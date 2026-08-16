@@ -4008,7 +4008,7 @@ export type Database = {
       cleanup_expired_apikeys: { Args: never; Returns: undefined }
       cleanup_expired_demo_apps: { Args: never; Returns: undefined }
       cleanup_expired_platform_impersonation_sessions: {
-        Args: never
+        Args: { batch_size?: number }
         Returns: undefined
       }
       cleanup_frequent_job_details: { Args: never; Returns: undefined }
@@ -4896,7 +4896,6 @@ export type Database = {
       is_platform_admin:
         | { Args: never; Returns: boolean }
         | { Args: { userid: string }; Returns: boolean }
-      is_platform_admin_listed: { Args: { userid: string }; Returns: boolean }
       is_rbac_enabled_globally: { Args: never; Returns: boolean }
       is_recent_email_otp_verified: {
         Args: { user_id: string }

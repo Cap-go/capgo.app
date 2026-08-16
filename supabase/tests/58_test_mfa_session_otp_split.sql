@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(11);
+SELECT plan(10);
 
 SELECT tests.create_supabase_user(
   'mfa_session_split_with_mfa',
@@ -11,7 +11,6 @@ SELECT tests.create_supabase_user(
   'mfa-session-split-without-mfa@test.local'
 );
 SELECT tests.mark_email_otp_verified('mfa_session_split_with_mfa');
-SELECT tests.mark_email_otp_verified('test_admin');
 
 INSERT INTO auth.mfa_factors (
   id,
@@ -26,27 +25,6 @@ VALUES (
   gen_random_uuid(),
   tests.get_supabase_uid('mfa_session_split_with_mfa'),
   'Test TOTP',
-  'totp'::auth.factor_type,
-  'verified'::auth.factor_status,
-  NOW(),
-  NOW()
-);
-
--- Seeded platform admin also gets a verified MFA factor for the OTP
--- exception coverage below.
-INSERT INTO auth.mfa_factors (
-  id,
-  user_id,
-  friendly_name,
-  factor_type,
-  status,
-  created_at,
-  updated_at
-)
-VALUES (
-  gen_random_uuid(),
-  'c591b04e-cf29-4945-b9a0-776d0672061a'::uuid,
-  'Admin TOTP',
   'totp'::auth.factor_type,
   'verified'::auth.factor_status,
   NOW(),
@@ -132,25 +110,6 @@ SELECT is(
   public.verify_mfa(),
   true,
   'verify_mfa allows aal2 when the user has a verified MFA factor'
-);
-SELECT tests.clear_authentication();
-
--- Platform admin may still use OTP while MFA-enrolled (support tooling).
-SELECT tests.authenticate_as('test_admin');
-SELECT set_config(
-  'request.jwt.claims',
-  jsonb_build_object(
-    'sub', 'c591b04e-cf29-4945-b9a0-776d0672061a'::text,
-    'email', 'admin@capgo.app',
-    'aal', 'aal1',
-    'amr', jsonb_build_array(jsonb_build_object('method', 'otp'))
-  )::text,
-  true
-);
-SELECT is(
-  public.verify_mfa(),
-  true,
-  'verify_mfa allows OTP for listed platform admins with MFA'
 );
 SELECT tests.clear_authentication();
 

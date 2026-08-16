@@ -1,44 +1,13 @@
 -- Split MFA session assurance from email OTP first-factor checks.
 -- `aal2` is the source of truth for completed MFA. Email OTP can be an
 -- `aal1` login method, so it must not satisfy the MFA gate used by
--- RLS/admin checks for normal users.
+-- RLS/admin checks (including platform admins).
 -- Re-applies the fix from 20260608114543 lost in the prod baseline
 -- squash.
 --
--- Exceptions (platform-admin support only):
--- 1) Listed platform admins may still satisfy verify_mfa via amr=otp so
---    admin tooling keeps working.
--- 2) Sessions minted by /private/log_as are registered so spoofing into
---    MFA-enforced customers is not blocked by restrictive 2FA RLS.
-
-CREATE OR REPLACE FUNCTION public.is_platform_admin_listed(userid uuid)
-RETURNS boolean
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = ''
-AS $$
-  SELECT COALESCE(
-    (
-      SELECT (decrypted_secret::jsonb) ? userid::text
-      FROM vault.decrypted_secrets
-      WHERE name = 'admin_users'
-      LIMIT 1
-    ),
-    false
-  );
-$$;
-
-COMMENT ON FUNCTION public.is_platform_admin_listed(userid uuid) IS
-'Vault admin_users membership only. No MFA check. Used by verify_mfa '
-'to allow legacy OTP for platform admins without recursion.';
-
-ALTER FUNCTION public.is_platform_admin_listed(userid uuid) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.is_platform_admin_listed(userid uuid)
-  FROM PUBLIC;
--- service_role + SECURITY DEFINER callers only (not an admin-oracle RPC)
-GRANT EXECUTE ON FUNCTION public.is_platform_admin_listed(userid uuid)
-  TO service_role;
+-- Support spoof of MFA-enforced customers: /private/log_as registers
+-- minted sessions in platform_impersonation_sessions so verify_mfa
+-- can allow those sessions without restoring a global OTP bypass.
 
 CREATE TABLE IF NOT EXISTS public.platform_impersonation_sessions (
   session_id uuid PRIMARY KEY,
@@ -156,36 +125,17 @@ AS $$
       WHERE (SELECT auth.uid()) = user_id
         AND status = 'verified'
     )
-    OR (
-      -- Legacy OTP path kept only for listed platform admins.
-      -- Scalar SELECTs keep Vault/impersonation lookups statement-level
-      -- under RLS rather than once-per-row.
-      EXISTS (
-        SELECT 1
-        FROM pg_catalog.jsonb_array_elements(
-          CASE
-            WHEN pg_catalog.jsonb_typeof(
-              (SELECT auth.jwt())->'amr'
-            ) = 'array'
-              THEN (SELECT auth.jwt())->'amr'
-            ELSE '[]'::jsonb
-          END
-        ) AS amr_elem
-        WHERE amr_elem->>'method' = 'otp'
-      )
-      AND (
-        SELECT public.is_platform_admin_listed((SELECT auth.uid()))
-      )
-    )
+    -- Scalar SELECT keeps the impersonation lookup statement-level
+    -- under RLS rather than once-per-row.
     OR (SELECT public.is_active_platform_impersonation());
 $$;
 
 COMMENT ON FUNCTION public.verify_mfa() IS
 'Returns true when the current session satisfies Supabase MFA '
 'assurance. Users with verified MFA factors require aal2; users '
-'without verified factors may use aal1 or aal2. Listed platform '
-'admins may still use amr=otp. Active platform-admin impersonation '
-'sessions (log_as) also pass so support spoof of MFA users works.';
+'without verified factors may use aal1 or aal2. Active '
+'platform-admin impersonation sessions (log_as) also pass so '
+'support spoof of MFA users works without an OTP MFA bypass.';
 
 ALTER FUNCTION public.verify_mfa() OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.verify_mfa() FROM PUBLIC;
@@ -231,7 +181,9 @@ GRANT EXECUTE ON FUNCTION public.verify_email_otp_auth()
   TO service_role;
 
 CREATE OR REPLACE FUNCTION
-  public.cleanup_expired_platform_impersonation_sessions()
+  public.cleanup_expired_platform_impersonation_sessions(
+    batch_size integer DEFAULT 1000
+  )
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -239,9 +191,16 @@ SET search_path = ''
 AS $$
 DECLARE
   deleted_count bigint;
+  v_batch_size integer := GREATEST(1, COALESCE(batch_size, 1000));
 BEGIN
   DELETE FROM public.platform_impersonation_sessions
-  WHERE expires_at <= now();
+  WHERE session_id IN (
+    SELECT session_id
+    FROM public.platform_impersonation_sessions
+    WHERE expires_at <= now()
+    ORDER BY expires_at
+    LIMIT v_batch_size
+  );
   GET DIAGNOSTICS deleted_count = ROW_COUNT;
   RAISE NOTICE
     'cleanup_expired_platform_impersonation_sessions: deleted %',
@@ -250,17 +209,18 @@ END;
 $$;
 
 COMMENT ON FUNCTION
-  public.cleanup_expired_platform_impersonation_sessions() IS
-'Deletes expired platform-admin log_as impersonation session rows.';
+  public.cleanup_expired_platform_impersonation_sessions(integer) IS
+'Deletes a bounded batch of expired platform-admin log_as '
+'impersonation session rows; later cron ticks drain any remainder.';
 
 ALTER FUNCTION
-  public.cleanup_expired_platform_impersonation_sessions()
+  public.cleanup_expired_platform_impersonation_sessions(integer)
   OWNER TO postgres;
 REVOKE ALL ON FUNCTION
-  public.cleanup_expired_platform_impersonation_sessions()
+  public.cleanup_expired_platform_impersonation_sessions(integer)
   FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION
-  public.cleanup_expired_platform_impersonation_sessions()
+  public.cleanup_expired_platform_impersonation_sessions(integer)
   TO service_role;
 
 INSERT INTO public.cron_tasks (
@@ -284,8 +244,8 @@ SELECT
   'cleanup_expired_platform_impersonation_sessions',
   'Delete expired platform-admin log_as impersonation sessions',
   'function',
-  'public.cleanup_expired_platform_impersonation_sessions()',
-  NULL,
+  'public.cleanup_expired_platform_impersonation_sessions(1000)',
+  1000,
   NULL,
   NULL,
   5,
@@ -301,3 +261,11 @@ WHERE NOT EXISTS (
   FROM public.cron_tasks
   WHERE name = 'cleanup_expired_platform_impersonation_sessions'
 );
+
+UPDATE public.cron_tasks
+SET
+  target = 'public.cleanup_expired_platform_impersonation_sessions(1000)',
+  batch_size = 1000,
+  description = 'Delete expired platform-admin log_as impersonation sessions',
+  updated_at = now()
+WHERE name = 'cleanup_expired_platform_impersonation_sessions';
