@@ -224,6 +224,7 @@ const tabs = computed<Tab[]>(() => {
           <ul class="space-y-1 lg:space-y-2">
             <li v-for="tab, i in tabs" :key="i">
               <button
+                type="button"
                 class="flex items-center p-3 w-full rounded-md transition duration-150 cursor-pointer lg:p-3 lg:rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-200 min-h-11 lg:text-slate-200 lg:hover:bg-slate-700/50 hover:bg-slate-700/50 focus:ring-offset-slate-800"
                 :class="{
                   'hover:bg-slate-700/50 lg:hover:bg-slate-700/50': !isTabActive(tab.key),

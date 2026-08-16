@@ -478,6 +478,7 @@ defineExpose({
 
     <!-- Right side: Deploy action button -->
     <button
+      type="button"
       :disabled="deploying"
       class="flex-shrink-0 inline-flex items-center justify-center rounded-md bg-blue-500 px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-blue-100/40 dark:focus:ring-offset-[#121b3a] disabled:opacity-50 disabled:cursor-not-allowed"
       @click="handleDeploy"

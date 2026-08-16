@@ -260,7 +260,7 @@ onMounted(async () => {
         <div class="mx-auto">
           <LangSelector />
         </div>
-        <button class="mt-3" :class="authGhostButtonClass" @click="openSupport">
+        <button type="button" class="mt-3" :class="authGhostButtonClass" @click="openSupport">
           {{ t('support') }}
         </button>
       </section>

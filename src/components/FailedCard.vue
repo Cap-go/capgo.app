@@ -75,12 +75,14 @@ async function copyOrgId() {
         </div>
         <div class="flex flex-wrap gap-3 mt-6">
           <button
+            type="button"
             class="py-3 px-8 text-base font-semibold text-white bg-orange-500 rounded-lg shadow-md transition-colors duration-200 hover:bg-orange-600 hover:shadow-lg focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:outline-none"
             @click="goToChangePassword"
           >
             {{ t('update-password-now') }}
           </button>
           <button
+            type="button"
             v-if="showCopyOrgId"
             class="py-3 px-8 text-base font-semibold text-[#973C00] bg-transparent border border-[#973C00] rounded-lg transition-colors duration-200 hover:bg-orange-100 focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:outline-none"
             @click="copyOrgId"
@@ -109,12 +111,14 @@ async function copyOrgId() {
         </div>
         <div class="flex flex-wrap gap-3 mt-6">
           <button
+            type="button"
             class="py-3 px-8 text-base font-semibold text-white bg-orange-500 rounded-lg shadow-md transition-colors duration-200 hover:bg-orange-600 hover:shadow-lg focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:outline-none"
             @click="goToAccountSettings"
           >
             {{ t('setup-2fa-now') }}
           </button>
           <button
+            type="button"
             v-if="showCopyOrgId"
             class="py-3 px-8 text-base font-semibold text-[#973C00] bg-transparent border border-[#973C00] rounded-lg transition-colors duration-200 hover:bg-orange-100 focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:outline-none"
             @click="copyOrgId"
@@ -143,6 +147,7 @@ async function copyOrgId() {
         </div>
         <div v-if="!hideExternalPurchaseFlows" class="mt-6">
           <button
+            type="button"
             class="py-3 px-8 text-base font-semibold text-white bg-red-600 rounded-lg shadow-md transition-colors duration-200 hover:bg-red-700 hover:shadow-lg focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:outline-none"
             @click="goToPlans"
           >

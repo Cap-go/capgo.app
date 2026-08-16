@@ -18,7 +18,7 @@ function hmac(key: string | Buffer, string: string): string {
 
 function encodeUri(str: string, allowSlashes = false): string {
   return encodeURIComponent(str)
-    .replace(/[!'()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
+    .replace(/[!'()*]/g, c => `%${c.codePointAt(0)!.toString(16).toUpperCase()}`)
     .replace(/%2F/g, allowSlashes ? '/' : '%2F')
 }
 

@@ -169,6 +169,7 @@ function formatJson(data: any): string {
       <div class="flex items-center gap-4 p-4 border-b border-gray-200 dark:border-gray-700 shrink-0">
         <div class="flex gap-2">
           <button
+            type="button"
             v-for="filter in statusFilters"
             :key="filter.value ?? 'all'"
             class="px-3 py-1.5 text-sm font-medium rounded-lg"
@@ -184,6 +185,7 @@ function formatJson(data: any): string {
           </button>
         </div>
         <button
+          type="button"
           class="flex items-center gap-1 px-3 py-1.5 ml-auto text-sm font-medium text-gray-600 rounded-lg hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
           :disabled="isLoadingDeliveries"
           @click="loadDeliveries"
@@ -264,6 +266,7 @@ function formatJson(data: any): string {
 
               <!-- Actions -->
               <button
+                type="button"
                 v-if="delivery.status === 'failed'"
                 class="flex items-center gap-1 px-3 py-1.5 min-h-11 text-xs font-medium text-blue-600 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
                 :disabled="retryingDeliveryId === delivery.id"
@@ -323,6 +326,7 @@ function formatJson(data: any): string {
         </span>
         <div class="flex gap-2">
           <button
+            type="button"
             class="flex items-center justify-center text-gray-600 rounded-lg size-11 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
             :disabled="currentPage === 0"
             :aria-label="t('previous')"
@@ -331,6 +335,7 @@ function formatJson(data: any): string {
             <IconChevronLeft class="w-5 h-5" />
           </button>
           <button
+            type="button"
             class="flex items-center justify-center text-gray-600 rounded-lg size-11 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
             :disabled="!deliveryPagination.has_more"
             :aria-label="t('next')"

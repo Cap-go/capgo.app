@@ -22,6 +22,12 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
 
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
   getEnv: mockGetEnv,
+  trimTrailingSlashes: (value: string) => {
+    let end = value.length
+    while (end > 0 && value[end - 1] === '/')
+      end -= 1
+    return value.slice(0, end)
+  },
 }))
 
 vi.mock('../supabase/functions/_backend/utils/tracking.ts', () => ({

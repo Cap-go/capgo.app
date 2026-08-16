@@ -759,7 +759,7 @@ export async function checkCompatibilityNativePackages(appId: string, channel: s
   // Only include remote packages that are not in local for informational purposes
   // These won't affect compatibility
   const removeNotInLocal = [...mappedRemoteNativePackages]
-    .filter(([remoteName]) => nativePackages.find(a => a.name === remoteName) === undefined)
+    .filter(([remoteName]) => !nativePackages.some(a => a.name === remoteName))
     .map(([name, version]) => ({ name, localVersion: undefined, remoteVersion: version.version }))
 
   finalDependencies.push(...removeNotInLocal)

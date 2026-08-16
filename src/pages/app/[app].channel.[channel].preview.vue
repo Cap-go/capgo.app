@@ -168,7 +168,7 @@ watchEffect(async () => {
       <p class="mt-2 text-muted-foreground">
         {{ t('channel-not-found-description') }}
       </p>
-      <button class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/channels`)">
+      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/channels`)">
         {{ t('back-to-channels') }}
       </button>
     </div>
@@ -181,7 +181,7 @@ watchEffect(async () => {
       <p class="mt-2 text-center text-muted-foreground max-w-md">
         {{ t('app-not-found-description') }}
       </p>
-      <button class="mt-4 text-white d-btn d-btn-primary" @click="router.push('/apps')">
+      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push('/apps')">
         {{ t('back-to-apps') }}
       </button>
     </div>
@@ -194,7 +194,7 @@ watchEffect(async () => {
       <p class="mt-2 text-center text-muted-foreground max-w-md">
         {{ t('preview-disabled-description') }}
       </p>
-      <button class="mt-4 text-white d-btn d-btn-primary" @click="goToAppSettings">
+      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="goToAppSettings">
         {{ t('preview-enable-settings') }}
       </button>
     </div>

@@ -517,7 +517,7 @@ export async function readDevices(c: Context, params: ReadDevicesParams, customI
   // Build next cursor from last item
   let nextCursor: string | undefined
   if (hasMore && data.length > 0) {
-    const lastItem = data[data.length - 1]
+    const lastItem = data.at(-1)!
     nextCursor = `${lastItem.updated_at}|${lastItem.device_id}`
   }
 

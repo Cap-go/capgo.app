@@ -66,6 +66,13 @@ export function fixSemver(version: string) {
   return version
 }
 
+export function trimTrailingSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value[end - 1] === '/')
+    end -= 1
+  return value.slice(0, end)
+}
+
 // Version required for Brotli support with .br extension
 export const BROTLI_MIN_UPDATER_VERSION_V5 = '5.10.0'
 export const BROTLI_MIN_UPDATER_VERSION_V6 = '6.25.0'

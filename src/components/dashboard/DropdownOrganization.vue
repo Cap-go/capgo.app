@@ -622,7 +622,7 @@ watch(
       </Teleport>
     </details>
     <div v-else-if="canCreateOrganizationInContext" class="p-px rounded-lg from-cyan-500 to-purple-500 bg-linear-to-r">
-      <button class="block w-full text-white d-btn d-btn-outline bg-slate-800 d-btn-sm" @click="createNewOrg">
+      <button type="button" class="block w-full text-white d-btn d-btn-outline bg-slate-800 d-btn-sm" @click="createNewOrg">
         {{ t('create-new-org') }}
       </button>
     </div>

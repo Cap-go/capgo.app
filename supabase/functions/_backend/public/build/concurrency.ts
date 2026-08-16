@@ -4,12 +4,11 @@ import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
 import { sendEventToTracking } from '../../utils/tracking.ts'
-import { getEnv } from '../../utils/utils.ts'
+import { getEnv, trimTrailingSlashes } from '../../utils/utils.ts'
 
 export const NATIVE_BUILD_TERMINAL_STATUSES = ['succeeded', 'failed', 'expired', 'released', 'cancelled', 'canceled'] as const
 export const NATIVE_BUILD_CONCURRENCY_ERROR = 'native_build_concurrency_limit_exceeded'
 const NON_ACTIVE_NATIVE_BUILD_STATUSES = ['pending', ...NATIVE_BUILD_TERMINAL_STATUSES] as const
-const TRAILING_SLASHES_REGEX = /\/+$/
 
 interface PgClient {
   query: <T extends Record<string, unknown> = Record<string, unknown>>(query: string, params?: unknown[]) => Promise<{
@@ -41,7 +40,7 @@ export interface NativeBuildSlotReservation extends NativeBuildConcurrencyState 
 export function getPlansUpgradeUrl(c: Context): string {
   // Join host parts so CI's ban on console logging does not false-positive on the URL.
   const fallbackWebAppUrl = `https://${['console', 'capgo.app'].join('.')}`
-  const base = (getEnv(c, 'WEBAPP_URL') || fallbackWebAppUrl).replace(TRAILING_SLASHES_REGEX, '')
+  const base = trimTrailingSlashes(getEnv(c, 'WEBAPP_URL') || fallbackWebAppUrl)
   return `${base}/settings/organization/plans`
 }
 

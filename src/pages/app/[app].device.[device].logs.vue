@@ -121,7 +121,7 @@ watchEffect(async () => {
       <p class="mt-2 text-muted-foreground">
         {{ t('device-not-found-description') }}
       </p>
-      <button class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/devices`)">
+      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/devices`)">
         {{ t('back-to-devices') }}
       </button>
     </div>

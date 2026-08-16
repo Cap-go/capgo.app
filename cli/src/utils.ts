@@ -34,7 +34,10 @@ import { isTruthyEnvValue } from './posthog'
 import { nativePackageSchema } from './schemas/common'
 import { safeParseSchema } from './schemas/schema_validation'
 import { CliUserError } from './shared/cli-user-error'
+import { trimTrailingSlashes } from './shared/trim-trailing-slashes'
 import { formatApiErrorForCli, parseSecurityPolicyError } from './utils/security_policy_errors'
+
+export { trimTrailingSlashes }
 
 function reportUploadContext(level: 'error' | 'info' | 'success' | 'warn', message: string) {
   const reporter = getActiveUploadReporter()
@@ -805,7 +808,7 @@ export function normalizeSupabaseHost(host: string): string {
   if (parsed.search || parsed.hash)
     throw new Error('Supabase host must not include query parameters or fragments')
 
-  const normalizedPath = parsed.pathname.replace(/\/+$/, '')
+  const normalizedPath = trimTrailingSlashes(parsed.pathname)
   return `${parsed.origin}${normalizedPath}`
 }
 
@@ -944,7 +947,7 @@ export async function invokeCapgoCliApi<T = any>(
   }
 
   const usesFunctionsV1 = base.includes('/functions/v1')
-  const url = `${base.replace(/\/+$/, '')}/${path.replace(/^\//, '')}`
+  const url = `${trimTrailingSlashes(base)}/${path.replace(/^\//, '')}`
   try {
     const response = await fetch(url, {
       method,

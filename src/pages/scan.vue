@@ -1333,6 +1333,7 @@ async function goBack() {
     <div class="relative z-10 mx-auto flex h-dvh w-full max-w-md flex-col px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(0.75rem,env(safe-area-inset-top))]">
       <header class="grid shrink-0 grid-cols-[2.75rem_1fr_2.75rem] items-center">
         <button
+          type="button"
           class="inline-flex h-11 w-11 items-center justify-center rounded-full bg-black/35 text-white backdrop-blur-sm transition-opacity active:opacity-70"
           aria-label="Go back"
           @click="goBack"
@@ -1401,6 +1402,7 @@ async function goBack() {
 
       <section class="shrink-0 space-y-3">
         <button
+          type="button"
           v-if="isNativePlatform"
           class="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-azure-500 px-4 py-3 text-sm font-semibold text-white transition-opacity active:opacity-80 disabled:cursor-not-allowed disabled:opacity-45"
           :disabled="isScanning || isLoading"
@@ -1443,6 +1445,7 @@ async function goBack() {
               class="mt-2 min-h-11 w-full rounded-xl border border-white/10 bg-slate-950/80 px-3 py-2.5 text-sm text-white outline-hidden transition-colors placeholder:text-slate-500 focus:border-azure-500/60"
             >
             <button
+              type="button"
               class="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-white transition-colors active:bg-white/15 disabled:cursor-not-allowed disabled:opacity-45"
               :disabled="!canSubmitManualUrl"
               @click="submitManualUrl"

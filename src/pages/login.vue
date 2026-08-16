@@ -1117,10 +1117,10 @@ onMounted(checkLogin)
               <div class="mx-auto">
                 <LangSelector />
               </div>
-              <button class="mt-3" :class="authGhostButtonClass" @click="openSupport">
+              <button type="button" class="mt-3" :class="authGhostButtonClass" @click="openSupport">
                 {{ t("support") }}
               </button>
-              <button v-if="isMobile" class="mt-3" :class="authGhostButtonClass" @click="openScan">
+              <button type="button" v-if="isMobile" class="mt-3" :class="authGhostButtonClass" @click="openScan">
                 {{ t("test-bundle") }}
               </button>
             </section>

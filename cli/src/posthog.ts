@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { arch, cwd, env, version as nodeVersion } from 'node:process'
 import pack from '../package.json'
 import { CliUserError } from './shared/cli-user-error'
+import { trimTrailingSlashes } from './shared/trim-trailing-slashes'
 
 const POSTHOG_EXCEPTION_URL = 'https://eu.i.posthog.com/i/v0/e/'
 const CAPGO_POSTHOG_PROJECT_TOKEN = 'phc_NXDyDajQaTQVwb25DEhIVZfxVUn4R0Y348Z7vWYHZUi'
@@ -41,7 +42,7 @@ export function getPosthogToken() {
 }
 
 function getPosthogExceptionUrl(host: string) {
-  const trimmedHost = host.replace(/\/+$/, '')
+  const trimmedHost = trimTrailingSlashes(host)
   if (trimmedHost.endsWith('/i/v0/e'))
     return `${trimmedHost}/`
 

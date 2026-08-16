@@ -929,7 +929,7 @@ function isPrintableText(text: string): boolean {
     return false
   let printable = 0
   for (let i = 0; i < text.length; i += 1) {
-    const code = text.charCodeAt(i)
+    const code = text.codePointAt(i) ?? 0
     if (code === 0x09 || code === 0x0A || code === 0x0D || (code >= 0x20 && code <= 0x7E))
       printable += 1
   }

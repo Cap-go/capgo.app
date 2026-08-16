@@ -66,7 +66,7 @@ import { appendInternalLog, getInternalLogPath, startInternalLog } from '../supp
 import { uploadSupportLogs } from '../support/support-upload.js'
 import { offerSupportUploadBeforeAi } from '../support/support-upload-prompt.js'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
-import { assertCliPermission, canPromptInteractively, createSupabaseClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { assertCliPermission, canPromptInteractively, createSupabaseClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, trimTrailingSlashes, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import { mergeCredentials, MIN_OUTPUT_RETENTION_SECONDS, parseAndroidPlayStoreReleaseStatus, parseAndroidPlayStoreTrack, parseInAppUpdatePriority, parseOptionalBoolean, parseOutputRetentionSeconds } from './credentials'
 import { buildProvisioningMap } from './credentials-command'
 import { withCwd } from './cwd'
@@ -448,7 +448,7 @@ async function streamBuildLogs(
     if (!logsUrl || !logsToken)
       return null
 
-    const baseUrl = logsUrl.replace(/\/+$/, '')
+    const baseUrl = trimTrailingSlashes(logsUrl)
     const startUrl = `${baseUrl}/start`
     const streamUrl = `${baseUrl}/stream?token=${encodeURIComponent(logsToken)}`
     const websocketUrl = streamUrl

@@ -12,7 +12,7 @@ import pack from '../../package.json'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { isTruthyEnvValue } from '../posthog'
 import { redactSecrets } from '../support/redact'
-import { defaultApiHost, getRemoteConfig } from '../utils'
+import { defaultApiHost, getRemoteConfig, trimTrailingSlashes } from '../utils'
 
 const DEFAULT_REPLAY_API_HOST = defaultApiHost
 const DEFAULT_COLS = 100
@@ -123,7 +123,7 @@ export function resolveCapgoReplayUrl(host = env.CAPGO_CLI_REPLAY_API_HOST?.trim
     return undefined
 
   try {
-    const withoutTrailingSlash = trimmedHost.replace(/\/+$/, '')
+    const withoutTrailingSlash = trimTrailingSlashes(trimmedHost)
     if (withoutTrailingSlash.endsWith('/private/replay'))
       return withoutTrailingSlash
 
@@ -140,7 +140,7 @@ export function resolveSupabaseReplayUrl(supaHost?: string) {
     return undefined
 
   try {
-    const withoutTrailingSlash = trimmedHost.replace(/\/+$/, '')
+    const withoutTrailingSlash = trimTrailingSlashes(trimmedHost)
     if (withoutTrailingSlash.endsWith('/functions/v1/private/replay'))
       return withoutTrailingSlash
 

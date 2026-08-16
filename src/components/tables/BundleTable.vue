@@ -484,7 +484,7 @@ async function massDelete() {
     return
   }
 
-  if (selectedElements.value.length > 0 && !!(selectedElements.value as any).find((val: Element) => val.name === 'unknown' || val.name === 'builtin')) {
+  if (selectedElements.value.length > 0 && (selectedElements.value as any).some((val: Element) => val.name === 'unknown' || val.name === 'builtin')) {
     toast.error(t('cannot-delete-unknown-or-builtin'))
     return
   }
@@ -612,7 +612,7 @@ watch(props, async () => {
       <p class="mt-2 text-slate-600 dark:text-slate-200">
         {{ t('add-your-first-bundle') }}
       </p>
-      <button class="mt-4 d-btn d-btn-primary" @click="addOne()">
+      <button type="button" class="mt-4 d-btn d-btn-primary" @click="addOne()">
         {{ t('add-another-bundle') }}
       </button>
     </div>

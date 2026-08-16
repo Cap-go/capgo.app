@@ -477,6 +477,7 @@ onMounted(async () => {
         </p>
       </div>
       <button
+        type="button"
         v-if="canAssignRoles"
         class="d-btn d-btn-primary"
         @click="openAssignRoleModal"
@@ -533,6 +534,7 @@ onMounted(async () => {
 
       <template #actions="{ row }">
         <button
+          type="button"
           v-if="canAssignRoles"
           class="d-btn d-btn-sm d-btn-ghost"
           :title="t('edit-role')"
@@ -541,6 +543,7 @@ onMounted(async () => {
           <IconWrench class="size-4" />
         </button>
         <button
+          type="button"
           v-if="canAssignRoles"
           class="d-btn d-btn-sm d-btn-ghost text-error"
           :title="t('remove')"
@@ -620,10 +623,11 @@ onMounted(async () => {
         </div>
 
         <div class="modal-action">
-          <button class="d-btn" @click="isAssignRoleModalOpen = false">
+          <button type="button" class="d-btn" @click="isAssignRoleModalOpen = false">
             {{ t('cancel') }}
           </button>
           <button
+            type="button"
             class="d-btn d-btn-primary"
             :disabled="!isAssignRoleFormValid || isLoading"
             @click="assignRole"
