@@ -13,9 +13,13 @@ vi.mock('../supabase/functions/_backend/utils/hono.ts', () => ({
   },
 }))
 
+const { getPgClientMock } = vi.hoisted(() => ({
+  getPgClientMock: vi.fn(),
+}))
+
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   closeClient: vi.fn(),
-  getPgClient: vi.fn(),
+  getPgClient: getPgClientMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
@@ -28,7 +32,7 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   supabaseWithAuth: vi.fn(),
 }))
 
-const { assertApiKeyManagerCanAssignBindings } = await import('../supabase/functions/_backend/public/apikey/scope.ts')
+const { assertApiKeyManagerCanAssignBindings, assertApiKeyManagerCanRotateTarget } = await import('../supabase/functions/_backend/public/apikey/scope.ts')
 
 const ORG_ID = '00000000-0000-4000-8000-000000000111'
 const auth = { authType: 'jwt', userId: '00000000-0000-4000-8000-000000000222' } as any
@@ -67,5 +71,36 @@ describe('api key manager role assignment guard', () => {
       role_name: 'app_preview',
       org_id: ORG_ID,
     }])).resolves.toBeUndefined()
+  })
+})
+
+describe('api key manager rotate guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('rejects rotating a target key that already has org_super_admin', async () => {
+    checkPermissionMock.mockResolvedValue(false)
+    getPgClientMock.mockReturnValue({
+      query: vi.fn().mockResolvedValue({
+        rows: [{ role_name: 'org_super_admin', org_id: ORG_ID }],
+      }),
+    })
+
+    await expect(assertApiKeyManagerCanRotateTarget(context, auth, '00000000-0000-4000-8000-000000000333')).rejects.toMatchObject({
+      status: 403,
+      cause: { error: 'forbidden_binding' },
+    })
+  })
+
+  it('allows rotating a target key when the caller can manage user roles', async () => {
+    checkPermissionMock.mockResolvedValue(true)
+    getPgClientMock.mockReturnValue({
+      query: vi.fn().mockResolvedValue({
+        rows: [{ role_name: 'org_super_admin', org_id: ORG_ID }],
+      }),
+    })
+
+    await expect(assertApiKeyManagerCanRotateTarget(context, auth, '00000000-0000-4000-8000-000000000333')).resolves.toBeUndefined()
   })
 })

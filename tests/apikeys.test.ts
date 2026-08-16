@@ -669,6 +669,103 @@ describe('[POST] /apikey operations', () => {
     }
   })
 
+  it.concurrent('apikey_manager cannot regenerate an org_super_admin sibling API key', async () => {
+    const dedicatedAuthHeaders = await getAuthHeadersForCredentials(USER_EMAIL_APIKEY_MANAGEMENT, USER_PASSWORD)
+    const managerKeyHeaders = {
+      'Content-Type': 'application/json',
+      'capgkey': APIKEY_MANAGEMENT_APIKEY_MANAGER,
+    }
+    const superAdminKeyHeaders = {
+      'Content-Type': 'application/json',
+      'capgkey': APIKEY_MANAGEMENT_ORG_SUPER_ADMIN,
+    }
+    const createdKeyIds: number[] = []
+
+    try {
+      const hashedSiblingResponse = await fetch(`${BASE_URL}/apikey`, {
+        method: 'POST',
+        headers: dedicatedAuthHeaders,
+        body: JSON.stringify(orgKeyBody('apikey-manager-blocked-super-admin-hashed', {
+          bindings: orgApiKeyBindings(ORG_ID_APIKEY_MANAGEMENT, 'org_super_admin'),
+          hashed: true,
+        })),
+      })
+      expect(hashedSiblingResponse.status).toBe(200)
+      const hashedSibling = await hashedSiblingResponse.json<{ id: number, key: string }>()
+      createdKeyIds.push(hashedSibling.id)
+
+      const hashedRegenerateResponse = await fetch(`${BASE_URL}/apikey/${hashedSibling.id}`, {
+        method: 'PUT',
+        headers: managerKeyHeaders,
+        body: JSON.stringify({ regenerate: true }),
+      })
+      expect(hashedRegenerateResponse.status).toBe(403)
+      const hashedRegenerateBody = await hashedRegenerateResponse.json() as Record<string, unknown>
+      expect(hashedRegenerateBody).toHaveProperty('error', 'forbidden_binding')
+      expect(hashedRegenerateBody).not.toHaveProperty('key')
+
+      const oldHashedAuthResponse = await fetch(`${BASE_URL}/apikey`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json', 'Authorization': hashedSibling.key },
+      })
+      expect(oldHashedAuthResponse.status).toBe(200)
+
+      const plainSiblingResponse = await fetch(`${BASE_URL}/apikey`, {
+        method: 'POST',
+        headers: dedicatedAuthHeaders,
+        body: JSON.stringify(orgKeyBody('apikey-manager-blocked-super-admin-plain', {
+          bindings: orgApiKeyBindings(ORG_ID_APIKEY_MANAGEMENT, 'org_super_admin'),
+          hashed: false,
+        })),
+      })
+      expect(plainSiblingResponse.status).toBe(200)
+      const plainSibling = await plainSiblingResponse.json<{ id: number, key: string }>()
+      createdKeyIds.push(plainSibling.id)
+
+      const plainRegenerateResponse = await fetch(`${BASE_URL}/apikey/${plainSibling.id}`, {
+        method: 'PUT',
+        headers: managerKeyHeaders,
+        body: JSON.stringify({ regenerate: true }),
+      })
+      expect(plainRegenerateResponse.status).toBe(403)
+      const plainRegenerateBody = await plainRegenerateResponse.json() as Record<string, unknown>
+      expect(plainRegenerateBody).toHaveProperty('error', 'forbidden_binding')
+      expect(plainRegenerateBody).not.toHaveProperty('key')
+
+      const jwtRegenerateResponse = await fetch(`${BASE_URL}/apikey/${hashedSibling.id}`, {
+        method: 'PUT',
+        headers: dedicatedAuthHeaders,
+        body: JSON.stringify({ regenerate: true }),
+      })
+      expect(jwtRegenerateResponse.status).toBe(200)
+      await expect(jwtRegenerateResponse.json()).resolves.toHaveProperty('id', hashedSibling.id)
+
+      const superAdminRegenerateResponse = await fetch(`${BASE_URL}/apikey/${plainSibling.id}`, {
+        method: 'PUT',
+        headers: superAdminKeyHeaders,
+        body: JSON.stringify({ regenerate: true }),
+      })
+      expect(superAdminRegenerateResponse.status).toBe(200)
+      await expect(superAdminRegenerateResponse.json()).resolves.toHaveProperty('id', plainSibling.id)
+    }
+    finally {
+      for (const keyId of createdKeyIds.reverse()) {
+        try {
+          const response = await fetch(`${BASE_URL}/apikey/${keyId}`, {
+            method: 'DELETE',
+            headers: dedicatedAuthHeaders,
+          })
+          if (!response.ok) {
+            console.warn(`apikey manager super-admin rotate cleanup delete ${keyId} status=${response.status}`)
+          }
+        }
+        catch (error) {
+          console.warn(`apikey manager super-admin rotate cleanup delete ${keyId} failed`, error)
+        }
+      }
+    }
+  })
+
   it.concurrent('rejects API key POST creation even for an org super admin key', async () => {
     const superAdminKeyHeaders = {
       'Content-Type': 'application/json',
