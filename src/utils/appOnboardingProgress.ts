@@ -85,12 +85,18 @@ export function withGettingStartedDismissed(
   const existing: { [key: string]: Json | undefined } = isRecord(value)
     ? { ...value as { [key: string]: Json | undefined } }
     : {}
-  if (typeof existing.getting_started_dismissed_at === 'string' && existing.getting_started_dismissed_at.length > 0)
-    return existing
   return {
     ...existing,
     getting_started_dismissed_at: at,
   }
+}
+
+export function withoutGettingStartedDismissed(value: unknown): Json {
+  const existing: { [key: string]: Json | undefined } = isRecord(value)
+    ? { ...value as { [key: string]: Json | undefined } }
+    : {}
+  delete existing.getting_started_dismissed_at
+  return existing
 }
 
 export function getAppOnboardingFeature(

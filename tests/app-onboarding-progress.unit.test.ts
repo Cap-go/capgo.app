@@ -14,6 +14,7 @@ import {
   shouldShowGettingStartedNav,
   shouldShowOnboardingNextStep,
   withGettingStartedDismissed,
+  withoutGettingStartedDismissed,
 } from '../src/utils/appOnboardingProgress.ts'
 import { storeReleaseValidatedKey } from '../src/utils/gettingStartedDismiss.ts'
 
@@ -218,7 +219,11 @@ describe('getting started dismiss storage', () => {
       getting_started_dismissed_at: dismissedAt,
     })
     expect(withGettingStartedDismissed({ getting_started_dismissed_at: dismissedAt }, '2026-08-16T11:00:00.000Z'))
-      .toEqual({ getting_started_dismissed_at: dismissedAt })
+      .toEqual({ getting_started_dismissed_at: '2026-08-16T11:00:00.000Z' })
+    expect(withoutGettingStartedDismissed({
+      features: {},
+      getting_started_dismissed_at: dismissedAt,
+    })).toEqual({ features: {} })
   })
 
   it.concurrent('uses a per-app store-release key', () => {

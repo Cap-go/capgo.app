@@ -11,6 +11,7 @@ import {
   parseAppOnboardingLedger,
   shouldShowGettingStartedNav,
   withGettingStartedDismissed,
+  withoutGettingStartedDismissed,
 } from '~/utils/appOnboardingProgress'
 import { isStoreReleaseValidated } from '~/utils/gettingStartedDismiss'
 
@@ -58,16 +59,15 @@ function isActive(appId: string) {
 }
 
 async function persistDismiss(app: OrganizationApp) {
-  const previous = app.onboarding
   const { data, error } = await supabase.rpc('dismiss_getting_started', {
     p_app_id: app.app_id,
   })
+  const current = organizationStore.getAppByAppId(app.app_id)?.onboarding ?? app.onboarding ?? {}
   if (error) {
     console.error('Failed to dismiss getting started', error)
-    organizationStore.updateAppOnboarding(app.app_id, previous ?? {})
+    organizationStore.updateAppOnboarding(app.app_id, withoutGettingStartedDismissed(current))
     return
   }
-  const current = organizationStore.getAppByAppId(app.app_id)?.onboarding ?? previous ?? data
   organizationStore.updateAppOnboarding(
     app.app_id,
     withGettingStartedDismissed(current, parseAppOnboardingLedger(data).getting_started_dismissed_at ?? undefined),
