@@ -2971,7 +2971,7 @@
   "frontend-onboarding-daily-conversion": "Conversion",
   "frontend-onboarding-daily-conversion-attempts": "attempts",
   "frontend-onboarding-daily-details-to-organization": "Daily App details → Organization conversion (v3)",
-  "frontend-onboarding-daily-intent-to-details": "Daily Intent → App details conversion",
+  "frontend-onboarding-daily-intent-to-details": "Daily Intent → App details conversion (v1, v2, and v3)",
   "frontend-onboarding-daily-organization-to-setup": "Daily Organization → Setup reached conversion (v3)",
   "frontend-onboarding-funnel-v2": "Onboarding funnel (v2)",
   "frontend-onboarding-funnel-v3": "Frontend onboarding funnel (v3)",

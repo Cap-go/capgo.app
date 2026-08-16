@@ -363,7 +363,7 @@ export function buildFrontendOnboardingAnalytics(
     },
     daily_attempts: buildDailyAttempts(currentAttempts, currentStartMs, currentEndMs),
     daily_conversions: {
-      intent_to_details: buildDailyConversion(currentV3ConversionAttempts, currentStartMs, currentEndMs, 'intent', 'details'),
+      intent_to_details: buildDailyConversion(attempts, currentStartMs, currentEndMs, 'intent', 'details'),
       details_to_organization: buildDailyConversion(currentV3ConversionAttempts, currentStartMs, currentEndMs, 'details', 'organization'),
       organization_to_setup: buildDailyConversion(currentV3ConversionAttempts, currentStartMs, currentEndMs, 'organization', 'setup'),
     },

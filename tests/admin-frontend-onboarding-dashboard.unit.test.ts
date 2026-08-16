@@ -725,7 +725,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(messages['frontend-onboarding-median-time-subtitle']).toBe('Completed attempts only')
     expect(messages['frontend-onboarding-largest-dropoff']).toBe('Largest drop-off')
     expect(messages['frontend-onboarding-daily-attempts']).toBe('Daily onboarding attempts')
-    expect(messages['frontend-onboarding-daily-intent-to-details']).toBe('Daily Intent → App details conversion')
+    expect(messages['frontend-onboarding-daily-intent-to-details']).toBe('Daily Intent → App details conversion (v1, v2, and v3)')
     expect(messages['frontend-onboarding-daily-details-to-organization']).toBe('Daily App details → Organization conversion (v3)')
     expect(messages['frontend-onboarding-daily-organization-to-setup']).toBe('Daily Organization → Setup reached conversion (v3)')
     expect(messages['frontend-onboarding-daily-conversion']).toBe('Conversion')
