@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parsePeriodDays } from '../src/composables/usePeriodDaysQuery.ts'
+import { parsePeriodDays } from '../src/utils/periodDays.ts'
 import { generateUtcDateLabels, getRollingStatsPeriod } from '../supabase/functions/_backend/utils/statsPeriod.ts'
 
 describe('rolling stats period', () => {
