@@ -42,17 +42,16 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
     throw quickError(403, 'cannot_access_organization', 'You can\'t access this organization', { org_id: body.owner_org })
   }
 
-  const normalizedIcon = !body.icon
-    ? null
-    : (() => {
-        const normalized = normalizeImagePath(body.icon)
-        if (body.icon.includes('://') && !normalized)
-          return body.icon
-        return assertAllowedImagePath(normalized, {
+  let normalizedIcon: string | null = null
+  if (body.icon) {
+    const normalized = normalizeImagePath(body.icon)
+    normalizedIcon = body.icon.includes('://') && !normalized
+      ? body.icon
+      : assertAllowedImagePath(normalized, {
           orgId: body.owner_org,
           appId: body.app_id,
         })
-      })()
+  }
   if (body.icon && !normalizedIcon)
     throw simpleError('invalid_icon_path', 'Icon path must belong to this app organization')
   const dataInsert = {

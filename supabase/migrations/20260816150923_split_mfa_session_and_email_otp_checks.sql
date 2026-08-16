@@ -1,7 +1,9 @@
 -- Split MFA session assurance from email OTP first-factor checks.
--- `aal2` is the source of truth for completed MFA. Email OTP can be an `aal1`
--- login method, so it must not satisfy the MFA gate used by RLS/admin checks.
--- Re-applies the fix from 20260608114543 that was lost in the prod baseline squash.
+-- `aal2` is the source of truth for completed MFA. Email OTP can be an
+-- `aal1` login method, so it must not satisfy the MFA gate used by
+-- RLS/admin checks.
+-- Re-applies the fix from 20260608114543 lost in the prod baseline
+-- squash.
 
 CREATE OR REPLACE FUNCTION public.verify_mfa()
 RETURNS boolean
@@ -24,7 +26,9 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION public.verify_mfa() IS
-'Returns true when the current session satisfies Supabase MFA assurance. Users with verified MFA factors require aal2; users without verified factors may use aal1 or aal2.';
+'Returns true when the current session satisfies Supabase MFA '
+'assurance. Users with verified MFA factors require aal2; users '
+'without verified factors may use aal1 or aal2.';
 
 ALTER FUNCTION public.verify_mfa() OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.verify_mfa() FROM PUBLIC;
@@ -44,7 +48,8 @@ AS $$
   amr AS (
     SELECT
       CASE
-        WHEN pg_catalog.jsonb_typeof(claims->'amr') = 'array' THEN claims->'amr'
+        WHEN pg_catalog.jsonb_typeof(claims->'amr') = 'array'
+          THEN claims->'amr'
         ELSE '[]'::jsonb
       END AS entries
     FROM jwt_claims
@@ -57,9 +62,13 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION public.verify_email_otp_auth() IS
-'Returns true when the current JWT authentication-method reference includes OTP. This is first-factor/email OTP evidence and must not be used as MFA assurance.';
+'Returns true when the current JWT authentication-method reference '
+'includes OTP. This is first-factor/email OTP evidence and must not '
+'be used as MFA assurance.';
 
 ALTER FUNCTION public.verify_email_otp_auth() OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.verify_email_otp_auth() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.verify_email_otp_auth() TO authenticated;
-GRANT EXECUTE ON FUNCTION public.verify_email_otp_auth() TO service_role;
+GRANT EXECUTE ON FUNCTION public.verify_email_otp_auth()
+  TO authenticated;
+GRANT EXECUTE ON FUNCTION public.verify_email_otp_auth()
+  TO service_role;

@@ -122,19 +122,22 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     }
   }
 
-  const normalizedIcon = body.icon === undefined
-    ? undefined
-    : body.icon === ''
-      ? ''
-      : (() => {
-          const normalized = normalizeImagePath(body.icon)
-          if (body.icon.includes('://') && !normalized)
-            return body.icon
-          return assertAllowedImagePath(normalized, {
-            orgId: previousApp.owner_org,
-            appId,
-          })
-        })()
+  let normalizedIcon: string | undefined
+  if (body.icon === undefined) {
+    normalizedIcon = undefined
+  }
+  else if (body.icon === '') {
+    normalizedIcon = ''
+  }
+  else {
+    const normalized = normalizeImagePath(body.icon)
+    normalizedIcon = body.icon.includes('://') && !normalized
+      ? body.icon
+      : assertAllowedImagePath(normalized, {
+          orgId: previousApp.owner_org,
+          appId,
+        }) ?? undefined
+  }
   if (body.icon !== undefined && body.icon !== '' && !normalizedIcon)
     throw simpleError('invalid_icon_path', 'Icon path must belong to this app organization')
   const onboardingLock = shouldSerializeOnboardingCompletion
