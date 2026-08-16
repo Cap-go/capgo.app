@@ -13,14 +13,9 @@ import {
   rankAppOnboardingStage,
   shouldShowGettingStartedNav,
   shouldShowOnboardingNextStep,
+  withGettingStartedDismissed,
 } from '../src/utils/appOnboardingProgress.ts'
-import {
-  gettingStartedDismissedKey,
-  gettingStartedDismissedLegacyKey,
-  parseDismissedGettingStartedAppIds,
-  serializeDismissedGettingStartedAppIds,
-  storeReleaseValidatedKey,
-} from '../src/utils/gettingStartedDismiss.ts'
+import { storeReleaseValidatedKey } from '../src/utils/gettingStartedDismiss.ts'
 
 describe('app onboarding progress ledger', () => {
   it.concurrent('parses feature timestamps and ignores unknown stages', () => {
@@ -209,16 +204,24 @@ describe('app onboarding progress ledger', () => {
 })
 
 describe('getting started dismiss storage', () => {
-  it.concurrent('parses and serializes dismissed app ids', () => {
-    expect(parseDismissedGettingStartedAppIds(null).size).toBe(0)
-    expect(parseDismissedGettingStartedAppIds('not-json').size).toBe(0)
-    expect([...parseDismissedGettingStartedAppIds('["com.demo.app",""]')]).toEqual(['com.demo.app'])
-    expect(serializeDismissedGettingStartedAppIds(['com.a.app', 'com.a.app'])).toBe('["com.a.app"]')
+  it.concurrent('hides the nav after app-level dismiss', () => {
+    const dismissedAt = '2026-08-16T10:00:00.000Z'
+    expect(parseAppOnboardingLedger({
+      getting_started_dismissed_at: dismissedAt,
+      features: { ota: { stage: 'no_device' } },
+    }).getting_started_dismissed_at).toBe(dismissedAt)
+    expect(shouldShowGettingStartedNav({
+      getting_started_dismissed_at: dismissedAt,
+    })).toBe(false)
+    expect(withGettingStartedDismissed({ features: {} }, dismissedAt)).toEqual({
+      features: {},
+      getting_started_dismissed_at: dismissedAt,
+    })
+    expect(withGettingStartedDismissed({ getting_started_dismissed_at: dismissedAt }, '2026-08-16T11:00:00.000Z'))
+      .toEqual({ getting_started_dismissed_at: dismissedAt })
   })
 
-  it.concurrent('uses a per-app dismiss key', () => {
-    expect(gettingStartedDismissedKey('user-1', 'com.demo.app')).toBe('capgo.gettingStarted.dismissed.user-1.com.demo.app')
-    expect(gettingStartedDismissedLegacyKey('user-1')).toBe('capgo.gettingStarted.dismissed.user-1')
+  it.concurrent('uses a per-app store-release key', () => {
     expect(storeReleaseValidatedKey('user-1', 'com.demo.app')).toBe('capgo.gettingStarted.storeRelease.user-1.com.demo.app')
   })
 })

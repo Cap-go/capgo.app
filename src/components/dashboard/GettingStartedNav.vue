@@ -1,39 +1,34 @@
 <script setup lang="ts">
 import type { OrganizationApp } from '~/stores/organization'
-import { computed, ref, watch } from 'vue'
+import { computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconX from '~icons/lucide/x'
+import { useSupabase } from '~/services/supabase'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import {
   parseAppOnboardingLedger,
   shouldShowGettingStartedNav,
+  withGettingStartedDismissed,
 } from '~/utils/appOnboardingProgress'
-import {
-  dismissGettingStarted,
-  isGettingStartedDismissed,
-  isStoreReleaseValidated,
-} from '~/utils/gettingStartedDismiss'
+import { isStoreReleaseValidated } from '~/utils/gettingStartedDismiss'
 
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
+const supabase = useSupabase()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
-const dismissedTick = ref(0)
 
 const userId = computed(() => main.user?.id ?? main.auth?.id ?? '')
 
 const apps = computed(() => {
-  void dismissedTick.value
   const orgId = organizationStore.currentOrganization?.gid
   if (!orgId || !userId.value)
     return [] as OrganizationApp[]
 
   return organizationStore.getAppsByOrgId(orgId).filter((app) => {
-    if (isGettingStartedDismissed(userId.value, app.app_id))
-      return false
     return shouldShowGettingStartedNav(parseAppOnboardingLedger(app.onboarding), {
       storeReleaseValidated: isStoreReleaseValidated(userId.value, app.app_id),
     })
@@ -62,13 +57,22 @@ function isActive(appId: string) {
   return route.path === gettingStartedPath(appId)
 }
 
+async function persistDismiss(app: OrganizationApp) {
+  const { data, error } = await supabase.rpc('dismiss_getting_started', {
+    p_app_id: app.app_id,
+  })
+  if (error) {
+    console.error('Failed to dismiss getting started', error)
+    return
+  }
+  organizationStore.updateAppOnboarding(app.app_id, data)
+}
+
 function dismiss(app: OrganizationApp, event: Event) {
   event.preventDefault()
   event.stopPropagation()
-  if (!userId.value)
-    return
-  dismissGettingStarted(userId.value, app.app_id)
-  dismissedTick.value += 1
+  organizationStore.updateAppOnboarding(app.app_id, withGettingStartedDismissed(app.onboarding))
+  void persistDismiss(app)
   if (isActive(app.app_id))
     void router.push(`/app/${encodeURIComponent(app.app_id)}`)
 }

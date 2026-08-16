@@ -2,7 +2,7 @@ import type { Database } from '~/types/supabase.types'
 import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { parseAppOnboardingLedger } from '../src/utils/appOnboardingProgress.ts'
+import { parseAppOnboardingLedger, shouldShowGettingStartedNav } from '../src/utils/appOnboardingProgress.ts'
 import {
   executeSQL,
   getSupabaseClient,
@@ -223,5 +223,43 @@ describe('app onboarding progress RPCs', () => {
        )->>'stage' AS stage`,
     )
     expect(merged[0]?.stage).toBe('store_live')
+  })
+
+  it('must reject unauthenticated dismiss_getting_started', async () => {
+    const anon = createAuthClient()
+    const { error } = await anon.rpc('dismiss_getting_started', {
+      p_app_id: APP_RPC,
+    })
+    expect(error).toBeTruthy()
+  })
+
+  it('persists getting started dismiss on the app and survives refresh', async () => {
+    const authClient = createAuthClient()
+    const { error: signInError } = await authClient.auth.signInWithPassword({
+      email: USER_EMAIL,
+      password: USER_PASSWORD,
+    })
+    if (signInError)
+      throw signInError
+
+    const { data, error } = await authClient.rpc('dismiss_getting_started', {
+      p_app_id: APP_RPC,
+    })
+    expect(error).toBeNull()
+    const ledger = parseAppOnboardingLedger(data)
+    expect(ledger.getting_started_dismissed_at).toBeTruthy()
+    expect(shouldShowGettingStartedNav(ledger)).toBe(false)
+    expect(ledger.features?.cli_install?.started_at).toBeTruthy()
+
+    const firstDismissedAt = ledger.getting_started_dismissed_at
+    const { data: again, error: againError } = await authClient.rpc('dismiss_getting_started', {
+      p_app_id: APP_RPC,
+    })
+    expect(againError).toBeNull()
+    expect(parseAppOnboardingLedger(again).getting_started_dismissed_at).toBe(firstDismissedAt)
+
+    const refreshed = await refreshUntil(APP_RPC)
+    expect(refreshed.getting_started_dismissed_at).toBe(firstDismissedAt)
+    expect(refreshed.features?.cli_install?.started_at).toBeTruthy()
   })
 })

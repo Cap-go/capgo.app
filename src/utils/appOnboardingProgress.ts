@@ -21,6 +21,7 @@ export interface AppOnboardingFeature {
 
 export interface AppOnboardingLedger {
   refreshed_at?: string | null
+  getting_started_dismissed_at?: string | null
   features?: Partial<Record<string, AppOnboardingFeature>>
 }
 
@@ -70,7 +71,21 @@ export function parseAppOnboardingLedger(value: unknown): AppOnboardingLedger {
 
   return {
     refreshed_at: asTimestamp(value.refreshed_at),
+    getting_started_dismissed_at: asTimestamp(value.getting_started_dismissed_at),
     features,
+  }
+}
+
+export function withGettingStartedDismissed(
+  value: unknown,
+  at = new Date().toISOString(),
+): Record<string, unknown> {
+  const existing = isRecord(value) ? { ...value } : {}
+  if (typeof existing.getting_started_dismissed_at === 'string' && existing.getting_started_dismissed_at.length > 0)
+    return existing
+  return {
+    ...existing,
+    getting_started_dismissed_at: at,
   }
 }
 
@@ -242,6 +257,8 @@ export function gettingStartedProgress(steps: GettingStartedStep[]): {
 }
 
 export function shouldShowGettingStartedNav(ledger: AppOnboardingLedger, extras?: GettingStartedStepExtras): boolean {
+  if (ledger.getting_started_dismissed_at)
+    return false
   return buildGettingStartedSteps(ledger, extras)
     .some(step => step.group === 'essential' && !step.done)
 }
