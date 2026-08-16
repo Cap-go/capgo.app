@@ -4085,6 +4085,7 @@ export type Database = {
         Returns: string
       }
       delete_user: { Args: never; Returns: undefined }
+      dismiss_getting_started: { Args: { p_app_id: string }; Returns: Json }
       exist_app: { Args: { appid: string }; Returns: boolean }
       exist_app_v2: { Args: { appid: string }; Returns: boolean }
       exist_app_versions:
