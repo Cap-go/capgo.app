@@ -31,8 +31,12 @@ async function orgSwitcherMenuIsOnTop(page: Page) {
   }, { x: menuBox!.x + Math.min(40, menuBox!.width / 2), y: menuBox!.y + 24 })
 }
 
-function visibleOrgSwitcher(page: Page) {
-  return page.locator('[data-test="org-switcher"]').filter({ visible: true })
+function headerOrgSwitcher(page: Page) {
+  return page.locator('header [data-test="org-switcher"]')
+}
+
+function sidebarOrgSwitcher(page: Page) {
+  return page.locator('#sidebar [data-test="org-switcher"]')
 }
 
 test.describe('Desktop sidebar collapse', () => {
@@ -51,17 +55,17 @@ test.describe('Desktop sidebar collapse', () => {
     await page.locator('[data-test="sidebar-collapse-toggle"]').click()
 
     await expect(page.locator('#sidebar')).toBeHidden()
-    await expect(visibleOrgSwitcher(page)).toBeVisible()
+    await expect(headerOrgSwitcher(page)).toBeVisible()
     await expect.poll(() => shellPadding(page)).toBe('0px 0px 0px')
 
-    await visibleOrgSwitcher(page).locator('summary').click()
+    await headerOrgSwitcher(page).locator('summary').click()
     await expect(page.locator('[data-test="org-switcher-menu"]').filter({ visible: true })).toContainText(/add organization/i)
     expect(await orgSwitcherMenuIsOnTop(page)).toBe(true)
 
     await page.reload()
     await dismissSupportPrompt(page)
     await expect(page.locator('#sidebar')).toBeHidden()
-    await expect(visibleOrgSwitcher(page)).toBeVisible()
+    await expect(headerOrgSwitcher(page)).toBeVisible()
 
     await page.locator('[data-test="sidebar-collapse-toggle"]').click()
     await expect(page.locator('#sidebar')).toBeVisible()
@@ -81,15 +85,15 @@ test.describe('Desktop sidebar collapse', () => {
     await page.locator('[data-test="sidebar-mobile-toggle"]').click()
     await expect(page.locator('#sidebar')).toBeInViewport()
     await expect(page.locator('#sidebar')).toContainText(/pages/i)
-    await expect(visibleOrgSwitcher(page)).toBeVisible()
+    await expect(sidebarOrgSwitcher(page)).toBeVisible()
   })
 
   test('keeps the collapsed org switcher above app dashboard tabs', async ({ page }) => {
     await page.locator('[data-test="sidebar-collapse-toggle"]').click()
     await page.goto('/app/com.demo.app')
     await dismissSupportPrompt(page)
-    await expect(visibleOrgSwitcher(page)).toBeVisible()
-    await visibleOrgSwitcher(page).locator('summary').click()
+    await expect(headerOrgSwitcher(page)).toBeVisible()
+    await headerOrgSwitcher(page).locator('summary').click()
     await expect(page.locator('[data-test="org-switcher-menu"]').filter({ visible: true })).toHaveCSS('position', 'fixed')
     expect(await orgSwitcherMenuIsOnTop(page)).toBe(true)
   })
