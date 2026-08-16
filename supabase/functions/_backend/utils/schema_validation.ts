@@ -5,7 +5,7 @@ import { z } from 'zod'
  * Match arktype `string.numeric.parse`: accept numeric strings only.
  * Rejects null/false/"" (unlike z.coerce.number(), which maps those to 0).
  */
-export const numericStringSchema = z.string().regex(/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/).transform(Number)
+export const numericStringSchema = z.string().regex(/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/).transform(Number)
 
 export const numberLikeSchema = z.union([z.number(), numericStringSchema])
 

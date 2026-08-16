@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import { cloudlogErr, serializeError } from './logging.ts'
-import { getEnv } from './utils.ts'
+import { getEnv, trimTrailingSlashes } from './utils.ts'
 
 export const MAX_POSTHOG_RESPONSE_BYTES = 8 * 1024 * 1024
 const DEFAULT_POSTHOG_READ_HOST = 'https://eu.posthog.com'
@@ -32,7 +32,7 @@ function posthogReadConfig(c: Context): PosthogReadConfig | null {
   if (!key || Boolean(hostOverride) !== Boolean(projectOverride))
     return null
 
-  const host = (hostOverride || DEFAULT_POSTHOG_READ_HOST).replace(/\/+$/, '')
+  const host = trimTrailingSlashes(hostOverride || DEFAULT_POSTHOG_READ_HOST)
   const project = projectOverride || DEFAULT_POSTHOG_READ_PROJECT_ID
   if (!host || !project)
     return null

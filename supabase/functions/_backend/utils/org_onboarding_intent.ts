@@ -5,12 +5,10 @@ import { cloudlog } from './logging.ts'
 import { getOrgAdminMemberEmailsForTags } from './org_email_notifications.ts'
 import { getDrizzleClient, getPgClient } from './pg.ts'
 import * as schema from './postgres_schema.ts'
-import { getEnv } from './utils.ts'
+import { getEnv, trimTrailingSlashes } from './utils.ts'
 
 export const ORG_ONBOARDING_INTENTS = ['unknown', 'ota', 'builder', 'both', 'exploring'] as const
 export type OrgOnboardingIntent = typeof ORG_ONBOARDING_INTENTS[number]
-
-const TRAILING_SLASHES_REGEX = /\/+$/
 
 export function parseOrgOnboardingIntent(onboarding: unknown): OrgOnboardingIntent {
   if (!onboarding || typeof onboarding !== 'object' || !('intent' in onboarding))
@@ -39,7 +37,7 @@ export function buildOnboardingIntentBentoEventData(
   intent: OrgOnboardingIntent,
   org: { id: string, name: string, website?: string | null },
 ): Record<string, string | null> {
-  const baseUrl = (getEnv(c, 'WEBAPP_URL') || '').replace(TRAILING_SLASHES_REGEX, '')
+  const baseUrl = trimTrailingSlashes(getEnv(c, 'WEBAPP_URL') || '')
   const onboardingUrlOta = baseUrl ? `${baseUrl}/app/new` : null
   const onboardingUrlBuilder = baseUrl ? `${baseUrl}/apps` : null
 

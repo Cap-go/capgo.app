@@ -189,7 +189,7 @@ function fingerprint(raw: string): { fp: string, title: string } {
     .trim()
     .slice(0, 160)
   let h = 5381
-  for (let i = 0; i < norm.length; i++) h = (h * 33) ^ norm.charCodeAt(i)
+  for (let i = 0; i < norm.length; i++) h = (h * 33) ^ (norm.codePointAt(i) ?? 0)
   return { fp: (h >>> 0).toString(16), title: firstLine.slice(0, 140) }
 }
 

@@ -11,6 +11,13 @@ const POSTHOG_EXCEPTION_URL = 'https://eu.i.posthog.com/i/v0/e/'
 const CAPGO_POSTHOG_PROJECT_TOKEN = 'phc_NXDyDajQaTQVwb25DEhIVZfxVUn4R0Y348Z7vWYHZUi'
 const POSTHOG_TIMEOUT_MS = 1500
 
+function trimTrailingSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value[end - 1] === '/')
+    end -= 1
+  return value.slice(0, end)
+}
+
 type CliPosthogExceptionKind = 'unhandled_error'
 
 interface SerializedError {
@@ -41,7 +48,7 @@ export function getPosthogToken() {
 }
 
 function getPosthogExceptionUrl(host: string) {
-  const trimmedHost = host.replace(/\/+$/, '')
+  const trimmedHost = trimTrailingSlashes(host)
   if (trimmedHost.endsWith('/i/v0/e'))
     return `${trimmedHost}/`
 

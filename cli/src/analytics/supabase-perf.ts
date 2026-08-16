@@ -92,8 +92,15 @@ export function deriveSupabaseOperation(url: string, method: string): string {
   const functionsMarker = '/functions/v1/'
   const functionsIdx = pathname.indexOf(functionsMarker)
   if (functionsIdx >= 0) {
-    const functionRoute = pathname.slice(functionsIdx + functionsMarker.length).replace(/^\/+|\/+$/g, '')
-    return functionRoute ? `${method} functions:${functionRoute}` : `${method} functions`
+    const functionRoute = pathname.slice(functionsIdx + functionsMarker.length)
+    let start = 0
+    let end = functionRoute.length
+    while (start < end && functionRoute[start] === '/')
+      start += 1
+    while (end > start && functionRoute[end - 1] === '/')
+      end -= 1
+    const trimmedRoute = functionRoute.slice(start, end)
+    return trimmedRoute ? `${method} functions:${trimmedRoute}` : `${method} functions`
   }
 
   const marker = '/rest/v1/'

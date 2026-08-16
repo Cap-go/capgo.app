@@ -796,6 +796,13 @@ export async function getRemoteFileConfig() {
   }
 }
 
+export function trimTrailingSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value[end - 1] === '/')
+    end -= 1
+  return value.slice(0, end)
+}
+
 export function normalizeSupabaseHost(host: string): string {
   const parsed = new URL(host)
   if (!['http:', 'https:'].includes(parsed.protocol))
@@ -805,7 +812,7 @@ export function normalizeSupabaseHost(host: string): string {
   if (parsed.search || parsed.hash)
     throw new Error('Supabase host must not include query parameters or fragments')
 
-  const normalizedPath = parsed.pathname.replace(/\/+$/, '')
+  const normalizedPath = trimTrailingSlashes(parsed.pathname)
   return `${parsed.origin}${normalizedPath}`
 }
 
@@ -944,7 +951,7 @@ export async function invokeCapgoCliApi<T = any>(
   }
 
   const usesFunctionsV1 = base.includes('/functions/v1')
-  const url = `${base.replace(/\/+$/, '')}/${path.replace(/^\//, '')}`
+  const url = `${trimTrailingSlashes(base)}/${path.replace(/^\//, '')}`
   try {
     const response = await fetch(url, {
       method,
