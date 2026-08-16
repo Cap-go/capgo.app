@@ -69,7 +69,7 @@ const { t } = useI18n()
               @click.stop="$emit('toggleSidebarCollapse')"
             >
               <span class="sr-only">{{ props.sidebarCollapsed ? t('expand-sidebar') : t('collapse-sidebar') }}</span>
-              <IconPanelLeft class="w-6 h-6" />
+              <IconPanelLeft class="h-5 w-5 [stroke-width:1.5]" />
             </button>
           </div>
           <!-- Hamburger button -->
