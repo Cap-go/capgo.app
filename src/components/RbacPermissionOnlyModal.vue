@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Permission } from '~/services/permissions'
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconUserCircle from '~icons/heroicons/user-circle'
 import { userHasPermission } from '~/services/permissions'
@@ -26,6 +26,13 @@ const mainStore = useMainStore()
 
 const contacts = ref<{ key: string, email: string, image_url: string }[]>([])
 const isLoading = ref(true)
+
+// Only org.update_billing denials are dismissible (Escape / backdrop).
+// org.read_billing (and other gates) stay until the user gains access.
+const canDismiss = computed(() => {
+  const permissions = Array.isArray(props.permission) ? props.permission : [props.permission]
+  return permissions.includes('org.update_billing')
+})
 
 function getMemberKey(member: { uid?: string | null, id?: string | number | null, email: string }) {
   return String(member.uid ?? member.id ?? member.email)
@@ -98,11 +105,29 @@ async function loadContacts() {
   }
 }
 
-function onBackdropClick() {
+function tryEmitClose() {
+  if (!canDismiss.value)
+    return
   emit('close')
 }
 
-onMounted(loadContacts)
+function onBackdropClick() {
+  tryEmitClose()
+}
+
+function onEscapeKey(event: KeyboardEvent) {
+  if (event.key !== 'Escape')
+    return
+  tryEmitClose()
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onEscapeKey)
+  void loadContacts()
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', onEscapeKey)
+})
 watch(() => [props.permission, organizationStore.currentOrganization?.gid], loadContacts)
 </script>
 
