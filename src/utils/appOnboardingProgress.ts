@@ -1,3 +1,5 @@
+import type { Json } from '~/types/supabase.types'
+
 export const APP_ONBOARDING_FEATURES = ['cli_install', 'ota', 'builder'] as const
 export type AppOnboardingFeatureKey = typeof APP_ONBOARDING_FEATURES[number]
 
@@ -79,8 +81,10 @@ export function parseAppOnboardingLedger(value: unknown): AppOnboardingLedger {
 export function withGettingStartedDismissed(
   value: unknown,
   at = new Date().toISOString(),
-): Record<string, unknown> {
-  const existing = isRecord(value) ? { ...value } : {}
+): Json {
+  const existing: { [key: string]: Json | undefined } = isRecord(value)
+    ? { ...value as { [key: string]: Json | undefined } }
+    : {}
   if (typeof existing.getting_started_dismissed_at === 'string' && existing.getting_started_dismissed_at.length > 0)
     return existing
   return {
