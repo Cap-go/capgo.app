@@ -143,7 +143,7 @@ beforeAll(async () => {
       INSERT INTO public.groups (org_id, name, description, is_system, created_by)
       VALUES (
         $1::uuid,
-        '__capgo_billing_read_backfill',
+        '__capgo.sys.billing_read_backfill',
         'Test backfill group',
         true,
         $2::uuid
@@ -323,7 +323,10 @@ describe('org.read_billing default + redaction', () => {
       JOIN public.groups g ON g.id = gm.group_id
       WHERE gm.user_id = $1::uuid
         AND g.org_id = $2::uuid
-        AND g.name = '__capgo_billing_read_backfill'
+        AND g.name IN (
+          '__capgo.sys.billing_read_backfill',
+          '__capgo.sys.billing_read_backfill.' || $2::text
+        )
     `, [alreadyHasBillingId, orgId])
     expect(groupMembership.rows[0].cnt).toBe(0)
   })

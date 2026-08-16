@@ -3,7 +3,7 @@ import type { CreditMetricType, CreditPricingStep } from '~/services/creditPrici
 import type { Database } from '~/types/supabase.types'
 import { FormKit } from '@formkit/vue'
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -71,6 +71,7 @@ const isMobile = isNativeAppStoreContext()
 const showAdminModal = ref(false)
 const adminModalPermission = ref<'org.read_billing' | 'org.update_billing'>('org.update_billing')
 const hasReadBillingAccess = ref(false)
+let updateBillingFocusEl: HTMLElement | null = null
 
 const transactions = ref<UsageCreditLedgerRow[]>([])
 const pricingSteps = ref<CreditPricingStep[]>([])
@@ -423,8 +424,12 @@ async function ensureReadBillingAccess(expectedOrgId?: string) {
 }
 
 function dismissUpdateBillingModal() {
-  if (adminModalPermission.value === 'org.update_billing')
-    showAdminModal.value = false
+  if (adminModalPermission.value !== 'org.update_billing')
+    return
+  showAdminModal.value = false
+  const el = updateBillingFocusEl
+  updateBillingFocusEl = null
+  void nextTick(() => el?.focus?.())
 }
 
 function onEscapeDismiss(event: KeyboardEvent) {
@@ -437,6 +442,9 @@ async function ensureUpdateBillingAccess() {
   const orgId = currentOrganization.value?.gid
   if (orgId && await checkPermissions('org.update_billing', { orgId }))
     return true
+  updateBillingFocusEl = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null
   adminModalPermission.value = 'org.update_billing'
   showAdminModal.value = true
   return false

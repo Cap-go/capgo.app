@@ -139,19 +139,39 @@ WHERE uwb.user_id IS NULL;
 CREATE INDEX ON _tmp_needs_org_read_billing (user_id, org_id);
 
 -- 3a) One system group per org that still has users needing the grant.
+-- Reserved name; never promote a pre-existing user group via ON CONFLICT UPDATE.
 INSERT INTO public.groups (org_id, name, description, is_system, created_by)
 SELECT DISTINCT
   nb.org_id,
-  '__capgo_billing_read_backfill',
+  '__capgo.sys.billing_read_backfill',
   'System group: preserves org.read_billing for users who already saw billing before enforcement',
   true,
   o.created_by
 FROM _tmp_needs_org_read_billing nb
 JOIN public.orgs o ON o.id = nb.org_id
-ON CONFLICT (org_id, name) DO UPDATE
-SET
-  description = EXCLUDED.description,
-  is_system = true;
+ON CONFLICT (org_id, name) DO NOTHING;
+
+-- If a non-system group already owns the reserved name, use an org-id suffix.
+INSERT INTO public.groups (org_id, name, description, is_system, created_by)
+SELECT DISTINCT
+  nb.org_id,
+  '__capgo.sys.billing_read_backfill.' || nb.org_id::text,
+  'System group: preserves org.read_billing for users who already saw billing before enforcement',
+  true,
+  o.created_by
+FROM _tmp_needs_org_read_billing nb
+JOIN public.orgs o ON o.id = nb.org_id
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM public.groups g
+  WHERE g.org_id = nb.org_id
+    AND g.is_system = true
+    AND g.name IN (
+      '__capgo.sys.billing_read_backfill',
+      '__capgo.sys.billing_read_backfill.' || nb.org_id::text
+    )
+)
+ON CONFLICT (org_id, name) DO NOTHING;
 
 -- 3b) Bind org_billing_reader to each backfill group (org-scoped).
 INSERT INTO public.role_bindings (
@@ -175,8 +195,14 @@ SELECT
   true
 FROM public.groups g
 JOIN public.roles ON roles.name = 'org_billing_reader'
-WHERE g.name = '__capgo_billing_read_backfill'
-  AND g.is_system = true
+WHERE g.is_system = true
+  AND (
+    g.name = '__capgo.sys.billing_read_backfill'
+    OR g.name = '__capgo.sys.billing_read_backfill.' || g.org_id::text
+  )
+  AND EXISTS (
+    SELECT 1 FROM _tmp_needs_org_read_billing nb WHERE nb.org_id = g.org_id
+  )
   AND NOT EXISTS (
     SELECT 1
     FROM public.role_bindings existing
@@ -193,8 +219,11 @@ SELECT g.id, nb.user_id, COALESCE(g.created_by, nb.user_id)
 FROM _tmp_needs_org_read_billing nb
 JOIN public.groups g
   ON g.org_id = nb.org_id
- AND g.name = '__capgo_billing_read_backfill'
  AND g.is_system = true
+ AND (
+   g.name = '__capgo.sys.billing_read_backfill'
+   OR g.name = '__capgo.sys.billing_read_backfill.' || nb.org_id::text
+ )
 ON CONFLICT DO NOTHING;
 
 DROP TABLE _tmp_needs_org_read_billing;
