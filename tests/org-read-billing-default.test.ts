@@ -43,10 +43,9 @@ beforeAll(async () => {
 
     const roles = await client.query(`
       SELECT
-        MAX(id) FILTER (WHERE name = public.rbac_role_org_member()) AS org_member_id,
-        MAX(id) FILTER (WHERE name = 'org_billing_reader') AS billing_reader_id,
-        MAX(id) FILTER (WHERE name = public.rbac_role_app_reader()) AS app_reader_id
-      FROM public.roles
+        (SELECT id FROM public.roles WHERE name = public.rbac_role_org_member() LIMIT 1) AS org_member_id,
+        (SELECT id FROM public.roles WHERE name = 'org_billing_reader' LIMIT 1) AS billing_reader_id,
+        (SELECT id FROM public.roles WHERE name = public.rbac_role_app_reader() LIMIT 1) AS app_reader_id
     `)
     orgMemberRoleId = roles.rows[0]?.org_member_id
     billingReaderRoleId = roles.rows[0]?.billing_reader_id
