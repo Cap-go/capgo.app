@@ -188,13 +188,15 @@ const tabs = computed<Tab[]>(() => {
     <div
       id="sidebar"
       ref="sidebar"
-      class="fixed z-60 left-4 top-16 h-[calc(100%-4rem)] w-64 flex shrink-0 flex-col bg-slate-800 transition-all duration-200 ease-in-out rounded-xl shadow-lg lg:static lg:left-0 lg:top-0 lg:h-full lg:bg-slate-800 lg:rounded-none lg:shadow-none lg:translate-x-0"
+      class="fixed z-60 left-4 top-16 h-[calc(100%-4rem)] w-64 flex shrink-0 flex-col bg-slate-800 rounded-xl shadow-lg transition-[transform,width,opacity,min-width] duration-300 ease-out motion-reduce:transition-none lg:static lg:left-0 lg:top-0 lg:h-full lg:overflow-hidden lg:bg-slate-800 lg:rounded-none lg:shadow-none lg:translate-x-0"
       :class="{
         'translate-x-0': props.sidebarOpen,
         '-translate-x-[120%]': !props.sidebarOpen,
-        'lg:w-64': !props.sidebarCollapsed,
-        'lg:hidden': props.sidebarCollapsed,
+        'lg:w-64 lg:opacity-100': !props.sidebarCollapsed,
+        'lg:pointer-events-none lg:w-0 lg:min-w-0 lg:opacity-0': props.sidebarCollapsed,
       }"
+      :aria-hidden="props.sidebarCollapsed || undefined"
+      :inert="props.sidebarCollapsed || undefined"
     >
       <!-- Sidebar header -->
       <div class="flex justify-between px-3 py-4 border-b lg:py-6 lg:px-6 lg:border-b border-slate-800 shrink-0 lg:border-slate-700">
@@ -212,7 +214,7 @@ const tabs = computed<Tab[]>(() => {
 
       <!-- Organization dropdown -->
       <div class="px-3 py-4 lg:py-4 lg:px-6 shrink-0">
-        <dropdown-organization v-if="main.user && !props.sidebarCollapsed" />
+        <dropdown-organization v-if="main.user" />
       </div>
 
       <!-- Navigation -->

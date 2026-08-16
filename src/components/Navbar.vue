@@ -56,9 +56,18 @@ const { t } = useI18n()
               <span class="hidden md:block">{{ t('button-back') }}</span>
             </button>
           </div>
-          <div v-if="props.sidebarCollapsed && main.user" class="hidden lg:block">
-            <dropdown-organization compact />
-          </div>
+          <Transition
+            enter-active-class="transition-opacity duration-300 ease-out motion-reduce:transition-none"
+            enter-from-class="opacity-0"
+            enter-to-class="opacity-100"
+            leave-active-class="transition-opacity duration-200 ease-in motion-reduce:transition-none"
+            leave-from-class="opacity-100"
+            leave-to-class="opacity-0"
+          >
+            <div v-if="props.sidebarCollapsed && main.user" class="hidden lg:block">
+              <dropdown-organization compact />
+            </div>
+          </Transition>
           <div class="hidden lg:block">
             <button
               type="button"

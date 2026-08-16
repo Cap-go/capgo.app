@@ -85,12 +85,12 @@ useRealtimeCLIFeed()
     <!-- Content area -->
     <div
       data-test="dashboard-shell"
-      class="flex flex-col flex-1 h-full overflow-hidden transition-[padding] duration-200"
+      class="flex flex-col flex-1 h-full overflow-hidden transition-[padding] duration-300 ease-out motion-reduce:transition-none"
       :class="sidebarCollapsed ? 'lg:p-0' : 'lg:p-3'"
     >
       <div
-        class="flex flex-col h-full overflow-hidden border border-gray-200 dark:border-gray-700 bg-slate-100 dark:bg-slate-900"
-        :class="sidebarCollapsed ? 'lg:rounded-none lg:border-0 lg:shadow-none' : 'lg:rounded-xl lg:shadow-sm'"
+        class="flex flex-col h-full overflow-hidden border border-gray-200 dark:border-gray-700 bg-slate-100 dark:bg-slate-900 transition-[border-radius,box-shadow,border-color] duration-300 ease-out motion-reduce:transition-none"
+        :class="sidebarCollapsed ? 'lg:rounded-none lg:border-transparent lg:shadow-none' : 'lg:rounded-xl lg:shadow-sm'"
       >
         <!-- Site header -->
         <Navbar
