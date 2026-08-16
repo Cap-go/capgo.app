@@ -446,7 +446,7 @@ watch(
       <summary
         class="shadow-none d-btn d-btn-sm border border-gray-700 text-white bg-[#1a1d24] hover:bg-gray-700 hover:text-white active:text-white focus-visible:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800"
         :class="props.compact
-          ? 'relative size-10 min-h-10 p-1 justify-center'
+          ? 'relative size-8 min-h-8 min-w-8 p-0 justify-center'
           : 'h-auto min-h-12 justify-between w-full px-3 py-2'"
         :aria-label="triggerAriaLabel"
       >
@@ -456,13 +456,13 @@ watch(
             :src="currentOrganization.logo"
             :alt="`${currentOrganization.name} logo`"
             class="object-cover rounded-sm d-mask d-mask-squircle shrink-0"
-            :class="props.compact ? 'size-8' : 'size-6 mr-2'"
+            :class="props.compact ? 'size-6' : 'size-6 mr-2'"
             @error="refreshBrokenOrganizationLogo(currentOrganization)"
           >
           <div
             v-else-if="currentOrganization?.logo_is_loading"
             class="flex items-center justify-center bg-gray-700 rounded-sm d-mask d-mask-squircle shrink-0"
-            :class="props.compact ? 'size-8' : 'size-6 mr-2'"
+            :class="props.compact ? 'size-6' : 'size-6 mr-2'"
             :aria-label="t('loading')"
           >
             <span class="size-3.5 rounded-full border-2 border-blue-400 border-t-transparent animate-spin" />
@@ -471,7 +471,7 @@ watch(
           <div
             v-else
             class="flex items-center justify-center text-xs font-semibold text-gray-300 bg-gray-700 rounded-sm d-mask d-mask-squircle shrink-0"
-            :class="props.compact ? 'size-8' : 'size-6 mr-2'"
+            :class="props.compact ? 'size-6' : 'size-6 mr-2'"
           >
             {{ acronym(currentLabel) }}
           </div>

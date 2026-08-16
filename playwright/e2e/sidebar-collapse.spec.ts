@@ -58,8 +58,8 @@ test.describe('Desktop sidebar collapse', () => {
     await page.locator('[data-test="sidebar-collapse-toggle"]').click()
 
     await expect(page.locator('#sidebar')).toBeVisible()
-    await expect.poll(() => sidebarWidth(page)).toBeGreaterThan(48)
-    await expect.poll(() => sidebarWidth(page)).toBeLessThan(80)
+    await expect.poll(() => sidebarWidth(page)).toBeGreaterThan(40)
+    await expect.poll(() => sidebarWidth(page)).toBeLessThan(56)
     await expect(page.locator('#sidebar [data-test="org-switcher"]')).toBeVisible()
     await expect(page.locator('#sidebar').getByRole('button', { name: 'Dashboard' })).toBeVisible()
     await expect.poll(() => shellPadding(page)).toBe('12px 12px 12px')
@@ -75,7 +75,7 @@ test.describe('Desktop sidebar collapse', () => {
     await page.reload()
     await dismissSupportPrompt(page)
     await expect(page.locator('#sidebar')).toBeVisible()
-    await expect.poll(() => sidebarWidth(page)).toBeLessThan(80)
+    await expect.poll(() => sidebarWidth(page)).toBeLessThan(56)
 
     await page.locator('[data-test="sidebar-collapse-toggle"]').click()
     await expect.poll(() => sidebarWidth(page)).toBeGreaterThan(200)

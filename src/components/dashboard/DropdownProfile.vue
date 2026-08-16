@@ -102,18 +102,18 @@ async function resetSpoofedUser() {
 <template>
   <div>
     <div class="relative text-gray-300">
-      <div class="flex flex-col space-y-2" :class="props.compact ? 'p-2' : 'p-4'">
+      <div class="flex flex-col space-y-2" :class="props.compact ? 'p-1' : 'p-4'">
         <div class="flex items-center" :class="props.compact ? 'justify-center' : ''">
           <router-link
             v-if="props.compact"
             to="/settings/account"
-            class="d-btn d-btn-ghost d-btn-square h-10 min-h-10 w-10 p-0 rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
+            class="d-btn d-btn-ghost d-btn-square h-8 min-h-8 w-8 p-0 rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
             :aria-label="t('settings')"
             :title="t('settings')"
             @click="allowPendingOnboardingDashboardExploration"
           >
-            <img v-if="main.user?.image_url" class="w-10 h-10 d-mask d-mask-squircle" :src="main.user?.image_url" alt="User" width="32" height="32">
-            <div v-else class="flex items-center justify-center w-10 h-10 bg-gray-700 d-mask d-mask-squircle">
+            <img v-if="main.user?.image_url" class="w-8 h-8 d-mask d-mask-squircle" :src="main.user?.image_url" alt="User" width="32" height="32">
+            <div v-else class="flex items-center justify-center w-8 h-8 bg-gray-700 d-mask d-mask-squircle">
               <span class="font-medium">
                 {{ acronym }}
               </span>

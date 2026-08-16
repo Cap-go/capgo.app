@@ -189,26 +189,26 @@ const tabs = computed<Tab[]>(() => {
     <div
       id="sidebar"
       ref="sidebar"
-      class="fixed z-60 left-4 top-16 h-[calc(100%-4rem)] w-64 flex shrink-0 flex-col bg-slate-800 rounded-xl shadow-lg transition-[transform,width] duration-300 ease-out motion-reduce:transition-none lg:static lg:left-0 lg:top-0 lg:h-full lg:bg-slate-800 lg:rounded-none lg:shadow-none lg:translate-x-0"
+      class="fixed z-60 left-4 top-16 h-[calc(100%-4rem)] w-64 flex shrink-0 flex-col overflow-x-hidden bg-slate-800 rounded-xl shadow-lg transition-transform duration-200 ease-out motion-reduce:transition-none lg:static lg:left-0 lg:top-0 lg:h-full lg:bg-slate-800 lg:rounded-none lg:shadow-none lg:translate-x-0 lg:transition-none"
       :class="{
         'translate-x-0': props.sidebarOpen,
         '-translate-x-[120%]': !props.sidebarOpen,
         'lg:w-64': !isRail,
-        'lg:w-16': isRail,
+        'lg:w-12': isRail,
       }"
     >
       <!-- Sidebar header -->
       <div
         class="flex border-b shrink-0 border-slate-800 lg:border-slate-700"
-        :class="isRail ? 'justify-center px-2 py-4' : 'justify-between px-3 py-4 lg:py-6 lg:px-6'"
+        :class="isRail ? 'justify-center px-1 py-3' : 'justify-between px-3 py-4 lg:py-6 lg:px-6'"
       >
         <router-link
-          class="flex items-center p-1 rounded-lg cursor-pointer focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
-          :class="isRail ? 'justify-center' : 'space-x-2 lg:space-x-3'"
+          class="flex items-center rounded-lg cursor-pointer focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
+          :class="isRail ? 'justify-center' : 'p-1 space-x-2 lg:space-x-3'"
           to="/apps"
           aria-label="Capgo - Go to dashboard"
         >
-          <img src="/capgo.webp" alt="Capgo logo" class="w-8 h-8 shrink-0">
+          <img src="/capgo.webp" alt="Capgo logo" class="shrink-0" :class="isRail ? 'w-7 h-7' : 'w-8 h-8'">
           <span
             class="text-xl font-semibold truncate transition duration-150 hover:text-white font-prompt text-slate-200 lg:text-slate-200 lg:hover:text-white"
             :class="isRail ? 'sr-only' : ''"
@@ -221,12 +221,12 @@ const tabs = computed<Tab[]>(() => {
       <GettingStartedNav :compact="isRail" />
 
       <!-- Organization dropdown -->
-      <div class="shrink-0" :class="isRail ? 'flex justify-center px-2 py-3' : 'px-3 py-4 lg:py-4 lg:px-6'">
+      <div class="shrink-0" :class="isRail ? 'flex justify-center px-1 py-2' : 'px-3 py-4 lg:py-4 lg:px-6'">
         <dropdown-organization v-if="main.user" :compact="isRail" />
       </div>
 
       <!-- Navigation -->
-      <div class="flex-1 space-y-4 overflow-y-auto" :class="isRail ? 'px-2 py-3' : 'px-3 py-4 lg:py-6 lg:px-6'">
+      <div class="flex-1 space-y-4 overflow-y-auto" :class="isRail ? 'px-1 py-2' : 'px-3 py-4 lg:py-6 lg:px-6'">
         <div>
           <h3
             class="text-xs font-semibold uppercase text-slate-500 lg:text-slate-500"
@@ -238,10 +238,10 @@ const tabs = computed<Tab[]>(() => {
             <li v-for="tab, i in tabs" :key="i">
               <button
                 type="button"
-                class="flex items-center w-full rounded-md transition duration-150 cursor-pointer lg:rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-200 min-h-11 lg:text-slate-200 lg:hover:bg-slate-700/50 hover:bg-slate-700/50 focus:ring-offset-slate-800"
+                class="flex items-center w-full rounded-md transition duration-150 cursor-pointer lg:rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-200 lg:text-slate-200 lg:hover:bg-slate-700/50 hover:bg-slate-700/50 focus:ring-offset-slate-800"
                 :class="{
-                  'justify-center p-2': isRail,
-                  'p-3 lg:p-3': !isRail,
+                  'justify-center p-1 min-h-9': isRail,
+                  'p-3 lg:p-3 min-h-11': !isRail,
                   'hover:bg-slate-700/50 lg:hover:bg-slate-700/50': !isTabActive(tab.key),
                   'bg-slate-700 text-white lg:bg-slate-700 lg:text-white': isTabActive(tab.key),
                   'cursor-default': isTabActive(tab.key),

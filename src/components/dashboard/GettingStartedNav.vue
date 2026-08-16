@@ -97,7 +97,7 @@ watch(() => organizationStore.currentOrganization?.gid, async (orgId) => {
 </script>
 
 <template>
-  <div v-if="apps.length" data-test="getting-started-nav" :class="props.compact ? 'px-2 pt-2' : 'px-3 pt-3 lg:px-6'">
+  <div v-if="apps.length" data-test="getting-started-nav" :class="props.compact ? 'px-1 pt-1' : 'px-3 pt-3 lg:px-6'">
     <ul class="max-h-56 space-y-1 overflow-y-auto">
       <li v-for="app in apps" :key="app.app_id">
         <div
