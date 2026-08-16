@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Permission } from '~/services/permissions'
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconUserCircle from '~icons/heroicons/user-circle'
 import { userHasPermission } from '~/services/permissions'
@@ -16,12 +16,23 @@ const props = defineProps<{
   permission: Permission | Permission[]
 }>()
 
+const emit = defineEmits<{
+  close: []
+}>()
+
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
 const mainStore = useMainStore()
 
 const contacts = ref<{ key: string, email: string, image_url: string }[]>([])
 const isLoading = ref(true)
+
+// Only org.update_billing denials are dismissible (Escape / backdrop).
+// org.read_billing (and other gates) stay until the user gains access.
+const canDismiss = computed(() => {
+  const permissions = Array.isArray(props.permission) ? props.permission : [props.permission]
+  return permissions.includes('org.update_billing')
+})
 
 function getMemberKey(member: { uid?: string | null, id?: string | number | null, email: string }) {
   return String(member.uid ?? member.id ?? member.email)
@@ -94,13 +105,41 @@ async function loadContacts() {
   }
 }
 
-onMounted(loadContacts)
+function tryEmitClose() {
+  if (!canDismiss.value)
+    return
+  emit('close')
+}
+
+function onBackdropClick() {
+  tryEmitClose()
+}
+
+function onEscapeKey(event: KeyboardEvent) {
+  if (event.key !== 'Escape')
+    return
+  tryEmitClose()
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onEscapeKey)
+  void loadContacts()
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', onEscapeKey)
+})
 watch(() => [props.permission, organizationStore.currentOrganization?.gid], loadContacts)
 </script>
 
 <template>
-  <div class="flex absolute inset-0 z-10 flex-col justify-center items-center bg-white/60 dark:bg-gray-900/60">
-    <div class="p-8 text-center bg-white rounded-xl border shadow-xl dark:bg-gray-800 border-blue-200 dark:border-blue-700 max-w-md">
+  <div
+    class="flex absolute inset-0 z-10 flex-col justify-center items-center bg-white/60 dark:bg-gray-900/60"
+    @click="onBackdropClick"
+  >
+    <div
+      class="p-8 text-center bg-white rounded-xl border shadow-xl dark:bg-gray-800 border-blue-200 dark:border-blue-700 max-w-md"
+      @click.stop
+    >
       <div class="flex justify-center mb-4">
         <div class="flex justify-center items-center w-16 h-16 bg-blue-100 rounded-full dark:bg-blue-900/30">
           <svg class="w-8 h-8 text-blue-500" viewBox="0 0 20 20" fill="currentColor">

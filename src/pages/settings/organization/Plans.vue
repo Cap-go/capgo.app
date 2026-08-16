@@ -695,7 +695,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
       v-if="showAdminModal"
       :title="t('billing-access-required')"
       permission="org.update_billing"
-      @click="showAdminModal = false"
+      @close="showAdminModal = false"
     />
   </div>
 </template>
