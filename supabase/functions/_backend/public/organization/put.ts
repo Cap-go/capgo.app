@@ -7,7 +7,7 @@ import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { createSignedImageUrl, normalizeImagePath } from '../../utils/storage.ts'
+import { assertAllowedImagePath, createSignedImageUrl, normalizeImagePath } from '../../utils/storage.ts'
 import { getStripeCustomerName, isDeterministicStripeCustomerUpdateError, updateCustomerOrganizationName } from '../../utils/stripe.ts'
 import { apikeyHasOrgRightWithPolicy, supabaseAdmin, supabaseApikey, supabaseClient } from '../../utils/supabase.ts'
 import { normalizeWebsiteUrl } from './website.ts'
@@ -228,8 +228,24 @@ function buildUpdateFields(body: OrganizationPutBody, sanitizedName?: string) {
     updateFields.name = sanitizedName ?? body.name
   if (body.website !== undefined)
     updateFields.website = normalizeWebsiteUrl(body.website)
-  if (body.logo !== undefined)
-    updateFields.logo = normalizeImagePath(body.logo) ?? body.logo
+  if (body.logo !== undefined) {
+    if (body.logo === '') {
+      updateFields.logo = ''
+    }
+    else {
+      const normalizedLogo = normalizeImagePath(body.logo)
+      // Absolute external URLs stay as-is; storage paths must be under this org.
+      if (body.logo.includes('://') && !normalizedLogo) {
+        updateFields.logo = body.logo
+      }
+      else {
+        const allowedLogo = assertAllowedImagePath(normalizedLogo, { orgId: body.orgId })
+        if (!allowedLogo)
+          throw simpleError('invalid_logo_path', 'Logo path must belong to this organization')
+        updateFields.logo = allowedLogo
+      }
+    }
+  }
   if (body.management_email !== undefined)
     updateFields.management_email = body.management_email
   if (body.require_apikey_expiration !== undefined)
@@ -492,7 +508,7 @@ export async function put(
   }
 
   if (dataOrg.logo) {
-    const signedLogo = await createSignedImageUrl(c, dataOrg.logo)
+    const signedLogo = await createSignedImageUrl(c, dataOrg.logo, { orgId: dataOrg.id })
     dataOrg.logo = signedLogo ?? null
   }
 

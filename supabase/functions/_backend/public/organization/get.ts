@@ -111,7 +111,7 @@ export async function get(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, 
     await ensureOrgAccess(c, apikey, body.orgId, supabase)
     const org = await fetchOrg(supabase, body.orgId)
     if (org.logo) {
-      const signedLogo = await createSignedImageUrl(c, org.logo)
+      const signedLogo = await createSignedImageUrl(c, org.logo, { orgId: org.id })
       org.logo = signedLogo ?? null
     }
 
@@ -122,7 +122,7 @@ export async function get(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, 
   const signedOrgs = await Promise.all(orgs.map(async (org) => {
     if (!org.logo)
       return org
-    const signedLogo = await createSignedImageUrl(c, org.logo)
+    const signedLogo = await createSignedImageUrl(c, org.logo, { orgId: org.id })
     return {
       ...org,
       logo: signedLogo ?? null,

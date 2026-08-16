@@ -5,7 +5,7 @@ import { applyAppOnboardingPatch, isAppOnboardingSource } from '../../utils/appO
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { createSignedImageUrl, normalizeImagePath } from '../../utils/storage.ts'
+import { assertAllowedImagePath, createSignedImageUrl, normalizeImagePath } from '../../utils/storage.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
 export interface CreateApp {
@@ -42,7 +42,19 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
     throw quickError(403, 'cannot_access_organization', 'You can\'t access this organization', { org_id: body.owner_org })
   }
 
-  const normalizedIcon = normalizeImagePath(body.icon ?? '')
+  const normalizedIcon = !body.icon
+    ? null
+    : (() => {
+        const normalized = normalizeImagePath(body.icon)
+        if (body.icon.includes('://') && !normalized)
+          return body.icon
+        return assertAllowedImagePath(normalized, {
+          orgId: body.owner_org,
+          appId: body.app_id,
+        })
+      })()
+  if (body.icon && !normalizedIcon)
+    throw simpleError('invalid_icon_path', 'Icon path must belong to this app organization')
   const dataInsert = {
     owner_org: body.owner_org,
     app_id: body.app_id,
@@ -125,7 +137,10 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
   }
 
   if (data.icon_url) {
-    const signedIcon = await createSignedImageUrl(c, data.icon_url)
+    const signedIcon = await createSignedImageUrl(c, data.icon_url, {
+      orgId: data.owner_org,
+      appId: data.app_id,
+    })
     data.icon_url = signedIcon ?? ''
   }
 

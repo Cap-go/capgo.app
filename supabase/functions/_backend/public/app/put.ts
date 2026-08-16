@@ -10,7 +10,7 @@ import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { createSignedImageUrl, normalizeImagePath } from '../../utils/storage.ts'
+import { assertAllowedImagePath, createSignedImageUrl, normalizeImagePath } from '../../utils/storage.ts'
 import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
@@ -122,7 +122,21 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     }
   }
 
-  const normalizedIcon = normalizeImagePath(body.icon)
+  const normalizedIcon = body.icon === undefined
+    ? undefined
+    : body.icon === ''
+      ? ''
+      : (() => {
+          const normalized = normalizeImagePath(body.icon)
+          if (body.icon.includes('://') && !normalized)
+            return body.icon
+          return assertAllowedImagePath(normalized, {
+            orgId: previousApp.owner_org,
+            appId,
+          })
+        })()
+  if (body.icon !== undefined && body.icon !== '' && !normalizedIcon)
+    throw simpleError('invalid_icon_path', 'Icon path must belong to this app organization')
   const onboardingLock = shouldSerializeOnboardingCompletion
     ? await lockOnboardingApp(c, appId)
     : null
@@ -233,7 +247,10 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
   }
 
   if (data.icon_url) {
-    const signedIcon = await createSignedImageUrl(c, data.icon_url)
+    const signedIcon = await createSignedImageUrl(c, data.icon_url, {
+      orgId: data.owner_org,
+      appId: data.app_id,
+    })
     data.icon_url = signedIcon ?? ''
   }
 

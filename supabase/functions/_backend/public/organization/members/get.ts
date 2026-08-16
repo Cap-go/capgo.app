@@ -66,7 +66,7 @@ export async function get(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, 
         image_url: '',
       }
     }
-    const signedImage = await createSignedImageUrl(c, member.image_url)
+    const signedImage = await createSignedImageUrl(c, member.image_url, { userId: member.uid })
     return {
       ...member,
       image_url: signedImage ?? '',

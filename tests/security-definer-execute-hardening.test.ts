@@ -105,6 +105,7 @@ const AUTHENTICATED_ONLY_PROCS = [
   'public.rbac_check_permission(text, uuid, character varying, bigint)',
   'public.rbac_check_permission_no_password_policy(text, uuid, character varying, bigint)',
   'public.update_org_member_role(uuid, uuid, text)',
+  'public.verify_email_otp_auth()',
 ] as const
 
 describe('security definer execute hardening', () => {
