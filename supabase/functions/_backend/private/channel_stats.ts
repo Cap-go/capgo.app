@@ -212,7 +212,7 @@ function getLatestCounts(labels: string[], countsByDate: Record<string, Record<s
       return counts
   }
 
-  const latestLabel = labels.at(-1)
+  const latestLabel = labels[labels.length - 1]
   return countsByDate[latestLabel] ?? {}
 }
 
