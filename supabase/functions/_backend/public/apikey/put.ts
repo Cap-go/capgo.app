@@ -13,7 +13,7 @@ import { schema } from '../../utils/postgres_schema.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { supabaseAdmin, supabaseWithAuth, validateExpirationAgainstOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
 import { apiKeyBindingsAllowOrgCreate, assertApiKeyCanKeepOrgCreateGrant, parseApiKeyGlobalPermissions, replaceApiKeyGlobalPermissions, validateApiKeyGlobalPermissionsForBindings } from './global_permissions.ts'
-import { assertApiKeyManagerCanAssignBindings, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, sanitizeClientBindings, selectOwnedApiKeyByIdentifier } from './scope.ts'
+import { assertApiKeyManagerCanAssignBindings, assertApiKeyManagerCanRotateTarget, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, sanitizeClientBindings, selectOwnedApiKeyByIdentifier } from './scope.ts'
 import { getErrorCode, getErrorStatus } from '../../utils/errors.ts'
 
 const app = honoFactory.createApp()
@@ -419,6 +419,8 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
   }
 
   if (regenerate) {
+    await assertApiKeyManagerCanRotateTarget(c, auth, existingApikey.rbac_id)
+
     if (isHashedKey) {
       const { data: regeneratedApikey, error: regenerateError } = await supabaseAdmin(c).rpc('regenerate_hashed_apikey_for_user', {
         p_apikey_id: existingApikey.id,
