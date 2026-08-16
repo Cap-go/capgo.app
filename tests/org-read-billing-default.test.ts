@@ -6,13 +6,20 @@ import { POSTGRES_URL, USER_ID, USER_PASSWORD_HASH, withAuthenticatedUser } from
 
 const fixtureId = randomUUID()
 const orgId = randomUUID()
+const appRbacId = randomUUID()
+const appId = `com.test.readbilling.${fixtureId.slice(0, 8)}`
 const customerId = `cus_read_billing_${fixtureId.replaceAll('-', '').slice(0, 20)}`
 const memberWithDefaultId = randomUUID()
 const memberWithoutBillingId = randomUUID()
+const appOnlyBackfillId = randomUUID()
+const alreadyHasBillingId = randomUUID()
 
 let pool: Pool
 let noBillingRoleId: string
 let orgMemberRoleId: string
+let billingReaderRoleId: string
+let appReaderRoleId: string
+let backfillGroupId: string
 
 async function createAuthUser(client: PoolClient, userId: string, email: string) {
   await client.query(`
@@ -35,13 +42,18 @@ beforeAll(async () => {
     await client.query('BEGIN')
 
     const roles = await client.query(`
-      SELECT id
+      SELECT
+        MAX(id) FILTER (WHERE name = public.rbac_role_org_member()) AS org_member_id,
+        MAX(id) FILTER (WHERE name = 'org_billing_reader') AS billing_reader_id,
+        MAX(id) FILTER (WHERE name = public.rbac_role_app_reader()) AS app_reader_id
       FROM public.roles
-      WHERE name = public.rbac_role_org_member()
-      LIMIT 1
     `)
-    orgMemberRoleId = roles.rows[0]?.id
+    orgMemberRoleId = roles.rows[0]?.org_member_id
+    billingReaderRoleId = roles.rows[0]?.billing_reader_id
+    appReaderRoleId = roles.rows[0]?.app_reader_id
     expect(orgMemberRoleId).toBeTruthy()
+    expect(billingReaderRoleId).toBeTruthy()
+    expect(appReaderRoleId).toBeTruthy()
 
     // Guard: org_member must include org.read_billing by default.
     const memberPerm = await client.query(`
@@ -68,8 +80,15 @@ beforeAll(async () => {
       VALUES ($1::uuid, $2::uuid, $3, $4, $5)
     `, [orgId, USER_ID, `Read Billing Org ${fixtureId}`, `read-billing-${fixtureId}@capgo.app`, customerId])
 
+    await client.query(`
+      INSERT INTO public.apps (id, app_id, name, icon_url, owner_org)
+      VALUES ($1::uuid, $2, $3, 'https://example.com/icon.png', $4::uuid)
+    `, [appRbacId, appId, `Read Billing App ${fixtureId}`, orgId])
+
     await createAuthUser(client, memberWithDefaultId, `read-billing-default-${fixtureId}@capgo.app`)
     await createAuthUser(client, memberWithoutBillingId, `read-billing-denied-${fixtureId}@capgo.app`)
+    await createAuthUser(client, appOnlyBackfillId, `read-billing-app-only-${fixtureId}@capgo.app`)
+    await createAuthUser(client, alreadyHasBillingId, `read-billing-already-${fixtureId}@capgo.app`)
 
     // Dedicated role without org.read_billing for revoke/deny coverage.
     const noBillingRole = await client.query(`
@@ -99,11 +118,13 @@ beforeAll(async () => {
 
     await client.query(`
       INSERT INTO public.role_bindings (
-        principal_type, principal_id, role_id, scope_type, org_id, granted_by, reason, is_direct
+        principal_type, principal_id, role_id, scope_type, org_id, app_id, granted_by, reason, is_direct
       )
       VALUES
-        (public.rbac_principal_user(), $1::uuid, $2::uuid, public.rbac_scope_org(), $3::uuid, $4::uuid, 'default member', true),
-        (public.rbac_principal_user(), $5::uuid, $6::uuid, public.rbac_scope_org(), $3::uuid, $4::uuid, 'no billing member', true)
+        (public.rbac_principal_user(), $1::uuid, $2::uuid, public.rbac_scope_org(), $3::uuid, NULL, $4::uuid, 'default member', true),
+        (public.rbac_principal_user(), $5::uuid, $6::uuid, public.rbac_scope_org(), $3::uuid, NULL, $4::uuid, 'no billing member', true),
+        (public.rbac_principal_user(), $7::uuid, $8::uuid, public.rbac_scope_app(), $3::uuid, $9::uuid, $4::uuid, 'app only', true),
+        (public.rbac_principal_user(), $10::uuid, $2::uuid, public.rbac_scope_org(), $3::uuid, NULL, $4::uuid, 'already has billing', true)
     `, [
       memberWithDefaultId,
       orgMemberRoleId,
@@ -111,14 +132,48 @@ beforeAll(async () => {
       USER_ID,
       memberWithoutBillingId,
       noBillingRoleId,
+      appOnlyBackfillId,
+      appReaderRoleId,
+      appRbacId,
+      alreadyHasBillingId,
     ])
+
+    // Simulate migration backfill for app-only users: system group + org_billing_reader.
+    const group = await client.query(`
+      INSERT INTO public.groups (org_id, name, description, is_system, created_by)
+      VALUES (
+        $1::uuid,
+        '__capgo_billing_read_backfill',
+        'Test backfill group',
+        true,
+        $2::uuid
+      )
+      RETURNING id
+    `, [orgId, USER_ID])
+    backfillGroupId = group.rows[0].id
+
+    await client.query(`
+      INSERT INTO public.role_bindings (
+        principal_type, principal_id, role_id, scope_type, org_id, granted_by, reason, is_direct
+      )
+      VALUES (
+        public.rbac_principal_group(), $1::uuid, $2::uuid, public.rbac_scope_org(), $3::uuid, $4::uuid,
+        'test backfill', true
+      )
+    `, [backfillGroupId, billingReaderRoleId, orgId, USER_ID])
+
+    await client.query(`
+      INSERT INTO public.group_members (group_id, user_id, added_by)
+      VALUES ($1::uuid, $2::uuid, $3::uuid)
+    `, [backfillGroupId, appOnlyBackfillId, USER_ID])
 
     await client.query(`
       INSERT INTO public.org_users (org_id, user_id, rbac_role_name, is_invite)
       VALUES
         ($1::uuid, $2::uuid, public.rbac_role_org_member(), false),
-        ($1::uuid, $3::uuid, public.rbac_role_org_member(), false)
-    `, [orgId, memberWithDefaultId, memberWithoutBillingId])
+        ($1::uuid, $3::uuid, public.rbac_role_org_member(), false),
+        ($1::uuid, $4::uuid, public.rbac_role_org_member(), false)
+    `, [orgId, memberWithDefaultId, memberWithoutBillingId, alreadyHasBillingId])
 
     await client.query(`
       INSERT INTO public.usage_credit_grants (
@@ -147,10 +202,14 @@ afterAll(async () => {
     await client.query('DELETE FROM public.users WHERE id = ANY($1::uuid[])', [[
       memberWithDefaultId,
       memberWithoutBillingId,
+      appOnlyBackfillId,
+      alreadyHasBillingId,
     ]])
     await client.query('DELETE FROM auth.users WHERE id = ANY($1::uuid[])', [[
       memberWithDefaultId,
       memberWithoutBillingId,
+      appOnlyBackfillId,
+      alreadyHasBillingId,
     ]])
   }
   finally {
@@ -163,7 +222,7 @@ describe('org.read_billing default + redaction', () => {
   it.concurrent('org_member default sees credit fields from get_orgs_v7', async () => {
     const rows = await withAuthenticatedUser(pool, memberWithDefaultId, async (client) => {
       const result = await client.query(`
-        SELECT gid, credit_available, credit_total, paying, management_email
+        SELECT gid, credit_available, credit_total, paying, management_email, role, next_stats_update_at
         FROM public.get_orgs_v7()
         WHERE gid = $1::uuid
       `, [orgId])
@@ -175,6 +234,8 @@ describe('org.read_billing default + redaction', () => {
     expect(Number(rows[0].credit_total)).toBe(250)
     expect(rows[0].paying).toBe(true)
     expect(rows[0].management_email).toBeTruthy()
+    expect(rows[0].role).toBe('org_member')
+    expect(rows[0].next_stats_update_at).toBeTruthy()
   })
 
   it.concurrent('member without org.read_billing gets billing fields redacted', async () => {
@@ -182,7 +243,7 @@ describe('org.read_billing default + redaction', () => {
       const result = await client.query(`
         SELECT gid, credit_available, credit_total, paying, trial_left, can_use_more,
                is_canceled, subscription_start, subscription_end, management_email, is_yearly,
-               credit_next_expiration
+               credit_next_expiration, next_stats_update_at, role, created_at, app_count
         FROM public.get_orgs_v7()
         WHERE gid = $1::uuid
       `, [orgId])
@@ -201,6 +262,10 @@ describe('org.read_billing default + redaction', () => {
     expect(rows[0].subscription_end).toBeNull()
     expect(rows[0].management_email).toBeNull()
     expect(rows[0].is_yearly).toBe(false)
+    expect(rows[0].next_stats_update_at).toBeNull()
+    expect(rows[0].role).not.toBe('org_billing_reader')
+    expect(rows[0].created_at).toBeTruthy()
+    expect(Number(rows[0].app_count)).toBeGreaterThanOrEqual(1)
   })
 
   it.concurrent('stripe_info is hidden without org.read_billing', async () => {
@@ -220,5 +285,46 @@ describe('org.read_billing default + redaction', () => {
     })
     expect(allowed).toHaveLength(1)
     expect(allowed[0].customer_id).toBe(customerId)
+  })
+
+  it.concurrent('app-only backfill group keeps billing without exposing org_billing_reader role', async () => {
+    const rows = await withAuthenticatedUser(pool, appOnlyBackfillId, async (client) => {
+      const result = await client.query(`
+        SELECT gid, credit_available, credit_total, paying, role
+        FROM public.get_orgs_v7()
+        WHERE gid = $1::uuid
+      `, [orgId])
+      return result.rows
+    })
+
+    expect(rows).toHaveLength(1)
+    expect(Number(rows[0].credit_available)).toBe(200)
+    expect(rows[0].paying).toBe(true)
+    // Non-assignable backfill role must not replace the public role label.
+    expect(rows[0].role).toBe('org_member')
+    expect(rows[0].role).not.toBe('org_billing_reader')
+  })
+
+  it.concurrent('user who already has org.read_billing gets no duplicate org_billing_reader binding', async () => {
+    const bindings = await pool.query(`
+      SELECT COUNT(*)::int AS cnt
+      FROM public.role_bindings rb
+      JOIN public.roles r ON r.id = rb.role_id
+      WHERE rb.principal_type = public.rbac_principal_user()
+        AND rb.principal_id = $1::uuid
+        AND rb.org_id = $2::uuid
+        AND r.name = 'org_billing_reader'
+    `, [alreadyHasBillingId, orgId])
+    expect(bindings.rows[0].cnt).toBe(0)
+
+    const groupMembership = await pool.query(`
+      SELECT COUNT(*)::int AS cnt
+      FROM public.group_members gm
+      JOIN public.groups g ON g.id = gm.group_id
+      WHERE gm.user_id = $1::uuid
+        AND g.org_id = $2::uuid
+        AND g.name = '__capgo_billing_read_backfill'
+    `, [alreadyHasBillingId, orgId])
+    expect(groupMembership.rows[0].cnt).toBe(0)
   })
 })

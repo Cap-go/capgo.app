@@ -94,13 +94,27 @@ async function loadContacts() {
   }
 }
 
+const emit = defineEmits<{
+  close: []
+}>()
+
+function onBackdropClick() {
+  emit('close')
+}
+
 onMounted(loadContacts)
 watch(() => [props.permission, organizationStore.currentOrganization?.gid], loadContacts)
 </script>
 
 <template>
-  <div class="flex absolute inset-0 z-10 flex-col justify-center items-center bg-white/60 dark:bg-gray-900/60">
-    <div class="p-8 text-center bg-white rounded-xl border shadow-xl dark:bg-gray-800 border-blue-200 dark:border-blue-700 max-w-md">
+  <div
+    class="flex absolute inset-0 z-10 flex-col justify-center items-center bg-white/60 dark:bg-gray-900/60"
+    @click="onBackdropClick"
+  >
+    <div
+      class="p-8 text-center bg-white rounded-xl border shadow-xl dark:bg-gray-800 border-blue-200 dark:border-blue-700 max-w-md"
+      @click.stop
+    >
       <div class="flex justify-center mb-4">
         <div class="flex justify-center items-center w-16 h-16 bg-blue-100 rounded-full dark:bg-blue-900/30">
           <svg class="w-8 h-8 text-blue-500" viewBox="0 0 20 20" fill="currentColor">

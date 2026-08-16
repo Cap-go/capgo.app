@@ -3,7 +3,7 @@ import type { CreditMetricType, CreditPricingStep } from '~/services/creditPrici
 import type { Database } from '~/types/supabase.types'
 import { FormKit } from '@formkit/vue'
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -422,9 +422,15 @@ async function ensureReadBillingAccess(expectedOrgId?: string) {
   return false
 }
 
-async function dismissUpdateBillingModal() {
+function dismissUpdateBillingModal() {
   if (adminModalPermission.value === 'org.update_billing')
     showAdminModal.value = false
+}
+
+function onEscapeDismiss(event: KeyboardEvent) {
+  if (event.key !== 'Escape')
+    return
+  dismissUpdateBillingModal()
 }
 
 async function ensureUpdateBillingAccess() {
@@ -530,6 +536,7 @@ onMounted(async () => {
     return
   }
 
+  window.addEventListener('keydown', onEscapeDismiss)
   displayStore.NavTitle = t('credits')
   await organizationStore.awaitInitialLoad()
   // Finalize Stripe return before the read gate so update-billing holders can
@@ -538,6 +545,10 @@ onMounted(async () => {
   if (!(await ensureReadBillingAccess()))
     return
   await Promise.allSettled([loadTransactions(), loadPricingSteps()])
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onEscapeDismiss)
 })
 
 watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined, oldOrgId: string | undefined) => {
@@ -558,6 +569,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
     <div
       v-if="hasReadBillingAccess"
       class="space-y-8"
+      :inert="showAdminModal && adminModalPermission === 'org.update_billing'"
       :class="{ 'blur-sm pointer-events-none select-none': showAdminModal && adminModalPermission === 'org.update_billing' }"
     >
       <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
@@ -902,7 +914,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
       v-if="showAdminModal"
       :title="t('billing-access-required')"
       :permission="adminModalPermission"
-      @click="dismissUpdateBillingModal"
+      @close="dismissUpdateBillingModal"
     />
   </div>
 </template>

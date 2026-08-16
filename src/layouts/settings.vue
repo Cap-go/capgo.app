@@ -365,7 +365,7 @@ function handleTertiary(val: string) {
         v-if="showBillingModal"
         :title="t('billing-access-required')"
         permission="org.update_billing"
-        @click="showBillingModal = false"
+        @close="showBillingModal = false"
       />
     </main>
   </div>

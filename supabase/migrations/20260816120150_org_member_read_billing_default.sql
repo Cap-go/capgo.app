@@ -36,10 +36,11 @@ WHERE r.name = 'org_billing_reader'
 ON CONFLICT DO NOTHING;
 
 -- 3) Backfill users who can reach an org but still lack org.read_billing.
--- role_bindings allows only one org-scoped binding per principal/org, so:
---   - extend existing org-scoped roles that lack the permission
---   - otherwise attach the non-assignable org_billing_reader role
-CREATE TABLE public._tmp_needs_org_read_billing AS
+-- Do NOT mutate shared roles (role_permissions are global). Grant via a
+-- per-org system group bound to non-assignable org_billing_reader instead.
+-- That preserves existing assignable role display names and avoids leaking
+-- the permission to every org that reuses a custom role.
+CREATE TEMP TABLE _tmp_needs_org_read_billing AS
 WITH users_with_billing AS (
   SELECT DISTINCT rb.principal_id AS user_id, rb.org_id
   FROM public.role_bindings rb
@@ -135,37 +136,24 @@ LEFT JOIN users_with_billing uwb
  AND uwb.org_id = org_reach.org_id
 WHERE uwb.user_id IS NULL;
 
-CREATE INDEX ON public._tmp_needs_org_read_billing (user_id, org_id);
+CREATE INDEX ON _tmp_needs_org_read_billing (user_id, org_id);
 
--- 3a) Extend existing org-scoped roles (one binding per principal/org).
-INSERT INTO public.role_permissions (role_id, permission_id)
-SELECT DISTINCT src.role_id, p.id
-FROM (
-  SELECT rb.role_id
-  FROM public._tmp_needs_org_read_billing nb
-  JOIN public.role_bindings rb
-    ON rb.principal_type = public.rbac_principal_user()
-   AND rb.principal_id = nb.user_id
-   AND rb.org_id = nb.org_id
-   AND rb.scope_type = public.rbac_scope_org()
-   AND (rb.expires_at IS NULL OR rb.expires_at > now())
+-- 3a) One system group per org that still has users needing the grant.
+INSERT INTO public.groups (org_id, name, description, is_system, created_by)
+SELECT DISTINCT
+  nb.org_id,
+  '__capgo_billing_read_backfill',
+  'System group: preserves org.read_billing for users who already saw billing before enforcement',
+  true,
+  o.created_by
+FROM _tmp_needs_org_read_billing nb
+JOIN public.orgs o ON o.id = nb.org_id
+ON CONFLICT (org_id, name) DO UPDATE
+SET
+  description = EXCLUDED.description,
+  is_system = true;
 
-  UNION
-
-  SELECT rb.role_id
-  FROM public._tmp_needs_org_read_billing nb
-  JOIN public.group_members gm ON gm.user_id = nb.user_id
-  JOIN public.role_bindings rb
-    ON rb.principal_type = public.rbac_principal_group()
-   AND rb.principal_id = gm.group_id
-   AND rb.org_id = nb.org_id
-   AND rb.scope_type = public.rbac_scope_org()
-   AND (rb.expires_at IS NULL OR rb.expires_at > now())
-) src
-JOIN public.permissions p ON p.key = public.rbac_perm_org_read_billing()
-ON CONFLICT DO NOTHING;
-
--- 3b) App/channel-only users: attach org_billing_reader when no org binding exists.
+-- 3b) Bind org_billing_reader to each backfill group (org-scoped).
 INSERT INTO public.role_bindings (
   principal_type,
   principal_id,
@@ -177,40 +165,50 @@ INSERT INTO public.role_bindings (
   is_direct
 )
 SELECT
-  public.rbac_principal_user(),
-  nb.user_id,
+  public.rbac_principal_group(),
+  g.id,
   roles.id,
   public.rbac_scope_org(),
-  nb.org_id,
-  nb.user_id,
-  'Backfill org.read_billing for users who previously saw billing without the permission',
+  g.org_id,
+  g.created_by,
+  'Backfill org.read_billing via system group (do not mutate shared roles)',
   true
-FROM public._tmp_needs_org_read_billing nb
+FROM public.groups g
 JOIN public.roles ON roles.name = 'org_billing_reader'
-WHERE NOT EXISTS (
-  SELECT 1
-  FROM public.role_bindings existing
-  WHERE existing.principal_type = public.rbac_principal_user()
-    AND existing.principal_id = nb.user_id
-    AND existing.scope_type = public.rbac_scope_org()
-    AND existing.org_id = nb.org_id
-    AND (existing.expires_at IS NULL OR existing.expires_at > now())
-)
-AND NOT EXISTS (
-  SELECT 1
-  FROM public.group_members gm
-  JOIN public.role_bindings existing
-    ON existing.principal_type = public.rbac_principal_group()
-   AND existing.principal_id = gm.group_id
-   AND existing.scope_type = public.rbac_scope_org()
-   AND existing.org_id = nb.org_id
-   AND (existing.expires_at IS NULL OR existing.expires_at > now())
-  WHERE gm.user_id = nb.user_id
-);
+WHERE g.name = '__capgo_billing_read_backfill'
+  AND g.is_system = true
+  AND NOT EXISTS (
+    SELECT 1
+    FROM public.role_bindings existing
+    WHERE existing.principal_type = public.rbac_principal_group()
+      AND existing.principal_id = g.id
+      AND existing.scope_type = public.rbac_scope_org()
+      AND existing.org_id = g.org_id
+      AND (existing.expires_at IS NULL OR existing.expires_at > now())
+  );
 
-DROP TABLE public._tmp_needs_org_read_billing;
+-- 3c) Add needing users to their org's backfill group.
+INSERT INTO public.group_members (group_id, user_id, added_by)
+SELECT g.id, nb.user_id, COALESCE(g.created_by, nb.user_id)
+FROM _tmp_needs_org_read_billing nb
+JOIN public.groups g
+  ON g.org_id = nb.org_id
+ AND g.name = '__capgo_billing_read_backfill'
+ AND g.is_system = true
+ON CONFLICT DO NOTHING;
+
+DROP TABLE _tmp_needs_org_read_billing;
 
 -- 4) stripe_info SELECT follows org.read_billing, not bare org.read.
+-- RLS path notes (scalability):
+-- - Called from stripe_info SELECT policy once per statement (InitPlan-style
+--   subquery via COALESCE((SELECT readable_org_customer_ids()), ...)).
+-- - Roles: anon + authenticated (API-key traffic uses JWT claims / apikey header).
+-- - rbac_org_ids_for_permission already resolves API-key principals via
+--   get_apikey_header() + find_apikey_by_value() + role_bindings; no extra scan.
+-- - Cardinality: returns customer_id list for orgs the caller may bill-read;
+--   bounded by the caller's org membership set, not by stripe_info size.
+-- - Expected indexes: orgs(id), orgs(customer_id), role_bindings principal/scope.
 CREATE OR REPLACE FUNCTION public.readable_org_customer_ids()
 RETURNS text[]
 LANGUAGE sql
@@ -228,7 +226,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION public.readable_org_customer_ids() IS
-  'Customer IDs whose stripe_info rows are readable by the caller through org.read_billing.';
+  'Customer IDs whose stripe_info rows are readable by the caller through org.read_billing. Invoked once per stripe_info SELECT statement; API-key principals are handled inside rbac_org_ids_for_permission.';
 
 -- 5) Redact billing fields in get_orgs_v7 when the user lacks org.read_billing.
 CREATE OR REPLACE FUNCTION "public"."get_orgs_v7"("userid" "uuid") RETURNS TABLE("gid" "uuid", "created_by" "uuid", "created_at" timestamp with time zone, "logo" "text", "website" "text", "name" "text", "role" character varying, "is_invite" boolean, "paying" boolean, "trial_left" integer, "can_use_more" boolean, "is_canceled" boolean, "app_count" bigint, "subscription_start" timestamp with time zone, "subscription_end" timestamp with time zone, "management_email" "text", "is_yearly" boolean, "stats_updated_at" timestamp without time zone, "stats_refresh_requested_at" timestamp without time zone, "next_stats_update_at" timestamp with time zone, "credit_available" numeric, "credit_total" numeric, "credit_next_expiration" timestamp with time zone, "enforcing_2fa" boolean, "2fa_has_access" boolean, "enforce_hashed_api_keys" boolean, "password_policy_config" "jsonb", "password_has_access" boolean, "require_apikey_expiration" boolean, "max_apikey_expiration_days" integer, "enforce_encrypted_bundles" boolean, "required_encryption_key" character varying)
@@ -247,6 +245,8 @@ BEGIN
     FROM public.role_bindings rb
     JOIN public.roles r ON rb.role_id = r.id
       AND r.scope_type = rb.scope_type
+      -- Hide non-assignable backfill roles from the public role label.
+      AND r.is_assignable = true
     WHERE rb.principal_type = public.rbac_principal_user()
       AND rb.principal_id = userid
       AND rb.scope_type = public.rbac_scope_org()
@@ -258,6 +258,7 @@ BEGIN
     JOIN public.group_members gm ON gm.group_id = rb.principal_id
     JOIN public.roles r ON rb.role_id = r.id
       AND r.scope_type = rb.scope_type
+      AND r.is_assignable = true
     WHERE rb.principal_type = public.rbac_principal_group()
       AND gm.user_id = userid
       AND rb.scope_type = public.rbac_scope_org()
@@ -414,21 +415,21 @@ BEGIN
     COALESCE(pi.role_name::varchar, ror.role_name::varchar, public.rbac_role_org_member()::varchar) AS role,
     (pi.org_id IS NOT NULL) AS is_invite,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN false
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN false
       ELSE COALESCE(si.status = 'succeeded', false)
     END AS paying,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN 0
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN 0
       ELSE GREATEST(COALESCE((si.trial_at::date - NOW()::date), 0), 0)::integer
     END AS trial_left,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN false
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN false
       ELSE COALESCE((si.status = 'succeeded' AND si.is_good_plan = true)
         OR (si.trial_at::date - NOW()::date > 0)
         OR COALESCE(ucb.available_credits, 0) > 0, false)
     END AS can_use_more,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN false
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN false
       ELSE COALESCE(si.status = 'canceled', false)
     END AS is_canceled,
     CASE
@@ -436,38 +437,39 @@ BEGIN
       ELSE COALESCE(ac.cnt, 0)
     END AS app_count,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN NULL::timestamptz
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::timestamptz
       ELSE bc.cycle_start
     END AS subscription_start,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN NULL::timestamptz
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::timestamptz
       ELSE (bc.cycle_start + INTERVAL '1 MONTH')
     END AS subscription_end,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN NULL::text
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::text
       ELSE o.management_email
     END AS management_email,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN false
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN false
       ELSE COALESCE(si.price_id = p.price_y_id, false)
     END AS is_yearly,
     o.stats_updated_at,
     o.stats_refresh_requested_at,
     CASE
+      WHEN COALESCE(billing_acc.should_redact_billing, true) THEN NULL::timestamptz
       WHEN poo.id IS NOT NULL THEN
         public.get_next_cron_time('0 3 * * *', NOW()) + make_interval(mins => poo.preceding_count::int * 4)
       ELSE NULL
     END AS next_stats_update_at,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN NULL::numeric
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::numeric
       ELSE COALESCE(ucb.available_credits, 0)
     END AS credit_available,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN NULL::numeric
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::numeric
       ELSE COALESCE(ucb.total_credits, 0)
     END AS credit_total,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR billing_acc.should_redact_billing THEN NULL::timestamptz
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::timestamptz
       ELSE ucb.next_expiration
     END AS credit_next_expiration,
     tfa.enforcing_2fa,
