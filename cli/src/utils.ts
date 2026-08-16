@@ -34,7 +34,10 @@ import { isTruthyEnvValue } from './posthog'
 import { nativePackageSchema } from './schemas/common'
 import { safeParseSchema } from './schemas/schema_validation'
 import { CliUserError } from './shared/cli-user-error'
+import { trimTrailingSlashes } from './shared/trim-trailing-slashes'
 import { formatApiErrorForCli, parseSecurityPolicyError } from './utils/security_policy_errors'
+
+export { trimTrailingSlashes }
 
 function reportUploadContext(level: 'error' | 'info' | 'success' | 'warn', message: string) {
   const reporter = getActiveUploadReporter()
@@ -794,13 +797,6 @@ export async function getRemoteFileConfig() {
       alertUploadSize: ALERT_UPLOAD_SIZE_BYTES,
     }
   }
-}
-
-export function trimTrailingSlashes(value: string): string {
-  let end = value.length
-  while (end > 0 && value[end - 1] === '/')
-    end -= 1
-  return value.slice(0, end)
 }
 
 export function normalizeSupabaseHost(host: string): string {

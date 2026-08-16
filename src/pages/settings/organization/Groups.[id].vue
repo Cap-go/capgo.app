@@ -936,7 +936,6 @@ async function removeMemberFromGroup(userId: string) {
                   <button
                     type="button"
                     class="d-btn d-btn-xs d-btn-ghost text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0"
-                    type="button"
                     :disabled="isSubmitting"
                     @click="toggleApp(appId)"
                   >

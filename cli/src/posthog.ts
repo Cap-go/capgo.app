@@ -6,17 +6,11 @@ import { join } from 'node:path'
 import { arch, cwd, env, version as nodeVersion } from 'node:process'
 import pack from '../package.json'
 import { CliUserError } from './shared/cli-user-error'
+import { trimTrailingSlashes } from './shared/trim-trailing-slashes'
 
 const POSTHOG_EXCEPTION_URL = 'https://eu.i.posthog.com/i/v0/e/'
 const CAPGO_POSTHOG_PROJECT_TOKEN = 'phc_NXDyDajQaTQVwb25DEhIVZfxVUn4R0Y348Z7vWYHZUi'
 const POSTHOG_TIMEOUT_MS = 1500
-
-function trimTrailingSlashes(value: string): string {
-  let end = value.length
-  while (end > 0 && value[end - 1] === '/')
-    end -= 1
-  return value.slice(0, end)
-}
 
 type CliPosthogExceptionKind = 'unhandled_error'
 

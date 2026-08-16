@@ -237,8 +237,8 @@ async function getChannel(force = false) {
 }
 
 async function saveChannelChanges(update: ChannelUpdate) {
-  const changesStableVersion = Object.hasOwn(update, 'version')
-  const changesRolloutVersion = Object.hasOwn(update, 'rollout_version')
+  const changesStableVersion = Object.prototype.hasOwnProperty.call(update, 'version')
+  const changesRolloutVersion = Object.prototype.hasOwnProperty.call(update, 'rollout_version')
   // Unlinking rollout_version (including disable) requires promote_bundle — matches refresh_channel_rollout_id.
   const canUpdate = changesStableVersion || changesRolloutVersion
     ? canPromoteBundle.value
@@ -252,12 +252,12 @@ async function saveChannelChanges(update: ChannelUpdate) {
   if (!id.value || !channel.value)
     return false
 
-  if (Object.hasOwn(update, 'version') && (update.version === undefined || (update.version !== null && typeof update.version !== 'number'))) {
+  if (Object.prototype.hasOwnProperty.call(update, 'version') && (update.version === undefined || (update.version !== null && typeof update.version !== 'number'))) {
     console.error('Invalid version ID:', update.version)
     toast.error(t('error-invalid-version'))
     return false
   }
-  if (Object.hasOwn(update, 'rollout_version') && (update.rollout_version === undefined || (update.rollout_version !== null && typeof update.rollout_version !== 'number'))) {
+  if (Object.prototype.hasOwnProperty.call(update, 'rollout_version') && (update.rollout_version === undefined || (update.rollout_version !== null && typeof update.rollout_version !== 'number'))) {
     console.error('Invalid rollout version ID:', update.rollout_version)
     toast.error(t('error-invalid-version'))
     return false

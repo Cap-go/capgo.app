@@ -118,7 +118,7 @@ function getOverrideKey(channelId: number, permission: ChannelPermissionKey) {
 
 function hasOverride(channelId: number, permission: ChannelPermissionKey) {
   const key = getOverrideKey(channelId, permission)
-  return Object.hasOwn(channelOverrides.value, key)
+  return Object.prototype.hasOwnProperty.call(channelOverrides.value, key)
 }
 
 function getOverrideValue(channelId: number, permission: ChannelPermissionKey) {

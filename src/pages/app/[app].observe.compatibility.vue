@@ -679,7 +679,6 @@ watchEffect(async () => {
                       <button
                         type="button"
                         v-if="permittedRollbackTargets.length > 0"
-                        type="button"
                         data-test="compatibility-rollback-cta"
                         class="text-white d-btn d-btn-primary d-btn-sm"
                         @click="openRollbackDialog"

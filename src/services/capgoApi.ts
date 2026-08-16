@@ -90,12 +90,11 @@ async function invokeWithRetry<T>(
   }
 }
 
-function normalizeApiHost(host: string | undefined): string {
-  const value = host ?? ''
-  let end = value.length
-  while (end > 0 && value[end - 1] === '/')
+function normalizeApiHost(host = ''): string {
+  let end = host.length
+  while (end > 0 && host[end - 1] === '/')
     end -= 1
-  return value.slice(0, end)
+  return host.slice(0, end)
 }
 
 function parseHostname(supaHost: string): string | null {

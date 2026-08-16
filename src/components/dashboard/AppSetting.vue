@@ -143,10 +143,10 @@ onMounted(async () => {
   isLoading.value = true
 
   const { error, data } = await supabase
-      .from('apps')
-      .select('*, owner_org ( name, id )')
-      .eq('app_id', props.appId)
-      .single()
+    .from('apps')
+    .select('*, owner_org ( name, id )')
+    .eq('app_id', props.appId)
+    .single()
 
   if (error) {
     toast.error(t('cannot-load-app-settings'))
