@@ -36,11 +36,12 @@ type StatsPeriodStartReason = 'requested_days' | 'current_version_release'
 const supportedPeriodDays = [1, 3, 7, 30] as const
 type StatsPeriodDays = typeof supportedPeriodDays[number]
 
-function normalizeStatsPeriodDays(days = 30): StatsPeriodDays | null {
-  if (!Number.isInteger(days) || !supportedPeriodDays.includes(days as StatsPeriodDays))
+function normalizeStatsPeriodDays(days: number | undefined): StatsPeriodDays | null {
+  const requestedDays = days ?? 30
+  if (!Number.isInteger(requestedDays) || !supportedPeriodDays.includes(requestedDays as StatsPeriodDays))
     return null
 
-  return days as StatsPeriodDays
+  return requestedDays as StatsPeriodDays
 }
 
 function getStatsPeriod(requestedDays: StatsPeriodDays, endDate: Date, currentVersionReleasedAt: string | null | undefined) {
