@@ -30,16 +30,11 @@ export async function replaceUserOnboardingIfUnchanged(
   expectedOnboarding: Json,
   onboarding: Json,
 ) {
-  let query = useSupabase()
+  return useSupabase()
     .from('users')
     .update({ onboarding })
     .eq('id', userId)
-
-  query = expectedOnboarding === null
-    ? query.is('onboarding', null)
-    : query.filter('onboarding', 'eq', JSON.stringify(expectedOnboarding))
-
-  return query
+    .filter('onboarding', 'eq', JSON.stringify(expectedOnboarding))
     .select()
     .maybeSingle()
 }
