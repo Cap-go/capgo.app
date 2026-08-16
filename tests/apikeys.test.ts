@@ -751,13 +751,16 @@ describe('[POST] /apikey operations', () => {
     finally {
       for (const keyId of createdKeyIds.reverse()) {
         try {
-          await fetch(`${BASE_URL}/apikey/${keyId}`, {
+          const response = await fetch(`${BASE_URL}/apikey/${keyId}`, {
             method: 'DELETE',
             headers: dedicatedAuthHeaders,
           })
+          if (!response.ok) {
+            console.warn(`apikey manager super-admin rotate cleanup delete ${keyId} status=${response.status}`)
+          }
         }
-        catch {
-          // Best-effort cleanup: keep deleting remaining keys.
+        catch (error) {
+          console.warn(`apikey manager super-admin rotate cleanup delete ${keyId} failed`, error)
         }
       }
     }
