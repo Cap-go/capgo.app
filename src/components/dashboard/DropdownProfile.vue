@@ -107,7 +107,7 @@ async function resetSpoofedUser() {
           <router-link
             v-if="props.compact"
             to="/settings/account"
-            class="flex items-center justify-center rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
+            class="d-btn d-btn-ghost d-btn-square h-10 min-h-10 w-10 p-0 rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
             :aria-label="t('settings')"
             :title="t('settings')"
             @click="allowPendingOnboardingDashboardExploration"

@@ -17,6 +17,7 @@ async function sidebarWidth(page: Page) {
 }
 
 async function orgSwitcherMenuIsOnTop(page: Page) {
+  const trigger = page.locator('#sidebar [data-test="org-switcher"] summary')
   const menu = page.locator('[data-test="org-switcher-menu"]').filter({ visible: true })
   await expect(menu).toBeVisible()
   await expect.poll(async () => {
@@ -25,10 +26,15 @@ async function orgSwitcherMenuIsOnTop(page: Page) {
       return `${style.position}:${style.display}`
     })
   }).toMatch(/^(absolute|fixed):(?!none).+/)
+  const triggerBox = await trigger.boundingBox()
   const menuBox = await menu.boundingBox()
+  expect(triggerBox).toBeTruthy()
   expect(menuBox).toBeTruthy()
   expect(menuBox!.width).toBeGreaterThan(160)
   expect(menuBox!.height).toBeGreaterThan(40)
+  expect(menuBox!.x).toBeGreaterThanOrEqual(triggerBox!.x + triggerBox!.width + 4)
+  expect(menuBox!.x).toBeLessThanOrEqual(triggerBox!.x + triggerBox!.width + 16)
+  expect(Math.abs(menuBox!.y - triggerBox!.y)).toBeLessThan(24)
   return page.evaluate(({ x, y }) => {
     const el = document.elementFromPoint(x, y)
     return el?.closest('[data-test="org-switcher-menu"]') != null
