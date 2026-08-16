@@ -10,7 +10,7 @@ import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { assertAllowedImagePath, createSignedImageUrl, getStorageAllowedOrigins, normalizeImagePath } from '../../utils/storage.ts'
+import { createSignedImageUrl, getStorageAllowedOrigins, resolveWritableImageValue } from '../../utils/storage.ts'
 import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
@@ -130,15 +130,11 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     normalizedIcon = ''
   }
   else {
-    const normalized = normalizeImagePath(body.icon, {
-      allowedOrigins: getStorageAllowedOrigins(c),
-    })
-    normalizedIcon = body.icon.includes('://') && !normalized
-      ? body.icon
-      : assertAllowedImagePath(normalized, {
-          orgId: previousApp.owner_org,
-          appId,
-        }) ?? undefined
+    normalizedIcon = resolveWritableImageValue(
+      body.icon,
+      { orgId: previousApp.owner_org, appId },
+      getStorageAllowedOrigins(c),
+    ) ?? undefined
   }
   if (body.icon !== undefined && body.icon !== '' && !normalizedIcon)
     throw simpleError('invalid_icon_path', 'Icon path must belong to this app organization')

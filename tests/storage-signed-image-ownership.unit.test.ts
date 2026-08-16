@@ -17,10 +17,13 @@ vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
 const {
   assertAllowedImagePath,
   createSignedImageUrl,
+  getStorageAllowedOrigins,
   isAllowedImagePath,
   isLegacyBareImageFilename,
   isOwnershipBearingImagePath,
+  isSupabaseStorageImageUrl,
   normalizeImagePath,
+  resolveWritableImageValue,
 } = await import('../supabase/functions/_backend/utils/storage.ts')
 
 describe('image path ownership for signed URLs', () => {
@@ -28,7 +31,13 @@ describe('image path ownership for signed URLs', () => {
     mocks.createSignedUrl.mockReset()
     mocks.supabaseAdmin.mockReset()
     mocks.getEnv.mockReset()
-    mocks.getEnv.mockReturnValue('https://example.supabase.co')
+    mocks.getEnv.mockImplementation((_: unknown, key: string) => {
+      if (key === 'SUPABASE_URL')
+        return 'https://example.supabase.co'
+      if (key === 'SUPABASE_REPLICATE_URL')
+        return 'https://replica.example.supabase.co'
+      return ''
+    })
     mocks.supabaseAdmin.mockReturnValue({
       storage: {
         from: () => ({
@@ -51,6 +60,14 @@ describe('image path ownership for signed URLs', () => {
     expect(isOwnershipBearingImagePath('test-icon')).toBe(false)
     expect(isOwnershipBearingImagePath('private/secret.png')).toBe(true)
     expect(isOwnershipBearingImagePath('org/org-1/logo/a.png')).toBe(true)
+  })
+
+  it('collects primary and replica storage origins', () => {
+    const context = {} as Parameters<typeof getStorageAllowedOrigins>[0]
+    expect(getStorageAllowedOrigins(context)).toEqual([
+      'https://example.supabase.co',
+      'https://replica.example.supabase.co',
+    ])
   })
 
   it('refuses to mint admin signed URLs for foreign org paths', async () => {
@@ -106,11 +123,46 @@ describe('image path ownership for signed URLs', () => {
       'https://example.supabase.co/storage/v1/object/sign/images/org/org-1/logo/a.png?token=x',
       { allowedOrigins: ['https://example.supabase.co'] },
     )).toBe('org/org-1/logo/a.png')
+    expect(normalizeImagePath(
+      'https://replica.example.supabase.co/storage/v1/object/public/images/org/org-1/logo/a.png',
+      { allowedOrigins: ['https://example.supabase.co', 'https://replica.example.supabase.co'] },
+    )).toBe('org/org-1/logo/a.png')
   })
 
   it('does not extract storage paths without an allowed origin list', () => {
     expect(normalizeImagePath(
       'https://example.supabase.co/storage/v1/object/sign/images/org/org-1/logo/a.png?token=x',
     )).toBeNull()
+    expect(normalizeImagePath(
+      'https://example.supabase.co/storage/v1/object/sign/images/org/org-1/logo/a.png?token=x',
+      { allowedOrigins: [] },
+    )).toBeNull()
+  })
+
+  it('rejects unverified storage-shaped URLs on write while keeping true CDN URLs', () => {
+    expect(isSupabaseStorageImageUrl(
+      'https://evil.example/storage/v1/object/sign/images/org/org-1/logo/a.png',
+    )).toBe(true)
+    expect(isSupabaseStorageImageUrl('https://cdn.example/logo.png')).toBe(false)
+    expect(resolveWritableImageValue(
+      'https://cdn.example/logo.png',
+      { orgId: 'org-1' },
+      ['https://example.supabase.co'],
+    )).toBe('https://cdn.example/logo.png')
+    expect(resolveWritableImageValue(
+      'https://evil.example/storage/v1/object/sign/images/org/org-1/logo/a.png',
+      { orgId: 'org-1' },
+      ['https://example.supabase.co'],
+    )).toBeNull()
+    expect(resolveWritableImageValue(
+      'https://example.supabase.co/storage/v1/object/sign/images/org/org-1/logo/a.png',
+      { orgId: 'org-1' },
+      ['https://example.supabase.co'],
+    )).toBe('org/org-1/logo/a.png')
+    expect(resolveWritableImageValue(
+      'org/org-1/logo/a.png',
+      { orgId: 'org-1' },
+      ['https://example.supabase.co'],
+    )).toBe('org/org-1/logo/a.png')
   })
 })

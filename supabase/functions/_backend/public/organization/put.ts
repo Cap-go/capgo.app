@@ -7,7 +7,7 @@ import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { assertAllowedImagePath, createSignedImageUrl, getStorageAllowedOrigins, normalizeImagePath } from '../../utils/storage.ts'
+import { createSignedImageUrl, getStorageAllowedOrigins, resolveWritableImageValue } from '../../utils/storage.ts'
 import { getStripeCustomerName, isDeterministicStripeCustomerUpdateError, updateCustomerOrganizationName } from '../../utils/stripe.ts'
 import { apikeyHasOrgRightWithPolicy, supabaseAdmin, supabaseApikey, supabaseClient } from '../../utils/supabase.ts'
 import { normalizeWebsiteUrl } from './website.ts'
@@ -237,17 +237,14 @@ function buildUpdateFields(
       updateFields.logo = ''
     }
     else {
-      const normalizedLogo = normalizeImagePath(body.logo, { allowedOrigins })
-      // Absolute external / foreign-host URLs stay as-is; our storage paths must be under this org.
-      if (body.logo.includes('://') && !normalizedLogo) {
-        updateFields.logo = body.logo
-      }
-      else {
-        const allowedLogo = assertAllowedImagePath(normalizedLogo, { orgId: body.orgId })
-        if (!allowedLogo)
-          throw simpleError('invalid_logo_path', 'Logo path must belong to this organization')
-        updateFields.logo = allowedLogo
-      }
+      const allowedLogo = resolveWritableImageValue(
+        body.logo,
+        { orgId: body.orgId },
+        allowedOrigins,
+      )
+      if (!allowedLogo)
+        throw simpleError('invalid_logo_path', 'Logo path must belong to this organization')
+      updateFields.logo = allowedLogo
     }
   }
   if (body.management_email !== undefined)

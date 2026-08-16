@@ -11,16 +11,60 @@ export interface ImagePathScope {
   appId?: string
 }
 
-export function getStorageAllowedOrigins(c: Context): string[] {
-  const supabaseUrl = getEnv(c, 'SUPABASE_URL').trim()
-  if (!supabaseUrl)
-    return []
+function originFromEnvUrl(raw: string) {
+  const trimmed = raw.trim()
+  if (!trimmed)
+    return null
   try {
-    return [new URL(supabaseUrl).origin]
+    return new URL(trimmed).origin
   }
   catch {
-    return []
+    return null
   }
+}
+
+/**
+ * Origins that may host Capgo image objects.
+ * Include both primary and replica/gateway hosts so signed/public object URLs
+ * round-trip correctly; never treat an empty list as “trust any host”.
+ */
+export function getStorageAllowedOrigins(c: Context): string[] {
+  const origins = new Set<string>()
+  for (const key of ['SUPABASE_URL', 'SUPABASE_REPLICATE_URL'] as const) {
+    const origin = originFromEnvUrl(getEnv(c, key))
+    if (origin)
+      origins.add(origin)
+  }
+  return [...origins]
+}
+
+export function isSupabaseStorageImageUrl(raw: string) {
+  try {
+    return STORAGE_URL_REGEX.test(new URL(raw).pathname)
+  }
+  catch {
+    return false
+  }
+}
+
+/**
+ * Normalize a client-supplied icon/logo for persistence.
+ * - Owned storage paths → relative object path
+ * - True external CDN URLs → absolute URL unchanged
+ * - Storage-shaped URLs on unknown/missing origins → reject (null)
+ */
+export function resolveWritableImageValue(
+  raw: string,
+  scope: ImagePathScope,
+  allowedOrigins: string[],
+) {
+  const normalized = normalizeImagePath(raw, { allowedOrigins })
+  if (raw.includes('://') && !normalized) {
+    if (isSupabaseStorageImageUrl(raw))
+      return null
+    return raw
+  }
+  return assertAllowedImagePath(normalized, scope)
 }
 
 export function normalizeImagePath(
@@ -38,8 +82,9 @@ export function normalizeImagePath(
     const url = new URL(trimmed)
     const match = STORAGE_URL_REGEX.exec(url.pathname)
     if (match?.[1]) {
-      // Only extract object paths from our configured Supabase origin.
-      if (!options?.allowedOrigins?.includes(url.origin))
+      // Require an explicit allow-list; empty list means misconfigured, not open.
+      const allowed = options?.allowedOrigins ?? []
+      if (!allowed.includes(url.origin))
         return null
       return decodeURIComponent(match[1]).replace(/^\/+/, '')
     }
