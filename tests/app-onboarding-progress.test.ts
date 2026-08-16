@@ -242,6 +242,12 @@ describe('app onboarding progress RPCs', () => {
     if (signInError)
       throw signInError
 
+    const { error: markError } = await authClient.rpc('mark_onboarding_feature_started', {
+      p_app_id: APP_RPC,
+      p_feature_key: 'cli_install',
+    })
+    expect(markError).toBeNull()
+
     const { data, error } = await authClient.rpc('dismiss_getting_started', {
       p_app_id: APP_RPC,
     })
