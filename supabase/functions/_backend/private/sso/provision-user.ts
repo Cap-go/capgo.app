@@ -560,7 +560,7 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
     // Security note: never resolve the merge candidate from public.users.email. That profile
     // column is user-editable; only auth.users.email and the current verified SSO session are
     // trusted identity sources for account linking. Unconfirmed auth.users rows are ignored
-    // so a pre-signup cannot become the merge target (GHSA-445f-fpr8-fgcq).
+    // so a pre-signup cannot become the merge target.
     let resolvedExistingUserId: string | null = null
     try {
       resolvedExistingUserId = await findCanonicalAuthUserIdByEmail(getSharedPgClient(), userEmail, userId, trustedSsoProviders)
