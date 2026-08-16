@@ -1506,7 +1506,7 @@ describe('[POST] /private/sso/provision-user', () => {
     }
   })
 
-  it('does not merge SSO login into an unconfirmed auth.users row with the same email', async () => {
+  it.concurrent('does not merge SSO login into an unconfirmed auth.users row with the same email', async () => {
     const managedOrgId = randomUUID()
     const managedCustomerId = `cus_sso_unconfirmed_merge_${randomUUID()}`
     const providerId = randomUUID()
@@ -1543,7 +1543,10 @@ describe('[POST] /private/sso/provision-user', () => {
       },
     })
     if (ssoUserError || !ssoUser.user) {
-      await pool.end()
+      await Promise.allSettled([
+        getSupabaseClient().auth.admin.deleteUser(unconfirmedUser.user.id),
+        pool.end(),
+      ])
       throw ssoUserError ?? new Error('Failed to create SSO auth user for unconfirmed merge regression')
     }
 
