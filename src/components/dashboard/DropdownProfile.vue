@@ -103,7 +103,7 @@ async function resetSpoofedUser() {
   <div>
     <div class="relative text-gray-300">
       <div class="flex flex-col space-y-2" :class="props.compact ? 'p-1' : 'p-4'">
-        <div class="flex items-center" :class="props.compact ? 'justify-center' : ''">
+        <div class="flex items-center">
           <router-link
             v-if="props.compact"
             to="/settings/account"

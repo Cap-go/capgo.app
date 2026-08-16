@@ -189,7 +189,7 @@ const tabs = computed<Tab[]>(() => {
     <div
       id="sidebar"
       ref="sidebar"
-      class="fixed z-60 left-4 top-16 h-[calc(100%-4rem)] w-64 flex shrink-0 flex-col overflow-x-hidden bg-slate-800 rounded-xl shadow-lg transition-transform duration-200 ease-out motion-reduce:transition-none lg:static lg:left-0 lg:top-0 lg:h-full lg:overflow-hidden lg:bg-slate-800 lg:rounded-none lg:shadow-none lg:translate-x-0 lg:transition-[width] lg:duration-300 lg:ease-out"
+      class="fixed z-60 left-4 top-16 h-[calc(100%-4rem)] w-64 flex shrink-0 flex-col overflow-x-hidden bg-slate-800 rounded-xl shadow-lg transition-transform duration-200 ease-out motion-reduce:transition-none lg:static lg:left-0 lg:top-0 lg:h-full lg:overflow-hidden lg:bg-slate-800 lg:rounded-none lg:shadow-none lg:translate-x-0 lg:transition-[width] lg:duration-500 lg:ease-[cubic-bezier(0.4,0,0.2,1)]"
       :class="{
         'translate-x-0': props.sidebarOpen,
         '-translate-x-[120%]': !props.sidebarOpen,
@@ -197,21 +197,21 @@ const tabs = computed<Tab[]>(() => {
         'lg:w-12': isRail,
       }"
     >
+      <div class="flex h-full w-64 min-w-64 flex-col">
       <!-- Sidebar header -->
       <div
-        class="flex border-b shrink-0 border-slate-800 lg:border-slate-700"
-        :class="isRail ? 'justify-center px-1 py-3' : 'justify-between px-3 py-4 lg:py-6 lg:px-6'"
+        class="flex border-b shrink-0 border-slate-800 lg:border-slate-700 transition-[padding] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:transition-none"
+        :class="isRail ? 'px-2 py-3' : 'px-3 py-4 lg:py-6 lg:px-6'"
       >
         <router-link
-          class="flex items-center rounded-lg cursor-pointer focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
-          :class="isRail ? 'justify-center' : 'p-1 space-x-2 lg:space-x-3'"
+          class="flex items-center p-1 rounded-lg cursor-pointer focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
           to="/apps"
           aria-label="Capgo - Go to dashboard"
         >
-          <img src="/capgo.webp" alt="Capgo logo" class="shrink-0" :class="isRail ? 'w-7 h-7' : 'w-8 h-8'">
+          <img src="/capgo.webp" alt="Capgo logo" class="w-8 h-8 shrink-0">
           <span
-            class="text-xl font-semibold truncate transition duration-150 hover:text-white font-prompt text-slate-200 lg:text-slate-200 lg:hover:text-white"
-            :class="isRail ? 'sr-only' : ''"
+            class="text-xl font-semibold whitespace-nowrap overflow-hidden font-prompt text-slate-200 lg:text-slate-200 transition-[opacity,max-width,margin] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:transition-none"
+            :class="isRail ? 'opacity-0 max-w-0 ml-0' : 'max-w-[8rem] ml-2 opacity-100 hover:text-white lg:hover:text-white'"
           >
             Capgo
           </span>
@@ -221,16 +221,23 @@ const tabs = computed<Tab[]>(() => {
       <GettingStartedNav :compact="isRail" />
 
       <!-- Organization dropdown -->
-      <div class="shrink-0" :class="isRail ? 'flex justify-center px-1 py-2' : 'px-3 py-4 lg:py-4 lg:px-6'">
+      <div
+        class="shrink-0 transition-[padding] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:transition-none"
+        :class="isRail ? 'px-2 py-2' : 'px-3 py-4 lg:py-4 lg:px-6'"
+      >
         <dropdown-organization v-if="main.user" :compact="isRail" />
       </div>
 
       <!-- Navigation -->
-      <div class="flex-1 space-y-4 overflow-y-auto" :class="isRail ? 'px-1 py-2' : 'px-3 py-4 lg:py-6 lg:px-6'">
+      <div
+        class="flex-1 space-y-4 overflow-y-auto transition-[padding] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:transition-none"
+        :class="isRail ? 'px-2 py-2' : 'px-3 py-4 lg:py-6 lg:px-6'"
+      >
         <div>
           <h3
-            class="text-xs font-semibold uppercase text-slate-500 lg:text-slate-500"
-            :class="isRail ? 'sr-only' : 'mb-3 lg:mb-4 lg:tracking-wider'"
+            class="text-xs font-semibold uppercase overflow-hidden whitespace-nowrap text-slate-500 lg:text-slate-500 transition-[opacity,max-height,margin] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:transition-none"
+            :class="isRail ? 'opacity-0 max-h-0 mb-0' : 'max-h-8 mb-3 lg:mb-4 lg:tracking-wider'"
+            :aria-hidden="isRail || undefined"
           >
             {{ t('pages') }}
           </h3>
@@ -238,10 +245,8 @@ const tabs = computed<Tab[]>(() => {
             <li v-for="tab, i in tabs" :key="i">
               <button
                 type="button"
-                class="d-btn d-btn-ghost flex items-center w-full rounded-md border-none shadow-none transition duration-150 cursor-pointer lg:rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-200 lg:text-slate-200 lg:hover:bg-slate-700/50 hover:bg-slate-700/50 focus:ring-offset-slate-800"
+                class="d-btn d-btn-ghost flex justify-start items-center w-full h-auto min-h-11 p-3 rounded-md border-none shadow-none transition duration-150 cursor-pointer lg:rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-200 lg:text-slate-200 lg:hover:bg-slate-700/50 hover:bg-slate-700/50 focus:ring-offset-slate-800"
                 :class="{
-                  'd-btn-square justify-center p-1 min-h-9 h-9 min-w-0': isRail,
-                  'justify-start h-auto p-3 lg:p-3 min-h-11': !isRail,
                   'hover:bg-slate-700/50 lg:hover:bg-slate-700/50': !isTabActive(tab.key),
                   'bg-slate-700 text-white lg:bg-slate-700 lg:text-white': isTabActive(tab.key),
                   'cursor-default': isTabActive(tab.key),
@@ -253,9 +258,9 @@ const tabs = computed<Tab[]>(() => {
               >
                 <component :is="tab.icon" class="w-5 h-5 transition-colors duration-150 shrink-0" :class="{ 'text-blue-500 lg:text-blue-500': isTabActive(tab.key), 'text-slate-400 group-hover:text-slate-300 lg:text-slate-400 lg:group-hover:text-slate-300': !isTabActive(tab.key) }" />
                 <span
-                  class="items-center text-sm font-medium capitalize transition-colors duration-150"
+                  class="flex items-center text-sm font-medium capitalize overflow-hidden whitespace-nowrap transition-[opacity,max-width,margin] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:transition-none"
                   :class="[
-                    isRail ? 'sr-only' : 'flex ml-3',
+                    isRail ? 'opacity-0 max-w-0 ml-0' : 'max-w-[12rem] ml-3 opacity-100',
                     isTabActive(tab.key) ? 'text-blue-500 lg:text-blue-500' : 'text-slate-400 group-hover:text-slate-300 lg:text-slate-400 lg:group-hover:text-slate-300',
                     tab.redirect && !isRail ? 'underline' : '',
                   ]"
@@ -273,10 +278,11 @@ const tabs = computed<Tab[]>(() => {
       </div>
 
       <!-- User menu -->
-      <div class="mt-auto shrink-0 lg:border-t lg:border-slate-700" :class="isRail ? 'pt-2' : 'pt-4 lg:pt-6 lg:mt-0'">
-        <div v-if="main.user" class="flex items-center" :class="isRail ? 'justify-center' : ''">
+      <div class="mt-auto shrink-0 lg:border-t lg:border-slate-700 transition-[padding] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:transition-none" :class="isRail ? 'pt-2' : 'pt-4 lg:pt-6 lg:mt-0'">
+        <div v-if="main.user" class="flex items-center">
           <DropdownProfile class="w-full" :compact="isRail" />
         </div>
+      </div>
       </div>
     </div>
   </div>
