@@ -1506,6 +1506,181 @@ describe('[POST] /private/sso/provision-user', () => {
     }
   })
 
+  it('does not merge SSO login into an unconfirmed auth.users row with the same email', async () => {
+    const managedOrgId = randomUUID()
+    const managedCustomerId = `cus_sso_unconfirmed_merge_${randomUUID()}`
+    const providerId = randomUUID()
+    const externalProviderId = randomUUID()
+    const domain = `${randomUUID()}.sso.test`
+    const targetEmail = `unconfirmed-merge-user@${domain}`
+    const tempSsoEmail = `temp-sso-unconfirmed-${randomUUID()}@${domain}`
+    const password = 'testtest'
+    const identityProvider = `sso:${externalProviderId}`
+    const identityProviderId = `nameid-${randomUUID()}`
+    const pool = new Pool({ connectionString: POSTGRES_URL })
+
+    const { data: unconfirmedUser, error: unconfirmedUserError } = await getSupabaseClient().auth.admin.createUser({
+      email: targetEmail,
+      password,
+      email_confirm: false,
+      user_metadata: {
+        first_name: 'Unconfirmed',
+        last_name: 'Attacker',
+      },
+    })
+    if (unconfirmedUserError || !unconfirmedUser.user) {
+      await pool.end()
+      throw unconfirmedUserError ?? new Error('Failed to create unconfirmed auth user for SSO merge regression')
+    }
+
+    const { data: ssoUser, error: ssoUserError } = await getSupabaseClient().auth.admin.createUser({
+      email: tempSsoEmail,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        first_name: 'SSO',
+        last_name: 'Victim',
+      },
+    })
+    if (ssoUserError || !ssoUser.user) {
+      await pool.end()
+      throw ssoUserError ?? new Error('Failed to create SSO auth user for unconfirmed merge regression')
+    }
+
+    try {
+      const { error: stripeError } = await getSupabaseClient().from('stripe_info').insert({
+        customer_id: managedCustomerId,
+        status: 'succeeded',
+        product_id: 'prod_LQIregjtNduh4q',
+        subscription_id: `sub_sso_unconfirmed_merge_${randomUUID()}`,
+        trial_at: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString(),
+        is_good_plan: true,
+      })
+      if (stripeError)
+        throw stripeError
+
+      const { error: orgError } = await getSupabaseClient().from('orgs').insert({
+        id: managedOrgId,
+        name: `SSO Unconfirmed Merge Org ${managedOrgId}`,
+        management_email: `sso-unconfirmed-merge-${managedOrgId}@capgo.app`,
+        created_by: USER_ID,
+        customer_id: managedCustomerId,
+      })
+      if (orgError)
+        throw orgError
+
+      const { error: providerError } = await (getSupabaseClient().from as any)('sso_providers').insert({
+        id: providerId,
+        org_id: managedOrgId,
+        domain,
+        provider_id: externalProviderId,
+        status: 'active',
+        enforce_sso: false,
+        dns_verification_token: `dns-${randomUUID()}`,
+      })
+      if (providerError)
+        throw providerError
+
+      const { error: unconfirmedPublicUserError } = await getSupabaseClient().from('users').insert({
+        id: unconfirmedUser.user.id,
+        email: targetEmail,
+        first_name: 'Unconfirmed',
+        last_name: 'Attacker',
+        country: null,
+        enable_notifications: true,
+        opt_for_newsletters: true,
+      })
+      if (unconfirmedPublicUserError)
+        throw unconfirmedPublicUserError
+
+      await pool.query(
+        'update auth.users set email_confirmed_at = null where id = $1',
+        [unconfirmedUser.user.id],
+      )
+
+      const unconfirmedBeforeProvision = await pool.query<{ email_confirmed_at: string | null }>(
+        'select email_confirmed_at from auth.users where id = $1',
+        [unconfirmedUser.user.id],
+      )
+      expect(unconfirmedBeforeProvision.rows[0]?.email_confirmed_at).toBeNull()
+
+      const ssoAuthHeaders = await getAuthHeadersForCredentials(tempSsoEmail, password)
+
+      await pool.query(
+        `
+          update auth.users
+          set email = $1,
+              email_confirmed_at = coalesce(email_confirmed_at, now()),
+              is_sso_user = true,
+              raw_app_meta_data = coalesce(raw_app_meta_data, '{}'::jsonb)
+                || jsonb_build_object('provider', $2::text, 'providers', jsonb_build_array($2::text)),
+              updated_at = now()
+          where id = $3
+        `,
+        [targetEmail, identityProvider, ssoUser.user.id],
+      )
+
+      await pool.query(
+        'update auth.identities set provider = $1, provider_id = $2, identity_data = jsonb_build_object($$sub$$, $2::text, $$email$$, $3::text, $$email_verified$$, true) where user_id = $4',
+        [identityProvider, identityProviderId, targetEmail, ssoUser.user.id],
+      )
+
+      const response = await fetchTestRequest(getEndpointUrl('/private/sso/provision-user'), {
+        method: 'POST',
+        headers: ssoAuthHeaders,
+        body: JSON.stringify({}),
+      })
+
+      const responseBody = await response.json() as {
+        success: boolean
+        merged?: boolean
+      }
+      expect(response.status).toBe(200)
+      expect(responseBody).toMatchObject({ success: true })
+      expect(responseBody.merged).toBeUndefined()
+
+      const { data: unconfirmedLookup } = await getSupabaseClient().auth.admin.getUserById(unconfirmedUser.user.id)
+      expect(unconfirmedLookup.user?.id).toBe(unconfirmedUser.user.id)
+
+      const { data: ssoLookup } = await getSupabaseClient().auth.admin.getUserById(ssoUser.user.id)
+      expect(ssoLookup.user?.id).toBe(ssoUser.user.id)
+
+      const { data: unconfirmedMembership, error: unconfirmedMembershipError } = await getSupabaseClient()
+        .from('org_users')
+        .select('id')
+        .eq('org_id', managedOrgId)
+        .eq('user_id', unconfirmedUser.user.id)
+        .maybeSingle()
+
+      expect(unconfirmedMembershipError).toBeNull()
+      expect(unconfirmedMembership).toBeNull()
+
+      const { data: ssoMembership, error: ssoMembershipError } = await getSupabaseClient()
+        .from('org_users')
+        .select('org_id, user_id, rbac_role_name')
+        .eq('org_id', managedOrgId)
+        .eq('user_id', ssoUser.user.id)
+        .maybeSingle()
+
+      expect(ssoMembershipError).toBeNull()
+      expect(ssoMembership).toMatchObject({
+        org_id: managedOrgId,
+        user_id: ssoUser.user.id,
+        rbac_role_name: 'org_member',
+      })
+    }
+    finally {
+      await Promise.allSettled([
+        getSupabaseClient().auth.admin.deleteUser(ssoUser.user.id),
+        getSupabaseClient().auth.admin.deleteUser(unconfirmedUser.user.id),
+        (getSupabaseClient().from as any)('sso_providers').delete().eq('id', providerId),
+        getSupabaseClient().from('orgs').delete().eq('id', managedOrgId),
+        getSupabaseClient().from('stripe_info').delete().eq('customer_id', managedCustomerId),
+      ])
+      await pool.end()
+    }
+  })
+
   it('does not merge SSO login into an account that only matches mutable public profile email', async () => {
     const managedOrgId = randomUUID()
     const managedCustomerId = `cus_sso_profile_poison_${randomUUID()}`
