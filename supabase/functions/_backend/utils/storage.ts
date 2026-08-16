@@ -3,6 +3,7 @@ import { supabaseAdmin } from './supabase.ts'
 
 const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 7
 const STORAGE_URL_REGEX = /\/storage\/v1\/object(?:\/(?:public|sign))?\/images\/(.+)$/
+const USER_FOLDER_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\//i
 
 export interface ImagePathScope {
   orgId?: string
@@ -39,6 +40,14 @@ function hasUnsafeImagePathSegments(normalized: string) {
 }
 
 /**
+ * Paths that claim an org or user folder must be ownership-checked.
+ * Legacy bare filenames (e.g. `test-icon`) are not ownership-bearing.
+ */
+export function isOwnershipBearingImagePath(normalized: string) {
+  return normalized.startsWith('org/') || USER_FOLDER_REGEX.test(normalized)
+}
+
+/**
  * Image objects must live under a caller-owned prefix:
  * - user avatar: `{userId}/...`
  * - org logo / app icon: `org/{orgId}/...` (optionally `org/{orgId}/{appId}/...`)
@@ -65,7 +74,9 @@ export function isAllowedImagePath(normalized: string, scope: ImagePathScope) {
 export function assertAllowedImagePath(normalized: string | null, scope: ImagePathScope) {
   if (!normalized)
     return null
-  if (!isAllowedImagePath(normalized, scope))
+  if (hasUnsafeImagePathSegments(normalized))
+    return null
+  if (isOwnershipBearingImagePath(normalized) && !isAllowedImagePath(normalized, scope))
     return null
   return normalized
 }
@@ -91,12 +102,14 @@ export async function createSignedImageUrl(
   }
 
   const normalized = normalizeImagePath(rawPath)
-  if (!normalized)
+  if (!normalized || hasUnsafeImagePathSegments(normalized))
     return null
 
-  // Refuse to mint admin signed URLs without an ownership scope.
-  if (!scope || !isAllowedImagePath(normalized, scope))
-    return null
+  // Ownership-bearing paths require a matching scope before admin signing.
+  if (isOwnershipBearingImagePath(normalized)) {
+    if (!scope || !isAllowedImagePath(normalized, scope))
+      return null
+  }
 
   const { data, error } = await supabaseAdmin(c)
     .storage
