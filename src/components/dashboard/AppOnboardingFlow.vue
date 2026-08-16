@@ -9,6 +9,7 @@ import type {
   OnboardingInteractionProperties,
   OnboardingStepCompletionProperties,
 } from '~/utils/onboardingProgressAnalytics'
+import type { OnboardingPersistResult } from '~/utils/onboardingProgressPersistence'
 import type { UserOnboardingStatus } from '~/utils/userOnboardingProgress'
 import mime from 'mime'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -60,7 +61,8 @@ import {
   loadOnboardingAppDraft,
 } from '~/utils/onboardingAppDraft'
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
-import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker } from '~/utils/onboardingProgressAnalytics'
+import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker, createOnboardingTelemetryIdentity } from '~/utils/onboardingProgressAnalytics'
+import { createOnboardingProgressPersistence, shouldInitializeOnboardingProgressTracking } from '~/utils/onboardingProgressPersistence'
 import { allowOnboardingDashboardExploration, ONBOARDING_DASHBOARD_EXPLORED_EVENT } from '~/utils/onboardingRedirect'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import {
@@ -89,6 +91,7 @@ const organizationStore = useOrganizationStore()
 const dashboardAppsStore = useDashboardAppsStore()
 const onboardingUserId = computed(() => main.user?.id ?? main.auth?.id ?? null)
 const config = getLocalConfig()
+const onboardingTelemetry = createOnboardingTelemetryIdentity({ flow: props.preOrg ? 'pre_org' : 'existing_org', supaHost: config.supaHost })
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
 const removeBeforeUnloadWarning = useBeforeUnloadWarning(Boolean(props.preOrg))
 
@@ -332,9 +335,14 @@ const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onb
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
-let persistChain = Promise.resolve()
 let persistFieldsTimer: ReturnType<typeof setTimeout> | undefined
 let pendingDashboardExplored = false
+let onboardingFlowDisposed = false
+let onboardingInitialPersistInFlight = false
+const onboardingProgressPersistence = createOnboardingProgressPersistence({
+  write: writeOnboardingProgress,
+  onError: error => console.error('Failed to persist onboarding progress', error),
+})
 
 function trackDetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
   if (props.preOrg)
@@ -360,6 +368,8 @@ function initializeProgressTracking(resumed: boolean) {
     resumed,
     steps: trackedSteps,
     supaHost: config.supaHost,
+    onboardingAttemptId: onboardingTelemetry.attemptId,
+    onboardingRunId: onboardingTelemetry.runId,
   })
   progressTracker.viewStep(flowStep.value)
   if (pendingDashboardExplored)
@@ -392,6 +402,7 @@ function viewPreviousStep(nextStep: OnboardingFlowStep) {
 
 function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress') {
   const flow = props.preOrg ? 'pre_org' : 'existing_org'
+  const telemetry = onboardingTelemetry.getProgressMetadata()
   return buildUserOnboardingProgress({
     status,
     step: clampResumableOnboardingStep(flowStep.value, flow),
@@ -405,20 +416,17 @@ function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress'
     importedStoreAppId: importedStoreAppId.value,
     orgName: orgNameInput.value,
     estimatedUsersIndex: estimatedUsersIndex.value,
+    onboardingAttemptId: telemetry.onboardingAttemptId,
+    lastRunId: telemetry.lastRunId,
   })
 }
 
 async function persistOnboardingProgress(status: UserOnboardingStatus = 'in_progress') {
-  persistChain = persistChain
-    .then(() => writeOnboardingProgress(status))
-    .catch((error) => {
-      console.error('Failed to persist onboarding progress', error)
-    })
-  return persistChain
+  return onboardingProgressPersistence.persist(status)
 }
 
 function schedulePersistOnboardingProgress() {
-  if (isHydratingOnboarding.value)
+  if (isHydratingOnboarding.value || onboardingProgressPersistence.isBlocked() || onboardingProgressPersistence.isAborted())
     return
   window.clearTimeout(persistFieldsTimer)
   persistFieldsTimer = setTimeout(() => {
@@ -429,11 +437,11 @@ function schedulePersistOnboardingProgress() {
 async function writeOnboardingProgress(status: UserOnboardingStatus) {
   const userId = onboardingUserId.value
   if (!userId || isHydratingOnboarding.value)
-    return
+    return 'skipped'
 
   const current = parseUserOnboardingProgress(main.user?.onboarding)
   if (current?.status === 'completed' && status !== 'completed')
-    return
+    return 'skipped'
 
   const progress = snapshotOnboardingProgress(status)
   const onboarding = progress as unknown as Json
@@ -454,16 +462,16 @@ async function writeOnboardingProgress(status: UserOnboardingStatus) {
 
   if (error) {
     console.error('Failed to persist onboarding progress', error)
-    return
+    return 'retryable_failure'
   }
 
   if (data && main.user?.id === userId) {
     main.user = { ...data, image_url: main.user.image_url }
-    return
+    return 'persisted'
   }
 
   if (status === 'completed' || main.user?.id !== userId)
-    return
+    return 'skipped'
 
   const { data: latest, error: latestError } = await supabase
     .from('users')
@@ -474,6 +482,7 @@ async function writeOnboardingProgress(status: UserOnboardingStatus) {
     console.error('Failed to refresh onboarding progress snapshot', latestError)
   if (latest && main.user?.id === userId)
     main.user = { ...latest, image_url: main.user.image_url }
+  return 'conflict'
 }
 
 function resetOnboardingForm() {
@@ -547,6 +556,13 @@ async function maybeResumeSavedOnboarding() {
     return false
   }
 
+  const resumableStep = clampResumableOnboardingStep(saved.step, flow)
+  onboardingTelemetry.prepareResumeCandidate({
+    onboardingAttemptId: saved.onboarding_attempt_id,
+    lastRunId: saved.last_run_id,
+    savedStep: resumableStep,
+    steps: appOnboardingSteps.value.map(step => step.id),
+  })
   dialogStore.openDialog({
     title: t('onboarding-resume-title'),
     description: t('onboarding-resume-description'),
@@ -556,15 +572,24 @@ async function maybeResumeSavedOnboarding() {
       { text: t('onboarding-resume-continue'), id: 'onboarding-resume-continue', role: 'primary' },
     ],
   })
+  onboardingTelemetry.recordResumeDialogViewed()
   await dialogStore.onDialogDismiss()
 
+  if (onboardingFlowDisposed)
+    return null
+
   if (dialogStore.lastButtonRole === 'onboarding-resume-restart') {
+    onboardingTelemetry.recordResumeRestarted()
     resetOnboardingForm()
     existingApp.value = true
     existingAppSetup.value = 'manual'
     return false
   }
 
+  if (dialogStore.lastButtonRole !== 'onboarding-resume-continue')
+    return null
+
+  onboardingTelemetry.recordResumeContinued()
   applyOnboardingProgress(saved)
   return true
 }
@@ -1545,7 +1570,12 @@ onMounted(async () => {
   isHydratingOnboarding.value = true
   try {
     if (props.preOrg) {
-      resumedFlow = await maybeResumeSavedOnboarding()
+      const resumeResult = await maybeResumeSavedOnboarding()
+      if (resumeResult === null) {
+        onboardingProgressPersistence.abort()
+        return
+      }
+      resumedFlow = resumeResult
       return
     }
 
@@ -1564,17 +1594,38 @@ onMounted(async () => {
   }
   finally {
     isHydratingOnboarding.value = false
-    isLoading.value = false
-    initializeProgressTracking(resumedFlow)
-    void persistOnboardingProgress()
+    let onboardingPersistResult: OnboardingPersistResult = 'skipped'
+    if (!onboardingFlowDisposed && !onboardingProgressPersistence.isAborted()) {
+      onboardingInitialPersistInFlight = true
+      onboardingPersistResult = await persistOnboardingProgress()
+      if (onboardingPersistResult === 'retryable_failure' && !onboardingFlowDisposed)
+        onboardingPersistResult = await persistOnboardingProgress()
+      onboardingInitialPersistInFlight = false
+    }
+    function finishOnboardingMount() {
+      if (onboardingFlowDisposed || onboardingProgressPersistence.isAborted())
+        return
+      isLoading.value = false
+      const shouldInitializeProgressTracking = shouldInitializeOnboardingProgressTracking(
+        onboardingPersistResult,
+        {
+          aborted: onboardingProgressPersistence.isAborted(),
+          disposed: onboardingFlowDisposed,
+        },
+      )
+      if (shouldInitializeProgressTracking)
+        initializeProgressTracking(resumedFlow)
+    }
+    finishOnboardingMount()
   }
 })
 
 onBeforeUnmount(() => {
+  onboardingFlowDisposed = true
   window.clearTimeout(persistFieldsTimer)
   window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   detailsFieldTracker.dispose()
-  if (!isHydratingOnboarding.value)
+  if (!isHydratingOnboarding.value && !onboardingInitialPersistInFlight && !onboardingProgressPersistence.isBlocked() && !onboardingProgressPersistence.isAborted())
     void persistOnboardingProgress()
 
   if (localIconPreview.value.startsWith('blob:'))

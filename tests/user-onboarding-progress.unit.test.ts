@@ -26,6 +26,8 @@ describe('user onboarding progress', () => {
       app_id: 'com.acme.app',
       existing_app: false,
       org_name: 'Acme Org',
+      onboarding_attempt_id: '7e64f484-4171-47b6-86f7-0ef5d49e0ef8',
+      last_run_id: 'ir_6b735b41-f8ea-45b9-a46e-10c8be795276',
       updated_at: '2026-08-15T00:00:00.000Z',
     })).toEqual({
       status: 'in_progress',
@@ -36,6 +38,24 @@ describe('user onboarding progress', () => {
       app_id: 'com.acme.app',
       existing_app: false,
       org_name: 'Acme Org',
+      onboarding_attempt_id: '7e64f484-4171-47b6-86f7-0ef5d49e0ef8',
+      last_run_id: 'ir_6b735b41-f8ea-45b9-a46e-10c8be795276',
+      updated_at: '2026-08-15T00:00:00.000Z',
+    })
+  })
+
+  it.concurrent('ignores malformed telemetry metadata without invalidating saved progress', () => {
+    expect(parseUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'details',
+      flow: 'pre_org',
+      onboarding_attempt_id: 'not-an-attempt-id',
+      last_run_id: 'ir_not-a-run-id',
+      updated_at: '2026-08-15T00:00:00.000Z',
+    })).toEqual({
+      status: 'in_progress',
+      step: 'details',
+      flow: 'pre_org',
       updated_at: '2026-08-15T00:00:00.000Z',
     })
   })
@@ -52,6 +72,8 @@ describe('user onboarding progress', () => {
       existingAppSetup: 'import',
       storeUrl: 'https://apps.apple.com/app/id123',
       orgName: '  ',
+      onboardingAttemptId: '7e64f484-4171-47b6-86f7-0ef5d49e0ef8',
+      lastRunId: 'ir_6b735b41-f8ea-45b9-a46e-10c8be795276',
       updatedAt: '2026-08-15T00:00:00.000Z',
     })
 
@@ -64,6 +86,8 @@ describe('user onboarding progress', () => {
       existing_app: true,
       existing_app_setup: 'import',
       store_url: 'https://apps.apple.com/app/id123',
+      onboarding_attempt_id: '7e64f484-4171-47b6-86f7-0ef5d49e0ef8',
+      last_run_id: 'ir_6b735b41-f8ea-45b9-a46e-10c8be795276',
       updated_at: '2026-08-15T00:00:00.000Z',
     })
     expect(JSON.stringify(progress)).not.toContain('data:image')
