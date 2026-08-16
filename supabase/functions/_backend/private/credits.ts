@@ -482,7 +482,7 @@ app.post('/', async (c) => {
 
     // If there's still remaining value, use the highest tier
     if (remainingValue > 0) {
-      const highestStep = applicableSteps[applicableSteps.length - 1]
+      const highestStep = applicableSteps.at(-1)
       if (highestStep) {
         const unitFactor = highestStep.unit_factor || 1
 

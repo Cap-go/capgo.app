@@ -520,7 +520,7 @@ async function getNormalStats(c: Context, appId: string | null, ownerOrg: string
 
   Object.values(metricsByApp)
     .forEach((arrItem) => {
-      const sortedArrItem = arrItem.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      const sortedArrItem = arrItem.toSorted((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
       cloudlog({ requestId: c.get('requestId'), message: 'sortedArrItem', data: sortedArrItem })
       sortedArrItem.forEach((item) => {
         if (!item.date)
@@ -604,7 +604,7 @@ async function getNormalStats(c: Context, appId: string | null, ownerOrg: string
       let appGets = isDashboard ? createUndefinedArray(graphDays) as number[] : []
 
       // Process metrics for this app (same logic as aggregated version)
-      appMetrics.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).forEach((item) => {
+      appMetrics.toSorted((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).forEach((item) => {
         if (!item.date)
           return
         const dayNumber = metricDayNumber(item.date, from, graphDays)
@@ -1091,7 +1091,7 @@ app.get('/user', async (c) => {
     get?: number
   }
 
-  const finalStats = Array.from(stats.map(stat => stat.data!).flat().reduce((acc, curr) => {
+  const finalStats = Array.from(stats.flatMap(stat => stat.data!).reduce((acc, curr) => {
     const current = acc.get(curr.date)
     if (current) {
       current.mau += curr.mau

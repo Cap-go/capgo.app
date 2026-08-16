@@ -484,7 +484,7 @@ async function massDelete() {
     return
   }
 
-  if (selectedElements.value.length > 0 && !!(selectedElements.value as any).find((val: Element) => val.name === 'unknown' || val.name === 'builtin')) {
+  if (selectedElements.value.length > 0 && (selectedElements.value as any).some((val: Element) => val.name === 'unknown' || val.name === 'builtin')) {
     toast.error(t('cannot-delete-unknown-or-builtin'))
     return
   }

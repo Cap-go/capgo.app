@@ -32,7 +32,7 @@ export function isDirectLoginLanding(firstUrl: string | null | undefined): boole
     while (end > 0 && pathname[end - 1] === '/')
       end -= 1
     const path = pathname.slice(0, end) || '/'
-    const lastSegment = path.split('/').filter(Boolean).pop()
+    const lastSegment = path.split('/').findLast(Boolean)
     return lastSegment === 'login'
   }
   catch {

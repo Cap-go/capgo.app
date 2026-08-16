@@ -211,7 +211,7 @@ function updateUrlParams() {
 }
 
 const isSelectAllEnabled = computed(() => {
-  return props.massSelect && selectedRows.value.find(val => val)
+  return props.massSelect && selectedRows.value.find(Boolean)
 })
 
 function loadFromUrlParams() {

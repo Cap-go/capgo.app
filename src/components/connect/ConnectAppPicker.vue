@@ -56,7 +56,7 @@ const selectedCount = computed(() => Object.keys(props.modelValue).length)
 const allSelected = computed(() => props.apps.length > 0 && selectedCount.value === props.apps.length)
 
 function isSelected(id: string): boolean {
-  return Object.prototype.hasOwnProperty.call(props.modelValue, id)
+  return Object.hasOwn(props.modelValue, id)
 }
 
 function toggle(id: string): void {

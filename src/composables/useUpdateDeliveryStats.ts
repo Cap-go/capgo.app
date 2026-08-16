@@ -143,16 +143,16 @@ export function buildDemoUpdateDeliveryStats(days: number): UpdateDeliveryStatsR
     period: {
       requested_days: days,
       actual_days: labels.length,
-      start: `${labels[0]}T00:00:00.000Z`,
-      end: `${labels[labels.length - 1]}T23:59:59.999Z`,
+      start: `${labels.at(0)}T00:00:00.000Z`,
+      end: `${labels.at(-1)}T23:59:59.999Z`,
     },
     overview: {
       samples: samples.reduce((sum, value) => sum + value, 0),
       devices: 42,
-      p50_ms: p50_ms[p50_ms.length - 1] ?? null,
-      p75_ms: p75_ms[p75_ms.length - 1] ?? null,
-      p95_ms: p95_ms[p95_ms.length - 1] ?? null,
-      p99_ms: p99_ms[p99_ms.length - 1] ?? null,
+      p50_ms: p50_ms.at(-1) ?? null,
+      p75_ms: p75_ms.at(-1) ?? null,
+      p95_ms: p95_ms.at(-1) ?? null,
+      p99_ms: p99_ms.at(-1) ?? null,
     },
     daily: {
       samples,

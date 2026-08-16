@@ -266,8 +266,8 @@ const dailyTransactions = computed<DailyLedgerRow[]>(() => {
         dateLabel,
         transactionCount: 1,
         amountTotal: tx.amount ?? 0,
-        positiveTotal: tx.amount >= 0 ? tx.amount : 0,
-        negativeTotal: tx.amount < 0 ? tx.amount : 0,
+        positiveTotal: Math.max(tx.amount, 0),
+        negativeTotal: Math.min(tx.amount, 0),
         latestBalance: tx.balance_after,
         typeCounts: {
           grant: 0,
@@ -277,9 +277,9 @@ const dailyTransactions = computed<DailyLedgerRow[]>(() => {
           expiry: 0,
           refund: 0,
         },
-        grantsTotal: tx.amount >= 0 ? tx.amount : 0,
+        grantsTotal: Math.max(tx.amount, 0),
         grantsCount: tx.amount >= 0 ? 1 : 0,
-        deductionsTotal: tx.amount < 0 ? tx.amount : 0,
+        deductionsTotal: Math.min(tx.amount, 0),
         deductionsCount: tx.amount < 0 ? 1 : 0,
         deductionsByMetric: {},
       }

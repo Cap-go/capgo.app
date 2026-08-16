@@ -2,7 +2,7 @@ const PENDING_INVITE_SKIP_STORAGE_KEY = 'capgo:pending-invite-skip-user'
 
 function canUseSessionStorage() {
   try {
-    return typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined'
+    return typeof window !== 'undefined' && window.sessionStorage !== undefined
   }
   catch {
     return false

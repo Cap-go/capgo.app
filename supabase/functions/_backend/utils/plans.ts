@@ -380,8 +380,7 @@ async function userAbovePlan(c: Context, org: {
       if (unpaid > 0)
         hasUnpaidOverage = true
     }
-    else {
-      if (metric.key === 'mau')
+    else if (metric.key === 'mau')
         await set_mau_exceeded(c, org.customer_id, false, orgId)
       else if (metric.key === 'storage')
         await set_storage_exceeded(c, org.customer_id, false, orgId)
@@ -389,7 +388,6 @@ async function userAbovePlan(c: Context, org: {
         await set_bandwidth_exceeded(c, org.customer_id, false, orgId)
       else if (metric.key === 'build_time')
         await set_build_time_exceeded(c, orgId, false)
-    }
   }
 
   if (!hasUnpaidOverage) {

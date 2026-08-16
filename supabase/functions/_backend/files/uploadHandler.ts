@@ -787,11 +787,7 @@ export class UploadHandler extends DurableObject {
   }
 }
 
-export class AttachmentUploadHandler extends UploadHandler {
-  constructor(ctx: ConstructorParameters<typeof DurableObject>[0], env: Env) {
-    super(ctx, env)
-  }
-}
+export class AttachmentUploadHandler extends UploadHandler {}
 
 class UnrecoverableError extends Error {
   r2Key: string

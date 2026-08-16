@@ -226,7 +226,7 @@ function toTitleCaseSegment(segment: string) {
 }
 
 function deriveOrgNameFromWebsite(hostname: string) {
-  const primarySegment = hostname.split('.').filter(Boolean)[0] ?? ''
+  const primarySegment = hostname.split('.').find(Boolean) ?? ''
   return toTitleCaseSegment(primarySegment)
 }
 

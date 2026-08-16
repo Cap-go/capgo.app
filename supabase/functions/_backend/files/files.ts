@@ -794,7 +794,7 @@ async function setKeyFromIdParam(c: Context, next: Next) {
         })
         // Extract file path: remove bucket prefix (capgo/) and UUID suffix
         // Resulting path starts with "orgs/..."
-        const pathParts = parts.slice(1, parts.length - 1)
+        const pathParts = parts.slice(1, -1)
         if (pathParts.length > 0) {
           extractedFileId = pathParts.join('/')
           cloudlog({

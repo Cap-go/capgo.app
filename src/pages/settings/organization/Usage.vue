@@ -315,9 +315,7 @@ async function loadData() {
   isLoading.value = true
 
   if (initialLoad.value) {
-    const [pls] = await Promise.all([
-      getPlans(),
-    ])
+    const pls = await getPlans()
     plans.value.length = 0
     plans.value.push(...pls)
   }

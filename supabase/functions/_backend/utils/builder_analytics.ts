@@ -103,11 +103,11 @@ function buildJourney(evs: OnbEvent[]): Journey {
     orgId: first.orgId,
     platform: first.platform || 'unknown',
     startedAt: first.ts,
-    endedAt: evs[evs.length - 1].ts,
+    endedAt: evs.at(-1)!.ts,
     steps,
     milestone,
     completed: steps.includes(TERMINAL_STEP),
-    lastStep: stepEvents[stepEvents.length - 1]?.step || first.step || '',
+    lastStep: stepEvents.at(-1)?.step || first.step || '',
     usedAi: steps.some(s => AI_STEPS.has(s)),
     errorCategories,
   }
@@ -363,7 +363,7 @@ export async function getAdminBuilderAnalytics(c: Context, startDate: string, en
     // new_count is over ALL groups, not just the displayed top-40, so a rare brand-new error
     // ranked outside the top-40 still raises the alert.
     const newCount = allGroups.filter(g => g.is_new).length
-    const error_groups = allGroups.sort((a, b) => b.count - a.count).slice(0, 40)
+    const error_groups = allGroups.toSorted((a, b) => b.count - a.count).slice(0, 40)
 
     // Org names for the orgs that onboarded or built.
     const orgIds = [...new Set([...journeys.map(j => j.orgId), ...orgBuildRows.map(r => r.ownerOrg)].filter(Boolean))]

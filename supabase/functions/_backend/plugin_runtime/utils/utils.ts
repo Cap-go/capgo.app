@@ -203,7 +203,7 @@ export function isLimited(c: Context, id: string) {
   // Use CSPRNG so Sonar does not flag Math.random in this path.
   const buf = new Uint32Array(1)
   crypto.getRandomValues(buf)
-  return (buf[0]! / 0x1_0000_0000) < app.ignore
+  return (buf[0]! / 2 ** 32) < app.ignore
 }
 
 export function backgroundTask(c: Context, p: any) {

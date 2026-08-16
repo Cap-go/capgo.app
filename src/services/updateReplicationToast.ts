@@ -53,14 +53,14 @@ function getClosestRegionFromTimeZone(): string | null {
   if (!tz)
     return null
 
-  if (/^America\//.test(tz))
+  if (tz.startsWith('America/'))
     return 'aws:us-east-1'
-  if (/^Europe\//.test(tz) || /^Atlantic\//.test(tz))
+  if (tz.startsWith('Europe/') || tz.startsWith('Atlantic/'))
     return 'aws:eu-central-1'
-  if (/^Africa\//.test(tz))
+  if (tz.startsWith('Africa/'))
     return 'gcp:africa-south1'
 
-  if (/^Asia\//.test(tz)) {
+  if (tz.startsWith('Asia/')) {
     const region = (tz.split('/')[1] ?? '').toLowerCase()
     if (['tokyo', 'osaka', 'seoul', 'pyongyang'].includes(region))
       return 'aws:ap-northeast-1'

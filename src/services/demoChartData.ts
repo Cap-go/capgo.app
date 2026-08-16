@@ -152,8 +152,8 @@ export function calculateDemoEvolution(data: number[]): number {
   if (nonZeroDays.length < 2)
     return 0
 
-  const lastDayCount = nonZeroDays[nonZeroDays.length - 1]
-  const previousDayCount = nonZeroDays[nonZeroDays.length - 2]
+  const lastDayCount = nonZeroDays.at(-1)!
+  const previousDayCount = nonZeroDays.at(-2)!
 
   if (previousDayCount === 0)
     return lastDayCount > 0 ? 100 : 0

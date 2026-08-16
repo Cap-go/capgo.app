@@ -439,8 +439,8 @@ export async function getAllDashboard(orgId: string, startDate?: string, endDate
     }
 
     return {
-      global: global.sort((a, b) => a.date.localeCompare(b.date)),
-      byApp: byApp.sort((a, b) => a.date.localeCompare(b.date)),
+      global: global.toSorted((a, b) => a.date.localeCompare(b.date)),
+      byApp: byApp.toSorted((a, b) => a.date.localeCompare(b.date)),
     }
   }
   catch (error) {
@@ -759,7 +759,7 @@ export async function checkCompatibilityNativePackages(appId: string, channel: s
   // Only include remote packages that are not in local for informational purposes
   // These won't affect compatibility
   const removeNotInLocal = [...mappedRemoteNativePackages]
-    .filter(([remoteName]) => nativePackages.find(a => a.name === remoteName) === undefined)
+    .filter(([remoteName]) => !nativePackages.some(a => a.name === remoteName))
     .map(([name, version]) => ({ name, localVersion: undefined, remoteVersion: version.version }))
 
   finalDependencies.push(...removeNotInLocal)

@@ -11,7 +11,7 @@ export const numberLikeSchema = z.union([z.number(), numericStringSchema])
 
 export const integerLikeSchema = z.union([
   z.number().int(),
-  z.string().regex(/^[+-]?\d+$/).transform(value => Number(value)),
+  z.string().regex(/^[+-]?\d+$/).transform(Number),
 ])
 
 export type ValidationIssue = StandardSchemaV1.Issue & { readonly code?: string }

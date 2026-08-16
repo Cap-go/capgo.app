@@ -887,7 +887,7 @@ async function deleteBundle() {
                   {{ version.min_update_version }}
                 </InfoRow>
 
-                <InfoRow v-if="channels && channels.length > 0 && version && channels.filter(c => c.version === version!.id).length > 0" :label="t('channel')">
+                <InfoRow v-if="channels && channels.length > 0 && version && channels.some(c => c.version === version!.id)" :label="t('channel')">
                   <div class="flex flex-wrap justify-end w-full gap-3">
                     <div v-for="chn in channels.filter(c => c.version === version!.id)" :id="`open-channel-${chn.id}`" :key="chn.id" class="flex items-center gap-2">
                       <span

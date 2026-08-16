@@ -118,7 +118,6 @@ const { t } = useI18n()
                   </li>
                 </ol>
               </nav>
-              <!-- <span v-if="showNavTitle" class="mx-1">{{ displayStore.NavTitle }}</span> -->
             </div>
           </div>
         </div>

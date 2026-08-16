@@ -109,8 +109,8 @@ export function computeLastDayEvolution(series: number[]): number {
   const nonZeroDays = series.filter(count => count > 0)
   if (nonZeroDays.length < 2)
     return 0
-  const lastDayCount = nonZeroDays[nonZeroDays.length - 1]
-  const previousDayCount = nonZeroDays[nonZeroDays.length - 2]
+  const lastDayCount = nonZeroDays.at(-1)!
+  const previousDayCount = nonZeroDays.at(-2)!
   return previousDayCount > 0 ? ((lastDayCount - previousDayCount) / previousDayCount) * 100 : 0
 }
 

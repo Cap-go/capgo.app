@@ -109,7 +109,7 @@ export const localizedReleaseNotesSchema = z.record(z.string(), z.string()).tran
       ctx.addIssue({ code: 'custom', message: 'a non-empty release note' })
       return z.NEVER
     }
-    if (Object.prototype.hasOwnProperty.call(out, key)) {
+    if (Object.hasOwn(out, key)) {
       ctx.addIssue({ code: 'custom', message: `a unique locale key (duplicate after trim: "${key}")` })
       return z.NEVER
     }
