@@ -2,6 +2,7 @@ import type { Ref } from 'vue'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import { chartLabelCountForPeriodDays } from '~/services/date'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 export type UpdateDeliveryScope = 'app' | 'org' | 'platform'
@@ -125,7 +126,8 @@ export function useUpdateDeliveryStats(
 export function buildDemoUpdateDeliveryStats(days: number): UpdateDeliveryStatsResponse {
   const labels: string[] = []
   const end = new Date()
-  for (let i = days - 1; i >= 0; i -= 1) {
+  const labelCount = chartLabelCountForPeriodDays(days)
+  for (let i = labelCount - 1; i >= 0; i -= 1) {
     const date = new Date(end)
     date.setUTCDate(end.getUTCDate() - i)
     labels.push(date.toISOString().slice(0, 10))

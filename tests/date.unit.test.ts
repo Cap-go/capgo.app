@@ -142,9 +142,10 @@ describe('date helpers', () => {
     vi.setSystemTime(new Date('2026-08-15T12:00:00.000Z'))
     try {
       const oneDay = getLastNUtcDaysRange(1)
-      expect(formatUtcDateParam(oneDay.startDate)).toBe(formatUtcDateParam(oneDay.endDate))
       expect(formatUtcDateParam(oneDay.endDate)).toBe(formatUtcDateParam(normalizeToUtcStartOfDay(new Date())))
-      expect(generateChartDayLabels(oneDay.startDate, oneDay.endDate)).toHaveLength(1)
+      expect(formatUtcDateParam(oneDay.startDate)).toBe('2026-08-14')
+      expect(formatUtcDateParam(oneDay.endDate)).toBe('2026-08-15')
+      expect(generateChartDayLabels(oneDay.startDate, oneDay.endDate)).toHaveLength(2)
 
       const sevenDays = getLastNUtcDaysRange(7)
       const sevenSpan = Math.round((sevenDays.endDate.getTime() - sevenDays.startDate.getTime()) / (24 * 60 * 60 * 1000))

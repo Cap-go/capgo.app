@@ -2,6 +2,7 @@ import type { Ref } from 'vue'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import { chartLabelCountForPeriodDays } from '~/services/date'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 export interface BundleInstallStatsItem {
@@ -118,12 +119,12 @@ export function useBundleInstallStats(
 export function buildDemoBundleInstallStats(days: number): BundleInstallStatsResponse {
   const end = utcEndOfDay()
   const start = utcStartOfDay(end)
-  start.setUTCDate(end.getUTCDate() - (days - 1))
+  start.setUTCDate(end.getUTCDate() - (chartLabelCountForPeriodDays(days) - 1))
 
   return {
     period: {
       requested_days: days,
-      actual_days: days,
+      actual_days: chartLabelCountForPeriodDays(days),
       start: start.toISOString(),
       end: end.toISOString(),
     },

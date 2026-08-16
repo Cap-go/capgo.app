@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions } from 'chart.js'
+import type { PeriodDayOption } from '~/utils/periodDays'
 import { BarElement, CategoryScale, Chart, Legend, LinearScale, LineElement, PointElement, Tooltip } from 'chart.js'
-import { computed, ref, watch } from 'vue'
+import { computed, watch } from 'vue'
 import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -13,14 +14,13 @@ import IconTimer from '~icons/lucide/timer'
 import DeliveryLatencyPanel from '~/components/dashboard/DeliveryLatencyPanel.vue'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import { useNativeObserveStats } from '~/composables/useNativeObserveStats'
+import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { formatLocalDateShort } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { actionToFilter } from '~/services/statsActions'
 import { useDisplayStore } from '~/stores/display'
 
 Chart.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Tooltip, Legend)
-
-type PeriodDayOption = 1 | 3 | 7 | 30
 
 type NullableSeries = Array<number | null>
 
@@ -90,7 +90,7 @@ const packageId = computed(() => {
   return Array.isArray(app) ? app[0] ?? '' : String(app ?? '')
 })
 const appRouteSegment = computed(() => route.path.match(/^\/app\/([^/]+)/)?.[1] ?? encodeURIComponent(packageId.value))
-const days = ref<PeriodDayOption>(7)
+const { days } = usePeriodDaysQuery()
 const { stats, statsLoading, fetchStats } = useNativeObserveStats<NativeObserveStatsResponse>(
   packageId,
   () => ({ days: days.value }),
@@ -200,7 +200,10 @@ const performanceChartOptions = computed<ChartOptions<'line'>>(() => ({
     tooltip: { enabled: true },
   },
   scales: {
-    x: { grid: { display: false } },
+    x: {
+      grid: { display: false },
+      offset: chartLabels.value.length <= 2,
+    },
     y: {
       beginAtZero: true,
       ticks: {
@@ -219,7 +222,10 @@ const eventChartOptions = computed<ChartOptions<'bar'>>(() => ({
     tooltip: { enabled: true },
   },
   scales: {
-    x: { grid: { display: false } },
+    x: {
+      grid: { display: false },
+      offset: chartLabels.value.length <= 2,
+    },
     y: {
       beginAtZero: true,
       ticks: {
@@ -259,8 +265,6 @@ function formatAction(action: string) {
 }
 
 function selectPeriod(option: PeriodDayOption) {
-  if (days.value === option)
-    return
   days.value = option
 }
 
@@ -302,7 +306,11 @@ watch([packageId, days], async () => {
           <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
             {{ t('native-observe-subtitle') }}
           </p>
-          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          <p
+            class="mt-1 text-xs text-slate-500 dark:text-slate-400"
+            data-testid="observe-period-labels"
+            :data-count="stats?.labels.length ?? 0"
+          >
             {{ observeScopeLabel }}
           </p>
         </div>
