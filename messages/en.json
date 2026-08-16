@@ -1670,6 +1670,8 @@
   "no-compatible-download-channel": "No compatible channels found. Create one before setting defaults.",
   "no-credits-available": "No credits yet. Purchase a pack to extend your plan usage.",
   "no-data": "No Data",
+  "collapse-chart": "Minimize graph",
+  "expand-chart": "Expand graph",
   "no-data-available": "No data available",
   "no-deliveries": "No deliveries yet",
   "no-devices-on-channel": "No devices on this channel yet",

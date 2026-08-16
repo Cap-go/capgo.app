@@ -36,6 +36,7 @@ import IconStore from '~icons/lucide/store'
 import IconTerminal from '~icons/lucide/terminal'
 import IconTrash from '~icons/lucide/trash-2'
 import IconUsers from '~icons/lucide/users-round'
+import { preserveAdminDashboardMinimize } from '~/services/adminDashboardPreferences'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
 import {
   parseAppOnboarding,
@@ -444,7 +445,11 @@ async function writeOnboardingProgress(status: UserOnboardingStatus) {
     return 'skipped'
 
   const progress = snapshotOnboardingProgress(status)
-  const onboarding = progress as unknown as Json
+  const onboarding = preserveAdminDashboardMinimize(
+    progress as unknown as Json,
+    main.user?.onboarding,
+    main.isAdmin,
+  )
   let query = supabase
     .from('users')
     .update({ onboarding })

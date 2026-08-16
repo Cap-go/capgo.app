@@ -1,8 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
+import ChevronDownIcon from '~icons/heroicons/chevron-down'
 import Spinner from '~/components/Spinner.vue'
+import { createAdminDashboardChartPreferenceKey } from '~/services/adminDashboardPreferences'
 import { formatNumberValue } from '~/services/formatLocale'
+import { useAdminDashboardStore } from '~/stores/adminDashboard'
 
 const props = defineProps({
   title: {
@@ -41,25 +45,54 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  preferenceKey: {
+    type: String,
+    default: '',
+  },
 })
 
 const { t } = useI18n()
+const route = useRoute()
+const adminDashboard = useAdminDashboardStore()
+const chartContentId = `chart-content-${useId()}`
 
 const showEvolutionBadge = computed(() => props.lastDayEvolution !== undefined && props.lastDayEvolution !== null)
 const displayNoDataMessage = computed(() => props.noDataMessage ?? t('no-data'))
+const isAdminDashboard = computed(() => route.path === '/admin/dashboard' || route.path.startsWith('/admin/dashboard/'))
+const chartPreferenceKey = computed(() => (
+  props.preferenceKey
+  || createAdminDashboardChartPreferenceKey(route.path, props.title)
+))
+const isCollapsed = computed(() => (
+  isAdminDashboard.value
+  && adminDashboard.isChartMinimized(chartPreferenceKey.value)
+))
+
+function toggleCollapsed() {
+  void adminDashboard.setChartMinimized(chartPreferenceKey.value, !isCollapsed.value)
+}
 </script>
 
 <template>
-  <div class="relative col-span-full flex min-h-[460px] flex-col overflow-hidden rounded-[1.75rem] border border-slate-200/80 bg-white/95 shadow-[0_20px_60px_-38px_rgba(15,23,42,0.3)] backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/85 dark:shadow-[0_24px_70px_-42px_rgba(2,6,23,0.72)]">
+  <div
+    class="relative col-span-full flex flex-col overflow-hidden rounded-[1.75rem] border border-slate-200/80 bg-white/95 shadow-[0_20px_60px_-38px_rgba(15,23,42,0.3)] backdrop-blur transition-[min-height,box-shadow] duration-300 dark:border-slate-700/70 dark:bg-slate-900/85 dark:shadow-[0_24px_70px_-42px_rgba(2,6,23,0.72)]"
+    :class="isCollapsed ? 'min-h-0' : 'min-h-[460px]'"
+  >
     <div class="pointer-events-none absolute inset-x-0 top-0 h-28 bg-gradient-to-br from-slate-50 via-white to-transparent dark:from-slate-800/70 dark:via-slate-900/40 dark:to-transparent" />
 
     <!-- Header with title and stats -->
-    <div class="relative overflow-hidden px-5 pt-5">
+    <div
+      class="relative overflow-hidden px-5"
+      :class="isCollapsed ? 'py-4' : 'pt-5'"
+    >
       <!-- Custom header slot or default header -->
-      <div class="flex flex-col gap-4">
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div class="flex flex-col" :class="isCollapsed ? 'gap-0' : 'gap-4'">
+        <div class="flex items-start justify-between gap-3">
           <div class="min-w-0 flex-1">
-            <slot name="header">
+            <h2 v-if="isCollapsed" class="truncate text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
+              {{ title }}
+            </h2>
+            <slot v-else name="header">
               <div class="min-w-0">
                 <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
                   {{ title }}
@@ -68,19 +101,36 @@ const displayNoDataMessage = computed(() => props.noDataMessage ?? t('no-data'))
             </slot>
           </div>
 
-          <div class="flex items-center gap-2 sm:justify-end">
+          <div class="flex shrink-0 items-center gap-2 sm:justify-end">
             <div
-              v-if="showEvolutionBadge"
+              v-if="!isCollapsed && showEvolutionBadge"
               class="inline-flex justify-center items-center rounded-full px-3 py-1 text-xs font-bold text-white shadow-sm"
               :class="{ 'bg-cyan-500': (lastDayEvolution ?? 0) >= 0, 'bg-amber-500': (lastDayEvolution ?? 0) < 0 }"
             >
               {{ (lastDayEvolution ?? 0) < 0 ? '-' : '+' }}{{ formatNumberValue(Math.abs(lastDayEvolution ?? 0), { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}%
             </div>
-            <div v-else class="inline-flex rounded-full px-3 py-1 text-xs font-semibold opacity-0" aria-hidden="true" />
+            <div v-else-if="!isCollapsed" class="inline-flex rounded-full px-3 py-1 text-xs font-semibold opacity-0" aria-hidden="true" />
+            <button
+              v-if="isAdminDashboard"
+              data-test="chart-collapse-toggle"
+              type="button"
+              class="group inline-flex size-9 shrink-0 items-center justify-center rounded-full border border-slate-200/90 bg-white/85 text-slate-500 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-indigo-300 hover:text-indigo-600 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:border-slate-700 dark:bg-slate-800/85 dark:text-slate-300 dark:hover:border-indigo-500/70 dark:hover:text-indigo-300 dark:focus-visible:ring-offset-slate-900"
+              :aria-label="t(isCollapsed ? 'expand-chart' : 'collapse-chart')"
+              :title="t(isCollapsed ? 'expand-chart' : 'collapse-chart')"
+              :aria-expanded="!isCollapsed"
+              :aria-controls="chartContentId"
+              @click="toggleCollapsed"
+            >
+              <ChevronDownIcon
+                class="h-4 w-4 transition-transform duration-200"
+                :class="{ 'rotate-180': !isCollapsed }"
+                aria-hidden="true"
+              />
+            </button>
           </div>
         </div>
 
-        <div v-if="total !== undefined" class="flex items-end gap-2">
+        <div v-if="!isCollapsed && total !== undefined" class="flex items-end gap-2">
           <div class="max-w-full text-3xl font-semibold leading-none tracking-tight break-words text-slate-900 dark:text-white sm:text-4xl">
             {{ formatNumberValue(total) }}
           </div>
@@ -92,7 +142,7 @@ const displayNoDataMessage = computed(() => props.noDataMessage ?? t('no-data'))
     </div>
 
     <!-- Chart content area -->
-    <div class="relative flex min-h-0 flex-1 flex-col px-5 pb-5 pt-4">
+    <div v-if="!isCollapsed" :id="chartContentId" class="relative flex min-h-0 flex-1 flex-col px-5 pb-5 pt-4">
       <!-- Loading state -->
       <div v-if="isLoading" class="flex h-full items-center justify-center">
         <Spinner size="w-24 h-24" />

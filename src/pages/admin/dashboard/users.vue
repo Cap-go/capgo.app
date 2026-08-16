@@ -1376,17 +1376,23 @@ displayStore.defaultBack = '/dashboard'
 
         <div v-else class="space-y-6">
           <!-- Onboarding Funnel Section -->
-          <div class="p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900">
-            <h3 class="mb-4 text-lg font-semibold">
-              {{ t('onboarding-funnel') }}
-            </h3>
-            <p class="mb-4 text-sm text-slate-600 dark:text-slate-400">
-              {{ t('onboarding-funnel-description') }}
-            </p>
-            <div v-if="isLoadingOnboardingFunnel" class="flex items-center justify-center h-48">
-              <span class="loading loading-spinner loading-lg" />
-            </div>
-            <div v-else-if="onboardingFunnelStages.length > 0" class="space-y-6">
+          <ChartCard
+            :title="t('onboarding-funnel')"
+            :is-loading="isLoadingOnboardingFunnel"
+            :has-data="onboardingFunnelStages.length > 0"
+            :no-data-message="t('no-data-available')"
+          >
+            <template #header>
+              <div class="min-w-0">
+                <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
+                  {{ t('onboarding-funnel') }}
+                </h2>
+                <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                  {{ t('onboarding-funnel-description') }}
+                </p>
+              </div>
+            </template>
+            <div class="space-y-6">
               <div class="h-72 sm:h-80">
                 <AdminFunnelChart :stages="onboardingFunnelStages" :is-loading="isLoadingOnboardingFunnel" />
               </div>
@@ -1417,10 +1423,7 @@ displayStore.defaultBack = '/dashboard'
                 {{ t('activation-telemetry-unavailable') }}
               </p>
             </div>
-            <div v-else class="flex items-center justify-center h-48 text-slate-400">
-              {{ t('no-data-available') }}
-            </div>
-          </div>
+          </ChartCard>
 
           <ChartCard
             :title="t('onboarding-wizard-dropoff')"
