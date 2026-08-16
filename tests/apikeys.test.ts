@@ -178,13 +178,16 @@ describe('[POST] /apikey operations', () => {
     finally {
       await Promise.all(createdIds.map(async (keyId) => {
         try {
-          await fetch(`${BASE_URL}/apikey/${keyId}`, {
+          const response = await fetch(`${BASE_URL}/apikey/${keyId}`, {
             method: 'DELETE',
             headers: authHeaders,
           })
+          if (!response.ok) {
+            console.warn(`apikey latency cleanup delete ${keyId} status=${response.status}`)
+          }
         }
-        catch {
-          // Best-effort: a failed DELETE must not skip remaining keys or mask the test error.
+        catch (error) {
+          console.warn(`apikey latency cleanup delete ${keyId} failed`, error)
         }
       }))
     }
