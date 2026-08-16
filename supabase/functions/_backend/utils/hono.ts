@@ -25,6 +25,7 @@ export interface JWTClaims {
   iat?: number
   aud?: string | string[]
   iss?: string
+  session_id?: string
   app_metadata?: {
     provider?: string
     [key: string]: unknown

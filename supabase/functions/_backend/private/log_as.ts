@@ -1,11 +1,12 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import { z } from 'zod'
 import { Hono } from 'hono/tiny'
-import { safeParseSchema } from '../utils/schema_validation.ts'
+import { z } from 'zod'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
-import { middlewareAuth } from '../utils/hono_jwt.ts'
+import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
+import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
 import { emptySupabase, supabaseAdmin as useSupabaseAdmin, supabaseClient as useSupabaseClient } from '../utils/supabase.ts'
 
 export const bodySchema = z.object({
@@ -18,18 +19,18 @@ export const bodySchema = z.object({
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+$/
 
-export type LogAsBody = {
+export interface LogAsBody {
   user_id?: string
   email?: string
   org_id?: string
   identifier?: string
 }
 
-export type LogAsIdentifier =
-  | { kind: 'user_id', value: string }
-  | { kind: 'email', value: string }
-  | { kind: 'org_id', value: string }
-  | { kind: 'identifier', value: string }
+export type LogAsIdentifier
+  = | { kind: 'user_id', value: string }
+    | { kind: 'email', value: string }
+    | { kind: 'org_id', value: string }
+    | { kind: 'identifier', value: string }
 
 type SupabaseAdmin = Awaited<ReturnType<typeof useSupabaseAdmin>>
 
@@ -262,6 +263,57 @@ app.post('/', middlewareAuth, async (c) => {
 
   if (!jwt) {
     throw simpleError('no_jwt', 'No jwt', { authData })
+  }
+
+  // Register this magic-link session so verify_mfa allows support spoof of
+  // MFA-enforced customers (OTP alone must not satisfy MFA for normal users).
+  const spoofClaims = await getClaimsFromJWT(c, jwt)
+  const adminAuth = c.get('auth')
+  const adminUserId = adminAuth?.userId
+  const sessionId = spoofClaims?.session_id
+  const targetUserId = spoofClaims?.sub
+  if (sessionId && targetUserId && adminUserId) {
+    const expiresAt = spoofClaims.exp
+      ? new Date(spoofClaims.exp * 1000)
+      : new Date(Date.now() + 60 * 60 * 1000)
+    const pgClient = getPgClient(c)
+    try {
+      await pgClient.query(
+        `
+          INSERT INTO public.platform_impersonation_sessions
+            (session_id, target_user_id, admin_user_id, expires_at)
+          VALUES ($1::uuid, $2::uuid, $3::uuid, $4::timestamptz)
+          ON CONFLICT (session_id) DO UPDATE SET
+            target_user_id = EXCLUDED.target_user_id,
+            admin_user_id = EXCLUDED.admin_user_id,
+            expires_at = EXCLUDED.expires_at
+        `,
+        [sessionId, targetUserId, adminUserId, expiresAt.toISOString()],
+      )
+    }
+    catch (error) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        context: 'log_as - failed to register impersonation session',
+        error: error instanceof Error ? error.message : String(error),
+        sessionId,
+        targetUserId,
+        adminUserId,
+      })
+      throw simpleError('impersonation_session_error', 'Failed to register impersonation session', { error })
+    }
+    finally {
+      await closeClient(c, pgClient)
+    }
+  }
+  else {
+    cloudlog({
+      requestId: c.get('requestId'),
+      context: 'log_as - missing claims for impersonation session registration',
+      hasSessionId: Boolean(sessionId),
+      hasTargetUserId: Boolean(targetUserId),
+      hasAdminUserId: Boolean(adminUserId),
+    })
   }
 
   return c.json({ jwt, refreshToken })

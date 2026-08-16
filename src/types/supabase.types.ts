@@ -5464,6 +5464,8 @@ export type Database = {
       }
       verify_email_otp_auth: { Args: never; Returns: boolean }
       verify_mfa: { Args: never; Returns: boolean }
+      is_platform_admin_listed: { Args: { userid: string }; Returns: boolean }
+      is_active_platform_impersonation: { Args: never; Returns: boolean }
     }
     Enums: {
       action_type: "mau" | "storage" | "bandwidth" | "build_time"

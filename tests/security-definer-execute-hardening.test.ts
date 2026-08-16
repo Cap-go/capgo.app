@@ -51,6 +51,8 @@ const SERVICE_ONLY_PROCS = [
   'public.sanitize_users_text_fields()',
   'public.set_webhook_created_by()',
   'public.sync_org_has_usage_credits_from_grants()',
+  'public.is_platform_admin_listed(uuid)',
+  'public.is_active_platform_impersonation()',
 ] as const
 
 const REMOVED_OLD_RIGHTS_PROCS = [
