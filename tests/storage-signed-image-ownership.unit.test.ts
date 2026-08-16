@@ -188,4 +188,16 @@ describe('image path ownership for signed URLs', () => {
       { allowedOrigins: ['https://example.supabase.co'] },
     )).toBe('org/org-1/file name.png')
   })
+
+  it('rejects malformed percent escapes in storage object keys', () => {
+    expect(normalizeImagePath(
+      'https://example.supabase.co/storage/v1/object/sign/images/org/org-1/file%.png',
+      { allowedOrigins: ['https://example.supabase.co'] },
+    )).toBeNull()
+    expect(resolveWritableImageValue(
+      'https://example.supabase.co/storage/v1/object/sign/images/org/org-1/file%.png',
+      { orgId: 'org-1' },
+      ['https://example.supabase.co'],
+    )).toBeNull()
+  })
 })

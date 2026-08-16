@@ -29,11 +29,18 @@ function isStorageImagePathname(pathname: string) {
 /**
  * Extract the images object key from a storage pathname.
  * Decode the route for matching when needed, but decode the object key only once.
+ * Malformed percent-escapes are rejected (null), not returned as raw URLs.
  */
 function extractStorageImageKey(pathname: string) {
   const rawMatch = STORAGE_URL_REGEX.exec(pathname)
-  if (rawMatch?.[1])
-    return decodeURIComponent(rawMatch[1]).replace(/^\/+/, '')
+  if (rawMatch?.[1]) {
+    try {
+      return decodeURIComponent(rawMatch[1]).replace(/^\/+/, '')
+    }
+    catch {
+      return null
+    }
+  }
 
   const decodedMatch = STORAGE_URL_REGEX.exec(decodePathname(pathname))
   if (decodedMatch?.[1])
