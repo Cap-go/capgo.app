@@ -11,6 +11,26 @@ async function shellPadding(page: Page) {
   })
 }
 
+async function orgSwitcherMenuIsOnTop(page: Page) {
+  const menu = page.locator('[data-test="org-switcher-menu"]')
+  await expect(menu).toBeVisible()
+  await expect.poll(async () => {
+    return menu.evaluate((el) => {
+      const style = getComputedStyle(el)
+      return `${style.position}:${style.display}`
+    })
+  }).toMatch(/^(absolute|fixed):(?!none).+/)
+  const menuBox = await menu.boundingBox()
+  expect(menuBox).toBeTruthy()
+  // Guard against the clipped-under-tabs regression (a sliver a few px tall).
+  expect(menuBox!.width).toBeGreaterThan(160)
+  expect(menuBox!.height).toBeGreaterThan(40)
+  return page.evaluate(({ x, y }) => {
+    const el = document.elementFromPoint(x, y)
+    return el?.closest('[data-test="org-switcher-menu"]') != null
+  }, { x: menuBox!.x + Math.min(40, menuBox!.width / 2), y: menuBox!.y + 24 })
+}
+
 test.describe('Desktop sidebar collapse', () => {
   test.beforeEach(async ({ page }) => {
     await page.login('test@capgo.app', 'testtest')
@@ -31,8 +51,8 @@ test.describe('Desktop sidebar collapse', () => {
     await expect.poll(() => shellPadding(page)).toBe('0px 0px 0px')
 
     await page.locator('[data-test="org-switcher"] summary').click()
-    await expect(page.locator('[data-test="org-switcher-menu"]')).toBeVisible()
     await expect(page.locator('[data-test="org-switcher-menu"]')).toContainText(/add organization/i)
+    expect(await orgSwitcherMenuIsOnTop(page)).toBe(true)
 
     await page.reload()
     await dismissSupportPrompt(page)
@@ -58,5 +78,15 @@ test.describe('Desktop sidebar collapse', () => {
     await expect(page.locator('#sidebar')).toBeInViewport()
     await expect(page.locator('#sidebar')).toContainText(/pages/i)
     await expect(page.locator('[data-test="org-switcher"]')).toBeVisible()
+  })
+
+  test('keeps the collapsed org switcher above app dashboard tabs', async ({ page }) => {
+    await page.locator('[data-test="sidebar-collapse-toggle"]').click()
+    await page.goto('/app/com.demo.app')
+    await dismissSupportPrompt(page)
+    await expect(page.locator('[data-test="org-switcher"]')).toBeVisible()
+    await page.locator('[data-test="org-switcher"] summary').click()
+    await expect(page.locator('[data-test="org-switcher-menu"]')).toHaveCSS('position', 'fixed')
+    expect(await orgSwitcherMenuIsOnTop(page)).toBe(true)
   })
 })

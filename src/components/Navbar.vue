@@ -40,7 +40,7 @@ const { t } = useI18n()
 </script>
 
 <template>
-  <header class="bg-slate-100 backdrop-blur-xl dark:bg-slate-900">
+  <header class="relative z-40 bg-slate-100 backdrop-blur-xl dark:bg-slate-900">
     <div class="px-2 sm:px-4 lg:px-6">
       <div class="relative flex items-center justify-between h-16 -mb-px">
         <!-- Header: Left side -->
