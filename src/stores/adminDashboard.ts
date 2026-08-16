@@ -374,6 +374,9 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
     adminDashboardMinimize.value = {}
     adminDashboardMinimizeUserId.value = null
     adminDashboardMinimizeAuthGeneration.value = null
+    pendingAdminDashboardMinimize.value = {}
+    pendingAdminDashboardMinimizeUserId.value = null
+    pendingAdminDashboardMinimizeAuthGeneration.value = null
   }
 
   return {

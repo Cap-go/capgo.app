@@ -227,6 +227,25 @@ describe('admin dashboard graph minimize store', () => {
     consoleError.mockRestore()
   })
 
+  it('clears a failed optimistic preference when the dashboard store resets', async () => {
+    const { useAdminDashboardStore } = await import('../src/stores/adminDashboard.ts')
+    const store = useAdminDashboardStore()
+    const key = 'users.failed-chart.12345678'
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    mockUpdateMaybeSingle.mockResolvedValueOnce({
+      data: null,
+      error: { message: 'offline' },
+    })
+
+    await store.setChartMinimized(key, true)
+    expect(store.isChartMinimized(key)).toBe(true)
+
+    store.$reset()
+
+    expect(store.isChartMinimized(key)).toBe(false)
+    consoleError.mockRestore()
+  })
+
   it('refreshes shared onboarding after exhausting compare-and-swap retries', async () => {
     const { useAdminDashboardStore } = await import('../src/stores/adminDashboard.ts')
     const store = useAdminDashboardStore()
