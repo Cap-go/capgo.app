@@ -70,6 +70,7 @@ const isMobile = isNativeAppStoreContext()
 // Modal state for insufficient billing access
 const showAdminModal = ref(false)
 const adminModalPermission = ref<'org.read_billing' | 'org.update_billing'>('org.update_billing')
+const hasReadBillingAccess = ref(false)
 
 const transactions = ref<UsageCreditLedgerRow[]>([])
 const pricingSteps = ref<CreditPricingStep[]>([])
@@ -399,11 +400,19 @@ async function loadPricingSteps() {
 // Page view requires org.read_billing; buy/checkout still requires org.update_billing.
 async function ensureReadBillingAccess() {
   const orgId = currentOrganization.value?.gid
-  if (orgId && await checkPermissions('org.read_billing', { orgId }))
+  if (orgId && await checkPermissions('org.read_billing', { orgId })) {
+    hasReadBillingAccess.value = true
     return true
+  }
+  hasReadBillingAccess.value = false
   adminModalPermission.value = 'org.read_billing'
   showAdminModal.value = true
   return false
+}
+
+async function dismissUpdateBillingModal() {
+  if (adminModalPermission.value === 'org.update_billing')
+    showAdminModal.value = false
 }
 
 async function ensureUpdateBillingAccess() {
@@ -529,7 +538,12 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
 </script>
 
 <template>
-  <div class="space-y-8 px-4 pt-6 pb-6 mx-auto max-w-7xl lg:px-8 sm:px-6">
+  <div class="relative space-y-8 px-4 pt-6 pb-6 mx-auto max-w-7xl lg:px-8 sm:px-6">
+    <div
+      v-if="hasReadBillingAccess"
+      class="space-y-8"
+      :class="{ 'blur-sm pointer-events-none select-none': showAdminModal && adminModalPermission === 'org.update_billing' }"
+    >
     <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
       <div class="flex h-full flex-col justify-between rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800">
         <div class="flex items-start justify-between gap-4">
@@ -866,12 +880,13 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
         </div>
       </div>
     </div>
-    <!-- Permission modal shown when the user lacks read or update billing access -->
+    </div>
+    <!-- Permission modal: read denial is not dismissible; update denial can be closed -->
     <RbacPermissionOnlyModal
       v-if="showAdminModal"
       :title="t('billing-access-required')"
       :permission="adminModalPermission"
-      @click="showAdminModal = false"
+      @click="dismissUpdateBillingModal"
     />
   </div>
 </template>
