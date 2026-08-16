@@ -270,13 +270,11 @@ async function readRollingSuccessRows(
   start: dayjs.Dayjs,
   endExclusive: dayjs.Dayjs,
   versionFilter?: Set<string>,
-  channelId?: number,
 ) {
   const { data, error } = await supabaseAdmin(c).rpc('read_version_usage', {
     p_app_id: appId,
     p_period_start: start.toISOString(),
     p_period_end: endExclusive.toISOString(),
-    ...(channelId ? { p_channel_id: channelId } : {}),
   })
   if (error)
     throw error
@@ -552,7 +550,6 @@ async function readBundleInstallStatsSB(
   endExclusive: dayjs.Dayjs,
   endInclusive: dayjs.Dayjs,
   versionFilter?: Set<string>,
-  channelId?: number,
 ) {
   const db = getPgClient(c, true)
   try {
@@ -570,7 +567,7 @@ async function readBundleInstallStatsSB(
 
     const [successRows, timingResult] = await Promise.all([
       days === 1
-        ? readRollingSuccessRows(c, appId, start, endExclusive, versionFilter, channelId)
+        ? readRollingSuccessRows(c, appId, start, endExclusive, versionFilter)
         : db.query<BundleSuccessRow>(
             buildSuccessRateQuery(hasVersionFilter),
             hasVersionFilter ? [appId, start.format('YYYY-MM-DD'), endInclusive.format('YYYY-MM-DD'), versionNames] : [appId, start.format('YYYY-MM-DD'), endInclusive.format('YYYY-MM-DD')],
@@ -608,7 +605,6 @@ async function readBundleInstallStatsCF(
   endExclusive: dayjs.Dayjs,
   endInclusive: dayjs.Dayjs,
   versionFilter?: Set<string>,
-  channelId?: number,
 ) {
   const queryStart = start.subtract(2, 'hour')
   const versionNames = versionFilter ? [...versionFilter] : undefined
@@ -627,7 +623,7 @@ async function readBundleInstallStatsCF(
 
   let successRows: BundleSuccessRow[]
   if (days === 1) {
-    successRows = await readRollingSuccessRows(c, appId, start, endExclusive, versionFilter, channelId)
+    successRows = await readRollingSuccessRows(c, appId, start, endExclusive, versionFilter)
   }
   else {
     const auth = c.get('auth')
@@ -738,7 +734,7 @@ async function readBundleInstallStats(
   let response: BundleInstallStatsResponse
   if (c.env.APP_LOG) {
     try {
-      response = await readBundleInstallStatsCF(c, appId, days, start, endExclusive, endInclusive, versionFilter, channelId)
+      response = await readBundleInstallStatsCF(c, appId, days, start, endExclusive, endInclusive, versionFilter)
     }
     catch (error) {
       cloudlogErr({
@@ -747,11 +743,11 @@ async function readBundleInstallStats(
         error: serializeError(error),
         app_id: appId,
       })
-      response = await readBundleInstallStatsSB(c, appId, days, start, endExclusive, endInclusive, versionFilter, channelId)
+      response = await readBundleInstallStatsSB(c, appId, days, start, endExclusive, endInclusive, versionFilter)
     }
   }
   else {
-    response = await readBundleInstallStatsSB(c, appId, days, start, endExclusive, endInclusive, versionFilter, channelId)
+    response = await readBundleInstallStatsSB(c, appId, days, start, endExclusive, endInclusive, versionFilter)
   }
 
   if (response.bundles.length > 0)
