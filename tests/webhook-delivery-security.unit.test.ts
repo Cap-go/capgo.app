@@ -158,7 +158,7 @@ describe('webhook delivery redirect handling', () => {
   it('caps response bodies while reading webhook delivery previews', async () => {
     mockGetEnv.mockReturnValue('')
     let streamCancelled = false
-    const oversizedChunk = new Uint8Array(12000).fill('a'.charCodeAt(0))
+    const oversizedChunk = new Uint8Array(12000).fill('a'.codePointAt(0) ?? 0)
     const responseBody = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(oversizedChunk)

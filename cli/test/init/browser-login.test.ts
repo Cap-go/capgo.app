@@ -19,7 +19,7 @@ describe('init browser login', () => {
 
   it('wires browser login after saved-key lookup and only for interactive init', () => {
     const initApp = initSource.slice(initSource.indexOf('export async function initApp('))
-    const savedKeyLookup = initApp.indexOf('options.apikey ??= findSavedKey(true)')
+    const savedKeyLookup = initApp.indexOf('options.apikey = findSavedKey(true)')
     const browserGate = initApp.indexOf('shouldStartInitBrowserLogin(options.apikey, supportsBrowserLogin && canPromptInteractively())')
     const authenticatedClient = initApp.indexOf('const supabase = await createSupabaseClient(options.apikey')
 

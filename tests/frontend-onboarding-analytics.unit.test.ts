@@ -53,6 +53,7 @@ describe('buildFrontendOnboardingHogql', () => {
     expect(query).toContain("'onboarding_organization_invite_succeeded'")
     expect(query).toContain("'onboarding_technical_invite_succeeded'")
     expect(query).toContain('JSONExtractString(toString(properties), \'flow\') = \'pre_org\'')
+    expect(query).toContain('JSONExtractString(toString(properties), \'$host\') = \'console.capgo.app\'')
     expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) AS onboarding_version')
     expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) IN (1, 2, 3)')
     expect(query).not.toContain('toInt64OrZero')
@@ -181,11 +182,11 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       ] },
       v3_graph: { nodes: [{ key: 'onboarding_app_id_entered', count: 1 }] },
       v2_graph: { nodes: [{ key: 'onboarding_app_name_entered', count: 1 }] },
-      v2_setup_cli_outcomes: {
-        total_users: 1,
+      v2_v3_setup_cli_outcomes: {
+        total_users: 2,
         cli_only: 0,
         cli_and_ai_instructions: 1,
-        no_cli: 0,
+        no_cli: 1,
       },
       posthog_configured: true,
       posthog_connected: true,
@@ -205,11 +206,11 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         returning: createFrontendOnboardingDailySetupCliOutcomeCounts(),
       },
     ])
-    expect(result.v2_setup_cli_outcomes).toEqual({
-      total_users: 1,
+    expect(result.v2_v3_setup_cli_outcomes).toEqual({
+      total_users: 2,
       cli_only: 0,
       cli_and_ai_instructions: 1,
-      no_cli: 0,
+      no_cli: 1,
     })
     expect(result).not.toHaveProperty('onboarding_version')
     expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)

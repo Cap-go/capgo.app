@@ -159,6 +159,13 @@ export interface CommandContext {
   positional_arg_count: number
 }
 
+interface DeferredCommandInvocation {
+  commandPath: string
+  ctx: CommandContext
+}
+
+let deferredCommandInvocation: DeferredCommandInvocation | undefined
+
 interface CommanderLike {
   args: readonly string[]
   opts: () => Record<string, unknown>
@@ -179,10 +186,9 @@ export function extractCommandContext(command: CommanderLike): CommandContext {
   }
 }
 
-export function trackCommandInvoked(commandPath: string, ctx: CommandContext): void {
-  commandStartedAt = Date.now()
-  currentCommandPath = commandPath
+function emitCommandInvoked(commandPath: string, ctx: CommandContext, apikey?: string): void {
   void trackEvent({
+    apikey,
     channel: CLI_USAGE_CHANNEL,
     event: 'CLI Command Invoked',
     icon: '⚡',
@@ -193,6 +199,27 @@ export function trackCommandInvoked(commandPath: string, ctx: CommandContext): v
       positional_arg_count: ctx.positional_arg_count,
     },
   })
+}
+
+export function trackCommandInvoked(commandPath: string, ctx: CommandContext): void {
+  commandStartedAt = Date.now()
+  currentCommandPath = commandPath
+  emitCommandInvoked(commandPath, ctx)
+}
+
+export function deferCommandInvocation(commandPath: string, ctx: CommandContext): void {
+  commandStartedAt = Date.now()
+  currentCommandPath = commandPath
+  deferredCommandInvocation = { commandPath, ctx }
+}
+
+export function flushDeferredCommandInvocation(apikey: string): void {
+  const invocation = deferredCommandInvocation
+  if (!invocation)
+    return
+
+  deferredCommandInvocation = undefined
+  emitCommandInvoked(invocation.commandPath, invocation.ctx, apikey)
 }
 
 export function trackCommandSucceeded(commandPath: string): void {

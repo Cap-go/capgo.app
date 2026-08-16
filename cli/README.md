@@ -208,6 +208,7 @@ npx @capgo/cli@latest init YOUR_API_KEY com.example.app
 
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
 | **-n** | <code>string</code> | App name for display in Capgo Cloud |
 | **-i** | <code>string</code> | App icon path for display in Capgo Cloud |
 | **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
@@ -318,6 +319,7 @@ npx @capgo/cli@latest login YOUR_API_KEY
 
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
 | **--local** | <code>boolean</code> | Only save in local folder, git ignored for security. |
 | **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
 | **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |

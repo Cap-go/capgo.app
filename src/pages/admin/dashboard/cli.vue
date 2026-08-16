@@ -161,6 +161,7 @@ displayStore.defaultBack = '/dashboard'
 
           <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
             <ChartCard
+              chart-id="cli-version"
               title="By CLI version"
               :is-loading="isLoadingStats"
               :has-data="versionEntries.length > 0"
@@ -176,6 +177,7 @@ displayStore.defaultBack = '/dashboard'
             </ChartCard>
 
             <ChartCard
+              chart-id="command"
               title="By command"
               :is-loading="isLoadingStats"
               :has-data="commandEntries.length > 0"
@@ -191,6 +193,7 @@ displayStore.defaultBack = '/dashboard'
             </ChartCard>
 
             <ChartCard
+              chart-id="api-version"
               title="By API version"
               :is-loading="isLoadingStats"
               :has-data="apiVersionEntries.length > 0"
@@ -207,6 +210,7 @@ displayStore.defaultBack = '/dashboard'
           </div>
 
           <ChartCard
+            chart-id="daily-trend"
             title="Daily trend"
             :is-loading="isLoadingStats"
             :has-data="dailySeries.length > 0"

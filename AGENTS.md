@@ -1048,7 +1048,9 @@ repeated here.
   boot before any Supabase command. The `ubuntu` user is already in the
   `docker` group, so `docker`/`supabase` work without `sudo` after the daemon is
   up. The daemon uses the `fuse-overlayfs` storage driver (configured in
-  `/etc/docker/daemon.json`) — do not switch it to `overlay2`.
+  `/etc/docker/daemon.json`) — do not switch it to `overlay2`. On Docker 29+,
+  `/etc/docker/daemon.json` must also set `features.containerd-snapshotter=false`
+  or `fuse-overlayfs` is ignored and Supabase containers fail to start.
 - **Supabase ports are worktree-isolated, not the documented defaults.** Each
   git worktree gets its own ports (e.g. the API may be on `57671`, not `54321`).
   Always run `bun run supabase:status` to read the current `SUPABASE_URL`,

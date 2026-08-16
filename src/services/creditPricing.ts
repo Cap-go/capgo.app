@@ -71,8 +71,7 @@ export function sortCreditPricingSteps(steps: CreditPricingStep[]) {
 
 export function getFirstTierCreditUnitPricing(steps: CreditPricingStep[]) {
   return sortCreditPricingSteps(steps).reduce<Partial<Record<CreditMetricType, number>>>((pricing, step) => {
-    if (pricing[step.type] === undefined)
-      pricing[step.type] = step.price_per_unit
+    pricing[step.type] ??= step.price_per_unit
 
     return pricing
   }, {})

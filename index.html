@@ -30,10 +30,10 @@
         const html = document.documentElement;
         if (isDark) {
           html.classList.add('dark');
-          html.setAttribute('data-theme', 'capgodark');
+          html.dataset.theme = 'capgodark';
         } else {
           html.classList.remove('dark');
-          html.setAttribute('data-theme', 'capgolight');
+          html.dataset.theme = 'capgolight';
         }
       }
 

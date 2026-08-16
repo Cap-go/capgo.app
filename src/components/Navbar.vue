@@ -3,6 +3,7 @@ import { Capacitor } from '@capacitor/core'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import IconPanelLeft from '~icons/lucide/panel-left'
 import IconBack from '~icons/material-symbols/arrow-back-ios-rounded'
 import IconMenu from '~icons/material-symbols/menu-rounded'
 import { useDisplayStore } from '~/stores/display'
@@ -13,9 +14,13 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  sidebarCollapsed: {
+    type: Boolean,
+    default: false,
+  },
 })
 
-defineEmits(['toggleSidebar'])
+defineEmits(['toggleSidebar', 'toggleSidebarCollapse'])
 const isMobile = ref(Capacitor.isNativePlatform())
 
 const router = useRouter()
@@ -33,13 +38,14 @@ const { t } = useI18n()
 </script>
 
 <template>
-  <header class="bg-slate-100 backdrop-blur-xl dark:bg-slate-900">
+  <header class="relative z-40 bg-slate-100 backdrop-blur-xl dark:bg-slate-900">
     <div class="px-2 sm:px-4 lg:px-6">
       <div class="relative flex items-center justify-between h-16 -mb-px">
         <!-- Header: Left side -->
-        <div class="flex items-center space-x-4">
+        <div class="flex items-center space-x-4 lg:space-x-3">
           <div v-if="displayStore.NavTitle && isMobile" class="pr-2">
             <button
+              type="button"
               class="flex p-2 rounded-sm dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:bg-slate-600 hover:bg-slate-300"
               :aria-label="t('button-back')"
               @click="back()"
@@ -48,9 +54,25 @@ const { t } = useI18n()
               <span class="hidden md:block">{{ t('button-back') }}</span>
             </button>
           </div>
+          <div class="hidden lg:block">
+            <button
+              type="button"
+              class="d-btn d-btn-ghost d-btn-square d-btn-sm dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:text-slate-50 hover:text-slate-600"
+              data-test="sidebar-collapse-toggle"
+              aria-controls="sidebar"
+              :aria-expanded="!props.sidebarCollapsed"
+              :aria-label="props.sidebarCollapsed ? t('expand-sidebar') : t('collapse-sidebar')"
+              @click.stop="$emit('toggleSidebarCollapse')"
+            >
+              <span class="sr-only">{{ props.sidebarCollapsed ? t('expand-sidebar') : t('collapse-sidebar') }}</span>
+              <IconPanelLeft class="h-5 w-5 [stroke-width:1.5]" />
+            </button>
+          </div>
           <!-- Hamburger button -->
           <button
+            type="button"
             class="p-1 rounded-md lg:hidden dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:text-slate-50 hover:text-slate-600"
+            data-test="sidebar-mobile-toggle"
             aria-controls="sidebar"
             :aria-expanded="props.sidebarOpen"
             :aria-label="props.sidebarOpen ? t('close-sidebar') : t('open-sidebar')"
@@ -91,7 +113,6 @@ const { t } = useI18n()
                   </li>
                 </ol>
               </nav>
-              <!-- <span v-if="showNavTitle" class="mx-1">{{ displayStore.NavTitle }}</span> -->
             </div>
           </div>
         </div>

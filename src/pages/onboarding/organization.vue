@@ -226,7 +226,7 @@ function toTitleCaseSegment(segment: string) {
 }
 
 function deriveOrgNameFromWebsite(hostname: string) {
-  const primarySegment = hostname.split('.').filter(Boolean)[0] ?? ''
+  const primarySegment = hostname.split('.').find(Boolean) ?? ''
   return toTitleCaseSegment(primarySegment)
 }
 
@@ -528,7 +528,7 @@ async function useImportedLogo() {
       }
 
       const binary = atob(payload)
-      const bytes = Uint8Array.from(binary, char => char.charCodeAt(0))
+      const bytes = Uint8Array.from(binary, char => char.codePointAt(0) ?? 0)
       const blob = new Blob([bytes], { type: contentType })
       return await uploadLogoBlob(blob, `${websiteHostname.value || 'website-logo'}.png`)
     }

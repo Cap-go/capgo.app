@@ -503,6 +503,7 @@ onMounted(() => {
     </div>
     <nav class="fixed bottom-0 left-0 z-40 flex items-center justify-between w-full p-4 bg-white md:relative md:pt-4 md:bg-transparent dark:bg-gray-900 dark:md:bg-transparent" aria-label="Table navigation">
       <button
+        type="button"
         class="flex items-center justify-center h-10 px-4 py-2 space-x-2 text-sm font-medium transition-colors border border-gray-300 rounded-md whitespace-nowrap dark:text-white dark:border-gray-700 focus-visible:ring-2 focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none ring-offset-background dark:hover:bg-primary/90 hover:bg-primary/10 focus-visible:outline-hidden focus-visible:ring-ring"
         @click="fastBackward"
       >

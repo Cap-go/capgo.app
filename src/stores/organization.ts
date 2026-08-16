@@ -276,7 +276,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     owner_org: string
     need_onboarding: boolean
     icon_url: string | null
-    onboarding?: OrganizationApp['onboarding']
+    onboarding?: Exclude<OrganizationApp['onboarding'], undefined>
   }): OrganizationApp => {
     const { normalized, shouldSign } = resolveImagePath(app.icon_url)
     return {

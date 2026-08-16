@@ -5396,6 +5396,61 @@ $$;
 ALTER FUNCTION "public"."delete_user"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."dismiss_getting_started"("p_app_id" character varying) RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_owner_org uuid;
+  v_onboarding jsonb;
+  v_now text;
+BEGIN
+  IF p_app_id IS NULL OR btrim(p_app_id) = '' THEN
+    RAISE EXCEPTION 'APP_NOT_FOUND';
+  END IF;
+
+  SELECT apps.owner_org, apps.onboarding
+  INTO v_owner_org, v_onboarding
+  FROM public.apps
+  WHERE apps.app_id = p_app_id
+  FOR UPDATE;
+
+  IF v_owner_org IS NULL THEN
+    RAISE EXCEPTION 'NO_PERMISSION';
+  END IF;
+
+  IF NOT public.rbac_check_permission_request(
+    public.rbac_perm_app_read(),
+    v_owner_org,
+    p_app_id,
+    NULL::bigint
+  ) THEN
+    RAISE EXCEPTION 'NO_PERMISSION';
+  END IF;
+
+  v_onboarding := COALESCE(v_onboarding, '{}'::jsonb);
+  IF NULLIF(v_onboarding->>'getting_started_dismissed_at', '') IS NULL THEN
+    v_now := to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+    v_onboarding := v_onboarding || jsonb_build_object('getting_started_dismissed_at', v_now);
+
+    UPDATE public.apps
+    SET onboarding = v_onboarding,
+        updated_at = now()
+    WHERE apps.app_id = p_app_id;
+  END IF;
+
+  RETURN v_onboarding;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."dismiss_getting_started"("p_app_id" character varying) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."dismiss_getting_started"("p_app_id" character varying) IS 'Sets onboarding.getting_started_dismissed_at once when the caller can read the app. Does not change features or setup.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."enforce_apikey_expiration_policy"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -6600,7 +6655,7 @@ COMMENT ON COLUMN "public"."apps"."onboarding_completed_at" IS 'Timestamp when t
 
 
 
-COMMENT ON COLUMN "public"."apps"."onboarding" IS 'Feature ledger plus setup source. Shape: {"refreshed_at": iso, "features": {...}, "setup": {"source": manual|cli|mcp|ai, "outcome": in_progress|completed|skipped|switched_to_manual, "steps": {step_id: {"status": done|skipped, "at": iso}}}}. Manual is the default when setup.source is missing.';
+COMMENT ON COLUMN "public"."apps"."onboarding" IS 'Feature ledger plus setup source and Getting Started dismiss. Shape: {"refreshed_at": iso, "features": {...}, "setup": {"source": manual|cli|mcp|ai, "outcome": in_progress|completed|skipped|switched_to_manual, "steps": {step_id: {"status": done|skipped, "at": iso}}}, "getting_started_dismissed_at": iso}. Manual is the default when setup.source is missing.';
 
 
 
@@ -21252,7 +21307,8 @@ CREATE TABLE IF NOT EXISTS "public"."users" (
     "format_locale" character varying,
     "discord_username" character varying(32),
     "github_username" character varying(39),
-    "github_id" bigint
+    "github_id" bigint,
+    "onboarding" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL
 );
 
 
@@ -21276,6 +21332,10 @@ COMMENT ON COLUMN "public"."users"."discord_username" IS 'Optional Discord usern
 
 
 COMMENT ON COLUMN "public"."users"."github_username" IS 'Optional GitHub username supplied by the user for future experience enrichment.';
+
+
+
+COMMENT ON COLUMN "public"."users"."onboarding" IS 'Persisted create-app onboarding wizard progress for resume and admin drop-off. Keys: status, step, flow, intent, app_name, app_id, existing_app, existing_app_setup, store_url, imported_store_app_id, org_name, estimated_users_index, updated_at, completed_at.';
 
 
 
@@ -21862,6 +21922,11 @@ ALTER TABLE ONLY "public"."user_password_compliance"
 
 ALTER TABLE ONLY "public"."user_security"
     ADD CONSTRAINT "user_security_pkey" PRIMARY KEY ("user_id");
+
+
+
+ALTER TABLE "public"."users"
+    ADD CONSTRAINT "users_onboarding_valid" CHECK ((("jsonb_typeof"("onboarding") = 'object'::"text") AND ("octet_length"(("onboarding")::"text") <= 8192) AND ((NOT ("onboarding" ? 'status'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'status'::"text")) = 'string'::"text") AND (("onboarding" ->> 'status'::"text") = ANY (ARRAY['in_progress'::"text", 'completed'::"text", 'abandoned'::"text"])))) AND ((NOT ("onboarding" ? 'step'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'step'::"text")) = 'string'::"text") AND (("onboarding" ->> 'step'::"text") = ANY (ARRAY['intent'::"text", 'details'::"text", 'organization'::"text", 'choice'::"text", 'install'::"text", 'setup'::"text"])))) AND ((NOT ("onboarding" ? 'flow'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'flow'::"text")) = 'string'::"text") AND (("onboarding" ->> 'flow'::"text") = ANY (ARRAY['pre_org'::"text", 'existing_org'::"text"])))) AND ((NOT ("onboarding" ? 'intent'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'intent'::"text")) = 'string'::"text") AND (("onboarding" ->> 'intent'::"text") = ANY (ARRAY['ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text"])))))) NOT VALID;
 
 
 
@@ -22570,6 +22635,10 @@ CREATE UNIQUE INDEX "usage_credit_transactions_purchase_payment_intent_id_idx" O
 
 
 CREATE UNIQUE INDEX "usage_credit_transactions_purchase_session_id_idx" ON "public"."usage_credit_transactions" USING "btree" ((("source_ref" ->> 'sessionId'::"text"))) WHERE (("transaction_type" = 'purchase'::"public"."credit_transaction_type") AND (("source_ref" ->> 'sessionId'::"text") IS NOT NULL));
+
+
+
+CREATE INDEX "users_onboarding_in_progress_step_idx" ON "public"."users" USING "btree" ((("onboarding" ->> 'step'::"text"))) WHERE (("onboarding" ->> 'status'::"text") = 'in_progress'::"text");
 
 
 
@@ -25307,6 +25376,12 @@ GRANT ALL ON FUNCTION "public"."delete_org_member_role"("p_org_id" "uuid", "p_us
 REVOKE ALL ON FUNCTION "public"."delete_user"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."delete_user"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."delete_user"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."dismiss_getting_started"("p_app_id" character varying) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."dismiss_getting_started"("p_app_id" character varying) TO "service_role";
+GRANT ALL ON FUNCTION "public"."dismiss_getting_started"("p_app_id" character varying) TO "authenticated";
 
 
 

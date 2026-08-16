@@ -1,6 +1,7 @@
 export const FRONTEND_ONBOARDING_VERSIONS = [1, 2, 3] as const
 export type FrontendOnboardingVersion = typeof FRONTEND_ONBOARDING_VERSIONS[number]
 export const FRONTEND_ONBOARDING_FOLLOWUP_MS = 24 * 60 * 60 * 1000
+export const FRONTEND_ONBOARDING_PRODUCTION_HOST = ['console', 'capgo', 'app'].join('.')
 
 export type FrontendOnboardingStageKey = 'intent' | 'details' | 'organization' | 'setup'
 
@@ -91,7 +92,7 @@ export interface FrontendOnboardingAnalytics {
   v3_graph: {
     nodes: Array<{ key: string, count: number }>
   }
-  v2_setup_cli_outcomes: FrontendOnboardingSetupCliOutcomes
+  v2_v3_setup_cli_outcomes: FrontendOnboardingSetupCliOutcomes
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -284,7 +285,7 @@ function buildInteractionGraph(attempts: FrontendOnboardingAttempt[]): Array<{ k
     .map(([key, count]) => ({ key, count }))
 }
 
-function buildV2SetupCliOutcomes(attempts: FrontendOnboardingAttempt[]): FrontendOnboardingSetupCliOutcomes {
+function buildV2V3SetupCliOutcomes(attempts: FrontendOnboardingAttempt[]): FrontendOnboardingSetupCliOutcomes {
   const outcomesByPerson = new Map<string, { copiedAiInstructions: boolean, startedCli: boolean }>()
 
   for (const attempt of attempts) {
@@ -347,6 +348,7 @@ export function buildFrontendOnboardingAnalytics(
   const currentV1Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 1)
   const currentV2Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 2)
   const currentV3Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 3)
+  const currentV2AndV3Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 2 || attempt.onboardingVersion === 3)
   const currentV3ConversionAttempts = attempts.filter(attempt => attempt.onboardingVersion === 3
     && attempt.intentMs >= currentStartMs - FRONTEND_ONBOARDING_FOLLOWUP_MS
     && attempt.intentMs < currentEndMs)
@@ -361,7 +363,7 @@ export function buildFrontendOnboardingAnalytics(
     },
     daily_attempts: buildDailyAttempts(currentAttempts, currentStartMs, currentEndMs),
     daily_conversions: {
-      intent_to_details: buildDailyConversion(currentV3ConversionAttempts, currentStartMs, currentEndMs, 'intent', 'details'),
+      intent_to_details: buildDailyConversion(attempts, currentStartMs, currentEndMs, 'intent', 'details'),
       details_to_organization: buildDailyConversion(currentV3ConversionAttempts, currentStartMs, currentEndMs, 'details', 'organization'),
       organization_to_setup: buildDailyConversion(currentV3ConversionAttempts, currentStartMs, currentEndMs, 'organization', 'setup'),
     },
@@ -372,6 +374,6 @@ export function buildFrontendOnboardingAnalytics(
     },
     v2_graph: { nodes: buildInteractionGraph(currentV2Attempts) },
     v3_graph: { nodes: buildInteractionGraph(currentV3Attempts) },
-    v2_setup_cli_outcomes: buildV2SetupCliOutcomes(currentV2Attempts),
+    v2_v3_setup_cli_outcomes: buildV2V3SetupCliOutcomes(currentV2AndV3Attempts),
   }
 }

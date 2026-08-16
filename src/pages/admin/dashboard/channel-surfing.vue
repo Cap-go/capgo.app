@@ -150,6 +150,7 @@ displayStore.defaultBack = '/dashboard'
           </div>
 
           <ChartCard
+            chart-id="channel-surfing-trend"
             :title="t('channel-surfing-trend')"
             :is-loading="isLoadingStats"
             :has-data="dailySeries.length > 0"
@@ -162,6 +163,7 @@ displayStore.defaultBack = '/dashboard'
 
           <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <ChartCard
+              chart-id="channel-surfing-top-apps-events"
               :title="t('channel-surfing-top-apps-events')"
               :is-loading="isLoadingStats"
               :has-data="topApps.length > 0"
@@ -177,6 +179,7 @@ displayStore.defaultBack = '/dashboard'
             </ChartCard>
 
             <ChartCard
+              chart-id="channel-surfing-top-apps-devices"
               :title="t('channel-surfing-top-apps-devices')"
               :is-loading="isLoadingStats"
               :has-data="topApps.length > 0"

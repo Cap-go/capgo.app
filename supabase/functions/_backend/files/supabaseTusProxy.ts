@@ -94,7 +94,7 @@ function utf8ToBase64(str: string): string {
   const bytes = encoder.encode(str)
   let binary = ''
   for (const byte of bytes) {
-    binary += String.fromCharCode(byte)
+    binary += String.fromCodePoint(byte)
   }
   return btoa(binary)
 }
@@ -143,12 +143,12 @@ function rewriteLocationHeader(c: Context, supabaseLocation: string): string {
   try {
     const url = new URL(supabaseLocation)
     const pathSegments = url.pathname.split('/').filter(Boolean)
-    uploadId = pathSegments[pathSegments.length - 1]
+    uploadId = pathSegments.at(-1)
   }
   catch {
     const pathWithoutQuery = supabaseLocation.split('?')[0].split('#')[0]
     const pathSegments = pathWithoutQuery.split('/').filter(Boolean)
-    uploadId = pathSegments[pathSegments.length - 1]
+    uploadId = pathSegments.at(-1)
   }
 
   if (!uploadId) {

@@ -106,8 +106,7 @@ export function maxConcurrentUsed(
     const stop = Math.min(end, rangeEndMs)
     if (stop <= start)
       continue
-    events.push({ t: start, d: 1 })
-    events.push({ t: stop, d: -1 })
+    events.push({ t: start, d: 1 }, { t: stop, d: -1 })
   }
   events.sort((a, b) => a.t - b.t || a.d - b.d)
 
@@ -457,7 +456,7 @@ async function loadRunIntervals(
 
     return rows
       .map((row) => {
-        const started = row.started_at ? Date.parse(row.started_at) : NaN
+        const started = row.started_at ? Date.parse(row.started_at) : Number.NaN
         if (!Number.isFinite(started))
           return null
         const completed = row.completed_at ? Date.parse(row.completed_at) : null

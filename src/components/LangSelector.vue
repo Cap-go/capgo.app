@@ -13,7 +13,7 @@ function closeDropdown() {
 
 <template>
   <div ref="dropdown" class="d-dropdown">
-    <button tabindex="0" class="m-1 border-gray-300 dark:border-gray-600 d-btn d-btn-outline d-btn-sm">
+    <button type="button" tabindex="0" class="m-1 border-gray-300 dark:border-gray-600 d-btn d-btn-outline d-btn-sm">
       {{ getEmoji(i18n.global.locale.value) }} {{ languages[i18n.global.locale.value as keyof typeof languages] }} <svg class="ml-2 w-4 h-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>
     </button>
     <ul tabindex="0" class="p-2 w-52 bg-white shadow d-dropdown-content d-menu rounded-box z-1 dark:bg-base-200">

@@ -1047,6 +1047,7 @@ displayStore.defaultBack = '/dashboard'
           <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <!-- Subscription Flow (New vs Canceled) -->
             <ChartCard
+              chart-id="subscription-flow"
               :title="t('subscription-flow')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="subscriptionFlowSeries.length > 0"
@@ -1059,6 +1060,7 @@ displayStore.defaultBack = '/dashboard'
 
             <!-- Subscription Type (Yearly vs Monthly) -->
             <ChartCard
+              chart-id="subscription-type-trend"
               :title="t('subscription-type-trend')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="subscriptionTypeSeries.length > 0"
@@ -1072,6 +1074,7 @@ displayStore.defaultBack = '/dashboard'
 
           <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <ChartCard
+              chart-id="past-due-organizations"
               :title="t('past-due-organizations')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="pastDueOrgSeries.length > 0"
@@ -1083,6 +1086,7 @@ displayStore.defaultBack = '/dashboard'
             </ChartCard>
 
             <ChartCard
+              chart-id="average-past-due-days"
               :title="t('average-past-due-days')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="pastDueAverageDaysSeries.length > 0"
@@ -1097,6 +1101,7 @@ displayStore.defaultBack = '/dashboard'
 
           <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <ChartCard
+              chart-id="active-canceled-organizations"
               :title="t('active-canceled-organizations')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="activeCanceledOrgSeries.length > 0"
@@ -1108,6 +1113,7 @@ displayStore.defaultBack = '/dashboard'
             </ChartCard>
 
             <ChartCard
+              chart-id="active-past-due-organizations"
               :title="t('active-past-due-organizations')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="activePastDueOrgSeries.length > 0"
@@ -1121,6 +1127,7 @@ displayStore.defaultBack = '/dashboard'
 
           <div class="grid grid-cols-1 gap-6">
             <ChartCard
+              chart-id="paid-plan-mix"
               title="Paid Plan Mix (of paying)"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="planConversionSeries.length > 0"
@@ -1135,6 +1142,7 @@ displayStore.defaultBack = '/dashboard'
 
           <div class="grid grid-cols-1 gap-6">
             <ChartCard
+              chart-id="upgrade-rate-12m"
               :title="t('upgrade-rate-12m')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="upgradeRate12mSeries.length > 0"
@@ -1151,6 +1159,7 @@ displayStore.defaultBack = '/dashboard'
           <div class="grid grid-cols-1 gap-6">
             <!-- MRR - Monthly Recurring Revenue -->
             <ChartCard
+              chart-id="mrr"
               title="MRR - Monthly Recurring Revenue"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="mrrSeries.length > 0"
@@ -1164,6 +1173,7 @@ displayStore.defaultBack = '/dashboard'
 
             <!-- ARR - Annual Recurring Revenue -->
             <ChartCard
+              chart-id="arr"
               title="ARR - Annual Recurring Revenue Projection"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="arrSeries.length > 0"
@@ -1177,6 +1187,7 @@ displayStore.defaultBack = '/dashboard'
 
             <!-- ARR by Plan (3 lines) -->
             <ChartCard
+              chart-id="arr-by-plan"
               title="ARR by Plan"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="planARRSeries.length > 0"
@@ -1189,6 +1200,7 @@ displayStore.defaultBack = '/dashboard'
             </ChartCard>
 
             <ChartCard
+              chart-id="ltv-by-customer"
               title="LTV by Customer"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="ltvSeries.length > 0"
@@ -1204,6 +1216,7 @@ displayStore.defaultBack = '/dashboard'
           <!-- Retention Charts -->
           <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <ChartCard
+              chart-id="nrr"
               title="NRR - Net Revenue Retention"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="nrrSeries.length > 0"
@@ -1219,6 +1232,7 @@ displayStore.defaultBack = '/dashboard'
             </ChartCard>
 
             <ChartCard
+              chart-id="churn"
               :title="churnChartTitle"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="churnChartSeries.length > 0"
@@ -1265,6 +1279,7 @@ displayStore.defaultBack = '/dashboard'
           <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <!-- Total Paying Organizations Trend -->
             <ChartCard
+              chart-id="paying-organizations-trend"
               :title="t('paying-orgs-trend')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="totalPayingOrgsSeries.length > 0"
@@ -1277,6 +1292,7 @@ displayStore.defaultBack = '/dashboard'
 
             <!-- Above Plan Trend -->
             <ChartCard
+              chart-id="above-plan-trend"
               :title="t('above-plan-trend')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="upgradeTrendSeries.length > 0"

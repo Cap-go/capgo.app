@@ -172,11 +172,11 @@ const timeRemaining = computed(() => {
         </p>
       </div>
 
-      <button :class="authPrimaryButtonClass" :disabled="isRestoring" :aria-busy="isRestoring ? 'true' : 'false'" @click="handleRestore">
+      <button type="button" :class="authPrimaryButtonClass" :disabled="isRestoring" :aria-busy="isRestoring ? 'true' : 'false'" @click="handleRestore">
         {{ isRestoring ? t('restoring-account') : t('restore-account') }}
       </button>
 
-      <button :class="authSecondaryButtonClass" @click="handleLogout">
+      <button type="button" :class="authSecondaryButtonClass" @click="handleLogout">
         {{ t('sign-out') }}
       </button>
     </div>
@@ -186,7 +186,7 @@ const timeRemaining = computed(() => {
         <div class="mx-auto">
           <LangSelector />
         </div>
-        <button class="mt-3" :class="authGhostButtonClass" @click="openSupport">
+        <button type="button" class="mt-3" :class="authGhostButtonClass" @click="openSupport">
           {{ t('support') }}
         </button>
       </section>

@@ -496,6 +496,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
             </span>
             <!-- Custom Plan Trigger -->
             <button
+              type="button"
               v-if="!isMobile"
               class="items-center hidden px-3 py-1 text-xs font-medium text-blue-700 transition-colors rounded-full bg-blue-50 lg:inline-flex dark:text-blue-300 hover:bg-blue-100 dark:bg-blue-900/30"
               @click="openSupport()"
@@ -516,6 +517,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
         <!-- Toggle -->
         <div class="flex items-center p-1 bg-gray-200 rounded-lg dark:bg-base-200">
           <button
+            type="button"
             class="py-1.5 px-4 text-sm font-medium rounded-md transition-all duration-200"
             :class="segmentVal === 'm' ? 'bg-white dark:bg-base-100 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'"
             @click="segmentVal = 'm'"
@@ -523,6 +525,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
             {{ t('monthly-plan') }}
           </button>
           <button
+            type="button"
             class="flex gap-2 items-center py-1.5 px-4 text-sm font-medium rounded-md transition-all duration-200"
             :class="segmentVal === 'y' ? 'bg-white dark:bg-base-100 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'"
             @click="segmentVal = 'y'"
@@ -589,6 +592,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
 
           <!-- Action Button -->
           <button
+            type="button"
             data-test="plan-action-button"
             :class="buttonStyle(p)"
             class="flex items-center justify-center w-full gap-2 px-4 py-2 mb-6 text-sm font-semibold transition-all duration-200 rounded-lg shadow-sm shrink-0"
@@ -691,7 +695,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
       v-if="showAdminModal"
       :title="t('billing-access-required')"
       permission="org.update_billing"
-      @click="showAdminModal = false"
+      @close="showAdminModal = false"
     />
   </div>
 </template>

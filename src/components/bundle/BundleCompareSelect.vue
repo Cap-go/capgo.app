@@ -310,7 +310,7 @@ function liveBadgeTitle(versionId: number): string {
 }
 
 function escapeIlike(term: string): string {
-  return term.replace(/[\\%_]/g, '\\$&')
+  return term.replace(/[\\%_]/g, String.raw`\$&`)
 }
 
 async function searchCompareVersions(term: string) {
@@ -433,6 +433,7 @@ watch(
     <div class="flex items-center gap-2 mt-2">
       <div class="w-full d-dropdown">
         <button
+          type="button"
           tabindex="0"
           class="inline-flex w-full min-w-0 items-center justify-between rounded-lg border border-slate-300 bg-white px-3 py-2 text-left text-sm text-slate-700 shadow-sm transition hover:border-slate-400 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
           :disabled="disabled"

@@ -6,7 +6,7 @@ import { categorizeCliError } from './analytics/error-category'
 import { applyCommandAnalyticsOptOut, applyRawCommandAnalyticsOptOut } from './analytics/opt-out'
 import { enableSupabaseInstrumentation } from './analytics/supabase-perf'
 import { setCurrentCliCommand } from './analytics/cli-headers'
-import { extractCommandContext, flushAnalytics, trackCommandFailed, trackCommandInvoked, trackCommandSucceeded } from './analytics/track'
+import { deferCommandInvocation, extractCommandContext, flushAnalytics, trackCommandFailed, trackCommandInvoked, trackCommandSucceeded } from './analytics/track'
 import { addApp } from './app/add'
 import { debugApp } from './app/debug'
 import { deleteApp } from './app/delete'
@@ -92,7 +92,11 @@ program.hook('preAction', (_thisCommand, actionCommand) => {
   currentCommandPath = getCommandPath(actionCommand)
   setCurrentCliCommand(currentCommandPath)
   applyCommandAnalyticsOptOut(currentCommandPath, actionCommand.opts())
-  trackCommandInvoked(currentCommandPath, extractCommandContext(actionCommand))
+  const commandContext = extractCommandContext(actionCommand)
+  if (currentCommandPath === 'login' || currentCommandPath === 'init')
+    deferCommandInvocation(currentCommandPath, commandContext)
+  else
+    trackCommandInvoked(currentCommandPath, commandContext)
 })
 
 program.hook('postAction', (_thisCommand, actionCommand) => {
@@ -116,6 +120,7 @@ During the iOS run-on-device step, choose a physical iPhone/iPad or simulator. I
 
 Example: npx @capgo/cli@latest init YOUR_API_KEY com.example.app`)
   .action(initApp)
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('-n, --name <name>', `App name for display in Capgo Cloud`)
   .option('-i, --icon <icon>', `App icon path for display in Capgo Cloud`)
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
@@ -181,6 +186,7 @@ Use --apikey=******** in any command to override it.
 
 Example: npx @capgo/cli@latest login YOUR_API_KEY`)
   .action(login)
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('--local', `Only save in local folder, git ignored for security.`)
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)

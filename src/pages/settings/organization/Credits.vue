@@ -3,7 +3,7 @@ import type { CreditMetricType, CreditPricingStep } from '~/services/creditPrici
 import type { Database } from '~/types/supabase.types'
 import { FormKit } from '@formkit/vue'
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -70,6 +70,8 @@ const isMobile = isNativeAppStoreContext()
 // Modal state for insufficient billing access
 const showAdminModal = ref(false)
 const adminModalPermission = ref<'org.read_billing' | 'org.update_billing'>('org.update_billing')
+const hasReadBillingAccess = ref(false)
+let updateBillingFocusEl: HTMLElement | null = null
 
 const transactions = ref<UsageCreditLedgerRow[]>([])
 const pricingSteps = ref<CreditPricingStep[]>([])
@@ -266,8 +268,8 @@ const dailyTransactions = computed<DailyLedgerRow[]>(() => {
         dateLabel,
         transactionCount: 1,
         amountTotal: tx.amount ?? 0,
-        positiveTotal: tx.amount >= 0 ? tx.amount : 0,
-        negativeTotal: tx.amount < 0 ? tx.amount : 0,
+        positiveTotal: Math.max(tx.amount, 0),
+        negativeTotal: Math.min(tx.amount, 0),
         latestBalance: tx.balance_after,
         typeCounts: {
           grant: 0,
@@ -277,9 +279,9 @@ const dailyTransactions = computed<DailyLedgerRow[]>(() => {
           expiry: 0,
           refund: 0,
         },
-        grantsTotal: tx.amount >= 0 ? tx.amount : 0,
+        grantsTotal: Math.max(tx.amount, 0),
         grantsCount: tx.amount >= 0 ? 1 : 0,
-        deductionsTotal: tx.amount < 0 ? tx.amount : 0,
+        deductionsTotal: Math.min(tx.amount, 0),
         deductionsCount: tx.amount < 0 ? 1 : 0,
         deductionsByMetric: {},
       }
@@ -397,19 +399,52 @@ async function loadPricingSteps() {
 }
 
 // Page view requires org.read_billing; buy/checkout still requires org.update_billing.
-async function ensureReadBillingAccess() {
-  const orgId = currentOrganization.value?.gid
-  if (orgId && await checkPermissions('org.read_billing', { orgId }))
+async function ensureReadBillingAccess(expectedOrgId?: string) {
+  const orgId = expectedOrgId ?? currentOrganization.value?.gid
+  // Hide previous org data immediately while the async permission check runs.
+  hasReadBillingAccess.value = false
+  if (!orgId)
+    return false
+
+  const allowed = await checkPermissions('org.read_billing', { orgId })
+  // Ignore stale results if the user switched orgs mid-check.
+  if (currentOrganization.value?.gid !== orgId)
+    return false
+
+  if (allowed) {
+    hasReadBillingAccess.value = true
+    if (adminModalPermission.value === 'org.read_billing')
+      showAdminModal.value = false
     return true
+  }
+
   adminModalPermission.value = 'org.read_billing'
   showAdminModal.value = true
   return false
+}
+
+function dismissUpdateBillingModal() {
+  if (adminModalPermission.value !== 'org.update_billing')
+    return
+  showAdminModal.value = false
+  const el = updateBillingFocusEl
+  updateBillingFocusEl = null
+  void nextTick(() => el?.focus?.())
+}
+
+function onEscapeDismiss(event: KeyboardEvent) {
+  if (event.key !== 'Escape')
+    return
+  dismissUpdateBillingModal()
 }
 
 async function ensureUpdateBillingAccess() {
   const orgId = currentOrganization.value?.gid
   if (orgId && await checkPermissions('org.update_billing', { orgId }))
     return true
+  updateBillingFocusEl = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null
   adminModalPermission.value = 'org.update_billing'
   showAdminModal.value = true
   return false
@@ -483,7 +518,9 @@ async function handleCreditCheckoutReturn() {
     await organizationStore.fetchOrganizations()
     if (orgId)
       organizationStore.setCurrentOrganization(orgId)
-    await Promise.allSettled([loadTransactions()])
+    // Do not load the ledger here: callers with org.update_billing but without
+    // org.read_billing must still finalize checkout, then the read gate loads
+    // transactions only when allowed.
   }
   catch (error) {
     console.error('Failed to finalize credit top-up', error)
@@ -507,12 +544,19 @@ onMounted(async () => {
     return
   }
 
+  window.addEventListener('keydown', onEscapeDismiss)
   displayStore.NavTitle = t('credits')
   await organizationStore.awaitInitialLoad()
+  // Finalize Stripe return before the read gate so update-billing holders can
+  // complete a top-up even when they temporarily lack org.read_billing.
+  await handleCreditCheckoutReturn()
   if (!(await ensureReadBillingAccess()))
     return
   await Promise.allSettled([loadTransactions(), loadPricingSteps()])
-  await handleCreditCheckoutReturn()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onEscapeDismiss)
 })
 
 watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined, oldOrgId: string | undefined) => {
@@ -521,357 +565,366 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
 
   if (!newOrgId || newOrgId === oldOrgId)
     return
-  if (!(await ensureReadBillingAccess()))
+  await handleCreditCheckoutReturn()
+  if (!(await ensureReadBillingAccess(newOrgId)))
     return
   await Promise.allSettled([loadTransactions(), loadPricingSteps()])
-  await handleCreditCheckoutReturn()
 })
 </script>
 
 <template>
-  <div class="space-y-8 px-4 pt-6 pb-6 mx-auto max-w-7xl lg:px-8 sm:px-6">
-    <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
-      <div class="flex h-full flex-col justify-between rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-        <div class="flex items-start justify-between gap-4">
-          <div>
-            <div class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-              <ScaleIcon class="h-4 w-4" />
-              {{ t('credits-balance') }}
+  <div class="relative space-y-8 px-4 pt-6 pb-6 mx-auto max-w-7xl lg:px-8 sm:px-6">
+    <div
+      v-if="hasReadBillingAccess"
+      class="space-y-8"
+      :inert="showAdminModal && adminModalPermission === 'org.update_billing'"
+      :class="{ 'blur-sm pointer-events-none select-none': showAdminModal && adminModalPermission === 'org.update_billing' }"
+    >
+      <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
+        <div class="flex h-full flex-col justify-between rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <div class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                <ScaleIcon class="h-4 w-4" />
+                {{ t('credits-balance') }}
+              </div>
+              <div class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">
+                {{ formatCredits(creditAvailable) }} <span class="font-medium text-gray-900 dark:text-white">/ {{ formatCredits(creditTotal) }}</span>
+              </div>
+              <p class="text-sm text-gray-500 dark:text-gray-400">
+                {{ t('credits-available') }}
+              </p>
             </div>
-            <div class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">
-              {{ formatCredits(creditAvailable) }} <span class="font-medium text-gray-900 dark:text-white">/ {{ formatCredits(creditTotal) }}</span>
+            <div v-if="creditNextExpiration" class="text-right">
+              <div class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                {{ t('credits-next-expiration') }}
+              </div>
+              <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">
+                {{ creditNextExpiration }}
+              </div>
             </div>
-            <p class="text-sm text-gray-500 dark:text-gray-400">
-              {{ t('credits-available') }}
+          </div>
+          <div class="mt-6">
+            <div class="mb-2 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+              <span>{{ t('credits-used-in-period') }}</span>
+              <span class="font-medium text-gray-900 dark:text-white">{{ formatCredits(creditUsed) }}</span>
+            </div>
+            <div class="h-2 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
+              <div
+                class="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-600 transition-all duration-300"
+                :style="{ width: `${creditUsagePercent}%` }"
+              />
+            </div>
+            <p v-if="!hasCreditSummary" class="mt-4 text-sm text-gray-500 dark:text-gray-400">
+              {{ t('no-credits-available') }}
             </p>
           </div>
-          <div v-if="creditNextExpiration" class="text-right">
-            <div class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-              {{ t('credits-next-expiration') }}
-            </div>
-            <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">
-              {{ creditNextExpiration }}
-            </div>
-          </div>
         </div>
-        <div class="mt-6">
-          <div class="mb-2 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
-            <span>{{ t('credits-used-in-period') }}</span>
-            <span class="font-medium text-gray-900 dark:text-white">{{ formatCredits(creditUsed) }}</span>
+
+        <div class="flex h-full flex-col justify-between rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+          <div>
+            <div class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+              <BanknotesIcon class="h-4 w-4" />
+              {{ t('credits-used-dollars') }}
+            </div>
+            <div class="mt-3 text-3xl font-semibold text-gray-900 dark:text-white">
+              {{ formatCurrency(creditUsedUsd) }}
+            </div>
+            <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
+              {{ t('credits-used-dollars-description') }}
+            </p>
           </div>
-          <div class="h-2 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-            <div
-              class="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-600 transition-all duration-300"
-              :style="{ width: `${creditUsagePercent}%` }"
-            />
+          <div class="mt-6">
+            <div class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+              <span>{{ t('credits-available') }}</span>
+              <span class="font-medium text-gray-900 dark:text-white">
+                {{ formatCurrency(creditsAvailableUsd) }}
+              </span>
+            </div>
           </div>
-          <p v-if="!hasCreditSummary" class="mt-4 text-sm text-gray-500 dark:text-gray-400">
-            {{ t('no-credits-available') }}
-          </p>
         </div>
       </div>
 
-      <div class="flex h-full flex-col justify-between rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-        <div>
-          <div class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-            <BanknotesIcon class="h-4 w-4" />
-            {{ t('credits-used-dollars') }}
+      <div class="rounded-3xl border border-blue-500 p-6 text-white shadow-lg">
+        <div class="flex flex-col items-start justify-between gap-6 sm:flex-col sm:items-start">
+          <div class="max-w-xl">
+            <h3 class="text-2xl font-semibold text-gray-900 dark:text-white">
+              {{ t('credits-cta-title') }}
+            </h3>
+            <p class="mt-2 max-w-xl text-sm opacity-90 font-medium text-gray-900 dark:text-white">
+              {{ t('credits-cta-description') }}
+            </p>
           </div>
-          <div class="mt-3 text-3xl font-semibold text-gray-900 dark:text-white">
-            {{ formatCurrency(creditUsedUsd) }}
-          </div>
-          <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
-            {{ t('credits-used-dollars-description') }}
-          </p>
-        </div>
-        <div class="mt-6">
-          <div class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
-            <span>{{ t('credits-available') }}</span>
-            <span class="font-medium text-gray-900 dark:text-white">
-              {{ formatCurrency(creditsAvailableUsd) }}
-            </span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="rounded-3xl border border-blue-500 p-6 text-white shadow-lg">
-      <div class="flex flex-col items-start justify-between gap-6 sm:flex-col sm:items-start">
-        <div class="max-w-xl">
-          <h3 class="text-2xl font-semibold text-gray-900 dark:text-white">
-            {{ t('credits-cta-title') }}
-          </h3>
-          <p class="mt-2 max-w-xl text-sm opacity-90 font-medium text-gray-900 dark:text-white">
-            {{ t('credits-cta-description') }}
-          </p>
-        </div>
-        <form class="flex w-full flex-col p-3 sm:flex-row sm:items-center sm:justify-between" @submit.prevent="handleBuyCredits">
-          <div class="flex w-full flex-col gap-3 sm:max-w-md">
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-end">
-              <div class="relative w-full sm:flex-1">
-                <FormKit
-                  v-model="topUpQuantityInput"
-                  type="number"
-                  name="creditsTopUpQuantity"
-                  data-test="credits-top-up-quantity"
-                  inputmode="numeric"
-                  min="1"
-                  step="1"
-                  :placeholder="`${DEFAULT_TOP_UP_QUANTITY}`"
-                  :label="t('credits-top-up-quantity-label')"
-                  validation="required|min:1"
-                  validation-visibility="live"
-                  outer-class="w-full !mb-0"
-                  label-class="text-xs font-semibold uppercase tracking-wide"
-                  help-class="hidden"
-                  message-class="text-xs text-rose-200 mt-1"
-                >
-                  <template #prefix>
-                    $
-                  </template>
-                </FormKit>
+          <form class="flex w-full flex-col p-3 sm:flex-row sm:items-center sm:justify-between" @submit.prevent="handleBuyCredits">
+            <div class="flex w-full flex-col gap-3 sm:max-w-md">
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-end">
+                <div class="relative w-full sm:flex-1">
+                  <FormKit
+                    v-model="topUpQuantityInput"
+                    type="number"
+                    name="creditsTopUpQuantity"
+                    data-test="credits-top-up-quantity"
+                    inputmode="numeric"
+                    min="1"
+                    step="1"
+                    :placeholder="`${DEFAULT_TOP_UP_QUANTITY}`"
+                    :label="t('credits-top-up-quantity-label')"
+                    validation="required|min:1"
+                    validation-visibility="live"
+                    outer-class="w-full !mb-0"
+                    label-class="text-xs font-semibold uppercase tracking-wide"
+                    help-class="hidden"
+                    message-class="text-xs text-rose-200 mt-1"
+                  >
+                    <template #prefix>
+                      $
+                    </template>
+                  </FormKit>
+                </div>
+                <div class="grid grid-cols-3 gap-2 sm:flex sm:shrink-0 sm:items-end">
+                  <button
+                    v-for="amount in QUICK_TOP_UP_OPTIONS"
+                    :key="amount"
+                    type="button"
+                    class="d-btn d-btn-sm h-11 min-w-0 sm:min-w-[4.25rem]"
+                    :class="topUpQuantity === amount
+                      ? 'border border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700 dark:border-blue-500 dark:bg-blue-500 dark:hover:border-blue-400 dark:hover:bg-blue-500/90'
+                      : 'border border-blue-200 bg-white text-blue-700 hover:border-blue-400 hover:bg-blue-50 dark:border-blue-500/60 dark:bg-gray-900 dark:text-blue-200 dark:hover:border-blue-400 dark:hover:bg-blue-900/40'"
+                    @click="selectTopUpQuantity(amount)"
+                  >
+                    ${{ amount }}
+                  </button>
+                </div>
               </div>
-              <div class="grid grid-cols-3 gap-2 sm:flex sm:shrink-0 sm:items-end">
-                <button
-                  v-for="amount in QUICK_TOP_UP_OPTIONS"
-                  :key="amount"
-                  type="button"
-                  class="d-btn d-btn-sm h-11 min-w-0 sm:min-w-[4.25rem]"
-                  :class="topUpQuantity === amount
-                    ? 'border border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700 dark:border-blue-500 dark:bg-blue-500 dark:hover:border-blue-400 dark:hover:bg-blue-500/90'
-                    : 'border border-blue-200 bg-white text-blue-700 hover:border-blue-400 hover:bg-blue-50 dark:border-blue-500/60 dark:bg-gray-900 dark:text-blue-200 dark:hover:border-blue-400 dark:hover:bg-blue-900/40'"
-                  @click="selectTopUpQuantity(amount)"
-                >
-                  ${{ amount }}
-                </button>
-              </div>
-            </div>
-            <button
-              type="submit"
-              data-test="credits-top-up-submit"
-              :disabled="isProcessingCheckout || !isTopUpQuantityValid"
-              :class="{ 'opacity-75 pointer-events-none': isProcessingCheckout || !isTopUpQuantityValid }"
-              class="inline-flex w-full justify-center items-center py-2 px-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white text-sm font-semibold rounded-lg transition-all duration-200 shadow-md hover:shadow-lg transform hover:-translate-y-0.5 disabled:opacity-60 disabled:cursor-not-allowed sm:w-auto"
-            >
-              <Spinner v-if="isProcessingCheckout" size="w-4 h-4" class="mr-2" color="white" />
-              <span>{{ t('buy-credits') }}</span>
-            </button>
-            <div class="text-xs opacity-90 space-y-1 font-medium text-gray-900 dark:text-white">
-              <p>
-                {{ t('credits-top-up-quantity-help') }}
-              </p>
-              <p class="font-medium">
-                {{ t('credits-top-up-total-estimate', { amount: formatCurrency(topUpQuantityUsd) }) }}
-              </p>
-            </div>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <details id="credit-pricing" class="group rounded-3xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800" :open="isCreditPricingOpen" @toggle="handleCreditPricingToggle">
-      <summary class="flex w-full cursor-pointer items-center justify-between gap-4 p-6 text-left [&::-webkit-details-marker]:hidden">
-        <div>
-          <h2 class="text-2xl font-semibold text-gray-900 dark:text-white">
-            {{ t('credits-pricing-title') }}
-          </h2>
-          <p class="mt-2 text-sm text-gray-600 dark:text-gray-300">
-            {{ t('credits-pricing-description') }}
-          </p>
-        </div>
-        <div class="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50 text-blue-700 transition-transform duration-200 dark:bg-blue-900/40 dark:text-blue-200">
-          <ChevronDownIcon class="h-5 w-5 transition-transform duration-200 group-open:rotate-180" />
-        </div>
-      </summary>
-      <div class="space-y-8 border-t border-gray-200 p-6 lg:p-8 dark:border-gray-700">
-        <div class="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-          <div
-            v-for="section in creditPricingSections"
-            :key="section.title"
-            class="flex h-full flex-col rounded-2xl border border-gray-200 bg-gray-50 p-6 shadow-sm dark:border-gray-700 dark:bg-gray-900/40"
-          >
-            <div class="flex items-start gap-3">
-              <div class="flex h-10 w-20 items-center justify-center rounded-full" :class="section.accentClass">
-                <component :is="section.icon" class="h-5 w-5" />
-              </div>
-              <div>
-                <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
-                  {{ section.title }}
-                </h3>
-                <p class="text-sm text-gray-500 dark:text-gray-400">
-                  {{ section.subtitle }}
+              <button
+                type="submit"
+                data-test="credits-top-up-submit"
+                :disabled="isProcessingCheckout || !isTopUpQuantityValid"
+                :class="{ 'opacity-75 pointer-events-none': isProcessingCheckout || !isTopUpQuantityValid }"
+                class="inline-flex w-full justify-center items-center py-2 px-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white text-sm font-semibold rounded-lg transition-all duration-200 shadow-md hover:shadow-lg transform hover:-translate-y-0.5 disabled:opacity-60 disabled:cursor-not-allowed sm:w-auto"
+              >
+                <Spinner v-if="isProcessingCheckout" size="w-4 h-4" class="mr-2" color="white" />
+                <span>{{ t('buy-credits') }}</span>
+              </button>
+              <div class="text-xs opacity-90 space-y-1 font-medium text-gray-900 dark:text-white">
+                <p>
+                  {{ t('credits-top-up-quantity-help') }}
+                </p>
+                <p class="font-medium">
+                  {{ t('credits-top-up-total-estimate', { amount: formatCurrency(topUpQuantityUsd) }) }}
                 </p>
               </div>
             </div>
-            <dl class="mt-6 flex-1 space-y-3">
-              <div
-                v-for="tier in section.tiers"
-                :key="tier.label"
-                class="flex items-baseline justify-between rounded-lg bg-white px-4 py-3 text-sm text-gray-600 shadow-sm dark:bg-gray-900/60 dark:text-gray-300"
-              >
-                <dt class="font-medium text-gray-700 dark:text-gray-200">
-                  {{ tier.label }}
-                </dt>
-                <dd class="font-semibold text-gray-900 dark:text-white">
-                  {{ tier.price }}
-                </dd>
+          </form>
+        </div>
+      </div>
+
+      <details id="credit-pricing" class="group rounded-3xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800" :open="isCreditPricingOpen" @toggle="handleCreditPricingToggle">
+        <summary class="flex w-full cursor-pointer items-center justify-between gap-4 p-6 text-left [&::-webkit-details-marker]:hidden">
+          <div>
+            <h2 class="text-2xl font-semibold text-gray-900 dark:text-white">
+              {{ t('credits-pricing-title') }}
+            </h2>
+            <p class="mt-2 text-sm text-gray-600 dark:text-gray-300">
+              {{ t('credits-pricing-description') }}
+            </p>
+          </div>
+          <div class="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50 text-blue-700 transition-transform duration-200 dark:bg-blue-900/40 dark:text-blue-200">
+            <ChevronDownIcon class="h-5 w-5 transition-transform duration-200 group-open:rotate-180" />
+          </div>
+        </summary>
+        <div class="space-y-8 border-t border-gray-200 p-6 lg:p-8 dark:border-gray-700">
+          <div class="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+            <div
+              v-for="section in creditPricingSections"
+              :key="section.title"
+              class="flex h-full flex-col rounded-2xl border border-gray-200 bg-gray-50 p-6 shadow-sm dark:border-gray-700 dark:bg-gray-900/40"
+            >
+              <div class="flex items-start gap-3">
+                <div class="flex h-10 w-20 items-center justify-center rounded-full" :class="section.accentClass">
+                  <component :is="section.icon" class="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+                    {{ section.title }}
+                  </h3>
+                  <p class="text-sm text-gray-500 dark:text-gray-400">
+                    {{ section.subtitle }}
+                  </p>
+                </div>
               </div>
-            </dl>
+              <dl class="mt-6 flex-1 space-y-3">
+                <div
+                  v-for="tier in section.tiers"
+                  :key="tier.label"
+                  class="flex items-baseline justify-between rounded-lg bg-white px-4 py-3 text-sm text-gray-600 shadow-sm dark:bg-gray-900/60 dark:text-gray-300"
+                >
+                  <dt class="font-medium text-gray-700 dark:text-gray-200">
+                    {{ tier.label }}
+                  </dt>
+                  <dd class="font-semibold text-gray-900 dark:text-white">
+                    {{ tier.price }}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+          <div class="space-y-2 text-center text-xs text-gray-500 dark:text-gray-400">
+            <p>
+              {{ creditPricingFootnote }}
+            </p>
+            <p>
+              {{ creditPricingDisclaimer }}
+            </p>
           </div>
         </div>
-        <div class="space-y-2 text-center text-xs text-gray-500 dark:text-gray-400">
-          <p>
-            {{ creditPricingFootnote }}
-          </p>
-          <p>
-            {{ creditPricingDisclaimer }}
-          </p>
+      </details>
+      <div class="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="flex items-center justify-between border-b border-gray-200 px-6 py-4 dark:border-gray-700">
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+            {{ t('credits-transactions') }}
+          </h2>
         </div>
-      </div>
-    </details>
-    <div class="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
-      <div class="flex items-center justify-between border-b border-gray-200 px-6 py-4 dark:border-gray-700">
-        <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-          {{ t('credits-transactions') }}
-        </h2>
-      </div>
-      <div>
-        <div v-if="loadError" class="rounded-lg border border-red-200 bg-red-50 p-4 m-8 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-200">
-          {{ t('credits-load-error') }}
-        </div>
-        <div v-else-if="isLoadingTransactions" class="flex items-center justify-center py-12">
-          <Spinner size="w-6 h-6" class="text-blue-500" />
-        </div>
-        <div v-else-if="transactions.length === 0" class="py-12 text-center text-sm text-gray-500 dark:text-gray-400">
-          {{ t('credits-empty-state') }}
-        </div>
-        <div v-else class="-mx-4 overflow-x-auto sm:mx-0">
-          <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
-            <thead class="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:bg-gray-900 dark:text-gray-400">
-              <tr>
-                <th scope="col" class="px-4 py-3">
-                  {{ t('credit-transaction-occurred-at') }}
-                </th>
-                <th scope="col" class="px-4 py-3">
-                  {{ t('credit-transaction-description') }}
-                </th>
-                <th scope="col" class="px-4 py-3 text-right">
-                  {{ t('credit-transaction-amount') }}
-                </th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-              <template v-for="day in paginatedDailyTransactions" :key="day.dateKey">
-                <tr class="bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-white">
-                  <td class="px-4 py-3 font-semibold">
-                    {{ day.dateLabel }}
-                  </td>
-                  <td class="px-4 py-3 text-xs text-gray-700 dark:text-gray-200">
-                    {{ t('credits-daily-transaction-count', { count: day.transactionCount }) }} • {{ summarizeTypes(day.typeCounts) }}
-                  </td>
-                  <td class="px-4 py-3 text-right font-semibold text-gray-900 dark:text-white">
-                    <div class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                      {{ t('credits-daily-balance-label') }}
-                    </div>
-                    <div>
-                      {{ day.latestBalance !== null ? formatCredits(day.latestBalance) : '—' }}
-                    </div>
-                  </td>
+        <div>
+          <div v-if="loadError" class="rounded-lg border border-red-200 bg-red-50 p-4 m-8 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-200">
+            {{ t('credits-load-error') }}
+          </div>
+          <div v-else-if="isLoadingTransactions" class="flex items-center justify-center py-12">
+            <Spinner size="w-6 h-6" class="text-blue-500" />
+          </div>
+          <div v-else-if="transactions.length === 0" class="py-12 text-center text-sm text-gray-500 dark:text-gray-400">
+            {{ t('credits-empty-state') }}
+          </div>
+          <div v-else class="-mx-4 overflow-x-auto sm:mx-0">
+            <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
+              <thead class="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:bg-gray-900 dark:text-gray-400">
+                <tr>
+                  <th scope="col" class="px-4 py-3">
+                    {{ t('credit-transaction-occurred-at') }}
+                  </th>
+                  <th scope="col" class="px-4 py-3">
+                    {{ t('credit-transaction-description') }}
+                  </th>
+                  <th scope="col" class="px-4 py-3 text-right">
+                    {{ t('credit-transaction-amount') }}
+                  </th>
                 </tr>
-                <tr
-                  v-if="day.grantsCount > 0"
-                  :key="`${day.dateKey}-grants`"
-                  class="transition hover:bg-gray-50 dark:hover:bg-gray-700/60"
-                >
-                  <td class="whitespace-nowrap px-4 py-3 text-gray-700 dark:text-gray-200">
-                    {{ day.dateLabel }}
-                  </td>
-                  <td class="px-4 py-3 text-gray-700 dark:text-gray-200">
-                    <div class="font-semibold text-gray-900 dark:text-white">
-                      {{ t('credits-daily-grants-purchases') }}
-                    </div>
-                  </td>
-                  <td
-                    class="whitespace-nowrap px-4 py-3 text-right font-semibold text-emerald-600 dark:text-emerald-400"
+              </thead>
+              <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                <template v-for="day in paginatedDailyTransactions" :key="day.dateKey">
+                  <tr class="bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-white">
+                    <td class="px-4 py-3 font-semibold">
+                      {{ day.dateLabel }}
+                    </td>
+                    <td class="px-4 py-3 text-xs text-gray-700 dark:text-gray-200">
+                      {{ t('credits-daily-transaction-count', { count: day.transactionCount }) }} • {{ summarizeTypes(day.typeCounts) }}
+                    </td>
+                    <td class="px-4 py-3 text-right font-semibold text-gray-900 dark:text-white">
+                      <div class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                        {{ t('credits-daily-balance-label') }}
+                      </div>
+                      <div>
+                        {{ day.latestBalance !== null ? formatCredits(day.latestBalance) : '—' }}
+                      </div>
+                    </td>
+                  </tr>
+                  <tr
+                    v-if="day.grantsCount > 0"
+                    :key="`${day.dateKey}-grants`"
+                    class="transition hover:bg-gray-50 dark:hover:bg-gray-700/60"
                   >
-                    +{{ formatCredits(day.grantsTotal) }}
-                  </td>
-                </tr>
-                <tr
-                  v-for="(entry) in metricsWithData(day)"
-                  :key="`${day.dateKey}-${entry.metric}`"
-                  class="transition hover:bg-gray-50 dark:hover:bg-gray-700/60"
-                >
-                  <td class="whitespace-nowrap px-4 py-3 text-gray-700 dark:text-gray-200">
-                    {{ day.dateLabel }}
-                  </td>
-                  <td class="px-4 py-3 text-gray-700 dark:text-gray-200">
-                    <div class="font-semibold text-gray-900 dark:text-white">
-                      {{ t('credits-daily-deduction-title', { metric: metricLabel(entry.metric) }) }}
-                    </div>
-                    <div class="text-xs text-gray-500 dark:text-gray-400">
-                      {{ t('credits-daily-deduction-count', { count: entry.data?.count ?? 0 }) }}
-                      <span v-if="entry.data?.total && pricingSteps.length > 0" class="ml-2 inline-flex items-center rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
-                        ~{{ formatMetricAmount(entry.metric, computeUsageFromCredits(entry.metric, entry.data.total)) }}
-                      </span>
-                    </div>
-                  </td>
-                  <td
-                    class="whitespace-nowrap px-4 py-3 text-right font-semibold text-rose-500 dark:text-rose-400"
+                    <td class="whitespace-nowrap px-4 py-3 text-gray-700 dark:text-gray-200">
+                      {{ day.dateLabel }}
+                    </td>
+                    <td class="px-4 py-3 text-gray-700 dark:text-gray-200">
+                      <div class="font-semibold text-gray-900 dark:text-white">
+                        {{ t('credits-daily-grants-purchases') }}
+                      </div>
+                    </td>
+                    <td
+                      class="whitespace-nowrap px-4 py-3 text-right font-semibold text-emerald-600 dark:text-emerald-400"
+                    >
+                      +{{ formatCredits(day.grantsTotal) }}
+                    </td>
+                  </tr>
+                  <tr
+                    v-for="(entry) in metricsWithData(day)"
+                    :key="`${day.dateKey}-${entry.metric}`"
+                    class="transition hover:bg-gray-50 dark:hover:bg-gray-700/60"
                   >
-                    -{{ formatCredits(Math.abs(entry.data?.total ?? 0)) }}
-                  </td>
-                </tr>
-                <tr
-                  v-if="day.grantsCount === 0 && metricsWithData(day).length === 0"
-                  :key="`${day.dateKey}-empty`"
-                  class="transition hover:bg-gray-50 dark:hover:bg-gray-700/60"
+                    <td class="whitespace-nowrap px-4 py-3 text-gray-700 dark:text-gray-200">
+                      {{ day.dateLabel }}
+                    </td>
+                    <td class="px-4 py-3 text-gray-700 dark:text-gray-200">
+                      <div class="font-semibold text-gray-900 dark:text-white">
+                        {{ t('credits-daily-deduction-title', { metric: metricLabel(entry.metric) }) }}
+                      </div>
+                      <div class="text-xs text-gray-500 dark:text-gray-400">
+                        {{ t('credits-daily-deduction-count', { count: entry.data?.count ?? 0 }) }}
+                        <span v-if="entry.data?.total && pricingSteps.length > 0" class="ml-2 inline-flex items-center rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
+                          ~{{ formatMetricAmount(entry.metric, computeUsageFromCredits(entry.metric, entry.data.total)) }}
+                        </span>
+                      </div>
+                    </td>
+                    <td
+                      class="whitespace-nowrap px-4 py-3 text-right font-semibold text-rose-500 dark:text-rose-400"
+                    >
+                      -{{ formatCredits(Math.abs(entry.data?.total ?? 0)) }}
+                    </td>
+                  </tr>
+                  <tr
+                    v-if="day.grantsCount === 0 && metricsWithData(day).length === 0"
+                    :key="`${day.dateKey}-empty`"
+                    class="transition hover:bg-gray-50 dark:hover:bg-gray-700/60"
+                  >
+                    <td class="whitespace-nowrap px-4 py-3 text-gray-700 dark:text-gray-200">
+                      {{ day.dateLabel }}
+                    </td>
+                    <td class="px-4 py-3 text-gray-700 dark:text-gray-200">
+                      <div class="text-sm text-gray-600 dark:text-gray-300">
+                        {{ t('credits-daily-no-activity') }}
+                      </div>
+                    </td>
+                    <td class="whitespace-nowrap px-4 py-3 text-right font-semibold text-gray-700 dark:text-gray-200">
+                      0.00
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+            <div class="mt-4 flex items-center justify-between px-6 py-4 text-sm">
+              <span>
+                {{ t('credits-pagination-label', { current: currentPage, total: totalPages }) }}
+              </span>
+              <div class="flex items-center gap-2">
+                <button
+                  type="button"
+                  class="d-btn d-btn-sm"
+                  :disabled="currentPage === 1"
+                  @click="currentPage = Math.max(1, currentPage - 1)"
                 >
-                  <td class="whitespace-nowrap px-4 py-3 text-gray-700 dark:text-gray-200">
-                    {{ day.dateLabel }}
-                  </td>
-                  <td class="px-4 py-3 text-gray-700 dark:text-gray-200">
-                    <div class="text-sm text-gray-600 dark:text-gray-300">
-                      {{ t('credits-daily-no-activity') }}
-                    </div>
-                  </td>
-                  <td class="whitespace-nowrap px-4 py-3 text-right font-semibold text-gray-700 dark:text-gray-200">
-                    0.00
-                  </td>
-                </tr>
-              </template>
-            </tbody>
-          </table>
-          <div class="mt-4 flex items-center justify-between px-6 py-4 text-sm">
-            <span>
-              {{ t('credits-pagination-label', { current: currentPage, total: totalPages }) }}
-            </span>
-            <div class="flex items-center gap-2">
-              <button
-                class="d-btn d-btn-sm"
-                :disabled="currentPage === 1"
-                @click="currentPage = Math.max(1, currentPage - 1)"
-              >
-                {{ t('previous') }}
-              </button>
-              <button
-                class="d-btn d-btn-sm"
-                :disabled="currentPage >= totalPages"
-                @click="currentPage = Math.min(totalPages, currentPage + 1)"
-              >
-                {{ t('next') }}
-              </button>
+                  {{ t('previous') }}
+                </button>
+                <button
+                  type="button"
+                  class="d-btn d-btn-sm"
+                  :disabled="currentPage >= totalPages"
+                  @click="currentPage = Math.min(totalPages, currentPage + 1)"
+                >
+                  {{ t('next') }}
+                </button>
+              </div>
             </div>
           </div>
         </div>
       </div>
     </div>
-    <!-- Permission modal shown when the user lacks read or update billing access -->
+    <!-- Permission modal: read denial is not dismissible; update denial can be closed -->
     <RbacPermissionOnlyModal
       v-if="showAdminModal"
       :title="t('billing-access-required')"
       :permission="adminModalPermission"
-      @click="showAdminModal = false"
+      @close="dismissUpdateBillingModal"
     />
   </div>
 </template>

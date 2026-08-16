@@ -296,7 +296,7 @@ function withAttachmentResponseHeaders(response: Response, fileId: string): Resp
 function getTransferredBytesFromResponse(response: Response): number | null {
   const contentRange = response.headers.get('content-range')
   if (contentRange) {
-    const match = contentRange.match(/^bytes (\d+)-(\d+)\/(?:\d+|\*)$/i)
+    const match = /^bytes (\d+)-(\d+)\/(?:\d+|\*)$/i.exec(contentRange)
     if (match) {
       const startIndex = Number.parseInt(match[1], 10)
       const endIndex = Number.parseInt(match[2], 10)
@@ -794,7 +794,7 @@ async function setKeyFromIdParam(c: Context, next: Next) {
         })
         // Extract file path: remove bucket prefix (capgo/) and UUID suffix
         // Resulting path starts with "orgs/..."
-        const pathParts = parts.slice(1, parts.length - 1)
+        const pathParts = parts.slice(1, -1)
         if (pathParts.length > 0) {
           extractedFileId = pathParts.join('/')
           cloudlog({
@@ -848,7 +848,7 @@ async function checkWriteAppAccess(c: Context, next: Next) {
 
   const scopedPath = parseAppScopedAttachmentPath(requestId)
 
-  if (!scopedPath || scopedPath.kind !== 'scoped') {
+  if (scopedPath?.kind !== 'scoped') {
     cloudlog({
       requestId: c.get('requestId'),
       message: 'checkWriteAppAccess - invalid path structure',

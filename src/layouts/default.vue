@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useLocalStorage, useMediaQuery } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import OnboardingExploreBanner from '~/components/dashboard/OnboardingExploreBanner.vue'
@@ -10,6 +11,14 @@ import Navbar from '../components/Navbar.vue'
 import Sidebar from '../components/Sidebar.vue'
 
 const sidebarOpen = ref(false)
+const sidebarCollapsedPreference = useLocalStorage('capgo-sidebar-collapsed', false)
+const isDesktop = useMediaQuery('(min-width: 1024px)')
+const sidebarCollapsed = computed(() => isDesktop.value && sidebarCollapsedPreference.value)
+
+function toggleSidebarCollapse() {
+  sidebarCollapsedPreference.value = !sidebarCollapsedPreference.value
+}
+
 const pendingOnboardingAppId = ref('')
 const route = useRoute()
 const supabase = useSupabase()
@@ -68,12 +77,26 @@ useRealtimeCLIFeed()
 <template>
   <div class="flex h-full overflow-hidden bg-slate-800 pt-safe safe-areas">
     <!-- Sidebar -->
-    <Sidebar :sidebar-open="sidebarOpen" @close-sidebar="sidebarOpen = false" />
+    <Sidebar
+      :sidebar-open="sidebarOpen"
+      :sidebar-collapsed="sidebarCollapsed"
+      @close-sidebar="sidebarOpen = false"
+    />
     <!-- Content area -->
-    <div class="flex flex-col flex-1 h-full overflow-hidden lg:p-3">
-      <div class="flex flex-col h-full overflow-hidden border border-gray-200 lg:rounded-xl lg:shadow-sm dark:border-gray-700 bg-slate-100 dark:bg-slate-900">
+    <div
+      data-test="dashboard-shell"
+      class="flex flex-col flex-1 h-full overflow-hidden lg:p-3"
+    >
+      <div
+        class="flex flex-col h-full overflow-hidden border border-gray-200 dark:border-gray-700 bg-slate-100 dark:bg-slate-900 lg:rounded-xl lg:shadow-sm"
+      >
         <!-- Site header -->
-        <Navbar :sidebar-open="sidebarOpen" @toggle-sidebar="sidebarOpen = !sidebarOpen" />
+        <Navbar
+          :sidebar-open="sidebarOpen"
+          :sidebar-collapsed="sidebarCollapsed"
+          @toggle-sidebar="sidebarOpen = !sidebarOpen"
+          @toggle-sidebar-collapse="toggleSidebarCollapse"
+        />
         <!-- App and settings layouts are nested inside this shared dashboard shell. -->
         <OnboardingExploreBanner v-if="pendingOnboardingAppId" :app-id="pendingOnboardingAppId" />
         <main class="w-full h-full overflow-hidden">

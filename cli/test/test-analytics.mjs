@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
-import { extractCommandContext, flushAnalytics, getGlobalAnalyticsProps, setInvocationSource, trackCommandFailed, trackCommandInvoked, trackCommandSucceeded, trackEvent } from '../src/analytics/track.ts'
+import { deferCommandInvocation, extractCommandContext, flushAnalytics, flushDeferredCommandInvocation, getGlobalAnalyticsProps, setInvocationSource, trackCommandFailed, trackCommandInvoked, trackCommandSucceeded, trackEvent } from '../src/analytics/track.ts'
 import { sendEvent } from '../src/utils.ts'
 
 console.log('🧪 Testing analytics track.ts...\n')
@@ -108,6 +108,28 @@ try {
   assert.equal(body.tags.flags, 'apikey,channel')
   assert.equal(body.tags.flags_count, 2)
   assert.equal(body.tags.positional_arg_count, 1)
+
+  // 6b. login/init defer invocation until an explicitly validated key is available
+  process.env.CAPGO_TOKEN = 'stale-key'
+  requests = stubFetch()
+  deferCommandInvocation('login', { flags: ['apikey'], positional_arg_count: 0 })
+  await flushAnalytics()
+  assert.equal(findEvent(requests), undefined, 'deferred invocation must not use a stale saved or environment key')
+
+  flushDeferredCommandInvocation('validated-key')
+  await flushAnalytics()
+  const deferredRequests = requests.filter(request => request.url.endsWith('/private/events'))
+  assert.equal(deferredRequests.length, 1, 'deferred invocation emits exactly once after validation')
+  assert.equal(deferredRequests[0].init.headers.capgkey, 'validated-key', 'deferred invocation uses the validated key explicitly')
+  body = JSON.parse(deferredRequests[0].init.body)
+  assert.equal(body.event, 'CLI Command Invoked')
+  assert.equal(body.tags.command_path, 'login')
+  assert.equal(body.tags.flags, 'apikey')
+  assert.equal(JSON.stringify(body.tags).includes('validated-key'), false, 'validated API keys must not appear in analytics tags')
+
+  flushDeferredCommandInvocation('validated-key')
+  await flushAnalytics()
+  assert.equal(requests.filter(request => request.url.endsWith('/private/events')).length, 1, 'flushing a consumed invocation does not duplicate it')
 
   requests = stubFetch()
   trackCommandSucceeded('bundle upload')

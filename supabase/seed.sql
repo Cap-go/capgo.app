@@ -1310,13 +1310,38 @@ BEGIN
     WHERE r.name = public.rbac_role_org_billing_admin()
     ON CONFLICT DO NOTHING;
 
-    -- org_member: org-only access (no app permissions)
+    -- org_member: org-only access (no app permissions).
+    -- org.read_billing is default so members can see plan/usage; orgs can revoke it.
     INSERT INTO public.role_permissions (role_id, permission_id)
     SELECT r.id, p.id FROM public.roles r
     JOIN public.permissions p ON p.key IN (
-      public.rbac_perm_org_read(), public.rbac_perm_org_create_app(), public.rbac_perm_org_read_members()
+      public.rbac_perm_org_read(), public.rbac_perm_org_create_app(), public.rbac_perm_org_read_members(),
+      public.rbac_perm_org_read_billing()
     )
     WHERE r.name = public.rbac_role_org_member()
+    ON CONFLICT DO NOTHING;
+
+    -- Legacy non-assignable billing-read role used by the backfill migration.
+    INSERT INTO public.roles (name, scope_type, description, priority_rank, is_assignable, created_by)
+    VALUES (
+      'org_billing_reader',
+      public.rbac_scope_org(),
+      'Legacy billing read access preserved for users who already saw plan/usage before org.read_billing was enforced',
+      5,
+      false,
+      NULL
+    )
+    ON CONFLICT (name) DO UPDATE
+    SET
+      scope_type = EXCLUDED.scope_type,
+      description = EXCLUDED.description,
+      priority_rank = EXCLUDED.priority_rank,
+      is_assignable = EXCLUDED.is_assignable;
+
+    INSERT INTO public.role_permissions (role_id, permission_id)
+    SELECT r.id, p.id FROM public.roles r
+    JOIN public.permissions p ON p.key = public.rbac_perm_org_read_billing()
+    WHERE r.name = 'org_billing_reader'
     ON CONFLICT DO NOTHING;
 
     -- apikey_org_reader: compatibility org metadata read without org-wide app access

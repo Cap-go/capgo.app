@@ -49,7 +49,7 @@ const statsBodySchema = z.object(statsBodyShape)
 function stripControlChars(input: string): string {
   const out: string[] = []
   for (let i = 0; i < input.length; i++) {
-    const code = input.charCodeAt(i)
+    const code = input.codePointAt(i) ?? 0
     // 0-31 are control chars, 127 is DEL.
     if ((code >= 0 && code <= 31) || code === 127)
       continue

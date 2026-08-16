@@ -50,7 +50,7 @@ export function isR2MultipartDoesNotExistError(error: unknown): boolean {
 function isR2Error(error: unknown, predicate: (msg: string) => boolean): boolean {
   // R2 bindings currently has no structured errors :( . We need to check for expected errors
   // by searching error messages. These usually contain a numeric error code, but not always
-  if (error != null && error instanceof Object && Object.prototype.hasOwnProperty.call(error, 'message')) {
+  if (error != null && error instanceof Object && Object.hasOwn(error, 'message')) {
     const msg: string = (error as { message: string }).message
     return predicate(msg.toLowerCase())
   }

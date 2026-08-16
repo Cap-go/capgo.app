@@ -24,6 +24,8 @@ export interface UserOnboardingProgress {
   imported_store_app_id?: string
   org_name?: string
   estimated_users_index?: number | null
+  onboarding_attempt_id?: string
+  last_run_id?: string
   updated_at: string
   completed_at?: string
 }
@@ -41,6 +43,8 @@ export interface UserOnboardingProgressInput {
   importedStoreAppId?: string
   orgName?: string
   estimatedUsersIndex?: number | null
+  onboardingAttemptId?: string
+  lastRunId?: string
   updatedAt?: string
   completedAt?: string | null
 }
@@ -52,6 +56,8 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
 // Leave headroom: PostgreSQL jsonb::text is slightly larger than JSON.stringify.
 export const USER_ONBOARDING_MAX_JSON_BYTES = 8000
 const OPTIONAL_STRING_KEYS = ['store_url', 'org_name', 'app_name', 'app_id', 'imported_store_app_id'] as const
+const onboardingAttemptIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const onboardingRunIdPattern = /^ir_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function truncateToCodePoints(value: string, maxLength: number): string {
   return Array.from(value).slice(0, maxLength).join('')
@@ -162,7 +168,7 @@ export function parseUserOnboardingProgress(value: unknown): UserOnboardingProgr
   if (!isOneOf(raw.flow, USER_ONBOARDING_FLOWS))
     return null
 
-  return applyOptionalUserOnboardingFields({
+  const progress = applyOptionalUserOnboardingFields({
     status: raw.status,
     step: raw.step,
     flow: raw.flow,
@@ -170,6 +176,16 @@ export function parseUserOnboardingProgress(value: unknown): UserOnboardingProgr
       ? raw.updated_at
       : new Date(0).toISOString(),
   }, raw)
+
+  const onboardingAttemptId = optionalTrimmedString(raw.onboarding_attempt_id, 64)
+  if (onboardingAttemptId && onboardingAttemptIdPattern.test(onboardingAttemptId))
+    progress.onboarding_attempt_id = onboardingAttemptId
+
+  const lastRunId = optionalTrimmedString(raw.last_run_id, 67)
+  if (lastRunId && onboardingRunIdPattern.test(lastRunId))
+    progress.last_run_id = lastRunId
+
+  return progress
 }
 
 export function buildUserOnboardingProgress(input: UserOnboardingProgressInput): UserOnboardingProgress {
@@ -211,6 +227,12 @@ export function buildUserOnboardingProgress(input: UserOnboardingProgressInput):
 
   if (input.estimatedUsersIndex !== undefined)
     progress.estimated_users_index = input.estimatedUsersIndex
+
+  if (input.onboardingAttemptId && onboardingAttemptIdPattern.test(input.onboardingAttemptId))
+    progress.onboarding_attempt_id = input.onboardingAttemptId
+
+  if (input.lastRunId && onboardingRunIdPattern.test(input.lastRunId))
+    progress.last_run_id = input.lastRunId
 
   if (input.status === 'completed')
     progress.completed_at = optionalTrimmedString(input.completedAt) ?? progress.updated_at

@@ -211,7 +211,7 @@ function updateUrlParams() {
 }
 
 const isSelectAllEnabled = computed(() => {
-  return props.massSelect && selectedRows.value.find(val => val)
+  return props.massSelect && selectedRows.value.find(Boolean)
 })
 
 function loadFromUrlParams() {
@@ -698,6 +698,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                           class="relative inline-flex group"
                         >
                           <button
+                            type="button"
                             :disabled="isActionDisabled(action, elem)"
                             :aria-describedby="getActionTitle(action, elem) ? tooltipIdFor(i, actionIndex) : undefined"
                             :data-test="action.testId ? (typeof action.testId === 'function' ? action.testId(elem) : action.testId) : undefined"
@@ -719,6 +720,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                     </template>
                     <template v-else-if="col.icon">
                       <button
+                        type="button"
                         class="p-2 text-gray-500 rounded-md cursor-pointer dark:text-gray-400 hover:text-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700 dark:hover:text-gray-300"
                         @click.stop="col.onClick ? col.onClick(elem) : () => { }"
                       >
@@ -800,6 +802,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
       <ul class="inline-flex items-center -space-x-px">
         <li>
           <button
+            type="button"
             class="block px-3 py-2 ml-0 leading-tight text-gray-500 bg-white border border-gray-300 rounded-l-lg cursor-pointer dark:text-gray-400 dark:bg-gray-800 dark:border-gray-700"
             :class="{
               'hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-700 dark:hover:text-white':
@@ -812,6 +815,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
         </li>
         <li>
           <button
+            type="button"
             class="block px-3 py-2 ml-0 leading-tight text-gray-500 bg-white border border-gray-300 cursor-pointer dark:text-gray-400 dark:bg-gray-800 dark:border-gray-700"
             :class="{
               'hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-700 dark:hover:text-white':
@@ -824,6 +828,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
         </li>
         <li>
           <button
+            type="button"
             aria-current="page"
             class="z-10 px-3 py-2 leading-tight text-blue-600 border border-blue-300 bg-blue-50 dark:text-white dark:bg-gray-700 dark:border-gray-700"
             disabled
@@ -833,6 +838,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
         </li>
         <li>
           <button
+            type="button"
             class="block px-3 py-2 leading-tight text-gray-500 bg-white border border-gray-300 cursor-pointer dark:text-gray-400 dark:bg-gray-800 dark:border-gray-700"
             :class="{
               'hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-700 dark:hover:text-white':
@@ -845,6 +851,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
         </li>
         <li>
           <button
+            type="button"
             class="block px-3 py-2 leading-tight text-gray-500 bg-white border border-gray-300 rounded-r-lg cursor-pointer dark:text-gray-400 dark:bg-gray-800 dark:border-gray-700"
             :class="{
               'hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-700 dark:hover:text-white':

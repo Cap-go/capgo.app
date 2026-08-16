@@ -271,7 +271,7 @@ onUnmounted(() => {
   <section class="overflow-y-auto py-12 h-full sm:py-16 lg:py-20 max-h-fit bg-slate-100 dark:bg-slate-900">
     <div class="px-4 mx-auto max-w-7xl sm:px-6 lg:px-8">
       <div class="flex justify-items-center items-center place-content-center">
-        <button v-if="!onboarding" class="mr-6 text-white bg-gray-800 d-btn d-btn-outline" @click="emit('closeStep')">
+        <button type="button" v-if="!onboarding" class="mr-6 text-white bg-gray-800 d-btn d-btn-outline" @click="emit('closeStep')">
           <arrowBack />
         </button>
         <div v-if="props.onboarding" class="text-center">

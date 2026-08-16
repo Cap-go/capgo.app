@@ -3,13 +3,14 @@ import type {
   FrontendOnboardingDailySetupCliEvent,
   FrontendOnboardingDailySetupCliEventKind,
 } from './frontend_onboarding_daily_setup_cli_outcomes_model.ts'
+import { FRONTEND_ONBOARDING_PRODUCTION_HOST } from './frontend_onboarding_analytics_model.ts'
 import { cloudlogErr } from './logging.ts'
 import { queryPosthogHogql } from './posthog_read.ts'
 
 const INVALID_TOTAL_EVENTS_ERROR = 'daily Setup CLI analytics query returned invalid total metadata'
 const EVENT_LIMIT_EXCEEDED_ERROR = 'daily Setup CLI analytics query exceeded event limit'
 const INVALID_ROW_ERROR = 'daily Setup CLI analytics row is invalid'
-const EVENT_KINDS: readonly FrontendOnboardingDailySetupCliEventKind[] = ['setup', 'cli_copy', 'ai_copy', 'cli_command']
+const EVENT_KINDS = new Set<FrontendOnboardingDailySetupCliEventKind>(['setup', 'cli_copy', 'ai_copy', 'cli_command'])
 
 export const FRONTEND_ONBOARDING_DAILY_SETUP_CLI_EVENT_LIMIT = 50_000
 
@@ -30,7 +31,7 @@ function timestampMs(value: unknown): number | null {
 function mapEvent(row: Record<string, unknown>): FrontendOnboardingDailySetupCliEvent {
   const personId = typeof row.person_id === 'string' ? row.person_id.trim() : ''
   const timestamp = timestampMs(row.timestamp_ms)
-  const kind = EVENT_KINDS.includes(row.event_kind as FrontendOnboardingDailySetupCliEventKind)
+  const kind = EVENT_KINDS.has(row.event_kind as FrontendOnboardingDailySetupCliEventKind)
     ? row.event_kind as FrontendOnboardingDailySetupCliEventKind
     : null
 
@@ -76,7 +77,8 @@ export function buildFrontendOnboardingDailySetupCliHogql(
       FROM events
       WHERE event = 'onboarding_step_viewed'
         AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
-        AND toIntOrZero(toString(properties.onboarding_version)) = 2
+        AND JSONExtractString(toString(properties), '$host') = ${sqlStr(FRONTEND_ONBOARDING_PRODUCTION_HOST)}
+        AND toIntOrZero(toString(properties.onboarding_version)) IN (2, 3)
         AND JSONExtractString(toString(properties), 'step') = 'setup'
         AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
         AND timestamp < parseDateTimeBestEffort(${sqlStr(endDate)})
@@ -102,7 +104,8 @@ export function buildFrontendOnboardingDailySetupCliHogql(
         OR (
           selected_events.event IN ('onboarding_step_viewed', 'onboarding_cli_command_copied', 'onboarding_ai_instructions_copied')
           AND JSONExtractString(toString(selected_events.properties), 'flow') = 'pre_org'
-          AND toIntOrZero(toString(selected_events.properties.onboarding_version)) = 2
+          AND JSONExtractString(toString(selected_events.properties), '$host') = ${sqlStr(FRONTEND_ONBOARDING_PRODUCTION_HOST)}
+          AND toIntOrZero(toString(selected_events.properties.onboarding_version)) IN (2, 3)
           AND JSONExtractString(toString(selected_events.properties), 'step') = 'setup'
         )
       )

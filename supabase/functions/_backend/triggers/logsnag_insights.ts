@@ -2175,7 +2175,7 @@ async function readDailyBuildStatsByDate(c: Context, dateIds: readonly string[])
     return new Map()
 
   const start = new Date(`${uniqueDateIds[0]}T00:00:00.000Z`)
-  const end = new Date(`${uniqueDateIds[uniqueDateIds.length - 1]}T00:00:00.000Z`)
+  const end = new Date(`${uniqueDateIds.at(-1)}T00:00:00.000Z`)
   end.setUTCDate(end.getUTCDate() + 1)
 
   const db = getPgClient(c, false)
@@ -2220,7 +2220,7 @@ async function readCompletedGlobalStatsRepairShardStale(c: Context, dateId: stri
     return false
 
   const repairRow = (await readGlobalStatsRepairRows(c, [dateId])).get(dateId)
-  if (!repairRow || !repairRow.completedShards.has(shard))
+  if (!repairRow?.completedShards.has(shard))
     return false
 
   const buildStats = shard === 'builds'

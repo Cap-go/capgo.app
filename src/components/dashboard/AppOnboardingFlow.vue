@@ -9,6 +9,7 @@ import type {
   OnboardingInteractionProperties,
   OnboardingStepCompletionProperties,
 } from '~/utils/onboardingProgressAnalytics'
+import type { OnboardingPersistOptions, OnboardingPersistResult } from '~/utils/onboardingProgressPersistence'
 import type { UserOnboardingStatus } from '~/utils/userOnboardingProgress'
 import mime from 'mime'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -35,6 +36,7 @@ import IconStore from '~icons/lucide/store'
 import IconTerminal from '~icons/lucide/terminal'
 import IconTrash from '~icons/lucide/trash-2'
 import IconUsers from '~icons/lucide/users-round'
+import { preserveAdminDashboardMinimize } from '~/services/adminDashboardPreferences'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
 import {
   parseAppOnboarding,
@@ -45,6 +47,11 @@ import { pushEvent } from '~/services/posthog'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
+import {
+  MAX_USER_ONBOARDING_WRITE_ATTEMPTS,
+  replaceUserOnboardingIfUnchanged,
+  serializeUserOnboardingWrite,
+} from '~/services/userOnboardingWriteQueue'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
@@ -60,7 +67,8 @@ import {
   loadOnboardingAppDraft,
 } from '~/utils/onboardingAppDraft'
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
-import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker } from '~/utils/onboardingProgressAnalytics'
+import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker, createOnboardingTelemetryIdentity } from '~/utils/onboardingProgressAnalytics'
+import { createOnboardingProgressPersistence, shouldInitializeOnboardingProgressTracking } from '~/utils/onboardingProgressPersistence'
 import { allowOnboardingDashboardExploration, ONBOARDING_DASHBOARD_EXPLORED_EVENT } from '~/utils/onboardingRedirect'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import {
@@ -89,6 +97,7 @@ const organizationStore = useOrganizationStore()
 const dashboardAppsStore = useDashboardAppsStore()
 const onboardingUserId = computed(() => main.user?.id ?? main.auth?.id ?? null)
 const config = getLocalConfig()
+const onboardingTelemetry = createOnboardingTelemetryIdentity({ flow: props.preOrg ? 'pre_org' : 'existing_org', supaHost: config.supaHost })
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
 const removeBeforeUnloadWarning = useBeforeUnloadWarning(Boolean(props.preOrg))
 
@@ -332,9 +341,14 @@ const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onb
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
-let persistChain = Promise.resolve()
 let persistFieldsTimer: ReturnType<typeof setTimeout> | undefined
 let pendingDashboardExplored = false
+let onboardingFlowDisposed = false
+let onboardingInitialPersistInFlight = false
+const onboardingProgressPersistence = createOnboardingProgressPersistence({
+  write: writeOnboardingProgress,
+  onError: error => console.error('Failed to persist onboarding progress', error),
+})
 
 function trackDetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
   if (props.preOrg)
@@ -360,6 +374,8 @@ function initializeProgressTracking(resumed: boolean) {
     resumed,
     steps: trackedSteps,
     supaHost: config.supaHost,
+    onboardingAttemptId: onboardingTelemetry.attemptId,
+    onboardingRunId: onboardingTelemetry.runId,
   })
   progressTracker.viewStep(flowStep.value)
   if (pendingDashboardExplored)
@@ -392,6 +408,7 @@ function viewPreviousStep(nextStep: OnboardingFlowStep) {
 
 function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress') {
   const flow = props.preOrg ? 'pre_org' : 'existing_org'
+  const telemetry = onboardingTelemetry.getProgressMetadata()
   return buildUserOnboardingProgress({
     status,
     step: clampResumableOnboardingStep(flowStep.value, flow),
@@ -405,20 +422,20 @@ function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress'
     importedStoreAppId: importedStoreAppId.value,
     orgName: orgNameInput.value,
     estimatedUsersIndex: estimatedUsersIndex.value,
+    onboardingAttemptId: telemetry.onboardingAttemptId,
+    lastRunId: telemetry.lastRunId,
   })
 }
 
-async function persistOnboardingProgress(status: UserOnboardingStatus = 'in_progress') {
-  persistChain = persistChain
-    .then(() => writeOnboardingProgress(status))
-    .catch((error) => {
-      console.error('Failed to persist onboarding progress', error)
-    })
-  return persistChain
+async function persistOnboardingProgress(
+  status: UserOnboardingStatus = 'in_progress',
+  options: OnboardingPersistOptions = {},
+) {
+  return onboardingProgressPersistence.persist(status, options)
 }
 
 function schedulePersistOnboardingProgress() {
-  if (isHydratingOnboarding.value)
+  if (isHydratingOnboarding.value || onboardingProgressPersistence.isBlocked() || onboardingProgressPersistence.isAborted())
     return
   window.clearTimeout(persistFieldsTimer)
   persistFieldsTimer = setTimeout(() => {
@@ -426,54 +443,87 @@ function schedulePersistOnboardingProgress() {
   }, 400)
 }
 
-async function writeOnboardingProgress(status: UserOnboardingStatus) {
+async function writeOnboardingProgress(
+  status: UserOnboardingStatus,
+  options: OnboardingPersistOptions,
+) {
   const userId = onboardingUserId.value
   if (!userId || isHydratingOnboarding.value)
-    return
+    return 'skipped'
 
-  const current = parseUserOnboardingProgress(main.user?.onboarding)
-  if (current?.status === 'completed' && status !== 'completed')
-    return
+  const authGeneration = main.authGeneration
+  return serializeUserOnboardingWrite(userId, async () => {
+    if (
+      (onboardingFlowDisposed && !options.allowDisposed)
+      || onboardingUserId.value !== userId
+      || main.authGeneration !== authGeneration
+      || isHydratingOnboarding.value
+    ) {
+      return 'skipped'
+    }
 
-  const progress = snapshotOnboardingProgress(status)
-  const onboarding = progress as unknown as Json
-  let query = supabase
-    .from('users')
-    .update({ onboarding })
-    .eq('id', userId)
-  if (status !== 'completed') {
-    query = query.or('onboarding->>status.is.null,onboarding->>status.neq.completed')
-    const lastUpdated = current?.updated_at
-    query = lastUpdated
-      ? query.or(`onboarding->>updated_at.is.null,onboarding->>updated_at.eq."${lastUpdated}"`)
-      : query.or('onboarding->>updated_at.is.null')
-  }
-  const { data, error } = await query
-    .select()
-    .maybeSingle()
+    if (main.user?.id !== userId)
+      return 'skipped'
 
-  if (error) {
-    console.error('Failed to persist onboarding progress', error)
-    return
-  }
+    const progress = snapshotOnboardingProgress(status)
+    let currentOnboarding = main.user.onboarding
+    let latestProfile = main.user
 
-  if (data && main.user?.id === userId) {
-    main.user = { ...data, image_url: main.user.image_url }
-    return
-  }
+    for (let attempt = 0; attempt < MAX_USER_ONBOARDING_WRITE_ATTEMPTS; attempt++) {
+      if (
+        onboardingUserId.value !== userId
+        || main.authGeneration !== authGeneration
+        || (onboardingFlowDisposed && !options.allowDisposed)
+      ) {
+        return 'skipped'
+      }
 
-  if (status === 'completed' || main.user?.id !== userId)
-    return
+      const current = parseUserOnboardingProgress(currentOnboarding)
+      if (current?.status === 'completed' && status !== 'completed')
+        return 'skipped'
 
-  const { data: latest, error: latestError } = await supabase
-    .from('users')
-    .select()
-    .eq('id', userId)
-    .maybeSingle()
-  if (latestError)
-    console.error('Failed to refresh onboarding progress snapshot', latestError)
-  if (latest && main.user?.id === userId)
-    main.user = { ...latest, image_url: main.user.image_url }
+      const onboarding = preserveAdminDashboardMinimize(
+        progress as unknown as Json,
+        currentOnboarding,
+        main.isAdmin,
+      )
+      const { data, error } = await replaceUserOnboardingIfUnchanged(
+        userId,
+        currentOnboarding,
+        onboarding,
+      )
+
+      if (error) {
+        console.error('Failed to persist onboarding progress', error)
+        return 'retryable_failure'
+      }
+
+      if (data) {
+        if (main.user?.id === userId && main.authGeneration === authGeneration)
+          main.user = { ...data, image_url: main.user.image_url }
+        return 'persisted'
+      }
+
+      const { data: latest, error: latestError } = await supabase
+        .from('users')
+        .select()
+        .eq('id', userId)
+        .maybeSingle()
+      if (latestError) {
+        console.error('Failed to refresh onboarding progress snapshot', latestError)
+        return 'retryable_failure'
+      }
+      if (!latest)
+        return status === 'completed' ? 'skipped' : 'conflict'
+
+      latestProfile = latest
+      currentOnboarding = latest.onboarding
+    }
+
+    if (main.user?.id === userId && main.authGeneration === authGeneration)
+      main.user = { ...latestProfile, image_url: main.user.image_url }
+    return 'conflict'
+  })
 }
 
 function resetOnboardingForm() {
@@ -547,6 +597,13 @@ async function maybeResumeSavedOnboarding() {
     return false
   }
 
+  const resumableStep = clampResumableOnboardingStep(saved.step, flow)
+  onboardingTelemetry.prepareResumeCandidate({
+    onboardingAttemptId: saved.onboarding_attempt_id,
+    lastRunId: saved.last_run_id,
+    savedStep: resumableStep,
+    steps: appOnboardingSteps.value.map(step => step.id),
+  })
   dialogStore.openDialog({
     title: t('onboarding-resume-title'),
     description: t('onboarding-resume-description'),
@@ -556,15 +613,24 @@ async function maybeResumeSavedOnboarding() {
       { text: t('onboarding-resume-continue'), id: 'onboarding-resume-continue', role: 'primary' },
     ],
   })
+  onboardingTelemetry.recordResumeDialogViewed()
   await dialogStore.onDialogDismiss()
 
+  if (onboardingFlowDisposed)
+    return null
+
   if (dialogStore.lastButtonRole === 'onboarding-resume-restart') {
+    onboardingTelemetry.recordResumeRestarted()
     resetOnboardingForm()
     existingApp.value = true
     existingAppSetup.value = 'manual'
     return false
   }
 
+  if (dialogStore.lastButtonRole !== 'onboarding-resume-continue')
+    return null
+
+  onboardingTelemetry.recordResumeContinued()
   applyOnboardingProgress(saved)
   return true
 }
@@ -1545,7 +1611,12 @@ onMounted(async () => {
   isHydratingOnboarding.value = true
   try {
     if (props.preOrg) {
-      resumedFlow = await maybeResumeSavedOnboarding()
+      const resumeResult = await maybeResumeSavedOnboarding()
+      if (resumeResult === null) {
+        onboardingProgressPersistence.abort()
+        return
+      }
+      resumedFlow = resumeResult
       return
     }
 
@@ -1564,18 +1635,39 @@ onMounted(async () => {
   }
   finally {
     isHydratingOnboarding.value = false
-    isLoading.value = false
-    initializeProgressTracking(resumedFlow)
-    void persistOnboardingProgress()
+    let onboardingPersistResult: OnboardingPersistResult = 'skipped'
+    if (!onboardingFlowDisposed && !onboardingProgressPersistence.isAborted()) {
+      onboardingInitialPersistInFlight = true
+      onboardingPersistResult = await persistOnboardingProgress()
+      if (onboardingPersistResult === 'retryable_failure' && !onboardingFlowDisposed)
+        onboardingPersistResult = await persistOnboardingProgress()
+      onboardingInitialPersistInFlight = false
+    }
+    function finishOnboardingMount() {
+      if (onboardingFlowDisposed || onboardingProgressPersistence.isAborted())
+        return
+      isLoading.value = false
+      const shouldInitializeProgressTracking = shouldInitializeOnboardingProgressTracking(
+        onboardingPersistResult,
+        {
+          aborted: onboardingProgressPersistence.isAborted(),
+          disposed: onboardingFlowDisposed,
+        },
+      )
+      if (shouldInitializeProgressTracking)
+        initializeProgressTracking(resumedFlow)
+    }
+    finishOnboardingMount()
   }
 })
 
 onBeforeUnmount(() => {
+  onboardingFlowDisposed = true
   window.clearTimeout(persistFieldsTimer)
   window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   detailsFieldTracker.dispose()
-  if (!isHydratingOnboarding.value)
-    void persistOnboardingProgress()
+  if (!isHydratingOnboarding.value && !onboardingInitialPersistInFlight && !onboardingProgressPersistence.isBlocked() && !onboardingProgressPersistence.isAborted())
+    void persistOnboardingProgress('in_progress', { allowDisposed: true })
 
   if (localIconPreview.value.startsWith('blob:'))
     URL.revokeObjectURL(localIconPreview.value)
@@ -1826,7 +1918,7 @@ defineExpose({
                         :placeholder="t('app-onboarding-store-link-placeholder')"
                         type="url"
                       >
-                      <button class="d-btn min-h-12 shrink-0" :class="whiteCardSecondaryButtonClass()" :disabled="isImportingStore || !storeUrl" @click="importStoreMetadata()">
+                      <button type="button" class="d-btn min-h-12 shrink-0" :class="whiteCardSecondaryButtonClass()" :disabled="isImportingStore || !storeUrl" @click="importStoreMetadata()">
                         <IconLoader v-if="isImportingStore" class="h-4 w-4 animate-spin" />
                         <IconSparkles v-else class="h-4 w-4" />
                         <span>{{ t('app-onboarding-store-import-button') }}</span>
@@ -1975,10 +2067,11 @@ defineExpose({
                 </div>
 
                 <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/15">
-                  <button class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" @click="props.preOrg ? viewPreviousStep('intent') : router.push('/apps')">
+                  <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" @click="props.preOrg ? viewPreviousStep('intent') : router.push('/apps')">
                     {{ props.preOrg ? t('button-back') : t('button-cancel') }}
                   </button>
                   <button
+                    type="button"
                     class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" :disabled="isSubmitting" data-test="app-onboarding-continue"
                     @click="props.preOrg ? continuePreOrgDetails() : createAppRecord()"
                   >
@@ -2341,7 +2434,7 @@ defineExpose({
                   {{ t('app-onboarding-ai-help-caption') }}
                 </p>
               </div>
-              <button class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="copyAiInstructions">
+              <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="copyAiInstructions">
                 <IconCopy class="h-4 w-4" />
                 {{ t('app-onboarding-ai-help-button') }}
               </button>
@@ -2349,7 +2442,7 @@ defineExpose({
           </div>
 
           <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
-            <button class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
+            <button type="button" class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
               <IconLoader v-if="isSeedingDemo" class="h-4 w-4 animate-spin" />
               <template v-else>
                 {{ t('app-onboarding-explore-dashboard') }}
@@ -2380,7 +2473,7 @@ defineExpose({
             </div>
 
             <div class="mt-6 grid gap-4 md:grid-cols-2">
-              <button class="group rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:border-primary-500/40 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-white/15 dark:bg-slate-950/90 dark:hover:border-white/30 dark:hover:bg-slate-900" @click="goToInstallStep">
+              <button type="button" class="group rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:border-primary-500/40 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-white/15 dark:bg-slate-950/90 dark:hover:border-white/30 dark:hover:bg-slate-900" @click="goToInstallStep">
                 <div class="flex items-start gap-4">
                   <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary-500 text-white">
                     <IconTerminal class="h-5 w-5" />
@@ -2401,6 +2494,7 @@ defineExpose({
               </button>
 
               <button
+                type="button"
                 class="group rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:cursor-wait disabled:opacity-70 dark:border-white/15 dark:bg-slate-950/90 dark:hover:border-emerald-400/60 dark:hover:bg-emerald-400/10"
                 :disabled="isSeedingDemo"
                 @click="seedDemoData"
@@ -2487,7 +2581,7 @@ defineExpose({
                     {{ t('app-onboarding-ai-help-caption') }}
                   </p>
                 </div>
-                <button class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="copyAiInstructions">
+                <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="copyAiInstructions">
                   <IconCopy class="h-4 w-4" />
                   {{ t('app-onboarding-ai-help-button') }}
                 </button>
@@ -2495,10 +2589,10 @@ defineExpose({
             </div>
 
             <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <button class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" :disabled="isSeedingDemo" @click="viewPreviousStep('choice')">
+              <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" :disabled="isSeedingDemo" @click="viewPreviousStep('choice')">
                 {{ t('button-back') }}
               </button>
-              <button class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
+              <button type="button" class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
                 <IconLoader v-if="isSeedingDemo" class="h-4 w-4 animate-spin" />
                 <template v-else>
                   {{ t('app-onboarding-explore-dashboard') }}

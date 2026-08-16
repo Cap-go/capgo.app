@@ -1,5 +1,5 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   formatLocalDate,
   formatLocalDateShort,
@@ -13,6 +13,7 @@ import {
   generateMonthDays,
   getChartDateRange,
   getDateLocale,
+  getLastNUtcDaysRange,
   getUtcDayBounds,
   normalizeToUtcStartOfDay,
   resolveDateLocale,
@@ -97,7 +98,7 @@ describe('date helpers', () => {
     const startDate = new Date(Date.UTC(2026, 0, 31))
     const endDate = new Date(Date.UTC(2026, 1, 2))
 
-    expect(generateChartDayLabels(true, startDate, endDate)).toEqual([
+    expect(generateChartDayLabels(startDate, endDate)).toEqual([
       formatLocalDateShort(utcCalendarDayAsLocalDate(startDate)),
       formatLocalDateShort(utcCalendarDayAsLocalDate(new Date(Date.UTC(2026, 1, 1)))),
       formatLocalDateShort(utcCalendarDayAsLocalDate(endDate)),
@@ -134,6 +135,25 @@ describe('date helpers', () => {
     expect(formatUtcDateParam(range.endDate)).toBe(formatUtcDateParam(normalizeToUtcStartOfDay(new Date())))
     const daySpan = Math.round((range.endDate.getTime() - range.startDate.getTime()) / (24 * 60 * 60 * 1000))
     expect(daySpan).toBe(29)
+  })
+
+  it('builds last-N-day chart ranges ending today', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-15T12:00:00.000Z'))
+    try {
+      const oneDay = getLastNUtcDaysRange(1)
+      expect(formatUtcDateParam(oneDay.startDate)).toBe(formatUtcDateParam(oneDay.endDate))
+      expect(formatUtcDateParam(oneDay.endDate)).toBe(formatUtcDateParam(normalizeToUtcStartOfDay(new Date())))
+      expect(generateChartDayLabels(oneDay.startDate, oneDay.endDate)).toHaveLength(1)
+
+      const sevenDays = getLastNUtcDaysRange(7)
+      const sevenSpan = Math.round((sevenDays.endDate.getTime() - sevenDays.startDate.getTime()) / (24 * 60 * 60 * 1000))
+      expect(sevenSpan).toBe(6)
+      expect(generateChartDayLabels(sevenDays.startDate, sevenDays.endDate)).toHaveLength(7)
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 
   it('keeps formatUtcDateParam stable for date-only strings', () => {

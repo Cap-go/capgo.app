@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
-import type { NativeNotificationEvent, NativeNotificationPlatform, NativeNotificationProvider, NativeNotificationProviderConfig, NativeNotificationRegisterInput, NativeNotificationRegistryRow, NativeNotificationTarget } from '../../utils/nativeNotifications.ts'
+import type { NativeNotificationEvent, NativeNotificationPermission, NativeNotificationPlatform, NativeNotificationProvider, NativeNotificationProviderConfig, NativeNotificationRegistryRow, NativeNotificationTarget } from '../../utils/nativeNotifications.ts'
 import type { Permission } from '../../utils/rbac.ts'
 import { sql } from 'drizzle-orm'
 import { BRES, createHono, parseBody, quickError, simpleError, simpleRateLimit, useCors } from '../../utils/hono.ts'
@@ -76,13 +76,13 @@ interface RegisterBody {
   pluginVersion?: string
   tags?: string[]
   attributes?: Record<string, unknown>
-  permission?: NativeNotificationRegisterInput['permission']
+  permission?: NativeNotificationPermission
   badge?: number
   badgeRevision?: number
   active?: boolean
   consent?: boolean
   identityProof: string
-  previousPermission?: NativeNotificationRegisterInput['permission']
+  previousPermission?: NativeNotificationPermission
   previousRecipientKey?: string
   previousDeviceKey?: string
   previousEventProof?: string
@@ -174,7 +174,7 @@ interface SettingsBody {
 
 interface UpdateCheckBody {
   appId: string
-  target?: SendBody['target']
+  target?: NonNullable<SendBody['target']>
   campaignId?: string
   installMode?: 'next' | 'set'
   channel?: string | null
@@ -303,7 +303,7 @@ function normalizeSecretRefSegment(value: string): string {
   let normalized = ''
   let needsSeparator = false
   for (const char of value.toUpperCase()) {
-    const code = char.charCodeAt(0)
+    const code = char.codePointAt(0) ?? 0
     const isAlpha = code >= 65 && code <= 90
     const isDigit = code >= 48 && code <= 57
     if (isAlpha || isDigit) {

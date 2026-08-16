@@ -372,7 +372,7 @@ function parseDashboardRangeDate(value?: string) {
   if (!value)
     return null
 
-  const dateParts = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|T)/)
+  const dateParts = /^(\d{4})-(\d{2})-(\d{2})(?:$|T)/.exec(value)
   if (!dateParts)
     return null
 
@@ -759,7 +759,7 @@ export async function checkCompatibilityNativePackages(appId: string, channel: s
   // Only include remote packages that are not in local for informational purposes
   // These won't affect compatibility
   const removeNotInLocal = [...mappedRemoteNativePackages]
-    .filter(([remoteName]) => nativePackages.find(a => a.name === remoteName) === undefined)
+    .filter(([remoteName]) => !nativePackages.some(a => a.name === remoteName))
     .map(([name, version]) => ({ name, localVersion: undefined, remoteVersion: version.version }))
 
   finalDependencies.push(...removeNotInLocal)

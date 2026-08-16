@@ -109,7 +109,7 @@ const resourceType = computed(() => {
 const resourceId = computed(() => {
   if (!resourceType.value)
     return ''
-  const match = route.path.match(new RegExp(`\\/${resourceType.value}\\/([^/]+)`))
+  const match = route.path.match(new RegExp(String.raw`\/${resourceType.value}\/([^/]+)`))
   return match ? match[1] : ''
 })
 

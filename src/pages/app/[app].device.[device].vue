@@ -485,6 +485,7 @@ async function copyCurlCommand() {
           <!-- Debug API Section -->
           <div class="border-t border-slate-300 dark:border-slate-700">
             <button
+              type="button"
               class="flex items-center justify-between w-full px-6 py-4 transition-colors dark:hover:bg-slate-700/50 hover:bg-slate-50"
               @click="showDebugSection = !showDebugSection"
             >
@@ -502,6 +503,7 @@ async function copyCurlCommand() {
               <div class="relative">
                 <pre class="p-4 overflow-x-auto text-sm rounded-lg bg-slate-900 text-slate-100"><code>{{ getCurlCommand() }}</code></pre>
                 <button
+                  type="button"
                   class="absolute p-2 transition-colors rounded top-2 right-2 hover:bg-slate-700"
                   :title="t('copy-curl')"
                   @click="copyCurlCommand"
@@ -525,7 +527,7 @@ async function copyCurlCommand() {
       <p class="mt-2 text-muted-foreground">
         {{ t('device-not-found-description') }}
       </p>
-      <button class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/devices`)">
+      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/devices`)">
         {{ t('back-to-devices') }}
       </button>
     </div>

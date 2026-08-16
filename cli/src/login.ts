@@ -2,10 +2,13 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { intro, isCancel, log, outro, password } from '@clack/prompts'
 import { checkAlerts } from './api/update'
+import { flushDeferredCommandInvocation } from './analytics/track'
+import { resolveLoginCommandApiKey } from './auth/command-input'
 import { validateAndSaveKey } from './auth/session'
 import { CliUserError } from './shared/cli-user-error'
 
 interface Options {
+  apikey?: string
   local: boolean
   supaHost?: string
   supaAnon?: string
@@ -16,7 +19,7 @@ export function doLoginExists() {
   return existsSync(`${userHomeDir}/.capgo`) || existsSync('.capgo')
 }
 
-export async function loginInternal(apikey: string, options: Options, silent = false) {
+export async function loginInternal(apikey: string | undefined, options: Options, silent = false): Promise<string> {
   if (!silent)
     intro(`Login to Capgo`)
 
@@ -61,8 +64,11 @@ export async function loginInternal(apikey: string, options: Options, silent = f
     log.success(`login saved into .capgo file in ${local ? 'local' : 'home'} directory`)
     outro('Done ✅')
   }
+
+  return apikey
 }
 
 export async function login(apikey: string, options: Options) {
-  await loginInternal(apikey, options, false)
+  const validatedApiKey = await loginInternal(resolveLoginCommandApiKey(apikey, options.apikey), options, false)
+  flushDeferredCommandInvocation(validatedApiKey)
 }

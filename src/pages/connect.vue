@@ -304,8 +304,8 @@ function back(): void {
                 {{ t('connect-organization') }}
               </span>
               <button
-                v-if="orgs.length > 1"
                 type="button"
+                v-if="orgs.length > 1"
                 class="text-xs font-semibold text-azure-500 hover:underline"
                 @click="toggleAllOrgs"
               >

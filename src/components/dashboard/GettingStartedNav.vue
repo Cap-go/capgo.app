@@ -1,39 +1,40 @@
 <script setup lang="ts">
 import type { OrganizationApp } from '~/stores/organization'
-import { computed, ref, watch } from 'vue'
+import { computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconX from '~icons/lucide/x'
+import { useSupabase } from '~/services/supabase'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import {
   parseAppOnboardingLedger,
   shouldShowGettingStartedNav,
+  withGettingStartedDismissed,
+  withoutGettingStartedDismissed,
 } from '~/utils/appOnboardingProgress'
-import {
-  dismissGettingStarted,
-  isGettingStartedDismissed,
-  isStoreReleaseValidated,
-} from '~/utils/gettingStartedDismiss'
+import { isStoreReleaseValidated } from '~/utils/gettingStartedDismiss'
 
+const props = withDefaults(defineProps<{
+  compact?: boolean
+}>(), {
+  compact: false,
+})
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
+const supabase = useSupabase()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
-const dismissedTick = ref(0)
 
 const userId = computed(() => main.user?.id ?? main.auth?.id ?? '')
 
 const apps = computed(() => {
-  void dismissedTick.value
   const orgId = organizationStore.currentOrganization?.gid
   if (!orgId || !userId.value)
     return [] as OrganizationApp[]
 
   return organizationStore.getAppsByOrgId(orgId).filter((app) => {
-    if (isGettingStartedDismissed(userId.value, app.app_id))
-      return false
     return shouldShowGettingStartedNav(parseAppOnboardingLedger(app.onboarding), {
       storeReleaseValidated: isStoreReleaseValidated(userId.value, app.app_id),
     })
@@ -62,13 +63,27 @@ function isActive(appId: string) {
   return route.path === gettingStartedPath(appId)
 }
 
+async function persistDismiss(app: OrganizationApp) {
+  const { data, error } = await supabase.rpc('dismiss_getting_started', {
+    p_app_id: app.app_id,
+  })
+  const current = organizationStore.getAppByAppId(app.app_id)?.onboarding ?? app.onboarding ?? {}
+  if (error) {
+    console.error('Failed to dismiss getting started', error)
+    organizationStore.updateAppOnboarding(app.app_id, withoutGettingStartedDismissed(current))
+    return
+  }
+  organizationStore.updateAppOnboarding(
+    app.app_id,
+    withGettingStartedDismissed(current, parseAppOnboardingLedger(data).getting_started_dismissed_at ?? undefined),
+  )
+}
+
 function dismiss(app: OrganizationApp, event: Event) {
   event.preventDefault()
   event.stopPropagation()
-  if (!userId.value)
-    return
-  dismissGettingStarted(userId.value, app.app_id)
-  dismissedTick.value += 1
+  organizationStore.updateAppOnboarding(app.app_id, withGettingStartedDismissed(app.onboarding))
+  void persistDismiss(app)
   if (isActive(app.app_id))
     void router.push(`/app/${encodeURIComponent(app.app_id)}`)
 }
@@ -82,18 +97,23 @@ watch(() => organizationStore.currentOrganization?.gid, async (orgId) => {
 </script>
 
 <template>
-  <div v-if="apps.length" class="px-3 pt-3 lg:px-6" data-test="getting-started-nav">
+  <div v-if="apps.length" data-test="getting-started-nav" :class="props.compact ? 'px-1 pt-1' : 'px-3 pt-3 lg:px-6'">
     <ul class="max-h-56 space-y-1 overflow-y-auto">
       <li v-for="app in apps" :key="app.app_id">
         <div
-          class="flex items-center gap-1 rounded-lg transition duration-150"
-          :class="isActive(app.app_id) ? 'bg-azure-500/20' : 'bg-azure-500/10 hover:bg-azure-500/20'"
+          class="flex items-center rounded-lg transition duration-150"
+          :class="[
+            isActive(app.app_id) ? 'bg-azure-500/20' : 'bg-azure-500/10 hover:bg-azure-500/20',
+            props.compact ? 'justify-center' : 'gap-1',
+          ]"
         >
           <router-link
-            class="flex min-h-11 min-w-0 flex-1 items-center gap-2 px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-azure-500 focus:ring-offset-2 focus:ring-offset-slate-800"
+            class="d-btn d-btn-ghost flex min-h-11 h-auto items-center border-none bg-transparent shadow-none hover:bg-transparent focus:outline-none focus:ring-2 focus:ring-azure-500 focus:ring-offset-2 focus:ring-offset-slate-800"
+            :class="props.compact ? 'min-w-0 flex-1 justify-center px-1 py-1.5' : 'min-w-0 flex-1 justify-start gap-2 px-2 py-1.5'"
             :to="gettingStartedPath(app.app_id)"
             :aria-current="isActive(app.app_id) ? 'page' : undefined"
             :aria-label="`${t('getting-started')} — ${appLabel(app)}`"
+            :title="`${t('getting-started')} — ${appLabel(app)}`"
             data-test="getting-started-nav-link"
           >
             <img
@@ -118,11 +138,12 @@ watch(() => organizationStore.currentOrganization?.gid, async (orgId) => {
             >
               {{ acronym(appLabel(app)) }}
             </span>
-            <span class="min-w-0 truncate text-sm font-medium text-azure-100">
+            <span class="min-w-0 truncate text-sm font-medium text-azure-100" :class="props.compact ? 'sr-only' : ''">
               {{ t('getting-started') }}
             </span>
           </router-link>
           <button
+            v-if="!props.compact"
             type="button"
             class="flex size-11 shrink-0 items-center justify-center rounded-lg text-slate-400 transition duration-150 hover:bg-slate-700/80 hover:text-white focus:outline-none focus:ring-2 focus:ring-azure-500 focus:ring-offset-2 focus:ring-offset-slate-800"
             :aria-label="`${t('getting-started-dismiss')} — ${appLabel(app)}`"

@@ -14,9 +14,11 @@ import open from 'open'
 import tmp from 'tmp'
 import { checkAppIdsExist, completePendingOnboardingApp, findAppInOrganization, listPendingOnboardingApps } from '../api/app'
 import { checkVersionStatus } from '../api/update'
+import { flushDeferredCommandInvocation } from '../analytics/track'
 import { addAppInternal } from '../app/add'
 import { markSnag, waitLog } from '../app/debug'
 import { deleteAppInternal } from '../app/delete'
+import { resolveInitCommandInput } from '../auth/command-input'
 import { getInfoInternal } from '../app/info'
 import { WAIT_LOG_CONTINUE_HINT } from '../app/wait-log-query'
 import { canUseFilePicker, openPackageJsonPicker } from '../build/onboarding/file-picker'
@@ -5290,7 +5292,9 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   setConfigWriteTarget(initialTargets.capacitorConfigPath)
   globalSupaHost = options.supaHost // honor --supa-host for the support-logs upload
   const pm = getPMAndCommand()
-  options.apikey = apikeyCommand
+  const commandInput = resolveInitCommandInput(apikeyCommand, appId, options.apikey)
+  options.apikey = commandInput.apikey ?? ''
+  appId = commandInput.appId ?? ''
   startInitReplay({
     analyticsEnabled,
     apikey: options.apikey?.trim() || findSavedKeySilent(),
@@ -5306,7 +5310,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
   if (!options.apikey) {
     try {
-      options.apikey ??= findSavedKey(true)
+      options.apikey = findSavedKey(true)
     }
     catch {
     }
@@ -5322,7 +5326,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   }
 
   const log = pSpinner()
-  if (!doLoginExists() || apikeyCommand) {
+  if (!doLoginExists() || commandInput.explicitApiKey) {
     log.start(`Running: ${pm.runner} @capgo/cli@latest login ***`)
     try {
       await loginInternal(options.apikey, options, true)
@@ -5336,6 +5340,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
   await resolveUserIdFromApiKey(supabase, options.apikey)
+  flushDeferredCommandInvocation(options.apikey)
   activeInitTelemetry?.setAuth('', options.apikey)
 
   let resumed = await tryResumeOnboarding(options.apikey, initialTargets, initialCwd, supabase, {

@@ -5,13 +5,13 @@ import { z } from 'zod'
  * Match arktype `string.numeric.parse`: accept numeric strings only.
  * Rejects null/false/"" (unlike z.coerce.number(), which maps those to 0).
  */
-export const numericStringSchema = z.string().regex(/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/).transform(Number)
+export const numericStringSchema = z.string().regex(/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/).transform(Number)
 
 export const numberLikeSchema = z.union([z.number(), numericStringSchema])
 
 export const integerLikeSchema = z.union([
   z.number().int(),
-  z.string().regex(/^[+-]?\d+$/).transform(value => Number(value)),
+  z.string().regex(/^[+-]?\d+$/).transform(Number),
 ])
 
 export type ValidationIssue = StandardSchemaV1.Issue & { readonly code?: string }

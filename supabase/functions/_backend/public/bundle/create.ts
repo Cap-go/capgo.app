@@ -194,7 +194,7 @@ function checkEncryptedBundleEnforcement(appWithOrg: AppWithOrg, sessionKey: str
 
     // Check if the key_id matches the required key (compare first N characters)
     // key_id is 20 chars, required_encryption_key is up to 21 chars
-    const matches = keyId === requiredKey.substring(0, 20) || keyId.substring(0, requiredKey.length) === requiredKey
+    const matches = keyId === requiredKey.substring(0, 20) || keyId.startsWith(requiredKey)
     if (!matches) {
       throw simpleError('encryption_key_mismatch', 'This organization requires bundles to be encrypted with a specific key. The uploaded bundle was encrypted with a different key.', {
         enforce_encrypted_bundles: true,

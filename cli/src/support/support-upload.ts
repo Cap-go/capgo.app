@@ -1,6 +1,7 @@
 // cli/src/support/support-upload.ts
 import { readFileSync } from 'node:fs'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
+import { trimTrailingSlashes } from '../utils'
 
 export interface SupportUploadInput {
   apiHost: string
@@ -29,7 +30,7 @@ export async function uploadSupportLogs(input: SupportUploadInput): Promise<Supp
   catch {
     return null
   }
-  const host = input.apiHost.replace(/\/+$/, '') // tolerate a trailing slash from --supa-host
+  const host = trimTrailingSlashes(input.apiHost) // tolerate a trailing slash from --supa-host
   try {
     const res = await fetch(`${host}/build/support_logs`, {
       method: 'POST',

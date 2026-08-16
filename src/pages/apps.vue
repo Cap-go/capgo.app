@@ -214,6 +214,7 @@ displayStore.defaultBack = '/apps'
             </p>
             <div class="flex flex-col gap-3 mt-5 sm:flex-row sm:items-center">
               <button
+                type="button"
                 :aria-describedby="!canCreateApp ? 'cannot-add-app-no-permission' : undefined"
                 :aria-disabled="!canCreateApp"
                 :title="!canCreateApp ? t('cannot-add-app-no-permission') : undefined"

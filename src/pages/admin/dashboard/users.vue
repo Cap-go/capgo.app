@@ -1376,17 +1376,24 @@ displayStore.defaultBack = '/dashboard'
 
         <div v-else class="space-y-6">
           <!-- Onboarding Funnel Section -->
-          <div class="p-6 bg-white border rounded-lg shadow-lg border-slate-300 dark:bg-gray-800 dark:border-slate-900">
-            <h3 class="mb-4 text-lg font-semibold">
-              {{ t('onboarding-funnel') }}
-            </h3>
-            <p class="mb-4 text-sm text-slate-600 dark:text-slate-400">
-              {{ t('onboarding-funnel-description') }}
-            </p>
-            <div v-if="isLoadingOnboardingFunnel" class="flex items-center justify-center h-48">
-              <span class="loading loading-spinner loading-lg" />
-            </div>
-            <div v-else-if="onboardingFunnelStages.length > 0" class="space-y-6">
+          <ChartCard
+            chart-id="onboarding-funnel"
+            :title="t('onboarding-funnel')"
+            :is-loading="isLoadingOnboardingFunnel"
+            :has-data="onboardingFunnelStages.length > 0"
+            :no-data-message="t('no-data-available')"
+          >
+            <template #header>
+              <div class="min-w-0">
+                <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
+                  {{ t('onboarding-funnel') }}
+                </h2>
+                <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                  {{ t('onboarding-funnel-description') }}
+                </p>
+              </div>
+            </template>
+            <div class="space-y-6">
               <div class="h-72 sm:h-80">
                 <AdminFunnelChart :stages="onboardingFunnelStages" :is-loading="isLoadingOnboardingFunnel" />
               </div>
@@ -1417,12 +1424,10 @@ displayStore.defaultBack = '/dashboard'
                 {{ t('activation-telemetry-unavailable') }}
               </p>
             </div>
-            <div v-else class="flex items-center justify-center h-48 text-slate-400">
-              {{ t('no-data-available') }}
-            </div>
-          </div>
+          </ChartCard>
 
           <ChartCard
+            chart-id="onboarding-wizard-dropoff"
             :title="t('onboarding-wizard-dropoff')"
             :is-loading="isLoadingOnboardingFunnel"
             :has-data="hasWizardDropoff"
@@ -1441,6 +1446,7 @@ displayStore.defaultBack = '/dashboard'
 
           <!-- Registration Source Trend Chart -->
           <ChartCard
+            chart-id="registrations-by-source"
             :title="t('registrations-by-source')"
             :is-loading="isLoadingOnboardingFunnel"
             :has-data="registrationSourceTrendSeries.length > 0"
@@ -1479,6 +1485,7 @@ displayStore.defaultBack = '/dashboard'
 
           <!-- App onboarding method chart -->
           <ChartCard
+            chart-id="apps-onboarding-by-method"
             :title="t('apps-onboarding-by-method')"
             :is-loading="isLoadingOnboardingFunnel"
             :has-data="appOnboardingMethodTrendSeries.length > 0"
@@ -1524,6 +1531,7 @@ displayStore.defaultBack = '/dashboard'
 
           <!-- App onboarding outcome chart -->
           <ChartCard
+            chart-id="apps-onboarding-by-outcome"
             :title="t('apps-onboarding-by-outcome')"
             :is-loading="isLoadingOnboardingFunnel"
             :has-data="appOnboardingOutcomeTrendSeries.length > 0"
@@ -1569,6 +1577,7 @@ displayStore.defaultBack = '/dashboard'
 
           <!-- Onboarding Trend Chart -->
           <ChartCard
+            chart-id="onboarding-trend"
             :title="t('onboarding-trend')"
             :is-loading="isLoadingOnboardingFunnel"
             :has-data="onboardingFunnelTrendSeries.length > 0"
@@ -1581,6 +1590,7 @@ displayStore.defaultBack = '/dashboard'
 
           <!-- Invite Join Trend Chart -->
           <ChartCard
+            chart-id="invite-join-trend"
             :title="t('invite-join-trend')"
             :is-loading="isLoadingOnboardingFunnel"
             :has-data="inviteJoinTrendSeries.length > 0"
@@ -1739,6 +1749,7 @@ displayStore.defaultBack = '/dashboard'
             </div>
 
             <ChartCard
+              chart-id="email-type-trend"
               :title="t('admin-users-email-type-trend')"
               :is-loading="isLoadingEmailTypeBreakdown"
               :has-data="emailTypeTrendSeries.length > 0"
@@ -1785,6 +1796,7 @@ displayStore.defaultBack = '/dashboard'
             </div>
 
             <ChartCard
+              chart-id="customer-country"
               :title="t('admin-users-country-chart')"
               :is-loading="isLoadingCustomerCountryBreakdown"
               :has-data="topCustomerCountryEntries.length > 0"
@@ -1800,6 +1812,7 @@ displayStore.defaultBack = '/dashboard'
           </div>
 
           <ChartCard
+            chart-id="trial-plan-breakdown"
             :title="t('admin-users-trial-plan-breakdown')"
             :total="trialPlanBreakdownTotal"
             :is-loading="isLoadingTrialPlanBreakdown"
@@ -1883,6 +1896,7 @@ displayStore.defaultBack = '/dashboard'
           <!-- Plan Distribution Trend Chart -->
           <div class="grid grid-cols-1 gap-6">
             <ChartCard
+              chart-id="plan-distribution-trend"
               :title="t('plan-distribution-trend')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="planDistributionTrendSeries.length > 0"
@@ -1898,6 +1912,7 @@ displayStore.defaultBack = '/dashboard'
           <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <!-- Users Trend -->
             <ChartCard
+              chart-id="users-trend"
               :title="t('users-trend')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="usersTrendSeries.length > 0"
@@ -1910,6 +1925,7 @@ displayStore.defaultBack = '/dashboard'
 
             <!-- Trial Extension Conversions -->
             <ChartCard
+              chart-id="trial-extension-conversion-trend"
               :title="t('trial-extension-conversion-trend')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="trialExtensionTrendSeries.length > 0"
@@ -1922,6 +1938,7 @@ displayStore.defaultBack = '/dashboard'
 
             <!-- Daily Registrations -->
             <ChartCard
+              chart-id="daily-registrations"
               :title="t('daily-registrations')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="registrationsTrendSeries.length > 0"
@@ -1934,6 +1951,7 @@ displayStore.defaultBack = '/dashboard'
 
             <!-- Registration to Subscription Conversion -->
             <ChartCard
+              chart-id="registration-to-subscription-conversion"
               :title="t('registration-to-subscription-conversion')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="registrationToSubscriptionConversionSeries.length > 0"
@@ -1947,6 +1965,7 @@ displayStore.defaultBack = '/dashboard'
 
             <!-- Apps Created by Day -->
             <ChartCard
+              chart-id="apps-created-by-day"
               :title="t('admin-apps-created-by-day')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="appsCreatedTrendSeries.length > 0"
@@ -1959,6 +1978,7 @@ displayStore.defaultBack = '/dashboard'
 
             <!-- Versions Uploaded by Day -->
             <ChartCard
+              chart-id="versions-uploaded-by-day"
               :title="t('admin-versions-uploaded-by-day')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="versionsCreatedTrendSeries.length > 0"
@@ -1971,6 +1991,7 @@ displayStore.defaultBack = '/dashboard'
 
             <!-- Apps with Preview QR Enabled -->
             <ChartCard
+              chart-id="apps-with-preview"
               :title="t('admin-apps-with-preview')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="appsWithPreviewTrendSeries.length > 0"

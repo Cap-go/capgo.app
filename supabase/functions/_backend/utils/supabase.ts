@@ -24,7 +24,7 @@ const DEFAULT_LIMIT = 1000
  * Escape a string and wrap it in double quotes for safely embedding into PostgREST filter payloads.
  */
 function quotePostgrestFilterValue(value: string): string {
-  const escapedValue = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  const escapedValue = value.replace(/\\/g, String.raw`\\`).replace(/"/g, String.raw`\"`)
   return `"${escapedValue}"`
 }
 
