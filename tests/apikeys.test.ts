@@ -145,6 +145,56 @@ describe('[POST] /apikey operations', () => {
     expect(verifyData.name).toBe(keyName)
   })
 
+  it.concurrent('creates an API key when an authorized org UUID uses uppercase characters', async () => {
+    const uppercaseOrgId = orgApiKeyBindings()[0].org_id.toUpperCase()
+    let createdKeyId: number | undefined
+
+    try {
+      const response = await fetch(`${BASE_URL}/apikey`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          name: `uppercase-org-key-${id.slice(0, 8)}`,
+          bindings: orgApiKeyBindings(uppercaseOrgId),
+        }),
+      })
+      const data = await response.json() as { id?: number }
+      createdKeyId = data.id
+
+      expect(response.status).toBe(200)
+      expect(createdKeyId).toEqual(expect.any(Number))
+    }
+    finally {
+      if (createdKeyId) {
+        await fetch(`${BASE_URL}/apikey/${createdKeyId}`, {
+          method: 'DELETE',
+          headers: authHeaders,
+        })
+      }
+    }
+  })
+
+  it.concurrent('isolates a malformed first org and preserves its management-denial precedence', async () => {
+    const malformedOrgId = `malformed-org-${id.slice(0, 8)}`
+    const validOrgId = orgApiKeyBindings()[0].org_id
+    const response = await fetch(`${BASE_URL}/apikey`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({
+        name: `malformed-org-key-${id.slice(0, 8)}`,
+        bindings: [
+          { role_name: 'org_member', scope_type: 'org', org_id: malformedOrgId },
+          { role_name: 'org_admin', scope_type: 'org', org_id: validOrgId },
+        ],
+      }),
+    })
+    const responseBody = await response.text()
+
+    expect(response.status).toBe(403)
+    expect(responseBody).toContain(`Forbidden - API key management rights required for org ${malformedOrgId}`)
+    expect(responseBody).not.toContain('Forbidden - API key managers cannot assign the org_admin role')
+  })
+
   it.concurrent('creates an app-only preview key bound to its owning organization', async () => {
     const appBindings = await appApiKeyBindings(APPNAME, 'app_preview')
     const response = await fetch(`${BASE_URL}/apikey`, {
