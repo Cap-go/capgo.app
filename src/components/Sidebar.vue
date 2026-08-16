@@ -199,65 +199,65 @@ const tabs = computed<Tab[]>(() => {
       :inert="props.sidebarCollapsed || undefined"
     >
       <div class="flex h-full w-64 min-w-64 flex-col">
-      <!-- Sidebar header -->
-      <div class="flex justify-between px-3 py-4 border-b lg:py-6 lg:px-6 lg:border-b border-slate-800 shrink-0 lg:border-slate-700">
-        <router-link
-          class="flex items-center p-1 space-x-2 rounded-lg cursor-pointer lg:space-x-3 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
-          to="/apps"
-          aria-label="Capgo - Go to dashboard"
-        >
-          <img src="/capgo.webp" alt="Capgo logo" class="w-8 h-8">
-          <span class="text-xl font-semibold truncate transition duration-150 hover:text-white font-prompt text-slate-200 lg:text-slate-200 lg:hover:text-white">Capgo</span>
-        </router-link>
-      </div>
-
-      <GettingStartedNav />
-
-      <!-- Organization dropdown -->
-      <div class="px-3 py-4 lg:py-4 lg:px-6 shrink-0">
-        <dropdown-organization v-if="main.user" />
-      </div>
-
-      <!-- Navigation -->
-      <div class="flex-1 px-3 py-4 space-y-4 overflow-y-auto lg:py-6 lg:px-6">
-        <div>
-          <h3 class="mb-3 text-xs font-semibold uppercase lg:mb-4 lg:tracking-wider text-slate-500 lg:text-slate-500">
-            {{ t('pages') }}
-          </h3>
-          <ul class="space-y-1 lg:space-y-2">
-            <li v-for="tab, i in tabs" :key="i">
-              <button
-                type="button"
-                class="flex items-center p-3 w-full rounded-md transition duration-150 cursor-pointer lg:p-3 lg:rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-200 min-h-11 lg:text-slate-200 lg:hover:bg-slate-700/50 hover:bg-slate-700/50 focus:ring-offset-slate-800"
-                :class="{
-                  'hover:bg-slate-700/50 lg:hover:bg-slate-700/50': !isTabActive(tab.key),
-                  'bg-slate-700 text-white lg:bg-slate-700 lg:text-white': isTabActive(tab.key),
-                  'cursor-default': isTabActive(tab.key),
-                }"
-                :aria-label="tab.redirect ? `${t(tab.label)} (opens in new tab)` : t(tab.label)"
-                :aria-current="isTabActive(tab.key) ? 'page' : undefined"
-                @click="openTab(tab)"
-              >
-                <component :is="tab.icon" class="w-5 h-5 transition-colors duration-150 shrink-0" :class="{ 'text-blue-500 lg:text-blue-500': isTabActive(tab.key), 'text-slate-400 group-hover:text-slate-300 lg:text-slate-400 lg:group-hover:text-slate-300': !isTabActive(tab.key) }" />
-                <span class="flex items-center ml-3 text-sm font-medium capitalize transition-colors duration-150" :class="{ 'text-blue-500 lg:text-blue-500': isTabActive(tab.key), 'text-slate-400 group-hover:text-slate-300 lg:text-slate-400 lg:group-hover:text-slate-300': !isTabActive(tab.key), 'underline': tab.redirect }">
-                  {{ t(tab.label) }}
-                  <svg v-if="tab.redirect" class="w-3 h-3 ml-1 opacity-60" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                    <path fill-rule="evenodd" d="M4.25 5.5a.75.75 0 00-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 00.75-.75v-4a.75.75 0 011.5 0v4A2.25 2.25 0 0112.75 17h-8.5A2.25 2.25 0 012 14.75v-8.5A2.25 2.25 0 014.25 4h5a.75.75 0 010 1.5h-5z" clip-rule="evenodd" />
-                    <path fill-rule="evenodd" d="M6.194 12.753a.75.75 0 001.06.053L16.5 4.44v2.81a.75.75 0 001.5 0v-4.5a.75.75 0 00-.75-.75h-4.5a.75.75 0 000 1.5h2.553l-9.056 8.194a.75.75 0 00-.053 1.06z" clip-rule="evenodd" />
-                  </svg>
-                </span>
-              </button>
-            </li>
-          </ul>
+        <!-- Sidebar header -->
+        <div class="flex justify-between px-3 py-4 border-b lg:py-6 lg:px-6 lg:border-b border-slate-800 shrink-0 lg:border-slate-700">
+          <router-link
+            class="flex items-center p-1 space-x-2 rounded-lg cursor-pointer lg:space-x-3 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
+            to="/apps"
+            aria-label="Capgo - Go to dashboard"
+          >
+            <img src="/capgo.webp" alt="Capgo logo" class="w-8 h-8">
+            <span class="text-xl font-semibold truncate transition duration-150 hover:text-white font-prompt text-slate-200 lg:text-slate-200 lg:hover:text-white">Capgo</span>
+          </router-link>
         </div>
-      </div>
 
-      <!-- User menu -->
-      <div class="pt-4 mt-auto lg:pt-6 lg:mt-0 lg:border-t shrink-0 lg:border-slate-700">
-        <div v-if="main.user" class="flex items-center">
-          <DropdownProfile class="w-full" />
+        <GettingStartedNav />
+
+        <!-- Organization dropdown -->
+        <div class="px-3 py-4 lg:py-4 lg:px-6 shrink-0">
+          <dropdown-organization v-if="main.user" />
         </div>
-      </div>
+
+        <!-- Navigation -->
+        <div class="flex-1 px-3 py-4 space-y-4 overflow-y-auto lg:py-6 lg:px-6">
+          <div>
+            <h3 class="mb-3 text-xs font-semibold uppercase lg:mb-4 lg:tracking-wider text-slate-500 lg:text-slate-500">
+              {{ t('pages') }}
+            </h3>
+            <ul class="space-y-1 lg:space-y-2">
+              <li v-for="tab, i in tabs" :key="i">
+                <button
+                  type="button"
+                  class="flex items-center p-3 w-full rounded-md transition duration-150 cursor-pointer lg:p-3 lg:rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-200 min-h-11 lg:text-slate-200 lg:hover:bg-slate-700/50 hover:bg-slate-700/50 focus:ring-offset-slate-800"
+                  :class="{
+                    'hover:bg-slate-700/50 lg:hover:bg-slate-700/50': !isTabActive(tab.key),
+                    'bg-slate-700 text-white lg:bg-slate-700 lg:text-white': isTabActive(tab.key),
+                    'cursor-default': isTabActive(tab.key),
+                  }"
+                  :aria-label="tab.redirect ? `${t(tab.label)} (opens in new tab)` : t(tab.label)"
+                  :aria-current="isTabActive(tab.key) ? 'page' : undefined"
+                  @click="openTab(tab)"
+                >
+                  <component :is="tab.icon" class="w-5 h-5 transition-colors duration-150 shrink-0" :class="{ 'text-blue-500 lg:text-blue-500': isTabActive(tab.key), 'text-slate-400 group-hover:text-slate-300 lg:text-slate-400 lg:group-hover:text-slate-300': !isTabActive(tab.key) }" />
+                  <span class="flex items-center ml-3 text-sm font-medium capitalize transition-colors duration-150" :class="{ 'text-blue-500 lg:text-blue-500': isTabActive(tab.key), 'text-slate-400 group-hover:text-slate-300 lg:text-slate-400 lg:group-hover:text-slate-300': !isTabActive(tab.key), 'underline': tab.redirect }">
+                    {{ t(tab.label) }}
+                    <svg v-if="tab.redirect" class="w-3 h-3 ml-1 opacity-60" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                      <path fill-rule="evenodd" d="M4.25 5.5a.75.75 0 00-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 00.75-.75v-4a.75.75 0 011.5 0v4A2.25 2.25 0 0112.75 17h-8.5A2.25 2.25 0 012 14.75v-8.5A2.25 2.25 0 014.25 4h5a.75.75 0 010 1.5h-5z" clip-rule="evenodd" />
+                      <path fill-rule="evenodd" d="M6.194 12.753a.75.75 0 001.06.053L16.5 4.44v2.81a.75.75 0 001.5 0v-4.5a.75.75 0 00-.75-.75h-4.5a.75.75 0 000 1.5h2.553l-9.056 8.194a.75.75 0 00-.053 1.06z" clip-rule="evenodd" />
+                    </svg>
+                  </span>
+                </button>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- User menu -->
+        <div class="pt-4 mt-auto lg:pt-6 lg:mt-0 lg:border-t shrink-0 lg:border-slate-700">
+          <div v-if="main.user" class="flex items-center">
+            <DropdownProfile class="w-full" />
+          </div>
+        </div>
       </div>
     </div>
   </div>
