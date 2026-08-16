@@ -97,59 +97,54 @@ watch(() => organizationStore.currentOrganization?.gid, async (orgId) => {
 </script>
 
 <template>
-  <div v-if="apps.length" data-test="getting-started-nav" class="transition-[padding] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:transition-none" :class="props.compact ? 'px-2 pt-1' : 'px-3 pt-3 lg:px-6'">
+  <div v-if="apps.length" data-test="getting-started-nav" class="pt-2">
     <ul class="max-h-56 space-y-1 overflow-y-auto">
       <li v-for="app in apps" :key="app.app_id">
         <div
-          class="flex items-center rounded-lg transition duration-150"
-          :class="[
-            isActive(app.app_id) ? 'bg-azure-500/20' : 'bg-azure-500/10 hover:bg-azure-500/20',
-            props.compact ? '' : 'gap-1',
-          ]"
+          class="flex items-center rounded-lg transition-colors duration-150"
+          :class="isActive(app.app_id) ? 'bg-azure-500/20' : 'bg-azure-500/10 hover:bg-azure-500/20'"
         >
           <router-link
-            class="d-btn d-btn-ghost flex min-h-11 h-auto items-center justify-start border-none bg-transparent shadow-none hover:bg-transparent focus:outline-none focus:ring-2 focus:ring-azure-500 focus:ring-offset-2 focus:ring-offset-slate-800"
-            :class="props.compact ? 'min-w-0 flex-1 px-1 py-1.5' : 'min-w-0 flex-1 gap-2 px-2 py-1.5'"
+            class="d-btn d-btn-ghost flex min-h-11 h-auto min-w-0 flex-1 items-center justify-start border-none bg-transparent p-0 shadow-none hover:bg-transparent focus:outline-none focus:ring-2 focus:ring-azure-500 focus:ring-offset-2 focus:ring-offset-slate-800"
             :to="gettingStartedPath(app.app_id)"
             :aria-current="isActive(app.app_id) ? 'page' : undefined"
             :aria-label="`${t('getting-started')} — ${appLabel(app)}`"
             :title="`${t('getting-started')} — ${appLabel(app)}`"
             data-test="getting-started-nav-link"
           >
-            <img
-              v-if="app.icon_url"
-              :src="app.icon_url"
-              :alt="`${appLabel(app)} icon`"
-              class="size-6 shrink-0 rounded-sm object-cover d-mask d-mask-squircle"
-              width="24"
-              height="24"
-            >
-            <span
-              v-else-if="app.icon_url_loading"
-              class="flex size-6 shrink-0 items-center justify-center rounded-sm bg-slate-700 d-mask d-mask-squircle"
-            >
-              <span class="size-3 rounded-full border-2 border-azure-400 border-t-transparent animate-spin" />
-              <span class="sr-only">{{ t('loading') }}</span>
+            <span class="flex w-12 h-11 shrink-0 items-center justify-center">
+              <img
+                v-if="app.icon_url"
+                :src="app.icon_url"
+                :alt="`${appLabel(app)} icon`"
+                class="size-6 shrink-0 rounded-sm object-cover d-mask d-mask-squircle"
+                width="24"
+                height="24"
+              >
+              <span
+                v-else-if="app.icon_url_loading"
+                class="flex size-6 shrink-0 items-center justify-center rounded-sm bg-slate-700 d-mask d-mask-squircle"
+              >
+                <span class="size-3 rounded-full border-2 border-azure-400 border-t-transparent animate-spin" />
+                <span class="sr-only">{{ t('loading') }}</span>
+              </span>
+              <span
+                v-else
+                class="flex size-6 shrink-0 items-center justify-center rounded-sm bg-slate-700 text-[10px] font-semibold text-slate-200 d-mask d-mask-squircle"
+                aria-hidden="true"
+              >
+                {{ acronym(appLabel(app)) }}
+              </span>
             </span>
-            <span
-              v-else
-              class="flex size-6 shrink-0 items-center justify-center rounded-sm bg-slate-700 text-[10px] font-semibold text-slate-200 d-mask d-mask-squircle"
-              aria-hidden="true"
-            >
-              {{ acronym(appLabel(app)) }}
-            </span>
-            <span
-              class="min-w-0 truncate text-sm font-medium text-azure-100 overflow-hidden whitespace-nowrap transition-[opacity,max-width,margin] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:transition-none"
-              :class="props.compact ? 'opacity-0 max-w-0 ml-0' : 'opacity-100 max-w-[12rem]'"
-            >
+            <span class="min-w-0 truncate pr-2 text-sm font-medium text-azure-100 whitespace-nowrap">
               {{ t('getting-started') }}
             </span>
           </router-link>
           <button
-            v-if="!props.compact"
             type="button"
-            class="flex size-11 shrink-0 items-center justify-center rounded-lg text-slate-400 transition duration-150 hover:bg-slate-700/80 hover:text-white focus:outline-none focus:ring-2 focus:ring-azure-500 focus:ring-offset-2 focus:ring-offset-slate-800"
+            class="flex size-11 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors duration-150 hover:bg-slate-700/80 hover:text-white focus:outline-none focus:ring-2 focus:ring-azure-500 focus:ring-offset-2 focus:ring-offset-slate-800"
             :aria-label="`${t('getting-started-dismiss')} — ${appLabel(app)}`"
+            :tabindex="props.compact ? -1 : undefined"
             data-test="getting-started-nav-dismiss"
             @click="dismiss(app, $event)"
           >
