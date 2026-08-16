@@ -37,7 +37,7 @@ beforeEach(() => {
 })
 
 describe('buildFrontendOnboardingDailySetupCliHogql', () => {
-  it('selects the bounded v2 Setup cohort and its Setup, copy, and unfiltered CLI events', () => {
+  it('selects the bounded v2 and v3 Setup cohort and its Setup, copy, and unfiltered CLI events', () => {
     const query = buildFrontendOnboardingDailySetupCliHogql(
       '2026-08-01T00:00:00.123Z',
       '2026-08-03T00:00:00.456Z',
@@ -55,7 +55,7 @@ describe('buildFrontendOnboardingDailySetupCliHogql', () => {
     expect(setupPeople).toContain('WHERE event = \'onboarding_step_viewed\'')
     expect(setupPeople).toContain('JSONExtractString(toString(properties), \'flow\') = \'pre_org\'')
     expect(setupPeople).toContain('JSONExtractString(toString(properties), \'$host\') = \'console.capgo.app\'')
-    expect(setupPeople).toContain('toIntOrZero(toString(properties.onboarding_version)) = 2')
+    expect(setupPeople).toContain('toIntOrZero(toString(properties.onboarding_version)) IN (2, 3)')
     expect(setupPeople).toContain('JSONExtractString(toString(properties), \'step\') = \'setup\'')
     expect(setupPeople).toContain('timestamp >= parseDateTimeBestEffort(\'2026-08-01T00:00:00.123Z\')')
     expect(setupPeople).toContain('timestamp < parseDateTimeBestEffort(\'2026-08-03T00:00:00.456Z\')')
@@ -84,7 +84,7 @@ describe('buildFrontendOnboardingDailySetupCliHogql', () => {
     expect(selectedSetupCopyBranch).toContain('selected_events.event IN (\'onboarding_step_viewed\', \'onboarding_cli_command_copied\', \'onboarding_ai_instructions_copied\')')
     expect(selectedSetupCopyBranch).toContain('JSONExtractString(toString(selected_events.properties), \'flow\') = \'pre_org\'')
     expect(selectedSetupCopyBranch).toContain('JSONExtractString(toString(selected_events.properties), \'$host\') = \'console.capgo.app\'')
-    expect(selectedSetupCopyBranch).toContain('toIntOrZero(toString(selected_events.properties.onboarding_version)) = 2')
+    expect(selectedSetupCopyBranch).toContain('toIntOrZero(toString(selected_events.properties.onboarding_version)) IN (2, 3)')
     expect(selectedSetupCopyBranch).toContain('JSONExtractString(toString(selected_events.properties), \'step\') = \'setup\'')
 
     expect(query).toContain('count() OVER () AS total_events')

@@ -395,7 +395,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
     expect(analytics.v3_graph.nodes).toEqual([{ key: 'at_boundary', count: 1 }])
   })
 
-  it.concurrent('classifies each setup-reaching v2 person once across mutually exclusive CLI outcomes', () => {
+  it.concurrent('classifies each setup-reaching v2 or v3 person once across mutually exclusive CLI outcomes', () => {
     const setupMs = CURRENT_START_MS + 10 * MINUTE_MS
     const analytics = buildFrontendOnboardingAnalytics([
       attempt({
@@ -416,40 +416,48 @@ describe('buildFrontendOnboardingAnalytics', () => {
       }),
       attempt({
         attemptId: 'cli-and-ai-second-attempt',
-        onboardingVersion: 2,
+        onboardingVersion: 3,
         personId: 'person-cli-and-ai',
         intentMs: CURRENT_START_MS + 2 * MINUTE_MS,
         setupMs: setupMs + 2 * MINUTE_MS,
         cliStartedMs: [setupMs + 3 * MINUTE_MS],
       }),
       attempt({
+        attemptId: 'v3-cli-only',
+        onboardingVersion: 3,
+        personId: 'person-v3-cli-only',
+        intentMs: CURRENT_START_MS + 3 * MINUTE_MS,
+        setupMs: setupMs + 3 * MINUTE_MS,
+        cliStartedMs: [setupMs + 4 * MINUTE_MS],
+      }),
+      attempt({
         attemptId: 'no-cli',
         onboardingVersion: 2,
         personId: 'person-no-cli',
-        intentMs: CURRENT_START_MS + 3 * MINUTE_MS,
-        setupMs: setupMs + 3 * MINUTE_MS,
+        intentMs: CURRENT_START_MS + 4 * MINUTE_MS,
+        setupMs: setupMs + 4 * MINUTE_MS,
       }),
       attempt({
         attemptId: 'ai-without-cli',
         onboardingVersion: 2,
         personId: 'person-ai-without-cli',
-        intentMs: CURRENT_START_MS + 4 * MINUTE_MS,
-        setupMs: setupMs + 4 * MINUTE_MS,
-        aiInstructionsCopiedMs: [setupMs + 5 * MINUTE_MS],
+        intentMs: CURRENT_START_MS + 5 * MINUTE_MS,
+        setupMs: setupMs + 5 * MINUTE_MS,
+        aiInstructionsCopiedMs: [setupMs + 6 * MINUTE_MS],
       }),
       attempt({
         attemptId: 'v1-ignored',
         personId: 'person-v1',
         onboardingVersion: 1,
-        intentMs: CURRENT_START_MS + 5 * MINUTE_MS,
-        setupMs: setupMs + 5 * MINUTE_MS,
-        cliStartedMs: [setupMs + 6 * MINUTE_MS],
+        intentMs: CURRENT_START_MS + 6 * MINUTE_MS,
+        setupMs: setupMs + 6 * MINUTE_MS,
+        cliStartedMs: [setupMs + 7 * MINUTE_MS],
       }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.v2_setup_cli_outcomes).toEqual({
-      total_users: 4,
-      cli_only: 1,
+    expect(analytics.v2_v3_setup_cli_outcomes).toEqual({
+      total_users: 5,
+      cli_only: 2,
       cli_and_ai_instructions: 1,
       no_cli: 2,
     })
@@ -485,7 +493,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
       }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.v2_setup_cli_outcomes).toEqual({
+    expect(analytics.v2_v3_setup_cli_outcomes).toEqual({
       total_users: 2,
       cli_only: 0,
       cli_and_ai_instructions: 1,
