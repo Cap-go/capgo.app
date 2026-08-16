@@ -15,6 +15,11 @@ import {
 } from '~/utils/appOnboardingProgress'
 import { isStoreReleaseValidated } from '~/utils/gettingStartedDismiss'
 
+const props = withDefaults(defineProps<{
+  compact?: boolean
+}>(), {
+  compact: false,
+})
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
@@ -92,18 +97,23 @@ watch(() => organizationStore.currentOrganization?.gid, async (orgId) => {
 </script>
 
 <template>
-  <div v-if="apps.length" class="px-3 pt-3 lg:px-6" data-test="getting-started-nav">
+  <div v-if="apps.length" data-test="getting-started-nav" :class="props.compact ? 'px-2 pt-2' : 'px-3 pt-3 lg:px-6'">
     <ul class="max-h-56 space-y-1 overflow-y-auto">
       <li v-for="app in apps" :key="app.app_id">
         <div
-          class="flex items-center gap-1 rounded-lg transition duration-150"
-          :class="isActive(app.app_id) ? 'bg-azure-500/20' : 'bg-azure-500/10 hover:bg-azure-500/20'"
+          class="flex items-center rounded-lg transition duration-150"
+          :class="[
+            isActive(app.app_id) ? 'bg-azure-500/20' : 'bg-azure-500/10 hover:bg-azure-500/20',
+            props.compact ? 'justify-center' : 'gap-1',
+          ]"
         >
           <router-link
-            class="flex min-h-11 min-w-0 flex-1 items-center gap-2 px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-azure-500 focus:ring-offset-2 focus:ring-offset-slate-800"
+            class="flex min-h-11 items-center focus:outline-none focus:ring-2 focus:ring-azure-500 focus:ring-offset-2 focus:ring-offset-slate-800"
+            :class="props.compact ? 'justify-center px-1 py-1.5' : 'min-w-0 flex-1 gap-2 px-2 py-1.5'"
             :to="gettingStartedPath(app.app_id)"
             :aria-current="isActive(app.app_id) ? 'page' : undefined"
             :aria-label="`${t('getting-started')} — ${appLabel(app)}`"
+            :title="`${t('getting-started')} — ${appLabel(app)}`"
             data-test="getting-started-nav-link"
           >
             <img
@@ -128,11 +138,12 @@ watch(() => organizationStore.currentOrganization?.gid, async (orgId) => {
             >
               {{ acronym(appLabel(app)) }}
             </span>
-            <span class="min-w-0 truncate text-sm font-medium text-azure-100">
+            <span class="min-w-0 truncate text-sm font-medium text-azure-100" :class="props.compact ? 'sr-only' : ''">
               {{ t('getting-started') }}
             </span>
           </router-link>
           <button
+            v-if="!props.compact"
             type="button"
             class="flex size-11 shrink-0 items-center justify-center rounded-lg text-slate-400 transition duration-150 hover:bg-slate-700/80 hover:text-white focus:outline-none focus:ring-2 focus:ring-azure-500 focus:ring-offset-2 focus:ring-offset-slate-800"
             :aria-label="`${t('getting-started-dismiss')} — ${appLabel(app)}`"

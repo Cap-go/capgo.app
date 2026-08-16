@@ -31,7 +31,10 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       const sidebar = page.locator('#sidebar')
       if (await sidebar.isVisible()) {
         await toggle.click()
-        await sidebar.waitFor({ state: 'hidden' })
+        await page.waitForFunction(() => {
+          const el = document.querySelector('#sidebar')
+          return !!el && el.getBoundingClientRect().width < 80 && el.getBoundingClientRect().width > 0
+        })
       }
     },
   },

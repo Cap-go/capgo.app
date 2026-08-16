@@ -86,12 +86,10 @@ function placeCompactMenu() {
   const rect = trigger.getBoundingClientRect()
   const menuWidth = Math.max(menu.value?.offsetWidth || 288, 288)
   const menuHeight = menu.value?.offsetHeight || 0
-  const left = Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8))
-  const gap = 4
-  let top = rect.bottom + gap
+  const left = Math.max(8, Math.min(rect.right + 8, window.innerWidth - menuWidth - 8))
+  let top = rect.top
   if (menuHeight && top + menuHeight > window.innerHeight - 8) {
-    const above = rect.top - gap - menuHeight
-    top = above >= 8 ? above : Math.max(8, window.innerHeight - menuHeight - 8)
+    top = Math.max(8, window.innerHeight - menuHeight - 8)
   }
   compactMenuStyle.value = {
     top: `${Math.round(top)}px`,
