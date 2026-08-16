@@ -89,6 +89,21 @@ export interface PermissionScope {
   channelId?: number
 }
 
+export interface ApiKeyOrgPermissions {
+  canManageApiKeys: boolean
+  canUpdateUserRoles: boolean
+}
+
+interface ApiKeyOrgPermissionRow extends Record<string, unknown> {
+  org_id: string
+  can_manage_apikeys: boolean
+  can_update_user_roles: boolean
+}
+
+type ApiKeyPermissionFailure = 'org.manage_apikeys' | 'org.update_user_roles'
+
+type DrizzleExecutor = Pick<ReturnType<typeof getDrizzleClient>, 'execute'>
+
 const TRANSIENT_NODE_ERROR_CODES = new Set([
   'ECONNREFUSED',
   'ECONNRESET',
@@ -479,6 +494,55 @@ export async function checkPermissionPg(
   }
   catch (e) {
     return handlePermissionCheckError(c, permission, scope, e, 'checkPermissionPg')
+  }
+}
+
+export async function checkApiKeyOrgPermissionsPg(
+  c: Context<MiddlewareKeyVariables>,
+  orgIds: string[],
+  drizzleClient: DrizzleExecutor,
+  userId: string,
+  apikeyString: string | null,
+  failurePermission: ApiKeyPermissionFailure,
+): Promise<Map<string, ApiKeyOrgPermissions>> {
+  if (!userId || orgIds.length === 0)
+    return new Map()
+
+  try {
+    const result = await drizzleClient.execute<ApiKeyOrgPermissionRow>(
+      sql`SELECT
+        requested_orgs.org_id::text AS org_id,
+        public.rbac_check_permission_direct(
+          'org.manage_apikeys',
+          ${userId}::uuid,
+          requested_orgs.org_id,
+          NULL::varchar,
+          NULL::bigint,
+          ${apikeyString}::text
+        ) AS can_manage_apikeys,
+        public.rbac_check_permission_direct(
+          'org.update_user_roles',
+          ${userId}::uuid,
+          requested_orgs.org_id,
+          NULL::varchar,
+          NULL::bigint,
+          ${apikeyString}::text
+        ) AS can_update_user_roles
+      FROM unnest(${orgIds}::uuid[]) WITH ORDINALITY AS requested_orgs(org_id, ordinal)
+      ORDER BY requested_orgs.ordinal`,
+    )
+
+    return new Map(result.rows.map(row => [
+      row.org_id,
+      {
+        canManageApiKeys: row.can_manage_apikeys === true,
+        canUpdateUserRoles: row.can_update_user_roles === true,
+      },
+    ] as const))
+  }
+  catch (error) {
+    handlePermissionCheckError(c, failurePermission, { orgId: orgIds[0] }, error, 'checkPermissionPg')
+    return new Map()
   }
 }
 
