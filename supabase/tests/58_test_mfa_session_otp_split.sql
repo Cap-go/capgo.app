@@ -114,6 +114,8 @@ SELECT is(
 SELECT tests.clear_authentication();
 
 -- Admin-minted log_as session may spoof MFA-enforced customers.
+-- Table is service_role-only; seed rows as service_role, then test as user.
+SET LOCAL ROLE service_role;
 INSERT INTO public.platform_impersonation_sessions (
   session_id,
   target_user_id,
@@ -126,6 +128,7 @@ VALUES (
   'c591b04e-cf29-4945-b9a0-776d0672061a'::uuid,
   now() + interval '1 hour'
 );
+RESET ROLE;
 
 SELECT tests.authenticate_as('mfa_session_split_with_mfa');
 SELECT set_config(
@@ -147,9 +150,11 @@ SELECT is(
 SELECT tests.clear_authentication();
 
 -- Expired impersonation row must not satisfy verify_mfa.
+SET LOCAL ROLE service_role;
 UPDATE public.platform_impersonation_sessions
 SET expires_at = now() - interval '1 minute'
 WHERE session_id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'::uuid;
+RESET ROLE;
 
 SELECT tests.authenticate_as('mfa_session_split_with_mfa');
 SELECT set_config(
@@ -171,11 +176,13 @@ SELECT is(
 SELECT tests.clear_authentication();
 
 -- session_id registered for a different target must not pass.
+SET LOCAL ROLE service_role;
 UPDATE public.platform_impersonation_sessions
 SET
   expires_at = now() + interval '1 hour',
   target_user_id = tests.get_supabase_uid('mfa_session_split_without_mfa')
 WHERE session_id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'::uuid;
+RESET ROLE;
 
 SELECT tests.authenticate_as('mfa_session_split_with_mfa');
 SELECT set_config(
