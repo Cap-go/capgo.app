@@ -90,7 +90,7 @@ useRealtimeCLIFeed()
     >
       <div
         class="flex flex-col h-full overflow-hidden border border-gray-200 dark:border-gray-700 bg-slate-100 dark:bg-slate-900 transition-[border-radius,box-shadow,border-color] duration-300 ease-out motion-reduce:transition-none"
-        :class="sidebarCollapsed ? 'lg:rounded-none lg:border-transparent lg:shadow-none' : 'lg:rounded-xl lg:shadow-sm'"
+        :class="sidebarCollapsed ? 'lg:rounded-none lg:border-transparent lg:dark:border-transparent lg:shadow-none' : 'lg:rounded-xl lg:shadow-sm'"
       >
         <!-- Site header -->
         <Navbar

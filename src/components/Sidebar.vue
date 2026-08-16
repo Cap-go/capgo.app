@@ -215,7 +215,7 @@ const tabs = computed<Tab[]>(() => {
 
         <!-- Organization dropdown -->
         <div class="px-3 py-4 lg:py-4 lg:px-6 shrink-0">
-          <dropdown-organization v-if="main.user" />
+          <dropdown-organization v-if="main.user && !props.sidebarCollapsed" />
         </div>
 
         <!-- Navigation -->
