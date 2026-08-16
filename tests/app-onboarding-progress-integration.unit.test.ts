@@ -125,6 +125,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).not.toContain('let onboardingMountAborted')
     expect(onboardingSource).not.toContain('let onboardingPersistenceBlocked')
     expect(onboardingSource).toContain('const onboardingProgressPersistence = createOnboardingProgressPersistence({')
+    expect(onboardingSource).toContain(`import { serializeUserOnboardingWrite } from '~/services/userOnboardingWriteQueue'`)
     expect(onboardingSource).toContain('write: writeOnboardingProgress,')
     expect(onboardingSource).toContain(`onError: error => console.error('Failed to persist onboarding progress', error),`)
 
@@ -136,15 +137,18 @@ describe('app onboarding progress analytics integration', () => {
 
     const writer = sourceBetween('async function writeOnboardingProgress(', 'function resetOnboardingForm(')
     expect(writer).toContain(`if (!userId || isHydratingOnboarding.value)\n    return 'skipped'`)
-    expect(writer).toContain(`if (current?.status === 'completed' && status !== 'completed')\n    return 'skipped'`)
+    expect(writer).toContain('return serializeUserOnboardingWrite(userId, async () => {')
+    expect(writer).toContain('main.authGeneration !== authGeneration')
+    expect(writer).toContain(`if (current?.status === 'completed' && status !== 'completed')`)
     expectSourceOrder(writer, [
       'if (error) {',
       `console.error('Failed to persist onboarding progress', error)`,
       `return 'retryable_failure'`,
     ])
     expect(writer).toContain('if (data && main.user?.id === userId) {')
-    expect(writer).toContain(`main.user = { ...data, image_url: main.user.image_url }\n    return 'persisted'`)
-    expect(writer).toContain(`if (status === 'completed' || main.user?.id !== userId)\n    return 'skipped'`)
+    expect(writer).toContain('main.user = { ...data, image_url: main.user.image_url }')
+    expect(writer).toContain(`return 'persisted'`)
+    expect(writer).toContain(`if (status === 'completed' || main.user?.id !== userId)`)
 
     const noRowRefresh = writer.slice(writer.indexOf('const { data: latest, error: latestError }'))
     const noRowConflict = writer.slice(writer.indexOf(`if (status === 'completed' || main.user?.id !== userId)`))
@@ -160,7 +164,7 @@ describe('app onboarding progress analytics integration', () => {
       'if (latest && main.user?.id === userId)',
       `return 'conflict'`,
     ])
-    expect(writer.trimEnd().endsWith(`return 'conflict'\n}`)).toBe(true)
+    expect(writer.trimEnd().endsWith(`return 'conflict'\n  })\n}`)).toBe(true)
   })
 
   it.concurrent('initializes tracking after exhausted retryable initial writes while blocking skipped and conflict outcomes', () => {

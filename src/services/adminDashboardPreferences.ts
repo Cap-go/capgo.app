@@ -73,9 +73,10 @@ function stableHash(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0')
 }
 
-export function createAdminDashboardChartPreferenceKey(routePath: string, title: string): string {
-  const routeSegment = routePath.split('/').filter(Boolean).at(-1) ?? 'dashboard'
+export function createAdminDashboardChartPreferenceKey(routePath: string, chartId: string): string {
+  const routeSegments = routePath.split('/').filter(Boolean)
+  const routeSegment = routeSegments[routeSegments.length - 1] ?? 'dashboard'
   const routeSlug = slugify(routeSegment, 'dashboard', 24)
-  const titleSlug = slugify(title, 'chart', 32)
-  return `${routeSlug}.${titleSlug}.${stableHash(`${routePath}\0${title}`)}`
+  const chartSlug = slugify(chartId, 'chart', 32)
+  return `${routeSlug}.${chartSlug}.${stableHash(`${routePath}\0${chartId}`)}`
 }

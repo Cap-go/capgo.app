@@ -10,6 +10,7 @@ import {
   getDateRangeForPreset as getDateRangeForMode,
 } from '~/services/dateRange'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
+import { serializeUserOnboardingWrite } from '~/services/userOnboardingWriteQueue'
 import { useMainStore } from '~/stores/main'
 
 export type MetricCategory = 'uploads' | 'distribution' | 'failures' | 'success_rate' | 'platform_overview' | 'org_metrics' | 'mau_trend' | 'success_rate_trend' | 'apps_trend' | 'bundles_trend' | 'deployments_trend' | 'storage_trend' | 'bandwidth_trend' | 'global_stats_trend' | 'plugin_breakdown' | 'trial_organizations' | 'trial_plan_breakdown' | 'onboarding_funnel' | 'cancelled_users' | 'email_type_breakdown' | 'customer_country_breakdown' | 'organization_insights' | 'builder_analytics' | 'builder_capacity' | 'cli_usage' | 'channel_surfing' | 'frontend_onboarding_analytics' | 'plans_analytics'
@@ -68,7 +69,7 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
   // Graph minimize preferences are hydrated once from the user profile fetched by auth.
   const adminDashboardMinimize = ref<AdminDashboardMinimize>({})
   const adminDashboardMinimizeUserId = ref<string | null>(null)
-  let adminDashboardMinimizeWriteChain = Promise.resolve()
+  const adminDashboardMinimizeAuthGeneration = ref<number | null>(null)
 
   function getRollingDateRange(now = new Date()): DateRange {
     return getDateRangeForMode(dateRangeMode.value, now, customDateRange.value)
@@ -82,12 +83,20 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
   function hydrateAdminDashboardMinimize(): boolean {
     const main = useMainStore()
     const userId = main.user?.id
-    if (!main.isAdmin || !userId)
+    if (!main.isAdmin || !userId) {
+      adminDashboardMinimize.value = {}
+      adminDashboardMinimizeUserId.value = null
+      adminDashboardMinimizeAuthGeneration.value = null
       return false
+    }
 
-    if (adminDashboardMinimizeUserId.value !== userId) {
+    if (
+      adminDashboardMinimizeUserId.value !== userId
+      || adminDashboardMinimizeAuthGeneration.value !== main.authGeneration
+    ) {
       adminDashboardMinimize.value = readAdminDashboardMinimize(main.user?.onboarding)
       adminDashboardMinimizeUserId.value = userId
+      adminDashboardMinimizeAuthGeneration.value = main.authGeneration
     }
 
     return true
@@ -108,6 +117,7 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
       return Promise.resolve()
 
     const userId = main.user.id
+    const authGeneration = main.authGeneration
     const preferences = {
       ...adminDashboardMinimize.value,
       [key]: minimized,
@@ -118,29 +128,35 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
       onboarding: withAdminDashboardMinimize(main.user.onboarding, preferences),
     }
 
-    adminDashboardMinimizeWriteChain = adminDashboardMinimizeWriteChain
-      .then(async () => {
-        const latestMain = useMainStore()
-        if (!latestMain.isAdmin || latestMain.user?.id !== userId)
-          return
+    return serializeUserOnboardingWrite(userId, async () => {
+      const latestMain = useMainStore()
+      if (
+        !latestMain.isAdmin
+        || latestMain.user?.id !== userId
+        || latestMain.authGeneration !== authGeneration
+      ) {
+        return
+      }
 
-        const onboarding = withAdminDashboardMinimize(
-          latestMain.user.onboarding,
-          preferences,
-        )
-        const { error } = await useSupabase()
-          .from('users')
-          .update({ onboarding })
-          .eq('id', userId)
+      const onboarding = withAdminDashboardMinimize(
+        latestMain.user.onboarding,
+        adminDashboardMinimize.value,
+      )
+      latestMain.user = {
+        ...latestMain.user,
+        onboarding,
+      }
+      const { error } = await useSupabase()
+        .from('users')
+        .update({ onboarding })
+        .eq('id', userId)
 
-        if (error)
-          throw error
-      })
+      if (error)
+        throw error
+    })
       .catch((error) => {
         console.error('Failed to persist admin dashboard graph preference', error)
       })
-
-    return adminDashboardMinimizeWriteChain
   }
 
   // Actions
@@ -275,7 +291,7 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
     loadingCategory.value = null
     adminDashboardMinimize.value = {}
     adminDashboardMinimizeUserId.value = null
-    adminDashboardMinimizeWriteChain = Promise.resolve()
+    adminDashboardMinimizeAuthGeneration.value = null
   }
 
   return {

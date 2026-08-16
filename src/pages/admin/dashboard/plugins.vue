@@ -260,6 +260,7 @@ displayStore.defaultBack = '/dashboard'
           </div>
 
           <ChartCard
+            chart-id="version-breakdown-trend"
             title="Version Breakdown Over Time"
             :is-loading="isLoadingBreakdown"
             :has-data="hasVersionTrendData"
@@ -284,6 +285,7 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
+            chart-id="major-version-breakdown-trend"
             title="Major Version Breakdown Over Time"
             :is-loading="isLoadingBreakdown"
             :has-data="hasMajorTrendData"
@@ -308,6 +310,7 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
+            chart-id="version-ladder"
             title="Version Ladder"
             :is-loading="isLoadingBreakdown"
             :has-data="hasVersionLadderData"
@@ -380,6 +383,7 @@ displayStore.defaultBack = '/dashboard'
 
           <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
             <ChartCard
+              chart-id="plugin-versions"
               title="Plugin Versions"
               :total="devicesTotal"
               unit="devices"
@@ -442,6 +446,7 @@ displayStore.defaultBack = '/dashboard'
             </ChartCard>
 
             <ChartCard
+              chart-id="major-versions"
               title="Major Versions"
               :total="devicesTotal"
               unit="devices"

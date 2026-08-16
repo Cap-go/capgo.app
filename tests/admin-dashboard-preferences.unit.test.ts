@@ -66,25 +66,25 @@ describe('admin dashboard graph preferences', () => {
     expect(preserveAdminDashboardMinimize(next, current, false)).toEqual(next)
   })
 
-  it('creates compact deterministic keys that separate routes and titles', () => {
+  it('creates compact deterministic keys from stable IDs and separates routes', () => {
     const key = createAdminDashboardChartPreferenceKey(
       '/admin/dashboard/frontend-onboarding',
-      'Frontend onboarding funnel (v3)',
+      'funnel-v3',
     )
 
-    expect(key).toMatch(/^frontend-onboarding\.frontend-onboarding-funnel-v3\.[a-f0-9]{8}$/)
+    expect(key).toMatch(/^frontend-onboarding\.funnel-v3\.[a-f0-9]{8}$/)
     expect(key.length).toBeLessThanOrEqual(72)
     expect(createAdminDashboardChartPreferenceKey(
       '/admin/dashboard/frontend-onboarding',
-      'Frontend onboarding funnel (v3)',
+      'funnel-v3',
     )).toBe(key)
     expect(createAdminDashboardChartPreferenceKey(
       '/admin/dashboard/users',
-      'Frontend onboarding funnel (v3)',
+      'funnel-v3',
     )).not.toBe(key)
     expect(createAdminDashboardChartPreferenceKey(
       '/admin/dashboard/frontend-onboarding',
-      'Daily onboarding attempts',
+      'daily-attempts',
     )).not.toBe(key)
   })
 })

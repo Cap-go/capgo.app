@@ -47,6 +47,7 @@ import { pushEvent } from '~/services/posthog'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
+import { serializeUserOnboardingWrite } from '~/services/userOnboardingWriteQueue'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
@@ -440,54 +441,66 @@ async function writeOnboardingProgress(status: UserOnboardingStatus) {
   if (!userId || isHydratingOnboarding.value)
     return 'skipped'
 
-  const current = parseUserOnboardingProgress(main.user?.onboarding)
-  if (current?.status === 'completed' && status !== 'completed')
-    return 'skipped'
+  const authGeneration = main.authGeneration
+  return serializeUserOnboardingWrite(userId, async () => {
+    if (
+      onboardingFlowDisposed
+      || onboardingUserId.value !== userId
+      || main.authGeneration !== authGeneration
+      || isHydratingOnboarding.value
+    ) {
+      return 'skipped'
+    }
 
-  const progress = snapshotOnboardingProgress(status)
-  const onboarding = preserveAdminDashboardMinimize(
-    progress as unknown as Json,
-    main.user?.onboarding,
-    main.isAdmin,
-  )
-  let query = supabase
-    .from('users')
-    .update({ onboarding })
-    .eq('id', userId)
-  if (status !== 'completed') {
-    query = query.or('onboarding->>status.is.null,onboarding->>status.neq.completed')
-    const lastUpdated = current?.updated_at
-    query = lastUpdated
-      ? query.or(`onboarding->>updated_at.is.null,onboarding->>updated_at.eq."${lastUpdated}"`)
-      : query.or('onboarding->>updated_at.is.null')
-  }
-  const { data, error } = await query
-    .select()
-    .maybeSingle()
+    const current = parseUserOnboardingProgress(main.user?.onboarding)
+    if (current?.status === 'completed' && status !== 'completed')
+      return 'skipped'
 
-  if (error) {
-    console.error('Failed to persist onboarding progress', error)
-    return 'retryable_failure'
-  }
+    const progress = snapshotOnboardingProgress(status)
+    const onboarding = preserveAdminDashboardMinimize(
+      progress as unknown as Json,
+      main.user?.onboarding,
+      main.isAdmin,
+    )
+    let query = supabase
+      .from('users')
+      .update({ onboarding })
+      .eq('id', userId)
+    if (status !== 'completed') {
+      query = query.or('onboarding->>status.is.null,onboarding->>status.neq.completed')
+      const lastUpdated = current?.updated_at
+      query = lastUpdated
+        ? query.or(`onboarding->>updated_at.is.null,onboarding->>updated_at.eq."${lastUpdated}"`)
+        : query.or('onboarding->>updated_at.is.null')
+    }
+    const { data, error } = await query
+      .select()
+      .maybeSingle()
 
-  if (data && main.user?.id === userId) {
-    main.user = { ...data, image_url: main.user.image_url }
-    return 'persisted'
-  }
+    if (error) {
+      console.error('Failed to persist onboarding progress', error)
+      return 'retryable_failure'
+    }
 
-  if (status === 'completed' || main.user?.id !== userId)
-    return 'skipped'
+    if (data && main.user?.id === userId) {
+      main.user = { ...data, image_url: main.user.image_url }
+      return 'persisted'
+    }
 
-  const { data: latest, error: latestError } = await supabase
-    .from('users')
-    .select()
-    .eq('id', userId)
-    .maybeSingle()
-  if (latestError)
-    console.error('Failed to refresh onboarding progress snapshot', latestError)
-  if (latest && main.user?.id === userId)
-    main.user = { ...latest, image_url: main.user.image_url }
-  return 'conflict'
+    if (status === 'completed' || main.user?.id !== userId)
+      return 'skipped'
+
+    const { data: latest, error: latestError } = await supabase
+      .from('users')
+      .select()
+      .eq('id', userId)
+      .maybeSingle()
+    if (latestError)
+      console.error('Failed to refresh onboarding progress snapshot', latestError)
+    if (latest && main.user?.id === userId)
+      main.user = { ...latest, image_url: main.user.image_url }
+    return 'conflict'
+  })
 }
 
 function resetOnboardingForm() {

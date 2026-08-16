@@ -131,6 +131,7 @@ displayStore.defaultBack = '/dashboard'
           </div>
 
           <ChartCard
+            chart-id="traffic"
             :title="t('plans-analytics-traffic')"
             :is-loading="isLoadingStats"
             :has-data="hasTraffic"
@@ -172,6 +173,7 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
+            chart-id="plan-page-visitors"
             :title="t('plans-analytics-who-opened')"
             :is-loading="isLoadingStats"
             :has-data="hasVisitors"
@@ -213,6 +215,7 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
+            chart-id="checkout-intent"
             :title="t('plans-analytics-checkout-intent')"
             :is-loading="isLoadingStats"
             :has-data="hasCheckoutIntent"
@@ -254,6 +257,7 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
+            chart-id="checkout-visitors"
             :title="t('plans-analytics-who-opened-checkout')"
             :is-loading="isLoadingStats"
             :has-data="hasCheckoutVisitors"
@@ -294,7 +298,7 @@ displayStore.defaultBack = '/dashboard'
             </div>
           </ChartCard>
 
-          <ChartCard :title="t('plans-analytics-checkout-completion')" :has-data="true">
+          <ChartCard chart-id="checkout-completion" :title="t('plans-analytics-checkout-completion')" :has-data="true">
             <template #header>
               <h2 class="text-xl font-semibold text-slate-900 dark:text-white sm:text-2xl">
                 {{ t('plans-analytics-checkout-completion') }}

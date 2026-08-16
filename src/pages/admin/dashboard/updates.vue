@@ -246,6 +246,7 @@ displayStore.defaultBack = '/dashboard'
           <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <!-- Updates Trend -->
             <ChartCard
+              chart-id="updates-trend"
               :title="t('updates-trend')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="updatesTrendSeries.length > 0"
@@ -258,6 +259,7 @@ displayStore.defaultBack = '/dashboard'
 
             <!-- External/Open Source Updates -->
             <ChartCard
+              chart-id="open-source-updates"
               :title="t('open-source-updates')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="externalUpdatesSeries.length > 0"
@@ -273,6 +275,7 @@ displayStore.defaultBack = '/dashboard'
           <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <!-- Success Rate Trend -->
             <ChartCard
+              chart-id="success-rate-trend"
               :title="t('success-rate-trend')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="successRateTrendSeries.length > 0"
@@ -285,6 +288,7 @@ displayStore.defaultBack = '/dashboard'
 
             <!-- Devices Trend -->
             <ChartCard
+              chart-id="devices-trend"
               :title="t('devices-trend')"
               :is-loading="isLoadingGlobalStatsTrend"
               :has-data="devicesTrendSeries.length > 0"

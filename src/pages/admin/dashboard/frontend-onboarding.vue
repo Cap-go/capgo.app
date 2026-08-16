@@ -444,6 +444,7 @@ displayStore.defaultBack = '/dashboard'
           </div>
 
           <ChartCard
+            chart-id="daily-attempts"
             :title="t('frontend-onboarding-daily-attempts')"
             :is-loading="isLoadingStats"
             :has-data="hasDailyAttempts"
@@ -452,6 +453,7 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
+            chart-id="funnel-v3"
             :title="t('frontend-onboarding-funnel-v3')"
             :is-loading="isLoadingStats"
           >
@@ -466,7 +468,7 @@ displayStore.defaultBack = '/dashboard'
               </div>
             </template>
             <div class="mt-6 h-72 sm:h-80">
-              <AdminFunnelChart :stages="v3FunnelStages" :is-loading="isLoadingStats" />
+              <AdminFunnelChart :stages="v3FunnelStages" />
             </div>
             <div class="grid grid-cols-2 gap-4 pt-5 mt-5 border-t border-slate-200 md:grid-cols-4 dark:border-slate-700">
               <div v-for="summary in v3FunnelSummaries" :key="summary.key" class="text-center">
@@ -481,6 +483,7 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
+            chart-id="daily-intent-to-details"
             :title="t('frontend-onboarding-daily-intent-to-details')"
             :is-loading="isLoadingStats"
             :has-data="hasConversionData(intentToDetailsDaily)"
@@ -495,6 +498,7 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
+            chart-id="daily-details-to-organization"
             :title="t('frontend-onboarding-daily-details-to-organization')"
             :is-loading="isLoadingStats"
             :has-data="hasConversionData(detailsToOrganizationDaily)"
@@ -509,6 +513,7 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
+            chart-id="daily-organization-to-setup"
             :title="t('frontend-onboarding-daily-organization-to-setup')"
             :is-loading="isLoadingStats"
             :has-data="hasConversionData(organizationToSetupDaily)"
@@ -523,6 +528,7 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
+            chart-id="journey-graph-v3"
             :title="t('frontend-onboarding-graph-v3')"
             :is-loading="isLoadingStats"
           >
@@ -542,6 +548,7 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
+            chart-id="setup-cli-outcomes-v2"
             :title="t('frontend-onboarding-setup-cli-outcomes-v2')"
             :total="setupCliOutcomes.total_users"
             :unit="t('frontend-onboarding-people')"
@@ -571,6 +578,7 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
+            chart-id="daily-setup-cli-outcomes-v2"
             :title="t('frontend-onboarding-daily-setup-cli-outcomes-v2')"
             :is-loading="isLoadingStats"
             :has-data="hasDailySetupCliOutcomeData"
@@ -593,6 +601,7 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
+            chart-id="funnel-v1-legacy"
             :title="t('frontend-onboarding-funnel-v1-legacy')"
             :is-loading="isLoadingStats"
           >
@@ -607,7 +616,7 @@ displayStore.defaultBack = '/dashboard'
               </div>
             </template>
             <div class="mt-6 h-72 sm:h-80">
-              <AdminFunnelChart :stages="v1FunnelStages" :is-loading="isLoadingStats" />
+              <AdminFunnelChart :stages="v1FunnelStages" />
             </div>
             <div class="grid grid-cols-2 gap-4 pt-5 mt-5 border-t border-slate-200 md:grid-cols-4 dark:border-slate-700">
               <div v-for="summary in v1FunnelSummaries" :key="summary.key" class="text-center">

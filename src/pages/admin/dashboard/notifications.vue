@@ -195,6 +195,7 @@ onMounted(async () => {
 
         <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <ChartCard
+            chart-id="notification-adoption"
             :title="t('admin-notifications-adoption-chart')"
             :is-loading="isLoadingGlobalStatsTrend"
             :has-data="appsTrendSeries.length > 0"
@@ -206,6 +207,7 @@ onMounted(async () => {
           </ChartCard>
 
           <ChartCard
+            chart-id="notification-delivery"
             :title="t('admin-notifications-delivery-chart')"
             :is-loading="isLoadingGlobalStatsTrend"
             :has-data="dailyDeliverySeries.length > 0"
@@ -217,6 +219,7 @@ onMounted(async () => {
           </ChartCard>
 
           <ChartCard
+            chart-id="notification-delivery-last-month"
             :title="t('admin-notifications-last-month-chart')"
             :is-loading="isLoadingGlobalStatsTrend"
             :has-data="lastMonthSeries.length > 0"
@@ -228,6 +231,7 @@ onMounted(async () => {
           </ChartCard>
 
           <ChartCard
+            chart-id="notification-campaigns"
             :title="t('admin-notifications-campaigns-chart')"
             :is-loading="isLoadingGlobalStatsTrend"
             :has-data="campaignsDaySeries.length > 0"

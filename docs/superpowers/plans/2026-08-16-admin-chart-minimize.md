@@ -28,7 +28,7 @@
 - [x] Add route-scoped, component-local `isCollapsed` state.
 - [x] Add an icon-only chevron button with translated `aria-label`, tooltip text, `aria-expanded`, focus styling, and a rotation transition.
 - [x] Switch the card to a compact title-only row while collapsed and unmount the graph content.
-- [x] Add the English `collapse-chart` and `expand-chart` translation keys.
+- [x] Add the English `collapse-chart` and `expand-chart` translation keys, run `bun run i18n:contexts`, and commit the regenerated context catalog.
 - [x] Re-run the focused test and confirm it passes.
 
 ### Task 3: Put custom admin graphs into the shared shell

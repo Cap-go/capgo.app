@@ -492,6 +492,7 @@ onMounted(async () => {
 
           <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <ChartCard
+              chart-id="credits-by-day"
               :title="t('admin-credits-analytics-chart-day')"
               :is-loading="isLoadingCreditAnalytics"
               :has-data="dailyCreditsSeries.length > 0"
@@ -503,6 +504,7 @@ onMounted(async () => {
             </ChartCard>
 
             <ChartCard
+              chart-id="credits-by-month"
               :title="t('admin-credits-analytics-chart-month')"
               :is-loading="isLoadingCreditAnalytics"
               :has-data="monthlyCreditsSeries.length > 0"
@@ -516,6 +518,7 @@ onMounted(async () => {
           </div>
 
           <ChartCard
+            chart-id="revenue-with-credits-by-month"
             :title="t('admin-credits-analytics-chart-revenue-month')"
             :is-loading="isLoadingCreditAnalytics"
             :has-data="monthlyRevenueWithCreditsSeries.length > 0"
