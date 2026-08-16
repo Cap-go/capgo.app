@@ -322,10 +322,7 @@ describe('org.read_billing default + redaction', () => {
       JOIN public.groups g ON g.id = gm.group_id
       WHERE gm.user_id = $1::uuid
         AND g.org_id = $2::uuid
-        AND g.name IN (
-          '__capgo.sys.billing_read_backfill',
-          '__capgo.sys.billing_read_backfill.' || $2::text
-        )
+        AND g.name LIKE '\_\_capgo.sys.billing\_read\_backfill%' ESCAPE '\'
     `, [alreadyHasBillingId, orgId])
     expect(groupMembership.rows[0].cnt).toBe(0)
   })

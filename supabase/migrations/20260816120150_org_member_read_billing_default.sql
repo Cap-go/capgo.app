@@ -139,7 +139,7 @@ WHERE uwb.user_id IS NULL;
 CREATE INDEX ON _tmp_needs_org_read_billing (user_id, org_id);
 
 -- 3a) One system group per org that still has users needing the grant.
--- Reserved name; never promote a pre-existing user group via ON CONFLICT UPDATE.
+-- Reserved names; never promote a pre-existing user group via ON CONFLICT UPDATE.
 INSERT INTO public.groups (org_id, name, description, is_system, created_by)
 SELECT DISTINCT
   nb.org_id,
@@ -151,11 +151,11 @@ FROM _tmp_needs_org_read_billing nb
 JOIN public.orgs o ON o.id = nb.org_id
 ON CONFLICT (org_id, name) DO NOTHING;
 
--- If a non-system group already owns the reserved name, use an org-id suffix.
+-- If the reserved name is taken by a non-system group, allocate a unique system name.
 INSERT INTO public.groups (org_id, name, description, is_system, created_by)
 SELECT DISTINCT
   nb.org_id,
-  '__capgo.sys.billing_read_backfill.' || nb.org_id::text,
+  '__capgo.sys.billing_read_backfill.' || gen_random_uuid()::text,
   'System group: preserves org.read_billing for users who already saw billing before enforcement',
   true,
   o.created_by
@@ -166,12 +166,8 @@ WHERE NOT EXISTS (
   FROM public.groups g
   WHERE g.org_id = nb.org_id
     AND g.is_system = true
-    AND g.name IN (
-      '__capgo.sys.billing_read_backfill',
-      '__capgo.sys.billing_read_backfill.' || nb.org_id::text
-    )
-)
-ON CONFLICT (org_id, name) DO NOTHING;
+    AND g.name LIKE '\_\_capgo.sys.billing\_read\_backfill%' ESCAPE '\'
+);
 
 -- 3b) Bind org_billing_reader to each backfill group (org-scoped).
 INSERT INTO public.role_bindings (
@@ -196,10 +192,7 @@ SELECT
 FROM public.groups g
 JOIN public.roles ON roles.name = 'org_billing_reader'
 WHERE g.is_system = true
-  AND (
-    g.name = '__capgo.sys.billing_read_backfill'
-    OR g.name = '__capgo.sys.billing_read_backfill.' || g.org_id::text
-  )
+  AND g.name LIKE '\_\_capgo.sys.billing\_read\_backfill%' ESCAPE '\'
   AND EXISTS (
     SELECT 1 FROM _tmp_needs_org_read_billing nb WHERE nb.org_id = g.org_id
   )
@@ -220,10 +213,7 @@ FROM _tmp_needs_org_read_billing nb
 JOIN public.groups g
   ON g.org_id = nb.org_id
  AND g.is_system = true
- AND (
-   g.name = '__capgo.sys.billing_read_backfill'
-   OR g.name = '__capgo.sys.billing_read_backfill.' || nb.org_id::text
- )
+ AND g.name LIKE '\_\_capgo.sys.billing\_read\_backfill%' ESCAPE '\'
 ON CONFLICT DO NOTHING;
 
 DROP TABLE _tmp_needs_org_read_billing;
