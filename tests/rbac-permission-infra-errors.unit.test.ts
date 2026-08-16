@@ -1,5 +1,5 @@
-import { HTTPException } from 'hono/http-exception'
 import { PgDialect } from 'drizzle-orm/pg-core'
+import { HTTPException } from 'hono/http-exception'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const executeMock = vi.fn()
@@ -200,7 +200,8 @@ describe('rbac permission infra errors', () => {
     const uppercaseOrgId = '046A36AC-E03C-4590-9257-BD6C9DBA9EE8'
     executeMock.mockImplementationOnce((query) => {
       const renderedQuery = new PgDialect().sqlToQuery(query)
-      expect(renderedQuery.sql).toContain('::text[]) WITH ORDINALITY')
+      expect(renderedQuery.sql).toContain('FROM unnest(ARRAY[$5::text]::text[]) WITH ORDINALITY')
+      expect(renderedQuery.params.at(-1)).toBe(uppercaseOrgId)
 
       return {
         rows: [{ org_id: uppercaseOrgId, can_manage_apikeys: true, can_update_user_roles: false }],

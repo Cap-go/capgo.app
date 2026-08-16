@@ -52,10 +52,10 @@ computation or a missing index.
 
 ### 1. One set-based permission query per phase
 
-Send all unique organization IDs to PostgreSQL as a text array so each caller-provided
-string remains the result-map key. Use PostgreSQL's built-in `unnest()` function to
-turn the array into rows and evaluate both permission functions as columns for every
-valid UUID row.
+Bind every unique organization ID as an individual text value and construct the
+PostgreSQL text array in the query so each caller-provided string remains the
+result-map key. Use PostgreSQL's built-in `unnest()` function to turn the array into
+rows and evaluate both permission functions as columns for every valid UUID row.
 
 This produces one database statement before the transaction and one after the locks
 are acquired. PostgreSQL still evaluates both permissions independently for every
@@ -105,15 +105,16 @@ SELECT
   requested_orgs.org_id,
   CASE WHEN pg_input_is_valid(requested_orgs.org_id, 'uuid') THEN
     public.rbac_check_permission_direct(
-      'org.manage_apikeys', $2::uuid, requested_orgs.org_id::uuid, NULL, NULL, $3
+      'org.manage_apikeys', $1::uuid, requested_orgs.org_id::uuid, NULL, NULL, $2
     )
   ELSE false END AS can_manage_apikeys,
   CASE WHEN pg_input_is_valid(requested_orgs.org_id, 'uuid') THEN
     public.rbac_check_permission_direct(
-      'org.update_user_roles', $2::uuid, requested_orgs.org_id::uuid, NULL, NULL, $3
+      'org.update_user_roles', $3::uuid, requested_orgs.org_id::uuid, NULL, NULL, $4
     )
   ELSE false END AS can_update_user_roles
-FROM unnest($1::text[]) WITH ORDINALITY AS requested_orgs(org_id, ordinal)
+FROM unnest(ARRAY[$5::text, $6::text, ...]::text[])
+  WITH ORDINALITY AS requested_orgs(org_id, ordinal)
 ORDER BY ordinal;
 ```
 
@@ -122,9 +123,11 @@ table, or persistent database object. `WITH ORDINALITY` retains input order, alt
 the application will make authorization decisions by iterating the original
 deduplicated organization list rather than trusting row order. Keeping `org_id` as
 text also preserves uppercase or otherwise non-canonical valid UUID strings as exact
-map keys. Each permission expression uses `pg_input_is_valid` before casting only that
-row for evaluation, so a malformed organization ID produces two `false` permissions
-without aborting or dropping later rows.
+map keys. Binding the values separately avoids driver-specific JavaScript-array
+serialization, including the single-element case. Each permission expression uses
+`pg_input_is_valid` before casting only that row for evaluation, so a malformed
+organization ID produces two `false` permissions without aborting or dropping later
+rows.
 
 The helper must retain current permission-check failure semantics:
 

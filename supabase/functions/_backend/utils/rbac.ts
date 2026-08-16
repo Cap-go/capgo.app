@@ -509,6 +509,7 @@ export async function checkApiKeyOrgPermissionsPg(
     return new Map()
 
   try {
+    const orgIdValues = sql.join(orgIds.map(orgId => sql`${orgId}::text`), sql`, `)
     const result = await drizzleClient.execute<ApiKeyOrgPermissionRow>(
       sql`SELECT
         requested_orgs.org_id,
@@ -532,7 +533,7 @@ export async function checkApiKeyOrgPermissionsPg(
             ${apikeyString}::text
           )
         ELSE false END AS can_update_user_roles
-      FROM unnest(${orgIds}::text[]) WITH ORDINALITY AS requested_orgs(org_id, ordinal)
+      FROM unnest(ARRAY[${orgIdValues}]::text[]) WITH ORDINALITY AS requested_orgs(org_id, ordinal)
       ORDER BY requested_orgs.ordinal`,
     )
 
