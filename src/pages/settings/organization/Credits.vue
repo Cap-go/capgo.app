@@ -504,7 +504,9 @@ async function handleCreditCheckoutReturn() {
     await organizationStore.fetchOrganizations()
     if (orgId)
       organizationStore.setCurrentOrganization(orgId)
-    await Promise.allSettled([loadTransactions()])
+    // Do not load the ledger here: callers with org.update_billing but without
+    // org.read_billing must still finalize checkout, then the read gate loads
+    // transactions only when allowed.
   }
   catch (error) {
     console.error('Failed to finalize credit top-up', error)
