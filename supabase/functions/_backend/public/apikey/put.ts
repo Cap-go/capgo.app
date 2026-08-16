@@ -353,6 +353,9 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
   // Validate expiration against org policies (only if expiration or scopes are changing)
   const currentBindingOrgIds = await getApiKeyBindingOrgIds(c, existingApikey.rbac_id)
   await ensureApiKeyCanManageTargetOrgIds(c, auth, authApikey, currentBindingOrgIds, 'cannot_update_apikey', { requestId })
+  if (regenerate) {
+    await assertApiKeyManagerCanRotateTarget(c, auth, existingApikey.rbac_id)
+  }
 
   if (expires_at !== undefined || hasBindingUpdates) {
     const orgsToValidate = hasBindingUpdates
@@ -419,8 +422,6 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
   }
 
   if (regenerate) {
-    await assertApiKeyManagerCanRotateTarget(c, auth, existingApikey.rbac_id)
-
     if (isHashedKey) {
       const { data: regeneratedApikey, error: regenerateError } = await supabaseAdmin(c).rpc('regenerate_hashed_apikey_for_user', {
         p_apikey_id: existingApikey.id,

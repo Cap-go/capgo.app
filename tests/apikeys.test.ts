@@ -750,10 +750,15 @@ describe('[POST] /apikey operations', () => {
     }
     finally {
       for (const keyId of createdKeyIds.reverse()) {
-        await fetch(`${BASE_URL}/apikey/${keyId}`, {
-          method: 'DELETE',
-          headers: dedicatedAuthHeaders,
-        })
+        try {
+          await fetch(`${BASE_URL}/apikey/${keyId}`, {
+            method: 'DELETE',
+            headers: dedicatedAuthHeaders,
+          })
+        }
+        catch {
+          // Best-effort cleanup: keep deleting remaining keys.
+        }
       }
     }
   })
