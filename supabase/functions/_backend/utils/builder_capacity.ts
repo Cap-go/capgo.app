@@ -106,8 +106,7 @@ export function maxConcurrentUsed(
     const stop = Math.min(end, rangeEndMs)
     if (stop <= start)
       continue
-    events.push({ t: start, d: 1 })
-    events.push({ t: stop, d: -1 })
+    events.push({ t: start, d: 1 }, { t: stop, d: -1 })
   }
   events.sort((a, b) => a.t - b.t || a.d - b.d)
 

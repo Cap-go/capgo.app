@@ -29,7 +29,7 @@ export function buildDailyReportedCountsByName(
   usage.forEach((entry) => {
     const date = entry.date
     const version = entry.version_name
-    if (!version || !counts[date] || counts[date][version] === undefined)
+    if (!version || counts[date]?.[version] === undefined)
       return
     counts[date][version] += Math.max(0, Math.round(entry.get ?? 0))
   })

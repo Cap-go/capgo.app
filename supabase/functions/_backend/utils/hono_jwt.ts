@@ -59,7 +59,7 @@ export const middlewareAuth = honoFactory.createMiddleware(async (c, next) => {
 
   // Decode JWT claims via Supabase Auth `getClaims()`.
   const claims = await getClaimsFromJWT(c, authorization)
-  if (!claims || !claims.sub) {
+  if (!claims?.sub) {
     cloudlog({ requestId: c.get('requestId'), message: 'Invalid JWT claims' })
     throw simpleError('invalid_jwt', 'Invalid JWT')
   }

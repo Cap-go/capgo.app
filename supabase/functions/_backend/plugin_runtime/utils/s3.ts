@@ -303,7 +303,7 @@ async function getSignedUrl(c: Context, fileId: string, expirySeconds: number) {
 }
 
 function parseObjectSizeFromHeaders(contentRange: string | null, contentLength: string | null): number {
-  if (contentRange && contentRange.includes('/')) {
+  if (contentRange?.includes('/')) {
     const total = Number.parseInt(contentRange.split('/').at(1) ?? '0', 10)
     if (Number.isFinite(total) && total > 0)
       return total

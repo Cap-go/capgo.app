@@ -249,8 +249,7 @@ function applyEdgeRateLimitCacheHeaders(headers, responseBody, cacheTtl) {
 
   const nowSec = Math.floor(Date.now() / 1000)
   const retryAfter = getRetryAfterSeconds(headers, responseBody)
-  const fromBodyReset = responseBody && responseBody.moreInfo
-    && typeof responseBody.moreInfo.rateLimitResetAt === 'number'
+  const fromBodyReset = typeof responseBody?.moreInfo?.rateLimitResetAt === 'number'
     ? Math.ceil(responseBody.moreInfo.rateLimitResetAt / 1000)
     : null
 
@@ -302,16 +301,16 @@ async function setOnPremCache(hostname, appId, endpoint, method, responseBody, s
 
 function isOnPremResponse(status, responseBody) {
   // Check for 429 with on_premise_app error (from /updates)
-  if (status === 429 && responseBody && responseBody.error === 'on_premise_app')
+  if (status === 429 && responseBody?.error === 'on_premise_app')
     return true
   // Check for isOnprem: true (from /stats)
-  if (responseBody && responseBody.isOnprem === true)
+  if (responseBody?.isOnprem === true)
     return true
   return false
 }
 
 function isPlanUpgradeResponse(status, responseBody) {
-  return status === 429 && responseBody && responseBody.error === 'need_plan_upgrade'
+  return status === 429 && responseBody?.error === 'need_plan_upgrade'
 }
 
 async function buildOnPremResponse(hostname, appId, endpoint, method, responseBody, status, responseHeaders) {

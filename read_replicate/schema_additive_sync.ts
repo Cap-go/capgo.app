@@ -918,7 +918,7 @@ function typeMatches(
   expected: SchemaType,
   actual: SchemaType | undefined,
 ): boolean {
-  if (!actual || actual.kind !== expected.kind)
+  if (actual?.kind !== expected.kind)
     return false
 
   return JSON.stringify(actual.definition) === JSON.stringify(expected.definition)
@@ -1185,8 +1185,7 @@ function buildAttachConstraintStatement(
     (constraint.type !== 'p' && constraint.type !== 'u')
     || !isSafeReplicaTable(constraint.table, actualTables)
     || !isSafeQuotedIdentifier(constraint.name)
-    || !expectedIndex
-    || expectedIndex.name !== constraint.name
+    || expectedIndex?.name !== constraint.name
     || expectedIndex.table !== constraint.table
     || expectedIndex.constraintOwned !== true
   ) {

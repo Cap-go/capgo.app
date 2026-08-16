@@ -31,7 +31,11 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       const sidebar = page.locator('#sidebar')
       if (await sidebar.isVisible()) {
         await toggle.click()
-        await sidebar.waitFor({ state: 'hidden' })
+        // Base may fully hide the sidebar (width 0). Head keeps a ~48px icon rail.
+        await page.waitForFunction(() => {
+          const el = document.querySelector('#sidebar')
+          return !!el && el.getBoundingClientRect().width < 56
+        })
       }
     },
   },

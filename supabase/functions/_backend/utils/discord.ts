@@ -25,7 +25,7 @@ function sanitizeSensitiveFromString(str: string): string {
   // Completely remove password fields (including the key)
   for (const field of REMOVED_FIELDS) {
     // Remove "password":"value", or "password": "value" (with optional trailing comma)
-    const jsonRegexWithComma = new RegExp(`"${field}"\\s*:\\s*"[^"]*"\\s*,?\\s*`, 'gi')
+    const jsonRegexWithComma = new RegExp(String.raw`"${field}"\s*:\s*"[^"]*"\s*,?\s*`, 'gi')
     result = result.replace(jsonRegexWithComma, '')
     // Clean up any resulting double commas or leading/trailing commas in objects
     result = result.replace(/,\s*,/g, ',')
@@ -35,7 +35,7 @@ function sanitizeSensitiveFromString(str: string): string {
 
   // Partially redact other sensitive fields (show first 4 and last 4 chars)
   for (const field of PARTIALLY_REDACTED_FIELDS) {
-    const jsonRegex = new RegExp(`("${field}"\\s*:\\s*)"([^"]*)"`, 'gi')
+    const jsonRegex = new RegExp(String.raw`("${field}"\s*:\s*)"([^"]*)"`, 'gi')
     result = result.replace(jsonRegex, (_match, prefix, value) => {
       return `${prefix}"${partialRedact(value)}"`
     })

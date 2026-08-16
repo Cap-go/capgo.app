@@ -2220,7 +2220,7 @@ async function readCompletedGlobalStatsRepairShardStale(c: Context, dateId: stri
     return false
 
   const repairRow = (await readGlobalStatsRepairRows(c, [dateId])).get(dateId)
-  if (!repairRow || !repairRow.completedShards.has(shard))
+  if (!repairRow?.completedShards.has(shard))
     return false
 
   const buildStats = shard === 'builds'

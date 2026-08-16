@@ -11,6 +11,12 @@ import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { allowOnboardingDashboardExploration } from '~/utils/onboardingRedirect'
 
+const props = withDefaults(defineProps<{
+  compact?: boolean
+}>(), {
+  compact: false,
+})
+
 const { t } = useI18n()
 const router = useRouter()
 const route = useRoute()
@@ -96,49 +102,68 @@ async function resetSpoofedUser() {
 <template>
   <div>
     <div class="relative text-gray-300">
-      <div class="flex flex-col p-4 space-y-2">
-        <div class="flex items-center">
-          <img v-if="main.user?.image_url" class="mr-3 w-10 h-10 d-mask d-mask-squircle" :src="main.user?.image_url" alt="User" width="32" height="32">
-          <div v-else class="p-2 mr-3 bg-gray-700 d-mask d-mask-squircle">
-            <span class="font-medium">
-              {{ acronym }}
+      <div class="flex flex-col space-y-2" :class="props.compact ? 'p-1' : 'p-4'">
+        <div class="flex items-center" :class="props.compact ? 'justify-center' : ''">
+          <router-link
+            v-if="props.compact"
+            to="/settings/account"
+            class="d-btn d-btn-ghost d-btn-square h-8 min-h-8 w-8 p-0 rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
+            :aria-label="t('settings')"
+            :title="t('settings')"
+            @click="allowPendingOnboardingDashboardExploration"
+          >
+            <img v-if="main.user?.image_url" class="w-8 h-8 d-mask d-mask-squircle" :src="main.user?.image_url" alt="User" width="32" height="32">
+            <div v-else class="flex items-center justify-center w-8 h-8 bg-gray-700 d-mask d-mask-squircle">
+              <span class="font-medium">
+                {{ acronym }}
+              </span>
+            </div>
+          </router-link>
+          <template v-else>
+            <img v-if="main.user?.image_url" class="mr-3 w-10 h-10 d-mask d-mask-squircle" :src="main.user?.image_url" alt="User" width="32" height="32">
+            <div v-else class="p-2 mr-3 bg-gray-700 d-mask d-mask-squircle">
+              <span class="font-medium">
+                {{ acronym }}
+              </span>
+            </div>
+            <div class="min-w-0 flex-1">
+              <p class="font-medium truncate">
+                {{ `${main.user?.first_name} ${main.user?.last_name}` }}
+              </p>
+              <div class="flex items-center gap-1 min-w-0">
+                <p class="text-sm text-gray-400 truncate min-w-0 flex-1">
+                  {{ main.user?.email }}
+                </p>
+                <router-link
+                  to="/settings/account"
+                  class="d-btn d-btn-ghost d-btn-sm d-btn-square size-8 min-h-0 border-none text-slate-300 hover:bg-slate-500/30 hover:text-white shrink-0"
+                  :aria-label="t('settings')"
+                  @click="allowPendingOnboardingDashboardExploration"
+                >
+                  <IconSettings class="size-4" />
+                </router-link>
+              </div>
+            </div>
+          </template>
+        </div>
+        <template v-if="!props.compact">
+          <router-link v-if="isMobile" to="/app/modules" class="block py-2 px-3 rounded-lg hover:bg-slate-700/50">
+            {{ t('module-heading') }}
+          </router-link>
+          <router-link v-if="isMobile" to="/app/modules_test" class="block py-2 px-3 rounded-lg hover:bg-slate-700/50">
+            {{ t('module-heading') }} {{ t('tests') }}
+          </router-link>
+          <div v-if="main.isAdmin && !spoofed" class="block py-2 px-3 rounded-lg cursor-pointer hover:bg-slate-700/50" :class="{ 'opacity-50 cursor-not-allowed': isLoading }" @click="openLogAsDialog">
+            <span v-if="!isLoading">{{ t('log-as') }}</span>
+            <span v-else class="flex items-center">
+              <Spinner size="w-4 h-4" class="mr-2" />
+              {{ t('loading') }}
             </span>
           </div>
-          <div class="min-w-0 flex-1">
-            <p class="font-medium truncate">
-              {{ `${main.user?.first_name} ${main.user?.last_name}` }}
-            </p>
-            <div class="flex items-center gap-1 min-w-0">
-              <p class="text-sm text-gray-400 truncate min-w-0 flex-1">
-                {{ main.user?.email }}
-              </p>
-              <router-link
-                to="/settings/account"
-                class="d-btn d-btn-ghost d-btn-sm d-btn-square size-8 min-h-0 border-none text-slate-300 hover:bg-slate-500/30 hover:text-white shrink-0"
-                :aria-label="t('settings')"
-                @click="allowPendingOnboardingDashboardExploration"
-              >
-                <IconSettings class="size-4" />
-              </router-link>
-            </div>
+          <div v-if="spoofed" class="block py-2 px-3 rounded-lg cursor-pointer hover:bg-slate-700/50" :class="{ 'opacity-50 cursor-not-allowed': isLoading }" @click="resetSpoofedUser">
+            {{ t('reset-spoofed-user') }}
           </div>
-        </div>
-        <router-link v-if="isMobile" to="/app/modules" class="block py-2 px-3 rounded-lg hover:bg-slate-700/50">
-          {{ t('module-heading') }}
-        </router-link>
-        <router-link v-if="isMobile" to="/app/modules_test" class="block py-2 px-3 rounded-lg hover:bg-slate-700/50">
-          {{ t('module-heading') }} {{ t('tests') }}
-        </router-link>
-        <div v-if="main.isAdmin && !spoofed" class="block py-2 px-3 rounded-lg cursor-pointer hover:bg-slate-700/50" :class="{ 'opacity-50 cursor-not-allowed': isLoading }" @click="openLogAsDialog">
-          <span v-if="!isLoading">{{ t('log-as') }}</span>
-          <span v-else class="flex items-center">
-            <Spinner size="w-4 h-4" class="mr-2" />
-            {{ t('loading') }}
-          </span>
-        </div>
-        <div v-if="spoofed" class="block py-2 px-3 rounded-lg cursor-pointer hover:bg-slate-700/50" :class="{ 'opacity-50 cursor-not-allowed': isLoading }" @click="resetSpoofedUser">
-          {{ t('reset-spoofed-user') }}
-        </div>
+        </template>
       </div>
     </div>
 

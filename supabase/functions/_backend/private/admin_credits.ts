@@ -30,7 +30,7 @@ interface SearchOrgsQuery {
 
 async function verifyAdmin(c: AppContext): Promise<{ isAdmin: boolean, userId: string | null }> {
   const auth = c.get('auth')
-  if (!auth || !auth.userId || auth.authType !== 'jwt' || !auth.jwt) {
+  if (!auth?.userId || auth.authType !== 'jwt' || !auth.jwt) {
     cloudlog({ requestId: c.get('requestId'), message: 'admin_verify_no_auth' })
     return { isAdmin: false, userId: null }
   }

@@ -372,7 +372,7 @@ function parseDashboardRangeDate(value?: string) {
   if (!value)
     return null
 
-  const dateParts = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|T)/)
+  const dateParts = /^(\d{4})-(\d{2})-(\d{2})(?:$|T)/.exec(value)
   if (!dateParts)
     return null
 

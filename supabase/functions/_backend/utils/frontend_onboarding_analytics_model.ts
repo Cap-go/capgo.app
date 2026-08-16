@@ -92,7 +92,7 @@ export interface FrontendOnboardingAnalytics {
   v3_graph: {
     nodes: Array<{ key: string, count: number }>
   }
-  v2_setup_cli_outcomes: FrontendOnboardingSetupCliOutcomes
+  v2_v3_setup_cli_outcomes: FrontendOnboardingSetupCliOutcomes
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -285,7 +285,7 @@ function buildInteractionGraph(attempts: FrontendOnboardingAttempt[]): Array<{ k
     .map(([key, count]) => ({ key, count }))
 }
 
-function buildV2SetupCliOutcomes(attempts: FrontendOnboardingAttempt[]): FrontendOnboardingSetupCliOutcomes {
+function buildV2V3SetupCliOutcomes(attempts: FrontendOnboardingAttempt[]): FrontendOnboardingSetupCliOutcomes {
   const outcomesByPerson = new Map<string, { copiedAiInstructions: boolean, startedCli: boolean }>()
 
   for (const attempt of attempts) {
@@ -348,6 +348,7 @@ export function buildFrontendOnboardingAnalytics(
   const currentV1Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 1)
   const currentV2Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 2)
   const currentV3Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 3)
+  const currentV2AndV3Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 2 || attempt.onboardingVersion === 3)
   const currentV3ConversionAttempts = attempts.filter(attempt => attempt.onboardingVersion === 3
     && attempt.intentMs >= currentStartMs - FRONTEND_ONBOARDING_FOLLOWUP_MS
     && attempt.intentMs < currentEndMs)
@@ -373,6 +374,6 @@ export function buildFrontendOnboardingAnalytics(
     },
     v2_graph: { nodes: buildInteractionGraph(currentV2Attempts) },
     v3_graph: { nodes: buildInteractionGraph(currentV3Attempts) },
-    v2_setup_cli_outcomes: buildV2SetupCliOutcomes(currentV2Attempts),
+    v2_v3_setup_cli_outcomes: buildV2V3SetupCliOutcomes(currentV2AndV3Attempts),
   }
 }

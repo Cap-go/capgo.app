@@ -88,11 +88,10 @@ async function fetchOrg(
 
 async function fetchOrgs(
   supabase: ReturnType<typeof supabaseApikey>,
-  page?: number,
+  page = 0,
 ) {
-  const fetchOffset = page ?? 0
-  const from = fetchOffset * fetchLimit
-  const to = (fetchOffset + 1) * fetchLimit - 1
+  const from = page * fetchLimit
+  const to = (page + 1) * fetchLimit - 1
   const { data, error } = await supabase
     .from('orgs')
     .select('*')

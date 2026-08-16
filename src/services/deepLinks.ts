@@ -96,7 +96,7 @@ async function routeDeferredPreviewLink(router: Router) {
 
   try {
     const result = await withTimeout(InstallReferrer.getReferrer(), INSTALL_REFERRER_TIMEOUT_MS)
-    if (!result || result.platform !== 'android')
+    if (result?.platform !== 'android')
       return
 
     const previewUrl = previewLinkFromInstallReferrer(result.referrer)

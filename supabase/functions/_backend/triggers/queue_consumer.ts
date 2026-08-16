@@ -942,7 +942,7 @@ async function readQueue(c: Context, db: ReturnType<typeof getPgClient>, queueNa
       throw simpleError('error_reading_from_pgmq_queue', 'Error reading from pgmq queue', { queueName }, readError)
     }
 
-    if (!messages || (messages && messages.length === 0)) {
+    if (!messages?.length) {
       cloudlog({ requestId: c.get('requestId'), message: `[${queueKey}] No new messages found in queue ${queueName}.` })
       return messages
     }

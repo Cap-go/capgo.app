@@ -343,7 +343,7 @@ export async function deleteChannel(c: Context<MiddlewareKeyVariables>, body: Ch
     .eq('name', body.channel)
     .select('id')
 
-  if (deleteError || !deletedChannels || deletedChannels.length !== 1) {
+  if (deleteError || deletedChannels?.length !== 1) {
     throw simpleError('cannot_delete_channel', 'Cannot delete channel', { supabaseError: deleteError })
   }
 

@@ -7,7 +7,6 @@ import IconPanelLeft from '~icons/lucide/panel-left'
 import IconBack from '~icons/material-symbols/arrow-back-ios-rounded'
 import IconMenu from '~icons/material-symbols/menu-rounded'
 import { useDisplayStore } from '~/stores/display'
-import { useMainStore } from '~/stores/main'
 import Banner from './Banner.vue'
 
 const props = defineProps({
@@ -22,7 +21,6 @@ const props = defineProps({
 })
 
 defineEmits(['toggleSidebar', 'toggleSidebarCollapse'])
-const main = useMainStore()
 const isMobile = ref(Capacitor.isNativePlatform())
 
 const router = useRouter()
@@ -55,9 +53,6 @@ const { t } = useI18n()
               <IconBack class="w-6 h-6 fill-current" />
               <span class="hidden md:block">{{ t('button-back') }}</span>
             </button>
-          </div>
-          <div v-if="props.sidebarCollapsed && main.user" class="hidden lg:block">
-            <dropdown-organization compact />
           </div>
           <div class="hidden lg:block">
             <button

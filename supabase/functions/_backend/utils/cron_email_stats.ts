@@ -1,7 +1,7 @@
 export interface WeeklyInstallStatsInput {
   all_updates: number | string | null | undefined
   failed_updates: number | string | null | undefined
-  open_app?: number | string | null | undefined
+  open_app?: number | string | null
 }
 
 export interface WeeklyInstallStatsResult {

@@ -307,9 +307,9 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
     if (!appData && !appError) {
       const escapedAppId = appId
         .toLowerCase()
-        .replace(/\\/g, '\\\\')
-        .replace(/%/g, '\\%')
-        .replace(/_/g, '\\_')
+        .replace(/\\/g, String.raw`\\`)
+        .replace(/%/g, String.raw`\%`)
+        .replace(/_/g, String.raw`\_`)
 
       const fallbackLookup = await supabase
         .from('apps')

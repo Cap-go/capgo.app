@@ -310,7 +310,7 @@ function liveBadgeTitle(versionId: number): string {
 }
 
 function escapeIlike(term: string): string {
-  return term.replace(/[\\%_]/g, '\\$&')
+  return term.replace(/[\\%_]/g, String.raw`\$&`)
 }
 
 async function searchCompareVersions(term: string) {

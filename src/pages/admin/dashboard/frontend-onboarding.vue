@@ -153,7 +153,7 @@ const v1FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(
 const v3FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(visibleAnalytics.value?.funnels.v3 ?? []))
 const hasDailyAttempts = computed(() => (visibleAnalytics.value?.daily_attempts ?? [])
   .some(day => day.v1_attempts > 0 || day.v2_attempts > 0 || day.v3_attempts > 0))
-const setupCliOutcomes = computed(() => visibleAnalytics.value?.v2_setup_cli_outcomes ?? {
+const setupCliOutcomes = computed(() => visibleAnalytics.value?.v2_v3_setup_cli_outcomes ?? {
   total_users: 0,
   cli_only: 0,
   cli_and_ai_instructions: 0,
@@ -548,8 +548,8 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
-            chart-id="setup-cli-outcomes-v2"
-            :title="t('frontend-onboarding-setup-cli-outcomes-v2')"
+            chart-id="setup-cli-outcomes-v2-v3"
+            :title="t('frontend-onboarding-setup-cli-outcomes-v2-v3')"
             :total="setupCliOutcomes.total_users"
             :unit="t('frontend-onboarding-people')"
             :is-loading="isLoadingStats"
@@ -558,7 +558,7 @@ displayStore.defaultBack = '/dashboard'
             <template #header>
               <div class="min-w-0">
                 <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
-                  {{ t('frontend-onboarding-setup-cli-outcomes-v2') }}
+                  {{ t('frontend-onboarding-setup-cli-outcomes-v2-v3') }}
                 </h2>
                 <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
                   {{ t('frontend-onboarding-setup-cli-outcomes-description') }}
@@ -578,15 +578,15 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
-            chart-id="daily-setup-cli-outcomes-v2"
-            :title="t('frontend-onboarding-daily-setup-cli-outcomes-v2')"
+            chart-id="daily-setup-cli-outcomes-v2-v3"
+            :title="t('frontend-onboarding-daily-setup-cli-outcomes-v2-v3')"
             :is-loading="isLoadingStats"
             :has-data="hasDailySetupCliOutcomeData"
           >
             <template #header>
               <div class="min-w-0">
                 <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
-                  {{ t('frontend-onboarding-daily-setup-cli-outcomes-v2') }}
+                  {{ t('frontend-onboarding-daily-setup-cli-outcomes-v2-v3') }}
                 </h2>
                 <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
                   {{ t('frontend-onboarding-daily-setup-cli-outcomes-description') }}
