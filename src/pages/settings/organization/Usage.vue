@@ -444,7 +444,7 @@ function nextRunDate() {
             <div class="mb-4 text-sm text-gray-600 dark:text-gray-300">
               {{ formatMonthlyPrice(currentPlanSuggest?.price_m) }}
             </div>
-            <button class="w-full py-2 text-sm font-semibold text-white transition-colors bg-blue-600 rounded-lg shadow-sm hover:bg-blue-700" @click="goToPlans">
+            <button type="button" class="w-full py-2 text-sm font-semibold text-white transition-colors bg-blue-600 rounded-lg shadow-sm hover:bg-blue-700" @click="goToPlans">
               {{ t('plan-upgrade-v2') }}
             </button>
           </div>

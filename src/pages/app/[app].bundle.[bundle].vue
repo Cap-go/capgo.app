@@ -869,6 +869,7 @@ async function deleteBundle() {
                       </div>
                     </div>
                     <button
+                      type="button"
                       class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800"
                       @click="copyToast(version?.checksum ?? '')"
                     >
@@ -896,6 +897,7 @@ async function deleteBundle() {
                         {{ chn!.name }}
                       </span>
                       <button
+                        type="button"
                         class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800"
                         @click="openChannelSettings(chn)"
                       >
@@ -1001,6 +1003,7 @@ async function deleteBundle() {
                     <template v-if="hasZip">
                       {{ zipSizeLabel }}
                       <button
+                        type="button"
                         class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800"
                         @click="openDownload()"
                       >
@@ -1034,6 +1037,7 @@ async function deleteBundle() {
                   <span class="flex items-center gap-2">
                     {{ t('bundle-active') }}
                     <button
+                      type="button"
                       class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800"
                       @click="deleteBundle"
                     >
@@ -1060,7 +1064,7 @@ async function deleteBundle() {
       <p class="mt-2 text-muted-foreground">
         {{ t('bundle-not-found-description') }}
       </p>
-      <button class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles/`)">
+      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles/`)">
         {{ t('back-to-bundles') }}
       </button>
     </div>

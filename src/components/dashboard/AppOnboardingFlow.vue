@@ -1826,7 +1826,7 @@ defineExpose({
                         :placeholder="t('app-onboarding-store-link-placeholder')"
                         type="url"
                       >
-                      <button class="d-btn min-h-12 shrink-0" :class="whiteCardSecondaryButtonClass()" :disabled="isImportingStore || !storeUrl" @click="importStoreMetadata()">
+                      <button type="button" class="d-btn min-h-12 shrink-0" :class="whiteCardSecondaryButtonClass()" :disabled="isImportingStore || !storeUrl" @click="importStoreMetadata()">
                         <IconLoader v-if="isImportingStore" class="h-4 w-4 animate-spin" />
                         <IconSparkles v-else class="h-4 w-4" />
                         <span>{{ t('app-onboarding-store-import-button') }}</span>
@@ -1975,10 +1975,11 @@ defineExpose({
                 </div>
 
                 <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/15">
-                  <button class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" @click="props.preOrg ? viewPreviousStep('intent') : router.push('/apps')">
+                  <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" @click="props.preOrg ? viewPreviousStep('intent') : router.push('/apps')">
                     {{ props.preOrg ? t('button-back') : t('button-cancel') }}
                   </button>
                   <button
+                    type="button"
                     class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" :disabled="isSubmitting" data-test="app-onboarding-continue"
                     @click="props.preOrg ? continuePreOrgDetails() : createAppRecord()"
                   >
@@ -2341,7 +2342,7 @@ defineExpose({
                   {{ t('app-onboarding-ai-help-caption') }}
                 </p>
               </div>
-              <button class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="copyAiInstructions">
+              <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="copyAiInstructions">
                 <IconCopy class="h-4 w-4" />
                 {{ t('app-onboarding-ai-help-button') }}
               </button>
@@ -2349,7 +2350,7 @@ defineExpose({
           </div>
 
           <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
-            <button class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
+            <button type="button" class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
               <IconLoader v-if="isSeedingDemo" class="h-4 w-4 animate-spin" />
               <template v-else>
                 {{ t('app-onboarding-explore-dashboard') }}
@@ -2380,7 +2381,7 @@ defineExpose({
             </div>
 
             <div class="mt-6 grid gap-4 md:grid-cols-2">
-              <button class="group rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:border-primary-500/40 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-white/15 dark:bg-slate-950/90 dark:hover:border-white/30 dark:hover:bg-slate-900" @click="goToInstallStep">
+              <button type="button" class="group rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:border-primary-500/40 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-white/15 dark:bg-slate-950/90 dark:hover:border-white/30 dark:hover:bg-slate-900" @click="goToInstallStep">
                 <div class="flex items-start gap-4">
                   <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary-500 text-white">
                     <IconTerminal class="h-5 w-5" />
@@ -2401,6 +2402,7 @@ defineExpose({
               </button>
 
               <button
+                type="button"
                 class="group rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:cursor-wait disabled:opacity-70 dark:border-white/15 dark:bg-slate-950/90 dark:hover:border-emerald-400/60 dark:hover:bg-emerald-400/10"
                 :disabled="isSeedingDemo"
                 @click="seedDemoData"
@@ -2487,7 +2489,7 @@ defineExpose({
                     {{ t('app-onboarding-ai-help-caption') }}
                   </p>
                 </div>
-                <button class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="copyAiInstructions">
+                <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="copyAiInstructions">
                   <IconCopy class="h-4 w-4" />
                   {{ t('app-onboarding-ai-help-button') }}
                 </button>
@@ -2495,10 +2497,10 @@ defineExpose({
             </div>
 
             <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <button class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" :disabled="isSeedingDemo" @click="viewPreviousStep('choice')">
+              <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" :disabled="isSeedingDemo" @click="viewPreviousStep('choice')">
                 {{ t('button-back') }}
               </button>
-              <button class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
+              <button type="button" class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
                 <IconLoader v-if="isSeedingDemo" class="h-4 w-4 animate-spin" />
                 <template v-else>
                   {{ t('app-onboarding-explore-dashboard') }}

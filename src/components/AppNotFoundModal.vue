@@ -26,6 +26,7 @@ function goToApps() {
         {{ t('app-not-found-description') }}
       </p>
       <button
+        type="button"
         class="inline-flex gap-2 items-center px-6 py-3 text-white bg-primary rounded-lg transition-colors cursor-pointer hover:bg-primary/90 focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:outline-none"
         @click="goToApps"
       >

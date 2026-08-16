@@ -272,6 +272,7 @@ function openPrivacy() {
       </div>
 
       <button
+        type="button"
         :disabled="isLoading || !isPasswordValid || !acceptTerms"
         :aria-busy="isLoading ? 'true' : 'false'"
         :class="authPrimaryButtonClass"
@@ -295,7 +296,7 @@ function openPrivacy() {
       <div v-if="isError" class="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/70 dark:bg-rose-950/30 dark:text-rose-200">
         {{ isError }}
       </div>
-      <button :class="authSecondaryButtonClass" @click="joinCapgo">
+      <button type="button" :class="authSecondaryButtonClass" @click="joinCapgo">
         {{ t('join-capgo') }}
       </button>
     </div>
@@ -305,7 +306,7 @@ function openPrivacy() {
         <div class="mx-auto">
           <LangSelector />
         </div>
-        <button class="mt-3" :class="authGhostButtonClass" @click="openSupport">
+        <button type="button" class="mt-3" :class="authGhostButtonClass" @click="openSupport">
           {{ t('support') }}
         </button>
       </section>

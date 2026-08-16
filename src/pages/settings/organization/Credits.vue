@@ -848,6 +848,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             </span>
             <div class="flex items-center gap-2">
               <button
+                type="button"
                 class="d-btn d-btn-sm"
                 :disabled="currentPage === 1"
                 @click="currentPage = Math.max(1, currentPage - 1)"
@@ -855,6 +856,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
                 {{ t('previous') }}
               </button>
               <button
+                type="button"
                 class="d-btn d-btn-sm"
                 :disabled="currentPage >= totalPages"
                 @click="currentPage = Math.min(totalPages, currentPage + 1)"

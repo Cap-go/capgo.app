@@ -828,6 +828,7 @@ async function removeMemberFromGroup(userId: string) {
           <!-- Pill sub-tabs -->
           <div class="flex border-b border-slate-200 dark:border-slate-700 -mx-8 px-8 mt-2">
             <button
+              type="button"
               v-for="tab in sectionTabs"
               :key="tab.key"
               class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 -mb-px transition-colors"
@@ -851,6 +852,7 @@ async function removeMemberFromGroup(userId: string) {
               <div class="flex justify-end mb-4">
                 <div class="relative">
                   <button
+                    type="button"
                     class="d-btn d-btn-sm d-btn-outline gap-2"
                     :disabled="isSubmitting"
                     @click="showAppDropdown = !showAppDropdown"
@@ -932,6 +934,7 @@ async function removeMemberFromGroup(userId: string) {
                     :role-name="pendingAppBindings[appId]"
                   />
                   <button
+                    type="button"
                     class="d-btn d-btn-xs d-btn-ghost text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0"
                     type="button"
                     :disabled="isSubmitting"
@@ -964,6 +967,7 @@ async function removeMemberFromGroup(userId: string) {
           <!-- Global Save / Create button -->
           <div class="flex justify-end mt-8 pt-4 border-t border-slate-200 dark:border-slate-700">
             <button
+              type="button"
               class="d-btn d-btn-primary"
               :disabled="isSubmitting || !editName.trim()"
               @click="isCreateMode ? createGroup() : saveGroup()"

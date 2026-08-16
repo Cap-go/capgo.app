@@ -677,6 +677,7 @@ watchEffect(async () => {
                     </p>
                     <div class="flex flex-wrap items-center gap-2 mt-4">
                       <button
+                        type="button"
                         v-if="permittedRollbackTargets.length > 0"
                         type="button"
                         data-test="compatibility-rollback-cta"
@@ -870,6 +871,7 @@ watchEffect(async () => {
                     <td class="px-4 py-3 text-right whitespace-nowrap">
                       <div class="flex items-center justify-end gap-2">
                         <button
+                          type="button"
                           v-if="dependencyDiffPath(id, group.representative)"
                           data-test="compatibility-diff-link"
                           class="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md text-blue-600 hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-900/30"
@@ -879,6 +881,7 @@ watchEffect(async () => {
                           {{ t('compatibility-view-dependency-diff') }}
                         </button>
                         <button
+                          type="button"
                           v-if="!group.resolved"
                           data-test="compatibility-accept"
                           class="inline-flex items-center px-3 py-1 text-xs font-medium text-white rounded-md bg-amber-600 hover:bg-amber-700"
@@ -905,7 +908,7 @@ watchEffect(async () => {
       <p class="mt-2 text-muted-foreground">
         {{ t('app-not-found-description') }}
       </p>
-      <button class="mt-4 text-white d-btn d-btn-primary" @click="$router.push(`/apps`)">
+      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="$router.push(`/apps`)">
         {{ t('back-to-apps') }}
       </button>
     </div>

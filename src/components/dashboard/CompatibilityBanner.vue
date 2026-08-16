@@ -57,6 +57,7 @@ watch(() => props.appId, () => {
 
 <template>
   <button
+    type="button"
     v-if="unresolvedCount > 0"
     type="button"
     data-test="compatibility-banner"

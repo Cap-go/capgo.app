@@ -660,7 +660,7 @@ watch(activeNotificationTab, () => {
                   {{ t('notification-beta-description') }}
                 </p>
               </div>
-              <button class="self-start d-btn d-btn-sm d-btn-outline sm:self-auto" :disabled="isLoading" @click="() => refreshData()">
+              <button type="button" class="self-start d-btn d-btn-sm d-btn-outline sm:self-auto" :disabled="isLoading" @click="() => refreshData()">
                 <span v-if="isLoading" class="d-loading d-loading-spinner d-loading-xs" />
                 <IconRefresh v-else class="w-4 h-4" aria-hidden="true" />
                 {{ t('refresh') }}
@@ -708,7 +708,7 @@ watch(activeNotificationTab, () => {
                     <h2 class="text-base font-semibold text-slate-950 dark:text-white">
                       {{ t('notification-provider-setup') }}
                     </h2>
-                    <button class="self-start d-btn d-btn-sm d-btn-primary sm:self-auto" :disabled="isSaving" @click="saveProvider">
+                    <button type="button" class="self-start d-btn d-btn-sm d-btn-primary sm:self-auto" :disabled="isSaving" @click="saveProvider">
                       <span v-if="isSaving" class="d-loading d-loading-spinner d-loading-xs" />
                       <IconCheckCircle v-else class="w-4 h-4" aria-hidden="true" />
                       {{ t('notification-save-provider') }}
@@ -806,12 +806,12 @@ watch(activeNotificationTab, () => {
                     <input v-model="pushUpdateChannel" class="w-full d-input d-input-bordered" :placeholder="t('channel')">
                   </label>
                   <div class="grid grid-cols-2 gap-2">
-                    <button class="d-btn d-btn-sm d-btn-outline" :disabled="isSaving" @click="saveNotificationSettings">
+                    <button type="button" class="d-btn d-btn-sm d-btn-outline" :disabled="isSaving" @click="saveNotificationSettings">
                       <span v-if="isSaving" class="d-loading d-loading-spinner d-loading-xs" />
                       <IconCheckCircle v-else class="w-4 h-4" aria-hidden="true" />
                       {{ t('notification-save-settings') }}
                     </button>
-                    <button class="d-btn d-btn-sm d-btn-primary" :disabled="isSaving || configuredProviders === 0 || !settings.pushUpdateEnabled" @click="pushUpdateNow">
+                    <button type="button" class="d-btn d-btn-sm d-btn-primary" :disabled="isSaving || configuredProviders === 0 || !settings.pushUpdateEnabled" @click="pushUpdateNow">
                       <span v-if="isSaving" class="d-loading d-loading-spinner d-loading-xs" />
                       <IconZap v-else class="w-4 h-4" aria-hidden="true" />
                       {{ t('notification-push-update-now') }}
@@ -854,7 +854,7 @@ watch(activeNotificationTab, () => {
                     <h2 class="text-base font-semibold text-slate-950 dark:text-white">
                       {{ t('notification-create-broadcast') }}
                     </h2>
-                    <button class="self-start d-btn d-btn-sm d-btn-primary sm:self-auto" :disabled="isSaving || configuredProviders === 0 || !campaignForm.name.trim() || (!campaignForm.title.trim() && !campaignForm.body.trim())" @click="createBroadcast">
+                    <button type="button" class="self-start d-btn d-btn-sm d-btn-primary sm:self-auto" :disabled="isSaving || configuredProviders === 0 || !campaignForm.name.trim() || (!campaignForm.title.trim() && !campaignForm.body.trim())" @click="createBroadcast">
                       <span v-if="isSaving" class="d-loading d-loading-spinner d-loading-xs" />
                       <IconSend v-else class="w-4 h-4" aria-hidden="true" />
                       {{ t('notification-create-broadcast') }}
@@ -944,7 +944,7 @@ watch(activeNotificationTab, () => {
                       <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ t('notification-message-body') }}</span>
                       <textarea v-model="sendBody" class="w-full d-textarea d-textarea-bordered min-h-24" :placeholder="t('notification-message-body')" />
                     </label>
-                    <button class="w-full d-btn d-btn-sm d-btn-primary" :disabled="isSaving || configuredProviders === 0 || !sendExternalId.trim()" @click="sendTest">
+                    <button type="button" class="w-full d-btn d-btn-sm d-btn-primary" :disabled="isSaving || configuredProviders === 0 || !sendExternalId.trim()" @click="sendTest">
                       <span v-if="isSaving" class="d-loading d-loading-spinner d-loading-xs" />
                       <IconSend v-else class="w-4 h-4" aria-hidden="true" />
                       {{ t('notification-send-test') }}
@@ -959,7 +959,7 @@ watch(activeNotificationTab, () => {
                       <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ t('notification-recipient-external-id') }}</span>
                       <input v-model="lookupExternalId" class="w-full d-input d-input-bordered" :placeholder="t('notification-recipient-external-id')">
                     </label>
-                    <button class="w-full d-btn d-btn-sm d-btn-outline" :disabled="isSaving || !lookupExternalId.trim()" @click="lookupRecipient">
+                    <button type="button" class="w-full d-btn d-btn-sm d-btn-outline" :disabled="isSaving || !lookupExternalId.trim()" @click="lookupRecipient">
                       <IconSearch class="w-4 h-4" aria-hidden="true" />
                       {{ t('notification-lookup') }}
                     </button>
@@ -1095,7 +1095,7 @@ watch(activeNotificationTab, () => {
       <p class="mt-2 text-muted-foreground">
         {{ t('app-not-found-description') }}
       </p>
-      <button class="mt-4 text-white d-btn d-btn-primary" @click="$router.push('/apps')">
+      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="$router.push('/apps')">
         {{ t('back-to-apps') }}
       </button>
     </div>

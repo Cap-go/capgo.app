@@ -612,7 +612,7 @@ watch(props, async () => {
       <p class="mt-2 text-slate-600 dark:text-slate-200">
         {{ t('add-your-first-bundle') }}
       </p>
-      <button class="mt-4 d-btn d-btn-primary" @click="addOne()">
+      <button type="button" class="mt-4 d-btn d-btn-primary" @click="addOne()">
         {{ t('add-another-bundle') }}
       </button>
     </div>
