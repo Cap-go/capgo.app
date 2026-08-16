@@ -4,7 +4,7 @@
 
 **Goal:** Preserve the exact `POST /apikey` authorization and locking behavior while replacing 40 sequential permission SQL statements for ten organizations with one batched statement before the transaction and one after locking.
 
-**Architecture:** Add one PostgreSQL-backed TypeScript helper that evaluates `org.manage_apikeys` and `org.update_user_roles` for an array of organization IDs using `unnest()`. Keep the existing preflight and post-lock phases, their validation order, the RBAC function, and all writes unchanged; only their permission-query transport changes.
+**Architecture:** Add one PostgreSQL-backed TypeScript helper that preserves organization IDs as text map keys, evaluates `org.manage_apikeys` and `org.update_user_roles` for valid UUID rows using `unnest()` plus a per-row validity guard, and denies malformed rows without aborting the batch. Keep the existing preflight and post-lock phases, their validation order, the RBAC function, and all writes unchanged; only their permission-query transport changes.
 
 **Tech Stack:** TypeScript, Hono, Drizzle ORM, node-postgres, PostgreSQL, Vitest
 
@@ -23,6 +23,7 @@ Test changes are limited to:
 - `tests/rbac-permission-infra-errors.unit.test.ts`: batch mapping, one-statement behavior, and infrastructure-error behavior.
 - `tests/apikey-scope.unit.test.ts`: query-free sensitive-role assertion behavior.
 - `tests/apikey-post-permission-batching.unit.test.ts`: two-phase route wiring and lock ordering.
+- `tests/apikeys.test.ts`: database-backed uppercase UUID mapping and malformed-row isolation coverage.
 
 Do not add an RPC, migration, PostgreSQL function, pool-size change, `Promise.all`, new production file, lock optimization, or role-binding optimization. Do not touch `put.ts` behavior. At plan-writing time, `post.ts` already has an unrelated uncommitted import edit; inspect and preserve or explicitly reconcile that edit before modifying the same import block.
 
@@ -107,11 +108,23 @@ it('loads both API-key permissions for all orgs with one SQL statement', async (
   ]))
 })
 
-it('treats a non-transient batch query failure as all permissions denied', async () => {
-  executeMock.mockRejectedValueOnce(Object.assign(
-    new Error('invalid input syntax for type uuid'),
-    { code: '22P02' },
-  ))
+it('denies a malformed org row without dropping the following valid result', async () => {
+  const malformedOrgId = 'not-a-uuid'
+  const validOrgId = '00000000-0000-4000-8000-000000000102'
+  executeMock.mockResolvedValueOnce({
+    rows: [
+      {
+        org_id: malformedOrgId,
+        can_manage_apikeys: false,
+        can_update_user_roles: false,
+      },
+      {
+        org_id: validOrgId,
+        can_manage_apikeys: true,
+        can_update_user_roles: true,
+      },
+    ],
+  })
 
   await expect(checkApiKeyOrgPermissionsPg(
     makeContext({
@@ -119,12 +132,15 @@ it('treats a non-transient batch query failure as all permissions denied', async
       authType: 'jwt',
       apikey: null,
     }),
-    ['not-a-uuid'],
+    [malformedOrgId, validOrgId],
     getDrizzleClientMock() as any,
     '00000000-0000-4000-8000-000000000001',
     null,
     'org.update_user_roles',
-  )).resolves.toEqual(new Map())
+  )).resolves.toEqual(new Map([
+    [malformedOrgId, { canManageApiKeys: false, canUpdateUserRoles: false }],
+    [validOrgId, { canManageApiKeys: true, canUpdateUserRoles: true }],
+  ]))
 })
 
 it('surfaces transient batch permission failures as 503', async () => {
@@ -198,24 +214,28 @@ export async function checkApiKeyOrgPermissionsPg(
   try {
     const result = await drizzleClient.execute<ApiKeyOrgPermissionRow>(sql`
       SELECT
-        requested_orgs.org_id::text AS org_id,
-        public.rbac_check_permission_direct(
-          'org.manage_apikeys'::text,
-          ${userId}::uuid,
-          requested_orgs.org_id,
-          NULL::varchar,
-          NULL::bigint,
-          ${apikeyString}::text
-        ) AS can_manage_apikeys,
-        public.rbac_check_permission_direct(
-          'org.update_user_roles'::text,
-          ${userId}::uuid,
-          requested_orgs.org_id,
-          NULL::varchar,
-          NULL::bigint,
-          ${apikeyString}::text
-        ) AS can_update_user_roles
-      FROM unnest(${orgIds}::uuid[]) WITH ORDINALITY AS requested_orgs(org_id, ordinal)
+        requested_orgs.org_id,
+        CASE WHEN pg_input_is_valid(requested_orgs.org_id, 'uuid') THEN
+          public.rbac_check_permission_direct(
+            'org.manage_apikeys',
+            ${userId}::uuid,
+            requested_orgs.org_id::uuid,
+            NULL::varchar,
+            NULL::bigint,
+            ${apikeyString}::text
+          )
+        ELSE false END AS can_manage_apikeys,
+        CASE WHEN pg_input_is_valid(requested_orgs.org_id, 'uuid') THEN
+          public.rbac_check_permission_direct(
+            'org.update_user_roles',
+            ${userId}::uuid,
+            requested_orgs.org_id::uuid,
+            NULL::varchar,
+            NULL::bigint,
+            ${apikeyString}::text
+          )
+        ELSE false END AS can_update_user_roles
+      FROM unnest(${orgIds}::text[]) WITH ORDINALITY AS requested_orgs(org_id, ordinal)
       ORDER BY requested_orgs.ordinal
     `)
 
@@ -242,9 +262,12 @@ export async function checkApiKeyOrgPermissionsPg(
 
 The `failurePermission` argument preserves which permission appears in transient-error
 metadata for each phase: preflight passes `org.update_user_roles`, while the locked
-phase passes `org.manage_apikeys`. Returning an empty map after a non-transient query
-failure is deny-by-default; callers must interpret a missing entry as both permissions
-being false.
+phase passes `org.manage_apikeys`. Unnesting `text[]` preserves the exact input string
+as the result-map key, including uppercase valid UUIDs. `pg_input_is_valid` guards each
+row and the UUID cast occurs only inside the permission calls, so malformed rows yield
+both permissions as `false` without aborting later rows. Other non-transient query
+failures still return an empty deny-by-default map; callers interpret a missing entry
+as both permissions being false.
 
 - [ ] **Step 4: Run the focused test and verify GREEN**
 
@@ -766,8 +789,9 @@ bun run supabase:start
 bun run supabase:with-env -- bunx vitest run tests/apikeys.test.ts tests/apikey-atomic-bindings.test.ts
 ```
 
-Expected: both files pass. Successful creation, forbidden organization, sensitive-role
-denial, and atomic rollback assertions remain unchanged.
+Expected: both files pass. Successful creation, uppercase authorized organization UUIDs,
+malformed-row isolation, forbidden organizations, sensitive-role denial, and atomic
+rollback assertions remain unchanged.
 
 - [ ] **Step 5: Inspect the local query plan for ten organization inputs**
 
@@ -777,25 +801,29 @@ with `EXPLAIN (ANALYZE, BUFFERS)`:
 ```sql
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT
-  requested_orgs.org_id::text AS org_id,
-  public.rbac_check_permission_direct(
-    'org.manage_apikeys'::text,
-    '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid,
-    requested_orgs.org_id,
-    NULL::varchar,
-    NULL::bigint,
-    NULL::text
-  ) AS can_manage_apikeys,
-  public.rbac_check_permission_direct(
-    'org.update_user_roles'::text,
-    '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid,
-    requested_orgs.org_id,
-    NULL::varchar,
-    NULL::bigint,
-    NULL::text
-  ) AS can_update_user_roles
+  requested_orgs.org_id,
+  CASE WHEN pg_input_is_valid(requested_orgs.org_id, 'uuid') THEN
+    public.rbac_check_permission_direct(
+      'org.manage_apikeys',
+      '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid,
+      requested_orgs.org_id::uuid,
+      NULL::varchar,
+      NULL::bigint,
+      NULL::text
+    )
+  ELSE false END AS can_manage_apikeys,
+  CASE WHEN pg_input_is_valid(requested_orgs.org_id, 'uuid') THEN
+    public.rbac_check_permission_direct(
+      'org.update_user_roles',
+      '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid,
+      requested_orgs.org_id::uuid,
+      NULL::varchar,
+      NULL::bigint,
+      NULL::text
+    )
+  ELSE false END AS can_update_user_roles
 FROM unnest(ARRAY[
-  '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+  '046A36AC-E03C-4590-9257-BD6C9DBA9EE8',
   '00000000-0000-4000-8000-000000000002',
   '00000000-0000-4000-8000-000000000003',
   '00000000-0000-4000-8000-000000000004',
@@ -804,15 +832,16 @@ FROM unnest(ARRAY[
   '00000000-0000-4000-8000-000000000007',
   '00000000-0000-4000-8000-000000000008',
   '00000000-0000-4000-8000-000000000009',
-  '00000000-0000-4000-8000-000000000010'
-]::uuid[]) WITH ORDINALITY AS requested_orgs(org_id, ordinal)
+  'not-a-uuid'
+]::text[]) WITH ORDINALITY AS requested_orgs(org_id, ordinal)
 ORDER BY requested_orgs.ordinal;
 ```
 
-Expected: one statement returns ten rows, with no unbounded sequential scan over a
-large RBAC table. Record execution time and buffer summary in the PR notes. This is
-verification only; do not create an RPC, view, function, migration, or permanent SQL
-test fixture.
+Expected: one statement returns ten rows, preserves the uppercase first key, returns
+two false permissions for the malformed last row, and performs no unbounded sequential
+scan over a large RBAC table. Record execution time and buffer summary in the PR notes.
+This is verification only; do not create an RPC, view, function, migration, or
+permanent SQL test fixture.
 
 - [ ] **Step 6: Review the production diff for accidental scope expansion**
 

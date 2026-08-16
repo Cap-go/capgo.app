@@ -52,9 +52,10 @@ computation or a missing index.
 
 ### 1. One set-based permission query per phase
 
-Send all unique organization IDs to PostgreSQL as a UUID array. Use PostgreSQL's
-built-in `unnest()` function to turn the array into rows and evaluate both permission
-functions as columns for every row.
+Send all unique organization IDs to PostgreSQL as a text array so each caller-provided
+string remains the result-map key. Use PostgreSQL's built-in `unnest()` function to
+turn the array into rows and evaluate both permission functions as columns for every
+valid UUID row.
 
 This produces one database statement before the transaction and one after the locks
 are acquired. PostgreSQL still evaluates both permissions independently for every
@@ -101,27 +102,36 @@ The query has this conceptual shape:
 
 ```sql
 SELECT
-  org_id,
-  public.rbac_check_permission_direct(
-    'org.manage_apikeys', $2, org_id, NULL, NULL, $3
-  ) AS can_manage_apikeys,
-  public.rbac_check_permission_direct(
-    'org.update_user_roles', $2, org_id, NULL, NULL, $3
-  ) AS can_update_user_roles
-FROM unnest($1::uuid[]) WITH ORDINALITY AS requested_orgs(org_id, ordinal)
+  requested_orgs.org_id,
+  CASE WHEN pg_input_is_valid(requested_orgs.org_id, 'uuid') THEN
+    public.rbac_check_permission_direct(
+      'org.manage_apikeys', $2::uuid, requested_orgs.org_id::uuid, NULL, NULL, $3
+    )
+  ELSE false END AS can_manage_apikeys,
+  CASE WHEN pg_input_is_valid(requested_orgs.org_id, 'uuid') THEN
+    public.rbac_check_permission_direct(
+      'org.update_user_roles', $2::uuid, requested_orgs.org_id::uuid, NULL, NULL, $3
+    )
+  ELSE false END AS can_update_user_roles
+FROM unnest($1::text[]) WITH ORDINALITY AS requested_orgs(org_id, ordinal)
 ORDER BY ordinal;
 ```
 
 `unnest()` is built into PostgreSQL and requires no extension, migration, temporary
 table, or persistent database object. `WITH ORDINALITY` retains input order, although
 the application will make authorization decisions by iterating the original
-deduplicated organization list rather than trusting row order.
+deduplicated organization list rather than trusting row order. Keeping `org_id` as
+text also preserves uppercase or otherwise non-canonical valid UUID strings as exact
+map keys. Each permission expression uses `pg_input_is_valid` before casting only that
+row for evaluation, so a malformed organization ID produces two `false` permissions
+without aborting or dropping later rows.
 
 The helper must retain current permission-check failure semantics:
 
 - a transient PostgreSQL, Hyperdrive, timeout, or connection failure becomes the
   existing `503 upstream_unavailable` response;
 - a non-transient query failure is treated as denied;
+- a malformed organization ID yields both permissions as `false` for only that row;
 - a missing result row or missing boolean is treated as denied;
 - no permission-query error may default to allowed.
 
@@ -186,7 +196,8 @@ application/database round trips and repeated standalone pool creation.
 - Every requested organization must have `org.manage_apikeys`.
 - A missing `org.update_user_roles` permission continues to reject only the existing
   sensitive role set for that organization.
-- Authorization remains deny-by-default for missing, malformed, or failed results.
+- Authorization remains deny-by-default for missing or failed results, while malformed
+  organization IDs are isolated as denied rows and cannot erase later valid results.
 - Existing HTTP status codes, error codes, and user-facing messages remain unchanged.
 - The implementation must not interpolate organization IDs or permission keys as raw
   SQL; all values remain bound parameters.
@@ -198,6 +209,9 @@ application/database round trips and repeated standalone pool creation.
 - Verify that loading both permissions for multiple organization IDs calls the Drizzle
   executor exactly once.
 - Verify that returned rows map to the correct organization and permission booleans.
+- Verify that uppercase valid UUID input remains the exact result-map key.
+- Verify that a malformed row returns two false permissions without dropping later
+  valid rows.
 - Verify that missing rows and false/null values deny access.
 - Verify that transient infrastructure errors remain `503 upstream_unavailable` and
   non-transient permission-query errors deny access.
@@ -211,7 +225,10 @@ application/database round trips and repeated standalone pool creation.
 
 Run the focused API-key creation, scope, and atomic-binding tests. They must continue to
 cover successful creation, nonexistent or unauthorized organizations, sensitive-role
-rejection, permitted lower-privilege roles, and transaction rollback.
+rejection, permitted lower-privilege roles, and transaction rollback. API-key creation
+coverage must also exercise an uppercase authorized organization UUID and a malformed
+first organization followed by a valid sensitive binding, preserving the first
+organization's management-denial precedence.
 
 ### Query-plan and latency verification
 
@@ -229,6 +246,8 @@ rejection, permitted lower-privilege roles, and transaction rollback.
   permission SQL statements, not 40.
 - Both permissions are still independently evaluated for all ten organizations in both
   phases.
+- Original organization strings remain map keys, and malformed rows deny only
+  themselves without aborting the batch.
 - No additional connections, database objects, migrations, or permissions are added.
 - Existing authorization and atomicity tests pass without weakened assertions.
 - Backend lint and type checking pass.
