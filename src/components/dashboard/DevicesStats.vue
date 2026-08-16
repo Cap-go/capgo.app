@@ -744,49 +744,54 @@ watch(
 </script>
 
 <template>
-  <ChartCard
-    :title="t(titleKey)"
-    :is-loading="isLoading"
-    :has-data="hasData"
-    :is-demo-data="isDemoMode"
-  >
-    <template #header>
-      <div class="flex flex-col flex-1 gap-3">
-        <div
-          class="flex flex-wrap items-start justify-between gap-3"
-          data-testid="version-chart-range"
-          :data-from="currentRange ? formatUtcDateParam(currentRange.startDate) : undefined"
-          :data-to="currentRange ? formatUtcDateParam(currentRange.endDate) : undefined"
-        >
-          <h2 class="min-w-0 text-2xl font-semibold leading-tight dark:text-white text-slate-600">
-            {{ t(titleKey) }}
-          </h2>
-          <PeriodDaySelector
-            v-model="periodDays"
-            :labels="{ 30: 'max-period' }"
-          />
-        </div>
-
-        <div class="flex max-w-[11rem] flex-col items-end self-end text-right shrink-0">
-          <div
-            class="inline-flex items-center justify-center px-2 py-1 text-xs font-bold text-white rounded-full shadow-lg whitespace-nowrap bg-cyan-500"
-          >
-            {{ latestVersionPercentageDisplay }}
-          </div>
-          <div
-            v-if="latestVersion"
-            class="font-bold leading-tight break-words dark:text-white text-slate-600"
-            :class="isNativeUsage ? 'text-xl sm:text-2xl' : 'text-3xl'"
-          >
-            {{ latestVersion.name }}
-          </div>
-          <div v-if="latestVersion" class="text-xs text-slate-500 dark:text-slate-400">
-            {{ latestVersionCountDisplay }} {{ t('devices') }}
-          </div>
-        </div>
+  <section class="flex flex-col gap-4">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+      <div class="min-w-0">
+        <h2 class="text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
+          {{ t(titleKey) }}
+        </h2>
       </div>
-    </template>
+      <PeriodDaySelector
+        v-model="periodDays"
+        :labels="{ 30: 'max-period' }"
+      />
+    </div>
 
-    <Line class="h-full w-full" :data="processedChartData!" :options="chartOptions" :plugins="chartPlugins" />
-  </ChartCard>
+    <div
+      data-testid="version-chart-range"
+      :data-from="currentRange ? formatUtcDateParam(currentRange.startDate) : undefined"
+      :data-to="currentRange ? formatUtcDateParam(currentRange.endDate) : undefined"
+    >
+      <ChartCard
+        :title="t(titleKey)"
+        :is-loading="isLoading"
+        :has-data="hasData"
+        :is-demo-data="isDemoMode"
+      >
+        <template #header>
+          <div class="flex w-full items-start justify-end">
+            <div class="flex max-w-[11rem] flex-col items-end text-right shrink-0">
+              <div
+                class="inline-flex items-center justify-center px-2 py-1 text-xs font-bold text-white rounded-full shadow-lg whitespace-nowrap bg-cyan-500"
+              >
+                {{ latestVersionPercentageDisplay }}
+              </div>
+              <div
+                v-if="latestVersion"
+                class="font-bold leading-tight break-words dark:text-white text-slate-600"
+                :class="isNativeUsage ? 'text-xl sm:text-2xl' : 'text-3xl'"
+              >
+                {{ latestVersion.name }}
+              </div>
+              <div v-if="latestVersion" class="text-xs text-slate-500 dark:text-slate-400">
+                {{ latestVersionCountDisplay }} {{ t('devices') }}
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <Line class="h-full w-full" :data="processedChartData!" :options="chartOptions" :plugins="chartPlugins" />
+      </ChartCard>
+    </div>
+  </section>
 </template>
