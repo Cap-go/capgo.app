@@ -1,6 +1,5 @@
 import type {
   OnboardingAnalyticsFlow,
-  OnboardingAnalyticsStep,
   OnboardingIntent,
 } from '~/utils/onboardingProgressAnalytics'
 
@@ -10,10 +9,11 @@ export const USER_ONBOARDING_FLOWS = ['pre_org', 'existing_org'] as const
 export const USER_ONBOARDING_INTENTS = ['ota', 'builder', 'both', 'exploring'] as const
 
 export type UserOnboardingStatus = typeof USER_ONBOARDING_STATUSES[number]
+export type UserOnboardingStep = typeof USER_ONBOARDING_STEPS[number]
 
 export interface UserOnboardingProgress {
   status: UserOnboardingStatus
-  step: OnboardingAnalyticsStep
+  step: UserOnboardingStep
   flow: OnboardingAnalyticsFlow
   intent?: OnboardingIntent
   app_name?: string
@@ -32,7 +32,7 @@ export interface UserOnboardingProgress {
 
 export interface UserOnboardingProgressInput {
   status: UserOnboardingStatus
-  step: OnboardingAnalyticsStep
+  step: UserOnboardingStep
   flow: OnboardingAnalyticsFlow
   intent?: OnboardingIntent | null
   appName?: string
@@ -241,9 +241,9 @@ export function buildUserOnboardingProgress(input: UserOnboardingProgressInput):
 }
 
 export function clampResumableOnboardingStep(
-  step: OnboardingAnalyticsStep,
+  step: UserOnboardingStep,
   flow: OnboardingAnalyticsFlow,
-): OnboardingAnalyticsStep {
+): UserOnboardingStep {
   if (flow === 'pre_org' && (step === 'choice' || step === 'install' || step === 'setup'))
     return 'organization'
   return step
