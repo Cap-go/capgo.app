@@ -72,7 +72,7 @@ describe('admin onboarding activation telemetry', () => {
     expect(installSourceQuery).toContain('GROUP BY index1, blob9')
   })
 
-  it('preserves prior batch telemetry when a later Analytics Engine query fails', async () => {
+  it('marks telemetry unavailable when a later Analytics Engine query fails', async () => {
     const windows = Array.from({ length: 101 }, (_, index) => ({
       app_id: 'com.example.' + index,
       start_at: '2026-07-01T00:00:00.000Z',
@@ -112,10 +112,24 @@ describe('admin onboarding activation telemetry', () => {
         get: vi.fn((key: string) => key === 'requestId' ? 'test-request' : undefined),
       } as unknown as Context, windows, '2026-07-01T00:00:00.000Z', new Date('2026-07-13T12:00:00.000Z'))
 
-      expect(telemetry.available).toBe(true)
-      expect(telemetry.first_production_device_at_by_app.get('com.example.0')).toEqual(new Date('2026-07-02T00:00:00.000Z'))
-      expect(telemetry.first_update_download_at_by_app.get('com.example.0')).toEqual(new Date('2026-07-03T00:00:00.000Z'))
+      expect(telemetry.available).toBe(false)
+      expect(telemetry.first_production_device_at_by_app.size).toBe(0)
+      expect(telemetry.first_update_download_at_by_app.size).toBe(0)
+      expect(telemetry.first_store_live_at_by_app.size).toBe(0)
+      expect(telemetry.first_testflight_at_by_app.size).toBe(0)
       expect(fetchMock).toHaveBeenCalledTimes(6)
+      expect(getAdminOnboardingActivationMetrics([{
+        org_id: 'org-0',
+        app_id: 'com.example.0',
+        created_at: '2026-07-01T00:00:00.000Z',
+        activation_window_end: '2026-07-08T00:00:00.000Z',
+      }], telemetry)).toEqual({
+        orgs_with_production_device: 0,
+        orgs_with_update_download: 0,
+        orgs_with_testflight: 0,
+        orgs_with_store_live: 0,
+        trend_by_date: new Map(),
+      })
     }
     finally {
       vi.unstubAllGlobals()

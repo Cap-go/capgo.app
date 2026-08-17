@@ -678,7 +678,7 @@ export async function getAdminOnboardingTelemetry(
   if (validWindows.length === 0)
     return emptyAdminOnboardingTelemetry(true)
 
-  const telemetry = emptyAdminOnboardingTelemetry(true)
+  const telemetry = emptyAdminOnboardingTelemetry()
   try {
     // Batch by SQL size so Analytics Engine queries stay under the 10k limit.
     const windowBatches = batchAdminOnboardingTelemetryWindows(
@@ -702,6 +702,7 @@ export async function getAdminOnboardingTelemetry(
       addFirstSeenByApp(telemetry.first_update_download_at_by_app, updateDownloadRows)
       addInstallSourceFirstSeen(telemetry, installSourceRows)
     }
+    telemetry.available = true
     return telemetry
   }
   catch (error) {
@@ -710,7 +711,7 @@ export async function getAdminOnboardingTelemetry(
       message: 'getAdminOnboardingTelemetry failed',
       error: serializeError(error),
     })
-    return telemetry
+    return emptyAdminOnboardingTelemetry()
   }
 }
 
