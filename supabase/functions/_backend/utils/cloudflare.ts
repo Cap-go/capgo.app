@@ -689,7 +689,7 @@ export async function getAdminOnboardingTelemetry(
           buildAdminOnboardingUpdateDownloadQuery(batch),
           buildAdminOnboardingInstallSourceQuery(batch),
         ]
-        return queries.reduce((longest, query) => query.length > longest.length ? query : longest)
+        return queries.reduce((longest, query) => query.length > longest.length ? query : longest, '')
       },
     )
     for (const windowBatch of windowBatches) {
