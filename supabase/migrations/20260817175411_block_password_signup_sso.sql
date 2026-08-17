@@ -34,7 +34,6 @@ ALTER FUNCTION public.is_sso_auth_provider(text, jsonb) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.is_sso_auth_provider(text, jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.is_sso_auth_provider(text, jsonb) FROM anon, authenticated;
 GRANT ALL ON FUNCTION public.is_sso_auth_provider(text, jsonb) TO service_role;
-GRANT ALL ON FUNCTION public.is_sso_auth_provider(text, jsonb) TO supabase_auth_admin;
 
 CREATE OR REPLACE FUNCTION public.password_signup_blocked_for_email(p_email text)
 RETURNS boolean
@@ -69,7 +68,6 @@ ALTER FUNCTION public.password_signup_blocked_for_email(text) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.password_signup_blocked_for_email(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.password_signup_blocked_for_email(text) FROM anon, authenticated;
 GRANT ALL ON FUNCTION public.password_signup_blocked_for_email(text) TO service_role;
-GRANT ALL ON FUNCTION public.password_signup_blocked_for_email(text) TO supabase_auth_admin;
 
 CREATE OR REPLACE FUNCTION public.hook_before_user_created(event jsonb)
 RETURNS jsonb
@@ -111,8 +109,6 @@ $$;
 ALTER FUNCTION public.hook_before_user_created(jsonb) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.hook_before_user_created(jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.hook_before_user_created(jsonb) FROM anon, authenticated;
-GRANT USAGE ON SCHEMA public TO supabase_auth_admin;
-GRANT EXECUTE ON FUNCTION public.hook_before_user_created(jsonb) TO supabase_auth_admin;
 
 CREATE OR REPLACE FUNCTION public.prevent_password_signup_on_sso()
 RETURNS trigger
@@ -149,3 +145,14 @@ CREATE TRIGGER prevent_password_signup_on_sso
   BEFORE INSERT ON auth.users
   FOR EACH ROW
   EXECUTE FUNCTION public.prevent_password_signup_on_sso();
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'supabase_auth_admin') THEN
+    GRANT USAGE ON SCHEMA public TO supabase_auth_admin;
+    GRANT ALL ON FUNCTION public.is_sso_auth_provider(text, jsonb) TO supabase_auth_admin;
+    GRANT ALL ON FUNCTION public.password_signup_blocked_for_email(text) TO supabase_auth_admin;
+    GRANT EXECUTE ON FUNCTION public.hook_before_user_created(jsonb) TO supabase_auth_admin;
+  END IF;
+END
+$$;
