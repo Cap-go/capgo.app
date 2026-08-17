@@ -80,7 +80,7 @@ describe('onboarding demo reset', () => {
         manifest_count,
         created_at
       ) VALUES
-        ($1, '2.0.0', $2, $3, 'orgs/real/2.0.0.zip', 'r2', false, 1, NOW() - interval '1 day'),
+        ($1, '2.0.0', $2, $3, 'orgs/' || $2::text || '/apps/' || $1 || '/2.0.0.zip', 'r2', false, 1, NOW() - interval '1 day'),
         ($1, '1.0.0', $2, $3, NULL, 'r2', false, 1, NOW())
       RETURNING id, name`,
       [appId, ORG_ID, USER_ID],
