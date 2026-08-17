@@ -122,6 +122,7 @@ function createVersion(overrides: Record<string, unknown> = {}) {
     manifest: null,
     manifest_count: 0,
     name: '1.0.0',
+    owner_org: 'org-1',
     r2_path: 'orgs/org-1/apps/com.cleanup.test/1.0.0.zip',
     storage_provider: 'r2',
     ...overrides,
@@ -180,6 +181,15 @@ describe('on_version_update deleted version cleanup', () => {
     expect(response.status).toBe(200)
     expect(moveObjectToTrash).toHaveBeenCalledWith(expect.anything(), 'orgs/org-1/apps/com.cleanup.test/1.0.0.zip')
     expect(appVersionsMetaUpdate).toHaveBeenCalledWith({ size: 0 })
+  })
+
+  it('skips bundle trash when r2_path does not match the canonical version path', async () => {
+    const response = await deleteIt(createContext(), createVersion({
+      r2_path: 'orgs/org-1/apps/com.cleanup.test/9.9.9.zip',
+    }))
+
+    expect(response.status).toBe(200)
+    expect(moveObjectToTrash).not.toHaveBeenCalled()
   })
 
   it('locks, trashes R2, then deletes each manifest DB row', async () => {
