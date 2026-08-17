@@ -48,8 +48,10 @@ describe('security response headers', () => {
     expect(response.headers.get('content-security-policy')).toBeNull()
   })
 
-  it.concurrent('does not send upgrade-insecure-requests on API CSP', () => {
+  it.concurrent('does not send upgrade-insecure-requests on API CSP', async () => {
     expect(API_CONTENT_SECURITY_POLICY).not.toContain('upgrade-insecure-requests')
+    const response = await apiWorker.fetch(new Request('https://api.preprod.capgo.app/ok'))
+    expect(response.headers.get('content-security-policy')).not.toContain('upgrade-insecure-requests')
   })
 
   it.concurrent.each([
