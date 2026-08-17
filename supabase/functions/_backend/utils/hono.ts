@@ -307,8 +307,10 @@ export function createHono(functionName: string, _version: string) {
       if (!origin)
         return
       const allowed = getAllowedCorsOrigin(origin, c)
-      if (allowed)
+      if (allowed) {
         c.header('Access-Control-Allow-Origin', allowed)
+        c.header('Vary', 'Origin', { append: true })
+      }
     })
   }
 

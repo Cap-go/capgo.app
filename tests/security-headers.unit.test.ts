@@ -66,6 +66,7 @@ describe('security response headers', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('access-control-allow-origin')).toBe(origin)
+    expect(response.headers.get('vary') ?? '').toMatch(/Origin/i)
   })
 
   it.concurrent.each([
