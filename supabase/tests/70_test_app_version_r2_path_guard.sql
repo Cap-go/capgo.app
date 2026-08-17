@@ -88,7 +88,8 @@ VALUES (
   '70000000-0000-4000-8000-000000000070'::uuid,
   tests.get_supabase_uid('r2_path_guard_owner'),
   'r2',
-  'orgs/70000000-0000-4000-8000-000000000070/apps/com.test.r2.path.victim/9.9.9-victim-bundle.zip',
+  'orgs/70000000-0000-4000-8000-000000000070'
+  || '/apps/com.test.r2.path.victim/9.9.9-victim-bundle.zip',
   false
 )
 ON CONFLICT (id) DO UPDATE
@@ -97,7 +98,8 @@ SET r2_path = EXCLUDED.r2_path;
 SELECT throws_ok(
   $$
     UPDATE public.app_versions
-    SET r2_path = 'orgs/70000000-0000-4000-8000-000000000070/apps/com.test.r2.path.victim/9.9.9-victim-bundle.zip'
+    SET r2_path = 'orgs/70000000-0000-4000-8000-000000000070'
+      || '/apps/com.test.r2.path.victim/9.9.9-victim-bundle.zip'
     WHERE id = 7000701
   $$,
   'invalid_r2_path: Bundle storage path must match the canonical location for this version.',
@@ -107,7 +109,8 @@ SELECT throws_ok(
 SELECT lives_ok(
   $$
     UPDATE public.app_versions
-    SET r2_path = 'orgs/70000000-0000-4000-8000-000000000070/apps/com.test.r2.path.guard/1.0.0-r2-path-guard.zip'
+    SET r2_path = 'orgs/70000000-0000-4000-8000-000000000070'
+      || '/apps/com.test.r2.path.guard/1.0.0-r2-path-guard.zip'
     WHERE id = 7000701
   $$,
   'canonical upload_link r2_path is accepted'
@@ -119,14 +122,16 @@ SELECT is(
     FROM public.app_versions
     WHERE id = 7000701
   ),
-  'orgs/70000000-0000-4000-8000-000000000070/apps/com.test.r2.path.guard/1.0.0-r2-path-guard.zip',
+  'orgs/70000000-0000-4000-8000-000000000070'
+  || '/apps/com.test.r2.path.guard/1.0.0-r2-path-guard.zip',
   'canonical r2_path is persisted'
 );
 
 SELECT throws_ok(
   $$
     UPDATE public.app_versions
-    SET r2_path = 'orgs/70000000-0000-4000-8000-000000000070/apps/com.test.r2.path.guard/9.9.9-victim-bundle.zip'
+    SET r2_path = 'orgs/70000000-0000-4000-8000-000000000070'
+      || '/apps/com.test.r2.path.guard/9.9.9-victim-bundle.zip'
     WHERE id = 7000701
   $$,
   'invalid_r2_path: Bundle storage path must match the canonical location for this version.',
@@ -139,8 +144,9 @@ SELECT is(
     FROM public.app_versions
     WHERE id = 7000701
   ),
-  'orgs/70000000-0000-4000-8000-000000000070/apps/com.test.r2.path.guard/1.0.0-r2-path-guard.zip',
-  'canonical r2_path is unchanged after rejected same-app cross-version retarget'
+  'orgs/70000000-0000-4000-8000-000000000070'
+  || '/apps/com.test.r2.path.guard/1.0.0-r2-path-guard.zip',
+  'canonical r2_path unchanged after rejected cross-version retarget'
 );
 
 SELECT * FROM finish(); -- noqa: AM04

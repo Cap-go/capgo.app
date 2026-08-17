@@ -53,7 +53,8 @@ VALUES
     '6aa76066-55ef-4238-ade6-0b32334a4097',
     false,
     'r2',
-    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8/apps/com.test.onb.real.old/1.0.0.zip',
+    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+    || '/apps/com.test.onb.real.old/1.0.0.zip',
     null
   ),
   (
@@ -65,7 +66,8 @@ VALUES
     '6aa76066-55ef-4238-ade6-0b32334a4097',
     false,
     'r2',
-    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8/apps/com.test.onb.real.recent/1.0.0.zip',
+    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+    || '/apps/com.test.onb.real.recent/1.0.0.zip',
     null
   ),
   (
@@ -77,7 +79,8 @@ VALUES
     '6aa76066-55ef-4238-ade6-0b32334a4097',
     false,
     'r2',
-    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8/apps/com.test.onb.noreal.old/builtin.zip',
+    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+    || '/apps/com.test.onb.noreal.old/builtin.zip',
     null
   ),
   (
@@ -89,7 +92,8 @@ VALUES
     '6aa76066-55ef-4238-ade6-0b32334a4097',
     false,
     'r2',
-    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8/apps/com.test.onb.demo.old/1.0.0.zip',
+    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+    || '/apps/com.test.onb.demo.old/1.0.0.zip',
     null
   ),
   (
@@ -125,7 +129,8 @@ VALUES
     '6aa76066-55ef-4238-ade6-0b32334a4097',
     false,
     'r2-direct',
-    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8/apps/com.test.onb.r2direct.old/1.0.0.zip',
+    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+    || '/apps/com.test.onb.r2direct.old/1.0.0.zip',
     null
   ),
   (
@@ -137,7 +142,8 @@ VALUES
     '6aa76066-55ef-4238-ade6-0b32334a4097',
     false,
     'r2',
-    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8/apps/com.test.onb.raises.old/2.0.0.zip',
+    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+    || '/apps/com.test.onb.raises.old/2.0.0.zip',
     null
   ),
   (
@@ -149,7 +155,8 @@ VALUES
     '6aa76066-55ef-4238-ade6-0b32334a4097',
     false,
     'r2',
-    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8/apps/com.test.onb.raises.old/1.0.0.zip',
+    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+    || '/apps/com.test.onb.raises.old/1.0.0.zip',
     null
   );
 
