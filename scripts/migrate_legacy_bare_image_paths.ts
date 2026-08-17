@@ -365,60 +365,100 @@ async function copyObject(
 }
 
 /**
- * Count DB rows that still point at this bare storage object, including
- * padded/alias spellings that normalize to the same key.
+ * One-shot scan: normalized bare path → how many DB rows still reference it.
+ * Keyset pagination (ordered by PK) so concurrent writes cannot skip pages.
+ * Includes padded/alias spellings and absolute storage URLs that normalize to a bare key.
  */
-async function countBareReferences(supabase: SupabaseClient, normalizedBarePath: string) {
-  const aliases = barePathAliases(normalizedBarePath)
-  const [appsExact, orgsExact, usersExact] = await Promise.all([
-    supabase.from('apps').select('app_id', { count: 'exact', head: true }).in('icon_url', aliases),
-    supabase.from('orgs').select('id', { count: 'exact', head: true }).in('logo', aliases),
-    supabase.from('users').select('id', { count: 'exact', head: true }).in('image_url', aliases),
-  ])
-  if (appsExact.error)
-    throw appsExact.error
-  if (orgsExact.error)
-    throw orgsExact.error
-  if (usersExact.error)
-    throw usersExact.error
+async function buildBareReferenceIndex(supabase: SupabaseClient): Promise<Map<string, number>> {
+  const counts = new Map<string, number>()
 
-  let count = (appsExact.count ?? 0) + (orgsExact.count ?? 0) + (usersExact.count ?? 0)
-
-  // Padded whitespace values won't match exact aliases — scan legacy candidates.
-  const aliasSet = new Set(aliases)
-  async function countPadded(table: 'apps' | 'orgs' | 'users') {
-    const column = table === 'apps' ? 'icon_url' : table === 'orgs' ? 'logo' : 'image_url'
-    let from = 0
-    let padded = 0
+  async function scanTable(
+    table: 'apps' | 'orgs' | 'users',
+    column: string,
+    idColumn: string,
+  ) {
+    let lastId: string | null = null
     while (true) {
-      const { data, error } = await applyLegacyImageColumnFilter(
-        supabase.from(table).select(column),
-        column,
-      )
-        .range(from, from + DEFAULT_PAGE_SIZE - 1)
+      let query: any = supabase
+        .from(table)
+        .select(`${idColumn}, ${column}`)
+        .order(idColumn, { ascending: true })
+        .limit(DEFAULT_PAGE_SIZE)
+      query = applyLegacyImageColumnFilter(query, column)
+      if (lastId)
+        query = query.gt(idColumn, lastId)
+
+      const { data, error } = await query
       if (error)
         throw error
       if (!data?.length)
         break
-      for (const row of data) {
-        const raw = String((row as Record<string, unknown>)[column] ?? '')
-        if (aliasSet.has(raw))
+
+      for (const row of data as Record<string, unknown>[]) {
+        lastId = String(row[idColumn] ?? '')
+        const path = normalizeStoredPath(String(row[column] ?? ''))
+        if (!isLegacyBarePath(path))
           continue
-        if (normalizeStoredPath(raw) === normalizedBarePath)
-          padded += 1
+        counts.set(path, (counts.get(path) ?? 0) + 1)
       }
+
       if (data.length < DEFAULT_PAGE_SIZE)
         break
-      from += DEFAULT_PAGE_SIZE
     }
-    return padded
   }
 
-  count += await countPadded('apps')
-  count += await countPadded('orgs')
-  count += await countPadded('users')
+  // Absolute storage URLs are excluded by the legacy filter; scan them separately.
+  async function scanStorageUrlBareRefs(
+    table: 'apps' | 'orgs' | 'users',
+    column: string,
+    idColumn: string,
+  ) {
+    let lastId: string | null = null
+    while (true) {
+      let query = supabase
+        .from(table)
+        .select(`${idColumn}, ${column}`)
+        .not(column, 'is', null)
+        .like(column, '%://%')
+        .like(column, '%/images/%')
+        .order(idColumn, { ascending: true })
+        .limit(DEFAULT_PAGE_SIZE)
+      if (lastId)
+        query = query.gt(idColumn, lastId)
 
-  return count
+      const { data, error } = await query
+      if (error)
+        throw error
+      if (!data?.length)
+        break
+
+      for (const row of data as Record<string, unknown>[]) {
+        lastId = String(row[idColumn] ?? '')
+        const path = normalizeStoredPath(String(row[column] ?? ''))
+        if (!isLegacyBarePath(path))
+          continue
+        counts.set(path, (counts.get(path) ?? 0) + 1)
+      }
+
+      if (data.length < DEFAULT_PAGE_SIZE)
+        break
+    }
+  }
+
+  await scanTable('apps', 'icon_url', 'app_id')
+  await scanTable('orgs', 'logo', 'id')
+  await scanTable('users', 'image_url', 'id')
+  await scanStorageUrlBareRefs('apps', 'icon_url', 'app_id')
+  await scanStorageUrlBareRefs('orgs', 'logo', 'id')
+  await scanStorageUrlBareRefs('users', 'image_url', 'id')
+  return counts
+}
+
+/** Synchronously consume one DB reference after a successful migrate/clear. */
+function consumeBareReference(index: Map<string, number>, normalizedBarePath: string) {
+  const next = Math.max(0, (index.get(normalizedBarePath) ?? 0) - 1)
+  index.set(normalizedBarePath, next)
+  return next
 }
 
 async function updateRow(supabase: SupabaseClient, row: LegacyRow, newValue: string) {
@@ -612,6 +652,7 @@ async function processRow(
   row: LegacyRow,
   apply: boolean,
   deleteSource: boolean,
+  bareRefIndex: Map<string, number> | null,
 ): Promise<MigrateResult> {
   if (row.action === 'clear') {
     if (!apply) {
@@ -625,13 +666,23 @@ async function processRow(
       }
     }
     const { updated, targetPath } = await updateRowWithRetry(supabase, row, '')
+    let deletedSource = false
+    if (updated && deleteSource && bareRefIndex) {
+      const remaining = consumeBareReference(bareRefIndex, row.sourcePath)
+      if (remaining === 0 && !isPlaceholderBare(row.rawValue, row.sourcePath)) {
+        const { error } = await supabase.storage.from('images').remove([row.sourcePath])
+        if (error)
+          throw error
+        deletedSource = true
+      }
+    }
     return {
       kind: row.kind,
       id: row.id,
       sourcePath: row.sourcePath,
       targetPath,
       status: updated ? 'cleared' : 'already_migrated',
-      deletedSource: false,
+      deletedSource,
     }
   }
 
@@ -654,6 +705,8 @@ async function processRow(
   if (!sourceExists) {
     // Object already gone — clear broken pointer so it is not a bare legacy ref.
     const { updated, targetPath: clearedTarget } = await updateRowWithRetry(supabase, row, '')
+    if (updated && bareRefIndex)
+      consumeBareReference(bareRefIndex, row.sourcePath)
     return {
       kind: row.kind,
       id: row.id,
@@ -678,9 +731,9 @@ async function processRow(
   }
 
   let deletedSource = false
-  if (deleteSource) {
-    const refs = await countBareReferences(supabase, row.sourcePath)
-    if (refs === 0) {
+  if (deleteSource && bareRefIndex) {
+    const remaining = consumeBareReference(bareRefIndex, row.sourcePath)
+    if (remaining === 0) {
       const { error } = await supabase.storage.from('images').remove([row.sourcePath])
       if (error)
         throw error
@@ -737,12 +790,19 @@ async function main() {
   const allRows = [...appRows, ...orgRows, ...userRows]
   console.log(`Found legacy bare paths: apps=${appRows.length} orgs=${orgRows.length} users=${userRows.length} total=${allRows.length}`)
 
+  let bareRefIndex: Map<string, number> | null = null
+  if (apply && deleteSource) {
+    console.log('Building bare-path reference index (one scan)…')
+    bareRefIndex = await buildBareReferenceIndex(supabase)
+    console.log(`Indexed ${bareRefIndex.size} distinct bare object keys`)
+  }
+
   const results: MigrateResult[] = []
   const failures: MigrateFailure[] = []
 
   await asyncPool(concurrency, allRows, async (row) => {
     try {
-      const result = await processRow(supabase, row, apply, deleteSource)
+      const result = await processRow(supabase, row, apply, deleteSource, bareRefIndex)
       results.push(result)
       console.log(`[${result.status}] ${row.kind} ${row.id}: ${row.sourcePath} → ${result.targetPath ?? '(cleared)'}`)
     }
