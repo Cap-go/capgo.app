@@ -44,6 +44,7 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'INSERT'), async (c
       registration_os: typeof registrationMetadata.registration_os === 'string' ? registrationMetadata.registration_os : 'unknown',
       user_id: record.id,
     }, BENTO_REGISTERED_FROM_MOBILE_EVENT)
+    // Bento fact events are intentionally at-least-once; queue retries may repeat them.
     if (result === false)
       quickError(500, 'bento_mobile_registration_delivery_failed', 'Bento mobile registration delivery failed')
   }
