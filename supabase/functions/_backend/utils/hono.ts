@@ -265,7 +265,6 @@ export const API_CONTENT_SECURITY_POLICY = [
   'style-src \'none\'',
   'img-src \'none\'',
   'connect-src \'none\'',
-  'upgrade-insecure-requests',
 ].join('; ')
 
 function isPreviewHost(hostname: string) {
@@ -297,6 +296,23 @@ export function createHono(functionName: string, _version: string) {
       c.header('Content-Security-Policy', API_CONTENT_SECURITY_POLICY)
     return next()
   })
+
+  // Echo ACAO after the handler so Capacitor WebView origins work on routes
+  // that forgot useCors (GET /ok). Do not mount hono cors globally: it
+  // short-circuits OPTIONS and strips TUS discovery headers.
+  if (!pluginHotPath) {
+    appGlobal.use('*', async (c, next) => {
+      await next()
+      const origin = c.req.header('origin')
+      if (!origin)
+        return
+      const allowed = getAllowedCorsOrigin(origin, c)
+      if (allowed) {
+        c.header('Access-Control-Allow-Origin', allowed)
+        c.header('Vary', 'Origin', { append: true })
+      }
+    })
+  }
 
   // Skip hono's access logger on plugin hot paths — it serializes every request
   // on millions of device calls/day.
