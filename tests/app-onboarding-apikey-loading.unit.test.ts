@@ -6,7 +6,7 @@ const englishMessages = JSON.parse(readFileSync(new URL('../messages/en.json', i
 
 describe('app onboarding API key loading state', () => {
   it.concurrent('does not render the terminal alternative before an organization exists', () => {
-    expect(onboardingSource).toContain('<div v-if="!props.preOrg" class="pt-1">')
+    expect(onboardingSource).toContain('<div v-if="!props.preOrg && appDetailsStep === \'icon\'" class="pt-1">')
   })
 
   it.concurrent('replaces every incomplete CLI command with the shared loading treatment', () => {

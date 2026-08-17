@@ -48,7 +48,13 @@ describe('buildFrontendOnboardingHogql', () => {
       '2026-08-04T00:00:00.789Z',
     )
 
-    expect(query).toContain("event IN ('onboarding_step_viewed', 'onboarding_ai_instructions_copied', 'onboarding_app_id_entered'")
+    expect(query).toContain("event IN ('onboarding_step_viewed', 'onboarding_ai_instructions_copied'")
+    expect(query).toContain("'onboarding_app_id_entered'")
+    expect(query).toContain("'onboarding_app_creation_succeeded'")
+    expect(query).not.toContain("'onboarding_app_details_step_completed'")
+    expect(query).not.toContain("'onboarding_app_details_step_viewed'")
+    expect(query).toContain("'onboarding_store_icon_import_succeeded'")
+    expect(query).toContain("'onboarding_store_icon_url_entered'")
     expect(query).toContain("'onboarding_organization_import_opened'")
     expect(query).toContain("'onboarding_organization_invite_succeeded'")
     expect(query).toContain("'onboarding_technical_invite_succeeded'")
@@ -68,7 +74,7 @@ describe('buildFrontendOnboardingHogql', () => {
     expect(query).toContain('event = \'Builder Onboarding Step\'')
     expect(query).toContain('JSONExtractString(toString(properties), \'step\') IN (\'welcome\', \'resume-prompt\')')
     expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, event = \'onboarding_step_viewed\' AND step = \'intent\'))')
-    expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, event = \'onboarding_step_viewed\' AND step = \'details\'))')
+    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step IN ('details', 'app_name'))) AS details_ms")
     expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, event = \'onboarding_step_viewed\' AND step = \'organization\'))')
     expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, event = \'onboarding_step_viewed\' AND step = \'setup\'))')
     expect(query).toContain('groupUniqArrayIf(tuple(event, toUnixTimestamp64Milli(timestamp)), event IN (')

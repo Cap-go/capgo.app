@@ -1,6 +1,5 @@
 import type {
   OnboardingAnalyticsFlow,
-  OnboardingAnalyticsStep,
   OnboardingIntent,
 } from '~/utils/onboardingProgressAnalytics'
 
@@ -8,14 +7,18 @@ export const USER_ONBOARDING_STATUSES = ['in_progress', 'completed', 'abandoned'
 export const USER_ONBOARDING_STEPS = ['intent', 'details', 'organization', 'choice', 'install', 'setup'] as const
 export const USER_ONBOARDING_FLOWS = ['pre_org', 'existing_org'] as const
 export const USER_ONBOARDING_INTENTS = ['ota', 'builder', 'both', 'exploring'] as const
+export const USER_ONBOARDING_DETAILS_STEPS = ['name', 'app_id', 'icon'] as const
 
 export type UserOnboardingStatus = typeof USER_ONBOARDING_STATUSES[number]
+export type UserOnboardingStep = typeof USER_ONBOARDING_STEPS[number]
+export type UserOnboardingDetailsStep = typeof USER_ONBOARDING_DETAILS_STEPS[number]
 
 export interface UserOnboardingProgress {
   status: UserOnboardingStatus
-  step: OnboardingAnalyticsStep
+  step: UserOnboardingStep
   flow: OnboardingAnalyticsFlow
   intent?: OnboardingIntent
+  details_step?: UserOnboardingDetailsStep
   app_name?: string
   app_id?: string
   existing_app?: boolean | null
@@ -32,9 +35,10 @@ export interface UserOnboardingProgress {
 
 export interface UserOnboardingProgressInput {
   status: UserOnboardingStatus
-  step: OnboardingAnalyticsStep
+  step: UserOnboardingStep
   flow: OnboardingAnalyticsFlow
   intent?: OnboardingIntent | null
+  detailsStep?: UserOnboardingDetailsStep
   appName?: string
   appId?: string
   existingApp?: boolean | null
@@ -118,6 +122,9 @@ function applyOptionalUserOnboardingFields(
   if (isOneOf(raw.intent, USER_ONBOARDING_INTENTS))
     progress.intent = raw.intent
 
+  if (isOneOf(raw.details_step, USER_ONBOARDING_DETAILS_STEPS))
+    progress.details_step = raw.details_step
+
   const appName = optionalTrimmedString(raw.app_name)
   if (appName)
     progress.app_name = appName
@@ -199,6 +206,9 @@ export function buildUserOnboardingProgress(input: UserOnboardingProgressInput):
   if (input.intent)
     progress.intent = input.intent
 
+  if (input.detailsStep)
+    progress.details_step = input.detailsStep
+
   const appName = optionalTrimmedString(input.appName)
   if (appName)
     progress.app_name = appName
@@ -241,9 +251,9 @@ export function buildUserOnboardingProgress(input: UserOnboardingProgressInput):
 }
 
 export function clampResumableOnboardingStep(
-  step: OnboardingAnalyticsStep,
+  step: UserOnboardingStep,
   flow: OnboardingAnalyticsFlow,
-): OnboardingAnalyticsStep {
+): UserOnboardingStep {
   if (flow === 'pre_org' && (step === 'choice' || step === 'install' || step === 'setup'))
     return 'organization'
   return step

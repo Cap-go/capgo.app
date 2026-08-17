@@ -31,16 +31,19 @@ describe('onboarding details field analytics debounce', () => {
     tracker.schedule('onboarding_app_name_entered', 'app_name', '   ')
     tracker.schedule('onboarding_app_id_entered', 'app_id', 'com.example.app')
     tracker.schedule('onboarding_store_url_entered', 'store_url', 'https://apps.apple.com/example')
+    const iconStoreUrl = 'https://play.google.com/example'
+    tracker.schedule('onboarding_store_icon_url_entered', 'icon_store_url', iconStoreUrl)
     vi.advanceTimersByTime(1_000)
 
-    expect(emit).toHaveBeenCalledTimes(2)
+    expect(emit).toHaveBeenCalledTimes(3)
     expect(emit).toHaveBeenCalledWith('onboarding_app_id_entered', { field_length: 15 })
     expect(emit).toHaveBeenCalledWith('onboarding_store_url_entered', { field_length: 30 })
+    expect(emit).toHaveBeenCalledWith('onboarding_store_icon_url_entered', { field_length: iconStoreUrl.length })
 
     tracker.schedule('onboarding_app_name_entered', 'app_name', 'Never emitted')
     tracker.dispose()
     vi.runAllTimers()
-    expect(emit).toHaveBeenCalledTimes(3)
+    expect(emit).toHaveBeenCalledTimes(4)
     expect(emit).toHaveBeenLastCalledWith('onboarding_app_name_entered', { field_length: 13 })
   })
 })

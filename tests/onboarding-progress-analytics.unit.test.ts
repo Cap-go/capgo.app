@@ -287,6 +287,64 @@ describe('onboarding progress analytics', () => {
     )
   })
 
+  it.concurrent('associates app-details interactions with their page-level analytics step', () => {
+    const capture = vi.fn()
+    const pageSteps = ['intent', 'app_name', 'app_id', 'app_icon', 'organization', 'setup'] as const
+    const tracker = createOnboardingProgressTracker({
+      ...trackerIdentity,
+      capture,
+      flow: 'pre_org',
+      resumed: false,
+      steps: pageSteps,
+      supaHost: 'https://supabase.capgo.test',
+    })
+
+    tracker.viewStep('app_name')
+    capture.mockClear()
+    tracker.trackDetailsEvent('onboarding_app_name_entered', { field_length: 11 }, 'app_name')
+
+    expect(capture).toHaveBeenCalledWith(
+      'onboarding_app_name_entered',
+      'https://supabase.capgo.test',
+      expect.objectContaining({
+        field_length: 11,
+        step: 'app_name',
+        step_index: 1,
+        total_steps: 6,
+      }),
+    )
+  })
+
+  it.concurrent('associates app creation outcomes with sanitized choice metadata', () => {
+    const capture = vi.fn()
+    const tracker = createOnboardingProgressTracker({
+      ...trackerIdentity,
+      capture,
+      flow: 'pre_org',
+      resumed: false,
+      steps,
+      supaHost: 'https://supabase.capgo.test',
+    })
+
+    tracker.trackDetailsEvent('onboarding_app_creation_succeeded', {
+      app_id_source: 'generated',
+      has_icon: true,
+      icon_source: 'store',
+      used_fallback: false,
+    })
+
+    expect(capture).toHaveBeenCalledWith(
+      'onboarding_app_creation_succeeded',
+      'https://supabase.capgo.test',
+      expect.objectContaining({
+        app_id_source: 'generated',
+        has_icon: true,
+        icon_source: 'store',
+        used_fallback: false,
+      }),
+    )
+  })
+
   it.concurrent('associates organization interactions with the active attempt', () => {
     const capture = vi.fn()
     const tracker = createOnboardingProgressTracker({

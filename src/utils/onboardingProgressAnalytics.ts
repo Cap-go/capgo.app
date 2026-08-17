@@ -3,7 +3,7 @@ import { pushEvent } from '~/services/posthog'
 export const ONBOARDING_ANALYTICS_VERSION = 3
 
 export type OnboardingAnalyticsFlow = 'pre_org' | 'existing_org'
-export type OnboardingAnalyticsStep = 'intent' | 'details' | 'organization' | 'choice' | 'install' | 'setup'
+export type OnboardingAnalyticsStep = 'intent' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'choice' | 'install' | 'setup'
 export type OnboardingCopyEvent = 'onboarding_ai_instructions_copied' | 'onboarding_cli_command_copied'
 export type OnboardingIntent = 'ota' | 'builder' | 'both' | 'exploring'
 export type OnboardingInteractionEvent
@@ -18,8 +18,14 @@ export type OnboardingInteractionEvent
     | 'onboarding_technical_invite_opened'
     | 'onboarding_technical_invite_succeeded'
 export type OnboardingDetailsEvent
-  = | 'onboarding_app_id_entered'
+  = | 'onboarding_app_creation_failed'
+    | 'onboarding_app_creation_started'
+    | 'onboarding_app_creation_succeeded'
+    | 'onboarding_app_icon_import_selected'
+    | 'onboarding_app_icon_removed'
+    | 'onboarding_app_id_entered'
     | 'onboarding_app_id_help_opened'
+    | 'onboarding_app_id_suggestion_selected'
     | 'onboarding_app_icon_picked'
     | 'onboarding_app_icon_picker_closed_without_selection'
     | 'onboarding_app_icon_picker_open_failed'
@@ -32,6 +38,12 @@ export type OnboardingDetailsEvent
     | 'onboarding_store_import_shown'
     | 'onboarding_store_import_submitted'
     | 'onboarding_store_import_succeeded'
+    | 'onboarding_store_icon_import_failed'
+    | 'onboarding_store_icon_import_hidden'
+    | 'onboarding_store_icon_import_shown'
+    | 'onboarding_store_icon_import_submitted'
+    | 'onboarding_store_icon_import_succeeded'
+    | 'onboarding_store_icon_url_entered'
     | 'onboarding_store_url_entered'
 
 type AnalyticsPrimitive = string | number | boolean
@@ -60,8 +72,12 @@ export interface OnboardingStepCompletionProperties {
 }
 
 export interface OnboardingDetailsEventProperties {
+  app_id_source?: 'generated' | 'manual' | 'store'
+  failure_reason?: 'all_conflicts' | 'request_error'
   field_length?: number
-  icon_source?: 'file' | 'store'
+  has_icon?: boolean
+  icon_source?: 'file' | 'none' | 'store'
+  used_fallback?: boolean
 }
 
 export interface OnboardingInteractionProperties {
@@ -76,7 +92,7 @@ export interface OnboardingCopyEventProperties {
   setup_command: 'builder' | 'ota'
 }
 
-export type OnboardingDetailsField = 'app_id' | 'app_name' | 'store_url'
+export type OnboardingDetailsField = 'app_id' | 'app_name' | 'icon_store_url' | 'store_url'
 
 export function createOnboardingDetailsFieldDebouncer(
   emit: (name: OnboardingDetailsEvent, properties: OnboardingDetailsEventProperties) => void,
@@ -270,8 +286,12 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     safelyCapture('onboarding_step_completed', properties)
   }
 
-  function trackDetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
-    const properties = sharedProperties('details')
+  function trackDetailsEvent(
+    name: OnboardingDetailsEvent,
+    details: OnboardingDetailsEventProperties = {},
+    step: OnboardingAnalyticsStep = 'details',
+  ) {
+    const properties = sharedProperties(step)
     if (!properties)
       return
 
