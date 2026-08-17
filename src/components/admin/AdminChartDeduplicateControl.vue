@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 
+const props = defineProps<{
+  chartLabel: string
+}>()
 const modelValue = defineModel<boolean>({ required: true })
 const { t } = useI18n()
 </script>
@@ -14,6 +17,7 @@ const { t } = useI18n()
       <input
         v-model="modelValue"
         type="checkbox"
+        :aria-label="t('frontend-onboarding-deduplicate-by-user-chart', { chart: props.chartLabel })"
         class="d-checkbox d-checkbox-primary d-checkbox-sm"
       >
       <span>{{ t('frontend-onboarding-deduplicate-by-user') }}</span>

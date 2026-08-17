@@ -118,7 +118,16 @@ const v3SetupGraphEventNodes = [
 ] as const
 
 const loadAnalytics = createFrontendOnboardingAnalyticsLoader(
-  async () => await adminStore.fetchStats('frontend_onboarding_analytics') || null,
+  async () => {
+    const result = await adminStore.fetchStats('frontend_onboarding_analytics')
+    if (result && (
+      !Array.isArray(result.deduplicated?.daily_attempts)
+      || !Array.isArray(result.deduplicated?.funnels?.v3)
+    )) {
+      throw new Error('Frontend onboarding analytics response is missing deduplicated chart data')
+    }
+    return result || null
+  },
   {
     onAnalytics: (value) => {
       analytics.value = value
@@ -459,7 +468,10 @@ displayStore.defaultBack = '/dashboard'
             :has-data="hasDailyAttempts"
           >
             <AdminStackedBarChart :series="dailySeries" :is-loading="isLoadingStats" />
-            <AdminChartDeduplicateControl v-model="deduplicateDailyAttempts" />
+            <AdminChartDeduplicateControl
+              v-model="deduplicateDailyAttempts"
+              :chart-label="t('frontend-onboarding-daily-attempts')"
+            />
           </ChartCard>
 
           <ChartCard
@@ -490,7 +502,10 @@ displayStore.defaultBack = '/dashboard'
                 </p>
               </div>
             </div>
-            <AdminChartDeduplicateControl v-model="deduplicateV3Funnel" />
+            <AdminChartDeduplicateControl
+              v-model="deduplicateV3Funnel"
+              :chart-label="t('frontend-onboarding-funnel-v3')"
+            />
           </ChartCard>
 
           <ChartCard
