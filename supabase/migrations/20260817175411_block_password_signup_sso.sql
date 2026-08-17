@@ -37,28 +37,47 @@ GRANT ALL ON FUNCTION public.is_sso_auth_provider(text, jsonb) TO service_role;
 
 CREATE OR REPLACE FUNCTION public.password_signup_blocked_for_email(p_email text)
 RETURNS boolean
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
 SET search_path = ''
 AS $$
-  SELECT
-    p_email IS NOT NULL
-    AND btrim(p_email) <> ''
-    AND (
-      EXISTS (
+DECLARE
+  v_blocked boolean := false;
+BEGIN
+  IF p_email IS NULL OR btrim(p_email) = '' THEN
+    RETURN false;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'auth'
+      AND table_name = 'users'
+      AND column_name = 'is_sso_user'
+  ) THEN
+    EXECUTE $q$
+      SELECT EXISTS (
         SELECT 1
         FROM auth.users AS au
-        WHERE lower(au.email) = lower(btrim(p_email))
+        WHERE lower(au.email) = lower(btrim($1))
           AND au.is_sso_user IS TRUE
       )
-      OR EXISTS (
-        SELECT 1
-        FROM public.sso_providers AS sp
-        WHERE sp.domain = lower(split_part(btrim(p_email), '@', 2))
-          AND sp.status = 'active'
-      )
-    );
+    $q$
+    INTO v_blocked
+    USING p_email;
+    IF v_blocked THEN
+      RETURN true;
+    END IF;
+  END IF;
+
+  RETURN EXISTS (
+    SELECT 1
+    FROM public.sso_providers AS sp
+    WHERE sp.domain = lower(split_part(btrim(p_email), '@', 2))
+      AND sp.status = 'active'
+  );
+END;
 $$;
 
 COMMENT ON FUNCTION public.password_signup_blocked_for_email(text) IS
@@ -117,7 +136,7 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 BEGIN
-  IF NEW.is_sso_user IS TRUE THEN
+  IF COALESCE(to_jsonb(NEW)->>'is_sso_user', '') IN ('true', 't') THEN
     RETURN NEW;
   END IF;
 
