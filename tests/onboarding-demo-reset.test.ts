@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, describe, expect, it } from 'vitest'
+import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
 import { cleanupPostgresClient, executeSQL, ORG_ID, USER_ID } from './test-utils.ts'
 
 const RELATIONS = {
@@ -68,6 +69,8 @@ describe('onboarding demo reset', () => {
     const realDate = '2099-04-01'
     const demoDate = '2099-04-02'
 
+    const realR2Path = getCanonicalAppVersionR2Path(ORG_ID, appId, '2.0.0')
+
     const versionRows = await executeSQL(
       `INSERT INTO public.app_versions (
         app_id,
@@ -80,10 +83,10 @@ describe('onboarding demo reset', () => {
         manifest_count,
         created_at
       ) VALUES
-        ($1, '2.0.0', $2, $3, 'orgs/' || $2::text || '/apps/' || $1 || '/2.0.0.zip', 'r2', false, 1, NOW() - interval '1 day'),
+        ($1, '2.0.0', $2, $3, $4, 'r2', false, 1, NOW() - interval '1 day'),
         ($1, '1.0.0', $2, $3, NULL, 'r2', false, 1, NOW())
       RETURNING id, name`,
-      [appId, ORG_ID, USER_ID],
+      [appId, ORG_ID, USER_ID, realR2Path],
     ) as Array<{ id: number, name: string }>
     const realVersionId = versionRows.find(row => row.name === '2.0.0')!.id
     const demoVersionId = versionRows.find(row => row.name === '1.0.0')!.id
