@@ -118,12 +118,14 @@ SELECT lives_ok(
 
 SELECT is(
   (
-    SELECT r2_path
+    SELECT r2_path::text
     FROM public.app_versions
     WHERE id = 7000701
   ),
-  'orgs/70000000-0000-4000-8000-000000000070'
-  || '/apps/com.test.r2.path.guard/1.0.0-r2-path-guard.zip',
+  (
+    'orgs/70000000-0000-4000-8000-000000000070'
+    || '/apps/com.test.r2.path.guard/1.0.0-r2-path-guard.zip'
+  ),
   'canonical r2_path is persisted'
 );
 
@@ -140,12 +142,14 @@ SELECT throws_ok(
 
 SELECT is(
   (
-    SELECT r2_path
+    SELECT r2_path::text
     FROM public.app_versions
     WHERE id = 7000701
   ),
-  'orgs/70000000-0000-4000-8000-000000000070'
-  || '/apps/com.test.r2.path.guard/1.0.0-r2-path-guard.zip',
+  (
+    'orgs/70000000-0000-4000-8000-000000000070'
+    || '/apps/com.test.r2.path.guard/1.0.0-r2-path-guard.zip'
+  ),
   'canonical r2_path unchanged after rejected cross-version retarget'
 );
 
