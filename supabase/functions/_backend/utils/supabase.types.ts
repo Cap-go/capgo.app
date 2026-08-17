@@ -4882,6 +4882,10 @@ export type Database = {
         Args: { p_org_id: string; p_user_id: string }
         Returns: boolean
       }
+      is_version_scoped_app_version_r2_path: {
+        Args: { p_app_id: string; p_r2_path: string; p_version_name: string }
+        Returns: boolean
+      }
       lock_channel_bundle_lifecycle: {
         Args: { p_rollout_version_id: number; p_version_id: number }
         Returns: undefined
