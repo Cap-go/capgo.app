@@ -96,6 +96,16 @@ describe('admin frontend onboarding dashboard', () => {
         { key: 'setup', label: 'Setup reached', reached: 1, of_start_percent: 25, dropoff_percent: 50 },
       ],
     },
+    deduplicated: {
+      daily_attempts: [
+        { date: '2026-08-10', v1_attempts: 5, v2_attempts: 2, v3_attempts: 1 },
+      ],
+      funnels: {
+        v3: [
+          { key: 'intent', label: 'Intent', reached: 3, of_start_percent: 100, dropoff_percent: 0 },
+        ],
+      },
+    },
     v2_graph: {
       nodes: [
         { key: 'details', count: 4 },
@@ -677,6 +687,34 @@ describe('admin frontend onboarding dashboard', () => {
     expect(funnelChart).toContain('class="d-loading d-loading-spinner d-loading-lg text-primary"')
   })
 
+  it.concurrent('shows independent local de-duplicate controls on the expanded daily attempts and v3 funnel cards', async () => {
+    const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
+    const control = await readFile(new URL('../src/components/admin/AdminChartDeduplicateControl.vue', import.meta.url), 'utf8')
+    const dailyAttemptsIndex = source.indexOf(`t('frontend-onboarding-daily-attempts')`)
+    const v3FunnelIndex = source.indexOf(`t('frontend-onboarding-funnel-v3')`)
+    const nextChartIndex = source.indexOf(`t('frontend-onboarding-daily-intent-to-details')`)
+
+    expect(source).toContain('const deduplicateDailyAttempts = ref(false)')
+    expect(source).toContain('const deduplicateV3Funnel = ref(false)')
+    expect(source).toContain('const displayedDailyAttempts = computed')
+    expect(source).toContain('deduplicateDailyAttempts.value')
+    expect(source).toContain('visibleAnalytics.value?.deduplicated.daily_attempts')
+    expect(source).toContain('const displayedV3Funnel = computed')
+    expect(source).toContain('deduplicateV3Funnel.value')
+    expect(source).toContain('visibleAnalytics.value?.deduplicated.funnels.v3')
+    expect(source).toContain('buildFrontendOnboardingDailySeries(\n  displayedDailyAttempts.value')
+    expect(source).toContain('buildFrontendOnboardingFunnelStages(displayedV3Funnel.value)')
+    expect(source).toContain('buildFrontendOnboardingFunnelSummaries(displayedV3Funnel.value)')
+    expect(source.match(/deduplicateDailyAttempts/g)).toHaveLength(3)
+    expect(source.match(/deduplicateV3Funnel/g)).toHaveLength(3)
+    expect(source.slice(dailyAttemptsIndex, v3FunnelIndex)).toContain('<AdminChartDeduplicateControl v-model="deduplicateDailyAttempts" />')
+    expect(source.slice(v3FunnelIndex, nextChartIndex)).toContain('<AdminChartDeduplicateControl v-model="deduplicateV3Funnel" />')
+    expect(control).toContain('data-test="deduplicate-by-user"')
+    expect(control).toContain('type="checkbox"')
+    expect(control).toContain('justify-end')
+    expect(control).toContain(`t('frontend-onboarding-deduplicate-by-user')`)
+  })
+
   it.concurrent('shows request failures instead of zero analytics', async () => {
     const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
     const template = source.slice(source.indexOf('<template>'))
@@ -729,6 +767,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(messages['frontend-onboarding-median-time-subtitle']).toBe('Completed attempts only')
     expect(messages['frontend-onboarding-largest-dropoff']).toBe('Largest drop-off')
     expect(messages['frontend-onboarding-daily-attempts']).toBe('Daily onboarding attempts')
+    expect(messages['frontend-onboarding-deduplicate-by-user']).toBe('De-duplicate by user')
     expect(messages['frontend-onboarding-daily-intent-to-details']).toBe('Daily Intent → App details conversion (v1, v2, and v3)')
     expect(messages['frontend-onboarding-daily-details-to-organization']).toBe('Daily App details → Organization conversion (v3)')
     expect(messages['frontend-onboarding-daily-organization-to-setup']).toBe('Daily Organization → Setup reached conversion (v3)')

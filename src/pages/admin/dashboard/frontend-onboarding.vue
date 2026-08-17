@@ -13,6 +13,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import AdminBarChart from '~/components/admin/AdminBarChart.vue'
+import AdminChartDeduplicateControl from '~/components/admin/AdminChartDeduplicateControl.vue'
 import AdminDailyConversionChart from '~/components/admin/AdminDailyConversionChart.vue'
 import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
 import AdminFunnelChart from '~/components/admin/AdminFunnelChart.vue'
@@ -45,6 +46,8 @@ const isLoadingStats = ref(false)
 const isReady = ref(false)
 const analytics = ref<FrontendOnboardingAnalytics | null>(null)
 const loadError = ref(false)
+const deduplicateDailyAttempts = ref(false)
+const deduplicateV3Funnel = ref(false)
 
 const v3DetailsGraphDefinitions = [
   { key: 'onboarding_app_name_entered' },
@@ -136,9 +139,15 @@ const loadAnalytics = createFrontendOnboardingAnalyticsLoader(
 )
 
 const visibleAnalytics = computed(() => isLoadingStats.value ? null : analytics.value)
+const displayedDailyAttempts = computed(() => deduplicateDailyAttempts.value
+  ? visibleAnalytics.value?.deduplicated.daily_attempts ?? []
+  : visibleAnalytics.value?.daily_attempts ?? [])
+const displayedV3Funnel = computed(() => deduplicateV3Funnel.value
+  ? visibleAnalytics.value?.deduplicated.funnels.v3 ?? []
+  : visibleAnalytics.value?.funnels.v3 ?? [])
 const kpis = computed(() => visibleAnalytics.value?.kpis)
 const dailySeries = computed(() => buildFrontendOnboardingDailySeries(
-  visibleAnalytics.value?.daily_attempts ?? [],
+  displayedDailyAttempts.value,
   t('frontend-onboarding-version-1'),
   t('frontend-onboarding-version-2'),
   t('frontend-onboarding-version-3'),
@@ -148,10 +157,10 @@ const detailsToOrganizationDaily = computed(() => visibleAnalytics.value?.daily_
 const organizationToSetupDaily = computed(() => visibleAnalytics.value?.daily_conversions?.organization_to_setup ?? [])
 const hasConversionData = (points: readonly { started: number }[]) => points.some(point => point.started > 0)
 const v1FunnelStages = computed(() => buildFrontendOnboardingFunnelStages(visibleAnalytics.value?.funnels.v1 ?? []))
-const v3FunnelStages = computed(() => buildFrontendOnboardingFunnelStages(visibleAnalytics.value?.funnels.v3 ?? []))
+const v3FunnelStages = computed(() => buildFrontendOnboardingFunnelStages(displayedV3Funnel.value))
 const v1FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(visibleAnalytics.value?.funnels.v1 ?? []))
-const v3FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(visibleAnalytics.value?.funnels.v3 ?? []))
-const hasDailyAttempts = computed(() => (visibleAnalytics.value?.daily_attempts ?? [])
+const v3FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(displayedV3Funnel.value))
+const hasDailyAttempts = computed(() => displayedDailyAttempts.value
   .some(day => day.v1_attempts > 0 || day.v2_attempts > 0 || day.v3_attempts > 0))
 const setupCliOutcomes = computed(() => visibleAnalytics.value?.v2_v3_setup_cli_outcomes ?? {
   total_users: 0,
@@ -450,6 +459,7 @@ displayStore.defaultBack = '/dashboard'
             :has-data="hasDailyAttempts"
           >
             <AdminStackedBarChart :series="dailySeries" :is-loading="isLoadingStats" />
+            <AdminChartDeduplicateControl v-model="deduplicateDailyAttempts" />
           </ChartCard>
 
           <ChartCard
@@ -480,6 +490,7 @@ displayStore.defaultBack = '/dashboard'
                 </p>
               </div>
             </div>
+            <AdminChartDeduplicateControl v-model="deduplicateV3Funnel" />
           </ChartCard>
 
           <ChartCard
