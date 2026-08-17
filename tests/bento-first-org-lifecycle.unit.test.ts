@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const {
   closeClientMock,
   createApiKeyMock,
+  getUserByIdMock,
   getPgClientMock,
   pgConnectMock,
   pgQueryMock,
@@ -16,9 +17,14 @@ const {
   const pgQueryMock = vi.fn<(query: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>>(async () => ({ rows: [] }))
   const pgReleaseMock = vi.fn<(destroy?: Error | boolean) => void>(() => undefined)
   const pgConnectMock = vi.fn(async () => ({ query: pgQueryMock, release: pgReleaseMock }))
+  const getUserByIdMock = vi.fn<(userId: string) => Promise<{
+    data: { user: { user_metadata: Record<string, unknown> } | null }
+    error: Error | null
+  }>>(async () => ({ data: { user: { user_metadata: {} } }, error: null }))
   return {
     closeClientMock: vi.fn(async () => undefined),
     createApiKeyMock: vi.fn(async () => undefined),
+    getUserByIdMock,
     getPgClientMock: vi.fn(() => ({ connect: pgConnectMock, query: pgQueryMock })),
     pgConnectMock,
     pgQueryMock,
@@ -31,7 +37,12 @@ const {
       signal?: AbortSignal,
     ) => Promise<boolean | undefined>>(async () => true),
     syncUserPreferenceTagsMock: vi.fn(async () => undefined),
-    trackBentoEventMock: vi.fn(async () => true as boolean | undefined),
+    trackBentoEventMock: vi.fn<(
+      c: unknown,
+      email: string,
+      data: Record<string, unknown>,
+      event: string,
+    ) => Promise<boolean | undefined>>(async () => true),
     unsubscribeBentoMock: vi.fn<(
       c: unknown,
       email: string,
@@ -61,6 +72,7 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   createApiKey: createApiKeyMock,
+  supabaseAdmin: vi.fn(() => ({ auth: { admin: { getUserById: getUserByIdMock } } })),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/tracking.ts', () => ({
@@ -143,6 +155,10 @@ function userRecord(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function mockRegistrationMetadata(user_metadata: Record<string, unknown>) {
+  getUserByIdMock.mockResolvedValue({ data: { user: { user_metadata } }, error: null })
+}
+
 async function postUser(record = userRecord()) {
   return await onUserCreateApp.request('http://local/', {
     body: JSON.stringify({
@@ -163,6 +179,7 @@ describe('first-organization lifecycle on user registration', () => {
     pgConnectMock.mockImplementation(async () => ({ query: pgQueryMock, release: pgReleaseMock }))
     pgReleaseMock.mockImplementation(() => undefined)
     closeClientMock.mockResolvedValue(undefined)
+    mockRegistrationMetadata({})
     getPgClientMock.mockImplementation(() => ({ connect: pgConnectMock, query: pgQueryMock }))
     pgQueryMock.mockResolvedValue({ rows: [firstOrgDatabaseState()] })
     syncBentoSubscriberTagsMock.mockResolvedValue(true)
@@ -199,6 +216,55 @@ describe('first-organization lifecycle on user registration', () => {
       'user:registered_without_org',
     )
     expect(pgQueryMock).toHaveBeenCalledTimes(4)
+  })
+
+  it.each([
+    ['mobile', true],
+    ['tablet', true],
+    ['desktop', false],
+    ['unknown', false],
+    [undefined, false],
+  ])('emits the mobile registration event for %s device metadata', async (deviceType, shouldEmit) => {
+    mockRegistrationMetadata({
+      registration_browser: 'Mobile Safari',
+      registration_device_type: deviceType,
+      registration_os: 'iOS',
+    })
+
+    const response = await postUser()
+    const mobileEvents = trackBentoEventMock.mock.calls.filter(call => call[3] === 'user:registered_from_mobile')
+
+    expect(response.status).toBe(200)
+    expect(mobileEvents).toHaveLength(shouldEmit ? 1 : 0)
+    if (shouldEmit) {
+      expect(mobileEvents[0]).toEqual([expect.anything(), 'new.user@example.com', {
+        registered_at: REGISTERED_AT,
+        registration_browser: 'Mobile Safari',
+        registration_device_type: deviceType,
+        registration_os: 'iOS',
+        user_id: USER_ID,
+      }, 'user:registered_from_mobile'])
+    }
+  })
+
+  it('fails for retry when Bento rejects the mobile registration event', async () => {
+    mockRegistrationMetadata({ registration_device_type: 'mobile' })
+    trackBentoEventMock.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+
+    const response = await postUser()
+    trackBentoEventMock.mockReset()
+    trackBentoEventMock.mockResolvedValue(true)
+
+    expect(response.status).toBe(500)
+  })
+
+  it('fails before provisioning when the Auth metadata lookup fails', async () => {
+    getUserByIdMock.mockResolvedValueOnce({ data: { user: null }, error: new Error('Auth unavailable') })
+
+    const response = await postUser()
+
+    expect(response.status).toBe(500)
+    expect(createApiKeyMock).not.toHaveBeenCalled()
   })
 
   it('returns a retryable failure when default API-key provisioning times out on a lock', async () => {
