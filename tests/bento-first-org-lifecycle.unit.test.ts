@@ -18,7 +18,7 @@ const {
   const pgReleaseMock = vi.fn<(destroy?: Error | boolean) => void>(() => undefined)
   const pgConnectMock = vi.fn(async () => ({ query: pgQueryMock, release: pgReleaseMock }))
   const getUserByIdMock = vi.fn<(userId: string) => Promise<{
-    data: { user: { user_metadata: Record<string, unknown> } | null }
+    data: { user: { user_metadata: Record<string, unknown> | null } | null }
     error: Error | null
   }>>(async () => ({ data: { user: { user_metadata: {} } }, error: null }))
   return {
@@ -155,7 +155,7 @@ function userRecord(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function mockRegistrationMetadata(user_metadata: Record<string, unknown>) {
+function mockRegistrationMetadata(user_metadata: Record<string, unknown> | null) {
   getUserByIdMock.mockResolvedValue({ data: { user: { user_metadata } }, error: null })
 }
 
@@ -225,7 +225,7 @@ describe('first-organization lifecycle on user registration', () => {
     ['unknown', false],
     [undefined, false],
   ])('emits the mobile registration event for %s device metadata', async (deviceType, shouldEmit) => {
-    mockRegistrationMetadata({
+    mockRegistrationMetadata(deviceType === undefined ? null : {
       registration_browser: 'Mobile Safari',
       registration_device_type: deviceType,
       registration_os: 'iOS',

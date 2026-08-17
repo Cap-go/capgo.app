@@ -17,7 +17,7 @@ async function getRegistrationMetadata(c: Context, userId: string) {
   const { data, error } = await supabaseAdmin(c).auth.admin.getUserById(userId)
   if (error)
     throw error
-  return data.user.user_metadata
+  return data.user.user_metadata ?? {}
 }
 
 app.post('/', middlewareAPISecret, triggerValidator('users', 'INSERT'), async (c) => {
