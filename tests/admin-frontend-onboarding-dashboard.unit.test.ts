@@ -774,7 +774,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(messages['frontend-onboarding-largest-dropoff']).toBe('Largest drop-off')
     expect(messages['frontend-onboarding-daily-attempts']).toBe('Daily onboarding attempts')
     expect(messages['frontend-onboarding-deduplicate-by-user']).toBe('De-duplicate by user')
-    expect(messages['frontend-onboarding-deduplicate-by-user-chart']).toBe('De-duplicate {chart} by user')
+    expect(messages['frontend-onboarding-deduplicate-by-user-chart']).toBe('De-duplicate by user: {chart}')
     expect(messages['frontend-onboarding-daily-intent-to-details']).toBe('Daily Intent → App details conversion (v1, v2, and v3)')
     expect(messages['frontend-onboarding-daily-details-to-organization']).toBe('Daily App details → Organization conversion (v3)')
     expect(messages['frontend-onboarding-daily-organization-to-setup']).toBe('Daily Organization → Setup reached conversion (v3)')
