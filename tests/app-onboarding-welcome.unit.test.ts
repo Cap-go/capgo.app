@@ -29,9 +29,12 @@ describe('app onboarding welcome', () => {
       source.indexOf('function whiteCardToggleButtonClass('),
     )
 
-    expect(source).toContain('useMediaQuery(\'(min-width: 640px) and (min-height: 640px)\')')
-    expect(source).toContain('const showPreOrgWelcome = computed(() => props.preOrg && hasWelcomeCanvas.value && welcomePending.value)')
-    expect(source).toContain('welcomePending.value = Boolean(props.preOrg)')
+    expect(source).toContain('const WELCOME_CANVAS_MEDIA_QUERY = \'(min-width: 640px) and (min-height: 640px)\'')
+    expect(source).toContain('const welcomeCanvasEligible = ref(false)')
+    expect(source).toContain('const showPreOrgWelcome = computed(() => props.preOrg && welcomeCanvasEligible.value && welcomePending.value)')
+    expect(source).toContain('welcomeCanvasEligible.value = window.matchMedia(WELCOME_CANVAS_MEDIA_QUERY).matches')
+    expect(source).toContain('welcomePending.value = Boolean(props.preOrg && welcomeCanvasEligible.value)')
+    expect(source).not.toContain('useMediaQuery(')
     expect(source).not.toContain('useMediaQuery(\'(min-width: 1024px)\')')
     expect(source).not.toContain('(hover: hover) and (pointer: fine)')
     expect(source).toContain('v-if="showPreOrgWelcome && !isLoading"')

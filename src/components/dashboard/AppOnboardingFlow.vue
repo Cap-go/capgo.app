@@ -12,7 +12,6 @@ import type {
 } from '~/utils/onboardingProgressAnalytics'
 import type { OnboardingPersistOptions, OnboardingPersistResult } from '~/utils/onboardingProgressPersistence'
 import type { UserOnboardingStatus } from '~/utils/userOnboardingProgress'
-import { useMediaQuery } from '@vueuse/core'
 import mime from 'mime'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -102,6 +101,7 @@ const onboardingUserId = computed(() => main.user?.id ?? main.auth?.id ?? null)
 const config = getLocalConfig()
 const onboardingTelemetry = createOnboardingTelemetryIdentity({ flow: props.preOrg ? 'pre_org' : 'existing_org', supaHost: config.supaHost })
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
+const WELCOME_CANVAS_MEDIA_QUERY = '(min-width: 640px) and (min-height: 640px)'
 const removeBeforeUnloadWarning = useBeforeUnloadWarning(Boolean(props.preOrg))
 
 type AppRow = Omit<Database['public']['Tables']['apps']['Row'], 'onboarding'> & {
@@ -127,9 +127,9 @@ interface OrganizationWebsitePreview {
 
 const isLoading = ref(true)
 const isHydratingOnboarding = ref(true)
-const hasWelcomeCanvas = useMediaQuery('(min-width: 640px) and (min-height: 640px)')
+const welcomeCanvasEligible = ref(false)
 const welcomePending = ref(false)
-const showPreOrgWelcome = computed(() => props.preOrg && hasWelcomeCanvas.value && welcomePending.value)
+const showPreOrgWelcome = computed(() => props.preOrg && welcomeCanvasEligible.value && welcomePending.value)
 const isSubmitting = ref(false)
 const isImportingStore = ref(false)
 const isResumeIconLoading = ref(false)
@@ -554,7 +554,7 @@ function resetOnboardingForm() {
 }
 
 function showWelcomeOnDesktop() {
-  welcomePending.value = Boolean(props.preOrg)
+  welcomePending.value = Boolean(props.preOrg && welcomeCanvasEligible.value)
 }
 
 function continueFromWelcome() {
@@ -1628,6 +1628,7 @@ function trackDashboardExplored() {
 
 onMounted(async () => {
   window.addEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
+  welcomeCanvasEligible.value = window.matchMedia(WELCOME_CANVAS_MEDIA_QUERY).matches
   let resumedFlow = false
   isLoading.value = true
   isHydratingOnboarding.value = true
