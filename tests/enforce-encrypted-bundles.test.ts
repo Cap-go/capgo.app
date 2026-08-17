@@ -453,8 +453,8 @@ describe('[Encrypted Bundles Enforcement]', () => {
     it('should allow CLI completion update that marks encrypted bundle ready', async () => {
       await withEncryptedBundleEnforcement(async () => {
         const sessionKey = 'encrypted-session-key-for-cli-ready-update'
-        const r2Path = `orgs/${ORG_ID_ENCRYPTED}/apps/${APP_NAME_ENCRYPTED}/cli-ready-update-${Date.now()}.zip`
         const bundleName = `1.0.0-cli-ready-update-${Date.now()}`
+        const r2Path = `orgs/${ORG_ID_ENCRYPTED}/apps/${APP_NAME_ENCRYPTED}/${bundleName}.zip`
         const { data: inserted, error: insertError } = await getSupabaseClient()
           .from('app_versions')
           .insert({
