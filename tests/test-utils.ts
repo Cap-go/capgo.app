@@ -5,8 +5,6 @@ import { randomUUID } from 'node:crypto'
 import process, { env } from 'node:process'
 import { createClient } from '@supabase/supabase-js'
 import { type PoolClient, Pool } from 'pg'
-import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
-
 function normalizePostgresUrl(raw: string): string {
   // Avoid Node preferring IPv6 (::1) for localhost in some environments.
   return raw.replace('localhost', '127.0.0.1')
@@ -633,9 +631,7 @@ export async function createAppVersions(
   const sessionKey = values.session_key ?? null
   const storageProvider = values.storage_provider ?? 'r2'
   const minUpdateVersion = values.min_update_version ?? null
-  const r2Path = values.r2_path === undefined || values.r2_path === null
-    ? values.r2_path ?? null
-    : getCanonicalAppVersionR2Path(ownerOrg, appId, version)
+  const r2Path = values.r2_path ?? null
   const link = values.link ?? null
   const comment = values.comment ?? null
   const userId = values.user_id ?? null

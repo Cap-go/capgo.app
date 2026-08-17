@@ -7,6 +7,7 @@ AS $$
 DECLARE
   v_owner_org uuid;
   v_expected text;
+  v_old_expected text;
 BEGIN
   IF NEW.r2_path IS NULL OR btrim(NEW.r2_path) = '' THEN
     NEW.r2_path := NULL;
@@ -27,20 +28,41 @@ BEGIN
 
   v_expected := 'orgs/' || v_owner_org::text || '/apps/' || NEW.app_id || '/' || NEW.name || '.zip';
 
-  IF NEW.r2_path <> v_expected THEN
-    PERFORM public.pg_log(
-      'deny: APP_VERSION_R2_PATH_GUARD',
-      jsonb_build_object(
-        'owner_org', v_owner_org,
-        'app_id', NEW.app_id,
-        'version_name', NEW.name,
-        'r2_path', NEW.r2_path,
-        'expected', v_expected
-      )
-    );
-    RAISE EXCEPTION '%',
-      'invalid_r2_path: Bundle storage path must match the canonical location for this version.';
+  IF NEW.r2_path = v_expected THEN
+    RETURN NEW;
   END IF;
+
+  IF TG_OP = 'UPDATE'
+    AND OLD.r2_path IS NOT NULL
+    AND (
+      NEW.owner_org IS DISTINCT FROM OLD.owner_org
+      OR NEW.app_id IS DISTINCT FROM OLD.app_id
+      OR NEW.name IS DISTINCT FROM OLD.name
+    ) THEN
+    v_old_expected := 'orgs/' || OLD.owner_org::text || '/apps/' || OLD.app_id || '/' || OLD.name || '.zip';
+
+    IF current_setting('capgo.allow_owner_org_transfer', true) = 'true'
+      AND NEW.owner_org IS DISTINCT FROM OLD.owner_org
+      AND NEW.app_id IS NOT DISTINCT FROM OLD.app_id
+      AND NEW.name IS NOT DISTINCT FROM OLD.name
+      AND OLD.r2_path = v_old_expected THEN
+      NEW.r2_path := v_expected;
+      RETURN NEW;
+    END IF;
+  END IF;
+
+  PERFORM public.pg_log(
+    'deny: APP_VERSION_R2_PATH_GUARD',
+    jsonb_build_object(
+      'owner_org', v_owner_org,
+      'app_id', NEW.app_id,
+      'version_name', NEW.name,
+      'r2_path', NEW.r2_path,
+      'expected', v_expected
+    )
+  );
+  RAISE EXCEPTION '%',
+    'invalid_r2_path: Bundle storage path must match the canonical location for this version.';
 
   RETURN NEW;
 END;
@@ -52,6 +74,6 @@ GRANT ALL ON FUNCTION public.guard_app_version_r2_path() TO service_role;
 
 DROP TRIGGER IF EXISTS guard_app_version_r2_path_trigger ON public.app_versions;
 CREATE TRIGGER guard_app_version_r2_path_trigger
-BEFORE INSERT OR UPDATE OF r2_path ON public.app_versions
+BEFORE INSERT OR UPDATE OF r2_path, owner_org, app_id, name ON public.app_versions
 FOR EACH ROW
 EXECUTE FUNCTION public.guard_app_version_r2_path();

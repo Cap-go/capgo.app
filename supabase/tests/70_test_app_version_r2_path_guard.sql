@@ -4,7 +4,10 @@ BEGIN;
 SELECT plan(5);
 
 SELECT tests.authenticate_as_service_role();
-SELECT tests.create_supabase_user('r2_path_guard_owner', 'r2_path_guard_owner@test.local');
+SELECT tests.create_supabase_user(
+  'r2_path_guard_owner',
+  'r2_path_guard_owner@test.local'
+);
 
 INSERT INTO public.users (id, email, created_at, updated_at)
 VALUES (
@@ -65,7 +68,7 @@ VALUES (
 ON CONFLICT (id) DO UPDATE
 SET
   storage_provider = EXCLUDED.storage_provider,
-  r2_path = NULL,
+  r2_path = null,
   deleted = EXCLUDED.deleted;
 
 INSERT INTO public.app_versions (
@@ -134,10 +137,10 @@ SELECT is(
   (
     SELECT r2_path
     FROM public.app_versions
-    WHERE id = 7000702
+    WHERE id = 7000701
   ),
-  'orgs/70000000-0000-4000-8000-000000000070/apps/com.test.r2.path.victim/9.9.9-victim-bundle.zip',
-  'victim bundle path is unchanged after blocked retarget attempts'
+  'orgs/70000000-0000-4000-8000-000000000070/apps/com.test.r2.path.guard/1.0.0-r2-path-guard.zip',
+  'canonical r2_path is unchanged after rejected same-app cross-version retarget'
 );
 
 SELECT * FROM finish(); -- noqa: AM04
