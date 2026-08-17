@@ -632,12 +632,9 @@ export async function createAppVersions(
   const sessionKey = values.session_key ?? null
   const storageProvider = values.storage_provider ?? 'r2'
   const minUpdateVersion = values.min_update_version ?? null
-  const canonicalR2Path = getCanonicalAppVersionR2Path(ownerOrg, appId, version)
   const r2Path = values.r2_path === undefined || values.r2_path === null
-    ? values.r2_path ?? null
-    : values.r2_path === canonicalR2Path
-      ? values.r2_path
-      : canonicalR2Path
+    ? null
+    : getCanonicalAppVersionR2Path(ownerOrg, appId, version)
   const link = values.link ?? null
   const comment = values.comment ?? null
   const userId = values.user_id ?? null
