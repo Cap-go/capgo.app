@@ -76,6 +76,12 @@ export interface FrontendOnboardingSetupCliOutcomes {
 export interface FrontendOnboardingAnalytics {
   kpis: FrontendOnboardingPeriodKpis & { comparison: FrontendOnboardingComparison }
   daily_attempts: FrontendOnboardingDailyAttempt[]
+  deduplicated: {
+    daily_attempts: FrontendOnboardingDailyAttempt[]
+    funnels: {
+      v3: FrontendOnboardingFunnelStage[]
+    }
+  }
   daily_conversions: {
     intent_to_details: FrontendOnboardingDailyConversion[]
     details_to_organization: FrontendOnboardingDailyConversion[]
@@ -113,6 +119,36 @@ function isStepInFollowupWindow(timestamp: number | null, intentMs: number): tim
   return timestamp !== null
     && timestamp >= intentMs
     && timestamp <= intentMs + FRONTEND_ONBOARDING_FOLLOWUP_MS
+}
+
+function stageRank(attempt: FrontendOnboardingAttempt): number {
+  if (isStepInFollowupWindow(attempt.setupMs, attempt.intentMs))
+    return 3
+  if (isStepInFollowupWindow(attempt.organizationMs, attempt.intentMs))
+    return 2
+  if (isStepInFollowupWindow(attempt.detailsMs, attempt.intentMs))
+    return 1
+  return 0
+}
+
+function selectDeduplicatedAttempts(attempts: FrontendOnboardingAttempt[]): FrontendOnboardingAttempt[] {
+  const winners = new Map<string, FrontendOnboardingAttempt>()
+
+  for (const attempt of attempts) {
+    const personId = attempt.personId.trim()
+    const identityKey = personId === '' ? `attempt:${attempt.attemptId}` : personId
+    const current = winners.get(identityKey)
+    if (current === undefined
+      || stageRank(attempt) > stageRank(current)
+      || (stageRank(attempt) === stageRank(current) && attempt.intentMs > current.intentMs)
+      || (stageRank(attempt) === stageRank(current)
+        && attempt.intentMs === current.intentMs
+        && attempt.attemptId > current.attemptId)) {
+      winners.set(identityKey, attempt)
+    }
+  }
+
+  return [...winners.values()]
 }
 
 function median(values: number[]): number | null {
@@ -355,6 +391,8 @@ export function buildFrontendOnboardingAnalytics(
   const previousV3Attempts = previousAttempts.filter(attempt => attempt.onboardingVersion === 3)
   const currentV3 = summarizePeriod(currentV3Attempts)
   const previousV3 = summarizePeriod(previousV3Attempts)
+  const deduplicatedCurrentAttempts = selectDeduplicatedAttempts(currentAttempts)
+  const deduplicatedCurrentV3Attempts = selectDeduplicatedAttempts(currentV3Attempts)
 
   return {
     kpis: {
@@ -362,6 +400,10 @@ export function buildFrontendOnboardingAnalytics(
       comparison: comparePeriods(currentV3.kpis, previousV3.kpis),
     },
     daily_attempts: buildDailyAttempts(currentAttempts, currentStartMs, currentEndMs),
+    deduplicated: {
+      daily_attempts: buildDailyAttempts(deduplicatedCurrentAttempts, currentStartMs, currentEndMs),
+      funnels: { v3: buildFunnel(deduplicatedCurrentV3Attempts) },
+    },
     daily_conversions: {
       intent_to_details: buildDailyConversion(attempts, currentStartMs, currentEndMs, 'intent', 'details'),
       details_to_organization: buildDailyConversion(currentV3ConversionAttempts, currentStartMs, currentEndMs, 'details', 'organization'),
