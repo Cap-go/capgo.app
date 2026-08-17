@@ -121,16 +121,6 @@ function isLegacyBarePath(normalized: string) {
   return !!normalized && !normalized.includes('/')
 }
 
-/** DB spellings that can point at the same bare storage object. */
-function barePathAliases(normalized: string) {
-  return [
-    normalized,
-    `/${normalized}`,
-    `images/${normalized}`,
-    `/images/${normalized}`,
-  ]
-}
-
 function isPlaceholderBare(rawValue: string, sourcePath: string) {
   const trimmed = rawValue.trim()
   return PLACEHOLDER_BARE_NAMES.has(sourcePath)
