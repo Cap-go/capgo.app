@@ -286,10 +286,10 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     safelyCapture('onboarding_step_completed', properties)
   }
 
-  function trackDetailsEvent(
-    name: OnboardingDetailsEvent,
-    details: OnboardingDetailsEventProperties = {},
-    step: OnboardingAnalyticsStep = 'details',
+  function trackEvent(
+    name: OnboardingDetailsEvent | OnboardingInteractionEvent,
+    step: OnboardingAnalyticsStep,
+    details: OnboardingDetailsEventProperties | OnboardingInteractionProperties,
   ) {
     const properties = sharedProperties(step)
     if (!properties)
@@ -298,16 +298,20 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     safelyCapture(name, { ...properties, ...details })
   }
 
+  function trackDetailsEvent(
+    name: OnboardingDetailsEvent,
+    details: OnboardingDetailsEventProperties = {},
+    step: OnboardingAnalyticsStep = 'details',
+  ) {
+    trackEvent(name, step, details)
+  }
+
   function trackStepEvent(
     name: OnboardingInteractionEvent,
     step: OnboardingAnalyticsStep,
     details: OnboardingInteractionProperties = {},
   ) {
-    const properties = sharedProperties(step)
-    if (!properties)
-      return
-
-    safelyCapture(name, { ...properties, ...details })
+    trackEvent(name, step, details)
   }
 
   function trackCopyEvent(name: OnboardingCopyEvent, details: OnboardingCopyEventProperties) {

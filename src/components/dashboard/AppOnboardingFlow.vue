@@ -897,11 +897,11 @@ async function importStoreMetadata() {
         appName.value = storeAppNamePreview.value
     }
 
-    const importedIcon = typeof data?.icon_data_url === 'string' && data.icon_data_url.trim()
-      ? data.icon_data_url.trim()
-      : typeof data?.icon_url === 'string' && data.icon_url.trim()
-        ? data.icon_url.trim()
-        : ''
+    let importedIcon = ''
+    if (typeof data?.icon_data_url === 'string' && data.icon_data_url.trim())
+      importedIcon = data.icon_data_url.trim()
+    else if (typeof data?.icon_url === 'string' && data.icon_url.trim())
+      importedIcon = data.icon_url.trim()
     storeIconPreview.value = importedIcon
     if (importedIcon) {
       if (!localIconPreview.value)
@@ -954,11 +954,11 @@ async function importStoreIcon() {
     if (error)
       throw error
 
-    const importedIcon = typeof data?.icon_data_url === 'string' && data.icon_data_url.trim()
-      ? data.icon_data_url.trim()
-      : typeof data?.icon_url === 'string' && data.icon_url.trim()
-        ? data.icon_url.trim()
-        : ''
+    let importedIcon = ''
+    if (typeof data?.icon_data_url === 'string' && data.icon_data_url.trim())
+      importedIcon = data.icon_data_url.trim()
+    else if (typeof data?.icon_url === 'string' && data.icon_url.trim())
+      importedIcon = data.icon_url.trim()
     if (!importedIcon)
       throw new Error('Store metadata did not include an app icon')
 
@@ -2388,6 +2388,9 @@ defineExpose({
                         {{ t('app-onboarding-import-icon-only-helper') }}
                       </p>
                       <div class="space-y-3">
+                        <label for="app-onboarding-icon-store-url" class="sr-only">
+                          {{ t('app-onboarding-store-link-label') }}
+                        </label>
                         <input
                           id="app-onboarding-icon-store-url"
                           v-model="iconStoreUrl"
