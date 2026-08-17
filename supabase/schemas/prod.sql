@@ -8205,6 +8205,8 @@ BEGIN
     FROM public.role_bindings rb
     JOIN public.roles r ON rb.role_id = r.id
       AND r.scope_type = rb.scope_type
+      -- Hide non-assignable backfill roles from the public role label.
+      AND r.is_assignable = true
     WHERE rb.principal_type = public.rbac_principal_user()
       AND rb.principal_id = userid
       AND rb.scope_type = public.rbac_scope_org()
@@ -8216,6 +8218,7 @@ BEGIN
     JOIN public.group_members gm ON gm.group_id = rb.principal_id
     JOIN public.roles r ON rb.role_id = r.id
       AND r.scope_type = rb.scope_type
+      AND r.is_assignable = true
     WHERE rb.principal_type = public.rbac_principal_group()
       AND gm.user_id = userid
       AND rb.scope_type = public.rbac_scope_org()
@@ -8344,6 +8347,20 @@ BEGIN
       NOT public.user_meets_password_policy(userid, o.id) AS should_redact_password
     FROM public.orgs o
     JOIN user_orgs uo ON uo.org_id = o.id
+  ),
+  billing_access AS (
+    SELECT
+      o.id AS org_id,
+      NOT public.rbac_check_permission_direct(
+        public.rbac_perm_org_read_billing(),
+        userid,
+        o.id,
+        NULL::character varying,
+        NULL::bigint,
+        public.get_apikey_header()
+      ) AS should_redact_billing
+    FROM public.orgs o
+    JOIN user_orgs uo ON uo.org_id = o.id
   )
   SELECT
     o.id AS gid,
@@ -8358,21 +8375,21 @@ BEGIN
     COALESCE(pi.role_name::varchar, ror.role_name::varchar, public.rbac_role_org_member()::varchar) AS role,
     (pi.org_id IS NOT NULL) AS is_invite,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password THEN false
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN false
       ELSE COALESCE(si.status = 'succeeded', false)
     END AS paying,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password THEN 0
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN 0
       ELSE GREATEST(COALESCE((si.trial_at::date - NOW()::date), 0), 0)::integer
     END AS trial_left,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password THEN false
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN false
       ELSE COALESCE((si.status = 'succeeded' AND si.is_good_plan = true)
         OR (si.trial_at::date - NOW()::date > 0)
         OR COALESCE(ucb.available_credits, 0) > 0, false)
     END AS can_use_more,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password THEN false
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN false
       ELSE COALESCE(si.status = 'canceled', false)
     END AS is_canceled,
     CASE
@@ -8380,38 +8397,39 @@ BEGIN
       ELSE COALESCE(ac.cnt, 0)
     END AS app_count,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password THEN NULL::timestamptz
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::timestamptz
       ELSE bc.cycle_start
     END AS subscription_start,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password THEN NULL::timestamptz
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::timestamptz
       ELSE (bc.cycle_start + INTERVAL '1 MONTH')
     END AS subscription_end,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password THEN NULL::text
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::text
       ELSE o.management_email
     END AS management_email,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password THEN false
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN false
       ELSE COALESCE(si.price_id = p.price_y_id, false)
     END AS is_yearly,
     o.stats_updated_at,
     o.stats_refresh_requested_at,
     CASE
+      WHEN COALESCE(billing_acc.should_redact_billing, true) THEN NULL::timestamptz
       WHEN poo.id IS NOT NULL THEN
         public.get_next_cron_time('0 3 * * *', NOW()) + make_interval(mins => poo.preceding_count::int * 4)
       ELSE NULL
     END AS next_stats_update_at,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password THEN NULL::numeric
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::numeric
       ELSE COALESCE(ucb.available_credits, 0)
     END AS credit_available,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password THEN NULL::numeric
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::numeric
       ELSE COALESCE(ucb.total_credits, 0)
     END AS credit_total,
     CASE
-      WHEN tfa.should_redact_2fa OR ppa.should_redact_password THEN NULL::timestamptz
+      WHEN tfa.should_redact_2fa OR ppa.should_redact_password OR COALESCE(billing_acc.should_redact_billing, true) THEN NULL::timestamptz
       ELSE ucb.next_expiration
     END AS credit_next_expiration,
     tfa.enforcing_2fa,
@@ -8429,6 +8447,7 @@ BEGIN
   LEFT JOIN rbac_org_roles ror ON ror.org_id = o.id
   LEFT JOIN two_fa_access tfa ON tfa.org_id = o.id
   LEFT JOIN password_policy_access ppa ON ppa.org_id = o.id
+  LEFT JOIN billing_access billing_acc ON billing_acc.org_id = o.id
   LEFT JOIN public.stripe_info si ON o.customer_id = si.customer_id
   LEFT JOIN public.plans p ON si.product_id = p.stripe_id
   LEFT JOIN app_counts ac ON ac.owner_org = o.id
@@ -8440,6 +8459,10 @@ $$;
 
 
 ALTER FUNCTION "public"."get_orgs_v7"("userid" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."get_orgs_v7"("userid" "uuid") IS 'Org membership list for a user. Billing/plan/credit fields are null/false when the user lacks org.read_billing for that org.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."get_owner_org_by_app_id_internal"("p_app_id" "text") RETURNS "uuid"
@@ -15350,11 +15373,18 @@ CREATE OR REPLACE FUNCTION "public"."readable_org_customer_ids"() RETURNS "text"
   SELECT COALESCE(array_agg(DISTINCT orgs.customer_id::text), '{}'::text[])
   FROM public.orgs
   WHERE orgs.customer_id IS NOT NULL
-    AND orgs.id = ANY(COALESCE((SELECT public.orgs_readable_org_ids()), '{}'::uuid[]))
+    AND orgs.id = ANY(COALESCE(
+      (SELECT public.rbac_org_ids_for_permission(public.rbac_perm_org_read_billing())),
+      '{}'::uuid[]
+    ))
 $$;
 
 
 ALTER FUNCTION "public"."readable_org_customer_ids"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."readable_org_customer_ids"() IS 'Customer IDs whose stripe_info rows are readable by the caller through org.read_billing. Invoked once per stripe_info SELECT statement; API-key principals are handled inside rbac_org_ids_for_permission.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."reassign_webhook_created_by_before_user_delete"() RETURNS "trigger"
