@@ -1,9 +1,10 @@
+import type { FrontendOnboardingAttempt } from '../supabase/functions/_backend/utils/frontend_onboarding_analytics_model.ts'
 import { describe, expect, it } from 'vitest'
 import {
   buildFrontendOnboardingAnalytics,
   FRONTEND_ONBOARDING_FOLLOWUP_MS,
   FRONTEND_ONBOARDING_VERSIONS,
-  type FrontendOnboardingAttempt,
+
 } from '../supabase/functions/_backend/utils/frontend_onboarding_analytics_model.ts'
 
 const MINUTE_MS = 60 * 1000
