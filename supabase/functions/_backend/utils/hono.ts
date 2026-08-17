@@ -265,7 +265,6 @@ export const API_CONTENT_SECURITY_POLICY = [
   'style-src \'none\'',
   'img-src \'none\'',
   'connect-src \'none\'',
-  'upgrade-insecure-requests',
 ].join('; ')
 
 function isPreviewHost(hostname: string) {
@@ -297,6 +296,13 @@ export function createHono(functionName: string, _version: string) {
       c.header('Content-Security-Policy', API_CONTENT_SECURITY_POLICY)
     return next()
   })
+
+  // Browser and Capacitor WebView clients (Origin: capacitor://localhost /
+  // https://localhost) need CORS on every route. Per-route useCors misses
+  // handlers such as GET /ok. Skip plugin hot paths; the plugin worker
+  // already mounts CORS once.
+  if (!pluginHotPath)
+    appGlobal.use('*', useCors)
 
   // Skip hono's access logger on plugin hot paths — it serializes every request
   // on millions of device calls/day.

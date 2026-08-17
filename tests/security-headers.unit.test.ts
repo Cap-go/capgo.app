@@ -48,6 +48,24 @@ describe('security response headers', () => {
     expect(response.headers.get('content-security-policy')).toBeNull()
   })
 
+  it.concurrent('does not send upgrade-insecure-requests on API CSP', () => {
+    expect(API_CONTENT_SECURITY_POLICY).not.toContain('upgrade-insecure-requests')
+  })
+
+  it.concurrent.each([
+    'capacitor://localhost',
+    'ionic://localhost',
+    'https://localhost',
+    'http://localhost',
+  ])('sets CORS on api /ok for native origin %s', async (origin) => {
+    const response = await apiWorker.fetch(new Request('https://api.preprod.capgo.app/ok', {
+      headers: { origin },
+    }))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('access-control-allow-origin')).toBe(origin)
+  })
+
   it.concurrent.each([
     'https://capgo.app',
     'https://preprod.capgo.app',
