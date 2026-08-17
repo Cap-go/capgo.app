@@ -52,6 +52,6 @@ GRANT ALL ON FUNCTION public.guard_app_version_r2_path() TO service_role;
 
 DROP TRIGGER IF EXISTS guard_app_version_r2_path_trigger ON public.app_versions;
 CREATE TRIGGER guard_app_version_r2_path_trigger
-BEFORE INSERT OR UPDATE OF r2_path, name, app_id, owner_org ON public.app_versions
+BEFORE INSERT OR UPDATE OF r2_path ON public.app_versions
 FOR EACH ROW
 EXECUTE FUNCTION public.guard_app_version_r2_path();
