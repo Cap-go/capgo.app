@@ -510,11 +510,17 @@ export interface AdminOnboardingTelemetry {
   available: boolean
   first_production_device_at_by_app: Map<string, Date>
   first_update_download_at_by_app: Map<string, Date>
+  first_store_live_at_by_app: Map<string, Date>
+  first_testflight_at_by_app: Map<string, Date>
 }
 
 interface AdminOnboardingTelemetryRow {
   app_id: string
   first_at: Date | string
+}
+
+interface AdminOnboardingInstallSourceRow extends AdminOnboardingTelemetryRow {
+  install_source: string
 }
 
 // Cloudflare Analytics Engine SQL rejects bodies longer than 10_000 chars.
@@ -597,10 +603,41 @@ export function buildAdminOnboardingUpdateDownloadQuery(windows: AdminOnboarding
   GROUP BY index1`
 }
 
+export function buildAdminOnboardingInstallSourceQuery(windows: AdminOnboardingTelemetryWindow[]) {
+  return `SELECT
+    index1 AS app_id,
+    blob9 AS install_source,
+    min(timestamp) AS first_at
+  FROM device_info
+  WHERE (${getAdminOnboardingTelemetryWindowFilter(windows)})
+    AND blob9 IN ('app_store', 'testflight')
+  GROUP BY index1, blob9`
+}
+
 function addFirstSeenByApp(target: Map<string, Date>, rows: AdminOnboardingTelemetryRow[]) {
   for (const row of rows) {
     const firstAt = toValidDate(row.first_at)
     if (!row.app_id || !firstAt)
+      continue
+
+    const current = target.get(row.app_id)
+    if (!current || firstAt < current)
+      target.set(row.app_id, firstAt)
+  }
+}
+
+function addInstallSourceFirstSeen(telemetry: AdminOnboardingTelemetry, rows: AdminOnboardingInstallSourceRow[]) {
+  for (const row of rows) {
+    const firstAt = toValidDate(row.first_at)
+    if (!row.app_id || !firstAt)
+      continue
+
+    const target = row.install_source === 'app_store'
+      ? telemetry.first_store_live_at_by_app
+      : row.install_source === 'testflight'
+        ? telemetry.first_testflight_at_by_app
+        : null
+    if (!target)
       continue
 
     const current = target.get(row.app_id)
@@ -614,6 +651,8 @@ function emptyAdminOnboardingTelemetry(available = false): AdminOnboardingTeleme
     available,
     first_production_device_at_by_app: new Map(),
     first_update_download_at_by_app: new Map(),
+    first_store_live_at_by_app: new Map(),
+    first_testflight_at_by_app: new Map(),
   }
 }
 
@@ -639,21 +678,31 @@ export async function getAdminOnboardingTelemetry(
   if (validWindows.length === 0)
     return emptyAdminOnboardingTelemetry(true)
 
-  const telemetry = emptyAdminOnboardingTelemetry(true)
+  const telemetry = emptyAdminOnboardingTelemetry()
   try {
-    // Batch by SQL size so both queries stay under the Analytics Engine 10k limit.
+    // Batch by SQL size so Analytics Engine queries stay under the 10k limit.
     const windowBatches = batchAdminOnboardingTelemetryWindows(
       validWindows,
-      batch => buildAdminOnboardingUpdateDownloadQuery(batch),
+      (batch) => {
+        const queries = [
+          buildAdminOnboardingProductionDeviceQuery(batch),
+          buildAdminOnboardingUpdateDownloadQuery(batch),
+          buildAdminOnboardingInstallSourceQuery(batch),
+        ]
+        return queries.reduce((longest, query) => query.length > longest.length ? query : longest, '')
+      },
     )
     for (const windowBatch of windowBatches) {
-      const [productionDeviceRows, updateDownloadRows] = await Promise.all([
+      const [productionDeviceRows, updateDownloadRows, installSourceRows] = await Promise.all([
         runQueryToCFA<AdminOnboardingTelemetryRow>(c, buildAdminOnboardingProductionDeviceQuery(windowBatch)),
         runQueryToCFA<AdminOnboardingTelemetryRow>(c, buildAdminOnboardingUpdateDownloadQuery(windowBatch)),
+        runQueryToCFA<AdminOnboardingInstallSourceRow>(c, buildAdminOnboardingInstallSourceQuery(windowBatch)),
       ])
       addFirstSeenByApp(telemetry.first_production_device_at_by_app, productionDeviceRows)
       addFirstSeenByApp(telemetry.first_update_download_at_by_app, updateDownloadRows)
+      addInstallSourceFirstSeen(telemetry, installSourceRows)
     }
+    telemetry.available = true
     return telemetry
   }
   catch (error) {
@@ -662,7 +711,7 @@ export async function getAdminOnboardingTelemetry(
       message: 'getAdminOnboardingTelemetry failed',
       error: serializeError(error),
     })
-    return telemetry
+    return emptyAdminOnboardingTelemetry()
   }
 }
 
