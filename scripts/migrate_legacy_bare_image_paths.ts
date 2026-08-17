@@ -49,6 +49,9 @@ interface LegacyRow {
   kind: Kind
   id: string
   ownerKey: string
+  /** Exact DB column value for compare-and-set updates. */
+  rawValue: string
+  /** Normalized storage object key (no leading slash / images/ prefix). */
   sourcePath: string
   targetPath: string | null
   action: 'copy' | 'clear'
@@ -104,6 +107,47 @@ function isLegacyBarePath(normalized: string) {
   return !!normalized && !normalized.includes('/')
 }
 
+/** DB spellings that can point at the same bare storage object. */
+function barePathAliases(normalized: string) {
+  const aliases = new Set<string>([
+    normalized,
+    `/${normalized}`,
+    `images/${normalized}`,
+    `/images/${normalized}`,
+  ])
+  // Also include trimmed variants if callers stored padded whitespace separately —
+  // CAS uses rawValue; reference counts use these exact spellings.
+  return [...aliases]
+}
+
+function isPlaceholderBare(rawValue: string, sourcePath: string) {
+  const trimmed = rawValue.trim()
+  return PLACEHOLDER_BARE_NAMES.has(sourcePath)
+    || PLACEHOLDER_BARE_NAMES.has(trimmed)
+    || PLACEHOLDER_BARE_NAMES.has(`/${sourcePath}`)
+}
+
+/**
+ * PostgREST prefilter: bare names, leading-slash bare names, or images/<bare>.
+ * Client still applies normalizeStoredPath + isLegacyBarePath.
+ */
+function applyLegacyImageColumnFilter(
+  // supabase query builder chain
+  query: any,
+  column: string,
+) {
+  return query
+    .not(column, 'is', null)
+    .neq(column, '')
+    .not(column, 'like', '%://%')
+    .or([
+      `${column}.not.like.*/%*`,
+      `and(${column}.like./%,${column}.not.like./%/%)`,
+      `and(${column}.like.images/%,${column}.not.like.images/%/%)`,
+      `and(${column}.like./images/%,${column}.not.like./images/%/%)`,
+    ].join(','))
+}
+
 function targetForApp(ownerOrg: string, appId: string) {
   return `org/${ownerOrg}/${appId}/icon`
 }
@@ -130,14 +174,10 @@ async function listLegacyApps(supabase: SupabaseClient, limit: number | null) {
     const pageSize = limit === null
       ? DEFAULT_PAGE_SIZE
       : Math.min(DEFAULT_PAGE_SIZE, limit - rows.length)
-    // Bare keys only: no `/`, not absolute URLs.
-    const { data, error } = await supabase
-      .from('apps')
-      .select('app_id, owner_org, icon_url')
-      .not('icon_url', 'is', null)
-      .neq('icon_url', '')
-      .not('icon_url', 'like', '%/%')
-      .not('icon_url', 'like', '%://%')
+    const { data, error } = await applyLegacyImageColumnFilter(
+      supabase.from('apps').select('app_id, owner_org, icon_url'),
+      'icon_url',
+    )
       .range(from, from + pageSize - 1)
       .order('app_id', { ascending: true })
 
@@ -147,14 +187,16 @@ async function listLegacyApps(supabase: SupabaseClient, limit: number | null) {
       break
 
     for (const app of data) {
-      const sourcePath = normalizeStoredPath(app.icon_url)
+      const rawValue = app.icon_url ?? ''
+      const sourcePath = normalizeStoredPath(rawValue)
       if (!isLegacyBarePath(sourcePath))
         continue
-      const clear = PLACEHOLDER_BARE_NAMES.has(sourcePath) || PLACEHOLDER_BARE_NAMES.has(app.icon_url?.trim() ?? '')
+      const clear = isPlaceholderBare(rawValue, sourcePath)
       rows.push({
         kind: 'app_icon',
         id: app.app_id,
         ownerKey: app.owner_org,
+        rawValue,
         sourcePath,
         targetPath: clear ? null : targetForApp(app.owner_org, app.app_id),
         action: clear ? 'clear' : 'copy',
@@ -180,13 +222,10 @@ async function listLegacyOrgs(supabase: SupabaseClient, remaining: number | null
     const pageSize = remaining === null
       ? DEFAULT_PAGE_SIZE
       : Math.min(DEFAULT_PAGE_SIZE, remaining - rows.length)
-    const { data, error } = await supabase
-      .from('orgs')
-      .select('id, logo')
-      .not('logo', 'is', null)
-      .neq('logo', '')
-      .not('logo', 'like', '%/%')
-      .not('logo', 'like', '%://%')
+    const { data, error } = await applyLegacyImageColumnFilter(
+      supabase.from('orgs').select('id, logo'),
+      'logo',
+    )
       .range(from, from + pageSize - 1)
       .order('id', { ascending: true })
 
@@ -196,14 +235,16 @@ async function listLegacyOrgs(supabase: SupabaseClient, remaining: number | null
       break
 
     for (const org of data) {
-      const sourcePath = normalizeStoredPath(org.logo)
+      const rawValue = org.logo ?? ''
+      const sourcePath = normalizeStoredPath(rawValue)
       if (!isLegacyBarePath(sourcePath))
         continue
-      const clear = PLACEHOLDER_BARE_NAMES.has(sourcePath)
+      const clear = isPlaceholderBare(rawValue, sourcePath)
       rows.push({
         kind: 'org_logo',
         id: org.id,
         ownerKey: org.id,
+        rawValue,
         sourcePath,
         targetPath: clear ? null : targetForOrgLogo(org.id, sourcePath),
         action: clear ? 'clear' : 'copy',
@@ -229,13 +270,10 @@ async function listLegacyUsers(supabase: SupabaseClient, remaining: number | nul
     const pageSize = remaining === null
       ? DEFAULT_PAGE_SIZE
       : Math.min(DEFAULT_PAGE_SIZE, remaining - rows.length)
-    const { data, error } = await supabase
-      .from('users')
-      .select('id, image_url')
-      .not('image_url', 'is', null)
-      .neq('image_url', '')
-      .not('image_url', 'like', '%/%')
-      .not('image_url', 'like', '%://%')
+    const { data, error } = await applyLegacyImageColumnFilter(
+      supabase.from('users').select('id, image_url'),
+      'image_url',
+    )
       .range(from, from + pageSize - 1)
       .order('id', { ascending: true })
 
@@ -245,14 +283,16 @@ async function listLegacyUsers(supabase: SupabaseClient, remaining: number | nul
       break
 
     for (const user of data) {
-      const sourcePath = normalizeStoredPath(user.image_url)
+      const rawValue = user.image_url ?? ''
+      const sourcePath = normalizeStoredPath(rawValue)
       if (!isLegacyBarePath(sourcePath))
         continue
-      const clear = PLACEHOLDER_BARE_NAMES.has(sourcePath)
+      const clear = isPlaceholderBare(rawValue, sourcePath)
       rows.push({
         kind: 'user_avatar',
         id: user.id,
         ownerKey: user.id,
+        rawValue,
         sourcePath,
         targetPath: clear ? null : targetForUser(user.id, sourcePath),
         action: clear ? 'clear' : 'copy',
@@ -296,11 +336,12 @@ async function copyObject(supabase: SupabaseClient, fromPath: string, toPath: st
   }
 }
 
-async function countBareReferences(supabase: SupabaseClient, barePath: string) {
+async function countBareReferences(supabase: SupabaseClient, normalizedBarePath: string) {
+  const aliases = barePathAliases(normalizedBarePath)
   const [apps, orgs, users] = await Promise.all([
-    supabase.from('apps').select('app_id', { count: 'exact', head: true }).eq('icon_url', barePath),
-    supabase.from('orgs').select('id', { count: 'exact', head: true }).eq('logo', barePath),
-    supabase.from('users').select('id', { count: 'exact', head: true }).eq('image_url', barePath),
+    supabase.from('apps').select('app_id', { count: 'exact', head: true }).in('icon_url', aliases),
+    supabase.from('orgs').select('id', { count: 'exact', head: true }).in('logo', aliases),
+    supabase.from('users').select('id', { count: 'exact', head: true }).in('image_url', aliases),
   ])
   if (apps.error)
     throw apps.error
@@ -317,7 +358,8 @@ async function updateRow(supabase: SupabaseClient, row: LegacyRow, newValue: str
       .from('apps')
       .update({ icon_url: newValue })
       .eq('app_id', row.id)
-      .eq('icon_url', row.sourcePath)
+      .eq('owner_org', row.ownerKey)
+      .eq('icon_url', row.rawValue)
       .select('app_id')
     if (error)
       throw error
@@ -328,7 +370,7 @@ async function updateRow(supabase: SupabaseClient, row: LegacyRow, newValue: str
       .from('orgs')
       .update({ logo: newValue })
       .eq('id', row.id)
-      .eq('logo', row.sourcePath)
+      .eq('logo', row.rawValue)
       .select('id')
     if (error)
       throw error
@@ -338,11 +380,128 @@ async function updateRow(supabase: SupabaseClient, row: LegacyRow, newValue: str
     .from('users')
     .update({ image_url: newValue })
     .eq('id', row.id)
-    .eq('image_url', row.sourcePath)
+    .eq('image_url', row.rawValue)
     .select('id')
   if (error)
     throw error
   return (data?.length ?? 0) > 0
+}
+
+/**
+ * When CAS misses (org transfer / raw value drift), re-read and retry once
+ * with the current owner + exact DB value.
+ */
+async function updateRowWithRetry(
+  supabase: SupabaseClient,
+  row: LegacyRow,
+  newValue: string,
+): Promise<{ updated: boolean, targetPath: string | null }> {
+  if (await updateRow(supabase, row, newValue))
+    return { updated: true, targetPath: newValue || null }
+
+  if (row.kind === 'app_icon') {
+    const { data: current, error } = await supabase
+      .from('apps')
+      .select('app_id, owner_org, icon_url')
+      .eq('app_id', row.id)
+      .maybeSingle()
+    if (error)
+      throw error
+    if (!current)
+      return { updated: false, targetPath: newValue || null }
+
+    const currentRaw = current.icon_url ?? ''
+    const currentPath = normalizeStoredPath(currentRaw)
+    if (!isLegacyBarePath(currentPath))
+      return { updated: false, targetPath: newValue || null }
+
+    const clear = isPlaceholderBare(currentRaw, currentPath)
+    const retryTarget = clear ? '' : targetForApp(current.owner_org, row.id)
+    if (!clear && retryTarget && retryTarget !== newValue) {
+      const sourceExists = await storageObjectExists(supabase, currentPath)
+      if (sourceExists)
+        await copyObject(supabase, currentPath, retryTarget)
+    }
+
+    const retryRow: LegacyRow = {
+      ...row,
+      ownerKey: current.owner_org,
+      rawValue: currentRaw,
+      sourcePath: currentPath,
+      targetPath: clear ? null : retryTarget,
+      action: clear ? 'clear' : 'copy',
+    }
+    const updated = await updateRow(supabase, retryRow, retryTarget)
+    return { updated, targetPath: clear ? null : retryTarget }
+  }
+
+  if (row.kind === 'org_logo') {
+    const { data: current, error } = await supabase
+      .from('orgs')
+      .select('id, logo')
+      .eq('id', row.id)
+      .maybeSingle()
+    if (error)
+      throw error
+    if (!current)
+      return { updated: false, targetPath: newValue || null }
+
+    const currentRaw = current.logo ?? ''
+    const currentPath = normalizeStoredPath(currentRaw)
+    if (!isLegacyBarePath(currentPath))
+      return { updated: false, targetPath: newValue || null }
+
+    const clear = isPlaceholderBare(currentRaw, currentPath)
+    const retryTarget = clear ? '' : targetForOrgLogo(row.id, currentPath)
+    if (!clear && retryTarget && retryTarget !== newValue) {
+      const sourceExists = await storageObjectExists(supabase, currentPath)
+      if (sourceExists)
+        await copyObject(supabase, currentPath, retryTarget)
+    }
+
+    const retryRow: LegacyRow = {
+      ...row,
+      rawValue: currentRaw,
+      sourcePath: currentPath,
+      targetPath: clear ? null : retryTarget,
+      action: clear ? 'clear' : 'copy',
+    }
+    const updated = await updateRow(supabase, retryRow, retryTarget)
+    return { updated, targetPath: clear ? null : retryTarget }
+  }
+
+  const { data: current, error } = await supabase
+    .from('users')
+    .select('id, image_url')
+    .eq('id', row.id)
+    .maybeSingle()
+  if (error)
+    throw error
+  if (!current)
+    return { updated: false, targetPath: newValue || null }
+
+  const currentRaw = current.image_url ?? ''
+  const currentPath = normalizeStoredPath(currentRaw)
+  if (!isLegacyBarePath(currentPath))
+    return { updated: false, targetPath: newValue || null }
+
+  const clear = isPlaceholderBare(currentRaw, currentPath)
+  const retryTarget = clear ? '' : targetForUser(row.id, currentPath)
+  if (!clear && retryTarget && retryTarget !== newValue) {
+    const sourceExists = await storageObjectExists(supabase, currentPath)
+    if (sourceExists)
+      await copyObject(supabase, currentPath, retryTarget)
+  }
+
+  const retryRow: LegacyRow = {
+    ...row,
+    rawValue: currentRaw,
+    sourcePath: currentPath,
+    targetPath: clear ? null : retryTarget,
+    action: clear ? 'clear' : 'copy',
+  }
+  const updated = await updateRow(supabase, retryRow, retryTarget)
+  return { updated, targetPath: clear ? null : retryTarget }
 }
 
 async function processRow(
@@ -362,12 +521,12 @@ async function processRow(
         deletedSource: false,
       }
     }
-    const updated = await updateRow(supabase, row, '')
+    const { updated, targetPath } = await updateRowWithRetry(supabase, row, '')
     return {
       kind: row.kind,
       id: row.id,
       sourcePath: row.sourcePath,
-      targetPath: null,
+      targetPath,
       status: updated ? 'cleared' : 'already_migrated',
       deletedSource: false,
     }
@@ -391,25 +550,25 @@ async function processRow(
   const sourceExists = await storageObjectExists(supabase, row.sourcePath)
   if (!sourceExists) {
     // Object already gone — clear broken pointer so it is not a bare legacy ref.
-    const updated = await updateRow(supabase, row, '')
+    const { updated, targetPath: clearedTarget } = await updateRowWithRetry(supabase, row, '')
     return {
       kind: row.kind,
       id: row.id,
       sourcePath: row.sourcePath,
-      targetPath: null,
+      targetPath: clearedTarget,
       status: updated ? 'cleared' : 'already_migrated',
       deletedSource: false,
     }
   }
 
   await copyObject(supabase, row.sourcePath, targetPath)
-  const updated = await updateRow(supabase, row, targetPath)
+  const { updated, targetPath: finalTarget } = await updateRowWithRetry(supabase, row, targetPath)
   if (!updated) {
     return {
       kind: row.kind,
       id: row.id,
       sourcePath: row.sourcePath,
-      targetPath,
+      targetPath: finalTarget ?? targetPath,
       status: 'already_migrated',
       deletedSource: false,
     }
@@ -430,7 +589,7 @@ async function processRow(
     kind: row.kind,
     id: row.id,
     sourcePath: row.sourcePath,
-    targetPath,
+    targetPath: finalTarget ?? targetPath,
     status: 'updated',
     deletedSource,
   }
