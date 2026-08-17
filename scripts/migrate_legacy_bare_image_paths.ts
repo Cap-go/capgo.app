@@ -97,8 +97,21 @@ function normalizeStoredPath(raw: string | null | undefined) {
   if (!raw)
     return ''
   const trimmed = raw.trim()
-  if (!trimmed || trimmed.includes('://'))
+  if (!trimmed)
     return ''
+  if (trimmed.includes('://')) {
+    // Absolute storage URLs may still point at a bare object key.
+    try {
+      const url = new URL(trimmed)
+      const match = url.pathname.match(/\/storage\/v1\/object(?:\/(?:public|sign))?\/images\/([^/?#]+)$/i)
+      if (match?.[1] && !match[1].includes('%2F') && !decodeURIComponent(match[1]).includes('/'))
+        return decodeURIComponent(match[1])
+    }
+    catch {
+      // ignore
+    }
+    return ''
+  }
   // Strip leading slashes before images/ so `/images/foo` → `foo`.
   return trimmed.replace(/^\/+/, '').replace(/^images\//, '').replace(/^\/+/, '')
 }
@@ -306,15 +319,14 @@ async function listLegacyUsers(supabase: SupabaseClient, remaining: number | nul
 }
 
 async function storageObjectExists(supabase: SupabaseClient, path: string) {
-  const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
-  const name = path.includes('/') ? path.slice(path.lastIndexOf('/') + 1) : path
-  const { data, error } = await supabase.storage.from('images').list(parent, {
-    limit: 100,
-    search: name,
-  })
-  if (error)
+  // Prefer signed-URL probe over list+search (search can miss exact names past limit).
+  const { data, error } = await supabase.storage.from('images').createSignedUrl(path, 60)
+  if (error) {
+    if (/not found|404|Object not found|does not exist/i.test(error.message))
+      return false
     throw error
-  return (data ?? []).some(entry => entry.name === name)
+  }
+  return !!data?.signedUrl
 }
 
 async function copyObject(
@@ -326,12 +338,21 @@ async function copyObject(
   if (fromPath === toPath)
     return
   const existsTarget = await storageObjectExists(supabase, toPath)
-  if (existsTarget) {
-    if (!options?.force)
-      return
-    const { error: removeError } = await supabase.storage.from('images').remove([toPath])
-    if (removeError)
-      throw removeError
+  if (existsTarget && !options?.force)
+    return
+
+  if (existsTarget && options?.force) {
+    // Never remove-then-copy: a failed copy after delete would destroy the owned object.
+    const { data: blob, error: downloadError } = await supabase.storage.from('images').download(fromPath)
+    if (downloadError || !blob)
+      throw downloadError ?? new Error(`source missing: ${fromPath}`)
+    const { error: uploadError } = await supabase.storage.from('images').upload(toPath, blob, {
+      upsert: true,
+      contentType: blob.type || undefined,
+    })
+    if (uploadError)
+      throw uploadError
+    return
   }
 
   const { error } = await supabase.storage.from('images').copy(fromPath, toPath)

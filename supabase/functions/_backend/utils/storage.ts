@@ -162,7 +162,8 @@ export function isOwnershipBearingImagePath(normalized: string) {
 /**
  * Image objects must live under a caller-owned prefix:
  * - user avatar: `{userId}/...`
- * - org logo / app icon: `org/{orgId}/...` (optionally `org/{orgId}/{appId}/...`)
+ * - org logo: `org/{orgId}/logo/...` (org-only scope never signs app icons)
+ * - app icon: `org/{orgId}/{appId}/...` (app scope never signs sibling apps)
  */
 export function isAllowedImagePath(normalized: string, scope: ImagePathScope) {
   if (!normalized || hasUnsafeImagePathSegments(normalized))
@@ -174,9 +175,10 @@ export function isAllowedImagePath(normalized: string, scope: ImagePathScope) {
   if (scope.userId)
     prefixes.push(`${scope.userId}/`)
   if (scope.orgId) {
-    prefixes.push(`org/${scope.orgId}/`)
     if (scope.appId)
       prefixes.push(`org/${scope.orgId}/${scope.appId}/`)
+    else
+      prefixes.push(`org/${scope.orgId}/logo/`)
   }
 
   if (prefixes.length === 0)

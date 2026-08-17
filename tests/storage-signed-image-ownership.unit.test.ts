@@ -52,12 +52,23 @@ describe('image path ownership for signed URLs', () => {
     expect(isAllowedImagePath('11111111-1111-1111-1111-111111111111/avatar.png', { userId: '11111111-1111-1111-1111-111111111111' })).toBe(true)
     expect(isAllowedImagePath('org/org-2/logo/a.png', { orgId: 'org-1' })).toBe(false)
     expect(isAllowedImagePath('org/org-1/../org-2/secret.png', { orgId: 'org-1' })).toBe(false)
+    // Org-only scope must not mint/sign sibling app icons under the same org.
+    expect(isAllowedImagePath('org/org-1/com.app/icon', { orgId: 'org-1' })).toBe(false)
+    expect(isAllowedImagePath('org/org-1/com.other/icon', { orgId: 'org-1', appId: 'com.app' })).toBe(false)
     expect(assertAllowedImagePath('org/org-2/logo/a.png', { orgId: 'org-1' })).toBeNull()
     expect(assertAllowedImagePath('private/secret.png', { orgId: 'org-1' })).toBeNull()
     expect(assertAllowedImagePath('test-icon', { orgId: 'org-1' })).toBeNull()
     expect(isOwnershipBearingImagePath('test-icon')).toBe(false)
     expect(isOwnershipBearingImagePath('private/secret.png')).toBe(true)
     expect(isOwnershipBearingImagePath('org/org-1/logo/a.png')).toBe(true)
+  })
+
+  it('refuses org-scoped signing of app-icon paths and app-scoped signing of logos', async () => {
+    const context = {} as Parameters<typeof createSignedImageUrl>[0]
+    await expect(createSignedImageUrl(context, 'org/org-1/com.app/icon', { orgId: 'org-1' })).resolves.toBeNull()
+    await expect(createSignedImageUrl(context, 'org/org-1/logo/a.png', { orgId: 'org-1', appId: 'com.app' })).resolves.toBeNull()
+    await expect(createSignedImageUrl(context, 'org/org-1/com.other/icon', { orgId: 'org-1', appId: 'com.app' })).resolves.toBeNull()
+    expect(mocks.createSignedUrl).not.toHaveBeenCalled()
   })
 
   it('collects primary and replica storage origins', () => {

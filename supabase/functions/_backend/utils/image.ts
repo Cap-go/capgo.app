@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
+import type { ImagePathScope } from './storage.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { getStorageAllowedOrigins, normalizeImagePath } from './storage.ts'
+import { assertAllowedImagePath, getStorageAllowedOrigins, normalizeImagePath } from './storage.ts'
 import { supabaseAdmin } from './supabase.ts'
 
 const JPEG_SIGNATURE = [0xFF, 0xD8]
@@ -160,7 +161,11 @@ function mimeFromFilePath(path: string): string | null {
   return null
 }
 
-export async function cleanStoredImageMetadata(c: Context, rawImagePath: string): Promise<void> {
+export async function cleanStoredImageMetadata(
+  c: Context,
+  rawImagePath: string,
+  scope: ImagePathScope,
+): Promise<void> {
   const requestId = c.get('requestId')
   const normalizedPath = normalizeImagePath(rawImagePath, {
     allowedOrigins: getStorageAllowedOrigins(c),
@@ -168,6 +173,18 @@ export async function cleanStoredImageMetadata(c: Context, rawImagePath: string)
 
   if (!normalizedPath) {
     cloudlog({ requestId, message: 'Cannot normalize image path', rawImagePath })
+    return
+  }
+
+  // Fail closed: never admin-download/upsert a path outside the row's ownership scope.
+  if (!assertAllowedImagePath(normalizedPath, scope)) {
+    cloudlog({
+      requestId,
+      message: 'Skipping metadata cleanup for image path outside ownership scope',
+      rawImagePath,
+      normalizedPath,
+      scope,
+    })
     return
   }
 

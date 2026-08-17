@@ -293,9 +293,13 @@ app.post('/', middlewareAuth, async (c) => {
     )
   }
 
-  const expiresAt = spoofClaims.exp
-    ? new Date(spoofClaims.exp * 1000)
-    : new Date(Date.now() + 60 * 60 * 1000)
+  const jwtExpMs = spoofClaims.exp
+    ? spoofClaims.exp * 1000
+    : Date.now() + 60 * 60 * 1000
+  // Access tokens are ~1h; refresh keeps the same session_id. Keep the registry
+  // row long enough that support spoof does not lose MFA mid-session.
+  const IMPERSONATION_SESSION_TTL_MS = 24 * 60 * 60 * 1000
+  const expiresAt = new Date(Math.max(jwtExpMs, Date.now() + IMPERSONATION_SESSION_TTL_MS))
   const pgClient = getPgClient(c)
   try {
     await pgClient.query(
