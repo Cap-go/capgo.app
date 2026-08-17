@@ -99,7 +99,8 @@ function normalizeStoredPath(raw: string | null | undefined) {
   const trimmed = raw.trim()
   if (!trimmed || trimmed.includes('://'))
     return ''
-  return trimmed.replace(/^images\//, '').replace(/^\/+/, '')
+  // Strip leading slashes before images/ so `/images/foo` → `foo`.
+  return trimmed.replace(/^\/+/, '').replace(/^images\//, '').replace(/^\/+/, '')
 }
 
 /** Root-level object key with no folder segment. */
@@ -109,15 +110,12 @@ function isLegacyBarePath(normalized: string) {
 
 /** DB spellings that can point at the same bare storage object. */
 function barePathAliases(normalized: string) {
-  const aliases = new Set<string>([
+  return [
     normalized,
     `/${normalized}`,
     `images/${normalized}`,
     `/images/${normalized}`,
-  ])
-  // Also include trimmed variants if callers stored padded whitespace separately —
-  // CAS uses rawValue; reference counts use these exact spellings.
-  return [...aliases]
+  ]
 }
 
 function isPlaceholderBare(rawValue: string, sourcePath: string) {
@@ -132,8 +130,7 @@ function isPlaceholderBare(rawValue: string, sourcePath: string) {
  * Client still applies normalizeStoredPath + isLegacyBarePath.
  */
 function applyLegacyImageColumnFilter(
-  // supabase query builder chain
-  query: any,
+  query: { not: (...args: any[]) => any, neq: (...args: any[]) => any, or: (...args: any[]) => any },
   column: string,
 ) {
   return query
@@ -320,12 +317,22 @@ async function storageObjectExists(supabase: SupabaseClient, path: string) {
   return (data ?? []).some(entry => entry.name === name)
 }
 
-async function copyObject(supabase: SupabaseClient, fromPath: string, toPath: string) {
+async function copyObject(
+  supabase: SupabaseClient,
+  fromPath: string,
+  toPath: string,
+  options?: { force?: boolean },
+) {
   if (fromPath === toPath)
     return
   const existsTarget = await storageObjectExists(supabase, toPath)
-  if (existsTarget)
-    return
+  if (existsTarget) {
+    if (!options?.force)
+      return
+    const { error: removeError } = await supabase.storage.from('images').remove([toPath])
+    if (removeError)
+      throw removeError
+  }
 
   const { error } = await supabase.storage.from('images').copy(fromPath, toPath)
   if (error) {
@@ -336,20 +343,61 @@ async function copyObject(supabase: SupabaseClient, fromPath: string, toPath: st
   }
 }
 
+/**
+ * Count DB rows that still point at this bare storage object, including
+ * padded/alias spellings that normalize to the same key.
+ */
 async function countBareReferences(supabase: SupabaseClient, normalizedBarePath: string) {
   const aliases = barePathAliases(normalizedBarePath)
-  const [apps, orgs, users] = await Promise.all([
+  const [appsExact, orgsExact, usersExact] = await Promise.all([
     supabase.from('apps').select('app_id', { count: 'exact', head: true }).in('icon_url', aliases),
     supabase.from('orgs').select('id', { count: 'exact', head: true }).in('logo', aliases),
     supabase.from('users').select('id', { count: 'exact', head: true }).in('image_url', aliases),
   ])
-  if (apps.error)
-    throw apps.error
-  if (orgs.error)
-    throw orgs.error
-  if (users.error)
-    throw users.error
-  return (apps.count ?? 0) + (orgs.count ?? 0) + (users.count ?? 0)
+  if (appsExact.error)
+    throw appsExact.error
+  if (orgsExact.error)
+    throw orgsExact.error
+  if (usersExact.error)
+    throw usersExact.error
+
+  let count = (appsExact.count ?? 0) + (orgsExact.count ?? 0) + (usersExact.count ?? 0)
+
+  // Padded whitespace values won't match exact aliases — scan legacy candidates.
+  const aliasSet = new Set(aliases)
+  async function countPadded(table: 'apps' | 'orgs' | 'users') {
+    const column = table === 'apps' ? 'icon_url' : table === 'orgs' ? 'logo' : 'image_url'
+    let from = 0
+    let padded = 0
+    while (true) {
+      const { data, error } = await applyLegacyImageColumnFilter(
+        supabase.from(table).select(column),
+        column,
+      )
+        .range(from, from + DEFAULT_PAGE_SIZE - 1)
+      if (error)
+        throw error
+      if (!data?.length)
+        break
+      for (const row of data) {
+        const raw = String((row as Record<string, unknown>)[column] ?? '')
+        if (aliasSet.has(raw))
+          continue
+        if (normalizeStoredPath(raw) === normalizedBarePath)
+          padded += 1
+      }
+      if (data.length < DEFAULT_PAGE_SIZE)
+        break
+      from += DEFAULT_PAGE_SIZE
+    }
+    return padded
+  }
+
+  count += await countPadded('apps')
+  count += await countPadded('orgs')
+  count += await countPadded('users')
+
+  return count
 }
 
 async function updateRow(supabase: SupabaseClient, row: LegacyRow, newValue: string) {
@@ -388,6 +436,28 @@ async function updateRow(supabase: SupabaseClient, row: LegacyRow, newValue: str
 }
 
 /**
+ * Refresh destination from the current bare source before CAS retry.
+ * Missing source → clear the DB pointer instead of writing a broken path.
+ */
+async function refreshOwnedPathFromBareSource(
+  supabase: SupabaseClient,
+  currentPath: string,
+  retryTarget: string,
+  clear: boolean,
+): Promise<{ action: 'clear' | 'copy', target: string }> {
+  if (clear)
+    return { action: 'clear', target: '' }
+
+  const sourceExists = await storageObjectExists(supabase, currentPath)
+  if (!sourceExists)
+    return { action: 'clear', target: '' }
+
+  // Always force-refresh so a same-owner icon_url change doesn't keep stale bytes.
+  await copyObject(supabase, currentPath, retryTarget, { force: true })
+  return { action: 'copy', target: retryTarget }
+}
+
+/**
  * When CAS misses (org transfer / raw value drift), re-read and retry once
  * with the current owner + exact DB value.
  */
@@ -416,23 +486,27 @@ async function updateRowWithRetry(
       return { updated: false, targetPath: newValue || null }
 
     const clear = isPlaceholderBare(currentRaw, currentPath)
-    const retryTarget = clear ? '' : targetForApp(current.owner_org, row.id)
-    if (!clear && retryTarget && retryTarget !== newValue) {
-      const sourceExists = await storageObjectExists(supabase, currentPath)
-      if (sourceExists)
-        await copyObject(supabase, currentPath, retryTarget)
-    }
+    const ownedTarget = clear ? '' : targetForApp(current.owner_org, row.id)
+    const refreshed = await refreshOwnedPathFromBareSource(
+      supabase,
+      currentPath,
+      ownedTarget,
+      clear,
+    )
 
     const retryRow: LegacyRow = {
       ...row,
       ownerKey: current.owner_org,
       rawValue: currentRaw,
       sourcePath: currentPath,
-      targetPath: clear ? null : retryTarget,
-      action: clear ? 'clear' : 'copy',
+      targetPath: refreshed.action === 'clear' ? null : refreshed.target,
+      action: refreshed.action === 'clear' ? 'clear' : 'copy',
     }
-    const updated = await updateRow(supabase, retryRow, retryTarget)
-    return { updated, targetPath: clear ? null : retryTarget }
+    const updated = await updateRow(supabase, retryRow, refreshed.target)
+    return {
+      updated,
+      targetPath: refreshed.action === 'clear' ? null : refreshed.target,
+    }
   }
 
   if (row.kind === 'org_logo') {
@@ -452,22 +526,26 @@ async function updateRowWithRetry(
       return { updated: false, targetPath: newValue || null }
 
     const clear = isPlaceholderBare(currentRaw, currentPath)
-    const retryTarget = clear ? '' : targetForOrgLogo(row.id, currentPath)
-    if (!clear && retryTarget && retryTarget !== newValue) {
-      const sourceExists = await storageObjectExists(supabase, currentPath)
-      if (sourceExists)
-        await copyObject(supabase, currentPath, retryTarget)
-    }
+    const ownedTarget = clear ? '' : targetForOrgLogo(row.id, currentPath)
+    const refreshed = await refreshOwnedPathFromBareSource(
+      supabase,
+      currentPath,
+      ownedTarget,
+      clear,
+    )
 
     const retryRow: LegacyRow = {
       ...row,
       rawValue: currentRaw,
       sourcePath: currentPath,
-      targetPath: clear ? null : retryTarget,
-      action: clear ? 'clear' : 'copy',
+      targetPath: refreshed.action === 'clear' ? null : refreshed.target,
+      action: refreshed.action === 'clear' ? 'clear' : 'copy',
     }
-    const updated = await updateRow(supabase, retryRow, retryTarget)
-    return { updated, targetPath: clear ? null : retryTarget }
+    const updated = await updateRow(supabase, retryRow, refreshed.target)
+    return {
+      updated,
+      targetPath: refreshed.action === 'clear' ? null : refreshed.target,
+    }
   }
 
   const { data: current, error } = await supabase
@@ -486,22 +564,26 @@ async function updateRowWithRetry(
     return { updated: false, targetPath: newValue || null }
 
   const clear = isPlaceholderBare(currentRaw, currentPath)
-  const retryTarget = clear ? '' : targetForUser(row.id, currentPath)
-  if (!clear && retryTarget && retryTarget !== newValue) {
-    const sourceExists = await storageObjectExists(supabase, currentPath)
-    if (sourceExists)
-      await copyObject(supabase, currentPath, retryTarget)
-  }
+  const ownedTarget = clear ? '' : targetForUser(row.id, currentPath)
+  const refreshed = await refreshOwnedPathFromBareSource(
+    supabase,
+    currentPath,
+    ownedTarget,
+    clear,
+  )
 
   const retryRow: LegacyRow = {
     ...row,
     rawValue: currentRaw,
     sourcePath: currentPath,
-    targetPath: clear ? null : retryTarget,
-    action: clear ? 'clear' : 'copy',
+    targetPath: refreshed.action === 'clear' ? null : refreshed.target,
+    action: refreshed.action === 'clear' ? 'clear' : 'copy',
   }
-  const updated = await updateRow(supabase, retryRow, retryTarget)
-  return { updated, targetPath: clear ? null : retryTarget }
+  const updated = await updateRow(supabase, retryRow, refreshed.target)
+  return {
+    updated,
+    targetPath: refreshed.action === 'clear' ? null : refreshed.target,
+  }
 }
 
 async function processRow(
