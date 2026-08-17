@@ -1,3 +1,40 @@
+CREATE OR REPLACE FUNCTION public.is_version_scoped_app_version_r2_path(
+  p_r2_path text,
+  p_app_id character varying,
+  p_version_name character varying
+)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+SET search_path = ''
+AS $$
+  SELECT
+    p_r2_path IS NOT NULL
+    AND p_r2_path ~ (
+      '^orgs/[^/]+/apps/'
+      || regexp_replace(p_app_id::text, '([.^$*+?(){|\[\]\\])', '\\\1', 'g')
+      || '/'
+      || regexp_replace(p_version_name::text, '([.^$*+?(){|\[\]\\])', '\\\1', 'g')
+      || '\.zip$'
+    );
+$$;
+
+ALTER FUNCTION public.is_version_scoped_app_version_r2_path(
+  text,
+  character varying,
+  character varying
+) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.is_version_scoped_app_version_r2_path(
+  text,
+  character varying,
+  character varying
+) FROM PUBLIC;
+GRANT ALL ON FUNCTION public.is_version_scoped_app_version_r2_path(
+  text,
+  character varying,
+  character varying
+) TO service_role;
+
 CREATE OR REPLACE FUNCTION public.guard_app_version_r2_path()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -7,7 +44,6 @@ AS $$
 DECLARE
   v_owner_org uuid;
   v_expected text;
-  v_old_expected text;
 BEGIN
   IF NEW.r2_path IS NULL OR btrim(NEW.r2_path) = '' THEN
     NEW.r2_path := NULL;
@@ -33,22 +69,13 @@ BEGIN
   END IF;
 
   IF TG_OP = 'UPDATE'
-    AND OLD.r2_path IS NOT NULL
-    AND (
-      NEW.owner_org IS DISTINCT FROM OLD.owner_org
-      OR NEW.app_id IS DISTINCT FROM OLD.app_id
-      OR NEW.name IS DISTINCT FROM OLD.name
+    AND NEW.r2_path IS NOT DISTINCT FROM OLD.r2_path
+    AND public.is_version_scoped_app_version_r2_path(
+      NEW.r2_path,
+      NEW.app_id,
+      NEW.name
     ) THEN
-    v_old_expected := 'orgs/' || OLD.owner_org::text || '/apps/' || OLD.app_id || '/' || OLD.name || '.zip';
-
-    IF current_setting('capgo.allow_owner_org_transfer', true) = 'true'
-      AND NEW.owner_org IS DISTINCT FROM OLD.owner_org
-      AND NEW.app_id IS NOT DISTINCT FROM OLD.app_id
-      AND NEW.name IS NOT DISTINCT FROM OLD.name
-      AND OLD.r2_path = v_old_expected THEN
-      NEW.r2_path := v_expected;
-      RETURN NEW;
-    END IF;
+    RETURN NEW;
   END IF;
 
   PERFORM public.pg_log(

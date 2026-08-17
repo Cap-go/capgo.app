@@ -192,6 +192,19 @@ describe('on_version_update deleted version cleanup', () => {
     expect(moveObjectToTrash).not.toHaveBeenCalled()
   })
 
+  it('moves retained source-org bundle path to trash after owner_org transfer', async () => {
+    const response = await deleteIt(createContext(), createVersion({
+      owner_org: 'org-2',
+      r2_path: 'orgs/org-1/apps/com.cleanup.test/1.0.0.zip',
+    }))
+
+    expect(response.status).toBe(200)
+    expect(moveObjectToTrash).toHaveBeenCalledWith(
+      expect.anything(),
+      'orgs/org-1/apps/com.cleanup.test/1.0.0.zip',
+    )
+  })
+
   it('locks, trashes R2, then deletes each manifest DB row', async () => {
     manifestSelectWhere.mockResolvedValue(makeEntries(1))
 

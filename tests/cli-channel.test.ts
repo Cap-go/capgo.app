@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createTestSDK } from './cli-sdk-utils'
 import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
-import { BASE_URL, createAppVersions, createDirectApiKeyWithBindings, createIsolatedSeedAppOptions, getSupabaseClient, ORG_ID, resetAndSeedAppData, resetAppData, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, USER_ID } from './test-utils'
+import { BASE_URL, createAppVersions, createDirectApiKeyWithBindings, createIsolatedSeedAppOptions, getSupabaseClient, resetAndSeedAppData, resetAppData, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, USER_ID } from './test-utils'
 
 const seedOptions = createIsolatedSeedAppOptions()
 
@@ -601,7 +601,7 @@ describe('tests CLI channel commands', () => {
     const withDelta = await createAppVersions(withDeltaName, APPNAME, {
       checksum: 'cli-delta-set',
       storage_provider: 'r2',
-      r2_path: getCanonicalAppVersionR2Path(ORG_ID, APPNAME, withDeltaName),
+      r2_path: getCanonicalAppVersionR2Path(seedOptions.orgId, APPNAME, withDeltaName),
     })
     await getSupabaseClient()
       .from('manifest')
@@ -641,7 +641,7 @@ describe('tests CLI channel commands', () => {
     const zipOnly = await createAppVersions(zipOnlyName, APPNAME, {
       checksum: 'cli-zip-only',
       storage_provider: 'r2',
-      r2_path: getCanonicalAppVersionR2Path(ORG_ID, APPNAME, zipOnlyName),
+      r2_path: getCanonicalAppVersionR2Path(seedOptions.orgId, APPNAME, zipOnlyName),
     })
     await getSupabaseClient()
       .from('channels')
