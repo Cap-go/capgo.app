@@ -297,12 +297,20 @@ export function createHono(functionName: string, _version: string) {
     return next()
   })
 
-  // Browser and Capacitor WebView clients (Origin: capacitor://localhost /
-  // https://localhost) need CORS on every route. Per-route useCors misses
-  // handlers such as GET /ok. Skip plugin hot paths; the plugin worker
-  // already mounts CORS once.
-  if (!pluginHotPath)
-    appGlobal.use('*', useCors)
+  // Echo ACAO after the handler so Capacitor WebView origins work on routes
+  // that forgot useCors (GET /ok). Do not mount hono cors globally: it
+  // short-circuits OPTIONS and strips TUS discovery headers.
+  if (!pluginHotPath) {
+    appGlobal.use('*', async (c, next) => {
+      await next()
+      const origin = c.req.header('origin')
+      if (!origin)
+        return
+      const allowed = getAllowedCorsOrigin(origin, c)
+      if (allowed)
+        c.header('Access-Control-Allow-Origin', allowed)
+    })
+  }
 
   // Skip hono's access logger on plugin hot paths — it serializes every request
   // on millions of device calls/day.

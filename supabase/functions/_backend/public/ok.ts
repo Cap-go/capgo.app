@@ -1,8 +1,10 @@
 import { resolveCapgoApiVersion } from '../utils/api_version.ts'
-import { BRES, honoFactory, parseBody } from '../utils/hono.ts'
+import { BRES, honoFactory, parseBody, useCors } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 
 export const app = honoFactory.createApp()
+
+app.use('*', useCors)
 
 app.post('/', async (c) => {
   const body = await parseBody<any>(c)
