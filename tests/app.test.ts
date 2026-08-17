@@ -30,7 +30,7 @@ describe('[DELETE] /app operations', () => {
     app_id: APPNAME,
     owner_org: ORG_ID,
     name: `App ${APPNAME}`,
-    icon: 'test-icon',
+    icon: 'https://cdn.example/test-icon.png',
   }
 
   afterAll(async () => {
@@ -114,7 +114,7 @@ describe('[GET] /app operations with subkey', () => {
         owner_org: ORG_ID,
         app_id: APPNAME,
         name: `App ${APPNAME}`,
-        icon: 'test-icon',
+        icon: 'https://cdn.example/test-icon.png',
       }),
     })
     // Handle duplicate app creation gracefully on retry (app may already exist from a previous attempt)
@@ -161,7 +161,7 @@ describe('[GET] /app operations with subkey', () => {
         owner_org: ORG_ID,
         app_id: OTHER_APPNAME,
         name: `App ${OTHER_APPNAME}`,
-        icon: 'test-icon',
+        icon: 'https://cdn.example/test-icon.png',
       }),
     })
     if (createOtherApp.status !== 200) {
@@ -195,7 +195,7 @@ describe('[GET] /app operations with subkey', () => {
       headers: { ...headers, ...subkeyHeaders },
       body: JSON.stringify({
         name: APPNAME,
-        icon: 'updated-icon',
+        icon: 'https://cdn.example/updated-icon.png',
       }),
     })
     expect(updateApp.status).toBe(200)
@@ -296,7 +296,7 @@ describe('/app hashed subkey enforcement', () => {
         owner_org: ORG_ID,
         app_id: appName,
         name: `App ${appName}`,
-        icon: 'test-icon',
+        icon: 'https://cdn.example/test-icon.png',
       }),
     })
     if (createApp.status !== 200) {
@@ -351,7 +351,7 @@ describe('/app hashed subkey enforcement', () => {
         owner_org: ORG_ID,
         app_id: BLOCKED_APPNAME,
         name: `App ${BLOCKED_APPNAME}`,
-        icon: 'test-icon',
+        icon: 'https://cdn.example/test-icon.png',
       }),
     })
 
@@ -503,7 +503,7 @@ describe('[POST] /app operations with non-owner user', () => {
         owner_org: noAccessOrgId,
         app_id: noAccessAppName,
         name: `${noAccessAppName}_no_access`,
-        icon: 'test-icon',
+        icon: 'https://cdn.example/test-icon.png',
       }),
     })
     expect(createApp.status).toBe(403)
@@ -519,7 +519,7 @@ describe('[POST] /app operations with non-owner user', () => {
         owner_org: adminAccessOrgId,
         app_id: adminAccessAppName,
         name: `App ${adminAccessAppName}`,
-        icon: 'test-icon',
+        icon: 'https://cdn.example/test-icon.png',
       }),
     })
     expect(createApp.status).toBe(200)
@@ -545,7 +545,7 @@ describe('[POST]/[PUT] /app onboarding progress', () => {
         owner_org: ORG_ID,
         app_id: APPNAME,
         name: `App ${APPNAME}`,
-        icon: 'test-icon',
+        icon: 'https://cdn.example/test-icon.png',
       }),
     })
     expect(createApp.status).toBe(200)
