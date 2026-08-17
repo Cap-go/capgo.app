@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createTestSDK } from './cli-sdk-utils'
-import { BASE_URL, createAppVersions, createDirectApiKeyWithBindings, createIsolatedSeedAppOptions, getSupabaseClient, resetAndSeedAppData, resetAppData, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, USER_ID } from './test-utils'
+import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
+import { BASE_URL, createAppVersions, createDirectApiKeyWithBindings, createIsolatedSeedAppOptions, getSupabaseClient, ORG_ID, resetAndSeedAppData, resetAppData, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, USER_ID } from './test-utils'
 
 const seedOptions = createIsolatedSeedAppOptions()
 
@@ -596,10 +597,11 @@ describe('tests CLI channel commands', () => {
   it.concurrent('should set channel update package', async () => {
     const testChannelName = generateChannelName()
     await createChannel(testChannelName, APPNAME)
-    const withDelta = await createAppVersions(`1.0.cli-delta-set-${randomUUID().slice(0, 8)}`, APPNAME, {
+    const withDeltaName = `1.0.cli-delta-set-${randomUUID().slice(0, 8)}`
+    const withDelta = await createAppVersions(withDeltaName, APPNAME, {
       checksum: 'cli-delta-set',
       storage_provider: 'r2',
-      r2_path: `orgs/test/apps/${APPNAME}/cli-delta-set.zip`,
+      r2_path: getCanonicalAppVersionR2Path(ORG_ID, APPNAME, withDeltaName),
     })
     await getSupabaseClient()
       .from('manifest')
@@ -635,10 +637,11 @@ describe('tests CLI channel commands', () => {
   it.concurrent('should refuse delta-only when the linked bundle has no delta files', async () => {
     const testChannelName = generateChannelName()
     await createChannel(testChannelName, APPNAME)
-    const zipOnly = await createAppVersions(`1.0.cli-zip-${randomUUID().slice(0, 8)}`, APPNAME, {
+    const zipOnlyName = `1.0.cli-zip-${randomUUID().slice(0, 8)}`
+    const zipOnly = await createAppVersions(zipOnlyName, APPNAME, {
       checksum: 'cli-zip-only',
       storage_provider: 'r2',
-      r2_path: `orgs/test/apps/${APPNAME}/cli-zip-only.zip`,
+      r2_path: getCanonicalAppVersionR2Path(ORG_ID, APPNAME, zipOnlyName),
     })
     await getSupabaseClient()
       .from('channels')

@@ -2,7 +2,8 @@ import type { ManifestEntry } from '../supabase/functions/_backend/utils/downloa
 
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { createAppVersions, getBaseData, getSupabaseClient, PLUGIN_BASE_URL, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, warmEdgeEndpoint } from './test-utils.ts'
+import { createAppVersions, getBaseData, getSupabaseClient, ORG_ID, PLUGIN_BASE_URL, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, warmEdgeEndpoint } from './test-utils.ts'
+import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
 
 const id = randomUUID()
 const APPNAME = `com.demo.app.updates.${id}`
@@ -281,9 +282,10 @@ describe('channel update package', () => {
   })
 
   it('zip only from builtin applies only on the store binary', async () => {
-    const version = await createAppVersions(`1.0.${Math.floor(Math.random() * 100000) + 2000}`, APPNAME, {
+    const versionName = `1.0.${Math.floor(Math.random() * 100000) + 2000}`
+    const version = await createAppVersions(versionName, APPNAME, {
       checksum: 'pkg-zip-builtin',
-      r2_path: `orgs/test/apps/${APPNAME}/zip-builtin.zip`,
+      r2_path: getCanonicalAppVersionR2Path(ORG_ID, APPNAME, versionName),
     })
     createdVersionIds.push(version.id)
     await insertManifestEntries(version.id)
@@ -314,9 +316,10 @@ describe('channel update package', () => {
   })
 
   it('delta only from builtin applies only on the store binary', async () => {
-    const version = await createAppVersions(`1.0.${Math.floor(Math.random() * 100000) + 2000}`, APPNAME, {
+    const versionName = `1.0.${Math.floor(Math.random() * 100000) + 2000}`
+    const version = await createAppVersions(versionName, APPNAME, {
       checksum: 'pkg-delta-builtin',
-      r2_path: `orgs/test/apps/${APPNAME}/delta-builtin.zip`,
+      r2_path: getCanonicalAppVersionR2Path(ORG_ID, APPNAME, versionName),
     })
     createdVersionIds.push(version.id)
     await insertManifestEntries(version.id)
