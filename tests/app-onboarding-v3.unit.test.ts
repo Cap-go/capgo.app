@@ -38,7 +38,6 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain(':aria-expanded="isStoreImportOpen"')
     expect(onboardingSource).toContain('v-if="isStoreImportOpen" id="app-onboarding-store-import-panel"')
     expect(onboardingSource).toContain("trackDetailsEvent(isStoreImportOpen.value ? 'onboarding_store_import_shown' : 'onboarding_store_import_hidden')")
-    expect(onboardingSource).toContain('// Store publication is unrelated to whether the user already has a mobile project.')
     expect(onboardingSource).toContain('existingApp.value = true')
     expect(onboardingSource).toContain("trackDetailsEvent('onboarding_store_import_submitted'")
     expect(onboardingSource).toContain("trackDetailsEvent('onboarding_store_import_succeeded'")
@@ -65,7 +64,8 @@ describe('pre-organization onboarding v3', () => {
     )
     expect(iconImport).toContain("invokeCapgoApi('app/store-metadata'")
     expect(iconImport).toContain('storeIconPreview.value = importedIcon')
-    expect(iconImport).toContain('selectImportedIcon()')
+    expect(iconImport).toContain('selectImportedIcon(false)')
+    expect(onboardingSource).toContain('function cancelPendingStoreIconImport()')
     expect(iconImport).not.toContain('appName.value =')
     expect(iconImport).not.toContain('manualAppId.value =')
     expect(iconImport).not.toContain('importedStoreAppId.value =')
@@ -79,11 +79,23 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain('class="mb-6 mt-5 overflow-hidden rounded-xl')
     const iconImportPanel = onboardingSource.slice(
       onboardingSource.indexOf('id="app-onboarding-icon-store-import-panel"'),
-      onboardingSource.indexOf('<div v-if="false && storeScreenshotPreview"'),
+      onboardingSource.indexOf('<div class="flex flex-col-reverse gap-3 border-t'),
     )
     expect(iconImportPanel).toContain('<div class="space-y-3">')
     expect(iconImportPanel).toContain('class="d-btn min-h-11 w-full sm:w-auto"')
     expect(iconImportPanel).not.toContain('sm:flex-row')
+    expect(onboardingSource).not.toContain('v-if="false"')
+    expect(onboardingSource).not.toContain('v-if="false && storeScreenshotPreview"')
+  })
+
+  it.concurrent('keeps the existing-app choice reachable for existing-organization creation', () => {
+    expect(onboardingSource).toContain('v-if="!props.preOrg && appDetailsStep === \'name\'" class="grid gap-3 sm:grid-cols-2"')
+    expect(onboardingSource).toContain('existingApp.value = props.preOrg ? true : null')
+    expect(onboardingSource).toContain("toast.error(t('app-onboarding-toast-existing-required'))")
+  })
+
+  it.concurrent('does not restore a skipped generated App ID as a manual choice', () => {
+    expect(onboardingSource).toContain("appId: selectedAppIdSource.value === 'generated' ? '' : generatedAppId.value")
   })
 
   it.concurrent('tracks every app-details page as a standard onboarding step', () => {

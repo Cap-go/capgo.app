@@ -23,7 +23,6 @@ import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheck from '~icons/lucide/check'
 import IconChevronDown from '~icons/lucide/chevron-down'
 import IconChevronUp from '~icons/lucide/chevron-up'
-import IconCode from '~icons/lucide/code-2'
 import IconCompass from '~icons/lucide/compass'
 import IconGlobe from '~icons/lucide/globe-2'
 import IconInfo from '~icons/lucide/info'
@@ -453,9 +452,7 @@ function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress'
     intent: selectedIntent.value,
     detailsStep: appDetailsStep.value,
     appName: appName.value,
-    appId: flowStep.value === 'details' && appDetailsStep.value !== 'icon' && !manualAppId.value.trim() && !importedStoreAppId.value
-      ? ''
-      : generatedAppId.value,
+    appId: selectedAppIdSource.value === 'generated' ? '' : generatedAppId.value,
     existingApp: existingApp.value,
     existingAppSetup: existingAppSetup.value,
     storeUrl: storeUrl.value,
@@ -570,8 +567,8 @@ function resetOnboardingForm() {
   flowStep.value = props.preOrg ? 'intent' : 'details'
   appDetailsStep.value = 'name'
   selectedIntent.value = null
-  existingApp.value = true
-  existingAppSetup.value = 'manual'
+  existingApp.value = props.preOrg ? true : null
+  existingAppSetup.value = props.preOrg ? 'manual' : null
   appName.value = ''
   manualAppId.value = ''
   hasEditedAppId.value = false
@@ -580,6 +577,7 @@ function resetOnboardingForm() {
   estimatedUsersIndex.value = null
   isStoreImportOpen.value = false
   isStoreIconImportOpen.value = false
+  cancelPendingStoreIconImport()
   createdApp.value = null
   selectedIconFile.value = null
   if (localIconPreview.value.startsWith('blob:'))
@@ -935,6 +933,11 @@ async function importStoreMetadata() {
 }
 
 let storeIconImportRun = 0
+function cancelPendingStoreIconImport() {
+  storeIconImportRun += 1
+  isImportingStoreIcon.value = false
+}
+
 async function importStoreIcon() {
   const requestedUrl = iconStoreUrl.value.trim()
   if (!requestedUrl)
@@ -966,7 +969,7 @@ async function importStoreIcon() {
     storeAppNamePreview.value = typeof data?.name === 'string' && data.name.trim()
       ? data.name.trim()
       : appName.value.trim()
-    selectImportedIcon()
+    selectImportedIcon(false)
     isStoreIconImportOpen.value = false
     trackDetailsEvent('onboarding_store_icon_import_succeeded')
   }
@@ -1087,6 +1090,8 @@ function onSelectIconFormKit(value: unknown) {
       : null
 
   selectedIconFile.value = file
+  if (file)
+    cancelPendingStoreIconImport()
   if (localIconPreview.value.startsWith('blob:'))
     URL.revokeObjectURL(localIconPreview.value)
   localIconPreview.value = file ? URL.createObjectURL(file) : ''
@@ -1104,7 +1109,9 @@ function clearLocalIconSelection() {
   localIconPreview.value = ''
 }
 
-function selectImportedIcon() {
+function selectImportedIcon(cancelPendingImport = true) {
+  if (cancelPendingImport)
+    cancelPendingStoreIconImport()
   clearLocalIconSelection()
   useImportedStoreIcon.value = !!storeIconPreview.value
   if (useImportedStoreIcon.value)
@@ -1113,6 +1120,7 @@ function selectImportedIcon() {
 
 function removeSelectedIcon() {
   const removedIconSource = selectedAppIconSource.value
+  cancelPendingStoreIconImport()
   clearLocalIconSelection()
   useImportedStoreIcon.value = false
   if (removedIconSource !== 'none')
@@ -1185,6 +1193,10 @@ function completeAndViewAppDetailsStep(nextDetailsStep: AppDetailsStep) {
 function continueFromAppName() {
   if (!appName.value.trim()) {
     toast.error(t('app-onboarding-toast-name-required'))
+    return
+  }
+  if (!props.preOrg && existingApp.value === null) {
+    toast.error(t('app-onboarding-toast-existing-required'))
     return
   }
 
@@ -1866,8 +1878,8 @@ onMounted(async () => {
     if (!resumed) {
       flowStep.value = 'details'
       appDetailsStep.value = 'name'
-      existingApp.value = true
-      existingAppSetup.value = 'manual'
+      existingApp.value = null
+      existingAppSetup.value = null
     }
 
     void loadApiKey().catch((error) => {
@@ -2088,7 +2100,7 @@ defineExpose({
                 </p>
               </div>
 
-              <div v-if="false" class="grid gap-3 sm:grid-cols-2">
+              <div v-if="!props.preOrg && appDetailsStep === 'name'" class="grid gap-3 sm:grid-cols-2">
                 <button
                   type="button"
                   :aria-pressed="existingApp === true"
@@ -2133,67 +2145,6 @@ defineExpose({
                   </span>
                   <IconCheck v-if="existingApp === false" class="h-5 w-5 shrink-0 text-current" />
                 </button>
-              </div>
-
-              <div v-if="false" class="space-y-5 border-t border-slate-200 pt-6 dark:border-white/15">
-                <div>
-                  <p class="text-sm font-semibold text-slate-950 dark:text-white">
-                    {{ t('app-onboarding-start-question') }}
-                  </p>
-                  <div class="mt-3 grid gap-3 sm:grid-cols-2">
-                    <button
-                      type="button"
-                      :aria-pressed="existingAppSetup === 'import'"
-                      class="flex min-h-24 items-start gap-3 rounded-2xl border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
-                      :class="whiteCardToggleButtonClass(existingAppSetup === 'import')"
-                      @click="existingAppSetup = 'import'"
-                    >
-                      <IconGlobe class="mt-0.5 h-5 w-5 shrink-0" />
-                      <span>
-                        <span class="block text-sm font-semibold">{{ t('app-onboarding-mode-import') }}</span>
-                        <span class="mt-1 block text-sm leading-6 opacity-75">{{ t('app-onboarding-mode-import-helper') }}</span>
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      :aria-pressed="existingAppSetup === 'manual'"
-                      class="flex min-h-24 items-start gap-3 rounded-2xl border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
-                      :class="whiteCardToggleButtonClass(existingAppSetup === 'manual')"
-                      @click="existingAppSetup = 'manual'"
-                    >
-                      <IconCode class="mt-0.5 h-5 w-5 shrink-0" />
-                      <span>
-                        <span class="block text-sm font-semibold">{{ t('app-onboarding-mode-manual') }}</span>
-                        <span class="mt-1 block text-sm leading-6 opacity-75">{{ t('app-onboarding-mode-manual-helper') }}</span>
-                      </span>
-                    </button>
-                  </div>
-                </div>
-
-                <template v-if="existingAppSetup === 'import'">
-                  <div>
-                    <label for="app-onboarding-store-url" class="text-sm font-medium text-slate-800 dark:text-slate-200">{{ t('app-onboarding-store-link-label') }}</label>
-                    <div class="mt-2 flex flex-col gap-3 sm:flex-row">
-                      <input
-                        id="app-onboarding-store-url"
-                        v-model="storeUrl"
-                        class="min-h-12 w-full rounded-xl border border-slate-300 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/10 dark:border-white/20 dark:bg-slate-950/90 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-primary-500 dark:focus:ring-primary-500/30"
-                        :placeholder="t('app-onboarding-store-link-placeholder')"
-                        type="url"
-                      >
-                      <button type="button" class="d-btn min-h-12 shrink-0" :class="whiteCardSecondaryButtonClass()" :disabled="isImportingStore || !storeUrl" @click="importStoreMetadata()">
-                        <IconLoader v-if="isImportingStore" class="h-4 w-4 animate-spin" />
-                        <IconSparkles v-else class="h-4 w-4" />
-                        <span>{{ t('app-onboarding-store-import-button') }}</span>
-                      </button>
-                    </div>
-                    <p class="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400" aria-live="polite">
-                      {{ hasImportedStoreMetadata
-                        ? t('app-onboarding-store-imported-help')
-                        : t('app-onboarding-store-help') }}
-                    </p>
-                  </div>
-                </template>
               </div>
 
               <div class="contents">
@@ -2332,7 +2283,7 @@ defineExpose({
                         :class="canUseStoreImportPreview ? whiteCardSecondaryButtonClass() : whiteCardPrimaryButtonClass()"
                         :disabled="canUseStoreImportPreview"
                         data-test="app-onboarding-use-imported-icon"
-                        @click="selectImportedIcon"
+                        @click="selectImportedIcon()"
                       >
                         <IconCheck v-if="canUseStoreImportPreview" class="h-4 w-4" />
                         {{ canUseStoreImportPreview ? t('app-onboarding-imported-icon-selected') : t('app-onboarding-use-imported-icon') }}
@@ -2407,10 +2358,6 @@ defineExpose({
                       </div>
                     </div>
                   </div>
-                </div>
-
-                <div v-if="false && storeScreenshotPreview" class="overflow-hidden rounded-xl border border-slate-200 dark:border-white/15">
-                  <img :src="storeScreenshotPreview" :alt="t('app-onboarding-store-screenshot-alt')" class="mx-auto aspect-9/19.5 max-h-48 w-auto object-cover object-top">
                 </div>
 
                 <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/15">

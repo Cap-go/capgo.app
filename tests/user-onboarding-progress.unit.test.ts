@@ -114,6 +114,13 @@ describe('user onboarding progress', () => {
     }), 'pre_org')).toBe(true)
     expect(shouldPromptOnboardingResume(buildUserOnboardingProgress({
       status: 'in_progress',
+      step: 'details',
+      flow: 'existing_org',
+      detailsStep: 'app_id',
+      updatedAt: '2026-08-15T00:00:00.000Z',
+    }), 'existing_org')).toBe(true)
+    expect(shouldPromptOnboardingResume(buildUserOnboardingProgress({
+      status: 'in_progress',
       step: 'organization',
       flow: 'pre_org',
       appName: 'Acme',

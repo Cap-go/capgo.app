@@ -272,6 +272,7 @@ export function shouldPromptOnboardingResume(
 
   return Boolean(
     progress.intent
+    || (progress.details_step !== undefined && progress.details_step !== 'name')
     || progress.app_name
     || progress.existing_app === true
     || progress.existing_app === false
