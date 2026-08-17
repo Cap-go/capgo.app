@@ -56,7 +56,7 @@ describe('app onboarding file input', () => {
   it('clears the selected filename and native input when the model is reset', async () => {
     const selectedIcon = ref<unknown>(null)
     const container = document.createElement('div')
-    document.body.append(container)
+    document.body.appendChild(container)
     const app = createApp({
       setup: () => () => h(AppOnboardingIconInput, {
         chooseLabel: 'Choose file',
