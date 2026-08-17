@@ -19,7 +19,6 @@ const {
   createSignedImageUrl,
   getStorageAllowedOrigins,
   isAllowedImagePath,
-  isLegacyBareImageFilename,
   isOwnershipBearingImagePath,
   isSupabaseStorageImageUrl,
   normalizeImagePath,
@@ -55,8 +54,7 @@ describe('image path ownership for signed URLs', () => {
     expect(isAllowedImagePath('org/org-1/../org-2/secret.png', { orgId: 'org-1' })).toBe(false)
     expect(assertAllowedImagePath('org/org-2/logo/a.png', { orgId: 'org-1' })).toBeNull()
     expect(assertAllowedImagePath('private/secret.png', { orgId: 'org-1' })).toBeNull()
-    expect(assertAllowedImagePath('test-icon', { orgId: 'org-1' })).toBe('test-icon')
-    expect(isLegacyBareImageFilename('test-icon')).toBe(true)
+    expect(assertAllowedImagePath('test-icon', { orgId: 'org-1' })).toBeNull()
     expect(isOwnershipBearingImagePath('test-icon')).toBe(false)
     expect(isOwnershipBearingImagePath('private/secret.png')).toBe(true)
     expect(isOwnershipBearingImagePath('org/org-1/logo/a.png')).toBe(true)
@@ -95,15 +93,11 @@ describe('image path ownership for signed URLs', () => {
     expect(mocks.createSignedUrl).toHaveBeenCalledWith('org/org-1/logo/a.png', expect.any(Number))
   })
 
-  it('still signs legacy bare filenames', async () => {
-    mocks.createSignedUrl.mockResolvedValue({
-      data: { signedUrl: 'https://signed.example/legacy.png' },
-      error: null,
-    })
+  it('refuses to sign bare filenames without ownership', async () => {
     const context = {} as Parameters<typeof createSignedImageUrl>[0]
-    await expect(createSignedImageUrl(context, 'test-icon'))
-      .resolves
-      .toBe('https://signed.example/legacy.png')
+    await expect(createSignedImageUrl(context, 'test-icon')).resolves.toBeNull()
+    await expect(createSignedImageUrl(context, 'test-icon', { orgId: 'org-1' })).resolves.toBeNull()
+    expect(mocks.createSignedUrl).not.toHaveBeenCalled()
   })
 
   it('keeps external non-storage URLs unsigned', async () => {

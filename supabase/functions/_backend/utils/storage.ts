@@ -150,17 +150,13 @@ function hasUnsafeImagePathSegments(normalized: string) {
     || normalized.split('/').some(segment => segment === '.' || segment === '..')
 }
 
-/** Legacy icons stored as a single root-level filename (no `/`). */
-export function isLegacyBareImageFilename(normalized: string) {
-  return !!normalized && !normalized.includes('/') && !hasUnsafeImagePathSegments(normalized)
-}
-
 /**
- * Any path with a folder segment must pass ownership checks.
- * Bare filenames are the only legacy exception.
+ * Every stored image path must pass ownership checks.
+ * Root-level bare filenames are rejected (migrate with
+ * `bun run admin:migrate-legacy-bare-image-paths --apply`).
  */
 export function isOwnershipBearingImagePath(normalized: string) {
-  return normalized.includes('/')
+  return !!normalized && normalized.includes('/')
 }
 
 /**
@@ -170,6 +166,8 @@ export function isOwnershipBearingImagePath(normalized: string) {
  */
 export function isAllowedImagePath(normalized: string, scope: ImagePathScope) {
   if (!normalized || hasUnsafeImagePathSegments(normalized))
+    return false
+  if (!normalized.includes('/'))
     return false
 
   const prefixes: string[] = []
@@ -192,8 +190,6 @@ export function assertAllowedImagePath(normalized: string | null, scope: ImagePa
     return null
   if (hasUnsafeImagePathSegments(normalized))
     return null
-  if (isLegacyBareImageFilename(normalized))
-    return normalized
   if (!isAllowedImagePath(normalized, scope))
     return null
   return normalized
@@ -227,11 +223,9 @@ export async function createSignedImageUrl(
   if (!normalized || hasUnsafeImagePathSegments(normalized))
     return null
 
-  // Foldered paths require a matching ownership scope before admin signing.
-  if (isOwnershipBearingImagePath(normalized)) {
-    if (!scope || !isAllowedImagePath(normalized, scope))
-      return null
-  }
+  // Every images object key requires a matching ownership scope before admin signing.
+  if (!scope || !isAllowedImagePath(normalized, scope))
+    return null
 
   const { data, error } = await supabaseAdmin(c)
     .storage
