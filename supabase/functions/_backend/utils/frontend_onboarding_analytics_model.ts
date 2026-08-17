@@ -136,7 +136,7 @@ function selectDeduplicatedAttempts(attempts: FrontendOnboardingAttempt[]): Fron
 
   for (const attempt of attempts) {
     const personId = attempt.personId.trim()
-    const identityKey = personId === '' ? `attempt:${attempt.attemptId}` : personId
+    const identityKey = personId === '' ? `attempt:${attempt.attemptId}` : `person:${personId}`
     const current = winners.get(identityKey)
     if (current === undefined
       || stageRank(attempt) > stageRank(current)

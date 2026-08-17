@@ -121,6 +121,27 @@ describe('buildFrontendOnboardingAnalytics', () => {
     expect(analytics.deduplicated.funnels.v3.map(stage => stage.reached)).toEqual([4, 2, 1, 0])
   })
 
+  it.concurrent('keeps blank and namespaced person identities separate', () => {
+    const analytics = buildFrontendOnboardingAnalytics([
+      attempt({
+        attemptId: 'blank-attempt',
+        personId: '',
+        onboardingVersion: 1,
+        intentMs: CURRENT_START_MS,
+      }),
+      attempt({
+        attemptId: 'real-person-attempt',
+        personId: 'attempt:blank-attempt',
+        intentMs: CURRENT_START_MS + MINUTE_MS,
+      }),
+    ], CURRENT_START_MS, CURRENT_END_MS)
+
+    expect(analytics.deduplicated.daily_attempts).toEqual([
+      { date: '2026-08-01', v1_attempts: 1, v2_attempts: 0, v3_attempts: 1 },
+      { date: '2026-08-02', v1_attempts: 0, v2_attempts: 0, v3_attempts: 0 },
+    ])
+  })
+
   it.concurrent('ignores steps before intent and after the 24-hour progression window', () => {
     const intentMs = CURRENT_START_MS + MINUTE_MS
     const analytics = buildFrontendOnboardingAnalytics([
