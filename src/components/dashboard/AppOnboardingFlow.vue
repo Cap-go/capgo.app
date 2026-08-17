@@ -152,7 +152,6 @@ const selectedIconFile = ref<File | null>(null)
 const localIconPreview = ref('')
 const storeIconPreview = ref('')
 const storeAppNamePreview = ref('')
-const storeScreenshotPreview = ref('')
 const useImportedStoreIcon = ref(false)
 const existingApp = ref<boolean | null>(null)
 const existingAppSetup = ref<'import' | 'manual' | null>(null)
@@ -374,7 +373,7 @@ const onboardingProgressPersistence = createOnboardingProgressPersistence({
 
 function trackDetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
   if (props.preOrg)
-    progressTracker?.trackDetailsEvent(name, details, analyticsStepFor('details'))
+    progressTracker?.trackDetailsEvent(name, analyticsStepFor('details'), details)
 }
 
 function trackOrganizationEvent(
@@ -577,7 +576,6 @@ function resetOnboardingForm() {
   estimatedUsersIndex.value = null
   isStoreImportOpen.value = false
   isStoreIconImportOpen.value = false
-  cancelPendingStoreIconImport()
   createdApp.value = null
   selectedIconFile.value = null
   if (localIconPreview.value.startsWith('blob:'))
@@ -757,12 +755,13 @@ function getStoreUrls(url: string) {
 }
 
 let storeImportRun = 0
+let storeIconImportRun = 0
 function resetStoreImportState() {
   storeImportRun += 1
+  cancelPendingStoreIconImport()
   storeUrl.value = ''
   storeIconPreview.value = ''
   storeAppNamePreview.value = ''
-  storeScreenshotPreview.value = ''
   useImportedStoreIcon.value = false
   importedStoreAppId.value = ''
   isImportingStore.value = false
@@ -856,7 +855,6 @@ async function loadResumeApp() {
   const iconLoadRun = ++resumeIconLoadRun
   localIconPreview.value = getImmediateImageUrl(data.icon_url) || ''
   void loadResumeIconPreview(data.icon_url, data.app_id, iconLoadRun)
-  storeScreenshotPreview.value = ''
   if (resumeStep.value === 'setup') {
     flowStep.value = 'setup'
     hydrateIntentFromCurrentOrg()
@@ -909,8 +907,6 @@ async function importStoreMetadata() {
       useImportedStoreIcon.value = false
     }
 
-    storeScreenshotPreview.value = typeof data?.screenshot_url === 'string' ? data.screenshot_url.trim() : ''
-
     importedStoreAppId.value = typeof data?.app_id === 'string' ? data.app_id.trim() : ''
 
     if (props.preOrg)
@@ -932,7 +928,6 @@ async function importStoreMetadata() {
   }
 }
 
-let storeIconImportRun = 0
 function cancelPendingStoreIconImport() {
   storeIconImportRun += 1
   isImportingStoreIcon.value = false
@@ -1253,6 +1248,7 @@ async function uploadIcon(appId: string, iconSourceUrl?: string) {
     return
 
   let fileToUpload = selectedIconFile.value
+  const iconSource = selectedIconFile.value || (iconSourceUrl && iconSourceUrl === localIconPreview.value) ? 'file' : 'store'
 
   if (!fileToUpload && iconSourceUrl) {
     try {
@@ -1286,11 +1282,9 @@ async function uploadIcon(appId: string, iconSourceUrl?: string) {
 
   if (!fileToUpload) {
     if (iconSourceUrl)
-      trackDetailsEvent('onboarding_app_icon_upload_failed', { icon_source: 'store' })
+      trackDetailsEvent('onboarding_app_icon_upload_failed', { icon_source: iconSource })
     return
   }
-
-  const iconSource = selectedIconFile.value ? 'file' : 'store'
 
   const iconPath = `org/${currentOrg.value.gid}/${appId}/icon`
   const { error: uploadError } = await supabase.storage
@@ -1355,8 +1349,6 @@ function restoreDraftState() {
     storeIconPreview.value = draft.storeIconDataUrl
     useImportedStoreIcon.value = !draft.iconDataUrl
   }
-  if (draft.storeScreenshotUrl)
-    storeScreenshotPreview.value = draft.storeScreenshotUrl
   if (draft.iconDataUrl)
     localIconPreview.value = draft.iconDataUrl
   return true
@@ -1625,8 +1617,9 @@ async function createAppRecord(options?: { nextStep?: StandardFlowStep | PreOrgF
       appIdSuggestions.value = []
     }
 
+    const restoredLocalIconSource = localIconPreview.value.startsWith('data:image/') ? localIconPreview.value : ''
     const importedIconSource = canUseStoreImportPreview.value ? storeIconPreview.value : ''
-    await uploadIcon(appId, importedIconSource)
+    await uploadIcon(appId, restoredLocalIconSource || importedIconSource)
     const { data: refreshed } = await supabase
       .from('apps')
       .select()

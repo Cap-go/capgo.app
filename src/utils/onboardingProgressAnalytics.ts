@@ -300,8 +300,8 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
 
   function trackDetailsEvent(
     name: OnboardingDetailsEvent,
+    step: OnboardingAnalyticsStep,
     details: OnboardingDetailsEventProperties = {},
-    step: OnboardingAnalyticsStep = 'details',
   ) {
     trackEvent(name, step, details)
   }

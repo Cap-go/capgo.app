@@ -271,7 +271,7 @@ describe('onboarding progress analytics', () => {
       supaHost: 'https://supabase.capgo.test',
     })
 
-    tracker.trackDetailsEvent('onboarding_app_name_entered', { field_length: 11 })
+    tracker.trackDetailsEvent('onboarding_app_name_entered', 'details', { field_length: 11 })
 
     expect(capture).toHaveBeenCalledWith(
       'onboarding_app_name_entered',
@@ -301,7 +301,7 @@ describe('onboarding progress analytics', () => {
 
     tracker.viewStep('app_name')
     capture.mockClear()
-    tracker.trackDetailsEvent('onboarding_app_name_entered', { field_length: 11 }, 'app_name')
+    tracker.trackDetailsEvent('onboarding_app_name_entered', 'app_name', { field_length: 11 })
 
     expect(capture).toHaveBeenCalledWith(
       'onboarding_app_name_entered',
@@ -326,7 +326,7 @@ describe('onboarding progress analytics', () => {
       supaHost: 'https://supabase.capgo.test',
     })
 
-    tracker.trackDetailsEvent('onboarding_app_creation_succeeded', {
+    tracker.trackDetailsEvent('onboarding_app_creation_succeeded', 'details', {
       app_id_source: 'generated',
       has_icon: true,
       icon_source: 'store',

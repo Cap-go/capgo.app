@@ -123,6 +123,8 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain("trackDetailsEvent('onboarding_store_icon_import_submitted'")
     expect(onboardingSource).toContain("trackDetailsEvent('onboarding_store_icon_import_succeeded'")
     expect(onboardingSource).toContain("trackDetailsEvent('onboarding_store_icon_import_failed'")
+    const resetStoreImportState = onboardingSource.slice(onboardingSource.indexOf('function resetStoreImportState()'), onboardingSource.indexOf('let resumeIconLoadRun'))
+    expect(resetStoreImportState).toContain('cancelPendingStoreIconImport()')
   })
 
   it.concurrent('continues to organization creation after the pre-org icon step', () => {
@@ -155,6 +157,8 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain("trackDetailsEvent('onboarding_app_icon_uploaded'")
     expect(onboardingSource).toContain("trackDetailsEvent('onboarding_app_icon_upload_failed'")
     expect(onboardingSource).toContain("parsedIconUrl.protocol === 'data:' && iconSourceUrl.startsWith('data:image/')")
+    expect(onboardingSource).toContain("const restoredLocalIconSource = localIconPreview.value.startsWith('data:image/')")
+    expect(onboardingSource).toContain('await uploadIcon(appId, restoredLocalIconSource || importedIconSource)')
   })
 
   it.concurrent('opens App ID guidance and tracks only the open action', () => {
