@@ -1642,7 +1642,7 @@ describe('rbac permission system', () => {
         })
       })
 
-      it('allows channel-scoped admin API keys to look up, update, and delete their bound channel without app read', async () => {
+      it('allows channel-scoped admin API keys to look up and delete their bound channel but blocks direct settings writes', async () => {
         const testId = randomUUID()
         const channelKeyOwnerId = randomUUID()
         const orgId = randomUUID()
@@ -1738,11 +1738,10 @@ describe('rbac permission system', () => {
         )
         expect(visibleChannel.rowCount).toBe(1)
 
-        const updatedChannel = await query(
+        await expect(query(
           'UPDATE public.channels SET allow_emulator = true WHERE id = $1::bigint RETURNING id, allow_emulator',
           [channel.rows[0].id],
-        )
-        expect(updatedChannel.rows).toEqual([{ id: channel.rows[0].id, allow_emulator: true }])
+        )).rejects.toThrow(/not allowed allow_emulator/)
 
         const deletedChannel = await query(
           'DELETE FROM public.channels WHERE id = $1::bigint RETURNING id',

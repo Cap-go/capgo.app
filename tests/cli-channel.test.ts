@@ -1067,11 +1067,12 @@ describe('tests CLI channel commands', () => {
           .eq('id', target!.id)
         expect(targetPublicUpdateError?.code).toBe('42501')
 
+        // Direct PostgREST settings writes are blocked for API keys; use /channel instead.
         const { error: targetUpdateError } = await scopedSupabase
           .from('channels')
           .update({ allow_emulator: true })
           .eq('id', target!.id)
-        expect(targetUpdateError).toBeNull()
+        expect(targetUpdateError?.message).toMatch(/not allowed allow_emulator/)
 
         const { error: siblingUpdateError } = await scopedSupabase
           .from('channels')
@@ -1093,7 +1094,7 @@ describe('tests CLI channel commands', () => {
           .eq('id', target!.id)
           .single()
         expect(targetAfterDirectUpdateError).toBeNull()
-        expect(targetAfterDirectUpdate).toEqual({ public: false, allow_emulator: true })
+        expect(targetAfterDirectUpdate).toEqual({ public: false, allow_emulator: false })
 
         const postResponse = await fetch(`${BASE_URL}/channel`, {
           method: 'POST',
@@ -1105,17 +1106,18 @@ describe('tests CLI channel commands', () => {
             app_id: APPNAME,
             channel: targetChannelName,
             public: false,
+            allow_emulator: true,
           }),
         })
         expect(postResponse.status).toBe(200)
 
-        const { data: targetAfterPost, error: targetAfterPostError } = await supabase
+        const { data: targetAfterSettingsPost, error: targetAfterSettingsPostError } = await supabase
           .from('channels')
-          .select('version, public')
+          .select('public, allow_emulator')
           .eq('id', target!.id)
           .single()
-        expect(targetAfterPostError).toBeNull()
-        expect(targetAfterPost).toEqual({ version: target!.version, public: false })
+        expect(targetAfterSettingsPostError).toBeNull()
+        expect(targetAfterSettingsPost).toEqual({ public: false, allow_emulator: true })
 
         const deleteResponse = await fetch(`${BASE_URL}/channel?app_id=${encodeURIComponent(APPNAME)}&channel=${encodeURIComponent(targetChannelName)}`, {
           method: 'DELETE',

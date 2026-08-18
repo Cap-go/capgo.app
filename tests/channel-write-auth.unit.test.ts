@@ -66,9 +66,12 @@ function requestClient() {
 describe('channel write authorization boundary', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    process.env.SUPABASE_URL = 'http://supabase.test'
+    process.env.SUPABASE_ANON_KEY = 'anon-key'
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key'
   })
 
-  it('uses the request-scoped client and omits immutable and preserved fields on an existing channel', async () => {
+  it('uses service_role for existing channel updates after route-level authorization', async () => {
     const { client, table } = requestClient()
     createClient.mockReturnValue(client)
     const { updateOrCreateChannel } = await import('../supabase/functions/_backend/utils/supabase.ts')
@@ -76,7 +79,8 @@ describe('channel write authorization boundary', () => {
     await updateOrCreateChannel(requestContext(), channelInsert(), 42, true)
 
     expect(createClient).toHaveBeenCalledTimes(1)
-    expect(createClient.mock.calls[0]?.[2]).toEqual(expect.objectContaining({
+    expect(createClient.mock.calls[0]?.[1]).toBe('service-role-key')
+    expect(createClient.mock.calls[0]?.[2]).not.toEqual(expect.objectContaining({
       global: { headers: { capgkey: 'scoped-key' } },
     }))
     expect(client.from).toHaveBeenCalledWith('channels')

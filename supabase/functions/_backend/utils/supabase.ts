@@ -229,9 +229,8 @@ export async function updateOrCreateChannel(
     throw new Error('missing request auth')
   }
 
-  const supabase = supabaseWithAuth(c, auth)
   if (existingChannelId === null) {
-    return supabase
+    return supabaseWithAuth(c, auth)
       .from('channels')
       .insert(update)
       .select('id')
@@ -239,11 +238,11 @@ export async function updateOrCreateChannel(
       .throwOnError()
   }
 
-  // Keep the original creator immutable. Omitted stable versions are read only
-  // for the response shape and must not overwrite a concurrent promotion.
+  // Settings writes are authorized in the channel route; use service_role so
+  // channels.noupdate does not treat API-key PostgREST traffic as a full update.
   const { created_by: _createdBy, version, ...channelUpdate } = update
   const requestUpdate = preserveVersion ? channelUpdate : { ...channelUpdate, version }
-  return supabase
+  return supabaseAdmin(c)
     .from('channels')
     .update(requestUpdate)
     .eq('id', existingChannelId)
