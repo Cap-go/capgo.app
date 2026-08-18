@@ -46,4 +46,14 @@ describe('buildAppTooLargeBentoEvent', () => {
     expect(buildAppTooLargeBentoEvent({ ...base, orgId: undefined })).toBeUndefined()
     expect(buildAppTooLargeBentoEvent({ ...base, appId: undefined })).toBeUndefined()
   })
+
+  it.concurrent('defaults missing org and app names to empty strings', () => {
+    const result = buildAppTooLargeBentoEvent({
+      event: APP_TOO_LARGE_EVENT,
+      orgId: 'org-1',
+      appId: 'com.demo.app',
+    })
+    expect(result?.data.org_name).toBe('')
+    expect(result?.data.app_name).toBe('')
+  })
 })
