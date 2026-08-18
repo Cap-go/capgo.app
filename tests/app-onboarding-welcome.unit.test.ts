@@ -14,6 +14,8 @@ describe('app onboarding welcome', () => {
     expect(source).toContain('data-test="onboarding-welcome-brand"')
     expect(source).toContain('src="/favicon.svg"')
     expect(source).toContain('class="d-btn d-btn-primary')
+    const primaryButtonTag = source.slice(source.indexOf('<button'), source.indexOf('data-test="onboarding-welcome-continue"'))
+    expect(primaryButtonTag).toContain('motion-reduce:transition-none')
     expect(source).toContain('onboarding-welcome-glow-shell')
     expect(source).toContain('onboarding-glow-drift')
     expect(source).not.toContain('conic-gradient')

@@ -622,8 +622,8 @@ describe('admin frontend onboarding dashboard', () => {
     expect(onLoadingCallback).toContain('if (!value)')
     expect(onLoadingCallback).toContain('isLoading.value = false')
     expect(source).toContain('const visibleAnalytics = computed(() => isLoadingStats.value ? null : analytics.value)')
-    expect(source).toContain('visibleAnalytics.value?.v4_kpis ?? visibleAnalytics.value?.kpis')
-    expect(source).toContain('visibleAnalytics.value?.v4_daily_conversions ?? visibleAnalytics.value?.daily_conversions')
+    expect(source).toContain("rawLatestFunnel.value.version === 'v4'\n  ? visibleAnalytics.value?.v4_kpis ?? visibleAnalytics.value?.kpis")
+    expect(source).toContain("rawLatestFunnel.value.version === 'v4'\n  ? visibleAnalytics.value?.v4_daily_conversions ?? visibleAnalytics.value?.daily_conversions")
   })
 
   it.concurrent('uses the existing admin dashboard components for v4 and the legacy funnel', async () => {

@@ -186,7 +186,9 @@ const latestVersionLabel = computed(() => t(rawLatestFunnel.value.version === 'v
 const displayedFunnelTitle = computed(() => t(displayedLatestFunnel.value.version === 'v4'
   ? 'frontend-onboarding-funnel-v4'
   : 'frontend-onboarding-funnel-v3'))
-const kpis = computed(() => visibleAnalytics.value?.v4_kpis ?? visibleAnalytics.value?.kpis)
+const kpis = computed(() => rawLatestFunnel.value.version === 'v4'
+  ? visibleAnalytics.value?.v4_kpis ?? visibleAnalytics.value?.kpis
+  : visibleAnalytics.value?.kpis)
 const dailySeries = computed(() => buildFrontendOnboardingDailySeries(
   displayedDailyAttempts.value,
   t('frontend-onboarding-version-1'),
@@ -194,7 +196,9 @@ const dailySeries = computed(() => buildFrontendOnboardingDailySeries(
   t('frontend-onboarding-version-3'),
   t('frontend-onboarding-version-4'),
 ))
-const latestDailyConversions = computed(() => visibleAnalytics.value?.v4_daily_conversions ?? visibleAnalytics.value?.daily_conversions)
+const latestDailyConversions = computed(() => rawLatestFunnel.value.version === 'v4'
+  ? visibleAnalytics.value?.v4_daily_conversions ?? visibleAnalytics.value?.daily_conversions
+  : visibleAnalytics.value?.daily_conversions)
 const intentToDetailsDaily = computed(() => latestDailyConversions.value?.intent_to_details ?? [])
 const detailsToOrganizationDaily = computed(() => latestDailyConversions.value?.details_to_organization ?? [])
 const organizationToSetupDaily = computed(() => latestDailyConversions.value?.organization_to_setup ?? [])
