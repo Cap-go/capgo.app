@@ -935,11 +935,11 @@ function isMissingBuildMetricColumnError(error: unknown): boolean {
 }
 
 function isMissingAppsWithPreviewColumnError(error: unknown): boolean {
-  return isMissingSchemaColumnError(error, ['apps_with_preview'])
+  return String((error as any)?.message ?? '').toLowerCase().includes('apps_with_preview')
 }
 
 function isMissingUsersWith2faColumnError(error: unknown): boolean {
-  return isMissingSchemaColumnError(error, ['users_with_2fa'])
+  return String((error as any)?.message ?? '').toLowerCase().includes('users_with_2fa')
 }
 
 async function calculateRevenue(c: Context, referenceDate?: Date): Promise<PlanRevenue> {

@@ -830,6 +830,7 @@ describe('global stats metric helpers', () => {
     expect(coreShard).toContain('users_with_2fa,')
     expect(source).toContain('users_with_2fa?: number')
     expect(source).toContain('isMissingUsersWith2faColumnError')
+    // Name-match only: a generic PGRST204/42703 must not drop the other optional column.
     expect(source).toContain('.includes(\'apps_with_preview\')')
     expect(source).toContain('.includes(\'users_with_2fa\')')
   })
