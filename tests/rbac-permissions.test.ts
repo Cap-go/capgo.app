@@ -1671,8 +1671,8 @@ describe('rbac permission system', () => {
         `, [appUuid, appId, `RBAC Channel Key 2FA App ${testId}`, 'rbac-channel-key-2fa-icon', orgId])
 
         const channel = await query(`
-          INSERT INTO public.channels (name, app_id, created_by, owner_org)
-          VALUES ($1, $2, $3::uuid, $4::uuid)
+          INSERT INTO public.channels (name, app_id, created_by, owner_org, allow_emulator)
+          VALUES ($1, $2, $3::uuid, $4::uuid, false)
           RETURNING id, rbac_id
         `, [`allowed-${testId}`, appId, USER_ID, orgId])
 
