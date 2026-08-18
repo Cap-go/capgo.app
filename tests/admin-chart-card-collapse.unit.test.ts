@@ -388,8 +388,8 @@ describe('admin chart card minimize control', () => {
   it('uses the collapsible card for every custom frontend onboarding graph', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/pages/admin/dashboard/frontend-onboarding.vue'), 'utf8')
 
-    expect(source).toContain(`:title="t('frontend-onboarding-funnel-v3')"`)
-    expect(source).toContain(`:title="t('frontend-onboarding-graph-v3')"`)
+    expect(source).toContain(`:title="t('frontend-onboarding-funnel-v4')"`)
+    expect(source).toContain(`:title="t('frontend-onboarding-graph-v4')"`)
     expect(source).toContain(`:title="t('frontend-onboarding-funnel-v1-legacy')"`)
     expect(source.match(/<ChartCard/g)).toHaveLength(9)
   })
