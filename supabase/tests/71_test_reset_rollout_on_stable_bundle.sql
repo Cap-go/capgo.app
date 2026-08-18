@@ -1,7 +1,7 @@
 -- Setting a new stable channel bundle drops leftover progressive rollout.
 BEGIN;
 
-SELECT plan(8);
+SELECT plan(9);
 
 SELECT tests.authenticate_as_service_role();
 SELECT tests.create_supabase_user(
