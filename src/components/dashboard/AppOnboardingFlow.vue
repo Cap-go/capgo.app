@@ -383,7 +383,10 @@ function trackOrganizationEvent(
   progressTracker?.trackStepEvent(name, 'organization', details)
 }
 
-const detailsFieldTracker = createOnboardingDetailsFieldDebouncer(trackDetailsEvent)
+const detailsFieldTracker = createOnboardingDetailsFieldDebouncer((name, step, details) => {
+  if (props.preOrg)
+    progressTracker?.trackDetailsEvent(name, step, details)
+})
 
 function analyticsStepFor(flow: OnboardingFlowStep, detailsStep = appDetailsStep.value): OnboardingAnalyticsStep {
   if (flow === 'details')
@@ -1135,7 +1138,7 @@ function onIconPickerClosedWithoutSelection() {
 }
 
 function onAppNameInput(event: Event) {
-  detailsFieldTracker.schedule('onboarding_app_name_entered', 'app_name', (event.target as HTMLInputElement).value)
+  detailsFieldTracker.schedule('onboarding_app_name_entered', 'app_name', 'app_name', (event.target as HTMLInputElement).value)
 }
 
 function onAppIdInput(event: Event) {
@@ -1143,15 +1146,15 @@ function onAppIdInput(event: Event) {
   manualAppId.value = (event.target as HTMLInputElement).value
   appIdFeedback.value = ''
   appIdSuggestions.value = []
-  detailsFieldTracker.schedule('onboarding_app_id_entered', 'app_id', manualAppId.value)
+  detailsFieldTracker.schedule('onboarding_app_id_entered', 'app_id', 'app_id', manualAppId.value)
 }
 
 function onStoreUrlInput(event: Event) {
-  detailsFieldTracker.schedule('onboarding_store_url_entered', 'store_url', (event.target as HTMLInputElement).value)
+  detailsFieldTracker.schedule('onboarding_store_url_entered', 'store_url', 'app_id', (event.target as HTMLInputElement).value)
 }
 
 function onIconStoreUrlInput(event: Event) {
-  detailsFieldTracker.schedule('onboarding_store_icon_url_entered', 'icon_store_url', (event.target as HTMLInputElement).value)
+  detailsFieldTracker.schedule('onboarding_store_icon_url_entered', 'icon_store_url', 'app_icon', (event.target as HTMLInputElement).value)
 }
 
 function openAppIdHelp() {

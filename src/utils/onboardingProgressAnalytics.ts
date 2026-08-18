@@ -95,13 +95,26 @@ export interface OnboardingCopyEventProperties {
 export type OnboardingDetailsField = 'app_id' | 'app_name' | 'icon_store_url' | 'store_url'
 
 export function createOnboardingDetailsFieldDebouncer(
-  emit: (name: OnboardingDetailsEvent, properties: OnboardingDetailsEventProperties) => void,
+  emit: (
+    name: OnboardingDetailsEvent,
+    step: OnboardingAnalyticsStep,
+    properties: OnboardingDetailsEventProperties,
+  ) => void,
   delayMs = 1_000,
 ) {
   const timers = new Map<OnboardingDetailsField, ReturnType<typeof setTimeout>>()
-  const pending = new Map<OnboardingDetailsField, { name: OnboardingDetailsEvent, properties: OnboardingDetailsEventProperties }>()
+  const pending = new Map<OnboardingDetailsField, {
+    name: OnboardingDetailsEvent
+    properties: OnboardingDetailsEventProperties
+    step: OnboardingAnalyticsStep
+  }>()
 
-  function schedule(name: OnboardingDetailsEvent, field: OnboardingDetailsField, value: string) {
+  function schedule(
+    name: OnboardingDetailsEvent,
+    field: OnboardingDetailsField,
+    step: OnboardingAnalyticsStep,
+    value: string,
+  ) {
     const activeTimer = timers.get(field)
     if (activeTimer)
       clearTimeout(activeTimer)
@@ -113,10 +126,10 @@ export function createOnboardingDetailsFieldDebouncer(
       return
     }
 
-    const event = { name, properties: { field_length: normalizedValue.length } }
+    const event = { name, step, properties: { field_length: normalizedValue.length } }
     pending.set(field, event)
     timers.set(field, setTimeout(() => {
-      emit(event.name, event.properties)
+      emit(event.name, event.step, event.properties)
       timers.delete(field)
       pending.delete(field)
     }, delayMs))
@@ -126,7 +139,7 @@ export function createOnboardingDetailsFieldDebouncer(
     for (const timer of timers.values())
       clearTimeout(timer)
     for (const event of pending.values())
-      emit(event.name, event.properties)
+      emit(event.name, event.step, event.properties)
     timers.clear()
     pending.clear()
   }

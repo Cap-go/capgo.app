@@ -132,10 +132,10 @@ describe('pre-organization onboarding v3', () => {
   })
 
   it.concurrent('does not send raw onboarding field values to analytics', () => {
-    expect(onboardingSource).toContain("detailsFieldTracker.schedule('onboarding_app_name_entered', 'app_name'")
-    expect(onboardingSource).toContain("detailsFieldTracker.schedule('onboarding_app_id_entered', 'app_id'")
-    expect(onboardingSource).toContain("detailsFieldTracker.schedule('onboarding_store_url_entered', 'store_url'")
-    expect(onboardingSource).toContain("detailsFieldTracker.schedule('onboarding_store_icon_url_entered', 'icon_store_url'")
+    expect(onboardingSource).toContain("detailsFieldTracker.schedule('onboarding_app_name_entered', 'app_name', 'app_name'")
+    expect(onboardingSource).toContain("detailsFieldTracker.schedule('onboarding_app_id_entered', 'app_id', 'app_id'")
+    expect(onboardingSource).toContain("detailsFieldTracker.schedule('onboarding_store_url_entered', 'store_url', 'app_id'")
+    expect(onboardingSource).toContain("detailsFieldTracker.schedule('onboarding_store_icon_url_entered', 'icon_store_url', 'app_icon'")
     expect(onboardingSource).toContain('@input="onIconStoreUrlInput"')
     expect(onboardingSource).not.toContain('{ app_name:')
     expect(onboardingSource).not.toContain('{ store_url:')
