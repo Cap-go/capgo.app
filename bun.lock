@@ -219,6 +219,7 @@
         "@inkjs/ui": "^2.0.0",
         "@rrweb/types": "^2.1.1",
         "@standard-schema/spec": "^1.1.0",
+        "@xmldom/xmldom": "^0.9.10",
         "@xterm/addon-serialize": "^0.14.0",
         "@xterm/headless": "^6.0.0",
         "happy-dom": "^20.11.0",
