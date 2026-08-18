@@ -288,9 +288,14 @@ SET allow_emulator = true
 WHERE id = 6700401;
 
 SELECT is(
-  (SELECT allow_emulator FROM public.channels WHERE id = 6700401),
+  (
+    SELECT allow_emulator
+    FROM public.channels
+    WHERE id = 6700401
+  ),
   false,
-  'app_preview key cannot update channel settings without channel.update_settings'
+  'app_preview key cannot update channel settings '
+  'without channel.update_settings'
 );
 
 -- 5) Channel-admin can mutate channel settings when RBAC grants channel.update_settings.
