@@ -7,7 +7,7 @@ import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { createSignedImageUrl, normalizeImagePath } from '../../utils/storage.ts'
+import { createSignedImageUrl, getStorageAllowedOrigins, resolveWritableImageValue } from '../../utils/storage.ts'
 import { getStripeCustomerName, isDeterministicStripeCustomerUpdateError, updateCustomerOrganizationName } from '../../utils/stripe.ts'
 import { apikeyHasOrgRightWithPolicy, supabaseAdmin, supabaseApikey, supabaseClient } from '../../utils/supabase.ts'
 import { normalizeWebsiteUrl } from './website.ts'
@@ -222,14 +222,31 @@ function validateRequiredEncryptionKey(requiredKey?: string | null) {
   return normalized
 }
 
-function buildUpdateFields(body: OrganizationPutBody, sanitizedName?: string) {
+function buildUpdateFields(
+  body: OrganizationPutBody,
+  sanitizedName?: string,
+  allowedOrigins: string[] = [],
+) {
   const updateFields: OrgUpdateFields = {}
   if (body.name !== undefined)
     updateFields.name = sanitizedName ?? body.name
   if (body.website !== undefined)
     updateFields.website = normalizeWebsiteUrl(body.website)
-  if (body.logo !== undefined)
-    updateFields.logo = normalizeImagePath(body.logo) ?? body.logo
+  if (body.logo !== undefined) {
+    if (body.logo === '') {
+      updateFields.logo = ''
+    }
+    else {
+      const allowedLogo = resolveWritableImageValue(
+        body.logo,
+        { orgId: body.orgId },
+        allowedOrigins,
+      )
+      if (!allowedLogo)
+        throw simpleError('invalid_logo_path', 'Logo path must belong to this organization')
+      updateFields.logo = allowedLogo
+    }
+  }
   if (body.management_email !== undefined)
     updateFields.management_email = body.management_email
   if (body.require_apikey_expiration !== undefined)
@@ -440,7 +457,7 @@ export async function put(
   const sanitizedOrgName = body.name !== undefined
     ? await sanitizeOrgNameForSync(c, body.name)
     : undefined
-  const updateFields = buildUpdateFields(body, sanitizedOrgName)
+  const updateFields = buildUpdateFields(body, sanitizedOrgName, getStorageAllowedOrigins(c))
   const shouldSyncStripeName = body.name !== undefined
   const currentOrg = shouldSyncStripeName
     ? await getOrgForNameSync(c, body.orgId)
@@ -492,7 +509,7 @@ export async function put(
   }
 
   if (dataOrg.logo) {
-    const signedLogo = await createSignedImageUrl(c, dataOrg.logo)
+    const signedLogo = await createSignedImageUrl(c, dataOrg.logo, { orgId: dataOrg.id })
     dataOrg.logo = signedLogo ?? null
   }
 

@@ -38,7 +38,7 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'UPDATE'), async (c
   const newImagePath = record.image_url
   const oldImagePath = oldRecord?.image_url
   if (newImagePath && newImagePath !== oldImagePath) {
-    await cleanStoredImageMetadata(c, newImagePath)
+    await cleanStoredImageMetadata(c, newImagePath, { userId: record.id })
   }
 
   return c.json(BRES)

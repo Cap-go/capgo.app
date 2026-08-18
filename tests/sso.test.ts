@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
+import { createClient } from '@supabase/supabase-js'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { fetchTestRequest, getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, USER_ADMIN_EMAIL, USER_EMAIL_NONMEMBER, USER_ID, USER_PASSWORD_NONMEMBER } from './test-utils.ts'
+import { fetchTestRequest, getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, USER_ADMIN_EMAIL, USER_EMAIL_NONMEMBER, USER_ID, USER_PASSWORD_NONMEMBER } from './test-utils.ts'
 
 const SSO_TEST_ORG_ID = randomUUID()
 const SSO_TEST_CUSTOMER_ID = `cus_sso_test_${randomUUID()}`
@@ -541,18 +542,6 @@ describe('[POST] /private/sso/prelink-users', () => {
       if (foreignOrgError)
         throw foreignOrgError
 
-      const { error: providerError } = await (getSupabaseClient().from as any)('sso_providers').insert({
-        id: providerId,
-        org_id: prelinkOrgId,
-        domain,
-        provider_id: randomUUID(),
-        status: 'active',
-        enforce_sso: false,
-        dns_verification_token: `dns-${randomUUID()}`,
-      })
-      if (providerError)
-        throw providerError
-
       const { data: memberUserData, error: memberUserError } = await getSupabaseClient().auth.admin.createUser({
         email: memberEmail,
         password: 'testtest',
@@ -595,6 +584,18 @@ describe('[POST] /private/sso/prelink-users', () => {
       ])
       if (publicUsersError)
         throw publicUsersError
+
+      const { error: providerError } = await (getSupabaseClient().from as any)('sso_providers').insert({
+        id: providerId,
+        org_id: prelinkOrgId,
+        domain,
+        provider_id: randomUUID(),
+        status: 'active',
+        enforce_sso: false,
+        dns_verification_token: `dns-${randomUUID()}`,
+      })
+      if (providerError)
+        throw providerError
 
       const { error: orgUsersError } = await getSupabaseClient().from('org_users').insert([
         {
@@ -1093,18 +1094,6 @@ describe('[POST] /private/sso/provision-user', () => {
         ],
       )
 
-      const { error: providerError } = await (getSupabaseClient().from as any)('sso_providers').insert({
-        id: providerId,
-        org_id: managedOrgId,
-        domain,
-        provider_id: externalProviderId,
-        status: 'active',
-        enforce_sso: false,
-        dns_verification_token: `dns-${randomUUID()}`,
-      })
-      if (providerError)
-        throw providerError
-
       const { data: createdUser, error: createUserError } = await getSupabaseClient().auth.admin.createUser({
         email,
         password,
@@ -1121,6 +1110,18 @@ describe('[POST] /private/sso/provision-user', () => {
         throw createUserError ?? new Error('Failed to create mismatched SSO auth user')
       }
       createdUserId = createdUser.user.id
+
+      const { error: providerError } = await (getSupabaseClient().from as any)('sso_providers').insert({
+        id: providerId,
+        org_id: managedOrgId,
+        domain,
+        provider_id: externalProviderId,
+        status: 'active',
+        enforce_sso: false,
+        dns_verification_token: `dns-${randomUUID()}`,
+      })
+      if (providerError)
+        throw providerError
 
       await pool.query(
         'update auth.identities set provider = $1, provider_id = $2, identity_data = jsonb_build_object($$sub$$, $2::text, $$email$$, $3::text, $$email_verified$$, true) where user_id = $4',
@@ -2252,6 +2253,115 @@ describe('[PATCH] /private/sso/providers/:id', () => {
       await Promise.allSettled([
         (getSupabaseClient().from as any)('sso_providers').delete().eq('id', providerId),
         getSupabaseClient().auth.admin.deleteUser(createdUser.user.id),
+        pool.end(),
+      ])
+    }
+  })
+})
+
+function getAnonAuthClient() {
+  if (!SUPABASE_BASE_URL || !SUPABASE_ANON_KEY)
+    throw new Error('SUPABASE_URL or SUPABASE_ANON_KEY is missing for signup tests')
+
+  return createClient(SUPABASE_BASE_URL, SUPABASE_ANON_KEY, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  })
+}
+
+describe('password signup vs SSO email', () => {
+  it('returns the same error as an existing account for SSO emails', async () => {
+    const duplicateEmail = `dup-password-${randomUUID()}@signup-block.test`
+    const ssoEmail = `existing-sso-${randomUUID()}@signup-block.test`
+    const ssoDomain = `${randomUUID()}.sso.test`
+    const domainSignupEmail = `new-user@${ssoDomain}`
+    const password = 'testtest'
+    const providerId = randomUUID()
+    const createdUserIds: string[] = []
+    const pool = new Pool({ connectionString: POSTGRES_URL })
+    const anon = getAnonAuthClient()
+
+    const { data: duplicateUser, error: duplicateUserError } = await getSupabaseClient().auth.admin.createUser({
+      email: duplicateEmail,
+      password,
+      email_confirm: true,
+    })
+    if (duplicateUserError || !duplicateUser.user)
+      throw duplicateUserError ?? new Error('Failed to create duplicate password user for signup comparison')
+    createdUserIds.push(duplicateUser.user.id)
+
+    const { data: ssoUser, error: ssoUserError } = await getSupabaseClient().auth.admin.createUser({
+      email: ssoEmail,
+      password,
+      email_confirm: true,
+    })
+    if (ssoUserError || !ssoUser.user)
+      throw ssoUserError ?? new Error('Failed to create SSO auth user for signup comparison')
+    createdUserIds.push(ssoUser.user.id)
+
+    try {
+      await pool.query('update auth.users set is_sso_user = true where id = $1', [ssoUser.user.id])
+
+      const { error: providerError } = await (getSupabaseClient().from as any)('sso_providers').insert({
+        id: providerId,
+        org_id: SSO_TEST_ORG_ID,
+        domain: ssoDomain,
+        provider_id: randomUUID(),
+        status: 'active',
+        enforce_sso: false,
+        dns_verification_token: `dns-${randomUUID()}`,
+      })
+      if (providerError)
+        throw providerError
+
+      const { error: duplicateSignupError } = await anon.auth.signUp({
+        email: duplicateEmail,
+        password,
+      })
+      const { error: ssoEmailSignupError } = await anon.auth.signUp({
+        email: ssoEmail,
+        password,
+      })
+      const { error: ssoDomainSignupError } = await anon.auth.signUp({
+        email: domainSignupEmail,
+        password,
+      })
+
+      const duplicateShape = {
+        status: duplicateSignupError?.status,
+        message: duplicateSignupError?.message,
+      }
+      expect(duplicateShape).toEqual({
+        status: 422,
+        message: 'User already registered',
+      })
+      expect({
+        status: ssoEmailSignupError?.status,
+        message: ssoEmailSignupError?.message,
+      }).toEqual(duplicateShape)
+      expect({
+        status: ssoDomainSignupError?.status,
+        message: ssoDomainSignupError?.message,
+      }).toEqual(duplicateShape)
+      expect(ssoEmailSignupError?.message.toLowerCase()).not.toContain('sso')
+      expect(ssoDomainSignupError?.message.toLowerCase()).not.toContain('sso')
+
+      const allowedEmail = `allowed-${randomUUID()}@signup-block.test`
+      const { data: allowedSignup, error: allowedSignupError } = await anon.auth.signUp({
+        email: allowedEmail,
+        password,
+      })
+      expect(allowedSignupError).toBeNull()
+      if (!allowedSignup.user)
+        throw new Error('Expected password signup to succeed on a non-SSO domain')
+      createdUserIds.push(allowedSignup.user.id)
+    }
+    finally {
+      await Promise.allSettled([
+        (getSupabaseClient().from as any)('sso_providers').delete().eq('id', providerId),
+        ...createdUserIds.map(id => getSupabaseClient().auth.admin.deleteUser(id)),
         pool.end(),
       ])
     }

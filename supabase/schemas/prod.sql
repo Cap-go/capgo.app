@@ -4026,6 +4026,37 @@ $$;
 ALTER FUNCTION "public"."cleanup_expired_demo_apps"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."cleanup_expired_platform_impersonation_sessions"("batch_size" integer DEFAULT 1000) RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  deleted_count bigint;
+  v_batch_size integer := GREATEST(1, COALESCE(batch_size, 1000));
+BEGIN
+  DELETE FROM public.platform_impersonation_sessions
+  WHERE session_id IN (
+    SELECT session_id
+    FROM public.platform_impersonation_sessions
+    WHERE expires_at <= now()
+    ORDER BY expires_at
+    LIMIT v_batch_size
+  );
+  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+  RAISE NOTICE
+    'cleanup_expired_platform_impersonation_sessions: deleted %',
+    deleted_count;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."cleanup_expired_platform_impersonation_sessions"("batch_size" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."cleanup_expired_platform_impersonation_sessions"("batch_size" integer) IS 'Deletes a bounded batch of expired platform-admin log_as impersonation session rows; later cron ticks drain any remainder.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."cleanup_frequent_job_details"() RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -9597,6 +9628,68 @@ COMMENT ON FUNCTION "public"."groups_mark_inserting"() IS 'BEFORE INSERT: store 
 
 
 
+CREATE OR REPLACE FUNCTION "public"."guard_app_version_r2_path"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_owner_org uuid;
+  v_expected text;
+BEGIN
+  IF NEW.r2_path IS NULL OR btrim(NEW.r2_path) = '' THEN
+    NEW.r2_path := NULL;
+    RETURN NEW;
+  END IF;
+
+  v_owner_org := NEW.owner_org;
+  IF v_owner_org IS NULL AND NEW.app_id IS NOT NULL THEN
+    SELECT apps.owner_org
+    INTO v_owner_org
+    FROM public.apps
+    WHERE apps.app_id = NEW.app_id;
+  END IF;
+
+  IF v_owner_org IS NULL OR NEW.app_id IS NULL OR NEW.name IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  v_expected := 'orgs/' || v_owner_org::text || '/apps/' || NEW.app_id || '/' || NEW.name || '.zip';
+
+  IF NEW.r2_path = v_expected THEN
+    RETURN NEW;
+  END IF;
+
+  IF TG_OP = 'UPDATE'
+    AND NEW.r2_path IS NOT DISTINCT FROM OLD.r2_path
+    AND public.is_version_scoped_app_version_r2_path(
+      NEW.r2_path,
+      NEW.app_id,
+      NEW.name
+    ) THEN
+    RETURN NEW;
+  END IF;
+
+  PERFORM public.pg_log(
+    'deny: APP_VERSION_R2_PATH_GUARD',
+    jsonb_build_object(
+      'owner_org', v_owner_org,
+      'app_id', NEW.app_id,
+      'version_name', NEW.name,
+      'r2_path', NEW.r2_path,
+      'expected', v_expected
+    )
+  );
+  RAISE EXCEPTION '%',
+    'invalid_r2_path: Bundle storage path must match the canonical location for this version.';
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."guard_app_version_r2_path"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."guard_owner_org_reassignment"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     SET "search_path" TO ''
@@ -10016,6 +10109,34 @@ $$;
 
 
 ALTER FUNCTION "public"."is_active_org_super_admin_binding"("p_role_id" "uuid", "p_scope_type" "text", "p_principal_type" "text", "p_org_id" "uuid", "p_expires_at" timestamp with time zone) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."is_active_platform_impersonation"() RETURNS boolean
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $_$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.platform_impersonation_sessions AS s
+    WHERE s.target_user_id = (SELECT auth.uid())
+      AND s.expires_at > now()
+      AND s.session_id = (
+        CASE
+          WHEN ((SELECT auth.jwt()) ->> 'session_id')
+            ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          THEN ((SELECT auth.jwt()) ->> 'session_id')::uuid
+          ELSE NULL
+        END
+      )
+  );
+$_$;
+
+
+ALTER FUNCTION "public"."is_active_platform_impersonation"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."is_active_platform_impersonation"() IS 'True when the current JWT session_id was registered by platform-admin log_as and has not expired.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."is_allowed_action"("apikey" "text", "appid" "text") RETURNS boolean
@@ -11019,6 +11140,25 @@ ALTER FUNCTION "public"."is_user_org_admin"("p_user_id" "uuid", "p_org_id" "uuid
 
 COMMENT ON FUNCTION "public"."is_user_org_admin"("p_user_id" "uuid", "p_org_id" "uuid") IS 'Checks whether a user has an admin role in an organization (bypasses RLS to avoid recursion).';
 
+
+
+CREATE OR REPLACE FUNCTION "public"."is_version_scoped_app_version_r2_path"("p_r2_path" "text", "p_app_id" character varying, "p_version_name" character varying) RETURNS boolean
+    LANGUAGE "sql" IMMUTABLE
+    SET "search_path" TO ''
+    AS $_$
+  SELECT
+    p_r2_path IS NOT NULL
+    AND p_r2_path ~ (
+      '^orgs/[^/]+/apps/'
+      || regexp_replace(p_app_id::text, '([.^$*+?(){|\[\]\\])', '\\\1', 'g')
+      || '/'
+      || regexp_replace(p_version_name::text, '([.^$*+?(){|\[\]\\])', '\\\1', 'g')
+      || '\.zip$'
+    );
+$_$;
+
+
+ALTER FUNCTION "public"."is_version_scoped_app_version_r2_path"("p_r2_path" "text", "p_app_id" character varying, "p_version_name" character varying) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."lock_channel_bundle_lifecycle"("p_version_id" bigint, "p_rollout_version_id" bigint) RETURNS "void"
@@ -18846,32 +18986,63 @@ $$;
 ALTER FUNCTION "public"."verify_api_key_hash"("plain_key" "text", "stored_hash" "text") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."verify_mfa"() RETURNS boolean
-    LANGUAGE "plpgsql" SECURITY DEFINER
+CREATE OR REPLACE FUNCTION "public"."verify_email_otp_auth"() RETURNS boolean
+    LANGUAGE "sql" STABLE
     SET "search_path" TO ''
     AS $$
-BEGIN
-  RETURN (
-    array[(SELECT coalesce(auth.jwt()->>'aal', 'aal1'))] <@ (
-      SELECT
-          CASE
-            WHEN count(id) > 0 THEN array['aal2']
-            ELSE array['aal1', 'aal2']
-          END AS aal
-        FROM auth.mfa_factors
-        WHERE (SELECT auth.uid()) = user_id AND status = 'verified'
-    )
-  ) OR (
-    EXISTS(
-      SELECT 1 FROM jsonb_array_elements((SELECT auth.jwt())->'amr') AS amr_elem
-      WHERE amr_elem->>'method' = 'otp'
-    )
+  WITH jwt_claims AS (
+    SELECT auth.jwt() AS claims
+  ),
+  amr AS (
+    SELECT
+      CASE
+        WHEN pg_catalog.jsonb_typeof(claims->'amr') = 'array'
+          THEN claims->'amr'
+        ELSE '[]'::jsonb
+      END AS entries
+    FROM jwt_claims
+  )
+  SELECT EXISTS (
+    SELECT 1
+    FROM amr, pg_catalog.jsonb_array_elements(amr.entries) AS amr_elem
+    WHERE amr_elem->>'method' = 'otp'
   );
-END;  
+$$;
+
+
+ALTER FUNCTION "public"."verify_email_otp_auth"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."verify_email_otp_auth"() IS 'Returns true when the current JWT authentication-method reference includes OTP. This is first-factor/email OTP evidence and must not be used as MFA assurance.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."verify_mfa"() RETURNS boolean
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  SELECT
+    array[(SELECT COALESCE(auth.jwt()->>'aal', 'aal1'))] <@ (
+      SELECT
+        CASE
+          WHEN count(id) > 0 THEN array['aal2']
+          ELSE array['aal1', 'aal2']
+        END AS aal
+      FROM auth.mfa_factors
+      WHERE (SELECT auth.uid()) = user_id
+        AND status = 'verified'
+    )
+    -- Scalar SELECT keeps the impersonation lookup statement-level
+    -- under RLS rather than once-per-row.
+    OR (SELECT public.is_active_platform_impersonation());
 $$;
 
 
 ALTER FUNCTION "public"."verify_mfa"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."verify_mfa"() IS 'Returns true when the current session satisfies Supabase MFA assurance. Users with verified MFA factors require aal2; users without verified factors may use aal1 or aal2. Active platform-admin impersonation sessions (log_as) also pass so support spoof of MFA users works without an OTP MFA bypass.';
+
 
 
 CREATE TABLE IF NOT EXISTS "public"."apikey_global_permissions" (
@@ -20686,6 +20857,22 @@ COMMENT ON COLUMN "public"."plans"."native_build_concurrency" IS 'Maximum number
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."platform_impersonation_sessions" (
+    "session_id" "uuid" NOT NULL,
+    "target_user_id" "uuid" NOT NULL,
+    "admin_user_id" "uuid" NOT NULL,
+    "expires_at" timestamp with time zone NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."platform_impersonation_sessions" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."platform_impersonation_sessions" IS 'Short-lived sessions minted by platform-admin /private/log_as. Allows verify_mfa during support spoof of MFA-enforced users.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."processed_stripe_events" (
     "event_id" "text" NOT NULL,
     "customer_id" character varying NOT NULL,
@@ -21835,6 +22022,11 @@ ALTER TABLE ONLY "public"."plans"
 
 
 
+ALTER TABLE ONLY "public"."platform_impersonation_sessions"
+    ADD CONSTRAINT "platform_impersonation_sessions_pkey" PRIMARY KEY ("session_id");
+
+
+
 ALTER TABLE ONLY "public"."processed_stripe_events"
     ADD CONSTRAINT "processed_stripe_events_pkey" PRIMARY KEY ("event_id");
 
@@ -22588,6 +22780,10 @@ CREATE INDEX "orgs_enforce_hashed_api_keys_true_idx" ON "public"."orgs" USING "b
 
 
 
+CREATE INDEX "platform_impersonation_sessions_expires_at_idx" ON "public"."platform_impersonation_sessions" USING "btree" ("expires_at");
+
+
+
 CREATE INDEX "processed_stripe_events_customer_id_date_id_idx" ON "public"."processed_stripe_events" USING "btree" ("customer_id", "date_id");
 
 
@@ -22825,6 +23021,10 @@ CREATE OR REPLACE TRIGGER "global_stats_creates_on_version_insert" AFTER INSERT 
 
 
 CREATE OR REPLACE TRIGGER "groups_mark_inserting" BEFORE INSERT ON "public"."groups" FOR EACH ROW EXECUTE FUNCTION "public"."groups_mark_inserting"();
+
+
+
+CREATE OR REPLACE TRIGGER "guard_app_version_r2_path_trigger" BEFORE INSERT OR UPDATE OF "r2_path", "owner_org", "app_id", "name" ON "public"."app_versions" FOR EACH ROW EXECUTE FUNCTION "public"."guard_app_version_r2_path"();
 
 
 
@@ -23894,6 +24094,10 @@ CREATE POLICY "Deny delete on deploy history" ON "public"."deploy_history" FOR D
 
 
 
+CREATE POLICY "Deny delete on platform_impersonation_sessions" ON "public"."platform_impersonation_sessions" AS RESTRICTIVE FOR DELETE TO "anon", "authenticated" USING (false);
+
+
+
 CREATE POLICY "Deny delete on trial_extension_events" ON "public"."trial_extension_events" AS RESTRICTIVE FOR DELETE TO "anon", "authenticated" USING (false);
 
 
@@ -23930,6 +24134,10 @@ CREATE POLICY "Deny insert on daily_storage_hourly" ON "public"."daily_storage_h
 
 
 
+CREATE POLICY "Deny insert on platform_impersonation_sessions" ON "public"."platform_impersonation_sessions" AS RESTRICTIVE FOR INSERT TO "anon", "authenticated" WITH CHECK (false);
+
+
+
 CREATE POLICY "Deny insert on trial_extension_events" ON "public"."trial_extension_events" AS RESTRICTIVE FOR INSERT TO "anon", "authenticated" WITH CHECK (false);
 
 
@@ -23943,6 +24151,10 @@ CREATE POLICY "Deny select on apikey_global_permissions" ON "public"."apikey_glo
 
 
 CREATE POLICY "Deny select on cli_usage" ON "public"."cli_usage" AS RESTRICTIVE FOR SELECT TO "anon", "authenticated" USING (false);
+
+
+
+CREATE POLICY "Deny select on platform_impersonation_sessions" ON "public"."platform_impersonation_sessions" AS RESTRICTIVE FOR SELECT TO "anon", "authenticated" USING (false);
 
 
 
@@ -23975,6 +24187,10 @@ CREATE POLICY "Deny update on cli_usage" ON "public"."cli_usage" AS RESTRICTIVE 
 
 
 CREATE POLICY "Deny update on daily_storage_hourly" ON "public"."daily_storage_hourly" AS RESTRICTIVE FOR UPDATE TO "anon", "authenticated" USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny update on platform_impersonation_sessions" ON "public"."platform_impersonation_sessions" AS RESTRICTIVE FOR UPDATE TO "anon", "authenticated" USING (false) WITH CHECK (false);
 
 
 
@@ -24399,6 +24615,9 @@ CREATE POLICY "permissions_update" ON "public"."permissions" FOR UPDATE TO "auth
 
 
 ALTER TABLE "public"."plans" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."platform_impersonation_sessions" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."processed_stripe_events" ENABLE ROW LEVEL SECURITY;
@@ -25219,6 +25438,11 @@ GRANT ALL ON FUNCTION "public"."cleanup_expired_demo_apps"() TO "service_role";
 
 
 
+REVOKE ALL ON FUNCTION "public"."cleanup_expired_platform_impersonation_sessions"("batch_size" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."cleanup_expired_platform_impersonation_sessions"("batch_size" integer) TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."cleanup_frequent_job_details"() FROM PUBLIC;
 
 
@@ -25900,6 +26124,11 @@ GRANT ALL ON FUNCTION "public"."groups_mark_inserting"() TO "service_role";
 
 
 
+REVOKE ALL ON FUNCTION "public"."guard_app_version_r2_path"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."guard_app_version_r2_path"() TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."guard_owner_org_reassignment"() TO "service_role";
 
 
@@ -25970,6 +26199,11 @@ GRANT ALL ON FUNCTION "public"."is_account_disabled"("user_id" "uuid") TO "authe
 
 REVOKE ALL ON FUNCTION "public"."is_active_org_super_admin_binding"("p_role_id" "uuid", "p_scope_type" "text", "p_principal_type" "text", "p_org_id" "uuid", "p_expires_at" timestamp with time zone) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."is_active_org_super_admin_binding"("p_role_id" "uuid", "p_scope_type" "text", "p_principal_type" "text", "p_org_id" "uuid", "p_expires_at" timestamp with time zone) TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."is_active_platform_impersonation"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."is_active_platform_impersonation"() TO "service_role";
 
 
 
@@ -26209,6 +26443,11 @@ GRANT ALL ON FUNCTION "public"."is_user_app_admin"("p_user_id" "uuid", "p_app_id
 REVOKE ALL ON FUNCTION "public"."is_user_org_admin"("p_user_id" "uuid", "p_org_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."is_user_org_admin"("p_user_id" "uuid", "p_org_id" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."is_user_org_admin"("p_user_id" "uuid", "p_org_id" "uuid") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."is_version_scoped_app_version_r2_path"("p_r2_path" "text", "p_app_id" character varying, "p_version_name" character varying) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."is_version_scoped_app_version_r2_path"("p_r2_path" "text", "p_app_id" character varying, "p_version_name" character varying) TO "service_role";
 
 
 
@@ -27381,6 +27620,12 @@ GRANT ALL ON FUNCTION "public"."verify_api_key_hash"("plain_key" "text", "stored
 
 
 
+REVOKE ALL ON FUNCTION "public"."verify_email_otp_auth"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."verify_email_otp_auth"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."verify_email_otp_auth"() TO "authenticated";
+
+
+
 REVOKE ALL ON FUNCTION "public"."verify_mfa"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."verify_mfa"() TO "anon";
 GRANT ALL ON FUNCTION "public"."verify_mfa"() TO "authenticated";
@@ -27777,6 +28022,10 @@ GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public".
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."plans" TO "anon";
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."plans" TO "authenticated";
 GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,UPDATE ON TABLE "public"."plans" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."platform_impersonation_sessions" TO "service_role";
 
 
 

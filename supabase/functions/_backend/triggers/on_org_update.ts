@@ -17,7 +17,7 @@ app.post('/', middlewareAPISecret, triggerValidator('orgs', 'UPDATE'), async (c)
   }
 
   if (record.logo) {
-    await cleanStoredImageMetadata(c, record.logo)
+    await cleanStoredImageMetadata(c, record.logo, { orgId: record.id })
   }
 
   return c.json(BRES)

@@ -28,7 +28,7 @@ describe('app creation permission tests', () => {
           app_id: appName, // Added app_id for validation
           owner_org: nonExistentOrgId,
           name: appName,
-          icon: 'test-icon',
+          icon: 'https://cdn.example/test-icon.png',
         }),
       })
 
@@ -91,7 +91,7 @@ describe('app creation permission tests', () => {
           app_id: appName, // Added app_id for validation
           owner_org: unauthorizedOrgId,
           name: appName,
-          icon: 'test-icon',
+          icon: 'https://cdn.example/test-icon.png',
         }),
       })
 
@@ -118,7 +118,7 @@ describe('app creation permission tests', () => {
           owner_org: ORG_ID, // Using the default test org where the test user has permissions
           name: `App ${appName}`,
           app_id: appName,
-          icon: 'test-icon',
+          icon: 'https://cdn.example/test-icon.png',
         }),
       })
 
@@ -144,7 +144,7 @@ describe('app creation permission tests', () => {
         body: JSON.stringify({
           app_id: appName, // Added app_id for validation
           name: appName,
-          icon: 'test-icon',
+          icon: 'https://cdn.example/test-icon.png',
           // Omitting owner_org
         }),
       })

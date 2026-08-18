@@ -5,7 +5,7 @@ import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { clearFailedAccountAuth, isAccountRateLimited, recordFailedAccountAuth } from '../utils/rate_limit.ts'
 import { buildRateLimitInfo } from '../utils/rateLimitInfo.ts'
-import { emptySupabase, supabaseAdmin } from '../utils/supabase.ts'
+import { emptySupabase, supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
 import { version } from '../utils/version.ts'
 
 const bodySchema = z.object({
@@ -17,6 +17,15 @@ const bodySchema = z.object({
 export const app = createHono('', version)
 
 app.use('/', useCors)
+
+export async function verifyEmailOtpAuthSession(c: Parameters<typeof supabaseClient>[0], accessToken: string) {
+  const { data, error } = await supabaseClient(c, `Bearer ${accessToken}`).rpc('verify_email_otp_auth')
+
+  return {
+    verified: data === true,
+    error,
+  }
+}
 
 app.post('/', middlewareAuth, async (c) => {
   const rawBody = await parseBody<{ token?: string, token_hash?: string, type?: 'email' | 'magiclink' }>(c)
@@ -103,6 +112,25 @@ app.post('/', middlewareAuth, async (c) => {
   if (!verifyData.user?.id) {
     await recordFailedAccountAuth(c, auth.userId)
     return quickError(500, 'no_user', 'No user associated with OTP')
+  }
+
+  const emailOtpAuth = await verifyEmailOtpAuthSession(c, verifyData.session.access_token)
+  if (emailOtpAuth.error) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      context: 'verify_email_otp - OTP session auth method check errored',
+      error: emailOtpAuth.error.message,
+    })
+    return quickError(500, 'otp_auth_check_failed', 'OTP session verification check failed')
+  }
+
+  if (!emailOtpAuth.verified) {
+    await recordFailedAccountAuth(c, auth.userId)
+    cloudlog({
+      requestId: c.get('requestId'),
+      context: 'verify_email_otp - OTP session auth method check failed',
+    })
+    return quickError(401, 'invalid_otp_auth', 'OTP session verification failed')
   }
 
   await clearFailedAccountAuth(c, auth.userId)

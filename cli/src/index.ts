@@ -976,7 +976,8 @@ iOS IPA only (no TestFlight upload): npx @capgo/cli@latest build request com.exa
   .option('--no-skip-build-number-bump', 'Override saved credentials to re-enable automatic build number incrementing for this build only.')
   .option('--skip-marketing-version-bump', 'Skip automatic marketing version (CFBundleShortVersionString / versionName) bump when the app is already released.')
   .option('--no-skip-marketing-version-bump', 'Override saved credentials to re-enable automatic marketing version bump for this build only.')
-  .option('--sync-ios-version', 'iOS: sync Xcode MARKETING_VERSION from package.json before uploading the project.')
+  .option('--sync-ios-version', 'iOS: sync the app version from package.json before uploading the project. Updates MARKETING_VERSION or CFBundleShortVersionString based on the Xcode Info.plist configuration.')
+  .option('--sync-android-version', 'Android: sync versionName in android/app/build.gradle from package.json before uploading the project. Fails unless versionName is a standalone quoted string literal.')
   .option('--ai-analytics', 'On build failure, send logs to Capgo AI for diagnosis. In interactive terminals this skips the upfront confirmation; in CI this auto-uploads and prints the analysis to stderr.')
   .option('--no-prescan', 'Skip the automatic pre-build scan')
   .option('--prescan-ignore-fatal', 'Run the pre-build scan but never block the build (report only)')
@@ -992,11 +993,13 @@ iOS IPA only (no TestFlight upload): npx @capgo/cli@latest build request com.exa
 
 build
   .command('sync-ios-version')
-  .description(`Sync the local iOS Xcode MARKETING_VERSION from package.json.
+  .description(`Sync the local iOS app version from package.json.
+
+Updates MARKETING_VERSION or CFBundleShortVersionString based on the Xcode Info.plist configuration.
 
 Example: npx @capgo/cli@latest build sync-ios-version --path .`)
   .option('--path <path>', 'Path to the project directory (default: current directory)')
-  .option('--check', 'Check only; exit non-zero when MARKETING_VERSION is out of sync')
+  .option('--check', 'Check only; exit non-zero when MARKETING_VERSION or CFBundleShortVersionString is out of sync')
   .action(syncIosMarketingVersionCommand)
 
 build
