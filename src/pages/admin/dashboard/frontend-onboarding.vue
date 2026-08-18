@@ -122,7 +122,10 @@ const loadAnalytics = createFrontendOnboardingAnalyticsLoader(
     const result = await adminStore.fetchStats('frontend_onboarding_analytics')
     if (result && (
       !Array.isArray(result.deduplicated?.daily_attempts)
-      || !Array.isArray(result.deduplicated?.funnels?.v4)
+      || (
+        !Array.isArray(result.deduplicated?.funnels?.v4)
+        && !Array.isArray(result.deduplicated?.funnels?.v3)
+      )
     )) {
       throw new Error('Frontend onboarding analytics response is missing deduplicated chart data')
     }
@@ -151,9 +154,14 @@ const visibleAnalytics = computed(() => isLoadingStats.value ? null : analytics.
 const displayedDailyAttempts = computed(() => deduplicateDailyAttempts.value
   ? visibleAnalytics.value?.deduplicated.daily_attempts ?? []
   : visibleAnalytics.value?.daily_attempts ?? [])
-const displayedV4Funnel = computed(() => deduplicateV4Funnel.value
-  ? visibleAnalytics.value?.deduplicated.funnels.v4 ?? []
-  : visibleAnalytics.value?.funnels.v4 ?? [])
+const displayedV4Funnel = computed(() => {
+  if (!deduplicateV4Funnel.value)
+    return visibleAnalytics.value?.funnels.v4 ?? []
+
+  return visibleAnalytics.value?.deduplicated.funnels.v4
+    ?? visibleAnalytics.value?.deduplicated.funnels.v3
+    ?? []
+})
 const kpis = computed(() => visibleAnalytics.value?.kpis)
 const dailySeries = computed(() => buildFrontendOnboardingDailySeries(
   displayedDailyAttempts.value,

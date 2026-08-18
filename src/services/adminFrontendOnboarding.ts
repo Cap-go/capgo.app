@@ -77,7 +77,8 @@ export interface FrontendOnboardingAnalytics {
       v4_attempts: number
     }>
     funnels: {
-      v4: FrontendOnboardingFunnelStage[]
+      v3: FrontendOnboardingFunnelStage[]
+      v4?: FrontendOnboardingFunnelStage[]
     }
   }
   daily_conversions: {

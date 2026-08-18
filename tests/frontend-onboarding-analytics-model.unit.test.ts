@@ -43,6 +43,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
     expect(FRONTEND_ONBOARDING_VERSIONS).toEqual([1, 2, 3, 4])
     expect(analytics.kpis).toMatchObject({ attempts: 1, completed: 1, completion_rate: 100 })
     expect(analytics.daily_attempts[0]).toMatchObject({ v4_attempts: 1 })
+    expect(analytics.deduplicated.funnels.v3.map(stage => stage.reached)).toEqual([0, 0, 0, 0])
     expect(analytics.funnels.v4.map(stage => stage.reached)).toEqual([1, 1, 1, 1])
     expect(analytics.v4_graph.nodes).toEqual([{ key: 'onboarding_app_name_entered', count: 1 }])
   })

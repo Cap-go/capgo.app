@@ -80,6 +80,7 @@ export interface FrontendOnboardingAnalytics {
   deduplicated: {
     daily_attempts: FrontendOnboardingDailyAttempt[]
     funnels: {
+      v3: FrontendOnboardingFunnelStage[]
       v4: FrontendOnboardingFunnelStage[]
     }
   }
@@ -398,6 +399,7 @@ export function buildFrontendOnboardingAnalytics(
   const currentV4 = summarizePeriod(currentV4Attempts)
   const previousV4 = summarizePeriod(previousV4Attempts)
   const deduplicatedCurrentAttempts = selectDeduplicatedAttempts(currentAttempts)
+  const deduplicatedCurrentV3Attempts = selectDeduplicatedAttempts(currentV3Attempts)
   const deduplicatedCurrentV4Attempts = selectDeduplicatedAttempts(currentV4Attempts)
 
   return {
@@ -408,7 +410,10 @@ export function buildFrontendOnboardingAnalytics(
     daily_attempts: buildDailyAttempts(currentAttempts, currentStartMs, currentEndMs),
     deduplicated: {
       daily_attempts: buildDailyAttempts(deduplicatedCurrentAttempts, currentStartMs, currentEndMs),
-      funnels: { v4: buildFunnel(deduplicatedCurrentV4Attempts) },
+      funnels: {
+        v3: buildFunnel(deduplicatedCurrentV3Attempts),
+        v4: buildFunnel(deduplicatedCurrentV4Attempts),
+      },
     },
     daily_conversions: {
       intent_to_details: buildDailyConversion(attempts, currentStartMs, currentEndMs, 'intent', 'details'),

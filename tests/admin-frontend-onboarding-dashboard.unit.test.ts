@@ -107,6 +107,9 @@ describe('admin frontend onboarding dashboard', () => {
         { date: '2026-08-10', v1_attempts: 5, v2_attempts: 2, v3_attempts: 1, v4_attempts: 3 },
       ],
       funnels: {
+        v3: [
+          { key: 'intent', label: 'Intent', reached: 3, of_start_percent: 100, dropoff_percent: 0 },
+        ],
         v4: [
           { key: 'intent', label: 'Intent', reached: 3, of_start_percent: 100, dropoff_percent: 0 },
         ],
@@ -725,6 +728,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('const displayedV4Funnel = computed')
     expect(source).toContain('deduplicateV4Funnel.value')
     expect(source).toContain('visibleAnalytics.value?.deduplicated.funnels.v4')
+    expect(source).toContain('visibleAnalytics.value?.deduplicated.funnels.v3')
     expect(source).toContain('buildFrontendOnboardingDailySeries(\n  displayedDailyAttempts.value')
     expect(source).toContain('buildFrontendOnboardingFunnelStages(displayedV4Funnel.value)')
     expect(source).toContain('buildFrontendOnboardingFunnelSummaries(displayedV4Funnel.value)')
@@ -735,6 +739,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('const result = await adminStore.fetchStats(\'frontend_onboarding_analytics\')')
     expect(source).toContain('!Array.isArray(result.deduplicated?.daily_attempts)')
     expect(source).toContain('!Array.isArray(result.deduplicated?.funnels?.v4)')
+    expect(source).toContain('!Array.isArray(result.deduplicated?.funnels?.v3)')
     expect(source).toContain('throw new Error(\'Frontend onboarding analytics response is missing deduplicated chart data\')')
     expect(control).toContain('data-test="deduplicate-by-user"')
     expect(control).toContain('chartLabel: string')
