@@ -237,3 +237,37 @@ describe('permission backstop fires before the POST on the prescan-skipped and -
     expect(probe.postedBuildRequest).toBe(false)
   })
 })
+
+describe('--sync-android-version preflight', () => {
+  afterEach(() => {
+    globalThis.fetch = realFetch
+  })
+
+  it('rejects a computed versionName before any network call', async () => {
+    let fetchCalls = 0
+    globalThis.fetch = (async () => {
+      fetchCalls += 1
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }) as typeof fetch
+
+    const projectDir = makeProject({
+      'package.json': JSON.stringify({ version: '13.0.0' }),
+      'capacitor.config.json': JSON.stringify({ appId: 'com.demo.app', appName: 'demo', webDir: 'dist' }),
+      'android/app/build.gradle': `android {
+  defaultConfig {
+    applicationId "com.demo.app"
+    versionName projectVersion
+  }
+}
+`,
+    })
+    const options = gateOptions({ prescan: false, path: projectDir })
+    Object.assign(options, { syncAndroidVersion: true })
+
+    const result = await requestBuildInternal('com.demo.app', options, true)
+
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/versionName.*quoted string/i)
+    expect(fetchCalls).toBe(0)
+  })
+})
