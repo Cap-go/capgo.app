@@ -229,8 +229,11 @@ export async function updateOrCreateChannel(
     throw new Error('missing request auth')
   }
 
+  // Channel writes are authorized in the channel route; use service_role so
+  // channels.noupdate and related guards do not treat API-key PostgREST traffic
+  // as privileged settings writes.
   if (existingChannelId === null) {
-    return supabaseWithAuth(c, auth)
+    return supabaseAdmin(c)
       .from('channels')
       .insert(update)
       .select('id')
@@ -238,8 +241,6 @@ export async function updateOrCreateChannel(
       .throwOnError()
   }
 
-  // Settings writes are authorized in the channel route; use service_role so
-  // channels.noupdate does not treat API-key PostgREST traffic as a full update.
   const { created_by: _createdBy, version, ...channelUpdate } = update
   const requestUpdate = preserveVersion ? channelUpdate : { ...channelUpdate, version }
   return supabaseAdmin(c)

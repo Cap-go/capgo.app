@@ -76,11 +76,11 @@ describe('[POST] /channel operations', () => {
       body: JSON.stringify({
         app_id: APPNAME,
         channel: `test_channel_${id.slice(0, 8)}`,
-        public: true,
+        public: false,
       }),
     })
-    const data = await response.json<{ status: string }>()
-    expect(response.status).toBe(200)
+    const data = await response.json<{ status: string, error?: string, message?: string }>()
+    expect(response.status, JSON.stringify(data)).toBe(200)
     expect(data.status).toBe('ok')
   })
 
