@@ -25,12 +25,19 @@ function expectSourceOrder(source: string, markers: string[]) {
 
 describe('app onboarding progress analytics integration', () => {
   it.concurrent('initializes tracking once the real initial or resumed step is resolved', () => {
-    expect(onboardingSource).toContain(`import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker, createOnboardingTelemetryIdentity } from '~/utils/onboardingProgressAnalytics'`)
+    const analyticsImport = sourceBetween(
+      'import {\n  createOnboardingDetailsFieldDebouncer,',
+      'import { createOnboardingProgressPersistence',
+    )
+    expect(analyticsImport).toContain('createOnboardingProgressTracker,')
+    expect(analyticsImport).toContain('createOnboardingTelemetryIdentity,')
+    expect(analyticsImport).toContain("} from '~/utils/onboardingProgressAnalytics'")
 
     const initializer = sourceBetween('function initializeProgressTracking(', 'function completeAndViewStep(')
     expect(initializer).toContain(`flow: props.preOrg ? 'pre_org' : 'existing_org'`)
-    expect(initializer).toContain(`const initialStep: OnboardingAnalyticsStep = showPreOrgWelcome.value ? 'welcome' : flowStep.value`)
-    expect(initializer).toContain('const trackedSteps: OnboardingAnalyticsStep[] = appOnboardingSteps.value.map(step => step.id)')
+    expect(initializer).toContain(`const initialStep: OnboardingAnalyticsStep = showPreOrgWelcome.value ? 'welcome' : analyticsStepFor(flowStep.value)`)
+    expect(initializer).toContain('const trackedSteps = appOnboardingSteps.value.flatMap<OnboardingAnalyticsStep>')
+    expect(initializer).toContain('return Object.values(APP_DETAILS_ANALYTICS_STEPS)')
     expect(initializer).toContain(`trackedSteps.unshift('welcome')`)
     expect(initializer).toContain(`if (!props.preOrg && resumed && flowStep.value === 'setup')`)
     expect(initializer).toContain(`trackedSteps.push('setup')`)
@@ -237,9 +244,9 @@ describe('app onboarding progress analytics integration', () => {
 
   it.concurrent('tracks only successful forward transitions with approved context', () => {
     const transitionHelpers = sourceBetween('function completeAndViewStep(', 'function whiteCardToggleButtonClass(')
-    expect(transitionHelpers).toContain('progressTracker?.completeStep(previousStep, {')
-    expect(transitionHelpers).toContain('nextStep,')
-    expect(transitionHelpers).toContain('progressTracker?.viewStep(nextStep, previousStep)')
+    expect(transitionHelpers).toContain('progressTracker?.completeStep(previousAnalyticsStep, {')
+    expect(transitionHelpers).toContain('nextStep: nextAnalyticsStep,')
+    expect(transitionHelpers).toContain('progressTracker?.viewStep(nextAnalyticsStep, previousAnalyticsStep)')
     expect(transitionHelpers).toContain('void persistOnboardingProgress()')
 
     const intentTransition = sourceBetween('function continueFromIntent()', 'function continuePreOrgDetails()')
@@ -262,7 +269,7 @@ describe('app onboarding progress analytics integration', () => {
   it.concurrent('reports back navigation as a new view without completing the abandoned step', () => {
     const backNavigation = sourceBetween('function viewPreviousStep(', 'function snapshotOnboardingProgress(')
     expect(backNavigation).not.toContain('completeStep')
-    expect(backNavigation).toContain('progressTracker?.viewStep(nextStep, previousStep)')
+    expect(backNavigation).toContain('progressTracker?.viewStep(nextAnalyticsStep, previousAnalyticsStep)')
     expect(onboardingSource).toContain('@click="viewPreviousStep(\'choice\')"')
     expect(onboardingSource).toContain('@click="viewPreviousStep(\'details\')"')
     expect(onboardingSource).toContain(`props.preOrg ? viewPreviousStep('intent') : router.push('/apps')`)
