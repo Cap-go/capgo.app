@@ -146,6 +146,7 @@ const globalStatsTrendData = ref<Array<{
   apps_active: number
   users: number
   users_active: number
+  users_with_2fa: number
   paying: number
   trial: number
   not_paying: number
@@ -561,6 +562,14 @@ const usersTrendSeries = computed(() => {
         value: item.trial,
       })),
       color: '#f59e0b', // amber
+    },
+    {
+      label: t('admin-users-with-2fa-series'),
+      data: globalStatsTrendData.value.map(item => ({
+        date: item.date,
+        value: item.users_with_2fa ?? 0,
+      })),
+      color: '#119eff',
     },
   ]
 })

@@ -172,6 +172,7 @@ beforeAll(async () => {
       apps_active: 7,
       users: 20,
       users_active: 8,
+      users_with_2fa: 5,
       paying: 4,
       org_conversion_rate: 20,
       trial: 2,
@@ -217,6 +218,7 @@ beforeAll(async () => {
       apps_active: 8,
       users: 22,
       users_active: 9,
+      users_with_2fa: 7,
       paying: 5,
       org_conversion_rate: 22.7,
       trial: 2,
@@ -262,6 +264,7 @@ beforeAll(async () => {
       apps_active: 0,
       users: 0,
       users_active: 0,
+      users_with_2fa: 0,
       paying: 0,
       org_conversion_rate: 0,
       trial: 0,
@@ -1019,6 +1022,7 @@ describe('/private/admin_stats', () => {
         date: string
         apps: number
         apps_created: number
+        users_with_2fa: number
         versions_created: number
         apps_with_cli_onboarding_builds_24h: number
         apps_with_manual_builds_24h: number
@@ -1048,6 +1052,7 @@ describe('/private/admin_stats', () => {
     expect(latest).toBeTruthy()
     expect(latest?.apps).toBe(11)
     expect(latest?.apps_created).toBe(3)
+    expect(latest?.users_with_2fa).toBe(7)
     expect(latest?.versions_created).toBe(8)
     expect(latest?.apps_with_cli_onboarding_builds_24h).toBe(2)
     expect(latest?.app_build_onboarding_finalized).toBe(true)

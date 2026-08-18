@@ -1911,6 +1911,7 @@ export interface AdminGlobalStatsTrend {
   app_build_onboarding_finalized: boolean
   apps_active: number
   apps_with_preview: number
+  users_with_2fa: number
   users: number
   users_active: number
   paying: number
@@ -2039,6 +2040,7 @@ export async function getAdminGlobalStatsTrend(
         (onboarding_next.date_id IS NOT NULL)::boolean AS app_build_onboarding_finalized,
         gs.apps_active::int AS apps_active,
         COALESCE(NULLIF(to_jsonb(gs) ->> 'apps_with_preview', '')::int, 0)::int AS apps_with_preview,
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'users_with_2fa', '')::int, 0)::int AS users_with_2fa,
         gs.users::int AS users,
         gs.users_active::int AS users_active,
         gs.paying::int AS paying,
@@ -2196,6 +2198,7 @@ export async function getAdminGlobalStatsTrend(
       app_build_onboarding_finalized: row.app_build_onboarding_finalized === true || row.app_build_onboarding_finalized === 'true',
       apps_active: Number(row.apps_active) || 0,
       apps_with_preview: Number(row.apps_with_preview) || 0,
+      users_with_2fa: Number(row.users_with_2fa) || 0,
       users: Number(row.users) || 0,
       users_active: Number(row.users_active) || 0,
       paying: Number(row.paying) || 0,

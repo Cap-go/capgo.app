@@ -815,6 +815,25 @@ describe('global stats metric helpers', () => {
     expect(source).toContain('apps_with_preview?: number')
     expect(source).toContain('isMissingAppsWithPreviewColumnError')
   })
+  it.concurrent('snapshots users with verified 2FA in the core global stats shard', () => {
+    const source = readFileSync(new URL('../supabase/functions/_backend/triggers/global_stats.ts', import.meta.url), 'utf8')
+    const countFn = source.match(/async function countUsersWith2fa[\s\S]*?async function getTrialExtensionStats/)?.[0] ?? ''
+    const coreShard = source.match(/async function runCoreGlobalStatsShard[\s\S]*?async function getRegistersToday/)?.[0] ?? ''
+
+    expect(countFn).toContain('auth.mfa_factors')
+    expect(countFn).toContain('auth.mfa_challenges')
+    expect(countFn).toContain("mfa.status = 'verified'")
+    expect(countFn).toContain('mfa.created_at <')
+    expect(countFn).toContain('ch.verified_at <')
+    expect(countFn).toContain('u.created_at <')
+    expect(coreShard).toContain('countUsersWith2fa(c, window.prevDayEnd)')
+    expect(coreShard).toContain('users_with_2fa,')
+    expect(source).toContain('users_with_2fa?: number')
+    expect(source).toContain('isMissingUsersWith2faColumnError')
+    expect(source).toContain('.includes(\'apps_with_preview\')')
+    expect(source).toContain('.includes(\'users_with_2fa\')')
+  })
+
   it.concurrent('normalizes global stats retry payload counts', () => {
     expect(globalStatsTestUtils.normalizeGlobalStatsRetryCount('2')).toBe(2)
     expect(globalStatsTestUtils.normalizeGlobalStatsRetryCount(2.8)).toBe(2)
