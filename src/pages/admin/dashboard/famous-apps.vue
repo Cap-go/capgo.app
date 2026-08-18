@@ -330,17 +330,7 @@ displayStore.defaultBack = '/dashboard'
               </p>
             </div>
 
-            <div class="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:min-w-[720px]">
-              <label for="admin-famous-apps-search" class="sr-only">{{ t('famous-apps-search') }}</label>
-              <input
-                id="admin-famous-apps-search"
-                v-model="searchQuery"
-                type="search"
-                class="w-full d-input d-input-bordered d-input-sm"
-                :placeholder="t('famous-apps-search')"
-                :aria-label="t('famous-apps-search')"
-              >
-
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:min-w-[480px]">
               <label for="admin-famous-apps-tier" class="sr-only">{{ t('famous-apps-all-tiers') }}</label>
               <select
                 id="admin-famous-apps-tier"
@@ -388,11 +378,19 @@ displayStore.defaultBack = '/dashboard'
             :current-page="currentPage"
             :columns="appColumns"
             :element-list="apps"
+            :search="searchQuery"
+            :search-placeholder="t('famous-apps-search')"
+            :offset="PAGE_SIZE"
             :auto-reload="false"
             @reload="loadAppsImmediately"
             @reset="loadAppsImmediately"
+            @update:search="(query: string) => { searchQuery = query }"
             @update:current-page="(page: number) => { currentPage = page; loadAppsImmediately() }"
-          />
+          >
+            <template #empty-state>
+              {{ t('famous-apps-empty') }}
+            </template>
+          </DataTable>
         </div>
       </div>
     </div>

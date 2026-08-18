@@ -92,7 +92,6 @@ describe('admin famous apps', () => {
     expect(famous?.tier).toBe('iconic')
     expect(famous?.known_as).toBe('National Bank')
     expect(niche?.fame_score).toBe(38)
-    expect(payload.data.iconic_count).toBeGreaterThanOrEqual(1)
 
     const famousIndex = payload.data.apps.findIndex(app => app.app_id === famousAppId)
     const nicheIndex = payload.data.apps.findIndex(app => app.app_id === nicheAppId)

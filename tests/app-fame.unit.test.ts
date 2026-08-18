@@ -70,6 +70,24 @@ describe('app fame scoring', () => {
     }])
   })
 
+  it.concurrent('unwraps Workers AI response envelopes before parsing', () => {
+    const decisions = parseFameDecisions({
+      response: JSON.stringify({
+        apps: [{
+          app_id: 'com.bank.app',
+          fame_score: 80,
+          confidence: 70,
+          category: 'finance',
+          known_as: 'National Bank',
+          summary: 'Major national consumer bank.',
+        }],
+      }),
+    }, new Set(['com.bank.app']))
+
+    expect(decisions).toHaveLength(1)
+    expect(decisions[0]?.tier).toBe('famous')
+  })
+
   it.concurrent('parses JSON text wrapped in markdown fences', () => {
     const decisions = parseFameDecisions(`
       \`\`\`json
