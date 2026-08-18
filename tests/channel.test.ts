@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
-import { BASE_URL, createAppVersions, getSupabaseClient, headers, ORG_ID, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils.ts'
+import { BASE_URL, createAppVersions, getEndpointUrl, getSupabaseClient, headers, ORG_ID, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils.ts'
 
 const id = randomUUID()
 const APPNAME = `com.app.c.${id}`
@@ -86,9 +86,10 @@ describe('[POST] /channel operations', () => {
 
   it('publicizes a private channel through POST /channel when caller has app.update_settings', async () => {
     const channelName = `publicize_${id.slice(0, 8)}`
+    const channelEndpoint = getEndpointUrl('/channel')
     const client = getSupabaseClient()
 
-    const createResponse = await fetch(`${BASE_URL}/channel`, {
+    const createResponse = await fetch(channelEndpoint, {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -118,7 +119,7 @@ describe('[POST] /channel operations', () => {
           .throwOnError()
       }
 
-      const publicizeResponse = await fetch(`${BASE_URL}/channel`, {
+      const publicizeResponse = await fetch(channelEndpoint, {
         method: 'POST',
         headers,
         body: JSON.stringify({

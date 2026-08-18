@@ -283,14 +283,13 @@ SELECT tests.clear_authentication();
 SELECT set_config('request.jwt.claim.role', 'anon', true);
 SELECT set_config('request.headers', '{"capgkey":"public-channel-guard-preview-key"}', true);
 
-SELECT throws_ok(
-  $$
-    UPDATE public.channels
-    SET allow_emulator = true
-    WHERE id = 6700401
-  $$,
-  'P0001',
-  'not allowed allow_emulator',
+UPDATE public.channels
+SET allow_emulator = true
+WHERE id = 6700401;
+
+SELECT is(
+  (SELECT allow_emulator FROM public.channels WHERE id = 6700401),
+  false,
   'app_preview key cannot update channel settings without channel.update_settings'
 );
 
