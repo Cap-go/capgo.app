@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "12.244.0",
+  "version": "12.244.1",
   "private": true,
   "workspaces": [
     "cli",
@@ -107,6 +107,7 @@
     "admin:backfill-credit-usage-posthog": "bun scripts/backfill_credit_usage_posthog_events.ts",
     "admin:backfill-plugin-version-ladder": "bun scripts/backfill_plugin_version_ladder.ts",
     "admin:backfill-missing-app-icons": "bun scripts/backfill_missing_app_icons.ts",
+    "admin:migrate-legacy-bare-image-paths": "bun scripts/migrate_legacy_bare_image_paths.ts",
     "admin:backfill-missing-store-urls": "bun scripts/backfill_missing_store_urls.ts",
     "admin:backfill-github-user-ids": "bun scripts/backfill_github_user_ids.ts",
     "stripe:backfill-retention-metrics": "bun scripts/backfill_retention_metrics.ts",

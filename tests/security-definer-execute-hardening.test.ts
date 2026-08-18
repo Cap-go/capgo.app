@@ -51,6 +51,8 @@ const SERVICE_ONLY_PROCS = [
   'public.sanitize_users_text_fields()',
   'public.set_webhook_created_by()',
   'public.sync_org_has_usage_credits_from_grants()',
+  'public.is_active_platform_impersonation()',
+  'public.cleanup_expired_platform_impersonation_sessions(integer)',
 ] as const
 
 const REMOVED_OLD_RIGHTS_PROCS = [
@@ -105,6 +107,7 @@ const AUTHENTICATED_ONLY_PROCS = [
   'public.rbac_check_permission(text, uuid, character varying, bigint)',
   'public.rbac_check_permission_no_password_policy(text, uuid, character varying, bigint)',
   'public.update_org_member_role(uuid, uuid, text)',
+  'public.verify_email_otp_auth()',
 ] as const
 
 describe('security definer execute hardening', () => {

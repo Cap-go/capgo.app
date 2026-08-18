@@ -1,10 +1,123 @@
 import type { Context } from 'hono'
 import { supabaseAdmin } from './supabase.ts'
+import { getEnv } from './utils.ts'
 
 const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 7
 const STORAGE_URL_REGEX = /\/storage\/v1\/object(?:\/(?:public|sign))?\/images\/(.+)$/
 
-export function normalizeImagePath(raw?: string | null) {
+export interface ImagePathScope {
+  orgId?: string
+  userId?: string
+  appId?: string
+}
+
+function tryDecodeUri(value: string) {
+  try {
+    return decodeURIComponent(value)
+  }
+  catch {
+    return null
+  }
+}
+
+/**
+ * Decode each path segment independently so a malformed object-key escape
+ * cannot hide a percent-encoded `/storage/.../images/` route.
+ */
+function decodePathnameSegments(pathname: string) {
+  return pathname.split('/').map((segment) => {
+    if (!segment.includes('%'))
+      return segment
+    return tryDecodeUri(segment) ?? segment
+  }).join('/')
+}
+
+/** True when pathname is a Capgo images storage object URL (raw or percent-encoded route). */
+function isStorageImagePathname(pathname: string) {
+  return STORAGE_URL_REGEX.test(pathname)
+    || STORAGE_URL_REGEX.test(decodePathnameSegments(pathname))
+}
+
+/**
+ * Extract the images object key from a storage pathname.
+ * Decode the route for matching when needed, but decode the object key only once.
+ * Malformed percent-escapes are rejected (null), not returned as raw URLs.
+ */
+function extractStorageImageKey(pathname: string) {
+  // Reject undecodable escapes in the original pathname (before segment decode).
+  if (pathname.split('/').some(segment => segment.includes('%') && tryDecodeUri(segment) === null))
+    return null
+
+  const rawMatch = STORAGE_URL_REGEX.exec(pathname)
+  if (rawMatch?.[1])
+    return tryDecodeUri(rawMatch[1])?.replace(/^\/+/, '') ?? null
+
+  const decodedMatch = STORAGE_URL_REGEX.exec(decodePathnameSegments(pathname))
+  if (!decodedMatch?.[1])
+    return null
+  return decodedMatch[1].replace(/^\/+/, '')
+}
+
+function originFromEnvUrl(raw: string) {
+  const trimmed = raw.trim()
+  if (!trimmed)
+    return null
+  try {
+    return new URL(trimmed).origin
+  }
+  catch {
+    return null
+  }
+}
+
+/**
+ * Origins that may host Capgo image objects.
+ * Include both primary and replica/gateway hosts so signed/public object URLs
+ * round-trip correctly; never treat an empty list as “trust any host”.
+ */
+export function getStorageAllowedOrigins(c: Context): string[] {
+  const origins = new Set<string>()
+  for (const key of ['SUPABASE_URL', 'SUPABASE_REPLICATE_URL'] as const) {
+    const origin = originFromEnvUrl(getEnv(c, key))
+    if (origin)
+      origins.add(origin)
+  }
+  return [...origins]
+}
+
+export function isSupabaseStorageImageUrl(raw: string) {
+  try {
+    return isStorageImagePathname(new URL(raw).pathname)
+  }
+  catch {
+    return false
+  }
+}
+
+/**
+ * Normalize a client-supplied icon/logo for persistence.
+ * - Owned storage paths → relative object path
+ * - True external CDN URLs → absolute URL unchanged
+ * - Storage-shaped URLs on unknown/missing origins → reject (null)
+ */
+export function resolveWritableImageValue(
+  raw: string,
+  scope: ImagePathScope,
+  allowedOrigins: string[],
+) {
+  const normalized = normalizeImagePath(raw, { allowedOrigins })
+  if (raw.includes('://') && !normalized) {
+    if (isSupabaseStorageImageUrl(raw))
+      return null
+    return raw
+  }
+  return assertAllowedImagePath(normalized, scope)
+}
+
+export function normalizeImagePath(
+  raw?: string | null,
+  options?: { allowedOrigins?: string[] },
+) {
   if (!raw)
     return null
 
@@ -14,10 +127,16 @@ export function normalizeImagePath(raw?: string | null) {
 
   try {
     const url = new URL(trimmed)
-    const match = STORAGE_URL_REGEX.exec(url.pathname)
-    if (match?.[1])
-      return decodeURIComponent(match[1])
-    return trimmed
+    const objectKey = extractStorageImageKey(url.pathname)
+    if (objectKey) {
+      // Require an explicit allow-list; empty list means misconfigured, not open.
+      const allowed = options?.allowedOrigins ?? []
+      if (!allowed.includes(url.origin))
+        return null
+      return objectKey
+    }
+    // External non-storage URL
+    return null
   }
   catch {
     // Not a URL
@@ -26,15 +145,88 @@ export function normalizeImagePath(raw?: string | null) {
   return trimmed.replace(/^images\//, '').replace(/^\/+/, '')
 }
 
-export async function createSignedImageUrl(c: Context, rawPath?: string | null) {
+function hasUnsafeImagePathSegments(normalized: string) {
+  return normalized.includes('\0')
+    || normalized.split('/').some(segment => segment === '.' || segment === '..')
+}
+
+/**
+ * Every stored image path must pass ownership checks.
+ * Root-level bare filenames are rejected (migrate with
+ * `bun run admin:migrate-legacy-bare-image-paths --apply`).
+ */
+export function isOwnershipBearingImagePath(normalized: string) {
+  return !!normalized && normalized.includes('/')
+}
+
+/**
+ * Image objects must live under a caller-owned prefix:
+ * - user avatar: `{userId}/...`
+ * - org logo: `org/{orgId}/logo/...` (org-only scope never signs app icons)
+ * - app icon: `org/{orgId}/{appId}/...` (app scope never signs sibling apps)
+ */
+export function isAllowedImagePath(normalized: string, scope: ImagePathScope) {
+  if (!normalized || hasUnsafeImagePathSegments(normalized))
+    return false
+  if (!normalized.includes('/'))
+    return false
+
+  const prefixes: string[] = []
+  if (scope.userId)
+    prefixes.push(`${scope.userId}/`)
+  if (scope.orgId) {
+    if (scope.appId)
+      prefixes.push(`org/${scope.orgId}/${scope.appId}/`)
+    else
+      prefixes.push(`org/${scope.orgId}/logo/`)
+  }
+
+  if (prefixes.length === 0)
+    return false
+
+  return prefixes.some(prefix => normalized.startsWith(prefix))
+}
+
+export function assertAllowedImagePath(normalized: string | null, scope: ImagePathScope) {
+  if (!normalized)
+    return null
+  if (hasUnsafeImagePathSegments(normalized))
+    return null
+  if (!isAllowedImagePath(normalized, scope))
+    return null
+  return normalized
+}
+
+export async function createSignedImageUrl(
+  c: Context,
+  rawPath?: string | null,
+  scope?: ImagePathScope,
+) {
   if (!rawPath)
     return null
 
-  if (rawPath.includes('://'))
-    return rawPath
+  const allowedOrigins = getStorageAllowedOrigins(c)
 
-  const normalized = normalizeImagePath(rawPath)
-  if (!normalized)
+  // Absolute non-storage / foreign-host URLs are returned unchanged (no admin signing).
+  if (rawPath.includes('://')) {
+    try {
+      const url = new URL(rawPath)
+      const isOurStoragePath = isStorageImagePathname(url.pathname)
+        && allowedOrigins.includes(url.origin)
+      if (!isOurStoragePath)
+        return rawPath
+    }
+    catch {
+      return rawPath
+    }
+  }
+
+  const normalized = normalizeImagePath(rawPath, { allowedOrigins })
+  if (!normalized || hasUnsafeImagePathSegments(normalized))
+    return null
+
+  // Every images object key requires a matching ownership scope before admin signing.
+  if (!scope || !isAllowedImagePath(normalized, scope))
     return null
 
   const { data, error } = await supabaseAdmin(c)
