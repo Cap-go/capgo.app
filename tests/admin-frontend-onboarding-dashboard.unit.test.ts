@@ -218,6 +218,11 @@ describe('admin frontend onboarding dashboard', () => {
       { label: 'V3', color: '#10b981', data: [] },
       { label: 'V4', color: '#f59e0b', data: [] },
     ])
+    expect(buildFrontendOnboardingDailySeries([
+      { date: '2026-08-08', v1_attempts: 1, v2_attempts: 2, v3_attempts: 3 },
+    ], 'V1', 'V2', 'V3', 'V4')[3]?.data).toEqual([
+      { date: '2026-08-08', value: 0 },
+    ])
   })
 
   it.concurrent('builds paired stacks only for Setup CLI outcome categories present in the range', () => {
@@ -639,7 +644,8 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).not.toContain('<AdminFunnelChart :stages="v1FunnelStages" :is-loading="isLoadingStats" />')
     expect(source).toContain('orientation="vertical"')
     expect(source).toContain(':values="setupCliOutcomeValues"')
-    expect(source).toContain('visibleAnalytics.value?.v2_v3_setup_cli_outcomes')
+    expect(source).toContain('visibleAnalytics.value?.v2_v4_setup_cli_outcomes')
+    expect(source).toContain('?? visibleAnalytics.value?.v2_v3_setup_cli_outcomes')
     expect(source).toContain('buildFrontendOnboardingDailySetupCliSeries')
     expect(source).toContain('visibleAnalytics.value?.daily_setup_cli_outcomes')
     expect(source).toContain(':series="dailySetupCliSeries"')
@@ -652,7 +658,8 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain(`t('frontend-onboarding-funnel-v1-legacy')`)
     expect(source).not.toContain(`t('frontend-onboarding-demo-data')`)
     expect(source).toContain('buildFrontendOnboardingGraphMetrics')
-    expect(source).toContain('visibleAnalytics.value?.v4_graph.nodes')
+    expect(source).toContain('visibleAnalytics.value?.v4_graph?.nodes')
+    expect(source).toContain('?? visibleAnalytics.value?.v3_graph?.nodes')
     expect(source).not.toContain('onboardingGraphV4Demo')
     expect(source).toContain('buildFrontendOnboardingFunnelSummaries')
     expect(template).toContain('summary.conversion_percent')
@@ -690,6 +697,9 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain(`fromPoint: { x: 2130, y: 90 }, toPoint: { x: 2130, y: 870 }, style: 'dotted', arrow: false`)
     expect(source).toContain(`fromPoint: { x: 2130, y: 540 }, to: 'organization', style: 'primary'`)
     for (const eventKey of [
+      'onboarding_app_creation_started',
+      'onboarding_app_creation_succeeded',
+      'onboarding_app_creation_failed',
       'onboarding_organization_import_opened',
       'onboarding_organization_import_submitted',
       'onboarding_organization_import_succeeded',
@@ -705,6 +715,9 @@ describe('admin frontend onboarding dashboard', () => {
     }
     expect(source).toContain(`from: 'organization', to: 'organization_import_opened', style: 'branch'`)
     expect(source).toContain(`from: 'organization', to: 'organization_invite_viewed', style: 'branch'`)
+    expect(source).toContain(`from: 'organization', to: 'app_creation_started', style: 'branch'`)
+    expect(source).toContain(`from: 'app_creation_started', to: 'app_creation_succeeded', style: 'branch'`)
+    expect(source).toContain(`from: 'app_creation_started', to: 'app_creation_failed', style: 'branch'`)
     expect(source).toContain(`from: 'setup', to: 'technical_invite_opened', style: 'branch'`)
 
     const statsCard = await readFile(new URL('../src/components/admin/AdminStatsCard.vue', import.meta.url), 'utf8')
@@ -729,6 +742,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('deduplicateV4Funnel.value')
     expect(source).toContain('visibleAnalytics.value?.deduplicated.funnels.v4')
     expect(source).toContain('visibleAnalytics.value?.deduplicated.funnels.v3')
+    expect(source).toContain('visibleAnalytics.value?.funnels.v4\n      ?? visibleAnalytics.value?.funnels.v3')
     expect(source).toContain('buildFrontendOnboardingDailySeries(\n  displayedDailyAttempts.value')
     expect(source).toContain('buildFrontendOnboardingFunnelStages(displayedV4Funnel.value)')
     expect(source).toContain('buildFrontendOnboardingFunnelSummaries(displayedV4Funnel.value)')
@@ -852,6 +866,9 @@ describe('admin frontend onboarding dashboard', () => {
     expect(messages['frontend-onboarding-graph-organization-invite-opened']).toBe('Invitation opened')
     expect(messages['frontend-onboarding-graph-organization-invite-succeeded']).toBe('Invitation succeeded')
     expect(messages['frontend-onboarding-graph-organization-invite-continued']).toBe('Invitation step continued')
+    expect(messages['frontend-onboarding-graph-app-creation-started']).toBe('App creation started')
+    expect(messages['frontend-onboarding-graph-app-creation-succeeded']).toBe('App creation succeeded')
+    expect(messages['frontend-onboarding-graph-app-creation-failed']).toBe('App creation failed')
     expect(messages['frontend-onboarding-graph-technical-invite-opened']).toBe('Technical invite opened')
     expect(messages['frontend-onboarding-graph-technical-invite-succeeded']).toBe('Technical invite succeeded')
     expect(messages['frontend-onboarding-graph-percent-of-level']).toBe('{percent}% of {level}')

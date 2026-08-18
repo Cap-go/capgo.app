@@ -538,18 +538,32 @@ describe('buildFrontendOnboardingAnalytics', () => {
         aiInstructionsCopiedMs: [setupMs + 6 * MINUTE_MS],
       }),
       attempt({
-        attemptId: 'v1-ignored',
-        personId: 'person-v1',
-        onboardingVersion: 1,
+        attemptId: 'v4-cli-only',
+        onboardingVersion: 4,
+        personId: 'person-v4-cli-only',
         intentMs: CURRENT_START_MS + 6 * MINUTE_MS,
         setupMs: setupMs + 6 * MINUTE_MS,
         cliStartedMs: [setupMs + 7 * MINUTE_MS],
+      }),
+      attempt({
+        attemptId: 'v1-ignored',
+        personId: 'person-v1',
+        onboardingVersion: 1,
+        intentMs: CURRENT_START_MS + 7 * MINUTE_MS,
+        setupMs: setupMs + 7 * MINUTE_MS,
+        cliStartedMs: [setupMs + 8 * MINUTE_MS],
       }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
     expect(analytics.v2_v3_setup_cli_outcomes).toEqual({
       total_users: 5,
       cli_only: 2,
+      cli_and_ai_instructions: 1,
+      no_cli: 2,
+    })
+    expect(analytics.v2_v4_setup_cli_outcomes).toEqual({
+      total_users: 6,
+      cli_only: 3,
       cli_and_ai_instructions: 1,
       no_cli: 2,
     })
@@ -591,5 +605,6 @@ describe('buildFrontendOnboardingAnalytics', () => {
       cli_and_ai_instructions: 1,
       no_cli: 1,
     })
+    expect(analytics.v2_v4_setup_cli_outcomes).toEqual(analytics.v2_v3_setup_cli_outcomes)
   })
 })

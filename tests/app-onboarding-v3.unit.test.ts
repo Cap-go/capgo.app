@@ -35,6 +35,7 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain('id="app-onboarding-v2-store-url"')
     expect(onboardingSource).toContain("const isStoreImportOpen = ref(false)")
     expect(onboardingSource).toContain('data-test="app-onboarding-toggle-store-import"')
+    expect(onboardingSource).toContain('v-if="appDetailsStep === \'app_id\' && (props.preOrg || existingApp === true)"')
     expect(onboardingSource).toContain(':aria-expanded="isStoreImportOpen"')
     expect(onboardingSource).toContain('v-if="isStoreImportOpen" id="app-onboarding-store-import-panel"')
     expect(onboardingSource).toContain("trackDetailsEvent(isStoreImportOpen.value ? 'onboarding_store_import_shown' : 'onboarding_store_import_hidden')")
@@ -60,7 +61,7 @@ describe('pre-organization onboarding v3', () => {
   it.concurrent('lets icon re-import change only the selected icon', () => {
     const iconImport = onboardingSource.slice(
       onboardingSource.indexOf('async function importStoreIcon()'),
-      onboardingSource.indexOf('function onSelectIconFormKit('),
+      onboardingSource.indexOf('function toggleStoreImport()'),
     )
     expect(iconImport).toContain("invokeCapgoApi('app/store-metadata'")
     expect(iconImport).toContain('storeIconPreview.value = importedIcon')
@@ -140,6 +141,9 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain("trackDetailsEvent('onboarding_store_icon_import_failed'")
     const resetStoreImportState = onboardingSource.slice(onboardingSource.indexOf('function resetStoreImportState()'), onboardingSource.indexOf('let resumeIconLoadRun'))
     expect(resetStoreImportState).toContain('cancelPendingStoreIconImport()')
+    expect(resetStoreImportState).toContain("iconStoreUrl.value = ''")
+    expect(resetStoreImportState).toContain('isStoreImportOpen.value = false')
+    expect(resetStoreImportState).toContain('isStoreIconImportOpen.value = false')
   })
 
   it.concurrent('invalidates the opposite import before either store request starts', () => {

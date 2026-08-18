@@ -8,6 +8,7 @@ import type { AdminOnboardingJourneyGraphConfig, AdminOnboardingJourneyNode } fr
 import type {
   FrontendOnboardingAnalytics,
   FrontendOnboardingDailySetupCliOutcomeKey,
+  FrontendOnboardingStageKey,
 } from '~/services/adminFrontendOnboarding'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -76,6 +77,9 @@ const v4OrganizationGraphDefinitions = [
   { key: 'onboarding_organization_invite_opened', parentKey: 'onboarding_organization_invite_viewed' },
   { key: 'onboarding_organization_invite_succeeded', parentKey: 'onboarding_organization_invite_opened' },
   { key: 'onboarding_organization_invite_continued', parentKey: 'onboarding_organization_invite_viewed' },
+  { key: 'onboarding_app_creation_started' },
+  { key: 'onboarding_app_creation_succeeded', parentKey: 'onboarding_app_creation_started' },
+  { key: 'onboarding_app_creation_failed', parentKey: 'onboarding_app_creation_started' },
 ] as const
 
 const v4SetupGraphDefinitions = [
@@ -110,6 +114,9 @@ const v4OrganizationGraphEventNodes = [
   { id: 'organization_invite_opened', eventKey: 'onboarding_organization_invite_opened', labelKey: 'frontend-onboarding-graph-organization-invite-opened', x: 3160, y: 570, icon: 'organization' },
   { id: 'organization_invite_succeeded', eventKey: 'onboarding_organization_invite_succeeded', labelKey: 'frontend-onboarding-graph-organization-invite-succeeded', x: 3520, y: 520, icon: 'success', tone: 'success' },
   { id: 'organization_invite_continued', eventKey: 'onboarding_organization_invite_continued', labelKey: 'frontend-onboarding-graph-organization-invite-continued', x: 3880, y: 700, icon: 'setup' },
+  { id: 'app_creation_started', eventKey: 'onboarding_app_creation_started', labelKey: 'frontend-onboarding-graph-app-creation-started', x: 3160, y: 850, icon: 'app' },
+  { id: 'app_creation_succeeded', eventKey: 'onboarding_app_creation_succeeded', labelKey: 'frontend-onboarding-graph-app-creation-succeeded', x: 3520, y: 800, icon: 'success', tone: 'success' },
+  { id: 'app_creation_failed', eventKey: 'onboarding_app_creation_failed', labelKey: 'frontend-onboarding-graph-app-creation-failed', x: 3520, y: 900, icon: 'failure', tone: 'danger' },
 ] as const
 
 const v4SetupGraphEventNodes = [
@@ -155,8 +162,11 @@ const displayedDailyAttempts = computed(() => deduplicateDailyAttempts.value
   ? visibleAnalytics.value?.deduplicated.daily_attempts ?? []
   : visibleAnalytics.value?.daily_attempts ?? [])
 const displayedV4Funnel = computed(() => {
-  if (!deduplicateV4Funnel.value)
-    return visibleAnalytics.value?.funnels.v4 ?? []
+  if (!deduplicateV4Funnel.value) {
+    return visibleAnalytics.value?.funnels.v4
+      ?? visibleAnalytics.value?.funnels.v3
+      ?? []
+  }
 
   return visibleAnalytics.value?.deduplicated.funnels.v4
     ?? visibleAnalytics.value?.deduplicated.funnels.v3
@@ -179,13 +189,15 @@ const v4FunnelStages = computed(() => buildFrontendOnboardingFunnelStages(displa
 const v1FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(visibleAnalytics.value?.funnels.v1 ?? []))
 const v4FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(displayedV4Funnel.value))
 const hasDailyAttempts = computed(() => displayedDailyAttempts.value
-  .some(day => day.v1_attempts > 0 || day.v2_attempts > 0 || day.v3_attempts > 0 || day.v4_attempts > 0))
-const setupCliOutcomes = computed(() => visibleAnalytics.value?.v2_v3_setup_cli_outcomes ?? {
-  total_users: 0,
-  cli_only: 0,
-  cli_and_ai_instructions: 0,
-  no_cli: 0,
-})
+  .some(day => day.v1_attempts > 0 || day.v2_attempts > 0 || day.v3_attempts > 0 || (day.v4_attempts ?? 0) > 0))
+const setupCliOutcomes = computed(() => visibleAnalytics.value?.v2_v4_setup_cli_outcomes
+  ?? visibleAnalytics.value?.v2_v3_setup_cli_outcomes
+  ?? {
+    total_users: 0,
+    cli_only: 0,
+    cli_and_ai_instructions: 0,
+    no_cli: 0,
+  })
 const setupCliOutcomeLabels = computed(() => [
   t('frontend-onboarding-setup-cli-only'),
   t('frontend-onboarding-setup-cli-and-ai'),
@@ -221,14 +233,18 @@ const dailySetupCliSeries = computed(() => buildFrontendOnboardingDailySetupCliS
 const hasDailySetupCliOutcomeData = computed(() => dailySetupCliSeries.value.length > 0)
 
 const onboardingGraphV4 = computed<AdminOnboardingJourneyGraphConfig>(() => {
-  const funnel = visibleAnalytics.value?.funnels.v4 ?? []
-  const stage = (key: FrontendOnboardingAnalytics['funnels']['v4'][number]['key']) => funnel.find(item => item.key === key)
+  const funnel = visibleAnalytics.value?.funnels.v4
+    ?? visibleAnalytics.value?.funnels.v3
+    ?? []
+  const stage = (key: FrontendOnboardingStageKey) => funnel.find(item => item.key === key)
   const intent = stage('intent')
   const details = stage('details')
   const organization = stage('organization')
   const setup = stage('setup')
   const parentPercent = (current: number, previous: number) => previous > 0 ? current / previous * 100 : 0
-  const interactionNodes = visibleAnalytics.value?.v4_graph.nodes ?? []
+  const interactionNodes = visibleAnalytics.value?.v4_graph?.nodes
+    ?? visibleAnalytics.value?.v3_graph?.nodes
+    ?? []
   const graphMetrics = {
     ...buildFrontendOnboardingGraphMetrics(v4DetailsGraphDefinitions, interactionNodes, details?.reached),
     ...buildFrontendOnboardingGraphMetrics(v4OrganizationGraphDefinitions, interactionNodes, organization?.reached),
@@ -344,10 +360,15 @@ const onboardingGraphV4 = computed<AdminOnboardingJourneyGraphConfig>(() => {
       { from: 'organization_invite_viewed', to: 'organization_invite_opened', style: 'branch' },
       { from: 'organization_invite_opened', to: 'organization_invite_succeeded', style: 'branch' },
       { from: 'organization_invite_viewed', to: 'organization_invite_continued', style: 'branch' },
+      { from: 'organization', to: 'app_creation_started', style: 'branch' },
+      { from: 'app_creation_started', to: 'app_creation_succeeded', style: 'branch' },
+      { from: 'app_creation_started', to: 'app_creation_failed', style: 'branch' },
       { from: 'organization_import_succeeded', toPoint: { x: 4200, y: 110 }, style: 'dotted' },
       { from: 'organization_import_failed', toPoint: { x: 4200, y: 210 }, style: 'dotted' },
       { from: 'organization_invite_continued', toPoint: { x: 4200, y: 700 }, style: 'dotted' },
-      { fromPoint: { x: 4200, y: 110 }, toPoint: { x: 4200, y: 700 }, style: 'dotted', arrow: false },
+      { from: 'app_creation_succeeded', toPoint: { x: 4200, y: 800 }, style: 'dotted' },
+      { from: 'app_creation_failed', toPoint: { x: 4200, y: 900 }, style: 'dotted' },
+      { fromPoint: { x: 4200, y: 110 }, toPoint: { x: 4200, y: 900 }, style: 'dotted', arrow: false },
       { from: 'organization', toPoint: { x: 4200, y: 540 }, style: 'primary' },
       { fromPoint: { x: 4200, y: 540 }, to: 'setup', style: 'primary' },
       { from: 'setup', to: 'technical_invite_opened', style: 'branch' },

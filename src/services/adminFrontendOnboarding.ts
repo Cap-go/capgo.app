@@ -66,7 +66,7 @@ export interface FrontendOnboardingAnalytics {
     v1_attempts: number
     v2_attempts: number
     v3_attempts: number
-    v4_attempts: number
+    v4_attempts?: number
   }>
   deduplicated: {
     daily_attempts: Array<{
@@ -74,7 +74,7 @@ export interface FrontendOnboardingAnalytics {
       v1_attempts: number
       v2_attempts: number
       v3_attempts: number
-      v4_attempts: number
+      v4_attempts?: number
     }>
     funnels: {
       v3: FrontendOnboardingFunnelStage[]
@@ -90,7 +90,7 @@ export interface FrontendOnboardingAnalytics {
     v1: FrontendOnboardingFunnelStage[]
     v2: FrontendOnboardingFunnelStage[]
     v3: FrontendOnboardingFunnelStage[]
-    v4: FrontendOnboardingFunnelStage[]
+    v4?: FrontendOnboardingFunnelStage[]
   }
   v2_graph: {
     nodes: Array<{
@@ -104,13 +104,19 @@ export interface FrontendOnboardingAnalytics {
       count: number
     }>
   }
-  v4_graph: {
+  v4_graph?: {
     nodes: Array<{
       key: string
       count: number
     }>
   }
   v2_v3_setup_cli_outcomes: {
+    total_users: number
+    cli_only: number
+    cli_and_ai_instructions: number
+    no_cli: number
+  }
+  v2_v4_setup_cli_outcomes?: {
     total_users: number
     cli_only: number
     cli_and_ai_instructions: number
@@ -225,7 +231,7 @@ export function buildFrontendOnboardingDailySeries(
     {
       label: v4Label,
       color: '#f59e0b',
-      data: dailyAttempts.map(({ date, v4_attempts }) => ({ date, value: v4_attempts })),
+      data: dailyAttempts.map(({ date, v4_attempts = 0 }) => ({ date, value: v4_attempts })),
     },
   ]
 }
@@ -305,7 +311,7 @@ export function buildFrontendOnboardingFunnelSummaries(
 
 export function buildFrontendOnboardingGraphMetrics(
   definitions: readonly FrontendOnboardingGraphMetricDefinition[],
-  nodes: readonly FrontendOnboardingAnalytics['v4_graph']['nodes'][number][],
+  nodes: readonly { key: string, count: number }[],
   appDetailsCount: number | undefined,
 ): Record<string, FrontendOnboardingGraphMetric> {
   const counts = new Map(nodes.map(node => [node.key, node.count]))

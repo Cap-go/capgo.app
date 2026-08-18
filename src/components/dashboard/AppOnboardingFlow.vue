@@ -801,11 +801,14 @@ function resetStoreImportState() {
   cancelPendingStoreImport()
   cancelPendingStoreIconImport()
   storeUrl.value = ''
+  iconStoreUrl.value = ''
   storeIconPreview.value = ''
   storeAppNamePreview.value = ''
   useImportedStoreIcon.value = false
   importedStoreAppId.value = ''
   isImportingStore.value = false
+  isStoreImportOpen.value = false
+  isStoreIconImportOpen.value = false
 }
 
 let resumeIconLoadRun = 0
@@ -2280,7 +2283,7 @@ defineExpose({
                   </div>
                 </div>
 
-                <div v-if="appDetailsStep === 'app_id'" class="mb-6 mt-4 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/15 dark:bg-slate-950/60">
+                <div v-if="appDetailsStep === 'app_id' && (props.preOrg || existingApp === true)" class="mb-6 mt-4 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/15 dark:bg-slate-950/60">
                   <button
                     type="button"
                     class="flex min-h-12 w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-semibold text-slate-800 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 dark:text-slate-200 dark:hover:bg-slate-900"

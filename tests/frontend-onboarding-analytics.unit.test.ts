@@ -189,6 +189,12 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       v4_graph: { nodes: [{ key: 'onboarding_app_id_entered', count: 1 }] },
       v2_graph: { nodes: [{ key: 'onboarding_app_name_entered', count: 1 }] },
       v2_v3_setup_cli_outcomes: {
+        total_users: 1,
+        cli_only: 0,
+        cli_and_ai_instructions: 1,
+        no_cli: 0,
+      },
+      v2_v4_setup_cli_outcomes: {
         total_users: 2,
         cli_only: 0,
         cli_and_ai_instructions: 1,
@@ -213,6 +219,12 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       },
     ])
     expect(result.v2_v3_setup_cli_outcomes).toEqual({
+      total_users: 1,
+      cli_only: 0,
+      cli_and_ai_instructions: 1,
+      no_cli: 0,
+    })
+    expect(result.v2_v4_setup_cli_outcomes).toEqual({
       total_users: 2,
       cli_only: 0,
       cli_and_ai_instructions: 1,

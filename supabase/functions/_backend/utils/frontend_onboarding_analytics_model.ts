@@ -105,6 +105,7 @@ export interface FrontendOnboardingAnalytics {
     nodes: Array<{ key: string, count: number }>
   }
   v2_v3_setup_cli_outcomes: FrontendOnboardingSetupCliOutcomes
+  v2_v4_setup_cli_outcomes: FrontendOnboardingSetupCliOutcomes
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -391,7 +392,8 @@ export function buildFrontendOnboardingAnalytics(
   const currentV2Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 2)
   const currentV3Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 3)
   const currentV4Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 4)
-  const currentSetupCliOutcomeAttempts = currentAttempts.filter(attempt => attempt.onboardingVersion >= 2)
+  const currentV2V3SetupCliOutcomeAttempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 2 || attempt.onboardingVersion === 3)
+  const currentV2V4SetupCliOutcomeAttempts = currentAttempts.filter(attempt => attempt.onboardingVersion >= 2)
   const currentV4ConversionAttempts = attempts.filter(attempt => attempt.onboardingVersion === 4
     && attempt.intentMs >= currentStartMs - FRONTEND_ONBOARDING_FOLLOWUP_MS
     && attempt.intentMs < currentEndMs)
@@ -429,6 +431,7 @@ export function buildFrontendOnboardingAnalytics(
     v2_graph: { nodes: buildInteractionGraph(currentV2Attempts) },
     v3_graph: { nodes: buildInteractionGraph(currentV3Attempts) },
     v4_graph: { nodes: buildInteractionGraph(currentV4Attempts) },
-    v2_v3_setup_cli_outcomes: buildSetupCliOutcomes(currentSetupCliOutcomeAttempts),
+    v2_v3_setup_cli_outcomes: buildSetupCliOutcomes(currentV2V3SetupCliOutcomeAttempts),
+    v2_v4_setup_cli_outcomes: buildSetupCliOutcomes(currentV2V4SetupCliOutcomeAttempts),
   }
 }
