@@ -842,6 +842,7 @@ describe('global stats metric helpers', () => {
 
     expect(countFn).toContain('apps.ios_store_url')
     expect(countFn).toContain('apps.android_store_url')
+    expect(countFn).toContain('[^[:space:]]')
     expect(countFn).toContain('apps.created_at <')
     expect(countFn).toContain('snapshotEnd')
     expect(coreShard).toContain('countAppsWithStoreUrl(c, window.prevDayEnd)')

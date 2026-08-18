@@ -1627,8 +1627,8 @@ async function countAppsWithStoreUrl(c: Context, snapshotEnd: Date): Promise<num
       FROM public.apps AS apps
       WHERE apps.created_at < ${snapshotEnd}
         AND (
-          NULLIF(BTRIM(apps.ios_store_url), '') IS NOT NULL
-          OR NULLIF(BTRIM(apps.android_store_url), '') IS NOT NULL
+          apps.ios_store_url ~ '[^[:space:]]'
+          OR apps.android_store_url ~ '[^[:space:]]'
         )
     `)
 
