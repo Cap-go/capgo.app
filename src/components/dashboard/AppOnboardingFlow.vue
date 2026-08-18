@@ -145,6 +145,8 @@ const isSeedingDemo = ref(false)
 const isCliCommandVisible = ref(false)
 const apiKey = ref<string | null>(null)
 const createdApp = ref<AppRow | null>(null)
+const preOrgCreatedOrganizationId = ref<string | null>(null)
+const preOrgShouldInvite = ref(false)
 const reportedSetupSource = ref<'manual' | 'cli' | 'mcp' | 'ai' | null>(null)
 const flowStep = ref<OnboardingFlowStep>('details')
 const appDetailsStep = ref<AppDetailsStep>('name')
@@ -174,6 +176,9 @@ const hasEditedOrgName = ref(false)
 const estimatedUsersIndex = ref<number | null>(null)
 const isStoreImportOpen = ref(false)
 const isStoreIconImportOpen = ref(false)
+const isAppDetailsNavigationPending = computed(() => (
+  isSubmitting.value || isImportingStore.value || isImportingStoreIcon.value
+))
 const isOrganizationImportOpen = ref(false)
 const isImportingOrganizationWebsite = ref(false)
 const organizationWebsiteInput = ref('')
@@ -585,6 +590,8 @@ function resetOnboardingForm() {
   isStoreImportOpen.value = false
   isStoreIconImportOpen.value = false
   createdApp.value = null
+  preOrgCreatedOrganizationId.value = null
+  preOrgShouldInvite.value = false
   selectedIconFile.value = null
   if (localIconPreview.value.startsWith('blob:'))
     URL.revokeObjectURL(localIconPreview.value)
@@ -764,8 +771,13 @@ function getStoreUrls(url: string) {
 
 let storeImportRun = 0
 let storeIconImportRun = 0
-function resetStoreImportState() {
+function cancelPendingStoreImport() {
   storeImportRun += 1
+  isImportingStore.value = false
+}
+
+function resetStoreImportState() {
+  cancelPendingStoreImport()
   cancelPendingStoreIconImport()
   storeUrl.value = ''
   storeIconPreview.value = ''
@@ -878,6 +890,7 @@ async function importStoreMetadata() {
   if (!requestedUrl)
     return
 
+  cancelPendingStoreIconImport()
   existingApp.value = true
   existingAppSetup.value = 'import'
   trackDetailsEvent('onboarding_store_import_submitted')
@@ -946,6 +959,7 @@ async function importStoreIcon() {
   if (!requestedUrl)
     return
 
+  cancelPendingStoreImport()
   trackDetailsEvent('onboarding_store_icon_import_submitted')
   const requestedRun = ++storeIconImportRun
   isImportingStoreIcon.value = true
@@ -1245,10 +1259,23 @@ function viewPreviousAppDetailsStep() {
 }
 
 function finishAppDetails() {
-  if (props.preOrg)
+  if (props.preOrg && preOrgCreatedOrganizationId.value) {
+    void completePreOrgAppCreation(preOrgCreatedOrganizationId.value, preOrgShouldInvite.value)
+  }
+  else if (props.preOrg) {
     continuePreOrgDetails()
-  else
+  }
+  else {
     void createAppRecord()
+  }
+}
+
+function returnToAppIdAfterConflict() {
+  const previousAnalyticsStep = analyticsStepFor(flowStep.value)
+  flowStep.value = 'details'
+  appDetailsStep.value = 'app_id'
+  progressTracker?.viewStep('app_id', previousAnalyticsStep)
+  schedulePersistOnboardingProgress()
 }
 
 async function uploadIcon(appId: string, iconSourceUrl?: string) {
@@ -1471,29 +1498,35 @@ async function createOrganizationAndApp() {
       return
     }
 
-    clearOnboardingAppDraft(onboardingUserId.value)
-    await createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })
-
-    if (!createdApp.value)
-      return
-
-    await uploadImportedOrganizationLogo(data.id)
-    showOrganizationInvite.value = shouldInvite
-    if (shouldInvite)
-      trackOrganizationEvent('onboarding_organization_invite_viewed')
-
-    removeBeforeUnloadWarning()
-
-    try {
-      await loadApiKey()
-    }
-    catch (apiKeyError) {
-      console.error('Cannot ensure API key', apiKeyError)
-      toast.error(t('app-onboarding-toast-apikey-error'))
-    }
+    preOrgCreatedOrganizationId.value = data.id
+    preOrgShouldInvite.value = shouldInvite
+    await completePreOrgAppCreation(data.id, shouldInvite)
   }
   finally {
     isSubmitting.value = false
+  }
+}
+
+async function completePreOrgAppCreation(organizationId: string, shouldInvite: boolean) {
+  await createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })
+
+  if (!createdApp.value)
+    return
+
+  clearOnboardingAppDraft(onboardingUserId.value)
+  await uploadImportedOrganizationLogo(organizationId)
+  showOrganizationInvite.value = shouldInvite
+  if (shouldInvite)
+    trackOrganizationEvent('onboarding_organization_invite_viewed')
+
+  removeBeforeUnloadWarning()
+
+  try {
+    await loadApiKey()
+  }
+  catch (apiKeyError) {
+    console.error('Cannot ensure API key', apiKeyError)
+    toast.error(t('app-onboarding-toast-apikey-error'))
   }
 }
 
@@ -1590,6 +1623,7 @@ async function createAppRecord(options?: { nextStep?: StandardFlowStep | PreOrgF
         appIdFeedback.value = t('app-onboarding-appid-taken-pick-another', {
           appId: createResult.originalAppId,
         })
+        returnToAppIdAfterConflict()
         toast.error(appIdFeedback.value)
         return
       }
@@ -2105,7 +2139,7 @@ defineExpose({
                 <button
                   type="button"
                   :aria-pressed="existingApp === true"
-                  class="group flex min-h-32 items-start gap-4 rounded-2xl border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
+                  class="d-btn group h-auto min-h-32 w-full items-start justify-start gap-4 whitespace-normal rounded-2xl border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
                   :class="whiteCardToggleButtonClass(existingApp === true)"
                   data-test="app-onboarding-existing-yes"
                   @click="existingApp = true"
@@ -2127,7 +2161,7 @@ defineExpose({
                 <button
                   type="button"
                   :aria-pressed="existingApp === false"
-                  class="group flex min-h-32 items-start gap-4 rounded-2xl border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
+                  class="d-btn group h-auto min-h-32 w-full items-start justify-start gap-4 whitespace-normal rounded-2xl border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
                   :class="whiteCardToggleButtonClass(existingApp === false)"
                   data-test="app-onboarding-existing-no"
                   @click="existingApp = false"
@@ -2366,6 +2400,7 @@ defineExpose({
                     type="button"
                     class="d-btn min-h-12"
                     :class="whiteCardSecondaryButtonClass()"
+                    :disabled="isAppDetailsNavigationPending"
                     @click="appDetailsStep === 'name' ? (props.preOrg ? viewPreviousStep('intent') : router.push('/apps')) : viewPreviousAppDetailsStep()"
                   >
                     {{ appDetailsStep === 'name' && !props.preOrg ? t('button-cancel') : t('button-back') }}
@@ -2375,7 +2410,7 @@ defineExpose({
                       type="button"
                       class="d-btn min-h-12"
                       :class="whiteCardPrimaryButtonClass()"
-                      :disabled="isSubmitting"
+                      :disabled="isAppDetailsNavigationPending"
                       :data-test="appDetailsStep === 'app_id' && !hasProvidedAppId ? 'app-onboarding-skip-app-id' : 'app-onboarding-continue'"
                       @click="continueFromCurrentAppDetailsStep"
                     >
