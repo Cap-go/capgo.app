@@ -120,7 +120,7 @@ describe('sendEventToTracking', () => {
     expect(posthogMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       event: 'Tracked Event',
       ip: '1.2.3.4',
-      nonPersonTags: { apikey_id: 87015, notify: false },
+      nonPersonTags: { apikey_id: 87015 },
       user_id: 'org-id',
     }))
     expect(notifToOrgMembersMock).toHaveBeenCalledWith(
@@ -201,7 +201,7 @@ describe('sendEventToTracking', () => {
     }))
   })
 
-  it('keeps deprecated presentation options as PostHog event metadata', async () => {
+  it('keeps deprecated presentation hints but omits notification delivery control from PostHog metadata', async () => {
     const { sendEventToTracking } = await import('../supabase/functions/_backend/utils/tracking.ts')
 
     await sendEventToTracking(createContext(), {
@@ -217,7 +217,6 @@ describe('sendEventToTracking', () => {
       nonPersonTags: {
         cli_version: '8.31.3',
         icon: '🧪',
-        notify: true,
         parser: 'markdown',
       },
     }))

@@ -413,6 +413,10 @@ describe('global stats metric helpers', () => {
     expect(globalStatsTestUtils.getGlobalStatsNotificationStepAction(sent, 'notifications_tracking', 'notifications_tracking_claim')).toBe('skip')
   })
 
+  it.concurrent('keeps the legacy notification lock namespace during rolling deployments', () => {
+    expect(globalStatsTestUtils.GLOBAL_STATS_NOTIFICATION_LOCK_NAMESPACE).toBe('logsnag_insights_notifications')
+  })
+
   it.concurrent('computes NRR from prior MRR, churn, contraction, and expansion', () => {
     expect(globalStatsTestUtils.calculateNrr(100, {
       churnMrr: 15,

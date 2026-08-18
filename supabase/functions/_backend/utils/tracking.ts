@@ -115,14 +115,13 @@ function getTrackingTimestamp(timestamp?: number | Date) {
 }
 
 function getPostHogEventMetadata(payload: SendEventToTrackingPayload) {
-  const hasPresentationMetadata = payload.icon !== undefined || payload.notify !== undefined || payload.parser !== undefined
+  const hasPresentationMetadata = payload.icon !== undefined || payload.parser !== undefined
   if (!hasPresentationMetadata)
     return payload.nonPersonTags
 
   return {
     ...payload.nonPersonTags,
     ...(payload.icon !== undefined ? { icon: payload.icon } : {}),
-    ...(payload.notify !== undefined ? { notify: payload.notify } : {}),
     ...(payload.parser !== undefined ? { parser: payload.parser } : {}),
   }
 }

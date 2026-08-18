@@ -425,7 +425,8 @@ const GLOBAL_STATS_RETRY_DELAY_SECONDS = 300
 const GLOBAL_STATS_QUEUE_NAME = 'admin_stats'
 const GLOBAL_STATS_NOTIFICATION_DELAY_SECONDS = 180
 const GLOBAL_STATS_RECENT_REPAIR_LOOKBACK_DAYS = 30
-const GLOBAL_STATS_NOTIFICATION_LOCK_NAMESPACE = 'global_stats_notifications'
+// Keep the legacy key so old and new workers contend on the same lock during rolling deployments.
+const GLOBAL_STATS_NOTIFICATION_LOCK_NAMESPACE = 'logsnag_insights_notifications'
 const GLOBAL_STATS_NOTIFICATION_TRACKING_STEP = 'notifications_tracking'
 const GLOBAL_STATS_NOTIFICATION_TRACKING_CLAIM = 'notifications_tracking_claim'
 const GLOBAL_STATS_COMPLETION_MARKERS = [
@@ -3510,6 +3511,7 @@ export const globalStatsTestUtils = {
   readGlobalStatsPayload,
   REVENUE_ACTIVE_STRIPE_STATUSES,
   GLOBAL_STATS_BACKGROUND_MAX_RETRIES,
+  GLOBAL_STATS_NOTIFICATION_LOCK_NAMESPACE,
   USAGE_GLOBAL_STATS_SHARDS,
   calculatePastDueOrgStats,
   calculateSubscriptionAccessSnapshotCounts,
