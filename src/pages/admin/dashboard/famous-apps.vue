@@ -70,6 +70,7 @@ const apps = ref<FamousApp[]>([])
 const totalApps = ref(0)
 const currentPage = ref(1)
 const isLoadingApps = ref(false)
+const loadFailed = ref(false)
 const pendingCount = ref(0)
 const iconicCount = ref(0)
 const famousCount = ref(0)
@@ -140,6 +141,7 @@ async function loadApps() {
     iconicCount.value = payload.data?.iconic_count ?? 0
     famousCount.value = payload.data?.famous_count ?? 0
     notableCount.value = payload.data?.notable_count ?? 0
+    loadFailed.value = false
   }
   catch (error) {
     if (sequence !== loadAppsSequence)
@@ -147,6 +149,7 @@ async function loadApps() {
     console.error('[Admin Dashboard Famous Apps] Error loading apps:', error)
     apps.value = []
     totalApps.value = 0
+    loadFailed.value = true
   }
   finally {
     if (sequence === loadAppsSequence)
@@ -388,7 +391,7 @@ displayStore.defaultBack = '/dashboard'
             @update:current-page="(page: number) => { currentPage = page; loadAppsImmediately() }"
           >
             <template #empty-state>
-              {{ t('famous-apps-empty') }}
+              {{ loadFailed ? t('error-loading-data') : t('famous-apps-empty') }}
             </template>
           </DataTable>
         </div>

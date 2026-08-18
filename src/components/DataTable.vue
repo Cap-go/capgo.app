@@ -724,6 +724,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
         <div class="min-w-0 w-full overflow-hidden sm:w-auto sm:max-w-[13rem] md:max-w-[14rem] lg:max-w-[16rem] xl:max-w-xs">
           <FormKit
             v-model="searchVal" :placeholder="searchPlaceholder" :prefix-icon="IconSearch"
+            :attrs="{ 'aria-label': searchPlaceholder || t('search') }"
             :disabled="isLoading" enterkeyhint="send" :classes="{
               outer: 'mb-0! w-full sm:w-52 md:w-56 lg:w-64 xl:w-80',
             }"
