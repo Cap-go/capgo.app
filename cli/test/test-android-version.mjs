@@ -55,6 +55,72 @@ finally {
   rmSync(literalProjectDir, { recursive: true, force: true })
 }
 
+const blockCommentBuildGradle = `android {
+  /*
+   * versionName "leave-this-block-comment-alone"
+   */
+  defaultConfig {
+    versionName "1.2.3"
+  }
+}
+`
+const blockCommentProjectDir = createFixture(blockCommentBuildGradle)
+
+try {
+  const result = syncAndroidVersion({ path: blockCommentProjectDir })
+  const updated = readFileSync(join(blockCommentProjectDir, 'android/app/build.gradle'), 'utf8')
+
+  assert.equal(result.replacements, 1)
+  assert.equal(updated, blockCommentBuildGradle.replace('versionName "1.2.3"', 'versionName "13.0.0"'))
+}
+finally {
+  rmSync(blockCommentProjectDir, { recursive: true, force: true })
+}
+
+const multipleLiteralsBuildGradle = `android {
+  defaultConfig {
+    versionName "1.2.3"
+  }
+  productFlavors {
+    production {
+      versionName '4.5.6'
+    }
+  }
+}
+`
+const multipleLiteralsProjectDir = createFixture(multipleLiteralsBuildGradle)
+
+try {
+  const result = syncAndroidVersion({ path: multipleLiteralsProjectDir })
+  const updated = readFileSync(join(multipleLiteralsProjectDir, 'android/app/build.gradle'), 'utf8')
+
+  assert.equal(result.replacements, 2)
+  assert.match(updated, /versionName "13\.0\.0"/)
+  assert.match(updated, /versionName '13\.0\.0'/)
+}
+finally {
+  rmSync(multipleLiteralsProjectDir, { recursive: true, force: true })
+}
+
+const escapedQuoteBuildGradle = String.raw`android {
+  defaultConfig {
+    versionName "1.2\"3"
+  }
+}
+`
+const escapedQuoteProjectDir = createFixture(escapedQuoteBuildGradle)
+
+try {
+  const result = syncAndroidVersion({ path: escapedQuoteProjectDir })
+  const updated = readFileSync(join(escapedQuoteProjectDir, 'android/app/build.gradle'), 'utf8')
+
+  assert.equal(result.replacements, 1)
+  assert.match(updated, /versionName "13\.0\.0"/)
+}
+finally {
+  rmSync(escapedQuoteProjectDir, { recursive: true, force: true })
+}
+
 const unicodeBuildGradle = `android {
   // Release train 🚀
   defaultConfig {
