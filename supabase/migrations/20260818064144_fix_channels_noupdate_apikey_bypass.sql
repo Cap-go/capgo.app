@@ -1,10 +1,9 @@
 -- GHSA-ph9c-vwjq-pqhj: API-key PostgREST traffic must not bypass
--- channels.noupdate(). The old auth.uid() IS NULL early return skipped the
--- guard for every capgkey request. Only skip when there is no JWT and no
--- capgkey (internal/maintenance). API keys may only change version/updated_at
--- via direct PostgREST; authenticated JWT users with app.update_settings may
--- change other fields. Official /channel routes use service_role after route
--- auth because they perform settings writes API-key PostgREST must not pass.
+-- channels.noupdate(). The old auth.uid() IS NULL early return skipped RBAC
+-- for every capgkey request. Only skip when there is no JWT and no capgkey
+-- (internal/maintenance). Otherwise honor app.update_settings and
+-- channel.update_settings via rbac_check_permission_request; callers without
+-- those permissions may only change version/updated_at.
 CREATE OR REPLACE FUNCTION public.noupdate()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -25,13 +24,21 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  IF auth.uid() IS NOT NULL
-    AND public.rbac_check_permission_request(
-      public.rbac_perm_app_update_settings(),
-      OLD.owner_org,
-      OLD.app_id,
-      NULL::bigint
-    ) THEN
+  IF public.rbac_check_permission_request(
+    public.rbac_perm_app_update_settings(),
+    OLD.owner_org,
+    OLD.app_id,
+    NULL::bigint
+  ) THEN
+    RETURN NEW;
+  END IF;
+
+  IF public.rbac_check_permission_request(
+    public.rbac_perm_channel_update_settings(),
+    OLD.owner_org,
+    OLD.app_id,
+    OLD.id
+  ) THEN
     RETURN NEW;
   END IF;
 
@@ -58,6 +65,6 @@ REVOKE ALL ON FUNCTION public.noupdate() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.noupdate() TO service_role;
 
 COMMENT ON FUNCTION public.noupdate() IS
-  'Restricts direct PostgREST channel updates: API keys may only change '
-  'version/updated_at; authenticated JWT users with app.update_settings may '
-  'change other fields. Skips only when auth.uid() and capgkey are both absent.';
+  'Restricts channel updates without RBAC: callers with app.update_settings '
+  'or channel.update_settings may change fields; others may only change '
+  'version/updated_at. Skips only when auth.uid() and capgkey are both absent.';

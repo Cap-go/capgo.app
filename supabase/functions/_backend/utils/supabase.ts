@@ -229,8 +229,9 @@ export async function updateOrCreateChannel(
     throw new Error('missing request auth')
   }
 
+  const supabase = supabaseWithAuth(c, auth)
   if (existingChannelId === null) {
-    return supabaseWithAuth(c, auth)
+    return supabase
       .from('channels')
       .insert(update)
       .select('id')
@@ -238,11 +239,11 @@ export async function updateOrCreateChannel(
       .throwOnError()
   }
 
-  // Settings updates hit channels.noupdate on capgkey PostgREST; route auth already
-  // ran in post.ts, so use service_role here (no capgkey) to bypass that trigger.
+  // Keep the original creator immutable. Omitted stable versions are read only
+  // for the response shape and must not overwrite a concurrent promotion.
   const { created_by: _createdBy, version, ...channelUpdate } = update
   const requestUpdate = preserveVersion ? channelUpdate : { ...channelUpdate, version }
-  return supabaseAdmin(c)
+  return supabase
     .from('channels')
     .update(requestUpdate)
     .eq('id', existingChannelId)

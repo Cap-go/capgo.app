@@ -278,7 +278,11 @@ SELECT throws_ok(
   'channel-admin cannot promote a private channel to public'
 );
 
--- 4) Channel-admin cannot mutate protected settings via direct PostgREST.
+-- 4) Preview key cannot mutate channel settings without channel.update_settings.
+SELECT tests.clear_authentication();
+SELECT set_config('request.jwt.claim.role', 'anon', true);
+SELECT set_config('request.headers', '{"capgkey":"public-channel-guard-preview-key"}', true);
+
 SELECT throws_ok(
   $$
     UPDATE public.channels
@@ -287,26 +291,24 @@ SELECT throws_ok(
   $$,
   'P0001',
   'not allowed allow_emulator',
-  'channel-admin cannot update non-public settings via API key PostgREST'
+  'app_preview key cannot update channel settings without channel.update_settings'
 );
 
--- 5) App admin API keys cannot flip private -> public via direct PostgREST.
+-- 5) Channel-admin can mutate channel settings when RBAC grants channel.update_settings.
 SELECT tests.clear_authentication();
 SELECT set_config('request.jwt.claim.role', 'anon', true);
-SELECT set_config('request.headers', '{"capgkey":"public-channel-guard-admin-key"}', true);
+SELECT set_config('request.headers', '{"capgkey":"public-channel-guard-channel-admin-key"}', true);
 
-SELECT throws_ok(
+SELECT lives_ok(
   $$
     UPDATE public.channels
-    SET public = true
+    SET allow_emulator = true
     WHERE id = 6700401
   $$,
-  'P0001',
-  'not allowed public',
-  'app admin API key cannot promote a private channel to public via PostgREST'
+  'channel-admin can update channel settings with channel.update_settings'
 );
 
--- 6) Channel-admin cannot edit an already-public channel via direct PostgREST.
+-- 6) Channel-admin can edit an already-public channel with channel.update_settings.
 SELECT tests.clear_authentication();
 SELECT tests.authenticate_as_service_role();
 SELECT set_config('request.headers', '{}', true);
@@ -317,16 +319,14 @@ SELECT tests.clear_authentication();
 SELECT set_config('request.jwt.claim.role', 'anon', true);
 SELECT set_config('request.headers', '{"capgkey":"public-channel-guard-channel-admin-key"}', true);
 
-SELECT throws_ok(
+SELECT lives_ok(
   $$
     UPDATE public.channels
     SET allow_device = true
     WHERE id = 6700401
   $$,
-  'P0001',
-  'not allowed allow_device',
-  'channel-admin cannot update settings on an already-public channel '
-  'via API key PostgREST'
+  'channel-admin can update settings on an already-public channel '
+  'with channel.update_settings'
 );
 
 SELECT tests.clear_authentication();

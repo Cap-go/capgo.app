@@ -1642,7 +1642,7 @@ describe('rbac permission system', () => {
         })
       })
 
-      it('allows channel-scoped admin API keys to look up and delete their bound channel but blocks direct settings writes', async () => {
+      it('allows channel-scoped admin API keys to look up, update, and delete their bound channel without app read', async () => {
         const testId = randomUUID()
         const channelKeyOwnerId = randomUUID()
         const orgId = randomUUID()
@@ -1671,8 +1671,8 @@ describe('rbac permission system', () => {
         `, [appUuid, appId, `RBAC Channel Key 2FA App ${testId}`, 'rbac-channel-key-2fa-icon', orgId])
 
         const channel = await query(`
-          INSERT INTO public.channels (name, app_id, created_by, owner_org, allow_emulator)
-          VALUES ($1, $2, $3::uuid, $4::uuid, false)
+          INSERT INTO public.channels (name, app_id, created_by, owner_org)
+          VALUES ($1, $2, $3::uuid, $4::uuid)
           RETURNING id, rbac_id
         `, [`allowed-${testId}`, appId, USER_ID, orgId])
 
@@ -1719,7 +1719,6 @@ describe('rbac permission system', () => {
         })
 
         await query(`SELECT set_config('request.headers', $1, true)`, [JSON.stringify({ capgkey: channelKey })])
-        await query(`SELECT set_config('request.jwt.claim.role', 'anon', true)`)
         await query('SET LOCAL ROLE anon')
 
         const guardedAccess = await query(`
@@ -1739,19 +1738,11 @@ describe('rbac permission system', () => {
         )
         expect(visibleChannel.rowCount).toBe(1)
 
-        await query('SAVEPOINT channel_settings_write_denied')
-        let settingsWriteError: unknown
-        try {
-          await query(
-            'UPDATE public.channels SET allow_emulator = true WHERE id = $1::bigint RETURNING id, allow_emulator',
-            [channel.rows[0].id],
-          )
-        }
-        catch (error) {
-          settingsWriteError = error
-        }
-        await query('ROLLBACK TO SAVEPOINT channel_settings_write_denied')
-        expect((settingsWriteError as { message?: string } | undefined)?.message).toMatch(/not allowed allow_emulator/)
+        const updatedChannel = await query(
+          'UPDATE public.channels SET allow_emulator = true WHERE id = $1::bigint RETURNING id, allow_emulator',
+          [channel.rows[0].id],
+        )
+        expect(updatedChannel.rows).toEqual([{ id: channel.rows[0].id, allow_emulator: true }])
 
         const deletedChannel = await query(
           'DELETE FROM public.channels WHERE id = $1::bigint RETURNING id',
