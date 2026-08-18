@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
-import { markSnag } from '../src/app/debug.ts'
+import { sendCliEvent } from '../src/app/debug.ts'
 
-console.log('🧪 Testing v2 event migration (markSnag → onboarding events)...\n')
+console.log('🧪 Testing v2 event migration (sendCliEvent → onboarding events)...\n')
 
 const originalFetch = globalThis.fetch
 
@@ -18,11 +18,11 @@ try {
     })
   }
 
-  // markSnag is the shared helper behind every onboarding-step-* / debug event.
-  await markSnag('onboarding-v2', 'org-123', 'capgo-key', 'onboarding-step-done', 'com.example.app')
+  // sendCliEvent is the shared helper behind every onboarding-step-* / debug event.
+  await sendCliEvent('onboarding-v2', 'org-123', 'capgo-key', 'onboarding-step-done', 'com.example.app')
 
   const eventRequest = requests.find(request => request.url.endsWith('/private/events'))
-  assert.ok(eventRequest, 'Expected markSnag telemetry request')
+  assert.ok(eventRequest, 'Expected sendCliEvent telemetry request')
   assert.equal(eventRequest.init.method, 'POST')
   assert.equal(eventRequest.init.headers.capgkey, 'capgo-key')
 
@@ -35,7 +35,7 @@ try {
   assert.equal(body.user_id, undefined, 'CLI must not send user_id (backend derives the actor from the key)')
   // Global analytics props now ride in nonPersonTags (event-only; the backend
   // never writes them as PostHog person properties / $set). Caller tags stay in
-  // tags — markSnag's direct (non-trackEvent) send path included.
+  // tags — sendCliEvent's direct (non-trackEvent) send path included.
   assert.equal(typeof body.nonPersonTags.os_release, 'string', 'OS release rides on the shared send path')
   assert.equal(typeof body.nonPersonTags.os_platform, 'string')
   assert.equal(typeof body.nonPersonTags.os_arch, 'string')

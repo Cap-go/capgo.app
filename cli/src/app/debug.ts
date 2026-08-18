@@ -69,7 +69,7 @@ function describeFetchFailure(error: unknown, endpoint: string) {
 }
 
 
-export async function markSnag(channel: string, orgId: string, apikey: string, event: string, appId?: string, icon = '✅', tags?: Record<string, string | number | boolean>) {
+export async function sendCliEvent(channel: string, orgId: string, apikey: string, event: string, appId?: string, icon = '✅', tags?: Record<string, string | number | boolean>) {
   await sendEvent(apikey, {
     channel,
     event,
@@ -85,7 +85,7 @@ export async function cancelCommand(channel: string, command: boolean | symbol, 
   if (!isCancel(command))
     return
 
-  await markSnag(channel, orgId, apikey, 'canceled', undefined, '🤷')
+  await sendCliEvent(channel, orgId, apikey, 'canceled', undefined, '🤷')
   log.warn('Command cancelled')
   throw new CliUserError('Command cancelled')
 }
@@ -145,13 +145,13 @@ export async function getStats(apikey: string, query: QueryStats, after: string 
 }
 
 type Level = 'info' | 'warn' | 'error'
-interface LogSpec { summary: (ctx: { data: LogData, baseAppUrl: string, baseUrl: string }) => string, level: Level, snag?: string, stop?: boolean }
+interface LogSpec { summary: (ctx: { data: LogData, baseAppUrl: string, baseUrl: string }) => string, level: Level, trackingEvent?: string, stop?: boolean }
 
 function summarizeAction(data: LogData): LogSpec | null {
   const map: Record<string, LogSpec> = {
-    get: { summary: () => 'Update request by device. Waiting for download…', level: 'info', snag: 'done' },
+    get: { summary: () => 'Update request by device. Waiting for download…', level: 'info', trackingEvent: 'done' },
     delete: { summary: () => 'Bundle deleted on device', level: 'info' },
-    set: { summary: () => 'Bundle set on device ❤️', level: 'info', snag: 'set', stop: true },
+    set: { summary: () => 'Bundle set on device ❤️', level: 'info', trackingEvent: 'set', stop: true },
     NoChannelOrOverride: { summary: () => 'No default channel/override; create it in channel settings', level: 'error' },
     needPlanUpgrade: { summary: ({ baseUrl }) => `Out of quota. Upgrade plan: ${baseUrl}/settings/organization/plans`, level: 'error' },
     missingBundle: { summary: () => 'Requested bundle not found on server', level: 'error' },
@@ -191,7 +191,7 @@ function summarizeAction(data: LogData): LogSpec | null {
   if (data.action.startsWith('download_')) {
     const part = data.action.split('_')[1]
     if (part === 'complete')
-      return { summary: () => 'Download complete; relaunch app to apply', level: 'info', snag: 'downloaded' }
+      return { summary: () => 'Download complete; relaunch app to apply', level: 'info', trackingEvent: 'downloaded' }
     if (part === 'fail')
       return { summary: () => 'Download failed on device', level: 'error' }
     return { summary: () => `Downloading ${part}%`, level: 'info' }
@@ -203,8 +203,8 @@ async function toTableRow(data: LogData, channel: string, orgId: string, apikey:
   const spec = summarizeAction(data)
   if (!spec)
     return {}
-  if (spec.snag)
-    await markSnag(channel, orgId, apikey, spec.snag)
+  if (spec.trackingEvent)
+    await sendCliEvent(channel, orgId, apikey, spec.trackingEvent)
   const time = formatTimeOnly(data.created_at)
   const key = data.action
   const versionId = data.version_id ? `(version #${data.version_id})` : ''
@@ -263,7 +263,7 @@ function listenForWaitLogContinue(signal: AbortSignal): Promise<void> {
 export async function waitLog(channel: string, apikey: string, appId: string, orgId: string, options: WaitLogOptions = {}): Promise<{ skipped: boolean }> {
   const config = await getLocalConfig()
   const baseAppUrl = `${config.hostWeb}/app/${appId}`
-  await markSnag(channel, orgId, apikey, 'Use waitlog', appId)
+  await sendCliEvent(channel, orgId, apikey, 'Use waitlog', appId)
   const query = buildWaitLogQuery(appId, options.deviceId, options.now, options.lookbackMs)
   let after: string | null = null
   // Track displayed log items to avoid duplicates across rounds

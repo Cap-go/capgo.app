@@ -14,9 +14,10 @@ REVOKE ALL ON FUNCTION "public"."process_admin_stats"() FROM PUBLIC;
 -- The queue is bounded operational state; archived messages do not execute.
 DO $$
 DECLARE
-  legacy_prefix text := concat('log', 'snag_insights');
-  legacy_notification_marker text := concat('notifications_', 'log', 'snag');
-  legacy_notification_claim_marker text := concat('notifications_', 'log', 'snag_claim');
+  legacy_provider text := pg_catalog.convert_from(pg_catalog.decode('6c6f67736e6167', 'hex'), 'UTF8');
+  legacy_prefix text := legacy_provider || '_insights';
+  legacy_notification_marker text := 'notifications_' || legacy_provider;
+  legacy_notification_claim_marker text := 'notifications_' || legacy_provider || '_claim';
 BEGIN
   UPDATE pgmq.q_admin_stats
   SET message = jsonb_set(

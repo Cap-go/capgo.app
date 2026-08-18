@@ -26,7 +26,7 @@ import { buildCliRequestHeaders } from './analytics/cli-headers'
 import { getGlobalAnalyticsProps } from './analytics/global-props'
 import { getActiveUploadReporter } from './bundle/reporter'
 import { createTimedFetch, isSupabaseInstrumentationEnabled } from './analytics/supabase-perf'
-import { markSnag } from './app/debug'
+import { sendCliEvent } from './app/debug'
 import { findMonorepoRoot, findNXMonorepoRoot, isMonorepo, isNXMonorepo } from './capacitor-cli'
 import { getChecksum } from './checksum'
 import { loadConfig, loadConfigForWrite, writeConfig } from './config'
@@ -2917,7 +2917,7 @@ export async function promptAndSyncCapacitor(
   if (isCancel(shouldSync)) {
     // For init flow, mark the cancellation
     if (isInit && orgId && apikey) {
-      await markSnag('onboarding-v2', orgId, apikey, 'canceled', undefined, '🤷')
+      await sendCliEvent('onboarding-v2', orgId, apikey, 'canceled', undefined, '🤷')
     }
     log.warn('Canceled Capacitor sync')
     throw new CliUserError('Capacitor sync cancelled')

@@ -75,7 +75,7 @@ export function createInitTelemetry(options: InitTelemetryOptions = {}) {
         await options.capture(event, eventProperties, icon, eventAppId ?? undefined)
       else if (auth) {
         const { apikey, orgId } = auth
-        await import('../app/debug').then(({ markSnag }) => markSnag('onboarding-v2', orgId, apikey, event, eventAppId ?? undefined, icon, eventProperties))
+        await import('../app/debug').then(({ sendCliEvent }) => sendCliEvent('onboarding-v2', orgId, apikey, event, eventAppId ?? undefined, icon, eventProperties))
       }
     }
     catch {

@@ -16,7 +16,7 @@ import { checkAppIdsExist, completePendingOnboardingApp, findAppInOrganization, 
 import { checkVersionStatus } from '../api/update'
 import { flushDeferredCommandInvocation } from '../analytics/track'
 import { addAppInternal } from '../app/add'
-import { markSnag, waitLog } from '../app/debug'
+import { sendCliEvent, waitLog } from '../app/debug'
 import { deleteAppInternal } from '../app/delete'
 import { resolveInitCommandInput } from '../auth/command-input'
 import { getInfoInternal } from '../app/info'
@@ -728,7 +728,7 @@ async function runInitDoctorDiagnostics(): Promise<void> {
 }
 
 async function exitCanceledInitOnboarding(orgId: string, apikey: string, message = 'You can resume the onboarding anytime by running the same command again'): Promise<never> {
-  await markInitSnag(orgId, apikey, 'canceled', undefined, '🤷')
+  await recordInitEvent(orgId, apikey, 'canceled', undefined, '🤷')
   pOutro(`Bye 👋\n💡 ${message}`)
   return await exitAfterFinishingReplay('cancelled', 1)
 }
@@ -1637,7 +1637,7 @@ function cleanupStepsDone() {
 
 async function cancelCommand(command: boolean | string | symbol, orgId: string, apikey: string) {
   if (pIsCancel(command)) {
-    await markInitSnag(orgId, apikey, 'canceled', undefined, '🤷')
+    await recordInitEvent(orgId, apikey, 'canceled', undefined, '🤷')
     pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
     return await exitAfterFinishingReplay('cancelled', 0)
   }
@@ -1672,7 +1672,7 @@ async function selectRecoveryOption<T extends string>(
     })
 
     if (pIsCancel(choice) || choice === '__cancel__') {
-      await markInitSnag(orgId, apikey, 'canceled', undefined, '🤷')
+      await recordInitEvent(orgId, apikey, 'canceled', undefined, '🤷')
       pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
       return await exitAfterFinishingReplay('cancelled', 1)
     }
@@ -1815,16 +1815,16 @@ async function warnIfNotInCapacitorRoot() {
   }
 }
 
-async function markInitSnag(orgId: string, apikey: string, event: string, appId?: string, icon = '✅') {
+async function recordInitEvent(orgId: string, apikey: string, event: string, appId?: string, icon = '✅') {
   activeInitTelemetry?.setAuth(orgId, apikey)
   if (activeInitTelemetry)
     return activeInitTelemetry.recordMilestone(event, undefined, icon, appId ?? null)
   const replaySessionId = getActiveCliReplaySessionId()
-  return markSnag('onboarding-v2', orgId, apikey, event, appId, icon, replaySessionId ? { $session_id: replaySessionId } : undefined)
+  return sendCliEvent('onboarding-v2', orgId, apikey, event, appId, icon, replaySessionId ? { $session_id: replaySessionId } : undefined)
 }
 
 async function markStep(orgId: string, apikey: string, step: string, appId: string) {
-  return markInitSnag(orgId, apikey, `onboarding-step-${step}`, appId)
+  return recordInitEvent(orgId, apikey, `onboarding-step-${step}`, appId)
 }
 /**
  * Save the app ID to the CapacitorUpdater plugin config.
@@ -2460,7 +2460,7 @@ async function askForReplacementAppId(
   await cancelCommand(choice, organization.gid, apikey)
 
   if (choice === 'cancel') {
-    await markInitSnag(organization.gid, apikey, 'canceled-appid-conflict', undefined, '🤷')
+    await recordInitEvent(organization.gid, apikey, 'canceled-appid-conflict', undefined, '🤷')
     pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
     return await exitAfterFinishingReplay('cancelled', 0)
   }
@@ -3367,7 +3367,7 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
       // log buffer, which `renderInitOnboardingFrame` wipes when step 6
       // renders — producing a visible "flash" of the success line.
       s.stop()
-      await markInitSnag(orgId, apikey, 'Use encryption v2', appId)
+      await recordInitEvent(orgId, apikey, 'Use encryption v2', appId)
 
       // Run `cap sync` now, inside step 5, so the public key we just wrote
       // to `capacitor.config.*` actually lands in the native projects
@@ -4658,7 +4658,7 @@ async function addCodeChangeStep(orgId: string, apikey: string, appId: string, p
     ],
   })
   if (pIsCancel(modificationType)) {
-    await markInitSnag(orgId, apikey, 'canceled', undefined, '🤷')
+    await recordInitEvent(orgId, apikey, 'canceled', undefined, '🤷')
     pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
     return await exitAfterFinishingReplay('cancelled', 0)
   }
@@ -4744,7 +4744,7 @@ async function addCodeChangeStep(orgId: string, apikey: string, appId: string, p
     ],
   })
   if (pIsCancel(versionChoice)) {
-    await markInitSnag(orgId, apikey, 'canceled', undefined, '🤷')
+    await recordInitEvent(orgId, apikey, 'canceled', undefined, '🤷')
     pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
     return await exitAfterFinishingReplay('cancelled', 0)
   }
@@ -4765,7 +4765,7 @@ async function addCodeChangeStep(orgId: string, apikey: string, appId: string, p
       },
     })
     if (pIsCancel(userVersion)) {
-      await markInitSnag(orgId, apikey, 'canceled', undefined, '🤷')
+      await recordInitEvent(orgId, apikey, 'canceled', undefined, '🤷')
       pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
       return await exitAfterFinishingReplay('cancelled', 0)
     }
