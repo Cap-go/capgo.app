@@ -234,10 +234,15 @@ function getDatesInRange(startDate: Date, endDate: Date) {
   return dates
 }
 
-export function getLastNUtcDaysRange(dayCount: number) {
+export function chartLabelCountForPeriodDays(dayCount: number) {
   const days = Number.isFinite(dayCount) ? Math.max(1, Math.floor(dayCount)) : 30
+  return days === 1 ? 2 : days
+}
+
+export function getLastNUtcDaysRange(dayCount: number) {
   const endDate = normalizeToUtcStartOfDay(new Date())
-  const startDate = addUtcDays(endDate, -(days - 1))
+  // 1 day = last 24h: yesterday + today so charts have two points.
+  const startDate = addUtcDays(endDate, -(chartLabelCountForPeriodDays(dayCount) - 1))
   return { startDate, endDate }
 }
 

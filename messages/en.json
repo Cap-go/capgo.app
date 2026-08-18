@@ -2990,6 +2990,8 @@
   "frontend-onboarding-largest-dropoff": "Largest drop-off",
   "frontend-onboarding-load-error": "Unable to load onboarding analytics. Please try again.",
   "frontend-onboarding-daily-attempts": "Daily onboarding attempts",
+  "frontend-onboarding-deduplicate-by-user": "De-duplicate by user",
+  "frontend-onboarding-deduplicate-by-user-chart": "De-duplicate by user: {chart}",
   "frontend-onboarding-daily-conversion": "Conversion",
   "frontend-onboarding-daily-conversion-attempts": "attempts",
   "frontend-onboarding-daily-details-to-organization": "Daily App details → Organization conversion (v3)",

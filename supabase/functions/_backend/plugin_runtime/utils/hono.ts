@@ -180,7 +180,6 @@ export const API_CONTENT_SECURITY_POLICY = [
   'style-src \'none\'',
   'img-src \'none\'',
   'connect-src \'none\'',
-  'upgrade-insecure-requests',
 ].join('; ')
 
 function isPreviewHost(hostname: string) {

@@ -11,6 +11,7 @@ import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
 import { checkPermission } from '../utils/rbac.ts'
+import { getRollingStatsPeriod } from '../utils/statsPeriod.ts'
 
 dayjs.extend(utc)
 
@@ -520,7 +521,6 @@ function aggregateNativeObserveSamples(samples: NativeObserveEventSample[]) {
   return finalizeNativeObserveAggregate(state)
 }
 
-
 function buildNativeObserveResponse(input: BuildNativeObserveResponseInput) {
   const labelIndex = new Map(input.labels.map((label, index) => [label, index]))
   const totalEvents = createSeries(input.labels.length)
@@ -676,13 +676,13 @@ async function foldNativeObserveTimingEventsCFChunked(
 ) {
   // Build UTC day windows newest-first so an event cap truncates older days, not recent ones.
   const windows: Array<{ start: string, end: string }> = []
-  let cursor = start.utc().startOf('day')
+  let cursor = start.utc()
   const end = endExclusive.utc()
   while (cursor.isBefore(end)) {
-    const next = cursor.add(1, 'day')
-    const chunkEnd = next.isBefore(end) ? next : end
+    const nextMidnight = cursor.add(1, 'day').startOf('day')
+    const chunkEnd = nextMidnight.isAfter(cursor) && nextMidnight.isBefore(end) ? nextMidnight : end
     windows.push({ start: cursor.toISOString(), end: chunkEnd.toISOString() })
-    cursor = next
+    cursor = chunkEnd
   }
   windows.reverse()
 
@@ -774,10 +774,11 @@ async function readNativeObserveStatsCF(
 }
 
 async function readNativeObserveStats(c: Context<MiddlewareKeyVariables>, appId: string, days: NativeObservePeriodDays) {
-  const endExclusive = dayjs().utc().add(1, 'day').startOf('day')
-  const start = endExclusive.subtract(days, 'day')
-  const endInclusive = endExclusive.subtract(1, 'millisecond')
-  const labels = generateDateLabels(start.toDate(), endExclusive.subtract(1, 'day').toDate())
+  const period = getRollingStatsPeriod(days)
+  const start = dayjs(period.start)
+  const endExclusive = dayjs(period.endExclusive)
+  const endInclusive = dayjs(period.endInclusive)
+  const labels = period.labels
 
   // Same dual-path pattern as private/stats and update_delivery_stats.
   if (c.env.APP_LOG) {

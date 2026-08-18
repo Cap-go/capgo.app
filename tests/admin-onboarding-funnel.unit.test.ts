@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  buildAdminOnboardingInstallSourceQuery,
   buildAdminOnboardingProductionDeviceQuery,
   buildAdminOnboardingUpdateDownloadQuery,
   getAdminOnboardingTelemetry,
@@ -35,10 +36,12 @@ describe('admin onboarding activation telemetry', () => {
     // Legacy fixed batches of 100 windows overflow Cloudflare's SQL body limit.
     expect(buildAdminOnboardingProductionDeviceQuery(windows).length).toBeGreaterThan(10_000)
     expect(buildAdminOnboardingUpdateDownloadQuery(windows).length).toBeGreaterThan(10_000)
+    expect(buildAdminOnboardingInstallSourceQuery(windows).length).toBeGreaterThan(10_000)
 
     const safeWindows = windows.slice(0, 40)
     expect(buildAdminOnboardingProductionDeviceQuery(safeWindows).length).toBeLessThanOrEqual(9_000)
     expect(buildAdminOnboardingUpdateDownloadQuery(safeWindows).length).toBeLessThanOrEqual(9_000)
+    expect(buildAdminOnboardingInstallSourceQuery(safeWindows).length).toBeLessThanOrEqual(9_000)
   })
 
   it.concurrent('builds bounded first-event queries for production devices and completed downloads', () => {
@@ -60,9 +63,16 @@ describe('admin onboarding activation telemetry', () => {
     expect(updateDownloadQuery).toContain('FROM app_log')
     expect(updateDownloadQuery).toContain("blob2 IN ('download_complete', 'download_manifest_complete', 'download_zip_complete')")
     expect(updateDownloadQuery).toContain('min(timestamp) AS first_at')
+
+    const installSourceQuery = buildAdminOnboardingInstallSourceQuery(windows)
+    expect(installSourceQuery).toContain('FROM device_info')
+    expect(installSourceQuery).toContain("blob9 IN ('app_store', 'testflight')")
+    expect(installSourceQuery).toContain('blob9 AS install_source')
+    expect(installSourceQuery).toContain("index1 = 'com.example.o''hara'")
+    expect(installSourceQuery).toContain('GROUP BY index1, blob9')
   })
 
-  it('preserves prior batch telemetry when a later Analytics Engine query fails', async () => {
+  it('marks telemetry unavailable when a later Analytics Engine query fails', async () => {
     const windows = Array.from({ length: 101 }, (_, index) => ({
       app_id: 'com.example.' + index,
       start_at: '2026-07-01T00:00:00.000Z',
@@ -102,10 +112,24 @@ describe('admin onboarding activation telemetry', () => {
         get: vi.fn((key: string) => key === 'requestId' ? 'test-request' : undefined),
       } as unknown as Context, windows, '2026-07-01T00:00:00.000Z', new Date('2026-07-13T12:00:00.000Z'))
 
-      expect(telemetry.available).toBe(true)
-      expect(telemetry.first_production_device_at_by_app.get('com.example.0')).toEqual(new Date('2026-07-02T00:00:00.000Z'))
-      expect(telemetry.first_update_download_at_by_app.get('com.example.0')).toEqual(new Date('2026-07-03T00:00:00.000Z'))
-      expect(fetchMock).toHaveBeenCalledTimes(4)
+      expect(telemetry.available).toBe(false)
+      expect(telemetry.first_production_device_at_by_app.size).toBe(0)
+      expect(telemetry.first_update_download_at_by_app.size).toBe(0)
+      expect(telemetry.first_store_live_at_by_app.size).toBe(0)
+      expect(telemetry.first_testflight_at_by_app.size).toBe(0)
+      expect(fetchMock).toHaveBeenCalledTimes(6)
+      expect(getAdminOnboardingActivationMetrics([{
+        org_id: 'org-0',
+        app_id: 'com.example.0',
+        created_at: '2026-07-01T00:00:00.000Z',
+        activation_window_end: '2026-07-08T00:00:00.000Z',
+      }], telemetry)).toEqual({
+        orgs_with_production_device: 0,
+        orgs_with_update_download: 0,
+        orgs_with_testflight: 0,
+        orgs_with_store_live: 0,
+        trend_by_date: new Map(),
+      })
     }
     finally {
       vi.unstubAllGlobals()
@@ -158,19 +182,91 @@ describe('admin onboarding activation telemetry', () => {
         ['app-beta', new Date('2026-07-08T00:00:00.000Z')],
         ['app-gamma-download', new Date('2026-07-05T00:00:00.000Z')],
       ]),
+      first_store_live_at_by_app: new Map(),
+      first_testflight_at_by_app: new Map(),
     })
 
     expect(metrics.orgs_with_production_device).toBe(2)
     expect(metrics.orgs_with_update_download).toBe(1)
+    expect(metrics.orgs_with_store_live).toBe(0)
+    expect(metrics.orgs_with_testflight).toBe(0)
     expect(metrics.trend_by_date.get('2026-07-01')).toEqual({
       orgs_with_production_device: 1,
       orgs_with_update_download: 1,
+      orgs_with_testflight: 0,
+      orgs_with_store_live: 0,
     })
     expect(metrics.trend_by_date.get('2026-07-02')).toBeUndefined()
     expect(metrics.trend_by_date.get('2026-07-03')).toEqual({
       orgs_with_production_device: 1,
       orgs_with_update_download: 0,
+      orgs_with_testflight: 0,
+      orgs_with_store_live: 0,
     })
+  })
+
+  it.concurrent('counts App Store and TestFlight from Analytics Engine install_source, not Postgres', () => {
+    const metrics = getAdminOnboardingActivationMetrics([
+      {
+        org_id: 'org-store',
+        app_id: 'app-store',
+        created_at: '2026-07-01T00:00:00.000Z',
+        activation_window_end: '2026-07-08T00:00:00.000Z',
+      },
+      {
+        org_id: 'org-both',
+        app_id: 'app-both-testflight',
+        created_at: '2026-07-01T00:00:00.000Z',
+        activation_window_end: '2026-07-08T00:00:00.000Z',
+      },
+      {
+        org_id: 'org-both',
+        app_id: 'app-both-store',
+        created_at: '2026-07-01T00:00:00.000Z',
+        activation_window_end: '2026-07-08T00:00:00.000Z',
+      },
+      {
+        org_id: 'org-testflight',
+        app_id: 'app-testflight',
+        created_at: '2026-07-02T00:00:00.000Z',
+        activation_window_end: '2026-07-09T00:00:00.000Z',
+      },
+      {
+        org_id: 'org-late',
+        app_id: 'app-late',
+        created_at: '2026-07-03T00:00:00.000Z',
+        activation_window_end: '2026-07-10T00:00:00.000Z',
+      },
+    ], {
+      available: true,
+      first_production_device_at_by_app: new Map(),
+      first_update_download_at_by_app: new Map(),
+      first_store_live_at_by_app: new Map([
+        ['app-store', new Date('2026-07-02T00:00:00.000Z')],
+        ['app-both-store', new Date('2026-07-04T00:00:00.000Z')],
+        ['app-late', new Date('2026-07-10T00:00:00.000Z')],
+      ]),
+      first_testflight_at_by_app: new Map([
+        ['app-both-testflight', new Date('2026-07-03T00:00:00.000Z')],
+        ['app-testflight', new Date('2026-07-05T00:00:00.000Z')],
+      ]),
+    })
+
+    expect(metrics.orgs_with_store_live).toBe(2)
+    expect(metrics.orgs_with_testflight).toBe(1)
+    expect(metrics.trend_by_date.get('2026-07-01')).toEqual({
+      orgs_with_production_device: 0,
+      orgs_with_update_download: 0,
+      orgs_with_testflight: 0,
+      orgs_with_store_live: 2,
+    })
+    expect(metrics.trend_by_date.get('2026-07-02')).toEqual({
+      orgs_with_production_device: 0,
+      orgs_with_update_download: 0,
+      orgs_with_testflight: 1,
+      orgs_with_store_live: 0,
+    })
+    expect(metrics.trend_by_date.get('2026-07-03')).toBeUndefined()
   })
 
   it.concurrent('does not report activation data when telemetry is unavailable', () => {
@@ -178,11 +274,15 @@ describe('admin onboarding activation telemetry', () => {
       available: false,
       first_production_device_at_by_app: new Map(),
       first_update_download_at_by_app: new Map(),
+      first_store_live_at_by_app: new Map(),
+      first_testflight_at_by_app: new Map(),
     })
 
     expect(metrics).toEqual({
       orgs_with_production_device: 0,
       orgs_with_update_download: 0,
+      orgs_with_testflight: 0,
+      orgs_with_store_live: 0,
       trend_by_date: new Map(),
     })
   })

@@ -12,6 +12,7 @@ import { cloudlog } from '../utils/logging.ts'
 import { appIdSchema, deviceIdSchema, hasInvalidQueryLimitInput, hasUnsafeQueryText, hasUnsafeStatsQueryText, MAX_QUERY_LIMIT, queryLimitSchema, safeQueryDateSchema, safeQueryTextSchema, statsActionSchema } from '../utils/privateAnalyticsValidation.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { readStats, readStatsInsights } from '../utils/stats.ts'
+import { getRollingStatsPeriod } from '../utils/statsPeriod.ts'
 
 interface DataStats {
   appId: string
@@ -185,25 +186,14 @@ function normalizeStatsInsightsPeriodDays(days: number | undefined = 7): Insight
   return days as InsightPeriodDays
 }
 
-function createUtcDate(year: number, month: number, day: number) {
-  return new Date(Date.UTC(year, month, day, 0, 0, 0, 0))
-}
-
 function getStatsInsightsPeriod(days: InsightPeriodDays, now = new Date()) {
-  const todayStart = createUtcDate(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-  const endExclusive = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000)
-  const start = new Date(endExclusive.getTime() - days * 24 * 60 * 60 * 1000)
-  const labels: string[] = []
-  for (let cursor = new Date(start); cursor.getTime() < endExclusive.getTime(); cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000)) {
-    labels.push(cursor.toISOString().slice(0, 10))
-  }
-
+  const period = getRollingStatsPeriod(days, now)
   return {
     requested_days: days,
-    start: start.toISOString(),
-    end: new Date(endExclusive.getTime() - 1).toISOString(),
-    end_exclusive: endExclusive.toISOString(),
-    labels,
+    start: period.start,
+    end: period.endInclusive,
+    end_exclusive: period.endExclusive,
+    labels: period.labels,
   }
 }
 

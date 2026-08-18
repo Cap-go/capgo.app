@@ -103,4 +103,17 @@ describe('bundle install stats helpers', () => {
     expect(response).toEqual(responseBeforeFiltering)
     expect(response.bundles).toHaveLength(2)
   })
+
+  it.concurrent('aggregates rolling version usage into install/fail rows', () => {
+    const rows = bundleInstallStatsTestUtils.aggregateSuccessRowsFromVersionUsage([
+      { date: '2026-08-15', app_id: 'com.demo.app', version_name: '1.0.0', get: 0, fail: 1, install: 4, uninstall: 0 },
+      { date: '2026-08-16', app_id: 'com.demo.app', version_name: '1.0.0', get: 0, fail: 1, install: 6, uninstall: 0 },
+      { date: '2026-08-16', app_id: 'com.demo.app', version_name: '2.0.0', get: 0, fail: 0, install: 3, uninstall: 0 },
+      { date: '2026-08-16', app_id: 'com.demo.app', version_name: 'skip-me', get: 0, fail: 9, install: 9, uninstall: 0 },
+    ], new Set(['1.0.0', '2.0.0']))
+    expect(rows).toEqual([
+      { version_name: '1.0.0', install: 10, fail: 2 },
+      { version_name: '2.0.0', install: 3, fail: 0 },
+    ])
+  })
 })

@@ -69,16 +69,17 @@ async function createRoleBindingFixture(): Promise<RoleBindingFixture> {
   if (victimAppError)
     throw victimAppError
 
+  const attackerVersionName = `role-binding-version-${id.slice(0, 8)}`
   const { data: attackerVersion, error: attackerVersionError } = await supabase
     .from('app_versions')
     .insert({
       app_id: attackerPublicAppId,
-      name: `role-binding-version-${id.slice(0, 8)}`,
+      name: attackerVersionName,
       owner_org: attackerOrgId,
       user_id: USER_ID,
       checksum: `checksum-${id}`,
       storage_provider: 'r2',
-      r2_path: `orgs/${attackerOrgId}/apps/${attackerPublicAppId}/${id}.zip`,
+      r2_path: `orgs/${attackerOrgId}/apps/${attackerPublicAppId}/${attackerVersionName}.zip`,
       deleted: false,
     })
     .select('id')
@@ -226,16 +227,17 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       })
       expect(appError).toBeNull()
 
+      const versionName = `role-binding-version-${id.slice(0, 8)}`
       const { data: version, error: versionError } = await supabase
         .from('app_versions')
         .insert({
           app_id: publicAppId,
-          name: `role-binding-version-${id.slice(0, 8)}`,
+          name: versionName,
           owner_org: orgId,
           user_id: USER_ID_2,
           checksum: `checksum-${id}`,
           storage_provider: 'r2',
-          r2_path: `orgs/${orgId}/apps/${publicAppId}/${id}.zip`,
+          r2_path: `orgs/${orgId}/apps/${publicAppId}/${versionName}.zip`,
           deleted: false,
         })
         .select('id')
@@ -356,16 +358,17 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       })
       expect(appError).toBeNull()
 
+      const versionName = `role-binding-version-${id.slice(0, 8)}`
       const { data: version, error: versionError } = await supabase
         .from('app_versions')
         .insert({
           app_id: publicAppId,
-          name: `role-binding-version-${id.slice(0, 8)}`,
+          name: versionName,
           owner_org: orgId,
           user_id: USER_ID_2,
           checksum: `checksum-${id}`,
           storage_provider: 'r2',
-          r2_path: `orgs/${orgId}/apps/${publicAppId}/${id}.zip`,
+          r2_path: `orgs/${orgId}/apps/${publicAppId}/${versionName}.zip`,
           deleted: false,
         })
         .select('id')
@@ -730,16 +733,17 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       })
       expect(appError).toBeNull()
 
+      const versionName = `role-binding-version-${id.slice(0, 8)}`
       const { data: version, error: versionError } = await supabase
         .from('app_versions')
         .insert({
           app_id: publicAppId,
-          name: `role-binding-version-${id.slice(0, 8)}`,
+          name: versionName,
           owner_org: orgId,
           user_id: USER_ID_2,
           checksum: `checksum-${id}`,
           storage_provider: 'r2',
-          r2_path: `orgs/${orgId}/apps/${publicAppId}/${id}.zip`,
+          r2_path: `orgs/${orgId}/apps/${publicAppId}/${versionName}.zip`,
           deleted: false,
         })
         .select('id')

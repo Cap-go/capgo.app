@@ -45,6 +45,7 @@ async function findCanonicalAuthUserIdByEmail(pgClient: ReturnType<typeof getPgC
         on pu.id = au.id
       where lower(au.email) = lower($1)
         and au.id <> $2
+        and au.email_confirmed_at is not null
       order by
         case when pu.id is not null then 0 else 1 end,
         case when exists (
@@ -558,7 +559,8 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
     //
     // Security note: never resolve the merge candidate from public.users.email. That profile
     // column is user-editable; only auth.users.email and the current verified SSO session are
-    // trusted identity sources for account linking.
+    // trusted identity sources for account linking. Unconfirmed auth.users rows are ignored
+    // so a pre-signup cannot become the merge target.
     let resolvedExistingUserId: string | null = null
     try {
       resolvedExistingUserId = await findCanonicalAuthUserIdByEmail(getSharedPgClient(), userEmail, userId, trustedSsoProviders)

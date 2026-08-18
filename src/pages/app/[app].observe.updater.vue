@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Database } from '~/types/supabase.types'
+import type { PeriodDayOption } from '~/utils/periodDays'
 import { computed, ref, useId, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -11,13 +12,12 @@ import IconExternalLink from '~icons/lucide/external-link'
 import IconLayers from '~icons/lucide/layers'
 import IconSmartphone from '~icons/lucide/smartphone'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
+import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { formatLocalDateShort, formatLocalDateTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { actionToFilter } from '~/services/statsActions'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
-
-type PeriodDayOption = 1 | 3 | 7 | 30
 
 interface LogInsightSummary {
   total: number
@@ -82,7 +82,7 @@ const id = ref('')
 const lastPath = ref('')
 const isLoading = ref(false)
 const insightsLoading = ref(false)
-const selectedDays = ref<PeriodDayOption>(7)
+const { days: selectedDays } = usePeriodDaysQuery()
 const selectedVersionName = ref('')
 const bundleNames = ref<string[]>([])
 const versionFilterId = useId()
@@ -292,10 +292,7 @@ async function refreshData() {
 }
 
 async function selectPeriod(option: PeriodDayOption) {
-  if (selectedDays.value === option)
-    return
   selectedDays.value = option
-  await fetchInsights()
 }
 
 async function applyVersionFilter(name: string) {
@@ -309,7 +306,6 @@ async function applyVersionFilter(name: string) {
   else
     delete query.version
   await router.replace({ query })
-  await fetchInsights()
 }
 
 function onVersionSelectChange(event: Event) {
@@ -343,13 +339,17 @@ watchEffect(async () => {
   }
 })
 
-watch(() => typeof route.query.version === 'string' ? route.query.version : '', async (version) => {
-  if (selectedVersionName.value === version)
+watch(() => [
+  selectedDays.value,
+  typeof route.query.version === 'string' ? route.query.version : '',
+] as const, async ([, version], previous) => {
+  if (!id.value || !previous)
     return
-  ensureBundleName(version)
-  selectedVersionName.value = version
-  if (id.value)
-    await fetchInsights()
+  if (selectedVersionName.value !== version) {
+    ensureBundleName(version)
+    selectedVersionName.value = version
+  }
+  await fetchInsights()
 })
 </script>
 
@@ -363,7 +363,11 @@ watch(() => typeof route.query.version === 'string' ? route.query.version : '', 
             <h3 class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
               {{ t('selected-period') }}
             </h3>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+            <p
+              class="mt-1 text-sm text-slate-600 dark:text-slate-300"
+              data-testid="observe-period-labels"
+              :data-count="insights?.period.labels.length ?? 0"
+            >
               {{ selectedPeriodLabel }} · {{ periodRangeLabel }}
             </p>
             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">

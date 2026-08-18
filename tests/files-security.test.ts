@@ -87,14 +87,14 @@ async function seedApp(appId: string, orgId: string, stripeCustomerId: string) {
   )
 }
 
-async function seedReadyBundle(appId: string, orgId: string, filename: string) {
-  const filePath = `orgs/${orgId}/apps/${appId}/${filename}`
-  const { uploadMetadata } = buildAttachmentPath(orgId, appId, filename)
+async function seedReadyBundle(appId: string, orgId: string, versionName: string) {
+  const filePath = `orgs/${orgId}/apps/${appId}/${versionName}.zip`
+  const { uploadMetadata } = buildAttachmentPath(orgId, appId, `${versionName}.zip`)
   const { error } = await getSupabaseClient()
     .from('app_versions')
     .insert({
       app_id: appId,
-      name: `ready-${randomUUID()}`,
+      name: versionName,
       checksum: randomUUID().replaceAll('-', ''),
       owner_org: orgId,
       user_id: USER_ID,
@@ -204,7 +204,7 @@ describe('ready bundle upload immutability regression', () => {
     const createdKey = await createSeededApiKey({ appId, scope: 'app', role: 'upload', name: `upload-ready-${appId}` })
     uploadKeyId = createdKey.id
     uploadKey = createdKey.key
-    readyBundle = await seedReadyBundle(appId, orgId, `ready-${scopeId}.zip`)
+    readyBundle = await seedReadyBundle(appId, orgId, `ready-${scopeId}`)
   }, 60_000)
 
   afterAll(async () => {

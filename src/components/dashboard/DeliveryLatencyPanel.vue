@@ -128,6 +128,7 @@ const chartOptions = computed<ChartOptions<'line'>>(() => ({
   scales: {
     x: {
       grid: { display: false },
+      offset: chartLabels.value.length <= 2,
       ticks: { maxRotation: 0, autoSkipPadding: 12 },
     },
     y: {

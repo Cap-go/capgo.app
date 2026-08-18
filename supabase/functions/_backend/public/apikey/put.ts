@@ -13,7 +13,7 @@ import { schema } from '../../utils/postgres_schema.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { supabaseAdmin, supabaseWithAuth, validateExpirationAgainstOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
 import { apiKeyBindingsAllowOrgCreate, assertApiKeyCanKeepOrgCreateGrant, parseApiKeyGlobalPermissions, replaceApiKeyGlobalPermissions, validateApiKeyGlobalPermissionsForBindings } from './global_permissions.ts'
-import { assertApiKeyManagerCanAssignBindings, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, sanitizeClientBindings, selectOwnedApiKeyByIdentifier } from './scope.ts'
+import { assertApiKeyManagerCanAssignBindings, assertApiKeyManagerCanRotateTarget, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, sanitizeClientBindings, selectOwnedApiKeyByIdentifier } from './scope.ts'
 import { getErrorCode, getErrorStatus } from '../../utils/errors.ts'
 
 const app = honoFactory.createApp()
@@ -353,6 +353,9 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
   // Validate expiration against org policies (only if expiration or scopes are changing)
   const currentBindingOrgIds = await getApiKeyBindingOrgIds(c, existingApikey.rbac_id)
   await ensureApiKeyCanManageTargetOrgIds(c, auth, authApikey, currentBindingOrgIds, 'cannot_update_apikey', { requestId })
+  if (regenerate) {
+    await assertApiKeyManagerCanRotateTarget(c, auth, existingApikey.rbac_id)
+  }
 
   if (expires_at !== undefined || hasBindingUpdates) {
     const orgsToValidate = hasBindingUpdates
