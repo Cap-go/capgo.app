@@ -76,6 +76,7 @@ export interface FrontendOnboardingSetupCliOutcomes {
 
 export interface FrontendOnboardingAnalytics {
   kpis: FrontendOnboardingPeriodKpis & { comparison: FrontendOnboardingComparison }
+  v4_kpis: FrontendOnboardingPeriodKpis & { comparison: FrontendOnboardingComparison }
   daily_attempts: FrontendOnboardingDailyAttempt[]
   deduplicated: {
     daily_attempts: FrontendOnboardingDailyAttempt[]
@@ -85,6 +86,11 @@ export interface FrontendOnboardingAnalytics {
     }
   }
   daily_conversions: {
+    intent_to_details: FrontendOnboardingDailyConversion[]
+    details_to_organization: FrontendOnboardingDailyConversion[]
+    organization_to_setup: FrontendOnboardingDailyConversion[]
+  }
+  v4_daily_conversions: {
     intent_to_details: FrontendOnboardingDailyConversion[]
     details_to_organization: FrontendOnboardingDailyConversion[]
     organization_to_setup: FrontendOnboardingDailyConversion[]
@@ -394,10 +400,16 @@ export function buildFrontendOnboardingAnalytics(
   const currentV4Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 4)
   const currentV2V3SetupCliOutcomeAttempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 2 || attempt.onboardingVersion === 3)
   const currentV2V4SetupCliOutcomeAttempts = currentAttempts.filter(attempt => attempt.onboardingVersion >= 2)
+  const currentV3ConversionAttempts = attempts.filter(attempt => attempt.onboardingVersion === 3
+    && attempt.intentMs >= currentStartMs - FRONTEND_ONBOARDING_FOLLOWUP_MS
+    && attempt.intentMs < currentEndMs)
   const currentV4ConversionAttempts = attempts.filter(attempt => attempt.onboardingVersion === 4
     && attempt.intentMs >= currentStartMs - FRONTEND_ONBOARDING_FOLLOWUP_MS
     && attempt.intentMs < currentEndMs)
+  const previousV3Attempts = previousAttempts.filter(attempt => attempt.onboardingVersion === 3)
   const previousV4Attempts = previousAttempts.filter(attempt => attempt.onboardingVersion === 4)
+  const currentV3 = summarizePeriod(currentV3Attempts)
+  const previousV3 = summarizePeriod(previousV3Attempts)
   const currentV4 = summarizePeriod(currentV4Attempts)
   const previousV4 = summarizePeriod(previousV4Attempts)
   const deduplicatedCurrentAttempts = selectDeduplicatedAttempts(currentAttempts)
@@ -406,6 +418,10 @@ export function buildFrontendOnboardingAnalytics(
 
   return {
     kpis: {
+      ...currentV3.kpis,
+      comparison: comparePeriods(currentV3.kpis, previousV3.kpis),
+    },
+    v4_kpis: {
       ...currentV4.kpis,
       comparison: comparePeriods(currentV4.kpis, previousV4.kpis),
     },
@@ -418,6 +434,11 @@ export function buildFrontendOnboardingAnalytics(
       },
     },
     daily_conversions: {
+      intent_to_details: buildDailyConversion(attempts, currentStartMs, currentEndMs, 'intent', 'details'),
+      details_to_organization: buildDailyConversion(currentV3ConversionAttempts, currentStartMs, currentEndMs, 'details', 'organization'),
+      organization_to_setup: buildDailyConversion(currentV3ConversionAttempts, currentStartMs, currentEndMs, 'organization', 'setup'),
+    },
+    v4_daily_conversions: {
       intent_to_details: buildDailyConversion(attempts, currentStartMs, currentEndMs, 'intent', 'details'),
       details_to_organization: buildDailyConversion(currentV4ConversionAttempts, currentStartMs, currentEndMs, 'details', 'organization'),
       organization_to_setup: buildDailyConversion(currentV4ConversionAttempts, currentStartMs, currentEndMs, 'organization', 'setup'),

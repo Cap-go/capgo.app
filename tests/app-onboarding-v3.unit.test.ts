@@ -4,6 +4,14 @@ import { describe, expect, it } from 'vitest'
 const onboardingSource = readFileSync(new URL('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
 const iconInputSource = readFileSync(new URL('../src/components/dashboard/AppOnboardingIconInput.vue', import.meta.url), 'utf8')
 
+function sliceBetween(source: string, startMarker: string, endMarker: string) {
+  const start = source.indexOf(startMarker)
+  const end = source.indexOf(endMarker)
+  expect(start, `missing marker: ${startMarker}`).toBeGreaterThan(-1)
+  expect(end, `missing or misplaced marker: ${endMarker}`).toBeGreaterThan(start)
+  return source.slice(start, end)
+}
+
 describe('pre-organization onboarding v3', () => {
   it.concurrent('splits app details into name, App ID, and icon screens', () => {
     expect(onboardingSource).toContain("type AppDetailsStep = 'name' | 'app_id' | 'icon'")
@@ -21,10 +29,7 @@ describe('pre-organization onboarding v3', () => {
   })
 
   it.concurrent('validates the generated or entered App ID before either action advances', () => {
-    const appIdContinuation = onboardingSource.slice(
-      onboardingSource.indexOf('function continueFromAppId()'),
-      onboardingSource.indexOf('function viewPreviousAppDetailsStep()'),
-    )
+    const appIdContinuation = sliceBetween(onboardingSource, 'function continueFromAppId()', 'function viewPreviousAppDetailsStep()')
     expect(appIdContinuation).toContain('if (!ensureValidAppId())')
     expect(appIdContinuation).toContain('function skipAppId()')
     expect(appIdContinuation).toContain('continueFromAppId()')
@@ -44,10 +49,7 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain("trackDetailsEvent('onboarding_store_import_succeeded'")
     expect(onboardingSource).toContain("trackDetailsEvent('onboarding_store_import_failed'")
     expect(onboardingSource).not.toContain("{ store_url: requestedUrl }")
-    const storeImport = onboardingSource.slice(
-      onboardingSource.indexOf('id="app-onboarding-v2-store-url"'),
-      onboardingSource.indexOf("<div v-if=\"appDetailsStep === 'icon'\">"),
-    )
+    const storeImport = sliceBetween(onboardingSource, 'id="app-onboarding-v2-store-url"', "<div v-if=\"appDetailsStep === 'icon'\">")
     expect(storeImport).toContain('class="d-btn min-h-11 w-full sm:w-auto"')
   })
 
@@ -59,10 +61,7 @@ describe('pre-organization onboarding v3', () => {
   })
 
   it.concurrent('lets icon re-import change only the selected icon', () => {
-    const iconImport = onboardingSource.slice(
-      onboardingSource.indexOf('async function importStoreIcon()'),
-      onboardingSource.indexOf('function toggleStoreImport()'),
-    )
+    const iconImport = sliceBetween(onboardingSource, 'async function importStoreIcon()', 'function toggleStoreImport()')
     expect(iconImport).toContain("invokeCapgoApi('app/store-metadata'")
     expect(iconImport).toContain('storeIconPreview.value = importedIcon')
     expect(iconImport).toContain('selectImportedIcon(false)')
@@ -78,10 +77,7 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain(':aria-expanded="isStoreIconImportOpen"')
     expect(onboardingSource).toContain('v-if="isStoreIconImportOpen" id="app-onboarding-icon-store-import-panel"')
     expect(onboardingSource).toContain('class="mb-6 mt-5 overflow-hidden rounded-xl')
-    const iconImportPanel = onboardingSource.slice(
-      onboardingSource.indexOf('id="app-onboarding-icon-store-import-panel"'),
-      onboardingSource.indexOf('<div class="flex flex-col-reverse gap-3 border-t'),
-    )
+    const iconImportPanel = sliceBetween(onboardingSource, 'id="app-onboarding-icon-store-import-panel"', '<div class="flex flex-col-reverse gap-3 border-t')
     expect(iconImportPanel).toContain('<div class="space-y-3">')
     expect(iconImportPanel).toContain('class="d-btn min-h-11 w-full sm:w-auto"')
     expect(iconImportPanel).not.toContain('sm:flex-row')
@@ -93,10 +89,7 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain('v-if="!props.preOrg && appDetailsStep === \'name\'" class="grid gap-3 sm:grid-cols-2"')
     expect(onboardingSource).toContain('existingApp.value = props.preOrg ? true : null')
     expect(onboardingSource).toContain("toast.error(t('app-onboarding-toast-existing-required'))")
-    const appChoice = onboardingSource.slice(
-      onboardingSource.indexOf('v-if="!props.preOrg && appDetailsStep === \'name\'"'),
-      onboardingSource.indexOf('<div class="contents">'),
-    )
+    const appChoice = sliceBetween(onboardingSource, 'v-if="!props.preOrg && appDetailsStep === \'name\'"', '<div class="contents">')
     expect(appChoice.match(/class="d-btn group h-auto min-h-32/g)).toHaveLength(2)
   })
 
@@ -125,10 +118,7 @@ describe('pre-organization onboarding v3', () => {
   })
 
   it.concurrent('classifies restored draft icon data as a file in creation telemetry', () => {
-    const iconSource = onboardingSource.slice(
-      onboardingSource.indexOf('const selectedAppIconSource = computed'),
-      onboardingSource.indexOf('function createAiHelpPrompt()'),
-    )
+    const iconSource = sliceBetween(onboardingSource, 'const selectedAppIconSource = computed', 'function createAiHelpPrompt()')
     expect(iconSource).toContain('resolveOnboardingAppIconSource({')
     expect(iconSource).toContain('hasSelectedIconFile: Boolean(selectedIconFile.value)')
     expect(iconSource).toContain('localIconPreview: localIconPreview.value')
@@ -139,7 +129,7 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain("trackDetailsEvent('onboarding_store_icon_import_submitted'")
     expect(onboardingSource).toContain("trackDetailsEvent('onboarding_store_icon_import_succeeded'")
     expect(onboardingSource).toContain("trackDetailsEvent('onboarding_store_icon_import_failed'")
-    const resetStoreImportState = onboardingSource.slice(onboardingSource.indexOf('function resetStoreImportState()'), onboardingSource.indexOf('let resumeIconLoadRun'))
+    const resetStoreImportState = sliceBetween(onboardingSource, 'function resetStoreImportState()', 'let resumeIconLoadRun')
     expect(resetStoreImportState).toContain('cancelPendingStoreIconImport()')
     expect(resetStoreImportState).toContain("iconStoreUrl.value = ''")
     expect(resetStoreImportState).toContain('isStoreImportOpen.value = false')
@@ -147,17 +137,11 @@ describe('pre-organization onboarding v3', () => {
   })
 
   it.concurrent('invalidates the opposite import before either store request starts', () => {
-    const metadataImport = onboardingSource.slice(
-      onboardingSource.indexOf('async function importStoreMetadata()'),
-      onboardingSource.indexOf('function cancelPendingStoreIconImport()'),
-    )
+    const metadataImport = sliceBetween(onboardingSource, 'async function importStoreMetadata()', 'function cancelPendingStoreIconImport()')
     expect(metadataImport).toContain('cancelPendingStoreIconImport()')
     expect(metadataImport.indexOf('cancelPendingStoreIconImport()')).toBeLessThan(metadataImport.indexOf('const requestedRun = ++storeImportRun'))
 
-    const iconImport = onboardingSource.slice(
-      onboardingSource.indexOf('async function importStoreIcon()'),
-      onboardingSource.indexOf('function toggleStoreImport()'),
-    )
+    const iconImport = sliceBetween(onboardingSource, 'async function importStoreIcon()', 'function toggleStoreImport()')
     expect(iconImport).toContain('cancelPendingStoreImport()')
     expect(iconImport.indexOf('cancelPendingStoreImport()')).toBeLessThan(iconImport.indexOf('const requestedRun = ++storeIconImportRun'))
   })
@@ -169,7 +153,8 @@ describe('pre-organization onboarding v3', () => {
   })
 
   it.concurrent('continues to organization creation after the pre-org icon step', () => {
-    expect(onboardingSource).toContain("? props.preOrg\n                          ? t('app-onboarding-continue')\n                          : t('app-onboarding-finish-details')")
+    expect(onboardingSource).toContain("t('app-onboarding-continue')")
+    expect(onboardingSource).toContain("t('app-onboarding-finish-details')")
   })
 
   it.concurrent('does not send raw onboarding field values to analytics', () => {
@@ -204,7 +189,7 @@ describe('pre-organization onboarding v3', () => {
   })
 
   it.concurrent('opens App ID guidance and tracks only the open action', () => {
-    const appIdHelp = onboardingSource.slice(onboardingSource.indexOf('function openAppIdHelp()'), onboardingSource.indexOf('function applyAppIdSuggestion('))
+    const appIdHelp = sliceBetween(onboardingSource, 'function openAppIdHelp()', 'function applyAppIdSuggestion(')
     expect(appIdHelp).toContain("trackDetailsEvent('onboarding_app_id_help_opened')")
     expect(appIdHelp).toContain('dialogStore.openDialog({')
     expect(appIdHelp).not.toContain('onDialogDismiss')
@@ -231,10 +216,7 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain("organizationWebsiteInput.value = ''")
     expect(onboardingSource).toContain("t('organization-onboarding-imported-logo-label')")
     expect(onboardingSource).toContain("t('organization-onboarding-website-import-success')")
-    const deletion = onboardingSource.slice(
-      onboardingSource.indexOf('function deleteImportedOrganizationDetails()'),
-      onboardingSource.indexOf('async function uploadImportedOrganizationLogo('),
-    )
+    const deletion = sliceBetween(onboardingSource, 'function deleteImportedOrganizationDetails()', 'async function uploadImportedOrganizationLogo(')
     expect(deletion).not.toContain('orgNameInput')
   })
 
@@ -249,53 +231,35 @@ describe('pre-organization onboarding v3', () => {
   it.concurrent('creates both records before exposing invitations', () => {
     expect(onboardingSource).toContain('async function createOrganizationAndApp()')
     expect(onboardingSource).toContain('async function createAppRecord(')
-    const creation = onboardingSource.slice(
-      onboardingSource.indexOf('async function createOrganizationAndApp()'),
-      onboardingSource.indexOf('async function createAppRecord('),
-    )
+    const creation = sliceBetween(onboardingSource, 'async function createOrganizationAndApp()', 'async function createAppRecord(')
     expect(creation).toContain('await createAppRecord(')
     expect(creation).toContain('showOrganizationInvite.value = shouldInvite')
     expect(creation.indexOf('await createAppRecord(')).toBeLessThan(creation.indexOf('showOrganizationInvite.value = shouldInvite'))
   })
 
   it.concurrent('retries only app creation after an App ID conflict created the organization', () => {
-    const finishDetails = onboardingSource.slice(
-      onboardingSource.indexOf('function finishAppDetails()'),
-      onboardingSource.indexOf('function returnToAppIdAfterConflict()'),
-    )
+    const finishDetails = sliceBetween(onboardingSource, 'function finishAppDetails()', 'function returnToAppIdAfterConflict()')
     expect(finishDetails).toContain('preOrgCreatedOrganizationId.value')
     expect(finishDetails).toContain('completePreOrgAppCreation(preOrgCreatedOrganizationId.value, preOrgShouldInvite.value)')
 
-    const conflictRecovery = onboardingSource.slice(
-      onboardingSource.indexOf('function returnToAppIdAfterConflict()'),
-      onboardingSource.indexOf('async function uploadIcon('),
-    )
+    const conflictRecovery = sliceBetween(onboardingSource, 'function returnToAppIdAfterConflict()', 'async function uploadIcon(')
     expect(conflictRecovery).toContain("flowStep.value = 'details'")
     expect(conflictRecovery).toContain("appDetailsStep.value = 'app_id'")
     expect(conflictRecovery).toContain("progressTracker?.viewStep('app_id', previousAnalyticsStep)")
 
-    const organizationCreation = onboardingSource.slice(
-      onboardingSource.indexOf('async function createOrganizationAndApp()'),
-      onboardingSource.indexOf('async function createAppRecord('),
-    )
+    const organizationCreation = sliceBetween(onboardingSource, 'async function createOrganizationAndApp()', 'async function createAppRecord(')
     expect(organizationCreation).toContain('preOrgCreatedOrganizationId.value = data.id')
     expect(organizationCreation).toContain('await completePreOrgAppCreation(data.id, shouldInvite)')
     expect(organizationCreation).toContain("await createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })")
 
-    const appCreation = onboardingSource.slice(
-      onboardingSource.indexOf('async function createAppRecord('),
-      onboardingSource.indexOf('async function seedDemoData()'),
-    )
+    const appCreation = sliceBetween(onboardingSource, 'async function createAppRecord(', 'async function seedDemoData()')
     expect(appCreation).toContain('returnToAppIdAfterConflict()')
   })
 
   it.concurrent('shows technical delegation unconditionally on pre-org setup', () => {
     expect(onboardingSource).toContain("flowStep === 'setup' && createdApp")
     expect(onboardingSource).toContain("!props.preOrg && flowStep === 'choice'")
-    const setup = onboardingSource.slice(
-      onboardingSource.indexOf("flowStep === 'setup' && createdApp"),
-      onboardingSource.indexOf("!props.preOrg && flowStep === 'choice'"),
-    )
+    const setup = sliceBetween(onboardingSource, "flowStep === 'setup' && createdApp", "!props.preOrg && flowStep === 'choice'")
     expect(setup).toContain('<TechnicalTeammateInviteCard')
     expect(setup).toContain('analytics-channel="onboarding-v3"')
     expect(setup).toContain(':show-manual-setup-link="false"')

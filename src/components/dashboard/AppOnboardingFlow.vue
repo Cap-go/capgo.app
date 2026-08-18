@@ -614,8 +614,9 @@ function showWelcomeOnDesktop() {
 
 function continueFromWelcome() {
   const nextStep = flowStep.value
-  progressTracker?.completeStep('welcome', { nextStep })
-  progressTracker?.viewStep(nextStep, 'welcome')
+  const nextAnalyticsStep = analyticsStepFor(nextStep)
+  progressTracker?.completeStep('welcome', { nextStep: nextAnalyticsStep })
+  progressTracker?.viewStep(nextAnalyticsStep, 'welcome')
   welcomePending.value = false
 }
 

@@ -13,6 +13,7 @@ describe('app onboarding welcome', () => {
     expect(source).toContain('data-test="onboarding-welcome-continue"')
     expect(source).toContain('data-test="onboarding-welcome-brand"')
     expect(source).toContain('src="/favicon.svg"')
+    expect(source).toContain('class="d-btn d-btn-primary')
     expect(source).toContain('onboarding-welcome-glow-shell')
     expect(source).toContain('onboarding-glow-drift')
     expect(source).not.toContain('conic-gradient')
@@ -64,9 +65,10 @@ describe('app onboarding welcome', () => {
     expect(analyticsSource).toContain(`export type OnboardingAnalyticsStep = 'welcome' | 'intent'`)
     expect(initializeTracking).toContain(`trackedSteps.unshift('welcome')`)
     expect(initializeTracking).toContain(`progressTracker.viewStep(initialStep)`)
-    expect(continueFromWelcome).toContain(`completeStep('welcome', { nextStep })`)
-    expect(continueFromWelcome).toContain(`viewStep(nextStep, 'welcome')`)
-    expect(continueFromWelcome.indexOf(`completeStep('welcome', { nextStep })`)).toBeLessThan(continueFromWelcome.indexOf(`viewStep(nextStep, 'welcome')`))
+    expect(continueFromWelcome).toContain('const nextAnalyticsStep = analyticsStepFor(nextStep)')
+    expect(continueFromWelcome).toContain(`completeStep('welcome', { nextStep: nextAnalyticsStep })`)
+    expect(continueFromWelcome).toContain(`viewStep(nextAnalyticsStep, 'welcome')`)
+    expect(continueFromWelcome.indexOf(`completeStep('welcome', { nextStep: nextAnalyticsStep })`)).toBeLessThan(continueFromWelcome.indexOf(`viewStep(nextAnalyticsStep, 'welcome')`))
   })
 
   it.concurrent('uses the focused naked onboarding layout with persistent account controls', async () => {

@@ -42,12 +42,12 @@ const { t } = useI18n()
         <div class="onboarding-welcome-glow-shell">
           <button
             type="button"
-            class="onboarding-welcome-primary"
+            class="d-btn d-btn-primary onboarding-welcome-primary group relative z-[1] min-h-[3.375rem] gap-3 overflow-hidden rounded-[0.875rem] border-blue-700/90 bg-gradient-to-br from-blue-500 via-blue-600 to-blue-700 px-[1.5625rem] text-[0.9375rem] font-[750] text-white shadow-[0_0.5rem_1.25rem_rgba(37,99,235,0.16),inset_0_1px_0_rgba(255,255,255,0.28)] transition duration-150 ease-out hover:-translate-y-px hover:brightness-105 focus-visible:outline-3 focus-visible:outline-offset-4 focus-visible:outline-blue-500/35"
             data-test="onboarding-welcome-continue"
             @click="emit('continue')"
           >
             <span>{{ t('onboarding-welcome-cta') }}</span>
-            <IconArrowRight class="onboarding-welcome-arrow h-5 w-5" aria-hidden="true" />
+            <IconArrowRight class="h-5 w-5 transition-transform duration-150 group-hover:translate-x-[3px] motion-reduce:transition-none" aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -157,28 +157,7 @@ const { t } = useI18n()
 }
 
 .onboarding-welcome-primary {
-  position: relative;
-  z-index: 1;
-  display: inline-flex;
-  min-height: 3.375rem;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  overflow: hidden;
-  border: 1px solid rgb(29 78 216 / 88%);
-  border-radius: 0.875rem;
-  padding: 0 1.5625rem;
-  background: linear-gradient(135deg, #3b82f6, #2563eb 64%, #1d4ed8);
-  box-shadow:
-    0 0.5rem 1.25rem rgb(37 99 235 / 16%),
-    inset 0 1px 0 rgb(255 255 255 / 28%);
-  color: white;
-  cursor: pointer;
-  font-size: 0.9375rem;
-  font-weight: 750;
-  transition:
-    filter 160ms ease,
-    transform 160ms ease;
+  isolation: isolate;
 }
 
 .onboarding-welcome-primary::before {
@@ -196,24 +175,6 @@ const { t } = useI18n()
 .onboarding-welcome-primary > * {
   position: relative;
   z-index: 1;
-}
-
-.onboarding-welcome-primary:hover {
-  filter: brightness(1.04);
-  transform: translateY(-1px);
-}
-
-.onboarding-welcome-primary:focus-visible {
-  outline: 3px solid rgb(59 130 246 / 35%);
-  outline-offset: 5px;
-}
-
-.onboarding-welcome-arrow {
-  transition: transform 160ms ease;
-}
-
-.onboarding-welcome-primary:hover .onboarding-welcome-arrow {
-  transform: translateX(3px);
 }
 
 :global(.dark) .onboarding-welcome {
@@ -291,11 +252,6 @@ const { t } = useI18n()
   .onboarding-welcome-glow-shell::after,
   .onboarding-welcome-primary::before {
     animation: none;
-  }
-
-  .onboarding-welcome-primary,
-  .onboarding-welcome-arrow {
-    transition: none;
   }
 }
 </style>

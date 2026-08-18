@@ -175,7 +175,8 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     const result = await getAdminFrontendOnboardingAnalytics(createContext(), start, '2026-08-03T00:00:00.000Z')
 
     expect(result).toMatchObject({
-      kpis: { attempts: 1, completed: 1, completion_rate: 100, median_completion_ms: 2_666 },
+      kpis: { attempts: 0, completed: 0, completion_rate: 0, median_completion_ms: null },
+      v4_kpis: { attempts: 1, completed: 1, completion_rate: 100, median_completion_ms: 2_666 },
       daily_attempts: [
         { date: '2026-08-01', v1_attempts: 1, v2_attempts: 1, v3_attempts: 0, v4_attempts: 1 },
         { date: '2026-08-02', v1_attempts: 0, v2_attempts: 0, v3_attempts: 0, v4_attempts: 0 },
@@ -203,6 +204,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       posthog_configured: true,
       posthog_connected: true,
     })
+    expect(result.v4_daily_conversions.details_to_organization[0]).toMatchObject({ started: 1, converted: 1 })
     expect(result.daily_setup_cli_outcomes).toEqual([
       {
         date: '2026-08-01',
@@ -344,7 +346,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     )
 
     expect(result).toMatchObject({
-      kpis: { attempts: 2, completed: 0, completion_rate: 0 },
+      v4_kpis: { attempts: 2, completed: 0, completion_rate: 0 },
       funnels: { v4: [
         { key: 'intent', reached: 2 },
         { key: 'details', reached: 0 },

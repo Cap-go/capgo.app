@@ -52,15 +52,24 @@ export interface FrontendOnboardingDailyConversionPoint {
   conversion_percent: number | null
 }
 
+export interface FrontendOnboardingKpis {
+  attempts: number
+  completed: number
+  completion_rate: number
+  median_completion_ms: number | null
+  largest_dropoff: FrontendOnboardingLargestDropoff | null
+  comparison: FrontendOnboardingComparison
+}
+
+export interface FrontendOnboardingDailyConversions {
+  intent_to_details: FrontendOnboardingDailyConversionPoint[]
+  details_to_organization: FrontendOnboardingDailyConversionPoint[]
+  organization_to_setup: FrontendOnboardingDailyConversionPoint[]
+}
+
 export interface FrontendOnboardingAnalytics {
-  kpis: {
-    attempts: number
-    completed: number
-    completion_rate: number
-    median_completion_ms: number | null
-    largest_dropoff: FrontendOnboardingLargestDropoff | null
-    comparison: FrontendOnboardingComparison
-  }
+  kpis: FrontendOnboardingKpis
+  v4_kpis?: FrontendOnboardingKpis
   daily_attempts: Array<{
     date: string
     v1_attempts: number
@@ -81,11 +90,8 @@ export interface FrontendOnboardingAnalytics {
       v4?: FrontendOnboardingFunnelStage[]
     }
   }
-  daily_conversions: {
-    intent_to_details: FrontendOnboardingDailyConversionPoint[]
-    details_to_organization: FrontendOnboardingDailyConversionPoint[]
-    organization_to_setup: FrontendOnboardingDailyConversionPoint[]
-  }
+  daily_conversions: FrontendOnboardingDailyConversions
+  v4_daily_conversions?: FrontendOnboardingDailyConversions
   funnels: {
     v1: FrontendOnboardingFunnelStage[]
     v2: FrontendOnboardingFunnelStage[]

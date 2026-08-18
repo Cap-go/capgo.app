@@ -27,6 +27,30 @@ function attempt(overrides: Partial<FrontendOnboardingAttempt> & Pick<FrontendOn
 }
 
 describe('buildFrontendOnboardingAnalytics', () => {
+  it.concurrent('preserves legacy v3 fields and exposes v4 analytics additively', () => {
+    const analytics = buildFrontendOnboardingAnalytics([
+      attempt({
+        attemptId: 'v3-details-only',
+        onboardingVersion: 3,
+        intentMs: CURRENT_START_MS,
+        detailsMs: CURRENT_START_MS + MINUTE_MS,
+      }),
+      attempt({
+        attemptId: 'v4-complete',
+        onboardingVersion: 4,
+        intentMs: CURRENT_START_MS + 2 * MINUTE_MS,
+        detailsMs: CURRENT_START_MS + 3 * MINUTE_MS,
+        organizationMs: CURRENT_START_MS + 4 * MINUTE_MS,
+        setupMs: CURRENT_START_MS + 5 * MINUTE_MS,
+      }),
+    ], CURRENT_START_MS, CURRENT_END_MS)
+
+    expect(analytics.kpis).toMatchObject({ attempts: 1, completed: 0, completion_rate: 0 })
+    expect(analytics.v4_kpis).toMatchObject({ attempts: 1, completed: 1, completion_rate: 100 })
+    expect(analytics.daily_conversions.details_to_organization[0]).toMatchObject({ started: 1, converted: 0 })
+    expect(analytics.v4_daily_conversions.details_to_organization[0]).toMatchObject({ started: 1, converted: 1 })
+  })
+
   it.concurrent('surfaces v4 as the current analytics cohort', () => {
     const analytics = buildFrontendOnboardingAnalytics([
       attempt({
@@ -41,7 +65,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
     ], CURRENT_START_MS, CURRENT_END_MS)
 
     expect(FRONTEND_ONBOARDING_VERSIONS).toEqual([1, 2, 3, 4])
-    expect(analytics.kpis).toMatchObject({ attempts: 1, completed: 1, completion_rate: 100 })
+    expect(analytics.v4_kpis).toMatchObject({ attempts: 1, completed: 1, completion_rate: 100 })
     expect(analytics.daily_attempts[0]).toMatchObject({ v4_attempts: 1 })
     expect(analytics.deduplicated.funnels.v3.map(stage => stage.reached)).toEqual([0, 0, 0, 0])
     expect(analytics.funnels.v4.map(stage => stage.reached)).toEqual([1, 1, 1, 1])
@@ -75,7 +99,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
       }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.kpis).toMatchObject({
+    expect(analytics.v4_kpis).toMatchObject({
       attempts: 4,
       completed: 2,
       completion_rate: 50,
@@ -177,7 +201,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
     ], CURRENT_START_MS, CURRENT_END_MS)
 
     expect(analytics.funnels.v4.map(stage => stage.reached)).toEqual([1, 0, 0, 0])
-    expect(analytics.kpis.median_completion_ms).toBeNull()
+    expect(analytics.v4_kpis.median_completion_ms).toBeNull()
   })
 
   it.concurrent('uses the immediately preceding cohort for comparisons', () => {
@@ -206,7 +230,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
       }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.kpis.comparison).toEqual({
+    expect(analytics.v4_kpis.comparison).toEqual({
       attempts_percent: 0,
       completion_rate_points: 50,
       median_completion_ms: -300_000,
@@ -219,7 +243,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
       attempt({ attemptId: 'current-intent', intentMs: CURRENT_START_MS }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.kpis.comparison).toEqual({
+    expect(analytics.v4_kpis.comparison).toEqual({
       attempts_percent: null,
       completion_rate_points: null,
       median_completion_ms: null,
@@ -230,7 +254,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
   it.concurrent('returns zero KPIs, zero-filled days, and an empty funnel for an empty cohort', () => {
     const analytics = buildFrontendOnboardingAnalytics([], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.kpis).toMatchObject({
+    expect(analytics.v4_kpis).toMatchObject({
       attempts: 0,
       completed: 0,
       completion_rate: 0,
@@ -264,8 +288,8 @@ describe('buildFrontendOnboardingAnalytics', () => {
       }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.kpis.largest_dropoff).toBeNull()
-    expect(analytics.kpis.comparison.largest_dropoff_points).toBe(-100)
+    expect(analytics.v4_kpis.largest_dropoff).toBeNull()
+    expect(analytics.v4_kpis.comparison.largest_dropoff_points).toBe(-100)
   })
 
   it.concurrent('includes the start boundary and 24-hour step boundary but excludes the end boundary', () => {
@@ -278,9 +302,9 @@ describe('buildFrontendOnboardingAnalytics', () => {
       attempt({ attemptId: 'end-exclusive', intentMs: CURRENT_END_MS }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.kpis.attempts).toBe(1)
-    expect(analytics.kpis.completed).toBe(1)
-    expect(analytics.kpis.median_completion_ms).toBe(FRONTEND_ONBOARDING_FOLLOWUP_MS)
+    expect(analytics.v4_kpis.attempts).toBe(1)
+    expect(analytics.v4_kpis.completed).toBe(1)
+    expect(analytics.v4_kpis.median_completion_ms).toBe(FRONTEND_ONBOARDING_FOLLOWUP_MS)
   })
 
   it.concurrent('fills every UTC date crossed by a partial-day range', () => {
@@ -325,7 +349,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
       attempt({ attemptId: 'intent-only', intentMs: CURRENT_START_MS + 5 * MINUTE_MS }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.daily_conversions).toEqual({
+    expect(analytics.v4_daily_conversions).toEqual({
       intent_to_details: [
         { date: '2026-08-01', started: 4, converted: 3, conversion_percent: 75 },
         { date: '2026-08-02', started: 0, converted: 0, conversion_percent: null },
@@ -356,19 +380,19 @@ describe('buildFrontendOnboardingAnalytics', () => {
       }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.daily_conversions.intent_to_details[0]).toEqual({
+    expect(analytics.v4_daily_conversions.intent_to_details[0]).toEqual({
       date: '2026-08-01',
       started: 2,
       converted: 1,
       conversion_percent: 50,
     })
-    expect(analytics.daily_conversions.details_to_organization[1]).toEqual({
+    expect(analytics.v4_daily_conversions.details_to_organization[1]).toEqual({
       date: '2026-08-02',
       started: 1,
       converted: 1,
       conversion_percent: 100,
     })
-    expect(analytics.daily_conversions.organization_to_setup[1]).toEqual({
+    expect(analytics.v4_daily_conversions.organization_to_setup[1]).toEqual({
       date: '2026-08-02',
       started: 1,
       converted: 1,
@@ -388,14 +412,14 @@ describe('buildFrontendOnboardingAnalytics', () => {
       }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.daily_conversions.intent_to_details[0].started).toBe(0)
-    expect(analytics.daily_conversions.details_to_organization[0]).toEqual({
+    expect(analytics.v4_daily_conversions.intent_to_details[0].started).toBe(0)
+    expect(analytics.v4_daily_conversions.details_to_organization[0]).toEqual({
       date: '2026-08-01',
       started: 1,
       converted: 1,
       conversion_percent: 100,
     })
-    expect(analytics.daily_conversions.organization_to_setup[0]).toEqual({
+    expect(analytics.v4_daily_conversions.organization_to_setup[0]).toEqual({
       date: '2026-08-01',
       started: 1,
       converted: 1,
@@ -414,7 +438,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
       }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.kpis.comparison.median_completion_ms).toBeNull()
+    expect(analytics.v4_kpis.comparison.median_completion_ms).toBeNull()
   })
 
   it.concurrent.each([
