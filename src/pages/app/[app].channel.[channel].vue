@@ -81,6 +81,40 @@ const loading = ref(true)
 const channel = ref<Database['public']['Tables']['channels']['Row'] & Channel>()
 const rolloutConfigured = computed(() => !!channel.value?.rollout_version)
 const rolloutPercentage = computed(() => (channel.value?.rollout_percentage_bps ?? 0) / 100)
+const rolloutIsActive = computed(() => !!channel.value?.rollout_enabled && rolloutConfigured.value)
+const rolloutIsServingDevices = computed(() =>
+  rolloutIsActive.value
+  && !channel.value?.rollout_paused_at
+  && (channel.value?.rollout_percentage_bps ?? 0) > 0,
+)
+const rolloutTargetName = computed(() => channel.value?.rollout_version_info?.name ?? t('not-configured'))
+const stableBundleName = computed(() => channel.value?.version?.name ?? t('not-configured'))
+const rolloutPercentageText = computed(() => `${rolloutPercentage.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}%`)
+const rolloutDeliveryTitle = computed(() => {
+  if (!rolloutIsActive.value)
+    return ''
+  if (!rolloutIsServingDevices.value) {
+    return t('rollout-delivery-fallback-title', { fallback: stableBundleName.value })
+  }
+  if ((channel.value?.rollout_percentage_bps ?? 0) >= 10000)
+    return t('rollout-delivery-all-title', { target: rolloutTargetName.value })
+  return t('rollout-delivery-split-title', { percent: rolloutPercentageText.value, target: rolloutTargetName.value })
+})
+const rolloutDeliveryHint = computed(() => {
+  if (!rolloutIsActive.value)
+    return ''
+  if (channel.value?.rollout_paused_at)
+    return t('rollout-delivery-paused-hint', { target: rolloutTargetName.value })
+  if ((channel.value?.rollout_percentage_bps ?? 0) <= 0)
+    return t('rollout-delivery-zero-hint', { target: rolloutTargetName.value })
+  return t('rollout-delivery-upload-hint', { fallback: stableBundleName.value })
+})
+const rolloutDeliveryBannerClass = computed(() => {
+  if (!rolloutIsServingDevices.value) {
+    return 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800/70 dark:bg-amber-950/30 dark:text-amber-100'
+  }
+  return 'border-sky-300 bg-sky-50 text-sky-900 dark:border-sky-800/70 dark:bg-sky-950/30 dark:text-sky-100'
+})
 const rolloutStatusLabel = computed(() => {
   if (!rolloutConfigured.value)
     return t('not-configured')
@@ -97,7 +131,6 @@ const rolloutStatusClass = computed(() => {
   }
   return 'border-sky-300 bg-sky-50 text-sky-800 dark:border-sky-800/70 dark:bg-sky-950/30 dark:text-sky-200'
 })
-const rolloutPercentageText = computed(() => `${rolloutPercentage.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}%`)
 const rolloutProgressClass = computed(() => {
   if (!rolloutConfigured.value || !channel.value?.rollout_enabled)
     return 'bg-slate-300 dark:bg-slate-600'
@@ -983,8 +1016,21 @@ async function copyCurlCommand() {
             <InfoRow :label="t('name')">
               {{ channel.name }}
             </InfoRow>
+            <div v-if="rolloutIsActive" class="px-4 py-4 sm:px-6">
+              <div class="flex gap-3 rounded-md border px-4 py-3" :class="rolloutDeliveryBannerClass">
+                <IconWarning class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <div class="min-w-0 space-y-1">
+                  <p class="text-sm font-semibold">
+                    {{ rolloutDeliveryTitle }}
+                  </p>
+                  <p class="text-xs opacity-90">
+                    {{ rolloutDeliveryHint }}
+                  </p>
+                </div>
+              </div>
+            </div>
             <!-- Bundle assigned to this channel -->
-            <InfoRow :label="t('bundle-assigned-to-this-channel')" class="sm:items-center" label-class="text-base! leading-5 font-bold! lg:whitespace-nowrap" :is-link="channel && !isInternalVersionName((channel.version.name))">
+            <InfoRow :label="rolloutIsActive ? t('stable-fallback') : t('bundle-assigned-to-this-channel')" class="sm:items-center" label-class="text-base! leading-5 font-bold! lg:whitespace-nowrap" :is-link="channel && !isInternalVersionName((channel.version.name))">
               <div class="flex items-center gap-3">
                 <span class="text-base leading-5 cursor-pointer" @click="openBundle()">{{ channel.version.name }}</span>
                 <button
@@ -1036,6 +1082,9 @@ async function copyCurlCommand() {
                       <h2 id="rollout-settings-title" class="text-base font-semibold text-slate-950 dark:text-white">
                         {{ t('progressive-rollout') }}
                       </h2>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('rollout-settings-help') }}
+                      </p>
                       <p v-if="channel.rollout_pause_reason" class="text-xs text-amber-700 dark:text-amber-300">
                         {{ channel.rollout_pause_reason }}
                       </p>

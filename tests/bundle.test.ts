@@ -311,6 +311,52 @@ describe('[PUT] /bundle operations - Set bundle to channel', () => {
     }
   })
 
+  it('should reset leftover rollout when a new stable bundle is set', async () => {
+    const supabase = getSupabaseClient()
+    const nextVersion = await createAppVersions('1.0.1-test-channel-rollout-reset', APPNAME)
+    const rolloutVersion = await createAppVersions('1.0.0-test-channel-rollout-target', APPNAME)
+
+    const { error: leftoverError } = await supabase
+      .from('channels')
+      .update({
+        version: versionId,
+        rollout_version: rolloutVersion.id,
+        rollout_enabled: true,
+        rollout_percentage_bps: 10000,
+      })
+      .eq('id', channelId)
+      .eq('app_id', APPNAME)
+    expect(leftoverError).toBeNull()
+
+    const { data: before, error: beforeError } = await supabase
+      .from('channels')
+      .select('version, rollout_version, rollout_enabled, rollout_id')
+      .eq('id', channelId)
+      .single()
+    expect(beforeError).toBeNull()
+    expect(before?.version).toBe(versionId)
+    expect(before?.rollout_version).toBe(rolloutVersion.id)
+    expect(before?.rollout_enabled).toBe(true)
+
+    const response = await putBundleToChannel({
+      app_id: APPNAME,
+      version_id: nextVersion.id,
+      channel_id: channelId,
+    })
+    expect(response.status).toBe(200)
+
+    const { data: after, error: afterError } = await supabase
+      .from('channels')
+      .select('version, rollout_version, rollout_enabled, rollout_id')
+      .eq('id', channelId)
+      .single()
+    expect(afterError).toBeNull()
+    expect(after?.version).toBe(nextVersion.id)
+    expect(after?.rollout_version).toBeNull()
+    expect(after?.rollout_enabled).toBe(false)
+    expect(after?.rollout_id).not.toBe(before?.rollout_id)
+  })
+
   it('should keep the supported write-scoped API key bundle promotion flow working', async () => {
     if (!writeScopedHeaders) {
       throw new Error('Write-scoped bundle test key was not created')

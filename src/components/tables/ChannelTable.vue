@@ -32,6 +32,10 @@ interface Channel {
     created_at: string
     min_update_version: string | null
   } | null
+  rollout_version_info?: {
+    id: number
+    name: string
+  } | null
   misconfigured: boolean | undefined
 }
 type Element = Database['public']['Tables']['channels']['Row'] & Channel
@@ -114,6 +118,14 @@ async function getData() {
             name,
             created_at,
             min_update_version
+          ),
+          rollout_enabled,
+          rollout_percentage_bps,
+          rollout_paused_at,
+          rollout_version,
+          rollout_version_info:app_versions!channels_rollout_version_fkey(
+            id,
+            name
           ),
           created_at,
           updated_at,
@@ -290,7 +302,17 @@ columns.value = [
     key: 'version',
     mobile: true,
     sortable: true,
-    displayFunction: (elem: Element) => elem.version?.name ?? t('channel-builtin'),
+    displayFunction: (elem: Element) => {
+      const stable = elem.version?.name ?? t('channel-builtin')
+      const servingRollout = !!elem.rollout_enabled
+        && elem.rollout_version != null
+        && !elem.rollout_paused_at
+        && (elem.rollout_percentage_bps ?? 0) > 0
+      const target = elem.rollout_version_info?.name
+      if (!servingRollout || !target)
+        return stable
+      return t('channel-version-with-rollout', { fallback: stable, target })
+    },
     onClick: (elem: Element) => openOneVersion(elem),
   },
   {
@@ -363,8 +385,13 @@ async function showAddModal() {
 }
 
 async function openOneVersion(one: Element) {
-  if (one.version?.id)
-    router.push(`/app/${props.appId}/bundle/${one.version.id}`)
+  const servingRollout = !!one.rollout_enabled
+    && one.rollout_version != null
+    && !one.rollout_paused_at
+    && (one.rollout_percentage_bps ?? 0) > 0
+  const servedId = servingRollout ? one.rollout_version_info?.id : one.version?.id
+  if (servedId)
+    router.push(`/app/${props.appId}/bundle/${servedId}`)
 }
 
 async function openOne(one: Element) {

@@ -39,7 +39,7 @@ import { formatUploadChannels, getChannelsToAssignByChecksum, parseUploadChannel
 type SupabaseType = Awaited<ReturnType<typeof createSupabaseClient>>
 type pmType = ReturnType<typeof getPMAndCommand>
 type localConfigType = Awaited<ReturnType<typeof getLocalConfig>>
-type UploadTargetChannel = Pick<Database['public']['Tables']['channels']['Row'], 'id' | 'public' | 'version' | 'rollout_version'>
+type UploadTargetChannel = Pick<Database['public']['Tables']['channels']['Row'], 'id' | 'public' | 'version' | 'rollout_version' | 'rollout_enabled'>
 
 export type { UploadBundleResult }
 export type { UploadReporter, UploadSpinner }
@@ -936,7 +936,7 @@ async function findUploadTargetChannel(
 ): Promise<UploadTargetChannel | null> {
   const { data, error } = await supabase
     .from('channels')
-    .select('id, public, version, rollout_version')
+    .select('id, public, version, rollout_version, rollout_enabled')
     .eq('app_id', appid)
     .eq('name', channel)
     .maybeSingle()
@@ -1035,10 +1035,15 @@ async function promoteExistingChannel(
   }
 
   const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${targetChannel.id}`
-  if (targetChannel.public)
+  if (targetChannel.rollout_enabled && targetChannel.rollout_version != null) {
+    log.warn('This channel has an active progressive rollout. Linking this bundle as the stable version resets that rollout, so devices receive the new bundle instead of the previous rollout target.')
+  }
+  else if (targetChannel.public) {
     log.info('Your update is now available in your public channel 🎉')
-  else
+  }
+  else {
     log.info(`Link device to this bundle to try it: ${bundleUrl}`)
+  }
 
   if (displayBundleUrl)
     log.info(`Bundle url: ${bundleUrl}`)
@@ -1099,10 +1104,15 @@ async function setVersionInChannel(
     }
     if (data?.id) {
       const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${data.id}`
-      if (data.public)
+      if (targetChannel.rollout_enabled && targetChannel.rollout_version != null) {
+        log.warn('This channel has an active progressive rollout. Linking this bundle as the stable version resets that rollout, so devices receive the new bundle instead of the previous rollout target.')
+      }
+      else if (data.public) {
         log.info('Your update is now available in your public channel 🎉')
-      else
+      }
+      else {
         log.info(`Link device to this bundle to try it: ${bundleUrl}`)
+      }
       if (displayBundleUrl)
         log.info(`Bundle url: ${bundleUrl}`)
     }
