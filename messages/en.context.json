@@ -2418,6 +2418,7 @@
   "reason-placeholder": "Used in Capgo web console areas: components/dashboard. Role: input placeholder. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "recent-releases-active": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "recommended": "Used in Capgo web console areas: pages/settings/organization. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "refer-and-earn": "Used in Capgo web console areas: components. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "refresh": "Used in Capgo web console areas: components, components/dashboard, pages/app. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "register": "Used in Capgo web console areas: pages. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "register-heading": "Used in Capgo web console areas: pages. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

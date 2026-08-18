@@ -278,31 +278,47 @@ SELECT throws_ok(
   'channel-admin cannot promote a private channel to public'
 );
 
--- 4) Channel-admin can still edit non-public settings on a private channel.
+-- 4) Preview key cannot mutate channel settings without channel.update_settings.
+SELECT tests.clear_authentication();
+SELECT set_config('request.jwt.claim.role', 'anon', true);
+SELECT set_config('request.headers', '{"capgkey":"public-channel-guard-preview-key"}', true);
+
+UPDATE public.channels
+SET allow_emulator = true
+WHERE id = 6700401;
+
+SELECT is(
+  (
+    SELECT allow_emulator
+    FROM public.channels
+    WHERE id = 6700401
+  ),
+  false,
+  'app_preview key cannot update channel settings '
+  'without channel.update_settings'
+);
+
+-- 5) Channel-admin can mutate channel settings when RBAC grants channel.update_settings.
+SELECT tests.clear_authentication();
+SELECT set_config('request.jwt.claim.role', 'anon', true);
+SELECT set_config('request.headers', '{"capgkey":"public-channel-guard-channel-admin-key"}', true);
+
 SELECT lives_ok(
   $$
     UPDATE public.channels
     SET allow_emulator = true
     WHERE id = 6700401
   $$,
-  'channel-admin can update non-public settings on a private channel'
+  'channel-admin can update channel settings with channel.update_settings'
 );
 
--- 5) App admin can flip private -> public.
+-- 6) Channel-admin can edit an already-public channel with channel.update_settings.
 SELECT tests.clear_authentication();
-SELECT set_config('request.jwt.claim.role', 'anon', true);
-SELECT set_config('request.headers', '{"capgkey":"public-channel-guard-admin-key"}', true);
-
-SELECT lives_ok(
-  $$
-    UPDATE public.channels
-    SET public = true
-    WHERE id = 6700401
-  $$,
-  'app admin can promote a private channel to public'
-);
-
--- 6) Channel-admin can still edit an already-public channel.
+SELECT tests.authenticate_as_service_role();
+SELECT set_config('request.headers', '{}', true);
+UPDATE public.channels
+SET public = true
+WHERE id = 6700401;
 SELECT tests.clear_authentication();
 SELECT set_config('request.jwt.claim.role', 'anon', true);
 SELECT set_config('request.headers', '{"capgkey":"public-channel-guard-channel-admin-key"}', true);
@@ -313,7 +329,8 @@ SELECT lives_ok(
     SET allow_device = true
     WHERE id = 6700401
   $$,
-  'channel-admin can update settings on an already-public channel'
+  'channel-admin can update settings on an already-public channel '
+  'with channel.update_settings'
 );
 
 SELECT tests.clear_authentication();

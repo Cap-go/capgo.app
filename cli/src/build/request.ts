@@ -67,6 +67,7 @@ import { uploadSupportLogs } from '../support/support-upload.js'
 import { offerSupportUploadBeforeAi } from '../support/support-upload-prompt.js'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { assertCliPermission, canPromptInteractively, createSupabaseClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, trimTrailingSlashes, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { syncAndroidVersion } from './android-version'
 import { mergeCredentials, MIN_OUTPUT_RETENTION_SECONDS, parseAndroidPlayStoreReleaseStatus, parseAndroidPlayStoreTrack, parseInAppUpdatePriority, parseOptionalBoolean, parseOutputRetentionSeconds } from './credentials'
 import { buildProvisioningMap } from './credentials-command'
 import { withCwd } from './cwd'
@@ -1431,6 +1432,13 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       log.info(syncResult.changed
         ? `Synced iOS app version to ${syncResult.marketingVersion}`
         : `iOS app version is already ${syncResult.marketingVersion}`)
+    }
+
+    if (platform === 'android' && options.syncAndroidVersion) {
+      const syncResult = syncAndroidVersion({ path: projectDir })
+      log.info(syncResult.changed
+        ? `Synced Android app version to ${syncResult.packageVersion}`
+        : `Android app version is already ${syncResult.packageVersion}`)
     }
 
     const host = options.supaHost || 'https://api.capgo.app'

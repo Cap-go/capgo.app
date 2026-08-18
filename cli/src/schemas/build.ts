@@ -90,6 +90,7 @@ export const buildRequestOptionsSchema = optionsBaseSchema.extend({
   skipBuildNumberBump: z.boolean().optional(),
   skipMarketingVersionBump: z.boolean().optional(),
   syncIosVersion: z.boolean().optional(),
+  syncAndroidVersion: z.boolean().optional(),
   playstoreUpload: z.boolean().optional(),
   submitToStoreReview: z.boolean().optional(),
   storeReleaseName: z.string().min(1).optional(),
