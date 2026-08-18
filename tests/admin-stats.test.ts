@@ -166,6 +166,7 @@ beforeAll(async () => {
       date_id: GLOBAL_STATS_TREND_DATES[0],
       apps: 10,
       apps_created: 2,
+      apps_with_store_url: 4,
       versions_created: 5,
       apps_with_cli_onboarding_builds_24h: 1,
       apps_with_manual_builds_24h: 0,
@@ -212,6 +213,7 @@ beforeAll(async () => {
       date_id: GLOBAL_STATS_TREND_DATES[1],
       apps: 11,
       apps_created: 3,
+      apps_with_store_url: 6,
       versions_created: 8,
       apps_with_cli_onboarding_builds_24h: 2,
       apps_with_manual_builds_24h: 1,
@@ -1023,6 +1025,7 @@ describe('/private/admin_stats', () => {
         apps: number
         apps_created: number
         users_with_2fa: number
+        apps_with_store_url: number
         versions_created: number
         apps_with_cli_onboarding_builds_24h: number
         apps_with_manual_builds_24h: number
@@ -1053,6 +1056,7 @@ describe('/private/admin_stats', () => {
     expect(latest?.apps).toBe(11)
     expect(latest?.apps_created).toBe(3)
     expect(latest?.users_with_2fa).toBe(7)
+    expect(latest?.apps_with_store_url).toBe(6)
     expect(latest?.versions_created).toBe(8)
     expect(latest?.apps_with_cli_onboarding_builds_24h).toBe(2)
     expect(latest?.app_build_onboarding_finalized).toBe(true)

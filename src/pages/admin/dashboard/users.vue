@@ -165,6 +165,7 @@ const globalStatsTrendData = ref<Array<{
   versions_created: number
   demo_apps_created: number
   apps_with_preview: number
+  apps_with_store_url: number
   devices_last_month: number
   trial_extended_orgs: number
   trial_extended_subscribed_orgs: number
@@ -720,6 +721,14 @@ const appsCreatedTrendSeries = computed(() => {
         value: item.apps_created ?? 0,
       })),
       color: '#2563eb',
+    },
+    {
+      label: t('admin-apps-with-store-url-series'),
+      data: globalStatsTrendData.value.map(item => ({
+        date: item.date,
+        value: item.apps_with_store_url ?? 0,
+      })),
+      color: '#f59e0b',
     },
   ]
 })
