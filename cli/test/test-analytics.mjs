@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { deferCommandInvocation, extractCommandContext, flushAnalytics, flushDeferredCommandInvocation, getGlobalAnalyticsProps, setInvocationSource, trackCommandFailed, trackCommandInvoked, trackCommandSucceeded, trackEvent } from '../src/analytics/track.ts'
+import { sendEvent } from '../src/utils.ts'
 
 console.log('🧪 Testing analytics track.ts...\n')
 
@@ -67,7 +68,34 @@ try {
   await trackEvent({ apikey: 'capgo-key', channel: 'cli-usage', event: 'Nope', orgId: 'o', appId: 'a' })
   await flushAnalytics()
   assert.equal(findEvent(requests), undefined, 'opt-out must suppress events')
+
+  await sendEvent('capgo-key', {
+    channel: 'app',
+    event: 'App Created',
+    icon: '🆕',
+    notifyConsole: true,
+  })
+  let consoleReq = findEvent(requests)
+  assert.ok(consoleReq, 'telemetry opt-out must preserve functional console broadcasts')
+  body = JSON.parse(consoleReq.init.body)
+  assert.equal(body.icon, '🆕')
+  assert.equal(body.notifyConsole, true)
   delete process.env.CAPGO_DISABLE_TELEMETRY
+
+  process.env.CAPGO_DISABLE_POSTHOG = '1'
+  requests = stubFetch()
+  await sendEvent('capgo-key', {
+    channel: 'app',
+    event: 'App Updated',
+    icon: '📝',
+    notifyConsole: true,
+  })
+  consoleReq = findEvent(requests)
+  assert.ok(consoleReq, 'PostHog opt-out must preserve functional console broadcasts')
+  body = JSON.parse(consoleReq.init.body)
+  assert.equal(body.icon, '📝')
+  assert.equal(body.notifyConsole, true)
+  delete process.env.CAPGO_DISABLE_POSTHOG
 
   // (the no-key early return is exercised in the migration suite; it can't be
   //  simulated reliably here because the dev machine has a saved ~/.capgo)

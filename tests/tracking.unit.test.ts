@@ -214,6 +214,10 @@ describe('sendEventToTracking', () => {
         cli_version: '8.31.3',
       },
     }))
+    const posthogPayload = posthogMock.mock.calls[0]?.[1]
+    expect(posthogPayload).not.toHaveProperty('icon')
+    expect(posthogPayload).not.toHaveProperty('notify')
+    expect(posthogPayload).not.toHaveProperty('parser')
   })
 
   it('can skip PostHog while preserving Bento delivery', async () => {
