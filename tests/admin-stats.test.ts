@@ -260,6 +260,7 @@ beforeAll(async () => {
       date_id: GLOBAL_STATS_TREND_DATES[2],
       apps: 12,
       apps_created: 0,
+      apps_with_store_url: 0,
       versions_created: 0,
       apps_with_cli_onboarding_builds_24h: 0,
       apps_with_manual_builds_24h: 0,
