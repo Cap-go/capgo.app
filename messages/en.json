@@ -1089,7 +1089,7 @@
   "days": "days",
   "days-ago": "{count} days ago",
   "days-remaining": "Days Remaining",
-  "debug-api-description": "Use this curl command to reproduce the exact API request this device makes to check for updates",
+  "debug-api-description": "Use this curl command to reproduce the plugin /updates request this device sends. Dashboard channel overrides are applied server-side from the device id, not from a channel field in the body.",
   "debug-api-request": "Debug API Request",
   "debug-channel-api-description": "Use this curl command to test if a device would receive an update from this channel",
   "debug-channel-api-request": "Test Update API",

@@ -3,8 +3,9 @@ import type { Database } from '~/types/supabase.types'
 type DeviceRow = Database['public']['Tables']['devices']['Row']
 
 /**
- * Interface matching the update endpoint expected request format
- * Based on AppInfos from supabase/functions/_backend/utils/types.ts
+ * Plugin `/updates` request body.
+ * Dashboard channel overrides live in `channel_devices` and are applied
+ * server-side from `device_id`. Devices never send a `channel` field here.
  */
 export interface UpdateEndpointRequest {
   version_name: string
@@ -17,8 +18,7 @@ export interface UpdateEndpointRequest {
   platform: string
   app_id: string
   device_id: string
-  defaultChannel: string
-  channel?: string
+  defaultChannel?: string
 }
 
 /**
@@ -28,10 +28,8 @@ export function useDeviceUpdateFormat() {
   function transformDeviceToUpdateRequest(
     device: DeviceRow,
     appId: string,
-    defaultChannel: string = 'production',
-    channelOverrideName?: string | null,
   ): UpdateEndpointRequest {
-    return {
+    const request: UpdateEndpointRequest = {
       version_name: device.version_name || '',
       version_build: device.version_build || '',
       version_os: device.os_version || '',
@@ -42,18 +40,17 @@ export function useDeviceUpdateFormat() {
       platform: device.platform || 'ios',
       app_id: appId,
       device_id: device.device_id || '',
-      defaultChannel,
-      ...(channelOverrideName ? { channel: channelOverrideName } : {}),
     }
+    if (device.default_channel)
+      request.defaultChannel = device.default_channel
+    return request
   }
 
   function copyUpdateRequestToClipboard(
     device: DeviceRow,
     appId: string,
-    defaultChannel: string = 'production',
-    channelOverrideName?: string | null,
   ): Promise<void> {
-    const request = transformDeviceToUpdateRequest(device, appId, defaultChannel, channelOverrideName)
+    const request = transformDeviceToUpdateRequest(device, appId)
     const jsonString = JSON.stringify(request, null, 2)
     return navigator.clipboard.writeText(jsonString)
   }
