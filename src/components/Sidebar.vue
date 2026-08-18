@@ -10,6 +10,7 @@ import IconDoc from '~icons/gg/loadbar-doc'
 import IconChart from '~icons/heroicons/chart-bar'
 import IconShield from '~icons/heroicons/shield-check'
 import IconDiscord from '~icons/ic/round-discord'
+import IconGift from '~icons/lucide/gift'
 import IconHeadset from '~icons/lucide/headset'
 import IconScanQrCode from '~icons/lucide/scan-qr-code'
 import IconApiKey from '~icons/mdi/shield-key'
@@ -155,6 +156,13 @@ const tabs = computed<Tab[]>(() => {
       icon: IconHeadset,
       key: '#support',
       onClick: () => window.open('https://support.capgo.app', '_blank', 'noopener,noreferrer'),
+      redirect: true,
+    },
+    {
+      label: 'refer-and-earn',
+      icon: IconGift,
+      key: '#refer-and-earn',
+      onClick: () => window.open('https://capgo.affonso.io', '_blank', 'noopener,noreferrer'),
       redirect: true,
     },
   ]
