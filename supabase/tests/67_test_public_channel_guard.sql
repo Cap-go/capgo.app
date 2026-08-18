@@ -307,7 +307,9 @@ SELECT throws_ok(
 );
 
 -- 6) Channel-admin cannot edit an already-public channel via direct PostgREST.
+SELECT tests.clear_authentication();
 SELECT tests.authenticate_as_service_role();
+SELECT set_config('request.headers', '{}', true);
 UPDATE public.channels
 SET public = true
 WHERE id = 6700401;
