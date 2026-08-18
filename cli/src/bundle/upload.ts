@@ -549,6 +549,7 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
       tracking_version: 2,
       tags: {
         'app-id': appid,
+        'size_mb': mbSize,
       },
       notify: false,
     }, options.verbose)
