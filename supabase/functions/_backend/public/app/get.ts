@@ -30,7 +30,10 @@ export async function get(c: Context<MiddlewareKeyVariables>, appId: string, api
   }
 
   if (data.icon_url) {
-    const signedIcon = await createSignedImageUrl(c, data.icon_url)
+    const signedIcon = await createSignedImageUrl(c, data.icon_url, {
+      orgId: data.owner_org,
+      appId: data.app_id,
+    })
     data.icon_url = signedIcon ?? ''
   }
 
@@ -83,7 +86,10 @@ export async function getAll(c: Context, apikey: Database['public']['Tables']['a
     (data ?? []).map(async (app) => {
       if (!app.icon_url)
         return app
-      const signedIcon = await createSignedImageUrl(c, app.icon_url)
+      const signedIcon = await createSignedImageUrl(c, app.icon_url, {
+        orgId: app.owner_org,
+        appId: app.app_id,
+      })
       return {
         ...app,
         icon_url: signedIcon ?? '',
