@@ -977,7 +977,7 @@ iOS IPA only (no TestFlight upload): npx @capgo/cli@latest build request com.exa
   .option('--skip-marketing-version-bump', 'Skip automatic marketing version (CFBundleShortVersionString / versionName) bump when the app is already released.')
   .option('--no-skip-marketing-version-bump', 'Override saved credentials to re-enable automatic marketing version bump for this build only.')
   .option('--sync-ios-version', 'iOS: sync the app version from package.json before uploading the project. Updates MARKETING_VERSION or CFBundleShortVersionString based on the Xcode Info.plist configuration.')
-  .option('--sync-android-version', 'Android: sync versionName in android/app/build.gradle from package.json before uploading the project. Fails when versionName is not a quoted string.')
+  .option('--sync-android-version', 'Android: sync versionName in android/app/build.gradle from package.json before uploading the project. Fails unless versionName is a standalone quoted string literal.')
   .option('--ai-analytics', 'On build failure, send logs to Capgo AI for diagnosis. In interactive terminals this skips the upfront confirmation; in CI this auto-uploads and prints the analysis to stderr.')
   .option('--no-prescan', 'Skip the automatic pre-build scan')
   .option('--prescan-ignore-fatal', 'Run the pre-build scan but never block the build (report only)')

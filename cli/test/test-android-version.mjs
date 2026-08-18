@@ -34,6 +34,44 @@ finally {
   rmSync(projectDir, { recursive: true, force: true })
 }
 
+const interpolatedBuildGradle = String.raw`android {
+  defaultConfig {
+    versionName "${'$'}{major}.0.0"
+  }
+}
+`
+const interpolatedProjectDir = createFixture(interpolatedBuildGradle)
+
+try {
+  assert.throws(
+    () => syncAndroidVersion({ path: interpolatedProjectDir }),
+    /versionName.*quoted string literal/i,
+  )
+  assert.equal(readFileSync(join(interpolatedProjectDir, 'android/app/build.gradle'), 'utf8'), interpolatedBuildGradle)
+}
+finally {
+  rmSync(interpolatedProjectDir, { recursive: true, force: true })
+}
+
+const concatenatedBuildGradle = `android {
+  defaultConfig {
+    versionName "1.2." + patchVersion
+  }
+}
+`
+const concatenatedProjectDir = createFixture(concatenatedBuildGradle)
+
+try {
+  assert.throws(
+    () => syncAndroidVersion({ path: concatenatedProjectDir }),
+    /versionName.*quoted string literal/i,
+  )
+  assert.equal(readFileSync(join(concatenatedProjectDir, 'android/app/build.gradle'), 'utf8'), concatenatedBuildGradle)
+}
+finally {
+  rmSync(concatenatedProjectDir, { recursive: true, force: true })
+}
+
 const literalBuildGradle = `android {
   defaultConfig {
     // versionName "leave-this-comment-alone"

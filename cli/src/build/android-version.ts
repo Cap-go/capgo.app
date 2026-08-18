@@ -19,6 +19,25 @@ interface StringLiteralRange {
   end: number
 }
 
+function hasUnescapedDollar(value: string): boolean {
+  let escaped = false
+
+  for (const character of value) {
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (character === '\\') {
+      escaped = true
+      continue
+    }
+    if (character === '$')
+      return true
+  }
+
+  return false
+}
+
 function maskGradleComments(content: string): string {
   const masked = content.split('')
   let quote: '"' | "'" | null = null
@@ -99,10 +118,11 @@ function findVersionNameStringLiterals(content: string, buildGradlePath: string)
 
     const quote = masked[cursor]
     if (quote !== '"' && quote !== "'")
-      throw new Error(`versionName in ${buildGradlePath} must be a quoted string`)
+      throw new Error(`versionName in ${buildGradlePath} must be a standalone quoted string literal`)
 
     const start = cursor + 1
     let escaped = false
+    let end: number | undefined
     cursor = start
     while (cursor < masked.length) {
       const character = masked[cursor]
@@ -113,18 +133,35 @@ function findVersionNameStringLiterals(content: string, buildGradlePath: string)
         escaped = true
       }
       else if (character === quote) {
-        ranges.push({ start, end: cursor })
+        end = cursor
         break
       }
       cursor += 1
     }
 
-    if (ranges.at(-1)?.start !== start)
-      throw new Error(`versionName in ${buildGradlePath} must be a quoted string`)
+    if (end === undefined)
+      throw new Error(`versionName in ${buildGradlePath} must be a standalone quoted string literal`)
+
+    if (quote === '"' && hasUnescapedDollar(content.slice(start, end)))
+      throw new Error(`versionName in ${buildGradlePath} must be a standalone quoted string literal`)
+
+    let trailingCursor = end + 1
+    while (masked[trailingCursor] === ' ' || masked[trailingCursor] === '\t')
+      trailingCursor += 1
+    const trailingCharacter = masked[trailingCursor]
+    if (trailingCharacter !== undefined
+      && trailingCharacter !== '\n'
+      && trailingCharacter !== '\r'
+      && trailingCharacter !== ';'
+      && trailingCharacter !== '}') {
+      throw new Error(`versionName in ${buildGradlePath} must be a standalone quoted string literal`)
+    }
+
+    ranges.push({ start, end })
   }
 
   if (ranges.length === 0)
-    throw new Error(`versionName in ${buildGradlePath} must be a quoted string`)
+    throw new Error(`versionName in ${buildGradlePath} must be a standalone quoted string literal`)
 
   return ranges
 }
