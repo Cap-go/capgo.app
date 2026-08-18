@@ -4,6 +4,7 @@ import { onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
+import { shouldShowCLIActivity } from '~/services/cliActivity'
 import { useSupabase } from '~/services/supabase'
 import { isUploadReplicationEvent, showUploadReplicationToast } from '~/services/updateReplicationToast'
 import { useMainStore } from '~/stores/main'
@@ -95,6 +96,9 @@ export function useRealtimeCLIFeed() {
   }
 
   function showToast(payload: CLIActivityPayload) {
+    if (!shouldShowCLIActivity(payload))
+      return
+
     const route = getRouteForEvent(payload)
     const icon = payload.icon ?? '📡'
     const title = `${icon} ${payload.event}`
