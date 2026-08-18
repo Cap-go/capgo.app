@@ -161,17 +161,31 @@ const visibleAnalytics = computed(() => isLoadingStats.value ? null : analytics.
 const displayedDailyAttempts = computed(() => deduplicateDailyAttempts.value
   ? visibleAnalytics.value?.deduplicated.daily_attempts ?? []
   : visibleAnalytics.value?.daily_attempts ?? [])
-const displayedV4Funnel = computed(() => {
-  if (!deduplicateV4Funnel.value) {
-    return visibleAnalytics.value?.funnels.v4
-      ?? visibleAnalytics.value?.funnels.v3
-      ?? []
-  }
-
-  return visibleAnalytics.value?.deduplicated.funnels.v4
-    ?? visibleAnalytics.value?.deduplicated.funnels.v3
-    ?? []
+const rawLatestFunnel = computed(() => {
+  const funnels = visibleAnalytics.value?.funnels
+  const v4 = funnels?.v4
+  return {
+    version: v4 === undefined ? 'v3' : 'v4',
+    stages: v4 ?? funnels?.v3 ?? [],
+  } as const
 })
+const displayedLatestFunnel = computed(() => {
+  const funnels = deduplicateV4Funnel.value
+    ? visibleAnalytics.value?.deduplicated.funnels
+    : visibleAnalytics.value?.funnels
+  const v4 = funnels?.v4
+  return {
+    version: v4 === undefined ? 'v3' : 'v4',
+    stages: v4 ?? funnels?.v3 ?? [],
+  } as const
+})
+const displayedV4Funnel = computed(() => displayedLatestFunnel.value.stages)
+const latestVersionLabel = computed(() => t(rawLatestFunnel.value.version === 'v4'
+  ? 'frontend-onboarding-version-4'
+  : 'frontend-onboarding-version-3'))
+const displayedFunnelTitle = computed(() => t(displayedLatestFunnel.value.version === 'v4'
+  ? 'frontend-onboarding-funnel-v4'
+  : 'frontend-onboarding-funnel-v3'))
 const kpis = computed(() => visibleAnalytics.value?.kpis)
 const dailySeries = computed(() => buildFrontendOnboardingDailySeries(
   displayedDailyAttempts.value,
@@ -232,19 +246,38 @@ const dailySetupCliSeries = computed(() => buildFrontendOnboardingDailySetupCliS
 ))
 const hasDailySetupCliOutcomeData = computed(() => dailySetupCliSeries.value.length > 0)
 
+const onboardingGraphSource = computed(() => {
+  const v4Funnel = visibleAnalytics.value?.funnels.v4
+  const v4Nodes = visibleAnalytics.value?.v4_graph?.nodes
+  if (v4Funnel !== undefined && v4Nodes !== undefined) {
+    return {
+      version: 'v4',
+      funnel: v4Funnel,
+      nodes: v4Nodes,
+    } as const
+  }
+
+  return {
+    version: 'v3',
+    funnel: visibleAnalytics.value?.funnels.v3 ?? [],
+    nodes: visibleAnalytics.value?.v3_graph?.nodes ?? [],
+  } as const
+})
+const graphTitle = computed(() => t(onboardingGraphSource.value.version === 'v4'
+  ? 'frontend-onboarding-graph-v4'
+  : 'frontend-onboarding-graph-v3'))
+const graphDescription = computed(() => t(onboardingGraphSource.value.version === 'v4'
+  ? 'frontend-onboarding-graph-v4-description'
+  : 'frontend-onboarding-graph-v3-description'))
+
 const onboardingGraphV4 = computed<AdminOnboardingJourneyGraphConfig>(() => {
-  const funnel = visibleAnalytics.value?.funnels.v4
-    ?? visibleAnalytics.value?.funnels.v3
-    ?? []
+  const { funnel, nodes: interactionNodes } = onboardingGraphSource.value
   const stage = (key: FrontendOnboardingStageKey) => funnel.find(item => item.key === key)
   const intent = stage('intent')
   const details = stage('details')
   const organization = stage('organization')
   const setup = stage('setup')
   const parentPercent = (current: number, previous: number) => previous > 0 ? current / previous * 100 : 0
-  const interactionNodes = visibleAnalytics.value?.v4_graph?.nodes
-    ?? visibleAnalytics.value?.v3_graph?.nodes
-    ?? []
   const graphMetrics = {
     ...buildFrontendOnboardingGraphMetrics(v4DetailsGraphDefinitions, interactionNodes, details?.reached),
     ...buildFrontendOnboardingGraphMetrics(v4OrganizationGraphDefinitions, interactionNodes, organization?.reached),
@@ -410,7 +443,7 @@ const largestDropoffSubtitle = computed(() => {
   if (!dropoff)
     return t('frontend-onboarding-no-dropoff')
 
-  const stages = visibleAnalytics.value?.funnels.v4 ?? []
+  const stages = rawLatestFunnel.value.stages
   const from = stages.find(stage => stage.key === dropoff.from)?.label ?? dropoff.from
   const to = stages.find(stage => stage.key === dropoff.to)?.label ?? dropoff.to
   return t('frontend-onboarding-transition', { from, to })
@@ -451,7 +484,7 @@ displayStore.defaultBack = '/dashboard'
             {{ t('frontend-onboarding') }}
           </h1>
           <span class="px-3 py-1 text-xs font-semibold text-indigo-700 bg-indigo-100 rounded-full dark:bg-indigo-500/20 dark:text-indigo-200">
-            {{ t('frontend-onboarding-version-4') }}
+            {{ latestVersionLabel }}
           </span>
         </div>
 
@@ -506,13 +539,13 @@ displayStore.defaultBack = '/dashboard'
 
           <ChartCard
             chart-id="funnel-v4"
-            :title="t('frontend-onboarding-funnel-v4')"
+            :title="displayedFunnelTitle"
             :is-loading="isLoadingStats"
           >
             <template #header>
               <div class="min-w-0">
                 <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
-                  {{ t('frontend-onboarding-funnel-v4') }}
+                  {{ displayedFunnelTitle }}
                 </h2>
                 <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
                   {{ t('frontend-onboarding-funnel-description') }}
@@ -534,7 +567,7 @@ displayStore.defaultBack = '/dashboard'
             </div>
             <AdminChartDeduplicateControl
               v-model="deduplicateV4Funnel"
-              :chart-label="t('frontend-onboarding-funnel-v4')"
+              :chart-label="displayedFunnelTitle"
             />
           </ChartCard>
 
@@ -585,16 +618,16 @@ displayStore.defaultBack = '/dashboard'
 
           <ChartCard
             chart-id="journey-graph-v4"
-            :title="t('frontend-onboarding-graph-v4')"
+            :title="graphTitle"
             :is-loading="isLoadingStats"
           >
             <template #header>
               <div class="min-w-0">
                 <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
-                  {{ t('frontend-onboarding-graph-v4') }}
+                  {{ graphTitle }}
                 </h2>
                 <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                  {{ t('frontend-onboarding-graph-v4-description') }}
+                  {{ graphDescription }}
                 </p>
               </div>
             </template>
