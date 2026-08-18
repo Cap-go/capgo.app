@@ -2,7 +2,6 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
-import IconSettings from '~icons/lucide/settings'
 import { useMainStore } from '~/stores/main'
 import { allowOnboardingDashboardExploration } from '~/utils/onboardingRedirect'
 
@@ -58,11 +57,8 @@ function allowPendingOnboardingDashboardExploration() {
       <span class="block font-medium truncate">
         {{ displayName }}
       </span>
-      <span class="flex items-center gap-1 min-w-0">
-        <span class="block text-sm text-gray-400 truncate min-w-0 flex-1">
-          {{ main.user?.email }}
-        </span>
-        <IconSettings class="size-4 text-slate-300 shrink-0" aria-hidden="true" />
+      <span class="block text-sm text-gray-400 truncate">
+        {{ main.user?.email }}
       </span>
     </span>
   </router-link>

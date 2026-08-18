@@ -64,6 +64,7 @@ test.describe('Desktop sidebar collapse', () => {
     await expect.poll(() => sidebarWidth(page)).toBeLessThan(56)
     await expect(page.locator('#sidebar [data-test="org-switcher"]')).toBeVisible()
     await expect(page.locator('#sidebar').getByRole('button', { name: 'Dashboard' })).toBeVisible()
+    await expect(page.locator('#sidebar').getByRole('button', { name: /refer & earn/i })).toBeVisible()
     await expect.poll(() => shellPadding(page)).toBe('0px 0px 0px 0px')
 
     await page.locator('#sidebar [data-test="org-switcher"] summary').click()
@@ -108,5 +109,29 @@ test.describe('Desktop sidebar collapse', () => {
     await page.locator('#sidebar [data-test="org-switcher"] summary').click()
     await expect(page.locator('[data-test="org-switcher-menu"]').filter({ visible: true })).toHaveCSS('position', 'fixed')
     expect(await orgSwitcherMenuIsOnTop(page)).toBe(true)
+  })
+
+  test('opens the affiliate program from Refer & Earn', async ({ page }) => {
+    const refer = page.locator('#sidebar').getByRole('button', { name: /refer & earn/i })
+    await expect(refer).toBeVisible()
+
+    await page.context().route(/https:\/\/capgo\.affonso\.io/, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/html',
+        body: '<html><title>Capgo Affiliate</title></html>',
+      })
+    })
+
+    const [popup] = await Promise.all([
+      page.waitForEvent('popup'),
+      refer.click(),
+    ])
+    await expect(popup).toHaveURL(/https:\/\/capgo\.affonso\.io\/?/)
+    await popup.close()
+
+    await page.locator('[data-test="sidebar-collapse-toggle"]').click()
+    await expect.poll(() => sidebarWidth(page)).toBeLessThan(56)
+    await expect(refer).toHaveAttribute('title', /refer & earn/i)
   })
 })
