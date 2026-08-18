@@ -1,12 +1,7 @@
 <script setup lang="ts">
-import { Capacitor } from '@capacitor/core'
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRoute, useRouter } from 'vue-router'
-import { toast } from 'vue-sonner'
-import { logAsUser } from '~/services/logAs'
-import { isSpoofed, unspoofUser } from '~/services/supabase'
-import { useDialogV2Store } from '~/stores/dialogv2'
+import { useRoute } from 'vue-router'
 import { useMainStore } from '~/stores/main'
 import { allowOnboardingDashboardExploration } from '~/utils/onboardingRedirect'
 
@@ -17,11 +12,12 @@ const props = withDefaults(defineProps<{
 })
 
 const { t } = useI18n()
-const router = useRouter()
 const route = useRoute()
 const main = useMainStore()
-const dialogStore = useDialogV2Store()
-const isMobile = ref(Capacitor.isNativePlatform())
+const displayName = computed(() => `${main.user?.first_name ?? ''} ${main.user?.last_name ?? ''}`.trim())
+const accountSettingsLabel = computed(() => {
+  return [displayName.value, main.user?.email, t('settings')].filter(Boolean).join(', ')
+})
 const acronym = computed(() => {
   let res = 'MD'
   if (main.user?.first_name && main.user?.last_name)
@@ -32,134 +28,38 @@ const acronym = computed(() => {
     res = main.user?.last_name[0]
   return res.toUpperCase()
 })
-const isLoading = ref(false)
-const spoofed = ref(isSpoofed())
-const logAsInput = ref('')
 
 function allowPendingOnboardingDashboardExploration() {
   const resumeAppId = typeof route.query.resume === 'string' ? route.query.resume : null
   if (route.path === '/app/new' && resumeAppId)
     allowOnboardingDashboardExploration(main.user?.id ?? main.auth?.id, resumeAppId)
 }
-
-async function openLogAsDialog() {
-  let identifier = ''
-  logAsInput.value = ''
-
-  dialogStore.openDialog({
-    title: t('log-as'),
-    buttons: [
-      {
-        text: t('button-cancel'),
-        role: 'cancel',
-      },
-      {
-        text: t('log-as'),
-        handler: () => {
-          identifier = logAsInput.value
-        },
-      },
-    ],
-  })
-  await dialogStore.onDialogDismiss()
-
-  if (identifier) {
-    isLoading.value = true
-    try {
-      await logAsUser(identifier, router)
-    }
-    finally {
-      isLoading.value = false
-    }
-  }
-}
-
-async function resetSpoofedUser() {
-  isLoading.value = true
-  try {
-    const restored = await unspoofUser()
-    spoofed.value = isSpoofed()
-
-    if (!restored) {
-      toast.error(t('spoof-session-cleared'))
-      return
-    }
-
-    toast.success(t('spoof-stopped-reload'))
-    setTimeout(() => {
-      router.replace('/dashboard').then(() => {
-        globalThis.location.reload()
-      })
-    }, 1000)
-  }
-  finally {
-    isLoading.value = false
-  }
-}
 </script>
 
 <template>
-  <div>
-    <div class="relative text-gray-300">
-      <div class="flex flex-col py-2">
-        <div class="flex items-center">
-          <router-link
-            to="/settings/account"
-            class="flex w-12 h-11 shrink-0 items-center justify-center rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
-            :aria-label="t('settings')"
-            :title="t('settings')"
-            @click="allowPendingOnboardingDashboardExploration"
-          >
-            <img v-if="main.user?.image_url" class="w-8 h-8 d-mask d-mask-squircle" :src="main.user?.image_url" alt="User" width="32" height="32">
-            <div v-else class="flex items-center justify-center w-8 h-8 bg-gray-700 d-mask d-mask-squircle">
-              <span class="font-medium">
-                {{ acronym }}
-              </span>
-            </div>
-          </router-link>
-          <div class="min-w-0 flex-1 pr-3">
-            <p class="font-medium truncate">
-              {{ `${main.user?.first_name} ${main.user?.last_name}` }}
-            </p>
-            <p class="text-sm text-gray-400 truncate">
-              {{ main.user?.email }}
-            </p>
-          </div>
-        </div>
-        <template v-if="!props.compact">
-          <router-link v-if="isMobile" to="/app/modules" class="block py-2 pl-12 pr-3 rounded-lg hover:bg-slate-700/50">
-            {{ t('module-heading') }}
-          </router-link>
-          <router-link v-if="isMobile" to="/app/modules_test" class="block py-2 pl-12 pr-3 rounded-lg hover:bg-slate-700/50">
-            {{ t('module-heading') }} {{ t('tests') }}
-          </router-link>
-          <div v-if="main.isAdmin && !spoofed" class="block py-2 pl-12 pr-3 rounded-lg cursor-pointer hover:bg-slate-700/50" :class="{ 'opacity-50 cursor-not-allowed': isLoading }" @click="openLogAsDialog">
-            <span v-if="!isLoading">{{ t('log-as') }}</span>
-            <span v-else class="flex items-center">
-              <Spinner size="w-4 h-4" class="mr-2" />
-              {{ t('loading') }}
-            </span>
-          </div>
-          <div v-if="spoofed" class="block py-2 pl-12 pr-3 rounded-lg cursor-pointer hover:bg-slate-700/50" :class="{ 'opacity-50 cursor-not-allowed': isLoading }" @click="resetSpoofedUser">
-            {{ t('reset-spoofed-user') }}
-          </div>
-        </template>
-      </div>
-    </div>
-
-    <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('log-as')" to="#dialog-v2-content" defer>
-      <div class="w-full">
-        <label for="log-as-input" class="sr-only">{{ t('user-email-or-org-id') }}</label>
-        <input
-          id="log-as-input"
-          v-model="logAsInput"
-          type="text"
-          :placeholder="t('user-email-or-org-id')"
-          :aria-label="t('user-email-or-org-id')"
-          class="p-3 w-full rounded-lg border border-gray-300 dark:text-white dark:bg-gray-800 dark:border-gray-600"
-          @keydown.enter="$event.preventDefault()"
-        >
-      </div>
-    </teleport>
-  </div>
+  <router-link
+    to="/settings/account"
+    class="flex items-center w-full min-h-11 rounded-lg cursor-pointer text-gray-300 hover:bg-slate-700/50 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
+    :title="props.compact ? displayName || t('settings') : t('settings')"
+    :aria-label="accountSettingsLabel"
+    data-test="sidebar-account"
+    @click="allowPendingOnboardingDashboardExploration"
+  >
+    <span class="flex w-12 h-11 shrink-0 items-center justify-center">
+      <img v-if="main.user?.image_url" class="w-8 h-8 d-mask d-mask-squircle" :src="main.user?.image_url" alt="" width="32" height="32">
+      <span v-else class="flex items-center justify-center w-8 h-8 bg-gray-700 d-mask d-mask-squircle">
+        <span class="font-medium">
+          {{ acronym }}
+        </span>
+      </span>
+    </span>
+    <span class="min-w-0 flex-1 py-2 pr-3">
+      <span class="block font-medium truncate">
+        {{ displayName }}
+      </span>
+      <span class="block text-sm text-gray-400 truncate">
+        {{ main.user?.email }}
+      </span>
+    </span>
+  </router-link>
 </template>
