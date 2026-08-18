@@ -12,6 +12,7 @@ import IconShield from '~icons/heroicons/shield-check'
 import IconDiscord from '~icons/ic/round-discord'
 import IconBoxes from '~icons/lucide/boxes'
 import IconFlask from '~icons/lucide/flask-conical'
+import IconGift from '~icons/lucide/gift'
 import IconHeadset from '~icons/lucide/headset'
 import IconScanQrCode from '~icons/lucide/scan-qr-code'
 import IconVenetianMask from '~icons/lucide/venetian-mask'
@@ -237,6 +238,13 @@ const tabs = computed<Tab[]>(() => {
       onClick: () => window.open('https://support.capgo.app', '_blank', 'noopener,noreferrer'),
       redirect: true,
     },
+    {
+      label: 'refer-and-earn',
+      icon: IconGift,
+      key: '#refer-and-earn',
+      onClick: () => window.open('https://capgo.affonso.io', '_blank', 'noopener,noreferrer'),
+      redirect: true,
+    },
     ...(isNativePlatform
       ? [
           {
@@ -319,7 +327,10 @@ function tabLabel(tab: Tab) {
         'lg:w-12': isRail,
       }"
     >
-      <div class="flex h-full w-64 min-w-64 flex-col" :class="{ '[&>*]:px-3': !isRail }">
+      <div
+        class="flex h-full w-64 min-w-64 flex-col transition-[padding-inline] duration-500 ease-in-out motion-reduce:!transition-none"
+        :class="isRail ? 'px-0' : 'px-3'"
+      >
         <!-- Sidebar header -->
         <div class="flex border-b shrink-0 border-slate-800 lg:border-slate-700 py-4">
           <router-link

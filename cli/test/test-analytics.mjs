@@ -69,16 +69,19 @@ try {
   await flushAnalytics()
   assert.equal(findEvent(requests), undefined, 'opt-out must suppress events')
 
+  // 4. browser-login console events are functional delivery, not analytics
   await sendEvent('capgo-key', {
-    channel: 'app',
-    event: 'App Created',
-    icon: '🆕',
+    channel: 'user-login',
+    event: 'User CLI login',
+    org_id: 'org-1',
+    description: 'cli-login:test-session',
+    tracking_version: 2,
     notifyConsole: true,
   })
   let consoleReq = findEvent(requests)
   assert.ok(consoleReq, 'telemetry opt-out must preserve functional console broadcasts')
   body = JSON.parse(consoleReq.init.body)
-  assert.equal(body.icon, '🆕')
+  assert.equal(body.description, 'cli-login:test-session')
   assert.equal(body.notifyConsole, true)
   delete process.env.CAPGO_DISABLE_TELEMETRY
 
@@ -86,14 +89,14 @@ try {
   requests = stubFetch()
   await sendEvent('capgo-key', {
     channel: 'app',
-    event: 'App Updated',
-    icon: '📝',
+    event: 'App Created',
+    icon: '🆕',
     notifyConsole: true,
   })
   consoleReq = findEvent(requests)
   assert.ok(consoleReq, 'PostHog opt-out must preserve functional console broadcasts')
   body = JSON.parse(consoleReq.init.body)
-  assert.equal(body.icon, '📝')
+  assert.equal(body.icon, '🆕')
   assert.equal(body.notifyConsole, true)
   delete process.env.CAPGO_DISABLE_POSTHOG
 

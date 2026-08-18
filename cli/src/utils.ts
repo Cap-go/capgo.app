@@ -1876,7 +1876,8 @@ type SendEventPayload = TrackOptions & { nonPersonTags?: Record<string, string |
 )
 
 export async function sendEvent(capgkey: string, payload: SendEventPayload, verbose?: boolean, signal?: AbortSignal): Promise<void> {
-  if (!payload.notifyConsole && (isTruthyEnvValue(env.CAPGO_DISABLE_TELEMETRY) || isTruthyEnvValue(env.CAPGO_DISABLE_POSTHOG)))
+  const telemetryDisabled = isTruthyEnvValue(env.CAPGO_DISABLE_TELEMETRY) || isTruthyEnvValue(env.CAPGO_DISABLE_POSTHOG)
+  if (telemetryDisabled && !payload.notifyConsole)
     return
 
   try {

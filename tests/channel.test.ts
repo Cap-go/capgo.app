@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
-import { BASE_URL, createAppVersions, getSupabaseClient, headers, ORG_ID, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils.ts'
+import { BASE_URL, createAppVersions, getEndpointUrl, getSupabaseClient, headers, ORG_ID, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils.ts'
 
 const id = randomUUID()
 const APPNAME = `com.app.c.${id}`
@@ -70,18 +70,94 @@ describe('[GET] /channel operations', () => {
 
 describe('[POST] /channel operations', () => {
   it('create channel', async () => {
-    const response = await fetch(`${BASE_URL}/channel`, {
+    const response = await fetch(getEndpointUrl('/channel'), {
       method: 'POST',
       headers,
       body: JSON.stringify({
         app_id: APPNAME,
-        channel: 'test_channel',
-        public: true,
+        channel: `test_channel_${id.slice(0, 8)}`,
+        public: false,
       }),
     })
-    const data = await response.json<{ status: string }>()
-    expect(response.status).toBe(200)
+    const data = await response.json<{ status: string, error?: string, message?: string }>()
+    expect(response.status, JSON.stringify(data)).toBe(200)
     expect(data.status).toBe('ok')
+  })
+
+  it('publicizes a private channel through POST /channel when caller has app.update_settings', async () => {
+    const channelName = `publicize_${id.slice(0, 8)}`
+    const channelEndpoint = getEndpointUrl('/channel')
+    const client = getSupabaseClient()
+
+    const createResponse = await fetch(channelEndpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        channel: channelName,
+        public: false,
+      }),
+    })
+    const createData = await createResponse.json<{ status: string, error?: string, message?: string }>()
+    expect(createResponse.status, JSON.stringify(createData)).toBe(200)
+
+    const { data: productionBefore } = await client
+      .from('channels')
+      .select('public')
+      .eq('app_id', APPNAME)
+      .eq('name', 'production')
+      .single()
+      .throwOnError()
+
+    try {
+      if (productionBefore.public) {
+        await client
+          .from('channels')
+          .update({ public: false })
+          .eq('app_id', APPNAME)
+          .eq('name', 'production')
+          .throwOnError()
+      }
+
+      const publicizeResponse = await fetch(channelEndpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          app_id: APPNAME,
+          channel: channelName,
+          public: true,
+        }),
+      })
+      const publicizeData = await publicizeResponse.json<{ status: string, error?: string, message?: string }>()
+      expect(publicizeResponse.status, JSON.stringify(publicizeData)).toBe(200)
+      expect(publicizeData.status).toBe('ok')
+
+      const { data: channel } = await client
+        .from('channels')
+        .select('public')
+        .eq('app_id', APPNAME)
+        .eq('name', channelName)
+        .single()
+        .throwOnError()
+      expect(channel.public).toBe(true)
+    }
+    finally {
+      await client
+        .from('channels')
+        .update({ public: false })
+        .eq('app_id', APPNAME)
+        .eq('name', channelName)
+        .throwOnError()
+
+      if (productionBefore.public) {
+        await client
+          .from('channels')
+          .update({ public: true })
+          .eq('app_id', APPNAME)
+          .eq('name', 'production')
+          .throwOnError()
+      }
+    }
   })
 
   it('update channel', async () => {
