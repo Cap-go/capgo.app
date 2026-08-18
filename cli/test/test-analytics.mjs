@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { deferCommandInvocation, extractCommandContext, flushAnalytics, flushDeferredCommandInvocation, getGlobalAnalyticsProps, setInvocationSource, trackCommandFailed, trackCommandInvoked, trackCommandSucceeded, trackEvent } from '../src/analytics/track.ts'
+import { sendEvent } from '../src/utils.ts'
 
 console.log('🧪 Testing analytics track.ts...\n')
 
@@ -65,6 +66,21 @@ try {
   await trackEvent({ apikey: 'capgo-key', channel: 'cli-usage', event: 'Nope', orgId: 'o', appId: 'a' })
   await flushAnalytics()
   assert.equal(findEvent(requests), undefined, 'opt-out must suppress events')
+  delete process.env.CAPGO_DISABLE_TELEMETRY
+
+  // 4. console workflow events are functional delivery, not analytics
+  process.env.CAPGO_DISABLE_TELEMETRY = '1'
+  requests = stubFetch()
+  await sendEvent('capgo-key', {
+    channel: 'user-login',
+    event: 'User CLI login',
+    org_id: 'org-1',
+    description: 'cli-login:test-session',
+    tracking_version: 2,
+    notifyConsole: true,
+    notify: false,
+  })
+  assert.ok(findEvent(requests), 'console workflow events must bypass analytics opt-out')
   delete process.env.CAPGO_DISABLE_TELEMETRY
 
   // (the no-key early return is exercised in the migration suite; it can't be

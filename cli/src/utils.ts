@@ -1890,7 +1890,8 @@ export async function updateOrCreateChannel(supabase: SupabaseClient<Database>, 
 }
 
 export async function sendEvent(capgkey: string, payload: TrackOptions & { notifyConsole?: boolean, nonPersonTags?: Record<string, string | number | boolean> }, verbose?: boolean, signal?: AbortSignal): Promise<void> {
-  if (isTruthyEnvValue(env.CAPGO_DISABLE_TELEMETRY) || isTruthyEnvValue(env.CAPGO_DISABLE_POSTHOG))
+  const telemetryDisabled = isTruthyEnvValue(env.CAPGO_DISABLE_TELEMETRY) || isTruthyEnvValue(env.CAPGO_DISABLE_POSTHOG)
+  if (telemetryDisabled && !payload.notifyConsole)
     return
 
   try {
