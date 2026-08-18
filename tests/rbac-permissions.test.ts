@@ -1739,10 +1739,19 @@ describe('rbac permission system', () => {
         )
         expect(visibleChannel.rowCount).toBe(1)
 
-        await expect(query(
-          'UPDATE public.channels SET allow_emulator = true WHERE id = $1::bigint RETURNING id, allow_emulator',
-          [channel.rows[0].id],
-        )).rejects.toThrow(/not allowed allow_emulator/)
+        await query('SAVEPOINT channel_settings_write_denied')
+        let settingsWriteError: unknown
+        try {
+          await query(
+            'UPDATE public.channels SET allow_emulator = true WHERE id = $1::bigint RETURNING id, allow_emulator',
+            [channel.rows[0].id],
+          )
+        }
+        catch (error) {
+          settingsWriteError = error
+        }
+        await query('ROLLBACK TO SAVEPOINT channel_settings_write_denied')
+        expect((settingsWriteError as { message?: string } | undefined)?.message).toMatch(/not allowed allow_emulator/)
 
         const deletedChannel = await query(
           'DELETE FROM public.channels WHERE id = $1::bigint RETURNING id',
