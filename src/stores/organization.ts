@@ -338,10 +338,13 @@ export const useOrganizationStore = defineStore('organization', () => {
   }
 
   let pendingOrganizationImageLoad: Promise<void> | undefined
+  let pendingOrganizationImageLoadRequested = false
 
   const loadPendingOrganizationImages = () => {
-    if (pendingOrganizationImageLoad)
+    if (pendingOrganizationImageLoad) {
+      pendingOrganizationImageLoadRequested = true
       return
+    }
 
     const imageLoads: Promise<void>[] = []
     const organizationsWithPendingLogos = Array.from(_organizations.value.values())
@@ -361,6 +364,10 @@ export const useOrganizationStore = defineStore('organization', () => {
       .then(() => undefined)
       .finally(() => {
         pendingOrganizationImageLoad = undefined
+        if (pendingOrganizationImageLoadRequested) {
+          pendingOrganizationImageLoadRequested = false
+          loadPendingOrganizationImages()
+        }
       })
   }
 

@@ -86,6 +86,8 @@ describe('/login-cli page contract', () => {
     expect(organizationStore).toContain('loadOrganizationApps(selectableOrganizations, loadImages)')
     expect(organizationStore).toContain('loadPendingOrganizationImages()')
     expect(organizationStore).toContain('if (pendingOrganizationImageLoad)')
+    expect(organizationStore).toContain('pendingOrganizationImageLoadRequested = true')
+    expect(organizationStore).toContain('if (pendingOrganizationImageLoadRequested)')
   })
 
   it.concurrent('contains focused key, paste, warning, waiting, and success copy', () => {
