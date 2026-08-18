@@ -10,7 +10,6 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
-import IconBack from '~icons/material-symbols/arrow-back-ios-rounded'
 import iconEmail from '~icons/oui/email?raw'
 import iconPassword from '~icons/ph/key?raw'
 import mfaIcon from '~icons/simple-icons/2fas?raw'
@@ -25,9 +24,10 @@ const isLoading = ref(false)
 const isMobile = ref(Capacitor.isNativePlatform())
 const turnstileToken = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
-const statusAuth: Ref<'email' | 'credentials' | '2fa'> = ref('email')
+const statusAuth: Ref<'login' | '2fa'> = ref('login')
 const mfaLoginFactor: Ref<Factor | null> = ref(null)
 const mfaChallengeId: Ref<string> = ref('')
+const mfaCode = ref('')
 const querySessionAccessToken = ref('')
 const querySessionRefreshToken = ref('')
 const hasQuerySession = ref(false)
@@ -35,18 +35,33 @@ const router = useRouter()
 const { t } = useI18n()
 const captchaComponent = ref<InstanceType<typeof VueTurnstile> | null>(null)
 
-// Two-step login state
+// Keep email, password, and OTP in one form so password managers can fill them
+// with a single biometric prompt. SSO is detected in the background.
 const emailForLogin = ref('')
 const hasSso = ref(false)
 const enforceSso = ref(false)
-const isDomainChecking = ref(false)
+const lastCheckedEmail = ref('')
 const domainCheckTimeoutMs = 5000
+const domainCheckDebounceMs = 350
 const isCheckingSavedSession = ref(true)
 const captchaStatus = ref<'disabled' | 'loading' | 'ready' | 'unavailable'>(captchaKey.value ? 'loading' : 'disabled')
 let captchaInitTimeout: ReturnType<typeof setTimeout> | null = null
+let domainCheckTimer: ReturnType<typeof setTimeout> | null = null
+let domainCheckSeq = 0
 
 const version = import.meta.env.VITE_APP_VERSION
-const isEmailStepBusy = computed(() => isDomainChecking.value || isCheckingSavedSession.value)
+const isLoginStep = computed(() => statusAuth.value === 'login')
+const emailValidation = computed(() => (isLoginStep.value ? 'required:trim|email' : ''))
+const passwordValidation = computed(() => (isLoginStep.value && !enforceSso.value ? 'required:trim' : ''))
+const mfaValidation = computed(() => (statusAuth.value === '2fa' ? 'required|mfa_code_validation' : ''))
+const autofillPreserveHiddenStyle = {
+  position: 'absolute',
+  width: '1px',
+  height: '1px',
+  opacity: '0',
+  overflow: 'hidden',
+  pointerEvents: 'none',
+} as const
 const shouldBlockForCaptcha = computed(() => !!captchaKey.value && captchaStatus.value === 'loading' && !turnstileToken.value)
 const loginHeroChips = computed(() => [
   t('login-chip-live-updates'),
@@ -91,21 +106,6 @@ const authSecondaryButtonClass = [
   'dark:border-slate-600/90 dark:bg-slate-950/85 dark:text-slate-200 dark:hover:bg-slate-800/95',
   'disabled:pointer-events-none disabled:opacity-60',
 ].join(' ')
-const authAccountContextClass = [
-  'flex min-w-0 flex-col items-start gap-2 rounded-2xl border border-slate-200/80 bg-slate-50/80 p-2',
-  'dark:border-slate-700 dark:bg-slate-900/70',
-].join(' ')
-const authBackToEmailButtonClass = [
-  'inline-flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-xl px-3 text-sm font-semibold text-slate-700',
-  'transition duration-200 hover:bg-white hover:text-slate-950',
-  'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-[var(--color-azure-500)]',
-  'dark:text-slate-200 dark:hover:bg-slate-800 dark:hover:text-white',
-  'disabled:pointer-events-none disabled:opacity-60',
-].join(' ')
-const authSelectedEmailClass = [
-  'w-full min-w-0 rounded-xl bg-white/75 px-3 py-2 text-sm font-medium leading-5 text-slate-700 [overflow-wrap:anywhere]',
-  'dark:bg-slate-950/55 dark:text-slate-100',
-].join(' ')
 const authInlineLinkClass = [
   'inline-flex min-h-6 items-center justify-center gap-1 border-none bg-transparent p-0 text-[0.95rem] font-semibold text-[rgb(255,114,17)]',
   'transition-colors duration-200 hover:text-[rgb(235,94,0)]',
@@ -144,7 +144,7 @@ function clearCaptchaInitTimeout() {
 }
 
 function scheduleCaptchaInitTimeout() {
-  if (!captchaKey.value || statusAuth.value !== 'credentials') {
+  if (!captchaKey.value || !isLoginStep.value) {
     clearCaptchaInitTimeout()
     return
   }
@@ -174,7 +174,7 @@ watch(turnstileToken, (token) => {
     captchaStatus.value = 'ready'
     clearCaptchaInitTimeout()
   }
-  else if (statusAuth.value === 'credentials') {
+  else if (isLoginStep.value) {
     captchaStatus.value = 'loading'
     scheduleCaptchaInitTimeout()
   }
@@ -187,7 +187,7 @@ watch(statusAuth, (status) => {
     return
   }
 
-  if (status === 'credentials') {
+  if (status === 'login') {
     captchaStatus.value = turnstileToken.value ? 'ready' : 'loading'
     scheduleCaptchaInitTimeout()
   }
@@ -198,6 +198,8 @@ watch(statusAuth, (status) => {
 
 onBeforeUnmount(() => {
   clearCaptchaInitTimeout()
+  if (domainCheckTimer)
+    clearTimeout(domainCheckTimer)
 })
 
 async function nextLogin() {
@@ -246,6 +248,9 @@ async function checkMfa() {
     mfaChallengeId.value = challenge.id
     statusAuth.value = '2fa'
     isLoading.value = false
+    await nextTick()
+    if (mfaRegex.test(mfaCode.value))
+      await handleMfaSubmit({ code: mfaCode.value })
   }
   else {
     await nextLogin()
@@ -356,39 +361,103 @@ async function checkDomain(email: string): Promise<{ has_sso: boolean, enforce_s
   }
 }
 
-async function handleEmailContinue(form: { email: string }) {
-  isDomainChecking.value = true
-  emailForLogin.value = form.email
+function isCompletableEmail(email: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+}
 
+async function refreshSsoForEmail(email: string) {
+  const trimmed = email.trim()
+  const seq = ++domainCheckSeq
   try {
-    const result = await checkDomain(form.email)
+    const result = await checkDomain(trimmed)
+    if (seq !== domainCheckSeq)
+      return
     hasSso.value = result.has_sso
     enforceSso.value = result.enforce_sso === true
+    lastCheckedEmail.value = trimmed
   }
   catch (error) {
-    // Domain check timed out or failed. Fall through to the password step.
+    if (seq !== domainCheckSeq)
+      return
     console.error('SSO domain check failed', error)
     hasSso.value = false
     enforceSso.value = false
-    toast.error(t('sso-check-failed'))
-  }
-  finally {
-    isDomainChecking.value = false
-    statusAuth.value = 'credentials'
+    lastCheckedEmail.value = trimmed
   }
 }
 
-async function handlePasswordSubmit(form: { password: string }) {
-  isLoading.value = true
-  await login({ email: emailForLogin.value, password: form.password })
+async function ensureSsoChecked(email: string) {
+  const trimmed = email.trim()
+  if (lastCheckedEmail.value === trimmed)
+    return
+  if (domainCheckTimer) {
+    clearTimeout(domainCheckTimer)
+    domainCheckTimer = null
+  }
+  await refreshSsoForEmail(trimmed)
 }
 
-async function handleSsoLogin() {
-  if (isLoading.value || shouldBlockForCaptcha.value) {
+watch(emailForLogin, (email) => {
+  const trimmed = email.trim()
+  const domain = trimmed.split('@')[1] || ''
+  const lastDomain = lastCheckedEmail.value.split('@')[1] || ''
+  if (domain !== lastDomain) {
+    hasSso.value = false
+    enforceSso.value = false
+  }
+
+  if (domainCheckTimer) {
+    clearTimeout(domainCheckTimer)
+    domainCheckTimer = null
+  }
+
+  if (!isCompletableEmail(trimmed)) {
+    lastCheckedEmail.value = ''
+    return
+  }
+
+  domainCheckTimer = setTimeout(() => {
+    void refreshSsoForEmail(trimmed)
+  }, domainCheckDebounceMs)
+})
+
+async function handleLoginSubmit(form: { email: string, password: string, code?: string }) {
+  if (statusAuth.value === '2fa') {
+    await handleMfaSubmit({ code: form.code || mfaCode.value })
     return
   }
 
   isLoading.value = true
+  emailForLogin.value = form.email
+
+  try {
+    await ensureSsoChecked(form.email)
+  }
+  catch (error) {
+    console.error('SSO domain check failed', error)
+  }
+
+  if (enforceSso.value) {
+    await handleSsoLogin()
+    return
+  }
+
+  await login({ email: form.email, password: form.password })
+}
+
+async function handleSsoLogin() {
+  if (shouldBlockForCaptcha.value) {
+    isLoading.value = false
+    return
+  }
+
+  isLoading.value = true
+  await ensureSsoChecked(emailForLogin.value)
+  if (!hasSso.value) {
+    isLoading.value = false
+    return
+  }
+
   const domain = emailForLogin.value.split('@')[1]
 
   try {
@@ -449,19 +518,6 @@ async function handleMfaSubmit(form: { code: string }) {
     await nextLogin()
     isLoading.value = false
   }
-}
-
-async function goBackToEmail() {
-  if (isLoading.value) {
-    return
-  }
-
-  statusAuth.value = 'email'
-  hasSso.value = false
-  enforceSso.value = false
-
-  await nextTick()
-  focusLoginEmailInput()
 }
 
 async function goToForgotPassword() {
@@ -693,7 +749,10 @@ async function goback() {
 
   mfaChallengeId.value = ''
   mfaLoginFactor.value = null
-  statusAuth.value = 'email'
+  mfaCode.value = ''
+  statusAuth.value = 'login'
+  await nextTick()
+  focusLoginEmailInput()
 }
 onMounted(checkLogin)
 </script>
@@ -824,105 +883,36 @@ onMounted(checkLogin)
               </div>
             </div>
 
-            <Transition
-              v-else
-              mode="out-in"
-              enter-active-class="transition duration-200 ease-out"
-              enter-from-class="translate-x-6 opacity-0"
-              enter-to-class="translate-x-0 opacity-100"
-              leave-active-class="transition duration-200 ease-in"
-              leave-from-class="translate-x-0 opacity-100"
-              leave-to-class="-translate-x-6 opacity-0"
-            >
-              <!-- Step 1: Email -->
-              <div v-if="statusAuth === 'email'" key="step-email" :class="authStepCardClass">
-                <div class="text-slate-500 dark:text-slate-300" :class="authCardBodyClass">
-                  <FormKit id="email-step" type="form" :actions="false" @submit="handleEmailContinue">
-                    <div class="space-y-5">
+            <div v-else :class="authStepCardClass">
+              <div class="text-slate-500 dark:text-slate-300" :class="authCardBodyClass">
+                <FormKit id="login-account" type="form" :actions="false" autocapitalize="off" data-test="login-form" @submit="handleLoginSubmit">
+                  <div class="space-y-5">
+                    <div v-show="isLoginStep" class="space-y-5">
                       <FormKit
-                        id="login-email" type="email" name="email" :disabled="isEmailStepBusy" enterkeyhint="next" :placeholder="t('email')"
-                        :prefix-icon="iconEmail" inputmode="email" :label="t('email')" autocomplete="email"
-                        validation="required:trim" data-test="email"
+                        id="login-email"
+                        v-model="emailForLogin"
+                        type="email"
+                        name="email"
+                        enterkeyhint="next"
+                        :placeholder="t('email')"
+                        :prefix-icon="iconEmail"
+                        inputmode="email"
+                        :label="t('email')"
+                        autocomplete="username"
+                        :validation="emailValidation"
+                        data-test="email"
                       />
-                      <FormKitMessages data-test="form-error" />
-                      <div>
-                        <div class="inline-flex justify-center items-center w-full">
-                          <button
-                            type="submit" data-test="continue" :disabled="isEmailStepBusy" :aria-busy="isEmailStepBusy ? 'true' : 'false'"
-                            :class="authPrimaryButtonClass"
-                          >
-                            <svg
-                              v-if="isEmailStepBusy" class="inline-block mr-3 -ml-1 w-5 h-5 text-white align-middle animate-spin"
-                              xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" data-test="loading"
-                            >
-                              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                              <path
-                                class="opacity-75" fill="currentColor"
-                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                              />
-                            </svg>
-                            {{ t('continue') }}
-                          </button>
-                        </div>
-                      </div>
 
-                      <div :class="authPanelClass">
-                        <span class="text-slate-500 dark:text-slate-400">
-                          {{ t('dont-have-an-account') }}
-                        </span>
-                        <a
-                          v-if="!isMobile"
-                          :href="registerUrl"
-                          data-test="register"
-                          :class="authInlineLinkClass"
-                        >
-                          {{ t('create-a-free-account') }}
-                        </a>
-                      </div>
-                    </div>
-                  </FormKit>
-                </div>
-              </div>
-
-              <!-- Step 2: Credentials (SSO or Password) -->
-              <div v-else-if="statusAuth === 'credentials'" key="step-credentials" :class="authStepCardClass">
-                <div class="text-slate-500 dark:text-slate-300" :class="authCardBodyClass">
-                  <!-- SSO path (enforce_sso=true: SSO only) -->
-                  <div v-if="hasSso && enforceSso" class="space-y-5">
-                    <!-- Show email context -->
-                    <div :class="authAccountContextClass">
-                      <button
-                        type="button"
-                        data-test="back-to-email"
-                        :disabled="isLoading"
-                        :aria-label="t('go-back')"
-                        :class="authBackToEmailButtonClass"
-                        @click="goBackToEmail"
-                      >
-                        <IconBack class="h-4 w-4 fill-current" aria-hidden="true" />
-                        <span>{{ t('go-back') }}</span>
-                      </button>
-                      <p data-test="selected-email" :class="authSelectedEmailClass">
-                        {{ emailForLogin }}
+                      <p v-if="hasSso && enforceSso" class="text-sm text-slate-600 dark:text-slate-300">
+                        {{ t('sso-detected') }}
                       </p>
-                    </div>
-                    <p class="text-sm text-slate-600 dark:text-slate-300">
-                      {{ t('sso-detected') }}
-                    </p>
-                    <div v-if="!!captchaKey">
-                      <VueTurnstile
-                        ref="captchaComponent"
-                        v-model="turnstileToken"
-                        size="flexible"
-                        :site-key="captchaKey"
-                        @error="handleCaptchaUnavailable('Turnstile error', $event)"
-                        @unsupported="handleCaptchaUnavailable('Turnstile unsupported')"
-                      />
-                    </div>
-                    <div>
-                      <div class="inline-flex justify-center items-center w-full">
+
+                      <div v-if="hasSso">
                         <button
-                          type="button" data-test="sso-login" :disabled="isLoading || shouldBlockForCaptcha" :aria-busy="isLoading ? 'true' : 'false'"
+                          type="button"
+                          data-test="sso-login"
+                          :disabled="isLoading || shouldBlockForCaptcha || isCheckingSavedSession"
+                          :aria-busy="isLoading ? 'true' : 'false'"
                           :class="authPrimaryButtonClass"
                           @click="handleSsoLogin"
                         >
@@ -938,181 +928,154 @@ onMounted(checkLogin)
                           </svg>
                           {{ t('continue-with-sso') }}
                         </button>
+                        <div v-if="!enforceSso" class="flex items-center my-4">
+                          <div class="flex-1 h-px bg-gray-200 dark:bg-gray-600" />
+                          <span class="px-3 text-sm text-gray-400">{{ t('login-or-separator') }}</span>
+                          <div class="flex-1 h-px bg-gray-200 dark:bg-gray-600" />
+                        </div>
+                      </div>
+
+                      <!--
+                        Password stays in the DOM from first paint so password managers can fill
+                        email + password in one biometric prompt. Hide it only after SSO
+                        enforcement is confirmed.
+                      -->
+                      <div v-show="!enforceSso">
+                        <FormKit
+                          id="passwordInput"
+                          type="password"
+                          :placeholder="t('password')"
+                          name="password"
+                          :label="t('password')"
+                          :prefix-icon="iconPassword"
+                          :validation="passwordValidation"
+                          enterkeyhint="send"
+                          autocomplete="current-password"
+                          data-test="password"
+                        />
+                      </div>
+
+                      <div v-if="!!captchaKey">
+                        <VueTurnstile
+                          ref="captchaComponent"
+                          v-model="turnstileToken"
+                          size="flexible"
+                          :site-key="captchaKey"
+                          @error="handleCaptchaUnavailable('Turnstile error', $event)"
+                          @unsupported="handleCaptchaUnavailable('Turnstile unsupported')"
+                        />
                       </div>
                     </div>
-                  </div>
 
-                  <!-- Password path (with optional SSO button when enforce_sso=false) -->
-                  <div v-else>
-                    <FormKit id="login-account" type="form" :actions="false" @submit="handlePasswordSubmit">
-                      <div class="space-y-5">
-                        <!--
-                      Hidden email input placed inside the form so browsers and password managers
-                      can associate the password field with the correct account (autocomplete="username").
-                      Uses opacity+absolute positioning instead of display:none so browsers still
-                      detect it for autofill purposes.
+                    <!--
+                      Keep the OTP field mounted (not display:none) so Apple Passwords can fill
+                      a TOTP during the same prompt. Reveal it only when MFA is required.
                     -->
-                        <input
-                          id="login-username-hidden"
-                          type="email"
-                          :value="emailForLogin"
-                          name="username"
-                          autocomplete="username"
-                          readonly
-                          tabindex="-1"
-                          aria-hidden="true"
-                          :aria-label="t('email')"
-                          style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none;"
-                        >
-                        <div :class="authAccountContextClass">
-                          <button
-                            type="button"
-                            data-test="back-to-email"
-                            :disabled="isLoading"
-                            :aria-label="t('go-back')"
-                            :class="authBackToEmailButtonClass"
-                            @click="goBackToEmail"
-                          >
-                            <IconBack class="h-4 w-4 fill-current" aria-hidden="true" />
-                            <span>{{ t('go-back') }}</span>
-                          </button>
-                          <p data-test="selected-email" :class="authSelectedEmailClass">
-                            {{ emailForLogin }}
-                          </p>
-                        </div>
-                        <!-- Optional SSO button when SSO exists but is not enforced -->
-                        <div v-if="hasSso && !enforceSso">
-                          <button
-                            type="button" data-test="sso-login"
-                            :disabled="isLoading || shouldBlockForCaptcha"
-                            :aria-busy="isLoading ? 'true' : 'false'"
-                            :class="authPrimaryButtonClass"
-                            @click="handleSsoLogin"
-                          >
-                            {{ t('continue-with-sso') }}
-                          </button>
-                          <div class="flex items-center my-4">
-                            <div class="flex-1 h-px bg-gray-200 dark:bg-gray-600" />
-                            <span class="px-3 text-sm text-gray-400">{{ t('login-or-separator') }}</span>
-                            <div class="flex-1 h-px bg-gray-200 dark:bg-gray-600" />
-                          </div>
-                        </div>
-                        <div>
-                          <FormKit
-                            id="passwordInput" type="password" :placeholder="t('password')"
-                            name="password" :label="t('password')" :prefix-icon="iconPassword" :disabled="isLoading"
-                            validation="required:trim" enterkeyhint="send" autocomplete="current-password"
-                            data-test="password"
-                          />
-                        </div>
-                        <div v-if="!!captchaKey">
-                          <VueTurnstile
-                            ref="captchaComponent"
-                            v-model="turnstileToken"
-                            size="flexible"
-                            :site-key="captchaKey"
-                            @error="handleCaptchaUnavailable('Turnstile error', $event)"
-                            @unsupported="handleCaptchaUnavailable('Turnstile unsupported')"
-                          />
-                        </div>
-                        <FormKitMessages data-test="form-error" />
-                        <div>
-                          <div class="inline-flex justify-center items-center w-full">
-                            <button
-                              type="submit" data-test="submit" :disabled="isLoading || shouldBlockForCaptcha" :aria-busy="isLoading ? 'true' : 'false'"
-                              :class="authPrimaryButtonClass"
-                            >
-                              <svg
-                                v-if="isLoading" class="inline-block mr-3 -ml-1 w-5 h-5 text-white align-middle animate-spin"
-                                xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" data-test="loading"
-                              >
-                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                                <path
-                                  class="opacity-75" fill="currentColor"
-                                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                                />
-                              </svg>
-                              {{ t('log-in') }}
-                            </button>
-                          </div>
-                        </div>
-
-                        <div :class="authPanelClass">
-                          <a
-                            v-if="!isMobile"
-                            :href="registerUrl"
-                            data-test="register"
-                            :class="authInlineLinkClass"
-                          >
-                            {{ t('create-a-free-account') }}
-                          </a>
-                          <button
-                            type="button"
-                            data-test="forgot-password"
-                            :class="authInlineLinkClass"
-                            @click="goToForgotPassword"
-                          >
-                            {{ t('forgot') }} {{ t('password') }} ?
-                          </button>
-                        </div>
-                      </div>
-                    </FormKit>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Step 3: 2FA -->
-              <div v-else key="step-2fa" :class="authStepCardClass">
-                <div :class="authCardBodyClass">
-                  <FormKit id="2fa-account" type="form" :actions="false" autocapitalize="off" data-test="2fa-form" @submit="handleMfaSubmit">
-                    <div class="space-y-5 text-slate-500 dark:text-slate-300">
+                    <div :style="statusAuth === '2fa' ? undefined : autofillPreserveHiddenStyle">
                       <FormKit
-                        type="text" name="code" :disabled="isLoading"
-                        :prefix-icon="mfaIcon" inputmode="text" :label="t('2fa-code')"
+                        v-model="mfaCode"
+                        type="text"
+                        name="code"
+                        :disabled="isLoading && statusAuth === '2fa'"
+                        :prefix-icon="mfaIcon"
+                        inputmode="numeric"
+                        :label="t('2fa-code')"
                         :validation-rules="{ mfa_code_validation }"
                         :validation-messages="{
                           mfa_code_validation: t('login-2fa-code-invalid'),
                         }"
                         placeholder="xxx xxx"
-                        autocomplete="off"
-                        validation="required|mfa_code_validation"
-                        validation-visibility="live"
+                        autocomplete="one-time-code"
+                        :validation="mfaValidation"
+                        :validation-visibility="statusAuth === '2fa' ? 'live' : 'blur'"
                         data-test="2fa-code"
                       />
-                      <FormKitMessages />
-                      <div>
-                        <div class="inline-flex justify-center items-center w-full">
-                          <button
-                            type="submit" data-test="verify" :disabled="isLoading" :aria-busy="isLoading ? 'true' : 'false'"
-                            :class="authPrimaryButtonClass"
-                          >
-                            <svg
-                              v-if="isLoading" class="inline-block mr-3 -ml-1 w-5 h-5 text-white align-middle animate-spin"
-                              xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" data-test="loading"
-                            >
-                              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                              <path
-                                class="opacity-75" fill="currentColor"
-                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                              />
-                            </svg>
-                            {{ t('verify') }}
-                          </button>
-                        </div>
-                      </div>
+                    </div>
 
-                      <div :class="authPanelClass">
-                        <button type="button" class="appearance-none" :class="authInlineLinkClass" @click="goback">
-                          {{ t('go-back') }}
+                    <FormKitMessages data-test="form-error" />
+
+                    <div v-show="isLoginStep && !enforceSso">
+                      <div class="inline-flex justify-center items-center w-full">
+                        <button
+                          type="submit"
+                          data-test="submit"
+                          :disabled="statusAuth === '2fa' || isLoading || shouldBlockForCaptcha || isCheckingSavedSession"
+                          :aria-busy="isLoading ? 'true' : 'false'"
+                          :class="authPrimaryButtonClass"
+                        >
+                          <svg
+                            v-if="isLoading" class="inline-block mr-3 -ml-1 w-5 h-5 text-white align-middle animate-spin"
+                            xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" data-test="loading"
+                          >
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                            <path
+                              class="opacity-75" fill="currentColor"
+                              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                            />
+                          </svg>
+                          {{ t('log-in') }}
                         </button>
                       </div>
                     </div>
-                  </FormKit>
-                </div>
-              </div>
-            </Transition>
 
-            <!-- Footer (visible for email and credentials steps) -->
+                    <div v-show="statusAuth === '2fa'">
+                      <div class="inline-flex justify-center items-center w-full">
+                        <button
+                          type="submit"
+                          data-test="verify"
+                          :disabled="statusAuth !== '2fa' || isLoading"
+                          :aria-busy="isLoading ? 'true' : 'false'"
+                          :class="authPrimaryButtonClass"
+                        >
+                          <svg
+                            v-if="isLoading" class="inline-block mr-3 -ml-1 w-5 h-5 text-white align-middle animate-spin"
+                            xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" data-test="loading"
+                          >
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                            <path
+                              class="opacity-75" fill="currentColor"
+                              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                            />
+                          </svg>
+                          {{ t('verify') }}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div v-show="isLoginStep" :class="authPanelClass">
+                      <span class="text-slate-500 dark:text-slate-400">
+                        {{ t('dont-have-an-account') }}
+                      </span>
+                      <a
+                        v-if="!isMobile"
+                        :href="registerUrl"
+                        data-test="register"
+                        :class="authInlineLinkClass"
+                      >
+                        {{ t('create-a-free-account') }}
+                      </a>
+                      <button
+                        v-show="!enforceSso"
+                        type="button"
+                        data-test="forgot-password"
+                        :class="authInlineLinkClass"
+                        @click="goToForgotPassword"
+                      >
+                        {{ t('forgot') }} {{ t('password') }} ?
+                      </button>
+                    </div>
+
+                    <div v-show="statusAuth === '2fa'" :class="authPanelClass">
+                      <button type="button" class="appearance-none" :class="authInlineLinkClass" @click="goback">
+                        {{ t('go-back') }}
+                      </button>
+                    </div>
+                  </div>
+                </FormKit>
+              </div>
+            </div>
+
+            <!-- Footer (visible on the login step) -->
             <section v-if="statusAuth !== '2fa'" class="flex flex-col items-center mt-6">
               <div class="mx-auto">
                 <LangSelector />
