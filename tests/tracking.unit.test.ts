@@ -165,6 +165,23 @@ describe('sendEventToTracking', () => {
     }))
   })
 
+  it.each([
+    ['a Date', new Date('2026-08-18T08:15:30.000Z')],
+    ['a numeric timestamp', Date.parse('2026-08-18T09:45:00.000Z')],
+  ])('preserves %s when forwarding events to PostHog', async (_label, timestamp) => {
+    const { sendEventToTracking } = await import('../supabase/functions/_backend/utils/tracking.ts')
+
+    await sendEventToTracking(createContext(), {
+      channel: 'usage',
+      event: 'Timestamped Event',
+      timestamp,
+    }, { background: false })
+
+    expect(posthogMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      timestamp: new Date(timestamp).toISOString(),
+    }))
+  })
+
   it('can skip PostHog while preserving Bento delivery', async () => {
     const { sendEventToTracking } = await import('../supabase/functions/_backend/utils/tracking.ts')
 

@@ -180,6 +180,15 @@ describe('global stats metric helpers', () => {
     expect(definition!).not.toContain('file_size')
   })
 
+  it.concurrent('registers the native notification shard on both trigger runtimes', () => {
+    const cloudflareRouter = readFileSync(new URL('../cloudflare_workers/api/index.ts', import.meta.url), 'utf8')
+    const supabaseRouter = readFileSync(new URL('../supabase/functions/triggers/index.ts', import.meta.url), 'utf8')
+    const route = "route('/global_stats_native_notifications', globalStatsShardApps.native_notifications)"
+
+    expect(cloudflareRouter).toContain(route)
+    expect(supabaseRouter).toContain(route)
+  })
+
   it.concurrent('detects missing global stats shards before notifications', () => {
     expect(globalStatsTestUtils.getMissingGlobalStatsRequiredShards(new Set())).toEqual([
       'core',

@@ -2310,8 +2310,8 @@ async function dispatchMissingGlobalStatsShards(c: Context, dateId: string): Pro
     c,
     dateId,
     undefined,
-    'No missing global stats global stats shards to queue',
-    'Queued missing global stats global stats shards',
+    'No missing global stats shards to queue',
+    'Queued missing global stats shards',
   )
 }
 
@@ -2332,7 +2332,7 @@ async function dispatchGlobalStatsShards(c: Context, dateId: string): Promise<vo
 
   cloudlog({
     requestId: c.get('requestId'),
-    message: 'Queued global stats global stats shards',
+    message: 'Queued global stats shards',
     dateId,
     queued,
     completedShards: Array.from(completedShards).sort((a, b) => a.localeCompare(b)),
