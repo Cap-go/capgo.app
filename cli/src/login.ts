@@ -1,11 +1,13 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { intro, isCancel, log, outro, password } from '@clack/prompts'
+import { intro, isCancel, log, outro, password, select } from '@clack/prompts'
 import { checkAlerts } from './api/update'
 import { flushDeferredCommandInvocation } from './analytics/track'
 import { resolveLoginCommandApiKey } from './auth/command-input'
 import { validateAndSaveKey } from './auth/session'
+import { loginInitInBrowser } from './init/browser-login'
 import { CliUserError } from './shared/cli-user-error'
+import { canPromptInteractively } from './utils'
 
 interface Options {
   apikey?: string
@@ -14,15 +16,43 @@ interface Options {
   supaAnon?: string
 }
 
+export type LoginMethod = 'browser' | 'paste'
+type LoginMethodPrompt = (options: {
+  message: string
+  options: Array<{ value: LoginMethod, label: string }>
+}) => Promise<unknown>
+
+export const LOGIN_METHOD_OPTIONS: Array<{ value: LoginMethod, label: string }> = [
+  { value: 'browser', label: 'Open the browser to generate an API key automatically' },
+  { value: 'paste', label: 'Paste an API key' },
+]
+
+export async function chooseLoginMethod(prompt: LoginMethodPrompt = options => select(options)): Promise<LoginMethod> {
+  const method = await prompt({
+    message: 'How would you like to log in?',
+    options: LOGIN_METHOD_OPTIONS,
+  })
+
+  if (isCancel(method)) {
+    log.warn('Login cancelled')
+    throw new CliUserError('Login cancelled')
+  }
+  if (method !== 'browser' && method !== 'paste')
+    throw new CliUserError('Invalid login method')
+  return method
+}
+
 export function doLoginExists() {
   const userHomeDir = homedir()
   return existsSync(`${userHomeDir}/.capgo`) || existsSync('.capgo')
 }
 
-export async function loginInternal(apikey: string | undefined, options: Options, silent = false): Promise<string> {
-  if (!silent)
-    intro(`Login to Capgo`)
+function showLoginSuccess(local: boolean) {
+  log.success(`login saved into .capgo file in ${local ? 'local' : 'home'} directory`)
+  outro('Done ✅')
+}
 
+export async function loginInternal(apikey: string | undefined, options: Options, silent = false): Promise<string> {
   if (!apikey && !silent) {
     const apikeyInput = await password({
       message: 'Enter your API key:',
@@ -60,15 +90,34 @@ export async function loginInternal(apikey: string | undefined, options: Options
     supaAnon: options.supaAnon,
   })
 
-  if (!silent) {
-    log.success(`login saved into .capgo file in ${local ? 'local' : 'home'} directory`)
-    outro('Done ✅')
-  }
+  if (!silent)
+    showLoginSuccess(local)
 
   return apikey
 }
 
 export async function login(apikey: string, options: Options) {
-  const validatedApiKey = await loginInternal(resolveLoginCommandApiKey(apikey, options.apikey), options, false)
+  let resolvedApiKey = resolveLoginCommandApiKey(apikey, options.apikey)
+  const supportsBrowserLogin = !options.supaHost && !options.supaAnon
+
+  if (!resolvedApiKey && !canPromptInteractively()) {
+    log.error('Missing API key. Provide it as an argument or with --apikey.')
+    throw new CliUserError('Missing API key')
+  }
+
+  intro(`Login to Capgo`)
+
+  if (!resolvedApiKey && supportsBrowserLogin) {
+    const loginMethod = await chooseLoginMethod()
+    if (loginMethod === 'browser') {
+      await checkAlerts()
+      resolvedApiKey = await loginInitInBrowser(options)
+      showLoginSuccess(options.local)
+      flushDeferredCommandInvocation(resolvedApiKey)
+      return
+    }
+  }
+
+  const validatedApiKey = await loginInternal(resolvedApiKey, options, false)
   flushDeferredCommandInvocation(validatedApiKey)
 }

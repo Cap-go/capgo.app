@@ -28,7 +28,8 @@ import { addChannelInternal } from '../channel/add'
 import { getConfigWriteTarget, resolveCapacitorConfigTargetPath, setConfigWriteTarget, writeConfigUpdater } from '../config'
 import { getRepoStarStatus, isRepoStarredInSession, starAllRepositories, starRepository } from '../github'
 import { createKeyInternal } from '../key'
-import { doLoginExists, loginInternal } from '../login'
+import type { LoginMethod } from '../login'
+import { doLoginExists, LOGIN_METHOD_OPTIONS, loginInternal } from '../login'
 import { writeOnboardingSupportBundle, writeSupportBundleFiles } from '../onboarding-support'
 import { showReplicationProgress } from '../replicationProgress'
 import { formatRunnerCommand, splitRunnerCommand } from '../runner-command'
@@ -36,7 +37,7 @@ import { copyToClipboard, revealInFinder } from '../support/clipboard'
 import { contactSupport } from '../support/contact-support'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log'
 import { uploadSupportLogs } from '../support/support-upload'
-import { canPromptInteractively, consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKey, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
+import { canPromptInteractively, consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
 import { loginInitInBrowser, shouldStartInitBrowserLogin } from './browser-login'
 import { isChannelAlreadyExistsError } from './channel-conflict'
@@ -5309,25 +5310,54 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   pIntro('Capgo onboarding')
   renderInitOnboardingWelcome(initOnboardingSteps.length, analyticsEnabled)
 
-  if (!options.apikey) {
-    try {
-      options.apikey = findSavedKey(true)
-    }
-    catch {
-    }
-  }
+  if (!options.apikey)
+    options.apikey = findSavedKeySilent() ?? ''
 
   const supportsBrowserLogin = !options.local && !options.supaHost && !options.supaAnon
+  let authenticatedViaLoginPrompt = false
   if (shouldStartInitBrowserLogin(options.apikey, supportsBrowserLogin && canPromptInteractively({ silent: options.silent }))) {
-    options.apikey = await loginInitInBrowser({
-      local: options.local,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+    const loginMethod = await pSelect<LoginMethod>({
+      message: 'How would you like to log in?',
+      options: LOGIN_METHOD_OPTIONS,
     })
+    if (pIsCancel(loginMethod)) {
+      pCancel('Login cancelled')
+      return await exitAfterFinishingReplay('cancelled', 0)
+    }
+
+    const promptForInitApiKey = async () => {
+      const value = await pText({
+        message: 'Paste the API key from the Capgo dashboard:',
+        mask: '*',
+        validate: input => input?.trim() ? undefined : 'API key is required',
+      })
+      return pIsCancel(value) ? undefined : value
+    }
+
+    if (loginMethod === 'browser') {
+      options.apikey = await loginInitInBrowser({
+        local: options.local,
+        supaHost: options.supaHost,
+        supaAnon: options.supaAnon,
+      }, {
+        promptForKey: promptForInitApiKey,
+        writeUrl: message => pLog.info(message),
+      })
+    }
+    else {
+      const pastedApiKey = await promptForInitApiKey()
+      if (!pastedApiKey) {
+        pCancel('Login cancelled')
+        return await exitAfterFinishingReplay('cancelled', 0)
+      }
+      options.apikey = await loginInternal(pastedApiKey, options, true)
+    }
+    authenticatedViaLoginPrompt = true
+    pLog.success('Login successful')
   }
 
   const log = pSpinner()
-  if (!doLoginExists() || commandInput.explicitApiKey) {
+  if (!authenticatedViaLoginPrompt && (!doLoginExists() || commandInput.explicitApiKey)) {
     log.start(`Running: ${pm.runner} @capgo/cli@latest login ***`)
     try {
       await loginInternal(options.apikey, options, true)

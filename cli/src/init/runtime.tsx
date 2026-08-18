@@ -33,6 +33,7 @@ export interface ConfirmPrompt {
 
 export interface TextPrompt {
   kind: 'text'
+  mask?: string
   message: string
   placeholder?: string
   validate?: (value: string | undefined) => string | undefined
@@ -227,13 +228,14 @@ export function requestInitConfirm(message: string, initialValue?: boolean): Pro
   })
 }
 
-export function requestInitText(message: string, placeholder?: string, validate?: (value: string | undefined) => string | undefined): Promise<string | symbol> {
+export function requestInitText(message: string, placeholder?: string, validate?: (value: string | undefined) => string | undefined, mask?: string): Promise<string | symbol> {
   ensureInitInkSession()
   return new Promise((resolve) => {
     updateState(current => ({
       ...current,
       prompt: {
         kind: 'text',
+        mask,
         message,
         placeholder,
         validate,

@@ -194,6 +194,7 @@ async function guard(
     : null
   const isAdminRoute = to.path.startsWith('/admin')
   const isCliLoginRoute = to.path === '/login-cli'
+  const organizationFetchOptions = { loadImages: !isCliLoginRoute }
 
   async function tryLoadOrganizations(fetcher: () => Promise<void>) {
     try {
@@ -342,7 +343,7 @@ async function guard(
 
     await loadPlansIfNeeded()
 
-    const organizationsLoaded = await tryLoadOrganizations(() => organizationStore.fetchOrganizations())
+    const organizationsLoaded = await tryLoadOrganizations(() => organizationStore.fetchOrganizations(organizationFetchOptions))
     if (shouldRedirectToPendingInviteOnboarding(organizationsLoaded)) {
       return next({
         path: '/onboarding/invitation',
@@ -415,7 +416,7 @@ async function guard(
 
     await loadPlansIfNeeded()
 
-    let organizationsLoaded = await tryLoadOrganizations(() => organizationStore.dedupFetchOrganizations())
+    let organizationsLoaded = await tryLoadOrganizations(() => organizationStore.dedupFetchOrganizations(organizationFetchOptions))
     if (shouldRedirectToPendingInviteOnboarding(organizationsLoaded)) {
       return next({
         path: '/onboarding/invitation',
@@ -435,7 +436,7 @@ async function guard(
         return next(false)
       }
 
-      organizationsLoaded = await tryLoadOrganizations(() => organizationStore.fetchOrganizations())
+      organizationsLoaded = await tryLoadOrganizations(() => organizationStore.fetchOrganizations(organizationFetchOptions))
     }
 
     if (organizationsLoaded && !organizationStore.hasOrganizations && shouldRedirectToOrgOnboarding()) {

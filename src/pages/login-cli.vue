@@ -6,6 +6,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconCheckCircle from '~icons/heroicons/check-circle'
 import IconClipboard from '~icons/heroicons/clipboard-document'
+import IconEye from '~icons/heroicons/eye'
+import IconEyeSlash from '~icons/heroicons/eye-slash'
 import IconKey from '~icons/heroicons/key'
 import {
   createCliLoginKeyDependencies,
@@ -31,6 +33,7 @@ const organizationStore = useOrganizationStore()
 const state = ref<PageState>('preparing')
 const secret = ref<string | null>(null)
 const revealed = ref(false)
+const revealDialogOpen = ref(false)
 const reused = ref(false)
 const hashed = ref(false)
 const expiresAt = ref<string | null>(null)
@@ -41,6 +44,7 @@ const channels: RealtimeChannel[] = []
 const displayedKey = computed(() => revealed.value && secret.value ? secret.value : hiddenKey)
 
 function clearSecret(): void {
+  revealDialogOpen.value = false
   revealed.value = false
   secret.value = null
 }
@@ -145,6 +149,28 @@ async function copyKey(): Promise<void> {
   }
 }
 
+function toggleReveal(): void {
+  if (revealed.value) {
+    revealed.value = false
+    return
+  }
+  revealDialogOpen.value = true
+}
+
+function closeRevealDialog(): void {
+  revealDialogOpen.value = false
+}
+
+function confirmReveal(): void {
+  revealed.value = true
+  closeRevealDialog()
+}
+
+async function copyFromRevealDialog(): Promise<void> {
+  await copyKey()
+  closeRevealDialog()
+}
+
 function goToDestination(): void {
   void router.push(destination.value)
 }
@@ -173,9 +199,10 @@ onBeforeUnmount(() => {
         </h1>
       </header>
 
-      <p v-if="state === 'preparing'" role="status" class="text-slate-600 dark:text-slate-300">
-        {{ t('cli-login-preparing') }}
-      </p>
+      <div v-if="state === 'preparing'" role="status" class="flex items-center gap-3 text-slate-600 dark:text-slate-300">
+        <span class="d-loading d-loading-spinner d-loading-md text-primary" aria-hidden="true" />
+        <span>{{ t('cli-login-preparing') }}</span>
+      </div>
 
       <div v-else-if="state === 'direct'" class="space-y-4">
         <h2 class="text-lg font-semibold">
@@ -203,23 +230,30 @@ onBeforeUnmount(() => {
         <p class="text-slate-600 dark:text-slate-300">
           {{ t('cli-login-paste-instruction') }}
         </p>
-        <div class="flex items-center gap-2 rounded-2xl border border-slate-200 p-3 dark:border-slate-700">
-          <code :class="revealed ? '' : 'select-none blur-[5px]'" class="min-w-0 flex-1 truncate">{{ displayedKey }}</code>
-          <button class="d-btn d-btn-ghost d-btn-sm" type="button" :aria-pressed="revealed" @click="revealed = !revealed">
-            {{ t(revealed ? 'cli-login-hide-key' : 'cli-login-reveal-key') }}
-          </button>
-          <button class="d-btn d-btn-primary d-btn-sm" type="button" @click="copyKey">
-            <IconClipboard class="h-4 w-4" /> {{ t('copy') }}
-          </button>
+        <div class="flex flex-col gap-3 rounded-2xl border border-slate-200 p-3 sm:flex-row sm:items-center dark:border-slate-700">
+          <code :class="revealed ? '' : 'select-none blur-[5px]'" class="min-w-0 flex-1 whitespace-normal break-all">{{ displayedKey }}</code>
+          <div class="flex shrink-0 items-center gap-2 self-end sm:self-center">
+            <button
+              class="d-btn d-btn-ghost d-btn-square d-btn-sm"
+              type="button"
+              :aria-label="t(revealed ? 'cli-login-hide-key' : 'cli-login-reveal-key')"
+              :title="t(revealed ? 'cli-login-hide-key' : 'cli-login-reveal-key')"
+              :aria-pressed="revealed"
+              @click="toggleReveal"
+            >
+              <IconEyeSlash v-if="revealed" class="h-4 w-4" />
+              <IconEye v-else class="h-4 w-4" />
+            </button>
+            <button class="d-btn d-btn-primary d-btn-sm" type="button" @click="copyKey">
+              <IconClipboard class="h-4 w-4" /> {{ t('copy') }}
+            </button>
+          </div>
         </div>
         <p class="text-xs text-slate-500">
           {{ t('cli-login-copy-note') }}
         </p>
         <p class="d-alert d-alert-warning text-sm">
           {{ t('cli-login-security-warning') }}
-        </p>
-        <p v-if="reused" class="text-sm">
-          {{ t('cli-login-reused') }}
         </p>
         <p v-if="hashed" class="text-sm text-amber-700 dark:text-amber-300">
           {{ t('cli-login-hashed-warning') }}
@@ -230,8 +264,18 @@ onBeforeUnmount(() => {
         <p v-if="skippedNames.length" class="text-sm text-amber-700 dark:text-amber-300">
           {{ t('cli-login-skipped-organizations', { organizations: skippedNames.join(', ') }) }}
         </p>
-        <p role="status" class="text-sm" :class="realtimeUnavailable ? 'text-amber-700' : 'text-slate-500'">
-          {{ t(realtimeUnavailable ? 'cli-login-realtime-unavailable' : 'cli-login-waiting') }}
+        <p role="status" class="flex items-center text-sm" :class="realtimeUnavailable ? 'text-amber-700' : 'text-slate-500'">
+          <template v-if="realtimeUnavailable">
+            {{ t('cli-login-realtime-unavailable') }}
+          </template>
+          <template v-else>
+            <span>{{ t('cli-login-waiting') }}</span>
+            <span class="d-loading d-loading-dots d-loading-xs ml-1" aria-hidden="true" />
+          </template>
+        </p>
+        <p v-if="reused" class="flex items-start gap-1.5 pt-1 text-xs text-slate-400 dark:text-slate-500">
+          <span aria-hidden="true">*</span>
+          <span>{{ t('cli-login-reused') }}</span>
         </p>
       </div>
 
@@ -259,6 +303,44 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </section>
+
+    <Teleport to="body">
+      <div
+        v-if="revealDialogOpen"
+        class="d-modal d-modal-open z-50"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cli-login-reveal-dialog-title"
+        aria-describedby="cli-login-reveal-dialog-description"
+        @keydown.esc="closeRevealDialog"
+      >
+        <div class="d-modal-box w-[calc(100vw-2rem)] max-w-md rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800">
+          <h2 id="cli-login-reveal-dialog-title" class="text-xl font-semibold text-slate-950 dark:text-white">
+            {{ t('cli-login-reveal-dialog-title') }}
+          </h2>
+          <p id="cli-login-reveal-dialog-description" class="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
+            {{ t('cli-login-reveal-dialog-description') }}
+          </p>
+          <div class="d-modal-action flex-wrap">
+            <button class="d-btn d-btn-ghost" type="button" autofocus @click="closeRevealDialog">
+              {{ t('cancel') }}
+            </button>
+            <button class="d-btn" type="button" @click="copyFromRevealDialog">
+              <IconClipboard class="h-4 w-4" /> {{ t('copy') }}
+            </button>
+            <button class="d-btn d-btn-primary" type="button" @click="confirmReveal">
+              <IconEye class="h-4 w-4" /> {{ t('cli-login-reveal-key') }}
+            </button>
+          </div>
+        </div>
+        <button
+          type="button"
+          class="d-modal-backdrop bg-black/50"
+          :aria-label="t('cancel')"
+          @click="closeRevealDialog"
+        />
+      </div>
+    </Teleport>
   </main>
 </template>
 

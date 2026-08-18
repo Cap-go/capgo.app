@@ -52,6 +52,9 @@ export type ExtendedOrganizationMember = OrgMemberRow & { id: number | string }
 export type ExtendedOrganizationMembers = ExtendedOrganizationMember[]
 type SignedMemberImageCallback = (signedImages: Map<string, string>) => void
 type OrgPermissionFloor = 'org_member' | 'org_billing_admin' | 'org_admin' | 'org_super_admin' | 'owner'
+interface OrganizationFetchOptions {
+  loadImages?: boolean
+}
 
 // Mapping des rôles RBAC d'organisation vers leurs clés de traduction i18n
 export const RBAC_ORG_ROLE_I18N_KEYS: Record<string, string> = {
@@ -141,6 +144,7 @@ export const useOrganizationStore = defineStore('organization', () => {
   const _appsByAppId: Ref<Map<string, OrganizationApp>> = ref(new Map())
   const _initialLoadPromise = ref(createDeferredPromise<boolean>())
   const _initialized = ref(false)
+  let loadOrganizationImages = true
 
   const organizations: ComputedRef<Organization[]> = computed(
     () => {
@@ -239,7 +243,7 @@ export const useOrganizationStore = defineStore('organization', () => {
       currentOrganization.value = nextOrganization
   }
 
-  const loadOrganizationLogo = async (org: Organization & { id: number }, run: number) => {
+  const loadOrganizationLogo = async (org: Organization, run: number) => {
     const logoSource = org.logo_storage_path ?? org.logo
     const { normalized, shouldSign } = resolveImagePath(logoSource)
     if (!normalized || !shouldSign) {
@@ -261,7 +265,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     }
   }
 
-  const loadOrganizationLogos = (sourceOrganizations: Array<Organization & { id: number }>, run: number) => {
+  const loadOrganizationLogos = (sourceOrganizations: Organization[], run: number) => {
     for (const org of sourceOrganizations) {
       loadOrganizationLogo(org, run).catch((error) => {
         console.warn('Cannot load signed organization logo', { orgId: org.gid, error })
@@ -336,6 +340,18 @@ export const useOrganizationStore = defineStore('organization', () => {
         updateOrganizationAppIconState(app.app_id, { icon_url_loading: false }, run)
       })
     }
+  }
+
+  const loadPendingOrganizationImages = () => {
+    const organizationsWithPendingLogos = Array.from(_organizations.value.values())
+      .filter(organization => organization.logo_is_loading)
+    if (organizationsWithPendingLogos.length > 0)
+      loadOrganizationLogos(organizationsWithPendingLogos, ++organizationLogoLoadRun)
+
+    const appsWithPendingIcons = Array.from(_appsByAppId.value.values())
+      .filter(app => app.icon_url_loading)
+    if (appsWithPendingIcons.length > 0)
+      loadOrganizationAppIcons(appsWithPendingIcons, ++organizationAppIconLoadRun)
   }
 
   watch([currentOrganization, stripeEnabled], async ([currentOrganizationRaw, stripeEnabledValue], [previousOrganization]) => {
@@ -443,7 +459,8 @@ export const useOrganizationStore = defineStore('organization', () => {
     _organizationsByAppId.value = organizationsByAppId
     _appsByOrgId.value = appsByOrgId
     _appsByAppId.value = appsByAppId
-    loadOrganizationAppIcons(Array.from(appsByAppId.values()), appIconLoadRun)
+    if (loadOrganizationImages)
+      loadOrganizationAppIcons(Array.from(appsByAppId.values()), appIconLoadRun)
     _initialLoadPromise.value.resolve(true)
   })
 
@@ -589,8 +606,9 @@ export const useOrganizationStore = defineStore('organization', () => {
     return mappedMembers
   }
 
-  const fetchOrganizations = async () => {
+  const fetchOrganizations = async (options: OrganizationFetchOptions = {}) => {
     const main = useMainStore()
+    loadOrganizationImages = options.loadImages ?? true
 
     const userId = main.user?.id ?? main.auth?.id
     if (!userId)
@@ -649,7 +667,8 @@ export const useOrganizationStore = defineStore('organization', () => {
         console.error('Failed to resolve platform admin status:', error)
       })
     _organizations.value = new Map(mappedData.map(item => [item.gid, item as Organization]))
-    loadOrganizationLogos(mappedData, logoLoadRun)
+    if (loadOrganizationImages)
+      loadOrganizationLogos(mappedData, logoLoadRun)
 
     const selectableOrganizations = mappedData
       .filter(org => isSelectableOrganization(org))
@@ -728,9 +747,16 @@ export const useOrganizationStore = defineStore('organization', () => {
     }
   }
 
-  const dedupFetchOrganizations = async () => {
-    if (_organizations.value.size === 0)
-      await fetchOrganizations()
+  const dedupFetchOrganizations = async (options: OrganizationFetchOptions = {}) => {
+    if (options.loadImages !== undefined)
+      loadOrganizationImages = options.loadImages
+
+    if (_organizations.value.size === 0) {
+      await fetchOrganizations(options)
+    }
+    else if (loadOrganizationImages) {
+      loadPendingOrganizationImages()
+    }
   }
 
   const getAllOrgs = () => {

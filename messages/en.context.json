@@ -912,6 +912,8 @@
   "cli-login-preparing": "Loading status while the dashboard prepares or reuses a CLI API key. Translate for UI.",
   "cli-login-realtime-unavailable": "Fallback message when realtime CLI login confirmation cannot be subscribed to. Translate for UI.",
   "cli-login-reused": "Notice that an existing compatible Capgo CLI API key was reused. Translate for UI; keep Capgo CLI unchanged.",
+  "cli-login-reveal-dialog-description": "Security warning in the reveal-key confirmation dialog. Translate for UI; keep API key terminology unchanged.",
+  "cli-login-reveal-dialog-title": "Title of the confirmation dialog shown before revealing the CLI API key. Translate for UI; keep API key terminology unchanged.",
   "cli-login-reveal-key": "Button label that reveals the CLI API key. Translate for UI.",
   "cli-login-security-warning": "Security warning telling users to paste the API key only into trusted terminals and tools. Translate for UI.",
   "cli-login-skipped-organizations": "Warning listing organizations excluded from the CLI API key. Translate for UI; preserve {organizations}.",
