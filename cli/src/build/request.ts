@@ -1429,8 +1429,8 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     if (platform === 'ios' && options.syncIosVersion) {
       const syncResult = syncIosMarketingVersion({ path: projectDir })
       log.info(syncResult.changed
-        ? `Synced iOS MARKETING_VERSION to ${syncResult.marketingVersion}`
-        : `iOS MARKETING_VERSION is already ${syncResult.marketingVersion}`)
+        ? `Synced iOS app version to ${syncResult.marketingVersion}`
+        : `iOS app version is already ${syncResult.marketingVersion}`)
     }
 
     const host = options.supaHost || 'https://api.capgo.app'

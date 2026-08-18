@@ -24,16 +24,29 @@ async function test(name, fn) {
   }
 }
 
-function createFixture(packageVersion) {
+function createFixture(packageVersion, options = {}) {
   const cwd = mkdtempSync(join(tmpdir(), 'capgo-ios-version-'))
   const xcodeProjectDir = join(cwd, 'ios/App/App.xcodeproj')
+  const infoPlistDir = join(cwd, 'ios/App/App')
+  const generateInfoPlist = options.generateInfoPlist ?? 'NO'
+  const generateInfoPlistSetting = generateInfoPlist === 'DEFAULT'
+    ? ''
+    : `GENERATE_INFOPLIST_FILE = ${generateInfoPlist}; `
 
   mkdirSync(xcodeProjectDir, { recursive: true })
   writeFileSync(join(cwd, 'package.json'), JSON.stringify({ version: packageVersion }))
   writeFileSync(join(xcodeProjectDir, 'project.pbxproj'), [
-    'Debug = { MARKETING_VERSION = 0.0.1; };',
-    'Release = { MARKETING_VERSION = 0.0.1; };',
+    `Debug = { ${generateInfoPlistSetting}INFOPLIST_FILE = App/Info.plist; MARKETING_VERSION = 0.0.1; };`,
+    `Release = { ${generateInfoPlistSetting}INFOPLIST_FILE = App/Info.plist; MARKETING_VERSION = 0.0.1; };`,
   ].join('\n'))
+
+  if (options.infoPlistVersion !== undefined) {
+    mkdirSync(infoPlistDir, { recursive: true })
+    const versionEntry = options.infoPlistVersion === null
+      ? ''
+      : `  <key>CFBundleShortVersionString</key>\n  <string>${options.infoPlistVersion}</string>\n`
+    writeFileSync(join(infoPlistDir, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0">\n<dict>\n${versionEntry}</dict>\n</plist>\n`)
+  }
 
   return cwd
 }
@@ -55,7 +68,7 @@ await test('replaces all Xcode MARKETING_VERSION entries', () => {
 })
 
 await test('syncs a Capacitor iOS project from package.json', () => {
-  const cwd = createFixture('1.2.3-alpha.0')
+  const cwd = createFixture('1.2.3-alpha.0', { infoPlistVersion: '$(MARKETING_VERSION)' })
 
   try {
     const result = syncIosMarketingVersion({ path: cwd })
@@ -63,8 +76,9 @@ await test('syncs a Capacitor iOS project from package.json', () => {
 
     assert.equal(result.changed, true)
     assert.equal(result.marketingVersion, '1.2.3')
-    assert.match(project, /Debug = \{ MARKETING_VERSION = 1\.2\.3; \};/)
-    assert.match(project, /Release = \{ MARKETING_VERSION = 1\.2\.3; \};/)
+    assert.match(project, /Debug = \{[^}]*MARKETING_VERSION = 1\.2\.3;/)
+    assert.match(project, /Release = \{[^}]*MARKETING_VERSION = 1\.2\.3;/)
+    assert.match(readFileSync(join(cwd, 'ios/App/App/Info.plist'), 'utf8'), /<string>\$\(MARKETING_VERSION\)<\/string>/)
   }
   finally {
     rmSync(cwd, { recursive: true, force: true })
@@ -72,7 +86,7 @@ await test('syncs a Capacitor iOS project from package.json', () => {
 })
 
 await test('check mode reports drift without writing', () => {
-  const cwd = createFixture('1.2.3')
+  const cwd = createFixture('1.2.3', { infoPlistVersion: '$(MARKETING_VERSION)' })
 
   try {
     const result = syncIosMarketingVersion({ path: cwd, check: true })
@@ -80,6 +94,89 @@ await test('check mode reports drift without writing', () => {
 
     assert.equal(result.changed, true)
     assert.match(project, /MARKETING_VERSION = 0\.0\.1;/)
+  }
+  finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+await test('uses MARKETING_VERSION when Xcode generates Info.plist', () => {
+  const cwd = createFixture('1.2.3', { generateInfoPlist: 'YES', infoPlistVersion: '0.0.1' })
+
+  try {
+    syncIosMarketingVersion({ path: cwd })
+
+    const project = readFileSync(join(cwd, 'ios/App/App.xcodeproj/project.pbxproj'), 'utf8')
+    const plist = readFileSync(join(cwd, 'ios/App/App/Info.plist'), 'utf8')
+    assert.match(project, /MARKETING_VERSION = 1\.2\.3;/)
+    assert.match(plist, /<string>0\.0\.1<\/string>/)
+  }
+  finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+await test('treats an omitted GENERATE_INFOPLIST_FILE setting as a manually managed plist', () => {
+  const cwd = createFixture('1.2.3', { generateInfoPlist: 'DEFAULT', infoPlistVersion: '0.0.1' })
+
+  try {
+    syncIosMarketingVersion({ path: cwd })
+
+    const project = readFileSync(join(cwd, 'ios/App/App.xcodeproj/project.pbxproj'), 'utf8')
+    const plist = readFileSync(join(cwd, 'ios/App/App/Info.plist'), 'utf8')
+    assert.match(project, /MARKETING_VERSION = 0\.0\.1;/)
+    assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>1\.2\.3<\/string>/)
+  }
+  finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+await test('updates a literal CFBundleShortVersionString when Xcode does not generate Info.plist', () => {
+  const cwd = createFixture('1.2.3', { infoPlistVersion: '0.0.1' })
+
+  try {
+    syncIosMarketingVersion({ path: cwd })
+
+    const project = readFileSync(join(cwd, 'ios/App/App.xcodeproj/project.pbxproj'), 'utf8')
+    const plist = readFileSync(join(cwd, 'ios/App/App/Info.plist'), 'utf8')
+    assert.match(project, /MARKETING_VERSION = 0\.0\.1;/)
+    assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>1\.2\.3<\/string>/)
+  }
+  finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+await test('adds CFBundleShortVersionString when a manually managed Info.plist omits it', () => {
+  const cwd = createFixture('1.2.3', { infoPlistVersion: null })
+
+  try {
+    syncIosMarketingVersion({ path: cwd })
+
+    const project = readFileSync(join(cwd, 'ios/App/App.xcodeproj/project.pbxproj'), 'utf8')
+    const plist = readFileSync(join(cwd, 'ios/App/App/Info.plist'), 'utf8')
+    assert.match(project, /MARKETING_VERSION = 0\.0\.1;/)
+    assert.match(plist, /<key>CFBundleShortVersionString<\/key>\s*<string>1\.2\.3<\/string>/)
+  }
+  finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+await test('check mode reports a literal Info.plist version drift without writing', () => {
+  const cwd = createFixture('1.2.3', { infoPlistVersion: '0.0.1' })
+
+  try {
+    const infoPlistPath = join(cwd, 'ios/App/App/Info.plist')
+    const result = syncIosMarketingVersion({ path: cwd, check: true })
+    const project = readFileSync(join(cwd, 'ios/App/App.xcodeproj/project.pbxproj'), 'utf8')
+    const plist = readFileSync(infoPlistPath, 'utf8')
+
+    assert.equal(result.changed, true)
+    assert.deepEqual(result.updatedFiles, [infoPlistPath])
+    assert.match(project, /MARKETING_VERSION = 0\.0\.1;/)
+    assert.match(plist, /<string>0\.0\.1<\/string>/)
   }
   finally {
     rmSync(cwd, { recursive: true, force: true })

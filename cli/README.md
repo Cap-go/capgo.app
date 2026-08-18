@@ -1465,7 +1465,7 @@ npx @capgo/cli@latest build request com.example.app --platform ios --path .
 | **--no-skip-build-number-bump** | <code>boolean</code> | Override saved credentials to re-enable automatic build number incrementing for this build only. |
 | **--skip-marketing-version-bump** | <code>boolean</code> | Skip automatic marketing version (CFBundleShortVersionString / versionName) bump when the app is already released. |
 | **--no-skip-marketing-version-bump** | <code>boolean</code> | Override saved credentials to re-enable automatic marketing version bump for this build only. |
-| **--sync-ios-version** | <code>boolean</code> | iOS: sync Xcode MARKETING_VERSION from package.json before uploading the project. |
+| **--sync-ios-version** | <code>boolean</code> | iOS: sync the app version from package.json before uploading the project. Updates MARKETING_VERSION or CFBundleShortVersionString based on the Xcode Info.plist configuration. |
 | **--ai-analytics** | <code>boolean</code> | On build failure, send logs to Capgo AI for diagnosis. In interactive terminals this skips the upfront confirmation; in CI this auto-uploads and prints the analysis to stderr. |
 | **--no-prescan** | <code>boolean</code> | Skip the automatic pre-build scan |
 | **--prescan-ignore-fatal** | <code>boolean</code> | Run the pre-build scan but never block the build (report only) |
@@ -1485,7 +1485,8 @@ npx @capgo/cli@latest build request com.example.app --platform ios --path .
 npx @capgo/cli@latest build sync-ios-version
 ```
 
-Sync the local iOS Xcode MARKETING_VERSION from package.json.
+Sync the local iOS app version from package.json.
+Updates MARKETING_VERSION or CFBundleShortVersionString based on the Xcode Info.plist configuration.
 
 **Example:**
 
