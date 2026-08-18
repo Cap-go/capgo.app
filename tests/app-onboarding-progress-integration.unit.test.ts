@@ -25,7 +25,13 @@ function expectSourceOrder(source: string, markers: string[]) {
 
 describe('app onboarding progress analytics integration', () => {
   it.concurrent('initializes tracking once the real initial or resumed step is resolved', () => {
-    expect(onboardingSource).toContain(`import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker, createOnboardingTelemetryIdentity } from '~/utils/onboardingProgressAnalytics'`)
+    const analyticsImport = sourceBetween(
+      'import {\n  createOnboardingDetailsFieldDebouncer,',
+      'import { createOnboardingProgressPersistence',
+    )
+    expect(analyticsImport).toContain('createOnboardingProgressTracker,')
+    expect(analyticsImport).toContain('createOnboardingTelemetryIdentity,')
+    expect(analyticsImport).toContain("} from '~/utils/onboardingProgressAnalytics'")
 
     const initializer = sourceBetween('function initializeProgressTracking(', 'function completeAndViewStep(')
     expect(initializer).toContain(`flow: props.preOrg ? 'pre_org' : 'existing_org'`)

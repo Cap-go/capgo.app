@@ -3,6 +3,7 @@ import {
   createOnboardingProgressTracker,
   createOnboardingTelemetryIdentity,
   ONBOARDING_ANALYTICS_VERSION,
+  resolveOnboardingAppIconSource,
 } from '../src/utils/onboardingProgressAnalytics'
 
 const steps = ['intent', 'details', 'organization', 'setup'] as const
@@ -17,6 +18,26 @@ const trackerIdentity = {
 }
 
 describe('onboarding progress analytics', () => {
+  it.concurrent('classifies restored draft icon data as a file source', () => {
+    expect(resolveOnboardingAppIconSource({
+      canUseStoreImportPreview: true,
+      hasSelectedIconFile: false,
+      localIconPreview: 'data:image/png;base64,restored-icon',
+    })).toBe('file')
+
+    expect(resolveOnboardingAppIconSource({
+      canUseStoreImportPreview: true,
+      hasSelectedIconFile: false,
+      localIconPreview: 'https://capgo.test/restored-icon.png',
+    })).toBe('store')
+
+    expect(resolveOnboardingAppIconSource({
+      canUseStoreImportPreview: false,
+      hasSelectedIconFile: false,
+      localIconPreview: '',
+    })).toBe('none')
+  })
+
   it.concurrent('keeps the resumed attempt while continuing from saved progress', () => {
     const capture = vi.fn()
     const ids = [ATTEMPT_A2, RUN_R2_UUID]

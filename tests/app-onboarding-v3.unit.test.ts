@@ -118,6 +118,16 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain('used_fallback: createResult.wasRetried')
   })
 
+  it.concurrent('classifies restored draft icon data as a file in creation telemetry', () => {
+    const iconSource = onboardingSource.slice(
+      onboardingSource.indexOf('const selectedAppIconSource = computed'),
+      onboardingSource.indexOf('function createAiHelpPrompt()'),
+    )
+    expect(iconSource).toContain('resolveOnboardingAppIconSource({')
+    expect(iconSource).toContain('hasSelectedIconFile: Boolean(selectedIconFile.value)')
+    expect(iconSource).toContain('localIconPreview: localIconPreview.value')
+  })
+
   it.concurrent('tracks icon-only store import interactions and outcomes', () => {
     expect(onboardingSource).toContain("'onboarding_store_icon_import_shown' : 'onboarding_store_icon_import_hidden'")
     expect(onboardingSource).toContain("trackDetailsEvent('onboarding_store_icon_import_submitted'")

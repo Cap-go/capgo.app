@@ -67,7 +67,12 @@ import {
   loadOnboardingAppDraft,
 } from '~/utils/onboardingAppDraft'
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
-import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker, createOnboardingTelemetryIdentity } from '~/utils/onboardingProgressAnalytics'
+import {
+  createOnboardingDetailsFieldDebouncer,
+  createOnboardingProgressTracker,
+  createOnboardingTelemetryIdentity,
+  resolveOnboardingAppIconSource,
+} from '~/utils/onboardingProgressAnalytics'
 import { createOnboardingProgressPersistence, shouldInitializeOnboardingProgressTracking } from '~/utils/onboardingProgressPersistence'
 import { allowOnboardingDashboardExploration, ONBOARDING_DASHBOARD_EXPLORED_EVENT } from '~/utils/onboardingRedirect'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
@@ -298,11 +303,11 @@ const selectedAppIdSource = computed<NonNullable<OnboardingDetailsEventPropertie
   return 'generated'
 })
 const selectedAppIconSource = computed<NonNullable<OnboardingDetailsEventProperties['icon_source']>>(() => {
-  if (selectedIconFile.value)
-    return 'file'
-  if (canUseStoreImportPreview.value)
-    return 'store'
-  return 'none'
+  return resolveOnboardingAppIconSource({
+    canUseStoreImportPreview: canUseStoreImportPreview.value,
+    hasSelectedIconFile: Boolean(selectedIconFile.value),
+    localIconPreview: localIconPreview.value,
+  })
 })
 function createAiHelpPrompt() {
   const resolvedAppId = createdApp.value?.app_id || generatedAppId.value || '[APP_ID]'

@@ -80,6 +80,18 @@ export interface OnboardingDetailsEventProperties {
   used_fallback?: boolean
 }
 
+export function resolveOnboardingAppIconSource(options: {
+  canUseStoreImportPreview: boolean
+  hasSelectedIconFile: boolean
+  localIconPreview: string
+}): NonNullable<OnboardingDetailsEventProperties['icon_source']> {
+  if (options.hasSelectedIconFile || options.localIconPreview.startsWith('data:image/'))
+    return 'file'
+  if (options.canUseStoreImportPreview)
+    return 'store'
+  return 'none'
+}
+
 export interface OnboardingInteractionProperties {
   invitation_count?: number
 }
