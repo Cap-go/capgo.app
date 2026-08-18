@@ -1,6 +1,6 @@
 import { pushEvent } from '~/services/posthog'
 
-export const ONBOARDING_ANALYTICS_VERSION = 3
+export const ONBOARDING_ANALYTICS_VERSION = 4
 
 export type OnboardingAnalyticsFlow = 'pre_org' | 'existing_org'
 export type OnboardingAnalyticsStep = 'welcome' | 'intent' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'choice' | 'install' | 'setup'

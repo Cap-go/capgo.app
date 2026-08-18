@@ -194,7 +194,7 @@ describe('onboarding progress analytics', () => {
 
     tracker.viewStep('intent')
 
-    expect(ONBOARDING_ANALYTICS_VERSION).toBe(3)
+    expect(ONBOARDING_ANALYTICS_VERSION).toBe(4)
     expect(capture).toHaveBeenCalledOnce()
     expect(capture).toHaveBeenCalledWith(
       'onboarding_step_viewed',
