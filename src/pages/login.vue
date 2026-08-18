@@ -61,8 +61,7 @@ const autofillPreserveHiddenStyle = {
   overflow: 'hidden',
   pointerEvents: 'none',
 } as const
-// eslint-disable-next-line regexp/no-unused-capturing-group
-const mfaRegex = /(((\d){6})|((\d){3} (\d){3}))$/
+const mfaRegex = /^(?:\d{6}|\d{3} \d{3})$/
 const shouldBlockForCaptcha = computed(() => !!captchaKey.value && captchaStatus.value === 'loading' && !turnstileToken.value)
 const loginHeroChips = computed(() => [
   t('login-chip-live-updates'),
@@ -391,7 +390,6 @@ async function refreshSsoForEmail(email: string) {
       return
     console.error('SSO domain check failed', error)
     hasSso.value = false
-    lastCheckedEmail.value = trimmed
   }
 }
 
@@ -436,10 +434,11 @@ async function handleLoginSubmit(form: { email: string, password: string, code?:
   }
 
   isLoading.value = true
-  emailForLogin.value = form.email
+  const email = form.email.trim()
+  emailForLogin.value = email
 
   try {
-    await ensureSsoChecked(form.email)
+    await ensureSsoChecked(email)
   }
   catch (error) {
     console.error('SSO domain check failed', error)
@@ -450,7 +449,7 @@ async function handleLoginSubmit(form: { email: string, password: string, code?:
     return
   }
 
-  await login({ email: form.email, password: form.password })
+  await login({ email, password: form.password })
 }
 
 async function handleSsoLogin() {

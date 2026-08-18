@@ -44,7 +44,7 @@ test.describe('SSO Login Flow', () => {
     await expect(page.locator('[data-test="submit"]')).toBeHidden()
   })
 
-  test('should keep email editable on mobile when SSO is required', async ({ page }) => {
+  test('should keep email editable on mobile when the domain has SSO', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 667 })
     await page.route('**/private/sso/check-domain', async (route) => {
       await route.fulfill({
