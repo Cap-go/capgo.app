@@ -1,6 +1,7 @@
 import { app as canceled_org_retention_alerts } from '../_backend/triggers/canceled_org_retention_alerts.ts'
 import { app as credit_usage_alerts } from '../_backend/triggers/credit_usage_alerts.ts'
 import { app as credit_usage_posthog } from '../_backend/triggers/credit_usage_posthog.ts'
+import { app as cron_app_fame } from '../_backend/triggers/cron_app_fame.ts'
 import { app as cron_clean_orphan_images } from '../_backend/triggers/cron_clean_orphan_images.ts'
 import { app as cron_clear_versions } from '../_backend/triggers/cron_clear_versions.ts'
 import { app as cron_email } from '../_backend/triggers/cron_email.ts'
@@ -38,6 +39,7 @@ import { version } from '../_backend/utils/version.ts'
 const functionName = 'triggers'
 const appGlobal = createHono(functionName, version)
 
+appGlobal.route('/cron_app_fame', cron_app_fame)
 appGlobal.route('/cron_email', cron_email)
 appGlobal.route('/global_stats', global_stats)
 appGlobal.route('/global_stats_core', globalStatsShardApps.core)
