@@ -998,7 +998,7 @@ Updates MARKETING_VERSION or CFBundleShortVersionString based on the Xcode Info.
 
 Example: npx @capgo/cli@latest build sync-ios-version --path .`)
   .option('--path <path>', 'Path to the project directory (default: current directory)')
-  .option('--check', 'Check only; exit non-zero when MARKETING_VERSION is out of sync')
+  .option('--check', 'Check only; exit non-zero when MARKETING_VERSION or CFBundleShortVersionString is out of sync')
   .action(syncIosMarketingVersionCommand)
 
 build

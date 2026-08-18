@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { exit } from 'node:process'
 import { log as clackLog } from '@clack/prompts'
+import { DOMParser } from '@xmldom/xmldom'
 import { findXcodeProject } from './pbxproj-parser'
 
 export interface SyncIosMarketingVersionOptions {
@@ -24,6 +25,12 @@ interface FileUpdate {
   path: string
   content: string
   replacements: number
+}
+
+interface XmlNode {
+  nodeType: number
+  nodeName: string
+  childNodes: ArrayLike<XmlNode>
 }
 
 const INFO_PLIST_VERSION_KEY = 'CFBundleShortVersionString'
@@ -60,6 +67,71 @@ function readBuildSettingValues(content: string, setting: string): string[] {
   return values
 }
 
+function findMatchingBrace(content: string, openingBraceIndex: number): number {
+  let depth = 0
+  let quote: '"' | "'" | null = null
+  let escaped = false
+
+  for (let index = openingBraceIndex; index < content.length; index += 1) {
+    const character = content[index]
+
+    if (quote) {
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (character === '\\') {
+        escaped = true
+        continue
+      }
+      if (character === quote)
+        quote = null
+      continue
+    }
+
+    if (character === '"' || character === "'") {
+      quote = character
+      continue
+    }
+    if (character === '{')
+      depth += 1
+    else if (character === '}')
+      depth -= 1
+
+    if (depth === 0)
+      return index
+  }
+
+  return -1
+}
+
+function readBuildConfigurationSettings(content: string): string[] {
+  const settings: string[] = []
+  const configurationRegex = /\bisa\s*=\s*XCBuildConfiguration\s*;/g
+
+  for (const configurationMatch of content.matchAll(configurationRegex)) {
+    const configurationStart = content.lastIndexOf('{', configurationMatch.index)
+    if (configurationStart === -1)
+      continue
+
+    const configurationEnd = findMatchingBrace(content, configurationStart)
+    if (configurationEnd === -1)
+      continue
+
+    const configuration = content.slice(configurationStart, configurationEnd + 1)
+    const buildSettingsMatch = /\bbuildSettings\s*=\s*\{/.exec(configuration)
+    if (!buildSettingsMatch)
+      continue
+
+    const buildSettingsStart = configuration.indexOf('{', buildSettingsMatch.index)
+    const buildSettingsEnd = findMatchingBrace(configuration, buildSettingsStart)
+    if (buildSettingsEnd !== -1)
+      settings.push(configuration.slice(buildSettingsStart + 1, buildSettingsEnd))
+  }
+
+  return settings
+}
+
 function resolveInfoPlistPath(pbxprojPath: string, settingValue: string): string {
   const sourceRoot = dirname(dirname(pbxprojPath))
   const expanded = settingValue
@@ -74,6 +146,28 @@ function resolveInfoPlistPath(pbxprojPath: string, settingValue: string): string
 }
 
 function replaceInfoPlistVersion(content: string, marketingVersion: string): { content: string, replacements: number } {
+  const parseErrors: string[] = []
+  let document
+
+  try {
+    document = new DOMParser({
+      onError: (level, message) => parseErrors.push(`${level}: ${message}`),
+    }).parseFromString(content, 'application/xml')
+  }
+  catch (error) {
+    parseErrors.push(error instanceof Error ? error.message : String(error))
+  }
+
+  const rootElement = document?.documentElement as unknown as XmlNode | undefined
+  const rootHasDictionary = rootElement
+    ? Array.from(rootElement.childNodes).some(node => node.nodeType === 1 && node.nodeName === 'dict')
+    : false
+
+  if (parseErrors.length > 0 || rootElement?.nodeName !== 'plist' || !rootHasDictionary) {
+    const detail = parseErrors[0] ? `: ${parseErrors[0]}` : ''
+    throw new Error(`Cannot update malformed Info.plist${detail}`)
+  }
+
   const entryRegex = new RegExp(`(<key>${INFO_PLIST_VERSION_KEY}<\\/key>\\s*<string>)([\\s\\S]*?)(<\\/string>)`)
   const entry = content.match(entryRegex)
 
@@ -125,16 +219,24 @@ export function syncIosMarketingVersion(options: SyncIosMarketingVersionOptions 
   }
 
   const pbxprojContent = readFileSync(pbxprojPath, 'utf8')
-  const generateInfoPlistValues = readBuildSettingValues(pbxprojContent, 'GENERATE_INFOPLIST_FILE')
-  const hasGeneratedInfoPlist = generateInfoPlistValues.some(value => value.toUpperCase() === 'YES')
-  const hasManualInfoPlist = generateInfoPlistValues.length === 0
-    || generateInfoPlistValues.some(value => value.toUpperCase() !== 'YES')
+  const buildConfigurations = readBuildConfigurationSettings(pbxprojContent)
+  const generatedConfigurations = buildConfigurations.filter((configuration) => {
+    return readBuildSettingValues(configuration, 'GENERATE_INFOPLIST_FILE')[0]?.toUpperCase() === 'YES'
+  })
+  const manualConfigurations = buildConfigurations.filter((configuration) => {
+    const generateInfoPlist = readBuildSettingValues(configuration, 'GENERATE_INFOPLIST_FILE')[0]
+    const infoPlistFile = readBuildSettingValues(configuration, 'INFOPLIST_FILE')[0]
+    return generateInfoPlist?.toUpperCase() !== 'YES' && (generateInfoPlist !== undefined || infoPlistFile !== undefined)
+  })
+  const hasGeneratedInfoPlist = generatedConfigurations.length > 0
+  const hasManualInfoPlist = manualConfigurations.length > 0
   let shouldUpdateMarketingVersion = hasGeneratedInfoPlist
   const updates: FileUpdate[] = []
 
   if (hasManualInfoPlist) {
     const infoPlistPaths = [...new Set(
-      readBuildSettingValues(pbxprojContent, 'INFOPLIST_FILE')
+      manualConfigurations
+        .flatMap(configuration => readBuildSettingValues(configuration, 'INFOPLIST_FILE'))
         .map(value => resolveInfoPlistPath(pbxprojPath, value)),
     )]
 
@@ -146,6 +248,7 @@ export function syncIosMarketingVersion(options: SyncIosMarketingVersionOptions 
         throw new Error(`Info.plist not found at ${infoPlistPath}`)
 
       const infoPlistContent = readFileSync(infoPlistPath, 'utf8')
+      const infoPlistUpdate = replaceInfoPlistVersion(infoPlistContent, marketingVersion)
       const versionEntry = infoPlistContent.match(new RegExp(`<key>${INFO_PLIST_VERSION_KEY}<\\/key>\\s*<string>([\\s\\S]*?)<\\/string>`))
 
       if (versionEntry?.[1].trim() === MARKETING_VERSION_REFERENCE) {
@@ -153,7 +256,6 @@ export function syncIosMarketingVersion(options: SyncIosMarketingVersionOptions 
         continue
       }
 
-      const infoPlistUpdate = replaceInfoPlistVersion(infoPlistContent, marketingVersion)
       if (infoPlistUpdate.content !== infoPlistContent) {
         updates.push({
           path: infoPlistPath,
@@ -163,6 +265,9 @@ export function syncIosMarketingVersion(options: SyncIosMarketingVersionOptions 
       }
     }
   }
+
+  if (!hasGeneratedInfoPlist && !hasManualInfoPlist)
+    throw new Error(`No iOS Info.plist build configurations found in ${pbxprojPath}`)
 
   if (shouldUpdateMarketingVersion) {
     const pbxprojUpdate = replaceMarketingVersionInPbxproj(pbxprojContent, marketingVersion)
