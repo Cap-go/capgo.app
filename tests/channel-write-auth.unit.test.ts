@@ -92,7 +92,7 @@ describe('channel write authorization boundary', () => {
     expect(table.eq).toHaveBeenNthCalledWith(1, 'id', 42)
   })
 
-  it('uses service_role for new channel inserts after route-level authorization', async () => {
+  it('uses capgkey PostgREST for new channel inserts after route-level authorization', async () => {
     const { client, table } = requestClient()
     createClient.mockReturnValue(client)
     const { updateOrCreateChannel } = await import('../supabase/functions/_backend/utils/supabase.ts')
@@ -101,7 +101,11 @@ describe('channel write authorization boundary', () => {
     await updateOrCreateChannel(requestContext(), insert, null)
 
     expect(createClient).toHaveBeenCalledTimes(1)
-    expect(createClient.mock.calls[0]?.[1]).toBe('service-role-key')
+    expect(createClient.mock.calls[0]?.[1]).toBe('anon-key')
+    expect(createClient.mock.calls[0]?.[2]).toEqual(expect.objectContaining({
+      global: { headers: { capgkey: 'scoped-key' } },
+    }))
+    expect(client.from).toHaveBeenCalledWith('channels')
     expect(table.insert).toHaveBeenCalledWith(insert)
     expect(table.select).toHaveBeenCalledWith('id')
     expect(table.single).toHaveBeenCalledTimes(1)

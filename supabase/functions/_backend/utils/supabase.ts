@@ -229,11 +229,8 @@ export async function updateOrCreateChannel(
     throw new Error('missing request auth')
   }
 
-  // Channel writes are authorized in the channel route; use service_role so
-  // channels.noupdate and related guards do not treat API-key PostgREST traffic
-  // as privileged settings writes.
   if (existingChannelId === null) {
-    return supabaseAdmin(c)
+    return supabaseWithAuth(c, auth)
       .from('channels')
       .insert(update)
       .select('id')
@@ -241,6 +238,8 @@ export async function updateOrCreateChannel(
       .throwOnError()
   }
 
+  // Settings updates hit channels.noupdate on capgkey PostgREST; route auth already
+  // ran in post.ts, so use service_role here (no capgkey) to bypass that trigger.
   const { created_by: _createdBy, version, ...channelUpdate } = update
   const requestUpdate = preserveVersion ? channelUpdate : { ...channelUpdate, version }
   return supabaseAdmin(c)
