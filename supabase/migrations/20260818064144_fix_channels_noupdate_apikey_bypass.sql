@@ -1,7 +1,8 @@
--- GHSA-ph9c-vwjq-pqhj: API-key PostgREST traffic must not bypass channels.noupdate().
--- Direct PostgREST updates may only change version/updated_at unless the caller is
--- an internal/service-role path or an authenticated JWT with app.update_settings.
--- Official channel routes perform settings writes with service_role after checking
+-- GHSA-ph9c-vwjq-pqhj: API-key PostgREST traffic must not bypass
+-- channels.noupdate(). Direct PostgREST updates may only change
+-- version/updated_at unless the caller is an internal/service-role path
+-- or an authenticated JWT with app.update_settings. Official channel
+-- routes perform settings writes with service_role after checking
 -- permissions in application code.
 CREATE OR REPLACE FUNCTION public.noupdate()
 RETURNS trigger
@@ -59,4 +60,6 @@ REVOKE ALL ON FUNCTION public.noupdate() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.noupdate() TO service_role;
 
 COMMENT ON FUNCTION public.noupdate() IS
-  'Restricts direct PostgREST channel updates: API keys may only change version/updated_at; authenticated users with app.update_settings and internal/service-role callers may change other fields.';
+  'Restricts direct PostgREST channel updates: API keys may only change '
+  'version/updated_at; authenticated users with app.update_settings and '
+  'internal/service-role callers may change other fields.';

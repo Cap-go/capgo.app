@@ -319,7 +319,8 @@ SELECT throws_ok(
   $$,
   'P0001',
   'not allowed allow_device',
-  'channel-admin cannot update settings on an already-public channel via API key PostgREST'
+  'channel-admin cannot update settings on an already-public channel '
+  'via API key PostgREST'
 );
 
 SELECT tests.clear_authentication();
