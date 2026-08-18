@@ -307,6 +307,10 @@ SELECT throws_ok(
 );
 
 -- 6) Channel-admin cannot edit an already-public channel via direct PostgREST.
+SELECT tests.authenticate_as_service_role();
+UPDATE public.channels
+SET public = true
+WHERE id = 6700401;
 SELECT tests.clear_authentication();
 SELECT set_config('request.jwt.claim.role', 'anon', true);
 SELECT set_config('request.headers', '{"capgkey":"public-channel-guard-channel-admin-key"}', true);

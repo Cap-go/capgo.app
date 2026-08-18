@@ -15,18 +15,17 @@ DECLARE
   is_different boolean;
   v_request_role text := public.current_request_role();
 BEGIN
-  IF current_setting('capgo.allow_owner_org_transfer', true) = 'true' THEN
+  IF pg_catalog.current_setting('capgo.allow_owner_org_transfer', true) = 'true' THEN
     RETURN NEW;
   END IF;
 
-  IF v_request_role IN ('service_role', 'postgres') THEN
+  IF v_request_role = ANY (public.internal_request_role_names()) THEN
     RETURN NEW;
   END IF;
 
   -- Direct postgres maintenance without PostgREST/API-key request context.
-  IF v_request_role IN ('', 'none')
-    AND COALESCE(session_user, current_user) = ANY (public.internal_request_db_user_names())
-    AND NULLIF(btrim(public.get_apikey_header()), '') IS NULL
+  IF public.is_internal_request_role(v_request_role)
+    AND NULLIF(pg_catalog.btrim(public.get_apikey_header()), '') IS NULL
   THEN
     RETURN NEW;
   END IF;
@@ -41,9 +40,13 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  FOR val IN SELECT * FROM json_each_text(row_to_json(NEW))
+  FOR val IN SELECT * FROM pg_catalog.json_each_text(pg_catalog.row_to_json(NEW))
   LOOP
-    EXECUTE format('SELECT ($1."%s" is distinct from $2."%s")', val.key, val.key) USING NEW, OLD
+    EXECUTE pg_catalog.format(
+      'SELECT ($1."%s" is distinct from $2."%s")',
+      val.key,
+      val.key
+    ) USING NEW, OLD
     INTO is_different;
 
     IF is_different AND val.key <> 'version' AND val.key <> 'updated_at' THEN

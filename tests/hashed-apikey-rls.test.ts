@@ -1249,6 +1249,8 @@ describe('channels rls blocks direct api-key updates', () => {
     if (!allKey || !channelId || !versionId)
       throw new Error('RLS channel test setup did not complete')
 
+    await pool.query('UPDATE public.channels SET version = NULL WHERE id = $1', [channelId])
+
     const result = await execWithRoleClaims(
       'UPDATE public.channels SET version = $1 WHERE id = $2 RETURNING id, version',
       {
@@ -1266,8 +1268,8 @@ describe('channels rls blocks direct api-key updates', () => {
     expect(Number(result.rows[0].version)).toBe(versionId)
 
     await pool.query(
-      'UPDATE public.channels SET version = NULL WHERE id = $1',
-      [channelId],
+      'UPDATE public.channels SET version = $1 WHERE id = $2',
+      [versionId, channelId],
     )
   })
 
