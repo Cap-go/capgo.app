@@ -21,7 +21,9 @@ test.describe('SSO Login Flow', () => {
       })
     })
 
+    const domainCheck = page.waitForResponse(response => response.url().includes('/private/sso/check-domain'))
     await page.fill('[data-test="email"]', 'test@example.com')
+    await domainCheck
     await expect(page.locator('[data-test="password"]')).toBeVisible()
     await expect(page.locator('[data-test="submit"]')).toBeVisible()
     await expect(page.locator('[data-test="sso-login"]')).toHaveCount(0)

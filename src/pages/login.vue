@@ -372,18 +372,22 @@ function isCompletableEmail(email: string) {
   return dot > 0 && dot < domain.length - 1
 }
 
+function isCurrentDomainCheck(seq: number, email: string) {
+  return seq === domainCheckSeq && email === emailForLogin.value.trim()
+}
+
 async function refreshSsoForEmail(email: string) {
   const trimmed = email.trim()
   const seq = ++domainCheckSeq
   try {
     const result = await checkDomain(trimmed)
-    if (seq !== domainCheckSeq)
+    if (!isCurrentDomainCheck(seq, trimmed))
       return
     hasSso.value = result.has_sso
     lastCheckedEmail.value = trimmed
   }
   catch (error) {
-    if (seq !== domainCheckSeq)
+    if (!isCurrentDomainCheck(seq, trimmed))
       return
     console.error('SSO domain check failed', error)
     hasSso.value = false
@@ -403,6 +407,7 @@ async function ensureSsoChecked(email: string) {
 }
 
 watch(emailForLogin, (email) => {
+  ++domainCheckSeq
   const trimmed = email.trim()
   const domain = trimmed.split('@')[1] || ''
   const lastDomain = lastCheckedEmail.value.split('@')[1] || ''
@@ -559,9 +564,11 @@ async function checkAuthUser() {
 
     mfaLoginFactor.value = mfaFactor!
     mfaChallengeId.value = challenge.id
-
     statusAuth.value = '2fa'
     isLoading.value = false
+    await nextTick()
+    if (mfaRegex.test(mfaCode.value))
+      await handleMfaSubmit({ code: mfaCode.value })
   }
   else {
     await nextLogin()
