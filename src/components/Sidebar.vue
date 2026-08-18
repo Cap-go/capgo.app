@@ -2,18 +2,23 @@
 import type { Tab } from './comp_def'
 import { Capacitor } from '@capacitor/core'
 import { onClickOutside } from '@vueuse/core'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
-
+import { toast } from 'vue-sonner'
 import IconDoc from '~icons/gg/loadbar-doc'
 import IconChart from '~icons/heroicons/chart-bar'
 import IconShield from '~icons/heroicons/shield-check'
 import IconDiscord from '~icons/ic/round-discord'
+import IconBoxes from '~icons/lucide/boxes'
+import IconFlask from '~icons/lucide/flask-conical'
 import IconHeadset from '~icons/lucide/headset'
 import IconScanQrCode from '~icons/lucide/scan-qr-code'
+import IconVenetianMask from '~icons/lucide/venetian-mask'
 import IconApiKey from '~icons/mdi/shield-key'
 import IconAppStore from '~icons/simple-icons/appstore'
+import { logAsUser } from '~/services/logAs'
+import { isSpoofed, unspoofUser } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import {
@@ -39,8 +44,70 @@ const { t } = useI18n()
 const sidebar = useTemplateRef('sidebar')
 const route = useRoute()
 const isNativePlatform = Capacitor.isNativePlatform()
+const spoofed = ref(isSpoofed())
+const spoofLoading = ref(false)
+const logAsInput = ref('')
 
 onClickOutside(sidebar, () => emit('closeSidebar'))
+
+function isSpoofTab(tab: Tab) {
+  return tab.key === '#log-as' || tab.key === '#unspoof'
+}
+
+async function openLogAsDialog() {
+  let identifier = ''
+  logAsInput.value = ''
+
+  dialogStore.openDialog({
+    title: t('log-as'),
+    buttons: [
+      {
+        text: t('button-cancel'),
+        role: 'cancel',
+      },
+      {
+        text: t('log-as'),
+        handler: () => {
+          identifier = logAsInput.value
+        },
+      },
+    ],
+  })
+  await dialogStore.onDialogDismiss()
+
+  if (identifier) {
+    spoofLoading.value = true
+    try {
+      await logAsUser(identifier, router)
+    }
+    finally {
+      spoofLoading.value = false
+    }
+  }
+}
+
+async function resetSpoofedUser() {
+  spoofLoading.value = true
+  try {
+    const restored = await unspoofUser()
+    spoofed.value = isSpoofed()
+
+    if (!restored) {
+      toast.error(t('spoof-session-cleared'))
+      return
+    }
+
+    toast.success(t('spoof-stopped-reload'))
+    setTimeout(() => {
+      router.replace('/dashboard').then(() => {
+        globalThis.location.reload()
+      })
+    }, 1000)
+  }
+  finally {
+    spoofLoading.value = false
+  }
+}
 
 function normalizeSidebarPath(path: string) {
   let normalizedPath = path
@@ -65,6 +132,9 @@ function isTabActive(tab: string) {
   })
 }
 async function openTab(tab: Tab) {
+  if (isSpoofTab(tab) && spoofLoading.value)
+    return
+
   const onboardingUserId = main.user?.id ?? main.auth?.id
   const resumeQueryAppId = typeof route.query.resume === 'string' ? route.query.resume : null
   const isPendingOnboardingResume = route.path === '/app/new'
@@ -157,6 +227,20 @@ const tabs = computed<Tab[]>(() => {
       onClick: () => window.open('https://support.capgo.app', '_blank', 'noopener,noreferrer'),
       redirect: true,
     },
+    ...(isNativePlatform
+      ? [
+          {
+            label: 'module-heading',
+            icon: IconBoxes,
+            key: '/app/modules',
+          },
+          {
+            label: 'tests',
+            icon: IconFlask,
+            key: '/app/modules_test',
+          },
+        ]
+      : []),
   ]
 
   // Add admin dashboard link if user is admin
@@ -168,8 +252,36 @@ const tabs = computed<Tab[]>(() => {
     })
   }
 
+  if (main.isAdmin && !spoofed.value) {
+    baseTabs.push({
+      label: 'log-as',
+      icon: IconVenetianMask,
+      key: '#log-as',
+      onClick: () => {
+        void openLogAsDialog()
+      },
+    })
+  }
+
+  if (spoofed.value) {
+    baseTabs.push({
+      label: 'reset-spoofed-user',
+      icon: IconVenetianMask,
+      key: '#unspoof',
+      onClick: () => {
+        void resetSpoofedUser()
+      },
+    })
+  }
+
   return baseTabs
 })
+
+function tabLabel(tab: Tab) {
+  if (tab.key === '/app/modules_test')
+    return `${t('module-heading')} ${t('tests')}`
+  return t(tab.label)
+}
 </script>
 
 <template>
@@ -197,7 +309,7 @@ const tabs = computed<Tab[]>(() => {
         'lg:w-12': isRail,
       }"
     >
-      <div class="flex h-full w-64 min-w-64 flex-col">
+      <div class="flex h-full w-64 min-w-64 flex-col" :class="{ '[&>*]:px-3': !isRail }">
         <!-- Sidebar header -->
         <div class="flex border-b shrink-0 border-slate-800 lg:border-slate-700 py-4">
           <router-link
@@ -236,14 +348,17 @@ const tabs = computed<Tab[]>(() => {
                     'hover:bg-slate-700/50 lg:hover:bg-slate-700/50': !isTabActive(tab.key),
                     'bg-slate-700 text-white lg:bg-slate-700 lg:text-white': isTabActive(tab.key),
                     'cursor-default': isTabActive(tab.key),
+                    'opacity-50 cursor-not-allowed': isSpoofTab(tab) && spoofLoading,
                   }"
-                  :title="isRail ? t(tab.label) : undefined"
-                  :aria-label="tab.redirect ? `${t(tab.label)} (opens in new tab)` : t(tab.label)"
+                  :disabled="isSpoofTab(tab) && spoofLoading"
+                  :title="isRail ? tabLabel(tab) : undefined"
+                  :aria-label="tab.redirect ? `${tabLabel(tab)} (opens in new tab)` : tabLabel(tab)"
                   :aria-current="isTabActive(tab.key) ? 'page' : undefined"
                   @click="openTab(tab)"
                 >
                   <span class="flex w-12 h-11 shrink-0 items-center justify-center">
-                    <component :is="tab.icon" class="w-5 h-5 transition-colors duration-150 shrink-0" :class="{ 'text-blue-500 lg:text-blue-500': isTabActive(tab.key), 'text-slate-400 group-hover:text-slate-300 lg:text-slate-400 lg:group-hover:text-slate-300': !isTabActive(tab.key) }" />
+                    <Spinner v-if="isSpoofTab(tab) && spoofLoading" size="w-5 h-5" />
+                    <component :is="tab.icon" v-else class="w-5 h-5 transition-colors duration-150 shrink-0" :class="{ 'text-blue-500 lg:text-blue-500': isTabActive(tab.key), 'text-slate-400 group-hover:text-slate-300 lg:text-slate-400 lg:group-hover:text-slate-300': !isTabActive(tab.key) }" />
                   </span>
                   <span
                     class="flex items-center pr-3 text-sm font-medium capitalize whitespace-nowrap"
@@ -252,7 +367,7 @@ const tabs = computed<Tab[]>(() => {
                       tab.redirect ? 'underline' : '',
                     ]"
                   >
-                    {{ t(tab.label) }}
+                    {{ isSpoofTab(tab) && spoofLoading ? t('loading') : tabLabel(tab) }}
                     <svg v-if="tab.redirect" class="w-3 h-3 ml-1 opacity-60" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                       <path fill-rule="evenodd" d="M4.25 5.5a.75.75 0 00-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 00.75-.75v-4a.75.75 0 011.5 0v4A2.25 2.25 0 0112.75 17h-8.5A2.25 2.25 0 012 14.75v-8.5A2.25 2.25 0 014.25 4h5a.75.75 0 010 1.5h-5z" clip-rule="evenodd" />
                       <path fill-rule="evenodd" d="M6.194 12.753a.75.75 0 001.06.053L16.5 4.44v2.81a.75.75 0 001.5 0v-4.5a.75.75 0 00-.75-.75h-4.5a.75.75 0 000 1.5h2.553l-9.056 8.194a.75.75 0 00-.053 1.06z" clip-rule="evenodd" />
@@ -272,5 +387,19 @@ const tabs = computed<Tab[]>(() => {
         </div>
       </div>
     </div>
+    <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('log-as')" to="#dialog-v2-content" defer>
+      <div class="w-full">
+        <label for="log-as-input" class="sr-only">{{ t('user-email-or-org-id') }}</label>
+        <input
+          id="log-as-input"
+          v-model="logAsInput"
+          type="text"
+          :placeholder="t('user-email-or-org-id')"
+          :aria-label="t('user-email-or-org-id')"
+          class="p-3 w-full rounded-lg border border-gray-300 dark:text-white dark:bg-gray-800 dark:border-gray-600"
+          @keydown.enter="$event.preventDefault()"
+        >
+      </div>
+    </Teleport>
   </div>
 </template>
