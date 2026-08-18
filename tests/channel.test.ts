@@ -70,7 +70,7 @@ describe('[GET] /channel operations', () => {
 
 describe('[POST] /channel operations', () => {
   it('create channel', async () => {
-    const response = await fetch(`${BASE_URL}/channel`, {
+    const response = await fetch(getEndpointUrl('/channel'), {
       method: 'POST',
       headers,
       body: JSON.stringify({
