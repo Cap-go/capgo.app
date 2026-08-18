@@ -1719,6 +1719,7 @@ describe('rbac permission system', () => {
         })
 
         await query(`SELECT set_config('request.headers', $1, true)`, [JSON.stringify({ capgkey: channelKey })])
+        await query(`SELECT set_config('request.jwt.claim.role', 'anon', true)`)
         await query('SET LOCAL ROLE anon')
 
         const guardedAccess = await query(`

@@ -12,12 +12,21 @@ AS $_$
 DECLARE
   val record;
   is_different boolean;
+  v_request_role text := public.current_request_role();
 BEGIN
   IF current_setting('capgo.allow_owner_org_transfer', true) = 'true' THEN
     RETURN NEW;
   END IF;
 
-  IF public.is_internal_request_role(public.current_request_role()) THEN
+  IF v_request_role IN ('service_role', 'postgres') THEN
+    RETURN NEW;
+  END IF;
+
+  -- Direct postgres maintenance without PostgREST/API-key request context.
+  IF v_request_role IN ('', 'none')
+    AND COALESCE(session_user, current_user) = ANY (public.internal_request_db_user_names())
+    AND NULLIF(btrim(public.get_apikey_header()), '') IS NULL
+  THEN
     RETURN NEW;
   END IF;
 

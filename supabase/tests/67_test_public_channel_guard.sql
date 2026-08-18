@@ -278,42 +278,48 @@ SELECT throws_ok(
   'channel-admin cannot promote a private channel to public'
 );
 
--- 4) Channel-admin can still edit non-public settings on a private channel.
-SELECT lives_ok(
+-- 4) Channel-admin cannot mutate protected settings via direct PostgREST.
+SELECT throws_ok(
   $$
     UPDATE public.channels
     SET allow_emulator = true
     WHERE id = 6700401
   $$,
-  'channel-admin can update non-public settings on a private channel'
+  'P0001',
+  'not allowed allow_emulator',
+  'channel-admin cannot update non-public settings via API key PostgREST'
 );
 
--- 5) App admin can flip private -> public.
+-- 5) App admin API keys cannot flip private -> public via direct PostgREST.
 SELECT tests.clear_authentication();
 SELECT set_config('request.jwt.claim.role', 'anon', true);
 SELECT set_config('request.headers', '{"capgkey":"public-channel-guard-admin-key"}', true);
 
-SELECT lives_ok(
+SELECT throws_ok(
   $$
     UPDATE public.channels
     SET public = true
     WHERE id = 6700401
   $$,
-  'app admin can promote a private channel to public'
+  'P0001',
+  'not allowed public',
+  'app admin API key cannot promote a private channel to public via PostgREST'
 );
 
--- 6) Channel-admin can still edit an already-public channel.
+-- 6) Channel-admin cannot edit an already-public channel via direct PostgREST.
 SELECT tests.clear_authentication();
 SELECT set_config('request.jwt.claim.role', 'anon', true);
 SELECT set_config('request.headers', '{"capgkey":"public-channel-guard-channel-admin-key"}', true);
 
-SELECT lives_ok(
+SELECT throws_ok(
   $$
     UPDATE public.channels
     SET allow_device = true
     WHERE id = 6700401
   $$,
-  'channel-admin can update settings on an already-public channel'
+  'P0001',
+  'not allowed allow_device',
+  'channel-admin cannot update settings on an already-public channel via API key PostgREST'
 );
 
 SELECT tests.clear_authentication();

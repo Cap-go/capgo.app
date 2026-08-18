@@ -1184,7 +1184,7 @@ describe('channels rls blocks direct api-key updates', () => {
     if (!writeKey || !channelId)
       throw new Error('RLS channel test setup did not complete')
 
-    await expect(execWithRoleClaims(
+    const result = await execWithRoleClaims(
       'UPDATE public.channels SET allow_emulator = true WHERE id = $1 RETURNING id, allow_emulator',
       {
         role: 'anon',
@@ -1195,7 +1195,9 @@ describe('channels rls blocks direct api-key updates', () => {
         headers: { capgkey: writeKey.key },
         params: [channelId],
       },
-    )).rejects.toThrow(/not allowed allow_emulator/)
+    )
+
+    expect(result.rowCount).toBe(0)
 
     const { rows } = await pool.query(
       'SELECT allow_emulator FROM public.channels WHERE id = $1',
@@ -1261,7 +1263,7 @@ describe('channels rls blocks direct api-key updates', () => {
     )
 
     expect(result.rowCount).toBe(1)
-    expect(result.rows[0].version).toBe(versionId)
+    expect(Number(result.rows[0].version)).toBe(versionId)
 
     await pool.query(
       'UPDATE public.channels SET version = NULL WHERE id = $1',
@@ -1300,7 +1302,7 @@ describe('channels rls blocks direct api-key updates', () => {
           headers: { capgkey: allKey.key },
           params: [versionId, channelId],
         },
-      )).rejects.toThrow(/NO_RIGHTS/)
+      )).rejects.toThrow(/not allowed rollout_version/)
 
       await expect(execWithRoleClaims(
         'UPDATE public.channels SET allow_emulator = true WHERE id = $1 RETURNING id, allow_emulator',
