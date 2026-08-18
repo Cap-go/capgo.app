@@ -89,6 +89,7 @@ const addTooltipId = `${useId()}-add-tooltip`
 const exportMenuId = `${useId()}-export-menu`
 const exportMenuOpen = ref(false)
 const exportTriggerRef = ref<HTMLButtonElement | null>(null)
+const searchInputId = `${useId()}-search`
 
 function focusExportTrigger() {
   if (props.exportLoading)
@@ -131,6 +132,7 @@ watch(() => props.exportLoading, (loading, wasLoading) => {
 const slots = useSlots()
 const { t } = useI18n()
 const searchVal = ref(props.search ?? '')
+const searchAriaLabel = computed(() => props.searchPlaceholder || t('search'))
 const pendingReset = ref(false)
 const pendingAdd = ref(false)
 // const sorts = ref<TableSort>({})
@@ -722,9 +724,11 @@ const paginationClass = computed(() => props.mobileFixedPagination
           <slot name="toolbar-extras" />
         </div>
         <div class="min-w-0 w-full overflow-hidden sm:w-auto sm:max-w-[13rem] md:max-w-[14rem] lg:max-w-[16rem] xl:max-w-xs">
+          <label :for="searchInputId" class="sr-only">{{ searchAriaLabel }}</label>
           <FormKit
+            :id="searchInputId"
             v-model="searchVal" :placeholder="searchPlaceholder" :prefix-icon="IconSearch"
-            :attrs="{ 'aria-label': searchPlaceholder || t('search') }"
+            :attrs="{ 'aria-label': searchAriaLabel }"
             :disabled="isLoading" enterkeyhint="send" :classes="{
               outer: 'mb-0! w-full sm:w-52 md:w-56 lg:w-64 xl:w-80',
             }"
