@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Database, Json } from '~/types/supabase.types'
 import type {
+  OnboardingAnalyticsStep,
   OnboardingCopyEvent,
   OnboardingDetailsEvent,
   OnboardingDetailsEventProperties,
@@ -79,6 +80,7 @@ import {
 } from '~/utils/userOnboardingProgress'
 import AppOnboardingCliSteps from './AppOnboardingCliSteps.vue'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
+import AppOnboardingWelcome from './AppOnboardingWelcome.vue'
 import OrganizationOnboardingInvite from './OrganizationOnboardingInvite.vue'
 import TechnicalTeammateInviteCard from './TechnicalTeammateInviteCard.vue'
 
@@ -99,6 +101,7 @@ const onboardingUserId = computed(() => main.user?.id ?? main.auth?.id ?? null)
 const config = getLocalConfig()
 const onboardingTelemetry = createOnboardingTelemetryIdentity({ flow: props.preOrg ? 'pre_org' : 'existing_org', supaHost: config.supaHost })
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
+const WELCOME_CANVAS_MEDIA_QUERY = '(min-width: 640px) and (min-height: 640px)'
 const removeBeforeUnloadWarning = useBeforeUnloadWarning(Boolean(props.preOrg))
 
 type AppRow = Omit<Database['public']['Tables']['apps']['Row'], 'onboarding'> & {
@@ -124,6 +127,9 @@ interface OrganizationWebsitePreview {
 
 const isLoading = ref(true)
 const isHydratingOnboarding = ref(true)
+const welcomeCanvasEligible = ref(false)
+const welcomePending = ref(false)
+const showPreOrgWelcome = computed(() => props.preOrg && welcomeCanvasEligible.value && welcomePending.value)
 const isSubmitting = ref(false)
 const isImportingStore = ref(false)
 const isResumeIconLoading = ref(false)
@@ -365,7 +371,10 @@ function trackOrganizationEvent(
 const detailsFieldTracker = createOnboardingDetailsFieldDebouncer(trackDetailsEvent)
 
 function initializeProgressTracking(resumed: boolean) {
-  const trackedSteps = appOnboardingSteps.value.map(step => step.id)
+  const initialStep: OnboardingAnalyticsStep = showPreOrgWelcome.value ? 'welcome' : flowStep.value
+  const trackedSteps: OnboardingAnalyticsStep[] = appOnboardingSteps.value.map(step => step.id)
+  if (initialStep === 'welcome')
+    trackedSteps.unshift('welcome')
   if (!props.preOrg && resumed && flowStep.value === 'setup')
     trackedSteps.push('setup')
 
@@ -377,7 +386,7 @@ function initializeProgressTracking(resumed: boolean) {
     onboardingAttemptId: onboardingTelemetry.attemptId,
     onboardingRunId: onboardingTelemetry.runId,
   })
-  progressTracker.viewStep(flowStep.value)
+  progressTracker.viewStep(initialStep)
   if (pendingDashboardExplored)
     trackDashboardExplored()
 }
@@ -544,6 +553,17 @@ function resetOnboardingForm() {
   resetStoreImportState()
 }
 
+function showWelcomeOnDesktop() {
+  welcomePending.value = Boolean(props.preOrg && welcomeCanvasEligible.value)
+}
+
+function continueFromWelcome() {
+  const nextStep = flowStep.value
+  progressTracker?.completeStep('welcome', { nextStep })
+  progressTracker?.viewStep(nextStep, 'welcome')
+  welcomePending.value = false
+}
+
 function applyOnboardingProgress(progress: ReturnType<typeof parseUserOnboardingProgress>) {
   if (!progress)
     return
@@ -594,6 +614,7 @@ async function maybeResumeSavedOnboarding() {
     else {
       applyDefaultPreOrgDetails()
     }
+    showWelcomeOnDesktop()
     return false
   }
 
@@ -624,6 +645,7 @@ async function maybeResumeSavedOnboarding() {
     resetOnboardingForm()
     existingApp.value = true
     existingAppSetup.value = 'manual'
+    showWelcomeOnDesktop()
     return false
   }
 
@@ -1606,6 +1628,7 @@ function trackDashboardExplored() {
 
 onMounted(async () => {
   window.addEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
+  welcomeCanvasEligible.value = window.matchMedia(WELCOME_CANVAS_MEDIA_QUERY).matches
   let resumedFlow = false
   isLoading.value = true
   isHydratingOnboarding.value = true
@@ -1723,7 +1746,12 @@ defineExpose({
 </script>
 
 <template>
-  <section class="min-h-full overflow-y-auto bg-slate-50 px-4 py-6 sm:px-6 lg:px-8 dark:bg-slate-950">
+  <AppOnboardingWelcome
+    v-if="showPreOrgWelcome && !isLoading"
+    @continue="continueFromWelcome"
+  />
+
+  <section v-else class="h-full min-h-0 overflow-y-auto bg-slate-50 px-4 py-6 sm:px-6 lg:px-8 dark:bg-slate-950">
     <div class="mx-auto w-full max-w-3xl">
       <div v-if="isLoading" class="flex min-h-[50vh] items-center justify-center">
         <Spinner size="w-32 h-32" />

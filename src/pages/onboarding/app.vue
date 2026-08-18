@@ -49,8 +49,8 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="h-full min-h-0 overflow-y-auto bg-slate-50 dark:bg-slate-950">
-    <div class="mx-auto flex w-full max-w-3xl justify-end px-4 pt-4 sm:px-6">
+  <div class="flex h-full min-h-0 flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">
+    <header class="relative z-20 flex shrink-0 items-center justify-end px-6 py-5 lg:px-10">
       <button
         type="button"
         class="d-btn d-btn-ghost min-h-11 text-slate-600 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white"
@@ -62,14 +62,17 @@ onMounted(async () => {
         <IconLoader v-if="isLoggingOut" class="h-4 w-4 animate-spin" />
         <span :class="{ 'sr-only': isLoggingOut }">{{ t('logout') }}</span>
       </button>
-    </div>
+    </header>
 
-    <PageLoader v-if="!isReady" />
-    <AppOnboardingFlow v-else ref="onboardingFlow" pre-org onboarding />
+    <PageLoader v-if="!isReady" class="min-h-0 flex-1" />
+    <div v-else class="min-h-0 flex-1">
+      <AppOnboardingFlow ref="onboardingFlow" pre-org onboarding />
+    </div>
   </div>
 </template>
 
 <route lang="yaml">
 meta:
+  layout: naked
   middleware: auth
 </route>
