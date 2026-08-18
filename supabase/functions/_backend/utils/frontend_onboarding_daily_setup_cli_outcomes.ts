@@ -3,7 +3,7 @@ import type {
   FrontendOnboardingDailySetupCliEvent,
   FrontendOnboardingDailySetupCliEventKind,
 } from './frontend_onboarding_daily_setup_cli_outcomes_model.ts'
-import { FRONTEND_ONBOARDING_PRODUCTION_HOST } from './frontend_onboarding_analytics_model.ts'
+import { FRONTEND_ONBOARDING_PRODUCTION_HOST, FRONTEND_ONBOARDING_VERSIONS } from './frontend_onboarding_analytics_model.ts'
 import { cloudlogErr } from './logging.ts'
 import { queryPosthogHogql } from './posthog_read.ts'
 
@@ -70,6 +70,8 @@ export function buildFrontendOnboardingDailySetupCliHogql(
   endDate: string,
   followupEndDate: string,
 ): string {
+  const setupVersionAllowlist = FRONTEND_ONBOARDING_VERSIONS.filter(version => version >= 2).join(', ')
+
   return `
     WITH setup_people AS (
       SELECT DISTINCT
@@ -78,7 +80,7 @@ export function buildFrontendOnboardingDailySetupCliHogql(
       WHERE event = 'onboarding_step_viewed'
         AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
         AND JSONExtractString(toString(properties), '$host') = ${sqlStr(FRONTEND_ONBOARDING_PRODUCTION_HOST)}
-        AND toIntOrZero(toString(properties.onboarding_version)) IN (2, 3)
+        AND toIntOrZero(toString(properties.onboarding_version)) IN (${setupVersionAllowlist})
         AND JSONExtractString(toString(properties), 'step') = 'setup'
         AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
         AND timestamp < parseDateTimeBestEffort(${sqlStr(endDate)})
@@ -105,7 +107,7 @@ export function buildFrontendOnboardingDailySetupCliHogql(
           selected_events.event IN ('onboarding_step_viewed', 'onboarding_cli_command_copied', 'onboarding_ai_instructions_copied')
           AND JSONExtractString(toString(selected_events.properties), 'flow') = 'pre_org'
           AND JSONExtractString(toString(selected_events.properties), '$host') = ${sqlStr(FRONTEND_ONBOARDING_PRODUCTION_HOST)}
-          AND toIntOrZero(toString(selected_events.properties.onboarding_version)) IN (2, 3)
+          AND toIntOrZero(toString(selected_events.properties.onboarding_version)) IN (${setupVersionAllowlist})
           AND JSONExtractString(toString(selected_events.properties), 'step') = 'setup'
         )
       )

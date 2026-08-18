@@ -1,4 +1,4 @@
-export const FRONTEND_ONBOARDING_VERSIONS = [1, 2, 3] as const
+export const FRONTEND_ONBOARDING_VERSIONS = [1, 2, 3, 4] as const
 export type FrontendOnboardingVersion = typeof FRONTEND_ONBOARDING_VERSIONS[number]
 export const FRONTEND_ONBOARDING_FOLLOWUP_MS = 24 * 60 * 60 * 1000
 export const FRONTEND_ONBOARDING_PRODUCTION_HOST = ['console', 'capgo', 'app'].join('.')
@@ -57,6 +57,7 @@ export interface FrontendOnboardingDailyAttempt {
   v1_attempts: number
   v2_attempts: number
   v3_attempts: number
+  v4_attempts: number
 }
 
 export interface FrontendOnboardingDailyConversion {
@@ -79,7 +80,7 @@ export interface FrontendOnboardingAnalytics {
   deduplicated: {
     daily_attempts: FrontendOnboardingDailyAttempt[]
     funnels: {
-      v3: FrontendOnboardingFunnelStage[]
+      v4: FrontendOnboardingFunnelStage[]
     }
   }
   daily_conversions: {
@@ -91,11 +92,15 @@ export interface FrontendOnboardingAnalytics {
     v1: FrontendOnboardingFunnelStage[]
     v2: FrontendOnboardingFunnelStage[]
     v3: FrontendOnboardingFunnelStage[]
+    v4: FrontendOnboardingFunnelStage[]
   }
   v2_graph: {
     nodes: Array<{ key: string, count: number }>
   }
   v3_graph: {
+    nodes: Array<{ key: string, count: number }>
+  }
+  v4_graph: {
     nodes: Array<{ key: string, count: number }>
   }
   v2_v3_setup_cli_outcomes: FrontendOnboardingSetupCliOutcomes
@@ -248,7 +253,7 @@ function eachUtcDate(startMs: number, endMs: number): string[] {
 }
 
 function buildDailyAttempts(attempts: FrontendOnboardingAttempt[], startMs: number, endMs: number): FrontendOnboardingDailyAttempt[] {
-  const emptyCounts = () => ({ v1_attempts: 0, v2_attempts: 0, v3_attempts: 0 })
+  const emptyCounts = () => ({ v1_attempts: 0, v2_attempts: 0, v3_attempts: 0, v4_attempts: 0 })
   const attemptsByDate = new Map<string, ReturnType<typeof emptyCounts>>()
   for (const attempt of attempts) {
     const date = utcDate(attempt.intentMs)
@@ -321,7 +326,7 @@ function buildInteractionGraph(attempts: FrontendOnboardingAttempt[]): Array<{ k
     .map(([key, count]) => ({ key, count }))
 }
 
-function buildV2V3SetupCliOutcomes(attempts: FrontendOnboardingAttempt[]): FrontendOnboardingSetupCliOutcomes {
+function buildSetupCliOutcomes(attempts: FrontendOnboardingAttempt[]): FrontendOnboardingSetupCliOutcomes {
   const outcomesByPerson = new Map<string, { copiedAiInstructions: boolean, startedCli: boolean }>()
 
   for (const attempt of attempts) {
@@ -384,38 +389,41 @@ export function buildFrontendOnboardingAnalytics(
   const currentV1Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 1)
   const currentV2Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 2)
   const currentV3Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 3)
-  const currentV2AndV3Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 2 || attempt.onboardingVersion === 3)
-  const currentV3ConversionAttempts = attempts.filter(attempt => attempt.onboardingVersion === 3
+  const currentV4Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 4)
+  const currentSetupCliOutcomeAttempts = currentAttempts.filter(attempt => attempt.onboardingVersion >= 2)
+  const currentV4ConversionAttempts = attempts.filter(attempt => attempt.onboardingVersion === 4
     && attempt.intentMs >= currentStartMs - FRONTEND_ONBOARDING_FOLLOWUP_MS
     && attempt.intentMs < currentEndMs)
-  const previousV3Attempts = previousAttempts.filter(attempt => attempt.onboardingVersion === 3)
-  const currentV3 = summarizePeriod(currentV3Attempts)
-  const previousV3 = summarizePeriod(previousV3Attempts)
+  const previousV4Attempts = previousAttempts.filter(attempt => attempt.onboardingVersion === 4)
+  const currentV4 = summarizePeriod(currentV4Attempts)
+  const previousV4 = summarizePeriod(previousV4Attempts)
   const deduplicatedCurrentAttempts = selectDeduplicatedAttempts(currentAttempts)
-  const deduplicatedCurrentV3Attempts = selectDeduplicatedAttempts(currentV3Attempts)
+  const deduplicatedCurrentV4Attempts = selectDeduplicatedAttempts(currentV4Attempts)
 
   return {
     kpis: {
-      ...currentV3.kpis,
-      comparison: comparePeriods(currentV3.kpis, previousV3.kpis),
+      ...currentV4.kpis,
+      comparison: comparePeriods(currentV4.kpis, previousV4.kpis),
     },
     daily_attempts: buildDailyAttempts(currentAttempts, currentStartMs, currentEndMs),
     deduplicated: {
       daily_attempts: buildDailyAttempts(deduplicatedCurrentAttempts, currentStartMs, currentEndMs),
-      funnels: { v3: buildFunnel(deduplicatedCurrentV3Attempts) },
+      funnels: { v4: buildFunnel(deduplicatedCurrentV4Attempts) },
     },
     daily_conversions: {
       intent_to_details: buildDailyConversion(attempts, currentStartMs, currentEndMs, 'intent', 'details'),
-      details_to_organization: buildDailyConversion(currentV3ConversionAttempts, currentStartMs, currentEndMs, 'details', 'organization'),
-      organization_to_setup: buildDailyConversion(currentV3ConversionAttempts, currentStartMs, currentEndMs, 'organization', 'setup'),
+      details_to_organization: buildDailyConversion(currentV4ConversionAttempts, currentStartMs, currentEndMs, 'details', 'organization'),
+      organization_to_setup: buildDailyConversion(currentV4ConversionAttempts, currentStartMs, currentEndMs, 'organization', 'setup'),
     },
     funnels: {
       v1: buildFunnel(currentV1Attempts),
       v2: buildFunnel(currentV2Attempts),
-      v3: currentV3.funnel,
+      v3: buildFunnel(currentV3Attempts),
+      v4: currentV4.funnel,
     },
     v2_graph: { nodes: buildInteractionGraph(currentV2Attempts) },
     v3_graph: { nodes: buildInteractionGraph(currentV3Attempts) },
-    v2_v3_setup_cli_outcomes: buildV2V3SetupCliOutcomes(currentV2AndV3Attempts),
+    v4_graph: { nodes: buildInteractionGraph(currentV4Attempts) },
+    v2_v3_setup_cli_outcomes: buildSetupCliOutcomes(currentSetupCliOutcomeAttempts),
   }
 }

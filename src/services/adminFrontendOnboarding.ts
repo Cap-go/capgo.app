@@ -66,6 +66,7 @@ export interface FrontendOnboardingAnalytics {
     v1_attempts: number
     v2_attempts: number
     v3_attempts: number
+    v4_attempts: number
   }>
   deduplicated: {
     daily_attempts: Array<{
@@ -73,9 +74,10 @@ export interface FrontendOnboardingAnalytics {
       v1_attempts: number
       v2_attempts: number
       v3_attempts: number
+      v4_attempts: number
     }>
     funnels: {
-      v3: FrontendOnboardingFunnelStage[]
+      v4: FrontendOnboardingFunnelStage[]
     }
   }
   daily_conversions: {
@@ -87,6 +89,7 @@ export interface FrontendOnboardingAnalytics {
     v1: FrontendOnboardingFunnelStage[]
     v2: FrontendOnboardingFunnelStage[]
     v3: FrontendOnboardingFunnelStage[]
+    v4: FrontendOnboardingFunnelStage[]
   }
   v2_graph: {
     nodes: Array<{
@@ -95,6 +98,12 @@ export interface FrontendOnboardingAnalytics {
     }>
   }
   v3_graph: {
+    nodes: Array<{
+      key: string
+      count: number
+    }>
+  }
+  v4_graph: {
     nodes: Array<{
       key: string
       count: number
@@ -194,6 +203,7 @@ export function buildFrontendOnboardingDailySeries(
   v1Label: string,
   v2Label: string,
   v3Label: string,
+  v4Label: string,
 ): FrontendOnboardingDailySeries[] {
   return [
     {
@@ -210,6 +220,11 @@ export function buildFrontendOnboardingDailySeries(
       label: v3Label,
       color: '#10b981',
       data: dailyAttempts.map(({ date, v3_attempts }) => ({ date, value: v3_attempts })),
+    },
+    {
+      label: v4Label,
+      color: '#f59e0b',
+      data: dailyAttempts.map(({ date, v4_attempts }) => ({ date, value: v4_attempts })),
     },
   ]
 }
@@ -289,7 +304,7 @@ export function buildFrontendOnboardingFunnelSummaries(
 
 export function buildFrontendOnboardingGraphMetrics(
   definitions: readonly FrontendOnboardingGraphMetricDefinition[],
-  nodes: readonly FrontendOnboardingAnalytics['v3_graph']['nodes'][number][],
+  nodes: readonly FrontendOnboardingAnalytics['v4_graph']['nodes'][number][],
   appDetailsCount: number | undefined,
 ): Record<string, FrontendOnboardingGraphMetric> {
   const counts = new Map(nodes.map(node => [node.key, node.count]))

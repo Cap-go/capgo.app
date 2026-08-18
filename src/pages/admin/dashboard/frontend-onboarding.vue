@@ -47,9 +47,9 @@ const isReady = ref(false)
 const analytics = ref<FrontendOnboardingAnalytics | null>(null)
 const loadError = ref(false)
 const deduplicateDailyAttempts = ref(false)
-const deduplicateV3Funnel = ref(false)
+const deduplicateV4Funnel = ref(false)
 
-const v3DetailsGraphDefinitions = [
+const v4DetailsGraphDefinitions = [
   { key: 'onboarding_app_name_entered' },
   { key: 'onboarding_app_id_entered' },
   { key: 'onboarding_app_id_help_opened' },
@@ -67,7 +67,7 @@ const v3DetailsGraphDefinitions = [
   { key: 'onboarding_app_icon_upload_failed', parentKey: 'onboarding_app_icon_picked' },
 ] as const
 
-const v3OrganizationGraphDefinitions = [
+const v4OrganizationGraphDefinitions = [
   { key: 'onboarding_organization_import_opened' },
   { key: 'onboarding_organization_import_submitted', parentKey: 'onboarding_organization_import_opened' },
   { key: 'onboarding_organization_import_succeeded', parentKey: 'onboarding_organization_import_submitted' },
@@ -78,12 +78,12 @@ const v3OrganizationGraphDefinitions = [
   { key: 'onboarding_organization_invite_continued', parentKey: 'onboarding_organization_invite_viewed' },
 ] as const
 
-const v3SetupGraphDefinitions = [
+const v4SetupGraphDefinitions = [
   { key: 'onboarding_technical_invite_opened' },
   { key: 'onboarding_technical_invite_succeeded', parentKey: 'onboarding_technical_invite_opened' },
 ] as const
 
-const v3DetailsGraphEventNodes = [
+const v4DetailsGraphEventNodes = [
   { id: 'app_name', eventKey: 'onboarding_app_name_entered', labelKey: 'frontend-onboarding-graph-app-name-entered', x: 820, y: 90, icon: 'app' },
   { id: 'app_id', eventKey: 'onboarding_app_id_entered', labelKey: 'frontend-onboarding-graph-app-id-entered', x: 820, y: 195, icon: 'file' },
   { id: 'learn_more', eventKey: 'onboarding_app_id_help_opened', labelKey: 'frontend-onboarding-graph-app-id-help-opened', x: 820, y: 300, icon: 'details' },
@@ -101,7 +101,7 @@ const v3DetailsGraphEventNodes = [
   { id: 'icon_upload_failed', eventKey: 'onboarding_app_icon_upload_failed', labelKey: 'frontend-onboarding-graph-icon-upload-failed', x: 1540, y: 870, icon: 'upload', tone: 'danger' },
 ] as const
 
-const v3OrganizationGraphEventNodes = [
+const v4OrganizationGraphEventNodes = [
   { id: 'organization_import_opened', eventKey: 'onboarding_organization_import_opened', labelKey: 'frontend-onboarding-graph-organization-import-opened', x: 2800, y: 160, icon: 'import' },
   { id: 'organization_import_submitted', eventKey: 'onboarding_organization_import_submitted', labelKey: 'frontend-onboarding-graph-organization-import-submitted', x: 3160, y: 160, icon: 'import' },
   { id: 'organization_import_succeeded', eventKey: 'onboarding_organization_import_succeeded', labelKey: 'frontend-onboarding-graph-organization-import-succeeded', x: 3520, y: 110, icon: 'success', tone: 'success' },
@@ -112,7 +112,7 @@ const v3OrganizationGraphEventNodes = [
   { id: 'organization_invite_continued', eventKey: 'onboarding_organization_invite_continued', labelKey: 'frontend-onboarding-graph-organization-invite-continued', x: 3880, y: 700, icon: 'setup' },
 ] as const
 
-const v3SetupGraphEventNodes = [
+const v4SetupGraphEventNodes = [
   { id: 'technical_invite_opened', eventKey: 'onboarding_technical_invite_opened', labelKey: 'frontend-onboarding-graph-technical-invite-opened', x: 4950, y: 450, icon: 'organization' },
   { id: 'technical_invite_succeeded', eventKey: 'onboarding_technical_invite_succeeded', labelKey: 'frontend-onboarding-graph-technical-invite-succeeded', x: 5300, y: 450, icon: 'success', tone: 'success' },
 ] as const
@@ -122,7 +122,7 @@ const loadAnalytics = createFrontendOnboardingAnalyticsLoader(
     const result = await adminStore.fetchStats('frontend_onboarding_analytics')
     if (result && (
       !Array.isArray(result.deduplicated?.daily_attempts)
-      || !Array.isArray(result.deduplicated?.funnels?.v3)
+      || !Array.isArray(result.deduplicated?.funnels?.v4)
     )) {
       throw new Error('Frontend onboarding analytics response is missing deduplicated chart data')
     }
@@ -151,26 +151,27 @@ const visibleAnalytics = computed(() => isLoadingStats.value ? null : analytics.
 const displayedDailyAttempts = computed(() => deduplicateDailyAttempts.value
   ? visibleAnalytics.value?.deduplicated.daily_attempts ?? []
   : visibleAnalytics.value?.daily_attempts ?? [])
-const displayedV3Funnel = computed(() => deduplicateV3Funnel.value
-  ? visibleAnalytics.value?.deduplicated.funnels.v3 ?? []
-  : visibleAnalytics.value?.funnels.v3 ?? [])
+const displayedV4Funnel = computed(() => deduplicateV4Funnel.value
+  ? visibleAnalytics.value?.deduplicated.funnels.v4 ?? []
+  : visibleAnalytics.value?.funnels.v4 ?? [])
 const kpis = computed(() => visibleAnalytics.value?.kpis)
 const dailySeries = computed(() => buildFrontendOnboardingDailySeries(
   displayedDailyAttempts.value,
   t('frontend-onboarding-version-1'),
   t('frontend-onboarding-version-2'),
   t('frontend-onboarding-version-3'),
+  t('frontend-onboarding-version-4'),
 ))
 const intentToDetailsDaily = computed(() => visibleAnalytics.value?.daily_conversions?.intent_to_details ?? [])
 const detailsToOrganizationDaily = computed(() => visibleAnalytics.value?.daily_conversions?.details_to_organization ?? [])
 const organizationToSetupDaily = computed(() => visibleAnalytics.value?.daily_conversions?.organization_to_setup ?? [])
 const hasConversionData = (points: readonly { started: number }[]) => points.some(point => point.started > 0)
 const v1FunnelStages = computed(() => buildFrontendOnboardingFunnelStages(visibleAnalytics.value?.funnels.v1 ?? []))
-const v3FunnelStages = computed(() => buildFrontendOnboardingFunnelStages(displayedV3Funnel.value))
+const v4FunnelStages = computed(() => buildFrontendOnboardingFunnelStages(displayedV4Funnel.value))
 const v1FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(visibleAnalytics.value?.funnels.v1 ?? []))
-const v3FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(displayedV3Funnel.value))
+const v4FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(displayedV4Funnel.value))
 const hasDailyAttempts = computed(() => displayedDailyAttempts.value
-  .some(day => day.v1_attempts > 0 || day.v2_attempts > 0 || day.v3_attempts > 0))
+  .some(day => day.v1_attempts > 0 || day.v2_attempts > 0 || day.v3_attempts > 0 || day.v4_attempts > 0))
 const setupCliOutcomes = computed(() => visibleAnalytics.value?.v2_v3_setup_cli_outcomes ?? {
   total_users: 0,
   cli_only: 0,
@@ -211,22 +212,22 @@ const dailySetupCliSeries = computed(() => buildFrontendOnboardingDailySetupCliS
 ))
 const hasDailySetupCliOutcomeData = computed(() => dailySetupCliSeries.value.length > 0)
 
-const onboardingGraphV3 = computed<AdminOnboardingJourneyGraphConfig>(() => {
-  const funnel = visibleAnalytics.value?.funnels.v3 ?? []
-  const stage = (key: FrontendOnboardingAnalytics['funnels']['v3'][number]['key']) => funnel.find(item => item.key === key)
+const onboardingGraphV4 = computed<AdminOnboardingJourneyGraphConfig>(() => {
+  const funnel = visibleAnalytics.value?.funnels.v4 ?? []
+  const stage = (key: FrontendOnboardingAnalytics['funnels']['v4'][number]['key']) => funnel.find(item => item.key === key)
   const intent = stage('intent')
   const details = stage('details')
   const organization = stage('organization')
   const setup = stage('setup')
   const parentPercent = (current: number, previous: number) => previous > 0 ? current / previous * 100 : 0
-  const interactionNodes = visibleAnalytics.value?.v3_graph.nodes ?? []
+  const interactionNodes = visibleAnalytics.value?.v4_graph.nodes ?? []
   const graphMetrics = {
-    ...buildFrontendOnboardingGraphMetrics(v3DetailsGraphDefinitions, interactionNodes, details?.reached),
-    ...buildFrontendOnboardingGraphMetrics(v3OrganizationGraphDefinitions, interactionNodes, organization?.reached),
-    ...buildFrontendOnboardingGraphMetrics(v3SetupGraphDefinitions, interactionNodes, setup?.reached),
+    ...buildFrontendOnboardingGraphMetrics(v4DetailsGraphDefinitions, interactionNodes, details?.reached),
+    ...buildFrontendOnboardingGraphMetrics(v4OrganizationGraphDefinitions, interactionNodes, organization?.reached),
+    ...buildFrontendOnboardingGraphMetrics(v4SetupGraphDefinitions, interactionNodes, setup?.reached),
   }
   const mapEventNodes = (
-    nodes: readonly (typeof v3DetailsGraphEventNodes[number] | typeof v3OrganizationGraphEventNodes[number] | typeof v3SetupGraphEventNodes[number])[],
+    nodes: readonly (typeof v4DetailsGraphEventNodes[number] | typeof v4OrganizationGraphEventNodes[number] | typeof v4SetupGraphEventNodes[number])[],
     levelLabelKey: string,
   ): AdminOnboardingJourneyNode[] => nodes.map((node) => {
     const metric = graphMetrics[node.eventKey]
@@ -245,9 +246,9 @@ const onboardingGraphV3 = computed<AdminOnboardingJourneyGraphConfig>(() => {
     }
   })
   const eventNodes = [
-    ...mapEventNodes(v3DetailsGraphEventNodes, 'frontend-onboarding-graph-stage-app-details'),
-    ...mapEventNodes(v3OrganizationGraphEventNodes, 'frontend-onboarding-graph-stage-organization-details'),
-    ...mapEventNodes(v3SetupGraphEventNodes, 'frontend-onboarding-graph-stage-setup-reached'),
+    ...mapEventNodes(v4DetailsGraphEventNodes, 'frontend-onboarding-graph-stage-app-details'),
+    ...mapEventNodes(v4OrganizationGraphEventNodes, 'frontend-onboarding-graph-stage-organization-details'),
+    ...mapEventNodes(v4SetupGraphEventNodes, 'frontend-onboarding-graph-stage-setup-reached'),
   ]
 
   return {
@@ -380,7 +381,7 @@ const largestDropoffSubtitle = computed(() => {
   if (!dropoff)
     return t('frontend-onboarding-no-dropoff')
 
-  const stages = visibleAnalytics.value?.funnels.v3 ?? []
+  const stages = visibleAnalytics.value?.funnels.v4 ?? []
   const from = stages.find(stage => stage.key === dropoff.from)?.label ?? dropoff.from
   const to = stages.find(stage => stage.key === dropoff.to)?.label ?? dropoff.to
   return t('frontend-onboarding-transition', { from, to })
@@ -421,7 +422,7 @@ displayStore.defaultBack = '/dashboard'
             {{ t('frontend-onboarding') }}
           </h1>
           <span class="px-3 py-1 text-xs font-semibold text-indigo-700 bg-indigo-100 rounded-full dark:bg-indigo-500/20 dark:text-indigo-200">
-            {{ t('frontend-onboarding-version-3') }}
+            {{ t('frontend-onboarding-version-4') }}
           </span>
         </div>
 
@@ -475,14 +476,14 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
-            chart-id="funnel-v3"
-            :title="t('frontend-onboarding-funnel-v3')"
+            chart-id="funnel-v4"
+            :title="t('frontend-onboarding-funnel-v4')"
             :is-loading="isLoadingStats"
           >
             <template #header>
               <div class="min-w-0">
                 <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
-                  {{ t('frontend-onboarding-funnel-v3') }}
+                  {{ t('frontend-onboarding-funnel-v4') }}
                 </h2>
                 <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
                   {{ t('frontend-onboarding-funnel-description') }}
@@ -490,10 +491,10 @@ displayStore.defaultBack = '/dashboard'
               </div>
             </template>
             <div class="mt-6 h-72 sm:h-80">
-              <AdminFunnelChart :stages="v3FunnelStages" />
+              <AdminFunnelChart :stages="v4FunnelStages" />
             </div>
             <div class="grid grid-cols-2 gap-4 pt-5 mt-5 border-t border-slate-200 md:grid-cols-4 dark:border-slate-700">
-              <div v-for="summary in v3FunnelSummaries" :key="summary.key" class="text-center">
+              <div v-for="summary in v4FunnelSummaries" :key="summary.key" class="text-center">
                 <p class="text-xl font-bold text-slate-900 tabular-nums dark:text-white">
                   {{ formatNumberValue(summary.conversion_percent) }}%
                 </p>
@@ -503,8 +504,8 @@ displayStore.defaultBack = '/dashboard'
               </div>
             </div>
             <AdminChartDeduplicateControl
-              v-model="deduplicateV3Funnel"
-              :chart-label="t('frontend-onboarding-funnel-v3')"
+              v-model="deduplicateV4Funnel"
+              :chart-label="t('frontend-onboarding-funnel-v4')"
             />
           </ChartCard>
 
@@ -554,28 +555,28 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
-            chart-id="journey-graph-v3"
-            :title="t('frontend-onboarding-graph-v3')"
+            chart-id="journey-graph-v4"
+            :title="t('frontend-onboarding-graph-v4')"
             :is-loading="isLoadingStats"
           >
             <template #header>
               <div class="min-w-0">
                 <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
-                  {{ t('frontend-onboarding-graph-v3') }}
+                  {{ t('frontend-onboarding-graph-v4') }}
                 </h2>
                 <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                  {{ t('frontend-onboarding-graph-v3-description') }}
+                  {{ t('frontend-onboarding-graph-v4-description') }}
                 </p>
               </div>
             </template>
             <div class="mt-1">
-              <AdminOnboardingJourneyGraph :config="onboardingGraphV3" />
+              <AdminOnboardingJourneyGraph :config="onboardingGraphV4" />
             </div>
           </ChartCard>
 
           <ChartCard
-            chart-id="setup-cli-outcomes-v2-v3"
-            :title="t('frontend-onboarding-setup-cli-outcomes-v2-v3')"
+            chart-id="setup-cli-outcomes-v2-v4"
+            :title="t('frontend-onboarding-setup-cli-outcomes-v2-v4')"
             :total="setupCliOutcomes.total_users"
             :unit="t('frontend-onboarding-people')"
             :is-loading="isLoadingStats"
@@ -584,7 +585,7 @@ displayStore.defaultBack = '/dashboard'
             <template #header>
               <div class="min-w-0">
                 <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
-                  {{ t('frontend-onboarding-setup-cli-outcomes-v2-v3') }}
+                  {{ t('frontend-onboarding-setup-cli-outcomes-v2-v4') }}
                 </h2>
                 <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
                   {{ t('frontend-onboarding-setup-cli-outcomes-description') }}
@@ -604,15 +605,15 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <ChartCard
-            chart-id="daily-setup-cli-outcomes-v2-v3"
-            :title="t('frontend-onboarding-daily-setup-cli-outcomes-v2-v3')"
+            chart-id="daily-setup-cli-outcomes-v2-v4"
+            :title="t('frontend-onboarding-daily-setup-cli-outcomes-v2-v4')"
             :is-loading="isLoadingStats"
             :has-data="hasDailySetupCliOutcomeData"
           >
             <template #header>
               <div class="min-w-0">
                 <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
-                  {{ t('frontend-onboarding-daily-setup-cli-outcomes-v2-v3') }}
+                  {{ t('frontend-onboarding-daily-setup-cli-outcomes-v2-v4') }}
                 </h2>
                 <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
                   {{ t('frontend-onboarding-daily-setup-cli-outcomes-description') }}
