@@ -62,6 +62,8 @@ const autofillPreserveHiddenStyle = {
   overflow: 'hidden',
   pointerEvents: 'none',
 } as const
+// eslint-disable-next-line regexp/no-unused-capturing-group
+const mfaRegex = /(((\d){6})|((\d){3} (\d){3}))$/
 const shouldBlockForCaptcha = computed(() => !!captchaKey.value && captchaStatus.value === 'loading' && !turnstileToken.value)
 const loginHeroChips = computed(() => [
   t('login-chip-live-updates'),
@@ -362,7 +364,13 @@ async function checkDomain(email: string): Promise<{ has_sso: boolean, enforce_s
 }
 
 function isCompletableEmail(email: string) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+  const trimmed = email.trim()
+  const at = trimmed.indexOf('@')
+  if (at <= 0 || trimmed.includes(' '))
+    return false
+  const domain = trimmed.slice(at + 1)
+  const dot = domain.indexOf('.')
+  return dot > 0 && dot < domain.length - 1
 }
 
 async function refreshSsoForEmail(email: string) {
@@ -732,8 +740,6 @@ function declineQuerySession() {
   hideLoader()
 }
 
-// eslint-disable-next-line regexp/no-unused-capturing-group
-const mfaRegex = /(((\d){6})|((\d){3} (\d){3}))$/
 function mfa_code_validation(node: { value: any }) {
   return Promise.resolve(mfaRegex.test(node.value))
 }
