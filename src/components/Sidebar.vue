@@ -80,10 +80,19 @@ async function openLogAsDialog() {
     try {
       await logAsUser(identifier, router)
     }
+    catch {
+      // logAsUser already shows an error toast
+    }
     finally {
       spoofLoading.value = false
     }
   }
+}
+
+function submitLogAsDialog() {
+  const logAsButton = dialogStore.dialogOptions?.buttons?.find(button => button.text === t('log-as') && button.role !== 'cancel')
+  if (logAsButton)
+    void dialogStore.closeDialog(logAsButton)
 }
 
 async function resetSpoofedUser() {
@@ -93,7 +102,8 @@ async function resetSpoofedUser() {
     spoofed.value = isSpoofed()
 
     if (!restored) {
-      toast.error(t('spoof-session-cleared'))
+      if (!spoofed.value)
+        toast.error(t('spoof-session-cleared'))
       return
     }
 
@@ -397,7 +407,7 @@ function tabLabel(tab: Tab) {
           :placeholder="t('user-email-or-org-id')"
           :aria-label="t('user-email-or-org-id')"
           class="p-3 w-full rounded-lg border border-gray-300 dark:text-white dark:bg-gray-800 dark:border-gray-600"
-          @keydown.enter="$event.preventDefault()"
+          @keydown.enter.prevent="submitLogAsDialog"
         >
       </div>
     </Teleport>

@@ -16,6 +16,9 @@ const { t } = useI18n()
 const route = useRoute()
 const main = useMainStore()
 const displayName = computed(() => `${main.user?.first_name ?? ''} ${main.user?.last_name ?? ''}`.trim())
+const accountSettingsLabel = computed(() => {
+  return [displayName.value, main.user?.email, t('settings')].filter(Boolean).join(', ')
+})
 const acronym = computed(() => {
   let res = 'MD'
   if (main.user?.first_name && main.user?.last_name)
@@ -39,6 +42,7 @@ function allowPendingOnboardingDashboardExploration() {
     to="/settings/account"
     class="flex items-center w-full min-h-11 rounded-lg cursor-pointer text-gray-300 hover:bg-slate-700/50 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
     :title="props.compact ? displayName || t('settings') : t('settings')"
+    :aria-label="accountSettingsLabel"
     data-test="sidebar-account"
     @click="allowPendingOnboardingDashboardExploration"
   >
