@@ -67,6 +67,17 @@ export interface FrontendOnboardingAnalytics {
     v2_attempts: number
     v3_attempts: number
   }>
+  deduplicated: {
+    daily_attempts: Array<{
+      date: string
+      v1_attempts: number
+      v2_attempts: number
+      v3_attempts: number
+    }>
+    funnels: {
+      v3: FrontendOnboardingFunnelStage[]
+    }
+  }
   daily_conversions: {
     intent_to_details: FrontendOnboardingDailyConversionPoint[]
     details_to_organization: FrontendOnboardingDailyConversionPoint[]

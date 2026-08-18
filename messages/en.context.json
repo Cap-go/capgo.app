@@ -1493,6 +1493,8 @@
   "frontend-onboarding-daily-setup-cli-outcomes-description": "Used in Capgo web console areas: pages/admin/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "frontend-onboarding-daily-setup-cli-outcomes-v2-v3": "Used in Capgo web console areas: pages/admin/dashboard. Role: chart title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "frontend-onboarding-daily-setup-cli-returning": "Used in Capgo web console areas: pages/admin/dashboard. Role: chart lifecycle label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "frontend-onboarding-deduplicate-by-user": "Used in Capgo web console areas: components/admin. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "frontend-onboarding-deduplicate-by-user-chart": "Used in Capgo web console areas: components/admin. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "frontend-onboarding-funnel-description": "Used in Capgo web console areas: pages/admin/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "frontend-onboarding-funnel-v1-legacy": "Used in Capgo web console areas: pages/admin/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "frontend-onboarding-funnel-v2": "Used in Capgo web console areas: pages/admin/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
