@@ -143,6 +143,7 @@ interface BuildLogger {
 - `--keystore-store-password <password>`
 - `--play-config-json <json>`
 - `--android-flavor <flavor>`
+- `--sync-android-version`: before upload, replace a quoted `versionName` in `android/app/build.gradle` with the `package.json` version. The request fails before submission if the file is missing or `versionName` is not a quoted string.
 - `--in-app-update-priority <0-5>`: Google Play in-app update priority (higher = more urgent)
 
 #### Output behavior options
