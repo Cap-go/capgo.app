@@ -1,8 +1,8 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { intro, isCancel, log, outro, password, select } from '@clack/prompts'
-import { checkAlerts } from './api/update'
 import { flushDeferredCommandInvocation } from './analytics/track'
+import { checkAlerts } from './api/update'
 import { resolveLoginCommandApiKey } from './auth/command-input'
 import { validateAndSaveKey } from './auth/session'
 import { loginInitInBrowser } from './init/browser-login'
@@ -98,7 +98,7 @@ export async function loginInternal(apikey: string | undefined, options: Options
 
 export async function login(apikey: string, options: Options) {
   let resolvedApiKey = resolveLoginCommandApiKey(apikey, options.apikey)
-  const supportsBrowserLogin = !options.supaHost && !options.supaAnon
+  const supportsBrowserLogin = !options.local && !options.supaHost && !options.supaAnon
 
   if (!resolvedApiKey && !canPromptInteractively()) {
     log.error('Missing API key. Provide it as an argument or with --apikey.')

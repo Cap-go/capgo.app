@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { RealtimeChannel } from '@supabase/supabase-js'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -42,6 +42,8 @@ const realtimeUnavailable = ref(false)
 const destination = ref('/dashboard')
 const channels: RealtimeChannel[] = []
 const displayedKey = computed(() => revealed.value && secret.value ? secret.value : hiddenKey)
+const revealButtonRef = useTemplateRef<HTMLButtonElement>('revealButtonRef')
+const revealDialogRef = useTemplateRef<HTMLElement>('revealDialogRef')
 
 function clearSecret(): void {
   revealDialogOpen.value = false
@@ -161,6 +163,40 @@ function closeRevealDialog(): void {
   revealDialogOpen.value = false
 }
 
+function getRevealDialogFocusable(): HTMLElement[] {
+  if (!revealDialogRef.value)
+    return []
+  return Array.from(revealDialogRef.value.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )).filter(element => element.offsetParent !== null)
+}
+
+function onRevealDialogKeydown(event: KeyboardEvent): void {
+  if (!revealDialogOpen.value)
+    return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeRevealDialog()
+    return
+  }
+  if (event.key !== 'Tab')
+    return
+
+  const focusable = getRevealDialogFocusable()
+  if (focusable.length === 0)
+    return
+  const first = focusable[0]!
+  const last = focusable[focusable.length - 1]!
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  }
+  else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
 function confirmReveal(): void {
   revealed.value = true
   closeRevealDialog()
@@ -180,8 +216,22 @@ function showReadyUnlessCompleted(): void {
     state.value = 'ready'
 }
 
+watch(revealDialogOpen, async (open) => {
+  if (open) {
+    window.addEventListener('keydown', onRevealDialogKeydown)
+    await nextTick()
+    getRevealDialogFocusable()[0]?.focus()
+  }
+  else {
+    window.removeEventListener('keydown', onRevealDialogKeydown)
+    await nextTick()
+    revealButtonRef.value?.focus()
+  }
+})
+
 onMounted(prepare)
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onRevealDialogKeydown)
   clearSecret()
   clearChannels()
 })
@@ -234,6 +284,7 @@ onBeforeUnmount(() => {
           <code :class="revealed ? '' : 'select-none blur-[5px]'" class="min-w-0 flex-1 whitespace-normal break-all">{{ displayedKey }}</code>
           <div class="flex shrink-0 items-center gap-2 self-end sm:self-center">
             <button
+              ref="revealButtonRef"
               class="d-btn d-btn-ghost d-btn-square d-btn-sm"
               type="button"
               :aria-label="t(revealed ? 'cli-login-hide-key' : 'cli-login-reveal-key')"
@@ -312,9 +363,8 @@ onBeforeUnmount(() => {
         aria-modal="true"
         aria-labelledby="cli-login-reveal-dialog-title"
         aria-describedby="cli-login-reveal-dialog-description"
-        @keydown.esc="closeRevealDialog"
       >
-        <div class="d-modal-box w-[calc(100vw-2rem)] max-w-md rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800">
+        <div ref="revealDialogRef" class="d-modal-box w-[calc(100vw-2rem)] max-w-md rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800">
           <h2 id="cli-login-reveal-dialog-title" class="text-xl font-semibold text-slate-950 dark:text-white">
             {{ t('cli-login-reveal-dialog-title') }}
           </h2>
@@ -322,7 +372,7 @@ onBeforeUnmount(() => {
             {{ t('cli-login-reveal-dialog-description') }}
           </p>
           <div class="d-modal-action flex-wrap">
-            <button class="d-btn d-btn-ghost" type="button" autofocus @click="closeRevealDialog">
+            <button class="d-btn d-btn-ghost" type="button" @click="closeRevealDialog">
               {{ t('cancel') }}
             </button>
             <button class="d-btn" type="button" @click="copyFromRevealDialog">

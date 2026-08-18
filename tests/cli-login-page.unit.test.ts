@@ -37,6 +37,15 @@ describe('/login-cli page contract', () => {
     expect(page).toContain('aria-labelledby="cli-login-reveal-dialog-title"')
   })
 
+  it.concurrent('traps reveal-dialog focus and restores it to the reveal button', () => {
+    const page = readFileSync(pagePath, 'utf8')
+    expect(page).toContain('ref="revealButtonRef"')
+    expect(page).toContain('ref="revealDialogRef"')
+    expect(page).toContain(`window.addEventListener('keydown', onRevealDialogKeydown)`)
+    expect(page).toContain(`if (event.key !== 'Tab')`)
+    expect(page).toContain('revealButtonRef.value?.focus()')
+  })
+
   it.concurrent('animates the waiting state and keeps reused-key info as a final footnote', () => {
     const page = readFileSync(pagePath, 'utf8')
     const waitingStatus = page.indexOf('d-loading d-loading-dots')
@@ -72,8 +81,11 @@ describe('/login-cli page contract', () => {
     expect(auth).toContain('const organizationFetchOptions = { loadImages: !isCliLoginRoute }')
     expect(auth).toContain('organizationStore.fetchOrganizations(organizationFetchOptions)')
     expect(auth).toContain('organizationStore.dedupFetchOrganizations(organizationFetchOptions)')
-    expect(organizationStore).toContain('if (loadOrganizationImages)')
+    expect(organizationStore).not.toContain('let loadOrganizationImages')
+    expect(organizationStore).toContain('const loadImages = options.loadImages ?? true')
+    expect(organizationStore).toContain('loadOrganizationApps(selectableOrganizations, loadImages)')
     expect(organizationStore).toContain('loadPendingOrganizationImages()')
+    expect(organizationStore).toContain('if (pendingOrganizationImageLoad)')
   })
 
   it.concurrent('contains focused key, paste, warning, waiting, and success copy', () => {

@@ -163,6 +163,7 @@ describe('login browser choice', () => {
     expect(chooseMethod).toBeGreaterThan(resolveKey)
     expect(browserLogin).toBeGreaterThan(chooseMethod)
     expect(manualLogin).toBeGreaterThan(browserLogin)
+    expect(loginAction).toContain('const supportsBrowserLogin = !options.local && !options.supaHost && !options.supaAnon')
     expect(loginAction).toContain('if (!resolvedApiKey && supportsBrowserLogin)')
     expect(loginAction).toContain("if (loginMethod === 'browser')")
   })
