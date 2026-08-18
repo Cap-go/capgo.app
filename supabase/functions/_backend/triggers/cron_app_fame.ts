@@ -78,7 +78,23 @@ export async function processAppFameBatch(c: Context<MiddlewareKeyVariables>): P
       return { scored: 0, skipped: candidates.length }
     }
 
-    for (const decision of decisions) {
+    const scoredIds = new Set(decisions.map(decision => decision.app_id))
+    const rowsToPersist: AppFameDecision[] = [
+      ...decisions,
+      ...candidates
+        .filter(candidate => !scoredIds.has(candidate.app_id))
+        .map(candidate => ({
+          app_id: candidate.app_id,
+          fame_score: 0,
+          confidence: 0,
+          tier: 'unknown' as const,
+          category: '',
+          known_as: candidate.name?.trim() || '',
+          summary: 'AI returned no usable reputation score for this app.',
+        })),
+    ]
+
+    for (const decision of rowsToPersist) {
       await drizzleClient.execute(sql`
         INSERT INTO public.app_fame (
           app_id,

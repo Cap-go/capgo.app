@@ -79,6 +79,48 @@ function fameResponseSchema() {
   }
 }
 
+function parseFameDecisionRow(
+  row: unknown,
+  allowedAppIds: Set<string>,
+  seen: Set<string>,
+): AppFameDecision | null {
+  if (!row || typeof row !== 'object' || Array.isArray(row))
+    return null
+
+  const entry = row as Record<string, unknown>
+  const appId = typeof entry.app_id === 'string' ? entry.app_id.trim() : ''
+  if (!appId || !allowedAppIds.has(appId) || seen.has(appId))
+    return null
+
+  const fameScore = clampScore(entry.fame_score)
+  const confidence = clampScore(entry.confidence)
+  if (fameScore === null || confidence === null)
+    return null
+
+  const summary = typeof entry.summary === 'string' ? entry.summary.trim() : ''
+  if (!summary)
+    return null
+
+  const category = typeof entry.category === 'string' ? entry.category.trim() : ''
+  const knownAs = typeof entry.known_as === 'string' ? entry.known_as.trim() : ''
+  const requestedTier = typeof entry.tier === 'string' ? entry.tier.trim().toLowerCase() : ''
+  const derivedTier = fameTierFromScore(fameScore)
+  const tier = TIER_SET.has(requestedTier) && requestedTier === derivedTier
+    ? requestedTier as AppFameTier
+    : derivedTier
+
+  seen.add(appId)
+  return {
+    app_id: appId,
+    fame_score: fameScore,
+    confidence,
+    tier,
+    category,
+    known_as: knownAs,
+    summary,
+  }
+}
+
 export function parseFameDecisions(value: unknown, allowedAppIds: Set<string>): AppFameDecision[] {
   const record = parseJsonObjectFromAiText(value) ?? parseJsonObjectFromAiText(extractAiText(value))
   if (!record)
@@ -89,39 +131,9 @@ export function parseFameDecisions(value: unknown, allowedAppIds: Set<string>): 
   const seen = new Set<string>()
 
   for (const row of rows) {
-    if (!row || typeof row !== 'object' || Array.isArray(row))
-      continue
-    const entry = row as Record<string, unknown>
-    const appId = typeof entry.app_id === 'string' ? entry.app_id.trim() : ''
-    if (!appId || !allowedAppIds.has(appId) || seen.has(appId))
-      continue
-
-    const fameScore = clampScore(entry.fame_score)
-    const confidence = clampScore(entry.confidence)
-    if (fameScore === null || confidence === null)
-      continue
-
-    const summary = typeof entry.summary === 'string' ? entry.summary.trim() : ''
-    if (!summary)
-      continue
-
-    const category = typeof entry.category === 'string' ? entry.category.trim() : ''
-    const knownAs = typeof entry.known_as === 'string' ? entry.known_as.trim() : ''
-    const requestedTier = typeof entry.tier === 'string' ? entry.tier.trim().toLowerCase() : ''
-    const tier = TIER_SET.has(requestedTier) && requestedTier === fameTierFromScore(fameScore)
-      ? requestedTier as AppFameTier
-      : fameTierFromScore(fameScore)
-
-    seen.add(appId)
-    decisions.push({
-      app_id: appId,
-      fame_score: fameScore,
-      confidence,
-      tier,
-      category,
-      known_as: knownAs,
-      summary,
-    })
+    const decision = parseFameDecisionRow(row, allowedAppIds, seen)
+    if (decision)
+      decisions.push(decision)
   }
 
   return decisions

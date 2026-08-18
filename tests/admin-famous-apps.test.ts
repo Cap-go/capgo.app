@@ -67,6 +67,7 @@ describe('admin famous apps', () => {
         metric_category: 'famous_apps',
         start_date: INSIGHTS_START,
         end_date: INSIGHTS_END,
+        search: fixtureId.slice(0, 8),
         min_score: 0,
         limit: 50,
         offset: 0,
@@ -131,7 +132,7 @@ describe('admin famous apps', () => {
     })).rejects.toThrow(/permission denied/)
   })
 
-  it('registers the fame scoring cron and queue', async () => {
+  it('registers fame scoring in cron_tasks for process_all_cron_tasks', async () => {
     const tasks = await executeSQL(`
       SELECT name, task_type, target
       FROM public.cron_tasks
