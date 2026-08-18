@@ -84,6 +84,81 @@ describe('[POST] /channel operations', () => {
     expect(data.status).toBe('ok')
   })
 
+  it('publicizes a private channel through POST /channel when caller has app.update_settings', async () => {
+    const channelName = `publicize_${id.slice(0, 8)}`
+    const client = getSupabaseClient()
+
+    const createResponse = await fetch(`${BASE_URL}/channel`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        channel: channelName,
+        public: false,
+      }),
+    })
+    const createData = await createResponse.json<{ status: string, error?: string, message?: string }>()
+    expect(createResponse.status, JSON.stringify(createData)).toBe(200)
+
+    const { data: productionBefore } = await client
+      .from('channels')
+      .select('public')
+      .eq('app_id', APPNAME)
+      .eq('name', 'production')
+      .single()
+      .throwOnError()
+
+    try {
+      if (productionBefore.public) {
+        await client
+          .from('channels')
+          .update({ public: false })
+          .eq('app_id', APPNAME)
+          .eq('name', 'production')
+          .throwOnError()
+      }
+
+      const publicizeResponse = await fetch(`${BASE_URL}/channel`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          app_id: APPNAME,
+          channel: channelName,
+          public: true,
+        }),
+      })
+      const publicizeData = await publicizeResponse.json<{ status: string, error?: string, message?: string }>()
+      expect(publicizeResponse.status, JSON.stringify(publicizeData)).toBe(200)
+      expect(publicizeData.status).toBe('ok')
+
+      const { data: channel } = await client
+        .from('channels')
+        .select('public')
+        .eq('app_id', APPNAME)
+        .eq('name', channelName)
+        .single()
+        .throwOnError()
+      expect(channel.public).toBe(true)
+    }
+    finally {
+      await client
+        .from('channels')
+        .update({ public: false })
+        .eq('app_id', APPNAME)
+        .eq('name', channelName)
+        .throwOnError()
+
+      if (productionBefore.public) {
+        await client
+          .from('channels')
+          .update({ public: true })
+          .eq('app_id', APPNAME)
+          .eq('name', 'production')
+          .throwOnError()
+      }
+    }
+  })
+
   it('update channel', async () => {
     const response = await fetch(`${BASE_URL}/channel`, {
       method: 'POST',
