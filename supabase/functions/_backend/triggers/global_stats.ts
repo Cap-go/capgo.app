@@ -3457,7 +3457,6 @@ async function runNotificationsGlobalStatsShard(c: Context, window: DailyWindow)
             storage_gb: bundle_storage_gb,
             org_conversion_rate,
           },
-          icon: '📲',
         }, { background: false, strict: true })
       },
     )

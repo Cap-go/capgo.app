@@ -3,7 +3,6 @@ import { defaultApiHost, useSupabase } from '~/services/supabase'
 type TagKey = Lowercase<string>
 /** Tag Type */
 type Tags = Record<TagKey, string | number | boolean>
-type Parser = 'markdown' | 'text'
 /**
  * Options for publishing analytics events
  */
@@ -37,13 +36,6 @@ interface TrackOptions {
    */
   tracking_version?: number
   /**
-   * Event icon (emoji)
-   * must be a single emoji
-   * example: "🎉"
-   * @deprecated Tracking v1 presentation hint. Tracking v2 records it as event-only metadata.
-   */
-  icon?: string
-  /**
    * Event tags
    * example: { username: "mattie" }
    */
@@ -52,14 +44,6 @@ interface TrackOptions {
    * Per-event metadata that must not become PostHog person properties.
    */
   nonPersonTags?: Tags
-  /**
-   * @deprecated Tracking v2 notifications are controlled by server-side Bento mappings.
-   */
-  notify?: boolean
-  /**
-   * @deprecated Tracking v1 presentation hint. Tracking v2 records it as event-only metadata.
-   */
-  parser?: Parser
   /**
    * Event timestamp
    */

@@ -328,9 +328,7 @@ async function guard(
     sendEvent({
       channel: 'user-login',
       event: 'User Login',
-      icon: '✅',
       user_id: main.auth?.id,
-      notify: false,
     }).catch()
 
     await loadPlansIfNeeded()

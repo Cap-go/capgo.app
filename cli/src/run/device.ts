@@ -139,7 +139,7 @@ export async function testRunDeviceCommand(platformName?: string, options: RunDe
     const pm = getPMAndCommand()
     const platformNameChoice = await selectRunDevicePlatform(platformName, interactive)
 
-    void trackEvent({ channel: 'cli-usage', event: 'Run On Device', icon: '📱', tags: { platform: platformNameChoice } })
+    void trackEvent({ channel: 'cli-usage', event: 'Run On Device', tags: { platform: platformNameChoice } })
 
     if (!interactive) {
       const runCommand = getNonInteractiveRunDeviceCommand(pm, platformNameChoice)

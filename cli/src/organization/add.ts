@@ -90,13 +90,11 @@ export async function addOrganizationInternal(options: OrganizationAddOptions, s
   await sendEvent(enrichedOptions.apikey, {
     channel: 'organization',
     event: 'Organization Created',
-    icon: '🏢',
     org_id: orgData.id,
     tracking_version: 2,
     tags: {
       'org-name': name,
     },
-    notify: false,
   }).catch(() => {})
 
   if (!silent) {

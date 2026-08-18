@@ -79,8 +79,6 @@ export async function trackBuilderOnboardingStep(input: TrackBuilderOnboardingSt
     await sendEvent(input.apikey, {
       event: 'Builder Onboarding Step',
       channel: 'builder-onboarding',
-      icon: '🧭',
-      notify: false,
       org_id: input.orgId,
       tracking_version: 2,
       tags,
@@ -109,8 +107,6 @@ export async function trackBuilderOnboardingAction(input: TrackBuilderOnboarding
     await sendEvent(input.apikey, {
       event: 'Builder Onboarding Action',
       channel: 'builder-onboarding',
-      icon: '🧭',
-      notify: false,
       org_id: input.orgId,
       tracking_version: 2,
       tags,
@@ -173,8 +169,6 @@ export async function trackBuilderOnboardingCancelled(input: TrackBuilderOnboard
     await sendEvent(input.apikey, {
       event: 'Builder Onboarding Quit',
       channel: 'builder-onboarding',
-      icon: '🚪',
-      notify: false,
       org_id: input.orgId,
       tracking_version: 2,
       tags,

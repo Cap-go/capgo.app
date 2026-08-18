@@ -987,11 +987,9 @@ async function customerSourceCreated(c: Context, org: Org, stripeEvent: Stripe.C
     },
     channel: 'usage',
     event: 'Credit Card Added',
-    icon: '💳',
     sentToBento: true,
     user_id: org.id,
     groups: { organization: org.id },
-    notify: false,
   })
   return c.json(BRES)
 }
@@ -1008,11 +1006,9 @@ async function customerSourceExpiring(c: Context, org: Org) {
     },
     channel: 'usage',
     event: 'Credit Card Expiring',
-    icon: '⚠️',
     sentToBento: true,
     user_id: org.id,
     groups: { organization: org.id },
-    notify: false,
   })
   return c.json(BRES)
 }
@@ -1047,11 +1043,9 @@ async function invoiceUpcoming(c: Context, org: Org, stripeEvent: Stripe.Invoice
     },
     channel: 'usage',
     event: 'Invoice Upcoming',
-    icon: '📄',
     sentToBento: true,
     user_id: org.id,
     groups: { organization: org.id },
-    notify: false,
   })
   return c.json(BRES)
 }
@@ -1157,11 +1151,9 @@ async function createdOrUpdated(
         },
         channel: 'usage',
         event: planChangeEventName,
-        icon: '💰',
         sentToBento: true,
         user_id: org.id,
         groups: { organization: org.id },
-        notify: true,
         tags: planChangeMetadata,
       })
     }
@@ -1187,11 +1179,9 @@ async function createdOrUpdated(
       },
       channel: 'usage',
       event: isNewSubscription ? 'User subscribe' : 'User update subscribe',
-      icon: '💰',
       sentToBento: true,
       user_id: org.id,
       groups: { organization: org.id },
-      notify: isNewSubscription,
       tags: subscriptionMetadata,
     })
 
@@ -1260,11 +1250,9 @@ async function didCancel(c: Context, org: Org, customerId: string) {
     },
     channel: 'usage',
     event: 'User cancel',
-    icon: '⚠️',
     sentToBento: true,
     user_id: org.id,
     groups: { organization: org.id },
-    notify: true,
   })
 
   await backgroundTask(c, groupIdentifyPosthog(c, {

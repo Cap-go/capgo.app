@@ -69,15 +69,13 @@ function describeFetchFailure(error: unknown, endpoint: string) {
 }
 
 
-export async function sendCliEvent(channel: string, orgId: string, apikey: string, event: string, appId?: string, icon = '✅', tags?: Record<string, string | number | boolean>) {
+export async function sendCliEvent(channel: string, orgId: string, apikey: string, event: string, appId?: string, tags?: Record<string, string | number | boolean>) {
   await sendEvent(apikey, {
     channel,
     event,
-    icon,
     org_id: orgId,
     tracking_version: 2,
     ...((appId || tags) ? { tags: { ...(appId ? { 'app-id': appId } : {}), ...tags } } : {}),
-    notify: false,
   })
 }
 
@@ -85,7 +83,7 @@ export async function cancelCommand(channel: string, command: boolean | symbol, 
   if (!isCancel(command))
     return
 
-  await sendCliEvent(channel, orgId, apikey, 'canceled', undefined, '🤷')
+  await sendCliEvent(channel, orgId, apikey, 'canceled')
   log.warn('Command cancelled')
   throw new CliUserError('Command cancelled')
 }

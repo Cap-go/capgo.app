@@ -33,8 +33,13 @@ interface ResolvedTrackingId {
 }
 
 interface TrackEventBody extends TrackOptions {
+  // Older clients may still send these fields. They are discarded for
+  // analytics; icon is read only by the explicit Realtime console path.
+  icon?: string
+  notify?: boolean
   notifyConsole?: boolean
   org_id?: string
+  parser?: 'markdown' | 'text'
   tracking_version?: number | string
   nonPersonTags?: Record<string, string | number | boolean>
 }
@@ -150,7 +155,7 @@ function buildTrackedBody(
   verifiedOrgId: string | undefined,
   requestedUserId: string | undefined,
   trackingUserId: string,
-  trackOptions: Omit<TrackEventBody, 'notifyConsole' | 'org_id' | 'tracking_version'>,
+  trackOptions: TrackOptions,
 ) {
   const trackedTags = trackingV2 && verifiedOrgId
     ? { ...(trackOptions.tags || {}), org_id: verifiedOrgId }
@@ -165,6 +170,7 @@ function buildTrackedBody(
 async function handleNotifyConsole(
   c: Context<MiddlewareKeyVariables>,
   trackedBody: TrackOptions,
+  icon: string | undefined,
   appId: string | undefined,
   verifiedOrgId: string | undefined,
 ) {
@@ -175,7 +181,7 @@ async function handleNotifyConsole(
     event: trackedBody.event,
     channel: trackedBody.channel,
     description: trackedBody.description,
-    icon: trackedBody.icon,
+    icon,
     app_id: appId,
     org_id: verifiedOrgId,
     channel_name: typeof trackedBody.tags?.channel === 'string' ? trackedBody.tags.channel : undefined,
@@ -363,7 +369,15 @@ async function buildBundleIncompatibleBentoEvent(
 
 app.post('/', middlewareAuth(), async (c) => {
   const body = await parseBody<TrackEventBody>(c)
-  const { notifyConsole = false, org_id: _orgId, tracking_version: _trackingVersion, ...trackOptions } = body
+  const {
+    icon,
+    notify: _notify,
+    notifyConsole = false,
+    org_id: _orgId,
+    parser: _parser,
+    tracking_version: _trackingVersion,
+    ...trackOptions
+  } = body
   const trackingV2 = isTrackingV2(body.tracking_version)
   const requestedOrgId = getRequestedOrgId(body, trackingV2)
   const requestedUserId = typeof body.user_id === 'string' ? body.user_id : undefined
@@ -373,7 +387,7 @@ app.post('/', middlewareAuth(), async (c) => {
 
   // notifyConsole: broadcast to Supabase Realtime only, skip all tracking
   if (notifyConsole) {
-    await handleNotifyConsole(c, trackedBody, appId, verifiedOrgId)
+    await handleNotifyConsole(c, trackedBody, icon, appId, verifiedOrgId)
     return c.json(BRES)
   }
 

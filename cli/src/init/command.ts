@@ -728,7 +728,7 @@ async function runInitDoctorDiagnostics(): Promise<void> {
 }
 
 async function exitCanceledInitOnboarding(orgId: string, apikey: string, message = 'You can resume the onboarding anytime by running the same command again'): Promise<never> {
-  await recordInitEvent(orgId, apikey, 'canceled', undefined, '🤷')
+  await recordInitEvent(orgId, apikey, 'canceled')
   pOutro(`Bye 👋\n💡 ${message}`)
   return await exitAfterFinishingReplay('cancelled', 1)
 }
@@ -1637,7 +1637,7 @@ function cleanupStepsDone() {
 
 async function cancelCommand(command: boolean | string | symbol, orgId: string, apikey: string) {
   if (pIsCancel(command)) {
-    await recordInitEvent(orgId, apikey, 'canceled', undefined, '🤷')
+    await recordInitEvent(orgId, apikey, 'canceled')
     pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
     return await exitAfterFinishingReplay('cancelled', 0)
   }
@@ -1672,7 +1672,7 @@ async function selectRecoveryOption<T extends string>(
     })
 
     if (pIsCancel(choice) || choice === '__cancel__') {
-      await recordInitEvent(orgId, apikey, 'canceled', undefined, '🤷')
+      await recordInitEvent(orgId, apikey, 'canceled')
       pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
       return await exitAfterFinishingReplay('cancelled', 1)
     }
@@ -1815,12 +1815,12 @@ async function warnIfNotInCapacitorRoot() {
   }
 }
 
-async function recordInitEvent(orgId: string, apikey: string, event: string, appId?: string, icon = '✅') {
+async function recordInitEvent(orgId: string, apikey: string, event: string, appId?: string) {
   activeInitTelemetry?.setAuth(orgId, apikey)
   if (activeInitTelemetry)
-    return activeInitTelemetry.recordMilestone(event, undefined, icon, appId ?? null)
+    return activeInitTelemetry.recordMilestone(event, undefined, appId ?? null)
   const replaySessionId = getActiveCliReplaySessionId()
-  return sendCliEvent('onboarding-v2', orgId, apikey, event, appId, icon, replaySessionId ? { $session_id: replaySessionId } : undefined)
+  return sendCliEvent('onboarding-v2', orgId, apikey, event, appId, replaySessionId ? { $session_id: replaySessionId } : undefined)
 }
 
 async function markStep(orgId: string, apikey: string, step: string, appId: string) {
@@ -2460,7 +2460,7 @@ async function askForReplacementAppId(
   await cancelCommand(choice, organization.gid, apikey)
 
   if (choice === 'cancel') {
-    await recordInitEvent(organization.gid, apikey, 'canceled-appid-conflict', undefined, '🤷')
+    await recordInitEvent(organization.gid, apikey, 'canceled-appid-conflict')
     pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
     return await exitAfterFinishingReplay('cancelled', 0)
   }
@@ -4658,7 +4658,7 @@ async function addCodeChangeStep(orgId: string, apikey: string, appId: string, p
     ],
   })
   if (pIsCancel(modificationType)) {
-    await recordInitEvent(orgId, apikey, 'canceled', undefined, '🤷')
+    await recordInitEvent(orgId, apikey, 'canceled')
     pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
     return await exitAfterFinishingReplay('cancelled', 0)
   }
@@ -4744,7 +4744,7 @@ async function addCodeChangeStep(orgId: string, apikey: string, appId: string, p
     ],
   })
   if (pIsCancel(versionChoice)) {
-    await recordInitEvent(orgId, apikey, 'canceled', undefined, '🤷')
+    await recordInitEvent(orgId, apikey, 'canceled')
     pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
     return await exitAfterFinishingReplay('cancelled', 0)
   }
@@ -4765,7 +4765,7 @@ async function addCodeChangeStep(orgId: string, apikey: string, appId: string, p
       },
     })
     if (pIsCancel(userVersion)) {
-      await recordInitEvent(orgId, apikey, 'canceled', undefined, '🤷')
+      await recordInitEvent(orgId, apikey, 'canceled')
       pOutro(`Bye 👋\n💡 You can resume the onboarding anytime by running the same command again`)
       return await exitAfterFinishingReplay('cancelled', 0)
     }

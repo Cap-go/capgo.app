@@ -128,14 +128,12 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
   await sendEvent(options.apikey, {
     channel: 'channel',
     event: 'Delete channel',
-    icon: '✅',
     org_id: orgId,
     tracking_version: 2,
     tags: {
       'app-id': appId,
       'channel': channelId,
     },
-    notify: false,
   }).catch(() => {})
 
   if (!silent) {

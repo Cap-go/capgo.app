@@ -211,11 +211,9 @@ export async function setAppInternal(appId: string, options: Options, silent = f
   await sendEvent(options.apikey, {
     channel: 'app',
     event: 'App Updated',
-    icon: '📝',
     org_id: organizationUid,
     tracking_version: 2,
     tags: { 'app-id': appId },
-    notify: false,
     notifyConsole: true,
   }).catch(() => {})
 

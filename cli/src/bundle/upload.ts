@@ -265,7 +265,6 @@ async function verifyCompatibility(supabase: SupabaseType, pm: pmType, options: 
   void trackEvent({
     channel: 'bundle',
     event: 'Bundle Upload Compatibility Checked',
-    icon: '🧪',
     apikey: options.apikey,
     appId: appid,
     orgId,
@@ -485,13 +484,11 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
     await sendEvent(apikey, {
       channel: 'app',
       event: 'App encryption v2',
-      icon: '🔑',
       org_id: orgId,
       tracking_version: 2,
       tags: {
         'app-id': appid,
       },
-      notify: false,
     }, options.verbose)
     if (!keyDataV2) {
       const keyFile = readFileSync(privateKey)
@@ -544,13 +541,11 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
     await sendEvent(apikey, {
       channel: 'app-error',
       event: 'App Too Large',
-      icon: '🚛',
       org_id: orgId,
       tracking_version: 2,
       tags: {
         'app-id': appid,
       },
-      notify: false,
     }, options.verbose)
 
     if (options.verbose)
@@ -753,14 +748,12 @@ async function uploadBundleToCapgoCloud(apikey: string, supabase: SupabaseType, 
   await sendEvent(apikey, {
     channel: 'performance',
     event: isTus ? 'TUS upload zip performance' : 'Upload zip performance',
-    icon: '🚄',
     org_id: orgId,
     tracking_version: 2,
     tags: {
       'app-id': appid,
       'time': uploadTime,
     },
-    notify: false,
   }, options.verbose)
 
   if (options.verbose)
@@ -1530,7 +1523,6 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     void trackEvent({
       channel: 'bundle',
       event: 'Bundle Upload Blocked',
-      icon: '⛔',
       apikey: options.apikey,
       appId: appid,
       orgId,
@@ -1617,13 +1609,11 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     await sendEvent(apikey, {
       channel: 'app',
       event: 'App external',
-      icon: '📤',
       org_id: orgId,
       tracking_version: 2,
       tags: {
         'app-id': appid,
       },
-      notify: false,
     }, options.verbose)
 
     if (options.verbose) {
@@ -1969,27 +1959,23 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   await sendEvent(apikey, {
     channel: 'app',
     event: 'App Uploaded',
-    icon: '⏫',
     org_id: orgId,
     tracking_version: 2,
     tags: {
       'app-id': appid,
       'bundle': bundle,
     },
-    notify: false,
   }, options.verbose)
 
   await sendEvent(apikey, {
     channel: 'app',
     event: 'Bundle Uploaded',
-    icon: '⏫',
     org_id: orgId,
     tracking_version: 2,
     tags: {
       'app-id': appid,
       'bundle': bundle,
     },
-    notify: false,
     notifyConsole: true,
   }).catch(() => {})
 
@@ -2003,7 +1989,6 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     void trackEvent({
       channel: 'bundle',
       event: 'Bundle Incompatible',
-      icon: '🚫',
       apikey,
       appId: appid,
       orgId,

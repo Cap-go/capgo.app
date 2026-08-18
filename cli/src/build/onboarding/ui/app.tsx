@@ -1079,13 +1079,11 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
   // blocks or throws into the wizard.
   const trackVerifyEvent = useCallback((
     event: string,
-    icon: string,
     tags: Record<string, string | number | boolean> = {},
   ) => {
     void trackEvent({
       channel: 'bundle',
       event,
-      icon,
       apikey: resolvedApiKeyRef.current ?? apikey ?? undefined,
       appId,
       orgId: resolvedOrgId ?? undefined,
@@ -1179,14 +1177,14 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
       // fired — Auto Fixed (changed > 0), Create App Opened, Gate Blocked (the
       // attempt counter advanced while staying parked), Passed (advanced).
       if (action === 'autofix' && autoFixChanged > 0)
-        trackVerifyEvent('iOS App Verify Auto Fixed', '🔧', { attempt: preAttempt, path: 'fix-build-id' })
+        trackVerifyEvent('iOS App Verify Auto Fixed', { attempt: preAttempt, path: 'fix-build-id' })
       if (action === 'open' || action === 'reopen')
-        trackVerifyEvent('iOS App Verify Create App Opened', '🌐', { attempt: preAttempt })
+        trackVerifyEvent('iOS App Verify Create App Opened', { attempt: preAttempt })
       const attemptAfter = t?.verifyAttempt ?? preAttempt
       if (result.next === 'verify-app' && attemptAfter > preAttempt)
-        trackVerifyEvent('iOS App Verify Gate Blocked', '🚧', { attempt: attemptAfter, path: gatePath })
+        trackVerifyEvent('iOS App Verify Gate Blocked', { attempt: attemptAfter, path: gatePath })
       if (result.next && result.next !== 'verify-app' && result.next !== 'error') {
-        trackVerifyEvent('iOS App Verify Passed', '✅', { attempts: preAttempt, path: gatePath })
+        trackVerifyEvent('iOS App Verify Passed', { attempts: preAttempt, path: gatePath })
         setStep(result.next)
       }
     }
@@ -2407,15 +2405,15 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
             const bundleIdCount = t.verifyRegisteredIds?.length ?? 0
             if (!verifyShownRef.current) {
               verifyShownRef.current = true
-              trackVerifyEvent('iOS App Verify Shown', '🔍', {
+              trackVerifyEvent('iOS App Verify Shown', {
                 app_count: appCount,
                 bundle_id_count: bundleIdCount,
                 debug_release_differ: t.verifyDebugReleaseDiffer ?? false,
               })
             }
-            trackVerifyEvent('iOS App Verify Result', '🔎', { result: t.verifyResult, app_count: appCount, bundle_id_count: bundleIdCount })
+            trackVerifyEvent('iOS App Verify Result', { result: t.verifyResult, app_count: appCount, bundle_id_count: bundleIdCount })
             if (t.verifyResult === 'exact-match')
-              trackVerifyEvent('iOS App Verify Passed', '✅', { attempts: 0, path: 'exact-match' })
+              trackVerifyEvent('iOS App Verify Passed', { attempts: 0, path: 'exact-match' })
           }
         }
 
@@ -3621,7 +3619,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
           // exactly as before (the engine's error-sink 'cancel' is for headless
           // drivers, which have no exitOnboarding).
           const cancelGate = (path: GatePath) => {
-            trackVerifyEvent('iOS App Verify Cancelled', '🚫', { attempt: verifyAttempt, path })
+            trackVerifyEvent('iOS App Verify Cancelled', { attempt: verifyAttempt, path })
             addLog('Exiting onboarding.', 'yellow')
             exitOnboarding()
           }
@@ -3784,12 +3782,12 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
                 ]}
                 onChange={(value) => {
                   if (value === '__create_new__') {
-                    trackVerifyEvent('iOS App Verify Picked', '👆', { matches_build_id: false, chose_create_new: true })
+                    trackVerifyEvent('iOS App Verify Picked', { matches_build_id: false, chose_create_new: true })
                     void runVerifyGateAction('create-new')
                     return
                   }
                   const chosen = verifyApps.find(a => a.bundleId === value) ?? null
-                  trackVerifyEvent('iOS App Verify Picked', '👆', {
+                  trackVerifyEvent('iOS App Verify Picked', {
                     matches_build_id: value === releaseId,
                     chose_create_new: false,
                   })

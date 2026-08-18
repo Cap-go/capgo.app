@@ -146,10 +146,8 @@ function setLog() {
       sendEvent({
         channel: 'onboarding-build',
         event: `onboarding-build-step-${stepToName(step.value)}`,
-        icon: 'build',
         org_id: orgId,
         tracking_version: 2,
-        notify: false,
       }).catch()
       pushEvent(`user:onboarding-build-${stepToName(step.value)}`, config.supaHost, { org_id: orgId })
     }

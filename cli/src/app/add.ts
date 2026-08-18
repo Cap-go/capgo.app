@@ -265,11 +265,9 @@ export async function addAppInternal(
   await sendEvent(options.apikey!, {
     channel: 'app',
     event: 'App Created',
-    icon: '🆕',
     org_id: organizationUid,
     tracking_version: 2,
     tags: { 'app-id': appId, 'source': appCreateSource },
-    notify: false,
     notifyConsole: true,
   }).catch(() => {})
 

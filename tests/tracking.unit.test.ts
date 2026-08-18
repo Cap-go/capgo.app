@@ -72,7 +72,6 @@ describe('sendEventToTracking', () => {
     const payload = addAuthenticatedApiKeyIdToTrackingPayload({
       channel: 'usage',
       event: 'Tracked Event',
-      notify: false,
       tags: { apikey_id: 'caller-supplied', app_id: 'app-id' },
     }, 87015)
 
@@ -86,7 +85,6 @@ describe('sendEventToTracking', () => {
     const payload = addAuthenticatedApiKeyIdToTrackingPayload({
       channel: 'usage',
       event: 'Tracked Event',
-      notify: false,
       tags: { apikey_id: 'caller-supplied', app_id: 'app-id' },
       nonPersonTags: { apikey_id: 'caller-supplied', cli_version: '8.31.3' },
     }, undefined)
@@ -110,7 +108,6 @@ describe('sendEventToTracking', () => {
       event: 'Tracked Event',
       user_id: 'org-id',
       description: 'test description',
-      notify: false,
       sentToBento: true,
       tags: { app_id: 'app-id' },
       nonPersonTags: { apikey_id: 87015 },
@@ -150,7 +147,6 @@ describe('sendEventToTracking', () => {
       channel: 'usage',
       event: 'Inline Event',
       user_id: 'org-id',
-      notify: true,
       sentToBento: true,
     }, {
       background: false,
@@ -201,7 +197,7 @@ describe('sendEventToTracking', () => {
     }))
   })
 
-  it('keeps deprecated presentation hints but omits notification delivery control from PostHog metadata', async () => {
+  it('ignores legacy presentation and notification fields instead of copying them into PostHog metadata', async () => {
     const { sendEventToTracking } = await import('../supabase/functions/_backend/utils/tracking.ts')
 
     await sendEventToTracking(createContext(), {
@@ -211,13 +207,11 @@ describe('sendEventToTracking', () => {
       nonPersonTags: { cli_version: '8.31.3' },
       notify: true,
       parser: 'markdown',
-    }, { background: false })
+    } as any, { background: false })
 
     expect(posthogMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       nonPersonTags: {
         cli_version: '8.31.3',
-        icon: '🧪',
-        parser: 'markdown',
       },
     }))
   })
@@ -234,7 +228,6 @@ describe('sendEventToTracking', () => {
       },
       channel: 'onboarding',
       event: 'onboarding_ai_instructions_copied',
-      notify: false,
       sentToBento: true,
       user_id: 'org-id',
     }, { background: false, posthog: false })

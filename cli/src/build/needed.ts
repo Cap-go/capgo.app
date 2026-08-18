@@ -314,7 +314,7 @@ export async function checkBuildNeeded(
 
     stdout.write(`${output}\n`)
     process.exitCode = getBuildNeededExitCode(result.required)
-    void trackEvent({ channel: 'cli-usage', event: 'Build Needed Checked', icon: '🧭', tags: { build_needed: result.required } })
+    void trackEvent({ channel: 'cli-usage', event: 'Build Needed Checked', tags: { build_needed: result.required } })
   }
   catch (error) {
     log.error(`Error checking build requirement ${formatError(error)}`)
