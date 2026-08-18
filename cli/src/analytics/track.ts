@@ -75,6 +75,7 @@ export function resolveTrackingContext(apikey: string, signal?: AbortSignal): Pr
 export interface TrackEventInput {
   channel: string
   event: string
+  /** @deprecated Tracking v1 presentation hint. Tracking v2 records it as event-only metadata. */
   icon?: string
   /** Org id for actor-scoped attribution. Omitted => resolved best-effort. */
   orgId?: string

@@ -12,9 +12,12 @@ export interface TrackOptions {
   event: string
   description?: string
   user_id?: string
+  /** @deprecated Tracking v1 presentation hint. Tracking v2 records it as event-only metadata. */
   icon?: string
   tags?: Record<string, string | number | boolean>
+  /** @deprecated Tracking v2 notifications require an explicit server-side Bento mapping. */
   notify?: boolean
+  /** @deprecated Tracking v1 presentation hint. Tracking v2 records it as event-only metadata. */
   parser?: 'markdown' | 'text'
   timestamp?: number | Date
 }
@@ -104,9 +107,24 @@ function getTrackingTimestamp(timestamp?: number | Date) {
   if (timestamp === undefined)
     return undefined
 
-  return timestamp instanceof Date
-    ? timestamp.toISOString()
-    : new Date(timestamp).toISOString()
+  const date = timestamp instanceof Date ? timestamp : new Date(timestamp)
+  if (!Number.isFinite(date.getTime()))
+    return undefined
+
+  return date.toISOString()
+}
+
+function getPostHogEventMetadata(payload: SendEventToTrackingPayload) {
+  const hasPresentationMetadata = payload.icon !== undefined || payload.notify !== undefined || payload.parser !== undefined
+  if (!hasPresentationMetadata)
+    return payload.nonPersonTags
+
+  return {
+    ...payload.nonPersonTags,
+    ...(payload.icon !== undefined ? { icon: payload.icon } : {}),
+    ...(payload.notify !== undefined ? { notify: payload.notify } : {}),
+    ...(payload.parser !== undefined ? { parser: payload.parser } : {}),
+  }
 }
 
 async function executeTracking(c: Context, payload: SendEventToTrackingPayload, options: SendEventToTrackingOptions) {
@@ -117,7 +135,7 @@ async function executeTracking(c: Context, payload: SendEventToTrackingPayload, 
     event: payload.event,
     user_id: payload.user_id,
     tags: payload.tags,
-    nonPersonTags: payload.nonPersonTags,
+    nonPersonTags: getPostHogEventMetadata(payload),
     channel: payload.channel,
     description: payload.description,
     groups: payload.groups,

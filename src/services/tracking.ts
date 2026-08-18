@@ -40,6 +40,7 @@ interface TrackOptions {
    * Event icon (emoji)
    * must be a single emoji
    * example: "🎉"
+   * @deprecated Tracking v1 presentation hint. Tracking v2 records it as event-only metadata.
    */
   icon?: string
   /**
@@ -52,11 +53,11 @@ interface TrackOptions {
    */
   nonPersonTags?: Tags
   /**
-   * Send push notification
+   * @deprecated Tracking v2 notifications are controlled by server-side Bento mappings.
    */
   notify?: boolean
   /**
-   * Parser for description
+   * @deprecated Tracking v1 presentation hint. Tracking v2 records it as event-only metadata.
    */
   parser?: Parser
   /**

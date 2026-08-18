@@ -120,7 +120,7 @@ describe('sendEventToTracking', () => {
     expect(posthogMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       event: 'Tracked Event',
       ip: '1.2.3.4',
-      nonPersonTags: { apikey_id: 87015 },
+      nonPersonTags: { apikey_id: 87015, notify: false },
       user_id: 'org-id',
     }))
     expect(notifToOrgMembersMock).toHaveBeenCalledWith(
@@ -179,6 +179,47 @@ describe('sendEventToTracking', () => {
 
     expect(posthogMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       timestamp: new Date(timestamp).toISOString(),
+    }))
+  })
+
+  it.each([
+    ['an invalid Date', new Date(Number.NaN)],
+    ['NaN', Number.NaN],
+    ['positive infinity', Number.POSITIVE_INFINITY],
+    ['an out-of-range timestamp', 8.64e15 + 1],
+  ])('drops %s instead of failing strict tracking', async (_label, timestamp) => {
+    const { sendEventToTracking } = await import('../supabase/functions/_backend/utils/tracking.ts')
+
+    await expect(sendEventToTracking(createContext(), {
+      channel: 'usage',
+      event: 'Invalid Timestamp Event',
+      timestamp,
+    }, { background: false, strict: true })).resolves.toBeUndefined()
+
+    expect(posthogMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      timestamp: undefined,
+    }))
+  })
+
+  it('keeps deprecated presentation options as PostHog event metadata', async () => {
+    const { sendEventToTracking } = await import('../supabase/functions/_backend/utils/tracking.ts')
+
+    await sendEventToTracking(createContext(), {
+      channel: 'usage',
+      event: 'Legacy Presentation Event',
+      icon: '🧪',
+      nonPersonTags: { cli_version: '8.31.3' },
+      notify: true,
+      parser: 'markdown',
+    }, { background: false })
+
+    expect(posthogMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      nonPersonTags: {
+        cli_version: '8.31.3',
+        icon: '🧪',
+        notify: true,
+        parser: 'markdown',
+      },
     }))
   })
 
