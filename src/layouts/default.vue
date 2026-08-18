@@ -85,7 +85,7 @@ useRealtimeCLIFeed()
     <!-- Content area -->
     <div
       data-test="dashboard-shell"
-      class="flex flex-col flex-1 h-full overflow-hidden transition-[padding] duration-500 ease-in-out motion-reduce:!transition-none"
+      class="flex flex-col flex-1 h-full overflow-hidden transition-[padding-top,padding-right,padding-bottom,padding-left] duration-500 ease-in-out motion-reduce:!transition-none"
       :class="sidebarCollapsed ? 'lg:p-0' : 'lg:p-3'"
     >
       <div

@@ -327,7 +327,10 @@ function tabLabel(tab: Tab) {
         'lg:w-12': isRail,
       }"
     >
-      <div class="flex h-full w-64 min-w-64 flex-col" :class="{ '[&>*]:px-3': !isRail }">
+      <div
+        class="flex h-full w-64 min-w-64 flex-col transition-[padding-left,padding-right,padding-inline] duration-500 ease-in-out motion-reduce:!transition-none"
+        :class="isRail ? 'px-0' : 'px-3'"
+      >
         <!-- Sidebar header -->
         <div class="flex border-b shrink-0 border-slate-800 lg:border-slate-700 py-4">
           <router-link
