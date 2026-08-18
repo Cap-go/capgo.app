@@ -27,7 +27,7 @@ test.describe('SSO Login Flow', () => {
     await expect(page.locator('[data-test="sso-login"]')).toHaveCount(0)
   })
 
-  test('should show optional SSO without hiding password', async ({ page }) => {
+  test('should use SSO only when the domain has SSO', async ({ page }) => {
     await page.route('**/private/sso/check-domain', async (route) => {
       await route.fulfill({
         status: 200,
@@ -36,34 +36,19 @@ test.describe('SSO Login Flow', () => {
       })
     })
 
-    await page.fill('[data-test="email"]', 'user@optional-sso.example')
-    await expect(page.locator('[data-test="sso-login"]')).toBeVisible({ timeout: 10000 })
-    await expect(page.locator('[data-test="password"]')).toBeVisible()
-    await expect(page.locator('[data-test="submit"]')).toBeVisible()
-  })
-
-  test('should hide password when SSO is enforced', async ({ page }) => {
-    await page.route('**/private/sso/check-domain', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ has_sso: true, enforce_sso: true }),
-      })
-    })
-
-    await page.fill('[data-test="email"]', 'user@enforced-sso.example')
+    await page.fill('[data-test="email"]', 'user@sso.example')
     await expect(page.locator('[data-test="sso-login"]')).toBeVisible({ timeout: 10000 })
     await expect(page.locator('[data-test="password"]')).toBeHidden()
     await expect(page.locator('[data-test="submit"]')).toBeHidden()
   })
 
-  test('should keep email editable on mobile when SSO is enforced', async ({ page }) => {
+  test('should keep email editable on mobile when SSO is required', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 667 })
     await page.route('**/private/sso/check-domain', async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ has_sso: true, enforce_sso: true }),
+        body: JSON.stringify({ has_sso: true }),
       })
     })
 

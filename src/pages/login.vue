@@ -39,7 +39,6 @@ const captchaComponent = ref<InstanceType<typeof VueTurnstile> | null>(null)
 // with a single biometric prompt. SSO is detected in the background.
 const emailForLogin = ref('')
 const hasSso = ref(false)
-const enforceSso = ref(false)
 const lastCheckedEmail = ref('')
 const domainCheckTimeoutMs = 5000
 const domainCheckDebounceMs = 350
@@ -52,7 +51,7 @@ let domainCheckSeq = 0
 const version = import.meta.env.VITE_APP_VERSION
 const isLoginStep = computed(() => statusAuth.value === 'login')
 const emailValidation = computed(() => (isLoginStep.value ? 'required:trim|email' : ''))
-const passwordValidation = computed(() => (isLoginStep.value && !enforceSso.value ? 'required:trim' : ''))
+const passwordValidation = computed(() => (isLoginStep.value && !hasSso.value ? 'required:trim' : ''))
 const mfaValidation = computed(() => (statusAuth.value === '2fa' ? 'required|mfa_code_validation' : ''))
 const autofillPreserveHiddenStyle = {
   position: 'absolute',
@@ -381,7 +380,6 @@ async function refreshSsoForEmail(email: string) {
     if (seq !== domainCheckSeq)
       return
     hasSso.value = result.has_sso
-    enforceSso.value = result.enforce_sso === true
     lastCheckedEmail.value = trimmed
   }
   catch (error) {
@@ -389,7 +387,6 @@ async function refreshSsoForEmail(email: string) {
       return
     console.error('SSO domain check failed', error)
     hasSso.value = false
-    enforceSso.value = false
     lastCheckedEmail.value = trimmed
   }
 }
@@ -409,10 +406,8 @@ watch(emailForLogin, (email) => {
   const trimmed = email.trim()
   const domain = trimmed.split('@')[1] || ''
   const lastDomain = lastCheckedEmail.value.split('@')[1] || ''
-  if (domain !== lastDomain) {
+  if (domain !== lastDomain)
     hasSso.value = false
-    enforceSso.value = false
-  }
 
   if (domainCheckTimer) {
     clearTimeout(domainCheckTimer)
@@ -445,7 +440,7 @@ async function handleLoginSubmit(form: { email: string, password: string, code?:
     console.error('SSO domain check failed', error)
   }
 
-  if (enforceSso.value) {
+  if (hasSso.value) {
     await handleSsoLogin()
     return
   }
@@ -909,7 +904,7 @@ onMounted(checkLogin)
                         data-test="email"
                       />
 
-                      <p v-if="hasSso && enforceSso" class="text-sm text-slate-600 dark:text-slate-300">
+                      <p v-if="hasSso" class="text-sm text-slate-600 dark:text-slate-300">
                         {{ t('sso-detected') }}
                       </p>
 
@@ -934,19 +929,13 @@ onMounted(checkLogin)
                           </svg>
                           {{ t('continue-with-sso') }}
                         </button>
-                        <div v-if="!enforceSso" class="flex items-center my-4">
-                          <div class="flex-1 h-px bg-gray-200 dark:bg-gray-600" />
-                          <span class="px-3 text-sm text-gray-400">{{ t('login-or-separator') }}</span>
-                          <div class="flex-1 h-px bg-gray-200 dark:bg-gray-600" />
-                        </div>
                       </div>
 
                       <!--
                         Password stays in the DOM from first paint so password managers can fill
-                        email + password in one biometric prompt. Hide it only after SSO
-                        enforcement is confirmed.
+                        email + password in one biometric prompt. Hide it once SSO is confirmed.
                       -->
-                      <div v-show="!enforceSso">
+                      <div v-show="!hasSso">
                         <FormKit
                           id="passwordInput"
                           type="password"
@@ -1000,7 +989,7 @@ onMounted(checkLogin)
 
                     <FormKitMessages data-test="form-error" />
 
-                    <div v-show="isLoginStep && !enforceSso">
+                    <div v-show="isLoginStep && !hasSso">
                       <div class="inline-flex justify-center items-center w-full">
                         <button
                           type="submit"
@@ -1061,7 +1050,7 @@ onMounted(checkLogin)
                         {{ t('create-a-free-account') }}
                       </a>
                       <button
-                        v-show="!enforceSso"
+                        v-show="!hasSso"
                         type="button"
                         data-test="forgot-password"
                         :class="authInlineLinkClass"
