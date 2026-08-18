@@ -18,11 +18,15 @@ async function expectProtectedRouteRedirect(page: Page, targetPath: string, expe
   }
 }
 
-async function continueFromAppNameToOrganization(page: Page) {
+async function continueFromAppNameToIcon(page: Page) {
   await page.click('[data-test="app-onboarding-continue"]')
   await expect(page.locator('#app-onboarding-app-id')).toBeVisible()
   await page.click('[data-test="app-onboarding-skip-app-id"]')
   await expect(page.locator('[data-test="app-onboarding-toggle-icon-store-import"]')).toBeVisible()
+}
+
+async function continueFromAppNameToOrganization(page: Page) {
+  await continueFromAppNameToIcon(page)
   await page.click('[data-test="app-onboarding-continue"]')
 }
 
@@ -108,10 +112,7 @@ test.describe('Registration', () => {
     await page.click('[data-test="onboarding-intent-ota"]')
     await page.click('[data-test="app-onboarding-continue-intent"]')
     await page.fill('[data-test="app-onboarding-name"]', appName)
-    await page.click('[data-test="app-onboarding-continue"]')
-    await expect(page.locator('#app-onboarding-app-id')).toBeVisible()
-    await page.click('[data-test="app-onboarding-skip-app-id"]')
-    await expect(page.locator('[data-test="app-onboarding-toggle-icon-store-import"]')).toBeVisible()
+    await continueFromAppNameToIcon(page)
     await Promise.all([
       page.waitForResponse((response) => {
         if (!response.url().includes('/rest/v1/users') || response.request().method() !== 'PATCH' || !response.ok())
