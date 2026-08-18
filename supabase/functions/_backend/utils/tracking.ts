@@ -1,13 +1,23 @@
-import type { TrackOptions } from '@logsnag/node'
 import type { Context } from 'hono'
 import type { EmailPreferenceKey, NotificationAudience } from './org_email_notifications.ts'
 import type { PostHogGroups } from './posthog.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
-import { logsnag } from './logsnag.ts'
 import { sendNotifToOrgMembers, sendNotifToOrgMembersOnce } from './org_email_notifications.ts'
 import { getDrizzleClient, getPgClient } from './pg.ts'
 import { trackPosthogEvent } from './posthog.ts'
 import { backgroundTask } from './utils.ts'
+
+export interface TrackOptions {
+  channel: string
+  event: string
+  description?: string
+  user_id?: string
+  icon?: string
+  tags?: Record<string, string | number | boolean>
+  notify?: boolean
+  parser?: 'markdown' | 'text'
+  timestamp?: number | Date
+}
 
 export interface BentoTrackingPayload {
   /** Cron window for the throttle/dedupe. Used only when `once` is not set. */
@@ -91,23 +101,19 @@ function getTrackingIp(c: Context, ip?: string) {
 }
 
 async function executeTracking(c: Context, payload: SendEventToTrackingPayload, options: SendEventToTrackingOptions) {
-  const tasks: Array<Promise<void>> = [
-    runTrackedCall(c, 'logsnag', () => logsnag(c).track(payload), options.strict),
-  ]
-  if (options.posthog !== false) {
-    tasks.push(runTrackedCall(c, 'posthog', () => trackPosthogEvent(c, {
-      event: payload.event,
-      user_id: payload.user_id,
-      tags: payload.tags,
-      nonPersonTags: payload.nonPersonTags,
-      channel: payload.channel,
-      description: payload.description,
-      groups: payload.groups,
-      ip: getTrackingIp(c, options.ip),
-    }), options.strict))
-  }
+  if (options.posthog === false)
+    return
 
-  await Promise.all(tasks)
+  await runTrackedCall(c, 'posthog', () => trackPosthogEvent(c, {
+    event: payload.event,
+    user_id: payload.user_id,
+    tags: payload.tags,
+    nonPersonTags: payload.nonPersonTags,
+    channel: payload.channel,
+    description: payload.description,
+    groups: payload.groups,
+    ip: getTrackingIp(c, options.ip),
+  }), options.strict)
 }
 
 async function executeBentoTracking(c: Context, payload: SendEventToTrackingPayload, strict = false) {

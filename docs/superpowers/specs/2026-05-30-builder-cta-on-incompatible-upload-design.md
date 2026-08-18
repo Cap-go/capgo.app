@@ -122,7 +122,7 @@ upload is abandoned before any zip/upload work:
 ## Tracking (PostHog via existing `trackEvent`)
 
 All events go through `cli/src/analytics/track.ts` → `sendEvent` → `/private/events`
-→ PostHog (and LogSnag). They carry the standard global props (cli_version,
+→ PostHog. They carry the standard global props (cli_version,
 node_version, os, is_ci, app_id, org group) automatically.
 
 | Event | Tags |

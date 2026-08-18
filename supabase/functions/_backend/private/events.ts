@@ -1,7 +1,6 @@
-import type { TrackOptions } from '@logsnag/node'
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import type { BentoTrackingPayload } from '../utils/tracking.ts'
+import type { BentoTrackingPayload, TrackOptions } from '../utils/tracking.ts'
 import { Hono } from 'hono/tiny'
 import { buildBuilderOnboardingBentoEvent, BUILDER_RECOVERY_MILESTONES } from '../utils/builder_onboarding_recovery.ts'
 import { buildBundleCompatibilityBentoEvent, BUNDLE_INCOMPATIBLE_EVENT, isBreakingChangeGatedByChannelStrategy } from '../utils/bundle_compatibility_recovery.ts'

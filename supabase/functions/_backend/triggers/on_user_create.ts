@@ -59,7 +59,7 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'INSERT'), async (c
   }).catch((error) => {
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'LogSnag.track user-register failed',
+      message: 'User registration tracking failed',
       error,
     })
   })

@@ -6,14 +6,12 @@ const {
   drizzleClientMock,
   pgClientEndMock,
   pgClientMock,
-  logsnagTrackMock,
   notifToOrgMembersMock,
   posthogMock,
 } = vi.hoisted(() => ({
   backgroundTaskMock: vi.fn(),
   cloudlogErrMock: vi.fn(),
   drizzleClientMock: { mocked: true },
-  logsnagTrackMock: vi.fn(),
   notifToOrgMembersMock: vi.fn(),
   pgClientEndMock: vi.fn().mockResolvedValue(undefined),
   pgClientMock: { mocked: true, end: vi.fn().mockResolvedValue(undefined) },
@@ -22,12 +20,6 @@ const {
 
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
   backgroundTask: backgroundTaskMock,
-}))
-
-vi.mock('../supabase/functions/_backend/utils/logsnag.ts', () => ({
-  logsnag: () => ({
-    track: logsnagTrackMock,
-  }),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/posthog.ts', () => ({
@@ -61,7 +53,6 @@ beforeEach(() => {
   backgroundTaskMock.mockImplementation((_c: unknown, promise: Promise<unknown>) => promise)
   notifToOrgMembersMock.mockResolvedValue(true)
   pgClientEndMock.mockResolvedValue(undefined)
-  logsnagTrackMock.mockResolvedValue(true)
   posthogMock.mockResolvedValue(true)
 })
 
@@ -70,7 +61,6 @@ afterEach(() => {
   backgroundTaskMock.mockReset()
   notifToOrgMembersMock.mockReset()
   pgClientEndMock.mockReset()
-  logsnagTrackMock.mockReset()
   posthogMock.mockReset()
   cloudlogErrMock.mockReset()
 })
@@ -105,7 +95,7 @@ describe('sendEventToTracking', () => {
     expect(payload.nonPersonTags).toEqual({ cli_version: '8.31.3' })
   })
 
-  it('runs all tracking providers in the background by default', async () => {
+  it('runs PostHog and Bento in the background by default', async () => {
     const { sendEventToTracking } = await import('../supabase/functions/_backend/utils/tracking.ts')
 
     await sendEventToTracking(createContext(), {
@@ -127,7 +117,6 @@ describe('sendEventToTracking', () => {
     })
 
     expect(backgroundTaskMock).toHaveBeenCalledTimes(2)
-    expect(logsnagTrackMock).toHaveBeenCalledWith(expect.objectContaining({ event: 'Tracked Event' }))
     expect(posthogMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       event: 'Tracked Event',
       ip: '1.2.3.4',
@@ -147,28 +136,36 @@ describe('sendEventToTracking', () => {
     )
   })
 
-  it('can run inline and keeps other providers running when one fails', async () => {
-    logsnagTrackMock.mockRejectedValueOnce(new Error('logsnag failed'))
+  it('can run inline and keeps Bento running when PostHog fails', async () => {
+    posthogMock.mockRejectedValueOnce(new Error('posthog failed'))
     const { sendEventToTracking } = await import('../supabase/functions/_backend/utils/tracking.ts')
 
     await sendEventToTracking(createContext(), {
+      bento: {
+        data: { org_id: 'org-id' },
+        event: 'org:inline',
+        preferenceKey: 'onboarding',
+        uniqId: 'org:inline',
+      },
       channel: 'usage',
       event: 'Inline Event',
       user_id: 'org-id',
       notify: true,
+      sentToBento: true,
     }, {
       background: false,
     })
 
     expect(backgroundTaskMock).not.toHaveBeenCalled()
     expect(posthogMock).toHaveBeenCalledOnce()
+    expect(notifToOrgMembersMock).toHaveBeenCalledOnce()
     expect(cloudlogErrMock).toHaveBeenCalledWith(expect.objectContaining({
       message: 'sendEventToTracking provider failed',
-      provider: 'logsnag',
+      provider: 'posthog',
     }))
   })
 
-  it('can skip PostHog while preserving LogSnag and Bento delivery', async () => {
+  it('can skip PostHog while preserving Bento delivery', async () => {
     const { sendEventToTracking } = await import('../supabase/functions/_backend/utils/tracking.ts')
 
     await sendEventToTracking(createContext(), {
@@ -185,7 +182,6 @@ describe('sendEventToTracking', () => {
       user_id: 'org-id',
     }, { background: false, posthog: false })
 
-    expect(logsnagTrackMock).toHaveBeenCalledOnce()
     expect(posthogMock).not.toHaveBeenCalled()
     expect(notifToOrgMembersMock).toHaveBeenCalledOnce()
   })

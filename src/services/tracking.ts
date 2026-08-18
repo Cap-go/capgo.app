@@ -5,7 +5,7 @@ type TagKey = Lowercase<string>
 type Tags = Record<TagKey, string | number | boolean>
 type Parser = 'markdown' | 'text'
 /**
- * Options for publishing LogSnag events
+ * Options for publishing analytics events
  */
 interface TrackOptions {
   /**

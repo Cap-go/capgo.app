@@ -204,7 +204,7 @@ type TagKey = Lowercase<string>
 type Tags = Record<TagKey, string | number | boolean>
 type Parser = 'markdown' | 'text'
 /**
- * Options for publishing LogSnag events
+ * Options for publishing analytics events
  */
 interface TrackOptions {
   /**
@@ -1919,7 +1919,7 @@ export async function sendEvent(capgkey: string, payload: TrackOptions & { notif
     // not bypass an Ink-controlled stdout (e.g. during `capgo init`).
     const config = await getRemoteConfig(true, signal)
     if (verbose) {
-      log.info(`Sending LogSnag event: ${JSON.stringify(enrichedPayload)}`)
+      log.info(`Sending analytics event: ${JSON.stringify(enrichedPayload)}`)
     }
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 10000) // 10 seconds timeout
@@ -1949,7 +1949,7 @@ export async function sendEvent(capgkey: string, payload: TrackOptions & { notif
       const response = await fetchResponse.json() as { error?: string }
 
       if (response.error && verbose) {
-        log.error(`Failed to send LogSnag event: ${response.error}`)
+        log.error(`Failed to send analytics event: ${response.error}`)
       }
     }
     finally {

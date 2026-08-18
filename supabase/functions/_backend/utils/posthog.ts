@@ -1,4 +1,3 @@
-import type { TrackOptions } from '@logsnag/node'
 import type { Context } from 'hono'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { existInEnv, getEnv, trimTrailingSlashes } from './utils.ts'
@@ -12,8 +11,11 @@ const RRWEB_META_EVENT_TYPE = 4
 
 export type PostHogGroups = Record<string, string>
 
-interface PostHogCapturePayload extends Pick<TrackOptions, 'event'>, Pick<TrackOptions, 'channel' | 'description'> {
+interface PostHogCapturePayload {
+  channel: string
+  description?: string
   distinct_id?: string
+  event: string
   groups?: PostHogGroups
   ip?: string
   personProperties?: Record<string, unknown>
