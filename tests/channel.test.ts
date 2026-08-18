@@ -75,7 +75,7 @@ describe('[POST] /channel operations', () => {
       headers,
       body: JSON.stringify({
         app_id: APPNAME,
-        channel: 'test_channel',
+        channel: `test_channel_${id.slice(0, 8)}`,
         public: true,
       }),
     })
