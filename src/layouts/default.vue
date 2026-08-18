@@ -85,8 +85,8 @@ useRealtimeCLIFeed()
     <!-- Content area -->
     <div
       data-test="dashboard-shell"
-      class="flex flex-col flex-1 h-full overflow-hidden transition-[padding-top,padding-right,padding-bottom,padding-left] duration-500 ease-in-out motion-reduce:!transition-none"
-      :class="sidebarCollapsed ? 'lg:p-0' : 'lg:p-3'"
+      class="flex flex-col flex-1 h-full overflow-hidden transition-[padding-inline,padding-block] duration-500 ease-in-out motion-reduce:!transition-none"
+      :class="sidebarCollapsed ? 'lg:px-0 lg:py-0' : 'lg:px-3 lg:py-3'"
     >
       <div
         class="flex flex-col h-full overflow-hidden border border-gray-200 dark:border-gray-700 bg-slate-100 dark:bg-slate-900 transition-[border-radius,box-shadow,border-color] duration-500 ease-in-out motion-reduce:!transition-none"
