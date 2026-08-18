@@ -1,4 +1,3 @@
-import { PgDialect } from 'drizzle-orm/pg-core'
 import { HTTPException } from 'hono/http-exception'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -20,7 +19,7 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   getPgClient: getPgClientMock,
 }))
 
-const { checkApiKeyOrgPermissionsPg, checkPermission, checkPermissionPg } = await import('../supabase/functions/_backend/utils/rbac.ts')
+const { checkPermission, checkPermissionPg } = await import('../supabase/functions/_backend/utils/rbac.ts')
 
 function makeContext(auth: Record<string, unknown> | undefined = {
   userId: '00000000-0000-4000-8000-000000000001',
@@ -169,118 +168,6 @@ describe('rbac permission infra errors', () => {
       '00000000-0000-4000-8000-000000000001',
       'capgo_test_key',
     )).resolves.toBe(false)
-  })
-
-  it('checkApiKeyOrgPermissionsPg loads permissions for all requested orgs in one query', async () => {
-    const orgOne = '00000000-0000-4000-8000-000000000010'
-    const orgTwo = '00000000-0000-4000-8000-000000000011'
-    executeMock.mockResolvedValueOnce({
-      rows: [
-        { org_id: orgOne, can_manage_apikeys: true, can_update_user_roles: false },
-        { org_id: orgTwo, can_manage_apikeys: false, can_update_user_roles: true },
-      ],
-    })
-
-    await expect(checkApiKeyOrgPermissionsPg(
-      makeContext(),
-      [orgOne, orgTwo],
-      { execute: executeMock },
-      '00000000-0000-4000-8000-000000000001',
-      'capgo_test_key',
-      'org.manage_apikeys',
-    )).resolves.toEqual(new Map([
-      [orgOne, { canManageApiKeys: true, canUpdateUserRoles: false }],
-      [orgTwo, { canManageApiKeys: false, canUpdateUserRoles: true }],
-    ]))
-
-    expect(executeMock).toHaveBeenCalledTimes(1)
-  })
-
-  it('checkApiKeyOrgPermissionsPg preserves an uppercase UUID as the result-map key', async () => {
-    const uppercaseOrgId = '046A36AC-E03C-4590-9257-BD6C9DBA9EE8'
-    executeMock.mockImplementationOnce((query) => {
-      const renderedQuery = new PgDialect().sqlToQuery(query)
-      expect(renderedQuery.sql).toContain('FROM unnest(ARRAY[$5::text]::text[]) WITH ORDINALITY')
-      expect(renderedQuery.params.at(-1)).toBe(uppercaseOrgId)
-
-      return {
-        rows: [{ org_id: uppercaseOrgId, can_manage_apikeys: true, can_update_user_roles: false }],
-      }
-    })
-
-    await expect(checkApiKeyOrgPermissionsPg(
-      makeContext(),
-      [uppercaseOrgId],
-      { execute: executeMock },
-      '00000000-0000-4000-8000-000000000001',
-      'capgo_test_key',
-      'org.manage_apikeys',
-    )).resolves.toEqual(new Map([
-      [uppercaseOrgId, { canManageApiKeys: true, canUpdateUserRoles: false }],
-    ]))
-  })
-
-  it('checkApiKeyOrgPermissionsPg denies only a malformed UUID row and preserves following results', async () => {
-    const malformedOrgId = 'bad-org-id'
-    const validOrgId = '00000000-0000-4000-8000-000000000011'
-    executeMock.mockImplementationOnce((query) => {
-      const renderedQuery = new PgDialect().sqlToQuery(query)
-      expect(renderedQuery.sql.match(/pg_input_is_valid\(requested_orgs\.org_id, 'uuid'\)/g)).toHaveLength(2)
-
-      return {
-        rows: [
-          { org_id: malformedOrgId, can_manage_apikeys: false, can_update_user_roles: false },
-          { org_id: validOrgId, can_manage_apikeys: true, can_update_user_roles: true },
-        ],
-      }
-    })
-
-    await expect(checkApiKeyOrgPermissionsPg(
-      makeContext(),
-      [malformedOrgId, validOrgId],
-      { execute: executeMock },
-      '00000000-0000-4000-8000-000000000001',
-      'capgo_test_key',
-      'org.update_user_roles',
-    )).resolves.toEqual(new Map([
-      [malformedOrgId, { canManageApiKeys: false, canUpdateUserRoles: false }],
-      [validOrgId, { canManageApiKeys: true, canUpdateUserRoles: true }],
-    ]))
-  })
-
-  it('checkApiKeyOrgPermissionsPg treats invalid UUID cast errors as ACL deny', async () => {
-    executeMock.mockRejectedValueOnce(Object.assign(new Error('invalid input syntax for type uuid: "bad-org-id"'), {
-      code: '22P02',
-    }))
-
-    await expect(checkApiKeyOrgPermissionsPg(
-      makeContext(),
-      ['bad-org-id'],
-      { execute: executeMock },
-      '00000000-0000-4000-8000-000000000001',
-      'capgo_test_key',
-      'org.manage_apikeys',
-    )).resolves.toEqual(new Map())
-  })
-
-  it('checkApiKeyOrgPermissionsPg surfaces connection failures as 503 upstream_unavailable', async () => {
-    executeMock.mockRejectedValueOnce(Object.assign(new Error('Connection terminated unexpectedly'), {
-      code: 'ECONNRESET',
-    }))
-
-    await expect(checkApiKeyOrgPermissionsPg(
-      makeContext(),
-      ['00000000-0000-4000-8000-000000000010'],
-      { execute: executeMock },
-      '00000000-0000-4000-8000-000000000001',
-      'capgo_test_key',
-      'org.update_user_roles',
-    )).rejects.toMatchObject({
-      status: 503,
-      cause: {
-        error: 'upstream_unavailable',
-      },
-    })
   })
 
   it('checkPermission allows JWT auth through the non-rbac_id query path', async () => {

@@ -163,23 +163,6 @@ const APIKEY_MANAGER_DENIED_ASSIGNABLE_ROLES = new Set([
   'channel_admin',
 ])
 
-export function assertApiKeyManagerCanAssignBindingsForOrg(
-  bindings: Array<{ role_name: string, org_id: string }>,
-  orgId: string,
-  canUpdateUserRoles: boolean,
-): void {
-  if (canUpdateUserRoles)
-    return
-
-  for (const binding of bindings) {
-    if (binding.org_id !== orgId)
-      continue
-    if (APIKEY_MANAGER_DENIED_ASSIGNABLE_ROLES.has(binding.role_name)) {
-      throw quickError(403, 'forbidden_binding', `Forbidden - API key managers cannot assign the ${binding.role_name} role`)
-    }
-  }
-}
-
 export async function assertApiKeyManagerCanAssignBindings(
   c: Parameters<typeof checkPermission>[0],
   auth: AuthInfo,
@@ -194,7 +177,18 @@ export async function assertApiKeyManagerCanAssignBindings(
     const canUpdateUserRoles = drizzle
       ? await checkPermissionPg(c, 'org.update_user_roles', { orgId }, drizzle, auth.userId, apikeyString)
       : await checkPermission(c, 'org.update_user_roles', { orgId })
-    assertApiKeyManagerCanAssignBindingsForOrg(bindings, orgId, canUpdateUserRoles)
+    if (canUpdateUserRoles) {
+      continue
+    }
+
+    for (const binding of bindings) {
+      if (binding.org_id !== orgId) {
+        continue
+      }
+      if (APIKEY_MANAGER_DENIED_ASSIGNABLE_ROLES.has(binding.role_name)) {
+        throw quickError(403, 'forbidden_binding', `Forbidden - API key managers cannot assign the ${binding.role_name} role`)
+      }
+    }
   }
 }
 

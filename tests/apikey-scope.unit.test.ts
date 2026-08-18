@@ -28,7 +28,7 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   supabaseWithAuth: vi.fn(),
 }))
 
-const { assertApiKeyManagerCanAssignBindings, assertApiKeyManagerCanAssignBindingsForOrg } = await import('../supabase/functions/_backend/public/apikey/scope.ts')
+const { assertApiKeyManagerCanAssignBindings } = await import('../supabase/functions/_backend/public/apikey/scope.ts')
 
 const ORG_ID = '00000000-0000-4000-8000-000000000111'
 const auth = { authType: 'jwt', userId: '00000000-0000-4000-8000-000000000222' } as any
@@ -67,30 +67,5 @@ describe('api key manager role assignment guard', () => {
       role_name: 'app_preview',
       org_id: ORG_ID,
     }])).resolves.toBeUndefined()
-  })
-
-  it('rejects app_preview synchronously when the caller cannot manage user roles for the organization', () => {
-    expect(() => assertApiKeyManagerCanAssignBindingsForOrg([{
-      role_name: 'app_preview',
-      org_id: ORG_ID,
-    }], ORG_ID, false)).toThrow('Forbidden - API key managers cannot assign the app_preview role')
-    expect(checkPermissionMock).not.toHaveBeenCalled()
-    expect(checkPermissionPgMock).not.toHaveBeenCalled()
-  })
-
-  it('allows app_uploader synchronously when the caller cannot manage user roles for the organization', () => {
-    expect(() => assertApiKeyManagerCanAssignBindingsForOrg([{
-      role_name: 'app_uploader',
-      org_id: ORG_ID,
-    }], ORG_ID, false)).not.toThrow()
-    expect(checkPermissionMock).not.toHaveBeenCalled()
-    expect(checkPermissionPgMock).not.toHaveBeenCalled()
-  })
-
-  it('ignores sensitive bindings belonging to a different organization', () => {
-    expect(() => assertApiKeyManagerCanAssignBindingsForOrg([{
-      role_name: 'org_super_admin',
-      org_id: '00000000-0000-4000-8000-000000000333',
-    }], ORG_ID, false)).not.toThrow()
   })
 })
