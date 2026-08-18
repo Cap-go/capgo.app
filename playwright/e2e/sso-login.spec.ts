@@ -5,14 +5,15 @@ test.describe('SSO Login Flow', () => {
     await page.goto('/login/')
   })
 
-  test('should show email and password on first paint', async ({ page }) => {
+  test('should show email only on first paint', async ({ page }) => {
     await expect(page.locator('[data-test="email"]')).toBeVisible()
-    await expect(page.locator('[data-test="password"]')).toBeVisible()
-    await expect(page.locator('[data-test="submit"]')).toBeVisible()
+    await expect(page.locator('[data-test="submit"]')).toBeHidden()
     await expect(page.locator('[data-test="sso-login"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="password"]')).toHaveCount(1)
+    await expect(page.locator('[data-password-ready="false"]')).toHaveCount(1)
   })
 
-  test('should keep password visible for non-SSO domains', async ({ page }) => {
+  test('should reveal password for non-SSO domains', async ({ page }) => {
     await page.route('**/private/sso/check-domain', async (route) => {
       await route.fulfill({
         status: 200,
@@ -24,6 +25,7 @@ test.describe('SSO Login Flow', () => {
     const domainCheck = page.waitForResponse(response => response.url().includes('/private/sso/check-domain'))
     await page.fill('[data-test="email"]', 'test@example.com')
     await domainCheck
+    await expect(page.locator('[data-password-ready="true"]')).toHaveCount(1)
     await expect(page.locator('[data-test="password"]')).toBeVisible()
     await expect(page.locator('[data-test="submit"]')).toBeVisible()
     await expect(page.locator('[data-test="sso-login"]')).toHaveCount(0)
@@ -40,7 +42,7 @@ test.describe('SSO Login Flow', () => {
 
     await page.fill('[data-test="email"]', 'user@sso.example')
     await expect(page.locator('[data-test="sso-login"]')).toBeVisible({ timeout: 10000 })
-    await expect(page.locator('[data-test="password"]')).toBeHidden()
+    await expect(page.locator('[data-password-ready="false"]')).toHaveCount(1)
     await expect(page.locator('[data-test="submit"]')).toBeHidden()
   })
 

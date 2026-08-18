@@ -36,10 +36,12 @@ const { t } = useI18n()
 const captchaComponent = ref<InstanceType<typeof VueTurnstile> | null>(null)
 
 // Keep email, password, and OTP in one form so password managers can fill them
-// with a single biometric prompt. SSO is detected in the background.
+// with a single biometric prompt. Password stays hidden until the domain is
+// known not to use SSO. SSO domains never show a password field.
 const emailForLogin = ref('')
 const hasSso = ref(false)
 const lastCheckedEmail = ref('')
+const passwordPathReady = ref(false)
 const domainCheckTimeoutMs = 5000
 const domainCheckDebounceMs = 350
 const isCheckingSavedSession = ref(true)
@@ -51,7 +53,7 @@ let domainCheckSeq = 0
 const version = import.meta.env.VITE_APP_VERSION
 const isLoginStep = computed(() => statusAuth.value === 'login')
 const emailValidation = computed(() => (isLoginStep.value ? 'required:trim|email' : ''))
-const passwordValidation = computed(() => (isLoginStep.value && !hasSso.value ? 'required:trim' : ''))
+const passwordValidation = computed(() => (passwordPathReady.value ? 'required:trim' : ''))
 const mfaValidation = computed(() => (statusAuth.value === '2fa' ? 'required|mfa_code_validation' : ''))
 const autofillPreserveHiddenStyle = {
   position: 'absolute',
@@ -384,12 +386,14 @@ async function refreshSsoForEmail(email: string) {
       return
     hasSso.value = result.has_sso
     lastCheckedEmail.value = trimmed
+    passwordPathReady.value = !result.has_sso
   }
   catch (error) {
     if (!isCurrentDomainCheck(seq, trimmed))
       return
     console.error('SSO domain check failed', error)
     hasSso.value = false
+    passwordPathReady.value = true
   }
 }
 
@@ -409,8 +413,6 @@ watch(emailForLogin, (email) => {
   const trimmed = email.trim()
   const domain = trimmed.split('@')[1] || ''
   const lastDomain = lastCheckedEmail.value.split('@')[1] || ''
-  if (domain !== lastDomain)
-    hasSso.value = false
 
   if (domainCheckTimer) {
     clearTimeout(domainCheckTimer)
@@ -418,8 +420,20 @@ watch(emailForLogin, (email) => {
   }
 
   if (!isCompletableEmail(trimmed)) {
+    hasSso.value = false
+    passwordPathReady.value = false
     lastCheckedEmail.value = ''
     return
+  }
+
+  if (lastCheckedEmail.value === trimmed) {
+    passwordPathReady.value = !hasSso.value
+    return
+  }
+
+  if (domain !== lastDomain) {
+    hasSso.value = false
+    passwordPathReady.value = false
   }
 
   domainCheckTimer = setTimeout(() => {
@@ -938,10 +952,13 @@ onMounted(checkLogin)
                       </div>
 
                       <!--
-                        Password stays in the DOM from first paint so password managers can fill
-                        email + password in one biometric prompt. Hide it once SSO is confirmed.
+                        Keep password in the form from first paint so password managers can fill
+                        it with the email. Reveal it only after the domain is known not to use SSO.
                       -->
-                      <div v-show="!hasSso">
+                      <div
+                        :style="passwordPathReady ? undefined : autofillPreserveHiddenStyle"
+                        :data-password-ready="passwordPathReady ? 'true' : 'false'"
+                      >
                         <FormKit
                           id="passwordInput"
                           type="password"
@@ -995,7 +1012,7 @@ onMounted(checkLogin)
 
                     <FormKitMessages data-test="form-error" />
 
-                    <div v-show="isLoginStep && !hasSso">
+                    <div v-show="passwordPathReady">
                       <div class="inline-flex justify-center items-center w-full">
                         <button
                           type="submit"
@@ -1056,7 +1073,7 @@ onMounted(checkLogin)
                         {{ t('create-a-free-account') }}
                       </a>
                       <button
-                        v-show="!hasSso"
+                        v-show="passwordPathReady"
                         type="button"
                         data-test="forgot-password"
                         :class="authInlineLinkClass"
