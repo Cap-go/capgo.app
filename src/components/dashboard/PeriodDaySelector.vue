@@ -1,8 +1,8 @@
 <script setup lang="ts">
+import type { PeriodDayOption } from '~/utils/periodDays'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-
-export type PeriodDayOption = 1 | 3 | 7 | 30
+import { PERIOD_DAY_OPTIONS } from '~/utils/periodDays'
 
 const props = withDefaults(defineProps<{
   modelValue: PeriodDayOption
@@ -16,7 +16,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const options: PeriodDayOption[] = [1, 3, 7, 30]
+const options = PERIOD_DAY_OPTIONS
 const defaultLabels: Record<PeriodDayOption, string> = {
   1: 'one-day',
   3: 'three-days',

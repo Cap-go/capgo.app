@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg'
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
 import {
   ORG_ID_CRON_QUEUE,
   POSTGRES_URL,
@@ -94,6 +95,11 @@ describe('delete_old_deleted_versions', () => {
     const manifestSignalPendingName = `manifest-signal-pending-${randomUUID()}`
     const client = await pool.connect()
 
+    const cleanR2Path = getCanonicalAppVersionR2Path(ORG_ID_CRON_QUEUE, cleanupAppId, cleanName)
+    const manifestPendingR2Path = getCanonicalAppVersionR2Path(ORG_ID_CRON_QUEUE, cleanupAppId, manifestPendingName)
+    const bundlePendingR2Path = getCanonicalAppVersionR2Path(ORG_ID_CRON_QUEUE, cleanupAppId, bundlePendingName)
+    const manifestSignalPendingR2Path = getCanonicalAppVersionR2Path(ORG_ID_CRON_QUEUE, cleanupAppId, manifestSignalPendingName)
+
     try {
       await client.query('BEGIN')
       const inserted = await client.query<{ id: string, name: string }>(
@@ -109,13 +115,24 @@ describe('delete_old_deleted_versions', () => {
           manifest_count
         )
         VALUES
-          ($1, $2, $6, true, pg_catalog.now() - INTERVAL '91 days', 'cleanup/clean.zip', 'r2', 0),
-          ($1, $3, $6, true, pg_catalog.now() - INTERVAL '91 days', 'cleanup/manifest-pending.zip', 'r2', 1),
-          ($1, $4, $6, true, pg_catalog.now() - INTERVAL '91 days', 'cleanup/bundle-pending.zip', 'r2', 0),
-          ($1, $5, $6, true, pg_catalog.now() - INTERVAL '91 days', 'cleanup/manifest-signal-pending.zip', 'r2', 1)
+          ($1, $2, $6, true, pg_catalog.now() - INTERVAL '91 days', $7, 'r2', 0),
+          ($1, $3, $6, true, pg_catalog.now() - INTERVAL '91 days', $8, 'r2', 1),
+          ($1, $4, $6, true, pg_catalog.now() - INTERVAL '91 days', $9, 'r2', 0),
+          ($1, $5, $6, true, pg_catalog.now() - INTERVAL '91 days', $10, 'r2', 1)
         RETURNING id, name
         `,
-        [cleanupAppId, cleanName, manifestPendingName, bundlePendingName, manifestSignalPendingName, ORG_ID_CRON_QUEUE],
+        [
+          cleanupAppId,
+          cleanName,
+          manifestPendingName,
+          bundlePendingName,
+          manifestSignalPendingName,
+          ORG_ID_CRON_QUEUE,
+          cleanR2Path,
+          manifestPendingR2Path,
+          bundlePendingR2Path,
+          manifestSignalPendingR2Path,
+        ],
       )
       const ids = Object.fromEntries(inserted.rows.map(row => [row.name, row.id]))
 

@@ -35,15 +35,17 @@ describe('app onboarding progress analytics integration', () => {
 
     const initializer = sourceBetween('function initializeProgressTracking(', 'function completeAndViewStep(')
     expect(initializer).toContain(`flow: props.preOrg ? 'pre_org' : 'existing_org'`)
+    expect(initializer).toContain(`const initialStep: OnboardingAnalyticsStep = showPreOrgWelcome.value ? 'welcome' : analyticsStepFor(flowStep.value)`)
     expect(initializer).toContain('const trackedSteps = appOnboardingSteps.value.flatMap<OnboardingAnalyticsStep>')
     expect(initializer).toContain('return Object.values(APP_DETAILS_ANALYTICS_STEPS)')
+    expect(initializer).toContain(`trackedSteps.unshift('welcome')`)
     expect(initializer).toContain(`if (!props.preOrg && resumed && flowStep.value === 'setup')`)
     expect(initializer).toContain(`trackedSteps.push('setup')`)
     expect(initializer).toContain('steps: trackedSteps')
     expect(initializer).toContain('resumed,')
     expect(initializer).toContain('onboardingAttemptId: onboardingTelemetry.attemptId')
     expect(initializer).toContain('onboardingRunId: onboardingTelemetry.runId')
-    expect(initializer).toContain('progressTracker.viewStep(analyticsStepFor(flowStep.value))')
+    expect(initializer).toContain('progressTracker.viewStep(initialStep)')
     expect(initializer.match(/\.viewStep\(/g)).toHaveLength(1)
 
     const resumeDialog = sourceBetween('async function maybeResumeSavedOnboarding()', 'function whiteCardToggleButtonClass(')
@@ -229,9 +231,9 @@ describe('app onboarding progress analytics integration', () => {
   })
 
   it.concurrent('keeps Maker+ invitations inside the organization progress step', () => {
-    expect(onboardingSource).toContain("createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })")
-    expect(onboardingSource).toContain("trackOrganizationEvent('onboarding_organization_invite_viewed')")
-    expect(onboardingSource).toContain("completeAndViewStep('setup', { appId: createdApp.value.app_id })")
+    expect(onboardingSource).toContain(`createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })`)
+    expect(onboardingSource).toContain(`trackOrganizationEvent('onboarding_organization_invite_viewed')`)
+    expect(onboardingSource).toContain(`completeAndViewStep('setup', { appId: createdApp.value.app_id })`)
   })
 
   it.concurrent('keeps the unload warning scoped to unfinished pre-org onboarding', () => {
@@ -265,7 +267,7 @@ describe('app onboarding progress analytics integration', () => {
   })
 
   it.concurrent('reports back navigation as a new view without completing the abandoned step', () => {
-    const backNavigation = sourceBetween('function viewPreviousStep(', 'function whiteCardToggleButtonClass(')
+    const backNavigation = sourceBetween('function viewPreviousStep(', 'function snapshotOnboardingProgress(')
     expect(backNavigation).not.toContain('completeStep')
     expect(backNavigation).toContain('progressTracker?.viewStep(nextAnalyticsStep, previousAnalyticsStep)')
     expect(onboardingSource).toContain('@click="viewPreviousStep(\'choice\')"')

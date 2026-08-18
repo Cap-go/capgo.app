@@ -8,6 +8,7 @@ import { cloudlog } from '../utils/logging.ts'
 import { persistVersionManifestEntries } from '../utils/manifest_persist.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { manifest } from '../utils/postgres_schema.ts'
+import { isCanonicalAppVersionR2Path } from '../utils/app_version_r2_path.ts'
 import { getPath, s3 } from '../utils/s3.ts'
 import { createStatsMeta } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
@@ -452,17 +453,30 @@ export async function deleteIt(c: Context, record: Database['public']['Tables'][
 
   // Bundle zip: move to lifecycle trash. Retry via queue if this fails; manifests already cleared.
   if (record.r2_path) {
-    let moved = false
-    try {
-      moved = await s3.moveObjectToTrash(c, record.r2_path)
+    if (!isCanonicalAppVersionR2Path(record)) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'Skipping bundle trash for non-canonical r2_path',
+        id: record.id,
+        app_id: record.app_id,
+        owner_org: record.owner_org,
+        name: record.name,
+        r2_path: record.r2_path,
+      })
     }
-    catch (error) {
-      cloudlog({ requestId: c.get('requestId'), message: 'Cannot move s3 to trash (v2)', error })
-      throw simpleError('cannot_move_s3_to_trash', 'Cannot move S3 object for deleted version to trash', { id: record.id, r2_path: record.r2_path }, error)
-    }
+    else {
+      let moved = false
+      try {
+        moved = await s3.moveObjectToTrash(c, record.r2_path)
+      }
+      catch (error) {
+        cloudlog({ requestId: c.get('requestId'), message: 'Cannot move s3 to trash (v2)', error })
+        throw simpleError('cannot_move_s3_to_trash', 'Cannot move S3 object for deleted version to trash', { id: record.id, r2_path: record.r2_path }, error)
+      }
 
-    if (!moved) {
-      throw simpleError('cannot_move_s3_to_trash', 'Cannot move S3 object for deleted version to trash', { id: record.id, r2_path: record.r2_path })
+      if (!moved) {
+        throw simpleError('cannot_move_s3_to_trash', 'Cannot move S3 object for deleted version to trash', { id: record.id, r2_path: record.r2_path })
+      }
     }
   }
   else {

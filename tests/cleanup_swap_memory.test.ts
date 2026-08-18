@@ -250,11 +250,18 @@ describe('swap memory cleanup functions', () => {
     const versionId = await seedAuditAppVersion(appId, orgId)
     await clearVersionAudits(versionId)
 
+    const versionRows = await executeSQL(
+      `SELECT name FROM public.app_versions WHERE id = $1`,
+      [versionId],
+    )
+    const versionName = versionRows[0]?.name as string
+    const canonicalR2Path = `orgs/${orgId}/apps/${appId}/${versionName}.zip`
+
     await executeSQL(
       `UPDATE public.app_versions
-       SET r2_path = 'apps/test/bundle.zip', updated_at = now()
+       SET r2_path = $2, updated_at = now()
        WHERE id = $1`,
-      [versionId],
+      [versionId, canonicalR2Path],
     )
     await executeSQL(
       `UPDATE public.app_versions

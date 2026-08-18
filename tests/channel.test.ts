@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { BASE_URL, createAppVersions, getSupabaseClient, headers, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils.ts'
+import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
+import { BASE_URL, createAppVersions, getSupabaseClient, headers, ORG_ID, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils.ts'
 
 const id = randomUUID()
 const APPNAME = `com.app.c.${id}`
@@ -214,10 +215,11 @@ describe('channel update package vs bundle compatibility', () => {
   })
 
   it('refuses assigning a zip-only bundle to a delta-only channel', async () => {
-    const withDelta = await createAppVersions(`1.0.both-${randomUUID().slice(0, 8)}`, APPNAME, {
+    const withDeltaName = `1.0.both-${randomUUID().slice(0, 8)}`
+    const withDelta = await createAppVersions(withDeltaName, APPNAME, {
       checksum: 'zip-and-delta',
       storage_provider: 'r2',
-      r2_path: `orgs/test/apps/${APPNAME}/both.zip`,
+      r2_path: getCanonicalAppVersionR2Path(ORG_ID, APPNAME, withDeltaName),
     })
     await insertDelta(withDelta.id)
     await fetch(`${BASE_URL}/channel`, {
@@ -231,10 +233,11 @@ describe('channel update package vs bundle compatibility', () => {
       }),
     })
 
-    const zipOnly = await createAppVersions(`1.0.zip-${randomUUID().slice(0, 8)}`, APPNAME, {
+    const zipOnlyName = `1.0.zip-${randomUUID().slice(0, 8)}`
+    const zipOnly = await createAppVersions(zipOnlyName, APPNAME, {
       checksum: 'zip-only',
       storage_provider: 'r2',
-      r2_path: `orgs/test/apps/${APPNAME}/zip-only.zip`,
+      r2_path: getCanonicalAppVersionR2Path(ORG_ID, APPNAME, zipOnlyName),
     })
 
     const response = await fetch(`${BASE_URL}/channel`, {
@@ -287,10 +290,11 @@ describe('channel update package vs bundle compatibility', () => {
   })
 
   it('refuses an incompatible setting change through a console-style channel update', async () => {
-    const zipOnly = await createAppVersions(`1.0.ui-zip-${randomUUID().slice(0, 8)}`, APPNAME, {
+    const zipOnlyName = `1.0.ui-zip-${randomUUID().slice(0, 8)}`
+    const zipOnly = await createAppVersions(zipOnlyName, APPNAME, {
       checksum: 'ui-zip-only',
       storage_provider: 'r2',
-      r2_path: `orgs/test/apps/${APPNAME}/ui-zip-only.zip`,
+      r2_path: getCanonicalAppVersionR2Path(ORG_ID, APPNAME, zipOnlyName),
     })
     await getSupabaseClient()
       .from('channels')

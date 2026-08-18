@@ -56,6 +56,10 @@ test.describe('App dashboard sections', () => {
       return Math.round((toDate.getTime() - fromDate.getTime()) / (24 * 60 * 60 * 1000))
     }
 
+    function expectedDaySpan(days: number) {
+      return days === 1 ? 1 : days - 1
+    }
+
     function assertDayWindow(from: string | null, to: string | null, days: number) {
       expect(from).toBeTruthy()
       expect(to).toBeTruthy()
@@ -63,14 +67,14 @@ test.describe('App dashboard sections', () => {
       const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000
       expect(toDate.getTime()).toBeGreaterThanOrEqual(twoDaysAgo)
       expect(toDate.getTime()).toBeLessThanOrEqual(Date.now())
-      expect(daySpan(from, to)).toBe(days - 1)
+      expect(daySpan(from, to)).toBe(expectedDaySpan(days))
     }
 
     function isUsageWindow(url: string, path: string, days: number) {
       if (!url.includes(`/${path}?`))
         return false
       const parsed = new URL(url)
-      return daySpan(parsed.searchParams.get('from'), parsed.searchParams.get('to')) === days - 1
+      return daySpan(parsed.searchParams.get('from'), parsed.searchParams.get('to')) === expectedDaySpan(days)
     }
 
     const oneDayButton = (locator = page.locator('[data-testid="period-day-selector"]')) =>
@@ -85,6 +89,8 @@ test.describe('App dashboard sections', () => {
     await page.goto('/app/com.demo.app/installs')
     await expect(page.locator('[data-testid="period-day-selector"]')).toBeVisible()
     await expect(oneDayButton()).toHaveAttribute('aria-pressed', 'true')
+    await page.locator('[data-testid="period-day-selector"]').getByRole('button', { name: '7 days', exact: true }).click()
+    await expect(page).toHaveURL(/[?&]days=7(?:&|$)/)
 
     const bundleRequest = page.waitForRequest(request => isUsageWindow(request.url(), 'bundle_usage', 1))
     await page.goto('/app/com.demo.app/active-bundle')
@@ -95,10 +101,17 @@ test.describe('App dashboard sections', () => {
     const maxButton = page.locator('[data-testid="period-day-selector"]').getByRole('button', { name: 'Max', exact: true })
     const range = page.locator('[data-testid="version-chart-range"]')
     await maxButton.click()
+    await expect(page).toHaveURL(/[?&]days=30(?:&|$)/)
     await expect(maxButton).toHaveAttribute('aria-pressed', 'true')
     await expect.poll(async () => {
       return daySpan(await range.getAttribute('data-from'), await range.getAttribute('data-to'))
     }).toBe(29)
     assertDayWindow(await range.getAttribute('data-from'), await range.getAttribute('data-to'), 30)
+
+    await oneDayButton().click()
+    await expect(page).toHaveURL(/[?&]days=1(?:&|$)/)
+    await expect.poll(async () => {
+      return daySpan(await range.getAttribute('data-from'), await range.getAttribute('data-to'))
+    }).toBe(1)
   })
 })

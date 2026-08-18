@@ -5,6 +5,12 @@ async function loginToOnboarding(page: Page, email: string, password: string) {
   await page.login(email, password, /\/onboarding\/app/)
 }
 
+async function continuePastWelcome(page: Page) {
+  const continueButton = page.locator('[data-test="onboarding-welcome-continue"]')
+  await expect(continueButton).toBeVisible()
+  await continueButton.click()
+}
+
 async function expectProtectedRouteRedirect(page: Page, targetPath: string, expectedUrl: RegExp, expectedSelector: string) {
   const redirectedPage = await page.context().newPage()
 
@@ -60,6 +66,7 @@ test.describe('Registration', () => {
     await page.click('[data-test="submit"]')
 
     await page.waitForURL(/\/onboarding\/app/)
+    await continuePastWelcome(page)
     await page.click('[data-test="onboarding-intent-ota"]')
     await page.click('[data-test="app-onboarding-continue-intent"]')
 
@@ -109,6 +116,7 @@ test.describe('Registration', () => {
     await page.click('[data-test="submit"]')
 
     await page.waitForURL(/\/onboarding\/app/)
+    await continuePastWelcome(page)
     await page.click('[data-test="onboarding-intent-ota"]')
     await page.click('[data-test="app-onboarding-continue-intent"]')
     await page.fill('[data-test="app-onboarding-name"]', appName)
@@ -136,6 +144,7 @@ test.describe('Registration', () => {
     await loginToOnboarding(page, email, password)
     await expect(page.locator('[data-test="onboarding-resume-restart"]')).toBeVisible()
     await page.locator('[data-test="onboarding-resume-restart"]').click()
+    await continuePastWelcome(page)
     await expect(page.locator('[data-test="onboarding-intent-ota"]')).toBeVisible()
     await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveCount(0)
   })

@@ -31,17 +31,134 @@ VALUES
 --   so it is rejected ONLY by the name filter (exercises that branch).
 -- raises.old has two versions: 960008 (real, makes it eligible) and 960009
 --   (demo-tracked, with a non-demo manifest that is left untracked).
-INSERT INTO public.app_versions (id, owner_org, created_at, app_id, name, user_id, deleted, storage_provider, r2_path, external_url)
+INSERT INTO public.app_versions (
+  id,
+  owner_org,
+  created_at,
+  app_id,
+  name,
+  user_id,
+  deleted,
+  storage_provider,
+  r2_path,
+  external_url
+)
 VALUES
-  (960001, '046a36ac-e03c-4590-9257-bd6c9dba9ee8', now() - interval '20 days', 'com.test.onb.real.old', '1.0.0', '6aa76066-55ef-4238-ade6-0b32334a4097', false, 'r2', 'orgs/046a36ac/apps/com.test.onb.real.old/1.0.0.zip', NULL),
-  (960002, '046a36ac-e03c-4590-9257-bd6c9dba9ee8', now() - interval '2 days', 'com.test.onb.real.recent', '1.0.0', '6aa76066-55ef-4238-ade6-0b32334a4097', false, 'r2', 'orgs/046a36ac/apps/com.test.onb.real.recent/1.0.0.zip', NULL),
-  (960003, '046a36ac-e03c-4590-9257-bd6c9dba9ee8', now() - interval '20 days', 'com.test.onb.noreal.old', 'builtin', '6aa76066-55ef-4238-ade6-0b32334a4097', false, 'r2', 'orgs/046a36ac/apps/com.test.onb.noreal.old/builtin.zip', NULL),
-  (960004, '046a36ac-e03c-4590-9257-bd6c9dba9ee8', now() - interval '20 days', 'com.test.onb.demo.old', '1.0.0', '6aa76066-55ef-4238-ade6-0b32334a4097', false, 'r2', 'demo/com.test.onb.demo.old/1.0.0.zip', NULL),
-  (960005, '046a36ac-e03c-4590-9257-bd6c9dba9ee8', now() - interval '20 days', 'com.test.onb.noupload.old', '1.0.0', '6aa76066-55ef-4238-ade6-0b32334a4097', false, 'r2', NULL, NULL),
-  (960006, '046a36ac-e03c-4590-9257-bd6c9dba9ee8', now() - interval '20 days', 'com.test.onb.external.old', '1.0.0', '6aa76066-55ef-4238-ade6-0b32334a4097', false, 'external', NULL, 'https://cdn.example.com/external/1.0.0.zip'),
-  (960007, '046a36ac-e03c-4590-9257-bd6c9dba9ee8', now() - interval '20 days', 'com.test.onb.r2direct.old', '1.0.0', '6aa76066-55ef-4238-ade6-0b32334a4097', false, 'r2-direct', 'orgs/046a36ac/apps/com.test.onb.r2direct.old/1.0.0.zip', NULL),
-  (960008, '046a36ac-e03c-4590-9257-bd6c9dba9ee8', now() - interval '20 days', 'com.test.onb.raises.old', '2.0.0', '6aa76066-55ef-4238-ade6-0b32334a4097', false, 'r2', 'orgs/046a36ac/apps/com.test.onb.raises.old/2.0.0.zip', NULL),
-  (960009, '046a36ac-e03c-4590-9257-bd6c9dba9ee8', now() - interval '20 days', 'com.test.onb.raises.old', '1.0.0', '6aa76066-55ef-4238-ade6-0b32334a4097', false, 'r2', 'orgs/046a36ac/apps/com.test.onb.raises.old/1.0.0.zip', NULL);
+  (
+    960001,
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+    now() - interval '20 days',
+    'com.test.onb.real.old',
+    '1.0.0',
+    '6aa76066-55ef-4238-ade6-0b32334a4097',
+    false,
+    'r2',
+    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+    || '/apps/com.test.onb.real.old/1.0.0.zip',
+    null
+  ),
+  (
+    960002,
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+    now() - interval '2 days',
+    'com.test.onb.real.recent',
+    '1.0.0',
+    '6aa76066-55ef-4238-ade6-0b32334a4097',
+    false,
+    'r2',
+    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+    || '/apps/com.test.onb.real.recent/1.0.0.zip',
+    null
+  ),
+  (
+    960003,
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+    now() - interval '20 days',
+    'com.test.onb.noreal.old',
+    'builtin',
+    '6aa76066-55ef-4238-ade6-0b32334a4097',
+    false,
+    'r2',
+    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+    || '/apps/com.test.onb.noreal.old/builtin.zip',
+    null
+  ),
+  (
+    960004,
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+    now() - interval '20 days',
+    'com.test.onb.demo.old',
+    '1.0.0',
+    '6aa76066-55ef-4238-ade6-0b32334a4097',
+    false,
+    'r2',
+    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+    || '/apps/com.test.onb.demo.old/1.0.0.zip',
+    null
+  ),
+  (
+    960005,
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+    now() - interval '20 days',
+    'com.test.onb.noupload.old',
+    '1.0.0',
+    '6aa76066-55ef-4238-ade6-0b32334a4097',
+    false,
+    'r2',
+    null,
+    null
+  ),
+  (
+    960006,
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+    now() - interval '20 days',
+    'com.test.onb.external.old',
+    '1.0.0',
+    '6aa76066-55ef-4238-ade6-0b32334a4097',
+    false,
+    'external',
+    null,
+    'https://cdn.example.com/external/1.0.0.zip'
+  ),
+  (
+    960007,
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+    now() - interval '20 days',
+    'com.test.onb.r2direct.old',
+    '1.0.0',
+    '6aa76066-55ef-4238-ade6-0b32334a4097',
+    false,
+    'r2-direct',
+    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+    || '/apps/com.test.onb.r2direct.old/1.0.0.zip',
+    null
+  ),
+  (
+    960008,
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+    now() - interval '20 days',
+    'com.test.onb.raises.old',
+    '2.0.0',
+    '6aa76066-55ef-4238-ade6-0b32334a4097',
+    false,
+    'r2',
+    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+    || '/apps/com.test.onb.raises.old/2.0.0.zip',
+    null
+  ),
+  (
+    960009,
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+    now() - interval '20 days',
+    'com.test.onb.raises.old',
+    '1.0.0',
+    '6aa76066-55ef-4238-ade6-0b32334a4097',
+    false,
+    'r2',
+    'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+    || '/apps/com.test.onb.raises.old/1.0.0.zip',
+    null
+  );
 
 -- demo.old carries a demo/ manifest (so has_seeded_demo_data is true).
 -- raises.old's demo-tracked version 960009 carries a NON-demo manifest that is

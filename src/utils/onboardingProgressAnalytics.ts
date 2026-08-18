@@ -3,7 +3,7 @@ import { pushEvent } from '~/services/posthog'
 export const ONBOARDING_ANALYTICS_VERSION = 3
 
 export type OnboardingAnalyticsFlow = 'pre_org' | 'existing_org'
-export type OnboardingAnalyticsStep = 'intent' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'choice' | 'install' | 'setup'
+export type OnboardingAnalyticsStep = 'welcome' | 'intent' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'choice' | 'install' | 'setup'
 export type OnboardingCopyEvent = 'onboarding_ai_instructions_copied' | 'onboarding_cli_command_copied'
 export type OnboardingIntent = 'ota' | 'builder' | 'both' | 'exploring'
 export type OnboardingInteractionEvent

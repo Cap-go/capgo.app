@@ -181,7 +181,8 @@ describe('pre-organization onboarding v3', () => {
   it.concurrent('maps the visual details section to page-level analytics steps', () => {
     expect(onboardingSource).toContain('function analyticsStepFor(')
     expect(onboardingSource).toContain('return APP_DETAILS_ANALYTICS_STEPS[detailsStep]')
-    expect(onboardingSource).toContain('progressTracker.viewStep(analyticsStepFor(flowStep.value))')
+    expect(onboardingSource).toContain(`const initialStep: OnboardingAnalyticsStep = showPreOrgWelcome.value ? 'welcome' : analyticsStepFor(flowStep.value)`)
+    expect(onboardingSource).toContain('progressTracker.viewStep(initialStep)')
     expect(onboardingSource).toContain('const previousAnalyticsStep = analyticsStepFor(previousStep)')
     expect(onboardingSource).toContain('const nextAnalyticsStep = analyticsStepFor(nextStep)')
   })

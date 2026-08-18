@@ -1,9 +1,10 @@
+import type { FrontendOnboardingAttempt } from '../supabase/functions/_backend/utils/frontend_onboarding_analytics_model.ts'
 import { describe, expect, it } from 'vitest'
 import {
   buildFrontendOnboardingAnalytics,
   FRONTEND_ONBOARDING_FOLLOWUP_MS,
   FRONTEND_ONBOARDING_VERSIONS,
-  type FrontendOnboardingAttempt,
+
 } from '../supabase/functions/_backend/utils/frontend_onboarding_analytics_model.ts'
 
 const MINUTE_MS = 60 * 1000
@@ -72,6 +73,74 @@ describe('buildFrontendOnboardingAnalytics', () => {
       { key: 'setup', label: 'Setup reached', reached: 2, of_start_percent: 50, dropoff_percent: 0 },
     ])
     expect(analytics.funnels.v1.map(stage => stage.reached)).toEqual([1, 0, 0, 0])
+  })
+
+  it.concurrent('builds range-level daily and v3-only de-duplicated variants', () => {
+    const analytics = buildFrontendOnboardingAnalytics([
+      attempt({
+        attemptId: 'furthest-v1',
+        personId: 'furthest',
+        onboardingVersion: 1,
+        intentMs: CURRENT_START_MS + MINUTE_MS,
+        setupMs: CURRENT_START_MS + 2 * MINUTE_MS,
+      }),
+      attempt({
+        attemptId: 'furthest-v3',
+        personId: 'furthest',
+        intentMs: CURRENT_START_MS + DAY_MS + MINUTE_MS,
+        organizationMs: CURRENT_START_MS + DAY_MS + 2 * MINUTE_MS,
+      }),
+      attempt({
+        attemptId: 'latest-v1',
+        personId: 'latest',
+        onboardingVersion: 1,
+        intentMs: CURRENT_START_MS + 3 * MINUTE_MS,
+        detailsMs: CURRENT_START_MS + 4 * MINUTE_MS,
+      }),
+      attempt({
+        attemptId: 'latest-v3',
+        personId: 'latest',
+        intentMs: CURRENT_START_MS + DAY_MS + 3 * MINUTE_MS,
+        detailsMs: CURRENT_START_MS + DAY_MS + 4 * MINUTE_MS,
+      }),
+      attempt({
+        attemptId: 'blank-day-one',
+        personId: '',
+        intentMs: CURRENT_START_MS + 5 * MINUTE_MS,
+      }),
+      attempt({
+        attemptId: 'blank-day-two',
+        personId: '',
+        intentMs: CURRENT_START_MS + DAY_MS + 5 * MINUTE_MS,
+      }),
+    ], CURRENT_START_MS, CURRENT_END_MS)
+
+    expect(analytics.deduplicated.daily_attempts).toEqual([
+      { date: '2026-08-01', v1_attempts: 1, v2_attempts: 0, v3_attempts: 1 },
+      { date: '2026-08-02', v1_attempts: 0, v2_attempts: 0, v3_attempts: 2 },
+    ])
+    expect(analytics.deduplicated.funnels.v3.map(stage => stage.reached)).toEqual([4, 2, 1, 0])
+  })
+
+  it.concurrent('keeps blank and namespaced person identities separate', () => {
+    const analytics = buildFrontendOnboardingAnalytics([
+      attempt({
+        attemptId: 'blank-attempt',
+        personId: '',
+        onboardingVersion: 1,
+        intentMs: CURRENT_START_MS,
+      }),
+      attempt({
+        attemptId: 'real-person-attempt',
+        personId: 'attempt:blank-attempt',
+        intentMs: CURRENT_START_MS + MINUTE_MS,
+      }),
+    ], CURRENT_START_MS, CURRENT_END_MS)
+
+    expect(analytics.deduplicated.daily_attempts).toEqual([
+      { date: '2026-08-01', v1_attempts: 1, v2_attempts: 0, v3_attempts: 1 },
+      { date: '2026-08-02', v1_attempts: 0, v2_attempts: 0, v3_attempts: 0 },
+    ])
   })
 
   it.concurrent('ignores steps before intent and after the 24-hour progression window', () => {

@@ -192,6 +192,43 @@ export async function assertApiKeyManagerCanAssignBindings(
   }
 }
 
+async function loadApiKeyOrgRoleBindings(
+  c: Context<MiddlewareKeyVariables>,
+  apikeyRbacId: string,
+): Promise<Array<{ role_name: string, org_id: string }>> {
+  let pgClient: ReturnType<typeof getPgClient> | undefined
+  try {
+    pgClient = getPgClient(c)
+    const { rows } = await pgClient.query<{ role_name: string, org_id: string }>(
+      `
+      SELECT DISTINCT r.name AS role_name, rb.org_id::text AS org_id
+      FROM public.role_bindings rb
+      JOIN public.roles r ON r.id = rb.role_id
+      WHERE rb.principal_type = public.rbac_principal_apikey()
+        AND rb.principal_id = $1::uuid
+        AND rb.org_id IS NOT NULL
+        AND (rb.expires_at IS NULL OR rb.expires_at > now())
+      `,
+      [apikeyRbacId],
+    )
+    return rows
+  }
+  finally {
+    if (pgClient) {
+      await closeClient(c, pgClient)
+    }
+  }
+}
+
+export async function assertApiKeyManagerCanRotateTarget(
+  c: Context<MiddlewareKeyVariables>,
+  auth: AuthInfo,
+  targetRbacId: string,
+) {
+  const bindings = await loadApiKeyOrgRoleBindings(c, targetRbacId)
+  await assertApiKeyManagerCanAssignBindings(c, auth, bindings)
+}
+
 export async function ensureApiKeyManagementAllowed(
   c: Context<MiddlewareKeyVariables>,
   auth: AuthInfo,
