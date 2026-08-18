@@ -347,13 +347,14 @@ describe('[PUT] /bundle operations - Set bundle to channel', () => {
 
     const { data: after, error: afterError } = await supabase
       .from('channels')
-      .select('version, rollout_version, rollout_enabled, rollout_id')
+      .select('version, rollout_version, rollout_enabled, rollout_percentage_bps, rollout_id')
       .eq('id', channelId)
       .single()
     expect(afterError).toBeNull()
     expect(after?.version).toBe(nextVersion.id)
     expect(after?.rollout_version).toBeNull()
     expect(after?.rollout_enabled).toBe(false)
+    expect(after?.rollout_percentage_bps).toBe(0)
     expect(after?.rollout_id).not.toBe(before?.rollout_id)
   })
 

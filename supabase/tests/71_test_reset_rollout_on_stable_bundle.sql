@@ -1,7 +1,7 @@
 -- Setting a new stable channel bundle drops leftover progressive rollout.
 BEGIN;
 
-SELECT plan(6);
+SELECT plan(8);
 
 SELECT tests.authenticate_as_service_role();
 SELECT tests.create_supabase_user(
@@ -120,6 +120,12 @@ SELECT rollout_id
 FROM public.channels
 WHERE id = 7100401;
 
+SELECT is(
+  (SELECT rollout_channel_count FROM public.apps WHERE app_id = 'com.test.reset.rollout.stable'),
+  1::bigint,
+  'app rollup counts the leftover rollout before reset'
+);
+
 UPDATE public.channels
 SET version = 7100703
 WHERE id = 7100401;
@@ -146,6 +152,18 @@ SELECT isnt(
   (SELECT rollout_id FROM public.channels WHERE id = 7100401),
   (SELECT rollout_id FROM reset_rollout_before),
   'rollout_id rotates so sticky device assignments miss'
+);
+
+SELECT is(
+  (SELECT rollout_percentage_bps FROM public.channels WHERE id = 7100401),
+  0,
+  'leftover rollout percentage is cleared'
+);
+
+SELECT is(
+  (SELECT rollout_channel_count FROM public.apps WHERE app_id = 'com.test.reset.rollout.stable'),
+  0::bigint,
+  'app rollup drops the leftover rollout after a stable-only update'
 );
 
 UPDATE public.channels

@@ -107,7 +107,7 @@ const rolloutDeliveryHint = computed(() => {
     return t('rollout-delivery-paused-hint', { target: rolloutTargetName.value })
   if ((channel.value?.rollout_percentage_bps ?? 0) <= 0)
     return t('rollout-delivery-zero-hint', { target: rolloutTargetName.value })
-  return t('rollout-delivery-upload-hint', { fallback: stableBundleName.value })
+  return t('rollout-delivery-upload-hint')
 })
 const rolloutDeliveryBannerClass = computed(() => {
   if (!rolloutIsServingDevices.value) {

@@ -19,6 +19,7 @@ BEGIN
   THEN
     NEW.rollout_version := NULL;
     NEW.rollout_enabled := false;
+    NEW.rollout_percentage_bps := 0;
   END IF;
 
   IF TG_OP = 'INSERT' THEN
@@ -101,6 +102,16 @@ BEFORE INSERT OR UPDATE OF rollout_version, version
 ON public.channels
 FOR EACH ROW
 EXECUTE FUNCTION public.refresh_channel_rollout_id();
+
+-- UPDATE OF matches columns in the SET list, not values a BEFORE trigger
+-- mutates. PUT /bundle only writes version, so the app rollup trigger must
+-- also observe version or leftover rollout stays counted after this reset.
+DROP TRIGGER IF EXISTS refresh_app_rollout_channel_count ON public.channels;
+CREATE TRIGGER refresh_app_rollout_channel_count
+AFTER INSERT OR DELETE OR UPDATE OF app_id, version, rollout_enabled, rollout_version, rollout_percentage_bps, rollout_paused_at
+ON public.channels
+FOR EACH ROW
+EXECUTE FUNCTION public.refresh_app_rollout_channel_count();
 
 -- This trigger runs before refresh_channel_rollout_id. Skip leftover rollout
 -- package checks when the stable bundle is being replaced; that write drops
