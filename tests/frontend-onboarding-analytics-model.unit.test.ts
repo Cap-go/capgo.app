@@ -20,6 +20,9 @@ function attempt(overrides: Partial<FrontendOnboardingAttempt> & Pick<FrontendOn
     cliStartedMs: [],
     interactionEvents: [],
     detailsMs: null,
+    appNameMs: null,
+    appIdMs: null,
+    appIconMs: null,
     organizationMs: null,
     setupMs: null,
     ...overrides,
@@ -27,6 +30,70 @@ function attempt(overrides: Partial<FrontendOnboardingAttempt> & Pick<FrontendOn
 }
 
 describe('buildFrontendOnboardingAnalytics', () => {
+  it.concurrent('builds the expanded monotonic v4 app-step funnel while preserving legacy stages', () => {
+    const analytics = buildFrontendOnboardingAnalytics([
+      attempt({
+        attemptId: 'complete',
+        intentMs: CURRENT_START_MS,
+        appNameMs: CURRENT_START_MS + MINUTE_MS,
+        appIdMs: CURRENT_START_MS + 2 * MINUTE_MS,
+        appIconMs: CURRENT_START_MS + 3 * MINUTE_MS,
+        organizationMs: CURRENT_START_MS + 4 * MINUTE_MS,
+        setupMs: CURRENT_START_MS + 5 * MINUTE_MS,
+      }),
+      attempt({
+        attemptId: 'setup-only',
+        intentMs: CURRENT_START_MS + MINUTE_MS,
+        setupMs: CURRENT_START_MS + 6 * MINUTE_MS,
+      }),
+      attempt({
+        attemptId: 'app-name-only',
+        intentMs: CURRENT_START_MS + 2 * MINUTE_MS,
+        appNameMs: CURRENT_START_MS + 3 * MINUTE_MS,
+      }),
+      attempt({ attemptId: 'intent-only', intentMs: CURRENT_START_MS + 3 * MINUTE_MS }),
+      attempt({
+        attemptId: 'legacy-v3',
+        onboardingVersion: 3,
+        intentMs: CURRENT_START_MS + 4 * MINUTE_MS,
+        detailsMs: CURRENT_START_MS + 5 * MINUTE_MS,
+      }),
+    ], CURRENT_START_MS, CURRENT_END_MS)
+
+    expect(analytics.funnels.v4).toEqual([
+      { key: 'intent', label: 'Intent', reached: 4, of_start_percent: 100, dropoff_percent: 0 },
+      { key: 'app_name', label: 'App name', reached: 3, of_start_percent: 75, dropoff_percent: 25 },
+      { key: 'app_id', label: 'App ID', reached: 2, of_start_percent: 50, dropoff_percent: 1 / 3 * 100 },
+      { key: 'app_icon', label: 'App icon', reached: 2, of_start_percent: 50, dropoff_percent: 0 },
+      { key: 'organization', label: 'Organization details', reached: 2, of_start_percent: 50, dropoff_percent: 0 },
+      { key: 'setup', label: 'Setup reached', reached: 2, of_start_percent: 50, dropoff_percent: 0 },
+    ])
+    expect(analytics.funnels.v3.map(stage => stage.key)).toEqual(['intent', 'details', 'organization', 'setup'])
+  })
+
+  it.concurrent('de-duplicates v4 users by the furthest expanded app step', () => {
+    const analytics = buildFrontendOnboardingAnalytics([
+      attempt({
+        attemptId: 'older-app-icon',
+        personId: 'same-person',
+        intentMs: CURRENT_START_MS,
+        appIconMs: CURRENT_START_MS + MINUTE_MS,
+      }),
+      attempt({
+        attemptId: 'newer-app-id',
+        personId: 'same-person',
+        intentMs: CURRENT_START_MS + DAY_MS,
+        appIdMs: CURRENT_START_MS + DAY_MS + MINUTE_MS,
+      }),
+    ], CURRENT_START_MS, CURRENT_END_MS)
+
+    expect(analytics.deduplicated.daily_attempts).toEqual([
+      { date: '2026-08-01', v1_attempts: 0, v2_attempts: 0, v3_attempts: 0, v4_attempts: 1 },
+      { date: '2026-08-02', v1_attempts: 0, v2_attempts: 0, v3_attempts: 0, v4_attempts: 0 },
+    ])
+    expect(analytics.deduplicated.funnels.v4.map(stage => stage.reached)).toEqual([1, 1, 1, 1, 0, 0])
+  })
+
   it.concurrent('preserves legacy v3 fields and exposes v4 analytics additively', () => {
     const analytics = buildFrontendOnboardingAnalytics([
       attempt({
@@ -58,6 +125,9 @@ describe('buildFrontendOnboardingAnalytics', () => {
         onboardingVersion: 4 as FrontendOnboardingAttempt['onboardingVersion'],
         intentMs: CURRENT_START_MS,
         detailsMs: CURRENT_START_MS + MINUTE_MS,
+        appNameMs: CURRENT_START_MS + MINUTE_MS,
+        appIdMs: CURRENT_START_MS + 90_000,
+        appIconMs: CURRENT_START_MS + 105_000,
         organizationMs: CURRENT_START_MS + 2 * MINUTE_MS,
         setupMs: CURRENT_START_MS + 3 * MINUTE_MS,
         interactionEvents: [{ key: 'onboarding_app_name_entered', timestampMs: CURRENT_START_MS + MINUTE_MS }],
@@ -68,7 +138,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
     expect(analytics.v4_kpis).toMatchObject({ attempts: 1, completed: 1, completion_rate: 100 })
     expect(analytics.daily_attempts[0]).toMatchObject({ v4_attempts: 1 })
     expect(analytics.deduplicated.funnels.v3.map(stage => stage.reached)).toEqual([0, 0, 0, 0])
-    expect(analytics.funnels.v4.map(stage => stage.reached)).toEqual([1, 1, 1, 1])
+    expect(analytics.funnels.v4.map(stage => stage.reached)).toEqual([1, 1, 1, 1, 1, 1])
     expect(analytics.v4_graph.nodes).toEqual([{ key: 'onboarding_app_name_entered', count: 1 }])
   })
 
@@ -78,6 +148,9 @@ describe('buildFrontendOnboardingAnalytics', () => {
         attemptId: 'complete',
         intentMs: CURRENT_START_MS,
         detailsMs: CURRENT_START_MS + MINUTE_MS,
+        appNameMs: CURRENT_START_MS + MINUTE_MS,
+        appIdMs: CURRENT_START_MS + 90_000,
+        appIconMs: CURRENT_START_MS + 105_000,
         organizationMs: CURRENT_START_MS + 2 * MINUTE_MS,
         setupMs: CURRENT_START_MS + 4 * MINUTE_MS,
       }),
@@ -90,6 +163,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
         attemptId: 'details-only',
         intentMs: CURRENT_START_MS + DAY_MS,
         detailsMs: CURRENT_START_MS + DAY_MS + MINUTE_MS,
+        appNameMs: CURRENT_START_MS + DAY_MS + MINUTE_MS,
       }),
       attempt({ attemptId: 'intent-only', intentMs: CURRENT_START_MS + DAY_MS + MINUTE_MS }),
       attempt({
@@ -104,17 +178,19 @@ describe('buildFrontendOnboardingAnalytics', () => {
       completed: 2,
       completion_rate: 50,
       median_completion_ms: 300_000,
-      largest_dropoff: { from: 'details', to: 'organization', percentage: 1 / 3 * 100 },
+      largest_dropoff: { from: 'app_name', to: 'app_id', percentage: 1 / 3 * 100 },
     })
     expect(analytics.daily_attempts).toEqual([
       { date: '2026-08-01', v1_attempts: 0, v2_attempts: 0, v3_attempts: 0, v4_attempts: 2 },
       { date: '2026-08-02', v1_attempts: 1, v2_attempts: 0, v3_attempts: 0, v4_attempts: 2 },
     ])
-    expect(analytics.funnels.v4.map(stage => stage.reached)).toEqual([4, 3, 2, 2])
+    expect(analytics.funnels.v4.map(stage => stage.reached)).toEqual([4, 3, 2, 2, 2, 2])
     expect(analytics.funnels.v4).toEqual([
       { key: 'intent', label: 'Intent', reached: 4, of_start_percent: 100, dropoff_percent: 0 },
-      { key: 'details', label: 'App details', reached: 3, of_start_percent: 75, dropoff_percent: 25 },
-      { key: 'organization', label: 'Organization', reached: 2, of_start_percent: 50, dropoff_percent: 1 / 3 * 100 },
+      { key: 'app_name', label: 'App name', reached: 3, of_start_percent: 75, dropoff_percent: 25 },
+      { key: 'app_id', label: 'App ID', reached: 2, of_start_percent: 50, dropoff_percent: 1 / 3 * 100 },
+      { key: 'app_icon', label: 'App icon', reached: 2, of_start_percent: 50, dropoff_percent: 0 },
+      { key: 'organization', label: 'Organization details', reached: 2, of_start_percent: 50, dropoff_percent: 0 },
       { key: 'setup', label: 'Setup reached', reached: 2, of_start_percent: 50, dropoff_percent: 0 },
     ])
     expect(analytics.funnels.v1.map(stage => stage.reached)).toEqual([1, 0, 0, 0])
@@ -147,6 +223,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
         personId: 'latest',
         intentMs: CURRENT_START_MS + DAY_MS + 3 * MINUTE_MS,
         detailsMs: CURRENT_START_MS + DAY_MS + 4 * MINUTE_MS,
+        appNameMs: CURRENT_START_MS + DAY_MS + 4 * MINUTE_MS,
       }),
       attempt({
         attemptId: 'blank-day-one',
@@ -164,7 +241,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
       { date: '2026-08-01', v1_attempts: 1, v2_attempts: 0, v3_attempts: 0, v4_attempts: 1 },
       { date: '2026-08-02', v1_attempts: 0, v2_attempts: 0, v3_attempts: 0, v4_attempts: 2 },
     ])
-    expect(analytics.deduplicated.funnels.v4.map(stage => stage.reached)).toEqual([4, 2, 1, 0])
+    expect(analytics.deduplicated.funnels.v4.map(stage => stage.reached)).toEqual([4, 2, 1, 1, 1, 0])
   })
 
   it.concurrent('keeps blank and namespaced person identities separate', () => {
@@ -200,7 +277,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
       }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.funnels.v4.map(stage => stage.reached)).toEqual([1, 0, 0, 0])
+    expect(analytics.funnels.v4.map(stage => stage.reached)).toEqual([1, 0, 0, 0, 0, 0])
     expect(analytics.v4_kpis.median_completion_ms).toBeNull()
   })
 
@@ -268,7 +345,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
     expect(analytics.funnels.v1.map(stage => stage.reached)).toEqual([0, 0, 0, 0])
     expect(analytics.funnels.v2.map(stage => stage.reached)).toEqual([0, 0, 0, 0])
     expect(analytics.funnels.v3.map(stage => stage.reached)).toEqual([0, 0, 0, 0])
-    expect(analytics.funnels.v4.map(stage => stage.reached)).toEqual([0, 0, 0, 0])
+    expect(analytics.funnels.v4.map(stage => stage.reached)).toEqual([0, 0, 0, 0, 0, 0])
     expect(analytics.v2_graph.nodes).toEqual([])
     expect(analytics.v3_graph.nodes).toEqual([])
     expect(analytics.v4_graph.nodes).toEqual([])
@@ -499,6 +576,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
         attemptId: 'windowed-interactions',
         intentMs,
         detailsMs: intentMs + MINUTE_MS,
+        appNameMs: intentMs + MINUTE_MS,
         interactionEvents: [
           { key: 'before_intent', timestampMs: intentMs - 1 },
           { key: 'at_boundary', timestampMs: intentMs + FRONTEND_ONBOARDING_FOLLOWUP_MS },
@@ -507,7 +585,7 @@ describe('buildFrontendOnboardingAnalytics', () => {
       }),
     ], CURRENT_START_MS, CURRENT_END_MS)
 
-    expect(analytics.funnels.v4.find(stage => stage.key === 'details')?.reached).toBe(1)
+    expect(analytics.funnels.v4.find(stage => stage.key === 'app_name')?.reached).toBe(1)
     expect(analytics.v4_graph.nodes).toEqual([{ key: 'at_boundary', count: 1 }])
   })
 
