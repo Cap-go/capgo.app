@@ -90,7 +90,7 @@ Workflow contract tests must prove that:
 - The bump job still depends on successful scoped tests.
 - Stable and development branches select `production` and `dev` respectively.
 - Exit code `0` preserves the conventional release severity.
-- Exit code `1` checks the latest reachable Capgo tag on the current stable or alpha release line and selects `major` only when its GitHub Release can be confirmed.
+- Exit code `1` checks the latest reachable Capgo tag on the current stable or alpha release line and selects `major` when no matching prior tag exists or when its GitHub Release can be confirmed.
 - Unexpected exit codes fail before `standard-version`.
 - The tagged workflow uploads OTA without a native-compatibility condition.
 - GitHub Release creation remains ordered after OTA upload.

@@ -64,9 +64,20 @@ describe('native-aware Capgo release workflow', () => {
     expect(decision).toContain('channel="dev"')
     expect(decision).toContain('bunx @capgo/cli@latest build needed --channel "$channel"')
     expect(decision).toContain('release_as=$DEFAULT_RELEASE_AS')
-    expect(decision).toContain("--match 'capgo-*' --exclude '*-alpha.*'")
-    expect(decision).toContain("--match 'capgo-*-alpha.*'")
-    expect(decision).toContain('gh release view "$previous_tag"')
+    const previousTagGuardIndex = decision.indexOf('if [ -n "$previous_tag" ]')
+    const releaseAsMajorIndex = decision.indexOf('echo "release_as=major"')
+    const releaseLineLookup = decision.slice(
+      decision.lastIndexOf('if [ "$GITHUB_REF"', previousTagGuardIndex),
+      previousTagGuardIndex,
+    )
+    const releaseLineElseIndex = releaseLineLookup.indexOf('else')
+    expect(releaseLineLookup.indexOf("--match 'capgo-*' --exclude '*-alpha.*'")).toBeLessThan(releaseLineElseIndex)
+    expect(releaseLineLookup.indexOf("--match 'capgo-*-alpha.*'")).toBeGreaterThan(releaseLineElseIndex)
+
+    const guardedReleaseLookup = decision.slice(previousTagGuardIndex, releaseAsMajorIndex)
+    expect(guardedReleaseLookup).toContain('gh release view "$previous_tag"')
+    expect(decision.slice(0, previousTagGuardIndex)).not.toContain('gh release view "$previous_tag"')
+    expect(decision.slice(releaseAsMajorIndex)).not.toContain('gh release view "$previous_tag"')
     expect(decision).toContain('Could not confirm a completed GitHub Release')
     expect(decision).toContain('release_as=major')
     expect(decision).toContain('exit 1')
