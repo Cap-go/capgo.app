@@ -3376,8 +3376,10 @@ export async function getAdminOnboardingFunnel(
           COUNT(*) FILTER (WHERE o.onboarding->'starting_out' = 'true'::jsonb)::int as starting_out_true,
           COUNT(*) FILTER (WHERE o.onboarding->'starting_out' = 'false'::jsonb)::int as starting_out_false
         FROM public.orgs o
-        WHERE o.created_at >= ${start_date}::timestamptz
-          AND o.created_at < ${end_date}::timestamptz
+        INNER JOIN public.users u ON u.id = o.created_by
+        WHERE o.created_at >= ${start_date}::timestamp
+          AND o.created_at < ${end_date}::timestamp
+          AND u.created_via_invite = false
           AND o.onboarding->'starting_out' IN ('true'::jsonb, 'false'::jsonb)
         GROUP BY o.created_at::date
       ),

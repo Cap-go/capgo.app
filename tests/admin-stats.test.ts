@@ -502,6 +502,7 @@ beforeAll(async () => {
       management_email: TEST_EMAIL,
       customer_id: ONBOARDING_CUSTOMER_ID,
       created_at: ONBOARDING_ORG_CREATED_AT,
+      onboarding: { starting_out: false },
     },
     {
       id: ONBOARDING_NO_BUNDLE_ORG_ID,
@@ -526,6 +527,7 @@ beforeAll(async () => {
       management_email: inviteEmail,
       customer_id: ONBOARDING_INVITE_CUSTOMER_ID,
       created_at: ONBOARDING_ORG_CREATED_AT,
+      onboarding: { starting_out: true },
     },
   ])
   if (orgError)
@@ -1303,6 +1305,11 @@ describe('/private/admin_stats', () => {
           invite_registrations: number
           without_profile: number
         }>
+        starting_out_trend: Array<{
+          date: string
+          starting_out_true: number
+          starting_out_false: number
+        }>
       }
     }
 
@@ -1337,6 +1344,11 @@ describe('/private/admin_stats', () => {
       org_joins_invite_register: 1,
       org_joins_existing_account: 1,
     })
+    expect(payload.data.starting_out_trend).toEqual([{
+      date: '2026-02-01',
+      starting_out_true: 0,
+      starting_out_false: 1,
+    }])
   })
 
   it('returns every auth registration in exactly one daily profile bucket', async () => {

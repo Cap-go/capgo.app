@@ -80,7 +80,7 @@ interface OnboardingFunnelData {
     org_joins_existing_account: number
   }>
   registration_source_trend: RegistrationSourceTrendPoint[]
-  starting_out_trend: Array<{
+  starting_out_trend?: Array<{
     date: string
     starting_out_true: number
     starting_out_false: number
@@ -1088,7 +1088,7 @@ const startingOutTrendSeries = computed(() => {
   ]
 })
 const hasStartingOutTrendData = computed(() => (
-  onboardingFunnelData.value?.starting_out_trend.some(item => (
+  onboardingFunnelData.value?.starting_out_trend?.some(item => (
     (Number(item.starting_out_true) || 0) + (Number(item.starting_out_false) || 0) > 0
   )) ?? false
 ))

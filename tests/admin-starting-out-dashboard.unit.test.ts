@@ -7,6 +7,7 @@ describe('admin starting-out dashboard', () => {
 
     expect(source).toContain('starting_out_trend')
     expect(source).toContain('startingOutTrendSeries')
+    expect(source).toContain('starting_out_trend?.some')
     expect(source).toContain('chart-id="organizations-by-starting-out"')
     expect(source).toContain(`t('starting-out-no-users')`)
     expect(source).toContain(`t('starting-out-existing-users')`)
