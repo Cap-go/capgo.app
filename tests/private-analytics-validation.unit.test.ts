@@ -237,6 +237,42 @@ describe('private analytics route validation', () => {
     }), false)
   })
 
+  it('passes osVersion compare filters to countDevices on /private/devices', async () => {
+    countDevicesMock.mockResolvedValue(3)
+
+    const response = await devicesApp.request(postJson('http://local/', {
+      appId: 'com.example.app',
+      count: true,
+      platform: 'android',
+      osVersion: '14',
+      osVersionOp: 'gte',
+      versionNames: ['1.2.3'],
+      versionNameOp: 'lte',
+    }))
+
+    expect(response.status).toBe(200)
+    expect(countDevicesMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'com.example.app',
+      false,
+      [],
+      undefined,
+      undefined,
+      expect.objectContaining({
+        platform: 'android',
+        osVersionCompare: { op: 'gte', value: '14' },
+        versionNameCompare: { op: 'lte', value: '1.2.3' },
+      }),
+    )
+  })
+
+  it('rejects multiple versionNames for numeric bundle operators', async () => {
+    await expectRejectedDevicesBody({
+      versionNames: ['1.0.0', '2.0.0'],
+      versionNameOp: 'gte',
+    })
+  })
+
   it('rejects non-numeric osVersion on /private/devices', async () => {
     await expectRejectedDevicesBody({ osVersion: 'not-a-version', osVersionOp: 'gte' })
   })

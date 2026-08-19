@@ -74,11 +74,17 @@ const bundleNames = ref<string[]>([])
 const dateRangePickerRef = ref<DateRangePickerHandle>()
 const skipFilterReload = ref(false)
 const offset = 10
-const activeExtraFilters = computed(() =>
-  (selectedPlatform.value ? 1 : 0)
-  + (selectedVersionNames.value.length ? 1 : 0)
-  + (osVersionValue.value.trim() ? 1 : 0),
-)
+function hasVersionDigits(value: string | undefined) {
+  return Boolean(value && /\d/.test(value.trim()))
+}
+const activeExtraFilters = computed(() => {
+  const bundleActive = bundleCompareOp.value === 'in'
+    ? selectedVersionNames.value.length > 0
+    : hasVersionDigits(selectedVersionNames.value[0])
+  return (selectedPlatform.value ? 1 : 0)
+    + (bundleActive ? 1 : 0)
+    + (hasVersionDigits(osVersionValue.value) ? 1 : 0)
+})
 const bundleRangeValue = computed({
   get: () => selectedVersionNames.value[0] ?? '',
   set: (value: string) => {
@@ -239,12 +245,14 @@ function getDevicesFilterBody() {
 }
 
 function getQuerySignature() {
+  const bundle = getBundleFilterPayload()
+  const os = getOsVersionFilter()
   return JSON.stringify({
     appId: props.appId,
-    versionNames: getVersionNameFilter() ?? [],
-    versionNameOp: bundleCompareOp.value,
-    osVersion: osVersionValue.value.trim(),
-    osVersionOp: osVersionOp.value,
+    versionNames: bundle.versionNames ?? [],
+    versionNameOp: bundle.versionNameOp ?? 'in',
+    osVersion: os.osVersion ?? '',
+    osVersionOp: os.osVersionOp ?? osVersionOp.value,
     platform: getPlatformFilter() ?? '',
     search: getSearchTerm(),
     order: getActiveOrder(columns.value),
@@ -665,6 +673,7 @@ watch(() => props.appId, async (appId) => {
 watch(() => props.versionName, (value) => {
   cancelScheduledReload()
   skipFilterReload.value = true
+  bundleCompareOp.value = 'in'
   selectedVersionNames.value = value ? [value] : []
   skipFilterReload.value = false
   debouncedReload()
@@ -676,7 +685,11 @@ watch([selectedPlatform, selectedVersionNames, bundleCompareOp, osVersionOp, osV
   debouncedReload()
 }, { deep: true })
 
-watch(bundleCompareOp, (op) => {
+watch(bundleCompareOp, (op, previous) => {
+  if ((op === 'in') !== (previous === 'in')) {
+    selectedVersionNames.value = []
+    return
+  }
   if (op !== 'in' && selectedVersionNames.value.length > 1)
     selectedVersionNames.value = selectedVersionNames.value.slice(0, 1)
 })

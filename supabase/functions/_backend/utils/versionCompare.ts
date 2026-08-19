@@ -7,9 +7,10 @@ export interface VersionCompareFilter {
 }
 
 const MAX_VERSION_PARTS = 4
+const VERSION_DIGIT_RE = /\d{1,9}/
 
 function firstNumber(part: string): number | null {
-  const match = part.match(/\d+/)
+  const match = part.match(VERSION_DIGIT_RE)
   if (!match)
     return null
   const parsed = Number.parseInt(match[0]!, 10)
@@ -73,11 +74,11 @@ export function compareVersionPrefix(deviceVersion: string | null | undefined, f
 }
 
 function pgPartExpr(column: string, index: number): string {
-  return `COALESCE(NULLIF(SUBSTRING(split_part(${column}, '.', ${index}) FROM '[0-9]+'), '')::bigint, 0)`
+  return `COALESCE(NULLIF(SUBSTRING(split_part(${column}, '.', ${index}) FROM '[0-9]{1,9}'), '')::bigint, 0)`
 }
 
 function cfPartExpr(column: string, index: number): string {
-  return `toUInt32(splitByChar('.', concat(${column}, '.0.0.0'))[${index}])`
+  return `toUInt32OrZero(splitByChar('.', ${column})[${index}])`
 }
 
 function partExpr(column: string, index: number, dialect: 'pg' | 'cf'): string {

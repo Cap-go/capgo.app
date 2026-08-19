@@ -134,7 +134,8 @@ async function parseAuthorizedDevicesBody(c: Context<MiddlewareKeyVariables>, sc
     throw simpleError('invalid_body', 'Invalid body')
   if (body.versionNameOp && body.versionNameOp !== 'in') {
     const names = resolveVersionNameFilter(body)
-    if (!parseVersionCompareFilter(body.versionNameOp, firstVersionName(names)))
+    const nameList = Array.isArray(names) ? names : names ? [names] : []
+    if (nameList.length > 1 || !parseVersionCompareFilter(body.versionNameOp, firstVersionName(names)))
       throw simpleError('invalid_body', 'Invalid body')
   }
   cloudlog({ requestId: c.get('requestId'), message: logLabel, body })

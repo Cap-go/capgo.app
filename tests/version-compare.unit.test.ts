@@ -9,10 +9,11 @@ describe('parseVersionParts', () => {
     expect(parseVersionParts('Android 14')).toEqual([14])
   })
 
-  it.concurrent('returns null for empty or non-numeric values', () => {
+  it.concurrent('returns null for empty, non-numeric, or oversized values', () => {
     expect(parseVersionParts('')).toBeNull()
     expect(parseVersionParts('builtin')).toBeNull()
     expect(parseVersionParts(undefined)).toBeNull()
+    expect(parseVersionParts('9999999999')).toEqual([999999999])
   })
 })
 
@@ -51,7 +52,9 @@ describe('buildVersionCompareSql', () => {
 
   it.concurrent('builds cloudflare prefix gte on a single part', () => {
     const sql = buildVersionCompareSql('os_version', { op: 'gte', value: '14' }, 'cf')
-    expect(sql).toContain("splitByChar('.', concat(os_version, '.0.0.0'))[1]")
+    expect(sql).toContain("splitByChar('.', os_version)[1]")
+    expect(sql).not.toContain('concat(')
+    expect(sql).toContain('toUInt32OrZero')
     expect(sql).toContain('>= 14')
   })
 

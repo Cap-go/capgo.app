@@ -85,6 +85,8 @@ const isFilterModalOpen = ref(false)
 const filterOpenButtonRef = ref<HTMLButtonElement | null>(null)
 const filterModalTitleId = `${useId()}-filters-title`
 const addTooltipId = `${useId()}-add-tooltip`
+const exportMenuId = `${useId()}-export-menu`
+const exportMenuOpen = ref(false)
 const slots = useSlots()
 const { t } = useI18n()
 const searchVal = ref(props.search ?? '')
@@ -525,7 +527,12 @@ const paginationClass = computed(() => props.mobileFixedPagination
           <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
           <span class="hidden text-sm md:block">{{ t("reload") }}</span>
         </button>
-        <div v-if="exportable" class="d-dropdown">
+        <div
+          v-if="exportable"
+          class="d-dropdown"
+          @focusin="exportMenuOpen = true"
+          @focusout="exportMenuOpen = false"
+        >
           <button
             tabindex="0"
             type="button"
@@ -534,15 +541,22 @@ const paginationClass = computed(() => props.mobileFixedPagination
             data-test="data-table-export"
             :aria-label="t('export')"
             aria-haspopup="menu"
+            :aria-expanded="exportMenuOpen"
+            :aria-controls="exportMenuId"
           >
             <IconDownload v-if="!exportLoading" class="m-1 md:mr-2" />
             <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
             <span class="hidden text-sm md:block">{{ t('export') }}</span>
           </button>
-          <ul role="menu" class="d-dropdown-content d-menu z-20 mt-1 mr-2 w-40 rounded-md border border-slate-200 bg-white p-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
-            <li>
+          <ul
+            :id="exportMenuId"
+            role="menu"
+            class="d-dropdown-content d-menu z-20 mt-1 mr-2 w-40 rounded-md border border-slate-200 bg-white p-1 shadow-lg dark:border-slate-700 dark:bg-slate-900"
+          >
+            <li role="none">
               <button
                 type="button"
+                role="menuitem"
                 class="d-btn d-btn-ghost d-btn-sm w-full justify-start rounded-md px-3 py-2 text-left text-sm font-normal text-slate-700 shadow-none dark:text-slate-200"
                 data-test="data-table-export-csv"
                 :disabled="isLoading || exportLoading"
@@ -551,9 +565,10 @@ const paginationClass = computed(() => props.mobileFixedPagination
                 {{ t('download-csv') }}
               </button>
             </li>
-            <li>
+            <li role="none">
               <button
                 type="button"
+                role="menuitem"
                 class="d-btn d-btn-ghost d-btn-sm w-full justify-start rounded-md px-3 py-2 text-left text-sm font-normal text-slate-700 shadow-none dark:text-slate-200"
                 data-test="data-table-export-json"
                 :disabled="isLoading || exportLoading"

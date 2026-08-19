@@ -180,8 +180,9 @@ describe('buildReadDevicesCFQuery', () => {
     const groupByIndex = query.indexOf('GROUP BY blob1')
     expect(query).toContain('argMax(blob4, timestamp) AS os_version')
     expect(query.indexOf('>= 14')).toBeGreaterThan(groupByIndex)
-    expect(query.indexOf("splitByChar('.', concat(os_version, '.0.0.0'))")).toBeGreaterThan(groupByIndex)
-    expect(query.indexOf("splitByChar('.', concat(version_name, '.0.0.0'))")).toBeGreaterThan(groupByIndex)
+    expect(query).toContain("splitByChar('.', os_version)")
+    expect(query).toContain("splitByChar('.', version_name)")
+    expect(query).not.toContain('concat(')
   })
 
   it.concurrent('filters devices by multiple version names after grouping', () => {
