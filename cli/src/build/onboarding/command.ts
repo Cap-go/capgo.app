@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
-import { log } from '@clack/prompts'
+import { confirm, log, select, spinner } from '@clack/prompts'
 // src/build/onboarding/command.ts
 import { render } from 'ink'
 import React from 'react'
@@ -17,6 +17,8 @@ import { getPlatformDirFromCapacitorConfig } from '../platform-paths.js'
 import OnboardingShell from './ui/shell.js'
 import { checkForCliUpdate, manualUpdateHint, runUpdateAndReexec } from './self-update.js'
 import { resolveSupabaseReplayUrl, startInitReplay } from '../../init/replay.js'
+import { discoverCapacitorProjects, hasCapacitorConfig } from './project-discovery.js'
+import { selectCapacitorProject } from './project-selection.js'
 import type { OnboardingResult } from './types.js'
 export interface OnboardingBuilderOptions {
   analytics?: boolean
@@ -37,9 +39,72 @@ export interface OnboardingBuilderOptions {
    * (e.g. re-run the upload) instead of `build init`.
    */
   enableSelfUpdate?: boolean
+  /** Search exact-root package workspaces for a Capacitor app before onboarding. */
+  enableProjectDiscovery?: boolean
 }
 
 type Platform = 'ios' | 'android' | 'appflow'
+
+export function shouldDiscoverBuilderProject(options: OnboardingBuilderOptions): boolean {
+  return options.enableProjectDiscovery === true
+}
+
+export function builderProjectNotFoundMessage(nxDetected: boolean): string {
+  const lines = [
+    "We couldn't find a Capacitor app in this project.",
+    'Run `npx @capgo/cli@latest build init` from your Capacitor app directory or from the root of a supported package-manager workspace.',
+  ]
+  if (nxDetected)
+    lines.push('Nx repositories that do not use package-manager workspaces are not currently supported.')
+  return lines.join('\n')
+}
+
+function projectCandidateLabel(candidate: { packageName?: string, relativeDir: string }): string {
+  return candidate.packageName
+    ? `${candidate.packageName} — ${candidate.relativeDir}`
+    : candidate.relativeDir
+}
+
+type BuilderProjectResolution = 'ready' | 'cancelled' | 'not-found'
+
+async function discoverBuilderProjectFromInvocationRoot(options: OnboardingBuilderOptions): Promise<BuilderProjectResolution> {
+  if (!shouldDiscoverBuilderProject(options) || hasCapacitorConfig(process.cwd()))
+    return 'ready'
+
+  const progress = spinner()
+  progress.start('Looking for a Capacitor app in this workspace...')
+  const discovery = await discoverCapacitorProjects(process.cwd())
+  if (discovery.candidates.length === 0) {
+    progress.stop('No Capacitor app found')
+    log.error(builderProjectNotFoundMessage(discovery.nxDetected))
+    return 'not-found'
+  }
+
+  const count = discovery.candidates.length
+  progress.stop(`Found ${count} Capacitor ${count === 1 ? 'app' : 'apps'}`)
+  const selectedProject = await selectCapacitorProject(discovery.candidates, {
+    confirm: candidate => confirm({
+      message: `We found a Capacitor app at ${candidate.relativeDir}. Is this the correct app?`,
+      initialValue: true,
+    }),
+    select: candidates => select({
+      message: 'Which Capacitor app do you want to set up?',
+      options: candidates.map(candidate => ({
+        value: candidate.dir,
+        label: projectCandidateLabel(candidate),
+      })),
+    }),
+  })
+
+  if (!selectedProject) {
+    log.info('Capgo build onboarding cancelled. Re-run `npx @capgo/cli@latest build init` when you are ready.')
+    return 'cancelled'
+  }
+
+  process.chdir(selectedProject.dir)
+  log.success(`Using Capacitor app at ${selectedProject.relativeDir}`)
+  return 'ready'
+}
 
 /**
  * Decide which platform to onboard WITHOUT prompting:
@@ -105,6 +170,13 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
     console.error('It cannot run in CI, pipes, or non-TTY environments.')
     console.error('Use `build credentials save` for non-interactive credential setup.')
     process.exit(1)
+  }
+
+  const projectResolution = await discoverBuilderProjectFromInvocationRoot(options)
+  if (projectResolution !== 'ready') {
+    if (projectResolution === 'not-found')
+      process.exitCode = 1
+    return
   }
 
   // Detect app ID and platform directories from capacitor.config.ts

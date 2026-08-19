@@ -909,10 +909,14 @@ build
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
   .option('--no-analytics', 'Disable build onboarding analytics and terminal replay for this run')
-  // enableSelfUpdate is set ONLY here (the genuine `build init` entrypoint) so
-  // the self-update prompt's re-exec replays `build init`, never a wrapper
-  // command that reached onboarding as a sub-step (bundle upload / credentials).
-  .action((options: OnboardingBuilderOptions) => onboardingBuilderCommand({ ...options, enableSelfUpdate: true }))
+  // Self-update and workspace discovery are enabled ONLY here (the genuine
+  // `build init` entrypoint), never for wrapper commands that reach onboarding
+  // as a sub-step (bundle upload / credentials).
+  .action((options: OnboardingBuilderOptions) => onboardingBuilderCommand({
+    ...options,
+    enableSelfUpdate: true,
+    enableProjectDiscovery: true,
+  }))
 
 build
   .command('request [appId]')

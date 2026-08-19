@@ -338,8 +338,8 @@ git commit -m "feat(cli): select workspace app during build init"
 Run:
 
 ```bash
-bun --cwd cli run lint
-bun --cwd cli run typecheck
+bun run --cwd cli lint
+bun run --cwd cli typecheck
 ```
 
 Expected: both commands exit 0.
@@ -349,9 +349,9 @@ Expected: both commands exit 0.
 Run:
 
 ```bash
-bun --cwd cli run test:builder-project-discovery
-bun --cwd cli run test:init-monorepo-targeting
-bun --cwd cli run test:build-platform-selection
+bun run --cwd cli test:builder-project-discovery
+bun run --cwd cli test:init-monorepo-targeting
+bun run --cwd cli test:build-platform-selection
 ```
 
 Expected: all commands exit 0.
