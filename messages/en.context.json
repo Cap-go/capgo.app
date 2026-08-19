@@ -3098,6 +3098,7 @@
   "app-onboarding-name-step-title": "Used in app onboarding details wizard. Role: step title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "app-onboarding-remove-icon": "Used in app onboarding details wizard. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "app-onboarding-skip-app-id": "Used in app onboarding details wizard. Role: button label that accepts Capgo's generated App ID. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "app-onboarding-skip-icon": "Used in app onboarding details wizard. Role: button label that continues without an optional app icon. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "app-onboarding-toast-store-icon-error": "Used in app onboarding details wizard. Role: error toast. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "app-onboarding-use-different-icon": "Used in app onboarding details wizard. Role: section label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "app-onboarding-use-imported-icon": "Used in app onboarding details wizard. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

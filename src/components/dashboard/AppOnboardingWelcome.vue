@@ -59,8 +59,8 @@ const { t } = useI18n()
 .onboarding-welcome {
   isolation: isolate;
   background:
-    radial-gradient(circle at 50% 40%, rgb(59 130 246 / 12%), transparent 29rem),
-    linear-gradient(180deg, #fff 0%, #f8fafc 58%, #f1f5f9 100%);
+    radial-gradient(circle at 50% 40%, rgb(59 130 246 / 14%), transparent 29rem),
+    linear-gradient(180deg, var(--color-base-100) 0%, var(--color-base-200) 58%, var(--color-base-300) 100%);
 }
 
 .onboarding-welcome::before,
@@ -175,12 +175,6 @@ const { t } = useI18n()
 .onboarding-welcome-primary > * {
   position: relative;
   z-index: 1;
-}
-
-:global(.dark) .onboarding-welcome {
-  background:
-    radial-gradient(circle at 50% 40%, rgb(59 130 246 / 18%), transparent 29rem),
-    linear-gradient(180deg, #020617 0%, #0f172a 58%, #111827 100%);
 }
 
 @keyframes onboarding-status-pulse {

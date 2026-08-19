@@ -518,6 +518,7 @@
   "app-onboarding-store-link-placeholder": "https://apps.apple.com/... or https://play.google.com/store/apps/details?id=com.example.app",
   "app-onboarding-store-screenshot-alt": "Store screenshot preview",
   "app-onboarding-skip-app-id": "Skip",
+  "app-onboarding-skip-icon": "Skip",
   "app-onboarding-subtitle": "The app is created immediately in Capgo. From there you can either connect your real project in the CLI or explore the dashboard with temporary demo data.",
   "app-onboarding-summary-method": "Setup method",
   "app-onboarding-summary-source": "Starting point",

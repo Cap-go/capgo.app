@@ -25,6 +25,17 @@ describe('app onboarding welcome', () => {
     expect(source).not.toContain('Takes about')
   })
 
+  it.concurrent('uses DaisyUI theme colors for the welcome canvas', async () => {
+    const source = await readFile(new URL('../src/components/dashboard/AppOnboardingWelcome.vue', import.meta.url), 'utf8')
+    const welcomeRule = source.match(/\.onboarding-welcome\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
+    const backgroundDeclaration = welcomeRule.match(/background:\s*([\s\S]*?);/)?.[1] ?? ''
+
+    expect(backgroundDeclaration).toContain('var(--color-base-100)')
+    expect(backgroundDeclaration).toContain('var(--color-base-200)')
+    expect(backgroundDeclaration).toContain('var(--color-base-300)')
+    expect(source).not.toContain(':global(.dark) .onboarding-welcome')
+  })
+
   it.concurrent('shows only for fresh or restarted desktop pre-organization onboarding', async () => {
     const source = await readFile(new URL('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
     const resumeFlow = source.slice(
