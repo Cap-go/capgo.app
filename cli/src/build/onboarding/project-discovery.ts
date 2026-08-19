@@ -59,15 +59,24 @@ function selectWorkspaceTool(searchRoot: string, packageJson: WorkspacePackageJs
     return PnpmTool
   if (isFile(join(searchRoot, 'rush.json')))
     return RushTool
+
+  const packageManager = packageJson.packageManager?.toLowerCase() ?? ''
+  const hasArrayWorkspaces = Array.isArray(packageJson.workspaces)
+  const hasObjectWorkspaces = packageJson.workspaces != null
+    && !Array.isArray(packageJson.workspaces)
+    && Array.isArray(packageJson.workspaces.packages)
+  if (hasArrayWorkspaces || hasObjectWorkspaces) {
+    if (packageManager.startsWith('bun@') || isFile(join(searchRoot, 'bun.lock')) || isFile(join(searchRoot, 'bun.lockb')))
+      return BunTool
+    if (packageManager.startsWith('yarn@') || isFile(join(searchRoot, 'yarn.lock')) || hasObjectWorkspaces)
+      return YarnTool
+    return NpmTool
+  }
+
+  // Modern Lerna derives packages from root workspaces when they exist. Lerna's
+  // own adapter is still needed for custom `lerna.json` package globs.
   if (isFile(join(searchRoot, 'lerna.json')))
     return LernaTool
-  const packageManager = packageJson.packageManager?.toLowerCase() ?? ''
-  if (packageManager.startsWith('bun@') || isFile(join(searchRoot, 'bun.lock')) || isFile(join(searchRoot, 'bun.lockb')))
-    return BunTool
-  if (packageManager.startsWith('yarn@') || isFile(join(searchRoot, 'yarn.lock')) || (!Array.isArray(packageJson.workspaces) && Array.isArray(packageJson.workspaces?.packages)))
-    return YarnTool
-  if (packageManager.startsWith('npm@') || isFile(join(searchRoot, 'package-lock.json')) || Array.isArray(packageJson.workspaces))
-    return NpmTool
   return undefined
 }
 

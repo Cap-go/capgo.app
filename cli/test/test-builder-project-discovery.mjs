@@ -144,6 +144,21 @@ try {
     assert.deepEqual(result.candidates.map(candidate => candidate.relativeDir), ['products/mobile'])
   })
 
+  await test('discovers Lerna repositories that derive packages from root workspaces', async () => {
+    const root = fixture('lerna-workspaces')
+    writeJson(join(root, 'package.json'), {
+      private: true,
+      packageManager: 'npm@10.9.2',
+      workspaces: ['apps/*', 'packages/*'],
+    })
+    writeJson(join(root, 'lerna.json'), { version: 'independent', npmClient: 'npm' })
+    addCapacitorApp(root, 'apps/mobile', '@example/lerna-mobile', 'com.example.lerna')
+    addPackage(root, 'packages/shared', '@example/shared')
+
+    const result = await discoverCapacitorProjects(root)
+    assert.deepEqual(result.candidates.map(candidate => candidate.relativeDir), ['apps/mobile'])
+  })
+
   await test('discovers Rush project folders', async () => {
     const root = fixture('rush')
     writeJson(join(root, 'package.json'), { private: true })
