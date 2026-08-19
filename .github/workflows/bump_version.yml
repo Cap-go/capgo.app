@@ -93,6 +93,48 @@ jobs:
       - name: Install dependencies
         if: ${{ needs.changes.outputs.run_capgo == 'true' || needs.changes.outputs.run_cli == 'true' || needs.changes.outputs.run_notifications == 'true' }}
         run: bun install --frozen-lockfile
+      - name: Resolve Capgo native release bump
+        id: capgo_version
+        if: ${{ needs.changes.outputs.run_capgo == 'true' }}
+        env:
+          CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_RELEASE_AS: ${{ needs.changes.outputs.capgo_release_as }}
+        run: |
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            channel="production"
+          else
+            channel="dev"
+          fi
+
+          set +e
+          bunx @capgo/cli@latest build needed --channel "$channel"
+          exit_code=$?
+          set -e
+
+          if [ "$exit_code" -eq 0 ]; then
+            echo "release_as=$DEFAULT_RELEASE_AS" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$exit_code" -ne 1 ]; then
+            echo "::error::build needed failed with exit code $exit_code"
+            exit "$exit_code"
+          fi
+
+          previous_tag="$(git describe --tags --match 'capgo-*' --abbrev=0 2>/dev/null || true)"
+          if [ -n "$previous_tag" ]; then
+            if ! release_is_draft="$(gh release view "$previous_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
+              echo "::error::$previous_tag has no completed GitHub Release. No new version will be created."
+              exit 1
+            fi
+            if [ "$release_is_draft" != "false" ]; then
+              echo "::error::$previous_tag is still a draft GitHub Release. No new version will be created."
+              exit 1
+            fi
+          fi
+
+          echo "release_as=major" >> "$GITHUB_OUTPUT"
       - name: Git config
         run: |
           git config --local user.name "github-actions[bot]"
@@ -112,7 +154,7 @@ jobs:
       - name: Create version bumps
         env:
           RUN_CAPGO: ${{ needs.changes.outputs.run_capgo }}
-          CAPGO_RELEASE_AS: ${{ needs.changes.outputs.capgo_release_as }}
+          CAPGO_RELEASE_AS: ${{ steps.capgo_version.outputs.release_as }}
           RUN_CLI: ${{ needs.changes.outputs.run_cli }}
           CLI_RELEASE_AS: ${{ needs.changes.outputs.cli_release_as }}
           RUN_NOTIFICATIONS: ${{ needs.changes.outputs.run_notifications }}
