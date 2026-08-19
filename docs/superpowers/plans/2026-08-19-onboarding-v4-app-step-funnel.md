@@ -107,7 +107,13 @@ Run: `bunx vitest run tests/frontend-onboarding-analytics-model.unit.test.ts`
 
 Expected: PASS with v4 returning six stages and v1-v3 returning four.
 
-- [ ] **Step 6: Commit the model behavior**
+- [ ] **Step 6: Run formatting and lint checks before the first commit**
+
+Run: `bun lint:fix && bun lint:backend`
+
+Expected: both commands exit 0.
+
+- [ ] **Step 7: Commit the model behavior**
 
 ```bash
 git add tests/frontend-onboarding-analytics-model.unit.test.ts supabase/functions/_backend/utils/frontend_onboarding_analytics_model.ts
@@ -239,43 +245,45 @@ git commit -m "feat(admin): render expanded onboarding v4 funnel"
 **Files:**
 - Verify all modified files
 
-- [ ] **Step 1: Run formatting and lint checks**
-
-Run: `bun lint && bun lint:backend`
-
-Expected: both commands exit 0.
-
-- [ ] **Step 2: Run backend and frontend typechecks**
+- [ ] **Step 1: Run backend and frontend typechecks**
 
 Run: `bun run typecheck:backend && bun run typecheck:frontend`
 
 Expected: both commands exit 0.
 
-- [ ] **Step 3: Run the full unit suite**
+- [ ] **Step 2: Run the full unit suite**
 
 Run: `bun test:unit`
 
 Expected: all unit tests pass.
 
-- [ ] **Step 4: Run the production build**
+- [ ] **Step 3: Run the production build**
 
 Run: `CHOKIDAR_USEPOLLING=true bun run build`
 
 Expected: production build exits 0. If generated declarations change without semantic source changes, restore them to `HEAD` and confirm the worktree contains only intended files.
 
-- [ ] **Step 5: Push and create the pull request**
+- [ ] **Step 4: Push and create the pull request**
 
 ```bash
 git push -u origin wolny/onboarding-v4-app-step-funnel
-gh pr create --base main --head wolny/onboarding-v4-app-step-funnel --title "feat(admin): expand onboarding v4 funnel stages" --body "## Summary
+gh pr create --base main --head wolny/onboarding-v4-app-step-funnel --title "feat(admin): expand onboarding v4 funnel stages" --body "## Summary (AI generated)
 
 - expand only the onboarding v4 funnel to Intent, App name, App ID, App icon, Organization details, and Setup reached
 - source the three new stages from console.capgo.app onboarding_step_viewed events and rank de-duplicated v4 attempts by the furthest expanded stage
 - keep v1-v3 funnels and existing daily conversion charts unchanged
 
-## Verification
+## Motivation (AI generated)
 
-- bun lint
+- expose where users drop off inside the app-creation portion of onboarding v4 instead of grouping those interactions into one App details stage
+
+## Business Impact (AI generated)
+
+- make onboarding experiments measurable at each app-creation step while preserving historical v1-v3 reporting
+
+## Test Plan (AI generated)
+
+- bun lint:fix
 - bun lint:backend
 - bun run typecheck:backend
 - bun run typecheck:frontend
@@ -285,6 +293,6 @@ gh pr create --base main --head wolny/onboarding-v4-app-step-funnel --title "fea
 
 The PR body must summarize the six-stage model, v4-only scope, PostHog source, de-duplication change, and verification commands. Do not merge the PR.
 
-- [ ] **Step 6: Run the `pr-ready` workflow**
+- [ ] **Step 5: Run the `pr-ready` workflow**
 
 Observe checks, reviews, mergeability, and unresolved threads. Fix actionable findings, rerun affected local verification, push updates, and restart observation. Report stable-green only after two identical fully green observations at least five minutes apart.
