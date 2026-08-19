@@ -52,6 +52,8 @@ describe('native-aware Capgo release workflow', () => {
 
     const guardedReleaseLookup = decision.slice(previousTagGuardIndex, releaseAsMajorIndex)
     expect(guardedReleaseLookup).toContain('gh release view "$previous_tag"')
+    expect(guardedReleaseLookup).toContain("--json isDraft --jq '.isDraft'")
+    expect(guardedReleaseLookup).toContain('if [ "$release_is_draft" != "false" ]')
     expect(decision.slice(0, previousTagGuardIndex)).not.toContain('gh release view "$previous_tag"')
     expect(decision.slice(releaseAsMajorIndex)).not.toContain('gh release view "$previous_tag"')
     expect(decision).toContain('Could not confirm a completed GitHub Release')
