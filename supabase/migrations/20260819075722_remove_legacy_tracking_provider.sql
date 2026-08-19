@@ -38,20 +38,9 @@ WHERE
 
 UPDATE public.global_stats
 SET
-    completed_shards = (
-        SELECT
-            coalesce(
-                jsonb_agg(markers.marker ORDER BY markers.marker), '[]'::jsonb
-            )
-        FROM
-            jsonb_array_elements_text(
-                public.global_stats.completed_shards
-            ) AS markers (marker)
-        WHERE
-            markers.marker NOT IN (
-                'notifications_logsnag', 'notifications_logsnag_claim'
-            )
-    )
+    completed_shards = completed_shards
+    - 'notifications_logsnag'
+    - 'notifications_logsnag_claim'
 WHERE
     completed_shards ? 'notifications_logsnag'
     OR completed_shards ? 'notifications_logsnag_claim';
