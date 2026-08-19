@@ -36,6 +36,8 @@ describe('native-aware Capgo release workflow', () => {
     expect(decision).toContain('channel="dev"')
     expect(decision).toContain('bunx @capgo/cli@latest build needed --channel "$channel"')
     expect(decision).toContain('release_as=$DEFAULT_RELEASE_AS')
+    expect(decision).toContain('if [ "$exit_code" -ne 1 ]')
+    expect(decision).toContain('exit "$exit_code"')
     expect(decision).toContain("previous_tag=\"$(git describe --tags --match 'capgo-*' --abbrev=0")
     expect(decision).toContain('gh release view "$previous_tag"')
     expect(decision).toContain('release_as=major')
@@ -52,6 +54,7 @@ describe('native-aware Capgo release workflow', () => {
     expect(workflow.indexOf('Deploy OTA bundle to Capgo')).toBeLessThan(
       workflow.indexOf('Create GitHub release'),
     )
+    expect(workflow.match(/needs\.deploy_webapp\.outputs\.native_build_needed == 'true'/g)).toHaveLength(2)
   })
 
   it.concurrent('synchronizes visible versions in every native build request', async () => {
