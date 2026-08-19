@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildFrontendOnboardingDailySeries,
   buildFrontendOnboardingDailySetupCliSeries,
+  buildFrontendOnboardingDailyWelcomeOutcomeSeries,
   buildFrontendOnboardingFunnelStages,
   buildFrontendOnboardingFunnelSummaries,
   buildFrontendOnboardingGraphMetrics,
@@ -64,6 +65,10 @@ describe('admin frontend onboarding dashboard', () => {
       { date: '2026-08-10', v1_attempts: 6, v2_attempts: 3, v3_attempts: 2, v4_attempts: 4 },
       { date: '2026-08-09', v1_attempts: 4, v2_attempts: 2, v3_attempts: 1, v4_attempts: 2 },
     ],
+    daily_welcome_outcomes: [
+      { date: '2026-08-10', welcome_advanced_to_intent: 4, welcome_not_viewed: 2, welcome_did_not_advance: 1 },
+      { date: '2026-08-09', welcome_advanced_to_intent: 2, welcome_not_viewed: 1, welcome_did_not_advance: 3 },
+    ],
     daily_conversions: {
       intent_to_details: [
         { date: '2026-08-09', started: 5, converted: 4, conversion_percent: 80 },
@@ -105,6 +110,9 @@ describe('admin frontend onboarding dashboard', () => {
     deduplicated: {
       daily_attempts: [
         { date: '2026-08-10', v1_attempts: 5, v2_attempts: 2, v3_attempts: 1, v4_attempts: 3 },
+      ],
+      daily_welcome_outcomes: [
+        { date: '2026-08-10', welcome_advanced_to_intent: 3, welcome_not_viewed: 1, welcome_did_not_advance: 1 },
       ],
       funnels: {
         v3: [
@@ -222,6 +230,40 @@ describe('admin frontend onboarding dashboard', () => {
       { date: '2026-08-08', v1_attempts: 1, v2_attempts: 2, v3_attempts: 3 },
     ], 'V1', 'V2', 'V3', 'V4')[3]?.data).toEqual([
       { date: '2026-08-08', value: 0 },
+    ])
+  })
+
+  it.concurrent('adapts daily Welcome outcomes into absolute stacked series', () => {
+    expect(buildFrontendOnboardingDailyWelcomeOutcomeSeries(
+      analytics.daily_welcome_outcomes ?? [],
+      'Advanced',
+      'Welcome not viewed',
+      'Did not advance',
+    )).toEqual([
+      {
+        label: 'Advanced',
+        color: '#10b981',
+        data: [
+          { date: '2026-08-10', value: 4 },
+          { date: '2026-08-09', value: 2 },
+        ],
+      },
+      {
+        label: 'Welcome not viewed',
+        color: '#f59e0b',
+        data: [
+          { date: '2026-08-10', value: 2 },
+          { date: '2026-08-09', value: 1 },
+        ],
+      },
+      {
+        label: 'Did not advance',
+        color: '#f43f5e',
+        data: [
+          { date: '2026-08-10', value: 1 },
+          { date: '2026-08-09', value: 3 },
+        ],
+      },
     ])
   })
 
@@ -633,9 +675,9 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('<PageLoader')
     expect(source.match(/<AdminFilterBar(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source.match(/<AdminStatsCard(?:\s|\/?>)/g)).toHaveLength(4)
-    expect(source.match(/<ChartCard(?:\s|\/?>)/g)).toHaveLength(9)
+    expect(source.match(/<ChartCard(?:\s|\/?>)/g)).toHaveLength(10)
     expect(source.match(/<AdminBarChart(?:\s|\/?>)/g)).toHaveLength(1)
-    expect(source.match(/<AdminStackedBarChart(?:\s|\/?>)/g)).toHaveLength(2)
+    expect(source.match(/<AdminStackedBarChart(?:\s|\/?>)/g)).toHaveLength(3)
     expect(source.match(/<AdminDailyConversionChart(?:\s|\/?>)/g)).toHaveLength(3)
     expect(source.match(/<AdminFunnelChart(?:\s|\/?>)/g)).toHaveLength(2)
     expect(source.match(/<AdminOnboardingJourneyGraph(?:\s|\/?>)/g)).toHaveLength(1)
@@ -762,6 +804,43 @@ describe('admin frontend onboarding dashboard', () => {
     expect(control).toContain(`:aria-label="t('frontend-onboarding-deduplicate-by-user-chart', { chart: props.chartLabel })"`)
     expect(control).toContain('justify-end')
     expect(control).toContain(`t('frontend-onboarding-deduplicate-by-user')`)
+  })
+
+  it.concurrent('renders v4 Welcome outcomes directly below the v4 funnel with an independent de-duplicate control', async () => {
+    const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
+    const service = await readFile(new URL('../src/services/adminFrontendOnboarding.ts', import.meta.url), 'utf8')
+    const messages = await readFile(new URL('../messages/en.json', import.meta.url), 'utf8')
+    const template = source.slice(source.indexOf('<template>'))
+    const funnelIndex = template.indexOf('chart-id="funnel-v4"')
+    const welcomeOutcomesIndex = template.indexOf('chart-id="welcome-outcomes-v4"')
+    const intentDetailsIndex = template.indexOf('chart-id="daily-intent-to-details"')
+
+    expect(source).toContain('const deduplicateWelcomeOutcomes = ref(false)')
+    expect(source).toContain('const displayedWelcomeOutcomes = computed')
+    expect(source).toContain('deduplicateWelcomeOutcomes.value')
+    expect(source).toContain('visibleAnalytics.value?.deduplicated.daily_welcome_outcomes')
+    expect(source).toContain('visibleAnalytics.value?.daily_welcome_outcomes')
+    expect(source).toContain('buildFrontendOnboardingDailyWelcomeOutcomeSeries')
+    expect(source).toContain('const hasWelcomeOutcomeData = computed')
+    expect(source).not.toContain('!Array.isArray(result.daily_welcome_outcomes)')
+    expect(source).not.toContain('!Array.isArray(result.deduplicated?.daily_welcome_outcomes)')
+    expect(service.match(/daily_welcome_outcomes\?: FrontendOnboardingDailyWelcomeOutcomePoint\[\]/g)).toHaveLength(2)
+    expect(funnelIndex).toBeGreaterThanOrEqual(0)
+    expect(welcomeOutcomesIndex).toBeGreaterThan(funnelIndex)
+    expect(welcomeOutcomesIndex).toBeLessThan(intentDetailsIndex)
+
+    const section = template.slice(welcomeOutcomesIndex, intentDetailsIndex)
+    expect(section).toContain(`t('frontend-onboarding-welcome-outcomes-v4')`)
+    expect(section).toContain(`t('frontend-onboarding-welcome-outcomes-v4-description')`)
+    expect(section).toContain(':series="welcomeOutcomeSeries"')
+    expect(section).toContain('accessible-borders')
+    expect(section).toContain('v-model="deduplicateWelcomeOutcomes"')
+    expect(section).toContain(`:chart-label="t('frontend-onboarding-welcome-outcomes-v4')"`)
+    expect(source.match(/deduplicateWelcomeOutcomes/g)).toHaveLength(3)
+    expect(messages).toContain('"frontend-onboarding-welcome-outcomes-v4"')
+    expect(messages).toContain('"frontend-onboarding-welcome-advanced-to-intent"')
+    expect(messages).toContain('"frontend-onboarding-welcome-not-viewed": "Did not view Welcome screen"')
+    expect(messages).toContain('"frontend-onboarding-welcome-did-not-advance"')
   })
 
   it.concurrent('labels v3 fallback data and resolves drop-off labels from the same funnel source', async () => {

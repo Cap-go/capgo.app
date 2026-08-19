@@ -26,6 +26,7 @@ import PageLoader from '~/components/PageLoader.vue'
 import {
   buildFrontendOnboardingDailySeries,
   buildFrontendOnboardingDailySetupCliSeries,
+  buildFrontendOnboardingDailyWelcomeOutcomeSeries,
   buildFrontendOnboardingFunnelStages,
   buildFrontendOnboardingFunnelSummaries,
   buildFrontendOnboardingGraphMetrics,
@@ -49,6 +50,7 @@ const analytics = ref<FrontendOnboardingAnalytics | null>(null)
 const loadError = ref(false)
 const deduplicateDailyAttempts = ref(false)
 const deduplicateV4Funnel = ref(false)
+const deduplicateWelcomeOutcomes = ref(false)
 
 const v4DetailsGraphDefinitions = [
   { key: 'onboarding_app_name_entered' },
@@ -161,6 +163,9 @@ const visibleAnalytics = computed(() => isLoadingStats.value ? null : analytics.
 const displayedDailyAttempts = computed(() => deduplicateDailyAttempts.value
   ? visibleAnalytics.value?.deduplicated.daily_attempts ?? []
   : visibleAnalytics.value?.daily_attempts ?? [])
+const displayedWelcomeOutcomes = computed(() => deduplicateWelcomeOutcomes.value
+  ? visibleAnalytics.value?.deduplicated.daily_welcome_outcomes ?? []
+  : visibleAnalytics.value?.daily_welcome_outcomes ?? [])
 const rawLatestFunnel = computed(() => {
   const funnels = visibleAnalytics.value?.funnels
   const v4 = funnels?.v4
@@ -196,6 +201,12 @@ const dailySeries = computed(() => buildFrontendOnboardingDailySeries(
   t('frontend-onboarding-version-3'),
   t('frontend-onboarding-version-4'),
 ))
+const welcomeOutcomeSeries = computed(() => buildFrontendOnboardingDailyWelcomeOutcomeSeries(
+  displayedWelcomeOutcomes.value,
+  t('frontend-onboarding-welcome-advanced-to-intent'),
+  t('frontend-onboarding-welcome-not-viewed'),
+  t('frontend-onboarding-welcome-did-not-advance'),
+))
 const latestDailyConversions = computed(() => rawLatestFunnel.value.version === 'v4'
   ? visibleAnalytics.value?.v4_daily_conversions ?? visibleAnalytics.value?.daily_conversions
   : visibleAnalytics.value?.daily_conversions)
@@ -209,6 +220,11 @@ const v1FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(
 const v4FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(displayedV4Funnel.value))
 const hasDailyAttempts = computed(() => displayedDailyAttempts.value
   .some(day => day.v1_attempts > 0 || day.v2_attempts > 0 || day.v3_attempts > 0 || (day.v4_attempts ?? 0) > 0))
+const hasWelcomeOutcomeData = computed(() => displayedWelcomeOutcomes.value.some(day => (
+  day.welcome_advanced_to_intent > 0
+  || day.welcome_not_viewed > 0
+  || day.welcome_did_not_advance > 0
+)))
 const setupCliOutcomes = computed(() => visibleAnalytics.value?.v2_v4_setup_cli_outcomes
   ?? visibleAnalytics.value?.v2_v3_setup_cli_outcomes
   ?? {
@@ -573,6 +589,33 @@ displayStore.defaultBack = '/dashboard'
             <AdminChartDeduplicateControl
               v-model="deduplicateV4Funnel"
               :chart-label="displayedFunnelTitle"
+            />
+          </ChartCard>
+
+          <ChartCard
+            chart-id="welcome-outcomes-v4"
+            :title="t('frontend-onboarding-welcome-outcomes-v4')"
+            :is-loading="isLoadingStats"
+            :has-data="hasWelcomeOutcomeData"
+          >
+            <template #header>
+              <div class="min-w-0">
+                <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
+                  {{ t('frontend-onboarding-welcome-outcomes-v4') }}
+                </h2>
+                <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                  {{ t('frontend-onboarding-welcome-outcomes-v4-description') }}
+                </p>
+              </div>
+            </template>
+            <AdminStackedBarChart
+              :series="welcomeOutcomeSeries"
+              :is-loading="isLoadingStats"
+              accessible-borders
+            />
+            <AdminChartDeduplicateControl
+              v-model="deduplicateWelcomeOutcomes"
+              :chart-label="t('frontend-onboarding-welcome-outcomes-v4')"
             />
           </ChartCard>
 

@@ -391,7 +391,7 @@ describe('admin chart card minimize control', () => {
     expect(source).toContain(':title="displayedFunnelTitle"')
     expect(source).toContain(':title="graphTitle"')
     expect(source).toContain(`:title="t('frontend-onboarding-funnel-v1-legacy')"`)
-    expect(source.match(/<ChartCard/g)).toHaveLength(9)
+    expect(source.match(/<ChartCard/g)).toHaveLength(10)
   })
 
   it('assigns a stable chart ID to every admin dashboard graph', () => {
