@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildFrontendOnboardingDailySeries,
   buildFrontendOnboardingDailySetupCliSeries,
+  buildFrontendOnboardingDailyWelcomeOutcomeSeries,
   buildFrontendOnboardingFunnelStages,
   buildFrontendOnboardingFunnelSummaries,
   buildFrontendOnboardingGraphMetrics,
@@ -64,6 +65,10 @@ describe('admin frontend onboarding dashboard', () => {
       { date: '2026-08-10', v1_attempts: 6, v2_attempts: 3, v3_attempts: 2, v4_attempts: 4 },
       { date: '2026-08-09', v1_attempts: 4, v2_attempts: 2, v3_attempts: 1, v4_attempts: 2 },
     ],
+    daily_welcome_outcomes: [
+      { date: '2026-08-10', welcome_advanced_to_intent: 4, welcome_not_viewed: 2, welcome_did_not_advance: 1 },
+      { date: '2026-08-09', welcome_advanced_to_intent: 2, welcome_not_viewed: 1, welcome_did_not_advance: 3 },
+    ],
     daily_conversions: {
       intent_to_details: [
         { date: '2026-08-09', started: 5, converted: 4, conversion_percent: 80 },
@@ -105,6 +110,9 @@ describe('admin frontend onboarding dashboard', () => {
     deduplicated: {
       daily_attempts: [
         { date: '2026-08-10', v1_attempts: 5, v2_attempts: 2, v3_attempts: 1, v4_attempts: 3 },
+      ],
+      daily_welcome_outcomes: [
+        { date: '2026-08-10', welcome_advanced_to_intent: 3, welcome_not_viewed: 1, welcome_did_not_advance: 1 },
       ],
       funnels: {
         v3: [
@@ -222,6 +230,40 @@ describe('admin frontend onboarding dashboard', () => {
       { date: '2026-08-08', v1_attempts: 1, v2_attempts: 2, v3_attempts: 3 },
     ], 'V1', 'V2', 'V3', 'V4')[3]?.data).toEqual([
       { date: '2026-08-08', value: 0 },
+    ])
+  })
+
+  it.concurrent('adapts daily Welcome outcomes into absolute stacked series', () => {
+    expect(buildFrontendOnboardingDailyWelcomeOutcomeSeries(
+      analytics.daily_welcome_outcomes,
+      'Advanced',
+      'Welcome not viewed',
+      'Did not advance',
+    )).toEqual([
+      {
+        label: 'Advanced',
+        color: '#10b981',
+        data: [
+          { date: '2026-08-10', value: 4 },
+          { date: '2026-08-09', value: 2 },
+        ],
+      },
+      {
+        label: 'Welcome not viewed',
+        color: '#f59e0b',
+        data: [
+          { date: '2026-08-10', value: 2 },
+          { date: '2026-08-09', value: 1 },
+        ],
+      },
+      {
+        label: 'Did not advance',
+        color: '#f43f5e',
+        data: [
+          { date: '2026-08-10', value: 1 },
+          { date: '2026-08-09', value: 3 },
+        ],
+      },
     ])
   })
 

@@ -52,6 +52,13 @@ export interface FrontendOnboardingDailyConversionPoint {
   conversion_percent: number | null
 }
 
+export interface FrontendOnboardingDailyWelcomeOutcomePoint {
+  date: string
+  welcome_advanced_to_intent: number
+  welcome_not_viewed: number
+  welcome_did_not_advance: number
+}
+
 export interface FrontendOnboardingKpis {
   attempts: number
   completed: number
@@ -77,6 +84,7 @@ export interface FrontendOnboardingAnalytics {
     v3_attempts: number
     v4_attempts?: number
   }>
+  daily_welcome_outcomes: FrontendOnboardingDailyWelcomeOutcomePoint[]
   deduplicated: {
     daily_attempts: Array<{
       date: string
@@ -85,6 +93,7 @@ export interface FrontendOnboardingAnalytics {
       v3_attempts: number
       v4_attempts?: number
     }>
+    daily_welcome_outcomes: FrontendOnboardingDailyWelcomeOutcomePoint[]
     funnels: {
       v3: FrontendOnboardingFunnelStage[]
       v4?: FrontendOnboardingFunnelStage[]
@@ -238,6 +247,31 @@ export function buildFrontendOnboardingDailySeries(
       label: v4Label,
       color: '#f59e0b',
       data: dailyAttempts.map(({ date, v4_attempts = 0 }) => ({ date, value: v4_attempts })),
+    },
+  ]
+}
+
+export function buildFrontendOnboardingDailyWelcomeOutcomeSeries(
+  points: readonly FrontendOnboardingDailyWelcomeOutcomePoint[],
+  advancedLabel: string,
+  notViewedLabel: string,
+  didNotAdvanceLabel: string,
+): FrontendOnboardingDailySeries[] {
+  return [
+    {
+      label: advancedLabel,
+      color: '#10b981',
+      data: points.map(point => ({ date: point.date, value: point.welcome_advanced_to_intent })),
+    },
+    {
+      label: notViewedLabel,
+      color: '#f59e0b',
+      data: points.map(point => ({ date: point.date, value: point.welcome_not_viewed })),
+    },
+    {
+      label: didNotAdvanceLabel,
+      color: '#f43f5e',
+      data: points.map(point => ({ date: point.date, value: point.welcome_did_not_advance })),
     },
   ]
 }
