@@ -444,7 +444,8 @@ app.post('/', middlewareAuth(), async (c) => {
     orgId: onboardingOrgId,
   })
 
-  // CLI bundle upload warning when the zip is over the 20 MB alert threshold.
+  // CLI bundle upload warning when the zip is over the 20 MB alert threshold
+  // and the zip is actually uploaded (`--delta-only` skips it).
   // PostHog already records `App Too Large`; this Bento signal lets a lifecycle
   // automation email org admins (gated by the `app_too_large` preference).
   const appTooLargeBentoEvent: BentoTrackingPayload | undefined = await buildAppTooLargeTrackedBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)

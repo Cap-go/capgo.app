@@ -2,9 +2,10 @@ import type { BentoTrackingPayload } from './tracking.ts'
 
 /**
  * CLI `bundle upload` emits this when the zipped bundle is over the alert
- * threshold (20 MB) but still under the hard max. PostHog already records it;
- * this helper builds the Bento payload so org admins can get a lifecycle
- * automation / email.
+ * threshold (20 MB) but still under the hard max, and the zip is actually
+ * uploaded (`--delta-only` / `--partial-only` skip it). PostHog already
+ * records it; this helper builds the Bento payload so org admins can get a
+ * lifecycle automation / email.
  */
 export const APP_TOO_LARGE_EVENT = 'App Too Large'
 export const APP_TOO_LARGE_BENTO_EVENT = 'app_too_large'

@@ -433,6 +433,10 @@ async function getChannelsToAssignAfterChecksumCheck(supabase: SupabaseType, app
   return channelsToAssign
 }
 
+function shouldUploadFullZip(options: OptionsUpload): boolean {
+  return !options.partialOnly && !options.deltaOnly
+}
+
 async function prepareBundleFile(path: string, options: OptionsUpload, apikey: string, orgId: string, appid: string, maxUploadLength: number, alertUploadSize: number, publicKeyFromConfig?: string) {
   let ivSessionKey
   let sessionKey
@@ -530,32 +534,38 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
     uploadFail(`The bundle size is ${mbSize} Mb, this is greater than the maximum upload length ${mbSizeMax} Mb, please reduce the size of your bundle`)
   }
   else if (zipped?.byteLength > alertUploadSize) {
-    log.warn(`WARNING !!\nThe bundle size is ${mbSize} Mb, this may take a while to download for users\n`)
-    log.info(`Learn how to optimize your assets https://capgo.app/blog/optimise-your-images-for-updates/\n`)
-
-    if (options.verbose) {
-      log.info(`[Verbose] Bundle size details:`)
-      log.info(`  - Actual size: ${mbSize} MB (${zipped?.byteLength} bytes)`)
-      log.info(`  - Alert threshold: ${Math.floor(alertUploadSize / 1024 / 1024)} MB`)
-      log.info(`  - Maximum allowed: ${mbSizeMax} MB`)
-      log.info(`[Verbose] Sending 'App Too Large' event to analytics...`)
+    if (!shouldUploadFullZip(options)) {
+      if (options.verbose)
+        log.info(`[Verbose] Skipping 'App Too Large' event (delta-only upload, zip is not sent)`)
     }
+    else {
+      log.warn(`WARNING !!\nThe bundle size is ${mbSize} Mb, this may take a while to download for users\n`)
+      log.info(`Learn how to optimize your assets https://capgo.app/blog/optimise-your-images-for-updates/\n`)
 
-    await sendEvent(apikey, {
-      channel: 'app-error',
-      event: 'App Too Large',
-      icon: '🚛',
-      org_id: orgId,
-      tracking_version: 2,
-      tags: {
-        'app-id': appid,
-        'size_mb': mbSize,
-      },
-      notify: false,
-    }, options.verbose)
+      if (options.verbose) {
+        log.info(`[Verbose] Bundle size details:`)
+        log.info(`  - Actual size: ${mbSize} MB (${zipped?.byteLength} bytes)`)
+        log.info(`  - Alert threshold: ${Math.floor(alertUploadSize / 1024 / 1024)} MB`)
+        log.info(`  - Maximum allowed: ${mbSizeMax} MB`)
+        log.info(`[Verbose] Sending 'App Too Large' event to analytics...`)
+      }
 
-    if (options.verbose)
-      log.info(`[Verbose] Event sent successfully`)
+      await sendEvent(apikey, {
+        channel: 'app-error',
+        event: 'App Too Large',
+        icon: '🚛',
+        org_id: orgId,
+        tracking_version: 2,
+        tags: {
+          'app-id': appid,
+          'size_mb': mbSize,
+        },
+        notify: false,
+      }, options.verbose)
+
+      if (options.verbose)
+        log.info(`[Verbose] Event sent successfully`)
+    }
   }
   else if (options.verbose) {
     log.info(`[Verbose] Bundle size OK: ${mbSize} MB (under ${Math.floor(alertUploadSize / 1024 / 1024)} MB alert threshold)`)
@@ -1813,7 +1823,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       log.info(`[Verbose] S3 upload complete, external URL: ${versionData.external_url}`)
   }
   else if (zipped) {
-    if (!options.partialOnly && !options.deltaOnly) {
+    if (shouldUploadFullZip(options)) {
       if (options.verbose)
         log.info(`[Verbose] Starting full bundle upload to Capgo Cloud...`)
       await uploadBundleToCapgoCloud(apikey, supabase, appid, bundle, orgId, zipped, options, options.tusChunkSize)
