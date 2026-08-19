@@ -145,7 +145,7 @@ try {
     assert.deepEqual(result.candidates.map(candidate => candidate.relativeDir), ['products/mobile'])
   })
 
-  await test('discovers Lerna repositories that derive packages from root workspaces', async () => {
+  await test('prefers root npm workspaces when lerna.json omits package globs', async () => {
     const root = fixture('lerna-workspaces')
     writeJson(join(root, 'package.json'), {
       private: true,
