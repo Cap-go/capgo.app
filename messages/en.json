@@ -3043,7 +3043,7 @@
   "frontend-onboarding-welcome-outcomes-v4": "Welcome screen outcomes (v4)",
   "frontend-onboarding-welcome-outcomes-v4-description": "Daily v4 outcomes. Recent Welcome-only attempts remain provisional for 24 hours.",
   "frontend-onboarding-welcome-advanced-to-intent": "Viewed Welcome screen, advanced to Intent",
-  "frontend-onboarding-welcome-not-viewed": "Did not show viewing Welcome screen",
+  "frontend-onboarding-welcome-not-viewed": "Did not view Welcome screen",
   "frontend-onboarding-welcome-did-not-advance": "Viewed Welcome screen, did not advance",
   "frontend-onboarding-graph-v2": "Onboarding graph (v2)",
   "frontend-onboarding-graph-v2-description": "Explore behavior inside each onboarding stage",

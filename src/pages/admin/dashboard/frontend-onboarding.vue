@@ -130,9 +130,7 @@ const loadAnalytics = createFrontendOnboardingAnalyticsLoader(
   async () => {
     const result = await adminStore.fetchStats('frontend_onboarding_analytics')
     if (result && (
-      !Array.isArray(result.daily_welcome_outcomes)
-      || !Array.isArray(result.deduplicated?.daily_attempts)
-      || !Array.isArray(result.deduplicated?.daily_welcome_outcomes)
+      !Array.isArray(result.deduplicated?.daily_attempts)
       || (
         !Array.isArray(result.deduplicated?.funnels?.v4)
         && !Array.isArray(result.deduplicated?.funnels?.v3)

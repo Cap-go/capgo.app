@@ -235,7 +235,7 @@ describe('admin frontend onboarding dashboard', () => {
 
   it.concurrent('adapts daily Welcome outcomes into absolute stacked series', () => {
     expect(buildFrontendOnboardingDailyWelcomeOutcomeSeries(
-      analytics.daily_welcome_outcomes,
+      analytics.daily_welcome_outcomes ?? [],
       'Advanced',
       'Welcome not viewed',
       'Did not advance',
@@ -808,6 +808,7 @@ describe('admin frontend onboarding dashboard', () => {
 
   it.concurrent('renders v4 Welcome outcomes directly below the v4 funnel with an independent de-duplicate control', async () => {
     const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
+    const service = await readFile(new URL('../src/services/adminFrontendOnboarding.ts', import.meta.url), 'utf8')
     const messages = await readFile(new URL('../messages/en.json', import.meta.url), 'utf8')
     const template = source.slice(source.indexOf('<template>'))
     const funnelIndex = template.indexOf('chart-id="funnel-v4"')
@@ -821,8 +822,9 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('visibleAnalytics.value?.daily_welcome_outcomes')
     expect(source).toContain('buildFrontendOnboardingDailyWelcomeOutcomeSeries')
     expect(source).toContain('const hasWelcomeOutcomeData = computed')
-    expect(source).toContain('!Array.isArray(result.daily_welcome_outcomes)')
-    expect(source).toContain('!Array.isArray(result.deduplicated?.daily_welcome_outcomes)')
+    expect(source).not.toContain('!Array.isArray(result.daily_welcome_outcomes)')
+    expect(source).not.toContain('!Array.isArray(result.deduplicated?.daily_welcome_outcomes)')
+    expect(service.match(/daily_welcome_outcomes\?: FrontendOnboardingDailyWelcomeOutcomePoint\[\]/g)).toHaveLength(2)
     expect(funnelIndex).toBeGreaterThanOrEqual(0)
     expect(welcomeOutcomesIndex).toBeGreaterThan(funnelIndex)
     expect(welcomeOutcomesIndex).toBeLessThan(intentDetailsIndex)
@@ -837,7 +839,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source.match(/deduplicateWelcomeOutcomes/g)).toHaveLength(3)
     expect(messages).toContain('"frontend-onboarding-welcome-outcomes-v4"')
     expect(messages).toContain('"frontend-onboarding-welcome-advanced-to-intent"')
-    expect(messages).toContain('"frontend-onboarding-welcome-not-viewed"')
+    expect(messages).toContain('"frontend-onboarding-welcome-not-viewed": "Did not view Welcome screen"')
     expect(messages).toContain('"frontend-onboarding-welcome-did-not-advance"')
   })
 

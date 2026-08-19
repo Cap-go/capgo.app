@@ -84,7 +84,7 @@ export interface FrontendOnboardingAnalytics {
     v3_attempts: number
     v4_attempts?: number
   }>
-  daily_welcome_outcomes: FrontendOnboardingDailyWelcomeOutcomePoint[]
+  daily_welcome_outcomes?: FrontendOnboardingDailyWelcomeOutcomePoint[]
   deduplicated: {
     daily_attempts: Array<{
       date: string
@@ -93,7 +93,7 @@ export interface FrontendOnboardingAnalytics {
       v3_attempts: number
       v4_attempts?: number
     }>
-    daily_welcome_outcomes: FrontendOnboardingDailyWelcomeOutcomePoint[]
+    daily_welcome_outcomes?: FrontendOnboardingDailyWelcomeOutcomePoint[]
     funnels: {
       v3: FrontendOnboardingFunnelStage[]
       v4?: FrontendOnboardingFunnelStage[]
