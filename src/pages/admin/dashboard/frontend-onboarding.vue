@@ -576,7 +576,7 @@ displayStore.defaultBack = '/dashboard'
             <div class="mt-6 h-72 sm:h-80">
               <AdminFunnelChart :stages="v4FunnelStages" />
             </div>
-            <div class="grid grid-cols-2 gap-4 pt-5 mt-5 border-t border-slate-200 md:grid-cols-4 dark:border-slate-700">
+            <div class="grid grid-cols-2 gap-4 pt-5 mt-5 border-t border-slate-200 md:grid-cols-3 xl:grid-cols-6 dark:border-slate-700">
               <div v-for="summary in v4FunnelSummaries" :key="summary.key" class="text-center">
                 <p class="text-xl font-bold text-slate-900 tabular-nums dark:text-white">
                   {{ formatNumberValue(summary.conversion_percent) }}%

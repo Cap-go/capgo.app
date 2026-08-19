@@ -205,8 +205,8 @@ const FUNNEL_STAGE_COLORS: Record<FrontendOnboardingStageKey, string> = {
   details: '#6366f1',
   app_name: '#4f7cff',
   app_id: '#6366f1',
-  app_icon: '#8b5cf6',
-  organization: '#a855f7',
+  app_icon: '#7c3aed',
+  organization: '#8b5cf6',
   setup: '#10b981',
 }
 ```

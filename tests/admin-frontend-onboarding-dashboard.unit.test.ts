@@ -102,8 +102,10 @@ describe('admin frontend onboarding dashboard', () => {
       ],
       v4: [
         { key: 'intent', label: 'Intent', reached: 4, of_start_percent: 100, dropoff_percent: 0 },
-        { key: 'details', label: 'App details', reached: 3, of_start_percent: 75, dropoff_percent: 25 },
-        { key: 'organization', label: 'Organization', reached: 2, of_start_percent: 50, dropoff_percent: 1 / 3 * 100 },
+        { key: 'app_name', label: 'App name', reached: 4, of_start_percent: 100, dropoff_percent: 0 },
+        { key: 'app_id', label: 'App ID', reached: 3, of_start_percent: 75, dropoff_percent: 25 },
+        { key: 'app_icon', label: 'App icon', reached: 2, of_start_percent: 50, dropoff_percent: 1 / 3 * 100 },
+        { key: 'organization', label: 'Organization details', reached: 2, of_start_percent: 50, dropoff_percent: 0 },
         { key: 'setup', label: 'Setup reached', reached: 1, of_start_percent: 25, dropoff_percent: 50 },
       ],
     },
@@ -413,6 +415,14 @@ describe('admin frontend onboarding dashboard', () => {
       { label: 'Organization', value: 3, color: '#8b5cf6' },
       { label: 'Setup reached', value: 2, color: '#10b981' },
     ])
+    expect(buildFrontendOnboardingFunnelStages(analytics.funnels.v4)).toEqual([
+      { label: 'Intent', value: 4, color: '#119eff' },
+      { label: 'App name', value: 4, color: '#4f7cff' },
+      { label: 'App ID', value: 3, color: '#6366f1' },
+      { label: 'App icon', value: 2, color: '#7c3aed' },
+      { label: 'Organization details', value: 2, color: '#8b5cf6' },
+      { label: 'Setup reached', value: 1, color: '#10b981' },
+    ])
   })
 
   it.concurrent('adapts either selected funnel into ordered stage-to-stage conversions', () => {
@@ -447,6 +457,7 @@ describe('admin frontend onboarding dashboard', () => {
       },
     ])
     expect(buildFrontendOnboardingFunnelSummaries(analytics.funnels.v2).map(stage => stage.reached)).toEqual([5, 4, 3, 2])
+    expect(buildFrontendOnboardingFunnelSummaries(analytics.funnels.v4).map(stage => stage.reached)).toEqual([4, 4, 3, 2, 2, 1])
   })
 
   it.concurrent('shows zero conversion for every stage when the selected cohort is empty', () => {
@@ -717,6 +728,7 @@ describe('admin frontend onboarding dashboard', () => {
     const cliOutcomeIndex = template.indexOf(`t('frontend-onboarding-setup-cli-outcomes-v2-v4')`)
     const dailyCliOutcomeIndex = template.indexOf(`t('frontend-onboarding-daily-setup-cli-outcomes-v2-v4')`)
     const legacyIndex = template.indexOf(`t('frontend-onboarding-funnel-v1-legacy')`)
+    expect(template.slice(v4FunnelIndex, intentDetailsChartIndex)).toContain('md:grid-cols-3 xl:grid-cols-6')
     expect(v4FunnelIndex).toBeLessThan(graphIndex)
     expect(v4FunnelIndex).toBeLessThan(intentDetailsChartIndex)
     expect(intentDetailsChartIndex).toBeLessThan(detailsOrganizationChartIndex)
