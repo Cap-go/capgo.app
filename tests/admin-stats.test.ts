@@ -502,7 +502,6 @@ beforeAll(async () => {
       management_email: TEST_EMAIL,
       customer_id: ONBOARDING_CUSTOMER_ID,
       created_at: ONBOARDING_ORG_CREATED_AT,
-      onboarding: { starting_out: false },
     },
     {
       id: ONBOARDING_NO_BUNDLE_ORG_ID,
@@ -527,11 +526,24 @@ beforeAll(async () => {
       management_email: inviteEmail,
       customer_id: ONBOARDING_INVITE_CUSTOMER_ID,
       created_at: ONBOARDING_ORG_CREATED_AT,
-      onboarding: { starting_out: true },
     },
   ])
   if (orgError)
     throw orgError
+
+  const { error: onboardingAnswerError } = await supabase
+    .from('orgs')
+    .update({ onboarding: { starting_out: false } })
+    .eq('id', ONBOARDING_ORG_ID)
+  if (onboardingAnswerError)
+    throw onboardingAnswerError
+
+  const { error: inviteOnboardingAnswerError } = await supabase
+    .from('orgs')
+    .update({ onboarding: { starting_out: true } })
+    .eq('id', ONBOARDING_INVITE_ORG_ID)
+  if (inviteOnboardingAnswerError)
+    throw inviteOnboardingAnswerError
 
   const { error: appError } = await supabase.from('apps').insert({
     owner_org: TRIAL_ORG_ID,
