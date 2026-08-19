@@ -304,6 +304,15 @@ const suggestedAppId = computed(() => {
 })
 const generatedAppId = computed(() => createdApp.value?.app_id || manualAppId.value.trim() || suggestedAppId.value)
 const hasProvidedAppId = computed(() => Boolean(manualAppId.value.trim() || importedStoreAppId.value.trim()))
+const appDetailsPrimaryActionLabel = computed(() => {
+  if (appDetailsStep.value === 'icon')
+    return iconPreview.value ? t('app-onboarding-continue') : t('app-onboarding-skip-icon')
+
+  if (appDetailsStep.value === 'app_id' && !hasProvidedAppId.value)
+    return t('app-onboarding-skip-app-id')
+
+  return t('app-onboarding-continue')
+})
 const appNameInitial = computed(() => Array.from(appName.value.trim())[0]?.toLocaleUpperCase() ?? '')
 const selectedAppIdSource = computed<NonNullable<OnboardingDetailsEventProperties['app_id_source']>>(() => {
   if (manualAppId.value.trim())
@@ -2446,11 +2455,7 @@ defineExpose({
                       @click="continueFromCurrentAppDetailsStep"
                     >
                       <IconLoader v-if="isSubmitting" class="h-4 w-4 animate-spin" />
-                      <span v-else>{{ appDetailsStep === 'icon'
-                        ? iconPreview ? t('app-onboarding-continue') : t('app-onboarding-skip-icon')
-                        : appDetailsStep === 'app_id' && !hasProvidedAppId
-                          ? t('app-onboarding-skip-app-id')
-                          : t('app-onboarding-continue') }}</span>
+                      <span v-else>{{ appDetailsPrimaryActionLabel }}</span>
                       <IconArrowRight v-if="!isSubmitting" class="h-4 w-4" />
                     </button>
                   </div>

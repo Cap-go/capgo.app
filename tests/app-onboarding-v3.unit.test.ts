@@ -155,10 +155,14 @@ describe('pre-organization onboarding v3', () => {
 
   it.concurrent('labels the icon action as skip until an icon is provided', () => {
     const iconAction = sliceBetween(onboardingSource, ':data-test="appDetailsStep === \'app_id\'', '<IconArrowRight v-if="!isSubmitting"')
+    const primaryActionLabel = sliceBetween(onboardingSource, 'const appDetailsPrimaryActionLabel = computed(() => {', 'const appNameInitial = computed')
 
     expect(messages['app-onboarding-skip-icon']).toBe('Skip')
-    expect(iconAction).toContain("appDetailsStep === 'icon'")
-    expect(iconAction).toContain("iconPreview ? t('app-onboarding-continue') : t('app-onboarding-skip-icon')")
+    expect(primaryActionLabel).toContain("if (appDetailsStep.value === 'icon')")
+    expect(primaryActionLabel).toContain("return iconPreview.value ? t('app-onboarding-continue') : t('app-onboarding-skip-icon')")
+    expect(primaryActionLabel).toContain("if (appDetailsStep.value === 'app_id' && !hasProvidedAppId.value)")
+    expect(primaryActionLabel).toContain("return t('app-onboarding-skip-app-id')")
+    expect(iconAction).toContain('{{ appDetailsPrimaryActionLabel }}')
     expect(iconAction).not.toContain("t('app-onboarding-finish-details')")
   })
 
