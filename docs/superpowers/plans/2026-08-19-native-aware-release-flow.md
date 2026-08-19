@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Add failing release-workflow contract tests
+## Task 1: Add failing release-workflow contract tests
 
 **Files:**
 - Create: `tests/capgo-release-workflow.unit.test.ts`
@@ -117,7 +117,7 @@ git add tests/capgo-release-workflow.unit.test.ts
 git commit -m "test(ci): define native-aware release contracts"
 ```
 
-### Task 2: Implement the pre-tag release decision
+## Task 2: Implement the pre-tag release decision
 
 **Files:**
 - Modify: `.github/workflows/bump_version.yml`
@@ -197,7 +197,7 @@ git add .github/workflows/bump_version.yml tests/capgo-release-workflow.unit.tes
 git commit -m "feat(ci): make Capgo version bumps native-aware"
 ```
 
-### Task 3: Publish OTA for native releases and synchronize platform versions
+## Task 3: Publish OTA for native releases and synchronize platform versions
 
 **Files:**
 - Modify: `.github/workflows/build_and_deploy.yml`
@@ -252,7 +252,7 @@ git add .github/workflows/build_and_deploy.yml .github/workflows/build_mobile_an
 git commit -m "feat(ci): publish OTA alongside native releases"
 ```
 
-### Task 4: Verify the complete change and prepare the pull request
+## Task 4: Verify the complete change and prepare the pull request
 
 **Files:**
 - Verify: `.github/workflows/bump_version.yml`
@@ -295,7 +295,7 @@ Expected: only the pre-existing uncommitted `codedb.snapshot` change remains.
 
 ```bash
 git push -u origin wolny/native-aware-release-flow
-gh pr create --repo Cap-go/capgo.app --base main --head wolny/native-aware-release-flow --title "feat(ci): make releases native-aware" --body $'## Summary\n\n- force major Capgo versions for native-incompatible releases\n- upload OTA before publishing the GitHub Release\n- synchronize visible iOS and Android versions for native builds\n\n## Tests\n\n- bunx vitest run tests/capgo-release-workflow.unit.test.ts tests/release-scope.test.ts\n- bun test:unit\n- bun lint'
+gh pr create --repo Cap-go/capgo.app --base main --head wolny/native-aware-release-flow --title "feat(ci): make releases native-aware" --body $'## Summary (AI generated)\n\n- force major Capgo versions for native-incompatible releases\n- upload OTA before publishing the GitHub Release\n- synchronize visible iOS and Android versions for native builds\n\n## Motivation (AI generated)\n\nPrevent native-incompatible changes from being released indefinitely as native-only updates.\n\n## Business Impact (AI generated)\n\nKeep existing users on compatible OTA major lines while native store releases move users onto the next line.\n\n## Test Plan (AI generated)\n\n- bunx vitest run tests/capgo-release-workflow.unit.test.ts tests/release-scope.test.ts\n- bun test:unit\n- bun lint'
 ```
 
 - [ ] **Step 6: Run the `pr-ready` workflow until stable-green**
