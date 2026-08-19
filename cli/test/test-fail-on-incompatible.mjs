@@ -134,6 +134,21 @@ test('--ignore-metadata-check alone does not trigger the conflict', () => {
   assert.doesNotThrow(() => checkValidOptions({ ignoreMetadataCheck: true }))
 })
 
+test('--rollout-advance with --dry-upload is rejected', () => {
+  assert.throws(
+    () => checkValidOptions({ rolloutAdvance: true, dryUpload: true }),
+    (error) => {
+      assert.ok(error instanceof Error, 'expected an Error to be thrown')
+      assert.match(error.message, /--rollout-advance/, 'message should mention --rollout-advance')
+      return true
+    },
+  )
+})
+
+test('--rollout-advance alone does not trigger a dry-upload conflict', () => {
+  assert.doesNotThrow(() => checkValidOptions({ rolloutAdvance: true }))
+})
+
 if (failures > 0) {
   console.error(`\n❌ ${failures} fail-on-incompatible test(s) failed`)
   process.exit(1)
