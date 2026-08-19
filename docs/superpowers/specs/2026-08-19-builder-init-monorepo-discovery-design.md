@@ -62,7 +62,8 @@ Each candidate is a workspace package directory containing one of the three
 supported Capacitor config filenames. Candidates are sorted by their path
 relative to the invocation directory so the prompt is stable.
 
-- One descendant candidate: ask the user to confirm that app.
+- One descendant candidate: ask the user for explicit confirmation; never
+  auto-select that app.
 - Multiple candidates: show a select prompt containing package names and
   relative paths.
 - Cancellation or rejection ends discovery without starting onboarding.
