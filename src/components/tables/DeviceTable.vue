@@ -686,6 +686,8 @@ watch([selectedPlatform, selectedVersionNames, bundleCompareOp, osVersionOp, osV
 }, { deep: true })
 
 watch(bundleCompareOp, (op, previous) => {
+  if (skipFilterReload.value)
+    return
   if ((op === 'in') !== (previous === 'in')) {
     selectedVersionNames.value = []
     return

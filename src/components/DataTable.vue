@@ -87,6 +87,18 @@ const filterModalTitleId = `${useId()}-filters-title`
 const addTooltipId = `${useId()}-add-tooltip`
 const exportMenuId = `${useId()}-export-menu`
 const exportMenuOpen = ref(false)
+
+function closeExportMenu() {
+  exportMenuOpen.value = false
+  const active = document.activeElement
+  if (active instanceof HTMLElement)
+    active.blur()
+}
+
+function exportTable(format: 'csv' | 'json') {
+  closeExportMenu()
+  emit('export', format)
+}
 const slots = useSlots()
 const { t } = useI18n()
 const searchVal = ref(props.search ?? '')
@@ -532,6 +544,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
           class="d-dropdown"
           @focusin="exportMenuOpen = true"
           @focusout="exportMenuOpen = false"
+          @keydown.escape.prevent="closeExportMenu"
         >
           <button
             tabindex="0"
@@ -560,7 +573,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                 class="d-btn d-btn-ghost d-btn-sm w-full justify-start rounded-md px-3 py-2 text-left text-sm font-normal text-slate-700 shadow-none dark:text-slate-200"
                 data-test="data-table-export-csv"
                 :disabled="isLoading || exportLoading"
-                @click="emit('export', 'csv')"
+                @click="exportTable('csv')"
               >
                 {{ t('download-csv') }}
               </button>
@@ -572,7 +585,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                 class="d-btn d-btn-ghost d-btn-sm w-full justify-start rounded-md px-3 py-2 text-left text-sm font-normal text-slate-700 shadow-none dark:text-slate-200"
                 data-test="data-table-export-json"
                 :disabled="isLoading || exportLoading"
-                @click="emit('export', 'json')"
+                @click="exportTable('json')"
               >
                 {{ t('download-json') }}
               </button>
