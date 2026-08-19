@@ -9,7 +9,7 @@ import IconLoader from '~icons/lucide/loader-2'
 import TechnicalTeammateInviteCard from '~/components/dashboard/TechnicalTeammateInviteCard.vue'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { pushEvent } from '~/services/posthog'
+import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -94,7 +94,7 @@ function setLog() {
         tracking_version: 2,
         notify: false,
       }).catch()
-      pushEvent(`user:onboarding-step-${stepToName(step.value)}`, config.supaHost, { org_id: orgId })
+      void sendOnboardingEvent(`user:onboarding-step-${stepToName(step.value)}`, { org_id: orgId })
     }
   }
   if (step.value === 2) {
@@ -134,7 +134,7 @@ function onTechnicalInviteOpened() {
       tracking_version: 2,
       notify: false,
     }).catch()
-    pushEvent(`user:onboarding-alternative-send-invite`, config.supaHost, { org_id: orgId })
+    void sendOnboardingEvent(`user:onboarding-alternative-send-invite`, { org_id: orgId })
   }
 }
 
@@ -164,7 +164,7 @@ async function createDemoApp() {
       tracking_version: 2,
       notify: false,
     }).catch()
-    pushEvent('user:onboarding-create-demo-app', config.supaHost, { org_id: orgId })
+    void sendOnboardingEvent('user:onboarding-create-demo-app', { org_id: orgId })
 
     const { data, error } = await invokeCapgoApi('app/demo', {
       method: 'POST',

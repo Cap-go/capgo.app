@@ -90,6 +90,14 @@ function getTrackingIp(c: Context, ip?: string) {
   return c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for')?.split(',')[0]?.trim()
 }
 
+function getTrackingTimestamp(timestamp: TrackOptions['timestamp']) {
+  if (timestamp === undefined)
+    return undefined
+
+  const date = timestamp instanceof Date ? timestamp : new Date(timestamp)
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
+}
+
 async function executeTracking(c: Context, payload: SendEventToTrackingPayload, options: SendEventToTrackingOptions) {
   const tasks: Array<Promise<void>> = [
     runTrackedCall(c, 'logsnag', () => logsnag(c).track(payload), options.strict),
@@ -104,6 +112,7 @@ async function executeTracking(c: Context, payload: SendEventToTrackingPayload, 
       description: payload.description,
       groups: payload.groups,
       ip: getTrackingIp(c, options.ip),
+      timestamp: getTrackingTimestamp(payload.timestamp),
     }), options.strict))
   }
 

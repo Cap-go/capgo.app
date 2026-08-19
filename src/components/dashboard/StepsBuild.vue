@@ -14,7 +14,7 @@ import IconTerminal from '~icons/lucide/terminal-square'
 import IconAndroid from '~icons/mdi/android'
 import IconApple from '~icons/mdi/apple'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
-import { pushEvent } from '~/services/posthog'
+import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -151,7 +151,7 @@ function setLog() {
         tracking_version: 2,
         notify: false,
       }).catch()
-      pushEvent(`user:onboarding-build-${stepToName(step.value)}`, config.supaHost, { org_id: orgId })
+      void sendOnboardingEvent(`user:onboarding-build-${stepToName(step.value)}`, { org_id: orgId })
     }
   }
   if (step.value === completedStepIndex.value) {

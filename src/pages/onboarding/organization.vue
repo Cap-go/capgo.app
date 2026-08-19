@@ -21,9 +21,9 @@ import OrganizationOnboardingInvite from '~/components/dashboard/OrganizationOnb
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { formatNumberValue } from '~/services/formatLocale'
 import { createOnboardingAppFromDraft } from '~/services/onboardingAppCreate'
+import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { uploadOrgLogoFile } from '~/services/photos'
-import { pushEvent } from '~/services/posthog'
-import { getLocalConfig, useSupabase } from '~/services/supabase'
+import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
@@ -75,7 +75,6 @@ const logoInputRef = useTemplateRef<HTMLInputElement>('logoInput')
 const isAdditionalOrgFlow = ref(false)
 const appDraft = ref(loadOnboardingAppDraft(main.user?.id ?? main.auth?.id))
 const estimatedUsersIndex = ref<number | null>(null)
-const config = getLocalConfig()
 
 // Org-level onboarding intent: what the user wants to do with Capgo first.
 // Persisted on the new org (orgs.onboarding jsonb, keyed by `intent`) by the
@@ -442,16 +441,11 @@ async function createOrganization() {
     createdOrgId.value = data.id
     toast.success(t('org-created-successfully'))
 
-    try {
-      pushEvent('onboarding_intent_selected', config.supaHost, {
-        intent: selectedIntent.value,
-        estimated_mau: selectedUserCountStop.value?.value ?? null,
-        org_id: data.id,
-      })
-    }
-    catch (error) {
-      console.error('Failed to track onboarding intent', error)
-    }
+    void sendOnboardingEvent('onboarding_intent_selected', {
+      intent: selectedIntent.value,
+      ...(selectedUserCountStop.value ? { estimated_mau: selectedUserCountStop.value.value } : {}),
+      org_id: data.id,
+    })
 
     try {
       await organizationStore.fetchOrganizations()

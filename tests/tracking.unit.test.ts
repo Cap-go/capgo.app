@@ -168,6 +168,22 @@ describe('sendEventToTracking', () => {
     }))
   })
 
+  it('preserves a numeric frontend event timestamp when sending to PostHog', async () => {
+    const { sendEventToTracking } = await import('../supabase/functions/_backend/utils/tracking.ts')
+
+    await sendEventToTracking(createContext(), {
+      channel: 'onboarding',
+      event: 'onboarding_step_viewed',
+      notify: false,
+      timestamp: 1_755_600_000_000,
+      user_id: 'user-id',
+    }, { background: false })
+
+    expect(posthogMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      timestamp: '2025-08-19T10:40:00.000Z',
+    }))
+  })
+
   it('can skip PostHog while preserving LogSnag and Bento delivery', async () => {
     const { sendEventToTracking } = await import('../supabase/functions/_backend/utils/tracking.ts')
 

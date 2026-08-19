@@ -8,7 +8,7 @@ import { buildBundleCompatibilityBentoEvent, BUNDLE_INCOMPATIBLE_EVENT, isBreaki
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { buildAiInstructionsCopiedBentoEvent, isFrontendPosthogCapturedEvent } from '../utils/onboarding_copy_tracking.ts'
+import { buildAiInstructionsCopiedBentoEvent } from '../utils/onboarding_copy_tracking.ts'
 import { trackPosthogEvent } from '../utils/posthog.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { broadcastCLIEvent } from '../utils/realtime_broadcast.ts'
@@ -422,9 +422,7 @@ app.post('/', middlewareAuth(), async (c) => {
     bento: bentoEvent,
     sentToBento: Boolean(bentoEvent),
     groups: verifiedOrgId ? { organization: verifiedOrgId } : undefined,
-  }, apikeyId), {
-    posthog: !isFrontendPosthogCapturedEvent(trackedBody.event),
-  })
+  }, apikeyId))
 
   return c.json(BRES)
 })
