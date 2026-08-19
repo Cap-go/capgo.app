@@ -437,12 +437,16 @@ function hasS3UploadConfig(options: OptionsUpload): boolean {
   return !!(options.s3BucketName || options.s3Endpoint || options.s3Region || options.s3Apikey || options.s3Apisecret || options.s3Port || options.s3SSL)
 }
 
+function hasCompleteS3UploadConfig(options: OptionsUpload): boolean {
+  return !!(options.s3BucketName && options.s3Endpoint && options.s3Region && options.s3Apikey && options.s3Apisecret && options.s3Port)
+}
+
 function shouldUploadFullZip(options: OptionsUpload): boolean {
   return !options.partialOnly && !options.deltaOnly
 }
 
 function shouldSendAppTooLargeEvent(options: OptionsUpload): boolean {
-  return shouldUploadFullZip(options) || hasS3UploadConfig(options)
+  return shouldUploadFullZip(options) || hasCompleteS3UploadConfig(options)
 }
 
 async function prepareBundleFile(path: string, options: OptionsUpload, apikey: string, orgId: string, appid: string, maxUploadLength: number, alertUploadSize: number, publicKeyFromConfig?: string) {
