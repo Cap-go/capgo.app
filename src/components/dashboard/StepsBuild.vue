@@ -151,7 +151,7 @@ function setLog() {
         tracking_version: 2,
         notify: false,
       }).catch()
-      void sendOnboardingEvent(`user:onboarding-build-${stepToName(step.value)}`, { org_id: orgId })
+      sendOnboardingEvent(`user:onboarding-build-${stepToName(step.value)}`, { org_id: orgId })
     }
   }
   if (step.value === completedStepIndex.value) {

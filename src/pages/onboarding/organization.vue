@@ -441,7 +441,7 @@ async function createOrganization() {
     createdOrgId.value = data.id
     toast.success(t('org-created-successfully'))
 
-    void sendOnboardingEvent('onboarding_intent_selected', {
+    sendOnboardingEvent('onboarding_intent_selected', {
       intent: selectedIntent.value,
       ...(selectedUserCountStop.value ? { estimated_mau: selectedUserCountStop.value.value } : {}),
       org_id: data.id,

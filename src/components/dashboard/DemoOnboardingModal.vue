@@ -199,7 +199,7 @@ function trackNoAppDemoEvent(event: string, tags: Record<string, string | number
       notify: false,
       tags,
     }).catch()
-    void sendOnboardingEvent(`user:${event}`, { org_id: orgId })
+    sendOnboardingEvent(`user:${event}`, { org_id: orgId, ...tags })
   }
 }
 

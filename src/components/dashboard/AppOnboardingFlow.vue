@@ -1510,7 +1510,7 @@ async function createOrganizationAndApp() {
       return
     }
 
-    void sendOnboardingEvent('onboarding_intent_selected', {
+    sendOnboardingEvent('onboarding_intent_selected', {
       intent: selectedIntent.value,
       estimated_mau: estimatedMau,
       org_id: data.id,

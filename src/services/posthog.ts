@@ -21,37 +21,6 @@ export function posthogLoader(supaHost: string) {
 
 type JsonPrimitive = string | number | boolean | null
 type PostHogProperties = Record<string, JsonPrimitive>
-type PostHogBrowserContext = Record<string, string | number | boolean>
-
-export function getPostHogBrowserContext(): PostHogBrowserContext {
-  const context: PostHogBrowserContext = {}
-
-  try {
-    if (typeof posthog !== 'undefined') {
-      const sessionId = posthog.get_session_id?.()
-      const windowId = posthog.get_property?.('$window_id')
-      const deviceId = posthog.get_property?.('$device_id')
-      if (typeof sessionId === 'string')
-        context.$session_id = sessionId
-      if (typeof windowId === 'string')
-        context.$window_id = windowId
-      if (typeof deviceId === 'string')
-        context.$device_id = deviceId
-    }
-  }
-  catch {
-    // Missing PostHog context must never interrupt product analytics.
-  }
-
-  if (typeof window !== 'undefined') {
-    context.$current_url = window.location.href
-    context.$pathname = window.location.pathname
-  }
-  if (typeof document !== 'undefined')
-    context.$referrer = document.referrer
-
-  return context
-}
 
 export function pushEvent(nameEvent: string, supaHost: string, properties?: PostHogProperties): void {
   if (isLocal(supaHost))

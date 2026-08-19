@@ -1,26 +1,19 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { sendOnboardingEvent } from '../src/services/onboardingTracking'
 import { createOnboardingProgressTracker } from '../src/utils/onboardingProgressAnalytics'
 
 const {
-  getPostHogBrowserContextMock,
-  pushEventMock,
+  getLocalConfigMock,
   sendEventMock,
 } = vi.hoisted(() => ({
-  getPostHogBrowserContextMock: vi.fn(() => ({
-    $current_url: 'https://web.capgo.app/onboarding',
-    $device_id: 'device-id',
-    $pathname: '/onboarding',
-    $referrer: 'https://capgo.app/',
-    $session_id: 'session-id',
-    $window_id: 'window-id',
-  })),
-  pushEventMock: vi.fn(),
+  getLocalConfigMock: vi.fn(() => ({ supaHost: 'https://sb.capgo.app' })),
   sendEventMock: vi.fn(async (_payload: unknown) => null),
 }))
 
-vi.mock('~/services/posthog', () => ({
-  getPostHogBrowserContext: getPostHogBrowserContextMock,
-  pushEvent: pushEventMock,
+vi.mock('~/services/supabase', () => ({
+  getLocalConfig: getLocalConfigMock,
+  isLocal: (supaHost: string) => supaHost !== 'https://sb.capgo.app',
 }))
 
 vi.mock('~/services/tracking', () => ({
@@ -43,14 +36,27 @@ function createTracker() {
 }
 
 beforeEach(() => {
+  getLocalConfigMock.mockReturnValue({ supaHost: 'https://sb.capgo.app' })
+  vi.stubGlobal('posthog', {
+    get_property: (property: string) => property === '$window_id' ? 'window-id' : 'device-id',
+    get_session_id: () => 'session-id',
+  })
+  vi.stubGlobal('window', {
+    location: {
+      href: 'https://web.capgo.app/onboarding?access_token=secret#refresh_token=secret',
+      origin: 'https://web.capgo.app',
+      pathname: '/onboarding',
+    },
+  })
+  vi.stubGlobal('document', { referrer: 'https://capgo.app/' })
   vi.spyOn(Date, 'now').mockReturnValue(1_755_600_000_000)
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
-  pushEventMock.mockClear()
+  vi.unstubAllGlobals()
+  getLocalConfigMock.mockClear()
   sendEventMock.mockClear()
-  getPostHogBrowserContextMock.mockClear()
 })
 
 describe('onboarding backend tracking', () => {
@@ -59,7 +65,6 @@ describe('onboarding backend tracking', () => {
 
     tracker.viewStep('intent')
 
-    expect(pushEventMock).not.toHaveBeenCalled()
     expect(sendEventMock).toHaveBeenCalledOnce()
     expect(sendEventMock).toHaveBeenCalledWith({
       channel: 'onboarding',
@@ -84,6 +89,19 @@ describe('onboarding backend tracking', () => {
       tracking_version: 2,
     })
     expect(sendEventMock.mock.calls[0]?.[0]).not.toHaveProperty('user_id')
+  })
+
+  it('does not dispatch onboarding analytics outside the production Supabase host', () => {
+    getLocalConfigMock.mockReturnValue({ supaHost: 'http://127.0.0.1:54321' })
+    const tracker = createTracker()
+
+    tracker.viewStep('intent')
+
+    expect(sendEventMock).not.toHaveBeenCalled()
+  })
+
+  it('owns the fire-and-forget promise so component callers cannot create unhandled rejections', () => {
+    expect(sendOnboardingEvent('onboarding_step_viewed')).toBeUndefined()
   })
 
   it('sends the AI-copy event once with the verified org and app context needed by Bento', () => {
@@ -113,5 +131,11 @@ describe('onboarding backend tracking', () => {
       timestamp: 1_755_600_000_000,
       tracking_version: 2,
     }))
+  })
+
+  it('keeps demo action metadata in the backend-routed compatibility event', () => {
+    const source = readFileSync(new URL('../src/components/dashboard/DemoOnboardingModal.vue', import.meta.url), 'utf8')
+
+    expect(source).toContain('sendOnboardingEvent(`user:${event}`, { org_id: orgId, ...tags })')
   })
 })

@@ -94,7 +94,7 @@ function setLog() {
         tracking_version: 2,
         notify: false,
       }).catch()
-      void sendOnboardingEvent(`user:onboarding-step-${stepToName(step.value)}`, { org_id: orgId })
+      sendOnboardingEvent(`user:onboarding-step-${stepToName(step.value)}`, { org_id: orgId })
     }
   }
   if (step.value === 2) {
@@ -134,7 +134,7 @@ function onTechnicalInviteOpened() {
       tracking_version: 2,
       notify: false,
     }).catch()
-    void sendOnboardingEvent(`user:onboarding-alternative-send-invite`, { org_id: orgId })
+    sendOnboardingEvent(`user:onboarding-alternative-send-invite`, { org_id: orgId })
   }
 }
 
@@ -164,7 +164,7 @@ async function createDemoApp() {
       tracking_version: 2,
       notify: false,
     }).catch()
-    void sendOnboardingEvent('user:onboarding-create-demo-app', { org_id: orgId })
+    sendOnboardingEvent('user:onboarding-create-demo-app', { org_id: orgId })
 
     const { data, error } = await invokeCapgoApi('app/demo', {
       method: 'POST',

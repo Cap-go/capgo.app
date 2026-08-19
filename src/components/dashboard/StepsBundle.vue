@@ -81,7 +81,7 @@ function setLog() {
         tracking_version: 2,
         notify: false,
       }).catch()
-      void sendOnboardingEvent(`user:onboarding-bundle-${stepToName(step.value)}`, { org_id: orgId })
+      sendOnboardingEvent(`user:onboarding-bundle-${stepToName(step.value)}`, { org_id: orgId })
     }
   }
   if (step.value === 2) {

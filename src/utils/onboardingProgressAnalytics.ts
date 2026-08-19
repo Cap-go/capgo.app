@@ -51,7 +51,7 @@ type AnalyticsProperties = Record<string, AnalyticsPrimitive>
 type CaptureEvent = (name: string, supaHost: string, properties?: AnalyticsProperties) => void
 
 const captureOnboardingEvent: CaptureEvent = (name, _supaHost, properties) => {
-  void sendOnboardingEvent(name, properties)
+  sendOnboardingEvent(name, properties)
 }
 
 interface OnboardingResumeCandidate {
