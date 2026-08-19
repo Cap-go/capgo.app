@@ -71,7 +71,9 @@ describe('native-aware Capgo release workflow', () => {
       previousTagGuardIndex,
     )
     const releaseLineElseIndex = releaseLineLookup.indexOf('else')
-    expect(releaseLineLookup.indexOf("--match 'capgo-*' --exclude '*-alpha.*'")).toBeLessThan(releaseLineElseIndex)
+    const stableTagMatcherIndex = releaseLineLookup.indexOf("--match 'capgo-*' --exclude '*-alpha.*'")
+    expect(stableTagMatcherIndex).toBeGreaterThan(-1)
+    expect(stableTagMatcherIndex).toBeLessThan(releaseLineElseIndex)
     expect(releaseLineLookup.indexOf("--match 'capgo-*-alpha.*'")).toBeGreaterThan(releaseLineElseIndex)
 
     const guardedReleaseLookup = decision.slice(previousTagGuardIndex, releaseAsMajorIndex)
