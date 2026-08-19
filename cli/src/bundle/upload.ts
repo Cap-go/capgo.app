@@ -39,7 +39,7 @@ import { formatUploadChannels, getChannelsToAssignByChecksum, parseUploadChannel
 type SupabaseType = Awaited<ReturnType<typeof createSupabaseClient>>
 type pmType = ReturnType<typeof getPMAndCommand>
 type localConfigType = Awaited<ReturnType<typeof getLocalConfig>>
-type UploadTargetChannel = Pick<Database['public']['Tables']['channels']['Row'], 'id' | 'public' | 'version' | 'rollout_version' | 'rollout_enabled'>
+type UploadTargetChannel = Pick<Database['public']['Tables']['channels']['Row'], 'id' | 'public' | 'version' | 'rollout_version' | 'rollout_enabled' | 'rollout_percentage_bps'>
 
 export type { UploadBundleResult }
 export type { UploadReporter, UploadSpinner }
@@ -959,7 +959,7 @@ async function findUploadTargetChannel(
 ): Promise<UploadTargetChannel | null> {
   const { data, error } = await supabase
     .from('channels')
-    .select('id, public, version, rollout_version, rollout_enabled')
+    .select('id, public, version, rollout_version, rollout_enabled, rollout_percentage_bps')
     .eq('app_id', appid)
     .eq('name', channel)
     .maybeSingle()
@@ -977,8 +977,10 @@ async function preflightRequiredChannelAssignments(
   channels: string[],
   selfAssign = false,
   rolloutPercentageBps?: number,
+  rolloutAdvance = false,
 ): Promise<Map<string, UploadTargetChannel | null>> {
   const uploadTargetChannels = new Map<string, UploadTargetChannel | null>()
+  const assignsRollout = rolloutPercentageBps != null || rolloutAdvance
 
   for (const channel of new Set(channels)) {
     const targetChannel = await findUploadTargetChannel(supabase, appid, channel)
@@ -989,7 +991,7 @@ async function preflightRequiredChannelAssignments(
       if (!canPromoteTargetChannel)
         uploadFail('Cannot set channel because this API key lacks channel.promote_bundle for the target channel')
 
-      const requiresSettingsUpdate = selfAssign || rolloutPercentageBps != null
+      const requiresSettingsUpdate = selfAssign || assignsRollout
       if (requiresSettingsUpdate) {
         const canUpdateChannelSettings = await hasCliPermission(supabase, apikey, 'channel.update_settings', { appId: appid, channelId: targetChannel.id })
         if (!canUpdateChannelSettings) {
@@ -999,13 +1001,15 @@ async function preflightRequiredChannelAssignments(
         }
       }
 
-      if (rolloutPercentageBps != null && !targetChannel.version)
+      if (assignsRollout && !targetChannel.version)
         uploadFail(`Cannot set rollout, channel ${channel} needs a stable bundle before using progressive rollout`)
+      if (rolloutAdvance && targetChannel.rollout_version == null)
+        uploadFail(`Cannot advance rollout, channel ${channel} has no rollout target to promote to stable`)
 
       continue
     }
 
-    if (rolloutPercentageBps != null)
+    if (assignsRollout)
       uploadFail(`Cannot set rollout, channel ${channel} must already exist with a stable bundle`)
 
     const canCreateChannel = await hasCliPermission(supabase, apikey, 'app.create_channel', { appId: appid })
@@ -1211,11 +1215,14 @@ async function setRolloutVersionInChannel(
   rolloutCacheTtlSeconds?: number,
   selfAssign?: boolean,
   cliHost?: { supaHost?: string, supaAnon?: string },
+  promoteCurrentRollout = false,
 ): Promise<boolean> {
   if (!targetChannel)
     uploadFail(`Cannot set rollout, channel ${channel} must already exist with a stable bundle`)
   if (!targetChannel.version)
     uploadFail(`Cannot set rollout, channel ${channel} needs a stable bundle before using progressive rollout`)
+  if (promoteCurrentRollout && targetChannel.rollout_version == null)
+    uploadFail(`Cannot advance rollout, channel ${channel} has no rollout target to promote to stable`)
 
   const versionId = await getVersionIdForChannelUpdate(supabase, apikey, appid, bundle)
   const [canPromote, canUpdateSettings] = await Promise.all([
@@ -1237,6 +1244,7 @@ async function setRolloutVersionInChannel(
       rolloutVersion: bundle,
       rolloutPercentageBps,
       rolloutEnabled: rolloutPercentageBps > 0,
+      ...(promoteCurrentRollout ? { promoteToStable: true } : {}),
       ...(shouldResumeSameRollout ? { rolloutPaused: false } : {}),
       ...(rolloutCacheTtlSeconds != null ? { rolloutCacheTtlSeconds } : {}),
       ...(selfAssign ? { allow_device_self_set: true } : {}),
@@ -1250,7 +1258,10 @@ async function setRolloutVersionInChannel(
   }
 
   const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${targetChannel.id}`
-  log.info(`Set ${appid} channel ${channel} rollout target to @${bundle} (${formatRolloutPercentage(rolloutPercentageBps)})`)
+  if (promoteCurrentRollout)
+    log.info(`Promoted the previous rollout to stable on ${channel} and set @${bundle} as the new rollout target (${formatRolloutPercentage(rolloutPercentageBps)})`)
+  else
+    log.info(`Set ${appid} channel ${channel} rollout target to @${bundle} (${formatRolloutPercentage(rolloutPercentageBps)})`)
   if (displayBundleUrl)
     log.info(`Bundle url: ${bundleUrl}`)
   return true
@@ -1517,7 +1528,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       log.info(`  - IV Session Key: ${preparedBundle.ivSessionKey ? 'present' : 'none'}`)
       log.info(`  - Key ID: ${preparedBundle.keyId || 'none'}`)
     }
-    const shouldCheckChecksum = !options.ignoreChecksumCheck && rolloutPercentageBps == null
+    const shouldCheckChecksum = !options.ignoreChecksumCheck && rolloutPercentageBps == null && !options.rolloutAdvance
     if (shouldCheckChecksum) {
       if (options.verbose)
         log.info(`[Verbose] Checking for duplicate checksum...`)
@@ -1614,7 +1625,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   }
   const channelAssignmentRequired = channelsToAssign.length > 0
   const uploadTargetChannels = channelAssignmentRequired
-    ? await preflightRequiredChannelAssignments(supabase, apikey, appid, channelsToAssign, !!options.selfAssign, rolloutPercentageBps)
+    ? await preflightRequiredChannelAssignments(supabase, apikey, appid, channelsToAssign, !!options.selfAssign, rolloutPercentageBps, !!options.rolloutAdvance)
     : new Map<string, UploadTargetChannel | null>()
   const versionData = {
     name: bundle,
@@ -1959,8 +1970,10 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     const uploadTargetChannel = uploadTargetChannels.has(targetChannel)
       ? uploadTargetChannels.get(targetChannel) ?? null
       : await findUploadTargetChannel(supabase, appid, targetChannel)
-    const targetChannelVersionSet = rolloutPercentageBps != null
-      ? await setRolloutVersionInChannel(supabase, apikey, !!options.bundleUrl, bundle, targetChannel, appid, localConfig, uploadTargetChannel, rolloutPercentageBps, options.rolloutCacheTtlSeconds, options.selfAssign, options)
+    const shouldAssignRollout = options.rolloutAdvance || rolloutPercentageBps != null
+    const nextRolloutPercentageBps = rolloutPercentageBps ?? uploadTargetChannel?.rollout_percentage_bps ?? 0
+    const targetChannelVersionSet = shouldAssignRollout
+      ? await setRolloutVersionInChannel(supabase, apikey, !!options.bundleUrl, bundle, targetChannel, appid, localConfig, uploadTargetChannel, nextRolloutPercentageBps, options.rolloutCacheTtlSeconds, options.selfAssign, options, !!options.rolloutAdvance)
       : await setVersionInChannel(supabase, apikey, !!options.bundleUrl, bundle, targetChannel, userId, orgId, appid, localConfig, uploadTargetChannel, channelAssignmentRequired, options.selfAssign, options)
     if (targetChannelVersionSet)
       channelVersionSet.add(targetChannel)
@@ -2098,7 +2111,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
  */
 export function checkValidOptions(options: OptionsUpload) {
   const noKey = options.key === false
-  const hasUploadRollout = options.rollout != null || options.rolloutPercentageBps != null
+  const hasUploadRollout = options.rollout != null || options.rolloutPercentageBps != null || options.rolloutAdvance === true
   const forceCrc32 = options.forceCrc32Checksum === true
   const hasEncryptionKey = (options.keyV2 || options.keyDataV2 || existsSync(baseKeyV2))
 
@@ -2150,10 +2163,10 @@ export function checkValidOptions(options: OptionsUpload) {
     uploadFail('Rollout cache TTL seconds must be between 60 and 31536000')
   }
   if (hasUploadRollout && options.dryUpload) {
-    uploadFail('You cannot use --rollout with --dry-upload because dry upload does not update channels')
+    uploadFail('You cannot use --rollout or --rollout-advance with --dry-upload because dry upload does not update channels')
   }
   if (hasUploadRollout && options.deleteLinkedBundleOnUpload) {
-    uploadFail('You cannot use --rollout with --delete-linked-bundle-on-upload because rollout needs the stable channel bundle as fallback')
+    uploadFail('You cannot use --rollout or --rollout-advance with --delete-linked-bundle-on-upload because rollout needs the stable channel bundle as fallback')
   }
   if (forceCrc32 && hasEncryptionKey && !noKey) {
     uploadFail('You cannot use --force-crc32-checksum when encryption is enabled. Remove the flag or disable encryption.')

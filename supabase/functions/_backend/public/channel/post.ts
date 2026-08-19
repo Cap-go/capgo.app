@@ -484,16 +484,26 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
   }
 
   if (body.promoteToStable) {
-    const promotedVersion = channel.rollout_version ?? existingRolloutVersion
+    const promotedVersion = existingRolloutVersion
     if (!promotedVersion) {
       throw simpleError('missing_rollout_version', 'Cannot promote without a rollout version', { app_id: body.app_id, channel: body.channel })
     }
     channel.version = promotedVersion
-    channel.rollout_version = null
-    channel.rollout_enabled = false
-    channel.rollout_percentage_bps = 0
-    channel.rollout_paused_at = null
-    channel.rollout_pause_reason = null
+    // A new rolloutVersion on the same request is the next candidate, not the
+    // bundle being promoted. Promote always uses the existing leftover target.
+    if (channel.rollout_version) {
+      if (body.rolloutEnabled == null)
+        channel.rollout_enabled = true
+      channel.rollout_paused_at = null
+      channel.rollout_pause_reason = null
+    }
+    else {
+      channel.rollout_version = null
+      channel.rollout_enabled = false
+      channel.rollout_percentage_bps = 0
+      channel.rollout_paused_at = null
+      channel.rollout_pause_reason = null
+    }
   }
 
   // Disabling progressive rollout always unlinks the second bundle (ignore any parallel rolloutVersion).
