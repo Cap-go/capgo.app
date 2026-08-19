@@ -33,7 +33,7 @@ The CLI invocation remains `bunx @capgo/cli@latest`.
 
 ### Preventing repeated major bumps
 
-When `build needed` returns `1`, the bump job finds the latest reachable `capgo-*` tag. If that tag exists but has no published, non-draft GitHub Release, the bump job exits with an error before invoking `standard-version`.
+When `build needed` returns `1`, the bump job finds the latest reachable Capgo tag on the current release line: stable tags on `main`, or `-alpha` tags on `development`. If that tag exists but its published, non-draft GitHub Release cannot be confirmed, the bump job exits with an error before invoking `standard-version`.
 
 The check does not retry or dispatch any workflow. It only prevents a second version bump. The existing incomplete tag remains available for a manual rerun of its deployment.
 
@@ -88,7 +88,7 @@ Workflow contract tests must prove that:
 - The bump job still depends on successful scoped tests.
 - Stable and development branches select `production` and `dev` respectively.
 - Exit code `0` preserves the conventional release severity.
-- Exit code `1` checks the latest reachable Capgo tag's GitHub Release and selects `major` only when allowed.
+- Exit code `1` checks the latest reachable Capgo tag on the current stable or alpha release line and selects `major` only when its GitHub Release can be confirmed.
 - Unexpected exit codes fail before `standard-version`.
 - The tagged workflow uploads OTA without a native-compatibility condition.
 - GitHub Release creation remains ordered after OTA upload.

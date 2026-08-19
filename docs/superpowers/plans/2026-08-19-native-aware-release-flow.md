@@ -64,8 +64,10 @@ describe('native-aware Capgo release workflow', () => {
     expect(decision).toContain('channel="dev"')
     expect(decision).toContain('bunx @capgo/cli@latest build needed --channel "$channel"')
     expect(decision).toContain('release_as=$DEFAULT_RELEASE_AS')
-    expect(decision).toContain("previous_tag=\"$(git describe --tags --match 'capgo-*' --abbrev=0")
+    expect(decision).toContain("--match 'capgo-*' --exclude '*-alpha.*'")
+    expect(decision).toContain("--match 'capgo-*-alpha.*'")
     expect(decision).toContain('gh release view "$previous_tag"')
+    expect(decision).toContain('Could not confirm a completed GitHub Release')
     expect(decision).toContain('release_as=major')
     expect(decision).toContain('exit 1')
     expect(workflow).toContain('CAPGO_RELEASE_AS: ${{ steps.capgo_version.outputs.release_as }}')
@@ -155,10 +157,14 @@ git commit -m "test(ci): define native-aware release contracts"
             exit "$exit_code"
           fi
 
-          previous_tag="$(git describe --tags --match 'capgo-*' --abbrev=0 2>/dev/null || true)"
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            previous_tag="$(git describe --tags --match 'capgo-*' --exclude '*-alpha.*' --abbrev=0 2>/dev/null || true)"
+          else
+            previous_tag="$(git describe --tags --match 'capgo-*-alpha.*' --abbrev=0 2>/dev/null || true)"
+          fi
           if [ -n "$previous_tag" ]; then
-            if ! release_is_draft="$(gh release view "$previous_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
-              echo "::error::$previous_tag has no completed GitHub Release. No new version will be created."
+            if ! release_is_draft="$(gh release view "$previous_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"; then
+              echo "::error::Could not confirm a completed GitHub Release for $previous_tag. No new version will be created."
               exit 1
             fi
             if [ "$release_is_draft" != "false" ]; then
