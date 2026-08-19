@@ -213,7 +213,6 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Deploy OTA bundle to Capgo
-        if: steps.release_check.outputs.native_build_needed == 'false'
         run: bunx @capgo/cli@latest bundle upload --channel ${{ env.CHANNEL }} --delta
         env:
           CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}
@@ -430,7 +429,7 @@ jobs:
           P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
           BUILD_OUTPUT_UPLOAD_ENABLED: "true"
           BUILD_OUTPUT_RETENTION_SECONDS: "604800"
-        run: bunx @capgo/cli@latest build request --platform ios --path . --ai-analytics
+        run: bunx @capgo/cli@latest build request --platform ios --path . --sync-ios-version --ai-analytics
 
   deploy_native_android:
     needs: [changes, supabase_deploy, deploy_webapp]
@@ -474,4 +473,4 @@ jobs:
           KEYSTORE_STORE_PASSWORD: ${{ secrets.KEYSTORE_STORE_PASSWORD }}
           BUILD_OUTPUT_UPLOAD_ENABLED: "true"
           BUILD_OUTPUT_RETENTION_SECONDS: "604800"
-        run: bunx @capgo/cli@latest build request --platform android --path . --ai-analytics
+        run: bunx @capgo/cli@latest build request --platform android --path . --sync-android-version --ai-analytics
