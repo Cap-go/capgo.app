@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import * as builderOnboardingCommand from '../src/build/onboarding/command.ts'
 import {
   discoverCapacitorProjects,
   hasCapacitorConfig,
@@ -249,6 +250,41 @@ try {
 
     assert.equal(selected?.dir, candidates[1].dir)
     assert.equal(cancelled, undefined)
+  })
+
+  await test('changes into the selected app and keeps the invocation root on cancellation', async () => {
+    assert.equal(typeof builderOnboardingCommand.discoverBuilderProjectFromInvocationRoot, 'function')
+    const root = fixture('command-handoff')
+    writeJson(join(root, 'package.json'), { private: true, workspaces: ['apps/*'] })
+    const appDir = addCapacitorApp(root, 'apps/mobile', '@example/mobile', 'com.example.mobile')
+    const previousCwd = process.cwd()
+
+    try {
+      process.chdir(root)
+      const selected = await builderOnboardingCommand.discoverBuilderProjectFromInvocationRoot(
+        { enableProjectDiscovery: true },
+        {
+          confirm: async () => true,
+          select: async () => assert.fail('select must not run'),
+        },
+      )
+      assert.equal(selected, 'ready')
+      assert.equal(realpathSync(process.cwd()), realpathSync(appDir))
+
+      process.chdir(root)
+      const cancelled = await builderOnboardingCommand.discoverBuilderProjectFromInvocationRoot(
+        { enableProjectDiscovery: true },
+        {
+          confirm: async () => false,
+          select: async () => assert.fail('select must not run'),
+        },
+      )
+      assert.equal(cancelled, 'cancelled')
+      assert.equal(realpathSync(process.cwd()), realpathSync(root))
+    }
+    finally {
+      process.chdir(previousCwd)
+    }
   })
 
   await test('enables workspace discovery only for the direct build init entrypoint', () => {

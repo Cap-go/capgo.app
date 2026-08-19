@@ -19,6 +19,7 @@ import { checkForCliUpdate, manualUpdateHint, runUpdateAndReexec } from './self-
 import { resolveSupabaseReplayUrl, startInitReplay } from '../../init/replay.js'
 import { discoverCapacitorProjects, hasCapacitorConfig } from './project-discovery.js'
 import { selectCapacitorProject } from './project-selection.js'
+import type { BuilderProjectPrompts } from './project-selection.js'
 import type { OnboardingResult } from './types.js'
 export interface OnboardingBuilderOptions {
   analytics?: boolean
@@ -67,7 +68,24 @@ function projectCandidateLabel(candidate: { packageName?: string, relativeDir: s
 
 type BuilderProjectResolution = 'ready' | 'cancelled' | 'not-found'
 
-async function discoverBuilderProjectFromInvocationRoot(options: OnboardingBuilderOptions): Promise<BuilderProjectResolution> {
+const defaultBuilderProjectPrompts: BuilderProjectPrompts = {
+  confirm: candidate => confirm({
+    message: `We found a Capacitor app at ${candidate.relativeDir}. Is this the correct app?`,
+    initialValue: true,
+  }),
+  select: candidates => select({
+    message: 'Which Capacitor app do you want to set up?',
+    options: candidates.map(candidate => ({
+      value: candidate.dir,
+      label: projectCandidateLabel(candidate),
+    })),
+  }),
+}
+
+export async function discoverBuilderProjectFromInvocationRoot(
+  options: OnboardingBuilderOptions,
+  prompts: BuilderProjectPrompts = defaultBuilderProjectPrompts,
+): Promise<BuilderProjectResolution> {
   if (!shouldDiscoverBuilderProject(options) || hasCapacitorConfig(process.cwd()))
     return 'ready'
 
@@ -82,19 +100,7 @@ async function discoverBuilderProjectFromInvocationRoot(options: OnboardingBuild
 
   const count = discovery.candidates.length
   progress.stop(`Found ${count} Capacitor ${count === 1 ? 'app' : 'apps'}`)
-  const selectedProject = await selectCapacitorProject(discovery.candidates, {
-    confirm: candidate => confirm({
-      message: `We found a Capacitor app at ${candidate.relativeDir}. Is this the correct app?`,
-      initialValue: true,
-    }),
-    select: candidates => select({
-      message: 'Which Capacitor app do you want to set up?',
-      options: candidates.map(candidate => ({
-        value: candidate.dir,
-        label: projectCandidateLabel(candidate),
-      })),
-    }),
-  })
+  const selectedProject = await selectCapacitorProject(discovery.candidates, prompts)
 
   if (!selectedProject) {
     log.info('Capgo build onboarding cancelled. Re-run `npx @capgo/cli@latest build init` when you are ready.')
