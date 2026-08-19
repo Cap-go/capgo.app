@@ -295,7 +295,7 @@ const onboardingGraphV4 = computed<AdminOnboardingJourneyGraphConfig>(() => {
   const { funnel, nodes: interactionNodes } = onboardingGraphSource.value
   const stage = (key: FrontendOnboardingStageKey) => funnel.find(item => item.key === key)
   const intent = stage('intent')
-  const details = stage('details')
+  const details = stage(onboardingGraphSource.value.version === 'v4' ? 'app_name' : 'details')
   const organization = stage('organization')
   const setup = stage('setup')
   const parentPercent = (current: number, previous: number) => previous > 0 ? current / previous * 100 : 0

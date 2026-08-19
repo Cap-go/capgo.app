@@ -715,6 +715,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('buildFrontendOnboardingGraphMetrics')
     expect(source).toContain('visibleAnalytics.value?.v4_graph?.nodes')
     expect(source).toContain('visibleAnalytics.value?.v3_graph?.nodes')
+    expect(source).toContain("const details = stage(onboardingGraphSource.value.version === 'v4' ? 'app_name' : 'details')")
     expect(source).not.toContain('onboardingGraphV4Demo')
     expect(source).toContain('buildFrontendOnboardingFunnelSummaries')
     expect(template).toContain('summary.conversion_percent')
