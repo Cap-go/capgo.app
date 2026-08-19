@@ -1382,6 +1382,51 @@ describe('/private/admin_stats', () => {
     expect(exclusiveEndData.registration_source_trend.some(row => row.date === '2026-02-02')).toBe(false)
   })
 
+  it.concurrent('returns daily starting-out answers and excludes missing or non-boolean values', async () => {
+    const supabase = getSupabaseClient()
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
+    const orgs = [
+      { id: randomUUID(), created_at: '2096-08-14T08:00:00.000Z', onboarding: { starting_out: true } },
+      { id: randomUUID(), created_at: '2096-08-14T09:00:00.000Z', onboarding: { starting_out: true } },
+      { id: randomUUID(), created_at: '2096-08-14T10:00:00.000Z', onboarding: { starting_out: false } },
+      { id: randomUUID(), created_at: '2096-08-14T11:00:00.000Z', onboarding: { intent: 'ota' } },
+      { id: randomUUID(), created_at: '2096-08-14T12:00:00.000Z', onboarding: { starting_out: 'true' } },
+      { id: randomUUID(), created_at: '2096-08-15T08:00:00.000Z', onboarding: { starting_out: false } },
+    ]
+
+    try {
+      const { error } = await supabase.from('orgs').insert(orgs.map((org, index) => ({
+        ...org,
+        created_by: USER_ID,
+        name: `Admin starting out ${suffix} ${index}`,
+        management_email: `admin-starting-out-${suffix}-${index}@capgo.app`,
+      })))
+      if (error)
+        throw error
+
+      const data = await getOnboardingFunnelDirect(
+        '2096-08-14T00:00:00.000Z',
+        '2096-08-16T00:00:00.000Z',
+      )
+
+      expect(data.starting_out_trend).toEqual([
+        {
+          date: '2096-08-14',
+          starting_out_true: 2,
+          starting_out_false: 1,
+        },
+        {
+          date: '2096-08-15',
+          starting_out_true: 0,
+          starting_out_false: 1,
+        },
+      ])
+    }
+    finally {
+      await supabase.from('orgs').delete().in('id', orgs.map(org => org.id))
+    }
+  })
+
   it('returns a daily breakdown of app onboarding methods and CLI outcomes', async () => {
     const supabase = getSupabaseClient()
     const suffix = randomUUID().replaceAll('-', '').slice(0, 12)

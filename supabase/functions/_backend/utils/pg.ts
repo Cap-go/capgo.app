@@ -3228,6 +3228,11 @@ export interface AdminOnboardingFunnel {
     invite_registrations: number
     without_profile: number
   }>
+  starting_out_trend: Array<{
+    date: string
+    starting_out_true: number
+    starting_out_false: number
+  }>
   wizard_dropoff: AdminOnboardingWizardDropoff[]
   onboarding_method_trend: Array<{
     date: string
@@ -3365,6 +3370,17 @@ export async function getAdminOnboardingFunnel(
           AND u.created_via_invite = false
         GROUP BY o.created_at::date
       ),
+      daily_starting_out AS (
+        SELECT
+          o.created_at::date as date,
+          COUNT(*) FILTER (WHERE o.onboarding->'starting_out' = 'true'::jsonb)::int as starting_out_true,
+          COUNT(*) FILTER (WHERE o.onboarding->'starting_out' = 'false'::jsonb)::int as starting_out_false
+        FROM public.orgs o
+        WHERE o.created_at >= ${start_date}::timestamptz
+          AND o.created_at < ${end_date}::timestamptz
+          AND o.onboarding->'starting_out' IN ('true'::jsonb, 'false'::jsonb)
+        GROUP BY o.created_at::date
+      ),
       daily_apps AS (
         SELECT o.created_at::date as date, COUNT(DISTINCT o.id)::int as orgs_created_app
         FROM orgs o
@@ -3420,6 +3436,8 @@ export async function getAdminOnboardingFunnel(
         ds.date,
         COALESCE(dregs.new_registrations, 0) as new_registrations,
         COALESCE(dorgs.new_orgs, 0) as new_orgs,
+        COALESCE(dstarting.starting_out_true, 0) as starting_out_true,
+        COALESCE(dstarting.starting_out_false, 0) as starting_out_false,
         COALESCE(dapps.orgs_created_app, 0) as orgs_created_app,
         COALESCE(dchannels.orgs_created_channel, 0) as orgs_created_channel,
         COALESCE(dbundles.orgs_created_bundle, 0) as orgs_created_bundle,
@@ -3427,6 +3445,7 @@ export async function getAdminOnboardingFunnel(
       FROM date_series ds
       LEFT JOIN daily_registrations dregs ON dregs.date = ds.date
       LEFT JOIN daily_orgs dorgs ON dorgs.date = ds.date
+      LEFT JOIN daily_starting_out dstarting ON dstarting.date = ds.date
       LEFT JOIN daily_apps dapps ON dapps.date = ds.date
       LEFT JOIN daily_channels dchannels ON dchannels.date = ds.date
       LEFT JOIN daily_bundles dbundles ON dbundles.date = ds.date
@@ -3692,6 +3711,12 @@ export async function getAdminOnboardingFunnel(
       without_profile: Number(row.without_profile) || 0,
     }))
 
+    const startingOutTrend = trendResult.rows.map((row: any) => ({
+      date: row.date instanceof Date ? row.date.toISOString().split('T')[0] : String(row.date),
+      starting_out_true: Number(row.starting_out_true) || 0,
+      starting_out_false: Number(row.starting_out_false) || 0,
+    }))
+
     const onboardingMethodTrend = onboardingMethodTrendResult.rows.map((row: any) => ({
       date: row.date instanceof Date ? row.date.toISOString().split('T')[0] : String(row.date),
       manual: Number(row.manual) || 0,
@@ -3739,6 +3764,7 @@ export async function getAdminOnboardingFunnel(
       trend,
       invite_trend: inviteTrend,
       registration_source_trend: registrationSourceTrend,
+      starting_out_trend: startingOutTrend,
       wizard_dropoff: buildAdminOnboardingWizardDropoff(wizardDropoffResult.rows as Array<{ step?: unknown, count?: unknown }>),
       onboarding_method_trend: onboardingMethodTrend,
       onboarding_outcome_trend: onboardingOutcomeTrend,
@@ -3777,6 +3803,7 @@ export async function getAdminOnboardingFunnel(
       trend: [],
       invite_trend: [],
       registration_source_trend: [],
+      starting_out_trend: [],
       wizard_dropoff: buildAdminOnboardingWizardDropoff([]),
       onboarding_method_trend: [],
       onboarding_outcome_trend: [],

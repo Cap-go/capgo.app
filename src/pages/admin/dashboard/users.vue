@@ -80,6 +80,11 @@ interface OnboardingFunnelData {
     org_joins_existing_account: number
   }>
   registration_source_trend: RegistrationSourceTrendPoint[]
+  starting_out_trend: Array<{
+    date: string
+    starting_out_true: number
+    starting_out_false: number
+  }>
   wizard_dropoff: Array<{
     step: string
     count: number
@@ -1061,6 +1066,33 @@ const wizardDropoffLabels = computed(() => wizardDropoffEntries.value.map(entry 
 const wizardDropoffValues = computed(() => wizardDropoffEntries.value.map(entry => Number(entry.count) || 0))
 const hasWizardDropoff = computed(() => wizardDropoffValues.value.some(count => count > 0))
 
+const startingOutTrendSeries = computed(() => {
+  const trend = onboardingFunnelData.value?.starting_out_trend ?? []
+  return [
+    {
+      label: t('starting-out-no-users'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.starting_out_true) || 0,
+      })),
+      color: '#3b82f6',
+    },
+    {
+      label: t('starting-out-existing-users'),
+      data: trend.map(item => ({
+        date: item.date,
+        value: Number(item.starting_out_false) || 0,
+      })),
+      color: '#f97316',
+    },
+  ]
+})
+const hasStartingOutTrendData = computed(() => (
+  onboardingFunnelData.value?.starting_out_trend.some(item => (
+    (Number(item.starting_out_true) || 0) + (Number(item.starting_out_false) || 0) > 0
+  )) ?? false
+))
+
 // Onboarding funnel trend for multi-line chart
 function normalizeTrendDate(value: string) {
   return value.includes('T') ? value.split('T')[0] : value
@@ -1440,6 +1472,21 @@ displayStore.defaultBack = '/dashboard'
               :values="wizardDropoffValues"
               :label="t('onboarding-wizard-dropoff')"
               value-mode="count"
+              :is-loading="isLoadingOnboardingFunnel"
+            />
+          </ChartCard>
+
+          <ChartCard
+            chart-id="organizations-by-starting-out"
+            :title="t('organizations-by-starting-out')"
+            :is-loading="isLoadingOnboardingFunnel"
+            :has-data="hasStartingOutTrendData"
+          >
+            <p class="mb-3 text-sm text-slate-500 dark:text-slate-400">
+              {{ t('organizations-by-starting-out-description') }}
+            </p>
+            <AdminStackedBarChart
+              :series="startingOutTrendSeries"
               :is-loading="isLoadingOnboardingFunnel"
             />
           </ChartCard>
