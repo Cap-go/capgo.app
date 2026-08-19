@@ -127,7 +127,7 @@ async function parseAuthorizedDevicesBody(c: Context<MiddlewareKeyVariables>, sc
   const parsed = safeParseSchema(schema, bodyRaw)
   if (!parsed.success)
     throw simpleError('invalid_body', 'Invalid body', { error: parsed.error })
-  const body = parsed.data
+  const body = parsed.data as DataDevice
   if (hasUnsafeDevicesQueryText(body))
     throw simpleError('invalid_body', 'Invalid body')
   if (body.osVersion?.trim() && !parseVersionCompareFilter(body.osVersionOp ?? 'eq', body.osVersion))
