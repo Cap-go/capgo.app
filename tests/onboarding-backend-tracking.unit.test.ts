@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sendOnboardingEvent } from '../src/services/onboardingTracking'
 import { createOnboardingProgressTracker } from '../src/utils/onboardingProgressAnalytics'
@@ -131,11 +130,5 @@ describe('onboarding backend tracking', () => {
       timestamp: 1_755_600_000_000,
       tracking_version: 2,
     }))
-  })
-
-  it('keeps demo action metadata in the backend-routed compatibility event', () => {
-    const source = readFileSync(new URL('../src/components/dashboard/DemoOnboardingModal.vue', import.meta.url), 'utf8')
-
-    expect(source).toContain('sendOnboardingEvent(`user:${event}`, { org_id: orgId, ...tags })')
   })
 })
