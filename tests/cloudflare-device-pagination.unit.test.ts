@@ -168,6 +168,22 @@ describe('buildReadDevicesCFQuery', () => {
     expect(Math.max(outerWhereIndex, altOuterWhereIndex)).toBeGreaterThan(groupByIndex)
   })
 
+  it.concurrent('filters devices by os_version gte after grouping', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      platform: 'android',
+      os_version_compare: { op: 'gte', value: '14' },
+      version_name_compare: { op: 'lte', value: '1.2.3' },
+      limit: 1,
+    }, false)
+
+    const groupByIndex = query.indexOf('GROUP BY blob1')
+    expect(query).toContain('argMax(blob4, timestamp) AS os_version')
+    expect(query.indexOf('>= 14')).toBeGreaterThan(groupByIndex)
+    expect(query.indexOf("splitByChar('.', concat(os_version, '.0.0.0'))")).toBeGreaterThan(groupByIndex)
+    expect(query.indexOf("splitByChar('.', concat(version_name, '.0.0.0'))")).toBeGreaterThan(groupByIndex)
+  })
+
   it.concurrent('filters devices by multiple version names after grouping', () => {
     const query = buildReadDevicesCFQuery({
       app_id: 'com.example.app',

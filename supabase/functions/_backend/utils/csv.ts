@@ -45,3 +45,34 @@ export function toCsv<THeader extends readonly string[]>(
   // Always end with newline so spreadsheet import is consistent.
   return `${lines.join('\n')}\n`
 }
+
+function stripControlChars(input: string): string {
+  let out = ''
+  for (const char of input) {
+    const code = char.codePointAt(0) ?? 0
+    if ((code >= 0 && code <= 31) || code === 127)
+      continue
+    out += char
+  }
+  return out
+}
+
+/** Safe download filename. Strips path separators and control characters. */
+export function sanitizeFilename(input: string | undefined, extension: 'csv' | 'json'): string | undefined {
+  if (!input)
+    return undefined
+
+  const trimmed = input.trim()
+  if (!trimmed)
+    return undefined
+
+  const safe = stripControlChars(trimmed)
+    .replace(/[\\/]/g, '_')
+    .replace(/\s+/g, ' ')
+    .slice(0, 180)
+
+  const ext = `.${extension}`
+  if (safe.toLowerCase().endsWith(ext))
+    return safe
+  return `${safe}${ext}`
+}

@@ -1,4 +1,7 @@
 import type { Database } from './supabase.types.ts'
+import type { VersionCompareFilter } from './versionCompare.ts'
+
+export type { VersionCompareFilter, VersionCompareOp } from './versionCompare.ts'
 
 export type StatsMetadata = Record<string, string>
 
@@ -133,6 +136,10 @@ export interface ReadDevicesParams {
   app_id: string
   /** Exact version_name match. Pass a string for one bundle, or an array for OR across bundles. */
   version_name?: string | string[]
+  /** Prefix numeric compare on version_name (`gte` 1.2.3). Ignored when unset. */
+  version_name_compare?: VersionCompareFilter
+  /** Prefix numeric compare on os_version (`gte` 14). */
+  os_version_compare?: VersionCompareFilter
   /** Exact platform filter (`ios` | `android` | `electron`) */
   platform?: Database['public']['Enums']['platform_os']
   deviceIds?: string[]

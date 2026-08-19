@@ -23,6 +23,7 @@ import plusOutline from '~icons/ion/add-outline'
 import IconSortDown from '~icons/lucide/chevron-down'
 import IconSortUp from '~icons/lucide/chevron-up'
 import IconSort from '~icons/lucide/chevrons-up-down'
+import IconDownload from '~icons/lucide/download'
 import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
 import FilterModal from '~/components/FilterModal.vue'
@@ -41,6 +42,8 @@ interface Props {
   addDisabled?: boolean
   addTooltip?: string
   addButtonTestId?: string
+  exportable?: boolean
+  exportLoading?: boolean
   search?: string
   total: number
   /** Fixed page size used for last-page / next calculations. Prefer this over inferring from the current page length. */
@@ -57,6 +60,8 @@ const props = withDefaults(defineProps<Props>(), {
   autoReload: true,
   mobileFixedPagination: true,
   extraFilterCount: 0,
+  exportable: false,
+  exportLoading: false,
 })
 const emit = defineEmits([
   'add',
@@ -74,6 +79,7 @@ const emit = defineEmits([
   'selectRow',
   'massDelete',
   'clearExtraFilters',
+  'export',
 ])
 const isFilterModalOpen = ref(false)
 const filterOpenButtonRef = ref<HTMLButtonElement | null>(null)
@@ -519,6 +525,43 @@ const paginationClass = computed(() => props.mobileFixedPagination
           <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
           <span class="hidden text-sm md:block">{{ t("reload") }}</span>
         </button>
+        <div v-if="exportable" class="d-dropdown">
+          <button
+            tabindex="0"
+            type="button"
+            class="inline-flex items-center py-1.5 px-3 mr-2 h-full text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 cursor-pointer dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden"
+            :disabled="isLoading || exportLoading"
+            data-test="data-table-export"
+            :aria-label="t('export')"
+            aria-haspopup="menu"
+          >
+            <IconDownload v-if="!exportLoading" class="m-1 md:mr-2" />
+            <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
+            <span class="hidden text-sm md:block">{{ t('export') }}</span>
+          </button>
+          <ul tabindex="0" class="d-dropdown-content d-menu z-20 mt-1 w-40 rounded-md border border-slate-200 bg-white p-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+            <li>
+              <button
+                type="button"
+                class="w-full rounded-md px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800"
+                data-test="data-table-export-csv"
+                @click="emit('export', 'csv')"
+              >
+                {{ t('download-csv') }}
+              </button>
+            </li>
+            <li>
+              <button
+                type="button"
+                class="w-full rounded-md px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800"
+                data-test="data-table-export-json"
+                @click="emit('export', 'json')"
+              >
+                {{ t('download-json') }}
+              </button>
+            </li>
+          </ul>
+        </div>
         <div v-if="showAdd" class="p-px mr-2 rounded-lg from-cyan-500 to-purple-500 bg-linear-to-r">
           <button
             :data-test="addButtonTestId"

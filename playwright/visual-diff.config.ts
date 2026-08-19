@@ -64,6 +64,7 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
         return
       }
       await page.locator('[data-test="device-platform-filter"]').waitFor({ state: 'visible' })
+      await page.locator('[data-test="device-os-version-filter"]').waitFor({ state: 'visible' })
     },
   },
   { slug: 'observe', path: '/app/com.demo.app/observe/updater', auth: true },

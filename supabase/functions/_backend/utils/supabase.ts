@@ -16,6 +16,7 @@ import { closeClient, getPgClient } from './pg.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
 import { Constants } from './supabase.types.ts'
 import { getEnv, isStripeConfigured } from './utils.ts'
+import { buildVersionCompareSql } from './versionCompare.ts'
 
 const DEFAULT_LIMIT = 1000
 // Import Supabase client
@@ -52,6 +53,162 @@ function getDevicesOrder(order?: Order[]): DevicesOrder {
 
   return {
     ascending: activeOrder.sortable === 'asc',
+  }
+}
+
+function hasDeviceVersionCompare(params: Pick<ReadDevicesParams, 'os_version_compare' | 'version_name_compare'>) {
+  return Boolean(params.os_version_compare || params.version_name_compare)
+}
+
+function buildDevicesSqlWhere(params: ReadDevicesParams, customIdMode: boolean) {
+  const values: unknown[] = [params.app_id]
+  const clauses = ['app_id = $1']
+
+  if (customIdMode)
+    clauses.push(`custom_id IS NOT NULL AND custom_id != ''`)
+
+  if (params.deviceIds?.length) {
+    values.push(params.deviceIds)
+    clauses.push(`device_id = ANY($${values.length}::text[])`)
+  }
+
+  if (params.customIds?.length) {
+    values.push(params.customIds)
+    clauses.push(`custom_id = ANY($${values.length}::text[])`)
+  }
+
+  if (params.search) {
+    values.push(`%${params.search}%`)
+    const searchIndex = values.length
+    if (params.deviceIds?.length)
+      clauses.push(`(custom_id ILIKE $${searchIndex} OR version_name ILIKE $${searchIndex})`)
+    else
+      clauses.push(`(device_id ILIKE $${searchIndex} OR custom_id ILIKE $${searchIndex} OR version_name ILIKE $${searchIndex})`)
+  }
+
+  if (params.version_name_compare) {
+    clauses.push(buildVersionCompareSql('version_name', params.version_name_compare, 'pg'))
+  }
+  else if (params.version_name) {
+    const versionNames = (Array.isArray(params.version_name) ? params.version_name : [params.version_name])
+      .map(name => name.trim())
+      .filter(Boolean)
+    if (versionNames.length === 1) {
+      values.push(versionNames[0])
+      clauses.push(`version_name = $${values.length}`)
+    }
+    else if (versionNames.length > 1) {
+      values.push(versionNames)
+      clauses.push(`version_name = ANY($${values.length}::text[])`)
+    }
+  }
+
+  if (params.os_version_compare)
+    clauses.push(buildVersionCompareSql('os_version', params.os_version_compare, 'pg'))
+
+  if (params.platform) {
+    values.push(params.platform)
+    clauses.push(`platform = $${values.length}::public.platform_os`)
+  }
+
+  if (params.installSources?.length) {
+    values.push(params.installSources)
+    clauses.push(`install_source = ANY($${values.length}::text[])`)
+  }
+
+  if (params.updated_at_gt) {
+    values.push(params.updated_at_gt)
+    clauses.push(`updated_at > $${values.length}::timestamptz`)
+  }
+  if (params.updated_at_lte) {
+    values.push(params.updated_at_lte)
+    clauses.push(`updated_at <= $${values.length}::timestamptz`)
+  }
+
+  const devicesOrder = getDevicesOrder(params.order)
+  if (params.cursor) {
+    const [cursorTime, cursorDeviceId] = params.cursor.split('|')
+    if (cursorTime && cursorDeviceId) {
+      if (!devicesOrder) {
+        values.push(cursorDeviceId)
+        clauses.push(`device_id > $${values.length}`)
+      }
+      else {
+        values.push(cursorTime, cursorDeviceId)
+        const timeIndex = values.length - 1
+        const idIndex = values.length
+        const cmp = devicesOrder.ascending ? '>' : '<'
+        clauses.push(`(updated_at ${cmp} $${timeIndex}::timestamptz OR (updated_at = $${timeIndex}::timestamptz AND device_id > $${idIndex}))`)
+      }
+    }
+  }
+
+  return { values, where: clauses.join(' AND '), devicesOrder }
+}
+
+async function readDevicesSBSql(c: Context, params: ReadDevicesParams, customIdMode: boolean) {
+  const limit = params.limit ?? DEFAULT_LIMIT
+  const { values, where, devicesOrder } = buildDevicesSqlWhere(params, customIdMode)
+  const orderBy = devicesOrder
+    ? `updated_at ${devicesOrder.ascending ? 'ASC' : 'DESC'}, device_id ASC`
+    : 'device_id ASC'
+  values.push(limit + 1)
+  const pgClient = getPgClient(c, true)
+  try {
+    const result = await pgClient.query(
+      `SELECT * FROM public.devices WHERE ${where} ORDER BY ${orderBy} LIMIT $${values.length}`,
+      values,
+    )
+    return result.rows ?? []
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading device list with version compare', error })
+    return []
+  }
+  finally {
+    closeClient(c, pgClient)
+  }
+}
+
+async function countDevicesSBSql(
+  c: Context,
+  app_id: string,
+  customIdMode: boolean,
+  deviceIds: string[],
+  versionName: string | string[] | undefined,
+  search: string | undefined,
+  options?: {
+    platform?: Database['public']['Enums']['platform_os']
+    updatedAt?: { gt?: string, lte?: string }
+    osVersionCompare?: ReadDevicesParams['os_version_compare']
+    versionNameCompare?: ReadDevicesParams['version_name_compare']
+  },
+) {
+  const { values, where } = buildDevicesSqlWhere({
+    app_id,
+    deviceIds,
+    version_name: versionName,
+    search,
+    platform: options?.platform,
+    updated_at_gt: options?.updatedAt?.gt,
+    updated_at_lte: options?.updatedAt?.lte,
+    os_version_compare: options?.osVersionCompare,
+    version_name_compare: options?.versionNameCompare,
+  }, customIdMode)
+  const pgClient = getPgClient(c, true)
+  try {
+    const result = await pgClient.query<{ total: string }>(
+      `SELECT COUNT(*)::text AS total FROM public.devices WHERE ${where}`,
+      values,
+    )
+    return Number(result.rows[0]?.total ?? 0)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error counting devices with version compare', error })
+    return 0
+  }
+  finally {
+    closeClient(c, pgClient)
   }
 }
 
@@ -1532,6 +1689,9 @@ export async function readDevicesSB(c: Context, params: ReadDevicesParams, custo
 
   cloudlog({ requestId: c.get('requestId'), message: 'readDevicesSB', params })
 
+  if (hasDeviceVersionCompare(params))
+    return await readDevicesSBSql(c, params, customIdMode)
+
   let query = supabase
     .from('devices')
     .select('*')
@@ -1660,8 +1820,14 @@ export async function countDevicesSB(
   options?: {
     platform?: Database['public']['Enums']['platform_os']
     updatedAt?: { gt?: string, lte?: string }
+    osVersionCompare?: ReadDevicesParams['os_version_compare']
+    versionNameCompare?: ReadDevicesParams['version_name_compare']
   },
 ) {
+  if (options?.osVersionCompare || options?.versionNameCompare) {
+    return countDevicesSBSql(c, app_id, customIdMode, deviceIds, versionName, search, options)
+  }
+
   let req = supabaseAdmin(c)
     .from('devices')
     .select('device_id', { count: 'exact', head: true })
