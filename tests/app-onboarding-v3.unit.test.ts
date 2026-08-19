@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 const onboardingSource = readFileSync(new URL('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
 const iconInputSource = readFileSync(new URL('../src/components/dashboard/AppOnboardingIconInput.vue', import.meta.url), 'utf8')
+const messages = JSON.parse(readFileSync(new URL('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
 function sliceBetween(source: string, startMarker: string, endMarker: string) {
   const start = source.indexOf(startMarker)
@@ -152,9 +153,13 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource.match(/:disabled="isAppDetailsNavigationPending"/g)).toHaveLength(2)
   })
 
-  it.concurrent('continues to organization creation after the pre-org icon step', () => {
-    expect(onboardingSource).toContain("t('app-onboarding-continue')")
-    expect(onboardingSource).toContain("t('app-onboarding-finish-details')")
+  it.concurrent('labels the icon action as skip until an icon is provided', () => {
+    const iconAction = sliceBetween(onboardingSource, ':data-test="appDetailsStep === \'app_id\'', '<IconArrowRight v-if="!isSubmitting"')
+
+    expect(messages['app-onboarding-skip-icon']).toBe('Skip')
+    expect(iconAction).toContain("appDetailsStep === 'icon'")
+    expect(iconAction).toContain("iconPreview ? t('app-onboarding-continue') : t('app-onboarding-skip-icon')")
+    expect(iconAction).not.toContain("t('app-onboarding-finish-details')")
   })
 
   it.concurrent('does not send raw onboarding field values to analytics', () => {

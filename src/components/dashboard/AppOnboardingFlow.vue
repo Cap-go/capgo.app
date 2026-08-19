@@ -2447,9 +2447,7 @@ defineExpose({
                     >
                       <IconLoader v-if="isSubmitting" class="h-4 w-4 animate-spin" />
                       <span v-else>{{ appDetailsStep === 'icon'
-                        ? props.preOrg
-                          ? t('app-onboarding-continue')
-                          : t('app-onboarding-finish-details')
+                        ? iconPreview ? t('app-onboarding-continue') : t('app-onboarding-skip-icon')
                         : appDetailsStep === 'app_id' && !hasProvidedAppId
                           ? t('app-onboarding-skip-app-id')
                           : t('app-onboarding-continue') }}</span>
