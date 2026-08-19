@@ -1029,10 +1029,6 @@ function buildVersionNameSqlCondition(versionName: string | string[] | undefined
   return `version_name IN (${names.map(name => `'${escapeSqlString(name)}'`).join(', ')})`
 }
 
-function buildReadDevicesCFVersionCompareCondition(column: 'os_version' | 'version_name', filter: ReadDevicesParams['os_version_compare'] | ReadDevicesParams['version_name_compare']) {
-  return buildVersionCompareSql(column, filter, 'cf')
-}
-
 export async function countDevicesCF(
   c: Context,
   app_id: string,
@@ -1050,8 +1046,8 @@ export async function countDevicesCF(
   // Use Analytics Engine DEVICE_INFO for counting devices
   const platform = options?.platform
   const updatedAt = options?.updatedAt
-  const osVersionCondition = buildReadDevicesCFVersionCompareCondition('os_version', options?.osVersionCompare)
-  const versionNameCompareCondition = buildReadDevicesCFVersionCompareCondition('version_name', options?.versionNameCompare)
+  const osVersionCondition = buildVersionCompareSql('os_version', options?.osVersionCompare, 'cf')
+  const versionNameCompareCondition = buildVersionCompareSql('version_name', options?.versionNameCompare, 'cf')
   const versionNameCondition = versionNameCompareCondition ? '' : buildVersionNameSqlCondition(versionName)
   const conditions = [`index1 = '${escapeSqlString(app_id)}'`]
 
@@ -1235,9 +1231,9 @@ function buildReadDevicesCFOuterConditions(params: ReadDevicesParams, devicesOrd
     // Match the latest aggregated platform/version/search, not historical event rows.
     buildReadDevicesCFPlatformCondition(params.platform),
     params.version_name_compare
-      ? buildReadDevicesCFVersionCompareCondition('version_name', params.version_name_compare)
+      ? buildVersionCompareSql('version_name', params.version_name_compare, 'cf')
       : buildReadDevicesCFVersionNameCondition(params.version_name),
-    buildReadDevicesCFVersionCompareCondition('os_version', params.os_version_compare),
+    buildVersionCompareSql('os_version', params.os_version_compare, 'cf'),
     buildReadDevicesCFSearchCondition(params.search, params.deviceIds),
   ].filter((condition): condition is string => Boolean(condition))
 }

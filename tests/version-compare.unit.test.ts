@@ -61,4 +61,23 @@ describe('buildVersionCompareSql', () => {
     expect(sql).toContain('> 1')
     expect(sql).toContain('> 2')
   })
+
+  it.concurrent('builds an eq prefix compare', () => {
+    const sql = buildVersionCompareSql('os_version', { op: 'eq', value: '14.0' }, 'pg')
+    expect(sql).toContain('= 14')
+    expect(sql).toContain('= 0')
+    expect(sql).toContain('AND')
+    expect(sql.startsWith('(')).toBe(false)
+  })
+
+  it.concurrent('returns a false predicate for unparseable values', () => {
+    expect(buildVersionCompareSql('os_version', { op: 'gte', value: 'builtin' }, 'pg')).toBe('1 = 0')
+  })
+})
+
+describe('compareVersionPrefix extra ops', () => {
+  it.concurrent('does not treat later dotted parts as greater for gt on a shorter prefix', () => {
+    expect(compareVersionPrefix('14.5', { op: 'gt', value: '14' })).toBe(false)
+    expect(compareVersionPrefix('15', { op: 'gt', value: '14' })).toBe(true)
+  })
 })

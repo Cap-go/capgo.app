@@ -71,6 +71,9 @@ export function sanitizeFilename(input: string | undefined, extension: 'csv' | '
     .replace(/\s+/g, ' ')
     .slice(0, 180)
 
+  if (!safe)
+    return undefined
+
   const ext = `.${extension}`
   if (safe.toLowerCase().endsWith(ext))
     return safe

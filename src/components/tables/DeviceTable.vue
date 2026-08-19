@@ -82,7 +82,8 @@ const activeExtraFilters = computed(() =>
 const bundleRangeValue = computed({
   get: () => selectedVersionNames.value[0] ?? '',
   set: (value: string) => {
-    selectedVersionNames.value = value.trim() ? [value] : []
+    const trimmed = value.trim()
+    selectedVersionNames.value = trimmed ? [trimmed] : []
   },
 })
 const platformOptions = computed(() => [
@@ -211,7 +212,7 @@ function getPlatformFilter(): PlatformOs | undefined {
 
 function getOsVersionFilter() {
   const value = osVersionValue.value.trim()
-  if (!value)
+  if (!value || !/\d/.test(value))
     return {}
   return {
     osVersion: value,
@@ -224,7 +225,7 @@ function getBundleFilterPayload() {
   if (bundleCompareOp.value === 'in')
     return { versionNames: names, versionNameOp: undefined as undefined }
   const value = names?.[0]
-  if (!value)
+  if (!value || !/\d/.test(value))
     return { versionNames: undefined, versionNameOp: undefined as undefined }
   return { versionNames: [value], versionNameOp: bundleCompareOp.value }
 }
@@ -689,7 +690,7 @@ function downloadText(filename: string, content: string, mime: string) {
   document.body.appendChild(a)
   a.click()
   a.remove()
-  URL.revokeObjectURL(url)
+  setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
 async function exportDevices(format: 'csv' | 'json') {
@@ -719,7 +720,6 @@ async function exportDevices(format: 'csv' | 'json') {
         order: getActiveOrder(columns.value),
         customIdMode: filters.value.CustomId,
         format,
-        limit: 10_000,
         ...getDateRangePayload(),
       }),
     })

@@ -57,7 +57,7 @@ const devicesBodyShape = {
   installSourceCounts: z.boolean().optional(),
   versionName: safeQueryTextSchema.optional(),
   versionNames: z.array(safeQueryTextSchema).max(MAX_VERSION_NAMES).optional(),
-  versionNameOp: z.enum(['in', 'eq', 'gt', 'gte', 'lt', 'lte']).optional(),
+  versionNameOp: z.union([z.literal('in'), versionCompareOpSchema]).optional(),
   osVersion: safeQueryTextSchema.optional(),
   osVersionOp: versionCompareOpSchema.optional(),
   platform: platformSchema.optional(),

@@ -277,4 +277,41 @@ describe('private analytics route validation', () => {
       os_version_compare: { op: 'gte', value: '14' },
     }), false)
   })
+
+  it('exports devices as json on /private/devices/export', async () => {
+    readDevicesMock.mockResolvedValue({
+      data: [{
+        device_id: '00000000-0000-0000-0000-000000000001',
+        custom_id: '',
+        platform: 'android',
+        os_version: '14',
+        version_name: '1.2.3',
+        version_build: '1.0.0',
+        plugin_version: '6.0.0',
+        updated_at: '2026-08-19T00:00:00.000Z',
+        is_prod: true,
+        is_emulator: false,
+        install_source: 'play_store',
+        country_code: 'US',
+      }],
+      nextCursor: undefined,
+      hasMore: false,
+    })
+
+    const response = await devicesApp.request(postJson('http://local/export', {
+      appId: 'com.example.app',
+      format: 'json',
+      osVersion: '14',
+      osVersionOp: 'gte',
+    }))
+
+    expect(response.status).toBe(200)
+    const payload = await response.json() as { format: string, data: unknown[], rowCount: number, limit: number, filename?: string }
+    expect(payload.format).toBe('json')
+    expect(payload.rowCount).toBe(1)
+    expect(payload.limit).toBe(10_000)
+    expect(Array.isArray(payload.data)).toBe(true)
+    expect(payload.data).toHaveLength(1)
+    expect(payload.filename).toBeUndefined()
+  })
 })

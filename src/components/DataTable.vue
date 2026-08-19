@@ -529,7 +529,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
           <button
             tabindex="0"
             type="button"
-            class="inline-flex items-center py-1.5 px-3 mr-2 h-full text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 cursor-pointer dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden"
+            class="d-btn d-btn-sm inline-flex h-full items-center rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-500 shadow-none dark:border-gray-600 dark:bg-gray-800 dark:text-white"
             :disabled="isLoading || exportLoading"
             data-test="data-table-export"
             :aria-label="t('export')"
@@ -539,12 +539,13 @@ const paginationClass = computed(() => props.mobileFixedPagination
             <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
             <span class="hidden text-sm md:block">{{ t('export') }}</span>
           </button>
-          <ul tabindex="0" class="d-dropdown-content d-menu z-20 mt-1 w-40 rounded-md border border-slate-200 bg-white p-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+          <ul role="menu" class="d-dropdown-content d-menu z-20 mt-1 mr-2 w-40 rounded-md border border-slate-200 bg-white p-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
             <li>
               <button
                 type="button"
-                class="w-full rounded-md px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800"
+                class="d-btn d-btn-ghost d-btn-sm w-full justify-start rounded-md px-3 py-2 text-left text-sm font-normal text-slate-700 shadow-none dark:text-slate-200"
                 data-test="data-table-export-csv"
+                :disabled="isLoading || exportLoading"
                 @click="emit('export', 'csv')"
               >
                 {{ t('download-csv') }}
@@ -553,8 +554,9 @@ const paginationClass = computed(() => props.mobileFixedPagination
             <li>
               <button
                 type="button"
-                class="w-full rounded-md px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800"
+                class="d-btn d-btn-ghost d-btn-sm w-full justify-start rounded-md px-3 py-2 text-left text-sm font-normal text-slate-700 shadow-none dark:text-slate-200"
                 data-test="data-table-export-json"
+                :disabled="isLoading || exportLoading"
                 @click="emit('export', 'json')"
               >
                 {{ t('download-json') }}

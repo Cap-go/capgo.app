@@ -4,10 +4,56 @@ import { APP_NAME, fetchTestRequest, getEndpointUrl, getSupabaseClient, headers,
 
 const id = randomUUID()
 const APP_ID = `${APP_NAME}.df.${id}`
+const oldAndroid = randomUUID().toLowerCase()
+const newAndroid = randomUUID().toLowerCase()
+const iosDevice = randomUUID().toLowerCase()
 
 beforeAll(async () => {
   await resetAndSeedAppData(APP_ID)
   await resetAndSeedAppDataStats(APP_ID)
+  const supabase = getSupabaseClient()
+  const { error } = await supabase.from('devices').upsert([
+    {
+      app_id: APP_ID,
+      device_id: oldAndroid,
+      platform: 'android',
+      plugin_version: '6.0.0',
+      os_version: '13',
+      version_build: '1.0.0',
+      version_name: '1.0.0',
+      custom_id: '',
+      is_prod: true,
+      is_emulator: false,
+      updated_at: new Date().toISOString(),
+    },
+    {
+      app_id: APP_ID,
+      device_id: newAndroid,
+      platform: 'android',
+      plugin_version: '6.0.0',
+      os_version: '14.0.1',
+      version_build: '1.0.0',
+      version_name: '1.1.0',
+      custom_id: '',
+      is_prod: true,
+      is_emulator: false,
+      updated_at: new Date().toISOString(),
+    },
+    {
+      app_id: APP_ID,
+      device_id: iosDevice,
+      platform: 'ios',
+      plugin_version: '6.0.0',
+      os_version: '17.4',
+      version_build: '1.0.0',
+      version_name: '1.1.0',
+      custom_id: '',
+      is_prod: true,
+      is_emulator: false,
+      updated_at: new Date().toISOString(),
+    },
+  ])
+  expect(error).toBeNull()
 }, 60_000)
 
 afterAll(async () => {
@@ -17,54 +63,6 @@ afterAll(async () => {
 
 describe('[POST] /private/devices version compare', () => {
   it('counts android devices on OS 14 or newer and older bundles', async () => {
-    const supabase = getSupabaseClient()
-    const oldAndroid = randomUUID().toLowerCase()
-    const newAndroid = randomUUID().toLowerCase()
-    const iosDevice = randomUUID().toLowerCase()
-
-    const { error } = await supabase.from('devices').upsert([
-      {
-        app_id: APP_ID,
-        device_id: oldAndroid,
-        platform: 'android',
-        plugin_version: '6.0.0',
-        os_version: '13',
-        version_build: '1.0.0',
-        version_name: '1.0.0',
-        custom_id: '',
-        is_prod: true,
-        is_emulator: false,
-        updated_at: new Date().toISOString(),
-      },
-      {
-        app_id: APP_ID,
-        device_id: newAndroid,
-        platform: 'android',
-        plugin_version: '6.0.0',
-        os_version: '14.0.1',
-        version_build: '1.0.0',
-        version_name: '1.1.0',
-        custom_id: '',
-        is_prod: true,
-        is_emulator: false,
-        updated_at: new Date().toISOString(),
-      },
-      {
-        app_id: APP_ID,
-        device_id: iosDevice,
-        platform: 'ios',
-        plugin_version: '6.0.0',
-        os_version: '17.4',
-        version_build: '1.0.0',
-        version_name: '1.1.0',
-        custom_id: '',
-        is_prod: true,
-        is_emulator: false,
-        updated_at: new Date().toISOString(),
-      },
-    ])
-    expect(error).toBeNull()
-
     const countResponse = await fetchTestRequest(getEndpointUrl('/private/devices'), {
       method: 'POST',
       headers,
@@ -121,7 +119,9 @@ describe('[POST] /private/devices version compare', () => {
     expect(csvData.format).toBe('csv')
     expect(csvData.csv.startsWith('device_id,custom_id,platform,os_version,version_name')).toBe(true)
     expect(csvData.csv.endsWith('\n')).toBe(true)
-    expect(csvData.rowCount).toBeGreaterThanOrEqual(1)
+    expect(csvData.csv).toContain(newAndroid)
+    expect(csvData.csv).not.toContain(oldAndroid)
+    expect(csvData.csv).not.toContain(iosDevice)
 
     const jsonResponse = await fetchTestRequest(getEndpointUrl('/private/devices/export'), {
       method: 'POST',
@@ -136,9 +136,11 @@ describe('[POST] /private/devices version compare', () => {
       }),
     })
     expect(jsonResponse.status).toBe(200)
-    const jsonData = await jsonResponse.json() as { format: string, data: unknown[], rowCount: number }
+    const jsonData = await jsonResponse.json() as { format: string, data: { device_id: string }[], rowCount: number }
     expect(jsonData.format).toBe('json')
-    expect(Array.isArray(jsonData.data)).toBe(true)
-    expect(jsonData.rowCount).toBeGreaterThanOrEqual(1)
+    const exportedIds = jsonData.data.map(row => row.device_id)
+    expect(exportedIds).toContain(newAndroid)
+    expect(exportedIds).not.toContain(oldAndroid)
+    expect(exportedIds).not.toContain(iosDevice)
   })
 })
