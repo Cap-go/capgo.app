@@ -3,6 +3,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { BentoTrackingPayload } from '../utils/tracking.ts'
 import { Hono } from 'hono/tiny'
+import { APP_TOO_LARGE_EVENT, buildAppTooLargeBentoEvent } from '../utils/app_too_large_tracking.ts'
 import { buildBuilderOnboardingBentoEvent, BUILDER_RECOVERY_MILESTONES } from '../utils/builder_onboarding_recovery.ts'
 import { buildBundleCompatibilityBentoEvent, BUNDLE_INCOMPATIBLE_EVENT, isBreakingChangeGatedByChannelStrategy } from '../utils/bundle_compatibility_recovery.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
@@ -265,6 +266,35 @@ async function buildBuilderBentoEvent(
   })
 }
 
+async function buildAppTooLargeTrackedBentoEvent(
+  c: Context<MiddlewareKeyVariables>,
+  supabase: ReturnType<typeof supabaseWithAuth>,
+  onboardingOrgId: string | undefined,
+  appId: string | undefined,
+  trackedBody: TrackOptions,
+) {
+  if (!onboardingOrgId || !appId || trackedBody.event !== APP_TOO_LARGE_EVENT)
+    return undefined
+
+  const [orgResult, appResult] = await Promise.all([
+    supabase.from('orgs').select('id, name').eq('id', onboardingOrgId).single(),
+    supabase.from('apps').select('name').eq('app_id', appId).single(),
+  ])
+  if (orgResult.error || appResult.error) {
+    cloudlog({ requestId: c.get('requestId'), message: 'app too large bento lookup failed; skipping signal', org: orgResult.error, app: appResult.error })
+    return undefined
+  }
+
+  return buildAppTooLargeBentoEvent({
+    event: trackedBody.event,
+    orgId: onboardingOrgId,
+    appId,
+    orgName: orgResult.data?.name ?? undefined,
+    appName: appResult.data?.name ?? undefined,
+    tags: trackedBody.tags,
+  })
+}
+
 async function buildBundleIncompatibleBentoEvent(
   c: Context<MiddlewareKeyVariables>,
   supabase: ReturnType<typeof supabaseWithAuth>,
@@ -414,8 +444,14 @@ app.post('/', middlewareAuth(), async (c) => {
     orgId: onboardingOrgId,
   })
 
+  // CLI bundle upload warning when the zip is over the 20 MB alert threshold
+  // and the zip is actually uploaded (`--delta-only` skips it).
+  // PostHog already records `App Too Large`; this Bento signal lets a lifecycle
+  // automation email org admins (gated by the `app_too_large` preference).
+  const appTooLargeBentoEvent: BentoTrackingPayload | undefined = await buildAppTooLargeTrackedBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
+
   // Exactly one of these is ever set (distinct event names); `??` picks the active one.
-  const bentoEvent = onboardingBentoEvent ?? builderBentoEvent ?? bundleIncompatibleBentoEvent ?? aiInstructionsCopiedBentoEvent
+  const bentoEvent = onboardingBentoEvent ?? builderBentoEvent ?? bundleIncompatibleBentoEvent ?? aiInstructionsCopiedBentoEvent ?? appTooLargeBentoEvent
   const apikeyId = c.get('apikey')?.id
   await sendEventToTracking(c, addAuthenticatedApiKeyIdToTrackingPayload({
     ...trackedBody,

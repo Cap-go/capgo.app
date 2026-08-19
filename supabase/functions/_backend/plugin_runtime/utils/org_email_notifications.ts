@@ -75,6 +75,7 @@ export type EmailPreferenceKey
     | 'cli_realtime_feed'
     | 'bundle_incompatible'
     | 'bundle_incompatible_expected'
+    | 'app_too_large'
 
 export interface EmailPreferences {
   usage_limit?: boolean
@@ -93,6 +94,7 @@ export interface EmailPreferences {
   cli_realtime_feed?: boolean
   bundle_incompatible?: boolean
   bundle_incompatible_expected?: boolean
+  app_too_large?: boolean
 }
 
 /**
