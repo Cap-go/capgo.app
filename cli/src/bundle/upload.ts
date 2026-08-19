@@ -433,8 +433,16 @@ async function getChannelsToAssignAfterChecksumCheck(supabase: SupabaseType, app
   return channelsToAssign
 }
 
+function hasS3UploadConfig(options: OptionsUpload): boolean {
+  return !!(options.s3BucketName || options.s3Endpoint || options.s3Region || options.s3Apikey || options.s3Apisecret || options.s3Port || options.s3SSL)
+}
+
 function shouldUploadFullZip(options: OptionsUpload): boolean {
   return !options.partialOnly && !options.deltaOnly
+}
+
+function shouldSendAppTooLargeEvent(options: OptionsUpload): boolean {
+  return shouldUploadFullZip(options) || hasS3UploadConfig(options)
 }
 
 async function prepareBundleFile(path: string, options: OptionsUpload, apikey: string, orgId: string, appid: string, maxUploadLength: number, alertUploadSize: number, publicKeyFromConfig?: string) {
@@ -534,9 +542,9 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
     uploadFail(`The bundle size is ${mbSize} Mb, this is greater than the maximum upload length ${mbSizeMax} Mb, please reduce the size of your bundle`)
   }
   else if (zipped?.byteLength > alertUploadSize) {
-    if (!shouldUploadFullZip(options)) {
+    if (!shouldSendAppTooLargeEvent(options)) {
       if (options.verbose)
-        log.info(`[Verbose] Skipping 'App Too Large' event (delta-only upload, zip is not sent)`)
+        log.info(`[Verbose] Skipping 'App Too Large' event (zip is not sent)`)
     }
     else {
       log.warn(`WARNING !!\nThe bundle size is ${mbSize} Mb, this may take a while to download for users\n`)
@@ -1773,7 +1781,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] TUS chunk size: ${Math.floor(options.tusChunkSize / 1024 / 1024)} MB`)
 
-  if (zipped && (s3BucketName || s3Endpoint || s3Region || s3Apikey || s3Apisecret || s3Port || s3SSL)) {
+  if (zipped && hasS3UploadConfig(options)) {
     if (!s3BucketName || !s3Endpoint || !s3Region || !s3Apikey || !s3Apisecret || !s3Port)
       uploadFail('Missing argument, for S3 upload you need to provide a bucket name, endpoint, region, port, API key, and API secret')
 

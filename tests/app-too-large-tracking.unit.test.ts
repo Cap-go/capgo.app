@@ -35,6 +35,7 @@ describe('buildAppTooLargeBentoEvent', () => {
   it.concurrent('omits size_mb when the tag is missing or invalid', () => {
     expect(buildAppTooLargeBentoEvent({ ...base, tags: undefined })?.data).not.toHaveProperty('size_mb')
     expect(buildAppTooLargeBentoEvent({ ...base, tags: { size_mb: 'nope' } })?.data).not.toHaveProperty('size_mb')
+    expect(buildAppTooLargeBentoEvent({ ...base, tags: { size_mb: '   ' } })?.data).not.toHaveProperty('size_mb')
     expect(buildAppTooLargeBentoEvent({ ...base, tags: { size_mb: -1 } })?.data).not.toHaveProperty('size_mb')
   })
 

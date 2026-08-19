@@ -23,10 +23,13 @@ function toSizeMb(tags: Record<string, string | number | boolean> | undefined): 
   const raw = tags?.size_mb
   if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0)
     return raw
-  if (typeof raw === 'string' && raw.length > 0) {
-    const parsed = Number(raw)
-    if (Number.isFinite(parsed) && parsed >= 0)
-      return parsed
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (trimmed.length > 0) {
+      const parsed = Number(trimmed)
+      if (Number.isFinite(parsed) && parsed >= 0)
+        return parsed
+    }
   }
   return undefined
 }
