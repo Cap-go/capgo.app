@@ -110,7 +110,7 @@ describe('native-aware Capgo release workflow', () => {
 
 Run: `bunx vitest run tests/capgo-release-workflow.unit.test.ts`
 
-Expected: FAIL because `Resolve Capgo native release bump` does not exist, OTA still has a compatibility condition, and automatic/manual Android requests lack `--sync-android-version`.
+Expected from the pre-implementation baseline, before Tasks 2 and 3: FAIL because `Resolve Capgo native release bump` does not exist, OTA still has a compatibility condition, and automatic/manual Android requests lack `--sync-android-version`.
 
 - [ ] **Step 5: Commit the failing contract test**
 

@@ -35,6 +35,8 @@ The CLI invocation remains `bunx @capgo/cli@latest`.
 
 When `build needed` returns `1`, the bump job finds the latest reachable Capgo tag on the current release line: stable tags on `main`, or `-alpha` tags on `development`. If that tag exists but its published, non-draft GitHub Release cannot be confirmed, the bump job exits with an error before invoking `standard-version`.
 
+The lookup deliberately fails closed for a missing release, authentication problem, rate limit, or transient network error. The underlying `gh` stderr remains visible so the operator can distinguish the cause, but no retry or extra release state is introduced and no new version is created while completion is uncertain.
+
 The check does not retry or dispatch any workflow. It only prevents a second version bump. The existing incomplete tag remains available for a manual rerun of its deployment.
 
 The guard is deliberately narrow: it runs only when a native build is currently required. OTA-compatible releases are not blocked by an unrelated missing GitHub Release.
