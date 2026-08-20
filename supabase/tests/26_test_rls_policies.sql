@@ -801,6 +801,7 @@ SELECT
                 'has_app_right_apikey',
                 'has_app_right_userid',
                 'force_org_rbac_enabled',
+                'is_rbac_enabled_globally',
                 'invite_user_to_org',
                 'modify_permissions_tmp',
                 'rbac_legacy_right_for_org_role',

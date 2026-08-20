@@ -60,6 +60,7 @@ const REMOVED_OLD_RIGHTS_PROCS = [
   'public.sync_org_user_role_binding_on_delete()',
   'public.sync_org_user_role_binding_on_update()',
   'public.sync_org_user_to_role_binding()',
+  'public.is_rbac_enabled_globally()',
 ] as const
 
 const ANON_ALLOWED_PROCS = [
