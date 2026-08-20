@@ -410,6 +410,7 @@ describe('admin chart card minimize control', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/pages/admin/dashboard/users.vue'), 'utf8')
 
     expect(source).toContain(`:title="t('onboarding-funnel')"`)
-    expect(source.match(/<ChartCard/g)).toHaveLength(18)
+    expect(source).toContain(`:title="t('organizations-by-starting-out')"`)
+    expect(source.match(/<ChartCard/g)).toHaveLength(19)
   })
 })
