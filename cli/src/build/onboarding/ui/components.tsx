@@ -352,7 +352,7 @@ export const Header: FC<{ compact?: boolean }> = () => {
       alignSelf="center"
     >
       <Text bold color="cyan">
-        🚀  Capgo Cloud Build · Onboarding
+        ◆  Capgo Cloud Build · Onboarding
       </Text>
     </Box>
   )
