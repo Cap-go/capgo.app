@@ -136,7 +136,7 @@ export function TextPromptView({ prompt, onError }: Readonly<{ prompt: TextPromp
 
   useEffect(() => {
     setValue('')
-  }, [prompt.message, prompt.placeholder])
+  }, [prompt.mask, prompt.message, prompt.placeholder])
 
   useInput((input, key) => {
     if ((key.ctrl && input === 'c') || key.escape) {
@@ -172,7 +172,7 @@ export function TextPromptView({ prompt, onError }: Readonly<{ prompt: TextPromp
       <Box marginTop={1}>
         <Text color="cyan">❯ </Text>
         {value
-          ? <Text>{value}</Text>
+          ? <Text>{prompt.mask ? prompt.mask.repeat(value.length) : value}</Text>
           : <Text dimColor>{prompt.placeholder || ''}</Text>}
         <Text color="white">█</Text>
       </Box>

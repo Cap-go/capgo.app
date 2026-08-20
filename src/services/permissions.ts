@@ -38,6 +38,7 @@ export type Permission
     | 'org.read_audit'
     | 'org.read_billing_audit'
     | 'org.create_app'
+    | 'org.manage_apikeys'
   // App permissions
     | 'app.read'
     | 'app.update_settings'

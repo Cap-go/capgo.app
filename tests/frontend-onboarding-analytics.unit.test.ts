@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   assertFrontendOnboardingAttemptTotal,
   buildFrontendOnboardingHogql,
+  buildFrontendOnboardingWelcomeHogql,
   FRONTEND_ONBOARDING_ATTEMPT_LIMIT,
   FRONTEND_ONBOARDING_MAX_RANGE_MS,
   getAdminFrontendOnboardingAnalytics,
@@ -48,14 +49,20 @@ describe('buildFrontendOnboardingHogql', () => {
       '2026-08-04T00:00:00.789Z',
     )
 
-    expect(query).toContain("event IN ('onboarding_step_viewed', 'onboarding_ai_instructions_copied', 'onboarding_app_id_entered'")
+    expect(query).toContain("event IN ('onboarding_step_viewed', 'onboarding_ai_instructions_copied'")
+    expect(query).toContain("'onboarding_app_id_entered'")
+    expect(query).toContain("'onboarding_app_creation_succeeded'")
+    expect(query).not.toContain("'onboarding_app_details_step_completed'")
+    expect(query).not.toContain("'onboarding_app_details_step_viewed'")
+    expect(query).toContain("'onboarding_store_icon_import_succeeded'")
+    expect(query).toContain("'onboarding_store_icon_url_entered'")
     expect(query).toContain("'onboarding_organization_import_opened'")
     expect(query).toContain("'onboarding_organization_invite_succeeded'")
     expect(query).toContain("'onboarding_technical_invite_succeeded'")
     expect(query).toContain('JSONExtractString(toString(properties), \'flow\') = \'pre_org\'')
     expect(query).toContain('JSONExtractString(toString(properties), \'$host\') = \'console.capgo.app\'')
     expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) AS onboarding_version')
-    expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) IN (1, 2, 3)')
+    expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) IN (1, 2, 3, 4)')
     expect(query).not.toContain('toInt64OrZero')
     expect(query).toContain('JSONExtractString(toString(properties), \'onboarding_attempt_id\')')
     expect(query).toContain('JSONExtractString(toString(properties), \'step\')')
@@ -68,7 +75,10 @@ describe('buildFrontendOnboardingHogql', () => {
     expect(query).toContain('event = \'Builder Onboarding Step\'')
     expect(query).toContain('JSONExtractString(toString(properties), \'step\') IN (\'welcome\', \'resume-prompt\')')
     expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, event = \'onboarding_step_viewed\' AND step = \'intent\'))')
-    expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, event = \'onboarding_step_viewed\' AND step = \'details\'))')
+    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step IN ('details', 'app_name'))) AS details_ms")
+    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'app_name')) AS app_name_ms")
+    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'app_id')) AS app_id_ms")
+    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'app_icon')) AS app_icon_ms")
     expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, event = \'onboarding_step_viewed\' AND step = \'organization\'))')
     expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, event = \'onboarding_step_viewed\' AND step = \'setup\'))')
     expect(query).toContain('groupUniqArrayIf(tuple(event, toUnixTimestamp64Milli(timestamp)), event IN (')
@@ -89,6 +99,35 @@ describe('buildFrontendOnboardingHogql', () => {
   })
 })
 
+describe('buildFrontendOnboardingWelcomeHogql', () => {
+  it('queries only production v4 pre-org Welcome and Intent views', () => {
+    const query = buildFrontendOnboardingWelcomeHogql(
+      '2026-07-31T00:00:00.000Z',
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+      '2026-08-04T00:00:00.000Z',
+    )
+
+    expect(query).toContain("event = 'onboarding_step_viewed'")
+    expect(query).toContain("toIntOrZero(toString(properties.onboarding_version)) = 4")
+    expect(query).toContain("JSONExtractString(toString(properties), 'flow') = 'pre_org'")
+    expect(query).toContain("JSONExtractString(toString(properties), '$host') = 'console.capgo.app'")
+    expect(query).toContain("JSONExtractString(toString(properties), 'step') AS step")
+    expect(query).toContain("step IN ('welcome', 'intent')")
+    expect(query).toContain("timestamp >= parseDateTimeBestEffort('2026-07-31T00:00:00.000Z')")
+    expect(query).toContain("timestamp < parseDateTimeBestEffort('2026-08-04T00:00:00.000Z')")
+    expect(query).toContain("trim(attempt_id) != ''")
+    expect(query).toContain("minIf(timestamp, step = 'welcome')")
+    expect(query).toContain("minIf(timestamp, step = 'intent')")
+    expect(query).toContain("parseDateTimeBestEffort('2026-08-01T00:00:00.000Z')")
+    expect(query).toContain("parseDateTimeBestEffort('2026-08-03T00:00:00.000Z')")
+    expect(query).toContain('count() OVER () AS total_attempts')
+    expect(query).toContain('ORDER BY anchor_ms ASC, attempt_id ASC')
+    expect(query).toContain('LIMIT 50000')
+    expect(query).not.toContain('onboarding_version IN (1, 2, 3, 4)')
+  })
+})
+
 describe('assertFrontendOnboardingAttemptTotal', () => {
   it('fails closed when grouped total metadata exceeds its limit', () => {
     expect(() => assertFrontendOnboardingAttemptTotal(2, 1)).toThrow('frontend onboarding analytics query exceeded attempt limit')
@@ -98,7 +137,7 @@ describe('assertFrontendOnboardingAttemptTotal', () => {
 })
 
 describe('getAdminFrontendOnboardingAnalytics', () => {
-  it('maps grouped v1 and v3 rows, including repeated v3 interactions', async () => {
+  it('maps grouped v1, v2, and v4 rows, including repeated v4 interactions', async () => {
     const start = '2026-08-01T00:00:00.000Z'
     const intentMs = Date.parse(start) + 60 * 60 * 1000 + 123
     const dailySetupMs = Date.parse(start) + 2 * 60 * 60 * 1000
@@ -108,10 +147,13 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       failureReason: null,
       rows: [{
         attempt_id: 'attempt-1',
-        person_id: 'person-v3',
-        onboarding_version: 3,
+        person_id: 'person-v4',
+        onboarding_version: 4,
         intent_ms: intentMs,
         details_ms: intentMs + 555,
+        app_name_ms: intentMs + 555,
+        app_id_ms: intentMs + 777,
+        app_icon_ms: intentMs + 888,
         organization_ms: intentMs + 1_000,
         setup_ms: intentMs + 2_666,
         interaction_events: [
@@ -165,24 +207,67 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         total_events: 3,
       }],
     })
+    queryPosthogHogqlMock.mockResolvedValueOnce({
+      configured: true,
+      connected: true,
+      failureReason: null,
+      rows: [{
+        attempt_id: 'welcome-advanced',
+        person_id: 'welcome-person-1',
+        welcome_ms: intentMs,
+        intent_ms: intentMs + 1_000,
+        total_attempts: 3,
+      }, {
+        attempt_id: 'welcome-not-viewed',
+        person_id: 'welcome-person-2',
+        welcome_ms: 0,
+        intent_ms: intentMs + 2_000,
+        total_attempts: 3,
+      }, {
+        attempt_id: 'welcome-not-advanced',
+        person_id: 'welcome-person-3',
+        welcome_ms: intentMs + DAY_MS,
+        intent_ms: 0,
+        total_attempts: 3,
+      }],
+    })
 
     const result = await getAdminFrontendOnboardingAnalytics(createContext(), start, '2026-08-03T00:00:00.000Z')
 
     expect(result).toMatchObject({
-      kpis: { attempts: 1, completed: 1, completion_rate: 100, median_completion_ms: 2_666 },
+      kpis: { attempts: 0, completed: 0, completion_rate: 0, median_completion_ms: null },
+      v4_kpis: { attempts: 1, completed: 1, completion_rate: 100, median_completion_ms: 2_666 },
       daily_attempts: [
-        { date: '2026-08-01', v1_attempts: 1, v2_attempts: 1, v3_attempts: 1 },
-        { date: '2026-08-02', v1_attempts: 0, v2_attempts: 0, v3_attempts: 0 },
+        { date: '2026-08-01', v1_attempts: 1, v2_attempts: 1, v3_attempts: 0, v4_attempts: 1 },
+        { date: '2026-08-02', v1_attempts: 0, v2_attempts: 0, v3_attempts: 0, v4_attempts: 0 },
       ],
-      funnels: { v3: [
+      daily_welcome_outcomes: [
+        { date: '2026-08-01', welcome_advanced_to_intent: 1, welcome_not_viewed: 1, welcome_did_not_advance: 0 },
+        { date: '2026-08-02', welcome_advanced_to_intent: 0, welcome_not_viewed: 0, welcome_did_not_advance: 1 },
+      ],
+      deduplicated: {
+        daily_welcome_outcomes: [
+          { date: '2026-08-01', welcome_advanced_to_intent: 1, welcome_not_viewed: 1, welcome_did_not_advance: 0 },
+          { date: '2026-08-02', welcome_advanced_to_intent: 0, welcome_not_viewed: 0, welcome_did_not_advance: 1 },
+        ],
+      },
+      funnels: { v4: [
         { key: 'intent', reached: 1 },
-        { key: 'details', reached: 1 },
+        { key: 'app_name', reached: 1 },
+        { key: 'app_id', reached: 1 },
+        { key: 'app_icon', reached: 1 },
         { key: 'organization', reached: 1 },
         { key: 'setup', reached: 1 },
       ] },
-      v3_graph: { nodes: [{ key: 'onboarding_app_id_entered', count: 1 }] },
+      v4_graph: { nodes: [{ key: 'onboarding_app_id_entered', count: 1 }] },
       v2_graph: { nodes: [{ key: 'onboarding_app_name_entered', count: 1 }] },
       v2_v3_setup_cli_outcomes: {
+        total_users: 1,
+        cli_only: 0,
+        cli_and_ai_instructions: 1,
+        no_cli: 0,
+      },
+      v2_v4_setup_cli_outcomes: {
         total_users: 2,
         cli_only: 0,
         cli_and_ai_instructions: 1,
@@ -191,6 +276,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       posthog_configured: true,
       posthog_connected: true,
     })
+    expect(result.v4_daily_conversions.details_to_organization[0]).toMatchObject({ started: 1, converted: 1 })
     expect(result.daily_setup_cli_outcomes).toEqual([
       {
         date: '2026-08-01',
@@ -207,13 +293,19 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       },
     ])
     expect(result.v2_v3_setup_cli_outcomes).toEqual({
+      total_users: 1,
+      cli_only: 0,
+      cli_and_ai_instructions: 1,
+      no_cli: 0,
+    })
+    expect(result.v2_v4_setup_cli_outcomes).toEqual({
       total_users: 2,
       cli_only: 0,
       cli_and_ai_instructions: 1,
       no_cli: 1,
     })
     expect(result).not.toHaveProperty('onboarding_version')
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
   })
 
   it('returns zero analytics for a successful PostHog query with no matching attempts', async () => {
@@ -240,7 +332,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         returning: createFrontendOnboardingDailySetupCliOutcomeCounts(),
       },
     ])
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
   })
 
   it('fails closed when the daily Setup CLI PostHog query fails', async () => {
@@ -253,7 +345,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       '2026-08-01T00:00:00.000Z',
       '2026-08-03T00:00:00.000Z',
     )).rejects.toThrow('daily Setup CLI analytics PostHog query failed')
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
   })
 
   it('propagates an aggregate query rejection while the daily query is configured', async () => {
@@ -266,7 +358,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       '2026-08-01T00:00:00.000Z',
       '2026-08-03T00:00:00.000Z',
     )).rejects.toThrow('aggregate PostHog request rejected')
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
   })
 
   it('propagates a daily query rejection while the aggregate query is configured', async () => {
@@ -279,7 +371,21 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       '2026-08-01T00:00:00.000Z',
       '2026-08-03T00:00:00.000Z',
     )).rejects.toThrow('daily PostHog request rejected')
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('fails closed when the Welcome outcomes PostHog query fails', async () => {
+    queryPosthogHogqlMock
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+      .mockResolvedValueOnce({ configured: true, connected: false, failureReason: 'timeout', rows: [] })
+
+    await expect(getAdminFrontendOnboardingAnalytics(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+    )).rejects.toThrow('frontend onboarding Welcome analytics PostHog query failed')
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
   })
 
   it.each([
@@ -312,10 +418,22 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         { attempt_id: 'zero-intent', onboarding_version: 2, intent_ms: 0, details_ms: startMs + 2_000, total_attempts: 10 },
         { attempt_id: false, onboarding_version: 2, intent_ms: startMs + 1_000, details_ms: startMs + 2_000, total_attempts: 10 },
         { attempt_id: ['array'], onboarding_version: 2, intent_ms: startMs + 1_000, details_ms: startMs + 2_000, total_attempts: 10 },
-        { attempt_id: 'unknown-version', onboarding_version: 4, intent_ms: startMs + 1_000, total_attempts: 10 },
+        { attempt_id: 'unknown-version', onboarding_version: 5, intent_ms: startMs + 1_000, total_attempts: 10 },
         { attempt_id: 'string-version', onboarding_version: '3', intent_ms: startMs + 1_000, total_attempts: 10 },
-        { attempt_id: 'boolean-step', onboarding_version: 3, intent_ms: startMs + 2_000, details_ms: true, organization_ms: [], setup_ms: {}, interaction_events: 'not-an-array', total_attempts: 10 },
-        { attempt_id: 'valid', onboarding_version: 3, intent_ms: String(startMs + 1_000), details_ms: undefined, organization_ms: 0, setup_ms: 'not-a-number', interaction_events: [[' valid ', startMs + 2_000], ['', startMs + 2_000], ['missing-time'], 42, null], total_attempts: 10 },
+        { attempt_id: 'boolean-step', onboarding_version: 4, intent_ms: startMs + 2_000, details_ms: true, organization_ms: [], setup_ms: {}, interaction_events: 'not-an-array', total_attempts: 10 },
+        { attempt_id: 'valid', onboarding_version: 4, intent_ms: String(startMs + 1_000), details_ms: undefined, organization_ms: 0, setup_ms: 'not-a-number', interaction_events: [[' valid ', startMs + 2_000], ['', startMs + 2_000], ['missing-time'], 42, null], total_attempts: 10 },
+      ],
+    })
+    queryPosthogHogqlMock.mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+    queryPosthogHogqlMock.mockResolvedValueOnce({
+      configured: true,
+      connected: true,
+      failureReason: null,
+      rows: [
+        { attempt_id: ' ', person_id: 'ignored-empty-id', welcome_ms: startMs + 1_000, intent_ms: 0, total_attempts: 4 },
+        { attempt_id: 'ignored-empty-timestamps', person_id: 'ignored-empty', welcome_ms: 0, intent_ms: null, total_attempts: 4 },
+        { attempt_id: false, person_id: 'ignored-invalid-id', welcome_ms: startMs + 1_000, intent_ms: 0, total_attempts: 4 },
+        { attempt_id: 'valid-welcome', person_id: ' welcome-person ', welcome_ms: String(startMs + 2_000), intent_ms: startMs + 3_000, total_attempts: 4 },
       ],
     })
 
@@ -326,16 +444,22 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     )
 
     expect(result).toMatchObject({
-      kpis: { attempts: 2, completed: 0, completion_rate: 0 },
-      funnels: { v3: [
+      v4_kpis: { attempts: 2, completed: 0, completion_rate: 0 },
+      funnels: { v4: [
         { key: 'intent', reached: 2 },
-        { key: 'details', reached: 0 },
+        { key: 'app_name', reached: 0 },
+        { key: 'app_id', reached: 0 },
+        { key: 'app_icon', reached: 0 },
         { key: 'organization', reached: 0 },
         { key: 'setup', reached: 0 },
       ] },
-      v3_graph: { nodes: [{ key: 'valid', count: 1 }] },
+      v4_graph: { nodes: [{ key: 'valid', count: 1 }] },
+      daily_welcome_outcomes: [
+        { date: '2026-08-01', welcome_advanced_to_intent: 1, welcome_not_viewed: 0, welcome_did_not_advance: 0 },
+        { date: '2026-08-02', welcome_advanced_to_intent: 0, welcome_not_viewed: 0, welcome_did_not_advance: 0 },
+      ],
     })
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
   })
 
   it('queries the equal-length previous window through the current end plus 48 hours for post-setup outcomes', async () => {
@@ -344,7 +468,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
 
     await getAdminFrontendOnboardingAnalytics(createContext(), start, end)
 
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
     expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
       `timestamp >= parseDateTimeBestEffort('${new Date(Date.parse(start) - 2 * DAY_MS).toISOString()}')`,
     )
@@ -363,6 +487,18 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     expect(queryPosthogHogqlMock.mock.calls[1][1]).toContain(
       `timestamp < parseDateTimeBestEffort('${new Date(Date.parse(end) + DAY_MS).toISOString()}')`,
     )
+    expect(queryPosthogHogqlMock.mock.calls[2][1]).toContain(
+      `timestamp >= parseDateTimeBestEffort('${new Date(Date.parse(start) - DAY_MS).toISOString()}')`,
+    )
+    expect(queryPosthogHogqlMock.mock.calls[2][1]).toContain(
+      `timestamp < parseDateTimeBestEffort('${new Date(Date.parse(end) + DAY_MS).toISOString()}')`,
+    )
+    expect(queryPosthogHogqlMock.mock.calls[2][1]).toContain(
+      `parseDateTimeBestEffort('${start}')`,
+    )
+    expect(queryPosthogHogqlMock.mock.calls[2][1]).toContain(
+      `parseDateTimeBestEffort('${end}')`,
+    )
   })
 
   it('queries a full 24-hour intent lookback for ranges shorter than the follow-up window', async () => {
@@ -371,7 +507,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
 
     await getAdminFrontendOnboardingAnalytics(createContext(), start, end)
 
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
     expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
       `timestamp >= parseDateTimeBestEffort('${new Date(Date.parse(start) - DAY_MS).toISOString()}')`,
     )
@@ -380,6 +516,9 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     )
     expect(queryPosthogHogqlMock.mock.calls[1][1]).toContain(
       `timestamp >= parseDateTimeBestEffort('${start}')`,
+    )
+    expect(queryPosthogHogqlMock.mock.calls[2][1]).toContain(
+      `timestamp >= parseDateTimeBestEffort('${new Date(Date.parse(start) - DAY_MS).toISOString()}')`,
     )
   })
 
@@ -390,7 +529,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       '2026-08-03T00:00:00.5678Z',
     )
 
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(2)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
     expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain('parseDateTimeBestEffort(\'2026-08-03T00:00:00.567Z\')')
     expect(queryPosthogHogqlMock.mock.calls[1][1]).toContain('parseDateTimeBestEffort(\'2026-08-01T00:00:00.123Z\')')
     expect(queryPosthogHogqlMock.mock.calls[1][1]).toContain('parseDateTimeBestEffort(\'2026-08-03T00:00:00.567Z\')')
@@ -425,6 +564,28 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     expect(cloudlogErrMock).toHaveBeenCalledWith(expect.objectContaining({
       message: 'frontend_onboarding_analytics_attempt_limit_exceeded',
       attempt_limit: FRONTEND_ONBOARDING_ATTEMPT_LIMIT,
+      total_attempts: FRONTEND_ONBOARDING_ATTEMPT_LIMIT + 1,
+    }))
+  })
+
+  it('applies the same attempt limit to the Welcome outcomes query', async () => {
+    queryPosthogHogqlMock
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+      .mockResolvedValueOnce({
+        configured: true,
+        connected: true,
+        failureReason: null,
+        rows: [{ total_attempts: FRONTEND_ONBOARDING_ATTEMPT_LIMIT + 1 }],
+      })
+
+    await expect(getAdminFrontendOnboardingAnalytics(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+    )).rejects.toThrow('frontend onboarding analytics query exceeded attempt limit')
+    expect(cloudlogErrMock).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'welcome',
       total_attempts: FRONTEND_ONBOARDING_ATTEMPT_LIMIT + 1,
     }))
   })

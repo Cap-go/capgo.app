@@ -78,6 +78,7 @@ const validRolloutOptions = safeParseSchema(optionsUploadSchema, {
   apikey: 'test-key',
   rollout: 12.5,
   rolloutPercentageBps: 1250,
+  rolloutAdvance: true,
   rolloutCacheTtlSeconds: 3600,
 })
 if (!validRolloutOptions.success) {

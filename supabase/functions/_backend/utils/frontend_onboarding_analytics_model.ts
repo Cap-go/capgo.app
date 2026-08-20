@@ -1,9 +1,9 @@
-export const FRONTEND_ONBOARDING_VERSIONS = [1, 2, 3] as const
+export const FRONTEND_ONBOARDING_VERSIONS = [1, 2, 3, 4] as const
 export type FrontendOnboardingVersion = typeof FRONTEND_ONBOARDING_VERSIONS[number]
 export const FRONTEND_ONBOARDING_FOLLOWUP_MS = 24 * 60 * 60 * 1000
 export const FRONTEND_ONBOARDING_PRODUCTION_HOST = ['console', 'capgo', 'app'].join('.')
 
-export type FrontendOnboardingStageKey = 'intent' | 'details' | 'organization' | 'setup'
+export type FrontendOnboardingStageKey = 'intent' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'setup'
 
 export interface FrontendOnboardingAttempt {
   attemptId: string
@@ -11,6 +11,9 @@ export interface FrontendOnboardingAttempt {
   personId: string
   intentMs: number
   detailsMs: number | null
+  appNameMs: number | null
+  appIdMs: number | null
+  appIconMs: number | null
   organizationMs: number | null
   setupMs: number | null
   aiInstructionsCopiedMs: number[]
@@ -25,7 +28,7 @@ export interface FrontendOnboardingInteractionEvent {
 
 export interface FrontendOnboardingFunnelStage {
   key: FrontendOnboardingStageKey
-  label: 'Intent' | 'App details' | 'Organization' | 'Setup reached'
+  label: 'Intent' | 'App details' | 'App name' | 'App ID' | 'App icon' | 'Organization' | 'Organization details' | 'Setup reached'
   reached: number
   of_start_percent: number
   dropoff_percent: number
@@ -57,6 +60,7 @@ export interface FrontendOnboardingDailyAttempt {
   v1_attempts: number
   v2_attempts: number
   v3_attempts: number
+  v4_attempts: number
 }
 
 export interface FrontendOnboardingDailyConversion {
@@ -75,14 +79,21 @@ export interface FrontendOnboardingSetupCliOutcomes {
 
 export interface FrontendOnboardingAnalytics {
   kpis: FrontendOnboardingPeriodKpis & { comparison: FrontendOnboardingComparison }
+  v4_kpis: FrontendOnboardingPeriodKpis & { comparison: FrontendOnboardingComparison }
   daily_attempts: FrontendOnboardingDailyAttempt[]
   deduplicated: {
     daily_attempts: FrontendOnboardingDailyAttempt[]
     funnels: {
       v3: FrontendOnboardingFunnelStage[]
+      v4: FrontendOnboardingFunnelStage[]
     }
   }
   daily_conversions: {
+    intent_to_details: FrontendOnboardingDailyConversion[]
+    details_to_organization: FrontendOnboardingDailyConversion[]
+    organization_to_setup: FrontendOnboardingDailyConversion[]
+  }
+  v4_daily_conversions: {
     intent_to_details: FrontendOnboardingDailyConversion[]
     details_to_organization: FrontendOnboardingDailyConversion[]
     organization_to_setup: FrontendOnboardingDailyConversion[]
@@ -91,6 +102,7 @@ export interface FrontendOnboardingAnalytics {
     v1: FrontendOnboardingFunnelStage[]
     v2: FrontendOnboardingFunnelStage[]
     v3: FrontendOnboardingFunnelStage[]
+    v4: FrontendOnboardingFunnelStage[]
   }
   v2_graph: {
     nodes: Array<{ key: string, count: number }>
@@ -98,15 +110,28 @@ export interface FrontendOnboardingAnalytics {
   v3_graph: {
     nodes: Array<{ key: string, count: number }>
   }
+  v4_graph: {
+    nodes: Array<{ key: string, count: number }>
+  }
   v2_v3_setup_cli_outcomes: FrontendOnboardingSetupCliOutcomes
+  v2_v4_setup_cli_outcomes: FrontendOnboardingSetupCliOutcomes
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
-const FUNNEL_STAGES: Array<Pick<FrontendOnboardingFunnelStage, 'key' | 'label'>> = [
+const LEGACY_FUNNEL_STAGES: Array<Pick<FrontendOnboardingFunnelStage, 'key' | 'label'>> = [
   { key: 'intent', label: 'Intent' },
   { key: 'details', label: 'App details' },
   { key: 'organization', label: 'Organization' },
+  { key: 'setup', label: 'Setup reached' },
+]
+
+const V4_FUNNEL_STAGES: Array<Pick<FrontendOnboardingFunnelStage, 'key' | 'label'>> = [
+  { key: 'intent', label: 'Intent' },
+  { key: 'app_name', label: 'App name' },
+  { key: 'app_id', label: 'App ID' },
+  { key: 'app_icon', label: 'App icon' },
+  { key: 'organization', label: 'Organization details' },
   { key: 'setup', label: 'Setup reached' },
 ]
 
@@ -123,11 +148,20 @@ function isStepInFollowupWindow(timestamp: number | null, intentMs: number): tim
 
 function stageRank(attempt: FrontendOnboardingAttempt): number {
   if (isStepInFollowupWindow(attempt.setupMs, attempt.intentMs))
-    return 3
+    return 6
   if (isStepInFollowupWindow(attempt.organizationMs, attempt.intentMs))
-    return 2
+    return 5
+  if (attempt.onboardingVersion === 4) {
+    if (isStepInFollowupWindow(attempt.appIconMs, attempt.intentMs))
+      return 4
+    if (isStepInFollowupWindow(attempt.appIdMs, attempt.intentMs))
+      return 3
+    if (isStepInFollowupWindow(attempt.appNameMs, attempt.intentMs))
+      return 2
+    return 0
+  }
   if (isStepInFollowupWindow(attempt.detailsMs, attempt.intentMs))
-    return 1
+    return 2
   return 0
 }
 
@@ -162,7 +196,22 @@ function median(values: number[]): number | null {
     : sorted[middle]
 }
 
-function buildFunnel(attempts: FrontendOnboardingAttempt[]): FrontendOnboardingFunnelStage[] {
+function buildFunnelStages(
+  stages: Array<Pick<FrontendOnboardingFunnelStage, 'key' | 'label'>>,
+  reached: number[],
+): FrontendOnboardingFunnelStage[] {
+  return stages.map((stage, index) => {
+    const previousReached = index === 0 ? 0 : reached[index - 1]
+    return {
+      ...stage,
+      reached: reached[index],
+      of_start_percent: reached[0] === 0 ? 0 : reached[index] / reached[0] * 100,
+      dropoff_percent: previousReached === 0 ? 0 : (previousReached - reached[index]) / previousReached * 100,
+    }
+  })
+}
+
+function buildLegacyFunnel(attempts: FrontendOnboardingAttempt[]): FrontendOnboardingFunnelStage[] {
   const reached = [
     attempts.length,
     attempts.filter(attempt => (
@@ -177,15 +226,38 @@ function buildFunnel(attempts: FrontendOnboardingAttempt[]): FrontendOnboardingF
     attempts.filter(attempt => isStepInFollowupWindow(attempt.setupMs, attempt.intentMs)).length,
   ]
 
-  return FUNNEL_STAGES.map((stage, index) => {
-    const previousReached = index === 0 ? 0 : reached[index - 1]
-    return {
-      ...stage,
-      reached: reached[index],
-      of_start_percent: reached[0] === 0 ? 0 : reached[index] / reached[0] * 100,
-      dropoff_percent: previousReached === 0 ? 0 : (previousReached - reached[index]) / previousReached * 100,
-    }
-  })
+  return buildFunnelStages(LEGACY_FUNNEL_STAGES, reached)
+}
+
+function buildV4Funnel(attempts: FrontendOnboardingAttempt[]): FrontendOnboardingFunnelStage[] {
+  const reached = [
+    attempts.length,
+    attempts.filter(attempt => (
+      isStepInFollowupWindow(attempt.appNameMs, attempt.intentMs)
+      || isStepInFollowupWindow(attempt.appIdMs, attempt.intentMs)
+      || isStepInFollowupWindow(attempt.appIconMs, attempt.intentMs)
+      || isStepInFollowupWindow(attempt.organizationMs, attempt.intentMs)
+      || isStepInFollowupWindow(attempt.setupMs, attempt.intentMs)
+    )).length,
+    attempts.filter(attempt => (
+      isStepInFollowupWindow(attempt.appIdMs, attempt.intentMs)
+      || isStepInFollowupWindow(attempt.appIconMs, attempt.intentMs)
+      || isStepInFollowupWindow(attempt.organizationMs, attempt.intentMs)
+      || isStepInFollowupWindow(attempt.setupMs, attempt.intentMs)
+    )).length,
+    attempts.filter(attempt => (
+      isStepInFollowupWindow(attempt.appIconMs, attempt.intentMs)
+      || isStepInFollowupWindow(attempt.organizationMs, attempt.intentMs)
+      || isStepInFollowupWindow(attempt.setupMs, attempt.intentMs)
+    )).length,
+    attempts.filter(attempt => (
+      isStepInFollowupWindow(attempt.organizationMs, attempt.intentMs)
+      || isStepInFollowupWindow(attempt.setupMs, attempt.intentMs)
+    )).length,
+    attempts.filter(attempt => isStepInFollowupWindow(attempt.setupMs, attempt.intentMs)).length,
+  ]
+
+  return buildFunnelStages(V4_FUNNEL_STAGES, reached)
 }
 
 function findLargestDropoff(funnel: FrontendOnboardingFunnelStage[]): FrontendOnboardingLargestDropoff | null {
@@ -210,8 +282,12 @@ function findLargestDropoff(funnel: FrontendOnboardingFunnelStage[]): FrontendOn
   return largestDropoff
 }
 
-function summarizePeriod(attempts: FrontendOnboardingAttempt[]): PeriodSummary {
+function summarizePeriod(
+  attempts: FrontendOnboardingAttempt[],
+  buildFunnel: (attempts: FrontendOnboardingAttempt[]) => FrontendOnboardingFunnelStage[],
+): PeriodSummary {
   const funnel = buildFunnel(attempts)
+  const completed = funnel.at(-1)?.reached ?? 0
   const completionDurations: number[] = []
   for (const attempt of attempts) {
     const setupMs = attempt.setupMs
@@ -223,8 +299,8 @@ function summarizePeriod(attempts: FrontendOnboardingAttempt[]): PeriodSummary {
     funnel,
     kpis: {
       attempts: attempts.length,
-      completed: funnel[3].reached,
-      completion_rate: attempts.length === 0 ? 0 : funnel[3].reached / attempts.length * 100,
+      completed,
+      completion_rate: attempts.length === 0 ? 0 : completed / attempts.length * 100,
       median_completion_ms: median(completionDurations),
       largest_dropoff: findLargestDropoff(funnel),
     },
@@ -248,7 +324,7 @@ function eachUtcDate(startMs: number, endMs: number): string[] {
 }
 
 function buildDailyAttempts(attempts: FrontendOnboardingAttempt[], startMs: number, endMs: number): FrontendOnboardingDailyAttempt[] {
-  const emptyCounts = () => ({ v1_attempts: 0, v2_attempts: 0, v3_attempts: 0 })
+  const emptyCounts = () => ({ v1_attempts: 0, v2_attempts: 0, v3_attempts: 0, v4_attempts: 0 })
   const attemptsByDate = new Map<string, ReturnType<typeof emptyCounts>>()
   for (const attempt of attempts) {
     const date = utcDate(attempt.intentMs)
@@ -266,9 +342,15 @@ function firstReachedStageMs(attempt: FrontendOnboardingAttempt, stage: Frontend
     ? [attempt.intentMs]
     : stage === 'details'
       ? [attempt.detailsMs, attempt.organizationMs, attempt.setupMs]
-      : stage === 'organization'
-        ? [attempt.organizationMs, attempt.setupMs]
-        : [attempt.setupMs]
+      : stage === 'app_name'
+        ? [attempt.appNameMs, attempt.appIdMs, attempt.appIconMs, attempt.organizationMs, attempt.setupMs]
+        : stage === 'app_id'
+          ? [attempt.appIdMs, attempt.appIconMs, attempt.organizationMs, attempt.setupMs]
+          : stage === 'app_icon'
+            ? [attempt.appIconMs, attempt.organizationMs, attempt.setupMs]
+            : stage === 'organization'
+              ? [attempt.organizationMs, attempt.setupMs]
+              : [attempt.setupMs]
 
   const reached = candidates.filter(timestamp => isStepInFollowupWindow(timestamp, attempt.intentMs))
   return reached.length === 0 ? null : Math.min(...reached)
@@ -321,7 +403,7 @@ function buildInteractionGraph(attempts: FrontendOnboardingAttempt[]): Array<{ k
     .map(([key, count]) => ({ key, count }))
 }
 
-function buildV2V3SetupCliOutcomes(attempts: FrontendOnboardingAttempt[]): FrontendOnboardingSetupCliOutcomes {
+function buildSetupCliOutcomes(attempts: FrontendOnboardingAttempt[]): FrontendOnboardingSetupCliOutcomes {
   const outcomesByPerson = new Map<string, { copiedAiInstructions: boolean, startedCli: boolean }>()
 
   for (const attempt of attempts) {
@@ -384,38 +466,62 @@ export function buildFrontendOnboardingAnalytics(
   const currentV1Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 1)
   const currentV2Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 2)
   const currentV3Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 3)
-  const currentV2AndV3Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 2 || attempt.onboardingVersion === 3)
+  const currentV4Attempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 4)
+  const currentV2V3SetupCliOutcomeAttempts = currentAttempts.filter(attempt => attempt.onboardingVersion === 2 || attempt.onboardingVersion === 3)
+  const currentV2V4SetupCliOutcomeAttempts = currentAttempts.filter(attempt => attempt.onboardingVersion >= 2)
   const currentV3ConversionAttempts = attempts.filter(attempt => attempt.onboardingVersion === 3
     && attempt.intentMs >= currentStartMs - FRONTEND_ONBOARDING_FOLLOWUP_MS
     && attempt.intentMs < currentEndMs)
+  const currentV4ConversionAttempts = attempts.filter(attempt => attempt.onboardingVersion === 4
+    && attempt.intentMs >= currentStartMs - FRONTEND_ONBOARDING_FOLLOWUP_MS
+    && attempt.intentMs < currentEndMs)
   const previousV3Attempts = previousAttempts.filter(attempt => attempt.onboardingVersion === 3)
-  const currentV3 = summarizePeriod(currentV3Attempts)
-  const previousV3 = summarizePeriod(previousV3Attempts)
+  const previousV4Attempts = previousAttempts.filter(attempt => attempt.onboardingVersion === 4)
+  const currentV3 = summarizePeriod(currentV3Attempts, buildLegacyFunnel)
+  const previousV3 = summarizePeriod(previousV3Attempts, buildLegacyFunnel)
+  const currentV4 = summarizePeriod(currentV4Attempts, buildV4Funnel)
+  const previousV4 = summarizePeriod(previousV4Attempts, buildV4Funnel)
   const deduplicatedCurrentAttempts = selectDeduplicatedAttempts(currentAttempts)
   const deduplicatedCurrentV3Attempts = selectDeduplicatedAttempts(currentV3Attempts)
+  const deduplicatedCurrentV4Attempts = selectDeduplicatedAttempts(currentV4Attempts)
 
   return {
     kpis: {
       ...currentV3.kpis,
       comparison: comparePeriods(currentV3.kpis, previousV3.kpis),
     },
+    v4_kpis: {
+      ...currentV4.kpis,
+      comparison: comparePeriods(currentV4.kpis, previousV4.kpis),
+    },
     daily_attempts: buildDailyAttempts(currentAttempts, currentStartMs, currentEndMs),
     deduplicated: {
       daily_attempts: buildDailyAttempts(deduplicatedCurrentAttempts, currentStartMs, currentEndMs),
-      funnels: { v3: buildFunnel(deduplicatedCurrentV3Attempts) },
+      funnels: {
+        v3: buildLegacyFunnel(deduplicatedCurrentV3Attempts),
+        v4: buildV4Funnel(deduplicatedCurrentV4Attempts),
+      },
     },
     daily_conversions: {
       intent_to_details: buildDailyConversion(attempts, currentStartMs, currentEndMs, 'intent', 'details'),
       details_to_organization: buildDailyConversion(currentV3ConversionAttempts, currentStartMs, currentEndMs, 'details', 'organization'),
       organization_to_setup: buildDailyConversion(currentV3ConversionAttempts, currentStartMs, currentEndMs, 'organization', 'setup'),
     },
+    v4_daily_conversions: {
+      intent_to_details: buildDailyConversion(attempts, currentStartMs, currentEndMs, 'intent', 'details'),
+      details_to_organization: buildDailyConversion(currentV4ConversionAttempts, currentStartMs, currentEndMs, 'details', 'organization'),
+      organization_to_setup: buildDailyConversion(currentV4ConversionAttempts, currentStartMs, currentEndMs, 'organization', 'setup'),
+    },
     funnels: {
-      v1: buildFunnel(currentV1Attempts),
-      v2: buildFunnel(currentV2Attempts),
-      v3: currentV3.funnel,
+      v1: buildLegacyFunnel(currentV1Attempts),
+      v2: buildLegacyFunnel(currentV2Attempts),
+      v3: buildLegacyFunnel(currentV3Attempts),
+      v4: currentV4.funnel,
     },
     v2_graph: { nodes: buildInteractionGraph(currentV2Attempts) },
     v3_graph: { nodes: buildInteractionGraph(currentV3Attempts) },
-    v2_v3_setup_cli_outcomes: buildV2V3SetupCliOutcomes(currentV2AndV3Attempts),
+    v4_graph: { nodes: buildInteractionGraph(currentV4Attempts) },
+    v2_v3_setup_cli_outcomes: buildSetupCliOutcomes(currentV2V3SetupCliOutcomeAttempts),
+    v2_v4_setup_cli_outcomes: buildSetupCliOutcomes(currentV2V4SetupCliOutcomeAttempts),
   }
 }

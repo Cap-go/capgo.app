@@ -10,6 +10,7 @@ import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
 import { DEFAULT_LIMIT } from './types.ts'
 import { getEnv } from './utils.ts'
+import { buildVersionCompareSql } from './versionCompare.ts'
 
 /** Escape a value for safe interpolation into an Analytics Engine SQL string. */
 export function escapeSqlString(value: string): string {
@@ -1038,12 +1039,16 @@ export async function countDevicesCF(
   options?: {
     platform?: Database['public']['Enums']['platform_os']
     updatedAt?: { gt?: string, lte?: string }
+    osVersionCompare?: ReadDevicesParams['os_version_compare']
+    versionNameCompare?: ReadDevicesParams['version_name_compare']
   },
 ) {
   // Use Analytics Engine DEVICE_INFO for counting devices
   const platform = options?.platform
   const updatedAt = options?.updatedAt
-  const versionNameCondition = buildVersionNameSqlCondition(versionName)
+  const osVersionCondition = buildVersionCompareSql('os_version', options?.osVersionCompare, 'cf')
+  const versionNameCompareCondition = buildVersionCompareSql('version_name', options?.versionNameCompare, 'cf')
+  const versionNameCondition = versionNameCompareCondition ? '' : buildVersionNameSqlCondition(versionName)
   const conditions = [`index1 = '${escapeSqlString(app_id)}'`]
 
   if (deviceIds.length) {
@@ -1061,12 +1066,16 @@ export async function countDevicesCF(
   // Match latest aggregated fields for current-state filtering (same as Supabase devices table).
   // customIdMode must use aggregated custom_id so historical non-empty blob5 rows
   // do not keep devices that later cleared their custom id.
-  if (versionNameCondition || platform || search || customIdMode) {
+  if (versionNameCondition || versionNameCompareCondition || osVersionCondition || platform || search || customIdMode) {
     const outerConditions: string[] = []
     if (customIdMode)
       outerConditions.push(`custom_id != ''`)
     if (versionNameCondition)
       outerConditions.push(versionNameCondition)
+    if (versionNameCompareCondition)
+      outerConditions.push(versionNameCompareCondition)
+    if (osVersionCondition)
+      outerConditions.push(osVersionCondition)
     if (platform)
       outerConditions.push(`platform = ${platformOsToCFDouble(platform)}`)
     if (search) {
@@ -1084,6 +1093,7 @@ FROM (
   SELECT
     argMax(blob1, timestamp) AS device_id,
     argMax(blob2, timestamp) AS version_name,
+    argMax(blob4, timestamp) AS os_version,
     argMax(blob5, timestamp) AS custom_id,
     argMax(double1, timestamp) AS platform
   FROM device_info
@@ -1220,7 +1230,10 @@ function buildReadDevicesCFOuterConditions(params: ReadDevicesParams, devicesOrd
     buildReadDevicesCFCustomIdsCondition(params.customIds),
     // Match the latest aggregated platform/version/search, not historical event rows.
     buildReadDevicesCFPlatformCondition(params.platform),
-    buildReadDevicesCFVersionNameCondition(params.version_name),
+    params.version_name_compare
+      ? buildVersionCompareSql('version_name', params.version_name_compare, 'cf')
+      : buildReadDevicesCFVersionNameCondition(params.version_name),
+    buildVersionCompareSql('os_version', params.os_version_compare, 'cf'),
     buildReadDevicesCFSearchCondition(params.search, params.deviceIds),
   ].filter((condition): condition is string => Boolean(condition))
 }

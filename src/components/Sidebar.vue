@@ -328,7 +328,7 @@ function tabLabel(tab: Tab) {
       }"
     >
       <div
-        class="flex h-full w-64 min-w-64 flex-col transition-[padding-left,padding-right,padding-inline] duration-500 ease-in-out motion-reduce:!transition-none"
+        class="flex h-full w-64 min-w-64 flex-col transition-[padding-inline] duration-500 ease-in-out motion-reduce:!transition-none"
         :class="isRail ? 'px-0' : 'px-3'"
       >
         <!-- Sidebar header -->

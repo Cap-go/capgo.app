@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, useId } from 'vue'
+import { ref, useId, watch } from 'vue'
 
 defineProps<{
   chooseLabel: string
@@ -17,6 +17,14 @@ const modelValue = defineModel<unknown>()
 const fileInputId = `app-onboarding-icon-input-${useId()}`
 const fileInput = ref<HTMLInputElement | null>(null)
 const selectedFileName = ref('')
+
+watch(modelValue, (value) => {
+  if (value)
+    return
+  selectedFileName.value = ''
+  if (fileInput.value)
+    fileInput.value.value = ''
+})
 
 function openFilePicker() {
   try {

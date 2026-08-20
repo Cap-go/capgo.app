@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 const props = defineProps<{
   options: string[]
   modelValue: string[]
+  hideLabel?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -78,13 +79,15 @@ function clearSelection() {
 
 <template>
   <div class="flex w-full flex-col gap-2" data-test="device-bundle-filter">
-    <div class="flex items-center justify-between gap-2">
+    <div v-if="!hideLabel || modelValue.length" class="flex items-center justify-between gap-2">
       <label
+        v-if="!hideLabel"
         :for="searchId"
         class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400"
       >
         {{ t('bundle') }}
       </label>
+      <span v-else />
       <button
         v-if="modelValue.length"
         type="button"

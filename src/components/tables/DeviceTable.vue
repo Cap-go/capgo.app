@@ -19,6 +19,10 @@ import {
 } from '~/services/dateRange'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 import BundleMultiFilter from './BundleMultiFilter.vue'
+import VersionCompareField from './VersionCompareField.vue'
+
+type VersionCompareOp = 'eq' | 'gt' | 'gte' | 'lt' | 'lte'
+type BundleCompareOp = VersionCompareOp | 'in'
 
 const props = defineProps<{
   appId: string
@@ -62,13 +66,32 @@ const dateRange = ref<[Date, Date] | null>([initialRange.start, initialRange.end
 const dateRangeMode = ref<DateRangePreset>(TABLE_DATE_RANGE_DEFAULT)
 const selectedPlatform = ref<'' | PlatformOs>('')
 const selectedVersionNames = ref<string[]>(props.versionName ? [props.versionName] : [])
+const bundleCompareOp = ref<BundleCompareOp>('in')
+const osVersionOp = ref<VersionCompareOp>('gte')
+const osVersionValue = ref('')
+const isExporting = ref(false)
 const bundleNames = ref<string[]>([])
 const dateRangePickerRef = ref<DateRangePickerHandle>()
 const skipFilterReload = ref(false)
 const offset = 10
-const activeExtraFilters = computed(() =>
-  (selectedPlatform.value ? 1 : 0) + (selectedVersionNames.value.length ? 1 : 0),
-)
+function hasVersionDigits(value: string | undefined) {
+  return Boolean(value && /\d/.test(value.trim()))
+}
+const activeExtraFilters = computed(() => {
+  const bundleActive = bundleCompareOp.value === 'in'
+    ? selectedVersionNames.value.length > 0
+    : hasVersionDigits(selectedVersionNames.value[0])
+  return (selectedPlatform.value ? 1 : 0)
+    + (bundleActive ? 1 : 0)
+    + (hasVersionDigits(osVersionValue.value) ? 1 : 0)
+})
+const bundleRangeValue = computed({
+  get: () => selectedVersionNames.value[0] ?? '',
+  set: (value: string) => {
+    const trimmed = value.trim()
+    selectedVersionNames.value = trimmed ? [trimmed] : []
+  },
+})
 const platformOptions = computed(() => [
   { value: '' as const, label: t('all-platforms') },
   { value: 'ios' as const, label: t('platform-ios') },
@@ -88,6 +111,9 @@ function clearExtraFilters() {
   skipFilterReload.value = true
   selectedPlatform.value = ''
   selectedVersionNames.value = []
+  bundleCompareOp.value = 'in'
+  osVersionOp.value = 'gte'
+  osVersionValue.value = ''
   nextTick(() => {
     skipFilterReload.value = false
   })
@@ -190,10 +216,43 @@ function getPlatformFilter(): PlatformOs | undefined {
   return selectedPlatform.value || undefined
 }
 
+function getOsVersionFilter() {
+  const value = osVersionValue.value.trim()
+  if (!value || !/\d/.test(value))
+    return {}
+  return {
+    osVersion: value,
+    osVersionOp: osVersionOp.value,
+  }
+}
+
+function getBundleFilterPayload() {
+  const names = getVersionNameFilter()
+  if (bundleCompareOp.value === 'in')
+    return { versionNames: names, versionNameOp: undefined as undefined }
+  const value = names?.[0]
+  if (!value || !/\d/.test(value))
+    return { versionNames: undefined, versionNameOp: undefined as undefined }
+  return { versionNames: [value], versionNameOp: bundleCompareOp.value }
+}
+
+function getDevicesFilterBody() {
+  return {
+    ...getBundleFilterPayload(),
+    ...getOsVersionFilter(),
+    platform: getPlatformFilter(),
+  }
+}
+
 function getQuerySignature() {
+  const bundle = getBundleFilterPayload()
+  const os = getOsVersionFilter()
   return JSON.stringify({
     appId: props.appId,
-    versionNames: getVersionNameFilter() ?? [],
+    versionNames: bundle.versionNames ?? [],
+    versionNameOp: bundle.versionNameOp ?? 'in',
+    osVersion: os.osVersion ?? '',
+    osVersionOp: os.osVersionOp ?? osVersionOp.value,
     platform: getPlatformFilter() ?? '',
     search: getSearchTerm(),
     order: getActiveOrder(columns.value),
@@ -278,8 +337,7 @@ async function countDevices(options?: { includeDateRange?: boolean }) {
       body: JSON.stringify({
         count: true,
         appId: props.appId,
-        versionNames: getVersionNameFilter(),
-        platform: getPlatformFilter(),
+        ...getDevicesFilterBody(),
         devicesId: deviceIds.length > 0 ? deviceIds : undefined,
         search: searchTerm,
         order: getActiveOrder(columns.value),
@@ -436,8 +494,7 @@ async function fetchDevicesPage(cursor: string | undefined | null) {
     },
     body: JSON.stringify({
       appId: props.appId,
-      versionNames: getVersionNameFilter(),
-      platform: getPlatformFilter(),
+      ...getDevicesFilterBody(),
       devicesId: ids.length ? ids : undefined,
       search: searchTerm,
       order: getActiveOrder(columns.value),
@@ -603,6 +660,9 @@ watch(() => props.appId, async (appId) => {
   skipFilterReload.value = true
   selectedPlatform.value = ''
   selectedVersionNames.value = props.versionName ? [props.versionName] : []
+  bundleCompareOp.value = 'in'
+  osVersionOp.value = 'gte'
+  osVersionValue.value = ''
   await loadBundleNames()
   if (appId !== props.appId)
     return
@@ -613,16 +673,114 @@ watch(() => props.appId, async (appId) => {
 watch(() => props.versionName, (value) => {
   cancelScheduledReload()
   skipFilterReload.value = true
+  bundleCompareOp.value = 'in'
   selectedVersionNames.value = value ? [value] : []
-  skipFilterReload.value = false
-  debouncedReload()
+  nextTick(() => {
+    skipFilterReload.value = false
+    debouncedReload()
+  })
 })
 
-watch([selectedPlatform, selectedVersionNames], () => {
+watch([selectedPlatform, selectedVersionNames, bundleCompareOp, osVersionOp, osVersionValue], () => {
   if (skipFilterReload.value)
     return
   debouncedReload()
 }, { deep: true })
+
+watch(bundleCompareOp, (op, previous) => {
+  if (skipFilterReload.value)
+    return
+  if ((op === 'in') !== (previous === 'in')) {
+    selectedVersionNames.value = []
+    return
+  }
+  if (op !== 'in' && selectedVersionNames.value.length > 1)
+    selectedVersionNames.value = selectedVersionNames.value.slice(0, 1)
+})
+
+function downloadText(filename: string, content: string, mime: string) {
+  const blob = new Blob([content], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+async function exportDevices(format: 'csv' | 'json') {
+  if (isExporting.value)
+    return
+  isExporting.value = true
+  const loadingToastId = toast.loading(t('exporting-devices'))
+  try {
+    const { data: currentSession } = await supabase.auth.getSession()!
+    if (!currentSession.session) {
+      toast.dismiss(loadingToastId)
+      toast.error(t('not-logged-in'))
+      return
+    }
+    const ids = await resolveDeviceIds()
+    const response = await fetch(`${defaultApiHost}/private/devices/export`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'authorization': `Bearer ${currentSession.session.access_token}`,
+      },
+      body: JSON.stringify({
+        appId: props.appId,
+        ...getDevicesFilterBody(),
+        devicesId: ids.length ? ids : undefined,
+        search: getSearchTerm(),
+        order: getActiveOrder(columns.value),
+        customIdMode: filters.value.CustomId,
+        format,
+        ...getDateRangePayload(),
+      }),
+    })
+    if (!response.ok) {
+      const err = (await response.json().catch(() => ({}))) as { message?: string }
+      toast.dismiss(loadingToastId)
+      toast.error(err?.message || t('export-failed'))
+      return
+    }
+    const data = await response.json() as {
+      csv?: string
+      filename?: string
+      contentType?: string
+      data?: unknown[]
+      rowCount?: number
+      limit?: number
+    }
+    if (format === 'json') {
+      const filename = `capgo-devices-${props.appId}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`
+      downloadText(filename, `${JSON.stringify(data.data ?? [], null, 2)}\n`, 'application/json')
+    }
+    else {
+      if (!data.csv || !data.filename) {
+        toast.dismiss(loadingToastId)
+        toast.error(t('export-failed'))
+        return
+      }
+      downloadText(data.filename, data.csv, data.contentType || 'text/csv; charset=utf-8')
+    }
+    toast.dismiss(loadingToastId)
+    if ((data.rowCount ?? 0) >= (data.limit ?? 10_000))
+      toast.success(t('export-limit-reached', { count: data.rowCount }))
+    else
+      toast.success(t('export-ready'))
+  }
+  catch (error) {
+    console.error(error)
+    toast.dismiss(loadingToastId)
+    toast.error(t('export-failed'))
+  }
+  finally {
+    isExporting.value = false
+  }
+}
 </script>
 
 <template>
@@ -633,12 +791,15 @@ watch([selectedPlatform, selectedVersionNames], () => {
       filter-text="Filters"
       :extra-filter-count="activeExtraFilters"
       :show-add="showAddButton"
+      :exportable="true"
+      :export-loading="isExporting"
       :is-loading="isLoading"
       :search-placeholder="t('search-by-device-id')"
       @add="handleAddDevice"
       @reload="reload()"
       @reset="refreshData()"
       @clear-extra-filters="clearExtraFilters"
+      @export="exportDevices"
     >
       <template #toolbar-extras>
         <ChannelOverrideRetentionNotice v-if="showAddButton" show-label />
@@ -756,9 +917,30 @@ watch([selectedPlatform, selectedVersionNames], () => {
             </button>
           </div>
         </fieldset>
+        <VersionCompareField
+          :label="t('os-version')"
+          :op="osVersionOp"
+          :value="osVersionValue"
+          :placeholder="t('os-version-placeholder')"
+          test-id="device-os-version-filter"
+          @update:op="osVersionOp = $event === 'in' ? 'gte' : $event"
+          @update:value="osVersionValue = $event"
+        />
+        <VersionCompareField
+          :label="t('bundle')"
+          :op="bundleCompareOp"
+          :value="bundleRangeValue"
+          :placeholder="t('bundle-range-placeholder')"
+          test-id="device-bundle-compare"
+          include-in
+          @update:op="bundleCompareOp = $event"
+          @update:value="bundleRangeValue = $event"
+        />
         <BundleMultiFilter
+          v-if="bundleCompareOp === 'in'"
           v-model="selectedVersionNames"
           :options="bundleNames"
+          hide-label
         />
       </template>
     </DataTable>

@@ -387,6 +387,7 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **-c** | <code>string</code> | Channel to link to. Use commas for multiple channels, for example production,beta |
 | **--rollout** | <code>string</code> | Set the uploaded bundle as this channel's rollout target at a percentage from 0 to 100 |
 | **--rollout-percentage-bps** | <code>string</code> | Set the uploaded bundle rollout percentage in basis points from 0 to 10000 |
+| **--rollout-advance** | <code>boolean</code> | Promote the current rollout target to stable, then set the uploaded bundle as the new rollout. Reuses the previous percentage unless --rollout or --rollout-percentage-bps is also set |
 | **--rollout-cache-ttl-seconds** | <code>string</code> | Cloudflare rollout decision cache TTL in seconds |
 | **-e** | <code>string</code> | Link to external URL instead of upload to Capgo Cloud |
 | **--iv-session-key** | <code>string</code> | Set the IV and session key for bundle URL external |
@@ -1466,6 +1467,7 @@ npx @capgo/cli@latest build request com.example.app --platform ios --path .
 | **--skip-marketing-version-bump** | <code>boolean</code> | Skip automatic marketing version (CFBundleShortVersionString / versionName) bump when the app is already released. |
 | **--no-skip-marketing-version-bump** | <code>boolean</code> | Override saved credentials to re-enable automatic marketing version bump for this build only. |
 | **--sync-ios-version** | <code>boolean</code> | iOS: sync the app version from package.json before uploading the project. Updates MARKETING_VERSION or CFBundleShortVersionString based on the Xcode Info.plist configuration. |
+| **--sync-android-version** | <code>boolean</code> | Android: sync versionName in android/app/build.gradle from package.json before uploading the project. Fails unless versionName is a standalone quoted string literal. |
 | **--ai-analytics** | <code>boolean</code> | On build failure, send logs to Capgo AI for diagnosis. In interactive terminals this skips the upfront confirmation; in CI this auto-uploads and prints the analysis to stderr. |
 | **--no-prescan** | <code>boolean</code> | Skip the automatic pre-build scan |
 | **--prescan-ignore-fatal** | <code>boolean</code> | Run the pre-build scan but never block the build (report only) |

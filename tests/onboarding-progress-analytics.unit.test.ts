@@ -3,6 +3,7 @@ import {
   createOnboardingProgressTracker,
   createOnboardingTelemetryIdentity,
   ONBOARDING_ANALYTICS_VERSION,
+  resolveOnboardingAppIconSource,
 } from '../src/utils/onboardingProgressAnalytics'
 
 const steps = ['intent', 'details', 'organization', 'setup'] as const
@@ -17,6 +18,26 @@ const trackerIdentity = {
 }
 
 describe('onboarding progress analytics', () => {
+  it.concurrent('classifies restored draft icon data as a file source', () => {
+    expect(resolveOnboardingAppIconSource({
+      canUseStoreImportPreview: true,
+      hasSelectedIconFile: false,
+      localIconPreview: 'data:image/png;base64,restored-icon',
+    })).toBe('file')
+
+    expect(resolveOnboardingAppIconSource({
+      canUseStoreImportPreview: true,
+      hasSelectedIconFile: false,
+      localIconPreview: 'https://capgo.test/restored-icon.png',
+    })).toBe('store')
+
+    expect(resolveOnboardingAppIconSource({
+      canUseStoreImportPreview: false,
+      hasSelectedIconFile: false,
+      localIconPreview: '',
+    })).toBe('none')
+  })
+
   it.concurrent('keeps the resumed attempt while continuing from saved progress', () => {
     const capture = vi.fn()
     const ids = [ATTEMPT_A2, RUN_R2_UUID]
@@ -173,7 +194,7 @@ describe('onboarding progress analytics', () => {
 
     tracker.viewStep('intent')
 
-    expect(ONBOARDING_ANALYTICS_VERSION).toBe(3)
+    expect(ONBOARDING_ANALYTICS_VERSION).toBe(4)
     expect(capture).toHaveBeenCalledOnce()
     expect(capture).toHaveBeenCalledWith(
       'onboarding_step_viewed',
@@ -271,7 +292,7 @@ describe('onboarding progress analytics', () => {
       supaHost: 'https://supabase.capgo.test',
     })
 
-    tracker.trackDetailsEvent('onboarding_app_name_entered', { field_length: 11 })
+    tracker.trackDetailsEvent('onboarding_app_name_entered', 'details', { field_length: 11 })
 
     expect(capture).toHaveBeenCalledWith(
       'onboarding_app_name_entered',
@@ -283,6 +304,64 @@ describe('onboarding progress analytics', () => {
         onboarding_run_id: RUN_R1,
         onboarding_version: ONBOARDING_ANALYTICS_VERSION,
         step: 'details',
+      }),
+    )
+  })
+
+  it.concurrent('associates app-details interactions with their page-level analytics step', () => {
+    const capture = vi.fn()
+    const pageSteps = ['intent', 'app_name', 'app_id', 'app_icon', 'organization', 'setup'] as const
+    const tracker = createOnboardingProgressTracker({
+      ...trackerIdentity,
+      capture,
+      flow: 'pre_org',
+      resumed: false,
+      steps: pageSteps,
+      supaHost: 'https://supabase.capgo.test',
+    })
+
+    tracker.viewStep('app_name')
+    capture.mockClear()
+    tracker.trackDetailsEvent('onboarding_app_name_entered', 'app_name', { field_length: 11 })
+
+    expect(capture).toHaveBeenCalledWith(
+      'onboarding_app_name_entered',
+      'https://supabase.capgo.test',
+      expect.objectContaining({
+        field_length: 11,
+        step: 'app_name',
+        step_index: 1,
+        total_steps: 6,
+      }),
+    )
+  })
+
+  it.concurrent('associates app creation outcomes with sanitized choice metadata', () => {
+    const capture = vi.fn()
+    const tracker = createOnboardingProgressTracker({
+      ...trackerIdentity,
+      capture,
+      flow: 'pre_org',
+      resumed: false,
+      steps,
+      supaHost: 'https://supabase.capgo.test',
+    })
+
+    tracker.trackDetailsEvent('onboarding_app_creation_succeeded', 'details', {
+      app_id_source: 'generated',
+      has_icon: true,
+      icon_source: 'store',
+      used_fallback: false,
+    })
+
+    expect(capture).toHaveBeenCalledWith(
+      'onboarding_app_creation_succeeded',
+      'https://supabase.capgo.test',
+      expect.objectContaining({
+        app_id_source: 'generated',
+        has_icon: true,
+        icon_source: 'store',
+        used_fallback: false,
       }),
     )
   })
