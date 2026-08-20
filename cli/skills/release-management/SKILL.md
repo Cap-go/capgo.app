@@ -56,7 +56,7 @@ Use this skill for OTA update workflows in Capgo Cloud.
   - `-c, --channel <channel[,channel...]>`
   - `--rollout <percentage>`
   - `--rollout-percentage-bps <basisPoints>`
-  - `--rollout-advance` (promote the current rollout target to stable, then set the uploaded bundle as the new rollout)
+  - `--rollout-advance` (promote the current rollout target to stable, then set the uploaded bundle as the new rollout; reuses the previous percentage unless `--rollout` or `--rollout-percentage-bps` is also set)
   - `--rollout-cache-ttl-seconds <seconds>`
   - `-e, --external <url>`
   - `--iv-session-key <key>`

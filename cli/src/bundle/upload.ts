@@ -1244,7 +1244,7 @@ async function setRolloutVersionInChannel(
       rolloutVersion: bundle,
       rolloutPercentageBps,
       rolloutEnabled: rolloutPercentageBps > 0,
-      ...(promoteCurrentRollout ? { promoteToStable: true } : {}),
+      ...(promoteCurrentRollout ? { advanceRollout: true } : {}),
       ...(shouldResumeSameRollout ? { rolloutPaused: false } : {}),
       ...(rolloutCacheTtlSeconds != null ? { rolloutCacheTtlSeconds } : {}),
       ...(selfAssign ? { allow_device_self_set: true } : {}),

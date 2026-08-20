@@ -47,6 +47,8 @@ interface ChannelSet {
   rollback?: boolean
   promoteToStable?: boolean
   promote_to_stable?: boolean
+  advanceRollout?: boolean
+  advance_rollout?: boolean
   autoPauseEnabled?: boolean
   auto_pause_enabled?: boolean
   autoPauseWindowMinutes?: number
@@ -81,6 +83,7 @@ function normalizeChannelSet(body: ChannelSet): ChannelSet {
     rolloutPauseReason: definedOrAlias(body.rolloutPauseReason, body.rollout_pause_reason),
     rolloutCacheTtlSeconds: definedOrAlias(body.rolloutCacheTtlSeconds, body.rollout_cache_ttl_seconds),
     promoteToStable: definedOrAlias(body.promoteToStable, body.promote_to_stable),
+    advanceRollout: definedOrAlias(body.advanceRollout, body.advance_rollout),
     autoPauseEnabled: definedOrAlias(body.autoPauseEnabled, body.auto_pause_enabled),
     autoPauseWindowMinutes: definedOrAlias(body.autoPauseWindowMinutes, body.auto_pause_window_minutes),
     autoPauseFailureRateBps: definedOrAlias(body.autoPauseFailureRateBps, body.auto_pause_failure_rate_bps),
@@ -409,11 +412,12 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
   if (body.updatePackage != null && !updatePackages.includes(body.updatePackage)) {
     throw simpleError('invalid_update_package', 'Update package must be all, zip, delta, zip_from_builtin, or delta_from_builtin', { updatePackage: body.updatePackage })
   }
-  const disablesRollout = body.rolloutEnabled === false && !body.rollback && !body.promoteToStable
+  const disablesRollout = body.rolloutEnabled === false && !body.rollback && !body.promoteToStable && !body.advanceRollout
   // Clearing rollout_version (disable unlink / explicit target / rollback / promote) is gated by the DB trigger with channel.promote_bundle.
   const changesRolloutTarget = body.rolloutVersion !== undefined
     || !!body.rollback
     || !!body.promoteToStable
+    || !!body.advanceRollout
     || (disablesRollout && existingRolloutVersion != null)
   if (changesRolloutTarget) {
     if (existingChannelId === null) {
@@ -423,7 +427,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
       throw simpleError('cannot_promote_bundle', 'You can\'t promote bundles on this channel', { app_id: body.app_id, channel: body.channel, channelId: existingChannelId })
     }
   }
-  if (body.rolloutVersion && (
+  if (body.rolloutVersion && !body.advanceRollout && (
     (body.version === undefined && existingChannelVersion === null) || body.version === null || body.version === 'unknown'
   )) {
     throw simpleError('missing_stable_version', 'Cannot set rollout target without a stable bundle', { app_id: body.app_id, channel: body.channel })
@@ -483,27 +487,31 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
     channel.rollout_pause_reason = null
   }
 
-  if (body.promoteToStable) {
+  if (body.advanceRollout) {
     const promotedVersion = existingRolloutVersion
+    if (!promotedVersion) {
+      throw simpleError('missing_rollout_version', 'Cannot advance without a rollout version', { app_id: body.app_id, channel: body.channel })
+    }
+    if (!channel.rollout_version) {
+      throw simpleError('missing_rollout_version', 'Cannot advance without a new rollout target', { app_id: body.app_id, channel: body.channel })
+    }
+    channel.version = promotedVersion
+    if (body.rolloutEnabled == null)
+      channel.rollout_enabled = true
+    channel.rollout_paused_at = null
+    channel.rollout_pause_reason = null
+  }
+  else if (body.promoteToStable) {
+    const promotedVersion = channel.rollout_version ?? existingRolloutVersion
     if (!promotedVersion) {
       throw simpleError('missing_rollout_version', 'Cannot promote without a rollout version', { app_id: body.app_id, channel: body.channel })
     }
     channel.version = promotedVersion
-    // A new rolloutVersion on the same request is the next candidate, not the
-    // bundle being promoted. Promote always uses the existing leftover target.
-    if (channel.rollout_version) {
-      if (body.rolloutEnabled == null)
-        channel.rollout_enabled = true
-      channel.rollout_paused_at = null
-      channel.rollout_pause_reason = null
-    }
-    else {
-      channel.rollout_version = null
-      channel.rollout_enabled = false
-      channel.rollout_percentage_bps = 0
-      channel.rollout_paused_at = null
-      channel.rollout_pause_reason = null
-    }
+    channel.rollout_version = null
+    channel.rollout_enabled = false
+    channel.rollout_percentage_bps = 0
+    channel.rollout_paused_at = null
+    channel.rollout_pause_reason = null
   }
 
   // Disabling progressive rollout always unlinks the second bundle (ignore any parallel rolloutVersion).
@@ -519,7 +527,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
   }
 
   try {
-    await updateOrCreateChannel(c, channel, existingChannelId, body.version === undefined && !body.promoteToStable)
+    await updateOrCreateChannel(c, channel, existingChannelId, body.version === undefined && !body.promoteToStable && !body.advanceRollout)
   }
   catch (error) {
     throwIfChannelUpdatePackageMismatch(error)

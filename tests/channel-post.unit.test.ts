@@ -457,6 +457,31 @@ describe('public channel post', () => {
     expect(updateOrCreateChannel).toHaveBeenCalledWith(c, expect.objectContaining({ version: 456, rollout_version: null }), 42, false)
   })
 
+  it('keeps promoteToStable plus rolloutVersion as promote-and-clear', async () => {
+    supabaseAdmin.mockImplementation(() => buildAdminChain({
+      existingChannelId: 42,
+      existingChannelVersion: 123,
+      existingRolloutVersion: 456,
+      versionId: 789,
+    }))
+    const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
+    const c = context()
+
+    await post(c, {
+      app_id: 'com.test.promote-with-target',
+      channel: 'production',
+      promoteToStable: true,
+      rolloutVersion: '1.5.16',
+    }, apiKey())
+
+    expect(updateOrCreateChannel).toHaveBeenCalledWith(c, expect.objectContaining({
+      version: 789,
+      rollout_version: null,
+      rollout_enabled: false,
+      rollout_percentage_bps: 0,
+    }), 42, false)
+  })
+
   it('promotes the leftover rollout to stable and assigns a new rollout target in one write', async () => {
     supabaseAdmin.mockImplementation(() => buildAdminChain({
       existingChannelId: 42,
@@ -470,7 +495,7 @@ describe('public channel post', () => {
     await post(c, {
       app_id: 'com.test.advance-rollout',
       channel: 'production',
-      promoteToStable: true,
+      advanceRollout: true,
       rolloutVersion: '1.5.16',
       rolloutPercentageBps: 1000,
     }, apiKey())
