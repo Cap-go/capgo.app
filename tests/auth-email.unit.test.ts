@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   authEmailDeliveriesFromGoTrueEvent,
-  authEmailPayloadFromGoTrueEvent,
   buildAuthConfirmationUrl,
   buildAuthEmailBentoDetails,
   getAuthEmailBentoEvent,
@@ -64,10 +63,20 @@ describe('auth email Bento mapping', () => {
       site_url: 'https://console.capgo.app',
       token: '305805',
     })
+    expect(Object.keys(details).sort()).toEqual([
+      'confirmation_link',
+      'confirmation_url',
+      'email',
+      'factor_type',
+      'new_email',
+      'old_email',
+      'site_url',
+      'token',
+    ])
   })
 
   it.concurrent('sends insecure email change to the new address', () => {
-    expect(authEmailPayloadFromGoTrueEvent({
+    const [delivery] = authEmailDeliveriesFromGoTrueEvent({
       user: {
         email: 'old@capgo.app',
         new_email: 'new@capgo.app',
@@ -77,13 +86,9 @@ describe('auth email Bento mapping', () => {
         token: '305805',
         token_hash: 'hash-3',
       },
-    })).toMatchObject({
-      email: 'new@capgo.app',
-      email_action_type: 'email_change',
-      new_email: 'new@capgo.app',
-      token: '305805',
-      token_hash: 'hash-3',
     })
+    expect(delivery?.email).toBe('new@capgo.app')
+    expect(delivery?.payload.email).toBe('old@capgo.app')
   })
 
   it.concurrent('splits secure email change into current and new deliveries', () => {
@@ -111,7 +116,7 @@ describe('auth email Bento mapping', () => {
       {
         email: 'new@capgo.app',
         payload: expect.objectContaining({
-          email: 'new@capgo.app',
+          email: 'old@capgo.app',
           token: '222222',
           token_hash: 'hash-new',
         }),

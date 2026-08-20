@@ -167,7 +167,7 @@ describe('send_email queue handler', () => {
       expect.anything(),
       'new@capgo.app',
       expect.objectContaining({
-        email: 'new@capgo.app',
+        email: 'old@capgo.app',
         new_email: 'new@capgo.app',
         old_email: 'old@capgo.app',
       }),
@@ -189,6 +189,7 @@ describe('send_email queue handler', () => {
       expect.anything(),
       'old@capgo.app',
       expect.objectContaining({
+        email: 'new@capgo.app',
         old_email: 'old@capgo.app',
       }),
       'auth_email_changed_notification',

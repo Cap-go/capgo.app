@@ -85,7 +85,7 @@ function delivery(
   return {
     email,
     payload: {
-      email,
+      email: textField(user.email) || email,
       email_action_type: verifyType(textField(emailData.email_action_type)),
       factor_type: textField(emailData.factor_type),
       new_email: textField(user.new_email) || textField(emailData.new_email),
@@ -133,13 +133,6 @@ export function authEmailDeliveriesFromGoTrueEvent(event: GoTrueSendEmailEvent):
     return [delivery(oldEmail || currentEmail, event, token, tokenHash)].filter(item => item.email)
 
   return [delivery(currentEmail, event, token, tokenHash)].filter(item => item.email)
-}
-
-export function authEmailPayloadFromGoTrueEvent(event: GoTrueSendEmailEvent): AuthEmailPayload {
-  return authEmailDeliveriesFromGoTrueEvent(event)[0]?.payload ?? {
-    email: '',
-    email_action_type: '',
-  }
 }
 
 export function getAuthEmailBentoEvent(emailActionType: string): string {
