@@ -71,7 +71,7 @@ app.post('/', middlewareAPISecret, async (c) => {
   if (!isBentoConfigured(c))
     return c.json(BRES)
 
-  const result = await trackBentoEvent(c, payload.email, details, eventName)
+  const result = await trackBentoEvent(c, payload.email, { ...details }, eventName)
   if (result === false) {
     quickError(500, 'bento_auth_email_delivery_failed', 'Bento auth email delivery failed', {
       email_action_type: payload.email_action_type,

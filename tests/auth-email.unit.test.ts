@@ -6,18 +6,19 @@ import {
 } from '../supabase/functions/_backend/utils/auth_email.ts'
 
 describe('auth email Bento mapping', () => {
-  it.concurrent('maps GoTrue action types to auth: events', () => {
-    expect(getAuthEmailBentoEvent('signup')).toBe('auth:signup')
-    expect(getAuthEmailBentoEvent('recovery')).toBe('auth:recovery')
-    expect(getAuthEmailBentoEvent('magiclink')).toBe('auth:magiclink')
-    expect(getAuthEmailBentoEvent('invite')).toBe('auth:invite')
-    expect(getAuthEmailBentoEvent('email_change')).toBe('auth:email_change')
-    expect(getAuthEmailBentoEvent('password_changed_notification')).toBe('auth:password_changed')
-    expect(getAuthEmailBentoEvent('mfa_factor_enrolled_notification')).toBe('auth:mfa_factor_enrolled')
+  it.concurrent('maps GoTrue action types to Bento auth_* events', () => {
+    expect(getAuthEmailBentoEvent('signup')).toBe('auth_confirmation')
+    expect(getAuthEmailBentoEvent('recovery')).toBe('auth_recovery')
+    expect(getAuthEmailBentoEvent('magiclink')).toBe('auth_magic_link')
+    expect(getAuthEmailBentoEvent('invite')).toBe('auth_invite')
+    expect(getAuthEmailBentoEvent('email_change')).toBe('auth_email_change')
+    expect(getAuthEmailBentoEvent('email_change_new')).toBe('auth_email_change')
+    expect(getAuthEmailBentoEvent('password_changed_notification')).toBe('auth_password_changed_notification')
+    expect(getAuthEmailBentoEvent('mfa_factor_enrolled_notification')).toBe('auth_mfa_factor_enrolled_notification')
   })
 
   it.concurrent('keeps unknown action types instead of dropping the email', () => {
-    expect(getAuthEmailBentoEvent('custom_action')).toBe('auth:custom_action')
+    expect(getAuthEmailBentoEvent('custom_action')).toBe('auth_custom_action')
   })
 
   it.concurrent('builds GoTrue ConfirmationURL from token_hash', () => {

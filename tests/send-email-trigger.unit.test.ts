@@ -80,7 +80,7 @@ describe('send_email queue handler', () => {
         site_url: 'https://console.capgo.app',
         token: '305805',
       },
-      'auth:signup',
+      'auth_confirmation',
     )
   })
 

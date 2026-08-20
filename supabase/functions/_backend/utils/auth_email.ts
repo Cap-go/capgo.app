@@ -1,23 +1,20 @@
 import { trimTrailingSlashes } from './utils.ts'
 
-export const AUTH_EMAIL_EVENT_PREFIX = 'auth:'
+export const AUTH_EMAIL_EVENT_PREFIX = 'auth_'
 
 export const AUTH_EMAIL_EVENTS = {
-  email_change: 'auth:email_change',
-  email_change_current: 'auth:email_change_current',
-  email_change_new: 'auth:email_change_new',
-  email_changed_notification: 'auth:email_changed',
-  identity_linked_notification: 'auth:identity_linked',
-  identity_unlinked_notification: 'auth:identity_unlinked',
-  invite: 'auth:invite',
-  magiclink: 'auth:magiclink',
-  mfa_factor_enrolled_notification: 'auth:mfa_factor_enrolled',
-  mfa_factor_unenrolled_notification: 'auth:mfa_factor_unenrolled',
-  password_changed_notification: 'auth:password_changed',
-  phone_changed_notification: 'auth:phone_changed',
-  reauthentication: 'auth:reauthentication',
-  recovery: 'auth:recovery',
-  signup: 'auth:signup',
+  email_change: 'auth_email_change',
+  email_change_current: 'auth_email_change',
+  email_change_new: 'auth_email_change',
+  email_changed_notification: 'auth_email_changed_notification',
+  invite: 'auth_invite',
+  magiclink: 'auth_magic_link',
+  mfa_factor_enrolled_notification: 'auth_mfa_factor_enrolled_notification',
+  mfa_factor_unenrolled_notification: 'auth_mfa_factor_unenrolled_notification',
+  password_changed_notification: 'auth_password_changed_notification',
+  reauthentication: 'auth_reauthentication',
+  recovery: 'auth_recovery',
+  signup: 'auth_confirmation',
 } as const
 
 export interface AuthEmailPayload {
