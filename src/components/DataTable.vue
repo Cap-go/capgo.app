@@ -95,6 +95,24 @@ function closeExportMenu() {
   nextTick(() => exportTriggerRef.value?.focus())
 }
 
+function toggleExportMenu() {
+  if (exportMenuOpen.value)
+    closeExportMenu()
+  else
+    exportMenuOpen.value = true
+}
+
+function onExportFocusOut(event: FocusEvent) {
+  const root = event.currentTarget as HTMLElement | null
+  const next = event.relatedTarget as Node | null
+  if (!root || (next && root.contains(next)))
+    return
+  nextTick(() => {
+    if (!root.contains(document.activeElement))
+      exportMenuOpen.value = false
+  })
+}
+
 function exportTable(format: 'csv' | 'json') {
   closeExportMenu()
   emit('export', format)
@@ -542,7 +560,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
         <div
           v-if="exportable"
           class="d-dropdown"
-          @focusout="exportMenuOpen = false"
+          @focusout="onExportFocusOut"
           @keydown.escape.prevent="closeExportMenu"
         >
           <button
@@ -555,7 +573,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
             aria-haspopup="true"
             :aria-expanded="exportMenuOpen"
             :aria-controls="exportMenuId"
-            @click="exportMenuOpen = !exportMenuOpen"
+            @click="toggleExportMenu"
           >
             <IconDownload v-if="!exportLoading" class="m-1 md:mr-2" />
             <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
