@@ -1,0 +1,44 @@
+<!-- Bento event: auth:magiclink -->
+<!-- Subject: [Capgo]: Magic Link to log into your Capgo.app account -->
+
+<p>Hi,</p>
+
+<p>You requested access to your Capgo.app account. Use the option that matches what you are doing. Both expire in 1 hour.</p>
+
+<p>
+  Option 1: One-time code (only for confirming your email in the 2FA system)<br />
+  Enter this code on the 2FA email confirmation screen:<br />
+  <strong>{{ event.details.token }}</strong>
+</p>
+
+<p>
+  Option 2: Magic link (for normal login to Capgo.app)<br />
+  Click this link to sign in:
+</p>
+
+<p>
+  <a
+    href="{{ event.details.site_url }}/confirm-signup?confirmation_url={{ event.details.confirmation_url }}"
+    target="_blank"
+    rel="noopener noreferrer nofollow"
+    style="
+      background-color: #2563eb;
+      color: #ffffff;
+      border-radius: 8px;
+      font-size: 14px;
+      text-decoration: none;
+      font-weight: bold;
+      padding: 8px 16px;
+      display: inline-block;
+    "
+  >
+    Sign in to Capgo.app
+  </a>
+</p>
+
+<p>
+  If you did not request this, ignore this email. If you suspect someone is trying to access your account, change your
+  password and contact Capgo support.
+</p>
+
+<p>- Martin, Founder of Capgo.app</p>

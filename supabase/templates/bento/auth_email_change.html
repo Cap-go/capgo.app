@@ -1,0 +1,33 @@
+<!-- Bento event: auth:email_change, auth:email_change_current, auth:email_change_new -->
+<!-- Subject: [Capgo]: Confirm change of your Email with Capgo.app account -->
+
+<p>Hi,</p>
+
+<p>
+  You have requested to change the email address associated with your Capgo.app account. This request is to update your
+  email from {{ event.details.email }} to {{ event.details.new_email }}.
+</p>
+
+<p>To confirm this change, please click on the following link:</p>
+
+<p>
+  <a
+    href="{{ event.details.site_url }}/confirm-signup?confirmation_url={{ event.details.confirmation_url }}"
+    target="_blank"
+    rel="noopener noreferrer nofollow"
+    style="
+      background-color: #2563eb;
+      color: #ffffff;
+      border-radius: 8px;
+      font-size: 14px;
+      text-decoration: none;
+      font-weight: bold;
+      padding: 8px 16px;
+      display: inline-block;
+    "
+  >
+    Confirm email change
+  </a>
+</p>
+
+<p style="color: #6c757d;">- Martin, Founder of Capgo.app</p>
