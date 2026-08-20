@@ -125,9 +125,10 @@ SELECT is(
         "webhook_delivery",
         "credit_usage_posthog",
         "on_user_org_access",
-        "canceled_org_retention_alerts"
+        "canceled_org_retention_alerts",
+        "send_email"
     ]'::jsonb,
-    'high-frequency queues retain order and append on_user_org_access then canceled_org_retention_alerts'
+    'high-frequency queues retain order and append on_user_org_access, canceled_org_retention_alerts, then send_email'
 );
 
 SELECT is(
