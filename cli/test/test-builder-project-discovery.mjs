@@ -91,6 +91,17 @@ try {
     assert.equal(result.candidates[0].appId, 'com.example.mobile')
   })
 
+  await test('reads appId from a JavaScript config without project TypeScript', async () => {
+    const root = fixture('javascript-config')
+    writeJson(join(root, 'package.json'), { private: true, workspaces: ['apps/*'] })
+    const appDir = addPackage(root, 'apps/mobile', '@example/mobile')
+    writeText(join(appDir, 'capacitor.config.js'), "module.exports = { appId: 'com.example.javascript' }\n")
+
+    const result = await discoverCapacitorProjects(root)
+    assert.equal(result.reason, undefined)
+    assert.equal(result.candidates[0].appId, 'com.example.javascript')
+  })
+
   await test('sorts multiple Capacitor apps by relative workspace path', async () => {
     const root = fixture('multiple')
     writeJson(join(root, 'package.json'), { private: true, workspaces: ['apps/*'] })

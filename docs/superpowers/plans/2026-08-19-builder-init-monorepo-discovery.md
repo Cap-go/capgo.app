@@ -136,6 +136,7 @@ export interface CapacitorProjectCandidate {
   dir: string
   relativeDir: string
   packageName?: string
+  appId?: string
 }
 
 export interface BuilderProjectDiscovery {
@@ -174,7 +175,13 @@ const contained = relativePath === ''
 
 Add the root itself as a candidate only when it has a Capacitor config. De-dupe
 canonical directories, ignore workspace packages without a Capacitor config,
-and sort candidates by `relativeDir`.
+and sort candidates by `relativeDir`. For each candidate, load the detected
+Capacitor config with `loadConfigTarget` and copy its top-level `appId` into the
+candidate. Treat that metadata read as best-effort: a dynamic config that cannot
+be evaluated remains selectable without an `appId`, and its normal post-selection
+config load reports the actionable error. JavaScript configs must load without
+resolving TypeScript; TypeScript configs prefer the project's TypeScript runtime
+and fall back to the TypeScript runtime bundled with the CLI.
 
 - [ ] **Step 3: Run discovery tests and verify partial GREEN**
 

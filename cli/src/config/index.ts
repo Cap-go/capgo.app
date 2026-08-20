@@ -4,6 +4,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { cwd } from 'node:process'
+import * as bundledTypescript from 'typescript'
 import type { CapacitorConfig, ExtConfigPairs } from '../schemas/config'
 import { formatJSObject, loadConfig as loadConfigCap, requireTS, writeConfig as writeConfigCap } from '../capacitor-cli'
 
@@ -60,24 +61,27 @@ export function resolveCapacitorConfigTargetPath(value: string | undefined, init
 }
 
 export async function loadConfigTarget(filePath: string): Promise<CapacitorConfig> {
-  if (extname(filePath) === '.json')
+  const extension = extname(filePath)
+  if (extension === '.json')
     return JSON.parse(await readFile(filePath, 'utf8')) as CapacitorConfig
 
   // Mirror Capacitor's own `capacitor.config.js` loader, which simply `require()`s the file.
   const targetRequire = createRequire(filePath)
-  let typescript: typeof import('typescript')
+  if (extension === '.js') {
+    const configModule = targetRequire(filePath) as Record<string, unknown>
+    const exportedConfig = configModule.default ?? configModule
+    return (typeof exportedConfig === 'function' ? await exportedConfig() : await exportedConfig) as CapacitorConfig
+  }
+
+  let typescript = bundledTypescript
   try {
     typescript = targetRequire('typescript') as typeof import('typescript')
   }
   catch {
-    // A workspace package can inherit the CLI's TypeScript runtime even when it
-    // does not declare TypeScript itself. This also keeps best-effort metadata
-    // reads working for otherwise valid Capacitor packages in a monorepo.
-    typescript = createRequire(import.meta.url)('typescript') as typeof import('typescript')
+    // Keep the TypeScript runtime bundled with the CLI. Workspace packages can
+    // still use their own version when one is resolvable from the config file.
   }
-  const configModule = extname(filePath) === '.js'
-    ? (targetRequire(filePath) as Record<string, unknown>)
-    : requireTS(typescript, filePath)
+  const configModule = requireTS(typescript, filePath)
   const exportedConfig = configModule.default ?? configModule
   return (typeof exportedConfig === 'function' ? await exportedConfig() : await exportedConfig) as CapacitorConfig
 }
