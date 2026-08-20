@@ -1005,6 +1005,8 @@ async function preflightRequiredChannelAssignments(
         uploadFail(`Cannot set rollout, channel ${channel} needs a stable bundle before using progressive rollout`)
       if (rolloutAdvance && targetChannel.rollout_version == null)
         uploadFail(`Cannot advance rollout, channel ${channel} has no rollout target to promote to stable`)
+      if (rolloutAdvance && rolloutPercentageBps == null && !(targetChannel.rollout_percentage_bps > 0))
+        uploadFail(`Cannot advance rollout, channel ${channel} has no rollout percentage to reuse. Pass --rollout or --rollout-percentage-bps`)
 
       continue
     }
@@ -1971,7 +1973,10 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       ? uploadTargetChannels.get(targetChannel) ?? null
       : await findUploadTargetChannel(supabase, appid, targetChannel)
     const shouldAssignRollout = options.rolloutAdvance || rolloutPercentageBps != null
-    const nextRolloutPercentageBps = rolloutPercentageBps ?? uploadTargetChannel?.rollout_percentage_bps ?? 0
+    const previousRolloutPercentageBps = uploadTargetChannel?.rollout_percentage_bps
+    const nextRolloutPercentageBps = rolloutPercentageBps ?? previousRolloutPercentageBps ?? 0
+    if (options.rolloutAdvance && rolloutPercentageBps == null && !(previousRolloutPercentageBps > 0))
+      uploadFail(`Cannot advance rollout, channel ${targetChannel} has no rollout percentage to reuse. Pass --rollout or --rollout-percentage-bps`)
     const targetChannelVersionSet = shouldAssignRollout
       ? await setRolloutVersionInChannel(supabase, apikey, !!options.bundleUrl, bundle, targetChannel, appid, localConfig, uploadTargetChannel, nextRolloutPercentageBps, options.rolloutCacheTtlSeconds, options.selfAssign, options, !!options.rolloutAdvance)
       : await setVersionInChannel(supabase, apikey, !!options.bundleUrl, bundle, targetChannel, userId, orgId, appid, localConfig, uploadTargetChannel, channelAssignmentRequired, options.selfAssign, options)
