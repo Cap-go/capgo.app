@@ -393,6 +393,7 @@ async function refreshSsoForEmail(email: string) {
       return
     console.error('SSO domain check failed', error)
     hasSso.value = false
+    lastCheckedEmail.value = ''
     passwordPathReady.value = true
   }
 }
@@ -434,6 +435,7 @@ watch(emailForLogin, (email) => {
   if (domain !== lastDomain) {
     hasSso.value = false
     passwordPathReady.value = false
+    lastCheckedEmail.value = ''
   }
 
   domainCheckTimer = setTimeout(() => {
