@@ -37,6 +37,7 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **-c** | <code>string</code> | Channel to link to. Use commas for multiple channels, for example production,beta |
 | **--rollout** | <code>string</code> | Set the uploaded bundle as this channel's rollout target at a percentage from 0 to 100 |
 | **--rollout-percentage-bps** | <code>string</code> | Set the uploaded bundle rollout percentage in basis points from 0 to 10000 |
+| **--rollout-advance** | <code>boolean</code> | Promote the current rollout target to stable, then set the uploaded bundle as the new rollout. Reuses the previous percentage unless --rollout or --rollout-percentage-bps is also set |
 | **--rollout-cache-ttl-seconds** | <code>string</code> | Cloudflare rollout decision cache TTL in seconds |
 | **-e** | <code>string</code> | Link to external URL instead of upload to Capgo Cloud |
 | **--iv-session-key** | <code>string</code> | Set the IV and session key for bundle URL external |
