@@ -6,7 +6,7 @@
 
 **Architecture:** A filesystem-only discovery module selects an exact-root `@manypkg/tools` adapter and returns bounded Capacitor candidates. A small selection module converts one candidate into a confirmation and multiple candidates into a select prompt. The direct command runs these helpers before loading Capacitor configuration, changes cwd to the selected app, and then reuses the existing onboarding flow unchanged.
 
-**Tech Stack:** TypeScript, Bun, `@manypkg/tools`, `@clack/prompts`, Node filesystem APIs, assertion-based CLI unit tests.
+**Tech Stack:** TypeScript, Bun, `@manypkg/tools`, Ink, Node filesystem APIs, assertion-based CLI unit tests and TUI journeys.
 
 ---
 
@@ -283,16 +283,18 @@ In `cli/src/index.ts`, set it only on the real command:
 Before the existing `getConfig(true)` call, when discovery is enabled and the
 current directory lacks a Capacitor config:
 
-1. Start a Clack spinner with `Looking for a Capacitor app in this workspace...`.
+1. Render an Ink loading state with `Looking for a Capacitor app in this workspace...`.
 2. Call `discoverCapacitorProjects(process.cwd())`.
-3. Stop the spinner with the number of candidates found.
+3. Replace the loading state with the discovery result.
 4. On no candidates, print `builderProjectNotFoundMessage(nxDetected)` and exit 1.
-5. For one candidate, call Clack `confirm` with its relative path.
-6. For multiple candidates, call Clack `select` with package name and relative
-   path labels.
-7. Treat Clack cancellation or a rejected confirmation as a normal cancelled
+5. For one candidate, render an Ink confirmation with its relative path and
+   Capacitor `appId` when available.
+6. For multiple candidates, render an Ink selector with relative paths and
+   Capacitor `appId` values when available.
+7. Treat Ink cancellation or a rejected confirmation as a normal cancelled
    setup and return before starting logs/replay.
-8. Call `process.chdir(selected.dir)` and print the selected relative path.
+8. Call `process.chdir(selected.dir)` and reuse the Ink instance for the
+   existing onboarding shell.
 
 Use this pure shared wording:
 

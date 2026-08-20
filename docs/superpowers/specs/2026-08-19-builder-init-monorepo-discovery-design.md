@@ -59,21 +59,24 @@ of crawling the filesystem.
 ## Candidate Detection and Selection
 
 Each candidate is a workspace package directory containing one of the three
-supported Capacitor config filenames. Candidates are sorted by their path
-relative to the invocation directory so the prompt is stable.
+supported Capacitor config filenames. The CLI loads the config best-effort and
+shows its `appId` when available, so similarly named apps are easy to identify.
+Candidates are sorted by their path relative to the invocation directory so the
+prompt is stable.
 
 - One descendant candidate: ask the user for explicit confirmation; never
   auto-select that app.
-- Multiple candidates: show a select prompt containing package names and
-  relative paths.
+- Multiple candidates: show a select prompt containing relative paths and the
+  detected `appId` when available.
 - Cancellation or rejection ends discovery without starting onboarding.
 - Once selected, the process changes its working directory to the app directory
   before loading the Capacitor config, resolving native platform paths, starting
   logs/replay, or rendering the existing onboarding wizard.
 
-The prompt runs before the Ink onboarding wizard. A short spinner tells the
-user that Capgo is inspecting workspace metadata; this keeps the implementation
-small and avoids a second full-screen Ink application.
+Discovery, confirmation, and selection use the same full-screen Ink experience
+as the rest of builder onboarding. After selection, the existing Ink instance
+is reused for the onboarding wizard so the terminal does not flash between two
+alternate-screen applications.
 
 ## Failure Experience
 
@@ -106,9 +109,10 @@ Unit tests create temporary workspace layouts and exercise the real
 - ignoring non-Capacitor workspace packages;
 - Nx-only failure and Nx plus package workspaces success;
 - rejection of package paths that resolve outside the invocation root;
-- stable candidate ordering.
+- stable candidate ordering;
+- best-effort `appId` metadata from JSON and TypeScript Capacitor configs.
 
 Command-level tests cover confirmation, selection, cancellation, changing to
-the selected app directory, and the shared actionable error wording. No
-interactive key-helper or end-to-end TUI automation is required for this
-feature.
+the selected app directory, and the shared actionable error wording. TUI
+journeys cover the Ink confirmation and selection screens across the monorepo
+fixture matrix without continuing into signing-helper flows.

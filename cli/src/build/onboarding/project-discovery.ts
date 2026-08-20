@@ -9,6 +9,7 @@ import {
   YarnTool,
 } from '@manypkg/tools'
 import type { Tool } from '@manypkg/tools'
+import { loadConfigTarget } from '../../config/index.js'
 
 const CAPACITOR_CONFIG_FILES = [
   'capacitor.config.ts',
@@ -32,6 +33,7 @@ export interface CapacitorProjectCandidate {
   dir: string
   relativeDir: string
   packageName?: string
+  appId?: string
 }
 
 export interface BuilderProjectDiscovery {
@@ -52,6 +54,42 @@ function isFile(path: string): boolean {
 
 export function hasCapacitorConfig(directory: string): boolean {
   return CAPACITOR_CONFIG_FILES.some(file => isFile(join(directory, file)))
+}
+
+function findCapacitorConfig(directory: string): string | undefined {
+  return CAPACITOR_CONFIG_FILES
+    .map(file => join(directory, file))
+    .find(isFile)
+}
+
+async function readCapacitorAppId(directory: string): Promise<string | undefined> {
+  const configPath = findCapacitorConfig(directory)
+  if (!configPath)
+    return undefined
+  try {
+    const config = await loadConfigTarget(configPath)
+    const appId = config.appId?.trim()
+    return appId || undefined
+  }
+  catch {
+    // Discovery must still offer the project when a dynamic config cannot be
+    // evaluated. The selected project's normal config load will report the
+    // actionable error afterward.
+    return undefined
+  }
+}
+
+async function projectCandidate(
+  searchRoot: string,
+  directory: string,
+  packageName?: string,
+): Promise<CapacitorProjectCandidate> {
+  return {
+    dir: directory,
+    relativeDir: displayRelativePath(searchRoot, directory),
+    packageName,
+    appId: await readCapacitorAppId(directory),
+  }
 }
 
 function selectWorkspaceTool(searchRoot: string, packageJson: WorkspacePackageJson): Tool | undefined {
@@ -113,7 +151,7 @@ export async function discoverCapacitorProjects(searchRoot: string): Promise<Bui
   if (hasCapacitorConfig(canonicalRoot)) {
     return {
       searchRoot: canonicalRoot,
-      candidates: [{ dir: canonicalRoot, relativeDir: '.' }],
+      candidates: [await projectCandidate(canonicalRoot, canonicalRoot)],
       nxDetected,
     }
   }
@@ -150,11 +188,10 @@ export async function discoverCapacitorProjects(searchRoot: string): Promise<Bui
         continue
 
       const packageName = typeof pkg.packageJson.name === 'string' ? pkg.packageJson.name : undefined
-      candidatesByDirectory.set(canonicalPackageDir, {
-        dir: canonicalPackageDir,
-        relativeDir: displayRelativePath(canonicalRoot, canonicalPackageDir),
-        packageName,
-      })
+      candidatesByDirectory.set(
+        canonicalPackageDir,
+        await projectCandidate(canonicalRoot, canonicalPackageDir, packageName),
+      )
     }
 
     const candidates = [...candidatesByDirectory.values()]

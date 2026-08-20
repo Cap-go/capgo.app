@@ -59,14 +59,25 @@ export function resolveCapacitorConfigTargetPath(value: string | undefined, init
   return target
 }
 
-async function loadConfigTarget(filePath: string): Promise<CapacitorConfig> {
+export async function loadConfigTarget(filePath: string): Promise<CapacitorConfig> {
   if (extname(filePath) === '.json')
     return JSON.parse(await readFile(filePath, 'utf8')) as CapacitorConfig
 
   // Mirror Capacitor's own `capacitor.config.js` loader, which simply `require()`s the file.
+  const targetRequire = createRequire(filePath)
+  let typescript: typeof import('typescript')
+  try {
+    typescript = targetRequire('typescript') as typeof import('typescript')
+  }
+  catch {
+    // A workspace package can inherit the CLI's TypeScript runtime even when it
+    // does not declare TypeScript itself. This also keeps best-effort metadata
+    // reads working for otherwise valid Capacitor packages in a monorepo.
+    typescript = createRequire(import.meta.url)('typescript') as typeof import('typescript')
+  }
   const configModule = extname(filePath) === '.js'
-    ? (createRequire(filePath)(filePath) as Record<string, unknown>)
-    : requireTS(createRequire(filePath)('typescript'), filePath)
+    ? (targetRequire(filePath) as Record<string, unknown>)
+    : requireTS(typescript, filePath)
   const exportedConfig = configModule.default ?? configModule
   return (typeof exportedConfig === 'function' ? await exportedConfig() : await exportedConfig) as CapacitorConfig
 }

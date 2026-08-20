@@ -9,7 +9,7 @@ import {
   discoverCapacitorProjects,
   hasCapacitorConfig,
 } from '../src/build/onboarding/project-discovery.ts'
-import { selectCapacitorProject } from '../src/build/onboarding/project-selection.ts'
+import { projectCandidateLabel, selectCapacitorProject } from '../src/build/onboarding/project-selection.ts'
 import {
   builderProjectNotFoundMessage,
   shouldDiscoverBuilderProject,
@@ -66,6 +66,7 @@ try {
     const result = await discoverCapacitorProjects(root)
     assert.equal(result.reason, undefined)
     assert.deepEqual(result.candidates.map(candidate => candidate.relativeDir), ['.'])
+    assert.equal(result.candidates[0].appId, 'com.example.current')
   })
 
   await test('does not search when the invocation directory has no package.json', async () => {
@@ -87,6 +88,7 @@ try {
     assert.equal(result.reason, undefined)
     assert.deepEqual(result.candidates.map(candidate => candidate.relativeDir), ['apps/mobile'])
     assert.equal(result.candidates[0].packageName, '@example/mobile')
+    assert.equal(result.candidates[0].appId, 'com.example.mobile')
   })
 
   await test('sorts multiple Capacitor apps by relative workspace path', async () => {
@@ -250,6 +252,26 @@ try {
 
     assert.equal(selected?.dir, candidates[1].dir)
     assert.equal(cancelled, undefined)
+  })
+
+  await test('labels project choices with path and Capacitor appId when available', () => {
+    assert.equal(
+      projectCandidateLabel({
+        dir: '/workspace/apps/mobile',
+        relativeDir: 'apps/mobile',
+        packageName: '@example/mobile',
+        appId: 'com.example.mobile',
+      }),
+      'apps/mobile — appId: com.example.mobile',
+    )
+    assert.equal(
+      projectCandidateLabel({
+        dir: '/workspace/apps/admin',
+        relativeDir: 'apps/admin',
+        packageName: '@example/admin',
+      }),
+      '@example/admin — apps/admin',
+    )
   })
 
   await test('changes into the selected app and keeps the invocation root on cancellation', async () => {

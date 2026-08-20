@@ -5,6 +5,14 @@ export interface BuilderProjectPrompts {
   select: (candidates: CapacitorProjectCandidate[]) => Promise<string | symbol>
 }
 
+export function projectCandidateLabel(candidate: CapacitorProjectCandidate): string {
+  if (candidate.appId)
+    return `${candidate.relativeDir} — appId: ${candidate.appId}`
+  return candidate.packageName
+    ? `${candidate.packageName} — ${candidate.relativeDir}`
+    : candidate.relativeDir
+}
+
 export async function selectCapacitorProject(
   candidates: CapacitorProjectCandidate[],
   prompts: BuilderProjectPrompts,
