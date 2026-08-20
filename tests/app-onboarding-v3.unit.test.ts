@@ -218,6 +218,15 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain("completeAndViewStep('setup', { appId: createdApp.value.app_id })")
   })
 
+  it.concurrent('keeps the organization website tooltip clear of the panel and viewport edges', () => {
+    const organizationImport = sliceBetween(onboardingSource, 'id="onboarding-org-name-input"', '<div v-if="existingApp === true">')
+
+    expect(organizationImport).not.toContain('class="overflow-hidden rounded-xl')
+    expect(organizationImport).toContain('class="relative flex items-center gap-2"')
+    expect(organizationImport).toContain('absolute bottom-full left-0')
+    expect(organizationImport).not.toContain('-translate-x-1/2')
+  })
+
   it.concurrent('keeps imported organization details reviewable and removable before creation', () => {
     expect(onboardingSource).toContain(':readonly="!!websitePreview"')
     expect(onboardingSource).toContain('data-test="onboarding-delete-imported-organization-details"')

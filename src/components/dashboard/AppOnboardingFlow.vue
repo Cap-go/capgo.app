@@ -2561,10 +2561,11 @@ defineExpose({
                 >
               </div>
 
-              <div class="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/15 dark:bg-slate-950/90">
+              <div class="rounded-xl border border-slate-200 bg-slate-50 dark:border-white/15 dark:bg-slate-950/90">
                 <button
                   type="button"
-                  class="flex min-h-12 w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-semibold text-slate-800 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 dark:text-slate-200 dark:hover:bg-slate-900"
+                  class="flex min-h-12 w-full items-center justify-between gap-3 rounded-xl px-4 py-3 text-left text-sm font-semibold text-slate-800 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 dark:text-slate-200 dark:hover:bg-slate-900"
+                  :class="{ 'rounded-b-none': isOrganizationImportOpen }"
                   data-test="onboarding-toggle-organization-import"
                   :aria-expanded="isOrganizationImportOpen"
                   @click="toggleOrganizationWebsiteImport"
@@ -2579,12 +2580,12 @@ defineExpose({
 
                 <div v-if="isOrganizationImportOpen" class="space-y-4 border-t border-slate-200 p-4 dark:border-white/15">
                   <div>
-                    <div class="flex items-center gap-2">
+                    <div class="relative flex items-center gap-2">
                       <label for="onboarding-organization-website" class="text-sm font-medium text-slate-800 dark:text-slate-200">
                         {{ t('organization-onboarding-website-label') }}
                       </label>
                       <span
-                        class="group relative inline-flex rounded-full text-slate-400 outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-slate-500"
+                        class="group inline-flex rounded-full text-slate-400 outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-slate-500"
                         tabindex="0"
                         aria-describedby="onboarding-organization-website-help"
                       >
@@ -2592,7 +2593,7 @@ defineExpose({
                         <span
                           id="onboarding-organization-website-help"
                           role="tooltip"
-                          class="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-64 -translate-x-1/2 rounded-lg bg-slate-950 px-3 py-2 text-xs font-normal leading-5 text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus:opacity-100 dark:bg-slate-800"
+                          class="pointer-events-none absolute bottom-full left-0 z-20 mb-2 w-64 max-w-[calc(100vw-2rem)] rounded-lg bg-slate-950 px-3 py-2 text-xs font-normal leading-5 text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus:opacity-100 dark:bg-slate-800"
                         >
                           {{ t('organization-onboarding-website-help') }}
                         </span>
