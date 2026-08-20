@@ -2593,7 +2593,7 @@ defineExpose({
                         <span
                           id="onboarding-organization-website-help"
                           role="tooltip"
-                          class="pointer-events-none absolute bottom-full left-0 z-20 mb-2 w-64 max-w-[calc(100vw-2rem)] rounded-lg bg-slate-950 px-3 py-2 text-xs font-normal leading-5 text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus:opacity-100 dark:bg-slate-800"
+                          class="pointer-events-none absolute bottom-full left-0 z-20 mb-2 w-64 max-w-[calc(100vw-4rem)] rounded-lg bg-slate-950 px-3 py-2 text-xs font-normal leading-5 text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus:opacity-100 dark:bg-slate-800"
                         >
                           {{ t('organization-onboarding-website-help') }}
                         </span>

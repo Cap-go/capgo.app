@@ -224,6 +224,7 @@ describe('pre-organization onboarding v3', () => {
     expect(organizationImport).not.toContain('class="overflow-hidden rounded-xl')
     expect(organizationImport).toContain('class="relative flex items-center gap-2"')
     expect(organizationImport).toContain('absolute bottom-full left-0')
+    expect(organizationImport).toContain('max-w-[calc(100vw-4rem)]')
     expect(organizationImport).not.toContain('-translate-x-1/2')
   })
 
