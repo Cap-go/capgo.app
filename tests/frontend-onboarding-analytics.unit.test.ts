@@ -76,6 +76,9 @@ describe('buildFrontendOnboardingHogql', () => {
     expect(query).toContain('JSONExtractString(toString(properties), \'step\') IN (\'welcome\', \'resume-prompt\')')
     expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, event = \'onboarding_step_viewed\' AND step = \'intent\'))')
     expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step IN ('details', 'app_name'))) AS details_ms")
+    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'app_name')) AS app_name_ms")
+    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'app_id')) AS app_id_ms")
+    expect(query).toContain("toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'app_icon')) AS app_icon_ms")
     expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, event = \'onboarding_step_viewed\' AND step = \'organization\'))')
     expect(query).toContain('toUnixTimestamp64Milli(minIf(timestamp, event = \'onboarding_step_viewed\' AND step = \'setup\'))')
     expect(query).toContain('groupUniqArrayIf(tuple(event, toUnixTimestamp64Milli(timestamp)), event IN (')
@@ -148,6 +151,9 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         onboarding_version: 4,
         intent_ms: intentMs,
         details_ms: intentMs + 555,
+        app_name_ms: intentMs + 555,
+        app_id_ms: intentMs + 777,
+        app_icon_ms: intentMs + 888,
         organization_ms: intentMs + 1_000,
         setup_ms: intentMs + 2_666,
         interaction_events: [
@@ -247,7 +253,9 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       },
       funnels: { v4: [
         { key: 'intent', reached: 1 },
-        { key: 'details', reached: 1 },
+        { key: 'app_name', reached: 1 },
+        { key: 'app_id', reached: 1 },
+        { key: 'app_icon', reached: 1 },
         { key: 'organization', reached: 1 },
         { key: 'setup', reached: 1 },
       ] },
@@ -439,7 +447,9 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       v4_kpis: { attempts: 2, completed: 0, completion_rate: 0 },
       funnels: { v4: [
         { key: 'intent', reached: 2 },
-        { key: 'details', reached: 0 },
+        { key: 'app_name', reached: 0 },
+        { key: 'app_id', reached: 0 },
+        { key: 'app_icon', reached: 0 },
         { key: 'organization', reached: 0 },
         { key: 'setup', reached: 0 },
       ] },

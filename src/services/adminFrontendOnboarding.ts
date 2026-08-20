@@ -1,4 +1,4 @@
-export type FrontendOnboardingStageKey = 'intent' | 'details' | 'organization' | 'setup'
+export type FrontendOnboardingStageKey = 'intent' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'setup'
 
 export const FRONTEND_ONBOARDING_DAILY_SETUP_CLI_OUTCOME_KEYS = [
   'cli_copy_init',
@@ -39,7 +39,7 @@ export interface FrontendOnboardingComparison {
 
 export interface FrontendOnboardingFunnelStage {
   key: FrontendOnboardingStageKey
-  label: 'Intent' | 'App details' | 'Organization' | 'Setup reached'
+  label: 'Intent' | 'App details' | 'App name' | 'App ID' | 'App icon' | 'Organization' | 'Organization details' | 'Setup reached'
   reached: number
   of_start_percent: number
   dropoff_percent: number
@@ -187,6 +187,9 @@ export interface FrontendOnboardingAnalyticsLoaderCallbacks {
 const FUNNEL_STAGE_COLORS: Record<FrontendOnboardingStageKey, string> = {
   intent: '#119eff',
   details: '#6366f1',
+  app_name: '#4f7cff',
+  app_id: '#6366f1',
+  app_icon: '#7c3aed',
   organization: '#8b5cf6',
   setup: '#10b981',
 }

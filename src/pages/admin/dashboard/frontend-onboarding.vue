@@ -295,7 +295,7 @@ const onboardingGraphV4 = computed<AdminOnboardingJourneyGraphConfig>(() => {
   const { funnel, nodes: interactionNodes } = onboardingGraphSource.value
   const stage = (key: FrontendOnboardingStageKey) => funnel.find(item => item.key === key)
   const intent = stage('intent')
-  const details = stage('details')
+  const details = stage(onboardingGraphSource.value.version === 'v4' ? 'app_name' : 'details')
   const organization = stage('organization')
   const setup = stage('setup')
   const parentPercent = (current: number, previous: number) => previous > 0 ? current / previous * 100 : 0
@@ -576,7 +576,7 @@ displayStore.defaultBack = '/dashboard'
             <div class="mt-6 h-72 sm:h-80">
               <AdminFunnelChart :stages="v4FunnelStages" />
             </div>
-            <div class="grid grid-cols-2 gap-4 pt-5 mt-5 border-t border-slate-200 md:grid-cols-4 dark:border-slate-700">
+            <div class="grid grid-cols-2 gap-4 pt-5 mt-5 border-t border-slate-200 md:grid-cols-3 xl:grid-cols-6 dark:border-slate-700">
               <div v-for="summary in v4FunnelSummaries" :key="summary.key" class="text-center">
                 <p class="text-xl font-bold text-slate-900 tabular-nums dark:text-white">
                   {{ formatNumberValue(summary.conversion_percent) }}%
