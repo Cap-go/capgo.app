@@ -12,8 +12,9 @@
 --   DEFINER (postgres) so pgmq.send does not need grants on pgmq to auth admin.
 --   anon / authenticated / PUBLIC cannot execute it.
 -- - Cardinality: O(1) insert into pgmq.q_send_email. No table scans.
--- - Drain: high_frequency_queues (every 10s) calls process_function_queue for
---   send_email. Failures retry up to MAX_QUEUE_READS = 5.
+-- - Drain: high_frequency_queues (every 10s) counts the queue. If it has jobs,
+--   it calls queue_consumer. The consumer reads send_email, runs the job, and
+--   deletes the message when it succeeds. Failures retry up to MAX_QUEUE_READS = 5.
 
 DO $$
 BEGIN
@@ -60,8 +61,8 @@ BEGIN
     );
   END IF;
 
-  -- Same envelope as trigger_http_queue_post_to_function / cron_email:
-  -- pgmq.send only. queue_consumer posts `payload` (the raw GoTrue event).
+  -- Same envelope as other function queues: event goes onto pgmq. Cron later
+  -- calls the consumer, which reads the job and marks it done.
   PERFORM pgmq.send(
     'send_email',
     jsonb_build_object(
