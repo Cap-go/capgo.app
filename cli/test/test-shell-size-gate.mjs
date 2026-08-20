@@ -74,14 +74,6 @@ function check(name, cond) {
   }
 }
 
-// Some terminals render emoji presentation characters as one cell even though
-// string-width (and therefore Ink's layout engine) measures them as two. Model
-// that terminal behavior so a content-sized border cannot silently become
-// ragged on those terminals.
-function narrowEmojiWidth(line) {
-  return stringWidth(line.replace(/\p{Extended_Pictographic}/gu, 'x'))
-}
-
 // The picker is gated only to the tiny banner-fits floor (44×11), NOT the full
 // 80×49 onboarding floor. Three bands:
 //   • below the banner floor → resize prompt (banner can't render, picker broken)
@@ -115,8 +107,9 @@ function narrowEmojiWidth(line) {
   check('picker shows on an ample terminal', /want to set up|iOS|Android/i.test(out))
   check('no resize prompt on the ample picker path', !/too small/i.test(out))
   const headerRows = out.split('\n').filter(line => /[╔║╚].*[╗║╝]/u.test(line)).slice(0, 5)
-  const headerWidths = headerRows.map(narrowEmojiWidth)
-  check('boxed header stays aligned on terminals that render emoji as one cell', headerRows.length === 5 && new Set(headerWidths).size === 1)
+  const headerWidths = headerRows.map(stringWidth)
+  check('boxed header stays rectangular', headerRows.length === 5 && new Set(headerWidths).size === 1)
+  check('boxed header avoids terminal-dependent emoji widths', headerRows.every(line => !/\p{Extended_Pictographic}/u.test(line)))
 }
 
 console.log(`\n${passed} passed, ${failed} failed`)

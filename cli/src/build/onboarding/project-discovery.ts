@@ -9,7 +9,6 @@ import {
   YarnTool,
 } from '@manypkg/tools'
 import type { Tool } from '@manypkg/tools'
-import { loadConfigTarget } from '../../config/index.js'
 
 const CAPACITOR_CONFIG_FILES = [
   'capacitor.config.ts',
@@ -62,19 +61,101 @@ function findCapacitorConfig(directory: string): string | undefined {
     .find(isFile)
 }
 
-async function readCapacitorAppId(directory: string): Promise<string | undefined> {
+interface StaticStringToken {
+  end: number
+  value?: string
+}
+
+function skipTrivia(source: string, start: number): number {
+  let index = start
+  while (index < source.length) {
+    if (/\s/u.test(source[index])) {
+      index += 1
+      continue
+    }
+    if (source.startsWith('//', index)) {
+      index = source.indexOf('\n', index + 2)
+      return index === -1 ? source.length : skipTrivia(source, index + 1)
+    }
+    if (source.startsWith('/*', index)) {
+      const end = source.indexOf('*/', index + 2)
+      return end === -1 ? source.length : skipTrivia(source, end + 2)
+    }
+    break
+  }
+  return index
+}
+
+function readStaticString(source: string, start: number): StaticStringToken | undefined {
+  const quote = source[start]
+  if (quote !== '\'' && quote !== '"')
+    return undefined
+
+  let value = ''
+  let escaped = false
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index]
+    if (character === '\\') {
+      escaped = true
+      index += 1
+      continue
+    }
+    if (character === quote)
+      return { end: index + 1, value: escaped ? undefined : value }
+    value += character
+  }
+  return { end: source.length }
+}
+
+function readStaticAppId(source: string): string | undefined {
+  const values = new Set<string>()
+  let index = 0
+  while (index < source.length) {
+    index = skipTrivia(source, index)
+    const stringToken = readStaticString(source, index)
+    let key: string | undefined
+    let keyEnd = index
+    if (stringToken) {
+      key = stringToken.value
+      keyEnd = stringToken.end
+    }
+    else if (/[A-Za-z_$]/u.test(source[index] ?? '')) {
+      const identifier = source.slice(index).match(/^[A-Za-z_$][\w$]*/u)?.[0]
+      key = identifier
+      keyEnd = index + (identifier?.length ?? 1)
+    }
+
+    if (key === 'appId') {
+      const colon = skipTrivia(source, keyEnd)
+      if (source[colon] === ':') {
+        const valueStart = skipTrivia(source, colon + 1)
+        const valueToken = readStaticString(source, valueStart)
+        const value = valueToken?.value?.trim()
+        if (value)
+          values.add(value)
+      }
+    }
+    index = Math.max(keyEnd, index + 1)
+  }
+  return values.size === 1 ? [...values][0] : undefined
+}
+
+function readCapacitorAppId(directory: string): string | undefined {
   const configPath = findCapacitorConfig(directory)
   if (!configPath)
     return undefined
   try {
-    const config = await loadConfigTarget(configPath)
-    const appId = config.appId?.trim()
-    return appId || undefined
+    const source = readFileSync(configPath, 'utf8')
+    if (configPath.endsWith('.json')) {
+      const config = JSON.parse(source) as { appId?: unknown }
+      const appId = typeof config.appId === 'string' ? config.appId.trim() : ''
+      return appId || undefined
+    }
+    return readStaticAppId(source)
   }
   catch {
-    // Discovery must still offer the project when a dynamic config cannot be
-    // evaluated. The selected project's normal config load will report the
-    // actionable error afterward.
+    // Discovery remains best-effort. The selected project's normal config load
+    // reports malformed or dynamic configuration errors afterward.
     return undefined
   }
 }
@@ -88,7 +169,7 @@ async function projectCandidate(
     dir: directory,
     relativeDir: displayRelativePath(searchRoot, directory),
     packageName,
-    appId: await readCapacitorAppId(directory),
+    appId: readCapacitorAppId(directory),
   }
 }
 

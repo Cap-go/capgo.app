@@ -59,8 +59,10 @@ of crawling the filesystem.
 ## Candidate Detection and Selection
 
 Each candidate is a workspace package directory containing one of the three
-supported Capacitor config filenames. The CLI loads the config best-effort and
-shows its `appId` when available, so similarly named apps are easy to identify.
+supported Capacitor config filenames. The CLI reads JSON or a static string
+literal `appId` best-effort, so similarly named apps are easy to identify
+without executing candidate JavaScript or TypeScript before selection. Dynamic
+values remain unlabeled until the chosen project's normal config load.
 Candidates are sorted by their path relative to the invocation directory so the
 prompt is stable.
 

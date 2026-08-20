@@ -90,9 +90,15 @@ export async function loadConfigTarget(filePath: string): Promise<CapacitorConfi
   // Bun can resolve unrelated global cache entries from createRequire(). Only
   // accept a project compiler when it exposes the API Capacitor's loader uses.
   // The published CLI ships TypeScript as a runtime dependency for the fallback.
-  const cliTypeScript: unknown = isTypeScriptCompiler(projectTypeScript)
-    ? undefined
-    : createRequire(import.meta.url)('typescript')
+  let cliTypeScript: unknown
+  if (!isTypeScriptCompiler(projectTypeScript)) {
+    try {
+      cliTypeScript = createRequire(import.meta.url)('typescript')
+    }
+    catch {
+      cliTypeScript = undefined
+    }
+  }
   const typescript = isTypeScriptCompiler(projectTypeScript)
     ? projectTypeScript
     : cliTypeScript

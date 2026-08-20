@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import * as builderOnboardingCommand from '../src/build/onboarding/command.ts'
@@ -101,6 +101,22 @@ try {
     const result = await discoverCapacitorProjects(root)
     assert.equal(result.reason, undefined)
     assert.equal(result.candidates[0].appId, 'com.example.javascript')
+  })
+
+  await test('reads literal appId metadata without executing candidate configuration code', async () => {
+    const root = fixture('non-executing-config-discovery')
+    writeJson(join(root, 'package.json'), { private: true, workspaces: ['apps/*'] })
+    const appDir = addPackage(root, 'apps/mobile', '@example/mobile')
+    const executionMarker = join(root, 'candidate-config-executed')
+    writeText(
+      join(appDir, 'capacitor.config.js'),
+      `require('node:fs').writeFileSync(${JSON.stringify(executionMarker)}, 'executed')\nmodule.exports = { appId: 'com.example.safe-discovery' }\n`,
+    )
+
+    const result = await discoverCapacitorProjects(root)
+    assert.equal(result.reason, undefined)
+    assert.equal(result.candidates[0].appId, 'com.example.safe-discovery')
+    assert.equal(existsSync(executionMarker), false)
   })
 
   await test('falls back to the CLI compiler when a resolved TypeScript module is unusable', async () => {
