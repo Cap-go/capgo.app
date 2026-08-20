@@ -181,7 +181,7 @@ candidate. Treat that metadata read as best-effort: a dynamic config that cannot
 be evaluated remains selectable without an `appId`, and its normal post-selection
 config load reports the actionable error. JavaScript configs must load without
 resolving TypeScript; TypeScript configs prefer the project's TypeScript runtime
-and fall back to the TypeScript runtime bundled with the CLI.
+and fall back to the TypeScript runtime installed with the CLI.
 
 - [ ] **Step 3: Run discovery tests and verify partial GREEN**
 

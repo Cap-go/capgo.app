@@ -4,7 +4,6 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { cwd } from 'node:process'
-import * as bundledTypescript from 'typescript'
 import type { CapacitorConfig, ExtConfigPairs } from '../schemas/config'
 import { formatJSObject, loadConfig as loadConfigCap, requireTS, writeConfig as writeConfigCap } from '../capacitor-cli'
 
@@ -73,13 +72,14 @@ export async function loadConfigTarget(filePath: string): Promise<CapacitorConfi
     return (typeof exportedConfig === 'function' ? await exportedConfig() : await exportedConfig) as CapacitorConfig
   }
 
-  let typescript = bundledTypescript
+  let typescript: typeof import('typescript')
   try {
     typescript = targetRequire('typescript') as typeof import('typescript')
   }
   catch {
-    // Keep the TypeScript runtime bundled with the CLI. Workspace packages can
-    // still use their own version when one is resolvable from the config file.
+    // The published CLI ships TypeScript as a runtime dependency. Prefer the
+    // project's version, then resolve the CLI's installed copy as a fallback.
+    typescript = createRequire(import.meta.url)('typescript') as typeof import('typescript')
   }
   const configModule = requireTS(typescript, filePath)
   const exportedConfig = configModule.default ?? configModule
