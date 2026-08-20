@@ -5,6 +5,7 @@ import { useDebounceFn } from '@vueuse/core'
 import DOMPurify from 'dompurify'
 import {
   computed,
+  nextTick,
   onMounted,
   onUnmounted,
   ref,
@@ -87,12 +88,11 @@ const filterModalTitleId = `${useId()}-filters-title`
 const addTooltipId = `${useId()}-add-tooltip`
 const exportMenuId = `${useId()}-export-menu`
 const exportMenuOpen = ref(false)
+const exportTriggerRef = ref<HTMLButtonElement | null>(null)
 
 function closeExportMenu() {
   exportMenuOpen.value = false
-  const active = document.activeElement
-  if (active instanceof HTMLElement)
-    active.blur()
+  nextTick(() => exportTriggerRef.value?.focus())
 }
 
 function exportTable(format: 'csv' | 'json') {
@@ -542,34 +542,33 @@ const paginationClass = computed(() => props.mobileFixedPagination
         <div
           v-if="exportable"
           class="d-dropdown"
-          @focusin="exportMenuOpen = true"
           @focusout="exportMenuOpen = false"
           @keydown.escape.prevent="closeExportMenu"
         >
           <button
-            tabindex="0"
+            ref="exportTriggerRef"
             type="button"
             class="d-btn d-btn-sm inline-flex h-full items-center rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-500 shadow-none dark:border-gray-600 dark:bg-gray-800 dark:text-white"
             :disabled="isLoading || exportLoading"
             data-test="data-table-export"
             :aria-label="t('export')"
-            aria-haspopup="menu"
+            aria-haspopup="true"
             :aria-expanded="exportMenuOpen"
             :aria-controls="exportMenuId"
+            @click="exportMenuOpen = !exportMenuOpen"
           >
             <IconDownload v-if="!exportLoading" class="m-1 md:mr-2" />
             <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
             <span class="hidden text-sm md:block">{{ t('export') }}</span>
           </button>
           <ul
+            v-show="exportMenuOpen"
             :id="exportMenuId"
-            role="menu"
             class="d-dropdown-content d-menu z-20 mt-1 mr-2 w-40 rounded-md border border-slate-200 bg-white p-1 shadow-lg dark:border-slate-700 dark:bg-slate-900"
           >
-            <li role="none">
+            <li>
               <button
                 type="button"
-                role="menuitem"
                 class="d-btn d-btn-ghost d-btn-sm w-full justify-start rounded-md px-3 py-2 text-left text-sm font-normal text-slate-700 shadow-none dark:text-slate-200"
                 data-test="data-table-export-csv"
                 :disabled="isLoading || exportLoading"
@@ -578,10 +577,9 @@ const paginationClass = computed(() => props.mobileFixedPagination
                 {{ t('download-csv') }}
               </button>
             </li>
-            <li role="none">
+            <li>
               <button
                 type="button"
-                role="menuitem"
                 class="d-btn d-btn-ghost d-btn-sm w-full justify-start rounded-md px-3 py-2 text-left text-sm font-normal text-slate-700 shadow-none dark:text-slate-200"
                 data-test="data-table-export-json"
                 :disabled="isLoading || exportLoading"

@@ -675,8 +675,10 @@ watch(() => props.versionName, (value) => {
   skipFilterReload.value = true
   bundleCompareOp.value = 'in'
   selectedVersionNames.value = value ? [value] : []
-  skipFilterReload.value = false
-  debouncedReload()
+  nextTick(() => {
+    skipFilterReload.value = false
+    debouncedReload()
+  })
 })
 
 watch([selectedPlatform, selectedVersionNames, bundleCompareOp, osVersionOp, osVersionValue], () => {
