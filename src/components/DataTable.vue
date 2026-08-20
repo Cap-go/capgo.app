@@ -90,9 +90,15 @@ const exportMenuId = `${useId()}-export-menu`
 const exportMenuOpen = ref(false)
 const exportTriggerRef = ref<HTMLButtonElement | null>(null)
 
+function focusExportTrigger() {
+  if (props.exportLoading)
+    return
+  exportTriggerRef.value?.focus()
+}
+
 function closeExportMenu() {
   exportMenuOpen.value = false
-  nextTick(() => exportTriggerRef.value?.focus())
+  nextTick(focusExportTrigger)
 }
 
 function toggleExportMenu() {
@@ -117,6 +123,11 @@ function exportTable(format: 'csv' | 'json') {
   closeExportMenu()
   emit('export', format)
 }
+
+watch(() => props.exportLoading, (loading, wasLoading) => {
+  if (wasLoading && !loading)
+    nextTick(focusExportTrigger)
+})
 const slots = useSlots()
 const { t } = useI18n()
 const searchVal = ref(props.search ?? '')
