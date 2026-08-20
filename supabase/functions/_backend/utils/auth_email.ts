@@ -27,6 +27,8 @@ export interface GoTrueSendEmailEvent {
     site_url?: string
     token?: string
     token_hash?: string
+    token_hash_new?: string
+    token_new?: string
   }
   user?: {
     email?: string
@@ -46,7 +48,13 @@ export interface AuthEmailPayload {
   token_hash?: string
 }
 
+export interface AuthEmailDelivery {
+  email: string
+  payload: AuthEmailPayload
+}
+
 export interface AuthEmailBentoDetails {
+  confirmation_link: string
   confirmation_url: string
   email: string
   factor_type: string
@@ -60,20 +68,77 @@ function textField(value: string | undefined): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-export function authEmailPayloadFromGoTrueEvent(event: GoTrueSendEmailEvent): AuthEmailPayload {
+function verifyType(emailActionType: string): string {
+  if (emailActionType === 'email_change_current' || emailActionType === 'email_change_new')
+    return 'email_change'
+  return emailActionType
+}
+
+function delivery(
+  email: string,
+  event: GoTrueSendEmailEvent,
+  token: string,
+  tokenHash: string,
+): AuthEmailDelivery {
   const emailData = event.email_data ?? {}
   const user = event.user ?? {}
-
   return {
-    email: textField(user.email),
-    email_action_type: textField(emailData.email_action_type),
-    factor_type: textField(emailData.factor_type),
-    new_email: textField(user.new_email) || textField(emailData.new_email),
-    old_email: textField(emailData.old_email),
-    redirect_to: textField(emailData.redirect_to),
-    site_url: textField(emailData.site_url),
-    token: textField(emailData.token),
-    token_hash: textField(emailData.token_hash),
+    email,
+    payload: {
+      email,
+      email_action_type: verifyType(textField(emailData.email_action_type)),
+      factor_type: textField(emailData.factor_type),
+      new_email: textField(user.new_email) || textField(emailData.new_email),
+      old_email: textField(emailData.old_email),
+      redirect_to: textField(emailData.redirect_to),
+      site_url: textField(emailData.site_url),
+      token,
+      token_hash: tokenHash,
+    },
+  }
+}
+
+export function authEmailDeliveriesFromGoTrueEvent(event: GoTrueSendEmailEvent): AuthEmailDelivery[] {
+  const emailData = event.email_data ?? {}
+  const user = event.user ?? {}
+  const actionType = textField(emailData.email_action_type)
+  const currentEmail = textField(user.email)
+  const newEmail = textField(user.new_email) || textField(emailData.new_email)
+  const oldEmail = textField(emailData.old_email)
+  const token = textField(emailData.token)
+  const tokenNew = textField(emailData.token_new)
+  const tokenHash = textField(emailData.token_hash)
+  const tokenHashNew = textField(emailData.token_hash_new)
+
+  if (actionType === 'email_change' && tokenHash && tokenHashNew) {
+    return [
+      delivery(currentEmail, event, token, tokenHashNew),
+      delivery(newEmail || currentEmail, event, tokenNew, tokenHash),
+    ].filter(item => item.email)
+  }
+
+  if (actionType === 'email_change_current')
+    return [delivery(currentEmail, event, token, tokenHashNew || tokenHash)].filter(item => item.email)
+
+  if (actionType === 'email_change_new' || actionType === 'email_change') {
+    return [delivery(
+      newEmail || currentEmail,
+      event,
+      tokenNew || token,
+      tokenHash,
+    )].filter(item => item.email)
+  }
+
+  if (actionType === 'email_changed_notification')
+    return [delivery(oldEmail || currentEmail, event, token, tokenHash)].filter(item => item.email)
+
+  return [delivery(currentEmail, event, token, tokenHash)].filter(item => item.email)
+}
+
+export function authEmailPayloadFromGoTrueEvent(event: GoTrueSendEmailEvent): AuthEmailPayload {
+  return authEmailDeliveriesFromGoTrueEvent(event)[0]?.payload ?? {
+    email: '',
+    email_action_type: '',
   }
 }
 
@@ -83,6 +148,7 @@ export function getAuthEmailBentoEvent(emailActionType: string): string {
     return `${AUTH_EMAIL_EVENT_PREFIX}unknown`
 
   return AUTH_EMAIL_EVENTS[actionType as keyof typeof AUTH_EMAIL_EVENTS]
+    ?? AUTH_EMAIL_EVENTS[verifyType(actionType) as keyof typeof AUTH_EMAIL_EVENTS]
     ?? `${AUTH_EMAIL_EVENT_PREFIX}${actionType}`
 }
 
@@ -94,7 +160,7 @@ export function buildAuthConfirmationUrl(
 ): string {
   const baseUrl = trimTrailingSlashes(textField(supabaseUrl))
   const hash = textField(tokenHash)
-  const actionType = textField(emailActionType)
+  const actionType = verifyType(textField(emailActionType))
   if (!baseUrl || !hash || !actionType)
     return ''
 
@@ -115,14 +181,18 @@ export function buildAuthEmailBentoDetails(
   webappUrl: string,
 ): AuthEmailBentoDetails {
   const siteUrl = trimTrailingSlashes(textField(webappUrl)) || trimTrailingSlashes(textField(payload.site_url))
+  const confirmationUrl = buildAuthConfirmationUrl(
+    supabaseUrl,
+    payload.token_hash ?? '',
+    payload.email_action_type,
+    payload.redirect_to ?? '',
+  )
 
   return {
-    confirmation_url: buildAuthConfirmationUrl(
-      supabaseUrl,
-      payload.token_hash ?? '',
-      payload.email_action_type,
-      payload.redirect_to ?? '',
-    ),
+    confirmation_link: siteUrl && confirmationUrl
+      ? `${siteUrl}/confirm-signup?confirmation_url=${encodeURIComponent(confirmationUrl)}`
+      : '',
+    confirmation_url: confirmationUrl,
     email: textField(payload.email),
     factor_type: textField(payload.factor_type),
     new_email: textField(payload.new_email),

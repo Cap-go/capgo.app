@@ -128,7 +128,8 @@ SELECT is(
         "canceled_org_retention_alerts",
         "send_email"
     ]'::jsonb,
-    'high-frequency queues retain order and append on_user_org_access, canceled_org_retention_alerts, then send_email'
+    'high-frequency queues retain order and append on_user_org_access,'
+    ' canceled_org_retention_alerts, then send_email'
 );
 
 SELECT is(
