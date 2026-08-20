@@ -570,7 +570,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
         </button>
         <div
           v-if="exportable"
-          class="d-dropdown"
+          class="d-dropdown mr-2"
           @focusout="onExportFocusOut"
           @keydown.escape.prevent="closeExportMenu"
         >
