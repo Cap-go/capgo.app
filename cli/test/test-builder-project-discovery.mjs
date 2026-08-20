@@ -14,6 +14,7 @@ import {
   builderProjectNotFoundMessage,
   shouldDiscoverBuilderProject,
 } from '../src/build/onboarding/command.ts'
+import { loadConfigTarget } from '../src/config/index.ts'
 
 const fixtureRoots = []
 let failures = 0
@@ -100,6 +101,17 @@ try {
     const result = await discoverCapacitorProjects(root)
     assert.equal(result.reason, undefined)
     assert.equal(result.candidates[0].appId, 'com.example.javascript')
+  })
+
+  await test('falls back to the CLI compiler when a resolved TypeScript module is unusable', async () => {
+    const root = fixture('invalid-project-typescript')
+    const configPath = join(root, 'capacitor.config.ts')
+    writeText(configPath, "export default { appId: 'com.example.fallback' }\n")
+    writeJson(join(root, 'node_modules/typescript/package.json'), { name: 'typescript', version: '0.0.0', main: 'index.js' })
+    writeText(join(root, 'node_modules/typescript/index.js'), "module.exports = { version: '0.0.0' }\n")
+
+    const config = await loadConfigTarget(configPath)
+    assert.equal(config.appId, 'com.example.fallback')
   })
 
   await test('sorts multiple Capacitor apps by relative workspace path', async () => {

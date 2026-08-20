@@ -59,6 +59,14 @@ export function resolveCapacitorConfigTargetPath(value: string | undefined, init
   return target
 }
 
+function isTypeScriptCompiler(value: unknown): value is typeof import('typescript') {
+  if (value === null || typeof value !== 'object')
+    return false
+  const candidate = value as { transpileModule?: unknown, ModuleKind?: { CommonJS?: unknown } }
+  return typeof candidate.transpileModule === 'function'
+    && typeof candidate.ModuleKind?.CommonJS === 'number'
+}
+
 export async function loadConfigTarget(filePath: string): Promise<CapacitorConfig> {
   const extension = extname(filePath)
   if (extension === '.json')
@@ -72,15 +80,24 @@ export async function loadConfigTarget(filePath: string): Promise<CapacitorConfi
     return (typeof exportedConfig === 'function' ? await exportedConfig() : await exportedConfig) as CapacitorConfig
   }
 
-  let typescript: typeof import('typescript')
+  let projectTypeScript: unknown
   try {
-    typescript = targetRequire('typescript') as typeof import('typescript')
+    projectTypeScript = targetRequire('typescript')
   }
   catch {
-    // The published CLI ships TypeScript as a runtime dependency. Prefer the
-    // project's version, then resolve the CLI's installed copy as a fallback.
-    typescript = createRequire(import.meta.url)('typescript') as typeof import('typescript')
+    projectTypeScript = undefined
   }
+  // Bun can resolve unrelated global cache entries from createRequire(). Only
+  // accept a project compiler when it exposes the API Capacitor's loader uses.
+  // The published CLI ships TypeScript as a runtime dependency for the fallback.
+  const cliTypeScript: unknown = isTypeScriptCompiler(projectTypeScript)
+    ? undefined
+    : createRequire(import.meta.url)('typescript')
+  const typescript = isTypeScriptCompiler(projectTypeScript)
+    ? projectTypeScript
+    : cliTypeScript
+  if (!isTypeScriptCompiler(typescript))
+    throw new Error('Could not load a usable TypeScript compiler for the Capacitor config')
   const configModule = requireTS(typescript, filePath)
   const exportedConfig = configModule.default ?? configModule
   return (typeof exportedConfig === 'function' ? await exportedConfig() : await exportedConfig) as CapacitorConfig
