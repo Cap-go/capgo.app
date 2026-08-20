@@ -60,26 +60,14 @@ BEGIN
     );
   END IF;
 
+  -- Same envelope as trigger_http_queue_post_to_function / cron_email:
+  -- pgmq.send only. queue_consumer posts `payload` (the raw GoTrue event).
   PERFORM pgmq.send(
     'send_email',
     jsonb_build_object(
       'function_name', 'send_email',
       'function_type', 'cloudflare',
-      'payload', jsonb_build_object(
-        'email', v_email,
-        'email_action_type', v_action_type,
-        'factor_type', COALESCE(event -> 'email_data' ->> 'factor_type', ''),
-        'new_email', COALESCE(
-          event -> 'user' ->> 'new_email',
-          event -> 'email_data' ->> 'new_email',
-          ''
-        ),
-        'old_email', COALESCE(event -> 'email_data' ->> 'old_email', ''),
-        'redirect_to', COALESCE(event -> 'email_data' ->> 'redirect_to', ''),
-        'site_url', COALESCE(event -> 'email_data' ->> 'site_url', ''),
-        'token', COALESCE(event -> 'email_data' ->> 'token', ''),
-        'token_hash', COALESCE(event -> 'email_data' ->> 'token_hash', '')
-      )
+      'payload', event
     )
   );
 

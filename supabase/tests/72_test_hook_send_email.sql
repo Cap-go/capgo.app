@@ -17,7 +17,7 @@ BEGIN
     EXECUTE
         'SELECT message -> ''payload''
          FROM pgmq.q_send_email
-         WHERE message -> ''payload'' ->> ''token_hash'' = $1
+         WHERE message -> ''payload'' -> ''email_data'' ->> ''token_hash'' = $1
          ORDER BY msg_id
          LIMIT 1'
     INTO v_payload
@@ -118,27 +118,27 @@ SELECT is(
 );
 
 SELECT is(
-    pg_temp.send_email_payload() ->> 'email',
+    pg_temp.send_email_payload() -> 'user' ->> 'email',
     'hook-send-email@capgo.test',
-    'queued payload keeps recipient email'
+    'queued payload keeps the raw GoTrue user email'
 );
 
 SELECT is(
-    pg_temp.send_email_payload() ->> 'new_email',
+    pg_temp.send_email_payload() -> 'user' ->> 'new_email',
     'hook-send-email-new@capgo.test',
-    'queued payload keeps new_email from user.new_email'
+    'queued payload keeps the raw GoTrue user.new_email'
 );
 
 SELECT is(
-    pg_temp.send_email_payload() ->> 'token',
+    pg_temp.send_email_payload() -> 'email_data' ->> 'token',
     '305805',
-    'queued payload keeps OTP token'
+    'queued payload keeps the raw GoTrue OTP token'
 );
 
 SELECT is(
-    pg_temp.send_email_payload() ->> 'email_action_type',
+    pg_temp.send_email_payload() -> 'email_data' ->> 'email_action_type',
     'email_change',
-    'queued payload keeps email_action_type'
+    'queued payload keeps the raw GoTrue email_action_type'
 );
 
 SELECT is(
@@ -146,7 +146,7 @@ SELECT is(
         SELECT message ->> 'function_name'
         FROM pgmq.q_send_email
         WHERE
-            message -> 'payload' ->> 'token_hash'
+            message -> 'payload' -> 'email_data' ->> 'token_hash'
             = 'hook-send-email-token-hash'
         ORDER BY msg_id
         LIMIT 1
@@ -156,7 +156,9 @@ SELECT is(
 );
 
 DELETE FROM pgmq.q_send_email
-WHERE message -> 'payload' ->> 'token_hash' = 'hook-send-email-token-hash';
+WHERE
+    message -> 'payload' -> 'email_data' ->> 'token_hash'
+    = 'hook-send-email-token-hash';
 
 SELECT * FROM finish(); -- noqa: AM04
 ROLLBACK;

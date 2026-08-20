@@ -37,16 +37,18 @@ vi.mock('../supabase/functions/_backend/utils/utils.ts', async () => {
 
 const { app } = await import('../supabase/functions/_backend/triggers/send_email.ts')
 
-const signupPayload = {
-  email: 'user@capgo.app',
-  email_action_type: 'signup',
-  factor_type: '',
-  new_email: '',
-  old_email: '',
-  redirect_to: 'https://console.capgo.app',
-  site_url: 'https://console.capgo.app',
-  token: '305805',
-  token_hash: 'token-hash',
+const signupEvent = {
+  user: {
+    email: 'user@capgo.app',
+  },
+  email_data: {
+    email_action_type: 'signup',
+    factor_type: '',
+    redirect_to: 'https://console.capgo.app',
+    site_url: 'https://console.capgo.app',
+    token: '305805',
+    token_hash: 'token-hash',
+  },
 }
 
 function postSendEmail(body: unknown) {
@@ -65,7 +67,7 @@ describe('send_email queue handler', () => {
   })
 
   it('tracks a Bento transactional event with GoTrue template fields', async () => {
-    const response = await postSendEmail(signupPayload)
+    const response = await postSendEmail(signupEvent)
 
     expect(response.status).toBe(200)
     expect(trackBentoEventMock).toHaveBeenCalledWith(
@@ -84,20 +86,10 @@ describe('send_email queue handler', () => {
     )
   })
 
-  it('unwraps the queue envelope payload', async () => {
-    const response = await postSendEmail({
-      function_name: 'send_email',
-      payload: signupPayload,
-    })
-
-    expect(response.status).toBe(200)
-    expect(trackBentoEventMock).toHaveBeenCalledOnce()
-  })
-
   it('acks when Bento is not configured so local/CI does not poison the queue', async () => {
     isBentoConfiguredMock.mockReturnValue(false)
 
-    const response = await postSendEmail(signupPayload)
+    const response = await postSendEmail(signupEvent)
 
     expect(response.status).toBe(200)
     expect(trackBentoEventMock).not.toHaveBeenCalled()
@@ -106,7 +98,7 @@ describe('send_email queue handler', () => {
   it('fails for queue retry when configured Bento delivery fails', async () => {
     trackBentoEventMock.mockResolvedValue(false)
 
-    const response = await postSendEmail(signupPayload)
+    const response = await postSendEmail(signupEvent)
 
     expect(response.status).toBe(500)
   })

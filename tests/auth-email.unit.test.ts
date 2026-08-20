@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  authEmailPayloadFromGoTrueEvent,
   buildAuthConfirmationUrl,
   buildAuthEmailBentoDetails,
   getAuthEmailBentoEvent,
@@ -61,6 +62,26 @@ describe('auth email Bento mapping', () => {
       'site_url',
       'token',
     ])
+  })
+
+  it.concurrent('reads new_email from the GoTrue user object', () => {
+    expect(authEmailPayloadFromGoTrueEvent({
+      user: {
+        email: 'old@capgo.app',
+        new_email: 'new@capgo.app',
+      },
+      email_data: {
+        email_action_type: 'email_change',
+        token: '305805',
+        token_hash: 'hash-3',
+      },
+    })).toMatchObject({
+      email: 'old@capgo.app',
+      email_action_type: 'email_change',
+      new_email: 'new@capgo.app',
+      token: '305805',
+      token_hash: 'hash-3',
+    })
   })
 
   it.concurrent('uses GoTrue site_url when WEBAPP_URL is empty', () => {

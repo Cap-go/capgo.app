@@ -17,6 +17,23 @@ export const AUTH_EMAIL_EVENTS = {
   signup: 'auth_confirmation',
 } as const
 
+export interface GoTrueSendEmailEvent {
+  email_data?: {
+    email_action_type?: string
+    factor_type?: string
+    new_email?: string
+    old_email?: string
+    redirect_to?: string
+    site_url?: string
+    token?: string
+    token_hash?: string
+  }
+  user?: {
+    email?: string
+    new_email?: string
+  }
+}
+
 export interface AuthEmailPayload {
   email: string
   email_action_type: string
@@ -41,6 +58,23 @@ export interface AuthEmailBentoDetails {
 
 function textField(value: string | undefined): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+export function authEmailPayloadFromGoTrueEvent(event: GoTrueSendEmailEvent): AuthEmailPayload {
+  const emailData = event.email_data ?? {}
+  const user = event.user ?? {}
+
+  return {
+    email: textField(user.email),
+    email_action_type: textField(emailData.email_action_type),
+    factor_type: textField(emailData.factor_type),
+    new_email: textField(user.new_email) || textField(emailData.new_email),
+    old_email: textField(emailData.old_email),
+    redirect_to: textField(emailData.redirect_to),
+    site_url: textField(emailData.site_url),
+    token: textField(emailData.token),
+    token_hash: textField(emailData.token_hash),
+  }
 }
 
 export function getAuthEmailBentoEvent(emailActionType: string): string {
