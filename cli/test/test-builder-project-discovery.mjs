@@ -102,14 +102,18 @@ async function test(name, run) {
 
 try {
   await test('does not paint search status when discovery completes within 100ms', async () => {
-    const root = fixture('fast-ui-discovery')
-    writeJson(join(root, 'package.json'), { private: true, workspaces: ['apps/*'] })
-    addCapacitorApp(root, 'apps/mobile', '@example/mobile', 'com.example.mobile')
+    const candidate = {
+      dir: '/workspace/apps/mobile',
+      relativeDir: 'apps/mobile',
+      packageName: '@example/mobile',
+      appId: 'com.example.mobile',
+    }
     const stdout = makeStdout()
     const instance = render(
       React.createElement(BuilderProjectDiscoveryApp, {
-        searchRoot: root,
+        searchRoot: '/workspace',
         onDecision: () => {},
+        discoverProjects: async () => ({ candidates: [candidate], nxDetected: false }),
       }),
       {
         stdout,
@@ -130,7 +134,7 @@ try {
     }
   })
 
-  await test('keeps delayed search status visible for at least one second once shown', async () => {
+  await test('keeps delayed search status visible for its configured minimum duration', async () => {
     const candidate = {
       dir: '/workspace/apps/mobile',
       relativeDir: 'apps/mobile',
