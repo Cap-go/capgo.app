@@ -475,7 +475,7 @@ describe('cli app preview lifecycle', () => {
     const channelPostIndex = requests.findIndex(request => request.method === 'POST' && request.path === '/functions/v1/channel')
     expect(channelPostIndex).toBeGreaterThanOrEqual(0)
     expect(requests).not.toContainEqual({ method: 'POST', path: '/rest/v1/rpc/get_app_versions' })
-    expect(requests.slice(channelPostIndex + 1)).toContainEqual({ method: 'GET', path: '/rest/v1/channels' })
+    expect(requests.slice(channelPostIndex + 1)).toContainEqual({ method: 'GET', path: '/functions/v1/private/cli/upload-channel' })
 
     await expect(deleteChannelInternal(LEGACY_CHANNEL_NAME, APPNAME, {
       ...cliOptions,
@@ -499,7 +499,7 @@ describe('cli app preview lifecycle', () => {
       const { upload, requests } = await (async () => {
         const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
           const request = requestTrace(input, init)
-          if (createdChannelId != null && request.method === 'GET' && request.path === '/rest/v1/channels') {
+          if (createdChannelId != null && request.method === 'GET' && request.path === '/functions/v1/private/cli/upload-channel') {
             return new Response(JSON.stringify({ message: 'Readback unavailable' }), {
               status: 503,
               headers: { 'content-type': 'application/json' },
@@ -546,7 +546,7 @@ describe('cli app preview lifecycle', () => {
         bundle: LEGACY_PARTIAL_BUNDLE_NAME,
         updatedChannels: [LEGACY_PARTIAL_CHANNEL_NAME],
       })
-      expect(requests).toContainEqual({ method: 'GET', path: '/rest/v1/channels' })
+      expect(requests).toContainEqual({ method: 'GET', path: '/functions/v1/private/cli/upload-channel' })
       expect(logInfo).toHaveBeenCalledWith(expect.stringContaining(`Link device to this bundle to try it: `))
       expect(logInfo).toHaveBeenCalledWith(expect.stringContaining(`/app/${APPNAME}/channel/${createdChannelId}`))
     }
