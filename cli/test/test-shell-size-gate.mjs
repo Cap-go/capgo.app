@@ -109,7 +109,7 @@ function check(name, cond) {
   const headerRows = out.split('\n').filter(line => /[╔║╚].*[╗║╝]/u.test(line)).slice(0, 5)
   const headerWidths = headerRows.map(stringWidth)
   check('boxed header stays rectangular', headerRows.length === 5 && new Set(headerWidths).size === 1)
-  check('boxed header avoids terminal-dependent emoji widths', headerRows.every(line => !/\p{Extended_Pictographic}/u.test(line)))
+  check('boxed header restores the rocket branding', headerRows.some(line => /🚀/u.test(line)))
 }
 
 console.log(`\n${passed} passed, ${failed} failed`)
