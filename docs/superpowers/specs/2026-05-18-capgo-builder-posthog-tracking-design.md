@@ -20,7 +20,7 @@ Mirror the existing Capgo onboarding-progress PostHog tracking onto the **Capgo 
 
 ### 1. Onboarding step events
 
-One event per CLI wizard step transition. Sent from the CLI through the existing `/private/events` endpoint so the existing dual-writer (LogSnag + PostHog) and org grouping apply automatically.
+One event per CLI wizard step transition. Sent from the CLI through the existing `/private/events` endpoint so PostHog capture and org grouping apply automatically.
 
 **Event:** `Builder Onboarding Step`
 **Channel:** `builder-onboarding`
@@ -158,7 +158,6 @@ ONBOARDING:
           └─→ POST /private/events                                [reuses existing endpoint]
                 └─→ backend validates body, resolves orgId via resolveTrackingUserId
                       └─→ sendEventToTracking(...)                 [supabase/functions/_backend/utils/tracking.ts]
-                            ├─→ logsnag(c).track(...)
                             └─→ trackPosthogEvent(c, {...})
 
 BUILDS:
@@ -183,7 +182,7 @@ BUILDS:
 The CLI already has `capgo/cli/src/posthog.ts`, but it is scoped to exception capture (`$exception` events with stack traces). Routing onboarding events through the backend gives us:
 
 - Org grouping for free (`groups: { organization: orgId }`) without the CLI having to know the org id
-- Dual-write to LogSnag (existing convention)
+- Centralized PostHog delivery and error handling
 - Auth-gated event source (anyone with a CLI token is a real user)
 - Consistency with `on_app_create.ts` and the other backend trackers
 

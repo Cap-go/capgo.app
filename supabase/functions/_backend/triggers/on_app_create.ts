@@ -138,7 +138,6 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'INSERT'), async (c)
     bento: appCreatedBentoEvent,
     channel: 'app-created',
     event: isDemo ? 'Demo App Created' : isPendingOnboarding ? 'Onboarding App Created' : 'App Created',
-    icon: isDemo ? '🎮' : isPendingOnboarding ? '🧭' : '🎉',
     sentToBento: Boolean(appCreatedBentoEvent),
     user_id: ownerOrg,
     groups: { organization: ownerOrg },
@@ -147,7 +146,6 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'INSERT'), async (c)
       is_demo: isDemo ? 'true' : 'false',
       need_onboarding: isPendingOnboarding ? 'true' : 'false',
     },
-    notify: false,
   })
 
   // Purge on-prem cache for this app to clear any stale responses

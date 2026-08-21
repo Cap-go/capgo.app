@@ -6,7 +6,7 @@
  *   that denominator from public.orgs.created_at.
  *
  * plan_*_conversion_rate = plan_count / paying * 100
- *   Plan mix among paying orgs (same as the daily admin core shard / LogSnag).
+ *   Plan mix among paying orgs (same as the daily admin core shard).
  *
  * Dry run, defaulting to the last 30 UTC calendar days:
  *   bun run stripe:backfill-org-conversion-rate

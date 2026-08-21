@@ -197,7 +197,7 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
     }
   })
 
-  void trackEvent({ channel: 'organization', event: 'Org Members Listed', icon: '👥', tags: { member_count: memberInfoList.length, with_2fa_count: memberInfoList.filter(m => m.has_2fa).length } })
+  void trackEvent({ channel: 'organization', event: 'Org Members Listed', tags: { member_count: memberInfoList.length, with_2fa_count: memberInfoList.filter(m => m.has_2fa).length } })
 
   if (!silent) {
     log.info(`Members found: ${memberInfoList.length}`)

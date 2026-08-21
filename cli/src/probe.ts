@@ -67,7 +67,7 @@ export async function probeInternal(options: ProbeOptions): Promise<ProbeInterna
   const ctx = prepared.context
   const result = await singleProbeRequest(ctx.endpoint, ctx.payload)
 
-  void trackEvent({ channel: 'cli-usage', event: 'Update Probed', icon: '🔎', tags: { update_available: result.success } })
+  void trackEvent({ channel: 'cli-usage', event: 'Update Probed', tags: { update_available: result.success } })
 
   const probeInternalResult: ProbeInternalResult = {
     success: result.success,

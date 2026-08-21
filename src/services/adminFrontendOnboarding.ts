@@ -1,4 +1,4 @@
-export type FrontendOnboardingStageKey = 'intent' | 'details' | 'organization' | 'setup'
+export type FrontendOnboardingStageKey = 'intent' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'setup'
 
 export const FRONTEND_ONBOARDING_DAILY_SETUP_CLI_OUTCOME_KEYS = [
   'cli_copy_init',
@@ -39,7 +39,7 @@ export interface FrontendOnboardingComparison {
 
 export interface FrontendOnboardingFunnelStage {
   key: FrontendOnboardingStageKey
-  label: 'Intent' | 'App details' | 'Organization' | 'Setup reached'
+  label: 'Intent' | 'App details' | 'App name' | 'App ID' | 'App icon' | 'Organization' | 'Organization details' | 'Setup reached'
   reached: number
   of_start_percent: number
   dropoff_percent: number
@@ -52,41 +52,60 @@ export interface FrontendOnboardingDailyConversionPoint {
   conversion_percent: number | null
 }
 
+export interface FrontendOnboardingDailyWelcomeOutcomePoint {
+  date: string
+  welcome_advanced_to_intent: number
+  welcome_not_viewed: number
+  welcome_did_not_advance: number
+}
+
+export interface FrontendOnboardingKpis {
+  attempts: number
+  completed: number
+  completion_rate: number
+  median_completion_ms: number | null
+  largest_dropoff: FrontendOnboardingLargestDropoff | null
+  comparison: FrontendOnboardingComparison
+}
+
+export interface FrontendOnboardingDailyConversions {
+  intent_to_details: FrontendOnboardingDailyConversionPoint[]
+  details_to_organization: FrontendOnboardingDailyConversionPoint[]
+  organization_to_setup: FrontendOnboardingDailyConversionPoint[]
+}
+
 export interface FrontendOnboardingAnalytics {
-  kpis: {
-    attempts: number
-    completed: number
-    completion_rate: number
-    median_completion_ms: number | null
-    largest_dropoff: FrontendOnboardingLargestDropoff | null
-    comparison: FrontendOnboardingComparison
-  }
+  kpis: FrontendOnboardingKpis
+  v4_kpis?: FrontendOnboardingKpis
   daily_attempts: Array<{
     date: string
     v1_attempts: number
     v2_attempts: number
     v3_attempts: number
+    v4_attempts?: number
   }>
+  daily_welcome_outcomes?: FrontendOnboardingDailyWelcomeOutcomePoint[]
   deduplicated: {
     daily_attempts: Array<{
       date: string
       v1_attempts: number
       v2_attempts: number
       v3_attempts: number
+      v4_attempts?: number
     }>
+    daily_welcome_outcomes?: FrontendOnboardingDailyWelcomeOutcomePoint[]
     funnels: {
       v3: FrontendOnboardingFunnelStage[]
+      v4?: FrontendOnboardingFunnelStage[]
     }
   }
-  daily_conversions: {
-    intent_to_details: FrontendOnboardingDailyConversionPoint[]
-    details_to_organization: FrontendOnboardingDailyConversionPoint[]
-    organization_to_setup: FrontendOnboardingDailyConversionPoint[]
-  }
+  daily_conversions: FrontendOnboardingDailyConversions
+  v4_daily_conversions?: FrontendOnboardingDailyConversions
   funnels: {
     v1: FrontendOnboardingFunnelStage[]
     v2: FrontendOnboardingFunnelStage[]
     v3: FrontendOnboardingFunnelStage[]
+    v4?: FrontendOnboardingFunnelStage[]
   }
   v2_graph: {
     nodes: Array<{
@@ -100,7 +119,19 @@ export interface FrontendOnboardingAnalytics {
       count: number
     }>
   }
+  v4_graph?: {
+    nodes: Array<{
+      key: string
+      count: number
+    }>
+  }
   v2_v3_setup_cli_outcomes: {
+    total_users: number
+    cli_only: number
+    cli_and_ai_instructions: number
+    no_cli: number
+  }
+  v2_v4_setup_cli_outcomes?: {
     total_users: number
     cli_only: number
     cli_and_ai_instructions: number
@@ -156,6 +187,9 @@ export interface FrontendOnboardingAnalyticsLoaderCallbacks {
 const FUNNEL_STAGE_COLORS: Record<FrontendOnboardingStageKey, string> = {
   intent: '#119eff',
   details: '#6366f1',
+  app_name: '#4f7cff',
+  app_id: '#6366f1',
+  app_icon: '#7c3aed',
   organization: '#8b5cf6',
   setup: '#10b981',
 }
@@ -194,6 +228,7 @@ export function buildFrontendOnboardingDailySeries(
   v1Label: string,
   v2Label: string,
   v3Label: string,
+  v4Label: string,
 ): FrontendOnboardingDailySeries[] {
   return [
     {
@@ -210,6 +245,36 @@ export function buildFrontendOnboardingDailySeries(
       label: v3Label,
       color: '#10b981',
       data: dailyAttempts.map(({ date, v3_attempts }) => ({ date, value: v3_attempts })),
+    },
+    {
+      label: v4Label,
+      color: '#f59e0b',
+      data: dailyAttempts.map(({ date, v4_attempts = 0 }) => ({ date, value: v4_attempts })),
+    },
+  ]
+}
+
+export function buildFrontendOnboardingDailyWelcomeOutcomeSeries(
+  points: readonly FrontendOnboardingDailyWelcomeOutcomePoint[],
+  advancedLabel: string,
+  notViewedLabel: string,
+  didNotAdvanceLabel: string,
+): FrontendOnboardingDailySeries[] {
+  return [
+    {
+      label: advancedLabel,
+      color: '#10b981',
+      data: points.map(point => ({ date: point.date, value: point.welcome_advanced_to_intent })),
+    },
+    {
+      label: notViewedLabel,
+      color: '#f59e0b',
+      data: points.map(point => ({ date: point.date, value: point.welcome_not_viewed })),
+    },
+    {
+      label: didNotAdvanceLabel,
+      color: '#f43f5e',
+      data: points.map(point => ({ date: point.date, value: point.welcome_did_not_advance })),
     },
   ]
 }
@@ -289,7 +354,7 @@ export function buildFrontendOnboardingFunnelSummaries(
 
 export function buildFrontendOnboardingGraphMetrics(
   definitions: readonly FrontendOnboardingGraphMetricDefinition[],
-  nodes: readonly FrontendOnboardingAnalytics['v3_graph']['nodes'][number][],
+  nodes: readonly { key: string, count: number }[],
   appDetailsCount: number | undefined,
 ): Record<string, FrontendOnboardingGraphMetric> {
   const counts = new Map(nodes.map(node => [node.key, node.count]))

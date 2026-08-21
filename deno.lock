@@ -125,7 +125,6 @@
     "npm:@jsr/bradenmacdonald__s3-lite-client@0.9.6": "0.9.6",
     "npm:@jsr/sauber__table@*": "0.1.0",
     "npm:@jsr/std__semver@1.0.8": "1.0.8",
-    "npm:@logsnag/node@1.0.1": "1.0.1",
     "npm:@modelcontextprotocol/sdk@^1.29.0": "1.29.0_zod@4.4.3",
     "npm:@playwright/test@1.61.0": "1.61.0",
     "npm:@rrweb/types@^2.0.1": "2.0.1",
@@ -2642,9 +2641,6 @@
     },
     "@kurkle/color@0.3.4": {
       "integrity": "sha512-M5UknZPHRu3DEDWoipU6sE8PdkZ6Z/S+v4dD+Ke8IaNlpdSQah50lz1KtcFBa2vsdOnwbbnxJwVM4wty6udA5w=="
-    },
-    "@logsnag/node@1.0.1": {
-      "integrity": "sha512-JW2S1KN91XyOb0oG2PblboZ1Ys4mkOSMn83GDYjM8CXzcFbkYFMnlFQoEgP0Y5z+1A56hOO+a7uLsvxO5IdUFA=="
     },
     "@mediapipe/tasks-genai@0.10.27": {
       "integrity": "sha512-cv69CPPAtEDBUs6dGZft2S+sBqde1XvEMST367siSyxrhffdWtm4uQIsfdedAbhJ33BwAjuMnAdxDrO9WrzIAQ=="
@@ -9668,7 +9664,6 @@
         "npm:@intlify/unplugin-vue-i18n@^11.2.3",
         "npm:@jsr/bradenmacdonald__s3-lite-client@0.9.6",
         "npm:@jsr/std__semver@1.0.8",
-        "npm:@logsnag/node@1.0.1",
         "npm:@playwright/test@1.61.0",
         "npm:@standard-schema/spec@^1.1.0",
         "npm:@supabase/supabase-js@2.108.2",

@@ -161,7 +161,7 @@ export async function cleanupBundleInternal(appId: string, options: BundleCleanu
 
   await removeVersions(toRemove, supabase, appId, silent, { apikey: options.apikey!, supaHost: options.supaHost, supaAnon: options.supaAnon })
 
-  void trackEvent({ channel: 'bundle', event: 'Bundles Cleaned', icon: '🧹', tags: { kept_count: kept, deleted_count: toRemove.length } })
+  void trackEvent({ channel: 'bundle', event: 'Bundles Cleaned', tags: { kept_count: kept, deleted_count: toRemove.length } })
 
   if (!silent)
     outro('Done ✅')

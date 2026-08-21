@@ -242,14 +242,12 @@ export async function setOrganizationInternal(
       await sendEvent(enrichedOptions.apikey, {
         channel: 'organization',
         event: enforce2fa ? 'Organization 2FA Enabled' : 'Organization 2FA Disabled',
-        icon: '🔐',
         org_id: orgId,
         tracking_version: 2,
         tags: {
           'org-name': orgData.name,
           'enforce-2fa': enforce2fa.toString(),
         },
-        notify: false,
       }).catch(() => {})
 
       if (!silent) {
@@ -340,13 +338,11 @@ export async function setOrganizationInternal(
       await sendEvent(enrichedOptions.apikey, {
         channel: 'organization',
         event: passwordPolicy ? 'Password Policy Enabled' : 'Password Policy Disabled',
-        icon: '🔑',
         org_id: orgId,
         tracking_version: 2,
         tags: {
           'org-name': orgData.name,
         },
-        notify: false,
       }).catch(() => {})
 
       if (!silent) {
@@ -415,13 +411,11 @@ export async function setOrganizationInternal(
       await sendEvent(enrichedOptions.apikey, {
         channel: 'organization',
         event: 'API Key Settings Updated',
-        icon: '🔐',
         org_id: orgId,
         tracking_version: 2,
         tags: {
           'org-name': orgData.name,
         },
-        notify: false,
       }).catch(() => {})
 
       if (!silent) {
@@ -484,13 +478,11 @@ export async function setOrganizationInternal(
   await sendEvent(enrichedOptions.apikey, {
     channel: 'organization',
     event: 'Organization Updated',
-    icon: '✏️',
     org_id: orgId,
     tracking_version: 2,
     tags: {
       'org-name': name,
     },
-    notify: false,
   }).catch(() => {})
 
   if (!silent) {

@@ -121,9 +121,7 @@ export async function validateAndSaveKey(apikey: string, options: SaveKeyOptions
   await sendEvent(apikey, {
     channel: 'user-login',
     event: 'User CLI login',
-    icon: '✅',
     tracking_version: 2,
-    notify: false,
   }).catch(() => {})
 
   return { userId }

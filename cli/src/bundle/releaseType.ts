@@ -41,7 +41,7 @@ export async function printReleaseType(appId: string, options: BundleReleaseType
           `Request build: npx @capgo/cli@latest build request ${resolvedAppId} --platform <ios|android> --path .`,
         ]
     stdout.write(`${lines.join('\n')}\n`)
-    void trackEvent({ channel: 'bundle', event: 'Release Type Printed', icon: '🧭', tags: { release_type: releaseType } })
+    void trackEvent({ channel: 'bundle', event: 'Release Type Printed', tags: { release_type: releaseType } })
   }
   catch (error) {
     log.error(`Error checking release type ${formatError(error)}`)

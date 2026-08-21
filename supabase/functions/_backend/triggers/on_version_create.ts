@@ -45,14 +45,12 @@ app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'INSERT'), a
     await sendEventToTracking(c, {
       channel: 'bundle-created',
       event: 'Bundle Created',
-      icon: '🎉',
       user_id: record.owner_org,
       groups: { organization: record.owner_org },
       tags: {
         app_id: record.app_id,
         bundle_name: record.name,
       },
-      notify: false,
     })
     const pgClient = getPgClient(c, true)
     const drizzleClient = getDrizzleClient(pgClient)

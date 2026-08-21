@@ -113,7 +113,6 @@
         "@formkit/themes": "2.1.0",
         "@formkit/vue": "2.1.0",
         "@hono/standard-validator": "^0.3.0",
-        "@logsnag/node": "1.0.1",
         "@std/semver": "npm:@jsr/std__semver@1.0.8",
         "@supabase/supabase-js": "2.110.8",
         "@vuepic/vue-datepicker": "^14.0.0",
@@ -212,7 +211,7 @@
     },
     "cli": {
       "name": "@capgo/cli",
-      "version": "8.33.1",
+      "version": "8.39.1",
       "bin": {
         "capgo": "dist/index.js",
       },
@@ -910,8 +909,6 @@
     "@keyv/serialize": ["@keyv/serialize@1.1.1", "", {}, "sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA=="],
 
     "@kurkle/color": ["@kurkle/color@0.3.4", "", {}, "sha512-M5UknZPHRu3DEDWoipU6sE8PdkZ6Z/S+v4dD+Ke8IaNlpdSQah50lz1KtcFBa2vsdOnwbbnxJwVM4wty6udA5w=="],
-
-    "@logsnag/node": ["@logsnag/node@1.0.1", "", {}, "sha512-JW2S1KN91XyOb0oG2PblboZ1Ys4mkOSMn83GDYjM8CXzcFbkYFMnlFQoEgP0Y5z+1A56hOO+a7uLsvxO5IdUFA=="],
 
     "@manypkg/tools": ["@manypkg/tools@2.1.2", "", { "dependencies": { "jju": "^1.4.0", "tinyglobby": "^0.2.13", "yaml": "^2.9.0" } }, "sha512-6QEf6yqFbETdwGITKq57aYoPfX/3K8XFNwsAlx0C1M7o8cb79sv1M3w+tWuWvIcSbNqrLF7OD7YpZMVVz335hQ=="],
 

@@ -76,10 +76,8 @@ export async function notifyNativeBuildConcurrencyLimit(
     await sendEventToTracking(c, {
       channel: 'usage',
       event: 'Native build concurrency limit reached',
-      icon: '🚧',
       user_id: input.userId || input.orgId,
       groups: { organization: input.orgId },
-      notify: false,
       tags: {
         org_id: input.orgId,
         ...(input.appId ? { app_id: input.appId } : {}),

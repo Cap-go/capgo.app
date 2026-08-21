@@ -79,11 +79,9 @@ app.post('/', middlewareAPISecret, triggerValidator('orgs', 'INSERT'), async (c)
     },
     channel: 'org-created',
     event: 'Org Created',
-    icon: '🎉',
     sentToBento: true,
     user_id: record.id,
     groups: { organization: record.id },
-    notify: false,
   })
 
   return c.json(BRES)

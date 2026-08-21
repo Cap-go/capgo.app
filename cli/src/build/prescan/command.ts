@@ -111,7 +111,6 @@ export async function prescanCommand(appId: string | undefined, options: Prescan
     await sendEvent(apikeyUsedForScan, {
       channel: 'build',
       event: 'Prescan run',
-      icon: '🛡️',
       tags: {
         'source': 'standalone',
         'result': enforced.error > 0 ? (options.ignoreFatal ? 'bypassed' : 'blocked') : enforced.warning > 0 ? (options.failOnWarnings ? 'blocked' : 'warned') : informationOnly > 0 ? 'information-only' : 'clean',
@@ -122,7 +121,6 @@ export async function prescanCommand(appId: string | undefined, options: Prescan
         'finding-ids': report.findings.filter(f => f.severity !== 'info').map(f => f.id).join(',').slice(0, 200),
         'information-only-findings': String(informationOnly),
       },
-      notify: false,
     }, options.verbose).catch(() => {})
   }
   exit(exitCodeFor(report.counts, options, report.findings))

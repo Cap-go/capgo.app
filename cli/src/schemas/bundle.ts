@@ -11,6 +11,7 @@ export const optionsUploadSchema = optionsBaseSchema.extend({
   channel: z.string().optional(),
   rollout: z.number().min(0).max(100).optional(),
   rolloutPercentageBps: z.number().int().min(0).max(10000).optional(),
+  rolloutAdvance: z.boolean().optional(),
   rolloutCacheTtlSeconds: z.number().int().min(60).max(31536000).optional(),
   displayIvSession: z.boolean().optional(),
   external: z.string().optional(),

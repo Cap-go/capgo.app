@@ -17,7 +17,6 @@ interface BrowserLoginEvent {
   org_id: string
   description: string
   notifyConsole: true
-  notify: false
 }
 
 interface BrowserLoginDependencies {
@@ -94,7 +93,6 @@ export async function loginInitInBrowser(
       org_id: orgId,
       description: `cli-login:${session}`,
       notifyConsole: true,
-      notify: false,
     })))
   }
   catch {

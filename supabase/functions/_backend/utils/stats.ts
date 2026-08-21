@@ -3,7 +3,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import type { StatsLogDimensions, VersionAction } from './plugin_stats.ts'
 import type { Database } from './supabase.types.ts'
-import type { DeviceRes, DeviceWithoutCreatedAt, NativeVersionUsage, ReadDevicesParams, ReadDevicesResponse, ReadStatsInsightsParams, ReadStatsParams, StatsActions, StatsInsightAction, StatsInsightDaily, StatsInsightDevice, StatsInsightsResult, StatsInsightVersion, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
+import type { DeviceRes, DeviceWithoutCreatedAt, NativeVersionUsage, ReadDevicesParams, ReadDevicesResponse, ReadStatsInsightsParams, ReadStatsParams, StatsActions, StatsInsightAction, StatsInsightDaily, StatsInsightDevice, StatsInsightsResult, StatsInsightVersion, StatsMetadata, VersionCompareFilter, VersionUsage, VersionUsageChannel } from './types.ts'
 import { getRuntimeKey } from 'hono/adapter'
 import { countDevicesCF, countInstallSourcesCF, countUpdatesFromLogsCF, countUpdatesFromLogsExternalCF, getAppsFromCF, getUpdateStatsCF, readBandwidthUsageCF, readDevicesCF, readDeviceUsageCF, readDeviceVersionCountsCF, readNativeVersionUsageCF, readStatsCF, readStatsInsightsCF, readStatsVersionCF, trackDevicesCF } from './cloudflare.ts'
 import { isDemoApp } from './demo.ts'
@@ -482,6 +482,8 @@ export function countDevices(
   options?: {
     platform?: Database['public']['Enums']['platform_os']
     updatedAt?: { gt?: string, lte?: string }
+    osVersionCompare?: VersionCompareFilter
+    versionNameCompare?: VersionCompareFilter
   },
 ) {
   const trimmedSearch = search?.trim()

@@ -52,8 +52,6 @@ export async function trackAiAnalysisChoice(input: TrackAiAnalysisChoiceInput): 
     await sendEvent(input.apikey, {
       event: 'CLI AI Build Analysis Choice',
       channel: 'build-lifecycle',
-      icon: '🤖',
-      notify: false,
       org_id: input.orgId,
       tracking_version: 2,
       tags: {
@@ -92,8 +90,6 @@ export async function trackAiAnalysisResult(input: TrackAiAnalysisResultInput): 
     await sendEvent(input.apikey, {
       event: 'CLI AI Build Analysis Result',
       channel: 'build-lifecycle',
-      icon: '🤖',
-      notify: false,
       org_id: input.orgId,
       tracking_version: 2,
       tags,

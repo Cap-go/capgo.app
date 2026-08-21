@@ -20,17 +20,14 @@ const ALERT_CONFIG = {
   bundles_deletion_warning: {
     bentoEvent: 'org:bundles_will_be_deleted',
     trackingEvent: 'Bundles will be deleted',
-    icon: '📦',
   },
   app_deletion_warning: {
     bentoEvent: 'org:apps_will_be_deleted',
     trackingEvent: 'Apps will be deleted',
-    icon: '🗑️',
   },
 } as const satisfies Record<RetentionAlertType, {
   bentoEvent: string
   trackingEvent: string
-  icon: string
 }>
 
 const ORG_ID_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -114,10 +111,8 @@ app.post('/', middlewareAPISecret, async (c) => {
     },
     channel: 'usage',
     event: config.trackingEvent,
-    icon: config.icon,
     user_id: orgId,
     groups: { organization: orgId },
-    notify: false,
     sentToBento: true,
     tags: {
       alert_type: alertType,

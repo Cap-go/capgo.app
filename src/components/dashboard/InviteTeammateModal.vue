@@ -184,10 +184,8 @@ function completeInviteSuccess(payload: InviteSuccessPayload) {
     sendEvent({
       channel: props.analyticsChannel,
       event: `onboarding-step-invite-teammate`,
-      icon: '👥',
       org_id: orgId,
       tracking_version: props.trackingVersion,
-      notify: false,
     }).catch()
   }
 }

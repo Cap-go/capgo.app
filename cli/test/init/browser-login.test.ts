@@ -107,7 +107,6 @@ describe('init browser login', () => {
       org_id: 'org-a',
       description: 'cli-login:AbCdEfGhIjKlMnOpQrStUv',
       notifyConsole: true,
-      notify: false,
     })
     expect(output.join('\n')).toContain('/login-cli?session=AbCdEfGhIjKlMnOpQrStUv')
     expect(output.join('\n')).not.toContain('super-secret-key')

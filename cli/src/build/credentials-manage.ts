@@ -513,7 +513,7 @@ export async function manageCredentialsCommand(options: ManageCredentialsOptions
 
     if (!handedOffToOnboarding) {
       pOutro('Done.')
-      void trackEvent({ channel: 'credentials', event: 'Credentials Managed', icon: '🗂️', tags: {} })
+      void trackEvent({ channel: 'credentials', event: 'Credentials Managed', tags: {} })
     }
   }
   catch (error) {

@@ -56,9 +56,9 @@ describe('queue Load Test', () => {
     await fetchQueueSync(queueName)
   })
 
-  it('should queue delayed messages with the same PGMQ send shape used by logsnag insights retries', async () => {
+  it('should queue delayed messages with the same PGMQ send shape used by global stats retries', async () => {
     const retryMessage = {
-      function_name: 'logsnag_insights',
+      function_name: 'global_stats',
       function_type: 'cloudflare',
       payload: {
         date_id: '2099-01-01',
@@ -72,6 +72,14 @@ describe('queue Load Test', () => {
     )
 
     expect(Number.isSafeInteger(Number(result.rows[0]?.msg_id))).toBe(true)
+  })
+
+  it('should enqueue the provider-neutral global stats route from the admin stats cron function', async () => {
+    const result = await pool.query<{ definition: string }>(
+      `SELECT pg_get_functiondef('public.process_admin_stats()'::regprocedure) AS definition`,
+    )
+
+    expect(result.rows[0]?.definition).toMatch(/'function_name'\s*,\s*'global_stats'/)
   })
 
   it.concurrent('should reject invalid queue sync requests', async () => {

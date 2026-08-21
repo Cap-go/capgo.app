@@ -90,7 +90,7 @@ export async function listOrganizationsInternal(options: OptionsBase, silent = f
 
   const organizations = allOrganizations || []
 
-  void trackEvent({ channel: 'organization', event: 'Orgs Listed', icon: '📋', tags: { org_count: organizations.length } })
+  void trackEvent({ channel: 'organization', event: 'Orgs Listed', tags: { org_count: organizations.length } })
 
   if (!silent) {
     log.info(`Organizations found: ${organizations.length}`)
