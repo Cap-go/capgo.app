@@ -211,12 +211,13 @@
     },
     "cli": {
       "name": "@capgo/cli",
-      "version": "8.33.1",
+      "version": "8.39.1",
       "bin": {
         "capgo": "dist/index.js",
       },
       "dependencies": {
         "@inkjs/ui": "^2.0.0",
+        "@manypkg/tools": "^2.1.2",
         "@rrweb/types": "^2.1.1",
         "@standard-schema/spec": "^1.1.0",
         "@xmldom/xmldom": "^0.9.10",
@@ -231,6 +232,7 @@
         "react": "^19.2.8",
         "rrweb-snapshot": "^2.1.1",
         "string-width": "^8.2.2",
+        "typescript": "6.0.3",
         "zod": "^4.4.3",
       },
       "devDependencies": {
@@ -271,7 +273,6 @@
         "prettyjson": "^1.2.5",
         "tmp": "^0.2.7",
         "tus-js-client": "^4.3.1",
-        "typescript": "6.0.3",
         "ws": "^8.21.1",
       },
       "optionalDependencies": {
@@ -908,6 +909,8 @@
     "@keyv/serialize": ["@keyv/serialize@1.1.1", "", {}, "sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA=="],
 
     "@kurkle/color": ["@kurkle/color@0.3.4", "", {}, "sha512-M5UknZPHRu3DEDWoipU6sE8PdkZ6Z/S+v4dD+Ke8IaNlpdSQah50lz1KtcFBa2vsdOnwbbnxJwVM4wty6udA5w=="],
+
+    "@manypkg/tools": ["@manypkg/tools@2.1.2", "", { "dependencies": { "jju": "^1.4.0", "tinyglobby": "^0.2.13", "yaml": "^2.9.0" } }, "sha512-6QEf6yqFbETdwGITKq57aYoPfX/3K8XFNwsAlx0C1M7o8cb79sv1M3w+tWuWvIcSbNqrLF7OD7YpZMVVz335hQ=="],
 
     "@mediapipe/tasks-genai": ["@mediapipe/tasks-genai@0.10.27", "", {}, "sha512-cv69CPPAtEDBUs6dGZft2S+sBqde1XvEMST367siSyxrhffdWtm4uQIsfdedAbhJ33BwAjuMnAdxDrO9WrzIAQ=="],
 
@@ -2040,6 +2043,8 @@
     "istanbul-reports": ["istanbul-reports@3.2.0", "", { "dependencies": { "html-escaper": "^2.0.0", "istanbul-lib-report": "^3.0.0" } }, "sha512-HGYWWS/ehqTV3xN10i23tkPkpH46MLCIMFNCaaKNavAXTF1RkqxawEPtnjnGZ6XKSInBKkiOA5BKS+aZiY3AvA=="],
 
     "jiti": ["jiti@2.7.0", "", { "bin": { "jiti": "lib/jiti-cli.mjs" } }, "sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ=="],
+
+    "jju": ["jju@1.4.0", "", {}, "sha512-8wb9Yw966OSxApiCt0K3yNJL8pnNeIv+OEq2YMidz4FKP6nonSRoOXc80iXY4JaN2FC11B9qsNmDsm+ZOfMROA=="],
 
     "jose": ["jose@6.2.4", "", {}, "sha512-N8acGzVsQy6M/fjFcxtysNc4Q379TcM5dM/qKkNtsHFji88yANnXTr7BLeP75iPnFwBfQzM/jg2BZ9+HZrHCZA=="],
 

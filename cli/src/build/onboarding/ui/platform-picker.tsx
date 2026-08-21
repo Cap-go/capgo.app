@@ -182,12 +182,14 @@ export interface CardChooserProps {
   defaultIndex?: number
   /** Rendered directly below the legend (flush, no gap). */
   footer?: ReactNode
+  /** Keep variable-width details on a stable row for shared/golden layouts. */
+  subtitleAlign?: 'center' | 'left'
   onSelect: (value: string) => void
 }
 
 /** A heading + bordered cards (←/→/Enter) — or a Select on narrow terminals —
  *  for any small choice. Reuses PlatformCard so the boxes match the platform picker. */
-export const CardChooser: FC<CardChooserProps> = ({ layout, question, subtitle, options, defaultIndex = 0, footer, onSelect }) => {
+export const CardChooser: FC<CardChooserProps> = ({ layout, question, subtitle, options, defaultIndex = 0, footer, subtitleAlign = 'center', onSelect }) => {
   const [index, setIndex] = useState(Math.max(0, Math.min(options.length - 1, defaultIndex)))
   const clamp = (i: number): number => Math.max(0, Math.min(options.length - 1, i))
 
@@ -225,7 +227,11 @@ export const CardChooser: FC<CardChooserProps> = ({ layout, question, subtitle, 
   return (
     <Box flexDirection="column" alignItems="center" flexGrow={1} marginTop={1}>
       <Text bold>{question}</Text>
-      {subtitle ? <Box marginTop={1}><Text dimColor>{subtitle}</Text></Box> : null}
+      {subtitle
+        ? subtitleAlign === 'left'
+          ? <Box width="100%" marginTop={1} paddingLeft={6}><Text dimColor>{subtitle}</Text></Box>
+          : <Box marginTop={1}><Text dimColor>{subtitle}</Text></Box>
+        : null}
       <Box flexDirection="row" gap={3} marginTop={1}>
         {options.map((o, i) => (
           <PlatformCard key={o.value} emoji={o.emoji} name={o.name} hint={o.hint} selected={index === i} />

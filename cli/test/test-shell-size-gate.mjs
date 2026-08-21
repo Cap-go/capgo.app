@@ -13,6 +13,7 @@ import { EventEmitter } from 'node:events'
 import process from 'node:process'
 import { render } from 'ink'
 import React from 'react'
+import stringWidth from 'string-width'
 import OnboardingShell from '../src/build/onboarding/ui/shell.tsx'
 
 const watchdog = setTimeout(() => {
@@ -105,6 +106,10 @@ function check(name, cond) {
   const out = await renderShellAt(100, 50)
   check('picker shows on an ample terminal', /want to set up|iOS|Android/i.test(out))
   check('no resize prompt on the ample picker path', !/too small/i.test(out))
+  const headerRows = out.split('\n').filter(line => /[╔║╚].*[╗║╝]/u.test(line)).slice(0, 5)
+  const headerWidths = headerRows.map(stringWidth)
+  check('boxed header stays rectangular', headerRows.length === 5 && new Set(headerWidths).size === 1)
+  check('boxed header restores the rocket branding', headerRows.some(line => /🚀/u.test(line)))
 }
 
 console.log(`\n${passed} passed, ${failed} failed`)
