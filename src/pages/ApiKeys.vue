@@ -906,7 +906,7 @@ async function getKeys(retry = true): Promise<void> {
   }
 
   isLoading.value = false
-  hasLoadedKeys.value = true
+  hasLoadedKeys.value = data !== null
 }
 
 async function copyCliLoginCommand() {
