@@ -15,7 +15,7 @@ interface CreateBundleBody {
   key_id?: string
 }
 
-function validateUrlFormat(url: string) {
+export function validateUrlFormat(url: string) {
   if (!url.startsWith('https://')) {
     throw simpleError('invalid_protocol', 'External URL must use HTTPS protocol', { external_url: url })
   }

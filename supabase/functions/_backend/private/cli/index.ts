@@ -4,6 +4,7 @@ import { Hono } from 'hono/tiny'
 import { getBodyOrQuery, parseBody, quickError } from '../../utils/hono.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
 import { checkPermission } from '../../utils/rbac.ts'
+import { getAppOrganization } from '../../public/bundle/create.ts'
 import {
   isAllowedActionOrg,
   isPayingOrg,
@@ -34,6 +35,62 @@ interface UploadChannelQuery {
   channel: string
 }
 
+function requireObjectBody<T extends Record<string, unknown>>(body: unknown): T | Response {
+  if (body === null || typeof body !== 'object' || Array.isArray(body))
+    return quickError(400, 'invalid_json_body', 'Invalid JSON body', { body })
+  return body as T
+}
+
+async function assertPlanUploadScope(
+  c: Parameters<typeof checkPermission>[0],
+  orgId: string,
+  appId?: string | null,
+): Promise<Response | null> {
+  if (appId) {
+    if (typeof appId !== 'string' || !isValidAppId(appId))
+      return quickError(400, 'invalid_app_id', 'App ID must be a reverse domain string', { app_id: appId })
+
+    if (!(await checkPermission(c, 'app.upload_bundle', { appId })))
+      return quickError(401, 'not_authorized', 'You cannot upload bundles for this app', { app_id: appId })
+
+    const appWithOrg = await getAppOrganization(c, appId)
+    if (appWithOrg.owner_org !== orgId)
+      return quickError(403, 'org_mismatch', 'App does not belong to the requested organization', { org_id: orgId, app_id: appId })
+
+    return null
+  }
+
+  if (!(await checkPermission(c, 'org.read', { orgId })))
+    return quickError(401, 'not_authorized', 'You cannot read this organization', { org_id: orgId })
+
+  return null
+}
+
+async function assertWarningsScope(
+  c: Parameters<typeof checkPermission>[0],
+  orgId: string,
+  appId?: string,
+): Promise<Response | null> {
+  if (appId) {
+    if (!isValidAppId(appId))
+      return quickError(400, 'invalid_app_id', 'App ID must be a reverse domain string', { app_id: appId })
+
+    if (!(await checkPermission(c, 'app.upload_bundle', { appId })))
+      return quickError(401, 'not_authorized', 'You cannot upload bundles for this app', { app_id: appId })
+
+    const appWithOrg = await getAppOrganization(c, appId)
+    if (appWithOrg.owner_org !== orgId)
+      return quickError(403, 'org_mismatch', 'App does not belong to the requested organization', { org_id: orgId, app_id: appId })
+
+    return null
+  }
+
+  if (!(await checkPermission(c, 'org.read', { orgId })))
+    return quickError(401, 'not_authorized', 'You cannot read this organization', { org_id: orgId })
+
+  return null
+}
+
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.get('/user-id', middlewareKey(), async (c) => {
@@ -42,8 +99,12 @@ app.get('/user-id', middlewareKey(), async (c) => {
 })
 
 app.post('/check-permission', middlewareKey(), async (c) => {
-  const body = await parseBody<CheckPermissionBody>(c)
-  if (!body.permission_key)
+  const bodyResult = requireObjectBody<CheckPermissionBody>(await parseBody<unknown>(c))
+  if (bodyResult instanceof Response)
+    return bodyResult
+  const body = bodyResult
+
+  if (!body.permission_key || typeof body.permission_key !== 'string')
     return quickError(400, 'missing_permission_key', 'Missing permission_key', { body })
 
   const allowed = await checkPermission(c, body.permission_key as any, {
@@ -56,9 +117,17 @@ app.post('/check-permission', middlewareKey(), async (c) => {
 })
 
 app.post('/check-plan-upload', middlewareKey(), async (c) => {
-  const body = await parseBody<CheckPlanUploadBody>(c)
-  if (!body.org_id)
+  const bodyResult = requireObjectBody<CheckPlanUploadBody>(await parseBody<unknown>(c))
+  if (bodyResult instanceof Response)
+    return bodyResult
+  const body = bodyResult
+
+  if (!body.org_id || typeof body.org_id !== 'string')
     return quickError(400, 'missing_org_id', 'Missing org_id', { body })
+
+  const scopeError = await assertPlanUploadScope(c, body.org_id, body.app_id)
+  if (scopeError)
+    return scopeError
 
   const supabase = supabaseAdmin(c)
   const validPlan = body.app_id
@@ -101,9 +170,13 @@ app.post('/check-plan-upload', middlewareKey(), async (c) => {
 })
 
 app.get('/warnings', middlewareKey(), async (c) => {
-  const body = await getBodyOrQuery<{ org_id?: string, cli_version?: string }>(c)
+  const body = await getBodyOrQuery<{ org_id?: string, cli_version?: string, app_id?: string }>(c)
   if (!body.org_id)
     return quickError(400, 'missing_org_id', 'Missing org_id', { body })
+
+  const scopeError = await assertWarningsScope(c, body.org_id, body.app_id)
+  if (scopeError)
+    return scopeError
 
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   const apikeyString = apikey.key ?? c.get('capgkey')
@@ -121,13 +194,24 @@ app.get('/warnings', middlewareKey(), async (c) => {
 })
 
 app.post('/check-2fa-app', middlewareKey(), async (c) => {
-  const body = await parseBody<Check2faAppBody>(c)
-  if (!body.app_id)
+  const bodyResult = requireObjectBody<Check2faAppBody>(await parseBody<unknown>(c))
+  if (bodyResult instanceof Response)
+    return bodyResult
+  const body = bodyResult
+
+  if (!body.app_id || typeof body.app_id !== 'string')
     return quickError(400, 'missing_app_id', 'Missing app_id', { body })
   if (!isValidAppId(body.app_id))
     return quickError(400, 'invalid_app_id', 'App ID must be a reverse domain string', { app_id: body.app_id })
 
-  const { data: shouldReject, error } = await supabaseAdmin(c)
+  if (!(await checkPermission(c, 'app.upload_bundle', { appId: body.app_id }))
+    && !(await checkPermission(c, 'app.read', { appId: body.app_id }))) {
+    return quickError(401, 'not_authorized', 'You cannot access this app', { app_id: body.app_id })
+  }
+
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  const apikeyString = apikey.key ?? c.get('capgkey')
+  const { data: shouldReject, error } = await supabaseApikey(c, apikeyString)
     .rpc('reject_access_due_to_2fa_for_app', { app_id: body.app_id })
 
   if (error)

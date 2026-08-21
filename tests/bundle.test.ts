@@ -625,10 +625,10 @@ describe('[PUT] /bundle RBAC channel overrides', () => {
   })
 })
 
-describe('[POST] /bundle/prepare operations', () => {
+describe('[POST] /bundle/prepare and [GET] /bundle/lookup operations', () => {
   const prepareVersion = `9.9.9-prepare-${id.slice(0, 8)}`
 
-  it('creates an uploadable version row for CLI prepare', async () => {
+  it('creates an uploadable version row and latest lookup returns it', async () => {
     const response = await fetch(`${BASE_URL}/bundle/prepare`, {
       method: 'POST',
       headers,
@@ -653,18 +653,46 @@ describe('[POST] /bundle/prepare operations', () => {
     expect(lookup.status).toBe(200)
     expect(lookupData.exists).toBe(true)
     expect(lookupData.id).toBe(data.version?.id)
-  })
-})
 
-describe('[GET] /bundle/lookup operations', () => {
-  it('returns latest version name for auto-bump', async () => {
-    const response = await fetch(`${BASE_URL}/bundle/lookup?app_id=${encodeURIComponent(APPNAME)}&latest=true`, {
+    const latest = await fetch(`${BASE_URL}/bundle/lookup?app_id=${encodeURIComponent(APPNAME)}&latest=true`, {
       method: 'GET',
       headers,
     })
+    const latestData = await latest.json() as { name?: string | null }
+    expect(latest.status).toBe(200)
+    expect(latestData.name).toBe(prepareVersion)
+  })
 
-    const data = await response.json() as { name?: string | null }
-    expect(response.status).toBe(200)
-    expect(typeof data.name === 'string' || data.name === null).toBe(true)
+  it('rejects invalid storage_provider on create', async () => {
+    const response = await fetch(`${BASE_URL}/bundle/prepare`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        name: `9.9.8-bad-storage-${id.slice(0, 8)}`,
+        storage_provider: 'r2',
+      }),
+    })
+
+    const data = await response.json() as { error?: string }
+    expect(response.status).toBe(400)
+    expect(data.error).toBe('invalid_storage_provider')
+  })
+
+  it('rejects non-HTTPS external_url on prepare', async () => {
+    const response = await fetch(`${BASE_URL}/bundle/prepare`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        name: `9.9.8-bad-url-${id.slice(0, 8)}`,
+        storage_provider: 'external',
+        external_url: 'http://example.com/bundle.zip',
+      }),
+    })
+
+    const data = await response.json() as { error?: string }
+    expect(response.status).toBe(400)
+    expect(data.error).toBe('invalid_protocol')
   })
 })
