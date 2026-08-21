@@ -35,7 +35,7 @@ interface UploadChannelQuery {
   channel: string
 }
 
-function requireObjectBody<T extends Record<string, unknown>>(body: unknown): T | Response {
+function requireObjectBody<T extends object>(body: unknown): T | Response {
   if (body === null || typeof body !== 'object' || Array.isArray(body))
     return quickError(400, 'invalid_json_body', 'Invalid JSON body', { body })
   return body as T
