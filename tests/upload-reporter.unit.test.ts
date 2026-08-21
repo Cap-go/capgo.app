@@ -56,6 +56,17 @@ describe('bundle upload reporting', () => {
   it('keeps the late permission check silent for internal uploads', async () => {
     const source = readFileSync(new URL('../cli/src/bundle/upload.ts', import.meta.url), 'utf8')
 
-    expect(source).toContain("checkAppExistsAndHasPermissionOrgErr(supabase, apikey, appid, 'app.upload_bundle', silent, true)")
+    expect(source).toContain("checkAppExistsAndHasPermissionOrgErr(apikey, appid, 'app.upload_bundle', { ...uploadCtx.host, silent, skip2FACheck: true })")
+  })
+
+  it('routes upload version writes through Capgo HTTP instead of supabase-js', async () => {
+    const source = readFileSync(new URL('../cli/src/bundle/upload.ts', import.meta.url), 'utf8')
+
+    expect(source).not.toMatch(/supabase\.from\(/)
+    expect(source).not.toMatch(/supabase\.rpc\(/)
+    expect(source).not.toMatch(/functions\.invoke\(/)
+    expect(source).toContain('updateOrCreateVersion(ctx.apikey')
+    expect(source).toContain('finishTusUploadVersion(ctx.apikey')
+    expect(source).toContain('checkPlanValidUploadViaHttp(apikey, orgId, appid, true, uploadCtx.host)')
   })
 })

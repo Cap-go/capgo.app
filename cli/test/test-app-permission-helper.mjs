@@ -6,6 +6,9 @@ import { shouldCapturePosthogException } from '../src/posthog.ts'
 
 const calls = []
 const supabase = {
+  from() {
+    return {}
+  },
   rpc(name, args) {
     calls.push({ name, args })
     if (name === 'cli_check_permission') {

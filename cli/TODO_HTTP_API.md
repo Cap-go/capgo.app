@@ -15,7 +15,10 @@
 - [ ] PUT app fields still missing from HTTP: `allow_preview`, `build_timeout_seconds`, `default_upload_channel`
 - [ ] GET organization security fields (`enforcing_2fa`, `password_policy_config`, API-key policy flags)
 - [ ] GET channel fields still missing from HTTP response: `ios`, `android`, `owner_org`
-- [ ] Bundle upload finalize / version upsert / encryption field writes (keep existing partial `invokeCapgoCliApi` in upload)
+- [x] POST `bundle/prepare` — version upsert for CLI upload (`updateOrCreateVersion` → Capgo HTTP)
+- [x] GET `bundle/lookup` — version existence / latest name for auto-bump
+- [x] POST `private/finish_tus_upload` — set `r2_path` after TUS
+- [x] POST/GET `private/cli/*` — upload permission, plan check, warnings, 2FA app check, upload channel context, user id
 - [ ] Bundle compatibility `native_packages` dedicated endpoint (today via full GET bundle rows)
 - [ ] User-scoped storage cleanup path `apps/${appId}/${userId}` on app delete
 
@@ -32,14 +35,14 @@
 ## Still on supabase-js (file references)
 
 - `cli/src/utils.ts` — `resolveUserIdFromApiKey`, `hasCliPermission` / `assertCliPermission`, `checkPlanValid`, `updateOrCreateChannel` fallback, storage helpers
-- `cli/src/api/app.ts` — `check2FAComplianceForApp` (`reject_access_due_to_2fa_for_app`)
+- `cli/src/api/app.ts` — `check2FAComplianceForApp` uses HTTP when called with API key; legacy supabase RPC path kept for other commands
 - `cli/src/channel/currentBundle.ts` — channel row + `get_channel_current_bundle_rbac`
 - `cli/src/app/set.ts` — icon storage upload; `allow_preview` / `build_timeout_seconds` / `default_upload_channel`; download-channel helpers
 - `cli/src/app/delete.ts` — user-scoped storage cleanup
 - `cli/src/app/add.ts` — icon storage upload; org permission RPCs
 - `cli/src/organization/set.ts` — org security field reads + 2FA/password RPCs (writes already HTTP)
 - `cli/src/organization/members.ts` — org security settings select + 2FA/password RPCs (member list HTTP)
-- `cli/src/bundle/upload.ts` — version upsert / finalize / encryption writes
+- `cli/src/bundle/upload.ts` — migrated to Capgo HTTP for version upsert, channel context, permissions, plan checks, TUS finalize (AI auto-bump manifest fetch still uses supabase-js)
 - `cli/src/bundle/compatibility.ts` — native package reads when not using HTTP bundle payload
 - `cli/src/bundle/unlink.ts` — still uses permission/plan RPCs around HTTP unlink
 - `cli/src/channel/set.ts` — `checkCompatibilityNativePackages` still needs supabase client

@@ -168,7 +168,7 @@ async function checkVersionExists(c: Context, appId: string, apikey: Database['p
   }
 }
 
-function checkEncryptedBundleEnforcement(appWithOrg: AppWithOrg, sessionKey: string | undefined, keyId: string | undefined): void {
+export function checkEncryptedBundleEnforcement(appWithOrg: AppWithOrg, sessionKey: string | undefined, keyId: string | undefined): void {
   // If org doesn't enforce encrypted bundles, allow
   if (!appWithOrg.orgs.enforce_encrypted_bundles) {
     return
