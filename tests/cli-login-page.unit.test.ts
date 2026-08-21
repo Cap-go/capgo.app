@@ -67,9 +67,21 @@ describe('/login-cli page contract', () => {
 
   it.concurrent('does not prepare a key without a valid session', () => {
     const page = readFileSync(pagePath, 'utf8')
-    expect(page).toContain('if (!isValidCliLoginSession(route.query.session))')
-    expect(page.indexOf('if (!isValidCliLoginSession(route.query.session))'))
+    expect(page).toContain('const session = route.query.session')
+    expect(page).toContain('if (!aiMode.value && !isValidCliLoginSession(session))')
+    expect(page.indexOf('if (!aiMode.value && !isValidCliLoginSession(session))'))
       .toBeLessThan(page.indexOf('prepareCliLoginKey('))
+  })
+
+  it.concurrent('supports a direct AI setup prompt containing the prepared key', () => {
+    const page = readFileSync(pagePath, 'utf8')
+    expect(page).toContain(`const aiMode = computed(() => route.query.ai === '1')`)
+    expect(page).toContain('`npx @capgo/cli@latest init $' + '{secret.value}`')
+    expect(page).toContain(`t('cli-login-ai-prompt'`)
+    expect(page).toContain(`apiKeyGuidance: t('app-onboarding-ai-help-with-key')`)
+    expect(page).toContain('await navigator.clipboard.writeText(aiPrompt.value)')
+    expect(page).toContain(`v-if="aiMode"`)
+    expect(page).toContain(`t('cli-login-ai-copy')`)
   })
 
   it.concurrent('keeps the route out of normal onboarding redirects', () => {
@@ -97,6 +109,10 @@ describe('/login-cli page contract', () => {
     expect(messages['cli-login-copy-note']).toContain('hidden')
     expect(messages['cli-login-waiting']).toContain('Waiting')
     expect(messages['cli-login-success-title']).toContain('successful')
+    expect(messages['cli-login-ai-description']).toContain('AI assistant')
+    expect(messages['cli-login-ai-security-warning']).toContain('API key')
+    expect(messages['cli-login-ai-prompt']).toContain('{command}')
+    expect(messages['cli-login-ai-prompt']).toContain('{apiKeyGuidance}')
   })
 
   it.concurrent('uses prefixed DaisyUI primitives and resolves the destination before success', () => {

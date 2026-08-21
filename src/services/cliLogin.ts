@@ -81,6 +81,20 @@ const CLI_KEY_NAME = /^Capgo CLI(?: \(([1-9]\d*)\))?$/
 const DAY_MS = 86_400_000
 const CLOCK_MARGIN_MS = 60_000
 
+export function shouldShowCliLoginGuidance(
+  keys: Array<Pick<CliApiKeyMetadata, 'name' | 'created_at'>>,
+  now = new Date(),
+): boolean {
+  const firstManagedKeyCreatedAt = keys
+    .filter(key => CLI_KEY_NAME.test(key.name))
+    .map(key => new Date(key.created_at ?? '').getTime())
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right)[0]
+
+  return firstManagedKeyCreatedAt === undefined
+    || now.getTime() < firstManagedKeyCreatedAt + DAY_MS
+}
+
 export function roleForCliKey(role: string | null | undefined): 'org_admin' | 'org_super_admin' | null {
   if (role === 'owner' || role === 'org_super_admin')
     return 'org_super_admin'
