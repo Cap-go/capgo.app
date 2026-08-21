@@ -459,6 +459,7 @@ Example: npx @capgo/cli@latest app list`)
   .option('--filter-by-org-id <orgId>', 'Only list apps from this organization ID')
   .option('--show-org', 'Show the organization name for each app')
   .option('--show-org-id', 'Show the organization ID for each app')
+  .option('--output-text', 'Print plain text with a CSV app table and no interactive formatting')
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
 
