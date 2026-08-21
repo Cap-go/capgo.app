@@ -8,8 +8,10 @@ import { app as config } from '../_backend/private/config.ts'
 import { app as configBuilder } from '../_backend/private/config_builder.ts'
 import { app as create_device } from '../_backend/private/create_device.ts'
 import { app as credits } from '../_backend/private/credits.ts'
+import { app as cliPrivate } from '../_backend/private/cli/index.ts'
 import { app as deleted_failed_version } from '../_backend/private/delete_failed_version.ts'
 import { app as devices_priv } from '../_backend/private/devices.ts'
+import { app as finish_tus_upload } from '../_backend/private/finish_tus_upload.ts'
 import { app as download_link } from '../_backend/private/download_link.ts'
 import { app as emailPreferences } from '../_backend/private/email_preferences.ts'
 import { app as events } from '../_backend/private/events.ts'
@@ -75,6 +77,8 @@ appGlobal.route('/stripe_portal', stripe_portal)
 appGlobal.route('/upload_link', upload_link)
 appGlobal.route('/set_manifest', set_manifest)
 appGlobal.route('/delete_failed_version', deleted_failed_version)
+appGlobal.route('/finish_tus_upload', finish_tus_upload)
+appGlobal.route('/cli', cliPrivate)
 appGlobal.route('/set_org_email', set_org_email)
 appGlobal.route('/latency', latency)
 appGlobal.route('/replay', replay)

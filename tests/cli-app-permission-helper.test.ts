@@ -22,6 +22,7 @@ function createSupabaseMock() {
   return {
     supabaseUrl: 'http://127.0.0.1:54321',
     supabaseKey: 'test-anon',
+    from: vi.fn(() => ({})),
     rpc: vi.fn(),
   }
 }
