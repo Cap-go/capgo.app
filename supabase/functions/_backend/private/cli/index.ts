@@ -1,16 +1,16 @@
-import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import type { Database } from '../utils/supabase.types.ts'
+import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
+import type { Database } from '../../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
-import { getBodyOrQuery, parseBody, quickError } from '../utils/hono.ts'
-import { middlewareKey } from '../utils/hono_middleware.ts'
-import { checkPermission } from '../utils/rbac.ts'
+import { getBodyOrQuery, parseBody, quickError } from '../../utils/hono.ts'
+import { middlewareKey } from '../../utils/hono_middleware.ts'
+import { checkPermission } from '../../utils/rbac.ts'
 import {
   isAllowedActionOrg,
   isPayingOrg,
   isTrialOrg,
   supabaseAdmin,
-} from '../utils/supabase.ts'
-import { isValidAppId } from '../utils/utils.ts'
+} from '../../utils/supabase.ts'
+import { isValidAppId } from '../../utils/utils.ts'
 
 interface CheckPermissionBody {
   permission_key: string
