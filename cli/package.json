@@ -194,7 +194,7 @@
     "test:support-upload-prompt": "bun test/test-support-upload-prompt.mjs",
     "test:support-bundle-files": "bun test/test-support-bundle-files.mjs",
     "test:mcp-live-update-onboarding": "bun test/test-mcp-live-update-onboarding.mjs",
-    "test:app-set-options": "bun test/test-app-set-options.mjs",
+    "test:app-set-options": "bun test/test-app-set-options.mjs && bun test/test-app-list-options.mjs",
     "test:android-reporting-api": "bun test/test-android-reporting-api.mjs",
     "test:android-app-verification": "bun test/test-android-app-verification.mjs",
     "test:android-rename": "bun test/test-android-rename.mjs",

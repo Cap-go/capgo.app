@@ -456,6 +456,7 @@ Example: npx @capgo/cli@latest app list`)
     await listApp(options)
   })
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--filter-by-org-id <orgId>', 'Only list apps from this organization ID')
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
 
