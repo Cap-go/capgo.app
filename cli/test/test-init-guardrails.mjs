@@ -167,6 +167,7 @@ t('CLI login command matches the package runner used to invoke the CLI', () => {
     ['npm/11.6.2 node/v24.8.0 darwin arm64', 'npx -y @capgo/cli@latest login'],
     ['bun/1.2.20 npm/? node/v24.3.0 darwin arm64', 'bunx @capgo/cli@latest login'],
     ['pnpm/10.15.0 npm/? node/v24.3.0 darwin arm64', 'pnpm dlx @capgo/cli@latest login'],
+    ['yarn/1.22.22 npm/? node/v24.3.0 darwin arm64', 'npx -y @capgo/cli@latest login'],
     ['yarn/4.9.2 npm/? node/v24.3.0 darwin arm64', 'yarn dlx @capgo/cli@latest login'],
   ]
 
@@ -178,6 +179,10 @@ t('CLI login command detects the runner from npm_execpath when the user agent is
   assert.equal(
     getCliLoginCommand({ npm_execpath: '/opt/homebrew/lib/node_modules/pnpm/bin/pnpm.cjs' }),
     'pnpm dlx @capgo/cli@latest login',
+  )
+  assert.equal(
+    getCliLoginCommand({ npm_execpath: '/opt/homebrew/lib/node_modules/yarn/bin/yarn.js' }),
+    'npx -y @capgo/cli@latest login',
   )
 })
 
