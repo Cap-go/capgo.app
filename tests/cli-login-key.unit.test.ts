@@ -8,6 +8,7 @@ import {
   nextManagedCliKeyName,
   prepareCliLoginKey,
   roleForCliKey,
+  shouldShowCliLoginGuidance,
 } from '../src/services/cliLogin'
 
 const now = new Date('2026-08-15T12:00:00.000Z')
@@ -78,6 +79,22 @@ describe('CLI login key model', () => {
       'Capgo CLI copy',
       'Capgo CLI (01)',
     ])).toBe('Capgo CLI (2)')
+  })
+
+  it.concurrent('shows CLI login guidance until 24 hours after the first managed key', () => {
+    const guidanceNow = new Date('2026-08-20T12:00:00.000Z')
+
+    expect(shouldShowCliLoginGuidance([], guidanceNow)).toBe(true)
+    expect(shouldShowCliLoginGuidance([
+      { name: 'Manually named key', created_at: '2026-08-01T00:00:00.000Z' },
+    ], guidanceNow)).toBe(true)
+    expect(shouldShowCliLoginGuidance([
+      { name: 'Capgo CLI', created_at: '2026-08-19T13:00:00.000Z' },
+    ], guidanceNow)).toBe(true)
+    expect(shouldShowCliLoginGuidance([
+      { name: 'Capgo CLI (2)', created_at: '2026-08-20T11:00:00.000Z' },
+      { name: 'Capgo CLI', created_at: '2026-08-19T11:59:59.000Z' },
+    ], guidanceNow)).toBe(false)
   })
 
   it.concurrent('canonicalizes all scope fields so extra app or channel access is not equal', () => {
