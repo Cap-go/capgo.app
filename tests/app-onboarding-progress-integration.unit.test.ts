@@ -24,6 +24,12 @@ function expectSourceOrder(source: string, markers: string[]) {
 }
 
 describe('app onboarding progress analytics integration', () => {
+  it.concurrent('forwards document visibility changes and removes the listener on teardown', () => {
+    expect(onboardingSource).toContain("progressTracker?.trackVisibilityChange(document.visibilityState)")
+    expect(onboardingSource).toContain("document.addEventListener('visibilitychange', trackOnboardingVisibilityChange)")
+    expect(onboardingSource).toContain("document.removeEventListener('visibilitychange', trackOnboardingVisibilityChange)")
+  })
+
   it.concurrent('initializes tracking once the real initial or resumed step is resolved', () => {
     const analyticsImport = sourceBetween(
       'import {\n  createOnboardingDetailsFieldDebouncer,',

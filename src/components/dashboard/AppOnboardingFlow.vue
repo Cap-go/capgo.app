@@ -417,6 +417,10 @@ function analyticsStepFor(flow: OnboardingFlowStep, detailsStep = appDetailsStep
   return flow
 }
 
+function trackOnboardingVisibilityChange() {
+  progressTracker?.trackVisibilityChange(document.visibilityState)
+}
+
 function initializeProgressTracking(resumed: boolean) {
   const initialStep: OnboardingAnalyticsStep = showPreOrgWelcome.value ? 'welcome' : analyticsStepFor(flowStep.value)
   const trackedSteps = appOnboardingSteps.value.flatMap<OnboardingAnalyticsStep>((step) => {
@@ -1905,6 +1909,7 @@ function trackDashboardExplored() {
 
 onMounted(async () => {
   window.addEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
+  document.addEventListener('visibilitychange', trackOnboardingVisibilityChange)
   welcomeCanvasEligible.value = window.matchMedia(WELCOME_CANVAS_MEDIA_QUERY).matches
   let resumedFlow = false
   isLoading.value = true
@@ -1969,6 +1974,7 @@ onBeforeUnmount(() => {
   onboardingFlowDisposed = true
   window.clearTimeout(persistFieldsTimer)
   window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
+  document.removeEventListener('visibilitychange', trackOnboardingVisibilityChange)
   detailsFieldTracker.dispose()
   if (!isHydratingOnboarding.value && !onboardingInitialPersistInFlight && !onboardingProgressPersistence.isBlocked() && !onboardingProgressPersistence.isAborted())
     void persistOnboardingProgress('in_progress', { allowDisposed: true })
