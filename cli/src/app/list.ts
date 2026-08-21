@@ -8,6 +8,8 @@ import { createSupabaseClient, findSavedKey, formatError, getHumanDate, invokeCa
 
 interface AppListOptions extends OptionsBase {
   filterByOrgId?: string
+  showOrg?: boolean
+  showOrgId?: boolean
 }
 
 export const APP_LIST_ORG_FILTER_WARNING = 'You have passed "--filter-by-org-id". You might have access to more apps. Remove the filter to see all apps'
@@ -19,13 +21,35 @@ export function getAppListPath(page: number, orgId?: string) {
   return `app?${query.toString()}`
 }
 
-function displayApps(data: Database['public']['Tables']['apps']['Row'][]) {
+type AppRow = Database['public']['Tables']['apps']['Row']
+
+export function getAppListHeaders(options: AppListOptions) {
+  const headers = ['Name', 'id']
+  if (options.showOrg)
+    headers.push('Organization')
+  headers.push('Created')
+  if (options.showOrgId)
+    headers.push('Organization ID')
+  return headers
+}
+
+export function getAppListRow(row: AppRow, options: AppListOptions, orgNames: Map<string, string>) {
+  const values = [row.name ?? '', row.app_id]
+  if (options.showOrg)
+    values.push(orgNames.get(row.owner_org) ?? 'Unknown')
+  values.push(getHumanDate(row.created_at))
+  if (options.showOrgId)
+    values.push(row.owner_org)
+  return values
+}
+
+function displayApps(data: AppRow[], options: AppListOptions, orgNames: Map<string, string>) {
   const table = new Table()
-  table.headers = ['Name', 'id', 'Created']
+  table.headers = getAppListHeaders(options)
   table.rows = []
 
   for (const row of data.toReversed())
-    table.rows.push([row.name ?? '', row.app_id, getHumanDate(row.created_at)])
+    table.rows.push(getAppListRow(row, options, orgNames))
 
   log.success('Apps')
   log.success(table.toString())
@@ -103,8 +127,17 @@ export async function listAppInternal(options: AppListOptions, silent = false) {
   }
 
   if (!silent) {
+    const orgNames = new Map<string, string>()
+    if (options.showOrg) {
+      const { data, error } = await supabase.rpc('get_orgs_v7')
+      if (error)
+        throw new Error(`Cannot get organizations: ${formatError(error)}`)
+      for (const org of data ?? [])
+        orgNames.set(org.gid, org.name ?? 'Unknown')
+    }
+
     log.info(`Active app in Capgo: ${allApps.length}`)
-    displayApps(allApps)
+    displayApps(allApps, options, orgNames)
     outro('Done ✅')
   }
 
