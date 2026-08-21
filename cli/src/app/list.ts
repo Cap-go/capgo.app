@@ -16,7 +16,8 @@ function writePlain(message: string) {
 }
 
 function escapeCsv(value: string) {
-  return /[",\r\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value
+  const safeValue = /^[\t\r\n ]*[=+\-@]/.test(value) ? `'${value}` : value
+  return /[",\r\n]/.test(safeValue) ? `"${safeValue.replaceAll('"', '""')}"` : safeValue
 }
 
 export function formatAppsCsv(data: Database['public']['Tables']['apps']['Row'][]) {

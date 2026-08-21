@@ -21,6 +21,11 @@ assert.match(csv, /^Name,id,Created\n/)
 assert.match(csv, /"Alpha, ""Beta""",com\.example\.alpha,/)
 assert.ok(csv.indexOf('Older') < csv.indexOf('Alpha'), 'preserves the existing oldest-first display order')
 
+const formulaCsv = appList.formatAppsCsv([
+  { app_id: 'com.example.formula', created_at: '2026-08-20T12:00:00.000Z', name: '=HYPERLINK("https://example.com")' },
+])
+assert.match(formulaCsv, /"'=HYPERLINK\(""https:\/\/example\.com""\)",com\.example\.formula,/)
+
 const output = appList.formatAppListText(apps)
 assert.match(output, /^Getting active bundle in Capgo\n\nActive app in Capgo: 2\n\nApps \(CSV\)\n/)
 assert.match(output, /\n\nDone ✅$/)
