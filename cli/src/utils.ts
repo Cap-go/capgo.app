@@ -1197,11 +1197,11 @@ export function findSavedKeySilent(): string | undefined {
   return tryReadKey(`.capgo`)
 }
 
-export function findSavedKey(quiet = false) {
+export function findSavedKey(quiet = false, report: (message: string) => void = message => log.info(message)) {
   const envKey = env.CAPGO_TOKEN?.trim()
   if (envKey) {
     if (!quiet)
-      log.info('Use CAPGO_TOKEN environment variable')
+      report('Use CAPGO_TOKEN environment variable')
     return envKey
   }
   // search for key in home dir
@@ -1210,13 +1210,13 @@ export function findSavedKey(quiet = false) {
   let keyPath = `${userHomeDir}/.capgo`
   if (existsSync(keyPath)) {
     if (!quiet)
-      log.info(`Use global API key ${keyPath}`)
+      report(`Use global API key ${keyPath}`)
     key = readFileSync(keyPath, 'utf8').trim()
   }
   keyPath = `.capgo`
   if (!key && existsSync(keyPath)) {
     if (!quiet)
-      log.info(`Use local API key ${keyPath}`)
+      report(`Use local API key ${keyPath}`)
     key = readFileSync(keyPath, 'utf8').trim()
   }
   if (!key) {
