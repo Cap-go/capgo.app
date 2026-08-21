@@ -42,11 +42,10 @@ import {
   parseAppOnboarding,
 } from '~/services/appOnboarding'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
+import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { uploadOrgLogoFile } from '~/services/photos'
-import { pushEvent } from '~/services/posthog'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
-import { sendEvent } from '~/services/tracking'
 import {
   MAX_USER_ONBOARDING_WRITE_ATTEMPTS,
   replaceUserOnboardingIfUnchanged,
@@ -1511,16 +1510,11 @@ async function createOrganizationAndApp() {
       return
     }
 
-    try {
-      pushEvent('onboarding_intent_selected', config.supaHost, {
-        intent: selectedIntent.value,
-        estimated_mau: estimatedMau,
-        org_id: data.id,
-      })
-    }
-    catch (eventError) {
-      console.error('Failed to track onboarding intent', eventError)
-    }
+    sendOnboardingEvent('onboarding_intent_selected', {
+      intent: selectedIntent.value,
+      estimated_mau: estimatedMau,
+      org_id: data.id,
+    })
 
     try {
       await organizationStore.fetchOrganizations()
@@ -1802,25 +1796,13 @@ async function copyText(text: string) {
 function trackSuccessfulCopy(event: OnboardingCopyEvent) {
   const orgId = currentOrg.value?.gid
   const appId = createdApp.value?.app_id || generatedAppId.value || undefined
-  const properties = progressTracker?.trackCopyEvent(event, {
+  progressTracker?.trackCopyEvent(event, {
     ...(appId ? { app_id: appId } : {}),
     ...(existingApp.value !== null ? { existing_app: existingApp.value } : {}),
     ...(selectedIntent.value ? { intent: selectedIntent.value } : {}),
     ...(orgId ? { org_id: orgId } : {}),
     setup_command: usesBuilderSetupCommand.value ? 'builder' : 'ota',
   })
-
-  if (event !== 'onboarding_ai_instructions_copied' || !properties || !orgId || !appId)
-    return
-
-  void sendEvent({
-    channel: 'onboarding',
-    event,
-    nonPersonTags: properties,
-    org_id: orgId,
-    tags: { app_id: appId },
-    tracking_version: 2,
-  }).catch(() => {})
 }
 
 async function copyCliCommand() {

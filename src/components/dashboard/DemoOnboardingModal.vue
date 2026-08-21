@@ -2,8 +2,7 @@
 import type { Ref } from 'vue'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { pushEvent } from '~/services/posthog'
-import { getLocalConfig } from '~/services/supabase'
+import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { sendEvent } from '~/services/tracking'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -64,7 +63,6 @@ const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 const router = useRouter()
 const organizationStore = useOrganizationStore()
-const config = getLocalConfig()
 const CAPGO_CLI_COMMAND = 'bunx @capgo/cli@latest'
 
 const appChoices: AppChoice[] = [
@@ -199,7 +197,7 @@ function trackNoAppDemoEvent(event: string, tags: Record<string, string | number
       tracking_version: 2,
       tags,
     }).catch()
-    pushEvent(`user:${event}`, config.supaHost, { org_id: orgId })
+    sendOnboardingEvent(`user:${event}`, { org_id: orgId, ...tags })
   }
 }
 

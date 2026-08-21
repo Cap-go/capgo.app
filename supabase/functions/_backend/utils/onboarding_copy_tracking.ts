@@ -11,13 +11,13 @@ interface AiInstructionsCopiedInput {
 
 const onboardingAttemptIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
-export function isFrontendPosthogCapturedEvent(event: string) {
+function isAiInstructionsCopiedEvent(event: string) {
   return event === AI_INSTRUCTIONS_COPIED_EVENT
 }
 
 export function buildAiInstructionsCopiedBentoEvent(input: AiInstructionsCopiedInput): BentoTrackingPayload | undefined {
   const attemptId = input.nonPersonTags?.onboarding_attempt_id
-  if (!isFrontendPosthogCapturedEvent(input.event)
+  if (!isAiInstructionsCopiedEvent(input.event)
     || !input.orgId
     || !input.appId
     || typeof attemptId !== 'string'

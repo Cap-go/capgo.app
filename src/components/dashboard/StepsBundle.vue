@@ -6,7 +6,7 @@ import arrowBack from '~icons/ion/arrow-back?width=2em&height=2em'
 import IconLoader from '~icons/lucide/loader-2'
 import InviteTeammateModal from '~/components/dashboard/InviteTeammateModal.vue'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
-import { pushEvent } from '~/services/posthog'
+import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -79,7 +79,7 @@ function setLog() {
         org_id: orgId,
         tracking_version: 2,
       }).catch()
-      pushEvent(`user:onboarding-bundle-${stepToName(step.value)}`, config.supaHost, { org_id: orgId })
+      sendOnboardingEvent(`user:onboarding-bundle-${stepToName(step.value)}`, { org_id: orgId })
     }
   }
   if (step.value === 2) {

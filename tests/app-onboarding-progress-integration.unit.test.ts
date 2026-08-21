@@ -227,7 +227,7 @@ describe('app onboarding progress analytics integration', () => {
   })
 
   it.concurrent('retains the existing intent compatibility event', () => {
-    expect(onboardingSource).toContain(`pushEvent('onboarding_intent_selected', config.supaHost, {`)
+    expect(onboardingSource).toContain(`sendOnboardingEvent('onboarding_intent_selected', {`)
   })
 
   it.concurrent('keeps Maker+ invitations inside the organization progress step', () => {

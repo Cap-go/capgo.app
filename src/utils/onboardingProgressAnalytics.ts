@@ -1,4 +1,4 @@
-import { pushEvent } from '~/services/posthog'
+import { sendOnboardingEvent } from '~/services/onboardingTracking'
 
 export const ONBOARDING_ANALYTICS_VERSION = 4
 
@@ -49,6 +49,10 @@ export type OnboardingDetailsEvent
 type AnalyticsPrimitive = string | number | boolean
 type AnalyticsProperties = Record<string, AnalyticsPrimitive>
 type CaptureEvent = (name: string, supaHost: string, properties?: AnalyticsProperties) => void
+
+const captureOnboardingEvent: CaptureEvent = (name, _supaHost, properties) => {
+  sendOnboardingEvent(name, properties)
+}
 
 interface OnboardingResumeCandidate {
   lastRunId?: string
@@ -160,7 +164,7 @@ export function createOnboardingDetailsFieldDebouncer(
 }
 
 export function createOnboardingTelemetryIdentity(options: CreateOnboardingTelemetryIdentityOptions) {
-  const capture = options.capture ?? pushEvent
+  const capture = options.capture ?? captureOnboardingEvent
   const idFactory = options.idFactory ?? (() => crypto.randomUUID())
   const initialAttemptId = idFactory()
   const onboardingRunId = `ir_${idFactory()}`
@@ -237,7 +241,7 @@ interface CreateOnboardingProgressTrackerOptions {
 }
 
 export function createOnboardingProgressTracker(options: CreateOnboardingProgressTrackerOptions) {
-  const capture = options.capture ?? pushEvent
+  const capture = options.capture ?? captureOnboardingEvent
   const now = options.now ?? Date.now
   let activeStep: OnboardingAnalyticsStep | null = null
   let activePreviousStep: OnboardingAnalyticsStep | null = null
