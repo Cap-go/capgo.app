@@ -1689,7 +1689,7 @@ getKeys()
 
               <button
                 type="button"
-                class="flex w-full shrink-0 items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition-colors hover:border-primary-500/40 hover:bg-primary-500/5 focus:ring-2 focus:ring-primary-500/30 focus:ring-offset-2 focus:outline-none lg:w-auto lg:min-w-96 dark:border-slate-600 dark:bg-slate-900 dark:hover:border-primary-500/50 dark:hover:bg-primary-500/10"
+                class="d-btn flex w-full shrink-0 items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition-colors hover:border-primary-500/40 hover:bg-primary-500/5 focus:ring-2 focus:ring-primary-500/30 focus:ring-offset-2 focus:outline-none lg:w-auto lg:min-w-96 dark:border-slate-600 dark:bg-slate-900 dark:hover:border-primary-500/50 dark:hover:bg-primary-500/10"
                 :aria-label="t('copy-command')"
                 @click="copyCliLoginCommand"
               >
