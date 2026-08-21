@@ -64,16 +64,40 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           FROM_TAG: ${{ steps.changelog_base.outputs.from_tag }}
         run: bun run changelog:ai
-      - name: Publish CLI to npm
+      - name: Setup Node.js for npm publish
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+          registry-url: 'https://registry.npmjs.org'
+      - name: Install npm CLI for staged publishing
+        run: npm install -g npm@^11.15.0
+      - name: Stage publish to npm
         if: ${{ !contains(github.ref, '-alpha.') }}
+        working-directory: cli
         env:
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: bun publish --cwd cli --access public
-      - name: Publish CLI to npm with next tag
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm --version
+          npm stage publish --tag latest --provenance --access public --ignore-scripts
+      - name: Stage publish to npm with next tag
         if: ${{ contains(github.ref, '-alpha.') }}
+        working-directory: cli
         env:
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: bun publish --cwd cli --tag next --access public
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm --version
+          npm stage publish --tag next --provenance --access public --ignore-scripts
+      - name: Request stage approval
+        continue-on-error: true
+        working-directory: cli
+        env:
+          GH_TOKEN: ${{ secrets.NPM_STAGE_DISPATCH_TOKEN }}
+        run: |
+          gh api --method POST repos/Cap-go/automations/dispatches \
+            -f event_type=npm-stage-approve \
+            -f "client_payload[repository]=${GITHUB_REPOSITORY}" \
+            -f "client_payload[run_id]=${GITHUB_RUN_ID}" \
+            -f "client_payload[package]=$(node -p "require('./package.json').name")"
       - name: Create GitHub release
         id: create_release
         uses: softprops/action-gh-release@v2
