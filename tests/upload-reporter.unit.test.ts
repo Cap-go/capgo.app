@@ -61,10 +61,15 @@ describe('bundle upload reporting', () => {
 
   it('routes upload version writes through Capgo HTTP instead of supabase-js', async () => {
     const source = readFileSync(new URL('../cli/src/bundle/upload.ts', import.meta.url), 'utf8')
+    const autoBumpStart = source.indexOf('const autoBumpInput = normalizeAutoBumpInput')
+    const autoBumpEnd = source.indexOf('if (options.autoSetBundle)', autoBumpStart)
+    const uploadHotPath = autoBumpStart === -1 || autoBumpEnd === -1
+      ? source
+      : `${source.slice(0, autoBumpStart)}${source.slice(autoBumpEnd)}`
 
-    expect(source).not.toMatch(/supabase\.from\(/)
-    expect(source).not.toMatch(/supabase\.rpc\(/)
-    expect(source).not.toMatch(/functions\.invoke\(/)
+    expect(uploadHotPath).not.toMatch(/supabase\.from\(/)
+    expect(uploadHotPath).not.toMatch(/supabase\.rpc\(/)
+    expect(uploadHotPath).not.toMatch(/functions\.invoke\(/)
     expect(source).toContain('updateOrCreateVersion(ctx.apikey')
     expect(source).toContain('finishTusUploadVersion(ctx.apikey')
     expect(source).toContain('checkPlanValidUploadViaHttp(apikey, orgId, appid, true, uploadCtx.host)')

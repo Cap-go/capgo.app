@@ -41,38 +41,13 @@ function requireObjectBody<T extends object>(body: unknown): T | Response {
   return body as T
 }
 
-async function assertPlanUploadScope(
+async function assertOrgUploadReadScope(
   c: Parameters<typeof checkPermission>[0],
   orgId: string,
   appId?: string | null,
 ): Promise<Response | null> {
   if (appId) {
     if (typeof appId !== 'string' || !isValidAppId(appId))
-      return quickError(400, 'invalid_app_id', 'App ID must be a reverse domain string', { app_id: appId })
-
-    if (!(await checkPermission(c, 'app.upload_bundle', { appId })))
-      return quickError(401, 'not_authorized', 'You cannot upload bundles for this app', { app_id: appId })
-
-    const appWithOrg = await getAppOrganization(c, appId)
-    if (appWithOrg.owner_org !== orgId)
-      return quickError(403, 'org_mismatch', 'App does not belong to the requested organization', { org_id: orgId, app_id: appId })
-
-    return null
-  }
-
-  if (!(await checkPermission(c, 'org.read', { orgId })))
-    return quickError(401, 'not_authorized', 'You cannot read this organization', { org_id: orgId })
-
-  return null
-}
-
-async function assertWarningsScope(
-  c: Parameters<typeof checkPermission>[0],
-  orgId: string,
-  appId?: string,
-): Promise<Response | null> {
-  if (appId) {
-    if (!isValidAppId(appId))
       return quickError(400, 'invalid_app_id', 'App ID must be a reverse domain string', { app_id: appId })
 
     if (!(await checkPermission(c, 'app.upload_bundle', { appId })))
@@ -125,7 +100,7 @@ app.post('/check-plan-upload', middlewareKey(), async (c) => {
   if (!body.org_id || typeof body.org_id !== 'string')
     return quickError(400, 'missing_org_id', 'Missing org_id', { body })
 
-  const scopeError = await assertPlanUploadScope(c, body.org_id, body.app_id)
+  const scopeError = await assertOrgUploadReadScope(c, body.org_id, body.app_id)
   if (scopeError)
     return scopeError
 
@@ -174,7 +149,7 @@ app.get('/warnings', middlewareKey(), async (c) => {
   if (!body.org_id)
     return quickError(400, 'missing_org_id', 'Missing org_id', { body })
 
-  const scopeError = await assertWarningsScope(c, body.org_id, body.app_id)
+  const scopeError = await assertOrgUploadReadScope(c, body.org_id, body.app_id)
   if (scopeError)
     return scopeError
 
@@ -231,7 +206,8 @@ app.get('/upload-channel', middlewareKey(), async (c) => {
     return quickError(401, 'not_authorized', 'You cannot upload bundles for this app', { app_id: body.app_id })
 
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
-  const { data, error } = await supabaseAdmin(c)
+  const apikeyString = apikey.key ?? c.get('capgkey')
+  const { data, error } = await supabaseApikey(c, apikeyString)
     .from('channels')
     .select(`
       id,

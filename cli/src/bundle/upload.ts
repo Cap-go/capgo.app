@@ -25,7 +25,7 @@ import { showReplicationProgress } from '../replicationProgress'
 import { CliUserError } from '../shared/cli-user-error'
 import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
-import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloudViaHttp, checkPlanValidUploadViaHttp, checkRemoteCliMessagesViaHttp, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, deleteBundleVersionViaHttp, fetchUploadChannelViaHttp, findRoot, findSavedKey, finishTusUploadVersion, formatCapgoCliApiError, formatError, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getDefaultUploadChannelViaHttp, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksumsViaHttp, getRemoteFileConfig, hasCliPermissionViaHttp, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, lookupLatestUploadVersionName, lookupUploadVersion, lookupUploadVersionId, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKeyViaHttp, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile, type CapgoCliHostOptions, type UploadChannelHttpRow } from '../utils'
+import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloudViaHttp, checkPlanValidUploadViaHttp, checkRemoteCliMessagesViaHttp, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, deleteBundleVersionViaHttp, fetchUploadChannelViaHttp, findRoot, findSavedKey, finishTusUploadVersion, formatCapgoCliApiError, formatError, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getDefaultUploadChannelViaHttp, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksumsViaHttp, getRemoteFileConfig, hasCliPermissionViaHttp, tryHasCliPermissionViaHttp, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, lookupLatestUploadVersionName, lookupUploadVersion, lookupUploadVersionId, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKeyViaHttp, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile, type CapgoCliHostOptions, type UploadChannelHttpRow } from '../utils'
 import type { AutoBumpLevel } from '../versionHelpers'
 import { autoBumpVersionBy, getVersionSuggestions, interactiveVersionBump, normalizeAutoBumpInput } from '../versionHelpers'
 import { resolveAutoBumpLevelFromAi } from './auto-bump-ai'
@@ -1915,7 +1915,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
 
   // App existence and app.upload_bundle permission were already verified up front (before any
   // upload). Here we only need the extra bundle.delete permission for linked-bundle cleanup.
-  const canDeleteBundle = await hasCliPermissionViaHttp(apikey, 'bundle.delete', { appId: appid }, uploadCtx.host)
+  const canDeleteBundle = await tryHasCliPermissionViaHttp(apikey, 'bundle.delete', { appId: appid }, uploadCtx.host)
 
   if (options.verbose) {
     log.info(`[Verbose] Permissions:`)

@@ -1801,6 +1801,33 @@ export async function hasCliPermissionViaHttp(
   return !!data?.allowed
 }
 
+export async function tryHasCliPermissionViaHttp(
+  apikey: string,
+  permissionKey: string,
+  scope: { orgId?: string | null, appId?: string | null, channelId?: number | null } = {},
+  options?: CapgoCliHostOptions,
+): Promise<boolean> {
+  const { data, error } = await invokeCapgoCliApi<{ allowed?: boolean }>('private/cli/check-permission', {
+    apikey,
+    method: 'POST',
+    body: {
+      permission_key: permissionKey,
+      org_id: scope.orgId ?? null,
+      app_id: scope.appId ?? null,
+      channel_id: scope.channelId ?? null,
+    },
+    supaHost: options?.supaHost,
+    supaAnon: options?.supaAnon,
+  })
+
+  if (error) {
+    log.warn(`Cannot check optional permission ${permissionKey}: ${await formatCapgoCliApiError(error)}`)
+    return false
+  }
+
+  return !!data?.allowed
+}
+
 export async function checkPlanValidUploadViaHttp(
   apikey: string,
   orgId: string,
@@ -1957,7 +1984,7 @@ export async function getRemoteChecksumsViaHttp(
 ): Promise<string | null> {
   const { data, error } = await fetchUploadChannelViaHttp(apikey, appId, channel, options)
   if (error)
-    return null
+    throw new Error(`Cannot load remote checksum for channel ${channel}: ${await formatCapgoCliApiError(error)}`)
 
   return data?.channel?.version_info?.checksum ?? null
 }

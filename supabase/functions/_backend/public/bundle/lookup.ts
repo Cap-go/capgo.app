@@ -35,6 +35,7 @@ export async function lookupBundle(
       .from('app_versions')
       .select('name')
       .eq('app_id', body.app_id)
+      .eq('deleted', false)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
