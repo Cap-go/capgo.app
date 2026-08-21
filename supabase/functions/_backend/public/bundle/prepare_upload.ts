@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
-import { BRES, getBodyOrQuery, honoFactory, simpleError } from '../../utils/hono.ts'
+import { getBodyOrQuery, honoFactory, simpleError } from '../../utils/hono.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseApikey } from '../../utils/supabase.ts'
@@ -13,7 +13,7 @@ export interface PrepareUploadBody {
   name: string
   session_key?: string | null
   external_url?: string | null
-  storage_provider?: Database['public']['Enums']['storage_provider'] | null
+  storage_provider?: Database['public']['Tables']['app_versions']['Insert']['storage_provider'] | null
   min_update_version?: string | null
   native_packages?: Database['public']['Tables']['app_versions']['Insert']['native_packages']
   checksum?: string | null

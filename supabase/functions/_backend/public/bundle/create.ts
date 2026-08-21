@@ -139,7 +139,7 @@ interface AppWithOrg {
   }
 }
 
-async function getAppOrganization(c: Context, appId: string): Promise<AppWithOrg> {
+export async function getAppOrganization(c: Context, appId: string): Promise<AppWithOrg> {
   // Use supabaseAdmin to access org security settings (RLS bypass needed for enforcement check)
   const { data: app, error: appError } = await supabaseAdmin(c)
     .from('apps')

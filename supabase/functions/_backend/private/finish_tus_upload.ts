@@ -1,5 +1,4 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
 import { BRES, parseBody, quickError, simpleError } from '../utils/hono.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
@@ -17,7 +16,6 @@ export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', middlewareKey(), async (c) => {
   const body = await parseBody<FinishTusUploadBody>(c)
-  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   const capgkey = c.get('capgkey') as string
 
   if (!body.app_id)
