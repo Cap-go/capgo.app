@@ -421,7 +421,8 @@ function analyticsStepFor(flow: OnboardingFlowStep, detailsStep = appDetailsStep
 function trackOnboardingVisibilityChange() {
   const visibilityChange = { state: document.visibilityState, occurredAt: Date.now() }
   if (!progressTracker) {
-    pendingVisibilityChanges.push(visibilityChange)
+    if (isHydratingOnboarding.value || onboardingInitialPersistInFlight)
+      pendingVisibilityChanges.push(visibilityChange)
     return
   }
   progressTracker.trackVisibilityChange(visibilityChange.state, visibilityChange.occurredAt)
@@ -1974,6 +1975,8 @@ onMounted(async () => {
       )
       if (shouldInitializeProgressTracking)
         initializeProgressTracking(resumedFlow)
+      else
+        pendingVisibilityChanges = []
     }
     finishOnboardingMount()
   }

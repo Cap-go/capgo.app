@@ -27,7 +27,12 @@ describe('app onboarding progress analytics integration', () => {
   it.concurrent('forwards document visibility changes and removes the listener on teardown', () => {
     const visibilityHandler = sourceBetween('function trackOnboardingVisibilityChange()', 'function initializeProgressTracking(')
     expect(visibilityHandler).toContain('const visibilityChange = { state: document.visibilityState, occurredAt: Date.now() }')
-    expect(visibilityHandler).toContain('pendingVisibilityChanges.push(visibilityChange)')
+    expectSourceOrder(visibilityHandler, [
+      'if (!progressTracker)',
+      'if (isHydratingOnboarding.value || onboardingInitialPersistInFlight)',
+      'pendingVisibilityChanges.push(visibilityChange)',
+      'return',
+    ])
     expect(visibilityHandler).toContain('progressTracker.trackVisibilityChange(visibilityChange.state, visibilityChange.occurredAt)')
     expect(onboardingSource).toContain("document.addEventListener('visibilitychange', trackOnboardingVisibilityChange)")
     expect(onboardingSource).toContain("document.removeEventListener('visibilitychange', trackOnboardingVisibilityChange)")
@@ -226,6 +231,8 @@ describe('app onboarding progress analytics integration', () => {
     ])
     expect(mountedFlow).toContain(`if (shouldInitializeProgressTracking)
         initializeProgressTracking(resumedFlow)`)
+    expect(mountedFlow).toContain(`else
+        pendingVisibilityChanges = []`)
 
     const scheduledPersistence = sourceBetween('function schedulePersistOnboardingProgress(', 'async function writeOnboardingProgress(')
     expectSourceOrder(scheduledPersistence, [
