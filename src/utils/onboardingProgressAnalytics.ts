@@ -284,8 +284,7 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     activePreviousStep = previousStep ?? null
     activeStepViewedAt = now()
     activeStepCompleted = false
-    if (step === 'setup')
-      hiddenAt = null
+    hiddenAt = null
 
     if (previousStep)
       properties.previous_step = previousStep
@@ -293,7 +292,7 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     safelyCapture('onboarding_step_viewed', properties)
   }
 
-  function trackVisibilityChange(visibilityState: 'hidden' | 'visible') {
+  function trackVisibilityChange(visibilityState: 'hidden' | 'visible', occurredAt = now()) {
     if (!activeStep || activeStep === 'setup') {
       hiddenAt = null
       return
@@ -303,12 +302,12 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     if (visibilityState === 'hidden') {
       if (hiddenAt !== null)
         return
-      hiddenAt = now()
+      hiddenAt = occurredAt
     }
     else {
       if (hiddenAt === null)
         return
-      hiddenDurationMs = Math.max(0, Math.floor(now() - hiddenAt))
+      hiddenDurationMs = Math.max(0, Math.floor(occurredAt - hiddenAt))
       hiddenAt = null
     }
 

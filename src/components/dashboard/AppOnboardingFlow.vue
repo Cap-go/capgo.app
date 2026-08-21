@@ -385,6 +385,7 @@ const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onb
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
+let pendingVisibilityChanges: Array<{ state: DocumentVisibilityState, occurredAt: number }> = []
 let persistFieldsTimer: ReturnType<typeof setTimeout> | undefined
 let pendingDashboardExplored = false
 let onboardingFlowDisposed = false
@@ -418,7 +419,12 @@ function analyticsStepFor(flow: OnboardingFlowStep, detailsStep = appDetailsStep
 }
 
 function trackOnboardingVisibilityChange() {
-  progressTracker?.trackVisibilityChange(document.visibilityState)
+  const visibilityChange = { state: document.visibilityState, occurredAt: Date.now() }
+  if (!progressTracker) {
+    pendingVisibilityChanges.push(visibilityChange)
+    return
+  }
+  progressTracker.trackVisibilityChange(visibilityChange.state, visibilityChange.occurredAt)
 }
 
 function initializeProgressTracking(resumed: boolean) {
@@ -442,6 +448,9 @@ function initializeProgressTracking(resumed: boolean) {
     onboardingRunId: onboardingTelemetry.runId,
   })
   progressTracker.viewStep(initialStep)
+  for (const visibilityChange of pendingVisibilityChanges)
+    progressTracker.trackVisibilityChange(visibilityChange.state, visibilityChange.occurredAt)
+  pendingVisibilityChanges = []
   if (pendingDashboardExplored)
     trackDashboardExplored()
 }

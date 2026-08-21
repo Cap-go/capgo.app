@@ -25,9 +25,20 @@ function expectSourceOrder(source: string, markers: string[]) {
 
 describe('app onboarding progress analytics integration', () => {
   it.concurrent('forwards document visibility changes and removes the listener on teardown', () => {
-    expect(onboardingSource).toContain("progressTracker?.trackVisibilityChange(document.visibilityState)")
+    const visibilityHandler = sourceBetween('function trackOnboardingVisibilityChange()', 'function initializeProgressTracking(')
+    expect(visibilityHandler).toContain('const visibilityChange = { state: document.visibilityState, occurredAt: Date.now() }')
+    expect(visibilityHandler).toContain('pendingVisibilityChanges.push(visibilityChange)')
+    expect(visibilityHandler).toContain('progressTracker.trackVisibilityChange(visibilityChange.state, visibilityChange.occurredAt)')
     expect(onboardingSource).toContain("document.addEventListener('visibilitychange', trackOnboardingVisibilityChange)")
     expect(onboardingSource).toContain("document.removeEventListener('visibilitychange', trackOnboardingVisibilityChange)")
+
+    const initializer = sourceBetween('function initializeProgressTracking(', 'function completeAndViewStep(')
+    expectSourceOrder(initializer, [
+      'progressTracker.viewStep(initialStep)',
+      'for (const visibilityChange of pendingVisibilityChanges)',
+      'progressTracker.trackVisibilityChange(visibilityChange.state, visibilityChange.occurredAt)',
+      'pendingVisibilityChanges = []',
+    ])
   })
 
   it.concurrent('initializes tracking once the real initial or resumed step is resolved', () => {
