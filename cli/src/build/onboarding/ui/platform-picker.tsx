@@ -230,7 +230,7 @@ export const CardChooser: FC<CardChooserProps> = ({ layout, question, subtitle, 
       {subtitle
         ? subtitleAlign === 'left'
           ? <Box width="100%" marginTop={1} paddingLeft={6}><Text dimColor>{subtitle}</Text></Box>
-          : <Box width="100%" justifyContent="center" marginTop={1}><Text dimColor>{subtitle}</Text></Box>
+          : <Box marginTop={1}><Text dimColor>{subtitle}</Text></Box>
         : null}
       <Box flexDirection="row" gap={3} marginTop={1}>
         {options.map((o, i) => (
