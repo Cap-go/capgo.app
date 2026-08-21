@@ -11,7 +11,9 @@ staged npm publishing flow documented by `Cap-go/automations`. The public
 `capgo.app` workflow will stage the package with the short-lived organization
 `NPM_TOKEN`, then dispatch `npm-stage-approve` to the private automations
 repository. The automations workflow remains responsible for npm login,
-WebAuthn approval, and its scheduled approval fallback.
+WebAuthn approval, and its scheduled approval fallback. Staging runs in a
+prerequisite job so a failed approval dispatch can be retried without trying to
+stage the same package version twice.
 
 ## Goals
 
@@ -23,6 +25,8 @@ WebAuthn approval, and its scheduled approval fallback.
   and private repositories.
 - Preserve the existing build, release changelog, prerelease, and GitHub release
   behavior.
+- Keep the approval dispatch and GitHub release retryable without repeating a
+  successful npm staging operation.
 
 ## Non-goals
 
@@ -42,11 +46,13 @@ Follow the `Cap-go/automations` integration contract directly:
    `cli` working directory.
 3. Supply the short-lived staging credential as `NODE_AUTH_TOKEN` from the
    organization `NPM_TOKEN` secret.
-4. Dispatch the `npm-stage-approve` repository event to
+4. Export the generated changelog and previous release tag from the staging job.
+5. In a downstream job, dispatch the `npm-stage-approve` repository event to
    `Cap-go/automations`, including the source repository, run ID, and
    `@capgo/cli` package name.
-5. Continue to the existing GitHub release step after GitHub accepts the
-   dispatch; do not poll npm.
+6. Continue to the existing GitHub release step after GitHub accepts the
+   dispatch; do not poll npm. A failed downstream job can be rerun without
+   repeating `npm stage publish`.
 
 The dispatch uses `NPM_STAGE_DISPATCH_TOKEN`, a GitHub fine-grained token whose
 only purpose is dispatching to `Cap-go/automations`. The npm bot password and
@@ -70,6 +76,9 @@ publish token would duplicate credentials and weaken the new approval boundary.
 - A staging failure stops the workflow before dispatch and GitHub release.
 - A missing or unauthorized dispatch credential makes the dispatch step fail
   visibly instead of silently claiming approval was requested.
+- A successful stage is isolated in its prerequisite job. Rerunning failed jobs
+  retries approval dispatch and GitHub release creation without restaging the
+  same package version.
 - Once the dispatch is accepted, approval is asynchronous. The automations
   repository retries newly created stages and its 15-minute schedule catches a
   missed or delayed dispatch.
@@ -93,7 +102,8 @@ Add a focused unit assertion over `publish_cli.yml` proving that the workflow:
   `bun publish`;
 - dispatches `npm-stage-approve` to `Cap-go/automations` with the dedicated
   GitHub secret; and
-- keeps the dispatch before GitHub release creation.
+- keeps staging in a successful prerequisite job and the dispatch before GitHub
+  release creation in a retryable downstream job.
 
 Run the focused release-workflow tests and repository lint checks before
 publishing the pull request.

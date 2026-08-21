@@ -101,49 +101,64 @@ describe('release scope matching', () => {
   it.concurrent('stages CLI publishing through automations approval', () => {
     const workflow = readFileSync('.github/workflows/publish_cli.yml', 'utf8')
     const dollar = '$'
+    const publishJob = '  publish_cli:\n'
+    const approvalJob = '  approve_and_release:\n'
     const stableStep = '- name: Stage CLI on npm\n'
     const nextStep = '- name: Stage CLI on npm with next tag'
     const stableGuard = `if: ${dollar}{{ !contains(github.ref, '-alpha.') }}`
     const nextGuard = `if: ${dollar}{{ contains(github.ref, '-alpha.') }}`
     const stableCommand = 'run: npm stage publish --access public --tag latest'
     const nextCommand = 'run: npm stage publish --access public --tag next'
-    const dispatch = 'repos/Cap-go/automations/dispatches'
+    const dispatchStep = '- name: Request npm stage approval'
+    const dispatchCommand = 'repos/Cap-go/automations/dispatches'
     const release = '- name: Create GitHub release'
-    const stableStepIndex = workflow.indexOf(stableStep)
-    const nextStepIndex = workflow.indexOf(nextStep)
-    const dispatchIndex = workflow.indexOf(dispatch)
-    const releaseIndex = workflow.indexOf(release)
-    const stableSection = workflow.slice(stableStepIndex, nextStepIndex)
-    const nextSection = workflow.slice(nextStepIndex, dispatchIndex)
+    const publishJobIndex = workflow.indexOf(publishJob)
+    const approvalJobIndex = workflow.indexOf(approvalJob)
+    const publishSection = workflow.slice(publishJobIndex, approvalJobIndex)
+    const approvalSection = workflow.slice(approvalJobIndex)
+    const stableStepIndex = publishSection.indexOf(stableStep)
+    const nextStepIndex = publishSection.indexOf(nextStep)
+    const dispatchIndex = approvalSection.indexOf(dispatchStep)
+    const releaseIndex = approvalSection.indexOf(release)
+    const stableSection = publishSection.slice(stableStepIndex, nextStepIndex)
+    const nextSection = publishSection.slice(nextStepIndex)
+    const dispatchSection = approvalSection.slice(dispatchIndex, releaseIndex)
 
-    expect(workflow).toContain('uses: actions/setup-node@v7')
-    expect(workflow).toContain('registry-url: https://registry.npmjs.org')
+    expect(publishJobIndex).toBeGreaterThan(-1)
+    expect(approvalJobIndex).toBeGreaterThan(publishJobIndex)
+    expect(publishSection).toContain('uses: actions/setup-node@v7')
+    expect(publishSection).toContain('registry-url: https://registry.npmjs.org')
     expect(stableStepIndex).toBeGreaterThan(-1)
     expect(nextStepIndex).toBeGreaterThan(stableStepIndex)
     expect(stableSection).toContain(stableGuard)
     expect(stableSection).toContain(stableCommand)
+    expect(stableSection).toContain('working-directory: cli')
+    expect(stableSection).toContain(`NODE_AUTH_TOKEN: ${dollar}{{ secrets.NPM_TOKEN }}`)
     expect(nextSection).toContain(nextGuard)
     expect(nextSection).toContain(nextCommand)
-    expect(workflow).toContain(`NODE_AUTH_TOKEN: ${dollar}{{ secrets.NPM_TOKEN }}`)
+    expect(nextSection).toContain('working-directory: cli')
+    expect(nextSection).toContain(`NODE_AUTH_TOKEN: ${dollar}{{ secrets.NPM_TOKEN }}`)
     expect(workflow).not.toContain('NPM_CONFIG_TOKEN')
     expect(workflow).not.toContain('bun publish')
-    expect(workflow).toContain(`GH_TOKEN: ${dollar}{{ secrets.NPM_STAGE_DISPATCH_TOKEN }}`)
-    expect(workflow).toContain(dispatch)
-    expect(workflow).toContain('-f event_type=npm-stage-approve')
-    expect(workflow).toContain(`-f "client_payload[repository]=${dollar}{GITHUB_REPOSITORY}"`)
-    expect(workflow).toContain(`-f "client_payload[run_id]=${dollar}{GITHUB_RUN_ID}"`)
-    expect(workflow).toContain('-f "client_payload[package]=@capgo/cli"')
-    expect(dispatchIndex).toBeGreaterThan(nextStepIndex)
+    expect(approvalSection).toContain('needs: publish_cli')
+    expect(approvalSection).not.toContain('npm stage publish')
+    expect(dispatchIndex).toBeGreaterThan(-1)
+    expect(dispatchSection).toContain(`GH_TOKEN: ${dollar}{{ secrets.NPM_STAGE_DISPATCH_TOKEN }}`)
+    expect(dispatchSection).toContain(`gh api --method POST ${dispatchCommand}`)
+    expect(dispatchSection).toContain('-f event_type=npm-stage-approve')
+    expect(dispatchSection).toContain(`-f "client_payload[repository]=${dollar}{GITHUB_REPOSITORY}"`)
+    expect(dispatchSection).toContain(`-f "client_payload[run_id]=${dollar}{GITHUB_RUN_ID}"`)
+    expect(dispatchSection).toContain('-f "client_payload[package]=@capgo/cli"')
     expect(releaseIndex).toBeGreaterThan(dispatchIndex)
   })
 
   it.concurrent('builds package changelogs from the last successful component release', () => {
-    for (const [workflowPath, prefix] of [
-      ['.github/workflows/publish_cli.yml', 'cli-'],
-      ['.github/workflows/publish_notifications.yml', 'notifications-'],
+    for (const [workflowPath, prefix, releaseFromTag] of [
+      ['.github/workflows/publish_cli.yml', 'cli-', 'needs.publish_cli.outputs.from_tag'],
+      ['.github/workflows/publish_notifications.yml', 'notifications-', 'steps.changelog_base.outputs.from_tag'],
     ] as const) {
       const workflow = readFileSync(workflowPath, 'utf8')
-      const changelogUrl = 'compare/$' + '{{ steps.changelog_base.outputs.from_tag }}...$' + '{{ github.ref_name }}'
+      const changelogUrl = 'compare/$' + `{{ ${releaseFromTag} }}...$` + '{{ github.ref_name }}'
       const legacyChangelogUrl = 'compare/$' + '{{ steps.changelog.outputs.from_tag }}...$' + '{{ steps.changelog.outputs.to_tag }}'
 
       expect(workflow).toContain('gh release list')

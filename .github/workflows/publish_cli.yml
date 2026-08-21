@@ -14,11 +14,14 @@ permissions: {}
 jobs:
   publish_cli:
     runs-on: ubuntu-latest
-    name: Build and publish CLI to npm
+    name: Build and stage CLI on npm
     timeout-minutes: 30
     permissions:
       contents: write
       id-token: write
+    outputs:
+      changelog: ${{ steps.changelog.outputs.result }}
+      from_tag: ${{ steps.changelog_base.outputs.from_tag }}
     steps:
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -77,6 +80,15 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm stage publish --access public --tag next
+
+  approve_and_release:
+    runs-on: ubuntu-latest
+    name: Approve staged CLI and create GitHub release
+    timeout-minutes: 10
+    needs: publish_cli
+    permissions:
+      contents: write
+    steps:
       - name: Request npm stage approval
         env:
           GH_TOKEN: ${{ secrets.NPM_STAGE_DISPATCH_TOKEN }}
@@ -93,11 +105,11 @@ jobs:
           body: |
             ## 🆕 Changelog
 
-            ${{ steps.changelog.outputs.result || '_Changelog was not generated automatically for this release._' }}
+            ${{ needs.publish_cli.outputs.changelog || '_Changelog was not generated automatically for this release._' }}
 
             ---
 
-            🔗 **Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ steps.changelog_base.outputs.from_tag }}...${{ github.ref_name }}
+            🔗 **Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ needs.publish_cli.outputs.from_tag }}...${{ github.ref_name }}
           make_latest: false
           token: '${{ secrets.PERSONAL_ACCESS_TOKEN }}'
           prerelease: ${{ contains(github.ref, '-alpha.') }}
