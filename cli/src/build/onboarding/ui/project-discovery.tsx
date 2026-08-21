@@ -82,7 +82,6 @@ export const BuilderProjectDiscoveryApp: FC<BuilderProjectDiscoveryAppProps> = (
           layout={pickPlatformLayout(cols, rows)}
           question={`We found a Capacitor app at ${candidate.relativeDir}. Is this the correct app?`}
           subtitle={candidateSubtitle(candidate)}
-          subtitleAlign="left"
           options={[
             { value: 'yes', emoji: '✓', name: 'Yes', hint: 'Use this Capacitor app' },
             { value: 'no', emoji: '←', name: 'No', hint: 'Exit without changing folders' },
