@@ -23,24 +23,41 @@ Add this test inside the existing `describe('release scope matching', ...)` bloc
 ```ts
 it.concurrent('stages CLI publishing through automations approval', () => {
   const workflow = readFileSync('.github/workflows/publish_cli.yml', 'utf8')
-  const stageStable = 'run: npm stage publish --access public --tag latest'
-  const stageNext = 'run: npm stage publish --access public --tag next'
+  const dollar = '$'
+  const stableStep = '- name: Stage CLI on npm\n'
+  const nextStep = '- name: Stage CLI on npm with next tag'
+  const stableGuard = `if: ${dollar}{{ !contains(github.ref, '-alpha.') }}`
+  const nextGuard = `if: ${dollar}{{ contains(github.ref, '-alpha.') }}`
+  const stableCommand = 'run: npm stage publish --access public --tag latest'
+  const nextCommand = 'run: npm stage publish --access public --tag next'
   const dispatch = 'repos/Cap-go/automations/dispatches'
   const release = '- name: Create GitHub release'
+  const stableStepIndex = workflow.indexOf(stableStep)
+  const nextStepIndex = workflow.indexOf(nextStep)
+  const dispatchIndex = workflow.indexOf(dispatch)
+  const releaseIndex = workflow.indexOf(release)
+  const stableSection = workflow.slice(stableStepIndex, nextStepIndex)
+  const nextSection = workflow.slice(nextStepIndex, dispatchIndex)
 
+  expect(workflow).toContain('uses: actions/setup-node@v7')
   expect(workflow).toContain('registry-url: https://registry.npmjs.org')
-  expect(workflow).toContain(stageStable)
-  expect(workflow).toContain(stageNext)
-  expect(workflow).toContain('NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}')
+  expect(stableStepIndex).toBeGreaterThan(-1)
+  expect(nextStepIndex).toBeGreaterThan(stableStepIndex)
+  expect(stableSection).toContain(stableGuard)
+  expect(stableSection).toContain(stableCommand)
+  expect(nextSection).toContain(nextGuard)
+  expect(nextSection).toContain(nextCommand)
+  expect(workflow).toContain(`NODE_AUTH_TOKEN: ${dollar}{{ secrets.NPM_TOKEN }}`)
   expect(workflow).not.toContain('NPM_CONFIG_TOKEN')
   expect(workflow).not.toContain('bun publish')
-  expect(workflow).toContain('GH_TOKEN: ${{ secrets.NPM_STAGE_DISPATCH_TOKEN }}')
+  expect(workflow).toContain(`GH_TOKEN: ${dollar}{{ secrets.NPM_STAGE_DISPATCH_TOKEN }}`)
   expect(workflow).toContain(dispatch)
   expect(workflow).toContain('-f event_type=npm-stage-approve')
-  expect(workflow).toContain('-f "client_payload[repository]=${GITHUB_REPOSITORY}"')
-  expect(workflow).toContain('-f "client_payload[run_id]=${GITHUB_RUN_ID}"')
+  expect(workflow).toContain(`-f "client_payload[repository]=${dollar}{GITHUB_REPOSITORY}"`)
+  expect(workflow).toContain(`-f "client_payload[run_id]=${dollar}{GITHUB_RUN_ID}"`)
   expect(workflow).toContain('-f "client_payload[package]=@capgo/cli"')
-  expect(workflow.indexOf(dispatch)).toBeLessThan(workflow.indexOf(release))
+  expect(dispatchIndex).toBeGreaterThan(nextStepIndex)
+  expect(releaseIndex).toBeGreaterThan(dispatchIndex)
 })
 ```
 
@@ -73,7 +90,7 @@ Update the existing setup step to include the npm registry:
 
 ```yaml
 - name: Setup Node.js
-  uses: actions/setup-node@v6
+  uses: actions/setup-node@v7
   with:
     node-version: 24.x
     registry-url: https://registry.npmjs.org
@@ -131,12 +148,12 @@ Expected: PASS for all tests in `tests/release-scope.test.ts`.
 Run:
 
 ```bash
-bun -e "import { parse } from 'yaml'; parse(await Bun.file('.github/workflows/publish_cli.yml').text())"
 bunx eslint tests/release-scope.test.ts .github/workflows/publish_cli.yml
 git diff --check
 ```
 
-Expected: all commands exit with status 0 and produce no errors.
+Expected: both commands exit with status 0 and produce no errors. The configured
+ESLint YAML parser validates workflow syntax while enforcing repository format.
 
 - [ ] **Step 6: Commit the workflow implementation**
 
@@ -160,11 +177,10 @@ Run:
 ```bash
 bunx vitest run tests/release-scope.test.ts
 bunx eslint tests/release-scope.test.ts .github/workflows/publish_cli.yml
-bun -e "import { parse } from 'yaml'; parse(await Bun.file('.github/workflows/publish_cli.yml').text())"
 git diff --check origin/main...HEAD
 ```
 
-Expected: the focused tests pass, lint and YAML parsing exit 0, and Git reports no whitespace errors.
+Expected: the focused tests pass, lint exits 0, and Git reports no whitespace errors.
 
 - [ ] **Step 2: Confirm the branch contains only the intended committed files**
 

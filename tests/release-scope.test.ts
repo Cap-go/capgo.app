@@ -101,15 +101,29 @@ describe('release scope matching', () => {
   it.concurrent('stages CLI publishing through automations approval', () => {
     const workflow = readFileSync('.github/workflows/publish_cli.yml', 'utf8')
     const dollar = '$'
-    const stageStable = 'run: npm stage publish --access public --tag latest'
-    const stageNext = 'run: npm stage publish --access public --tag next'
+    const stableStep = '- name: Stage CLI on npm\n'
+    const nextStep = '- name: Stage CLI on npm with next tag'
+    const stableGuard = `if: ${dollar}{{ !contains(github.ref, '-alpha.') }}`
+    const nextGuard = `if: ${dollar}{{ contains(github.ref, '-alpha.') }}`
+    const stableCommand = 'run: npm stage publish --access public --tag latest'
+    const nextCommand = 'run: npm stage publish --access public --tag next'
     const dispatch = 'repos/Cap-go/automations/dispatches'
     const release = '- name: Create GitHub release'
+    const stableStepIndex = workflow.indexOf(stableStep)
+    const nextStepIndex = workflow.indexOf(nextStep)
+    const dispatchIndex = workflow.indexOf(dispatch)
+    const releaseIndex = workflow.indexOf(release)
+    const stableSection = workflow.slice(stableStepIndex, nextStepIndex)
+    const nextSection = workflow.slice(nextStepIndex, dispatchIndex)
 
     expect(workflow).toContain('uses: actions/setup-node@v7')
     expect(workflow).toContain('registry-url: https://registry.npmjs.org')
-    expect(workflow).toContain(stageStable)
-    expect(workflow).toContain(stageNext)
+    expect(stableStepIndex).toBeGreaterThan(-1)
+    expect(nextStepIndex).toBeGreaterThan(stableStepIndex)
+    expect(stableSection).toContain(stableGuard)
+    expect(stableSection).toContain(stableCommand)
+    expect(nextSection).toContain(nextGuard)
+    expect(nextSection).toContain(nextCommand)
     expect(workflow).toContain(`NODE_AUTH_TOKEN: ${dollar}{{ secrets.NPM_TOKEN }}`)
     expect(workflow).not.toContain('NPM_CONFIG_TOKEN')
     expect(workflow).not.toContain('bun publish')
@@ -119,7 +133,8 @@ describe('release scope matching', () => {
     expect(workflow).toContain(`-f "client_payload[repository]=${dollar}{GITHUB_REPOSITORY}"`)
     expect(workflow).toContain(`-f "client_payload[run_id]=${dollar}{GITHUB_RUN_ID}"`)
     expect(workflow).toContain('-f "client_payload[package]=@capgo/cli"')
-    expect(workflow.indexOf(dispatch)).toBeLessThan(workflow.indexOf(release))
+    expect(dispatchIndex).toBeGreaterThan(nextStepIndex)
+    expect(releaseIndex).toBeGreaterThan(dispatchIndex)
   })
 
   it.concurrent('builds package changelogs from the last successful component release', () => {
