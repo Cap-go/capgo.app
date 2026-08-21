@@ -39,8 +39,6 @@ describe('emitBuildTransitionEvent', () => {
     expect(payload).toMatchObject({
       event: 'Build Started',
       channel: 'build-lifecycle',
-      icon: '⏳',
-      notify: false,
       user_id: 'user-uuid-1',
       groups: { organization: 'org-uuid-1' },
       tags: {
@@ -66,7 +64,6 @@ describe('emitBuildTransitionEvent', () => {
     const [, payload] = sendEventToTrackingMock.mock.calls[0]
     expect(payload).toMatchObject({
       event: 'Build Succeeded',
-      icon: '✅',
       tags: {
         duration_seconds: '123',
       },
@@ -87,7 +84,6 @@ describe('emitBuildTransitionEvent', () => {
     const [, payload] = sendEventToTrackingMock.mock.calls[0]
     expect(payload).toMatchObject({
       event: 'Build Failed',
-      icon: '❌',
       tags: {
         failure_category: 'builder_error',
         duration_seconds: '42',
@@ -121,7 +117,6 @@ describe('emitBuildTransitionEvent', () => {
     const [, payload] = sendEventToTrackingMock.mock.calls[0]
     expect(payload).toMatchObject({
       event: 'Build Timed Out',
-      icon: '⏰',
       tags: {
         failure_category: 'timeout',
         duration_seconds: '1800',

@@ -26,7 +26,7 @@ export async function getUserIdInternal(options: Options, silent = false) {
     )
     const userId = await resolveUserIdFromApiKey(supabase, enrichedOptions.apikey)
 
-    void trackEvent({ channel: 'account', event: 'Account Id Viewed', icon: '🪪', tags: {} })
+    void trackEvent({ channel: 'account', event: 'Account Id Viewed', tags: {} })
 
     if (!silent)
       outro(`Done ✅: ${userId}`)

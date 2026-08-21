@@ -75,7 +75,6 @@ export function resolveTrackingContext(apikey: string, signal?: AbortSignal): Pr
 export interface TrackEventInput {
   channel: string
   event: string
-  icon?: string
   /** Org id for actor-scoped attribution. Omitted => resolved best-effort. */
   orgId?: string
   /** App id (also lets the backend verify org ownership). */
@@ -122,8 +121,6 @@ export function trackEvent(input: TrackEventInput): Promise<void> {
       await sendEvent(apikey, {
         channel: input.channel,
         event: input.event,
-        icon: input.icon ?? '📊',
-        notify: false,
         tracking_version: 2,
         ...(orgId ? { org_id: orgId } : {}),
         tags,
@@ -191,7 +188,6 @@ function emitCommandInvoked(commandPath: string, ctx: CommandContext, apikey?: s
     apikey,
     channel: CLI_USAGE_CHANNEL,
     event: 'CLI Command Invoked',
-    icon: '⚡',
     tags: {
       command_path: commandPath,
       flags: ctx.flags.join(','),
@@ -226,7 +222,6 @@ export function trackCommandSucceeded(commandPath: string): void {
   void trackEvent({
     channel: CLI_USAGE_CHANNEL,
     event: 'CLI Command Succeeded',
-    icon: '✅',
     tags: {
       command_path: commandPath,
       ...(commandStartedAt ? { duration_ms: Date.now() - commandStartedAt } : {}),
@@ -238,7 +233,6 @@ export function trackCommandFailed(commandPath: string, opts: { errorCategory: s
   void trackEvent({
     channel: CLI_USAGE_CHANNEL,
     event: 'CLI Command Failed',
-    icon: '❌',
     tags: {
       command_path: commandPath,
       error_category: opts.errorCategory,
@@ -275,7 +269,6 @@ export function withMcpToolTracking<H extends AnyAsyncFn>(toolName: string, hand
       void trackEvent({
         channel: MCP_CHANNEL,
         event: 'MCP Tool Invoked',
-        icon: '🤖',
         tags: {
           tool_name: toolName,
           success,
@@ -291,7 +284,6 @@ export function trackMcpServerStarted(hasApikey: boolean): void {
   void trackEvent({
     channel: MCP_CHANNEL,
     event: 'MCP Server Started',
-    icon: '🤖',
     tags: {
       has_apikey: hasApikey,
       mcp_sdk_version: pack.version,
@@ -337,7 +329,7 @@ function recordSupabaseCall(info: SupabaseCallInfo): void {
   }
   // Use the key from the Supabase request itself so events fire even when the
   // key came from --apikey (not env / a saved file); trackEvent still falls back.
-  void trackEvent({ apikey: info.apikey, channel: CLI_PERF_CHANNEL, event: 'Supabase Call', icon: '⏱️', tags })
+  void trackEvent({ apikey: info.apikey, channel: CLI_PERF_CHANNEL, event: 'Supabase Call', tags })
 }
 
 setSupabaseCallRecorder(recordSupabaseCall)

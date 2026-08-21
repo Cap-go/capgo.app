@@ -269,7 +269,6 @@ export async function addAppInternal(
     org_id: organizationUid,
     tracking_version: 2,
     tags: { 'app-id': appId, 'source': appCreateSource },
-    notify: false,
     notifyConsole: true,
   }).catch(() => {})
 

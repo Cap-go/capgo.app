@@ -108,7 +108,6 @@ export async function getInfoInternal(options: DoctorInfoOptions, silent = false
   void trackEvent({
     channel: 'cli-usage',
     event: 'Doctor Ran',
-    icon: '👨‍⚕️',
     tags: computeDoctorAnalyticsTags(installedDependencies, latestDependencies),
   })
 

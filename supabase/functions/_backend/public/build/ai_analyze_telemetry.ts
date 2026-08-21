@@ -49,8 +49,6 @@ export async function emitAiAnalysisResult(c: Context, input: EmitAiAnalysisResu
     await sendEventToTracking(c, {
       event: 'AI Build Analysis Result',
       channel: 'build-lifecycle',
-      icon: '🤖',
-      notify: false,
       user_id: input.userId,
       groups: input.ownerOrg ? { organization: input.ownerOrg } : undefined,
       tags,

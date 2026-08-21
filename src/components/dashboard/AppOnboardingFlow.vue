@@ -1816,9 +1816,7 @@ function trackSuccessfulCopy(event: OnboardingCopyEvent) {
   void sendEvent({
     channel: 'onboarding',
     event,
-    icon: '🤖',
     nonPersonTags: properties,
-    notify: false,
     org_id: orgId,
     tags: { app_id: appId },
     tracking_version: 2,

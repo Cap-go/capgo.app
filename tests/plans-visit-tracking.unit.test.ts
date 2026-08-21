@@ -18,10 +18,8 @@ describe('plans visit tracking', () => {
     expect(sender).toHaveBeenCalledWith({
       channel: 'usage',
       event: 'User visit',
-      icon: '💳',
       org_id: 'org-1',
       tracking_version: 2,
-      notify: false,
       tags: { page: 'plans' },
     })
   })

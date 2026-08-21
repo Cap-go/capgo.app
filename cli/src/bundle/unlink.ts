@@ -108,13 +108,11 @@ export async function unlinkDeviceInternal(
     await sendEvent(enrichedOptions.apikey, {
       channel: 'bundle',
       event: 'Unlink bundle',
-      icon: '✅',
       org_id: orgId,
       tracking_version: 2,
       tags: {
         'app-id': resolvedAppId,
       },
-      notify: false,
     }).catch(() => {})
 
     if (!silent)

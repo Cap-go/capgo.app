@@ -150,11 +150,9 @@ export async function deleteAppInternal(
     await sendEvent(options.apikey, {
       channel: 'app',
       event: 'App Deleted',
-      icon: '🗑️',
       org_id: orgId,
       tracking_version: 2,
       tags: { 'app-id': appId },
-      notify: false,
     }).catch(() => {})
   }
 

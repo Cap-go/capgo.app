@@ -56,7 +56,6 @@ app.post('/', middlewareAPISecret, triggerValidator('deploy_history', 'INSERT'),
     await sendEventToTracking(c, {
       channel: 'bundle-deployed',
       event: 'Bundle Deployed',
-      icon: '🚀',
       user_id: version.owner_org,
       groups: { organization: version.owner_org },
       tags: {
@@ -64,7 +63,6 @@ app.post('/', middlewareAPISecret, triggerValidator('deploy_history', 'INSERT'),
         bundle_name: version.name,
         channel_id: record.channel_id,
       },
-      notify: false,
     })
 
     await backgroundTask(c, (async () => {

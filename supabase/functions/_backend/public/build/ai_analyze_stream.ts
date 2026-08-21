@@ -123,8 +123,6 @@ export async function aiAnalyzeStreamBuild(
     await sendEventToTracking(c, {
       event: 'AI Build Analysis Requested',
       channel: 'build-lifecycle',
-      icon: '🤖',
-      notify: false,
       user_id: apikey.user_id,
       groups: { organization: ownerOrg },
       tags: { app_id: appId, org_id: ownerOrg, job_id: jobId, logs_bytes: String(logsBytes) },

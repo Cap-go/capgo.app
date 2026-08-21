@@ -75,7 +75,7 @@ export async function currentBundleInternal(channel: string, appId: string, opti
     throw new CliUserError('Insufficient permissions for channel. Required RBAC permission for this action: channel.read.', { appId, channel })
   }
 
-  void trackEvent({ channel: 'channel', event: 'Channel Current Bundle Viewed', icon: '📦', tags: { has_bundle: Boolean(version) } })
+  void trackEvent({ channel: 'channel', event: 'Channel Current Bundle Viewed', tags: { has_bundle: Boolean(version) } })
 
   if (!version) {
     if (!silent)

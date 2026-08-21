@@ -89,10 +89,8 @@ function setLog() {
       sendEvent({
         channel: 'onboarding-v2',
         event: `onboarding-step-${stepToName(step.value)}`,
-        icon: '👶',
         org_id: orgId,
         tracking_version: 2,
-        notify: false,
       }).catch()
       pushEvent(`user:onboarding-step-${stepToName(step.value)}`, config.supaHost, { org_id: orgId })
     }
@@ -129,10 +127,8 @@ function onTechnicalInviteOpened() {
     sendEvent({
       channel: 'onboarding-v2',
       event: `onboarding-alternative-send-invite`,
-      icon: '👶',
       org_id: orgId,
       tracking_version: 2,
-      notify: false,
     }).catch()
     pushEvent(`user:onboarding-alternative-send-invite`, config.supaHost, { org_id: orgId })
   }
@@ -159,10 +155,8 @@ async function createDemoApp() {
     sendEvent({
       channel: 'onboarding-v2',
       event: 'onboarding-create-demo-app',
-      icon: '👶',
       org_id: orgId,
       tracking_version: 2,
-      notify: false,
     }).catch()
     pushEvent('user:onboarding-create-demo-app', config.supaHost, { org_id: orgId })
 

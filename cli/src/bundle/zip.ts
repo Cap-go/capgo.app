@@ -170,7 +170,7 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
     if (saveSpinner)
       saveSpinner.stop(`Saved to ${filename}`)
 
-    void trackEvent({ channel: 'bundle', event: 'Bundle Zipped', icon: '🗜️', tags: { zip_size_bytes: zipped.byteLength } })
+    void trackEvent({ channel: 'bundle', event: 'Bundle Zipped', tags: { zip_size_bytes: zipped.byteLength } })
 
     if (shouldShowPrompts)
       outro('Done ✅')

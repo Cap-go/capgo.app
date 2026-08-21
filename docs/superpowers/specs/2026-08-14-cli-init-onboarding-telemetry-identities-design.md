@@ -55,5 +55,5 @@ their names and success boundaries, gaining the shared identity properties.
 ## Delivery
 
 Lifecycle and enriched milestone events keep the existing best-effort
-`markSnag`/`sendEvent` path. No queue, retry, timeout, flush, transport,
+`sendCliEvent`/`sendEvent` path. No queue, retry, timeout, flush, transport,
 backend, replay-delivery, or control-flow changes are part of this work.

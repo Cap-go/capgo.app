@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import process from 'node:process'
 import { Hono } from 'hono/tiny'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { logsnagInsightsTestUtils } from '../supabase/functions/_backend/triggers/logsnag_insights.ts'
+import { globalStatsTestUtils } from '../supabase/functions/_backend/triggers/global_stats.ts'
 import { REQUIRED_GLOBAL_STATS_SHARDS } from '../supabase/functions/_backend/utils/global_stats.ts'
 import { getAdminGlobalStatsTrend, getAdminOnboardingFunnel } from '../supabase/functions/_backend/utils/pg.ts'
 import { BASE_URL, executeSQL, fetchTestRequest, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, PRODUCT_ID, resetAndSeedAppData, resetAppData, TEST_EMAIL, USER_ADMIN_EMAIL, USER_ID, USER_PASSWORD_HASH } from './test-utils.ts'
@@ -106,7 +106,7 @@ async function getCoreSnapshotCountsAt(snapshotExclusiveEnd: Date) {
     abovePlanWithCredits: number
     abovePlanWithoutCredits: number
   }>(app => {
-    app.get('/', async c => c.json(await logsnagInsightsTestUtils.getCoreSnapshotCounts(c, snapshotExclusiveEnd)))
+    app.get('/', async c => c.json(await globalStatsTestUtils.getCoreSnapshotCounts(c, snapshotExclusiveEnd)))
   })
 }
 
@@ -114,7 +114,7 @@ async function getBillingSnapshotCountsAt(snapshotExclusiveEnd: Date) {
   return requestDirectAdminStats<{
     plans: Record<string, number>
   }>(app => {
-    app.get('/', async c => c.json(await logsnagInsightsTestUtils.getBillingSnapshotCounts(c, snapshotExclusiveEnd)))
+    app.get('/', async c => c.json(await globalStatsTestUtils.getBillingSnapshotCounts(c, snapshotExclusiveEnd)))
   })
 }
 

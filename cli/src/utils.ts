@@ -26,7 +26,7 @@ import { buildCliRequestHeaders } from './analytics/cli-headers'
 import { getGlobalAnalyticsProps } from './analytics/global-props'
 import { getActiveUploadReporter } from './bundle/reporter'
 import { createTimedFetch, isSupabaseInstrumentationEnabled } from './analytics/supabase-perf'
-import { markSnag } from './app/debug'
+import { sendCliEvent } from './app/debug'
 import { findMonorepoRoot, findNXMonorepoRoot, isMonorepo, isNXMonorepo } from './capacitor-cli'
 import { getChecksum } from './checksum'
 import { loadConfig, loadConfigForWrite, writeConfig } from './config'
@@ -202,9 +202,8 @@ export async function check2FAAccessForOrg(supabase: SupabaseClient<Database>, o
 type TagKey = Lowercase<string>
 /** Tag Type */
 type Tags = Record<TagKey, string | number | boolean>
-type Parser = 'markdown' | 'text'
 /**
- * Options for publishing LogSnag events
+ * Options for publishing analytics events
  */
 interface TrackOptions {
   /**
@@ -236,24 +235,10 @@ interface TrackOptions {
    */
   tracking_version?: number
   /**
-   * Event icon (emoji)
-   * must be a single emoji
-   * example: "🎉"
-   */
-  icon?: string
-  /**
    * Event tags
    * example: { username: "mattie" }
    */
   tags?: Tags
-  /**
-   * Send push notification
-   */
-  notify?: boolean
-  /**
-   * Parser for description
-   */
-  parser?: Parser
   /**
    * Event timestamp
    */
@@ -1716,13 +1701,11 @@ export async function uploadTUS(apikey: string, data: Buffer, orgId: string, app
     sendEvent(apikey, {
       channel: 'app',
       event: 'App TUS upload',
-      icon: '⏫',
       org_id: orgId,
       tracking_version: 2,
       tags: {
         'app-id': appId,
       },
-      notify: false,
     })
     const upload = new tus.Upload(data as any, {
       endpoint: `${localConfig.hostFilesApi}/files/upload/attachments/`,
@@ -1781,13 +1764,11 @@ export async function uploadTUS(apikey: string, data: Buffer, orgId: string, app
         await sendEvent(apikey, {
           channel: 'app',
           event: 'App TUS done',
-          icon: '⏫',
           org_id: orgId,
           tracking_version: 2,
           tags: {
             'app-id': appId,
           },
-          notify: false,
         }).catch()
         resolve(true)
       },
@@ -1889,7 +1870,12 @@ export async function updateOrCreateChannel(supabase: SupabaseClient<Database>, 
     .single()
 }
 
-export async function sendEvent(capgkey: string, payload: TrackOptions & { notifyConsole?: boolean, nonPersonTags?: Record<string, string | number | boolean> }, verbose?: boolean, signal?: AbortSignal): Promise<void> {
+type SendEventPayload = TrackOptions & { nonPersonTags?: Record<string, string | number | boolean> } & (
+  | { notifyConsole: true, icon?: string }
+  | { notifyConsole?: false, icon?: never }
+)
+
+export async function sendEvent(capgkey: string, payload: SendEventPayload, verbose?: boolean, signal?: AbortSignal): Promise<void> {
   const telemetryDisabled = isTruthyEnvValue(env.CAPGO_DISABLE_TELEMETRY) || isTruthyEnvValue(env.CAPGO_DISABLE_POSTHOG)
   if (telemetryDisabled && !payload.notifyConsole)
     return
@@ -1920,7 +1906,7 @@ export async function sendEvent(capgkey: string, payload: TrackOptions & { notif
     // not bypass an Ink-controlled stdout (e.g. during `capgo init`).
     const config = await getRemoteConfig(true, signal)
     if (verbose) {
-      log.info(`Sending LogSnag event: ${JSON.stringify(enrichedPayload)}`)
+      log.info(`Sending analytics event: ${JSON.stringify(enrichedPayload)}`)
     }
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 10000) // 10 seconds timeout
@@ -1950,7 +1936,7 @@ export async function sendEvent(capgkey: string, payload: TrackOptions & { notif
       const response = await fetchResponse.json() as { error?: string }
 
       if (response.error && verbose) {
-        log.error(`Failed to send LogSnag event: ${response.error}`)
+        log.error(`Failed to send analytics event: ${response.error}`)
       }
     }
     finally {
@@ -2918,7 +2904,7 @@ export async function promptAndSyncCapacitor(
   if (isCancel(shouldSync)) {
     // For init flow, mark the cancellation
     if (isInit && orgId && apikey) {
-      await markSnag('onboarding-v2', orgId, apikey, 'canceled', undefined, '🤷')
+      await sendCliEvent('onboarding-v2', orgId, apikey, 'canceled')
     }
     log.warn('Canceled Capacitor sync')
     throw new CliUserError('Capacitor sync cancelled')

@@ -52,11 +52,9 @@ export async function deleteBundleInternal(bundleId: string, appId: string, opti
   await sendEvent(options.apikey, {
     channel: 'app',
     event: 'Bundle Deleted',
-    icon: '🗑️',
     org_id: orgId,
     tracking_version: 2,
     tags: { 'app-id': appId, 'bundle': bundleId },
-    notify: false,
     notifyConsole: true,
   }).catch(() => {})
 

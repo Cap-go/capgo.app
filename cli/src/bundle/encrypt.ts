@@ -125,7 +125,7 @@ export async function encryptZipInternal(
 
     writeFileSync(filenameEncrypted, encryptedData)
 
-    void trackEvent({ channel: 'bundle', event: 'Bundle Encrypted', icon: '🔒', tags: {} })
+    void trackEvent({ channel: 'bundle', event: 'Bundle Encrypted', tags: {} })
 
     if (!silent) {
       if (json) {

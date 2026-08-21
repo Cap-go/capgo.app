@@ -37,7 +37,7 @@ export async function listBundle(appId: string, options: OptionsBase, silent = f
 
   const allVersions = await getActiveAppVersions(options.apikey!, appId, { silent, apikey: options.apikey!, supaHost: options.supaHost, supaAnon: options.supaAnon })
 
-  void trackEvent({ channel: 'bundle', event: 'Bundles Listed', icon: '📋', tags: { bundle_count: allVersions?.length ?? 0 } })
+  void trackEvent({ channel: 'bundle', event: 'Bundles Listed', tags: { bundle_count: allVersions?.length ?? 0 } })
 
   if (!silent) {
     log.info(`Active versions in Capgo: ${allVersions?.length ?? 0}`)
