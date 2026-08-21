@@ -884,6 +884,34 @@ export function formatCapgoApiErrorBody(body: unknown): string {
   return [record.error, record.message, record.status].filter(Boolean).join(' | ')
 }
 
+export async function formatCapgoCliApiError(error: unknown): Promise<string> {
+  const payload = await readCapgoCliApiErrorPayload(error)
+  const formatted = formatCapgoApiErrorBody(payload)
+  if (formatted)
+    return formatted
+  return formatError(error)
+}
+
+export type CapgoCliHostOptions = Pick<CapgoCliInvokeOptions, 'supaHost' | 'supaAnon'>
+
+export interface UploadChannelHttpRow {
+  id: number
+  public: boolean
+  version: number | null
+  rollout_version: number | null
+  rollout_enabled: boolean | null
+  rollout_percentage_bps: number | null
+  disable_auto_update: string | null
+  version_info: {
+    id: number
+    name: string
+    deleted: boolean
+    checksum: string | null
+    min_update_version: string | null
+    native_packages: unknown
+  } | null
+}
+
 function messageAfterPrefix(text: string, prefix: string): string {
   const index = text.indexOf(prefix)
   if (index < 0)
@@ -1655,11 +1683,362 @@ export async function findMainFile(silent = false, rootDir: string = cwd()) {
   return mainFile
 }
 
-export async function updateOrCreateVersion(supabase: SupabaseClient<Database>, update: Database['public']['Tables']['app_versions']['Insert']) {
-  return supabase.from('app_versions')
-    .upsert(update, { onConflict: 'name,app_id' })
-    .eq('app_id', update.app_id)
-    .eq('name', update.name)
+export async function updateOrCreateVersion(
+  apikey: string,
+  update: Database['public']['Tables']['app_versions']['Insert'],
+  options?: CapgoCliHostOptions,
+) {
+  return invokeCapgoCliApi('bundle/prepare', {
+    apikey,
+    method: 'POST',
+    body: update,
+    supaHost: options?.supaHost,
+    supaAnon: options?.supaAnon,
+  })
+}
+
+export async function lookupUploadVersion(
+  apikey: string,
+  appId: string,
+  name: string,
+  options?: CapgoCliHostOptions,
+) {
+  const params = new URLSearchParams({ app_id: appId, name })
+  return invokeCapgoCliApi<{ exists?: boolean, id?: number | null, deleted?: boolean | null }>(
+    `bundle/lookup?${params.toString()}`,
+    {
+      apikey,
+      method: 'GET',
+      body: undefined,
+      supaHost: options?.supaHost,
+      supaAnon: options?.supaAnon,
+    },
+  )
+}
+
+export async function lookupLatestUploadVersionName(
+  apikey: string,
+  appId: string,
+  options?: CapgoCliHostOptions,
+) {
+  const params = new URLSearchParams({ app_id: appId, latest: 'true' })
+  return invokeCapgoCliApi<{ name?: string | null }>(
+    `bundle/lookup?${params.toString()}`,
+    {
+      apikey,
+      method: 'GET',
+      body: undefined,
+      supaHost: options?.supaHost,
+      supaAnon: options?.supaAnon,
+    },
+  )
+}
+
+export async function finishTusUploadVersion(
+  apikey: string,
+  appId: string,
+  name: string,
+  orgId: string,
+  options?: CapgoCliHostOptions,
+) {
+  return invokeCapgoCliApi('private/finish_tus_upload', {
+    apikey,
+    method: 'POST',
+    body: {
+      app_id: appId,
+      name,
+      owner_org: orgId,
+    },
+    supaHost: options?.supaHost,
+    supaAnon: options?.supaAnon,
+  })
+}
+
+export async function fetchUploadChannelViaHttp(
+  apikey: string,
+  appId: string,
+  channel: string,
+  options?: CapgoCliHostOptions,
+) {
+  const params = new URLSearchParams({ app_id: appId, channel })
+  return invokeCapgoCliApi<{ channel?: UploadChannelHttpRow | null, apikey_user_id?: string }>(
+    `private/cli/upload-channel?${params.toString()}`,
+    {
+      apikey,
+      method: 'GET',
+      body: undefined,
+      supaHost: options?.supaHost,
+      supaAnon: options?.supaAnon,
+    },
+  )
+}
+
+export async function hasCliPermissionViaHttp(
+  apikey: string,
+  permissionKey: string,
+  scope: { orgId?: string | null, appId?: string | null, channelId?: number | null } = {},
+  options?: CapgoCliHostOptions,
+): Promise<boolean> {
+  const { data, error } = await invokeCapgoCliApi<{ allowed?: boolean }>('private/cli/check-permission', {
+    apikey,
+    method: 'POST',
+    body: {
+      permission_key: permissionKey,
+      org_id: scope.orgId ?? null,
+      app_id: scope.appId ?? null,
+      channel_id: scope.channelId ?? null,
+    },
+    supaHost: options?.supaHost,
+    supaAnon: options?.supaAnon,
+  })
+
+  if (error) {
+    log.error(`Cannot check permission ${permissionKey}`)
+    log.error(await formatCapgoCliApiError(error))
+    throw new Error(`Cannot check permission ${permissionKey}`)
+  }
+
+  return !!data?.allowed
+}
+
+export async function checkPlanValidUploadViaHttp(
+  apikey: string,
+  orgId: string,
+  appId?: string,
+  warning = true,
+  options?: CapgoCliHostOptions,
+) {
+  const config = await getRemoteConfig()
+  const { data, error } = await invokeCapgoCliApi<{
+    valid?: boolean
+    trial_days?: number
+    is_paying?: boolean
+    has_credits?: boolean
+  }>('private/cli/check-plan-upload', {
+    apikey,
+    method: 'POST',
+    body: {
+      org_id: orgId,
+      app_id: appId ?? null,
+    },
+    supaHost: options?.supaHost,
+    supaAnon: options?.supaAnon,
+  })
+
+  if (error)
+    throw new Error(`Cannot validate plan: ${await formatCapgoCliApiError(error)}`)
+
+  if (!data?.valid) {
+    log.error(`You need to upgrade your plan to continue to use capgo.\n Upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
+    wait(100)
+    import('open')
+      .then(module => module.default(`${config.hostWeb}/settings/organization/plans`))
+    wait(500)
+    throw new CliUserError('Plan upgrade required for upload')
+  }
+
+  if (shouldWarnTrialExpiry({
+    trialDays: data.trial_days ?? 0,
+    isPaying: !!data.is_paying,
+    hasCredits: !!data.has_credits,
+    warning,
+  })) {
+    log.warn(`WARNING !!\nTrial expires in ${data.trial_days} days, upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
+  }
+}
+
+export async function checkRemoteCliMessagesViaHttp(
+  apikey: string,
+  orgId: string,
+  cliVersion: string,
+  options?: CapgoCliHostOptions,
+) {
+  const params = new URLSearchParams({ org_id: orgId, cli_version: cliVersion })
+  const { data, error } = await invokeCapgoCliApi<{ messages?: Array<{ message?: string, fatal?: boolean }> }>(
+    `private/cli/warnings?${params.toString()}`,
+    {
+      apikey,
+      method: 'GET',
+      body: undefined,
+      supaHost: options?.supaHost,
+      supaAnon: options?.supaAnon,
+    },
+  )
+
+  if (error) {
+    log.error(`Cannot check remote CLI messages ${await formatCapgoCliApiError(error)}`)
+    return
+  }
+
+  const messages = data?.messages ?? []
+  if (messages.length === 0)
+    return
+
+  log.info('Remote CLI warnings:')
+  let fatalError: Error | undefined
+  for (const message of messages) {
+    if (typeof message !== 'object' || typeof message.message !== 'string' || typeof message.fatal !== 'boolean')
+      continue
+    if (message.fatal) {
+      log.error(`${message.message.replaceAll('\\n', '\n')}`)
+      fatalError = new Error(message.message)
+    }
+    else {
+      log.warn(`${message.message.replaceAll('\\n', '\n')}`)
+    }
+  }
+  if (fatalError) {
+    log.error('Please fix the warnings and try again.')
+    throw fatalError
+  }
+  log.info('End of cli warnings.')
+}
+
+export async function getDefaultUploadChannelViaHttp(
+  apikey: string,
+  appId: string,
+  options?: CapgoCliHostOptions,
+) {
+  const { data, error } = await invokeCapgoCliApi<{ default_upload_channel?: string | null }>(
+    `app/${encodeURIComponent(appId)}`,
+    {
+      apikey,
+      method: 'GET',
+      body: undefined,
+      supaHost: options?.supaHost,
+      supaAnon: options?.supaAnon,
+    },
+  )
+
+  if (error || data?.default_upload_channel == null) {
+    const config = await getRemoteConfig()
+    throw new Error(`Cannot find default upload channel: ${await formatCapgoCliApiError(error)}. You can set it here: ${config.hostWeb}/app/${appId}/info`)
+  }
+
+  return data.default_upload_channel
+}
+
+export async function deleteBundleVersionViaHttp(
+  apikey: string,
+  appId: string,
+  versionName: string,
+  options?: CapgoCliHostOptions,
+) {
+  const params = new URLSearchParams({ app_id: appId, version: versionName })
+  return invokeCapgoCliApi(`bundle?${params.toString()}`, {
+    apikey,
+    method: 'DELETE',
+    body: undefined,
+    supaHost: options?.supaHost,
+    supaAnon: options?.supaAnon,
+  })
+}
+
+export async function resolveUserIdFromApiKeyViaHttp(
+  apikey: string,
+  options?: CapgoCliHostOptions,
+): Promise<string> {
+  const { data, error } = await invokeCapgoCliApi<{ user_id?: string }>('private/cli/user-id', {
+    apikey,
+    method: 'GET',
+    body: undefined,
+    supaHost: options?.supaHost,
+    supaAnon: options?.supaAnon,
+  })
+
+  if (error || !data?.user_id)
+    throw new Error(`Cannot resolve API key user: ${await formatCapgoCliApiError(error)}`)
+
+  return data.user_id
+}
+
+export async function getRemoteChecksumsViaHttp(
+  apikey: string,
+  appId: string,
+  channel: string,
+  options?: CapgoCliHostOptions,
+): Promise<string | null> {
+  const { data, error } = await fetchUploadChannelViaHttp(apikey, appId, channel, options)
+  if (error)
+    return null
+
+  return data?.channel?.version_info?.checksum ?? null
+}
+
+export async function checkCompatibilityCloudViaHttp(
+  apikey: string,
+  appId: string,
+  channel: string,
+  packageJsonPath: string | undefined,
+  nodeModules: string | undefined,
+  options?: CapgoCliHostOptions,
+) {
+  const dependenciesObject = await getLocalDependencies(packageJsonPath, nodeModules)
+  const { data, error } = await fetchUploadChannelViaHttp(apikey, appId, channel, options)
+  if (error)
+    throw new Error(`Error fetching native packages: ${await formatCapgoCliApiError(error)}`)
+
+  const nativePackages = (data?.channel?.version_info?.native_packages ?? []) as NativePackage[]
+  const mappedRemoteNativePackages = convertNativePackages(nativePackages)
+
+  const finalDependencies: Compatibility[] = dependenciesObject
+    .filter(a => !!a.native)
+    .map((local) => {
+      const remotePackage = mappedRemoteNativePackages.get(local.name)
+      if (remotePackage) {
+        return {
+          name: local.name,
+          localVersion: local.version,
+          localRequestedVersion: local.requested_version,
+          remoteVersion: remotePackage.version,
+          remoteRequestedVersion: remotePackage.requested_version,
+          localIosChecksum: local.ios_checksum,
+          remoteIosChecksum: remotePackage.ios_checksum,
+          localAndroidChecksum: local.android_checksum,
+          remoteAndroidChecksum: remotePackage.android_checksum,
+        }
+      }
+
+      return {
+        name: local.name,
+        localVersion: local.version,
+        localRequestedVersion: local.requested_version,
+        remoteVersion: undefined,
+        localIosChecksum: local.ios_checksum,
+        localAndroidChecksum: local.android_checksum,
+      }
+    })
+
+  const removeNotInLocal = [...mappedRemoteNativePackages]
+    .filter(([remoteName]) => !dependenciesObject.some(a => a.name === remoteName))
+    .map(([name, pkg]) => ({
+      name,
+      localVersion: undefined,
+      remoteVersion: pkg.version,
+      remoteRequestedVersion: pkg.requested_version,
+      remoteIosChecksum: pkg.ios_checksum,
+      remoteAndroidChecksum: pkg.android_checksum,
+    }))
+
+  finalDependencies.push(...removeNotInLocal)
+
+  return {
+    finalCompatibility: finalDependencies,
+    localDependencies: dependenciesObject,
+  }
+}
+
+export async function lookupUploadVersionId(
+  apikey: string,
+  appId: string,
+  name: string,
+  options?: CapgoCliHostOptions,
+): Promise<number> {
+  const { data, error } = await lookupUploadVersion(apikey, appId, name, options)
+  if (error || data?.id == null)
+    throw new Error('Cannot get version id, cannot set channel')
+
+  return data.id
 }
 
 export async function uploadUrl(apikey: string, appId: string, name: string, options?: { supaHost?: string, supaAnon?: string }): Promise<string> {

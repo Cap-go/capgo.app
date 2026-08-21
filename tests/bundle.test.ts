@@ -624,3 +624,47 @@ describe('[PUT] /bundle RBAC channel overrides', () => {
     expect(channel?.version).toBe(originalVersionId)
   })
 })
+
+describe('[POST] /bundle/prepare operations', () => {
+  const prepareVersion = `9.9.9-prepare-${id.slice(0, 8)}`
+
+  it('creates an uploadable version row for CLI prepare', async () => {
+    const response = await fetch(`${BASE_URL}/bundle/prepare`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        name: prepareVersion,
+        storage_provider: 'r2-direct',
+        cli_version: '99.0.0-test',
+      }),
+    })
+
+    const data = await response.json() as { status?: string, version?: { id?: number, name?: string } }
+    expect(response.status).toBe(200)
+    expect(data.status).toBe('ok')
+    expect(data.version?.name).toBe(prepareVersion)
+
+    const lookup = await fetch(`${BASE_URL}/bundle/lookup?app_id=${encodeURIComponent(APPNAME)}&name=${encodeURIComponent(prepareVersion)}`, {
+      method: 'GET',
+      headers,
+    })
+    const lookupData = await lookup.json() as { exists?: boolean, id?: number }
+    expect(lookup.status).toBe(200)
+    expect(lookupData.exists).toBe(true)
+    expect(lookupData.id).toBe(data.version?.id)
+  })
+})
+
+describe('[GET] /bundle/lookup operations', () => {
+  it('returns latest version name for auto-bump', async () => {
+    const response = await fetch(`${BASE_URL}/bundle/lookup?app_id=${encodeURIComponent(APPNAME)}&latest=true`, {
+      method: 'GET',
+      headers,
+    })
+
+    const data = await response.json() as { name?: string | null }
+    expect(response.status).toBe(200)
+    expect(typeof data.name === 'string' || data.name === null).toBe(true)
+  })
+})

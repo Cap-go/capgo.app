@@ -10,6 +10,8 @@ import { app as configBuilder } from '../../supabase/functions/_backend/private/
 import { app as create_device } from '../../supabase/functions/_backend/private/create_device.ts'
 import { app as credits } from '../../supabase/functions/_backend/private/credits.ts'
 import { app as deleted_failed_version } from '../../supabase/functions/_backend/private/delete_failed_version.ts'
+import { app as cliPrivate } from '../../supabase/functions/_backend/private/cli/index.ts'
+import { app as finish_tus_upload } from '../../supabase/functions/_backend/private/finish_tus_upload.ts'
 import { app as devices_priv } from '../../supabase/functions/_backend/private/devices.ts'
 import { app as emailPreferences } from '../../supabase/functions/_backend/private/email_preferences.ts'
 import { app as events } from '../../supabase/functions/_backend/private/events.ts'
@@ -149,7 +151,9 @@ appPrivate.route('/stripe_checkout', stripe_checkout)
 appPrivate.route('/stripe_portal', stripe_portal)
 appPrivate.route('/verify_email_otp', verify_email_otp)
 appPrivate.route('/delete_failed_version', deleted_failed_version)
+appPrivate.route('/finish_tus_upload', finish_tus_upload)
 appPrivate.route('/set_manifest', set_manifest)
+appPrivate.route('/cli', cliPrivate)
 appPrivate.route('/create_device', create_device)
 appPrivate.route('/latency', latency)
 appPrivate.route('/replay', replay)
