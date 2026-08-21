@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
-  BASE_URL,
   createDirectApiKeyWithBindings,
+  getEndpointUrl,
   getSupabaseClient,
   ORG_ID,
   ORG_ID_2,
@@ -44,7 +44,7 @@ afterAll(async () => {
 
 describe('private/cli upload helpers', () => {
   it('rejects check-plan-upload for an org the apikey cannot read', async () => {
-    const response = await fetch(`${BASE_URL}/private/cli/check-plan-upload`, {
+    const response = await fetch(getEndpointUrl('/private/cli/check-plan-upload'), {
       method: 'POST',
       headers: scopedHeaders,
       body: JSON.stringify({ org_id: OTHER_ORG_ID }),
@@ -56,7 +56,7 @@ describe('private/cli upload helpers', () => {
   })
 
   it('rejects check-plan-upload when app_id belongs to another org', async () => {
-    const response = await fetch(`${BASE_URL}/private/cli/check-plan-upload`, {
+    const response = await fetch(getEndpointUrl('/private/cli/check-plan-upload'), {
       method: 'POST',
       headers: scopedHeaders,
       body: JSON.stringify({ org_id: OTHER_ORG_ID, app_id: APPNAME }),
@@ -68,7 +68,7 @@ describe('private/cli upload helpers', () => {
   })
 
   it('rejects warnings for an org the apikey cannot read', async () => {
-    const response = await fetch(`${BASE_URL}/private/cli/warnings?org_id=${encodeURIComponent(OTHER_ORG_ID)}&cli_version=99.0.0-test`, {
+    const response = await fetch(`${getEndpointUrl('/private/cli/warnings')}?org_id=${encodeURIComponent(OTHER_ORG_ID)}&cli_version=99.0.0-test`, {
       method: 'GET',
       headers: scopedHeaders,
     })
@@ -79,7 +79,7 @@ describe('private/cli upload helpers', () => {
   })
 
   it('rejects null JSON bodies on POST handlers', async () => {
-    const response = await fetch(`${BASE_URL}/private/cli/check-plan-upload`, {
+    const response = await fetch(getEndpointUrl('/private/cli/check-plan-upload'), {
       method: 'POST',
       headers: scopedHeaders,
       body: 'null',
@@ -99,7 +99,7 @@ describe('private/cli upload helpers', () => {
     expect(error).toBeNull()
     expect(app?.owner_org).toBeTruthy()
 
-    const response = await fetch(`${BASE_URL}/private/cli/check-plan-upload`, {
+    const response = await fetch(getEndpointUrl('/private/cli/check-plan-upload'), {
       method: 'POST',
       headers: scopedHeaders,
       body: JSON.stringify({ org_id: app!.owner_org, app_id: APPNAME }),
@@ -113,7 +113,7 @@ describe('private/cli upload helpers', () => {
 
 describe('private/finish_tus_upload validation', () => {
   it('rejects null JSON body without throwing', async () => {
-    const response = await fetch(`${BASE_URL}/private/finish_tus_upload`, {
+    const response = await fetch(getEndpointUrl('/private/finish_tus_upload'), {
       method: 'POST',
       headers: scopedHeaders,
       body: 'null',
@@ -122,5 +122,42 @@ describe('private/finish_tus_upload validation', () => {
     const data = await response.json() as { error?: string }
     expect(response.status).toBe(400)
     expect(data.error).toBe('invalid_json_body')
+  })
+
+  it('sets r2_path for a prepared r2-direct version', async () => {
+    const versionName = `9.9.8-finish-tus-${id.slice(0, 8)}`
+    const { data: app, error: appError } = await getSupabaseClient()
+      .from('apps')
+      .select('owner_org')
+      .eq('app_id', APPNAME)
+      .single()
+    expect(appError).toBeNull()
+    expect(app?.owner_org).toBeTruthy()
+
+    const prepareResponse = await fetch(getEndpointUrl('/bundle/prepare'), {
+      method: 'POST',
+      headers: scopedHeaders,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        name: versionName,
+        storage_provider: 'r2-direct',
+      }),
+    })
+    expect(prepareResponse.status).toBe(200)
+
+    const finishResponse = await fetch(getEndpointUrl('/private/finish_tus_upload'), {
+      method: 'POST',
+      headers: scopedHeaders,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        name: versionName,
+        owner_org: app!.owner_org,
+      }),
+    })
+
+    const finishData = await finishResponse.json() as { status?: string, r2_path?: string }
+    expect(finishResponse.status).toBe(200)
+    expect(finishData.status).toBe('ok')
+    expect(finishData.r2_path).toBe(`orgs/${app!.owner_org}/apps/${APPNAME}/${versionName}.zip`)
   })
 })

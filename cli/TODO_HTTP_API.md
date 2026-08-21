@@ -2,13 +2,8 @@
 
 ## Missing endpoints (block full supabase-js removal)
 
-- [ ] GET/POST private/cli identity (`get_user_id` / `request_actor_user_id` + 2FA flags)
-- [ ] POST private/cli/check-permission (`cli_check_permission` / `assertCliPermission` / `hasCliPermission`)
 - [ ] GET organization v7-enriched fields (`get_orgs_v7` / rich org list with plan + warnings)
-- [ ] Billing/entitlement RPCs (`is_paying_org`, `is_trial_org`, `has_usage_credits_org`, `is_allowed_action_org*`, `checkPlanValid`)
-- [ ] 2FA member/org access RPCs (`reject_access_due_to_2fa_*`, `check_org_members_2fa_enabled`, `has_2fa_enabled`)
 - [ ] Password policy member status RPC (`check_org_members_password_policy`)
-- [ ] Org CLI warnings RPC (`get_organization_cli_warnings`)
 - [ ] POST organization via API key (JWT-only `middlewareAuth` today)
 - [ ] Icon / storage uploads via Capgo HTTP (still supabase storage)
 - [ ] Channel-scoped current bundle HTTP that preserves `channel.read` RBAC (`get_channel_current_bundle_rbac`)

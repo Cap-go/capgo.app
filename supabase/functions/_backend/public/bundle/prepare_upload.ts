@@ -24,7 +24,8 @@ export interface PrepareUploadBody {
   manifest?: Database['public']['Tables']['app_versions']['Insert']['manifest']
 }
 
-const UPLOADABLE_STORAGE_PROVIDERS = new Set(['r2-direct', 'external'])
+const PREPARE_STORAGE_PROVIDERS = new Set(['r2-direct', 'external'])
+const COMPLETED_UPLOAD_STORAGE_PROVIDER = 'r2'
 
 function pickUpsertFields(body: PrepareUploadBody) {
   return {
@@ -62,7 +63,7 @@ export async function prepareUpload(
     validateUrlFormat(body.external_url)
 
   const storageProvider = body.storage_provider ?? 'r2-direct'
-  if (!UPLOADABLE_STORAGE_PROVIDERS.has(storageProvider)) {
+  if (!PREPARE_STORAGE_PROVIDERS.has(storageProvider)) {
     throw simpleError('invalid_storage_provider', 'storage_provider must be r2-direct or external', {
       storage_provider: storageProvider,
     })
@@ -91,15 +92,22 @@ export async function prepareUpload(
     if (existing.deleted)
       throw simpleError('version_name_taken', 'Version name already exists (including deleted versions)', { version: body.name })
 
-    if (existing.storage_provider && !UPLOADABLE_STORAGE_PROVIDERS.has(existing.storage_provider) && body.storage_provider !== 'r2') {
+    if (existing.storage_provider
+      && existing.storage_provider !== COMPLETED_UPLOAD_STORAGE_PROVIDER
+      && !PREPARE_STORAGE_PROVIDERS.has(existing.storage_provider)) {
       throw simpleError('version_not_uploadable', 'Version is not in an uploadable state', {
         storage_provider: existing.storage_provider,
       })
     }
 
+    const resetForReupload = existing.storage_provider === COMPLETED_UPLOAD_STORAGE_PROVIDER
+    const updateFields = resetForReupload
+      ? { ...upsertFields, storage_provider: storageProvider, r2_path: null }
+      : upsertFields
+
     const { data: updated, error: updateError } = await supabase
       .from('app_versions')
-      .update(upsertFields)
+      .update(updateFields)
       .eq('id', existing.id)
       .select('id, name, storage_provider')
       .single()

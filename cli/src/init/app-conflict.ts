@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto'
+
 export function isAppAlreadyExistsError(error: unknown): boolean {
   const errorMessage = (() => {
     if (error instanceof Error)
@@ -20,9 +22,13 @@ export function isAppAlreadyExistsError(error: unknown): boolean {
     || errorMessage.includes('23505')
 }
 
+function secureRandomFraction(): number {
+  return randomBytes(4).readUInt32BE(0) / 0x1_0000_0000
+}
+
 export function buildAppIdConflictSuggestions(
   baseAppId: string,
-  random = Math.random,
+  random = secureRandomFraction,
   now = Date.now,
 ): string[] {
   const randomSuffix = random().toString(36).substring(2, 6) || 'dev'

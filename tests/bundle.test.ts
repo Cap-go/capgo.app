@@ -695,4 +695,51 @@ describe('[POST] /bundle/prepare and [GET] /bundle/lookup operations', () => {
     expect(response.status).toBe(400)
     expect(data.error).toBe('invalid_protocol')
   })
+
+  it('resets completed r2 versions back to r2-direct for re-upload', async () => {
+    const versionName = `9.9.7-reprepare-${id.slice(0, 8)}`
+    const supabase = getSupabaseClient()
+
+    const prepareResponse = await fetch(`${BASE_URL}/bundle/prepare`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        name: versionName,
+        storage_provider: 'r2-direct',
+      }),
+    })
+    expect(prepareResponse.status).toBe(200)
+
+    const { error: markCompleteError } = await supabase
+      .from('app_versions')
+      .update({ storage_provider: 'r2', r2_path: `orgs/${ORG_ID}/apps/${APPNAME}/${versionName}.zip` })
+      .eq('app_id', APPNAME)
+      .eq('name', versionName)
+    expect(markCompleteError).toBeNull()
+
+    const rePrepareResponse = await fetch(`${BASE_URL}/bundle/prepare`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        name: versionName,
+        storage_provider: 'r2-direct',
+      }),
+    })
+    const rePrepareData = await rePrepareResponse.json() as { status?: string, version?: { storage_provider?: string } }
+    expect(rePrepareResponse.status).toBe(200)
+    expect(rePrepareData.status).toBe('ok')
+    expect(rePrepareData.version?.storage_provider).toBe('r2-direct')
+
+    const { data: version, error } = await supabase
+      .from('app_versions')
+      .select('storage_provider, r2_path')
+      .eq('app_id', APPNAME)
+      .eq('name', versionName)
+      .single()
+    expect(error).toBeNull()
+    expect(version?.storage_provider).toBe('r2-direct')
+    expect(version?.r2_path).toBeNull()
+  })
 })

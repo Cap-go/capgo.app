@@ -2,15 +2,17 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
+function uploadHotPathSource(uploadSource) {
+  const autoBumpStart = uploadSource.indexOf('const autoBumpInput = normalizeAutoBumpInput')
+  const autoBumpEnd = uploadSource.indexOf('if (options.autoSetBundle)', autoBumpStart)
+  if (autoBumpStart === -1 || autoBumpEnd === -1)
+    return uploadSource
+  return `${uploadSource.slice(0, autoBumpStart)}${uploadSource.slice(autoBumpEnd)}`
+}
+
 const uploadSource = readFileSync(new URL('../src/bundle/upload.ts', import.meta.url), 'utf8')
 const utilsSource = readFileSync(new URL('../src/utils.ts', import.meta.url), 'utf8')
-
-// AI auto-bump still uses createSupabaseClient; lock only the upload HTTP hot path.
-const autoBumpStart = uploadSource.indexOf('const autoBumpInput = normalizeAutoBumpInput')
-const autoBumpEnd = uploadSource.indexOf('if (options.autoSetBundle)', autoBumpStart)
-const uploadHotPath = autoBumpStart === -1 || autoBumpEnd === -1
-  ? uploadSource
-  : `${uploadSource.slice(0, autoBumpStart)}${uploadSource.slice(autoBumpEnd)}`
+const uploadHotPath = uploadHotPathSource(uploadSource)
 
 assert.doesNotMatch(uploadHotPath, /supabase\.from\(/, 'upload hot path must not call supabase.from')
 assert.doesNotMatch(uploadHotPath, /supabase\.rpc\(/, 'upload hot path must not call supabase.rpc')
