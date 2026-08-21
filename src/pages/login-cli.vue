@@ -9,6 +9,7 @@ import IconClipboard from '~icons/heroicons/clipboard-document'
 import IconEye from '~icons/heroicons/eye'
 import IconEyeSlash from '~icons/heroicons/eye-slash'
 import IconKey from '~icons/heroicons/key'
+import IconSparkles from '~icons/heroicons/sparkles'
 import {
   createCliLoginKeyDependencies,
   getCliLoginDestination,
@@ -41,7 +42,17 @@ const skippedNames = ref<string[]>([])
 const realtimeUnavailable = ref(false)
 const destination = ref('/dashboard')
 const channels: RealtimeChannel[] = []
+const aiMode = computed(() => route.query.ai === '1')
 const displayedKey = computed(() => revealed.value && secret.value ? secret.value : hiddenKey)
+const aiPrompt = computed(() => {
+  if (!secret.value)
+    return ''
+  const command = `npx @capgo/cli@latest init ${secret.value}`
+  return t('cli-login-ai-prompt', {
+    command,
+    apiKeyGuidance: t('app-onboarding-ai-help-with-key'),
+  })
+})
 const revealButtonRef = useTemplateRef<HTMLButtonElement>('revealButtonRef')
 const revealDialogRef = useTemplateRef<HTMLElement>('revealDialogRef')
 
@@ -106,7 +117,8 @@ async function prepare(): Promise<void> {
   clearSecret()
   state.value = 'preparing'
   realtimeUnavailable.value = false
-  if (!isValidCliLoginSession(route.query.session)) {
+  const session = route.query.session
+  if (!aiMode.value && !isValidCliLoginSession(session)) {
     state.value = 'direct'
     return
   }
@@ -129,7 +141,13 @@ async function prepare(): Promise<void> {
     reused.value = result.reused
     hashed.value = result.policy.hashed
     expiresAt.value = result.policy.expiresAt
-    const connections = await subscribe(result.eligibleOrgIds, route.query.session)
+    if (aiMode.value) {
+      showReadyUnlessCompleted()
+      return
+    }
+    if (!isValidCliLoginSession(session))
+      throw new Error('Missing CLI login session')
+    const connections = await subscribe(result.eligibleOrgIds, session)
     realtimeUnavailable.value = !connections.some(Boolean)
     showReadyUnlessCompleted()
   }
@@ -145,6 +163,18 @@ async function copyKey(): Promise<void> {
   try {
     await navigator.clipboard.writeText(secret.value)
     toast.success(t('cli-login-copied'))
+  }
+  catch {
+    toast.error(t('copy-fail'))
+  }
+}
+
+async function copyAiPrompt(): Promise<void> {
+  if (!aiPrompt.value)
+    return
+  try {
+    await navigator.clipboard.writeText(aiPrompt.value)
+    toast.success(t('cli-login-ai-copied'))
   }
   catch {
     toast.error(t('copy-fail'))
@@ -242,10 +272,11 @@ onBeforeUnmount(() => {
     <section class="w-full max-w-xl rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800 sm:p-8">
       <header class="mb-6 flex items-center gap-3">
         <span class="flex h-11 w-11 items-center justify-center rounded-xl bg-orange-100 text-primary dark:bg-orange-950/40">
-          <IconKey class="h-5 w-5" />
+          <IconSparkles v-if="aiMode" class="h-5 w-5" />
+          <IconKey v-else class="h-5 w-5" />
         </span>
         <h1 class="text-2xl font-semibold text-slate-950 dark:text-white">
-          {{ t('cli-login-title') }}
+          {{ t(aiMode ? 'cli-login-ai-title' : 'cli-login-title') }}
         </h1>
       </header>
 
@@ -277,35 +308,56 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-else-if="state === 'ready'" class="space-y-5">
-        <p class="text-slate-600 dark:text-slate-300">
-          {{ t('cli-login-paste-instruction') }}
-        </p>
-        <div class="flex flex-col gap-3 rounded-2xl border border-slate-200 p-3 sm:flex-row sm:items-center dark:border-slate-700">
-          <code :class="revealed ? '' : 'select-none blur-[5px]'" class="min-w-0 flex-1 whitespace-normal break-all">{{ displayedKey }}</code>
-          <div class="flex shrink-0 items-center gap-2 self-end sm:self-center">
-            <button
-              ref="revealButtonRef"
-              class="d-btn d-btn-ghost d-btn-square d-btn-sm"
-              type="button"
-              :aria-label="t(revealed ? 'cli-login-hide-key' : 'cli-login-reveal-key')"
-              :title="t(revealed ? 'cli-login-hide-key' : 'cli-login-reveal-key')"
-              :aria-pressed="revealed"
-              @click="toggleReveal"
-            >
-              <IconEyeSlash v-if="revealed" class="h-4 w-4" />
-              <IconEye v-else class="h-4 w-4" />
-            </button>
-            <button class="d-btn d-btn-primary d-btn-sm" type="button" @click="copyKey">
-              <IconClipboard class="h-4 w-4" /> {{ t('copy') }}
+        <template v-if="aiMode">
+          <p class="text-slate-600 dark:text-slate-300">
+            {{ t('cli-login-ai-description') }}
+          </p>
+          <div class="rounded-2xl border border-slate-200 bg-slate-50 p-5 dark:border-slate-700 dark:bg-slate-900/60">
+            <div class="flex items-start gap-3">
+              <IconSparkles class="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+              <p class="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                {{ t('cli-login-ai-caption') }}
+              </p>
+            </div>
+            <button class="d-btn d-btn-primary mt-5 w-full" type="button" @click="copyAiPrompt">
+              <IconClipboard class="h-4 w-4" /> {{ t('cli-login-ai-copy') }}
             </button>
           </div>
-        </div>
-        <p class="text-xs text-slate-500">
-          {{ t('cli-login-copy-note') }}
-        </p>
-        <p class="d-alert d-alert-warning text-sm">
-          {{ t('cli-login-security-warning') }}
-        </p>
+          <p class="d-alert d-alert-warning text-sm">
+            {{ t('cli-login-ai-security-warning') }}
+          </p>
+        </template>
+        <template v-else>
+          <p class="text-slate-600 dark:text-slate-300">
+            {{ t('cli-login-paste-instruction') }}
+          </p>
+          <div class="flex flex-col gap-3 rounded-2xl border border-slate-200 p-3 sm:flex-row sm:items-center dark:border-slate-700">
+            <code :class="revealed ? '' : 'select-none blur-[5px]'" class="min-w-0 flex-1 whitespace-normal break-all">{{ displayedKey }}</code>
+            <div class="flex shrink-0 items-center gap-2 self-end sm:self-center">
+              <button
+                ref="revealButtonRef"
+                class="d-btn d-btn-ghost d-btn-square d-btn-sm"
+                type="button"
+                :aria-label="t(revealed ? 'cli-login-hide-key' : 'cli-login-reveal-key')"
+                :title="t(revealed ? 'cli-login-hide-key' : 'cli-login-reveal-key')"
+                :aria-pressed="revealed"
+                @click="toggleReveal"
+              >
+                <IconEyeSlash v-if="revealed" class="h-4 w-4" />
+                <IconEye v-else class="h-4 w-4" />
+              </button>
+              <button class="d-btn d-btn-primary d-btn-sm" type="button" @click="copyKey">
+                <IconClipboard class="h-4 w-4" /> {{ t('copy') }}
+              </button>
+            </div>
+          </div>
+          <p class="text-xs text-slate-500">
+            {{ t('cli-login-copy-note') }}
+          </p>
+          <p class="d-alert d-alert-warning text-sm">
+            {{ t('cli-login-security-warning') }}
+          </p>
+        </template>
         <p v-if="hashed" class="text-sm text-amber-700 dark:text-amber-300">
           {{ t('cli-login-hashed-warning') }}
         </p>
@@ -315,7 +367,7 @@ onBeforeUnmount(() => {
         <p v-if="skippedNames.length" class="text-sm text-amber-700 dark:text-amber-300">
           {{ t('cli-login-skipped-organizations', { organizations: skippedNames.join(', ') }) }}
         </p>
-        <p role="status" class="flex items-center text-sm" :class="realtimeUnavailable ? 'text-amber-700' : 'text-slate-500'">
+        <p v-if="!aiMode" role="status" class="flex items-center text-sm" :class="realtimeUnavailable ? 'text-amber-700' : 'text-slate-500'">
           <template v-if="realtimeUnavailable">
             {{ t('cli-login-realtime-unavailable') }}
           </template>
