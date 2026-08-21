@@ -12,18 +12,33 @@ interface FinishTusUploadBody {
   owner_org: string
 }
 
+function requireFinishTusUploadBody(body: unknown): FinishTusUploadBody | Response {
+  if (body === null || typeof body !== 'object' || Array.isArray(body))
+    return quickError(400, 'invalid_json_body', 'Invalid JSON body', { body })
+
+  const record = body as Record<string, unknown>
+  const app_id = record.app_id
+  const name = record.name
+  const owner_org = record.owner_org
+
+  if (typeof app_id !== 'string' || app_id.trim() === '')
+    return quickError(400, 'error_app_id_missing', 'Error app_id missing', { body })
+  if (typeof name !== 'string' || name.trim() === '')
+    return quickError(400, 'error_bundle_name_missing', 'Error bundle name missing', { body })
+  if (typeof owner_org !== 'string' || owner_org.trim() === '')
+    return quickError(400, 'error_owner_org_missing', 'Error owner_org missing', { body })
+
+  return { app_id, name, owner_org }
+}
+
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', middlewareKey(), async (c) => {
-  const body = await parseBody<FinishTusUploadBody>(c)
+  const parsedBody = requireFinishTusUploadBody(await parseBody<unknown>(c))
+  if (parsedBody instanceof Response)
+    return parsedBody
+  const body = parsedBody
   const capgkey = c.get('capgkey') as string
-
-  if (!body.app_id)
-    return quickError(400, 'error_app_id_missing', 'Error app_id missing', { body })
-  if (!body.name)
-    return quickError(400, 'error_bundle_name_missing', 'Error bundle name missing', { body })
-  if (!body.owner_org)
-    return quickError(400, 'error_owner_org_missing', 'Error owner_org missing', { body })
 
   if (!(await checkPermission(c, 'app.upload_bundle', { appId: body.app_id })))
     return quickError(401, 'not_authorized', 'You cannot upload bundles for this app', { app_id: body.app_id })

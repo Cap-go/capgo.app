@@ -6,7 +6,7 @@ import { middlewareKey } from '../../utils/hono_middleware.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseApikey } from '../../utils/supabase.ts'
 import { isValidAppId, isValidSemver } from '../../utils/utils.ts'
-import { checkEncryptedBundleEnforcement, getAppOrganization } from './create.ts'
+import { checkEncryptedBundleEnforcement, getAppOrganization, validateUrlFormat } from './create.ts'
 
 export interface PrepareUploadBody {
   app_id: string
@@ -58,6 +58,16 @@ export async function prepareUpload(
   if (!isValidSemver(body.name))
     throw simpleError('invalid_version_format', 'Version must be valid semver format', { version: body.name })
 
+  if (body.external_url != null && body.external_url !== '')
+    validateUrlFormat(body.external_url)
+
+  const storageProvider = body.storage_provider ?? 'r2-direct'
+  if (!UPLOADABLE_STORAGE_PROVIDERS.has(storageProvider)) {
+    throw simpleError('invalid_storage_provider', 'storage_provider must be r2-direct or external', {
+      storage_provider: storageProvider,
+    })
+  }
+
   if (!(await checkPermission(c, 'app.upload_bundle', { appId: body.app_id })))
     throw simpleError('cannot_prepare_upload', 'You cannot upload bundles for this app', { app_id: body.app_id })
 
@@ -105,7 +115,7 @@ export async function prepareUpload(
     name: body.name,
     owner_org: appWithOrg.owner_org,
     user_id: apikey.user_id,
-    storage_provider: body.storage_provider ?? 'r2-direct',
+    storage_provider: storageProvider,
     deleted: false,
     ...upsertFields,
   }
@@ -124,14 +134,20 @@ export async function prepareUpload(
 
 export const app = honoFactory.createApp()
 
+function requirePrepareUploadBody(body: PrepareUploadBody | null | undefined): PrepareUploadBody {
+  if (body === null || body === undefined || typeof body !== 'object' || Array.isArray(body))
+    throw simpleError('invalid_json_body', 'Invalid JSON body', { body })
+  return body
+}
+
 app.post('/', middlewareKey({ usePostgres: true, readOnly: false }), async (c) => {
-  const body = await getBodyOrQuery<PrepareUploadBody>(c)
+  const body = requirePrepareUploadBody(await getBodyOrQuery<PrepareUploadBody>(c))
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return prepareUpload(c, body, apikey)
 })
 
 app.patch('/', middlewareKey({ usePostgres: true, readOnly: false }), async (c) => {
-  const body = await getBodyOrQuery<PrepareUploadBody>(c)
+  const body = requirePrepareUploadBody(await getBodyOrQuery<PrepareUploadBody>(c))
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return prepareUpload(c, body, apikey)
 })
