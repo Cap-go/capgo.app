@@ -7,7 +7,7 @@ concurrency:
 on:
   push:
     tags:
-      - "cli-[0-9]*"
+      - 'cli-[0-9]*'
 
 permissions: {}
 
@@ -21,9 +21,10 @@ jobs:
       id-token: write
     steps:
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 24.x
+          registry-url: https://registry.npmjs.org
       - name: Checkout
         uses: actions/checkout@v6
         with:
@@ -64,16 +65,27 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           FROM_TAG: ${{ steps.changelog_base.outputs.from_tag }}
         run: bun run changelog:ai
-      - name: Publish CLI to npm
+      - name: Stage CLI on npm
         if: ${{ !contains(github.ref, '-alpha.') }}
+        working-directory: cli
         env:
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: bun publish --cwd cli --access public
-      - name: Publish CLI to npm with next tag
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm stage publish --access public --tag latest
+      - name: Stage CLI on npm with next tag
         if: ${{ contains(github.ref, '-alpha.') }}
+        working-directory: cli
         env:
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: bun publish --cwd cli --tag next --access public
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm stage publish --access public --tag next
+      - name: Request npm stage approval
+        env:
+          GH_TOKEN: ${{ secrets.NPM_STAGE_DISPATCH_TOKEN }}
+        run: |
+          gh api --method POST repos/Cap-go/automations/dispatches \
+            -f event_type=npm-stage-approve \
+            -f "client_payload[repository]=${GITHUB_REPOSITORY}" \
+            -f "client_payload[run_id]=${GITHUB_RUN_ID}" \
+            -f "client_payload[package]=@capgo/cli"
       - name: Create GitHub release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -87,5 +99,5 @@ jobs:
 
             🔗 **Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ steps.changelog_base.outputs.from_tag }}...${{ github.ref_name }}
           make_latest: false
-          token: "${{ secrets.PERSONAL_ACCESS_TOKEN }}"
+          token: '${{ secrets.PERSONAL_ACCESS_TOKEN }}'
           prerelease: ${{ contains(github.ref, '-alpha.') }}

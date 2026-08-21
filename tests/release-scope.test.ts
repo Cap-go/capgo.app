@@ -100,22 +100,24 @@ describe('release scope matching', () => {
 
   it.concurrent('stages CLI publishing through automations approval', () => {
     const workflow = readFileSync('.github/workflows/publish_cli.yml', 'utf8')
+    const dollar = '$'
     const stageStable = 'run: npm stage publish --access public --tag latest'
     const stageNext = 'run: npm stage publish --access public --tag next'
     const dispatch = 'repos/Cap-go/automations/dispatches'
     const release = '- name: Create GitHub release'
 
+    expect(workflow).toContain('uses: actions/setup-node@v7')
     expect(workflow).toContain('registry-url: https://registry.npmjs.org')
     expect(workflow).toContain(stageStable)
     expect(workflow).toContain(stageNext)
-    expect(workflow).toContain('NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}')
+    expect(workflow).toContain(`NODE_AUTH_TOKEN: ${dollar}{{ secrets.NPM_TOKEN }}`)
     expect(workflow).not.toContain('NPM_CONFIG_TOKEN')
     expect(workflow).not.toContain('bun publish')
-    expect(workflow).toContain('GH_TOKEN: ${{ secrets.NPM_STAGE_DISPATCH_TOKEN }}')
+    expect(workflow).toContain(`GH_TOKEN: ${dollar}{{ secrets.NPM_STAGE_DISPATCH_TOKEN }}`)
     expect(workflow).toContain(dispatch)
     expect(workflow).toContain('-f event_type=npm-stage-approve')
-    expect(workflow).toContain('-f "client_payload[repository]=${GITHUB_REPOSITORY}"')
-    expect(workflow).toContain('-f "client_payload[run_id]=${GITHUB_RUN_ID}"')
+    expect(workflow).toContain(`-f "client_payload[repository]=${dollar}{GITHUB_REPOSITORY}"`)
+    expect(workflow).toContain(`-f "client_payload[run_id]=${dollar}{GITHUB_RUN_ID}"`)
     expect(workflow).toContain('-f "client_payload[package]=@capgo/cli"')
     expect(workflow.indexOf(dispatch)).toBeLessThan(workflow.indexOf(release))
   })
