@@ -2,6 +2,7 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import { existsSync, statSync } from 'node:fs'
 import { resolveAppSetIconPath } from '../src/api/app.ts'
 import { getAppListHeaders, getAppListRow } from '../src/app/list.ts'
 import { normalizeStoreUrl } from '../src/app/store-url.ts'
@@ -80,12 +81,17 @@ await test('renders organization name and id from the app owner', () => {
 })
 
 await test('registers both app list organization display flags', () => {
+  const builtCli = new URL('../dist/index.js', import.meta.url)
+  const cliSource = new URL('../src/index.ts', import.meta.url)
+  assert.equal(existsSync(builtCli), true, 'Run `bun run build` before this test')
+  assert.ok(statSync(builtCli).mtimeMs >= statSync(cliSource).mtimeMs, 'Run `bun run build` before this test; dist/index.js is stale')
+
   const help = spawnSync(process.execPath, ['dist/index.js', 'app', 'list', '--help'], {
     cwd: new URL('..', import.meta.url),
     encoding: 'utf8',
   })
   assert.equal(help.status, 0, help.stderr)
-  assert.match(help.stdout, /--show-org\b/)
+  assert.match(help.stdout, /--show-org\b(?!-)/)
   assert.match(help.stdout, /--show-org-id\b/)
 })
 
