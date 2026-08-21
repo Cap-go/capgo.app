@@ -6,13 +6,40 @@ import { trackEvent } from '../analytics/track'
 import { checkAlerts } from '../api/update'
 import { createSupabaseClient, findSavedKey, formatError, getHumanDate, invokeCapgoCliApi, resolveUserIdFromApiKey } from '../utils'
 
-function displayApps(data: Database['public']['Tables']['apps']['Row'][]) {
+interface AppListOptions extends OptionsBase {
+  showOrg?: boolean
+  showOrgId?: boolean
+}
+
+type AppRow = Database['public']['Tables']['apps']['Row']
+
+export function getAppListHeaders(options: AppListOptions) {
+  const headers = ['Name', 'id']
+  if (options.showOrg)
+    headers.push('Organization')
+  headers.push('Created')
+  if (options.showOrgId)
+    headers.push('Organization ID')
+  return headers
+}
+
+export function getAppListRow(row: AppRow, options: AppListOptions, orgNames: Map<string, string>) {
+  const values = [row.name ?? '', row.app_id]
+  if (options.showOrg)
+    values.push(orgNames.get(row.owner_org) ?? 'Unknown')
+  values.push(getHumanDate(row.created_at))
+  if (options.showOrgId)
+    values.push(row.owner_org)
+  return values
+}
+
+function displayApps(data: AppRow[], options: AppListOptions, orgNames: Map<string, string>) {
   const table = new Table()
-  table.headers = ['Name', 'id', 'Created']
+  table.headers = getAppListHeaders(options)
   table.rows = []
 
   for (const row of data.toReversed())
-    table.rows.push([row.name ?? '', row.app_id, getHumanDate(row.created_at)])
+    table.rows.push(getAppListRow(row, options, orgNames))
 
   log.success('Apps')
   log.success(table.toString())
@@ -55,7 +82,7 @@ async function getActiveApps(
   return all.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
 }
 
-export async function listAppInternal(options: OptionsBase, silent = false) {
+export async function listAppInternal(options: AppListOptions, silent = false) {
   if (!silent)
     intro('List apps in Capgo')
 
@@ -86,14 +113,23 @@ export async function listAppInternal(options: OptionsBase, silent = false) {
   }
 
   if (!silent) {
+    const orgNames = new Map<string, string>()
+    if (options.showOrg) {
+      const { data, error } = await supabase.rpc('get_orgs_v7')
+      if (error)
+        throw new Error(`Cannot get organizations: ${formatError(error)}`)
+      for (const org of data ?? [])
+        orgNames.set(org.gid, org.name ?? 'Unknown')
+    }
+
     log.info(`Active app in Capgo: ${allApps.length}`)
-    displayApps(allApps)
+    displayApps(allApps, options, orgNames)
     outro('Done ✅')
   }
 
   return allApps
 }
 
-export async function listApp(options: OptionsBase, silent = false) {
+export async function listApp(options: AppListOptions, silent = false) {
   return listAppInternal(options, silent)
 }
