@@ -202,9 +202,9 @@ try {
   // regardless of the (dynamic) channel context attached to them.
   assert.equal(shouldCapturePosthogException(new CliUserError('Channel does not have a bundle linked', { appId: 'com.example.app', channel: 'production' })), false)
   assert.equal(shouldCapturePosthogException(new CliUserError('Missing API key')), false)
-  // `findSavedKey` throws this as a CliUserError when nobody ran `capgo login`;
+  // `findSavedKey` throws this as a CliUserError when nobody ran the suggested login command;
   // it must be skipped (a plain Error with this text would have leaked through).
-  assert.equal(shouldCapturePosthogException(new CliUserError('Cannot find API key in local folder or global, please login first with `capgo login`')), false)
+  assert.equal(shouldCapturePosthogException(new CliUserError('No Capgo API key found. Run `npx -y @capgo/cli@latest login` first, then retry this command.')), false)
   // `uploadFail` now throws CliUserError, so a duplicate-version upload — a normal
   // `bundle upload` outcome — is filtered out of error tracking by type.
   assert.equal(shouldCapturePosthogException(new CliUserError('Version 1.2.3 already exists')), false)
