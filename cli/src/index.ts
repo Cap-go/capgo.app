@@ -456,7 +456,7 @@ Example: npx @capgo/cli@latest app list`)
     await listApp(options)
   })
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--output-text', 'Print apps as plain-text CSV without interactive formatting')
+  .option('--output-text', 'Print plain text with a CSV app table and no interactive formatting')
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
 

@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import * as appList from '../src/app/list.ts'
 import { findSavedKey } from '../src/utils.ts'
@@ -36,6 +38,41 @@ finally {
     delete process.env.CAPGO_TOKEN
   else
     process.env.CAPGO_TOKEN = originalToken
+}
+
+const keyFixture = mkdtempSync(join(tmpdir(), 'capgo-app-list-key-'))
+const projectFixture = join(keyFixture, 'project')
+const originalHome = process.env.HOME
+const originalCwd = process.cwd()
+const originalFixtureToken = process.env.CAPGO_TOKEN
+try {
+  mkdirSync(projectFixture)
+  writeFileSync(join(keyFixture, '.capgo'), '')
+  writeFileSync(join(projectFixture, '.capgo'), 'local-output-text-token')
+  process.env.HOME = keyFixture
+  delete process.env.CAPGO_TOKEN
+  process.chdir(projectFixture)
+
+  const messages = []
+  assert.equal(findSavedKey(false, message => messages.push(message)), 'local-output-text-token')
+  assert.deepEqual(messages, ['Use local API key .capgo'])
+
+  writeFileSync(join(projectFixture, '.capgo'), '')
+  messages.length = 0
+  assert.throws(() => findSavedKey(false, message => messages.push(message)), /No Capgo API key found/)
+  assert.deepEqual(messages, [], 'does not announce an empty API-key file')
+}
+finally {
+  process.chdir(originalCwd)
+  if (originalHome === undefined)
+    delete process.env.HOME
+  else
+    process.env.HOME = originalHome
+  if (originalFixtureToken === undefined)
+    delete process.env.CAPGO_TOKEN
+  else
+    process.env.CAPGO_TOKEN = originalFixtureToken
+  rmSync(keyFixture, { recursive: true, force: true })
 }
 
 const builtCli = new URL('../dist/index.js', import.meta.url)

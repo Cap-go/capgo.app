@@ -35,7 +35,7 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 ### App-level operations
 
 - `app add [appId]`: create an app in Capgo Cloud.
-- `app list`: list apps under the current account. Use `npx @capgo/cli@latest app list --output-text` for plain-text CSV output without interactive terminal formatting.
+- `app list`: list apps under the current account. Use `npx @capgo/cli@latest app list --output-text` for plain status text with an embedded CSV app table and no interactive terminal formatting.
 - `app delete [appId]`: remove an app.
 - `app set [appId]`: update app settings such as name, icon, retention, metadata exposure, and preview access with `--preview` or `--no-preview`.
 - `app setting [path]`: update Capacitor config values programmatically.

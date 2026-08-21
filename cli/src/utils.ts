@@ -1206,18 +1206,17 @@ export function findSavedKey(quiet = false, report: (message: string) => void = 
   }
   // search for key in home dir
   const userHomeDir = homedir()
-  let key
   let keyPath = `${userHomeDir}/.capgo`
-  if (existsSync(keyPath)) {
+  let key = tryReadKey(keyPath)
+  if (key) {
     if (!quiet)
       report(`Use global API key ${keyPath}`)
-    key = readFileSync(keyPath, 'utf8').trim()
   }
-  keyPath = `.capgo`
-  if (!key && existsSync(keyPath)) {
-    if (!quiet)
+  else {
+    keyPath = `.capgo`
+    key = tryReadKey(keyPath)
+    if (key && !quiet)
       report(`Use local API key ${keyPath}`)
-    key = readFileSync(keyPath, 'utf8').trim()
   }
   if (!key) {
     const loginCommand = getCliLoginCommand()
