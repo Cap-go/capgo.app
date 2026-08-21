@@ -54,6 +54,11 @@ Follow the `Cap-go/automations` integration contract directly:
    dispatch; do not poll npm. A failed downstream job can be rerun without
    repeating `npm stage publish`.
 
+Both jobs keep the generated `GITHUB_TOKEN` at read-only contents access. npm
+staging uses `NPM_TOKEN`, approval dispatch uses `NPM_STAGE_DISPATCH_TOKEN`, and
+GitHub release creation continues to use `PERSONAL_ACCESS_TOKEN`, so neither
+job needs GitHub contents write or OIDC permissions.
+
 The dispatch uses `NPM_STAGE_DISPATCH_TOKEN`, a GitHub fine-grained token whose
 only purpose is dispatching to `Cap-go/automations`. The npm bot password and
 WebAuthn material stay exclusively in the private automations repository.

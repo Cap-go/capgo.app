@@ -51,6 +51,10 @@ it.concurrent('stages CLI publishing through automations approval', () => {
   expect(approvalJobIndex).toBeGreaterThan(publishJobIndex)
   expect(publishSection).toContain('uses: actions/setup-node@v7')
   expect(publishSection).toContain('registry-url: https://registry.npmjs.org')
+  expect(publishSection).toContain('permissions:\n      contents: read')
+  expect(publishSection).not.toContain('id-token: write')
+  expect(publishSection).toContain(`changelog: ${dollar}{{ steps.changelog.outputs.result }}`)
+  expect(publishSection).toContain(`from_tag: ${dollar}{{ steps.changelog_base.outputs.from_tag }}`)
   expect(stableStepIndex).toBeGreaterThan(-1)
   expect(nextStepIndex).toBeGreaterThan(stableStepIndex)
   expect(stableSection).toContain(stableGuard)
@@ -64,6 +68,9 @@ it.concurrent('stages CLI publishing through automations approval', () => {
   expect(workflow).not.toContain('NPM_CONFIG_TOKEN')
   expect(workflow).not.toContain('bun publish')
   expect(approvalSection).toContain('needs: publish_cli')
+  expect(approvalSection).toContain('permissions:\n      contents: read')
+  expect(approvalSection).toContain(`needs.publish_cli.outputs.changelog`)
+  expect(approvalSection).toContain(`needs.publish_cli.outputs.from_tag`)
   expect(approvalSection).not.toContain('npm stage publish')
   expect(dispatchIndex).toBeGreaterThan(-1)
   expect(dispatchSection).toContain(`GH_TOKEN: ${dollar}{{ secrets.NPM_STAGE_DISPATCH_TOKEN }}`)
@@ -101,14 +108,21 @@ git commit -m "test(ci): cover staged CLI publishing"
 
 - [ ] **Step 1: Configure npm authentication through setup-node**
 
-Update the existing setup step to include the npm registry:
+Keep `publish_cli` at read-only GitHub contents access, remove its unused OIDC
+permission, and update the existing setup step to include the npm registry:
 
 ```yaml
-- name: Setup Node.js
-  uses: actions/setup-node@v7
-  with:
-    node-version: 24.x
-    registry-url: https://registry.npmjs.org
+permissions:
+  contents: read
+outputs:
+  changelog: ${{ steps.changelog.outputs.result }}
+  from_tag: ${{ steps.changelog_base.outputs.from_tag }}
+steps:
+  - name: Setup Node.js
+    uses: actions/setup-node@v7
+    with:
+      node-version: 24.x
+      registry-url: https://registry.npmjs.org
 ```
 
 - [ ] **Step 2: Replace both direct publish steps with staged publishing**
@@ -149,7 +163,7 @@ approve_and_release:
   timeout-minutes: 10
   needs: publish_cli
   permissions:
-    contents: write
+    contents: read
   steps:
     - name: Request npm stage approval
       env:
