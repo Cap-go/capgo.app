@@ -35,7 +35,7 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 ### App-level operations
 
 - `app add [appId]`: create an app in Capgo Cloud.
-- `app list`: list apps under the current account. Pass `--show-org` to include organization names and `--show-org-id` to include organization IDs.
+- `app list`: list apps under the current account. Pass `--filter-by-org-id <orgId>` to list only apps from one organization, `--show-org` to include organization names, and `--show-org-id` to include organization IDs. The CLI warns that the filter can hide other accessible apps.
 - `app delete [appId]`: remove an app.
 - `app set [appId]`: update app settings such as name, icon, retention, metadata exposure, and preview access with `--preview` or `--no-preview`.
 - `app setting [path]`: update Capacitor config values programmatically.
@@ -91,7 +91,7 @@ npx @capgo/cli@latest login YOUR_API_KEY
 npx @capgo/cli@latest doctor
 npx @capgo/cli@latest probe --platform ios
 npx @capgo/cli@latest app add com.example.app --name "My App"
-npx @capgo/cli@latest app list --show-org --show-org-id
+npx @capgo/cli@latest app list --filter-by-org-id YOUR_ORG_ID --show-org --show-org-id
 npx @capgo/cli@latest get-qr com.example.app --channel production
 npx @capgo/cli@latest star-all
 ```

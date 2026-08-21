@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { cwd } from 'node:process'
+import { chdir, cwd } from 'node:process'
 import { Command } from 'commander'
 import { IncompatibleBundleError } from '../src/bundle/upload.ts'
 import {
@@ -14,6 +14,7 @@ import {
   shouldCapturePosthogException,
 } from '../src/posthog.ts'
 import { CliUserError } from '../src/shared/cli-user-error.ts'
+import { findSavedKey } from '../src/utils.ts'
 
 const originalFetch = globalThis.fetch
 const originalEnv = {
@@ -202,9 +203,41 @@ try {
   // regardless of the (dynamic) channel context attached to them.
   assert.equal(shouldCapturePosthogException(new CliUserError('Channel does not have a bundle linked', { appId: 'com.example.app', channel: 'production' })), false)
   assert.equal(shouldCapturePosthogException(new CliUserError('Missing API key')), false)
-  // `findSavedKey` throws this as a CliUserError when nobody ran `capgo login`;
-  // it must be skipped (a plain Error with this text would have leaked through).
-  assert.equal(shouldCapturePosthogException(new CliUserError('Cannot find API key in local folder or global, please login first with `capgo login`')), false)
+  // Exercise the real no-key path in an isolated home/project so the suggested
+  // command and its error-tracking classification stay covered together.
+  const noKeyDir = mkdtempSync(join(tmpdir(), 'capgo-no-key-'))
+  const previousCwd = cwd()
+  const previousHome = process.env.HOME
+  const previousToken = process.env.CAPGO_TOKEN
+  const previousUserAgent = process.env.npm_config_user_agent
+  let missingKeyError
+  try {
+    process.env.HOME = noKeyDir
+    process.env.npm_config_user_agent = 'npm/11.6.2 node/v24.8.0 darwin arm64'
+    delete process.env.CAPGO_TOKEN
+    chdir(noKeyDir)
+    assert.throws(() => findSavedKey(true), (error) => {
+      missingKeyError = error
+      return error instanceof CliUserError
+    })
+  }
+  finally {
+    chdir(previousCwd)
+    if (previousHome === undefined)
+      delete process.env.HOME
+    else
+      process.env.HOME = previousHome
+    if (previousToken === undefined)
+      delete process.env.CAPGO_TOKEN
+    else
+      process.env.CAPGO_TOKEN = previousToken
+    if (previousUserAgent === undefined)
+      delete process.env.npm_config_user_agent
+    else
+      process.env.npm_config_user_agent = previousUserAgent
+  }
+  assert.equal(missingKeyError.message, 'No Capgo API key found. Run `npx -y @capgo/cli@latest login` first, then retry this command.')
+  assert.equal(shouldCapturePosthogException(missingKeyError), false)
   // `uploadFail` now throws CliUserError, so a duplicate-version upload — a normal
   // `bundle upload` outcome — is filtered out of error tracking by type.
   assert.equal(shouldCapturePosthogException(new CliUserError('Version 1.2.3 already exists')), false)

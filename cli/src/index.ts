@@ -456,6 +456,7 @@ Example: npx @capgo/cli@latest app list`)
     await listApp(options)
   })
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--filter-by-org-id <orgId>', 'Only list apps from this organization ID')
   .option('--show-org', 'Show the organization name for each app')
   .option('--show-org-id', 'Show the organization ID for each app')
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
@@ -912,10 +913,14 @@ build
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
   .option('--no-analytics', 'Disable build onboarding analytics and terminal replay for this run')
-  // enableSelfUpdate is set ONLY here (the genuine `build init` entrypoint) so
-  // the self-update prompt's re-exec replays `build init`, never a wrapper
-  // command that reached onboarding as a sub-step (bundle upload / credentials).
-  .action((options: OnboardingBuilderOptions) => onboardingBuilderCommand({ ...options, enableSelfUpdate: true }))
+  // Self-update and workspace discovery are enabled ONLY here (the genuine
+  // `build init` entrypoint), never for wrapper commands that reach onboarding
+  // as a sub-step (bundle upload / credentials).
+  .action((options: OnboardingBuilderOptions) => onboardingBuilderCommand({
+    ...options,
+    enableSelfUpdate: true,
+    enableProjectDiscovery: true,
+  }))
 
 build
   .command('request [appId]')

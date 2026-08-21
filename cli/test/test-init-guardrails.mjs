@@ -35,6 +35,7 @@ import {
   supportsYarnDlx,
   waitForCommandResult,
 } from '../src/init/command-execution.ts'
+import { getCliLoginCommand } from '../src/runner-command.ts'
 import { usesAlwaysDirectUpdate } from '../src/updaterConfig.ts'
 import { getPMAndCommand, setPMAndCommand } from '../src/utils.ts'
 
@@ -159,6 +160,34 @@ t('package manager metadata uses matching direct commands and runners', () => {
     installCommand: 'bun install',
     runner: 'bunx',
   })
+})
+
+t('CLI login command matches the package runner used to invoke the CLI', () => {
+  const cases = [
+    ['npm/11.6.2 node/v24.8.0 darwin arm64', 'npx -y @capgo/cli@latest login'],
+    ['bun/1.2.20 npm/? node/v24.3.0 darwin arm64', 'bunx @capgo/cli@latest login'],
+    ['pnpm/10.15.0 npm/? node/v24.3.0 darwin arm64', 'pnpm dlx @capgo/cli@latest login'],
+    ['yarn/1.22.22 npm/? node/v24.3.0 darwin arm64', 'npx -y @capgo/cli@latest login'],
+    ['yarn/4.9.2 npm/? node/v24.3.0 darwin arm64', 'yarn dlx @capgo/cli@latest login'],
+  ]
+
+  for (const [userAgent, expected] of cases)
+    assert.equal(getCliLoginCommand({ npm_config_user_agent: userAgent }), expected)
+})
+
+t('CLI login command detects the runner from npm_execpath when the user agent is unavailable', () => {
+  assert.equal(
+    getCliLoginCommand({ npm_execpath: '/opt/homebrew/lib/node_modules/pnpm/bin/pnpm.cjs' }),
+    'pnpm dlx @capgo/cli@latest login',
+  )
+  assert.equal(
+    getCliLoginCommand({ npm_execpath: '/opt/homebrew/lib/node_modules/yarn/bin/yarn.js' }),
+    'npx -y @capgo/cli@latest login',
+  )
+})
+
+t('CLI login command safely falls back to npx', () => {
+  assert.equal(getCliLoginCommand({}), 'npx -y @capgo/cli@latest login')
 })
 
 t('selected package manager persists for later onboarding commands', () => {

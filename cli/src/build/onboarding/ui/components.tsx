@@ -347,6 +347,7 @@ export const Header: FC<{ compact?: boolean }> = () => {
     <Box
       borderStyle="double"
       borderColor="cyan"
+      width={44}
       paddingX={4}
       paddingY={1}
       alignSelf="center"

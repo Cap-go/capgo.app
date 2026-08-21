@@ -31,6 +31,7 @@ import { findMonorepoRoot, findNXMonorepoRoot, isMonorepo, isNXMonorepo } from '
 import { getChecksum } from './checksum'
 import { loadConfig, loadConfigForWrite, writeConfig } from './config'
 import { isTruthyEnvValue } from './posthog'
+import { getCliLoginCommand } from './runner-command'
 import { nativePackageSchema } from './schemas/common'
 import { safeParseSchema } from './schemas/schema_validation'
 import { CliUserError } from './shared/cli-user-error'
@@ -1219,10 +1220,8 @@ export function findSavedKey(quiet = false) {
     key = readFileSync(keyPath, 'utf8').trim()
   }
   if (!key) {
-    // Keep this message static (no interpolated package-manager runner): it is a
-    // CliUserError so error tracking skips it, and a constant string means one
-    // "not logged in" condition renders as one value instead of one per runner.
-    const message = 'Cannot find API key in local folder or global, please login first with `capgo login`'
+    const loginCommand = getCliLoginCommand()
+    const message = `No Capgo API key found. Run \`${loginCommand}\` first, then retry this command.`
     log.error(message)
     throw new CliUserError(message)
   }
