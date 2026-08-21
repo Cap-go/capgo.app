@@ -9,7 +9,6 @@ import { getDeviceDaySuccessRateCF, getLastMonthAnalyticsWindowStart, getPluginB
 import { GLOBAL_STATS_SHARDS, REQUIRED_GLOBAL_STATS_SHARDS, USAGE_GLOBAL_STATS_SHARDS } from '../utils/global_stats.ts'
 import { BRES, middlewareAPISecret, quickError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
-import { logsnagInsights } from '../utils/logsnag.ts'
 import { readGlobalNotificationStatsCF } from '../utils/nativeNotifications.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { countAllApps, countAllUpdates, countAllUpdatesExternal } from '../utils/stats.ts'
@@ -421,21 +420,18 @@ function normalizeCoreSnapshotCounts(row: Partial<CoreSnapshotRow> | null | unde
   }
 }
 
-const LOGSNAG_INSIGHTS_BACKGROUND_MAX_RETRIES = 4
-const LOGSNAG_INSIGHTS_RETRY_DELAY_SECONDS = 300
-const LOGSNAG_INSIGHTS_QUEUE_NAME = 'admin_stats'
-const LOGSNAG_INSIGHTS_NOTIFICATION_DELAY_SECONDS = 180
-const LOGSNAG_INSIGHTS_RECENT_REPAIR_LOOKBACK_DAYS = 30
+const GLOBAL_STATS_BACKGROUND_MAX_RETRIES = 4
+const GLOBAL_STATS_RETRY_DELAY_SECONDS = 300
+const GLOBAL_STATS_QUEUE_NAME = 'admin_stats'
+const GLOBAL_STATS_NOTIFICATION_DELAY_SECONDS = 180
+const GLOBAL_STATS_RECENT_REPAIR_LOOKBACK_DAYS = 30
+// Keep the legacy key so old and new workers contend on the same lock during rolling deployments.
 const GLOBAL_STATS_NOTIFICATION_LOCK_NAMESPACE = 'logsnag_insights_notifications'
-const GLOBAL_STATS_NOTIFICATION_LOGSNAG_STEP = 'notifications_logsnag'
 const GLOBAL_STATS_NOTIFICATION_TRACKING_STEP = 'notifications_tracking'
-const GLOBAL_STATS_NOTIFICATION_LOGSNAG_CLAIM = 'notifications_logsnag_claim'
 const GLOBAL_STATS_NOTIFICATION_TRACKING_CLAIM = 'notifications_tracking_claim'
 const GLOBAL_STATS_COMPLETION_MARKERS = [
   ...GLOBAL_STATS_SHARDS,
-  GLOBAL_STATS_NOTIFICATION_LOGSNAG_STEP,
   GLOBAL_STATS_NOTIFICATION_TRACKING_STEP,
-  GLOBAL_STATS_NOTIFICATION_LOGSNAG_CLAIM,
   GLOBAL_STATS_NOTIFICATION_TRACKING_CLAIM,
 ] as const
 const GLOBAL_STATS_SHARD_SET = new Set<string>(GLOBAL_STATS_SHARDS)
@@ -460,7 +456,7 @@ type GlobalStatsSnapshotRow = GlobalStatsRow & {
   plan_credits?: number | null
 }
 
-interface LogsnagInsightsPayload {
+interface GlobalStatsPayload {
   retry_count?: unknown
   shard?: unknown
   date_id?: unknown
@@ -498,29 +494,29 @@ interface GlobalStatsRepairSqlRow {
   build_count_day_android: number | string | null
 }
 
-interface ScheduleLogsnagInsightsUpdateOptions {
+interface ScheduleGlobalStatsUpdateOptions {
   retryCount?: number
   retryMsgId?: number | null
   cancelRetry?: (c: Context, retryMsgId: number) => Promise<void>
 }
 
-interface ScheduleLogsnagInsightsShardOptions {
+interface ScheduleGlobalStatsShardOptions {
   retryCount?: number
   retryMsgId?: number | null
   cancelRetry?: (c: Context, retryMsgId: number) => Promise<void>
   runShard?: (c: Context, shard: GlobalStatsShard, dateId: string) => Promise<void>
 }
 
-function normalizeLogsnagInsightsRetryCount(value: unknown): number {
+function normalizeGlobalStatsRetryCount(value: unknown): number {
   const retryCount = Number(value)
   if (!Number.isFinite(retryCount) || retryCount < 0)
     return 0
   return Math.floor(retryCount)
 }
 
-function buildLogsnagInsightsRetryMessage(retryCount: number, dateId?: string) {
+function buildGlobalStatsRetryMessage(retryCount: number, dateId?: string) {
   return {
-    function_name: 'logsnag_insights',
+    function_name: 'global_stats',
     function_type: 'cloudflare',
     payload: {
       ...(dateId ? { date_id: dateId } : {}),
@@ -529,13 +525,13 @@ function buildLogsnagInsightsRetryMessage(retryCount: number, dateId?: string) {
   }
 }
 
-function getLogsnagInsightsShardFunctionName(shard: GlobalStatsShard): string {
-  return `logsnag_insights_${shard}`
+function getGlobalStatsShardFunctionName(shard: GlobalStatsShard): string {
+  return `global_stats_${shard}`
 }
 
-function buildLogsnagInsightsShardMessage(shard: GlobalStatsShard, dateId: string, retryCount = 0) {
+function buildGlobalStatsShardMessage(shard: GlobalStatsShard, dateId: string, retryCount = 0) {
   return {
-    function_name: getLogsnagInsightsShardFunctionName(shard),
+    function_name: getGlobalStatsShardFunctionName(shard),
     function_type: 'cloudflare',
     payload: {
       date_id: dateId,
@@ -544,7 +540,7 @@ function buildLogsnagInsightsShardMessage(shard: GlobalStatsShard, dateId: strin
   }
 }
 
-async function readLogsnagInsightsPayload(c: Context): Promise<LogsnagInsightsPayload> {
+async function readGlobalStatsPayload(c: Context): Promise<GlobalStatsPayload> {
   const rawBody = await c.req.raw.clone().text()
   if (!rawBody.trim())
     return {}
@@ -554,14 +550,14 @@ async function readLogsnagInsightsPayload(c: Context): Promise<LogsnagInsightsPa
     body = JSON.parse(rawBody)
   }
   catch (error) {
-    quickError(400, 'invalid_logsnag_insights_payload', 'Invalid LogSnag insights payload', undefined, error, { alert: false })
+    quickError(400, 'invalid_global_stats_payload', 'Invalid Global stats payload', undefined, error, { alert: false })
   }
 
   if (!body || typeof body !== 'object' || Array.isArray(body))
     return {}
-  return body as LogsnagInsightsPayload
+  return body as GlobalStatsPayload
 }
-function normalizeLogsnagInsightsShard(value: unknown): GlobalStatsShard | null {
+function normalizeGlobalStatsShard(value: unknown): GlobalStatsShard | null {
   if (typeof value !== 'string' || !GLOBAL_STATS_SHARD_SET.has(value))
     return null
   return value as GlobalStatsShard
@@ -588,7 +584,7 @@ function getCompletedDayWindowForDateId(dateId: string): DailyWindow {
   }
 }
 
-function buildRecentGlobalStatsRepairDateIds(anchorDateId: string, lookbackDays = LOGSNAG_INSIGHTS_RECENT_REPAIR_LOOKBACK_DAYS): string[] {
+function buildRecentGlobalStatsRepairDateIds(anchorDateId: string, lookbackDays = GLOBAL_STATS_RECENT_REPAIR_LOOKBACK_DAYS): string[] {
   const anchor = new Date(`${anchorDateId}T00:00:00.000Z`)
   if (Number.isNaN(anchor.getTime()))
     return []
@@ -610,20 +606,20 @@ function getMetricWindowFromDailyWindow(window: DailyWindow): CurrentDayWindow {
   }
 }
 
-async function reserveLogsnagInsightsRetry(c: Context, retryCount: number, dateId?: string): Promise<number | null> {
-  if (retryCount >= LOGSNAG_INSIGHTS_BACKGROUND_MAX_RETRIES)
+async function reserveGlobalStatsRetry(c: Context, retryCount: number, dateId?: string): Promise<number | null> {
+  if (retryCount >= GLOBAL_STATS_BACKGROUND_MAX_RETRIES)
     return null
 
   const nextRetryCount = retryCount + 1
-  const delaySeconds = LOGSNAG_INSIGHTS_RETRY_DELAY_SECONDS * nextRetryCount
-  const retryMessage = buildLogsnagInsightsRetryMessage(nextRetryCount, dateId)
+  const delaySeconds = GLOBAL_STATS_RETRY_DELAY_SECONDS * nextRetryCount
+  const retryMessage = buildGlobalStatsRetryMessage(nextRetryCount, dateId)
   const db = getPgClient(c)
 
   try {
-    const retryMsgId = await queueLogsnagInsightsMessage(db, retryMessage, delaySeconds)
+    const retryMsgId = await queueGlobalStatsMessage(db, retryMessage, delaySeconds)
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'Reserved logsnag insights dispatcher retry',
+      message: 'Reserved global stats dispatcher retry',
       retryCount: nextRetryCount,
       delaySeconds,
       retryMsgId,
@@ -636,20 +632,20 @@ async function reserveLogsnagInsightsRetry(c: Context, retryCount: number, dateI
   }
 }
 
-async function reserveLogsnagInsightsShardRetry(c: Context, shard: GlobalStatsShard, dateId: string, retryCount: number): Promise<number | null> {
-  if (retryCount >= LOGSNAG_INSIGHTS_BACKGROUND_MAX_RETRIES)
+async function reserveGlobalStatsShardRetry(c: Context, shard: GlobalStatsShard, dateId: string, retryCount: number): Promise<number | null> {
+  if (retryCount >= GLOBAL_STATS_BACKGROUND_MAX_RETRIES)
     return null
 
   const nextRetryCount = retryCount + 1
-  const delaySeconds = LOGSNAG_INSIGHTS_RETRY_DELAY_SECONDS * nextRetryCount
-  const retryMessage = buildLogsnagInsightsShardMessage(shard, dateId, nextRetryCount)
+  const delaySeconds = GLOBAL_STATS_RETRY_DELAY_SECONDS * nextRetryCount
+  const retryMessage = buildGlobalStatsShardMessage(shard, dateId, nextRetryCount)
   const db = getPgClient(c)
 
   try {
-    const retryMsgId = await queueLogsnagInsightsMessage(db, retryMessage, delaySeconds)
+    const retryMsgId = await queueGlobalStatsMessage(db, retryMessage, delaySeconds)
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'Reserved logsnag insights shard retry',
+      message: 'Reserved global stats shard retry',
       shard,
       retryCount: nextRetryCount,
       delaySeconds,
@@ -663,24 +659,24 @@ async function reserveLogsnagInsightsShardRetry(c: Context, shard: GlobalStatsSh
   }
 }
 
-async function cancelLogsnagInsightsRetry(c: Context, retryMsgId: number): Promise<void> {
+async function cancelGlobalStatsRetry(c: Context, retryMsgId: number): Promise<void> {
   const db = getPgClient(c)
 
   try {
     await db.query('SELECT pgmq.delete($1, $2::bigint[])', [
-      LOGSNAG_INSIGHTS_QUEUE_NAME,
+      GLOBAL_STATS_QUEUE_NAME,
       [retryMsgId],
     ])
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'Cancelled reserved logsnag insights dispatcher retry',
+      message: 'Cancelled reserved global stats dispatcher retry',
       retryMsgId,
     })
   }
   catch (cancelError) {
     cloudlogErr({
       requestId: c.get('requestId'),
-      message: 'Failed to cancel reserved logsnag insights dispatcher retry',
+      message: 'Failed to cancel reserved global stats dispatcher retry',
       retryMsgId,
       error: cancelError,
     })
@@ -696,7 +692,7 @@ function getPaidPlanTotal(plans: PlanTotal) {
 }
 
 function getPlanConversionRates(plans: PlanTotal, payingCount: number): PlanConversionRates {
-  // Plan mix among paying orgs (not all orgs/users). Matches LogSnag insight cards.
+  // Plan mix among paying orgs (not all orgs/users). Matches the daily admin snapshot.
   return {
     solo: calculateConversionRate(plans.Solo, payingCount),
     maker: calculateConversionRate(plans.Maker, payingCount),
@@ -1906,7 +1902,7 @@ async function releaseGlobalStatsNotificationDeliveryClaim(c: Context, db: Retur
   }
 }
 
-async function shouldSkipCompletedLogsnagInsightsRetryDispatch(c: Context, dateId: string, retryCount: number): Promise<boolean> {
+async function shouldSkipCompletedGlobalStatsRetryDispatch(c: Context, dateId: string, retryCount: number): Promise<boolean> {
   if (retryCount <= 0)
     return false
 
@@ -1916,10 +1912,10 @@ async function shouldSkipCompletedLogsnagInsightsRetryDispatch(c: Context, dateI
     return false
 
   if (!completedShards.has('notifications')) {
-    const queued = await queueLogsnagInsightsShard(c, 'notifications', dateId)
+    const queued = await queueGlobalStatsShard(c, 'notifications', dateId)
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'Queued missing logsnag insights notification shard for completed retry',
+      message: 'Queued missing global stats notification shard for completed retry',
       dateId,
       retryCount,
       queued,
@@ -1930,7 +1926,7 @@ async function shouldSkipCompletedLogsnagInsightsRetryDispatch(c: Context, dateI
 
   cloudlog({
     requestId: c.get('requestId'),
-    message: 'Skipping completed logsnag insights retry dispatch',
+    message: 'Skipping completed global stats retry dispatch',
     dateId,
     retryCount,
     completedShards: Array.from(completedShards).sort((a, b) => a.localeCompare(b)),
@@ -2033,17 +2029,17 @@ async function runGlobalStatsNotificationProviderStep(
   completedShards.add(sentMarker)
 }
 
-function getLogsnagInsightsShardDelaySeconds(shard: GlobalStatsShard): number {
-  return shard === 'notifications' ? LOGSNAG_INSIGHTS_NOTIFICATION_DELAY_SECONDS : 0
+function getGlobalStatsShardDelaySeconds(shard: GlobalStatsShard): number {
+  return shard === 'notifications' ? GLOBAL_STATS_NOTIFICATION_DELAY_SECONDS : 0
 }
 
-async function queueLogsnagInsightsMessage(
+async function queueGlobalStatsMessage(
   db: ReturnType<typeof getPgClient>,
-  message: ReturnType<typeof buildLogsnagInsightsRetryMessage> | ReturnType<typeof buildLogsnagInsightsShardMessage>,
+  message: ReturnType<typeof buildGlobalStatsRetryMessage> | ReturnType<typeof buildGlobalStatsShardMessage>,
   delaySeconds: number,
 ): Promise<number> {
   const result = await db.query<{ msg_id: number | string }>('SELECT pgmq.send($1::text, $2::jsonb, $3::integer) AS msg_id', [
-    LOGSNAG_INSIGHTS_QUEUE_NAME,
+    GLOBAL_STATS_QUEUE_NAME,
     JSON.stringify(message),
     delaySeconds,
   ])
@@ -2053,12 +2049,12 @@ async function queueLogsnagInsightsMessage(
   return msgId
 }
 
-async function queueLogsnagInsightsShard(c: Context, shard: GlobalStatsShard, dateId: string): Promise<{ shard: GlobalStatsShard, msgId: number, delaySeconds: number }> {
+async function queueGlobalStatsShard(c: Context, shard: GlobalStatsShard, dateId: string): Promise<{ shard: GlobalStatsShard, msgId: number, delaySeconds: number }> {
   const db = getPgClient(c)
 
   try {
-    const delaySeconds = getLogsnagInsightsShardDelaySeconds(shard)
-    const msgId = await queueLogsnagInsightsMessage(db, buildLogsnagInsightsShardMessage(shard, dateId), delaySeconds)
+    const delaySeconds = getGlobalStatsShardDelaySeconds(shard)
+    const msgId = await queueGlobalStatsMessage(db, buildGlobalStatsShardMessage(shard, dateId), delaySeconds)
     return { shard, msgId, delaySeconds }
   }
   finally {
@@ -2066,7 +2062,7 @@ async function queueLogsnagInsightsShard(c: Context, shard: GlobalStatsShard, da
   }
 }
 
-async function queueLogsnagInsightsShards(
+async function queueGlobalStatsShards(
   c: Context,
   dateId: string,
   shards: readonly GlobalStatsShard[],
@@ -2079,8 +2075,8 @@ async function queueLogsnagInsightsShards(
 
   try {
     for (const shard of shards) {
-      const delaySeconds = getLogsnagInsightsShardDelaySeconds(shard)
-      const msgId = await queueLogsnagInsightsMessage(db, buildLogsnagInsightsShardMessage(shard, dateId), delaySeconds)
+      const delaySeconds = getGlobalStatsShardDelaySeconds(shard)
+      const msgId = await queueGlobalStatsMessage(db, buildGlobalStatsShardMessage(shard, dateId), delaySeconds)
       queued.push({ shard, msgId, delaySeconds })
     }
   }
@@ -2091,7 +2087,7 @@ async function queueLogsnagInsightsShards(
   return queued
 }
 
-async function queueMissingLogsnagInsightsShards(
+async function queueMissingGlobalStatsShards(
   c: Context,
   dateId: string,
   completedShards: ReadonlySet<GlobalStatsCompletionMarker>,
@@ -2099,19 +2095,19 @@ async function queueMissingLogsnagInsightsShards(
   staleShards: readonly GlobalStatsShard[] = [],
 ): Promise<Array<{ shard: GlobalStatsShard, msgId: number, delaySeconds: number }>> {
   const shardsToQueue = getGlobalStatsRepairShardQueueCandidates(completedShards, staleShards, candidateShards)
-  return queueLogsnagInsightsShards(c, dateId, shardsToQueue)
+  return queueGlobalStatsShards(c, dateId, shardsToQueue)
 }
 
-function getLogsnagInsightsShardQueueKey(shard: GlobalStatsShard, dateId: string): string {
-  return `${dateId}:${getLogsnagInsightsShardFunctionName(shard)}`
+function getGlobalStatsShardQueueKey(shard: GlobalStatsShard, dateId: string): string {
+  return `${dateId}:${getGlobalStatsShardFunctionName(shard)}`
 }
 
-async function readQueuedLogsnagInsightsShardKeys(c: Context, dateIds: readonly string[]): Promise<Set<string>> {
+async function readQueuedGlobalStatsShardKeys(c: Context, dateIds: readonly string[]): Promise<Set<string>> {
   if (dateIds.length === 0)
     return new Set()
 
   const db = getPgClient(c)
-  const functionNames = GLOBAL_STATS_SHARDS.map(shard => getLogsnagInsightsShardFunctionName(shard))
+  const functionNames = GLOBAL_STATS_SHARDS.map(shard => getGlobalStatsShardFunctionName(shard))
 
   try {
     const result = await db.query<{ function_name: string | null, date_id: string | null }>(
@@ -2237,7 +2233,7 @@ async function repairRecentMissingGlobalStatsSnapshots(c: Context, anchorDateId:
 
   const [repairRows, queuedShardKeys] = await Promise.all([
     readGlobalStatsRepairRows(c, dateIds),
-    readQueuedLogsnagInsightsShardKeys(c, dateIds),
+    readQueuedGlobalStatsShardKeys(c, dateIds),
   ])
   const missingDateIds = dateIds.filter(dateId => !repairRows.has(dateId))
   await ensureGlobalStatsSnapshotRows(c, missingDateIds)
@@ -2254,9 +2250,9 @@ async function repairRecentMissingGlobalStatsSnapshots(c: Context, anchorDateId:
     const completedShards = repairRow?.completedShards ?? new Set<GlobalStatsCompletionMarker>()
     const staleShards = repairRow ? getGlobalStatsStaleRepairShards(repairRow, buildStatsByDate.get(dateId) ?? getEmptyBuildShardStats()) : []
     const shardsToQueue = getGlobalStatsRepairShardQueueCandidates(completedShards, staleShards)
-      .filter(shard => !queuedShardKeys.has(getLogsnagInsightsShardQueueKey(shard, dateId)))
+      .filter(shard => !queuedShardKeys.has(getGlobalStatsShardQueueKey(shard, dateId)))
 
-    const queued = await queueLogsnagInsightsShards(c, dateId, shardsToQueue)
+    const queued = await queueGlobalStatsShards(c, dateId, shardsToQueue)
     if (queued.length > 0)
       queuedByDate.push({ dateId, staleShards, queued })
   }
@@ -2272,7 +2268,7 @@ async function repairRecentMissingGlobalStatsSnapshots(c: Context, anchorDateId:
   }
 }
 
-async function dispatchMissingLogsnagInsightsShardsFor(
+async function dispatchMissingGlobalStatsShardsFor(
   c: Context,
   dateId: string,
   candidateShards: readonly GlobalStatsShard[] | undefined,
@@ -2286,7 +2282,7 @@ async function dispatchMissingLogsnagInsightsShardsFor(
     ? (await readDailyBuildStatsByDate(c, [dateId])).get(dateId) ?? getEmptyBuildShardStats()
     : getEmptyBuildShardStats()
   const staleShards = repairRow ? getGlobalStatsStaleRepairShards(repairRow, buildStats) : []
-  const queued = await queueMissingLogsnagInsightsShards(c, dateId, completedShards, candidateShards, staleShards)
+  const queued = await queueMissingGlobalStatsShards(c, dateId, completedShards, candidateShards, staleShards)
   const completedShardNames = Array.from(completedShards).sort((a, b) => a.localeCompare(b))
 
   if (queued.length === 0) {
@@ -2310,34 +2306,34 @@ async function dispatchMissingLogsnagInsightsShardsFor(
   })
 }
 
-async function dispatchMissingLogsnagInsightsShards(c: Context, dateId: string): Promise<void> {
-  await dispatchMissingLogsnagInsightsShardsFor(
+async function dispatchMissingGlobalStatsShards(c: Context, dateId: string): Promise<void> {
+  await dispatchMissingGlobalStatsShardsFor(
     c,
     dateId,
     undefined,
-    'No missing logsnag insights global stats shards to queue',
-    'Queued missing logsnag insights global stats shards',
+    'No missing global stats shards to queue',
+    'Queued missing global stats shards',
   )
 }
 
-async function dispatchMissingLogsnagInsightsUsageShards(c: Context, dateId: string): Promise<void> {
-  await dispatchMissingLogsnagInsightsShardsFor(
+async function dispatchMissingGlobalStatsUsageShards(c: Context, dateId: string): Promise<void> {
+  await dispatchMissingGlobalStatsShardsFor(
     c,
     dateId,
     USAGE_GLOBAL_STATS_SHARDS,
-    'No missing logsnag insights usage shards to queue',
-    'Queued missing logsnag insights usage shards',
+    'No missing global stats usage shards to queue',
+    'Queued missing global stats usage shards',
   )
 }
 
-async function dispatchLogsnagInsightsShards(c: Context, dateId: string): Promise<void> {
+async function dispatchGlobalStatsShards(c: Context, dateId: string): Promise<void> {
   await ensureGlobalStatsSnapshotRow(c, dateId)
   const completedShards = await readCompletedGlobalStatsShards(c, dateId)
-  const queued = await queueMissingLogsnagInsightsShards(c, dateId, completedShards)
+  const queued = await queueMissingGlobalStatsShards(c, dateId, completedShards)
 
   cloudlog({
     requestId: c.get('requestId'),
-    message: 'Queued logsnag insights global stats shards',
+    message: 'Queued global stats shards',
     dateId,
     queued,
     completedShards: Array.from(completedShards).sort((a, b) => a.localeCompare(b)),
@@ -3291,12 +3287,6 @@ function getNumber(value: number | null | undefined): number {
   return Number(value) || 0
 }
 
-function formatPercentCount(count: number, total: number): string {
-  if (total <= 0)
-    return `0% - ${count}`
-  return `${(count * 100 / total).toFixed(0)}% - ${count}`
-}
-
 interface NativeNotificationGlobalStats {
   apps: number
   providers: number
@@ -3445,63 +3435,9 @@ async function runNotificationsGlobalStatsShard(c: Context, window: DailyWindow)
       }, undefined, { alert: false })
     }
 
-    const paying = getNumber(snapshot.paying)
     const bundle_storage_gb = getNumber(snapshot.bundle_storage_gb)
     const success_rate = getNumber(snapshot.success_rate)
     const org_conversion_rate = getNumber(snapshot.org_conversion_rate)
-    const plans = normalizePlanTotals({
-      Credits: getNumber(snapshot.plan_credits),
-      Enterprise: getNumber(snapshot.plan_enterprise),
-      Maker: getNumber(snapshot.plan_maker),
-      Solo: getNumber(snapshot.plan_solo),
-      Team: getNumber(snapshot.plan_team),
-      Trial: getNumber(snapshot.trial),
-    })
-
-    await runGlobalStatsNotificationProviderStep(
-      c,
-      window.prevDayDateId,
-      'logsnag',
-      completedShards,
-      GLOBAL_STATS_NOTIFICATION_LOGSNAG_STEP,
-      GLOBAL_STATS_NOTIFICATION_LOGSNAG_CLAIM,
-      async () => {
-        await logsnagInsights(c, [
-          { title: 'Apps', value: apps, icon: '📱' },
-          { title: 'Active Apps', value: getNumber(snapshot.apps_active), icon: '💃' },
-          { title: 'Updates', value: getNumber(snapshot.updates), icon: '📲' },
-          { title: 'Updates on premises', value: getNumber(snapshot.updates_external), icon: '📲' },
-          { title: 'Updates last month', value: getNumber(snapshot.updates_last_month), icon: '📲' },
-          { title: 'Bundle Storage (GB)', value: `${bundle_storage_gb.toFixed(2)} GB`, icon: '💾' },
-          { title: 'Total Users', value: users, icon: '👨' },
-          { title: 'Active Users', value: getNumber(snapshot.users_active), icon: '🎉' },
-          { title: 'Registrations Today', value: getNumber(snapshot.registers_today), icon: '🆕' },
-          { title: 'User onboarded', value: getNumber(snapshot.onboarded), icon: '✅' },
-          { title: 'Orgs', value: orgs, icon: '🏢' },
-          { title: 'Orgs with trial', value: plans.Trial, icon: '👶' },
-          { title: 'Orgs paying', value: paying, icon: '💰' },
-          { title: 'Org conversion rate', value: `${org_conversion_rate.toFixed(1)}%`, icon: '🎯' },
-          { title: 'Orgs yearly', value: formatPercentCount(getNumber(snapshot.paying_yearly), paying), icon: '🧧' },
-          { title: 'Orgs monthly', value: formatPercentCount(getNumber(snapshot.paying_monthly), paying), icon: '🗓️' },
-          { title: 'Orgs not paying', value: getNumber(snapshot.not_paying), icon: '🥲' },
-          { title: 'Orgs need upgrade', value: getNumber(snapshot.need_upgrade), icon: '🤒' },
-          { title: 'Orgs Solo Plan', value: formatPercentCount(plans.Solo, paying), icon: '🎸' },
-          { title: 'Orgs Maker Plan', value: formatPercentCount(plans.Maker, paying), icon: '🤝' },
-          { title: 'Orgs Team Plan', value: formatPercentCount(plans.Team, paying), icon: '👏' },
-          { title: 'Orgs Enterprise Plan', value: formatPercentCount(plans.Enterprise, paying), icon: '📈' },
-          { title: 'Orgs Credits Plan', value: plans.Credits, icon: '🪙' },
-          { title: 'Devices iOS (30d)', value: getNumber(snapshot.devices_last_month_ios), icon: '🍎' },
-          { title: 'Devices Android (30d)', value: getNumber(snapshot.devices_last_month_android), icon: '🤖' },
-          { title: 'Total Builds', value: getNumber(snapshot.builds_total), icon: '🔨' },
-          { title: 'iOS Builds', value: getNumber(snapshot.builds_ios), icon: '🍏' },
-          { title: 'Android Builds', value: getNumber(snapshot.builds_android), icon: '🤖' },
-          { title: 'Builds (30d)', value: getNumber(snapshot.builds_last_month), icon: '🔨' },
-          { title: 'iOS Builds (30d)', value: getNumber(snapshot.builds_last_month_ios), icon: '🍏' },
-          { title: 'Android Builds (30d)', value: getNumber(snapshot.builds_last_month_android), icon: '🤖' },
-        ], { strict: true })
-      },
-    )
-
     await runGlobalStatsNotificationProviderStep(
       c,
       window.prevDayDateId,
@@ -3521,27 +3457,26 @@ async function runNotificationsGlobalStatsShard(c: Context, window: DailyWindow)
             storage_gb: bundle_storage_gb,
             org_conversion_rate,
           },
-          icon: '📲',
         }, { background: false, strict: true })
       },
     )
 
     await markGlobalStatsShardComplete(c, window.prevDayDateId, 'notifications')
-    cloudlog({ requestId: c.get('requestId'), message: 'Sent logsnag insights from global stats snapshot', dateId: window.prevDayDateId })
+    cloudlog({ requestId: c.get('requestId'), message: 'Sent global stats tracking event from snapshot', dateId: window.prevDayDateId })
   }
   finally {
     await releaseGlobalStatsNotificationDeliveryClaim(c, notificationClaim, window.prevDayDateId)
   }
 }
 
-function scheduleLogsnagInsightsUpdate(
+function scheduleGlobalStatsUpdate(
   c: Context,
-  runUpdate: (c: Context) => Promise<void> = runLogsnagInsightsUpdate,
-  options: ScheduleLogsnagInsightsUpdateOptions = {},
+  runUpdate: (c: Context) => Promise<void> = runGlobalStatsUpdate,
+  options: ScheduleGlobalStatsUpdateOptions = {},
 ) {
   const retryCount = options.retryCount ?? 0
   const retryMsgId = options.retryMsgId ?? null
-  const cancelRetry = options.cancelRetry ?? cancelLogsnagInsightsRetry
+  const cancelRetry = options.cancelRetry ?? cancelGlobalStatsRetry
   let updateSucceeded = false
   const task = Promise.resolve()
     .then(() => runUpdate(c))
@@ -3552,29 +3487,30 @@ function scheduleLogsnagInsightsUpdate(
       await cancelRetry(c, retryMsgId)
     })
     .catch(async (error: unknown) => {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'logsnag insights background task failed', retryCount, retryMsgId, updateSucceeded, error })
+      cloudlogErr({ requestId: c.get('requestId'), message: 'global stats background task failed', retryCount, retryMsgId, updateSucceeded, error })
       if (retryMsgId !== null && !updateSucceeded)
         return
       if (retryMsgId !== null)
         throw error
-      if (retryCount >= LOGSNAG_INSIGHTS_BACKGROUND_MAX_RETRIES) {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'logsnag insights background retry budget exhausted', retryCount, error })
+      if (retryCount >= GLOBAL_STATS_BACKGROUND_MAX_RETRIES) {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'global stats background retry budget exhausted', retryCount, error })
         throw error
       }
     })
 
-  if (retryMsgId === null && retryCount >= LOGSNAG_INSIGHTS_BACKGROUND_MAX_RETRIES)
+  if (retryMsgId === null && retryCount >= GLOBAL_STATS_BACKGROUND_MAX_RETRIES)
     return task
 
   return backgroundTask(c, task)
 }
 
-export const logsnagInsightsTestUtils = {
-  buildLogsnagInsightsRetryMessage,
-  buildLogsnagInsightsShardMessage,
-  readLogsnagInsightsPayload,
+export const globalStatsTestUtils = {
+  buildGlobalStatsRetryMessage,
+  buildGlobalStatsShardMessage,
+  readGlobalStatsPayload,
   REVENUE_ACTIVE_STRIPE_STATUSES,
-  LOGSNAG_INSIGHTS_BACKGROUND_MAX_RETRIES,
+  GLOBAL_STATS_BACKGROUND_MAX_RETRIES,
+  GLOBAL_STATS_NOTIFICATION_LOCK_NAMESPACE,
   USAGE_GLOBAL_STATS_SHARDS,
   calculatePastDueOrgStats,
   calculateSubscriptionAccessSnapshotCounts,
@@ -3606,13 +3542,13 @@ export const logsnagInsightsTestUtils = {
   summarizeAppBuildOnboardingRows,
   getGlobalStatsNotificationStepAction,
   normalizeCompletedGlobalStatsShards,
-  getLogsnagInsightsShardFunctionName,
+  getGlobalStatsShardFunctionName,
   getCompletedDayWindow,
   getCurrentDayWindow,
   getPreviousDateId,
   normalizeGlobalStatsDateId,
-  normalizeLogsnagInsightsShard,
-  normalizeLogsnagInsightsRetryCount,
+  normalizeGlobalStatsShard,
+  normalizeGlobalStatsRetryCount,
   normalizePlanTotals,
   normalizeBillingSnapshotCounts,
   isUnpaidAtBillingSnapshot,
@@ -3623,20 +3559,20 @@ export const logsnagInsightsTestUtils = {
   normalizeCoreSnapshotCounts,
   getBillingSnapshotCounts,
   getCoreSnapshotCounts,
-  reserveLogsnagInsightsRetry,
-  reserveLogsnagInsightsShardRetry,
-  scheduleLogsnagInsightsUpdate,
-  scheduleLogsnagInsightsShardUpdate,
+  reserveGlobalStatsRetry,
+  reserveGlobalStatsShardRetry,
+  scheduleGlobalStatsUpdate,
+  scheduleGlobalStatsShardUpdate,
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
-async function runLogsnagInsightsShard(c: Context, shard: GlobalStatsShard, dateId: string): Promise<void> {
+async function runGlobalStatsShard(c: Context, shard: GlobalStatsShard, dateId: string): Promise<void> {
   const completedShards = await readCompletedGlobalStatsShards(c, dateId)
   if (await shouldSkipGlobalStatsShardUpdate(c, dateId, completedShards, shard)) {
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'Skipping completed logsnag insights shard retry',
+      message: 'Skipping completed global stats shard retry',
       shard,
       dateId,
     })
@@ -3711,16 +3647,16 @@ async function runLogsnagInsightsShard(c: Context, shard: GlobalStatsShard, date
   }
 }
 
-function scheduleLogsnagInsightsShardUpdate(
+function scheduleGlobalStatsShardUpdate(
   c: Context,
   shard: GlobalStatsShard,
   dateId: string,
-  options: ScheduleLogsnagInsightsShardOptions = {},
+  options: ScheduleGlobalStatsShardOptions = {},
 ) {
   const retryCount = options.retryCount ?? 0
   const retryMsgId = options.retryMsgId ?? null
-  const cancelRetry = options.cancelRetry ?? cancelLogsnagInsightsRetry
-  const runShard = options.runShard ?? runLogsnagInsightsShard
+  const cancelRetry = options.cancelRetry ?? cancelGlobalStatsRetry
+  const runShard = options.runShard ?? runGlobalStatsShard
   let updateSucceeded = false
   const task = Promise.resolve()
     .then(() => runShard(c, shard, dateId))
@@ -3731,37 +3667,37 @@ function scheduleLogsnagInsightsShardUpdate(
       await cancelRetry(c, retryMsgId)
     })
     .catch(async (error: unknown) => {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'logsnag insights shard background task failed', shard, dateId, retryCount, retryMsgId, updateSucceeded, error })
+      cloudlogErr({ requestId: c.get('requestId'), message: 'global stats shard background task failed', shard, dateId, retryCount, retryMsgId, updateSucceeded, error })
       if (retryMsgId !== null && !updateSucceeded)
         return
       if (retryMsgId !== null)
         throw error
-      if (retryCount >= LOGSNAG_INSIGHTS_BACKGROUND_MAX_RETRIES) {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'logsnag insights shard background retry budget exhausted', shard, dateId, retryCount, error })
+      if (retryCount >= GLOBAL_STATS_BACKGROUND_MAX_RETRIES) {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'global stats shard background retry budget exhausted', shard, dateId, retryCount, error })
         throw error
       }
     })
 
-  if (retryMsgId === null && retryCount >= LOGSNAG_INSIGHTS_BACKGROUND_MAX_RETRIES)
+  if (retryMsgId === null && retryCount >= GLOBAL_STATS_BACKGROUND_MAX_RETRIES)
     return task
 
   return backgroundTask(c, task)
 }
 
-async function runLogsnagInsightsUpdate(c: Context, dateId = getDailyWindow().prevDayDateId, retryCount = 0): Promise<void> {
+async function runGlobalStatsUpdate(c: Context, dateId = getDailyWindow().prevDayDateId, retryCount = 0): Promise<void> {
   await repairRecentMissingGlobalStatsSnapshots(c, dateId)
-  if (await shouldSkipCompletedLogsnagInsightsRetryDispatch(c, dateId, retryCount))
+  if (await shouldSkipCompletedGlobalStatsRetryDispatch(c, dateId, retryCount))
     return
 
   if (retryCount > 0) {
-    await dispatchMissingLogsnagInsightsShards(c, dateId)
+    await dispatchMissingGlobalStatsShards(c, dateId)
     return
   }
 
-  await dispatchLogsnagInsightsShards(c, dateId)
+  await dispatchGlobalStatsShards(c, dateId)
 }
 
-function resolveLogsnagInsightsSnapshotDateId(payload: LogsnagInsightsPayload): string {
+function resolveGlobalStatsSnapshotDateId(payload: GlobalStatsPayload): string {
   const payloadDateId = normalizeGlobalStatsDateId(payload.date_id)
   if (payload.date_id !== undefined && payloadDateId === null)
     quickError(400, 'invalid_global_stats_date_id', 'Invalid global stats date_id', { date_id: payload.date_id }, undefined, { alert: false })
@@ -3769,83 +3705,83 @@ function resolveLogsnagInsightsSnapshotDateId(payload: LogsnagInsightsPayload): 
   return payloadDateId ?? getDailyWindow().prevDayDateId
 }
 
-async function scheduleLogsnagInsightsShardRequest(c: Context, shard: GlobalStatsShard, snapshotDateId: string, retryCount: number): Promise<void> {
+async function scheduleGlobalStatsShardRequest(c: Context, shard: GlobalStatsShard, snapshotDateId: string, retryCount: number): Promise<void> {
   let retryMsgId: number | null = null
 
   try {
-    retryMsgId = await reserveLogsnagInsightsShardRetry(c, shard, snapshotDateId, retryCount)
+    retryMsgId = await reserveGlobalStatsShardRetry(c, shard, snapshotDateId, retryCount)
   }
   catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to reserve logsnag insights shard retry', shard, retryCount, dateId: snapshotDateId, error })
-    quickError(503, 'logsnag_insights_shard_retry_reserve_failed', 'Failed to reserve logsnag insights shard retry', { shard, retryCount, dateId: snapshotDateId }, error, { alert: false })
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to reserve global stats shard retry', shard, retryCount, dateId: snapshotDateId, error })
+    quickError(503, 'global_stats_shard_retry_reserve_failed', 'Failed to reserve global stats shard retry', { shard, retryCount, dateId: snapshotDateId }, error, { alert: false })
   }
 
-  await scheduleLogsnagInsightsShardUpdate(c, shard, snapshotDateId, {
+  await scheduleGlobalStatsShardUpdate(c, shard, snapshotDateId, {
     retryCount,
     retryMsgId,
   })
 }
 
-function createLogsnagInsightsShardApp(shard: GlobalStatsShard): Hono<MiddlewareKeyVariables> {
+function createGlobalStatsShardApp(shard: GlobalStatsShard): Hono<MiddlewareKeyVariables> {
   const shardApp = new Hono<MiddlewareKeyVariables>()
 
   shardApp.post('/', middlewareAPISecret, async (c) => {
-    const payload = await readLogsnagInsightsPayload(c)
-    const snapshotDateId = resolveLogsnagInsightsSnapshotDateId(payload)
-    const retryCount = normalizeLogsnagInsightsRetryCount(payload.retry_count)
+    const payload = await readGlobalStatsPayload(c)
+    const snapshotDateId = resolveGlobalStatsSnapshotDateId(payload)
+    const retryCount = normalizeGlobalStatsRetryCount(payload.retry_count)
 
     if (payload.shard !== undefined) {
-      const payloadShard = normalizeLogsnagInsightsShard(payload.shard)
+      const payloadShard = normalizeGlobalStatsShard(payload.shard)
       if (payloadShard !== shard)
         quickError(400, 'invalid_global_stats_shard', 'Invalid global stats shard', { shard: payload.shard, expected: shard }, undefined, { alert: false })
     }
 
-    await scheduleLogsnagInsightsShardRequest(c, shard, snapshotDateId, retryCount)
+    await scheduleGlobalStatsShardRequest(c, shard, snapshotDateId, retryCount)
     return c.json(BRES, 202)
   })
 
   return shardApp
 }
 
-export const logsnagInsightsLegacyUsageApp = new Hono<MiddlewareKeyVariables>()
+export const globalStatsLegacyUsageApp = new Hono<MiddlewareKeyVariables>()
 
-logsnagInsightsLegacyUsageApp.post('/', middlewareAPISecret, async (c) => {
-  const payload = await readLogsnagInsightsPayload(c)
-  const snapshotDateId = resolveLogsnagInsightsSnapshotDateId(payload)
-  await dispatchMissingLogsnagInsightsUsageShards(c, snapshotDateId)
+globalStatsLegacyUsageApp.post('/', middlewareAPISecret, async (c) => {
+  const payload = await readGlobalStatsPayload(c)
+  const snapshotDateId = resolveGlobalStatsSnapshotDateId(payload)
+  await dispatchMissingGlobalStatsUsageShards(c, snapshotDateId)
   return c.json(BRES, 202)
 })
 
-export const logsnagInsightsShardApps: Record<GlobalStatsShard, Hono<MiddlewareKeyVariables>> = {
-  core: createLogsnagInsightsShardApp('core'),
-  usage_updates: createLogsnagInsightsShardApp('usage_updates'),
-  usage_devices: createLogsnagInsightsShardApp('usage_devices'),
-  usage_device_platforms: createLogsnagInsightsShardApp('usage_device_platforms'),
-  usage_registrations: createLogsnagInsightsShardApp('usage_registrations'),
-  usage_storage: createLogsnagInsightsShardApp('usage_storage'),
-  usage_success_rate: createLogsnagInsightsShardApp('usage_success_rate'),
-  usage_demo_apps: createLogsnagInsightsShardApp('usage_demo_apps'),
-  revenue: createLogsnagInsightsShardApp('revenue'),
-  plugins: createLogsnagInsightsShardApp('plugins'),
-  builds: createLogsnagInsightsShardApp('builds'),
-  retention: createLogsnagInsightsShardApp('retention'),
-  paid_products: createLogsnagInsightsShardApp('paid_products'),
-  ltv: createLogsnagInsightsShardApp('ltv'),
-  notifications: createLogsnagInsightsShardApp('notifications'),
-  native_notifications: createLogsnagInsightsShardApp('native_notifications'),
+export const globalStatsShardApps: Record<GlobalStatsShard, Hono<MiddlewareKeyVariables>> = {
+  core: createGlobalStatsShardApp('core'),
+  usage_updates: createGlobalStatsShardApp('usage_updates'),
+  usage_devices: createGlobalStatsShardApp('usage_devices'),
+  usage_device_platforms: createGlobalStatsShardApp('usage_device_platforms'),
+  usage_registrations: createGlobalStatsShardApp('usage_registrations'),
+  usage_storage: createGlobalStatsShardApp('usage_storage'),
+  usage_success_rate: createGlobalStatsShardApp('usage_success_rate'),
+  usage_demo_apps: createGlobalStatsShardApp('usage_demo_apps'),
+  revenue: createGlobalStatsShardApp('revenue'),
+  plugins: createGlobalStatsShardApp('plugins'),
+  builds: createGlobalStatsShardApp('builds'),
+  retention: createGlobalStatsShardApp('retention'),
+  paid_products: createGlobalStatsShardApp('paid_products'),
+  ltv: createGlobalStatsShardApp('ltv'),
+  notifications: createGlobalStatsShardApp('notifications'),
+  native_notifications: createGlobalStatsShardApp('native_notifications'),
 }
 
 app.post('/', middlewareAPISecret, async (c) => {
-  const payload = await readLogsnagInsightsPayload(c)
-  const snapshotDateId = resolveLogsnagInsightsSnapshotDateId(payload)
-  const retryCount = normalizeLogsnagInsightsRetryCount(payload.retry_count)
+  const payload = await readGlobalStatsPayload(c)
+  const snapshotDateId = resolveGlobalStatsSnapshotDateId(payload)
+  const retryCount = normalizeGlobalStatsRetryCount(payload.retry_count)
 
   if (payload.shard !== undefined) {
-    const shard = normalizeLogsnagInsightsShard(payload.shard)
+    const shard = normalizeGlobalStatsShard(payload.shard)
     if (shard === null)
       quickError(400, 'invalid_global_stats_shard', 'Invalid global stats shard', { shard: payload.shard }, undefined, { alert: false })
 
-    await scheduleLogsnagInsightsShardRequest(c, shard, snapshotDateId, retryCount)
+    await scheduleGlobalStatsShardRequest(c, shard, snapshotDateId, retryCount)
     return c.json(BRES, 202)
   }
 
@@ -3853,14 +3789,14 @@ app.post('/', middlewareAPISecret, async (c) => {
 
   try {
     // Reserve the next delayed dispatcher retry before returning 202 so queue_consumer can acknowledge the current message safely.
-    retryMsgId = await reserveLogsnagInsightsRetry(c, retryCount, snapshotDateId)
+    retryMsgId = await reserveGlobalStatsRetry(c, retryCount, snapshotDateId)
   }
   catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to reserve logsnag insights dispatcher retry', retryCount, dateId: snapshotDateId, error })
-    quickError(503, 'logsnag_insights_retry_reserve_failed', 'Failed to reserve logsnag insights retry', { retryCount, dateId: snapshotDateId }, error, { alert: false })
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to reserve global stats dispatcher retry', retryCount, dateId: snapshotDateId, error })
+    quickError(503, 'global_stats_retry_reserve_failed', 'Failed to reserve global stats retry', { retryCount, dateId: snapshotDateId }, error, { alert: false })
   }
 
-  await scheduleLogsnagInsightsUpdate(c, context => runLogsnagInsightsUpdate(context, snapshotDateId, retryCount), {
+  await scheduleGlobalStatsUpdate(c, context => runGlobalStatsUpdate(context, snapshotDateId, retryCount), {
     retryCount,
     retryMsgId,
   })

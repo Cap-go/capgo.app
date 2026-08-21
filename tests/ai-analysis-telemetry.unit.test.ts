@@ -35,8 +35,6 @@ describe('trackAiAnalysisChoice', () => {
     expect(payload).toMatchObject({
       event: 'CLI AI Build Analysis Choice',
       channel: 'build-lifecycle',
-      icon: '🤖',
-      notify: false,
       org_id: 'org-uuid-1',
       tracking_version: 2,
       tags: {
@@ -87,8 +85,6 @@ describe('trackAiAnalysisResult', () => {
     expect(payload).toMatchObject({
       event: 'CLI AI Build Analysis Result',
       channel: 'build-lifecycle',
-      icon: '🤖',
-      notify: false,
       org_id: 'org-uuid-1',
       tracking_version: 2,
       tags: {

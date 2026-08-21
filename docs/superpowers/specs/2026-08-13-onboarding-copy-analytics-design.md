@@ -71,7 +71,7 @@ event name and safe metadata through the existing authenticated
 The backend recognizes this exact event as an allowlisted frontend-captured
 event. It builds a server-owned Bento payload and sends it through the existing
 Bento tracking path, while disabling the backend PostHog provider for this
-request. LogSnag may continue to receive the backend event.
+request. Bento delivery still runs for the allowlisted event.
 
 Implement backend PostHog suppression as an internal option on the shared
 tracking dispatcher. The client cannot select arbitrary providers: the

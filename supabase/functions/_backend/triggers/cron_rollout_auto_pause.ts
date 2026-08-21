@@ -140,7 +140,6 @@ async function evaluateChannel(c: Parameters<typeof supabaseAdmin>[0], supabase:
     await sendEventToTracking(c, {
       channel: 'rollout-auto-pause',
       event: 'Rollout Auto-Pause Notification',
-      icon: '⚠️',
       user_id: channel.owner_org,
       groups: { organization: channel.owner_org },
       tags: {
@@ -150,7 +149,6 @@ async function evaluateChannel(c: Parameters<typeof supabaseAdmin>[0], supabase:
         rollout_version: versionName,
       },
       description: reason,
-      notify: true,
     }, { background: false })
   }
 

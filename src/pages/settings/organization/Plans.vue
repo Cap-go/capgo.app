@@ -184,10 +184,8 @@ function trackPlanCheckoutStarted(plan: Database['public']['Tables']['plans']['R
   sendEvent({
     channel: 'usage',
     event: 'Checkout Started',
-    icon: '💳',
     org_id: orgId,
     tracking_version: 2,
-    notify: false,
     tags: {
       product_id: plan.stripe_id,
       plan_name: plan.name,

@@ -76,10 +76,8 @@ function setLog() {
       sendEvent({
         channel: 'onboarding-bundle',
         event: `onboarding-bundle-step-${stepToName(step.value)}`,
-        icon: '👶',
         org_id: orgId,
         tracking_version: 2,
-        notify: false,
       }).catch()
       sendOnboardingEvent(`user:onboarding-bundle-${stepToName(step.value)}`, { org_id: orgId })
     }

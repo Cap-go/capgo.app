@@ -15,11 +15,6 @@ BEGIN
         PERFORM vault.create_secret('http://kong:8000', 'db_url', 'db url');
     END IF;
 
-    IF NOT EXISTS (SELECT 1 FROM vault.secrets WHERE name = 'CAPGO_RBAC_ENABLED') THEN
-        -- Master feature flag for RBAC. Set to "true" to force RBAC on by default.
-        PERFORM vault.create_secret('false', 'CAPGO_RBAC_ENABLED', 'enable RBAC globally');
-    END IF;
-
     IF NOT EXISTS (SELECT 1 FROM vault.secrets WHERE name = 'CAPGO_MFA_EMAIL_OTP_ENFORCED_AT') THEN
         -- RFC3339 cutoff string. Empty means no enforcement cutoff by default.
         PERFORM vault.create_secret('', 'CAPGO_MFA_EMAIL_OTP_ENFORCED_AT', 'mfa email otp enforcement cutoff');

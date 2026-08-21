@@ -521,7 +521,6 @@ export async function saveCredentialsCommand(options: SaveCredentialsOptions): P
         await sendEvent(apikey, {
           channel: 'credentials',
           event: 'Credentials saved',
-          icon: '🔐',
           org_id: orgId,
           tracking_version: 2,
           tags: {
@@ -529,7 +528,6 @@ export async function saveCredentialsCommand(options: SaveCredentialsOptions): P
             'platform': platform,
             'storage': options.local ? 'local' : 'global',
           },
-          notify: false,
         }).catch()
       }
     }
@@ -646,7 +644,7 @@ export async function listCredentialsCommand(options?: { appId?: string, local?:
     log.info('\n🔒 These credentials are stored locally on your machine only.')
     log.info('   When building, they are sent to Capgo but NEVER stored there.\n')
 
-    void trackEvent({ channel: 'credentials', event: 'Credentials Listed', icon: '📋', tags: { credentials_count: appsToShow.length } })
+    void trackEvent({ channel: 'credentials', event: 'Credentials Listed', tags: { credentials_count: appsToShow.length } })
   }
   catch (error) {
     log.error(`Failed to list credentials: ${error instanceof Error ? error.message : String(error)}`)
@@ -700,7 +698,7 @@ export async function clearCredentialsCommand(options: { appId?: string, platfor
 
     log.info(`   Location: ${credentialsPath}\n`)
 
-    void trackEvent({ channel: 'credentials', event: 'Credentials Cleared', icon: '🧹', tags: {} })
+    void trackEvent({ channel: 'credentials', event: 'Credentials Cleared', tags: {} })
   }
   catch (error) {
     log.error(`Failed to clear credentials: ${error instanceof Error ? error.message : String(error)}`)
@@ -955,7 +953,7 @@ export async function updateCredentialsCommand(options: SaveCredentialsOptions):
     log.success(`\n✅ ${platform.toUpperCase()} credentials updated for ${appId}!`)
     log.info(`   Location: ${credentialsPath}\n`)
 
-    void trackEvent({ channel: 'credentials', event: 'Credentials Updated', icon: '✏️', tags: {} })
+    void trackEvent({ channel: 'credentials', event: 'Credentials Updated', tags: {} })
   }
   catch (error) {
     log.error(`Failed to update credentials: ${error instanceof Error ? error.message : String(error)}`)
@@ -1097,7 +1095,7 @@ export async function migrateCredentialsCommand(options: { appId?: string, platf
 
     log.info('')
 
-    void trackEvent({ channel: 'credentials', event: 'Credentials Migrated', icon: '🔀', tags: {} })
+    void trackEvent({ channel: 'credentials', event: 'Credentials Migrated', tags: {} })
   }
   catch (error) {
     log.error(`Failed to migrate credentials: ${error instanceof Error ? error.message : String(error)}`)

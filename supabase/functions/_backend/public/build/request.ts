@@ -406,8 +406,6 @@ async function recordBuildRequestedTelemetry(c: Context, input: {
     await sendEventToTracking(c, {
       event: 'Build Requested',
       channel: 'build-lifecycle',
-      icon: '🛠️',
-      notify: false,
       user_id: input.user_id,
       groups: { organization: input.org_id },
       tags: {

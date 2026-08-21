@@ -86,10 +86,8 @@ async function trackBuildOnboardingWorkflowEventAsync(options: TrackBuildOnboard
   await sendEvent(apikey, {
     channel: 'native-builder',
     event: WORKFLOW_EVENT_NAMES[options.event],
-    icon: '🧭',
     org_id: orgId,
     tracking_version: 2,
     tags,
-    notify: false,
   })
 }

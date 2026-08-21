@@ -1,13 +1,20 @@
-import type { TrackOptions } from '@logsnag/node'
 import type { Context } from 'hono'
 import type { EmailPreferenceKey, NotificationAudience } from './org_email_notifications.ts'
 import type { PostHogGroups } from './posthog.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
-import { logsnag } from './logsnag.ts'
 import { sendNotifToOrgMembers, sendNotifToOrgMembersOnce } from './org_email_notifications.ts'
 import { getDrizzleClient, getPgClient } from './pg.ts'
 import { trackPosthogEvent } from './posthog.ts'
 import { backgroundTask } from './utils.ts'
+
+export interface TrackOptions {
+  channel: string
+  event: string
+  description?: string
+  user_id?: string
+  tags?: Record<string, string | number | boolean>
+  timestamp?: number | Date
+}
 
 export interface BentoTrackingPayload {
   /** Cron window for the throttle/dedupe. Used only when `once` is not set. */
@@ -90,33 +97,32 @@ function getTrackingIp(c: Context, ip?: string) {
   return c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for')?.split(',')[0]?.trim()
 }
 
-function getTrackingTimestamp(timestamp: TrackOptions['timestamp']) {
+function getTrackingTimestamp(timestamp?: number | Date) {
   if (timestamp === undefined)
     return undefined
 
   const date = timestamp instanceof Date ? timestamp : new Date(timestamp)
-  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
+  if (!Number.isFinite(date.getTime()))
+    return undefined
+
+  return date.toISOString()
 }
 
 async function executeTracking(c: Context, payload: SendEventToTrackingPayload, options: SendEventToTrackingOptions) {
-  const tasks: Array<Promise<void>> = [
-    runTrackedCall(c, 'logsnag', () => logsnag(c).track(payload), options.strict),
-  ]
-  if (options.posthog !== false) {
-    tasks.push(runTrackedCall(c, 'posthog', () => trackPosthogEvent(c, {
-      event: payload.event,
-      user_id: payload.user_id,
-      tags: payload.tags,
-      nonPersonTags: payload.nonPersonTags,
-      channel: payload.channel,
-      description: payload.description,
-      groups: payload.groups,
-      ip: getTrackingIp(c, options.ip),
-      timestamp: getTrackingTimestamp(payload.timestamp),
-    }), options.strict))
-  }
+  if (options.posthog === false)
+    return
 
-  await Promise.all(tasks)
+  await runTrackedCall(c, 'posthog', () => trackPosthogEvent(c, {
+    event: payload.event,
+    user_id: payload.user_id,
+    tags: payload.tags,
+    nonPersonTags: payload.nonPersonTags,
+    channel: payload.channel,
+    description: payload.description,
+    groups: payload.groups,
+    ip: getTrackingIp(c, options.ip),
+    timestamp: getTrackingTimestamp(payload.timestamp),
+  }), options.strict)
 }
 
 async function executeBentoTracking(c: Context, payload: SendEventToTrackingPayload, strict = false) {

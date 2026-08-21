@@ -754,13 +754,11 @@ export async function setChannelInternal(channel: string, appId: string, options
   await sendEvent(options.apikey, {
     channel: 'channel',
     event: 'Set channel',
-    icon: '✅',
     org_id: orgId,
     tracking_version: 2,
     tags: {
       'app-id': appId,
     },
-    notify: false,
   }).catch(() => {})
 
   if (!silent)

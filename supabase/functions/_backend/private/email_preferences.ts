@@ -85,6 +85,7 @@ function allPreferencesDisabled(): EmailPreferences {
     prefs[key] = false
   prefs.cli_realtime_feed = false
   prefs.daily_fail_ratio = false
+  prefs.app_too_large = false
   return prefs
 }
 

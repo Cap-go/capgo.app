@@ -117,7 +117,7 @@ export async function decryptZipInternal(
         log.info('Checksum matches')
     }
 
-    void trackEvent({ channel: 'bundle', event: 'Bundle Decrypted', icon: '🔓', tags: {} })
+    void trackEvent({ channel: 'bundle', event: 'Bundle Decrypted', tags: {} })
 
     if (!silent)
       outro('✅ done')

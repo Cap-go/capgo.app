@@ -193,10 +193,8 @@ function trackNoAppDemoEvent(event: string, tags: Record<string, string | number
     sendEvent({
       channel: 'demo-onboarding',
       event,
-      icon: '🧪',
       org_id: orgId,
       tracking_version: 2,
-      notify: false,
       tags,
     }).catch()
     sendOnboardingEvent(`user:${event}`, { org_id: orgId, ...tags })

@@ -11035,7 +11035,7 @@ COMMENT ON FUNCTION "public"."is_platform_admin"("userid" "uuid") IS 'Checks pla
 
 
 
-CREATE OR REPLACE FUNCTION "public"."is_rbac_enabled_globally"() RETURNS boolean
+CREATE OR REPLACE FUNCTION "public"."is_rbac_enabled_globally"() RETURNS 
     LANGUAGE "plpgsql" STABLE
     SET "search_path" TO ''
     AS $$
@@ -21735,7 +21735,7 @@ COMMENT ON COLUMN "public"."users"."github_username" IS 'Optional GitHub usernam
 
 
 
-COMMENT ON COLUMN "public"."users"."onboarding" IS 'Persisted create-app onboarding wizard progress for resume and admin drop-off. Keys: status, step, flow, intent, app_name, app_id, existing_app, existing_app_setup, store_url, imported_store_app_id, org_name, estimated_users_index, updated_at, completed_at.';
+COMMENT ON COLUMN "public"."users"."onboarding" IS 'Persisted create-app onboarding wizard progress for resume and admin drop-off. Keys: status, step, flow, intent, details_step, app_name, app_id, existing_app, existing_app_setup, store_url, imported_store_app_id, org_name, estimated_users_index, onboarding_attempt_id, last_run_id, updated_at, completed_at.';
 
 
 

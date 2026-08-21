@@ -132,6 +132,7 @@ declare module 'vue' {
     UpdateStatsChart: typeof import('./components/dashboard/UpdateStatsChart.vue')['default']
     Usage: typeof import('./components/dashboard/Usage.vue')['default']
     UsageCard: typeof import('./components/dashboard/UsageCard.vue')['default']
+    VersionCompareField: typeof import('./components/tables/VersionCompareField.vue')['default']
     WebhookDeliveryLog: typeof import('./components/WebhookDeliveryLog.vue')['default']
     WebhookForm: typeof import('./components/WebhookForm.vue')['default']
     WelcomeBanner: typeof import('./components/dashboard/WelcomeBanner.vue')['default']

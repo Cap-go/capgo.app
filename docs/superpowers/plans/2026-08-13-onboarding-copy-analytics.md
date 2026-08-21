@@ -289,7 +289,7 @@ git commit -m "feat(onboarding): copy AI instructions with API key"
 Add a test proving `posthog: false` skips only PostHog:
 
 ```ts
-it('can skip PostHog while preserving LogSnag and Bento delivery', async () => {
+it('can skip PostHog while preserving Bento delivery', async () => {
   const { sendEventToTracking } = await import('../supabase/functions/_backend/utils/tracking.ts')
 
   await sendEventToTracking(createContext(), {
@@ -306,7 +306,6 @@ it('can skip PostHog while preserving LogSnag and Bento delivery', async () => {
     user_id: 'org-id',
   }, { background: false, posthog: false })
 
-  expect(logsnagTrackMock).toHaveBeenCalledOnce()
   expect(posthogMock).not.toHaveBeenCalled()
   expect(notifToOrgMembersMock).toHaveBeenCalledOnce()
 })
@@ -336,8 +335,8 @@ export interface SendEventToTrackingOptions {
 }
 ```
 
-Build the tracking task list with LogSnag always present and PostHog added only
-when `options.posthog !== false`. Do not change Bento execution or defaults.
+Run PostHog only when `options.posthog !== false`. Do not change Bento execution
+or defaults.
 
 - [ ] **Step 4: Run the focused tracking test**
 

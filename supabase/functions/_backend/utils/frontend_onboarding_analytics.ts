@@ -8,6 +8,8 @@ import {
 } from './frontend_onboarding_analytics_model.ts'
 import { getFrontendOnboardingDailySetupCliEvents } from './frontend_onboarding_daily_setup_cli_outcomes.ts'
 import { buildFrontendOnboardingDailySetupCliOutcomes } from './frontend_onboarding_daily_setup_cli_outcomes_model.ts'
+import type { FrontendOnboardingWelcomeAttempt } from './frontend_onboarding_welcome_outcomes_model.ts'
+import { buildFrontendOnboardingWelcomeOutcomes } from './frontend_onboarding_welcome_outcomes_model.ts'
 import { cloudlogErr } from './logging.ts'
 import { queryPosthogHogql } from './posthog_read.ts'
 
@@ -170,11 +172,31 @@ function mapAttempts(rows: Record<string, unknown>[]): FrontendOnboardingAttempt
       personId: personId(row.person_id),
       intentMs,
       detailsMs: nullableMs(row.details_ms),
+      appNameMs: nullableMs(row.app_name_ms),
+      appIdMs: nullableMs(row.app_id_ms),
+      appIconMs: nullableMs(row.app_icon_ms),
       organizationMs: nullableMs(row.organization_ms),
       setupMs: nullableMs(row.setup_ms),
       aiInstructionsCopiedMs: timestamps(row.ai_instructions_copied_ms),
       cliStartedMs: timestamps(row.cli_started_ms),
       interactionEvents: interactionEvents(row.interaction_events),
+    }]
+  })
+}
+
+function mapWelcomeAttempts(rows: Record<string, unknown>[]): FrontendOnboardingWelcomeAttempt[] {
+  return rows.flatMap((row) => {
+    const id = attemptId(row.attempt_id)
+    const welcomeMs = nullableMs(row.welcome_ms)
+    const intentMs = nullableMs(row.intent_ms)
+    if (!id || (welcomeMs === null && intentMs === null))
+      return []
+
+    return [{
+      attemptId: id,
+      personId: personId(row.person_id),
+      welcomeMs,
+      intentMs,
     }]
   })
 }
@@ -207,6 +229,9 @@ export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: s
         toString(argMin(person_id, timestamp)) AS person_id,
         toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'intent')) AS intent_ms,
         toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step IN ('details', 'app_name'))) AS details_ms,
+        toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'app_name')) AS app_name_ms,
+        toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'app_id')) AS app_id_ms,
+        toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'app_icon')) AS app_icon_ms,
         toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'organization')) AS organization_ms,
         toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'setup')) AS setup_ms,
         groupUniqArrayIf(tuple(event, toUnixTimestamp64Milli(timestamp)), event IN (${interactionEventAllowlist})) AS interaction_events,
@@ -239,6 +264,9 @@ export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: s
       count() OVER () AS total_attempts,
       intent_ms,
       details_ms,
+      app_name_ms,
+      app_id_ms,
+      app_icon_ms,
       organization_ms,
       setup_ms,
       interaction_events,
@@ -247,6 +275,52 @@ export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: s
     FROM onboarding_attempts
     LEFT JOIN cli_starts USING person_id
     ORDER BY intent_ms ASC, onboarding_version ASC, attempt_id ASC
+    LIMIT ${FRONTEND_ONBOARDING_ATTEMPT_LIMIT}`
+}
+
+export function buildFrontendOnboardingWelcomeHogql(
+  eventStartDate: string,
+  cohortStartDate: string,
+  cohortEndDate: string,
+  followupEndDate: string,
+): string {
+  return `
+    WITH welcome_events AS (
+      SELECT
+        timestamp,
+        person_id,
+        JSONExtractString(toString(properties), 'onboarding_attempt_id') AS attempt_id,
+        JSONExtractString(toString(properties), 'step') AS step
+      FROM events
+      WHERE event = 'onboarding_step_viewed'
+        AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
+        AND JSONExtractString(toString(properties), '$host') = ${sqlStr(FRONTEND_ONBOARDING_PRODUCTION_HOST)}
+        AND toIntOrZero(toString(properties.onboarding_version)) = 4
+        AND timestamp >= parseDateTimeBestEffort(${sqlStr(eventStartDate)})
+        AND timestamp < parseDateTimeBestEffort(${sqlStr(followupEndDate)})
+    ), welcome_attempts AS (
+      SELECT
+        attempt_id,
+        toString(argMin(person_id, timestamp)) AS person_id,
+        toUnixTimestamp64Milli(minIf(timestamp, step = 'welcome')) AS welcome_ms,
+        toUnixTimestamp64Milli(minIf(timestamp, step = 'intent')) AS intent_ms,
+        if(welcome_ms > 0, welcome_ms, intent_ms) AS anchor_ms
+      FROM welcome_events
+      WHERE trim(attempt_id) != ''
+        AND step IN ('welcome', 'intent')
+      GROUP BY attempt_id
+      HAVING anchor_ms >= toUnixTimestamp64Milli(parseDateTimeBestEffort(${sqlStr(cohortStartDate)}))
+        AND anchor_ms < toUnixTimestamp64Milli(parseDateTimeBestEffort(${sqlStr(cohortEndDate)}))
+    )
+    SELECT
+      attempt_id,
+      person_id,
+      count() OVER () AS total_attempts,
+      welcome_ms,
+      intent_ms,
+      anchor_ms
+    FROM welcome_attempts
+    ORDER BY anchor_ms ASC, attempt_id ASC
     LIMIT ${FRONTEND_ONBOARDING_ATTEMPT_LIMIT}`
 }
 
@@ -271,7 +345,8 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
     throw new RangeError('derived analytics date boundaries must be within the supported PostHog range')
   }
 
-  const [posthog, dailySetupCliEvents] = await Promise.all([
+  const welcomeQueryStartMs = startMs - FRONTEND_ONBOARDING_FOLLOWUP_MS
+  const [posthog, dailySetupCliEvents, welcomePosthog] = await Promise.all([
     queryPosthogHogql(
       c,
       buildFrontendOnboardingHogql(
@@ -286,12 +361,29 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
       normalizedEndDate,
       new Date(dailyFollowupEndMs).toISOString(),
     ),
+    queryPosthogHogql(
+      c,
+      buildFrontendOnboardingWelcomeHogql(
+        new Date(welcomeQueryStartMs).toISOString(),
+        normalizedStartDate,
+        normalizedEndDate,
+        new Date(dailyFollowupEndMs).toISOString(),
+      ),
+    ),
   ])
   if (!posthog.configured || !posthog.connected || posthog.failureReason !== null)
     throw new Error('frontend onboarding analytics PostHog query failed')
+  if (!welcomePosthog.configured || !welcomePosthog.connected || welcomePosthog.failureReason !== null)
+    throw new Error('frontend onboarding Welcome analytics PostHog query failed')
 
-  if (posthog.rows.length > 0) {
-    const totalAttempts = posthog.rows[0].total_attempts
+  for (const [source, rows] of [
+    ['aggregate', posthog.rows],
+    ['welcome', welcomePosthog.rows],
+  ] as const) {
+    if (rows.length === 0)
+      continue
+
+    const totalAttempts = rows[0].total_attempts
     try {
       assertFrontendOnboardingAttemptTotal(totalAttempts)
     }
@@ -304,16 +396,23 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
         message,
         attempt_limit: FRONTEND_ONBOARDING_ATTEMPT_LIMIT,
         total_attempts: totalAttempts,
-        returned_rows: posthog.rows.length,
+        returned_rows: rows.length,
+        source,
       })
       throw error
     }
   }
   const analytics = buildFrontendOnboardingAnalytics(mapAttempts(posthog.rows), startMs, endMs)
   const dailySetupCliOutcomes = buildFrontendOnboardingDailySetupCliOutcomes(dailySetupCliEvents, startMs, endMs)
+  const welcomeOutcomes = buildFrontendOnboardingWelcomeOutcomes(mapWelcomeAttempts(welcomePosthog.rows), startMs, endMs)
 
   return {
     ...analytics,
+    daily_welcome_outcomes: welcomeOutcomes.daily,
+    deduplicated: {
+      ...analytics.deduplicated,
+      daily_welcome_outcomes: welcomeOutcomes.deduplicated,
+    },
     daily_setup_cli_outcomes: dailySetupCliOutcomes,
     posthog_configured: posthog.configured,
     posthog_connected: posthog.connected,

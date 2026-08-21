@@ -53,13 +53,11 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'INSERT'), async (c
   await sendEventToTracking(c, {
     channel: 'user-register',
     event: !record.created_via_invite ? 'User Joined' : 'User Joined by Invite',
-    icon: '🎉',
     user_id: record.id,
-    notify: false,
   }).catch((error) => {
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'LogSnag.track user-register failed',
+      message: 'User registration tracking failed',
       error,
     })
   })

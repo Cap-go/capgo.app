@@ -1910,7 +1910,6 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
         await sendEvent(options.apikey, {
           channel: 'native-builder',
           event: 'Prescan run',
-          icon: '🛡️',
           org_id: orgId,
           tracking_version: 2,
           tags: {
@@ -1924,7 +1923,6 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
             'bypassed': String(prescanResult === 'bypassed'),
             'information-only-findings': String(gateInformationOnlyFindings),
           },
-          notify: false,
         }).catch(() => {})
       }
       if (gateDecision === 'block') {
@@ -2032,7 +2030,6 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     await sendEvent(options.apikey, {
       channel: 'native-builder',
       event: 'Build requested',
-      icon: '🏗️',
       org_id: orgId,
       tracking_version: 2,
       tags: {
@@ -2042,7 +2039,6 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
         // with the rest of the journey's events.
         ...(options.builderJourneyId ? { journey_id: options.builderJourneyId } : {}),
       },
-      notify: false,
     }).catch()
 
     // Create temporary directory for zip
@@ -2795,7 +2791,6 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       await sendEvent(options.apikey, {
         channel: 'native-builder',
         event: finalStatus === 'succeeded' ? 'Build succeeded' : 'Build failed',
-        icon: finalStatus === 'succeeded' ? '✅' : '❌',
         org_id: orgId,
         tracking_version: 2,
         tags: {
@@ -2807,7 +2802,6 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
           // outcome with the rest of the journey's events.
           ...(options.builderJourneyId ? { journey_id: options.builderJourneyId } : {}),
         },
-        notify: false,
       }).catch()
 
       return {

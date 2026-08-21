@@ -4897,7 +4897,6 @@ export type Database = {
       is_platform_admin:
         | { Args: never; Returns: boolean }
         | { Args: { userid: string }; Returns: boolean }
-      is_rbac_enabled_globally: { Args: never; Returns: boolean }
       is_recent_email_otp_verified: {
         Args: { user_id: string }
         Returns: boolean

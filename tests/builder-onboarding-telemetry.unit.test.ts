@@ -32,8 +32,6 @@ describe('trackBuilderOnboardingStep', () => {
     expect(payload).toMatchObject({
       event: 'Builder Onboarding Step',
       channel: 'builder-onboarding',
-      icon: '🧭',
-      notify: false,
       org_id: 'org-uuid-1',
       tracking_version: 2,
       tags: {

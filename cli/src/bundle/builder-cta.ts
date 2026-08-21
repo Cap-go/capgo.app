@@ -126,7 +126,6 @@ async function runBuilderCta(params: MaybePromptBuilderCtaParams): Promise<Build
   void trackEvent({
     channel: 'bundle',
     event: 'Builder CTA Shown',
-    icon: '📣',
     apikey: params.apikey,
     appId: params.appId,
     orgId: params.orgId,
@@ -162,7 +161,7 @@ async function runBuilderCta(params: MaybePromptBuilderCtaParams): Promise<Build
       return 'abort'
 
     if (choice === 'learn') {
-      void trackEvent({ channel: 'bundle', event: 'Builder CTA Learn Selected', icon: '📖', apikey: params.apikey, appId: params.appId, orgId: params.orgId, tags: { mode } })
+      void trackEvent({ channel: 'bundle', event: 'Builder CTA Learn Selected', apikey: params.apikey, appId: params.appId, orgId: params.orgId, tags: { mode } })
       try {
         await openUrl(LEARN_URL)
       }
@@ -173,12 +172,12 @@ async function runBuilderCta(params: MaybePromptBuilderCtaParams): Promise<Build
     }
 
     if (choice === 'yes') {
-      void trackEvent({ channel: 'bundle', event: 'Builder CTA Accepted', icon: '✅', apikey: params.apikey, appId: params.appId, orgId: params.orgId, tags: { mode } })
+      void trackEvent({ channel: 'bundle', event: 'Builder CTA Accepted', apikey: params.apikey, appId: params.appId, orgId: params.orgId, tags: { mode } })
       return mode === 'build' ? 'launch-build' : 'launch-onboarding'
     }
 
     // Declined → just continue the OTA upload (no follow-up prompt).
-    void trackEvent({ channel: 'bundle', event: 'Builder CTA Declined', icon: '🚫', apikey: params.apikey, appId: params.appId, orgId: params.orgId, tags: { mode } })
+    void trackEvent({ channel: 'bundle', event: 'Builder CTA Declined', apikey: params.apikey, appId: params.appId, orgId: params.orgId, tags: { mode } })
     return 'continue'
   }
 }

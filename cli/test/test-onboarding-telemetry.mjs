@@ -93,7 +93,9 @@ try {
     const body = findEventBody(requests)
     assert.equal(body.event, 'Builder Onboarding Action')
     assert.equal(body.channel, 'builder-onboarding')
-    assert.equal(body.notify, false)
+    assert.equal('icon' in body, false)
+    assert.equal('notify' in body, false)
+    assert.equal('parser' in body, false)
     assert.equal(body.org_id, 'org-id')
     assert.equal(body.tracking_version, 2)
     assert.deepEqual(body.tags, {
@@ -157,8 +159,9 @@ try {
     const body = findEventBody(requests)
     assert.equal(body.event, 'Builder Onboarding Quit')
     assert.equal(body.channel, 'builder-onboarding')
-    assert.equal(body.icon, '🚪')
-    assert.equal(body.notify, false)
+    assert.equal('icon' in body, false)
+    assert.equal('notify' in body, false)
+    assert.equal('parser' in body, false)
     assert.equal(body.org_id, 'org-id')
     assert.equal(body.tracking_version, 2)
     assert.deepEqual(body.tags, {

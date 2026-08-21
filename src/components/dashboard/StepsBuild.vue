@@ -146,10 +146,8 @@ function setLog() {
       sendEvent({
         channel: 'onboarding-build',
         event: `onboarding-build-step-${stepToName(step.value)}`,
-        icon: 'build',
         org_id: orgId,
         tracking_version: 2,
-        notify: false,
       }).catch()
       sendOnboardingEvent(`user:onboarding-build-${stepToName(step.value)}`, { org_id: orgId })
     }

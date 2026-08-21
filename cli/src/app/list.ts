@@ -77,7 +77,7 @@ export async function listAppInternal(options: OptionsBase, silent = false) {
     supaAnon: options.supaAnon,
   })
 
-  void trackEvent({ channel: 'app', event: 'Apps Listed', icon: '📋', tags: { app_count: allApps.length } })
+  void trackEvent({ channel: 'app', event: 'Apps Listed', tags: { app_count: allApps.length } })
 
   if (!allApps.length) {
     if (!silent)

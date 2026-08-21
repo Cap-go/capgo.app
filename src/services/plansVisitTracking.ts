@@ -12,10 +12,8 @@ export function createPlansVisitTracker(sender: typeof sendEvent = sendEvent) {
       void sender({
         channel: 'usage',
         event: 'User visit',
-        icon: '💳',
         org_id: orgId,
         tracking_version: 2,
-        notify: false,
         tags: { page: 'plans' },
       })
       return true

@@ -198,7 +198,6 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
       void trackEvent({
         channel: ASC_KEY_CHANNEL,
         event: 'ASC Key: Helper Untrusted',
-        icon: '🔑',
         apikey: options.apikey,
         tags: { reason: guidedProbe.reason },
       })
