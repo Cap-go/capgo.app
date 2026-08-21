@@ -1829,21 +1829,18 @@ export async function checkPlanValidUploadViaHttp(
     throw new Error(`Cannot validate plan: ${await formatCapgoCliApiError(error)}`)
 
   if (!data?.valid) {
-    log.error(`You need to upgrade your plan to continue to use capgo.\n Upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
-    wait(100)
-    import('open')
-      .then(module => module.default(`${config.hostWeb}/settings/organization/plans`))
-    wait(500)
-    throw new CliUserError('Plan upgrade required for upload')
+    const plansUrl = `${config.hostWeb}/settings/organization/plans`
+    await throwPlanUpgradeRequired(plansUrl, 'Plan upgrade required for upload')
   }
 
+  const planData = data!
   if (shouldWarnTrialExpiry({
-    trialDays: data.trial_days ?? 0,
-    isPaying: !!data.is_paying,
-    hasCredits: !!data.has_credits,
+    trialDays: planData.trial_days ?? 0,
+    isPaying: !!planData.is_paying,
+    hasCredits: !!planData.has_credits,
     warning,
   })) {
-    log.warn(`WARNING !!\nTrial expires in ${data.trial_days} days, upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
+    log.warn(`WARNING !!\nTrial expires in ${planData.trial_days} days, upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
   }
 }
 
