@@ -9,6 +9,7 @@ import {
   isPayingOrg,
   isTrialOrg,
   supabaseAdmin,
+  supabaseApikey,
 } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
@@ -104,7 +105,10 @@ app.get('/warnings', middlewareKey(), async (c) => {
   if (!body.org_id)
     return quickError(400, 'missing_org_id', 'Missing org_id', { body })
 
-  const { data: messages, error } = await supabaseAdmin(c)
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  const apikeyString = apikey.key ?? c.get('capgkey')
+  const supabase = supabaseApikey(c, apikeyString)
+  const { data: messages, error } = await supabase
     .rpc('get_organization_cli_warnings', {
       orgid: body.org_id,
       cli_version: body.cli_version ?? '',
