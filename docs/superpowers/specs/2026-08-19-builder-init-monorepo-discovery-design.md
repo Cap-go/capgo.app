@@ -76,9 +76,12 @@ prompt is stable.
   logs/replay, or rendering the existing onboarding wizard.
 
 Discovery, confirmation, and selection use the same full-screen Ink experience
-as the rest of builder onboarding. After selection, the existing Ink instance
-is reused for the onboarding wizard so the terminal does not flash between two
-alternate-screen applications.
+as the rest of builder onboarding. The banner renders immediately. The search
+status is withheld for the first 100 ms; once shown, it remains visible for at
+least one second. Discovery times out after five seconds with an actionable
+error. After selection, the existing Ink instance is reused directly for the
+onboarding wizard without a project-opening interstitial, so the terminal does
+not flash between two alternate-screen applications.
 
 ## Failure Experience
 
@@ -97,6 +100,13 @@ When `nx.json` exists at the invocation root, append:
 
 This is preferable to broad recursive searching and makes unsupported Nx-only
 layouts explicit.
+
+If discovery exceeds five seconds, stop waiting and report:
+
+> Searching for a Capacitor app timed out after 5 seconds.
+>
+> Run `npx @capgo/cli@latest build init` from your Capacitor app directory or
+> from the root of a supported package-manager workspace.
 
 ## Testing
 

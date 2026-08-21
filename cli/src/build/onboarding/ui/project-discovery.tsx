@@ -16,20 +16,44 @@ export type BuilderProjectDecision
   = { kind: 'selected', candidate: CapacitorProjectCandidate }
     | { kind: 'cancelled' }
     | { kind: 'not-found', nxDetected: boolean }
+    | { kind: 'timed-out' }
 
 export interface BuilderProjectDiscoveryAppProps {
   searchRoot: string
   onDecision: (decision: BuilderProjectDecision) => void
+  discoverProjects?: typeof discoverCapacitorProjects
+  timing?: Partial<BuilderProjectDiscoveryTiming>
+}
+
+export interface BuilderProjectDiscoveryTiming {
+  searchStatusDelayMs: number
+  minimumSearchStatusMs: number
+  timeoutMs: number
+}
+
+export const DEFAULT_BUILDER_PROJECT_DISCOVERY_TIMING: BuilderProjectDiscoveryTiming = {
+  searchStatusDelayMs: 100,
+  minimumSearchStatusMs: 1000,
+  timeoutMs: 5000,
 }
 
 function candidateSubtitle(candidate: CapacitorProjectCandidate): string | undefined {
   return candidate.appId ? `appId: ${candidate.appId}` : undefined
 }
 
-export const BuilderProjectDiscoveryApp: FC<BuilderProjectDiscoveryAppProps> = ({ searchRoot, onDecision }) => {
+export const BuilderProjectDiscoveryApp: FC<BuilderProjectDiscoveryAppProps> = ({
+  searchRoot,
+  onDecision,
+  discoverProjects = discoverCapacitorProjects,
+  timing,
+}) => {
   const { cols, rows } = useTerminalSize()
   const [discovery, setDiscovery] = useState<BuilderProjectDiscovery | null>(null)
+  const [showSearchStatus, setShowSearchStatus] = useState(false)
   const decided = useRef(false)
+  const searchStatusDelayMs = timing?.searchStatusDelayMs ?? DEFAULT_BUILDER_PROJECT_DISCOVERY_TIMING.searchStatusDelayMs
+  const minimumSearchStatusMs = timing?.minimumSearchStatusMs ?? DEFAULT_BUILDER_PROJECT_DISCOVERY_TIMING.minimumSearchStatusMs
+  const timeoutMs = timing?.timeoutMs ?? DEFAULT_BUILDER_PROJECT_DISCOVERY_TIMING.timeoutMs
 
   const decide = useCallback((decision: BuilderProjectDecision) => {
     if (decided.current)
@@ -40,19 +64,56 @@ export const BuilderProjectDiscoveryApp: FC<BuilderProjectDiscoveryAppProps> = (
 
   useEffect(() => {
     let active = true
-    void discoverCapacitorProjects(searchRoot).then((result) => {
-      if (!active)
-        return
-      if (result.candidates.length === 0) {
-        decide({ kind: 'not-found', nxDetected: result.nxDetected })
-        return
+    let settled = false
+    let searchStatusShownAt: number | undefined
+    let completionTimer: ReturnType<typeof setTimeout> | undefined
+    const searchStatusTimer = setTimeout(() => {
+      if (active) {
+        searchStatusShownAt = Date.now()
+        setShowSearchStatus(true)
       }
-      setDiscovery(result)
+    }, searchStatusDelayMs)
+    const timeoutTimer = setTimeout(() => {
+      if (!active || settled)
+        return
+      settled = true
+      if (completionTimer)
+        clearTimeout(completionTimer)
+      decide({ kind: 'timed-out' })
+    }, timeoutMs)
+    void discoverProjects(searchRoot).then((result) => {
+      if (!active || settled)
+        return
+      clearTimeout(searchStatusTimer)
+
+      const finishDiscovery = () => {
+        if (!active || settled)
+          return
+        settled = true
+        clearTimeout(timeoutTimer)
+        if (result.candidates.length === 0) {
+          decide({ kind: 'not-found', nxDetected: result.nxDetected })
+          return
+        }
+        setDiscovery(result)
+      }
+
+      const remainingStatusMs = searchStatusShownAt === undefined
+        ? 0
+        : Math.max(0, minimumSearchStatusMs - (Date.now() - searchStatusShownAt))
+      if (remainingStatusMs > 0)
+        completionTimer = setTimeout(finishDiscovery, remainingStatusMs)
+      else
+        finishDiscovery()
     })
     return () => {
       active = false
+      clearTimeout(searchStatusTimer)
+      clearTimeout(timeoutTimer)
+      if (completionTimer)
+        clearTimeout(completionTimer)
     }
-  }, [searchRoot, decide])
+  }, [searchRoot, decide, discoverProjects, searchStatusDelayMs, minimumSearchStatusMs, timeoutMs])
 
   useInput((input, key) => {
     if (key.escape || input.toLowerCase() === 'q')
@@ -66,9 +127,11 @@ export const BuilderProjectDiscoveryApp: FC<BuilderProjectDiscoveryAppProps> = (
     return (
       <Box flexDirection="column" minHeight={rows} padding={1}>
         <Header />
-        <Box marginTop={1}>
-          <SpinnerLine text="Looking for a Capacitor app in this workspace..." />
-        </Box>
+        {showSearchStatus && (
+          <Box marginTop={1}>
+            <SpinnerLine text="Looking for a Capacitor app in this workspace..." />
+          </Box>
+        )}
       </Box>
     )
   }
@@ -113,18 +176,6 @@ export const BuilderProjectDiscoveryApp: FC<BuilderProjectDiscoveryAppProps> = (
         </Box>
         <Box flexGrow={1} />
         <Text dimColor>↑  ↓  choose   ·   Enter  confirm   ·   Esc  exit</Text>
-      </Box>
-    </Box>
-  )
-}
-
-export const BuilderProjectOpeningApp: FC<{ candidate: CapacitorProjectCandidate }> = ({ candidate }) => {
-  const { rows } = useTerminalSize()
-  return (
-    <Box flexDirection="column" minHeight={rows} padding={1}>
-      <Header />
-      <Box marginTop={1}>
-        <SpinnerLine text={`Opening ${candidate.relativeDir}${candidate.appId ? ` (${candidate.appId})` : ''}...`} />
       </Box>
     </Box>
   )

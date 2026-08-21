@@ -1,9 +1,12 @@
 #!/usr/bin/env bun
 
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { EventEmitter } from 'node:events'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { render } from 'ink'
+import React from 'react'
 import * as builderOnboardingCommand from '../src/build/onboarding/command.ts'
 import {
   discoverCapacitorProjects,
@@ -15,6 +18,10 @@ import {
   shouldDiscoverBuilderProject,
 } from '../src/build/onboarding/command.ts'
 import { loadConfigTarget } from '../src/config/index.ts'
+import {
+  BuilderProjectDiscoveryApp,
+  DEFAULT_BUILDER_PROJECT_DISCOVERY_TIMING,
+} from '../src/build/onboarding/ui/project-discovery.tsx'
 
 const fixtureRoots = []
 let failures = 0
@@ -46,6 +53,41 @@ function addCapacitorApp(root, relativeDir, name, appId) {
   return dir
 }
 
+function makeStdout(cols = 100, rows = 50) {
+  const stream = new EventEmitter()
+  stream.columns = cols
+  stream.rows = rows
+  stream.isTTY = true
+  stream.frames = []
+  stream.lastFrame = ''
+  stream.write = (frame) => {
+    stream.frames.push(frame)
+    stream.lastFrame = frame
+    return true
+  }
+  return stream
+}
+
+function makeStdin() {
+  const stream = new EventEmitter()
+  stream.isTTY = true
+  stream.setEncoding = () => {}
+  stream.setRawMode = () => {}
+  stream.resume = () => {}
+  stream.pause = () => {}
+  stream.ref = () => {}
+  stream.unref = () => {}
+  stream.read = () => null
+  return stream
+}
+
+async function waitForFrame(stdout, pattern, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs
+  while (!pattern.test(stdout.lastFrame) && Date.now() < deadline)
+    await new Promise(resolve => setTimeout(resolve, 5))
+  assert.match(stdout.lastFrame, pattern)
+}
+
 async function test(name, run) {
   try {
     await run()
@@ -59,6 +101,125 @@ async function test(name, run) {
 }
 
 try {
+  await test('does not paint search status when discovery completes within 100ms', async () => {
+    const root = fixture('fast-ui-discovery')
+    writeJson(join(root, 'package.json'), { private: true, workspaces: ['apps/*'] })
+    addCapacitorApp(root, 'apps/mobile', '@example/mobile', 'com.example.mobile')
+    const stdout = makeStdout()
+    const instance = render(
+      React.createElement(BuilderProjectDiscoveryApp, {
+        searchRoot: root,
+        onDecision: () => {},
+      }),
+      {
+        stdout,
+        stderr: makeStdout(),
+        stdin: makeStdin(),
+        debug: true,
+        exitOnCtrlC: false,
+        patchConsole: false,
+      },
+    )
+
+    try {
+      await waitForFrame(stdout, /Is this the correct app\?/)
+      assert.equal(stdout.frames.some(frame => /Looking for a Capacitor app/.test(frame)), false)
+    }
+    finally {
+      instance.unmount()
+    }
+  })
+
+  await test('keeps delayed search status visible for at least one second once shown', async () => {
+    const candidate = {
+      dir: '/workspace/apps/mobile',
+      relativeDir: 'apps/mobile',
+      packageName: '@example/mobile',
+      appId: 'com.example.mobile',
+    }
+    let resolveDiscovery
+    const discoveryPromise = new Promise((resolve) => {
+      resolveDiscovery = resolve
+    })
+    const stdout = makeStdout()
+    const instance = render(
+      React.createElement(BuilderProjectDiscoveryApp, {
+        searchRoot: '/workspace',
+        onDecision: () => {},
+        discoverProjects: () => discoveryPromise,
+        timing: {
+          searchStatusDelayMs: 20,
+          minimumSearchStatusMs: 80,
+          timeoutMs: 500,
+        },
+      }),
+      {
+        stdout,
+        stderr: makeStdout(),
+        stdin: makeStdin(),
+        debug: true,
+        exitOnCtrlC: false,
+        patchConsole: false,
+      },
+    )
+
+    try {
+      await waitForFrame(stdout, /Looking for a Capacitor app/, 300)
+      const statusShownAt = Date.now()
+      resolveDiscovery({ candidates: [candidate], nxDetected: false })
+      await waitForFrame(stdout, /Is this the correct app\?/, 500)
+      assert.ok(Date.now() - statusShownAt >= 70, 'search status disappeared before its minimum display time')
+    }
+    finally {
+      instance.unmount()
+    }
+  })
+
+  await test('stops project discovery after five seconds', async () => {
+    assert.deepEqual(DEFAULT_BUILDER_PROJECT_DISCOVERY_TIMING, {
+      searchStatusDelayMs: 100,
+      minimumSearchStatusMs: 1000,
+      timeoutMs: 5000,
+    })
+    const stdout = makeStdout()
+    let resolveDecision
+    const decisionPromise = new Promise((resolve) => {
+      resolveDecision = resolve
+    })
+    const instance = render(
+      React.createElement(BuilderProjectDiscoveryApp, {
+        searchRoot: '/workspace',
+        onDecision: resolveDecision,
+        discoverProjects: () => new Promise(() => {}),
+        timing: {
+          searchStatusDelayMs: 10,
+          minimumSearchStatusMs: 20,
+          timeoutMs: 60,
+        },
+      }),
+      {
+        stdout,
+        stderr: makeStdout(),
+        stdin: makeStdin(),
+        debug: true,
+        exitOnCtrlC: false,
+        patchConsole: false,
+      },
+    )
+
+    try {
+      const decision = await Promise.race([
+        decisionPromise,
+        new Promise(resolve => setTimeout(() => resolve({ kind: 'test-timeout' }), 250)),
+      ])
+      assert.deepEqual(decision, { kind: 'timed-out' })
+      assert.ok(stdout.frames.some(frame => /Looking for a Capacitor app/.test(frame)))
+    }
+    finally {
+      instance.unmount()
+    }
+  })
+
   await test('accepts a Capacitor app in the invocation directory without requiring package.json', async () => {
     const root = fixture('current-app')
     writeText(join(root, 'capacitor.config.json'), '{"appId":"com.example.current"}\n')
@@ -360,6 +521,20 @@ try {
     assert.match(generic, /npx @capgo\/cli@latest build init/)
     assert.doesNotMatch(generic, /Nx repositories/)
     assert.match(nx, /Nx repositories.*not currently supported/s)
+  })
+
+  await test('provides an actionable five-second discovery timeout message', () => {
+    assert.equal(typeof builderOnboardingCommand.builderProjectTimeoutMessage, 'function')
+    const message = builderOnboardingCommand.builderProjectTimeoutMessage()
+    assert.match(message, /timed out after 5 seconds/i)
+    assert.match(message, /npx @capgo\/cli@latest build init/)
+  })
+
+  await test('does not render an opening interstitial after project selection', () => {
+    const commandSource = readFileSync(new URL('../src/build/onboarding/command.ts', import.meta.url), 'utf8')
+    const discoveryUiSource = readFileSync(new URL('../src/build/onboarding/ui/project-discovery.tsx', import.meta.url), 'utf8')
+    assert.doesNotMatch(commandSource, /BuilderProjectOpeningApp/)
+    assert.doesNotMatch(discoveryUiSource, /Opening .*candidate\.relativeDir/)
   })
 }
 finally {

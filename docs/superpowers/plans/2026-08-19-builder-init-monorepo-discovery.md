@@ -291,17 +291,22 @@ In `cli/src/index.ts`, set it only on the real command:
 Before the existing `getConfig(true)` call, when discovery is enabled and the
 current directory lacks a Capacitor config:
 
-1. Render an Ink loading state with `Looking for a Capacitor app in this workspace...`.
-2. Call `discoverCapacitorProjects(process.cwd())`.
-3. Replace the loading state with the discovery result.
-4. On no candidates, print `builderProjectNotFoundMessage(nxDetected)` and exit 1.
-5. For one candidate, render an Ink confirmation with its relative path and
+1. Render the Ink onboarding banner and call
+   `discoverCapacitorProjects(process.cwd())` immediately.
+2. If discovery is still running after 100 ms, show
+   `Looking for a Capacitor app in this workspace...` for at least one second.
+3. Stop discovery after five seconds, print an actionable timeout message, and
+   exit 1.
+4. Replace the banner or delayed search status directly with the discovery
+   result; do not render a separate project-opening interstitial.
+5. On no candidates, print `builderProjectNotFoundMessage(nxDetected)` and exit 1.
+6. For one candidate, render an Ink confirmation with its relative path and
    Capacitor `appId` when available.
-6. For multiple candidates, render an Ink selector with relative paths and
+7. For multiple candidates, render an Ink selector with relative paths and
    Capacitor `appId` values when available.
-7. Treat Ink cancellation or a rejected confirmation as a normal cancelled
+8. Treat Ink cancellation or a rejected confirmation as a normal cancelled
    setup and return before starting logs/replay.
-8. Call `process.chdir(selected.dir)` and reuse the Ink instance for the
+9. Call `process.chdir(selected.dir)` and reuse the Ink instance for the
    existing onboarding shell.
 
 Use this pure shared wording:

@@ -15,7 +15,7 @@ import { isMacOS, probeGuidedHelper } from './asc-key/helper.js'
 import { ASC_KEY_CHANNEL } from './asc-key/protocol.js'
 import { getPlatformDirFromCapacitorConfig } from '../platform-paths.js'
 import OnboardingShell from './ui/shell.js'
-import { BuilderProjectDiscoveryApp, BuilderProjectOpeningApp } from './ui/project-discovery.js'
+import { BuilderProjectDiscoveryApp } from './ui/project-discovery.js'
 import type { BuilderProjectDecision } from './ui/project-discovery.js'
 import { checkForCliUpdate, manualUpdateHint, runUpdateAndReexec } from './self-update.js'
 import { resolveSupabaseReplayUrl, startInitReplay } from '../../init/replay.js'
@@ -60,6 +60,13 @@ export function builderProjectNotFoundMessage(nxDetected: boolean): string {
   if (nxDetected)
     lines.push('Nx repositories that do not use package-manager workspaces are not currently supported.')
   return lines.join('\n')
+}
+
+export function builderProjectTimeoutMessage(): string {
+  return [
+    'Searching for a Capacitor app timed out after 5 seconds.',
+    'Run `npx @capgo/cli@latest build init` from your Capacitor app directory or from the root of a supported package-manager workspace.',
+  ].join('\n')
 }
 
 type BuilderProjectResolution = 'ready' | 'cancelled' | 'not-found'
@@ -116,11 +123,14 @@ async function discoverBuilderProjectWithInk(options: OnboardingBuilderOptions):
 
   if (decision.kind === 'selected') {
     process.chdir(decision.candidate.dir)
-    ink.rerender(React.createElement(BuilderProjectOpeningApp, { candidate: decision.candidate }))
     return { resolution: 'ready', ink }
   }
 
   await stopInk(ink)
+  if (decision.kind === 'timed-out') {
+    log.error(builderProjectTimeoutMessage())
+    return { resolution: 'not-found' }
+  }
   if (decision.kind === 'not-found') {
     log.error(builderProjectNotFoundMessage(decision.nxDetected))
     return { resolution: 'not-found' }
