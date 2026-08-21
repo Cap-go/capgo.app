@@ -6,6 +6,19 @@ import { trackEvent } from '../analytics/track'
 import { checkAlerts } from '../api/update'
 import { createSupabaseClient, findSavedKey, formatError, getHumanDate, invokeCapgoCliApi, resolveUserIdFromApiKey } from '../utils'
 
+interface AppListOptions extends OptionsBase {
+  filterByOrgId?: string
+}
+
+export const APP_LIST_ORG_FILTER_WARNING = 'You have passed "--filter-by-org-id". You might have access to more apps. Remove the filter to see all apps'
+
+export function getAppListPath(page: number, orgId?: string) {
+  const query = new URLSearchParams({ page: String(page) })
+  if (orgId)
+    query.set('org_id', orgId)
+  return `app?${query.toString()}`
+}
+
 function displayApps(data: Database['public']['Tables']['apps']['Row'][]) {
   const table = new Table()
   table.headers = ['Name', 'id', 'Created']
@@ -21,13 +34,13 @@ function displayApps(data: Database['public']['Tables']['apps']['Row'][]) {
 async function getActiveApps(
   apikey: string,
   silent: boolean,
-  options: { supaHost?: string, supaAnon?: string },
+  options: { supaHost?: string, supaAnon?: string, filterByOrgId?: string },
 ) {
   const all: Database['public']['Tables']['apps']['Row'][] = []
   let page = 0
   while (true) {
     const { data, error } = await invokeCapgoCliApi<Database['public']['Tables']['apps']['Row'][]>(
-      `app?page=${page}`,
+      getAppListPath(page, options.filterByOrgId),
       {
         apikey,
         method: 'GET',
@@ -55,7 +68,7 @@ async function getActiveApps(
   return all.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
 }
 
-export async function listAppInternal(options: OptionsBase, silent = false) {
+export async function listAppInternal(options: AppListOptions, silent = false) {
   if (!silent)
     intro('List apps in Capgo')
 
@@ -68,13 +81,17 @@ export async function listAppInternal(options: OptionsBase, silent = false) {
   // TODO(cli-http): identity still uses rpc via resolveUserIdFromApiKey
   await resolveUserIdFromApiKey(supabase, options.apikey)
 
-  if (!silent)
+  if (!silent) {
+    if (options.filterByOrgId)
+      log.warn(APP_LIST_ORG_FILTER_WARNING)
     log.info('Getting active bundle in Capgo')
+  }
 
   // TODO(cli-http): previously scoped via get_orgs_v6; GET app already scopes to key orgs server-side
   const allApps = await getActiveApps(options.apikey!, silent, {
     supaHost: options.supaHost,
     supaAnon: options.supaAnon,
+    filterByOrgId: options.filterByOrgId,
   })
 
   void trackEvent({ channel: 'app', event: 'Apps Listed', tags: { app_count: allApps.length } })
@@ -94,6 +111,6 @@ export async function listAppInternal(options: OptionsBase, silent = false) {
   return allApps
 }
 
-export async function listApp(options: OptionsBase, silent = false) {
+export async function listApp(options: AppListOptions, silent = false) {
   return listAppInternal(options, silent)
 }
