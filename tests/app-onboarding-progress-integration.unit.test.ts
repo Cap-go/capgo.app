@@ -53,7 +53,7 @@ describe('app onboarding progress analytics integration', () => {
     )
     expect(analyticsImport).toContain('createOnboardingProgressTracker,')
     expect(analyticsImport).toContain('createOnboardingTelemetryIdentity,')
-    expect(analyticsImport).toContain("} from '~/utils/onboardingProgressAnalytics'")
+    expect(analyticsImport).toContain(`} from '~/utils/onboardingProgressAnalytics'`)
 
     const initializer = sourceBetween('function initializeProgressTracking(', 'function completeAndViewStep(')
     expect(initializer).toContain(`flow: props.preOrg ? 'pre_org' : 'existing_org'`)
@@ -176,6 +176,11 @@ describe('app onboarding progress analytics integration', () => {
     expect(writer).toContain('attempt < MAX_USER_ONBOARDING_WRITE_ATTEMPTS')
     expect(writer).toContain(`if (current?.status === 'completed' && status !== 'completed')`)
     expect(writer).toContain('await replaceUserOnboardingIfUnchanged(')
+    expectSourceOrder(writer, [
+      'const onboardingWithPreferences = preserveAdminDashboardMinimize(',
+      'const onboarding = preserveUserBentoEvents(',
+      'await replaceUserOnboardingIfUnchanged(',
+    ])
     expectSourceOrder(writer, [
       'if (error) {',
       `console.error('Failed to persist onboarding progress', error)`,

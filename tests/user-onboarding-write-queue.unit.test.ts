@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { serializeUserOnboardingWrite } from '../src/services/userOnboardingWriteQueue'
+import { preserveUserBentoEvents, serializeUserOnboardingWrite } from '../src/services/userOnboardingWriteQueue'
 
 function deferred() {
   let resolve!: () => void
@@ -10,6 +10,32 @@ function deferred() {
 }
 
 describe('user onboarding write queue', () => {
+  it.concurrent('preserves backend Bento event state while applying the next progress snapshot', () => {
+    const current = {
+      status: 'in_progress',
+      bento_events: {
+        'cli:command_invoked': {
+          details: [{ observed_at: '2026-08-22T10:00:00.000Z' }],
+          occurrence_count: 1,
+          sent_at: '2026-08-22T10:00:01.000Z',
+        },
+      },
+    }
+    const next = { status: 'completed', step: 'setup' }
+
+    expect(preserveUserBentoEvents(next, current)).toEqual({
+      ...next,
+      bento_events: current.bento_events,
+    })
+  })
+
+  it.concurrent('ignores a malformed backend Bento event value', () => {
+    const current = { bento_events: ['not', 'an', 'object'] }
+    const next = { status: 'completed' }
+
+    expect(preserveUserBentoEvents(next, current)).toEqual(next)
+  })
+
   it.concurrent('serializes writes for the same user', async () => {
     const firstWrite = deferred()
     const events: string[] = []
