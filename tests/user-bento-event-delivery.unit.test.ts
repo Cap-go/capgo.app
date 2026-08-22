@@ -133,12 +133,18 @@ function expectAdditiveBentoPatch(queryCall: unknown[] | undefined) {
   expect(queryCall).toBeDefined()
   const sql = normalizeSql(queryCall?.[0])
   expect(sql).toContain('SET onboarding = jsonb_set(onboarding, \'{bento_events}\'')
-  expect(sql).toContain('COALESCE(onboarding -> \'bento_events\', \'{}\'::jsonb) || $2::jsonb')
+  expect(sql).toContain('CASE WHEN jsonb_typeof(onboarding -> \'bento_events\') = \'object\' THEN onboarding -> \'bento_events\' ELSE \'{}\'::jsonb END || $2::jsonb')
   expect(sql).not.toContain('SET onboarding = $2')
 }
 
 function patchCall(client: ReturnType<typeof createTransactionPool>['client']) {
   return client.query.mock.calls.find(([sql]) => normalizeSql(sql).startsWith('UPDATE public.users'))
+}
+
+function expectSanitizedLogs(...privateValues: string[]) {
+  const logs = JSON.stringify(mocks.cloudlogErr.mock.calls)
+  for (const value of privateValues)
+    expect(logs).not.toContain(value)
 }
 
 describe('user Bento event delivery', () => {
@@ -512,5 +518,241 @@ describe('user Bento event delivery', () => {
       event: undefined,
       error: { message: 'commit failed' },
     }))
+  })
+
+  it.each([
+    ['BEGIN', 'BEGIN', false],
+    ['lock', 'SELECT', true],
+    ['update', 'UPDATE', true],
+    ['commit', 'COMMIT', true],
+  ])('contains a TX1 %s failure and rolls back only after BEGIN', async (_label, failure, shouldRollback) => {
+    const failureError = new Error(`TX1 ${failure} failed`)
+    const fastPool = createFastPool({ rows: [{ onboarding: {} }] })
+    const tx = createTransactionPool({
+      query: async (sql) => {
+        if (
+          sql === failure
+          || (failure === 'SELECT' && sql.startsWith('SELECT email, onboarding'))
+          || (failure === 'UPDATE' && sql.startsWith('UPDATE public.users'))
+        ) {
+          throw failureError
+        }
+        if (sql.startsWith('SELECT email, onboarding'))
+          return { rows: [{ email: 'private.user@example.com', onboarding: {} }] }
+        return { rows: [] }
+      },
+    })
+    mocks.getPgClient
+      .mockReturnValueOnce(fastPool)
+      .mockReturnValueOnce(tx.pool)
+
+    await expect(recordUserBentoEvent(createContext(), {
+      sourceEvent: 'User CLI login',
+      observedAt: OBSERVED_AT,
+      userId: USER_ID,
+    })).resolves.toBeUndefined()
+
+    expect(tx.statements.includes('ROLLBACK')).toBe(shouldRollback)
+    expect(tx.client.release).toHaveBeenCalledOnce()
+    expect(mocks.closeClient).toHaveBeenCalledWith(expect.anything(), tx.pool)
+    expect(mocks.backgroundTask).not.toHaveBeenCalled()
+    expectSanitizedLogs('private.user@example.com', 'observations', 'secret-token')
+  })
+
+  it.each(['observe', 'deliver'] as const)('evicts the %s client and logs safely when rollback fails', async (phase) => {
+    vi.useFakeTimers()
+    const transactionError = new Error(`${phase} transaction failed`)
+    const rollbackError = new Error(`${phase} rollback failed`)
+    const tx = createTransactionPool({
+      email: 'private.user@example.com',
+      query: async (sql) => {
+        if (sql === 'ROLLBACK')
+          throw rollbackError
+        if (sql.startsWith('SELECT email, onboarding')) {
+          return {
+            rows: [{
+              email: 'private.user@example.com',
+              onboarding: phase === 'deliver' ? pendingLoginOnboarding() : {},
+            }],
+          }
+        }
+        if (phase === 'observe' && sql.startsWith('UPDATE public.users'))
+          throw transactionError
+        return { rows: [] }
+      },
+    })
+    if (phase === 'observe') {
+      const fastPool = createFastPool({ rows: [{ onboarding: {} }] })
+      mocks.getPgClient
+        .mockReturnValueOnce(fastPool)
+        .mockReturnValueOnce(tx.pool)
+      await expect(recordUserBentoEvent(createContext(), {
+        sourceEvent: 'User CLI login',
+        observedAt: OBSERVED_AT,
+        userId: USER_ID,
+      })).resolves.toBeUndefined()
+    }
+    else {
+      mocks.getPgClient.mockReturnValueOnce(tx.pool)
+      mocks.trackBentoEvents.mockRejectedValueOnce(transactionError)
+      await expect(deliverPendingUserBentoEvents(createContext(), USER_ID)).resolves.toBe(false)
+      expect(vi.getTimerCount()).toBe(0)
+    }
+
+    expect(tx.statements.at(-1)).toBe('ROLLBACK')
+    expect(tx.client.release).toHaveBeenCalledOnce()
+    expect(tx.client.release).toHaveBeenCalledWith(rollbackError)
+    expect(mocks.closeClient).toHaveBeenCalledWith(expect.anything(), tx.pool)
+    expect(JSON.stringify(mocks.cloudlogErr.mock.calls)).toContain(`${phase} rollback failed`)
+    expectSanitizedLogs('private.user@example.com', 'observations', 'secret-token')
+  })
+
+  it('contains pool creation and connection failures for both public functions', async () => {
+    const poolError = new Error('pool creation failed')
+    mocks.getPgClient.mockImplementationOnce(() => {
+      throw poolError
+    })
+    await expect(recordUserBentoEvent(createContext(), {
+      sourceEvent: 'User CLI login',
+      observedAt: OBSERVED_AT,
+      userId: USER_ID,
+    })).resolves.toBeUndefined()
+    expect(mocks.closeClient).not.toHaveBeenCalled()
+
+    vi.clearAllMocks()
+    const connectError = new Error('connect failed')
+    const fastPool = createFastPool({ rows: [{ onboarding: {} }] })
+    const observationPool = { connect: vi.fn().mockRejectedValue(connectError) }
+    mocks.getPgClient
+      .mockReturnValueOnce(fastPool)
+      .mockReturnValueOnce(observationPool)
+    await expect(recordUserBentoEvent(createContext(), {
+      sourceEvent: 'User CLI login',
+      observedAt: OBSERVED_AT,
+      userId: USER_ID,
+    })).resolves.toBeUndefined()
+    expect(mocks.closeClient).toHaveBeenCalledWith(expect.anything(), fastPool)
+    expect(mocks.closeClient).toHaveBeenCalledWith(expect.anything(), observationPool)
+
+    vi.clearAllMocks()
+    mocks.getPgClient.mockImplementationOnce(() => {
+      throw poolError
+    })
+    await expect(deliverPendingUserBentoEvents(createContext(), USER_ID)).resolves.toBe(false)
+    expect(mocks.closeClient).not.toHaveBeenCalled()
+
+    vi.clearAllMocks()
+    const deliveryPool = { connect: vi.fn().mockRejectedValue(connectError) }
+    mocks.getPgClient.mockReturnValueOnce(deliveryPool)
+    await expect(deliverPendingUserBentoEvents(createContext(), USER_ID)).resolves.toBe(false)
+    expect(mocks.closeClient).toHaveBeenCalledWith(expect.anything(), deliveryPool)
+    expectSanitizedLogs('private.user@example.com', 'observations', 'secret-token')
+  })
+
+  it.each(['observe', 'deliver'] as const)('contains and logs a %s client release failure', async (phase) => {
+    const transactionError = new Error(`${phase} transaction failed`)
+    const releaseError = new Error(`${phase} release failed`)
+    const tx = createTransactionPool({
+      query: async (sql) => {
+        if (sql.startsWith('SELECT email, onboarding')) {
+          return {
+            rows: [{
+              email: 'private.user@example.com',
+              onboarding: phase === 'deliver' ? pendingLoginOnboarding() : {},
+            }],
+          }
+        }
+        if (phase === 'observe' && sql.startsWith('UPDATE public.users'))
+          throw transactionError
+        return { rows: [] }
+      },
+    })
+    tx.client.release.mockImplementation(() => {
+      throw releaseError
+    })
+    if (phase === 'observe') {
+      const fastPool = createFastPool({ rows: [{ onboarding: {} }] })
+      mocks.getPgClient
+        .mockReturnValueOnce(fastPool)
+        .mockReturnValueOnce(tx.pool)
+      await expect(recordUserBentoEvent(createContext(), {
+        sourceEvent: 'User CLI login',
+        observedAt: OBSERVED_AT,
+        userId: USER_ID,
+      })).resolves.toBeUndefined()
+    }
+    else {
+      mocks.getPgClient.mockReturnValueOnce(tx.pool)
+      mocks.trackBentoEvents.mockRejectedValueOnce(transactionError)
+      await expect(deliverPendingUserBentoEvents(createContext(), USER_ID)).resolves.toBe(false)
+    }
+
+    expect(tx.client.release).toHaveBeenCalledOnce()
+    expect(mocks.closeClient).toHaveBeenCalledWith(expect.anything(), tx.pool)
+    expect(JSON.stringify(mocks.cloudlogErr.mock.calls)).toContain(`${phase} release failed`)
+    expectSanitizedLogs('private.user@example.com', 'observations', 'secret-token')
+  })
+
+  it.each(['observe', 'deliver'] as const)('contains and logs a %s pool close failure', async (phase) => {
+    const closeError = new Error(`${phase} close failed`)
+    if (phase === 'observe') {
+      const fastPool = createFastPool(new Error('fast read failed'))
+      mocks.getPgClient.mockReturnValueOnce(fastPool)
+      mocks.closeClient.mockRejectedValueOnce(closeError)
+      await expect(recordUserBentoEvent(createContext(), {
+        sourceEvent: 'User CLI login',
+        observedAt: OBSERVED_AT,
+        userId: USER_ID,
+      })).resolves.toBeUndefined()
+      expect(mocks.closeClient).toHaveBeenCalledWith(expect.anything(), fastPool)
+    }
+    else {
+      const tx = createTransactionPool({ lockRows: [] })
+      mocks.getPgClient.mockReturnValueOnce(tx.pool)
+      mocks.closeClient.mockRejectedValueOnce(closeError)
+      await expect(deliverPendingUserBentoEvents(createContext(), USER_ID)).resolves.toBe(true)
+      expect(mocks.closeClient).toHaveBeenCalledWith(expect.anything(), tx.pool)
+    }
+
+    expect(JSON.stringify(mocks.cloudlogErr.mock.calls)).toContain(`${phase} close failed`)
+    expectSanitizedLogs('private.user@example.com', 'observations', 'secret-token')
+  })
+
+  it('clears the timeout and rolls back when Bento throws', async () => {
+    vi.useFakeTimers()
+    const tx = createTransactionPool({
+      email: 'private.user@example.com',
+      lockOnboarding: pendingLoginOnboarding(),
+    })
+    mocks.getPgClient.mockReturnValueOnce(tx.pool)
+    mocks.trackBentoEvents.mockRejectedValueOnce(new Error('Bento transport failed'))
+
+    await expect(deliverPendingUserBentoEvents(createContext(), USER_ID)).resolves.toBe(false)
+
+    expect(tx.statements.at(-1)).toBe('ROLLBACK')
+    expect(vi.getTimerCount()).toBe(0)
+    expectSanitizedLogs('private.user@example.com', 'observations', 'secret-token')
+  })
+
+  it('contains a backgroundTask rejection after scheduling delivery', async () => {
+    const pendingLogin = pendingLoginOnboarding().bento_events['cli:login_successful']
+    const storedOnboarding = sentCommandOnboarding({ 'cli:login_successful': pendingLogin })
+    const fastPool = createFastPool({ rows: [{ onboarding: storedOnboarding }] })
+    const deliveryTx = createTransactionPool({ lockRows: [] })
+    const backgroundError = new Error('background scheduling failed')
+    mocks.getPgClient
+      .mockReturnValueOnce(fastPool)
+      .mockReturnValueOnce(deliveryTx.pool)
+    mocks.backgroundTask.mockRejectedValueOnce(backgroundError)
+
+    await expect(recordUserBentoEvent(createContext(), {
+      sourceEvent: 'CLI Command Invoked',
+      observedAt: '2026-08-22T10:00:04.000Z',
+      userId: USER_ID,
+    })).resolves.toBeUndefined()
+    await vi.waitFor(() => expect(mocks.closeClient).toHaveBeenCalledWith(expect.anything(), deliveryTx.pool))
+
+    expect(JSON.stringify(mocks.cloudlogErr.mock.calls)).toContain('background scheduling failed')
+    expectSanitizedLogs('private.user@example.com', 'observations', 'secret-token')
   })
 })

@@ -102,6 +102,27 @@ describe('bento response acceptance and configuration', () => {
 
       await expect(syncBentoSubscriberTags(createContext(), subscriberUpdates)).resolves.toBe(false)
     })
+
+    it('logs only numeric acknowledgement counts for a rejected subscriber batch', async () => {
+      queueAcknowledgement({
+        failed: 1,
+        results: 2,
+        email: 'private.user@example.com',
+        observations: [{ token: 'private-observation-token' }],
+        token: 'private-provider-token',
+      })
+
+      await expect(syncBentoSubscriberTags(createContext(), subscriberUpdates)).resolves.toBe(false)
+
+      expect(cloudlogErrMock).toHaveBeenCalledWith({
+        requestId: 'request-id',
+        message: 'syncBentoSubscriberTags',
+        error: { failed: 1, results: 2 },
+      })
+      expect(JSON.stringify(cloudlogErrMock.mock.calls)).not.toContain('private.user@example.com')
+      expect(JSON.stringify(cloudlogErrMock.mock.calls)).not.toContain('private-observation-token')
+      expect(JSON.stringify(cloudlogErrMock.mock.calls)).not.toContain('private-provider-token')
+    })
   })
 
   describe('trackBentoEvent', () => {
@@ -197,6 +218,80 @@ describe('bento response acceptance and configuration', () => {
         message: 'trackBentoEvents error',
         error,
       })
+    })
+
+    it('logs a non-2xx status without reading provider response data', async () => {
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+        email: 'private.user@example.com',
+        observations: [{ token: 'private-observation-token' }],
+        token: 'private-provider-token',
+      }), { status: 422 }))
+
+      await expect(trackBentoEvents(
+        createContext(),
+        'event.user@example.com',
+        events,
+      )).resolves.toBe(false)
+
+      const loggedError = cloudlogErrMock.mock.calls[0]?.[0]?.error
+      expect(loggedError).toBeInstanceOf(Error)
+      expect((loggedError as Error).message).toBe('Bento API error: 422')
+      expect(JSON.stringify(cloudlogErrMock.mock.calls)).not.toContain('private.user@example.com')
+      expect(JSON.stringify(cloudlogErrMock.mock.calls)).not.toContain('private-observation-token')
+      expect(JSON.stringify(cloudlogErrMock.mock.calls)).not.toContain('private-provider-token')
+    })
+
+    it('sanitizes invalid provider JSON without logging response data', async () => {
+      fetchMock.mockResolvedValueOnce(new Response(
+        '{"token":"private-provider-token", "observations": [',
+        { status: 200 },
+      ))
+
+      await expect(trackBentoEvents(
+        createContext(),
+        'event.user@example.com',
+        events,
+      )).resolves.toBe(false)
+
+      const loggedError = cloudlogErrMock.mock.calls[0]?.[0]?.error
+      expect(loggedError).toBeInstanceOf(Error)
+      expect((loggedError as Error).message).toBe('Bento API returned invalid JSON: 200')
+      expect(JSON.stringify(cloudlogErrMock.mock.calls)).not.toContain('private-provider-token')
+      expect(JSON.stringify(cloudlogErrMock.mock.calls)).not.toContain('observations')
+    })
+
+    it.each([
+      ['typed counts', {
+        failed: 1,
+        results: 2,
+        email: 'private.user@example.com',
+        observations: [{ token: 'private-observation-token' }],
+        token: 'private-provider-token',
+      }, { failed: 1, results: 2 }],
+      ['malformed counts', {
+        failed: '1',
+        results: '2',
+        email: 'private.user@example.com',
+        observations: [{ token: 'private-observation-token' }],
+        token: 'private-provider-token',
+      }, {}],
+    ])('logs only an allowlisted summary for rejected batch %s', async (_label, acknowledgement, summary) => {
+      queueAcknowledgement(acknowledgement)
+
+      await expect(trackBentoEvents(
+        createContext(),
+        'event.user@example.com',
+        events,
+      )).resolves.toBe(false)
+
+      expect(cloudlogErrMock).toHaveBeenCalledWith({
+        requestId: 'request-id',
+        message: 'trackBentoEvents',
+        error: summary,
+      })
+      expect(JSON.stringify(cloudlogErrMock.mock.calls)).not.toContain('private.user@example.com')
+      expect(JSON.stringify(cloudlogErrMock.mock.calls)).not.toContain('private-observation-token')
+      expect(JSON.stringify(cloudlogErrMock.mock.calls)).not.toContain('private-provider-token')
     })
 
     it.each([

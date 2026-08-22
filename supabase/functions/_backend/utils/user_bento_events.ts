@@ -88,7 +88,11 @@ const PATCH_BENTO_EVENTS_SQL = `
   SET onboarding = jsonb_set(
     onboarding,
     '{bento_events}',
-    COALESCE(onboarding -> 'bento_events', '{}'::jsonb) || $2::jsonb,
+    CASE
+      WHEN jsonb_typeof(onboarding -> 'bento_events') = 'object'
+        THEN onboarding -> 'bento_events'
+      ELSE '{}'::jsonb
+    END || $2::jsonb,
     true
   )
   WHERE id = $1::uuid
@@ -295,6 +299,10 @@ function logUserBentoError(
   })
 }
 
+function rollbackReleaseError(error: unknown): Error {
+  return error instanceof Error ? error : new Error('PostgreSQL rollback failed')
+}
+
 async function persistUserBentoObservation(
   c: Context,
   userId: string,
@@ -305,6 +313,7 @@ async function persistUserBentoObservation(
     pool = getPgClient(c)
     const client = await pool.connect()
     let transactionOpen = false
+    let rollbackError: Error | undefined
     try {
       await client.query('BEGIN')
       transactionOpen = true
@@ -337,16 +346,23 @@ async function persistUserBentoObservation(
       if (transactionOpen) {
         try {
           await client.query('ROLLBACK')
+          transactionOpen = false
         }
-        catch {
-          // The original transaction failure is the actionable error.
+        catch (error) {
+          rollbackError = rollbackReleaseError(error)
+          logUserBentoError(c, 'observe', userId, observation.bentoEvent, error)
         }
       }
       logUserBentoError(c, 'observe', userId, observation.bentoEvent, error)
       return false
     }
     finally {
-      client.release()
+      try {
+        client.release(rollbackError)
+      }
+      catch (error) {
+        logUserBentoError(c, 'observe', userId, observation.bentoEvent, error)
+      }
     }
   }
   catch (error) {
@@ -374,6 +390,7 @@ export async function deliverPendingUserBentoEvents(
     pool = getPgClient(c)
     const client = await pool.connect()
     let transactionOpen = false
+    let rollbackError: Error | undefined
     try {
       await client.query('BEGIN')
       transactionOpen = true
@@ -424,16 +441,23 @@ export async function deliverPendingUserBentoEvents(
       if (transactionOpen) {
         try {
           await client.query('ROLLBACK')
+          transactionOpen = false
         }
-        catch {
-          // The original transaction failure is the actionable error.
+        catch (error) {
+          rollbackError = rollbackReleaseError(error)
+          logUserBentoError(c, 'deliver', userId, undefined, error)
         }
       }
       logUserBentoError(c, 'deliver', userId, undefined, error)
       return false
     }
     finally {
-      client.release()
+      try {
+        client.release(rollbackError)
+      }
+      catch (error) {
+        logUserBentoError(c, 'deliver', userId, undefined, error)
+      }
     }
   }
   catch (error) {

@@ -52,12 +52,15 @@ async function bentoFetch(c: Context, path: string, siteUuid: string, body: any,
     signal,
   })
 
-  if (!response.ok) {
-    const error = await response.text()
-    throw new Error(`Bento API error: ${response.status} ${error}`)
-  }
+  if (!response.ok)
+    throw new Error(`Bento API error: ${response.status}`)
 
-  return response.json()
+  try {
+    return await response.json()
+  }
+  catch {
+    throw new Error(`Bento API returned invalid JSON: ${response.status}`)
+  }
 }
 
 function acceptedBentoBatchResult(result: unknown, expectedResults: number) {
@@ -66,6 +69,17 @@ function acceptedBentoBatchResult(result: unknown, expectedResults: number) {
 
   const response = result as { failed?: unknown, results?: unknown }
   return response.results === expectedResults && response.failed === 0
+}
+
+function bentoBatchResultSummary(result: unknown): { failed?: number, results?: number } {
+  if (!result || typeof result !== 'object')
+    return {}
+
+  const response = result as { failed?: unknown, results?: unknown }
+  return {
+    ...(typeof response.failed === 'number' && Number.isFinite(response.failed) ? { failed: response.failed } : {}),
+    ...(typeof response.results === 'number' && Number.isFinite(response.results) ? { results: response.results } : {}),
+  }
 }
 
 function acceptedBentoCommandResult(result: unknown, expectedResults: number) {
@@ -102,7 +116,7 @@ export async function trackBentoEvents(
     }
     const res = await bentoFetch(c, 'batch/events', siteUuid, payload, signal)
     if (!acceptedBentoBatchResult(res, payload.events.length)) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'trackBentoEvents', error: res })
+      cloudlogErr({ requestId: c.get('requestId'), message: 'trackBentoEvents', error: bentoBatchResultSummary(res) })
       return false
     }
     return true
@@ -189,7 +203,7 @@ export async function syncBentoSubscriberTags(
       const payload = { subscribers: chunk }
       const res = await bentoFetch(c, 'batch/subscribers', siteUuid, payload, signal)
       if (!acceptedBentoBatchResult(res, chunk.length)) {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'syncBentoSubscriberTags', error: res })
+        cloudlogErr({ requestId: c.get('requestId'), message: 'syncBentoSubscriberTags', error: bentoBatchResultSummary(res) })
         return false
       }
     }
