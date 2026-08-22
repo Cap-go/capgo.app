@@ -1,10 +1,110 @@
-import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+// @vitest-environment happy-dom
 
-const pagePath = new URL('../src/pages/login-cli.vue', import.meta.url)
-const auth = readFileSync(new URL('../src/modules/auth.ts', import.meta.url), 'utf8')
-const organizationStore = readFileSync(new URL('../src/stores/organization.ts', import.meta.url), 'utf8')
-const messages = JSON.parse(readFileSync(new URL('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
+import type { App } from 'vue'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createApp, h, nextTick } from 'vue'
+import { createI18n } from 'vue-i18n'
+import LoginCliPage from '../src/pages/login-cli.vue'
+
+const route = vi.hoisted(() => ({ query: { ai: '1' } as Record<string, string> }))
+const router = vi.hoisted(() => ({ push: vi.fn() }))
+const clipboardWrite = vi.hoisted(() => vi.fn())
+const cliLoginMocks = vi.hoisted(() => ({
+  createCliLoginKeyDependencies: vi.fn(() => ({})),
+  getCliLoginDestination: vi.fn(() => '/dashboard'),
+  isMatchingCliLoginEvent: vi.fn(() => false),
+  isValidCliLoginSession: vi.fn(() => true),
+  prepareCliLoginKey: vi.fn(),
+}))
+const organizationApps = vi.hoisted(() => new Map([
+  ['org-1', [{ app_id: 'com.test.app', name: 'Test App', owner_org: 'org-1' }]],
+]))
+const organizationStore = vi.hoisted(() => ({
+  awaitInitialLoad: vi.fn(async () => {}),
+  organizations: [{ gid: 'org-1', name: 'Test organization', app_count: 1 }],
+  getAppsByOrgId: vi.fn((orgId: string) => organizationApps.get(orgId) ?? []),
+}))
+const supabase = vi.hoisted(() => ({
+  channel: vi.fn(),
+  from: vi.fn(),
+  removeChannel: vi.fn(),
+}))
+
+vi.mock('vue-router', () => ({
+  useRoute: () => route,
+  useRouter: () => router,
+}))
+
+vi.mock('vue-sonner', () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
+}))
+
+vi.mock('~/services/cliLogin', () => cliLoginMocks)
+
+vi.mock('~/services/supabase', () => ({
+  useSupabase: () => supabase,
+}))
+
+vi.mock('~/stores/main', () => ({
+  useMainStore: () => ({ user: { id: 'user-1' } }),
+}))
+
+vi.mock('~/stores/organization', () => ({
+  isPendingOrganizationInvite: () => false,
+  useOrganizationStore: () => organizationStore,
+}))
+
+const pagePath = resolve(process.cwd(), 'src/pages/login-cli.vue')
+const auth = readFileSync(resolve(process.cwd(), 'src/modules/auth.ts'), 'utf8')
+const organizationStoreSource = readFileSync(resolve(process.cwd(), 'src/stores/organization.ts'), 'utf8')
+const messages = JSON.parse(readFileSync(resolve(process.cwd(), 'messages/en.json'), 'utf8')) as Record<string, string>
+const preparedKey = 'capgo_ai_setup_secret'
+const mountedApps: App[] = []
+
+function mountLoginCliPage() {
+  const app = createApp({ render: () => h(LoginCliPage) })
+  app.use(createI18n({
+    legacy: false,
+    locale: 'en',
+    messages: { en: messages },
+  }))
+  const container = document.createElement('div')
+  document.body.append(container)
+  app.mount(container)
+  mountedApps.push(app)
+  return container
+}
+
+async function flushPromises() {
+  await Promise.resolve()
+  await Promise.resolve()
+  await nextTick()
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  route.query = { ai: '1' }
+  cliLoginMocks.prepareCliLoginKey.mockResolvedValue({
+    status: 'ready',
+    keyName: 'Capgo CLI',
+    secret: preparedKey,
+    eligibleOrgIds: ['org-1'],
+    skippedOrganizationNames: [],
+    policy: { hashed: false, expiresAt: null },
+    reused: false,
+  })
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: clipboardWrite },
+  })
+})
+
+afterEach(() => {
+  mountedApps.splice(0).forEach(app => app.unmount())
+  document.body.replaceChildren()
+})
 
 describe('/login-cli page contract', () => {
   it.concurrent('uses the naked layout and does not reuse connect controls', () => {
@@ -57,6 +157,8 @@ describe('/login-cli page contract', () => {
     expect(reusedFootnote).toBeLessThan(readyStateEnd)
     expect(page).toContain('text-xs text-slate-400')
     expect(page).toContain('<span aria-hidden="true">*</span>')
+    expect(page).toContain('<output v-if="!aiMode"')
+    expect(page).not.toContain('<p v-if="!aiMode" role="status"')
   })
 
   it.concurrent('keeps the full revealed key visible without truncation', () => {
@@ -65,20 +167,43 @@ describe('/login-cli page contract', () => {
     expect(page).not.toContain('flex-1 truncate')
   })
 
-  it.concurrent('does not prepare a key without a valid session', () => {
+  it.concurrent('gates key preparation strictly in non-AI mode', () => {
     const page = readFileSync(pagePath, 'utf8')
     expect(page).toContain('const session = route.query.session')
-    expect(page).toContain('if (!isValidCliLoginSession(session))')
-    expect(page.indexOf('if (!isValidCliLoginSession(session))'))
+    expect(page).toContain('if (!aiMode.value && !isValidCliLoginSession(session))')
+    expect(page.indexOf('if (!aiMode.value && !isValidCliLoginSession(session))'))
       .toBeLessThan(page.indexOf('prepareCliLoginKey('))
   })
 
-  it.concurrent('does not enable key preparation through an AI query parameter', () => {
+  it.concurrent('supports a direct AI setup prompt containing the prepared key', () => {
     const page = readFileSync(pagePath, 'utf8')
-    expect(page).not.toContain('route.query.ai')
-    expect(page).not.toContain('aiMode')
-    expect(page).not.toContain('copyAiPrompt')
-    expect(page).not.toContain('cli-login-ai-')
+    expect(page).toContain(`const aiMode = computed(() => route.query.ai === '1')`)
+    expect(page).toContain('buildCliAiSetupPrompt({')
+    expect(page).toContain('organizationStore.getAppsByOrgId(organization.gid)')
+    expect(page).toContain('eligibleIds.has(organization.gid)')
+    expect(page).toContain('await navigator.clipboard.writeText(aiPrompt.value)')
+    expect(page).toContain(`v-if="aiMode"`)
+    expect(page).toContain(`t('cli-login-ai-copy')`)
+  })
+
+  it('copies a prompt containing the prepared key in AI mode', async () => {
+    const container = mountLoginCliPage()
+    await flushPromises()
+
+    const copyButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.includes(messages['cli-login-ai-copy']))
+    expect(copyButton).toBeDefined()
+
+    copyButton?.click()
+    await flushPromises()
+
+    expect(clipboardWrite).toHaveBeenCalledOnce()
+    const copiedPrompt = clipboardWrite.mock.calls[0]?.[0] as string
+    expect(copiedPrompt).toContain(`login ${preparedKey}`)
+    expect(copiedPrompt).toContain('Organization: "Test organization" (organization ID: `org-1`)')
+    expect(copiedPrompt).toContain('App: "Test App" (Capgo app ID: `com.test.app`)')
+    expect(copiedPrompt).toContain('## 8. Test the first live update')
+    expect(copiedPrompt.match(new RegExp(preparedKey, 'g'))).toHaveLength(1)
   })
 
   it.concurrent('keeps the route out of normal onboarding redirects', () => {
@@ -90,13 +215,13 @@ describe('/login-cli page contract', () => {
     expect(auth).toContain('const organizationFetchOptions = { loadImages: !isCliLoginRoute }')
     expect(auth).toContain('organizationStore.fetchOrganizations(organizationFetchOptions)')
     expect(auth).toContain('organizationStore.dedupFetchOrganizations(organizationFetchOptions)')
-    expect(organizationStore).not.toContain('let loadOrganizationImages')
-    expect(organizationStore).toContain('const loadImages = options.loadImages ?? true')
-    expect(organizationStore).toContain('loadOrganizationApps(selectableOrganizations, loadImages)')
-    expect(organizationStore).toContain('loadPendingOrganizationImages()')
-    expect(organizationStore).toContain('if (pendingOrganizationImageLoad)')
-    expect(organizationStore).toContain('pendingOrganizationImageLoadRequested = true')
-    expect(organizationStore).toContain('if (pendingOrganizationImageLoadRequested)')
+    expect(organizationStoreSource).not.toContain('let loadOrganizationImages')
+    expect(organizationStoreSource).toContain('const loadImages = options.loadImages ?? true')
+    expect(organizationStoreSource).toContain('loadOrganizationApps(selectableOrganizations, loadImages)')
+    expect(organizationStoreSource).toContain('loadPendingOrganizationImages()')
+    expect(organizationStoreSource).toContain('if (pendingOrganizationImageLoad)')
+    expect(organizationStoreSource).toContain('pendingOrganizationImageLoadRequested = true')
+    expect(organizationStoreSource).toContain('if (pendingOrganizationImageLoadRequested)')
   })
 
   it.concurrent('contains focused key, paste, warning, waiting, and success copy', () => {
@@ -106,7 +231,9 @@ describe('/login-cli page contract', () => {
     expect(messages['cli-login-copy-note']).toContain('hidden')
     expect(messages['cli-login-waiting']).toContain('Waiting')
     expect(messages['cli-login-success-title']).toContain('successful')
-    expect(Object.keys(messages).some(key => key.startsWith('cli-login-ai-'))).toBe(false)
+    expect(messages['cli-login-ai-description']).toContain('AI assistant')
+    expect(messages['cli-login-ai-security-warning']).toContain('API key')
+    expect(messages).not.toHaveProperty('cli-login-ai-prompt')
   })
 
   it.concurrent('uses prefixed DaisyUI primitives and resolves the destination before success', () => {
