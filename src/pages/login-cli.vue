@@ -387,7 +387,7 @@ onBeforeUnmount(() => {
         <p v-if="skippedNames.length" class="text-sm text-amber-700 dark:text-amber-300">
           {{ t('cli-login-skipped-organizations', { organizations: skippedNames.join(', ') }) }}
         </p>
-        <p v-if="!aiMode" role="status" class="flex items-center text-sm" :class="realtimeUnavailable ? 'text-amber-700' : 'text-slate-500'">
+        <output v-if="!aiMode" class="flex items-center text-sm" :class="realtimeUnavailable ? 'text-amber-700' : 'text-slate-500'">
           <template v-if="realtimeUnavailable">
             {{ t('cli-login-realtime-unavailable') }}
           </template>
@@ -395,7 +395,7 @@ onBeforeUnmount(() => {
             <span>{{ t('cli-login-waiting') }}</span>
             <span class="d-loading d-loading-dots d-loading-xs ml-1" aria-hidden="true" />
           </template>
-        </p>
+        </output>
         <p v-if="reused" class="flex items-start gap-1.5 pt-1 text-xs text-slate-400 dark:text-slate-500">
           <span aria-hidden="true">*</span>
           <span>{{ t('cli-login-reused') }}</span>

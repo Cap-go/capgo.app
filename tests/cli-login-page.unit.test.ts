@@ -157,6 +157,8 @@ describe('/login-cli page contract', () => {
     expect(reusedFootnote).toBeLessThan(readyStateEnd)
     expect(page).toContain('text-xs text-slate-400')
     expect(page).toContain('<span aria-hidden="true">*</span>')
+    expect(page).toContain('<output v-if="!aiMode"')
+    expect(page).not.toContain('<p v-if="!aiMode" role="status"')
   })
 
   it.concurrent('keeps the full revealed key visible without truncation', () => {
