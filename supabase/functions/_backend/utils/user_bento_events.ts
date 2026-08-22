@@ -210,7 +210,12 @@ export function appendUserBentoObservation(
   const retained = details.length <= MAX_USER_BENTO_DETAILS
     ? details
     : [details[0]!, ...details.slice(-(MAX_USER_BENTO_DETAILS - 1))]
-  const currentCount = current?.occurrence_count ?? 0
+  const storedCount = typeof current?.occurrence_count === 'number'
+    && Number.isSafeInteger(current.occurrence_count)
+    && current.occurrence_count >= 0
+    ? current.occurrence_count
+    : 0
+  const currentCount = Math.max(storedCount, current?.details.length ?? 0)
   const occurrenceCount = Math.min(Number.MAX_SAFE_INTEGER, currentCount + 1)
   return {
     ...events,
@@ -229,7 +234,7 @@ export function getPendingUserBentoEvents(
 }> {
   return USER_BENTO_EVENT_NAMES.flatMap((event) => {
     const state = events[event]
-    return state && !state.sent_at && state.details.length > 0
+    return state && !validIsoDate(state.sent_at) && state.details.length > 0
       ? [{ event, state }]
       : []
   })

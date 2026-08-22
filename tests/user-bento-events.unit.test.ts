@@ -139,6 +139,49 @@ describe('cli user Bento event registry', () => {
     })
   })
 
+  it('keeps a direct stored state with malformed sent_at pending', () => {
+    const observation = buildMappedUserBentoEvent({
+      sourceEvent: 'User CLI login',
+      observedAt: '2026-08-22T10:00:00.000Z',
+    })!
+    const state = {
+      details: [observation.details],
+      occurrence_count: 1,
+      sent_at: 'not-a-date',
+    }
+    const events: StoredUserBentoEvents = {
+      'cli:login_successful': state,
+    }
+
+    expect(getPendingUserBentoEvents(events)).toEqual([
+      { event: 'cli:login_successful', state },
+    ])
+  })
+
+  it.each([
+    ['negative', -1, 0, 1],
+    ['unsafe', Number.MAX_SAFE_INTEGER + 1, 0, 1],
+    ['undercounted', 1, 3, 4],
+  ])('normalizes %s occurrence_count before append', (_, occurrenceCount, detailCount, expectedCount) => {
+    const details = Array.from({ length: detailCount }, (_, index) => buildMappedUserBentoEvent({
+      sourceEvent: 'User CLI login',
+      observedAt: `2026-08-22T10:00:0${index}.000Z`,
+    })!.details)
+    const observation = buildMappedUserBentoEvent({
+      sourceEvent: 'User CLI login',
+      observedAt: '2026-08-22T10:00:09.000Z',
+    })!
+    const events: StoredUserBentoEvents = {
+      'cli:login_successful': {
+        details,
+        occurrence_count: occurrenceCount,
+      },
+    }
+
+    expect(appendUserBentoObservation(events, observation)['cli:login_successful']?.occurrence_count)
+      .toBe(expectedCount)
+  })
+
   it('drops unknown stored events and unknown stored detail properties', () => {
     const parsed = parseUserBentoEvents({
       bento_events: {
