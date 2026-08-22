@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { intro, log, outro } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { getInvocationSource } from '../analytics/track'
-import { checkAppExists, defaultAppIconPath, getAppIconStoragePath, newIconPath } from '../api/app'
+import { defaultAppIconPath, getAppIconStoragePath, newIconPath } from '../api/app'
 import { checkAlerts } from '../api/update'
 import { isAiAgentEnvironment } from '../init/onboarding-source'
 import { CliUserError } from '../shared/cli-user-error'
@@ -39,6 +39,12 @@ function ensureOptions(appId: string, options: AppOptions, silent: boolean) {
     throw new CliUserError('Missing appId')
   }
 
+  if (appId === 'io.ionic.starter') {
+    if (!silent)
+      log.error(`This appId ${appId} cannot be used it's reserved, please change it in your capacitor config.`)
+    throw new CliUserError('Reserved appId, please change it in capacitor config')
+  }
+
   if (appId.includes('--')) {
     if (!silent)
       log.error('The app id includes illegal symbols. You cannot use "--" in the app id')
@@ -54,30 +60,6 @@ function ensureOptions(appId: string, options: AppOptions, silent: boolean) {
     }
     throw new CliUserError('Invalid app ID format')
   }
-}
-
-async function ensureAppDoesNotExist(
-  apikey: string,
-  appId: string,
-  silent: boolean,
-  options?: { supaHost?: string, supaAnon?: string },
-) {
-  const appExist = await checkAppExists(apikey, appId, options)
-  if (!appExist)
-    return
-
-  if (appId === 'io.ionic.starter') {
-    if (!silent)
-      log.error(`This appId ${appId} cannot be used it's reserved, please change it in your capacitor config.`)
-    throw new CliUserError('Reserved appId, please change it in capacitor config')
-  }
-
-  if (!silent)
-    log.error(`App ${appId} already exist`)
-  // Keep "already exists" in the message so `isAppAlreadyExistsError` still
-  // matches it; pass the id via context, not the message. Re-uploading an
-  // existing app is an expected user state, not a crash.
-  throw new CliUserError('App already exists', { appId })
 }
 
 export type AppCreateSource = 'cli-direct' | 'onboarding' | 'mcp'
@@ -166,8 +148,6 @@ export async function addAppInternal(
 
   const supabase = await createSupabaseClient(options.apikey!, options.supaHost, options.supaAnon)
   const userId = await resolveUserIdFromApiKey(supabase, options.apikey)
-
-  await ensureAppDoesNotExist(options.apikey!, appId, silent, { supaHost: options.supaHost, supaAnon: options.supaAnon })
 
   if (!organization)
     organization = await getOrganizationWithPermission(supabase, options.apikey, 'org.create_app')
