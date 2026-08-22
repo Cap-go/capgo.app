@@ -1,4 +1,10 @@
-type TelemetryValue = string | number | boolean
+import type { Context } from 'hono'
+import { trackBentoEvents } from './bento.ts'
+import { cloudlogErr, serializeError } from './logging.ts'
+import { closeClient, getPgClient } from './pg.ts'
+import { backgroundTask } from './utils.ts'
+
+export type TelemetryValue = string | number | boolean
 type UserBentoDetails = Record<string, TelemetryValue>
 
 type DetailField
@@ -64,6 +70,29 @@ export interface StoredUserBentoEvent {
 export type StoredUserBentoEvents = Partial<Record<UserBentoEventName, StoredUserBentoEvent>>
 
 export const MAX_USER_BENTO_DETAILS = 5
+
+const USER_BENTO_TIMEOUT_MS = 5_000
+const FAST_STATE_SQL = `
+  SELECT onboarding
+  FROM public.users
+  WHERE id = $1::uuid
+`
+const LOCK_USER_SQL = `
+  SELECT email, onboarding
+  FROM public.users
+  WHERE id = $1::uuid
+  FOR UPDATE
+`
+const PATCH_BENTO_EVENTS_SQL = `
+  UPDATE public.users
+  SET onboarding = jsonb_set(
+    onboarding,
+    '{bento_events}',
+    COALESCE(onboarding -> 'bento_events', '{}'::jsonb) || $2::jsonb,
+    true
+  )
+  WHERE id = $1::uuid
+`
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -238,4 +267,230 @@ export function getPendingUserBentoEvents(
       ? [{ event, state }]
       : []
   })
+}
+
+export interface RecordUserBentoEventInput {
+  appId?: string
+  observedAt?: string
+  orgId?: string
+  sourceEvent: string
+  tags?: Record<string, TelemetryValue>
+  userId: string
+}
+
+function logUserBentoError(
+  c: Context,
+  phase: 'observe' | 'deliver',
+  userId: string,
+  event: UserBentoEventName | undefined,
+  error: unknown,
+) {
+  cloudlogErr({
+    requestId: c.get('requestId'),
+    message: 'user Bento event delivery failed',
+    phase,
+    userId,
+    event,
+    error: serializeError(error),
+  })
+}
+
+async function persistUserBentoObservation(
+  c: Context,
+  userId: string,
+  observation: MappedUserBentoEvent,
+): Promise<boolean> {
+  let pool: ReturnType<typeof getPgClient> | undefined
+  try {
+    pool = getPgClient(c)
+    const client = await pool.connect()
+    let transactionOpen = false
+    try {
+      await client.query('BEGIN')
+      transactionOpen = true
+      const result = await client.query<{ onboarding: unknown }>(LOCK_USER_SQL, [userId])
+      const lockedUser = result.rows[0]
+      if (!lockedUser) {
+        await client.query('COMMIT')
+        transactionOpen = false
+        return false
+      }
+
+      const storedEvents = parseUserBentoEvents(lockedUser.onboarding)
+      if (validIsoDate(storedEvents[observation.bentoEvent]?.sent_at)) {
+        await client.query('COMMIT')
+        transactionOpen = false
+        return getPendingUserBentoEvents(storedEvents).length > 0
+      }
+
+      const nextEvents = appendUserBentoObservation(storedEvents, observation)
+      const changedEvent = nextEvents[observation.bentoEvent]
+      await client.query(PATCH_BENTO_EVENTS_SQL, [
+        userId,
+        JSON.stringify({ [observation.bentoEvent]: changedEvent }),
+      ])
+      await client.query('COMMIT')
+      transactionOpen = false
+      return getPendingUserBentoEvents(nextEvents).length > 0
+    }
+    catch (error) {
+      if (transactionOpen) {
+        try {
+          await client.query('ROLLBACK')
+        }
+        catch {
+          // The original transaction failure is the actionable error.
+        }
+      }
+      logUserBentoError(c, 'observe', userId, observation.bentoEvent, error)
+      return false
+    }
+    finally {
+      client.release()
+    }
+  }
+  catch (error) {
+    logUserBentoError(c, 'observe', userId, observation.bentoEvent, error)
+    return false
+  }
+  finally {
+    if (pool) {
+      try {
+        await closeClient(c, pool)
+      }
+      catch (error) {
+        logUserBentoError(c, 'observe', userId, observation.bentoEvent, error)
+      }
+    }
+  }
+}
+
+export async function deliverPendingUserBentoEvents(
+  c: Context,
+  userId: string,
+): Promise<boolean> {
+  let pool: ReturnType<typeof getPgClient> | undefined
+  try {
+    pool = getPgClient(c)
+    const client = await pool.connect()
+    let transactionOpen = false
+    try {
+      await client.query('BEGIN')
+      transactionOpen = true
+      const result = await client.query<{ email: string, onboarding: unknown }>(LOCK_USER_SQL, [userId])
+      const lockedUser = result.rows[0]
+      if (!lockedUser) {
+        await client.query('COMMIT')
+        transactionOpen = false
+        return true
+      }
+
+      const pending = getPendingUserBentoEvents(parseUserBentoEvents(lockedUser.onboarding))
+      if (pending.length === 0) {
+        await client.query('COMMIT')
+        transactionOpen = false
+        return true
+      }
+
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), USER_BENTO_TIMEOUT_MS)
+      let accepted: boolean | undefined
+      try {
+        accepted = await trackBentoEvents(c, lockedUser.email, pending.map(item => ({
+          event: item.event,
+          data: {
+            occurrence_count: item.state.occurrence_count,
+            observations: item.state.details,
+          },
+        })), controller.signal)
+      }
+      finally {
+        clearTimeout(timeout)
+      }
+      if (accepted !== true)
+        throw new Error('Bento did not accept the complete user event batch')
+
+      const sentAt = new Date().toISOString()
+      const sentPatch = Object.fromEntries(pending.map(item => [
+        item.event,
+        { ...item.state, sent_at: sentAt },
+      ]))
+      await client.query(PATCH_BENTO_EVENTS_SQL, [userId, JSON.stringify(sentPatch)])
+      await client.query('COMMIT')
+      transactionOpen = false
+      return true
+    }
+    catch (error) {
+      if (transactionOpen) {
+        try {
+          await client.query('ROLLBACK')
+        }
+        catch {
+          // The original transaction failure is the actionable error.
+        }
+      }
+      logUserBentoError(c, 'deliver', userId, undefined, error)
+      return false
+    }
+    finally {
+      client.release()
+    }
+  }
+  catch (error) {
+    logUserBentoError(c, 'deliver', userId, undefined, error)
+    return false
+  }
+  finally {
+    if (pool) {
+      try {
+        await closeClient(c, pool)
+      }
+      catch (error) {
+        logUserBentoError(c, 'deliver', userId, undefined, error)
+      }
+    }
+  }
+}
+
+export async function recordUserBentoEvent(
+  c: Context,
+  input: RecordUserBentoEventInput,
+): Promise<void> {
+  const observation = buildMappedUserBentoEvent({
+    appId: input.appId,
+    observedAt: input.observedAt ?? new Date().toISOString(),
+    orgId: input.orgId,
+    sourceEvent: input.sourceEvent,
+    tags: input.tags,
+  })
+  if (!observation)
+    return
+
+  try {
+    let fastPool: ReturnType<typeof getPgClient> | undefined
+    let fastState: StoredUserBentoEvents
+    try {
+      fastPool = getPgClient(c)
+      const result = await fastPool.query<{ onboarding: unknown }>(FAST_STATE_SQL, [input.userId])
+      fastState = parseUserBentoEvents(result.rows[0]?.onboarding)
+    }
+    finally {
+      if (fastPool)
+        await closeClient(c, fastPool)
+    }
+
+    const currentSent = validIsoDate(fastState[observation.bentoEvent]?.sent_at)
+    const fastPending = getPendingUserBentoEvents(fastState)
+    if (currentSent && fastPending.length === 0)
+      return
+
+    const hasPending = currentSent
+      ? fastPending.length > 0
+      : await persistUserBentoObservation(c, input.userId, observation)
+    if (hasPending)
+      await backgroundTask(c, deliverPendingUserBentoEvents(c, input.userId))
+  }
+  catch (error) {
+    logUserBentoError(c, 'observe', input.userId, observation.bentoEvent, error)
+  }
 }
