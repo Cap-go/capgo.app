@@ -14,6 +14,7 @@ interface OnboardingRow {
 
 const userId = randomUUID()
 const email = `user-bento-events-${randomUUID()}@test.com`
+const verifiedAppId = 'com.demo.app'
 let apiKey: string | undefined
 let apiKeyId: number | undefined
 
@@ -63,11 +64,25 @@ async function postEvent(body: Record<string, unknown>) {
 }
 
 async function readOnboarding() {
+  const onboarding = await readOnboardingForUser(userId)
+  if (!onboarding)
+    throw new Error('Expected dedicated user onboarding row')
+  return onboarding
+}
+
+async function readOnboardingForUser(targetUserId: string) {
   const rows = await executeSQL<OnboardingRow>(
     'SELECT onboarding FROM public.users WHERE id = $1',
-    [userId],
+    [targetUserId],
   )
-  return rows[0]!.onboarding
+  return rows[0]?.onboarding
+}
+
+async function setOnboarding(onboarding: Record<string, unknown>) {
+  await executeSQL(
+    'UPDATE public.users SET onboarding = $2::jsonb WHERE id = $1',
+    [userId, JSON.stringify(onboarding)],
+  )
 }
 
 it('keeps notifyConsole login events out of the user Bento state', async () => {
@@ -84,6 +99,81 @@ it('keeps notifyConsole login events out of the user Bento state', async () => {
   expect(await readOnboarding()).not.toHaveProperty('bento_events')
 })
 
+it('records legacy org-scoped events on the authenticated actor', async () => {
+  await setOnboarding({ legacy_actor: { keep: true } })
+
+  const response = await postEvent({
+    channel: 'user-login',
+    event: 'User CLI login',
+    user_id: ORG_ID,
+  })
+
+  expect(response.status).toBe(200)
+  expect(await response.json()).toEqual({ status: 'ok' })
+  expect(await readOnboarding()).toMatchObject({
+    legacy_actor: { keep: true },
+    bento_events: {
+      'cli:login_successful': {
+        occurrence_count: 1,
+        details: [expect.objectContaining({ org_id: ORG_ID })],
+      },
+    },
+  })
+  expect(await readOnboardingForUser(ORG_ID)).toBeUndefined()
+})
+
+it('omits an unverified app id from actor Bento event details', async () => {
+  await setOnboarding({ unverified_app: { keep: true } })
+
+  const response = await postEvent({
+    channel: 'cli-usage',
+    event: 'CLI Command Invoked',
+    tracking_version: 2,
+    tags: {
+      app_id: verifiedAppId,
+      command_path: 'init',
+    },
+  })
+
+  expect(response.status).toBe(200)
+  expect(await response.json()).toEqual({ status: 'ok' })
+  const onboarding = await readOnboarding()
+  expect(onboarding).toMatchObject({ unverified_app: { keep: true } })
+  const commandDetail = onboarding.bento_events?.['cli:command_invoked']?.details[0]
+  expect(commandDetail).toMatchObject({ command_path: 'init' })
+  expect(commandDetail).not.toHaveProperty('app_id')
+})
+
+it('keeps a verified app id in actor Bento event details', async () => {
+  await setOnboarding({ verified_app: { keep: true } })
+
+  const response = await postEvent({
+    channel: 'cli-usage',
+    event: 'CLI Command Invoked',
+    org_id: ORG_ID,
+    tracking_version: 2,
+    tags: {
+      app_id: verifiedAppId,
+      command_path: 'init',
+    },
+  })
+
+  expect(response.status).toBe(200)
+  expect(await response.json()).toEqual({ status: 'ok' })
+  expect(await readOnboarding()).toMatchObject({
+    verified_app: { keep: true },
+    bento_events: {
+      'cli:command_invoked': {
+        occurrence_count: 1,
+        details: [expect.objectContaining({
+          app_id: verifiedAppId,
+          org_id: ORG_ID,
+        })],
+      },
+    },
+  })
+})
+
 it('records only mapped CLI Bento events for the authenticated actor', async () => {
   const initialOnboarding = {
     status: 'in_progress',
@@ -91,10 +181,7 @@ it('records only mapped CLI Bento events for the authenticated actor', async () 
     flow: 'pre_org',
     unrelated: { keep: true },
   }
-  await executeSQL(
-    'UPDATE public.users SET onboarding = $2::jsonb WHERE id = $1',
-    [userId, JSON.stringify(initialOnboarding)],
-  )
+  await setOnboarding(initialOnboarding)
 
   const payloads = [
     {

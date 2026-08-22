@@ -475,11 +475,11 @@ app.post('/', middlewareAuth(), async (c) => {
   }, apikeyId))
 
   await recordUserBentoEvent(c, {
-    userId: trackingUserId,
+    userId: c.get('auth')!.userId,
     sourceEvent: trackedBody.event,
     tags: trackedBody.tags,
     orgId: verifiedOrgId,
-    appId,
+    appId: verifiedOrgId ? appId : undefined,
   })
 
   return c.json(BRES)
