@@ -3,6 +3,20 @@ export type FrontendOnboardingVersion = typeof FRONTEND_ONBOARDING_VERSIONS[numb
 export const FRONTEND_ONBOARDING_FOLLOWUP_MS = 24 * 60 * 60 * 1000
 export const FRONTEND_ONBOARDING_PRODUCTION_HOST = ['console', 'capgo', 'app'].join('.')
 
+export function buildFrontendOnboardingProductionHostHogql(properties: string, timestamp: string): string {
+  const currentUrl = `JSONExtractString(toString(${properties}), '$current_url')`
+  const productionOrigin = `https://${FRONTEND_ONBOARDING_PRODUCTION_HOST}`
+
+  return `(
+    JSONExtractString(toString(${properties}), '$host') = '${FRONTEND_ONBOARDING_PRODUCTION_HOST}'
+    OR (
+      isNull(${properties}['$host'])
+      AND toDate(toTimeZone(${timestamp}, 'UTC')) = toDate('2026-08-22')
+      AND (${currentUrl} = '${productionOrigin}' OR ${currentUrl} LIKE '${productionOrigin}/%')
+    )
+  )`
+}
+
 export type FrontendOnboardingStageKey = 'intent' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'setup'
 
 export interface FrontendOnboardingAttempt {

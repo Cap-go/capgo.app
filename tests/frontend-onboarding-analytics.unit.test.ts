@@ -11,6 +11,7 @@ import {
   FRONTEND_ONBOARDING_MAX_RANGE_MS,
   getAdminFrontendOnboardingAnalytics,
 } from '../supabase/functions/_backend/utils/frontend_onboarding_analytics.ts'
+import { buildFrontendOnboardingProductionHostHogql } from '../supabase/functions/_backend/utils/frontend_onboarding_analytics_model.ts'
 import { createFrontendOnboardingDailySetupCliOutcomeCounts } from '../supabase/functions/_backend/utils/frontend_onboarding_daily_setup_cli_outcomes_model.ts'
 
 const { cloudlogErrMock, queryPosthogHogqlMock } = vi.hoisted(() => ({
@@ -40,6 +41,18 @@ beforeEach(() => {
     connected: true,
     failureReason: null,
     rows: [],
+  })
+})
+
+describe('buildFrontendOnboardingProductionHostHogql', () => {
+  it('recovers missing-host production events only on August 22 UTC', () => {
+    const filter = buildFrontendOnboardingProductionHostHogql('events.properties', 'events.timestamp')
+
+    expect(filter).toContain('JSONExtractString(toString(events.properties), \'$host\') = \'console.capgo.app\'')
+    expect(filter).toContain('isNull(events.properties[\'$host\'])')
+    expect(filter).toContain('toDate(toTimeZone(events.timestamp, \'UTC\')) = toDate(\'2026-08-22\')')
+    expect(filter).toContain('JSONExtractString(toString(events.properties), \'$current_url\') = \'https://console.capgo.app\'')
+    expect(filter).toContain('JSONExtractString(toString(events.properties), \'$current_url\') LIKE \'https://console.capgo.app/%\'')
   })
 })
 

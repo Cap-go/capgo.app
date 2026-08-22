@@ -84,6 +84,8 @@ describe('buildFrontendOnboardingDailySetupCliHogql', () => {
     expect(selectedSetupCopyBranch).toContain('selected_events.event IN (\'onboarding_step_viewed\', \'onboarding_cli_command_copied\', \'onboarding_ai_instructions_copied\')')
     expect(selectedSetupCopyBranch).toContain('JSONExtractString(toString(selected_events.properties), \'flow\') = \'pre_org\'')
     expect(selectedSetupCopyBranch).toContain('JSONExtractString(toString(selected_events.properties), \'$host\') = \'console.capgo.app\'')
+    expect(selectedSetupCopyBranch).toContain('isNull(selected_events.properties[\'$host\'])')
+    expect(selectedSetupCopyBranch).toContain('toDate(toTimeZone(selected_events.timestamp, \'UTC\')) = toDate(\'2026-08-22\')')
     expect(selectedSetupCopyBranch).toContain('toIntOrZero(toString(selected_events.properties.onboarding_version)) IN (2, 3, 4)')
     expect(selectedSetupCopyBranch).toContain('JSONExtractString(toString(selected_events.properties), \'step\') = \'setup\'')
 
