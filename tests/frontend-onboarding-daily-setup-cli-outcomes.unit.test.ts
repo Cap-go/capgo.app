@@ -26,11 +26,16 @@ function createContext(): Context {
 }
 
 function expectAugust22ProductionHostFallback(query: string, properties: string, timestamp: string) {
-  expect(query).toContain(`JSONExtractString(toString(${properties}), '$host') = 'console.capgo.app'`)
-  expect(query).toContain(`isNull(${properties}['$host'])`)
-  expect(query).toContain(`toDate(toTimeZone(${timestamp}, 'UTC')) = toDate('2026-08-22')`)
-  expect(query).toContain(`JSONExtractString(toString(${properties}), '$current_url') = 'https://console.capgo.app'`)
-  expect(query).toContain(`JSONExtractString(toString(${properties}), '$current_url') LIKE 'https://console.capgo.app/%'`)
+  const currentUrl = `JSONExtractString(toString(${properties}), '$current_url')`
+
+  expect(query).toContain(`(
+    JSONExtractString(toString(${properties}), '$host') = 'console.capgo.app'
+    OR (
+      isNull(${properties}['$host'])
+      AND toDate(toTimeZone(${timestamp}, 'UTC')) = toDate('2026-08-22')
+      AND (${currentUrl} = 'https://console.capgo.app' OR ${currentUrl} LIKE 'https://console.capgo.app/%')
+    )
+  )`)
 }
 
 beforeEach(() => {
