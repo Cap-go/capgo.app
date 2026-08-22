@@ -15,6 +15,7 @@ describe('app-creation onboarding responsive layout', () => {
   })
 
   it.concurrent('never hides navigation or account actions to make the layout fit', () => {
+    expect(pageStyles).not.toMatch(/onboarding-flow-header\s+nav[^}]*display:\s*none/)
     expect(pageStyles).not.toMatch(/onboarding-(?:details|intent)-actions[^}]*display:\s*none/)
     expect(pageStyles).not.toMatch(/onboarding-page-actions[^}]*display:\s*none/)
     expect(pageSource).toContain('data-test="onboarding-logout"')
