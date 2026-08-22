@@ -42,8 +42,9 @@ stage the same package version twice.
 Follow the `Cap-go/automations` integration contract directly:
 
 1. Configure `actions/setup-node` with the npm registry.
-2. Replace each direct `bun publish` command with `npm stage publish` from the
-   `cli` working directory.
+2. Install npm 11.15 or newer, then replace each direct `bun publish` command
+   with `npm stage publish --provenance --ignore-scripts` from the `cli` working
+   directory.
 3. Supply the short-lived staging credential as `NODE_AUTH_TOKEN` from the
    organization `NPM_TOKEN` secret.
 4. Export the generated changelog and previous release tag from the staging job.
@@ -54,10 +55,11 @@ Follow the `Cap-go/automations` integration contract directly:
    dispatch; do not poll npm. A failed downstream job can be rerun without
    repeating `npm stage publish`.
 
-Both jobs keep the generated `GITHUB_TOKEN` at read-only contents access. npm
-staging uses `NPM_TOKEN`, approval dispatch uses `NPM_STAGE_DISPATCH_TOKEN`, and
-GitHub release creation continues to use `PERSONAL_ACCESS_TOKEN`, so neither
-job needs GitHub contents write or OIDC permissions.
+Both jobs keep the generated `GITHUB_TOKEN` at read-only contents access. The
+staging job receives only `id-token: write` in addition so npm can generate the
+provenance attestation; package authentication still uses `NPM_TOKEN`, not
+trusted publishing. Approval dispatch uses `NPM_STAGE_DISPATCH_TOKEN`, and
+GitHub release creation continues to use `PERSONAL_ACCESS_TOKEN`.
 
 The dispatch uses `NPM_STAGE_DISPATCH_TOKEN`, a GitHub fine-grained token whose
 only purpose is dispatching to `Cap-go/automations`. The npm bot password and
@@ -103,6 +105,8 @@ Add a focused unit assertion over `publish_cli.yml` proving that the workflow:
 
 - uses `npm stage publish` for both stable and alpha releases;
 - preserves the `latest` and `next` npm tags;
+- installs npm 11.15 or newer and publishes with provenance while suppressing
+  package lifecycle scripts;
 - uses `NODE_AUTH_TOKEN` and no longer uses `NPM_CONFIG_TOKEN` or
   `bun publish`;
 - dispatches `npm-stage-approve` to `Cap-go/automations` with the dedicated

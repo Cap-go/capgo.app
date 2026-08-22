@@ -4,7 +4,7 @@
 
 **Goal:** Replace direct `@capgo/cli` npm publishing with the staged publishing and approval-dispatch flow documented by `Cap-go/automations`.
 
-**Architecture:** The public tag workflow will authenticate to npm with the rotating organization `NPM_TOKEN` and stage either the `latest` or `next` release from the `cli` directory. A downstream job dispatches `npm-stage-approve` to the private automations repository and creates the GitHub release, allowing a failed dispatch to be retried without restaging; approval itself remains asynchronous and is not polled.
+**Architecture:** The public tag workflow will authenticate to npm with the rotating organization `NPM_TOKEN` and stage either the `latest` or `next` release from the `cli` directory using npm 11.15+, provenance, and suppressed lifecycle scripts. A downstream job dispatches `npm-stage-approve` to the private automations repository and creates the GitHub release, allowing a failed dispatch to be retried without restaging; approval itself remains asynchronous and is not polled.
 
 **Tech Stack:** GitHub Actions YAML, npm CLI, GitHub CLI, Bun, Vitest
 
@@ -30,8 +30,8 @@ it.concurrent('stages CLI publishing through automations approval', () => {
   const nextStep = '- name: Stage CLI on npm with next tag'
   const stableGuard = `if: ${dollar}{{ !contains(github.ref, '-alpha.') }}`
   const nextGuard = `if: ${dollar}{{ contains(github.ref, '-alpha.') }}`
-  const stableCommand = 'run: npm stage publish --access public --tag latest'
-  const nextCommand = 'run: npm stage publish --access public --tag next'
+  const stableCommand = 'npm stage publish --tag latest --provenance --access public --ignore-scripts'
+  const nextCommand = 'npm stage publish --tag next --provenance --access public --ignore-scripts'
   const dispatchStep = '- name: Request npm stage approval'
   const dispatchCommand = 'repos/Cap-go/automations/dispatches'
   const release = '- name: Create GitHub release'
@@ -52,23 +52,27 @@ it.concurrent('stages CLI publishing through automations approval', () => {
   expect(publishSection).toContain('uses: actions/setup-node@v7')
   expect(publishSection).toContain('registry-url: https://registry.npmjs.org')
   expect(publishSection).toContain('permissions:\n      contents: read')
-  expect(publishSection).not.toContain('id-token: write')
+  expect(publishSection).toContain('id-token: write')
+  expect(publishSection).toContain('npm install -g npm@^11.15.0')
   expect(publishSection).toContain(`changelog: ${dollar}{{ steps.changelog.outputs.result }}`)
   expect(publishSection).toContain(`from_tag: ${dollar}{{ steps.changelog_base.outputs.from_tag }}`)
   expect(stableStepIndex).toBeGreaterThan(-1)
   expect(nextStepIndex).toBeGreaterThan(stableStepIndex)
   expect(stableSection).toContain(stableGuard)
   expect(stableSection).toContain(stableCommand)
+  expect(stableSection).toContain('npm --version')
   expect(stableSection).toContain('working-directory: cli')
   expect(stableSection).toContain(`NODE_AUTH_TOKEN: ${dollar}{{ secrets.NPM_TOKEN }}`)
   expect(nextSection).toContain(nextGuard)
   expect(nextSection).toContain(nextCommand)
+  expect(nextSection).toContain('npm --version')
   expect(nextSection).toContain('working-directory: cli')
   expect(nextSection).toContain(`NODE_AUTH_TOKEN: ${dollar}{{ secrets.NPM_TOKEN }}`)
   expect(workflow).not.toContain('NPM_CONFIG_TOKEN')
   expect(workflow).not.toContain('bun publish')
   expect(approvalSection).toContain('needs: publish_cli')
   expect(approvalSection).toContain('permissions:\n      contents: read')
+  expect(approvalSection).not.toContain('id-token: write')
   expect(approvalSection).toContain(`needs.publish_cli.outputs.changelog`)
   expect(approvalSection).toContain(`needs.publish_cli.outputs.from_tag`)
   expect(approvalSection).not.toContain('npm stage publish')
@@ -108,12 +112,14 @@ git commit -m "test(ci): cover staged CLI publishing"
 
 - [ ] **Step 1: Configure npm authentication through setup-node**
 
-Keep `publish_cli` at read-only GitHub contents access, remove its unused OIDC
-permission, and update the existing setup step to include the npm registry:
+Keep `publish_cli` at read-only GitHub contents access, grant OIDC only for npm
+provenance generation, and update the existing setup step to include the npm
+registry:
 
 ```yaml
 permissions:
   contents: read
+  id-token: write
 outputs:
   changelog: ${{ steps.changelog.outputs.result }}
   from_tag: ${{ steps.changelog_base.outputs.from_tag }}
@@ -127,6 +133,13 @@ steps:
 
 - [ ] **Step 2: Replace both direct publish steps with staged publishing**
 
+Install a stage-capable npm version:
+
+```yaml
+- name: Install npm CLI for staged publishing
+  run: npm install -g npm@^11.15.0
+```
+
 Replace the stable and alpha `bun publish` steps with:
 
 ```yaml
@@ -135,13 +148,17 @@ Replace the stable and alpha `bun publish` steps with:
   working-directory: cli
   env:
     NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-  run: npm stage publish --access public --tag latest
+  run: |
+    npm --version
+    npm stage publish --tag latest --provenance --access public --ignore-scripts
 - name: Stage CLI on npm with next tag
   if: ${{ contains(github.ref, '-alpha.') }}
   working-directory: cli
   env:
     NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-  run: npm stage publish --access public --tag next
+  run: |
+    npm --version
+    npm stage publish --tag next --provenance --access public --ignore-scripts
 ```
 
 - [ ] **Step 3: Make approval dispatch retryable without restaging**

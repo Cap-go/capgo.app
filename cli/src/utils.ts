@@ -1,3 +1,4 @@
+// Retrigger CLI release so 8.41.2 publishes after the npm-stage CI fix.
 import type { InstallCommand, PackageManagerRunner, PackageManagerType } from '@capgo/find-package-manager'
 import type {
   SemVer,
@@ -266,6 +267,43 @@ export function canPromptInteractively({
   ci = isCI,
 }: PromptInteractivityOptions = {}) {
   return !silent && stdinIsTTY && stdoutIsTTY && !ci
+}
+
+interface CanOpenExternalUrlOptions {
+  ci?: boolean
+  stdinIsTTY?: boolean
+  stdoutIsTTY?: boolean
+  display?: string | undefined
+  platform?: NodeJS.Platform
+}
+
+/** Whether the CLI may spawn a desktop browser for upgrade/docs links. */
+export function canOpenExternalUrl(options: CanOpenExternalUrlOptions = {}) {
+  const ci = options.ci ?? isCI
+  const stdinIsTTY = options.stdinIsTTY ?? !!stdin.isTTY
+  const stdoutIsTTY = options.stdoutIsTTY ?? !!stdout.isTTY
+  const platform = options.platform ?? osPlatform()
+  const display = 'display' in options ? options.display : env.DISPLAY
+  if (ci || !stdinIsTTY || !stdoutIsTTY)
+    return false
+  if (platform === 'linux' && !display)
+    return false
+  return true
+}
+
+/** Best-effort browser open; skipped in CI/headless and when xdg-open is missing. */
+export async function openExternalUrl(url: string): Promise<void> {
+  if (!canOpenExternalUrl())
+    return
+  try {
+    const module = await import('open')
+    await module.default(url)
+  }
+  catch (error: unknown) {
+    const code = (error as { code?: string })?.code
+    if (code === 'ENOENT')
+      return
+  }
 }
 
 export function projectIsMonorepo(dir: string) {
@@ -1088,6 +1126,40 @@ export async function isAllowedPlanActions(
   return data === true
 }
 
+export type MeteredPlanCheckResult = 'allowed' | 'billing_denied' | 'permission_denied'
+
+/** Distinguish RBAC denials on app-scoped plan RPCs from real billing limits. */
+export async function resolveMeteredPlanAllowed(
+  supabase: SupabaseClient<Database>,
+  orgId: string,
+  actions: Database['public']['Enums']['action_type'][],
+  appId?: string,
+): Promise<MeteredPlanCheckResult> {
+  if (appId) {
+    const appScoped = await isAllowedPlanActions(supabase, orgId, actions, appId)
+    if (appScoped)
+      return 'allowed'
+    const orgScoped = await isAllowedPlanActions(supabase, orgId, actions)
+    if (orgScoped)
+      return 'permission_denied'
+    return 'billing_denied'
+  }
+
+  const orgScoped = await isAllowedPlanActions(supabase, orgId, actions)
+  return orgScoped ? 'allowed' : 'billing_denied'
+}
+
+async function throwPlanUpgradeRequired(plansUrl: string, message: string) {
+  log.error(`You need to upgrade your plan to continue to use capgo.\n Upgrade here: ${plansUrl}\n`)
+  await openExternalUrl(plansUrl)
+  throw new CliUserError(message)
+}
+
+async function throwPlanPermissionDenied() {
+  log.error('Cannot validate plan usage for this app. The API key may lack permission to read app billing details.')
+  throw new CliUserError('Plan validation permission denied')
+}
+
 export async function checkRemoteCliMessages(supabase: SupabaseClient<Database>, orgId: string, cliVersion: string) {
   const { data: messages, error } = await supabase.rpc('get_organization_cli_warnings', { orgid: orgId, cli_version: cliVersion })
   if (error) {
@@ -1122,47 +1194,42 @@ export async function checkRemoteCliMessages(supabase: SupabaseClient<Database>,
 // TODO(cli-http): billing/entitlement RPCs have no Capgo HTTP equivalents yet
 export async function checkPlanValid(supabase: SupabaseClient<Database>, orgId: string, appId?: string, warning = true) {
   const config = await getRemoteConfig()
+  const plansUrl = `${config.hostWeb}/settings/organization/plans`
 
-  const validPlan = await (appId
-    ? isAllowedPlanActions(supabase, orgId, ['mau', 'storage', 'bandwidth', 'build_time'], appId)
-    : isAllowedActionOrg(supabase, orgId))
-  if (!validPlan) {
-    log.error(`You need to upgrade your plan to continue to use capgo.\n Upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
-    wait(100)
-    import('open')
-      .then((module) => {
-        module.default(`${config.hostWeb}/settings/organization/plans`)
-      })
-    wait(500)
-    // Needing a plan upgrade is a user-account state, not a CLI crash — opt it
-    // out of error tracking by type while keeping the message and non-zero exit.
-    throw new CliUserError('Plan upgrade required')
+  if (appId) {
+    const planCheck = await resolveMeteredPlanAllowed(
+      supabase,
+      orgId,
+      ['mau', 'storage', 'bandwidth', 'build_time'],
+      appId,
+    )
+    if (planCheck === 'permission_denied')
+      await throwPlanPermissionDenied()
+    if (planCheck === 'billing_denied')
+      await throwPlanUpgradeRequired(plansUrl, 'Plan upgrade required')
   }
+  else if (!await isAllowedActionOrg(supabase, orgId)) {
+    await throwPlanUpgradeRequired(plansUrl, 'Plan upgrade required')
+  }
+
   const [trialDays, ispaying, hasCredits] = await Promise.all([
     isTrialOrg(supabase, orgId),
     isPayingOrg(supabase, orgId),
     hasOrgUsageCredits(supabase, orgId, appId),
   ])
   if (shouldWarnTrialExpiry({ trialDays, isPaying: ispaying, hasCredits, warning }))
-    log.warn(`WARNING !!\nTrial expires in ${trialDays} days, upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
+    log.warn(`WARNING !!\nTrial expires in ${trialDays} days, upgrade here: ${plansUrl}\n`)
 }
 
 export async function checkPlanValidUpload(supabase: SupabaseClient<Database>, orgId: string, appId?: string, warning = true) {
   const config = await getRemoteConfig()
+  const plansUrl = `${config.hostWeb}/settings/organization/plans`
 
-  const validPlan = await isAllowedPlanActions(supabase, orgId, ['storage'], appId)
-  if (!validPlan) {
-    log.error(`You need to upgrade your plan to continue to use capgo.\n Upgrade here: ${config.hostWeb}/settings/organization/plans\n`)
-    wait(100)
-    import('open')
-      .then((module) => {
-        module.default(`${config.hostWeb}/settings/organization/plans`)
-      })
-    wait(500)
-    // Same as `checkPlanValid`: an upgrade prompt is an expected account state,
-    // not a crash — throw a filtered `CliUserError`, keep exit and analytics.
-    throw new CliUserError('Plan upgrade required for upload')
-  }
+  const planCheck = await resolveMeteredPlanAllowed(supabase, orgId, ['storage'], appId)
+  if (planCheck === 'permission_denied')
+    await throwPlanPermissionDenied()
+  if (planCheck === 'billing_denied')
+    await throwPlanUpgradeRequired(plansUrl, 'Plan upgrade required for upload')
   // Trial/paying stay on the legacy single-arg RPCs for old CLI compatibility.
   // Credits use the new has_usage_credits_org (with optional appid).
   const [trialDays, ispaying, hasCredits] = await Promise.all([

@@ -107,8 +107,8 @@ describe('release scope matching', () => {
     const nextStep = '- name: Stage CLI on npm with next tag'
     const stableGuard = `if: ${dollar}{{ !contains(github.ref, '-alpha.') }}`
     const nextGuard = `if: ${dollar}{{ contains(github.ref, '-alpha.') }}`
-    const stableCommand = 'run: npm stage publish --access public --tag latest'
-    const nextCommand = 'run: npm stage publish --access public --tag next'
+    const stableCommand = 'npm stage publish --tag latest --provenance --access public --ignore-scripts'
+    const nextCommand = 'npm stage publish --tag next --provenance --access public --ignore-scripts'
     const dispatchStep = '- name: Request npm stage approval'
     const dispatchCommand = 'repos/Cap-go/automations/dispatches'
     const release = '- name: Create GitHub release'
@@ -129,23 +129,27 @@ describe('release scope matching', () => {
     expect(publishSection).toContain('uses: actions/setup-node@v7')
     expect(publishSection).toContain('registry-url: https://registry.npmjs.org')
     expect(publishSection).toContain('permissions:\n      contents: read')
-    expect(publishSection).not.toContain('id-token: write')
+    expect(publishSection).toContain('id-token: write')
+    expect(publishSection).toContain('npm install -g npm@^11.15.0')
     expect(publishSection).toContain(`changelog: ${dollar}{{ steps.changelog.outputs.result }}`)
     expect(publishSection).toContain(`from_tag: ${dollar}{{ steps.changelog_base.outputs.from_tag }}`)
     expect(stableStepIndex).toBeGreaterThan(-1)
     expect(nextStepIndex).toBeGreaterThan(stableStepIndex)
     expect(stableSection).toContain(stableGuard)
     expect(stableSection).toContain(stableCommand)
+    expect(stableSection).toContain('npm --version')
     expect(stableSection).toContain('working-directory: cli')
     expect(stableSection).toContain(`NODE_AUTH_TOKEN: ${dollar}{{ secrets.NPM_TOKEN }}`)
     expect(nextSection).toContain(nextGuard)
     expect(nextSection).toContain(nextCommand)
+    expect(nextSection).toContain('npm --version')
     expect(nextSection).toContain('working-directory: cli')
     expect(nextSection).toContain(`NODE_AUTH_TOKEN: ${dollar}{{ secrets.NPM_TOKEN }}`)
     expect(workflow).not.toContain('NPM_CONFIG_TOKEN')
     expect(workflow).not.toContain('bun publish')
     expect(approvalSection).toContain('needs: publish_cli')
     expect(approvalSection).toContain('permissions:\n      contents: read')
+    expect(approvalSection).not.toContain('id-token: write')
     expect(approvalSection).toContain(`needs.publish_cli.outputs.changelog`)
     expect(approvalSection).toContain(`needs.publish_cli.outputs.from_tag`)
     expect(approvalSection).not.toContain('npm stage publish')

@@ -18,6 +18,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      id-token: write
     outputs:
       changelog: ${{ steps.changelog.outputs.result }}
       from_tag: ${{ steps.changelog_base.outputs.from_tag }}
@@ -67,18 +68,24 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           FROM_TAG: ${{ steps.changelog_base.outputs.from_tag }}
         run: bun run changelog:ai
+      - name: Install npm CLI for staged publishing
+        run: npm install -g npm@^11.15.0
       - name: Stage CLI on npm
         if: ${{ !contains(github.ref, '-alpha.') }}
         working-directory: cli
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm stage publish --access public --tag latest
+        run: |
+          npm --version
+          npm stage publish --tag latest --provenance --access public --ignore-scripts
       - name: Stage CLI on npm with next tag
         if: ${{ contains(github.ref, '-alpha.') }}
         working-directory: cli
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm stage publish --access public --tag next
+        run: |
+          npm --version
+          npm stage publish --tag next --provenance --access public --ignore-scripts
 
   approve_and_release:
     runs-on: ubuntu-latest
