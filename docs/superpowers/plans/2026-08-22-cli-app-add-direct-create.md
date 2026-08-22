@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Lock the direct-create contract with a failing regression test
+## Task 1: Lock the direct-create contract with a failing regression test
 
 **Files:**
 - Modify: `cli/test/test-app-created-source.mjs`
@@ -28,6 +28,7 @@ assert.doesNotMatch(appAddSource, /\bcheckAppExists\b/)
 assert.doesNotMatch(appAddSource, /\bensureAppDoesNotExist\b/)
 assert.match(appAddSource, /method:\s*'POST'/)
 assert.match(appAddSource, /appId === 'io\.ionic\.starter'/)
+assert.match(appAddSource, /upsert:\s*false/)
 ```
 
 - [ ] **Step 2: Run the focused test and verify RED**
@@ -47,7 +48,7 @@ git add cli/test/test-app-created-source.mjs
 git commit -m "test(cli): cover direct app creation flow"
 ```
 
-### Task 2: Remove only the broken app-add preflight
+## Task 2: Remove only the broken app-add preflight
 
 **Files:**
 - Modify: `cli/src/app/add.ts`
@@ -80,6 +81,12 @@ await ensureAppDoesNotExist(options.apikey!, appId, silent, { supaHost: options.
 
 Do not modify `cli/src/api/app.ts` or the backend app GET route.
 
+Keep the icon upload create-only so a duplicate app-add attempt cannot mutate an existing app before `POST /app` returns `409`:
+
+```ts
+upsert: false,
+```
+
 - [ ] **Step 3: Run the focused test and verify GREEN**
 
 Run:
@@ -97,7 +104,7 @@ git add cli/src/app/add.ts
 git commit -m "fix(cli): create apps without existence preflight"
 ```
 
-### Task 3: Verify the final CLI change
+## Task 3: Verify the final CLI change
 
 **Files:**
 - Verify: `cli/src/app/add.ts`
@@ -144,7 +151,7 @@ git status --short
 
 Expected: no whitespace errors and only the unrelated pre-existing `codedb.snapshot` modification remains unstaged.
 
-### Task 4: Open and stabilize the pull request
+## Task 4: Open and stabilize the pull request
 
 **Files:**
 - No additional source files expected

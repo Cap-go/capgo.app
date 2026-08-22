@@ -13,6 +13,7 @@ assert.doesNotMatch(appAddSource, /\bcheckAppExists\b/)
 assert.doesNotMatch(appAddSource, /\bensureAppDoesNotExist\b/)
 assert.match(appAddSource, /method:\s*'POST'/)
 assert.match(appAddSource, /appId === 'io\.ionic\.starter'/)
+assert.match(appAddSource, /upsert:\s*false/)
 
 // explicit onboarding wins
 assert.equal(resolveAppCreateSource('onboarding'), 'onboarding')

@@ -204,7 +204,8 @@ export async function addAppInternal(
       .from('images')
       .upload(iconPath, iconBuff, {
         contentType: iconType,
-        upsert: true,
+        // A duplicate app add must not overwrite the existing app's icon before POST returns 409.
+        upsert: false,
       })
 
     if (error) {

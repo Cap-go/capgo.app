@@ -23,6 +23,8 @@ The CLI app-add flow will:
 
 The `ensureAppDoesNotExist` preflight and its `checkAppExists` import will be removed from `cli/src/app/add.ts`. The reserved-ID check will move into local option validation so removing the preflight does not weaken that guard.
 
+The app-add icon upload will be create-only (`upsert: false`). This ensures a duplicate app-add attempt cannot overwrite an existing app's icon before `POST /app` returns the authoritative `409`; intentional icon replacement remains part of the app-set flow.
+
 ## Error Handling
 
 The existing `POST /app` response handling remains authoritative. In particular, duplicate app IDs produce the backend's `409 app_id_already_exists` error. Other validation and authorization errors remain surfaced through the current CLI formatting path.
@@ -37,6 +39,7 @@ Extend the focused CLI app-creation test to enforce these source-level contracts
 - `cli/src/app/add.ts` does not define or call `ensureAppDoesNotExist`.
 - App creation still uses `POST`.
 - The reserved `io.ionic.starter` guard remains present after the preflight is removed.
+- App-add icon uploads cannot overwrite an existing object.
 
 Run the focused test first and observe it fail on the current preflight. After the implementation, run CLI lint, typecheck, build, the focused test, and the complete CLI test suite required by repository guidance.
 
