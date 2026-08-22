@@ -59,6 +59,12 @@ export interface FrontendOnboardingDailyWelcomeOutcomePoint {
   welcome_did_not_advance: number
 }
 
+export type FrontendOnboardingTabSwitchStep = 'welcome' | 'intent' | 'app_name' | 'app_id' | 'app_icon' | 'organization'
+
+export interface FrontendOnboardingDailyTabSwitchPoint extends Record<FrontendOnboardingTabSwitchStep, number> {
+  date: string
+}
+
 export interface FrontendOnboardingKpis {
   attempts: number
   completed: number
@@ -85,6 +91,7 @@ export interface FrontendOnboardingAnalytics {
     v4_attempts?: number
   }>
   daily_welcome_outcomes?: FrontendOnboardingDailyWelcomeOutcomePoint[]
+  daily_tab_switches?: FrontendOnboardingDailyTabSwitchPoint[]
   deduplicated: {
     daily_attempts: Array<{
       date: string
@@ -277,6 +284,26 @@ export function buildFrontendOnboardingDailyWelcomeOutcomeSeries(
       data: points.map(point => ({ date: point.date, value: point.welcome_did_not_advance })),
     },
   ]
+}
+
+const TAB_SWITCH_SERIES: Array<{ key: FrontendOnboardingTabSwitchStep, color: string }> = [
+  { key: 'welcome', color: '#3b82f6' },
+  { key: 'intent', color: '#06b6d4' },
+  { key: 'app_name', color: '#10b981' },
+  { key: 'app_id', color: '#84cc16' },
+  { key: 'app_icon', color: '#f59e0b' },
+  { key: 'organization', color: '#8b5cf6' },
+]
+
+export function buildFrontendOnboardingDailyTabSwitchSeries(
+  points: readonly FrontendOnboardingDailyTabSwitchPoint[],
+  labels: Record<FrontendOnboardingTabSwitchStep, string>,
+): FrontendOnboardingDailySeries[] {
+  return TAB_SWITCH_SERIES.map(({ key, color }) => ({
+    label: labels[key],
+    color,
+    data: points.map(point => ({ date: point.date, value: point[key] })),
+  }))
 }
 
 const DAILY_SETUP_CLI_OUTCOME_COLORS: Record<FrontendOnboardingDailySetupCliOutcomeKey, string> = {

@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildFrontendOnboardingDailySeries,
   buildFrontendOnboardingDailySetupCliSeries,
+  buildFrontendOnboardingDailyTabSwitchSeries,
   buildFrontendOnboardingDailyWelcomeOutcomeSeries,
   buildFrontendOnboardingFunnelStages,
   buildFrontendOnboardingFunnelSummaries,
@@ -266,6 +267,34 @@ describe('admin frontend onboarding dashboard', () => {
           { date: '2026-08-09', value: 3 },
         ],
       },
+    ])
+  })
+
+  it.concurrent('adapts daily hidden events into onboarding-step stacked series', () => {
+    expect(buildFrontendOnboardingDailyTabSwitchSeries([
+      {
+        date: '2026-08-20',
+        welcome: 2,
+        intent: 3,
+        app_name: 20,
+        app_id: 4,
+        app_icon: 1,
+        organization: 5,
+      },
+    ], {
+      welcome: 'Welcome screen',
+      intent: 'Intent',
+      app_name: 'App name',
+      app_id: 'App ID',
+      app_icon: 'App icon',
+      organization: 'Organization details',
+    })).toEqual([
+      { label: 'Welcome screen', color: '#3b82f6', data: [{ date: '2026-08-20', value: 2 }] },
+      { label: 'Intent', color: '#06b6d4', data: [{ date: '2026-08-20', value: 3 }] },
+      { label: 'App name', color: '#10b981', data: [{ date: '2026-08-20', value: 20 }] },
+      { label: 'App ID', color: '#84cc16', data: [{ date: '2026-08-20', value: 4 }] },
+      { label: 'App icon', color: '#f59e0b', data: [{ date: '2026-08-20', value: 1 }] },
+      { label: 'Organization details', color: '#8b5cf6', data: [{ date: '2026-08-20', value: 5 }] },
     ])
   })
 
@@ -686,9 +715,9 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('<PageLoader')
     expect(source.match(/<AdminFilterBar(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source.match(/<AdminStatsCard(?:\s|\/?>)/g)).toHaveLength(4)
-    expect(source.match(/<ChartCard(?:\s|\/?>)/g)).toHaveLength(10)
+    expect(source.match(/<ChartCard(?:\s|\/?>)/g)).toHaveLength(11)
     expect(source.match(/<AdminBarChart(?:\s|\/?>)/g)).toHaveLength(1)
-    expect(source.match(/<AdminStackedBarChart(?:\s|\/?>)/g)).toHaveLength(3)
+    expect(source.match(/<AdminStackedBarChart(?:\s|\/?>)/g)).toHaveLength(4)
     expect(source.match(/<AdminDailyConversionChart(?:\s|\/?>)/g)).toHaveLength(3)
     expect(source.match(/<AdminFunnelChart(?:\s|\/?>)/g)).toHaveLength(2)
     expect(source.match(/<AdminOnboardingJourneyGraph(?:\s|\/?>)/g)).toHaveLength(1)
@@ -854,6 +883,27 @@ describe('admin frontend onboarding dashboard', () => {
     expect(messages).toContain('"frontend-onboarding-welcome-advanced-to-intent"')
     expect(messages).toContain('"frontend-onboarding-welcome-not-viewed": "Did not view Welcome screen"')
     expect(messages).toContain('"frontend-onboarding-welcome-did-not-advance"')
+  })
+
+  it.concurrent('renders daily v4 hidden events by active step below Welcome outcomes', async () => {
+    const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
+    const template = source.slice(source.indexOf('<template>'))
+    const welcomeOutcomesIndex = template.indexOf('chart-id="welcome-outcomes-v4"')
+    const tabSwitchIndex = template.indexOf('chart-id="tab-switches-v4"')
+    const intentDetailsIndex = template.indexOf('chart-id="daily-intent-to-details"')
+
+    expect(source).toContain('buildFrontendOnboardingDailyTabSwitchSeries')
+    expect(source).toContain('visibleAnalytics.value?.daily_tab_switches ?? []')
+    expect(source).toContain('const hasTabSwitchData = computed')
+    expect(tabSwitchIndex).toBeGreaterThan(welcomeOutcomesIndex)
+    expect(tabSwitchIndex).toBeLessThan(intentDetailsIndex)
+
+    const section = template.slice(tabSwitchIndex, intentDetailsIndex)
+    expect(section).toContain(`t('frontend-onboarding-tab-switches-v4')`)
+    expect(section).toContain(`t('frontend-onboarding-tab-switches-v4-description')`)
+    expect(section).toContain(':series="tabSwitchSeries"')
+    expect(section).toContain('accessible-borders')
+    expect(section).not.toContain('AdminChartDeduplicateControl')
   })
 
   it.concurrent('labels v3 fallback data and resolves drop-off labels from the same funnel source', async () => {

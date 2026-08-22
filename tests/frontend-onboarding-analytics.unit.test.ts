@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   assertFrontendOnboardingAttemptTotal,
+  buildFrontendOnboardingDailyTabSwitches,
   buildFrontendOnboardingHogql,
+  buildFrontendOnboardingTabSwitchHogql,
   buildFrontendOnboardingWelcomeHogql,
   FRONTEND_ONBOARDING_ATTEMPT_LIMIT,
   FRONTEND_ONBOARDING_MAX_RANGE_MS,
@@ -125,6 +127,112 @@ describe('buildFrontendOnboardingWelcomeHogql', () => {
     expect(query).toContain('ORDER BY anchor_ms ASC, attempt_id ASC')
     expect(query).toContain('LIMIT 50000')
     expect(query).not.toContain('onboarding_version IN (1, 2, 3, 4)')
+  })
+})
+
+describe('buildFrontendOnboardingTabSwitchHogql', () => {
+  it('counts only production v4 hidden events by day and active onboarding step', () => {
+    const query = buildFrontendOnboardingTabSwitchHogql(
+      '2026-08-01T00:00:00.123Z',
+      '2026-08-03T00:00:00.456Z',
+    )
+
+    expect(query).toContain("event = 'onboarding_visibility_changed'")
+    expect(query).toContain("JSONExtractString(toString(properties), 'visibility_state') = 'hidden'")
+    expect(query).toContain("JSONExtractString(toString(properties), 'flow') = 'pre_org'")
+    expect(query).toContain("JSONExtractString(toString(properties), '$host') = 'console.capgo.app'")
+    expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) = 4')
+    expect(query).toContain("toString(toDate(timestamp, 'UTC')) AS date")
+    expect(query).not.toContain('toString(toDate(timestamp)) AS date')
+    expect(query).toContain("step IN ('welcome', 'intent', 'app_name', 'app_id', 'app_icon', 'organization')")
+    expect(query).toContain("countIf(step = 'welcome') AS welcome")
+    expect(query).toContain("countIf(step = 'intent') AS intent")
+    expect(query).toContain("countIf(step = 'app_name') AS app_name")
+    expect(query).toContain("countIf(step = 'app_id') AS app_id")
+    expect(query).toContain("countIf(step = 'app_icon') AS app_icon")
+    expect(query).toContain("countIf(step = 'organization') AS organization")
+    expect(query).toContain("timestamp >= parseDateTimeBestEffort('2026-08-01T00:00:00.123Z')")
+    expect(query).toContain("timestamp < parseDateTimeBestEffort('2026-08-03T00:00:00.456Z')")
+    expect(query).toContain('GROUP BY date')
+    expect(query).toContain('ORDER BY date ASC')
+    expect(query).not.toContain("visibility_state') = 'visible'")
+  })
+})
+
+describe('buildFrontendOnboardingDailyTabSwitches', () => {
+  it('normalizes counts and fills days without hidden events', () => {
+    expect(buildFrontendOnboardingDailyTabSwitches([
+      {
+        date: '2026-08-01',
+        welcome: 2,
+        intent: '3',
+        app_name: 20,
+        app_id: 4,
+        app_icon: 1,
+        organization: 5,
+      },
+      {
+        date: '2026-08-01',
+        welcome: 1,
+        intent: 0,
+        app_name: 0,
+        app_id: 0,
+        app_icon: 0,
+        organization: 0,
+      },
+      {
+        date: '2026-08-03',
+        welcome: 99,
+      },
+    ], Date.parse('2026-08-01T00:00:00.000Z'), Date.parse('2026-08-03T00:00:00.000Z'))).toEqual([
+      {
+        date: '2026-08-01',
+        welcome: 3,
+        intent: 3,
+        app_name: 20,
+        app_id: 4,
+        app_icon: 1,
+        organization: 5,
+      },
+      {
+        date: '2026-08-02',
+        welcome: 0,
+        intent: 0,
+        app_name: 0,
+        app_id: 0,
+        app_icon: 0,
+        organization: 0,
+      },
+    ])
+  })
+
+  it.each([
+    ['negative', -1],
+    ['fractional', 1.5],
+    ['non-numeric', 'invalid'],
+    ['missing', undefined],
+  ])('rejects a %s aggregate count instead of silently reporting zero', (_label, invalidCount) => {
+    expect(() => buildFrontendOnboardingDailyTabSwitches([{
+      date: '2026-08-01',
+      welcome: 2,
+      intent: 3,
+      app_name: invalidCount,
+      app_id: 4,
+      app_icon: 1,
+      organization: 5,
+    }], Date.parse('2026-08-01T00:00:00.000Z'), Date.parse('2026-08-02T00:00:00.000Z'))).toThrow(
+      'frontend onboarding tab-switch query returned an invalid count',
+    )
+  })
+
+  it('keeps event counts from partial first and last UTC days', () => {
+    expect(buildFrontendOnboardingDailyTabSwitches([
+      { date: '2026-08-01', welcome: 2, intent: 0, app_name: 0, app_id: 0, app_icon: 0, organization: 0 },
+      { date: '2026-08-02', welcome: 0, intent: 3, app_name: 0, app_id: 0, app_icon: 0, organization: 0 },
+    ], Date.parse('2026-08-01T12:00:00.000Z'), Date.parse('2026-08-02T06:00:00.000Z'))).toEqual([
+      { date: '2026-08-01', welcome: 2, intent: 0, app_name: 0, app_id: 0, app_icon: 0, organization: 0 },
+      { date: '2026-08-02', welcome: 0, intent: 3, app_name: 0, app_id: 0, app_icon: 0, organization: 0 },
+    ])
   })
 })
 
@@ -305,7 +413,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       no_cli: 1,
     })
     expect(result).not.toHaveProperty('onboarding_version')
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(4)
   })
 
   it('returns zero analytics for a successful PostHog query with no matching attempts', async () => {
@@ -332,7 +440,90 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         returning: createFrontendOnboardingDailySetupCliOutcomeCounts(),
       },
     ])
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(4)
+  })
+
+  it('returns zero-filled daily hidden-event counts split by v4 onboarding step', async () => {
+    queryPosthogHogqlMock
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+      .mockResolvedValueOnce({
+        configured: true,
+        connected: true,
+        failureReason: null,
+        rows: [{
+          date: '2026-08-01',
+          welcome: 2,
+          intent: 3,
+          app_name: 20,
+          app_id: 4,
+          app_icon: 1,
+          organization: 5,
+        }],
+      })
+
+    const result = await getAdminFrontendOnboardingAnalytics(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+    )
+
+    expect(result.daily_tab_switches).toEqual([
+      {
+        date: '2026-08-01',
+        welcome: 2,
+        intent: 3,
+        app_name: 20,
+        app_id: 4,
+        app_icon: 1,
+        organization: 5,
+      },
+      {
+        date: '2026-08-02',
+        welcome: 0,
+        intent: 0,
+        app_name: 0,
+        app_id: 0,
+        app_icon: 0,
+        organization: 0,
+      },
+    ])
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(4)
+    expect(queryPosthogHogqlMock.mock.calls[3][1]).toContain("event = 'onboarding_visibility_changed'")
+  })
+
+  it('logs and fails closed when a tab-switch aggregate row is malformed', async () => {
+    queryPosthogHogqlMock
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+      .mockResolvedValueOnce({
+        configured: true,
+        connected: true,
+        failureReason: null,
+        rows: [{
+          date: '2026-08-01',
+          welcome: 2,
+          intent: 3,
+          app_name: 'not-a-count',
+          app_id: 4,
+          app_icon: 1,
+          organization: 5,
+        }],
+      })
+
+    await expect(getAdminFrontendOnboardingAnalytics(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+    )).rejects.toThrow('frontend onboarding tab-switch query returned an invalid count')
+
+    expect(cloudlogErrMock).toHaveBeenCalledWith({
+      requestId: 'request-id',
+      message: 'frontend_onboarding_tab_switch_invalid_row',
+      returned_rows: 1,
+    })
   })
 
   it('fails closed when the daily Setup CLI PostHog query fails', async () => {
@@ -345,7 +536,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       '2026-08-01T00:00:00.000Z',
       '2026-08-03T00:00:00.000Z',
     )).rejects.toThrow('daily Setup CLI analytics PostHog query failed')
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(4)
   })
 
   it('propagates an aggregate query rejection while the daily query is configured', async () => {
@@ -358,7 +549,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       '2026-08-01T00:00:00.000Z',
       '2026-08-03T00:00:00.000Z',
     )).rejects.toThrow('aggregate PostHog request rejected')
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(4)
   })
 
   it('propagates a daily query rejection while the aggregate query is configured', async () => {
@@ -371,7 +562,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       '2026-08-01T00:00:00.000Z',
       '2026-08-03T00:00:00.000Z',
     )).rejects.toThrow('daily PostHog request rejected')
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(4)
   })
 
   it('fails closed when the Welcome outcomes PostHog query fails', async () => {
@@ -385,7 +576,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       '2026-08-01T00:00:00.000Z',
       '2026-08-03T00:00:00.000Z',
     )).rejects.toThrow('frontend onboarding Welcome analytics PostHog query failed')
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(4)
   })
 
   it.each([
@@ -459,7 +650,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         { date: '2026-08-02', welcome_advanced_to_intent: 0, welcome_not_viewed: 0, welcome_did_not_advance: 0 },
       ],
     })
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(4)
   })
 
   it('queries the equal-length previous window through the current end plus 48 hours for post-setup outcomes', async () => {
@@ -468,7 +659,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
 
     await getAdminFrontendOnboardingAnalytics(createContext(), start, end)
 
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(4)
     expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
       `timestamp >= parseDateTimeBestEffort('${new Date(Date.parse(start) - 2 * DAY_MS).toISOString()}')`,
     )
@@ -507,7 +698,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
 
     await getAdminFrontendOnboardingAnalytics(createContext(), start, end)
 
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(4)
     expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain(
       `timestamp >= parseDateTimeBestEffort('${new Date(Date.parse(start) - DAY_MS).toISOString()}')`,
     )
@@ -529,7 +720,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       '2026-08-03T00:00:00.5678Z',
     )
 
-    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(3)
+    expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(4)
     expect(queryPosthogHogqlMock.mock.calls[0][1]).toContain('parseDateTimeBestEffort(\'2026-08-03T00:00:00.567Z\')')
     expect(queryPosthogHogqlMock.mock.calls[1][1]).toContain('parseDateTimeBestEffort(\'2026-08-01T00:00:00.123Z\')')
     expect(queryPosthogHogqlMock.mock.calls[1][1]).toContain('parseDateTimeBestEffort(\'2026-08-03T00:00:00.567Z\')')
