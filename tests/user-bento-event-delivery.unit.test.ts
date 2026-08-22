@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   closeClient: vi.fn(),
   cloudlogErr: vi.fn(),
   getPgClient: vi.fn(),
+  isBentoConfigured: vi.fn(),
   serializeError: vi.fn((error: unknown) => ({
     message: error instanceof Error ? error.message : String(error),
   })),
@@ -17,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
+  isBentoConfigured: mocks.isBentoConfigured,
   trackBentoEvents: mocks.trackBentoEvents,
 }))
 
@@ -152,6 +154,7 @@ describe('user Bento event delivery', () => {
     vi.clearAllMocks()
     mocks.backgroundTask.mockImplementation((_c: Context, task: Promise<unknown>) => task)
     mocks.closeClient.mockResolvedValue(undefined)
+    mocks.isBentoConfigured.mockReturnValue(true)
     mocks.trackBentoEvents.mockResolvedValue(true)
   })
 
@@ -278,6 +281,16 @@ describe('user Bento event delivery', () => {
     })
     expect(tx.client.release).toHaveBeenCalledOnce()
     expect(mocks.closeClient).toHaveBeenCalledWith(expect.anything(), tx.pool)
+  })
+
+  it('leaves pending events untouched without DB work or errors when Bento is unconfigured', async () => {
+    mocks.isBentoConfigured.mockReturnValue(false)
+
+    await expect(deliverPendingUserBentoEvents(createContext(), USER_ID)).resolves.toBe(false)
+
+    expect(mocks.getPgClient).not.toHaveBeenCalled()
+    expect(mocks.trackBentoEvents).not.toHaveBeenCalled()
+    expect(mocks.cloudlogErr).not.toHaveBeenCalled()
   })
 
   it.each([false, undefined])('rolls back without writing when Bento returns %s', async (accepted) => {

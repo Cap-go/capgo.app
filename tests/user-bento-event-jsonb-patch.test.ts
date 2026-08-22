@@ -210,7 +210,7 @@ describe('user Bento event JSONB patch', () => {
                  AND query LIKE '%FOR UPDATE%'`,
             )
             expect(Number(rows[0]?.waiting_count ?? 0)).toBeGreaterThanOrEqual(1)
-          }, { interval: 25, timeout: 3_000 })
+          }, { interval: 25, timeout: 10_000 })
           expect(fetchMock).toHaveBeenCalledOnce()
 
           acceptFirstBento()

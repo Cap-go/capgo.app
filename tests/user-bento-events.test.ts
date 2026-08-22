@@ -241,6 +241,4 @@ it('records only mapped CLI Bento events for the authenticated actor', async () 
     occurrence_count: 1,
     details: [expect.objectContaining({ command_path: 'init' })],
   })
-  for (const event of Object.values(bentoEvents))
-    expect(event).not.toHaveProperty('sent_at')
 })

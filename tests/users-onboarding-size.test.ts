@@ -45,16 +45,16 @@ describe('users.onboarding size constraint', () => {
        SET onboarding = jsonb_build_object('payload', $2::text)
        WHERE id = $1
        RETURNING onboarding ->> 'payload' AS payload`,
-      [userId, 'a'.repeat(65_000)],
+      [userId, 'a'.repeat(65_521)],
     )
 
-    expect(accepted[0]?.payload).toHaveLength(65_000)
+    expect(accepted[0]?.payload).toHaveLength(65_521)
 
     await expect(executeSQL(
       `UPDATE public.users
        SET onboarding = jsonb_build_object('payload', $2::text)
        WHERE id = $1`,
-      [userId, 'b'.repeat(65_536)],
+      [userId, 'b'.repeat(65_522)],
     )).rejects.toMatchObject({ code: '23514' })
   })
 })

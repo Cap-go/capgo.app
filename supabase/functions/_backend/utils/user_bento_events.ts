@@ -1,5 +1,5 @@
 import type { Context } from 'hono'
-import { trackBentoEvents } from './bento.ts'
+import { isBentoConfigured, trackBentoEvents } from './bento.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
 import { closeClient, getPgClient } from './pg.ts'
 import { backgroundTask } from './utils.ts'
@@ -385,6 +385,9 @@ export async function deliverPendingUserBentoEvents(
   c: Context,
   userId: string,
 ): Promise<boolean> {
+  if (!isBentoConfigured(c))
+    return false
+
   let pool: ReturnType<typeof getPgClient> | undefined
   try {
     pool = getPgClient(c)
@@ -409,6 +412,8 @@ export async function deliverPendingUserBentoEvents(
         return true
       }
 
+      // Keep this per-user lock through the bounded Bento request intentionally:
+      // concurrent deliveries must observe sent_at before deciding to send again.
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), USER_BENTO_TIMEOUT_MS)
       let accepted: boolean | undefined

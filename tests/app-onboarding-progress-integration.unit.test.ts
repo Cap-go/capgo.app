@@ -98,8 +98,8 @@ describe('app onboarding progress analytics integration', () => {
       'return',
     ])
     expect(visibilityHandler).toContain('progressTracker.trackVisibilityChange(visibilityChange.state, visibilityChange.occurredAt)')
-    expect(onboardingSource).toContain("document.addEventListener('visibilitychange', trackOnboardingVisibilityChange)")
-    expect(onboardingSource).toContain("document.removeEventListener('visibilitychange', trackOnboardingVisibilityChange)")
+    expect(onboardingSource).toContain(`document.addEventListener('visibilitychange', trackOnboardingVisibilityChange)`)
+    expect(onboardingSource).toContain(`document.removeEventListener('visibilitychange', trackOnboardingVisibilityChange)`)
 
     const initializer = sourceBetween('function initializeProgressTracking(', 'function completeAndViewStep(')
     expectSourceOrder(initializer, [
@@ -111,6 +111,8 @@ describe('app onboarding progress analytics integration', () => {
   })
 
   it('preserves Bento state from the refreshed CAS snapshot on retry', async () => {
+    const previousUser = writerMocks.main.user
+    const matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
     const initialBentoEvents = {
       'cli:command_invoked': {
         details: [{ observed_at: '2026-08-22T10:00:00.000Z' }],
@@ -130,6 +132,8 @@ describe('app onboarding progress analytics integration', () => {
     }
     const initialOnboarding = { bento_events: initialBentoEvents }
     const refreshedOnboarding = { bento_events: refreshedBentoEvents }
+    writerMocks.refreshUser.mockReset()
+    writerMocks.replaceUserOnboardingIfUnchanged.mockReset()
     writerMocks.main.user = {
       id: 'user-bento-retry',
       image_url: 'avatar.png',
@@ -168,6 +172,11 @@ describe('app onboarding progress analytics integration', () => {
     }
     finally {
       app.unmount()
+      writerMocks.main.user = previousUser
+      if (matchMediaDescriptor)
+        Object.defineProperty(window, 'matchMedia', matchMediaDescriptor)
+      else
+        Reflect.deleteProperty(window, 'matchMedia')
     }
   })
 

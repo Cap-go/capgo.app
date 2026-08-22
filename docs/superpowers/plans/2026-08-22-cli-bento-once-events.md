@@ -976,44 +976,70 @@ Add an internal `persistUserBentoObservation()` that:
 6. Commits and returns whether any mapped entry is pending.
 7. Rolls back on every failure, releases the connection, and closes the pool.
 
-Use this transaction shape:
+Use this transaction shape. Pool creation, connection acquisition, release, and
+pool closure are all guarded so a partially initialized transaction cannot hide
+the original error or leak a pool:
 
 ```ts
-let transactionOpen = false
+let pool: ReturnType<typeof getPgClient> | undefined
 try {
-  await client.query('BEGIN')
-  transactionOpen = true
-  const locked = await client.query(LOCK_USER_SQL, [userId])
-  if (!locked.rows[0]) {
+  pool = getPgClient(c)
+  const client = await pool.connect()
+  let transactionOpen = false
+  let rollbackError: Error | undefined
+  try {
+    await client.query('BEGIN')
+    transactionOpen = true
+    const locked = await client.query(LOCK_USER_SQL, [userId])
+    if (!locked.rows[0]) {
+      await client.query('COMMIT')
+      transactionOpen = false
+      return false
+    }
+
+    const current = parseUserBentoEvents(locked.rows[0].onboarding)
+    if (current[observation.bentoEvent]?.sent_at) {
+      await client.query('COMMIT')
+      transactionOpen = false
+      return getPendingUserBentoEvents(current).length > 0
+    }
+
+    const next = appendUserBentoObservation(current, observation)
+    await client.query(PATCH_BENTO_EVENTS_SQL, [userId, JSON.stringify({
+      [observation.bentoEvent]: next[observation.bentoEvent],
+    })])
     await client.query('COMMIT')
     transactionOpen = false
+    return getPendingUserBentoEvents(next).length > 0
+  }
+  catch (error) {
+    if (transactionOpen) {
+      try {
+        await client.query('ROLLBACK')
+      }
+      catch (error) {
+        rollbackError = error instanceof Error ? error : new Error('Rollback failed')
+      }
+    }
+    logUserBentoError(c, 'observe', userId, observation.bentoEvent, error)
     return false
   }
-
-  const current = parseUserBentoEvents(locked.rows[0].onboarding)
-  if (current[observation.bentoEvent]?.sent_at) {
-    await client.query('COMMIT')
-    transactionOpen = false
-    return getPendingUserBentoEvents(current).length > 0
+  finally {
+    try {
+      client.release(rollbackError)
+    }
+    catch (error) {
+      logUserBentoError(c, 'observe', userId, observation.bentoEvent, error)
+    }
   }
-
-  const next = appendUserBentoObservation(current, observation)
-  await client.query(PATCH_BENTO_EVENTS_SQL, [userId, JSON.stringify({
-    [observation.bentoEvent]: next[observation.bentoEvent],
-  })])
-  await client.query('COMMIT')
-  transactionOpen = false
-  return getPendingUserBentoEvents(next).length > 0
 }
 catch (error) {
-  if (transactionOpen)
-    await client.query('ROLLBACK').catch(() => {})
   logUserBentoError(c, 'observe', userId, observation.bentoEvent, error)
   return false
 }
 finally {
-  client.release()
-  await closeClient(c, pool)
+  if (pool)
+    await closeClient(c, pool).catch(error => logUserBentoError(c, 'observe', userId, observation.bentoEvent, error))
 }
 ```
 
