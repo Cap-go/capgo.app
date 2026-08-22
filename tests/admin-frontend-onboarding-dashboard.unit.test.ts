@@ -197,6 +197,7 @@ describe('admin frontend onboarding dashboard', () => {
       return
 
     expect(selector(undefined)).toEqual({ version: 'v4', stages: [] })
+    expect(selector({} as never)).toEqual({ version: 'v3', stages: [] })
     expect(selector({ v3: analytics.funnels.v3 })).toEqual({
       version: 'v3',
       stages: analytics.funnels.v3,

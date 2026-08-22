@@ -142,7 +142,7 @@ describe('buildFrontendOnboardingTabSwitchHogql', () => {
     expect(query).toContain("JSONExtractString(toString(properties), 'flow') = 'pre_org'")
     expect(query).toContain("JSONExtractString(toString(properties), '$host') = 'console.capgo.app'")
     expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) = 4')
-    expect(query).toContain('toString(toDate(timestamp)) AS date')
+    expect(query).toContain("toString(toDate(toTimeZone(timestamp, 'UTC'))) AS date")
     expect(query).not.toContain("toDate(timestamp, 'UTC')")
     expect(query).toContain("step IN ('welcome', 'intent', 'app_name', 'app_id', 'app_icon', 'organization')")
     expect(query).toContain("countIf(step = 'welcome') AS welcome")

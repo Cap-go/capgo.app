@@ -203,7 +203,7 @@ export function selectLatestFrontendOnboardingFunnel(
     return { version: 'v4', stages: funnels.v4 }
   if (funnels === null || funnels === undefined)
     return { version: 'v4', stages: [] }
-  return { version: 'v3', stages: funnels.v3 }
+  return { version: 'v3', stages: funnels.v3 ?? [] }
 }
 
 const FUNNEL_STAGE_COLORS: Record<FrontendOnboardingStageKey, string> = {
