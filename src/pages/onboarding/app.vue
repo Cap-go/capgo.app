@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconLoader from '~icons/lucide/loader-2'
+import IconLogOut from '~icons/lucide/log-out'
 import AppOnboardingFlow from '~/components/dashboard/AppOnboardingFlow.vue'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -50,17 +51,18 @@ onMounted(async () => {
 
 <template>
   <div class="relative flex h-full min-h-0 flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">
-    <header class="onboarding-page-actions absolute right-0 top-0 z-20 flex shrink-0 items-center justify-end px-6 py-3 lg:px-10">
+    <header class="onboarding-page-actions absolute right-0 top-0 z-20 flex shrink-0 items-center justify-end px-2 py-2 sm:px-6 sm:py-3 lg:px-10">
       <button
         type="button"
-        class="d-btn d-btn-ghost min-h-11 text-slate-600 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white"
+        class="d-btn d-btn-ghost min-h-10 px-3 text-slate-600 hover:text-slate-950 sm:min-h-11 dark:text-slate-300 dark:hover:text-white"
         data-test="onboarding-logout"
         :aria-label="t('logout')"
         :disabled="isLoggingOut"
         @click="logoutFromOnboarding"
       >
         <IconLoader v-if="isLoggingOut" class="h-4 w-4 animate-spin" />
-        <span :class="{ 'sr-only': isLoggingOut }">{{ t('logout') }}</span>
+        <IconLogOut v-else class="h-4 w-4" aria-hidden="true" />
+        <span class="hidden sm:inline" :class="{ 'sm:sr-only': isLoggingOut }">{{ t('logout') }}</span>
       </button>
     </header>
 
@@ -158,10 +160,6 @@ meta:
 }
 
 @media (max-width: 639px) and (max-height: 700px) {
-  :global(body:has(.onboarding-flow-app-creation) .onboarding-page-actions) {
-    display: none;
-  }
-
   :deep(.onboarding-flow-app-creation.onboarding-flow-intent .onboarding-flow-title),
   :deep(.onboarding-flow-app-creation.onboarding-flow-intent .onboarding-intent-eyebrow) {
     display: none;
