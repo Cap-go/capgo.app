@@ -9,6 +9,7 @@ import type {
   FrontendOnboardingAnalytics,
   FrontendOnboardingDailySetupCliOutcomeKey,
   FrontendOnboardingStageKey,
+  FrontendOnboardingTabSwitchStep,
 } from '~/services/adminFrontendOnboarding'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -26,6 +27,7 @@ import PageLoader from '~/components/PageLoader.vue'
 import {
   buildFrontendOnboardingDailySeries,
   buildFrontendOnboardingDailySetupCliSeries,
+  buildFrontendOnboardingDailyTabSwitchSeries,
   buildFrontendOnboardingDailyWelcomeOutcomeSeries,
   buildFrontendOnboardingFunnelStages,
   buildFrontendOnboardingFunnelSummaries,
@@ -207,6 +209,18 @@ const welcomeOutcomeSeries = computed(() => buildFrontendOnboardingDailyWelcomeO
   t('frontend-onboarding-welcome-not-viewed'),
   t('frontend-onboarding-welcome-did-not-advance'),
 ))
+const tabSwitchLabels = computed<Record<FrontendOnboardingTabSwitchStep, string>>(() => ({
+  welcome: t('frontend-onboarding-tab-switch-step-welcome'),
+  intent: t('frontend-onboarding-tab-switch-step-intent'),
+  app_name: t('frontend-onboarding-tab-switch-step-app-name'),
+  app_id: t('frontend-onboarding-tab-switch-step-app-id'),
+  app_icon: t('frontend-onboarding-tab-switch-step-app-icon'),
+  organization: t('frontend-onboarding-tab-switch-step-organization'),
+}))
+const tabSwitchSeries = computed(() => buildFrontendOnboardingDailyTabSwitchSeries(
+  visibleAnalytics.value?.daily_tab_switches ?? [],
+  tabSwitchLabels.value,
+))
 const latestDailyConversions = computed(() => rawLatestFunnel.value.version === 'v4'
   ? visibleAnalytics.value?.v4_daily_conversions ?? visibleAnalytics.value?.daily_conversions
   : visibleAnalytics.value?.daily_conversions)
@@ -224,6 +238,14 @@ const hasWelcomeOutcomeData = computed(() => displayedWelcomeOutcomes.value.some
   day.welcome_advanced_to_intent > 0
   || day.welcome_not_viewed > 0
   || day.welcome_did_not_advance > 0
+)))
+const hasTabSwitchData = computed(() => (visibleAnalytics.value?.daily_tab_switches ?? []).some(day => (
+  day.welcome > 0
+  || day.intent > 0
+  || day.app_name > 0
+  || day.app_id > 0
+  || day.app_icon > 0
+  || day.organization > 0
 )))
 const setupCliOutcomes = computed(() => visibleAnalytics.value?.v2_v4_setup_cli_outcomes
   ?? visibleAnalytics.value?.v2_v3_setup_cli_outcomes
@@ -616,6 +638,29 @@ displayStore.defaultBack = '/dashboard'
             <AdminChartDeduplicateControl
               v-model="deduplicateWelcomeOutcomes"
               :chart-label="t('frontend-onboarding-welcome-outcomes-v4')"
+            />
+          </ChartCard>
+
+          <ChartCard
+            chart-id="tab-switches-v4"
+            :title="t('frontend-onboarding-tab-switches-v4')"
+            :is-loading="isLoadingStats"
+            :has-data="hasTabSwitchData"
+          >
+            <template #header>
+              <div class="min-w-0">
+                <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
+                  {{ t('frontend-onboarding-tab-switches-v4') }}
+                </h2>
+                <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                  {{ t('frontend-onboarding-tab-switches-v4-description') }}
+                </p>
+              </div>
+            </template>
+            <AdminStackedBarChart
+              :series="tabSwitchSeries"
+              :is-loading="isLoadingStats"
+              accessible-borders
             />
           </ChartCard>
 

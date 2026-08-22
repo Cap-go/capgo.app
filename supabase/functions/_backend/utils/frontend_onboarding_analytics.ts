@@ -63,6 +63,18 @@ const ONBOARDING_INTERACTION_EVENTS = [
 ] as const
 
 const AI_INSTRUCTIONS_COPIED_EVENT = 'onboarding_ai_instructions_copied'
+const DAY_MS = 24 * 60 * 60 * 1000
+const FRONTEND_ONBOARDING_TAB_SWITCH_STEPS = ['welcome', 'intent', 'app_name', 'app_id', 'app_icon', 'organization'] as const
+
+export interface FrontendOnboardingDailyTabSwitches {
+  date: string
+  welcome: number
+  intent: number
+  app_name: number
+  app_id: number
+  app_icon: number
+  organization: number
+}
 
 function sqlStr(value: string): string {
   return `'${value.replace(/'/g, '\'\'')}'`
@@ -201,6 +213,53 @@ function mapWelcomeAttempts(rows: Record<string, unknown>[]): FrontendOnboarding
   })
 }
 
+function emptyTabSwitchCounts(): Omit<FrontendOnboardingDailyTabSwitches, 'date'> {
+  return {
+    welcome: 0,
+    intent: 0,
+    app_name: 0,
+    app_id: 0,
+    app_icon: 0,
+    organization: 0,
+  }
+}
+
+function nonNegativeInteger(value: unknown): number {
+  const count = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && value.trim() !== ''
+      ? Number(value)
+      : Number.NaN
+  return Number.isFinite(count) && Number.isInteger(count) && count >= 0 ? count : 0
+}
+
+export function buildFrontendOnboardingDailyTabSwitches(
+  rows: Record<string, unknown>[],
+  startMs: number,
+  endMs: number,
+): FrontendOnboardingDailyTabSwitches[] {
+  const dates: string[] = []
+  const start = new Date(startMs)
+  const firstDayMs = Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate())
+  for (let dayMs = firstDayMs; dayMs < endMs; dayMs += DAY_MS)
+    dates.push(new Date(dayMs).toISOString().slice(0, 10))
+
+  const validDates = new Set(dates)
+  const countsByDate = new Map<string, Omit<FrontendOnboardingDailyTabSwitches, 'date'>>()
+  for (const row of rows) {
+    const date = typeof row.date === 'string' ? row.date : ''
+    if (!validDates.has(date))
+      continue
+
+    const counts = countsByDate.get(date) ?? emptyTabSwitchCounts()
+    for (const step of FRONTEND_ONBOARDING_TAB_SWITCH_STEPS)
+      counts[step] += nonNegativeInteger(row[step])
+    countsByDate.set(date, counts)
+  }
+
+  return dates.map(date => ({ date, ...(countsByDate.get(date) ?? emptyTabSwitchCounts()) }))
+}
+
 export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: string, followupEndDate: string): string {
   const eventAllowlist = ['onboarding_step_viewed', AI_INSTRUCTIONS_COPIED_EVENT, ...ONBOARDING_INTERACTION_EVENTS].map(sqlStr).join(', ')
   const interactionEventAllowlist = ONBOARDING_INTERACTION_EVENTS.map(sqlStr).join(', ')
@@ -324,6 +383,36 @@ export function buildFrontendOnboardingWelcomeHogql(
     LIMIT ${FRONTEND_ONBOARDING_ATTEMPT_LIMIT}`
 }
 
+export function buildFrontendOnboardingTabSwitchHogql(startDate: string, endDate: string): string {
+  const stepAllowlist = FRONTEND_ONBOARDING_TAB_SWITCH_STEPS.map(sqlStr).join(', ')
+  return `
+    WITH tab_switch_events AS (
+      SELECT
+        toString(toDate(timestamp)) AS date,
+        JSONExtractString(toString(properties), 'step') AS step
+      FROM events
+      WHERE event = 'onboarding_visibility_changed'
+        AND JSONExtractString(toString(properties), 'visibility_state') = 'hidden'
+        AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
+        AND JSONExtractString(toString(properties), '$host') = ${sqlStr(FRONTEND_ONBOARDING_PRODUCTION_HOST)}
+        AND toIntOrZero(toString(properties.onboarding_version)) = 4
+        AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
+        AND timestamp < parseDateTimeBestEffort(${sqlStr(endDate)})
+    )
+    SELECT
+      date,
+      countIf(step = 'welcome') AS welcome,
+      countIf(step = 'intent') AS intent,
+      countIf(step = 'app_name') AS app_name,
+      countIf(step = 'app_id') AS app_id,
+      countIf(step = 'app_icon') AS app_icon,
+      countIf(step = 'organization') AS organization
+    FROM tab_switch_events
+    WHERE step IN (${stepAllowlist})
+    GROUP BY date
+    ORDER BY date ASC`
+}
+
 export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate: string, endDate: string) {
   const startMs = parseStrictPosthogDate(startDate)
   const endMs = parseStrictPosthogDate(endDate)
@@ -346,7 +435,7 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
   }
 
   const welcomeQueryStartMs = startMs - FRONTEND_ONBOARDING_FOLLOWUP_MS
-  const [posthog, dailySetupCliEvents, welcomePosthog] = await Promise.all([
+  const [posthog, dailySetupCliEvents, welcomePosthog, tabSwitchPosthog] = await Promise.all([
     queryPosthogHogql(
       c,
       buildFrontendOnboardingHogql(
@@ -370,11 +459,17 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
         new Date(dailyFollowupEndMs).toISOString(),
       ),
     ),
+    queryPosthogHogql(
+      c,
+      buildFrontendOnboardingTabSwitchHogql(normalizedStartDate, normalizedEndDate),
+    ),
   ])
   if (!posthog.configured || !posthog.connected || posthog.failureReason !== null)
     throw new Error('frontend onboarding analytics PostHog query failed')
   if (!welcomePosthog.configured || !welcomePosthog.connected || welcomePosthog.failureReason !== null)
     throw new Error('frontend onboarding Welcome analytics PostHog query failed')
+  if (!tabSwitchPosthog.configured || !tabSwitchPosthog.connected || tabSwitchPosthog.failureReason !== null)
+    throw new Error('frontend onboarding tab-switch analytics PostHog query failed')
 
   for (const [source, rows] of [
     ['aggregate', posthog.rows],
@@ -405,6 +500,7 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
   const analytics = buildFrontendOnboardingAnalytics(mapAttempts(posthog.rows), startMs, endMs)
   const dailySetupCliOutcomes = buildFrontendOnboardingDailySetupCliOutcomes(dailySetupCliEvents, startMs, endMs)
   const welcomeOutcomes = buildFrontendOnboardingWelcomeOutcomes(mapWelcomeAttempts(welcomePosthog.rows), startMs, endMs)
+  const dailyTabSwitches = buildFrontendOnboardingDailyTabSwitches(tabSwitchPosthog.rows, startMs, endMs)
 
   return {
     ...analytics,
@@ -414,6 +510,7 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
       daily_welcome_outcomes: welcomeOutcomes.deduplicated,
     },
     daily_setup_cli_outcomes: dailySetupCliOutcomes,
+    daily_tab_switches: dailyTabSwitches,
     posthog_configured: posthog.configured,
     posthog_connected: posthog.connected,
   }
