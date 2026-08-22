@@ -1,3 +1,4 @@
+// Retrigger CLI release so 8.41.2 publishes after the npm-stage CI fix.
 import type { InstallCommand, PackageManagerRunner, PackageManagerType } from '@capgo/find-package-manager'
 import type {
   SemVer,
