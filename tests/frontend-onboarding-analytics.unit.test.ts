@@ -57,6 +57,7 @@ describe('buildFrontendOnboardingProductionHostHogql', () => {
     const filter = buildFrontendOnboardingProductionHostHogql('events.properties', 'events.timestamp')
 
     expectAugust22ProductionHostFallback(filter, 'events.properties', 'events.timestamp')
+    expect(filter).toContain(`'$host') = 'console.capgo.app'\n    OR (\n      isNull(events.properties['$host'])`)
   })
 })
 
