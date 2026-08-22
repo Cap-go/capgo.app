@@ -118,22 +118,79 @@ properties are omitted.
 
 The current database constraint limits the complete `onboarding` object to
 8,192 bytes, while the frontend may already use approximately 8,000 bytes.
-A small migration raises this limit to 16,384 bytes. The event history remains
-bounded; the larger limit only guarantees room beside existing wizard state.
-No table, column, index, function, or extension is added.
+A small migration raises this limit to exactly 65,536 bytes (64 KiB). The event
+history remains bounded; the larger limit guarantees ample room beside existing
+wizard state and avoids another constraint migration as a few more deliberately
+mapped lifecycle events are added later. No table, column, index, function, or
+extension is added.
 
 ## Event Registry
 
-A small backend registry maps the three exact source names to:
+Use one data-only registry. Each entry declares the Bento name and a typed,
+bounded allowlist of properties copied from `trackedBody.tags`. A shared detail
+builder adds `observed_at`, `source_event`, and validated request context, then
+applies these descriptors. The following is the intended shape, not a separate
+framework:
 
-- the Bento event name;
-- the allowed detail fields and their validators/length bounds.
+```ts
+const CLI_BENTO_EVENT_REGISTRY = {
+  'CLI Command Invoked': {
+    bentoEvent: 'cli:command_invoked',
+    fields: [
+      { key: 'command_path', type: 'string', maxLength: 128 },
+      { key: 'flags', type: 'string', maxLength: 512 },
+      { key: 'flags_count', type: 'integer', min: 0, max: 128 },
+      { key: 'positional_arg_count', type: 'integer', min: 0, max: 128 },
+    ],
+  },
+  'User CLI login': {
+    bentoEvent: 'cli:login_successful',
+    fields: [],
+  },
+  'onboarding-run-started': {
+    bentoEvent: 'cli:onboarding_run_started',
+    fields: [
+      { key: 'onboarding_event_version', type: 'integer', min: 1, max: 100 },
+      { key: 'onboarding_journey_id', type: 'string', maxLength: 80 },
+      { key: 'onboarding_run_id', type: 'string', maxLength: 80 },
+      { key: 'resume_available', type: 'boolean' },
+      { key: 'resume_journey_id', type: 'string', maxLength: 80 },
+      { key: 'resumed_from_run_id', type: 'string', maxLength: 80 },
+      { key: 'saved_step', type: 'integer', min: 0, max: 1_000 },
+      { key: 'total_steps', type: 'integer', min: 0, max: 1_000 },
+    ],
+  },
+} as const
+```
 
-Unmapped events perform no user-Bento database or network work. Adding a future
-event requires one registry entry and tests; there is no generic name
-transformation because `User CLI login` intentionally maps to the semantic name
-`cli:login_successful` and arbitrary forwarding would create a volume and data
-exposure risk.
+The lookup and detail-building flow is deliberately small:
+
+```ts
+const mapping = getCliBentoEventMapping(trackedBody.event)
+if (!mapping)
+  return
+
+const details = buildMappedDetails(mapping, trackedBody.tags, {
+  sourceEvent: trackedBody.event,
+  observedAt,
+  orgId: verifiedOrgId,
+  appId,
+})
+```
+
+`buildMappedDetails()` supports only bounded strings, integers, and booleans.
+It ignores missing values, type mismatches, unknown properties, and non-finite
+numbers. It does not receive or spread the full body. The lookup should use a
+small type guard rather than weakening the request type with an unrestricted
+index signature.
+
+Unmapped events therefore perform no user-Bento database or network work.
+Adding a future event with these primitive field types requires one registry
+entry and tests. There is no generic name transformation because
+`User CLI login` intentionally maps to the semantic name
+`cli:login_successful`, and arbitrary forwarding would create volume and data
+exposure risks. If a future event needs computed details, that requirement can
+be designed then instead of adding an override mechanism now.
 
 ## Request and Delivery Flow
 
@@ -285,7 +342,7 @@ plans; the result must be at most 1,000.
 ### Database coverage
 
 - The revised constraint accepts a bounded wizard plus Bento payload below
-  16,384 bytes and rejects a payload above the limit.
+  65,536 bytes and rejects a payload above the limit.
 - Transaction tests use a dedicated user because they mutate
   `public.users.onboarding` and test files run in parallel.
 
