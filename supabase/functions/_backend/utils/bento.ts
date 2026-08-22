@@ -53,11 +53,21 @@ async function bentoFetch(c: Context, path: string, siteUuid: string, body: any,
   })
 
   if (!response.ok) {
-    const error = await response.text()
-    throw new Error(`Bento API error: ${response.status} ${error}`)
+    try {
+      await response.body?.cancel()
+    }
+    catch {
+      // Preserve the sanitized status error when stream cleanup fails.
+    }
+    throw new Error(`Bento API error: ${response.status}`)
   }
 
-  return response.json()
+  try {
+    return await response.json()
+  }
+  catch {
+    throw new Error(`Bento API returned invalid JSON: ${response.status}`)
+  }
 }
 
 function acceptedBentoBatchResult(result: unknown, expectedResults: number) {
@@ -68,6 +78,17 @@ function acceptedBentoBatchResult(result: unknown, expectedResults: number) {
   return response.results === expectedResults && response.failed === 0
 }
 
+function bentoBatchResultSummary(result: unknown): { failed?: number, results?: number } {
+  if (!result || typeof result !== 'object')
+    return {}
+
+  const response = result as { failed?: unknown, results?: unknown }
+  return {
+    ...(typeof response.failed === 'number' && Number.isFinite(response.failed) ? { failed: response.failed } : {}),
+    ...(typeof response.results === 'number' && Number.isFinite(response.results) ? { results: response.results } : {}),
+  }
+}
+
 function acceptedBentoCommandResult(result: unknown, expectedResults: number) {
   if (!result || typeof result !== 'object')
     return false
@@ -75,33 +96,53 @@ function acceptedBentoCommandResult(result: unknown, expectedResults: number) {
   return (result as { results?: unknown }).results === expectedResults
 }
 
-// Only use this function when a specific member of the organization needs to be tracked in Bento. For organization-level events, use sendNotifToOrgMembers in org_email_notifications.ts which will call trackBentoEvent for each member with an email in the background.
-export async function trackBentoEvent(c: Context, email: string, data: Record<string, unknown>, event: string) {
+export interface BentoBatchEvent {
+  data: Record<string, unknown>
+  event: string
+}
+
+export async function trackBentoEvents(
+  c: Context,
+  email: string,
+  events: readonly BentoBatchEvent[],
+  signal?: AbortSignal,
+) {
   if (!isBentoConfigured(c))
     return
+  if (events.length === 0)
+    return true
 
   try {
     const siteUuid = getEnv(c, 'BENTO_SITE_UUID')
-
     const payload = {
-      events: [{
-        type: event,
+      events: events.map(item => ({
+        type: item.event,
         email,
-        details: data,
-      }],
+        details: item.data,
+      })),
     }
-
-    const res = await bentoFetch(c, 'batch/events', siteUuid, payload)
+    const res = await bentoFetch(c, 'batch/events', siteUuid, payload, signal)
     if (!acceptedBentoBatchResult(res, payload.events.length)) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'trackBentoEvent', error: res })
+      cloudlogErr({ requestId: c.get('requestId'), message: 'trackBentoEvents', error: bentoBatchResultSummary(res) })
       return false
     }
     return true
   }
-  catch (e) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'trackBentoEvent error', error: serializeError(e) })
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'trackBentoEvents error', error: serializeError(error) })
     return false
   }
+}
+
+// Only use this function when a specific member of the organization needs to be tracked in Bento. For organization-level events, use sendNotifToOrgMembers in org_email_notifications.ts which will call trackBentoEvent for each member with an email in the background.
+export async function trackBentoEvent(
+  c: Context,
+  email: string,
+  data: Record<string, unknown>,
+  event: string,
+  signal?: AbortSignal,
+) {
+  return trackBentoEvents(c, email, [{ data, event }], signal)
 }
 
 export async function addTagBento(c: Context, email: string, segments: { segments: string[], deleteSegments: string[] }) {
@@ -169,7 +210,7 @@ export async function syncBentoSubscriberTags(
       const payload = { subscribers: chunk }
       const res = await bentoFetch(c, 'batch/subscribers', siteUuid, payload, signal)
       if (!acceptedBentoBatchResult(res, chunk.length)) {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'syncBentoSubscriberTags', error: res })
+        cloudlogErr({ requestId: c.get('requestId'), message: 'syncBentoSubscriberTags', error: bentoBatchResultSummary(res) })
         return false
       }
     }

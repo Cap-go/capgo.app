@@ -48,6 +48,7 @@ import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
 import {
   MAX_USER_ONBOARDING_WRITE_ATTEMPTS,
+  preserveUserBentoEvents,
   replaceUserOnboardingIfUnchanged,
   serializeUserOnboardingWrite,
 } from '~/services/userOnboardingWriteQueue'
@@ -561,10 +562,14 @@ async function writeOnboardingProgress(
       if (current?.status === 'completed' && status !== 'completed')
         return 'skipped'
 
-      const onboarding = preserveAdminDashboardMinimize(
+      const onboardingWithPreferences = preserveAdminDashboardMinimize(
         progress as unknown as Json,
         currentOnboarding,
         main.isAdmin,
+      )
+      const onboarding = preserveUserBentoEvents(
+        onboardingWithPreferences,
+        currentOnboarding,
       )
       const { data, error } = await replaceUserOnboardingIfUnchanged(
         userId,
