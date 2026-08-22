@@ -5,6 +5,22 @@ const onboardingWriteChains = new Map<string, Promise<void>>()
 
 export const MAX_USER_ONBOARDING_WRITE_ATTEMPTS = 3
 
+function isJsonObject(value: Json | undefined): value is { [key: string]: Json | undefined } {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+export function preserveUserBentoEvents(nextOnboarding: Json, currentOnboarding: Json | undefined): Json {
+  if (!isJsonObject(currentOnboarding))
+    return nextOnboarding
+
+  const bentoEvents = currentOnboarding.bento_events
+  if (!isJsonObject(bentoEvents))
+    return nextOnboarding
+
+  const next = isJsonObject(nextOnboarding) ? nextOnboarding : {}
+  return { ...next, bento_events: bentoEvents }
+}
+
 export function serializeUserOnboardingWrite<T>(
   userId: string,
   write: () => Promise<T>,
