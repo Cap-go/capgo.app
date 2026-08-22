@@ -3,22 +3,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { syncBentoSubscriberTags, trackBentoEvent, trackBentoEvents, unsubscribeBento } from '../supabase/functions/_backend/utils/bento.ts'
 
+const { cloudlogErrMock, getEnvMock } = vi.hoisted(() => ({
+  cloudlogErrMock: vi.fn(),
+  getEnvMock: vi.fn(),
+}))
+
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
   cloudlog: vi.fn(),
-  cloudlogErr: vi.fn(),
+  cloudlogErr: cloudlogErrMock,
   serializeError: (error: unknown) => error,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
-  getEnv: (_context: unknown, key: string) => {
+  getEnv: getEnvMock,
+}))
+
+function configureBentoEnv() {
+  getEnvMock.mockImplementation((_context: unknown, key: string) => {
     const values: Record<string, string> = {
       BENTO_PUBLISHABLE_KEY: 'publishable-key-value',
       BENTO_SECRET_KEY: 'secret-key-value',
       BENTO_SITE_UUID: 'site-uuid-value',
     }
     return values[key] ?? ''
-  },
-}))
+  })
+}
 
 const fetchMock = vi.fn<(
   input: string | URL | Request,
@@ -60,9 +69,12 @@ const events = [
   { event: 'cli:login_successful', data: { occurrence_count: 2 } },
 ]
 
-describe('configured Bento response acceptance', () => {
+describe('bento response acceptance and configuration', () => {
   beforeEach(() => {
+    cloudlogErrMock.mockReset()
     fetchMock.mockReset()
+    getEnvMock.mockReset()
+    configureBentoEnv()
     vi.stubGlobal('fetch', fetchMock)
   })
 
@@ -124,6 +136,28 @@ describe('configured Bento response acceptance', () => {
   })
 
   describe('trackBentoEvents', () => {
+    it('accepts an empty configured batch without a request', async () => {
+      await expect(trackBentoEvents(
+        createContext(),
+        'event.user@example.com',
+        [],
+      )).resolves.toBe(true)
+
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('skips an unconfigured batch without a request', async () => {
+      getEnvMock.mockReturnValue('')
+
+      await expect(trackBentoEvents(
+        createContext(),
+        'event.user@example.com',
+        events,
+      )).resolves.toBeUndefined()
+
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
     it('accepts an acknowledgement for the exact event count', async () => {
       queueAcknowledgement({ failed: 0, results: 2 })
 
@@ -145,6 +179,23 @@ describe('configured Bento response acceptance', () => {
           { type: 'cli:command_invoked', email: 'event.user@example.com', details: { occurrence_count: 1 } },
           { type: 'cli:login_successful', email: 'event.user@example.com', details: { occurrence_count: 2 } },
         ],
+      })
+    })
+
+    it('logs and rejects a failed request', async () => {
+      const error = new Error('Bento request failed')
+      fetchMock.mockRejectedValueOnce(error)
+
+      await expect(trackBentoEvents(
+        createContext(),
+        'event.user@example.com',
+        events,
+      )).resolves.toBe(false)
+
+      expect(cloudlogErrMock).toHaveBeenCalledWith({
+        requestId: 'request-id',
+        message: 'trackBentoEvents error',
+        error,
       })
     })
 

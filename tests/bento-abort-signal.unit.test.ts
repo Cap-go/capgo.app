@@ -99,6 +99,13 @@ describe('bento abort signals', () => {
 
   it.each([
     [
+      'event batch tracking',
+      (context: Context, signal: AbortSignal) => trackBentoEvents(context, subscriberUpdate.email, [{
+        event: 'cli:command_invoked',
+        data: { occurrence_count: 1 },
+      }], signal),
+    ],
+    [
       'subscriber synchronization',
       (context: Context, signal: AbortSignal) => syncBentoSubscriberTags(context, subscriberUpdate, signal),
     ],
