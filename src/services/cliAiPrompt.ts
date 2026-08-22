@@ -1,3 +1,5 @@
+import { isValidAppId } from '~/utils/appId'
+
 export interface CliAiPromptApp {
   appId: string
   name: string | null
@@ -21,18 +23,27 @@ function promptLabel(value: string | null | undefined, fallback: string): string
   return value?.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim() || fallback
 }
 
+function getPromptApps(organization: CliAiPromptOrganization): CliAiPromptApp[] {
+  return organization.apps.filter(app => isValidAppId(app.appId))
+}
+
 function formatOrganization(organization: CliAiPromptOrganization): string {
-  const apps = organization.apps.slice(0, APP_PREVIEW_LIMIT)
-  const remaining = Math.max(0, organization.apps.length - apps.length)
+  const promptApps = getPromptApps(organization)
+  const apps = promptApps.slice(0, APP_PREVIEW_LIMIT)
+  const remaining = Math.max(0, promptApps.length - apps.length)
+  const omitted = organization.apps.length - promptApps.length
   const appLines = apps.map(app => `  - App: ${promptLabel(app.name, app.appId)} (Capgo app ID: \`${app.appId}\`)`)
   const appFooter = remaining > 0
     ? `  There are ${remaining} more applications available for this org. To list them, run the following command using the same ephemeral package runner selected in Section 1:\n\n  {CAPGO_CLI_RUNNER} app list --filter-by-org-id ${organization.id} --output-text\n\n  Here, \`{CAPGO_CLI_RUNNER}\` is the complete runner prefix already selected above, such as \`npx -y @capgo/cli@latest\`.`
-    : '  These are all the apps for this organization. No other apps exist for this org.'
+    : omitted === 0 ? '  These are all the apps for this organization. No other apps exist for this org.' : ''
+  const omittedFooter = omitted > 0
+    ? `  ${omitted} ${omitted === 1 ? 'application was' : 'applications were'} omitted because ${omitted === 1 ? 'its' : 'their'} Capgo app ID is invalid. Do not attempt to configure ${omitted === 1 ? 'it' : 'them'}.`
+    : ''
+  const footerLines = [appFooter, omittedFooter].filter(Boolean)
   return [
     `- Organization: ${promptLabel(organization.name, organization.id)} (organization ID: \`${organization.id}\`)`,
     ...appLines,
-    '',
-    appFooter,
+    ...(footerLines.length ? ['', ...footerLines] : []),
   ].join('\n')
 }
 
@@ -93,7 +104,7 @@ Do not run the interactive \`init\` command on my behalf.`
 
 function buildOrganizationSection(input: CliAiPromptInput): string {
   const organizations = input.organizations.map(formatOrganization).join('\n\n')
-  const hasSingleTarget = input.organizations.length === 1 && input.organizations[0]?.apps.length === 1
+  const hasSingleTarget = input.organizations.length === 1 && getPromptApps(input.organizations[0]!).length === 1
   const targetInstruction = hasSingleTarget
     ? 'There is only one possible target. Use that organization and app without asking me to choose.'
     : `Before inspecting or changing my project, ask me to confirm which organization and app I want to configure. Refer to an app by both its name and its Capgo app ID. Do not begin setup until I confirm the target.
