@@ -14,6 +14,7 @@ import { checkPermission } from '../utils/rbac.ts'
 import { broadcastCLIEvent } from '../utils/realtime_broadcast.ts'
 import { supabaseWithAuth } from '../utils/supabase.ts'
 import { addAuthenticatedApiKeyIdToTrackingPayload, sendEventToTracking } from '../utils/tracking.ts'
+import { recordUserBentoEvent } from '../utils/user_bento_events.ts'
 import { backgroundTask } from '../utils/utils.ts'
 
 // PostHog event recording whether the org-member incompatibility email was sent
@@ -472,6 +473,14 @@ app.post('/', middlewareAuth(), async (c) => {
     sentToBento: Boolean(bentoEvent),
     groups: verifiedOrgId ? { organization: verifiedOrgId } : undefined,
   }, apikeyId))
+
+  await recordUserBentoEvent(c, {
+    userId: trackingUserId,
+    sourceEvent: trackedBody.event,
+    tags: trackedBody.tags,
+    orgId: verifiedOrgId,
+    appId,
+  })
 
   return c.json(BRES)
 })
