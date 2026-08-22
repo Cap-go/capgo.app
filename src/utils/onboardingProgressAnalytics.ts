@@ -247,6 +247,7 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
   let activePreviousStep: OnboardingAnalyticsStep | null = null
   let activeStepViewedAt = 0
   let activeStepCompleted = false
+  let hiddenAt: number | null = null
 
   function sharedProperties(step: OnboardingAnalyticsStep): AnalyticsProperties | null {
     const stepIndex = options.steps.indexOf(step)
@@ -283,11 +284,42 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     activePreviousStep = previousStep ?? null
     activeStepViewedAt = now()
     activeStepCompleted = false
+    hiddenAt = null
 
     if (previousStep)
       properties.previous_step = previousStep
 
     safelyCapture('onboarding_step_viewed', properties)
+  }
+
+  function trackVisibilityChange(visibilityState: 'hidden' | 'visible', occurredAt = now()) {
+    if (!activeStep || activeStep === 'setup') {
+      hiddenAt = null
+      return
+    }
+
+    let hiddenDurationMs: number | null = null
+    if (visibilityState === 'hidden') {
+      if (hiddenAt !== null)
+        return
+      hiddenAt = occurredAt
+    }
+    else {
+      if (hiddenAt === null)
+        return
+      hiddenDurationMs = Math.max(0, Math.floor(occurredAt - hiddenAt))
+      hiddenAt = null
+    }
+
+    const properties = sharedProperties(activeStep)
+    if (!properties)
+      return
+
+    properties.visibility_state = visibilityState
+    if (hiddenDurationMs !== null)
+      properties.hidden_duration_ms = hiddenDurationMs
+
+    safelyCapture('onboarding_visibility_changed', properties)
   }
 
   function completeStep(step: OnboardingAnalyticsStep, completion: OnboardingStepCompletionProperties = {}) {
@@ -387,6 +419,7 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     trackDashboardExplored,
     trackDetailsEvent,
     trackStepEvent,
+    trackVisibilityChange,
     viewStep,
   }
 }

@@ -385,6 +385,7 @@ const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onb
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
+let pendingVisibilityChanges: Array<{ state: DocumentVisibilityState, occurredAt: number }> = []
 let persistFieldsTimer: ReturnType<typeof setTimeout> | undefined
 let pendingDashboardExplored = false
 let onboardingFlowDisposed = false
@@ -417,6 +418,16 @@ function analyticsStepFor(flow: OnboardingFlowStep, detailsStep = appDetailsStep
   return flow
 }
 
+function trackOnboardingVisibilityChange() {
+  const visibilityChange = { state: document.visibilityState, occurredAt: Date.now() }
+  if (!progressTracker) {
+    if (isHydratingOnboarding.value || onboardingInitialPersistInFlight)
+      pendingVisibilityChanges.push(visibilityChange)
+    return
+  }
+  progressTracker.trackVisibilityChange(visibilityChange.state, visibilityChange.occurredAt)
+}
+
 function initializeProgressTracking(resumed: boolean) {
   const initialStep: OnboardingAnalyticsStep = showPreOrgWelcome.value ? 'welcome' : analyticsStepFor(flowStep.value)
   const trackedSteps = appOnboardingSteps.value.flatMap<OnboardingAnalyticsStep>((step) => {
@@ -438,6 +449,9 @@ function initializeProgressTracking(resumed: boolean) {
     onboardingRunId: onboardingTelemetry.runId,
   })
   progressTracker.viewStep(initialStep)
+  for (const visibilityChange of pendingVisibilityChanges)
+    progressTracker.trackVisibilityChange(visibilityChange.state, visibilityChange.occurredAt)
+  pendingVisibilityChanges = []
   if (pendingDashboardExplored)
     trackDashboardExplored()
 }
@@ -1905,6 +1919,7 @@ function trackDashboardExplored() {
 
 onMounted(async () => {
   window.addEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
+  document.addEventListener('visibilitychange', trackOnboardingVisibilityChange)
   welcomeCanvasEligible.value = window.matchMedia(WELCOME_CANVAS_MEDIA_QUERY).matches
   let resumedFlow = false
   isLoading.value = true
@@ -1960,6 +1975,8 @@ onMounted(async () => {
       )
       if (shouldInitializeProgressTracking)
         initializeProgressTracking(resumedFlow)
+      else
+        pendingVisibilityChanges = []
     }
     finishOnboardingMount()
   }
@@ -1969,6 +1986,7 @@ onBeforeUnmount(() => {
   onboardingFlowDisposed = true
   window.clearTimeout(persistFieldsTimer)
   window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
+  document.removeEventListener('visibilitychange', trackOnboardingVisibilityChange)
   detailsFieldTracker.dispose()
   if (!isHydratingOnboarding.value && !onboardingInitialPersistInFlight && !onboardingProgressPersistence.isBlocked() && !onboardingProgressPersistence.isAborted())
     void persistOnboardingProgress('in_progress', { allowDisposed: true })

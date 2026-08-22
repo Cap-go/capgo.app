@@ -212,6 +212,151 @@ describe('onboarding progress analytics', () => {
     )
   })
 
+  it.concurrent('tracks a hidden tab and its matching return before setup', () => {
+    let now = 1_000
+    const capture = vi.fn()
+    const tracker = createOnboardingProgressTracker({
+      ...trackerIdentity,
+      capture,
+      flow: 'pre_org',
+      now: () => now,
+      resumed: false,
+      steps: ['intent', 'details', 'setup'],
+      supaHost: 'https://supabase.capgo.test',
+    })
+
+    tracker.viewStep('intent')
+    capture.mockClear()
+    tracker.trackVisibilityChange('visible')
+    now = 1_250
+    tracker.trackVisibilityChange('hidden')
+    tracker.trackVisibilityChange('hidden')
+    now = 2_725.9
+    tracker.trackVisibilityChange('visible')
+    tracker.trackVisibilityChange('visible')
+
+    expect(capture.mock.calls).toEqual([
+      [
+        'onboarding_visibility_changed',
+        'https://supabase.capgo.test',
+        expect.objectContaining({
+          onboarding_attempt_id: ATTEMPT_A1,
+          onboarding_run_id: RUN_R1,
+          onboarding_version: ONBOARDING_ANALYTICS_VERSION,
+          step: 'intent',
+          step_index: 0,
+          total_steps: 3,
+          visibility_state: 'hidden',
+        }),
+      ],
+      [
+        'onboarding_visibility_changed',
+        'https://supabase.capgo.test',
+        expect.objectContaining({
+          hidden_duration_ms: 1_475,
+          onboarding_attempt_id: ATTEMPT_A1,
+          onboarding_run_id: RUN_R1,
+          onboarding_version: ONBOARDING_ANALYTICS_VERSION,
+          step: 'intent',
+          step_index: 0,
+          total_steps: 3,
+          visibility_state: 'visible',
+        }),
+      ],
+    ])
+  })
+
+  it.concurrent('uses buffered visibility timestamps captured before tracker initialization', () => {
+    const capture = vi.fn()
+    const tracker = createOnboardingProgressTracker({
+      ...trackerIdentity,
+      capture,
+      flow: 'pre_org',
+      now: () => 5_000,
+      resumed: false,
+      steps: ['intent', 'setup'],
+      supaHost: 'https://supabase.capgo.test',
+    })
+
+    tracker.viewStep('intent')
+    capture.mockClear()
+    tracker.trackVisibilityChange('hidden', 1_250)
+    tracker.trackVisibilityChange('visible', 2_725.9)
+
+    expect(capture.mock.calls).toEqual([
+      [
+        'onboarding_visibility_changed',
+        'https://supabase.capgo.test',
+        expect.objectContaining({
+          step: 'intent',
+          visibility_state: 'hidden',
+        }),
+      ],
+      [
+        'onboarding_visibility_changed',
+        'https://supabase.capgo.test',
+        expect.objectContaining({
+          hidden_duration_ms: 1_475,
+          step: 'intent',
+          visibility_state: 'visible',
+        }),
+      ],
+    ])
+  })
+
+  it.concurrent('drops an in-flight visibility pair when the active step changes', () => {
+    let now = 100
+    const capture = vi.fn()
+    const tracker = createOnboardingProgressTracker({
+      ...trackerIdentity,
+      capture,
+      flow: 'pre_org',
+      now: () => now,
+      resumed: false,
+      steps: ['intent', 'details', 'setup'],
+      supaHost: 'https://supabase.capgo.test',
+    })
+
+    tracker.viewStep('intent')
+    capture.mockClear()
+    now = 200
+    tracker.trackVisibilityChange('hidden')
+    tracker.viewStep('details', 'intent')
+    capture.mockClear()
+    now = 500
+    tracker.trackVisibilityChange('visible')
+
+    expect(capture).not.toHaveBeenCalled()
+  })
+
+  it.concurrent('stops visibility tracking when setup is reached', () => {
+    let now = 100
+    const capture = vi.fn()
+    const tracker = createOnboardingProgressTracker({
+      ...trackerIdentity,
+      capture,
+      flow: 'pre_org',
+      now: () => now,
+      resumed: false,
+      steps: ['intent', 'setup'],
+      supaHost: 'https://supabase.capgo.test',
+    })
+
+    tracker.trackVisibilityChange('hidden')
+    tracker.trackVisibilityChange('visible')
+    tracker.viewStep('intent')
+    capture.mockClear()
+    now = 200
+    tracker.trackVisibilityChange('hidden')
+    tracker.viewStep('setup', 'intent')
+    capture.mockClear()
+    now = 500
+    tracker.trackVisibilityChange('visible')
+    tracker.trackVisibilityChange('hidden')
+
+    expect(capture).not.toHaveBeenCalled()
+  })
+
   it.concurrent('uses the supplied identity for every event from a tracker instance', () => {
     const capture = vi.fn()
     const tracker = createOnboardingProgressTracker({
