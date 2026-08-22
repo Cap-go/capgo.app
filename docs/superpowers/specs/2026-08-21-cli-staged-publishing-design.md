@@ -42,7 +42,7 @@ stage the same package version twice.
 Follow the `Cap-go/automations` integration contract directly:
 
 1. Configure `actions/setup-node` with the npm registry.
-2. Install npm 11.15 or newer, then replace each direct `bun publish` command
+2. Install the tested npm 11.15.0 release, then replace each direct `bun publish` command
    with `npm stage publish --provenance --ignore-scripts` from the `cli` working
    directory.
 3. Supply the short-lived staging credential as `NODE_AUTH_TOKEN` from the
@@ -105,7 +105,7 @@ Add a focused unit assertion over `publish_cli.yml` proving that the workflow:
 
 - uses `npm stage publish` for both stable and alpha releases;
 - preserves the `latest` and `next` npm tags;
-- installs npm 11.15 or newer and publishes with provenance while suppressing
+- installs npm 11.15.0 and publishes with provenance while suppressing
   package lifecycle scripts;
 - uses `NODE_AUTH_TOKEN` and no longer uses `NPM_CONFIG_TOKEN` or
   `bun publish`;

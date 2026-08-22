@@ -4,7 +4,7 @@
 
 **Goal:** Replace direct `@capgo/cli` npm publishing with the staged publishing and approval-dispatch flow documented by `Cap-go/automations`.
 
-**Architecture:** The public tag workflow will authenticate to npm with the rotating organization `NPM_TOKEN` and stage either the `latest` or `next` release from the `cli` directory using npm 11.15+, provenance, and suppressed lifecycle scripts. A downstream job dispatches `npm-stage-approve` to the private automations repository and creates the GitHub release, allowing a failed dispatch to be retried without restaging; approval itself remains asynchronous and is not polled.
+**Architecture:** The public tag workflow will authenticate to npm with the rotating organization `NPM_TOKEN` and stage either the `latest` or `next` release from the `cli` directory using npm 11.15.0, provenance, and suppressed lifecycle scripts. A downstream job dispatches `npm-stage-approve` to the private automations repository and creates the GitHub release, allowing a failed dispatch to be retried without restaging; approval itself remains asynchronous and is not polled.
 
 **Tech Stack:** GitHub Actions YAML, npm CLI, GitHub CLI, Bun, Vitest
 
@@ -39,6 +39,8 @@ it.concurrent('stages CLI publishing through automations approval', () => {
   const approvalJobIndex = workflow.indexOf(approvalJob)
   const publishSection = workflow.slice(publishJobIndex, approvalJobIndex)
   const approvalSection = workflow.slice(approvalJobIndex)
+  const npmInstallStep = '- name: Install npm CLI for staged publishing\n'
+  const npmInstallIndex = publishSection.indexOf(npmInstallStep)
   const stableStepIndex = publishSection.indexOf(stableStep)
   const nextStepIndex = publishSection.indexOf(nextStep)
   const dispatchIndex = approvalSection.indexOf(dispatchStep)
@@ -53,9 +55,11 @@ it.concurrent('stages CLI publishing through automations approval', () => {
   expect(publishSection).toContain('registry-url: https://registry.npmjs.org')
   expect(publishSection).toContain('permissions:\n      contents: read')
   expect(publishSection).toContain('id-token: write')
-  expect(publishSection).toContain('npm install -g npm@^11.15.0')
+  expect(publishSection).toContain('npm install -g npm@11.15.0')
   expect(publishSection).toContain(`changelog: ${dollar}{{ steps.changelog.outputs.result }}`)
   expect(publishSection).toContain(`from_tag: ${dollar}{{ steps.changelog_base.outputs.from_tag }}`)
+  expect(npmInstallIndex).toBeGreaterThan(-1)
+  expect(npmInstallIndex).toBeLessThan(stableStepIndex)
   expect(stableStepIndex).toBeGreaterThan(-1)
   expect(nextStepIndex).toBeGreaterThan(stableStepIndex)
   expect(stableSection).toContain(stableGuard)
@@ -137,7 +141,7 @@ Install a stage-capable npm version:
 
 ```yaml
 - name: Install npm CLI for staged publishing
-  run: npm install -g npm@^11.15.0
+  run: npm install -g npm@11.15.0
 ```
 
 Replace the stable and alpha `bun publish` steps with:
