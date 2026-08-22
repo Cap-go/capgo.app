@@ -221,11 +221,13 @@ describe('bento response acceptance and configuration', () => {
     })
 
     it('logs a non-2xx status without reading provider response data', async () => {
-      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      const response = new Response(JSON.stringify({
         email: 'private.user@example.com',
         observations: [{ token: 'private-observation-token' }],
         token: 'private-provider-token',
-      }), { status: 422 }))
+      }), { status: 422 })
+      const cancel = vi.spyOn(response.body!, 'cancel')
+      fetchMock.mockResolvedValueOnce(response)
 
       await expect(trackBentoEvents(
         createContext(),
@@ -234,11 +236,32 @@ describe('bento response acceptance and configuration', () => {
       )).resolves.toBe(false)
 
       const loggedError = cloudlogErrMock.mock.calls[0]?.[0]?.error
+      expect(cancel).toHaveBeenCalledOnce()
       expect(loggedError).toBeInstanceOf(Error)
       expect((loggedError as Error).message).toBe('Bento API error: 422')
       expect(JSON.stringify(cloudlogErrMock.mock.calls)).not.toContain('private.user@example.com')
       expect(JSON.stringify(cloudlogErrMock.mock.calls)).not.toContain('private-observation-token')
       expect(JSON.stringify(cloudlogErrMock.mock.calls)).not.toContain('private-provider-token')
+    })
+
+    it('keeps the status-only error when rejected response cancellation fails', async () => {
+      const response = new Response('private-provider-body', { status: 503 })
+      const cancel = vi.spyOn(response.body!, 'cancel')
+        .mockRejectedValueOnce(new Error('private-cancel-error'))
+      fetchMock.mockResolvedValueOnce(response)
+
+      await expect(trackBentoEvents(
+        createContext(),
+        'event.user@example.com',
+        events,
+      )).resolves.toBe(false)
+
+      const loggedError = cloudlogErrMock.mock.calls[0]?.[0]?.error
+      expect(cancel).toHaveBeenCalledOnce()
+      expect(loggedError).toBeInstanceOf(Error)
+      expect((loggedError as Error).message).toBe('Bento API error: 503')
+      expect(JSON.stringify(cloudlogErrMock.mock.calls)).not.toContain('private-provider-body')
+      expect(JSON.stringify(cloudlogErrMock.mock.calls)).not.toContain('private-cancel-error')
     })
 
     it('sanitizes invalid provider JSON without logging response data', async () => {

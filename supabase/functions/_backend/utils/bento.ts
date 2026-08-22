@@ -52,8 +52,15 @@ async function bentoFetch(c: Context, path: string, siteUuid: string, body: any,
     signal,
   })
 
-  if (!response.ok)
+  if (!response.ok) {
+    try {
+      await response.body?.cancel()
+    }
+    catch {
+      // Preserve the sanitized status error when stream cleanup fails.
+    }
     throw new Error(`Bento API error: ${response.status}`)
+  }
 
   try {
     return await response.json()
