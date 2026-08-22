@@ -230,7 +230,9 @@ function nonNegativeInteger(value: unknown): number {
     : typeof value === 'string' && value.trim() !== ''
       ? Number(value)
       : Number.NaN
-  return Number.isFinite(count) && Number.isInteger(count) && count >= 0 ? count : 0
+  if (!Number.isFinite(count) || !Number.isInteger(count) || count < 0)
+    throw new TypeError('frontend onboarding tab-switch query returned an invalid count')
+  return count
 }
 
 export function buildFrontendOnboardingDailyTabSwitches(
@@ -388,7 +390,7 @@ export function buildFrontendOnboardingTabSwitchHogql(startDate: string, endDate
   return `
     WITH tab_switch_events AS (
       SELECT
-        toString(toDate(timestamp)) AS date,
+        toString(toDate(timestamp, 'UTC')) AS date,
         JSONExtractString(toString(properties), 'step') AS step
       FROM events
       WHERE event = 'onboarding_visibility_changed'
@@ -500,7 +502,18 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
   const analytics = buildFrontendOnboardingAnalytics(mapAttempts(posthog.rows), startMs, endMs)
   const dailySetupCliOutcomes = buildFrontendOnboardingDailySetupCliOutcomes(dailySetupCliEvents, startMs, endMs)
   const welcomeOutcomes = buildFrontendOnboardingWelcomeOutcomes(mapWelcomeAttempts(welcomePosthog.rows), startMs, endMs)
-  const dailyTabSwitches = buildFrontendOnboardingDailyTabSwitches(tabSwitchPosthog.rows, startMs, endMs)
+  let dailyTabSwitches: FrontendOnboardingDailyTabSwitches[]
+  try {
+    dailyTabSwitches = buildFrontendOnboardingDailyTabSwitches(tabSwitchPosthog.rows, startMs, endMs)
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'frontend_onboarding_tab_switch_invalid_row',
+      returned_rows: tabSwitchPosthog.rows.length,
+    })
+    throw error
+  }
 
   return {
     ...analytics,

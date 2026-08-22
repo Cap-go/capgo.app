@@ -142,6 +142,8 @@ describe('buildFrontendOnboardingTabSwitchHogql', () => {
     expect(query).toContain("JSONExtractString(toString(properties), 'flow') = 'pre_org'")
     expect(query).toContain("JSONExtractString(toString(properties), '$host') = 'console.capgo.app'")
     expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) = 4')
+    expect(query).toContain("toString(toDate(timestamp, 'UTC')) AS date")
+    expect(query).not.toContain('toString(toDate(timestamp)) AS date')
     expect(query).toContain("step IN ('welcome', 'intent', 'app_name', 'app_id', 'app_icon', 'organization')")
     expect(query).toContain("countIf(step = 'welcome') AS welcome")
     expect(query).toContain("countIf(step = 'intent') AS intent")
@@ -172,8 +174,11 @@ describe('buildFrontendOnboardingDailyTabSwitches', () => {
       {
         date: '2026-08-01',
         welcome: 1,
-        intent: -1,
-        app_name: 'invalid',
+        intent: 0,
+        app_name: 0,
+        app_id: 0,
+        app_icon: 0,
+        organization: 0,
       },
       {
         date: '2026-08-03',
@@ -201,10 +206,29 @@ describe('buildFrontendOnboardingDailyTabSwitches', () => {
     ])
   })
 
+  it.each([
+    ['negative', -1],
+    ['fractional', 1.5],
+    ['non-numeric', 'invalid'],
+    ['missing', undefined],
+  ])('rejects a %s aggregate count instead of silently reporting zero', (_label, invalidCount) => {
+    expect(() => buildFrontendOnboardingDailyTabSwitches([{
+      date: '2026-08-01',
+      welcome: 2,
+      intent: 3,
+      app_name: invalidCount,
+      app_id: 4,
+      app_icon: 1,
+      organization: 5,
+    }], Date.parse('2026-08-01T00:00:00.000Z'), Date.parse('2026-08-02T00:00:00.000Z'))).toThrow(
+      'frontend onboarding tab-switch query returned an invalid count',
+    )
+  })
+
   it('keeps event counts from partial first and last UTC days', () => {
     expect(buildFrontendOnboardingDailyTabSwitches([
-      { date: '2026-08-01', welcome: 2 },
-      { date: '2026-08-02', intent: 3 },
+      { date: '2026-08-01', welcome: 2, intent: 0, app_name: 0, app_id: 0, app_icon: 0, organization: 0 },
+      { date: '2026-08-02', welcome: 0, intent: 3, app_name: 0, app_id: 0, app_icon: 0, organization: 0 },
     ], Date.parse('2026-08-01T12:00:00.000Z'), Date.parse('2026-08-02T06:00:00.000Z'))).toEqual([
       { date: '2026-08-01', welcome: 2, intent: 0, app_name: 0, app_id: 0, app_icon: 0, organization: 0 },
       { date: '2026-08-02', welcome: 0, intent: 3, app_name: 0, app_id: 0, app_icon: 0, organization: 0 },
@@ -467,6 +491,39 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     ])
     expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(4)
     expect(queryPosthogHogqlMock.mock.calls[3][1]).toContain("event = 'onboarding_visibility_changed'")
+  })
+
+  it('logs and fails closed when a tab-switch aggregate row is malformed', async () => {
+    queryPosthogHogqlMock
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+      .mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [] })
+      .mockResolvedValueOnce({
+        configured: true,
+        connected: true,
+        failureReason: null,
+        rows: [{
+          date: '2026-08-01',
+          welcome: 2,
+          intent: 3,
+          app_name: 'not-a-count',
+          app_id: 4,
+          app_icon: 1,
+          organization: 5,
+        }],
+      })
+
+    await expect(getAdminFrontendOnboardingAnalytics(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+    )).rejects.toThrow('frontend onboarding tab-switch query returned an invalid count')
+
+    expect(cloudlogErrMock).toHaveBeenCalledWith({
+      requestId: 'request-id',
+      message: 'frontend_onboarding_tab_switch_invalid_row',
+      returned_rows: 1,
+    })
   })
 
   it('fails closed when the daily Setup CLI PostHog query fails', async () => {
