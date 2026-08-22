@@ -1,5 +1,9 @@
 import type { Context } from 'hono'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  deliverPendingUserBentoEvents,
+  recordUserBentoEvent,
+} from '../supabase/functions/_backend/utils/user_bento_events.ts'
 
 const mocks = vi.hoisted(() => ({
   backgroundTask: vi.fn(),
@@ -29,11 +33,6 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
   backgroundTask: mocks.backgroundTask,
 }))
-
-import {
-  deliverPendingUserBentoEvents,
-  recordUserBentoEvent,
-} from '../supabase/functions/_backend/utils/user_bento_events.ts'
 
 const USER_ID = '8e0931de-11ea-4b93-9061-00f0a06ca744'
 const OBSERVED_AT = '2026-08-22T10:00:00.000Z'
@@ -133,8 +132,8 @@ function createTransactionPool(options: {
 function expectAdditiveBentoPatch(queryCall: unknown[] | undefined) {
   expect(queryCall).toBeDefined()
   const sql = normalizeSql(queryCall?.[0])
-  expect(sql).toContain("SET onboarding = jsonb_set(onboarding, '{bento_events}'")
-  expect(sql).toContain("COALESCE(onboarding -> 'bento_events', '{}'::jsonb) || $2::jsonb")
+  expect(sql).toContain('SET onboarding = jsonb_set(onboarding, \'{bento_events}\'')
+  expect(sql).toContain('COALESCE(onboarding -> \'bento_events\', \'{}\'::jsonb) || $2::jsonb')
   expect(sql).not.toContain('SET onboarding = $2')
 }
 
