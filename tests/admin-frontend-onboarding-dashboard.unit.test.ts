@@ -188,6 +188,25 @@ describe('admin frontend onboarding dashboard', () => {
     posthog_connected: true,
   }
 
+  it.concurrent('defaults the latest funnel display to v4 while analytics are unavailable', async () => {
+    const adminFrontendOnboarding = await import('../src/services/adminFrontendOnboarding')
+    const selector = Reflect.get(adminFrontendOnboarding, 'selectLatestFrontendOnboardingFunnel')
+
+    expect(selector).toBeTypeOf('function')
+    if (typeof selector !== 'function')
+      return
+
+    expect(selector(undefined)).toEqual({ version: 'v4', stages: [] })
+    expect(selector({ v3: analytics.funnels.v3 })).toEqual({
+      version: 'v3',
+      stages: analytics.funnels.v3,
+    })
+    expect(selector({ v3: analytics.funnels.v3, v4: analytics.funnels.v4 })).toEqual({
+      version: 'v4',
+      stages: analytics.funnels.v4,
+    })
+  })
+
   it.concurrent('adapts split daily attempts into ordered version chart series', () => {
     expect(buildFrontendOnboardingDailySeries(analytics.daily_attempts, 'V1', 'V2', 'V3', 'V4')).toEqual([
       {
@@ -827,7 +846,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('const displayedV4Funnel = computed')
     expect(source).toContain('deduplicateV4Funnel.value')
     expect(source).toContain('visibleAnalytics.value?.deduplicated.funnels')
-    expect(source).toContain('stages: v4 ?? funnels?.v3 ?? []')
+    expect(source).toContain('return selectLatestFrontendOnboardingFunnel(funnels)')
     expect(source).toContain('buildFrontendOnboardingDailySeries(\n  displayedDailyAttempts.value')
     expect(source).toContain('buildFrontendOnboardingFunnelStages(displayedV4Funnel.value)')
     expect(source).toContain('buildFrontendOnboardingFunnelSummaries(displayedV4Funnel.value)')
@@ -911,7 +930,7 @@ describe('admin frontend onboarding dashboard', () => {
     const template = source.slice(source.indexOf('<template>'))
 
     expect(source).toContain('const rawLatestFunnel = computed')
-    expect(source).toContain("version: v4 === undefined ? 'v3' : 'v4'")
+    expect(source).toContain('selectLatestFrontendOnboardingFunnel(visibleAnalytics.value?.funnels)')
     expect(source).toContain('const displayedLatestFunnel = computed')
     expect(source).toContain('const displayedFunnelTitle = computed')
     expect(source).toContain(`t(displayedLatestFunnel.value.version === 'v4'`)

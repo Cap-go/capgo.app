@@ -390,7 +390,7 @@ export function buildFrontendOnboardingTabSwitchHogql(startDate: string, endDate
   return `
     WITH tab_switch_events AS (
       SELECT
-        toString(toDate(timestamp, 'UTC')) AS date,
+        toString(toDate(timestamp)) AS date,
         JSONExtractString(toString(properties), 'step') AS step
       FROM events
       WHERE event = 'onboarding_visibility_changed'

@@ -34,6 +34,7 @@ import {
   buildFrontendOnboardingGraphMetrics,
   createFrontendOnboardingAnalyticsLoader,
   formatFrontendOnboardingDuration,
+  selectLatestFrontendOnboardingFunnel,
 } from '~/services/adminFrontendOnboarding'
 import { formatNumberValue } from '~/services/formatLocale'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
@@ -168,23 +169,12 @@ const displayedDailyAttempts = computed(() => deduplicateDailyAttempts.value
 const displayedWelcomeOutcomes = computed(() => deduplicateWelcomeOutcomes.value
   ? visibleAnalytics.value?.deduplicated.daily_welcome_outcomes ?? []
   : visibleAnalytics.value?.daily_welcome_outcomes ?? [])
-const rawLatestFunnel = computed(() => {
-  const funnels = visibleAnalytics.value?.funnels
-  const v4 = funnels?.v4
-  return {
-    version: v4 === undefined ? 'v3' : 'v4',
-    stages: v4 ?? funnels?.v3 ?? [],
-  } as const
-})
+const rawLatestFunnel = computed(() => selectLatestFrontendOnboardingFunnel(visibleAnalytics.value?.funnels))
 const displayedLatestFunnel = computed(() => {
   const funnels = deduplicateV4Funnel.value
     ? visibleAnalytics.value?.deduplicated.funnels
     : visibleAnalytics.value?.funnels
-  const v4 = funnels?.v4
-  return {
-    version: v4 === undefined ? 'v3' : 'v4',
-    stages: v4 ?? funnels?.v3 ?? [],
-  } as const
+  return selectLatestFrontendOnboardingFunnel(funnels)
 })
 const displayedV4Funnel = computed(() => displayedLatestFunnel.value.stages)
 const latestVersionLabel = computed(() => t(rawLatestFunnel.value.version === 'v4'
