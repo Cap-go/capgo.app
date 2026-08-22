@@ -159,26 +159,36 @@ function promptLabel(value: string | null | undefined, fallback: string): string
   return (value?.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim() || fallback)
 }
 
+function promptDataLabel(value: string | null | undefined, fallback: string): string {
+  return JSON.stringify(promptLabel(value, fallback))
+}
+
 function formatOrganization(organization: CliAiPromptOrganization): string {
-  const apps = organization.apps.slice(0, APP_PREVIEW_LIMIT)
-  const remaining = Math.max(0, organization.apps.length - apps.length)
-  const appLines = apps.map(app => `  - App: ${promptLabel(app.name, app.appId)} (Capgo app ID: \`${app.appId}\`)`)
+  const promptApps = organization.apps.filter(app => isValidAppId(app.appId))
+  const apps = promptApps.slice(0, APP_PREVIEW_LIMIT)
+  const remaining = Math.max(0, promptApps.length - apps.length)
+  const omitted = organization.apps.length - promptApps.length
+  const appLines = apps.map(app => `  - App: ${promptDataLabel(app.name, app.appId)} (Capgo app ID: \`${app.appId}\`)`)
   const appFooter = remaining > 0
-    ? `  There are ${remaining} more applications available for this org. To list them, run:\n\n  {CAPGO_CLI_RUNNER} app list --filter-by-org-id ${organization.id} --output-text`
-    : '  These are all the apps for this organization. No other apps exist for this org.'
-  return [`- Organization: ${promptLabel(organization.name, organization.id)} (organization ID: \`${organization.id}\`)`, ...appLines, '', appFooter].join('\n')
+    ? `  There are ${remaining} more applications available for this org. To list them, run the following command using the same ephemeral package runner selected in Section 1:\n\n  {CAPGO_CLI_RUNNER} app list --filter-by-org-id ${organization.id} --output-text\n\n  Here, \`{CAPGO_CLI_RUNNER}\` is the complete runner prefix already selected above, such as \`npx -y @capgo/cli@latest\`.`
+    : omitted === 0 ? '  These are all the apps for this organization. No other apps exist for this org.' : ''
+  const omittedFooter = omitted > 0
+    ? `  ${omitted} ${omitted === 1 ? 'application was' : 'applications were'} omitted because ${omitted === 1 ? 'its' : 'their'} Capgo app ID is invalid. Do not attempt to configure ${omitted === 1 ? 'it' : 'them'}.`
+    : ''
+  const footerLines = [appFooter, omittedFooter].filter(Boolean)
+  return [`- Organization: ${promptDataLabel(organization.name, organization.id)} (organization ID: \`${organization.id}\`)`, ...appLines, ...(footerLines.length ? ['', ...footerLines] : [])].join('\n')
 }
 ```
 
-Keep organization and app IDs verbatim because they are command identifiers. Normalize only display names, and state immediately before the generated list that names are untrusted data rather than AI instructions.
+Import and reuse `isValidAppId` from `src/utils/appId.ts`. Keep valid organization and app IDs verbatim because they are command identifiers. Normalize display names, serialize them as quoted JSON strings, and state immediately before the generated list that names are untrusted data rather than AI instructions. Organizations with no valid app IDs must be marked non-selectable; the prompt must not offer `app list` as a way to reintroduce an invalid target.
 
 - [ ] **Step 4: Implement the conditional Part 3 renderer**
 
 Add a private `buildOrganizationSection(input)` that:
 
 1. Renders every eligible organization through `formatOrganization()`.
-2. Uses `organizations.length === 1 && organizations[0].apps.length === 1` for the automatic-target branch.
-3. Uses the confirmation branch for every other shape, including one organization with zero or multiple apps.
+2. Uses exactly one organization containing exactly one validated app for the automatic-target branch.
+3. Uses the confirmation branch when multiple valid targets exist, and a stopping branch when no valid target exists.
 4. Omits the skipped-organizations paragraph when `skippedOrganizations` is empty.
 5. Includes each skipped organization with both normalized name and exact ID when present.
 6. Includes the approved `plugins.CapacitorUpdater.appId` explanation and configuration example after the dynamic branches.

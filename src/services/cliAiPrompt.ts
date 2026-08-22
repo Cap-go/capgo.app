@@ -23,6 +23,10 @@ function promptLabel(value: string | null | undefined, fallback: string): string
   return value?.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim() || fallback
 }
 
+function promptDataLabel(value: string | null | undefined, fallback: string): string {
+  return JSON.stringify(promptLabel(value, fallback))
+}
+
 function getPromptApps(organization: CliAiPromptOrganization): CliAiPromptApp[] {
   return organization.apps.filter(app => isValidAppId(app.appId))
 }
@@ -32,7 +36,7 @@ function formatOrganization(organization: CliAiPromptOrganization): string {
   const apps = promptApps.slice(0, APP_PREVIEW_LIMIT)
   const remaining = Math.max(0, promptApps.length - apps.length)
   const omitted = organization.apps.length - promptApps.length
-  const appLines = apps.map(app => `  - App: ${promptLabel(app.name, app.appId)} (Capgo app ID: \`${app.appId}\`)`)
+  const appLines = apps.map(app => `  - App: ${promptDataLabel(app.name, app.appId)} (Capgo app ID: \`${app.appId}\`)`)
   const appFooter = remaining > 0
     ? `  There are ${remaining} more applications available for this org. To list them, run the following command using the same ephemeral package runner selected in Section 1:\n\n  {CAPGO_CLI_RUNNER} app list --filter-by-org-id ${organization.id} --output-text\n\n  Here, \`{CAPGO_CLI_RUNNER}\` is the complete runner prefix already selected above, such as \`npx -y @capgo/cli@latest\`.`
     : omitted === 0 ? '  These are all the apps for this organization. No other apps exist for this org.' : ''
@@ -41,7 +45,7 @@ function formatOrganization(organization: CliAiPromptOrganization): string {
     : ''
   const footerLines = [appFooter, omittedFooter].filter(Boolean)
   return [
-    `- Organization: ${promptLabel(organization.name, organization.id)} (organization ID: \`${organization.id}\`)`,
+    `- Organization: ${promptDataLabel(organization.name, organization.id)} (organization ID: \`${organization.id}\`)`,
     ...appLines,
     ...(footerLines.length ? ['', ...footerLines] : []),
   ].join('\n')
@@ -59,7 +63,9 @@ Use an ephemeral package runner appropriate for my project. For example:
 - npm: \`npx -y @capgo/cli@latest\`
 - Bun: \`bunx @capgo/cli@latest\`
 - pnpm: \`pnpm dlx @capgo/cli@latest\`
-- Yarn: \`yarn dlx @capgo/cli@latest\`
+- Yarn 2 or newer: \`yarn dlx @capgo/cli@latest\`
+
+Yarn Classic (1.x) does not support \`yarn dlx\`. For a Yarn Classic project, use \`npx -y @capgo/cli@latest\` as the ephemeral runner unless the project already provides another compatible ephemeral runner.
 
 Prefer the package manager indicated by the project's lockfile. If none can be determined, use \`npx -y\`.
 
@@ -104,19 +110,24 @@ Do not run the interactive \`init\` command on my behalf.`
 
 function buildOrganizationSection(input: CliAiPromptInput): string {
   const organizations = input.organizations.map(formatOrganization).join('\n\n')
+  const selectableOrganizations = input.organizations.filter(organization => getPromptApps(organization).length > 0)
   const hasSingleTarget = input.organizations.length === 1 && getPromptApps(input.organizations[0]!).length === 1
-  const targetInstruction = hasSingleTarget
-    ? 'There is only one possible target. Use that organization and app without asking me to choose.'
-    : `Before inspecting or changing my project, ask me to confirm which organization and app I want to configure. Refer to an app by both its name and its Capgo app ID. Do not begin setup until I confirm the target.
+  const targetInstruction = selectableOrganizations.length === 0
+    ? `There are no safely configurable apps available through this API key. Stop before inspecting or changing the project and tell me that no valid Capgo app target is available.
 
-If I choose an app that is not shown above and that organization has more applications, run that organization's filtered \`app list\` command first and ask me to confirm the app from the complete result.`
+Do not run \`app list\` for an organization with no valid app IDs, because that could reintroduce an invalid target that was deliberately omitted.`
+    : hasSingleTarget
+      ? 'There is only one possible target. Use that organization and app without asking me to choose.'
+      : `Before inspecting or changing my project, ask me to confirm which organization and app I want to configure. Refer to an app by both its name and its Capgo app ID. Do not begin setup until I confirm the target.
+
+Only when an organization block explicitly says that more valid apps are available, use its filtered \`app list\` command and ask me to confirm the app from the complete result. Do not run \`app list\` for an organization with no valid app IDs.`
   const skipped = input.skippedOrganizations.length === 0
     ? ''
     : `
 
 The API key does not have setup access to these organizations:
 
-${input.skippedOrganizations.map(organization => `- Organization: ${promptLabel(organization.name, organization.id)} (organization ID: \`${organization.id}\`)`).join('\n')}
+${input.skippedOrganizations.map(organization => `- Organization: ${promptDataLabel(organization.name, organization.id)} (organization ID: \`${organization.id}\`)`).join('\n')}
 
 I probably lack the permissions required to configure apps in those organizations. Do not claim that the API key can access them or attempt to configure one of their apps.`
 
@@ -134,13 +145,27 @@ ${targetInstruction}${skipped}
 
 This setting is only a Capgo lookup override. It does not rename the application and must not change the project's top-level Capacitor \`appId\`, Android application ID or namespace, or iOS bundle identifier. Those native identifiers may legitimately differ from the Capgo app ID.
 
-When editing \`capacitor.config.*\`, preserve all existing configuration and merge the selected Capgo app ID into the existing plugin settings:
+When editing \`capacitor.config.*\`, preserve the existing file format and all existing configuration. Merge the selected Capgo app ID into the existing plugin settings.
+
+For \`capacitor.config.ts\` or \`capacitor.config.js\`, preserve TypeScript or JavaScript syntax:
 
 \`\`\`ts
 plugins: {
   CapacitorUpdater: {
     appId: '{SELECTED_CAPGO_APP_ID}',
   },
+}
+\`\`\`
+
+For \`capacitor.config.json\`, preserve JSON syntax and merge the property into the existing JSON objects:
+
+\`\`\`json
+{
+  "plugins": {
+    "CapacitorUpdater": {
+      "appId": "{SELECTED_CAPGO_APP_ID}"
+    }
+  }
 }
 \`\`\`
 
@@ -301,7 +326,11 @@ Integrate with the version source the project already treats as authoritative. D
 
 \`plugins.CapacitorUpdater.version\` is the native baseline sent to Capgo by the installed application. Set it to a valid semantic version representing the native build being prepared.
 
-Choose the first uploaded bundle as the next patch version above that baseline. For example:
+Inspect the selected app's active bundle history before choosing a version:
+
+{CAPGO_CLI_RUNNER} bundle list {SELECTED_CAPGO_APP_ID}
+
+Use the next patch version above the native baseline as a starting candidate, not an assumption. The candidate must not appear in the active bundle history. For example:
 
 - Native baseline: \`1.2.3\`
 - First Capgo bundle: \`1.2.4\`
@@ -311,7 +340,7 @@ If this is a new project with no existing versioning strategy, use:
 - \`plugins.CapacitorUpdater.version\`: \`0.0.0\`
 - First Capgo bundle: \`0.0.1\`
 
-The uploaded version must be greater than \`0.0.0\` and unique for this Capgo app. Do not reuse a previously uploaded or deleted version.
+The uploaded version must be greater than \`0.0.0\` and unique for this Capgo app. Do not reuse a previously uploaded or deleted version. The list command shows active bundles; if upload reports that the candidate is already occupied by a deleted bundle, increment to the next unused patch version, tell me the replacement version, and retry only after confirmation.
 
 ### Build and synchronize
 

@@ -165,7 +165,7 @@ describe('/login-cli page contract', () => {
     expect(page).not.toContain('flex-1 truncate')
   })
 
-  it.concurrent('does not prepare a key without a valid session', () => {
+  it.concurrent('gates key preparation strictly in non-AI mode', () => {
     const page = readFileSync(pagePath, 'utf8')
     expect(page).toContain('const session = route.query.session')
     expect(page).toContain('if (!aiMode.value && !isValidCliLoginSession(session))')
@@ -198,8 +198,8 @@ describe('/login-cli page contract', () => {
     expect(clipboardWrite).toHaveBeenCalledOnce()
     const copiedPrompt = clipboardWrite.mock.calls[0]?.[0] as string
     expect(copiedPrompt).toContain(`login ${preparedKey}`)
-    expect(copiedPrompt).toContain('Organization: Test organization (organization ID: `org-1`)')
-    expect(copiedPrompt).toContain('App: Test App (Capgo app ID: `com.test.app`)')
+    expect(copiedPrompt).toContain('Organization: "Test organization" (organization ID: `org-1`)')
+    expect(copiedPrompt).toContain('App: "Test App" (Capgo app ID: `com.test.app`)')
     expect(copiedPrompt).toContain('## 8. Test the first live update')
     expect(copiedPrompt.match(new RegExp(preparedKey, 'g'))).toHaveLength(1)
   })
