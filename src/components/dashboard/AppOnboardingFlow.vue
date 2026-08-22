@@ -2055,19 +2055,29 @@ defineExpose({
     @continue="continueFromWelcome"
   />
 
-  <section v-else class="h-full min-h-0 overflow-y-auto bg-slate-50 px-4 py-6 sm:px-6 lg:px-8 dark:bg-slate-950">
+  <section
+    v-else
+    class="onboarding-flow-shell h-full min-h-0 overflow-y-auto bg-slate-50 px-4 py-6 sm:px-6 lg:px-8 dark:bg-slate-950"
+    :class="{
+      'onboarding-flow-app-creation': props.preOrg && (flowStep === 'intent' || flowStep === 'details'),
+      'onboarding-flow-intent': props.preOrg && flowStep === 'intent',
+      'onboarding-flow-details-name': flowStep === 'details' && appDetailsStep === 'name',
+      'onboarding-flow-details-app-id': flowStep === 'details' && appDetailsStep === 'app_id',
+      'onboarding-flow-details-icon': flowStep === 'details' && appDetailsStep === 'icon',
+    }"
+  >
     <div class="mx-auto w-full max-w-3xl">
       <div v-if="isLoading" class="flex min-h-[50vh] items-center justify-center">
         <Spinner size="w-32 h-32" />
       </div>
 
-      <div v-else class="space-y-6">
-        <header>
-          <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-semibold text-slate-700 shadow-sm dark:border-white/15 dark:bg-slate-900/95 dark:text-slate-200">
+      <div v-else class="onboarding-flow-content space-y-6">
+        <header class="onboarding-flow-header">
+          <div class="onboarding-flow-badge inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-semibold text-slate-700 shadow-sm dark:border-white/15 dark:bg-slate-900/95 dark:text-slate-200">
             <IconSparkles class="h-4 w-4" />
             {{ t('app-onboarding-badge') }}
           </div>
-          <h1 class="mt-4 text-2xl font-semibold text-slate-950 sm:text-3xl dark:text-white">
+          <h1 class="onboarding-flow-title mt-4 text-2xl font-semibold text-slate-950 sm:text-3xl dark:text-white">
             {{ props.onboarding
               ? t('app-onboarding-title-first')
               : t('app-onboarding-title-return') }}
@@ -2110,10 +2120,10 @@ defineExpose({
           </nav>
         </header>
 
-        <div v-if="props.preOrg && flowStep === 'intent'" class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
-          <div class="space-y-6">
-            <div>
-              <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
+        <div v-if="props.preOrg && flowStep === 'intent'" class="onboarding-intent-card rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
+          <div class="onboarding-intent-card-content space-y-6">
+            <div class="onboarding-intent-heading">
+              <p class="onboarding-intent-eyebrow text-sm font-semibold text-primary-500 dark:text-slate-300">
                 {{ t('unified-onboarding-step-intent') }}
               </p>
               <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
@@ -2123,16 +2133,16 @@ defineExpose({
                 {{ t('organization-onboarding-intent-hint') }}
               </p>
             </div>
-            <div class="grid gap-3 sm:grid-cols-2">
-              <button v-for="option in intentOptions" :key="option.value" type="button" class="group flex min-h-20 items-start gap-3 rounded-xl border p-3 text-left transition" :class="whiteCardToggleButtonClass(selectedIntent === option.value)" :data-test="`onboarding-intent-${option.value}`" @click="selectedIntent = option.value">
+            <div class="onboarding-intent-options grid gap-3 sm:grid-cols-2">
+              <button v-for="option in intentOptions" :key="option.value" type="button" class="d-btn onboarding-intent-option group h-auto min-h-20 w-full items-start justify-start gap-3 whitespace-normal rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900" :class="whiteCardToggleButtonClass(selectedIntent === option.value)" :data-test="`onboarding-intent-${option.value}`" @click="selectedIntent = option.value">
                 <span class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500/10 text-primary-500"><component :is="option.icon" class="h-5 w-5" /></span>
                 <span class="min-w-0">
                   <span class="block text-sm font-semibold text-slate-950 dark:text-white">{{ t(`organization-onboarding-intent-option-${option.value}-label`) }}</span>
-                  <span class="mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">{{ t(`organization-onboarding-intent-option-${option.value}-desc`) }}</span>
+                  <span class="onboarding-intent-option-description mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">{{ t(`organization-onboarding-intent-option-${option.value}-desc`) }}</span>
                 </span>
               </button>
             </div>
-            <div class="flex justify-end border-t border-slate-200 pt-6 dark:border-white/15">
+            <div class="onboarding-intent-actions flex justify-end border-t border-slate-200 pt-6 dark:border-white/15">
               <button type="button" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" data-test="app-onboarding-continue-intent" :disabled="!selectedIntent" @click="continueFromIntent()">
                 {{ t('unified-onboarding-continue-intent') }}<IconArrowRight class="h-4 w-4" />
               </button>
@@ -2141,10 +2151,10 @@ defineExpose({
         </div>
 
         <div v-if="flowStep === 'details'">
-          <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
-            <div class="space-y-6">
-              <div>
-                <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
+          <div class="onboarding-details-card rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
+            <div class="onboarding-details-card-content space-y-6">
+              <div class="onboarding-details-heading" :class="{ 'onboarding-details-heading-app-id': appDetailsStep === 'app_id' }">
+                <p class="onboarding-details-eyebrow text-sm font-semibold text-primary-500 dark:text-slate-300">
                   {{ t('app-onboarding-step-details') }}
                 </p>
                 <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
@@ -2163,8 +2173,12 @@ defineExpose({
                 </p>
               </div>
 
-              <div v-if="appDetailsStep !== 'icon'" class="flex flex-col items-center py-1 text-center">
-                <div class="relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-[1.4rem] bg-slate-950 text-white shadow-lg shadow-slate-950/15 ring-1 ring-white/10 dark:bg-white dark:text-slate-950 dark:shadow-black/20">
+              <div
+                v-if="appDetailsStep !== 'icon'"
+                class="onboarding-details-preview flex flex-col items-center py-1 text-center"
+                :class="{ 'onboarding-details-preview-app-id': appDetailsStep === 'app_id' }"
+              >
+                <div class="onboarding-details-preview-icon relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-[1.4rem] bg-slate-950 text-white shadow-lg shadow-slate-950/15 ring-1 ring-white/10 dark:bg-white dark:text-slate-950 dark:shadow-black/20">
                   <span class="absolute -right-3 -top-3 h-10 w-10 rounded-full bg-primary-500/90" aria-hidden="true" />
                   <span class="absolute -bottom-4 -left-2 h-11 w-11 rounded-full bg-emerald-400/80" aria-hidden="true" />
                   <span v-if="appNameInitial" class="relative text-2xl font-bold tracking-tight">{{ appNameInitial }}</span>
@@ -2226,7 +2240,7 @@ defineExpose({
               </div>
 
               <div class="contents">
-                <div v-if="appDetailsStep === 'icon'" class="flex items-center gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-white/15 dark:bg-slate-950/90">
+                <div v-if="appDetailsStep === 'icon'" class="onboarding-icon-identity flex items-center gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-white/15 dark:bg-slate-950/90">
                   <div class="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-slate-200 ring-1 ring-slate-300 dark:bg-slate-800 dark:ring-white/10">
                     <img v-if="iconPreview" :src="iconPreview" :alt="t('app-onboarding-icon-preview-alt')" class="h-full w-full object-cover">
                     <span v-else-if="isResumeIconLoading" class="h-5 w-5 rounded-full border-2 border-primary-500 border-t-transparent animate-spin" :aria-label="t('loading')" />
@@ -2260,7 +2274,7 @@ defineExpose({
                   <input
                     id="app-onboarding-app-id"
                     :value="manualAppId"
-                    class="mt-2 min-h-12 w-full rounded-xl border border-slate-300 bg-white px-4 font-mono text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/10 dark:border-white/20 dark:bg-slate-950/90 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-primary-500 dark:focus:ring-primary-500/30"
+                    class="onboarding-app-id-input mt-2 min-h-12 w-full rounded-xl border border-slate-300 bg-white px-4 font-mono text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/10 dark:border-white/20 dark:bg-slate-950/90 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-primary-500 dark:focus:ring-primary-500/30"
                     :placeholder="suggestedAppId"
                     @input="onAppIdInput"
                   >
@@ -2296,7 +2310,7 @@ defineExpose({
                   </div>
                 </div>
 
-                <div v-if="appDetailsStep === 'app_id' && (props.preOrg || existingApp === true)" class="mb-6 mt-4 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/15 dark:bg-slate-950/60">
+                <div v-if="appDetailsStep === 'app_id' && (props.preOrg || existingApp === true)" class="onboarding-store-import mb-6 mt-4 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/15 dark:bg-slate-950/60">
                   <button
                     type="button"
                     class="flex min-h-12 w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-semibold text-slate-800 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 dark:text-slate-200 dark:hover:bg-slate-900"
@@ -2369,7 +2383,7 @@ defineExpose({
                     </div>
                   </div>
 
-                  <div class="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-white/15 dark:bg-slate-950/60">
+                  <div class="onboarding-icon-uploader mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-white/15 dark:bg-slate-950/60">
                     <AppOnboardingIconInput
                       v-model="selectedIconFile"
                       :label="t('app-onboarding-use-different-icon')"
@@ -2380,7 +2394,7 @@ defineExpose({
                       @picker-opened="onIconPickerOpened"
                       @update:model-value="onSelectIconFormKit"
                     />
-                    <p class="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                    <p class="onboarding-icon-upload-helper mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
                       {{ t('app-onboarding-icon-help') }}
                     </p>
                     <button
@@ -2395,7 +2409,7 @@ defineExpose({
                     </button>
                   </div>
 
-                  <div class="mb-6 mt-5 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-white/15 dark:bg-slate-950/60">
+                  <div class="mb-6 mt-5 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 onboarding-icon-store-import dark:border-white/15 dark:bg-slate-950/60">
                     <button
                       type="button"
                       class="flex min-h-12 w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-semibold text-slate-800 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 dark:text-slate-200 dark:hover:bg-slate-900"
@@ -2438,7 +2452,7 @@ defineExpose({
                   </div>
                 </div>
 
-                <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/15">
+                <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between onboarding-details-actions dark:border-white/15">
                   <button
                     type="button"
                     class="d-btn min-h-12"
