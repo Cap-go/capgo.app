@@ -214,7 +214,23 @@ When the current event is not already sent:
 3. Re-read `onboarding.bento_events[eventName].sent_at` under the lock.
 4. If it now exists, commit without appending.
 5. Otherwise append the sanitized detail, increment `occurrence_count`, preserve
-   the first plus four latest details, update `onboarding`, and commit.
+   the first plus four latest details, patch only the `bento_events` subtree,
+   and commit.
+
+The SQL write must preserve every other `onboarding` key in the database. It
+uses a JSONB path/merge expression equivalent to:
+
+```sql
+SET onboarding = jsonb_set(
+  onboarding,
+  '{bento_events}',
+  COALESCE(onboarding -> 'bento_events', '{}'::jsonb) || $event_patch::jsonb,
+  true
+)
+```
+
+`$event_patch` contains only the event entry being changed. Backend code must
+never use `SET onboarding = $complete_object` for this feature.
 
 The API waits for this transaction to finish. PostgreSQL releases the row lock
 at commit; no lock is expected to survive between transactions.
@@ -235,7 +251,9 @@ success response.
    retaining the row lock. Each Bento event receives `occurrence_count` and the
    retained observations as its details. Apply a five-second request timeout.
 5. Only when Bento reports the expected result count with zero failures, set
-   `sent_at` on every event in that batch and commit.
+   `sent_at` on every event in that batch by merging a patch into the
+   `bento_events` subtree, then commit. All unrelated `onboarding` keys and
+   unsent Bento entries remain untouched.
 6. On a false result, missing Bento configuration, timeout, thrown error, or
    partial batch failure, roll back. Transaction 1's observations remain.
 
@@ -275,6 +293,11 @@ Add a small preservation helper alongside the existing onboarding-write
 helpers, and apply it in the existing wizard replacement path in the same place
 that admin dashboard metadata is preserved. Other known production writers
 already spread the latest JSON object and therefore retain the subtree.
+
+The frontend's existing full-object compare-and-swap remains outside this
+feature's backend write contract. Both backend transactions introduced here
+must patch only `onboarding.bento_events`; they never serialize and replace the
+complete `onboarding` object.
 
 ## Error Handling and Observability
 
@@ -333,6 +356,8 @@ plans; the result must be at most 1,000.
 - A later different mapped event retries all pending entries for the user.
 - An already-sent event performs no write or Bento call when nothing else is
   pending.
+- Both transaction writes preserve unrelated `onboarding` keys and other Bento
+  entries; neither issues a complete-object replacement.
 - `notifyConsole` login copies remain excluded.
 - Existing PostHog delivery still runs when user-Bento recording or delivery
   fails.
