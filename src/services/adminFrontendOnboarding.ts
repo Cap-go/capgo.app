@@ -174,6 +174,11 @@ export interface FrontendOnboardingFunnelSummary {
   to_label: string
 }
 
+export interface FrontendOnboardingLatestFunnel {
+  version: 'v3' | 'v4'
+  stages: FrontendOnboardingFunnelStage[]
+}
+
 export interface FrontendOnboardingGraphMetricDefinition {
   key: string
   parentKey?: string
@@ -189,6 +194,16 @@ export interface FrontendOnboardingAnalyticsLoaderCallbacks {
   onAnalytics: (analytics: FrontendOnboardingAnalytics | null) => void
   onError: (error: unknown) => void
   onLoading: (isLoading: boolean) => void
+}
+
+export function selectLatestFrontendOnboardingFunnel(
+  funnels: Pick<FrontendOnboardingAnalytics['funnels'], 'v3' | 'v4'> | null | undefined,
+): FrontendOnboardingLatestFunnel {
+  if (funnels?.v4 !== undefined)
+    return { version: 'v4', stages: funnels.v4 }
+  if (funnels === null || funnels === undefined)
+    return { version: 'v4', stages: [] }
+  return { version: 'v3', stages: funnels.v3 ?? [] }
 }
 
 const FUNNEL_STAGE_COLORS: Record<FrontendOnboardingStageKey, string> = {
