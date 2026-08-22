@@ -29,11 +29,16 @@ describe('user onboarding write queue', () => {
     })
   })
 
-  it.concurrent('ignores a malformed backend Bento event value', () => {
-    const current = { bento_events: ['not', 'an', 'object'] }
+  it.concurrent.each([
+    ['null', null],
+    ['array', ['not', 'an', 'object'] as string[]],
+    ['string', 'not an object'],
+    ['number', 42],
+    ['boolean', false],
+  ] as const)('ignores a malformed %s backend Bento event value', (_label, bentoEvents) => {
     const next = { status: 'completed' }
 
-    expect(preserveUserBentoEvents(next, current)).toEqual(next)
+    expect(preserveUserBentoEvents({ ...next }, { bento_events: bentoEvents })).toEqual(next)
   })
 
   it.concurrent('serializes writes for the same user', async () => {

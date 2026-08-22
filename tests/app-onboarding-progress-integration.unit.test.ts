@@ -1,8 +1,72 @@
-import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+// @vitest-environment happy-dom
 
-const onboardingSource = readFileSync(new URL('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
-const sidebarSource = readFileSync(new URL('../src/components/Sidebar.vue', import.meta.url), 'utf8')
+import { readFileSync } from 'node:fs'
+import { URL as NodeUrl } from 'node:url'
+import { describe, expect, it, vi } from 'vitest'
+import { createApp } from 'vue'
+import AppOnboardingFlow from '../src/components/dashboard/AppOnboardingFlow.vue'
+
+const writerMocks = vi.hoisted(() => ({
+  main: {
+    auth: { id: 'user-bento-retry' },
+    authGeneration: 1,
+    isAdmin: false,
+    plans: [],
+    user: {
+      id: 'user-bento-retry',
+      image_url: 'avatar.png',
+      onboarding: {},
+    },
+  },
+  refreshUser: vi.fn(),
+  replaceUserOnboardingIfUnchanged: vi.fn(),
+}))
+
+vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ query: {} }),
+  useRouter: () => ({ push: vi.fn() }),
+}))
+vi.mock('vue-sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
+vi.mock('~/services/onboardingTracking', () => ({ sendOnboardingEvent: vi.fn() }))
+vi.mock('~/services/supabase', () => ({
+  getLocalConfig: () => ({ supaHost: 'https://sb.capgo.app', supaKey: 'anon-key' }),
+  isLocal: () => false,
+  useSupabase: () => {
+    const query = {
+      eq: () => query,
+      maybeSingle: writerMocks.refreshUser,
+      select: () => query,
+    }
+    return { from: () => query }
+  },
+}))
+vi.mock('~/services/userOnboardingWriteQueue', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/services/userOnboardingWriteQueue')>()
+  return {
+    ...actual,
+    replaceUserOnboardingIfUnchanged: writerMocks.replaceUserOnboardingIfUnchanged,
+  }
+})
+vi.mock('~/stores/dashboardApps', () => ({ useDashboardAppsStore: () => ({ upsertApp: vi.fn() }) }))
+vi.mock('~/stores/dialogv2', () => ({
+  useDialogV2Store: () => ({
+    lastButtonRole: null,
+    onDialogDismiss: vi.fn(async () => undefined),
+    openDialog: vi.fn(),
+  }),
+}))
+vi.mock('~/stores/main', () => ({ useMainStore: () => writerMocks.main }))
+vi.mock('~/stores/organization', () => ({
+  useOrganizationStore: () => ({
+    currentOrganization: null,
+    organizations: [],
+    updateAppOnboarding: vi.fn(),
+  }),
+}))
+
+const onboardingSource = readFileSync(new NodeUrl('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
+const sidebarSource = readFileSync(new NodeUrl('../src/components/Sidebar.vue', import.meta.url), 'utf8')
 
 function sourceBetween(start: string, end: string) {
   const startIndex = onboardingSource.indexOf(start)
@@ -44,6 +108,67 @@ describe('app onboarding progress analytics integration', () => {
       'progressTracker.trackVisibilityChange(visibilityChange.state, visibilityChange.occurredAt)',
       'pendingVisibilityChanges = []',
     ])
+  })
+
+  it('preserves Bento state from the refreshed CAS snapshot on retry', async () => {
+    const initialBentoEvents = {
+      'cli:command_invoked': {
+        details: [{ observed_at: '2026-08-22T10:00:00.000Z' }],
+        occurrence_count: 1,
+        sent_at: '2026-08-22T10:00:01.000Z',
+      },
+    }
+    const refreshedBentoEvents = {
+      'cli:command_invoked': {
+        details: [
+          { observed_at: '2026-08-22T10:00:00.000Z' },
+          { observed_at: '2026-08-22T10:05:00.000Z' },
+        ],
+        occurrence_count: 2,
+        sent_at: '2026-08-22T10:05:01.000Z',
+      },
+    }
+    const initialOnboarding = { bento_events: initialBentoEvents }
+    const refreshedOnboarding = { bento_events: refreshedBentoEvents }
+    writerMocks.main.user = {
+      id: 'user-bento-retry',
+      image_url: 'avatar.png',
+      onboarding: initialOnboarding,
+    }
+    writerMocks.refreshUser.mockResolvedValueOnce({
+      data: { ...writerMocks.main.user, onboarding: refreshedOnboarding },
+      error: null,
+    })
+    writerMocks.replaceUserOnboardingIfUnchanged
+      .mockResolvedValueOnce({ data: null, error: null })
+      .mockImplementation(async (_userId, _expectedOnboarding, onboarding) => ({
+        data: { ...writerMocks.main.user, onboarding },
+        error: null,
+      }))
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn(() => ({ matches: false })),
+    })
+    const container = document.createElement('div')
+    const app = createApp(AppOnboardingFlow, { onboarding: true, preOrg: true })
+    app.config.warnHandler = () => undefined
+
+    try {
+      app.mount(container)
+      await vi.waitFor(() => expect(writerMocks.replaceUserOnboardingIfUnchanged).toHaveBeenCalledTimes(2))
+
+      expect(writerMocks.replaceUserOnboardingIfUnchanged.mock.calls[0]?.[2]).toEqual(expect.objectContaining({
+        bento_events: initialBentoEvents,
+      }))
+      expect(writerMocks.replaceUserOnboardingIfUnchanged.mock.calls[1]?.[1]).toEqual(refreshedOnboarding)
+      expect(writerMocks.replaceUserOnboardingIfUnchanged.mock.calls[1]?.[2]).toEqual(expect.objectContaining({
+        bento_events: refreshedBentoEvents,
+      }))
+      expect(writerMocks.replaceUserOnboardingIfUnchanged.mock.calls[1]?.[2]?.bento_events).not.toEqual(initialBentoEvents)
+    }
+    finally {
+      app.unmount()
+    }
   })
 
   it.concurrent('initializes tracking once the real initial or resumed step is resolved', () => {
