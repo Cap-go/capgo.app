@@ -33,6 +33,14 @@ function createContext(): Context {
   return { get: () => 'request-id' } as unknown as Context
 }
 
+function expectAugust22ProductionHostFallback(query: string, properties = 'properties', timestamp = 'timestamp') {
+  expect(query).toContain(`JSONExtractString(toString(${properties}), '$host') = 'console.capgo.app'`)
+  expect(query).toContain(`isNull(${properties}['$host'])`)
+  expect(query).toContain(`toDate(toTimeZone(${timestamp}, 'UTC')) = toDate('2026-08-22')`)
+  expect(query).toContain(`JSONExtractString(toString(${properties}), '$current_url') = 'https://console.capgo.app'`)
+  expect(query).toContain(`JSONExtractString(toString(${properties}), '$current_url') LIKE 'https://console.capgo.app/%'`)
+}
+
 beforeEach(() => {
   cloudlogErrMock.mockReset()
   queryPosthogHogqlMock.mockReset()
@@ -48,11 +56,7 @@ describe('buildFrontendOnboardingProductionHostHogql', () => {
   it('recovers missing-host production events only on August 22 UTC', () => {
     const filter = buildFrontendOnboardingProductionHostHogql('events.properties', 'events.timestamp')
 
-    expect(filter).toContain('JSONExtractString(toString(events.properties), \'$host\') = \'console.capgo.app\'')
-    expect(filter).toContain('isNull(events.properties[\'$host\'])')
-    expect(filter).toContain('toDate(toTimeZone(events.timestamp, \'UTC\')) = toDate(\'2026-08-22\')')
-    expect(filter).toContain('JSONExtractString(toString(events.properties), \'$current_url\') = \'https://console.capgo.app\'')
-    expect(filter).toContain('JSONExtractString(toString(events.properties), \'$current_url\') LIKE \'https://console.capgo.app/%\'')
+    expectAugust22ProductionHostFallback(filter, 'events.properties', 'events.timestamp')
   })
 })
 
@@ -76,6 +80,7 @@ describe('buildFrontendOnboardingHogql', () => {
     expect(query).toContain("'onboarding_technical_invite_succeeded'")
     expect(query).toContain('JSONExtractString(toString(properties), \'flow\') = \'pre_org\'')
     expect(query).toContain('JSONExtractString(toString(properties), \'$host\') = \'console.capgo.app\'')
+    expectAugust22ProductionHostFallback(query)
     expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) AS onboarding_version')
     expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) IN (1, 2, 3, 4)')
     expect(query).not.toContain('toInt64OrZero')
@@ -127,6 +132,7 @@ describe('buildFrontendOnboardingWelcomeHogql', () => {
     expect(query).toContain("toIntOrZero(toString(properties.onboarding_version)) = 4")
     expect(query).toContain("JSONExtractString(toString(properties), 'flow') = 'pre_org'")
     expect(query).toContain("JSONExtractString(toString(properties), '$host') = 'console.capgo.app'")
+    expectAugust22ProductionHostFallback(query)
     expect(query).toContain("JSONExtractString(toString(properties), 'step') AS step")
     expect(query).toContain("step IN ('welcome', 'intent')")
     expect(query).toContain("timestamp >= parseDateTimeBestEffort('2026-07-31T00:00:00.000Z')")
@@ -154,6 +160,7 @@ describe('buildFrontendOnboardingTabSwitchHogql', () => {
     expect(query).toContain("JSONExtractString(toString(properties), 'visibility_state') = 'hidden'")
     expect(query).toContain("JSONExtractString(toString(properties), 'flow') = 'pre_org'")
     expect(query).toContain("JSONExtractString(toString(properties), '$host') = 'console.capgo.app'")
+    expectAugust22ProductionHostFallback(query)
     expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) = 4')
     expect(query).toContain("toString(toDate(toTimeZone(timestamp, 'UTC'))) AS date")
     expect(query).not.toContain("toDate(timestamp, 'UTC')")
