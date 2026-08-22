@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { intro, log, outro } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { getInvocationSource } from '../analytics/track'
-import { checkAppExists, defaultAppIconPath, getAppIconStoragePath, newIconPath } from '../api/app'
+import { defaultAppIconPath, getAppIconStoragePath, newIconPath } from '../api/app'
 import { checkAlerts } from '../api/update'
 import { isAiAgentEnvironment } from '../init/onboarding-source'
 import { CliUserError } from '../shared/cli-user-error'
@@ -39,6 +39,12 @@ function ensureOptions(appId: string, options: AppOptions, silent: boolean) {
     throw new CliUserError('Missing appId')
   }
 
+  if (appId === 'io.ionic.starter') {
+    if (!silent)
+      log.error(`This appId ${appId} cannot be used it's reserved, please change it in your capacitor config.`)
+    throw new CliUserError('Reserved appId, please change it in capacitor config')
+  }
+
   if (appId.includes('--')) {
     if (!silent)
       log.error('The app id includes illegal symbols. You cannot use "--" in the app id')
@@ -56,36 +62,20 @@ function ensureOptions(appId: string, options: AppOptions, silent: boolean) {
   }
 }
 
-async function ensureAppDoesNotExist(
-  apikey: string,
-  appId: string,
-  silent: boolean,
-  options?: { supaHost?: string, supaAnon?: string },
-) {
-  const appExist = await checkAppExists(apikey, appId, options)
-  if (!appExist)
-    return
-
-  if (appId === 'io.ionic.starter') {
-    if (!silent)
-      log.error(`This appId ${appId} cannot be used it's reserved, please change it in your capacitor config.`)
-    throw new CliUserError('Reserved appId, please change it in capacitor config')
-  }
-
-  if (!silent)
-    log.error(`App ${appId} already exist`)
-  // Keep "already exists" in the message so `isAppAlreadyExistsError` still
-  // matches it; pass the id via context, not the message. Re-uploading an
-  // existing app is an expected user state, not a crash.
-  throw new CliUserError('App already exists', { appId })
-}
-
 export type AppCreateSource = 'cli-direct' | 'onboarding' | 'mcp'
 
 export function resolveAppCreateSource(explicit?: AppCreateSource): AppCreateSource {
   if (explicit)
     return explicit
   return getInvocationSource() === 'mcp' ? 'mcp' : 'cli-direct'
+}
+
+export function isStorageObjectConflict(error: unknown) {
+  if (!error || typeof error !== 'object')
+    return false
+
+  const { status, statusCode } = error as { status?: unknown, statusCode?: unknown }
+  return status === 409 || statusCode === '409'
 }
 
 async function createAppViaApi(
@@ -167,8 +157,6 @@ export async function addAppInternal(
   const supabase = await createSupabaseClient(options.apikey!, options.supaHost, options.supaAnon)
   const userId = await resolveUserIdFromApiKey(supabase, options.apikey)
 
-  await ensureAppDoesNotExist(options.apikey!, appId, silent, { supaHost: options.supaHost, supaAnon: options.supaAnon })
-
   if (!organization)
     organization = await getOrganizationWithPermission(supabase, options.apikey, 'org.create_app')
 
@@ -224,14 +212,18 @@ export async function addAppInternal(
       .from('images')
       .upload(iconPath, iconBuff, {
         contentType: iconType,
-        upsert: true,
+        // A duplicate app add must not overwrite the existing app's icon before POST returns 409.
+        upsert: false,
       })
 
-    if (error) {
+    if (error && !isStorageObjectConflict(error)) {
       if (!silent)
         log.warn(`Could not upload app icon (${formatError(error)}). Continuing with the default icon.`)
     }
     else {
+      // A conflict can be an orphaned icon from an earlier attempt whose POST failed.
+      // Reusing its path is safe because upsert:false did not mutate the stored object,
+      // and POST /app remains authoritative for duplicate app IDs.
       iconUrl = iconPath
     }
   }
