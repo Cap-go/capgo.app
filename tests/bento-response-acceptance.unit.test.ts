@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { syncBentoSubscriberTags, trackBentoEvent, unsubscribeBento } from '../supabase/functions/_backend/utils/bento.ts'
+import { syncBentoSubscriberTags, trackBentoEvent, trackBentoEvents, unsubscribeBento } from '../supabase/functions/_backend/utils/bento.ts'
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
   cloudlog: vi.fn(),
@@ -53,6 +53,11 @@ const subscriberUpdates = [
     email: 'second.user@example.com',
     segments: ['onboarding:first_org_recovery_suppressed'],
   },
+]
+
+const events = [
+  { event: 'cli:command_invoked', data: { occurrence_count: 1 } },
+  { event: 'cli:login_successful', data: { occurrence_count: 2 } },
 ]
 
 describe('configured Bento response acceptance', () => {
@@ -114,6 +119,46 @@ describe('configured Bento response acceptance', () => {
         'event.user@example.com',
         { source: 'unit-test' },
         'user:created',
+      )).resolves.toBe(false)
+    })
+  })
+
+  describe('trackBentoEvents', () => {
+    it('accepts an acknowledgement for the exact event count', async () => {
+      queueAcknowledgement({ failed: 0, results: 2 })
+
+      await expect(trackBentoEvents(
+        createContext(),
+        'event.user@example.com',
+        events,
+      )).resolves.toBe(true)
+    })
+
+    it('sends all events in one batch request', async () => {
+      queueAcknowledgement({ failed: 0, results: 2 })
+
+      await trackBentoEvents(createContext(), 'event.user@example.com', events)
+
+      expect(fetchMock).toHaveBeenCalledOnce()
+      expect(JSON.parse(fetchMock.mock.calls[0]![1]?.body as string)).toEqual({
+        events: [
+          { type: 'cli:command_invoked', email: 'event.user@example.com', details: { occurrence_count: 1 } },
+          { type: 'cli:login_successful', email: 'event.user@example.com', details: { occurrence_count: 2 } },
+        ],
+      })
+    })
+
+    it.each([
+      ['a short result count', { failed: 0, results: 1 }],
+      ['a non-zero failure count', { failed: 1, results: 2 }],
+      ['a malformed acknowledgement', null],
+    ])('rejects %s', async (_label, acknowledgement) => {
+      queueAcknowledgement(acknowledgement)
+
+      await expect(trackBentoEvents(
+        createContext(),
+        'event.user@example.com',
+        events,
       )).resolves.toBe(false)
     })
   })

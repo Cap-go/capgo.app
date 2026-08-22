@@ -75,33 +75,53 @@ function acceptedBentoCommandResult(result: unknown, expectedResults: number) {
   return (result as { results?: unknown }).results === expectedResults
 }
 
-// Only use this function when a specific member of the organization needs to be tracked in Bento. For organization-level events, use sendNotifToOrgMembers in org_email_notifications.ts which will call trackBentoEvent for each member with an email in the background.
-export async function trackBentoEvent(c: Context, email: string, data: Record<string, unknown>, event: string) {
+export interface BentoBatchEvent {
+  data: Record<string, unknown>
+  event: string
+}
+
+export async function trackBentoEvents(
+  c: Context,
+  email: string,
+  events: readonly BentoBatchEvent[],
+  signal?: AbortSignal,
+) {
   if (!isBentoConfigured(c))
     return
+  if (events.length === 0)
+    return true
 
   try {
     const siteUuid = getEnv(c, 'BENTO_SITE_UUID')
-
     const payload = {
-      events: [{
-        type: event,
+      events: events.map(item => ({
+        type: item.event,
         email,
-        details: data,
-      }],
+        details: item.data,
+      })),
     }
-
-    const res = await bentoFetch(c, 'batch/events', siteUuid, payload)
+    const res = await bentoFetch(c, 'batch/events', siteUuid, payload, signal)
     if (!acceptedBentoBatchResult(res, payload.events.length)) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'trackBentoEvent', error: res })
+      cloudlogErr({ requestId: c.get('requestId'), message: 'trackBentoEvents', error: res })
       return false
     }
     return true
   }
-  catch (e) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'trackBentoEvent error', error: serializeError(e) })
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'trackBentoEvents error', error: serializeError(error) })
     return false
   }
+}
+
+// Only use this function when a specific member of the organization needs to be tracked in Bento. For organization-level events, use sendNotifToOrgMembers in org_email_notifications.ts which will call trackBentoEvent for each member with an email in the background.
+export async function trackBentoEvent(
+  c: Context,
+  email: string,
+  data: Record<string, unknown>,
+  event: string,
+  signal?: AbortSignal,
+) {
+  return trackBentoEvents(c, email, [{ data, event }], signal)
 }
 
 export async function addTagBento(c: Context, email: string, segments: { segments: string[], deleteSegments: string[] }) {
