@@ -70,6 +70,14 @@ export function resolveAppCreateSource(explicit?: AppCreateSource): AppCreateSou
   return getInvocationSource() === 'mcp' ? 'mcp' : 'cli-direct'
 }
 
+export function isStorageObjectConflict(error: unknown) {
+  if (!error || typeof error !== 'object')
+    return false
+
+  const { status, statusCode } = error as { status?: unknown, statusCode?: unknown }
+  return status === 409 || statusCode === '409'
+}
+
 async function createAppViaApi(
   apikey: string,
   params: {
@@ -208,11 +216,14 @@ export async function addAppInternal(
         upsert: false,
       })
 
-    if (error) {
+    if (error && !isStorageObjectConflict(error)) {
       if (!silent)
         log.warn(`Could not upload app icon (${formatError(error)}). Continuing with the default icon.`)
     }
     else {
+      // A conflict can be an orphaned icon from an earlier attempt whose POST failed.
+      // Reusing its path is safe because upsert:false did not mutate the stored object,
+      // and POST /app remains authoritative for duplicate app IDs.
       iconUrl = iconPath
     }
   }

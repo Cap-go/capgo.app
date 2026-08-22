@@ -29,6 +29,8 @@ assert.doesNotMatch(appAddSource, /\bensureAppDoesNotExist\b/)
 assert.match(appAddSource, /method:\s*'POST'/)
 assert.match(appAddSource, /appId === 'io\.ionic\.starter'/)
 assert.match(appAddSource, /upsert:\s*false/)
+assert.equal(isStorageObjectConflict({ statusCode: '409' }), true)
+assert.equal(isStorageObjectConflict({ statusCode: '500' }), false)
 ```
 
 - [ ] **Step 2: Run the focused test and verify RED**
@@ -85,6 +87,17 @@ Keep the icon upload create-only so a duplicate app-add attempt cannot mutate an
 
 ```ts
 upsert: false,
+```
+
+Treat a Storage `409` as an existing deterministic icon object and reuse its path. This covers retries where the icon upload succeeded but the earlier app-create request did not, while `upsert: false` still prevents a duplicate app-add from changing the object:
+
+```ts
+if (error && !isStorageObjectConflict(error)) {
+  // Keep the default icon for unrelated upload failures.
+}
+else {
+  iconUrl = iconPath
+}
 ```
 
 - [ ] **Step 3: Run the focused test and verify GREEN**
