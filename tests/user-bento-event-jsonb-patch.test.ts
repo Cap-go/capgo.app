@@ -199,24 +199,30 @@ describe('user Bento event JSONB patch', () => {
         await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
 
         const secondDelivery = app.request('http://local/', { method: 'POST' }, bindings)
-        await vi.waitFor(async () => {
-          const rows = await executeSQL<{ waiting_count: string }>(
-            `SELECT count(*)::text AS waiting_count
-             FROM pg_stat_activity
-             WHERE wait_event_type = 'Lock'
-               AND application_name = 'user-bento-lock-test-direct'
-               AND query LIKE '%SELECT email, onboarding%'
-               AND query LIKE '%FOR UPDATE%'`,
-          )
-          expect(Number(rows[0]?.waiting_count ?? 0)).toBeGreaterThanOrEqual(1)
-        }, { interval: 25, timeout: 3_000 })
-        expect(fetchMock).toHaveBeenCalledOnce()
+        try {
+          await vi.waitFor(async () => {
+            const rows = await executeSQL<{ waiting_count: string }>(
+              `SELECT count(*)::text AS waiting_count
+               FROM pg_stat_activity
+               WHERE wait_event_type = 'Lock'
+                 AND application_name LIKE 'user-bento-lock-test-%'
+                 AND query LIKE '%SELECT email, onboarding%'
+                 AND query LIKE '%FOR UPDATE%'`,
+            )
+            expect(Number(rows[0]?.waiting_count ?? 0)).toBeGreaterThanOrEqual(1)
+          }, { interval: 25, timeout: 3_000 })
+          expect(fetchMock).toHaveBeenCalledOnce()
 
-        acceptFirstBento()
-        const responses = await Promise.all([firstDelivery, secondDelivery])
-        await expect(Promise.all(responses.map(response => response.json())))
-          .resolves
-          .toEqual([{ delivered: true }, { delivered: true }])
+          acceptFirstBento()
+          const responses = await Promise.all([firstDelivery, secondDelivery])
+          await expect(Promise.all(responses.map(response => response.json())))
+            .resolves
+            .toEqual([{ delivered: true }, { delivered: true }])
+        }
+        finally {
+          acceptFirstBento()
+          await Promise.allSettled([firstDelivery, secondDelivery])
+        }
       })
     }
     finally {
