@@ -42,6 +42,7 @@ export function getPostHogBrowserContext(): OnboardingEventProperties {
     const currentUrl = sanitizedUrl(window.location.href)
     if (currentUrl)
       context.$current_url = currentUrl
+    context.$host = window.location.host
     context.$pathname = window.location.pathname
   }
   if (typeof document !== 'undefined' && document.referrer) {
