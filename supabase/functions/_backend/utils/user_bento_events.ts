@@ -100,18 +100,21 @@ function copyMappedFields(
 ) {
   for (const field of fields) {
     const value = tags?.[field.key]
-    if (field.type === 'string' && typeof value === 'string' && value.length > 0)
+    if (field.type === 'string' && typeof value === 'string' && value.length > 0) {
       target[field.key] = truncate(value, field.maxLength)
-    else if (field.type === 'boolean' && typeof value === 'boolean')
+    }
+    else if (field.type === 'boolean' && typeof value === 'boolean') {
       target[field.key] = value
+    }
     else if (
       field.type === 'integer'
       && typeof value === 'number'
       && Number.isInteger(value)
       && value >= field.min
       && value <= field.max
-    )
+    ) {
       target[field.key] = value
+    }
   }
 }
 
@@ -188,7 +191,7 @@ export function parseUserBentoEvents(onboarding: unknown): StoredUserBentoEvents
       continue
     result[event] = {
       details,
-      occurrence_count: Math.max(storedCount, details.length),
+      occurrence_count: Math.max(storedCount, sanitizedDetails.length),
       ...(sentAt ? { sent_at: sentAt } : {}),
     }
   }
@@ -200,7 +203,7 @@ export function appendUserBentoObservation(
   observation: MappedUserBentoEvent,
 ): StoredUserBentoEvents {
   const current = events[observation.bentoEvent]
-  if (current?.sent_at)
+  if (validIsoDate(current?.sent_at))
     return events
 
   const details = [...(current?.details ?? []), observation.details]

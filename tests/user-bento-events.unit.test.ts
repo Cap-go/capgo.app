@@ -1,3 +1,4 @@
+import type { StoredUserBentoEvents } from '../supabase/functions/_backend/utils/user_bento_events.ts'
 import { describe, expect, it } from 'vitest'
 import {
   appendUserBentoObservation,
@@ -5,9 +6,8 @@ import {
   getPendingUserBentoEvents,
   parseUserBentoEvents,
 } from '../supabase/functions/_backend/utils/user_bento_events.ts'
-import type { StoredUserBentoEvents } from '../supabase/functions/_backend/utils/user_bento_events.ts'
 
-describe('CLI user Bento event registry', () => {
+describe('cli user Bento event registry', () => {
   it.each([
     ['CLI Command Invoked', 'cli:command_invoked'],
     ['User CLI login', 'cli:login_successful'],
@@ -112,6 +112,31 @@ describe('CLI user Bento event registry', () => {
     expect(getPendingUserBentoEvents(malformed)).toEqual([
       { event: 'cli:login_successful', state: malformed['cli:login_successful'] },
     ])
+  })
+
+  it('appends to a direct stored state with malformed sent_at', () => {
+    const first = buildMappedUserBentoEvent({
+      sourceEvent: 'User CLI login',
+      observedAt: '2026-08-22T10:00:00.000Z',
+    })!
+    const second = buildMappedUserBentoEvent({
+      sourceEvent: 'User CLI login',
+      observedAt: '2026-08-22T10:00:01.000Z',
+    })!
+    const events: StoredUserBentoEvents = {
+      'cli:login_successful': {
+        details: [first.details],
+        occurrence_count: 1,
+        sent_at: 'not-a-date',
+      },
+    }
+
+    expect(appendUserBentoObservation(events, second)).toEqual({
+      'cli:login_successful': {
+        details: [first.details, second.details],
+        occurrence_count: 2,
+      },
+    })
   })
 
   it('drops unknown stored events and unknown stored detail properties', () => {
@@ -248,7 +273,7 @@ describe('CLI user Bento event registry', () => {
     })
 
     expect(parsed['cli:command_invoked']).toEqual({
-      occurrence_count: 5,
+      occurrence_count: 7,
       details: [detail(1), detail(4), detail(5), detail(6), detail(7)].map(value => ({
         ...value,
         source_event: 'CLI Command Invoked',
