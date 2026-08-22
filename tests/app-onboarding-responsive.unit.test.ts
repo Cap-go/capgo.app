@@ -13,6 +13,10 @@ describe('app-creation onboarding responsive layout', () => {
     expect(flowSource).toContain("'onboarding-flow-details-icon': flowStep === 'details' && appDetailsStep === 'icon'")
     expect(pageSource).toContain(':deep(.onboarding-flow-app-creation)')
     expect(pageSource).not.toContain(':deep(.onboarding-flow-shell)')
+    expect(pageSource).not.toMatch(/:deep\(\.onboarding-flow-details-(?:name|app-id|icon)/)
+    expect(pageSource).not.toContain(':deep(.onboarding-flow-intent')
+    expect(pageSource).toContain(':deep(.onboarding-flow-app-creation.onboarding-flow-details-app-id')
+    expect(pageSource).toContain(':deep(.onboarding-flow-app-creation.onboarding-flow-details-icon')
   })
 
   it.concurrent('drops secondary content progressively before primary actions on short screens', () => {
