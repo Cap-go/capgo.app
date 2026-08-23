@@ -22,6 +22,7 @@ export const USER_BENTO_EVENT_NAMES = [
   'cli:command_invoked',
   'cli:login_successful',
   'cli:onboarding_run_started',
+  'onboarding:resume_restarted',
   'onboarding:step_completed',
 ] as const
 
@@ -55,6 +56,21 @@ const USER_BENTO_EVENT_REGISTRY = {
       { key: 'resumed_from_run_id', type: 'string', maxLength: 80 },
       { key: 'saved_step', type: 'integer', min: 0, max: 1_000 },
       { key: 'total_steps', type: 'integer', min: 0, max: 1_000 },
+    ],
+  },
+  'onboarding_resume_restarted': {
+    bentoEvent: 'onboarding:resume_restarted',
+    delivery: 'every',
+    fields: [
+      { key: 'flow', type: 'string', maxLength: 32 },
+      { key: 'onboarding_attempt_id', type: 'string', maxLength: 80 },
+      { key: 'onboarding_run_id', type: 'string', maxLength: 80 },
+      { key: 'onboarding_version', type: 'integer', min: 1, max: 100 },
+      { key: 'resume_onboarding_attempt_id', type: 'string', maxLength: 80 },
+      { key: 'resumed_from_run_id', type: 'string', maxLength: 80 },
+      { key: 'saved_step', type: 'string', maxLength: 32 },
+      { key: 'step_index', type: 'integer', min: 0, max: 100 },
+      { key: 'total_steps', type: 'integer', min: 0, max: 100 },
     ],
   },
   'onboarding_step_completed': {

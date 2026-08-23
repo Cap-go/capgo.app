@@ -20,6 +20,41 @@ describe('cli user Bento event registry', () => {
     })?.bentoEvent).toBe(bentoEvent)
   })
 
+  it('maps every frontend onboarding restart with only allowlisted details', () => {
+    expect(buildMappedUserBentoEvent({
+      sourceEvent: 'onboarding_resume_restarted',
+      observedAt: '2026-08-23T12:00:00.000Z',
+      tags: {
+        flow: 'pre_org',
+        onboarding_attempt_id: 'attempt-new',
+        onboarding_run_id: 'run-new',
+        onboarding_version: 4,
+        resume_onboarding_attempt_id: 'attempt-old',
+        resumed_from_run_id: 'run-old',
+        saved_step: 'organization',
+        secret: 'must-not-leak',
+        step_index: 2,
+        total_steps: 4,
+      },
+    })).toEqual({
+      bentoEvent: 'onboarding:resume_restarted',
+      delivery: 'every',
+      details: {
+        flow: 'pre_org',
+        observed_at: '2026-08-23T12:00:00.000Z',
+        onboarding_attempt_id: 'attempt-new',
+        onboarding_run_id: 'run-new',
+        onboarding_version: 4,
+        resume_onboarding_attempt_id: 'attempt-old',
+        resumed_from_run_id: 'run-old',
+        saved_step: 'organization',
+        source_event: 'onboarding_resume_restarted',
+        step_index: 2,
+        total_steps: 4,
+      },
+    })
+  })
+
   it('returns undefined for an unmapped event', () => {
     expect(buildMappedUserBentoEvent({
       sourceEvent: 'CLI Command Succeeded',
