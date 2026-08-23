@@ -25,7 +25,7 @@ const findEvent = requests => requests.find(r => r.url.endsWith('/private/events
 try {
   // 1. global props shape
   setInvocationSource('cli')
-  const props = getGlobalAnalyticsProps()
+  const props = getGlobalAnalyticsProps({})
   assert.equal(typeof props.cli_version, 'string')
   assert.equal(typeof props.node_version, 'string')
   assert.equal(typeof props.os_platform, 'string')
@@ -35,6 +35,12 @@ try {
   assert.equal(typeof props.is_ci, 'boolean')
   assert.equal(typeof props.is_tty, 'boolean')
   assert.equal(props.invocation_source, 'cli')
+  assert.equal(props.agent_invoker, false)
+  assert.equal(props.agent_identity, undefined)
+
+  const agentProps = getGlobalAnalyticsProps({ CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'session-123' })
+  assert.equal(agentProps.agent_invoker, true)
+  assert.deepEqual(agentProps.agent_identity, { id: 'claude-code', name: 'Claude Code', sessionId: 'session-123' })
 
   // 2. v2 actor-scoped payload (explicit org + app => no context lookup)
   delete process.env.CAPGO_DISABLE_TELEMETRY
