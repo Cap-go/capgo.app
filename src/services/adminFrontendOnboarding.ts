@@ -40,11 +40,11 @@ export interface FrontendOnboardingDailySetupCliAgentUsage {
   points: FrontendOnboardingDailySetupCliAgentPoint[]
 }
 
-export type FrontendOnboardingDailySetupCliReservedAgentGroupKey =
-  | 'multiple_agents'
-  | 'unknown_agent'
-  | 'no_agent'
-  | 'no_cli_invoked'
+export type FrontendOnboardingDailySetupCliReservedAgentGroupKey
+  = | 'multiple_agents'
+    | 'unknown_agent'
+    | 'no_agent'
+    | 'no_cli_invoked'
 
 export interface FrontendOnboardingLargestDropoff {
   from: Exclude<FrontendOnboardingStageKey, 'setup'>
@@ -390,10 +390,10 @@ export function buildFrontendOnboardingDailySetupCliSeries(
 const DAILY_SETUP_CLI_AGENT_COLORS: Record<string, string> = {
   'agent:codex': '#10a37f',
   'agent:claude-code': '#d97757',
-  multiple_agents: '#8b5cf6',
-  unknown_agent: '#f59e0b',
-  no_agent: '#3b82f6',
-  no_cli_invoked: '#94a3b8',
+  'multiple_agents': '#8b5cf6',
+  'unknown_agent': '#f59e0b',
+  'no_agent': '#3b82f6',
+  'no_cli_invoked': '#94a3b8',
 }
 
 const DAILY_SETUP_CLI_AGENT_FALLBACK_COLORS = [

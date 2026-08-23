@@ -26,6 +26,7 @@ import ChartCard from '~/components/dashboard/ChartCard.vue'
 import PageLoader from '~/components/PageLoader.vue'
 import {
   buildFrontendOnboardingDailySeries,
+  buildFrontendOnboardingDailySetupCliAgentSeries,
   buildFrontendOnboardingDailySetupCliSeries,
   buildFrontendOnboardingDailyTabSwitchSeries,
   buildFrontendOnboardingDailyWelcomeOutcomeSeries,
@@ -278,6 +279,16 @@ const dailySetupCliSeries = computed(() => buildFrontendOnboardingDailySetupCliS
   t('frontend-onboarding-daily-setup-cli-returning'),
 ))
 const hasDailySetupCliOutcomeData = computed(() => dailySetupCliSeries.value.length > 0)
+const dailySetupCliAgentSeries = computed(() => buildFrontendOnboardingDailySetupCliAgentSeries(
+  visibleAnalytics.value?.daily_setup_cli_agent_usage,
+  {
+    multiple_agents: t('frontend-onboarding-cli-agent-multiple'),
+    unknown_agent: t('frontend-onboarding-cli-agent-unknown'),
+    no_agent: t('frontend-onboarding-cli-agent-none'),
+    no_cli_invoked: t('frontend-onboarding-cli-agent-no-cli'),
+  },
+))
+const hasDailySetupCliAgentData = computed(() => dailySetupCliAgentSeries.value.length > 0)
 
 const onboardingGraphSource = computed(() => {
   const v4Funnel = visibleAnalytics.value?.funnels.v4
@@ -767,6 +778,29 @@ displayStore.defaultBack = '/dashboard'
             </template>
             <AdminStackedBarChart
               :series="dailySetupCliSeries"
+              :is-loading="isLoadingStats"
+              accessible-borders
+            />
+          </ChartCard>
+
+          <ChartCard
+            chart-id="daily-setup-cli-agent-usage-v2-v4"
+            :title="t('frontend-onboarding-daily-setup-cli-agent-usage-v2-v4')"
+            :is-loading="isLoadingStats"
+            :has-data="hasDailySetupCliAgentData"
+          >
+            <template #header>
+              <div class="min-w-0">
+                <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
+                  {{ t('frontend-onboarding-daily-setup-cli-agent-usage-v2-v4') }}
+                </h2>
+                <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                  {{ t('frontend-onboarding-daily-setup-cli-agent-usage-description') }}
+                </p>
+              </div>
+            </template>
+            <AdminStackedBarChart
+              :series="dailySetupCliAgentSeries"
               :is-loading="isLoadingStats"
               accessible-borders
             />
