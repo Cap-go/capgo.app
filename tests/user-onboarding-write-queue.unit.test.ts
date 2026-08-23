@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { preserveUserBentoEvents, serializeUserOnboardingWrite } from '../src/services/userOnboardingWriteQueue'
+import { mergeUserOnboardingProgress, serializeUserOnboardingWrite } from '../src/services/userOnboardingWriteQueue'
 
 function deferred() {
   let resolve!: () => void
@@ -10,8 +10,15 @@ function deferred() {
 }
 
 describe('user onboarding write queue', () => {
-  it.concurrent('preserves backend Bento event state while applying the next progress snapshot', () => {
+  it.concurrent('preserves server-owned state while replacing the frontend progress snapshot', () => {
     const current = {
+      abtests: {
+        new_emails: {
+          assigned_at: '2026-08-23T13:15:06.300Z',
+          branch: 'A',
+        },
+      },
+      app_id: 'stale.app.id',
       status: 'in_progress',
       bento_events: {
         'cli:command_invoked': {
@@ -20,12 +27,22 @@ describe('user onboarding write queue', () => {
           sent_at: '2026-08-22T10:00:01.000Z',
         },
       },
+      future_server_state: {
+        revision: 1,
+      },
     }
-    const next = { status: 'completed', step: 'setup' }
+    const next = {
+      flow: 'pre_org',
+      status: 'completed',
+      step: 'setup',
+      updated_at: '2026-08-23T13:16:26.987Z',
+    }
 
-    expect(preserveUserBentoEvents(next, current)).toEqual({
-      ...next,
+    expect(mergeUserOnboardingProgress(next, current)).toEqual({
+      abtests: current.abtests,
       bento_events: current.bento_events,
+      future_server_state: current.future_server_state,
+      ...next,
     })
   })
 
@@ -35,10 +52,15 @@ describe('user onboarding write queue', () => {
     ['string', 'not an object'],
     ['number', 42],
     ['boolean', false],
-  ] as const)('ignores a malformed %s backend Bento event value', (_label, bentoEvents) => {
-    const next = { status: 'completed' }
+  ] as const)('treats a malformed %s current onboarding value as empty', (_label, current) => {
+    const next = {
+      flow: 'pre_org',
+      status: 'completed',
+      step: 'setup',
+      updated_at: '2026-08-23T13:16:26.987Z',
+    }
 
-    expect(preserveUserBentoEvents({ ...next }, { bento_events: bentoEvents })).toEqual(next)
+    expect(mergeUserOnboardingProgress(next, current)).toEqual(next)
   })
 
   it.concurrent('serializes writes for the same user', async () => {

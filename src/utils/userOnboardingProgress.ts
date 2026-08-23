@@ -33,6 +33,26 @@ export interface UserOnboardingProgress {
   completed_at?: string
 }
 
+export const USER_ONBOARDING_PROGRESS_FIELDS = {
+  app_id: true,
+  app_name: true,
+  completed_at: true,
+  details_step: true,
+  estimated_users_index: true,
+  existing_app: true,
+  existing_app_setup: true,
+  flow: true,
+  imported_store_app_id: true,
+  intent: true,
+  last_run_id: true,
+  onboarding_attempt_id: true,
+  org_name: true,
+  status: true,
+  step: true,
+  store_url: true,
+  updated_at: true,
+} as const satisfies Record<keyof UserOnboardingProgress, true>
+
 export interface UserOnboardingProgressInput {
   status: UserOnboardingStatus
   step: UserOnboardingStep

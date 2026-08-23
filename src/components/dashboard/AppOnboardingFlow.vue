@@ -48,7 +48,7 @@ import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
 import {
   MAX_USER_ONBOARDING_WRITE_ATTEMPTS,
-  preserveUserBentoEvents,
+  mergeUserOnboardingProgress,
   replaceUserOnboardingIfUnchanged,
   serializeUserOnboardingWrite,
 } from '~/services/userOnboardingWriteQueue'
@@ -567,7 +567,7 @@ async function writeOnboardingProgress(
         currentOnboarding,
         main.isAdmin,
       )
-      const onboarding = preserveUserBentoEvents(
+      const onboarding = mergeUserOnboardingProgress(
         onboardingWithPreferences,
         currentOnboarding,
       )
