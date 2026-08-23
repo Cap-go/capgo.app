@@ -221,7 +221,7 @@ describe('user Bento event delivery', () => {
     expect(mocks.getPgClient).toHaveBeenCalledWith(expect.anything())
     expect(fastPool.query).toHaveBeenCalledOnce()
     expect(normalizeSql(fastPool.query.mock.calls[0]?.[0])).toBe(
-      'SELECT onboarding FROM public.users WHERE id = $1::uuid',
+      'SELECT email, onboarding FROM public.users WHERE id = $1::uuid',
     )
     expect(fastPool.query.mock.calls[0]?.[1]).toEqual([USER_ID])
     expect(fastPool.connect).not.toHaveBeenCalled()
@@ -229,6 +229,46 @@ describe('user Bento event delivery', () => {
     expect(mocks.trackBentoEvents).not.toHaveBeenCalled()
     expect(mocks.closeClient).toHaveBeenCalledTimes(1)
     expect(mocks.closeClient).toHaveBeenCalledWith(expect.anything(), fastPool)
+  })
+
+  it('delivers every onboarding step completion without persisting once-only state', async () => {
+    const fastPool = createFastPool({
+      rows: [{ email: 'bento.user@example.com', onboarding: {} }],
+    })
+    mocks.getPgClient.mockReturnValue(fastPool)
+
+    const tags = {
+      app_id: 'com.test.app', app_name: 'Test App', next_step: 'app_id', secret: 'must-not-leak',
+      step: 'app_name', step_index: 2, total_steps: 7,
+    }
+    await recordUserBentoEvent(createContext(), {
+      sourceEvent: 'onboarding_step_completed',
+      observedAt: OBSERVED_AT,
+      tags,
+      userId: USER_ID,
+    })
+    await recordUserBentoEvent(createContext(), {
+      sourceEvent: 'onboarding_step_completed',
+      observedAt: '2026-08-22T10:00:01.000Z',
+      tags,
+      userId: USER_ID,
+    })
+
+    expect(mocks.trackBentoEvents).toHaveBeenCalledTimes(2)
+    expect(mocks.trackBentoEvents).toHaveBeenNthCalledWith(1, expect.anything(), 'bento.user@example.com', [{
+      event: 'onboarding:step_completed',
+      data: {
+        app_id: 'com.test.app',
+        app_name: 'Test App',
+        next_step: 'app_id',
+        observed_at: OBSERVED_AT,
+        source_event: 'onboarding_step_completed',
+        step: 'app_name',
+        step_index: 2,
+        total_steps: 7,
+      },
+    }])
+    expect(fastPool.connect).not.toHaveBeenCalled()
   })
 
   it('holds the user lock through Bento and commits an additive sent_at patch', async () => {

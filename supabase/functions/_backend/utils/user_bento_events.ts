@@ -14,6 +14,7 @@ type DetailField
 
 interface UserBentoEventMapping {
   bentoEvent: UserBentoEventName
+  delivery: 'every' | 'once'
   fields: readonly DetailField[]
 }
 
@@ -21,13 +22,15 @@ export const USER_BENTO_EVENT_NAMES = [
   'cli:command_invoked',
   'cli:login_successful',
   'cli:onboarding_run_started',
+  'onboarding:step_completed',
 ] as const
 
 export type UserBentoEventName = typeof USER_BENTO_EVENT_NAMES[number]
 
-const CLI_BENTO_EVENT_REGISTRY = {
+const USER_BENTO_EVENT_REGISTRY = {
   'CLI Command Invoked': {
     bentoEvent: 'cli:command_invoked',
+    delivery: 'once',
     fields: [
       { key: 'command_path', type: 'string', maxLength: 128 },
       { key: 'flags', type: 'string', maxLength: 512 },
@@ -37,10 +40,12 @@ const CLI_BENTO_EVENT_REGISTRY = {
   },
   'User CLI login': {
     bentoEvent: 'cli:login_successful',
+    delivery: 'once',
     fields: [],
   },
   'onboarding-run-started': {
     bentoEvent: 'cli:onboarding_run_started',
+    delivery: 'once',
     fields: [
       { key: 'onboarding_event_version', type: 'integer', min: 1, max: 100 },
       { key: 'onboarding_journey_id', type: 'string', maxLength: 80 },
@@ -52,12 +57,34 @@ const CLI_BENTO_EVENT_REGISTRY = {
       { key: 'total_steps', type: 'integer', min: 0, max: 1_000 },
     ],
   },
+  'onboarding_step_completed': {
+    bentoEvent: 'onboarding:step_completed',
+    delivery: 'every',
+    fields: [
+      { key: 'app_id', type: 'string', maxLength: 255 },
+      { key: 'app_name', type: 'string', maxLength: 255 },
+      { key: 'duration_ms', type: 'integer', min: 0, max: Number.MAX_SAFE_INTEGER },
+      { key: 'flow', type: 'string', maxLength: 32 },
+      { key: 'intent', type: 'string', maxLength: 32 },
+      { key: 'next_step', type: 'string', maxLength: 32 },
+      { key: 'onboarding_attempt_id', type: 'string', maxLength: 80 },
+      { key: 'onboarding_run_id', type: 'string', maxLength: 80 },
+      { key: 'onboarding_version', type: 'integer', min: 1, max: 100 },
+      { key: 'previous_step', type: 'string', maxLength: 32 },
+      { key: 'resumed', type: 'boolean' },
+      { key: 'step', type: 'string', maxLength: 32 },
+      { key: 'step_index', type: 'integer', min: 0, max: 100 },
+      { key: 'store_import_used', type: 'boolean' },
+      { key: 'total_steps', type: 'integer', min: 0, max: 100 },
+    ],
+  },
 } as const satisfies Record<string, UserBentoEventMapping>
 
-type SourceEventName = keyof typeof CLI_BENTO_EVENT_REGISTRY
+type SourceEventName = keyof typeof USER_BENTO_EVENT_REGISTRY
 
 export interface MappedUserBentoEvent {
   bentoEvent: UserBentoEventName
+  delivery: UserBentoEventMapping['delivery']
   details: UserBentoDetails
 }
 
@@ -73,7 +100,7 @@ export const MAX_USER_BENTO_DETAILS = 5
 
 const USER_BENTO_TIMEOUT_MS = 5_000
 const FAST_STATE_SQL = `
-  SELECT onboarding
+  SELECT email, onboarding
   FROM public.users
   WHERE id = $1::uuid
 `
@@ -114,13 +141,13 @@ function validIsoDate(value: unknown): value is string {
 }
 
 function sourceMapping(event: string) {
-  if (!Object.hasOwn(CLI_BENTO_EVENT_REGISTRY, event))
+  if (!Object.hasOwn(USER_BENTO_EVENT_REGISTRY, event))
     return undefined
-  return CLI_BENTO_EVENT_REGISTRY[event as SourceEventName]
+  return USER_BENTO_EVENT_REGISTRY[event as SourceEventName]
 }
 
 function mappingForBentoEvent(event: UserBentoEventName) {
-  return (Object.entries(CLI_BENTO_EVENT_REGISTRY) as Array<[
+  return (Object.entries(USER_BENTO_EVENT_REGISTRY) as Array<[
     SourceEventName,
     UserBentoEventMapping,
   ]>).find(([, mapping]) => mapping.bentoEvent === event)
@@ -156,7 +183,7 @@ export function buildMappedUserBentoEvent(input: {
   observedAt: string
   orgId?: string
   sourceEvent: string
-  tags?: Record<string, TelemetryValue>
+  tags?: Record<string, unknown>
 }): MappedUserBentoEvent | undefined {
   const mapping = sourceMapping(input.sourceEvent)
   if (!mapping || !validIsoDate(input.observedAt))
@@ -171,7 +198,7 @@ export function buildMappedUserBentoEvent(input: {
   if (input.appId)
     details.app_id = truncate(input.appId, 255)
   copyMappedFields(details, input.tags, mapping.fields)
-  return { bentoEvent: mapping.bentoEvent, details }
+  return { bentoEvent: mapping.bentoEvent, delivery: mapping.delivery, details }
 }
 
 function sanitizeStoredDetail(
@@ -278,7 +305,7 @@ export interface RecordUserBentoEventInput {
   observedAt?: string
   orgId?: string
   sourceEvent: string
-  tags?: Record<string, TelemetryValue>
+  tags?: Record<string, unknown>
   userId: string
 }
 
@@ -497,15 +524,23 @@ export async function recordUserBentoEvent(
 
   try {
     let fastPool: ReturnType<typeof getPgClient> | undefined
+    let fastEmail: string | undefined
     let fastState: StoredUserBentoEvents
     try {
       fastPool = getPgClient(c)
-      const result = await fastPool.query<{ onboarding: unknown }>(FAST_STATE_SQL, [input.userId])
+      const result = await fastPool.query<{ email: string, onboarding: unknown }>(FAST_STATE_SQL, [input.userId])
+      fastEmail = result.rows[0]?.email
       fastState = parseUserBentoEvents(result.rows[0]?.onboarding)
     }
     finally {
       if (fastPool)
         await closeClient(c, fastPool)
+    }
+
+    if (observation.delivery === 'every') {
+      if (fastEmail)
+        await backgroundTask(c, trackBentoEvents(c, fastEmail, [{ event: observation.bentoEvent, data: observation.details }]))
+      return
     }
 
     const currentSent = validIsoDate(fastState[observation.bentoEvent]?.sent_at)

@@ -477,7 +477,7 @@ app.post('/', middlewareAuth(), async (c) => {
   await recordUserBentoEvent(c, {
     userId: c.get('auth')!.userId,
     sourceEvent: trackedBody.event,
-    tags: trackedBody.tags,
+    tags: { ...trackedBody.tags, ...body.nonPersonTags },
     orgId: verifiedOrgId,
     appId: verifiedOrgId ? appId : undefined,
   })
