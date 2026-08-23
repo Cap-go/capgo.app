@@ -5,7 +5,7 @@ export const AI_INSTRUCTIONS_COPIED_EVENT = 'onboarding_ai_instructions_copied'
 interface AiInstructionsCopiedInput {
   appId?: string
   event: string
-  nonPersonTags?: Record<string, string | number | boolean>
+  nonPersonTags?: Record<string, unknown>
   orgId?: string
 }
 
