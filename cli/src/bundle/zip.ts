@@ -9,6 +9,7 @@ import { checkAlerts } from '../api/update'
 import { getChecksum } from '../checksum'
 import {
   baseKeyV2,
+  canPromptInteractively,
   findRoot,
   formatError,
   getAppId,
@@ -20,6 +21,8 @@ import {
   zipFile,
 } from '../utils'
 import { checkIndexPosition, searchInDirectory } from './check'
+import { ensureNotifyAppReadyInBuildFolder, buildCiNotifyAppReadyMessage } from '../recovery/notify-app-ready'
+import { resolveAppIdWithRecovery } from '../recovery/app-id'
 
 export type { ZipResult } from '../schemas/bundle'
 
@@ -45,7 +48,13 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
       await checkAlerts()
 
     const extConfig = await getConfig()
-    const resolvedAppId = getAppId(appId, extConfig?.config)
+    const interactive = canPromptInteractively({ silent: json || silent })
+    const resolvedAppId = await resolveAppIdWithRecovery({
+      appIdArg: appId,
+      config: extConfig?.config,
+      interactive,
+      json,
+    })
 
     const uuid = randomUUID().split('-')[0]
     const packVersion = getBundleVersion('', options.packageJson)
@@ -81,22 +90,23 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
     if (shouldShowPrompts)
       log.info(`Started from path "${path}"`)
 
-    const shouldCheckNotifyAppReady = typeof options.codeCheck === 'undefined' ? true : options.codeCheck
+    const shouldCheckNotifyAppReady = options.codeCheck !== false && !options.ignoreNotifyAppReady
 
     if (shouldCheckNotifyAppReady) {
-      const isPluginConfigured = searchInDirectory(path, 'notifyAppReady')
-      if (!isPluginConfigured) {
-        if (!silent) {
+      if (!searchInDirectory(path, 'notifyAppReady')) {
+        const recovery = await ensureNotifyAppReadyInBuildFolder({
+          webDir: path,
+          interactive,
+          json,
+        })
+        if (recovery !== 'skipped' && !searchInDirectory(path, 'notifyAppReady')) {
           if (json)
             emitJsonError({ error: 'notifyAppReady_not_in_source_code' })
-          else
-            log.error('notifyAppReady() is missing in the build folder of your app. see: https://capgo.app/docs/plugin/api/#notifyappready')
+          throw new Error(buildCiNotifyAppReadyMessage(path))
         }
-        throw new Error('notifyAppReady() is missing in build folder')
       }
 
-      const foundIndex = checkIndexPosition(path)
-      if (!foundIndex) {
+      if (!checkIndexPosition(path)) {
         if (!silent) {
           if (json)
             emitJsonError({ error: 'index_html_not_found' })

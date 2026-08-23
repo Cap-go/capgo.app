@@ -32,6 +32,8 @@ import { resolveAutoBumpLevelFromAi } from './auto-bump-ai'
 import { maybePromptBuilderCta, shouldBlockIncompatibleUpload } from './builder-cta'
 import { checkIndexPosition, searchInDirectory } from './check'
 import { summarizeUploadCompatibility } from './compatibility'
+import { ensureNotifyAppReadyInBuildFolder } from '../recovery/notify-app-ready'
+import { resolveAppIdWithRecovery } from '../recovery/app-id'
 import { prepareBundlePartialFiles, uploadPartial } from './partial'
 import { clackUploadReporter, getUploadReporter, runWithUploadReporter } from './reporter'
 import { formatUploadChannels, getChannelsToAssignByChecksum, parseUploadChannels } from './upload-channels'
@@ -145,8 +147,15 @@ function getApikey(options: OptionsUpload) {
   return apikey
 }
 
-function getAppIdAndPath(appId: string | undefined, options: OptionsUpload, config: CapacitorConfig) {
-  const finalAppId = getAppId(appId, config)
+async function getAppIdAndPath(appId: string | undefined, options: OptionsUpload, config: CapacitorConfig, interactive: boolean) {
+  const finalAppId = await resolveAppIdWithRecovery({
+    appIdArg: appId,
+    config,
+    apikey: options.apikey || findSavedKey(),
+    interactive,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
   const path = options.path || config?.webDir
 
   if (!finalAppId) {
@@ -163,15 +172,29 @@ function getAppIdAndPath(appId: string | undefined, options: OptionsUpload, conf
   return { appid: finalAppId, path }
 }
 
-function checkNotifyAppReady(options: OptionsUpload, path: string) {
-  const checkNotifyAppReady = options.codeCheck
+async function checkNotifyAppReady(options: OptionsUpload, path: string, interactive: boolean) {
+  if (options.codeCheck === false || options.ignoreNotifyAppReady)
+    return
 
-  if (typeof checkNotifyAppReady === 'undefined' || checkNotifyAppReady) {
-    const isPluginConfigured = searchInDirectory(path, 'notifyAppReady')
-    if (!isPluginConfigured) {
-      uploadFail(`notifyAppReady() is missing in the build folder of your app. see: https://capgo.app/docs/plugin/api/#notifyappready
-      If you are sure your app has this code, you can use the --no-code-check option`)
+  const shouldRunNotifyAppReadyCheck = options.codeCheck
+
+  if (typeof shouldRunNotifyAppReadyCheck === 'undefined' || shouldRunNotifyAppReadyCheck) {
+    if (!searchInDirectory(path, 'notifyAppReady')) {
+      const recovery = await ensureNotifyAppReadyInBuildFolder({
+        webDir: path,
+        interactive,
+      })
+      if (recovery === 'skipped')
+        return
     }
+
+    if (!searchInDirectory(path, 'notifyAppReady')) {
+      const message = `notifyAppReady() is missing in the build folder of your app. see: https://capgo.app/docs/plugins/updater/notifyappready
+      If you are sure your app has this code, you can use the --no-code-check or --ignore-notify-app-ready option`
+      log.error(message)
+      throw new Error(message.trim())
+    }
+
     const foundIndex = checkIndexPosition(path)
     if (!foundIndex) {
       uploadFail(`index.html is missing in the root folder of ${path}`)
@@ -1351,7 +1374,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     log.info(`  - Max chunk size: ${Math.floor(fileConfig.maxChunkSize / 1024 / 1024)} MB`)
   }
 
-  const { appid, path } = getAppIdAndPath(preAppid, options, extConfig.config)
+  const { appid, path } = await getAppIdAndPath(preAppid, options, extConfig.config, interactive)
   if (options.verbose)
     log.info(`[Verbose] App ID: ${appid}, Build path: ${path}`)
 
@@ -1365,7 +1388,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   const defaultStorageProvider: Exclude<UploadBundleResult['storageProvider'], undefined> = options.external ? 'external' : 'r2-direct'
   let encryptionMethod: UploadBundleResult['encryptionMethod'] = 'none'
 
-  checkNotifyAppReady(options, path)
+  await checkNotifyAppReady(options, path, interactive)
   if (options.verbose)
     log.info(`[Verbose] Code check passed (notifyAppReady found and index.html present)`)
 
