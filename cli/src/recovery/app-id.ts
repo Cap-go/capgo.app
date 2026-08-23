@@ -109,7 +109,7 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
   const {
     appIdArg,
     config,
-    apikey = findSavedKey(),
+    apikey,
     interactive = false,
     json = false,
     supaHost,
@@ -142,13 +142,14 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
     throw new Error(buildCiAppIdMessage())
   }
 
-  if (!apikey)
+  const resolvedApikey = apikey || findSavedKey()
+  if (!resolvedApikey)
     throw new Error('Missing API key. Run `npx @capgo/cli@latest login` first.')
 
   while (true) {
     let remoteApps: Database['public']['Tables']['apps']['Row'][] = []
     try {
-      remoteApps = await fetchCapgoApps(apikey, supaHost, supaAnon)
+      remoteApps = await fetchCapgoApps(resolvedApikey, supaHost, supaAnon)
     }
     catch (error) {
       log.warn(formatError(error))
@@ -225,9 +226,9 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
       if (pIsCancel(entered))
         continue
       const appId = (entered as string).trim()
-      const supabase = await createSupabaseClient(apikey, supaHost, supaAnon)
-      const organization = await getOrganizationWithPermission(supabase, apikey, 'org.create_app')
-      await addAppInternal(appId, { apikey, supaHost, supaAnon }, organization, true)
+      const supabase = await createSupabaseClient(resolvedApikey, supaHost, supaAnon)
+      const organization = await getOrganizationWithPermission(supabase, resolvedApikey, 'org.create_app')
+      await addAppInternal(appId, { apikey: resolvedApikey, supaHost, supaAnon }, organization, true)
       await persistAppIdToConfig(appId)
       log.success(`Created app ${appId} in Capgo`)
       void trackEvent({ channel: 'app', event: 'CLI Recovered Missing AppId', tags: { recovery: 'create-app' } })

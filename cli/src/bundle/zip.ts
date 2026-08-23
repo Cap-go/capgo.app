@@ -12,7 +12,6 @@ import {
   canPromptInteractively,
   findRoot,
   formatError,
-  getAppId,
   getBundleVersion,
   getConfig,
   getInstalledVersion,
