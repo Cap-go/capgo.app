@@ -22,6 +22,7 @@
 - `src/services/adminFrontendOnboarding.ts` — define the new response types and map dynamic groups to stable stacked-bar series.
 - `src/pages/admin/dashboard/frontend-onboarding.vue` — render the new graph after the current daily CLI-outcomes graph.
 - `messages/en.json` — title, description, and reserved-group labels.
+- `messages/en.context.json` — generated translation context for the new labels.
 - `tests/frontend-onboarding-daily-setup-cli-outcomes.unit.test.ts` — HogQL projection and normalized-row validation.
 - `tests/frontend-onboarding-daily-setup-cli-outcomes-model.unit.test.ts` — classification, attribution, no-double-counting, zero filling, and deterministic order.
 - `tests/frontend-onboarding-analytics.unit.test.ts` — response integration.
