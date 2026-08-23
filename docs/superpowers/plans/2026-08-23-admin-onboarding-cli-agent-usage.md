@@ -508,7 +508,7 @@ Expected: every command exits 0.
 - [ ] **Step 6: Commit the dashboard graph**
 
 ```bash
-git add src/pages/admin/dashboard/frontend-onboarding.vue messages/en.json tests/admin-frontend-onboarding-dashboard.unit.test.ts
+git add src/pages/admin/dashboard/frontend-onboarding.vue messages/en.json messages/en.context.json tests/admin-frontend-onboarding-dashboard.unit.test.ts
 git commit -m "feat(admin): chart onboarding CLI agent usage"
 ```
 

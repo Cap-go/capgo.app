@@ -361,8 +361,9 @@ describe('buildFrontendOnboardingDailySetupCliAgentUsage', () => {
 
     expect(buildFrontendOnboardingDailySetupCliAgentUsage([
       setup('person', august3 + 1_000),
-      cli('person', august3 + 2_000, { agentInvoker: true, agentId: 'codex', agentName: 'Zeta Codex' }),
-      cli('person', august3 + 3_000, { agentInvoker: true, agentId: 'codex', agentName: 'Alpha Codex' }),
+      cli('person', august3 + 2_000, { agentInvoker: true, agentId: 'codex' }),
+      cli('person', august3 + 3_000, { agentInvoker: true, agentId: 'codex', agentName: 'Zeta Codex' }),
+      cli('person', august3 + 4_000, { agentInvoker: true, agentId: 'codex', agentName: 'Alpha Codex' }),
     ], august3, august3 + 86_400_000).groups).toEqual([
       { key: 'agent:codex', agent_id: 'codex', agent_name: 'Zeta Codex' },
     ])
