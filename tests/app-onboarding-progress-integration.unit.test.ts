@@ -110,7 +110,7 @@ describe('app onboarding progress analytics integration', () => {
     ])
   })
 
-  it('preserves Bento state from the refreshed CAS snapshot on retry', async () => {
+  it('preserves server-owned state from the refreshed CAS snapshot on retry', async () => {
     const previousUser = writerMocks.main.user
     const matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
     const initialBentoEvents = {
@@ -130,8 +130,28 @@ describe('app onboarding progress analytics integration', () => {
         sent_at: '2026-08-22T10:05:01.000Z',
       },
     }
-    const initialOnboarding = { bento_events: initialBentoEvents }
-    const refreshedOnboarding = { bento_events: refreshedBentoEvents }
+    const initialABTests = {
+      new_emails: {
+        assigned_at: '2026-08-23T13:15:06.300Z',
+        branch: 'A',
+      },
+    }
+    const refreshedABTests = {
+      new_emails: {
+        assigned_at: '2026-08-23T13:15:06.300Z',
+        branch: 'B',
+      },
+    }
+    const initialOnboarding = {
+      abtests: initialABTests,
+      bento_events: initialBentoEvents,
+      future_server_state: { revision: 1 },
+    }
+    const refreshedOnboarding = {
+      abtests: refreshedABTests,
+      bento_events: refreshedBentoEvents,
+      future_server_state: { revision: 2 },
+    }
     writerMocks.refreshUser.mockReset()
     writerMocks.replaceUserOnboardingIfUnchanged.mockReset()
     writerMocks.main.user = {
@@ -162,12 +182,17 @@ describe('app onboarding progress analytics integration', () => {
       await vi.waitFor(() => expect(writerMocks.replaceUserOnboardingIfUnchanged).toHaveBeenCalledTimes(2))
 
       expect(writerMocks.replaceUserOnboardingIfUnchanged.mock.calls[0]?.[2]).toEqual(expect.objectContaining({
+        abtests: initialABTests,
         bento_events: initialBentoEvents,
+        future_server_state: { revision: 1 },
       }))
       expect(writerMocks.replaceUserOnboardingIfUnchanged.mock.calls[1]?.[1]).toEqual(refreshedOnboarding)
       expect(writerMocks.replaceUserOnboardingIfUnchanged.mock.calls[1]?.[2]).toEqual(expect.objectContaining({
+        abtests: refreshedABTests,
         bento_events: refreshedBentoEvents,
+        future_server_state: { revision: 2 },
       }))
+      expect(writerMocks.replaceUserOnboardingIfUnchanged.mock.calls[1]?.[2]?.abtests).not.toEqual(initialABTests)
       expect(writerMocks.replaceUserOnboardingIfUnchanged.mock.calls[1]?.[2]?.bento_events).not.toEqual(initialBentoEvents)
     }
     finally {
@@ -312,7 +337,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(writer).toContain('await replaceUserOnboardingIfUnchanged(')
     expectSourceOrder(writer, [
       'const onboardingWithPreferences = preserveAdminDashboardMinimize(',
-      'const onboarding = preserveUserBentoEvents(',
+      'const onboarding = mergeUserOnboardingProgress(',
       'await replaceUserOnboardingIfUnchanged(',
     ])
     expectSourceOrder(writer, [
