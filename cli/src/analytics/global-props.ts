@@ -1,5 +1,6 @@
 import { platform, release } from 'node:os'
-import { arch, version as nodeVersion } from 'node:process'
+import { arch, env, version as nodeVersion } from 'node:process'
+import { detectAgent, type DetectedAgent } from 'agent-cli-detector'
 import { isCI, name as ciName } from 'ci-info'
 import pack from '../../package.json'
 
@@ -25,6 +26,8 @@ export interface GlobalAnalyticsProps {
   is_ci: boolean
   is_tty: boolean
   invocation_source: InvocationSource
+  agent_invoker: boolean
+  agent_identity?: DetectedAgent
   ci_provider?: string
 }
 
@@ -34,7 +37,8 @@ export interface GlobalAnalyticsProps {
  * many direct sendEvent() callers are tagged with the runtime OS, arch, OS
  * release, timezone, CLI/Node versions and CI context.
  */
-export function getGlobalAnalyticsProps(): GlobalAnalyticsProps {
+export function getGlobalAnalyticsProps(environment: NodeJS.ProcessEnv = env): GlobalAnalyticsProps {
+  const detectedAgent = detectAgent({ env: environment })
   const props: GlobalAnalyticsProps = {
     cli_version: pack.version,
     node_version: nodeVersion,
@@ -45,7 +49,10 @@ export function getGlobalAnalyticsProps(): GlobalAnalyticsProps {
     is_ci: isCI,
     is_tty: Boolean(process.stdout.isTTY),
     invocation_source: invocationSource,
+    agent_invoker: detectedAgent.detected,
   }
+  if (detectedAgent.detected && detectedAgent.agent)
+    props.agent_identity = detectedAgent.agent
   if (ciName)
     props.ci_provider = ciName
   return props

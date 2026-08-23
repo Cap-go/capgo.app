@@ -43,7 +43,7 @@ interface TrackEventBody extends TrackOptions {
   org_id?: string
   parser?: 'markdown' | 'text'
   tracking_version?: number | string
-  nonPersonTags?: Record<string, string | number | boolean>
+  nonPersonTags?: Record<string, unknown>
 }
 
 function isTrackingV2(version: unknown) {

@@ -37,7 +37,7 @@ export interface SendEventToTrackingPayload extends TrackOptions {
   bento?: BentoTrackingPayload
   groups?: PostHogGroups
   sentToBento?: boolean
-  nonPersonTags?: Record<string, string | number | boolean>
+  nonPersonTags?: Record<string, unknown>
 }
 
 export interface SendEventToTrackingOptions {

@@ -1935,7 +1935,7 @@ export async function updateOrCreateChannel(supabase: SupabaseClient<Database>, 
     .single()
 }
 
-type SendEventPayload = TrackOptions & { nonPersonTags?: Record<string, string | number | boolean> } & (
+type SendEventPayload = TrackOptions & { nonPersonTags?: Record<string, unknown> } & (
   | { notifyConsole: true, icon?: string }
   | { notifyConsole?: false, icon?: never }
 )
