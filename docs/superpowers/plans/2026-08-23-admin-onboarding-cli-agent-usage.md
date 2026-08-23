@@ -419,6 +419,7 @@ git commit -m "feat(admin): map CLI agent usage chart data"
 **Files:**
 - Modify: `src/pages/admin/dashboard/frontend-onboarding.vue`
 - Modify: `messages/en.json`
+- Modify: `messages/en.context.json`
 - Test: `tests/admin-frontend-onboarding-dashboard.unit.test.ts`
 
 - [ ] **Step 1: Add failing placement and translation assertions**
@@ -485,12 +486,17 @@ const hasDailySetupCliAgentData = computed(() => dailySetupCliAgentSeries.value.
 </ChartCard>
 ```
 
-Add the title, description, and four reserved labels to `messages/en.json`.
+Add the title, description, and four reserved labels to `messages/en.json`, then regenerate their context entries:
+
+```bash
+bun run i18n:contexts
+```
 
 - [ ] **Step 5: Run focused tests, lint, typecheck, and build**
 
 ```bash
 bunx vitest run tests/frontend-onboarding-daily-setup-cli-outcomes-model.unit.test.ts tests/frontend-onboarding-daily-setup-cli-outcomes.unit.test.ts tests/frontend-onboarding-analytics.unit.test.ts tests/admin-frontend-onboarding-dashboard.unit.test.ts
+bun run i18n:contexts
 bun lint
 bun typecheck
 bun build

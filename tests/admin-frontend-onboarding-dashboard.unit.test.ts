@@ -511,6 +511,25 @@ describe('admin frontend onboarding dashboard', () => {
     }])
   })
 
+  it.concurrent('maps Unknown agent and falls back to the raw dynamic agent key', () => {
+    const labels = {
+      multiple_agents: 'Multiple agents',
+      unknown_agent: 'Unknown agent',
+      no_agent: 'No agent',
+      no_cli_invoked: 'No CLI invoked',
+    }
+    const usage = {
+      groups: [{ key: 'unknown_agent' }, { key: 'agent:raw-fallback' }],
+      points: [{ date: '2026-08-09', counts: { unknown_agent: 2, 'agent:raw-fallback': 1 } }],
+    }
+
+    const series = buildFrontendOnboardingDailySetupCliAgentSeries(usage, labels)
+
+    expect(series.map(item => item.label)).toEqual(['Unknown agent', 'raw-fallback'])
+    expect(series[0].color).toBe('#f59e0b')
+    expect(series[1].color).toBe(buildFrontendOnboardingDailySetupCliAgentSeries(usage, labels)[1].color)
+  })
+
   it.concurrent('adapts reordered funnel stages with stable key-based colors', () => {
     expect(buildFrontendOnboardingFunnelStages([
       analytics.funnels.v1[3],

@@ -221,6 +221,60 @@ describe('getFrontendOnboardingDailySetupCliEvents', () => {
     }])
   })
 
+  it('normalizes numeric PostHog Boolean values on CLI events', async () => {
+    queryPosthogHogqlMock.mockResolvedValueOnce({
+      configured: true,
+      connected: true,
+      failureReason: null,
+      rows: [
+        {
+          person_id: 'person-agent',
+          timestamp_ms: 1_787_500_000_000,
+          event_kind: 'cli_command',
+          command_path: 'app list',
+          agent_invoker: 1,
+          agent_id: 'codex',
+          agent_name: 'Codex',
+          total_events: 2,
+        },
+        {
+          person_id: 'person-human',
+          timestamp_ms: 1_787_500_000_001,
+          event_kind: 'cli_command',
+          command_path: 'app list',
+          agent_invoker: 0,
+          agent_id: '',
+          agent_name: '',
+          total_events: 2,
+        },
+      ],
+    })
+
+    await expect(getFrontendOnboardingDailySetupCliEvents(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+      '2026-08-04T00:00:00.000Z',
+    )).resolves.toEqual([
+      {
+        personId: 'person-agent',
+        timestampMs: 1_787_500_000_000,
+        kind: 'cli_command',
+        commandPath: 'app list',
+        agentInvoker: true,
+        agentId: 'codex',
+        agentName: 'Codex',
+      },
+      {
+        personId: 'person-human',
+        timestampMs: 1_787_500_000_001,
+        kind: 'cli_command',
+        commandPath: 'app list',
+        agentInvoker: false,
+      },
+    ])
+  })
+
   it('returns an empty list for a successful empty query', async () => {
     await expect(getFrontendOnboardingDailySetupCliEvents(
       createContext(),
@@ -440,6 +494,7 @@ describe('getFrontendOnboardingDailySetupCliEvents', () => {
     ['missing CLI path', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'cli_command', total_events: 1 }],
     ['whitespace CLI path', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'cli_command', command_path: '   ', total_events: 1 }],
     ['non-Boolean agent invoker', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'cli_command', command_path: 'init', agent_invoker: 'true', total_events: 1 }],
+    ['out-of-range numeric agent invoker', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'cli_command', command_path: 'init', agent_invoker: 2, total_events: 1 }],
     ['non-string agent ID', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'cli_command', command_path: 'init', agent_invoker: true, agent_id: 42, total_events: 1 }],
     ['non-string agent name', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'cli_command', command_path: 'init', agent_invoker: true, agent_name: ['Codex'], total_events: 1 }],
   ])('rejects the whole query result for a malformed %s row', async (_name, row) => {

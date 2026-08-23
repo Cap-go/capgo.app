@@ -28,6 +28,15 @@ function timestampMs(value: unknown): number | null {
   return Number.isSafeInteger(timestamp) && timestamp > 0 ? timestamp : null
 }
 
+function posthogBoolean(value: unknown): boolean | null {
+  if (typeof value === 'boolean')
+    return value
+  if (value === 0 || value === 1)
+    return value === 1
+
+  return null
+}
+
 function mapEvent(row: Record<string, unknown>): FrontendOnboardingDailySetupCliEvent {
   const personId = typeof row.person_id === 'string' ? row.person_id.trim() : ''
   const timestamp = timestampMs(row.timestamp_ms)
@@ -43,8 +52,8 @@ function mapEvent(row: Record<string, unknown>): FrontendOnboardingDailySetupCli
     if (typeof commandPath !== 'string' || commandPath.trim() === '')
       throw new Error(INVALID_ROW_ERROR)
 
-    const agentInvoker = row.agent_invoker ?? false
-    if (typeof agentInvoker !== 'boolean')
+    const agentInvoker = posthogBoolean(row.agent_invoker ?? false)
+    if (agentInvoker === null)
       throw new Error(INVALID_ROW_ERROR)
 
     const agentId = row.agent_id ?? ''

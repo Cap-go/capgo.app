@@ -355,4 +355,16 @@ describe('buildFrontendOnboardingDailySetupCliAgentUsage', () => {
       { key: 'no_cli_invoked' },
     ])
   })
+
+  it('uses the first non-empty name reported for an agent identity', () => {
+    const august3 = utcMs('2026-08-03')
+
+    expect(buildFrontendOnboardingDailySetupCliAgentUsage([
+      setup('person', august3 + 1_000),
+      cli('person', august3 + 2_000, { agentInvoker: true, agentId: 'codex', agentName: 'Zeta Codex' }),
+      cli('person', august3 + 3_000, { agentInvoker: true, agentId: 'codex', agentName: 'Alpha Codex' }),
+    ], august3, august3 + 86_400_000).groups).toEqual([
+      { key: 'agent:codex', agent_id: 'codex', agent_name: 'Zeta Codex' },
+    ])
+  })
 })

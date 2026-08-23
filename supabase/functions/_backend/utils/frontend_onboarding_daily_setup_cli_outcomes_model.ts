@@ -166,8 +166,7 @@ export function buildFrontendOnboardingDailySetupCliAgentUsage(
       totalsByGroup.set(groupKey, (totalsByGroup.get(groupKey) ?? 0) + 1)
 
       for (const [agentId, agentName] of anchor.agentSignals.agents) {
-        const existingName = agentNames.get(agentId)
-        if (!existingName || agentName.localeCompare(existingName) < 0)
+        if (agentName && !agentNames.has(agentId))
           agentNames.set(agentId, agentName)
       }
     }
@@ -309,10 +308,9 @@ function buildFrontendOnboardingDailySetupCliAnchors(
       anchor.agentSignals.cliInvoked = true
       if (event.agentInvoker) {
         if (event.agentId) {
-          const agentName = event.agentName || event.agentId
           const existingName = anchor.agentSignals.agents.get(event.agentId)
-          if (!existingName || agentName.localeCompare(existingName) < 0)
-            anchor.agentSignals.agents.set(event.agentId, agentName)
+          if (!anchor.agentSignals.agents.has(event.agentId) || (!existingName && event.agentName))
+            anchor.agentSignals.agents.set(event.agentId, event.agentName ?? '')
         }
         else {
           anchor.agentSignals.unknownAgentInvoked = true

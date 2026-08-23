@@ -46,7 +46,7 @@ For each displayed Setup anchor, inspect only `CLI Command Invoked` events assig
 
 1. No CLI events: **No CLI invoked**.
 2. One or more CLI events, but every event has `agent_invoker != true`: **No agent**.
-3. Agent invocation events contain exactly one unique non-empty `agent_identity.id`: the group label is the first non-empty `agent_identity.name`, falling back to the ID.
+3. Every agent invocation event contains a usable `agent_identity.id`, and those events contain exactly one unique ID: the group label is the first non-empty `agent_identity.name`, falling back to the ID.
 4. Agent invocation events contain more than one unique identity ID: **Multiple agents**.
 5. At least one event has `agent_invoker = true`, but none contains a usable identity ID: **Unknown agent**.
 6. A known identity plus an unknown detected identity is **Multiple agents**, since more than one invocation environment was observed but not fully identified.
