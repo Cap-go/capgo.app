@@ -3017,7 +3017,7 @@ export async function promptAndSyncCapacitor(
         log.error('Stop here to avoid testing on a broken native iOS project.')
         log.warn(resetAdvice.summary)
         log.info(resetAdvice.command)
-        throw new Error('iOS sync validation failed. Delete your iOS folder, then rerun the add and sync commands above and retry.')
+        throw new CliUserError('iOS sync validation failed. Delete your iOS folder, then rerun the add and sync commands above and retry.')
       }
     }
 

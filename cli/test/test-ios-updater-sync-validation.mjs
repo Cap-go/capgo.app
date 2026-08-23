@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { validateIosUpdaterSync } from '../src/utils.ts'
@@ -221,6 +221,14 @@ await test('monorepo packageJsonPath points validation to app iOS folder', () =>
   finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+await test('promptAndSync throws CliUserError when iOS sync validation fails', () => {
+  const utilsSource = readFileSync(new URL('../src/utils.ts', import.meta.url), 'utf-8')
+  assert(
+    utilsSource.includes("throw new CliUserError('iOS sync validation failed. Delete your iOS folder, then rerun the add and sync commands above and retry.')"),
+    'Expected promptAndSync to throw CliUserError for iOS sync validation failure',
+  )
 })
 
 await test('corrupted package.json does not crash validation', () => {
