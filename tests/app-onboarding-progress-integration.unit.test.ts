@@ -415,6 +415,9 @@ describe('app onboarding progress analytics integration', () => {
     const intentTransition = sourceBetween('function continueFromIntent()', 'function continuePreOrgDetails()')
     expect(intentTransition).toContain(`completeAndViewStep('details', { intent: selectedIntent.value })`)
 
+    const appNameTransition = sourceBetween('function continueFromAppName()', 'function continueFromAppId()')
+    expect(appNameTransition).toContain(`completeAndViewAppDetailsStep('app_id', { appId: generatedAppId.value, appName: appName.value.trim() })`)
+
     const preOrgDetailsTransition = sourceBetween('function continuePreOrgDetails()', 'async function createOrganizationAndApp()')
     expect(preOrgDetailsTransition).toContain(`completeAndViewStep('organization', {`)
     expect(preOrgDetailsTransition).toContain('storeImportUsed: hasImportedStoreMetadata.value')

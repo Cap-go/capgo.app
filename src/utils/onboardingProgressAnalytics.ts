@@ -70,6 +70,7 @@ interface CreateOnboardingTelemetryIdentityOptions {
 
 export interface OnboardingStepCompletionProperties {
   appId?: string
+  appName?: string
   intent?: OnboardingIntent
   nextStep?: OnboardingAnalyticsStep
   storeImportUsed?: boolean
@@ -339,6 +340,8 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
       properties.next_step = completion.nextStep
     if (completion.appId)
       properties.app_id = completion.appId
+    if (completion.appName)
+      properties.app_name = completion.appName
     if (completion.intent)
       properties.intent = completion.intent
     if (completion.storeImportUsed !== undefined)
