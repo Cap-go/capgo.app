@@ -23,7 +23,7 @@ import { isCI } from 'ci-info'
 // Native fetch is available in Node.js >= 18
 import prettyjson from 'prettyjson'
 import * as tus from 'tus-js-client'
-import { buildCliRequestHeaders } from './analytics/cli-headers'
+import { buildCliRequestHeaders, validateCliRequestHeaderValue } from './analytics/cli-headers'
 import { getGlobalAnalyticsProps } from './analytics/global-props'
 import { getActiveUploadReporter } from './bundle/reporter'
 import { createTimedFetch, isSupabaseInstrumentationEnabled } from './analytics/supabase-perf'
@@ -1051,7 +1051,7 @@ export async function createSupabaseClient(apikey: string, supaHost?: string, su
     },
     global: {
       headers: {
-        capgkey: apikey,
+        capgkey: validateCliRequestHeaderValue('capgkey', apikey),
       },
       ...(isSupabaseInstrumentationEnabled() && instrument ? { fetch: createTimedFetch() } : {}),
     },
