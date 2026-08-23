@@ -392,7 +392,7 @@ describe('onboarding progress analytics', () => {
 
     tracker.viewStep('intent')
     now = 1_125.9
-    tracker.completeStep('intent', { intent: 'ota', nextStep: 'details' })
+    tracker.completeStep('intent', { appName: 'Acme App', intent: 'ota', nextStep: 'details' })
     tracker.viewStep('details', 'intent')
 
     expect(capture.mock.calls.map(call => call[0])).toEqual([
@@ -403,6 +403,7 @@ describe('onboarding progress analytics', () => {
     expect(capture.mock.calls[1]?.[2]).toEqual({
       duration_ms: 125,
       flow: 'pre_org',
+      app_name: 'Acme App',
       intent: 'ota',
       next_step: 'details',
       onboarding_attempt_id: ATTEMPT_A1,
@@ -691,7 +692,7 @@ describe('onboarding progress analytics', () => {
     expect(capture.mock.calls[0]?.[0]).toBe('onboarding_step_viewed')
   })
 
-  it.concurrent('never exposes free-text fields and never lets capture failures escape', () => {
+  it.concurrent('only exposes approved fields and never lets capture failures escape', () => {
     const capture = vi.fn<(
       name: string,
       supaHost: string,
@@ -717,6 +718,7 @@ describe('onboarding progress analytics', () => {
 
     const allowedKeys = new Set([
       'app_id',
+      'app_name',
       'duration_ms',
       'flow',
       'intent',

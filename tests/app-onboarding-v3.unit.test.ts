@@ -18,7 +18,7 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain("type AppDetailsStep = 'name' | 'app_id' | 'icon'")
     expect(onboardingSource).toContain("const appDetailsStep = ref<AppDetailsStep>('name')")
     expect(onboardingSource).toContain('const hasProvidedAppId = computed(() => Boolean(manualAppId.value.trim() || importedStoreAppId.value.trim()))')
-    expect(onboardingSource).toContain("completeAndViewAppDetailsStep('app_id')")
+    expect(onboardingSource).toContain("completeAndViewAppDetailsStep('app_id', { appId: generatedAppId.value, appName: appName.value.trim() })")
     expect(onboardingSource).toContain("completeAndViewAppDetailsStep('icon')")
     expect(onboardingSource).toContain(":data-test=\"appDetailsStep === 'app_id' && !hasProvidedAppId ? 'app-onboarding-skip-app-id' : 'app-onboarding-continue'\"")
     expect(onboardingSource).toContain('function skipAppId()')

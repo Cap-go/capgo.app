@@ -1250,10 +1250,10 @@ function applyAppIdSuggestion(suggestion: string) {
   trackDetailsEvent('onboarding_app_id_suggestion_selected', { app_id_source: 'manual' })
 }
 
-function completeAndViewAppDetailsStep(nextDetailsStep: AppDetailsStep) {
+function completeAndViewAppDetailsStep(nextDetailsStep: AppDetailsStep, completionProperties: OnboardingStepCompletionProperties = {}) {
   const previousAnalyticsStep = analyticsStepFor('details')
   const nextAnalyticsStep = analyticsStepFor('details', nextDetailsStep)
-  progressTracker?.completeStep(previousAnalyticsStep, { nextStep: nextAnalyticsStep })
+  progressTracker?.completeStep(previousAnalyticsStep, { ...completionProperties, nextStep: nextAnalyticsStep })
   appDetailsStep.value = nextDetailsStep
   progressTracker?.viewStep(nextAnalyticsStep, previousAnalyticsStep)
   schedulePersistOnboardingProgress()
@@ -1269,7 +1269,7 @@ function continueFromAppName() {
     return
   }
 
-  completeAndViewAppDetailsStep('app_id')
+  completeAndViewAppDetailsStep('app_id', { appId: generatedAppId.value, appName: appName.value.trim() })
 }
 
 function continueFromAppId() {
