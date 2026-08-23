@@ -8,7 +8,10 @@ import {
   FRONTEND_ONBOARDING_VERSIONS,
 } from './frontend_onboarding_analytics_model.ts'
 import { getFrontendOnboardingDailySetupCliEvents } from './frontend_onboarding_daily_setup_cli_outcomes.ts'
-import { buildFrontendOnboardingDailySetupCliOutcomes } from './frontend_onboarding_daily_setup_cli_outcomes_model.ts'
+import {
+  buildFrontendOnboardingDailySetupCliAgentUsage,
+  buildFrontendOnboardingDailySetupCliOutcomes,
+} from './frontend_onboarding_daily_setup_cli_outcomes_model.ts'
 import { buildFrontendOnboardingWelcomeOutcomes } from './frontend_onboarding_welcome_outcomes_model.ts'
 import { cloudlogErr } from './logging.ts'
 import { queryPosthogHogql } from './posthog_read.ts'
@@ -501,6 +504,7 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
   }
   const analytics = buildFrontendOnboardingAnalytics(mapAttempts(posthog.rows), startMs, endMs)
   const dailySetupCliOutcomes = buildFrontendOnboardingDailySetupCliOutcomes(dailySetupCliEvents, startMs, endMs)
+  const dailySetupCliAgentUsage = buildFrontendOnboardingDailySetupCliAgentUsage(dailySetupCliEvents, startMs, endMs)
   const welcomeOutcomes = buildFrontendOnboardingWelcomeOutcomes(mapWelcomeAttempts(welcomePosthog.rows), startMs, endMs)
   let dailyTabSwitches: FrontendOnboardingDailyTabSwitches[]
   try {
@@ -523,6 +527,7 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
       daily_welcome_outcomes: welcomeOutcomes.deduplicated,
     },
     daily_setup_cli_outcomes: dailySetupCliOutcomes,
+    daily_setup_cli_agent_usage: dailySetupCliAgentUsage,
     daily_tab_switches: dailyTabSwitches,
     posthog_configured: posthog.configured,
     posthog_connected: posthog.connected,
