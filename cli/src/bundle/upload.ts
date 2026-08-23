@@ -149,7 +149,7 @@ function getApikey(options: OptionsUpload) {
 
 async function getAppIdAndPath(appId: string | undefined, options: OptionsUpload, config: CapacitorConfig, interactive: boolean) {
   const finalAppId = await resolveAppIdWithRecovery({
-    appIdArg: appId,
+    explicitAppId: appId,
     config,
     apikey: options.apikey || findSavedKey(true),
     interactive,

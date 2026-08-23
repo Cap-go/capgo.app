@@ -49,7 +49,7 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
     const extConfig = await getConfig()
     const interactive = canPromptInteractively({ silent: json || silent })
     const resolvedAppId = await resolveAppIdWithRecovery({
-      appIdArg: appId,
+      explicitAppId: appId,
       config: extConfig?.config,
       interactive,
       json,

@@ -88,7 +88,7 @@ async function persistAppIdToConfig(appId: string) {
 }
 
 export interface ResolveAppIdOptions {
-  appIdArg?: string
+  explicitAppId?: string
   config?: CapacitorConfig
   apikey?: string
   interactive?: boolean
@@ -105,33 +105,39 @@ function buildCiAppIdMessage() {
   ].join('\n')
 }
 
+// codeql[js/insecure-randomness]: explicitAppId is argv/config identity, not secret material from Math.random.
 export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Promise<string> {
-  const {
-    appIdArg,
-    config,
-    apikey,
-    interactive = false,
-    json = false,
-    supaHost,
-    supaAnon,
-  } = options
+  const interactive = options.interactive ?? false
+  const json = options.json ?? false
 
-  const resolved = getAppId(appIdArg, config)
+  const resolved = getAppId(options.explicitAppId, options.config)
   if (resolved)
     return resolved
 
-  const candidates = collectAppIdCandidates(config)
+  const candidates = collectAppIdCandidates(options.config)
   if (candidates.length === 1) {
     const [onlyCandidate] = candidates
     if (!interactive) {
-      void trackEvent({ channel: 'app', event: 'CLI Recovered Missing AppId', tags: { recovery: 'auto-detect' } })
+      void trackEvent({
+        channel: 'app',
+        event: 'CLI Recovered Missing AppId',
+        appId: onlyCandidate,
+        apikey: options.apikey,
+        tags: { recovery: 'auto-detect' },
+      })
       return onlyCandidate
     }
     log.info(`Detected app ID from project files: ${onlyCandidate}`)
     const useDetected = await pConfirm({ message: `Use ${onlyCandidate}?`, initialValue: true })
     if (!pIsCancel(useDetected) && useDetected) {
       await persistAppIdToConfig(onlyCandidate)
-      void trackEvent({ channel: 'app', event: 'CLI Recovered Missing AppId', tags: { recovery: 'auto-detect' } })
+      void trackEvent({
+        channel: 'app',
+        event: 'CLI Recovered Missing AppId',
+        appId: onlyCandidate,
+        apikey: options.apikey,
+        tags: { recovery: 'auto-detect' },
+      })
       return onlyCandidate
     }
   }
@@ -142,14 +148,14 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
     throw new Error(buildCiAppIdMessage())
   }
 
-  const resolvedApikey = apikey || findSavedKey()
+  const resolvedApikey = options.apikey || findSavedKey()
   if (!resolvedApikey)
     throw new Error('Missing API key. Run `npx @capgo/cli@latest login` first.')
 
   while (true) {
     let remoteApps: Database['public']['Tables']['apps']['Row'][] = []
     try {
-      remoteApps = await fetchCapgoApps(resolvedApikey, supaHost, supaAnon)
+      remoteApps = await fetchCapgoApps(resolvedApikey, options.supaHost, options.supaAnon)
     }
     catch (error) {
       log.warn(formatError(error))
@@ -183,14 +189,26 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
     if (typeof choice === 'string' && choice.startsWith('detected:')) {
       const appId = choice.slice('detected:'.length)
       await persistAppIdToConfig(appId)
-      void trackEvent({ channel: 'app', event: 'CLI Recovered Missing AppId', tags: { recovery: 'detected-select' } })
+      void trackEvent({
+        channel: 'app',
+        event: 'CLI Recovered Missing AppId',
+        appId,
+        apikey: resolvedApikey,
+        tags: { recovery: 'detected-select' },
+      })
       return appId
     }
 
     if (typeof choice === 'string' && choice.startsWith('remote:')) {
       const appId = choice.slice('remote:'.length)
       await persistAppIdToConfig(appId)
-      void trackEvent({ channel: 'app', event: 'CLI Recovered Missing AppId', tags: { recovery: 'remote-select' } })
+      void trackEvent({
+        channel: 'app',
+        event: 'CLI Recovered Missing AppId',
+        appId,
+        apikey: resolvedApikey,
+        tags: { recovery: 'remote-select' },
+      })
       return appId
     }
 
@@ -208,7 +226,13 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
         continue
       const appId = (entered as string).trim()
       await persistAppIdToConfig(appId)
-      void trackEvent({ channel: 'app', event: 'CLI Recovered Missing AppId', tags: { recovery: 'manual' } })
+      void trackEvent({
+        channel: 'app',
+        event: 'CLI Recovered Missing AppId',
+        appId,
+        apikey: resolvedApikey,
+        tags: { recovery: 'manual' },
+      })
       return appId
     }
 
@@ -226,12 +250,18 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
       if (pIsCancel(entered))
         continue
       const appId = (entered as string).trim()
-      const supabase = await createSupabaseClient(resolvedApikey, supaHost, supaAnon)
+      const supabase = await createSupabaseClient(resolvedApikey, options.supaHost, options.supaAnon)
       const organization = await getOrganizationWithPermission(supabase, resolvedApikey, 'org.create_app')
-      await addAppInternal(appId, { apikey: resolvedApikey, supaHost, supaAnon }, organization, true)
+      await addAppInternal(appId, { apikey: resolvedApikey, supaHost: options.supaHost, supaAnon: options.supaAnon }, organization, true)
       await persistAppIdToConfig(appId)
       log.success(`Created app ${appId} in Capgo`)
-      void trackEvent({ channel: 'app', event: 'CLI Recovered Missing AppId', tags: { recovery: 'create-app' } })
+      void trackEvent({
+        channel: 'app',
+        event: 'CLI Recovered Missing AppId',
+        appId,
+        apikey: resolvedApikey,
+        tags: { recovery: 'create-app' },
+      })
       return appId
     }
   }
