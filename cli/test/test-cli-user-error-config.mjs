@@ -4,8 +4,9 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { chdir, cwd } from 'node:process'
+import { setConfigWriteTarget } from '../src/config/index.ts'
 import { CliUserError } from '../src/shared/cli-user-error.ts'
-import { getConfig, getOrganizationId } from '../src/utils.ts'
+import { getConfigForWrite, getOrganizationId } from '../src/utils.ts'
 
 const NO_CONFIG_MESSAGE = 'No capacitor config file found, run `cap init` first'
 const ORG_ID_MESSAGE = 'Cannot get organization id for app'
@@ -18,15 +19,17 @@ function assertCliUserError(error, message, contextKeys = []) {
 }
 
 const brokenConfigDir = mkdtempSync(join(tmpdir(), 'capgo-broken-cap-config-'))
-writeFileSync(join(brokenConfigDir, 'capacitor.config.ts'), 'export default {{{')
+const invalidConfigTarget = join(brokenConfigDir, 'capacitor.config.invalid.json')
+writeFileSync(invalidConfigTarget, '{not json')
 const previousCwd = cwd()
 const originalFetch = globalThis.fetch
 
 try {
   chdir(brokenConfigDir)
+  setConfigWriteTarget(invalidConfigTarget)
   let configError
   try {
-    await getConfig(true)
+    await getConfigForWrite(true)
   }
   catch (error) {
     configError = error
@@ -36,7 +39,7 @@ try {
     new CliUserError(NO_CONFIG_MESSAGE).message,
     new CliUserError(NO_CONFIG_MESSAGE, { cause: 'typescript missing' }).message,
   )
-  assert.match(String(configError.context.cause), /Parsing capacitor\.config\.ts failed|FATAL/)
+  assert.match(String(configError.context.cause), /JSON|Unexpected|parse/i)
 
   globalThis.fetch = async () => new Response(JSON.stringify({}), { status: 200 })
   let orgError
@@ -67,6 +70,7 @@ try {
   console.log('CLI CliUserError config/org tests passed')
 }
 finally {
+  setConfigWriteTarget(undefined)
   chdir(previousCwd)
   globalThis.fetch = originalFetch
   rmSync(brokenConfigDir, { recursive: true, force: true })
