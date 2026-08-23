@@ -1,13 +1,13 @@
 import type { ComposerTranslation } from 'vue-i18n'
 import { Capacitor } from '@capacitor/core'
-import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import { i18n } from '~/modules/i18n'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useSupabase } from './supabase'
 
 async function presentActionSheetOpen(url: string) {
-  const { t } = useI18n()
+  const { t } = i18n.global
   const dialogStore = useDialogV2Store()
 
   dialogStore.openDialog({
@@ -29,7 +29,7 @@ async function presentActionSheetOpen(url: string) {
   return dialogStore.onDialogDismiss()
 }
 async function presentBlockedPopupFallback(url: string) {
-  const { t } = useI18n()
+  const { t } = i18n.global
   const dialogStore = useDialogV2Store()
 
   dialogStore.openDialog({
