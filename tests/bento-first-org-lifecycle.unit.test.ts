@@ -9,6 +9,7 @@ const {
   pgQueryMock,
   pgReleaseMock,
   sendEventToTrackingMock,
+  syncNewUserABTestsMock,
   syncBentoSubscriberTagsMock,
   syncUserPreferenceTagsMock,
   trackBentoEventMock,
@@ -30,6 +31,7 @@ const {
     pgQueryMock,
     pgReleaseMock,
     sendEventToTrackingMock: vi.fn(async () => undefined),
+    syncNewUserABTestsMock: vi.fn(async () => undefined),
     syncBentoSubscriberTagsMock: vi.fn<(
       c: unknown,
       update: { deleteSegments: string[], email: string, segments: string[] }
@@ -50,6 +52,10 @@ const {
     ) => Promise<boolean | undefined>>(async () => true),
   }
 })
+
+vi.mock('../supabase/functions/_backend/utils/ab_tests.ts', () => ({
+  syncNewUserABTests: syncNewUserABTestsMock,
+}))
 
 vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
   syncBentoSubscriberTags: syncBentoSubscriberTagsMock,
@@ -205,6 +211,13 @@ describe('first-organization lifecycle on user registration', () => {
       'new.user@example.com',
       expect.objectContaining({ id: USER_ID }),
     )
+    expect(syncNewUserABTestsMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'new.user@example.com',
+      expect.objectContaining({ id: USER_ID }),
+    )
+    expect(createApiKeyMock.mock.invocationCallOrder[0])
+      .toBeLessThan(syncNewUserABTestsMock.mock.invocationCallOrder[0]!)
     expect(trackBentoEventMock).toHaveBeenCalledWith(
       expect.anything(),
       'new.user@example.com',
@@ -399,6 +412,7 @@ describe('first-organization lifecycle on user registration', () => {
     expect(trackBentoEventMock).not.toHaveBeenCalled()
     expect(pgQueryMock).toHaveBeenCalledOnce()
     expect(createApiKeyMock).not.toHaveBeenCalled()
+    expect(syncNewUserABTestsMock).not.toHaveBeenCalled()
     expect(syncUserPreferenceTagsMock).not.toHaveBeenCalled()
     expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'new.user@example.com', expect.any(AbortSignal))
     expect(syncBentoSubscriberTagsMock.mock.invocationCallOrder[0])
