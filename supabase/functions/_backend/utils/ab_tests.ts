@@ -37,8 +37,7 @@ export function validateABTestsConfig(value: unknown): ABTestsConfig {
     invalidConfig()
 
   const config: ABTestsConfig = {}
-  const branchATags = new Set<string>()
-  const branchBTags = new Set<string>()
+  const bentoTags = new Set<string>()
   for (const [testName, entry] of Object.entries(value)) {
     if (!testName.trim() || !isRecord(entry))
       invalidConfig(testName)
@@ -64,12 +63,12 @@ export function validateABTestsConfig(value: unknown): ABTestsConfig {
       || !branchATag.trim()
       || !branchBTag.trim()
       || branchATag === branchBTag
-      || branchBTags.has(branchATag)
-      || branchATags.has(branchBTag)) {
+      || bentoTags.has(branchATag)
+      || bentoTags.has(branchBTag)) {
       invalidConfig(testName)
     }
-    branchATags.add(branchATag)
-    branchBTags.add(branchBTag)
+    bentoTags.add(branchATag)
+    bentoTags.add(branchBTag)
 
     config[testName] = {
       audience,

@@ -186,6 +186,24 @@ describe('new-user A/B test assignment', () => {
     })).toThrow('Invalid A/B test configuration')
   })
 
+  it.each(['A', 'B'] as const)('rejects a tag reused by branch %s across experiments', async (branch) => {
+    const { validateABTestsConfig } = await loadABTestsModule()
+    const firstTest = testConfig().new_emails
+    const secondBranches = {
+      A: { bento_tag: 'ab:second_treatment' },
+      B: { bento_tag: 'ab:second_control' },
+    }
+    secondBranches[branch].bento_tag = firstTest.branches[branch].bento_tag
+
+    expect(() => validateABTestsConfig({
+      first_test: firstTest,
+      second_test: {
+        ...firstTest,
+        branches: secondBranches,
+      },
+    })).toThrow('Invalid A/B test configuration')
+  })
+
   it('keeps a persisted branch stable and synchronizes its Bento tag', async () => {
     const { syncNewUserABTests } = await loadABTestsModule()
     vi.spyOn(Math, 'random').mockReturnValue(0)
