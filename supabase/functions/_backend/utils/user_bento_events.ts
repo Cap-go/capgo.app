@@ -11,6 +11,7 @@ type DetailField
   = | { key: string, type: 'boolean' }
     | { key: string, type: 'integer', min: number, max: number }
     | { key: string, type: 'string', maxLength: number }
+    | { key: string, type: 'uuid' }
 
 interface UserBentoEventMapping {
   bentoEvent: UserBentoEventName
@@ -63,10 +64,10 @@ const USER_BENTO_EVENT_REGISTRY = {
     delivery: 'every',
     fields: [
       { key: 'flow', type: 'string', maxLength: 32 },
-      { key: 'onboarding_attempt_id', type: 'string', maxLength: 80 },
+      { key: 'onboarding_attempt_id', type: 'uuid' },
       { key: 'onboarding_run_id', type: 'string', maxLength: 80 },
       { key: 'onboarding_version', type: 'integer', min: 1, max: 100 },
-      { key: 'resume_onboarding_attempt_id', type: 'string', maxLength: 80 },
+      { key: 'resume_onboarding_attempt_id', type: 'uuid' },
       { key: 'resumed_from_run_id', type: 'string', maxLength: 80 },
       { key: 'saved_step', type: 'string', maxLength: 32 },
       { key: 'step_index', type: 'integer', min: 0, max: 100 },
@@ -83,7 +84,7 @@ const USER_BENTO_EVENT_REGISTRY = {
       { key: 'flow', type: 'string', maxLength: 32 },
       { key: 'intent', type: 'string', maxLength: 32 },
       { key: 'next_step', type: 'string', maxLength: 32 },
-      { key: 'onboarding_attempt_id', type: 'string', maxLength: 80 },
+      { key: 'onboarding_attempt_id', type: 'uuid' },
       { key: 'onboarding_run_id', type: 'string', maxLength: 80 },
       { key: 'onboarding_version', type: 'integer', min: 1, max: 100 },
       { key: 'previous_step', type: 'string', maxLength: 32 },
@@ -115,6 +116,7 @@ export type StoredUserBentoEvents = Partial<Record<UserBentoEventName, StoredUse
 export const MAX_USER_BENTO_DETAILS = 5
 
 const USER_BENTO_TIMEOUT_MS = 5_000
+const ONBOARDING_ATTEMPT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const FAST_STATE_SQL = `
   SELECT email, onboarding
   FROM public.users
@@ -180,6 +182,9 @@ function copyMappedFields(
       target[field.key] = truncate(value, field.maxLength)
     }
     else if (field.type === 'boolean' && typeof value === 'boolean') {
+      target[field.key] = value
+    }
+    else if (field.type === 'uuid' && typeof value === 'string' && ONBOARDING_ATTEMPT_ID_PATTERN.test(value)) {
       target[field.key] = value
     }
     else if (
