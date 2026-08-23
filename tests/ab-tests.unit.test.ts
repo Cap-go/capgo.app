@@ -8,7 +8,10 @@ const {
   pgReleaseMock,
   syncBentoSubscriberTagsMock,
 } = vi.hoisted(() => {
-  const pgQueryMock = vi.fn(async () => ({ rows: [] as Record<string, unknown>[] }))
+  const pgQueryMock = vi.fn<(
+    query: string,
+    params?: unknown[],
+  ) => Promise<{ rows: Record<string, unknown>[] }>>(async () => ({ rows: [] }))
   const pgReleaseMock = vi.fn<(destroy?: Error | boolean) => void>(() => undefined)
   const pgConnectMock = vi.fn(async () => ({ query: pgQueryMock, release: pgReleaseMock }))
   return {
