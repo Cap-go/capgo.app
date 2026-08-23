@@ -326,6 +326,21 @@ function logUserBentoError(
   })
 }
 
+async function deliverEveryUserBentoEvent(
+  c: Context,
+  email: string,
+  observation: MappedUserBentoEvent,
+) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), USER_BENTO_TIMEOUT_MS)
+  try {
+    await trackBentoEvents(c, email, [{ event: observation.bentoEvent, data: observation.details }], controller.signal)
+  }
+  finally {
+    clearTimeout(timeout)
+  }
+}
+
 function rollbackReleaseError(error: unknown): Error {
   return error instanceof Error ? error : new Error('PostgreSQL rollback failed')
 }
@@ -537,14 +552,18 @@ export async function recordUserBentoEvent(
         await closeClient(c, fastPool)
     }
 
+    const fastPending = getPendingUserBentoEvents(fastState)
     if (observation.delivery === 'every') {
       if (fastEmail)
-        await backgroundTask(c, trackBentoEvents(c, fastEmail, [{ event: observation.bentoEvent, data: observation.details }]))
+        await backgroundTask(c, deliverEveryUserBentoEvent(c, fastEmail, observation))
+      else
+        logUserBentoError(c, 'deliver', input.userId, observation.bentoEvent, new Error('User email unavailable'))
+      if (fastPending.length > 0)
+        await backgroundTask(c, deliverPendingUserBentoEvents(c, input.userId))
       return
     }
 
     const currentSent = validIsoDate(fastState[observation.bentoEvent]?.sent_at)
-    const fastPending = getPendingUserBentoEvents(fastState)
     if (currentSent && fastPending.length === 0)
       return
 
