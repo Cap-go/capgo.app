@@ -108,6 +108,7 @@
     "test:app-list-output-text": "bun test/test-app-list-output-text.mjs",
     "test:doctor-analytics": "bun test/test-doctor-analytics.mjs",
     "test:posthog-exception": "bun test/test-posthog-exception.mjs",
+    "test:create-supabase-client": "bun test/test-create-supabase-client.mjs",
     "test:onboarding-recovery": "bun test/test-onboarding-recovery.mjs",
     "test:onboarding-progress": "bun test/test-onboarding-progress.mjs",
     "test:onboarding-run-targets": "bun test/test-onboarding-run-targets.mjs",
