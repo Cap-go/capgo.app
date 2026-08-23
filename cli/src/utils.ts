@@ -625,21 +625,23 @@ export async function getDeclaredPackageVersionMap(f: string = findRoot(cwd()), 
 }
 
 async function getConfigFrom(loader: () => Promise<ExtConfigPairs | undefined>, silent = false): Promise<ExtConfigPairs> {
+  const message = 'No capacitor config file found, run `cap init` first'
   try {
     const extConfig = await loader()
     if (!extConfig) {
-      const message = 'No capacitor config file found, run `cap init` first'
       if (!silent)
         log.error(message)
-      throw new Error(message)
+      throw new CliUserError(message)
     }
     return extConfig
   }
   catch (err) {
-    const message = `No capacitor config file found, run \`cap init\` first ${formatError(err)}`
+    if (err instanceof CliUserError)
+      throw err
+    const cause = formatError(err)
     if (!silent)
-      log.error(message)
-    throw new Error(message)
+      log.error(`${message}: ${cause}`)
+    throw new CliUserError(message, { cause })
   }
 }
 
@@ -2206,10 +2208,11 @@ export async function getOrganizationId(
   })
 
   if (!data?.owner_org || error) {
+    const cause = formatError(error)
     // Surface the underlying cause instead of discarding it — a bare
     // "Cannot get organization id" leaves both users and triage with no signal.
-    log.error(`Cannot get organization id for app id ${appId}: ${formatError(error)}`)
-    throw new Error(`Cannot get organization id for app id ${appId}`)
+    log.error(`Cannot get organization id for app id ${appId}: ${cause}`)
+    throw new CliUserError('Cannot get organization id for app', { appId, cause })
   }
   return data.owner_org
 }

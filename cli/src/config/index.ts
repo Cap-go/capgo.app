@@ -6,6 +6,7 @@ import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path
 import { cwd } from 'node:process'
 import type { CapacitorConfig, ExtConfigPairs } from '../schemas/config'
 import { formatJSObject, loadConfig as loadConfigCap, requireTS, writeConfig as writeConfigCap } from '../capacitor-cli'
+import { CliUserError } from '../shared/cli-user-error'
 
 export type { CapacitorConfig, ExtConfigPairs } from '../schemas/config'
 
@@ -43,19 +44,22 @@ export function resolveCapacitorConfigTargetPath(value: string | undefined, init
   if (value === undefined)
     return undefined
   if (!value.trim())
-    throw new Error('Capacitor config path must not be empty')
+    throw new CliUserError('Capacitor config path must not be empty')
 
   const resolved = resolve(initialCwd, value)
   if (!existsSync(resolved) || !statSync(resolved).isFile())
-    throw new Error(`Capacitor config path does not exist: ${resolved}`)
+    throw new CliUserError('Capacitor config path does not exist', { path: resolved })
   if (!capacitorConfigFilePattern.test(basename(resolved)))
-    throw new Error(`Capacitor config path must point to a capacitor.config.*.ts, capacitor.config.*.js, or capacitor.config.*.json file: ${resolved}`)
+    throw new CliUserError(
+      'Capacitor config path must point to a capacitor.config.*.ts, capacitor.config.*.js, or capacitor.config.*.json file',
+      { path: resolved },
+    )
 
   const workspaceRoot = realpathSync(initialCwd)
   const target = realpathSync(resolved)
   const pathFromWorkspace = relative(workspaceRoot, target)
   if (pathFromWorkspace === '..' || pathFromWorkspace.startsWith(`..${sep}`) || isAbsolute(pathFromWorkspace))
-    throw new Error(`Capacitor config path must stay within the current working directory: ${resolved}`)
+    throw new CliUserError('Capacitor config path must stay within the current working directory', { path: resolved })
   return target
 }
 
