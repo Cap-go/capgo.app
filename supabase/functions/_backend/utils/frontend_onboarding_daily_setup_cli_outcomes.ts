@@ -3,7 +3,7 @@ import type {
   FrontendOnboardingDailySetupCliEvent,
   FrontendOnboardingDailySetupCliEventKind,
 } from './frontend_onboarding_daily_setup_cli_outcomes_model.ts'
-import { FRONTEND_ONBOARDING_PRODUCTION_HOST, FRONTEND_ONBOARDING_VERSIONS } from './frontend_onboarding_analytics_model.ts'
+import { buildFrontendOnboardingProductionHostHogql, FRONTEND_ONBOARDING_VERSIONS } from './frontend_onboarding_analytics_model.ts'
 import { cloudlogErr } from './logging.ts'
 import { queryPosthogHogql } from './posthog_read.ts'
 
@@ -79,7 +79,7 @@ export function buildFrontendOnboardingDailySetupCliHogql(
       FROM events
       WHERE event = 'onboarding_step_viewed'
         AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
-        AND JSONExtractString(toString(properties), '$host') = ${sqlStr(FRONTEND_ONBOARDING_PRODUCTION_HOST)}
+        AND ${buildFrontendOnboardingProductionHostHogql('properties', 'timestamp')}
         AND toIntOrZero(toString(properties.onboarding_version)) IN (${setupVersionAllowlist})
         AND JSONExtractString(toString(properties), 'step') = 'setup'
         AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
@@ -106,7 +106,7 @@ export function buildFrontendOnboardingDailySetupCliHogql(
         OR (
           selected_events.event IN ('onboarding_step_viewed', 'onboarding_cli_command_copied', 'onboarding_ai_instructions_copied')
           AND JSONExtractString(toString(selected_events.properties), 'flow') = 'pre_org'
-          AND JSONExtractString(toString(selected_events.properties), '$host') = ${sqlStr(FRONTEND_ONBOARDING_PRODUCTION_HOST)}
+          AND ${buildFrontendOnboardingProductionHostHogql('selected_events.properties', 'selected_events.timestamp')}
           AND toIntOrZero(toString(selected_events.properties.onboarding_version)) IN (${setupVersionAllowlist})
           AND JSONExtractString(toString(selected_events.properties), 'step') = 'setup'
         )

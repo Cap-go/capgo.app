@@ -1,14 +1,14 @@
 import type { Context } from 'hono'
 import type { FrontendOnboardingAttempt, FrontendOnboardingInteractionEvent, FrontendOnboardingVersion } from './frontend_onboarding_analytics_model.ts'
+import type { FrontendOnboardingWelcomeAttempt } from './frontend_onboarding_welcome_outcomes_model.ts'
 import {
   buildFrontendOnboardingAnalytics,
+  buildFrontendOnboardingProductionHostHogql,
   FRONTEND_ONBOARDING_FOLLOWUP_MS,
-  FRONTEND_ONBOARDING_PRODUCTION_HOST,
   FRONTEND_ONBOARDING_VERSIONS,
 } from './frontend_onboarding_analytics_model.ts'
 import { getFrontendOnboardingDailySetupCliEvents } from './frontend_onboarding_daily_setup_cli_outcomes.ts'
 import { buildFrontendOnboardingDailySetupCliOutcomes } from './frontend_onboarding_daily_setup_cli_outcomes_model.ts'
-import type { FrontendOnboardingWelcomeAttempt } from './frontend_onboarding_welcome_outcomes_model.ts'
 import { buildFrontendOnboardingWelcomeOutcomes } from './frontend_onboarding_welcome_outcomes_model.ts'
 import { cloudlogErr } from './logging.ts'
 import { queryPosthogHogql } from './posthog_read.ts'
@@ -279,7 +279,7 @@ export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: s
       FROM events
       WHERE event IN (${eventAllowlist})
         AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
-        AND JSONExtractString(toString(properties), '$host') = ${sqlStr(FRONTEND_ONBOARDING_PRODUCTION_HOST)}
+        AND ${buildFrontendOnboardingProductionHostHogql('properties', 'timestamp')}
         AND toIntOrZero(toString(properties.onboarding_version)) IN (${versionAllowlist})
         AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
         AND timestamp < parseDateTimeBestEffort(${sqlStr(followupEndDate)})
@@ -355,7 +355,7 @@ export function buildFrontendOnboardingWelcomeHogql(
       FROM events
       WHERE event = 'onboarding_step_viewed'
         AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
-        AND JSONExtractString(toString(properties), '$host') = ${sqlStr(FRONTEND_ONBOARDING_PRODUCTION_HOST)}
+        AND ${buildFrontendOnboardingProductionHostHogql('properties', 'timestamp')}
         AND toIntOrZero(toString(properties.onboarding_version)) = 4
         AND timestamp >= parseDateTimeBestEffort(${sqlStr(eventStartDate)})
         AND timestamp < parseDateTimeBestEffort(${sqlStr(followupEndDate)})
@@ -396,7 +396,7 @@ export function buildFrontendOnboardingTabSwitchHogql(startDate: string, endDate
       WHERE event = 'onboarding_visibility_changed'
         AND JSONExtractString(toString(properties), 'visibility_state') = 'hidden'
         AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
-        AND JSONExtractString(toString(properties), '$host') = ${sqlStr(FRONTEND_ONBOARDING_PRODUCTION_HOST)}
+        AND ${buildFrontendOnboardingProductionHostHogql('properties', 'timestamp')}
         AND toIntOrZero(toString(properties.onboarding_version)) = 4
         AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
         AND timestamp < parseDateTimeBestEffort(${sqlStr(endDate)})
