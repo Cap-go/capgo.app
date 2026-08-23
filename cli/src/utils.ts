@@ -2177,7 +2177,10 @@ export async function assertCliPermission(
   const message = options.message || `Insufficient permissions for ${permissionKey}`
   if (!options.silent)
     log.error(message)
-  throw new Error(message)
+  throw new CliUserError(`Insufficient permissions for ${permissionKey}`, {
+    permissionKey,
+    ...scope,
+  })
 }
 
 export async function assertOrgPermission(
