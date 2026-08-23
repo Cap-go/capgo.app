@@ -11,6 +11,7 @@ import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
+import { safeResetTurnstile } from '~/utils/turnstile'
 
 const { t } = useI18n()
 const supabase = useSupabase()
@@ -220,7 +221,7 @@ async function disableMfa() {
 function restartFromCaptcha() {
   captchaToken.value = ''
   savedCaptchaToken.value = ''
-  captchaRef.value?.reset()
+  safeResetTurnstile(captchaRef.value)
   otpVerificationCode.value = ''
   currentStep.value = 1
 }
@@ -229,7 +230,7 @@ function resetWizard() {
   currentStep.value = 1
   captchaToken.value = ''
   savedCaptchaToken.value = ''
-  captchaRef.value?.reset()
+  safeResetTurnstile(captchaRef.value)
   otpVerificationCode.value = ''
   mfaQRCode.value = ''
   enrolledFactorId.value = ''
