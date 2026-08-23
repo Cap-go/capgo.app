@@ -4,6 +4,7 @@ import { DrizzleError, entityKind, TransactionRollbackError } from 'drizzle-orm'
 import { sendDiscordAlert500 } from './discord.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
 import { capturePosthogException } from './posthog.ts'
+import { isTransientPgError } from './pg_errors.ts'
 import { backgroundTask } from './utils.ts'
 
 const drizzleErrorNames = new Set(['DrizzleError', 'DrizzleQueryError', 'TransactionRollbackError'])
@@ -202,6 +203,7 @@ export function onError(functionName: string) {
       return c.json(res, e.status)
     }
     if (isDrizzleError) {
+      const transient = isTransientPgError(e)
       // Log Drizzle errors with more detailed information
       cloudlogErr({
         requestId: c.get('requestId'),
@@ -211,17 +213,27 @@ export function onError(functionName: string) {
         url: c.req.url,
         errorMessage: e?.message ?? 'Unknown error',
         stack: serializeError(e)?.stack ?? 'N/A',
+        transient,
         moreInfo: {
           drizzleErrorCause: serializeError((e as Error).cause),
         },
       })
-      await backgroundTask(c, sendDiscordAlert500(c, functionName, body, e))
-      void backgroundTask(c, capturePosthogException(c, {
-        error: e,
-        functionName,
-        kind: 'drizzle_error',
-        status: 500,
-      }))
+      if (!transient) {
+        await backgroundTask(c, sendDiscordAlert500(c, functionName, body, e))
+        void backgroundTask(c, capturePosthogException(c, {
+          error: e,
+          functionName,
+          kind: 'drizzle_error',
+          status: 500,
+        }))
+      }
+      if (transient) {
+        return c.json({
+          error: 'upstream_unavailable',
+          message: 'Database temporarily unavailable',
+          moreInfo: {},
+        }, 503)
+      }
       return c.json(defaultResponse, 500)
     }
     // Non-HTTP errors: log with stack and return 500

@@ -379,6 +379,31 @@ describe('posthog helper', () => {
     expect(request?.[1]?.signal).toBeInstanceOf(AbortSignal)
   })
 
+  it('fingerprints drizzle errors by queried table', async () => {
+    const { capturePosthogException } = await import('../supabase/functions/_backend/utils/posthog.ts')
+    envState.posthogApiHost = 'https://eu.i.posthog.com/i/v0/e'
+
+    await capturePosthogException(createContext(), {
+      error: Object.assign(new Error(`Failed query:
+        SELECT app_id
+        FROM public.notification_app_settings
+        WHERE app_id = $1
+      `), {
+        name: 'DrizzleQueryError',
+        cause: Object.assign(new Error('relation "notification_app_settings" does not exist'), {
+          code: '42P01',
+        }),
+      }),
+      functionName: 'api',
+      kind: 'drizzle_error',
+      status: 500,
+    })
+
+    const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)
+    expect(body.properties.$exception_fingerprint).toContain('notification_app_settings')
+    expect(body.properties.pg_error_cause).toBe('42P01: relation "notification_app_settings" does not exist')
+  })
+
   it('logs and skips exception delivery when the configured PostHog host is invalid', async () => {
     const { capturePosthogException } = await import('../supabase/functions/_backend/utils/posthog.ts')
     envState.posthogApiHost = '://bad-host'

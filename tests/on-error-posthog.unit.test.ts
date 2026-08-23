@@ -274,6 +274,34 @@ describe('onError PostHog capture', () => {
     })
   })
 
+  it('returns 503 without PostHog capture for transient Drizzle errors', async () => {
+    const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
+
+    const response = await onError('api')({
+      cause: Object.assign(new Error('Connection terminated unexpectedly'), {
+        code: '57P01',
+      }),
+      message: `Failed query:
+      SELECT app_id, push_update_enabled
+      FROM public.notification_app_settings
+      WHERE app_id = $1
+    `,
+      name: 'DrizzleQueryError',
+    }, createContext(new Request('https://api.capgo.app/notifications/settings?app_id=com.demo.app')))
+
+    expect(backgroundTaskMock).not.toHaveBeenCalled()
+    expect(sendDiscordAlert500Mock).not.toHaveBeenCalled()
+    expect(capturePosthogExceptionMock).not.toHaveBeenCalled()
+    expect(response).toEqual({
+      body: {
+        error: 'upstream_unavailable',
+        message: 'Database temporarily unavailable',
+        moreInfo: {},
+      },
+      status: 503,
+    })
+  })
+
   it('skips Discord for expected files Durable Object storage timeouts', async () => {
     const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
 
