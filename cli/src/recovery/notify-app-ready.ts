@@ -3,14 +3,23 @@ import { basename, extname, join } from 'node:path'
 import { cwd } from 'node:process'
 import { confirm as pConfirm, isCancel as pIsCancel, log, select as pSelect } from '@clack/prompts'
 import { trackEvent } from '../analytics/track'
-import { injectInitCode, notifyAppReadyDocsUrl, readExistingMainFile } from '../init/command'
 import { findMainFile, findRoot, formatError } from '../utils'
 import { checkIndexPosition, searchInDirectory } from '../bundle/check'
 
 const NOTIFY_CALL = 'CapacitorUpdater.notifyAppReady()'
 const NOTIFY_SNIPPET = `import { CapacitorUpdater } from '@capgo/capacitor-updater'\n${NOTIFY_CALL};`
+export const notifyAppReadyDocsUrl = 'https://capgo.app/docs/plugins/updater/notify-app-ready/'
 
-export { notifyAppReadyDocsUrl }
+function readExistingMainFile(mainFilePath: string | null) {
+  try {
+    return mainFilePath && statSync(mainFilePath).isFile()
+      ? { path: mainFilePath, content: readFileSync(mainFilePath, 'utf8') }
+      : null
+  }
+  catch {
+    return null
+  }
+}
 
 export function findBuildEntryJsPath(webDir: string): string | undefined {
   const indexPath = join(webDir, 'index.html')
@@ -49,7 +58,10 @@ export function injectNotifyAppReadyIntoJs(filePath: string, content: string): s
     return `${content.trimEnd()}\n${NOTIFY_CALL};\n`
   }
 
-  return injectInitCode(filePath, content)
+  const updaterImport = extname(filePath) === '.cjs'
+    ? 'const { CapacitorUpdater } = require(\'@capgo/capacitor-updater\')'
+    : 'import { CapacitorUpdater } from \'@capgo/capacitor-updater\''
+  return `${updaterImport};\n\n${NOTIFY_CALL};\n${content}`
 }
 
 export function patchNotifyAppReadyInBuildFolder(webDir: string): string | undefined {
@@ -78,7 +90,7 @@ export async function patchNotifyAppReadyInSourceAsync(projectRoot = findRoot(cw
   if (mainFile.content.includes('notifyAppReady'))
     return mainFile.path
 
-  const updated = injectInitCode(mainFile.path, mainFile.content)
+  const updated = injectNotifyAppReadyIntoJs(mainFile.path, mainFile.content)
   writeFileSync(mainFile.path, updated, 'utf8')
   return mainFile.path
 }
