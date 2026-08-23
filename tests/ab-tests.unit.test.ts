@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises'
+import type { ABTestConfig } from '../supabase/functions/_backend/utils/ab_tests.ts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
@@ -36,29 +38,8 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   getPgClient: getPgClientMock,
 }))
 
-type ABTestConfig = Record<string, {
-  audience: 'all' | 'self_signup'
-  branch_a_percentage: number
-  branches: {
-    A: { bento_tag: string }
-    B: { bento_tag: string }
-  }
-}>
-
-interface ABTestsModule {
-  createABTestAssignments: (
-    user: { created_via_invite: boolean },
-    config: ABTestConfig,
-    random: () => number,
-    now: () => Date,
-  ) => Record<string, { assigned_at: string, branch: 'A' | 'B' }>
-  syncNewUserABTests: (
-    c: unknown,
-    email: string,
-    user: { created_via_invite: boolean, id: string },
-  ) => Promise<void>
-  validateABTestsConfig: (value: unknown) => ABTestConfig
-}
+type ABTestsConfig = Record<string, ABTestConfig>
+type ABTestsModule = typeof import('../supabase/functions/_backend/utils/ab_tests.ts')
 
 const modulePath = '../supabase/functions/_backend/utils/ab_tests.ts'
 const FIXED_DATE = new Date('2026-08-23T12:34:56.000Z')
@@ -68,7 +49,7 @@ async function loadABTestsModule() {
   return await import(/* @vite-ignore */ modulePath) as ABTestsModule
 }
 
-function testConfig(branchAPercentage = 50, audience: 'all' | 'self_signup' = 'self_signup') {
+function testConfig(branchAPercentage = 50, audience: ABTestConfig['audience'] = 'self_signup'): ABTestsConfig {
   return {
     new_emails: {
       audience,
@@ -92,6 +73,12 @@ describe('new-user A/B test assignment', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  it('declares the JSON import type required by the Supabase Deno runtime', async () => {
+    const source = await readFile(new URL('../supabase/functions/_backend/utils/ab_tests.ts', import.meta.url), 'utf8')
+
+    expect(source).toContain("from './ab_tests.json' with { type: 'json' }")
   })
 
   it.each([
@@ -177,6 +164,28 @@ describe('new-user A/B test assignment', () => {
     expect(() => validateABTestsConfig(config)).toThrow('Invalid A/B test configuration')
   })
 
+  it('rejects a tag used by branch A in one experiment and branch B in another', async () => {
+    const { validateABTestsConfig } = await loadABTestsModule()
+    const firstTest = testConfig().new_emails
+
+    expect(() => validateABTestsConfig({
+      first_test: {
+        ...firstTest,
+        branches: {
+          A: { bento_tag: 'ab:shared' },
+          B: { bento_tag: 'ab:first_control' },
+        },
+      },
+      second_test: {
+        ...firstTest,
+        branches: {
+          A: { bento_tag: 'ab:second_treatment' },
+          B: { bento_tag: 'ab:shared' },
+        },
+      },
+    })).toThrow('Invalid A/B test configuration')
+  })
+
   it('keeps a persisted branch stable and synchronizes its Bento tag', async () => {
     const { syncNewUserABTests } = await loadABTestsModule()
     vi.spyOn(Math, 'random').mockReturnValue(0)
@@ -187,7 +196,7 @@ describe('new-user A/B test assignment', () => {
         },
       }],
     })
-    const context = { get: vi.fn(() => 'request-id') }
+    const context = { get: vi.fn(() => 'request-id') } as never
 
     await syncNewUserABTests(context, 'new.user@example.com', {
       created_via_invite: false,
@@ -219,7 +228,7 @@ describe('new-user A/B test assignment', () => {
       }],
     })
 
-    await syncNewUserABTests({ get: vi.fn(() => 'request-id') }, 'new.user@example.com', {
+    await syncNewUserABTests({ get: vi.fn(() => 'request-id') } as never, 'new.user@example.com', {
       created_via_invite: false,
       id: USER_ID,
     })
@@ -233,7 +242,7 @@ describe('new-user A/B test assignment', () => {
     const { syncNewUserABTests } = await loadABTestsModule()
     pgQueryMock.mockResolvedValueOnce({ rows: [] })
 
-    await expect(syncNewUserABTests({ get: vi.fn(() => 'request-id') }, 'new.user@example.com', {
+    await expect(syncNewUserABTests({ get: vi.fn(() => 'request-id') } as never, 'new.user@example.com', {
       created_via_invite: false,
       id: USER_ID,
     })).rejects.toThrow('A/B test assignment failed')
@@ -251,7 +260,7 @@ describe('new-user A/B test assignment', () => {
     })
     syncBentoSubscriberTagsMock.mockResolvedValueOnce(false)
 
-    await expect(syncNewUserABTests({ get: vi.fn(() => 'request-id') }, 'new.user@example.com', {
+    await expect(syncNewUserABTests({ get: vi.fn(() => 'request-id') } as never, 'new.user@example.com', {
       created_via_invite: false,
       id: USER_ID,
     })).rejects.toThrow('Bento A/B test delivery failed')
@@ -268,7 +277,7 @@ describe('new-user A/B test assignment', () => {
     })
     syncBentoSubscriberTagsMock.mockResolvedValueOnce(undefined)
 
-    await expect(syncNewUserABTests({ get: vi.fn(() => 'request-id') }, 'new.user@example.com', {
+    await expect(syncNewUserABTests({ get: vi.fn(() => 'request-id') } as never, 'new.user@example.com', {
       created_via_invite: false,
       id: USER_ID,
     })).resolves.toBeUndefined()
@@ -277,7 +286,7 @@ describe('new-user A/B test assignment', () => {
   it('does not touch persistence or Bento when no experiment matches the audience', async () => {
     const { syncNewUserABTests } = await loadABTestsModule()
 
-    await syncNewUserABTests({ get: vi.fn(() => 'request-id') }, 'invitee@example.com', {
+    await syncNewUserABTests({ get: vi.fn(() => 'request-id') } as never, 'invitee@example.com', {
       created_via_invite: true,
       id: USER_ID,
     })

@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Build and test the assignment utility
+## Task 1: Build and test the assignment utility
 
 **Files:**
 - Create: `supabase/functions/_backend/utils/ab_tests.json`
@@ -166,7 +166,7 @@ git add -- supabase/functions/_backend/utils/ab_tests.json supabase/functions/_b
 git commit -m "feat(backend): assign new users to A/B tests"
 ```
 
-### Task 2: Wire assignment into user creation
+## Task 2: Wire assignment into user creation
 
 **Files:**
 - Modify: `supabase/functions/_backend/triggers/on_user_create.ts`
@@ -210,7 +210,7 @@ git add -- supabase/functions/_backend/triggers/on_user_create.ts tests/bento-fi
 git commit -m "feat(backend): enroll new users in A/B tests"
 ```
 
-### Task 3: Validate and publish
+## Task 3: Validate and publish
 
 **Files:**
 - Verify all files changed in Tasks 1 and 2.
@@ -239,7 +239,7 @@ Expected: no diff errors; only the pre-existing unstaged `codedb.snapshot` chang
 
 - [ ] **Step 4: Push and open a non-draft PR**
 
-Push `wolny/ab-test-new-emails`, reuse a matching open PR if one exists, otherwise open one against `main` with the feature summary and local verification evidence. The user explicitly requested a review-ready PR, so publish it as non-draft.
+Push `wolny/ab-test-new-emails`, reuse a matching open PR if one exists, otherwise open one against `main` with `Summary (AI generated)`, `Motivation (AI generated)`, `Business Impact (AI generated)`, and `Test Plan (AI generated)` sections. Include the local verification evidence. The user explicitly requested a review-ready PR, so publish it as non-draft.
 
 - [ ] **Step 5: Prove `pr-ready` stable-green**
 

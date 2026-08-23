@@ -1,7 +1,7 @@
 import type { Database } from './supabase.types.ts'
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from './hono.ts'
-import rawABTestsConfig from './ab_tests.json'
+import rawABTestsConfig from './ab_tests.json' with { type: 'json' }
 import { syncBentoSubscriberTags } from './bento.ts'
 import { quickError } from './hono.ts'
 import { closeClient, getPgClient } from './pg.ts'
@@ -37,6 +37,8 @@ export function validateABTestsConfig(value: unknown): ABTestsConfig {
     invalidConfig()
 
   const config: ABTestsConfig = {}
+  const branchATags = new Set<string>()
+  const branchBTags = new Set<string>()
   for (const [testName, entry] of Object.entries(value)) {
     if (!testName.trim() || !isRecord(entry))
       invalidConfig(testName)
@@ -61,9 +63,13 @@ export function validateABTestsConfig(value: unknown): ABTestsConfig {
       || typeof branchBTag !== 'string'
       || !branchATag.trim()
       || !branchBTag.trim()
-      || branchATag === branchBTag) {
+      || branchATag === branchBTag
+      || branchBTags.has(branchATag)
+      || branchATags.has(branchBTag)) {
       invalidConfig(testName)
     }
+    branchATags.add(branchATag)
+    branchBTags.add(branchBTag)
 
     config[testName] = {
       audience,
