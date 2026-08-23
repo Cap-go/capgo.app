@@ -20,6 +20,57 @@ describe('cli user Bento event registry', () => {
     })?.bentoEvent).toBe(bentoEvent)
   })
 
+  it('maps every frontend onboarding restart with only allowlisted details', () => {
+    expect(buildMappedUserBentoEvent({
+      sourceEvent: 'onboarding_resume_restarted',
+      observedAt: '2026-08-23T12:00:00.000Z',
+      tags: {
+        flow: 'pre_org',
+        onboarding_attempt_id: '84c27b64-9c96-4a05-b614-d63200b25799',
+        onboarding_run_id: 'run-new',
+        onboarding_version: 4,
+        resume_onboarding_attempt_id: '020acb55-8e96-44bb-8335-a7fc2379ea86',
+        resumed_from_run_id: 'run-old',
+        saved_step: 'organization',
+        secret: 'must-not-leak',
+        step_index: 2,
+        total_steps: 4,
+      },
+    })).toEqual({
+      bentoEvent: 'onboarding:resume_restarted',
+      delivery: 'every',
+      details: {
+        flow: 'pre_org',
+        observed_at: '2026-08-23T12:00:00.000Z',
+        onboarding_attempt_id: '84c27b64-9c96-4a05-b614-d63200b25799',
+        onboarding_run_id: 'run-new',
+        onboarding_version: 4,
+        resume_onboarding_attempt_id: '020acb55-8e96-44bb-8335-a7fc2379ea86',
+        resumed_from_run_id: 'run-old',
+        saved_step: 'organization',
+        source_event: 'onboarding_resume_restarted',
+        step_index: 2,
+        total_steps: 4,
+      },
+    })
+  })
+
+  it('drops malformed onboarding attempt IDs', () => {
+    expect(buildMappedUserBentoEvent({
+      sourceEvent: 'onboarding_resume_restarted',
+      observedAt: '2026-08-23T12:00:00.000Z',
+      tags: {
+        flow: 'pre_org',
+        onboarding_attempt_id: 'not-a-uuid',
+        resume_onboarding_attempt_id: 'also-not-a-uuid',
+      },
+    })?.details).toEqual({
+      flow: 'pre_org',
+      observed_at: '2026-08-23T12:00:00.000Z',
+      source_event: 'onboarding_resume_restarted',
+    })
+  })
+
   it('returns undefined for an unmapped event', () => {
     expect(buildMappedUserBentoEvent({
       sourceEvent: 'CLI Command Succeeded',
