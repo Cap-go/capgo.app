@@ -24,6 +24,28 @@ export interface FrontendOnboardingDailySetupCliOutcomePoint {
   returning: FrontendOnboardingDailySetupCliOutcomeCounts
 }
 
+export interface FrontendOnboardingDailySetupCliAgentGroup {
+  key: string
+  agent_id?: string
+  agent_name?: string
+}
+
+export interface FrontendOnboardingDailySetupCliAgentPoint {
+  date: string
+  counts: Record<string, number>
+}
+
+export interface FrontendOnboardingDailySetupCliAgentUsage {
+  groups: FrontendOnboardingDailySetupCliAgentGroup[]
+  points: FrontendOnboardingDailySetupCliAgentPoint[]
+}
+
+export type FrontendOnboardingDailySetupCliReservedAgentGroupKey =
+  | 'multiple_agents'
+  | 'unknown_agent'
+  | 'no_agent'
+  | 'no_cli_invoked'
+
 export interface FrontendOnboardingLargestDropoff {
   from: Exclude<FrontendOnboardingStageKey, 'setup'>
   to: Exclude<FrontendOnboardingStageKey, 'intent'>
@@ -145,6 +167,7 @@ export interface FrontendOnboardingAnalytics {
     no_cli: number
   }
   daily_setup_cli_outcomes: FrontendOnboardingDailySetupCliOutcomePoint[]
+  daily_setup_cli_agent_usage: FrontendOnboardingDailySetupCliAgentUsage
   posthog_configured: boolean
   posthog_connected: boolean
 }
@@ -362,6 +385,60 @@ export function buildFrontendOnboardingDailySetupCliSeries(
       data: points.map(point => ({ date: point.date, value: point.returning[key] })),
     },
   ]))
+}
+
+const DAILY_SETUP_CLI_AGENT_COLORS: Record<string, string> = {
+  'agent:codex': '#10a37f',
+  'agent:claude-code': '#d97757',
+  multiple_agents: '#8b5cf6',
+  unknown_agent: '#f59e0b',
+  no_agent: '#3b82f6',
+  no_cli_invoked: '#94a3b8',
+}
+
+const DAILY_SETUP_CLI_AGENT_FALLBACK_COLORS = [
+  '#0891b2',
+  '#65a30d',
+  '#db2777',
+  '#7c3aed',
+  '#ea580c',
+  '#0f766e',
+] as const
+
+export function buildFrontendOnboardingDailySetupCliAgentSeries(
+  usage: FrontendOnboardingDailySetupCliAgentUsage | null | undefined,
+  reservedLabels: Record<FrontendOnboardingDailySetupCliReservedAgentGroupKey, string>,
+): FrontendOnboardingDailySeries[] {
+  if (!usage)
+    return []
+
+  return usage.groups.map(group => ({
+    label: isFrontendOnboardingDailySetupCliReservedAgentGroupKey(group.key)
+      ? reservedLabels[group.key]
+      : group.agent_name?.trim() || group.agent_id?.trim() || group.key.replace(/^agent:/, ''),
+    color: DAILY_SETUP_CLI_AGENT_COLORS[group.key] ?? getFrontendOnboardingDailySetupCliAgentFallbackColor(group.key),
+    data: usage.points.map(point => ({
+      date: point.date,
+      value: point.counts[group.key] ?? 0,
+    })),
+  }))
+}
+
+function isFrontendOnboardingDailySetupCliReservedAgentGroupKey(
+  key: string,
+): key is FrontendOnboardingDailySetupCliReservedAgentGroupKey {
+  return key === 'multiple_agents'
+    || key === 'unknown_agent'
+    || key === 'no_agent'
+    || key === 'no_cli_invoked'
+}
+
+function getFrontendOnboardingDailySetupCliAgentFallbackColor(key: string): string {
+  let hash = 0
+  for (let index = 0; index < key.length; index++)
+    hash = (hash * 31 + key.charCodeAt(index)) >>> 0
+
+  return DAILY_SETUP_CLI_AGENT_FALLBACK_COLORS[hash % DAILY_SETUP_CLI_AGENT_FALLBACK_COLORS.length]
 }
 
 export function buildFrontendOnboardingFunnelStages(

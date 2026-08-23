@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import {
   buildFrontendOnboardingDailySeries,
+  buildFrontendOnboardingDailySetupCliAgentSeries,
   buildFrontendOnboardingDailySetupCliSeries,
   buildFrontendOnboardingDailyTabSwitchSeries,
   buildFrontendOnboardingDailyWelcomeOutcomeSeries,
@@ -184,6 +185,16 @@ describe('admin frontend onboarding dashboard', () => {
         no_action: 0,
       },
     }],
+    daily_setup_cli_agent_usage: {
+      groups: [
+        { key: 'agent:codex', agent_id: 'codex', agent_name: 'Codex' },
+        { key: 'no_cli_invoked' },
+      ],
+      points: [{
+        date: '2026-08-10',
+        counts: { 'agent:codex': 2, no_cli_invoked: 1 },
+      }],
+    },
     posthog_configured: true,
     posthog_connected: true,
   }
@@ -446,6 +457,58 @@ describe('admin frontend onboarding dashboard', () => {
       { date: '2026-08-09', value: 0 },
       { date: '2026-08-10', value: 1 },
     ])
+  })
+
+  it.concurrent('maps CLI agent groups in backend order with translated reserved labels and stable colors', () => {
+    const usage = {
+      groups: [
+        { key: 'agent:codex', agent_id: 'codex', agent_name: 'Codex' },
+        { key: 'agent:cline', agent_id: 'cline' },
+        { key: 'multiple_agents' },
+        { key: 'no_agent' },
+        { key: 'no_cli_invoked' },
+      ],
+      points: [
+        { date: '2026-08-09', counts: { 'agent:codex': 2, 'agent:cline': 0, multiple_agents: 1, no_agent: 0, no_cli_invoked: 3 } },
+        { date: '2026-08-10', counts: { 'agent:codex': 0, 'agent:cline': 1, multiple_agents: 0, no_agent: 2, no_cli_invoked: 0 } },
+      ],
+    }
+    const labels = {
+      multiple_agents: 'Multiple agents',
+      unknown_agent: 'Unknown agent',
+      no_agent: 'No agent',
+      no_cli_invoked: 'No CLI invoked',
+    }
+
+    const series = buildFrontendOnboardingDailySetupCliAgentSeries(usage, labels)
+
+    expect(series.map(item => item.label)).toEqual(['Codex', 'cline', 'Multiple agents', 'No agent', 'No CLI invoked'])
+    expect(series.map(item => item.color)).toMatchObject(['#10a37f', expect.any(String), '#8b5cf6', '#3b82f6', '#94a3b8'])
+    expect(series[0].data).toEqual([
+      { date: '2026-08-09', value: 2 },
+      { date: '2026-08-10', value: 0 },
+    ])
+    expect(series[1].data).toEqual([
+      { date: '2026-08-09', value: 0 },
+      { date: '2026-08-10', value: 1 },
+    ])
+    expect(buildFrontendOnboardingDailySetupCliAgentSeries(usage, labels)[1].color).toBe(series[1].color)
+  })
+
+  it.concurrent('keeps No CLI invoked when it is the only CLI agent group', () => {
+    expect(buildFrontendOnboardingDailySetupCliAgentSeries({
+      groups: [{ key: 'no_cli_invoked' }],
+      points: [{ date: '2026-08-09', counts: { no_cli_invoked: 4 } }],
+    }, {
+      multiple_agents: 'Multiple agents',
+      unknown_agent: 'Unknown agent',
+      no_agent: 'No agent',
+      no_cli_invoked: 'No CLI invoked',
+    })).toEqual([{
+      label: 'No CLI invoked',
+      color: '#94a3b8',
+      data: [{ date: '2026-08-09', value: 4 }],
+    }])
   })
 
   it.concurrent('adapts reordered funnel stages with stable key-based colors', () => {
