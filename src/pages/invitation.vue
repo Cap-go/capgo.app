@@ -12,6 +12,7 @@ import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
+import { safeResetTurnstile } from '~/utils/turnstile'
 
 const { t } = useI18n()
 const route = useRoute('/invitation')
@@ -90,7 +91,7 @@ onMounted(async () => {
     }).single()
 
     if (error) {
-      captchaComponent.value?.reset()
+      safeResetTurnstile(captchaComponent.value)
       console.error('Error fetching invite:', error)
       isError.value = error.message
       isFetchingInvite.value = false
@@ -134,7 +135,7 @@ async function submitForm() {
     })
 
     if (error) {
-      captchaComponent.value?.reset()
+      safeResetTurnstile(captchaComponent.value)
       throw new Error(error.message || 'Failed to accept invitation')
     }
 
@@ -151,12 +152,12 @@ async function submitForm() {
       await router.replace('/login')
     }
     else {
-      captchaComponent.value?.reset()
+      safeResetTurnstile(captchaComponent.value)
       throw new Error('No tokens received from server')
     }
   }
   catch (error: unknown) {
-    captchaComponent.value?.reset()
+    safeResetTurnstile(captchaComponent.value)
     console.error('Error accepting invitation:', error)
     isError.value = error instanceof Error ? error.message : String(error)
   }
