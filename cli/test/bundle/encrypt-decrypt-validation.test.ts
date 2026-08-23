@@ -1,0 +1,36 @@
+import { describe, expect, it } from 'bun:test'
+import { decryptZipInternal } from '../../src/bundle/decrypt'
+import { encryptZipInternal } from '../../src/bundle/encrypt'
+import { CliUserError } from '../../src/shared/cli-user-error'
+import { shouldCapturePosthogException } from '../../src/posthog'
+
+describe('bundle encrypt input validation', () => {
+  it('throws CliUserError when zip path is missing', async () => {
+    await expect(encryptZipInternal(undefined as any, 'abc123', {}, true)).rejects.toBeInstanceOf(CliUserError)
+    await expect(encryptZipInternal(undefined as any, 'abc123', {}, true)).rejects.toThrow(/zip path/i)
+    expect(shouldCapturePosthogException(new CliUserError('Missing zip path'))).toBe(false)
+  })
+
+  it('throws CliUserError when checksum is missing', async () => {
+    await expect(encryptZipInternal('./missing.zip', undefined as any, {}, true)).rejects.toBeInstanceOf(CliUserError)
+    await expect(encryptZipInternal('./missing.zip', undefined as any, {}, true)).rejects.toThrow(/checksum/i)
+  })
+})
+
+describe('bundle decrypt input validation', () => {
+  it('throws CliUserError when zip path is missing', async () => {
+    await expect(decryptZipInternal(undefined as any, 'a:b', {}, true)).rejects.toBeInstanceOf(CliUserError)
+    await expect(decryptZipInternal(undefined as any, 'a:b', {}, true)).rejects.toThrow(/zip path/i)
+  })
+
+  it('throws CliUserError when ivSessionKey is missing', async () => {
+    await expect(decryptZipInternal('./missing.zip', undefined as any, {}, true)).rejects.toBeInstanceOf(CliUserError)
+    await expect(decryptZipInternal('./missing.zip', undefined as any, {}, true)).rejects.toThrow(/ivSessionKey/i)
+    expect(shouldCapturePosthogException(new CliUserError('Missing ivSessionKey'))).toBe(false)
+  })
+
+  it('throws CliUserError when ivSessionKey is not in IV:SESSION format', async () => {
+    await expect(decryptZipInternal('./missing.zip', 'checksum-only', {}, true)).rejects.toBeInstanceOf(CliUserError)
+    await expect(decryptZipInternal('./missing.zip', 'checksum-only', {}, true)).rejects.toThrow(/ivSessionKey format/i)
+  })
+})

@@ -7,7 +7,9 @@ import { trackEvent } from '../analytics/track'
 import { decryptChecksum, decryptChecksumV3, decryptSource } from '../api/crypto'
 import { checkAlerts } from '../api/update'
 import { getChecksum } from '../checksum'
+import { CliUserError } from '../shared/cli-user-error'
 import { baseKeyPubV2, findRoot, formatError, getConfig, getInstalledVersion, isDeprecatedPluginVersion } from '../utils'
+import { requireExistingZipPath, requireIvSessionKey, requireZipPath } from './validate-inputs'
 
 export type { DecryptResult } from '../schemas/bundle'
 
@@ -40,14 +42,12 @@ export async function decryptZipInternal(
     intro('Decrypt zip file')
 
   try {
-    await checkAlerts()
+    requireZipPath(zipPath)
+    requireIvSessionKey(ivsessionKey)
+    requireExistingZipPath(zipPath)
 
-    if (!existsSync(zipPath)) {
-      const message = `Zip not found at the path ${zipPath}`
-      if (!silent)
-        log.error(message)
-      throw new Error(message)
-    }
+    if (!silent)
+      await checkAlerts()
 
     const extConfig = await getConfig()
 
@@ -125,6 +125,9 @@ export async function decryptZipInternal(
     return { outputPath, checksumMatches }
   }
   catch (error) {
+    if (error instanceof CliUserError)
+      throw error
+
     if (!silent)
       log.error(`Error decrypting zip file ${formatError(error)}`)
     throw error instanceof Error ? error : new Error(String(error))
