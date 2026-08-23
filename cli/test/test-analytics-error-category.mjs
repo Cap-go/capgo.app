@@ -12,8 +12,12 @@ assert.equal(categorizeCliError({ status: 413 }), 'payload_too_large')
 assert.equal(categorizeCliError({ status: 500 }), 'server_error')
 
 assert.equal(categorizeCliError(new Error('fetch failed: ECONNREFUSED')), 'network_error')
+assert.equal(categorizeCliError(new Error('TypeError: fetch failed')), 'network_error')
+assert.equal(categorizeCliError({ message: 'EAI_AGAIN' }), 'network_error')
 assert.equal(categorizeCliError(new Error('The operation timed out')), 'timeout')
+assert.equal(categorizeCliError(new Error('ETIMEDOUT')), 'timeout')
 assert.equal(categorizeCliError(new Error('Invalid app id format')), 'validation_error')
+assert.equal(categorizeCliError(new Error('DNS policy misconfiguration for org')), 'unknown')
 
 assert.equal(categorizeCliError({ code: 'commander.help' }), 'commander')
 

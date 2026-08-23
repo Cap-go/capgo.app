@@ -252,6 +252,10 @@ try {
   assert.equal(shouldCapturePosthogException(new CliUserError('Upload cancelled by user')), false)
   assert.equal(shouldCapturePosthogException(new CliUserError(CAPGO_SERVER_CONFIG_MISSING_MESSAGE)), false)
   assert.equal(
+    shouldCapturePosthogException(new CliUserError('Cannot reach Capgo to verify 2FA compliance. Check your network connection and try again.')),
+    false,
+  )
+  assert.equal(
     shouldCapturePosthogException(new CliUserError(
       'Insufficient permissions for app. Required RBAC permission for this action: app.upload_bundle.',
       { appId: 'com.example.app', requiredPermissionKey: 'app.upload_bundle' },

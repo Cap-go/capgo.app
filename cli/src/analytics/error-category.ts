@@ -21,11 +21,21 @@ function getStatus(error: unknown): number | undefined {
 }
 
 function getMessage(error: unknown): string {
-  if (error instanceof Error)
-    return error.message
-  if (typeof error === 'string')
-    return error
-  return ''
+  const parts: string[] = []
+  if (error instanceof Error) {
+    parts.push(error.message)
+    if (error.cause instanceof Error)
+      parts.push(error.cause.message)
+  }
+  else if (typeof error === 'string') {
+    parts.push(error)
+  }
+  else if (error && typeof error === 'object') {
+    const candidate = error as { message?: unknown }
+    if (typeof candidate.message === 'string')
+      parts.push(candidate.message)
+  }
+  return parts.join(' ')
 }
 
 /**
@@ -54,7 +64,7 @@ export function categorizeCliError(error: unknown): CliErrorCategory {
   }
 
   const message = getMessage(error).toLowerCase()
-  if (/econnrefused|enotfound|fetch failed|network|socket|dns/.test(message))
+  if (/econnrefused|econnreset|enotfound|eai_again|fetch failed|failed to fetch|connect timeout|und_err/.test(message))
     return 'network_error'
   if (/timed out|timeout|etimedout|aborted/.test(message))
     return 'timeout'

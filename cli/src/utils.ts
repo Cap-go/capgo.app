@@ -36,6 +36,8 @@ import { getCliLoginCommand } from './runner-command'
 import { nativePackageSchema } from './schemas/common'
 import { safeParseSchema } from './schemas/schema_validation'
 import { CliUserError } from './shared/cli-user-error'
+import { isTransientNetworkError } from './shared/network-error'
+import { TWO_FACTOR_COMPLIANCE_NETWORK_MESSAGE, throwTwoFactorComplianceRpcError } from './shared/two-factor-compliance'
 import { trimTrailingSlashes } from './shared/trim-trailing-slashes'
 import { formatApiErrorForCli, parseSecurityPolicyError } from './utils/security_policy_errors'
 
@@ -193,9 +195,13 @@ export function formatError(error: any): string {
 export async function check2FAAccessForOrg(supabase: SupabaseClient<Database>, orgId: string, silent = false): Promise<void> {
   const { data: reject2fa, error } = await supabase.rpc('reject_access_due_to_2fa_for_org', { org_id: orgId })
   if (error) {
-    if (!silent)
-      log.error(`Cannot check 2FA compliance: ${error.message}`)
-    throw new Error(`Cannot check 2FA compliance: ${error.message}`)
+    if (!silent) {
+      if (isTransientNetworkError(error))
+        log.error(TWO_FACTOR_COMPLIANCE_NETWORK_MESSAGE)
+      else
+        log.error(`Cannot check 2FA compliance: ${error.message}`)
+    }
+    throwTwoFactorComplianceRpcError(error)
   }
   if (reject2fa) {
     if (!silent)
