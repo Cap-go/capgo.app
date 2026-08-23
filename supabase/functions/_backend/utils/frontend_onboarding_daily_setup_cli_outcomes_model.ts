@@ -22,6 +22,9 @@ export interface FrontendOnboardingDailySetupCliEvent {
   timestampMs: number
   kind: FrontendOnboardingDailySetupCliEventKind
   commandPath?: string
+  agentInvoker?: boolean
+  agentId?: string
+  agentName?: string
 }
 
 export interface FrontendOnboardingDailySetupCliSignals {

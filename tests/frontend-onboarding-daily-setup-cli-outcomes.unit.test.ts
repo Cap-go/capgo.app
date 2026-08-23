@@ -82,6 +82,9 @@ describe('buildFrontendOnboardingDailySetupCliHogql', () => {
     expect(selectedProjection).toContain('selected_events.event = \'onboarding_ai_instructions_copied\', \'ai_copy\'')
     expect(selectedProjection).toContain('\'cli_command\'\n      ) AS event_kind')
     expect(selectedProjection).toContain('if(selected_events.event = \'CLI Command Invoked\', JSONExtractString(toString(selected_events.properties), \'command_path\'), \'\') AS command_path')
+    expect(selectedProjection).toContain("if(selected_events.event = 'CLI Command Invoked', JSONExtractBool(toString(selected_events.properties), 'agent_invoker'), false) AS agent_invoker")
+    expect(selectedProjection).toContain("if(selected_events.event = 'CLI Command Invoked', JSONExtractString(toString(selected_events.properties.agent_identity), 'id'), '') AS agent_id")
+    expect(selectedProjection).toContain("if(selected_events.event = 'CLI Command Invoked', JSONExtractString(toString(selected_events.properties.agent_identity), 'name'), '') AS agent_name")
     expect(selectedProjection).toContain('count() OVER () AS total_events')
     expect(selectedProjection).toContain('CLI Command Invoked')
 
@@ -180,9 +183,42 @@ describe('getFrontendOnboardingDailySetupCliEvents', () => {
       { personId: 'person-1', timestampMs: 1000, kind: 'setup' },
       { personId: 'person-1', timestampMs: 1100, kind: 'cli_copy' },
       { personId: 'person-1', timestampMs: 1200, kind: 'ai_copy' },
-      { personId: 'person-1', timestampMs: 1300, kind: 'cli_command', commandPath: 'init' },
-      { personId: 'person-1', timestampMs: 1400, kind: 'cli_command', commandPath: ' init ' },
+      { personId: 'person-1', timestampMs: 1300, kind: 'cli_command', commandPath: 'init', agentInvoker: false },
+      { personId: 'person-1', timestampMs: 1400, kind: 'cli_command', commandPath: ' init ', agentInvoker: false },
     ])
+  })
+
+  it('maps detected agent identity fields on a CLI event', async () => {
+    queryPosthogHogqlMock.mockResolvedValueOnce({
+      configured: true,
+      connected: true,
+      failureReason: null,
+      rows: [{
+        person_id: 'person-agent',
+        timestamp_ms: 1_787_500_000_000,
+        event_kind: 'cli_command',
+        command_path: 'app list',
+        agent_invoker: true,
+        agent_id: ' codex ',
+        agent_name: ' Codex ',
+        total_events: 1,
+      }],
+    })
+
+    await expect(getFrontendOnboardingDailySetupCliEvents(
+      createContext(),
+      '2026-08-01T00:00:00.000Z',
+      '2026-08-03T00:00:00.000Z',
+      '2026-08-04T00:00:00.000Z',
+    )).resolves.toEqual([{
+      personId: 'person-agent',
+      timestampMs: 1_787_500_000_000,
+      kind: 'cli_command',
+      commandPath: 'app list',
+      agentInvoker: true,
+      agentId: 'codex',
+      agentName: 'Codex',
+    }])
   })
 
   it('returns an empty list for a successful empty query', async () => {
@@ -403,6 +439,9 @@ describe('getFrontendOnboardingDailySetupCliEvents', () => {
     ['unknown kind', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'unknown', command_path: '', total_events: 1 }],
     ['missing CLI path', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'cli_command', total_events: 1 }],
     ['whitespace CLI path', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'cli_command', command_path: '   ', total_events: 1 }],
+    ['non-Boolean agent invoker', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'cli_command', command_path: 'init', agent_invoker: 'true', total_events: 1 }],
+    ['non-string agent ID', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'cli_command', command_path: 'init', agent_invoker: true, agent_id: 42, total_events: 1 }],
+    ['non-string agent name', { person_id: 'person-1', timestamp_ms: 1000, event_kind: 'cli_command', command_path: 'init', agent_invoker: true, agent_name: ['Codex'], total_events: 1 }],
   ])('rejects the whole query result for a malformed %s row', async (_name, row) => {
     queryPosthogHogqlMock.mockResolvedValueOnce({
       configured: true,
