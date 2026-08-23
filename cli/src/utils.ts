@@ -2590,12 +2590,20 @@ export async function getRemoteDependencies(supabase: SupabaseClient<Database>, 
         )`)
     .eq('name', channel)
     .eq('app_id', appId)
-    .single()
+    .maybeSingle()
 
   if (error) {
-    log.error(`Error fetching native packages: ${error.message}`)
-    throw new Error(`Error fetching native packages: ${error.message}`)
+    const message = error.message?.includes('Cannot coerce')
+      ? `Multiple channels matched for app "${appId}" and channel "${channel}". Contact support if this persists.`
+      : error.message
+    log.error(`Error fetching native packages: ${message}`)
+    throw new Error(`Error fetching native packages: ${message}`)
   }
+
+  if (!remoteNativePackages) {
+    return convertNativePackages([])
+  }
+
   return convertNativePackages(((remoteNativePackages.version as any)?.native_packages as any) ?? [])
 }
 

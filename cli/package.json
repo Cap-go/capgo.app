@@ -72,7 +72,7 @@
     "test:regex": "bun test/test-regex-validation.mjs",
     "test:upload": "bun test/test-upload-validation.mjs",
     "test:fail-on-incompatible": "bun test/test-fail-on-incompatible.mjs",
-    "test:native-dependencies": "bun test/test-native-dependencies.mjs",
+    "test:native-dependencies": "bun test/test-native-dependencies.mjs && bun test/test-get-remote-dependencies.mjs",
     "test:package-json-guard": "bun test/test-package-json-guard.mjs",
     "test:credentials": "bun test/test-credentials.mjs",
     "test:asc-key-protocol": "bun test/test-asc-key-protocol.mjs",
