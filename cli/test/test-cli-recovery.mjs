@@ -7,11 +7,13 @@ import { join } from 'node:path'
 import { shouldCapturePosthogException } from '../src/posthog.ts'
 import {
   collectAppIdCandidates,
+  isValidAppId,
+} from '../src/recovery/app-id.ts'
+import {
   findBuildEntryJsPath,
   injectNotifyAppReadyIntoJs,
-  isValidAppId,
   patchNotifyAppReadyInBuildFolder,
-} from '../src/recovery/index.ts'
+} from '../src/recovery/notify-app-ready.ts'
 
 const tempDirs = []
 let failures = 0
