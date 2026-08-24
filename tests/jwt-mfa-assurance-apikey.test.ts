@@ -5,8 +5,8 @@ import {
   executeSQL,
   getAuthHeaders,
   getAuthHeadersForCredentials,
-  orgApiKeyBindings,
   ORG_ID_JWT_MFA_EDGE,
+  orgApiKeyBindings,
   USER_EMAIL_JWT_MFA_EDGE,
   USER_ID_JWT_MFA_EDGE,
   USER_PASSWORD,
@@ -54,8 +54,8 @@ async function deleteApiKeyById(id: number | undefined) {
   try {
     await executeSQL(`DELETE FROM public.apikeys WHERE id = $1`, [id])
   }
-  catch {
-    // Best-effort cleanup only; do not mask the test result.
+  catch (error) {
+    console.error(`Failed to delete test API key ${id}:`, error)
   }
 }
 
@@ -63,7 +63,7 @@ afterEach(async () => {
   await cleanupVerifiedMfaFactor()
 })
 
-describe('JWT MFA assurance on /apikey create', () => {
+describe('jwt MFA assurance on /apikey create', () => {
   it('rejects MFA-enrolled users with password-only aal1 sessions', async () => {
     const headers = await getAuthHeadersForCredentials(USER_EMAIL_JWT_MFA_EDGE, USER_PASSWORD)
     await enrollVerifiedMfaFactor()
