@@ -5,38 +5,39 @@ import {
   executeSQL,
   getAuthHeaders,
   getAuthHeadersForCredentials,
+  getSupabaseClient,
   orgApiKeyBindings,
-  USER_PASSWORD_HASH,
 } from './test-utils.ts'
 
 const MFA_EDGE_USER_ID = 'f8e7d6c5-b4a3-4291-8f7e-6d5c4b3a2910'
 const MFA_EDGE_ORG_ID = 'a9b8c7d6-e5f4-4321-9876-543210fedcba'
-const MFA_EDGE_EMAIL = 'jwt-mfa-edge-apikey@test.local'
+const MFA_EDGE_EMAIL = 'jwt-mfa-edge-apikey@capgo.app'
 const MFA_EDGE_PASSWORD = 'testtest'
 
 async function setupMfaEdgeUser() {
-  await executeSQL(
-    `
-    INSERT INTO auth.users (
-      id,
-      email,
-      encrypted_password,
-      email_confirmed_at,
-      created_at,
-      updated_at,
-      raw_user_meta_data
-    )
-    VALUES ($1::uuid, $2, $3, NOW(), NOW(), NOW(), '{}'::jsonb)
-    ON CONFLICT (id) DO NOTHING
-    `,
-    [MFA_EDGE_USER_ID, MFA_EDGE_EMAIL, USER_PASSWORD_HASH],
-  )
+  const supabase = getSupabaseClient()
+
+  await supabase.auth.admin.deleteUser(MFA_EDGE_USER_ID).catch(() => undefined)
+
+  const { error: createUserError } = await supabase.auth.admin.createUser({
+    id: MFA_EDGE_USER_ID,
+    email: MFA_EDGE_EMAIL,
+    password: MFA_EDGE_PASSWORD,
+    email_confirm: true,
+    user_metadata: {
+      test_identifier: 'jwt_mfa_edge_apikey',
+    },
+  })
+  if (createUserError) {
+    throw createUserError
+  }
 
   await executeSQL(
     `
     INSERT INTO public.users (id, email, first_name)
     VALUES ($1::uuid, $2, 'JWT MFA Edge Test')
-    ON CONFLICT (id) DO NOTHING
+    ON CONFLICT (id) DO UPDATE
+    SET email = EXCLUDED.email
     `,
     [MFA_EDGE_USER_ID, MFA_EDGE_EMAIL],
   )
@@ -93,13 +94,7 @@ async function setupMfaEdgeUser() {
     [MFA_EDGE_USER_ID],
   )
 
-  await executeSQL(
-    `
-    DELETE FROM auth.mfa_factors
-    WHERE user_id = $1::uuid
-    `,
-    [MFA_EDGE_USER_ID],
-  )
+  await executeSQL(`DELETE FROM auth.mfa_factors WHERE user_id = $1::uuid`, [MFA_EDGE_USER_ID])
 
   await executeSQL(
     `
@@ -133,7 +128,7 @@ async function cleanupMfaEdgeUser() {
   await executeSQL(`DELETE FROM auth.mfa_factors WHERE user_id = $1::uuid`, [MFA_EDGE_USER_ID])
   await executeSQL(`DELETE FROM public.user_security WHERE user_id = $1::uuid`, [MFA_EDGE_USER_ID])
   await executeSQL(`DELETE FROM public.users WHERE id = $1::uuid`, [MFA_EDGE_USER_ID])
-  await executeSQL(`DELETE FROM auth.users WHERE id = $1::uuid`, [MFA_EDGE_USER_ID])
+  await getSupabaseClient().auth.admin.deleteUser(MFA_EDGE_USER_ID).catch(() => undefined)
 }
 
 beforeAll(async () => {
