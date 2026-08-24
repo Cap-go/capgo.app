@@ -59,12 +59,13 @@ export function isStatsRequestBody(input: unknown): boolean {
   if (typeof value.is_emulator !== 'boolean' || typeof value.is_prod !== 'boolean')
     return false
 
-  if (!isOptionalString(value.defaultChannel)
-    || !isOptionalString(value.channel)
-    || !isOptionalString(value.old_version_name)
-    || !isOptionalString(value.version_code)
-    || !isOptionalString(value.plugin_version)
-    || !isOptionalStringMaxLength(value.install_source, 64)
+ if (!isOptionalString(value.defaultChannel)
+ || !isOptionalString(value.channel)
+ || !isOptionalString(value.old_version_name)
+ || !isOptionalString(value.version_code)
+ || !isOptionalString(value.plugin_version)
+ || !isOptionalString(value.stats_mode)
+ || !isOptionalStringMaxLength(value.install_source, 64)
     || !isOptionalStringMaxLength(value.custom_id, 36)
     || !isOptionalStringMaxLength(value.key_id, 20)
     || !isOptionalString(value.version_build)) {
