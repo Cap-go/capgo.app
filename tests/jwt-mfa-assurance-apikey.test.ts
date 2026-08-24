@@ -47,8 +47,15 @@ async function cleanupVerifiedMfaFactor() {
 }
 
 async function deleteApiKeyById(id: number | undefined) {
-  if (typeof id === 'number') {
+  if (typeof id !== 'number') {
+    return
+  }
+
+  try {
     await executeSQL(`DELETE FROM public.apikeys WHERE id = $1`, [id])
+  }
+  catch {
+    // Best-effort cleanup only; do not mask the test result.
   }
 }
 
