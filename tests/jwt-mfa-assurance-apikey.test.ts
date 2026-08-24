@@ -66,14 +66,16 @@ async function setupMfaEdgeUser() {
       principal_id,
       principal_type,
       role_id,
-      scope_type
+      scope_type,
+      granted_by
     )
     SELECT
       $1::uuid,
       $2::uuid,
       public.rbac_principal_user(),
       r.id,
-      public.rbac_scope_org()
+      public.rbac_scope_org(),
+      $2::uuid
     FROM public.roles r
     WHERE r.name = public.rbac_role_org_super_admin()
     ON CONFLICT DO NOTHING
