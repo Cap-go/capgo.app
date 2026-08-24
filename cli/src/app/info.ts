@@ -1,10 +1,22 @@
+import { spawnSync } from 'node:child_process'
+import { dirname } from 'node:path'
+import { cwd, version as nodeVersion } from 'node:process'
 import { platform, version } from 'node:os'
-import { version as nodeVersion } from 'node:process'
-import { log, spinner } from '@clack/prompts'
+import { confirm, isCancel, log, select, spinner } from '@clack/prompts'
 import pack from '../../package.json'
 import { trackEvent } from '../analytics/track'
-import { getAllPackagesDependencies, getAppId, getBundleVersion, getConfig } from '../utils'
+import { canPromptInteractively, findRoot, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getPMAndCommand } from '../utils'
 import { getLatestVersion } from '../utils/latest-version'
+
+export const OUTDATED_DEPENDENCIES_ERROR = 'Some dependencies are not up to date'
+
+export interface OutdatedDependency {
+  name: string
+  installed: string
+  latest: string
+}
+
+export type DoctorUpdateChoice = 'capgo-only' | 'all' | 'skip'
 
 async function getLatestDependencies(installedDependencies: Record<string, string>) {
   const latestDependencies: Record<string, string> = {}
@@ -37,23 +49,199 @@ interface DoctorInfoOptions {
   packageJson?: string
 }
 
+export function listOutdatedDependencies(
+  installed: Record<string, string>,
+  latest: Record<string, string>,
+): OutdatedDependency[] {
+  const outdated: OutdatedDependency[] = []
+  for (const name of Object.keys(installed)) {
+    const have = installed[name]
+    const want = latest[name]
+    if (have && want && have !== want)
+      outdated.push({ name, installed: have, latest: want })
+  }
+  return outdated
+}
+
+export function partitionOutdatedDependencies(outdated: OutdatedDependency[]): {
+  capgo: OutdatedDependency[]
+  other: OutdatedDependency[]
+} {
+  const capgo: OutdatedDependency[] = []
+  const other: OutdatedDependency[] = []
+  for (const dep of outdated) {
+    if (dep.name.startsWith('@capgo/'))
+      capgo.push(dep)
+    else
+      other.push(dep)
+  }
+  return { capgo, other }
+}
+
+export function packagesForDoctorUpdateChoice(
+  choice: DoctorUpdateChoice,
+  capgo: OutdatedDependency[],
+  other: OutdatedDependency[],
+): OutdatedDependency[] {
+  if (choice === 'skip')
+    return []
+  if (choice === 'all')
+    return [...capgo, ...other]
+  return capgo
+}
+
+export function buildOutdatedInstallCommand(
+  pm: ReturnType<typeof getPMAndCommand>,
+  packages: OutdatedDependency[],
+): string {
+  const specs = packages.map(dep => `${dep.name}@latest`).join(' ')
+  return `${pm.installCommand} ${specs}`.trim()
+}
+
+function formatSpawnOutput(output: string | Buffer | null | undefined): string {
+  if (!output)
+    return ''
+  return typeof output === 'string' ? output : output.toString('utf8')
+}
+
+export function runOutdatedDependencyUpdates(
+  pm: ReturnType<typeof getPMAndCommand>,
+  packages: OutdatedDependency[],
+  projectRoot: string,
+): void {
+  if (packages.length === 0)
+    return
+
+  const [command, ...baseArgs] = pm.installCommand.split(/\s+/).filter(Boolean)
+  if (!command)
+    throw new Error('Cannot determine package manager install command')
+
+  const specs = packages.map(dep => `${dep.name}@latest`)
+  const result = spawnSync(command, [...baseArgs, ...specs], {
+    stdio: 'pipe',
+    cwd: projectRoot,
+  })
+
+  if (result.error || result.status !== 0) {
+    const output = [formatSpawnOutput(result.stdout), formatSpawnOutput(result.stderr)]
+      .map(text => text.trim())
+      .filter(Boolean)
+      .join('\n')
+    const outputDetails = output ? `\n${output}` : ''
+    const message = `Dependency update failed with code ${result.status ?? 'unknown'}${outputDetails}`
+    throw result.error ?? new Error(message)
+  }
+}
+
 export function computeDoctorAnalyticsTags(
   installed: Record<string, string>,
   latest: Record<string, string>,
 ): { is_outdated: boolean, dependency_count: number, outdated_count: number } {
-  const keys = Object.keys(installed)
-  let outdatedCount = 0
-  for (const key of keys) {
-    const have = installed[key]
-    const want = latest[key]
-    if (have && want && have !== want)
-      outdatedCount += 1
-  }
+  const outdated = listOutdatedDependencies(installed, latest)
   return {
-    is_outdated: outdatedCount > 0,
-    dependency_count: keys.length,
-    outdated_count: outdatedCount,
+    is_outdated: outdated.length > 0,
+    dependency_count: Object.keys(installed).length,
+    outdated_count: outdated.length,
   }
+}
+
+function logOutdatedDependencyTable(outdated: OutdatedDependency[]) {
+  log.warn('\x1B[31m🚨 Some dependencies are not up to date\x1B[0m')
+  for (const dep of outdated)
+    log.warn(`   ${dep.name}: ${dep.installed} → ${dep.latest}`)
+}
+
+function throwOutdatedDependenciesError(pm: ReturnType<typeof getPMAndCommand>, outdated: OutdatedDependency[], silent: boolean) {
+  if (!silent && outdated.length > 0)
+    log.info(`Run: ${buildOutdatedInstallCommand(pm, outdated)}`)
+  throw new Error(OUTDATED_DEPENDENCIES_ERROR)
+}
+
+async function promptDoctorUpdateChoice(capgo: OutdatedDependency[], other: OutdatedDependency[]): Promise<DoctorUpdateChoice> {
+  if (capgo.length > 0 && other.length === 0) {
+    const shouldUpdate = await confirm({
+      message: 'Update outdated @capgo/* packages now?',
+      initialValue: true,
+    })
+    if (isCancel(shouldUpdate))
+      return 'skip'
+    return shouldUpdate ? 'capgo-only' : 'skip'
+  }
+
+  if (capgo.length === 0 && other.length > 0) {
+    const choice = await select({
+      message: 'Outdated Capacitor-related packages detected. How do you want to proceed?',
+      options: [
+        { value: 'all', label: 'Update all listed packages now' },
+        { value: 'skip', label: 'Skip (doctor will fail)' },
+      ],
+    })
+    if (isCancel(choice))
+      return 'skip'
+    return choice as DoctorUpdateChoice
+  }
+
+  const choice = await select({
+    message: 'Outdated dependencies detected. How do you want to proceed?',
+    options: [
+      { value: 'capgo-only', label: 'Update @capgo/* packages only (recommended)' },
+      { value: 'all', label: 'Update all listed packages' },
+      { value: 'skip', label: 'Skip (doctor will fail)' },
+    ],
+  })
+  if (isCancel(choice))
+    return 'skip'
+  return choice as DoctorUpdateChoice
+}
+
+async function maybeRecoverOutdatedDependencies(
+  outdated: OutdatedDependency[],
+  options: DoctorInfoOptions,
+  silent: boolean,
+): Promise<boolean> {
+  if (!canPromptInteractively({ silent }))
+    return false
+
+  const pm = getPMAndCommand()
+  const { capgo, other } = partitionOutdatedDependencies(outdated)
+  const choice = await promptDoctorUpdateChoice(capgo, other)
+  const packagesToUpdate = packagesForDoctorUpdateChoice(choice, capgo, other)
+
+  if (packagesToUpdate.length === 0)
+    return false
+
+  const projectRoot = options.packageJson ? dirname(options.packageJson) : findRoot(cwd())
+  const installCommand = buildOutdatedInstallCommand(pm, packagesToUpdate)
+  const s = spinner()
+  s.start(`Running: ${installCommand}`)
+
+  try {
+    runOutdatedDependencyUpdates(pm, packagesToUpdate, projectRoot)
+    s.stop('Dependencies updated')
+  }
+  catch (error) {
+    s.stop('Dependency update failed')
+    log.error(error instanceof Error ? error.message : String(error))
+    log.info(`Run manually: ${installCommand}`)
+    return false
+  }
+
+  const installedAfterUpdate = await getInstalledDependencies()
+  const latestAfterUpdate = await getLatestDependencies(installedAfterUpdate)
+  const stillOutdated = listOutdatedDependencies(installedAfterUpdate, latestAfterUpdate)
+
+  if (stillOutdated.length === 0) {
+    void trackEvent({
+      channel: 'cli-usage',
+      event: 'CLI Recovered Outdated Dependencies',
+      tags: { recovery: 'update', outdated_count: outdated.length },
+    })
+    log.success('\x1B[32m✅ All dependencies are up to date after update\x1B[0m')
+    return true
+  }
+
+  log.warn('Some dependencies are still outdated after the update')
+  return false
 }
 
 export async function getInfoInternal(options: DoctorInfoOptions, silent = false) {
@@ -77,7 +265,7 @@ export async function getInfoInternal(options: DoctorInfoOptions, silent = false
     log.info(' Installed Dependencies:')
   }
 
-  const installedDependencies = await getInstalledDependencies()
+  let installedDependencies = await getInstalledDependencies()
 
   if (Object.keys(installedDependencies).length === 0) {
     if (!silent)
@@ -111,10 +299,18 @@ export async function getInfoInternal(options: DoctorInfoOptions, silent = false
     tags: computeDoctorAnalyticsTags(installedDependencies, latestDependencies),
   })
 
-  if (JSON.stringify(installedDependencies) !== JSON.stringify(latestDependencies)) {
+  const outdated = listOutdatedDependencies(installedDependencies, latestDependencies)
+
+  if (outdated.length > 0) {
     if (!silent)
-      log.warn('\x1B[31m🚨 Some dependencies are not up to date\x1B[0m')
-    throw new Error('Some dependencies are not up to date')
+      logOutdatedDependencyTable(outdated)
+
+    const recovered = await maybeRecoverOutdatedDependencies(outdated, options, silent)
+    if (!recovered)
+      throwOutdatedDependenciesError(getPMAndCommand(), outdated, silent)
+
+    installedDependencies = await getInstalledDependencies()
+    latestDependencies = await getLatestDependencies(installedDependencies)
   }
 
   if (!silent)
