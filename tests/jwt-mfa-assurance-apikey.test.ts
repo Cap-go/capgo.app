@@ -6,56 +6,45 @@ import {
   getAuthHeaders,
   getAuthHeadersForCredentials,
   orgApiKeyBindings,
+  USER_PASSWORD_HASH,
 } from './test-utils.ts'
 
 const MFA_EDGE_USER_ID = 'f8e7d6c5-b4a3-4291-8f7e-6d5c4b3a2910'
 const MFA_EDGE_ORG_ID = 'a9b8c7d6-e5f4-4321-9876-543210fedcba'
 const MFA_EDGE_EMAIL = 'jwt-mfa-edge-apikey@test.local'
 const MFA_EDGE_PASSWORD = 'testtest'
-const PASSWORD_HASH = '$2a$10$0CErXxryZPucjJWq3O7qXeTJgN.tnNU5XCZy9pXKDWRi/aS9W7UFi'
 
 async function setupMfaEdgeUser() {
   await executeSQL(
     `
     INSERT INTO auth.users (
       id,
-      instance_id,
-      aud,
-      role,
       email,
       encrypted_password,
       email_confirmed_at,
       created_at,
       updated_at,
-      confirmation_token,
-      recovery_token,
-      email_change_token_new,
-      email_change
+      raw_user_meta_data
     )
-    VALUES (
-      $1::uuid,
-      '00000000-0000-0000-0000-000000000000',
-      'authenticated',
-      'authenticated',
-      $2,
-      $3,
-      NOW(),
-      NOW(),
-      NOW(),
-      '',
-      '',
-      '',
-      ''
-    )
+    VALUES ($1::uuid, $2, $3, NOW(), NOW(), NOW(), '{}'::jsonb)
     ON CONFLICT (id) DO NOTHING
     `,
-    [MFA_EDGE_USER_ID, MFA_EDGE_EMAIL, PASSWORD_HASH],
+    [MFA_EDGE_USER_ID, MFA_EDGE_EMAIL, USER_PASSWORD_HASH],
   )
 
   await executeSQL(
     `
-    INSERT INTO public.orgs (id, owner, created_at, updated_at, name, email)
-    VALUES ($1::uuid, $2::uuid, NOW(), NOW(), 'JWT MFA Edge Test Org', $3)
+    INSERT INTO public.users (id, email, first_name)
+    VALUES ($1::uuid, $2, 'JWT MFA Edge Test')
+    ON CONFLICT (id) DO NOTHING
+    `,
+    [MFA_EDGE_USER_ID, MFA_EDGE_EMAIL],
+  )
+
+  await executeSQL(
+    `
+    INSERT INTO public.orgs (id, created_by, name, management_email)
+    VALUES ($1::uuid, $2::uuid, 'JWT MFA Edge Test Org', $3)
     ON CONFLICT (id) DO NOTHING
     `,
     [MFA_EDGE_ORG_ID, MFA_EDGE_USER_ID, MFA_EDGE_EMAIL],
@@ -63,8 +52,8 @@ async function setupMfaEdgeUser() {
 
   await executeSQL(
     `
-    INSERT INTO public.org_users (org_id, user_id, role, created_at, updated_at)
-    VALUES ($1::uuid, $2::uuid, public.rbac_role_org_super_admin(), NOW(), NOW())
+    INSERT INTO public.org_users (org_id, user_id, rbac_role_name, is_invite)
+    VALUES ($1::uuid, $2::uuid, public.rbac_role_org_super_admin(), false)
     ON CONFLICT DO NOTHING
     `,
     [MFA_EDGE_ORG_ID, MFA_EDGE_USER_ID],
@@ -131,6 +120,7 @@ async function cleanupMfaEdgeUser() {
   await executeSQL(`DELETE FROM public.org_users WHERE user_id = $1::uuid`, [MFA_EDGE_USER_ID])
   await executeSQL(`DELETE FROM public.orgs WHERE id = $1::uuid`, [MFA_EDGE_ORG_ID])
   await executeSQL(`DELETE FROM auth.mfa_factors WHERE user_id = $1::uuid`, [MFA_EDGE_USER_ID])
+  await executeSQL(`DELETE FROM public.users WHERE id = $1::uuid`, [MFA_EDGE_USER_ID])
   await executeSQL(`DELETE FROM auth.users WHERE id = $1::uuid`, [MFA_EDGE_USER_ID])
 }
 
