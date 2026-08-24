@@ -1,12 +1,13 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../../utils/hono.ts'
 import type { Database } from '../../../utils/supabase.types.ts'
+import { createClient } from '@supabase/supabase-js'
 import { z } from 'zod'
 import { safeParseSchema } from '../../../utils/schema_validation.ts'
 import { BRES, simpleError } from '../../../utils/hono.ts'
 import { cloudlog } from '../../../utils/logging.ts'
 import { checkPermission } from '../../../utils/rbac.ts'
-import { supabaseApikey } from '../../../utils/supabase.ts'
+import { getEnv } from '../../../utils/supabase.ts'
 
 const rbacInviteRoles = ['org_member', 'org_billing_admin', 'org_admin', 'org_super_admin'] as const
 
@@ -58,7 +59,27 @@ export async function post(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown,
     throw simpleError('cannot_access_organization', 'You can\'t access this organization', { orgId: body.orgId })
   }
 
-  const supabase = supabaseApikey(c, _apikey?.key)
+  const effectiveApikey = _apikey?.key ?? c.get('capgkey')
+  if (!effectiveApikey) {
+    throw simpleError('not_authorized', 'Not authorized')
+  }
+
+  const supabase = createClient<Database>(
+    getEnv(c, 'SUPABASE_URL'),
+    getEnv(c, 'SUPABASE_SERVICE_ROLE_KEY'),
+    {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+        detectSessionInUrl: false,
+      },
+      global: {
+        headers: {
+          capgkey: effectiveApikey,
+        },
+      },
+    },
+  )
 
   const rbacRoleName = normalizeInviteRole(body.invite_type)
 

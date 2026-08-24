@@ -156,18 +156,17 @@ describe('legacy CLI RBAC compatibility RPCs', () => {
     expect(uploadAllowed).toBe(false)
   })
 
-  it.concurrent('keeps old permission rank RPCs for authenticated API-key callers', async () => {
-    const authHeaders = await getAuthHeadersForCredentials(USER_EMAIL, USER_PASSWORD)
-    const uploaderClient = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      global: { headers: { ...authHeaders, capgkey: APIKEY_TEST_APP_UPLOADER } },
+  it.concurrent('keeps old permission rank RPCs for service-role API-key callers', async () => {
+    const uploaderClient = createClient<Database>(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+      global: { headers: { capgkey: APIKEY_TEST_APP_UPLOADER } },
       auth: { persistSession: false },
     })
-    const readerClient = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      global: { headers: { ...authHeaders, capgkey: APIKEY_TEST_APP_READER } },
+    const readerClient = createClient<Database>(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+      global: { headers: { capgkey: APIKEY_TEST_APP_READER } },
       auth: { persistSession: false },
     })
-    const ownerClient = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      global: { headers: { ...authHeaders, capgkey: APIKEY_TEST_ORG_SUPER_ADMIN } },
+    const ownerClient = createClient<Database>(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+      global: { headers: { capgkey: APIKEY_TEST_ORG_SUPER_ADMIN } },
       auth: { persistSession: false },
     })
 
