@@ -19,9 +19,11 @@ const configWriteTargetStore = new AsyncLocalStorage<{ filePath: string | undefi
 // emits CommonJS, so allowing them would let reads pass but writes silently no-op.
 const capacitorConfigFilePattern = /^capacitor\.config(?:\.[^.]+)*\.(?:ts|js|json)$/
 
-function throwCapacitorConfigPathError(message: string, context?: Record<string, unknown>): never {
-  const path = context?.path
-  log.error(typeof path === 'string' ? `${message}: ${path}` : message)
+function throwCapacitorConfigPathError(message: string, context?: Record<string, unknown>, logError = false): never {
+  if (logError) {
+    const path = context?.path
+    log.error(typeof path === 'string' ? `${message}: ${path}` : message)
+  }
   throw new CliUserError(message, context)
 }
 
@@ -47,26 +49,32 @@ export function withConfigWriteTarget<T>(filePath: string | undefined, action: (
   return configWriteTargetStore.run({ filePath }, action)
 }
 
-export function resolveCapacitorConfigTargetPath(value: string | undefined, initialCwd = cwd()): string | undefined {
+export function resolveCapacitorConfigTargetPath(
+  value: string | undefined,
+  initialCwd = cwd(),
+  options?: { logError?: boolean },
+): string | undefined {
+  const logError = options?.logError ?? false
   if (value === undefined)
     return undefined
   if (!value.trim())
-    throwCapacitorConfigPathError('Capacitor config path must not be empty')
+    throwCapacitorConfigPathError('Capacitor config path must not be empty', undefined, logError)
 
   const resolved = resolve(initialCwd, value)
   if (!existsSync(resolved) || !statSync(resolved).isFile())
-    throwCapacitorConfigPathError('Capacitor config path does not exist', { path: resolved })
+    throwCapacitorConfigPathError('Capacitor config path does not exist', { path: resolved }, logError)
   if (!capacitorConfigFilePattern.test(basename(resolved)))
     throwCapacitorConfigPathError(
       'Capacitor config path must point to a capacitor.config.*.ts, capacitor.config.*.js, or capacitor.config.*.json file',
       { path: resolved },
+      logError,
     )
 
   const workspaceRoot = realpathSync(initialCwd)
   const target = realpathSync(resolved)
   const pathFromWorkspace = relative(workspaceRoot, target)
   if (pathFromWorkspace === '..' || pathFromWorkspace.startsWith(`..${sep}`) || isAbsolute(pathFromWorkspace))
-    throwCapacitorConfigPathError('Capacitor config path must stay within the current working directory', { path: resolved })
+    throwCapacitorConfigPathError('Capacitor config path must stay within the current working directory', { path: resolved }, logError)
   return target
 }
 

@@ -10,7 +10,6 @@ import { getConfigForWrite, getOrganizationId } from '../src/utils.ts'
 
 const NO_CONFIG_MESSAGE = 'No capacitor config file found, run `cap init` first'
 const ORG_ID_MESSAGE = 'Cannot get organization id for app'
-const isolatedTmpRoot = process.platform === 'win32' ? tmpdir() : '/tmp'
 
 function assertCliUserError(error, message, contextKeys = []) {
   assert.equal(error instanceof CliUserError, true, `expected CliUserError, got ${error}`)
@@ -19,7 +18,7 @@ function assertCliUserError(error, message, contextKeys = []) {
     assert.ok(error.context?.[key] !== undefined, `expected context.${key}`)
 }
 
-const brokenConfigDir = mkdtempSync(join(isolatedTmpRoot, 'capgo-broken-cap-config-'))
+const brokenConfigDir = mkdtempSync(join(tmpdir(), 'capgo-broken-cap-config-'))
 const invalidConfigTarget = join(brokenConfigDir, 'capacitor.config.invalid.json')
 const missingConfigTarget = join(brokenConfigDir, 'capacitor.config.missing.json')
 const emptyConfigTarget = join(brokenConfigDir, 'capacitor.config.empty.json')
