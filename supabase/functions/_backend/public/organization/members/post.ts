@@ -78,8 +78,11 @@ export async function post(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown,
   // path via Postgres after revoking anon execute on invite_user_to_org_rbac.
   const pgPool = getPgClient(c)
   let dbClient: PgQueryClient | null = null
+  let transactionStarted = false
   try {
     dbClient = await pgPool.connect() as PgQueryClient
+    await dbClient.query('BEGIN')
+    transactionStarted = true
     await dbClient.query(
       'SELECT set_config($1, $2, true)',
       ['request.headers', JSON.stringify({ capgkey: effectiveApikey })],
@@ -92,8 +95,13 @@ export async function post(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown,
     if (!data || data !== 'OK') {
       throw simpleError('error_inviting_user_to_organization', 'Error inviting user to organization', { data })
     }
+    await dbClient.query('COMMIT')
+    transactionStarted = false
   }
   catch (error) {
+    if (dbClient && transactionStarted) {
+      await dbClient.query('ROLLBACK').catch(() => {})
+    }
     if (error instanceof HTTPException)
       throw error
     throw simpleError('error_inviting_user_to_organization', 'Error inviting user to organization', { error })

@@ -134,6 +134,7 @@ describe('anonymous oracle RPC hardening', () => {
     })
 
     expect(error).toBeNull()
-    expect(['NO_EMAIL', 'OK', 'ALREADY_INVITED']).toContain(data)
+    // Unknown email is read-only and proves authenticated execute still works.
+    expect(data).toBe('NO_EMAIL')
   })
 })

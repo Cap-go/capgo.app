@@ -93,11 +93,6 @@ const ANON_ALLOWED_PROCS = [
 ] as const
 
 const AUTHENTICATED_ONLY_PROCS = [
-  'public.get_org_perm_for_apikey(text, text)',
-  'public.get_org_perm_for_apikey_v2(text, text)',
-  'public.get_user_id(text)',
-  'public.get_user_id(text, text)',
-  'public.invite_user_to_org_rbac(character varying, uuid, text)',
   'public.accept_invitation_to_org(uuid)',
   'public.acknowledge_compatibility_event(bigint, text)',
   'public.count_non_compliant_bundles(uuid, text)',
@@ -108,7 +103,12 @@ const AUTHENTICATED_ONLY_PROCS = [
   'public.get_account_removal_date()',
   'public.get_app_access_rbac(uuid)',
   'public.get_app_metrics(uuid)',
+  'public.get_org_perm_for_apikey(text, text)',
+  'public.get_org_perm_for_apikey_v2(text, text)',
   'public.get_org_user_access_rbac(uuid, uuid)',
+  'public.get_user_id(text)',
+  'public.get_user_id(text, text)',
+  'public.invite_user_to_org_rbac(character varying, uuid, text)',
   'public.rbac_check_permission(text, uuid, character varying, bigint)',
   'public.rbac_check_permission_no_password_policy(text, uuid, character varying, bigint)',
   'public.update_org_member_role(uuid, uuid, text)',
