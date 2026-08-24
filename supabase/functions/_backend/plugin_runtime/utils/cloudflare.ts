@@ -267,4 +267,136 @@ export function trackLogsCF(c: Context, app_id: string, device_id: string, actio
 
   const durationMs = parseStatsDurationMs(metadata)
   c.env.APP_LOG.writeDataPoint({
-    blobs: [device_id, action, version_name, serializeStatsMetadata(metadata), ...appLogDimensionB
+    blobs: [device_id, action, version_name, serializeStatsMetadata(metadata), ...appLogDimensionBlobs(dimensions)],
+    ...(durationMs !== null ? { doubles: [durationMs] } : {}),
+    indexes: [app_id],
+  })
+
+  return Promise.resolve()
+}
+
+export function trackLogsCFExternal(c: Context, app_id: string, device_id: string, action: Database['public']['Enums']['stats_action'], version_name: string, metadata?: StatsMetadata, dimensions?: AppLogDimensions) {
+  if (!c.env.APP_LOG_EXTERNAL)
+    return Promise.resolve()
+
+  const durationMs = parseStatsDurationMs(metadata)
+  c.env.APP_LOG_EXTERNAL.writeDataPoint({
+    blobs: [device_id, action, version_name, serializeStatsMetadata(metadata), ...appLogDimensionBlobs(dimensions)],
+    ...(durationMs !== null ? { doubles: [durationMs] } : {}),
+    indexes: [app_id],
+  })
+
+  return Promise.resolve()
+}
+
+function getReplicaWriteStoreAppSession(c: Context) {
+  return c.env.DB_STOREAPPS
+}
+
+function getReplicaReadStoreAppSession(c: Context) {
+  return c.env.DB_STOREAPPS.withSession('first-unconstrained')
+}
+
+const TRACK_DEVICE_CACHE_PATH = '/.track-device-cache'
+const TRACK_DEVICE_CACHE_MAX_AGE_SECONDS = 31536000
+
+type DeviceCachePayload = DeviceComparable & {
+  app_id: string
+  device_id: string
+  cached_at: string
+}
+
+function toDeviceInfoComparable(device: DeviceWithoutCreatedAt, statsMode: StatsMode): DeviceComparable {
+  const comparableDevice = toComparableDevice(device)
+  if (!isBillingOnlyStatsMode(statsMode))
+    return comparableDevice
+
+  return {
+    ...comparableDevice,
+    platform: null,
+    os_version: '',
+    custom_id: '',
+    default_channel: null,
+    key_id: null,
+    install_source: undefined,
+    country_code: undefined,
+  }
+}
+
+export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt, statsMode: StatsMode = 'all') {
+  // Runs under waitUntil — Cache I/O here stretches Workers Wall Time charts.
+  const start = performance.now()
+  let outcome: 'cache_hit' | 'wrote' | 'error' = 'wrote'
+  const billingOnly = isBillingOnlyStatsMode(statsMode)
+
+  // Analytics Engine DEVICE_INFO is required for tracking devices
+  if (!c.env.DEVICE_INFO) {
+    cloudlog({ requestId: c.get('requestId'), message: 'DEVICE_INFO not available, skipping trackDevicesCF' })
+    return
+  }
+
+  try {
+    const trackDeviceCache = new CacheHelper(c)
+    const trackDeviceCacheRequest = trackDeviceCache.buildRequest(TRACK_DEVICE_CACHE_PATH, {
+      app_id: device.app_id,
+      device_id: device.device_id,
+    })
+    const deviceInfoComparable = toDeviceInfoComparable(device, statsMode)
+    const deviceForComparison: DeviceWithoutCreatedAt = {
+      ...device,
+      platform: billingOnly ? undefined : device.platform,
+      os_version: deviceInfoComparable.os_version,
+      custom_id: deviceInfoComparable.custom_id,
+      default_channel: deviceInfoComparable.default_channel ?? undefined,
+      key_id: deviceInfoComparable.key_id ?? undefined,
+      install_source: deviceInfoComparable.install_source ?? undefined,
+      country_code: deviceInfoComparable.country_code ?? undefined,
+    }
+    // Do not gate on helper.available — it is sync-racy before ensureCache resolves.
+    const cachedDevice = await trackDeviceCache.matchJson<DeviceCachePayload>(trackDeviceCacheRequest)
+    if (cachedDevice && !hasComparableDeviceChanged(cachedDevice, deviceForComparison)) {
+      outcome = 'cache_hit'
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'Cache hit – device unchanged, skipping write',
+        context: {
+          device_id: device.device_id,
+          app_id: device.app_id,
+        },
+      })
+      return
+    }
+
+    // Write to Analytics Engine - this is the primary store now (sync; needs no waitUntil)
+    cloudlog({ requestId: c.get('requestId'), message: 'Writing to Analytics Engine DEVICE_INFO' })
+    // Platform: 0 = android, 1 = ios, 2 = electron. billingOnly stores -1 (unknown).
+    const platformLower = billingOnly ? null : deviceInfoComparable.platform?.toLowerCase()
+    const platformValue = billingOnly ? -1 : platformLower === 'ios' ? 1 : platformLower === 'electron' ? 2 : 0
+    c.env.DEVICE_INFO.writeDataPoint({
+      blobs: [
+        device.device_id,
+        deviceInfoComparable.version_name ?? '',
+        deviceInfoComparable.plugin_version ?? '',
+        deviceInfoComparable.os_version ?? '',
+        deviceInfoComparable.custom_id ?? '',
+        deviceInfoComparable.version_build ?? '',
+        deviceInfoComparable.default_channel ?? '',
+        deviceInfoComparable.key_id ?? '',
+        deviceInfoComparable.install_source ?? '',
+        deviceInfoComparable.country_code ?? '',
+      ],
+      doubles: [
+        platformValue,
+        deviceInfoComparable.is_prod ? 1 : 0,
+        deviceInfoComparable.is_emulator ? 1 : 0,
+      ],
+      indexes: [device.app_id],
+    })
+
+    const cachePayload: DeviceCachePayload = {
+      ...deviceInfoComparable,
+      app_id: device.app_id,
+      device_id: device.device_id,
+      cached_at: new Date().toISOString(),
+    }
+    await trackDeviceCache.putJson(trackDeviceCacheRequest, cachePayload, TRACK_
