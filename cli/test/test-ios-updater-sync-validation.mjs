@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 
+import nodeAssert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { validateIosUpdaterSync } from '../src/utils.ts'
+import { IOS_SYNC_VALIDATION_FAILED_MESSAGE } from '../src/posthog.ts'
+import { CliUserError } from '../src/shared/cli-user-error.ts'
+import { throwIfIosUpdaterSyncInvalid, validateIosUpdaterSync } from '../src/utils.ts'
 
 let testsPassed = 0
 let testsFailed = 0
@@ -217,6 +220,34 @@ await test('monorepo packageJsonPath points validation to app iOS folder', () =>
     const result = validateIosUpdaterSync(root, 'apps/mobile/package.json')
     assert(result.shouldCheck === true, 'Expected shouldCheck=true for monorepo app path')
     assert(result.valid === true, 'Expected valid=true for monorepo app path')
+  }
+  finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+await test('throwIfIosUpdaterSyncInvalid throws CliUserError when iOS sync validation fails', () => {
+  const root = makeProjectDir()
+  try {
+    writeFile(join(root, 'package.json'), JSON.stringify({
+      dependencies: {
+        '@capgo/capacitor-updater': '^7.0.0',
+      },
+    }))
+    writeFile(join(root, 'ios', 'App', 'Podfile'), "pod '@capgo/capacitor-updater'\n")
+
+    const syncValidation = validateIosUpdaterSync(root)
+    assert(syncValidation.shouldCheck === true, 'Expected shouldCheck=true')
+    assert(syncValidation.valid === false, 'Expected valid=false')
+
+    nodeAssert.throws(
+      () => throwIfIosUpdaterSyncInvalid(syncValidation, 'npx'),
+      (error) => {
+        nodeAssert.equal(error instanceof CliUserError, true, 'Expected CliUserError')
+        nodeAssert.equal(error.message, IOS_SYNC_VALIDATION_FAILED_MESSAGE, 'Expected stable iOS sync validation message')
+        return true
+      },
+    )
   }
   finally {
     rmSync(root, { recursive: true, force: true })
