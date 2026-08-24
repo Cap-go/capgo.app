@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import nodeAssert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -239,18 +240,13 @@ await test('throwIfIosUpdaterSyncInvalid throws CliUserError when iOS sync valid
     assert(syncValidation.shouldCheck === true, 'Expected shouldCheck=true')
     assert(syncValidation.valid === false, 'Expected valid=false')
 
-    let thrown
-    try {
-      throwIfIosUpdaterSyncInvalid(syncValidation, 'npx')
-    }
-    catch (error) {
-      thrown = error
-    }
-
-    assert(thrown instanceof CliUserError, 'Expected CliUserError')
-    assert(
-      thrown.message === IOS_SYNC_VALIDATION_FAILED_MESSAGE,
-      'Expected stable iOS sync validation message',
+    nodeAssert.throws(
+      () => throwIfIosUpdaterSyncInvalid(syncValidation, 'npx'),
+      (error) => {
+        nodeAssert.equal(error instanceof CliUserError, true, 'Expected CliUserError')
+        nodeAssert.equal(error.message, IOS_SYNC_VALIDATION_FAILED_MESSAGE, 'Expected stable iOS sync validation message')
+        return true
+      },
     )
   }
   finally {
