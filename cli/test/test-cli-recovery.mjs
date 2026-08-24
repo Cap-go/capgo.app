@@ -8,6 +8,7 @@ import { shouldCapturePosthogException } from '../src/posthog.ts'
 import {
   collectAppIdCandidates,
   isValidAppId,
+  parsePackageJsonOptionPaths,
 } from '../src/recovery/app-id.ts'
 import {
   findBuildEntryJsPath,
@@ -95,6 +96,13 @@ await test('collectAppIdCandidates gathers config and gradle applicationId value
     plugins: { CapacitorUpdater: { appId: 'com.updater.app' } },
   }, root)
   assert.deepEqual(new Set(candidates), new Set(['com.config.app', 'com.updater.app', 'com.package.app', 'com.gradle.app']))
+})
+
+await test('parsePackageJsonOptionPaths splits comma-separated package.json paths', () => {
+  assert.deepEqual(
+    parsePackageJsonOptionPaths(' ./a/package.json , ./b/package.json '),
+    ['./a/package.json', './b/package.json'],
+  )
 })
 
 await test('collectAppIdCandidates reads appId from an explicit package.json path', () => {

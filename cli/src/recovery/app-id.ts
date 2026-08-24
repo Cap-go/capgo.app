@@ -29,6 +29,13 @@ function readAppIdFromPackageJson(packageJsonPath: string): string | undefined {
   }
 }
 
+export function parsePackageJsonOptionPaths(packageJson?: string): string[] | undefined {
+  if (!packageJson?.trim())
+    return undefined
+  const paths = packageJson.split(',').map(path => path.trim()).filter(Boolean)
+  return paths.length ? paths : undefined
+}
+
 export function collectAppIdCandidates(
   config: CapacitorConfig | undefined,
   projectRoot = findRoot(cwd()),

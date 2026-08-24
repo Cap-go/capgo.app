@@ -21,7 +21,7 @@ import {
 } from '../utils'
 import { checkIndexPosition, searchInDirectory } from './check'
 import { ensureNotifyAppReadyInBuildFolder, buildCiNotifyAppReadyMessage } from '../recovery/notify-app-ready'
-import { resolveAppIdWithRecovery } from '../recovery/app-id'
+import { parsePackageJsonOptionPaths, resolveAppIdWithRecovery } from '../recovery/app-id'
 
 export type { ZipResult } from '../schemas/bundle'
 
@@ -51,7 +51,7 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
     const resolvedAppId = await resolveAppIdWithRecovery({
       explicitAppId: appId,
       config: extConfig?.config,
-      packageJsonPaths: options.packageJson ? [options.packageJson] : undefined,
+      packageJsonPaths: parsePackageJsonOptionPaths(options.packageJson),
       interactive,
       json,
     })

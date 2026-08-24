@@ -117,8 +117,6 @@ export function injectNotifyAppReadyIntoBuildJs(content: string): string | undef
     return content
   if (!content.includes('CapacitorUpdater'))
     return undefined
-  if (content.includes('CapacitorUpdater.notifyAppReady'))
-    return content
   return `${content.trimEnd()}\n${NOTIFY_CALL};\n`
 }
 

@@ -33,7 +33,7 @@ import { maybePromptBuilderCta, shouldBlockIncompatibleUpload } from './builder-
 import { checkIndexPosition, searchInDirectory } from './check'
 import { summarizeUploadCompatibility } from './compatibility'
 import { ensureNotifyAppReadyInBuildFolder } from '../recovery/notify-app-ready'
-import { resolveAppIdWithRecovery } from '../recovery/app-id'
+import { parsePackageJsonOptionPaths, resolveAppIdWithRecovery } from '../recovery/app-id'
 import { prepareBundlePartialFiles, uploadPartial } from './partial'
 import { clackUploadReporter, getUploadReporter, runWithUploadReporter } from './reporter'
 import { formatUploadChannels, getChannelsToAssignByChecksum, parseUploadChannels } from './upload-channels'
@@ -152,6 +152,7 @@ async function getAppIdAndPath(appId: string | undefined, options: OptionsUpload
     explicitAppId: appId,
     config,
     apikey: options.apikey || findSavedKey(true),
+    packageJsonPaths: parsePackageJsonOptionPaths(options.packageJson),
     interactive,
     supaHost: options.supaHost,
     supaAnon: options.supaAnon,
