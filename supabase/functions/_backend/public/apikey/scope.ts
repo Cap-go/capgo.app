@@ -35,7 +35,7 @@ export async function requireJwtMfaForPrivilegedAction(
 export function isValidApiKeyIdFormat(id: string): boolean {
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
   const numericRegex = /^\d+$/
-  const legacyKeyRegex = /^[A-Za-z0-9._:-]{8,256}$/
+  const legacyKeyRegex = /^[\w.:-]{8,256}$/
   return uuidRegex.test(id) || numericRegex.test(id) || legacyKeyRegex.test(id)
 }
 

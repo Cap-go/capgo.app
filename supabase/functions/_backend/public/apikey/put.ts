@@ -5,6 +5,7 @@ import type { Database } from '../../utils/supabase.types.ts'
 import type { ClientBindingInput } from './scope.ts'
 import { sql } from 'drizzle-orm'
 import { createRoleBindingForPrincipal, lockRbacOrgs } from '../../private/role_bindings.ts'
+import { getErrorCode, getErrorStatus } from '../../utils/errors.ts'
 import { honoFactory, parseBody, quickError, simpleError } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
@@ -14,7 +15,6 @@ import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { supabaseAdmin, supabaseWithAuth, validateExpirationAgainstOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
 import { apiKeyBindingsAllowOrgCreate, assertApiKeyCanKeepOrgCreateGrant, parseApiKeyGlobalPermissions, replaceApiKeyGlobalPermissions, validateApiKeyGlobalPermissionsForBindings } from './global_permissions.ts'
 import { assertApiKeyManagerCanAssignBindings, assertApiKeyManagerCanRotateTarget, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, requireJwtMfaForPrivilegedAction, sanitizeClientBindings, selectOwnedApiKeyByIdentifier } from './scope.ts'
-import { getErrorCode, getErrorStatus } from '../../utils/errors.ts'
 
 const app = honoFactory.createApp()
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row']

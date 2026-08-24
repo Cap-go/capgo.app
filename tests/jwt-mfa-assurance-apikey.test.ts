@@ -67,20 +67,26 @@ describe('JWT MFA assurance on /apikey create', () => {
   it('rejects MFA-enrolled users with password-only aal1 sessions', async () => {
     const headers = await getAuthHeadersForCredentials(USER_EMAIL_JWT_MFA_EDGE, USER_PASSWORD)
     await enrollVerifiedMfaFactor()
+    let createdKeyId: number | undefined
 
-    const response = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        name: `mfa-blocked-${randomUUID()}`,
-        bindings: orgApiKeyBindings(ORG_ID_JWT_MFA_EDGE, 'org_admin'),
-      }),
-    })
+    try {
+      const response = await fetch(`${BASE_URL}/apikey`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          name: `mfa-blocked-${randomUUID()}`,
+          bindings: orgApiKeyBindings(ORG_ID_JWT_MFA_EDGE, 'org_admin'),
+        }),
+      })
 
-    const data = await response.json() as { error?: string, id?: number }
-    expect(response.status).toBe(403)
-    expect(data.error).toBe('mfa_required')
-    await deleteApiKeyById(data.id)
+      const data = await response.json() as { error?: string, id?: number }
+      createdKeyId = data.id
+      expect(response.status).toBe(403)
+      expect(data.error).toBe('mfa_required')
+    }
+    finally {
+      await deleteApiKeyById(createdKeyId)
+    }
   })
 
   it('allows users without MFA at aal1', async () => {
