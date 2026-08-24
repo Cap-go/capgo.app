@@ -4,6 +4,7 @@ import {
   buildOutdatedInstallCommand,
   buildOutdatedInstallCommandsForDoctor,
   computeDoctorAnalyticsTags,
+  formatDoctorInstallHint,
   getPMAndCommandForDir,
   groupOutdatedPackagesByPackageJson,
   listOutdatedDependencies,
@@ -192,5 +193,17 @@ assert.equal(shellQuotePath('/apps/mobile'), '\'/apps/mobile\'')
 assert.equal(shellQuotePath('/apps/my mobile'), '\'/apps/my mobile\'')
 assert.equal(shellQuotePath('/apps/foo$(rm -rf /)'), '\'/apps/foo$(rm -rf /)\'')
 assert.equal(shellQuotePath('/apps/o\'brien'), '\'/apps/o\'\\\'\'brien\'')
+assert.equal(shellQuotePath('C:\\apps\\mobile', 'win32'), '"C:\\apps\\mobile"')
+assert.equal(shellQuotePath('C:\\apps\\my mobile', 'win32'), '"C:\\apps\\my mobile"')
+assert.equal(shellQuotePath('C:\\apps\\foo"bar', 'win32'), '"C:\\apps\\foo""bar"')
+
+assert.equal(
+  formatDoctorInstallHint('/apps/mobile', 'npm install @capgo/cli@latest'),
+  '(cd \'/apps/mobile\' && npm install @capgo/cli@latest)',
+)
+assert.equal(
+  formatDoctorInstallHint('C:\\apps\\mobile', 'npm install @capgo/cli@latest', 'win32'),
+  'cd /d "C:\\apps\\mobile" && npm install @capgo/cli@latest',
+)
 
 console.log('✅ doctor analytics tags tests passed')

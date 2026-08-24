@@ -105,8 +105,22 @@ export function groupOutdatedPackagesByPackageJson(
   return groups
 }
 
-export function shellQuotePath(path: string): string {
+export function shellQuotePath(path: string, shellPlatform: NodeJS.Platform = platform()): string {
+  if (shellPlatform === 'win32')
+    return `"${path.replace(/"/g, '""')}"`
+
   return `'${path.replaceAll('\'', '\'\\\'\'')}'`
+}
+
+export function formatDoctorInstallHint(
+  projectRoot: string,
+  installCommand: string,
+  shellPlatform: NodeJS.Platform = platform(),
+): string {
+  if (shellPlatform === 'win32')
+    return `cd /d ${shellQuotePath(projectRoot, shellPlatform)} && ${installCommand}`
+
+  return `(cd ${shellQuotePath(projectRoot, shellPlatform)} && ${installCommand})`
 }
 
 export function buildOutdatedInstallCommandsForDoctor(
@@ -124,7 +138,7 @@ export function buildOutdatedInstallCommandsForDoctor(
     .map(({ packageJsonPath, packages: groupPackages }) => {
       const projectRoot = dirname(packageJsonPath)
       const pm = getPMAndCommandForDir(projectRoot)
-      return `(cd ${shellQuotePath(projectRoot)} && ${buildOutdatedInstallCommand(pm, groupPackages)})`
+      return formatDoctorInstallHint(projectRoot, buildOutdatedInstallCommand(pm, groupPackages))
     })
     .join('\n')
 }
