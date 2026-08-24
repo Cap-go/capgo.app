@@ -1,6 +1,7 @@
 import type { FrontendOnboardingDailySetupCliEvent } from '../supabase/functions/_backend/utils/frontend_onboarding_daily_setup_cli_outcomes_model.ts'
 import { describe, expect, it } from 'vitest'
 import {
+  buildFrontendOnboardingDailySetupCliAgentUsage,
   buildFrontendOnboardingDailySetupCliOutcomes,
   classifyFrontendOnboardingDailySetupCliOutcome,
   createFrontendOnboardingDailySetupCliOutcomeCounts,
@@ -13,6 +14,14 @@ function utcMs(date: string): number {
 
 function setup(personId: string, timestampMs: number): FrontendOnboardingDailySetupCliEvent {
   return { personId, timestampMs, kind: 'setup' }
+}
+
+function cli(
+  personId: string,
+  timestampMs: number,
+  agent: { agentInvoker?: boolean, agentId?: string, agentName?: string } = {},
+): FrontendOnboardingDailySetupCliEvent {
+  return { personId, timestampMs, kind: 'cli_command', commandPath: 'app list', ...agent }
 }
 
 function categoryTotal(point: ReturnType<typeof buildFrontendOnboardingDailySetupCliOutcomes>[number], lifecycle: 'first_time' | 'returning'): number {
@@ -235,5 +244,128 @@ describe('buildFrontendOnboardingDailySetupCliOutcomes', () => {
       for (const lifecycle of ['first_time', 'returning'] as const)
         expect(categoryTotal(point, lifecycle)).toBe(expectedSetupPersonDays[point.date][lifecycle])
     }
+  })
+})
+
+describe('buildFrontendOnboardingDailySetupCliAgentUsage', () => {
+  it.each([
+    ['no_cli_invoked', []],
+    ['no_agent', [{ agentInvoker: false }]],
+    ['agent:codex', [{ agentInvoker: true, agentId: 'codex', agentName: 'Codex' }]],
+    ['agent:codex', [
+      { agentInvoker: true, agentId: 'codex', agentName: 'Codex' },
+      { agentInvoker: true, agentId: 'codex', agentName: 'Codex' },
+    ]],
+    ['multiple_agents', [
+      { agentInvoker: true, agentId: 'codex', agentName: 'Codex' },
+      { agentInvoker: true, agentId: 'claude-code', agentName: 'Claude Code' },
+    ]],
+    ['unknown_agent', [{ agentInvoker: true }]],
+    ['multiple_agents', [
+      { agentInvoker: true, agentId: 'codex', agentName: 'Codex' },
+      { agentInvoker: true },
+    ]],
+  ] as const)('classifies a Setup person-day as %s', (expectedKey, agents) => {
+    const august3 = utcMs('2026-08-03')
+    const events: FrontendOnboardingDailySetupCliEvent[] = [setup('person', august3 + 1_000)]
+    agents.forEach((agent, index) => events.push(cli('person', august3 + 2_000 + index, agent)))
+
+    const usage = buildFrontendOnboardingDailySetupCliAgentUsage(events, august3, august3 + 86_400_000)
+
+    expect(usage.points).toEqual([{
+      date: '2026-08-03',
+      counts: { [expectedKey]: 1 },
+    }])
+    expect(usage.groups.map(group => group.key)).toEqual([expectedKey])
+  })
+
+  it('keeps attribution on the latest Setup anchor and excludes the 24-hour boundary', () => {
+    const august3 = utcMs('2026-08-03')
+    const august4 = utcMs('2026-08-04')
+    const august5 = utcMs('2026-08-05')
+
+    expect(buildFrontendOnboardingDailySetupCliAgentUsage([
+      setup('next-anchor', august3 + 1_000),
+      setup('next-anchor', august4 + 1_000),
+      cli('next-anchor', august4 + 1_000, { agentInvoker: true, agentId: 'codex', agentName: 'Codex' }),
+      setup('twenty-four-hours', august3 + 2_000),
+      cli('twenty-four-hours', august4 + 2_000, { agentInvoker: true, agentId: 'codex', agentName: 'Codex' }),
+    ], august3, august5)).toEqual({
+      groups: [
+        { key: 'agent:codex', agent_id: 'codex', agent_name: 'Codex' },
+        { key: 'no_cli_invoked' },
+      ],
+      points: [
+        { date: '2026-08-03', counts: { 'agent:codex': 0, no_cli_invoked: 2 } },
+        { date: '2026-08-04', counts: { 'agent:codex': 1, no_cli_invoked: 0 } },
+      ],
+    })
+  })
+
+  it('zero-fills UTC dates and keeps daily group totals equal to Setup person-days', () => {
+    const august3 = utcMs('2026-08-03')
+    const august6 = utcMs('2026-08-06')
+    const usage = buildFrontendOnboardingDailySetupCliAgentUsage([
+      setup('person-a', august3 + 1_000),
+      setup('person-a', august3 + 2_000),
+      cli('person-a', august3 + 3_000, { agentInvoker: false }),
+      setup('person-b', august3 + 4_000),
+      cli('person-b', august3 + 5_000, { agentInvoker: true, agentId: 'codex', agentName: 'Codex' }),
+    ], august3, august6)
+
+    expect(usage.groups).toEqual([
+      { key: 'agent:codex', agent_id: 'codex', agent_name: 'Codex' },
+      { key: 'no_agent' },
+    ])
+    expect(usage.points).toEqual([
+      { date: '2026-08-03', counts: { 'agent:codex': 1, no_agent: 1 } },
+      { date: '2026-08-04', counts: { 'agent:codex': 0, no_agent: 0 } },
+      { date: '2026-08-05', counts: { 'agent:codex': 0, no_agent: 0 } },
+    ])
+    expect(usage.points.map(point => Object.values(point.counts).reduce((sum, count) => sum + count, 0))).toEqual([2, 0, 0])
+  })
+
+  it('sorts detected agents by total then name and appends reserved groups in taxonomy order', () => {
+    const august3 = utcMs('2026-08-03')
+    const events: FrontendOnboardingDailySetupCliEvent[] = []
+    const add = (personId: string, offset: number, agent?: { agentInvoker?: boolean, agentId?: string, agentName?: string }) => {
+      events.push(setup(personId, august3 + offset))
+      if (agent)
+        events.push(cli(personId, august3 + offset + 1, agent))
+    }
+
+    add('codex-1', 1_000, { agentInvoker: true, agentId: 'codex', agentName: 'Codex' })
+    add('codex-2', 2_000, { agentInvoker: true, agentId: 'codex', agentName: 'Codex' })
+    add('zed', 3_000, { agentInvoker: true, agentId: 'zed', agentName: 'Zed' })
+    add('claude', 4_000, { agentInvoker: true, agentId: 'claude-code', agentName: 'Claude Code' })
+    events.push(setup('multiple', august3 + 5_000))
+    events.push(cli('multiple', august3 + 5_001, { agentInvoker: true, agentId: 'codex', agentName: 'Codex' }))
+    events.push(cli('multiple', august3 + 5_002, { agentInvoker: true, agentId: 'claude-code', agentName: 'Claude Code' }))
+    add('unknown', 6_000, { agentInvoker: true })
+    add('no-agent', 7_000, { agentInvoker: false })
+    add('no-cli', 8_000)
+
+    expect(buildFrontendOnboardingDailySetupCliAgentUsage(events, august3, august3 + 86_400_000).groups).toEqual([
+      { key: 'agent:codex', agent_id: 'codex', agent_name: 'Codex' },
+      { key: 'agent:claude-code', agent_id: 'claude-code', agent_name: 'Claude Code' },
+      { key: 'agent:zed', agent_id: 'zed', agent_name: 'Zed' },
+      { key: 'multiple_agents' },
+      { key: 'unknown_agent' },
+      { key: 'no_agent' },
+      { key: 'no_cli_invoked' },
+    ])
+  })
+
+  it('uses the first non-empty name reported for an agent identity', () => {
+    const august3 = utcMs('2026-08-03')
+
+    expect(buildFrontendOnboardingDailySetupCliAgentUsage([
+      setup('person', august3 + 1_000),
+      cli('person', august3 + 2_000, { agentInvoker: true, agentId: 'codex' }),
+      cli('person', august3 + 3_000, { agentInvoker: true, agentId: 'codex', agentName: 'Zeta Codex' }),
+      cli('person', august3 + 4_000, { agentInvoker: true, agentId: 'codex', agentName: 'Alpha Codex' }),
+    ], august3, august3 + 86_400_000).groups).toEqual([
+      { key: 'agent:codex', agent_id: 'codex', agent_name: 'Zeta Codex' },
+    ])
   })
 })

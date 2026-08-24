@@ -28,6 +28,15 @@ function timestampMs(value: unknown): number | null {
   return Number.isSafeInteger(timestamp) && timestamp > 0 ? timestamp : null
 }
 
+function posthogBoolean(value: unknown): boolean | null {
+  if (typeof value === 'boolean')
+    return value
+  if (value === 0 || value === 1)
+    return value === 1
+
+  return null
+}
+
 function mapEvent(row: Record<string, unknown>): FrontendOnboardingDailySetupCliEvent {
   const personId = typeof row.person_id === 'string' ? row.person_id.trim() : ''
   const timestamp = timestampMs(row.timestamp_ms)
@@ -43,7 +52,24 @@ function mapEvent(row: Record<string, unknown>): FrontendOnboardingDailySetupCli
     if (typeof commandPath !== 'string' || commandPath.trim() === '')
       throw new Error(INVALID_ROW_ERROR)
 
-    return { personId, timestampMs: timestamp, kind, commandPath }
+    const agentInvoker = posthogBoolean(row.agent_invoker ?? false)
+    if (agentInvoker === null)
+      throw new Error(INVALID_ROW_ERROR)
+
+    const agentId = row.agent_id ?? ''
+    const agentName = row.agent_name ?? ''
+    if (typeof agentId !== 'string' || typeof agentName !== 'string')
+      throw new Error(INVALID_ROW_ERROR)
+
+    return {
+      personId,
+      timestampMs: timestamp,
+      kind,
+      commandPath,
+      agentInvoker,
+      ...(agentId.trim() ? { agentId: agentId.trim() } : {}),
+      ...(agentName.trim() ? { agentName: agentName.trim() } : {}),
+    }
   }
 
   return { personId, timestampMs: timestamp, kind }
@@ -95,6 +121,9 @@ export function buildFrontendOnboardingDailySetupCliHogql(
         'cli_command'
       ) AS event_kind,
       if(selected_events.event = 'CLI Command Invoked', JSONExtractString(toString(selected_events.properties), 'command_path'), '') AS command_path,
+      if(selected_events.event = 'CLI Command Invoked', JSONExtractBool(toString(selected_events.properties), 'agent_invoker'), false) AS agent_invoker,
+      if(selected_events.event = 'CLI Command Invoked', JSONExtractString(toString(selected_events.properties.agent_identity), 'id'), '') AS agent_id,
+      if(selected_events.event = 'CLI Command Invoked', JSONExtractString(toString(selected_events.properties.agent_identity), 'name'), '') AS agent_name,
       count() OVER () AS total_events
     FROM events AS selected_events
     INNER JOIN setup_people AS cohort
