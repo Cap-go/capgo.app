@@ -35,7 +35,7 @@ export async function addChannelInternal(channelId: string, appId: string, optio
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon, silent)
   await check2FAComplianceForApp(supabase, appId, silent)
-  // TODO(cli-http): identity still uses rpc(get_user_id) via resolveUserIdFromApiKey
+  // TODO(cli-http): identity still uses request_actor_user_id via resolveUserIdFromApiKey
   await resolveUserIdFromApiKey(supabase, options.apikey)
   // Creating a channel needs the exact RBAC permission. The backend and channels
   // INSERT RLS remain authoritative, so a key without app.create_channel is denied.
