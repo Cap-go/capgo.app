@@ -117,4 +117,154 @@ function getUsagePlatformValue(platform?: string | null) {
  * @param device_id - Unique device identifier
  * @param app_id - Application identifier
  * @param org_id - Organization identifier (optional, defaults to empty string)
- * @param platform - Device plat
+ * @param platform - Device platform ('ios' or 'android')
+ */
+export async function trackDeviceUsageCF(c: Context, device_id: string, app_id: string, org_id: string, platform: string, version_build?: string | null) {
+  if (!c.env.DEVICE_USAGE)
+    return
+
+  const normalizedPlatform = normalizeUsagePlatform(platform)
+  const normalizedVersionBuild = version_build || 'unknown'
+
+  try {
+    const usageCache = new CacheHelper(c)
+    const usageCacheRequest = usageCache.buildRequest(TRACK_DEVICE_USAGE_CACHE_PATH, {
+      app_id,
+      device_id,
+      day: formatLocalYmd(),
+      platform: normalizedPlatform,
+      version_build: normalizedVersionBuild,
+    })
+
+    // Always await matchJson (resolves Cache API); .available is sync-racy.
+    const cachedUsage = await usageCache.matchJson<{ t: number }>(usageCacheRequest)
+    if (cachedUsage) {
+      // Device/version already tracked for this day, skip write
+      return
+    }
+
+    const platformValue = getUsagePlatformValue(normalizedPlatform)
+
+    // Write to Analytics Engine
+    c.env.DEVICE_USAGE.writeDataPoint({
+      blobs: [device_id, org_id, normalizedVersionBuild, normalizedPlatform],
+      doubles: [platformValue],
+      indexes: [app_id],
+    })
+
+    // Cache the write for this native version during the current day (put timed out).
+    await usageCache.putJson(usageCacheRequest, { t: Date.now() }, TRACK_DEVICE_USAGE_CACHE_MAX_AGE_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
+  }
+  catch {
+    const platformValue = getUsagePlatformValue(normalizedPlatform)
+    // On error, still try to write to Analytics Engine without caching
+    c.env.DEVICE_USAGE.writeDataPoint({
+      blobs: [device_id, org_id, normalizedVersionBuild, normalizedPlatform],
+      doubles: [platformValue],
+      indexes: [app_id],
+    })
+  }
+}
+
+export function trackBandwidthUsageCF(c: Context, device_id: string, app_id: string, file_size: number) {
+  if (!c.env.BANDWIDTH_USAGE)
+    return Promise.resolve()
+
+  c.env.BANDWIDTH_USAGE.writeDataPoint({
+    blobs: [device_id],
+    doubles: [file_size],
+    indexes: [app_id],
+  })
+
+  return Promise.resolve()
+}
+
+export function trackVersionUsageCF(c: Context, version_name: string, app_id: string, action: string, channel?: VersionUsageChannel | string | null) {
+  if (!c.env.VERSION_USAGE)
+    return Promise.resolve()
+
+  const channelName = typeof channel === 'string' ? channel : channel?.name
+  const channelId = typeof channel === 'object' && channel?.id ? String(channel.id) : ''
+
+  c.env.VERSION_USAGE.writeDataPoint({
+    blobs: [app_id, version_name, action, channelName ?? '', channelId],
+    indexes: [app_id],
+  })
+
+  return Promise.resolve()
+}
+
+const MAX_STATS_DURATION_MS = 7_200_000
+
+function parseStatsDurationMs(metadata?: StatsMetadata | Record<string, unknown> | null): number | null {
+  if (!metadata)
+    return null
+  for (const key of ['duration_ms', 'duration'] as const) {
+    const raw = metadata[key]
+    if (typeof raw === 'number') {
+      if (Number.isFinite(raw) && raw >= 0 && raw <= MAX_STATS_DURATION_MS)
+        return raw
+      continue
+    }
+    if (typeof raw !== 'string' || raw.length === 0 || raw.length > 15)
+      continue
+    if (!/^\d+(?:\.\d+)?$/.test(raw))
+      continue
+    const value = Number(raw)
+    if (!Number.isFinite(value) || value < 0 || value > MAX_STATS_DURATION_MS)
+      continue
+    return value
+  }
+  return null
+}
+
+function serializeStatsMetadata(metadata?: StatsMetadata): string {
+  return metadata && Object.keys(metadata).length > 0 ? JSON.stringify(metadata) : ''
+}
+
+function parseStatsMetadata(metadata: unknown): StatsMetadata | null {
+  if (typeof metadata !== 'string' || metadata === '')
+    return null
+
+  try {
+    const parsed = JSON.parse(metadata)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+      return null
+    return parsed as StatsMetadata
+  }
+  catch {
+    return null
+  }
+}
+
+export interface AppLogDimensions {
+  platform?: string | null
+  country_code?: string | null
+  plugin_version?: string | null
+}
+
+function normalizeAppLogDimension(value: string | null | undefined, maxLength: number) {
+  if (!value)
+    return ''
+  const normalized = value.trim()
+  if (!normalized)
+    return ''
+  return normalized.slice(0, maxLength)
+}
+
+function appLogDimensionBlobs(dimensions?: AppLogDimensions) {
+  // blob5=platform, blob6=country_code, blob7=plugin_version (denormalized for public /data breakdowns)
+  return [
+    normalizeAppLogDimension(dimensions?.platform, 16),
+    normalizeAppLogDimension(dimensions?.country_code, 2).toUpperCase(),
+    normalizeAppLogDimension(dimensions?.plugin_version, 32),
+  ]
+}
+
+export function trackLogsCF(c: Context, app_id: string, device_id: string, action: string, version_name: string, metadata?: StatsMetadata, dimensions?: AppLogDimensions) {
+  if (!c.env.APP_LOG)
+    return Promise.resolve()
+
+  const durationMs = parseStatsDurationMs(metadata)
+  c.env.APP_LOG.writeDataPoint({
+    blobs: [device_id, action, version_name, serializeStatsMetadata(metadata), ...appLogDimensionB
