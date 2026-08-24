@@ -24,6 +24,7 @@ import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { getRbacRoleI18nKey, isAdminRole, isSuperAdminRole, useOrganizationStore } from '~/stores/organization'
 import { notifyExistingUserInvite, resolveInviteNewUserErrorMessage, shouldAttemptExistingUserInviteNotification } from '~/utils/invites'
+import { safeResetTurnstile } from '~/utils/turnstile'
 import DeleteOrgDialog from './DeleteOrgDialog.vue'
 
 const { t } = useI18n()
@@ -204,9 +205,7 @@ function renderRoleCell(member: OrganizationMemberRow) {
 const isInviteNewUserDialogOpen = ref(false)
 
 function resetInviteCaptcha() {
-  if (captchaElement.value) {
-    captchaElement.value.reset()
-  }
+  safeResetTurnstile(captchaElement.value)
   captchaToken.value = ''
   updateInviteNewUserButton()
 }

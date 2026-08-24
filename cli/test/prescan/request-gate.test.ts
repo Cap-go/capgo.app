@@ -218,7 +218,7 @@ describe('permission backstop fires before the POST on the prescan-skipped and -
       true,
     )
     expect(result.success).toBe(false)
-    expect(result.error).toMatch(/missing app\.build_native permission/i)
+    expect(result.error).toMatch(/insufficient permissions for app\.build_native/i)
     expect(probe.postedBuildRequest).toBe(false)
   })
 
@@ -233,7 +233,7 @@ describe('permission backstop fires before the POST on the prescan-skipped and -
       true,
     )
     expect(result.success).toBe(false)
-    expect(result.error).toMatch(/missing app\.build_native permission/i)
+    expect(result.error).toMatch(/insufficient permissions for app\.build_native/i)
     expect(probe.postedBuildRequest).toBe(false)
   })
 })

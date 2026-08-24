@@ -251,6 +251,32 @@ try {
   assert.equal(shouldCapturePosthogException(new CliUserError('Login cancelled')), false)
   assert.equal(shouldCapturePosthogException(new CliUserError('Upload cancelled by user')), false)
   assert.equal(shouldCapturePosthogException(new CliUserError(CAPGO_SERVER_CONFIG_MISSING_MESSAGE)), false)
+  assert.equal(
+    shouldCapturePosthogException(new CliUserError(
+      'Insufficient permissions for app. Required RBAC permission for this action: app.upload_bundle.',
+      { appId: 'com.example.app', requiredPermissionKey: 'app.upload_bundle' },
+    )),
+    false,
+  )
+  assert.equal(
+    shouldCapturePosthogException(new CliUserError(
+      'Insufficient permissions for app. Required RBAC permission for this action: app.upload_bundle.',
+      { appId: 'com.other.app', requiredPermissionKey: 'app.upload_bundle' },
+    )),
+    false,
+  )
+  // Two failures on different apps must share one fingerprint (app id lives in context).
+  assert.equal(
+    new CliUserError(
+      'Insufficient permissions for app. Required RBAC permission for this action: app.upload_bundle.',
+      { appId: 'com.example.app', requiredPermissionKey: 'app.upload_bundle' },
+    ).message,
+    new CliUserError(
+      'Insufficient permissions for app. Required RBAC permission for this action: app.upload_bundle.',
+      { appId: 'com.other.app', requiredPermissionKey: 'app.upload_bundle' },
+    ).message,
+  )
+
   // Two failures on different channels must be treated identically (one issue,
   // not one per channel), since the channel name lives in context, not the message.
   assert.equal(

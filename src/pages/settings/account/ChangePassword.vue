@@ -13,6 +13,7 @@ import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
+import { safeResetTurnstile } from '~/utils/turnstile'
 // tabs handled by settings layout
 
 const isLoading = ref(false)
@@ -30,7 +31,7 @@ const { t } = useI18n()
 const SUPABASE_MAX_PASSWORD_LENGTH = 72
 
 function resetCaptcha() {
-  captchaComponent.value?.reset()
+  safeResetTurnstile(captchaComponent.value)
   turnstileToken.value = ''
 }
 displayStore.NavTitle = t('password')
