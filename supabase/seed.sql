@@ -557,25 +557,6 @@ BEGIN
     INSERT INTO public.user_security (user_id, email_otp_verified_at, created_at, updated_at)
     VALUES ('f8e7d6c5-b4a3-4291-8f7e-6d5c4b3a2910', NOW(), NOW(), NOW());
 
-    INSERT INTO auth.mfa_factors (
-      id,
-      user_id,
-      friendly_name,
-      factor_type,
-      status,
-      created_at,
-      updated_at
-    )
-    VALUES (
-      'a1b2c3d4-e5f6-4789-a012-3456789abcde',
-      'f8e7d6c5-b4a3-4291-8f7e-6d5c4b3a2910',
-      'JWT MFA Edge Test TOTP',
-      'totp',
-      'verified',
-      NOW(),
-      NOW()
-    );
-
     INSERT INTO "public"."apikeys" ("id", "created_at", "user_id", "key", "updated_at", "name") VALUES
     (1, NOW(), 'c591b04e-cf29-4945-b9a0-776d0672061a', 'c591b04e-cf29-4945-b9a0-776d0672061e', NOW(), 'admin app uploader'),
     (2, NOW(), 'c591b04e-cf29-4945-b9a0-776d0672061a', '67eeaff4-ae4c-49a6-8eb1-0875f5369de1', NOW(), 'admin app reader'),
