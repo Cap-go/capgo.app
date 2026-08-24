@@ -1,1 +1,1 @@
-@/tmp/chunk0_mcp_args.json:content
+$(cat /cursor/stores/self/push_content.ts)
