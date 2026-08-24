@@ -15,6 +15,7 @@ export class TwoFactorComplianceNetworkError extends Error {
   }
 }
 
+/** Maps Supabase RPC transport failures to user-facing 2FA compliance errors. */
 export function throwTwoFactorComplianceRpcError(error: { message?: string }): void {
   if (isTransientNetworkError(error))
     throw new TwoFactorComplianceNetworkError()
