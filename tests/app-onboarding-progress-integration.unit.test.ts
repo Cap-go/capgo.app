@@ -273,6 +273,7 @@ describe('app onboarding progress analytics integration', () => {
     const resumeLoader = sourceBetween('async function loadResumeApp()', 'async function importStoreMetadata()')
     expect(resumeLoader).not.toContain('initializeProgressTracking')
     expect(resumeLoader).not.toContain('viewStep')
+    expect(resumeLoader).toContain("if (props.preOrg || resumeStep.value === 'setup')")
 
     const mountedFlow = sourceBetween('onMounted(async () => {', 'onBeforeUnmount(() => {')
     expect(onboardingSource).toContain(`import { createOnboardingProgressPersistence, shouldInitializeOnboardingProgressTracking } from '~/utils/onboardingProgressPersistence'`)
@@ -280,8 +281,10 @@ describe('app onboarding progress analytics integration', () => {
     expectSourceOrder(mountedFlow, [
       'if (props.preOrg)',
       'if (resumeAppId.value)',
+      'await organizationStore.awaitInitialLoad()',
       'const resumed = await loadResumeApp()',
       'resumedFlow = true',
+      'void loadApiKey()',
       'return',
       'const resumeResult = await maybeResumeSavedOnboarding()',
     ])

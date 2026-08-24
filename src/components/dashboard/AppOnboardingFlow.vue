@@ -869,7 +869,8 @@ async function ensureApiKey() {
   if (!userId)
     return
 
-  const existingKey = await findUsablePlainApiKey(supabase, userId, currentOrg.value?.gid, resumeAppId.value)
+  const appId = createdApp.value?.app_id
+  const existingKey = await findUsablePlainApiKey(supabase, userId, currentOrg.value?.gid, appId)
   if (existingKey) {
     apiKey.value = existingKey
     return
@@ -882,14 +883,14 @@ async function ensureApiKey() {
 
   const { data, error: createError } = await createDefaultApiKey(supabase, 'api-key', {
     orgId: currentOrg.value?.gid,
-    appId: resumeAppId.value,
+    appId,
   })
   if (createError)
     throw createError
 
   apiKey.value = typeof data?.key === 'string'
     ? data.key
-    : await findUsablePlainApiKey(supabase, claimsUserId, currentOrg.value?.gid, resumeAppId.value)
+    : await findUsablePlainApiKey(supabase, claimsUserId, currentOrg.value?.gid, appId)
 }
 
 let apiKeyLoadingPromise: Promise<void> | null = null
@@ -927,7 +928,7 @@ async function loadResumeApp() {
   const iconLoadRun = ++resumeIconLoadRun
   localIconPreview.value = getImmediateImageUrl(data.icon_url) || ''
   void loadResumeIconPreview(data.icon_url, data.app_id, iconLoadRun)
-  if (resumeStep.value === 'setup') {
+  if (props.preOrg || resumeStep.value === 'setup') {
     flowStep.value = 'setup'
     hydrateIntentFromCurrentOrg()
   }
@@ -1933,7 +1934,6 @@ onMounted(async () => {
     if (props.preOrg) {
       if (resumeAppId.value) {
         await organizationStore.awaitInitialLoad()
-        await main.awaitInitialLoad()
         const resumed = await loadResumeApp()
         if (resumed) {
           resumedFlow = true
