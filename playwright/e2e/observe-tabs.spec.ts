@@ -8,6 +8,7 @@ test.describe('Observe sections', () => {
 
   test('keeps Observe subtabs reachable on desktop and mobile', async ({ page }) => {
     await page.goto('/app/com.demo.app/observe/updater')
+    // Dismiss support prompt so mobile tab clicks are not intercepted.
     await dismissSupportPrompt(page)
 
     const updaterTab = page.getByRole('button', { name: 'Updater', exact: true })
@@ -49,6 +50,7 @@ test.describe('Observe sections', () => {
     expect(updaterBox?.x).toBeGreaterThanOrEqual(0)
     expect((pluginsBox?.x ?? 0) + (pluginsBox?.width ?? 0)).toBeLessThanOrEqual(375)
 
+    // Dismiss support prompt so mobile tab clicks are not intercepted.
     await dismissSupportPrompt(page)
     await nativeTab.click()
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/native(?:\?|$)/)
