@@ -2,10 +2,13 @@
 import assert from 'node:assert/strict'
 import {
   buildOutdatedInstallCommand,
+  buildOutdatedInstallCommandsForDoctor,
   computeDoctorAnalyticsTags,
   getPMAndCommandForDir,
+  groupOutdatedPackagesByPackageJson,
   listOutdatedDependencies,
   packagesForDoctorUpdateChoice,
+  parseDoctorPackageJsonPaths,
   partitionOutdatedDependencies,
   resolveDoctorProjectRoot,
 } from '../src/app/info.ts'
@@ -133,5 +136,33 @@ assert.equal(
   '/apps/mobile',
 )
 assert.equal(getPMAndCommandForDir('/tmp/project').installCommand.includes('install'), true)
+
+const packageJsonPaths = [
+  '/apps/mobile/package.json',
+  '/apps/shared/package.json',
+]
+const declaredByPath = new Map([
+  [packageJsonPaths[0], new Set(['@capgo/capacitor-updater'])],
+  [packageJsonPaths[1], new Set(['@capacitor/core'])],
+])
+const grouped = groupOutdatedPackagesByPackageJson(packageJsonPaths, outdatedSample, path => declaredByPath.get(path))
+assert.equal(grouped.length, 2)
+assert.equal(grouped[0].packageJsonPath, packageJsonPaths[0])
+assert.equal(grouped[0].packages.length, 1)
+assert.equal(grouped[0].packages[0].name, '@capgo/capacitor-updater')
+assert.equal(grouped[1].packageJsonPath, packageJsonPaths[1])
+assert.equal(grouped[1].packages[0].name, '@capacitor/core')
+
+const multiInstallCommands = buildOutdatedInstallCommandsForDoctor(
+  '/apps/mobile/package.json,/apps/shared/package.json',
+  outdatedSample,
+  path => declaredByPath.get(path),
+)
+assert.match(multiInstallCommands, /cd \/apps\/mobile/)
+assert.match(multiInstallCommands, /cd \/apps\/shared/)
+assert.match(multiInstallCommands, /@capgo\/capacitor-updater@latest/)
+assert.match(multiInstallCommands, /@capacitor\/core@latest/)
+
+assert.deepEqual(parseDoctorPackageJsonPaths('/apps/mobile/package.json,/apps/shared/package.json'), packageJsonPaths)
 
 console.log('✅ doctor analytics tags tests passed')

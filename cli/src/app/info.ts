@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { cwd, version as nodeVersion } from 'node:process'
 import { platform, version } from 'node:os'
@@ -51,15 +52,95 @@ interface DoctorInfoOptions {
   packageJson?: string
 }
 
-export function resolveDoctorProjectRoot(packageJson?: string): string {
+export function parseDoctorPackageJsonPaths(packageJson?: string): string[] | undefined {
   if (!packageJson)
+    return undefined
+
+  const paths = packageJson.split(',').map(path => path.trim()).filter(Boolean)
+  return paths.length > 0 ? paths : undefined
+}
+
+export function resolveDoctorProjectRoot(packageJson?: string): string {
+  const paths = parseDoctorPackageJsonPaths(packageJson)
+  if (!paths)
     return findRoot(cwd())
 
-  const firstPackageJson = packageJson.split(',')[0]?.trim()
-  if (!firstPackageJson)
-    return findRoot(cwd())
+  return dirname(paths[0])
+}
 
-  return dirname(firstPackageJson)
+function readDeclaredDependencyNames(packageJsonPath: string): Set<string> {
+  const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as {
+    dependencies?: Record<string, string>
+    devDependencies?: Record<string, string>
+  }
+  return new Set([
+    ...Object.keys(pkg.dependencies ?? {}),
+    ...Object.keys(pkg.devDependencies ?? {}),
+  ])
+}
+
+export function groupOutdatedPackagesByPackageJson(
+  packageJsonPaths: string[],
+  packages: OutdatedDependency[],
+  readDeclaredNames: (packageJsonPath: string) => Set<string> = readDeclaredDependencyNames,
+): { packageJsonPath: string, packages: OutdatedDependency[] }[] {
+  const groups: { packageJsonPath: string, packages: OutdatedDependency[] }[] = []
+  const assigned = new Set<string>()
+
+  for (const packageJsonPath of packageJsonPaths) {
+    const declared = readDeclaredNames(packageJsonPath)
+    const packagesForManifest = packages.filter(dep => !assigned.has(dep.name) && declared.has(dep.name))
+    if (packagesForManifest.length === 0)
+      continue
+
+    groups.push({ packageJsonPath, packages: packagesForManifest })
+    for (const dep of packagesForManifest)
+      assigned.add(dep.name)
+  }
+
+  const unassigned = packages.filter(dep => !assigned.has(dep.name))
+  if (unassigned.length > 0 && packageJsonPaths[0])
+    groups.push({ packageJsonPath: packageJsonPaths[0], packages: unassigned })
+
+  return groups
+}
+
+export function buildOutdatedInstallCommandsForDoctor(
+  packageJson: string | undefined,
+  packages: OutdatedDependency[],
+  readDeclaredNames?: (packageJsonPath: string) => Set<string>,
+): string {
+  const packageJsonPaths = parseDoctorPackageJsonPaths(packageJson)
+  if (!packageJsonPaths || packageJsonPaths.length <= 1) {
+    const projectRoot = resolveDoctorProjectRoot(packageJson)
+    return buildOutdatedInstallCommand(getPMAndCommandForDir(projectRoot), packages)
+  }
+
+  return groupOutdatedPackagesByPackageJson(packageJsonPaths, packages, readDeclaredNames)
+    .map(({ packageJsonPath, packages: groupPackages }) => {
+      const projectRoot = dirname(packageJsonPath)
+      const pm = getPMAndCommandForDir(projectRoot)
+      return `(cd ${projectRoot} && ${buildOutdatedInstallCommand(pm, groupPackages)})`
+    })
+    .join('\n')
+}
+
+export function runOutdatedDependencyUpdatesForDoctor(
+  packageJson: string | undefined,
+  packages: OutdatedDependency[],
+  readDeclaredNames?: (packageJsonPath: string) => Set<string>,
+): void {
+  const packageJsonPaths = parseDoctorPackageJsonPaths(packageJson)
+  if (!packageJsonPaths || packageJsonPaths.length <= 1) {
+    const projectRoot = resolveDoctorProjectRoot(packageJson)
+    runOutdatedDependencyUpdates(getPMAndCommandForDir(projectRoot), packages, projectRoot)
+    return
+  }
+
+  for (const { packageJsonPath, packages: groupPackages } of groupOutdatedPackagesByPackageJson(packageJsonPaths, packages, readDeclaredNames)) {
+    const projectRoot = dirname(packageJsonPath)
+    runOutdatedDependencyUpdates(getPMAndCommandForDir(projectRoot), groupPackages, projectRoot)
+  }
 }
 
 export function getPMAndCommandForDir(projectRoot: string) {
@@ -176,9 +257,9 @@ function logOutdatedDependencyTable(outdated: OutdatedDependency[]) {
     log.warn(`   ${dep.name}: ${dep.installed} → ${dep.latest}`)
 }
 
-function throwOutdatedDependenciesError(pm: ReturnType<typeof getPMAndCommand>, outdated: OutdatedDependency[], silent: boolean) {
+function throwOutdatedDependenciesError(packageJson: string | undefined, outdated: OutdatedDependency[], silent: boolean) {
   if (!silent && outdated.length > 0)
-    log.info(`Run: ${buildOutdatedInstallCommand(pm, outdated)}`)
+    log.info(`Run:\n${buildOutdatedInstallCommandsForDoctor(packageJson, outdated)}`)
   throw new Error(OUTDATED_DEPENDENCIES_ERROR)
 }
 
@@ -227,8 +308,7 @@ async function maybeRecoverOutdatedDependencies(
   if (!canPromptInteractively({ silent }))
     return { recovered: false, remainingOutdated: outdated }
 
-  const projectRoot = resolveDoctorProjectRoot(options.packageJson)
-  const pm = getPMAndCommandForDir(projectRoot)
+  const packageJsonPaths = parseDoctorPackageJsonPaths(options.packageJson)
   const { capgo, other } = partitionOutdatedDependencies(outdated)
   const choice = await promptDoctorUpdateChoice(capgo, other)
   const packagesToUpdate = packagesForDoctorUpdateChoice(choice, capgo, other)
@@ -236,12 +316,12 @@ async function maybeRecoverOutdatedDependencies(
   if (packagesToUpdate.length === 0)
     return { recovered: false, remainingOutdated: outdated }
 
-  const installCommand = buildOutdatedInstallCommand(pm, packagesToUpdate)
+  const installCommand = buildOutdatedInstallCommandsForDoctor(options.packageJson, packagesToUpdate)
   const s = spinner()
-  s.start(`Running: ${installCommand}`)
+  s.start(`Running: ${installCommand.split('\n')[0]}`)
 
   try {
-    runOutdatedDependencyUpdates(pm, packagesToUpdate, projectRoot)
+    runOutdatedDependencyUpdatesForDoctor(options.packageJson, packagesToUpdate)
     s.stop('Dependencies updated')
   }
   catch (error) {
@@ -290,7 +370,6 @@ export async function getInfoInternal(options: DoctorInfoOptions, silent = false
     log.info(' Installed Dependencies:')
   }
 
-  const projectRoot = resolveDoctorProjectRoot(options.packageJson)
   let installedDependencies = await getInstalledDependencies(options.packageJson)
 
   if (Object.keys(installedDependencies).length === 0) {
@@ -333,7 +412,7 @@ export async function getInfoInternal(options: DoctorInfoOptions, silent = false
 
     const recovery = await maybeRecoverOutdatedDependencies(outdated, options, silent)
     if (!recovery.recovered)
-      throwOutdatedDependenciesError(getPMAndCommandForDir(projectRoot), recovery.remainingOutdated, silent)
+      throwOutdatedDependenciesError(options.packageJson, recovery.remainingOutdated, silent)
 
     installedDependencies = await getInstalledDependencies(options.packageJson)
     latestDependencies = await getLatestDependencies(installedDependencies)
