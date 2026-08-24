@@ -44,6 +44,12 @@ await test('returns empty map when channel version has no native packages', asyn
   assert.equal(result.size, 0)
 })
 
+await test('returns empty map when channel version has empty native packages', async () => {
+  const supabase = fakeSupabase({ data: { version: { native_packages: [] } }, error: null })
+  const result = await getRemoteDependencies(supabase, 'com.example.app', 'production')
+  assert.equal(result.size, 0)
+})
+
 await test('returns empty map when channel has no linked version', async () => {
   const supabase = fakeSupabase({ data: { version: null }, error: null })
   const result = await getRemoteDependencies(supabase, 'com.example.app', 'production')
@@ -76,6 +82,18 @@ await test('throws a clear error for multiple channel rows instead of coerce mes
   const supabase = fakeSupabase({
     data: null,
     error: { message: 'Cannot coerce the result to a single JSON object' },
+  })
+
+  await assert.rejects(
+    () => getRemoteDependencies(supabase, 'com.example.app', 'production'),
+    /Multiple channels matched/,
+  )
+})
+
+await test('throws a clear error when maybeSingle reports PGRST116 duplicate rows', async () => {
+  const supabase = fakeSupabase({
+    data: null,
+    error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' },
   })
 
   await assert.rejects(

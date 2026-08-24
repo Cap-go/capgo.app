@@ -12,6 +12,7 @@ import { getRecentEmailOtpVerification, sendEmailOtpVerification, verifyEmailOtp
 import { useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { useMainStore } from '~/stores/main'
+import { safeResetTurnstile } from '~/utils/turnstile'
 
 const { t } = useI18n()
 const supabase = useSupabase()
@@ -83,7 +84,7 @@ async function sendOtpCode() {
   const { error } = await sendEmailOtpVerification(supabase, currentUserEmail.value, otpCaptchaToken.value)
   otpSending.value = false
   otpCaptchaToken.value = ''
-  otpCaptchaRef.value?.reset()
+  safeResetTurnstile(otpCaptchaRef.value)
 
   if (error) {
     toast.error(error.message.toLowerCase().includes('captcha') ? t('captcha-fail') : t('verification-failed'))
