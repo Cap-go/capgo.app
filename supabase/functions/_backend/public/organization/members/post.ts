@@ -1,13 +1,13 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../../utils/hono.ts'
 import type { Database } from '../../../utils/supabase.types.ts'
-import { createClient } from '@supabase/supabase-js'
+import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
 import { safeParseSchema } from '../../../utils/schema_validation.ts'
 import { BRES, simpleError } from '../../../utils/hono.ts'
 import { cloudlog } from '../../../utils/logging.ts'
+import { closeClient, getPgClient } from '../../../utils/pg.ts'
 import { checkPermission } from '../../../utils/rbac.ts'
-import { getEnv } from '../../../utils/utils.ts'
 
 const rbacInviteRoles = ['org_member', 'org_billing_admin', 'org_admin', 'org_super_admin'] as const
 
@@ -37,6 +37,11 @@ const inviteBodySchema = z.object({
   invite_type: inviteTypeSchema,
 })
 
+interface PgQueryClient {
+  query: <TRow = Record<string, unknown>>(text: string, params?: unknown[]) => Promise<{ rowCount?: number | null, rows: TRow[] }>
+  release: () => void
+}
+
 export function normalizeInviteRole(inviteType: string): RbacInviteRole | null {
   if (!allowedInviteRoleSet.has(inviteType))
     return null
@@ -64,40 +69,40 @@ export async function post(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown,
     throw simpleError('not_authorized', 'Not authorized')
   }
 
-  const supabase = createClient<Database>(
-    getEnv(c, 'SUPABASE_URL'),
-    getEnv(c, 'SUPABASE_SERVICE_ROLE_KEY'),
-    {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-        detectSessionInUrl: false,
-      },
-      global: {
-        headers: {
-          capgkey: effectiveApikey,
-        },
-      },
-    },
-  )
-
   const rbacRoleName = normalizeInviteRole(body.invite_type)
 
   if (!rbacRoleName)
     throw simpleError('invalid_body', 'Invalid invite type', { invite_type: body.invite_type })
 
-  const { data, error } = await supabase.rpc('invite_user_to_org_rbac', {
-    email: body.email,
-    org_id: body.orgId,
-    role_name: rbacRoleName,
-  })
-
-  if (error) {
+  // API-key Supabase clients run as anon, so this checked endpoint owns the invite
+  // path via Postgres after revoking anon execute on invite_user_to_org_rbac.
+  const pgPool = getPgClient(c)
+  let dbClient: PgQueryClient | null = null
+  try {
+    dbClient = await pgPool.connect() as PgQueryClient
+    await dbClient.query(
+      'SELECT set_config($1, $2, true)',
+      ['request.headers', JSON.stringify({ capgkey: effectiveApikey })],
+    )
+    const result = await dbClient.query<{ invite_user_to_org_rbac: string }>(
+      'SELECT public.invite_user_to_org_rbac($1::varchar, $2::uuid, $3::text) AS invite_user_to_org_rbac',
+      [body.email, body.orgId, rbacRoleName],
+    )
+    const data = result.rows[0]?.invite_user_to_org_rbac
+    if (!data || data !== 'OK') {
+      throw simpleError('error_inviting_user_to_organization', 'Error inviting user to organization', { data })
+    }
+  }
+  catch (error) {
+    if (error instanceof HTTPException)
+      throw error
     throw simpleError('error_inviting_user_to_organization', 'Error inviting user to organization', { error })
   }
-  if (data && data !== 'OK') {
-    throw simpleError('error_inviting_user_to_organization', 'Error inviting user to organization', { data })
+  finally {
+    dbClient?.release()
+    closeClient(c, pgPool)
   }
+
   cloudlog({ requestId: c.get('requestId'), message: 'User invited to organization', data: { email: body.email, org_id: body.orgId } })
   return c.json(BRES)
 }
