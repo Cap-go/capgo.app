@@ -1,1 +1,1 @@
-test
+@/tmp/cf_content.ts
