@@ -399,4 +399,218 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt,
       device_id: device.device_id,
       cached_at: new Date().toISOString(),
     }
-    await trackDeviceCache.putJson(trackDeviceCacheRequest, cachePayload, TRACK_
+    await trackDeviceCache.putJson(trackDeviceCacheRequest, cachePayload, TRACK_DEVICE_CACHE_MAX_AGE_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
+  }
+  catch (e) {
+    outcome = 'error'
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error tracking device', error: serializeError(e), device: sanitizeDeviceForLogging(device, statsMode) })
+  }
+  finally {
+    const ms = Math.round(performance.now() - start)
+    if (ms >= 20) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'trackDevicesCF_timing',
+        ms,
+        outcome,
+        app_id: device.app_id,
+      })
+    }
+  }
+}
+
+export function formatDateCF(date: string | Date | undefined | null) {
+  // Preserve prior dayjs edge-case behavior:
+  // - undefined formats as "now" in local time (dayjs(undefined))
+  // - null / '' / unparseable values format as the literal "Invalid Date"
+  if (date === undefined)
+    return formatLocalDateTime()
+  if (date === null || date === '')
+    return 'Invalid Date'
+
+  const normalizedDate = date instanceof Date ? date : new Date(date)
+  if (Number.isNaN(normalizedDate.getTime()))
+    return 'Invalid Date'
+
+  const year = normalizedDate.getUTCFullYear()
+  const month = pad2(normalizedDate.getUTCMonth() + 1)
+  const day = pad2(normalizedDate.getUTCDate())
+  const hours = pad2(normalizedDate.getUTCHours())
+  const minutes = pad2(normalizedDate.getUTCMinutes())
+  const seconds = pad2(normalizedDate.getUTCSeconds())
+
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
+}
+
+interface AnalyticsApiResponse {
+  data: { [key: string]: string }[]
+  meta: { name: string, type: string }[]
+  rows: number
+  rows_before_limit_at_least: number
+}
+
+function convertDataToJsTypes<T>(apiResponse: AnalyticsApiResponse) {
+  const { meta, data } = apiResponse
+
+  // cloudlog(c.get('requestId'), 'meta', meta)
+  const toNumber = Number
+  const converters: Record<string, (value: string) => unknown> = {
+    String,
+    // Analytics Engine returns aggregate sums as Float64 string values.
+    // Without conversion, callers that do `sum + row.install` string-concatenate.
+    Float64: toNumber,
+    Float32: toNumber,
+    Int64: toNumber,
+    Int32: toNumber,
+    UInt64: toNumber,
+    UInt32: toNumber,
+    DateTime: (value: string) => new Date(value),
+  }
+
+  return data.map((row) => {
+    const convertedRow = {} as any
+    meta.forEach((column) => {
+      const { name, type } = column
+      convertedRow[name] = converters[type] ? converters[type](row[name]) : row[name]
+    })
+    return convertedRow as T
+  })
+}
+
+export async function runQueryToCFA<T>(c: Context, query: string) {
+  const CF_ANALYTICS_TOKEN = getEnv(c, 'CF_ANALYTICS_TOKEN')
+  const CF_ACCOUNT_ID = getEnv(c, 'CF_ACCOUNT_ANALYTICS_ID')
+
+  const headers = {
+    'Authorization': `Bearer ${CF_ANALYTICS_TOKEN}`,
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Accept-Encoding': 'gzip, zlib, deflate, zstd, br',
+    'User-Agent': 'Capgo/1.0',
+  }
+  const requestId = c.get('requestId')
+  cloudlog({
+    requestId,
+    message: 'runQueryToCFA payload',
+    queryLength: query.length,
+    headerNames: Object.keys(headers),
+  })
+
+  try {
+    const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/analytics_engine/sql`, {
+      method: 'POST',
+      headers,
+      body: query,
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      let errorForLog: unknown = errorText
+      try {
+        errorForLog = JSON.parse(errorText)
+      }
+      catch {
+        // Keep the raw text body when Cloudflare returns HTML or plain text.
+      }
+      const errorPreview = (errorText || response.statusText).replace(/\s+/g, ' ').trim().slice(0, 500)
+      cloudlogErr({ requestId: c.get('requestId'), message: 'runQueryToCFA HTTPError', status: response.status, error: errorForLog })
+      throw new Error(`runQueryToCFA HTTP ${response.status}: ${errorPreview}`)
+    }
+
+    const res = await response.json() as AnalyticsApiResponse & { data: T[] }
+    return convertDataToJsTypes<T>(res)
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'runQueryToCFA error', error: serializeError(e) })
+    if (e instanceof Error && e.message.startsWith('runQueryToCFA HTTP '))
+      throw e
+    const errorMessage = e instanceof Error ? e.message : String(e)
+    throw new Error(`runQueryToCFA encountered an error: ${errorMessage}`, { cause: e })
+  }
+}
+export interface AdminOnboardingTelemetryWindow {
+  app_id: string
+  start_at: Date | string
+  end_at: Date | string
+}
+
+export interface AdminOnboardingTelemetry {
+  available: boolean
+  first_production_device_at_by_app: Map<string, Date>
+  first_update_download_at_by_app: Map<string, Date>
+}
+
+interface AdminOnboardingTelemetryRow {
+  app_id: string
+  first_at: Date | string
+}
+
+// Cloudflare Analytics Engine SQL rejects bodies longer than 10_000 chars.
+const ADMIN_ONBOARDING_TELEMETRY_MAX_SQL_CHARS = 9_000
+const ADMIN_ONBOARDING_COMPLETED_DOWNLOAD_ACTIONS = [
+  'download_complete',
+  'download_manifest_complete',
+  'download_zip_complete',
+]
+
+function batchAdminOnboardingTelemetryWindows(
+  windows: AdminOnboardingTelemetryWindow[],
+  buildQuery: (batch: AdminOnboardingTelemetryWindow[]) => string,
+): AdminOnboardingTelemetryWindow[][] {
+  const batches: AdminOnboardingTelemetryWindow[][] = []
+  let current: AdminOnboardingTelemetryWindow[] = []
+
+  for (const window of windows) {
+    const candidate = [...current, window]
+    if (current.length > 0 && buildQuery(candidate).length > ADMIN_ONBOARDING_TELEMETRY_MAX_SQL_CHARS) {
+      batches.push(current)
+      current = [window]
+      continue
+    }
+    current = candidate
+  }
+
+  if (current.length > 0)
+    batches.push(current)
+
+  return batches
+}
+
+function toValidDate(value: Date | string) {
+  const date = value instanceof Date ? value : new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+export function isAdminOnboardingTelemetryWithinRetention(startDate: Date | string, now = new Date()) {
+  const start = toValidDate(startDate)
+  if (!start || start > now)
+    return false
+
+  const retentionCutoff = new Date(now)
+  retentionCutoff.setUTCMonth(retentionCutoff.getUTCMonth() - 3)
+  return start >= retentionCutoff
+}
+
+function getAdminOnboardingTelemetryWindowFilter(windows: AdminOnboardingTelemetryWindow[]) {
+  if (windows.length === 0)
+    return '1 = 0'
+
+  return windows.map((window) => {
+    return `(index1 = '${escapeSqlString(window.app_id)}'
+      AND timestamp >= toDateTime('${formatDateCF(window.start_at)}')
+      AND timestamp < toDateTime('${formatDateCF(window.end_at)}'))`
+  }).join('\n      OR ')
+}
+
+export function buildAdminOnboardingProductionDeviceQuery(windows: AdminOnboardingTelemetryWindow[]) {
+  return `SELECT
+    index1 AS app_id,
+    min(timestamp) AS first_at
+  FROM device_info
+  WHERE (${getAdminOnboardingTelemetryWindowFilter(windows)})
+    AND double2 = 1
+    AND double3 = 0
+    AND blob3 != ''
+  GROUP BY index1`
+}
+
+export function buildAdminOnboardingUpdateDownloadQuery(windows: AdminOnboardingTelemetryWindo
