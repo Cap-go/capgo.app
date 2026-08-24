@@ -85,6 +85,16 @@ async function setupMfaEdgeUser() {
 
   await executeSQL(
     `
+    INSERT INTO public.user_security (user_id, email_otp_verified_at, created_at, updated_at)
+    VALUES ($1::uuid, NOW(), NOW(), NOW())
+    ON CONFLICT (user_id) DO UPDATE
+    SET email_otp_verified_at = EXCLUDED.email_otp_verified_at, updated_at = EXCLUDED.updated_at
+    `,
+    [MFA_EDGE_USER_ID],
+  )
+
+  await executeSQL(
+    `
     DELETE FROM auth.mfa_factors
     WHERE user_id = $1::uuid
     `,
@@ -118,10 +128,10 @@ async function setupMfaEdgeUser() {
 
 async function cleanupMfaEdgeUser() {
   await executeSQL(`DELETE FROM public.apikeys WHERE user_id = $1::uuid`, [MFA_EDGE_USER_ID])
-  await executeSQL(`DELETE FROM public.role_bindings WHERE principal_id = $1::uuid`, [MFA_EDGE_USER_ID])
   await executeSQL(`DELETE FROM public.org_users WHERE user_id = $1::uuid`, [MFA_EDGE_USER_ID])
   await executeSQL(`DELETE FROM public.orgs WHERE id = $1::uuid`, [MFA_EDGE_ORG_ID])
   await executeSQL(`DELETE FROM auth.mfa_factors WHERE user_id = $1::uuid`, [MFA_EDGE_USER_ID])
+  await executeSQL(`DELETE FROM public.user_security WHERE user_id = $1::uuid`, [MFA_EDGE_USER_ID])
   await executeSQL(`DELETE FROM public.users WHERE id = $1::uuid`, [MFA_EDGE_USER_ID])
   await executeSQL(`DELETE FROM auth.users WHERE id = $1::uuid`, [MFA_EDGE_USER_ID])
 }
