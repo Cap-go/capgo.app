@@ -27,6 +27,18 @@ const TRANSIENT_PG_SQLSTATES = new Set([
 
 const TRANSIENT_ERROR_MESSAGE_RE = /connection (?:terminated|ended|closed|refused|reset)|timeout exceeded when trying to connect|connect(?:ion)? timed? ?out|canceling statement due to (?:statement|lock) timeout|network(?: |_)?error|socket hang up|hyperdrive|too many clients already/i
 
+const PG_SQLSTATE_RE = /^[0-9A-Z]{5}$/
+
+const DRIZZLE_ERROR_NAMES = new Set(['DrizzleError', 'DrizzleQueryError', 'TransactionRollbackError'])
+
+const DATABASE_MESSAGE_RE = /Failed query:|(?:FROM|INTO|UPDATE|SELECT|INSERT|DELETE)\s+(?:[\w"$]+\.)?[\w"$]+|relation\s+"[^"]+"\s+does not exist|Connection terminated unexpectedly|timeout exceeded when trying to connect|too many clients already|canceling statement due to/i
+
+const PG_CONNECTION_MESSAGE_RE = /:5432\b|postgres(?:ql)?|hyperdrive|pgbouncer|supabase.*(?:db|postgres)/i
+
+function isPostgresSqlStateCode(code: string): boolean {
+  return PG_SQLSTATE_RE.test(code) && !TRANSIENT_NODE_ERROR_CODES.has(code)
+}
+
 export function readPgErrorField(error: unknown, key: string): unknown {
   if (!error || typeof error !== 'object')
     return undefined
@@ -78,6 +90,62 @@ export function isTransientPgError(error: unknown, depth = 0): boolean {
     return errors.some(entry => isTransientPgError(entry, depth + 1))
 
   return false
+}
+
+export function isDatabaseOriginError(error: unknown, depth = 0): boolean {
+  if (!error || depth > 6)
+    return false
+
+  if (typeof error === 'object') {
+    const name = readPgErrorField(error, 'name')
+    if (typeof name === 'string' && DRIZZLE_ERROR_NAMES.has(name))
+      return true
+
+    for (const field of ['severity', 'routine', 'schema', 'table', 'column', 'detail']) {
+      if (readPgErrorField(error, field) !== undefined)
+        return true
+    }
+
+    const code = readPgErrorField(error, 'code')
+    if (typeof code === 'string') {
+      if (isPostgresSqlStateCode(code))
+        return true
+      if (TRANSIENT_NODE_ERROR_CODES.has(code)) {
+        const message = readPgErrorField(error, 'message')
+        if (typeof message === 'string' && PG_CONNECTION_MESSAGE_RE.test(message))
+          return true
+      }
+    }
+
+    const message = readPgErrorField(error, 'message')
+    if (typeof message === 'string') {
+      if (DATABASE_MESSAGE_RE.test(message))
+        return true
+      if (PG_CONNECTION_MESSAGE_RE.test(message))
+        return true
+    }
+  }
+
+  const cause = readPgErrorField(error, 'cause')
+  if (cause !== undefined && isDatabaseOriginError(cause, depth + 1))
+    return true
+
+  const errors = readPgErrorField(error, 'errors')
+  if (Array.isArray(errors))
+    return errors.some(entry => isDatabaseOriginError(entry, depth + 1))
+
+  return false
+}
+
+export function isTransientDatabaseError(error: unknown): boolean {
+  return isTransientPgError(error) && isDatabaseOriginError(error)
+}
+
+export function readQuickErrorOriginalCause(error: unknown): unknown {
+  const cause = readPgErrorField(error, 'cause')
+  if (!cause || typeof cause !== 'object')
+    return undefined
+  return readPgErrorField(cause, 'originalCause')
 }
 
 function collectErrorMessages(error: unknown, depth = 0): string[] {

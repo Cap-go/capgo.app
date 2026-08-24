@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   drizzleErrorFingerprintSegment,
+  isDatabaseOriginError,
+  isTransientDatabaseError,
   isTransientPgError,
   readPgErrorCode,
 } from '../supabase/functions/_backend/utils/pg_errors.ts'
@@ -82,5 +84,27 @@ describe('pg_errors', () => {
     })
 
     expect(readPgErrorCode(error)).toBe('22P02')
+  })
+
+  it('requires database origin before treating transient node errors as database outages', () => {
+    const stripeError = Object.assign(new Error('fetch failed'), {
+      code: 'ECONNREFUSED',
+      cause: Object.assign(new Error('connect ECONNREFUSED api.stripe.com:443'), {
+        code: 'ECONNREFUSED',
+      }),
+    })
+
+    expect(isTransientPgError(stripeError)).toBe(true)
+    expect(isDatabaseOriginError(stripeError)).toBe(false)
+    expect(isTransientDatabaseError(stripeError)).toBe(false)
+  })
+
+  it('treats postgres connection failures as database-origin transient errors', () => {
+    const pgError = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), {
+      code: 'ECONNREFUSED',
+    })
+
+    expect(isDatabaseOriginError(pgError)).toBe(true)
+    expect(isTransientDatabaseError(pgError)).toBe(true)
   })
 })

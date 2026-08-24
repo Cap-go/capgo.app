@@ -312,6 +312,10 @@ describe('onError PostHog capture', () => {
     expect(backgroundTaskMock).not.toHaveBeenCalled()
     expect(sendDiscordAlert500Mock).not.toHaveBeenCalled()
     expect(capturePosthogExceptionMock).not.toHaveBeenCalled()
+    expect(cloudlogErrMock).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'transient_pg_error',
+      moreInfo: { pgErrorCode: '57P01' },
+    }))
     expect(response).toEqual({
       body: {
         error: 'upstream_unavailable',
@@ -320,6 +324,56 @@ describe('onError PostHog capture', () => {
       },
       status: 503,
     })
+  })
+
+  it('returns 503 without PostHog capture for transient database errors wrapped in quickError', async () => {
+    const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
+
+    const originalCause = Object.assign(new Error('Connection terminated unexpectedly'), {
+      code: '57P01',
+    })
+    const error = new HTTPException(500, {
+      cause: {
+        error: 'failed_to_load_settings',
+        message: 'Failed to load notification settings',
+        moreInfo: {},
+        originalCause,
+      },
+    })
+
+    const response = await onError('api')(error, createContext())
+
+    expect(backgroundTaskMock).not.toHaveBeenCalled()
+    expect(sendDiscordAlert500Mock).not.toHaveBeenCalled()
+    expect(capturePosthogExceptionMock).not.toHaveBeenCalled()
+    expect(response).toEqual({
+      body: {
+        error: 'upstream_unavailable',
+        message: 'Database temporarily unavailable',
+        moreInfo: {},
+      },
+      status: 503,
+    })
+  })
+
+  it('does not treat unrelated transient network errors as database outages', async () => {
+    const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
+
+    const response = await onError('api')(Object.assign(new Error('fetch failed'), {
+      code: 'ECONNREFUSED',
+      cause: Object.assign(new Error('connect ECONNREFUSED api.stripe.com:443'), {
+        code: 'ECONNREFUSED',
+      }),
+    }), createContext())
+
+    expect(response.status).toBe(500)
+    expect(response.body).toEqual({
+      error: 'unknown_error',
+      message: 'Unknown error',
+      moreInfo: {},
+    })
+    expect(sendDiscordAlert500Mock).toHaveBeenCalledOnce()
+    expect(capturePosthogExceptionMock).toHaveBeenCalledOnce()
   })
 
   it('skips Discord for expected files Durable Object storage timeouts', async () => {
