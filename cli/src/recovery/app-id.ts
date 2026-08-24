@@ -8,7 +8,7 @@ import { trackEvent } from '../analytics/track'
 import { addAppInternal } from '../app/add'
 import { getAppListPath } from '../app/list'
 import { extractApplicationIds } from '../build/onboarding/android/gradle-parser'
-import { createSupabaseClient, findRoot, findSavedKey, formatError, getAppId, getConfigForWrite, getOrganizationWithPermission, invokeCapgoCliApi, PACKNAME } from '../utils'
+import { createSupabaseClient, findRoot, findSavedKeySilent, formatError, getAppId, getConfigForWrite, getOrganizationWithPermission, invokeCapgoCliApi, PACKNAME } from '../utils'
 import { writeConfigUpdater } from '../config'
 
 const APP_ID_REGEX = /^[a-z0-9]+(?:\.[\w-]+)+$/i
@@ -17,7 +17,23 @@ export function isValidAppId(appId: string) {
   return appId !== 'io.ionic.starter' && !appId.includes('--') && APP_ID_REGEX.test(appId)
 }
 
-export function collectAppIdCandidates(config: CapacitorConfig | undefined, projectRoot = findRoot(cwd())): string[] {
+function readAppIdFromPackageJson(packageJsonPath: string): string | undefined {
+  if (!existsSync(packageJsonPath))
+    return undefined
+  try {
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { capacitor?: { appId?: string } }
+    return packageJson.capacitor?.appId?.trim()
+  }
+  catch {
+    return undefined
+  }
+}
+
+export function collectAppIdCandidates(
+  config: CapacitorConfig | undefined,
+  projectRoot = findRoot(cwd()),
+  packageJsonPaths?: string[],
+): string[] {
   const candidates = new Set<string>()
   const push = (value: string | undefined) => {
     const trimmed = value?.trim()
@@ -28,16 +44,11 @@ export function collectAppIdCandidates(config: CapacitorConfig | undefined, proj
   push(config?.appId)
   push(config?.plugins?.CapacitorUpdater?.appId)
 
-  const packageJsonPath = join(projectRoot, PACKNAME)
-  if (existsSync(packageJsonPath)) {
-    try {
-      const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { capacitor?: { appId?: string } }
-      push(packageJson.capacitor?.appId)
-    }
-    catch {
-      // ignore malformed package.json
-    }
-  }
+  const pathsToRead = packageJsonPaths?.length
+    ? packageJsonPaths
+    : [join(projectRoot, PACKNAME)]
+  for (const packageJsonPath of pathsToRead)
+    push(readAppIdFromPackageJson(packageJsonPath))
 
   const gradlePath = join(projectRoot, 'android', 'app', 'build.gradle')
   if (existsSync(gradlePath)) {
@@ -91,6 +102,7 @@ export interface ResolveAppIdOptions {
   explicitAppId?: string
   config?: CapacitorConfig
   apikey?: string
+  packageJsonPaths?: string[]
   interactive?: boolean
   json?: boolean
   supaHost?: string
@@ -105,6 +117,20 @@ function buildCiAppIdMessage() {
   ].join('\n')
 }
 
+function trackAppIdRecovery(
+  appId: string,
+  recovery: string,
+  apikey?: string,
+) {
+  void trackEvent({
+    channel: 'app',
+    event: 'CLI Recovered Missing AppId',
+    appId,
+    apikey,
+    tags: { recovery },
+  })
+}
+
 // codeql[js/insecure-randomness]: explicitAppId is argv/config identity, not secret material from Math.random.
 export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Promise<string> {
   const interactive = options.interactive ?? false
@@ -114,30 +140,18 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
   if (resolved)
     return resolved
 
-  const candidates = collectAppIdCandidates(options.config)
+  const candidates = collectAppIdCandidates(options.config, findRoot(cwd()), options.packageJsonPaths)
   if (candidates.length === 1) {
     const [onlyCandidate] = candidates
     if (!interactive) {
-      void trackEvent({
-        channel: 'app',
-        event: 'CLI Recovered Missing AppId',
-        appId: onlyCandidate,
-        apikey: options.apikey,
-        tags: { recovery: 'auto-detect' },
-      })
+      trackAppIdRecovery(onlyCandidate, 'auto-detect', options.apikey)
       return onlyCandidate
     }
     log.info(`Detected app ID from project files: ${onlyCandidate}`)
     const useDetected = await pConfirm({ message: `Use ${onlyCandidate}?`, initialValue: true })
     if (!pIsCancel(useDetected) && useDetected) {
       await persistAppIdToConfig(onlyCandidate)
-      void trackEvent({
-        channel: 'app',
-        event: 'CLI Recovered Missing AppId',
-        appId: onlyCandidate,
-        apikey: options.apikey,
-        tags: { recovery: 'auto-detect' },
-      })
+      trackAppIdRecovery(onlyCandidate, 'auto-detect', options.apikey)
       return onlyCandidate
     }
   }
@@ -148,22 +162,21 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
     throw new Error(buildCiAppIdMessage())
   }
 
-  const resolvedApikey = options.apikey || findSavedKey()
-  if (!resolvedApikey)
-    throw new Error('Missing API key. Run `npx @capgo/cli@latest login` first.')
-
   while (true) {
+    const resolvedApikey = options.apikey || findSavedKeySilent()
     let remoteApps: Database['public']['Tables']['apps']['Row'][] = []
-    try {
-      remoteApps = await fetchCapgoApps(resolvedApikey, options.supaHost, options.supaAnon)
-    }
-    catch (error) {
-      log.warn(formatError(error))
+    if (resolvedApikey) {
+      try {
+        remoteApps = await fetchCapgoApps(resolvedApikey, options.supaHost, options.supaAnon)
+      }
+      catch (error) {
+        log.warn(formatError(error))
+      }
     }
 
     const selectOptions: { value: string, label: string }[] = []
     for (const candidate of candidates) {
-      if (!selectOptions.some(option => option.value === candidate)) {
+      if (!selectOptions.some(option => option.value === `detected:${candidate}`)) {
         selectOptions.push({
           value: `detected:${candidate}`,
           label: `Use detected app ID: ${candidate}`,
@@ -171,13 +184,16 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
       }
     }
     for (const app of remoteApps) {
+      if (!app.app_id || !isValidAppId(app.app_id))
+        continue
       selectOptions.push({
         value: `remote:${app.app_id}`,
         label: `${app.name ?? app.app_id} (${app.app_id})`,
       })
     }
-    selectOptions.push({ value: 'create', label: 'Create a new app in Capgo' })
     selectOptions.push({ value: 'manual', label: 'Enter an app ID manually' })
+    if (resolvedApikey)
+      selectOptions.push({ value: 'create', label: 'Create a new app in Capgo' })
 
     const choice = await pSelect({
       message: 'Missing appId. How do you want to continue?',
@@ -189,26 +205,14 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
     if (typeof choice === 'string' && choice.startsWith('detected:')) {
       const appId = choice.slice('detected:'.length)
       await persistAppIdToConfig(appId)
-      void trackEvent({
-        channel: 'app',
-        event: 'CLI Recovered Missing AppId',
-        appId,
-        apikey: resolvedApikey,
-        tags: { recovery: 'detected-select' },
-      })
+      trackAppIdRecovery(appId, 'detected-select', resolvedApikey)
       return appId
     }
 
     if (typeof choice === 'string' && choice.startsWith('remote:')) {
       const appId = choice.slice('remote:'.length)
       await persistAppIdToConfig(appId)
-      void trackEvent({
-        channel: 'app',
-        event: 'CLI Recovered Missing AppId',
-        appId,
-        apikey: resolvedApikey,
-        tags: { recovery: 'remote-select' },
-      })
+      trackAppIdRecovery(appId, 'remote-select', resolvedApikey)
       return appId
     }
 
@@ -226,17 +230,14 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
         continue
       const appId = (entered as string).trim()
       await persistAppIdToConfig(appId)
-      void trackEvent({
-        channel: 'app',
-        event: 'CLI Recovered Missing AppId',
-        appId,
-        apikey: resolvedApikey,
-        tags: { recovery: 'manual' },
-      })
+      trackAppIdRecovery(appId, 'manual', resolvedApikey)
       return appId
     }
 
     if (choice === 'create') {
+      if (!resolvedApikey)
+        throw new Error('Missing API key. Run `npx @capgo/cli@latest login` first.')
+
       const entered = await pText({
         message: 'Enter the app ID to create in Capgo (e.g. com.example.app):',
         defaultValue: candidates[0],
@@ -255,13 +256,7 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
       await addAppInternal(appId, { apikey: resolvedApikey, supaHost: options.supaHost, supaAnon: options.supaAnon }, organization, true)
       await persistAppIdToConfig(appId)
       log.success(`Created app ${appId} in Capgo`)
-      void trackEvent({
-        channel: 'app',
-        event: 'CLI Recovered Missing AppId',
-        appId,
-        apikey: resolvedApikey,
-        tags: { recovery: 'create-app' },
-      })
+      trackAppIdRecovery(appId, 'create-app', resolvedApikey)
       return appId
     }
   }

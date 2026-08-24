@@ -11,6 +11,7 @@ import {
 } from '../src/recovery/app-id.ts'
 import {
   findBuildEntryJsPath,
+  injectNotifyAppReadyIntoBuildJs,
   injectNotifyAppReadyIntoJs,
   patchNotifyAppReadyInBuildFolder,
 } from '../src/recovery/notify-app-ready.ts'
@@ -44,10 +45,28 @@ await test('findBuildEntryJsPath reads the script referenced by index.html', () 
   assert.equal(findBuildEntryJsPath(root), join(root, 'assets', 'main.js'))
 })
 
+await test('findBuildEntryJsPath prefers the app bundle over polyfills in index.html', () => {
+  const root = makeTempDir('entry-polyfill')
+  writeFileSync(join(root, 'index.html'), [
+    '<html><body>',
+    '<script src="./polyfills.js"></script>',
+    '<script src="./main.js"></script>',
+    '</body></html>',
+  ].join(''))
+  writeFileSync(join(root, 'polyfills.js'), 'console.log("polyfill")')
+  writeFileSync(join(root, 'main.js'), 'var CapacitorUpdater = {};\nconsole.log("boot")')
+  assert.equal(findBuildEntryJsPath(root), join(root, 'main.js'))
+})
+
 await test('injectNotifyAppReadyIntoJs appends notifyAppReady when CapacitorUpdater is already imported', () => {
   const input = 'import { CapacitorUpdater } from \'@capgo/capacitor-updater\'\nconsole.log("boot")\n'
   const output = injectNotifyAppReadyIntoJs('main.js', input)
   assert.match(output, /CapacitorUpdater\.notifyAppReady\(\)/)
+})
+
+await test('injectNotifyAppReadyIntoBuildJs refuses to add bare package imports', () => {
+  const input = 'console.log("boot")\n'
+  assert.equal(injectNotifyAppReadyIntoBuildJs(input), undefined)
 })
 
 await test('patchNotifyAppReadyInBuildFolder writes notifyAppReady into the built bundle', () => {
@@ -57,6 +76,13 @@ await test('patchNotifyAppReadyInBuildFolder writes notifyAppReady into the buil
   const patched = patchNotifyAppReadyInBuildFolder(root)
   assert.equal(patched, join(root, 'index.js'))
   assert.match(readFileSync(join(root, 'index.js'), 'utf8'), /notifyAppReady/)
+})
+
+await test('patchNotifyAppReadyInBuildFolder skips bundles without CapacitorUpdater', () => {
+  const root = makeTempDir('patch-skip')
+  writeFileSync(join(root, 'index.html'), '<html><body><script src="./index.js"></script></body></html>')
+  writeFileSync(join(root, 'index.js'), 'console.log("boot")\n')
+  assert.equal(patchNotifyAppReadyInBuildFolder(root), undefined)
 })
 
 await test('collectAppIdCandidates gathers config and gradle applicationId values', () => {
@@ -69,6 +95,14 @@ await test('collectAppIdCandidates gathers config and gradle applicationId value
     plugins: { CapacitorUpdater: { appId: 'com.updater.app' } },
   }, root)
   assert.deepEqual(new Set(candidates), new Set(['com.config.app', 'com.updater.app', 'com.package.app', 'com.gradle.app']))
+})
+
+await test('collectAppIdCandidates reads appId from an explicit package.json path', () => {
+  const root = makeTempDir('appid-package-json')
+  const customPackageJson = join(root, 'custom-package.json')
+  writeFileSync(customPackageJson, JSON.stringify({ capacitor: { appId: 'com.custom.package' } }))
+  const candidates = collectAppIdCandidates(undefined, root, [customPackageJson])
+  assert.deepEqual(candidates, ['com.custom.package'])
 })
 
 await test('isValidAppId rejects reserved and malformed ids', () => {

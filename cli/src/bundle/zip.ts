@@ -51,6 +51,7 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
     const resolvedAppId = await resolveAppIdWithRecovery({
       explicitAppId: appId,
       config: extConfig?.config,
+      packageJsonPaths: options.packageJson ? [options.packageJson] : undefined,
       interactive,
       json,
     })

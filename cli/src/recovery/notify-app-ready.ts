@@ -21,7 +21,22 @@ function readExistingMainFile(mainFilePath: string | null) {
   }
 }
 
-export function findBuildEntryJsPath(webDir: string): string | undefined {
+function scoreBuildEntryScript(src: string, content: string): number {
+  let score = 0
+  const base = basename(src).toLowerCase()
+  if (/polyfill|runtime|vendor|webpack|zone\.js/.test(base))
+    score -= 10
+  if (/^(main|index|app)\./.test(base))
+    score += 5
+  if (content.includes('CapacitorUpdater'))
+    score += 20
+  if (content.includes('notifyAppReady'))
+    score += 30
+  return score
+}
+
+function collectLocalScriptCandidates(webDir: string): { path: string, src: string, content: string }[] {
+  const candidates: { path: string, src: string, content: string }[] = []
   const indexPath = join(webDir, 'index.html')
   if (existsSync(indexPath)) {
     const html = readFileSync(indexPath, 'utf8')
@@ -31,21 +46,54 @@ export function findBuildEntryJsPath(webDir: string): string | undefined {
       if (!src || src.startsWith('http://') || src.startsWith('https://') || src.startsWith('//'))
         continue
       const candidate = join(webDir, src.replace(/^\//, ''))
-      if (existsSync(candidate) && extname(candidate) === '.js')
-        return candidate
+      if (existsSync(candidate) && extname(candidate) === '.js') {
+        try {
+          candidates.push({
+            path: candidate,
+            src,
+            content: readFileSync(candidate, 'utf8'),
+          })
+        }
+        catch {
+          // ignore unreadable script
+        }
+      }
     }
   }
 
-  const rootJsFiles = readdirSync(webDir)
-    .filter(file => extname(file) === '.js')
-    .map(file => join(webDir, file))
-    .filter(filePath => statSync(filePath).isFile())
+  if (!candidates.length) {
+    const rootJsFiles = readdirSync(webDir)
+      .filter(file => extname(file) === '.js')
+      .map(file => join(webDir, file))
+      .filter(filePath => statSync(filePath).isFile())
+    for (const filePath of rootJsFiles) {
+      try {
+        candidates.push({
+          path: filePath,
+          src: basename(filePath),
+          content: readFileSync(filePath, 'utf8'),
+        })
+      }
+      catch {
+        // ignore unreadable script
+      }
+    }
+  }
 
-  if (rootJsFiles.length === 1)
-    return rootJsFiles[0]
+  return candidates
+}
 
-  const preferred = rootJsFiles.find(filePath => /^(index|main)\./i.test(basename(filePath)))
-  return preferred ?? rootJsFiles[0]
+export function findBuildEntryJsPath(webDir: string): string | undefined {
+  const candidates = collectLocalScriptCandidates(webDir)
+  if (!candidates.length)
+    return undefined
+
+  const ranked = [...candidates].sort((left, right) => {
+    const scoreDelta = scoreBuildEntryScript(right.src, right.content) - scoreBuildEntryScript(left.src, left.content)
+    return scoreDelta !== 0 ? scoreDelta : 0
+  })
+
+  return ranked[0]?.path
 }
 
 export function injectNotifyAppReadyIntoJs(filePath: string, content: string): string {
@@ -64,16 +112,26 @@ export function injectNotifyAppReadyIntoJs(filePath: string, content: string): s
   return `${updaterImport};\n\n${NOTIFY_CALL};\n${content}`
 }
 
+export function injectNotifyAppReadyIntoBuildJs(content: string): string | undefined {
+  if (content.includes('notifyAppReady'))
+    return content
+  if (!content.includes('CapacitorUpdater'))
+    return undefined
+  if (content.includes('CapacitorUpdater.notifyAppReady'))
+    return content
+  return `${content.trimEnd()}\n${NOTIFY_CALL};\n`
+}
+
 export function patchNotifyAppReadyInBuildFolder(webDir: string): string | undefined {
   const entryPath = findBuildEntryJsPath(webDir)
   if (!entryPath)
     return undefined
 
   const current = readFileSync(entryPath, 'utf8')
-  if (current.includes('notifyAppReady'))
-    return entryPath
+  const updated = injectNotifyAppReadyIntoBuildJs(current)
+  if (!updated)
+    return undefined
 
-  const updated = injectNotifyAppReadyIntoJs(entryPath, current)
   writeFileSync(entryPath, updated, 'utf8')
   return entryPath
 }
@@ -176,7 +234,7 @@ export async function ensureNotifyAppReadyInBuildFolder(options: EnsureNotifyApp
     if (choice === 'patch-build') {
       const patchedPath = patchNotifyAppReadyInBuildFolder(webDir)
       if (!patchedPath) {
-        log.warn('Could not find a JavaScript entry file to patch in the build folder.')
+        log.warn('Could not patch the build folder automatically. The app bundle must already include CapacitorUpdater, or patch the source and rebuild.')
         continue
       }
       if (!searchInDirectory(webDir, 'notifyAppReady')) {
@@ -197,12 +255,13 @@ export async function ensureNotifyAppReadyInBuildFolder(options: EnsureNotifyApp
         }
         log.success(`Added notifyAppReady() to ${patchedPath}`)
         log.info('Rebuild your web assets, then retry zip/upload.')
-        void trackEvent({ channel: 'bundle', event: 'CLI Recovered Missing NotifyAppReady', tags: { recovery: 'patch-source' } })
         const rebuilt = await pConfirm({ message: 'Have you rebuilt your app into the build folder?' })
         if (pIsCancel(rebuilt) || !rebuilt)
           continue
-        if (searchInDirectory(webDir, 'notifyAppReady'))
+        if (searchInDirectory(webDir, 'notifyAppReady')) {
+          void trackEvent({ channel: 'bundle', event: 'CLI Recovered Missing NotifyAppReady', tags: { recovery: 'patch-source' } })
           return 'recovered'
+        }
         log.warn('notifyAppReady() is still missing in the build folder after rebuild.')
       }
       catch (error) {
