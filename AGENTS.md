@@ -894,6 +894,72 @@ When backend code uses the plugin read-path (`/updates`, `/stats`, `/channel_sel
 
 ## Pull Request Guidelines
 
+### Pull Request Lifecycle (MANDATORY for every agent)
+
+**This is non-negotiable.** Agents that skip steps, ping humans early, or call a
+PR "ready to merge" before this lifecycle is finished are doing it wrong.
+
+```
+draft → code + CI green → mark Ready → AI review → fix until AI clear → ONLY THEN ping human
+```
+
+#### 1. While you are working: keep the PR a **Draft**
+
+- Open the PR as a **draft** (or convert to draft immediately).
+- Stay in draft for the entire coding period: implementation, refactors, force-pushes, flaky CI loops.
+- **Never** ping a human for review or merge while the PR is still a draft.
+- **Never** tell a human the PR is ready while it is still a draft.
+
+#### 2. When coding is done: make CI/CD fully green, then mark **Ready for review**
+
+Only after **all** of these are true:
+
+- You believe the implementation is complete (no known leftover work).
+- **Every** required GitHub Actions / CI check on the PR is **green** (no failing, no still-required pending).
+- The PR description follows the required sections below (with `(AI generated)` where applicable).
+- UX/UI changes include any required visual proof (see visual-diff rules).
+
+…then mark the PR **Ready for review** in GitHub (undraft).
+
+Marking Ready is **not** “ready for a human.” It means: **ready for automatic AI review** (CodeRabbit / cubic / whatever the repo runs on ready PRs).
+
+#### 3. Wait for automatic review
+
+- After you mark Ready, **wait** for the automatic reviewers to finish.
+- Do not ping humans during this window.
+- Do not claim the PR is merge-ready while AI review is queued, pending, or incomplete.
+
+#### 4. Fix review comments until AI review is fully clear
+
+- Resolve **every** actionable review thread (Critical, Major, Minor, P2, nits — all of them).
+- Push fixes, re-run CI, and wait for AI re-review as needed.
+- Repeat until:
+  - **Zero** unresolved review threads remain, and
+  - Automatic review is satisfied (approved / no outstanding change requests from the AI reviewers), and
+  - CI is still fully green.
+
+If AI review still requests changes, you are **not** done. Fix again. Do not escalate.
+
+#### 5. Only then: ping a human
+
+Ping a human (CTO / Martin / reviewer) **only** when **all** of the following hold:
+
+1. PR is **not** a draft (Ready for review).
+2. CI/CD is fully green.
+3. Automatic AI review has finished.
+4. **No** unresolved review comments remain.
+5. AI review does not still request changes.
+
+That ping is the ask for **human review / merge**. Anything earlier is noise.
+
+#### Explicitly forbidden
+
+- Marking Ready before CI is green.
+- Pinging a human while the PR is draft.
+- Pinging a human while AI review is pending or still requesting changes.
+- Saying “ready to merge” / “ready for you” while any review thread is still open (including “minor” / P2).
+- Opening a second PR for the same change instead of fixing the existing draft/ready PR.
+
 ### Required Sections
 
 Every pull request MUST include the following sections:
