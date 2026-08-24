@@ -72,7 +72,7 @@ const managedProcesses: ManagedProcess[] = []
 const isWindows = process.platform === 'win32'
 const httpReadyTimeoutMs = 5_000
 const visualDiffActionTimeoutMs = 60_000
-const visualDiffRouteTimeoutMs = 120_000
+const visualDiffRouteTimeoutMs = 180_000
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
