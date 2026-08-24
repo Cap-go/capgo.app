@@ -180,6 +180,12 @@ function parseEncodedPreviewSubdomain(subdomain: string): ParsedPreviewSubdomain
 
 /**
  * Parses a reversible preview subdomain label.
+ *
+ * Legacy hostnames that used `__` for dots are intentionally rejected: that
+ * encoding is not bijective, so distinct app IDs can collide on one public
+ * hostname (for example `com.example.app` and `com.example__app` both mapped to
+ * `com__example__app`). Callers must use bijective labels from
+ * `buildPreviewSubdomain` / `buildChannelPreviewSubdomain`.
  */
 export function parsePreviewSubdomain(subdomain: string): ParsedPreviewSubdomain | null {
   return parseEncodedPreviewSubdomain(subdomain)
