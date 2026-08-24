@@ -127,6 +127,7 @@ export function buildOutdatedInstallCommandsForDoctor(
   packageJson: string | undefined,
   packages: OutdatedDependency[],
   readDeclaredNames?: (packageJsonPath: string) => Set<string>,
+  shellPlatform: NodeJS.Platform = platform(),
 ): string {
   const packageJsonPaths = parseDoctorPackageJsonPaths(packageJson)
   if (!packageJsonPaths || packageJsonPaths.length <= 1) {
@@ -138,7 +139,7 @@ export function buildOutdatedInstallCommandsForDoctor(
     .map(({ packageJsonPath, packages: groupPackages }) => {
       const projectRoot = dirname(packageJsonPath)
       const pm = getPMAndCommandForDir(projectRoot)
-      return formatDoctorInstallHint(projectRoot, buildOutdatedInstallCommand(pm, groupPackages))
+      return formatDoctorInstallHint(projectRoot, buildOutdatedInstallCommand(pm, groupPackages), shellPlatform)
     })
     .join('\n')
 }
