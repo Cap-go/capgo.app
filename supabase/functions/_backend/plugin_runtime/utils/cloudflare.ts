@@ -1,1 +1,1 @@
-/cursor/stores/self/push_content.ts
+__LOAD_FROM__/cursor/stores/self/push_content.ts
