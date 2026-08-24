@@ -354,7 +354,7 @@ async function checkDomain(email: string): Promise<{ has_sso: boolean, enforce_s
     })
 
     if (!response.ok) {
-      return { has_sso: false }
+      throw new Error(`SSO domain check failed: ${response.status}`)
     }
 
     return await response.json()

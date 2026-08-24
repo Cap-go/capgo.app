@@ -31,6 +31,29 @@ test.describe('SSO Login Flow', () => {
     await expect(page.locator('[data-test="sso-login"]')).toHaveCount(0)
   })
 
+  test('should retry an unsuccessful domain check on submit', async ({ page }) => {
+    let checks = 0
+    await page.route('**/private/sso/check-domain', async (route) => {
+      checks += 1
+      if (checks === 1) {
+        await route.fulfill({ status: 500, body: 'error' })
+        return
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ has_sso: true }),
+      })
+    })
+
+    await page.fill('[data-test="email"]', 'user@sso.example')
+    await expect(page.locator('[data-password-ready="true"]')).toHaveCount(1)
+    await page.fill('[data-test="password"]', 'Password123!')
+    await page.click('[data-test="submit"]')
+    await expect.poll(() => checks).toBeGreaterThan(1)
+  })
+
   test('should use SSO only when the domain has SSO', async ({ page }) => {
     await page.route('**/private/sso/check-domain', async (route) => {
       await route.fulfill({
