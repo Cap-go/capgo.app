@@ -1,5 +1,5 @@
 import type { Context } from 'hono'
-import type Stripe from 'stripe'
+import Stripe from 'stripe'
 import { getFallbackCreditProductId } from './credits.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { getOneTimePriceId, getStripe, isStripeEmulatorEnabled } from './stripe.ts'
@@ -94,7 +94,9 @@ async function getDefaultPaymentMethodId(c: Context, customerId: string): Promis
       if (paymentMethod.type === 'card')
         return paymentMethod.id
     }
-    catch {
+    catch (error) {
+      if (!(error instanceof Stripe.errors.StripeInvalidRequestError && error.code === 'resource_missing'))
+        throw error
       // Fall through to the saved-card list when the default method is gone.
     }
   }

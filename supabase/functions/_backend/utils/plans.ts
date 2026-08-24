@@ -597,21 +597,19 @@ export async function checkPlanStatusOnly(c: Context, orgId: string, drizzleClie
   const trialHandled = await handleTrialOrg(c, orgId, org)
   if (!trialHandled) {
     // Calculate plan status and usage
-    let planStatus: { is_good_plan: boolean, percentUsage: PlanUsage }
     try {
-      planStatus = await calculatePlanStatusFresh(c, orgId)
+      const planStatus = await calculatePlanStatusFresh(c, orgId)
+      const { is_good_plan, percentUsage } = planStatus
+      // Credits can restore final plan eligibility, so retain the raw usage threshold separately.
+      const isAbovePlan = percentUsage.total_percent > 100
+
+      // Update plan status in database
+      const finalIsGoodPlan = await handleOrgNotificationsAndEvents(c, org, orgId, is_good_plan, percentUsage, drizzleClient)
+      await updatePlanStatus(c, org, finalIsGoodPlan, isAbovePlan, percentUsage)
     }
     catch (error) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'calculatePlanStatus failed', orgId, error })
-      return
     }
-    const { is_good_plan, percentUsage } = planStatus
-    // Credits can restore final plan eligibility, so retain the raw usage threshold separately.
-    const isAbovePlan = percentUsage.total_percent > 100
-
-    // Update plan status in database
-    const finalIsGoodPlan = await handleOrgNotificationsAndEvents(c, org, orgId, is_good_plan, percentUsage, drizzleClient)
-    await updatePlanStatus(c, org, finalIsGoodPlan, isAbovePlan, percentUsage)
   }
 
   try {
