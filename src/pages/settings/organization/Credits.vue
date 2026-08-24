@@ -19,7 +19,7 @@ import { formatLocalDate } from '~/services/date'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
-import { completeCreditTopUp, startCreditTopUp } from '~/services/stripe'
+import { completeCreditTopUp, getCreditAutoTopUp, openPortal, saveCreditAutoTopUp, startCreditTopUp } from '~/services/stripe'
 import { getCreditPricingSteps, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
@@ -97,6 +97,20 @@ const topUpQuantity = computed(() => {
 })
 const isTopUpQuantityValid = computed(() => topUpQuantity.value !== null)
 const topUpQuantityUsd = computed(() => (topUpQuantity.value ?? 0) * creditUsdRate.value * CREDIT_TAX_MULTIPLIER)
+
+const MIN_AUTO_TOP_UP = 10
+const autoTopUpEnabled = ref(false)
+const autoTopUpThresholdInput = ref(String(MIN_AUTO_TOP_UP))
+const autoTopUpHasCard = ref(false)
+const isLoadingAutoTopUp = ref(false)
+const isSavingAutoTopUp = ref(false)
+const autoTopUpThreshold = computed(() => {
+  const parsed = Number.parseInt(autoTopUpThresholdInput.value, 10)
+  if (Number.isNaN(parsed))
+    return null
+  return parsed
+})
+const isAutoTopUpThresholdValid = computed(() => autoTopUpThreshold.value !== null && autoTopUpThreshold.value >= MIN_AUTO_TOP_UP)
 
 const creditTotal = computed(() => Number(currentOrganization.value?.credit_total ?? 0))
 const creditAvailable = computed(() => Number(currentOrganization.value?.credit_available ?? 0))
@@ -398,6 +412,85 @@ async function loadPricingSteps() {
   pricingSteps.value = await getCreditPricingSteps(currentOrganization.value?.gid)
 }
 
+async function loadAutoTopUpSettings() {
+  const orgId = currentOrganization.value?.gid
+  if (!orgId) {
+    autoTopUpEnabled.value = false
+    autoTopUpHasCard.value = false
+    return
+  }
+  isLoadingAutoTopUp.value = true
+  try {
+    const settings = await getCreditAutoTopUp(orgId)
+    autoTopUpEnabled.value = Boolean(settings?.enabled)
+    autoTopUpThresholdInput.value = String(Math.max(MIN_AUTO_TOP_UP, Math.floor(Number(settings?.threshold ?? MIN_AUTO_TOP_UP))))
+    autoTopUpHasCard.value = Boolean(settings?.hasPaymentMethod)
+  }
+  catch (error) {
+    console.error('Failed to load auto top-up settings', error)
+  }
+  finally {
+    isLoadingAutoTopUp.value = false
+  }
+}
+
+async function persistAutoTopUpSettings(enabled: boolean) {
+  if (!(await ensureUpdateBillingAccess())) {
+    autoTopUpEnabled.value = !enabled
+    return
+  }
+  const orgId = currentOrganization.value?.gid
+  if (!orgId)
+    return
+  if (!isAutoTopUpThresholdValid.value || autoTopUpThreshold.value === null) {
+    toast.error(t('credits-auto-top-up-threshold-invalid'))
+    autoTopUpEnabled.value = !enabled
+    return
+  }
+  if (enabled && !autoTopUpHasCard.value) {
+    toast.error(t('credits-auto-top-up-no-card'))
+    autoTopUpEnabled.value = false
+    return
+  }
+  isSavingAutoTopUp.value = true
+  try {
+    const settings = await saveCreditAutoTopUp(orgId, enabled, autoTopUpThreshold.value)
+    autoTopUpEnabled.value = Boolean(settings?.enabled)
+    autoTopUpHasCard.value = Boolean(settings?.hasPaymentMethod)
+    autoTopUpThresholdInput.value = String(Math.max(MIN_AUTO_TOP_UP, Math.floor(Number(settings?.threshold ?? autoTopUpThreshold.value))))
+    toast.success(t('credits-auto-top-up-saved'))
+  }
+  catch (error) {
+    console.error('Failed to save auto top-up settings', error)
+    autoTopUpEnabled.value = !enabled
+    toast.error(t('credits-auto-top-up-save-error'))
+  }
+  finally {
+    isSavingAutoTopUp.value = false
+  }
+}
+
+async function onAutoTopUpToggle(event: Event) {
+  const checked = (event.target as HTMLInputElement).checked
+  autoTopUpEnabled.value = checked
+  await persistAutoTopUpSettings(checked)
+}
+
+async function onAutoTopUpThresholdBlur() {
+  if (!autoTopUpEnabled.value)
+    return
+  await persistAutoTopUpSettings(true)
+}
+
+async function openBillingPortalForCard() {
+  const orgId = currentOrganization.value?.gid
+  if (!orgId)
+    return
+  if (!(await ensureUpdateBillingAccess()))
+    return
+  await openPortal(orgId, t)
+}
+
 // Page view requires org.read_billing; buy/checkout still requires org.update_billing.
 async function ensureReadBillingAccess(expectedOrgId?: string) {
   const orgId = expectedOrgId ?? currentOrganization.value?.gid
@@ -552,7 +645,7 @@ onMounted(async () => {
   await handleCreditCheckoutReturn()
   if (!(await ensureReadBillingAccess()))
     return
-  await Promise.allSettled([loadTransactions(), loadPricingSteps()])
+  await Promise.allSettled([loadTransactions(), loadPricingSteps(), loadAutoTopUpSettings()])
 })
 
 onUnmounted(() => {
@@ -568,7 +661,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
   await handleCreditCheckoutReturn()
   if (!(await ensureReadBillingAccess(newOrgId)))
     return
-  await Promise.allSettled([loadTransactions(), loadPricingSteps()])
+  await Promise.allSettled([loadTransactions(), loadPricingSteps(), loadAutoTopUpSettings()])
 })
 </script>
 
@@ -716,6 +809,66 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
               </div>
             </div>
           </form>
+        </div>
+      </div>
+
+      <div class="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800" data-test="credits-auto-top-up">
+        <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div class="max-w-xl">
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+              {{ t('credits-auto-top-up-title') }}
+            </h3>
+            <p class="mt-2 text-sm text-gray-600 dark:text-gray-300">
+              {{ t('credits-auto-top-up-description') }}
+            </p>
+          </div>
+          <div class="flex items-center gap-3">
+            <label for="credits-auto-top-up-enabled" class="text-sm font-medium text-gray-900 dark:text-white">
+              {{ t('credits-auto-top-up-label') }}
+            </label>
+            <input
+              id="credits-auto-top-up-enabled"
+              type="checkbox"
+              class="d-toggle"
+              :checked="autoTopUpEnabled"
+              :disabled="isLoadingAutoTopUp || isSavingAutoTopUp"
+              :aria-label="t('credits-auto-top-up-label')"
+              @change="onAutoTopUpToggle"
+            >
+          </div>
+        </div>
+        <div class="mt-6 max-w-md">
+          <FormKit
+            id="credits-auto-top-up-threshold"
+            v-model="autoTopUpThresholdInput"
+            type="number"
+            name="creditsAutoTopUpThreshold"
+            data-test="credits-auto-top-up-threshold"
+            inputmode="numeric"
+            min="10"
+            step="1"
+            :label="t('credits-auto-top-up-threshold-label')"
+            validation="required|min:10"
+            validation-visibility="live"
+            outer-class="w-full !mb-0"
+            :disabled="isLoadingAutoTopUp || isSavingAutoTopUp"
+            @blur="onAutoTopUpThresholdBlur"
+          >
+            <template #prefix>
+              $
+            </template>
+          </FormKit>
+          <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('credits-auto-top-up-min') }}
+          </p>
+          <button
+            v-if="!autoTopUpHasCard"
+            type="button"
+            class="d-btn d-btn-sm d-btn-outline mt-4"
+            @click="openBillingPortalForCard"
+          >
+            {{ t('credits-auto-top-up-add-card') }}
+          </button>
         </div>
       </div>
 

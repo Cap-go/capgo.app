@@ -18,6 +18,7 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'login', path: '/login/', auth: false },
   { slug: 'dashboard', path: '/dashboard', auth: true },
   { slug: 'account-settings', path: '/settings/account', auth: true },
+  { slug: 'organization-credits', path: '/settings/organization/credits', auth: true },
   { slug: 'apps', path: '/apps', auth: true },
   {
     slug: 'apps-sidebar-collapsed',
