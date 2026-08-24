@@ -112,8 +112,6 @@ async function updateVersionForReupload(
   }
   catch (error) {
     await pgClient.query('ROLLBACK').catch(() => undefined)
-    if (error instanceof Response)
-      throw error
     logPgError(c, 'prepare_upload_reupload_reset', error)
     throw simpleError('cannot_prepare_upload', 'Cannot update bundle version for upload', { error })
   }
