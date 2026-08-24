@@ -1,1 +1,1 @@
-PLACEHOLDER_USE_PYTHON
+@/tmp/push_full.json
