@@ -1,4 +1,5 @@
 import { expect, test } from '../support/commands'
+import { dismissSupportPrompt } from '../support/dismissSupportPrompt'
 
 test.describe('Observe sections', () => {
   test.beforeEach(async ({ page }) => {
@@ -7,6 +8,7 @@ test.describe('Observe sections', () => {
 
   test('keeps Observe subtabs reachable on desktop and mobile', async ({ page }) => {
     await page.goto('/app/com.demo.app/observe/updater')
+    await dismissSupportPrompt(page)
 
     const updaterTab = page.getByRole('button', { name: 'Updater', exact: true })
     const logsTab = page.getByRole('button', { name: 'Logs', exact: true })
@@ -47,6 +49,7 @@ test.describe('Observe sections', () => {
     expect(updaterBox?.x).toBeGreaterThanOrEqual(0)
     expect((pluginsBox?.x ?? 0) + (pluginsBox?.width ?? 0)).toBeLessThanOrEqual(375)
 
+    await dismissSupportPrompt(page)
     await nativeTab.click()
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/native(?:\?|$)/)
     await expect(nativeTab).toHaveAttribute('aria-current', 'page')
