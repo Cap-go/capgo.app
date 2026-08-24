@@ -28,7 +28,15 @@ function collectErrorMessages(error: unknown): string {
   if (typeof error === 'string')
     return error
 
-  while (current && typeof current === 'object') {
+  while (current) {
+    if (typeof current === 'string') {
+      parts.push(current)
+      break
+    }
+
+    if (typeof current !== 'object')
+      break
+
     if (seen.has(current))
       break
     seen.add(current)

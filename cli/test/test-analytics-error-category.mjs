@@ -24,6 +24,9 @@ const nestedNetworkCause = new Error('TypeError: fetch failed', {
 })
 assert.equal(categorizeCliError(nestedNetworkCause), 'network_error')
 assert.equal(isTransientNetworkError(nestedNetworkCause), true)
+const stringNetworkCause = new Error('RPC failed', { cause: 'ETIMEDOUT' })
+assert.equal(categorizeCliError(stringNetworkCause), 'timeout')
+assert.equal(isTransientNetworkError(stringNetworkCause), true)
 
 assert.equal(categorizeCliError({ code: 'commander.help' }), 'commander')
 
