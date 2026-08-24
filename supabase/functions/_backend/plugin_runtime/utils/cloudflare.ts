@@ -1,1 +1,1 @@
-__LOAD_FROM__/cursor/stores/self/push_content.ts
+@/tmp/chunk0_mcp_args.json:content
