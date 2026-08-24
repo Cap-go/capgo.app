@@ -267,4 +267,445 @@ export function trackLogsCF(c: Context, app_id: string, device_id: string, actio
 
   const durationMs = parseStatsDurationMs(metadata)
   c.env.APP_LOG.writeDataPoint({
-    blobs: [device_id, action, version_name, serializeStatsMetadata(metadata), ...appLogDimensionB
+    blobs: [device_id, action, version_name, serializeStatsMetadata(metadata), ...appLogDimensionBlobs(dimensions)],
+    ...(durationMs !== null ? { doubles: [durationMs] } : {}),
+    indexes: [app_id],
+  })
+
+  return Promise.resolve()
+}
+
+export function trackLogsCFExternal(c: Context, app_id: string, device_id: string, action: Database['public']['Enums']['stats_action'], version_name: string, metadata?: StatsMetadata, dimensions?: AppLogDimensions) {
+  if (!c.env.APP_LOG_EXTERNAL)
+    return Promise.resolve()
+
+  const durationMs = parseStatsDurationMs(metadata)
+  c.env.APP_LOG_EXTERNAL.writeDataPoint({
+    blobs: [device_id, action, version_name, serializeStatsMetadata(metadata), ...appLogDimensionBlobs(dimensions)],
+    ...(durationMs !== null ? { doubles: [durationMs] } : {}),
+    indexes: [app_id],
+  })
+
+  return Promise.resolve()
+}
+
+function getReplicaWriteStoreAppSession(c: Context) {
+  return c.env.DB_STOREAPPS
+}
+
+function getReplicaReadStoreAppSession(c: Context) {
+  return c.env.DB_STOREAPPS.withSession('first-unconstrained')
+}
+
+const TRACK_DEVICE_CACHE_PATH = '/.track-device-cache'
+const TRACK_DEVICE_CACHE_MAX_AGE_SECONDS = 31536000
+
+type DeviceCachePayload = DeviceComparable & {
+  app_id: string
+  device_id: string
+  cached_at: string
+}
+
+function toDeviceInfoComparable(device: DeviceWithoutCreatedAt, statsMode: StatsMode): DeviceComparable {
+  const comparableDevice = toComparableDevice(device)
+  if (!isBillingOnlyStatsMode(statsMode))
+    return comparableDevice
+
+  return {
+    ...comparableDevice,
+    platform: null,
+    os_version: '',
+    custom_id: '',
+    default_channel: null,
+    key_id: null,
+    install_source: undefined,
+    country_code: undefined,
+  }
+}
+
+export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt, statsMode: StatsMode = 'all') {
+  // Runs under waitUntil — Cache I/O here stretches Workers Wall Time charts.
+  const start = performance.now()
+  let outcome: 'cache_hit' | 'wrote' | 'error' = 'wrote'
+  const billingOnly = isBillingOnlyStatsMode(statsMode)
+
+  // Analytics Engine DEVICE_INFO is required for tracking devices
+  if (!c.env.DEVICE_INFO) {
+    cloudlog({ requestId: c.get('requestId'), message: 'DEVICE_INFO not available, skipping trackDevicesCF' })
+    return
+  }
+
+  try {
+    const trackDeviceCache = new CacheHelper(c)
+    const trackDeviceCacheRequest = trackDeviceCache.buildRequest(TRACK_DEVICE_CACHE_PATH, {
+      app_id: device.app_id,
+      device_id: device.device_id,
+    })
+    const deviceInfoComparable = toDeviceInfoComparable(device, statsMode)
+    const deviceForComparison: DeviceWithoutCreatedAt = {
+      ...device,
+      platform: billingOnly ? undefined : device.platform,
+      os_version: deviceInfoComparable.os_version,
+      custom_id: deviceInfoComparable.custom_id,
+      default_channel: deviceInfoComparable.default_channel ?? undefined,
+      key_id: deviceInfoComparable.key_id ?? undefined,
+      install_source: deviceInfoComparable.install_source ?? undefined,
+      country_code: deviceInfoComparable.country_code ?? undefined,
+    }
+    // Do not gate on helper.available — it is sync-racy before ensureCache resolves.
+    const cachedDevice = await trackDeviceCache.matchJson<DeviceCachePayload>(trackDeviceCacheRequest)
+    if (cachedDevice && !hasComparableDeviceChanged(cachedDevice, deviceForComparison)) {
+      outcome = 'cache_hit'
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'Cache hit – device unchanged, skipping write',
+        context: {
+          device_id: device.device_id,
+          app_id: device.app_id,
+        },
+      })
+      return
+    }
+
+    // Write to Analytics Engine - this is the primary store now (sync; needs no waitUntil)
+    cloudlog({ requestId: c.get('requestId'), message: 'Writing to Analytics Engine DEVICE_INFO' })
+    // Platform: 0 = android, 1 = ios, 2 = electron. billingOnly stores -1 (unknown).
+    const platformLower = billingOnly ? null : deviceInfoComparable.platform?.toLowerCase()
+    const platformValue = billingOnly ? -1 : platformLower === 'ios' ? 1 : platformLower === 'electron' ? 2 : 0
+    c.env.DEVICE_INFO.writeDataPoint({
+      blobs: [
+        device.device_id,
+        deviceInfoComparable.version_name ?? '',
+        deviceInfoComparable.plugin_version ?? '',
+        deviceInfoComparable.os_version ?? '',
+        deviceInfoComparable.custom_id ?? '',
+        deviceInfoComparable.version_build ?? '',
+        deviceInfoComparable.default_channel ?? '',
+        deviceInfoComparable.key_id ?? '',
+        deviceInfoComparable.install_source ?? '',
+        deviceInfoComparable.country_code ?? '',
+      ],
+      doubles: [
+        platformValue,
+        deviceInfoComparable.is_prod ? 1 : 0,
+        deviceInfoComparable.is_emulator ? 1 : 0,
+      ],
+      indexes: [device.app_id],
+    })
+
+    const cachePayload: DeviceCachePayload = {
+      ...deviceInfoComparable,
+      app_id: device.app_id,
+      device_id: device.device_id,
+      cached_at: new Date().toISOString(),
+    }
+    await trackDeviceCache.putJson(trackDeviceCacheRequest, cachePayload, TRACK_DEVICE_CACHE_MAX_AGE_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
+  }
+  catch (e) {
+    outcome = 'error'
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error tracking device', error: serializeError(e), device: sanitizeDeviceForLogging(device, statsMode) })
+  }
+  finally {
+    const ms = Math.round(performance.now() - start)
+    if (ms >= 20) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'trackDevicesCF_timing',
+        ms,
+        outcome,
+        app_id: device.app_id,
+      })
+    }
+  }
+}
+
+export function formatDateCF(date: string | Date | undefined | null) {
+  // Preserve prior dayjs edge-case behavior:
+  // - undefined formats as "now" in local time (dayjs(undefined))
+  // - null / '' / unparseable values format as the literal "Invalid Date"
+  if (date === undefined)
+    return formatLocalDateTime()
+  if (date === null || date === '')
+    return 'Invalid Date'
+
+  const normalizedDate = date instanceof Date ? date : new Date(date)
+  if (Number.isNaN(normalizedDate.getTime()))
+    return 'Invalid Date'
+
+  const year = normalizedDate.getUTCFullYear()
+  const month = pad2(normalizedDate.getUTCMonth() + 1)
+  const day = pad2(normalizedDate.getUTCDate())
+  const hours = pad2(normalizedDate.getUTCHours())
+  const minutes = pad2(normalizedDate.getUTCMinutes())
+  const seconds = pad2(normalizedDate.getUTCSeconds())
+
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
+}
+
+interface AnalyticsApiResponse {
+  data: { [key: string]: string }[]
+  meta: { name: string, type: string }[]
+  rows: number
+  rows_before_limit_at_least: number
+}
+
+function convertDataToJsTypes<T>(apiResponse: AnalyticsApiResponse) {
+  const { meta, data } = apiResponse
+
+  // cloudlog(c.get('requestId'), 'meta', meta)
+  const toNumber = Number
+  const converters: Record<string, (value: string) => unknown> = {
+    String,
+    // Analytics Engine returns aggregate sums as Float64 string values.
+    // Without conversion, callers that do `sum + row.install` string-concatenate.
+    Float64: toNumber,
+    Float32: toNumber,
+    Int64: toNumber,
+    Int32: toNumber,
+    UInt64: toNumber,
+    UInt32: toNumber,
+    DateTime: (value: string) => new Date(value),
+  }
+
+  return data.map((row) => {
+    const convertedRow = {} as any
+    meta.forEach((column) => {
+      const { name, type } = column
+      convertedRow[name] = converters[type] ? converters[type](row[name]) : row[name]
+    })
+    return convertedRow as T
+  })
+}
+
+export async function runQueryToCFA<T>(c: Context, query: string) {
+  const CF_ANALYTICS_TOKEN = getEnv(c, 'CF_ANALYTICS_TOKEN')
+  const CF_ACCOUNT_ID = getEnv(c, 'CF_ACCOUNT_ANALYTICS_ID')
+
+  const headers = {
+    'Authorization': `Bearer ${CF_ANALYTICS_TOKEN}`,
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Accept-Encoding': 'gzip, zlib, deflate, zstd, br',
+    'User-Agent': 'Capgo/1.0',
+  }
+  const requestId = c.get('requestId')
+  cloudlog({
+    requestId,
+    message: 'runQueryToCFA payload',
+    queryLength: query.length,
+    headerNames: Object.keys(headers),
+  })
+
+  try {
+    const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/analytics_engine/sql`, {
+      method: 'POST',
+      headers,
+      body: query,
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      let errorForLog: unknown = errorText
+      try {
+        errorForLog = JSON.parse(errorText)
+      }
+      catch {
+        // Keep the raw text body when Cloudflare returns HTML or plain text.
+      }
+      const errorPreview = (errorText || response.statusText).replace(/\s+/g, ' ').trim().slice(0, 500)
+      cloudlogErr({ requestId: c.get('requestId'), message: 'runQueryToCFA HTTPError', status: response.status, error: errorForLog })
+      throw new Error(`runQueryToCFA HTTP ${response.status}: ${errorPreview}`)
+    }
+
+    const res = await response.json() as AnalyticsApiResponse & { data: T[] }
+    return convertDataToJsTypes<T>(res)
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'runQueryToCFA error', error: serializeError(e) })
+    if (e instanceof Error && e.message.startsWith('runQueryToCFA HTTP '))
+      throw e
+    const errorMessage = e instanceof Error ? e.message : String(e)
+    throw new Error(`runQueryToCFA encountered an error: ${errorMessage}`, { cause: e })
+  }
+}
+export interface AdminOnboardingTelemetryWindow {
+  app_id: string
+  start_at: Date | string
+  end_at: Date | string
+}
+
+export interface AdminOnboardingTelemetry {
+  available: boolean
+  first_production_device_at_by_app: Map<string, Date>
+  first_update_download_at_by_app: Map<string, Date>
+}
+
+interface AdminOnboardingTelemetryRow {
+  app_id: string
+  first_at: Date | string
+}
+
+// Cloudflare Analytics Engine SQL rejects bodies longer than 10_000 chars.
+const ADMIN_ONBOARDING_TELEMETRY_MAX_SQL_CHARS = 9_000
+const ADMIN_ONBOARDING_COMPLETED_DOWNLOAD_ACTIONS = [
+  'download_complete',
+  'download_manifest_complete',
+  'download_zip_complete',
+]
+
+function batchAdminOnboardingTelemetryWindows(
+  windows: AdminOnboardingTelemetryWindow[],
+  buildQuery: (batch: AdminOnboardingTelemetryWindow[]) => string,
+): AdminOnboardingTelemetryWindow[][] {
+  const batches: AdminOnboardingTelemetryWindow[][] = []
+  let current: AdminOnboardingTelemetryWindow[] = []
+
+  for (const window of windows) {
+    const candidate = [...current, window]
+    if (current.length > 0 && buildQuery(candidate).length > ADMIN_ONBOARDING_TELEMETRY_MAX_SQL_CHARS) {
+      batches.push(current)
+      current = [window]
+      continue
+    }
+    current = candidate
+  }
+
+  if (current.length > 0)
+    batches.push(current)
+
+  return batches
+}
+
+function toValidDate(value: Date | string) {
+  const date = value instanceof Date ? value : new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+export function isAdminOnboardingTelemetryWithinRetention(startDate: Date | string, now = new Date()) {
+  const start = toValidDate(startDate)
+  if (!start || start > now)
+    return false
+
+  const retentionCutoff = new Date(now)
+  retentionCutoff.setUTCMonth(retentionCutoff.getUTCMonth() - 3)
+  return start >= retentionCutoff
+}
+
+function getAdminOnboardingTelemetryWindowFilter(windows: AdminOnboardingTelemetryWindow[]) {
+  if (windows.length === 0)
+    return '1 = 0'
+
+  return windows.map((window) => {
+    return `(index1 = '${escapeSqlString(window.app_id)}'
+      AND timestamp >= toDateTime('${formatDateCF(window.start_at)}')
+      AND timestamp < toDateTime('${formatDateCF(window.end_at)}'))`
+  }).join('\n      OR ')
+}
+
+export function buildAdminOnboardingProductionDeviceQuery(windows: AdminOnboardingTelemetryWindow[]) {
+  return `SELECT
+    index1 AS app_id,
+    min(timestamp) AS first_at
+  FROM device_info
+  WHERE (${getAdminOnboardingTelemetryWindowFilter(windows)})
+    AND double2 = 1
+    AND double3 = 0
+    AND blob3 != ''
+  GROUP BY index1`
+}
+
+export function buildAdminOnboardingUpdateDownloadQuery(windows: AdminOnboardingTelemetryWindow[]) {
+  const actions = ADMIN_ONBOARDING_COMPLETED_DOWNLOAD_ACTIONS.map(action => `'${action}'`).join(', ')
+  return `SELECT
+    index1 AS app_id,
+    min(timestamp) AS first_at
+  FROM app_log
+  WHERE (${getAdminOnboardingTelemetryWindowFilter(windows)})
+    AND blob2 IN (${actions})
+  GROUP BY index1`
+}
+
+function addFirstSeenByApp(target: Map<string, Date>, rows: AdminOnboardingTelemetryRow[]) {
+  for (const row of rows) {
+    const firstAt = toValidDate(row.first_at)
+    if (!row.app_id || !firstAt)
+      continue
+
+    const current = target.get(row.app_id)
+    if (!current || firstAt < current)
+      target.set(row.app_id, firstAt)
+  }
+}
+
+function emptyAdminOnboardingTelemetry(available = false): AdminOnboardingTelemetry {
+  return {
+    available,
+    first_production_device_at_by_app: new Map(),
+    first_update_download_at_by_app: new Map(),
+  }
+}
+
+export async function getAdminOnboardingTelemetry(
+  c: Context,
+  windows: AdminOnboardingTelemetryWindow[],
+  rangeStart: Date | string,
+  now = new Date(),
+): Promise<AdminOnboardingTelemetry> {
+  if (!isAdminOnboardingTelemetryWithinRetention(rangeStart, now)
+    || !c.env.APP_LOG
+    || !c.env.DEVICE_INFO
+    || !getEnv(c, 'CF_ANALYTICS_TOKEN')
+    || !getEnv(c, 'CF_ACCOUNT_ANALYTICS_ID')) {
+    return emptyAdminOnboardingTelemetry()
+  }
+
+  const validWindows = windows.filter((window) => {
+    const start = toValidDate(window.start_at)
+    const end = toValidDate(window.end_at)
+    return Boolean(window.app_id && start && end && start < end)
+  })
+  if (validWindows.length === 0)
+    return emptyAdminOnboardingTelemetry(true)
+
+  const telemetry = emptyAdminOnboardingTelemetry(true)
+  try {
+    // Batch by SQL size so both queries stay under the Analytics Engine 10k limit.
+    const windowBatches = batchAdminOnboardingTelemetryWindows(
+      validWindows,
+      batch => buildAdminOnboardingUpdateDownloadQuery(batch),
+    )
+    for (const windowBatch of windowBatches) {
+      const [productionDeviceRows, updateDownloadRows] = await Promise.all([
+        runQueryToCFA<AdminOnboardingTelemetryRow>(c, buildAdminOnboardingProductionDeviceQuery(windowBatch)),
+        runQueryToCFA<AdminOnboardingTelemetryRow>(c, buildAdminOnboardingUpdateDownloadQuery(windowBatch)),
+      ])
+      addFirstSeenByApp(telemetry.first_production_device_at_by_app, productionDeviceRows)
+      addFirstSeenByApp(telemetry.first_update_download_at_by_app, updateDownloadRows)
+    }
+    return telemetry
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'getAdminOnboardingTelemetry failed',
+      error: serializeError(error),
+    })
+    return telemetry
+  }
+}
+
+export interface DeviceUsageCF {
+  date: string
+  mau: number
+  app_id: string
+  org_id?: string
+}
+
+export interface DeviceUsageAllCF {
+  date: string
+  device_id: string
+  app_id: string
+  org_id: string
+}
+
+export async function readDeviceUsageCF(c: Context, app_id: string, period_start: string, period_end: string) {
+  if (!c.en
