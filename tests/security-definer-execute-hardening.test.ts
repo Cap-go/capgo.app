@@ -76,7 +76,6 @@ const ANON_ALLOWED_PROCS = [
   'public.get_user_main_org_id_by_app_id(text)',
   'public.get_user_org_ids()',
   'public.has_2fa_enabled()',
-  'public.invite_user_to_org_rbac(character varying, uuid, text)',
   'public.is_allowed_action_org(uuid)',
   'public.is_allowed_action_org_action(uuid, public.action_type[])',
   'public.is_canceled_org(uuid)',
@@ -94,6 +93,11 @@ const ANON_ALLOWED_PROCS = [
 ] as const
 
 const AUTHENTICATED_ONLY_PROCS = [
+  'public.get_org_perm_for_apikey(text, text)',
+  'public.get_org_perm_for_apikey_v2(text, text)',
+  'public.get_user_id(text)',
+  'public.get_user_id(text, text)',
+  'public.invite_user_to_org_rbac(character varying, uuid, text)',
   'public.accept_invitation_to_org(uuid)',
   'public.acknowledge_compatibility_event(bigint, text)',
   'public.count_non_compliant_bundles(uuid, text)',

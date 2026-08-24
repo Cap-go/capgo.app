@@ -1,5 +1,5 @@
-import type { Database } from '../src/types/supabase.types'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { Database } from '../src/types/supabase.types'
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 import { createClient } from '@supabase/supabase-js'
@@ -156,10 +156,20 @@ describe('legacy CLI RBAC compatibility RPCs', () => {
     expect(uploadAllowed).toBe(false)
   })
 
-  it.concurrent('keeps old permission rank RPCs without restoring old right columns', async () => {
-    const uploaderClient = createApiKeyClient(APIKEY_TEST_APP_UPLOADER)
-    const readerClient = createApiKeyClient(APIKEY_TEST_APP_READER)
-    const ownerClient = createApiKeyClient(APIKEY_TEST_ORG_SUPER_ADMIN)
+  it.concurrent('keeps old permission rank RPCs for authenticated API-key callers', async () => {
+    const authHeaders = await getAuthHeadersForCredentials(USER_EMAIL, USER_PASSWORD)
+    const uploaderClient = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { ...authHeaders, capgkey: APIKEY_TEST_APP_UPLOADER } },
+      auth: { persistSession: false },
+    })
+    const readerClient = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { ...authHeaders, capgkey: APIKEY_TEST_APP_READER } },
+      auth: { persistSession: false },
+    })
+    const ownerClient = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { ...authHeaders, capgkey: APIKEY_TEST_ORG_SUPER_ADMIN } },
+      auth: { persistSession: false },
+    })
 
     const { data: uploaderPerm, error: uploaderError } = await (uploaderClient.rpc as any)('get_org_perm_for_apikey', {
       apikey: APIKEY_TEST_APP_UPLOADER,
@@ -182,8 +192,19 @@ describe('legacy CLI RBAC compatibility RPCs', () => {
     expect(ownerPerm).toBe('perm_owner')
   })
 
-  it.concurrent('keeps get_user_id callable for old anon CLI clients', async () => {
+  it.concurrent('denies get_user_id for anonymous API-key callers', async () => {
     const client = createApiKeyClient(APIKEY_TEST_ORG_SUPER_ADMIN)
+
+    const { data, error } = await (client.rpc as any)('get_user_id', {
+      apikey: APIKEY_TEST_ORG_SUPER_ADMIN,
+    }).single()
+
+    expect(data).toBeNull()
+    expect(error?.code === '42501' || /permission denied/i.test(error?.message ?? '')).toBe(true)
+  })
+
+  it.concurrent('keeps get_user_id callable for authenticated API-key callers', async () => {
+    const client = await createAuthenticatedClient()
 
     const { data, error } = await (client.rpc as any)('get_user_id', {
       apikey: APIKEY_TEST_ORG_SUPER_ADMIN,
