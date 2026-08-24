@@ -583,7 +583,7 @@ export async function updatePlanStatus(c: Context, org: any, finalIsGoodPlan: bo
       plan_usage: Math.round(normalizedUsage.total_percent),
     })
     .eq('customer_id', org.customer_id!)
-    .then()
+    .throwOnError()
 }
 
 // New function for cron_stat_org - handles is_good_plan + plan % + exceeded flags
