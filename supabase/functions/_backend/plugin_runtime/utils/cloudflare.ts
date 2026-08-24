@@ -1,1 +1,1 @@
-FULL_CONTENT_PLACEHOLDER
+/cursor/stores/self/push_content.ts
