@@ -595,20 +595,28 @@ export async function checkPlanStatusOnly(c: Context, orgId: string, drizzleClie
 
   // Handle trial organizations
   const trialHandled = await handleTrialOrg(c, orgId, org)
+  let planStatusWriteError: unknown
   if (!trialHandled) {
     // Calculate plan status and usage
+    let planStatus: { is_good_plan: boolean, percentUsage: PlanUsage } | undefined
     try {
-      const planStatus = await calculatePlanStatusFresh(c, orgId)
-      const { is_good_plan, percentUsage } = planStatus
-      // Credits can restore final plan eligibility, so retain the raw usage threshold separately.
-      const isAbovePlan = percentUsage.total_percent > 100
-
-      // Update plan status in database
-      const finalIsGoodPlan = await handleOrgNotificationsAndEvents(c, org, orgId, is_good_plan, percentUsage, drizzleClient)
-      await updatePlanStatus(c, org, finalIsGoodPlan, isAbovePlan, percentUsage)
+      planStatus = await calculatePlanStatusFresh(c, orgId)
     }
     catch (error) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'calculatePlanStatus failed', orgId, error })
+    }
+    if (planStatus) {
+      const { is_good_plan, percentUsage } = planStatus
+      // Credits can restore final plan eligibility, so retain the raw usage threshold separately.
+      const isAbovePlan = percentUsage.total_percent > 100
+      try {
+        const finalIsGoodPlan = await handleOrgNotificationsAndEvents(c, org, orgId, is_good_plan, percentUsage, drizzleClient)
+        await updatePlanStatus(c, org, finalIsGoodPlan, isAbovePlan, percentUsage)
+      }
+      catch (error) {
+        planStatusWriteError = error
+        cloudlogErr({ requestId: c.get('requestId'), message: 'plan status write failed', orgId, error })
+      }
     }
   }
 
@@ -618,6 +626,8 @@ export async function checkPlanStatusOnly(c: Context, orgId: string, drizzleClie
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'credit auto top-up failed', orgId, error })
   }
+  if (planStatusWriteError)
+    throw planStatusWriteError
 }
 
 // New function for cron_sync_sub - handles subscription sync + events
