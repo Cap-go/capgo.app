@@ -20,22 +20,36 @@ function getStatus(error: unknown): number | undefined {
   return undefined
 }
 
-function getMessage(error: unknown): string {
+function collectErrorMessages(error: unknown): string {
   const parts: string[] = []
-  if (error instanceof Error) {
-    parts.push(error.message)
-    if (error.cause instanceof Error)
-      parts.push(error.cause.message)
-  }
-  else if (typeof error === 'string') {
-    parts.push(error)
-  }
-  else if (error && typeof error === 'object') {
-    const candidate = error as { message?: unknown }
+  const seen = new Set<unknown>()
+  let current: unknown = error
+
+  if (typeof error === 'string')
+    return error
+
+  while (current && typeof current === 'object') {
+    if (seen.has(current))
+      break
+    seen.add(current)
+
+    if (current instanceof Error) {
+      parts.push(current.message)
+      current = current.cause
+      continue
+    }
+
+    const candidate = current as { message?: unknown, cause?: unknown }
     if (typeof candidate.message === 'string')
       parts.push(candidate.message)
+    current = candidate.cause
   }
+
   return parts.join(' ')
+}
+
+function getMessage(error: unknown): string {
+  return collectErrorMessages(error)
 }
 
 /**

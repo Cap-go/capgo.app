@@ -4,7 +4,10 @@ import { check2FAComplianceForApp } from '../src/api/app.ts'
 import { shouldCapturePosthogException } from '../src/posthog.ts'
 import { CliUserError } from '../src/shared/cli-user-error.ts'
 import { isTransientNetworkError } from '../src/shared/network-error.ts'
-import { TWO_FACTOR_COMPLIANCE_NETWORK_MESSAGE } from '../src/shared/two-factor-compliance.ts'
+import {
+  TWO_FACTOR_COMPLIANCE_NETWORK_MESSAGE,
+  TwoFactorComplianceNetworkError,
+} from '../src/shared/two-factor-compliance.ts'
 import { check2FAAccessForOrg } from '../src/utils.ts'
 
 function makeSupabaseWithRpcError(message) {
@@ -23,14 +26,20 @@ assert.equal(isTransientNetworkError(new Error('ETIMEDOUT')), true)
 assert.equal(isTransientNetworkError(new Error('DNS policy misconfiguration for org')), false)
 assert.equal(isTransientNetworkError(new Error('permission denied for function')), false)
 
+const nestedCause = new Error('TypeError: fetch failed', {
+  cause: new Error('connect ECONNRESET'),
+})
+assert.equal(isTransientNetworkError(nestedCause), true)
+
 const networkSupabase = makeSupabaseWithRpcError('TypeError: fetch failed')
 
 await assert.rejects(
   () => check2FAComplianceForApp(networkSupabase, 'com.example.app', true),
   (error) => {
-    assert.equal(error instanceof CliUserError, true)
+    assert.equal(error instanceof TwoFactorComplianceNetworkError, true)
+    assert.equal(error instanceof CliUserError, false)
     assert.equal(error.message, TWO_FACTOR_COMPLIANCE_NETWORK_MESSAGE)
-    assert.equal(shouldCapturePosthogException(error), false)
+    assert.equal(shouldCapturePosthogException(error), true)
     return true
   },
 )
@@ -38,9 +47,10 @@ await assert.rejects(
 await assert.rejects(
   () => check2FAAccessForOrg(networkSupabase, 'org_123', true),
   (error) => {
-    assert.equal(error instanceof CliUserError, true)
+    assert.equal(error instanceof TwoFactorComplianceNetworkError, true)
+    assert.equal(error instanceof CliUserError, false)
     assert.equal(error.message, TWO_FACTOR_COMPLIANCE_NETWORK_MESSAGE)
-    assert.equal(shouldCapturePosthogException(error), false)
+    assert.equal(shouldCapturePosthogException(error), true)
     return true
   },
 )
@@ -51,7 +61,7 @@ await assert.rejects(
   () => check2FAComplianceForApp(appErrorSupabase, 'com.example.app', true),
   (error) => {
     assert.equal(error instanceof Error, true)
-    assert.equal(error instanceof CliUserError, false)
+    assert.equal(error instanceof TwoFactorComplianceNetworkError, false)
     assert.match(error.message, /Cannot check 2FA compliance/)
     assert.equal(shouldCapturePosthogException(error), true)
     return true

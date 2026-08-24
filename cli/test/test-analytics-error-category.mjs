@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import { categorizeCliError } from '../src/analytics/error-category.ts'
 import { categorizeHttpStatus } from '../src/analytics/error-category.ts'
+import { isTransientNetworkError } from '../src/shared/network-error.ts'
 
 console.log('🧪 Testing categorizeCliError...\n')
 
@@ -18,6 +19,11 @@ assert.equal(categorizeCliError(new Error('The operation timed out')), 'timeout'
 assert.equal(categorizeCliError(new Error('ETIMEDOUT')), 'timeout')
 assert.equal(categorizeCliError(new Error('Invalid app id format')), 'validation_error')
 assert.equal(categorizeCliError(new Error('DNS policy misconfiguration for org')), 'unknown')
+const nestedNetworkCause = new Error('TypeError: fetch failed', {
+  cause: new Error('connect ECONNRESET'),
+})
+assert.equal(categorizeCliError(nestedNetworkCause), 'network_error')
+assert.equal(isTransientNetworkError(nestedNetworkCause), true)
 
 assert.equal(categorizeCliError({ code: 'commander.help' }), 'commander')
 
