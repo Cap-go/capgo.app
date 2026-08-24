@@ -9,7 +9,7 @@ ALTER TABLE "public"."orgs"
   DROP CONSTRAINT IF EXISTS "orgs_auto_top_up_threshold_min";
 
 ALTER TABLE "public"."orgs"
-  ADD CONSTRAINT "orgs_auto_top_up_threshold_min" CHECK (("auto_top_up_threshold" >= (10)::numeric));
+  ADD CONSTRAINT "orgs_auto_top_up_threshold_min" CHECK (("auto_top_up_threshold" >= (10)::numeric AND "auto_top_up_threshold" = trunc("auto_top_up_threshold")));
 
 COMMENT ON COLUMN "public"."orgs"."auto_top_up_enabled" IS 'When true, the plan-check cron charges the saved card if available credits fall below auto_top_up_threshold. Default false.';
 
@@ -34,7 +34,6 @@ DECLARE
   v_existing_credits_debited numeric := 0;
   v_required numeric := 0;
   v_credits_to_apply numeric := 0;
-  v_credits_available numeric := 0;
   v_latest_event_id uuid;
   v_latest_overage_amount numeric;
   v_needs_new_record boolean := false;
@@ -125,13 +124,6 @@ BEGIN
 
   v_credits_to_apply := GREATEST(v_required - v_existing_credits_debited, 0);
   v_remaining := v_credits_to_apply;
-
-  -- Check if there are any credits available in grants
-  SELECT COALESCE(SUM(GREATEST(credits_total - credits_consumed, 0)), 0)
-  INTO v_credits_available
-  FROM public.usage_credit_grants
-  WHERE org_id = p_org_id
-    AND expires_at >= now();
 
   -- Determine if we need a new record:
   -- 1. No existing record for this cycle (first overage)
@@ -311,9 +303,11 @@ BEGIN
     RETURN;
   END IF;
 
-  SELECT COALESCE(balances.available_credits, 0) INTO v_available
-  FROM public.usage_credit_balances AS balances
-  WHERE balances.org_id = p_org_id;
+  SELECT COALESCE((
+    SELECT balances.available_credits
+    FROM public.usage_credit_balances AS balances
+    WHERE balances.org_id = p_org_id
+  ), 0) INTO v_available;
 
   IF NOT v_org.auto_top_up_enabled THEN
     RETURN QUERY SELECT false, false, v_org.auto_top_up_threshold::numeric, v_org.customer_id::text, v_available;

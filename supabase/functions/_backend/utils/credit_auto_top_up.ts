@@ -69,17 +69,7 @@ export async function customerHasSavedPaymentMethod(c: Context, customerId: stri
   if (!isStripeConfigured(c))
     return false
   try {
-    const stripe = getStripe(c)
-    const customer = await stripe.customers.retrieve(customerId)
-    if (customer.deleted)
-      return false
-    const defaultPm = customer.invoice_settings?.default_payment_method
-    if (typeof defaultPm === 'string' && defaultPm)
-      return true
-    if (defaultPm && typeof defaultPm === 'object' && 'id' in defaultPm && defaultPm.id)
-      return true
-    const cards = await stripe.paymentMethods.list({ customer: customerId, type: 'card', limit: 1 })
-    return cards.data.length > 0
+    return Boolean(await getDefaultPaymentMethodId(c, customerId))
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_payment_method_lookup_failed', customerId, error })
@@ -93,10 +83,16 @@ async function getDefaultPaymentMethodId(c: Context, customerId: string): Promis
   if (customer.deleted)
     return null
   const defaultPm = customer.invoice_settings?.default_payment_method
-  if (typeof defaultPm === 'string' && defaultPm)
-    return defaultPm
-  if (defaultPm && typeof defaultPm === 'object' && 'id' in defaultPm && defaultPm.id)
-    return defaultPm.id
+  const defaultPmId = typeof defaultPm === 'string'
+    ? defaultPm
+    : defaultPm && typeof defaultPm === 'object' && 'id' in defaultPm
+      ? defaultPm.id
+      : null
+  if (defaultPmId) {
+    const paymentMethod = await stripe.paymentMethods.retrieve(defaultPmId)
+    if (paymentMethod.type === 'card')
+      return paymentMethod.id
+  }
   const cards = await stripe.paymentMethods.list({ customer: customerId, type: 'card', limit: 1 })
   return cards.data[0]?.id ?? null
 }
@@ -265,10 +261,12 @@ export async function saveAutoTopUpSettings(
     .eq('id', orgId)
     .maybeSingle()
 
-  if (orgError || !org?.customer_id)
-    throw new Error('stripe_customer_missing')
+  if (orgError || !org)
+    throw orgError ?? new Error('stripe_customer_missing')
 
   if (enabled) {
+    if (!org.customer_id)
+      throw new Error('stripe_customer_missing')
     const hasPaymentMethod = await customerHasSavedPaymentMethod(c, org.customer_id)
     if (!hasPaymentMethod)
       throw new Error('payment_method_required')

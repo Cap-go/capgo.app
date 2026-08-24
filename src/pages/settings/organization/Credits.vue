@@ -104,6 +104,7 @@ const autoTopUpThresholdInput = ref(String(MIN_AUTO_TOP_UP))
 const autoTopUpHasCard = ref(false)
 const isLoadingAutoTopUp = ref(false)
 const isSavingAutoTopUp = ref(false)
+let autoTopUpPersistQueue = Promise.resolve()
 const autoTopUpThreshold = computed(() => {
   const parsed = Number.parseInt(autoTopUpThresholdInput.value, 10)
   if (Number.isNaN(parsed))
@@ -422,6 +423,8 @@ async function loadAutoTopUpSettings() {
   isLoadingAutoTopUp.value = true
   try {
     const settings = await getCreditAutoTopUp(orgId)
+    if (currentOrganization.value?.gid !== orgId)
+      return
     autoTopUpEnabled.value = Boolean(settings?.enabled)
     autoTopUpThresholdInput.value = String(Math.max(MIN_AUTO_TOP_UP, Math.floor(Number(settings?.threshold ?? MIN_AUTO_TOP_UP))))
     autoTopUpHasCard.value = Boolean(settings?.hasPaymentMethod)
@@ -435,6 +438,13 @@ async function loadAutoTopUpSettings() {
 }
 
 async function persistAutoTopUpSettings(enabled: boolean, revertEnabledTo: boolean = !enabled) {
+  const run = () => persistAutoTopUpSettingsNow(enabled, revertEnabledTo)
+  const pending = autoTopUpPersistQueue.then(run, run)
+  autoTopUpPersistQueue = pending.then(() => undefined, () => undefined)
+  await pending
+}
+
+async function persistAutoTopUpSettingsNow(enabled: boolean, revertEnabledTo: boolean) {
   if (!(await ensureUpdateBillingAccess())) {
     autoTopUpEnabled.value = revertEnabledTo
     return
@@ -631,6 +641,12 @@ watch(() => route.hash, (hash) => {
     isCreditPricingOpen.value = true
 })
 
+function onWindowFocus() {
+  if (!hasReadBillingAccess.value)
+    return
+  void loadAutoTopUpSettings()
+}
+
 onMounted(async () => {
   if (isMobile) {
     await router.replace('/settings/organization/usage')
@@ -638,6 +654,7 @@ onMounted(async () => {
   }
 
   window.addEventListener('keydown', onEscapeDismiss)
+  window.addEventListener('focus', onWindowFocus)
   displayStore.NavTitle = t('credits')
   await organizationStore.awaitInitialLoad()
   // Finalize Stripe return before the read gate so update-billing holders can
@@ -650,6 +667,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onEscapeDismiss)
+  window.removeEventListener('focus', onWindowFocus)
 })
 
 watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined, oldOrgId: string | undefined) => {

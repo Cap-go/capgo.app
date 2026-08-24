@@ -732,12 +732,15 @@ app.post('/auto-top-up', middlewareAuth, async (c) => {
   if (!await checkPermission(c, 'org.update_billing', { orgId: body.orgId }))
     throw simpleError('not_authorized', 'Not authorized')
 
+  if (body.enabled !== undefined && typeof body.enabled !== 'boolean')
+    throw simpleError('invalid_enabled', 'enabled must be a boolean')
+
   const threshold = normalizeAutoTopUpThreshold(body.threshold)
   if (threshold === null)
     throw simpleError('invalid_threshold', `Auto top-up amount must be at least ${MIN_AUTO_TOP_UP_THRESHOLD}`)
 
   try {
-    return c.json(await saveAutoTopUpSettings(c as AppContext, body.orgId, Boolean(body.enabled), threshold))
+    return c.json(await saveAutoTopUpSettings(c as AppContext, body.orgId, body.enabled === true, threshold))
   }
   catch (error) {
     const message = error instanceof Error ? error.message : String(error)
