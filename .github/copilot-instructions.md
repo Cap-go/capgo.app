@@ -1,5 +1,16 @@
 # Capgo AI Coding Agent Instructions
 
+## Pull Request Lifecycle (MANDATORY)
+
+Follow **`AGENTS.md` → “Pull Request Lifecycle (MANDATORY for every agent)”** exactly:
+
+1. Keep the PR a **draft** while coding.
+2. When implementation is done and **all CI is green**, mark the PR **Ready for review** (that starts automatic AI review — not human review).
+3. Wait for AI review; fix **every** comment until zero threads remain and AI is clear.
+4. **Only then** ping a human.
+
+Never ping a human while the PR is draft, CI is red/pending, AI review is unfinished, or any review thread is still open.
+
 ## Project Overview
 
 Capgo is a live update platform for Capacitor apps, consisting of:
