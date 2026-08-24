@@ -117,12 +117,33 @@ const provChoice = f.appflowFlow.applyInput('p8-source-select', afterP8, { value
 assert.strictEqual(provChoice.p8Source, 'provide')
 assert.strictEqual(f.getAppflowResumeStep(provChoice), 'input-p8-path')
 
+// choosing 'provide' clears any stale p8 fields from a prior attempt
+const staleProvide = f.appflowFlow.applyInput('p8-source-select', {
+  ...afterP8,
+  p8Path: '/old/AuthKey_OLDKEY12.p8',
+  p8KeyId: 'OLDKEY12',
+  p8IssuerId: 'old-issuer-uuid',
+}, { value: 'provide' })
+assert.strictEqual(staleProvide.p8Path, undefined)
+assert.strictEqual(staleProvide.p8KeyId, undefined)
+assert.strictEqual(staleProvide.p8IssuerId, undefined)
+
 // ── provide chain records each field; key id auto-extracts from AuthKey_*.p8 filename ──
 const withPath = f.appflowFlow.applyInput('input-p8-path', provChoice, { text: '/Users/me/Downloads/AuthKey_ABC123XYZ.p8' })
 assert.strictEqual(withPath.p8Path, '/Users/me/Downloads/AuthKey_ABC123XYZ.p8')
 assert.strictEqual(withPath.p8KeyId, 'ABC123XYZ', 'key id auto-extracted from the filename')
+assert.strictEqual(withPath.p8IssuerId, undefined, 'issuer id cleared when the .p8 path changes')
 // auto-extracted key id -> skip the key-id prompt, go straight to issuer id
 assert.strictEqual(f.getAppflowResumeStep(withPath), 'input-p8-issuer-id')
+
+// re-entering a new path clears a previously collected issuer id
+const rePath = f.appflowFlow.applyInput('input-p8-path', { ...withPath, p8IssuerId: 'stale-issuer' }, { text: '/tmp/AuthKey_NEWKEY123.p8' })
+assert.strictEqual(rePath.p8KeyId, 'NEWKEY123')
+assert.strictEqual(rePath.p8IssuerId, undefined)
+
+// empty path submission is a no-op
+const noPath = f.appflowFlow.applyInput('input-p8-path', provChoice, { text: '   ' })
+assert.strictEqual(noPath.p8Path, undefined)
 
 // a non-AuthKey filename leaves p8KeyId unset -> the key-id prompt is shown
 const plainPath = f.appflowFlow.applyInput('input-p8-path', provChoice, { text: '/tmp/mykey.p8' })
@@ -130,6 +151,7 @@ assert.strictEqual(plainPath.p8KeyId, undefined)
 assert.strictEqual(f.getAppflowResumeStep(plainPath), 'input-p8-key-id')
 const withKeyId = f.appflowFlow.applyInput('input-p8-key-id', plainPath, { text: 'MANUALKEY' })
 assert.strictEqual(withKeyId.p8KeyId, 'MANUALKEY')
+assert.strictEqual(withKeyId.p8IssuerId, undefined)
 assert.strictEqual(f.getAppflowResumeStep(withKeyId), 'input-p8-issuer-id')
 const withIssuer = f.appflowFlow.applyInput('input-p8-issuer-id', withKeyId, { text: 'issuer-uuid-1' })
 assert.strictEqual(withIssuer.p8IssuerId, 'issuer-uuid-1')

@@ -35,6 +35,7 @@ import { buildAppflowEffectDeps, persistAppflowCredentials } from '../appflow/de
 import { sanitizeBuildLogLines } from '../build-log.js'
 import { consoleWebUrl } from '../../../utils.js'
 import { Divider, Header, ErrorLine, SpinnerLine, FilteredTextInput, FullscreenBuildOutput, Table, isBuildCompleteDismissKey } from './components.js'
+import { InputIssuerIdStep, InputKeyIdStep } from './steps/ios-credentials.js'
 import { useTerminalSize } from './shell.js'
 import { exitAfterOnboardingBeforeExit } from './exit.js'
 import type { OnboardingBeforeExit } from './exit.js'
@@ -296,6 +297,7 @@ const AppflowApp: FC<AppflowAppProps> = ({ appId, scope, apikey, supaHost, journ
 
   const stage = stageFor(step)
   const isValidateResults = step === 'validate-results'
+  const useDedicatedP8Input = step === 'input-p8-key-id' || step === 'input-p8-issuer-id'
 
   return (
     <Box flexDirection="column" padding={1}>
@@ -316,7 +318,7 @@ const AppflowApp: FC<AppflowAppProps> = ({ appId, scope, apikey, supaHost, journ
 
         {isValidateResults
           ? <ValidationResults results={(ctx.results as AppflowValidationResult[]) ?? []} />
-          : busy || view.kind === 'auto'
+          : busy || view.kind === 'auto' || useDedicatedP8Input
             ? null
             : (
                 <Box marginTop={1} flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
@@ -327,7 +329,7 @@ const AppflowApp: FC<AppflowAppProps> = ({ appId, scope, apikey, supaHost, journ
         {error && <Box marginTop={1}><ErrorLine text={error} /></Box>}
 
         <Box marginTop={1}>
-          {renderBody(view, busy, advance, step)}
+          {renderBody(view, busy, advance, step, progress)}
         </Box>
       </Box>
     </Box>
@@ -530,6 +532,11 @@ function stageFor(step: AppflowStep): { n: number, title: string } {
     case 'validate-results':
       return { n: 6, title: 'Validate credentials' }
     case 'p8-upgrade-prompt':
+    case 'p8-source-select':
+    case 'input-p8-path':
+    case 'input-p8-key-id':
+    case 'input-p8-issuer-id':
+    case 'load-provided-p8':
       return { n: 7, title: 'Upgrade iOS upload auth' }
     case 'handoff-build':
       return { n: 8, title: 'Build' }
@@ -541,9 +548,35 @@ function stageFor(step: AppflowStep): { n: number, title: string } {
 /** Render the interactive body for the current StepView kind. The `step` keys the
  *  Select so it REMOUNTS per step — Ink's Select otherwise re-fires onChange while
  *  it stays mounted across a step change, which makes options feel "unselectable". */
-function renderBody(view: StepView, busy: boolean, advance: (value?: string, text?: string) => void, step: string): React.ReactNode {
+function renderBody(view: StepView, busy: boolean, advance: (value?: string, text?: string) => void, step: string, progress: AppflowProgress): React.ReactNode {
   if (busy || view.kind === 'auto')
     return <SpinnerLine text={view.prompt || 'Working…'} />
+  if (step === 'input-p8-key-id') {
+    return (
+      <InputKeyIdStep
+        key={step}
+        keyId={progress.p8KeyId ?? ''}
+        onSubmit={(text) => {
+          const trimmed = text.trim()
+          if (!trimmed && !progress.p8KeyId)
+            return
+          advance(undefined, trimmed || progress.p8KeyId)
+        }}
+      />
+    )
+  }
+  if (step === 'input-p8-issuer-id') {
+    return (
+      <InputIssuerIdStep
+        key={step}
+        onSubmit={(text) => {
+          if (!text.trim())
+            return
+          advance(undefined, text)
+        }}
+      />
+    )
+  }
   if (view.kind === 'choice') {
     const options = (view.options ?? []).map(o => ({ label: o.note ? `${o.label}  (${o.note})` : o.label, value: o.value }))
     return (
