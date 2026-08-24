@@ -113,6 +113,9 @@ try {
   fetchCalls.length = 0
 
   const deniedSupabase = {
+    from() {
+      return {}
+    },
     rpc(name, args) {
       calls.push({ name, args })
       if (name === 'cli_check_permission') {

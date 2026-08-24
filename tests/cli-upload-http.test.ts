@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   createDirectApiKeyWithBindings,
+  executeSQL,
   getEndpointUrl,
   getSupabaseClient,
   ORG_ID,
@@ -16,6 +17,8 @@ const APPNAME = `com.cli.upload.http.${id}`
 const OTHER_ORG_ID = ORG_ID_2
 
 let scopedHeaders: Record<string, string>
+let scopedApiKeyId: number | undefined
+let scopedApiKeyRbacId: string | undefined
 
 beforeAll(async () => {
   await resetAndSeedAppData(APPNAME)
@@ -32,6 +35,8 @@ beforeAll(async () => {
   if (!apiKey.key)
     throw new Error('Failed to create scoped API key')
 
+  scopedApiKeyId = apiKey.id
+  scopedApiKeyRbacId = apiKey.rbac_id
   scopedHeaders = {
     'Content-Type': 'application/json',
     capgkey: apiKey.key,
@@ -39,6 +44,16 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  if (scopedApiKeyRbacId) {
+    await executeSQL(
+      `DELETE FROM public.role_bindings
+       WHERE principal_type = public.rbac_principal_apikey()
+         AND principal_id = $1::uuid`,
+      [scopedApiKeyRbacId],
+    )
+  }
+  if (scopedApiKeyId !== undefined)
+    await executeSQL('DELETE FROM public.apikeys WHERE id = $1', [scopedApiKeyId])
   await resetAppData(APPNAME)
 })
 
