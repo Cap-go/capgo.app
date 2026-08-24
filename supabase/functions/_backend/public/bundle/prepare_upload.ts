@@ -108,7 +108,10 @@ async function updateVersionForReupload(
     const updated = result.rows[0]
     if (!updated)
       throw simpleError('cannot_prepare_upload', 'Cannot update bundle version for upload', { versionId })
-    return updated
+    return {
+      ...updated,
+      id: Number(updated.id),
+    }
   }
   catch (error) {
     await pgClient.query('ROLLBACK').catch(() => undefined)
