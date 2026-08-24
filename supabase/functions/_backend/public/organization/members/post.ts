@@ -37,7 +37,7 @@ const inviteBodySchema = z.object({
   invite_type: inviteTypeSchema,
 })
 
-interface PgQueryClient {
+interface PgTransactionClient {
   query: <TRow = Record<string, unknown>>(text: string, params?: unknown[]) => Promise<{ rowCount?: number | null, rows: TRow[] }>
   release: () => void
 }
@@ -79,10 +79,10 @@ export async function post(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown,
   // revoking anon execute. Mirrors organization/post.ts: set capgkey in
   // request.headers inside a transaction so the SECURITY DEFINER RPC sees it.
   const pgPool = getPgClient(c)
-  let dbClient: PgQueryClient | null = null
+  let dbClient: PgTransactionClient | null = null
   let transactionStarted = false
   try {
-    dbClient = await pgPool.connect() as PgQueryClient
+    dbClient = await pgPool.connect() as PgTransactionClient
     await dbClient.query('BEGIN')
     transactionStarted = true
     await dbClient.query(
