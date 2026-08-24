@@ -119,11 +119,18 @@ async function setupMfaEdgeUser() {
     `,
     [randomUUID(), MFA_EDGE_USER_ID],
   )
+
+  const { error: signInProbeError } = await supabase.auth.signInWithPassword({
+    email: MFA_EDGE_EMAIL,
+    password: MFA_EDGE_PASSWORD,
+  })
+  if (signInProbeError) {
+    throw signInProbeError
+  }
 }
 
 async function cleanupMfaEdgeUser() {
   await executeSQL(`DELETE FROM public.apikeys WHERE user_id = $1::uuid`, [MFA_EDGE_USER_ID])
-  await executeSQL(`DELETE FROM public.org_users WHERE user_id = $1::uuid`, [MFA_EDGE_USER_ID])
   await executeSQL(`DELETE FROM public.orgs WHERE id = $1::uuid`, [MFA_EDGE_ORG_ID])
   await executeSQL(`DELETE FROM auth.mfa_factors WHERE user_id = $1::uuid`, [MFA_EDGE_USER_ID])
   await executeSQL(`DELETE FROM public.user_security WHERE user_id = $1::uuid`, [MFA_EDGE_USER_ID])
