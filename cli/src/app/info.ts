@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { dirname } from 'node:path'
 import { cwd, version as nodeVersion } from 'node:process'
 import { platform, version } from 'node:os'
+import { findInstallCommand, findPackageManagerRunner, findPackageManagerType } from '@capgo/find-package-manager'
 import { confirm, isCancel, log, select, spinner } from '@clack/prompts'
 import pack from '../../package.json'
 import { trackEvent } from '../analytics/track'
@@ -31,8 +32,9 @@ async function getLatestDependencies(installedDependencies: Record<string, strin
   return latestDependencies
 }
 
-async function getInstalledDependencies() {
-  const dependencies = await getAllPackagesDependencies()
+async function getInstalledDependencies(packageJson?: string) {
+  const projectRoot = resolveDoctorProjectRoot(packageJson)
+  const dependencies = await getAllPackagesDependencies(projectRoot, packageJson)
   const installedDependencies: Record<string, string> = {
     '@capgo/cli': pack.version,
   }
@@ -47,6 +49,29 @@ async function getInstalledDependencies() {
 
 interface DoctorInfoOptions {
   packageJson?: string
+}
+
+export function resolveDoctorProjectRoot(packageJson?: string): string {
+  if (!packageJson)
+    return findRoot(cwd())
+
+  const firstPackageJson = packageJson.split(',')[0]?.trim()
+  if (!firstPackageJson)
+    return findRoot(cwd())
+
+  return dirname(firstPackageJson)
+}
+
+export function getPMAndCommandForDir(projectRoot: string) {
+  const pm = findPackageManagerType(projectRoot, 'npm')
+  const command = findInstallCommand(pm)
+  const runner = findPackageManagerRunner(projectRoot)
+  return { pm, command, installCommand: `${pm} ${command}`, runner }
+}
+
+export interface DoctorRecoveryResult {
+  recovered: boolean
+  remainingOutdated: OutdatedDependency[]
 }
 
 export function listOutdatedDependencies(
@@ -198,19 +223,19 @@ async function maybeRecoverOutdatedDependencies(
   outdated: OutdatedDependency[],
   options: DoctorInfoOptions,
   silent: boolean,
-): Promise<boolean> {
+): Promise<DoctorRecoveryResult> {
   if (!canPromptInteractively({ silent }))
-    return false
+    return { recovered: false, remainingOutdated: outdated }
 
-  const pm = getPMAndCommand()
+  const projectRoot = resolveDoctorProjectRoot(options.packageJson)
+  const pm = getPMAndCommandForDir(projectRoot)
   const { capgo, other } = partitionOutdatedDependencies(outdated)
   const choice = await promptDoctorUpdateChoice(capgo, other)
   const packagesToUpdate = packagesForDoctorUpdateChoice(choice, capgo, other)
 
   if (packagesToUpdate.length === 0)
-    return false
+    return { recovered: false, remainingOutdated: outdated }
 
-  const projectRoot = options.packageJson ? dirname(options.packageJson) : findRoot(cwd())
   const installCommand = buildOutdatedInstallCommand(pm, packagesToUpdate)
   const s = spinner()
   s.start(`Running: ${installCommand}`)
@@ -223,10 +248,10 @@ async function maybeRecoverOutdatedDependencies(
     s.stop('Dependency update failed')
     log.error(error instanceof Error ? error.message : String(error))
     log.info(`Run manually: ${installCommand}`)
-    return false
+    return { recovered: false, remainingOutdated: outdated }
   }
 
-  const installedAfterUpdate = await getInstalledDependencies()
+  const installedAfterUpdate = await getInstalledDependencies(options.packageJson)
   const latestAfterUpdate = await getLatestDependencies(installedAfterUpdate)
   const stillOutdated = listOutdatedDependencies(installedAfterUpdate, latestAfterUpdate)
 
@@ -237,11 +262,11 @@ async function maybeRecoverOutdatedDependencies(
       tags: { recovery: 'update', outdated_count: outdated.length },
     })
     log.success('\x1B[32m✅ All dependencies are up to date after update\x1B[0m')
-    return true
+    return { recovered: true, remainingOutdated: [] }
   }
 
-  log.warn('Some dependencies are still outdated after the update')
-  return false
+  logOutdatedDependencyTable(stillOutdated)
+  return { recovered: false, remainingOutdated: stillOutdated }
 }
 
 export async function getInfoInternal(options: DoctorInfoOptions, silent = false) {
@@ -265,7 +290,8 @@ export async function getInfoInternal(options: DoctorInfoOptions, silent = false
     log.info(' Installed Dependencies:')
   }
 
-  let installedDependencies = await getInstalledDependencies()
+  const projectRoot = resolveDoctorProjectRoot(options.packageJson)
+  let installedDependencies = await getInstalledDependencies(options.packageJson)
 
   if (Object.keys(installedDependencies).length === 0) {
     if (!silent)
@@ -305,11 +331,11 @@ export async function getInfoInternal(options: DoctorInfoOptions, silent = false
     if (!silent)
       logOutdatedDependencyTable(outdated)
 
-    const recovered = await maybeRecoverOutdatedDependencies(outdated, options, silent)
-    if (!recovered)
-      throwOutdatedDependenciesError(getPMAndCommand(), outdated, silent)
+    const recovery = await maybeRecoverOutdatedDependencies(outdated, options, silent)
+    if (!recovery.recovered)
+      throwOutdatedDependenciesError(getPMAndCommandForDir(projectRoot), recovery.remainingOutdated, silent)
 
-    installedDependencies = await getInstalledDependencies()
+    installedDependencies = await getInstalledDependencies(options.packageJson)
     latestDependencies = await getLatestDependencies(installedDependencies)
   }
 

@@ -3,9 +3,11 @@ import assert from 'node:assert/strict'
 import {
   buildOutdatedInstallCommand,
   computeDoctorAnalyticsTags,
+  getPMAndCommandForDir,
   listOutdatedDependencies,
   packagesForDoctorUpdateChoice,
   partitionOutdatedDependencies,
+  resolveDoctorProjectRoot,
 } from '../src/app/info.ts'
 
 console.log('🧪 Testing doctor analytics tags...\n')
@@ -124,5 +126,12 @@ assert.equal(
   installCommand,
   'npm install @capgo/capacitor-updater@latest @capacitor/core@latest',
 )
+
+assert.equal(resolveDoctorProjectRoot('/apps/mobile/package.json'), '/apps/mobile')
+assert.equal(
+  resolveDoctorProjectRoot('/apps/mobile/package.json,/apps/shared/package.json'),
+  '/apps/mobile',
+)
+assert.equal(getPMAndCommandForDir('/tmp/project').installCommand.includes('install'), true)
 
 console.log('✅ doctor analytics tags tests passed')
