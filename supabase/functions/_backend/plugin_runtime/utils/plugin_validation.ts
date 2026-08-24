@@ -209,6 +209,22 @@ function validateRequiredPluginVersion(input: UnknownRecord, issues: ValidationI
   return value
 }
 
+function validateOptionalStatsMode(input: UnknownRecord, issues: ValidationIssue[]): string | undefined {
+  const value = input.stats_mode
+  if (value === undefined) {
+    return undefined
+  }
+  if (typeof value !== 'string') {
+    issues.push(fieldIssue('stats_mode', 'stats_mode must be a string'))
+    return undefined
+  }
+  if (value !== 'all' && value !== 'updatesOnly' && value !== 'billingOnly') {
+    issues.push(fieldIssue('stats_mode', 'stats_mode must be one of: all, updatesOnly, billingOnly'))
+    return undefined
+  }
+  return value
+}
+
 function validateOptionalAction(input: UnknownRecord, issues: ValidationIssue[]): string | undefined {
   const value = input.action
   if (value === undefined) {
@@ -332,8 +348,9 @@ export const statsRequestSchema = createPluginSchema<AppStats>((input, issues) =
   validateRequiredVersionName(input, issues, true)
   validateRequiredVersionOs(input, issues)
   validateBasePluginBooleans(input, issues)
-  validateOptionalCommonStrings(input, issues)
-  validateOptionalAction(input, issues)
+ validateOptionalCommonStrings(input, issues)
+ validateOptionalStatsMode(input, issues)
+ validateOptionalAction(input, issues)
   validateOptionalStatsMetadata(input, issues)
   validateOptionalString(input, 'version_build', issues)
 }, isStatsRequestBody as (value: unknown) => value is AppStats)
