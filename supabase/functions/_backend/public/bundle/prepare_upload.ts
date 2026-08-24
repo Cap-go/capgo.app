@@ -3,6 +3,7 @@ import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { getBodyOrQuery, honoFactory, simpleError } from '../../utils/hono.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
+import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseApikey } from '../../utils/supabase.ts'
 import { isValidAppId, isValidSemver } from '../../utils/utils.ts'
@@ -26,6 +27,37 @@ export interface PrepareUploadBody {
 
 const PREPARE_STORAGE_PROVIDERS = new Set(['r2-direct', 'external'])
 const COMPLETED_UPLOAD_STORAGE_PROVIDER = 'r2'
+
+interface ExistingVersionRow {
+  id: number
+  deleted: boolean
+  storage_provider: string | null
+}
+
+async function loadExistingVersion(
+  c: Context<MiddlewareKeyVariables>,
+  appId: string,
+  name: string,
+): Promise<ExistingVersionRow | null> {
+  const pgClient = getPgClient(c, false)
+  try {
+    const result = await pgClient.query<ExistingVersionRow>(
+      `SELECT id, deleted, storage_provider
+       FROM public.app_versions
+       WHERE app_id = $1 AND name = $2
+       LIMIT 1`,
+      [appId, name],
+    )
+    return result.rows[0] ?? null
+  }
+  catch (error) {
+    logPgError(c, 'prepare_upload_load_existing', error)
+    throw simpleError('cannot_prepare_upload', 'Cannot load existing bundle version', { error })
+  }
+  finally {
+    await closeClient(c, pgClient)
+  }
+}
 
 function pickUpsertFields(body: PrepareUploadBody) {
   return {
@@ -75,16 +107,8 @@ export async function prepareUpload(
   const appWithOrg = await getAppOrganization(c, body.app_id)
   checkEncryptedBundleEnforcement(appWithOrg, body.session_key ?? undefined, body.key_id ?? undefined)
 
+  const existing = await loadExistingVersion(c, body.app_id, body.name)
   const supabase = supabaseApikey(c, apikey.key)
-  const { data: existing, error: existingError } = await supabase
-    .from('app_versions')
-    .select('id, deleted, storage_provider')
-    .eq('app_id', body.app_id)
-    .eq('name', body.name)
-    .maybeSingle()
-
-  if (existingError)
-    throw simpleError('cannot_prepare_upload', 'Cannot load existing bundle version', { supabaseError: existingError })
 
   const upsertFields = pickUpsertFields(body)
 
