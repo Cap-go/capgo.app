@@ -1,1 +1,1 @@
-@/tmp/push_full.json
+PLACEHOLDER_WILL_REPLACE
