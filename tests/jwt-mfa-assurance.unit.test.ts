@@ -78,6 +78,23 @@ describe('assertJwtMfaAssurance', () => {
     expect(queryMock).toHaveBeenCalledTimes(1)
   })
 
+  it('allows JWT users without verified MFA factors at aal2', async () => {
+    mockPgResponses(false)
+    await expect(assertJwtMfaAssurance(createContext() as never, createJwtAuth({ aal: 'aal2' }))).resolves.toBeUndefined()
+    expect(queryMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects JWT users without verified MFA factors when aal is unknown', async () => {
+    mockPgResponses(false)
+    await expect(assertJwtMfaAssurance(createContext() as never, createJwtAuth({ aal: 'aal3' }))).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(HTTPException)
+      expect((error as HTTPException).status).toBe(403)
+      expect((error as HTTPException).cause).toMatchObject({ error: 'mfa_required' })
+      return true
+    })
+    expect(queryMock).toHaveBeenCalledTimes(1)
+  })
+
   it('rejects MFA-enrolled JWT users at aal1', async () => {
     mockPgResponses(true)
     await expect(assertJwtMfaAssurance(createContext() as never, createJwtAuth({ aal: 'aal1' }))).rejects.toSatisfy((error: unknown) => {
@@ -101,6 +118,45 @@ describe('assertJwtMfaAssurance', () => {
       aal: 'aal1',
       session_id: SESSION_ID,
     }))).resolves.toBeUndefined()
+    expect(queryMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects expired platform-admin impersonation sessions at aal1', async () => {
+    mockPgResponses(true, false)
+    await expect(assertJwtMfaAssurance(createContext() as never, createJwtAuth({
+      aal: 'aal1',
+      session_id: SESSION_ID,
+    }))).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(HTTPException)
+      expect((error as HTTPException).status).toBe(403)
+      return true
+    })
+    expect(queryMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects impersonation lookup when session_id is malformed', async () => {
+    mockPgResponses(true)
+    await expect(assertJwtMfaAssurance(createContext() as never, createJwtAuth({
+      aal: 'aal1',
+      session_id: 'not-a-uuid',
+    }))).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(HTTPException)
+      expect((error as HTTPException).status).toBe(403)
+      return true
+    })
+    expect(queryMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects impersonation lookup when session_id belongs to another user', async () => {
+    mockPgResponses(true, false)
+    await expect(assertJwtMfaAssurance(createContext() as never, createJwtAuth({
+      aal: 'aal1',
+      session_id: '99999999-9999-4999-8999-999999999999',
+    }))).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(HTTPException)
+      expect((error as HTTPException).status).toBe(403)
+      return true
+    })
     expect(queryMock).toHaveBeenCalledTimes(2)
   })
 })

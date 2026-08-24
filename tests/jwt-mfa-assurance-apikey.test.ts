@@ -17,16 +17,6 @@ const MFA_EDGE_FACTOR_ID = 'a1b2c3d4-e5f6-4789-a012-3456789abcde'
 async function enrollVerifiedMfaFactor() {
   await executeSQL(
     `
-    INSERT INTO public.user_security (user_id, email_otp_verified_at, created_at, updated_at)
-    VALUES ($1::uuid, NOW(), NOW(), NOW())
-    ON CONFLICT (user_id) DO UPDATE
-    SET email_otp_verified_at = EXCLUDED.email_otp_verified_at, updated_at = EXCLUDED.updated_at
-    `,
-    [USER_ID_JWT_MFA_EDGE],
-  )
-
-  await executeSQL(
-    `
     INSERT INTO auth.mfa_factors (
       id,
       user_id,
@@ -56,6 +46,12 @@ async function cleanupVerifiedMfaFactor() {
   await executeSQL(`DELETE FROM auth.mfa_factors WHERE user_id = $1::uuid`, [USER_ID_JWT_MFA_EDGE])
 }
 
+async function deleteApiKeyById(id: number | undefined) {
+  if (typeof id === 'number') {
+    await executeSQL(`DELETE FROM public.apikeys WHERE id = $1`, [id])
+  }
+}
+
 afterEach(async () => {
   await cleanupVerifiedMfaFactor()
 })
@@ -74,28 +70,33 @@ describe('JWT MFA assurance on /apikey create', () => {
       }),
     })
 
-    const data = await response.json() as { error?: string }
+    const data = await response.json() as { error?: string, id?: number }
     expect(response.status).toBe(403)
     expect(data.error).toBe('mfa_required')
+    await deleteApiKeyById(data.id)
   })
 
   it('allows users without MFA at aal1', async () => {
     const headers = await getAuthHeaders()
-    const response = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        name: `no-mfa-${randomUUID()}`,
-        bindings: orgApiKeyBindings(),
-      }),
-    })
+    let createdKeyId: number | undefined
 
-    const data = await response.json() as { id?: number }
-    expect(response.status).toBe(200)
-    expect(typeof data.id).toBe('number')
+    try {
+      const response = await fetch(`${BASE_URL}/apikey`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          name: `no-mfa-${randomUUID()}`,
+          bindings: orgApiKeyBindings(),
+        }),
+      })
 
-    if (data.id) {
-      await executeSQL(`DELETE FROM public.apikeys WHERE id = $1`, [data.id])
+      const data = await response.json() as { id?: number }
+      expect(response.status).toBe(200)
+      expect(typeof data.id).toBe('number')
+      createdKeyId = data.id
+    }
+    finally {
+      await deleteApiKeyById(createdKeyId)
     }
   })
 })

@@ -156,6 +156,7 @@ describe('api key create postgres round trips', () => {
     }))
 
     expect(response.status).toBe(200)
+    expect(requireJwtMfaForPrivilegedActionMock).toHaveBeenCalledTimes(1)
     expect(getPgClientMock).toHaveBeenCalledTimes(1)
     expect(checkPermissionMock).not.toHaveBeenCalled()
     expect(supabaseWithAuthMock).not.toHaveBeenCalled()

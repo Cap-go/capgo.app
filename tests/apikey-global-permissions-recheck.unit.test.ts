@@ -142,6 +142,7 @@ describe('api key update authorization recheck', () => {
     }))
 
     expect(response.status).toBe(403)
+    expect(requireJwtMfaForPrivilegedActionMock).toHaveBeenCalledTimes(1)
     await expect(response.text()).resolves.toContain('Forbidden - Admin rights required')
     expect(checkPermissionMock).toHaveBeenCalledWith(expect.anything(), 'org.update_user_roles', { orgId: ORG_ID })
     expect(lockRbacOrgsMock).toHaveBeenCalledWith(expect.anything(), [ORG_ID])
@@ -175,6 +176,7 @@ describe('api key update authorization recheck', () => {
     }))
 
     expect(response.status).toBe(403)
+    expect(requireJwtMfaForPrivilegedActionMock).toHaveBeenCalledTimes(1)
     expect(assertApiKeyManagerCanAssignBindingsMock).toHaveBeenCalledWith(
       expect.anything(),
       { authType: 'jwt', userId: USER_ID },

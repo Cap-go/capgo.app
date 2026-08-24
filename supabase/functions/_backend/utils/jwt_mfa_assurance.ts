@@ -82,6 +82,13 @@ async function isActivePlatformImpersonation(
  * Mirrors public.verify_mfa() for Edge JWT-authenticated privileged actions.
  * API-key auth is a no-op because keys do not carry AAL claims.
  */
+function isAllowedAal(aal: string, hasVerifiedMfa: boolean): boolean {
+  if (hasVerifiedMfa) {
+    return aal === 'aal2'
+  }
+  return aal === 'aal1' || aal === 'aal2'
+}
+
 export async function assertJwtMfaAssurance(
   c: Context<MiddlewareKeyVariables>,
   auth: AuthInfo,
@@ -90,12 +97,10 @@ export async function assertJwtMfaAssurance(
     return
   }
 
+  const aal = getJwtAal(auth.claims)
   const hasVerifiedMfa = await userHasVerifiedMfaFactors(c, auth.userId)
-  if (!hasVerifiedMfa) {
-    return
-  }
 
-  if (getJwtAal(auth.claims) === 'aal2') {
+  if (isAllowedAal(aal, hasVerifiedMfa)) {
     return
   }
 
