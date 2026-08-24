@@ -6,10 +6,11 @@ import { join } from 'node:path'
 import { chdir, cwd } from 'node:process'
 import { setConfigWriteTarget } from '../src/config/index.ts'
 import { CliUserError } from '../src/shared/cli-user-error.ts'
-import { getConfig, getConfigForWrite, getOrganizationId } from '../src/utils.ts'
+import { getConfigForWrite, getOrganizationId } from '../src/utils.ts'
 
 const NO_CONFIG_MESSAGE = 'No capacitor config file found, run `cap init` first'
 const ORG_ID_MESSAGE = 'Cannot get organization id for app'
+const isolatedTmpRoot = process.platform === 'win32' ? tmpdir() : '/tmp'
 
 function assertCliUserError(error, message, contextKeys = []) {
   assert.equal(error instanceof CliUserError, true, `expected CliUserError, got ${error}`)
@@ -18,10 +19,12 @@ function assertCliUserError(error, message, contextKeys = []) {
     assert.ok(error.context?.[key] !== undefined, `expected context.${key}`)
 }
 
-const brokenConfigDir = mkdtempSync(join(tmpdir(), 'capgo-broken-cap-config-'))
-const emptyConfigDir = mkdtempSync(join(tmpdir(), 'capgo-empty-cap-config-'))
+const brokenConfigDir = mkdtempSync(join(isolatedTmpRoot, 'capgo-broken-cap-config-'))
 const invalidConfigTarget = join(brokenConfigDir, 'capacitor.config.invalid.json')
+const missingConfigTarget = join(brokenConfigDir, 'capacitor.config.missing.json')
+const emptyConfigTarget = join(brokenConfigDir, 'capacitor.config.empty.json')
 writeFileSync(invalidConfigTarget, '{not json')
+writeFileSync(emptyConfigTarget, '{}')
 const previousCwd = cwd()
 const originalFetch = globalThis.fetch
 
@@ -42,16 +45,19 @@ try {
   )
   assert.match(String(configError.context.cause), /JSON|Unexpected|parse/i)
 
-  chdir(emptyConfigDir)
-  setConfigWriteTarget(undefined)
-  let emptyConfigError
+  setConfigWriteTarget(missingConfigTarget)
+  let missingConfigError
   try {
-    await getConfig(true)
+    await getConfigForWrite(true)
   }
   catch (error) {
-    emptyConfigError = error
+    missingConfigError = error
   }
-  assertCliUserError(emptyConfigError, NO_CONFIG_MESSAGE)
+  assertCliUserError(missingConfigError, NO_CONFIG_MESSAGE, ['cause'])
+
+  setConfigWriteTarget(emptyConfigTarget)
+  const emptyConfig = await getConfigForWrite(true)
+  assert.deepEqual(emptyConfig.config, {})
 
   globalThis.fetch = async () => new Response(JSON.stringify({}), { status: 200 })
   let orgError
@@ -86,5 +92,4 @@ finally {
   chdir(previousCwd)
   globalThis.fetch = originalFetch
   rmSync(brokenConfigDir, { recursive: true, force: true })
-  rmSync(emptyConfigDir, { recursive: true, force: true })
 }
