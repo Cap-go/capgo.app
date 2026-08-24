@@ -11,6 +11,7 @@ import {
   parseDoctorPackageJsonPaths,
   partitionOutdatedDependencies,
   resolveDoctorProjectRoot,
+  shellQuotePath,
 } from '../src/app/info.ts'
 
 console.log('🧪 Testing doctor analytics tags...\n')
@@ -158,8 +159,8 @@ const multiInstallCommands = buildOutdatedInstallCommandsForDoctor(
   outdatedSample,
   path => declaredByPath.get(path),
 )
-assert.ok(multiInstallCommands.includes('cd "/apps/mobile"'))
-assert.ok(multiInstallCommands.includes('cd "/apps/shared"'))
+assert.ok(multiInstallCommands.includes('cd \'/apps/mobile\''))
+assert.ok(multiInstallCommands.includes('cd \'/apps/shared\''))
 assert.ok(multiInstallCommands.includes('@capgo/capacitor-updater@latest'))
 assert.ok(multiInstallCommands.includes('@capacitor/core@latest'))
 
@@ -185,6 +186,11 @@ const spacedInstallCommands = buildOutdatedInstallCommandsForDoctor(
   outdatedSample,
   path => spacedDeclaredByPath.get(path),
 )
-assert.ok(spacedInstallCommands.includes('cd "/apps/my mobile"'))
+assert.ok(spacedInstallCommands.includes('cd \'/apps/my mobile\''))
+
+assert.equal(shellQuotePath('/apps/mobile'), '\'/apps/mobile\'')
+assert.equal(shellQuotePath('/apps/my mobile'), '\'/apps/my mobile\'')
+assert.equal(shellQuotePath('/apps/foo$(rm -rf /)'), '\'/apps/foo$(rm -rf /)\'')
+assert.equal(shellQuotePath('/apps/o\'brien'), '\'/apps/o\'\\\'\'brien\'')
 
 console.log('✅ doctor analytics tags tests passed')

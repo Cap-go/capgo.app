@@ -105,8 +105,8 @@ export function groupOutdatedPackagesByPackageJson(
   return groups
 }
 
-function shellQuotePath(path: string): string {
-  return JSON.stringify(path)
+export function shellQuotePath(path: string): string {
+  return `'${path.replaceAll('\'', '\'\\\'\'')}'`
 }
 
 export function buildOutdatedInstallCommandsForDoctor(
