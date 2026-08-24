@@ -70,7 +70,7 @@ describe('stale asset error helpers', () => {
     expect(getErrorMessage({ notMessage: true })).toBeUndefined()
   })
 
-  it('suppresses only stale asset exception events in PostHog', () => {
+  it('suppresses stale asset and component-resolution exception events in PostHog', () => {
     expect(shouldSuppressPostHogExceptionEvent({
       event: '$exception',
       properties: {
@@ -88,7 +88,28 @@ describe('stale asset error helpers', () => {
     expect(shouldSuppressPostHogExceptionEvent({
       event: '$exception',
       properties: {
+        $exception_list: [{ value: 'Couldn\'t resolve component "default" at "/settings/organization"' }],
+      },
+    })).toBe(true)
+
+    expect(shouldSuppressPostHogExceptionEvent({
+      event: '$exception',
+      properties: {
+        $exception_values: ['Couldn\'t resolve component "default" at "/app/:app"'],
+      },
+    })).toBe(true)
+
+    expect(shouldSuppressPostHogExceptionEvent({
+      event: '$exception',
+      properties: {
         $exception_list: [{ value: 'ResizeObserver loop completed with undelivered notifications.' }],
+      },
+    })).toBe(false)
+
+    expect(shouldSuppressPostHogExceptionEvent({
+      event: '$exception',
+      properties: {
+        $exception_list: [{ value: 'Cannot read properties of undefined (reading \'digest\')' }],
       },
     })).toBe(false)
 

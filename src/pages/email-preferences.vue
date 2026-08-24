@@ -7,6 +7,7 @@ import IconCheck from '~icons/lucide/check'
 import IconLoader from '~icons/lucide/loader-2'
 import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { safeResetTurnstile } from '~/utils/turnstile'
 
 const PUBLIC_EMAIL_PREFERENCE_KEYS = [
   'usage_limit',
@@ -123,7 +124,7 @@ const canSubmit = computed(() => {
 })
 
 function resetCaptcha() {
-  captchaComponent.value?.reset()
+  safeResetTurnstile(captchaComponent.value)
   captchaToken.value = ''
 }
 

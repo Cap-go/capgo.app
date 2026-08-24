@@ -22,6 +22,7 @@ import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { isSuperAdminRole, useOrganizationStore } from '~/stores/organization'
+import { safeResetTurnstile } from '~/utils/turnstile'
 // tabs handled by settings layout
 
 const version = import.meta.env.VITE_APP_VERSION
@@ -225,7 +226,7 @@ async function deleteAccount() {
   // Show final confirmation
   deleteAccountPassword.value = ''
   deleteAccountCaptchaToken.value = ''
-  deleteAccountCaptchaRef.value?.reset()
+  safeResetTurnstile(deleteAccountCaptchaRef.value)
   dialogStore.openDialog({
     id: 'delete-account-confirm',
     title: t('delete-account'),
@@ -253,7 +254,7 @@ async function deleteAccount() {
   const dismissed = await dialogStore.onDialogDismiss()
   deleteAccountPassword.value = ''
   deleteAccountCaptchaToken.value = ''
-  deleteAccountCaptchaRef.value?.reset()
+  safeResetTurnstile(deleteAccountCaptchaRef.value)
   return dismissed
 }
 
@@ -284,7 +285,7 @@ async function performAccountDeletion(password: string) {
     })
     if (signInError) {
       deleteAccountCaptchaToken.value = ''
-      deleteAccountCaptchaRef.value?.reset()
+      safeResetTurnstile(deleteAccountCaptchaRef.value)
       if (signInError.message.includes('captcha')) {
         toast.error(t('captcha-fail'))
         return false
@@ -338,7 +339,7 @@ async function performAccountDeletion(password: string) {
       }
       if (deleteError.message?.includes('reauth_required')) {
         deleteAccountCaptchaToken.value = ''
-        deleteAccountCaptchaRef.value?.reset()
+        safeResetTurnstile(deleteAccountCaptchaRef.value)
         toast.error(t('invalid-auth'))
         return false
       }

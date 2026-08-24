@@ -1,0 +1,35 @@
+<!-- Bento event: auth_recovery -->
+<!-- Subject: [Capgo]: Instructions to change your Capgo.app password -->
+
+<p>Hi,</p>
+
+<p>
+  You have asked to reset your password for the Capgo.app account associated with this email address
+  ({{ event.details.email }}).
+</p>
+
+<p>To reset the password, please click on the following link:</p>
+
+<p>
+  <a
+    href="{{ event.details.confirmation_link }}"
+    target="_blank"
+    rel="noopener noreferrer nofollow"
+    style="
+      background-color: #2563eb;
+      color: #ffffff;
+      border-radius: 8px;
+      font-size: 14px;
+      text-decoration: none;
+      font-weight: bold;
+      padding: 8px 16px;
+      display: inline-block;
+    "
+  >
+    Reset your password
+  </a>
+</p>
+
+<p>This link will expire in 1 hour for security reasons.</p>
+
+<p style="color: #6c757d;">- Martin, Founder of Capgo.app</p>
