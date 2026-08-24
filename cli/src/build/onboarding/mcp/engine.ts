@@ -16,7 +16,7 @@ import { ANDROID_STEP_PROGRESS } from '../android/types.js'
 import { STEP_PROGRESS } from '../types.js'
 import { getAndroidResumeStep } from '../android/progress.js'
 import { extractDeveloperId } from '../android/play-api.js'
-import { getIosResumeStep } from '../ios/progress.js'
+import { getIosResumeStep, IOS_API_KEY_GATE_STEPS } from '../ios/progress.js'
 import { TAIL_INPUT_KEYS, validateIosStepInput, validateStepInput, validateStorePassword, validateTailStepInput } from './step-input.js'
 import { androidViewForStep, applyAndroidInput, applyGoogleSignInBroker, runAndroidEffect } from '../android/flow.js'
 import { applyIosInput, iosViewForStep, runIosEffect } from '../ios/flow.js'
@@ -303,16 +303,6 @@ async function decidePlatform(facts: PreflightFacts, _progress: OnboardingProgre
 // passwords) must NEVER serialize into a NextStepResult — mapIosView builds
 // results exclusively from view fields + whitelisted non-secret context.
 
-/** The TUI-only .p8 input chain steps the MCP collapses into one 'ios-api-key' gate. */
-const IOS_API_KEY_GATE_STEPS = new Set<OnboardingStep>([
-  'welcome',
-  'setup-method-select',
-  'api-key-instructions',
-  'p8-method-select',
-  'input-p8-path',
-  'input-key-id',
-  'input-issuer-id',
-])
 
 /** The single ios-api-key human gate (collects keyId + issuerId + p8Path in one call). */
 function iosApiKeyGateResult(facts: PreflightFacts): NextStepResult {
