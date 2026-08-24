@@ -656,6 +656,11 @@ export async function createOneTimeCheckout(
             }),
       },
     ],
+    custom_text: {
+      submit: {
+        message: 'Your card may be saved so you can later enable optional credit auto top-up in organization settings.',
+      },
+    },
     payment_intent_data: {
       setup_future_usage: 'off_session',
     },

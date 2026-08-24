@@ -168,6 +168,7 @@ export const APIKEY_MANAGEMENT_ORG_SUPER_ADMIN = 'c9d0e1f2-a3b4-4c5d-8e6f-7a8b9c
 export const APIKEY_MANAGEMENT_APIKEY_MANAGER = 'd1e2f3a4-b5c6-4d7e-8f90-a1b2c3d4e5f6'
 export const APIKEY_MANAGEMENT_APIKEY_MANAGER_ID = 113
 export const ORG_ID = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+export const ORG_ID_CREDIT_AUTO_TOP_UP = 'b8c9d0e1-f2a3-4b4c-9d5e-6f7a8b9c0dc7'
 export const STRIPE_INFO_CUSTOMER_ID = 'cus_Q38uE91NP8Ufqc' // Customer ID for ORG_ID
 export const NON_OWNER_ORG_ID = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'
 export const USER_ID = '6aa76066-55ef-4238-ade6-0b32334a4097'

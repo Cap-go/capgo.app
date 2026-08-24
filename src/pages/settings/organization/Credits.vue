@@ -434,9 +434,9 @@ async function loadAutoTopUpSettings() {
   }
 }
 
-async function persistAutoTopUpSettings(enabled: boolean) {
+async function persistAutoTopUpSettings(enabled: boolean, revertEnabledTo: boolean = !enabled) {
   if (!(await ensureUpdateBillingAccess())) {
-    autoTopUpEnabled.value = !enabled
+    autoTopUpEnabled.value = revertEnabledTo
     return
   }
   const orgId = currentOrganization.value?.gid
@@ -444,7 +444,7 @@ async function persistAutoTopUpSettings(enabled: boolean) {
     return
   if (!isAutoTopUpThresholdValid.value || autoTopUpThreshold.value === null) {
     toast.error(t('credits-auto-top-up-threshold-invalid'))
-    autoTopUpEnabled.value = !enabled
+    autoTopUpEnabled.value = revertEnabledTo
     return
   }
   if (enabled && !autoTopUpHasCard.value) {
@@ -462,7 +462,7 @@ async function persistAutoTopUpSettings(enabled: boolean) {
   }
   catch (error) {
     console.error('Failed to save auto top-up settings', error)
-    autoTopUpEnabled.value = !enabled
+    autoTopUpEnabled.value = revertEnabledTo
     toast.error(t('credits-auto-top-up-save-error'))
   }
   finally {
@@ -479,7 +479,7 @@ async function onAutoTopUpToggle(event: Event) {
 async function onAutoTopUpThresholdBlur() {
   if (!autoTopUpEnabled.value)
     return
-  await persistAutoTopUpSettings(true)
+  await persistAutoTopUpSettings(true, true)
 }
 
 async function openBillingPortalForCard() {

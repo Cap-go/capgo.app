@@ -49,4 +49,24 @@ describe('credit auto top-up decision', () => {
       now,
     })).toBe(false)
   })
+
+  it.concurrent('attempts again after the cooldown window ends', () => {
+    const now = Date.parse('2026-08-24T12:00:00.000Z')
+    expect(shouldAttemptAutoTopUp({
+      enabled: true,
+      availableCredits: 0,
+      threshold: 10,
+      lastAttemptAt: '2026-08-24T10:59:00.000Z',
+      now,
+    })).toBe(true)
+  })
+
+  it.concurrent('attempts when the last attempt timestamp is unparsable', () => {
+    expect(shouldAttemptAutoTopUp({
+      enabled: true,
+      availableCredits: 0,
+      threshold: 10,
+      lastAttemptAt: 'not-a-date',
+    })).toBe(true)
+  })
 })

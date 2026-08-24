@@ -136,12 +136,21 @@ BEGIN
   -- Determine if we need a new record:
   -- 1. No existing record for this cycle (first overage)
   -- 2. Overage amount changed significantly (more than 1%)
-  -- 3. Unpaid credits remain AND the org still has grants to apply
-  --    (including grants added after a partial debit in the same cycle)
+  -- 3. Unpaid credits remain AND a grant row can actually be consumed
+  --    (same predicate as the apply loop: unexpired and not fully consumed)
   v_needs_new_record := v_latest_event_id IS NULL
     OR (v_latest_overage_amount IS NOT NULL
         AND ABS(v_latest_overage_amount - p_overage_amount) / NULLIF(v_latest_overage_amount, 0) > 0.01)
-    OR (v_credits_to_apply > 0 AND v_credits_available > 0);
+    OR (
+      v_credits_to_apply > 0
+      AND EXISTS (
+        SELECT 1
+        FROM public.usage_credit_grants
+        WHERE org_id = p_org_id
+          AND expires_at >= now()
+          AND credits_consumed < credits_total
+      )
+    );
 
   -- Only create new record if needed
   IF v_needs_new_record THEN
@@ -267,6 +276,10 @@ BEGIN
 END;
 $$;
 
+-- Execution profile (service_role RPC from plan-check cron, once per org per run):
+-- Locks public.orgs by primary key (id) FOR UPDATE, then reads public.usage_credit_balances
+-- by org_id. Cardinality is 1 org row plus 0-1 balance row. Not used by RLS.
+-- Balance lookup is an indexed org_id equality; org lock is a PK point lookup.
 CREATE OR REPLACE FUNCTION public.try_claim_credit_auto_top_up(p_org_id uuid)
 RETURNS TABLE(
   claimed boolean,

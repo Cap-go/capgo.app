@@ -17,6 +17,8 @@ export interface AutoTopUpSettings {
   availableCredits: number
 }
 
+// Mirrors try_claim_credit_auto_top_up eligibility (enabled, min $10, balance, 1h cooldown).
+// SQL remains the source of truth for charging; this helper exists for unit tests.
 export function shouldAttemptAutoTopUp(input: {
   enabled: boolean
   availableCredits: number
@@ -100,24 +102,25 @@ async function getDefaultPaymentMethodId(c: Context, customerId: string): Promis
 }
 
 async function getCreditProductIdForCustomer(c: Context, customerId: string): Promise<string> {
+  const loadSoloPlan = async () => {
+    const { data, error } = await supabaseAdmin(c)
+      .from('plans')
+      .select('credit_id')
+      .eq('name', 'Solo')
+      .maybeSingle()
+    if (error)
+      throw error
+    return data ?? null
+  }
+
   const { data: stripeInfo, error: stripeInfoError } = await supabaseAdmin(c)
     .from('stripe_info')
     .select('product_id')
     .eq('customer_id', customerId)
     .maybeSingle()
 
-  if (stripeInfoError || !stripeInfo?.product_id) {
-    return await getFallbackCreditProductId(c, customerId, async () => {
-      const { data, error } = await supabaseAdmin(c)
-        .from('plans')
-        .select('credit_id')
-        .eq('name', 'Solo')
-        .maybeSingle()
-      if (error)
-        throw error
-      return data ?? null
-    })
-  }
+  if (stripeInfoError || !stripeInfo?.product_id)
+    return await getFallbackCreditProductId(c, customerId, loadSoloPlan)
 
   const { data: plan, error: planError } = await supabaseAdmin(c)
     .from('plans')
@@ -125,18 +128,8 @@ async function getCreditProductIdForCustomer(c: Context, customerId: string): Pr
     .eq('stripe_id', stripeInfo.product_id)
     .maybeSingle()
 
-  if (planError || !plan?.credit_id) {
-    return await getFallbackCreditProductId(c, customerId, async () => {
-      const { data, error } = await supabaseAdmin(c)
-        .from('plans')
-        .select('credit_id')
-        .eq('name', 'Solo')
-        .maybeSingle()
-      if (error)
-        throw error
-      return data ?? null
-    })
-  }
+  if (planError || !plan?.credit_id)
+    return await getFallbackCreditProductId(c, customerId, loadSoloPlan)
 
   return plan.credit_id
 }

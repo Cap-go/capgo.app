@@ -745,6 +745,7 @@ app.post('/auto-top-up', middlewareAuth, async (c) => {
       throw simpleError('payment_method_required', 'Add a card before enabling auto top-up')
     if (message === 'stripe_customer_missing')
       throw simpleError('stripe_customer_missing', 'Organization does not have a Stripe customer')
-    throw simpleError('auto_top_up_save_failed', 'Failed to save auto top-up settings', { error })
+    cloudlogErr({ requestId: c.get('requestId'), message: 'auto_top_up_save_failed', orgId: body.orgId, error })
+    throw simpleError('auto_top_up_save_failed', 'Failed to save auto top-up settings')
   }
 })
