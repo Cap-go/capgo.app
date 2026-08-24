@@ -98,13 +98,11 @@ export async function deleteOrganizationInternal(
   await sendEvent(enrichedOptions.apikey, {
     channel: 'organization',
     event: 'Organization Deleted',
-    icon: '🗑️',
     org_id: orgId,
     tracking_version: 2,
     tags: {
       'org-name': orgData.name,
     },
-    notify: false,
   }).catch(() => {})
 
   if (!silent) {

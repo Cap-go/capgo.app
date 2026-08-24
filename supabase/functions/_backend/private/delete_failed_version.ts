@@ -91,7 +91,6 @@ app.delete('/', middlewareKey(), async (c) => {
     event: 'Failed to upload a bundle',
     user_id: version.owner_org,
     groups: { organization: version.owner_org },
-    icon: '💀',
   })
 
   cloudlog({ requestId: c.get('requestId'), message: 'delete version', id: version.id })

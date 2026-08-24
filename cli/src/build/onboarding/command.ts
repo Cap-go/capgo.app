@@ -15,8 +15,13 @@ import { isMacOS, probeGuidedHelper } from './asc-key/helper.js'
 import { ASC_KEY_CHANNEL } from './asc-key/protocol.js'
 import { getPlatformDirFromCapacitorConfig } from '../platform-paths.js'
 import OnboardingShell from './ui/shell.js'
+import { BuilderProjectDiscoveryApp } from './ui/project-discovery.js'
+import type { BuilderProjectDecision } from './ui/project-discovery.js'
 import { checkForCliUpdate, manualUpdateHint, runUpdateAndReexec } from './self-update.js'
 import { resolveSupabaseReplayUrl, startInitReplay } from '../../init/replay.js'
+import { discoverCapacitorProjects, hasCapacitorConfig } from './project-discovery.js'
+import { selectCapacitorProject } from './project-selection.js'
+import type { BuilderProjectPrompts } from './project-selection.js'
 import type { OnboardingResult } from './types.js'
 export interface OnboardingBuilderOptions {
   analytics?: boolean
@@ -37,9 +42,103 @@ export interface OnboardingBuilderOptions {
    * (e.g. re-run the upload) instead of `build init`.
    */
   enableSelfUpdate?: boolean
+  /** Search exact-root package workspaces for a Capacitor app before onboarding. */
+  enableProjectDiscovery?: boolean
 }
 
 type Platform = 'ios' | 'android' | 'appflow'
+
+export function shouldDiscoverBuilderProject(options: OnboardingBuilderOptions): boolean {
+  return options.enableProjectDiscovery === true
+}
+
+export function builderProjectNotFoundMessage(nxDetected: boolean): string {
+  const lines = [
+    "We couldn't find a Capacitor app in this project.",
+    'Run `npx @capgo/cli@latest build init` from your Capacitor app directory or from the root of a supported package-manager workspace.',
+  ]
+  if (nxDetected)
+    lines.push('Nx repositories that do not use package-manager workspaces are not currently supported.')
+  return lines.join('\n')
+}
+
+export function builderProjectTimeoutMessage(): string {
+  return [
+    'Searching for a Capacitor app timed out after 5 seconds.',
+    'Run `npx @capgo/cli@latest build init` from your Capacitor app directory or from the root of a supported package-manager workspace.',
+  ].join('\n')
+}
+
+type BuilderProjectResolution = 'ready' | 'cancelled' | 'not-found'
+
+export async function discoverBuilderProjectFromInvocationRoot(
+  options: OnboardingBuilderOptions,
+  prompts: BuilderProjectPrompts,
+): Promise<BuilderProjectResolution> {
+  if (!shouldDiscoverBuilderProject(options) || hasCapacitorConfig(process.cwd()))
+    return 'ready'
+
+  const discovery = await discoverCapacitorProjects(process.cwd())
+  if (discovery.candidates.length === 0)
+    return 'not-found'
+
+  const selectedProject = await selectCapacitorProject(discovery.candidates, prompts)
+
+  if (!selectedProject)
+    return 'cancelled'
+
+  process.chdir(selectedProject.dir)
+  return 'ready'
+}
+
+interface BuilderProjectInkResolution {
+  resolution: BuilderProjectResolution
+  ink?: ReturnType<typeof render>
+}
+
+async function stopInk(ink: ReturnType<typeof render> | undefined): Promise<void> {
+  if (!ink)
+    return
+  ink.unmount()
+  await ink.waitUntilExit()
+}
+
+async function discoverBuilderProjectWithInk(options: OnboardingBuilderOptions): Promise<BuilderProjectInkResolution> {
+  if (!shouldDiscoverBuilderProject(options) || hasCapacitorConfig(process.cwd()))
+    return { resolution: 'ready' }
+
+  const searchRoot = process.cwd()
+  let resolveDecision!: (decision: BuilderProjectDecision) => void
+  const decisionPromise = new Promise<BuilderProjectDecision>((resolve) => {
+    resolveDecision = resolve
+  })
+  const ink = render(
+    React.createElement(BuilderProjectDiscoveryApp, {
+      searchRoot,
+      onDecision: resolveDecision,
+    }),
+    { alternateScreen: true },
+  )
+  const decision = await decisionPromise
+
+  if (decision.kind === 'selected') {
+    process.chdir(decision.candidate.dir)
+    return { resolution: 'ready', ink }
+  }
+
+  await stopInk(ink)
+  if (decision.kind === 'timed-out') {
+    log.error(builderProjectTimeoutMessage())
+    return { resolution: 'not-found' }
+  }
+  if (decision.kind === 'not-found') {
+    log.error(builderProjectNotFoundMessage(decision.nxDetected))
+    return { resolution: 'not-found' }
+  }
+
+  log.info('Capgo build onboarding cancelled. Re-run `npx @capgo/cli@latest build init` when you are ready.')
+  return { resolution: 'cancelled' }
+}
 
 /**
  * Decide which platform to onboard WITHOUT prompting:
@@ -107,6 +206,14 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
     process.exit(1)
   }
 
+  const projectDiscovery = await discoverBuilderProjectWithInk(options)
+  if (projectDiscovery.resolution !== 'ready') {
+    if (projectDiscovery.resolution === 'not-found')
+      process.exitCode = 1
+    return
+  }
+  const projectDiscoveryInk = projectDiscovery.ink
+
   // Detect app ID and platform directories from capacitor.config.ts
   let appId: string | undefined
   // `iosBundleIdInitial` is the iOS-side default — the top-level
@@ -133,6 +240,7 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
   }
   catch (err) {
     const message = err instanceof Error ? err.message : String(err)
+    await stopInk(projectDiscoveryInk)
     log.error(`Found a Capacitor config but could not load it: ${message}`)
     process.exit(1)
   }
@@ -142,6 +250,7 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
   // fallback) — distinct from the parse-error caught above. Treat both as "not a
   // Capacitor project" and stop plainly.
   if (!extConfig?.config || Object.keys(extConfig.config).length === 0) {
+    await stopInk(projectDiscoveryInk)
     log.error('This does not look like a Capacitor project. Run `capgo build init` from your app root (the folder with capacitor.config.ts, .js, or .json).')
     process.exit(1)
   }
@@ -152,6 +261,7 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
   androidDir = getPlatformDirFromCapacitorConfig(extConfig.config, 'android')
 
   if (!appId) {
+    await stopInk(projectDiscoveryInk)
     log.error('Found a Capacitor config but could not detect the app id. Set "appId" in your capacitor.config.ts and re-run.')
     process.exit(1)
   }
@@ -198,7 +308,6 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
       void trackEvent({
         channel: ASC_KEY_CHANNEL,
         event: 'ASC Key: Helper Untrusted',
-        icon: '🔑',
         apikey: options.apikey,
         tags: { reason: guidedProbe.reason },
       })
@@ -243,8 +352,7 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
   // WHERE the user dropped off regardless of HOW they left (keypress, Ctrl+C,
   // or a fatal error that exits) — none of which run React cleanup reliably.
   let lastStep: string | undefined
-  const { waitUntilExit } = render(
-    React.createElement(OnboardingShell, {
+  const onboardingTree = React.createElement(OnboardingShell, {
       appId,
       // Threaded through to the iOS OnboardingApp so it can use the iOS
       // bundle id (config.appId) for Apple-side operations while keeping
@@ -274,10 +382,11 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
         result = r
       },
       onBeforeExit: finishBuildReplay,
-    }),
-    { alternateScreen: true },
-  )
-  await waitUntilExit()
+  })
+  const ink = projectDiscoveryInk ?? render(onboardingTree, { alternateScreen: true })
+  if (projectDiscoveryInk)
+    projectDiscoveryInk.rerender(onboardingTree)
+  await ink.waitUntilExit()
 
   // The user accepted the self-update offer: Ink has restored the primary
   // buffer, so the install + re-exec can take over the terminal (it needs

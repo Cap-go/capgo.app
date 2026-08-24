@@ -5,7 +5,7 @@ import type { Order } from '../utils/types.ts'
 import { z } from 'zod'
 import { Hono } from 'hono/tiny'
 import { safeParseSchema } from '../utils/schema_validation.ts'
-import { toCsv } from '../utils/csv.ts'
+import { sanitizeFilename, toCsv } from '../utils/csv.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -46,38 +46,6 @@ const statsBodyShape = {
 } as const
 
 const statsBodySchema = z.object(statsBodyShape)
-
-function stripControlChars(input: string): string {
-  const out: string[] = []
-  for (let i = 0; i < input.length; i++) {
-    const code = input.codePointAt(i) ?? 0
-    // 0-31 are control chars, 127 is DEL.
-    if ((code >= 0 && code <= 31) || code === 127)
-      continue
-    out.push(input[i])
-  }
-  return out.join('')
-}
-
-function sanitizeFilename(input: string | undefined, extension: 'csv' | 'json'): string | undefined {
-  if (!input)
-    return undefined
-
-  const trimmed = input.trim()
-  if (!trimmed)
-    return undefined
-
-  // Strip path separators and control characters.
-  const safe = stripControlChars(trimmed)
-    .replace(/[\\/]/g, '_')
-    .replace(/\s+/g, ' ')
-    .slice(0, 180)
-
-  const ext = `.${extension}`
-  if (safe.toLowerCase().endsWith(ext))
-    return safe
-  return `${safe}${ext}`
-}
 
 const exportSchema = z.object({
   ...statsBodyShape,

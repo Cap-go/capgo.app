@@ -5,7 +5,6 @@
     "jsr:@std/semver@1.0.8": "1.0.8",
     "npm:@cloudflare/workers-types@4.20260526.1": "4.20260526.1",
     "npm:@hono/standard-validator@~0.2.2": "0.2.2_@standard-schema+spec@1.1.0_hono@4.12.23",
-    "npm:@logsnag/node@1.0.1": "1.0.1",
     "npm:@standard-schema/spec@^1.1.0": "1.1.0",
     "npm:@supabase/supabase-js@2.106.2": "2.106.2",
     "npm:@types/pg@*": "8.20.0",
@@ -38,9 +37,6 @@
         "@standard-schema/spec",
         "hono"
       ]
-    },
-    "@logsnag/node@1.0.1": {
-      "integrity": "sha512-JW2S1KN91XyOb0oG2PblboZ1Ys4mkOSMn83GDYjM8CXzcFbkYFMnlFQoEgP0Y5z+1A56hOO+a7uLsvxO5IdUFA=="
     },
     "@standard-schema/spec@1.1.0": {
       "integrity": "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="
@@ -224,7 +220,6 @@
       "jsr:@std/semver@1.0.8",
       "npm:@cloudflare/workers-types@4.20260526.1",
       "npm:@hono/standard-validator@~0.2.2",
-      "npm:@logsnag/node@1.0.1",
       "npm:@standard-schema/spec@^1.1.0",
       "npm:@supabase/supabase-js@2.106.2",
       "npm:@types/pg@8.20.0",

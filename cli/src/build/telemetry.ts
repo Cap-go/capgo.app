@@ -52,12 +52,6 @@ const EVENT_NAME_BY_PHASE: Record<BuilderUploadPhase, string> = {
   failed: 'Builder Upload Failed',
 }
 
-const ICON_BY_PHASE: Record<BuilderUploadPhase, string> = {
-  started: '⬆️',
-  succeeded: '📦',
-  failed: '🚫',
-}
-
 export async function trackBuilderUpload(input: TrackBuilderUploadInput): Promise<void> {
   const tags: Record<string, string> = {
     app_id: input.appId,
@@ -77,8 +71,6 @@ export async function trackBuilderUpload(input: TrackBuilderUploadInput): Promis
     await sendEvent(input.apikey, {
       event: EVENT_NAME_BY_PHASE[input.phase],
       channel: 'build-lifecycle',
-      icon: ICON_BY_PHASE[input.phase],
-      notify: false,
       org_id: input.orgId,
       tracking_version: 2,
       tags,

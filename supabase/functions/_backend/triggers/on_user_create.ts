@@ -2,6 +2,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import type { Context } from 'hono'
 import { Hono } from 'hono/tiny'
+import { syncNewUserABTests } from '../utils/ab_tests.ts'
 import { trackBentoEvent } from '../utils/bento.ts'
 import { normalizeBentoEmail, prepareNewUserProvisioning, syncBentoFirstOrgOnUserCreate } from '../utils/bento_first_org.ts'
 import { BRES, middlewareAPISecret, quickError, triggerValidator } from '../utils/hono.ts'
@@ -32,6 +33,7 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'INSERT'), async (c
 
   const registrationMetadata = await getRegistrationMetadata(c, record.id)
   await createApiKey(c, record.id)
+  await syncNewUserABTests(c, normalizeBentoEmail(record.email), record)
   cloudlog({ requestId: c.get('requestId'), message: 'createCustomer stripe' })
   await syncUserPreferenceTags(c, normalizeBentoEmail(record.email), record)
   await syncBentoFirstOrgOnUserCreate(c, record)
@@ -53,13 +55,11 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'INSERT'), async (c
   await sendEventToTracking(c, {
     channel: 'user-register',
     event: !record.created_via_invite ? 'User Joined' : 'User Joined by Invite',
-    icon: '🎉',
     user_id: record.id,
-    notify: false,
   }).catch((error) => {
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'LogSnag.track user-register failed',
+      message: 'User registration tracking failed',
       error,
     })
   })

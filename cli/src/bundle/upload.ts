@@ -39,7 +39,7 @@ import { formatUploadChannels, getChannelsToAssignByChecksum, parseUploadChannel
 type SupabaseType = Awaited<ReturnType<typeof createSupabaseClient>>
 type pmType = ReturnType<typeof getPMAndCommand>
 type localConfigType = Awaited<ReturnType<typeof getLocalConfig>>
-type UploadTargetChannel = Pick<Database['public']['Tables']['channels']['Row'], 'id' | 'public' | 'version' | 'rollout_version'>
+type UploadTargetChannel = Pick<Database['public']['Tables']['channels']['Row'], 'id' | 'public' | 'version' | 'rollout_version' | 'rollout_enabled' | 'rollout_percentage_bps'>
 
 export type { UploadBundleResult }
 export type { UploadReporter, UploadSpinner }
@@ -265,7 +265,6 @@ async function verifyCompatibility(supabase: SupabaseType, pm: pmType, options: 
   void trackEvent({
     channel: 'bundle',
     event: 'Bundle Upload Compatibility Checked',
-    icon: '🧪',
     apikey: options.apikey,
     appId: appid,
     orgId,
@@ -433,6 +432,22 @@ async function getChannelsToAssignAfterChecksumCheck(supabase: SupabaseType, app
   return channelsToAssign
 }
 
+function hasS3UploadConfig(options: OptionsUpload): boolean {
+  return !!(options.s3BucketName || options.s3Endpoint || options.s3Region || options.s3Apikey || options.s3Apisecret || options.s3Port || options.s3SSL)
+}
+
+function hasCompleteS3UploadConfig(options: OptionsUpload): boolean {
+  return !!(options.s3BucketName && options.s3Endpoint && options.s3Region && options.s3Apikey && options.s3Apisecret && options.s3Port)
+}
+
+function shouldUploadFullZip(options: OptionsUpload): boolean {
+  return !options.partialOnly && !options.deltaOnly
+}
+
+function shouldSendAppTooLargeEvent(options: OptionsUpload): boolean {
+  return shouldUploadFullZip(options) || hasCompleteS3UploadConfig(options)
+}
+
 async function prepareBundleFile(path: string, options: OptionsUpload, apikey: string, orgId: string, appid: string, maxUploadLength: number, alertUploadSize: number, publicKeyFromConfig?: string) {
   let ivSessionKey
   let sessionKey
@@ -485,13 +500,11 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
     await sendEvent(apikey, {
       channel: 'app',
       event: 'App encryption v2',
-      icon: '🔑',
       org_id: orgId,
       tracking_version: 2,
       tags: {
         'app-id': appid,
       },
-      notify: false,
     }, options.verbose)
     if (!keyDataV2) {
       const keyFile = readFileSync(privateKey)
@@ -530,31 +543,36 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
     uploadFail(`The bundle size is ${mbSize} Mb, this is greater than the maximum upload length ${mbSizeMax} Mb, please reduce the size of your bundle`)
   }
   else if (zipped?.byteLength > alertUploadSize) {
-    log.warn(`WARNING !!\nThe bundle size is ${mbSize} Mb, this may take a while to download for users\n`)
-    log.info(`Learn how to optimize your assets https://capgo.app/blog/optimise-your-images-for-updates/\n`)
-
-    if (options.verbose) {
-      log.info(`[Verbose] Bundle size details:`)
-      log.info(`  - Actual size: ${mbSize} MB (${zipped?.byteLength} bytes)`)
-      log.info(`  - Alert threshold: ${Math.floor(alertUploadSize / 1024 / 1024)} MB`)
-      log.info(`  - Maximum allowed: ${mbSizeMax} MB`)
-      log.info(`[Verbose] Sending 'App Too Large' event to analytics...`)
+    if (!shouldSendAppTooLargeEvent(options)) {
+      if (options.verbose)
+        log.info(`[Verbose] Skipping 'App Too Large' event (zip is not sent)`)
     }
+    else {
+      log.warn(`WARNING !!\nThe bundle size is ${mbSize} Mb, this may take a while to download for users\n`)
+      log.info(`Learn how to optimize your assets https://capgo.app/blog/optimise-your-images-for-updates/\n`)
 
-    await sendEvent(apikey, {
-      channel: 'app-error',
-      event: 'App Too Large',
-      icon: '🚛',
-      org_id: orgId,
-      tracking_version: 2,
-      tags: {
-        'app-id': appid,
-      },
-      notify: false,
-    }, options.verbose)
+      if (options.verbose) {
+        log.info(`[Verbose] Bundle size details:`)
+        log.info(`  - Actual size: ${mbSize} MB (${zipped?.byteLength} bytes)`)
+        log.info(`  - Alert threshold: ${Math.floor(alertUploadSize / 1024 / 1024)} MB`)
+        log.info(`  - Maximum allowed: ${mbSizeMax} MB`)
+        log.info(`[Verbose] Sending 'App Too Large' event to analytics...`)
+      }
 
-    if (options.verbose)
-      log.info(`[Verbose] Event sent successfully`)
+      await sendEvent(apikey, {
+        channel: 'app-error',
+        event: 'App Too Large',
+        org_id: orgId,
+        tracking_version: 2,
+        tags: {
+          'app-id': appid,
+          'size_mb': mbSize,
+        },
+      }, options.verbose)
+
+      if (options.verbose)
+        log.info(`[Verbose] Event sent successfully`)
+    }
   }
   else if (options.verbose) {
     log.info(`[Verbose] Bundle size OK: ${mbSize} MB (under ${Math.floor(alertUploadSize / 1024 / 1024)} MB alert threshold)`)
@@ -753,14 +771,12 @@ async function uploadBundleToCapgoCloud(apikey: string, supabase: SupabaseType, 
   await sendEvent(apikey, {
     channel: 'performance',
     event: isTus ? 'TUS upload zip performance' : 'Upload zip performance',
-    icon: '🚄',
     org_id: orgId,
     tracking_version: 2,
     tags: {
       'app-id': appid,
       'time': uploadTime,
     },
-    notify: false,
   }, options.verbose)
 
   if (options.verbose)
@@ -936,7 +952,7 @@ async function findUploadTargetChannel(
 ): Promise<UploadTargetChannel | null> {
   const { data, error } = await supabase
     .from('channels')
-    .select('id, public, version, rollout_version')
+    .select('id, public, version, rollout_version, rollout_enabled, rollout_percentage_bps')
     .eq('app_id', appid)
     .eq('name', channel)
     .maybeSingle()
@@ -954,8 +970,10 @@ async function preflightRequiredChannelAssignments(
   channels: string[],
   selfAssign = false,
   rolloutPercentageBps?: number,
+  rolloutAdvance = false,
 ): Promise<Map<string, UploadTargetChannel | null>> {
   const uploadTargetChannels = new Map<string, UploadTargetChannel | null>()
+  const assignsRollout = rolloutPercentageBps != null || rolloutAdvance
 
   for (const channel of new Set(channels)) {
     const targetChannel = await findUploadTargetChannel(supabase, appid, channel)
@@ -966,7 +984,7 @@ async function preflightRequiredChannelAssignments(
       if (!canPromoteTargetChannel)
         uploadFail('Cannot set channel because this API key lacks channel.promote_bundle for the target channel')
 
-      const requiresSettingsUpdate = selfAssign || rolloutPercentageBps != null
+      const requiresSettingsUpdate = selfAssign || assignsRollout
       if (requiresSettingsUpdate) {
         const canUpdateChannelSettings = await hasCliPermission(supabase, apikey, 'channel.update_settings', { appId: appid, channelId: targetChannel.id })
         if (!canUpdateChannelSettings) {
@@ -976,13 +994,17 @@ async function preflightRequiredChannelAssignments(
         }
       }
 
-      if (rolloutPercentageBps != null && !targetChannel.version)
+      if (assignsRollout && !targetChannel.version)
         uploadFail(`Cannot set rollout, channel ${channel} needs a stable bundle before using progressive rollout`)
+      if (rolloutAdvance && targetChannel.rollout_version == null)
+        uploadFail(`Cannot advance rollout, channel ${channel} has no rollout target to promote to stable`)
+      if (rolloutAdvance && rolloutPercentageBps == null && !((targetChannel.rollout_percentage_bps ?? 0) > 0))
+        uploadFail(`Cannot advance rollout, channel ${channel} has no rollout percentage to reuse. Pass --rollout or --rollout-percentage-bps`)
 
       continue
     }
 
-    if (rolloutPercentageBps != null)
+    if (assignsRollout)
       uploadFail(`Cannot set rollout, channel ${channel} must already exist with a stable bundle`)
 
     const canCreateChannel = await hasCliPermission(supabase, apikey, 'app.create_channel', { appId: appid })
@@ -1035,10 +1057,15 @@ async function promoteExistingChannel(
   }
 
   const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${targetChannel.id}`
-  if (targetChannel.public)
+  if (targetChannel.rollout_enabled && targetChannel.rollout_version != null) {
+    log.warn('This channel has an active progressive rollout. Linking this bundle as the stable version resets that rollout, so devices receive the new bundle instead of the previous rollout target.')
+  }
+  else if (targetChannel.public) {
     log.info('Your update is now available in your public channel 🎉')
-  else
+  }
+  else {
     log.info(`Link device to this bundle to try it: ${bundleUrl}`)
+  }
 
   if (displayBundleUrl)
     log.info(`Bundle url: ${bundleUrl}`)
@@ -1099,10 +1126,15 @@ async function setVersionInChannel(
     }
     if (data?.id) {
       const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${data.id}`
-      if (data.public)
+      if (targetChannel.rollout_enabled && targetChannel.rollout_version != null) {
+        log.warn('This channel has an active progressive rollout. Linking this bundle as the stable version resets that rollout, so devices receive the new bundle instead of the previous rollout target.')
+      }
+      else if (data.public) {
         log.info('Your update is now available in your public channel 🎉')
-      else
+      }
+      else {
         log.info(`Link device to this bundle to try it: ${bundleUrl}`)
+      }
       if (displayBundleUrl)
         log.info(`Bundle url: ${bundleUrl}`)
     }
@@ -1178,11 +1210,14 @@ async function setRolloutVersionInChannel(
   rolloutCacheTtlSeconds?: number,
   selfAssign?: boolean,
   cliHost?: { supaHost?: string, supaAnon?: string },
+  promoteCurrentRollout = false,
 ): Promise<boolean> {
   if (!targetChannel)
     uploadFail(`Cannot set rollout, channel ${channel} must already exist with a stable bundle`)
   if (!targetChannel.version)
     uploadFail(`Cannot set rollout, channel ${channel} needs a stable bundle before using progressive rollout`)
+  if (promoteCurrentRollout && targetChannel.rollout_version == null)
+    uploadFail(`Cannot advance rollout, channel ${channel} has no rollout target to promote to stable`)
 
   const versionId = await getVersionIdForChannelUpdate(supabase, apikey, appid, bundle)
   const [canPromote, canUpdateSettings] = await Promise.all([
@@ -1204,6 +1239,7 @@ async function setRolloutVersionInChannel(
       rolloutVersion: bundle,
       rolloutPercentageBps,
       rolloutEnabled: rolloutPercentageBps > 0,
+      ...(promoteCurrentRollout ? { advanceRollout: true } : {}),
       ...(shouldResumeSameRollout ? { rolloutPaused: false } : {}),
       ...(rolloutCacheTtlSeconds != null ? { rolloutCacheTtlSeconds } : {}),
       ...(selfAssign ? { allow_device_self_set: true } : {}),
@@ -1217,7 +1253,10 @@ async function setRolloutVersionInChannel(
   }
 
   const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${targetChannel.id}`
-  log.info(`Set ${appid} channel ${channel} rollout target to @${bundle} (${formatRolloutPercentage(rolloutPercentageBps)})`)
+  if (promoteCurrentRollout)
+    log.info(`Promoted the previous rollout to stable on ${channel} and set @${bundle} as the new rollout target (${formatRolloutPercentage(rolloutPercentageBps)})`)
+  else
+    log.info(`Set ${appid} channel ${channel} rollout target to @${bundle} (${formatRolloutPercentage(rolloutPercentageBps)})`)
   if (displayBundleUrl)
     log.info(`Bundle url: ${bundleUrl}`)
   return true
@@ -1484,7 +1523,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       log.info(`  - IV Session Key: ${preparedBundle.ivSessionKey ? 'present' : 'none'}`)
       log.info(`  - Key ID: ${preparedBundle.keyId || 'none'}`)
     }
-    const shouldCheckChecksum = !options.ignoreChecksumCheck && rolloutPercentageBps == null
+    const shouldCheckChecksum = !options.ignoreChecksumCheck && rolloutPercentageBps == null && !options.rolloutAdvance
     if (shouldCheckChecksum) {
       if (options.verbose)
         log.info(`[Verbose] Checking for duplicate checksum...`)
@@ -1520,7 +1559,6 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     void trackEvent({
       channel: 'bundle',
       event: 'Bundle Upload Blocked',
-      icon: '⛔',
       apikey: options.apikey,
       appId: appid,
       orgId,
@@ -1581,7 +1619,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   }
   const channelAssignmentRequired = channelsToAssign.length > 0
   const uploadTargetChannels = channelAssignmentRequired
-    ? await preflightRequiredChannelAssignments(supabase, apikey, appid, channelsToAssign, !!options.selfAssign, rolloutPercentageBps)
+    ? await preflightRequiredChannelAssignments(supabase, apikey, appid, channelsToAssign, !!options.selfAssign, rolloutPercentageBps, !!options.rolloutAdvance)
     : new Map<string, UploadTargetChannel | null>()
   const versionData = {
     name: bundle,
@@ -1607,13 +1645,11 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     await sendEvent(apikey, {
       channel: 'app',
       event: 'App external',
-      icon: '📤',
       org_id: orgId,
       tracking_version: 2,
       tags: {
         'app-id': appid,
       },
-      notify: false,
     }, options.verbose)
 
     if (options.verbose) {
@@ -1752,7 +1788,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] TUS chunk size: ${Math.floor(options.tusChunkSize / 1024 / 1024)} MB`)
 
-  if (zipped && (s3BucketName || s3Endpoint || s3Region || s3Apikey || s3Apisecret || s3Port || s3SSL)) {
+  if (zipped && hasS3UploadConfig(options)) {
     if (!s3BucketName || !s3Endpoint || !s3Region || !s3Apikey || !s3Apisecret || !s3Port)
       uploadFail('Missing argument, for S3 upload you need to provide a bucket name, endpoint, region, port, API key, and API secret')
 
@@ -1802,7 +1838,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       log.info(`[Verbose] S3 upload complete, external URL: ${versionData.external_url}`)
   }
   else if (zipped) {
-    if (!options.partialOnly && !options.deltaOnly) {
+    if (shouldUploadFullZip(options)) {
       if (options.verbose)
         log.info(`[Verbose] Starting full bundle upload to Capgo Cloud...`)
       await uploadBundleToCapgoCloud(apikey, supabase, appid, bundle, orgId, zipped, options, options.tusChunkSize)
@@ -1926,8 +1962,13 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     const uploadTargetChannel = uploadTargetChannels.has(targetChannel)
       ? uploadTargetChannels.get(targetChannel) ?? null
       : await findUploadTargetChannel(supabase, appid, targetChannel)
-    const targetChannelVersionSet = rolloutPercentageBps != null
-      ? await setRolloutVersionInChannel(supabase, apikey, !!options.bundleUrl, bundle, targetChannel, appid, localConfig, uploadTargetChannel, rolloutPercentageBps, options.rolloutCacheTtlSeconds, options.selfAssign, options)
+    const shouldAssignRollout = options.rolloutAdvance || rolloutPercentageBps != null
+    const previousRolloutPercentageBps = uploadTargetChannel?.rollout_percentage_bps
+    const nextRolloutPercentageBps = rolloutPercentageBps ?? previousRolloutPercentageBps ?? 0
+    if (options.rolloutAdvance && rolloutPercentageBps == null && !((previousRolloutPercentageBps ?? 0) > 0))
+      uploadFail(`Cannot advance rollout, channel ${targetChannel} has no rollout percentage to reuse. Pass --rollout or --rollout-percentage-bps`)
+    const targetChannelVersionSet = shouldAssignRollout
+      ? await setRolloutVersionInChannel(supabase, apikey, !!options.bundleUrl, bundle, targetChannel, appid, localConfig, uploadTargetChannel, nextRolloutPercentageBps, options.rolloutCacheTtlSeconds, options.selfAssign, options, !!options.rolloutAdvance)
       : await setVersionInChannel(supabase, apikey, !!options.bundleUrl, bundle, targetChannel, userId, orgId, appid, localConfig, uploadTargetChannel, channelAssignmentRequired, options.selfAssign, options)
     if (targetChannelVersionSet)
       channelVersionSet.add(targetChannel)
@@ -1959,27 +2000,23 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   await sendEvent(apikey, {
     channel: 'app',
     event: 'App Uploaded',
-    icon: '⏫',
     org_id: orgId,
     tracking_version: 2,
     tags: {
       'app-id': appid,
       'bundle': bundle,
     },
-    notify: false,
   }, options.verbose)
 
   await sendEvent(apikey, {
     channel: 'app',
     event: 'Bundle Uploaded',
-    icon: '⏫',
     org_id: orgId,
     tracking_version: 2,
     tags: {
       'app-id': appid,
       'bundle': bundle,
     },
-    notify: false,
     notifyConsole: true,
   }).catch(() => {})
 
@@ -1993,7 +2030,6 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     void trackEvent({
       channel: 'bundle',
       event: 'Bundle Incompatible',
-      icon: '🚫',
       apikey,
       appId: appid,
       orgId,
@@ -2065,7 +2101,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
  */
 export function checkValidOptions(options: OptionsUpload) {
   const noKey = options.key === false
-  const hasUploadRollout = options.rollout != null || options.rolloutPercentageBps != null
+  const hasUploadRollout = options.rollout != null || options.rolloutPercentageBps != null || options.rolloutAdvance === true
   const forceCrc32 = options.forceCrc32Checksum === true
   const hasEncryptionKey = (options.keyV2 || options.keyDataV2 || existsSync(baseKeyV2))
 
@@ -2117,10 +2153,10 @@ export function checkValidOptions(options: OptionsUpload) {
     uploadFail('Rollout cache TTL seconds must be between 60 and 31536000')
   }
   if (hasUploadRollout && options.dryUpload) {
-    uploadFail('You cannot use --rollout with --dry-upload because dry upload does not update channels')
+    uploadFail('You cannot use --rollout or --rollout-advance with --dry-upload because dry upload does not update channels')
   }
   if (hasUploadRollout && options.deleteLinkedBundleOnUpload) {
-    uploadFail('You cannot use --rollout with --delete-linked-bundle-on-upload because rollout needs the stable channel bundle as fallback')
+    uploadFail('You cannot use --rollout or --rollout-advance with --delete-linked-bundle-on-upload because rollout needs the stable channel bundle as fallback')
   }
   if (forceCrc32 && hasEncryptionKey && !noKey) {
     uploadFail('You cannot use --force-crc32-checksum when encryption is enabled. Remove the flag or disable encryption.')

@@ -1,4 +1,9 @@
+import { env as processEnv } from 'node:process'
+
 const RUNNER_WHITESPACE_RE = /\s+/g
+
+type CliPackageRunner = 'bunx' | 'npx -y' | 'pnpm dlx' | 'yarn dlx'
+type RunnerEnvironment = Record<string, string | undefined>
 
 const allowedRunnerCommands = new Set([
   'bunx',
@@ -9,6 +14,39 @@ const allowedRunnerCommands = new Set([
 
 export function formatRunnerCommand(runner: string, args: string[]): string {
   return `${runner} ${args.join(' ')}`
+}
+
+function detectCliPackageRunner(environment: RunnerEnvironment): CliPackageRunner {
+  const [userAgentPackage = ''] = environment.npm_config_user_agent
+    ?.trim()
+    .toLowerCase()
+    .split(/\s+/, 1) ?? []
+  const [userAgentPackageManager, userAgentVersion] = userAgentPackage.split('/', 2)
+
+  if (userAgentPackageManager === 'bun')
+    return 'bunx'
+  if (userAgentPackageManager === 'pnpm')
+    return 'pnpm dlx'
+  if (userAgentPackageManager === 'yarn') {
+    const yarnMajorVersion = Number.parseInt(userAgentVersion ?? '', 10)
+    return Number.isNaN(yarnMajorVersion) || yarnMajorVersion < 2 ? 'npx -y' : 'yarn dlx'
+  }
+  if (userAgentPackageManager === 'npm')
+    return 'npx -y'
+
+  const execPath = environment.npm_execpath?.toLowerCase() ?? ''
+  if (execPath.includes('pnpm'))
+    return 'pnpm dlx'
+  if (execPath.includes('yarn'))
+    return 'npx -y'
+  if (execPath.includes('bun'))
+    return 'bunx'
+
+  return 'npx -y'
+}
+
+export function getCliLoginCommand(environment: RunnerEnvironment = processEnv): string {
+  return formatRunnerCommand(detectCliPackageRunner(environment), ['@capgo/cli@latest', 'login'])
 }
 
 export function splitRunnerCommand(runner: string): { command: string, args: string[] } {

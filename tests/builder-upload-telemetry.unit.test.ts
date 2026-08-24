@@ -57,8 +57,6 @@ describe('trackBuilderUpload', () => {
     expect(payload).toMatchObject({
       event: 'Builder Upload Started',
       channel: 'build-lifecycle',
-      icon: '⬆️',
-      notify: false,
       org_id: 'org-uuid-1',
       tracking_version: 2,
       tags: {
@@ -89,7 +87,6 @@ describe('trackBuilderUpload', () => {
     const [, payload] = sendEventMock.mock.calls[0]
     expect(payload).toMatchObject({
       event: 'Builder Upload Succeeded',
-      icon: '📦',
       tags: {
         platform: 'android',
         upload_duration_seconds: '43',
@@ -114,7 +111,6 @@ describe('trackBuilderUpload', () => {
     const [, payload] = sendEventMock.mock.calls[0]
     expect(payload).toMatchObject({
       event: 'Builder Upload Failed',
-      icon: '🚫',
       tags: {
         failure_category: 'payload_too_large',
         upload_duration_seconds: '5',

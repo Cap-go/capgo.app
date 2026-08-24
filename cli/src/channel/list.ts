@@ -42,13 +42,11 @@ export async function listChannelsInternal(appId: string, options: OptionsBase, 
   await sendEvent(options.apikey, {
     channel: 'channel',
     event: 'List channel',
-    icon: '✅',
     org_id: orgId,
     tracking_version: 2,
     tags: {
       'app-id': appId,
     },
-    notify: false,
   }).catch(() => {})
 
   if (!silent)

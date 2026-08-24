@@ -5,6 +5,7 @@ import { useDebounceFn } from '@vueuse/core'
 import DOMPurify from 'dompurify'
 import {
   computed,
+  nextTick,
   onMounted,
   onUnmounted,
   ref,
@@ -23,6 +24,7 @@ import plusOutline from '~icons/ion/add-outline'
 import IconSortDown from '~icons/lucide/chevron-down'
 import IconSortUp from '~icons/lucide/chevron-up'
 import IconSort from '~icons/lucide/chevrons-up-down'
+import IconDownload from '~icons/lucide/download'
 import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
 import FilterModal from '~/components/FilterModal.vue'
@@ -41,6 +43,8 @@ interface Props {
   addDisabled?: boolean
   addTooltip?: string
   addButtonTestId?: string
+  exportable?: boolean
+  exportLoading?: boolean
   search?: string
   total: number
   /** Fixed page size used for last-page / next calculations. Prefer this over inferring from the current page length. */
@@ -57,6 +61,8 @@ const props = withDefaults(defineProps<Props>(), {
   autoReload: true,
   mobileFixedPagination: true,
   extraFilterCount: 0,
+  exportable: false,
+  exportLoading: false,
 })
 const emit = defineEmits([
   'add',
@@ -74,11 +80,54 @@ const emit = defineEmits([
   'selectRow',
   'massDelete',
   'clearExtraFilters',
+  'export',
 ])
 const isFilterModalOpen = ref(false)
 const filterOpenButtonRef = ref<HTMLButtonElement | null>(null)
 const filterModalTitleId = `${useId()}-filters-title`
 const addTooltipId = `${useId()}-add-tooltip`
+const exportMenuId = `${useId()}-export-menu`
+const exportMenuOpen = ref(false)
+const exportTriggerRef = ref<HTMLButtonElement | null>(null)
+
+function focusExportTrigger() {
+  if (props.exportLoading)
+    return
+  exportTriggerRef.value?.focus()
+}
+
+function closeExportMenu() {
+  exportMenuOpen.value = false
+  nextTick(focusExportTrigger)
+}
+
+function toggleExportMenu() {
+  if (exportMenuOpen.value)
+    closeExportMenu()
+  else
+    exportMenuOpen.value = true
+}
+
+function onExportFocusOut(event: FocusEvent) {
+  const root = event.currentTarget as HTMLElement | null
+  const next = event.relatedTarget as Node | null
+  if (!root || (next && root.contains(next)))
+    return
+  nextTick(() => {
+    if (!root.contains(document.activeElement))
+      exportMenuOpen.value = false
+  })
+}
+
+function exportTable(format: 'csv' | 'json') {
+  closeExportMenu()
+  emit('export', format)
+}
+
+watch(() => props.exportLoading, (loading, wasLoading) => {
+  if (wasLoading && !loading)
+    nextTick(focusExportTrigger)
+})
 const slots = useSlots()
 const { t } = useI18n()
 const searchVal = ref(props.search ?? '')
@@ -519,6 +568,57 @@ const paginationClass = computed(() => props.mobileFixedPagination
           <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
           <span class="hidden text-sm md:block">{{ t("reload") }}</span>
         </button>
+        <div
+          v-if="exportable"
+          class="d-dropdown mr-2"
+          @focusout="onExportFocusOut"
+          @keydown.escape.prevent="closeExportMenu"
+        >
+          <button
+            ref="exportTriggerRef"
+            type="button"
+            class="d-btn d-btn-sm inline-flex h-full items-center rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-500 shadow-none dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+            :disabled="isLoading || exportLoading"
+            data-test="data-table-export"
+            :aria-label="t('export')"
+            aria-haspopup="true"
+            :aria-expanded="exportMenuOpen"
+            :aria-controls="exportMenuId"
+            @click="toggleExportMenu"
+          >
+            <IconDownload v-if="!exportLoading" class="m-1 md:mr-2" />
+            <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
+            <span class="hidden text-sm md:block">{{ t('export') }}</span>
+          </button>
+          <ul
+            v-show="exportMenuOpen"
+            :id="exportMenuId"
+            class="d-dropdown-content d-menu z-20 mt-1 mr-2 w-40 rounded-md border border-slate-200 bg-white p-1 shadow-lg dark:border-slate-700 dark:bg-slate-900"
+          >
+            <li>
+              <button
+                type="button"
+                class="d-btn d-btn-ghost d-btn-sm w-full justify-start rounded-md px-3 py-2 text-left text-sm font-normal text-slate-700 shadow-none dark:text-slate-200"
+                data-test="data-table-export-csv"
+                :disabled="isLoading || exportLoading"
+                @click="exportTable('csv')"
+              >
+                {{ t('download-csv') }}
+              </button>
+            </li>
+            <li>
+              <button
+                type="button"
+                class="d-btn d-btn-ghost d-btn-sm w-full justify-start rounded-md px-3 py-2 text-left text-sm font-normal text-slate-700 shadow-none dark:text-slate-200"
+                data-test="data-table-export-json"
+                :disabled="isLoading || exportLoading"
+                @click="exportTable('json')"
+              >
+                {{ t('download-json') }}
+              </button>
+            </li>
+          </ul>
+        </div>
         <div v-if="showAdd" class="p-px mr-2 rounded-lg from-cyan-500 to-purple-500 bg-linear-to-r">
           <button
             :data-test="addButtonTestId"

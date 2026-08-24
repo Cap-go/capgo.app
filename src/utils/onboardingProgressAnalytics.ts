@@ -1,9 +1,9 @@
-import { pushEvent } from '~/services/posthog'
+import { sendOnboardingEvent } from '~/services/onboardingTracking'
 
-export const ONBOARDING_ANALYTICS_VERSION = 3
+export const ONBOARDING_ANALYTICS_VERSION = 4
 
 export type OnboardingAnalyticsFlow = 'pre_org' | 'existing_org'
-export type OnboardingAnalyticsStep = 'intent' | 'details' | 'organization' | 'choice' | 'install' | 'setup'
+export type OnboardingAnalyticsStep = 'welcome' | 'intent' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'choice' | 'install' | 'setup'
 export type OnboardingCopyEvent = 'onboarding_ai_instructions_copied' | 'onboarding_cli_command_copied'
 export type OnboardingIntent = 'ota' | 'builder' | 'both' | 'exploring'
 export type OnboardingInteractionEvent
@@ -18,8 +18,14 @@ export type OnboardingInteractionEvent
     | 'onboarding_technical_invite_opened'
     | 'onboarding_technical_invite_succeeded'
 export type OnboardingDetailsEvent
-  = | 'onboarding_app_id_entered'
+  = | 'onboarding_app_creation_failed'
+    | 'onboarding_app_creation_started'
+    | 'onboarding_app_creation_succeeded'
+    | 'onboarding_app_icon_import_selected'
+    | 'onboarding_app_icon_removed'
+    | 'onboarding_app_id_entered'
     | 'onboarding_app_id_help_opened'
+    | 'onboarding_app_id_suggestion_selected'
     | 'onboarding_app_icon_picked'
     | 'onboarding_app_icon_picker_closed_without_selection'
     | 'onboarding_app_icon_picker_open_failed'
@@ -32,11 +38,21 @@ export type OnboardingDetailsEvent
     | 'onboarding_store_import_shown'
     | 'onboarding_store_import_submitted'
     | 'onboarding_store_import_succeeded'
+    | 'onboarding_store_icon_import_failed'
+    | 'onboarding_store_icon_import_hidden'
+    | 'onboarding_store_icon_import_shown'
+    | 'onboarding_store_icon_import_submitted'
+    | 'onboarding_store_icon_import_succeeded'
+    | 'onboarding_store_icon_url_entered'
     | 'onboarding_store_url_entered'
 
 type AnalyticsPrimitive = string | number | boolean
 type AnalyticsProperties = Record<string, AnalyticsPrimitive>
 type CaptureEvent = (name: string, supaHost: string, properties?: AnalyticsProperties) => void
+
+const captureOnboardingEvent: CaptureEvent = (name, _supaHost, properties) => {
+  sendOnboardingEvent(name, properties)
+}
 
 interface OnboardingResumeCandidate {
   lastRunId?: string
@@ -54,14 +70,31 @@ interface CreateOnboardingTelemetryIdentityOptions {
 
 export interface OnboardingStepCompletionProperties {
   appId?: string
+  appName?: string
   intent?: OnboardingIntent
   nextStep?: OnboardingAnalyticsStep
   storeImportUsed?: boolean
 }
 
 export interface OnboardingDetailsEventProperties {
+  app_id_source?: 'generated' | 'manual' | 'store'
+  failure_reason?: 'all_conflicts' | 'request_error'
   field_length?: number
-  icon_source?: 'file' | 'store'
+  has_icon?: boolean
+  icon_source?: 'file' | 'none' | 'store'
+  used_fallback?: boolean
+}
+
+export function resolveOnboardingAppIconSource(options: {
+  canUseStoreImportPreview: boolean
+  hasSelectedIconFile: boolean
+  localIconPreview: string
+}): NonNullable<OnboardingDetailsEventProperties['icon_source']> {
+  if (options.hasSelectedIconFile || options.localIconPreview.startsWith('data:image/'))
+    return 'file'
+  if (options.canUseStoreImportPreview)
+    return 'store'
+  return 'none'
 }
 
 export interface OnboardingInteractionProperties {
@@ -76,16 +109,29 @@ export interface OnboardingCopyEventProperties {
   setup_command: 'builder' | 'ota'
 }
 
-export type OnboardingDetailsField = 'app_id' | 'app_name' | 'store_url'
+export type OnboardingDetailsField = 'app_id' | 'app_name' | 'icon_store_url' | 'store_url'
 
 export function createOnboardingDetailsFieldDebouncer(
-  emit: (name: OnboardingDetailsEvent, properties: OnboardingDetailsEventProperties) => void,
+  emit: (
+    name: OnboardingDetailsEvent,
+    step: OnboardingAnalyticsStep,
+    properties: OnboardingDetailsEventProperties,
+  ) => void,
   delayMs = 1_000,
 ) {
   const timers = new Map<OnboardingDetailsField, ReturnType<typeof setTimeout>>()
-  const pending = new Map<OnboardingDetailsField, { name: OnboardingDetailsEvent, properties: OnboardingDetailsEventProperties }>()
+  const pending = new Map<OnboardingDetailsField, {
+    name: OnboardingDetailsEvent
+    properties: OnboardingDetailsEventProperties
+    step: OnboardingAnalyticsStep
+  }>()
 
-  function schedule(name: OnboardingDetailsEvent, field: OnboardingDetailsField, value: string) {
+  function schedule(
+    name: OnboardingDetailsEvent,
+    field: OnboardingDetailsField,
+    step: OnboardingAnalyticsStep,
+    value: string,
+  ) {
     const activeTimer = timers.get(field)
     if (activeTimer)
       clearTimeout(activeTimer)
@@ -97,10 +143,10 @@ export function createOnboardingDetailsFieldDebouncer(
       return
     }
 
-    const event = { name, properties: { field_length: normalizedValue.length } }
+    const event = { name, step, properties: { field_length: normalizedValue.length } }
     pending.set(field, event)
     timers.set(field, setTimeout(() => {
-      emit(event.name, event.properties)
+      emit(event.name, event.step, event.properties)
       timers.delete(field)
       pending.delete(field)
     }, delayMs))
@@ -110,7 +156,7 @@ export function createOnboardingDetailsFieldDebouncer(
     for (const timer of timers.values())
       clearTimeout(timer)
     for (const event of pending.values())
-      emit(event.name, event.properties)
+      emit(event.name, event.step, event.properties)
     timers.clear()
     pending.clear()
   }
@@ -119,7 +165,7 @@ export function createOnboardingDetailsFieldDebouncer(
 }
 
 export function createOnboardingTelemetryIdentity(options: CreateOnboardingTelemetryIdentityOptions) {
-  const capture = options.capture ?? pushEvent
+  const capture = options.capture ?? captureOnboardingEvent
   const idFactory = options.idFactory ?? (() => crypto.randomUUID())
   const initialAttemptId = idFactory()
   const onboardingRunId = `ir_${idFactory()}`
@@ -196,12 +242,13 @@ interface CreateOnboardingProgressTrackerOptions {
 }
 
 export function createOnboardingProgressTracker(options: CreateOnboardingProgressTrackerOptions) {
-  const capture = options.capture ?? pushEvent
+  const capture = options.capture ?? captureOnboardingEvent
   const now = options.now ?? Date.now
   let activeStep: OnboardingAnalyticsStep | null = null
   let activePreviousStep: OnboardingAnalyticsStep | null = null
   let activeStepViewedAt = 0
   let activeStepCompleted = false
+  let hiddenAt: number | null = null
 
   function sharedProperties(step: OnboardingAnalyticsStep): AnalyticsProperties | null {
     const stepIndex = options.steps.indexOf(step)
@@ -238,11 +285,42 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     activePreviousStep = previousStep ?? null
     activeStepViewedAt = now()
     activeStepCompleted = false
+    hiddenAt = null
 
     if (previousStep)
       properties.previous_step = previousStep
 
     safelyCapture('onboarding_step_viewed', properties)
+  }
+
+  function trackVisibilityChange(visibilityState: 'hidden' | 'visible', occurredAt = now()) {
+    if (!activeStep || activeStep === 'setup') {
+      hiddenAt = null
+      return
+    }
+
+    let hiddenDurationMs: number | null = null
+    if (visibilityState === 'hidden') {
+      if (hiddenAt !== null)
+        return
+      hiddenAt = occurredAt
+    }
+    else {
+      if (hiddenAt === null)
+        return
+      hiddenDurationMs = Math.max(0, Math.floor(occurredAt - hiddenAt))
+      hiddenAt = null
+    }
+
+    const properties = sharedProperties(activeStep)
+    if (!properties)
+      return
+
+    properties.visibility_state = visibilityState
+    if (hiddenDurationMs !== null)
+      properties.hidden_duration_ms = hiddenDurationMs
+
+    safelyCapture('onboarding_visibility_changed', properties)
   }
 
   function completeStep(step: OnboardingAnalyticsStep, completion: OnboardingStepCompletionProperties = {}) {
@@ -262,6 +340,8 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
       properties.next_step = completion.nextStep
     if (completion.appId)
       properties.app_id = completion.appId
+    if (completion.appName)
+      properties.app_name = completion.appName
     if (completion.intent)
       properties.intent = completion.intent
     if (completion.storeImportUsed !== undefined)
@@ -270,12 +350,24 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     safelyCapture('onboarding_step_completed', properties)
   }
 
-  function trackDetailsEvent(name: OnboardingDetailsEvent, details: OnboardingDetailsEventProperties = {}) {
-    const properties = sharedProperties('details')
+  function trackEvent(
+    name: OnboardingDetailsEvent | OnboardingInteractionEvent,
+    step: OnboardingAnalyticsStep,
+    details: OnboardingDetailsEventProperties | OnboardingInteractionProperties,
+  ) {
+    const properties = sharedProperties(step)
     if (!properties)
       return
 
     safelyCapture(name, { ...properties, ...details })
+  }
+
+  function trackDetailsEvent(
+    name: OnboardingDetailsEvent,
+    step: OnboardingAnalyticsStep,
+    details: OnboardingDetailsEventProperties = {},
+  ) {
+    trackEvent(name, step, details)
   }
 
   function trackStepEvent(
@@ -283,11 +375,7 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     step: OnboardingAnalyticsStep,
     details: OnboardingInteractionProperties = {},
   ) {
-    const properties = sharedProperties(step)
-    if (!properties)
-      return
-
-    safelyCapture(name, { ...properties, ...details })
+    trackEvent(name, step, details)
   }
 
   function trackCopyEvent(name: OnboardingCopyEvent, details: OnboardingCopyEventProperties) {
@@ -334,6 +422,7 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
     trackDashboardExplored,
     trackDetailsEvent,
     trackStepEvent,
+    trackVisibilityChange,
     viewStep,
   }
 }

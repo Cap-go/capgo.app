@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { serializeUserOnboardingWrite } from '../src/services/userOnboardingWriteQueue'
+import { mergeUserOnboardingProgress, serializeUserOnboardingWrite } from '../src/services/userOnboardingWriteQueue'
 
 function deferred() {
   let resolve!: () => void
@@ -10,6 +10,59 @@ function deferred() {
 }
 
 describe('user onboarding write queue', () => {
+  it.concurrent('preserves server-owned state while replacing the frontend progress snapshot', () => {
+    const current = {
+      abtests: {
+        new_emails: {
+          assigned_at: '2026-08-23T13:15:06.300Z',
+          branch: 'A',
+        },
+      },
+      app_id: 'stale.app.id',
+      status: 'in_progress',
+      bento_events: {
+        'cli:command_invoked': {
+          details: [{ observed_at: '2026-08-22T10:00:00.000Z' }],
+          occurrence_count: 1,
+          sent_at: '2026-08-22T10:00:01.000Z',
+        },
+      },
+      future_server_state: {
+        revision: 1,
+      },
+    }
+    const next = {
+      flow: 'pre_org',
+      status: 'completed',
+      step: 'setup',
+      updated_at: '2026-08-23T13:16:26.987Z',
+    }
+
+    expect(mergeUserOnboardingProgress(next, current)).toEqual({
+      abtests: current.abtests,
+      bento_events: current.bento_events,
+      future_server_state: current.future_server_state,
+      ...next,
+    })
+  })
+
+  it.concurrent.each([
+    ['null', null],
+    ['array', ['not', 'an', 'object'] as string[]],
+    ['string', 'not an object'],
+    ['number', 42],
+    ['boolean', false],
+  ] as const)('treats a malformed %s current onboarding value as empty', (_label, current) => {
+    const next = {
+      flow: 'pre_org',
+      status: 'completed',
+      step: 'setup',
+      updated_at: '2026-08-23T13:16:26.987Z',
+    }
+
+    expect(mergeUserOnboardingProgress(next, current)).toEqual(next)
+  })
+
   it.concurrent('serializes writes for the same user', async () => {
     const firstWrite = deferred()
     const events: string[] = []

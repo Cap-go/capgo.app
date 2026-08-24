@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { deferCommandInvocation, extractCommandContext, flushAnalytics, flushDeferredCommandInvocation, getGlobalAnalyticsProps, setInvocationSource, trackCommandFailed, trackCommandInvoked, trackCommandSucceeded, trackEvent } from '../src/analytics/track.ts'
+import { sendEvent } from '../src/utils.ts'
 
 console.log('🧪 Testing analytics track.ts...\n')
 
@@ -24,7 +25,7 @@ const findEvent = requests => requests.find(r => r.url.endsWith('/private/events
 try {
   // 1. global props shape
   setInvocationSource('cli')
-  const props = getGlobalAnalyticsProps()
+  const props = getGlobalAnalyticsProps({})
   assert.equal(typeof props.cli_version, 'string')
   assert.equal(typeof props.node_version, 'string')
   assert.equal(typeof props.os_platform, 'string')
@@ -34,6 +35,12 @@ try {
   assert.equal(typeof props.is_ci, 'boolean')
   assert.equal(typeof props.is_tty, 'boolean')
   assert.equal(props.invocation_source, 'cli')
+  assert.equal(props.agent_invoker, false)
+  assert.equal(props.agent_identity, undefined)
+
+  const agentProps = getGlobalAnalyticsProps({ CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'session-123' })
+  assert.equal(agentProps.agent_invoker, true)
+  assert.deepEqual(agentProps.agent_identity, { id: 'claude-code', name: 'Claude Code', sessionId: 'session-123' })
 
   // 2. v2 actor-scoped payload (explicit org + app => no context lookup)
   delete process.env.CAPGO_DISABLE_TELEMETRY
@@ -48,7 +55,9 @@ try {
   let body = JSON.parse(req.init.body)
   assert.equal(body.event, 'Test Event')
   assert.equal(body.channel, 'cli-usage')
-  assert.equal(body.notify, false)
+  assert.equal('icon' in body, false)
+  assert.equal('notify' in body, false)
+  assert.equal('parser' in body, false)
   assert.equal(body.org_id, 'org-1')
   assert.equal(body.tracking_version, 2)
   assert.equal(body.user_id, undefined, 'CLI must not send user_id (backend derives it)')
@@ -65,7 +74,37 @@ try {
   await trackEvent({ apikey: 'capgo-key', channel: 'cli-usage', event: 'Nope', orgId: 'o', appId: 'a' })
   await flushAnalytics()
   assert.equal(findEvent(requests), undefined, 'opt-out must suppress events')
+
+  // 4. browser-login console events are functional delivery, not analytics
+  await sendEvent('capgo-key', {
+    channel: 'user-login',
+    event: 'User CLI login',
+    org_id: 'org-1',
+    description: 'cli-login:test-session',
+    tracking_version: 2,
+    notifyConsole: true,
+  })
+  let consoleReq = findEvent(requests)
+  assert.ok(consoleReq, 'telemetry opt-out must preserve functional console broadcasts')
+  body = JSON.parse(consoleReq.init.body)
+  assert.equal(body.description, 'cli-login:test-session')
+  assert.equal(body.notifyConsole, true)
   delete process.env.CAPGO_DISABLE_TELEMETRY
+
+  process.env.CAPGO_DISABLE_POSTHOG = '1'
+  requests = stubFetch()
+  await sendEvent('capgo-key', {
+    channel: 'app',
+    event: 'App Created',
+    icon: '🆕',
+    notifyConsole: true,
+  })
+  consoleReq = findEvent(requests)
+  assert.ok(consoleReq, 'PostHog opt-out must preserve functional console broadcasts')
+  body = JSON.parse(consoleReq.init.body)
+  assert.equal(body.icon, '🆕')
+  assert.equal(body.notifyConsole, true)
+  delete process.env.CAPGO_DISABLE_POSTHOG
 
   // (the no-key early return is exercised in the migration suite; it can't be
   //  simulated reliably here because the dev machine has a saved ~/.capgo)

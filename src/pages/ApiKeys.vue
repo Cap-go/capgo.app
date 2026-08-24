@@ -3,7 +3,7 @@ import type { TableColumn } from '~/components/comp_def'
 import type { Database } from '~/types/supabase.types'
 import { FormKit } from '@formkit/vue'
 import { VueDatePicker } from '@vuepic/vue-datepicker'
-import { useDark } from '@vueuse/core'
+import { useDark, useNow } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { computed, h, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -11,6 +11,7 @@ import { toast } from 'vue-sonner'
 import IconArrowPath from '~icons/heroicons/arrow-path'
 import IconCalendar from '~icons/heroicons/calendar'
 import IconClipboard from '~icons/heroicons/clipboard-document'
+import IconCommandLine from '~icons/heroicons/command-line'
 import IconPencil from '~icons/heroicons/pencil'
 import IconShield from '~icons/heroicons/shield-check'
 import IconTrash from '~icons/heroicons/trash'
@@ -28,6 +29,7 @@ import {
   sortApiKeyRows,
 } from '~/services/apikeys'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { shouldShowCliLoginGuidance } from '~/services/cliLogin'
 import { formatLocalDate } from '~/services/date'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
@@ -107,6 +109,12 @@ const scopePicker = ref<ScopePickerState | null>(null)
 const scopePickerQuery = ref('')
 const supabase = useSupabase()
 const keys = ref<ApiKeyRow[]>([])
+const hasLoadedKeys = ref(false)
+const now = useNow({ interval: 60_000 })
+const cliLoginCommand = 'npx @capgo/cli@latest login'
+const showCliLoginGuidance = computed(() =>
+  hasLoadedKeys.value && shouldShowCliLoginGuidance(keys.value, now.value),
+)
 const organizationStore = useOrganizationStore()
 const currentOrganizationId = computed(() => organizationStore.currentOrganization?.gid ?? null)
 const columns: Ref<TableColumn[]> = ref<TableColumn[]>([])
@@ -898,6 +906,18 @@ async function getKeys(retry = true): Promise<void> {
   }
 
   isLoading.value = false
+  hasLoadedKeys.value = data !== null
+}
+
+async function copyCliLoginCommand() {
+  try {
+    await navigator.clipboard.writeText(cliLoginCommand)
+    toast.success(t('cli-login-guidance-command-copied'))
+  }
+  catch (error) {
+    console.error('Failed to copy CLI login command:', error)
+    toast.error(t('cannot-copy-key'))
+  }
 }
 
 async function fetchRoles() {
@@ -1643,7 +1663,49 @@ getKeys()
     <div class="h-full pb-4 overflow-hidden">
       <div class="w-full h-full px-0 pt-0 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
         <div class="flex flex-col">
-          <div class="flex flex-col overflow-hidden overflow-y-auto bg-white md:mt-5 md:rounded-lg md:border md:shadow-lg border-slate-300 dark:border-slate-900 dark:bg-slate-800">
+          <section
+            v-if="showCliLoginGuidance"
+            data-test="cli-login-guidance"
+            class="relative mt-6 mb-4 overflow-hidden rounded-xl border border-primary-500/20 bg-white px-5 py-5 shadow-sm md:mt-10 md:px-6 dark:border-primary-500/40 dark:bg-slate-800"
+          >
+            <div class="absolute inset-y-0 left-0 w-1 bg-primary-500" />
+
+            <div class="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+              <div class="flex min-w-0 gap-4">
+                <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary-500/10 text-primary-500 ring-1 ring-primary-500/15 dark:bg-primary-500/25 dark:text-primary-300 dark:ring-primary-500/30">
+                  <IconCommandLine class="h-6 w-6" aria-hidden="true" />
+                </div>
+                <div class="min-w-0">
+                  <div class="mb-1.5 flex flex-wrap items-center gap-2">
+                    <h2 class="text-lg font-semibold tracking-tight text-slate-900 dark:text-white">
+                      {{ t('cli-login-guidance-title') }}
+                    </h2>
+                  </div>
+                  <p class="max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
+                    {{ t('cli-login-guidance-description') }}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                class="d-btn flex w-full shrink-0 items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition-colors hover:border-primary-500/40 hover:bg-primary-500/5 focus:ring-2 focus:ring-primary-500/30 focus:ring-offset-2 focus:outline-none lg:w-auto lg:min-w-96 dark:border-slate-600 dark:bg-slate-900 dark:hover:border-primary-500/50 dark:hover:bg-primary-500/10"
+                :aria-label="t('copy-command')"
+                @click="copyCliLoginCommand"
+              >
+                <code class="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{{ cliLoginCommand }}</code>
+                <span class="flex shrink-0 items-center gap-2 text-xs font-semibold text-primary-500 dark:text-primary-300">
+                  <IconClipboard class="h-4 w-4" aria-hidden="true" />
+                  {{ t('copy') }}
+                </span>
+              </button>
+            </div>
+          </section>
+
+          <div
+            class="flex flex-col overflow-hidden overflow-y-auto bg-white md:rounded-lg md:border md:shadow-lg border-slate-300 dark:border-slate-900 dark:bg-slate-800"
+            :class="{ 'md:mt-5': !showCliLoginGuidance }"
+          >
             <DataTable
               v-model:current-page="currentPage"
               add-button-test-id="create-key"

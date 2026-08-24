@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "12.244.2",
+  "version": "12.256.3",
   "private": true,
   "workspaces": [
     "cli",
@@ -316,7 +316,6 @@
     "@formkit/themes": "2.1.0",
     "@formkit/vue": "2.1.0",
     "@hono/standard-validator": "^0.3.0",
-    "@logsnag/node": "1.0.1",
     "@std/semver": "npm:@jsr/std__semver@1.0.8",
     "@supabase/supabase-js": "2.110.8",
     "@vuepic/vue-datepicker": "^14.0.0",

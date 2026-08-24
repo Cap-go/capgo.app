@@ -1,6 +1,5 @@
 import type {
   OnboardingAnalyticsFlow,
-  OnboardingAnalyticsStep,
   OnboardingIntent,
 } from '~/utils/onboardingProgressAnalytics'
 
@@ -8,14 +7,18 @@ export const USER_ONBOARDING_STATUSES = ['in_progress', 'completed', 'abandoned'
 export const USER_ONBOARDING_STEPS = ['intent', 'details', 'organization', 'choice', 'install', 'setup'] as const
 export const USER_ONBOARDING_FLOWS = ['pre_org', 'existing_org'] as const
 export const USER_ONBOARDING_INTENTS = ['ota', 'builder', 'both', 'exploring'] as const
+export const USER_ONBOARDING_DETAILS_STEPS = ['name', 'app_id', 'icon'] as const
 
 export type UserOnboardingStatus = typeof USER_ONBOARDING_STATUSES[number]
+export type UserOnboardingStep = typeof USER_ONBOARDING_STEPS[number]
+export type UserOnboardingDetailsStep = typeof USER_ONBOARDING_DETAILS_STEPS[number]
 
 export interface UserOnboardingProgress {
   status: UserOnboardingStatus
-  step: OnboardingAnalyticsStep
+  step: UserOnboardingStep
   flow: OnboardingAnalyticsFlow
   intent?: OnboardingIntent
+  details_step?: UserOnboardingDetailsStep
   app_name?: string
   app_id?: string
   existing_app?: boolean | null
@@ -30,11 +33,32 @@ export interface UserOnboardingProgress {
   completed_at?: string
 }
 
+export const USER_ONBOARDING_PROGRESS_FIELDS = {
+  app_id: true,
+  app_name: true,
+  completed_at: true,
+  details_step: true,
+  estimated_users_index: true,
+  existing_app: true,
+  existing_app_setup: true,
+  flow: true,
+  imported_store_app_id: true,
+  intent: true,
+  last_run_id: true,
+  onboarding_attempt_id: true,
+  org_name: true,
+  status: true,
+  step: true,
+  store_url: true,
+  updated_at: true,
+} as const satisfies Record<keyof UserOnboardingProgress, true>
+
 export interface UserOnboardingProgressInput {
   status: UserOnboardingStatus
-  step: OnboardingAnalyticsStep
+  step: UserOnboardingStep
   flow: OnboardingAnalyticsFlow
   intent?: OnboardingIntent | null
+  detailsStep?: UserOnboardingDetailsStep
   appName?: string
   appId?: string
   existingApp?: boolean | null
@@ -118,6 +142,9 @@ function applyOptionalUserOnboardingFields(
   if (isOneOf(raw.intent, USER_ONBOARDING_INTENTS))
     progress.intent = raw.intent
 
+  if (isOneOf(raw.details_step, USER_ONBOARDING_DETAILS_STEPS))
+    progress.details_step = raw.details_step
+
   const appName = optionalTrimmedString(raw.app_name)
   if (appName)
     progress.app_name = appName
@@ -199,6 +226,9 @@ export function buildUserOnboardingProgress(input: UserOnboardingProgressInput):
   if (input.intent)
     progress.intent = input.intent
 
+  if (input.detailsStep)
+    progress.details_step = input.detailsStep
+
   const appName = optionalTrimmedString(input.appName)
   if (appName)
     progress.app_name = appName
@@ -241,9 +271,9 @@ export function buildUserOnboardingProgress(input: UserOnboardingProgressInput):
 }
 
 export function clampResumableOnboardingStep(
-  step: OnboardingAnalyticsStep,
+  step: UserOnboardingStep,
   flow: OnboardingAnalyticsFlow,
-): OnboardingAnalyticsStep {
+): UserOnboardingStep {
   if (flow === 'pre_org' && (step === 'choice' || step === 'install' || step === 'setup'))
     return 'organization'
   return step
@@ -262,6 +292,7 @@ export function shouldPromptOnboardingResume(
 
   return Boolean(
     progress.intent
+    || (progress.details_step !== undefined && progress.details_step !== 'name')
     || progress.app_name
     || progress.existing_app === true
     || progress.existing_app === false

@@ -64,6 +64,14 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
         return
       }
       await page.locator('[data-test="device-platform-filter"]').waitFor({ state: 'visible' })
+      // Head has OS range filters; base from #2792 only has platform/bundle.
+      const osFilter = page.locator('[data-test="device-os-version-filter"]')
+      try {
+        await osFilter.waitFor({ state: 'visible', timeout: 3000 })
+      }
+      catch {
+        // Keep the platform/bundle modal screenshot on older bases.
+      }
     },
   },
   { slug: 'observe', path: '/app/com.demo.app/observe/updater', auth: true },

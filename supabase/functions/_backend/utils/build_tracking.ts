@@ -84,13 +84,6 @@ const EVENT_NAME_BY_TRANSITION: Record<BuildTransition, string> = {
   timed_out: 'Build Timed Out',
 }
 
-const ICON_BY_TRANSITION: Record<BuildTransition, string> = {
-  started: '⏳',
-  succeeded: '✅',
-  failed: '❌',
-  timed_out: '⏰',
-}
-
 /**
  * Emit the appropriate Build * lifecycle event for a status transition, or no-op when
  * `classifyBuildTransition` returns null (already-terminal previous status, or no change).
@@ -138,8 +131,6 @@ export async function emitBuildTransitionEvent(c: Context, input: EmitBuildTrans
     await sendEventToTracking(c, {
       event: EVENT_NAME_BY_TRANSITION[transition],
       channel: 'build-lifecycle',
-      icon: ICON_BY_TRANSITION[transition],
-      notify: false,
       user_id: input.build.requested_by,
       groups: { organization: input.build.owner_org },
       tags,

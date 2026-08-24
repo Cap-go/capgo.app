@@ -17,6 +17,7 @@ import { hideLoader } from '~/services/loader'
 import { autoAuth, defaultApiHost, hashEmail, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { isCapgoDomainReferrer, isDirectLoginLanding } from '~/utils/capgoReferrer'
+import { safeResetTurnstile } from '~/utils/turnstile'
 
 const route = useRoute('/login')
 const supabase = useSupabase()
@@ -310,11 +311,11 @@ async function login(form: { email: string, password: string }) {
     setErrors('login-account', [error.message], {})
     if (error.code === 'invalid_credentials' || error.message.includes('Invalid login credentials')) {
       turnstileToken.value = ''
-      captchaComponent.value?.reset()
+      safeResetTurnstile(captchaComponent.value)
     }
     if (error.code === 'captcha_failed' || error.message.includes('captcha')) {
       turnstileToken.value = ''
-      captchaComponent.value?.reset()
+      safeResetTurnstile(captchaComponent.value)
       toast.error(t('captcha-fail'))
     }
     else {
@@ -500,7 +501,7 @@ async function handleSsoLogin() {
     if (error) {
       console.error('SSO login error', error)
       turnstileToken.value = ''
-      captchaComponent.value?.reset()
+      safeResetTurnstile(captchaComponent.value)
       if (error.message.includes('captcha')) {
         toast.error(t('captcha-fail'))
       }
@@ -518,7 +519,7 @@ async function handleSsoLogin() {
   catch (err) {
     console.error('SSO login error', err)
     turnstileToken.value = ''
-    captchaComponent.value?.reset()
+    safeResetTurnstile(captchaComponent.value)
     toast.error(t('invalid-auth'))
     isLoading.value = false
   }

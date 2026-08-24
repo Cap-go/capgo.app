@@ -59,14 +59,52 @@ export function resolveCapacitorConfigTargetPath(value: string | undefined, init
   return target
 }
 
-async function loadConfigTarget(filePath: string): Promise<CapacitorConfig> {
-  if (extname(filePath) === '.json')
+function isTypeScriptCompiler(value: unknown): value is typeof import('typescript') {
+  if (value === null || typeof value !== 'object')
+    return false
+  const candidate = value as { transpileModule?: unknown, ModuleKind?: { CommonJS?: unknown } }
+  return typeof candidate.transpileModule === 'function'
+    && typeof candidate.ModuleKind?.CommonJS === 'number'
+}
+
+export async function loadConfigTarget(filePath: string): Promise<CapacitorConfig> {
+  const extension = extname(filePath)
+  if (extension === '.json')
     return JSON.parse(await readFile(filePath, 'utf8')) as CapacitorConfig
 
   // Mirror Capacitor's own `capacitor.config.js` loader, which simply `require()`s the file.
-  const configModule = extname(filePath) === '.js'
-    ? (createRequire(filePath)(filePath) as Record<string, unknown>)
-    : requireTS(createRequire(filePath)('typescript'), filePath)
+  const targetRequire = createRequire(filePath)
+  if (extension === '.js') {
+    const configModule = targetRequire(filePath) as Record<string, unknown>
+    const exportedConfig = configModule.default ?? configModule
+    return (typeof exportedConfig === 'function' ? await exportedConfig() : await exportedConfig) as CapacitorConfig
+  }
+
+  let projectTypeScript: unknown
+  try {
+    projectTypeScript = targetRequire('typescript')
+  }
+  catch {
+    projectTypeScript = undefined
+  }
+  // Bun can resolve unrelated global cache entries from createRequire(). Only
+  // accept a project compiler when it exposes the API Capacitor's loader uses.
+  // The published CLI ships TypeScript as a runtime dependency for the fallback.
+  let cliTypeScript: unknown
+  if (!isTypeScriptCompiler(projectTypeScript)) {
+    try {
+      cliTypeScript = createRequire(import.meta.url)('typescript')
+    }
+    catch {
+      cliTypeScript = undefined
+    }
+  }
+  const typescript = isTypeScriptCompiler(projectTypeScript)
+    ? projectTypeScript
+    : cliTypeScript
+  if (!isTypeScriptCompiler(typescript))
+    throw new Error('Could not load a usable TypeScript compiler for the Capacitor config')
+  const configModule = requireTS(typescript, filePath)
   const exportedConfig = configModule.default ?? configModule
   return (typeof exportedConfig === 'function' ? await exportedConfig() : await exportedConfig) as CapacitorConfig
 }

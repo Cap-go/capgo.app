@@ -89,6 +89,7 @@ export function shouldSuppressPostHogExceptionEvent(event: PostHogEventLike): bo
 
 function isSuppressibleNoiseErrorMessage(message: string | undefined): boolean {
   return isStaleAssetErrorMessage(message)
+    || isComponentResolutionErrorMessage(message)
     || isKnownCrawlerNoiseErrorMessage(message)
     || isTransientNetworkErrorMessage(message)
 }

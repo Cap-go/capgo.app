@@ -9,7 +9,7 @@ import IconLoader from '~icons/lucide/loader-2'
 import TechnicalTeammateInviteCard from '~/components/dashboard/TechnicalTeammateInviteCard.vue'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { pushEvent } from '~/services/posthog'
+import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -89,12 +89,10 @@ function setLog() {
       sendEvent({
         channel: 'onboarding-v2',
         event: `onboarding-step-${stepToName(step.value)}`,
-        icon: '👶',
         org_id: orgId,
         tracking_version: 2,
-        notify: false,
       }).catch()
-      pushEvent(`user:onboarding-step-${stepToName(step.value)}`, config.supaHost, { org_id: orgId })
+      sendOnboardingEvent(`user:onboarding-step-${stepToName(step.value)}`, { org_id: orgId })
     }
   }
   if (step.value === 2) {
@@ -129,12 +127,10 @@ function onTechnicalInviteOpened() {
     sendEvent({
       channel: 'onboarding-v2',
       event: `onboarding-alternative-send-invite`,
-      icon: '👶',
       org_id: orgId,
       tracking_version: 2,
-      notify: false,
     }).catch()
-    pushEvent(`user:onboarding-alternative-send-invite`, config.supaHost, { org_id: orgId })
+    sendOnboardingEvent(`user:onboarding-alternative-send-invite`, { org_id: orgId })
   }
 }
 
@@ -159,12 +155,10 @@ async function createDemoApp() {
     sendEvent({
       channel: 'onboarding-v2',
       event: 'onboarding-create-demo-app',
-      icon: '👶',
       org_id: orgId,
       tracking_version: 2,
-      notify: false,
     }).catch()
-    pushEvent('user:onboarding-create-demo-app', config.supaHost, { org_id: orgId })
+    sendOnboardingEvent('user:onboarding-create-demo-app', { org_id: orgId })
 
     const { data, error } = await invokeCapgoApi('app/demo', {
       method: 'POST',

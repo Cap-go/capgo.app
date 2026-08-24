@@ -1,0 +1,10 @@
+{
+  "new_emails": {
+    "audience": "self_signup",
+    "branch_a_percentage": 50,
+    "branches": {
+      "A": { "bento_tag": "ab:new_emails" },
+      "B": { "bento_tag": "ab:no_new_emails" }
+    }
+  }
+}

@@ -1,8 +1,72 @@
-import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+// @vitest-environment happy-dom
 
-const onboardingSource = readFileSync(new URL('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
-const sidebarSource = readFileSync(new URL('../src/components/Sidebar.vue', import.meta.url), 'utf8')
+import { readFileSync } from 'node:fs'
+import { URL as NodeUrl } from 'node:url'
+import { describe, expect, it, vi } from 'vitest'
+import { createApp } from 'vue'
+import AppOnboardingFlow from '../src/components/dashboard/AppOnboardingFlow.vue'
+
+const writerMocks = vi.hoisted(() => ({
+  main: {
+    auth: { id: 'user-bento-retry' },
+    authGeneration: 1,
+    isAdmin: false,
+    plans: [],
+    user: {
+      id: 'user-bento-retry',
+      image_url: 'avatar.png',
+      onboarding: {},
+    },
+  },
+  refreshUser: vi.fn(),
+  replaceUserOnboardingIfUnchanged: vi.fn(),
+}))
+
+vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ query: {} }),
+  useRouter: () => ({ push: vi.fn() }),
+}))
+vi.mock('vue-sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
+vi.mock('~/services/onboardingTracking', () => ({ sendOnboardingEvent: vi.fn() }))
+vi.mock('~/services/supabase', () => ({
+  getLocalConfig: () => ({ supaHost: 'https://sb.capgo.app', supaKey: 'anon-key' }),
+  isLocal: () => false,
+  useSupabase: () => {
+    const query = {
+      eq: () => query,
+      maybeSingle: writerMocks.refreshUser,
+      select: () => query,
+    }
+    return { from: () => query }
+  },
+}))
+vi.mock('~/services/userOnboardingWriteQueue', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/services/userOnboardingWriteQueue')>()
+  return {
+    ...actual,
+    replaceUserOnboardingIfUnchanged: writerMocks.replaceUserOnboardingIfUnchanged,
+  }
+})
+vi.mock('~/stores/dashboardApps', () => ({ useDashboardAppsStore: () => ({ upsertApp: vi.fn() }) }))
+vi.mock('~/stores/dialogv2', () => ({
+  useDialogV2Store: () => ({
+    lastButtonRole: null,
+    onDialogDismiss: vi.fn(async () => undefined),
+    openDialog: vi.fn(),
+  }),
+}))
+vi.mock('~/stores/main', () => ({ useMainStore: () => writerMocks.main }))
+vi.mock('~/stores/organization', () => ({
+  useOrganizationStore: () => ({
+    currentOrganization: null,
+    organizations: [],
+    updateAppOnboarding: vi.fn(),
+  }),
+}))
+
+const onboardingSource = readFileSync(new NodeUrl('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
+const sidebarSource = readFileSync(new NodeUrl('../src/components/Sidebar.vue', import.meta.url), 'utf8')
 
 function sourceBetween(start: string, end: string) {
   const startIndex = onboardingSource.indexOf(start)
@@ -24,19 +88,145 @@ function expectSourceOrder(source: string, markers: string[]) {
 }
 
 describe('app onboarding progress analytics integration', () => {
+  it.concurrent('forwards document visibility changes and removes the listener on teardown', () => {
+    const visibilityHandler = sourceBetween('function trackOnboardingVisibilityChange()', 'function initializeProgressTracking(')
+    expect(visibilityHandler).toContain('const visibilityChange = { state: document.visibilityState, occurredAt: Date.now() }')
+    expectSourceOrder(visibilityHandler, [
+      'if (!progressTracker)',
+      'if (isHydratingOnboarding.value || onboardingInitialPersistInFlight)',
+      'pendingVisibilityChanges.push(visibilityChange)',
+      'return',
+    ])
+    expect(visibilityHandler).toContain('progressTracker.trackVisibilityChange(visibilityChange.state, visibilityChange.occurredAt)')
+    expect(onboardingSource).toContain(`document.addEventListener('visibilitychange', trackOnboardingVisibilityChange)`)
+    expect(onboardingSource).toContain(`document.removeEventListener('visibilitychange', trackOnboardingVisibilityChange)`)
+
+    const initializer = sourceBetween('function initializeProgressTracking(', 'function completeAndViewStep(')
+    expectSourceOrder(initializer, [
+      'progressTracker.viewStep(initialStep)',
+      'for (const visibilityChange of pendingVisibilityChanges)',
+      'progressTracker.trackVisibilityChange(visibilityChange.state, visibilityChange.occurredAt)',
+      'pendingVisibilityChanges = []',
+    ])
+  })
+
+  it('preserves server-owned state from the refreshed CAS snapshot on retry', async () => {
+    const previousUser = writerMocks.main.user
+    const matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    const initialBentoEvents = {
+      'cli:command_invoked': {
+        details: [{ observed_at: '2026-08-22T10:00:00.000Z' }],
+        occurrence_count: 1,
+        sent_at: '2026-08-22T10:00:01.000Z',
+      },
+    }
+    const refreshedBentoEvents = {
+      'cli:command_invoked': {
+        details: [
+          { observed_at: '2026-08-22T10:00:00.000Z' },
+          { observed_at: '2026-08-22T10:05:00.000Z' },
+        ],
+        occurrence_count: 2,
+        sent_at: '2026-08-22T10:05:01.000Z',
+      },
+    }
+    const initialABTests = {
+      new_emails: {
+        assigned_at: '2026-08-23T13:15:06.300Z',
+        branch: 'A',
+      },
+    }
+    const refreshedABTests = {
+      new_emails: {
+        assigned_at: '2026-08-23T13:15:06.300Z',
+        branch: 'B',
+      },
+    }
+    const initialOnboarding = {
+      abtests: initialABTests,
+      bento_events: initialBentoEvents,
+      future_server_state: { revision: 1 },
+    }
+    const refreshedOnboarding = {
+      abtests: refreshedABTests,
+      bento_events: refreshedBentoEvents,
+      future_server_state: { revision: 2 },
+    }
+    writerMocks.refreshUser.mockReset()
+    writerMocks.replaceUserOnboardingIfUnchanged.mockReset()
+    writerMocks.main.user = {
+      id: 'user-bento-retry',
+      image_url: 'avatar.png',
+      onboarding: initialOnboarding,
+    }
+    writerMocks.refreshUser.mockResolvedValueOnce({
+      data: { ...writerMocks.main.user, onboarding: refreshedOnboarding },
+      error: null,
+    })
+    writerMocks.replaceUserOnboardingIfUnchanged
+      .mockResolvedValueOnce({ data: null, error: null })
+      .mockImplementation(async (_userId, _expectedOnboarding, onboarding) => ({
+        data: { ...writerMocks.main.user, onboarding },
+        error: null,
+      }))
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn(() => ({ matches: false })),
+    })
+    const container = document.createElement('div')
+    const app = createApp(AppOnboardingFlow, { onboarding: true, preOrg: true })
+    app.config.warnHandler = () => undefined
+
+    try {
+      app.mount(container)
+      await vi.waitFor(() => expect(writerMocks.replaceUserOnboardingIfUnchanged).toHaveBeenCalledTimes(2))
+
+      expect(writerMocks.replaceUserOnboardingIfUnchanged.mock.calls[0]?.[2]).toEqual(expect.objectContaining({
+        abtests: initialABTests,
+        bento_events: initialBentoEvents,
+        future_server_state: { revision: 1 },
+      }))
+      expect(writerMocks.replaceUserOnboardingIfUnchanged.mock.calls[1]?.[1]).toEqual(refreshedOnboarding)
+      expect(writerMocks.replaceUserOnboardingIfUnchanged.mock.calls[1]?.[2]).toEqual(expect.objectContaining({
+        abtests: refreshedABTests,
+        bento_events: refreshedBentoEvents,
+        future_server_state: { revision: 2 },
+      }))
+      expect(writerMocks.replaceUserOnboardingIfUnchanged.mock.calls[1]?.[2]?.abtests).not.toEqual(initialABTests)
+      expect(writerMocks.replaceUserOnboardingIfUnchanged.mock.calls[1]?.[2]?.bento_events).not.toEqual(initialBentoEvents)
+    }
+    finally {
+      app.unmount()
+      writerMocks.main.user = previousUser
+      if (matchMediaDescriptor)
+        Object.defineProperty(window, 'matchMedia', matchMediaDescriptor)
+      else
+        Reflect.deleteProperty(window, 'matchMedia')
+    }
+  })
+
   it.concurrent('initializes tracking once the real initial or resumed step is resolved', () => {
-    expect(onboardingSource).toContain(`import { createOnboardingDetailsFieldDebouncer, createOnboardingProgressTracker, createOnboardingTelemetryIdentity } from '~/utils/onboardingProgressAnalytics'`)
+    const analyticsImport = sourceBetween(
+      'import {\n  createOnboardingDetailsFieldDebouncer,',
+      'import { createOnboardingProgressPersistence',
+    )
+    expect(analyticsImport).toContain('createOnboardingProgressTracker,')
+    expect(analyticsImport).toContain('createOnboardingTelemetryIdentity,')
+    expect(analyticsImport).toContain(`} from '~/utils/onboardingProgressAnalytics'`)
 
     const initializer = sourceBetween('function initializeProgressTracking(', 'function completeAndViewStep(')
     expect(initializer).toContain(`flow: props.preOrg ? 'pre_org' : 'existing_org'`)
-    expect(initializer).toContain('const trackedSteps = appOnboardingSteps.value.map(step => step.id)')
+    expect(initializer).toContain(`const initialStep: OnboardingAnalyticsStep = showPreOrgWelcome.value ? 'welcome' : analyticsStepFor(flowStep.value)`)
+    expect(initializer).toContain('const trackedSteps = appOnboardingSteps.value.flatMap<OnboardingAnalyticsStep>')
+    expect(initializer).toContain('return Object.values(APP_DETAILS_ANALYTICS_STEPS)')
+    expect(initializer).toContain(`trackedSteps.unshift('welcome')`)
     expect(initializer).toContain(`if (!props.preOrg && resumed && flowStep.value === 'setup')`)
     expect(initializer).toContain(`trackedSteps.push('setup')`)
     expect(initializer).toContain('steps: trackedSteps')
     expect(initializer).toContain('resumed,')
     expect(initializer).toContain('onboardingAttemptId: onboardingTelemetry.attemptId')
     expect(initializer).toContain('onboardingRunId: onboardingTelemetry.runId')
-    expect(initializer).toContain('progressTracker.viewStep(flowStep.value)')
+    expect(initializer).toContain('progressTracker.viewStep(initialStep)')
     expect(initializer.match(/\.viewStep\(/g)).toHaveLength(1)
 
     const resumeDialog = sourceBetween('async function maybeResumeSavedOnboarding()', 'function whiteCardToggleButtonClass(')
@@ -83,10 +273,21 @@ describe('app onboarding progress analytics integration', () => {
     const resumeLoader = sourceBetween('async function loadResumeApp()', 'async function importStoreMetadata()')
     expect(resumeLoader).not.toContain('initializeProgressTracking')
     expect(resumeLoader).not.toContain('viewStep')
+    expect(resumeLoader).toContain("if (props.preOrg || resumeStep.value === 'setup')")
 
     const mountedFlow = sourceBetween('onMounted(async () => {', 'onBeforeUnmount(() => {')
     expect(onboardingSource).toContain(`import { createOnboardingProgressPersistence, shouldInitializeOnboardingProgressTracking } from '~/utils/onboardingProgressPersistence'`)
     expect(mountedFlow).toContain('let resumedFlow = false')
+    expectSourceOrder(mountedFlow, [
+      'if (props.preOrg)',
+      'if (resumeAppId.value)',
+      'await organizationStore.awaitInitialLoad()',
+      'const resumed = await loadResumeApp()',
+      'resumedFlow = true',
+      'void loadApiKey()',
+      'return',
+      'const resumeResult = await maybeResumeSavedOnboarding()',
+    ])
     expectSourceOrder(mountedFlow, [
       'const resumeResult = await maybeResumeSavedOnboarding()',
       'if (resumeResult === null)',
@@ -146,6 +347,11 @@ describe('app onboarding progress analytics integration', () => {
     expect(writer).toContain(`if (current?.status === 'completed' && status !== 'completed')`)
     expect(writer).toContain('await replaceUserOnboardingIfUnchanged(')
     expectSourceOrder(writer, [
+      'const onboardingWithPreferences = preserveAdminDashboardMinimize(',
+      'const onboarding = mergeUserOnboardingProgress(',
+      'await replaceUserOnboardingIfUnchanged(',
+    ])
+    expectSourceOrder(writer, [
       'if (error) {',
       `console.error('Failed to persist onboarding progress', error)`,
       `return 'retryable_failure'`,
@@ -200,6 +406,8 @@ describe('app onboarding progress analytics integration', () => {
     ])
     expect(mountedFlow).toContain(`if (shouldInitializeProgressTracking)
         initializeProgressTracking(resumedFlow)`)
+    expect(mountedFlow).toContain(`else
+        pendingVisibilityChanges = []`)
 
     const scheduledPersistence = sourceBetween('function schedulePersistOnboardingProgress(', 'async function writeOnboardingProgress(')
     expectSourceOrder(scheduledPersistence, [
@@ -218,13 +426,13 @@ describe('app onboarding progress analytics integration', () => {
   })
 
   it.concurrent('retains the existing intent compatibility event', () => {
-    expect(onboardingSource).toContain(`pushEvent('onboarding_intent_selected', config.supaHost, {`)
+    expect(onboardingSource).toContain(`sendOnboardingEvent('onboarding_intent_selected', {`)
   })
 
   it.concurrent('keeps Maker+ invitations inside the organization progress step', () => {
-    expect(onboardingSource).toContain("createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })")
-    expect(onboardingSource).toContain("trackOrganizationEvent('onboarding_organization_invite_viewed')")
-    expect(onboardingSource).toContain("completeAndViewStep('setup', { appId: createdApp.value.app_id })")
+    expect(onboardingSource).toContain(`createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })`)
+    expect(onboardingSource).toContain(`trackOrganizationEvent('onboarding_organization_invite_viewed')`)
+    expect(onboardingSource).toContain(`completeAndViewStep('setup', { appId: createdApp.value.app_id })`)
   })
 
   it.concurrent('keeps the unload warning scoped to unfinished pre-org onboarding', () => {
@@ -235,13 +443,16 @@ describe('app onboarding progress analytics integration', () => {
 
   it.concurrent('tracks only successful forward transitions with approved context', () => {
     const transitionHelpers = sourceBetween('function completeAndViewStep(', 'function whiteCardToggleButtonClass(')
-    expect(transitionHelpers).toContain('progressTracker?.completeStep(previousStep, {')
-    expect(transitionHelpers).toContain('nextStep,')
-    expect(transitionHelpers).toContain('progressTracker?.viewStep(nextStep, previousStep)')
+    expect(transitionHelpers).toContain('progressTracker?.completeStep(previousAnalyticsStep, {')
+    expect(transitionHelpers).toContain('nextStep: nextAnalyticsStep,')
+    expect(transitionHelpers).toContain('progressTracker?.viewStep(nextAnalyticsStep, previousAnalyticsStep)')
     expect(transitionHelpers).toContain('void persistOnboardingProgress()')
 
     const intentTransition = sourceBetween('function continueFromIntent()', 'function continuePreOrgDetails()')
     expect(intentTransition).toContain(`completeAndViewStep('details', { intent: selectedIntent.value })`)
+
+    const appNameTransition = sourceBetween('function continueFromAppName()', 'function continueFromAppId()')
+    expect(appNameTransition).toContain(`completeAndViewAppDetailsStep('app_id', { appId: generatedAppId.value, appName: appName.value.trim() })`)
 
     const preOrgDetailsTransition = sourceBetween('function continuePreOrgDetails()', 'async function createOrganizationAndApp()')
     expect(preOrgDetailsTransition).toContain(`completeAndViewStep('organization', {`)
@@ -258,9 +469,9 @@ describe('app onboarding progress analytics integration', () => {
   })
 
   it.concurrent('reports back navigation as a new view without completing the abandoned step', () => {
-    const backNavigation = sourceBetween('function viewPreviousStep(', 'function whiteCardToggleButtonClass(')
+    const backNavigation = sourceBetween('function viewPreviousStep(', 'function snapshotOnboardingProgress(')
     expect(backNavigation).not.toContain('completeStep')
-    expect(backNavigation).toContain('progressTracker?.viewStep(nextStep, previousStep)')
+    expect(backNavigation).toContain('progressTracker?.viewStep(nextAnalyticsStep, previousAnalyticsStep)')
     expect(onboardingSource).toContain('@click="viewPreviousStep(\'choice\')"')
     expect(onboardingSource).toContain('@click="viewPreviousStep(\'details\')"')
     expect(onboardingSource).toContain(`props.preOrg ? viewPreviousStep('intent') : router.push('/apps')`)

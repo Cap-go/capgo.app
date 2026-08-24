@@ -3,9 +3,8 @@ import { defaultApiHost, useSupabase } from '~/services/supabase'
 type TagKey = Lowercase<string>
 /** Tag Type */
 type Tags = Record<TagKey, string | number | boolean>
-type Parser = 'markdown' | 'text'
 /**
- * Options for publishing LogSnag events
+ * Options for publishing analytics events
  */
 interface TrackOptions {
   /**
@@ -37,12 +36,6 @@ interface TrackOptions {
    */
   tracking_version?: number
   /**
-   * Event icon (emoji)
-   * must be a single emoji
-   * example: "🎉"
-   */
-  icon?: string
-  /**
    * Event tags
    * example: { username: "mattie" }
    */
@@ -51,14 +44,6 @@ interface TrackOptions {
    * Per-event metadata that must not become PostHog person properties.
    */
   nonPersonTags?: Tags
-  /**
-   * Send push notification
-   */
-  notify?: boolean
-  /**
-   * Parser for description
-   */
-  parser?: Parser
   /**
    * Event timestamp
    */

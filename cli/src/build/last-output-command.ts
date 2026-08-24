@@ -54,7 +54,7 @@ export async function lastOutputCommand(options: LastOutputOptions): Promise<voi
     exit(1)
   }
 
-  void trackEvent({ channel: 'cli-usage', event: 'Build Last Output Viewed', icon: '📄', tags: {} })
+  void trackEvent({ channel: 'cli-usage', event: 'Build Last Output Viewed', tags: {} })
 
   if (options.qr) {
     stdout.write(`${record.qrCodeAscii ?? ''}\n`)

@@ -428,10 +428,8 @@ async function userAbovePlan(c: Context, org: {
     await sendEventToTracking(c, {
       channel: 'usage',
       event: `User need upgrade to ${bestPlanKey}`,
-      icon: '⚠️',
       user_id: orgId,
       groups: { organization: orgId },
-      notify: false,
     }).catch()
   }
 
@@ -459,10 +457,8 @@ async function userIsAtPlanUsage(c: Context, orgId: string, customerId: string |
     await sendEventToTracking(c, {
       channel: 'usage',
       event: `User is at ${alert.threshold}% of plan usage`,
-      icon: '⚠️',
       user_id: orgId,
       groups: { organization: orgId },
-      notify: false,
       tags: {
         metric: alert.metric,
         metric_percent: alert.metricPercent.toString(),
@@ -558,10 +554,8 @@ export async function handleOrgNotificationsAndEvents(c: Context, org: any, orgI
       await sendEventToTracking(c, {
         channel: 'usage',
         event: 'User need onboarding',
-        icon: '🥲',
         user_id: orgId,
         groups: { organization: orgId },
-        notify: false,
       }).catch()
     }
   }

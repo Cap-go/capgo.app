@@ -215,7 +215,6 @@ export async function setAppInternal(appId: string, options: Options, silent = f
     org_id: organizationUid,
     tracking_version: 2,
     tags: { 'app-id': appId },
-    notify: false,
     notifyConsole: true,
   }).catch(() => {})
 

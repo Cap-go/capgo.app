@@ -10,7 +10,7 @@ const saved = { journey_id: 'ij_saved', last_run_id: 'ir_previous' }
 function create(options = {}) {
   const events = []
   const telemetry = createInitTelemetry({
-    capture: async (event, properties, icon, appId) => events.push({ event, properties, icon, appId }),
+    capture: async (event, properties, appId) => events.push({ event, properties, appId }),
     replaySessionId: () => 'init-replay',
     ...options,
   })
@@ -124,27 +124,11 @@ function assertBefore(source, first, second, message) {
 
 {
   const { events, telemetry } = create()
-  await telemetry.recordMilestone('canceled', undefined, '🤷')
-  assert.equal(events[0].icon, '🤷', 'milestones preserve their icon through injected capture')
-}
-
-{
-  const { events, telemetry } = create()
   telemetry.setScope('scoped-app')
   telemetry.setScope()
-  await telemetry.recordMilestone('event-scoped-milestone', undefined, '✅', 'checked')
+  await telemetry.recordMilestone('event-scoped-milestone', undefined, 'checked')
   await telemetry.recordRunEnded('cancelled', 0)
   assert.deepEqual(events.map(event => event.appId), ['checked', 'scoped-app'], 'event scope does not replace the retained lifecycle app')
-}
-
-{
-  const icons = []
-  for (const [outcome, code] of [['completed', 0], ['cancelled', 0], ['failed', 1]]) {
-    const { events, telemetry } = create()
-    await telemetry.recordRunEnded(outcome, code)
-    icons.push(events[0].icon)
-  }
-  assert.deepEqual(icons, ['✅', '🤷', '❌'], 'run endings use their outcome icon')
 }
 
 {
@@ -153,7 +137,7 @@ function assertBefore(source, first, second, message) {
   const markStepDone = command.slice(command.indexOf('function markStepDone'), command.indexOf('\ninterface ResumeResult'))
   const initApp = command.slice(command.indexOf('export async function initApp'))
   const createAppTemplate = command.slice(command.indexOf('async function runCreateAppTemplate'), command.indexOf('\nasync function ensureWorkspaceReadyForInit'))
-  const markInitSnag = command.slice(command.indexOf('async function markInitSnag'), command.indexOf('\nasync function markStep'))
+  const recordInitEvent = command.slice(command.indexOf('async function recordInitEvent'), command.indexOf('\nasync function markStep'))
   const exitAfterFinishingReplay = command.slice(command.indexOf('async function exitAfterFinishingReplay'), command.indexOf('\nconst frameworkSetupGuides'))
   const allExitCalls = [...command.matchAll(/(?<!function )exitAfterFinishingReplay\([^)]*\)/g)]
   const exitCalls = [...command.matchAll(/(?<!function )exitAfterFinishingReplay\('(completed|cancelled|failed)', (0|1)\)/g)]
@@ -177,10 +161,10 @@ function assertBefore(source, first, second, message) {
   assert.match(resume, /catch \(err\) \{[\s\S]*?activeInitTelemetry\?\.clearScope\(\)[\s\S]*?return undefined\n  \}/, 'generic resume fallback clears saved scope before returning to fresh onboarding')
   assert.ok(markStepDone.indexOf('const progress = {') >= 0 && markStepDone.indexOf('mergeInitProgressTelemetry(progress, activeInitTelemetry?.getProgressMetadata())') >= 0, 'checkpoints merge telemetry into the existing operational progress payload')
   assert.ok(markStepDone.includes('formatError(error)'), 'progress reporting formats user-visible errors')
-  assert.ok(markInitSnag.includes('activeInitTelemetry?.setAuth(orgId, apikey)'), 'classic milestones set active authentication')
-  assert.ok(!markInitSnag.includes('setScope('), 'classic milestones do not persist event-only app associations')
-  assert.ok(markInitSnag.includes('activeInitTelemetry.recordMilestone(event, undefined, icon, appId ?? null)'), 'classic milestones use the telemetry context and preserve their app and icon')
-  assert.ok(markInitSnag.includes("return markSnag('onboarding-v2', orgId, apikey, event, appId, icon"), 'classic milestones retain the isolated markSnag fallback')
+  assert.ok(recordInitEvent.includes('activeInitTelemetry?.setAuth(orgId, apikey)'), 'classic milestones set active authentication')
+  assert.ok(!recordInitEvent.includes('setScope('), 'classic milestones do not persist event-only app associations')
+  assert.ok(recordInitEvent.includes('activeInitTelemetry.recordMilestone(event, undefined, appId ?? null)'), 'classic milestones use the telemetry context and preserve their app')
+  assert.ok(recordInitEvent.includes("return sendCliEvent('onboarding-v2', orgId, apikey, event, appId"), 'classic milestones retain the isolated sendCliEvent fallback')
   assert.equal(exitCalls.length, allExitCalls.length, 'every shared exit has an explicit outcome and code')
   assert.ok(exitCalls.every(([, outcome, code]) => outcome === 'cancelled' || (outcome === 'completed' ? code === '0' : code === '1')), 'shared exits use valid outcome/code pairs')
   assert.equal(exitCalls.filter(([, outcome]) => outcome === 'completed').length, 1, 'only final onboarding completion is completed')

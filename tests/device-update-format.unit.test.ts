@@ -6,62 +6,46 @@ import { filterDeviceKeys, parseCustomIdFilter } from '../supabase/functions/_ba
 type DeviceRow = Database['public']['Tables']['devices']['Row']
 
 describe('device update format helpers', () => {
-  it.concurrent('preserves the stored default channel and includes the override channel', () => {
-    const { transformDeviceToUpdateRequest } = useDeviceUpdateFormat()
-    const device: DeviceRow = {
-      app_id: 'lgbt.vibes.application',
-      country_code: null,
-      custom_id: '',
-      default_channel: 'insiders',
-      device_id: '31de6a5e-80a9-4348-9af1-31e1e9562583',
-      id: 1,
-      install_source: null,
-      is_emulator: false,
-      is_prod: true,
-      key_id: null,
-      os_version: '16',
-      platform: 'android',
-      plugin_version: '7.42.3',
-      updated_at: '2026-06-08T14:14:00.000Z',
-      version: null,
-      version_build: '3.1.0',
-      version_name: '3.1.0-insiders.59',
-    }
+  const device: DeviceRow = {
+    app_id: 'lgbt.vibes.application',
+    country_code: null,
+    custom_id: '',
+    default_channel: 'insiders',
+    device_id: '31de6a5e-80a9-4348-9af1-31e1e9562583',
+    id: 1,
+    install_source: null,
+    is_emulator: false,
+    is_prod: true,
+    key_id: null,
+    os_version: '16',
+    platform: 'android',
+    plugin_version: '7.42.3',
+    updated_at: '2026-06-08T14:14:00.000Z',
+    version: null,
+    version_build: '3.1.0',
+    version_name: '3.1.0-insiders.59',
+  }
 
-    expect(transformDeviceToUpdateRequest(device, 'lgbt.vibes.application', device.default_channel ?? '', 'dev')).toMatchObject({
+  it.concurrent('preserves the stored plugin defaultChannel and never sends channel', () => {
+    const { transformDeviceToUpdateRequest } = useDeviceUpdateFormat()
+
+    expect(transformDeviceToUpdateRequest(device, 'lgbt.vibes.application')).toMatchObject({
       app_id: 'lgbt.vibes.application',
       device_id: '31de6a5e-80a9-4348-9af1-31e1e9562583',
       defaultChannel: 'insiders',
-      channel: 'dev',
     })
+    expect(transformDeviceToUpdateRequest(device, 'lgbt.vibes.application')).not.toHaveProperty('channel')
   })
 
-  it.concurrent('omits the override channel when no override is set', () => {
+  it.concurrent('omits defaultChannel when the device did not report one', () => {
     const { transformDeviceToUpdateRequest } = useDeviceUpdateFormat()
-    const device = {
-      app_id: 'lgbt.vibes.application',
-      country_code: null,
-      custom_id: '',
-      default_channel: 'insiders',
-      device_id: '31de6a5e-80a9-4348-9af1-31e1e9562583',
-      install_source: null,
-      id: 1,
-      is_emulator: false,
-      is_prod: true,
-      key_id: null,
-      os_version: '16',
-      platform: 'android',
-      plugin_version: '7.42.3',
-      updated_at: '2026-06-08T14:14:00.000Z',
-      version: null,
-      version_build: '3.1.0',
-      version_name: '3.1.0-insiders.59',
+    const withoutDefault = {
+      ...device,
+      default_channel: null,
     } satisfies DeviceRow
 
-    expect(transformDeviceToUpdateRequest(device, 'lgbt.vibes.application', device.default_channel ?? '')).toMatchObject({
-      defaultChannel: 'insiders',
-    })
-    expect(transformDeviceToUpdateRequest(device, 'lgbt.vibes.application', device.default_channel ?? '')).not.toHaveProperty('channel')
+    expect(transformDeviceToUpdateRequest(withoutDefault, 'lgbt.vibes.application')).not.toHaveProperty('defaultChannel')
+    expect(transformDeviceToUpdateRequest(withoutDefault, 'lgbt.vibes.application')).not.toHaveProperty('channel')
   })
 
   it.concurrent('keeps install_source and country_code in public device responses', () => {

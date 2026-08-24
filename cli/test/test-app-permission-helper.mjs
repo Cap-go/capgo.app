@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { checkAppExistsAndHasPermissionOrgErr } from '../src/api/app.ts'
+import { CliUserError } from '../src/shared/cli-user-error.ts'
+import { shouldCapturePosthogException } from '../src/posthog.ts'
 
 const calls = []
 const supabase = {
@@ -103,6 +105,45 @@ try {
     app_id: 'com.example.app',
     channel_id: 77,
   })
+
+  calls.length = 0
+  fetchCalls.length = 0
+
+  const deniedSupabase = {
+    rpc(name, args) {
+      calls.push({ name, args })
+      if (name === 'cli_check_permission') {
+        return Promise.resolve({ data: false, error: null })
+      }
+      throw new Error(`Unexpected RPC call: ${name}`)
+    },
+  }
+
+  await assert.rejects(
+    () => checkAppExistsAndHasPermissionOrgErr(
+      deniedSupabase,
+      'ck_denied_key',
+      'com.example.app',
+      'app.upload_bundle',
+      true,
+      true,
+    ),
+    (error) => {
+      assert.equal(error instanceof CliUserError, true)
+      assert.equal(
+        error.message,
+        'Insufficient permissions for app. Required RBAC permission for this action: app.upload_bundle.',
+      )
+      assert.deepEqual(error.context, {
+        appId: 'com.example.app',
+        requiredPermissionKey: 'app.upload_bundle',
+      })
+      assert.equal(shouldCapturePosthogException(error), false)
+      return true
+    },
+  )
+
+  assert.deepEqual(calls.map(call => call.name), ['cli_check_permission'])
 
   console.log('app permission helper tests passed')
 }

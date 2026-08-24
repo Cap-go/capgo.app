@@ -12,6 +12,7 @@ interface ConfirmOptions {
 
 interface TextOptions {
   message: string
+  mask?: string
   placeholder?: string
   validate?: (value: string | undefined) => string | undefined
 }
@@ -69,7 +70,7 @@ export function confirm(options: ConfirmOptions): PromptResult<boolean> {
 }
 
 export function text(options: TextOptions): PromptResult<string> {
-  return requestInitText(options.message, options.placeholder, options.validate)
+  return requestInitText(options.message, options.placeholder, options.validate, options.mask)
 }
 
 export function select<T extends string = string>(options: SelectOptions<T>): PromptResult<T> {

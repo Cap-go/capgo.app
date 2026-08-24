@@ -5614,6 +5614,13 @@ BEGIN
       USING ERRCODE = '22023';
   END IF;
 
+  IF TG_OP = 'UPDATE'
+    AND NEW.version IS DISTINCT FROM OLD.version
+    AND NEW.rollout_version IS NOT DISTINCT FROM OLD.rollout_version
+  THEN
+    RETURN NEW;
+  END IF;
+
   v_msg := public.channel_update_package_mismatch(NEW.update_package, NEW.rollout_version, NEW.name);
   IF v_msg IS NOT NULL THEN
     RAISE EXCEPTION '%', v_msg
@@ -9904,6 +9911,45 @@ COMMENT ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid", "appid" cha
 
 
 
+CREATE OR REPLACE FUNCTION "public"."hook_before_user_created"("event" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_email text;
+  v_provider text;
+  v_providers jsonb;
+BEGIN
+  v_email := event->'user'->>'email';
+  v_provider := event->'user'->'app_metadata'->>'provider';
+  v_providers := event->'user'->'app_metadata'->'providers';
+
+  IF COALESCE(event->'user'->>'is_sso_user', '') IN ('true', 't') THEN
+    RETURN '{}'::jsonb;
+  END IF;
+
+  IF public.is_sso_auth_provider(v_provider, v_providers) THEN
+    RETURN '{}'::jsonb;
+  END IF;
+
+  IF public.password_signup_blocked_for_email(v_email) THEN
+    -- Exact GoTrue duplicate-email copy. Do not mention SSO.
+    RETURN jsonb_build_object(
+      'error', jsonb_build_object(
+        'http_code', 422,
+        'message', 'User already registered'
+      )
+    );
+  END IF;
+
+  RETURN '{}'::jsonb;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."hook_before_user_created"("event" "jsonb") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."internal_request_db_user_names"() RETURNS "text"[]
     LANGUAGE "sql" IMMUTABLE
     SET "search_path" TO ''
@@ -10989,7 +11035,7 @@ COMMENT ON FUNCTION "public"."is_platform_admin"("userid" "uuid") IS 'Checks pla
 
 
 
-CREATE OR REPLACE FUNCTION "public"."is_rbac_enabled_globally"() RETURNS boolean
+CREATE OR REPLACE FUNCTION "public"."is_rbac_enabled_globally"() RETURNS 
     LANGUAGE "plpgsql" STABLE
     SET "search_path" TO ''
     AS $$
@@ -11032,6 +11078,31 @@ $$;
 
 
 ALTER FUNCTION "public"."is_recent_email_otp_verified"("user_id" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."is_sso_auth_provider"("p_provider" "text", "p_providers" "jsonb") RETURNS boolean
+    LANGUAGE "sql" IMMUTABLE
+    SET "search_path" TO ''
+    AS $$
+  SELECT
+    COALESCE(p_provider, '') = 'sso'
+    OR COALESCE(p_provider, '') LIKE 'sso:%'
+    OR (
+      jsonb_typeof(COALESCE(p_providers, '[]'::jsonb)) = 'array'
+      AND EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements(COALESCE(p_providers, '[]'::jsonb)) AS elem
+        WHERE jsonb_typeof(elem) = 'string'
+          AND (
+            (elem #>> '{}') = 'sso'
+            OR (elem #>> '{}') LIKE 'sso:%'
+          )
+      )
+    );
+$$;
+
+
+ALTER FUNCTION "public"."is_sso_auth_provider"("p_provider" "text", "p_providers" "jsonb") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."is_storage_exceeded_by_org"("org_id" "uuid") RETURNS boolean
@@ -11752,11 +11823,13 @@ DECLARE
   val record;
   is_different boolean;
 BEGIN
-  IF current_setting('capgo.allow_owner_org_transfer', true) = 'true' THEN
+  IF pg_catalog.current_setting('capgo.allow_owner_org_transfer', true) = 'true' THEN
     RETURN NEW;
   END IF;
 
-  IF auth.uid() IS NULL THEN
+  IF auth.uid() IS NULL
+    AND NULLIF(pg_catalog.btrim(public.get_apikey_header()), '') IS NULL
+  THEN
     RETURN NEW;
   END IF;
 
@@ -11769,9 +11842,22 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  FOR val IN SELECT * FROM json_each_text(row_to_json(NEW))
+  IF public.rbac_check_permission_request(
+    public.rbac_perm_channel_update_settings(),
+    OLD.owner_org,
+    OLD.app_id,
+    OLD.id
+  ) THEN
+    RETURN NEW;
+  END IF;
+
+  FOR val IN SELECT * FROM pg_catalog.json_each_text(pg_catalog.row_to_json(NEW))
   LOOP
-    EXECUTE format('SELECT ($1."%s" is distinct from $2."%s")', val.key, val.key) USING NEW, OLD
+    EXECUTE pg_catalog.format(
+      'SELECT ($1."%s" is distinct from $2."%s")',
+      val.key,
+      val.key
+    ) USING NEW, OLD
     INTO is_different;
 
     IF is_different AND val.key <> 'version' AND val.key <> 'updated_at' THEN
@@ -11785,6 +11871,10 @@ $_$;
 
 
 ALTER FUNCTION "public"."noupdate"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."noupdate"() IS 'Restricts channel updates without RBAC: callers with app.update_settings or channel.update_settings may change fields; others may only change version/updated_at. Skips only when auth.uid() and capgkey are both absent.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."null_migrated_app_version_manifests"("max_batches" integer DEFAULT 1000000, "batch_size" integer DEFAULT 50, "max_runtime_ms" integer DEFAULT 60000) RETURNS "void"
@@ -12000,6 +12090,56 @@ $$;
 
 
 ALTER FUNCTION "public"."parse_step_pattern"("pattern" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."password_signup_blocked_for_email"("p_email" "text") RETURNS boolean
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $_$
+DECLARE
+  v_blocked boolean := false;
+BEGIN
+  IF p_email IS NULL OR btrim(p_email) = '' THEN
+    RETURN false;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'auth'
+      AND table_name = 'users'
+      AND column_name = 'is_sso_user'
+  ) THEN
+    EXECUTE $q$
+      SELECT EXISTS (
+        SELECT 1
+        FROM auth.users AS au
+        WHERE lower(au.email) = lower(btrim($1))
+          AND au.is_sso_user IS TRUE
+      )
+    $q$
+    INTO v_blocked
+    USING p_email;
+    IF v_blocked THEN
+      RETURN true;
+    END IF;
+  END IF;
+
+  RETURN EXISTS (
+    SELECT 1
+    FROM public.sso_providers AS sp
+    WHERE sp.domain = lower(split_part(btrim(p_email), '@', 2))
+      AND sp.status = 'active'
+  );
+END;
+$_$;
+
+
+ALTER FUNCTION "public"."password_signup_blocked_for_email"("p_email" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."password_signup_blocked_for_email"("p_email" "text") IS 'True when password signup must be refused for this email: an SSO auth user already exists, or the domain has an active SSO provider. Used by the before-user-created hook and auth.users insert trigger. Not granted to anon/authenticated so it cannot be used as an existence oracle.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."pg_log"("decision" "text", "input" "jsonb" DEFAULT '{}'::"jsonb") RETURNS "void"
@@ -12398,6 +12538,35 @@ $$;
 
 
 ALTER FUNCTION "public"."prevent_org_id_reuse"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."prevent_password_signup_on_sso"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  IF COALESCE(to_jsonb(NEW)->>'is_sso_user', '') IN ('true', 't') THEN
+    RETURN NEW;
+  END IF;
+
+  IF public.is_sso_auth_provider(
+    NEW.raw_app_meta_data->>'provider',
+    NEW.raw_app_meta_data->'providers'
+  ) THEN
+    RETURN NEW;
+  END IF;
+
+  IF public.password_signup_blocked_for_email(NEW.email) THEN
+    RAISE EXCEPTION 'User already registered'
+      USING ERRCODE = '23505';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."prevent_password_signup_on_sso"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."prevent_role_binding_priority_escalation"() RETURNS "trigger"
@@ -15982,6 +16151,16 @@ DECLARE
   v_rollout_changed boolean;
   v_channel_id bigint;
 BEGIN
+  IF TG_OP = 'UPDATE'
+    AND NEW.version IS DISTINCT FROM OLD.version
+    AND NEW.rollout_version IS NOT DISTINCT FROM OLD.rollout_version
+    AND NEW.rollout_version IS NOT NULL
+  THEN
+    NEW.rollout_version := NULL;
+    NEW.rollout_enabled := false;
+    NEW.rollout_percentage_bps := 0;
+  END IF;
+
   IF TG_OP = 'INSERT' THEN
     v_rollout_changed := NEW.rollout_version IS NOT NULL;
     v_channel_id := NULL::bigint;
@@ -16051,6 +16230,10 @@ $$;
 
 
 ALTER FUNCTION "public"."refresh_channel_rollout_id"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."refresh_channel_rollout_id"() IS 'Rotates rollout_id when the rollout target changes so device assignment caches miss. Setting a new stable bundle without an explicit new rollout target clears leftover rollout so devices receive the new bundle.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."refresh_orgs_has_usage_credits"() RETURNS "void"
@@ -21552,7 +21735,7 @@ COMMENT ON COLUMN "public"."users"."github_username" IS 'Optional GitHub usernam
 
 
 
-COMMENT ON COLUMN "public"."users"."onboarding" IS 'Persisted create-app onboarding wizard progress for resume and admin drop-off. Keys: status, step, flow, intent, app_name, app_id, existing_app, existing_app_setup, store_url, imported_store_app_id, org_name, estimated_users_index, updated_at, completed_at.';
+COMMENT ON COLUMN "public"."users"."onboarding" IS 'Persisted create-app onboarding wizard progress for resume and admin drop-off. Keys: status, step, flow, intent, details_step, app_name, app_id, existing_app, existing_app_setup, store_url, imported_store_app_id, org_name, estimated_users_index, onboarding_attempt_id, last_run_id, updated_at, completed_at.';
 
 
 
@@ -23220,11 +23403,11 @@ CREATE OR REPLACE TRIGGER "record_trial_extension_event_on_stripe_info" AFTER UP
 
 
 
-CREATE OR REPLACE TRIGGER "refresh_app_rollout_channel_count" AFTER INSERT OR DELETE OR UPDATE OF "app_id", "rollout_enabled", "rollout_version", "rollout_percentage_bps", "rollout_paused_at" ON "public"."channels" FOR EACH ROW EXECUTE FUNCTION "public"."refresh_app_rollout_channel_count"();
+CREATE OR REPLACE TRIGGER "refresh_app_rollout_channel_count" AFTER INSERT OR DELETE OR UPDATE OF "app_id", "version", "rollout_enabled", "rollout_version", "rollout_percentage_bps", "rollout_paused_at" ON "public"."channels" FOR EACH ROW EXECUTE FUNCTION "public"."refresh_app_rollout_channel_count"();
 
 
 
-CREATE OR REPLACE TRIGGER "refresh_channel_rollout_id" BEFORE INSERT OR UPDATE OF "rollout_version" ON "public"."channels" FOR EACH ROW EXECUTE FUNCTION "public"."refresh_channel_rollout_id"();
+CREATE OR REPLACE TRIGGER "refresh_channel_rollout_id" BEFORE INSERT OR UPDATE OF "rollout_version", "version" ON "public"."channels" FOR EACH ROW EXECUTE FUNCTION "public"."refresh_channel_rollout_id"();
 
 
 
@@ -24839,6 +25022,7 @@ REVOKE USAGE ON SCHEMA "public" FROM PUBLIC;
 GRANT USAGE ON SCHEMA "public" TO "anon";
 GRANT USAGE ON SCHEMA "public" TO "authenticated";
 GRANT USAGE ON SCHEMA "public" TO "service_role";
+GRANT USAGE ON SCHEMA "public" TO "supabase_auth_admin";
 
 
 
@@ -26174,6 +26358,12 @@ GRANT ALL ON FUNCTION "public"."has_usage_credits_org"("orgid" "uuid", "appid" c
 
 
 
+REVOKE ALL ON FUNCTION "public"."hook_before_user_created"("event" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."hook_before_user_created"("event" "jsonb") TO "service_role";
+GRANT ALL ON FUNCTION "public"."hook_before_user_created"("event" "jsonb") TO "supabase_auth_admin";
+
+
+
 REVOKE ALL ON FUNCTION "public"."internal_request_db_user_names"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."internal_request_db_user_names"() TO "service_role";
 
@@ -26421,6 +26611,12 @@ GRANT ALL ON FUNCTION "public"."is_recent_email_otp_verified"("user_id" "uuid") 
 
 
 
+REVOKE ALL ON FUNCTION "public"."is_sso_auth_provider"("p_provider" "text", "p_providers" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."is_sso_auth_provider"("p_provider" "text", "p_providers" "jsonb") TO "service_role";
+GRANT ALL ON FUNCTION "public"."is_sso_auth_provider"("p_provider" "text", "p_providers" "jsonb") TO "supabase_auth_admin";
+
+
+
 GRANT ALL ON FUNCTION "public"."is_storage_exceeded_by_org"("org_id" "uuid") TO "anon";
 GRANT ALL ON FUNCTION "public"."is_storage_exceeded_by_org"("org_id" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."is_storage_exceeded_by_org"("org_id" "uuid") TO "service_role";
@@ -26560,6 +26756,12 @@ GRANT ALL ON FUNCTION "public"."parse_step_pattern"("pattern" "text") TO "servic
 
 
 
+REVOKE ALL ON FUNCTION "public"."password_signup_blocked_for_email"("p_email" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."password_signup_blocked_for_email"("p_email" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."password_signup_blocked_for_email"("p_email" "text") TO "supabase_auth_admin";
+
+
+
 GRANT ALL ON FUNCTION "public"."pg_buffercache_evict"(integer) TO "postgres";
 GRANT ALL ON FUNCTION "public"."pg_buffercache_evict"(integer) TO "anon";
 GRANT ALL ON FUNCTION "public"."pg_buffercache_evict"(integer) TO "authenticated";
@@ -26593,6 +26795,11 @@ GRANT ALL ON FUNCTION "public"."prevent_last_super_admin_binding_update"() TO "s
 
 REVOKE ALL ON FUNCTION "public"."prevent_org_id_reuse"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."prevent_org_id_reuse"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."prevent_password_signup_on_sso"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."prevent_password_signup_on_sso"() TO "service_role";
 
 
 

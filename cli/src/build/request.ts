@@ -67,6 +67,7 @@ import { uploadSupportLogs } from '../support/support-upload.js'
 import { offerSupportUploadBeforeAi } from '../support/support-upload-prompt.js'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { assertCliPermission, canPromptInteractively, createSupabaseClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, trimTrailingSlashes, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { syncAndroidVersion } from './android-version'
 import { mergeCredentials, MIN_OUTPUT_RETENTION_SECONDS, parseAndroidPlayStoreReleaseStatus, parseAndroidPlayStoreTrack, parseInAppUpdatePriority, parseOptionalBoolean, parseOutputRetentionSeconds } from './credentials'
 import { buildProvisioningMap } from './credentials-command'
 import { withCwd } from './cwd'
@@ -1429,8 +1430,15 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     if (platform === 'ios' && options.syncIosVersion) {
       const syncResult = syncIosMarketingVersion({ path: projectDir })
       log.info(syncResult.changed
-        ? `Synced iOS MARKETING_VERSION to ${syncResult.marketingVersion}`
-        : `iOS MARKETING_VERSION is already ${syncResult.marketingVersion}`)
+        ? `Synced iOS app version to ${syncResult.marketingVersion}`
+        : `iOS app version is already ${syncResult.marketingVersion}`)
+    }
+
+    if (platform === 'android' && options.syncAndroidVersion) {
+      const syncResult = syncAndroidVersion({ path: projectDir })
+      log.info(syncResult.changed
+        ? `Synced Android app version to ${syncResult.packageVersion}`
+        : `Android app version is already ${syncResult.packageVersion}`)
     }
 
     const host = options.supaHost || 'https://api.capgo.app'
@@ -1902,7 +1910,6 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
         await sendEvent(options.apikey, {
           channel: 'native-builder',
           event: 'Prescan run',
-          icon: '🛡️',
           org_id: orgId,
           tracking_version: 2,
           tags: {
@@ -1916,7 +1923,6 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
             'bypassed': String(prescanResult === 'bypassed'),
             'information-only-findings': String(gateInformationOnlyFindings),
           },
-          notify: false,
         }).catch(() => {})
       }
       if (gateDecision === 'block') {
@@ -2024,7 +2030,6 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     await sendEvent(options.apikey, {
       channel: 'native-builder',
       event: 'Build requested',
-      icon: '🏗️',
       org_id: orgId,
       tracking_version: 2,
       tags: {
@@ -2034,7 +2039,6 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
         // with the rest of the journey's events.
         ...(options.builderJourneyId ? { journey_id: options.builderJourneyId } : {}),
       },
-      notify: false,
     }).catch()
 
     // Create temporary directory for zip
@@ -2787,7 +2791,6 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       await sendEvent(options.apikey, {
         channel: 'native-builder',
         event: finalStatus === 'succeeded' ? 'Build succeeded' : 'Build failed',
-        icon: finalStatus === 'succeeded' ? '✅' : '❌',
         org_id: orgId,
         tracking_version: 2,
         tags: {
@@ -2799,7 +2802,6 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
           // outcome with the rest of the journey's events.
           ...(options.builderJourneyId ? { journey_id: options.builderJourneyId } : {}),
         },
-        notify: false,
       }).catch()
 
       return {

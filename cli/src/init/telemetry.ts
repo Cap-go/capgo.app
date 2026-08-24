@@ -10,7 +10,7 @@ export interface InitProgressTelemetry {
 }
 
 export interface InitTelemetryOptions {
-  capture?: (event: string, properties: TelemetryProperties, icon: string, appId?: string) => Promise<void> | void
+  capture?: (event: string, properties: TelemetryProperties, appId?: string) => Promise<void> | void
   enabled?: boolean
   replaySessionId?: () => string | undefined
 }
@@ -64,7 +64,7 @@ export function createInitTelemetry(options: InitTelemetryOptions = {}) {
     }
   }
 
-  async function emit(event: string, extra?: TelemetryProperties, once = false, icon = '✅', eventAppId: string | null = appId ?? null) {
+  async function emit(event: string, extra?: TelemetryProperties, once = false, eventAppId: string | null = appId ?? null) {
     if (!enabled || (once && recorded.has(event)))
       return
     if (once)
@@ -72,10 +72,10 @@ export function createInitTelemetry(options: InitTelemetryOptions = {}) {
     try {
       const eventProperties = properties(extra)
       if (options.capture)
-        await options.capture(event, eventProperties, icon, eventAppId ?? undefined)
+        await options.capture(event, eventProperties, eventAppId ?? undefined)
       else if (auth) {
         const { apikey, orgId } = auth
-        await import('../app/debug').then(({ markSnag }) => markSnag('onboarding-v2', orgId, apikey, event, eventAppId ?? undefined, icon, eventProperties))
+        await import('../app/debug').then(({ sendCliEvent }) => sendCliEvent('onboarding-v2', orgId, apikey, event, eventAppId ?? undefined, eventProperties))
       }
     }
     catch {
@@ -109,7 +109,7 @@ export function createInitTelemetry(options: InitTelemetryOptions = {}) {
       candidate = saved ? { ...saved, savedStep, totalSteps } : { journey_id: `ij_${randomUUID()}`, savedStep, totalSteps }
       return { journey_id: candidate.journey_id, ...(candidate.last_run_id ? { last_run_id: candidate.last_run_id } : {}) }
     },
-    recordMilestone: (event: string, extra?: TelemetryProperties, icon = '✅', eventAppId?: string | null) => emit(event, extra, false, icon, eventAppId),
+    recordMilestone: (event: string, extra?: TelemetryProperties, eventAppId?: string | null) => emit(event, extra, false, eventAppId),
     recordResumeDecision: async (nextChoice: 'continue' | 'restart') => {
       if (!candidate || choice)
         return
@@ -124,7 +124,7 @@ export function createInitTelemetry(options: InitTelemetryOptions = {}) {
       }, true)
     },
     recordResumePromptViewed: () => candidate ? emit('onboarding-resume-prompt-viewed', { ...resumeProperties(), ...(candidate.totalSteps === undefined ? {} : { total_steps: candidate.totalSteps }) }, true) : Promise.resolve(),
-    recordRunEnded: (outcome: 'completed' | 'cancelled' | 'failed', exitCode: number) => emit('onboarding-run-ended', { outcome, exit_code: exitCode }, true, outcome === 'completed' ? '✅' : outcome === 'cancelled' ? '🤷' : '❌'),
+    recordRunEnded: (outcome: 'completed' | 'cancelled' | 'failed', exitCode: number) => emit('onboarding-run-ended', { outcome, exit_code: exitCode }, true),
     recordRunStarted: () => emit('onboarding-run-started', {
       resume_available: Boolean(candidate),
       ...resumeProperties(),

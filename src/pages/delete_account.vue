@@ -14,6 +14,7 @@ import { hideLoader } from '~/services/loader'
 import { useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { useDialogV2Store } from '~/stores/dialogv2'
+import { safeResetTurnstile } from '~/utils/turnstile'
 
 const supabase = useSupabase()
 const dialogStore = useDialogV2Store()
@@ -99,7 +100,7 @@ async function deleteAccount() {
             })
             if (reauthError) {
               confirmCaptchaToken.value = ''
-              confirmCaptchaComponent.value?.reset()
+              safeResetTurnstile(confirmCaptchaComponent.value)
               isLoading.value = false
               if (reauthError.message.includes('captcha'))
                 toast.error(t('captcha-fail'))
@@ -162,7 +163,7 @@ async function deleteAccount() {
             pendingEmail.value = ''
             pendingPassword.value = ''
             confirmCaptchaToken.value = ''
-            confirmCaptchaComponent.value?.reset()
+            safeResetTurnstile(confirmCaptchaComponent.value)
           }
         },
       },
@@ -180,7 +181,7 @@ async function deleteAccount() {
     pendingEmail.value = ''
     pendingPassword.value = ''
     confirmCaptchaToken.value = ''
-    confirmCaptchaComponent.value?.reset()
+    safeResetTurnstile(confirmCaptchaComponent.value)
   }
   return dismissed
 }
@@ -205,7 +206,7 @@ async function submit(form: { email: string, password: string }) {
     console.error('error', error)
     setErrors('delete-account', [error.message], {})
     if (error.message.includes('captcha')) {
-      captchaComponent.value?.reset()
+      safeResetTurnstile(captchaComponent.value)
       toast.error(t('captcha-fail'))
       return
     }
@@ -227,7 +228,7 @@ async function submit(form: { email: string, password: string }) {
     pendingEmail.value = form.email
     pendingPassword.value = form.password
     turnstileToken.value = ''
-    captchaComponent.value?.reset()
+    safeResetTurnstile(captchaComponent.value)
     // delete account
     deleteAccount()
   }

@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(9);
+SELECT plan(10);
 
 SELECT tests.create_supabase_user('onboarding_progress_user', 'onboarding_progress_user@test.local');
 
@@ -70,13 +70,20 @@ SELECT throws_ok(
   'invalid onboarding step is rejected'
 );
 
+SELECT lives_ok(
+  $$UPDATE public.users
+    SET onboarding = jsonb_build_object('pad', repeat('x', 65525))
+    WHERE id = tests.get_supabase_uid('onboarding_progress_user')$$,
+  'onboarding jsonb at the 65536-byte limit is accepted'
+);
+
 SELECT throws_ok(
   $$UPDATE public.users
-    SET onboarding = jsonb_build_object('pad', repeat('x', 9000))
+    SET onboarding = jsonb_build_object('pad', repeat('x', 65526))
     WHERE id = tests.get_supabase_uid('onboarding_progress_user')$$,
   '23514',
   NULL,
-  'oversized onboarding jsonb is rejected'
+  'onboarding jsonb above the 65536-byte limit is rejected'
 );
 
 SELECT throws_ok(

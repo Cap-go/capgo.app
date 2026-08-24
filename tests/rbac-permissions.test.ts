@@ -242,15 +242,7 @@ describe('rbac permission system', () => {
     })
 
     describe('rbac permission checks', () => {
-      beforeEach(async () => {
-        await query(`SELECT set_config('capgo.rbac_enabled', 'true', true)`)
-      })
-
-      afterEach(async () => {
-        await query(`SELECT set_config('capgo.rbac_enabled', 'false', true)`)
-      })
-
-      it('should check permissions via RBAC system when enabled', async () => {
+      it('should check permissions via RBAC system', async () => {
         // The user should have permissions via role_bindings
         const result = await query(`
           SELECT public.rbac_check_permission_direct(

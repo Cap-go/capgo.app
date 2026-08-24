@@ -1,19 +1,20 @@
-import type { TrackOptions } from '@logsnag/node'
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import type { BentoTrackingPayload } from '../utils/tracking.ts'
+import type { BentoTrackingPayload, TrackOptions } from '../utils/tracking.ts'
 import { Hono } from 'hono/tiny'
+import { APP_TOO_LARGE_EVENT, buildAppTooLargeBentoEvent } from '../utils/app_too_large_tracking.ts'
 import { buildBuilderOnboardingBentoEvent, BUILDER_RECOVERY_MILESTONES } from '../utils/builder_onboarding_recovery.ts'
 import { buildBundleCompatibilityBentoEvent, BUNDLE_INCOMPATIBLE_EVENT, isBreakingChangeGatedByChannelStrategy } from '../utils/bundle_compatibility_recovery.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { buildAiInstructionsCopiedBentoEvent, isFrontendPosthogCapturedEvent } from '../utils/onboarding_copy_tracking.ts'
+import { buildAiInstructionsCopiedBentoEvent } from '../utils/onboarding_copy_tracking.ts'
 import { trackPosthogEvent } from '../utils/posthog.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { broadcastCLIEvent } from '../utils/realtime_broadcast.ts'
 import { supabaseWithAuth } from '../utils/supabase.ts'
 import { addAuthenticatedApiKeyIdToTrackingPayload, sendEventToTracking } from '../utils/tracking.ts'
+import { recordUserBentoEvent } from '../utils/user_bento_events.ts'
 import { backgroundTask } from '../utils/utils.ts'
 
 // PostHog event recording whether the org-member incompatibility email was sent
@@ -34,10 +35,15 @@ interface ResolvedTrackingId {
 }
 
 interface TrackEventBody extends TrackOptions {
+  // Older clients may still send these fields. They are discarded for
+  // analytics; icon is read only by the explicit Realtime console path.
+  icon?: string
+  notify?: boolean
   notifyConsole?: boolean
   org_id?: string
+  parser?: 'markdown' | 'text'
   tracking_version?: number | string
-  nonPersonTags?: Record<string, string | number | boolean>
+  nonPersonTags?: Record<string, unknown>
 }
 
 function isTrackingV2(version: unknown) {
@@ -151,7 +157,7 @@ function buildTrackedBody(
   verifiedOrgId: string | undefined,
   requestedUserId: string | undefined,
   trackingUserId: string,
-  trackOptions: Omit<TrackEventBody, 'notifyConsole' | 'org_id' | 'tracking_version'>,
+  trackOptions: TrackOptions,
 ) {
   const trackedTags = trackingV2 && verifiedOrgId
     ? { ...(trackOptions.tags || {}), org_id: verifiedOrgId }
@@ -166,6 +172,7 @@ function buildTrackedBody(
 async function handleNotifyConsole(
   c: Context<MiddlewareKeyVariables>,
   trackedBody: TrackOptions,
+  icon: string | undefined,
   appId: string | undefined,
   verifiedOrgId: string | undefined,
 ) {
@@ -176,7 +183,7 @@ async function handleNotifyConsole(
     event: trackedBody.event,
     channel: trackedBody.channel,
     description: trackedBody.description,
-    icon: trackedBody.icon,
+    icon,
     app_id: appId,
     org_id: verifiedOrgId,
     channel_name: typeof trackedBody.tags?.channel === 'string' ? trackedBody.tags.channel : undefined,
@@ -262,6 +269,35 @@ async function buildBuilderBentoEvent(
     platform: builderPlatform,
     orgName: orgResult.data?.name ?? undefined,
     appName: appResult.data?.name ?? undefined,
+  })
+}
+
+async function buildAppTooLargeTrackedBentoEvent(
+  c: Context<MiddlewareKeyVariables>,
+  supabase: ReturnType<typeof supabaseWithAuth>,
+  onboardingOrgId: string | undefined,
+  appId: string | undefined,
+  trackedBody: TrackOptions,
+) {
+  if (!onboardingOrgId || !appId || trackedBody.event !== APP_TOO_LARGE_EVENT)
+    return undefined
+
+  const [orgResult, appResult] = await Promise.all([
+    supabase.from('orgs').select('id, name').eq('id', onboardingOrgId).single(),
+    supabase.from('apps').select('name').eq('app_id', appId).single(),
+  ])
+  if (orgResult.error || appResult.error) {
+    cloudlog({ requestId: c.get('requestId'), message: 'app too large bento lookup failed; skipping signal', org: orgResult.error, app: appResult.error })
+    return undefined
+  }
+
+  return buildAppTooLargeBentoEvent({
+    event: trackedBody.event,
+    orgId: onboardingOrgId,
+    appId,
+    orgName: orgResult.data?.name ?? undefined,
+    appName: appResult.data?.name ?? undefined,
+    tags: trackedBody.tags,
   })
 }
 
@@ -364,7 +400,15 @@ async function buildBundleIncompatibleBentoEvent(
 
 app.post('/', middlewareAuth(), async (c) => {
   const body = await parseBody<TrackEventBody>(c)
-  const { notifyConsole = false, org_id: _orgId, tracking_version: _trackingVersion, ...trackOptions } = body
+  const {
+    icon,
+    notify: _notify,
+    notifyConsole = false,
+    org_id: _orgId,
+    parser: _parser,
+    tracking_version: _trackingVersion,
+    ...trackOptions
+  } = body
   const trackingV2 = isTrackingV2(body.tracking_version)
   const requestedOrgId = getRequestedOrgId(body, trackingV2)
   const requestedUserId = typeof body.user_id === 'string' ? body.user_id : undefined
@@ -374,7 +418,7 @@ app.post('/', middlewareAuth(), async (c) => {
 
   // notifyConsole: broadcast to Supabase Realtime only, skip all tracking
   if (notifyConsole) {
-    await handleNotifyConsole(c, trackedBody, appId, verifiedOrgId)
+    await handleNotifyConsole(c, trackedBody, icon, appId, verifiedOrgId)
     return c.json(BRES)
   }
 
@@ -414,16 +458,28 @@ app.post('/', middlewareAuth(), async (c) => {
     orgId: onboardingOrgId,
   })
 
+  // CLI bundle upload warning when the zip is over the 20 MB alert threshold
+  // and the zip is actually uploaded (`--delta-only` skips it).
+  // PostHog already records `App Too Large`; this Bento signal lets a lifecycle
+  // automation email org admins (gated by the `app_too_large` preference).
+  const appTooLargeBentoEvent: BentoTrackingPayload | undefined = await buildAppTooLargeTrackedBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
+
   // Exactly one of these is ever set (distinct event names); `??` picks the active one.
-  const bentoEvent = onboardingBentoEvent ?? builderBentoEvent ?? bundleIncompatibleBentoEvent ?? aiInstructionsCopiedBentoEvent
+  const bentoEvent = onboardingBentoEvent ?? builderBentoEvent ?? bundleIncompatibleBentoEvent ?? aiInstructionsCopiedBentoEvent ?? appTooLargeBentoEvent
   const apikeyId = c.get('apikey')?.id
   await sendEventToTracking(c, addAuthenticatedApiKeyIdToTrackingPayload({
     ...trackedBody,
     bento: bentoEvent,
     sentToBento: Boolean(bentoEvent),
     groups: verifiedOrgId ? { organization: verifiedOrgId } : undefined,
-  }, apikeyId), {
-    posthog: !isFrontendPosthogCapturedEvent(trackedBody.event),
+  }, apikeyId))
+
+  await recordUserBentoEvent(c, {
+    userId: c.get('auth')!.userId,
+    sourceEvent: trackedBody.event,
+    tags: { ...trackedBody.tags, ...body.nonPersonTags },
+    orgId: verifiedOrgId,
+    appId: verifiedOrgId ? appId : undefined,
   })
 
   return c.json(BRES)

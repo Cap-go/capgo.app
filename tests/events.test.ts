@@ -38,8 +38,6 @@ describe('[POST] /private/events operations', () => {
         channel: 'test',
         event: 'test_event',
         description: 'Testing event tracking',
-        icon: '🧪',
-        notify: false,
         tags: {
           app_id: APPNAME_EVENT,
           test: true,
@@ -62,8 +60,6 @@ describe('[POST] /private/events operations', () => {
         channel: 'test',
         event: 'test_event_v2',
         description: 'Testing v2 event tracking',
-        icon: '🧪',
-        notify: false,
         org_id: ORG_ID,
         tracking_version: 2,
         tags: {
@@ -87,7 +83,6 @@ describe('[POST] /private/events operations', () => {
       body: JSON.stringify({
         channel: 'onboarding',
         event: 'onboarding_ai_instructions_copied',
-        icon: '🤖',
         nonPersonTags: {
           flow: 'existing_org',
           onboarding_attempt_id: id,
@@ -95,7 +90,6 @@ describe('[POST] /private/events operations', () => {
           resumed: true,
           setup_command: 'ota',
         },
-        notify: false,
         org_id: ORG_ID,
         tags: {
           app_id: APPNAME_EVENT,
@@ -119,12 +113,35 @@ describe('[POST] /private/events operations', () => {
         channel: 'test',
         event: 'test_event_v2_org_scoped',
         description: 'Testing v2 org-scoped event tracking',
-        icon: '🧪',
-        notify: false,
         org_id: ORG_ID,
         tracking_version: 2,
         tags: {
           test: true,
+        },
+      }),
+    })
+
+    const data = await response.json() as { status: string }
+    expect(response.status).toBe(200)
+    expect(data.status).toBe('ok')
+  })
+
+  it.concurrent('tracks v2 App Too Large events for Bento forwarding', async () => {
+    const response = await fetch(`${BASE_URL}/private/events`, {
+      method: 'POST',
+      headers: {
+        capgkey: headers.Authorization,
+      },
+      body: JSON.stringify({
+        channel: 'app-error',
+        event: 'App Too Large',
+        icon: '🚛',
+        notify: false,
+        org_id: ORG_ID,
+        tracking_version: 2,
+        tags: {
+          'app-id': APPNAME_EVENT,
+          'size_mb': 42,
         },
       }),
     })
@@ -144,8 +161,6 @@ describe('[POST] /private/events operations', () => {
         channel: 'onboarding-v2',
         event: 'onboarding-step-done',
         description: 'Testing v2 onboarding completion',
-        icon: '✅',
-        notify: false,
         org_id: ORG_ID,
         tracking_version: 2,
         tags: {
@@ -169,8 +184,6 @@ describe('[POST] /private/events operations', () => {
         channel: 'test',
         event: 'test_event_v2',
         description: 'Cross-org v2 spoof attempt',
-        icon: '🧪',
-        notify: false,
         org_id: NON_OWNER_ORG_ID,
         tracking_version: 2,
         tags: {
@@ -291,8 +304,6 @@ describe('[POST] /private/events operations', () => {
         channel: 'test',
         event: 'test_event',
         description: 'Testing event tracking',
-        icon: '🧪',
-        notify: false,
         tags: {
           app_id: APPNAME_EVENT,
           test: true,

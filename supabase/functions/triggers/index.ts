@@ -9,7 +9,7 @@ import { app as cron_rollout_auto_pause } from '../_backend/triggers/cron_rollou
 import { app as cron_stat_app } from '../_backend/triggers/cron_stat_app.ts'
 import { app as cron_stat_org } from '../_backend/triggers/cron_stat_org.ts'
 import { app as cron_sync_sub } from '../_backend/triggers/cron_sync_sub.ts'
-import { app as logsnag_insights, logsnagInsightsLegacyUsageApp, logsnagInsightsShardApps } from '../_backend/triggers/logsnag_insights.ts'
+import { app as global_stats, globalStatsLegacyUsageApp, globalStatsShardApps } from '../_backend/triggers/global_stats.ts'
 import { app as on_app_create } from '../_backend/triggers/on_app_create.ts'
 import { app as on_app_delete } from '../_backend/triggers/on_app_delete.ts'
 import { app as on_app_update } from '../_backend/triggers/on_app_update.ts'
@@ -28,6 +28,7 @@ import { app as on_version_delete } from '../_backend/triggers/on_version_delete
 import { app as on_version_update } from '../_backend/triggers/on_version_update.ts'
 import { app as pluginNotifications } from '../_backend/triggers/plugin_notifications.ts'
 import { app as queue_consumer } from '../_backend/triggers/queue_consumer.ts'
+import { app as send_email } from '../_backend/triggers/send_email.ts'
 import { app as stripe_event } from '../_backend/triggers/stripe_event.ts'
 import { app as webhook_delivery } from '../_backend/triggers/webhook_delivery.ts'
 import { app as webhook_dispatcher } from '../_backend/triggers/webhook_dispatcher.ts'
@@ -38,24 +39,24 @@ const functionName = 'triggers'
 const appGlobal = createHono(functionName, version)
 
 appGlobal.route('/cron_email', cron_email)
-appGlobal.route('/logsnag_insights', logsnag_insights)
-appGlobal.route('/logsnag_insights_core', logsnagInsightsShardApps.core)
-appGlobal.route('/logsnag_insights_usage', logsnagInsightsLegacyUsageApp)
-appGlobal.route('/logsnag_insights_usage_updates', logsnagInsightsShardApps.usage_updates)
-appGlobal.route('/logsnag_insights_usage_devices', logsnagInsightsShardApps.usage_devices)
-appGlobal.route('/logsnag_insights_usage_device_platforms', logsnagInsightsShardApps.usage_device_platforms)
-appGlobal.route('/logsnag_insights_usage_registrations', logsnagInsightsShardApps.usage_registrations)
-appGlobal.route('/logsnag_insights_usage_storage', logsnagInsightsShardApps.usage_storage)
-appGlobal.route('/logsnag_insights_usage_success_rate', logsnagInsightsShardApps.usage_success_rate)
-appGlobal.route('/logsnag_insights_usage_demo_apps', logsnagInsightsShardApps.usage_demo_apps)
-appGlobal.route('/logsnag_insights_revenue', logsnagInsightsShardApps.revenue)
-appGlobal.route('/logsnag_insights_plugins', logsnagInsightsShardApps.plugins)
-appGlobal.route('/logsnag_insights_builds', logsnagInsightsShardApps.builds)
-appGlobal.route('/logsnag_insights_retention', logsnagInsightsShardApps.retention)
-appGlobal.route('/logsnag_insights_paid_products', logsnagInsightsShardApps.paid_products)
-appGlobal.route('/logsnag_insights_ltv', logsnagInsightsShardApps.ltv)
-appGlobal.route('/logsnag_insights_notifications', logsnagInsightsShardApps.notifications)
-appGlobal.route('/logsnag_insights_native_notifications', logsnagInsightsShardApps.native_notifications)
+appGlobal.route('/global_stats', global_stats)
+appGlobal.route('/global_stats_core', globalStatsShardApps.core)
+appGlobal.route('/global_stats_usage', globalStatsLegacyUsageApp)
+appGlobal.route('/global_stats_usage_updates', globalStatsShardApps.usage_updates)
+appGlobal.route('/global_stats_usage_devices', globalStatsShardApps.usage_devices)
+appGlobal.route('/global_stats_usage_device_platforms', globalStatsShardApps.usage_device_platforms)
+appGlobal.route('/global_stats_usage_registrations', globalStatsShardApps.usage_registrations)
+appGlobal.route('/global_stats_usage_storage', globalStatsShardApps.usage_storage)
+appGlobal.route('/global_stats_usage_success_rate', globalStatsShardApps.usage_success_rate)
+appGlobal.route('/global_stats_usage_demo_apps', globalStatsShardApps.usage_demo_apps)
+appGlobal.route('/global_stats_revenue', globalStatsShardApps.revenue)
+appGlobal.route('/global_stats_plugins', globalStatsShardApps.plugins)
+appGlobal.route('/global_stats_builds', globalStatsShardApps.builds)
+appGlobal.route('/global_stats_retention', globalStatsShardApps.retention)
+appGlobal.route('/global_stats_paid_products', globalStatsShardApps.paid_products)
+appGlobal.route('/global_stats_ltv', globalStatsShardApps.ltv)
+appGlobal.route('/global_stats_notifications', globalStatsShardApps.notifications)
+appGlobal.route('/global_stats_native_notifications', globalStatsShardApps.native_notifications)
 appGlobal.route('/on_channel_update', on_channel_update)
 appGlobal.route('/on_user_create', on_user_create)
 appGlobal.route('/on_user_update', on_user_update)
@@ -85,6 +86,7 @@ appGlobal.route('/on_organization_delete', on_organization_delete)
 appGlobal.route('/on_deploy_history_create', on_deploy_history_create)
 appGlobal.route('/plugin_notifications', pluginNotifications)
 appGlobal.route('/queue_consumer', queue_consumer)
+appGlobal.route('/send_email', send_email)
 appGlobal.route('/webhook_delivery', webhook_delivery)
 appGlobal.route('/webhook_dispatcher', webhook_dispatcher)
 

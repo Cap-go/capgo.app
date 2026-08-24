@@ -5,6 +5,12 @@ async function loginToOnboarding(page: Page, email: string, password: string) {
   await page.login(email, password, /\/onboarding\/app/)
 }
 
+async function continuePastWelcome(page: Page) {
+  const continueButton = page.locator('[data-test="onboarding-welcome-continue"]')
+  await expect(continueButton).toBeVisible()
+  await continueButton.click()
+}
+
 async function expectProtectedRouteRedirect(page: Page, targetPath: string, expectedUrl: RegExp, expectedSelector: string) {
   const redirectedPage = await page.context().newPage()
 
@@ -16,6 +22,27 @@ async function expectProtectedRouteRedirect(page: Page, targetPath: string, expe
   finally {
     await redirectedPage.close()
   }
+}
+
+async function continueFromAppNameToIcon(page: Page) {
+  await page.click('[data-test="app-onboarding-continue"]')
+  await expect(page.locator('#app-onboarding-app-id')).toBeVisible()
+  await page.click('[data-test="app-onboarding-skip-app-id"]')
+  await expect(page.locator('[data-test="app-onboarding-toggle-icon-store-import"]')).toBeVisible()
+}
+
+async function continueFromAppNameToOrganization(page: Page) {
+  await continueFromAppNameToIcon(page)
+  await page.click('[data-test="app-onboarding-continue"]')
+}
+
+async function returnFromOrganizationToAppName(page: Page) {
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await expect(page.locator('[data-test="app-onboarding-toggle-icon-store-import"]')).toBeVisible()
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await expect(page.locator('#app-onboarding-app-id')).toBeVisible()
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await expect(page.locator('[data-test="app-onboarding-name"]')).toBeVisible()
 }
 
 test.describe('Registration', () => {
@@ -39,28 +66,29 @@ test.describe('Registration', () => {
     await page.click('[data-test="submit"]')
 
     await page.waitForURL(/\/onboarding\/app/)
+    await continuePastWelcome(page)
     await page.click('[data-test="onboarding-intent-ota"]')
     await page.click('[data-test="app-onboarding-continue-intent"]')
 
     await expect(page.locator('[data-test="app-onboarding-existing-yes"]')).toHaveCount(0)
     await expect(page.locator('[data-test="app-onboarding-existing-no"]')).toHaveCount(0)
     await expect(page.locator('[data-test="app-onboarding-name"]')).toBeVisible()
-    await expect(page.locator('#app-onboarding-app-id')).toBeVisible()
+    await expect(page.locator('#app-onboarding-app-id')).toHaveCount(0)
     await page.fill('[data-test="app-onboarding-name"]', appName)
-    await page.click('[data-test="app-onboarding-continue"]')
+    await continueFromAppNameToOrganization(page)
 
     await expectProtectedRouteRedirect(page, '/apps', /\/onboarding\/app/, '[data-test="onboarding-logout"]')
 
     await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveValue(appName)
     await page.locator('[data-test="onboarding-estimated-users-option"]').nth(1).click()
-    await page.getByRole('button', { name: 'Back', exact: true }).click()
+    await returnFromOrganizationToAppName(page)
     await page.fill('[data-test="app-onboarding-name"]', editedAppName)
-    await page.click('[data-test="app-onboarding-continue"]')
+    await continueFromAppNameToOrganization(page)
     await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveValue(editedAppName)
     await page.fill('[data-test="onboarding-org-name"]', organizationName)
-    await page.getByRole('button', { name: 'Back', exact: true }).click()
+    await returnFromOrganizationToAppName(page)
     await page.fill('[data-test="app-onboarding-name"]', finalAppName)
-    await page.click('[data-test="app-onboarding-continue"]')
+    await continueFromAppNameToOrganization(page)
     await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveValue(organizationName)
     await expect(page.locator('[data-test="onboarding-create-org"]')).toBeEnabled()
     await page.click('[data-test="onboarding-create-org"]')
@@ -88,9 +116,11 @@ test.describe('Registration', () => {
     await page.click('[data-test="submit"]')
 
     await page.waitForURL(/\/onboarding\/app/)
+    await continuePastWelcome(page)
     await page.click('[data-test="onboarding-intent-ota"]')
     await page.click('[data-test="app-onboarding-continue-intent"]')
     await page.fill('[data-test="app-onboarding-name"]', appName)
+    await continueFromAppNameToIcon(page)
     await Promise.all([
       page.waitForResponse((response) => {
         if (!response.url().includes('/rest/v1/users') || response.request().method() !== 'PATCH' || !response.ok())
@@ -114,6 +144,7 @@ test.describe('Registration', () => {
     await loginToOnboarding(page, email, password)
     await expect(page.locator('[data-test="onboarding-resume-restart"]')).toBeVisible()
     await page.locator('[data-test="onboarding-resume-restart"]').click()
+    await continuePastWelcome(page)
     await expect(page.locator('[data-test="onboarding-intent-ota"]')).toBeVisible()
     await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveCount(0)
   })

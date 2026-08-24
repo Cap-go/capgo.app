@@ -235,6 +235,7 @@ Example: npx @capgo/cli@latest bundle upload com.example.app --path ./dist --cha
   .option('-c, --channel <channel>', `Channel to link to. Use commas for multiple channels, for example production,beta`)
   .option('--rollout <rollout>', `Set the uploaded bundle as this channel's rollout target at a percentage from 0 to 100`, value => Number.parseFloat(value))
   .option('--rollout-percentage-bps <rolloutPercentageBps>', `Set the uploaded bundle rollout percentage in basis points from 0 to 10000`, value => Number.parseInt(value, 10))
+  .option('--rollout-advance', `Promote the current rollout target to stable, then set the uploaded bundle as the new rollout. Reuses the previous percentage unless --rollout or --rollout-percentage-bps is also set`)
   .option('--rollout-cache-ttl-seconds <rolloutCacheTtlSeconds>', `Cloudflare rollout decision cache TTL in seconds`, value => Number.parseInt(value, 10))
   .option('-e, --external <url>', `Link to external URL instead of upload to Capgo Cloud`)
   .option('--iv-session-key <key>', `Set the IV and session key for bundle URL external`)
@@ -455,6 +456,10 @@ Example: npx @capgo/cli@latest app list`)
     await listApp(options)
   })
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--filter-by-org-id <orgId>', 'Only list apps from this organization ID')
+  .option('--show-org', 'Show the organization name for each app')
+  .option('--show-org-id', 'Show the organization ID for each app')
+  .option('--output-text', 'Print plain text with a CSV app table and no interactive formatting')
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
 
@@ -909,10 +914,14 @@ build
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
   .option('--no-analytics', 'Disable build onboarding analytics and terminal replay for this run')
-  // enableSelfUpdate is set ONLY here (the genuine `build init` entrypoint) so
-  // the self-update prompt's re-exec replays `build init`, never a wrapper
-  // command that reached onboarding as a sub-step (bundle upload / credentials).
-  .action((options: OnboardingBuilderOptions) => onboardingBuilderCommand({ ...options, enableSelfUpdate: true }))
+  // Self-update and workspace discovery are enabled ONLY here (the genuine
+  // `build init` entrypoint), never for wrapper commands that reach onboarding
+  // as a sub-step (bundle upload / credentials).
+  .action((options: OnboardingBuilderOptions) => onboardingBuilderCommand({
+    ...options,
+    enableSelfUpdate: true,
+    enableProjectDiscovery: true,
+  }))
 
 build
   .command('request [appId]')
@@ -976,7 +985,8 @@ iOS IPA only (no TestFlight upload): npx @capgo/cli@latest build request com.exa
   .option('--no-skip-build-number-bump', 'Override saved credentials to re-enable automatic build number incrementing for this build only.')
   .option('--skip-marketing-version-bump', 'Skip automatic marketing version (CFBundleShortVersionString / versionName) bump when the app is already released.')
   .option('--no-skip-marketing-version-bump', 'Override saved credentials to re-enable automatic marketing version bump for this build only.')
-  .option('--sync-ios-version', 'iOS: sync Xcode MARKETING_VERSION from package.json before uploading the project.')
+  .option('--sync-ios-version', 'iOS: sync the app version from package.json before uploading the project. Updates MARKETING_VERSION or CFBundleShortVersionString based on the Xcode Info.plist configuration.')
+  .option('--sync-android-version', 'Android: sync versionName in android/app/build.gradle from package.json before uploading the project. Fails unless versionName is a standalone quoted string literal.')
   .option('--ai-analytics', 'On build failure, send logs to Capgo AI for diagnosis. In interactive terminals this skips the upfront confirmation; in CI this auto-uploads and prints the analysis to stderr.')
   .option('--no-prescan', 'Skip the automatic pre-build scan')
   .option('--prescan-ignore-fatal', 'Run the pre-build scan but never block the build (report only)')
@@ -992,11 +1002,13 @@ iOS IPA only (no TestFlight upload): npx @capgo/cli@latest build request com.exa
 
 build
   .command('sync-ios-version')
-  .description(`Sync the local iOS Xcode MARKETING_VERSION from package.json.
+  .description(`Sync the local iOS app version from package.json.
+
+Updates MARKETING_VERSION or CFBundleShortVersionString based on the Xcode Info.plist configuration.
 
 Example: npx @capgo/cli@latest build sync-ios-version --path .`)
   .option('--path <path>', 'Path to the project directory (default: current directory)')
-  .option('--check', 'Check only; exit non-zero when MARKETING_VERSION is out of sync')
+  .option('--check', 'Check only; exit non-zero when MARKETING_VERSION or CFBundleShortVersionString is out of sync')
   .action(syncIosMarketingVersionCommand)
 
 build

@@ -9,6 +9,7 @@ import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
 import { notifyExistingUserInvite, resolveInviteNewUserErrorMessage } from '~/utils/invites'
+import { safeResetTurnstile } from '~/utils/turnstile'
 
 interface InviteSuccessPayload {
   email: string
@@ -169,7 +170,7 @@ function resetInviteForm() {
   inviteLastName.value = ''
   if (shouldUseCaptcha.value) {
     inviteCaptchaToken.value = ''
-    inviteCaptchaElement.value?.reset()
+    safeResetTurnstile(inviteCaptchaElement.value)
   }
 }
 
@@ -184,10 +185,8 @@ function completeInviteSuccess(payload: InviteSuccessPayload) {
     sendEvent({
       channel: props.analyticsChannel,
       event: `onboarding-step-invite-teammate`,
-      icon: '👥',
       org_id: orgId,
       tracking_version: props.trackingVersion,
-      notify: false,
     }).catch()
   }
 }
@@ -352,7 +351,7 @@ async function handleFullDetailsSubmit() {
   finally {
     isInviting.value = false
     if (shouldUseCaptcha.value)
-      inviteCaptchaElement.value?.reset()
+      safeResetTurnstile(inviteCaptchaElement.value)
     inviteCaptchaToken.value = ''
   }
 }

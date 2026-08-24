@@ -151,13 +151,11 @@ export async function prepareBundlePartialFiles(
   await sendEvent(apikey, {
     channel: 'partial-update',
     event: 'Generate manifest',
-    icon: '📂',
     org_id: orgId,
     tracking_version: 2,
     tags: {
       'app-id': appid,
     },
-    notify: false,
   })
 
   return manifest
@@ -386,25 +384,21 @@ headers: buildCliRequestHeaders({ Authorization: apikey }),
     await sendEvent(apikey, {
       channel: 'app',
       event: `App Partial TUS done${brFilesCount > 0 ? ' with .br extension' : ''}`,
-      icon: '⏫',
       org_id: orgId,
       tracking_version: 2,
       tags: {
         'app-id': appId,
       },
-      notify: false,
     })
     await sendEvent(apikey, {
       channel: 'performance',
       event: 'Partial upload performance',
-      icon: '🚄',
       org_id: orgId,
       tracking_version: 2,
       tags: {
         'app-id': appId,
         'time': uploadTime,
       },
-      notify: false,
     })
     return results
   }

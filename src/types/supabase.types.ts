@@ -4787,6 +4787,7 @@ export type Database = {
       has_usage_credits_org:
         | { Args: { orgid: string }; Returns: boolean }
         | { Args: { appid: string; orgid: string }; Returns: boolean }
+      hook_before_user_created: { Args: { event: Json }; Returns: Json }
       internal_request_db_user_names: { Args: never; Returns: string[] }
       internal_request_role_names: { Args: never; Returns: string[] }
       invite_user_to_org_rbac: {
@@ -4896,9 +4897,12 @@ export type Database = {
       is_platform_admin:
         | { Args: never; Returns: boolean }
         | { Args: { userid: string }; Returns: boolean }
-      is_rbac_enabled_globally: { Args: never; Returns: boolean }
       is_recent_email_otp_verified: {
         Args: { user_id: string }
+        Returns: boolean
+      }
+      is_sso_auth_provider: {
+        Args: { p_provider: string; p_providers: Json }
         Returns: boolean
       }
       is_storage_exceeded_by_org: { Args: { org_id: string }; Returns: boolean }
@@ -4966,6 +4970,10 @@ export type Database = {
         Returns: number
       }
       parse_step_pattern: { Args: { pattern: string }; Returns: number }
+      password_signup_blocked_for_email: {
+        Args: { p_email: string }
+        Returns: boolean
+      }
       pg_buffercache_pages: { Args: never; Returns: Record<string, unknown>[] }
       pg_buffercache_summary: { Args: never; Returns: Record<string, unknown> }
       pg_buffercache_usage_counts: {

@@ -85,7 +85,6 @@ export async function checkCompatibilityInternal(
   void trackEvent({
     channel: 'bundle',
     event: 'Bundle Compatibility Checked',
-    icon: '🧪',
     tags: {
       result: hasIncompatible ? 'incompatible' : 'compatible',
       missing_deps_count: compatibility.finalCompatibility.filter(entry => !isCompatible(entry)).length,

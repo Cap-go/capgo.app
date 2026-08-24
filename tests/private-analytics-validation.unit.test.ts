@@ -210,13 +210,144 @@ describe('private analytics route validation', () => {
       [],
       '2.0.0',
       undefined,
-      {
+      expect.objectContaining({
         platform: 'android',
-        updatedAt: {
-          gt: undefined,
-          lte: undefined,
-        },
-      },
+      }),
     )
+  })
+
+  it('passes osVersion compare filters on /private/devices', async () => {
+    readDevicesMock.mockResolvedValue({ data: [], nextCursor: undefined, hasMore: false })
+
+    const response = await devicesApp.request(postJson('http://local/', {
+      appId: 'com.example.app',
+      platform: 'android',
+      osVersion: '14',
+      osVersionOp: 'gte',
+      versionNames: ['1.2.3'],
+      versionNameOp: 'lte',
+    }))
+
+    expect(response.status).toBe(200)
+    expect(readDevicesMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      app_id: 'com.example.app',
+      platform: 'android',
+      os_version_compare: { op: 'gte', value: '14' },
+      version_name_compare: { op: 'lte', value: '1.2.3' },
+    }), false)
+  })
+
+  it('passes osVersion compare filters to countDevices on /private/devices', async () => {
+    countDevicesMock.mockResolvedValue(3)
+
+    const response = await devicesApp.request(postJson('http://local/', {
+      appId: 'com.example.app',
+      count: true,
+      platform: 'android',
+      osVersion: '14',
+      osVersionOp: 'gte',
+      versionNames: ['1.2.3'],
+      versionNameOp: 'lte',
+    }))
+
+    expect(response.status).toBe(200)
+    expect(countDevicesMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'com.example.app',
+      false,
+      [],
+      undefined,
+      undefined,
+      expect.objectContaining({
+        platform: 'android',
+        osVersionCompare: { op: 'gte', value: '14' },
+        versionNameCompare: { op: 'lte', value: '1.2.3' },
+      }),
+    )
+  })
+
+  it('rejects multiple versionNames for numeric bundle operators', async () => {
+    await expectRejectedDevicesBody({
+      versionNames: ['1.0.0', '2.0.0'],
+      versionNameOp: 'gte',
+    })
+  })
+
+  it('rejects non-numeric osVersion on /private/devices', async () => {
+    await expectRejectedDevicesBody({ osVersion: 'not-a-version', osVersionOp: 'gte' })
+  })
+
+  it('exports devices as csv on /private/devices/export', async () => {
+    readDevicesMock.mockResolvedValue({
+      data: [{
+        device_id: '00000000-0000-0000-0000-000000000001',
+        custom_id: '',
+        platform: 'android',
+        os_version: '14',
+        version_name: '1.2.3',
+        version_build: '1.0.0',
+        plugin_version: '6.0.0',
+        updated_at: '2026-08-19T00:00:00.000Z',
+        is_prod: true,
+        is_emulator: false,
+        install_source: 'play_store',
+        country_code: 'US',
+      }],
+      nextCursor: undefined,
+      hasMore: false,
+    })
+
+    const response = await devicesApp.request(postJson('http://local/export', {
+      appId: 'com.example.app',
+      format: 'csv',
+      osVersion: '14',
+      osVersionOp: 'gte',
+    }))
+
+    expect(response.status).toBe(200)
+    const payload = await response.json() as { format: string, csv: string, rowCount: number }
+    expect(payload.format).toBe('csv')
+    expect(payload.rowCount).toBe(1)
+    expect(payload.csv.startsWith('device_id,custom_id,platform,os_version,version_name,version_build,plugin_version,updated_at,is_prod,is_emulator,install_source,country_code\n')).toBe(true)
+    expect(readDevicesMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      os_version_compare: { op: 'gte', value: '14' },
+    }), false)
+  })
+
+  it('exports devices as json on /private/devices/export', async () => {
+    readDevicesMock.mockResolvedValue({
+      data: [{
+        device_id: '00000000-0000-0000-0000-000000000001',
+        custom_id: '',
+        platform: 'android',
+        os_version: '14',
+        version_name: '1.2.3',
+        version_build: '1.0.0',
+        plugin_version: '6.0.0',
+        updated_at: '2026-08-19T00:00:00.000Z',
+        is_prod: true,
+        is_emulator: false,
+        install_source: 'play_store',
+        country_code: 'US',
+      }],
+      nextCursor: undefined,
+      hasMore: false,
+    })
+
+    const response = await devicesApp.request(postJson('http://local/export', {
+      appId: 'com.example.app',
+      format: 'json',
+      osVersion: '14',
+      osVersionOp: 'gte',
+    }))
+
+    expect(response.status).toBe(200)
+    const payload = await response.json() as { format: string, data: unknown[], rowCount: number, limit: number, filename?: string }
+    expect(payload.format).toBe('json')
+    expect(payload.rowCount).toBe(1)
+    expect(payload.limit).toBe(10_000)
+    expect(Array.isArray(payload.data)).toBe(true)
+    expect(payload.data).toHaveLength(1)
+    expect(payload.filename).toBeUndefined()
   })
 })

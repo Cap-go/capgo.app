@@ -70,7 +70,7 @@ export async function saveKeyInternal(options: SaveOptions, silent = false) {
 
     updaterConfig.publicKey = publicKey
     await writeConfigUpdater(extConfig)
-    void trackEvent({ channel: 'key', event: 'Key Saved', icon: '💾', tags: {} })
+    void trackEvent({ channel: 'key', event: 'Key Saved', tags: {} })
   }
 
   if (!silent) {
@@ -120,7 +120,7 @@ export async function deleteOldPrivateKeyInternal(options: Options, silent = fal
       log.success(`Old private key deleted from ${extConfig.path} file`)
       outro('Done ✅')
     }
-    void trackEvent({ channel: 'key', event: 'Old Key Deleted', icon: '🧹', tags: {} })
+    void trackEvent({ channel: 'key', event: 'Old Key Deleted', tags: {} })
     return true
   }
 
@@ -183,7 +183,7 @@ export async function createKeyInternal(options: Options, silent = false, existi
     await writeConfigUpdater(extConfig)
   }
 
-  void trackEvent({ channel: 'key', event: 'Encryption Keys Generated', icon: '🔑', tags: {} })
+  void trackEvent({ channel: 'key', event: 'Encryption Keys Generated', tags: {} })
 
   if (!silent) {
     log.success('Your RSA key has been generated')

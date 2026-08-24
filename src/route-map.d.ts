@@ -472,6 +472,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/login-cli': RouteRecordInfo<
+      '/login-cli',
+      '/login-cli',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/onboarding/app': RouteRecordInfo<
       '/onboarding/app',
       '/onboarding/app',
@@ -1200,6 +1207,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/login.vue': {
       routes:
         | '/login'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/login-cli.vue': {
+      routes:
+        | '/login-cli'
       views:
         | never
       pathParamNames:

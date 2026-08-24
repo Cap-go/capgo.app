@@ -6,7 +6,7 @@ const englishMessages = JSON.parse(readFileSync(new URL('../messages/en.json', i
 
 describe('app onboarding API key loading state', () => {
   it.concurrent('does not render the terminal alternative before an organization exists', () => {
-    expect(onboardingSource).toContain('<div v-if="!props.preOrg" class="pt-1">')
+    expect(onboardingSource).toContain('<div v-if="!props.preOrg && appDetailsStep === \'icon\'" class="pt-1">')
   })
 
   it.concurrent('replaces every incomplete CLI command with the shared loading treatment', () => {
@@ -34,6 +34,16 @@ describe('app onboarding API key loading state', () => {
     expect(apiKeyProvisioningIndex).toBeGreaterThanOrEqual(0)
     expect(resumeLoadIndex).toBeLessThan(apiKeyProvisioningIndex)
     expect(mountedFlow).not.toContain('await loadApiKey()')
+  })
+
+  it.concurrent('targets the created app when a stale resume falls back to replacement creation', () => {
+    const keyLoader = onboardingSource.slice(
+      onboardingSource.indexOf('async function ensureApiKey()'),
+      onboardingSource.indexOf('let apiKeyLoadingPromise'),
+    )
+
+    expect(keyLoader).toContain('const appId = createdApp.value?.app_id')
+    expect(keyLoader).not.toContain('resumeAppId.value')
   })
 
   it.concurrent('renders ready commands as native DaisyUI buttons', () => {

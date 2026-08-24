@@ -76,10 +76,8 @@ app.post('/', middlewareKey(), async (c) => {
   await sendEventToTracking(c, {
     channel: 'upload-get-link',
     event: 'Upload via single file',
-    icon: '🏛️',
     user_id: app.owner_org,
     groups: { organization: app.owner_org },
-    notify: false,
   })
 
   cloudlog({ requestId: c.get('requestId'), message: 'upload link generated', filePath })

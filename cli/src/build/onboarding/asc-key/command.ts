@@ -36,7 +36,7 @@ export async function createAppleKeyCommand(options: CreateAppleKeyOptions = {})
     log.error('This guided flow needs the macOS helper app and only runs on macOS.')
     log.info('On other platforms, create the key manually at https://appstoreconnect.apple.com/access/integrations/api '
       + 'then save it with `npx @capgo/cli build credentials save --platform ios --apple-key <AuthKey.p8> --apple-key-id <id> --apple-issuer-id <id>`.')
-    void trackEvent({ channel: ASC_KEY_CHANNEL, event: 'ASC Key: Unsupported Platform', icon: '🔑', apikey: options.apikey, tags: { os_platform: platform } })
+    void trackEvent({ channel: ASC_KEY_CHANNEL, event: 'ASC Key: Unsupported Platform', apikey: options.apikey, tags: { os_platform: platform } })
     await flushAnalytics()
     exit(1)
   }
@@ -44,7 +44,7 @@ export async function createAppleKeyCommand(options: CreateAppleKeyOptions = {})
   if (!resolveHelperBinary()) {
     log.error('Could not find the App Store Connect key helper binary.')
     log.info('Update @capgo/cli (and reinstall its optional dependencies) so the signed helper is installed, then try again.')
-    void trackEvent({ channel: ASC_KEY_CHANNEL, event: 'ASC Key: Helper Missing', icon: '🔑', apikey: options.apikey })
+    void trackEvent({ channel: ASC_KEY_CHANNEL, event: 'ASC Key: Helper Missing', apikey: options.apikey })
     await flushAnalytics()
     exit(1)
   }

@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   AI_INSTRUCTIONS_COPIED_EVENT,
   buildAiInstructionsCopiedBentoEvent,
-  isFrontendPosthogCapturedEvent,
 } from '../supabase/functions/_backend/utils/onboarding_copy_tracking.ts'
 
 describe('onboarding copy tracking', () => {
@@ -49,6 +48,5 @@ describe('onboarding copy tracking', () => {
       nonPersonTags: {},
       orgId: 'org-id',
     })).toBeUndefined()
-    expect(isFrontendPosthogCapturedEvent('arbitrary_event')).toBe(false)
   })
 })

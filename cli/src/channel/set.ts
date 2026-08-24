@@ -8,7 +8,7 @@ import { getActiveAppVersions, getVersionData } from '../api/versions'
 import { sendUpdateNotificationsForChannels } from '../notifications/send-update'
 import { printPreviewQrForResolvedTarget, resolveChannelPreviewTarget } from '../preview/qr'
 import { formatTable } from '../terminal-table'
-import { channelUpdatePackageCliError, checkCompatibilityNativePackages, checkPlanValid, createSupabaseClient, findSavedKey, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getOrganizationId, invokeCapgoCliApi, isCompatible, resolveUserIdFromApiKey, sendEvent } from '../utils'
+import { channelUpdatePackageCliError, checkCompatibilityNativePackages, createSupabaseClient, findSavedKey, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getOrganizationId, invokeCapgoCliApi, isCompatible, resolveUserIdFromApiKey, sendEvent } from '../utils'
 
 /**
  * Display a compatibility table for the given packages
@@ -227,8 +227,6 @@ export async function setChannelInternal(channel: string, appId: string, options
     await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'channel.promote_bundle', silent, true, existingChannel.id)
 
   const orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
-
-  await checkPlanValid(supabase, orgId, appId)
 
   const channelPayload: Database['public']['Tables']['channels']['Insert'] = {
     created_by: userId,
@@ -754,13 +752,11 @@ export async function setChannelInternal(channel: string, appId: string, options
   await sendEvent(options.apikey, {
     channel: 'channel',
     event: 'Set channel',
-    icon: '✅',
     org_id: orgId,
     tracking_version: 2,
     tags: {
       'app-id': appId,
     },
-    notify: false,
   }).catch(() => {})
 
   if (!silent)
