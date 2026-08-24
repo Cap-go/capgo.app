@@ -303,18 +303,18 @@ BEGIN
   WHERE balances.org_id = p_org_id;
 
   IF NOT v_org.auto_top_up_enabled THEN
-    RETURN QUERY SELECT false, false, v_org.auto_top_up_threshold, v_org.customer_id, v_available;
+    RETURN QUERY SELECT false, false, v_org.auto_top_up_threshold::numeric, v_org.customer_id::text, v_available;
     RETURN;
   END IF;
 
   IF v_available >= v_org.auto_top_up_threshold THEN
-    RETURN QUERY SELECT false, true, v_org.auto_top_up_threshold, v_org.customer_id, v_available;
+    RETURN QUERY SELECT false, true, v_org.auto_top_up_threshold::numeric, v_org.customer_id::text, v_available;
     RETURN;
   END IF;
 
   IF v_org.auto_top_up_last_attempt_at IS NOT NULL
      AND v_org.auto_top_up_last_attempt_at > now() - interval '1 hour' THEN
-    RETURN QUERY SELECT false, true, v_org.auto_top_up_threshold, v_org.customer_id, v_available;
+    RETURN QUERY SELECT false, true, v_org.auto_top_up_threshold::numeric, v_org.customer_id::text, v_available;
     RETURN;
   END IF;
 
@@ -322,7 +322,7 @@ BEGIN
   SET auto_top_up_last_attempt_at = now()
   WHERE id = p_org_id;
 
-  RETURN QUERY SELECT true, true, v_org.auto_top_up_threshold, v_org.customer_id, v_available;
+  RETURN QUERY SELECT true, true, v_org.auto_top_up_threshold::numeric, v_org.customer_id::text, v_available;
 END;
 $$;
 
