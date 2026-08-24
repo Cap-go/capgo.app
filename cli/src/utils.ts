@@ -31,7 +31,7 @@ import { sendCliEvent } from './app/debug'
 import { findMonorepoRoot, findNXMonorepoRoot, isMonorepo, isNXMonorepo } from './capacitor-cli'
 import { getChecksum } from './checksum'
 import { loadConfig, loadConfigForWrite, writeConfig } from './config'
-import { isTruthyEnvValue } from './posthog'
+import { isTruthyEnvValue, IOS_SYNC_VALIDATION_FAILED_MESSAGE } from './posthog'
 import { getCliLoginCommand } from './runner-command'
 import { nativePackageSchema } from './schemas/common'
 import { safeParseSchema } from './schemas/schema_validation'
@@ -2976,7 +2976,7 @@ export function throwIfIosUpdaterSyncInvalid(
   log.error('Stop here to avoid testing on a broken native iOS project.')
   log.warn(resetAdvice.summary)
   log.info(resetAdvice.command)
-  throw new CliUserError('iOS sync validation failed. Delete your iOS folder, then rerun the add and sync commands above and retry.')
+  throw new CliUserError(IOS_SYNC_VALIDATION_FAILED_MESSAGE)
 }
 
 export async function promptAndSyncCapacitor(

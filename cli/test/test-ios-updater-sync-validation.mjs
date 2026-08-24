@@ -3,6 +3,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { IOS_SYNC_VALIDATION_FAILED_MESSAGE } from '../src/posthog.ts'
 import { CliUserError } from '../src/shared/cli-user-error.ts'
 import { throwIfIosUpdaterSyncInvalid, validateIosUpdaterSync } from '../src/utils.ts'
 
@@ -248,7 +249,7 @@ await test('throwIfIosUpdaterSyncInvalid throws CliUserError when iOS sync valid
 
     assert(thrown instanceof CliUserError, 'Expected CliUserError')
     assert(
-      thrown.message === 'iOS sync validation failed. Delete your iOS folder, then rerun the add and sync commands above and retry.',
+      thrown.message === IOS_SYNC_VALIDATION_FAILED_MESSAGE,
       'Expected stable iOS sync validation message',
     )
   }

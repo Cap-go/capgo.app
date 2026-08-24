@@ -10,6 +10,7 @@ import {
   capturePosthogException,
   getCommandPath,
   getInstallId,
+  IOS_SYNC_VALIDATION_FAILED_MESSAGE,
   isExpectedUserError,
   shouldCapturePosthogException,
 } from '../src/posthog.ts'
@@ -203,6 +204,9 @@ try {
   // regardless of the (dynamic) channel context attached to them.
   assert.equal(shouldCapturePosthogException(new CliUserError('Channel does not have a bundle linked', { appId: 'com.example.app', channel: 'production' })), false)
   assert.equal(shouldCapturePosthogException(new CliUserError('Missing API key')), false)
+  // iOS sync validation is a real operational failure we still want in error tracking,
+  // while CliUserError keeps the guided output without a redundant "Error:" line.
+  assert.equal(shouldCapturePosthogException(new CliUserError(IOS_SYNC_VALIDATION_FAILED_MESSAGE)), true)
   // Exercise the real no-key path in an isolated home/project so the suggested
   // command and its error-tracking classification stay covered together.
   const noKeyDir = mkdtempSync(join(tmpdir(), 'capgo-no-key-'))
