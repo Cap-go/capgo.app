@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
-import { drizzleErrorFingerprintSegment, formatPgErrorCause } from './pg_errors.ts'
+import { drizzleErrorFingerprintSegment, readPgErrorCode } from './pg_errors.ts'
 import { existInEnv, getEnv, trimTrailingSlashes } from './utils.ts'
 
 const POSTHOG_CAPTURE_URL = 'https://eu.i.posthog.com/capture/'
@@ -313,8 +313,8 @@ export async function capturePosthogException(c: Context, payload: {
     topFrame?.filename || 'unknown',
     String(payload.status ?? 500),
   ].join(':')
-  const pgErrorCause = payload.kind === 'drizzle_error'
-    ? formatPgErrorCause(payload.error)
+  const pgErrorCode = payload.kind === 'drizzle_error'
+    ? readPgErrorCode(payload.error)
     : undefined
 
   const body = {
@@ -341,7 +341,7 @@ export async function capturePosthogException(c: Context, payload: {
       request_id: c.get('requestId'),
       status: payload.status,
       url_path: requestPath,
-      ...(pgErrorCause ? { pg_error_cause: pgErrorCause } : {}),
+      ...(pgErrorCode ? { pg_error_code: pgErrorCode } : {}),
     },
     timestamp: new Date().toISOString(),
   }

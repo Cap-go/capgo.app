@@ -400,8 +400,8 @@ describe('posthog helper', () => {
     })
 
     const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)
-    expect(body.properties.$exception_fingerprint).toContain('notification_app_settings')
-    expect(body.properties.pg_error_cause).toBe('42P01: relation "notification_app_settings" does not exist')
+    expect(body.properties.$exception_fingerprint).toContain(':DrizzleQueryError:notification_app_settings:pg:42P01:')
+    expect(body.properties.pg_error_code).toBe('42P01')
   })
 
   it('logs and skips exception delivery when the configured PostHog host is invalid', async () => {

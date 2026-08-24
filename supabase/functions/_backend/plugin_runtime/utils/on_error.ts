@@ -71,6 +71,28 @@ function shouldSuppressQueueRetryAlert(c: Context): boolean {
   return Boolean(queueName) && readCount !== null && maxReads !== null && readCount < maxReads
 }
 
+const upstreamUnavailableResponse: SimpleErrorResponse = {
+  error: 'upstream_unavailable',
+  message: 'Database temporarily unavailable',
+  moreInfo: {},
+}
+
+function logTransientPgError(c: Context, functionName: string, e: unknown, kind: 'transient_pg_error' | 'drizzle_error') {
+  cloudlogErr({
+    requestId: c.get('requestId'),
+    functionName,
+    kind,
+    method: c.req.method,
+    url: c.req.url,
+    errorMessage: (e as Error)?.message ?? 'Unknown error',
+    stack: serializeError(e)?.stack ?? 'N/A',
+    transient: true,
+    ...(kind === 'drizzle_error'
+      ? { moreInfo: { drizzleErrorCause: serializeError((e as Error).cause) } }
+      : {}),
+  })
+}
+
 export function onError(functionName: string) {
   return async (e: any, c: Context) => {
     let body = 'N/A'
@@ -202,9 +224,11 @@ export function onError(functionName: string) {
       }
       return c.json(res, e.status)
     }
+    if (isTransientPgError(e)) {
+      logTransientPgError(c, functionName, e, isDrizzleError ? 'drizzle_error' : 'transient_pg_error')
+      return c.json(upstreamUnavailableResponse, 503)
+    }
     if (isDrizzleError) {
-      const transient = isTransientPgError(e)
-      // Log Drizzle errors with more detailed information
       cloudlogErr({
         requestId: c.get('requestId'),
         functionName,
@@ -213,27 +237,17 @@ export function onError(functionName: string) {
         url: c.req.url,
         errorMessage: e?.message ?? 'Unknown error',
         stack: serializeError(e)?.stack ?? 'N/A',
-        transient,
         moreInfo: {
           drizzleErrorCause: serializeError((e as Error).cause),
         },
       })
-      if (!transient) {
-        await backgroundTask(c, sendDiscordAlert500(c, functionName, body, e))
-        void backgroundTask(c, capturePosthogException(c, {
-          error: e,
-          functionName,
-          kind: 'drizzle_error',
-          status: 500,
-        }))
-      }
-      if (transient) {
-        return c.json({
-          error: 'upstream_unavailable',
-          message: 'Database temporarily unavailable',
-          moreInfo: {},
-        }, 503)
-      }
+      await backgroundTask(c, sendDiscordAlert500(c, functionName, body, e))
+      void backgroundTask(c, capturePosthogException(c, {
+        error: e,
+        functionName,
+        kind: 'drizzle_error',
+        status: 500,
+      }))
       return c.json(defaultResponse, 500)
     }
     // Non-HTTP errors: log with stack and return 500
