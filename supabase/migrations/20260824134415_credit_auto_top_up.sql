@@ -9,7 +9,7 @@ ALTER TABLE "public"."orgs"
   DROP CONSTRAINT IF EXISTS "orgs_auto_top_up_threshold_min";
 
 ALTER TABLE "public"."orgs"
-  ADD CONSTRAINT "orgs_auto_top_up_threshold_min" CHECK (("auto_top_up_threshold" >= (10)::numeric AND "auto_top_up_threshold" = trunc("auto_top_up_threshold")));
+  ADD CONSTRAINT "orgs_auto_top_up_threshold_min" CHECK (("auto_top_up_threshold" >= (10)::numeric AND "auto_top_up_threshold" = trunc("auto_top_up_threshold") AND "auto_top_up_threshold" < 'Infinity'::numeric AND "auto_top_up_threshold" > '-Infinity'::numeric));
 
 COMMENT ON COLUMN "public"."orgs"."auto_top_up_enabled" IS 'When true, the plan-check cron charges the saved card if available credits fall below auto_top_up_threshold. Default false.';
 

@@ -105,6 +105,7 @@ const autoTopUpHasCard = ref(false)
 const isLoadingAutoTopUp = ref(false)
 const isSavingAutoTopUp = ref(false)
 let autoTopUpPersistQueue = Promise.resolve()
+let autoTopUpLoadSeq = 0
 const autoTopUpThreshold = computed(() => {
   const parsed = Number.parseInt(autoTopUpThresholdInput.value, 10)
   if (Number.isNaN(parsed))
@@ -421,9 +422,11 @@ async function loadAutoTopUpSettings() {
     return
   }
   isLoadingAutoTopUp.value = true
+  autoTopUpLoadSeq += 1
+  const loadSeq = autoTopUpLoadSeq
   try {
     const settings = await getCreditAutoTopUp(orgId)
-    if (currentOrganization.value?.gid !== orgId)
+    if (currentOrganization.value?.gid !== orgId || loadSeq !== autoTopUpLoadSeq)
       return
     autoTopUpEnabled.value = Boolean(settings?.enabled)
     autoTopUpThresholdInput.value = String(Math.max(MIN_AUTO_TOP_UP, Math.floor(Number(settings?.threshold ?? MIN_AUTO_TOP_UP))))
@@ -438,19 +441,24 @@ async function loadAutoTopUpSettings() {
 }
 
 async function persistAutoTopUpSettings(enabled: boolean, revertEnabledTo: boolean = !enabled) {
-  const run = () => persistAutoTopUpSettingsNow(enabled, revertEnabledTo)
+  const orgId = currentOrganization.value?.gid
+  if (!orgId)
+    return
+  const run = () => persistAutoTopUpSettingsNow(orgId, enabled, revertEnabledTo)
   const pending = autoTopUpPersistQueue.then(run, run)
   autoTopUpPersistQueue = pending.then(() => undefined, () => undefined)
   await pending
 }
 
-async function persistAutoTopUpSettingsNow(enabled: boolean, revertEnabledTo: boolean) {
+async function persistAutoTopUpSettingsNow(orgId: string, enabled: boolean, revertEnabledTo: boolean) {
+  if (currentOrganization.value?.gid !== orgId)
+    return
   if (!(await ensureUpdateBillingAccess())) {
-    autoTopUpEnabled.value = revertEnabledTo
+    if (currentOrganization.value?.gid === orgId)
+      autoTopUpEnabled.value = revertEnabledTo
     return
   }
-  const orgId = currentOrganization.value?.gid
-  if (!orgId)
+  if (currentOrganization.value?.gid !== orgId)
     return
   if (!isAutoTopUpThresholdValid.value || autoTopUpThreshold.value === null) {
     toast.error(t('credits-auto-top-up-threshold-invalid'))
@@ -463,8 +471,12 @@ async function persistAutoTopUpSettingsNow(enabled: boolean, revertEnabledTo: bo
     return
   }
   isSavingAutoTopUp.value = true
+  autoTopUpLoadSeq += 1
+  const saveSeq = autoTopUpLoadSeq
   try {
     const settings = await saveCreditAutoTopUp(orgId, enabled, autoTopUpThreshold.value)
+    if (currentOrganization.value?.gid !== orgId || saveSeq !== autoTopUpLoadSeq)
+      return
     autoTopUpEnabled.value = Boolean(settings?.enabled)
     autoTopUpHasCard.value = Boolean(settings?.hasPaymentMethod)
     autoTopUpThresholdInput.value = String(Math.max(MIN_AUTO_TOP_UP, Math.floor(Number(settings?.threshold ?? autoTopUpThreshold.value))))
@@ -472,7 +484,8 @@ async function persistAutoTopUpSettingsNow(enabled: boolean, revertEnabledTo: bo
   }
   catch (error) {
     console.error('Failed to save auto top-up settings', error)
-    autoTopUpEnabled.value = revertEnabledTo
+    if (currentOrganization.value?.gid === orgId && saveSeq === autoTopUpLoadSeq)
+      autoTopUpEnabled.value = revertEnabledTo
     toast.error(t('credits-auto-top-up-save-error'))
   }
   finally {
@@ -642,7 +655,7 @@ watch(() => route.hash, (hash) => {
 })
 
 function onWindowFocus() {
-  if (!hasReadBillingAccess.value)
+  if (!hasReadBillingAccess.value || isSavingAutoTopUp.value)
     return
   void loadAutoTopUpSettings()
 }

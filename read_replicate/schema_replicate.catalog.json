@@ -1968,7 +1968,7 @@
       "valid": true
     },
     {
-      "definition": "CHECK (auto_top_up_threshold >= 10::numeric AND auto_top_up_threshold = trunc(auto_top_up_threshold))",
+      "definition": "CHECK (auto_top_up_threshold >= 10::numeric AND auto_top_up_threshold = trunc(auto_top_up_threshold) AND auto_top_up_threshold < 'Infinity'::numeric AND auto_top_up_threshold > '-Infinity'::numeric)",
       "name": "orgs_auto_top_up_threshold_min",
       "table": "orgs",
       "type": "c",

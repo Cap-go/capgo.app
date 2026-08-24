@@ -89,9 +89,14 @@ async function getDefaultPaymentMethodId(c: Context, customerId: string): Promis
       ? defaultPm.id
       : null
   if (defaultPmId) {
-    const paymentMethod = await stripe.paymentMethods.retrieve(defaultPmId)
-    if (paymentMethod.type === 'card')
-      return paymentMethod.id
+    try {
+      const paymentMethod = await stripe.paymentMethods.retrieve(defaultPmId)
+      if (paymentMethod.type === 'card')
+        return paymentMethod.id
+    }
+    catch {
+      // Fall through to the saved-card list when the default method is gone.
+    }
   }
   const cards = await stripe.paymentMethods.list({ customer: customerId, type: 'card', limit: 1 })
   return cards.data[0]?.id ?? null
