@@ -74,8 +74,10 @@ export async function post(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown,
   if (!rbacRoleName)
     throw simpleError('invalid_body', 'Invalid invite type', { invite_type: body.invite_type })
 
-  // API-key Supabase clients run as anon, so this checked endpoint owns the invite
-  // path via Postgres after revoking anon execute on invite_user_to_org_rbac.
+  // API-key PostgREST clients run as anon, so this checked endpoint calls
+  // invite_user_to_org_rbac via Postgres (not service-role Supabase SDK) after
+  // revoking anon execute. Mirrors organization/post.ts: set capgkey in
+  // request.headers inside a transaction so the SECURITY DEFINER RPC sees it.
   const pgPool = getPgClient(c)
   let dbClient: PgQueryClient | null = null
   let transactionStarted = false
