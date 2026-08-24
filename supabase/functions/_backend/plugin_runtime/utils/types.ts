@@ -27,7 +27,10 @@ export interface AppStats extends AppInfos {
   action: string
   old_version_name?: string
   metadata?: StatsMetadata
+  stats_mode?: StatsMode
 }
+
+export type StatsMode = 'all' | 'updatesOnly' | 'billingOnly'
 
 export interface BaseHeaders {
   [k: string]: string | undefined
