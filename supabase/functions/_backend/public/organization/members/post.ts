@@ -76,8 +76,8 @@ export async function post(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown,
 
   // API-key PostgREST clients run as anon, so this checked endpoint calls
   // invite_user_to_org_rbac via Postgres (not service-role Supabase SDK) after
-  // revoking anon execute. Mirrors organization/post.ts: set capgkey in
-  // request.headers inside a transaction so the SECURITY DEFINER RPC sees it.
+  // revoking anon execute. Mirrors organization/post.ts: BEGIN before
+  // set_config(..., true) so capgkey survives until the RPC runs.
   const pgPool = getPgClient(c)
   let dbClient: PgTransactionClient | null = null
   let transactionStarted = false
