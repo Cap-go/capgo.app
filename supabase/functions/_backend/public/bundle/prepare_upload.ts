@@ -27,10 +27,30 @@ export interface PrepareUploadBody {
 
 const PREPARE_STORAGE_PROVIDERS = new Set(['r2-direct', 'external'])
 const COMPLETED_UPLOAD_STORAGE_PROVIDER = 'r2'
+const PREPARE_REUPLOAD_UPDATE_COLUMNS = new Set([
+  'session_key',
+  'external_url',
+  'storage_provider',
+  'min_update_version',
+  'native_packages',
+  'checksum',
+  'link',
+  'comment',
+  'key_id',
+  'cli_version',
+  'manifest',
+  'r2_path',
+])
 
 interface ExistingVersionRow {
   id: number
   deleted: boolean
+  storage_provider: string | null
+}
+
+interface PreparedVersionRow {
+  id: number
+  name: string
   storage_provider: string | null
 }
 
@@ -53,6 +73,49 @@ async function loadExistingVersion(
   catch (error) {
     logPgError(c, 'prepare_upload_load_existing', error)
     throw simpleError('cannot_prepare_upload', 'Cannot load existing bundle version', { error })
+  }
+  finally {
+    await closeClient(c, pgClient)
+  }
+}
+
+async function updateVersionForReupload(
+  c: Context<MiddlewareKeyVariables>,
+  versionId: number,
+  updateFields: Record<string, unknown>,
+): Promise<PreparedVersionRow> {
+  const entries = Object.entries(updateFields).filter(([key, value]) =>
+    PREPARE_REUPLOAD_UPDATE_COLUMNS.has(key) && value !== undefined)
+  if (entries.length === 0)
+    throw simpleError('cannot_prepare_upload', 'No upload fields to update', { versionId })
+
+  const setClauses = entries.map(([key], index) => `${key} = $${index + 1}`)
+  const values = entries.map(([, value]) => value)
+  values.push(versionId)
+
+  const pgClient = getPgClient(c, false)
+  try {
+    await pgClient.query('BEGIN')
+    await pgClient.query(`SELECT set_config('capgo.prepare_reupload_reset', 'on', true)`)
+    const result = await pgClient.query<PreparedVersionRow>(
+      `UPDATE public.app_versions
+       SET ${setClauses.join(', ')}
+       WHERE id = $${values.length}
+       RETURNING id, name, storage_provider`,
+      values,
+    )
+    await pgClient.query('COMMIT')
+    const updated = result.rows[0]
+    if (!updated)
+      throw simpleError('cannot_prepare_upload', 'Cannot update bundle version for upload', { versionId })
+    return updated
+  }
+  catch (error) {
+    await pgClient.query('ROLLBACK').catch(() => undefined)
+    if (error instanceof Response)
+      throw error
+    logPgError(c, 'prepare_upload_reupload_reset', error)
+    throw simpleError('cannot_prepare_upload', 'Cannot update bundle version for upload', { error })
   }
   finally {
     await closeClient(c, pgClient)
@@ -128,6 +191,11 @@ export async function prepareUpload(
     const updateFields = resetForReupload
       ? { ...upsertFields, storage_provider: storageProvider, r2_path: null }
       : upsertFields
+
+    if (resetForReupload) {
+      const updated = await updateVersionForReupload(c, existing.id, updateFields)
+      return c.json({ status: 'ok', version: updated })
+    }
 
     const { data: updated, error: updateError } = await supabase
       .from('app_versions')

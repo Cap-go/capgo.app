@@ -1,0 +1,221 @@
+-- Allow bundle/prepare to reset completed (non-r2-direct) versions back to
+-- r2-direct for same-version re-upload. Only honored when the caller sets
+-- capgo.prepare_reupload_reset=on in the same transaction (prepare_upload).
+CREATE OR REPLACE FUNCTION "public"."check_encrypted_bundle_on_insert"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  org_id uuid;
+  org_enforcing boolean;
+  org_required_key varchar(21);
+  bundle_is_encrypted boolean;
+  bundle_key_id varchar(20);
+  bundle_was_ready boolean;
+BEGIN
+  IF TG_OP = 'UPDATE' THEN
+    IF pg_catalog.current_setting('capgo.reclaim_manifest_null', true) = 'on'
+      AND NEW.manifest IS NULL
+      AND OLD.manifest IS NOT NULL
+      AND NEW.native_packages IS NOT DISTINCT FROM OLD.native_packages
+      AND NEW.name IS NOT DISTINCT FROM OLD.name
+      AND NEW.app_id IS NOT DISTINCT FROM OLD.app_id
+      AND NEW.session_key IS NOT DISTINCT FROM OLD.session_key
+      AND NEW.key_id IS NOT DISTINCT FROM OLD.key_id
+      AND NEW.storage_provider IS NOT DISTINCT FROM OLD.storage_provider
+      AND NEW.r2_path IS NOT DISTINCT FROM OLD.r2_path
+      AND NEW.external_url IS NOT DISTINCT FROM OLD.external_url
+      AND NEW.checksum IS NOT DISTINCT FROM OLD.checksum
+    THEN
+      RETURN NEW;
+    END IF;
+
+    IF NEW.manifest IS NULL
+      AND OLD.manifest IS NOT NULL
+      AND EXISTS (
+        SELECT 1
+        FROM pg_catalog.unnest(OLD.manifest) AS entry(file_name, s3_path, file_hash)
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM public.manifest AS m
+          WHERE m.app_version_id = OLD.id
+            AND m.s3_path = entry.s3_path
+            AND m.file_hash = entry.file_hash
+        )
+      )
+    THEN
+      RAISE EXCEPTION '%',
+        'bundle_manifest_not_migrated: Cannot clear app_versions.manifest '
+        || 'until every entry exists in public.manifest.';
+    END IF;
+
+    bundle_was_ready := OLD.storage_provider IS DISTINCT FROM 'r2-direct';
+
+    IF pg_catalog.current_setting('capgo.prepare_reupload_reset', true) = 'on'
+      AND bundle_was_ready
+      AND NEW.storage_provider = 'r2-direct'
+    THEN
+      RETURN NEW;
+    END IF;
+
+    IF bundle_was_ready
+      AND (
+        NEW.name IS DISTINCT FROM OLD.name
+        OR NEW.app_id IS DISTINCT FROM OLD.app_id
+        OR NEW.session_key IS DISTINCT FROM OLD.session_key
+        OR NEW.key_id IS DISTINCT FROM OLD.key_id
+        OR NEW.storage_provider IS DISTINCT FROM OLD.storage_provider
+        OR NEW.r2_path IS DISTINCT FROM OLD.r2_path
+        OR NEW.external_url IS DISTINCT FROM OLD.external_url
+        OR NEW.checksum IS DISTINCT FROM OLD.checksum
+        OR (NEW.manifest IS DISTINCT FROM OLD.manifest AND NEW.manifest IS NOT NULL)
+        OR (
+          NEW.manifest IS NULL
+          AND OLD.manifest IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM pg_catalog.unnest(OLD.manifest) AS entry(file_name, s3_path, file_hash)
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM public.manifest AS m
+              WHERE m.app_version_id = OLD.id
+                AND m.s3_path = entry.s3_path
+                AND m.file_hash = entry.file_hash
+            )
+          )
+        )
+        OR NEW.native_packages IS DISTINCT FROM OLD.native_packages
+      )
+    THEN
+      PERFORM public.pg_log('deny: BUNDLE_CONTENT_LOCKED_TRIGGER',
+        pg_catalog.jsonb_build_object(
+          'org_id', OLD.owner_org,
+          'app_id', OLD.app_id,
+          'version_name', OLD.name,
+          'user_id', OLD.user_id,
+          'old_storage_provider', OLD.storage_provider,
+          'new_storage_provider', NEW.storage_provider,
+          'reason', 'bundle_ready'
+        ));
+      RAISE EXCEPTION '%',
+        'bundle_already_ready: Bundle content cannot be changed '
+        || 'after upload is complete. Upload a new bundle instead.';
+    END IF;
+  END IF;
+
+  IF TG_OP = 'UPDATE'
+    AND NEW.session_key IS NOT DISTINCT FROM OLD.session_key
+    AND NEW.key_id IS NOT DISTINCT FROM OLD.key_id
+    AND NEW.name IS NOT DISTINCT FROM OLD.name
+    AND NEW.app_id IS NOT DISTINCT FROM OLD.app_id
+    AND NEW.storage_provider IS NOT DISTINCT FROM OLD.storage_provider
+    AND NEW.r2_path IS NOT DISTINCT FROM OLD.r2_path
+    AND NEW.external_url IS NOT DISTINCT FROM OLD.external_url
+    AND NEW.checksum IS NOT DISTINCT FROM OLD.checksum
+    AND NEW.native_packages IS NOT DISTINCT FROM OLD.native_packages
+    AND (
+      NEW.manifest IS NOT DISTINCT FROM OLD.manifest
+      OR (
+        NEW.manifest IS NULL
+        AND OLD.manifest IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM pg_catalog.unnest(OLD.manifest) AS entry(file_name, s3_path, file_hash)
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM public.manifest AS m
+            WHERE m.app_version_id = OLD.id
+              AND m.s3_path = entry.s3_path
+              AND m.file_hash = entry.file_hash
+          )
+        )
+      )
+    )
+  THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT apps.owner_org INTO org_id
+  FROM public.apps
+  WHERE apps.app_id = NEW.app_id;
+
+  IF org_id IS NULL THEN
+    org_id := NEW.owner_org;
+  END IF;
+
+  IF org_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT enforce_encrypted_bundles, required_encryption_key
+  INTO org_enforcing, org_required_key
+  FROM public.orgs
+  WHERE id = org_id;
+
+  IF org_enforcing IS NULL OR org_enforcing = false THEN
+    RETURN NEW;
+  END IF;
+
+  bundle_is_encrypted := public.is_bundle_encrypted(NEW.session_key);
+  bundle_key_id := NULLIF(pg_catalog.btrim(NEW.key_id), '')::varchar(20);
+
+  IF NOT bundle_is_encrypted THEN
+    PERFORM public.pg_log('deny: ORG_REQUIRES_ENCRYPTED_BUNDLES_TRIGGER',
+      pg_catalog.jsonb_build_object(
+        'org_id', org_id,
+        'app_id', NEW.app_id,
+        'version_name', NEW.name,
+        'user_id', NEW.user_id,
+        'reason', 'not_encrypted'
+      ));
+    RAISE EXCEPTION '%',
+      'encryption_required: This organization requires all bundles to be '
+      || 'encrypted. Please upload an encrypted bundle with a session_key.';
+  END IF;
+
+  IF org_required_key IS NOT NULL AND org_required_key <> '' THEN
+    IF bundle_key_id IS NULL THEN
+      PERFORM public.pg_log('deny: ORG_REQUIRES_SPECIFIC_ENCRYPTION_KEY_TRIGGER',
+        pg_catalog.jsonb_build_object(
+          'org_id', org_id,
+          'app_id', NEW.app_id,
+          'version_name', NEW.name,
+          'user_id', NEW.user_id,
+          'required_key', org_required_key,
+          'bundle_key_id', bundle_key_id,
+          'reason', 'missing_key_id'
+        ));
+      RAISE EXCEPTION '%',
+        'encryption_key_required: This organization requires bundles to be '
+        || 'encrypted with a specific key. The uploaded bundle does not have '
+        || 'a key_id.';
+    END IF;
+
+    IF NOT (
+      bundle_key_id = pg_catalog.left(org_required_key, 20)
+      OR pg_catalog.left(bundle_key_id, pg_catalog.length(org_required_key)) = org_required_key
+    ) THEN
+      PERFORM public.pg_log('deny: ORG_REQUIRES_SPECIFIC_ENCRYPTION_KEY_TRIGGER',
+        pg_catalog.jsonb_build_object(
+          'org_id', org_id,
+          'app_id', NEW.app_id,
+          'version_name', NEW.name,
+          'user_id', NEW.user_id,
+          'required_key', org_required_key,
+          'bundle_key_id', bundle_key_id,
+          'reason', 'key_mismatch'
+        ));
+      RAISE EXCEPTION '%',
+        'encryption_key_mismatch: This organization requires bundles to be '
+        || 'encrypted with a specific key. The uploaded bundle was encrypted '
+        || 'with a different key.';
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+ALTER FUNCTION "public"."check_encrypted_bundle_on_insert"() OWNER TO "postgres";
+REVOKE ALL ON FUNCTION "public"."check_encrypted_bundle_on_insert"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."check_encrypted_bundle_on_insert"() TO "service_role";
