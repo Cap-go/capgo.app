@@ -29,6 +29,8 @@ describe('preview subdomain encoding', () => {
   })
 
   it.concurrent('rejects legacy double-underscore hostnames and collision pairs', () => {
+    // Legacy encoding mapped dots to `__`, so com.example.app and com.example__app
+    // both became com__example__app and could share one public preview hostname.
     const legacyHostname = 'com__example__app-42.preview.capgo.app'
     expect(parsePreviewHostname(legacyHostname)).toBeNull()
     expect(parsePreviewHostname(legacyHostname)).not.toEqual({
