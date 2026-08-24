@@ -85,24 +85,28 @@ export function groupOutdatedPackagesByPackageJson(
   readDeclaredNames: (packageJsonPath: string) => Set<string> = readDeclaredDependencyNames,
 ): { packageJsonPath: string, packages: OutdatedDependency[] }[] {
   const groups: { packageJsonPath: string, packages: OutdatedDependency[] }[] = []
-  const assigned = new Set<string>()
+  const declaredInAnyManifest = new Set<string>()
 
   for (const packageJsonPath of packageJsonPaths) {
     const declared = readDeclaredNames(packageJsonPath)
-    const packagesForManifest = packages.filter(dep => !assigned.has(dep.name) && declared.has(dep.name))
+    const packagesForManifest = packages.filter(dep => declared.has(dep.name))
     if (packagesForManifest.length === 0)
       continue
 
     groups.push({ packageJsonPath, packages: packagesForManifest })
     for (const dep of packagesForManifest)
-      assigned.add(dep.name)
+      declaredInAnyManifest.add(dep.name)
   }
 
-  const unassigned = packages.filter(dep => !assigned.has(dep.name))
+  const unassigned = packages.filter(dep => !declaredInAnyManifest.has(dep.name))
   if (unassigned.length > 0 && packageJsonPaths[0])
     groups.push({ packageJsonPath: packageJsonPaths[0], packages: unassigned })
 
   return groups
+}
+
+function shellQuotePath(path: string): string {
+  return JSON.stringify(path)
 }
 
 export function buildOutdatedInstallCommandsForDoctor(
@@ -120,7 +124,7 @@ export function buildOutdatedInstallCommandsForDoctor(
     .map(({ packageJsonPath, packages: groupPackages }) => {
       const projectRoot = dirname(packageJsonPath)
       const pm = getPMAndCommandForDir(projectRoot)
-      return `(cd ${projectRoot} && ${buildOutdatedInstallCommand(pm, groupPackages)})`
+      return `(cd ${shellQuotePath(projectRoot)} && ${buildOutdatedInstallCommand(pm, groupPackages)})`
     })
     .join('\n')
 }
@@ -308,7 +312,6 @@ async function maybeRecoverOutdatedDependencies(
   if (!canPromptInteractively({ silent }))
     return { recovered: false, remainingOutdated: outdated }
 
-  const packageJsonPaths = parseDoctorPackageJsonPaths(options.packageJson)
   const { capgo, other } = partitionOutdatedDependencies(outdated)
   const choice = await promptDoctorUpdateChoice(capgo, other)
   const packagesToUpdate = packagesForDoctorUpdateChoice(choice, capgo, other)

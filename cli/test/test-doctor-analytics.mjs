@@ -158,11 +158,33 @@ const multiInstallCommands = buildOutdatedInstallCommandsForDoctor(
   outdatedSample,
   path => declaredByPath.get(path),
 )
-assert.match(multiInstallCommands, /cd \/apps\/mobile/)
-assert.match(multiInstallCommands, /cd \/apps\/shared/)
-assert.match(multiInstallCommands, /@capgo\/capacitor-updater@latest/)
-assert.match(multiInstallCommands, /@capacitor\/core@latest/)
+assert.ok(multiInstallCommands.includes('cd "/apps/mobile"'))
+assert.ok(multiInstallCommands.includes('cd "/apps/shared"'))
+assert.ok(multiInstallCommands.includes('@capgo/capacitor-updater@latest'))
+assert.ok(multiInstallCommands.includes('@capacitor/core@latest'))
 
 assert.deepEqual(parseDoctorPackageJsonPaths('/apps/mobile/package.json,/apps/shared/package.json'), packageJsonPaths)
+
+const sharedDependency = [{ name: '@capacitor/core', installed: '6.0.0', latest: '6.1.0' }]
+const sharedDeclaredByPath = new Map([
+  [packageJsonPaths[0], new Set(['@capacitor/core'])],
+  [packageJsonPaths[1], new Set(['@capacitor/core'])],
+])
+const sharedGrouped = groupOutdatedPackagesByPackageJson(packageJsonPaths, sharedDependency, path => sharedDeclaredByPath.get(path))
+assert.equal(sharedGrouped.length, 2)
+assert.equal(sharedGrouped[0].packages[0].name, '@capacitor/core')
+assert.equal(sharedGrouped[1].packages[0].name, '@capacitor/core')
+
+const spacedPaths = ['/apps/my mobile/package.json', '/apps/shared/package.json']
+const spacedDeclaredByPath = new Map([
+  [spacedPaths[0], new Set(['@capgo/capacitor-updater'])],
+  [spacedPaths[1], new Set(['@capacitor/core'])],
+])
+const spacedInstallCommands = buildOutdatedInstallCommandsForDoctor(
+  '/apps/my mobile/package.json,/apps/shared/package.json',
+  outdatedSample,
+  path => spacedDeclaredByPath.get(path),
+)
+assert.ok(spacedInstallCommands.includes('cd "/apps/my mobile"'))
 
 console.log('✅ doctor analytics tags tests passed')
