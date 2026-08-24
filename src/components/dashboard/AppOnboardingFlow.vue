@@ -1931,6 +1931,19 @@ onMounted(async () => {
   isHydratingOnboarding.value = true
   try {
     if (props.preOrg) {
+      if (resumeAppId.value) {
+        await organizationStore.awaitInitialLoad()
+        await main.awaitInitialLoad()
+        const resumed = await loadResumeApp()
+        if (resumed) {
+          resumedFlow = true
+          void loadApiKey().catch((error) => {
+            console.error('Cannot ensure API key', error)
+            toast.error(t('app-onboarding-toast-apikey-error'))
+          })
+          return
+        }
+      }
       const resumeResult = await maybeResumeSavedOnboarding()
       if (resumeResult === null) {
         onboardingProgressPersistence.abort()

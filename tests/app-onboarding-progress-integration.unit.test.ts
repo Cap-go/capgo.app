@@ -278,6 +278,14 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain(`import { createOnboardingProgressPersistence, shouldInitializeOnboardingProgressTracking } from '~/utils/onboardingProgressPersistence'`)
     expect(mountedFlow).toContain('let resumedFlow = false')
     expectSourceOrder(mountedFlow, [
+      'if (props.preOrg)',
+      'if (resumeAppId.value)',
+      'const resumed = await loadResumeApp()',
+      'resumedFlow = true',
+      'return',
+      'const resumeResult = await maybeResumeSavedOnboarding()',
+    ])
+    expectSourceOrder(mountedFlow, [
       'const resumeResult = await maybeResumeSavedOnboarding()',
       'if (resumeResult === null)',
       'onboardingProgressPersistence.abort()',

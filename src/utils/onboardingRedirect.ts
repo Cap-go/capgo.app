@@ -133,7 +133,7 @@ export function getOnboardingResumeRedirect(options: {
     return null
   if (options.organizationCount !== 1 || options.appCount !== 1 || !options.appId)
     return null
-  if (options.path === '/app/new' && options.resumeAppId === options.appId)
+  if ((options.path === '/app/new' || options.path === '/onboarding/app') && options.resumeAppId === options.appId)
     return null
   // The pending app already exists. Let the user open it, its devices, bundles,
   // and settings without bouncing back to "create your new app".
@@ -141,7 +141,7 @@ export function getOnboardingResumeRedirect(options: {
     return null
 
   return {
-    path: '/app/new',
-    query: { resume: options.appId },
+    path: '/onboarding/app',
+    query: { resume: options.appId, step: 'setup' },
   }
 }
