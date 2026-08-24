@@ -549,4 +549,602 @@ const ADMIN_ONBOARDING_TELEMETRY_MAX_SQL_CHARS = 9_000
 const ADMIN_ONBOARDING_COMPLETED_DOWNLOAD_ACTIONS = [
   'download_complete',
   'download_manifest_complete',
-  'download_zip_complete'
+  'download_zip_complete',
+]
+
+function batchAdminOnboardingTelemetryWindows(
+  windows: AdminOnboardingTelemetryWindow[],
+  buildQuery: (batch: AdminOnboardingTelemetryWindow[]) => string,
+): AdminOnboardingTelemetryWindow[][] {
+  const batches: AdminOnboardingTelemetryWindow[][] = []
+  let current: AdminOnboardingTelemetryWindow[] = []
+
+  for (const window of windows) {
+    const candidate = [...current, window]
+    if (current.length > 0 && buildQuery(candidate).length > ADMIN_ONBOARDING_TELEMETRY_MAX_SQL_CHARS) {
+      batches.push(current)
+      current = [window]
+      continue
+    }
+    current = candidate
+  }
+
+  if (current.length > 0)
+    batches.push(current)
+
+  return batches
+}
+
+function toValidDate(value: Date | string) {
+  const date = value instanceof Date ? value : new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+export function isAdminOnboardingTelemetryWithinRetention(startDate: Date | string, now = new Date()) {
+  const start = toValidDate(startDate)
+  if (!start || start > now)
+    return false
+
+  const retentionCutoff = new Date(now)
+  retentionCutoff.setUTCMonth(retentionCutoff.getUTCMonth() - 3)
+  return start >= retentionCutoff
+}
+
+function getAdminOnboardingTelemetryWindowFilter(windows: AdminOnboardingTelemetryWindow[]) {
+  if (windows.length === 0)
+    return '1 = 0'
+
+  return windows.map((window) => {
+    return `(index1 = '${escapeSqlString(window.app_id)}'
+      AND timestamp >= toDateTime('${formatDateCF(window.start_at)}')
+      AND timestamp < toDateTime('${formatDateCF(window.end_at)}'))`
+  }).join('\n      OR ')
+}
+
+export function buildAdminOnboardingProductionDeviceQuery(windows: AdminOnboardingTelemetryWindow[]) {
+  return `SELECT
+    index1 AS app_id,
+    min(timestamp) AS first_at
+  FROM device_info
+  WHERE (${getAdminOnboardingTelemetryWindowFilter(windows)})
+    AND double2 = 1
+    AND double3 = 0
+    AND blob3 != ''
+  GROUP BY index1`
+}
+
+export function buildAdminOnboardingUpdateDownloadQuery(windows: AdminOnboardingTelemetryWindow[]) {
+  const actions = ADMIN_ONBOARDING_COMPLETED_DOWNLOAD_ACTIONS.map(action => `'${action}'`).join(', ')
+  return `SELECT
+    index1 AS app_id,
+    min(timestamp) AS first_at
+  FROM app_log
+  WHERE (${getAdminOnboardingTelemetryWindowFilter(windows)})
+    AND blob2 IN (${actions})
+  GROUP BY index1`
+}
+
+function addFirstSeenByApp(target: Map<string, Date>, rows: AdminOnboardingTelemetryRow[]) {
+  for (const row of rows) {
+    const firstAt = toValidDate(row.first_at)
+    if (!row.app_id || !firstAt)
+      continue
+
+    const current = target.get(row.app_id)
+    if (!current || firstAt < current)
+      target.set(row.app_id, firstAt)
+  }
+}
+
+function emptyAdminOnboardingTelemetry(available = false): AdminOnboardingTelemetry {
+  return {
+    available,
+    first_production_device_at_by_app: new Map(),
+    first_update_download_at_by_app: new Map(),
+  }
+}
+
+export async function getAdminOnboardingTelemetry(
+  c: Context,
+  windows: AdminOnboardingTelemetryWindow[],
+  rangeStart: Date | string,
+  now = new Date(),
+): Promise<AdminOnboardingTelemetry> {
+  if (!isAdminOnboardingTelemetryWithinRetention(rangeStart, now)
+    || !c.env.APP_LOG
+    || !c.env.DEVICE_INFO
+    || !getEnv(c, 'CF_ANALYTICS_TOKEN')
+    || !getEnv(c, 'CF_ACCOUNT_ANALYTICS_ID')) {
+    return emptyAdminOnboardingTelemetry()
+  }
+
+  const validWindows = windows.filter((window) => {
+    const start = toValidDate(window.start_at)
+    const end = toValidDate(window.end_at)
+    return Boolean(window.app_id && start && end && start < end)
+  })
+  if (validWindows.length === 0)
+    return emptyAdminOnboardingTelemetry(true)
+
+  const telemetry = emptyAdminOnboardingTelemetry(true)
+  try {
+    // Batch by SQL size so both queries stay under the Analytics Engine 10k limit.
+    const windowBatches = batchAdminOnboardingTelemetryWindows(
+      validWindows,
+      batch => buildAdminOnboardingUpdateDownloadQuery(batch),
+    )
+    for (const windowBatch of windowBatches) {
+      const [productionDeviceRows, updateDownloadRows] = await Promise.all([
+        runQueryToCFA<AdminOnboardingTelemetryRow>(c, buildAdminOnboardingProductionDeviceQuery(windowBatch)),
+        runQueryToCFA<AdminOnboardingTelemetryRow>(c, buildAdminOnboardingUpdateDownloadQuery(windowBatch)),
+      ])
+      addFirstSeenByApp(telemetry.first_production_device_at_by_app, productionDeviceRows)
+      addFirstSeenByApp(telemetry.first_update_download_at_by_app, updateDownloadRows)
+    }
+    return telemetry
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'getAdminOnboardingTelemetry failed',
+      error: serializeError(error),
+    })
+    return telemetry
+  }
+}
+
+export interface DeviceUsageCF {
+  date: string
+  mau: number
+  app_id: string
+  org_id?: string
+}
+
+export interface DeviceUsageAllCF {
+  date: string
+  device_id: string
+  app_id: string
+  org_id: string
+}
+
+export async function readDeviceUsageCF(c: Context, app_id: string, period_start: string, period_end: string) {
+  if (!c.env.DEVICE_USAGE)
+    return [] as DeviceUsageCF[]
+  const query = `SELECT
+    formatDateTime(toStartOfInterval(min(timestamp), INTERVAL '1' DAY), '%Y-%m-%d') AS date,
+    blob1 AS device_id,
+    index1 AS app_id,
+    blob2 AS org_id
+  FROM device_usage
+  WHERE
+    app_id = '${escapeSqlString(app_id)}'
+    AND timestamp >= toDateTime('${formatDateCF(period_start)}')
+    AND timestamp < toDateTime('${formatDateCF(period_end)}')
+  GROUP BY device_id, app_id, org_id
+  ORDER BY date`
+
+  cloudlog({ requestId: c.get('requestId'), message: 'readDeviceUsageCF query', query })
+  try {
+    const res = await runQueryToCFA<DeviceUsageAllCF>(c, query)
+    const groupedByDay = res.reduce((acc, curr) => {
+      const { date, app_id, org_id } = curr
+      if (!acc[date]) {
+        acc[date] = {
+          date,
+          mau: 0,
+          app_id,
+          org_id,
+        }
+      }
+      acc[date].mau++
+      return acc
+    }, {} as Record<string, DeviceUsageCF>)
+    return Object.values(groupedByDay).sort((a, b) => a.date > b.date ? 1 : -1)
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading device usage', error: serializeError(e), query })
+  }
+  return [] as DeviceUsageCF[]
+}
+
+interface BandwidthUsageCF {
+  date: string
+  bandwidth: number
+  app_id: string
+}
+
+export async function rawAnalyticsQuery(c: Context, query: string) {
+  if (!c.env.BANDWIDTH_USAGE)
+    return []
+
+  cloudlog({ requestId: c.get('requestId'), message: 'rawAnalyticsQuery query', query })
+  try {
+    return await runQueryToCFA<any>(c, query)
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading rawAnalyticsQuery', error: serializeError(e) })
+  }
+  return []
+}
+
+export async function readBandwidthUsageCF(c: Context, app_id: string, period_start: string, period_end: string, options: { throwOnError?: boolean } = {}) {
+  if (!c.env.BANDWIDTH_USAGE)
+    return [] as BandwidthUsageCF[]
+  const query = `SELECT
+  formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
+  sum(double1) AS bandwidth,
+  index1 AS app_id
+FROM bandwidth_usage
+WHERE
+  timestamp >= toDateTime('${formatDateCF(period_start)}')
+  AND timestamp < toDateTime('${formatDateCF(period_end)}')
+  AND app_id = '${escapeSqlString(app_id)}'
+GROUP BY date, app_id
+ORDER BY date, app_id`
+
+  cloudlog({ requestId: c.get('requestId'), message: 'readBandwidthUsageCF query', query })
+  try {
+    return await runQueryToCFA<BandwidthUsageCF>(c, query)
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading bandwidth usage', error: serializeError(e), query })
+    if (options.throwOnError)
+      throw e
+  }
+  return [] as BandwidthUsageCF[]
+}
+
+interface StoreApp {
+  created_at: string // Assuming ISO string format for datetime
+  app_id: string
+  url: string
+  title: string
+  summary: string
+  icon: string
+  free: boolean
+  category: string
+  capacitor: boolean
+  developer_email: string
+  installs: number
+  developer: string
+  score: number
+  to_get_framework: boolean
+  onprem: boolean
+  updates: number
+  to_get_info: boolean
+  to_get_similar: boolean
+  updated_at: string // Assuming ISO string format for datetime
+  cordova: boolean
+  react_native: boolean
+  capgo: boolean
+  kotlin: boolean
+  flutter: boolean
+  native_script: boolean
+  lang?: string // Optional as it's not NOT NULL
+  developer_id?: string // Optional as it's not NOT NULL
+}
+
+export async function readStatsVersionCF(c: Context, app_id: string, period_start: string, period_end: string, channel?: VersionUsageChannel | string): Promise<VersionUsage[]> {
+  if (!c.env.VERSION_USAGE)
+    return []
+  // Note: blob2 contains version_name for new data and version_id (numeric) for old data.
+  // blob4 contains channel_name and blob5 contains channel_id only for newer data.
+  const channelId = typeof channel === 'object' && channel?.id ? String(channel.id) : ''
+  const channelName = typeof channel === 'string' ? channel : channelId ? null : channel?.name
+  const safeChannelName = channelName ? escapeSqlString(channelName) : ''
+  const safeChannelId = channelId ? escapeSqlString(channelId) : ''
+  const channelFilter = safeChannelId
+    ? `AND blob5 = '${safeChannelId}'`
+    : safeChannelName ? `AND blob4 = '${safeChannelName}'` : ''
+  const query = `SELECT
+  blob1 as app_id,
+  blob2 as version_name,
+  formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
+  sum(if(blob3 = 'get', 1, 0)) AS get,
+  sum(if(blob3 = 'fail', 1, 0)) AS fail,
+  sum(if(blob3 = 'install', 1, 0)) AS install,
+  sum(if(blob3 = 'uninstall', 1, 0)) AS uninstall
+FROM version_usage
+WHERE
+  app_id = '${escapeSqlString(app_id)}'
+  AND timestamp >= toDateTime('${formatDateCF(period_start)}')
+  AND timestamp < toDateTime('${formatDateCF(period_end)}')
+  ${channelFilter}
+GROUP BY date, app_id, version_name
+ORDER BY date`
+
+  cloudlog({ requestId: c.get('requestId'), message: 'readStatsVersionCF query', query })
+  try {
+    return await runQueryToCFA<VersionUsage>(c, query)
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading version usage', error: serializeError(e), query })
+  }
+  return []
+}
+
+export async function readNativeVersionUsageCF(c: Context, app_id: string, period_start: string, period_end: string): Promise<NativeVersionUsage[]> {
+  if (!c.env.DEVICE_USAGE)
+    return []
+
+  const query = `SELECT
+  formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
+  if(blob4 != '', blob4, if(double1 = 1, 'ios', if(double1 = 2, 'electron', if(double1 = 0, 'android', 'unknown')))) AS platform,
+  if(blob3 = '', 'unknown', blob3) AS version_build,
+  COUNT(DISTINCT blob1) AS devices
+FROM device_usage
+WHERE
+  index1 = '${escapeSqlString(app_id)}'
+  AND timestamp >= toDateTime('${formatDateCF(period_start)}')
+  AND timestamp < toDateTime('${formatDateCF(period_end)}')
+GROUP BY date, platform, version_build
+ORDER BY date, platform, version_build`
+
+  cloudlog({ requestId: c.get('requestId'), message: 'readNativeVersionUsageCF query', query })
+  try {
+    return await runQueryToCFA<NativeVersionUsage>(c, query)
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native version usage', error: serializeError(e), query })
+  }
+  return []
+}
+
+export async function readDeviceVersionCountsCF(c: Context, app_id: string, channelName?: string): Promise<Record<string, number>> {
+  if (!c.env.DEVICE_INFO)
+    return {}
+
+  const safeChannel = channelName ? escapeSqlString(channelName) : ''
+  const channelFilter = safeChannel ? `AND default_channel = '${safeChannel}'` : ''
+
+  const query = `SELECT
+  version_name,
+  count() AS device_count
+FROM (
+  SELECT
+    argMax(blob2, timestamp) AS version_name,
+    argMax(blob7, timestamp) AS default_channel,
+    blob1 AS device_id
+  FROM device_info
+  WHERE index1 = '${escapeSqlString(app_id)}' AND blob9 != ''
+  GROUP BY blob1
+)
+WHERE version_name != '' ${channelFilter}
+GROUP BY version_name`
+
+  cloudlog({ requestId: c.get('requestId'), message: 'readDeviceVersionCountsCF query', query })
+  try {
+    const result = await runQueryToCFA<{ version_name: string, device_count: number }>(c, query)
+    return result.reduce<Record<string, number>>((acc, row) => {
+      acc[row.version_name] = row.device_count
+      return acc
+    }, {})
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading device version counts from Analytics Engine', error: serializeError(e), query })
+  }
+  return {}
+}
+
+function buildInstallSourceList(installSources: string[]) {
+  return installSources.map(source => `'${escapeSqlString(source)}'`).join(', ')
+}
+export function buildDeviceIdsByInstallSourcesQuery(app_id: string, installSources: string[]) {
+  return `SELECT blob1 AS device_id
+FROM (
+  SELECT
+    blob1,
+    argMax(blob9, timestamp) AS install_source
+  FROM device_info
+  WHERE index1 = '${escapeSqlString(app_id)}' AND blob9 != ''
+  GROUP BY blob1
+)
+WHERE install_source IN (${buildInstallSourceList(installSources)})`
+}
+
+async function readDeviceIdsByInstallSourcesCF(c: Context, app_id: string, installSources: string[]): Promise<string[]> {
+  const query = buildDeviceIdsByInstallSourcesQuery(app_id, installSources)
+  cloudlog({ requestId: c.get('requestId'), message: 'readDeviceIdsByInstallSourcesCF query', query })
+  const res = await runQueryToCFA<{ device_id: string }>(c, query)
+  return res.map(row => row.device_id)
+}
+
+export async function countInstallSourcesCF(c: Context, app_id: string): Promise<Record<string, number>> {
+  const cache = new CacheHelper(c)
+  const cacheKey = cache.buildRequest('/internal/install-source-counts', { app_id })
+  const cached = await cache.matchJson<Record<string, number>>(cacheKey)
+  if (cached)
+    return cached
+
+  const query = `SELECT
+  install_source,
+  COUNT() AS total
+FROM (
+  SELECT
+    blob1 AS device_id,
+    argMax(blob9, timestamp) AS install_source
+  FROM device_info
+  WHERE index1 = '${escapeSqlString(app_id)}'
+  GROUP BY blob1
+)
+WHERE install_source != ''
+GROUP BY install_source`
+
+  cloudlog({ requestId: c.get('requestId'), message: 'countInstallSourcesCF query', query })
+  const res = await runQueryToCFA<{ install_source: string, total: number }>(c, query)
+  const counts = res.reduce<Record<string, number>>((acc, row) => {
+    acc[row.install_source] = row.total
+    return acc
+  }, {})
+  await cache.putJson(cacheKey, counts, INSTALL_SOURCE_COUNT_CACHE_TTL_SECONDS)
+  return counts
+}
+
+export async function countDevicesCF(
+  c: Context,
+  app_id: string,
+  customIdMode: boolean,
+  deviceIds: string[] = [],
+  versionName?: string,
+  search?: string,
+) {
+  // Use Analytics Engine DEVICE_INFO for counting devices
+  const conditions = [`index1 = '${escapeSqlString(app_id)}'`]
+
+  if (customIdMode)
+    conditions.push(`blob5 != ''`)
+
+  if (deviceIds.length) {
+    if (deviceIds.length === 1)
+      conditions.push(`blob1 = '${escapeSqlString(deviceIds[0])}'`)
+    else
+      conditions.push(`blob1 IN (${deviceIds.map(id => `'${escapeSqlString(id)}'`).join(', ')})`)
+  }
+
+  if (search) {
+    const searchLower = search.toLowerCase()
+    if (deviceIds.length) {
+      conditions.push(`position('${escapeSqlString(searchLower)}' IN toLower(blob5)) > 0`)
+    }
+    else {
+      // Search in device_id, custom_id, or version_name
+      conditions.push(`(position('${escapeSqlString(searchLower)}' IN toLower(blob1)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(blob5)) > 0 OR position('${escapeSqlString(searchLower)}' IN toLower(blob2)) > 0)`)
+    }
+  }
+
+  if (versionName)
+    conditions.push(`blob2 = '${escapeSqlString(versionName)}'`)
+
+  const query = `SELECT COUNT(DISTINCT blob1) AS total
+FROM device_info
+WHERE ${conditions.join(' AND ')}`
+
+  cloudlog({ requestId: c.get('requestId'), message: 'countDevicesCF query', query })
+  try {
+    const res = await runQueryToCFA<{ total: number }>(c, query)
+    return res[0]?.total ?? 0
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading device count from Analytics Engine', error: serializeError(e), query })
+  }
+  return 0
+}
+
+interface DeviceInfoCF {
+  device_id: string
+  version_name: string
+  plugin_version: string
+  os_version: string
+  custom_id: string
+  version_build: string
+  default_channel: string
+  key_id: string
+  install_source: string
+  country_code?: string
+  platform: number // 0 = android, 1 = ios
+  is_prod: number // 0 or 1
+  is_emulator: number // 0 or 1
+  updated_at: string
+}
+
+interface DevicesOrderCF {
+  ascending: boolean
+}
+
+function getReadDevicesCFOrder(params: ReadDevicesParams): DevicesOrderCF | null {
+  const activeOrder = params.order?.find(
+    col => col.key === 'updated_at' && typeof col.sortable === 'string',
+  )
+
+  return activeOrder ? { ascending: activeOrder.sortable === 'asc' } : null
+}
+
+function buildReadDevicesCFCursorCondition(cursor: string | undefined, devicesOrder: DevicesOrderCF | null) {
+  if (!cursor)
+    return ''
+
+  const [cursorTime, cursorDeviceId] = cursor.split('|')
+  if (!(cursorTime && cursorDeviceId))
+    return ''
+
+  const safeCursorDeviceId = escapeSqlString(cursorDeviceId)
+  if (!devicesOrder)
+    return `device_id > '${safeCursorDeviceId}'`
+
+  const safeCursorTime = escapeSqlString(cursorTime)
+  const comparison = devicesOrder.ascending ? '>' : '<'
+
+  return `(updated_at ${comparison} toDateTime('${safeCursorTime}') OR (updated_at = toDateTime('${safeCursorTime}') AND device_id > '${safeCursorDeviceId}'))`
+}
+
+function buildReadDevicesCFUpdatedAtGtCondition(updatedAtGt: string | undefined) {
+  if (!updatedAtGt)
+    return ''
+
+  const safeUpdatedAtGt = escapeSqlString(formatDateCF(updatedAtGt))
+  return `updated_at > toDateTime('${safeUpdatedAtGt}')`
+}
+
+function buildReadDevicesCFCustomIdsCondition(customIds: string[] | undefined) {
+  if (!customIds?.length)
+    return ''
+
+  if (customIds.length === 1)
+    return `custom_id = '${escapeSqlString(customIds[0])}'`
+
+  const customIdsList = customIds.map(id => `'${escapeSqlString(id)}'`).join(', ')
+  return `custom_id IN (${customIdsList})`
+}
+
+function buildReadDevicesCFVersionNameCondition(versionName: ReadDevicesParams['version_name']) {
+  if (!versionName)
+    return ''
+
+  const names = [...new Set(
+    (Array.isArray(versionName) ? versionName : [versionName])
+      .map(name => name.trim())
+      .filter(Boolean),
+  )]
+
+  if (!names.length)
+    return ''
+  if (names.length === 1)
+    return `blob2 = '${escapeSqlString(names[0]!)}'`
+  return `blob2 IN (${names.map(name => `'${escapeSqlString(name)}'`).join(', ')})`
+}
+
+function buildReadDevicesCFOuterConditions(params: ReadDevicesParams, devicesOrder: DevicesOrderCF | null) {
+  const conditions = [
+    buildReadDevicesCFCursorCondition(params.cursor, devicesOrder),
+    buildReadDevicesCFUpdatedAtGtCondition(params.updated_at_gt),
+    // Match the latest aggregated custom_id, not historical event rows.
+    buildReadDevicesCFCustomIdsCondition(params.customIds),
+  ]
+  return conditions.filter(Boolean)
+}
+
+export function buildReadDevicesCFQuery(params: ReadDevicesParams, customIdMode: boolean) {
+  const limit = normalizeAnalyticsLimit(params.limit)
+  const conditions: string[] = [`index1 = '${escapeSqlString(params.app_id)}'`]
+
+  if (customIdMode) {
+    conditions.push(`blob5 != ''`)
+  }
+
+  if (params.deviceIds?.length) {
+    if (params.deviceIds.length === 1) {
+      conditions.push(`blob1 = '${escapeSqlString(params.deviceIds[0])}'`)
+    }
+    else {
+      const devicesList = params.deviceIds.map(id => `'${escapeSqlString(id)}'`).join(', ')
+      conditions.push(`blob1 IN (${devicesList})`)
+    }
+  }
+
+  if (params.search) {
+    const searchLower = params.search.toLowerCase()
+    if (params.deviceIds?.length) {
+      conditions.push(`position('${escapeSqlString(searchLower)}' IN toLower(blob5)) > 0`)
+    }
+    else {
+      conditions.push(`(position('${escapeSqlString(searchLower)}' IN toLower(blob1)) > 0 OR position('${escapeSqlString(searchLower)}
