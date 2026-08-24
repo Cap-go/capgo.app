@@ -99,11 +99,14 @@ describe('api key create postgres round trips', () => {
   // validateExpirationAgainstOrgPolicies x1, createRoleBindingForPrincipal without skip flags.
   // After: one getPgClient, in-transaction RBAC only, assertExpirationMatchesOrgPolicies x1,
   // no PostgREST, skipOrgLock + skipPrincipalValidation.
+  // The JWT MFA gate is mocked here; production POST /apikey also calls
+  // requireJwtMfaForPrivilegedAction before this handler body.
   beforeEach(() => {
     vi.clearAllMocks()
     vi.resetModules()
 
     requireApiKeyManagementAuthMock.mockReturnValue({ authType: 'jwt', userId: USER_ID })
+    requireJwtMfaForPrivilegedActionMock.mockResolvedValue(undefined)
     ensureApiKeyManagementAllowedMock.mockResolvedValue(undefined)
     parseApiKeyGlobalPermissionsMock.mockReturnValue([])
     assertApiKeyManagerCanAssignBindingsMock.mockResolvedValue(undefined)

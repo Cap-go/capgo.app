@@ -1,3 +1,4 @@
+import { HTTPException } from 'hono/http-exception'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
@@ -104,6 +105,7 @@ describe('api key update authorization recheck', () => {
     vi.resetModules()
 
     requireApiKeyManagementAuthMock.mockReturnValue({ authType: 'jwt', userId: USER_ID })
+    requireJwtMfaForPrivilegedActionMock.mockResolvedValue(undefined)
     ensureApiKeyManagementAllowedMock.mockResolvedValue(undefined)
     getApiKeyBindingOrgIdsMock.mockResolvedValue([ORG_ID])
     selectOwnedApiKeyByIdentifierMock.mockResolvedValue({
@@ -127,6 +129,28 @@ describe('api key update authorization recheck', () => {
       transaction: async (callback: (tx: unknown) => Promise<unknown>) => await callback({ id: 'tx' }),
     })
     lockRbacOrgsMock.mockResolvedValue(undefined)
+  })
+
+  it('rejects JWT updates when MFA assurance fails', async () => {
+    requireJwtMfaForPrivilegedActionMock.mockRejectedValue(new HTTPException(403, {
+      cause: { error: 'mfa_required' },
+    }))
+
+    const { default: app } = await import('../supabase/functions/_backend/public/apikey/put.ts')
+
+    const response = await app.request(new Request('http://local/', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 41,
+        global_permissions: ['org.create'],
+      }),
+    }))
+
+    expect(response.status).toBe(403)
+    expect(requireJwtMfaForPrivilegedActionMock).toHaveBeenCalledTimes(1)
+    expect(checkPermissionMock).not.toHaveBeenCalled()
+    expect(replaceApiKeyGlobalPermissionsMock).not.toHaveBeenCalled()
   })
 
   it('rejects a global-permissions-only update when the locked permission recheck loses access', async () => {
