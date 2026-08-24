@@ -519,12 +519,14 @@ async function prepareScreenshotData(supabaseUrl: string, supabaseAnon: string) 
 async function login(page: Page) {
   await page.goto('/login/', { waitUntil: 'domcontentloaded' })
   await page.fill('[data-test="email"]', 'test@capgo.app')
-  // Password stays in the form but is visually hidden until the domain check
-  // finishes. Wait for Log in instead of a removed Continue step.
-  await page.locator('[data-test="submit"]').waitFor({ state: 'visible', timeout: 30_000 })
+
+  const continueButton = page.locator('[data-test="continue"]')
+  const submit = page.locator('[data-test="submit"]')
+  if (await continueButton.count())
+    await continueButton.click()
+  await submit.waitFor({ state: 'visible', timeout: 30_000 })
   await page.fill('[data-test="password"]', 'testtest')
 
-  const submit = page.locator('[data-test="submit"]')
   if (await submit.isEnabled())
     await submit.click()
   else
