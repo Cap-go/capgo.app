@@ -337,6 +337,9 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         timestamp_ms: dailySetupMs + 2_000,
         event_kind: 'cli_command',
         command_path: 'init',
+        agent_invoker: true,
+        agent_id: 'codex',
+        agent_name: 'Codex',
         total_events: 3,
       }],
     })
@@ -425,6 +428,13 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         returning: createFrontendOnboardingDailySetupCliOutcomeCounts(),
       },
     ])
+    expect(result).toHaveProperty('daily_setup_cli_agent_usage', {
+      groups: [{ key: 'agent:codex', agent_id: 'codex', agent_name: 'Codex' }],
+      points: [
+        { date: '2026-08-01', counts: { 'agent:codex': 1 } },
+        { date: '2026-08-02', counts: { 'agent:codex': 0 } },
+      ],
+    })
     expect(result.v2_v3_setup_cli_outcomes).toEqual({
       total_users: 1,
       cli_only: 0,

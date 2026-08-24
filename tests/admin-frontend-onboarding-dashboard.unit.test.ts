@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import {
   buildFrontendOnboardingDailySeries,
+  buildFrontendOnboardingDailySetupCliAgentSeries,
   buildFrontendOnboardingDailySetupCliSeries,
   buildFrontendOnboardingDailyTabSwitchSeries,
   buildFrontendOnboardingDailyWelcomeOutcomeSeries,
@@ -184,6 +185,16 @@ describe('admin frontend onboarding dashboard', () => {
         no_action: 0,
       },
     }],
+    daily_setup_cli_agent_usage: {
+      groups: [
+        { key: 'agent:codex', agent_id: 'codex', agent_name: 'Codex' },
+        { key: 'no_cli_invoked' },
+      ],
+      points: [{
+        date: '2026-08-10',
+        counts: { 'agent:codex': 2, no_cli_invoked: 1 },
+      }],
+    },
     posthog_configured: true,
     posthog_connected: true,
   }
@@ -446,6 +457,77 @@ describe('admin frontend onboarding dashboard', () => {
       { date: '2026-08-09', value: 0 },
       { date: '2026-08-10', value: 1 },
     ])
+  })
+
+  it.concurrent('maps CLI agent groups in backend order with translated reserved labels and stable colors', () => {
+    const usage = {
+      groups: [
+        { key: 'agent:codex', agent_id: 'codex', agent_name: 'Codex' },
+        { key: 'agent:cline', agent_id: 'cline' },
+        { key: 'multiple_agents' },
+        { key: 'no_agent' },
+        { key: 'no_cli_invoked' },
+      ],
+      points: [
+        { date: '2026-08-09', counts: { 'agent:codex': 2, 'agent:cline': 0, multiple_agents: 1, no_agent: 0, no_cli_invoked: 3 } },
+        { date: '2026-08-10', counts: { 'agent:codex': 0, 'agent:cline': 1, multiple_agents: 0, no_agent: 2, no_cli_invoked: 0 } },
+      ],
+    }
+    const labels = {
+      multiple_agents: 'Multiple agents',
+      unknown_agent: 'Unknown agent',
+      no_agent: 'No agent',
+      no_cli_invoked: 'No CLI invoked',
+    }
+
+    const series = buildFrontendOnboardingDailySetupCliAgentSeries(usage, labels)
+
+    expect(series.map(item => item.label)).toEqual(['Codex', 'cline', 'Multiple agents', 'No agent', 'No CLI invoked'])
+    expect(series.map(item => item.color)).toMatchObject(['#10a37f', expect.any(String), '#8b5cf6', '#3b82f6', '#94a3b8'])
+    expect(series[0].data).toEqual([
+      { date: '2026-08-09', value: 2 },
+      { date: '2026-08-10', value: 0 },
+    ])
+    expect(series[1].data).toEqual([
+      { date: '2026-08-09', value: 0 },
+      { date: '2026-08-10', value: 1 },
+    ])
+    expect(buildFrontendOnboardingDailySetupCliAgentSeries(usage, labels)[1].color).toBe(series[1].color)
+  })
+
+  it.concurrent('keeps No CLI invoked when it is the only CLI agent group', () => {
+    expect(buildFrontendOnboardingDailySetupCliAgentSeries({
+      groups: [{ key: 'no_cli_invoked' }],
+      points: [{ date: '2026-08-09', counts: { no_cli_invoked: 4 } }],
+    }, {
+      multiple_agents: 'Multiple agents',
+      unknown_agent: 'Unknown agent',
+      no_agent: 'No agent',
+      no_cli_invoked: 'No CLI invoked',
+    })).toEqual([{
+      label: 'No CLI invoked',
+      color: '#94a3b8',
+      data: [{ date: '2026-08-09', value: 4 }],
+    }])
+  })
+
+  it.concurrent('maps Unknown agent and falls back to the raw dynamic agent key', () => {
+    const labels = {
+      multiple_agents: 'Multiple agents',
+      unknown_agent: 'Unknown agent',
+      no_agent: 'No agent',
+      no_cli_invoked: 'No CLI invoked',
+    }
+    const usage = {
+      groups: [{ key: 'unknown_agent' }, { key: 'agent:raw-fallback' }],
+      points: [{ date: '2026-08-09', counts: { unknown_agent: 2, 'agent:raw-fallback': 1 } }],
+    }
+
+    const series = buildFrontendOnboardingDailySetupCliAgentSeries(usage, labels)
+
+    expect(series.map(item => item.label)).toEqual(['Unknown agent', 'raw-fallback'])
+    expect(series[0].color).toBe('#f59e0b')
+    expect(series[1].color).toBe(buildFrontendOnboardingDailySetupCliAgentSeries(usage, labels)[1].color)
   })
 
   it.concurrent('adapts reordered funnel stages with stable key-based colors', () => {
@@ -735,9 +817,9 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('<PageLoader')
     expect(source.match(/<AdminFilterBar(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source.match(/<AdminStatsCard(?:\s|\/?>)/g)).toHaveLength(4)
-    expect(source.match(/<ChartCard(?:\s|\/?>)/g)).toHaveLength(11)
+    expect(source.match(/<ChartCard(?:\s|\/?>)/g)).toHaveLength(12)
     expect(source.match(/<AdminBarChart(?:\s|\/?>)/g)).toHaveLength(1)
-    expect(source.match(/<AdminStackedBarChart(?:\s|\/?>)/g)).toHaveLength(4)
+    expect(source.match(/<AdminStackedBarChart(?:\s|\/?>)/g)).toHaveLength(5)
     expect(source.match(/<AdminDailyConversionChart(?:\s|\/?>)/g)).toHaveLength(3)
     expect(source.match(/<AdminFunnelChart(?:\s|\/?>)/g)).toHaveLength(2)
     expect(source.match(/<AdminOnboardingJourneyGraph(?:\s|\/?>)/g)).toHaveLength(1)
@@ -753,6 +835,9 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain('buildFrontendOnboardingDailySetupCliSeries')
     expect(source).toContain('visibleAnalytics.value?.daily_setup_cli_outcomes')
     expect(source).toContain(':series="dailySetupCliSeries"')
+    expect(source).toContain('buildFrontendOnboardingDailySetupCliAgentSeries')
+    expect(source).toContain('visibleAnalytics.value?.daily_setup_cli_agent_usage')
+    expect(source).toContain(':series="dailySetupCliAgentSeries"')
     expect(source).toContain('accessible-borders')
     expect(source).not.toContain('v-if="isLoadingStats" class="grid min-h-72 place-items-center"')
     expect(source).toContain(`t('frontend-onboarding-version-2')`)
@@ -776,7 +861,8 @@ describe('admin frontend onboarding dashboard', () => {
     const organizationSetupChartIndex = template.indexOf(`t('frontend-onboarding-daily-organization-to-setup')`)
     const graphIndex = template.indexOf('chart-id="journey-graph-v4"')
     const cliOutcomeIndex = template.indexOf(`t('frontend-onboarding-setup-cli-outcomes-v2-v4')`)
-    const dailyCliOutcomeIndex = template.indexOf(`t('frontend-onboarding-daily-setup-cli-outcomes-v2-v4')`)
+    const dailyCliOutcomeIndex = template.indexOf('chart-id="daily-setup-cli-outcomes-v2-v4"')
+    const dailyCliAgentIndex = template.indexOf('chart-id="daily-setup-cli-agent-usage-v2-v4"')
     const legacyIndex = template.indexOf(`t('frontend-onboarding-funnel-v1-legacy')`)
     expect(template.slice(v4FunnelIndex, intentDetailsChartIndex)).toContain('md:grid-cols-3 xl:grid-cols-6')
     expect(v4FunnelIndex).toBeLessThan(graphIndex)
@@ -786,15 +872,24 @@ describe('admin frontend onboarding dashboard', () => {
     expect(organizationSetupChartIndex).toBeLessThan(graphIndex)
     expect(graphIndex).toBeLessThan(cliOutcomeIndex)
     expect(cliOutcomeIndex).toBeLessThan(dailyCliOutcomeIndex)
+    expect(dailyCliOutcomeIndex).toBeLessThan(dailyCliAgentIndex)
+    expect(dailyCliAgentIndex).toBeLessThan(legacyIndex)
     expect(dailyCliOutcomeIndex).toBeLessThan(legacyIndex)
 
-    const dailyCliOutcomeSection = template.slice(dailyCliOutcomeIndex, legacyIndex)
+    const dailyCliOutcomeSection = template.slice(dailyCliOutcomeIndex, dailyCliAgentIndex)
     expect(dailyCliOutcomeSection).toContain(':has-data="hasDailySetupCliOutcomeData"')
     expect(dailyCliOutcomeSection).toContain(`t('frontend-onboarding-daily-setup-cli-outcomes-description')`)
     expect(dailyCliOutcomeSection).toContain('<AdminStackedBarChart')
     expect(dailyCliOutcomeSection).toContain(':series="dailySetupCliSeries"')
     expect(dailyCliOutcomeSection).not.toContain(':total=')
     expect(dailyCliOutcomeSection).not.toContain(':unit=')
+    const dailyCliAgentSection = template.slice(dailyCliAgentIndex, legacyIndex)
+    expect(dailyCliAgentSection).toContain(':has-data="hasDailySetupCliAgentData"')
+    expect(dailyCliAgentSection).toContain(`t('frontend-onboarding-daily-setup-cli-agent-usage-v2-v4')`)
+    expect(dailyCliAgentSection).toContain(`t('frontend-onboarding-daily-setup-cli-agent-usage-description')`)
+    expect(dailyCliAgentSection).toContain('<AdminStackedBarChart')
+    expect(dailyCliAgentSection).toContain(':series="dailySetupCliAgentSeries"')
+    expect(dailyCliAgentSection).toContain('accessible-borders')
     expect(source).not.toContain('id: \'organization_name\'')
     expect(source).not.toContain('id: \'organization_size\'')
     expect(source).not.toContain('id: \'invite_opened\'')
@@ -1023,6 +1118,12 @@ describe('admin frontend onboarding dashboard', () => {
     expect(messages['frontend-onboarding-daily-setup-cli-outcomes-v2-v3']).toBe('Daily Setup → CLI outcomes (v2 and v3)')
     expect(messages['frontend-onboarding-daily-setup-cli-outcomes-v2-v4']).toBe('Daily Setup → CLI outcomes (v2–v4)')
     expect(messages['frontend-onboarding-daily-setup-cli-outcomes-description']).toBe('Each person is counted once per UTC day. Left: first-time Setup views; right: returning views. Actions are attributed for up to 24 hours.')
+    expect(messages['frontend-onboarding-daily-setup-cli-agent-usage-v2-v4']).toBe('Daily Setup → CLI agent usage (v2–v4)')
+    expect(messages['frontend-onboarding-daily-setup-cli-agent-usage-description']).toBe('Each Setup person-day is grouped by detected CLI agent activity in the same up-to-24-hour attribution window.')
+    expect(messages['frontend-onboarding-cli-agent-multiple']).toBe('Multiple agents')
+    expect(messages['frontend-onboarding-cli-agent-unknown']).toBe('Unknown agent')
+    expect(messages['frontend-onboarding-cli-agent-none']).toBe('No agent')
+    expect(messages['frontend-onboarding-cli-agent-no-cli']).toBe('No CLI invoked')
     expect(messages['frontend-onboarding-daily-setup-cli-first-time']).toBe('First-time')
     expect(messages['frontend-onboarding-daily-setup-cli-returning']).toBe('Returning')
     expect(messages['frontend-onboarding-daily-setup-cli-cli-copy-init']).toBe('CLI copy + init')

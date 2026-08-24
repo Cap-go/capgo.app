@@ -114,6 +114,9 @@ export function uploadTimeoutMessage(timeoutMs: number): string {
 
 export const PACKNAME = 'package.json'
 
+/** Stable PostHog fingerprint for incomplete Capgo server config before Supabase client creation. */
+export const CAPGO_SERVER_CONFIG_MISSING_MESSAGE = 'Cannot connect to server please try again later'
+
 export type ArrayElement<ArrayType extends readonly unknown[]>
   = ArrayType extends readonly (infer ElementType)[] ? ElementType : never
 export type Organization = ArrayElement<Database['public']['Functions']['get_orgs_v7']['Returns']>
@@ -1039,9 +1042,11 @@ export async function createSupabaseClient(apikey: string, supaHost?: string, su
     config.supaKey = supaKey
   }
   if (!config.supaHost || !config.supaKey) {
-    if (!silent)
-      log.error('Cannot connect to server please try again later')
-    throw new Error('Cannot connect to server please try again later')
+    log.error(CAPGO_SERVER_CONFIG_MISSING_MESSAGE)
+    throw new CliUserError(CAPGO_SERVER_CONFIG_MISSING_MESSAGE, {
+      missingSupaHost: !config.supaHost,
+      missingSupaKey: !config.supaKey,
+    })
   }
   const normalizedSupaHost = normalizeSupabaseHost(config.supaHost)
   // Custom Supabase hosts are an explicit CLI feature; normalizeSupabaseHost constrains the accepted URL shape first.

@@ -22,6 +22,9 @@ export interface FrontendOnboardingDailySetupCliEvent {
   timestampMs: number
   kind: FrontendOnboardingDailySetupCliEventKind
   commandPath?: string
+  agentInvoker?: boolean
+  agentId?: string
+  agentName?: string
 }
 
 export interface FrontendOnboardingDailySetupCliSignals {
@@ -39,15 +42,39 @@ export interface FrontendOnboardingDailySetupCliOutcomePoint {
   returning: FrontendOnboardingDailySetupCliOutcomeCounts
 }
 
+export interface FrontendOnboardingDailySetupCliAgentGroup {
+  key: string
+  agent_id?: string
+  agent_name?: string
+}
+
+export interface FrontendOnboardingDailySetupCliAgentPoint {
+  date: string
+  counts: Record<string, number>
+}
+
+export interface FrontendOnboardingDailySetupCliAgentUsage {
+  groups: FrontendOnboardingDailySetupCliAgentGroup[]
+  points: FrontendOnboardingDailySetupCliAgentPoint[]
+}
+
+interface FrontendOnboardingDailySetupCliAgentSignals {
+  cliInvoked: boolean
+  unknownAgentInvoked: boolean
+  agents: Map<string, string>
+}
+
 interface FrontendOnboardingDailySetupCliAnchor {
   personId: string
   timestampMs: number
   date: string
   lifecycle: FrontendOnboardingDailySetupCliLifecycle | undefined
   signals: FrontendOnboardingDailySetupCliSignals
+  agentSignals: FrontendOnboardingDailySetupCliAgentSignals
 }
 
 const UTC_DAY_MS = 24 * 60 * 60 * 1000
+const RESERVED_AGENT_GROUP_KEYS = ['multiple_agents', 'unknown_agent', 'no_agent', 'no_cli_invoked'] as const
 
 export function createFrontendOnboardingDailySetupCliOutcomeCounts(): FrontendOnboardingDailySetupCliOutcomeCounts {
   return Object.fromEntries(
@@ -83,6 +110,104 @@ export function buildFrontendOnboardingDailySetupCliOutcomes(
   startMs: number,
   endMs: number,
 ): FrontendOnboardingDailySetupCliOutcomePoint[] {
+  const anchorsByPerson = buildFrontendOnboardingDailySetupCliAnchors(events, startMs, endMs)
+
+  const pointsByDate = new Map<string, FrontendOnboardingDailySetupCliOutcomePoint>()
+  for (let timestampMs = getUtcDayStart(startMs); timestampMs < endMs; timestampMs += UTC_DAY_MS) {
+    const date = getUtcDate(timestampMs)
+    pointsByDate.set(date, {
+      date,
+      first_time: createFrontendOnboardingDailySetupCliOutcomeCounts(),
+      returning: createFrontendOnboardingDailySetupCliOutcomeCounts(),
+    })
+  }
+
+  for (const anchors of anchorsByPerson.values()) {
+    for (const anchor of anchors) {
+      if (!anchor.lifecycle)
+        continue
+
+      const point = pointsByDate.get(anchor.date)
+      if (!point)
+        continue
+
+      const outcome = classifyFrontendOnboardingDailySetupCliOutcome(anchor.signals)
+      point[anchor.lifecycle][outcome]++
+    }
+  }
+
+  return [...pointsByDate.values()]
+}
+
+export function buildFrontendOnboardingDailySetupCliAgentUsage(
+  events: readonly FrontendOnboardingDailySetupCliEvent[],
+  startMs: number,
+  endMs: number,
+): FrontendOnboardingDailySetupCliAgentUsage {
+  const anchorsByPerson = buildFrontendOnboardingDailySetupCliAnchors(events, startMs, endMs)
+  const countsByDate = new Map<string, Record<string, number>>()
+  const totalsByGroup = new Map<string, number>()
+  const agentNames = new Map<string, string>()
+
+  for (let timestampMs = getUtcDayStart(startMs); timestampMs < endMs; timestampMs += UTC_DAY_MS)
+    countsByDate.set(getUtcDate(timestampMs), {})
+
+  for (const anchors of anchorsByPerson.values()) {
+    for (const anchor of anchors) {
+      if (!anchor.lifecycle)
+        continue
+
+      const counts = countsByDate.get(anchor.date)
+      if (!counts)
+        continue
+
+      const groupKey = classifyFrontendOnboardingDailySetupCliAgentSignals(anchor.agentSignals)
+      counts[groupKey] = (counts[groupKey] ?? 0) + 1
+      totalsByGroup.set(groupKey, (totalsByGroup.get(groupKey) ?? 0) + 1)
+
+      for (const [agentId, agentName] of anchor.agentSignals.agents) {
+        if (agentName && !agentNames.has(agentId))
+          agentNames.set(agentId, agentName)
+      }
+    }
+  }
+
+  const detectedGroups = [...totalsByGroup.keys()]
+    .filter(key => key.startsWith('agent:'))
+    .map((key): FrontendOnboardingDailySetupCliAgentGroup => {
+      const agentId = key.slice('agent:'.length)
+      return {
+        key,
+        agent_id: agentId,
+        agent_name: agentNames.get(agentId) ?? agentId,
+      }
+    })
+    .sort((left, right) => {
+      const totalDifference = (totalsByGroup.get(right.key) ?? 0) - (totalsByGroup.get(left.key) ?? 0)
+      if (totalDifference !== 0)
+        return totalDifference
+
+      const nameDifference = (left.agent_name ?? left.key).localeCompare(right.agent_name ?? right.key)
+      return nameDifference || left.key.localeCompare(right.key)
+    })
+
+  const reservedGroups = RESERVED_AGENT_GROUP_KEYS
+    .filter(key => totalsByGroup.has(key))
+    .map(key => ({ key }))
+  const groups = [...detectedGroups, ...reservedGroups]
+  const points = [...countsByDate].map(([date, counts]) => ({
+    date,
+    counts: Object.fromEntries(groups.map(group => [group.key, counts[group.key] ?? 0])),
+  }))
+
+  return { groups, points }
+}
+
+function buildFrontendOnboardingDailySetupCliAnchors(
+  events: readonly FrontendOnboardingDailySetupCliEvent[],
+  startMs: number,
+  endMs: number,
+): Map<string, FrontendOnboardingDailySetupCliAnchor[]> {
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs)
     throw new RangeError('startMs and endMs must be finite bounds with endMs greater than startMs')
 
@@ -101,11 +226,19 @@ export function buildFrontendOnboardingDailySetupCliOutcomes(
     const commandPath = event.commandPath
     if (event.kind === 'cli_command' && !commandPath?.trim())
       throw new Error('CLI command event commandPath must be a non-empty string')
+    if (event.agentInvoker !== undefined && typeof event.agentInvoker !== 'boolean')
+      throw new Error('CLI command event agentInvoker must be a Boolean')
+    if (event.agentId !== undefined && typeof event.agentId !== 'string')
+      throw new Error('CLI command event agentId must be a string')
+    if (event.agentName !== undefined && typeof event.agentName !== 'string')
+      throw new Error('CLI command event agentName must be a string')
 
     return {
       ...event,
       personId,
       commandPath,
+      agentId: event.agentId?.trim() || undefined,
+      agentName: event.agentName?.trim() || undefined,
     }
   })
 
@@ -126,6 +259,7 @@ export function buildFrontendOnboardingDailySetupCliOutcomes(
       date,
       lifecycle: undefined,
       signals: createFrontendOnboardingDailySetupCliSignals(),
+      agentSignals: createFrontendOnboardingDailySetupCliAgentSignals(),
     })
   }
 
@@ -170,37 +304,40 @@ export function buildFrontendOnboardingDailySetupCliOutcomes(
       anchor.signals.cliCopied = true
     else if (event.kind === 'ai_copy')
       anchor.signals.aiCopied = true
-    else if (event.commandPath === 'init')
-      anchor.signals.initRun = true
-    else
-      anchor.signals.otherCliRun = true
-  }
+    else {
+      anchor.agentSignals.cliInvoked = true
+      if (event.agentInvoker) {
+        if (event.agentId) {
+          const existingName = anchor.agentSignals.agents.get(event.agentId)
+          if (!anchor.agentSignals.agents.has(event.agentId) || (!existingName && event.agentName))
+            anchor.agentSignals.agents.set(event.agentId, event.agentName ?? '')
+        }
+        else {
+          anchor.agentSignals.unknownAgentInvoked = true
+        }
+      }
 
-  const pointsByDate = new Map<string, FrontendOnboardingDailySetupCliOutcomePoint>()
-  for (let timestampMs = getUtcDayStart(startMs); timestampMs < endMs; timestampMs += UTC_DAY_MS) {
-    const date = getUtcDate(timestampMs)
-    pointsByDate.set(date, {
-      date,
-      first_time: createFrontendOnboardingDailySetupCliOutcomeCounts(),
-      returning: createFrontendOnboardingDailySetupCliOutcomeCounts(),
-    })
-  }
-
-  for (const anchors of anchorsByPerson.values()) {
-    for (const anchor of anchors) {
-      if (!anchor.lifecycle)
-        continue
-
-      const point = pointsByDate.get(anchor.date)
-      if (!point)
-        continue
-
-      const outcome = classifyFrontendOnboardingDailySetupCliOutcome(anchor.signals)
-      point[anchor.lifecycle][outcome]++
+      if (event.commandPath === 'init')
+        anchor.signals.initRun = true
+      else
+        anchor.signals.otherCliRun = true
     }
   }
 
-  return [...pointsByDate.values()]
+  return anchorsByPerson
+}
+
+function classifyFrontendOnboardingDailySetupCliAgentSignals(
+  signals: FrontendOnboardingDailySetupCliAgentSignals,
+): string {
+  if (!signals.cliInvoked)
+    return 'no_cli_invoked'
+  if (signals.agents.size === 0)
+    return signals.unknownAgentInvoked ? 'unknown_agent' : 'no_agent'
+  if (signals.agents.size > 1 || signals.unknownAgentInvoked)
+    return 'multiple_agents'
+
+  return `agent:${signals.agents.keys().next().value}`
 }
 
 function createFrontendOnboardingDailySetupCliSignals(): FrontendOnboardingDailySetupCliSignals {
@@ -209,6 +346,14 @@ function createFrontendOnboardingDailySetupCliSignals(): FrontendOnboardingDaily
     aiCopied: false,
     initRun: false,
     otherCliRun: false,
+  }
+}
+
+function createFrontendOnboardingDailySetupCliAgentSignals(): FrontendOnboardingDailySetupCliAgentSignals {
+  return {
+    cliInvoked: false,
+    unknownAgentInvoked: false,
+    agents: new Map(),
   }
 }
 

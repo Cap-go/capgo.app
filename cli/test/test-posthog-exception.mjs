@@ -15,7 +15,7 @@ import {
   shouldCapturePosthogException,
 } from '../src/posthog.ts'
 import { CliUserError } from '../src/shared/cli-user-error.ts'
-import { findSavedKey } from '../src/utils.ts'
+import { CAPGO_SERVER_CONFIG_MISSING_MESSAGE, findSavedKey } from '../src/utils.ts'
 
 const originalFetch = globalThis.fetch
 const originalEnv = {
@@ -254,6 +254,7 @@ try {
   // never opens an error tracking issue.
   assert.equal(shouldCapturePosthogException(new CliUserError('Login cancelled')), false)
   assert.equal(shouldCapturePosthogException(new CliUserError('Upload cancelled by user')), false)
+  assert.equal(shouldCapturePosthogException(new CliUserError(CAPGO_SERVER_CONFIG_MISSING_MESSAGE)), false)
   assert.equal(
     shouldCapturePosthogException(new CliUserError(
       'Insufficient permissions for app. Required RBAC permission for this action: app.upload_bundle.',
@@ -279,6 +280,7 @@ try {
       { appId: 'com.other.app', requiredPermissionKey: 'app.upload_bundle' },
     ).message,
   )
+
   // Two failures on different channels must be treated identically (one issue,
   // not one per channel), since the channel name lives in context, not the message.
   assert.equal(
