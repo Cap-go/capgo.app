@@ -2957,6 +2957,28 @@ interface PromptAndSyncOptions {
   packageJsonPath?: string
 }
 
+export type IosUpdaterSyncValidation = ReturnType<typeof validateIosUpdaterSync>
+
+export function throwIfIosUpdaterSyncInvalid(
+  syncValidation: IosUpdaterSyncValidation,
+  platformRunner: string,
+  onFailure?: () => void,
+): void {
+  if (!syncValidation.shouldCheck || syncValidation.valid)
+    return
+
+  const resetAdvice = getNativeProjectResetAdvice(platformRunner, 'ios')
+  onFailure?.()
+  log.error('Capgo iOS dependency sync verification failed.')
+  for (const detail of syncValidation.details) {
+    log.error(detail)
+  }
+  log.error('Stop here to avoid testing on a broken native iOS project.')
+  log.warn(resetAdvice.summary)
+  log.info(resetAdvice.command)
+  throw new CliUserError('iOS sync validation failed. Delete your iOS folder, then rerun the add and sync commands above and retry.')
+}
+
 export async function promptAndSyncCapacitor(
   isInit?: boolean,
   orgId?: string,
@@ -3009,19 +3031,11 @@ export async function promptAndSyncCapacitor(
     }
 
     if (options?.validateIosUpdater) {
-      const syncValidation = validateIosUpdaterSync(cwd(), options.packageJsonPath)
-      if (syncValidation.shouldCheck && !syncValidation.valid) {
-        const resetAdvice = getNativeProjectResetAdvice(pm.runner, 'ios')
-        s.stop('iOS sync check failed ❌')
-        log.error('Capgo iOS dependency sync verification failed.')
-        for (const detail of syncValidation.details) {
-          log.error(detail)
-        }
-        log.error('Stop here to avoid testing on a broken native iOS project.')
-        log.warn(resetAdvice.summary)
-        log.info(resetAdvice.command)
-        throw new CliUserError('iOS sync validation failed. Delete your iOS folder, then rerun the add and sync commands above and retry.')
-      }
+      throwIfIosUpdaterSyncInvalid(
+        validateIosUpdaterSync(cwd(), options.packageJsonPath),
+        pm.runner,
+        () => s.stop('iOS sync check failed ❌'),
+      )
     }
 
     if (syncError) {

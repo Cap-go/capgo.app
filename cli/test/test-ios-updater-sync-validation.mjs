@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { validateIosUpdaterSync } from '../src/utils.ts'
+import { CliUserError } from '../src/shared/cli-user-error.ts'
+import { throwIfIosUpdaterSyncInvalid, validateIosUpdaterSync } from '../src/utils.ts'
 
 let testsPassed = 0
 let testsFailed = 0
@@ -223,12 +224,37 @@ await test('monorepo packageJsonPath points validation to app iOS folder', () =>
   }
 })
 
-await test('promptAndSync throws CliUserError when iOS sync validation fails', () => {
-  const utilsSource = readFileSync(new URL('../src/utils.ts', import.meta.url), 'utf-8')
-  assert(
-    utilsSource.includes("throw new CliUserError('iOS sync validation failed. Delete your iOS folder, then rerun the add and sync commands above and retry.')"),
-    'Expected promptAndSync to throw CliUserError for iOS sync validation failure',
-  )
+await test('throwIfIosUpdaterSyncInvalid throws CliUserError when iOS sync validation fails', () => {
+  const root = makeProjectDir()
+  try {
+    writeFile(join(root, 'package.json'), JSON.stringify({
+      dependencies: {
+        '@capgo/capacitor-updater': '^7.0.0',
+      },
+    }))
+    writeFile(join(root, 'ios', 'App', 'Podfile'), "pod '@capgo/capacitor-updater'\n")
+
+    const syncValidation = validateIosUpdaterSync(root)
+    assert(syncValidation.shouldCheck === true, 'Expected shouldCheck=true')
+    assert(syncValidation.valid === false, 'Expected valid=false')
+
+    let thrown
+    try {
+      throwIfIosUpdaterSyncInvalid(syncValidation, 'npx')
+    }
+    catch (error) {
+      thrown = error
+    }
+
+    assert(thrown instanceof CliUserError, 'Expected CliUserError')
+    assert(
+      thrown.message === 'iOS sync validation failed. Delete your iOS folder, then rerun the add and sync commands above and retry.',
+      'Expected stable iOS sync validation message',
+    )
+  }
+  finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 await test('corrupted package.json does not crash validation', () => {
