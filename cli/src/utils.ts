@@ -624,11 +624,21 @@ export async function getDeclaredPackageVersionMap(f: string = findRoot(cwd()), 
   return dependencies
 }
 
+function isPresentCapacitorConfig(extConfig: ExtConfigPairs | undefined): extConfig is ExtConfigPairs {
+  if (!extConfig)
+    return false
+  if (extConfig.config && Object.keys(extConfig.config).length > 0)
+    return true
+  // Capacitor's no-file fallback still reports a default path when the file is
+  // absent. Only treat empty config as missing when that path does not exist.
+  return !!extConfig.path && existsSync(extConfig.path)
+}
+
 async function getConfigFrom(loader: () => Promise<ExtConfigPairs | undefined>, silent = false): Promise<ExtConfigPairs> {
   const message = 'No capacitor config file found, run `cap init` first'
   try {
     const extConfig = await loader()
-    if (!extConfig) {
+    if (!isPresentCapacitorConfig(extConfig)) {
       if (!silent)
         log.error(message)
       throw new CliUserError(message)
