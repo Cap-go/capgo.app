@@ -5,6 +5,7 @@ import { sValidator } from '@hono/standard-validator'
 import { and, eq, sql } from 'drizzle-orm'
 import { createHono, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
+import { assertJwtMfaAssurance } from '../utils/jwt_mfa_assurance.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { schema } from '../utils/postgres_schema.ts'
@@ -89,6 +90,8 @@ async function requireAuthAndGuardLimitedKeys(c: Context<MiddlewareKeyVariables>
   if (auth.authType === 'apikey') {
     return c.json({ error: 'API keys cannot manage role bindings' }, 403)
   }
+
+  await assertJwtMfaAssurance(c, auth)
 
   await next()
 }

@@ -14,6 +14,7 @@ const {
   parseApiKeyGlobalPermissionsMock,
   replaceApiKeyGlobalPermissionsMock,
   requireApiKeyManagementAuthMock,
+  requireJwtMfaForPrivilegedActionMock,
   sanitizeClientBindingsMock,
   selectOwnedApiKeyByIdentifierMock,
 } = vi.hoisted(() => ({
@@ -30,6 +31,7 @@ const {
   parseApiKeyGlobalPermissionsMock: vi.fn(),
   replaceApiKeyGlobalPermissionsMock: vi.fn(),
   requireApiKeyManagementAuthMock: vi.fn(),
+  requireJwtMfaForPrivilegedActionMock: vi.fn(),
   sanitizeClientBindingsMock: vi.fn(),
   selectOwnedApiKeyByIdentifierMock: vi.fn(),
 }))
@@ -84,6 +86,7 @@ vi.mock('../supabase/functions/_backend/public/apikey/scope.ts', () => ({
   getApiKeyBindingOrgIds: getApiKeyBindingOrgIdsMock,
   isValidApiKeyIdFormat: () => true,
   requireApiKeyManagementAuth: requireApiKeyManagementAuthMock,
+  requireJwtMfaForPrivilegedAction: requireJwtMfaForPrivilegedActionMock,
   sanitizeClientBindings: sanitizeClientBindingsMock,
   selectOwnedApiKeyByIdentifier: selectOwnedApiKeyByIdentifierMock,
 }))

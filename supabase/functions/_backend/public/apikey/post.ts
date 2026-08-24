@@ -11,7 +11,7 @@ import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermissionPg } from '../../utils/rbac.ts'
 import { assertExpirationMatchesOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
 import { parseApiKeyGlobalPermissions, replaceApiKeyGlobalPermissions, validateApiKeyGlobalPermissionsForBindings } from './global_permissions.ts'
-import { assertApiKeyManagerCanAssignBindings, ensureApiKeyManagementAllowed, requireApiKeyManagementAuth, sanitizeClientBindings } from './scope.ts'
+import { assertApiKeyManagerCanAssignBindings, ensureApiKeyManagementAllowed, requireApiKeyManagementAuth, requireJwtMfaForPrivilegedAction, sanitizeClientBindings } from './scope.ts'
 
 type BindingInput = ClientBindingInput
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row']
@@ -102,6 +102,8 @@ app.post('/', middlewareAuth(), async (c) => {
     }
     throw simpleError('not_authorized', 'Only user sessions can create API keys')
   }
+
+  await requireJwtMfaForPrivilegedAction(c, auth)
 
   const authApikey = c.get('apikey') as ApiKeyRow | undefined
   await ensureApiKeyManagementAllowed(c, auth, authApikey, 'cannot_create_apikey')
