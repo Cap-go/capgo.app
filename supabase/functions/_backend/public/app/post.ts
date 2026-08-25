@@ -71,7 +71,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
     existing_app: body.existing_app ?? false,
     ios_store_url: body.ios_store_url ?? null,
     android_store_url: body.android_store_url ?? null,
-    onboarding: applyAppOnboardingPatch(addAppCreatorToOnboarding({}, auth.userId), {
+    onboarding: applyAppOnboardingPatch(addAppCreatorToOnboarding({}, auth.userId, auth.claims?.email), {
       source: isAppOnboardingSource(body.onboarding?.source) ? body.onboarding.source : 'manual',
     }),
   }

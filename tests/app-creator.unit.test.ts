@@ -11,9 +11,10 @@ describe('app creator metadata', () => {
   it.concurrent('stores the authenticated creator without dropping onboarding state', () => {
     const onboarding = addAppCreatorToOnboarding({
       features: { ota: { stage: 'local_only' } },
-    }, creatorUserId)
+    }, creatorUserId, 'creator@capgo.app')
 
     expect(onboarding).toEqual({
+      created_by_email: 'creator@capgo.app',
       created_by_user_id: creatorUserId,
       features: { ota: { stage: 'local_only' } },
     })
@@ -22,8 +23,9 @@ describe('app creator metadata', () => {
 
   it.concurrent('builds Bento event details with the creator id and email', () => {
     expect(buildAppCreatorEventDetails({
+      created_by_email: 'creator@capgo.app',
       created_by_user_id: creatorUserId,
-    }, 'creator@capgo.app')).toEqual({
+    })).toEqual({
       created_by_user_id: creatorUserId,
       created_by_email: 'creator@capgo.app',
     })
@@ -31,6 +33,6 @@ describe('app creator metadata', () => {
 
   it.concurrent('omits invalid or missing creator metadata', () => {
     expect(getAppCreatorUserId({ created_by_user_id: 'not-a-user-id' })).toBeUndefined()
-    expect(buildAppCreatorEventDetails({}, 'creator@capgo.app')).toEqual({})
+    expect(buildAppCreatorEventDetails({ created_by_email: 'creator@capgo.app' })).toEqual({})
   })
 })

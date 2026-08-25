@@ -5,12 +5,12 @@ import { eq, or } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 import { createIfNotExistStoreInfo } from '../utils/cloudflare.ts'
 import { purgeOnPremCache } from '../utils/cloudflare_cache_purge.ts'
+import { buildAppCreatorEventDetails } from '../utils/app_creator.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
-import { resolveAppCreatorEventDetails } from '../utils/app_creator.ts'
 import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent } from '../utils/org_onboarding_intent.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { backgroundTask } from '../utils/utils.ts'
@@ -107,7 +107,7 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'INSERT'), async (c)
 
   let appCreatedBentoEvent: BentoTrackingPayload | undefined
   if (!isDemo && !isPendingOnboarding) {
-    const creatorDetails = await resolveAppCreatorEventDetails(c, record.onboarding)
+    const creatorDetails = buildAppCreatorEventDetails(record.onboarding)
     appCreatedBentoEvent = await supabase
       .from('orgs')
       .select('*')
