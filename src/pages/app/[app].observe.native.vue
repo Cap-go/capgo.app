@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions } from 'chart.js'
-import type { PeriodDayOption } from '~/utils/periodDays'
 import type { VersionGroupOption } from '~/components/dashboard/VersionGroupSelector.vue'
+import type { PeriodDayOption } from '~/utils/periodDays'
 import { BarElement, CategoryScale, Chart, Legend, LinearScale, LineElement, PointElement, Tooltip } from 'chart.js'
 import { computed, ref, watch } from 'vue'
 import { Bar, Line } from 'vue-chartjs'

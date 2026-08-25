@@ -88,6 +88,7 @@ describe('native observe stats helpers', () => {
       days: 1,
       start: '2026-07-01T00:00:00.000Z',
       end: '2026-07-01T23:59:59.999Z',
+      versionGroup: 'version',
       dailyRows: [],
       actionRows: [],
       versionRows: [
@@ -311,5 +312,4 @@ describe('native observe stats helpers', () => {
       },
     ])
   })
-
 })
