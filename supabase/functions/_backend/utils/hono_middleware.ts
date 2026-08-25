@@ -374,8 +374,8 @@ function validateSubkeyUser(c: Context, subkey: Database['public']['Tables']['ap
 }
 
 /**
- * Returns true when every effective subkey permission and scope is covered by the
- * parent API key, or the subkey bindings are explicitly delegated from the parent.
+ * Returns true when every effective subkey permission and global permission is
+ * covered by the parent API key at the same or broader scope.
  */
 async function parentCanDelegateToSubkey(
   c: Context,
@@ -475,27 +475,10 @@ async function parentCanDelegateToSubkey(
               AND parent_global.permission_key = child_global.permission_key
           )
         LIMIT 1
-      ),
-      explicit_child_bindings AS (
-        SELECT EXISTS (
-          SELECT 1
-          FROM public.role_bindings AS child_binding
-          INNER JOIN public.role_bindings AS parent_binding
-            ON parent_binding.id = child_binding.parent_binding_id
-          WHERE child_binding.principal_type = public.rbac_principal_apikey()
-            AND child_binding.principal_id = $2::uuid
-            AND parent_binding.principal_type = public.rbac_principal_apikey()
-            AND parent_binding.principal_id = $1::uuid
-            AND (child_binding.expires_at IS NULL OR child_binding.expires_at > now())
-            AND (parent_binding.expires_at IS NULL OR parent_binding.expires_at > now())
-        ) AS has_explicit_delegation
       )
       SELECT (
-        EXISTS (SELECT 1 FROM explicit_child_bindings WHERE has_explicit_delegation)
-        OR (
-          NOT EXISTS (SELECT 1 FROM uncovered_permission)
-          AND NOT EXISTS (SELECT 1 FROM uncovered_global)
-        )
+        NOT EXISTS (SELECT 1 FROM uncovered_permission)
+        AND NOT EXISTS (SELECT 1 FROM uncovered_global)
       ) AS can_delegate
       `,
       [parent.rbac_id, subkey.rbac_id],

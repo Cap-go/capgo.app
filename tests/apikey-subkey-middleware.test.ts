@@ -17,6 +17,7 @@ describe('x-limited-key-id delegation containment', () => {
   const appA = `com.subkey.contain.a.${runId}`
   const appB = `com.subkey.contain.b.${runId}`
   const createdKeyIds: number[] = []
+  const createdKeyRbacIds: string[] = []
 
   let managerAppAdminSiblingId = 0
   let appScopedParentKey = ''
@@ -57,6 +58,7 @@ describe('x-limited-key-id delegation containment', () => {
     })
     managerAppAdminSiblingId = appAdminSibling.id
     createdKeyIds.push(appAdminSibling.id)
+    createdKeyRbacIds.push(appAdminSibling.rbac_id)
 
     const appScopedParent = await createDirectApiKeyWithBindings({
       userId: USER_ID_APIKEY_MANAGEMENT,
@@ -69,6 +71,7 @@ describe('x-limited-key-id delegation containment', () => {
     })
     appScopedParentKey = appScopedParent.key ?? ''
     createdKeyIds.push(appScopedParent.id)
+    createdKeyRbacIds.push(appScopedParent.rbac_id)
 
     const orgScopedSibling = await createDirectApiKeyWithBindings({
       userId: USER_ID_APIKEY_MANAGEMENT,
@@ -79,6 +82,7 @@ describe('x-limited-key-id delegation containment', () => {
     })
     orgScopedSiblingId = orgScopedSibling.id
     createdKeyIds.push(orgScopedSibling.id)
+    createdKeyRbacIds.push(orgScopedSibling.rbac_id)
 
     const appAParent = await createDirectApiKeyWithBindings({
       userId: USER_ID_APIKEY_MANAGEMENT,
@@ -91,6 +95,7 @@ describe('x-limited-key-id delegation containment', () => {
     })
     appAScopedParentKey = appAParent.key ?? ''
     createdKeyIds.push(appAParent.id)
+    createdKeyRbacIds.push(appAParent.rbac_id)
 
     const appBSibling = await createDirectApiKeyWithBindings({
       userId: USER_ID_APIKEY_MANAGEMENT,
@@ -103,6 +108,7 @@ describe('x-limited-key-id delegation containment', () => {
     })
     appBSiblingId = appBSibling.id
     createdKeyIds.push(appBSibling.id)
+    createdKeyRbacIds.push(appBSibling.rbac_id)
 
     const limitedChild = await createDirectApiKeyWithBindings({
       userId: USER_ID_APIKEY_MANAGEMENT,
@@ -115,17 +121,37 @@ describe('x-limited-key-id delegation containment', () => {
     })
     limitedChildId = limitedChild.id
     createdKeyIds.push(limitedChild.id)
+    createdKeyRbacIds.push(limitedChild.rbac_id)
   })
 
   afterAll(async () => {
     const { getSupabaseClient } = await import('./test-utils.ts')
     const supabase = getSupabaseClient()
 
-    for (const keyId of createdKeyIds) {
-      await supabase.from('apikeys').delete().eq('id', keyId)
+    for (const rbacId of createdKeyRbacIds) {
+      try {
+        await supabase.from('role_bindings').delete().eq('principal_id', rbacId)
+      }
+      catch {
+        // Best-effort cleanup for parallel test isolation.
+      }
     }
 
-    await supabase.from('apps').delete().in('app_id', [appA, appB])
+    for (const keyId of createdKeyIds) {
+      try {
+        await supabase.from('apikeys').delete().eq('id', keyId)
+      }
+      catch {
+        // Best-effort cleanup for parallel test isolation.
+      }
+    }
+
+    try {
+      await supabase.from('apps').delete().in('app_id', [appA, appB])
+    }
+    catch {
+      // Best-effort cleanup for parallel test isolation.
+    }
   })
 
   it.concurrent('rejects apikey_manager parent impersonating same-owner app_admin sibling for app update', async () => {
