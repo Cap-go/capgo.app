@@ -2,7 +2,7 @@ import { Hono } from 'hono/tiny'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { app as cacheInvalidateFanout, chunkAppIds, parsePluginInvalidateUrls } from '../supabase/functions/_backend/triggers/cache_invalidate.ts'
 import { app as cacheInvalidateRoute } from '../supabase/functions/_backend/plugin_runtime/private/cache_invalidate.ts'
-import { bumpAppCacheToken, cachedGetAppOwner, cachedRequestInfos, isUpdatesCacheEnabled } from '../supabase/functions/_backend/plugin_runtime/utils/updates_colo_cache.ts'
+import { bumpAppCacheToken, cachedGetAppOwner, cachedRequestInfos, isUpdatesCacheEnabled, normalizeDefaultChannelForCache } from '../supabase/functions/_backend/plugin_runtime/utils/updates_colo_cache.ts'
 
 type CacheKey = Request | string
 
@@ -231,6 +231,27 @@ describe('updates colo cache', () => {
     expect(first.channelData ?? null).toBeNull()
     expect(second.channelData ?? null).toBeNull()
     expect(pg.requestInfosChannelPostgres).toHaveBeenCalledTimes(1)
+  })
+
+  it('separates omitted defaultChannel from a channel literally named undefined', async () => {
+    const c = makeContext()
+    const base = {
+      c,
+      app_id: 'com.demo.app',
+      device_id: 'device-1',
+      drizzleClient: {} as any,
+      channelDeviceCount: 0,
+      manifestBundleCount: 0,
+      rolloutChannelCount: 0,
+      rolloutPausedVersionNames: [],
+      currentVersionName: '1.0.0',
+      platform: 'ios',
+    }
+    await cachedRequestInfos({ ...base, defaultChannel: undefined })
+    await cachedRequestInfos({ ...base, defaultChannel: 'undefined' })
+    expect(pg.requestInfosChannelPostgres).toHaveBeenCalledTimes(2)
+    expect(normalizeDefaultChannelForCache(undefined)).toEqual({ channelName: '', hasDefaultChannel: false })
+    expect(normalizeDefaultChannelForCache('undefined')).toEqual({ channelName: 'undefined', hasDefaultChannel: true })
   })
 
   it('separates cache entries per platform and defaultChannel', async () => {

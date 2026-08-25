@@ -92,6 +92,13 @@ function memoKey(c: Context): object | null {
 interface OwnerPayload { owner: AppOwnerPostgresResult | null }
 interface ChannelPayload { channel: unknown }
 
+/** Cache-key normalization: omitted/empty defaultChannel must not collide with a channel literally named "undefined". */
+export function normalizeDefaultChannelForCache(defaultChannel: string | undefined): { channelName: string, hasDefaultChannel: boolean } {
+  if (defaultChannel === undefined || defaultChannel === '')
+    return { channelName: '', hasDefaultChannel: false }
+  return { channelName: defaultChannel, hasDefaultChannel: true }
+}
+
 export function isUpdatesCacheEnabled(c: Context): boolean {
   return existInEnv(c, 'UPDATES_CACHE_MODE') && getEnv(c, 'UPDATES_CACHE_MODE') === 'on'
 }
@@ -213,7 +220,7 @@ export interface CachedRequestInfosOptions {
   platform: string
   app_id: string
   device_id: string
-  defaultChannel: string
+  defaultChannel?: string
   drizzleClient: ReturnType<typeof getDrizzleClient>
   channelDeviceCount?: number | null
   manifestBundleCount?: number | null
@@ -297,7 +304,7 @@ export async function cachedRequestInfos(options: CachedRequestInfosOptions): Pr
 interface CachedChannelLookupOptions {
   platform: string
   app_id: string
-  defaultChannel: string
+  defaultChannel?: string
   drizzleClient: ReturnType<typeof getDrizzleClient>
   includeMetadata: boolean
   includeManifest: boolean
@@ -306,9 +313,10 @@ interface CachedChannelLookupOptions {
 
 async function cachedChannelLookup(c: Context, options: CachedChannelLookupOptions): Promise<any> {
   const { platform, app_id, defaultChannel, drizzleClient, includeMetadata, includeManifest, rollout } = options
+  const { channelName, hasDefaultChannel } = normalizeDefaultChannelForCache(defaultChannel)
   const load = () => rollout
-    ? requestInfosChannelPostgresRollout(c, platform, app_id, defaultChannel, drizzleClient, includeMetadata)
-    : requestInfosChannelPostgres(c, platform, app_id, defaultChannel, drizzleClient, includeManifest, includeMetadata)
+    ? requestInfosChannelPostgresRollout(c, platform, app_id, channelName, drizzleClient, includeMetadata)
+    : requestInfosChannelPostgres(c, platform, app_id, channelName, drizzleClient, includeManifest, includeMetadata)
 
   const helper = new CacheHelper(c)
   const token = await getAppCacheToken(c, helper, app_id)
@@ -318,8 +326,8 @@ async function cachedChannelLookup(c: Context, options: CachedChannelLookupOptio
     app_id,
     v: token,
     platform,
-    channel: defaultChannel,
-    no_default: defaultChannel === '' ? '1' : '0',
+    channel: channelName,
+    no_default: hasDefaultChannel ? '0' : '1',
     meta: includeMetadata ? '1' : '0',
     manifest: includeManifest ? '1' : '0',
     rollout: rollout ? '1' : '0',
