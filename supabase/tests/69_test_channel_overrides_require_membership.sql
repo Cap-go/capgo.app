@@ -139,6 +139,11 @@ SELECT tests.create_v2_apikey(
   public.rbac_role_org_member()
 );
 
+CREATE TEMP TABLE channel_override_apikey_rbac AS
+SELECT apikeys.id, apikeys.rbac_id
+FROM public.apikeys
+WHERE apikeys.id IN (690040001, 690040002);
+
 SELECT tests.authenticate_as('channel_override_admin');
 
 SELECT throws_ok(
@@ -260,7 +265,7 @@ SELECT throws_ok(
     )
     VALUES (
       public.rbac_principal_apikey(),
-      (SELECT rbac_id FROM public.apikeys WHERE id = 690040002),
+      (SELECT rbac_id FROM channel_override_apikey_rbac WHERE id = 690040002),
       6900401,
       public.rbac_perm_channel_promote_bundle(),
       true
@@ -282,7 +287,7 @@ SELECT lives_ok(
     )
     VALUES (
       public.rbac_principal_apikey(),
-      (SELECT rbac_id FROM public.apikeys WHERE id = 690040001),
+      (SELECT rbac_id FROM channel_override_apikey_rbac WHERE id = 690040001),
       6900401,
       public.rbac_perm_channel_rollback_bundle(),
       true
