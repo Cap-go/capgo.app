@@ -324,14 +324,10 @@ const appOnboardingMethodTrendSeries = computed(() => {
   ]
 })
 
-const hasAppOnboardingMethodTrendData = computed(() => (
-  onboardingFunnelData.value?.onboarding_method_trend?.some(item => (
-    (Number(item.manual) || 0)
-    + (Number(item.cli) || 0)
-    + (Number(item.mcp) || 0)
-    + (Number(item.ai) || 0) > 0
-  )) ?? false
-))
+const hasAppOnboardingMethodTrendData = computed(() => {
+  const totals = appOnboardingMethodTotals.value
+  return totals.manual + totals.cli + totals.mcp + totals.ai > 0
+})
 
 const appOnboardingOutcomeTotals = computed(() => {
   return aggregateAppOnboardingOutcomeTotals(onboardingFunnelData.value?.onboarding_outcome_trend ?? [])
@@ -378,14 +374,10 @@ const appOnboardingOutcomeTrendSeries = computed(() => {
   ]
 })
 
-const hasAppOnboardingOutcomeTrendData = computed(() => (
-  onboardingFunnelData.value?.onboarding_outcome_trend?.some(item => (
-    (Number(item.completed) || 0)
-    + (Number(item.skipped) || 0)
-    + (Number(item.switched_to_manual) || 0)
-    + (Number(item.in_progress) || 0) > 0
-  )) ?? false
-))
+const hasAppOnboardingOutcomeTrendData = computed(() => {
+  const totals = appOnboardingOutcomeTotals.value
+  return totals.completed + totals.skipped + totals.switchedToManual + totals.inProgress > 0
+})
 
 watch(
   [() => adminStore.activeDateRange, () => adminStore.refreshTrigger],
