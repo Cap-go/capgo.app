@@ -1,4 +1,4 @@
-import { exit } from 'node:process'
+import { cwd, exit } from 'node:process'
 import { log } from '@clack/prompts'
 import { InvalidArgumentError, Option, program } from 'commander'
 import pack from '../package.json'
@@ -55,6 +55,7 @@ import { getPreviewQr } from './preview/qr'
 import { probe } from './probe'
 import { testRunDeviceCommand } from './run/device'
 import { CliUserError } from './shared/cli-user-error'
+import { TwoFactorComplianceNetworkError } from './shared/two-factor-compliance'
 import { getUserId } from './user/account'
 import { formatError } from './utils'
 import { normalizeAutoBumpInput } from './versionHelpers'
@@ -88,7 +89,7 @@ enableSupabaseInstrumentation()
 let currentCommandPath = 'unknown'
 
 program.hook('preAction', (_thisCommand, actionCommand) => {
-  setConfigWriteTarget(resolveCapacitorConfigTargetPath(actionCommand.optsWithGlobals().capacitorConfig))
+  setConfigWriteTarget(resolveCapacitorConfigTargetPath(actionCommand.optsWithGlobals().capacitorConfig, cwd(), { logError: true }))
   currentCommandPath = getCommandPath(actionCommand)
   setCurrentCliCommand(currentCommandPath)
   applyCommandAnalyticsOptOut(currentCommandPath, actionCommand.opts())
@@ -1376,7 +1377,7 @@ void (async () => {
     // For non-Commander errors, show full error details. A CliUserError already
     // printed a clear message at the call site, so skip the redundant and
     // alarming `Error: …` line for it.
-    if (!(error instanceof CliUserError))
+    if (!(error instanceof CliUserError) && !(error instanceof TwoFactorComplianceNetworkError))
       log.error(`Error: ${formatError(error)}`)
     trackCommandFailed(currentCommandPath, { errorCategory: categorizeCliError(error), exitCode: 1 })
     await Promise.all([capturePromise, flushAnalytics(), finishActiveCliReplay().catch(() => {})])

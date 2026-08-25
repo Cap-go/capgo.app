@@ -164,7 +164,7 @@ test.describe('Registration', () => {
     await page.click('[data-test="onboarding-logout"]')
 
     await page.waitForURL(/\/login\/?$/)
-    await expectProtectedRouteRedirect(page, '/apps', /\/login/, '[data-test="continue"]')
+    await expectProtectedRouteRedirect(page, '/apps', /\/login/, '[data-test="email"]')
   })
 
   test('should show error for existing email', async ({ page }) => {

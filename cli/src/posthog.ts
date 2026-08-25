@@ -12,6 +12,14 @@ const POSTHOG_EXCEPTION_URL = 'https://eu.i.posthog.com/i/v0/e/'
 const CAPGO_POSTHOG_PROJECT_TOKEN = 'phc_NXDyDajQaTQVwb25DEhIVZfxVUn4R0Y348Z7vWYHZUi'
 const POSTHOG_TIMEOUT_MS = 1500
 
+/** Stable message for broken/outdated native iOS projects after cap sync. */
+export const IOS_SYNC_VALIDATION_FAILED_MESSAGE = 'iOS sync validation failed. Delete your iOS folder, then rerun the add and sync commands above and retry.'
+
+/** Operational CLI failures that stay on the PostHog exception path despite CliUserError UX. */
+const TRACKED_CLI_USER_ERROR_MESSAGES = new Set([
+  IOS_SYNC_VALIDATION_FAILED_MESSAGE,
+])
+
 type CliPosthogExceptionKind = 'unhandled_error'
 
 interface SerializedError {
@@ -229,8 +237,13 @@ export function isExpectedUserError(error: unknown) {
 export function shouldCapturePosthogException(error: unknown) {
   // Expected user-facing failures (CliUserError, bad/missing key, app not
   // created, …) are legitimate states, not crashes — never open an error
-  // tracking issue for them.
-  if (error instanceof CliUserError || isExpectedUserError(error))
+  // tracking issue for them, except tracked operational failures below.
+  if (error instanceof CliUserError) {
+    if (TRACKED_CLI_USER_ERROR_MESSAGES.has(error.message))
+      return true
+    return false
+  }
+  if (isExpectedUserError(error))
     return false
   return !getCommanderCode(error)?.startsWith('commander.')
 }

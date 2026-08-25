@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import { categorizeCliError } from '../src/analytics/error-category.ts'
 import { categorizeHttpStatus } from '../src/analytics/error-category.ts'
+import { isTransientNetworkError } from '../src/shared/network-error.ts'
 
 console.log('🧪 Testing categorizeCliError...\n')
 
@@ -12,8 +13,20 @@ assert.equal(categorizeCliError({ status: 413 }), 'payload_too_large')
 assert.equal(categorizeCliError({ status: 500 }), 'server_error')
 
 assert.equal(categorizeCliError(new Error('fetch failed: ECONNREFUSED')), 'network_error')
+assert.equal(categorizeCliError(new Error('TypeError: fetch failed')), 'network_error')
+assert.equal(categorizeCliError({ message: 'EAI_AGAIN' }), 'network_error')
 assert.equal(categorizeCliError(new Error('The operation timed out')), 'timeout')
+assert.equal(categorizeCliError(new Error('ETIMEDOUT')), 'timeout')
 assert.equal(categorizeCliError(new Error('Invalid app id format')), 'validation_error')
+assert.equal(categorizeCliError(new Error('DNS policy misconfiguration for org')), 'unknown')
+const nestedNetworkCause = new Error('TypeError: fetch failed', {
+  cause: new Error('connect ECONNRESET'),
+})
+assert.equal(categorizeCliError(nestedNetworkCause), 'network_error')
+assert.equal(isTransientNetworkError(nestedNetworkCause), true)
+const stringNetworkCause = new Error('RPC failed', { cause: 'ETIMEDOUT' })
+assert.equal(categorizeCliError(stringNetworkCause), 'timeout')
+assert.equal(isTransientNetworkError(stringNetworkCause), true)
 
 assert.equal(categorizeCliError({ code: 'commander.help' }), 'commander')
 

@@ -7,6 +7,7 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
+import { CliUserError } from '../src/shared/cli-user-error.ts'
 import { getConfigWriteTarget, loadConfigForWrite, resolveCapacitorConfigTargetPath, setConfigWriteTarget } from '../src/config/index.ts'
 import { createKeyInternal } from '../src/key.ts'
 import { getConfig } from '../src/utils.ts'
@@ -113,15 +114,45 @@ module.exports = config
   assert.equal(resolveCapacitorConfigTargetPath('./env-configs/capacitor.config.qr-code-reader.ts', root), configTarget)
   assert.equal(resolveCapacitorConfigTargetPath('./env-configs/capacitor.config.json-target.json', root), jsonConfigTarget)
   assert.equal(resolveCapacitorConfigTargetPath('./env-configs/capacitor.config.javascript.js', root), javascriptConfigTarget)
-  assert.throws(() => resolveCapacitorConfigTargetPath('./env-configs/capacitor.config.esm.mjs', root), /\.ts, capacitor\.config\.\*\.js, or capacitor\.config\.\*\.json/)
-  assert.throws(() => resolveCapacitorConfigTargetPath(relative(root, outsideConfigTarget), root), /must stay within the current working directory/)
-  assert.throws(() => resolveCapacitorConfigTargetPath(outsideConfigTarget, root), /must stay within the current working directory/)
+  assert.throws(() => resolveCapacitorConfigTargetPath('./env-configs/capacitor.config.esm.mjs', root), (error) => {
+    assert.equal(error instanceof CliUserError, true)
+    assert.match(error.message, /\.ts, capacitor\.config\.\*\.js, or capacitor\.config\.\*\.json/)
+    assert.equal(error.context?.path, join(configDir, 'capacitor.config.esm.mjs'))
+    return true
+  })
+  assert.throws(() => resolveCapacitorConfigTargetPath(relative(root, outsideConfigTarget), root), (error) => {
+    assert.equal(error instanceof CliUserError, true)
+    assert.equal(error.message, 'Capacitor config path must stay within the current working directory')
+    return true
+  })
+  assert.throws(() => resolveCapacitorConfigTargetPath(outsideConfigTarget, root), (error) => {
+    assert.equal(error instanceof CliUserError, true)
+    assert.equal(error.message, 'Capacitor config path must stay within the current working directory')
+    return true
+  })
   const outsideLink = join(root, 'outside-link')
   symlinkSync(outsideRoot, outsideLink, process.platform === 'win32' ? 'junction' : 'dir')
-  assert.throws(() => resolveCapacitorConfigTargetPath(join('outside-link', 'capacitor.config.escape.ts'), root), /must stay within the current working directory/)
-  assert.throws(() => resolveCapacitorConfigTargetPath('./missing.ts', root), /Capacitor config path does not exist/)
-  assert.throws(() => resolveCapacitorConfigTargetPath('./directory-target', root), /Capacitor config path does not exist/)
-  assert.throws(() => resolveCapacitorConfigTargetPath('', root), /Capacitor config path must not be empty/)
+  assert.throws(() => resolveCapacitorConfigTargetPath(join('outside-link', 'capacitor.config.escape.ts'), root), (error) => {
+    assert.equal(error instanceof CliUserError, true)
+    assert.equal(error.message, 'Capacitor config path must stay within the current working directory')
+    return true
+  })
+  assert.throws(() => resolveCapacitorConfigTargetPath('./missing.ts', root), (error) => {
+    assert.equal(error instanceof CliUserError, true)
+    assert.equal(error.message, 'Capacitor config path does not exist')
+    assert.equal(error.context?.path, join(root, 'missing.ts'))
+    return true
+  })
+  assert.throws(() => resolveCapacitorConfigTargetPath('./directory-target', root), (error) => {
+    assert.equal(error instanceof CliUserError, true)
+    assert.equal(error.message, 'Capacitor config path does not exist')
+    return true
+  })
+  assert.throws(() => resolveCapacitorConfigTargetPath('', root), (error) => {
+    assert.equal(error instanceof CliUserError, true)
+    assert.equal(error.message, 'Capacitor config path must not be empty')
+    return true
+  })
   const previousCwd = process.cwd()
   const previousConfigWriteTarget = getConfigWriteTarget()
   try {
@@ -169,7 +200,11 @@ module.exports = config
   assert.match(readFileSync(configTarget, 'utf8'), /publicKey/)
   assert.equal(readFileSync(rootConfig, 'utf8'), rootConfigSource)
   assert.ok(!existsSync(join(root, '.capgo_key_v2')))
-  assert.throws(() => resolveCapacitorConfigTargetPath('./env-configs/not-a-capacitor-config.ts', root), /must point to a capacitor.config/)
+  assert.throws(() => resolveCapacitorConfigTargetPath('./env-configs/not-a-capacitor-config.ts', root), (error) => {
+    assert.equal(error instanceof CliUserError, true)
+    assert.match(error.message, /must point to a capacitor\.config/)
+    return true
+  })
 
   const sdkCwd = process.cwd()
   const sdkConfigWriteTarget = getConfigWriteTarget()

@@ -8,8 +8,7 @@ export const test = base.extend({
     page.login = async (email: string, password: string, targetUrl = /\/(apps|dashboard)(\/|$)/) => {
       await page.goto('/login/')
       await page.fill('[data-test="email"]', email)
-      await page.click('[data-test="continue"]')
-      await page.waitForSelector('[data-test="password"]')
+      await page.locator('[data-test="submit"]').waitFor({ state: 'visible', timeout: 10000 })
       await page.fill('[data-test="password"]', password)
       const submit = page.locator('[data-test="submit"]')
       for (let attempt = 0; attempt < 3; attempt++) {

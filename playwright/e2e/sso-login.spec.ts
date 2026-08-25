@@ -1,64 +1,88 @@
 import { expect, test } from '../support/commands'
 
-test.describe('SSO Login Flow (Two-Step)', () => {
+test.describe('SSO Login Flow', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/login/')
   })
 
-  test('should show email step first (Step 1)', async ({ page }) => {
+  test('should show email only on first paint', async ({ page }) => {
     await expect(page.locator('[data-test="email"]')).toBeVisible()
-    await expect(page.locator('[data-test="continue"]')).toBeVisible()
-
-    await expect(page.locator('[data-test="password"]')).not.toBeVisible()
-    await expect(page.locator('[data-test="submit"]')).not.toBeVisible()
+    await expect(page.locator('[data-test="submit"]')).toBeHidden()
+    await expect(page.locator('[data-test="sso-login"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="password"]')).toHaveCount(1)
+    await expect(page.locator('[data-password-ready="false"]')).toHaveCount(1)
   })
 
-  test('should show password field for non-SSO domain after Continue (Step 2)', async ({ page }) => {
-    await page.fill('[data-test="email"]', 'test@example.com')
-    await page.click('[data-test="continue"]')
+  test('should reveal password for non-SSO domains', async ({ page }) => {
+    await page.route('**/private/sso/check-domain', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ has_sso: false }),
+      })
+    })
 
-    await expect(page.locator('[data-test="password"]')).toBeVisible({ timeout: 10000 })
+    const domainCheck = page.waitForResponse(response => response.url().includes('/private/sso/check-domain'))
+    await page.fill('[data-test="email"]', 'test@example.com')
+    await domainCheck
+    await expect(page.locator('[data-password-ready="true"]')).toHaveCount(1)
+    await expect(page.locator('[data-test="password"]')).toBeVisible()
     await expect(page.locator('[data-test="submit"]')).toBeVisible()
-
-    await expect(page.locator('[data-test="continue"]')).not.toBeVisible()
+    await expect(page.locator('[data-test="sso-login"]')).toHaveCount(0)
   })
 
-  test('should return to Step 1 when clicking Back from password step', async ({ page }) => {
-    await page.fill('[data-test="email"]', 'test@example.com')
-    await page.click('[data-test="continue"]')
+  test('should retry an unsuccessful domain check on submit', async ({ page }) => {
+    let checks = 0
+    await page.route('**/private/sso/check-domain', async (route) => {
+      checks += 1
+      if (checks === 1) {
+        await route.fulfill({ status: 500, body: 'error' })
+        return
+      }
 
-    await expect(page.locator('[data-test="password"]')).toBeVisible({ timeout: 10000 })
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ has_sso: true }),
+      })
+    })
 
-    await page.locator('[data-test="back-to-email"]').click()
-
-    await expect(page.locator('[data-test="email"]')).toBeVisible()
-    await expect(page.locator('[data-test="continue"]')).toBeVisible()
-    await expect(page.locator('[data-test="password"]')).not.toBeVisible()
+    await page.fill('[data-test="email"]', 'user@sso.example')
+    await expect(page.locator('[data-password-ready="true"]')).toHaveCount(1)
+    await page.fill('[data-test="password"]', 'Password123!')
+    await page.click('[data-test="submit"]')
+    await expect.poll(() => checks).toBeGreaterThan(1)
   })
 
-  test('should keep Back visible and tappable on mobile password step', async ({ page }) => {
+  test('should use SSO only when the domain has SSO', async ({ page }) => {
+    await page.route('**/private/sso/check-domain', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ has_sso: true, enforce_sso: false }),
+      })
+    })
+
+    await page.fill('[data-test="email"]', 'user@sso.example')
+    await expect(page.locator('[data-test="sso-login"]')).toBeVisible({ timeout: 10000 })
+    await expect(page.locator('[data-password-ready="false"]')).toHaveCount(1)
+    await expect(page.locator('[data-test="submit"]')).toBeHidden()
+  })
+
+  test('should keep email editable on mobile when the domain has SSO', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 667 })
+    await page.route('**/private/sso/check-domain', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ has_sso: true }),
+      })
+    })
 
     const longEmail = 'avery.long.email.address.with-many-segments@very-long-example-domain-for-mobile-testing.example.com'
     await page.fill('[data-test="email"]', longEmail)
-    await page.click('[data-test="continue"]')
-
-    await expect(page.locator('[data-test="password"]')).toBeVisible({ timeout: 10000 })
-
-    const backButton = page.locator('[data-test="back-to-email"]')
-    await expect(backButton).toBeVisible()
-
-    const selectedEmail = page.locator('[data-test="selected-email"]')
-    await expect(selectedEmail).toHaveText(longEmail)
-
-    const buttonBox = await backButton.boundingBox()
-    const emailBox = await selectedEmail.boundingBox()
-    expect(buttonBox?.height).toBeGreaterThanOrEqual(44)
-    expect(emailBox?.y).toBeGreaterThan((buttonBox?.y ?? 0) + (buttonBox?.height ?? 0))
-    expect((emailBox?.x ?? 0) + (emailBox?.width ?? 0)).toBeLessThanOrEqual(375)
-    expect(emailBox?.height).toBeGreaterThan(32)
-
-    await backButton.click()
-    await expect(page.locator('[data-test="email"]')).toBeFocused()
+    await expect(page.locator('[data-test="sso-login"]')).toBeVisible({ timeout: 10000 })
+    await expect(page.locator('[data-test="email"]')).toHaveValue(longEmail)
+    await expect(page.locator('[data-test="email"]')).toBeEditable()
   })
 })

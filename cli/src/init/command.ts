@@ -5274,7 +5274,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   activeInitTelemetry = createInitTelemetry({ enabled: analyticsEnabled })
   const initialCwd = cwd()
   const packageJsonPath = resolveInitTargetPath(options.packageJson, 'Package JSON path', initialCwd)
-  const capacitorConfigPath = getConfigWriteTarget() ?? resolveCapacitorConfigTargetPath(options.capacitorConfig, initialCwd)
+  const capacitorConfigPath = getConfigWriteTarget() ?? resolveCapacitorConfigTargetPath(options.capacitorConfig, initialCwd, { logError: true })
   const mainFilePath = resolveInitTargetPath(options.mainFile, 'Main file path', initialCwd)
   if (packageJsonPath && path.basename(packageJsonPath) !== PACKNAME)
     throw new Error(`Package JSON path must point to ${PACKNAME}: ${packageJsonPath}`)
