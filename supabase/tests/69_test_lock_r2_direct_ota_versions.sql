@@ -2,7 +2,7 @@
 -- checksum/session_key. Unlinked in-progress r2-direct can still finalize.
 BEGIN;
 
-SELECT plan(5);
+SELECT plan(7);
 
 SELECT tests.authenticate_as_service_role();
 SELECT tests.create_supabase_user('r2_direct_ota_lock_owner', 'r2_direct_ota_lock_owner@test.local');
@@ -170,6 +170,30 @@ SELECT throws_ok(
   'P0001',
   'bundle_already_ready: Bundle content cannot be changed after upload is complete. Upload a new bundle instead.',
   'rollout-linked r2-direct cannot UPDATE checksum'
+);
+
+SELECT throws_ok(
+  $sql$
+    UPDATE public.app_versions
+    SET external_url = 'https://evil.example/bundle.zip'
+    WHERE app_id = 'com.test.r2direct.ota.lock'
+      AND name = '1.0.0-linked'
+  $sql$,
+  'P0001',
+  'bundle_already_ready: Bundle content cannot be changed after upload is complete. Upload a new bundle instead.',
+  'channel-linked r2-direct cannot UPDATE external_url'
+);
+
+SELECT throws_ok(
+  $sql$
+    UPDATE public.app_versions
+    SET storage_provider = 'external'
+    WHERE app_id = 'com.test.r2direct.ota.lock'
+      AND name = '1.0.0-linked'
+  $sql$,
+  'P0001',
+  'bundle_already_ready: Bundle content cannot be changed after upload is complete. Upload a new bundle instead.',
+  'channel-linked r2-direct cannot redirect storage_provider away from finalize'
 );
 
 SELECT lives_ok(

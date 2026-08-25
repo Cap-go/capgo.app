@@ -98,12 +98,13 @@ BEGIN
     END IF;
 
     -- GHSA-5rg9-rhwj-wj76: /updates serves channel-linked r2-direct rows.
-    -- Lock checksum/session_key/key_id on those OTA-selectable in-progress
-    -- rows. Finalize (r2-direct -> r2) and other upload metadata stay allowed.
+    -- Lock checksum/session_key/key_id and delivery metadata on those
+    -- OTA-selectable in-progress rows. Finalize (r2-direct -> r2 + r2_path)
+    -- and other non-delivery metadata stay allowed.
     --
     -- Execution profile (app_versions BEFORE UPDATE trigger, console upload path):
     -- - Runs once per UPDATE row when storage_provider is still r2-direct and a
-    --   protected field (checksum/session_key/key_id) changes.
+    --   protected field (checksum/session_key/key_id/delivery metadata) changes.
     -- - Role: service_role / authenticated via PostgREST; trigger is SECURITY
     --   DEFINER on app_versions.
     -- - Cardinality: channels is console-scale (low thousands); each lookup is
@@ -111,32 +112,53 @@ BEGIN
     -- - Indexes: finx_channels_version(version), idx_channels_rollout_version
     --   (rollout_version) WHERE rollout_version IS NOT NULL — BitmapOr of two
     --   Index Scans in EXPLAIN (ANALYZE, BUFFERS) on local seed data.
-    IF NOT bundle_was_ready
-      AND (
-        NEW.session_key IS DISTINCT FROM OLD.session_key
-        OR NEW.key_id IS DISTINCT FROM OLD.key_id
-        OR NEW.checksum IS DISTINCT FROM OLD.checksum
-      )
-      AND EXISTS (
+    -- - Serialization: pg_advisory_xact_lock(OLD.id) matches
+    --   lock_channel_bundle_lifecycle() so channel promotion and protected-field
+    --   updates cannot race.
+    IF NOT bundle_was_ready THEN
+      PERFORM pg_catalog.pg_advisory_xact_lock(OLD.id);
+
+      IF EXISTS (
         SELECT 1
         FROM public.channels AS ch
         WHERE ch.version = OLD.id
            OR ch.rollout_version = OLD.id
       )
-    THEN
-      PERFORM public.pg_log('deny: BUNDLE_CONTENT_LOCKED_TRIGGER',
-        pg_catalog.jsonb_build_object(
-          'org_id', OLD.owner_org,
-          'app_id', OLD.app_id,
-          'version_name', OLD.name,
-          'user_id', OLD.user_id,
-          'old_storage_provider', OLD.storage_provider,
-          'new_storage_provider', NEW.storage_provider,
-          'reason', 'ota_selectable_r2_direct'
-        ));
-      RAISE EXCEPTION '%',
-        'bundle_already_ready: Bundle content cannot be changed '
-        || 'after upload is complete. Upload a new bundle instead.';
+      AND (
+        NEW.session_key IS DISTINCT FROM OLD.session_key
+        OR NEW.key_id IS DISTINCT FROM OLD.key_id
+        OR NEW.checksum IS DISTINCT FROM OLD.checksum
+        OR NEW.external_url IS DISTINCT FROM OLD.external_url
+        OR (
+          NEW.storage_provider IS DISTINCT FROM OLD.storage_provider
+          AND NOT (
+            OLD.storage_provider = 'r2-direct'
+            AND NEW.storage_provider = 'r2'
+          )
+        )
+        OR (
+          NEW.r2_path IS DISTINCT FROM OLD.r2_path
+          AND NOT (
+            OLD.storage_provider = 'r2-direct'
+            AND NEW.storage_provider = 'r2'
+          )
+        )
+      )
+      THEN
+        PERFORM public.pg_log('deny: BUNDLE_CONTENT_LOCKED_TRIGGER',
+          pg_catalog.jsonb_build_object(
+            'org_id', OLD.owner_org,
+            'app_id', OLD.app_id,
+            'version_name', OLD.name,
+            'user_id', OLD.user_id,
+            'old_storage_provider', OLD.storage_provider,
+            'new_storage_provider', NEW.storage_provider,
+            'reason', 'ota_selectable_r2_direct'
+          ));
+        RAISE EXCEPTION '%',
+          'bundle_already_ready: Bundle content cannot be changed '
+          || 'after upload is complete. Upload a new bundle instead.';
+      END IF;
     END IF;
   END IF;
 
