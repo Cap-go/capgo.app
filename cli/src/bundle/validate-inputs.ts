@@ -19,9 +19,7 @@ function decodeStrictBase64(value: string, componentLabel: string): Buffer {
     throw new CliUserError(`${IV_SESSION_KEY_FORMAT_MESSAGE} ${componentLabel} is not valid Base64.`)
   }
 
-  const normalizedInput = value.replace(/=+$/, '')
-  const normalizedDecoded = decoded.toString('base64').replace(/=+$/, '')
-  if (normalizedDecoded !== normalizedInput) {
+  if (decoded.toString('base64') !== value) {
     throw new CliUserError(`${IV_SESSION_KEY_FORMAT_MESSAGE} ${componentLabel} is not valid Base64.`)
   }
 

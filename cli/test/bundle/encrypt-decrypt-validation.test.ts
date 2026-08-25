@@ -51,4 +51,12 @@ describe('bundle decrypt input validation', () => {
     expect(() => requireIvSessionKey(`${shortIv}:${sessionKey}`)).toThrow(CliUserError)
     expect(() => requireIvSessionKey(`${shortIv}:${sessionKey}`)).toThrow(/16 bytes/i)
   })
+
+  it('throws CliUserError when ivSessionKey IV uses non-canonical Base64 padding', () => {
+    const ivWithPadding = Buffer.alloc(16, 1).toString('base64')
+    const ivMissingPadding = ivWithPadding.replace(/=+$/, '')
+    const sessionKey = Buffer.from('encrypted-session-key').toString('base64')
+    expect(() => requireIvSessionKey(`${ivMissingPadding}:${sessionKey}`)).toThrow(CliUserError)
+    expect(() => requireIvSessionKey(`${ivMissingPadding}:${sessionKey}`)).toThrow(/not valid Base64/i)
+  })
 })
