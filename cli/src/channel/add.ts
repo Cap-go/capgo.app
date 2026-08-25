@@ -1,10 +1,15 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ChannelAddOptions } from '../schemas/channel'
+import type { Database } from '../types/supabase.types'
 import { intro, log, outro } from '@clack/prompts'
+import { trackEvent } from '../analytics/track'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
-import { createChannel } from '../api/channels'
+import { createChannel, findChannel } from '../api/channels'
+import { isChannelAlreadyExistsError } from '../init/channel-conflict'
 import {
   createSupabaseClient,
   findSavedKey,
+  formatCapgoCliInvokeError,
   formatError,
   getAppId,
   getConfig,
@@ -12,6 +17,52 @@ import {
   resolveUserIdFromApiKey,
   sendEvent,
 } from '../utils'
+
+export async function isChannelReadableByCaller(
+  supabase: SupabaseClient<Database>,
+  appId: string,
+  channelName: string,
+): Promise<boolean | null> {
+  const { data, error } = await findChannel(supabase, appId, channelName)
+  if (!error && data)
+    return true
+
+  const code = (error as { code?: string } | null)?.code
+  if (code === 'PGRST116')
+    return false
+
+  return null
+}
+
+export type ChannelAddDuplicateOutcome = 'duplicate_readable' | 'duplicate_inaccessible' | 'not_duplicate'
+
+export async function resolveChannelAddDuplicateOutcome(
+  params: {
+    createError: unknown
+    supabase: SupabaseClient<Database>
+    appId: string
+    channelName: string
+  },
+  deps: {
+    isChannelReadableByCaller?: typeof isChannelReadableByCaller
+  } = {},
+): Promise<ChannelAddDuplicateOutcome> {
+  if (!isChannelAlreadyExistsError(params.createError))
+    return 'not_duplicate'
+
+  const readable = await (deps.isChannelReadableByCaller ?? isChannelReadableByCaller)(
+    params.supabase,
+    params.appId,
+    params.channelName,
+  )
+
+  if (readable === true)
+    return 'duplicate_readable'
+  if (readable === false)
+    return 'duplicate_inaccessible'
+
+  throw new Error('Cannot verify channel access for this API key. Grant app.read_channels or channel.read, then retry.')
+}
 
 export async function addChannelInternal(channelId: string, appId: string, options: ChannelAddOptions, silent = false) {
   if (!silent)
@@ -59,9 +110,52 @@ export async function addChannelInternal(channelId: string, appId: string, optio
   })
 
   if (res.error) {
+    const createErrorDetail = await formatCapgoCliInvokeError(res.error)
+    let duplicateOutcome: ChannelAddDuplicateOutcome
+    try {
+      duplicateOutcome = await resolveChannelAddDuplicateOutcome({
+        createError: createErrorDetail,
+        supabase,
+        appId,
+        channelName: channelId,
+      })
+    }
+    catch (ownershipError) {
+      const message = formatError(ownershipError)
+      if (!silent)
+        log.error(`Cannot create Channel 🙀\n${message}`)
+      throw new Error(`Cannot create channel: ${message}`)
+    }
+
+    if (duplicateOutcome === 'duplicate_readable') {
+      void trackEvent({
+        channel: 'channel',
+        event: 'CLI Recovered Channel Already Exists',
+        appId,
+        apikey: options.apikey!,
+        orgId,
+        tags: { channel: channelId },
+      })
+
+      if (!silent) {
+        log.success(`Channel ${channelId} already exists ✅`)
+        outro('Done ✅')
+      }
+
+      return { name: channelId }
+    }
+
+    if (duplicateOutcome === 'duplicate_inaccessible') {
+      const message = `Channel ${channelId} already exists but is not accessible with this API key`
+      if (!silent)
+        log.error(`Cannot create Channel 🙀\n${message}`)
+      throw new Error(`Cannot create channel: ${message}`)
+    }
+
+    const message = createErrorDetail
     if (!silent)
-      log.error(`Cannot create Channel 🙀\n${formatError(res.error)}`)
-    throw new Error(`Cannot create channel: ${formatError(res.error)}`)
+      log.error(`Cannot create Channel 🙀\n${message}`)
+    throw new Error(`Cannot create channel: ${message}`)
   }
 
   await sendEvent(options.apikey, {
