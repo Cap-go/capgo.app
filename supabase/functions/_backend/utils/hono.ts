@@ -21,6 +21,7 @@ export interface JWTClaims {
   sub: string
   email?: string
   role?: string
+  aal?: string
   exp?: number
   iat?: number
   aud?: string | string[]

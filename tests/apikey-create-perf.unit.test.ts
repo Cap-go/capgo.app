@@ -14,6 +14,7 @@ const {
   parseApiKeyGlobalPermissionsMock,
   replaceApiKeyGlobalPermissionsMock,
   requireApiKeyManagementAuthMock,
+  requireJwtMfaForPrivilegedActionMock,
   sanitizeClientBindingsMock,
   supabaseWithAuthMock,
 } = vi.hoisted(() => ({
@@ -30,6 +31,7 @@ const {
   parseApiKeyGlobalPermissionsMock: vi.fn(),
   replaceApiKeyGlobalPermissionsMock: vi.fn(),
   requireApiKeyManagementAuthMock: vi.fn(),
+  requireJwtMfaForPrivilegedActionMock: vi.fn(),
   sanitizeClientBindingsMock: vi.fn(),
   supabaseWithAuthMock: vi.fn(),
 }))
@@ -79,6 +81,7 @@ vi.mock('../supabase/functions/_backend/public/apikey/scope.ts', () => ({
   assertApiKeyManagerCanAssignBindings: assertApiKeyManagerCanAssignBindingsMock,
   ensureApiKeyManagementAllowed: ensureApiKeyManagementAllowedMock,
   requireApiKeyManagementAuth: requireApiKeyManagementAuthMock,
+  requireJwtMfaForPrivilegedAction: requireJwtMfaForPrivilegedActionMock,
   sanitizeClientBindings: sanitizeClientBindingsMock,
 }))
 
@@ -96,11 +99,14 @@ describe('api key create postgres round trips', () => {
   // validateExpirationAgainstOrgPolicies x1, createRoleBindingForPrincipal without skip flags.
   // After: one getPgClient, in-transaction RBAC only, assertExpirationMatchesOrgPolicies x1,
   // no PostgREST, skipOrgLock + skipPrincipalValidation.
+  // The JWT MFA gate is mocked here; production POST /apikey also calls
+  // requireJwtMfaForPrivilegedAction before this handler body.
   beforeEach(() => {
     vi.clearAllMocks()
     vi.resetModules()
 
     requireApiKeyManagementAuthMock.mockReturnValue({ authType: 'jwt', userId: USER_ID })
+    requireJwtMfaForPrivilegedActionMock.mockResolvedValue(undefined)
     ensureApiKeyManagementAllowedMock.mockResolvedValue(undefined)
     parseApiKeyGlobalPermissionsMock.mockReturnValue([])
     assertApiKeyManagerCanAssignBindingsMock.mockResolvedValue(undefined)
@@ -153,6 +159,7 @@ describe('api key create postgres round trips', () => {
     }))
 
     expect(response.status).toBe(200)
+    expect(requireJwtMfaForPrivilegedActionMock).toHaveBeenCalledTimes(1)
     expect(getPgClientMock).toHaveBeenCalledTimes(1)
     expect(checkPermissionMock).not.toHaveBeenCalled()
     expect(supabaseWithAuthMock).not.toHaveBeenCalled()

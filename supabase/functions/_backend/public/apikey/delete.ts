@@ -1,13 +1,17 @@
 import type { Database } from '../../utils/supabase.types.ts'
 import { BRES, honoFactory, quickError, simpleError } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_middleware.ts'
-import { deleteOwnedApiKeyByIdentifier, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, selectOwnedApiKeyByIdentifier } from './scope.ts'
+import { deleteOwnedApiKeyByIdentifier, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, requireJwtMfaForPrivilegedAction, selectOwnedApiKeyByIdentifier } from './scope.ts'
 
 const app = honoFactory.createApp()
 
 app.delete('/:id', middlewareAuth(), async (c) => {
   const auth = requireApiKeyManagementAuth(c, 'not_authorized', 'API key management requires authentication')
   const authApikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row'] | undefined
+
+  if (auth.authType === 'jwt') {
+    await requireJwtMfaForPrivilegedAction(c, auth)
+  }
 
   await ensureApiKeyManagementAllowed(c, auth, authApikey, 'cannot_delete_apikey')
 

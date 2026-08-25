@@ -3,13 +3,14 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { sValidator } from '@hono/standard-validator'
 import { and, eq, sql } from 'drizzle-orm'
+import { getErrorCode } from '../utils/errors.ts'
 import { createHono, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
+import { assertJwtMfaAssurance } from '../utils/jwt_mfa_assurance.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { schema } from '../utils/postgres_schema.ts'
 import { checkPermission, checkPermissionPg } from '../utils/rbac.ts'
-import { getErrorCode } from '../utils/errors.ts'
 import { version } from '../utils/version.ts'
 import {
   appIdParamSchema,
@@ -77,21 +78,30 @@ export const app = createHono('', version)
 app.use('*', useCors)
 app.use('*', middlewareAuth())
 
-async function requireAuthAndGuardLimitedKeys(c: Context<MiddlewareKeyVariables>, next: () => Promise<void>) {
-  const auth = c.get('auth')
-  if (!auth?.userId) {
-    return c.json({ error: 'Unauthorized' }, 401)
-  }
+function createRequireAuthAndGuardLimitedKeys(requireMfa: boolean) {
+  return async (c: Context<MiddlewareKeyVariables>, next: () => Promise<void>) => {
+    const auth = c.get('auth')
+    if (!auth?.userId) {
+      return c.json({ error: 'Unauthorized' }, 401)
+    }
 
-  // API keys must not manage role bindings. V2 API-key permissions are scoped
-  // by these bindings, so allowing keys to mutate them would let a key widen
-  // its own access or mint another broad key.
-  if (auth.authType === 'apikey') {
-    return c.json({ error: 'API keys cannot manage role bindings' }, 403)
-  }
+    // API keys must not manage role bindings. V2 API-key permissions are scoped
+    // by these bindings, so allowing keys to mutate them would let a key widen
+    // its own access or mint another broad key.
+    if (auth.authType === 'apikey') {
+      return c.json({ error: 'API keys cannot manage role bindings' }, 403)
+    }
 
-  await next()
+    if (requireMfa) {
+      await assertJwtMfaAssurance(c, auth)
+    }
+
+    await next()
+  }
 }
+
+const requireAuthAndGuardLimitedKeys = createRequireAuthAndGuardLimitedKeys(false)
+const requireAuthMfaAndGuardLimitedKeys = createRequireAuthAndGuardLimitedKeys(true)
 
 function isSupportedChannelId(channelId: RoleBindingBody['channel_id']): channelId is string | number {
   if (typeof channelId === 'number') {
@@ -1015,7 +1025,7 @@ app.get('/:org_id', requireAuthAndGuardLimitedKeys, sValidator('param', orgIdPar
 })
 
 // POST /private/role_bindings - Assign a role
-app.post('/', requireAuthAndGuardLimitedKeys, async (c) => {
+app.post('/', requireAuthMfaAndGuardLimitedKeys, async (c) => {
   const auth = c.get('auth')!
   const userId = auth.userId
 
@@ -1123,7 +1133,7 @@ app.post('/', requireAuthAndGuardLimitedKeys, async (c) => {
 // PATCH /private/role_bindings/:binding_id - Update a role binding
 app.patch(
   '/:binding_id',
-  requireAuthAndGuardLimitedKeys,
+  requireAuthMfaAndGuardLimitedKeys,
   sValidator('param', bindingIdParamSchema, invalidBindingIdHook),
   async (c) => {
     const { binding_id: bindingId } = c.req.valid('param')
@@ -1216,7 +1226,7 @@ app.patch(
 )
 
 // DELETE /private/role_bindings/:binding_id - Remove a role
-app.delete('/:binding_id', requireAuthAndGuardLimitedKeys, sValidator('param', bindingIdParamSchema, invalidBindingIdHook), async (c) => {
+app.delete('/:binding_id', requireAuthMfaAndGuardLimitedKeys, sValidator('param', bindingIdParamSchema, invalidBindingIdHook), async (c) => {
   const { binding_id: bindingId } = c.req.valid('param')
 
   const auth = c.get('auth')!

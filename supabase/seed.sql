@@ -75,7 +75,8 @@ BEGIN
     ('00000000-0000-0000-0000-000000000000', 'af1a2b3c-4d5e-4f60-8a7b-1c2d3e4f5062', 'authenticated', 'authenticated', 'apikey-expiration@capgo.app', '$2a$10$0CErXxryZPucjJWq3O7qXeTJgN.tnNU5XCZy9pXKDWRi/aS9W7UFi', NOW(), NOW(), 'oljikwwipqrkwilfsytq', NOW(), '', NULL, '', '', NULL, NOW(), '{"provider": "email", "providers": ["email"]}', '{"test_identifier": "test_apikey_expiration"}', 'f', NOW(), NOW(), NULL, NULL, '', '', NULL, '', 0, NULL, '', NULL),
     ('00000000-0000-0000-0000-000000000000', 'd0f1a2b3-c4d5-4e6f-8a90-b1c2d3e4f506', 'authenticated', 'authenticated', 'apikey-management@capgo.app', '$2a$10$0CErXxryZPucjJWq3O7qXeTJgN.tnNU5XCZy9pXKDWRi/aS9W7UFi', NOW(), NOW(), 'oljikwwipqrkwilfsytm', NOW(), '', NULL, '', '', NULL, NOW(), '{"provider": "email", "providers": ["email"]}', '{"test_identifier": "test_apikey_management"}', 'f', NOW(), NOW(), NULL, NULL, '', '', NULL, '', 0, NULL, '', NULL),
     ('00000000-0000-0000-0000-000000000000', 'b7a1d9f4-7b8f-4e3c-8f2b-1a2b3c4d5e6f', 'authenticated', 'authenticated', 'delete-user-stale@capgo.app', '$2a$10$0CErXxryZPucjJWq3O7qXeTJgN.tnNU5XCZy9pXKDWRi/aS9W7UFi', NOW(), NOW(), 'oljikwwipqrkwilfsyu1', NOW(), '', NULL, '', '', NULL, NOW() - interval '10 minutes', '{"provider": "email", "providers": ["email"]}', '{"test_identifier": "test_delete_user_stale"}', 'f', NOW(), NOW(), NULL, NULL, '', '', NULL, '', 0, NULL, '', NULL),
-    ('00000000-0000-0000-0000-000000000000', 'c8b2e0f5-8c90-4f4d-9f3c-2b3c4d5e6f70', 'authenticated', 'authenticated', 'delete-user-fresh@capgo.app', '$2a$10$0CErXxryZPucjJWq3O7qXeTJgN.tnNU5XCZy9pXKDWRi/aS9W7UFi', NOW(), NOW(), 'oljikwwipqrkwilfsyu2', NOW(), '', NULL, '', '', NULL, NOW(), '{"provider": "email", "providers": ["email"]}', '{"test_identifier": "test_delete_user_fresh"}', 'f', NOW(), NOW(), NULL, NULL, '', '', NULL, '', 0, NULL, '', NULL);
+    ('00000000-0000-0000-0000-000000000000', 'c8b2e0f5-8c90-4f4d-9f3c-2b3c4d5e6f70', 'authenticated', 'authenticated', 'delete-user-fresh@capgo.app', '$2a$10$0CErXxryZPucjJWq3O7qXeTJgN.tnNU5XCZy9pXKDWRi/aS9W7UFi', NOW(), NOW(), 'oljikwwipqrkwilfsyu2', NOW(), '', NULL, '', '', NULL, NOW(), '{"provider": "email", "providers": ["email"]}', '{"test_identifier": "test_delete_user_fresh"}', 'f', NOW(), NOW(), NULL, NULL, '', '', NULL, '', 0, NULL, '', NULL),
+    ('00000000-0000-0000-0000-000000000000', 'f8e7d6c5-b4a3-4291-8f7e-6d5c4b3a2910', 'authenticated', 'authenticated', 'jwt-mfa-edge-apikey@capgo.app', '$2a$10$0CErXxryZPucjJWq3O7qXeTJgN.tnNU5XCZy9pXKDWRi/aS9W7UFi', NOW(), NOW(), 'oljikwwipqrkwilfsyu3', NOW(), '', NULL, '', '', NULL, NOW(), '{"provider": "email", "providers": ["email"]}', '{"test_identifier": "jwt_mfa_edge_apikey"}', 'f', NOW(), NOW(), NULL, NULL, '', '', NULL, '', 0, NULL, '', NULL);
 
     INSERT INTO "public"."deleted_account" ("created_at", "email", "id") VALUES
     (NOW(), encode(extensions.digest('deleted@capgo.app'::bytea, 'sha256'::text)::bytea, 'hex'::text), '00000000-0000-0000-0000-000000000001');
@@ -277,7 +278,8 @@ BEGIN
     ('2022-06-03 05:54:15+00', '', 'apikey', 'expiration', NULL, 'apikey-expiration@capgo.app', 'af1a2b3c-4d5e-4f60-8a7b-1c2d3e4f5062', NOW(), 't', 't'),
     ('2022-06-03 05:54:15+00', '', 'apikey', 'management', NULL, 'apikey-management@capgo.app', 'd0f1a2b3-c4d5-4e6f-8a90-b1c2d3e4f506', NOW(), 't', 't'),
     ('2022-06-03 05:54:15+00', '', 'delete', 'stale', NULL, 'delete-user-stale@capgo.app', 'b7a1d9f4-7b8f-4e3c-8f2b-1a2b3c4d5e6f', NOW(), 't', 't'),
-    ('2022-06-03 05:54:15+00', '', 'delete', 'fresh', NULL, 'delete-user-fresh@capgo.app', 'c8b2e0f5-8c90-4f4d-9f3c-2b3c4d5e6f70', NOW(), 't', 't');
+    ('2022-06-03 05:54:15+00', '', 'delete', 'fresh', NULL, 'delete-user-fresh@capgo.app', 'c8b2e0f5-8c90-4f4d-9f3c-2b3c4d5e6f70', NOW(), 't', 't'),
+    ('2022-06-03 05:54:15+00', '', 'jwt', 'mfa-edge', NULL, 'jwt-mfa-edge-apikey@capgo.app', 'f8e7d6c5-b4a3-4291-8f7e-6d5c4b3a2910', NOW(), 't', 't');
 
     ALTER TABLE public.orgs DISABLE TRIGGER generate_org_user_stripe_info_on_org_create;
     INSERT INTO "public"."orgs" ("id", "created_by", "created_at", "updated_at", "logo", "name", "management_email", "customer_id") VALUES
@@ -296,7 +298,8 @@ BEGIN
     ('d3e4f5a6-b7c8-4d90-8e1f-2a3b4c5d6e7f', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Cron Queue Test Org', 'test@capgo.app', 'cus_cron_queue_test_123'),
     ('e4f5a6b7-c8d9-4ea0-9f1a-2b3c4d5e6f70', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Overage Test Org', 'test@capgo.app', 'cus_overage_test_123'),
     ('e5f6a7b8-c9d0-4e1f-9a2b-3c4d5e6f7a82', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Private Error Test Org', 'test@capgo.app', NULL),
-    ('f1a2b3c4-d5e6-4f70-8a9b-0c1d2e3f4a50', 'd0f1a2b3-c4d5-4e6f-8a90-b1c2d3e4f506', NOW(), NOW(), '', 'API Key Management Test Org', 'apikey-management@capgo.app', 'cus_apikey_management_test_123');
+    ('f1a2b3c4-d5e6-4f70-8a9b-0c1d2e3f4a50', 'd0f1a2b3-c4d5-4e6f-8a90-b1c2d3e4f506', NOW(), NOW(), '', 'API Key Management Test Org', 'apikey-management@capgo.app', 'cus_apikey_management_test_123'),
+    ('a9b8c7d6-e5f4-4321-9876-543210fedcba', 'f8e7d6c5-b4a3-4291-8f7e-6d5c4b3a2910', NOW(), NOW(), '', 'JWT MFA Edge Test Org', 'jwt-mfa-edge-apikey@capgo.app', NULL);
     ALTER TABLE public.orgs ENABLE TRIGGER generate_org_user_stripe_info_on_org_create;
 
     INSERT INTO public.usage_credit_grants (
@@ -520,7 +523,8 @@ BEGIN
     ('d3e4f5a6-b7c8-4d90-8e1f-2a3b4c5d6e7f', '6aa76066-55ef-4238-ade6-0b32334a4097', public.rbac_role_org_super_admin(), null, null, false),
     ('e4f5a6b7-c8d9-4ea0-9f1a-2b3c4d5e6f70', '6aa76066-55ef-4238-ade6-0b32334a4097', public.rbac_role_org_super_admin(), null, null, false),
     ('e5f6a7b8-c9d0-4e1f-9a2b-3c4d5e6f7a82', '6aa76066-55ef-4238-ade6-0b32334a4097', public.rbac_role_org_super_admin(), null, null, false),
-    ('f1a2b3c4-d5e6-4f70-8a9b-0c1d2e3f4a50', 'd0f1a2b3-c4d5-4e6f-8a90-b1c2d3e4f506', public.rbac_role_org_super_admin(), null, null, false);
+    ('f1a2b3c4-d5e6-4f70-8a9b-0c1d2e3f4a50', 'd0f1a2b3-c4d5-4e6f-8a90-b1c2d3e4f506', public.rbac_role_org_super_admin(), null, null, false),
+    ('a9b8c7d6-e5f4-4321-9876-543210fedcba', 'f8e7d6c5-b4a3-4291-8f7e-6d5c4b3a2910', public.rbac_role_org_super_admin(), null, null, false);
 
     INSERT INTO public.role_bindings (
       principal_type,
@@ -549,6 +553,9 @@ BEGIN
       AND ou.app_id IS NULL
       AND ou.channel_id IS NULL
     ON CONFLICT DO NOTHING;
+
+    INSERT INTO public.user_security (user_id, email_otp_verified_at, created_at, updated_at)
+    VALUES ('f8e7d6c5-b4a3-4291-8f7e-6d5c4b3a2910', NOW(), NOW(), NOW());
 
     INSERT INTO "public"."apikeys" ("id", "created_at", "user_id", "key", "updated_at", "name") VALUES
     (1, NOW(), 'c591b04e-cf29-4945-b9a0-776d0672061a', 'c591b04e-cf29-4945-b9a0-776d0672061e', NOW(), 'admin app uploader'),

@@ -5,6 +5,7 @@ import type { Database } from '../../utils/supabase.types.ts'
 import type { ClientBindingInput } from './scope.ts'
 import { sql } from 'drizzle-orm'
 import { createRoleBindingForPrincipal, lockRbacOrgs } from '../../private/role_bindings.ts'
+import { getErrorCode, getErrorStatus } from '../../utils/errors.ts'
 import { honoFactory, parseBody, quickError, simpleError } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
@@ -13,8 +14,7 @@ import { schema } from '../../utils/postgres_schema.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { supabaseAdmin, supabaseWithAuth, validateExpirationAgainstOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
 import { apiKeyBindingsAllowOrgCreate, assertApiKeyCanKeepOrgCreateGrant, parseApiKeyGlobalPermissions, replaceApiKeyGlobalPermissions, validateApiKeyGlobalPermissionsForBindings } from './global_permissions.ts'
-import { assertApiKeyManagerCanAssignBindings, assertApiKeyManagerCanRotateTarget, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, sanitizeClientBindings, selectOwnedApiKeyByIdentifier } from './scope.ts'
-import { getErrorCode, getErrorStatus } from '../../utils/errors.ts'
+import { assertApiKeyManagerCanAssignBindings, assertApiKeyManagerCanRotateTarget, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, requireJwtMfaForPrivilegedAction, sanitizeClientBindings, selectOwnedApiKeyByIdentifier } from './scope.ts'
 
 const app = honoFactory.createApp()
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row']
@@ -279,6 +279,10 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
   const requestId = c.get('requestId')
   const auth = requireApiKeyManagementAuth(c, 'not_authorized', 'API key management requires authentication', { requestId })
   const authApikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row'] | undefined
+
+  if (auth.authType === 'jwt') {
+    await requireJwtMfaForPrivilegedAction(c, auth)
+  }
 
   await ensureApiKeyManagementAllowed(c, auth, authApikey, 'cannot_update_apikey', { requestId })
 
