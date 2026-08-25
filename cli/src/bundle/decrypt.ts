@@ -37,7 +37,7 @@ function toIvSessionKeyDecryptError(error: unknown): CliUserError | null {
   if (!(error instanceof Error))
     return null
   if (/RSA routines/i.test(error.message)) {
-    return new CliUserError('Invalid ivSessionKey. The session key could not be decrypted with your public key.')
+    return new CliUserError('Unable to decrypt ivSessionKey with the configured public key. Verify the ivSessionKey and public key.')
   }
   return null
 }
