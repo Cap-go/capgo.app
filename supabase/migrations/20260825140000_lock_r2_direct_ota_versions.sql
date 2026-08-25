@@ -104,7 +104,7 @@ BEGIN
     --
     -- Execution profile (app_versions BEFORE UPDATE trigger, console upload path):
     -- - Runs once per UPDATE row when storage_provider is still r2-direct and a
-    --   protected field (checksum/session_key/key_id/delivery metadata) changes.
+    --   protected field (checksum/session_key/key_id/manifest/delivery metadata) changes.
     -- - Role: service_role / authenticated via PostgREST; trigger is SECURITY
     --   DEFINER on app_versions.
     -- - Cardinality: channels is console-scale (low thousands); each lookup is
