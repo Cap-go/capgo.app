@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
-import { basename, extname, join } from 'node:path'
+import { basename, dirname, extname, join } from 'node:path'
 import { cwd } from 'node:process'
 import { confirm as pConfirm, isCancel as pIsCancel, log, select as pSelect } from '@clack/prompts'
 import { trackEvent } from '../analytics/track'
@@ -96,26 +96,75 @@ export function findBuildEntryJsPath(webDir: string): string | undefined {
   return ranked[0]?.path
 }
 
-export function injectNotifyAppReadyIntoJs(filePath: string, content: string): string {
-  if (content.includes('notifyAppReady'))
-    return content
+function findProjectRootForFile(filePath: string): string {
+  let dir = dirname(filePath)
+  while (dir !== dirname(dir)) {
+    if (existsSync(join(dir, 'package.json')))
+      return dir
+    dir = dirname(dir)
+  }
+  return findRoot(cwd())
+}
 
-  if (content.includes('CapacitorUpdater')) {
-    if (content.includes('CapacitorUpdater.notifyAppReady'))
-      return content
-    return `${content.trimEnd()}\n${NOTIFY_CALL};\n`
+function usesCommonJsModuleFormat(filePath: string, content: string): boolean {
+  const extension = extname(filePath).toLowerCase()
+  if (extension === '.cjs')
+    return true
+  if (extension === '.mjs')
+    return false
+
+  if (/\brequire\s*\(/.test(content) || /\bmodule\.exports\b/.test(content))
+    return true
+  if (/\bimport\s+/.test(content) || /\bexport\s+/.test(content))
+    return false
+
+  const packageJsonPath = join(findProjectRootForFile(filePath), 'package.json')
+  if (existsSync(packageJsonPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { type?: string }
+      return pkg.type !== 'module'
+    }
+    catch {
+      // ignore unreadable package.json
+    }
   }
 
-  const updaterImport = extname(filePath) === '.cjs'
+  return extension === '.js' || extension === '.jsx'
+}
+
+export function hasCallableCapacitorUpdaterBinding(content: string): boolean {
+  if (/\bCapacitorUpdater\s*\.\s*\w+/.test(content))
+    return true
+  if (/\b(?:var|let|const)\s+CapacitorUpdater\b/.test(content))
+    return true
+  if (/\bimport\s*\{[^}]*\bCapacitorUpdater\b[^}]*\}/.test(content))
+    return true
+  if (/\brequire\s*\(\s*['"]@capgo\/capacitor-updater['"]\s*\)/.test(content))
+    return true
+  return false
+}
+
+function hasNotifyAppReadyInvocation(content: string): boolean {
+  return /\bCapacitorUpdater\s*\.\s*notifyAppReady\s*\(/.test(content)
+}
+
+export function injectNotifyAppReadyIntoJs(filePath: string, content: string): string {
+  if (hasNotifyAppReadyInvocation(content))
+    return content
+
+  if (hasCallableCapacitorUpdaterBinding(content))
+    return `${content.trimEnd()}\n${NOTIFY_CALL};\n`
+
+  const updaterImport = usesCommonJsModuleFormat(filePath, content)
     ? 'const { CapacitorUpdater } = require(\'@capgo/capacitor-updater\')'
     : 'import { CapacitorUpdater } from \'@capgo/capacitor-updater\''
   return `${updaterImport};\n\n${NOTIFY_CALL};\n${content}`
 }
 
 export function injectNotifyAppReadyIntoBuildJs(content: string): string | undefined {
-  if (content.includes('notifyAppReady'))
+  if (hasNotifyAppReadyInvocation(content))
     return content
-  if (!content.includes('CapacitorUpdater'))
+  if (!hasCallableCapacitorUpdaterBinding(content))
     return undefined
   return `${content.trimEnd()}\n${NOTIFY_CALL};\n`
 }

@@ -7,13 +7,9 @@ import { trackEvent } from '../analytics/track'
 import { encryptChecksum, encryptChecksumV3, encryptSource, generateSessionKey } from '../api/crypto'
 import { checkAlerts } from '../api/update'
 import { ensurePublicKeyFromPrivateKey, ensurePublicKeyInConfig } from '../recovery/public-key'
-<<<<<<< HEAD
 import { CliUserError } from '../shared/cli-user-error'
 import { baseKeyV2, canPromptInteractively, findRoot, formatError, getConfigForWrite, getInstalledVersion, isDeprecatedPluginVersion } from '../utils'
 import { requireChecksum, requireExistingZipPath, requireZipPath } from './validate-inputs'
-=======
-import { baseKeyV2, canPromptInteractively, findRoot, formatError, getConfigForWrite, getInstalledVersion, isDeprecatedPluginVersion } from '../utils'
->>>>>>> d7203b446 (fix(cli): address PR review feedback on recovery flows)
 
 export type { EncryptResult } from '../schemas/bundle'
 
@@ -55,7 +51,6 @@ export async function encryptZipInternal(
 
     const interactive = canPromptInteractively({ silent: json || silent })
     const userSuppliedPrivateKey = options.keyData !== undefined || options.key !== undefined
-<<<<<<< HEAD
 
     let extConfig = await getConfigForWrite()
     const hasPublicKeyInConfig = !!extConfig.config.plugins?.CapacitorUpdater?.publicKey
@@ -81,43 +76,6 @@ export async function encryptZipInternal(
     if (hasPrivateKeyInConfig && shouldShowPrompts)
       log.warning('There is still a privateKey in the config')
 
-=======
-
-    if (!existsSync(zipPath)) {
-      const message = `Zip not found at the path ${zipPath}`
-      if (!silent) {
-        if (json)
-          emitJsonError({ error: 'zip_not_found' })
-        else
-          log.error(`Error: ${message}`)
-      }
-      throw new Error(message)
-    }
-
-    let extConfig = await getConfigForWrite()
-    const hasPublicKeyInConfig = !!extConfig.config.plugins?.CapacitorUpdater?.publicKey
-
-    if (!hasPublicKeyInConfig) {
-      if (userSuppliedPrivateKey) {
-        const keyPath = options.key || baseKeyV2
-        let privateKey = options.keyData || ''
-        if (!privateKey && existsSync(keyPath))
-          privateKey = readFileSync(keyPath, 'utf8')
-        await ensurePublicKeyFromPrivateKey(privateKey, { silent: silent || json, json })
-      }
-      else {
-        await ensurePublicKeyInConfig({ interactive, silent: silent || json, json })
-      }
-      extConfig = await getConfigForWrite()
-    }
-
-    const hasPrivateKeyInConfig = !!extConfig.config.plugins?.CapacitorUpdater?.privateKey
-    const refreshedHasPublicKey = !!extConfig.config.plugins?.CapacitorUpdater?.publicKey
-
-    if (hasPrivateKeyInConfig && shouldShowPrompts)
-      log.warning('There is still a privateKey in the config')
-
->>>>>>> d7203b446 (fix(cli): address PR review feedback on recovery flows)
     if (!refreshedHasPublicKey) {
       if (!silent) {
         if (json)

@@ -4,7 +4,11 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import process from 'node:process'
+import vm from 'node:vm'
 import { shouldCapturePosthogException } from '../src/posthog.ts'
+import { saveKeyInternal } from '../src/key.ts'
+import { setConfigWriteTarget } from '../src/config/index.ts'
 import {
   collectAppIdCandidates,
   isValidAppId,
@@ -12,6 +16,7 @@ import {
 } from '../src/recovery/app-id.ts'
 import {
   findBuildEntryJsPath,
+  hasCallableCapacitorUpdaterBinding,
   injectNotifyAppReadyIntoBuildJs,
   injectNotifyAppReadyIntoJs,
   patchNotifyAppReadyInBuildFolder,
@@ -68,6 +73,55 @@ await test('injectNotifyAppReadyIntoJs appends notifyAppReady when CapacitorUpda
 await test('injectNotifyAppReadyIntoBuildJs refuses to add bare package imports', () => {
   const input = 'console.log("boot")\n'
   assert.equal(injectNotifyAppReadyIntoBuildJs(input), undefined)
+})
+
+await test('injectNotifyAppReadyIntoBuildJs ignores CapacitorUpdater string literals', () => {
+  const input = 'console.log("CapacitorUpdater")\n'
+  assert.equal(injectNotifyAppReadyIntoBuildJs(input), undefined)
+  assert.equal(hasCallableCapacitorUpdaterBinding(input), false)
+})
+
+await test('injectNotifyAppReadyIntoBuildJs appends notifyAppReady to a real CapacitorUpdater binding', () => {
+  const input = 'var CapacitorUpdater = { notifyAppReady() { CapacitorUpdater.ready = true }, ready: false };\n'
+  const output = injectNotifyAppReadyIntoBuildJs(input)
+  assert.match(output, /CapacitorUpdater\.notifyAppReady\(\)/)
+  const sandbox = {}
+  vm.runInNewContext(output, sandbox)
+  assert.equal(sandbox.CapacitorUpdater.ready, true)
+})
+
+await test('injectNotifyAppReadyIntoJs uses require for CommonJS main.js projects', () => {
+  const root = makeTempDir('cjs-main')
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'commonjs' }))
+  const mainPath = join(root, 'main.js')
+  const output = injectNotifyAppReadyIntoJs(mainPath, 'console.log("boot")\n')
+  assert.match(output, /require\('@capgo\/capacitor-updater'\)/)
+})
+
+await test('saveKeyInternal keeps explicit keyData over a stale public key file', async () => {
+  const root = makeTempDir('save-key')
+  const previousCwd = process.cwd()
+  process.chdir(root)
+  try {
+    const configPath = join(root, 'capacitor.config.json')
+    writeFileSync(configPath, JSON.stringify({
+      appId: 'com.example.app',
+      appName: 'demo',
+      webDir: 'www',
+      plugins: { CapacitorUpdater: {} },
+    }, null, 2))
+    setConfigWriteTarget(configPath)
+    const stalePublicKey = '-----BEGIN RSA PUBLIC KEY-----\nstale-public-key\n-----END RSA PUBLIC KEY-----'
+    const suppliedPublicKey = '-----BEGIN RSA PUBLIC KEY-----\nsupplied-public-key\n-----END RSA PUBLIC KEY-----'
+    writeFileSync('.capgo_key_v2.pub', stalePublicKey)
+    await saveKeyInternal({ keyData: suppliedPublicKey }, true)
+    const config = JSON.parse(readFileSync(configPath, 'utf8'))
+    assert.equal(config.plugins.CapacitorUpdater.publicKey, suppliedPublicKey)
+    assert.notEqual(config.plugins.CapacitorUpdater.publicKey, stalePublicKey)
+  }
+  finally {
+    process.chdir(previousCwd)
+  }
 })
 
 await test('patchNotifyAppReadyInBuildFolder writes notifyAppReady into the built bundle', () => {

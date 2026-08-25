@@ -95,14 +95,20 @@ async function fetchCapgoApps(apikey: string, supaHost?: string, supaAnon?: stri
 }
 
 async function persistAppIdToConfig(appId: string) {
-  const extConfig = await getConfigForWrite()
-  extConfig.config.appId = appId
-  extConfig.config.plugins ??= {}
-  extConfig.config.plugins.CapacitorUpdater = {
-    ...extConfig.config.plugins.CapacitorUpdater,
-    appId,
+  try {
+    const extConfig = await getConfigForWrite()
+    extConfig.config.appId = appId
+    extConfig.config.plugins ??= {}
+    extConfig.config.plugins.CapacitorUpdater = {
+      ...extConfig.config.plugins.CapacitorUpdater,
+      appId,
+    }
+    await writeConfigUpdater(extConfig, true)
   }
-  await writeConfigUpdater(extConfig, true)
+  catch (error) {
+    log.warn(`Could not write app ID to capacitor config: ${formatError(error)}`)
+    log.warn(`Set appId to ${appId} in capacitor.config manually, or pass it on the command line.`)
+  }
 }
 
 export interface ResolveAppIdOptions {
@@ -151,6 +157,7 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
   if (candidates.length === 1) {
     const [onlyCandidate] = candidates
     if (!interactive) {
+      log.info(`No appId provided. Using app ID detected from project files: ${onlyCandidate}`)
       trackAppIdRecovery(onlyCandidate, 'auto-detect', options.apikey)
       return onlyCandidate
     }
@@ -247,7 +254,7 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
 
       const entered = await pText({
         message: 'Enter the app ID to create in Capgo (e.g. com.example.app):',
-        defaultValue: candidates[0],
+        initialValue: candidates[0],
         validate: (value) => {
           if (!value?.trim())
             return 'App ID is required'
