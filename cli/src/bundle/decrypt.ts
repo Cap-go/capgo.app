@@ -125,8 +125,11 @@ export async function decryptZipInternal(
     return { outputPath, checksumMatches }
   }
   catch (error) {
-    if (error instanceof CliUserError)
+    if (error instanceof CliUserError) {
+      if (!silent)
+        log.error(`Error: ${error.message}`)
       throw error
+    }
 
     if (!silent)
       log.error(`Error decrypting zip file ${formatError(error)}`)

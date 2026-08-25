@@ -146,8 +146,15 @@ export async function encryptZipInternal(
     }
   }
   catch (error) {
-    if (error instanceof CliUserError)
+    if (error instanceof CliUserError) {
+      if (!silent) {
+        if (options.json)
+          emitJsonError({ error: error.message })
+        else
+          log.error(`Error: ${error.message}`)
+      }
       throw error
+    }
 
     if (!silent) {
       if (options.json)

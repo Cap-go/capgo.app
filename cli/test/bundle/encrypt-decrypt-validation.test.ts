@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { decryptZipInternal } from '../../src/bundle/decrypt'
 import { encryptZipInternal } from '../../src/bundle/encrypt'
+import { requireIvSessionKey } from '../../src/bundle/validate-inputs'
 import { CliUserError } from '../../src/shared/cli-user-error'
 import { shouldCapturePosthogException } from '../../src/posthog'
 
@@ -32,5 +33,22 @@ describe('bundle decrypt input validation', () => {
   it('throws CliUserError when ivSessionKey is not in IV:SESSION format', async () => {
     await expect(decryptZipInternal('./missing.zip', 'checksum-only', {}, true)).rejects.toBeInstanceOf(CliUserError)
     await expect(decryptZipInternal('./missing.zip', 'checksum-only', {}, true)).rejects.toThrow(/ivSessionKey format/i)
+  })
+
+  it('throws CliUserError when ivSessionKey has invalid Base64 components', () => {
+    expect(() => requireIvSessionKey('not-base64:also-not-base64')).toThrow(CliUserError)
+    expect(() => requireIvSessionKey('not-base64:also-not-base64')).toThrow(/not valid Base64/i)
+  })
+
+  it('throws CliUserError when ivSessionKey has extra colon-separated segments', () => {
+    expect(() => requireIvSessionKey('iv:session:extra')).toThrow(CliUserError)
+    expect(() => requireIvSessionKey('iv:session:extra')).toThrow(/ivSessionKey format/i)
+  })
+
+  it('throws CliUserError when ivSessionKey IV is valid Base64 but not 16 bytes', () => {
+    const shortIv = Buffer.from('short').toString('base64')
+    const sessionKey = Buffer.from('encrypted-session-key').toString('base64')
+    expect(() => requireIvSessionKey(`${shortIv}:${sessionKey}`)).toThrow(CliUserError)
+    expect(() => requireIvSessionKey(`${shortIv}:${sessionKey}`)).toThrow(/16 bytes/i)
   })
 })
