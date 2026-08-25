@@ -309,8 +309,8 @@ function cancelRequest() {
           </h3>
 
           <div>
-            <label for="dedicated-builder-use-case" class="label">
-              <span class="label-text">{{ t('dedicated-builder-use-case') }}</span>
+            <label for="dedicated-builder-use-case" class="d-label">
+              <span class="d-label-text">{{ t('dedicated-builder-use-case') }}</span>
             </label>
             <textarea
               id="dedicated-builder-use-case"
@@ -323,14 +323,15 @@ function cancelRequest() {
           </div>
 
           <div>
-            <label for="dedicated-builder-monthly" class="label">
-              <span class="label-text">{{ t('dedicated-builder-monthly-estimate') }}</span>
+            <label for="dedicated-builder-monthly" class="d-label">
+              <span class="d-label-text">{{ t('dedicated-builder-monthly-estimate') }}</span>
             </label>
             <input
               id="dedicated-builder-monthly"
               v-model.number="monthlyBuildsEstimate"
               type="number"
               min="0"
+              step="1"
               class="w-full d-input d-input-bordered"
               :placeholder="t('dedicated-builder-monthly-estimate-placeholder')"
               :disabled="!canUpdateBilling || isSubmitting"

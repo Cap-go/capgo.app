@@ -7,6 +7,7 @@ import {
   publicDedicatedBuilderView,
 } from '../utils/dedicated_builder.ts'
 import { sendDiscordAlert } from '../utils/discord.ts'
+import { getErrorCode } from '../utils/errors.ts'
 import { BRES, createHono, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
@@ -229,6 +230,12 @@ app.post('/', async (c) => {
       .single()
 
     if (error || !data) {
+      if (getErrorCode(error) === '23505') {
+        const raced = await getDedicatedBuilderForOrg(c, orgId)
+        throw quickError(409, 'dedicated_builder_exists', 'A dedicated builder request already exists for this organization', {
+          status: raced?.status ?? 'requested',
+        })
+      }
       cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to create dedicated builder request', error })
       throw simpleError('internal_error', 'Unable to request dedicated builder')
     }
