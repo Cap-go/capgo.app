@@ -709,19 +709,34 @@ describe('rbac permission system', () => {
       })
 
       it('serializes preview bundle lifecycle locks across promotion and deletion transactions', async () => {
-        const bundles = await pool.query<{ id: string }>(`
-          SELECT id::text
-          FROM public.app_versions
-          WHERE deleted = false
-          ORDER BY id
-          LIMIT 2
-        `)
-        if (bundles.rowCount !== 2) {
-          throw new Error('Need at least two app_versions rows for bundle lock ordering test')
-        }
+        const slug = randomUUID().slice(0, 8)
+        const orgId = randomUUID()
+        const appId = `com.rbac.bundle-lock.${slug}`
 
-        const lowerBundleId = bundles.rows[0]!.id
-        const higherBundleId = bundles.rows[1]!.id
+        await query(`
+          INSERT INTO public.orgs (id, name, management_email, created_by)
+          VALUES ($1::uuid, $2, $3, $4::uuid)
+        `, [orgId, `Bundle Lock Org ${slug}`, `bundle-lock-${slug}@capgo.app`, USER_ID])
+
+        await query(`
+          INSERT INTO public.apps (app_id, name, icon_url, owner_org)
+          VALUES ($1, $2, 'https://example.com/icon.png', $3::uuid)
+        `, [appId, `Bundle Lock App ${slug}`, orgId])
+
+        const lowerBundle = await query(`
+          INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider)
+          VALUES ($1, $2, $3::uuid, $4::uuid, 'r2-direct')
+          RETURNING id::text
+        `, [appId, `bundle-lock-lower-${slug}`, orgId, USER_ID])
+        const higherBundle = await query(`
+          INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider)
+          VALUES ($1, $2, $3::uuid, $4::uuid, 'r2-direct')
+          RETURNING id::text
+        `, [appId, `bundle-lock-higher-${slug}`, orgId, USER_ID])
+
+        const lowerBundleId = lowerBundle.rows[0]!.id
+        const higherBundleId = higherBundle.rows[0]!.id
+        expect(BigInt(lowerBundleId) < BigInt(higherBundleId)).toBe(true)
 
         const holder = await pool.connect()
         const waiter = await pool.connect()
