@@ -462,4 +462,27 @@ describe('public email preferences endpoint', () => {
     await expect(response.json()).resolves.toMatchObject({ error: 'invalid_payload' })
     expect(getBentoSubscriberEmailByUuidMock).not.toHaveBeenCalled()
   })
+
+  it('returns a retryable error on GET when Bento lookup fails', async () => {
+    getBentoSubscriberEmailByUuidMock.mockResolvedValue(undefined)
+
+    const response = await getPreferences(`?uuid=${VISITOR_UUID}`)
+
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toMatchObject({ error: 'email_preferences_unavailable' })
+  })
+
+  it('returns a retryable error on POST when uuid lookup fails', async () => {
+    getBentoSubscriberEmailByUuidMock.mockResolvedValue(undefined)
+
+    const response = await postPreferences({
+      uuid: VISITOR_UUID,
+      unsubscribe_all: true,
+    })
+
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toMatchObject({ error: 'email_preferences_unavailable' })
+    expect(unsubscribeBentoMock).not.toHaveBeenCalled()
+    expect(usersUpdateEqMock).not.toHaveBeenCalled()
+  })
 })

@@ -236,7 +236,7 @@ async function savePreferences() {
         {{ t('email-preferences-description') }}
       </p>
 
-      <form class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6" @submit.prevent="savePreferences">
+      <form class="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6" novalidate @submit.prevent="savePreferences">
         <div>
           <label for="email-preferences-email" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">
             {{ t('email') }}

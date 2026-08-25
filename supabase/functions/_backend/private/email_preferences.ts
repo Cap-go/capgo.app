@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { getBentoSubscriberEmailByUuid, unsubscribeBento } from '../utils/bento.ts'
 import { CacheHelper } from '../utils/cache.ts'
 import { verifyCaptchaToken } from '../utils/captcha.ts'
-import { BRES, createHono, parseBody, simpleRateLimit, useCors } from '../utils/hono.ts'
+import { BRES, createHono, parseBody, simpleErrorWithStatus, simpleRateLimit, useCors } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
@@ -136,12 +136,14 @@ async function resolvePreferenceEmail(
   c: Parameters<typeof getClientIP>[0],
   email: string | undefined,
   uuid: string | undefined,
-): Promise<string | null> {
+): Promise<string | null | undefined> {
   if (email)
     return normalizeEmail(email)
   if (!uuid)
     return null
   const resolved = await getBentoSubscriberEmailByUuid(c, uuid)
+  if (resolved === undefined)
+    return undefined
   return resolved ? normalizeEmail(resolved) : null
 }
 
@@ -156,14 +158,16 @@ app.get('/', async (c) => {
 
   const parsed = uuidQuerySchema.safeParse({ uuid: c.req.query('uuid') })
   if (!parsed.success) {
-    return c.json({ error: 'invalid_payload', status: 'Error', message: 'Invalid email preferences payload' }, 400)
+    return simpleErrorWithStatus(c, 400, 'invalid_payload', 'Invalid email preferences payload')
   }
 
   if (await isEmailPreferencesRateLimited(c, parsed.data.uuid))
     return simpleRateLimit({ reason: 'email_preferences_rate_limit' })
 
   const email = await getBentoSubscriberEmailByUuid(c, parsed.data.uuid)
-  return c.json({ ...BRES, email: email ?? null })
+  if (email === undefined)
+    return simpleErrorWithStatus(c, 503, 'email_preferences_unavailable', 'Could not resolve email preferences')
+  return c.json({ ...BRES, email })
 })
 
 /**
@@ -197,6 +201,8 @@ app.post('/', async (c) => {
   const unsubscribeAll = parsed.data.unsubscribe_all === true
   const preferenceOptOuts = sanitizeOptOutPreferences(parsed.data.preferences)
   const email = await resolvePreferenceEmail(c, parsed.data.email, parsed.data.uuid)
+  if (email === undefined)
+    return simpleErrorWithStatus(c, 503, 'email_preferences_unavailable', 'Could not resolve email preferences')
 
   try {
     if (email) {
