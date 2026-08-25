@@ -4,6 +4,7 @@ import { CliUserError } from '../shared/cli-user-error'
 
 const IV_SESSION_KEY_FORMAT_MESSAGE = 'Invalid ivSessionKey format. Expected "IV_BASE64:SESSION_KEY_BASE64" from the bundle encrypt output.'
 const BASE64_PATTERN = /^[\d+/A-Za-z]+={0,2}$/
+const CHECKSUM_PATTERN = /^(?:[\da-f]{8}|[\da-f]{64})$/i
 
 function isMissingString(value: string | undefined): value is undefined | '' {
   return typeof value !== 'string' || value.trim().length === 0
@@ -44,6 +45,12 @@ export function requireChecksum(checksum: string | undefined): asserts checksum 
   if (isMissingString(checksum)) {
     throw new CliUserError(
       'Missing checksum. Run "bundle zip --json" to get the checksum, then pass it as the second argument.',
+    )
+  }
+
+  if (!CHECKSUM_PATTERN.test(checksum.trim())) {
+    throw new CliUserError(
+      'Invalid checksum format. Run "bundle zip --json" to get a valid SHA256 or CRC32 checksum.',
     )
   }
 }

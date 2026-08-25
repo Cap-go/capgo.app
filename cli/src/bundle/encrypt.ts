@@ -21,6 +21,14 @@ function emitJsonError(error: unknown) {
   console.error(formatError(error))
 }
 
+function emitCliUserJsonError(error: CliUserError) {
+  if (/^Zip not found at /i.test(error.message)) {
+    emitJsonError({ error: 'zip_not_found', message: error.message })
+    return
+  }
+  emitJsonError({ error: error.message })
+}
+
 export async function encryptZipInternal(
   zipPath: string,
   checksum: string,
@@ -149,7 +157,7 @@ export async function encryptZipInternal(
     if (error instanceof CliUserError) {
       if (!silent) {
         if (options.json)
-          emitJsonError({ error: error.message })
+          emitCliUserJsonError(error)
         else
           log.error(`Error: ${error.message}`)
       }

@@ -21,6 +21,11 @@ describe('bundle encrypt input validation', () => {
     await expect(encryptZipInternal('./missing.zip', undefined as any, {}, true)).rejects.toBeInstanceOf(CliUserError)
     await expect(encryptZipInternal('./missing.zip', undefined as any, {}, true)).rejects.toThrow(/checksum/i)
   })
+
+  it('throws CliUserError when checksum format is invalid', async () => {
+    await expect(encryptZipInternal('./missing.zip', 'not-a-checksum', {}, true)).rejects.toBeInstanceOf(CliUserError)
+    await expect(encryptZipInternal('./missing.zip', 'not-a-checksum', {}, true)).rejects.toThrow(/checksum format/i)
+  })
 })
 
 describe('bundle decrypt input validation', () => {
