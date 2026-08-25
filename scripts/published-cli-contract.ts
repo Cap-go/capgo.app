@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { compare, valid as isValidSemver } from 'semver'
 
 export const PUBLISHED_CLI_TAG_PREFIX = 'cli-'
 export const PUBLISHED_CLI_TAG_PATTERN = /^cli-[0-9]/
@@ -16,6 +17,12 @@ function defaultGitRunner(args: string[]): string {
 }
 
 export function comparePublishedCliTags(left: string, right: string): number {
+  const leftVersion = left.slice(PUBLISHED_CLI_TAG_PREFIX.length)
+  const rightVersion = right.slice(PUBLISHED_CLI_TAG_PREFIX.length)
+
+  if (isValidSemver(leftVersion) && isValidSemver(rightVersion))
+    return compare(leftVersion, rightVersion)
+
   const parse = (tag: string) => tag.replace(PUBLISHED_CLI_TAG_PREFIX, '').split(/[.-]/).map(part => Number.parseInt(part, 10) || 0)
   const leftParts = parse(left)
   const rightParts = parse(right)
@@ -79,6 +86,28 @@ export function resolvePublishedCliNpmInstallVersion(
   }
 
   return installable
+}
+
+export function resolvePublishedCliRpcSourceTag(
+  latestTag: string,
+  npmInstallVersion: string,
+  runGit: GitRunner = defaultGitRunner,
+): string {
+  const latestVersion = resolvePublishedCliNpmVersion(latestTag)
+  if (latestVersion === npmInstallVersion)
+    return latestTag
+
+  const installTag = `${PUBLISHED_CLI_TAG_PREFIX}${npmInstallVersion}`
+  try {
+    runGit(['rev-parse', '-q', '--verify', `refs/tags/${installTag}`])
+    return installTag
+  }
+  catch {
+    throw new Error(
+      `Published CLI npm version ${npmInstallVersion} has no matching git tag ${installTag}. `
+      + `Cannot verify RPC contract without the CLI source for the package under test.`,
+    )
+  }
 }
 
 export function extractArgKeysFromRpcCall(source: string, afterRpcNameIndex: number): string[] {

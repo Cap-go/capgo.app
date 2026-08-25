@@ -4,6 +4,7 @@ import {
   extractPublishedCliRpcCallsFromSource,
   resolveLatestPublishedCliTag,
   resolvePublishedCliNpmInstallVersion,
+  resolvePublishedCliRpcSourceTag,
   rpcCallMatchesOverload,
 } from '../scripts/published-cli-contract.ts'
 
@@ -12,6 +13,27 @@ describe('published CLI contract helpers', () => {
     expect(comparePublishedCliTags('cli-8.42.4', 'cli-8.42.5')).toBeLessThan(0)
     expect(comparePublishedCliTags('cli-8.42.5', 'cli-8.42.5')).toBe(0)
     expect(comparePublishedCliTags('cli-8.43.0', 'cli-8.42.5')).toBeGreaterThan(0)
+    expect(comparePublishedCliTags('cli-8.42.5', 'cli-8.42.5-rc.1')).toBeGreaterThan(0)
+  })
+
+  it.concurrent('prefers stable cli tags over prerelease tags with the same version', () => {
+    const tag = resolveLatestPublishedCliTag((args) => {
+      if (args[0] === 'tag')
+        return 'cli-8.42.5-rc.1\ncli-8.42.5\ncli-8.42.4'
+      throw new Error(`Unexpected git call: ${args.join(' ')}`)
+    })
+
+    expect(tag).toBe('cli-8.42.5')
+  })
+
+  it.concurrent('uses the git tag matching the npm package under test for rpc extraction', () => {
+    const sourceTag = resolvePublishedCliRpcSourceTag('cli-8.42.5', '8.42.3', (args) => {
+      if (args[0] === 'rev-parse')
+        return 'ok'
+      throw new Error(`Unexpected git call: ${args.join(' ')}`)
+    })
+
+    expect(sourceTag).toBe('cli-8.42.3')
   })
 
   it.concurrent('ignores cli-helper tags when resolving the latest published CLI tag', () => {

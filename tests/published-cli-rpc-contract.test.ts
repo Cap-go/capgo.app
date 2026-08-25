@@ -20,6 +20,7 @@ import {
   formatPublishedCliRpcCall,
   resolveLatestPublishedCliTag,
   resolvePublishedCliNpmInstallVersion,
+  resolvePublishedCliRpcSourceTag,
   rpcCallMatchesOverload,
   type PublishedCliRpcCall,
 } from '../scripts/published-cli-contract.ts'
@@ -36,15 +37,16 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY as string
 
 interface FunctionPrivilegeRow {
   proc: string
-  arg_names: string[] | null
-  default_count: number
-  arg_count: number
-  anon_exec: boolean
+  argNames: string[] | null
+  defaultCount: number
+  argCount: number
+  anonExec: boolean
 }
 
 const publishedCliTag = resolveLatestPublishedCliTag()
 const publishedCliNpmVersion = resolvePublishedCliNpmInstallVersion(publishedCliTag)
-const publishedCliRpcCalls = extractPublishedCliRpcCalls(publishedCliTag)
+const publishedCliRpcSourceTag = resolvePublishedCliRpcSourceTag(publishedCliTag, publishedCliNpmVersion)
+const publishedCliRpcCalls = extractPublishedCliRpcCalls(publishedCliRpcSourceTag)
 
 async function loadFunctionPrivileges(functionName: string): Promise<FunctionPrivilegeRow[]> {
   const pool = new Pool({ connectionString: POSTGRES_URL })
@@ -52,10 +54,10 @@ async function loadFunctionPrivileges(functionName: string): Promise<FunctionPri
     const result = await pool.query<FunctionPrivilegeRow>(`
       SELECT
         p.oid::regprocedure::text AS proc,
-        p.proargnames AS arg_names,
-        COALESCE(p.pronargdefaults, 0) AS default_count,
-        p.pronargs AS arg_count,
-        has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_exec
+        p.proargnames AS "argNames",
+        COALESCE(p.pronargdefaults, 0) AS "defaultCount",
+        p.pronargs AS "argCount",
+        has_function_privilege('anon', p.oid, 'EXECUTE') AS "anonExec"
       FROM pg_proc AS p
       INNER JOIN pg_namespace AS n ON n.oid = p.pronamespace
       WHERE n.nspname = 'public'
@@ -73,9 +75,9 @@ async function loadFunctionPrivileges(functionName: string): Promise<FunctionPri
 function resolveMatchingOverloads(call: PublishedCliRpcCall, rows: FunctionPrivilegeRow[]) {
   return rows.filter(row => rpcCallMatchesOverload(
     call,
-    row.arg_names,
-    Number(row.default_count),
-    Number(row.arg_count),
+    row.argNames,
+    Number(row.defaultCount),
+    Number(row.argCount),
   ))
 }
 
@@ -92,7 +94,7 @@ function createAnonymousApiKeyClient(apikey: string) {
   })
 }
 
-describe(`CRITICAL published CLI RPC contract (${publishedCliTag})`, () => {
+describe(`CRITICAL published CLI RPC contract (${publishedCliRpcSourceTag} / npm ${publishedCliNpmVersion})`, () => {
   let pool: Pool
 
   beforeAll(() => {
@@ -104,7 +106,7 @@ describe(`CRITICAL published CLI RPC contract (${publishedCliTag})`, () => {
     await pool.end()
   })
 
-  it.concurrent(`keeps anon EXECUTE on every RPC still called by ${publishedCliTag}`, async () => {
+  it.concurrent(`keeps anon EXECUTE on every RPC still called by ${publishedCliRpcSourceTag}`, async () => {
     const missing: string[] = []
 
     for (const call of publishedCliRpcCalls) {
@@ -115,12 +117,12 @@ describe(`CRITICAL published CLI RPC contract (${publishedCliTag})`, () => {
       expect(matches.length, `No overload matched ${formatPublishedCliRpcCall(call)}`).toBeGreaterThan(0)
 
       for (const overload of matches) {
-        if (!overload.anon_exec)
+        if (!overload.anonExec)
           missing.push(`${overload.proc} required by ${formatPublishedCliRpcCall(call)}`)
       }
     }
 
-    expect(missing, `Published CLI ${publishedCliTag} would break in production:\n${missing.join('\n')}`).toEqual([])
+    expect(missing, `Published CLI ${publishedCliRpcSourceTag} would break in production:\n${missing.join('\n')}`).toEqual([])
   })
 
   it.concurrent(`published CLI identity RPC get_user_id({ apikey }) MUST succeed for valid API keys`, async () => {

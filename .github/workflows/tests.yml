@@ -1533,7 +1533,6 @@ jobs:
     name: CRITICAL — Published CLI / do not break old CLI
     permissions:
       contents: read
-      actions: write
     concurrency:
       group: capgo-published-cli-contract-${{ github.event_name }}-${{ github.repository }}
       cancel-in-progress: false
