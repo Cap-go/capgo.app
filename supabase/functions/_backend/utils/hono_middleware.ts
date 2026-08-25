@@ -404,9 +404,34 @@ async function parentCanDelegateToSubkey(
           rb.bundle_id,
           rb.channel_id
         FROM public.role_bindings AS rb
+        INNER JOIN public.roles AS child_role
+          ON child_role.id = rb.role_id
+          AND child_role.scope_type = rb.scope_type
         WHERE rb.principal_type = public.rbac_principal_apikey()
           AND rb.principal_id = $2::uuid
           AND (rb.expires_at IS NULL OR rb.expires_at > now())
+          AND (
+            child_role.name <> 'channel_preview'
+            OR (
+              rb.is_direct IS FALSE
+              AND rb.parent_binding_id IS NOT NULL
+              AND EXISTS (
+                SELECT 1
+                FROM public.role_bindings AS parent_binding
+                INNER JOIN public.roles AS parent_role
+                  ON parent_role.id = parent_binding.role_id
+                  AND parent_role.scope_type = parent_binding.scope_type
+                WHERE parent_binding.id = rb.parent_binding_id
+                  AND parent_binding.principal_type = rb.principal_type
+                  AND parent_binding.principal_id = rb.principal_id
+                  AND parent_binding.scope_type = public.rbac_scope_app()
+                  AND parent_binding.org_id = rb.org_id
+                  AND parent_binding.app_id = rb.app_id
+                  AND parent_role.name = 'app_preview'
+                  AND (parent_binding.expires_at IS NULL OR parent_binding.expires_at > now())
+              )
+            )
+          )
       ),
       child_role_closure AS (
         SELECT
