@@ -66,6 +66,7 @@ VALUES
     'r2-direct',
     'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
     'session-key-rollout',
+    'initial rollout comment',
     false
   ),
   (
@@ -76,6 +77,7 @@ VALUES
     'r2-direct',
     'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
     'session-key-unlinked',
+    'initial unlinked comment',
     false
   )
 ON CONFLICT (name, app_id) DO UPDATE
