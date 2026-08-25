@@ -973,6 +973,53 @@ export async function withAuthenticatedUser<T>(
   })
 }
 
+type SqlQueryFn = (
+  text: string,
+  params?: Array<string | number | null>,
+) => Promise<{ rows: Array<Record<string, unknown>> }>
+
+export async function insertPendingOrgInvitation(
+  query: SqlQueryFn,
+  options: {
+    orgId: string
+    inviteeId: string
+    roleName: string
+    grantedBy: string
+  },
+): Promise<void> {
+  const { orgId, inviteeId, roleName, grantedBy } = options
+  await query(
+    `
+      INSERT INTO public.org_users (org_id, user_id, rbac_role_name, is_invite)
+      VALUES ($1::uuid, $2::uuid, $3, true)
+    `,
+    [orgId, inviteeId, roleName],
+  )
+  await query(
+    `
+      INSERT INTO public.role_bindings (
+        principal_type, principal_id, role_id, scope_type, org_id,
+        granted_by, granted_at, expires_at, reason, is_direct
+      )
+      SELECT
+        public.rbac_principal_user(),
+        $1::uuid,
+        roles.id,
+        public.rbac_scope_org(),
+        $2::uuid,
+        $3::uuid,
+        now(),
+        now() - INTERVAL '1 second',
+        'Pending invitation',
+        true
+      FROM public.roles
+      WHERE roles.name = $4
+        AND roles.scope_type = public.rbac_scope_org()
+    `,
+    [inviteeId, orgId, grantedBy, roleName],
+  )
+}
+
 export async function withAnonymousCapgkey<T>(
   db: Pool,
   capgkey: string,

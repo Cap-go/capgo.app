@@ -177,6 +177,7 @@ BEGIN
     WHERE role_bindings.principal_type = public.rbac_principal_apikey()
       AND role_bindings.principal_id = v_principal_id
       AND role_bindings.org_id = NEW.org_id
+      AND role_bindings.scope_type = public.rbac_scope_org()
       AND (
         role_bindings.expires_at IS NULL
         OR role_bindings.expires_at > pg_catalog.now()
@@ -190,6 +191,7 @@ BEGIN
       WHERE role_bindings.principal_type = public.rbac_principal_user()
         AND role_bindings.principal_id = v_principal_id
         AND role_bindings.org_id = NEW.org_id
+        AND role_bindings.scope_type = public.rbac_scope_org()
         AND (
           role_bindings.expires_at IS NULL
           OR role_bindings.expires_at > pg_catalog.now()
@@ -206,6 +208,7 @@ BEGIN
         ON role_bindings.principal_type = public.rbac_principal_group()
         AND role_bindings.principal_id = group_members.group_id
         AND role_bindings.org_id = groups.org_id
+        AND role_bindings.scope_type = public.rbac_scope_org()
       WHERE group_members.user_id = v_principal_id
         AND (
           role_bindings.expires_at IS NULL

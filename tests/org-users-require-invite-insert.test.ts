@@ -2,7 +2,7 @@ import type { PoolClient } from 'pg'
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { POSTGRES_URL, USER_ID, USER_ID_NONMEMBER } from './test-utils.ts'
+import { insertPendingOrgInvitation, POSTGRES_URL, USER_ID, USER_ID_NONMEMBER } from './test-utils.ts'
 
 describe('org_users require pending invite on insert', () => {
   let pool: Pool
@@ -72,36 +72,12 @@ describe('org_users require pending invite on insert', () => {
 
   const createPendingInvite = async (orgId: string, inviteeId: string, roleName: string) => {
     await withServiceRole()
-    await query(
-      `
-        INSERT INTO public.org_users (org_id, user_id, rbac_role_name, is_invite)
-        VALUES ($1::uuid, $2::uuid, $3, true)
-      `,
-      [orgId, inviteeId, roleName],
-    )
-    await query(
-      `
-        INSERT INTO public.role_bindings (
-          principal_type, principal_id, role_id, scope_type, org_id,
-          granted_by, granted_at, expires_at, reason, is_direct
-        )
-        SELECT
-          public.rbac_principal_user(),
-          $1::uuid,
-          roles.id,
-          public.rbac_scope_org(),
-          $2::uuid,
-          $3::uuid,
-          now(),
-          now() - INTERVAL '1 second',
-          'Pending invitation',
-          true
-        FROM public.roles
-        WHERE roles.name = $4
-          AND roles.scope_type = public.rbac_scope_org()
-      `,
-      [inviteeId, orgId, USER_ID, roleName],
-    )
+    await insertPendingOrgInvitation(query, {
+      orgId,
+      inviteeId,
+      roleName,
+      grantedBy: USER_ID,
+    })
   }
 
   it('rejects org admin direct INSERT of an active third-party membership', async () => {
@@ -167,5 +143,26 @@ describe('org_users require pending invite on insert', () => {
     expect(membership.rows).toHaveLength(1)
     expect(membership.rows[0]?.is_invite).toBe(false)
     expect(membership.rows[0]?.rbac_role_name).toBe('org_member')
+  })
+
+  it('allows an org admin to clear is_invite on a pending membership', async () => {
+    const orgId = await createOrgOwnedByUser(USER_ID)
+    await createPendingInvite(orgId, USER_ID_NONMEMBER, 'org_member')
+
+    await withAuthClaim(USER_ID)
+    const result = await query(
+      `
+        UPDATE public.org_users
+        SET is_invite = false
+        WHERE org_id = $1::uuid
+          AND user_id = $2::uuid
+        RETURNING is_invite, rbac_role_name
+      `,
+      [orgId, USER_ID_NONMEMBER],
+    )
+
+    expect(result.rows).toHaveLength(1)
+    expect(result.rows[0]?.is_invite).toBe(false)
+    expect(result.rows[0]?.rbac_role_name).toBe('org_member')
   })
 })

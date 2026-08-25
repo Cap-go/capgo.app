@@ -2,7 +2,7 @@ import type { PoolClient } from 'pg'
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { POSTGRES_URL, USER_ID, USER_ID_NONMEMBER } from './test-utils.ts'
+import { insertPendingOrgInvitation, POSTGRES_URL, USER_ID, USER_ID_NONMEMBER } from './test-utils.ts'
 
 describe('accept_invitation_to_org privilege guards', () => {
   let pool: Pool
@@ -73,36 +73,12 @@ describe('accept_invitation_to_org privilege guards', () => {
 
   const createPendingInvite = async (orgId: string, inviteeId: string, roleName: string) => {
     await withServiceRole()
-    await query(
-      `
-        INSERT INTO public.org_users (org_id, user_id, rbac_role_name, is_invite)
-        VALUES ($1::uuid, $2::uuid, $3, true)
-      `,
-      [orgId, inviteeId, roleName],
-    )
-    await query(
-      `
-        INSERT INTO public.role_bindings (
-          principal_type, principal_id, role_id, scope_type, org_id,
-          granted_by, granted_at, expires_at, reason, is_direct
-        )
-        SELECT
-          public.rbac_principal_user(),
-          $1::uuid,
-          roles.id,
-          public.rbac_scope_org(),
-          $2::uuid,
-          $3::uuid,
-          now(),
-          now() - INTERVAL '1 second',
-          'Pending invitation',
-          true
-        FROM public.roles
-        WHERE roles.name = $4
-          AND roles.scope_type = public.rbac_scope_org()
-      `,
-      [inviteeId, orgId, USER_ID, roleName],
-    )
+    await insertPendingOrgInvitation(query, {
+      orgId,
+      inviteeId,
+      roleName,
+      grantedBy: USER_ID,
+    })
   }
 
   it('allows an invitee to accept an org_admin invitation without privilege escalation errors', async () => {
