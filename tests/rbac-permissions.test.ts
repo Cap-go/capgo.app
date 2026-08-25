@@ -709,11 +709,22 @@ describe('rbac permission system', () => {
       })
 
       it('serializes preview bundle lifecycle locks across promotion and deletion transactions', async () => {
+        const bundles = await pool.query<{ id: string }>(`
+          SELECT id::text
+          FROM public.app_versions
+          WHERE deleted = false
+          ORDER BY id
+          LIMIT 2
+        `)
+        if (bundles.rowCount !== 2) {
+          throw new Error('Need at least two app_versions rows for bundle lock ordering test')
+        }
+
+        const lowerBundleId = bundles.rows[0]!.id
+        const higherBundleId = bundles.rows[1]!.id
+
         const holder = await pool.connect()
         const waiter = await pool.connect()
-        const lockSeed = BigInt(Date.now()) * BigInt(1_000_000) + BigInt(Math.floor(Math.random() * 1_000_000))
-        const lowerBundleId = lockSeed.toString()
-        const higherBundleId = (lockSeed + BigInt(1)).toString()
 
         try {
           await holder.query('BEGIN')
