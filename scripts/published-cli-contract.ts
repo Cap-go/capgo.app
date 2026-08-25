@@ -183,13 +183,31 @@ export function extractPublishedCliRpcCallsFromSource(source: string): Published
 }
 
 export function extractPublishedCliRpcCalls(tag: string, runGit: GitRunner = defaultGitRunner): PublishedCliRpcCall[] {
-  const output = runGit(['grep', '-n', '-E', String.raw`\.rpc\(['\`][a-z][a-z0-9_]*['\`]`, tag, '--', 'cli/src'])
-  const source = output
+  const output = runGit(['grep', '-l', '-E', String.raw`\.rpc\(['\`][a-z][a-z0-9_]*['\`]`, tag, '--', 'cli/src'])
+  const files = output
     .split('\n')
-    .map(line => line.replace(/^[^:]+:\d+:/, ''))
-    .join('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const tagPrefix = `${tag}:`
+      return line.startsWith(tagPrefix) ? line.slice(tagPrefix.length) : line
+    })
 
-  return extractPublishedCliRpcCallsFromSource(source)
+  const calls = new Map<string, PublishedCliRpcCall>()
+  for (const file of files) {
+    const source = runGit(['show', `${tag}:${file}`])
+    for (const call of extractPublishedCliRpcCallsFromSource(source)) {
+      const key = `${call.name}(${call.argKeys.join(',')})`
+      calls.set(key, call)
+    }
+  }
+
+  return [...calls.values()].sort((left, right) => {
+    const byName = left.name.localeCompare(right.name)
+    if (byName !== 0)
+      return byName
+    return left.argKeys.join(',').localeCompare(right.argKeys.join(','))
+  })
 }
 
 export function formatPublishedCliRpcCall(call: PublishedCliRpcCall): string {

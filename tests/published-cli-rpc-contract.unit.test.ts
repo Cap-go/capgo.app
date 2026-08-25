@@ -53,6 +53,20 @@ describe('published CLI contract helpers', () => {
     ])
   })
 
+  it.concurrent('extracts multiline rpc args from chained supabase calls', () => {
+    const source = `
+      const { data: bundleRows } = await withSupabaseSource('channels.currentBundleName', () => supabase
+        .rpc('get_channel_current_bundle_rbac' as any, {
+          p_app_id: appId,
+          p_channel_id: channelId,
+        }))
+    `
+
+    expect(extractPublishedCliRpcCallsFromSource(source)).toEqual([
+      { name: 'get_channel_current_bundle_rbac', argKeys: ['p_app_id', 'p_channel_id'] },
+    ])
+  })
+
   it.concurrent('matches postgrest overloads from provided rpc argument keys', () => {
     expect(rpcCallMatchesOverload(
       { name: 'get_user_id', argKeys: ['apikey'] },
