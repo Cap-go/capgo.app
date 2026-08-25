@@ -43,6 +43,7 @@ INSERT INTO public.app_versions (
   storage_provider,
   checksum,
   session_key,
+  comment,
   deleted
 )
 VALUES
@@ -54,6 +55,7 @@ VALUES
     'r2-direct',
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'session-key-linked',
+    'initial linked comment',
     false
   ),
   (
@@ -81,6 +83,7 @@ SET
   storage_provider = EXCLUDED.storage_provider,
   checksum = EXCLUDED.checksum,
   session_key = EXCLUDED.session_key,
+  comment = EXCLUDED.comment,
   deleted = false;
 
 INSERT INTO public.channels (
@@ -184,7 +187,7 @@ SELECT lives_ok(
 SELECT lives_ok(
   $sql$
     UPDATE public.app_versions
-    SET native_packages = NULL
+    SET comment = 'updated linked comment'
     WHERE app_id = 'com.test.r2direct.ota.lock'
       AND name = '1.0.0-linked'
   $sql$,
