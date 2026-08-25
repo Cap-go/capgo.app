@@ -16,7 +16,7 @@ import {
 } from '../src/posthog.ts'
 import { CliUserError } from '../src/shared/cli-user-error.ts'
 import { TwoFactorComplianceNetworkError } from '../src/shared/two-factor-compliance.ts'
-import { CAPGO_SERVER_CONFIG_MISSING_MESSAGE, findSavedKey } from '../src/utils.ts'
+import { CAPGO_SERVER_CONFIG_MISSING_MESSAGE, findSavedKey, formatCapgoCliInvokeError } from '../src/utils.ts'
 
 const originalFetch = globalThis.fetch
 const originalEnv = {
@@ -284,6 +284,36 @@ try {
       'Insufficient permissions for app. Required RBAC permission for this action: app.upload_bundle.',
       { appId: 'com.other.app', requiredPermissionKey: 'app.upload_bundle' },
     ).message,
+  )
+  // Channel create RBAC/duplicate failures stay on the PostHog exception path so
+  // user failures remain observable in error tracking.
+  assert.equal(shouldCapturePosthogException(new Error('Cannot create channel: duplicate key value violates unique constraint "unique_name_app_id" | Code: 23505')), true)
+  assert.equal(shouldCapturePosthogException(new Error('Cannot create channel: insufficient_permissions | HTTP 403')), true)
+  assert.equal(shouldCapturePosthogException(new Error('Cannot create channel: Edge Function returned a non-2xx status code')), true)
+  // Infrastructure failures (5xx / no HTTP status) must still be captured.
+  assert.equal(shouldCapturePosthogException(new Error('Cannot create channel: upstream unavailable')), true)
+  process.env.CAPGO_CLI_POSTHOG_API_HOST = 'https://eu.i.posthog.com/i/v0/e'
+  requests.length = 0
+  for (const details of ['upstream unavailable', 'gateway timeout']) {
+    await capturePosthogException({
+      error: new Error(`Cannot create channel: ${details}`),
+      functionName: 'channel add',
+      kind: 'unhandled_error',
+      status: 1,
+    })
+  }
+  assert.equal(requests.length, 2)
+  const [channelFpA, channelFpB] = requests.map(r => JSON.parse(r.init.body).properties.$exception_fingerprint)
+  assert.equal(channelFpA, channelFpB)
+  assert.equal(channelFpA, 'channel add:unhandled_error:Error:1')
+  const apiError = new Error('Edge Function returned a non-2xx status code')
+  apiError.context = new Response(JSON.stringify({
+    error: 'insufficient_permissions',
+    message: 'This API key cannot create channels for this app',
+  }), { status: 403 })
+  assert.equal(
+    await formatCapgoCliInvokeError(apiError),
+    'insufficient_permissions | This API key cannot create channels for this app',
   )
 
   // Two failures on different channels must be treated identically (one issue,
