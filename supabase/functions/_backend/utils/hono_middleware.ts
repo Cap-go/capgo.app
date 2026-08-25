@@ -373,6 +373,189 @@ function validateSubkeyUser(c: Context, subkey: Database['public']['Tables']['ap
   return null
 }
 
+/**
+ * Returns true when every effective subkey permission and scope is covered by the
+ * parent API key, or the subkey bindings are explicitly delegated from the parent.
+ */
+async function parentCanDelegateToSubkey(
+  c: Context,
+  parent: Database['public']['Tables']['apikeys']['Row'],
+  subkey: Database['public']['Tables']['apikeys']['Row'],
+) {
+  if (!parent.rbac_id || !subkey.rbac_id) {
+    return false
+  }
+
+  if (parent.id === subkey.id) {
+    return true
+  }
+
+  let pgClient: ReturnType<typeof getPgClient> | null = null
+  try {
+    pgClient = getPgClient(c)
+    const result = await pgClient.query<{ can_delegate: boolean }>(
+      `
+      WITH RECURSIVE child_direct_bindings AS (
+        SELECT
+          rb.role_id,
+          rb.scope_type,
+          rb.org_id,
+          rb.app_id,
+          rb.channel_id,
+          app.app_id AS app_slug,
+          channel.id AS channel_pk
+        FROM public.role_bindings AS rb
+        LEFT JOIN public.apps AS app
+          ON app.id = rb.app_id
+        LEFT JOIN public.channels AS channel
+          ON channel.rbac_id = rb.channel_id
+        WHERE rb.principal_type = public.rbac_principal_apikey()
+          AND rb.principal_id = $2::uuid
+          AND (rb.expires_at IS NULL OR rb.expires_at > now())
+      ),
+      child_role_closure AS (
+        SELECT
+          child_direct_bindings.role_id,
+          child_direct_bindings.role_id AS effective_role_id,
+          child_direct_bindings.scope_type,
+          child_direct_bindings.org_id,
+          child_direct_bindings.app_slug,
+          child_direct_bindings.channel_pk
+        FROM child_direct_bindings
+
+        UNION
+
+        SELECT
+          child_role_closure.role_id,
+          role_hierarchy.child_role_id,
+          child_role_closure.scope_type,
+          child_role_closure.org_id,
+          child_role_closure.app_slug,
+          child_role_closure.channel_pk
+        FROM child_role_closure
+        INNER JOIN public.role_hierarchy
+          ON role_hierarchy.parent_role_id = child_role_closure.effective_role_id
+        INNER JOIN public.roles AS child_role
+          ON child_role.id = role_hierarchy.child_role_id
+          AND child_role.scope_type = child_role_closure.scope_type
+      ),
+      child_permissions AS (
+        SELECT DISTINCT
+          permissions.key AS permission_key,
+          child_role_closure.org_id,
+          child_role_closure.app_slug,
+          child_role_closure.channel_pk
+        FROM child_role_closure
+        INNER JOIN public.role_permissions
+          ON role_permissions.role_id = child_role_closure.effective_role_id
+        INNER JOIN public.permissions
+          ON permissions.id = role_permissions.permission_id
+      ),
+      uncovered_permission AS (
+        SELECT child_permissions.permission_key
+        FROM child_permissions
+        WHERE NOT public.rbac_has_permission(
+          public.rbac_principal_apikey(),
+          $1::uuid,
+          child_permissions.permission_key,
+          child_permissions.org_id,
+          child_permissions.app_slug,
+          child_permissions.channel_pk
+        )
+        LIMIT 1
+      ),
+      uncovered_global AS (
+        SELECT child_global.permission_key
+        FROM public.apikey_global_permissions AS child_global
+        WHERE child_global.apikey_rbac_id = $2::uuid
+          AND NOT EXISTS (
+            SELECT 1
+            FROM public.apikey_global_permissions AS parent_global
+            WHERE parent_global.apikey_rbac_id = $1::uuid
+              AND parent_global.permission_key = child_global.permission_key
+          )
+        LIMIT 1
+      ),
+      explicit_child_bindings AS (
+        SELECT EXISTS (
+          SELECT 1
+          FROM public.role_bindings AS child_binding
+          INNER JOIN public.role_bindings AS parent_binding
+            ON parent_binding.id = child_binding.parent_binding_id
+          WHERE child_binding.principal_type = public.rbac_principal_apikey()
+            AND child_binding.principal_id = $2::uuid
+            AND parent_binding.principal_type = public.rbac_principal_apikey()
+            AND parent_binding.principal_id = $1::uuid
+            AND (child_binding.expires_at IS NULL OR child_binding.expires_at > now())
+            AND (parent_binding.expires_at IS NULL OR parent_binding.expires_at > now())
+        ) AS has_explicit_delegation
+      )
+      SELECT (
+        EXISTS (SELECT 1 FROM explicit_child_bindings WHERE has_explicit_delegation)
+        OR (
+          NOT EXISTS (SELECT 1 FROM uncovered_permission)
+          AND NOT EXISTS (SELECT 1 FROM uncovered_global)
+        )
+      ) AS can_delegate
+      `,
+      [parent.rbac_id, subkey.rbac_id],
+    )
+
+    return result.rows[0]?.can_delegate === true
+  }
+  catch (error) {
+    logPgError(c, 'parentCanDelegateToSubkey', error)
+    return false
+  }
+  finally {
+    if (pgClient) {
+      await closeClient(c, pgClient)
+    }
+  }
+}
+
+async function validateSubkeyDelegation(
+  c: Context,
+  parent: Database['public']['Tables']['apikeys']['Row'],
+  subkey: Database['public']['Tables']['apikeys']['Row'],
+) {
+  if (!(await parentCanDelegateToSubkey(c, parent, subkey))) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'Parent API key cannot delegate to subkey',
+      parentApikeyId: parent.id,
+      subkeyId: subkey.id,
+    })
+    return quickError(401, 'invalid_subkey', 'Invalid subkey')
+  }
+  return null
+}
+
+async function applyValidatedSubkeyContext(
+  c: Context,
+  parent: Database['public']['Tables']['apikeys']['Row'],
+  subkey: Database['public']['Tables']['apikeys']['Row'],
+) {
+  const userError = validateSubkeyUser(c, subkey, parent)
+  if (userError) {
+    return userError
+  }
+
+  const delegationError = await validateSubkeyDelegation(c, parent, subkey)
+  if (delegationError) {
+    return delegationError
+  }
+
+  const limitError = await validateSubkeyLimits(c, subkey)
+  if (limitError) {
+    return limitError
+  }
+
+  assertSubkeyHasPlaintextSecret(c, subkey)
+  setSubkeyAuthContext(c, parent.user_id, subkey, subkey.key)
+  return null
+}
+
 function resolveAuthHeaders(c: Context) {
   let jwt = c.req.header('authorization')
   let capgkey = c.req.header('capgkey') ?? c.req.header('x-api-key')
@@ -488,16 +671,10 @@ async function foundAPIKey(c: Context, capgkeyString: string) {
       subkeyId: subkey.id,
       subkeyUserId: subkey.user_id,
     })
-    const userError = validateSubkeyUser(c, subkey, apikey)
-    if (userError) {
-      return userError
+    const subkeyError = await applyValidatedSubkeyContext(c, apikey, subkey)
+    if (subkeyError) {
+      return subkeyError
     }
-    const limitError = await validateSubkeyLimits(c, subkey)
-    if (limitError) {
-      return limitError
-    }
-    assertSubkeyHasPlaintextSecret(c, subkey)
-    setSubkeyAuthContext(c, apikey.user_id, subkey, subkey.key)
   }
 }
 
@@ -664,17 +841,10 @@ export function middlewareKey(
         cloudlog({ requestId: c.get('requestId'), message: 'Invalid subkey', subkey_id })
         return quickError(401, 'invalid_subkey', 'Invalid subkey')
       }
-      const userError = validateSubkeyUser(c, subkey, apikey)
-      if (userError) {
-        return userError
+      const subkeyError = await applyValidatedSubkeyContext(c, apikey, subkey)
+      if (subkeyError) {
+        return subkeyError
       }
-      const limitError = await validateSubkeyLimits(c, subkey)
-      if (limitError) {
-        return limitError
-      }
-      assertSubkeyHasPlaintextSecret(c, subkey)
-      // Override auth context with subkey for RBAC
-      setSubkeyAuthContext(c, apikey.user_id, subkey, subkey.key)
     }
     await next()
   })
