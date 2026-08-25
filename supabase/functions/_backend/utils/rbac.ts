@@ -429,9 +429,15 @@ export async function canCallerAssignOrgRole(
   if (!targetRoleName)
     return false
 
+  const apikeyString = auth.apikey?.key ?? c.get('capgkey') ?? null
+
   let principalType = 'user'
   let principalId = auth.userId
   if (auth.authType === 'apikey' && auth.apikey?.rbac_id) {
+    principalType = 'apikey'
+    principalId = auth.apikey.rbac_id
+  }
+  else if (auth.apikey?.rbac_id && apikeyString) {
     principalType = 'apikey'
     principalId = auth.apikey.rbac_id
   }
@@ -450,16 +456,37 @@ export async function canCallerAssignOrgRole(
           AND r.is_assignable = true
         LIMIT 1
       ),
-      caller_priority AS (
-        SELECT COALESCE(MAX(r.priority_rank), 0) AS max_priority
+      active_caller_bindings AS (
+        SELECT rb.role_id
         FROM public.role_bindings rb
-        JOIN public.roles r
-          ON r.id = rb.role_id
-          AND r.scope_type = rb.scope_type
         WHERE rb.principal_type = $1
           AND rb.principal_id = $2::uuid
           AND rb.org_id = $3::uuid
+          AND rb.scope_type = public.rbac_scope_org()
           AND (rb.expires_at IS NULL OR rb.expires_at > now())
+
+        UNION ALL
+
+        SELECT rb.role_id
+        FROM public.group_members gm
+        INNER JOIN public.groups g
+          ON g.id = gm.group_id
+          AND g.org_id = $3::uuid
+        INNER JOIN public.role_bindings rb
+          ON rb.principal_type = public.rbac_principal_group()
+          AND rb.principal_id = gm.group_id
+          AND rb.org_id = g.org_id
+          AND rb.scope_type = public.rbac_scope_org()
+        WHERE $1 = public.rbac_principal_user()
+          AND gm.user_id = $2::uuid
+          AND (rb.expires_at IS NULL OR rb.expires_at > now())
+      ),
+      caller_priority AS (
+        SELECT COALESCE(MAX(r.priority_rank), 0) AS max_priority
+        FROM active_caller_bindings acb
+        INNER JOIN public.roles r
+          ON r.id = acb.role_id
+          AND r.scope_type = public.rbac_scope_org()
       )
       SELECT
         (SELECT max_priority FROM caller_priority) >= COALESCE(
