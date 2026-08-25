@@ -26324,6 +26324,7 @@ REVOKE ALL ON FUNCTION "public"."get_update_stats"() FROM PUBLIC;
 REVOKE ALL ON FUNCTION "public"."get_user_id"("apikey" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."get_user_id"("apikey" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."get_user_id"("apikey" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."get_user_id"("apikey" "text") TO "anon";
 
 
 

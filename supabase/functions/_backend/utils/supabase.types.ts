@@ -1613,7 +1613,6 @@ export type Database = {
           apps_with_cli_onboarding_builds_24h: number
           apps_with_manual_builds_24h: number
           apps_with_preview: number
-          users_with_2fa: number
           average_ltv: number
           build_avg_seconds_day_android: number
           build_avg_seconds_day_ios: number
@@ -1712,6 +1711,7 @@ export type Database = {
           upgraded_orgs: number
           users: number | null
           users_active: number | null
+          users_with_2fa: number
           versions_created: number
         }
         Insert: {
@@ -1725,7 +1725,6 @@ export type Database = {
           apps_with_cli_onboarding_builds_24h?: number
           apps_with_manual_builds_24h?: number
           apps_with_preview?: number
-          users_with_2fa?: number
           average_ltv?: number
           build_avg_seconds_day_android?: number
           build_avg_seconds_day_ios?: number
@@ -1824,6 +1823,7 @@ export type Database = {
           upgraded_orgs?: number
           users?: number | null
           users_active?: number | null
+          users_with_2fa?: number
           versions_created?: number
         }
         Update: {
@@ -1837,7 +1837,6 @@ export type Database = {
           apps_with_cli_onboarding_builds_24h?: number
           apps_with_manual_builds_24h?: number
           apps_with_preview?: number
-          users_with_2fa?: number
           average_ltv?: number
           build_avg_seconds_day_android?: number
           build_avg_seconds_day_ios?: number
@@ -1936,6 +1935,7 @@ export type Database = {
           upgraded_orgs?: number
           users?: number | null
           users_active?: number | null
+          users_with_2fa?: number
           versions_created?: number
         }
         Relationships: []
@@ -5168,6 +5168,14 @@ export type Database = {
       rbac_perm_platform_run_maintenance_jobs: { Args: never; Returns: string }
       rbac_principal_apikey: { Args: never; Returns: string }
       rbac_principal_group: { Args: never; Returns: string }
+      rbac_principal_has_org_binding: {
+        Args: {
+          p_org_id: string
+          p_principal_id: string
+          p_principal_type: string
+        }
+        Returns: boolean
+      }
       rbac_principal_user: { Args: never; Returns: string }
       rbac_resolve_permission_scope: {
         Args: { p_app_id: string; p_channel_id: number; p_org_id: string }
