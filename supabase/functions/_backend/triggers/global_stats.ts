@@ -448,11 +448,13 @@ type GlobalStatsSnapshotPatch = GlobalStatsUpdate & {
   orgs?: number
   // Present in repo migrations before prod deploy; keep writable while generated types lag.
   apps_with_preview?: number
+  users_with_2fa?: number
   plan_credits?: number
 }
 type GlobalStatsSnapshotRow = GlobalStatsRow & {
   orgs?: number | null
   apps_with_preview?: number | null
+  users_with_2fa?: number | null
   plan_credits?: number | null
 }
 
@@ -933,7 +935,11 @@ function isMissingBuildMetricColumnError(error: unknown): boolean {
 }
 
 function isMissingAppsWithPreviewColumnError(error: unknown): boolean {
-  return isMissingSchemaColumnError(error, ['apps_with_preview'])
+  return String((error as any)?.message ?? '').toLowerCase().includes('apps_with_preview')
+}
+
+function isMissingUsersWith2faColumnError(error: unknown): boolean {
+  return String((error as any)?.message ?? '').toLowerCase().includes('users_with_2fa')
 }
 
 async function calculateRevenue(c: Context, referenceDate?: Date): Promise<PlanRevenue> {
@@ -1573,6 +1579,38 @@ async function countAppsWithPreview(c: Context, snapshotEnd: Date): Promise<numb
   }
 }
 
+async function countUsersWith2fa(c: Context, snapshotEnd: Date): Promise<number> {
+  const pgClient = getPgClient(c, false)
+  const snapshotEndIso = snapshotEnd.toISOString()
+
+  try {
+    const result = await pgClient.query<{ count: number | string | null }>(`
+      SELECT COUNT(DISTINCT mfa.user_id)::int AS count
+      FROM auth.mfa_factors mfa
+      INNER JOIN public.users u ON u.id = mfa.user_id
+      WHERE mfa.status = 'verified'
+        AND mfa.created_at < $1::timestamptz
+        AND u.created_at < $1::timestamptz
+        AND EXISTS (
+          SELECT 1
+          FROM auth.mfa_challenges ch
+          WHERE ch.factor_id = mfa.id
+            AND ch.verified_at IS NOT NULL
+            AND ch.verified_at < $1::timestamptz
+        )
+    `, [snapshotEndIso])
+
+    return Number(result.rows[0]?.count) || 0
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'countUsersWith2fa error', error })
+    return 0
+  }
+  finally {
+    await closeClient(c, pgClient)
+  }
+}
+
 async function getTrialExtensionStats(c: Context, window: CurrentDayWindow): Promise<TrialExtensionStats> {
   const pgClient = getPgClient(c, false)
   const drizzleClient = getDrizzleClient(pgClient)
@@ -1651,34 +1689,42 @@ async function ensureGlobalStatsSnapshotRows(c: Context, dateIds: readonly strin
 async function updateGlobalStatsSnapshot(c: Context, dateId: string, patch: GlobalStatsSnapshotPatch): Promise<void> {
   await ensureGlobalStatsSnapshotRow(c, dateId)
 
-  const { orgs, apps_with_preview, ...globalStatsPatch } = patch
-  const updatePayload = {
-    ...globalStatsPatch,
-    ...(apps_with_preview === undefined ? {} : { apps_with_preview }),
-  } as GlobalStatsUpdate
-  const { error } = await supabaseAdmin(c)
-    .from('global_stats')
-    .update(updatePayload)
-    .eq('date_id', dateId)
+  const { orgs, apps_with_preview, users_with_2fa, ...globalStatsPatch } = patch
+  let includePreview = apps_with_preview !== undefined
+  let includeUsersWith2fa = users_with_2fa !== undefined
 
-  if (error) {
-    if (apps_with_preview !== undefined && isMissingAppsWithPreviewColumnError(error)) {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'global_stats.apps_with_preview missing; retrying snapshot update without it',
-        dateId,
-        error,
-      })
-      const { error: legacyError } = await supabaseAdmin(c)
-        .from('global_stats')
-        .update(globalStatsPatch as GlobalStatsUpdate)
-        .eq('date_id', dateId)
-      if (legacyError)
-        throw legacyError
-    }
-    else {
+  while (true) {
+    const updatePayload = {
+      ...globalStatsPatch,
+      ...(includePreview ? { apps_with_preview } : {}),
+      ...(includeUsersWith2fa ? { users_with_2fa } : {}),
+    } as GlobalStatsUpdate
+    const { error } = await supabaseAdmin(c)
+      .from('global_stats')
+      .update(updatePayload)
+      .eq('date_id', dateId)
+
+    if (!error)
+      break
+
+    const missingPreview = includePreview && isMissingAppsWithPreviewColumnError(error)
+    const missingUsersWith2fa = includeUsersWith2fa && isMissingUsersWith2faColumnError(error)
+    if (!missingPreview && !missingUsersWith2fa)
       throw error
-    }
+
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'global_stats optional user metric column missing; retrying snapshot update without it',
+      dateId,
+      missingPreview,
+      missingUsersWith2fa,
+      error,
+    })
+
+    if (missingPreview)
+      includePreview = false
+    if (missingUsersWith2fa)
+      includeUsersWith2fa = false
   }
 
   if (orgs !== undefined)
@@ -2733,6 +2779,7 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
   const [
     apps,
     apps_with_preview,
+    users_with_2fa,
     updates,
     updates_external,
     users,
@@ -2745,6 +2792,7 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
   ] = await Promise.all([
     countAllApps(c, window.prevDayEnd),
     countAppsWithPreview(c, window.prevDayEnd),
+    countUsersWith2fa(c, window.prevDayEnd),
     countAllUpdates(c, window.prevDayEnd),
     countAllUpdatesExternal(c, window.prevDayEnd),
     countRegisteredUsersForSnapshot(c, window.prevDayEnd),
@@ -2786,6 +2834,7 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
     apps,
     apps_active: actives.apps,
     apps_with_preview,
+    users_with_2fa,
     above_plan_with_credits,
     above_plan_without_credits,
     need_upgrade,
@@ -2814,7 +2863,7 @@ async function runCoreGlobalStatsShard(c: Context, window: DailyWindow): Promise
     users_active: actives.users,
   })
 
-  cloudlog({ requestId: c.get('requestId'), message: 'Updated global stats core shard', dateId: window.prevDayDateId, finalizedAppBuildOnboardingDateId: finalizedAppBuildOnboardingWindow.prevDayDateId, apps, apps_with_preview, updates, users, orgs })
+  cloudlog({ requestId: c.get('requestId'), message: 'Updated global stats core shard', dateId: window.prevDayDateId, finalizedAppBuildOnboardingDateId: finalizedAppBuildOnboardingWindow.prevDayDateId, apps, apps_with_preview, users_with_2fa, updates, users, orgs })
 }
 
 async function getRegistersToday(c: Context, createdAfterIso: string, createdBeforeIso: string): Promise<number> {
