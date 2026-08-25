@@ -191,15 +191,15 @@ describe('legacy CLI RBAC compatibility RPCs', () => {
     expect(ownerPerm).toBe('perm_owner')
   })
 
-  it.concurrent('denies get_user_id for anonymous API-key callers', async () => {
+  it.concurrent('keeps get_user_id callable for published CLI anonymous API-key callers', async () => {
     const client = createApiKeyClient(APIKEY_TEST_ORG_SUPER_ADMIN)
 
     const { data, error } = await (client.rpc as any)('get_user_id', {
       apikey: APIKEY_TEST_ORG_SUPER_ADMIN,
     }).single()
 
-    expect(data).toBeNull()
-    expect(error?.code === '42501' || /permission denied/i.test(error?.message ?? '')).toBe(true)
+    expect(error).toBeNull()
+    expect(data).toBe(USER_ID)
   })
 
   it.concurrent('keeps get_user_id callable for authenticated API-key callers', async () => {
