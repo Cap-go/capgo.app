@@ -672,7 +672,7 @@ describe('rbac permission system', () => {
           sharedBundleSoftDeleteError = error
         }
         await query('ROLLBACK TO SAVEPOINT preview_shared_bundle_soft_delete')
-        expect((sharedBundleSoftDeleteError as { message?: string } | undefined)?.message).toContain('PREVIEW_APIKEY_CANNOT_MUTATE_SHARED_BUNDLE')
+        expect((sharedBundleSoftDeleteError as { message?: string } | undefined)?.message).toContain('PERMISSION_DENIED_BUNDLE_DELETE')
 
         // RLS remains the defense in depth for direct PostgREST soft-deletes
         // of an otherwise unreferenced bundle. The service-role cleanup route
