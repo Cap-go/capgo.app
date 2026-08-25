@@ -713,30 +713,44 @@ describe('rbac permission system', () => {
         const orgId = randomUUID()
         const appId = `com.rbac.bundle-lock.${slug}`
 
-        await query(`
-          INSERT INTO public.orgs (id, name, management_email, created_by)
-          VALUES ($1::uuid, $2, $3, $4::uuid)
-        `, [orgId, `Bundle Lock Org ${slug}`, `bundle-lock-${slug}@capgo.app`, USER_ID])
+        const setup = await pool.connect()
+        let lowerBundleId: string
+        let higherBundleId: string
+        try {
+          await setup.query('BEGIN')
+          await setup.query(`
+            INSERT INTO public.orgs (id, name, management_email, created_by)
+            VALUES ($1::uuid, $2, $3, $4::uuid)
+          `, [orgId, `Bundle Lock Org ${slug}`, `bundle-lock-${slug}@capgo.app`, USER_ID])
 
-        await query(`
-          INSERT INTO public.apps (app_id, name, icon_url, owner_org)
-          VALUES ($1, $2, 'https://example.com/icon.png', $3::uuid)
-        `, [appId, `Bundle Lock App ${slug}`, orgId])
+          await setup.query(`
+            INSERT INTO public.apps (app_id, name, icon_url, owner_org)
+            VALUES ($1, $2, 'https://example.com/icon.png', $3::uuid)
+          `, [appId, `Bundle Lock App ${slug}`, orgId])
 
-        const lowerBundle = await query(`
-          INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider)
-          VALUES ($1, $2, $3::uuid, $4::uuid, 'r2-direct')
-          RETURNING id::text
-        `, [appId, `bundle-lock-lower-${slug}`, orgId, USER_ID])
-        const higherBundle = await query(`
-          INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider)
-          VALUES ($1, $2, $3::uuid, $4::uuid, 'r2-direct')
-          RETURNING id::text
-        `, [appId, `bundle-lock-higher-${slug}`, orgId, USER_ID])
+          const lowerBundle = await setup.query(`
+            INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider)
+            VALUES ($1, $2, $3::uuid, $4::uuid, 'r2-direct')
+            RETURNING id::text
+          `, [appId, `bundle-lock-lower-${slug}`, orgId, USER_ID])
+          const higherBundle = await setup.query(`
+            INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider)
+            VALUES ($1, $2, $3::uuid, $4::uuid, 'r2-direct')
+            RETURNING id::text
+          `, [appId, `bundle-lock-higher-${slug}`, orgId, USER_ID])
 
-        const lowerBundleId = lowerBundle.rows[0]!.id
-        const higherBundleId = higherBundle.rows[0]!.id
-        expect(BigInt(lowerBundleId) < BigInt(higherBundleId)).toBe(true)
+          lowerBundleId = lowerBundle.rows[0]!.id
+          higherBundleId = higherBundle.rows[0]!.id
+          expect(BigInt(lowerBundleId) < BigInt(higherBundleId)).toBe(true)
+          await setup.query('COMMIT')
+        }
+        catch (error) {
+          await setup.query('ROLLBACK')
+          throw error
+        }
+        finally {
+          setup.release()
+        }
 
         const holder = await pool.connect()
         const waiter = await pool.connect()
@@ -760,6 +774,16 @@ describe('rbac permission system', () => {
           await waiter.query('ROLLBACK')
           holder.release()
           waiter.release()
+
+          const cleanup = await pool.connect()
+          try {
+            await cleanup.query('DELETE FROM public.app_versions WHERE app_id = $1', [appId])
+            await cleanup.query('DELETE FROM public.apps WHERE app_id = $1', [appId])
+            await cleanup.query('DELETE FROM public.orgs WHERE id = $1::uuid', [orgId])
+          }
+          finally {
+            cleanup.release()
+          }
         }
       })
 
