@@ -177,29 +177,25 @@ async function checkNotifyAppReady(options: OptionsUpload, path: string, interac
   if (options.codeCheck === false || options.ignoreNotifyAppReady)
     return
 
-  const shouldRunNotifyAppReadyCheck = options.codeCheck
+  if (!searchInDirectory(path, 'notifyAppReady')) {
+    const recovery = await ensureNotifyAppReadyInBuildFolder({
+      webDir: path,
+      interactive,
+    })
+    if (recovery === 'skipped')
+      return
+  }
 
-  if (typeof shouldRunNotifyAppReadyCheck === 'undefined' || shouldRunNotifyAppReadyCheck) {
-    if (!searchInDirectory(path, 'notifyAppReady')) {
-      const recovery = await ensureNotifyAppReadyInBuildFolder({
-        webDir: path,
-        interactive,
-      })
-      if (recovery === 'skipped')
-        return
-    }
-
-    if (!searchInDirectory(path, 'notifyAppReady')) {
-      const message = `notifyAppReady() is missing in the build folder of your app. see: https://capgo.app/docs/plugins/updater/notifyappready
+  if (!searchInDirectory(path, 'notifyAppReady')) {
+    const message = `notifyAppReady() is missing in the build folder of your app. see: https://capgo.app/docs/plugins/updater/notifyappready
       If you are sure your app has this code, you can use the --no-code-check or --ignore-notify-app-ready option`
-      log.error(message)
-      throw new Error(message.trim())
-    }
+    log.error(message)
+    throw new Error(message.trim())
+  }
 
-    const foundIndex = checkIndexPosition(path)
-    if (!foundIndex) {
-      uploadFail(`index.html is missing in the root folder of ${path}`)
-    }
+  const foundIndex = checkIndexPosition(path)
+  if (!foundIndex) {
+    uploadFail(`index.html is missing in the root folder of ${path}`)
   }
 }
 

@@ -100,8 +100,6 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
           json,
         })
         if (recovery !== 'skipped' && !searchInDirectory(path, 'notifyAppReady')) {
-          if (json)
-            emitJsonError({ error: 'notifyAppReady_not_in_source_code' })
           throw new Error(buildCiNotifyAppReadyMessage(path))
         }
       }

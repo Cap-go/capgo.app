@@ -133,6 +133,13 @@ await test('patchNotifyAppReadyInBuildFolder writes notifyAppReady into the buil
   assert.match(readFileSync(join(root, 'index.js'), 'utf8'), /notifyAppReady/)
 })
 
+await test('patchNotifyAppReadyInBuildFolder skips bundles that already call notifyAppReady', () => {
+  const root = makeTempDir('patch-present')
+  writeFileSync(join(root, 'index.html'), '<html><body><script src="./index.js"></script></body></html>')
+  writeFileSync(join(root, 'index.js'), 'var CapacitorUpdater = {};\nCapacitorUpdater.notifyAppReady();\n')
+  assert.equal(patchNotifyAppReadyInBuildFolder(root), undefined)
+})
+
 await test('patchNotifyAppReadyInBuildFolder skips bundles without CapacitorUpdater', () => {
   const root = makeTempDir('patch-skip')
   writeFileSync(join(root, 'index.html'), '<html><body><script src="./index.js"></script></body></html>')

@@ -163,7 +163,7 @@ export function injectNotifyAppReadyIntoJs(filePath: string, content: string): s
 
 export function injectNotifyAppReadyIntoBuildJs(content: string): string | undefined {
   if (hasNotifyAppReadyInvocation(content))
-    return content
+    return undefined
   if (!hasCallableCapacitorUpdaterBinding(content))
     return undefined
   return `${content.trimEnd()}\n${NOTIFY_CALL};\n`
