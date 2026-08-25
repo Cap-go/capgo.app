@@ -129,28 +129,22 @@ describe('x-limited-key-id delegation containment', () => {
     const supabase = getSupabaseClient()
 
     for (const rbacId of createdKeyRbacIds) {
-      try {
-        await supabase.from('role_bindings').delete().eq('principal_id', rbacId)
-      }
-      catch {
-        // Best-effort cleanup for parallel test isolation.
+      const { error } = await supabase.from('role_bindings').delete().eq('principal_id', rbacId)
+      if (error) {
+        console.warn(`Failed to delete role_bindings for ${rbacId}:`, error.message)
       }
     }
 
     for (const keyId of createdKeyIds) {
-      try {
-        await supabase.from('apikeys').delete().eq('id', keyId)
-      }
-      catch {
-        // Best-effort cleanup for parallel test isolation.
+      const { error } = await supabase.from('apikeys').delete().eq('id', keyId)
+      if (error) {
+        console.warn(`Failed to delete apikey ${keyId}:`, error.message)
       }
     }
 
-    try {
-      await supabase.from('apps').delete().in('app_id', [appA, appB])
-    }
-    catch {
-      // Best-effort cleanup for parallel test isolation.
+    const { error: appDeleteError } = await supabase.from('apps').delete().in('app_id', [appA, appB])
+    if (appDeleteError) {
+      console.warn('Failed to delete containment test apps:', appDeleteError.message)
     }
   })
 

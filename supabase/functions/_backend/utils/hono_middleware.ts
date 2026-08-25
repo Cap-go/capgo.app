@@ -401,14 +401,9 @@ async function parentCanDelegateToSubkey(
           rb.scope_type,
           rb.org_id,
           rb.app_id,
-          rb.channel_id,
-          app.app_id AS app_slug,
-          channel.id AS channel_pk
+          rb.bundle_id,
+          rb.channel_id
         FROM public.role_bindings AS rb
-        LEFT JOIN public.apps AS app
-          ON app.id = rb.app_id
-        LEFT JOIN public.channels AS channel
-          ON channel.rbac_id = rb.channel_id
         WHERE rb.principal_type = public.rbac_principal_apikey()
           AND rb.principal_id = $2::uuid
           AND (rb.expires_at IS NULL OR rb.expires_at > now())
@@ -419,8 +414,9 @@ async function parentCanDelegateToSubkey(
           child_direct_bindings.role_id AS effective_role_id,
           child_direct_bindings.scope_type,
           child_direct_bindings.org_id,
-          child_direct_bindings.app_slug,
-          child_direct_bindings.channel_pk
+          child_direct_bindings.app_id,
+          child_direct_bindings.bundle_id,
+          child_direct_bindings.channel_id
         FROM child_direct_bindings
 
         UNION
@@ -430,8 +426,9 @@ async function parentCanDelegateToSubkey(
           role_hierarchy.child_role_id,
           child_role_closure.scope_type,
           child_role_closure.org_id,
-          child_role_closure.app_slug,
-          child_role_closure.channel_pk
+          child_role_closure.app_id,
+          child_role_closure.bundle_id,
+          child_role_closure.channel_id
         FROM child_role_closure
         INNER JOIN public.role_hierarchy
           ON role_hierarchy.parent_role_id = child_role_closure.effective_role_id
@@ -442,9 +439,11 @@ async function parentCanDelegateToSubkey(
       child_permissions AS (
         SELECT DISTINCT
           permissions.key AS permission_key,
+          child_role_closure.scope_type,
           child_role_closure.org_id,
-          child_role_closure.app_slug,
-          child_role_closure.channel_pk
+          child_role_closure.app_id,
+          child_role_closure.bundle_id,
+          child_role_closure.channel_id
         FROM child_role_closure
         INNER JOIN public.role_permissions
           ON role_permissions.role_id = child_role_closure.effective_role_id
@@ -454,13 +453,67 @@ async function parentCanDelegateToSubkey(
       uncovered_permission AS (
         SELECT child_permissions.permission_key
         FROM child_permissions
-        WHERE NOT public.rbac_has_permission(
-          public.rbac_principal_apikey(),
-          $1::uuid,
-          child_permissions.permission_key,
-          child_permissions.org_id,
-          child_permissions.app_slug,
-          child_permissions.channel_pk
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM public.role_bindings AS parent_binding
+          WHERE parent_binding.principal_type = public.rbac_principal_apikey()
+            AND parent_binding.principal_id = $1::uuid
+            AND (parent_binding.expires_at IS NULL OR parent_binding.expires_at > now())
+            AND (
+              (
+                parent_binding.scope_type = public.rbac_scope_org()
+                AND parent_binding.org_id = child_permissions.org_id
+              )
+              OR (
+                child_permissions.scope_type IN (
+                  public.rbac_scope_app(),
+                  public.rbac_scope_bundle(),
+                  public.rbac_scope_channel()
+                )
+                AND parent_binding.scope_type = public.rbac_scope_app()
+                AND parent_binding.org_id = child_permissions.org_id
+                AND parent_binding.app_id = child_permissions.app_id
+              )
+              OR (
+                child_permissions.scope_type IN (
+                  public.rbac_scope_bundle(),
+                  public.rbac_scope_channel()
+                )
+                AND parent_binding.scope_type = public.rbac_scope_bundle()
+                AND parent_binding.org_id = child_permissions.org_id
+                AND parent_binding.app_id = child_permissions.app_id
+                AND parent_binding.bundle_id = child_permissions.bundle_id
+              )
+              OR (
+                child_permissions.scope_type = public.rbac_scope_channel()
+                AND parent_binding.scope_type = public.rbac_scope_channel()
+                AND parent_binding.org_id = child_permissions.org_id
+                AND parent_binding.app_id = child_permissions.app_id
+                AND parent_binding.channel_id = child_permissions.channel_id
+              )
+            )
+            AND EXISTS (
+              WITH RECURSIVE parent_role_closure AS (
+                SELECT parent_binding.role_id AS effective_role_id
+
+                UNION
+
+                SELECT role_hierarchy.child_role_id
+                FROM parent_role_closure
+                INNER JOIN public.role_hierarchy
+                  ON role_hierarchy.parent_role_id = parent_role_closure.effective_role_id
+                INNER JOIN public.roles AS inherited_role
+                  ON inherited_role.id = role_hierarchy.child_role_id
+                  AND inherited_role.scope_type = parent_binding.scope_type
+              )
+              SELECT 1
+              FROM parent_role_closure
+              INNER JOIN public.role_permissions
+                ON role_permissions.role_id = parent_role_closure.effective_role_id
+              INNER JOIN public.permissions
+                ON permissions.id = role_permissions.permission_id
+              WHERE permissions.key = child_permissions.permission_key
+            )
         )
         LIMIT 1
       ),
