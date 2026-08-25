@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 
 const retryGetMock = vi.fn()
 const retryHeadMock = vi.fn()
+const queryMock = vi.fn()
+const closeClientMock = vi.fn()
+const getPgClientMock = vi.fn(() => ({ query: queryMock }))
 
 vi.mock('cloudflare:workers', () => ({
   DurableObject: class DurableObjectMock {},
@@ -18,6 +21,13 @@ vi.mock('hono/adapter', async (importOriginal) => {
 vi.mock('../supabase/functions/_backend/utils/discord.ts', () => ({
   sendDiscordAlert500: () => Promise.resolve(),
   sendDiscordAlert: () => Promise.resolve(),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  closeClient: closeClientMock,
+  getAppOwnerPostgres: vi.fn(),
+  getDrizzleClient: vi.fn(() => ({})),
+  getPgClient: getPgClientMock,
 }))
 
 vi.mock('../supabase/functions/_backend/files/retry.ts', () => ({
@@ -37,6 +47,7 @@ vi.mock('../supabase/functions/_backend/files/retry.ts', () => ({
 describe('files R2 error handling', () => {
   it('should return 503 when R2 get fails', async () => {
     vi.resetModules()
+    queryMock.mockResolvedValue({ rows: [] })
     retryHeadMock.mockResolvedValue(null)
     retryGetMock.mockImplementation(() => {
       throw new Error('r2 unavailable')
@@ -71,6 +82,7 @@ describe('files R2 error handling', () => {
 
   it('should add immutable cache control and strip tracking params on cached responses', async () => {
     vi.resetModules()
+    queryMock.mockResolvedValue({ rows: [] })
     retryHeadMock.mockResolvedValue(null)
     retryGetMock.mockResolvedValue(null)
 
@@ -115,7 +127,7 @@ describe('files R2 error handling', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('cache-control')).toBe('public, max-age=31536000, immutable, no-transform')
-    expect(matchMock).toHaveBeenCalled()
+    expect(matchMock).toHaveBeenCalledTimes(2)
   })
 
   it('should persist no-transform in file metadata written to R2', async () => {

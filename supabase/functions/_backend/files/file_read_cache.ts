@@ -1,10 +1,12 @@
 import type { Context } from 'hono'
+import { getRuntimeKey } from 'hono/adapter'
 import { cloudlog } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 
 export const FILE_READ_TRACKING_QUERY_PARAMS = ['device_id'] as const
 export const DELETED_FILE_CACHE_HEADER = 'x-capgo-file-deleted'
 const DELETED_FILE_MARKER_ORIGIN = 'https://capgo-files-cache.internal'
+const FILE_READ_CACHE_NAME = 'capgo-file-read-cache'
 const FILE_READ_CACHE_ORIGINS = ['https://api.capgo.app'] as const
 const FILE_READ_PATH_PREFIXES = [
   '/files/read/attachments/',
@@ -57,18 +59,40 @@ export function buildWorkersFileCacheKey(pathname: string, search = ''): string 
   return `/files-cache${pathname}${normalizeSearch(url, FILE_READ_TRACKING_QUERY_PARAMS)}`
 }
 
-export function getFileReadCache(): Cache | null {
+type CacheLike = Cache & {
+  default?: Cache
+  open?: (cacheName: string) => Promise<Cache>
+}
+
+let fileReadCachePromise: Promise<Cache | null> | null = null
+
+async function resolveFileReadCache(): Promise<Cache | null> {
   if (typeof caches === 'undefined')
     return null
 
-  const cacheStorage = caches as unknown as Cache & { default?: Cache, open?: (cacheName: string) => Promise<Cache> }
-  if (cacheStorage.default)
+  const cacheStorage = caches as unknown as CacheLike
+  if (getRuntimeKey() === 'workerd' && cacheStorage.default)
     return cacheStorage.default
-  return cacheStorage
+
+  if (typeof cacheStorage.open === 'function') {
+    try {
+      return await cacheStorage.open(FILE_READ_CACHE_NAME)
+    }
+    catch {
+      return null
+    }
+  }
+
+  return null
+}
+
+export async function getFileReadCache(): Promise<Cache | null> {
+  fileReadCachePromise ??= resolveFileReadCache()
+  return fileReadCachePromise
 }
 
 export async function hasDeletedFileMarker(fileId: string): Promise<boolean> {
-  const cache = getFileReadCache()
+  const cache = await getFileReadCache()
   if (!cache?.match)
     return false
 
@@ -82,7 +106,7 @@ export async function hasDeletedFileMarker(fileId: string): Promise<boolean> {
 }
 
 export async function markFileDeletedInCache(fileId: string): Promise<void> {
-  const cache = getFileReadCache()
+  const cache = await getFileReadCache()
   if (!cache?.put)
     return
 
@@ -115,7 +139,7 @@ function buildWorkersFileCacheRequests(fileId: string): Request[] {
 export async function purgeFileReadCache(fileId: string): Promise<void> {
   await markFileDeletedInCache(fileId)
 
-  const cache = getFileReadCache()
+  const cache = await getFileReadCache()
   if (!cache || typeof cache.delete !== 'function')
     return
 
@@ -148,11 +172,11 @@ export async function isAttachmentVersionDeleted(c: Context, fileId: string): Pr
   catch (error) {
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'isAttachmentVersionDeleted lookup failed, failing open',
+      message: 'isAttachmentVersionDeleted lookup failed, failing closed',
       fileId,
       error: error instanceof Error ? error.message : String(error),
     })
-    return false
+    return true
   }
   finally {
     if (pgClient)

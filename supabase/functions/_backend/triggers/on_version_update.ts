@@ -426,8 +426,19 @@ async function deleteManifest(c: Context, record: Database['public']['Tables']['
 export async function deleteIt(c: Context, record: Database['public']['Tables']['app_versions']['Row']) {
   cloudlog({ requestId: c.get('requestId'), message: 'Delete', r2_path: record.r2_path })
 
-  if (record.r2_path)
-    await purgeFileReadCache(record.r2_path)
+  if (record.r2_path) {
+    try {
+      await purgeFileReadCache(record.r2_path)
+    }
+    catch (error) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'purgeFileReadCache failed during version delete',
+        r2_path: record.r2_path,
+        error,
+      })
+    }
+  }
 
   // Manifest files: trash R2 first, then drop DB rows. Must finish before ACK.
   await deleteManifest(c, record)

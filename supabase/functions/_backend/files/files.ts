@@ -423,7 +423,7 @@ async function getHandler(c: Context): Promise<Response> {
     return c.json({ error: 'not_found', message: 'Not found' }, 404)
   }
 
-  const cache = getFileReadCache()
+  const cache = await getFileReadCache()
   const rawFileId = getRawAttachmentRouteId(c)
   const candidateKeys = getSafeAttachmentReadCandidateKeys(fileId, rawFileId)
   const cacheKey = buildFileReadCacheRequest(c.req.raw)
@@ -453,6 +453,9 @@ async function getHandler(c: Context): Promise<Response> {
 
         const cached = cachedResponse.clone()
         const data = await cached.arrayBuffer()
+        if (await isAttachmentVersionDeleted(c, fileId))
+          return
+
         const contentType = cached.headers.get('content-type') || undefined
         const httpMetadata = buildFileHttpMetadata(contentType, cached.headers.get('cache-control'))
         await bucket.put(fileId, data, { httpMetadata })
@@ -466,6 +469,11 @@ async function getHandler(c: Context): Promise<Response> {
       }
     })
     return cachedResponse
+  }
+
+  if (await isAttachmentVersionDeleted(c, fileId)) {
+    cloudlog({ requestId: c.get('requestId'), message: 'getHandler files cache miss for deleted version', fileId })
+    return c.json({ error: 'not_found', message: 'Not found' }, 404)
   }
 
   const rangeHeaderFromRequest = c.req.header('range')

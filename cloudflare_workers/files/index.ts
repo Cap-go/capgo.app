@@ -108,7 +108,16 @@ export const filesWorkerCacheTestUtils = {
 
 export default {
   async fetch(request: Request, env: Cloudflare.Env, ctx: FilesExecutionContext): Promise<Response> {
-    const fileId = getAttachmentFileIdFromReadPath(new URL(request.url).pathname)
+    const rawFileId = getAttachmentFileIdFromReadPath(new URL(request.url).pathname)
+    let fileId: string | null = rawFileId
+    if (rawFileId) {
+      try {
+        fileId = decodeURIComponent(rawFileId)
+      }
+      catch {
+        // Let the files handler return its invalid-path response.
+      }
+    }
     if (fileId && await hasDeletedFileMarker(fileId)) {
       return new Response(JSON.stringify({ error: 'not_found', message: 'Not found' }), {
         status: 404,

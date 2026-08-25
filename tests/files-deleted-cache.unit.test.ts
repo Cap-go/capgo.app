@@ -132,10 +132,17 @@ describe('deleted bundle cache', () => {
     const cache = createCache()
     globalThis.caches = { default: cache } as any
 
-    const { buildDeletedFileMarkerRequest, purgeFileReadCache } = await import('../supabase/functions/_backend/files/file_read_cache.ts')
+    const { buildDeletedFileMarkerRequest, buildFileReadCacheRequest, purgeFileReadCache } = await import('../supabase/functions/_backend/files/file_read_cache.ts')
     const fileId = 'orgs/org-1/apps/com.cleanup.test/1.0.0.zip'
+    const readRequest = buildFileReadCacheRequest(new Request(`https://api.capgo.app/files/read/attachments/${fileId}`))
+    await cache.put(readRequest, new Response('cached bundle bytes', {
+      headers: { 'content-type': 'application/zip' },
+    }))
+    expect(await cache.match(readRequest)).not.toBeNull()
+
     await purgeFileReadCache(fileId)
 
+    expect(await cache.match(readRequest)).toBeNull()
     const marker = await cache.match(buildDeletedFileMarkerRequest(fileId))
     expect(marker).not.toBeNull()
     expect(marker?.status).toBe(404)
