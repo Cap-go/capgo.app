@@ -175,11 +175,9 @@ class CapgoUpdaterModule(private val reactContext: ReactApplicationContext) :
     executor.execute {
       val id = options.getString("id")
       try {
-        if (id.isNullOrEmpty()) throw IllegalArgumentException("id required")
+        require(!id.isNullOrEmpty()) { "id required" }
         val record = BundleStore.get(reactContext, id) ?: throw IllegalStateException("bundle not found")
-        if (id != CapgoConfig.KEY_BUILTIN && record.status != "success") {
-          throw IllegalStateException("bundle is not ready")
-        }
+        require(id == CapgoConfig.KEY_BUILTIN || record.status == "success") { "bundle is not ready" }
         check(id == CapgoConfig.KEY_BUILTIN || BundleStore.jsBundleFile(reactContext, id).exists()) {
           "bundle files missing"
         }
@@ -207,7 +205,7 @@ class CapgoUpdaterModule(private val reactContext: ReactApplicationContext) :
       try {
         val id = options.getString("id") ?: throw IllegalArgumentException("id required")
         val record = BundleStore.get(reactContext, id) ?: throw IllegalStateException("bundle not found")
-        if (record.status != "success") throw IllegalStateException("bundle is not ready")
+        check(record.status == "success") { "bundle is not ready" }
         check(id == CapgoConfig.KEY_BUILTIN || BundleStore.jsBundleFile(reactContext, id).exists()) {
           "bundle files missing"
         }

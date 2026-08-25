@@ -12,7 +12,7 @@ describe('rn-cli export layout contract', () => {
     writeFileSync(join(dir, 'main.jsbundle'), 'ios')
     writeFileSync(join(dir, 'assets', 'img.png'), 'x')
 
-    validateExportLayout(dir)
+    expect(() => validateExportLayout(dir)).not.toThrow()
 
     rmSync(dir, { recursive: true, force: true })
   })

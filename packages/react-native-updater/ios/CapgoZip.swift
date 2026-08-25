@@ -20,7 +20,7 @@ enum ZipArchive {
       let method = Int(readU16(data, offset + 8))
       let flags = Int(readU16(data, offset + 6))
       let compSize = Int(readU32(data, offset + 18))
-      let uncompSize = Int(readU32(data, offset + 22))
+      _ = readU32(data, offset + 22)
       let nameLen = Int(readU16(data, offset + 26))
       let extraLen = Int(readU16(data, offset + 28))
       let nameStart = offset + 30
@@ -50,7 +50,7 @@ enum ZipArchive {
         if method == 0 {
           outData = payload
         } else if method == 8 {
-          outData = try inflateRaw(payload, expectedSize: max(uncompSize, 1))
+          outData = try inflateRaw(payload)
         } else {
           throw NSError(domain: "capgo.zip", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unsupported zip method \(method)"])
         }
@@ -81,7 +81,7 @@ enum ZipArchive {
       | (UInt32(data[o + 3]) << 24)
   }
 
-  private static func inflateRaw(_ data: Data, expectedSize: Int) throws -> Data {
+  private static func inflateRaw(_ data: Data) throws -> Data {
     var stream = compression_stream()
     var status = compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB)
     guard status != COMPRESSION_STATUS_ERROR else {
