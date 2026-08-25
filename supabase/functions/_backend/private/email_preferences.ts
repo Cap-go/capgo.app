@@ -40,7 +40,7 @@ export const visitorUuidSchema = z.string().trim().regex(
 )
 
 const bodySchema = z.object({
-  email: z.string().trim().email().max(320).optional(),
+  email: z.string().trim().pipe(z.email().max(320)).optional(),
   uuid: visitorUuidSchema.optional(),
   preferences: preferenceValueSchema.optional(),
   enable_notifications: z.boolean().optional(),
