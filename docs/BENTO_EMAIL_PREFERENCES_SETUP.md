@@ -130,6 +130,7 @@ https://console.capgo.app/email-preferences?email={{ visitor.email }}
 - “Unsubscribe from all” calls Bento unsubscribe for that address
 - Cloudflare Turnstile required when `CAPTCHA_SECRET_KEY` / `VITE_CAPTCHA_KEY` are set (same as invite/login)
 - Rate limits: ~20 / 15m per IP, ~10 / 15m per email or uuid hash
+- If Bento subscriber lookup fails (outage or misconfiguration), GET/POST return `503` with `email_preferences_unavailable` instead of silently succeeding
 - Update Bento footers to the `uuid` URL. Leave the `email` query working for mail already in inboxes.
 
 #### 4. Weekly Statistics
