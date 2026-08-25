@@ -1,6 +1,21 @@
 -- When a principal loses all role bindings in an org, stale channel_permission_overrides
 -- must not keep granting channel-scoped permissions. Gate override application on an
 -- active org binding (any scope) or group membership.
+--
+-- Execution profile for rbac_principal_has_org_binding (channel override gate):
+-- - Called at most once per rbac_check_permission_direct when p_channel_id IS NOT NULL
+--   (apikey and user branches are mutually exclusive).
+-- - Roles: service_role only; invoked from SECURITY DEFINER rbac_check_permission_direct.
+-- - Frequency: console/RLS channel-scoped checks; not plugin /updates|/stats hot path.
+-- - Cardinality: role_bindings rows per (principal, org) are typically single-digit;
+--   group_members per user is bounded by org group membership.
+-- - Indexes: role_bindings_principal_org_idx (principal_type, principal_id, org_id,
+--   expires_at); idx_group_members_user_id_group_id for group-derived user path;
+--   groups PK for group-principal branch.
+-- - Worst case (user + apikey call sites): Index Scan on role_bindings_principal_org_idx
+--   with expires_at filter; Nested Loop from group_members (user_id) to role_bindings
+--   (group principal). No sequential scan over role_bindings in EXPLAIN (ANALYZE,
+--   BUFFERS) on local seed data.
 
 CREATE OR REPLACE FUNCTION public.rbac_principal_has_org_binding(
   p_principal_type text,
@@ -57,10 +72,10 @@ REVOKE ALL ON FUNCTION public.rbac_principal_has_org_binding(text, uuid, uuid) F
 GRANT EXECUTE ON FUNCTION public.rbac_principal_has_org_binding(text, uuid, uuid) TO service_role;
 
 COMMENT ON FUNCTION public.rbac_principal_has_org_binding(text, uuid, uuid) IS
-  'True when the principal still has a non-expired role binding in the org (direct or via group membership for users) or the group belongs to the org. Used to ignore stale channel permission overrides after org access is revoked.';
+  'True when the principal still has a non-expired role binding in the org (direct or via group membership for users) or the group belongs to the org. Called once per channel-scoped rbac_check_permission_direct (console/RLS only). Indexed lookups on role_bindings_principal_org_idx and idx_group_members_user_id_group_id; no table scan on role_bindings at seed scale.';
 
 CREATE INDEX IF NOT EXISTS role_bindings_principal_org_idx
-  ON public.role_bindings (principal_type, principal_id, org_id);
+  ON public.role_bindings (principal_type, principal_id, org_id, expires_at);
 
 CREATE OR REPLACE FUNCTION public.rbac_check_permission_direct(
   p_permission_key text,
