@@ -157,7 +157,8 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
   if (candidates.length === 1) {
     const [onlyCandidate] = candidates
     if (!interactive) {
-      log.info(`No appId provided. Using app ID detected from project files: ${onlyCandidate}`)
+      if (!json)
+        log.info(`No appId provided. Using app ID detected from project files: ${onlyCandidate}`)
       trackAppIdRecovery(onlyCandidate, 'auto-detect', options.apikey)
       return onlyCandidate
     }

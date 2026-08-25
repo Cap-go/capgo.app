@@ -132,41 +132,68 @@ function usesCommonJsModuleFormat(filePath: string, content: string): boolean {
   return extension === '.js' || extension === '.jsx'
 }
 
-export function hasCallableCapacitorUpdaterBinding(content: string): boolean {
-  if (/\bCapacitorUpdater\s*\.\s*\w+/.test(content))
-    return true
+export function resolveCapacitorUpdaterIdentifier(content: string): string | undefined {
+  const aliasImport = content.match(/\bimport\s*\{[^}]*\bCapacitorUpdater\b\s+as\s+(\w+)/)
+  if (aliasImport?.[1])
+    return aliasImport[1]
+
+  const cjsAlias = content.match(/\b(?:var|let|const)\s*\{[^}]*\bCapacitorUpdater\s*:\s*(\w+)[^}]*\}\s*=\s*require\s*\(\s*['"]@capgo\/capacitor-updater['"]\s*\)/)
+  if (cjsAlias?.[1])
+    return cjsAlias[1]
+
+  const cjsNamed = content.match(/\b(?:var|let|const)\s*\{\s*CapacitorUpdater\s*\}\s*=\s*require\s*\(\s*['"]@capgo\/capacitor-updater['"]\s*\)/)
+  if (cjsNamed)
+    return 'CapacitorUpdater'
+
+  const namedImport = content.match(/\bimport\s*\{[^}]*\b(CapacitorUpdater)\b[^}]*\}/)
+  if (namedImport?.[1])
+    return namedImport[1]
+
   if (/\b(?:var|let|const)\s+CapacitorUpdater\b/.test(content))
-    return true
-  if (/\bimport\s*\{[^}]*\bCapacitorUpdater\b[^}]*\}/.test(content))
-    return true
-  if (/\brequire\s*\(\s*['"]@capgo\/capacitor-updater['"]\s*\)/.test(content))
-    return true
-  return false
+    return 'CapacitorUpdater'
+
+  if (/\bCapacitorUpdater\s*\.\s*\w+/.test(content))
+    return 'CapacitorUpdater'
+
+  return undefined
+}
+
+export function hasCallableCapacitorUpdaterBinding(content: string): boolean {
+  return resolveCapacitorUpdaterIdentifier(content) !== undefined
 }
 
 function hasNotifyAppReadyInvocation(content: string): boolean {
+  const identifier = resolveCapacitorUpdaterIdentifier(content)
+  if (identifier)
+    return new RegExp(`\\b${identifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\.\\s*notifyAppReady\\s*\\(`).test(content)
   return /\bCapacitorUpdater\s*\.\s*notifyAppReady\s*\(/.test(content)
+}
+
+function buildNotifyAppReadyCall(identifier: string) {
+  return `${identifier}.notifyAppReady()`
 }
 
 export function injectNotifyAppReadyIntoJs(filePath: string, content: string): string {
   if (hasNotifyAppReadyInvocation(content))
     return content
 
-  if (hasCallableCapacitorUpdaterBinding(content))
-    return `${content.trimEnd()}\n${NOTIFY_CALL};\n`
+  const identifier = resolveCapacitorUpdaterIdentifier(content)
+  if (identifier)
+    return `${content.trimEnd()}\n${buildNotifyAppReadyCall(identifier)};\n`
 
   const updaterImport = usesCommonJsModuleFormat(filePath, content)
     ? 'const { CapacitorUpdater } = require(\'@capgo/capacitor-updater\')'
     : 'import { CapacitorUpdater } from \'@capgo/capacitor-updater\''
-  return `${updaterImport};\n\n${NOTIFY_CALL};\n${content}`
+  return `${updaterImport};\n\n${buildNotifyAppReadyCall('CapacitorUpdater')};\n${content}`
 }
 
 export function injectNotifyAppReadyIntoBuildJs(content: string): string | undefined {
   if (hasNotifyAppReadyInvocation(content))
     return undefined
-  if (!hasCallableCapacitorUpdaterBinding(content))
+  const identifier = resolveCapacitorUpdaterIdentifier(content)
+  if (!identifier)
     return undefined
-  return `${content.trimEnd()}\n${NOTIFY_CALL};\n`
+  return `${content.trimEnd()}\n${buildNotifyAppReadyCall(identifier)};\n`
 }
 
 export function patchNotifyAppReadyInBuildFolder(webDir: string): string | undefined {

@@ -140,6 +140,18 @@ await test('patchNotifyAppReadyInBuildFolder skips bundles that already call not
   assert.equal(patchNotifyAppReadyInBuildFolder(root), undefined)
 })
 
+await test('injectNotifyAppReadyIntoBuildJs uses aliased ESM updater binding', () => {
+  const input = 'import { CapacitorUpdater as Updater } from \'@capgo/capacitor-updater\'\nconsole.log("boot")\n'
+  const output = injectNotifyAppReadyIntoBuildJs(input)
+  assert.match(output, /Updater\.notifyAppReady\(\)/)
+})
+
+await test('injectNotifyAppReadyIntoBuildJs uses aliased CommonJS updater binding', () => {
+  const input = 'const { CapacitorUpdater: Updater } = require(\'@capgo/capacitor-updater\')\nconsole.log("boot")\n'
+  const output = injectNotifyAppReadyIntoBuildJs(input)
+  assert.match(output, /Updater\.notifyAppReady\(\)/)
+})
+
 await test('patchNotifyAppReadyInBuildFolder skips bundles without CapacitorUpdater', () => {
   const root = makeTempDir('patch-skip')
   writeFileSync(join(root, 'index.html'), '<html><body><script src="./index.js"></script></body></html>')
