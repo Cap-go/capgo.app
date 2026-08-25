@@ -50,10 +50,10 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pg.ts', async (impo
   const requestInfosChannelDevicePostgresRollout = vi.fn(async () => null)
   const requestInfosChannelByIdPostgres = vi.fn(async () => structuredClone(CHANNEL_ROW))
   const requestInfosChannelByIdPostgresRollout = vi.fn(async () => structuredClone(CHANNEL_ROW))
-  const queryAppOwnerPostgres = vi.fn(async () => structuredClone(APP_OWNER))
-  const getAppOwnerPostgres = vi.fn(async (c: unknown, appId: string, client: unknown, actions: unknown) => {
+  const queryAppOwnerPostgres = vi.fn(async (..._args: unknown[]) => structuredClone(APP_OWNER))
+  const getAppOwnerPostgres = vi.fn(async (...args: unknown[]) => {
     try {
-      return await queryAppOwnerPostgres(c, appId, client, actions)
+      return await queryAppOwnerPostgres(...args)
     }
     catch {
       return null
