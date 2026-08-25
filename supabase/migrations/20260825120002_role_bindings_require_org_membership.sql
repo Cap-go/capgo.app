@@ -243,12 +243,6 @@ USING (
       )
     )
   )
-  AND rbac_internal.role_binding_principal_allowed_for_org(
-    principal_type,
-    principal_id,
-    org_id,
-    scope_type
-  )
 )
 WITH CHECK (
   (

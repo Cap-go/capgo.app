@@ -2,7 +2,7 @@
 -- Direct PostgREST INSERT of an app-scoped role_binding must require org membership.
 BEGIN;
 
-SELECT plan(6);
+SELECT plan(8);
 
 SELECT tests.create_supabase_user('rbac_membership_admin', 'rbac-membership-admin@test.local');
 SELECT tests.create_supabase_user('rbac_membership_member', 'rbac-membership-member@test.local');
@@ -88,6 +88,39 @@ JOIN public.roles
   ON roles.name = role_fixture.role_name
   AND roles.scope_type = public.rbac_scope_org()
 ON CONFLICT DO NOTHING;
+
+INSERT INTO public.orgs (id, created_by, name, management_email)
+VALUES (
+  '70000000-0000-4000-8000-000000009977',
+  tests.get_supabase_uid('rbac_membership_admin'),
+  'Role bindings membership outsider org',
+  'rbac-membership-outsider@test.local'
+)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.groups (id, org_id, name, description, created_by)
+VALUES (
+  '70000000-0000-4000-8000-000000009978',
+  '70000000-0000-4000-8000-000000009977',
+  'Outsider group for membership RLS',
+  'Group in another org',
+  tests.get_supabase_uid('rbac_membership_admin')
+)
+ON CONFLICT (id) DO NOTHING;
+
+SELECT tests.create_v2_apikey(
+  70997601,
+  tests.get_supabase_uid('rbac_membership_member'),
+  'test-apikey-membership-ghsa9976',
+  'Membership test apikey'
+);
+
+CREATE TEMP TABLE membership_test_apikey_rbac AS
+SELECT apikeys.rbac_id
+FROM public.apikeys
+WHERE apikeys.id = 70997601;
+
+GRANT SELECT ON membership_test_apikey_rbac TO authenticated;
 
 RESET ROLE;
 SELECT tests.clear_authentication();
@@ -203,6 +236,58 @@ SELECT throws_ok(
   'P0001',
   'Admins cannot elevate privileges!',
   'org admin cannot grant an app-scoped role when org_id mismatches apps.owner_org'
+);
+
+SELECT throws_ok(
+  $$INSERT INTO public.role_bindings (
+      principal_type,
+      principal_id,
+      role_id,
+      scope_type,
+      org_id,
+      app_id,
+      granted_by
+    )
+    SELECT
+      public.rbac_principal_group(),
+      '70000000-0000-4000-8000-000000009978'::uuid,
+      roles.id,
+      public.rbac_scope_app(),
+      '70000000-0000-4000-8000-000000009976',
+      apps.id,
+      tests.get_supabase_uid('rbac_membership_admin')
+    FROM public.roles
+    JOIN public.apps ON apps.app_id = 'com.test.rbac.membership.ghsa9976'
+    WHERE roles.name = public.rbac_role_app_reader()
+      AND roles.scope_type = public.rbac_scope_app()$$,
+  '42501',
+  'new row violates row-level security policy for table "role_bindings"',
+  'org admin cannot grant an app-scoped role to a group from another org'
+);
+
+SELECT lives_ok(
+  $$INSERT INTO public.role_bindings (
+      principal_type,
+      principal_id,
+      role_id,
+      scope_type,
+      org_id,
+      app_id,
+      granted_by
+    )
+    SELECT
+      public.rbac_principal_apikey(),
+      (SELECT rbac_id FROM membership_test_apikey_rbac),
+      roles.id,
+      public.rbac_scope_app(),
+      '70000000-0000-4000-8000-000000009976',
+      apps.id,
+      tests.get_supabase_uid('rbac_membership_admin')
+    FROM public.roles
+    JOIN public.apps ON apps.app_id = 'com.test.rbac.membership.ghsa9976'
+    WHERE roles.name = public.rbac_role_app_reader()
+      AND roles.scope_type = public.rbac_scope_app()$$,
+  'org admin can grant an app-scoped role to an apikey whose owner is an org member'
 );
 
 SELECT lives_ok(
