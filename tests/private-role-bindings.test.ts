@@ -838,7 +838,7 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       expect(overrides ?? []).toHaveLength(0)
     }
     finally {
-      await supabase.from('channel_permission_overrides').delete().eq('principal_id', USER_ID_2)
+      await supabase.from('channel_permission_overrides').delete().eq('principal_id', USER_ID_2).eq('channel_id', channel!.id)
       await supabase.from('role_bindings').delete().eq('org_id', orgId)
       await supabase.from('org_users').delete().eq('org_id', orgId)
       await supabase.from('channels').delete().eq('owner_org', orgId)
@@ -986,7 +986,7 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       expect(permissionAfterDelete?.can_promote).toBe(false)
     }
     finally {
-      await supabase.from('channel_permission_overrides').delete().eq('principal_id', USER_ID_2)
+      await supabase.from('channel_permission_overrides').delete().eq('principal_id', USER_ID_2).eq('channel_id', channel!.id)
       await supabase.from('role_bindings').delete().eq('org_id', orgId)
       await supabase.from('org_users').delete().eq('org_id', orgId)
       await supabase.from('channels').delete().eq('owner_org', orgId)
@@ -1146,7 +1146,7 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       expect(orgBPermission?.can_promote).toBe(true)
     }
     finally {
-      await supabase.from('channel_permission_overrides').delete().eq('principal_id', USER_ID_2)
+      await supabase.from('channel_permission_overrides').delete().eq('principal_id', USER_ID_2).in('channel_id', [channels.A, channels.B])
       await supabase.from('role_bindings').delete().in('org_id', [orgAId, orgBId])
       await supabase.from('org_users').delete().in('org_id', [orgAId, orgBId])
       await supabase.from('channels').delete().in('owner_org', [orgAId, orgBId])

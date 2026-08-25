@@ -21,6 +21,26 @@ AS $$
       WHERE groups.id = p_principal_id
         AND groups.org_id = p_org_id
     )
+    WHEN p_principal_type = public.rbac_principal_user() THEN (
+      EXISTS (
+        SELECT 1
+        FROM public.role_bindings
+        WHERE role_bindings.principal_type = p_principal_type
+          AND role_bindings.principal_id = p_principal_id
+          AND role_bindings.org_id = p_org_id
+          AND (role_bindings.expires_at IS NULL OR role_bindings.expires_at > pg_catalog.now())
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM public.group_members AS group_member
+        INNER JOIN public.role_bindings AS group_binding
+          ON group_binding.principal_type = public.rbac_principal_group()
+          AND group_binding.principal_id = group_member.group_id
+        WHERE group_member.user_id = p_principal_id
+          AND group_binding.org_id = p_org_id
+          AND (group_binding.expires_at IS NULL OR group_binding.expires_at > pg_catalog.now())
+      )
+    )
     ELSE EXISTS (
       SELECT 1
       FROM public.role_bindings
@@ -34,11 +54,13 @@ $$;
 
 ALTER FUNCTION public.rbac_principal_has_org_binding(text, uuid, uuid) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.rbac_principal_has_org_binding(text, uuid, uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.rbac_principal_has_org_binding(text, uuid, uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.rbac_principal_has_org_binding(text, uuid, uuid) TO service_role;
 
 COMMENT ON FUNCTION public.rbac_principal_has_org_binding(text, uuid, uuid) IS
-  'True when the principal still has a non-expired role binding in the org (any scope) or the group belongs to the org. Used to ignore stale channel permission overrides after org access is revoked.';
+  'True when the principal still has a non-expired role binding in the org (direct or via group membership for users) or the group belongs to the org. Used to ignore stale channel permission overrides after org access is revoked.';
+
+CREATE INDEX IF NOT EXISTS role_bindings_principal_org_idx
+  ON public.role_bindings (principal_type, principal_id, org_id);
 
 CREATE OR REPLACE FUNCTION public.rbac_check_permission_direct(
   p_permission_key text,
