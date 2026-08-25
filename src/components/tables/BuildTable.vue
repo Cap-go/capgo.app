@@ -414,53 +414,6 @@ watch(showSetupFlow, (newValue) => {
         @reset="reload()"
         @reload="getData()"
       >
-        <template #status="{ element }">
-          <span
-            class="font-semibold"
-            :class="getStatusColor(element.status)"
-          >
-            {{ element.status }}
-          </span>
-        </template>
-        <template #builder_pool="{ element }">
-          <span
-            v-if="element.builder_pool === 'dedicated'"
-            class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-azure-500/10 text-azure-700 dark:text-azure-300"
-          >
-            {{ t('builder-pool-dedicated') }}
-          </span>
-          <span
-            v-else-if="element.builder_pool === 'shared'"
-            class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
-          >
-            {{ t('builder-pool-shared') }}
-          </span>
-          <span v-else class="text-gray-400 dark:text-gray-600">—</span>
-        </template>
-        <template #last_error="{ element }">
-          <div v-if="element.last_error" class="flex items-center gap-2">
-            <span class="max-w-xs text-red-600 truncate dark:text-red-400">
-              {{ element.last_error.length > 50 ? `${element.last_error.substring(0, 50)}...` : element.last_error }}
-            </span>
-            <button
-              type="button"
-              class="p-1 text-gray-500 rounded-md cursor-pointer shrink-0 dark:text-gray-400 hover:text-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700 dark:hover:text-gray-300"
-              :aria-label="t('build-error-details')"
-              @click.stop="showErrorDetails(element.last_error)"
-            >
-              <IconEye class="w-4 h-4" />
-            </button>
-            <button
-              v-if="isPlanUpgradeError(element.last_error)"
-              type="button"
-              class="px-2 py-1 text-xs font-semibold text-white rounded-md d-btn d-btn-xs d-btn-primary shrink-0"
-              @click.stop="router.push('/settings/organization/plans')"
-            >
-              {{ t('plan-upgrade-v2') }}
-            </button>
-          </div>
-          <span v-else class="text-gray-400 dark:text-gray-600">-</span>
-        </template>
         <template #empty>
           <div class="flex flex-col items-center justify-center p-8">
             <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
