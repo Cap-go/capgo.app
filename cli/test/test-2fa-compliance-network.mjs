@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+process.env.CAPGO_DISABLE_POSTHOG = '1'
 import assert from 'node:assert/strict'
 import { check2FAComplianceForApp } from '../src/api/app.ts'
 import { shouldCapturePosthogException } from '../src/posthog.ts'

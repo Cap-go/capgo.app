@@ -60,6 +60,7 @@ export async function warnAndContinueTwoFactorPreflightNetworkFailure(
       error: networkError,
       functionName: options.telemetryFunctionName,
       kind: 'unhandled_error',
+      status: 0,
     })
   }
 }
