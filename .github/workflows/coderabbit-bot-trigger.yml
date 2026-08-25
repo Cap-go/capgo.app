@@ -23,7 +23,7 @@ jobs:
           script: |
             const { owner, repo } = context.repo
             const branch = context.ref.replace('refs/heads/', '')
-            const { data: prs } = await github.rest.pulls.list({
+            const prs = await github.paginate(github.rest.pulls.list, {
               owner,
               repo,
               head: `${owner}:${branch}`,
@@ -42,7 +42,7 @@ jobs:
                 pull_number: pr.number,
               })
               const latestCodeRabbitReview = reviews
-                .filter(review => review.user.login === 'coderabbitai[bot]')
+                .filter(review => review.user?.login === 'coderabbitai[bot]')
                 .pop()
 
               if (

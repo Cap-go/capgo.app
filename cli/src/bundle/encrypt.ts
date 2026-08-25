@@ -45,7 +45,7 @@ export async function encryptZipInternal(
 
   try {
     requireZipPath(zipPath)
-    requireChecksum(checksum)
+    checksum = requireChecksum(checksum)
     requireExistingZipPath(zipPath)
 
     const extConfig = await getConfig()

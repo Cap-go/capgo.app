@@ -41,18 +41,21 @@ export function requireExistingZipPath(zipPath: string): void {
   }
 }
 
-export function requireChecksum(checksum: string | undefined): asserts checksum is string {
+export function requireChecksum(checksum: string | undefined): string {
   if (isMissingString(checksum)) {
     throw new CliUserError(
       'Missing checksum. Run "bundle zip --json" to get the checksum, then pass it as the second argument.',
     )
   }
 
-  if (!CHECKSUM_PATTERN.test(checksum.trim())) {
+  const normalizedChecksum = checksum.trim()
+  if (!CHECKSUM_PATTERN.test(normalizedChecksum)) {
     throw new CliUserError(
       'Invalid checksum format. Run "bundle zip --json" to get a valid SHA256 or CRC32 checksum.',
     )
   }
+
+  return normalizedChecksum
 }
 
 export function requireIvSessionKey(ivSessionKey: string | undefined): asserts ivSessionKey is string {

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { decryptZipInternal } from '../../src/bundle/decrypt'
 import { encryptZipInternal } from '../../src/bundle/encrypt'
-import { requireIvSessionKey } from '../../src/bundle/validate-inputs'
+import { requireChecksum, requireIvSessionKey } from '../../src/bundle/validate-inputs'
 import { CliUserError } from '../../src/shared/cli-user-error'
 import { shouldCapturePosthogException } from '../../src/posthog'
 
@@ -25,6 +25,11 @@ describe('bundle encrypt input validation', () => {
   it('throws CliUserError when checksum format is invalid', async () => {
     await expect(encryptZipInternal('./missing.zip', 'not-a-checksum', {}, true)).rejects.toBeInstanceOf(CliUserError)
     await expect(encryptZipInternal('./missing.zip', 'not-a-checksum', {}, true)).rejects.toThrow(/checksum format/i)
+  })
+
+  it('trims leading and trailing whitespace from checksum before encryption', () => {
+    const checksumWithWhitespace = '  abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789  '
+    expect(requireChecksum(checksumWithWhitespace)).toBe(checksumWithWhitespace.trim())
   })
 })
 
