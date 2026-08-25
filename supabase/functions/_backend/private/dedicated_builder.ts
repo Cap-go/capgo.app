@@ -1,39 +1,45 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import { type } from 'arktype'
-import { safeParseSchema } from '../utils/ark_validation.ts'
+import { z } from 'zod'
 import {
   countActiveDedicatedBuilds,
   getDedicatedBuilderForOrg,
   publicDedicatedBuilderView,
 } from '../utils/dedicated_builder.ts'
 import { sendDiscordAlert } from '../utils/discord.ts'
-import { BRES, createHono, middlewareAuth, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
+import { BRES, createHono, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
+import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
+import { safeParseSchema } from '../utils/schema_validation.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { version } from '../utils/version.ts'
 
-const uuidSchema = type('string.uuid')
-
-const requestBodySchema = type({
-  'org_id': 'string.uuid',
-  'use_case?': 'string <= 2000',
-  'monthly_builds_estimate?': 'number.integer >= 0',
-  'platforms?': 'string[]',
+const requestBodySchema = z.object({
+  org_id: z.uuid(),
+  use_case: z.string().max(2000).optional(),
+  monthly_builds_estimate: z.number().int().min(0).optional(),
+  platforms: z.array(z.string()).optional(),
 })
 
-const patchBodySchema = type({
-  'allow_shared_fallback?': 'boolean',
-  'cancel?': 'boolean',
+const patchBodySchema = z.object({
+  allow_shared_fallback: z.boolean().optional(),
+  cancel: z.boolean().optional(),
 })
+
+function parseOrgIdParam(orgId: string): string {
+  if (!z.uuid().safeParse(orgId).success)
+    throw simpleError('invalid_org_id', 'Invalid organization id')
+  return orgId
+}
 
 const ALLOWED_PLATFORMS = new Set(['ios', 'android'])
 
 export const app = createHono('', version)
 
 app.use('*', useCors)
+app.use('*', middlewareAuth())
 
 async function requireReadBilling(c: Context<MiddlewareKeyVariables>, orgId: string) {
   const allowed = await checkPermission(c, 'org.read_billing' as any, { orgId })
@@ -120,8 +126,6 @@ async function notifyDedicatedBuilderRequested(
     await sendEventToTracking(c, {
       event: 'Dedicated Builder Requested',
       channel: 'build-lifecycle',
-      icon: '🏗️',
-      notify: false,
       user_id: input.userId,
       groups: { organization: input.orgId },
       tags: {
@@ -143,12 +147,8 @@ async function notifyDedicatedBuilderRequested(
 }
 
 // GET /private/dedicated_builder/:orgId
-app.get('/:orgId', middlewareAuth, async (c) => {
-  const orgIdResult = uuidSchema(c.req.param('orgId'))
-  if (orgIdResult instanceof type.errors)
-    throw simpleError('invalid_org_id', 'Invalid organization id')
-
-  const orgId = orgIdResult
+app.get('/:orgId', async (c) => {
+  const orgId = parseOrgIdParam(c.req.param('orgId'))
   await requireReadBilling(c, orgId)
 
   const row = await getDedicatedBuilderForOrg(c, orgId)
@@ -162,7 +162,7 @@ app.get('/:orgId', middlewareAuth, async (c) => {
 })
 
 // POST /private/dedicated_builder — request a dedicated builder
-app.post('/', middlewareAuth, async (c) => {
+app.post('/', async (c) => {
   const auth = c.get('auth')!
   const body = await parseBody<unknown>(c)
   const parsed = safeParseSchema(requestBodySchema, body)
@@ -318,12 +318,8 @@ async function updateDedicatedBuilderFallback(
 }
 
 // PATCH /private/dedicated_builder/:orgId — toggle fallback or cancel a pending request
-app.patch('/:orgId', middlewareAuth, async (c) => {
-  const orgIdResult = uuidSchema(c.req.param('orgId'))
-  if (orgIdResult instanceof type.errors)
-    throw simpleError('invalid_org_id', 'Invalid organization id')
-
-  const orgId = orgIdResult
+app.patch('/:orgId', async (c) => {
+  const orgId = parseOrgIdParam(c.req.param('orgId'))
   await requireUpdateBilling(c, orgId)
 
   const body = await parseBody<unknown>(c)
