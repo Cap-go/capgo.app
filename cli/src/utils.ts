@@ -2142,11 +2142,10 @@ export async function getOrganizationWithPermission(
   return organization
 }
 
-// TODO(cli-http): no Capgo HTTP identity endpoint yet (rpc get_user_id)
+// TODO(cli-http): no Capgo HTTP identity endpoint yet (rpc request_actor_user_id)
 export async function resolveUserIdFromApiKey(supabase: SupabaseClient<Database>, apikey: string, silent = false) {
   const { data: dataUser, error: userIdError } = await supabase
-    .rpc('get_user_id', { apikey })
-    .single()
+    .rpc('request_actor_user_id')
 
   const userId = (dataUser || '').toString()
 

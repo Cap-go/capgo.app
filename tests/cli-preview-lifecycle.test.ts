@@ -596,8 +596,7 @@ describe('cli app preview lifecycle', () => {
       .toMatchObject({ name: genericChannelName })
 
     const { data: uploaderUserId, error: uploaderUserError } = await apiKeyClient
-      .rpc('get_user_id', { apikey: apiKey.key })
-      .single()
+      .rpc('request_actor_user_id')
     expect(uploaderUserError).toBeNull()
     expect(uploaderUserId).toEqual(expect.any(String))
 
