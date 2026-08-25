@@ -33,9 +33,9 @@ const DATABASE_MESSAGE_RE = /Failed query:|(?:FROM|INTO|UPDATE|SELECT|INSERT|DEL
 
 const PG_CONNECTION_MESSAGE_RE = /postgres(?:ql)?(?:\.|:|@|\/|\s|$|-)|hyperdrive|pgbouncer|db\.[\w.-]+\.supabase\.(?:co|com)|neon\.tech|\.pooler\.|aws-.*-pooler/i
 
-const PG_CONNECT_PORTS = new Set([5432, 5433, 6543, 6432])
+const PG_CONNECT_PORTS = new Set([5432, 5433, 54322, 6543, 6432])
 
-const PG_CONNECT_PORT_MESSAGE_RE = /:(5432|5433|6543|6432)\b/
+const PG_CONNECT_PORT_MESSAGE_RE = /:(5432|5433|54322|6543|6432)\b/
 
 const PG_SEVERITY_RE = /^(?:ERROR|FATAL|PANIC|WARNING|NOTICE|INFO|LOG|DEBUG)$/i
 

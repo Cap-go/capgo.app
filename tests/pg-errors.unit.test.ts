@@ -121,6 +121,17 @@ describe('pg_errors', () => {
     expect(isTransientDatabaseError(pgError)).toBe(true)
   })
 
+  it('treats local supabase postgres connection failures on port 54322 as database-origin', () => {
+    const pgError = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:54322'), {
+      code: 'ECONNREFUSED',
+      port: 54322,
+      syscall: 'connect',
+    })
+
+    expect(isDatabaseOriginError(pgError)).toBe(true)
+    expect(isTransientDatabaseError(pgError)).toBe(true)
+  })
+
   it('detects message-only postgres connection failures on standard ports', () => {
     const pgError = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), {
       code: 'ECONNREFUSED',
