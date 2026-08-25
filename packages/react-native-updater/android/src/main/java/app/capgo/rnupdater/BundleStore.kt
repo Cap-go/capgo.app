@@ -33,6 +33,12 @@ object BundleStore {
   private const val INDEX = "bundles.json"
   private val indexLock = Any()
 
+  private fun deleteQuietly(file: File) {
+    if (!file.delete() && file.exists()) {
+      // Best-effort cleanup; stale tmp files are overwritten on the next atomic save.
+    }
+  }
+
   fun root(context: Context): File {
     val dir = File(context.filesDir, "capgo_bundles")
     if (!dir.exists()) dir.mkdirs()
@@ -84,7 +90,7 @@ object BundleStore {
       tmp.writeText(arr.toString())
       if (!tmp.renameTo(indexFile)) {
         tmp.copyTo(indexFile, overwrite = true)
-        tmp.delete()
+        deleteQuietly(tmp)
       }
     }
   }

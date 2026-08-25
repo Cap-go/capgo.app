@@ -23,6 +23,12 @@ object CapgoDownloader {
     fun onPercent(percent: Int)
   }
 
+  private fun deleteQuietly(file: File) {
+    if (!file.delete() && file.exists()) {
+      // Best-effort cleanup; stale temp files are overwritten on the next download pass.
+    }
+  }
+
   data class DownloadRequest(
     val id: String,
     val version: String,
@@ -168,16 +174,16 @@ object CapgoDownloader {
         decompressBrotli(tmp, target)
       } catch (e: Exception) {
         CapgoHttp.sendStats(context, "download_manifest_brotli_fail", "$version:$fileName")
-        tmp.delete()
+        deleteQuietly(tmp)
         throw e
       }
-      tmp.delete()
+      deleteQuietly(tmp)
       return
     }
     if (!tmp.renameTo(target)) {
       tmp.copyTo(target, overwrite = true)
     }
-    tmp.delete()
+    deleteQuietly(tmp)
   }
 
   private fun verifyChecksum(
@@ -212,13 +218,13 @@ object CapgoDownloader {
     if (!checksum.isNullOrBlank() && checksum.length == 64) {
       val actual = sha256(zipFile)
       if (!actual.equals(checksum, ignoreCase = true)) {
-        zipFile.delete()
+        deleteQuietly(zipFile)
         error("ZIP checksum mismatch")
       }
     }
     progress?.onPercent(70)
     unzip(zipFile, dest)
-    zipFile.delete()
+    deleteQuietly(zipFile)
   }
 
   private fun httpDownloadToFile(url: String, dest: File) {
