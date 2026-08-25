@@ -56,12 +56,14 @@ describe('admin registration source dashboard', () => {
     )
     expect(registrationSection.match(/:subtitle="t\('selected-period'\)"/g)).toHaveLength(3)
 
-    const sectionIndex = source.indexOf('<!-- Registration Source Trend Chart -->')
-    const chartIndex = source.indexOf('<AdminStackedBarChart')
-    const totalsIndex = source.indexOf('data-test="registration-source-totals"')
+    const sectionIndex = source.indexOf('chart-id="registrations-by-source"')
+    const sectionEnd = source.indexOf('chart-id="apps-onboarding-by-method"')
+    const registrationSectionSource = source.slice(sectionIndex, sectionEnd)
+    const chartIndex = registrationSectionSource.indexOf('<AdminStackedBarChart')
+    const totalsIndex = registrationSectionSource.indexOf('data-test="registration-source-totals"')
 
     expect(sectionIndex).toBeGreaterThan(-1)
-    expect(chartIndex).toBeGreaterThan(sectionIndex)
+    expect(chartIndex).toBeGreaterThan(-1)
     expect(totalsIndex).toBeGreaterThan(chartIndex)
   })
 
