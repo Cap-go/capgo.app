@@ -48,7 +48,12 @@ const tokenOpChains = new Map<string, Promise<unknown>>()
 function runSerializedTokenOp<T>(appId: string, op: () => Promise<T>): Promise<T> {
   const tail = tokenOpChains.get(appId) ?? Promise.resolve()
   const run = tail.catch(() => {}).then(op)
-  tokenOpChains.set(appId, run.then(() => undefined, () => undefined))
+  const next = run.then(() => undefined, () => undefined)
+  tokenOpChains.set(appId, next)
+  void next.finally(() => {
+    if (tokenOpChains.get(appId) === next)
+      tokenOpChains.delete(appId)
+  })
   return run
 }
 const DEFAULT_PAYLOAD_TTL_SECONDS = 60
@@ -313,7 +318,8 @@ async function cachedChannelLookup(c: Context, options: CachedChannelLookupOptio
     app_id,
     v: token,
     platform,
-    channel: defaultChannel || '__none__',
+    channel: defaultChannel,
+    no_default: defaultChannel === '' ? '1' : '0',
     meta: includeMetadata ? '1' : '0',
     manifest: includeManifest ? '1' : '0',
     rollout: rollout ? '1' : '0',

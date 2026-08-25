@@ -56,8 +56,12 @@ app.post('/', middlewareAPISecret, async (c) => {
     return c.json(BRES)
   }
 
-  const urls = parsePluginInvalidateUrls(getEnv(c, 'PLUGIN_INVALIDATE_URLS'))
   const secret = getEnv(c, 'CACHE_INVALIDATE_SECRET')
+  if (!secret) {
+    cloudlog({ requestId: c.get('requestId'), message: 'cache invalidate fanout skipped (empty CACHE_INVALIDATE_SECRET)', appIds })
+    return c.json(BRES)
+  }
+  const urls = parsePluginInvalidateUrls(getEnv(c, 'PLUGIN_INVALIDATE_URLS'))
   const chunks = chunkAppIds(appIds)
   const results = await Promise.all(urls.map(async (url) => {
     let regionOk = true
