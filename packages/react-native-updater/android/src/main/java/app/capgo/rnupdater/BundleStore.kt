@@ -84,7 +84,7 @@ object BundleStore {
       tmp.writeText(arr.toString())
       if (!tmp.renameTo(indexFile)) {
         tmp.copyTo(indexFile, overwrite = true)
-        require(tmp.delete() || !tmp.exists()) { "Failed to delete bundle index temp file" }
+        tmp.delete()
       }
     }
   }

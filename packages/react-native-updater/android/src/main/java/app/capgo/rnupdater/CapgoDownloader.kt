@@ -171,13 +171,13 @@ object CapgoDownloader {
         tmp.delete()
         throw e
       }
-      require(tmp.delete() || !tmp.exists()) { "Failed to delete temp brotli file ${tmp.absolutePath}" }
+      tmp.delete()
       return
     }
     if (!tmp.renameTo(target)) {
       tmp.copyTo(target, overwrite = true)
-      require(tmp.delete() || !tmp.exists()) { "Failed to delete temp download file ${tmp.absolutePath}" }
     }
+    tmp.delete()
   }
 
   private fun verifyChecksum(
@@ -212,13 +212,13 @@ object CapgoDownloader {
     if (!checksum.isNullOrBlank() && checksum.length == 64) {
       val actual = sha256(zipFile)
       if (!actual.equals(checksum, ignoreCase = true)) {
-        require(zipFile.delete() || !zipFile.exists()) { "Failed to delete invalid ZIP" }
+        zipFile.delete()
         error("ZIP checksum mismatch")
       }
     }
     progress?.onPercent(70)
     unzip(zipFile, dest)
-    require(zipFile.delete() || !zipFile.exists()) { "Failed to delete ZIP after extraction" }
+    zipFile.delete()
   }
 
   private fun httpDownloadToFile(url: String, dest: File) {

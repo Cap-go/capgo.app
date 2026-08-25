@@ -221,7 +221,9 @@ public class CapgoUpdater: RCTEventEmitter {
       }
       result = json
     }.resume()
-    sem.wait()
+    if sem.wait(timeout: .now() + 120) == .timedOut {
+      throw NSError(domain: "capgo", code: 12, userInfo: [NSLocalizedDescriptionKey: "HTTP request timed out"])
+    }
     if let err = err { throw err }
     return result
   }
