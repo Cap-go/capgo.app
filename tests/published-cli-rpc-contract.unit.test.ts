@@ -117,5 +117,12 @@ describe('published CLI contract helpers', () => {
       0,
       0,
     )).toBe(true)
+
+    expect(rpcCallMatchesOverload(
+      { name: 'get_channel_current_bundle_rbac', argKeys: [] },
+      ['p_app_id', 'p_channel_id'],
+      0,
+      2,
+    )).toBe(true)
   })
 })
