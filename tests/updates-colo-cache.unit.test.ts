@@ -50,13 +50,19 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pg.ts', async (impo
   const requestInfosChannelDevicePostgresRollout = vi.fn(async () => null)
   const requestInfosChannelByIdPostgres = vi.fn(async () => structuredClone(CHANNEL_ROW))
   const requestInfosChannelByIdPostgresRollout = vi.fn(async () => structuredClone(CHANNEL_ROW))
-  const getAppOwnerPostgres = vi.fn(async () => structuredClone(APP_OWNER))
+  const queryAppOwnerPostgres = vi.fn(async () => structuredClone(APP_OWNER))
+  const getAppOwnerPostgres = vi.fn(async (c: unknown, appId: string, client: unknown, actions: unknown) => {
+    try {
+      return await queryAppOwnerPostgres(c, appId, client, actions)
+    }
+    catch {
+      return null
+    }
+  })
   return {
     ...actual,
     getAppOwnerPostgres,
-    // The cached path uses the throwing variant; share the same stub so
-    // call-count assertions cover both entry points.
-    queryAppOwnerPostgres: getAppOwnerPostgres,
+    queryAppOwnerPostgres,
     requestInfosChannelPostgres: vi.fn(async () => structuredClone(CHANNEL_ROW)),
     requestInfosChannelPostgresRollout: vi.fn(async () => structuredClone(CHANNEL_ROW)),
     requestInfosChannelDevicePostgres,
@@ -122,24 +128,26 @@ describe('updates colo cache', () => {
     const second = await cachedGetAppOwner(c, 'com.demo.app', {} as any, ['mau'])
     expect(first?.owner_org).toBe('org-1')
     expect(second?.owner_org).toBe('org-1')
-    expect(pg.getAppOwnerPostgres).toHaveBeenCalledTimes(1)
+    expect(pg.queryAppOwnerPostgres).toHaveBeenCalledTimes(1)
   })
 
   it('caches negative owner results (unknown app)', async () => {
-    ;(pg.getAppOwnerPostgres as any).mockResolvedValueOnce(null)
+    ;(pg.queryAppOwnerPostgres as any).mockResolvedValueOnce(null)
     expect(await cachedGetAppOwner(makeContext(), 'com.ghost.app', {} as any, ['mau'])).toBeNull()
     expect(await cachedGetAppOwner(makeContext(), 'com.ghost.app', {} as any, ['mau'])).toBeNull()
-    expect(pg.getAppOwnerPostgres).toHaveBeenCalledTimes(1)
+    expect(pg.queryAppOwnerPostgres).toHaveBeenCalledTimes(1)
   })
 
   it('never caches a transient query failure as unknown app', async () => {
-    ;(pg.getAppOwnerPostgres as any).mockRejectedValueOnce(new Error('replica down'))
-    // direct-path fallback also fails once: the request answers null...
-    ;(pg.getAppOwnerPostgres as any).mockRejectedValueOnce(new Error('replica down'))
-    await expect(cachedGetAppOwner(makeContext(), 'com.demo.app', {} as any, ['mau'])).rejects.toThrow('replica down')
-    // ...but the next request loads and caches the real owner
+    ;(pg.queryAppOwnerPostgres as any).mockRejectedValueOnce(new Error('replica down'))
+    ;(pg.getAppOwnerPostgres as any).mockResolvedValueOnce(null)
+    const first = await cachedGetAppOwner(makeContext(), 'com.demo.app', {} as any, ['mau'])
+    expect(first).toBeNull()
+    expect(pg.queryAppOwnerPostgres).toHaveBeenCalledTimes(1)
+    expect(pg.getAppOwnerPostgres).toHaveBeenCalledTimes(1)
     const owner = await cachedGetAppOwner(makeContext(), 'com.demo.app', {} as any, ['mau'])
     expect(owner?.owner_org).toBe('org-1')
+    expect(pg.queryAppOwnerPostgres).toHaveBeenCalledTimes(2)
   })
 
   it('token bump invalidates every cached payload of the app', async () => {
@@ -147,7 +155,7 @@ describe('updates colo cache', () => {
     expect(await bumpAppCacheToken(makeContext(), 'com.demo.app')).toBe(true)
     // fresh request context: the token memo is per-request by design
     await cachedGetAppOwner(makeContext(), 'com.demo.app', {} as any, ['mau'])
-    expect(pg.getAppOwnerPostgres).toHaveBeenCalledTimes(2)
+    expect(pg.queryAppOwnerPostgres).toHaveBeenCalledTimes(2)
   })
 
   it('one request never mixes token generations (memoized per request)', async () => {
@@ -156,7 +164,7 @@ describe('updates colo cache', () => {
     await bumpAppCacheToken(makeContext(), 'com.demo.app')
     // same request keeps reading its generation: still a cache hit
     await cachedGetAppOwner(c, 'com.demo.app', {} as any, ['mau'])
-    expect(pg.getAppOwnerPostgres).toHaveBeenCalledTimes(1)
+    expect(pg.queryAppOwnerPostgres).toHaveBeenCalledTimes(1)
   })
 
   it('caches the channel lookup but never the per-device override', async () => {
@@ -245,7 +253,7 @@ describe('updates colo cache', () => {
   })
 
   it('rollout path decides per device on top of the cached channel row', async () => {
-    ;(pg.requestInfosChannelPostgresRollout as any).mockResolvedValue({
+    ;(pg.requestInfosChannelPostgresRollout as any).mockResolvedValueOnce({
       ...structuredClone(CHANNEL_ROW),
       rolloutVersion: { id: 43, name: '1.2.4', manifest_count: 0 },
       channels: { ...structuredClone(CHANNEL_ROW.channels), rollout_version: 43, rollout_enabled: true, rollout_percentage_bps: 10000, rollout_id: 'r-1', rollout_paused_at: null, rollout_cache_ttl_seconds: 2592000 },
@@ -315,7 +323,7 @@ describe('cache invalidate route (plugin worker)', () => {
   beforeEach(() => {
     cache = createMemoryCache()
     vi.stubGlobal('caches', { open: vi.fn(async () => cache) })
-    vi.stubEnv('API_SECRET', 's3cret')
+    vi.stubEnv('CACHE_INVALIDATE_SECRET', 's3cret')
   })
 
   afterEach(() => {
@@ -327,10 +335,10 @@ describe('cache invalidate route (plugin worker)', () => {
     const app = buildApp()
     const wrong = await app.request('/cache_invalidate', {
       method: 'POST',
-      headers: { 'apisecret': 'nope', 'Content-Type': 'application/json' },
+      headers: { 'x-cache-invalidate-secret': 'nope', 'Content-Type': 'application/json' },
       body: JSON.stringify({ app_ids: ['com.demo.app'] }),
     })
-    expect(wrong.status).toBe(400)
+    expect(wrong.status).toBe(401)
 
     vi.unstubAllEnvs()
     const disabled = await buildApp().request('/cache_invalidate', {
@@ -338,14 +346,24 @@ describe('cache invalidate route (plugin worker)', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ app_ids: ['com.demo.app'] }),
     })
-    expect(disabled.status).toBe(400)
+    expect(disabled.status).toBe(503)
+  })
+
+  it('rejects malformed JSON bodies with validation errors', async () => {
+    const app = buildApp()
+    const response = await app.request('/cache_invalidate', {
+      method: 'POST',
+      headers: { 'x-cache-invalidate-secret': 's3cret', 'Content-Type': 'application/json' },
+      body: 'null',
+    })
+    expect(response.status).toBe(400)
   })
 
   it('bumps tokens for each app', async () => {
     const app = buildApp()
     const response = await app.request('/cache_invalidate', {
       method: 'POST',
-      headers: { 'apisecret': 's3cret', 'Content-Type': 'application/json' },
+      headers: { 'x-cache-invalidate-secret': 's3cret', 'Content-Type': 'application/json' },
       body: JSON.stringify({ app_ids: ['com.demo.app', 'com.other.app'] }),
     })
     expect(response.status).toBe(200)
@@ -357,7 +375,7 @@ describe('cache invalidate route (plugin worker)', () => {
     const app = buildApp()
     const response = await app.request('/cache_invalidate', {
       method: 'POST',
-      headers: { 'apisecret': 's3cret', 'Content-Type': 'application/json' },
+      headers: { 'x-cache-invalidate-secret': 's3cret', 'Content-Type': 'application/json' },
       body: JSON.stringify({ app_ids: Array.from({ length: 101 }, (_, i) => `com.app.${i}`) }),
     })
     expect(response.status).toBe(400)
@@ -370,7 +388,7 @@ describe('cache invalidate route (plugin worker)', () => {
     const app = buildApp()
     const response = await app.request('/cache_invalidate', {
       method: 'POST',
-      headers: { 'apisecret': 's3cret', 'Content-Type': 'application/json' },
+      headers: { 'x-cache-invalidate-secret': 's3cret', 'Content-Type': 'application/json' },
       body: JSON.stringify({ app_ids: [] }),
     })
     expect(response.status).toBe(400)
@@ -386,6 +404,7 @@ describe('cache invalidate fanout (triggers)', () => {
 
   function stubFullEnv() {
     vi.stubEnv('API_SECRET', 'api-secret')
+    vi.stubEnv('CACHE_INVALIDATE_SECRET', 'cache-secret')
     vi.stubEnv('PLUGIN_INVALIDATE_URLS', 'https://plugin.eu.capgo.app, https://plugin.na.capgo.app/')
   }
 
@@ -448,7 +467,7 @@ describe('cache invalidate fanout (triggers)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     const [url, init] = fetchMock.mock.calls[0] as any
     expect(url).toBe('https://plugin.eu.capgo.app/cache_invalidate')
-    expect(init.headers.apisecret).toBe('api-secret')
+    expect(init.headers['x-cache-invalidate-secret']).toBe('cache-secret')
     expect(JSON.parse(init.body)).toEqual({ app_ids: ['com.demo.app'] })
   })
 

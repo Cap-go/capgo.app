@@ -51,30 +51,33 @@ app.post('/', middlewareAPISecret, async (c) => {
     return c.json(BRES)
   }
 
+  if (!existInEnv(c, 'CACHE_INVALIDATE_SECRET')) {
+    cloudlog({ requestId: c.get('requestId'), message: 'cache invalidate fanout skipped (missing CACHE_INVALIDATE_SECRET)', appIds })
+    return c.json(BRES)
+  }
+
   const urls = parsePluginInvalidateUrls(getEnv(c, 'PLUGIN_INVALIDATE_URLS'))
-  // Same intercommunication secret that authenticated this request.
-  const secret = getEnv(c, 'API_SECRET')
+  const secret = getEnv(c, 'CACHE_INVALIDATE_SECRET')
   const chunks = chunkAppIds(appIds)
   const results = await Promise.all(urls.map(async (url) => {
+    let regionOk = true
     try {
-      // Chunked to the route's per-request cap: nothing is ever silently
-      // dropped, a large org just becomes a few sequential calls per region.
       for (const chunk of chunks) {
         const response = await fetch(`${url}/cache_invalidate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'apisecret': secret,
+            'x-cache-invalidate-secret': secret,
           },
           body: JSON.stringify({ app_ids: chunk }),
           signal: AbortSignal.timeout(FANOUT_TIMEOUT_MS),
         })
         if (!response.ok) {
-          cloudlogErr({ requestId: c.get('requestId'), message: 'cache invalidate fanout failed', url, status: response.status })
-          return false
+          cloudlogErr({ requestId: c.get('requestId'), message: 'cache invalidate fanout failed', url, status: response.status, chunkSize: chunk.length })
+          regionOk = false
         }
       }
-      return true
+      return regionOk
     }
     catch (e) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'cache invalidate fanout error', url, error: serializeError(e) })

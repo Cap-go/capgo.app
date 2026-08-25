@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { POSTGRES_URL } from './test-utils.ts'
 
 // Postgres-level coverage for the /updates colo-cache invalidation migration
-// (20260711100000): statement-level trigger wiring, bulk-write aggregation,
+// (20260825111302): statement-level trigger wiring, bulk-write aggregation,
 // notify chunking/cap/dedupe through the pg_net queue, and privileges.
 
 const STATEMENT_TRIGGERS = [
@@ -19,6 +19,7 @@ const STATEMENT_TRIGGERS = [
   ['apps', 'invalidate_updates_cache_apps_del'],
   ['app_versions', 'invalidate_updates_cache_app_versions_upd'],
   ['manifest', 'invalidate_updates_cache_manifest_insert'],
+  ['manifest', 'invalidate_updates_cache_manifest_upd'],
   ['manifest', 'invalidate_updates_cache_manifest_delete'],
   ['orgs', 'invalidate_updates_cache_orgs_upd'],
   ['stripe_info', 'invalidate_updates_cache_stripe_info_ins'],
@@ -113,16 +114,15 @@ describe('updates cache invalidation (postgres)', () => {
   })
 
   it.concurrent('notify ignores empty input without queueing anything', async () => {
-    // Observe total endpoint queue growth inside one transaction so a wrongly
-    // queued empty payload cannot hide from a marker filter.
+    const marker = `empty-${randomUUID()}`
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
-      const countSql = `SELECT count(*)::int AS c FROM net.http_request_queue WHERE url LIKE '%/triggers/cache_invalidate'`
-      const { rows: [before] } = await client.query(countSql)
+      const countSql = `SELECT count(*)::int AS c FROM net.http_request_queue WHERE url LIKE '%/triggers/cache_invalidate' AND convert_from(body, 'utf8') LIKE $1`
+      const { rows: [before] } = await client.query(countSql, [`%${marker}%`])
       await client.query(`SELECT public.notify_updates_cache_invalidation(ARRAY[]::text[])`)
       await client.query(`SELECT public.notify_updates_cache_invalidation(ARRAY[NULL, '']::text[])`)
-      const { rows: [after] } = await client.query(countSql)
+      const { rows: [after] } = await client.query(countSql, [`%${marker}%`])
       expect(after.c).toBe(before.c)
       await client.query('ROLLBACK')
     }

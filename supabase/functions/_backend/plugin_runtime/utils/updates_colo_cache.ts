@@ -43,6 +43,14 @@ const CHANNEL_CACHE_PATH = '/cache/updates-channel'
 const MANIFEST_CACHE_PATH = '/cache/updates-manifest'
 
 const TOKEN_TTL_SECONDS = 7 * 24 * 3600
+const tokenOpChains = new Map<string, Promise<unknown>>()
+
+function runSerializedTokenOp<T>(appId: string, op: () => Promise<T>): Promise<T> {
+  const tail = tokenOpChains.get(appId) ?? Promise.resolve()
+  const run = tail.catch(() => {}).then(op)
+  tokenOpChains.set(appId, run.then(() => undefined, () => undefined))
+  return run
+}
 const DEFAULT_PAYLOAD_TTL_SECONDS = 60
 // Unknown apps (Capgo removed, misconfigured open-source installs, plain
 // abuse) hammer /updates forever and by definition never change: cache the
@@ -97,13 +105,16 @@ function negativeTtlSeconds(c: Context): number {
 // token bump atomically invalidates all payload variants of the app in this
 // colo. The old entries become unreachable and expire by TTL.
 async function loadAppCacheToken(helper: CacheHelper, appId: string): Promise<string | null> {
-  const request = buildCacheRequest(TOKEN_CACHE_PATH, { app_id: appId })
-  const cached = await helper.matchJson<TokenPayload>(request)
-  if (cached?.t)
-    return cached.t
-  const token = crypto.randomUUID()
-  await helper.putJson(request, { t: token }, TOKEN_TTL_SECONDS)
-  return token
+  return runSerializedTokenOp(appId, async () => {
+    const request = buildCacheRequest(TOKEN_CACHE_PATH, { app_id: appId })
+    const cached = await helper.matchJson<TokenPayload>(request)
+    if (cached?.t)
+      return cached.t
+    const token = crypto.randomUUID()
+    await helper.putJson(request, { t: token }, TOKEN_TTL_SECONDS)
+    const after = await helper.matchJson<TokenPayload>(request)
+    return after?.t ?? token
+  })
 }
 
 // Memoized per request: every cached lookup of one update check reads the
@@ -128,11 +139,18 @@ function getAppCacheToken(c: Context, helper: CacheHelper, appId: string): Promi
 
 // Invalidation entry point, called by the /cache_invalidate route on each
 // regional plugin worker (fan-out from the cache_invalidate trigger).
+async function clearNegativeOwnerStreak(helper: CacheHelper, appId: string): Promise<void> {
+  await helper.delete(buildCacheRequest(NEGATIVE_STREAK_PATH, { app_id: appId }))
+}
+
 export async function bumpAppCacheToken(c: Context, appId: string): Promise<boolean> {
-  const helper = new CacheHelper(c)
-  const request = buildCacheRequest(TOKEN_CACHE_PATH, { app_id: appId })
-  await helper.putJson(request, { t: crypto.randomUUID() }, TOKEN_TTL_SECONDS)
-  return true
+  return runSerializedTokenOp(appId, async () => {
+    const helper = new CacheHelper(c)
+    const request = buildCacheRequest(TOKEN_CACHE_PATH, { app_id: appId })
+    await helper.putJson(request, { t: crypto.randomUUID() }, TOKEN_TTL_SECONDS)
+    await clearNegativeOwnerStreak(helper, appId)
+    return true
+  })
 }
 
 // Drop-in replacement for getAppOwnerPostgres, cached per app. Negative
@@ -165,6 +183,8 @@ export async function cachedGetAppOwner(
     // on-prem for the whole TTL.
     return getAppOwnerPostgres(c, appId, drizzleClient, actions)
   }
+  if (owner !== null)
+    await clearNegativeOwnerStreak(helper, appId)
   await helper.putJson(request, { owner }, owner === null ? await negativeOwnerTtl(c, helper, appId) : payloadTtlSeconds(c))
   return owner
 }
@@ -220,7 +240,7 @@ export async function cachedRequestInfos(options: CachedRequestInfosOptions): Pr
     channelSelfOverrideChannelId,
   } = options
   const shouldQueryChannelOverride = channelDeviceCount === undefined || channelDeviceCount === null ? true : channelDeviceCount > 0
-  const shouldFetchManifest = manifestBundleCount === undefined || manifestBundleCount === null ? true : manifestBundleCount > 0
+  const shouldFetchRolloutManifest = manifestBundleCount === undefined || manifestBundleCount === null ? true : manifestBundleCount > 0
   const isPausedRolloutVersion = Array.isArray(rolloutPausedVersionNames) && rolloutPausedVersionNames.includes(currentVersionName)
   const rollout = (rolloutChannelCount ?? 0) > 0 || isPausedRolloutVersion
 
@@ -229,7 +249,7 @@ export async function cachedRequestInfos(options: CachedRequestInfosOptions): Pr
     app_id,
     device_id,
     drizzleClient,
-    includeManifest: shouldFetchManifest,
+    includeManifest: false,
     includeMetadata,
     rollout,
     shouldQueryChannelOverride,
@@ -243,7 +263,7 @@ export async function cachedRequestInfos(options: CachedRequestInfosOptions): Pr
     defaultChannel,
     drizzleClient,
     includeMetadata,
-    includeManifest: shouldFetchManifest,
+    includeManifest: false,
     rollout,
   })
 
@@ -259,7 +279,7 @@ export async function cachedRequestInfos(options: CachedRequestInfosOptions): Pr
     deviceId: device_id,
     currentVersionName,
     drizzleClient,
-    includeManifest: shouldFetchManifest,
+    includeManifest: shouldFetchRolloutManifest,
     manifestLoader: (versionId: number) => cachedManifestEntries(c, app_id, versionId, drizzleClient),
   }
   const channelOverride = await resolveRolloutChannelDataPostgres(c, channelOverrideRaw, rolloutArgs)
@@ -293,7 +313,7 @@ async function cachedChannelLookup(c: Context, options: CachedChannelLookupOptio
     app_id,
     v: token,
     platform,
-    channel: defaultChannel || '-',
+    channel: defaultChannel || '__none__',
     meta: includeMetadata ? '1' : '0',
     manifest: includeManifest ? '1' : '0',
     rollout: rollout ? '1' : '0',

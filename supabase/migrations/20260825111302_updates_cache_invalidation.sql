@@ -81,6 +81,13 @@ BEGIN
   IF TG_TABLE_NAME IN ('channels', 'channel_devices', 'apps', 'app_versions') THEN
     IF TG_OP = 'DELETE' THEN
       SELECT array_agg(DISTINCT r.app_id::text) INTO app_ids FROM old_rows r;
+    ELSIF TG_OP = 'UPDATE' THEN
+      SELECT array_agg(DISTINCT combined.app_id::text) INTO app_ids
+      FROM (
+        SELECT app_id FROM old_rows
+        UNION
+        SELECT app_id FROM new_rows
+      ) AS combined;
     ELSE
       SELECT array_agg(DISTINCT r.app_id::text) INTO app_ids FROM new_rows r;
     END IF;
@@ -105,6 +112,14 @@ BEGIN
       SELECT array_agg(DISTINCT av.app_id::text) INTO app_ids
       FROM old_rows m
       JOIN public.app_versions av ON av.id = m.app_version_id;
+    ELSIF TG_OP = 'UPDATE' THEN
+      SELECT array_agg(DISTINCT av.app_id::text) INTO app_ids
+      FROM (
+        SELECT app_version_id FROM old_rows
+        UNION
+        SELECT app_version_id FROM new_rows
+      ) AS changed
+      JOIN public.app_versions av ON av.id = changed.app_version_id;
     ELSE
       SELECT array_agg(DISTINCT av.app_id::text) INTO app_ids
       FROM new_rows m
@@ -131,7 +146,7 @@ FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
 DROP TRIGGER IF EXISTS invalidate_updates_cache_channels_upd ON public.channels;
 CREATE TRIGGER invalidate_updates_cache_channels_upd
 AFTER UPDATE ON public.channels
-REFERENCING NEW TABLE AS new_rows
+REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows
 FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
 
 DROP TRIGGER IF EXISTS invalidate_updates_cache_channels_del ON public.channels;
@@ -151,7 +166,7 @@ FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
 DROP TRIGGER IF EXISTS invalidate_updates_cache_channel_devices_upd ON public.channel_devices;
 CREATE TRIGGER invalidate_updates_cache_channel_devices_upd
 AFTER UPDATE ON public.channel_devices
-REFERENCING NEW TABLE AS new_rows
+REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows
 FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
 
 DROP TRIGGER IF EXISTS invalidate_updates_cache_channel_devices_del ON public.channel_devices;
@@ -171,7 +186,7 @@ FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
 DROP TRIGGER IF EXISTS invalidate_updates_cache_apps_upd ON public.apps;
 CREATE TRIGGER invalidate_updates_cache_apps_upd
 AFTER UPDATE ON public.apps
-REFERENCING NEW TABLE AS new_rows
+REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows
 FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
 
 DROP TRIGGER IF EXISTS invalidate_updates_cache_apps_del ON public.apps;
@@ -186,7 +201,7 @@ FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
 DROP TRIGGER IF EXISTS invalidate_updates_cache_app_versions_upd ON public.app_versions;
 CREATE TRIGGER invalidate_updates_cache_app_versions_upd
 AFTER UPDATE ON public.app_versions
-REFERENCING NEW TABLE AS new_rows
+REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows
 FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
 
 -- manifest: cached inside channel payloads and per-version entries; bundle
@@ -201,6 +216,12 @@ DROP TRIGGER IF EXISTS invalidate_updates_cache_manifest_delete ON public.manife
 CREATE TRIGGER invalidate_updates_cache_manifest_delete
 AFTER DELETE ON public.manifest
 REFERENCING OLD TABLE AS old_rows
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
+
+DROP TRIGGER IF EXISTS invalidate_updates_cache_manifest_upd ON public.manifest;
+CREATE TRIGGER invalidate_updates_cache_manifest_upd
+AFTER UPDATE ON public.manifest
+REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows
 FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
 
 -- orgs: has_usage_credits / customer_id feed plan validation.

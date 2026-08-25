@@ -1362,20 +1362,19 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
       deviceClient: typeof drizzleClient,
       channelClient: typeof drizzleClient,
     ) => {
-      let channelDevice: ReturnType<typeof requestInfosChannelByIdPostgres> | ReturnType<typeof requestInfosChannelDevicePostgres> | Promise<null>
-
-      if (typeof channelSelfOverrideChannelId === 'number') {
-        channelDevice = requestInfosChannelByIdPostgres(c, app_id, channelSelfOverrideChannelId, deviceClient, shouldFetchManifest, includeMetadata)
-      }
-      else if (shouldQueryChannelOverride) {
-        channelDevice = requestInfosChannelDevicePostgres(c, app_id, device_id, deviceClient, shouldFetchManifest, includeMetadata)
-      }
-      else {
-        channelDevice = Promise.resolve(null)
-      }
+      const channelOverride = requestChannelOverrideLookup(c, {
+        app_id,
+        device_id,
+        drizzleClient: deviceClient,
+        includeManifest: shouldFetchManifest,
+        includeMetadata,
+        rollout: false,
+        shouldQueryChannelOverride,
+        channelSelfOverrideChannelId,
+      })
       const channel = requestInfosChannelPostgres(c, platform, app_id, defaultChannel, channelClient, shouldFetchManifest, includeMetadata)
-      const [channelOverride, channelData] = await Promise.all([channelDevice, channel])
-      return { channelData, channelOverride }
+      const [channelOverrideResolved, channelData] = await Promise.all([channelOverride, channel])
+      return { channelData, channelOverride: channelOverrideResolved }
     }
 
     return (async () => {
@@ -1407,19 +1406,19 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
     })()
   }
 
-  let channelDevice: ReturnType<typeof requestInfosChannelByIdPostgresRollout> | ReturnType<typeof requestInfosChannelDevicePostgresRollout> | Promise<null>
-  if (typeof channelSelfOverrideChannelId === 'number') {
-    channelDevice = requestInfosChannelByIdPostgresRollout(c, app_id, channelSelfOverrideChannelId, drizzleClient, includeMetadata)
-  }
-  else if (shouldQueryChannelOverride) {
-    channelDevice = requestInfosChannelDevicePostgresRollout(c, app_id, device_id, drizzleClient, includeMetadata)
-  }
-  else {
-    channelDevice = Promise.resolve(null)
-  }
+  const channelOverride = requestChannelOverrideLookup(c, {
+    app_id,
+    device_id,
+    drizzleClient,
+    includeManifest: shouldFetchManifest,
+    includeMetadata,
+    rollout: true,
+    shouldQueryChannelOverride,
+    channelSelfOverrideChannelId,
+  })
   const channel = requestInfosChannelPostgresRollout(c, platform, app_id, defaultChannel, drizzleClient, includeMetadata)
 
-  return Promise.all([channelDevice, channel])
+  return Promise.all([channelOverride, channel])
     .then(async ([channelOverride, channelData]) => {
       const rolloutArgs = { appId: app_id, deviceId: device_id, currentVersionName, drizzleClient, includeManifest: shouldFetchManifest }
       const resolvedChannelOverride = await resolveRolloutChannelDataPostgres(c, channelOverride, rolloutArgs)
