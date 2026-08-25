@@ -11,9 +11,6 @@ ALTER TABLE "public"."orgs"
 ALTER TABLE "public"."orgs"
   ADD CONSTRAINT "orgs_auto_top_up_threshold_min" CHECK (("auto_top_up_threshold" >= (10)::numeric AND "auto_top_up_threshold" = trunc("auto_top_up_threshold") AND "auto_top_up_threshold" < 'Infinity'::numeric AND "auto_top_up_threshold" > '-Infinity'::numeric)) NOT VALID;
 
-ALTER TABLE "public"."orgs"
-  VALIDATE CONSTRAINT "orgs_auto_top_up_threshold_min";
-
 COMMENT ON COLUMN "public"."orgs"."auto_top_up_enabled" IS 'When true, the plan-check cron charges the saved card if available credits fall below auto_top_up_threshold. Default false.';
 
 COMMENT ON COLUMN "public"."orgs"."auto_top_up_threshold" IS 'Credit balance (USD/credits, 1:1) that triggers an automatic top-up of this same amount. Minimum 10.';

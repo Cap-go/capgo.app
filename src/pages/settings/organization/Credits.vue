@@ -436,7 +436,8 @@ async function loadAutoTopUpSettings() {
     console.error('Failed to load auto top-up settings', error)
   }
   finally {
-    isLoadingAutoTopUp.value = false
+    if (loadSeq === autoTopUpLoadSeq)
+      isLoadingAutoTopUp.value = false
   }
 }
 
