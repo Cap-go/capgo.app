@@ -112,12 +112,12 @@ BEGIN
     -- - Indexes: finx_channels_version(version), idx_channels_rollout_version
     --   (rollout_version) WHERE rollout_version IS NOT NULL — BitmapOr of two
     --   Index Scans in EXPLAIN (ANALYZE, BUFFERS) on local seed data.
-    -- - Serialization: pg_advisory_xact_lock(OLD.id) matches
-    --   lock_channel_bundle_lifecycle(), which now takes FOR UPDATE row locks
-    --   in deterministic bundle-id order before advisory locks.
+    -- - Serialization: concurrent channel promotion calls
+    --   lock_channel_bundle_lifecycle(), which takes FOR UPDATE row locks in
+    --   deterministic bundle-id order before advisory locks. This UPDATE
+    --   already holds a conflicting row lock, so no extra advisory lock is
+    --   needed here.
     IF NOT bundle_was_ready THEN
-      PERFORM pg_catalog.pg_advisory_xact_lock(OLD.id);
-
       IF EXISTS (
         SELECT 1
         FROM public.channels AS ch
