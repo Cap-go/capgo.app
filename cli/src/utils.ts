@@ -957,6 +957,16 @@ export async function readCapgoCliApiErrorPayload(error: unknown): Promise<{ err
   }
 }
 
+export async function formatCapgoCliInvokeError(error: unknown): Promise<string> {
+  const payload = await readCapgoCliApiErrorPayload(error)
+  if (payload) {
+    const formatted = formatCapgoApiErrorBody(payload)
+    if (formatted)
+      return formatted
+  }
+  return formatError(error)
+}
+
 /**
  * Invoke Capgo HTTP APIs formerly reached via supabase.functions.invoke.
  * Capgo cloud -> hostApi / hostFilesApi. Self-host -> /functions/v1.

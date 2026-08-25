@@ -9,6 +9,7 @@ import { isChannelAlreadyExistsError } from '../init/channel-conflict'
 import {
   createSupabaseClient,
   findSavedKey,
+  formatCapgoCliInvokeError,
   formatError,
   getAppId,
   getConfig,
@@ -109,10 +110,11 @@ export async function addChannelInternal(channelId: string, appId: string, optio
   })
 
   if (res.error) {
+    const createErrorDetail = await formatCapgoCliInvokeError(res.error)
     let duplicateOutcome: ChannelAddDuplicateOutcome
     try {
       duplicateOutcome = await resolveChannelAddDuplicateOutcome({
-        createError: res.error,
+        createError: createErrorDetail,
         supabase,
         appId,
         channelName: channelId,
@@ -150,7 +152,7 @@ export async function addChannelInternal(channelId: string, appId: string, optio
       throw new Error(`Cannot create channel: ${message}`)
     }
 
-    const message = formatError(res.error)
+    const message = createErrorDetail
     if (!silent)
       log.error(`Cannot create Channel 🙀\n${message}`)
     throw new Error(`Cannot create channel: ${message}`)
