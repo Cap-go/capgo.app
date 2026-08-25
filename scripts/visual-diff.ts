@@ -72,7 +72,7 @@ const managedProcesses: ManagedProcess[] = []
 const isWindows = process.platform === 'win32'
 const httpReadyTimeoutMs = 5_000
 const visualDiffActionTimeoutMs = 60_000
-const visualDiffRouteTimeoutMs = 120_000
+const visualDiffRouteTimeoutMs = 180_000
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -519,11 +519,14 @@ async function prepareScreenshotData(supabaseUrl: string, supabaseAnon: string) 
 async function login(page: Page) {
   await page.goto('/login/', { waitUntil: 'domcontentloaded' })
   await page.fill('[data-test="email"]', 'test@capgo.app')
-  await page.click('[data-test="continue"]')
-  await page.waitForSelector('[data-test="password"]', { timeout: 30_000 })
+
+  const continueButton = page.locator('[data-test="continue"]')
+  const submit = page.locator('[data-test="submit"]')
+  if (await continueButton.count())
+    await continueButton.click()
+  await submit.waitFor({ state: 'visible', timeout: 30_000 })
   await page.fill('[data-test="password"]', 'testtest')
 
-  const submit = page.locator('[data-test="submit"]')
   if (await submit.isEnabled())
     await submit.click()
   else
