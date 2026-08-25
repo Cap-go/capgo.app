@@ -98,7 +98,7 @@ BEGIN
     END IF;
 
     -- GHSA-5rg9-rhwj-wj76: /updates serves channel-linked r2-direct rows.
-    -- Lock checksum/session_key/key_id and delivery metadata on those
+    -- Lock checksum/session_key/key_id, manifest, and delivery metadata on those
     -- OTA-selectable in-progress rows. Finalize (r2-direct -> r2 + r2_path)
     -- and other non-delivery metadata stay allowed.
     --
@@ -133,6 +133,22 @@ BEGIN
         OR NEW.key_id IS DISTINCT FROM OLD.key_id
         OR NEW.checksum IS DISTINCT FROM OLD.checksum
         OR NEW.external_url IS DISTINCT FROM OLD.external_url
+        OR (NEW.manifest IS DISTINCT FROM OLD.manifest AND NEW.manifest IS NOT NULL)
+        OR (
+          NEW.manifest IS NULL
+          AND OLD.manifest IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM pg_catalog.unnest(OLD.manifest) AS entry(file_name, s3_path, file_hash)
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM public.manifest AS m
+              WHERE m.app_version_id = OLD.id
+                AND m.s3_path = entry.s3_path
+                AND m.file_hash = entry.file_hash
+            )
+          )
+        )
         OR (
           NEW.storage_provider IS DISTINCT FROM OLD.storage_provider
           AND NOT (
