@@ -77,29 +77,7 @@ describe('anonymous oracle RPC hardening', () => {
     expect(missingOrgResult.data).toBeNull()
   })
 
-  it.concurrent('keeps get_user_id callable for published CLI callers with capgkey header', async () => {
-    const client = createAnonymousApiKeyClient(APIKEY_TEST_ORG_SUPER_ADMIN)
-
-    const validKeyResult = await client.rpc('get_user_id', {
-      apikey: APIKEY_TEST_ORG_SUPER_ADMIN,
-    })
-    const invalidKeyResult = await client.rpc('get_user_id', {
-      apikey: '00000000-0000-0000-0000-000000000000',
-    })
-    const mismatchedHeaderClient = createAnonymousApiKeyClient(APIKEY_TEST_ORG_SUPER_ADMIN)
-    const mismatchedKeyResult = await mismatchedHeaderClient.rpc('get_user_id', {
-      apikey: '00000000-0000-0000-0000-000000000000',
-    })
-
-    expect(validKeyResult.error).toBeNull()
-    expect(validKeyResult.data).toBe(USER_ID)
-    expect(invalidKeyResult.error).toBeNull()
-    expect(invalidKeyResult.data).toBeNull()
-    expect(mismatchedKeyResult.error).toBeNull()
-    expect(mismatchedKeyResult.data).toBeNull()
-  })
-
-  it.concurrent('denies get_user_id for anonymous callers without capgkey header', async () => {
+  it.concurrent('keeps get_user_id(text) callable for published CLI anonymous callers', async () => {
     const client = createAnonymousClient()
 
     const validKeyResult = await client.rpc('get_user_id', {
@@ -110,9 +88,21 @@ describe('anonymous oracle RPC hardening', () => {
     })
 
     expect(validKeyResult.error).toBeNull()
-    expect(validKeyResult.data).toBeNull()
+    expect(validKeyResult.data).toBe(USER_ID)
     expect(invalidKeyResult.error).toBeNull()
     expect(invalidKeyResult.data).toBeNull()
+  })
+
+  it.concurrent('keeps get_user_id(text, text) denied for anonymous callers', async () => {
+    const client = createAnonymousApiKeyClient(APIKEY_TEST_ORG_SUPER_ADMIN)
+
+    const result = await client.rpc('get_user_id', {
+      apikey: APIKEY_TEST_ORG_SUPER_ADMIN,
+      app_id: APP_ID,
+    })
+
+    expect(isPermissionDenied(result.error)).toBe(true)
+    expect(result.data).toBeNull()
   })
 
   it.concurrent('blocks get_org_perm_for_apikey RPCs for anonymous callers', async () => {
