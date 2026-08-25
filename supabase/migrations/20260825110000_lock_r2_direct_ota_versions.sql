@@ -113,8 +113,9 @@ BEGIN
     --   (rollout_version) WHERE rollout_version IS NOT NULL — BitmapOr of two
     --   Index Scans in EXPLAIN (ANALYZE, BUFFERS) on local seed data.
     -- - Serialization: pg_advisory_xact_lock(OLD.id) matches
-    --   lock_channel_bundle_lifecycle() so channel promotion and protected-field
-    --   updates cannot race.
+    --   lock_channel_bundle_lifecycle() after app_versions row locks are taken.
+    --   Channel promotion triggers now acquire FOR KEY SHARE on bundle rows
+    --   before advisory locks so both paths use row-lock -> advisory order.
     IF NOT bundle_was_ready THEN
       PERFORM pg_catalog.pg_advisory_xact_lock(OLD.id);
 
@@ -268,6 +269,178 @@ BEGIN
         'encryption_key_mismatch: This organization requires bundles to be '
         || 'encrypted with a specific key. The uploaded bundle was encrypted '
         || 'with a different key.';
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+-- Keep bundle row locks before advisory locks so channel promotion and
+-- app_versions protected-field updates serialize without deadlocks.
+CREATE OR REPLACE FUNCTION "public"."enforce_channel_version_promotion_permission"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_request_role text := COALESCE(auth.role(), session_user);
+  v_owner_org uuid;
+  v_channel_id bigint;
+BEGIN
+  IF TG_OP = 'UPDATE' AND NEW.version IS NOT DISTINCT FROM OLD.version THEN
+    RETURN NEW;
+  END IF;
+
+  IF TG_OP = 'INSERT' THEN
+    v_owner_org := public.get_owner_org_by_app_id_internal(NEW.app_id);
+    v_channel_id := NULL::bigint;
+  ELSE
+    v_owner_org := OLD.owner_org;
+    v_channel_id := OLD.id;
+  END IF;
+
+  IF NEW.version IS NOT NULL THEN
+    PERFORM 1
+    FROM public.app_versions AS version
+    WHERE version.id = NEW.version
+      AND version.app_id = NEW.app_id
+      AND version.owner_org = v_owner_org
+      AND version.deleted = false
+    FOR KEY SHARE;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'INVALID_CHANNEL_VERSION';
+    END IF;
+  END IF;
+
+  PERFORM public.lock_channel_bundle_lifecycle(NEW.version, NEW.rollout_version);
+
+  -- A blank target is the native/builtin channel state; an initial target needs
+  -- app-level promotion, while changing an existing target is channel-scoped.
+  IF v_request_role NOT IN ('service_role', 'postgres')
+    AND pg_catalog.current_setting('capgo.seed_channel_targets', true) IS DISTINCT FROM 'true'
+  THEN
+    IF v_request_role IS DISTINCT FROM 'anon' AND v_request_role IS DISTINCT FROM 'authenticated' THEN
+      RAISE EXCEPTION 'PERMISSION_DENIED_CHANNEL_PROMOTE_BUNDLE'
+        USING ERRCODE = '42501';
+    END IF;
+
+    IF NOT (TG_OP = 'INSERT' AND NEW.version IS NULL)
+      AND NOT public.rbac_check_permission_request(
+        public.rbac_perm_channel_promote_bundle(),
+        v_owner_org,
+        NEW.app_id,
+        v_channel_id
+      ) THEN
+      RAISE EXCEPTION 'PERMISSION_DENIED_CHANNEL_PROMOTE_BUNDLE'
+        USING ERRCODE = '42501';
+    END IF;
+  END IF;
+
+  IF NEW.version IS NOT NULL THEN
+    -- Service-role endpoints carry the key in request.headers. This helper
+    -- no-ops for other callers and preserves preview-key bundle ownership.
+    PERFORM public.assert_preview_bundle_owner(
+      v_owner_org,
+      NEW.app_id,
+      NEW.version
+    );
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION "public"."refresh_channel_rollout_id"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_rollout_changed boolean;
+  v_channel_id bigint;
+BEGIN
+  IF TG_OP = 'UPDATE'
+    AND NEW.version IS DISTINCT FROM OLD.version
+    AND NEW.rollout_version IS NOT DISTINCT FROM OLD.rollout_version
+    AND NEW.rollout_version IS NOT NULL
+  THEN
+    NEW.rollout_version := NULL;
+    NEW.rollout_enabled := false;
+    NEW.rollout_percentage_bps := 0;
+  END IF;
+
+  IF TG_OP = 'INSERT' THEN
+    v_rollout_changed := NEW.rollout_version IS NOT NULL;
+    v_channel_id := NULL::bigint;
+  ELSE
+    v_rollout_changed := NEW.rollout_version IS DISTINCT FROM OLD.rollout_version;
+    v_channel_id := NEW.id;
+  END IF;
+
+  IF v_rollout_changed THEN
+    IF NEW.version IS NOT NULL THEN
+      PERFORM 1
+      FROM public.app_versions AS version
+      WHERE version.id = NEW.version
+        AND version.app_id = NEW.app_id
+        AND version.owner_org = NEW.owner_org
+        AND version.deleted = false
+      FOR KEY SHARE;
+    END IF;
+
+    IF NEW.rollout_version IS NOT NULL THEN
+      PERFORM 1
+      FROM public.app_versions AS version
+      WHERE version.id = NEW.rollout_version
+        AND version.app_id = NEW.app_id
+        AND version.owner_org = NEW.owner_org
+        AND version.deleted = false
+      FOR KEY SHARE;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'INVALID_ROLLOUT_VERSION';
+      END IF;
+    END IF;
+
+    PERFORM public.lock_channel_bundle_lifecycle(NEW.version, NEW.rollout_version);
+
+    IF (auth.uid() IS NOT NULL OR public.get_apikey_header() IS NOT NULL)
+      AND NOT public.rbac_check_permission_request(
+        public.rbac_perm_channel_promote_bundle(),
+        NEW.owner_org,
+        NEW.app_id,
+        v_channel_id
+      )
+    THEN
+      RAISE EXCEPTION 'NO_RIGHTS';
+    END IF;
+
+    IF NEW.rollout_version IS NOT NULL THEN
+      PERFORM public.assert_preview_bundle_owner(
+        NEW.owner_org,
+        NEW.app_id,
+        NEW.rollout_version
+      );
+    END IF;
+
+    NEW.rollout_id = gen_random_uuid();
+    IF NEW.rollout_version IS NULL THEN
+      NEW.rollout_paused_at = NULL;
+      IF TG_OP = 'INSERT' THEN
+        NEW.rollout_pause_reason = NULL;
+        NEW.auto_pause_last_triggered_at = NULL;
+      ELSE
+        IF NEW.rollout_pause_reason IS NOT DISTINCT FROM OLD.rollout_pause_reason THEN
+          NEW.rollout_pause_reason = NULL;
+        END IF;
+        IF NEW.auto_pause_last_triggered_at IS NOT DISTINCT FROM OLD.auto_pause_last_triggered_at THEN
+          NEW.auto_pause_last_triggered_at = NULL;
+        END IF;
+      END IF;
+    ELSE
+      NEW.rollout_paused_at = NULL;
+      NEW.rollout_pause_reason = NULL;
+      NEW.auto_pause_last_triggered_at = NULL;
     END IF;
   END IF;
 
