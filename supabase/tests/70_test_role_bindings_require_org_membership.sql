@@ -145,6 +145,17 @@ SELECT lives_ok(
   'org admin can grant an app-scoped role to an existing org member'
 );
 
+SELECT throws_ok(
+  $$UPDATE public.role_bindings
+    SET principal_id = tests.get_supabase_uid('rbac_membership_outsider')
+    WHERE principal_id = tests.get_supabase_uid('rbac_membership_member')
+      AND scope_type = public.rbac_scope_app()
+      AND org_id = '70000000-0000-4000-8000-000000009976'$$,
+  '42501',
+  'new row violates row-level security policy for table "role_bindings"',
+  'org admin cannot retarget an app-scoped binding to a non-member'
+);
+
 SELECT lives_ok(
   $$INSERT INTO public.role_bindings (
       principal_type,
@@ -165,17 +176,6 @@ SELECT lives_ok(
     WHERE roles.name = public.rbac_role_org_member()
       AND roles.scope_type = public.rbac_scope_org()$$,
   'org admin can still grant first org-scope membership to a non-member'
-);
-
-SELECT throws_ok(
-  $$UPDATE public.role_bindings
-    SET principal_id = tests.get_supabase_uid('rbac_membership_outsider')
-    WHERE principal_id = tests.get_supabase_uid('rbac_membership_member')
-      AND scope_type = public.rbac_scope_app()
-      AND org_id = '70000000-0000-4000-8000-000000009976'$$,
-  '42501',
-  'new row violates row-level security policy for table "role_bindings"',
-  'org admin cannot retarget an app-scoped binding to a non-member'
 );
 
 SELECT throws_ok(
@@ -200,8 +200,8 @@ SELECT throws_ok(
     JOIN public.apps ON apps.app_id = 'com.test.rbac.membership.ghsa9976'
     WHERE roles.name = public.rbac_role_app_reader()
       AND roles.scope_type = public.rbac_scope_app()$$,
-  '42501',
-  'new row violates row-level security policy for table "role_bindings"',
+  'P0001',
+  'Admins cannot elevate privileges!',
   'org admin cannot grant an app-scoped role when org_id mismatches apps.owner_org'
 );
 
