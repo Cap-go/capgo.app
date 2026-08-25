@@ -1968,11 +1968,11 @@
       "valid": true
     },
     {
-      "definition": "CHECK (auto_top_up_threshold >= 10::numeric AND auto_top_up_threshold = trunc(auto_top_up_threshold) AND auto_top_up_threshold < 'Infinity'::numeric AND auto_top_up_threshold > '-Infinity'::numeric)",
+      "definition": "CHECK (auto_top_up_threshold >= 10::numeric AND auto_top_up_threshold = trunc(auto_top_up_threshold) AND auto_top_up_threshold < 'Infinity'::numeric AND auto_top_up_threshold > '-Infinity'::numeric) NOT VALID",
       "name": "orgs_auto_top_up_threshold_min",
       "table": "orgs",
       "type": "c",
-      "valid": true
+      "valid": false
     },
     {
       "definition": "CHECK (max_apikey_expiration_days IS NULL OR max_apikey_expiration_days >= 1 AND max_apikey_expiration_days <= 365)",
