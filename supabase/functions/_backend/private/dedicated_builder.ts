@@ -279,12 +279,21 @@ async function cancelDedicatedBuilderRequest(
       cancelled_at: new Date().toISOString(),
     })
     .eq('id', existing.id)
+    .in('status', ['requested', 'provisioning'])
     .select('*')
-    .single()
+    .maybeSingle()
 
-  if (error || !data) {
+  if (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to cancel dedicated builder', error })
     throw simpleError('internal_error', 'Unable to cancel dedicated builder request')
+  }
+
+  if (!data) {
+    const current = await getDedicatedBuilderForOrg(c, existing.org_id)
+    if (current?.status === 'active') {
+      throw quickError(400, 'cannot_cancel', 'Only requested or provisioning dedicated builders can be cancelled from the console')
+    }
+    throw quickError(409, 'status_changed', 'Dedicated builder status changed before cancellation could complete')
   }
 
   return c.json({

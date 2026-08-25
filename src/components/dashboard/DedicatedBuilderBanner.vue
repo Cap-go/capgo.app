@@ -56,6 +56,8 @@ async function load() {
     loaded.value = true
     return
   }
+  if (token !== reqToken)
+    return
   resolvedOrgId.value = orgId
   try {
     const row = await fetchDedicatedBuilder(orgId)
