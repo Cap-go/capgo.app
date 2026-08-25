@@ -286,7 +286,7 @@ try {
     ).message,
   )
   // Channel create RBAC/duplicate failures stay on the PostHog exception path so
-  // user failures remain observable in error tracking.
+  // user failures remain observable in error tracking (not CliUserError).
   assert.equal(shouldCapturePosthogException(new Error('Cannot create channel: duplicate key value violates unique constraint "unique_name_app_id" | Code: 23505')), true)
   assert.equal(shouldCapturePosthogException(new Error('Cannot create channel: insufficient_permissions | HTTP 403')), true)
   assert.equal(shouldCapturePosthogException(new Error('Cannot create channel: Edge Function returned a non-2xx status code')), true)
