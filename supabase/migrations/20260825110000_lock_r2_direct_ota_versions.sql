@@ -113,9 +113,8 @@ BEGIN
     --   (rollout_version) WHERE rollout_version IS NOT NULL — BitmapOr of two
     --   Index Scans in EXPLAIN (ANALYZE, BUFFERS) on local seed data.
     -- - Serialization: pg_advisory_xact_lock(OLD.id) matches
-    --   lock_channel_bundle_lifecycle() after app_versions row locks are taken.
-    --   Channel promotion triggers now acquire FOR KEY SHARE on bundle rows
-    --   before advisory locks so both paths use row-lock -> advisory order.
+    --   lock_channel_bundle_lifecycle(), which now takes FOR UPDATE row locks
+    --   in deterministic bundle-id order before advisory locks.
     IF NOT bundle_was_ready THEN
       PERFORM pg_catalog.pg_advisory_xact_lock(OLD.id);
 
@@ -278,6 +277,33 @@ $$;
 
 -- Keep bundle row locks before advisory locks so channel promotion and
 -- app_versions protected-field updates serialize without deadlocks.
+CREATE OR REPLACE FUNCTION "public"."lock_channel_bundle_lifecycle"("p_version_id" bigint, "p_rollout_version_id" bigint) RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_bundle_id bigint;
+BEGIN
+  FOR v_bundle_id IN
+    SELECT bundle.bundle_id
+    FROM pg_catalog.unnest(ARRAY[p_version_id, p_rollout_version_id]) AS bundle(bundle_id)
+    WHERE bundle.bundle_id IS NOT NULL
+    ORDER BY bundle.bundle_id
+  LOOP
+    PERFORM 1
+    FROM public.app_versions AS version
+    WHERE version.id = v_bundle_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'INVALID_CHANNEL_BUNDLE';
+    END IF;
+
+    PERFORM pg_catalog.pg_advisory_xact_lock(v_bundle_id);
+  END LOOP;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION "public"."enforce_channel_version_promotion_permission"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -297,20 +323,6 @@ BEGIN
   ELSE
     v_owner_org := OLD.owner_org;
     v_channel_id := OLD.id;
-  END IF;
-
-  IF NEW.version IS NOT NULL THEN
-    PERFORM 1
-    FROM public.app_versions AS version
-    WHERE version.id = NEW.version
-      AND version.app_id = NEW.app_id
-      AND version.owner_org = v_owner_org
-      AND version.deleted = false
-    FOR KEY SHARE;
-
-    IF NOT FOUND THEN
-      RAISE EXCEPTION 'INVALID_CHANNEL_VERSION';
-    END IF;
   END IF;
 
   PERFORM public.lock_channel_bundle_lifecycle(NEW.version, NEW.rollout_version);
@@ -338,6 +350,17 @@ BEGIN
   END IF;
 
   IF NEW.version IS NOT NULL THEN
+    PERFORM 1
+    FROM public.app_versions AS version
+    WHERE version.id = NEW.version
+      AND version.app_id = NEW.app_id
+      AND version.owner_org = v_owner_org
+      AND version.deleted = false;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'INVALID_CHANNEL_VERSION';
+    END IF;
+
     -- Service-role endpoints carry the key in request.headers. This helper
     -- no-ops for other callers and preserves preview-key bundle ownership.
     PERFORM public.assert_preview_bundle_owner(
@@ -378,30 +401,6 @@ BEGIN
   END IF;
 
   IF v_rollout_changed THEN
-    IF NEW.version IS NOT NULL THEN
-      PERFORM 1
-      FROM public.app_versions AS version
-      WHERE version.id = NEW.version
-        AND version.app_id = NEW.app_id
-        AND version.owner_org = NEW.owner_org
-        AND version.deleted = false
-      FOR KEY SHARE;
-    END IF;
-
-    IF NEW.rollout_version IS NOT NULL THEN
-      PERFORM 1
-      FROM public.app_versions AS version
-      WHERE version.id = NEW.rollout_version
-        AND version.app_id = NEW.app_id
-        AND version.owner_org = NEW.owner_org
-        AND version.deleted = false
-      FOR KEY SHARE;
-
-      IF NOT FOUND THEN
-        RAISE EXCEPTION 'INVALID_ROLLOUT_VERSION';
-      END IF;
-    END IF;
-
     PERFORM public.lock_channel_bundle_lifecycle(NEW.version, NEW.rollout_version);
 
     IF (auth.uid() IS NOT NULL OR public.get_apikey_header() IS NOT NULL)
@@ -416,6 +415,17 @@ BEGIN
     END IF;
 
     IF NEW.rollout_version IS NOT NULL THEN
+      PERFORM 1
+      FROM public.app_versions AS version
+      WHERE version.id = NEW.rollout_version
+        AND version.app_id = NEW.app_id
+        AND version.owner_org = NEW.owner_org
+        AND version.deleted = false;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'INVALID_ROLLOUT_VERSION';
+      END IF;
+
       PERFORM public.assert_preview_bundle_owner(
         NEW.owner_org,
         NEW.app_id,
