@@ -1052,6 +1052,7 @@
   "credits": "Credits",
   "credits-auto-top-up-add-card": "Add a card to enable auto top-up",
   "credits-auto-top-up-description": "When your available credits fall below this amount, Capgo charges your saved card for the same amount.",
+  "credits-auto-top-up-load-error": "Could not load auto top-up settings. Retry before changing them.",
   "credits-auto-top-up-label": "Automatic top-up",
   "credits-auto-top-up-min": "Minimum is $10.",
   "credits-auto-top-up-no-card": "Add a card in the billing portal before turning this on.",

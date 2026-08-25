@@ -104,8 +104,11 @@ const autoTopUpThresholdInput = ref(String(MIN_AUTO_TOP_UP))
 const autoTopUpHasCard = ref(false)
 const isLoadingAutoTopUp = ref(false)
 const isSavingAutoTopUp = ref(false)
+const autoTopUpLoadFailed = ref(false)
 let autoTopUpPersistQueue = Promise.resolve()
 let autoTopUpLoadSeq = 0
+let confirmedAutoTopUpThreshold = MIN_AUTO_TOP_UP
+const isAutoTopUpControlsDisabled = computed(() => isLoadingAutoTopUp.value || isSavingAutoTopUp.value || autoTopUpLoadFailed.value)
 const autoTopUpThreshold = computed(() => {
   const parsed = Number.parseInt(autoTopUpThresholdInput.value, 10)
   if (Number.isNaN(parsed))
@@ -414,26 +417,51 @@ async function loadPricingSteps() {
   pricingSteps.value = await getCreditPricingSteps(currentOrganization.value?.gid)
 }
 
+function applyAutoTopUpSettings(settings: { enabled?: boolean | null, threshold?: number | null, hasPaymentMethod?: boolean | null }) {
+  const threshold = Math.max(MIN_AUTO_TOP_UP, Math.floor(Number(settings?.threshold ?? MIN_AUTO_TOP_UP)))
+  confirmedAutoTopUpThreshold = threshold
+  autoTopUpEnabled.value = Boolean(settings?.enabled)
+  autoTopUpThresholdInput.value = String(threshold)
+  autoTopUpHasCard.value = Boolean(settings?.hasPaymentMethod)
+}
+
+function resolveAutoTopUpThresholdForSave(enabled: boolean): number | null {
+  if (enabled) {
+    if (!isAutoTopUpThresholdValid.value || autoTopUpThreshold.value === null)
+      return null
+    return autoTopUpThreshold.value
+  }
+  return confirmedAutoTopUpThreshold
+}
+
 async function loadAutoTopUpSettings() {
   const orgId = currentOrganization.value?.gid
   if (!orgId) {
     autoTopUpEnabled.value = false
     autoTopUpHasCard.value = false
+    autoTopUpLoadFailed.value = false
     return
   }
   isLoadingAutoTopUp.value = true
+  autoTopUpLoadFailed.value = false
   autoTopUpLoadSeq += 1
   const loadSeq = autoTopUpLoadSeq
   try {
     const settings = await getCreditAutoTopUp(orgId)
     if (currentOrganization.value?.gid !== orgId || loadSeq !== autoTopUpLoadSeq)
       return
-    autoTopUpEnabled.value = Boolean(settings?.enabled)
-    autoTopUpThresholdInput.value = String(Math.max(MIN_AUTO_TOP_UP, Math.floor(Number(settings?.threshold ?? MIN_AUTO_TOP_UP))))
-    autoTopUpHasCard.value = Boolean(settings?.hasPaymentMethod)
+    applyAutoTopUpSettings(settings ?? {})
+    autoTopUpLoadFailed.value = false
   }
   catch (error) {
     console.error('Failed to load auto top-up settings', error)
+    if (currentOrganization.value?.gid === orgId && loadSeq === autoTopUpLoadSeq) {
+      autoTopUpLoadFailed.value = true
+      autoTopUpEnabled.value = false
+      autoTopUpHasCard.value = false
+      autoTopUpThresholdInput.value = String(MIN_AUTO_TOP_UP)
+      confirmedAutoTopUpThreshold = MIN_AUTO_TOP_UP
+    }
   }
   finally {
     if (loadSeq === autoTopUpLoadSeq)
@@ -461,7 +489,8 @@ async function persistAutoTopUpSettingsNow(orgId: string, enabled: boolean, reve
   }
   if (currentOrganization.value?.gid !== orgId)
     return
-  if (!isAutoTopUpThresholdValid.value || autoTopUpThreshold.value === null) {
+  const thresholdToSave = resolveAutoTopUpThresholdForSave(enabled)
+  if (thresholdToSave === null) {
     toast.error(t('credits-auto-top-up-threshold-invalid'))
     autoTopUpEnabled.value = revertEnabledTo
     return
@@ -475,12 +504,10 @@ async function persistAutoTopUpSettingsNow(orgId: string, enabled: boolean, reve
   autoTopUpLoadSeq += 1
   const saveSeq = autoTopUpLoadSeq
   try {
-    const settings = await saveCreditAutoTopUp(orgId, enabled, autoTopUpThreshold.value)
+    const settings = await saveCreditAutoTopUp(orgId, enabled, thresholdToSave)
     if (currentOrganization.value?.gid !== orgId || saveSeq !== autoTopUpLoadSeq)
       return
-    autoTopUpEnabled.value = Boolean(settings?.enabled)
-    autoTopUpHasCard.value = Boolean(settings?.hasPaymentMethod)
-    autoTopUpThresholdInput.value = String(Math.max(MIN_AUTO_TOP_UP, Math.floor(Number(settings?.threshold ?? autoTopUpThreshold.value))))
+    applyAutoTopUpSettings(settings ?? { enabled, threshold: thresholdToSave, hasPaymentMethod: autoTopUpHasCard.value })
     toast.success(t('credits-auto-top-up-saved'))
   }
   catch (error) {
@@ -863,11 +890,26 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
               type="checkbox"
               class="d-toggle"
               :checked="autoTopUpEnabled"
-              :disabled="isLoadingAutoTopUp || isSavingAutoTopUp"
+              :disabled="isAutoTopUpControlsDisabled"
               :aria-label="t('credits-auto-top-up-label')"
               @change="onAutoTopUpToggle"
             >
           </div>
+        </div>
+        <div
+          v-if="autoTopUpLoadFailed"
+          class="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-200"
+          data-test="credits-auto-top-up-load-error"
+        >
+          <p>{{ t('credits-auto-top-up-load-error') }}</p>
+          <button
+            type="button"
+            class="d-btn d-btn-sm d-btn-outline mt-3"
+            :disabled="isLoadingAutoTopUp"
+            @click="loadAutoTopUpSettings"
+          >
+            {{ t('retry') }}
+          </button>
         </div>
         <div class="mt-6 max-w-md">
           <FormKit
@@ -883,7 +925,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             validation="required|min:10"
             validation-visibility="live"
             outer-class="w-full !mb-0"
-            :disabled="isLoadingAutoTopUp || isSavingAutoTopUp"
+            :disabled="isAutoTopUpControlsDisabled"
             @blur="onAutoTopUpThresholdBlur"
           >
             <template #prefix>

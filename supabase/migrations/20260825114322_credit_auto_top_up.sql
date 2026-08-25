@@ -336,4 +336,3 @@ $$;
 ALTER FUNCTION public.try_claim_credit_auto_top_up(uuid) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.try_claim_credit_auto_top_up(uuid) FROM PUBLIC;
 GRANT ALL ON FUNCTION public.try_claim_credit_auto_top_up(uuid) TO service_role;
-
