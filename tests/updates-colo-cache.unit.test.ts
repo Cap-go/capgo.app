@@ -1,8 +1,8 @@
 import { Hono } from 'hono/tiny'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { app as cacheInvalidateFanout, chunkAppIds, parsePluginInvalidateUrls } from '../supabase/functions/_backend/triggers/cache_invalidate.ts'
-import { app as cacheInvalidateRoute } from '../supabase/functions/_backend/private/cache_invalidate.ts'
-import { bumpAppCacheToken, cachedGetAppOwner, cachedRequestInfos, isUpdatesCacheEnabled } from '../supabase/functions/_backend/utils/updates_colo_cache.ts'
+import { app as cacheInvalidateRoute } from '../supabase/functions/_backend/plugin_runtime/private/cache_invalidate.ts'
+import { bumpAppCacheToken, cachedGetAppOwner, cachedRequestInfos, isUpdatesCacheEnabled } from '../supabase/functions/_backend/plugin_runtime/utils/updates_colo_cache.ts'
 
 type CacheKey = Request | string
 
@@ -44,8 +44,8 @@ const CHANNEL_ROW = {
 // semantics, not the SQL (covered by the existing update tests with the
 // flag off). The shared dispatch/rollout helpers stay real so the cached
 // path runs the exact same code as the direct path.
-vi.mock('../supabase/functions/_backend/utils/pg.ts', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/pg.ts')>()
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pg.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/plugin_runtime/utils/pg.ts')>()
   const requestInfosChannelDevicePostgres = vi.fn(async () => null)
   const requestInfosChannelDevicePostgresRollout = vi.fn(async () => null)
   const requestInfosChannelByIdPostgres = vi.fn(async () => structuredClone(CHANNEL_ROW))
@@ -82,7 +82,7 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', async (importOriginal) => 
   }
 })
 
-const pg = await import('../supabase/functions/_backend/utils/pg.ts')
+const pg = await import('../supabase/functions/_backend/plugin_runtime/utils/pg.ts')
 
 function makeContext() {
   return {

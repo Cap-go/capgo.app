@@ -10,7 +10,7 @@
 
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
-import { MAX_INVALIDATE_APPS } from '../private/cache_invalidate.ts'
+import { MAX_INVALIDATE_APPS } from '../plugin_runtime/private/cache_invalidate.ts'
 import { BRES, middlewareAPISecret, parseBody } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { existInEnv, getEnv } from '../utils/utils.ts'
