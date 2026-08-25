@@ -179,29 +179,16 @@ function parseEncodedPreviewSubdomain(subdomain: string): ParsedPreviewSubdomain
 }
 
 /**
- * Parses the legacy preview subdomain format that encoded dots as `__`.
- */
-function parseLegacyPreviewSubdomain(subdomain: string): ParsedPreviewSubdomain | null {
-  const separatorIndex = subdomain.lastIndexOf('-')
-  if (separatorIndex <= 0)
-    return null
-
-  const encodedAppId = subdomain.slice(0, separatorIndex)
-  const versionId = parseVersionId(subdomain.slice(separatorIndex + 1))
-  if (versionId === null)
-    return null
-
-  return {
-    appId: encodedAppId.replaceAll('__', '.'),
-    versionId,
-  }
-}
-
-/**
- * Parses either the new reversible preview format or the legacy compatibility format.
+ * Parses a reversible preview subdomain label.
+ *
+ * Legacy hostnames that used `__` for dots are intentionally rejected: that
+ * encoding is not bijective, so distinct app IDs can collide on one public
+ * hostname (for example `com.example.app` and `com.example__app` both mapped to
+ * `com__example__app`). Callers must use bijective labels from
+ * `buildPreviewSubdomain` / `buildChannelPreviewSubdomain`.
  */
 export function parsePreviewSubdomain(subdomain: string): ParsedPreviewSubdomain | null {
-  return parseEncodedPreviewSubdomain(subdomain) ?? parseLegacyPreviewSubdomain(subdomain)
+  return parseEncodedPreviewSubdomain(subdomain)
 }
 
 /**

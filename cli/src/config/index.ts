@@ -4,8 +4,10 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { cwd } from 'node:process'
+import { log } from '@clack/prompts'
 import type { CapacitorConfig, ExtConfigPairs } from '../schemas/config'
 import { formatJSObject, loadConfig as loadConfigCap, requireTS, writeConfig as writeConfigCap } from '../capacitor-cli'
+import { CliUserError } from '../shared/cli-user-error'
 
 export type { CapacitorConfig, ExtConfigPairs } from '../schemas/config'
 
@@ -16,6 +18,14 @@ const configWriteTargetStore = new AsyncLocalStorage<{ filePath: string | undefi
 // intentionally excluded: Capacitor never loads them as configs, and the `.js` writer below
 // emits CommonJS, so allowing them would let reads pass but writes silently no-op.
 const capacitorConfigFilePattern = /^capacitor\.config(?:\.[^.]+)*\.(?:ts|js|json)$/
+
+function throwCapacitorConfigPathError(message: string, context?: Record<string, unknown>, logError = false): never {
+  if (logError) {
+    const path = context?.path
+    log.error(typeof path === 'string' ? `${message}: ${path}` : message)
+  }
+  throw new CliUserError(message, context)
+}
 
 /**
  * Overrides the config file Capacitor writes after loading the active root config.
@@ -39,23 +49,32 @@ export function withConfigWriteTarget<T>(filePath: string | undefined, action: (
   return configWriteTargetStore.run({ filePath }, action)
 }
 
-export function resolveCapacitorConfigTargetPath(value: string | undefined, initialCwd = cwd()): string | undefined {
+export function resolveCapacitorConfigTargetPath(
+  value: string | undefined,
+  initialCwd = cwd(),
+  options?: { logError?: boolean },
+): string | undefined {
+  const logError = options?.logError ?? false
   if (value === undefined)
     return undefined
   if (!value.trim())
-    throw new Error('Capacitor config path must not be empty')
+    throwCapacitorConfigPathError('Capacitor config path must not be empty', undefined, logError)
 
   const resolved = resolve(initialCwd, value)
   if (!existsSync(resolved) || !statSync(resolved).isFile())
-    throw new Error(`Capacitor config path does not exist: ${resolved}`)
+    throwCapacitorConfigPathError('Capacitor config path does not exist', { path: resolved }, logError)
   if (!capacitorConfigFilePattern.test(basename(resolved)))
-    throw new Error(`Capacitor config path must point to a capacitor.config.*.ts, capacitor.config.*.js, or capacitor.config.*.json file: ${resolved}`)
+    throwCapacitorConfigPathError(
+      'Capacitor config path must point to a capacitor.config.*.ts, capacitor.config.*.js, or capacitor.config.*.json file',
+      { path: resolved },
+      logError,
+    )
 
   const workspaceRoot = realpathSync(initialCwd)
   const target = realpathSync(resolved)
   const pathFromWorkspace = relative(workspaceRoot, target)
   if (pathFromWorkspace === '..' || pathFromWorkspace.startsWith(`..${sep}`) || isAbsolute(pathFromWorkspace))
-    throw new Error(`Capacitor config path must stay within the current working directory: ${resolved}`)
+    throwCapacitorConfigPathError('Capacitor config path must stay within the current working directory', { path: resolved }, logError)
   return target
 }
 

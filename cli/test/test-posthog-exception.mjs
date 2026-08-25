@@ -10,10 +10,12 @@ import {
   capturePosthogException,
   getCommandPath,
   getInstallId,
+  IOS_SYNC_VALIDATION_FAILED_MESSAGE,
   isExpectedUserError,
   shouldCapturePosthogException,
 } from '../src/posthog.ts'
 import { CliUserError } from '../src/shared/cli-user-error.ts'
+import { TwoFactorComplianceNetworkError } from '../src/shared/two-factor-compliance.ts'
 import { CAPGO_SERVER_CONFIG_MISSING_MESSAGE, findSavedKey } from '../src/utils.ts'
 
 const originalFetch = globalThis.fetch
@@ -203,6 +205,9 @@ try {
   // regardless of the (dynamic) channel context attached to them.
   assert.equal(shouldCapturePosthogException(new CliUserError('Channel does not have a bundle linked', { appId: 'com.example.app', channel: 'production' })), false)
   assert.equal(shouldCapturePosthogException(new CliUserError('Missing API key')), false)
+  // iOS sync validation is a real operational failure we still want in error tracking,
+  // while CliUserError keeps the guided output without a redundant "Error:" line.
+  assert.equal(shouldCapturePosthogException(new CliUserError(IOS_SYNC_VALIDATION_FAILED_MESSAGE)), true)
   // Exercise the real no-key path in an isolated home/project so the suggested
   // command and its error-tracking classification stay covered together.
   const noKeyDir = mkdtempSync(join(tmpdir(), 'capgo-no-key-'))
@@ -252,6 +257,10 @@ try {
   assert.equal(shouldCapturePosthogException(new CliUserError('Upload cancelled by user')), false)
   assert.equal(shouldCapturePosthogException(new CliUserError(CAPGO_SERVER_CONFIG_MISSING_MESSAGE)), false)
   assert.equal(
+    shouldCapturePosthogException(new TwoFactorComplianceNetworkError()),
+    true,
+  )
+  assert.equal(
     shouldCapturePosthogException(new CliUserError(
       'Insufficient permissions for app. Required RBAC permission for this action: app.upload_bundle.',
       { appId: 'com.example.app', requiredPermissionKey: 'app.upload_bundle' },
@@ -293,10 +302,12 @@ try {
   assert.equal(isExpectedUserError({ context: { status: 401 } }), true)
   assert.equal(isExpectedUserError({ status: 401 }), true)
   assert.equal(isExpectedUserError(new Error('Cannot get organization id for app id com.example')), false)
+  assert.equal(isExpectedUserError(new CliUserError('Cannot get organization id for app', { appId: 'com.example' })), false)
   assert.equal(isExpectedUserError(new Error('boom')), false)
   assert.equal(shouldCapturePosthogException(new Error('invalid_apikey')), false)
   assert.equal(shouldCapturePosthogException({ context: { status: 401 } }), false)
   assert.equal(shouldCapturePosthogException(new Error('Cannot get organization id for app id com.example')), true)
+  assert.equal(shouldCapturePosthogException(new CliUserError('Cannot get organization id for app', { appId: 'com.example' })), false)
 
   console.log('CLI PostHog exception capture tests passed')
 }

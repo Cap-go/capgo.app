@@ -1,6 +1,19 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
-import { computeDoctorAnalyticsTags } from '../src/app/info.ts'
+import {
+  buildOutdatedInstallCommand,
+  buildOutdatedInstallCommandsForDoctor,
+  computeDoctorAnalyticsTags,
+  formatDoctorInstallHint,
+  getPMAndCommandForDir,
+  groupOutdatedPackagesByPackageJson,
+  listOutdatedDependencies,
+  packagesForDoctorUpdateChoice,
+  parseDoctorPackageJsonPaths,
+  partitionOutdatedDependencies,
+  resolveDoctorProjectRoot,
+  shellQuotePath,
+} from '../src/app/info.ts'
 
 console.log('🧪 Testing doctor analytics tags...\n')
 
@@ -30,5 +43,167 @@ const allOutdated = computeDoctorAnalyticsTags({ a: '1.0.0', b: '2.0.0' }, { a: 
 assert.equal(allOutdated.is_outdated, true)
 assert.equal(allOutdated.dependency_count, 2)
 assert.equal(allOutdated.outdated_count, 2)
+
+// stringify mismatch / missing latest key is NOT outdated
+const missingLatest = listOutdatedDependencies(
+  { '@capgo/cli': '1.0.0', '@capgo/capacitor-updater': '6.0.0' },
+  { '@capgo/capacitor-updater': '6.2.0' },
+)
+assert.deepEqual(missingLatest, [
+  { name: '@capgo/capacitor-updater', installed: '6.0.0', latest: '6.2.0' },
+])
+assert.equal(computeDoctorAnalyticsTags(
+  { '@capgo/cli': '1.0.0', '@capgo/capacitor-updater': '6.0.0' },
+  { '@capgo/capacitor-updater': '6.2.0' },
+).is_outdated, true)
+assert.equal(computeDoctorAnalyticsTags(
+  { '@capgo/cli': '1.0.0', '@capgo/capacitor-updater': '6.0.0' },
+  { '@capgo/capacitor-updater': '6.2.0' },
+).outdated_count, 1)
+
+const extraLatestKeys = listOutdatedDependencies(
+  { '@capgo/cli': '1.0.0' },
+  { '@capgo/cli': '1.0.0', '@capgo/capacitor-updater': '6.2.0' },
+)
+assert.deepEqual(extraLatestKeys, [])
+assert.equal(computeDoctorAnalyticsTags(
+  { '@capgo/cli': '1.0.0' },
+  { '@capgo/cli': '1.0.0', '@capgo/capacitor-updater': '6.2.0' },
+).is_outdated, false)
+
+// mixed outdated vs up-to-date counts
+const mixed = listOutdatedDependencies(
+  {
+    '@capgo/capacitor-updater': '6.0.0',
+    '@capacitor/core': '6.1.0',
+    '@capawesome/capacitor-app': '6.0.0',
+  },
+  {
+    '@capgo/capacitor-updater': '6.2.0',
+    '@capacitor/core': '6.1.0',
+    '@capawesome/capacitor-app': '6.1.0',
+  },
+)
+assert.deepEqual(mixed, [
+  { name: '@capgo/capacitor-updater', installed: '6.0.0', latest: '6.2.0' },
+  { name: '@capawesome/capacitor-app', installed: '6.0.0', latest: '6.1.0' },
+])
+assert.equal(computeDoctorAnalyticsTags(
+  {
+    '@capgo/capacitor-updater': '6.0.0',
+    '@capacitor/core': '6.1.0',
+    '@capawesome/capacitor-app': '6.0.0',
+  },
+  {
+    '@capgo/capacitor-updater': '6.2.0',
+    '@capacitor/core': '6.1.0',
+    '@capawesome/capacitor-app': '6.1.0',
+  },
+).outdated_count, 2)
+
+// recovery partitioning and install command helpers
+const outdatedSample = [
+  { name: '@capgo/capacitor-updater', installed: '6.0.0', latest: '6.2.0' },
+  { name: '@capacitor/core', installed: '6.0.0', latest: '6.1.0' },
+]
+const partitioned = partitionOutdatedDependencies(outdatedSample)
+assert.equal(partitioned.capgo.length, 1)
+assert.equal(partitioned.other.length, 1)
+
+assert.equal(
+  packagesForDoctorUpdateChoice('capgo-only', partitioned.capgo, partitioned.other).length,
+  1,
+)
+assert.equal(
+  packagesForDoctorUpdateChoice('all', partitioned.capgo, partitioned.other).length,
+  2,
+)
+assert.equal(
+  packagesForDoctorUpdateChoice('skip', partitioned.capgo, partitioned.other).length,
+  0,
+)
+
+const installCommand = buildOutdatedInstallCommand(
+  { pm: 'npm', command: 'install', installCommand: 'npm install', runner: 'npx' },
+  outdatedSample,
+)
+assert.equal(
+  installCommand,
+  'npm install @capgo/capacitor-updater@latest @capacitor/core@latest',
+)
+
+assert.equal(resolveDoctorProjectRoot('/apps/mobile/package.json'), '/apps/mobile')
+assert.equal(
+  resolveDoctorProjectRoot('/apps/mobile/package.json,/apps/shared/package.json'),
+  '/apps/mobile',
+)
+assert.equal(getPMAndCommandForDir('/tmp/project').installCommand.includes('install'), true)
+
+const packageJsonPaths = [
+  '/apps/mobile/package.json',
+  '/apps/shared/package.json',
+]
+const declaredByPath = new Map([
+  [packageJsonPaths[0], new Set(['@capgo/capacitor-updater'])],
+  [packageJsonPaths[1], new Set(['@capacitor/core'])],
+])
+const grouped = groupOutdatedPackagesByPackageJson(packageJsonPaths, outdatedSample, path => declaredByPath.get(path))
+assert.equal(grouped.length, 2)
+assert.equal(grouped[0].packageJsonPath, packageJsonPaths[0])
+assert.equal(grouped[0].packages.length, 1)
+assert.equal(grouped[0].packages[0].name, '@capgo/capacitor-updater')
+assert.equal(grouped[1].packageJsonPath, packageJsonPaths[1])
+assert.equal(grouped[1].packages[0].name, '@capacitor/core')
+
+const multiInstallCommands = buildOutdatedInstallCommandsForDoctor(
+  '/apps/mobile/package.json,/apps/shared/package.json',
+  outdatedSample,
+  path => declaredByPath.get(path),
+)
+assert.ok(multiInstallCommands.includes('cd \'/apps/mobile\''))
+assert.ok(multiInstallCommands.includes('cd \'/apps/shared\''))
+assert.ok(multiInstallCommands.includes('@capgo/capacitor-updater@latest'))
+assert.ok(multiInstallCommands.includes('@capacitor/core@latest'))
+
+assert.deepEqual(parseDoctorPackageJsonPaths('/apps/mobile/package.json,/apps/shared/package.json'), packageJsonPaths)
+
+const sharedDependency = [{ name: '@capacitor/core', installed: '6.0.0', latest: '6.1.0' }]
+const sharedDeclaredByPath = new Map([
+  [packageJsonPaths[0], new Set(['@capacitor/core'])],
+  [packageJsonPaths[1], new Set(['@capacitor/core'])],
+])
+const sharedGrouped = groupOutdatedPackagesByPackageJson(packageJsonPaths, sharedDependency, path => sharedDeclaredByPath.get(path))
+assert.equal(sharedGrouped.length, 2)
+assert.equal(sharedGrouped[0].packages[0].name, '@capacitor/core')
+assert.equal(sharedGrouped[1].packages[0].name, '@capacitor/core')
+
+const spacedPaths = ['/apps/my mobile/package.json', '/apps/shared/package.json']
+const spacedDeclaredByPath = new Map([
+  [spacedPaths[0], new Set(['@capgo/capacitor-updater'])],
+  [spacedPaths[1], new Set(['@capacitor/core'])],
+])
+const spacedInstallCommands = buildOutdatedInstallCommandsForDoctor(
+  '/apps/my mobile/package.json,/apps/shared/package.json',
+  outdatedSample,
+  path => spacedDeclaredByPath.get(path),
+)
+assert.ok(spacedInstallCommands.includes('cd \'/apps/my mobile\''))
+
+assert.equal(shellQuotePath('/apps/mobile'), '\'/apps/mobile\'')
+assert.equal(shellQuotePath('/apps/my mobile'), '\'/apps/my mobile\'')
+assert.equal(shellQuotePath('/apps/foo$(rm -rf /)'), '\'/apps/foo$(rm -rf /)\'')
+assert.equal(shellQuotePath('/apps/o\'brien'), '\'/apps/o\'\\\'\'brien\'')
+assert.equal(shellQuotePath('C:\\apps\\mobile', 'win32'), '"C:\\apps\\mobile"')
+assert.equal(shellQuotePath('C:\\apps\\my mobile', 'win32'), '"C:\\apps\\my mobile"')
+assert.equal(shellQuotePath('C:\\apps\\foo"bar', 'win32'), '"C:\\apps\\foo""bar"')
+
+assert.equal(
+  formatDoctorInstallHint('/apps/mobile', 'npm install @capgo/cli@latest'),
+  '(cd \'/apps/mobile\' && npm install @capgo/cli@latest)',
+)
+assert.equal(
+  formatDoctorInstallHint('C:\\apps\\mobile', 'npm install @capgo/cli@latest', 'win32'),
+  'cd /d "C:\\apps\\mobile" && npm install @capgo/cli@latest',
+)
 
 console.log('✅ doctor analytics tags tests passed')

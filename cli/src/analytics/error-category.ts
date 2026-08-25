@@ -20,12 +20,44 @@ function getStatus(error: unknown): number | undefined {
   return undefined
 }
 
-function getMessage(error: unknown): string {
-  if (error instanceof Error)
-    return error.message
+function collectErrorMessages(error: unknown): string {
+  const parts: string[] = []
+  const seen = new Set<unknown>()
+  let current: unknown = error
+
   if (typeof error === 'string')
     return error
-  return ''
+
+  while (current) {
+    if (typeof current === 'string') {
+      parts.push(current)
+      break
+    }
+
+    if (typeof current !== 'object')
+      break
+
+    if (seen.has(current))
+      break
+    seen.add(current)
+
+    if (current instanceof Error) {
+      parts.push(current.message)
+      current = current.cause
+      continue
+    }
+
+    const candidate = current as { message?: unknown, cause?: unknown }
+    if (typeof candidate.message === 'string')
+      parts.push(candidate.message)
+    current = candidate.cause
+  }
+
+  return parts.join(' ')
+}
+
+function getMessage(error: unknown): string {
+  return collectErrorMessages(error)
 }
 
 /**
@@ -54,7 +86,7 @@ export function categorizeCliError(error: unknown): CliErrorCategory {
   }
 
   const message = getMessage(error).toLowerCase()
-  if (/econnrefused|enotfound|fetch failed|network|socket|dns/.test(message))
+  if (/econnrefused|econnreset|enotfound|eai_again|fetch failed|failed to fetch|connect timeout|und_err/.test(message))
     return 'network_error'
   if (/timed out|timeout|etimedout|aborted/.test(message))
     return 'timeout'

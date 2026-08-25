@@ -28,11 +28,21 @@ describe('preview subdomain encoding', () => {
     })
   })
 
-  it.concurrent('parses legacy preview hostnames for existing links', () => {
-    expect(parsePreviewHostname('com__example__app-42.preview.capgo.app')).toEqual({
+  it.concurrent('rejects legacy double-underscore hostnames and collision pairs', () => {
+    // Legacy encoding mapped dots to `__`, so com.example.app and com.example__app
+    // both became com__example__app and could share one public preview hostname.
+    const legacyHostname = 'com__example__app-42.preview.capgo.app'
+    expect(parsePreviewHostname(legacyHostname)).toBeNull()
+    expect(parsePreviewHostname(legacyHostname)).not.toEqual({
       appId: 'com.example.app',
       versionId: 42,
     })
+    expect(parsePreviewHostname(legacyHostname)).not.toEqual({
+      appId: 'com.example__app',
+      versionId: 42,
+    })
+    expect(buildPreviewSubdomain('com.example.app', 42)).not.toBe('com__example__app-42')
+    expect(buildPreviewSubdomain('com.example__app', 42)).not.toBe('com__example__app-42')
   })
 
   it.concurrent('round-trips stable channel preview hostnames', () => {
@@ -57,11 +67,8 @@ describe('preview subdomain encoding', () => {
     expect(parsePreviewHostname(`${subdomain}.preview.capgo.app`)).toEqual({ appId, versionId })
   })
 
-  it.concurrent('does not mistake legacy double-hyphen app IDs for the new separator', () => {
-    expect(parsePreviewHostname('com--example__app-42.preview.capgo.app')).toEqual({
-      appId: 'com--example.app',
-      versionId: 42,
-    })
+  it.concurrent('rejects legacy double-hyphen hostnames that used ambiguous decoding', () => {
+    expect(parsePreviewHostname('com--example__app-42.preview.capgo.app')).toBeNull()
   })
 
   it.concurrent('keeps long lowercase preview labels within the DNS label limit', () => {

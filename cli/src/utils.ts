@@ -31,11 +31,13 @@ import { sendCliEvent } from './app/debug'
 import { findMonorepoRoot, findNXMonorepoRoot, isMonorepo, isNXMonorepo } from './capacitor-cli'
 import { getChecksum } from './checksum'
 import { loadConfig, loadConfigForWrite, writeConfig } from './config'
-import { isTruthyEnvValue } from './posthog'
+import { isTruthyEnvValue, IOS_SYNC_VALIDATION_FAILED_MESSAGE } from './posthog'
 import { getCliLoginCommand } from './runner-command'
 import { nativePackageSchema } from './schemas/common'
 import { safeParseSchema } from './schemas/schema_validation'
 import { CliUserError } from './shared/cli-user-error'
+import { isTransientNetworkError } from './shared/network-error'
+import { TWO_FACTOR_COMPLIANCE_NETWORK_MESSAGE, throwTwoFactorComplianceRpcError } from './shared/two-factor-compliance'
 import { trimTrailingSlashes } from './shared/trim-trailing-slashes'
 import { formatApiErrorForCli, parseSecurityPolicyError } from './utils/security_policy_errors'
 
@@ -193,9 +195,13 @@ export function formatError(error: any): string {
 export async function check2FAAccessForOrg(supabase: SupabaseClient<Database>, orgId: string, silent = false): Promise<void> {
   const { data: reject2fa, error } = await supabase.rpc('reject_access_due_to_2fa_for_org', { org_id: orgId })
   if (error) {
-    if (!silent)
-      log.error(`Cannot check 2FA compliance: ${error.message}`)
-    throw new Error(`Cannot check 2FA compliance: ${error.message}`)
+    if (!silent) {
+      if (isTransientNetworkError(error))
+        log.error(TWO_FACTOR_COMPLIANCE_NETWORK_MESSAGE)
+      else
+        log.error(`Cannot check 2FA compliance: ${error.message}`)
+    }
+    throwTwoFactorComplianceRpcError(error)
   }
   if (reject2fa) {
     if (!silent)
@@ -627,22 +633,34 @@ export async function getDeclaredPackageVersionMap(f: string = findRoot(cwd()), 
   return dependencies
 }
 
+function isPresentCapacitorConfig(extConfig: ExtConfigPairs | undefined): extConfig is ExtConfigPairs {
+  if (!extConfig)
+    return false
+  if (extConfig.config && Object.keys(extConfig.config).length > 0)
+    return true
+  // Capacitor's no-file fallback still reports a default path when the file is
+  // absent. Only treat empty config as missing when that path does not exist.
+  return !!extConfig.path && existsSync(extConfig.path)
+}
+
 async function getConfigFrom(loader: () => Promise<ExtConfigPairs | undefined>, silent = false): Promise<ExtConfigPairs> {
+  const message = 'No capacitor config file found, run `cap init` first'
   try {
     const extConfig = await loader()
-    if (!extConfig) {
-      const message = 'No capacitor config file found, run `cap init` first'
+    if (!isPresentCapacitorConfig(extConfig)) {
       if (!silent)
         log.error(message)
-      throw new Error(message)
+      throw new CliUserError(message)
     }
     return extConfig
   }
   catch (err) {
-    const message = `No capacitor config file found, run \`cap init\` first ${formatError(err)}`
+    if (err instanceof CliUserError)
+      throw err
+    const cause = formatError(err)
     if (!silent)
-      log.error(message)
-    throw new Error(message)
+      log.error(`${message}: ${cause}`)
+    throw new CliUserError(message, { cause })
   }
 }
 
@@ -2213,10 +2231,11 @@ export async function getOrganizationId(
   })
 
   if (!data?.owner_org || error) {
+    const cause = formatError(error)
     // Surface the underlying cause instead of discarding it — a bare
     // "Cannot get organization id" leaves both users and triage with no signal.
-    log.error(`Cannot get organization id for app id ${appId}: ${formatError(error)}`)
-    throw new Error(`Cannot get organization id for app id ${appId}`)
+    log.error(`Cannot get organization id for app id ${appId}: ${cause}`)
+    throw new CliUserError('Cannot get organization id for app', { appId, cause })
   }
   return data.owner_org
 }
@@ -2597,12 +2616,22 @@ export async function getRemoteDependencies(supabase: SupabaseClient<Database>, 
         )`)
     .eq('name', channel)
     .eq('app_id', appId)
-    .single()
+    .maybeSingle()
 
   if (error) {
-    log.error(`Error fetching native packages: ${error.message}`)
-    throw new Error(`Error fetching native packages: ${error.message}`)
+    const duplicateChannelRow = (error as { code?: string }).code === 'PGRST116'
+      || error.message?.includes('Cannot coerce')
+    const message = duplicateChannelRow
+      ? `Multiple channels matched for app "${appId}" and channel "${channel}". Contact support if this persists.`
+      : error.message
+    log.error(`Error fetching native packages: ${message}`)
+    throw new Error(`Error fetching native packages: ${message}`)
   }
+
+  if (!remoteNativePackages) {
+    return convertNativePackages([])
+  }
+
   return convertNativePackages(((remoteNativePackages.version as any)?.native_packages as any) ?? [])
 }
 
@@ -2961,6 +2990,28 @@ interface PromptAndSyncOptions {
   packageJsonPath?: string
 }
 
+export type IosUpdaterSyncValidation = ReturnType<typeof validateIosUpdaterSync>
+
+export function throwIfIosUpdaterSyncInvalid(
+  syncValidation: IosUpdaterSyncValidation,
+  platformRunner: string,
+  onFailure?: () => void,
+): void {
+  if (!syncValidation.shouldCheck || syncValidation.valid)
+    return
+
+  const resetAdvice = getNativeProjectResetAdvice(platformRunner, 'ios')
+  onFailure?.()
+  log.error('Capgo iOS dependency sync verification failed.')
+  for (const detail of syncValidation.details) {
+    log.error(detail)
+  }
+  log.error('Stop here to avoid testing on a broken native iOS project.')
+  log.warn(resetAdvice.summary)
+  log.info(resetAdvice.command)
+  throw new CliUserError(IOS_SYNC_VALIDATION_FAILED_MESSAGE)
+}
+
 export async function promptAndSyncCapacitor(
   isInit?: boolean,
   orgId?: string,
@@ -3013,19 +3064,11 @@ export async function promptAndSyncCapacitor(
     }
 
     if (options?.validateIosUpdater) {
-      const syncValidation = validateIosUpdaterSync(cwd(), options.packageJsonPath)
-      if (syncValidation.shouldCheck && !syncValidation.valid) {
-        const resetAdvice = getNativeProjectResetAdvice(pm.runner, 'ios')
-        s.stop('iOS sync check failed ❌')
-        log.error('Capgo iOS dependency sync verification failed.')
-        for (const detail of syncValidation.details) {
-          log.error(detail)
-        }
-        log.error('Stop here to avoid testing on a broken native iOS project.')
-        log.warn(resetAdvice.summary)
-        log.info(resetAdvice.command)
-        throw new Error('iOS sync validation failed. Delete your iOS folder, then rerun the add and sync commands above and retry.')
-      }
+      throwIfIosUpdaterSyncInvalid(
+        validateIosUpdaterSync(cwd(), options.packageJsonPath),
+        pm.runner,
+        () => s.stop('iOS sync check failed ❌'),
+      )
     }
 
     if (syncError) {
