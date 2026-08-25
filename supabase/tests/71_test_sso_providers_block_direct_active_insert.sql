@@ -2,7 +2,7 @@
 -- via direct PostgREST INSERT. pending_verification inserts remain the client path.
 BEGIN;
 
-SELECT plan(12);
+SELECT plan(11);
 
 SELECT tests.authenticate_as_service_role();
 SELECT tests.create_supabase_user(
