@@ -141,7 +141,7 @@ export function resolveCapacitorUpdaterIdentifier(content: string): string | und
   if (cjsAlias?.[1])
     return cjsAlias[1]
 
-  const cjsNamed = content.match(/\b(?:var|let|const)\s*\{\s*CapacitorUpdater\s*\}\s*=\s*require\s*\(\s*['"]@capgo\/capacitor-updater['"]\s*\)/)
+  const cjsNamed = content.match(/\b(?:var|let|const)\s*\{(?=[^}]*\bCapacitorUpdater\b\s*(?:,|\}))[^}]*\}\s*=\s*require\s*\(\s*['"]@capgo\/capacitor-updater['"]\s*\)/)
   if (cjsNamed)
     return 'CapacitorUpdater'
 

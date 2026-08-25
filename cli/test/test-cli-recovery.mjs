@@ -152,6 +152,12 @@ await test('injectNotifyAppReadyIntoBuildJs uses aliased CommonJS updater bindin
   assert.match(output, /Updater\.notifyAppReady\(\)/)
 })
 
+await test('injectNotifyAppReadyIntoBuildJs uses CapacitorUpdater from mixed CommonJS destructuring', () => {
+  const input = 'const { CapacitorUpdater, App } = require(\'@capgo/capacitor-updater\')\nconsole.log("boot")\n'
+  const output = injectNotifyAppReadyIntoBuildJs(input)
+  assert.match(output, /CapacitorUpdater\.notifyAppReady\(\)/)
+})
+
 await test('patchNotifyAppReadyInBuildFolder skips bundles without CapacitorUpdater', () => {
   const root = makeTempDir('patch-skip')
   writeFileSync(join(root, 'index.html'), '<html><body><script src="./index.js"></script></body></html>')
