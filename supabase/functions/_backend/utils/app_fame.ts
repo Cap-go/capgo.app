@@ -5,6 +5,7 @@ import { extractAiText, parseJsonObjectFromAiText } from './workers_ai.ts'
 
 export const APP_FAME_BATCH_SIZE = 12
 export const APP_FAME_STALE_DAYS = 30
+// Standard Workers AI billing; supports json_schema (override via APP_FAME_MODEL).
 export const DEFAULT_APP_FAME_MODEL = '@cf/meta/llama-3.1-8b-instruct-fast'
 
 export const APP_FAME_TIERS = ['unknown', 'niche', 'notable', 'famous', 'iconic'] as const
