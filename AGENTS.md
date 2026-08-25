@@ -1023,6 +1023,22 @@ transparent about AI-generated content. ALWAYS mark every section with
 Generated with AI
 ```
 
+## Published CLI contract (CRITICAL — must not break production CLI)
+
+We **cannot break already-published `@capgo/cli` versions** that customers still run in production.
+The last published CLI is the newest `cli-*` git tag (same version as `@capgo/cli` on npm).
+
+CI enforces this forever in the dedicated job **`CRITICAL — Published CLI contract (must not break production CLI)`** and in `tests/published-cli-rpc-contract.test.ts`:
+
+1. Parse `.rpc('...')` calls from `cli/src` at the last `cli-*` tag.
+2. Fail if the PR schema revokes `anon` `EXECUTE` on any overload those calls still use.
+3. Run the **published** npm CLI (not the PR-branch workspace build) against the PR schema — today that means `app list`, which exercises `.rpc('get_user_id', { apikey })` exactly like production.
+
+**Do not invert these tests to expect permission denied (`42501`).** Success is the contract.
+Org-perm / invite oracle RPCs (`invite_user_to_org_rbac`, `get_org_perm_for_apikey*`, `get_user_id(text,text)`, …) stay revoked for anonymous callers — see `tests/security-oracle-rpc-hardening.test.ts`.
+
+Before revoking `anon` `EXECUTE` on any RPC, ship a CLI release that stops calling it, wait for customers to upgrade, then revoke.
+
 ## API and Plugin Backward Compatibility
 
 **CRITICAL: All changes to public APIs and plugin interfaces MUST be backward compatible.**

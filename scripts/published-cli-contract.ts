@@ -1,0 +1,186 @@
+import { execFileSync } from 'node:child_process'
+
+export const PUBLISHED_CLI_TAG_PREFIX = 'cli-'
+export const PUBLISHED_CLI_RPC_PATTERN = /\.rpc\(\s*['"`]([a-z][a-z0-9_]*)['"`]/g
+
+export interface PublishedCliRpcCall {
+  name: string
+  argKeys: string[]
+}
+
+export type GitRunner = (args: string[]) => string
+
+function defaultGitRunner(args: string[]): string {
+  return execFileSync('git', args, { encoding: 'utf8' }).trim()
+}
+
+export function comparePublishedCliTags(left: string, right: string): number {
+  const parse = (tag: string) => tag.replace(PUBLISHED_CLI_TAG_PREFIX, '').split(/[.-]/).map(part => Number.parseInt(part, 10) || 0)
+  const leftParts = parse(left)
+  const rightParts = parse(right)
+  const length = Math.max(leftParts.length, rightParts.length)
+
+  for (let index = 0; index < length; index++) {
+    const delta = (leftParts[index] ?? 0) - (rightParts[index] ?? 0)
+    if (delta !== 0)
+      return delta
+  }
+
+  return 0
+}
+
+export function resolveLatestPublishedCliTag(runGit: GitRunner = defaultGitRunner): string {
+  const output = runGit(['tag', '-l', `${PUBLISHED_CLI_TAG_PREFIX}*`])
+  const tags = output
+    .split('\n')
+    .map(tag => tag.trim())
+    .filter(tag => /^cli-\d/.test(tag))
+
+  if (tags.length === 0)
+    throw new Error(`No published CLI tags found (expected ${PUBLISHED_CLI_TAG_PREFIX}*)`)
+
+  return tags.sort(comparePublishedCliTags).at(-1)!
+}
+
+export function resolvePublishedCliNpmVersion(tag: string): string {
+  if (!tag.startsWith(PUBLISHED_CLI_TAG_PREFIX))
+    throw new Error(`Expected a published CLI tag, got ${tag}`)
+
+  return tag.slice(PUBLISHED_CLI_TAG_PREFIX.length)
+}
+
+export function extractArgKeysFromRpcCall(source: string, afterRpcNameIndex: number): string[] {
+  let cursor = afterRpcNameIndex
+  const castMatch = source.slice(cursor).match(/^\s*as\s+any/)
+  if (castMatch)
+    cursor += castMatch[0].length
+
+  const remainder = source.slice(cursor).trimStart()
+  if (remainder.startsWith(')'))
+    return []
+
+  const commaMatch = source.slice(cursor).match(/^\s*,/)
+  if (!commaMatch)
+    return []
+
+  cursor += commaMatch[0].length
+  const objectStart = source.indexOf('{', cursor)
+  if (objectStart === -1)
+    return []
+
+  let depth = 0
+  let inString: '"' | '\'' | '`' | null = null
+  let escaped = false
+
+  for (let index = objectStart; index < source.length; index++) {
+    const char = source[index]
+
+    if (inString) {
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (char === '\\') {
+        escaped = true
+        continue
+      }
+      if (char === inString)
+        inString = null
+      continue
+    }
+
+    if (char === '"' || char === '\'' || char === '`') {
+      inString = char
+      continue
+    }
+
+    if (char === '{') {
+      depth++
+      continue
+    }
+
+    if (char === '}') {
+      depth--
+      if (depth === 0) {
+        const argsSource = source.slice(objectStart + 1, index)
+        const keys = new Set<string>()
+        for (const segment of argsSource.split(',')) {
+          const trimmed = segment.trim()
+          if (!trimmed)
+            continue
+
+          const explicit = trimmed.match(/^([a-zA-Z_][\w]*)\s*:/)
+          if (explicit) {
+            keys.add(explicit[1]!)
+            continue
+          }
+
+          const shorthand = trimmed.match(/^([a-zA-Z_][\w]*)$/)
+          if (shorthand)
+            keys.add(shorthand[1]!)
+        }
+
+        return [...keys].sort()
+      }
+    }
+  }
+
+  return []
+}
+
+function rpcNameEndIndex(source: string, match: RegExpMatchArray): number {
+  return (match.index ?? 0) + match[0].length
+}
+
+export function extractPublishedCliRpcCallsFromSource(source: string): PublishedCliRpcCall[] {
+  const calls = new Map<string, PublishedCliRpcCall>()
+
+  for (const match of source.matchAll(PUBLISHED_CLI_RPC_PATTERN)) {
+    const name = match[1]!
+    const argKeys = extractArgKeysFromRpcCall(source, rpcNameEndIndex(source, match))
+    const key = `${name}(${argKeys.join(',')})`
+    calls.set(key, { name, argKeys })
+  }
+
+  return [...calls.values()].sort((left, right) => {
+    const byName = left.name.localeCompare(right.name)
+    if (byName !== 0)
+      return byName
+    return left.argKeys.join(',').localeCompare(right.argKeys.join(','))
+  })
+}
+
+export function extractPublishedCliRpcCalls(tag: string, runGit: GitRunner = defaultGitRunner): PublishedCliRpcCall[] {
+  const output = runGit(['grep', '-n', '-E', String.raw`\.rpc\(['\`][a-z][a-z0-9_]*['\`]`, tag, '--', 'cli/src'])
+  const source = output
+    .split('\n')
+    .map(line => line.replace(/^[^:]+:\d+:/, ''))
+    .join('\n')
+
+  return extractPublishedCliRpcCallsFromSource(source)
+}
+
+export function formatPublishedCliRpcCall(call: PublishedCliRpcCall): string {
+  if (call.argKeys.length === 0)
+    return `${call.name}()`
+  return `${call.name}({ ${call.argKeys.join(', ')} })`
+}
+
+export function rpcCallMatchesOverload(
+  call: PublishedCliRpcCall,
+  argNames: string[] | null,
+  defaultCount: number,
+  argCount: number,
+): boolean {
+  const names = argNames ?? []
+
+  if (call.argKeys.length === 0)
+    return argCount === 0 || defaultCount === argCount
+
+  const provided = new Set(call.argKeys)
+  if (!call.argKeys.every(key => names.includes(key)))
+    return false
+
+  const requiredNames = names.slice(0, Math.max(argCount - defaultCount, 0))
+  return requiredNames.every(name => provided.has(name))
+}

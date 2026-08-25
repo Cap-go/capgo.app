@@ -451,7 +451,7 @@ jobs:
       - name: Run backend integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}
-        run: bun run supabase:with-env -- bunx vitest run --exclude=tests/*.unit.test.ts --exclude=tests/cli* --exclude=tests/read-replica-schema-catalog.test.ts --exclude=tests/updates* --exclude=tests/stats* --exclude=tests/channel_self* --exclude=tests/channel-rate-limit.test.ts $(sed 's|^|--exclude=|' tests/tinbase-db-tests.txt | tr '\n' ' ') --shard="$VITEST_SHARD"
+        run: bun run supabase:with-env -- bunx vitest run --exclude=tests/*.unit.test.ts --exclude=tests/cli* --exclude=tests/published-cli-rpc-contract.test.ts --exclude=tests/read-replica-schema-catalog.test.ts --exclude=tests/updates* --exclude=tests/stats* --exclude=tests/channel_self* --exclude=tests/channel-rate-limit.test.ts $(sed 's|^|--exclude=|' tests/tinbase-db-tests.txt | tr '\n' ' ') --shard="$VITEST_SHARD"
       - name: Show Edge server logs after backend test failure
         if: failure() && steps.bootstrap_edge_server.outputs.log_path != ''
         run: |
@@ -845,7 +845,7 @@ jobs:
       - name: Run Cloudflare Workers integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}
-        run: bun run supabase:with-env -- bunx vitest run --exclude=tests/cli* --exclude=tests/*.unit.test.ts $(sed 's|^|--exclude=|' tests/tinbase-db-tests.txt | tr '\n' ' ') --config vitest.config.cloudflare.ts --shard="$VITEST_SHARD"
+        run: bun run supabase:with-env -- bunx vitest run --exclude=tests/cli* --exclude=tests/published-cli-rpc-contract.test.ts --exclude=tests/*.unit.test.ts $(sed 's|^|--exclude=|' tests/tinbase-db-tests.txt | tr '\n' ' ') --config vitest.config.cloudflare.ts --shard="$VITEST_SHARD"
       - name: Show Cloudflare Worker logs after Cloudflare test failure
         if: failure() && steps.start_cloudflare_workers.outputs.log_path != ''
         run: |
@@ -1524,3 +1524,60 @@ jobs:
             fi
           done
           bun scripts/supabase-worktree.ts stop --no-backup || true
+
+  published_cli_contract:
+    needs: changes
+    if: needs.changes.outputs.run_cli == 'true' || needs.changes.outputs.run_capgo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    name: CRITICAL — Published CLI contract (must not break production CLI)
+    permissions:
+      contents: read
+      actions: write
+    concurrency:
+      group: capgo-published-cli-contract-${{ github.event_name }}-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      SUPABASE_WORKTREE_INSTANCE: published-cli-${{ github.run_id }}-${{ github.run_attempt }}
+      SUPABASE_WORKTREE_PORT_OFFSET: 6100
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Setup bun
+        run: bash scripts/setup-bun.sh
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v2
+        with:
+          version: 2.109.1
+      - name: Link Supabase templates
+        run: ln -sfn supabase/templates templates
+      - name: Stop this job's Supabase stack
+        run: bun scripts/supabase-worktree.ts stop --no-backup || true
+      - name: Install dependencies
+        run: bun install
+      - name: Resolve last published CLI tag
+        run: |
+          PUBLISHED_CLI_TAG="$(git tag -l 'cli-*' | sort -V | tail -1)"
+          if [ -z "$PUBLISHED_CLI_TAG" ]; then
+            echo '::error::No cli-* tag found for published CLI contract'
+            exit 1
+          fi
+          PUBLISHED_CLI_VERSION="${PUBLISHED_CLI_TAG#cli-}"
+          echo "PUBLISHED_CLI_TAG=$PUBLISHED_CLI_TAG" >> "$GITHUB_ENV"
+          echo "PUBLISHED_CLI_VERSION=$PUBLISHED_CLI_VERSION" >> "$GITHUB_ENV"
+          echo "Published CLI contract target: @capgo/cli@${PUBLISHED_CLI_VERSION} (${PUBLISHED_CLI_TAG})"
+      - name: Run Supabase Start
+        run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+      - name: Run published CLI contract unit checks
+        run: bunx vitest run tests/published-cli-rpc-contract.unit.test.ts
+      - name: Run published CLI contract against PR schema
+        run: bun run supabase:with-env -- bunx vitest run tests/published-cli-rpc-contract.test.ts --no-file-parallelism --maxWorkers=1
+      - name: Stop Supabase stack
+        if: always()
+        run: bun scripts/supabase-worktree.ts stop --no-backup || true
