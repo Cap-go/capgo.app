@@ -9,8 +9,10 @@ describe('admin app onboarding dashboard', () => {
   it.concurrent('wires method and outcome trends to stacked charts', async () => {
     const source = await readFile(new URL('../src/pages/admin/dashboard/onboarding/sources.vue', import.meta.url), 'utf8')
 
-    expect(source).toContain('onboarding_method_trend')
-    expect(source).toContain('onboarding_outcome_trend')
+    expect(source).toContain('onboarding_method_trend?.some')
+    expect(source).toContain('onboarding_outcome_trend?.some')
+    expect(source).toContain('hasAppOnboardingMethodTrendData')
+    expect(source).toContain('hasAppOnboardingOutcomeTrendData')
     expect(source).toContain('AdminStackedBarChart')
     expect(source).toContain(`t('onboarding-source-cli')`)
     expect(source).toContain(`t('onboarding-source-mcp')`)

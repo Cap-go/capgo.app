@@ -324,6 +324,15 @@ const appOnboardingMethodTrendSeries = computed(() => {
   ]
 })
 
+const hasAppOnboardingMethodTrendData = computed(() => (
+  onboardingFunnelData.value?.onboarding_method_trend?.some(item => (
+    (Number(item.manual) || 0)
+    + (Number(item.cli) || 0)
+    + (Number(item.mcp) || 0)
+    + (Number(item.ai) || 0) > 0
+  )) ?? false
+))
+
 const appOnboardingOutcomeTotals = computed(() => {
   return aggregateAppOnboardingOutcomeTotals(onboardingFunnelData.value?.onboarding_outcome_trend ?? [])
 })
@@ -368,6 +377,15 @@ const appOnboardingOutcomeTrendSeries = computed(() => {
     },
   ]
 })
+
+const hasAppOnboardingOutcomeTrendData = computed(() => (
+  onboardingFunnelData.value?.onboarding_outcome_trend?.some(item => (
+    (Number(item.completed) || 0)
+    + (Number(item.skipped) || 0)
+    + (Number(item.switched_to_manual) || 0)
+    + (Number(item.in_progress) || 0) > 0
+  )) ?? false
+))
 
 watch(
   [() => adminStore.activeDateRange, () => adminStore.refreshTrigger],
@@ -466,7 +484,7 @@ displayStore.defaultBack = '/dashboard'
             chart-id="apps-onboarding-by-method"
             :title="t('apps-onboarding-by-method')"
             :is-loading="isLoadingOnboardingFunnel"
-            :has-data="appOnboardingMethodTrendSeries.length > 0"
+            :has-data="hasAppOnboardingMethodTrendData"
           >
             <p class="mb-3 text-sm text-slate-500 dark:text-slate-400">
               {{ t('apps-onboarding-by-method-description') }}
@@ -511,7 +529,7 @@ displayStore.defaultBack = '/dashboard'
             chart-id="apps-onboarding-by-outcome"
             :title="t('apps-onboarding-by-outcome')"
             :is-loading="isLoadingOnboardingFunnel"
-            :has-data="appOnboardingOutcomeTrendSeries.length > 0"
+            :has-data="hasAppOnboardingOutcomeTrendData"
           >
             <p class="mb-3 text-sm text-slate-500 dark:text-slate-400">
               {{ t('apps-onboarding-by-outcome-description') }}
