@@ -2,7 +2,7 @@
 -- via direct PostgREST INSERT. pending_verification inserts remain the client path.
 BEGIN;
 
-SELECT plan(11);
+SELECT plan(12);
 
 SELECT tests.authenticate_as_service_role();
 SELECT tests.create_supabase_user(
@@ -230,6 +230,28 @@ VALUES (
 )
 ON CONFLICT (id) DO NOTHING;
 
+INSERT INTO public.sso_providers (
+  id,
+  org_id,
+  domain,
+  provider_id,
+  status,
+  enforce_sso,
+  dns_verification_token,
+  dns_verified_at
+)
+VALUES (
+  '71000000-0000-4000-8000-000000000075',
+  '71000000-0000-4000-8000-000000000071',
+  'active-enforce.sso.test',
+  'prov_active_enforce',
+  'active',
+  false,
+  'dns-active-enforce',
+  NOW()
+)
+ON CONFLICT (id) DO NOTHING;
+
 SELECT tests.authenticate_as('sso_direct_insert_admin');
 
 SELECT throws_ok(
@@ -241,6 +263,17 @@ SELECT throws_ok(
   '42501',
   'SSO_PROVIDER_STATUS_PROMOTION_DENIED',
   'org admin cannot promote verified provider without dns_verified_at'
+);
+
+SELECT throws_ok(
+  $$
+    UPDATE public.sso_providers
+    SET enforce_sso = true
+    WHERE id = '71000000-0000-4000-8000-000000000075'
+  $$,
+  '42501',
+  'SSO_PROVIDER_ENFORCE_SSO_DENIED',
+  'org admin cannot enable enforce_sso on active provider via PostgREST'
 );
 
 SELECT throws_ok(
