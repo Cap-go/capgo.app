@@ -1,11 +1,12 @@
 /**
- * CRITICAL — Published CLI RPC contract (must not break production CLI)
+ * CRITICAL — Published CLI RPC contract (do not break old CLI)
  *
  * We cannot break already-published @capgo/cli versions that customers still run.
  * This file is the live guard for #3189-style regressions: if a migration revokes
  * anon EXECUTE on an RPC the last published CLI still calls (for example
  * `.rpc('get_user_id', { apikey })`), CI MUST fail here.
  *
+ * CI job: CRITICAL — Published CLI / do not break old CLI
  * Do NOT invert these tests to expect permission denied (42501). Success is the contract.
  */
 import type { Database } from '../src/types/supabase.types'

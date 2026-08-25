@@ -1530,7 +1530,7 @@ jobs:
     if: needs.changes.outputs.run_cli == 'true' || needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    name: CRITICAL — Published CLI contract (must not break production CLI)
+    name: CRITICAL — Published CLI / do not break old CLI
     permissions:
       contents: read
       actions: write
