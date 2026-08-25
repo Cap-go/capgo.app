@@ -144,6 +144,8 @@ SELECT apikeys.id, apikeys.rbac_id
 FROM public.apikeys
 WHERE apikeys.id IN (690040001, 690040002);
 
+GRANT SELECT ON channel_override_apikey_rbac TO authenticated;
+
 SELECT tests.authenticate_as('channel_override_admin');
 
 SELECT throws_ok(
