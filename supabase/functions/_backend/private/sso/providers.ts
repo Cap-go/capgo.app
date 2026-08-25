@@ -9,7 +9,7 @@ import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { requireEnterprisePlan } from '../../utils/plan-gating.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { createSSOProvider, deleteSSOProvider, ManagementAPIError } from '../../utils/supabase-management.ts'
-import { supabaseWithAuth } from '../../utils/supabase.ts'
+import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'
 
 const createBodySchema = z.object({
@@ -300,7 +300,8 @@ app.patch('/:id', async (c) => {
     throw simpleError('invalid_body', 'No updatable fields provided')
   }
 
-  const { data: updatedProvider, error: updateError } = await supabase
+  const admin = supabaseAdmin(c) as any
+  const { data: updatedProvider, error: updateError } = await admin
     .from('sso_providers')
     .update(updates)
     .eq('id', id)
