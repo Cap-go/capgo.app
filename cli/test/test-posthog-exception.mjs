@@ -297,10 +297,12 @@ try {
   assert.equal(isExpectedUserError({ context: { status: 401 } }), true)
   assert.equal(isExpectedUserError({ status: 401 }), true)
   assert.equal(isExpectedUserError(new Error('Cannot get organization id for app id com.example')), false)
+  assert.equal(isExpectedUserError(new CliUserError('Cannot get organization id for app', { appId: 'com.example' })), false)
   assert.equal(isExpectedUserError(new Error('boom')), false)
   assert.equal(shouldCapturePosthogException(new Error('invalid_apikey')), false)
   assert.equal(shouldCapturePosthogException({ context: { status: 401 } }), false)
   assert.equal(shouldCapturePosthogException(new Error('Cannot get organization id for app id com.example')), true)
+  assert.equal(shouldCapturePosthogException(new CliUserError('Cannot get organization id for app', { appId: 'com.example' })), false)
 
   console.log('CLI PostHog exception capture tests passed')
 }

@@ -74,6 +74,7 @@ import { addOrganizationInternal } from './organization/add'
 import { deleteOrganizationInternal } from './organization/delete'
 import { listOrganizationsInternal } from './organization/list'
 import { setOrganizationInternal } from './organization/set'
+import { CliUserError } from './shared/cli-user-error'
 import { getUserIdInternal } from './user/account'
 import { createSupabaseClient, findSavedKey, getConfig, getLocalConfig } from './utils'
 import { parseSecurityPolicyError } from './utils/security_policy_errors'
@@ -96,11 +97,13 @@ export type { UpdateProbeResult } from './app/updateProbe'
  */
 function createErrorResult<T = void>(error: unknown): SDKResult<T> {
   const errorMessage = error instanceof Error ? error.message : String(error)
+  const errorContext = error instanceof CliUserError ? error.context : undefined
   const parsed = parseSecurityPolicyError(error)
 
   return {
     success: false,
     error: errorMessage,
+    errorContext,
     isSecurityPolicyError: parsed.isSecurityPolicyError,
     securityPolicyMessage: parsed.isSecurityPolicyError ? parsed.message : undefined,
   }

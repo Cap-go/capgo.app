@@ -13,6 +13,7 @@ export interface SDKResult<T = void> {
   success: boolean
   data?: T
   error?: string
+  errorContext?: Record<string, unknown>
   securityPolicyMessage?: string
   isSecurityPolicyError?: boolean
   warnings?: string[]

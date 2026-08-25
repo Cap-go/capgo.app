@@ -627,22 +627,34 @@ export async function getDeclaredPackageVersionMap(f: string = findRoot(cwd()), 
   return dependencies
 }
 
+function isPresentCapacitorConfig(extConfig: ExtConfigPairs | undefined): extConfig is ExtConfigPairs {
+  if (!extConfig)
+    return false
+  if (extConfig.config && Object.keys(extConfig.config).length > 0)
+    return true
+  // Capacitor's no-file fallback still reports a default path when the file is
+  // absent. Only treat empty config as missing when that path does not exist.
+  return !!extConfig.path && existsSync(extConfig.path)
+}
+
 async function getConfigFrom(loader: () => Promise<ExtConfigPairs | undefined>, silent = false): Promise<ExtConfigPairs> {
+  const message = 'No capacitor config file found, run `cap init` first'
   try {
     const extConfig = await loader()
-    if (!extConfig) {
-      const message = 'No capacitor config file found, run `cap init` first'
+    if (!isPresentCapacitorConfig(extConfig)) {
       if (!silent)
         log.error(message)
-      throw new Error(message)
+      throw new CliUserError(message)
     }
     return extConfig
   }
   catch (err) {
-    const message = `No capacitor config file found, run \`cap init\` first ${formatError(err)}`
+    if (err instanceof CliUserError)
+      throw err
+    const cause = formatError(err)
     if (!silent)
-      log.error(message)
-    throw new Error(message)
+      log.error(`${message}: ${cause}`)
+    throw new CliUserError(message, { cause })
   }
 }
 
@@ -2214,10 +2226,11 @@ export async function getOrganizationId(
   })
 
   if (!data?.owner_org || error) {
+    const cause = formatError(error)
     // Surface the underlying cause instead of discarding it — a bare
     // "Cannot get organization id" leaves both users and triage with no signal.
-    log.error(`Cannot get organization id for app id ${appId}: ${formatError(error)}`)
-    throw new Error(`Cannot get organization id for app id ${appId}`)
+    log.error(`Cannot get organization id for app id ${appId}: ${cause}`)
+    throw new CliUserError('Cannot get organization id for app', { appId, cause })
   }
   return data.owner_org
 }

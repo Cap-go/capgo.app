@@ -1,4 +1,4 @@
-import { exit } from 'node:process'
+import { cwd, exit } from 'node:process'
 import { log } from '@clack/prompts'
 import { InvalidArgumentError, Option, program } from 'commander'
 import pack from '../package.json'
@@ -88,7 +88,7 @@ enableSupabaseInstrumentation()
 let currentCommandPath = 'unknown'
 
 program.hook('preAction', (_thisCommand, actionCommand) => {
-  setConfigWriteTarget(resolveCapacitorConfigTargetPath(actionCommand.optsWithGlobals().capacitorConfig))
+  setConfigWriteTarget(resolveCapacitorConfigTargetPath(actionCommand.optsWithGlobals().capacitorConfig, cwd(), { logError: true }))
   currentCommandPath = getCommandPath(actionCommand)
   setCurrentCliCommand(currentCommandPath)
   applyCommandAnalyticsOptOut(currentCommandPath, actionCommand.opts())
