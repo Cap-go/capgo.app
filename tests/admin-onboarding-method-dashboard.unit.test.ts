@@ -7,7 +7,7 @@ import {
 
 describe('admin app onboarding dashboard', () => {
   it.concurrent('wires method and outcome trends to stacked charts', async () => {
-    const source = await readFile(new URL('../src/pages/admin/dashboard/users.vue', import.meta.url), 'utf8')
+    const source = await readFile(new URL('../src/pages/admin/dashboard/onboarding/sources.vue', import.meta.url), 'utf8')
 
     expect(source).toContain('onboarding_method_trend')
     expect(source).toContain('onboarding_outcome_trend')
@@ -44,7 +44,7 @@ describe('admin app onboarding dashboard', () => {
   })
 
   it.concurrent('renders selected-period onboarding totals below the stacked charts', async () => {
-    const source = await readFile(new URL('../src/pages/admin/dashboard/users.vue', import.meta.url), 'utf8')
+    const source = await readFile(new URL('../src/pages/admin/dashboard/onboarding/sources.vue', import.meta.url), 'utf8')
 
     expect(source).toContain('aggregateAppOnboardingMethodTotals(onboardingFunnelData.value?.onboarding_method_trend ?? [])')
     expect(source).toContain('aggregateAppOnboardingOutcomeTotals(onboardingFunnelData.value?.onboarding_outcome_trend ?? [])')
@@ -55,11 +55,10 @@ describe('admin app onboarding dashboard', () => {
 
     const methodChartIndex = source.indexOf(`t('apps-onboarding-by-method')`)
     const outcomeChartIndex = source.indexOf(`t('apps-onboarding-by-outcome')`)
-    const onboardingTrendIndex = source.indexOf('<!-- Onboarding Trend Chart -->')
 
     expect(methodChartIndex).toBeGreaterThan(-1)
     expect(outcomeChartIndex).toBeGreaterThan(methodChartIndex)
-    expect(onboardingTrendIndex).toBeGreaterThan(outcomeChartIndex)
+    expect(source.indexOf(`t('admin-users-email-type-breakdown')`)).toBeGreaterThan(outcomeChartIndex)
   })
 
   it.concurrent('defines every app onboarding label in English', async () => {

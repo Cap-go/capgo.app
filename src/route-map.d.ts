@@ -178,6 +178,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/admin/dashboard/revenue/plans': RouteRecordInfo<
+      '/admin/dashboard/revenue/plans',
+      '/admin/dashboard/revenue/plans',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/admin/dashboard/revenue/risk': RouteRecordInfo<
       '/admin/dashboard/revenue/risk',
       '/admin/dashboard/revenue/risk',
@@ -872,6 +879,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/admin/dashboard/revenue/index.vue': {
       routes:
         | '/admin/dashboard/revenue/'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/admin/dashboard/revenue/plans.vue': {
+      routes:
+        | '/admin/dashboard/revenue/plans'
       views:
         | never
       pathParamNames:

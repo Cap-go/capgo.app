@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 describe('admin starting-out dashboard', () => {
   it.concurrent('wires the organization starting point trend to a stacked chart', async () => {
-    const source = await readFile(new URL('../src/pages/admin/dashboard/users.vue', import.meta.url), 'utf8')
+    const source = await readFile(new URL('../src/pages/admin/dashboard/onboarding/sources.vue', import.meta.url), 'utf8')
 
     expect(source).toContain('starting_out_trend')
     expect(source).toContain('startingOutTrendSeries')
@@ -14,7 +14,7 @@ describe('admin starting-out dashboard', () => {
 
     const section = source.slice(
       source.indexOf('chart-id="organizations-by-starting-out"'),
-      source.indexOf('<!-- Registration Source Trend Chart -->'),
+      source.indexOf('chart-id="registrations-by-source"'),
     )
 
     expect(section).toContain('<AdminStackedBarChart')

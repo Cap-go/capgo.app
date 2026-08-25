@@ -250,6 +250,8 @@ const router = createRouter({
     { path: '/admin/dashboard/credits', redirect: '/admin/dashboard/customers/credits' },
     { path: '/admin/dashboard/replication', redirect: '/admin/dashboard/platform/replication' },
     { path: '/admin/dashboard/debug', redirect: '/admin/dashboard/platform/debug' },
+    { path: '/admin/dashboard/plans', redirect: '/admin/dashboard/revenue/plans' },
+    { path: '/admin/dashboard/frontend-onboarding', redirect: '/admin/dashboard/onboarding/frontend' },
     ...setupLayouts(newRoutes),
   ],
   history: createWebHistory(import.meta.env.BASE_URL),
