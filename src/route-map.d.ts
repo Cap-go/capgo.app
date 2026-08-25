@@ -73,6 +73,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/admin/dashboard/onboarding/frontend': RouteRecordInfo<
+      '/admin/dashboard/onboarding/frontend',
+      '/admin/dashboard/onboarding/frontend',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/admin/dashboard/onboarding/sources': RouteRecordInfo<
       '/admin/dashboard/onboarding/sources',
       '/admin/dashboard/onboarding/sources',
@@ -293,6 +300,13 @@ declare module 'vue-router/auto-routes' {
     '/app/[app].channels': RouteRecordInfo<
       '/app/[app].channels',
       '/app/:app/channels',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
+    '/app/[app].getting-started': RouteRecordInfo<
+      '/app/[app].getting-started',
+      '/app/:app/getting-started',
       { app: ParamValue<true> },
       { app: ParamValue<false> },
       | never
@@ -743,6 +757,14 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | never
     }
+    'src/pages/admin/dashboard/onboarding/frontend.vue': {
+      routes:
+        | '/admin/dashboard/onboarding/frontend'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
     'src/pages/admin/dashboard/onboarding/sources.vue': {
       routes:
         | '/admin/dashboard/onboarding/sources'
@@ -1004,6 +1026,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/app/[app].channels.vue': {
       routes:
         | '/app/[app].channels'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].getting-started.vue': {
+      routes:
+        | '/app/[app].getting-started'
       views:
         | never
       pathParamNames:

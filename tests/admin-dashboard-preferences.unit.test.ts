@@ -68,14 +68,14 @@ describe('admin dashboard graph preferences', () => {
 
   it.concurrent('creates compact deterministic keys from stable IDs and separates routes', () => {
     const key = createAdminDashboardChartPreferenceKey(
-      '/admin/dashboard/frontend-onboarding',
+      '/admin/dashboard/onboarding/frontend',
       'funnel-v3',
     )
 
-    expect(key).toMatch(/^frontend-onboarding\.funnel-v3\.[a-f0-9]{8}$/)
+    expect(key).toMatch(/^frontend\.funnel-v3\.[a-f0-9]{8}$/)
     expect(key.length).toBeLessThanOrEqual(72)
     expect(createAdminDashboardChartPreferenceKey(
-      '/admin/dashboard/frontend-onboarding',
+      '/admin/dashboard/onboarding/frontend',
       'funnel-v3',
     )).toBe(key)
     expect(createAdminDashboardChartPreferenceKey(
@@ -83,7 +83,7 @@ describe('admin dashboard graph preferences', () => {
       'funnel-v3',
     )).not.toBe(key)
     expect(createAdminDashboardChartPreferenceKey(
-      '/admin/dashboard/frontend-onboarding',
+      '/admin/dashboard/onboarding/frontend',
       'daily-attempts',
     )).not.toBe(key)
   })

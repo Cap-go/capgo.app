@@ -386,7 +386,7 @@ describe('admin chart card minimize control', () => {
   })
 
   it('uses the collapsible card for every custom frontend onboarding graph', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/pages/admin/dashboard/frontend-onboarding.vue'), 'utf8')
+    const source = readFileSync(resolve(process.cwd(), 'src/pages/admin/dashboard/onboarding/frontend.vue'), 'utf8')
 
     expect(source).toContain(':title="displayedFunnelTitle"')
     expect(source).toContain(':title="graphTitle"')
@@ -408,11 +408,11 @@ describe('admin chart card minimize control', () => {
     }
   })
 
-  it('uses the collapsible card for the custom users onboarding funnel', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/pages/admin/dashboard/users.vue'), 'utf8')
+  it('uses the collapsible card for the custom onboarding funnel dashboard', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/pages/admin/dashboard/onboarding/index.vue'), 'utf8')
 
-    expect(source).toContain(`:title="t('onboarding-funnel')"`)
-    expect(source).toContain(`:title="t('organizations-by-starting-out')"`)
-    expect(source.match(/<ChartCard/g)).toHaveLength(19)
+    expect(source).toContain(`{{ t('onboarding-funnel') }}`)
+    expect(source).toContain(`:title="t('onboarding-trend')"`)
+    expect(source.match(/<ChartCard/g)).toHaveLength(4)
   })
 })
