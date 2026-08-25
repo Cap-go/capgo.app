@@ -271,7 +271,9 @@ public class CapgoUpdater: RCTEventEmitter {
         err = error
       }
     }.resume()
-    sem.wait()
+    if sem.wait(timeout: .now() + 120) == .timedOut {
+      throw NSError(domain: "capgo", code: 12, userInfo: [NSLocalizedDescriptionKey: "Download timed out"])
+    }
     if let err = err { throw err }
   }
 
