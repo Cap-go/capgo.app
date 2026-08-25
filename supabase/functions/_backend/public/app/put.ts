@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { parseAppOnboardingPatch } from '../../utils/appOnboarding.ts'
+import { resolveAppCreatorEventDetails } from '../../utils/app_creator.ts'
 import { deleteAppStatus } from '../../utils/appStatus.ts'
 import { trackBentoEvent } from '../../utils/bento.ts'
 import { createIfNotExistStoreInfo } from '../../utils/cloudflare.ts'
@@ -266,10 +267,12 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
       cloudlog({ requestId: c.get('requestId'), message: 'Cannot load organization for onboarding completion side effects', error: orgError, app_id: appId })
     }
     else {
+      const creatorDetails = await resolveAppCreatorEventDetails(c, data.onboarding)
       await trackBentoEvent(c, orgData.management_email, {
         org_id: data.owner_org,
         org_name: orgData.name,
         app_name: data.name,
+        ...creatorDetails,
       }, 'app:created')
     }
 

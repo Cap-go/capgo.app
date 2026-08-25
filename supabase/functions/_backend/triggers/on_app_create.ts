@@ -10,6 +10,7 @@ import { cloudlog } from '../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
+import { resolveAppCreatorEventDetails } from '../utils/app_creator.ts'
 import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent } from '../utils/org_onboarding_intent.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { backgroundTask } from '../utils/utils.ts'
@@ -106,6 +107,7 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'INSERT'), async (c)
 
   let appCreatedBentoEvent: BentoTrackingPayload | undefined
   if (!isDemo && !isPendingOnboarding) {
+    const creatorDetails = await resolveAppCreatorEventDetails(c, record.onboarding)
     appCreatedBentoEvent = await supabase
       .from('orgs')
       .select('*')
@@ -129,6 +131,7 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'INSERT'), async (c)
               website: data.website,
             }),
             app_name: record.name,
+            ...creatorDetails,
           },
         }
       })
