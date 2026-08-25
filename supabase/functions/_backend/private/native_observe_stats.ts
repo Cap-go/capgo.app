@@ -962,8 +962,10 @@ async function readNativeObserveStats(
     versionGroup,
   }
 
-  // Same dual-path pattern as private/stats and update_delivery_stats.
-  if (c.env.APP_LOG)
+  // Cloudflare timing events need APP_LOG; platform/channel grouping also needs DEVICE_INFO.
+  const canUseCfPath = c.env.APP_LOG
+    && (!needsVersionDeviceDimensions(versionGroup) || c.env.DEVICE_INFO)
+  if (canUseCfPath)
     return readNativeObserveStatsCF(c, input)
 
   return readNativeObserveStatsSB(c, input)
