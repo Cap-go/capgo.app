@@ -6,6 +6,7 @@ const {
   putJsonMock,
   syncUserPreferenceTagsMock,
   unsubscribeBentoMock,
+  getBentoSubscriberEmailByUuidMock,
   usersMaybeSingleMock,
   usersUpdateEqMock,
   usersUpdateMaybeSingleMock,
@@ -33,6 +34,7 @@ const {
     putJsonMock: vi.fn(async () => undefined),
     syncUserPreferenceTagsMock: vi.fn(async () => undefined),
     unsubscribeBentoMock: vi.fn(async () => true),
+    getBentoSubscriberEmailByUuidMock: vi.fn(async (): Promise<string | null | undefined> => null),
     usersMaybeSingleMock: vi.fn(async (): Promise<UsersQueryResult> => ({ data: null, error: null })),
     usersUpdateEqMock: vi.fn(),
     usersUpdateMaybeSingleMock: vi.fn(async (): Promise<UsersQueryResult> => ({ data: null, error: null })),
@@ -42,6 +44,7 @@ const {
 
 vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
   unsubscribeBento: unsubscribeBentoMock,
+  getBentoSubscriberEmailByUuid: getBentoSubscriberEmailByUuidMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/cache.ts', () => ({
@@ -106,13 +109,22 @@ const {
   PUBLIC_EMAIL_PREFERENCE_KEYS,
   escapeIlikeExact,
   sanitizeOptOutPreferences,
+  visitorUuidSchema,
 } = await import('../supabase/functions/_backend/private/email_preferences.ts')
+
+const VISITOR_UUID = '11111111-1111-4111-8111-111111111111'
 
 async function postPreferences(body: unknown) {
   return await app.request('http://local/', {
     body: JSON.stringify(body),
     headers: { 'content-type': 'application/json' },
     method: 'POST',
+  })
+}
+
+async function getPreferences(query: string) {
+  return await app.request(`http://local/${query}`, {
+    method: 'GET',
   })
 }
 
@@ -128,6 +140,7 @@ describe('public email preferences endpoint', () => {
     usersMaybeSingleMock.mockResolvedValue({ data: null, error: null })
     usersUpdateMaybeSingleMock.mockResolvedValue({ data: null, error: null })
     unsubscribeBentoMock.mockResolvedValue(true)
+    getBentoSubscriberEmailByUuidMock.mockResolvedValue(null)
     verifyCaptchaTokenMock.mockResolvedValue(undefined)
   })
 
@@ -331,5 +344,122 @@ describe('public email preferences endpoint', () => {
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({ status: 'ok' })
     expect(verifyCaptchaTokenMock).toHaveBeenCalledWith(expect.anything(), 'turnstile-token', 'test-secret')
+  })
+
+  it('accepts UUID-shaped Bento visitor ids', () => {
+    expect(visitorUuidSchema.safeParse(VISITOR_UUID).success).toBe(true)
+    expect(visitorUuidSchema.safeParse('not-a-uuid').success).toBe(false)
+  })
+
+  it('rejects posts that include neither email nor uuid', async () => {
+    const response = await postPreferences({
+      preferences: { onboarding: false },
+    })
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({ error: 'invalid_payload' })
+    expect(usersMaybeSingleMock).not.toHaveBeenCalled()
+    expect(getBentoSubscriberEmailByUuidMock).not.toHaveBeenCalled()
+  })
+
+  it('resolves uuid posts through Bento then applies opt-outs', async () => {
+    getBentoSubscriberEmailByUuidMock.mockResolvedValue('user@example.com')
+    const user = {
+      id: '11111111-1111-4111-8111-111111111111',
+      email: 'user@example.com',
+      enable_notifications: true,
+      opt_for_newsletters: true,
+      email_preferences: { onboarding: true },
+    }
+    usersMaybeSingleMock.mockResolvedValue({ data: user, error: null })
+    usersUpdateMaybeSingleMock.mockResolvedValue({
+      data: {
+        ...user,
+        email_preferences: { onboarding: false },
+      },
+      error: null,
+    })
+
+    const response = await postPreferences({
+      uuid: VISITOR_UUID,
+      preferences: { onboarding: false },
+    })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ status: 'ok' })
+    expect(getBentoSubscriberEmailByUuidMock).toHaveBeenCalledWith(expect.anything(), VISITOR_UUID)
+    expect(usersUpdateEqMock).toHaveBeenCalledWith(expect.objectContaining({
+      email_preferences: { onboarding: false },
+    }))
+  })
+
+  it('unsubscribes Bento with the resolved uuid email', async () => {
+    getBentoSubscriberEmailByUuidMock.mockResolvedValue('user@example.com')
+
+    const response = await postPreferences({
+      uuid: VISITOR_UUID,
+      unsubscribe_all: true,
+    })
+
+    expect(response.status).toBe(200)
+    expect(unsubscribeBentoMock).toHaveBeenCalledWith(expect.anything(), 'user@example.com')
+  })
+
+  it('returns ok for unknown uuids without creating a user', async () => {
+    const response = await postPreferences({
+      uuid: VISITOR_UUID,
+      unsubscribe_all: true,
+    })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ status: 'ok' })
+    expect(getBentoSubscriberEmailByUuidMock).toHaveBeenCalledWith(expect.anything(), VISITOR_UUID)
+    expect(usersUpdateEqMock).not.toHaveBeenCalled()
+    expect(unsubscribeBentoMock).not.toHaveBeenCalled()
+  })
+
+  it('prefers an explicit email over uuid lookup', async () => {
+    const response = await postPreferences({
+      email: 'nobody@example.com',
+      uuid: VISITOR_UUID,
+      preferences: { onboarding: false },
+    })
+
+    expect(response.status).toBe(200)
+    expect(getBentoSubscriberEmailByUuidMock).not.toHaveBeenCalled()
+    expect(usersMaybeSingleMock).toHaveBeenCalled()
+  })
+
+  it('resolves uuid on GET so the public page can prefill without email in the URL', async () => {
+    getBentoSubscriberEmailByUuidMock.mockResolvedValue('user@example.com')
+
+    const response = await getPreferences(`?uuid=${VISITOR_UUID}`)
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ status: 'ok', email: 'user@example.com' })
+    expect(getBentoSubscriberEmailByUuidMock).toHaveBeenCalledWith(expect.anything(), VISITOR_UUID)
+  })
+
+  it('returns a null email on GET when the uuid is unknown', async () => {
+    const response = await getPreferences(`?uuid=${VISITOR_UUID}`)
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ status: 'ok', email: null })
+  })
+
+  it('rejects GET without a visitor uuid', async () => {
+    const response = await getPreferences('')
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({ error: 'invalid_payload' })
+    expect(getBentoSubscriberEmailByUuidMock).not.toHaveBeenCalled()
+  })
+
+  it('does not look up GET by email', async () => {
+    const response = await getPreferences('?email=user@example.com')
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({ error: 'invalid_payload' })
+    expect(getBentoSubscriberEmailByUuidMock).not.toHaveBeenCalled()
   })
 })

@@ -109,18 +109,28 @@ Queue delivery is at least once, so the tag sync can repeat; treat the tag as a 
 
 #### 3c. Public email preference footer link
 
-Use the same Capgo preference URL in every Bento footer (does not reveal whether the email has an account):
+Use the Capgo preference URL in every Bento footer. **Do not put the visitor email in the query string** — GET URLs leak via logs, history, and Referer.
+
+Compliant URL (new sends):
+
+```text
+https://console.capgo.app/email-preferences?uuid={{ visitor.uuid }}
+```
+
+Legacy URL (already-sent emails; still works):
 
 ```text
 https://console.capgo.app/email-preferences?email={{ visitor.email }}
 ```
 
 - Prefills the address only — the visitor chooses what to disable
+- `uuid` is resolved server-side via Bento `GET /fetch/subscribers` so the email never appears in the page URL
 - Save always shows the same success for known and unknown emails
 - This public path is **opt-out only** (cannot re-enable prefs; use logged-in settings for that)
 - “Unsubscribe from all” calls Bento unsubscribe for that address
 - Cloudflare Turnstile required when `CAPTCHA_SECRET_KEY` / `VITE_CAPTCHA_KEY` are set (same as invite/login)
-- Rate limits: ~20 / 15m per IP, ~10 / 15m per email hash
+- Rate limits: ~20 / 15m per IP, ~10 / 15m per email or uuid hash
+- Update Bento footers to the `uuid` URL. Leave the `email` query working for mail already in inboxes.
 
 #### 4. Weekly Statistics
 

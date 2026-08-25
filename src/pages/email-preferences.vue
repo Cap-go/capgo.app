@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import VueTurnstile from 'vue-turnstile'
@@ -85,15 +85,22 @@ const PREFERENCE_DESC_KEYS: Record<PublicEmailPreferenceKey, string> = {
   bundle_incompatible: 'notifications-bundle-incompatible-desc',
 }
 
+const VISITOR_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 const { t } = useI18n()
 const route = useRoute('/email-preferences')
 
 const email = ref(String(route.query.email ?? '').trim())
+const visitorUuid = ref((() => {
+  const value = String(route.query.uuid ?? '').trim()
+  return VISITOR_UUID_RE.test(value) ? value : ''
+})())
 const unsubscribeAll = ref(false)
 const enableNotifications = ref(true)
 const optForNewsletters = ref(true)
 const isSaving = ref(false)
 const isSaved = ref(false)
+const isResolvingEmail = ref(false)
 const formError = ref<string | null>(null)
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY as string | undefined)
 const captchaToken = ref('')
@@ -116,11 +123,39 @@ const emailLooksValid = computed(() => {
 
 const captchaRequired = computed(() => Boolean(captchaKey.value))
 const canSubmit = computed(() => {
-  if (!emailLooksValid.value || isSaving.value)
+  if (isSaving.value || isResolvingEmail.value)
+    return false
+  if (!emailLooksValid.value && !visitorUuid.value)
     return false
   if (captchaRequired.value && !captchaToken.value)
     return false
   return true
+})
+
+async function resolveVisitorEmail() {
+  if (emailLooksValid.value || !visitorUuid.value)
+    return
+
+  isResolvingEmail.value = true
+  try {
+    const { data } = await invokeCapgoApi<{ email?: string | null }>(
+      `private/email_preferences?uuid=${encodeURIComponent(visitorUuid.value)}`,
+      { allowAnonymous: true, method: 'GET' },
+    )
+    const resolved = String(data?.email ?? '').trim()
+    if (resolved)
+      email.value = resolved
+  }
+  catch {
+    // Save still works with uuid when lookup misses.
+  }
+  finally {
+    isResolvingEmail.value = false
+  }
+}
+
+onMounted(() => {
+  void resolveVisitorEmail()
 })
 
 function resetCaptcha() {
@@ -130,7 +165,7 @@ function resetCaptcha() {
 
 async function savePreferences() {
   formError.value = null
-  if (!emailLooksValid.value) {
+  if (!emailLooksValid.value && !visitorUuid.value) {
     formError.value = t('email-preferences-invalid-email')
     return
   }
@@ -151,7 +186,8 @@ async function savePreferences() {
     const { data, error } = await invokeCapgoApi<{ status?: string }>('private/email_preferences', {
       allowAnonymous: true,
       body: {
-        email: email.value.trim().toLowerCase(),
+        email: emailLooksValid.value ? email.value.trim().toLowerCase() : undefined,
+        uuid: visitorUuid.value || undefined,
         unsubscribe_all: unsubscribeAll.value,
         // Opt-out only — never send `true` from this public page.
         enable_notifications: unsubscribeAll.value || !enableNotifications.value ? false : undefined,
@@ -210,7 +246,9 @@ async function savePreferences() {
             v-model="email"
             type="email"
             autocomplete="email"
-            required
+            :required="!visitorUuid"
+            :disabled="isResolvingEmail"
+            :aria-busy="isResolvingEmail"
             class="d-input d-input-bordered w-full bg-white dark:bg-slate-950"
             :aria-invalid="!emailLooksValid && email.length > 0"
           >
