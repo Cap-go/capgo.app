@@ -4,12 +4,12 @@
 -- service_role paths keep working.
 --
 -- Execution profile (app_versions BEFORE UPDATE OF deleted, deleted_at):
--- - Where: once per row when deleted_at is set or deleted flips to true.
--- - Frequency: console-scale bundle deletes (hundreds/day), not plugin hot path.
+-- - Where: once per row when deleted_at changes or deleted flips to true.
+-- - Frequency: console-scale bundle deletes (hundreds/day), not plugin path.
 -- - Roles: anon/authenticated API-key traffic and JWT users hit the guard;
 --   internal request roles (service_role, postgres) bypass via
 --   is_internal_request_role(current_request_role()).
--- - Cardinality: single app_versions row (NEW.owner_org, NEW.app_id) passed to
+-- - Cardinality: single app_versions row (OLD.owner_org, OLD.app_id) passed to
 --   rbac_check_permission_request(bundle.delete, ...).
 -- - Indexes: role_bindings_principal_scope_idx and role_bindings_scope_idx
 --   bound rbac_check_permission_direct lookups on (principal, org, app).
@@ -33,7 +33,7 @@ DECLARE
   v_request_role text := public.current_request_role();
 BEGIN
   IF NOT (
-    (NEW.deleted_at IS DISTINCT FROM OLD.deleted_at AND NEW.deleted_at IS NOT NULL)
+    NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
     OR (NEW.deleted IS TRUE AND OLD.deleted IS NOT TRUE)
   ) THEN
     RETURN NEW;
@@ -43,15 +43,17 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  IF v_request_role IS DISTINCT FROM 'anon' AND v_request_role IS DISTINCT FROM 'authenticated' THEN
+  IF v_request_role IS DISTINCT FROM 'anon'
+    AND v_request_role IS DISTINCT FROM 'authenticated'
+  THEN
     RAISE EXCEPTION 'PERMISSION_DENIED_BUNDLE_DELETE'
       USING ERRCODE = '42501';
   END IF;
 
   IF NOT public.rbac_check_permission_request(
     public.rbac_perm_bundle_delete(),
-    NEW.owner_org,
-    NEW.app_id,
+    OLD.owner_org,
+    OLD.app_id,
     NULL::bigint
   ) THEN
     RAISE EXCEPTION 'PERMISSION_DENIED_BUNDLE_DELETE'
@@ -73,4 +75,4 @@ FOR EACH ROW
 EXECUTE FUNCTION public.enforce_app_versions_delete_permission();
 
 COMMENT ON FUNCTION public.enforce_app_versions_delete_permission() IS
-  'Requires bundle.delete when a user-context write sets deleted or deleted_at.';
+  'Requires bundle.delete when a user-context write changes deleted or deleted_at.';

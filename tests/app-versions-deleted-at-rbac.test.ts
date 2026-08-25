@@ -80,9 +80,12 @@ describe('app_versions deleted_at requires bundle.delete', () => {
   }, 60_000)
 
   afterAll(async () => {
-    await executeSQL('DELETE FROM public.apikeys WHERE id = ANY($1::bigint[])', [[uploaderKeyId, deleterKeyId]])
+    const keyIds = [uploaderKeyId, deleterKeyId].filter((id): id is number => id != null)
+    if (keyIds.length > 0)
+      await executeSQL('DELETE FROM public.apikeys WHERE id = ANY($1::bigint[])', [keyIds])
     await executeSQL('SELECT public.reset_app_data($1)', [appId])
     await executeSQL('DELETE FROM public.deleted_apps WHERE app_id = $1', [appId])
+    await executeSQL('DELETE FROM public.apps WHERE app_id = $1', [`${appId}.other`])
     await executeSQL('DELETE FROM public.orgs WHERE id = $1::uuid', [orgId])
     await executeSQL('DELETE FROM public.stripe_info WHERE customer_id = $1', [stripeCustomerId])
     await pool.end()
@@ -116,6 +119,69 @@ describe('app_versions deleted_at requires bundle.delete', () => {
     const row = await readVersion(versionId)
     expect(row?.deleted).toBe(false)
     expect(row?.deleted_at).toBeNull()
+  })
+
+  it.concurrent('keeps an upload-scoped API key from mixing deleted_at into a benign update', async () => {
+    const versionId = await insertVersion(`upload-mixed-delete-${randomUUID()}`)
+    const comment = `mixed-comment-${randomUUID()}`
+
+    await expect(withAnonymousCapgkey(pool, uploaderKey, async (client) => {
+      await client.query(
+        'UPDATE public.app_versions SET comment = $2, deleted_at = now() WHERE id = $1',
+        [versionId, comment],
+      )
+    })).rejects.toThrow(/PERMISSION_DENIED_BUNDLE_DELETE/)
+
+    const row = await readVersion(versionId)
+    expect(row?.comment).not.toBe(comment)
+    expect(row?.deleted_at).toBeNull()
+    expect(row?.deleted).toBe(false)
+  })
+
+  it.concurrent('keeps an upload-scoped API key from clearing deleted_at', async () => {
+    const versionId = await insertVersion(`upload-clear-deleted-at-${randomUUID()}`)
+
+    await executeSQL(
+      'UPDATE public.app_versions SET deleted_at = now() WHERE id = $1',
+      [versionId],
+    )
+
+    await expect(withAnonymousCapgkey(pool, uploaderKey, async (client) => {
+      await client.query(
+        'UPDATE public.app_versions SET deleted_at = NULL WHERE id = $1',
+        [versionId],
+      )
+    })).rejects.toThrow(/PERMISSION_DENIED_BUNDLE_DELETE/)
+
+    const row = await readVersion(versionId)
+    expect(row?.deleted_at).toBeTruthy()
+  })
+
+  it.concurrent('checks bundle.delete against the original app scope when app_id changes', async () => {
+    const otherAppId = `${appId}.other`
+    await executeSQL(
+      `INSERT INTO public.apps (app_id, icon_url, user_id, name, owner_org)
+       VALUES ($1, '', $2::uuid, $3, $4::uuid)
+       ON CONFLICT (app_id) DO NOTHING`,
+      [otherAppId, USER_ID, otherAppId, orgId],
+    )
+
+    const versionId = await insertVersion(`scope-move-delete-${randomUUID()}`)
+
+    await expect(withAnonymousCapgkey(pool, uploaderKey, async (client) => {
+      await client.query(
+        'UPDATE public.app_versions SET app_id = $2, deleted_at = now() WHERE id = $1',
+        [versionId, otherAppId],
+      )
+    })).rejects.toThrow(/PERMISSION_DENIED_BUNDLE_DELETE/)
+
+    const rows = await executeSQL<{ app_id: string, deleted_at: string | null, deleted: boolean }>(
+      'SELECT app_id, deleted_at, deleted FROM public.app_versions WHERE id = $1',
+      [versionId],
+    )
+    expect(rows[0]?.app_id).toBe(appId)
+    expect(rows[0]?.deleted_at).toBeNull()
+    expect(rows[0]?.deleted).toBe(false)
   })
 
   it.concurrent('still lets an upload-scoped API key update non-deletion fields', async () => {
