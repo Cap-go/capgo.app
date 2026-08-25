@@ -48,28 +48,22 @@ const publishedCliNpmVersion = resolvePublishedCliNpmInstallVersion(publishedCli
 const publishedCliRpcSourceTag = resolvePublishedCliRpcSourceTag(publishedCliTag, publishedCliNpmVersion)
 const publishedCliRpcCalls = extractPublishedCliRpcCalls(publishedCliRpcSourceTag)
 
-async function loadFunctionPrivileges(functionName: string): Promise<FunctionPrivilegeRow[]> {
-  const pool = new Pool({ connectionString: POSTGRES_URL })
-  try {
-    const result = await pool.query<FunctionPrivilegeRow>(`
-      SELECT
-        p.oid::regprocedure::text AS proc,
-        p.proargnames AS "argNames",
-        COALESCE(p.pronargdefaults, 0) AS "defaultCount",
-        p.pronargs AS "argCount",
-        has_function_privilege('anon', p.oid, 'EXECUTE') AS "anonExec"
-      FROM pg_proc AS p
-      INNER JOIN pg_namespace AS n ON n.oid = p.pronamespace
-      WHERE n.nspname = 'public'
-        AND p.proname = $1
-      ORDER BY 1
-    `, [functionName])
+async function loadFunctionPrivileges(pool: Pool, functionName: string): Promise<FunctionPrivilegeRow[]> {
+  const result = await pool.query<FunctionPrivilegeRow>(`
+    SELECT
+      p.oid::regprocedure::text AS proc,
+      p.proargnames AS "argNames",
+      COALESCE(p.pronargdefaults, 0) AS "defaultCount",
+      p.pronargs AS "argCount",
+      has_function_privilege('anon', p.oid, 'EXECUTE') AS "anonExec"
+    FROM pg_proc AS p
+    INNER JOIN pg_namespace AS n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public'
+      AND p.proname = $1
+    ORDER BY 1
+  `, [functionName])
 
-    return result.rows
-  }
-  finally {
-    await pool.end()
-  }
+  return result.rows
 }
 
 function resolveMatchingOverloads(call: PublishedCliRpcCall, rows: FunctionPrivilegeRow[]) {
@@ -110,7 +104,7 @@ describe(`CRITICAL published CLI RPC contract (${publishedCliRpcSourceTag} / npm
     const missing: string[] = []
 
     for (const call of publishedCliRpcCalls) {
-      const overloads = await loadFunctionPrivileges(call.name)
+      const overloads = await loadFunctionPrivileges(pool, call.name)
       expect(overloads.length, `${call.name} is missing from public schema`).toBeGreaterThan(0)
 
       const matches = resolveMatchingOverloads(call, overloads)
