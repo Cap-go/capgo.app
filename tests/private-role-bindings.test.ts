@@ -707,6 +707,7 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
     const appUuid = randomUUID()
     const publicAppId = `com.role-binding.override-cleanup.${id}`
     const supabase = getSupabaseClient()
+    let channelId: number | null = null
 
     try {
       const { error: orgError } = await supabase.from('orgs').insert({
@@ -764,6 +765,7 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
         .select('id')
         .single()
       expect(channelError).toBeNull()
+      channelId = channel!.id
 
       const { data: roles, error: rolesError } = await supabase
         .from('roles')
@@ -838,7 +840,7 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       expect(overrides ?? []).toHaveLength(0)
     }
     finally {
-      await supabase.from('channel_permission_overrides').delete().eq('principal_id', USER_ID_2).eq('channel_id', channel!.id)
+      await supabase.from('channel_permission_overrides').delete().eq('principal_id', USER_ID_2).eq('channel_id', channelId!)
       await supabase.from('role_bindings').delete().eq('org_id', orgId)
       await supabase.from('org_users').delete().eq('org_id', orgId)
       await supabase.from('channels').delete().eq('owner_org', orgId)
@@ -854,6 +856,7 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
     const appUuid = randomUUID()
     const publicAppId = `com.role-binding.org-override-cleanup.${id}`
     const supabase = getSupabaseClient()
+    let channelId: number | null = null
 
     try {
       const { error: orgError } = await supabase.from('orgs').insert({
@@ -920,6 +923,7 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
         .select('id')
         .single()
       expect(channelError).toBeNull()
+      channelId = channel!.id
 
       const { error: overrideError } = await supabase.from('channel_permission_overrides').insert({
         principal_type: 'user',
@@ -986,7 +990,7 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       expect(permissionAfterDelete?.can_promote).toBe(false)
     }
     finally {
-      await supabase.from('channel_permission_overrides').delete().eq('principal_id', USER_ID_2).eq('channel_id', channel!.id)
+      await supabase.from('channel_permission_overrides').delete().eq('principal_id', USER_ID_2).eq('channel_id', channelId!)
       await supabase.from('role_bindings').delete().eq('org_id', orgId)
       await supabase.from('org_users').delete().eq('org_id', orgId)
       await supabase.from('channels').delete().eq('owner_org', orgId)
@@ -1005,6 +1009,7 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
     const publicAppAId = `com.role-binding.org-override-a.${id}`
     const publicAppBId = `com.role-binding.org-override-b.${id}`
     const supabase = getSupabaseClient()
+    const channels: Record<'A' | 'B', number> = { A: 0, B: 0 }
 
     try {
       for (const [orgId, orgLabel] of [[orgAId, 'A'], [orgBId, 'B']] as const) {
@@ -1037,8 +1042,6 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
         { orgId: orgAId, appUuid: appAUuid, publicAppId: publicAppAId, label: 'A' },
         { orgId: orgBId, appUuid: appBUuid, publicAppId: publicAppBId, label: 'B' },
       ] as const
-
-      const channels: Record<'A' | 'B', number> = { A: 0, B: 0 }
 
       for (const appFixture of orgApps) {
         const { error: appError } = await supabase.from('apps').insert({
