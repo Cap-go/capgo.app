@@ -1690,42 +1690,41 @@ async function updateGlobalStatsSnapshot(c: Context, dateId: string, patch: Glob
   await ensureGlobalStatsSnapshotRow(c, dateId)
 
   const { orgs, apps_with_preview, users_with_2fa, ...globalStatsPatch } = patch
-  const updatePayload = {
-    ...globalStatsPatch,
-    ...(apps_with_preview === undefined ? {} : { apps_with_preview }),
-    ...(users_with_2fa === undefined ? {} : { users_with_2fa }),
-  } as GlobalStatsUpdate
-  const { error } = await supabaseAdmin(c)
-    .from('global_stats')
-    .update(updatePayload)
-    .eq('date_id', dateId)
+  let includePreview = apps_with_preview !== undefined
+  let includeUsersWith2fa = users_with_2fa !== undefined
 
-  if (error) {
-    const missingPreview = apps_with_preview !== undefined && isMissingAppsWithPreviewColumnError(error)
-    const missingUsersWith2fa = users_with_2fa !== undefined && isMissingUsersWith2faColumnError(error)
-    if (missingPreview || missingUsersWith2fa) {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'global_stats optional user metric column missing; retrying snapshot update without it',
-        dateId,
-        missingPreview,
-        missingUsersWith2fa,
-        error,
-      })
-      const { error: legacyError } = await supabaseAdmin(c)
-        .from('global_stats')
-        .update({
-          ...globalStatsPatch,
-          ...(missingPreview || apps_with_preview === undefined ? {} : { apps_with_preview }),
-          ...(missingUsersWith2fa || users_with_2fa === undefined ? {} : { users_with_2fa }),
-        } as GlobalStatsUpdate)
-        .eq('date_id', dateId)
-      if (legacyError)
-        throw legacyError
-    }
-    else {
+  while (true) {
+    const updatePayload = {
+      ...globalStatsPatch,
+      ...(includePreview ? { apps_with_preview } : {}),
+      ...(includeUsersWith2fa ? { users_with_2fa } : {}),
+    } as GlobalStatsUpdate
+    const { error } = await supabaseAdmin(c)
+      .from('global_stats')
+      .update(updatePayload)
+      .eq('date_id', dateId)
+
+    if (!error)
+      break
+
+    const missingPreview = includePreview && isMissingAppsWithPreviewColumnError(error)
+    const missingUsersWith2fa = includeUsersWith2fa && isMissingUsersWith2faColumnError(error)
+    if (!missingPreview && !missingUsersWith2fa)
       throw error
-    }
+
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'global_stats optional user metric column missing; retrying snapshot update without it',
+      dateId,
+      missingPreview,
+      missingUsersWith2fa,
+      error,
+    })
+
+    if (missingPreview)
+      includePreview = false
+    if (missingUsersWith2fa)
+      includeUsersWith2fa = false
   }
 
   if (orgs !== undefined)
