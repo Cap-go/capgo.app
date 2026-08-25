@@ -797,17 +797,20 @@ async function enrichNativeObserveSamplesWithDeviceMeta(
   appId: string,
   samples: NativeObserveEventSample[],
   versionGroup: NativeObserveVersionGroup,
+  deviceMetaCache: Map<string, { platform: string, channel_name: string }>,
 ) {
   if (!needsVersionDeviceDimensions(versionGroup) || !samples.length)
     return samples
 
-  const deviceMeta = await readDevicePlatformChannelByIdsCF(
-    c,
-    appId,
-    samples.map(sample => sample.device_id),
-  )
+  const missingDeviceIds = [...new Set(samples.map(sample => sample.device_id).filter(id => !deviceMetaCache.has(id)))]
+  if (missingDeviceIds.length) {
+    const fetchedMeta = await readDevicePlatformChannelByIdsCF(c, appId, missingDeviceIds)
+    for (const [deviceId, meta] of fetchedMeta)
+      deviceMetaCache.set(deviceId, meta)
+  }
+
   return samples.map((sample) => {
-    const meta = deviceMeta.get(sample.device_id)
+    const meta = deviceMetaCache.get(sample.device_id)
     return {
       ...sample,
       platform: meta?.platform ?? 'unknown',
@@ -835,6 +838,8 @@ async function foldNativeObserveTimingEventsCFChunked(
   }
   windows.reverse()
 
+  const deviceMetaCache = new Map<string, { platform: string, channel_name: string }>()
+
   for (let i = 0; i < windows.length && state.events < MAX_NATIVE_OBSERVE_EVENTS; i += NATIVE_OBSERVE_CHUNK_CONCURRENCY) {
     const batch = windows.slice(i, i + NATIVE_OBSERVE_CHUNK_CONCURRENCY)
     const remaining = MAX_NATIVE_OBSERVE_EVENTS - state.events
@@ -854,6 +859,7 @@ async function foldNativeObserveTimingEventsCFChunked(
         appId,
         toNativeObserveEventSamples(chunk),
         state.versionGroup,
+        deviceMetaCache,
       )
       foldNativeObserveSamples(state, samples)
     }

@@ -1374,6 +1374,7 @@ export async function readDevicesCF(c: Context, params: ReadDevicesParams, custo
 }
 
 const DEVICE_PLATFORM_CHANNEL_LOOKUP_CHUNK = 200
+const DEVICE_PLATFORM_CHANNEL_LOOKUP_CONCURRENCY = 4
 
 function platformOsFromCFDouble(platform: number | null | undefined): string {
   if (platform === 1)
@@ -1399,8 +1400,15 @@ export async function readDevicePlatformChannelByIdsCF(
     return result
 
   const uniqueIds = [...new Set(deviceIds.filter(Boolean))]
-  for (let i = 0; i < uniqueIds.length; i += DEVICE_PLATFORM_CHANNEL_LOOKUP_CHUNK) {
-    const chunk = uniqueIds.slice(i, i + DEVICE_PLATFORM_CHANNEL_LOOKUP_CHUNK)
+  const chunks: string[][] = []
+  for (let i = 0; i < uniqueIds.length; i += DEVICE_PLATFORM_CHANNEL_LOOKUP_CHUNK)
+    chunks.push(uniqueIds.slice(i, i + DEVICE_PLATFORM_CHANNEL_LOOKUP_CHUNK))
+
+  if (!chunks.length)
+    return result
+
+  let chunkCursor = 0
+  async function lookupChunk(chunk: string[]) {
     const devicesList = chunk.map(id => `'${escapeSqlString(id)}'`).join(', ')
     const query = `SELECT
   device_id,
@@ -1431,6 +1439,16 @@ FROM (
       cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading device platform/channel map', error: serializeError(e), query })
     }
   }
+
+  async function lookupWorker() {
+    while (chunkCursor < chunks.length) {
+      const chunk = chunks[chunkCursor++]!
+      await lookupChunk(chunk)
+    }
+  }
+
+  const workerCount = Math.min(DEVICE_PLATFORM_CHANNEL_LOOKUP_CONCURRENCY, chunks.length)
+  await Promise.all(Array.from({ length: workerCount }, () => lookupWorker()))
 
   return result
 }

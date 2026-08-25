@@ -231,6 +231,56 @@ describe('native observe stats helpers', () => {
     expect(aggregates.versionRows).toHaveLength(3)
   })
 
+  it.concurrent('aggregates version rows by platform when channel grouping is not requested', () => {
+    const aggregates = nativeObserveStatsTestUtils.aggregateNativeObserveSamples([
+      {
+        day: '2026-07-01',
+        action: 'app_launch_ready',
+        version_name: '1.0.0',
+        device_id: 'android-prod',
+        duration_ms: 400,
+        platform: 'android',
+        channel_name: 'production',
+      },
+      {
+        day: '2026-07-01',
+        action: 'app_launch_ready',
+        version_name: '1.0.0',
+        device_id: 'android-beta',
+        duration_ms: 500,
+        platform: 'android',
+        channel_name: 'beta',
+      },
+      {
+        day: '2026-07-01',
+        action: 'app_launch_ready',
+        version_name: '1.0.0',
+        device_id: 'ios-prod',
+        duration_ms: 450,
+        platform: 'ios',
+        channel_name: 'production',
+      },
+    ], 'version_platform')
+
+    expect(aggregates.versionRows).toEqual([
+      expect.objectContaining({
+        version_name: '1.0.0',
+        platform: 'android',
+        channel_name: null,
+        devices: 2,
+        events: 2,
+      }),
+      expect.objectContaining({
+        version_name: '1.0.0',
+        platform: 'ios',
+        channel_name: null,
+        devices: 1,
+        events: 1,
+      }),
+    ])
+    expect(aggregates.versionRows).toHaveLength(2)
+  })
+
   it.concurrent('maps CF timing events into observe samples', () => {
     expect(nativeObserveStatsTestUtils.toNativeObserveEventSamples([
       {
