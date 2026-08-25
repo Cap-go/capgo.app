@@ -64,7 +64,7 @@ export type Bindings = {
   CLI_USAGE?: AnalyticsEngineDataset
   NOTIFICATION_QUEUE?: Queue
   DB_STOREAPPS: D1Database
-  // /updates colo cache + targeted invalidation (see utils/updates_colo_cache.ts)
+  // /updates colo cache + targeted invalidation (see plugin_runtime/utils/updates_colo_cache.ts)
   UPDATES_CACHE_MODE?: string
   UPDATES_CACHE_TTL_SECONDS?: string
   UPDATES_CACHE_NEGATIVE_TTL_SECONDS?: string

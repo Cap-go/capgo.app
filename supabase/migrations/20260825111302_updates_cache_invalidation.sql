@@ -1,5 +1,5 @@
 -- Targeted invalidation for the /updates colo cache
--- (see supabase/functions/_backend/utils/updates_colo_cache.ts).
+-- (see supabase/functions/_backend/plugin_runtime/utils/updates_colo_cache.ts).
 --
 -- Whenever rows that feed the update hot path change, notify the
 -- triggers/cache_invalidate function (via pg_net, async) which fans the
