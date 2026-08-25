@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { Buffer } from 'node:buffer'
 import { generateKeyPairSync } from 'node:crypto'
-import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { decryptZipInternal } from '../../src/bundle/decrypt'
@@ -80,8 +80,6 @@ describe('bundle decrypt input validation', () => {
       await expect(decryptZipInternal(zipPath, `${iv}:${sessionKey}`, { key: keyPath }, true)).rejects.toThrow(/verify the ivSessionKey and public key/i)
     }
     finally {
-      unlinkSync(zipPath)
-      unlinkSync(keyPath)
       rmSync(tempDir, { recursive: true, force: true })
     }
   })
