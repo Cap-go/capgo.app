@@ -1,4 +1,9 @@
 import { describe, expect, it } from 'bun:test'
+import { Buffer } from 'node:buffer'
+import { generateKeyPairSync } from 'node:crypto'
+import { mkdtempSync, unlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { decryptZipInternal } from '../../src/bundle/decrypt'
 import { encryptZipInternal } from '../../src/bundle/encrypt'
 import { requireIvSessionKey } from '../../src/bundle/validate-inputs'
@@ -58,5 +63,25 @@ describe('bundle decrypt input validation', () => {
     const sessionKey = Buffer.from('encrypted-session-key').toString('base64')
     expect(() => requireIvSessionKey(`${ivMissingPadding}:${sessionKey}`)).toThrow(CliUserError)
     expect(() => requireIvSessionKey(`${ivMissingPadding}:${sessionKey}`)).toThrow(/not valid Base64/i)
+  })
+
+  it('throws CliUserError when session key is valid Base64 but not RSA ciphertext', async () => {
+    const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString()
+    const iv = Buffer.alloc(16, 1).toString('base64')
+    const sessionKey = Buffer.from('encrypted-session-key').toString('base64')
+    const tempDir = mkdtempSync(join(tmpdir(), 'capgo-decrypt-test-'))
+    const zipPath = join(tempDir, 'bundle.zip')
+    const keyPath = join(tempDir, 'test.pub')
+    writeFileSync(zipPath, Buffer.from('fake zip'))
+    writeFileSync(keyPath, publicKeyPem)
+    try {
+      await expect(decryptZipInternal(zipPath, `${iv}:${sessionKey}`, { key: keyPath }, true)).rejects.toBeInstanceOf(CliUserError)
+      await expect(decryptZipInternal(zipPath, `${iv}:${sessionKey}`, { key: keyPath }, true)).rejects.toThrow(/could not be decrypted/i)
+    }
+    finally {
+      unlinkSync(zipPath)
+      unlinkSync(keyPath)
+    }
   })
 })

@@ -1,4 +1,5 @@
 import type { BundleDecryptOptions, DecryptResult } from '../schemas/bundle'
+import { Buffer } from 'node:buffer'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { cwd } from 'node:process'
 import { intro, log, outro } from '@clack/prompts'
@@ -30,6 +31,15 @@ function resolvePublicKey(options: BundleDecryptOptions, extConfig: Awaited<Retu
   }
 
   return { publicKey, fallbackKeyPath }
+}
+
+function toIvSessionKeyDecryptError(error: unknown): CliUserError | null {
+  if (!(error instanceof Error))
+    return null
+  if (/RSA routines/i.test(error.message)) {
+    return new CliUserError('Invalid ivSessionKey. The session key could not be decrypted with your public key.')
+  }
+  return null
 }
 
 export async function decryptZipInternal(
@@ -69,7 +79,16 @@ export async function decryptZipInternal(
 
     const zipFile = readFileSync(zipPath)
 
-    const decodedZip = decryptSource(zipFile, ivsessionKey, options.keyData ?? publicKey)
+    let decodedZip: Buffer
+    try {
+      decodedZip = decryptSource(zipFile, ivsessionKey, options.keyData ?? publicKey)
+    }
+    catch (error) {
+      const ivSessionKeyError = toIvSessionKeyDecryptError(error)
+      if (ivSessionKeyError)
+        throw ivSessionKeyError
+      throw error
+    }
     const outputPath = `${zipPath}_decrypted.zip`
     writeFileSync(outputPath, decodedZip)
 
