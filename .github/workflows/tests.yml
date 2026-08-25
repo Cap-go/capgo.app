@@ -1544,6 +1544,10 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 24.x
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Cache Deno dependencies
         uses: actions/cache@v5 # v5
         with:
@@ -1551,10 +1555,6 @@ jobs:
           key: deno-${{ runner.os }}-${{ hashFiles('supabase/functions/deno.lock') }}
           restore-keys: |
             deno-${{ runner.os }}-
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
       - name: Setup bun
         run: bash scripts/setup-bun.sh
       - name: Install Supabase CLI
