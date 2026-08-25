@@ -27,16 +27,75 @@ const TRANSIENT_PG_SQLSTATES = new Set([
 
 const TRANSIENT_ERROR_MESSAGE_RE = /connection (?:terminated|ended|closed|refused|reset)|timeout exceeded when trying to connect|connect(?:ion)? timed? ?out|canceling statement due to (?:statement|lock) timeout|network(?: |_)?error|socket hang up|hyperdrive|too many clients already/i
 
-const PG_SQLSTATE_RE = /^[0-9A-Z]{5}$/
-
 const DRIZZLE_ERROR_NAMES = new Set(['DrizzleError', 'DrizzleQueryError', 'TransactionRollbackError'])
 
 const DATABASE_MESSAGE_RE = /Failed query:|(?:FROM|INTO|UPDATE|SELECT|INSERT|DELETE)\s+(?:[\w"$]+\.)?[\w"$]+|relation\s+"[^"]+"\s+does not exist|Connection terminated unexpectedly|timeout exceeded when trying to connect|too many clients already|canceling statement due to/i
 
-const PG_CONNECTION_MESSAGE_RE = /:5432\b|postgres(?:ql)?|hyperdrive|pgbouncer|supabase.*(?:db|postgres)/i
+const PG_CONNECTION_MESSAGE_RE = /postgres(?:ql)?(?:\.|:|@|\/|\s|$|-)|hyperdrive|pgbouncer|supabase(?:\.co|abase)?|neon\.tech|\.pooler\.|aws-.*-pooler/i
+
+const NON_DB_CONNECT_PORTS = new Set([80, 443, 8080, 8443, 3000, 5000, 6379])
+
+const PG_SEVERITY_RE = /^(?:ERROR|FATAL|PANIC|WARNING|NOTICE|INFO|LOG|DEBUG)$/i
 
 function isPostgresSqlStateCode(code: string): boolean {
-  return PG_SQLSTATE_RE.test(code) && !TRANSIENT_NODE_ERROR_CODES.has(code)
+  if (code.length !== 5 || TRANSIENT_NODE_ERROR_CODES.has(code))
+    return false
+  if (/^[0-9]{2}[0-9A-Z]{3}$/.test(code))
+    return true
+  if (/^P[0-9]{4}$/.test(code))
+    return true
+  return TRANSIENT_PG_SQLSTATES.has(code)
+}
+
+function hasPgProtocolMetadata(error: unknown): boolean {
+  const severity = readPgErrorField(error, 'severity')
+  if (typeof severity === 'string' && PG_SEVERITY_RE.test(severity))
+    return true
+
+  for (const field of ['routine', 'schema', 'table', 'column', 'detail', 'internalQuery', 'constraint']) {
+    if (readPgErrorField(error, field) !== undefined)
+      return true
+  }
+
+  return false
+}
+
+function readConnectPort(error: unknown): number | undefined {
+  const port = readPgErrorField(error, 'port')
+  if (typeof port === 'number' && Number.isFinite(port))
+    return port
+
+  const message = readPgErrorField(error, 'message')
+  if (typeof message !== 'string')
+    return undefined
+
+  const portMatch = message.match(/:(\d{2,5})\b/)
+  if (!portMatch)
+    return undefined
+
+  const parsedPort = Number(portMatch[1])
+  return Number.isFinite(parsedPort) ? parsedPort : undefined
+}
+
+function isNodePgConnectError(error: unknown): boolean {
+  const code = readPgErrorField(error, 'code')
+  if (typeof code !== 'string' || !TRANSIENT_NODE_ERROR_CODES.has(code))
+    return false
+
+  const syscall = readPgErrorField(error, 'syscall')
+  if (syscall === 'connect') {
+    const port = readConnectPort(error)
+    if (typeof port === 'number')
+      return !NON_DB_CONNECT_PORTS.has(port)
+  }
+
+  const message = readPgErrorField(error, 'message')
+  if (typeof message === 'string') {
+    if (DATABASE_MESSAGE_RE.test(message) || PG_CONNECTION_MESSAGE_RE.test(message))
+      return true
+  }
+
+  return false
 }
 
 export function readPgErrorField(error: unknown, key: string): unknown {
@@ -101,20 +160,15 @@ export function isDatabaseOriginError(error: unknown, depth = 0): boolean {
     if (typeof name === 'string' && DRIZZLE_ERROR_NAMES.has(name))
       return true
 
-    for (const field of ['severity', 'routine', 'schema', 'table', 'column', 'detail']) {
-      if (readPgErrorField(error, field) !== undefined)
-        return true
-    }
+    if (hasPgProtocolMetadata(error))
+      return true
 
     const code = readPgErrorField(error, 'code')
     if (typeof code === 'string') {
       if (isPostgresSqlStateCode(code))
         return true
-      if (TRANSIENT_NODE_ERROR_CODES.has(code)) {
-        const message = readPgErrorField(error, 'message')
-        if (typeof message === 'string' && PG_CONNECTION_MESSAGE_RE.test(message))
-          return true
-      }
+      if (isNodePgConnectError(error))
+        return true
     }
 
     const message = readPgErrorField(error, 'message')

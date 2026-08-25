@@ -102,9 +102,31 @@ describe('pg_errors', () => {
   it('treats postgres connection failures as database-origin transient errors', () => {
     const pgError = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), {
       code: 'ECONNREFUSED',
+      port: 5432,
+      syscall: 'connect',
     })
 
     expect(isDatabaseOriginError(pgError)).toBe(true)
     expect(isTransientDatabaseError(pgError)).toBe(true)
+  })
+
+  it('treats pooler postgres connection failures on non-5432 ports as database-origin', () => {
+    const pgError = Object.assign(new Error('connect ECONNREFUSED db.pooler.example.com:6543'), {
+      code: 'ECONNREFUSED',
+      port: 6543,
+      syscall: 'connect',
+    })
+
+    expect(isDatabaseOriginError(pgError)).toBe(true)
+    expect(isTransientDatabaseError(pgError)).toBe(true)
+  })
+
+  it('does not treat unrelated five-character codes as postgres SQLSTATE', () => {
+    const fetchError = Object.assign(new Error('upstream unavailable'), {
+      code: 'FETCH',
+    })
+
+    expect(isDatabaseOriginError(fetchError)).toBe(false)
+    expect(isTransientDatabaseError(fetchError)).toBe(false)
   })
 })
