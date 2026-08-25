@@ -127,7 +127,7 @@ describe('app fame scoring', () => {
     }])
 
     expect(run).toHaveBeenCalledTimes(1)
-    expect(run.mock.calls[0]?.[0]).toBe('@cf/moonshotai/kimi-k2.6')
+    expect(run.mock.calls[0]?.[0]).toBe('@cf/meta/llama-3.1-8b-instruct-fast')
     expect(result.decisions).toEqual([{
       app_id: 'com.media.app',
       fame_score: 61,

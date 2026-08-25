@@ -5,7 +5,7 @@ import { extractAiText, parseJsonObjectFromAiText } from './workers_ai.ts'
 
 export const APP_FAME_BATCH_SIZE = 12
 export const APP_FAME_STALE_DAYS = 30
-export const DEFAULT_APP_FAME_MODEL = '@cf/moonshotai/kimi-k2.6'
+export const DEFAULT_APP_FAME_MODEL = '@cf/meta/llama-3.1-8b-instruct-fast'
 
 export const APP_FAME_TIERS = ['unknown', 'niche', 'notable', 'famous', 'iconic'] as const
 export type AppFameTier = typeof APP_FAME_TIERS[number]
