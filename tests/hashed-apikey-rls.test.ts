@@ -8,6 +8,7 @@
  * IMPORTANT: This test uses a completely isolated user (USER_ID_RLS) with its own
  * org and API key to prevent interference with other tests that create/delete API keys.
  */
+import type { Database } from '../src/types/supabase.types'
 import type { PoolClient } from 'pg'
 import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
@@ -279,6 +280,29 @@ async function deleteApiKey(id: number): Promise<void> {
   finally {
     client.release()
   }
+}
+
+async function deleteApiKeysBestEffort(ids: number[]): Promise<void> {
+  for (const id of [...ids].reverse()) {
+    try {
+      await deleteApiKey(id)
+    }
+    catch {
+      // Best-effort cleanup must not fail the test.
+    }
+  }
+}
+
+function createCapgkeyClient(capgkey: string) {
+  return createClient<Database>(
+    process.env.SUPABASE_URL!,
+    process.env.SUPABASE_ANON_KEY!,
+    {
+      global: {
+        headers: { capgkey },
+      },
+    },
+  )
 }
 
 // Helper to set API key expiration directly in DB
@@ -1017,48 +1041,220 @@ describe('rls policies with hashed api keys (via supabase sdk)', () => {
     expect(data.length).toBeGreaterThan(0)
   })
 
-  it('can regenerate a hashed API key through the public RPC despite direct apikey update denial', async () => {
-    const keyToRotate = await createHashedApiKey('test-rls-sdk-public-regenerate')
+  it('cannot regenerate a hashed API key through the public RPC without manage_apikeys', async () => {
+    const unprivilegedKey = await createHashedApiKey('test-rls-sdk-public-regenerate-denied', {
+      orgRoleName: 'org_member',
+    })
 
     try {
-      const supabase = createClient(
-        process.env.SUPABASE_URL!,
-        process.env.SUPABASE_ANON_KEY!,
-        {
-          global: {
-            headers: { capgkey: keyToRotate.key },
-          },
-        },
-      )
+      const supabase = createCapgkeyClient(unprivilegedKey.key)
 
-      const { data, error } = await supabase.rpc('regenerate_hashed_apikey' as any, {
+      const { data, error } = await supabase.rpc('regenerate_hashed_apikey', {
+        p_apikey_id: unprivilegedKey.id,
+      })
+
+      expect(error).not.toBeNull()
+      expect(error?.message).toMatch(/PERMISSION_DENIED_MANAGE_APIKEYS/)
+      expect(data).toBeNull()
+
+      const after = await pool.query<{ key_hash: string }>(
+        'SELECT key_hash FROM public.apikeys WHERE id = $1',
+        [unprivilegedKey.id],
+      )
+      expect(after.rows[0]?.key_hash).toBe(unprivilegedKey.key_hash)
+    }
+    finally {
+      await deleteApiKeysBestEffort([unprivilegedKey.id])
+    }
+  })
+
+  it('cannot rotate a sibling hashed API key through the public RPC without manage_apikeys', async () => {
+    const createdKeyIds: number[] = []
+    let siblingKey: { id: number, key: string, key_hash: string } | null = null
+    let unprivilegedKey: { id: number, key: string, key_hash: string } | null = null
+
+    try {
+      siblingKey = await createHashedApiKey('test-rls-sdk-public-regenerate-sibling', {
+        orgRoleName: 'org_admin',
+      })
+      createdKeyIds.push(siblingKey.id)
+
+      unprivilegedKey = await createHashedApiKey('test-rls-sdk-public-regenerate-sibling-reader', {
+        orgRoleName: 'org_member',
+      })
+      createdKeyIds.push(unprivilegedKey.id)
+
+      const supabase = createCapgkeyClient(unprivilegedKey.key)
+
+      const { data, error } = await supabase.rpc('regenerate_hashed_apikey', {
+        p_apikey_id: siblingKey.id,
+      })
+
+      expect(error).not.toBeNull()
+      expect(error?.message).toMatch(/PERMISSION_DENIED_MANAGE_APIKEYS/)
+      expect(data).toBeNull()
+
+      const after = await pool.query<{ key_hash: string }>(
+        'SELECT key_hash FROM public.apikeys WHERE id = $1',
+        [siblingKey.id],
+      )
+      expect(after.rows[0]?.key_hash).toBe(siblingKey.key_hash)
+    }
+    finally {
+      await deleteApiKeysBestEffort(createdKeyIds)
+    }
+  })
+
+  it('ignores expired org bindings when authorizing regenerate_hashed_apikey', async () => {
+    const keyToRotate = await createHashedApiKey('test-rls-sdk-public-regenerate-expired-binding', {
+      orgRoleName: 'org_admin',
+    })
+    const client = await pool.connect()
+
+    try {
+      await client.query('BEGIN')
+      await bindApiKeyRole(
+        client,
+        (await client.query<{ rbac_id: string }>(
+          'SELECT rbac_id FROM public.apikeys WHERE id = $1',
+          [keyToRotate.id],
+        )).rows[0].rbac_id,
+        RLS_TEST_USER_ID,
+        'org_member',
+        'org',
+        ORG_ID_2,
+      )
+      await client.query(
+        `UPDATE public.role_bindings
+         SET expires_at = pg_catalog.now() - interval '1 day'
+         WHERE principal_id = (
+           SELECT rbac_id FROM public.apikeys WHERE id = $1
+         )
+           AND org_id = $2::uuid`,
+        [keyToRotate.id, ORG_ID_2],
+      )
+      await client.query('COMMIT')
+
+      const supabase = createCapgkeyClient(keyToRotate.key)
+      const { data, error } = await supabase.rpc('regenerate_hashed_apikey', {
         p_apikey_id: keyToRotate.id,
       })
 
       expect(error).toBeNull()
-      const regenerated = data as { id: number, key: string, key_hash: string } | null
-      expect(regenerated?.id).toBe(keyToRotate.id)
-      expect(regenerated?.key).toBeTruthy()
-      expect(regenerated?.key).not.toBe(keyToRotate.key)
-      expect(regenerated?.key_hash).not.toBe(keyToRotate.key_hash)
+      expect(data?.id).toBe(keyToRotate.id)
+      expect(data?.key).toBeTruthy()
+      expect(data?.key).not.toBe(keyToRotate.key)
+    }
+    finally {
+      try {
+        await client.query('ROLLBACK')
+      }
+      catch {
+        // Ignore rollback failures for clearer root error handling.
+      }
+      client.release()
+      await deleteApiKeysBestEffort([keyToRotate.id])
+    }
+  })
 
-      const rotatedSupabase = createClient(
-        process.env.SUPABASE_URL!,
-        process.env.SUPABASE_ANON_KEY!,
-        {
-          global: {
-            headers: { capgkey: regenerated!.key },
-          },
-        },
+  it('serializes regenerate_hashed_apikey with concurrent apikey binding mutations', async () => {
+    const keyToRotate = await createHashedApiKey('test-rls-sdk-public-regenerate-lock', {
+      orgRoleName: 'org_admin',
+    })
+    const rbacId = (await pool.query<{ rbac_id: string }>(
+      'SELECT rbac_id FROM public.apikeys WHERE id = $1',
+      [keyToRotate.id],
+    )).rows[0].rbac_id
+
+    const locker = await pool.connect()
+    const binder = await pool.connect()
+    let bindingCompleted = false
+
+    try {
+      await locker.query('BEGIN')
+      await locker.query(
+        'SELECT public.lock_rbac_apikey_principal($1::uuid)',
+        [rbacId],
       )
+
+      const bindingPromise = (async () => {
+        await binder.query('BEGIN')
+        try {
+          await binder.query(
+            `INSERT INTO public.role_bindings (
+              principal_type, principal_id, role_id, scope_type, org_id,
+              granted_by, reason, is_direct
+            )
+            SELECT 'apikey', $1::uuid, roles.id, 'org', $2::uuid, $3::uuid, $4, true
+            FROM public.roles
+            WHERE roles.name = 'org_member'`,
+            [rbacId, ORG_ID_2, RLS_TEST_USER_ID, 'regenerate-lock-race-test'],
+          )
+          await binder.query('COMMIT')
+          bindingCompleted = true
+        }
+        catch (error) {
+          try {
+            await binder.query('ROLLBACK')
+          }
+          catch {
+            // Ignore rollback failures for clearer root error handling.
+          }
+          throw error
+        }
+      })()
+
+      const raced = await Promise.race([
+        bindingPromise.then(() => 'inserted' as const),
+        new Promise<'pending'>(resolve => setTimeout(() => resolve('pending'), 500)),
+      ])
+      expect(raced).toBe('pending')
+      expect(bindingCompleted).toBe(false)
+
+      await locker.query('COMMIT')
+      await bindingPromise
+      expect(bindingCompleted).toBe(true)
+    }
+    finally {
+      await pool.query(
+        `DELETE FROM public.role_bindings
+         WHERE principal_id = $1::uuid
+           AND reason = 'regenerate-lock-race-test'`,
+        [rbacId],
+      )
+      locker.release()
+      binder.release()
+      await deleteApiKeysBestEffort([keyToRotate.id])
+    }
+  })
+
+  it('can regenerate a hashed API key through the public RPC when caller has manage_apikeys', async () => {
+    const keyToRotate = await createHashedApiKey('test-rls-sdk-public-regenerate-allowed', {
+      orgRoleName: 'org_admin',
+    })
+
+    try {
+      const supabase = createCapgkeyClient(keyToRotate.key)
+
+      const { data, error } = await supabase.rpc('regenerate_hashed_apikey', {
+        p_apikey_id: keyToRotate.id,
+      })
+
+      expect(error).toBeNull()
+      expect(data?.id).toBe(keyToRotate.id)
+      expect(data?.key).toBeTruthy()
+      expect(data?.key).not.toBe(keyToRotate.key)
+      expect(data?.key_hash).not.toBe(keyToRotate.key_hash)
+
+      const rotatedSupabase = createCapgkeyClient(data!.key!)
 
       const { data: orgs, error: orgError } = await rotatedSupabase.rpc('get_orgs_v7')
       expect(orgError).toBeNull()
-      expect(Array.isArray(orgs)).toBe(true)
-      expect(orgs.length).toBeGreaterThan(0)
+      expect(orgs).not.toBeNull()
+      expect(orgs!.length).toBeGreaterThan(0)
     }
     finally {
-      await deleteApiKey(keyToRotate.id)
+      await deleteApiKeysBestEffort([keyToRotate.id])
     }
   })
 
