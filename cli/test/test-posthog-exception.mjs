@@ -15,6 +15,7 @@ import {
   shouldCapturePosthogException,
 } from '../src/posthog.ts'
 import { CliUserError } from '../src/shared/cli-user-error.ts'
+import { TwoFactorComplianceNetworkError } from '../src/shared/two-factor-compliance.ts'
 import { CAPGO_SERVER_CONFIG_MISSING_MESSAGE, findSavedKey } from '../src/utils.ts'
 
 const originalFetch = globalThis.fetch
@@ -255,6 +256,10 @@ try {
   assert.equal(shouldCapturePosthogException(new CliUserError('Login cancelled')), false)
   assert.equal(shouldCapturePosthogException(new CliUserError('Upload cancelled by user')), false)
   assert.equal(shouldCapturePosthogException(new CliUserError(CAPGO_SERVER_CONFIG_MISSING_MESSAGE)), false)
+  assert.equal(
+    shouldCapturePosthogException(new TwoFactorComplianceNetworkError()),
+    true,
+  )
   assert.equal(
     shouldCapturePosthogException(new CliUserError(
       'Insufficient permissions for app. Required RBAC permission for this action: app.upload_bundle.',

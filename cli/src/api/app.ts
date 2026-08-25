@@ -3,6 +3,8 @@ import type { Database } from '../types/supabase.types'
 import { log } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { CliUserError } from '../shared/cli-user-error'
+import { isTransientNetworkError } from '../shared/network-error'
+import { TWO_FACTOR_COMPLIANCE_NETWORK_MESSAGE, throwTwoFactorComplianceRpcError } from '../shared/two-factor-compliance'
 import { appAddHintMessage, formatCapgoApiErrorBody, getCapgoCliHttpStatus, hasCliPermission, invokeCapgoCliApi, isCapgoManagedSupabaseHost, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
 
 export async function checkAppExists(
@@ -203,9 +205,13 @@ export async function check2FAComplianceForApp(
     .rpc('reject_access_due_to_2fa_for_app', { app_id: appid })
 
   if (rejectError) {
-    if (!silent)
-      log.error(`Cannot check 2FA compliance: ${rejectError.message}`)
-    throw new Error(`Cannot check 2FA compliance: ${rejectError.message}`)
+    if (!silent) {
+      if (isTransientNetworkError(rejectError))
+        log.error(TWO_FACTOR_COMPLIANCE_NETWORK_MESSAGE)
+      else
+        log.error(`Cannot check 2FA compliance: ${rejectError.message}`)
+    }
+    throwTwoFactorComplianceRpcError(rejectError)
   }
 
   if (shouldReject) {
