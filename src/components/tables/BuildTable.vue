@@ -471,9 +471,6 @@ watch(showSetupFlow, (newValue) => {
           </div>
         </template>
       </DataTable>
-=======
-      />
->>>>>>> 64b92671c (fix(builder): address Cubic review on dedicated builder UI)
     </div>
   </div>
 </template>
