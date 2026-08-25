@@ -96,7 +96,7 @@ describe('app_versions deleted_at requires bundle.delete', () => {
         'UPDATE public.app_versions SET deleted_at = now() WHERE id = $1',
         [versionId],
       )
-    })).rejects.toThrow(/PERMISSION_DENIED_BUNDLE_DELETE|row-level security/i)
+    })).rejects.toThrow(/PERMISSION_DENIED_BUNDLE_DELETE/)
 
     const row = await readVersion(versionId)
     expect(row?.deleted_at).toBeNull()
@@ -111,7 +111,7 @@ describe('app_versions deleted_at requires bundle.delete', () => {
         'UPDATE public.app_versions SET deleted = true WHERE id = $1',
         [versionId],
       )
-    })).rejects.toThrow(/PERMISSION_DENIED_BUNDLE_DELETE|row-level security/i)
+    })).rejects.toThrow(/PERMISSION_DENIED_BUNDLE_DELETE/)
 
     const row = await readVersion(versionId)
     expect(row?.deleted).toBe(false)
@@ -157,12 +157,33 @@ describe('app_versions deleted_at requires bundle.delete', () => {
   it.concurrent('lets service_role set deleted_at without a user-context grant', async () => {
     const versionId = await insertVersion(`service-deleted-at-${randomUUID()}`)
 
-    const rows = await executeSQL<{ id: number, deleted_at: string | null }>(
-      'UPDATE public.app_versions SET deleted_at = now() WHERE id = $1 RETURNING id, deleted_at',
-      [versionId],
-    )
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query(
+        'SELECT set_config($1, $2, true)',
+        ['request.jwt.claim.role', 'service_role'],
+      )
+      await client.query(
+        'SELECT set_config($1, $2, true)',
+        ['request.jwt.claims', JSON.stringify({ role: 'service_role' })],
+      )
+      await client.query('SET LOCAL ROLE service_role')
+      const result = await client.query<{ id: number, deleted_at: string | null }>(
+        'UPDATE public.app_versions SET deleted_at = now() WHERE id = $1 RETURNING id, deleted_at',
+        [versionId],
+      )
+      await client.query('COMMIT')
 
-    expect(rows).toHaveLength(1)
-    expect(rows[0]?.deleted_at).toBeTruthy()
+      expect(result.rowCount).toBe(1)
+      expect(result.rows[0]?.deleted_at).toBeTruthy()
+    }
+    catch (error) {
+      await client.query('ROLLBACK')
+      throw error
+    }
+    finally {
+      client.release()
+    }
   })
 })
