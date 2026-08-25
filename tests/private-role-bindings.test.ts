@@ -5,7 +5,7 @@ import { Pool } from 'pg'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { validatePrincipalAccess, validateRoleScope } from '../supabase/functions/_backend/private/role_bindings.ts'
 import { getDrizzleClient } from '../supabase/functions/_backend/utils/pg.ts'
-import { getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, USER_ID, USER_ID_2, USER_PASSWORD } from './test-utils.ts'
+import { getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, USER_ID, USER_ID_2, USER_PASSWORD, executeSQL } from './test-utils.ts'
 
 let authHeaders: Record<string, string>
 let user2AuthHeaders: Record<string, string>
@@ -707,6 +707,7 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
     const appUuid = randomUUID()
     const publicAppId = `com.role-binding.override-cleanup.${id}`
     const supabase = getSupabaseClient()
+    let channelId: number | null = null
 
     try {
       const { error: orgError } = await supabase.from('orgs').insert({
@@ -764,6 +765,7 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
         .select('id')
         .single()
       expect(channelError).toBeNull()
+      channelId = channel!.id
 
       const { data: roles, error: rolesError } = await supabase
         .from('roles')
@@ -838,13 +840,322 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       expect(overrides ?? []).toHaveLength(0)
     }
     finally {
-      await supabase.from('channel_permission_overrides').delete().eq('principal_id', USER_ID_2)
+      await supabase.from('channel_permission_overrides').delete().eq('principal_id', USER_ID_2).eq('channel_id', channelId!)
       await supabase.from('role_bindings').delete().eq('org_id', orgId)
       await supabase.from('org_users').delete().eq('org_id', orgId)
       await supabase.from('channels').delete().eq('owner_org', orgId)
       await supabase.from('app_versions').delete().eq('owner_org', orgId)
       await supabase.from('apps').delete().eq('id', appUuid)
       await supabase.from('orgs').delete().eq('id', orgId)
+    }
+  })
+
+  it.concurrent('removes user channel permission overrides when the last org binding is deleted', async () => {
+    const id = randomUUID()
+    const orgId = randomUUID()
+    const appUuid = randomUUID()
+    const publicAppId = `com.role-binding.org-override-cleanup.${id}`
+    const supabase = getSupabaseClient()
+    let channelId: number | null = null
+
+    try {
+      const { error: orgError } = await supabase.from('orgs').insert({
+        id: orgId,
+        created_by: USER_ID,
+        name: `Role Binding Org Override Cleanup ${id}`,
+        management_email: `role-binding-org-override-cleanup-${id}@capgo.app`,
+      })
+      expect(orgError).toBeNull()
+
+      const { error: managerMemberError } = await supabase.from('org_users').insert({
+        org_id: orgId,
+        user_id: USER_ID,
+        rbac_role_name: 'org_super_admin',
+      })
+      expect(managerMemberError).toBeNull()
+      await createUserOrgBinding(orgId, USER_ID, 'org_super_admin', USER_ID)
+
+      const { error: targetMemberError } = await supabase.from('org_users').insert({
+        org_id: orgId,
+        user_id: USER_ID_2,
+        rbac_role_name: 'org_member',
+      })
+      expect(targetMemberError).toBeNull()
+      await createUserOrgBinding(orgId, USER_ID_2, 'org_member', USER_ID)
+
+      const { error: appError } = await supabase.from('apps').insert({
+        id: appUuid,
+        app_id: publicAppId,
+        owner_org: orgId,
+        icon_url: 'role-binding-test-icon',
+        name: `Org Override Cleanup App ${id}`,
+      })
+      expect(appError).toBeNull()
+
+      const versionName = `role-binding-org-version-${id.slice(0, 8)}`
+      const { data: version, error: versionError } = await supabase
+        .from('app_versions')
+        .insert({
+          app_id: publicAppId,
+          name: versionName,
+          owner_org: orgId,
+          user_id: USER_ID,
+          checksum: `checksum-${id}`,
+          storage_provider: 'r2',
+          r2_path: `orgs/${orgId}/apps/${publicAppId}/${versionName}.zip`,
+          deleted: false,
+        })
+        .select('id')
+        .single()
+      expect(versionError).toBeNull()
+
+      const { data: channel, error: channelError } = await supabase
+        .from('channels')
+        .insert({
+          app_id: publicAppId,
+          name: `role-binding-org-channel-${id.slice(0, 8)}`,
+          version: version!.id,
+          owner_org: orgId,
+          created_by: USER_ID,
+          public: false,
+          allow_emulator: false,
+        })
+        .select('id')
+        .single()
+      expect(channelError).toBeNull()
+      channelId = channel!.id
+
+      const { error: overrideError } = await supabase.from('channel_permission_overrides').insert({
+        principal_type: 'user',
+        principal_id: USER_ID_2,
+        channel_id: channel!.id,
+        permission_key: 'channel.promote_bundle',
+        is_allowed: true,
+      })
+      expect(overrideError).toBeNull()
+
+      const [permissionBeforeDelete] = await executeSQL<{ can_promote: boolean }>(
+        `SELECT public.rbac_check_permission_direct(
+          'channel.promote_bundle',
+          $1::uuid,
+          $2::uuid,
+          $3,
+          $4::bigint,
+          NULL
+        ) AS can_promote`,
+        [USER_ID_2, orgId, publicAppId, channel!.id],
+      )
+      expect(permissionBeforeDelete?.can_promote).toBe(true)
+
+      const { data: orgBinding, error: orgBindingError } = await supabase
+        .from('role_bindings')
+        .select('id')
+        .eq('principal_type', 'user')
+        .eq('principal_id', USER_ID_2)
+        .eq('scope_type', 'org')
+        .eq('org_id', orgId)
+        .single()
+      expect(orgBindingError).toBeNull()
+
+      const deleteResponse = await fetch(getEndpointUrl(`/private/role_bindings/${orgBinding!.id}`), {
+        method: 'DELETE',
+        headers: authHeaders,
+      })
+      const deleteData = await deleteResponse.json() as { success?: boolean, error?: string }
+
+      expect(deleteResponse.status).toBe(200)
+      expect(deleteData.success).toBe(true)
+
+      const { data: overrides, error: overridesError } = await supabase
+        .from('channel_permission_overrides')
+        .select('id')
+        .eq('principal_type', 'user')
+        .eq('principal_id', USER_ID_2)
+        .eq('channel_id', channel!.id)
+
+      expect(overridesError).toBeNull()
+      expect(overrides ?? []).toHaveLength(0)
+
+      const [permissionAfterDelete] = await executeSQL<{ can_promote: boolean }>(
+        `SELECT public.rbac_check_permission_direct(
+          'channel.promote_bundle',
+          $1::uuid,
+          $2::uuid,
+          $3,
+          $4::bigint,
+          NULL
+        ) AS can_promote`,
+        [USER_ID_2, orgId, publicAppId, channel!.id],
+      )
+      expect(permissionAfterDelete?.can_promote).toBe(false)
+    }
+    finally {
+      await supabase.from('channel_permission_overrides').delete().eq('principal_id', USER_ID_2).eq('channel_id', channelId!)
+      await supabase.from('role_bindings').delete().eq('org_id', orgId)
+      await supabase.from('org_users').delete().eq('org_id', orgId)
+      await supabase.from('channels').delete().eq('owner_org', orgId)
+      await supabase.from('app_versions').delete().eq('owner_org', orgId)
+      await supabase.from('apps').delete().eq('id', appUuid)
+      await supabase.from('orgs').delete().eq('id', orgId)
+    }
+  })
+
+  it.concurrent('keeps channel permission overrides in other orgs when one org binding is removed', async () => {
+    const id = randomUUID()
+    const orgAId = randomUUID()
+    const orgBId = randomUUID()
+    const appAUuid = randomUUID()
+    const appBUuid = randomUUID()
+    const publicAppAId = `com.role-binding.org-override-a.${id}`
+    const publicAppBId = `com.role-binding.org-override-b.${id}`
+    const supabase = getSupabaseClient()
+    const channels: Record<'A' | 'B', number> = { A: 0, B: 0 }
+
+    try {
+      for (const [orgId, orgLabel] of [[orgAId, 'A'], [orgBId, 'B']] as const) {
+        const { error: orgError } = await supabase.from('orgs').insert({
+          id: orgId,
+          created_by: USER_ID,
+          name: `Role Binding Org Override ${orgLabel} ${id}`,
+          management_email: `role-binding-org-override-${orgLabel.toLowerCase()}-${id}@capgo.app`,
+        })
+        expect(orgError).toBeNull()
+
+        const { error: managerMemberError } = await supabase.from('org_users').insert({
+          org_id: orgId,
+          user_id: USER_ID,
+          rbac_role_name: 'org_super_admin',
+        })
+        expect(managerMemberError).toBeNull()
+        await createUserOrgBinding(orgId, USER_ID, 'org_super_admin', USER_ID)
+
+        const { error: targetMemberError } = await supabase.from('org_users').insert({
+          org_id: orgId,
+          user_id: USER_ID_2,
+          rbac_role_name: 'org_member',
+        })
+        expect(targetMemberError).toBeNull()
+        await createUserOrgBinding(orgId, USER_ID_2, 'org_member', USER_ID)
+      }
+
+      const orgApps = [
+        { orgId: orgAId, appUuid: appAUuid, publicAppId: publicAppAId, label: 'A' },
+        { orgId: orgBId, appUuid: appBUuid, publicAppId: publicAppBId, label: 'B' },
+      ] as const
+
+      for (const appFixture of orgApps) {
+        const { error: appError } = await supabase.from('apps').insert({
+          id: appFixture.appUuid,
+          app_id: appFixture.publicAppId,
+          owner_org: appFixture.orgId,
+          icon_url: 'role-binding-test-icon',
+          name: `Org Override Cleanup App ${appFixture.label} ${id}`,
+        })
+        expect(appError).toBeNull()
+
+        const versionName = `role-binding-org-${appFixture.label}-version-${id.slice(0, 8)}`
+        const { data: version, error: versionError } = await supabase
+          .from('app_versions')
+          .insert({
+            app_id: appFixture.publicAppId,
+            name: versionName,
+            owner_org: appFixture.orgId,
+            user_id: USER_ID,
+            checksum: `checksum-${appFixture.label}-${id}`,
+            storage_provider: 'r2',
+            r2_path: `orgs/${appFixture.orgId}/apps/${appFixture.publicAppId}/${versionName}.zip`,
+            deleted: false,
+          })
+          .select('id')
+          .single()
+        expect(versionError).toBeNull()
+
+        const { data: channel, error: channelError } = await supabase
+          .from('channels')
+          .insert({
+            app_id: appFixture.publicAppId,
+            name: `role-binding-org-channel-${appFixture.label}-${id.slice(0, 8)}`,
+            version: version!.id,
+            owner_org: appFixture.orgId,
+            created_by: USER_ID,
+            public: false,
+            allow_emulator: false,
+          })
+          .select('id')
+          .single()
+        expect(channelError).toBeNull()
+        channels[appFixture.label] = channel!.id
+
+        const { error: overrideError } = await supabase.from('channel_permission_overrides').insert({
+          principal_type: 'user',
+          principal_id: USER_ID_2,
+          channel_id: channel!.id,
+          permission_key: 'channel.promote_bundle',
+          is_allowed: true,
+        })
+        expect(overrideError).toBeNull()
+      }
+
+      const { data: orgABinding, error: orgABindingError } = await supabase
+        .from('role_bindings')
+        .select('id')
+        .eq('principal_type', 'user')
+        .eq('principal_id', USER_ID_2)
+        .eq('scope_type', 'org')
+        .eq('org_id', orgAId)
+        .single()
+      expect(orgABindingError).toBeNull()
+
+      const deleteResponse = await fetch(getEndpointUrl(`/private/role_bindings/${orgABinding!.id}`), {
+        method: 'DELETE',
+        headers: authHeaders,
+      })
+      const deleteData = await deleteResponse.json() as { success?: boolean, error?: string }
+
+      expect(deleteResponse.status).toBe(200)
+      expect(deleteData.success).toBe(true)
+
+      const { data: orgAOverrides, error: orgAOverridesError } = await supabase
+        .from('channel_permission_overrides')
+        .select('id')
+        .eq('principal_type', 'user')
+        .eq('principal_id', USER_ID_2)
+        .eq('channel_id', channels.A)
+
+      expect(orgAOverridesError).toBeNull()
+      expect(orgAOverrides ?? []).toHaveLength(0)
+
+      const { data: orgBOverrides, error: orgBOverridesError } = await supabase
+        .from('channel_permission_overrides')
+        .select('id')
+        .eq('principal_type', 'user')
+        .eq('principal_id', USER_ID_2)
+        .eq('channel_id', channels.B)
+
+      expect(orgBOverridesError).toBeNull()
+      expect(orgBOverrides ?? []).toHaveLength(1)
+
+      const [orgBPermission] = await executeSQL<{ can_promote: boolean }>(
+        `SELECT public.rbac_check_permission_direct(
+          'channel.promote_bundle',
+          $1::uuid,
+          $2::uuid,
+          $3,
+          $4::bigint,
+          NULL
+        ) AS can_promote`,
+        [USER_ID_2, orgBId, publicAppBId, channels.B],
+      )
+      expect(orgBPermission?.can_promote).toBe(true)
+    }
+    finally {
+      await supabase.from('channel_permission_overrides').delete().eq('principal_id', USER_ID_2).in('channel_id', [channels.A, channels.B])
+      await supabase.from('role_bindings').delete().in('org_id', [orgAId, orgBId])
+      await supabase.from('org_users').delete().in('org_id', [orgAId, orgBId])
+      await supabase.from('channels').delete().in('owner_org', [orgAId, orgBId])
+      await supabase.from('app_versions').delete().in('owner_org', [orgAId, orgBId])
+      await supabase.from('apps').delete().in('id', [appAUuid, appBUuid])
+      await supabase.from('orgs').delete().in('id', [orgAId, orgBId])
     }
   })
 })

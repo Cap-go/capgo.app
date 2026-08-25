@@ -774,6 +774,29 @@ async function deleteChannelPermissionOverridesForBinding(
             )
         )
     `)
+    return
+  }
+
+  if (binding.scope_type === 'org' && binding.org_id) {
+    await tx.execute(sql`
+      DELETE FROM public.channel_permission_overrides AS overrides
+      USING public.channels AS channels
+      INNER JOIN public.apps AS apps
+        ON apps.app_id = channels.app_id
+      WHERE overrides.channel_id = channels.id
+        AND apps.owner_org = ${binding.org_id}
+        AND overrides.principal_type = ${binding.principal_type}
+        AND overrides.principal_id = ${binding.principal_id}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM public.role_bindings AS remaining_bindings
+          WHERE remaining_bindings.id <> ${binding.id}
+            AND remaining_bindings.principal_type = ${binding.principal_type}
+            AND remaining_bindings.principal_id = ${binding.principal_id}
+            AND remaining_bindings.org_id = ${binding.org_id}
+            AND (remaining_bindings.expires_at IS NULL OR remaining_bindings.expires_at > now())
+        )
+    `)
   }
 }
 
