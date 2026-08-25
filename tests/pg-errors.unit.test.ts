@@ -121,6 +121,51 @@ describe('pg_errors', () => {
     expect(isTransientDatabaseError(pgError)).toBe(true)
   })
 
+  it('detects message-only postgres connection failures on standard ports', () => {
+    const pgError = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), {
+      code: 'ECONNREFUSED',
+    })
+
+    expect(isDatabaseOriginError(pgError)).toBe(true)
+    expect(isTransientDatabaseError(pgError)).toBe(true)
+  })
+
+  it('does not treat redis or mongo connection failures as database-origin', () => {
+    const redisError = Object.assign(new Error('connect ECONNREFUSED cache.example.com:6379'), {
+      code: 'ECONNREFUSED',
+      port: 6379,
+      syscall: 'connect',
+    })
+    const mongoError = Object.assign(new Error('connect ECONNREFUSED mongo.example.com:27017'), {
+      code: 'ECONNREFUSED',
+      port: 27017,
+      syscall: 'connect',
+    })
+
+    expect(isDatabaseOriginError(redisError)).toBe(false)
+    expect(isDatabaseOriginError(mongoError)).toBe(false)
+  })
+
+  it('does not treat supabase API hostnames as postgres connection failures', () => {
+    const authError = Object.assign(new Error('connect ECONNREFUSED xyzabcdef.supabase.co:443'), {
+      code: 'ECONNREFUSED',
+      port: 443,
+      syscall: 'connect',
+    })
+
+    expect(isDatabaseOriginError(authError)).toBe(false)
+  })
+
+  it('treats supabase db hostnames as postgres connection failures', () => {
+    const dbError = Object.assign(new Error('connect ECONNREFUSED db.xyzabcdef.supabase.co:5432'), {
+      code: 'ECONNREFUSED',
+      port: 5432,
+      syscall: 'connect',
+    })
+
+    expect(isDatabaseOriginError(dbError)).toBe(true)
+  })
+
   it('does not treat unrelated five-character codes as postgres SQLSTATE', () => {
     const fetchError = Object.assign(new Error('upstream unavailable'), {
       code: 'FETCH',

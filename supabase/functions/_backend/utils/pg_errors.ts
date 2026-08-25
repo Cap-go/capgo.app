@@ -31,9 +31,11 @@ const DRIZZLE_ERROR_NAMES = new Set(['DrizzleError', 'DrizzleQueryError', 'Trans
 
 const DATABASE_MESSAGE_RE = /Failed query:|(?:FROM|INTO|UPDATE|SELECT|INSERT|DELETE)\s+(?:[\w"$]+\.)?[\w"$]+|relation\s+"[^"]+"\s+does not exist|Connection terminated unexpectedly|timeout exceeded when trying to connect|too many clients already|canceling statement due to/i
 
-const PG_CONNECTION_MESSAGE_RE = /postgres(?:ql)?(?:\.|:|@|\/|\s|$|-)|hyperdrive|pgbouncer|supabase(?:\.co|abase)?|neon\.tech|\.pooler\.|aws-.*-pooler/i
+const PG_CONNECTION_MESSAGE_RE = /postgres(?:ql)?(?:\.|:|@|\/|\s|$|-)|hyperdrive|pgbouncer|db\.[\w.-]+\.supabase\.(?:co|com)|neon\.tech|\.pooler\.|aws-.*-pooler/i
 
-const NON_DB_CONNECT_PORTS = new Set([80, 443, 8080, 8443, 3000, 5000, 6379])
+const PG_CONNECT_PORTS = new Set([5432, 5433, 6543, 6432])
+
+const PG_CONNECT_PORT_MESSAGE_RE = /:(5432|5433|6543|6432)\b/
 
 const PG_SEVERITY_RE = /^(?:ERROR|FATAL|PANIC|WARNING|NOTICE|INFO|LOG|DEBUG)$/i
 
@@ -82,20 +84,16 @@ function isNodePgConnectError(error: unknown): boolean {
   if (typeof code !== 'string' || !TRANSIENT_NODE_ERROR_CODES.has(code))
     return false
 
-  const syscall = readPgErrorField(error, 'syscall')
-  if (syscall === 'connect') {
-    const port = readConnectPort(error)
-    if (typeof port === 'number')
-      return !NON_DB_CONNECT_PORTS.has(port)
-  }
-
   const message = readPgErrorField(error, 'message')
   if (typeof message === 'string') {
     if (DATABASE_MESSAGE_RE.test(message) || PG_CONNECTION_MESSAGE_RE.test(message))
       return true
+    if (PG_CONNECT_PORT_MESSAGE_RE.test(message))
+      return true
   }
 
-  return false
+  const port = readConnectPort(error)
+  return typeof port === 'number' && PG_CONNECT_PORTS.has(port)
 }
 
 export function readPgErrorField(error: unknown, key: string): unknown {
