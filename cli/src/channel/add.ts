@@ -6,6 +6,7 @@ import { trackEvent } from '../analytics/track'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { createChannel, findChannel } from '../api/channels'
 import { isChannelAlreadyExistsError } from '../init/channel-conflict'
+import { CliUserError } from '../shared/cli-user-error'
 import {
   createSupabaseClient,
   findSavedKey,
@@ -81,7 +82,7 @@ export async function addChannelInternal(channelId: string, appId: string, optio
   if (!appId) {
     if (!silent)
       log.error('Missing argument, you need to provide a appId, or be in a capacitor project')
-    throw new Error('Missing appId')
+    throw new CliUserError('Missing appId')
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon, silent)

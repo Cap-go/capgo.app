@@ -85,7 +85,7 @@ export async function encryptZipInternal(
         else
           log.warning('Warning: Missing Public Key in config')
       }
-      throw new Error('Missing public key in config')
+      throw new CliUserError('Missing public key in config')
     }
 
     if (!privateKey) {
