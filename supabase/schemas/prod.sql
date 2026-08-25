@@ -27,6 +27,12 @@ CREATE EXTENSION IF NOT EXISTS "pg_net" WITH SCHEMA "extensions";
 
 
 
+CREATE SCHEMA IF NOT EXISTS "pganalyze";
+
+
+ALTER SCHEMA "pganalyze" OWNER TO "postgres";
+
+
 
 
 ALTER SCHEMA "public" OWNER TO "postgres";
@@ -378,6 +384,33 @@ CREATE TYPE "public"."version_action" AS ENUM (
 
 
 ALTER TYPE "public"."version_action" OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "pganalyze"."get_column_stats"() RETURNS TABLE("schemaname" "name", "tablename" "name", "attname" "name", "inherited" boolean, "null_frac" real, "avg_width" integer, "n_distinct" real, "correlation" real)
+    LANGUAGE "sql" SECURITY DEFINER
+    AS $$
+  /* pganalyze-collector */
+  SELECT schemaname, tablename, attname, inherited, null_frac, avg_width, n_distinct, correlation
+  FROM pg_catalog.pg_stats
+  WHERE schemaname NOT IN ('pg_catalog', 'information_schema') AND tablename <> 'pg_subscription';
+$$;
+
+
+ALTER FUNCTION "pganalyze"."get_column_stats"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "pganalyze"."get_relation_stats_ext"() RETURNS TABLE("statistics_schemaname" "text", "statistics_name" "text", "inherited" boolean, "n_distinct" "pg_ndistinct", "dependencies" "pg_dependencies", "most_common_val_nulls" boolean[], "most_common_freqs" double precision[], "most_common_base_freqs" double precision[])
+    LANGUAGE "sql" SECURITY DEFINER
+    AS $$
+  /* pganalyze-collector */ SELECT statistics_schemaname::text, statistics_name::text,
+  (row_to_json(se.*)::jsonb ->> 'inherited')::boolean AS inherited, n_distinct, dependencies,
+  most_common_val_nulls, most_common_freqs, most_common_base_freqs
+  FROM pg_catalog.pg_stats_ext se
+  WHERE schemaname NOT IN ('pg_catalog', 'information_schema') AND tablename <> 'pg_subscription';
+$$;
+
+
+ALTER FUNCTION "pganalyze"."get_relation_stats_ext"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."accept_invitation_to_org"("org_id" "uuid") RETURNS character varying
@@ -9950,6 +9983,68 @@ $$;
 ALTER FUNCTION "public"."hook_before_user_created"("event" "jsonb") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."hook_send_email"("event" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_action_type text;
+  v_email text;
+BEGIN
+  v_email := btrim(COALESCE(event -> 'user' ->> 'email', ''));
+  v_action_type := btrim(
+    COALESCE(event -> 'email_data' ->> 'email_action_type', '')
+  );
+
+  IF v_email = '' THEN
+    RETURN jsonb_build_object(
+      'error', jsonb_build_object(
+        'http_code', 400,
+        'message', 'Send email hook missing user email'
+      )
+    );
+  END IF;
+
+  IF v_action_type = '' THEN
+    RETURN jsonb_build_object(
+      'error', jsonb_build_object(
+        'http_code', 400,
+        'message', 'Send email hook missing email_action_type'
+      )
+    );
+  END IF;
+
+  -- Same envelope as other function queues: event goes onto pgmq. Cron later
+  -- calls the consumer, which reads the job and marks it done.
+  PERFORM pgmq.send(
+    'send_email',
+    jsonb_build_object(
+      'function_name', 'send_email',
+      'function_type', 'cloudflare',
+      'payload', event
+    )
+  );
+
+  RETURN '{}'::jsonb;
+EXCEPTION
+  WHEN OTHERS THEN
+    RETURN jsonb_build_object(
+      'error', jsonb_build_object(
+        'http_code', 500,
+        'message', 'Failed to enqueue auth email'
+      )
+    );
+END;
+$$;
+
+
+ALTER FUNCTION "public"."hook_send_email"("event" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."hook_send_email"("event" "jsonb") IS 'GoTrue Send Email hook. Enqueues auth mail onto pgmq send_email.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."internal_request_db_user_names"() RETURNS "text"[]
     LANGUAGE "sql" IMMUTABLE
     SET "search_path" TO ''
@@ -11033,31 +11128,6 @@ ALTER FUNCTION "public"."is_platform_admin"("userid" "uuid") OWNER TO "postgres"
 
 COMMENT ON FUNCTION "public"."is_platform_admin"("userid" "uuid") IS 'Checks platform admin status from admin_users and requires MFA.';
 
-
-
-CREATE OR REPLACE FUNCTION "public"."is_rbac_enabled_globally"() RETURNS 
-    LANGUAGE "plpgsql" STABLE
-    SET "search_path" TO ''
-    AS $$
-DECLARE
-  v_setting text;
-BEGIN
-  SELECT decrypted_secret
-  INTO v_setting
-  FROM vault.decrypted_secrets
-  WHERE name = 'CAPGO_RBAC_ENABLED'
-  LIMIT 1;
-
-  IF v_setting IS NULL OR btrim(v_setting) = '' THEN
-    RETURN false;
-  END IF;
-
-  RETURN lower(v_setting) IN ('1', 'true', 'on', 'yes');
-END;
-$$;
-
-
-ALTER FUNCTION "public"."is_rbac_enabled_globally"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."is_recent_email_otp_verified"("user_id" "uuid") RETURNS boolean
@@ -12930,7 +13000,14 @@ CREATE OR REPLACE FUNCTION "public"."process_admin_stats"() RETURNS "void"
     SET "search_path" TO ''
     AS $$
 BEGIN
-  PERFORM pgmq.send('admin_stats', jsonb_build_object('function_name','logsnag_insights','function_type','cloudflare','payload',jsonb_build_object()));
+  PERFORM pgmq.send(
+    'admin_stats',
+    jsonb_build_object(
+      'function_name', 'global_stats',
+      'function_type', 'cloudflare',
+      'payload', jsonb_build_object()
+    )
+  );
 END;
 $$;
 
@@ -22331,7 +22408,7 @@ ALTER TABLE ONLY "public"."user_security"
 
 
 ALTER TABLE "public"."users"
-    ADD CONSTRAINT "users_onboarding_valid" CHECK ((("jsonb_typeof"("onboarding") = 'object'::"text") AND ("octet_length"(("onboarding")::"text") <= 8192) AND ((NOT ("onboarding" ? 'status'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'status'::"text")) = 'string'::"text") AND (("onboarding" ->> 'status'::"text") = ANY (ARRAY['in_progress'::"text", 'completed'::"text", 'abandoned'::"text"])))) AND ((NOT ("onboarding" ? 'step'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'step'::"text")) = 'string'::"text") AND (("onboarding" ->> 'step'::"text") = ANY (ARRAY['intent'::"text", 'details'::"text", 'organization'::"text", 'choice'::"text", 'install'::"text", 'setup'::"text"])))) AND ((NOT ("onboarding" ? 'flow'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'flow'::"text")) = 'string'::"text") AND (("onboarding" ->> 'flow'::"text") = ANY (ARRAY['pre_org'::"text", 'existing_org'::"text"])))) AND ((NOT ("onboarding" ? 'intent'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'intent'::"text")) = 'string'::"text") AND (("onboarding" ->> 'intent'::"text") = ANY (ARRAY['ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text"])))))) NOT VALID;
+    ADD CONSTRAINT "users_onboarding_valid" CHECK ((("jsonb_typeof"("onboarding") = 'object'::"text") AND ("octet_length"(("onboarding")::"text") <= 65536) AND ((NOT ("onboarding" ? 'status'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'status'::"text")) = 'string'::"text") AND (("onboarding" ->> 'status'::"text") = ANY (ARRAY['in_progress'::"text", 'completed'::"text", 'abandoned'::"text"])))) AND ((NOT ("onboarding" ? 'step'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'step'::"text")) = 'string'::"text") AND (("onboarding" ->> 'step'::"text") = ANY (ARRAY['intent'::"text", 'details'::"text", 'organization'::"text", 'choice'::"text", 'install'::"text", 'setup'::"text"])))) AND ((NOT ("onboarding" ? 'flow'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'flow'::"text")) = 'string'::"text") AND (("onboarding" ->> 'flow'::"text") = ANY (ARRAY['pre_org'::"text", 'existing_org'::"text"])))) AND ((NOT ("onboarding" ? 'intent'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'intent'::"text")) = 'string'::"text") AND (("onboarding" ->> 'intent'::"text") = ANY (ARRAY['ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text"])))))) NOT VALID;
 
 
 
@@ -25018,11 +25095,16 @@ ALTER PUBLICATION "capgo_google_eu_2_pub" ADD TABLE ONLY "public"."stripe_info";
 
 
 
+GRANT USAGE ON SCHEMA "pganalyze" TO "pganalyze";
+
+
+
 REVOKE USAGE ON SCHEMA "public" FROM PUBLIC;
 GRANT USAGE ON SCHEMA "public" TO "anon";
 GRANT USAGE ON SCHEMA "public" TO "authenticated";
 GRANT USAGE ON SCHEMA "public" TO "service_role";
 GRANT USAGE ON SCHEMA "public" TO "supabase_auth_admin";
+GRANT USAGE ON SCHEMA "public" TO "pganalyze";
 
 
 
@@ -26123,13 +26205,11 @@ GRANT ALL ON FUNCTION "public"."get_org_members_rbac"("p_org_id" "uuid") TO "ser
 
 REVOKE ALL ON FUNCTION "public"."get_org_perm_for_apikey"("apikey" "text", "app_id" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."get_org_perm_for_apikey"("apikey" "text", "app_id" "text") TO "service_role";
-GRANT ALL ON FUNCTION "public"."get_org_perm_for_apikey"("apikey" "text", "app_id" "text") TO "anon";
 GRANT ALL ON FUNCTION "public"."get_org_perm_for_apikey"("apikey" "text", "app_id" "text") TO "authenticated";
 
 
 
 REVOKE ALL ON FUNCTION "public"."get_org_perm_for_apikey_v2"("apikey" "text", "app_id" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."get_org_perm_for_apikey_v2"("apikey" "text", "app_id" "text") TO "anon";
 GRANT ALL ON FUNCTION "public"."get_org_perm_for_apikey_v2"("apikey" "text", "app_id" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."get_org_perm_for_apikey_v2"("apikey" "text", "app_id" "text") TO "service_role";
 
@@ -26244,14 +26324,12 @@ REVOKE ALL ON FUNCTION "public"."get_update_stats"() FROM PUBLIC;
 REVOKE ALL ON FUNCTION "public"."get_user_id"("apikey" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."get_user_id"("apikey" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."get_user_id"("apikey" "text") TO "service_role";
-GRANT ALL ON FUNCTION "public"."get_user_id"("apikey" "text") TO "anon";
 
 
 
 REVOKE ALL ON FUNCTION "public"."get_user_id"("apikey" "text", "app_id" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."get_user_id"("apikey" "text", "app_id" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."get_user_id"("apikey" "text", "app_id" "text") TO "service_role";
-GRANT ALL ON FUNCTION "public"."get_user_id"("apikey" "text", "app_id" "text") TO "anon";
 
 
 
@@ -26364,6 +26442,12 @@ GRANT ALL ON FUNCTION "public"."hook_before_user_created"("event" "jsonb") TO "s
 
 
 
+REVOKE ALL ON FUNCTION "public"."hook_send_email"("event" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."hook_send_email"("event" "jsonb") TO "service_role";
+GRANT ALL ON FUNCTION "public"."hook_send_email"("event" "jsonb") TO "supabase_auth_admin";
+
+
+
 REVOKE ALL ON FUNCTION "public"."internal_request_db_user_names"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."internal_request_db_user_names"() TO "service_role";
 
@@ -26375,7 +26459,6 @@ GRANT ALL ON FUNCTION "public"."internal_request_role_names"() TO "service_role"
 
 
 REVOKE ALL ON FUNCTION "public"."invite_user_to_org_rbac"("email" character varying, "org_id" "uuid", "role_name" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."invite_user_to_org_rbac"("email" character varying, "org_id" "uuid", "role_name" "text") TO "anon";
 GRANT ALL ON FUNCTION "public"."invite_user_to_org_rbac"("email" character varying, "org_id" "uuid", "role_name" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."invite_user_to_org_rbac"("email" character varying, "org_id" "uuid", "role_name" "text") TO "service_role";
 
@@ -26600,10 +26683,6 @@ GRANT ALL ON FUNCTION "public"."is_platform_admin"() TO "authenticated";
 
 REVOKE ALL ON FUNCTION "public"."is_platform_admin"("userid" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."is_platform_admin"("userid" "uuid") TO "service_role";
-
-
-
-GRANT ALL ON FUNCTION "public"."is_rbac_enabled_globally"() TO "service_role";
 
 
 
@@ -27858,6 +27937,11 @@ GRANT ALL ON FUNCTION "public"."verify_mfa"() TO "service_role";
 
 
 
+
+
+
+SET SESSION AUTHORIZATION "postgres";
+RESET SESSION AUTHORIZATION;
 
 
 

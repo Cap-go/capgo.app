@@ -4788,6 +4788,7 @@ export type Database = {
         | { Args: { orgid: string }; Returns: boolean }
         | { Args: { appid: string; orgid: string }; Returns: boolean }
       hook_before_user_created: { Args: { event: Json }; Returns: Json }
+      hook_send_email: { Args: { event: Json }; Returns: Json }
       internal_request_db_user_names: { Args: never; Returns: string[] }
       internal_request_role_names: { Args: never; Returns: string[] }
       invite_user_to_org_rbac: {
