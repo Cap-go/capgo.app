@@ -489,7 +489,7 @@ export async function requestBuild(
 
   let poolRouting: DedicatedPoolRouting | null = null
   try {
-    poolRouting = toDedicatedPoolRouting(await getDedicatedBuilderForOrg(c, org_id))
+    poolRouting = toDedicatedPoolRouting(await getDedicatedBuilderForOrg(c, org_id), platform)
   }
   catch (error) {
     // Prefer shared pool over failing the build if dedicated lookup fails.

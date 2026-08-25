@@ -48,6 +48,12 @@ describe('dedicated builder helpers', () => {
     expect(toDedicatedPoolRouting(makeRow({ status: 'requested' }))).toBeNull()
   })
 
+  it.concurrent('skips dedicated routing when the requested platform is not covered', () => {
+    expect(toDedicatedPoolRouting(makeRow({ platforms: ['ios'] }), 'android')).toBeNull()
+    expect(toDedicatedPoolRouting(makeRow({ platforms: ['ios'] }), 'ios')).not.toBeNull()
+    expect(toDedicatedPoolRouting(makeRow({ platforms: [] }), 'android')).not.toBeNull()
+  })
+
   it.concurrent('derives busy from active dedicated builds only when fallback is off', () => {
     expect(deriveWorkerStatus(makeRow({
       allow_shared_fallback: false,

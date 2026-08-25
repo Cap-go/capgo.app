@@ -18,6 +18,7 @@ const router = useRouter()
 const organizationStore = useOrganizationStore()
 
 const dedicatedBuilder = ref<DedicatedBuilder | null>(null)
+const resolvedOrgId = ref<string | null>(null)
 const loaded = ref(false)
 const loadFailed = ref(false)
 let reqToken = 0
@@ -49,11 +50,13 @@ async function load() {
   if (!orgId) {
     if (token !== reqToken)
       return
+    resolvedOrgId.value = null
     dedicatedBuilder.value = null
     loadFailed.value = true
     loaded.value = true
     return
   }
+  resolvedOrgId.value = orgId
   try {
     const row = await fetchDedicatedBuilder(orgId)
     if (token !== reqToken)
@@ -84,6 +87,10 @@ watch(
 )
 
 function goToDedicatedBuilder() {
+  const orgId = resolvedOrgId.value ?? organizationStore.getOrgByAppId(props.appId)?.gid
+  if (!orgId)
+    return
+  organizationStore.setCurrentOrganization(orgId)
   router.push('/settings/organization/dedicated-builder')
 }
 </script>

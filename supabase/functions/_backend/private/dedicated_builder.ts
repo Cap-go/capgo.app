@@ -10,7 +10,7 @@ import { sendDiscordAlert } from '../utils/discord.ts'
 import { BRES, createHono, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
-import { checkPermission } from '../utils/rbac.ts'
+import { checkPermission, type Permission } from '../utils/rbac.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
@@ -42,13 +42,13 @@ app.use('*', useCors)
 app.use('*', middlewareAuth())
 
 async function requireReadBilling(c: Context<MiddlewareKeyVariables>, orgId: string) {
-  const allowed = await checkPermission(c, 'org.read_billing' as any, { orgId })
+  const allowed = await checkPermission(c, 'org.read_billing' satisfies Permission, { orgId })
   if (!allowed)
     throw quickError(403, 'not_authorized', 'Not authorized to view dedicated builder')
 }
 
 async function requireUpdateBilling(c: Context<MiddlewareKeyVariables>, orgId: string) {
-  const allowed = await checkPermission(c, 'org.update_billing' as any, { orgId })
+  const allowed = await checkPermission(c, 'org.update_billing' satisfies Permission, { orgId })
   if (!allowed)
     throw quickError(403, 'not_authorized', 'Not authorized to manage dedicated builder')
 }

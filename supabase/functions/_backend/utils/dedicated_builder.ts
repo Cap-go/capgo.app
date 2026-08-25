@@ -46,8 +46,15 @@ export async function getDedicatedBuilderForOrg(
   return data
 }
 
-export function toDedicatedPoolRouting(row: DedicatedBuilderRow | null): DedicatedPoolRouting | null {
+export function toDedicatedPoolRouting(
+  row: DedicatedBuilderRow | null,
+  platform?: 'ios' | 'android',
+): DedicatedPoolRouting | null {
   if (!isDedicatedBuilderActive(row) || !row)
+    return null
+
+  const platforms = row.platforms ?? []
+  if (platform && platforms.length > 0 && !platforms.includes(platform))
     return null
 
   return {

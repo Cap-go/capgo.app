@@ -42,21 +42,30 @@ const useCase = ref('')
 const monthlyBuildsEstimate = ref<number | null>(null)
 const platformIos = ref(true)
 const platformAndroid = ref(true)
+const fallbackEnabled = ref(true)
 let loadToken = 0
+
+function normalizeMonthlyBuildsEstimate(value: number | null): number | undefined {
+  if (value == null || !Number.isFinite(value) || value < 0)
+    return undefined
+  return Math.trunc(value)
+}
 
 const canReadBilling = computedAsync(async () => {
   const orgId = currentOrganization.value?.gid
   if (!orgId)
     return false
   return await checkPermissions('org.read_billing', { orgId })
-}, false)
+}, undefined)
 
 const canUpdateBilling = computedAsync(async () => {
   const orgId = currentOrganization.value?.gid
   if (!orgId)
     return false
   return await checkPermissions('org.update_billing', { orgId })
-}, false)
+}, undefined)
+
+const billingPermissionsReady = computed(() => canReadBilling.value !== undefined)
 
 const status = computed(() => dedicatedBuilder.value?.status ?? null)
 const isPending = computed(() => status.value === 'requested' || status.value === 'provisioning')
@@ -86,7 +95,12 @@ const workerStatusClass = computed(() => {
 async function loadDedicatedBuilder() {
   const orgId = currentOrganization.value?.gid
   const token = ++loadToken
-  if (!orgId || !canReadBilling.value) {
+  if (!orgId || !billingPermissionsReady.value) {
+    if (token === loadToken)
+      isLoading.value = false
+    return
+  }
+  if (!canReadBilling.value) {
     if (token === loadToken) {
       dedicatedBuilder.value = null
       isLoading.value = false
@@ -100,6 +114,7 @@ async function loadDedicatedBuilder() {
     if (token !== loadToken)
       return
     dedicatedBuilder.value = row
+    fallbackEnabled.value = row?.allow_shared_fallback ?? true
   }
   catch (error) {
     if (token !== loadToken)
@@ -152,7 +167,7 @@ async function submitRequest() {
     dedicatedBuilder.value = await requestDedicatedBuilder({
       orgId,
       useCase: useCase.value.trim() || undefined,
-      monthlyBuildsEstimate: monthlyBuildsEstimate.value,
+      monthlyBuildsEstimate: normalizeMonthlyBuildsEstimate(monthlyBuildsEstimate.value),
       platforms,
     })
     toast.success(t('dedicated-builder-request-success'))
@@ -179,14 +194,18 @@ async function toggleFallback(nextValue: boolean) {
     return
   }
 
+  const previousValue = fallbackEnabled.value
+  fallbackEnabled.value = nextValue
   isSavingFallback.value = true
   try {
     dedicatedBuilder.value = await updateDedicatedBuilder(orgId, {
       allow_shared_fallback: nextValue,
     })
+    fallbackEnabled.value = dedicatedBuilder.value.allow_shared_fallback
     toast.success(t('dedicated-builder-fallback-updated'))
   }
   catch (error) {
+    fallbackEnabled.value = previousValue
     console.error('Failed to update fallback', error)
     toast.error(t('dedicated-builder-fallback-error'))
   }
@@ -240,7 +259,7 @@ function cancelRequest() {
       </p>
     </div>
 
-    <div v-if="isLoading" class="flex justify-center py-16">
+    <div v-if="isLoading || !billingPermissionsReady" class="flex justify-center py-16">
       <Spinner size="h-8 w-8" />
     </div>
 
@@ -297,7 +316,7 @@ function cancelRequest() {
               id="dedicated-builder-use-case"
               v-model="useCase"
               rows="3"
-              class="w-full textarea textarea-bordered"
+              class="w-full d-textarea d-textarea-bordered"
               :placeholder="t('dedicated-builder-use-case-placeholder')"
               :disabled="!canUpdateBilling || isSubmitting"
             />
@@ -312,7 +331,7 @@ function cancelRequest() {
               v-model.number="monthlyBuildsEstimate"
               type="number"
               min="0"
-              class="w-full input input-bordered"
+              class="w-full d-input d-input-bordered"
               :placeholder="t('dedicated-builder-monthly-estimate-placeholder')"
               :disabled="!canUpdateBilling || isSubmitting"
             >
@@ -327,7 +346,7 @@ function cancelRequest() {
                 <input
                   v-model="platformIos"
                   type="checkbox"
-                  class="checkbox checkbox-sm"
+                  class="d-checkbox d-checkbox-sm"
                   :disabled="!canUpdateBilling || isSubmitting"
                 >
                 <span>{{ t('platform-ios') }}</span>
@@ -336,7 +355,7 @@ function cancelRequest() {
                 <input
                   v-model="platformAndroid"
                   type="checkbox"
-                  class="checkbox checkbox-sm"
+                  class="d-checkbox d-checkbox-sm"
                   :disabled="!canUpdateBilling || isSubmitting"
                 >
                 <span>{{ t('platform-android') }}</span>
@@ -483,14 +502,14 @@ function cancelRequest() {
               <span class="sr-only">{{ t('dedicated-builder-fallback-title') }}</span>
               <input
                 type="checkbox"
-                class="toggle toggle-primary"
-                :checked="dedicatedBuilder.allow_shared_fallback"
+                class="d-toggle d-toggle-primary"
+                :checked="fallbackEnabled"
                 :disabled="!canUpdateBilling || isSavingFallback"
                 :aria-label="t('dedicated-builder-fallback-title')"
                 @change="toggleFallback(($event.target as HTMLInputElement).checked)"
               >
               <span class="text-sm text-slate-700 dark:text-slate-200">
-                {{ dedicatedBuilder.allow_shared_fallback ? t('enabled') : t('disabled') }}
+                {{ fallbackEnabled ? t('enabled') : t('disabled') }}
               </span>
             </label>
           </div>
