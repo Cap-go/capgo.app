@@ -282,6 +282,67 @@ t('detectIosBundleIds picks pbxproj over capacitor when they disagree', () => {
   }
 })
 
+t('detectIosBundleIds returns the application target matching the Release bundle id', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'bundle-id-detect-'))
+  try {
+    const xcodeDir = join(tmp, 'ios', 'App', 'App.xcodeproj')
+    mkdirSync(xcodeDir, { recursive: true })
+    const pbxproj = `
+      AAAAAAAAAAAAAAAAAAAAAAAA /* App */ = {
+        isa = PBXNativeTarget;
+        buildConfigurationList = CCCCCCCCCCCCCCCCCCCCCCCC /* Build configuration list for PBXNativeTarget "App" */;
+        name = App;
+        productType = "com.apple.product-type.application";
+      };
+      BBBBBBBBBBBBBBBBBBBBBBBB /* Dinnerish */ = {
+        isa = PBXNativeTarget;
+        buildConfigurationList = DDDDDDDDDDDDDDDDDDDDDDDD /* Build configuration list for PBXNativeTarget "Dinnerish" */;
+        name = Dinnerish;
+        productType = "com.apple.product-type.application";
+      };
+      CCCCCCCCCCCCCCCCCCCCCCCC /* Build configuration list for PBXNativeTarget "App" */ = {
+        isa = XCConfigurationList;
+        buildConfigurations = (
+          EEEEEEEEEEEEEEEEEEEEEEEE /* Release */,
+        );
+      };
+      DDDDDDDDDDDDDDDDDDDDDDDD /* Build configuration list for PBXNativeTarget "Dinnerish" */ = {
+        isa = XCConfigurationList;
+        buildConfigurations = (
+          FFFFFFFFFFFFFFFFFFFFFFFF /* Release */,
+        );
+      };
+      EEEEEEEEEEEEEEEEEEEEEEEE /* Release */ = {
+        isa = XCBuildConfiguration;
+        buildSettings = {
+          PRODUCT_BUNDLE_IDENTIFIER = com.dinnerish.app.alternate;
+        };
+        name = Release;
+      };
+      FFFFFFFFFFFFFFFFFFFFFFFF /* Release */ = {
+        isa = XCBuildConfiguration;
+        buildSettings = {
+          PRODUCT_BUNDLE_IDENTIFIER = com.dinnerish.app;
+        };
+        name = Release;
+      };
+    `
+    writeFileSync(join(xcodeDir, 'project.pbxproj'), pbxproj, 'utf-8')
+
+    const result = detectIosBundleIds({
+      cwd: tmp,
+      iosDir: 'ios',
+      capacitorAppId: 'com.dinnerish.app',
+    })
+
+    assert.equal(result.pbxproj?.value, 'com.dinnerish.app')
+    assert.equal(result.iosTarget, 'Dinnerish')
+  }
+  finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
 t('detectIosBundleIds reports no mismatch when pbxproj and capacitor agree', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'bundle-id-detect-'))
   try {
