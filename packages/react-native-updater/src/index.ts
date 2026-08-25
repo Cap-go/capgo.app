@@ -36,7 +36,17 @@ export const CapgoUpdater: CapgoRNUpdater = {
     return NativeUpdater.getLatest(options ?? {})
   },
   download(options: DownloadOptions) {
-    return NativeUpdater.download(options)
+    const manifest = options.manifest?.map((entry) => {
+      if (!entry.file_name || !entry.download_url) {
+        throw new Error('Invalid manifest entry: file_name and download_url are required')
+      }
+      return {
+        file_name: entry.file_name,
+        download_url: entry.download_url,
+        ...(entry.file_hash ? { file_hash: entry.file_hash } : {}),
+      }
+    })
+    return NativeUpdater.download({ ...options, manifest })
   },
   set(options) {
     return NativeUpdater.set(options)
@@ -67,7 +77,7 @@ export const CapgoUpdater: CapgoRNUpdater = {
   },
   addListener(eventName: CapgoRNUpdaterEvent, listener) {
     if (!emitter) {
-      return { remove() {} }
+      throw new Error(LINKING_ERROR)
     }
     const sub = emitter.addListener(eventName, listener as (event: DownloadEvent) => void)
     return { remove: () => sub.remove() }

@@ -17,6 +17,7 @@ object CapgoConfig {
   const val KEY_NEXT = "next_bundle_id"
   const val KEY_DEVICE = "device_id"
   const val KEY_READY = "app_ready"
+  const val KEY_PREVIOUS = "previous_bundle_id"
   const val KEY_CHANNEL = "default_channel"
   const val KEY_BUILTIN = "builtin"
 

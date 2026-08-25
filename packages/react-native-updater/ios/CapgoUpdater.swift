@@ -22,6 +22,7 @@ public class CapgoUpdater: RCTEventEmitter {
   // MARK: - Public static API for AppDelegate
 
   @objc public static func getJSBundleURL() -> URL? {
+    rollbackIfNotReady()
     applyPendingNext()
     let defaults = UserDefaults.standard
     let id = defaults.string(forKey: "capgo_current_bundle_id") ?? "builtin"
@@ -40,13 +41,48 @@ public class CapgoUpdater: RCTEventEmitter {
   @objc public static func applyPendingNext() {
     let defaults = UserDefaults.standard
     guard let next = defaults.string(forKey: "capgo_next_bundle_id") else { return }
-    let file = bundleDir(id: next).appendingPathComponent(bundleFileName)
-    let alt = bundleDir(id: next).appendingPathComponent(androidBundleFileName)
-    if FileManager.default.fileExists(atPath: file.path) || FileManager.default.fileExists(atPath: alt.path) {
-      defaults.set(next, forKey: "capgo_current_bundle_id")
-      defaults.removeObject(forKey: "capgo_next_bundle_id")
-      defaults.set(false, forKey: "capgo_app_ready")
+    guard bundleReady(id: next) else { return }
+    let current = defaults.string(forKey: "capgo_current_bundle_id") ?? "builtin"
+    if current != "builtin" {
+      defaults.set(current, forKey: "capgo_previous_bundle_id")
     }
+    defaults.set(next, forKey: "capgo_current_bundle_id")
+    defaults.removeObject(forKey: "capgo_next_bundle_id")
+    defaults.set(false, forKey: "capgo_app_ready")
+  }
+
+  private static func rollbackIfNotReady() {
+    let defaults = UserDefaults.standard
+    if defaults.bool(forKey: "capgo_app_ready") { return }
+    guard let previous = defaults.string(forKey: "capgo_previous_bundle_id"),
+          bundleReady(id: previous) else { return }
+    defaults.set(previous, forKey: "capgo_current_bundle_id")
+    defaults.removeObject(forKey: "capgo_next_bundle_id")
+    defaults.set(true, forKey: "capgo_app_ready")
+  }
+
+  private static func bundleReady(id: String) -> Bool {
+    if id == "builtin" { return true }
+    let file = bundleDir(id: id).appendingPathComponent(bundleFileName)
+    let alt = bundleDir(id: id).appendingPathComponent(androidBundleFileName)
+    guard FileManager.default.fileExists(atPath: file.path)
+      || FileManager.default.fileExists(atPath: alt.path) else { return false }
+    guard let bundles = loadStaticIndex(),
+          let match = bundles.first(where: { ($0["id"] as? String) == id }),
+          let status = match["status"] as? String else { return false }
+    return status == "success"
+  }
+
+  private static func loadStaticIndex() -> [[String: Any]]? {
+    guard let data = try? Data(contentsOf: indexFile()),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+      return nil
+    }
+    return json
+  }
+
+  private static func indexFile() -> URL {
+    rootDir().appendingPathComponent("bundles.json")
   }
 
   private static func rootDir() -> URL {
@@ -104,29 +140,24 @@ public class CapgoUpdater: RCTEventEmitter {
   }
 
   private func indexFile() -> URL {
-    CapgoUpdater.rootDir().appendingPathComponent("bundles.json")
+    CapgoUpdater.indexFile()
   }
 
   private func loadIndex() -> [[String: Any]]? {
-    guard let data = try? Data(contentsOf: indexFile()),
-          let json = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-      return nil
-    }
-    return json
+    CapgoUpdater.loadStaticIndex()
   }
 
-  private func saveIndex(_ bundles: [[String: Any]]) {
-    if let data = try? JSONSerialization.data(withJSONObject: bundles) {
-      try? data.write(to: indexFile())
-    }
+  private func saveIndex(_ bundles: [[String: Any]]) throws {
+    let data = try JSONSerialization.data(withJSONObject: bundles)
+    try data.write(to: indexFile(), options: .atomic)
   }
 
-  private func upsert(_ record: [String: Any]) {
+  private func upsert(_ record: [String: Any]) throws {
     var all = loadIndex() ?? []
     let id = record["id"] as? String
     all = all.filter { ($0["id"] as? String) != id }
     all.append(record)
-    saveIndex(all)
+    try saveIndex(all)
   }
 
   private func createInfoObject(versionName: String, channel: String?) -> [String: Any] {
@@ -158,6 +189,13 @@ public class CapgoUpdater: RCTEventEmitter {
     #endif
   }
 
+  private lazy var session: URLSession = {
+    let config = URLSessionConfiguration.ephemeral
+    config.timeoutIntervalForRequest = 60
+    config.timeoutIntervalForResource = 120
+    return URLSession(configuration: config)
+  }()
+
   private func postJson(url: String, body: [String: Any]) throws -> [String: Any] {
     guard let endpoint = URL(string: url) else { throw NSError(domain: "capgo", code: 1) }
     var request = URLRequest(url: endpoint)
@@ -168,12 +206,17 @@ public class CapgoUpdater: RCTEventEmitter {
     let sem = DispatchSemaphore(value: 0)
     var result: [String: Any] = [:]
     var err: Error?
-    URLSession.shared.dataTask(with: request) { data, _, error in
+    session.dataTask(with: request) { data, response, error in
       defer { sem.signal() }
       if let error = error { err = error; return }
+      let text = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+      if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+        result = ["error": "http_error", "message": "HTTP \(http.statusCode): \(text.prefix(200))"]
+        return
+      }
       guard let data = data,
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-        result = ["error": "invalid_json"]
+        result = ["error": "invalid_json", "message": text.prefix(200)]
         return
       }
       result = json
@@ -191,9 +234,43 @@ public class CapgoUpdater: RCTEventEmitter {
   }
 
   private func sha256(path: URL) -> String {
-    guard let data = try? Data(contentsOf: path) else { return "" }
-    let digest = SHA256.hash(data: data)
-    return digest.map { String(format: "%02x", $0) }.joined()
+    guard let handle = try? FileHandle(forReadingFrom: path) else { return "" }
+    defer { try? handle.close() }
+    var hasher = SHA256()
+    while true {
+      let chunk = try? handle.read(upToCount: 8192)
+      guard let chunk, !chunk.isEmpty else { break }
+      hasher.update(data: chunk)
+    }
+    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+  }
+
+  private func downloadToFile(url: String, dest: URL) throws {
+    guard let remote = URL(string: url) else {
+      throw NSError(domain: "capgo", code: 7, userInfo: [NSLocalizedDescriptionKey: "Invalid download URL"])
+    }
+    let sem = DispatchSemaphore(value: 0)
+    var err: Error?
+    session.downloadTask(with: remote) { tempURL, response, error in
+      defer { sem.signal() }
+      if let error = error { err = error; return }
+      if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+        err = NSError(domain: "capgo", code: 7, userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode)"])
+        return
+      }
+      guard let tempURL else {
+        err = NSError(domain: "capgo", code: 7, userInfo: [NSLocalizedDescriptionKey: "Empty download body"])
+        return
+      }
+      do {
+        try? FileManager.default.removeItem(at: dest)
+        try FileManager.default.moveItem(at: tempURL, to: dest)
+      } catch {
+        err = error
+      }
+    }.resume()
+    sem.wait()
+    if let err = err { throw err }
   }
 
   // MARK: - Bridge methods
@@ -217,20 +294,26 @@ public class CapgoUpdater: RCTEventEmitter {
         let response = try self.postJson(url: self.updateUrl(), body: body)
         if response["error"] != nil {
           var map: [String: Any] = [
-            "error": response["error"] as Any,
-            "message": response["message"] as Any,
-            "kind": response["kind"] as Any,
             "version": self.currentVersionName(),
           ]
+          if let error = response["error"] { map["error"] = error }
+          if let message = response["message"] { map["message"] = message }
+          if let kind = response["kind"] { map["kind"] = kind }
           self.sendEvent(withName: "noNeedUpdate", body: map)
           resolve(map)
           return
         }
+        guard let version = response["version"] as? String,
+              let url = response["url"] as? String else {
+          throw NSError(domain: "capgo", code: 10, userInfo: [NSLocalizedDescriptionKey: "Invalid update response"])
+        }
         var map: [String: Any] = [
-          "version": response["version"] as Any,
-          "url": response["url"] as Any,
-          "sessionKey": response["session_key"] as Any,
+          "version": version,
+          "url": url,
         ]
+        if let sessionKey = response["session_key"] as? String {
+          map["sessionKey"] = sessionKey
+        }
         if let checksum = response["checksum"] {
           map["checksum"] = checksum
         }
@@ -270,7 +353,7 @@ public class CapgoUpdater: RCTEventEmitter {
           self.sendStats(action: "download_manifest_complete", versionName: version)
         } else if !url.isEmpty && !url.contains("404.capgo.app") {
           self.sendStats(action: "download_zip_start", versionName: version)
-          try self.downloadZip(url: url, to: dest)
+          try self.downloadZip(url: url, to: dest, checksum: checksum)
           self.sendStats(action: "download_zip_complete", versionName: version)
         } else {
           throw NSError(domain: "capgo", code: 3, userInfo: [NSLocalizedDescriptionKey: "No manifest or zip url"])
@@ -299,7 +382,7 @@ public class CapgoUpdater: RCTEventEmitter {
           "checksum": checksum,
           "downloaded": ISO8601DateFormatter().string(from: Date()),
         ]
-        self.upsert(record)
+        try self.upsert(record)
         self.sendEvent(withName: "downloadComplete", body: ["bundle": record])
         resolve(record)
       } catch {
@@ -313,8 +396,7 @@ public class CapgoUpdater: RCTEventEmitter {
     let total = max(manifest.count, 1)
     for (index, entry) in manifest.enumerated() {
       guard let fileName = entry["file_name"] as? String,
-            let downloadUrl = entry["download_url"] as? String,
-            let remote = URL(string: downloadUrl) else {
+            let downloadUrl = entry["download_url"] as? String else {
         sendStats(action: "download_manifest_file_fail", versionName: "\(version)")
         throw NSError(domain: "capgo", code: 5, userInfo: [NSLocalizedDescriptionKey: "Invalid manifest entry"])
       }
@@ -324,8 +406,7 @@ public class CapgoUpdater: RCTEventEmitter {
       try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
 
       let tmp = dest.appendingPathComponent("\(targetName).download")
-      let data = try Data(contentsOf: remote)
-      try data.write(to: tmp)
+      try downloadToFile(url: downloadUrl, dest: tmp)
       if isBrotli {
         do {
           try CapgoBrotli.decompress(input: tmp, output: target)
@@ -352,11 +433,16 @@ public class CapgoUpdater: RCTEventEmitter {
     }
   }
 
-  private func downloadZip(url: String, to dest: URL) throws {
-    guard let remote = URL(string: url) else { throw NSError(domain: "capgo", code: 7) }
+  private func downloadZip(url: String, to dest: URL, checksum: String) throws {
     let zipURL = dest.appendingPathComponent("bundle.zip")
-    let data = try Data(contentsOf: remote)
-    try data.write(to: zipURL)
+    try downloadToFile(url: url, dest: zipURL)
+    if checksum.count == 64 {
+      let actual = sha256(path: zipURL)
+      if actual.lowercased() != checksum.lowercased() {
+        try? FileManager.default.removeItem(at: zipURL)
+        throw NSError(domain: "capgo", code: 11, userInfo: [NSLocalizedDescriptionKey: "ZIP checksum mismatch"])
+      }
+    }
     try CapgoZip.unzip(zipURL, to: dest)
     try? FileManager.default.removeItem(at: zipURL)
   }
@@ -367,20 +453,31 @@ public class CapgoUpdater: RCTEventEmitter {
         reject("set_fail", "id required", nil)
         return
       }
+      guard CapgoUpdater.bundleReady(id: id) else {
+        reject("set_fail", "bundle not found or not ready", nil)
+        return
+      }
       let record = self.bundleMap(id: id)
-      UserDefaults.standard.set(id, forKey: "capgo_current_bundle_id")
-      UserDefaults.standard.removeObject(forKey: "capgo_next_bundle_id")
+      let defaults = UserDefaults.standard
+      let current = defaults.string(forKey: "capgo_current_bundle_id") ?? "builtin"
+      if current != "builtin" && current != id {
+        defaults.set(current, forKey: "capgo_previous_bundle_id")
+      }
+      defaults.set(id, forKey: "capgo_current_bundle_id")
+      defaults.removeObject(forKey: "capgo_next_bundle_id")
+      defaults.set(false, forKey: "capgo_app_ready")
       self.sendStats(action: "set", versionName: record["version"] as? String ?? id)
       resolve(record)
-      DispatchQueue.main.async {
-        exit(0)
-      }
     }
   }
 
   @objc func next(_ options: NSDictionary, resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     guard let id = options["id"] as? String else {
       reject("next_fail", "id required", nil)
+      return
+    }
+    guard CapgoUpdater.bundleReady(id: id) else {
+      reject("next_fail", "bundle not found or not ready", nil)
       return
     }
     UserDefaults.standard.set(id, forKey: "capgo_next_bundle_id")
@@ -393,9 +490,10 @@ public class CapgoUpdater: RCTEventEmitter {
     let old = currentVersionName()
     UserDefaults.standard.set("builtin", forKey: "capgo_current_bundle_id")
     UserDefaults.standard.removeObject(forKey: "capgo_next_bundle_id")
+    UserDefaults.standard.removeObject(forKey: "capgo_previous_bundle_id")
+    UserDefaults.standard.set(true, forKey: "capgo_app_ready")
     sendStats(action: "reset", versionName: "builtin", oldVersion: old)
     resolve(bundleMap(id: "builtin"))
-    DispatchQueue.main.async { exit(0) }
   }
 
   @objc func current(_ resolve: RCTPromiseResolveBlock, rejecter _: RCTPromiseRejectBlock) {

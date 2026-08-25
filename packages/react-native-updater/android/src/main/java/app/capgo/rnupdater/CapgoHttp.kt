@@ -47,6 +47,11 @@ object CapgoHttp {
       .build()
     client.newCall(request).execute().use { response ->
       val text = response.body?.string() ?: "{}"
+      if (!response.isSuccessful) {
+        return JSONObject()
+          .put("error", "http_error")
+          .put("message", "HTTP ${response.code}: ${text.take(200)}")
+      }
       return try {
         JSONObject(text)
       } catch (_: Exception) {

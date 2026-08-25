@@ -31,6 +31,7 @@ data class BundleRecord(
 
 object BundleStore {
   private const val INDEX = "bundles.json"
+  private val indexLock = Any()
 
   fun root(context: Context): File {
     val dir = File(context.filesDir, "capgo_bundles")
@@ -55,38 +56,59 @@ object BundleStore {
   fun list(context: Context): List<BundleRecord> {
     val file = File(root(context), INDEX)
     if (!file.exists()) return emptyList()
-    return try {
-      val arr = JSONArray(file.readText())
-      (0 until arr.length()).map { i ->
-        val o = arr.getJSONObject(i)
-        BundleRecord(
-          id = o.getString("id"),
-          version = o.optString("version", ""),
-          status = o.optString("status", "success"),
-          checksum = o.optString("checksum", ""),
-          downloaded = o.optString("downloaded", ""),
-        )
+    synchronized(indexLock) {
+      return try {
+        val arr = JSONArray(file.readText())
+        (0 until arr.length()).map { i ->
+          val o = arr.getJSONObject(i)
+          BundleRecord(
+            id = o.getString("id"),
+            version = o.optString("version", ""),
+            status = o.optString("status", "success"),
+            checksum = o.optString("checksum", ""),
+            downloaded = o.optString("downloaded", ""),
+          )
+        }
+      } catch (_: Exception) {
+        emptyList()
       }
-    } catch (_: Exception) {
-      emptyList()
     }
   }
 
   fun save(context: Context, bundles: List<BundleRecord>) {
-    val arr = JSONArray()
-    bundles.forEach { arr.put(it.toJson()) }
-    File(root(context), INDEX).writeText(arr.toString())
+    synchronized(indexLock) {
+      val arr = JSONArray()
+      bundles.forEach { arr.put(it.toJson()) }
+      val indexFile = File(root(context), INDEX)
+      val tmp = File(indexFile.parentFile, "$INDEX.tmp")
+      tmp.writeText(arr.toString())
+      if (!tmp.renameTo(indexFile)) {
+        tmp.copyTo(indexFile, overwrite = true)
+        tmp.delete()
+      }
+    }
   }
 
   fun upsert(context: Context, record: BundleRecord) {
-    val all = list(context).filter { it.id != record.id }.toMutableList()
-    all.add(record)
-    save(context, all)
+    synchronized(indexLock) {
+      val all = list(context).filter { it.id != record.id }.toMutableList()
+      all.add(record)
+      save(context, all)
+    }
   }
 
   fun get(context: Context, id: String): BundleRecord? {
     if (id == CapgoConfig.KEY_BUILTIN) return builtin()
     return list(context).firstOrNull { it.id == id }
+  }
+
+  fun removeBundle(context: Context, id: String) {
+    synchronized(indexLock) {
+      val dir = bundleDir(context, id)
+      if (dir.exists()) dir.deleteRecursively()
+      val all = list(context).filter { it.id != id }
+      save(context, all)
+    }
   }
 
   fun currentId(context: Context): String {
@@ -97,6 +119,16 @@ object BundleStore {
   fun setCurrent(context: Context, id: String) {
     context.getSharedPreferences(CapgoConfig.PREFS, Context.MODE_PRIVATE)
       .edit().putString(CapgoConfig.KEY_CURRENT, id).apply()
+  }
+
+  fun previousId(context: Context): String? {
+    return context.getSharedPreferences(CapgoConfig.PREFS, Context.MODE_PRIVATE)
+      .getString(CapgoConfig.KEY_PREVIOUS, null)
+  }
+
+  fun setPrevious(context: Context, id: String?) {
+    context.getSharedPreferences(CapgoConfig.PREFS, Context.MODE_PRIVATE)
+      .edit().putString(CapgoConfig.KEY_PREVIOUS, id).apply()
   }
 
   fun nextId(context: Context): String? {
@@ -113,5 +145,11 @@ object BundleStore {
 
   fun jsBundleFile(context: Context, id: String): File {
     return File(bundleDir(context, id), CapgoConfig.BUNDLE_FILE)
+  }
+
+  fun isBundleReady(context: Context, id: String): Boolean {
+    if (id == CapgoConfig.KEY_BUILTIN) return true
+    val record = get(context, id) ?: return false
+    return record.status == "success" && jsBundleFile(context, id).exists()
   }
 }

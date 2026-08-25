@@ -24,7 +24,7 @@ npx @capgo/rn-cli@latest init
 
 ## Export layout
 
-```
+```text
 .capgo-rn/export/
   index.android.bundle
   main.jsbundle

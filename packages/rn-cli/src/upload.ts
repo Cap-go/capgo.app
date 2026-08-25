@@ -22,7 +22,7 @@ export interface UploadOptions {
 
 function run(cmd: string, args: string[], cwd: string): Promise<void> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(cmd, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32', env: process.env })
+    const child = spawn(cmd, args, { cwd, stdio: 'inherit', shell: false, env: process.env })
     child.on('error', reject)
     child.on('exit', (code) => {
       if (code === 0) resolvePromise()
@@ -58,6 +58,9 @@ export async function runUpload(appId: string, options: UploadOptions): Promise<
   s.start('Uploading to Capgo with file-level delta')
 
   const useDelta = options.delta !== false
+  if (!useDelta && options.deltaOnly) {
+    throw new Error('--delta-only cannot be combined with --no-delta')
+  }
   const args = [
     'bundle', 'upload',
     appId,

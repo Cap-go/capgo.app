@@ -4,6 +4,12 @@ export interface ManifestEntry {
   download_url: string | null
 }
 
+export interface DownloadManifestEntry {
+  file_name: string
+  file_hash?: string
+  download_url: string
+}
+
 export interface LatestVersion {
   version: string
   url?: string
@@ -28,7 +34,7 @@ export interface DownloadOptions {
   version: string
   sessionKey?: string
   checksum?: string
-  manifest?: ManifestEntry[]
+  manifest?: DownloadManifestEntry[]
 }
 
 export interface CapgoRNUpdaterConfig {

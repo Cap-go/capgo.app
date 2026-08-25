@@ -14,7 +14,7 @@ export interface BundleOptions {
 
 function run(cmd: string, args: string[], cwd: string): Promise<void> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(cmd, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' })
+    const child = spawn(cmd, args, { cwd, stdio: 'inherit', shell: false })
     child.on('error', reject)
     child.on('exit', (code) => {
       if (code === 0) resolvePromise()
@@ -47,6 +47,15 @@ function copyAssets(fromDir: string, toDir: string) {
   }
 }
 
+export function validateExportLayout(dir: string): void {
+  const required = ['index.android.bundle', 'main.jsbundle']
+  for (const file of required) {
+    if (!existsSync(join(dir, file))) {
+      throw new Error(`Missing required export file: ${file}`)
+    }
+  }
+}
+
 export async function runBundle(options: BundleOptions): Promise<string> {
   const project = resolve(options.project)
   const out = resolve(project, options.out)
@@ -69,29 +78,37 @@ export async function runBundle(options: BundleOptions): Promise<string> {
   const metroBin = findMetroBin(project)
   const useNode = metroBin.endsWith('.js')
 
-  for (const platform of platforms) {
-    const bundleOut = platform === 'ios'
-      ? join(out, 'main.jsbundle')
-      : join(out, 'index.android.bundle')
-    const assetsDest = join(out, 'assets')
-    const args = [
-      ...(useNode ? [metroBin] : []),
-      'bundle',
-      '--platform', platform,
-      '--dev', options.dev ? 'true' : 'false',
-      '--entry-file', entryFile,
-      '--bundle-output', bundleOut,
-      '--assets-dest', assetsDest,
-      '--reset-cache',
-    ]
-    const cmd = useNode ? process.execPath : metroBin
-    await run(cmd, args, project)
-    if (!existsSync(bundleOut)) {
-      throw new Error(`Metro did not produce ${bundleOut}`)
+  try {
+    for (const platform of platforms) {
+      const bundleOut = platform === 'ios'
+        ? join(out, 'main.jsbundle')
+        : join(out, 'index.android.bundle')
+      const assetsDest = join(out, 'assets')
+      const args = [
+        ...(useNode ? [metroBin] : []),
+        'bundle',
+        '--platform', platform,
+        '--dev', options.dev ? 'true' : 'false',
+        '--entry-file', entryFile,
+        '--bundle-output', bundleOut,
+        '--assets-dest', assetsDest,
+        '--reset-cache',
+      ]
+      const cmd = useNode ? process.execPath : metroBin
+      await run(cmd, args, project)
+      if (!existsSync(bundleOut)) {
+        throw new Error(`Metro did not produce ${bundleOut}`)
+      }
     }
+
+    s.stop(color.green(`Export ready at ${out}`))
+    validateExportLayout(out)
+  }
+  catch (error) {
+    s.stop(color.red('Export failed'))
+    throw error
   }
 
-  s.stop(color.green(`Export ready at ${out}`))
   log.info(`Files: ${readdirSync(out).join(', ')}`)
   return out
 }

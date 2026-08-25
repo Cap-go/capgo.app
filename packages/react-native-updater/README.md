@@ -36,6 +36,7 @@ In `AppDelegate`, return Capgo's bundle URL in release:
 ```swift
 #if !DEBUG
 return CapgoUpdater.getJSBundleURL()
+  ?? Bundle.main.url(forResource: "main", withExtension: "jsbundle")
 #endif
 ```
 

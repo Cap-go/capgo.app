@@ -2,6 +2,8 @@ import Foundation
 import Compression
 
 enum CapgoZip {
+  private static let maxInflateSize = 128 * 1024 * 1024
+
   static func unzip(_ zipURL: URL, to destination: URL) throws {
     try ZipArchive.extract(zipURL: zipURL, to: destination)
   }
@@ -22,9 +24,17 @@ enum ZipArchive {
       let nameLen = Int(readU16(data, offset + 26))
       let extraLen = Int(readU16(data, offset + 28))
       let nameStart = offset + 30
+      guard nameLen <= data.count - nameStart else {
+        throw NSError(domain: "capgo.zip", code: 5, userInfo: [NSLocalizedDescriptionKey: "Truncated ZIP filename"])
+      }
       let nameData = data.subdata(in: nameStart..<(nameStart + nameLen))
       let name = String(data: nameData, encoding: .utf8) ?? "file"
       let dataStart = nameStart + nameLen + extraLen
+      guard dataStart >= nameStart,
+            dataStart <= data.count,
+            compSize <= data.count - dataStart else {
+        throw NSError(domain: "capgo.zip", code: 5, userInfo: [NSLocalizedDescriptionKey: "Truncated ZIP entry"])
+      }
 
       if flags & 0x8 != 0 && compSize == 0 {
         throw NSError(domain: "capgo.zip", code: 3, userInfo: [NSLocalizedDescriptionKey: "Zip data descriptors not supported"])
@@ -79,36 +89,44 @@ enum ZipArchive {
     }
     defer { compression_stream_destroy(&stream) }
 
-    let dstCapacity = max(expectedSize, data.count * 8, 64 * 1024)
-    var output = Data(count: dstCapacity)
-    let decodedCount: Int = data.withUnsafeBytes { srcBuffer in
-      output.withUnsafeMutableBytes { dstBuffer in
-        guard let src = srcBuffer.bindMemory(to: UInt8.self).baseAddress,
-              let dst = dstBuffer.bindMemory(to: UInt8.self).baseAddress else { return 0 }
-        stream.src_ptr = src
-        stream.src_size = data.count
-        stream.dst_ptr = dst
-        stream.dst_size = dstCapacity
-        status = compression_stream_process(&stream, Int32(COMPRESSION_STREAM_FINALIZE.rawValue))
-        if status == COMPRESSION_STATUS_END || status == COMPRESSION_STATUS_OK {
-          return dstCapacity - stream.dst_size
+    let chunkSize = 64 * 1024
+    var output = Data()
+    var finished = false
+
+    try data.withUnsafeBytes { srcBuffer in
+      guard let src = srcBuffer.bindMemory(to: UInt8.self).baseAddress else {
+        throw NSError(domain: "capgo.zip", code: 2, userInfo: [NSLocalizedDescriptionKey: "Deflate failed"])
+      }
+      stream.src_ptr = src
+      stream.src_size = data.count
+
+      while !finished {
+        var chunk = Data(count: chunkSize)
+        let produced: Int = chunk.withUnsafeMutableBytes { dstBuffer in
+          guard let dst = dstBuffer.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+          stream.dst_ptr = dst
+          stream.dst_size = chunkSize
+          status = compression_stream_process(&stream, Int32(COMPRESSION_STREAM_FINALIZE.rawValue))
+          if status == COMPRESSION_STATUS_ERROR { return 0 }
+          return chunkSize - stream.dst_size
         }
-        return 0
+        if produced > 0 {
+          output.append(chunk.prefix(produced))
+          if output.count > maxInflateSize {
+            throw NSError(domain: "capgo.zip", code: 2, userInfo: [NSLocalizedDescriptionKey: "Inflated entry too large"])
+          }
+        }
+        if status == COMPRESSION_STATUS_END {
+          finished = true
+        } else if status != COMPRESSION_STATUS_OK {
+          throw NSError(domain: "capgo.zip", code: 2, userInfo: [NSLocalizedDescriptionKey: "Deflate failed"])
+        }
       }
     }
-    if decodedCount > 0 {
-      output.count = decodedCount
-      return output
+
+    if output.isEmpty {
+      throw NSError(domain: "capgo.zip", code: 2, userInfo: [NSLocalizedDescriptionKey: "Deflate failed"])
     }
-    let dst = UnsafeMutablePointer<UInt8>.allocate(capacity: dstCapacity)
-    defer { dst.deallocate() }
-    let n = data.withUnsafeBytes { src -> Int in
-      guard let base = src.bindMemory(to: UInt8.self).baseAddress else { return 0 }
-      return compression_decode_buffer(dst, dstCapacity, base, data.count, nil, COMPRESSION_ZLIB)
-    }
-    if n > 0 {
-      return Data(bytes: dst, count: n)
-    }
-    throw NSError(domain: "capgo.zip", code: 2, userInfo: [NSLocalizedDescriptionKey: "Deflate failed"])
+    return output
   }
 }

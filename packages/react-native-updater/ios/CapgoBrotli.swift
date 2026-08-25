@@ -2,32 +2,62 @@ import Foundation
 import Compression
 
 enum CapgoBrotli {
+  private static let maxOutputSize = 128 * 1024 * 1024
+
   static func decompress(input: URL, output: URL) throws {
     let data = try Data(contentsOf: input)
-    // Prefer Apple Compression framework brotli if available (iOS 15.4+ decode path via Compression)
-    // Fallback: try NSData with brotli via compression_decode if encoded as raw brotli stream.
     let decoded = try decodeBrotli(data)
     try decoded.write(to: output)
   }
 
   private static func decodeBrotli(_ data: Data) throws -> Data {
-    // Use compression_decode_buffer with COMPRESSION_BROTLI when available.
     if #available(iOS 15.0, *) {
-      let dstCapacity = max(data.count * 6, 64 * 1024)
-      let dst = UnsafeMutablePointer<UInt8>.allocate(capacity: dstCapacity)
-      defer { dst.deallocate() }
-      let decodedSize = data.withUnsafeBytes { (src: UnsafeRawBufferPointer) -> Int in
-        guard let base = src.bindMemory(to: UInt8.self).baseAddress else { return 0 }
-        return compression_decode_buffer(
-          dst, dstCapacity,
-          base, data.count,
-          nil,
-          COMPRESSION_BROTLI
-        )
+      var stream = compression_stream()
+      var status = compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_BROTLI)
+      guard status != COMPRESSION_STATUS_ERROR else {
+        throw NSError(domain: "capgo.brotli", code: 1, userInfo: [NSLocalizedDescriptionKey: "Brotli init failed"])
       }
-      if decodedSize > 0 {
-        return Data(bytes: dst, count: decodedSize)
+      defer { compression_stream_destroy(&stream) }
+
+      let chunkSize = 64 * 1024
+      var output = Data()
+      var finished = false
+
+      try data.withUnsafeBytes { srcBuffer in
+        guard let srcBase = srcBuffer.bindMemory(to: UInt8.self).baseAddress else {
+          throw NSError(domain: "capgo.brotli", code: 1, userInfo: [NSLocalizedDescriptionKey: "Brotli decompress failed"])
+        }
+        stream.src_ptr = srcBase
+        stream.src_size = data.count
+
+        while !finished {
+          var chunk = Data(count: chunkSize)
+          let produced: Int = chunk.withUnsafeMutableBytes { dstBuffer in
+            guard let dstBase = dstBuffer.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+            stream.dst_ptr = dstBase
+            stream.dst_size = chunkSize
+            status = compression_stream_process(&stream, Int32(COMPRESSION_STREAM_FINALIZE.rawValue))
+            if status == COMPRESSION_STATUS_ERROR { return 0 }
+            return chunkSize - stream.dst_size
+          }
+          if produced > 0 {
+            output.append(chunk.prefix(produced))
+            if output.count > maxOutputSize {
+              throw NSError(domain: "capgo.brotli", code: 2, userInfo: [NSLocalizedDescriptionKey: "Brotli output too large"])
+            }
+          }
+          if status == COMPRESSION_STATUS_END {
+            finished = true
+          } else if status != COMPRESSION_STATUS_OK {
+            throw NSError(domain: "capgo.brotli", code: 1, userInfo: [NSLocalizedDescriptionKey: "Brotli decompress failed"])
+          }
+        }
       }
+
+      if output.isEmpty {
+        throw NSError(domain: "capgo.brotli", code: 1, userInfo: [NSLocalizedDescriptionKey: "Brotli decompress failed"])
+      }
+      return output
     }
     throw NSError(domain: "capgo.brotli", code: 1, userInfo: [NSLocalizedDescriptionKey: "Brotli decompress failed"])
   }

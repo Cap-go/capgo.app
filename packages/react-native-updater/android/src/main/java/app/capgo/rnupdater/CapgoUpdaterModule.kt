@@ -124,6 +124,7 @@ class CapgoUpdaterModule(private val reactContext: ReactApplicationContext) :
   @ReactMethod
   fun download(options: ReadableMap, promise: Promise) {
     executor.execute {
+      var bundleId: String? = null
       try {
         val url = options.getString("url") ?: ""
         val version = options.getString("version") ?: throw IllegalArgumentException("version required")
@@ -132,6 +133,7 @@ class CapgoUpdaterModule(private val reactContext: ReactApplicationContext) :
         val manifest = readManifest(options)
 
         val id = BundleStore.newId()
+        bundleId = id
         val pending = BundleRecord(id, version, "downloading", checksum ?: "", "")
         BundleStore.upsert(reactContext, pending)
 
@@ -157,6 +159,9 @@ class CapgoUpdaterModule(private val reactContext: ReactApplicationContext) :
         emit("downloadComplete", complete)
         promise.resolve(bundleToMap(record))
       } catch (e: Exception) {
+        if (bundleId != null) {
+          BundleStore.removeBundle(reactContext, bundleId)
+        }
         val fail = Arguments.createMap()
         fail.putString("error", e.message)
         emit("downloadFailed", fail)
@@ -168,19 +173,29 @@ class CapgoUpdaterModule(private val reactContext: ReactApplicationContext) :
   @ReactMethod
   fun set(options: ReadableMap, promise: Promise) {
     executor.execute {
+      val id = options.getString("id")
       try {
-        val id = options.getString("id") ?: throw IllegalArgumentException("id required")
+        if (id.isNullOrEmpty()) throw IllegalArgumentException("id required")
         val record = BundleStore.get(reactContext, id) ?: throw IllegalStateException("bundle not found")
+        if (id != CapgoConfig.KEY_BUILTIN && record.status != "success") {
+          throw IllegalStateException("bundle is not ready")
+        }
         check(id == CapgoConfig.KEY_BUILTIN || BundleStore.jsBundleFile(reactContext, id).exists()) {
           "bundle files missing"
         }
+        val current = BundleStore.currentId(reactContext)
+        if (current != CapgoConfig.KEY_BUILTIN && current != id) {
+          BundleStore.setPrevious(reactContext, current)
+        }
         BundleStore.setCurrent(reactContext, id)
         BundleStore.setNext(reactContext, null)
+        reactContext.getSharedPreferences(CapgoConfig.PREFS, android.content.Context.MODE_PRIVATE)
+          .edit().putBoolean(CapgoConfig.KEY_READY, false).apply()
         CapgoHttp.sendStats(reactContext, "set", record.version)
-        CapgoUpdater.reload(reactContext)
         promise.resolve(bundleToMap(record))
+        CapgoUpdater.reload(reactContext)
       } catch (e: Exception) {
-        CapgoHttp.sendStats(reactContext, "set_fail", options.getString("id") ?: "")
+        CapgoHttp.sendStats(reactContext, "set_fail", id ?: "")
         promise.reject("set_fail", e)
       }
     }
@@ -192,6 +207,10 @@ class CapgoUpdaterModule(private val reactContext: ReactApplicationContext) :
       try {
         val id = options.getString("id") ?: throw IllegalArgumentException("id required")
         val record = BundleStore.get(reactContext, id) ?: throw IllegalStateException("bundle not found")
+        if (record.status != "success") throw IllegalStateException("bundle is not ready")
+        check(id == CapgoConfig.KEY_BUILTIN || BundleStore.jsBundleFile(reactContext, id).exists()) {
+          "bundle files missing"
+        }
         BundleStore.setNext(reactContext, id)
         CapgoHttp.sendStats(reactContext, "set_next", record.version)
         promise.resolve(bundleToMap(record))
@@ -206,8 +225,8 @@ class CapgoUpdaterModule(private val reactContext: ReactApplicationContext) :
     executor.execute {
       try {
         CapgoUpdater.rollbackToBuiltin(reactContext)
-        CapgoUpdater.reload(reactContext)
         promise.resolve(bundleToMap(BundleStore.builtin()))
+        CapgoUpdater.reload(reactContext)
       } catch (e: Exception) {
         promise.reject("reset_fail", e)
       }

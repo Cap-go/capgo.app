@@ -55,7 +55,7 @@ object CapgoDownloader {
       }
       request.url.isNotEmpty() && !request.url.contains("404.capgo.app") -> {
         CapgoHttp.sendStats(context, "download_zip_start", request.version)
-        downloadZip(canonicalDest, request.url, progress)
+        downloadZip(canonicalDest, request.url, request.checksum, progress)
         CapgoHttp.sendStats(context, "download_zip_complete", request.version)
       }
       else -> error("No manifest or zip url provided")
@@ -102,11 +102,25 @@ object CapgoDownloader {
     manifest: JSONArray,
     progress: Progress?,
   ) {
+    val hashIndex = buildHashIndex(context, dest)
     val total = manifest.length()
     for (i in 0 until total) {
-      downloadManifestEntry(context, dest, version, manifest.getJSONObject(i))
+      downloadManifestEntry(context, dest, version, manifest.getJSONObject(i), hashIndex)
       progress?.onPercent((((i + 1).toDouble() / total) * 90).toInt().coerceIn(10, 90))
     }
+  }
+
+  private fun buildHashIndex(context: Context, exclude: File): Map<String, File> {
+    val index = mutableMapOf<String, File>()
+    val root = BundleStore.root(context)
+    root.listFiles()?.forEach { bundle ->
+      if (!bundle.isDirectory || bundle.absolutePath == exclude.absolutePath) return@forEach
+      walkFiles(bundle).forEach { file ->
+        val hash = sha256(file)
+        if (hash.length == 64) index.putIfAbsent(hash.lowercase(), file)
+      }
+    }
+    return index
   }
 
   private fun downloadManifestEntry(
@@ -114,6 +128,7 @@ object CapgoDownloader {
     dest: File,
     version: String,
     entry: org.json.JSONObject,
+    hashIndex: Map<String, File>,
   ) {
     val fileName = entry.optString("file_name", "")
     val fileHash = entry.optString("file_hash", "")
@@ -128,7 +143,7 @@ object CapgoDownloader {
     val target = safeTarget(dest, targetName)
     target.parentFile?.mkdirs()
 
-    val reused = findCachedByHash(context, fileHash, dest)
+    val reused = if (fileHash.length == 64) hashIndex[fileHash.lowercase()] else null
     if (reused != null) {
       reused.copyTo(target, overwrite = true)
     } else {
@@ -182,14 +197,7 @@ object CapgoDownloader {
 
   private fun findCachedByHash(context: Context, hash: String, exclude: File): File? {
     if (hash.length != 64) return null
-    val root = BundleStore.root(context)
-    root.listFiles()?.forEach { bundle ->
-      if (!bundle.isDirectory || bundle.absolutePath == exclude.absolutePath) return@forEach
-      walkFiles(bundle).forEach { file ->
-        if (sha256(file).equals(hash, ignoreCase = true)) return file
-      }
-    }
-    return null
+    return buildHashIndex(context, exclude)[hash.lowercase()]
   }
 
   private fun walkFiles(dir: File): Sequence<File> = sequence {
@@ -198,9 +206,16 @@ object CapgoDownloader {
     }
   }
 
-  private fun downloadZip(dest: File, url: String, progress: Progress?) {
+  private fun downloadZip(dest: File, url: String, checksum: String?, progress: Progress?) {
     val zipFile = File(dest, "bundle.zip")
     httpDownloadToFile(url, zipFile)
+    if (!checksum.isNullOrBlank() && checksum.length == 64) {
+      val actual = sha256(zipFile)
+      if (!actual.equals(checksum, ignoreCase = true)) {
+        zipFile.delete()
+        error("ZIP checksum mismatch")
+      }
+    }
     progress?.onPercent(70)
     unzip(zipFile, dest)
     zipFile.delete()

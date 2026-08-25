@@ -16,6 +16,7 @@ object CapgoUpdater {
    */
   @JvmStatic
   fun getJSBundleFile(context: Context): String? {
+    rollbackIfNotReady(context)
     applyPendingNext(context)
     val id = BundleStore.currentId(context)
     if (id == CapgoConfig.KEY_BUILTIN) return null
@@ -27,12 +28,28 @@ object CapgoUpdater {
   fun applyPendingNext(context: Context) {
     val next = BundleStore.nextId(context) ?: return
     val record = BundleStore.get(context, next) ?: return
-    if (BundleStore.jsBundleFile(context, record.id).exists()) {
-      BundleStore.setCurrent(context, record.id)
+    if (!BundleStore.isBundleReady(context, record.id)) return
+    val current = BundleStore.currentId(context)
+    if (current != CapgoConfig.KEY_BUILTIN) {
+      BundleStore.setPrevious(context, current)
+    }
+    BundleStore.setCurrent(context, record.id)
+    BundleStore.setNext(context, null)
+    context.getSharedPreferences(CapgoConfig.PREFS, Context.MODE_PRIVATE)
+      .edit().putBoolean(CapgoConfig.KEY_READY, false).apply()
+  }
+
+  @JvmStatic
+  fun rollbackIfNotReady(context: Context) {
+    val prefs = context.getSharedPreferences(CapgoConfig.PREFS, Context.MODE_PRIVATE)
+    if (prefs.getBoolean(CapgoConfig.KEY_READY, true)) return
+    val previous = BundleStore.previousId(context)
+    if (previous != null && BundleStore.isBundleReady(context, previous)) {
+      BundleStore.setCurrent(context, previous)
       BundleStore.setNext(context, null)
-      // Mark not ready until notifyAppReady
-      context.getSharedPreferences(CapgoConfig.PREFS, Context.MODE_PRIVATE)
-        .edit().putBoolean(CapgoConfig.KEY_READY, false).apply()
+      prefs.edit().putBoolean(CapgoConfig.KEY_READY, true).apply()
+      val old = BundleStore.get(context, BundleStore.currentId(context))
+      CapgoHttp.sendStats(context, "rollback", previous, old?.version ?: "")
     }
   }
 
@@ -49,6 +66,9 @@ object CapgoUpdater {
     val old = BundleStore.get(context, BundleStore.currentId(context))
     BundleStore.setCurrent(context, CapgoConfig.KEY_BUILTIN)
     BundleStore.setNext(context, null)
+    BundleStore.setPrevious(context, null)
+    context.getSharedPreferences(CapgoConfig.PREFS, Context.MODE_PRIVATE)
+      .edit().putBoolean(CapgoConfig.KEY_READY, true).apply()
     CapgoHttp.sendStats(context, "reset", "builtin", old?.version ?: "")
   }
 
