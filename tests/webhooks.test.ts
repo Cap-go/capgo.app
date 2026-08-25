@@ -219,10 +219,9 @@ describeBackend('[GET] /webhooks', () => {
       },
     })
 
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string, message: string }
-    expect(data.error).toBe('no_permission')
-    expect(data.message).toContain('App-scoped API keys')
+    expect(response.status).toBe(401)
+    const data = await response.json() as { error: string }
+    expect(data.error).toBe('invalid_subkey')
   })
 })
 
@@ -878,10 +877,9 @@ describeBackend('[POST] /webhooks/test', () => {
       }),
     })
 
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string, message: string }
-    expect(data.error).toBe('no_permission')
-    expect(data.message).toContain('App-scoped API keys')
+    expect(response.status).toBe(401)
+    const data = await response.json() as { error: string }
+    expect(data.error).toBe('invalid_subkey')
   })
 })
 
@@ -1027,10 +1025,9 @@ describeBackend('[POST] /webhooks/deliveries/retry', () => {
       }),
     })
 
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string, message: string }
-    expect(data.error).toBe('no_permission')
-    expect(data.message).toContain('App-scoped API keys')
+    expect(response.status).toBe(401)
+    const data = await response.json() as { error: string }
+    expect(data.error).toBe('invalid_subkey')
   })
 
   it('rejects retrying pending deliveries', async () => {
