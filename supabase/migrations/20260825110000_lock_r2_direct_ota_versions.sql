@@ -112,12 +112,16 @@ BEGIN
     -- - Indexes: finx_channels_version(version), idx_channels_rollout_version
     --   (rollout_version) WHERE rollout_version IS NOT NULL — BitmapOr of two
     --   Index Scans in EXPLAIN (ANALYZE, BUFFERS) on local seed data.
-    -- - Serialization: concurrent channel promotion calls
-    --   lock_channel_bundle_lifecycle(), which takes FOR UPDATE row locks in
-    --   deterministic bundle-id order before advisory locks. This UPDATE
-    --   already holds a conflicting row lock, so no extra advisory lock is
-    --   needed here.
+    -- - Serialization: acquire FOR UPDATE on OLD.id before the channels lookup
+    --   so a concurrent promotion cannot link the version between the check and
+    --   the write. lock_channel_bundle_lifecycle() uses the same row-lock
+    --   order (FOR UPDATE in deterministic bundle-id order) for promotion.
     IF NOT bundle_was_ready THEN
+      PERFORM 1
+      FROM public.app_versions AS version
+      WHERE version.id = OLD.id
+      FOR UPDATE;
+
       IF EXISTS (
         SELECT 1
         FROM public.channels AS ch
