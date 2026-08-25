@@ -4,7 +4,6 @@ import {
   extractPublishedCliRpcCallsFromSource,
   resolveLatestPublishedCliTag,
   resolvePublishedCliNpmInstallVersion,
-  resolvePublishedCliNpmVersion,
   rpcCallMatchesOverload,
 } from '../scripts/published-cli-contract.ts'
 
