@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
 
 export const PUBLISHED_CLI_TAG_PREFIX = 'cli-'
+export const PUBLISHED_CLI_TAG_PATTERN = /^cli-[0-9]/
 export const PUBLISHED_CLI_RPC_PATTERN = /\.rpc\(\s*['"`]([a-z][a-z0-9_]*)['"`]/g
 
 export interface PublishedCliRpcCall {
@@ -34,19 +35,50 @@ export function resolveLatestPublishedCliTag(runGit: GitRunner = defaultGitRunne
   const tags = output
     .split('\n')
     .map(tag => tag.trim())
-    .filter(tag => /^cli-\d/.test(tag))
+    .filter(tag => PUBLISHED_CLI_TAG_PATTERN.test(tag))
 
   if (tags.length === 0)
-    throw new Error(`No published CLI tags found (expected ${PUBLISHED_CLI_TAG_PREFIX}*)`)
+    throw new Error(`No published CLI tags found (expected ${PUBLISHED_CLI_TAG_PREFIX}<semver>)`)
 
   return tags.sort(comparePublishedCliTags).at(-1)!
 }
 
 export function resolvePublishedCliNpmVersion(tag: string): string {
-  if (!tag.startsWith(PUBLISHED_CLI_TAG_PREFIX))
+  if (!PUBLISHED_CLI_TAG_PATTERN.test(tag))
     throw new Error(`Expected a published CLI tag, got ${tag}`)
 
   return tag.slice(PUBLISHED_CLI_TAG_PREFIX.length)
+}
+
+type NpmRunner = (args: string[]) => string
+
+function defaultNpmRunner(args: string[]): string {
+  return execFileSync('npm', args, { encoding: 'utf8' }).trim()
+}
+
+export function resolvePublishedCliNpmInstallVersion(
+  tag: string,
+  runNpm: NpmRunner = defaultNpmRunner,
+): string {
+  const targetVersion = resolvePublishedCliNpmVersion(tag)
+  const publishedVersions = JSON.parse(runNpm(['view', '@capgo/cli', 'versions', '--json'])) as string[]
+
+  if (publishedVersions.includes(targetVersion))
+    return targetVersion
+
+  const installable = publishedVersions
+    .filter(version => comparePublishedCliTags(`${PUBLISHED_CLI_TAG_PREFIX}${version}`, tag) <= 0)
+    .sort((left, right) => comparePublishedCliTags(`${PUBLISHED_CLI_TAG_PREFIX}${left}`, `${PUBLISHED_CLI_TAG_PREFIX}${right}`))
+    .at(-1)
+
+  if (!installable) {
+    throw new Error(
+      `No published @capgo/cli npm version found for git tag ${tag}. `
+      + `Latest npm release is ${publishedVersions.at(-1) ?? 'unknown'}.`,
+    )
+  }
+
+  return installable
 }
 
 export function extractArgKeysFromRpcCall(source: string, afterRpcNameIndex: number): string[] {

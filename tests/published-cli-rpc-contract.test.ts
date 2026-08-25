@@ -18,7 +18,7 @@ import {
   extractPublishedCliRpcCalls,
   formatPublishedCliRpcCall,
   resolveLatestPublishedCliTag,
-  resolvePublishedCliNpmVersion,
+  resolvePublishedCliNpmInstallVersion,
   rpcCallMatchesOverload,
   type PublishedCliRpcCall,
 } from '../scripts/published-cli-contract.ts'
@@ -42,7 +42,7 @@ interface FunctionPrivilegeRow {
 }
 
 const publishedCliTag = resolveLatestPublishedCliTag()
-const publishedCliVersion = resolvePublishedCliNpmVersion(publishedCliTag)
+const publishedCliNpmVersion = resolvePublishedCliNpmInstallVersion(publishedCliTag)
 const publishedCliRpcCalls = extractPublishedCliRpcCalls(publishedCliTag)
 
 async function loadFunctionPrivileges(functionName: string): Promise<FunctionPrivilegeRow[]> {
@@ -52,7 +52,7 @@ async function loadFunctionPrivileges(functionName: string): Promise<FunctionPri
       SELECT
         p.oid::regprocedure::text AS proc,
         p.proargnames AS arg_names,
-        COALESCE(array_length(p.proargdefaults, 1), 0) AS default_count,
+        COALESCE(p.pronargdefaults, 0) AS default_count,
         p.pronargs AS arg_count,
         has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_exec
       FROM pg_proc AS p
@@ -133,9 +133,9 @@ describe(`CRITICAL published CLI RPC contract (${publishedCliTag})`, () => {
     expect(data).toBe(USER_ID)
   })
 
-  it.concurrent(`published @capgo/cli@${publishedCliVersion} app list MUST succeed against this schema`, async () => {
+  it.concurrent(`published @capgo/cli@${publishedCliNpmVersion} app list MUST succeed against this schema`, async () => {
     const { stdout, stderr } = await execFileAsync('bunx', [
-      `@capgo/cli@${publishedCliVersion}`,
+      `@capgo/cli@${publishedCliNpmVersion}`,
       'app',
       'list',
       '-a',

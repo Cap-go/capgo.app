@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   comparePublishedCliTags,
   extractPublishedCliRpcCallsFromSource,
+  resolveLatestPublishedCliTag,
+  resolvePublishedCliNpmInstallVersion,
   resolvePublishedCliNpmVersion,
   rpcCallMatchesOverload,
 } from '../scripts/published-cli-contract.ts'
@@ -13,8 +15,23 @@ describe('published CLI contract helpers', () => {
     expect(comparePublishedCliTags('cli-8.43.0', 'cli-8.42.5')).toBeGreaterThan(0)
   })
 
-  it.concurrent('maps cli tags to npm versions', () => {
-    expect(resolvePublishedCliNpmVersion('cli-8.42.5')).toBe('8.42.5')
+  it.concurrent('ignores cli-helper tags when resolving the latest published CLI tag', () => {
+    const tag = resolveLatestPublishedCliTag((args) => {
+      if (args[0] === 'tag')
+        return 'cli-helper-1.1.1-rc.1\ncli-8.42.4\ncli-8.42.5'
+      throw new Error(`Unexpected git call: ${args.join(' ')}`)
+    })
+
+    expect(tag).toBe('cli-8.42.5')
+  })
+
+  it.concurrent('uses the highest published npm version at or below the git tag', () => {
+    const version = resolvePublishedCliNpmInstallVersion('cli-8.42.5', (args) => {
+      expect(args).toEqual(['view', '@capgo/cli', 'versions', '--json'])
+      return JSON.stringify(['8.42.1', '8.42.2', '8.42.3'])
+    })
+
+    expect(version).toBe('8.42.3')
   })
 
   it.concurrent('extracts rpc calls and argument keys from CLI source', () => {

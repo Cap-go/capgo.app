@@ -1563,7 +1563,7 @@ jobs:
         run: bun install
       - name: Resolve last published CLI tag
         run: |
-          PUBLISHED_CLI_TAG="$(git tag -l 'cli-*' | sort -V | tail -1)"
+          PUBLISHED_CLI_TAG="$(git tag -l 'cli-*' | grep -E '^cli-[0-9]' | sort -V | tail -1)"
           if [ -z "$PUBLISHED_CLI_TAG" ]; then
             echo '::error::No cli-* tag found for published CLI contract'
             exit 1
