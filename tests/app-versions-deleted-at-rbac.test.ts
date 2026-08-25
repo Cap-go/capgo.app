@@ -13,6 +13,7 @@ const scopeId = randomUUID().replaceAll('-', '')
 const orgId = randomUUID()
 const stripeCustomerId = `cus_deleted_at_rbac_${scopeId}`
 const appId = `com.deletedat.rbac.${scopeId}`
+const otherAppId = `${appId}.other`
 
 let pool: Pool
 let uploaderKey: string
@@ -64,6 +65,39 @@ describe('app_versions deleted_at requires bundle.delete', () => {
     uploaderKey = uploader.key
     uploaderKeyId = uploader.id
 
+    await executeSQL(
+      `INSERT INTO public.apps (app_id, icon_url, user_id, name, owner_org)
+       VALUES ($1, '', $2::uuid, $3, $4::uuid)
+       ON CONFLICT (app_id) DO NOTHING`,
+      [otherAppId, USER_ID, otherAppId, orgId],
+    )
+
+    const [otherApp] = await executeSQL<{ id: string }>(
+      'SELECT id::text FROM public.apps WHERE app_id = $1 LIMIT 1',
+      [otherAppId],
+    )
+    if (!otherApp?.id)
+      throw new Error(`Unable to resolve app ${otherAppId}`)
+
+    const [otherAppAdminRole] = await executeSQL<{ id: string }>(
+      `SELECT id::text FROM public.roles
+       WHERE name = 'app_admin' AND scope_type = 'app'
+       LIMIT 1`,
+    )
+    if (!otherAppAdminRole?.id)
+      throw new Error('Unable to resolve app_admin role')
+
+    await executeSQL(
+      `INSERT INTO public.role_bindings (
+         principal_type, principal_id, role_id, scope_type, org_id, app_id,
+         granted_by, reason, is_direct
+       ) VALUES (
+         'apikey', $1::uuid, $2::uuid, 'app', $3::uuid, $4::uuid,
+         $5::uuid, 'Scope regression: bundle.delete on destination app only', true
+       )`,
+      [uploader.rbac_id, otherAppAdminRole.id, orgId, otherApp.id, USER_ID],
+    )
+
     const deleter = await createDirectApiKeyWithBindings({
       userId: USER_ID,
       key: randomUUID(),
@@ -85,7 +119,7 @@ describe('app_versions deleted_at requires bundle.delete', () => {
       await executeSQL('DELETE FROM public.apikeys WHERE id = ANY($1::bigint[])', [keyIds])
     await executeSQL('SELECT public.reset_app_data($1)', [appId])
     await executeSQL('DELETE FROM public.deleted_apps WHERE app_id = $1', [appId])
-    await executeSQL('DELETE FROM public.apps WHERE app_id = $1', [`${appId}.other`])
+    await executeSQL('DELETE FROM public.apps WHERE app_id = $1', [otherAppId])
     await executeSQL('DELETE FROM public.orgs WHERE id = $1::uuid', [orgId])
     await executeSQL('DELETE FROM public.stripe_info WHERE customer_id = $1', [stripeCustomerId])
     await pool.end()
@@ -133,7 +167,7 @@ describe('app_versions deleted_at requires bundle.delete', () => {
     })).rejects.toThrow(/PERMISSION_DENIED_BUNDLE_DELETE/)
 
     const row = await readVersion(versionId)
-    expect(row?.comment).not.toBe(comment)
+    expect(row?.comment).toBeNull()
     expect(row?.deleted_at).toBeNull()
     expect(row?.deleted).toBe(false)
   })
@@ -158,14 +192,6 @@ describe('app_versions deleted_at requires bundle.delete', () => {
   })
 
   it.concurrent('checks bundle.delete against the original app scope when app_id changes', async () => {
-    const otherAppId = `${appId}.other`
-    await executeSQL(
-      `INSERT INTO public.apps (app_id, icon_url, user_id, name, owner_org)
-       VALUES ($1, '', $2::uuid, $3, $4::uuid)
-       ON CONFLICT (app_id) DO NOTHING`,
-      [otherAppId, USER_ID, otherAppId, orgId],
-    )
-
     const versionId = await insertVersion(`scope-move-delete-${randomUUID()}`)
 
     await expect(withAnonymousCapgkey(pool, uploaderKey, async (client) => {
