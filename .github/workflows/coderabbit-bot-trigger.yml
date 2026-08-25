@@ -1,0 +1,70 @@
+name: Trigger CodeRabbit review for bot pushes
+
+on:
+  push:
+    branches:
+      - 'cursor/**'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  trigger:
+    if: github.actor == 'cursor[bot]' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo
+            const branch = context.ref.replace('refs/heads/', '')
+            const { data: prs } = await github.rest.pulls.list({
+              owner,
+              repo,
+              head: `${owner}:${branch}`,
+              state: 'open',
+            })
+            if (prs.length === 0) {
+              core.info('No open PR for this branch')
+              return
+            }
+
+            const pr = prs[0]
+            const headSha = pr.head.sha
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner,
+              repo,
+              pull_number: pr.number,
+            })
+            const latestCodeRabbitReview = reviews
+              .filter(review => review.user.login === 'coderabbitai[bot]')
+              .pop()
+
+            if (
+              latestCodeRabbitReview?.commit_id === headSha
+              && latestCodeRabbitReview.state !== 'CHANGES_REQUESTED'
+            ) {
+              core.info('CodeRabbit already reviewed the current head commit')
+              return
+            }
+
+            const marker = `<!-- coderabbit-trigger:${headSha} -->`
+            const { data: comments } = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number: pr.number,
+              per_page: 100,
+            })
+            if (comments.some(comment => comment.body?.includes(marker))) {
+              core.info('CodeRabbit trigger already posted for this head commit')
+              return
+            }
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: pr.number,
+              body: `${marker}\n@coderabbitai review`,
+            })
