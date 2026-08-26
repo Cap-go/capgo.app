@@ -999,6 +999,37 @@ export async function setServiceRoleClaim(query: SqlQueryFn): Promise<void> {
   await query('SET LOCAL ROLE service_role')
 }
 
+type AuthContextSnapshot = {
+  sqlRole: string
+  jwtRole: string | null
+  jwtClaims: string | null
+}
+
+async function captureAuthContext(query: SqlQueryFn): Promise<AuthContextSnapshot> {
+  const result = await query(`
+    SELECT
+      current_user AS sql_role,
+      current_setting('request.jwt.claim.role', true) AS jwt_role,
+      current_setting('request.jwt.claims', true) AS jwt_claims
+  `)
+  const row = result.rows[0] ?? {}
+  return {
+    sqlRole: String(row.sql_role ?? ''),
+    jwtRole: row.jwt_role == null ? null : String(row.jwt_role),
+    jwtClaims: row.jwt_claims == null ? null : String(row.jwt_claims),
+  }
+}
+
+async function restoreAuthContext(query: SqlQueryFn, context: AuthContextSnapshot): Promise<void> {
+  await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claim.role', context.jwtRole ?? ''])
+  await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claims', context.jwtClaims ?? ''])
+
+  if (context.sqlRole === 'authenticated' || context.sqlRole === 'anon' || context.sqlRole === 'service_role')
+    await query(`SET LOCAL ROLE ${context.sqlRole}`)
+  else
+    await query('RESET ROLE')
+}
+
 export async function setAnonCapgkeyClaim(query: SqlQueryFn, capgkey: string): Promise<void> {
   await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claim.role', 'anon'])
   await query(`SELECT set_config($1, $2, true)`, ['request.headers', JSON.stringify({ capgkey })])
@@ -1011,6 +1042,7 @@ export async function createOrgOwnedByUser(
   labelPrefix: string,
 ): Promise<string> {
   const orgId = randomUUID()
+  const previousContext = await captureAuthContext(query)
   await setServiceRoleClaim(query)
   try {
     await query(
@@ -1022,7 +1054,7 @@ export async function createOrgOwnedByUser(
     )
   }
   finally {
-    await query('RESET ROLE')
+    await restoreAuthContext(query, previousContext)
   }
   return orgId
 }
