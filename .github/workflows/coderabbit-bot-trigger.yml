@@ -38,7 +38,9 @@ jobs:
             }
 
             for (const pr of prs) {
-              const headSha = pr.head.sha
+              const headSha = context.eventName === 'push'
+                ? context.sha
+                : pr.head.sha
               const reviews = await github.paginate(github.rest.pulls.listReviews, {
                 owner,
                 repo,
