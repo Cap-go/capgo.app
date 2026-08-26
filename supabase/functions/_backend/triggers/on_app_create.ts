@@ -5,6 +5,7 @@ import { eq, or } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 import { createIfNotExistStoreInfo } from '../utils/cloudflare.ts'
 import { purgeOnPremCache } from '../utils/cloudflare_cache_purge.ts'
+import { buildAppCreatorEventDetails } from '../utils/app_creator.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
@@ -106,6 +107,7 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'INSERT'), async (c)
 
   let appCreatedBentoEvent: BentoTrackingPayload | undefined
   if (!isDemo && !isPendingOnboarding) {
+    const creatorDetails = buildAppCreatorEventDetails(record.onboarding)
     appCreatedBentoEvent = await supabase
       .from('orgs')
       .select('*')
@@ -129,6 +131,7 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'INSERT'), async (c)
               website: data.website,
             }),
             app_name: record.name,
+            ...creatorDetails,
           },
         }
       })

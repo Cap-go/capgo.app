@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { applyAppOnboardingPatch, isAppOnboardingSource } from '../../utils/appOnboarding.ts'
+import { addAppCreatorToOnboarding } from '../../utils/app_creator.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
@@ -24,6 +25,11 @@ export interface CreateApp {
 }
 
 export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp): Promise<Response> {
+  const auth = c.get('auth')
+  if (!auth?.userId) {
+    throw quickError(401, 'not_authenticated', 'Not authenticated')
+  }
+
   if (!body.app_id) {
     throw simpleError('missing_app_id', 'Missing app_id', { body })
   }
@@ -65,7 +71,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
     existing_app: body.existing_app ?? false,
     ios_store_url: body.ios_store_url ?? null,
     android_store_url: body.android_store_url ?? null,
-    onboarding: applyAppOnboardingPatch({}, {
+    onboarding: applyAppOnboardingPatch(addAppCreatorToOnboarding({}, auth.userId, auth.claims?.email), {
       source: isAppOnboardingSource(body.onboarding?.source) ? body.onboarding.source : 'manual',
     }),
   }
