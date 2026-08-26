@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Bind frontend login to repeatable Bento delivery
+## Task 1: Bind frontend login to repeatable Bento delivery
 
 **Files:**
 - Modify: `tests/user-bento-events.unit.test.ts`

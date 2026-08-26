@@ -24,9 +24,11 @@ describe('cli user Bento event registry', () => {
     expect(buildMappedUserBentoEvent({
       sourceEvent: 'User Login',
       observedAt: '2026-08-26T10:00:00.000Z',
-    })).toMatchObject({
+      tags: { email: 'must-not-leak@example.com' },
+    })).toEqual({
       bentoEvent: 'user:login',
       delivery: 'every',
+      details: { observed_at: '2026-08-26T10:00:00.000Z', source_event: 'User Login' },
     })
   })
 
