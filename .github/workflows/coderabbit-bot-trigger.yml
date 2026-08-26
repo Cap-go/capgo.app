@@ -11,9 +11,11 @@ concurrency:
   group: coderabbit-bot-trigger-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
+# pull-requests: write is required: GITHUB_TOKEN gets 403 on issues.createComment
+# for PRs when only pull-requests: read is granted (see run 32975845301).
 permissions:
   issues: write
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   trigger:
