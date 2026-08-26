@@ -388,12 +388,12 @@ Example: npx @capgo/cli@latest bundle encrypt ./myapp.zip CHECKSUM`)
   .option('--package-json <packageJson>', optionDescriptions.packageJson)
 
 bundle
-  .command('decrypt [zipPath] [checksum]')
+  .command('decrypt [zipPath] [ivSessionKey]')
   .description(`🔓 Decrypt an encrypted bundle (mainly for testing).
 
 Prints base64 session key for verification.
 
-Example: npx @capgo/cli@latest bundle decrypt ./myapp_encrypted.zip CHECKSUM`)
+Example: npx @capgo/cli@latest bundle decrypt ./myapp_encrypted.zip IV_BASE64:SESSION_KEY_BASE64`)
   .action(decryptZip)
   .option('--key <key>', `Custom path for private signing key`)
   .option('--key-data <keyData>', `Private signing key`)

@@ -6,7 +6,9 @@ import { parse } from '@std/semver'
 import { trackEvent } from '../analytics/track'
 import { encryptChecksum, encryptChecksumV3, encryptSource, generateSessionKey } from '../api/crypto'
 import { checkAlerts } from '../api/update'
+import { CliUserError } from '../shared/cli-user-error'
 import { baseKeyV2, findRoot, formatError, getConfig, getInstalledVersion, isDeprecatedPluginVersion } from '../utils'
+import { requireChecksum, requireExistingZipPath, requireZipPath } from './validate-inputs'
 
 export type { EncryptResult } from '../schemas/bundle'
 
@@ -17,6 +19,14 @@ const HEX_CHECKSUM_MIN_VERSION_V7 = '7.30.0'
 
 function emitJsonError(error: unknown) {
   console.error(formatError(error))
+}
+
+function emitCliUserJsonError(error: CliUserError) {
+  if (/^Zip not found at /i.test(error.message)) {
+    emitJsonError({ error: 'zip_not_found', message: error.message })
+    return
+  }
+  emitJsonError({ error: error.message })
 }
 
 export async function encryptZipInternal(
@@ -34,6 +44,10 @@ export async function encryptZipInternal(
   }
 
   try {
+    requireZipPath(zipPath)
+    checksum = requireChecksum(checksum)
+    requireExistingZipPath(zipPath)
+
     const extConfig = await getConfig()
 
     const hasPrivateKeyInConfig = !!extConfig.config.plugins?.CapacitorUpdater?.privateKey
@@ -41,17 +55,6 @@ export async function encryptZipInternal(
 
     if (hasPrivateKeyInConfig && shouldShowPrompts)
       log.warning('There is still a privateKey in the config')
-
-    if (!existsSync(zipPath)) {
-      const message = `Zip not found at the path ${zipPath}`
-      if (!silent) {
-        if (json)
-          emitJsonError({ error: 'zip_not_found' })
-        else
-          log.error(`Error: ${message}`)
-      }
-      throw new Error(message)
-    }
 
     if (!hasPublicKeyInConfig) {
       if (!silent) {
@@ -151,6 +154,16 @@ export async function encryptZipInternal(
     }
   }
   catch (error) {
+    if (error instanceof CliUserError) {
+      if (!silent) {
+        if (options.json)
+          emitCliUserJsonError(error)
+        else
+          log.error(`Error: ${error.message}`)
+      }
+      throw error
+    }
+
     if (!silent) {
       if (options.json)
         emitJsonError(error)
