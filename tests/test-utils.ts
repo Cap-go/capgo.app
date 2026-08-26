@@ -1012,13 +1012,18 @@ export async function createOrgOwnedByUser(
 ): Promise<string> {
   const orgId = randomUUID()
   await setServiceRoleClaim(query)
-  await query(
-    `
-      INSERT INTO public.orgs (id, name, management_email, created_by)
-      VALUES ($1::uuid, $2, $3, $4::uuid)
-    `,
-    [orgId, `${labelPrefix} ${orgId}`, `${labelPrefix.toLowerCase().replace(/\s+/g, '-')}-${orgId}@capgo.app`, ownerId],
-  )
+  try {
+    await query(
+      `
+        INSERT INTO public.orgs (id, name, management_email, created_by)
+        VALUES ($1::uuid, $2, $3, $4::uuid)
+      `,
+      [orgId, `${labelPrefix} ${orgId}`, `${labelPrefix.toLowerCase().replace(/\s+/g, '-')}-${orgId}@capgo.app`, ownerId],
+    )
+  }
+  finally {
+    await query('RESET ROLE')
+  }
   return orgId
 }
 
