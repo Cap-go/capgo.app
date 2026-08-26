@@ -5,6 +5,8 @@ import {
   buildLogicalPlansOpenings,
   buildPlansChartData,
   CHECKOUT_ATTRIBUTION_MS,
+  CHECKOUT_COMPLETION_OBSERVATION_MS,
+  classifyCheckoutCompletion,
 } from '../supabase/functions/_backend/utils/plans_analytics_model.ts'
 
 const ms = (value: string) => Date.parse(value)
@@ -105,7 +107,9 @@ describe('plans analytics model', () => {
       attributedCheckouts: matches,
       startMs: ms('2026-08-01T00:00:00Z'),
       endMs: ms('2026-08-03T00:00:00Z'),
+      nowMs: ms('2026-08-10T00:00:00Z'),
       classifyAt: orgId => orgId === 'org-a' ? 'paying' : 'active_trial',
+      isCheckoutCompleted: () => false,
     })
 
     expect(result.traffic.uniqueVisitorOrganizations).toEqual([1, 1])
@@ -129,7 +133,9 @@ describe('plans analytics model', () => {
       attributedCheckouts: matches,
       startMs: ms('2026-08-01T00:00:00Z'),
       endMs: ms('2026-08-02T00:00:00Z'),
+      nowMs: ms('2026-08-10T00:00:00Z'),
       classifyAt: (_orgId, timestampMs) => timestampMs < ms('2026-08-01T10:00:00Z') ? 'expired_trial' : 'credits_only',
+      isCheckoutCompleted: () => false,
     })
 
     expect(result.checkoutIntent).toEqual([{ date: '2026-08-01', startedCheckout: 1, didNotStart: 0 }])
@@ -151,10 +157,12 @@ describe('plans analytics model', () => {
       attributedCheckouts: matches,
       startMs: ms('2026-08-01T12:00:00Z'),
       endMs: ms('2026-08-04T06:00:00Z'),
+      nowMs: ms('2026-08-10T00:00:00Z'),
       classifyAt: (_orgId, timestampMs) => {
         classifiedAt.push(timestampMs)
         return timestampMs < ms('2026-08-02T10:00:00Z') ? 'expired_trial' : 'credits_only'
       },
+      isCheckoutCompleted: () => false,
     })
 
     expect(result.traffic).toEqual({
@@ -189,7 +197,9 @@ describe('plans analytics model', () => {
       }],
       startMs: ms('2026-08-01T00:00:00Z'),
       endMs: ms('2026-08-02T00:00:00Z'),
+      nowMs: ms('2026-08-10T00:00:00Z'),
       classifyAt: () => 'unknown',
+      isCheckoutCompleted: () => false,
     })
 
     expect(result.traffic).toEqual({
@@ -198,5 +208,58 @@ describe('plans analytics model', () => {
       totalOpens: [1],
     })
     expect(result.checkoutIntent).toEqual([{ date: '2026-08-01', startedCheckout: 0, didNotStart: 1 }])
+  })
+
+  it.concurrent('classifies checkout completion from billing evidence within the observation window', () => {
+    expect(CHECKOUT_COMPLETION_OBSERVATION_MS).toBe(CHECKOUT_ATTRIBUTION_MS)
+
+    const checkoutAt = ms('2026-08-01T08:05:00Z')
+    const completed = classifyCheckoutCompletion(
+      checkoutAt,
+      ms('2026-08-02T09:00:00Z'),
+      timestampMs => timestampMs === checkoutAt && ms('2026-08-01T09:00:00Z') > checkoutAt,
+    )
+    const pending = classifyCheckoutCompletion(
+      checkoutAt,
+      ms('2026-08-01T20:00:00Z'),
+      () => false,
+    )
+    const notCompleted = classifyCheckoutCompletion(
+      checkoutAt,
+      ms('2026-08-03T00:00:00Z'),
+      () => false,
+    )
+
+    expect(completed).toBe('completed')
+    expect(pending).toBe('pending')
+    expect(notCompleted).toBe('not_completed')
+  })
+
+  it.concurrent('buckets checkout completion on the attributed Plans-opening UTC day', () => {
+    const openings = buildLogicalPlansOpenings([
+      event({ timestampMs: ms('2026-08-01T08:00:00Z'), orgId: 'org-a', page: 'plans' }),
+      event({ timestampMs: ms('2026-08-01T09:00:00Z'), orgId: 'org-b', page: 'plans' }),
+      event({ timestampMs: ms('2026-08-02T08:00:00Z'), orgId: 'org-c', page: 'plans' }),
+    ], ms('2026-08-01T00:00:00Z'), ms('2026-08-03T00:00:00Z'))
+    const matches = attributeCheckoutStarts(openings, [
+      event({ event: 'Checkout Started', timestampMs: ms('2026-08-01T08:05:00Z'), orgId: 'org-a' }),
+      event({ event: 'Checkout Started', timestampMs: ms('2026-08-01T09:05:00Z'), orgId: 'org-b' }),
+      event({ event: 'Checkout Started', timestampMs: ms('2026-08-02T08:05:00Z'), orgId: 'org-c' }),
+    ])
+    const result = buildPlansChartData({
+      openings,
+      attributedCheckouts: matches,
+      startMs: ms('2026-08-01T00:00:00Z'),
+      endMs: ms('2026-08-03T00:00:00Z'),
+      nowMs: ms('2026-08-10T00:00:00Z'),
+      classifyAt: () => 'active_trial',
+      isCheckoutCompleted: (_orgId, checkoutTimestampMs) => checkoutTimestampMs === ms('2026-08-01T08:05:00Z'),
+    })
+
+    expect(result.checkoutCompletion).toEqual([
+      { date: '2026-08-01', completed: 1, notCompleted: 1, pending: 0 },
+      { date: '2026-08-02', completed: 0, notCompleted: 1, pending: 0 },
+    ])
+    expect(result.checkoutCompletion.map(day => day.completed + day.notCompleted + day.pending)).toEqual([2, 1])
   })
 })

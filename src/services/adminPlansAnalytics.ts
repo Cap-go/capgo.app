@@ -24,6 +24,13 @@ export interface DailyCheckoutIntentPoint {
   didNotStart: number
 }
 
+export interface DailyCheckoutCompletionPoint {
+  date: string
+  completed: number
+  notCompleted: number
+  pending: number
+}
+
 export interface PlansAnalyticsDataQuality {
   exactTrackingStartedAt: string | null
   exactLogicalOpens: number
@@ -50,6 +57,7 @@ export interface PlansAnalyticsPresentationState {
   hasTraffic: boolean
   hasVisitors: boolean
   hasCheckoutIntent: boolean
+  hasCheckoutCompletion: boolean
   hasCheckoutVisitors: boolean
   showPartialBillingWarning: boolean
 }
@@ -69,6 +77,7 @@ export interface PlansAnalyticsSeries {
   traffic: ChartSeries[]
   visitors: ChartSeries[]
   checkoutIntent: ChartSeries[]
+  checkoutCompletion: ChartSeries[]
   checkoutVisitors: ChartSeries[]
 }
 
@@ -90,6 +99,7 @@ export function buildPlansAnalyticsPresentationState(
     hasTraffic: Boolean(data?.dataQuality.posthogConnected && data.traffic.totalOpens.some(value => value > 0)),
     hasVisitors: Boolean(data?.dataQuality.posthogConnected && data.visitorBreakdown.some(row => row.total > 0)),
     hasCheckoutIntent: Boolean(data?.dataQuality.posthogConnected && data.checkoutIntent.some(row => row.startedCheckout > 0 || row.didNotStart > 0)),
+    hasCheckoutCompletion: Boolean(data?.dataQuality.posthogConnected && data.checkoutCompletion.some(row => row.completed > 0 || row.notCompleted > 0 || row.pending > 0)),
     hasCheckoutVisitors: Boolean(data?.dataQuality.posthogConnected && data.checkoutVisitorBreakdown.some(row => row.total > 0)),
     showPartialBillingWarning: Boolean(data && data.dataQuality.unknownBillingOrganizations > 0),
   }
@@ -195,6 +205,16 @@ function dailyBillingPoint(value: unknown, path: string): DailyBillingPoint {
   }
 }
 
+function dailyCheckoutCompletionPoint(value: unknown, path: string): DailyCheckoutCompletionPoint {
+  const row = record(value, path)
+  return {
+    date: utcDate(row.date, `${path}.date`),
+    completed: count(row.completed, `${path}.completed`),
+    notCompleted: count(row.notCompleted, `${path}.notCompleted`),
+    pending: count(row.pending, `${path}.pending`),
+  }
+}
+
 function dailyCheckoutIntentPoint(value: unknown, path: string): DailyCheckoutIntentPoint {
   const row = record(value, path)
   return {
@@ -222,6 +242,8 @@ export function parsePlansAnalyticsResponse(value: unknown): PlansAnalyticsRespo
       .map((row, index) => dailyBillingPoint(row, `response.visitorBreakdown[${index}]`)),
     checkoutIntent: array(response.checkoutIntent, 'response.checkoutIntent')
       .map((row, index) => dailyCheckoutIntentPoint(row, `response.checkoutIntent[${index}]`)),
+    checkoutCompletion: array(response.checkoutCompletion, 'response.checkoutCompletion')
+      .map((row, index) => dailyCheckoutCompletionPoint(row, `response.checkoutCompletion[${index}]`)),
     checkoutVisitorBreakdown: array(response.checkoutVisitorBreakdown, 'response.checkoutVisitorBreakdown')
       .map((row, index) => dailyBillingPoint(row, `response.checkoutVisitorBreakdown[${index}]`)),
     dataQuality: {
@@ -261,6 +283,11 @@ export function buildPlansAnalyticsSeries(data: PlansAnalyticsResponse, t: Trans
     checkoutIntent: [
       { label: t('plans-analytics-started-checkout'), color: '#10b981', data: data.checkoutIntent.map(row => ({ date: row.date, value: row.startedCheckout })) },
       { label: t('plans-analytics-did-not-start'), color: '#94a3b8', data: data.checkoutIntent.map(row => ({ date: row.date, value: row.didNotStart })) },
+    ],
+    checkoutCompletion: [
+      { label: t('plans-analytics-completed-checkout'), color: '#2563eb', data: data.checkoutCompletion.map(row => ({ date: row.date, value: row.completed })) },
+      { label: t('plans-analytics-not-completed'), color: '#94a3b8', data: data.checkoutCompletion.map(row => ({ date: row.date, value: row.notCompleted })) },
+      { label: t('plans-analytics-pending-completion'), color: '#f59e0b', data: data.checkoutCompletion.map(row => ({ date: row.date, value: row.pending })) },
     ],
     checkoutVisitors: billing(data.checkoutVisitorBreakdown),
   }

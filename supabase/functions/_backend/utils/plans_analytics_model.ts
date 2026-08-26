@@ -1,4 +1,5 @@
 export const CHECKOUT_ATTRIBUTION_MS = 24 * 60 * 60 * 1000
+export const CHECKOUT_COMPLETION_OBSERVATION_MS = CHECKOUT_ATTRIBUTION_MS
 
 export type PlansBillingCategory
   = | 'paying'
@@ -43,6 +44,15 @@ export interface DailyCheckoutIntentPoint {
   didNotStart: number
 }
 
+export interface DailyCheckoutCompletionPoint {
+  date: string
+  completed: number
+  notCompleted: number
+  pending: number
+}
+
+export type CheckoutCompletionOutcome = 'completed' | 'not_completed' | 'pending'
+
 export interface PlansChartData {
   traffic: {
     dates: string[]
@@ -51,6 +61,7 @@ export interface PlansChartData {
   }
   visitorBreakdown: DailyBillingPoint[]
   checkoutIntent: DailyCheckoutIntentPoint[]
+  checkoutCompletion: DailyCheckoutCompletionPoint[]
   checkoutVisitorBreakdown: DailyBillingPoint[]
 }
 
@@ -167,12 +178,30 @@ function utcDaysIntersecting(startMs: number, endMs: number): string[] {
   return dates
 }
 
+export function classifyCheckoutCompletion(
+  checkoutTimestampMs: number,
+  nowMs: number,
+  isCompleted: (checkoutTimestampMs: number) => boolean,
+): CheckoutCompletionOutcome {
+  if (!Number.isFinite(checkoutTimestampMs))
+    return 'not_completed'
+
+  const observationDeadlineMs = checkoutTimestampMs + CHECKOUT_COMPLETION_OBSERVATION_MS
+  if (isCompleted(checkoutTimestampMs))
+    return 'completed'
+  if (Number.isFinite(nowMs) && nowMs >= observationDeadlineMs)
+    return 'not_completed'
+  return 'pending'
+}
+
 export function buildPlansChartData(input: {
   openings: LogicalPlansOpening[]
   attributedCheckouts: AttributedCheckout[]
   startMs: number
   endMs: number
+  nowMs: number
   classifyAt: (orgId: string, timestampMs: number) => PlansBillingCategory
+  isCheckoutCompleted: (orgId: string, checkoutTimestampMs: number) => boolean
 }): PlansChartData {
   const dates = utcDaysIntersecting(input.startMs, input.endMs)
   const dateIndexes = new Map(dates.map((date, index) => [date, index]))
@@ -180,6 +209,7 @@ export function buildPlansChartData(input: {
   const totalOpens = dates.map(() => 0)
   const visitorBreakdown = dates.map(createDailyBillingPoint)
   const checkoutIntent = dates.map(date => ({ date, startedCheckout: 0, didNotStart: 0 }))
+  const checkoutCompletion = dates.map(date => ({ date, completed: 0, notCompleted: 0, pending: 0 }))
   const checkoutVisitorBreakdown = dates.map(createDailyBillingPoint)
   const firstDailyOpening = new Map<string, LogicalPlansOpening>()
   const seenOrganizations = new Set<string>()
@@ -241,6 +271,18 @@ export function buildPlansChartData(input: {
         checkoutVisitorBreakdown[dateIndex],
         input.classifyAt(checkout.orgId, checkout.opening.timestampMs),
       )
+
+      const outcome = classifyCheckoutCompletion(
+        checkout.checkoutTimestampMs,
+        input.nowMs,
+        checkoutTimestampMs => input.isCheckoutCompleted(checkout.orgId, checkoutTimestampMs),
+      )
+      if (outcome === 'completed')
+        checkoutCompletion[dateIndex].completed += 1
+      else if (outcome === 'not_completed')
+        checkoutCompletion[dateIndex].notCompleted += 1
+      else
+        checkoutCompletion[dateIndex].pending += 1
     }
   }
 
@@ -248,6 +290,7 @@ export function buildPlansChartData(input: {
     traffic: { dates, uniqueVisitorOrganizations, totalOpens },
     visitorBreakdown,
     checkoutIntent,
+    checkoutCompletion,
     checkoutVisitorBreakdown,
   }
 }
