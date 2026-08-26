@@ -51,9 +51,13 @@ BEGIN
 
     bundle_was_ready := OLD.storage_provider IS DISTINCT FROM 'r2-direct';
 
+    -- Service-role bundle/prepare sets this GUC transaction-locally before resetting
+    -- a completed (r2) version back to r2-direct for same-version re-upload.
     IF pg_catalog.current_setting('capgo.prepare_reupload_reset', true) = 'on'
       AND bundle_was_ready
       AND NEW.storage_provider = 'r2-direct'
+      AND NEW.name IS NOT DISTINCT FROM OLD.name
+      AND NEW.app_id IS NOT DISTINCT FROM OLD.app_id
     THEN
       RETURN NEW;
     END IF;
