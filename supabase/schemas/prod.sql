@@ -3299,6 +3299,16 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  IF TG_OP = 'INSERT'
+    AND COALESCE(NEW.is_invite, false) IS NOT TRUE
+  THEN
+    PERFORM public.pg_log(
+      'deny: ORG_USER_ACTIVE_INSERT',
+      pg_catalog.jsonb_build_object('org_id', NEW.org_id, 'uid', v_actor_id)
+    );
+    RAISE EXCEPTION 'Admins cannot insert active org memberships!';
+  END IF;
+
   IF TG_OP = 'UPDATE'
     AND (
       NEW.org_id IS DISTINCT FROM OLD.org_id
@@ -3383,6 +3393,7 @@ BEGIN
     WHERE role_bindings.principal_type = public.rbac_principal_apikey()
       AND role_bindings.principal_id = v_principal_id
       AND role_bindings.org_id = NEW.org_id
+      AND role_bindings.scope_type = public.rbac_scope_org()
       AND (
         role_bindings.expires_at IS NULL
         OR role_bindings.expires_at > pg_catalog.now()
@@ -3396,6 +3407,7 @@ BEGIN
       WHERE role_bindings.principal_type = public.rbac_principal_user()
         AND role_bindings.principal_id = v_principal_id
         AND role_bindings.org_id = NEW.org_id
+        AND role_bindings.scope_type = public.rbac_scope_org()
         AND (
           role_bindings.expires_at IS NULL
           OR role_bindings.expires_at > pg_catalog.now()
@@ -3412,6 +3424,7 @@ BEGIN
         ON role_bindings.principal_type = public.rbac_principal_group()
         AND role_bindings.principal_id = group_members.group_id
         AND role_bindings.org_id = groups.org_id
+        AND role_bindings.scope_type = public.rbac_scope_org()
       WHERE group_members.user_id = v_principal_id
         AND (
           role_bindings.expires_at IS NULL
@@ -5624,6 +5637,57 @@ $$;
 
 
 ALTER FUNCTION "public"."enforce_apikey_role_binding_expiration_policy"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."enforce_app_versions_delete_permission"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  -- Prefer current_request_role over auth.role()/session_user: pgTAP and
+  -- PostgREST API-key traffic set the role GUC (and/or JWT role) to anon while
+  -- session_user stays postgres. Falling back to session_user would skip the
+  -- guard for those callers.
+  v_request_role text := public.current_request_role();
+BEGIN
+  IF NOT (
+    NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
+    OR (NEW.deleted IS TRUE AND OLD.deleted IS NOT TRUE)
+  ) THEN
+    RETURN NEW;
+  END IF;
+
+  IF public.is_internal_request_role(v_request_role) THEN
+    RETURN NEW;
+  END IF;
+
+  IF v_request_role IS DISTINCT FROM 'anon'
+    AND v_request_role IS DISTINCT FROM 'authenticated'
+  THEN
+    RAISE EXCEPTION 'PERMISSION_DENIED_BUNDLE_DELETE'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF NOT public.rbac_check_permission_request(
+    public.rbac_perm_bundle_delete(),
+    OLD.owner_org,
+    OLD.app_id,
+    NULL::bigint
+  ) THEN
+    RAISE EXCEPTION 'PERMISSION_DENIED_BUNDLE_DELETE'
+      USING ERRCODE = '42501';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."enforce_app_versions_delete_permission"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."enforce_app_versions_delete_permission"() IS 'Requires bundle.delete when a user-context write changes deleted or deleted_at.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."enforce_channel_update_package_bundle"() RETURNS "trigger"
@@ -20469,7 +20533,8 @@ CREATE TABLE IF NOT EXISTS "public"."global_stats" (
     "notifications_opened_last_month" bigint DEFAULT 0 NOT NULL,
     "apps_with_preview" bigint DEFAULT 0 NOT NULL,
     "plan_credits" integer DEFAULT 0 NOT NULL,
-    "users_with_2fa" bigint DEFAULT 0 NOT NULL
+    "users_with_2fa" bigint DEFAULT 0 NOT NULL,
+    "apps_with_store_url" bigint DEFAULT 0 NOT NULL
 );
 
 
@@ -20793,6 +20858,10 @@ COMMENT ON COLUMN "public"."global_stats"."plan_credits" IS 'Orgs with remaining
 
 
 COMMENT ON COLUMN "public"."global_stats"."users_with_2fa" IS 'Snapshot of users with at least one verified MFA factor at UTC day end.';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."apps_with_store_url" IS 'Number of apps with at least one App Store or Google Play link at snapshot day end.';
 
 
 
@@ -23272,7 +23341,7 @@ CREATE OR REPLACE TRIGGER "check_if_org_can_exist_org_users" AFTER DELETE ON "pu
 
 
 
-CREATE OR REPLACE TRIGGER "check_privileges" BEFORE INSERT OR UPDATE OF "user_id", "org_id", "rbac_role_name" ON "public"."org_users" FOR EACH ROW WHEN ((("current_setting"('request.jwt.claim.role'::"text", true) = 'authenticated'::"text") AND COALESCE((NOT ("current_setting"('request.jwt.claim.email'::"text", true) = ANY (ARRAY['bot@capgo.app'::"text", 'test@capgo.app'::"text"]))), true))) EXECUTE FUNCTION "public"."check_org_user_privileges"();
+CREATE OR REPLACE TRIGGER "check_privileges" BEFORE INSERT OR UPDATE OF "user_id", "org_id", "rbac_role_name", "is_invite" ON "public"."org_users" FOR EACH ROW WHEN ((("current_setting"('request.jwt.claim.role'::"text", true) = ANY (ARRAY['authenticated'::"text", 'anon'::"text"])) AND COALESCE((NOT ("current_setting"('request.jwt.claim.email'::"text", true) = ANY (ARRAY['bot@capgo.app'::"text", 'test@capgo.app'::"text"]))), true))) EXECUTE FUNCTION "public"."check_org_user_privileges"();
 
 
 
@@ -23289,6 +23358,10 @@ CREATE OR REPLACE TRIGGER "credit_usage_alert_on_transactions" AFTER INSERT ON "
 
 
 CREATE OR REPLACE TRIGGER "credit_usage_posthog_on_transactions" AFTER INSERT ON "public"."usage_credit_transactions" FOR EACH ROW EXECUTE FUNCTION "public"."enqueue_credit_usage_posthog_event"();
+
+
+
+CREATE OR REPLACE TRIGGER "enforce_app_versions_delete_permission" BEFORE UPDATE OF "deleted", "deleted_at" ON "public"."app_versions" FOR EACH ROW EXECUTE FUNCTION "public"."enforce_app_versions_delete_permission"();
 
 
 
@@ -25984,6 +26057,11 @@ GRANT ALL ON FUNCTION "public"."enforce_apikey_expiration_policy"() TO "service_
 
 REVOKE ALL ON FUNCTION "public"."enforce_apikey_role_binding_expiration_policy"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."enforce_apikey_role_binding_expiration_policy"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."enforce_app_versions_delete_permission"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."enforce_app_versions_delete_permission"() TO "service_role";
 
 
 

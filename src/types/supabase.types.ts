@@ -125,6 +125,56 @@ export type Database = {
           },
         ]
       }
+      app_fame: {
+        Row: {
+          app_id: string
+          category: string | null
+          checked_at: string
+          confidence: number
+          created_at: string
+          fame_score: number
+          known_as: string | null
+          model: string
+          summary: string
+          tier: string
+          updated_at: string
+        }
+        Insert: {
+          app_id: string
+          category?: string | null
+          checked_at?: string
+          confidence: number
+          created_at?: string
+          fame_score: number
+          known_as?: string | null
+          model?: string
+          summary?: string
+          tier: string
+          updated_at?: string
+        }
+        Update: {
+          app_id?: string
+          category?: string | null
+          checked_at?: string
+          confidence?: number
+          created_at?: string
+          fame_score?: number
+          known_as?: string | null
+          model?: string
+          summary?: string
+          tier?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "app_fame_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: true
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
+          },
+        ]
+      }
       app_metrics_cache: {
         Row: {
           cached_at: string
