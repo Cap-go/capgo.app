@@ -142,12 +142,8 @@ describe('CRITICAL published CLI RPC contract', () => {
       expect(overloads.length, `${call.name} is missing from public schema`).toBeGreaterThan(0)
 
       const matches = resolveMatchingOverloads(call, overloads)
-      if (call.argKeys === null) {
-        expect(overloads.length, `${call.name} is missing from public schema`).toBeGreaterThan(0)
-      }
-      else {
+      if (call.argKeys !== null)
         expect(matches.length, `No overload matched ${formatPublishedCliRpcCall(call)}`).toBeGreaterThan(0)
-      }
 
       const overloadsToCheck = call.argKeys === null ? overloads : matches
       const hasAnonExec = overloadsToCheck.some(overload => overload.anonExec)
