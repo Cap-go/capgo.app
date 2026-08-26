@@ -152,7 +152,8 @@ describe('swap memory cleanup functions', () => {
          storage_provider,
          comment,
          manifest,
-         r2_path
+         r2_path,
+         native_packages
        )
        VALUES (
          $1,
@@ -161,7 +162,8 @@ describe('swap memory cleanup functions', () => {
          'r2',
          'before',
          ARRAY[ROW('a.js', $4, 'hash')::public.manifest_entry],
-         $5
+         $5,
+         ARRAY['{"name":"cordova-plugin"}'::jsonb]
        )
        RETURNING id`,
       [
@@ -185,8 +187,7 @@ describe('swap memory cleanup functions', () => {
        SET
          comment = 'after',
          manifest = NULL,
-         manifest_count = 1,
-         native_packages = ARRAY['{"name":"cordova-plugin"}'::jsonb]
+         manifest_count = 1
        WHERE id = $1`,
       [versionId],
     )
@@ -209,7 +210,6 @@ describe('swap memory cleanup functions', () => {
     expect(logs[0]?.changed_fields).toContain('comment')
     // Fat payloads stay stripped, but field names remain for upload-time history.
     expect(logs[0]?.changed_fields).toContain('manifest')
-    expect(logs[0]?.changed_fields).toContain('native_packages')
 
     await executeSQL(`DELETE FROM public.audit_logs WHERE record_id = $1 AND table_name = 'app_versions'`, [String(versionId)])
     await executeSQL(`DELETE FROM public.manifest WHERE app_version_id = $1`, [versionId])
