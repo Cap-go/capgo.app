@@ -5,7 +5,8 @@ on:
     branches:
       - 'cursor/**'
       - 'feat/admin-famous-apps'
-      - 'posthog-self-driving/**'
+      - 'posthog-self-driving/*'
+      - 'posthog-self-driving/fixcli-throw-cliusererror-from-bundle-b1ae1e'
   workflow_dispatch:
 
 concurrency:
