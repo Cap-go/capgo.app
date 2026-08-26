@@ -22,6 +22,8 @@ import {
   injectNotifyAppReadyIntoJs,
   patchNotifyAppReadyInBuildFolder,
 } from '../src/recovery/notify-app-ready.ts'
+import { resolveLocalSemverFallback, resolveUpdaterPackageJsonPath } from '../src/recovery/bundle-zip.ts'
+import { zipBundleInternal } from '../src/bundle/zip.ts'
 
 const tempDirs = []
 let failures = 0
@@ -222,6 +224,37 @@ await test('isValidAppId rejects reserved and malformed ids', () => {
   assert.equal(isValidAppId('com.example.app'), true)
   assert.equal(isValidAppId('io.ionic.starter'), false)
   assert.equal(isValidAppId('bad id'), false)
+})
+
+await test('resolveLocalSemverFallback builds a local semver tag', () => {
+  assert.equal(resolveLocalSemverFallback('abc123'), '0.0.1-beta.local-abc123')
+})
+
+await test('resolveUpdaterPackageJsonPath picks the first existing comma-separated package.json', () => {
+  const root = makeTempDir('updater-pkg')
+  const nested = join(root, 'apps', 'mobile')
+  mkdirSync(nested, { recursive: true })
+  writeFileSync(join(nested, 'package.json'), '{}')
+  const missing = join(root, 'missing', 'package.json')
+  const resolved = resolveUpdaterPackageJsonPath(`${missing},${join(nested, 'package.json')}`)
+  assert.equal(resolved, join(nested, 'package.json'))
+})
+
+await test('zipBundleInternal silent notifyAppReady failure stays PostHog-capturable', async () => {
+  const root = makeTempDir('zip-silent')
+  const webDir = join(root, 'www')
+  mkdirSync(webDir)
+  writeFileSync(join(webDir, 'index.html'), '<html></html>')
+  writeFileSync(join(webDir, 'main.js'), 'console.log("hello")')
+
+  await assert.rejects(
+    () => zipBundleInternal('com.example.app', { path: webDir, bundle: '1.0.0' }, true),
+    (error) => {
+      assert.match(error.message, /notifyAppReady\(\) is missing/)
+      assert.equal(shouldCapturePosthogException(error), true)
+      return true
+    },
+  )
 })
 
 await test('failed recovery errors stay visible to PostHog exception capture', () => {

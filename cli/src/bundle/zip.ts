@@ -20,6 +20,7 @@ import {
   zipFile,
 } from '../utils'
 import { checkIndexPosition, searchInDirectory } from './check'
+import { recoverInvalidSemverBundle, recoverMissingUpdater, recoverMissingWebDirPath, resolveLocalSemverFallback } from '../recovery/bundle-zip'
 import { ensureNotifyAppReadyInBuildFolder, buildCiNotifyAppReadyMessage } from '../recovery/notify-app-ready'
 import { parsePackageJsonOptionPaths, resolveAppIdWithRecovery } from '../recovery/app-id'
 
@@ -58,23 +59,37 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
 
     const uuid = randomUUID().split('-')[0]
     const packVersion = getBundleVersion('', options.packageJson)
-    bundle = bundle || packVersion || `0.0.1-beta.local-${uuid}`
+    bundle = bundle || packVersion || resolveLocalSemverFallback(uuid)
 
     if (shouldShowPrompts)
-      intro(`Zipping ${resolvedAppId}@${bundle}`)
+      intro(`Zipping ${resolvedAppId ?? 'app'}@${bundle}`)
 
+    // Expected setup failures use plain Error (not CliUserError) so PostHog still captures
+    // real user aborts after declined recovery. notifyAppReady stays a bare Error too.
     if (bundle && !regexSemver.test(bundle)) {
-      const message = `Your bundle name ${bundle}, is not valid it should follow semver convention : https://semver.org/`
-      if (!silent) {
-        if (json)
-          emitJsonError({ error: 'invalid_semver' })
-        else
-          log.error(message)
+      if (interactive) {
+        const recoveredBundle = await recoverInvalidSemverBundle(bundle, resolveLocalSemverFallback(uuid))
+        if (recoveredBundle)
+          bundle = recoveredBundle
       }
-      throw new Error('Invalid bundle version format')
+      if (!regexSemver.test(bundle)) {
+        const message = `Your bundle name ${bundle}, is not valid it should follow semver convention : https://semver.org/`
+        if (!silent) {
+          if (json)
+            emitJsonError({ error: 'invalid_semver' })
+          else
+            log.error(message)
+        }
+        throw new Error('Invalid bundle version format')
+      }
     }
 
     path = path || extConfig?.config?.webDir
+    if (!path && interactive) {
+      const recoveredPath = await recoverMissingWebDirPath('Enter the path to your built web assets (webDir):')
+      if (recoveredPath)
+        path = recoveredPath
+    }
 
     if (!resolvedAppId || !bundle || !path) {
       const message = 'Missing argument, you need to provide a appId and a bundle and a path, or be in a capacitor project'
@@ -125,7 +140,10 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
       checksumSpinner.start('Calculating checksum')
 
     const root = findRoot(cwd())
-    const updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
+    let updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
+
+    if (!updaterVersion && interactive && await recoverMissingUpdater(options.packageJson))
+      updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
 
     if (!updaterVersion) {
       const warning = 'Cannot find @capgo/capacitor-updater in node_modules, please install it first with your package manager'
