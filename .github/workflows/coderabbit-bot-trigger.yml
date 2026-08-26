@@ -50,7 +50,7 @@ jobs:
                 .filter(review => review.user?.login === 'coderabbitai[bot]')
                 .pop()
 
-              // Skip only when CodeRabbit already approved this SHA.
+              // Skip only when CodeRabbit already approved this SHA (COMMENTED does not clear CHANGES_REQUESTED).
               if (
                 latestCodeRabbitReview?.commit_id === headSha
                 && latestCodeRabbitReview.state === 'APPROVED'
