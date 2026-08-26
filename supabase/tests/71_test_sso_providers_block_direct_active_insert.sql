@@ -58,7 +58,6 @@ SELECT throws_ok(
     INSERT INTO public.sso_providers (
       org_id,
       domain,
-      provider_id,
       status,
       enforce_sso,
       dns_verification_token
@@ -66,7 +65,6 @@ SELECT throws_ok(
     VALUES (
       '71000000-0000-4000-8000-000000000071',
       'forged-active.sso.test',
-      'prov_forged_active',
       'active',
       true,
       'dns-forged-active'
@@ -82,7 +80,6 @@ SELECT throws_ok(
     INSERT INTO public.sso_providers (
       org_id,
       domain,
-      provider_id,
       status,
       enforce_sso,
       dns_verification_token
@@ -90,7 +87,6 @@ SELECT throws_ok(
     VALUES (
       '71000000-0000-4000-8000-000000000071',
       'forged-enforce-pending.sso.test',
-      'prov_forged_enforce_pending',
       'pending_verification',
       true,
       'dns-forged-enforce-pending'
@@ -106,7 +102,6 @@ SELECT throws_ok(
     INSERT INTO public.sso_providers (
       org_id,
       domain,
-      provider_id,
       status,
       enforce_sso,
       dns_verification_token,
@@ -115,7 +110,6 @@ SELECT throws_ok(
     VALUES (
       '71000000-0000-4000-8000-000000000071',
       'forged-verified.sso.test',
-      'prov_forged_verified',
       'verified',
       false,
       'dns-forged-verified',
