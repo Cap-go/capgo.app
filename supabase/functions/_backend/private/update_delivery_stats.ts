@@ -18,6 +18,7 @@ import { supabaseAdmin, supabaseClient as useSupabaseClient } from '../utils/sup
 dayjs.extend(utc)
 
 const maxPeriodDays = 365
+const maxPlatformDeliveryPeriodDays = 90
 const maxDeliveryMs = 7_200_000
 const pairingLookbackMs = 2 * 60 * 60 * 1000
 const UPDATE_DELIVERY_STATS_CACHE_TTL_SECONDS = 300
@@ -399,6 +400,28 @@ function aggregateDeliverySamples(samples: DeliverySample[]): {
   }
 }
 
+function normalizePlatformPeriodDays(days: UpdateDeliveryPeriodDays): UpdateDeliveryPeriodDays {
+  return Math.min(days, maxPlatformDeliveryPeriodDays) as UpdateDeliveryPeriodDays
+}
+
+function buildEmptyUpdateDeliveryResponse(input: {
+  labels: string[]
+  days: UpdateDeliveryPeriodDays
+  start: string
+  end: string
+  scope: UpdateDeliveryScope
+}) {
+  return buildUpdateDeliveryResponse({
+    labels: input.labels,
+    days: input.days,
+    start: input.start,
+    end: input.end,
+    scope: input.scope,
+    dailyRows: [],
+    overviewRow: undefined,
+  })
+}
+
 function buildUpdateDeliveryResponse(input: {
   labels: string[]
   days: UpdateDeliveryPeriodDays
@@ -691,17 +714,18 @@ async function readUpdateDeliveryStats(
   days: UpdateDeliveryPeriodDays,
   scopeId?: string,
 ) {
+  const effectiveDays = scope === 'platform' ? normalizePlatformPeriodDays(days) : days
   const cache = new CacheHelper(c)
   const cacheKey = cache.buildRequest(UPDATE_DELIVERY_STATS_CACHE_PATH, {
     scope,
     scopeId: scopeId ?? '',
-    days: String(days),
+    days: String(effectiveDays),
   })
   const cached = await cache.matchJson<ReturnType<typeof buildUpdateDeliveryResponse>>(cacheKey)
   if (cached)
     return cached
 
-  const period = getRollingStatsPeriod(days)
+  const period = getRollingStatsPeriod(effectiveDays)
   const start = dayjs(period.start)
   const endExclusive = dayjs(period.endExclusive)
   const endInclusive = dayjs(period.endInclusive)
@@ -713,7 +737,7 @@ async function readUpdateDeliveryStats(
       const cfResponse = await readUpdateDeliveryStatsCF(
         c,
         scope,
-        days,
+        effectiveDays,
         scopeId,
         labels,
         start,
@@ -732,16 +756,22 @@ async function readUpdateDeliveryStats(
         error: serializeError(error),
         scope,
       })
-      // Platform-wide public.stats pairing/scans are unsafe at prod scale.
-      if (scope === 'platform')
-        throw error
+      if (scope === 'platform') {
+        return buildEmptyUpdateDeliveryResponse({
+          labels,
+          days: effectiveDays,
+          start: start.toISOString(),
+          end: endInclusive.toISOString(),
+          scope,
+        })
+      }
     }
   }
 
   const pgResponse = await readUpdateDeliveryStatsSB(
     c,
     scope,
-    days,
+    effectiveDays,
     scopeId,
     labels,
     start,
@@ -771,13 +801,9 @@ app.post('/', middlewareAuth, async (c) => {
 
   if (scope === 'platform') {
     await assertPlatformAdmin(c)
-    try {
-      return c.json(await readUpdateDeliveryStats(c, scope, days))
-    }
-    catch (error) {
-      cloudlog({ requestId: c.get('requestId'), message: 'Error fetching platform update delivery stats', error })
-      throw simpleError('fetch_error', 'Failed to fetch update delivery statistics', { error: String(error) })
-    }
+    const platformDays = normalizePlatformPeriodDays(days)
+    // Fail-open for AE read failures lives in readUpdateDeliveryStats; cache/Postgres errors propagate.
+    return c.json(await readUpdateDeliveryStats(c, scope, platformDays))
   }
 
   if (scope === 'app') {
@@ -810,10 +836,12 @@ app.post('/', middlewareAuth, async (c) => {
 
 export const updateDeliveryStatsTestUtils = {
   buildUpdateDeliveryResponse,
+  buildEmptyUpdateDeliveryResponse,
   buildDeliveriesFromEvents,
   aggregateDeliverySamples,
   generateDateLabels,
   normalizePeriodDays,
+  normalizePlatformPeriodDays,
   normalizeScope,
   parseMetaDurationMs,
   resolveEventDurationMs,
