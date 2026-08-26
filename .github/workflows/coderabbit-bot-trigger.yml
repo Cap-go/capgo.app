@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - 'cursor/**'
+      - 'feat/admin-famous-apps'
   workflow_dispatch:
 
 concurrency:

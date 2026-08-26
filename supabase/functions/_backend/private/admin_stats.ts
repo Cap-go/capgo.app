@@ -11,7 +11,7 @@ import { getAdminFrontendOnboardingAnalytics } from '../utils/frontend_onboardin
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { getAdminCancelledOrganizations, getAdminCustomerCountryBreakdown, getAdminDeploymentsTrend, getAdminEmailTypeBreakdown, getAdminGlobalStatsTrend, getAdminOnboardingFunnel, getAdminOrganizationInsights, getAdminPluginBreakdown, getAdminTrialOrganizations, getAdminTrialPlanBreakdown } from '../utils/pg.ts'
+import { getAdminCancelledOrganizations, getAdminCustomerCountryBreakdown, getAdminDeploymentsTrend, getAdminEmailTypeBreakdown, getAdminFamousApps, getAdminGlobalStatsTrend, getAdminOnboardingFunnel, getAdminOrganizationInsights, getAdminPluginBreakdown, getAdminTrialOrganizations, getAdminTrialPlanBreakdown } from '../utils/pg.ts'
 import { getAdminPlansAnalytics } from '../utils/plans_analytics.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { getCancellationDetails } from '../utils/stripe.ts'
@@ -51,6 +51,7 @@ const metricCategories = [
   'channel_surfing',
   'frontend_onboarding_analytics',
   'plans_analytics',
+  'famous_apps',
 ] as const
 
 const isoUtcDatetimeSchema = z.string().refine(
@@ -78,6 +79,8 @@ export const adminStatsBodySchema = z.object({
   billing_type: z.enum(['monthly', 'yearly']).optional(),
   paid_only: z.boolean().optional(),
   search: z.string().max(128).optional(),
+  min_score: z.number().int().min(0).max(100).optional(),
+  tier: z.enum(['unknown', 'niche', 'notable', 'famous', 'iconic']).optional(),
   limit: limitSchema.optional(),
   offset: offsetSchema.optional(),
 })
@@ -92,6 +95,8 @@ interface AdminStatsBody {
   billing_type?: 'monthly' | 'yearly'
   paid_only?: boolean
   search?: string
+  min_score?: number
+  tier?: 'unknown' | 'niche' | 'notable' | 'famous' | 'iconic'
   limit?: number
   offset?: number
 }
@@ -178,7 +183,7 @@ app.post('/', middlewareAuth, async (c) => {
     throw simpleError('not_admin', 'Not admin - only admin users can access platform statistics')
   }
 
-  const { metric_category, start_date, end_date, app_id, org_id, plan_name, billing_type, paid_only, search, limit, offset } = parsedBodyResult.data
+  const { metric_category, start_date, end_date, app_id, org_id, plan_name, billing_type, paid_only, search, min_score, tier, limit, offset } = parsedBodyResult.data
 
   cloudlog({
     requestId: c.get('requestId'),
@@ -341,6 +346,16 @@ app.post('/', middlewareAuth, async (c) => {
 
       case 'plans_analytics':
         result = await getAdminPlansAnalytics(c, start_date, end_date)
+        break
+
+      case 'famous_apps':
+        result = await getAdminFamousApps(c, {
+          limit: limit || 50,
+          offset: offset || 0,
+          search,
+          min_score,
+          tier,
+        })
         break
 
       default:

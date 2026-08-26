@@ -16,6 +16,10 @@ import {
   useAdminDashboardStore,
 } from '~/stores/adminDashboard'
 
+defineProps<{
+  hideDatePicker?: boolean
+}>()
+
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
@@ -165,6 +169,7 @@ watch(
   <div class="mb-4">
     <div class="flex items-center justify-end gap-2">
       <DateRangePicker
+        v-if="!hideDatePicker"
         v-model="rangeValue"
         v-model:mode="rangeMode"
         @apply="onApply"
