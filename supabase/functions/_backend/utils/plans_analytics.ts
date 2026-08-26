@@ -8,7 +8,6 @@ import {
   buildLogicalPlansOpenings,
   buildPlansChartData,
   CHECKOUT_ATTRIBUTION_MS,
-  CHECKOUT_COMPLETION_OBSERVATION_MS,
 } from './plans_analytics_model.ts'
 import {
   classifyPlansBillingAt,
@@ -439,7 +438,7 @@ export async function getAdminPlansAnalytics(
       return hasCheckoutPaidCompletion(
         history,
         checkoutTimestampMs,
-        checkoutTimestampMs + CHECKOUT_COMPLETION_OBSERVATION_MS,
+        checkoutTimestampMs + CHECKOUT_ATTRIBUTION_MS,
       )
     },
   })

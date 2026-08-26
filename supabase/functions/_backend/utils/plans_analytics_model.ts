@@ -1,5 +1,4 @@
 export const CHECKOUT_ATTRIBUTION_MS = 24 * 60 * 60 * 1000
-export const CHECKOUT_COMPLETION_OBSERVATION_MS = CHECKOUT_ATTRIBUTION_MS
 
 export type PlansBillingCategory
   = | 'paying'
@@ -186,7 +185,7 @@ export function classifyCheckoutCompletion(
   if (!Number.isFinite(checkoutTimestampMs))
     return 'not_completed'
 
-  const observationDeadlineMs = checkoutTimestampMs + CHECKOUT_COMPLETION_OBSERVATION_MS
+  const observationDeadlineMs = checkoutTimestampMs + CHECKOUT_ATTRIBUTION_MS
   if (isCompleted(checkoutTimestampMs))
     return 'completed'
   if (Number.isFinite(nowMs) && nowMs >= observationDeadlineMs)

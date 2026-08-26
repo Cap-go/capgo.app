@@ -5,7 +5,6 @@ import {
   buildLogicalPlansOpenings,
   buildPlansChartData,
   CHECKOUT_ATTRIBUTION_MS,
-  CHECKOUT_COMPLETION_OBSERVATION_MS,
   classifyCheckoutCompletion,
 } from '../supabase/functions/_backend/utils/plans_analytics_model.ts'
 
@@ -211,8 +210,6 @@ describe('plans analytics model', () => {
   })
 
   it.concurrent('classifies checkout completion from billing evidence within the observation window', () => {
-    expect(CHECKOUT_COMPLETION_OBSERVATION_MS).toBe(CHECKOUT_ATTRIBUTION_MS)
-
     const checkoutAt = ms('2026-08-01T08:05:00Z')
     const completed = classifyCheckoutCompletion(
       checkoutAt,

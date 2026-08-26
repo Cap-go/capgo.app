@@ -46,6 +46,7 @@ export interface PlansAnalyticsResponse {
   traffic: PlansAnalyticsTraffic
   visitorBreakdown: DailyBillingPoint[]
   checkoutIntent: DailyCheckoutIntentPoint[]
+  checkoutCompletion: DailyCheckoutCompletionPoint[]
   checkoutVisitorBreakdown: DailyBillingPoint[]
   dataQuality: PlansAnalyticsDataQuality
 }
