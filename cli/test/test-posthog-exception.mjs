@@ -285,9 +285,8 @@ try {
       { appId: 'com.other.app', requiredPermissionKey: 'app.upload_bundle' },
     ).message,
   )
-  // Channel create RBAC/duplicate failures stay on the PostHog exception path so
-  // user failures remain observable in error tracking (not CliUserError).
-  assert.equal(shouldCapturePosthogException(new Error('Cannot create channel: duplicate key value violates unique constraint "unique_name_app_id" | Code: 23505')), true)
+  // Channel create RBAC failures stay on the PostHog exception path (not CliUserError).
+  // Duplicate-channel outcomes are exercised in test-channel-add-exists.mjs via addChannelInternal.
   assert.equal(shouldCapturePosthogException(new Error('Cannot create channel: insufficient_permissions | HTTP 403')), true)
   assert.equal(shouldCapturePosthogException(new Error('Cannot create channel: Edge Function returned a non-2xx status code')), true)
   // Infrastructure failures (5xx / no HTTP status) must still be captured.
