@@ -1060,9 +1060,8 @@ jobs:
     permissions:
       contents: read
     concurrency:
-      # Isolate by PR/run and job-index: repository + matrix.shard embed slashes (owner/repo, 1/2)
-      # which breaks concurrency group matching and can cancel Playwright jobs across PRs.
-      group: capgo-local-services-playwright-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-${{ strategy.job-index }}
+      # Isolate by event_name so push + pull_request on the same branch do not cancel pending jobs.
+      group: capgo-local-services-playwright-${{ github.event_name }}-${{ github.repository }}-${{ matrix.shard }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
