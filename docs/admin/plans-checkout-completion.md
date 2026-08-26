@@ -26,7 +26,7 @@ This captures new subscriptions and plan upgrades without requiring a dedicated 
 
 The observation window is 24 hours after checkout start (`CHECKOUT_ATTRIBUTION_MS`, shared with checkout attribution).
 
-Until that deadline passes, an unattributed paid transition remains **pending** instead of **not completed**.
+Until that deadline passes, an attributed checkout without a qualifying paid transition remains **pending** instead of **not completed**.
 
 ## Admin UI
 

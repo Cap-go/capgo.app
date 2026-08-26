@@ -366,10 +366,11 @@ export async function getAdminPlansAnalytics(
   for (let offset = 0; offset < orgIds.length; offset += TRANSITION_ORG_BATCH_SIZE) {
     transitionBatches.push(orgIds.slice(offset, offset + TRANSITION_ORG_BATCH_SIZE))
   }
+  const billingTransitionsEndIso = safeIso(range.endMs + CHECKOUT_ATTRIBUTION_MS)!
   for (let offset = 0; offset < transitionBatches.length; offset += TRANSITION_QUERY_CONCURRENCY) {
     const wave = transitionBatches.slice(offset, offset + TRANSITION_QUERY_CONCURRENCY)
     const transitionResults = await Promise.all(wave.map(batch => (
-      queryPosthogHogql(c, buildBillingTransitionsQuery(range.endIso, batch), { maxResponseBytes: MAX_TRANSITION_RESPONSE_BYTES })
+      queryPosthogHogql(c, buildBillingTransitionsQuery(billingTransitionsEndIso, batch), { maxResponseBytes: MAX_TRANSITION_RESPONSE_BYTES })
     )))
     const transitionFailure = failedResult(transitionResults)
     if (transitionFailure) {
