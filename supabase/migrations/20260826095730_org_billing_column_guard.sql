@@ -107,6 +107,21 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  pending_customer_id := 'pending_' || NEW.id::text;
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.stripe_info
+    WHERE customer_id = pending_customer_id
+  ) THEN
+    UPDATE public.orgs
+    SET customer_id = pending_customer_id
+    WHERE id = NEW.id;
+
+    PERFORM set_config('capgo.org_creation_bootstrap_org_id', '', true);
+    RETURN NEW;
+  END IF;
+
   SELECT stripe_id INTO solo_plan_stripe_id
   FROM public.plans
   WHERE name = 'Solo'

@@ -1,7 +1,7 @@
 -- org.customer_id is service-managed: user/capgkey roles cannot write it.
 BEGIN;
 
-SELECT plan(6);
+SELECT plan(7);
 
 SELECT tests.authenticate_as_service_role();
 SELECT tests.create_supabase_user('org_billing_guard_admin', 'org_billing_guard_admin@test.local');
