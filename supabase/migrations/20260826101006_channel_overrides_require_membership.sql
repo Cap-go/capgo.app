@@ -1,11 +1,10 @@
 -- GHSA-626c-p6fq-3whq: channel permission overrides must target a principal
 -- that already belongs to the channel's owner org. Caller still needs
--- app.update_user_roles. Membership is an indexed lookup only:
---   user/apikey: non-expired org-scope role_binding on apps.owner_org
---   group: groups.org_id = apps.owner_org
--- SECURITY DEFINER so the check is not filtered by groups/role_bindings RLS
--- (app-scoped admins cannot SELECT those rows). Join channels -> apps for
--- owner_org, same as the previous policies.
+-- app.update_user_roles. Membership matches rbac_principal_has_org_binding
+-- (any non-expired org/app/channel binding, or user via group binding, or
+-- group in org). SECURITY DEFINER wrapper so the check is not filtered by
+-- groups/role_bindings RLS (app-scoped admins cannot SELECT those rows).
+-- Join channels -> apps for owner_org, same as the previous policies.
 
 CREATE SCHEMA IF NOT EXISTS rbac_internal;
 
@@ -20,41 +19,11 @@ STABLE
 SECURITY DEFINER
 SET search_path = ''
 AS $$
-  SELECT CASE
-    WHEN p_org_id IS NULL OR p_principal_id IS NULL OR p_principal_type IS NULL THEN
-      false
-    WHEN p_principal_type = public.rbac_principal_user() THEN EXISTS (
-      SELECT 1
-      FROM public.role_bindings
-      WHERE role_bindings.principal_type = public.rbac_principal_user()
-        AND role_bindings.principal_id = p_principal_id
-        AND role_bindings.scope_type = public.rbac_scope_org()
-        AND role_bindings.org_id = p_org_id
-        AND (
-          role_bindings.expires_at IS NULL
-          OR role_bindings.expires_at > pg_catalog.now()
-        )
-    )
-    WHEN p_principal_type = public.rbac_principal_group() THEN EXISTS (
-      SELECT 1
-      FROM public.groups
-      WHERE groups.id = p_principal_id
-        AND groups.org_id = p_org_id
-    )
-    WHEN p_principal_type = public.rbac_principal_apikey() THEN EXISTS (
-      SELECT 1
-      FROM public.role_bindings
-      WHERE role_bindings.principal_type = public.rbac_principal_apikey()
-        AND role_bindings.principal_id = p_principal_id
-        AND role_bindings.scope_type = public.rbac_scope_org()
-        AND role_bindings.org_id = p_org_id
-        AND (
-          role_bindings.expires_at IS NULL
-          OR role_bindings.expires_at > pg_catalog.now()
-        )
-    )
-    ELSE false
-  END;
+  SELECT public.rbac_principal_has_org_binding(
+    p_principal_type,
+    p_principal_id,
+    p_org_id
+  );
 $$;
 
 ALTER FUNCTION rbac_internal.channel_override_principal_in_org(text, uuid, uuid)
@@ -66,13 +35,12 @@ GRANT EXECUTE ON FUNCTION rbac_internal.channel_override_principal_in_org(text, 
   TO authenticated, service_role;
 
 COMMENT ON FUNCTION rbac_internal.channel_override_principal_in_org(text, uuid, uuid) IS
-  'RLS helper: true when the principal belongs to the org. Called from '
-  'channel_permission_overrides INSERT/UPDATE policies (once per written row, '
-  'authenticated only). Lookups are bounded by principal_id + org_id using '
-  'role_bindings_principal_scope_idx for user/apikey branches; groups_pkey for '
-  'group branch; expires_at is a residual filter on role_bindings. '
-  'SECURITY DEFINER so app-scoped admins are not blocked by groups/role_bindings '
-  'SELECT RLS. Lives in rbac_internal (not PostgREST-exposed).';
+  'RLS helper: delegates to rbac_principal_has_org_binding (any scope binding, '
+  'group membership, or group in org). Called from channel_permission_overrides '
+  'INSERT/UPDATE policies and cleanup DELETE (once per written row, '
+  'authenticated only). SECURITY DEFINER so app-scoped admins are not blocked '
+  'by groups/role_bindings SELECT RLS. Lives in rbac_internal (not '
+  'PostgREST-exposed).';
 
 DROP FUNCTION IF EXISTS public.channel_override_principal_in_org(text, uuid, uuid);
 

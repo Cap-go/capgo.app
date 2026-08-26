@@ -2,19 +2,25 @@
 -- to principals outside the channel owner org.
 BEGIN;
 
-SELECT plan(9);
+SELECT plan(12);
 
 SELECT tests.create_supabase_user('channel_override_admin', 'channel_override_admin@test.local');
 SELECT tests.create_supabase_user('channel_override_member', 'channel_override_member@test.local');
 SELECT tests.create_supabase_user('channel_override_outsider', 'channel_override_outsider@test.local');
 SELECT tests.create_supabase_user('channel_override_app_admin', 'channel_override_app_admin@test.local');
+SELECT tests.create_supabase_user('channel_override_app_member', 'channel_override_app_member@test.local');
+SELECT tests.create_supabase_user('channel_override_channel_member', 'channel_override_channel_member@test.local');
+SELECT tests.create_supabase_user('channel_override_group_user', 'channel_override_group_user@test.local');
 
 INSERT INTO public.users (id, email, created_at, updated_at)
 VALUES
   (tests.get_supabase_uid('channel_override_admin'), 'channel_override_admin@test.local', NOW(), NOW()),
   (tests.get_supabase_uid('channel_override_member'), 'channel_override_member@test.local', NOW(), NOW()),
   (tests.get_supabase_uid('channel_override_outsider'), 'channel_override_outsider@test.local', NOW(), NOW()),
-  (tests.get_supabase_uid('channel_override_app_admin'), 'channel_override_app_admin@test.local', NOW(), NOW())
+  (tests.get_supabase_uid('channel_override_app_admin'), 'channel_override_app_admin@test.local', NOW(), NOW()),
+  (tests.get_supabase_uid('channel_override_app_member'), 'channel_override_app_member@test.local', NOW(), NOW()),
+  (tests.get_supabase_uid('channel_override_channel_member'), 'channel_override_channel_member@test.local', NOW(), NOW()),
+  (tests.get_supabase_uid('channel_override_group_user'), 'channel_override_group_user@test.local', NOW(), NOW())
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO public.orgs (id, created_by, name, management_email)
@@ -105,6 +111,66 @@ WHERE roles.name = public.rbac_role_app_admin()
   AND apps.app_id = 'com.test.channel.overrides.membership'
 ON CONFLICT DO NOTHING;
 
+INSERT INTO public.role_bindings (
+  principal_type,
+  principal_id,
+  role_id,
+  scope_type,
+  org_id,
+  app_id,
+  granted_by,
+  reason,
+  is_direct
+)
+SELECT
+  public.rbac_principal_user(),
+  tests.get_supabase_uid('channel_override_app_member'),
+  roles.id,
+  public.rbac_scope_app(),
+  '69000000-0000-4000-8000-000000000069'::uuid,
+  apps.id,
+  tests.get_supabase_uid('channel_override_admin'),
+  'pgTAP channel override app member fixture',
+  true
+FROM public.roles
+CROSS JOIN public.apps
+WHERE roles.name = public.rbac_role_app_developer()
+  AND roles.scope_type = public.rbac_scope_app()
+  AND apps.app_id = 'com.test.channel.overrides.membership'
+ON CONFLICT DO NOTHING;
+
+INSERT INTO public.role_bindings (
+  principal_type,
+  principal_id,
+  role_id,
+  scope_type,
+  org_id,
+  app_id,
+  channel_id,
+  granted_by,
+  reason,
+  is_direct
+)
+SELECT
+  public.rbac_principal_user(),
+  tests.get_supabase_uid('channel_override_channel_member'),
+  roles.id,
+  public.rbac_scope_channel(),
+  '69000000-0000-4000-8000-000000000069'::uuid,
+  apps.id,
+  channels.rbac_id,
+  tests.get_supabase_uid('channel_override_admin'),
+  'pgTAP channel override channel member fixture',
+  true
+FROM public.roles
+CROSS JOIN public.apps
+CROSS JOIN public.channels
+WHERE roles.name = public.rbac_role_channel_reader()
+  AND roles.scope_type = public.rbac_scope_channel()
+  AND apps.app_id = 'com.test.channel.overrides.membership'
+  AND channels.id = 6900401
+ON CONFLICT DO NOTHING;
+
 INSERT INTO public.groups (id, org_id, name, created_by)
 VALUES
   (
@@ -120,6 +186,38 @@ VALUES
     tests.get_supabase_uid('channel_override_outsider')
   )
 ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.role_bindings (
+  principal_type,
+  principal_id,
+  role_id,
+  scope_type,
+  org_id,
+  granted_by,
+  reason,
+  is_direct
+)
+SELECT
+  public.rbac_principal_group(),
+  '69000000-0000-4000-8000-000000000071'::uuid,
+  roles.id,
+  public.rbac_scope_org(),
+  '69000000-0000-4000-8000-000000000069'::uuid,
+  tests.get_supabase_uid('channel_override_admin'),
+  'pgTAP channel override group member fixture',
+  true
+FROM public.roles
+WHERE roles.name = public.rbac_role_org_member()
+  AND roles.scope_type = public.rbac_scope_org()
+ON CONFLICT DO NOTHING;
+
+INSERT INTO public.group_members (group_id, user_id, added_by)
+VALUES (
+  '69000000-0000-4000-8000-000000000071',
+  tests.get_supabase_uid('channel_override_group_user'),
+  tests.get_supabase_uid('channel_override_admin')
+)
+ON CONFLICT DO NOTHING;
 
 SELECT tests.create_v2_apikey(
   690040001,
@@ -296,6 +394,66 @@ SELECT lives_ok(
     )
   $$,
   'admin can insert a channel permission override for an org apikey'
+);
+
+SELECT lives_ok(
+  $$
+    INSERT INTO public.channel_permission_overrides (
+      principal_type,
+      principal_id,
+      channel_id,
+      permission_key,
+      is_allowed
+    )
+    VALUES (
+      public.rbac_principal_user(),
+      tests.get_supabase_uid('channel_override_app_member'),
+      6900401,
+      public.rbac_perm_channel_promote_bundle(),
+      true
+    )
+  $$,
+  'admin can insert a channel permission override for an app-scoped member'
+);
+
+SELECT lives_ok(
+  $$
+    INSERT INTO public.channel_permission_overrides (
+      principal_type,
+      principal_id,
+      channel_id,
+      permission_key,
+      is_allowed
+    )
+    VALUES (
+      public.rbac_principal_user(),
+      tests.get_supabase_uid('channel_override_channel_member'),
+      6900401,
+      public.rbac_perm_channel_promote_bundle(),
+      true
+    )
+  $$,
+  'admin can insert a channel permission override for a channel-scoped member'
+);
+
+SELECT lives_ok(
+  $$
+    INSERT INTO public.channel_permission_overrides (
+      principal_type,
+      principal_id,
+      channel_id,
+      permission_key,
+      is_allowed
+    )
+    VALUES (
+      public.rbac_principal_user(),
+      tests.get_supabase_uid('channel_override_group_user'),
+      6900401,
+      public.rbac_perm_channel_promote_bundle(),
+      true
+    )
+  $$,
+  'admin can insert a channel permission override for a group-only member user'
 );
 
 SELECT tests.authenticate_as('channel_override_app_admin');
