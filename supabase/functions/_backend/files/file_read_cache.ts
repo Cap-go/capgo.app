@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { getRuntimeKey } from 'hono/adapter'
 import { cloudlog } from '../utils/logging.ts'
-import { closeClient, getPgClient } from '../utils/pg.ts'
+import { getDatabaseURL, getPgClient } from '../utils/pg.ts'
 
 export const FILE_READ_TRACKING_QUERY_PARAMS = ['device_id'] as const
 export const DELETED_FILE_CACHE_HEADER = 'x-capgo-file-deleted'
@@ -119,24 +119,52 @@ export async function markFileDeletedInCache(fileId: string): Promise<void> {
   }))
 }
 
-function buildFileReadCacheRequestsForPath(fileId: string): Request[] {
+let sharedReadOnlyPool: ReturnType<typeof getPgClient> | null = null
+let sharedReadOnlyPoolUrl: string | null = null
+
+function getSharedReadOnlyPgClient(c: Context): ReturnType<typeof getPgClient> {
+  const dbUrl = getDatabaseURL(c, true)
+  if (!sharedReadOnlyPool || sharedReadOnlyPoolUrl !== dbUrl) {
+    sharedReadOnlyPool = getPgClient(c, true)
+    sharedReadOnlyPoolUrl = dbUrl
+  }
+  return sharedReadOnlyPool
+}
+
+function buildFileReadCacheRequestsForPath(fileId: string, checksum?: string | null): Request[] {
+  const identityParamSets: Array<Record<string, string>> = [{}]
+  if (checksum)
+    identityParamSets.push({ key: checksum })
+
   return FILE_READ_CACHE_ORIGINS.flatMap(origin =>
-    FILE_READ_PATH_PREFIXES.map((prefix) => {
-      const url = new URL(`${prefix}${fileId}`, origin)
-      url.searchParams.set('range', '')
-      url.searchParams.sort()
-      return new Request(url)
+    FILE_READ_PATH_PREFIXES.flatMap((prefix) => {
+      return identityParamSets.map((identityParams) => {
+        const url = new URL(`${prefix}${fileId}`, origin)
+        for (const [key, value] of Object.entries(identityParams))
+          url.searchParams.set(key, value)
+        url.searchParams.set('range', '')
+        url.searchParams.sort()
+        return new Request(url)
+      })
     }),
   )
 }
 
-function buildWorkersFileCacheRequests(fileId: string): Request[] {
+function buildWorkersFileCacheRequests(fileId: string, checksum?: string | null): Request[] {
+  const searchVariants = ['']
+  if (checksum)
+    searchVariants.push(`?key=${encodeURIComponent(checksum)}`)
+
   return FILE_READ_PATH_PREFIXES
     .filter(prefix => prefix.startsWith('/files/') || prefix.startsWith('/private/'))
-    .map(prefix => new Request(`${DELETED_FILE_MARKER_ORIGIN}${buildWorkersFileCacheKey(`${prefix}${fileId}`)}`))
+    .flatMap(prefix =>
+      searchVariants.map(search =>
+        new Request(`${DELETED_FILE_MARKER_ORIGIN}${buildWorkersFileCacheKey(`${prefix}${fileId}`, search)}`),
+      ),
+    )
 }
 
-export async function purgeFileReadCache(fileId: string): Promise<void> {
+export async function purgeFileReadCache(fileId: string, checksum?: string | null): Promise<void> {
   await markFileDeletedInCache(fileId)
 
   const cache = await getFileReadCache()
@@ -144,8 +172,8 @@ export async function purgeFileReadCache(fileId: string): Promise<void> {
     return
 
   const requests = [
-    ...buildFileReadCacheRequestsForPath(fileId),
-    ...buildWorkersFileCacheRequests(fileId),
+    ...buildFileReadCacheRequestsForPath(fileId, checksum),
+    ...buildWorkersFileCacheRequests(fileId, checksum),
   ]
   await Promise.all(requests.map(request => cache.delete(request).catch(() => false)))
 }
@@ -154,9 +182,8 @@ export async function isAttachmentVersionDeleted(c: Context, fileId: string): Pr
   if (await hasDeletedFileMarker(fileId))
     return true
 
-  let pgClient: ReturnType<typeof getPgClient> | null = null
   try {
-    pgClient = getPgClient(c, true)
+    const pgClient = getSharedReadOnlyPgClient(c)
     const result = await pgClient.query<{ deleted: boolean | null, deleted_at: string | null }>(
       `
         SELECT deleted, deleted_at
@@ -177,10 +204,6 @@ export async function isAttachmentVersionDeleted(c: Context, fileId: string): Pr
       error: error instanceof Error ? error.message : String(error),
     })
     return true
-  }
-  finally {
-    if (pgClient)
-      await closeClient(c, pgClient)
   }
 }
 

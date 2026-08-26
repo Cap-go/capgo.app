@@ -130,6 +130,7 @@ function createVersion(overrides: Record<string, unknown> = {}) {
     name: '1.0.0',
     owner_org: 'org-1',
     r2_path: 'orgs/org-1/apps/com.cleanup.test/1.0.0.zip',
+    checksum: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
     storage_provider: 'r2',
     ...overrides,
   } as any

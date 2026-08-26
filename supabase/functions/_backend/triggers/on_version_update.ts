@@ -428,7 +428,7 @@ export async function deleteIt(c: Context, record: Database['public']['Tables'][
 
   if (record.r2_path) {
     try {
-      await purgeFileReadCache(record.r2_path)
+      await purgeFileReadCache(record.r2_path, record.checksum)
     }
     catch (error) {
       cloudlog({
