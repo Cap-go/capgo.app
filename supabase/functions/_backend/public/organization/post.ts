@@ -292,6 +292,7 @@ export async function post(
     else {
       await assertJwtMfaAssurance(c, auth)
 
+      // Omit customer_id: org-create trigger links pre-created pending stripe_info.
       const { id, name, created_by, management_email, website: orgWebsite, onboarding: orgOnboarding } = newOrg
       const { error: errorOrg } = await supabaseWithAuth(c, auth)
         .from('orgs')
