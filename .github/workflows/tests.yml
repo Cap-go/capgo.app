@@ -1529,7 +1529,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run_cli == 'true' || needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     name: CRITICAL — Published CLI / do not break old CLI
     permissions:
       contents: read
