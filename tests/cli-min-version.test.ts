@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createTestSDK, uploadBundleSDK } from './cli-sdk-utils'
 import { cleanupCli, getSemver, prepareCli } from './cli-utils'
-import { createIsolatedSeedAppOptions, getSupabaseClient, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils'
+import { createIsolatedSeedAppOptions, executeSQL, getSupabaseClient, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils'
 
 async function writeBundleContent(appId: string, marker: string) {
   const indexHtmlPath = join(process.cwd(), 'temp_cli_test', appId, 'dist', 'index.html')
@@ -130,14 +130,17 @@ describe('tests min version', () => {
     expect(checkErrorNew).toBeDefined()
     expect(dataNew).toBeNull()
 
-    // Clear native_packages from previous version to simulate first upload
-    const { error: error2 } = await supabase
-      .from('app_versions')
-      .update({ min_update_version: null, native_packages: null })
-      .eq('name', semverDefault)
-      .eq('app_id', APPNAME)
-      .throwOnError()
-    expect(error2).toBeNull()
+    // Simulate a channel whose current bundle has no compatibility metadata.
+    await executeSQL(
+      'DELETE FROM public.app_versions WHERE app_id = $1 AND name = ANY($2::varchar[])',
+      [APPNAME, [semverDefault, semverNew]],
+    )
+    const relinkSeed = await sdk.updateChannel({
+      appId: APPNAME,
+      channelId: channelName,
+      bundle: '1.0.0',
+    })
+    expect(relinkSeed.success).toBe(true)
 
     // Upload with auto-min-update-version when previous version has no native_packages
     const semverWithNull = `1.0.${testId + 2}`
