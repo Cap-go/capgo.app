@@ -11,7 +11,7 @@ permissions: {}
 
 jobs:
   analyze:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     name: Scan PR changes
     # Configure deepsec-fork-pr with required reviewers to make fork PR scans
@@ -234,7 +234,7 @@ jobs:
   comment:
     needs: analyze
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     name: Post findings comment
     permissions:

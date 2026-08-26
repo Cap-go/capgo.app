@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
       requested: ${{ steps.check.outputs.requested }}
     steps:
@@ -40,7 +40,7 @@ jobs:
   visual-diff:
     needs: check
     if: needs.check.outputs.requested == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     name: Generate visual diff report
     permissions:

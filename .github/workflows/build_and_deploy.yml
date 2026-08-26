@@ -13,7 +13,7 @@ permissions: {}
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     name: Resolve deploy scope
     permissions:
@@ -44,7 +44,7 @@ jobs:
   supabase_deploy:
     needs: [changes, read_replica_schema]
     if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 60
     name: Build code and deploy to Supabase
     permissions:
@@ -117,7 +117,7 @@ jobs:
   read_replica_schema:
     needs: changes
     if: ${{ needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && !contains(github.ref_name, '-alpha') }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 40
     name: Reconcile production read-replica schema
     permissions:
@@ -146,7 +146,7 @@ jobs:
   deploy_webapp:
     needs: [changes, supabase_deploy, read_replica_schema]
     if: ${{ always() && needs.changes.result == 'success' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     permissions:
       contents: read
@@ -235,7 +235,7 @@ jobs:
   deploy_api:
     needs: [changes, supabase_deploy, read_replica_schema]
     if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.api == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -265,7 +265,7 @@ jobs:
   deploy_translation_worker:
     needs: [changes, supabase_deploy, read_replica_schema]
     if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.translation == 'true' && (needs.supabase_deploy.result == 'success' || (needs.supabase_deploy.result == 'skipped' && needs.changes.outputs.supabase != 'true')) && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -295,7 +295,7 @@ jobs:
   deploy_files:
     needs: [changes, supabase_deploy, read_replica_schema]
     if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.files == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -325,7 +325,7 @@ jobs:
   deploy_plugin_regions:
     needs: [changes, supabase_deploy, read_replica_schema]
     if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.plugins == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -388,7 +388,7 @@ jobs:
   deploy_native_ios:
     needs: [changes, supabase_deploy, deploy_webapp]
     if: ${{ always() && needs.changes.result == 'success' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && needs.deploy_webapp.result == 'success' && needs.deploy_webapp.outputs.native_build_needed == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
       contents: read
@@ -434,7 +434,7 @@ jobs:
   deploy_native_android:
     needs: [changes, supabase_deploy, deploy_webapp]
     if: ${{ always() && needs.changes.result == 'success' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && needs.deploy_webapp.result == 'success' && needs.deploy_webapp.outputs.native_build_needed == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
       contents: read

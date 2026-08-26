@@ -21,7 +21,7 @@ permissions:
 jobs:
   upload_ios_screenshots:
     if: ${{ inputs.platform == 'ios' }}
-    runs-on: macOS-latest
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 30
     env:
       BUNDLE_GEMFILE: .bundle/fastlane/Gemfile
@@ -54,7 +54,7 @@ jobs:
 
   upload_android_screenshots:
     if: ${{ inputs.platform == 'android' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     env:
       BUNDLE_GEMFILE: .bundle/fastlane/Gemfile

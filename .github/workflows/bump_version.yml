@@ -13,7 +13,7 @@ jobs:
     if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') && !startsWith(github.event.head_commit.message, 'chore(auto-sync):') }}
     permissions:
       contents: read
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
       run_capgo: ${{ steps.capgo.outputs.should_release }}
       capgo_release_as: ${{ steps.capgo.outputs.release_as }}
@@ -72,7 +72,7 @@ jobs:
   bump-version:
     needs: [changes, test]
     if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') && !startsWith(github.event.head_commit.message, 'chore(auto-sync):') && needs.changes.outputs.run_any == 'true' && needs.test.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     name: Bump versions and create tags
     permissions:
@@ -240,7 +240,7 @@ jobs:
   sync_schema_types:
     needs: [changes, bump-version]
     if: ${{ github.ref == 'refs/heads/main' && needs.changes.outputs.has_migration_changes == 'true' && !startsWith(github.event.head_commit.message, 'chore(release):') && !startsWith(github.event.head_commit.message, 'chore(auto-sync):') }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     permissions:
       contents: write

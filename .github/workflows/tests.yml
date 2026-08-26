@@ -1,11 +1,10 @@
 name: Run tests
 
 concurrency:
-  # Include event_name so push and pull_request on the same branch do not cancel each other.
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'workflow_call' && github.sha || github.head_ref || github.ref_name || github.ref }}
-  # Keep in-progress pull_request suites running; duplicate synchronize events were
-  # cancelling shards mid-queue and leaving cancelled required checks on the PR.
-  cancel-in-progress: ${{ github.event_name != 'pull_request' }}
+  # One run per branch/ref regardless of trigger event (Blacksmith cannot
+  # sustain two full matrices for the same commit without jobs being cancelled).
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_call' && github.sha || github.head_ref || github.ref_name || github.ref }}
+  cancel-in-progress: false
 
 on:
   workflow_dispatch:
@@ -38,20 +37,8 @@ env:
   CLICOLOR: '1'
 
 jobs:
-  should_run:
-    runs-on: ubuntu-latest
-    permissions: {}
-    outputs:
-      enabled: ${{ steps.check.outputs.enabled }}
-    steps:
-      - name: Enable test workflow for this event
-        id: check
-        run: echo "enabled=true" >> "$GITHUB_OUTPUT"
-
   changes:
-    needs: should_run
-    if: needs.should_run.outputs.enabled == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
       pull-requests: read
@@ -179,7 +166,7 @@ jobs:
   dead_code:
     needs: changes
     if: needs.changes.outputs.run_capgo == 'true' || needs.changes.outputs.run_cli == 'true' || needs.changes.outputs.run_notifications == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     name: Check dead code
     permissions:
@@ -201,7 +188,7 @@ jobs:
   notifications_package:
     needs: changes
     if: needs.changes.outputs.run_notifications == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     name: Notifications plugin package
     permissions:
@@ -227,7 +214,7 @@ jobs:
   lint_typecheck:
     needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     name: Lint and typecheck
     permissions:
@@ -266,7 +253,7 @@ jobs:
   test_unit:
     needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     name: Run unit tests
     permissions:
@@ -288,7 +275,7 @@ jobs:
   test_db:
     needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     name: Run DB tests (Tinbase)
     permissions:
@@ -315,6 +302,7 @@ jobs:
   test_backend:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
+    # Isolated GitHub-hosted VMs avoid Docker port collisions when 6 Supabase stacks start in parallel.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     name: Run backend tests (shard ${{ matrix.shard }})
@@ -329,7 +317,7 @@ jobs:
       SUPABASE_WORKTREE_INSTANCE: backend-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard_id }}
       SUPABASE_WORKTREE_PORT_OFFSET: ${{ matrix.supabase_port_offset }}
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           - shard: 1/6
@@ -592,7 +580,7 @@ jobs:
   test_backend_sql:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     name: Run backend SQL checks
     permissions:
@@ -662,7 +650,7 @@ jobs:
   test_backend_sql_catalog:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     name: Run backend SQL catalog checks
     permissions:
@@ -734,6 +722,7 @@ jobs:
   test_cloudflare:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
+    # Isolated GitHub-hosted VMs avoid Docker port collisions when 8 Supabase stacks start in parallel.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     name: Run Cloudflare Workers tests (shard ${{ matrix.shard }})
@@ -749,7 +738,7 @@ jobs:
       CLOUDFLARE_WORKER_PORT_OFFSET: ${{ matrix.cloudflare_worker_port_offset }}
       CLOUDFLARE_PERSIST_DIR: .context/cloudflare-workers-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.supabase_port_offset }}
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           - shard: 1/8
@@ -877,7 +866,7 @@ jobs:
   test_cloudflare_plugin:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     name: Run Cloudflare plugin tests (serial)
     permissions:
@@ -1147,7 +1136,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run_cli == 'true'
     name: CLI on Node.js ${{ matrix.node-version }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     strategy:
       fail-fast: false
@@ -1177,7 +1166,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run_cli == 'true'
     name: Check for typos (CLI)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Setup Node.js
@@ -1196,7 +1185,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run_cli == 'true'
     name: CLI create valid zip (Linux)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Setup Node.js
@@ -1228,13 +1217,19 @@ jobs:
   cli_check_posix_paths_windows:
     needs: changes
     if: needs.changes.outputs.run_cli == 'true'
-    name: CLI POSIX paths (${{ matrix.os }})
+    name: CLI POSIX paths (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     # windows-2022 often needs >5m for bun install + CLI zip under shared runners.
-    timeout-minutes: 10
+    # windows-2025 on Blacksmith can also exceed 10m when the runner queue is busy.
+    timeout-minutes: 15
     strategy:
       matrix:
-        os: [windows-2025, windows-2022]
+        include:
+          # `target` keeps the artifact/zip names independent from the runner label
+          - target: windows-2025
+            os: blacksmith-4vcpu-windows-2025
+          - target: windows-2022
+            os: windows-2022
     steps:
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -1256,18 +1251,18 @@ jobs:
       - name: Build CLI
         run: bun run cli:build
       - name: Create a zip test
-        run: node ./cli/dist/index.js bundle zip --path cli/test/test_upload -n build-${{ matrix.os }}.zip --package-json cli/test/test_upload/package.json
+        run: node ./cli/dist/index.js bundle zip --path cli/test/test_upload -n build-${{ matrix.target }}.zip --package-json cli/test/test_upload/package.json
       - name: Upload build.zip artifact
         uses: actions/upload-artifact@v4 # v4
         with:
-          name: build-zip-${{ matrix.os }}
-          path: build-${{ matrix.os }}.zip
+          name: build-zip-${{ matrix.target }}
+          path: build-${{ matrix.target }}.zip
 
   cli_check_posix_paths_unix:
     needs: [changes, cli_create_valid_zip_linux, cli_check_posix_paths_windows]
     if: needs.changes.outputs.run_cli == 'true'
     name: CLI POSIX paths (Unix)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Setup Node.js
@@ -1350,6 +1345,8 @@ jobs:
     needs: [changes, cli_create_valid_zip_linux, cli_check_posix_paths_windows]
     if: needs.changes.outputs.run_cli == 'true'
     name: CLI POSIX paths (macOS)
+    # Stays on GitHub-hosted macOS: actions/download-artifact fails with
+    # ECONNREFUSED from the Blacksmith macOS runners used by this repo
     runs-on: macos-latest
     timeout-minutes: 5
     steps:
@@ -1389,7 +1386,7 @@ jobs:
     needs: [changes, cli_check_posix_paths_unix, cli_check_posix_paths_macos]
     if: needs.changes.outputs.run_cli == 'true'
     name: CLI POSIX paths final
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Setup Node.js
@@ -1402,7 +1399,7 @@ jobs:
   cli_tests:
     needs: changes
     if: needs.changes.outputs.run_cli == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     name: Run CLI tests
     timeout-minutes: 5
     steps:
@@ -1440,15 +1437,15 @@ jobs:
     # CLI integration tests exercise the backend edge functions, so backend-only
     # changes must run them too (they are excluded from the backend shards).
     if: needs.changes.outputs.run_cli == 'true' || needs.changes.outputs.run_capgo == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     name: Run Capgo CLI integration tests
     permissions:
       contents: read
       actions: write
     concurrency:
-      # Per-branch CLI stacks avoid cross-PR queue starvation on busy runner windows.
-      group: capgo-local-services-cli-${{ github.event_name }}-${{ github.repository }}-${{ github.head_ref || github.ref_name }}
+      # Isolate by event_name so push + pull_request on the same branch do not cancel pending jobs.
+      group: capgo-local-services-cli-${{ github.event_name }}-${{ github.repository }}
       cancel-in-progress: false
     env:
       SUPABASE_WORKTREE_INSTANCE: cli-${{ github.run_id }}-${{ github.run_attempt }}

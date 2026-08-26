@@ -11,7 +11,7 @@ permissions: {}
 
 jobs:
   release_ios:
-    runs-on: macOS-latest
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 30
     permissions:
       contents: read

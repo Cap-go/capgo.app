@@ -57,7 +57,7 @@ jobs:
     # goldens are recorded against that flow — on Linux every journey crossing a
     # path prompt times out on `waitFor /Type the path/`. Public repo → macOS
     # runners are free.
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 45
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
     permissions:

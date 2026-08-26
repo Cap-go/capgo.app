@@ -20,6 +20,8 @@ permissions:
 jobs:
   benchmarks:
     name: Run benchmarks
+    # Stays on GitHub-hosted Ubuntu: CodSpeed baselines are tied to this runtime.
+    # Blacksmith runners report false regressions from environment differences.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

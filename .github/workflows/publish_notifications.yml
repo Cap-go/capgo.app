@@ -13,7 +13,7 @@ permissions: {}
 
 jobs:
   publish_notifications:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     name: Build and publish notifications plugin to npm
     timeout-minutes: 30
     permissions:
