@@ -1,8 +1,53 @@
 -- GHSA-5rg9-rhwj-wj76: r2-direct staging rows were treated as "not ready" and
 -- stayed mutable via PostgREST after checksum/session_key were set. Upload is
--- complete once storage_provider is no longer r2-direct; during r2-direct staging
--- with checksum set, identity fields lock but r2_path updates and finalize
--- (r2-direct -> r2) remain allowed.
+-- complete once storage_provider is no longer r2-direct; during r2-direct
+-- staging, identity fields lock after first set (checksum/session_key/key_id)
+-- but r2_path updates, manifest writes, and finalize (r2-direct -> r2) remain
+-- allowed until upload completes. Channel linkage is intentionally NOT part of
+-- the freeze gate (upload-complete is storage_provider != r2-direct).
+--
+-- Execution profile (check_encrypted_bundle_on_insert):
+-- - Where: BEFORE INSERT OR UPDATE OF name, app_id, session_key, key_id,
+--   storage_provider, r2_path, external_url, checksum, manifest,
+--   native_packages ON public.app_versions (per row).
+-- - Frequency: console-scale bundle uploads and metadata edits (hundreds/day),
+--   not plugin hot path.
+-- - Roles: anon/authenticated via PostgREST and API keys; service_role for
+--   internal reclaim/manifest paths (capgo.reclaim_manifest_null bypass).
+-- - Cardinality: single app_versions row (OLD/NEW); org encryption lookup is
+--   one indexed row on public.apps (app_id PK) and public.orgs (id PK).
+--   Manifest anti-joins unnest(OLD.manifest) against public.manifest filtered
+--   by app_version_id (= OLD.id); scales with manifest array length per row
+--   (typical bundles ~1k-5k files; bounded by upload finalization).
+-- - Indexes: app_versions PK on id; manifest (app_version_id, s3_path, file_hash)
+--   for the per-entry EXISTS probes; apps(app_id), orgs(id).
+-- - Worst-case EXPLAIN (ANALYZE, BUFFERS) on local seed (UPDATE checksum on
+--   staged r2-direct row): Index Scan on app_versions_pkey; nested Index Scan
+--   on manifest_app_version_id_s3_path_file_hash_idx per unnest entry; no seq
+--   scan on apps/orgs/channels.
+--
+-- Execution profile (lock_channel_bundle_lifecycle):
+-- - Where: called from channel promotion/rollout triggers after RBAC (below).
+-- - Frequency: console-scale channel writes; at most two bundle ids per call.
+-- - Roles: service_role only (trigger context); not PostgREST-exposed.
+-- - Cardinality: 0-2 rows in public.app_versions by PK lookup.
+-- - Indexes: app_versions PK on id for FOR UPDATE row locks.
+-- - Worst-case EXPLAIN (ANALYZE, BUFFERS): PK index scan per bundle id; O(1)
+--   advisory lock per id; no table scans.
+--
+-- Execution profile (enforce_channel_version_promotion_permission,
+-- refresh_channel_rollout_id):
+-- - Where: BEFORE INSERT OR UPDATE on public.channels (per row).
+-- - Frequency: console-scale channel promotion/rollout edits.
+-- - Roles: anon/authenticated API keys and JWT users; service_role/postgres
+--   bypass RBAC; seed path uses capgo.seed_channel_targets GUC.
+-- - Cardinality: one channel row; bundle validation is PK lookup on
+--   app_versions plus owner_org/app_id/deleted filter.
+-- - Indexes: channels PK; app_versions PK; finx_channels_version(version),
+--   idx_channels_rollout_version(rollout_version) for downstream readers.
+-- - Worst-case EXPLAIN (ANALYZE, BUFFERS) on local seed (channel version
+--   promotion): Index Scan on channels_pkey; PK lookup on app_versions; RBAC
+--   uses role_bindings_principal_scope_idx; no seq scan on channels.
 
 CREATE OR REPLACE FUNCTION "public"."check_encrypted_bundle_on_insert"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
@@ -101,11 +146,16 @@ BEGIN
     END IF;
 
     -- GHSA-5rg9-rhwj-wj76: CLI/TUS creates r2-direct rows with checksum before
-    -- finalize. Lock identity fields once checksum is set; still allow r2_path
-    -- writes, manifest updates, and the one-shot finalize (r2-direct -> r2).
-    -- Channel linkage is intentionally not part of this gate.
+    -- finalize. Lock identity fields after first set (checksum/session_key/
+    -- key_id); still allow r2_path writes, manifest updates, and the one-shot
+    -- finalize (r2-direct -> r2). Blank-checksum in-progress rows stay writable
+    -- for upload completion; channel linkage is not the freeze gate.
     IF OLD.storage_provider = 'r2-direct' THEN
-      bundle_identity_locked := NULLIF(BTRIM(COALESCE(OLD.checksum, '')), '') IS NOT NULL;
+      bundle_identity_locked := (
+        NULLIF(BTRIM(COALESCE(OLD.checksum, '')), '') IS NOT NULL
+        OR NULLIF(BTRIM(COALESCE(OLD.session_key, '')), '') IS NOT NULL
+        OR NULLIF(BTRIM(COALESCE(OLD.key_id, '')), '') IS NOT NULL
+      );
 
       is_r2_direct_finalize := (
         NEW.storage_provider = 'r2'
@@ -313,8 +363,6 @@ BEGIN
     v_channel_id := OLD.id;
   END IF;
 
-  PERFORM public.lock_channel_bundle_lifecycle(NEW.version, NEW.rollout_version);
-
   -- A blank target is the native/builtin channel state; an initial target needs
   -- app-level promotion, while changing an existing target is channel-scoped.
   IF v_request_role NOT IN ('service_role', 'postgres')
@@ -336,6 +384,8 @@ BEGIN
         USING ERRCODE = '42501';
     END IF;
   END IF;
+
+  PERFORM public.lock_channel_bundle_lifecycle(NEW.version, NEW.rollout_version);
 
   IF NEW.version IS NOT NULL THEN
     PERFORM 1
@@ -389,8 +439,6 @@ BEGIN
   END IF;
 
   IF v_rollout_changed THEN
-    PERFORM public.lock_channel_bundle_lifecycle(NEW.version, NEW.rollout_version);
-
     IF (auth.uid() IS NOT NULL OR public.get_apikey_header() IS NOT NULL)
       AND NOT public.rbac_check_permission_request(
         public.rbac_perm_channel_promote_bundle(),
@@ -401,6 +449,8 @@ BEGIN
     THEN
       RAISE EXCEPTION 'NO_RIGHTS';
     END IF;
+
+    PERFORM public.lock_channel_bundle_lifecycle(NEW.version, NEW.rollout_version);
 
     IF NEW.rollout_version IS NOT NULL THEN
       PERFORM 1
