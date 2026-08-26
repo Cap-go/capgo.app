@@ -1,6 +1,9 @@
--- GHSA-5rg9-rhwj-wj76: upload-complete bundles lock all content fields.
--- r2-direct staging with checksum locks identity fields; finalize and r2_path
--- writes remain allowed until storage_provider flips to r2.
+-- GHSA-5rg9-rhwj-wj76: upload-complete bundles (storage_provider != r2-direct) lock
+-- delivery fields (name, app_id, checksum, session_key, key_id, storage_provider,
+-- r2_path, external_url, manifest, native_packages). Non-content metadata (e.g.
+-- comment) and clearing manifest once migrated to public.manifest remain allowed.
+-- r2-direct staging locks identity fields after first set; r2_path/manifest writes
+-- and finalize (r2-direct -> r2) stay allowed until upload completes.
 BEGIN;
 
 SELECT plan(11);
@@ -97,7 +100,7 @@ SELECT throws_ok(
       AND name = '1.0.0-staged'
   $sql$,
   'P0001',
-  'bundle_already_ready: Bundle content cannot be changed after upload is complete. Upload a new bundle instead.',
+  'bundle_identity_locked: Bundle identity fields cannot be changed after checksum, session_key, or key_id are first set during upload.',
   'staged r2-direct cannot UPDATE checksum'
 );
 
@@ -109,7 +112,7 @@ SELECT throws_ok(
       AND name = '1.0.0-staged'
   $sql$,
   'P0001',
-  'bundle_already_ready: Bundle content cannot be changed after upload is complete. Upload a new bundle instead.',
+  'bundle_identity_locked: Bundle identity fields cannot be changed after checksum, session_key, or key_id are first set during upload.',
   'staged r2-direct cannot UPDATE session_key'
 );
 
@@ -121,7 +124,7 @@ SELECT throws_ok(
       AND name = '1.0.0-staged'
   $sql$,
   'P0001',
-  'bundle_already_ready: Bundle content cannot be changed after upload is complete. Upload a new bundle instead.',
+  'bundle_identity_locked: Bundle identity fields cannot be changed after checksum, session_key, or key_id are first set during upload.',
   'staged r2-direct cannot UPDATE key_id'
 );
 
@@ -133,7 +136,7 @@ SELECT throws_ok(
       AND name = '1.0.0-staged'
   $sql$,
   'P0001',
-  'bundle_already_ready: Bundle content cannot be changed after upload is complete. Upload a new bundle instead.',
+  'bundle_identity_locked: Bundle identity fields cannot be changed after checksum, session_key, or key_id are first set during upload.',
   'staged r2-direct cannot UPDATE external_url'
 );
 
@@ -145,7 +148,7 @@ SELECT throws_ok(
       AND name = '1.0.0-staged'
   $sql$,
   'P0001',
-  'bundle_already_ready: Bundle content cannot be changed after upload is complete. Upload a new bundle instead.',
+  'bundle_identity_locked: Bundle identity fields cannot be changed after checksum, session_key, or key_id are first set during upload.',
   'staged r2-direct cannot redirect storage_provider away from finalize'
 );
 
