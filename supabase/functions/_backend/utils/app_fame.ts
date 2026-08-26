@@ -122,13 +122,16 @@ function parseFameDecisionRow(
   }
 }
 
-export function parseFameDecisions(value: unknown, allowedAppIds: Set<string>): AppFameDecision[] {
+export function parseFameDecisions(value: unknown, allowedAppIds: Set<string>): {
+  decisions: AppFameDecision[]
+  missingAppIds: string[]
+} {
   const fromText = parseJsonObjectFromAiText(extractAiText(value))
   const fromValue = parseJsonObjectFromAiText(value)
   const record = (fromText && Array.isArray(fromText.apps) ? fromText : null)
     ?? (fromValue && Array.isArray(fromValue.apps) ? fromValue : null)
   if (!record)
-    return []
+    return { decisions: [], missingAppIds: [...allowedAppIds] }
 
   const rows = Array.isArray(record.apps) ? record.apps : []
   const decisions: AppFameDecision[] = []
@@ -140,7 +143,8 @@ export function parseFameDecisions(value: unknown, allowedAppIds: Set<string>): 
       decisions.push(decision)
   }
 
-  return decisions
+  const missingAppIds = [...allowedAppIds].filter(appId => !seen.has(appId))
+  return { decisions, missingAppIds }
 }
 
 export function buildFameSystemPrompt(): string {
@@ -166,7 +170,7 @@ export async function scoreAppsWithAi(
   c: Context,
   ai: AiBinding,
   candidates: AppFameCandidate[],
-): Promise<{ decisions: AppFameDecision[], model: string }> {
+): Promise<{ decisions: AppFameDecision[], missingAppIds: string[], model: string }> {
   const model = getEnv(c, 'APP_FAME_MODEL') || DEFAULT_APP_FAME_MODEL
   const allowedAppIds = new Set(candidates.map(candidate => candidate.app_id))
   const result = await ai.run(model, {
@@ -188,8 +192,11 @@ export async function scoreAppsWithAi(
     ],
   })
 
+  const { decisions, missingAppIds } = parseFameDecisions(result, allowedAppIds)
+
   return {
-    decisions: parseFameDecisions(result, allowedAppIds),
+    decisions,
+    missingAppIds,
     model,
   }
 }

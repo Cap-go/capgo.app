@@ -22,7 +22,7 @@ describe('app fame scoring', () => {
 
   it.concurrent('keeps recognized brands and drops unknown or invalid AI rows', () => {
     const allowed = new Set(['com.bank.app', 'com.utility.app'])
-    const decisions = parseFameDecisions({
+    const { decisions, missingAppIds } = parseFameDecisions({
       apps: [
         {
           app_id: 'com.bank.app',
@@ -68,10 +68,11 @@ describe('app fame scoring', () => {
       known_as: 'National Bank',
       summary: 'Major national consumer bank.',
     }])
+    expect(missingAppIds).toEqual(['com.utility.app'])
   })
 
   it.concurrent('unwraps Workers AI response envelopes before parsing', () => {
-    const decisions = parseFameDecisions({
+    const { decisions, missingAppIds } = parseFameDecisions({
       response: JSON.stringify({
         apps: [{
           app_id: 'com.bank.app',
@@ -86,10 +87,11 @@ describe('app fame scoring', () => {
 
     expect(decisions).toHaveLength(1)
     expect(decisions[0]?.tier).toBe('famous')
+    expect(missingAppIds).toEqual([])
   })
 
   it.concurrent('parses JSON text wrapped in markdown fences', () => {
-    const decisions = parseFameDecisions(`
+    const { decisions, missingAppIds } = parseFameDecisions(`
       \`\`\`json
       {"apps":[{"app_id":"com.airline.app","fame_score":92,"confidence":80,"category":"travel","known_as":"Air Brand","summary":"National flag carrier."}]}
       \`\`\`
@@ -98,6 +100,15 @@ describe('app fame scoring', () => {
     expect(decisions).toHaveLength(1)
     expect(decisions[0]?.tier).toBe('iconic')
     expect(decisions[0]?.known_as).toBe('Air Brand')
+    expect(missingAppIds).toEqual([])
+  })
+
+  it.concurrent('returns all allowed app ids when AI response is unusable', () => {
+    const allowed = new Set(['com.one.app', 'com.two.app'])
+    const { decisions, missingAppIds } = parseFameDecisions('not json', allowed)
+
+    expect(decisions).toEqual([])
+    expect(missingAppIds.sort()).toEqual(['com.one.app', 'com.two.app'])
   })
 
   it('calls Workers AI and returns parsed decisions', async () => {
@@ -137,5 +148,6 @@ describe('app fame scoring', () => {
       known_as: 'City Paper',
       summary: 'Well-known regional newspaper.',
     }])
+    expect(result.missingAppIds).toEqual([])
   })
 })

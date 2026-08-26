@@ -67,7 +67,7 @@ export async function processAppFameBatch(c: Context<MiddlewareKeyVariables>): P
     if (candidates.length === 0)
       return { scored: 0, skipped: 0 }
 
-    const { decisions, model } = await scoreAppsWithAi(c, ai, candidates)
+    const { decisions, missingAppIds, model } = await scoreAppsWithAi(c, ai, candidates)
     if (decisions.length === 0) {
       cloudlogErr({
         requestId: c.get('requestId'),
@@ -78,23 +78,7 @@ export async function processAppFameBatch(c: Context<MiddlewareKeyVariables>): P
       return { scored: 0, skipped: candidates.length }
     }
 
-    const scoredIds = new Set(decisions.map(decision => decision.app_id))
-    const rowsToPersist: AppFameDecision[] = [
-      ...decisions,
-      ...candidates
-        .filter(candidate => !scoredIds.has(candidate.app_id))
-        .map(candidate => ({
-          app_id: candidate.app_id,
-          fame_score: 0,
-          confidence: 0,
-          tier: 'unknown' as const,
-          category: '',
-          known_as: candidate.name?.trim() || '',
-          summary: 'AI returned no usable reputation score for this app.',
-        })),
-    ]
-
-    for (const decision of rowsToPersist) {
+    for (const decision of decisions) {
       await drizzleClient.execute(sql`
         INSERT INTO public.app_fame (
           app_id,
@@ -136,11 +120,12 @@ export async function processAppFameBatch(c: Context<MiddlewareKeyVariables>): P
       requestId: c.get('requestId'),
       message: 'cron_app_fame scored apps',
       scored: decisions.length,
-      skipped: candidates.length - decisions.length,
+      skipped: missingAppIds.length,
+      omittedAppIds: missingAppIds,
       model,
     })
 
-    return { scored: decisions.length, skipped: candidates.length - decisions.length }
+    return { scored: decisions.length, skipped: missingAppIds.length }
   }
   catch (error) {
     logPgError(c, 'processAppFameBatch', error)
