@@ -6,6 +6,74 @@ import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseApikey } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
 
+type BuildUploadWindowRow = Pick<
+  Database['public']['Tables']['build_requests']['Row'],
+  'status' | 'upload_expires_at'
+>
+
+/** Same revocable upload window gate used before forwarding bytes to the builder. */
+export function assertBuildUploadWindowOpen(
+  c: Context,
+  jobId: string,
+  buildRequest: BuildUploadWindowRow,
+): void {
+  // Fail closed: only `pending` is the upload window (set in request.ts).
+  // After /build/start the row moves to starting/running/terminal and must not accept more bytes.
+  if (!buildRequest.status || buildRequest.status !== 'pending') {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'TUS upload rejected for non-pending build status',
+      job_id: jobId,
+      status: buildRequest.status,
+    })
+    throw quickError(403, 'upload_not_allowed', 'Upload is not allowed for this build status')
+  }
+
+  if (!buildRequest.upload_expires_at) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'TUS upload rejected: missing upload_expires_at',
+      job_id: jobId,
+    })
+    throw quickError(403, 'upload_expired', 'Upload window has expired')
+  }
+
+  const uploadExpiresAt = new Date(buildRequest.upload_expires_at)
+  if (Number.isNaN(uploadExpiresAt.getTime()) || uploadExpiresAt.getTime() <= Date.now()) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'TUS upload rejected: upload window expired',
+      job_id: jobId,
+      upload_expires_at: buildRequest.upload_expires_at,
+    })
+    throw quickError(403, 'upload_expired', 'Upload window has expired')
+  }
+}
+
+async function reassertBuildUploadWindowAtAcceptance(
+  c: Context,
+  supabase: ReturnType<typeof supabaseApikey>,
+  jobId: string,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from('build_requests')
+    .select('status, upload_expires_at')
+    .eq('builder_job_id', jobId)
+    .single()
+
+  if (error || !data) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'Build request not found at TUS acceptance boundary',
+      job_id: jobId,
+      error,
+    })
+    throw simpleError('not_found', 'Build request not found')
+  }
+
+  assertBuildUploadWindowOpen(c, jobId, data)
+}
+
 /**
  * TUS proxy for builder uploads
  * This proxies TUS protocol requests (POST, HEAD, PATCH, OPTIONS) to the builder,
@@ -58,37 +126,7 @@ export async function tusProxy(
     throw simpleError('not_found', 'Build request not found')
   }
 
-  // Fail closed: only `pending` is the upload window (set in request.ts).
-  // After /build/start the row moves to running/terminal and must not accept more bytes.
-  if (!buildRequest.status || buildRequest.status !== 'pending') {
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'TUS upload rejected for non-pending build status',
-      job_id: jobId,
-      status: buildRequest.status,
-    })
-    throw quickError(403, 'upload_not_allowed', 'Upload is not allowed for this build status')
-  }
-
-  if (!buildRequest.upload_expires_at) {
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'TUS upload rejected: missing upload_expires_at',
-      job_id: jobId,
-    })
-    throw quickError(403, 'upload_expired', 'Upload window has expired')
-  }
-
-  const uploadExpiresAt = new Date(buildRequest.upload_expires_at)
-  if (Number.isNaN(uploadExpiresAt.getTime()) || uploadExpiresAt.getTime() <= Date.now()) {
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'TUS upload rejected: upload window expired',
-      job_id: jobId,
-      upload_expires_at: buildRequest.upload_expires_at,
-    })
-    throw quickError(403, 'upload_expired', 'Upload window has expired')
-  }
+  assertBuildUploadWindowOpen(c, jobId, buildRequest)
 
   // Check if user has permission to upload for this build (auth context set by middlewareKey)
   if (!(await checkPermission(c, 'app.build_native', { appId: buildRequest.app_id }))) {
@@ -323,6 +361,10 @@ export async function tusProxy(
     // @ts-expect-error - duplex is valid for streaming
     forwardInit.duplex = 'half'
   }
+
+  // Re-check the revocable upload lease immediately before builder byte acceptance.
+  // /build/start can invalidate pending between the initial read above and this forward.
+  await reassertBuildUploadWindowAtAcceptance(c, supabase, jobId)
 
   const builderResponse = await fetch(builderTusUrl, forwardInit)
 

@@ -264,6 +264,110 @@ describe('build upload proxy security', () => {
     })
   })
 
+  it('rejects when upload window closes between initial validation and builder forward', async () => {
+    const defaultRequest = createDefaultBuildRequest()
+    queryBuilder = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      single: vi.fn()
+        .mockResolvedValueOnce({ data: defaultRequest, error: null })
+        .mockResolvedValueOnce({
+          data: {
+            status: 'running',
+            upload_expires_at: defaultRequest.upload_expires_at,
+          },
+          error: null,
+        }),
+    }
+    mockSupabaseApikey.mockReturnValue({
+      from: vi.fn().mockReturnValue(queryBuilder),
+    })
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
+
+    let error: HTTPException | undefined
+    try {
+      await tusProxy(
+        fakeContext(`http://localhost/build/upload/${jobId}/${jobUploadResource}`, 'PATCH') as any,
+        jobId,
+        { user_id: 'user-test', key: 'api-test' } as any,
+      )
+    }
+    catch (err) {
+      expect(err).toBeInstanceOf(HTTPException)
+      if (!(err instanceof HTTPException)) {
+        throw err
+      }
+      error = err
+    }
+    finally {
+      expect(fetchMock).not.toHaveBeenCalled()
+      fetchMock.mockRestore()
+    }
+
+    if (!error) {
+      throw new Error('Expected tusProxy to reject with HTTPException')
+    }
+    expect(error.status).toBe(403)
+    expect(error.cause).toMatchObject({
+      error: 'upload_not_allowed',
+      message: 'Upload is not allowed for this build status',
+    })
+    expect(queryBuilder.single).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects when upload expires between initial validation and builder forward', async () => {
+    const defaultRequest = createDefaultBuildRequest()
+    queryBuilder = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      single: vi.fn()
+        .mockResolvedValueOnce({ data: defaultRequest, error: null })
+        .mockResolvedValueOnce({
+          data: {
+            status: 'pending',
+            upload_expires_at: new Date(Date.now() - 60 * 1000).toISOString(),
+          },
+          error: null,
+        }),
+    }
+    mockSupabaseApikey.mockReturnValue({
+      from: vi.fn().mockReturnValue(queryBuilder),
+    })
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
+
+    let error: HTTPException | undefined
+    try {
+      await tusProxy(
+        fakeContext(`http://localhost/build/upload/${jobId}/${jobUploadResource}`, 'PATCH') as any,
+        jobId,
+        { user_id: 'user-test', key: 'api-test' } as any,
+      )
+    }
+    catch (err) {
+      expect(err).toBeInstanceOf(HTTPException)
+      if (!(err instanceof HTTPException)) {
+        throw err
+      }
+      error = err
+    }
+    finally {
+      expect(fetchMock).not.toHaveBeenCalled()
+      fetchMock.mockRestore()
+    }
+
+    if (!error) {
+      throw new Error('Expected tusProxy to reject with HTTPException')
+    }
+    expect(error.status).toBe(403)
+    expect(error.cause).toMatchObject({
+      error: 'upload_expired',
+      message: 'Upload window has expired',
+    })
+    expect(queryBuilder.single).toHaveBeenCalledTimes(2)
+  })
+
   it('rejects expired upload_expires_at before forwarding', async () => {
     queryBuilder = createQueryBuilder({
       ...createDefaultBuildRequest(),
