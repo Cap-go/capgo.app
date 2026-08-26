@@ -248,7 +248,7 @@ CREATE OR REPLACE TRIGGER "check_privileges"
   ON "public"."org_users"
   FOR EACH ROW
   WHEN ((
-    ("current_setting"('request.jwt.claim.role'::"text", true) = 'authenticated'::"text")
+    ("current_setting"('request.jwt.claim.role'::"text", true) = ANY (ARRAY['authenticated'::"text", 'anon'::"text"]))
     AND COALESCE((NOT ("current_setting"('request.jwt.claim.email'::"text", true) = ANY (ARRAY['bot@capgo.app'::"text", 'test@capgo.app'::"text"]))), true)
   ))
   EXECUTE FUNCTION "public"."check_org_user_privileges"();

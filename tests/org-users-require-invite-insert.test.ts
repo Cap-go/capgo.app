@@ -1,34 +1,23 @@
 import type { PoolClient } from 'pg'
-import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { insertPendingOrgInvitation, POSTGRES_URL, USER_ID, USER_ID_NONMEMBER } from './test-utils.ts'
+import {
+  createOrgAdminApiKey,
+  createOrgOwnedByUser,
+  insertPendingOrgInvitation,
+  POSTGRES_URL,
+  setAnonCapgkeyClaim,
+  setAuthenticatedClaim,
+  setServiceRoleClaim,
+  USER_ID,
+  USER_ID_NONMEMBER,
+} from './test-utils.ts'
 
 describe('org_users require pending invite on insert', () => {
   let pool: Pool
   let client: PoolClient
 
   const query = (text: string, params?: Array<string | number | null>) => client.query(text, params)
-
-  const withAuthClaim = async (userId: string) => {
-    await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claim.sub', userId])
-    await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claim.role', 'authenticated'])
-    await query(`SELECT set_config($1, $2, true)`, [
-      'request.jwt.claims',
-      JSON.stringify({
-        sub: userId,
-        role: 'authenticated',
-        aud: 'authenticated',
-      }),
-    ])
-    await query('SET LOCAL ROLE authenticated')
-  }
-
-  const withServiceRole = async () => {
-    await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claim.role', 'service_role'])
-    await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claims', JSON.stringify({ role: 'service_role' })])
-    await query('SET LOCAL ROLE service_role')
-  }
 
   beforeAll(() => {
     pool = new Pool({
@@ -57,21 +46,8 @@ describe('org_users require pending invite on insert', () => {
     await pool.end()
   })
 
-  const createOrgOwnedByUser = async (ownerId: string) => {
-    const orgId = randomUUID()
-    await withServiceRole()
-    await query(
-      `
-        INSERT INTO public.orgs (id, name, management_email, created_by)
-        VALUES ($1::uuid, $2, $3, $4::uuid)
-      `,
-      [orgId, `Invite insert org ${orgId}`, `invite-insert-${orgId}@capgo.app`, ownerId],
-    )
-    return orgId
-  }
-
   const createPendingInvite = async (orgId: string, inviteeId: string, roleName: string) => {
-    await withServiceRole()
+    await setServiceRoleClaim(query)
     await insertPendingOrgInvitation(query, {
       orgId,
       inviteeId,
@@ -81,9 +57,36 @@ describe('org_users require pending invite on insert', () => {
   }
 
   it('rejects org admin direct INSERT of an active third-party membership', async () => {
-    const orgId = await createOrgOwnedByUser(USER_ID)
+    const orgId = await createOrgOwnedByUser(query, USER_ID, 'Invite insert org')
 
-    await withAuthClaim(USER_ID)
+    await setAuthenticatedClaim(query, USER_ID)
+    let thrown: unknown
+    try {
+      await query(
+        `
+          INSERT INTO public.org_users (user_id, org_id, rbac_role_name, is_invite)
+          VALUES ($1::uuid, $2::uuid, $3, false)
+        `,
+        [USER_ID_NONMEMBER, orgId, 'org_member'],
+      )
+    }
+    catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeTruthy()
+    expect((thrown as Error).message).toContain('Admins cannot insert active org memberships!')
+  })
+
+  it('rejects anon API-key INSERT of an active third-party membership', async () => {
+    const orgId = await createOrgOwnedByUser(query, USER_ID, 'Invite insert anon org')
+    const apiKey = await createOrgAdminApiKey(query, {
+      orgId,
+      ownerId: USER_ID,
+      label: `Invite insert anon ${orgId}`,
+    })
+
+    await setAnonCapgkeyClaim(query, apiKey)
     let thrown: unknown
     try {
       await query(
@@ -103,9 +106,9 @@ describe('org_users require pending invite on insert', () => {
   })
 
   it('allows org admin to INSERT a pending invite', async () => {
-    const orgId = await createOrgOwnedByUser(USER_ID)
+    const orgId = await createOrgOwnedByUser(query, USER_ID, 'Invite insert org')
 
-    await withAuthClaim(USER_ID)
+    await setAuthenticatedClaim(query, USER_ID)
     const result = await query(
       `
         INSERT INTO public.org_users (user_id, org_id, rbac_role_name, is_invite)
@@ -121,10 +124,10 @@ describe('org_users require pending invite on insert', () => {
   })
 
   it('allows an invitee to accept a pending invitation', async () => {
-    const orgId = await createOrgOwnedByUser(USER_ID)
+    const orgId = await createOrgOwnedByUser(query, USER_ID, 'Invite insert org')
     await createPendingInvite(orgId, USER_ID_NONMEMBER, 'org_member')
 
-    await withAuthClaim(USER_ID_NONMEMBER)
+    await setAuthenticatedClaim(query, USER_ID_NONMEMBER)
     const result = await query(
       `SELECT public.accept_invitation_to_org($1::uuid) AS status`,
       [orgId],
@@ -146,10 +149,10 @@ describe('org_users require pending invite on insert', () => {
   })
 
   it('allows an org admin to clear is_invite on a pending membership', async () => {
-    const orgId = await createOrgOwnedByUser(USER_ID)
+    const orgId = await createOrgOwnedByUser(query, USER_ID, 'Invite insert org')
     await createPendingInvite(orgId, USER_ID_NONMEMBER, 'org_member')
 
-    await withAuthClaim(USER_ID)
+    await setAuthenticatedClaim(query, USER_ID)
     const result = await query(
       `
         UPDATE public.org_users
