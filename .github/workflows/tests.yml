@@ -1567,23 +1567,45 @@ jobs:
         run: bun scripts/supabase-worktree.ts stop --no-backup || true
       - name: Install dependencies
         run: bun install
-      - name: Resolve last published CLI tag
+      - name: Verify published CLI tag exists
         run: |
-          PUBLISHED_CLI_TAG="$(git tag -l 'cli-*' | grep -E '^cli-[0-9]' | sort -V | tail -1)"
-          if [ -z "$PUBLISHED_CLI_TAG" ]; then
+          if ! git tag -l 'cli-*' | grep -Eq '^cli-[0-9]'; then
             echo '::error::No cli-* tag found for published CLI contract'
             exit 1
           fi
-          PUBLISHED_CLI_VERSION="${PUBLISHED_CLI_TAG#cli-}"
-          echo "PUBLISHED_CLI_TAG=$PUBLISHED_CLI_TAG" >> "$GITHUB_ENV"
-          echo "PUBLISHED_CLI_VERSION=$PUBLISHED_CLI_VERSION" >> "$GITHUB_ENV"
-          echo "Published CLI contract target: @capgo/cli@${PUBLISHED_CLI_VERSION} (${PUBLISHED_CLI_TAG})"
       - name: Run Supabase Start
         run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+      - name: Export isolated Supabase endpoints
+        run: |
+          bun scripts/supabase-worktree.ts with-env bun -e 'const apiUrl = new URL(process.env.SUPABASE_URL ?? ""); const dbUrl = process.env.SUPABASE_DB_URL ?? ""; if (!apiUrl.host || !dbUrl) throw new Error("Isolated Supabase status is missing API_URL or DB_URL."); console.log(`SUPABASE_FUNCTIONS_HEALTH_URL=http-get://${apiUrl.host}/functions/v1/ok`); console.log(`MAIN_SUPABASE_DB_URL=${dbUrl}`)' >> "$GITHUB_ENV"
+      - id: bootstrap_published_cli_edge_server
+        name: Bootstrap Edge server
+        env:
+          BACKGROUND_SERVICE_NAME: Bootstrap Edge server
+          BACKGROUND_RUN_COMMAND: exec bun scripts/supabase-worktree.ts functions serve
+          BACKGROUND_LOG_PATH: ${{ runner.temp }}/bootstrap-published-cli-edge-server.log
+          BACKGROUND_WAIT_TIMEOUT_MS: 60000
+        run: |
+          export BACKGROUND_WAIT_ON="${SUPABASE_FUNCTIONS_HEALTH_URL:?Missing isolated Supabase health URL}"
+          bash .github/scripts/start-background-service.sh
       - name: Run published CLI contract unit checks
         run: bunx vitest run tests/published-cli-rpc-contract.unit.test.ts
       - name: Run published CLI contract against PR schema
         run: bun run supabase:with-env -- bunx vitest run tests/published-cli-rpc-contract.test.ts --no-file-parallelism --maxWorkers=1
+      - name: Show published CLI Edge server logs after failure
+        if: failure() && steps.bootstrap_published_cli_edge_server.outputs.log_path != ''
+        run: |
+          echo "::group::Published CLI Bootstrap Edge server log"
+          tail -n 200 "${{ steps.bootstrap_published_cli_edge_server.outputs.log_path }}" || true
+          echo "::endgroup::"
+      - name: Stop published CLI background services
+        if: always()
+        run: |
+          for pid in "${{ steps.bootstrap_published_cli_edge_server.outputs.pid }}"; do
+            if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+              kill "${pid}" 2>/dev/null || true
+            fi
+          done
       - name: Stop Supabase stack
         if: always()
         run: bun scripts/supabase-worktree.ts stop --no-backup || true

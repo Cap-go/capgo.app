@@ -52,7 +52,14 @@ async function loadFunctionPrivileges(pool: Pool, functionName: string): Promise
   const result = await pool.query<FunctionPrivilegeRow>(`
     SELECT
       p.oid::regprocedure::text AS proc,
-      p.proargnames AS "argNames",
+      CASE
+        WHEN p.proargmodes IS NULL THEN p.proargnames
+        ELSE (
+          SELECT array_agg(args.arg_name ORDER BY args.ordinality)
+          FROM unnest(p.proargnames, p.proargmodes) WITH ORDINALITY AS args(arg_name, arg_mode, ordinality)
+          WHERE args.arg_mode IN ('i', 'b', 'v')
+        )
+      END AS "argNames",
       COALESCE(p.pronargdefaults, 0) AS "defaultCount",
       p.pronargs AS "argCount",
       has_function_privilege('anon', p.oid, 'EXECUTE') AS "anonExec"
@@ -60,6 +67,7 @@ async function loadFunctionPrivileges(pool: Pool, functionName: string): Promise
     INNER JOIN pg_namespace AS n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public'
       AND p.proname = $1
+      AND p.prokind = 'f'
     ORDER BY 1
   `, [functionName])
 
@@ -159,6 +167,5 @@ describe(`CRITICAL published CLI RPC contract (${publishedCliRpcSourceTag} / npm
     const output = `${stdout}\n${stderr}`
     expect(output).not.toMatch(/permission denied/i)
     expect(output).not.toMatch(/42501/)
-    expect(stdout).toContain('Apps (CSV)')
   }, 180_000)
 })

@@ -124,5 +124,19 @@ describe('published CLI contract helpers', () => {
       0,
       2,
     )).toBe(false)
+
+    expect(rpcCallMatchesOverload(
+      { name: 'get_orgs_v7', argKeys: ['org_id'] },
+      ['org_id', 'is_invite'],
+      1,
+      2,
+    )).toBe(true)
+
+    expect(rpcCallMatchesOverload(
+      { name: 'get_orgs_v7', argKeys: [] },
+      ['org_id', 'is_invite'],
+      1,
+      2,
+    )).toBe(false)
   })
 })

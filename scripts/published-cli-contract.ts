@@ -125,6 +125,10 @@ export function extractArgKeysFromRpcCall(source: string, afterRpcNameIndex: num
     return []
 
   cursor += commaMatch[0].length
+  const afterComma = source.slice(cursor).trimStart()
+  if (!afterComma.startsWith('{'))
+    return []
+
   const objectStart = source.indexOf('{', cursor)
   if (objectStart === -1)
     return []
@@ -165,7 +169,7 @@ export function extractArgKeysFromRpcCall(source: string, afterRpcNameIndex: num
       if (depth === 0) {
         const argsSource = source.slice(objectStart + 1, index)
         const keys = new Set<string>()
-        for (const segment of argsSource.split(',')) {
+        for (const segment of splitTopLevelArgSegments(argsSource)) {
           const trimmed = segment.trim()
           if (!trimmed)
             continue
@@ -189,6 +193,58 @@ export function extractArgKeysFromRpcCall(source: string, afterRpcNameIndex: num
   return []
 }
 
+function splitTopLevelArgSegments(source: string): string[] {
+  const segments: string[] = []
+  let start = 0
+  let depth = 0
+  let inString: '"' | '\'' | '`' | null = null
+  let escaped = false
+
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index]
+
+    if (inString) {
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (char === '\\') {
+        escaped = true
+        continue
+      }
+      if (char === inString)
+        inString = null
+      continue
+    }
+
+    if (char === '"' || char === '\'' || char === '`') {
+      inString = char
+      continue
+    }
+
+    if (char === '{' || char === '[' || char === '(')
+      depth++
+    else if (char === '}' || char === ']' || char === ')')
+      depth--
+    else if (char === ',' && depth === 0) {
+      segments.push(source.slice(start, index))
+      start = index + 1
+    }
+  }
+
+  if (start < source.length)
+    segments.push(source.slice(start))
+
+  return segments
+}
+
+function comparePublishedCliRpcCalls(left: PublishedCliRpcCall, right: PublishedCliRpcCall): number {
+  const byName = left.name.localeCompare(right.name)
+  if (byName !== 0)
+    return byName
+  return left.argKeys.join(',').localeCompare(right.argKeys.join(','))
+}
+
 function rpcNameEndIndex(source: string, match: RegExpMatchArray): number {
   return (match.index ?? 0) + match[0].length
 }
@@ -203,16 +259,11 @@ export function extractPublishedCliRpcCallsFromSource(source: string): Published
     calls.set(key, { name, argKeys })
   }
 
-  return [...calls.values()].sort((left, right) => {
-    const byName = left.name.localeCompare(right.name)
-    if (byName !== 0)
-      return byName
-    return left.argKeys.join(',').localeCompare(right.argKeys.join(','))
-  })
+  return [...calls.values()].sort(comparePublishedCliRpcCalls)
 }
 
 export function extractPublishedCliRpcCalls(tag: string, runGit: GitRunner = defaultGitRunner): PublishedCliRpcCall[] {
-  const output = runGit(['grep', '-l', '-E', String.raw`\.rpc\(['\`][a-z][a-z0-9_]*['\`]`, tag, '--', 'cli/src'])
+  const output = runGit(['grep', '-l', '-E', String.raw`\.rpc\(["'\`][a-z][a-z0-9_]*["'\`]`, tag, '--', 'cli/src'])
   const files = output
     .split('\n')
     .map(line => line.trim())
@@ -231,12 +282,7 @@ export function extractPublishedCliRpcCalls(tag: string, runGit: GitRunner = def
     }
   }
 
-  return [...calls.values()].sort((left, right) => {
-    const byName = left.name.localeCompare(right.name)
-    if (byName !== 0)
-      return byName
-    return left.argKeys.join(',').localeCompare(right.argKeys.join(','))
-  })
+  return [...calls.values()].sort(comparePublishedCliRpcCalls)
 }
 
 export function formatPublishedCliRpcCall(call: PublishedCliRpcCall): string {
