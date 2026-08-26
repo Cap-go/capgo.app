@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions } from 'chart.js'
+import type { VersionGroupOption } from '~/components/dashboard/VersionGroupSelector.vue'
 import type { PeriodDayOption } from '~/utils/periodDays'
 import { BarElement, CategoryScale, Chart, Legend, LinearScale, LineElement, PointElement, Tooltip } from 'chart.js'
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -13,6 +14,7 @@ import IconRocket from '~icons/lucide/rocket'
 import IconTimer from '~icons/lucide/timer'
 import DeliveryLatencyPanel from '~/components/dashboard/DeliveryLatencyPanel.vue'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
+import VersionGroupSelector from '~/components/dashboard/VersionGroupSelector.vue'
 import { useNativeObserveStats } from '~/composables/useNativeObserveStats'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { formatLocalDateShort } from '~/services/date'
@@ -63,8 +65,11 @@ interface NativeObserveStatsResponse {
     p99_ms: number | null
     is_issue: boolean
   }>
+  version_group: VersionGroupOption
   versions: Array<{
     version_name: string
+    platform: string | null
+    channel_name: string | null
     events: number
     devices: number
     issue_count: number
@@ -91,14 +96,31 @@ const packageId = computed(() => {
 })
 const appRouteSegment = computed(() => route.path.match(/^\/app\/([^/]+)/)?.[1] ?? encodeURIComponent(packageId.value))
 const { days } = usePeriodDaysQuery()
+const versionGroup = ref<VersionGroupOption>('version')
 const { stats, statsLoading, fetchStats } = useNativeObserveStats<NativeObserveStatsResponse>(
   packageId,
-  () => ({ days: days.value }),
+  () => ({ days: days.value, version_group: versionGroup.value }),
   'native observe stats',
 )
 const hasData = computed(() => (stats.value?.overview.total_events ?? 0) > 0)
 const topActions = computed(() => stats.value?.actionBreakdown.slice(0, 10) ?? [])
-const topVersions = computed(() => stats.value?.versions.slice(0, 8) ?? [])
+const topVersions = computed(() => stats.value?.versions.slice(0, versionGroup.value === 'version' ? 8 : 24) ?? [])
+const showPlatformColumn = computed(() => versionGroup.value !== 'version')
+const showChannelColumn = computed(() => versionGroup.value === 'version_platform_channel')
+const versionHealthHelp = computed(() => {
+  if (versionGroup.value === 'version_platform_channel')
+    return t('native-observe-version-health-help-platform-channel')
+  if (versionGroup.value === 'version_platform')
+    return t('native-observe-version-health-help-platform')
+  return t('native-observe-version-health-help')
+})
+const versionTableMinWidth = computed(() => {
+  if (showChannelColumn.value)
+    return 'min-w-[980px]'
+  if (showPlatformColumn.value)
+    return 'min-w-[860px]'
+  return 'min-w-[760px]'
+})
 
 const selectedPeriodLabel = computed(() => {
   if (days.value === 1)
@@ -268,6 +290,16 @@ function selectPeriod(option: PeriodDayOption) {
   days.value = option
 }
 
+function selectVersionGroup(option: VersionGroupOption) {
+  if (versionGroup.value === option)
+    return
+  versionGroup.value = option
+}
+
+function versionRowKey(version: NativeObserveStatsResponse['versions'][number]) {
+  return [version.version_name, version.platform ?? '', version.channel_name ?? ''].join('\0')
+}
+
 function openLogs(action: string) {
   if (!stats.value)
     return
@@ -287,7 +319,7 @@ watch(packageId, () => {
   displayStore.defaultBack = '/apps'
 }, { immediate: true })
 
-watch([packageId, days], async () => {
+watch([packageId, days, versionGroup], async () => {
   await fetchStats()
 }, { immediate: true })
 </script>
@@ -443,23 +475,32 @@ watch([packageId, days], async () => {
 
           <div class="grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.65fr)]">
             <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-              <div class="flex items-center justify-between gap-3 mb-4">
-                <div>
-                  <h2 class="text-base font-semibold text-slate-950 dark:text-white">
-                    {{ t('native-observe-version-health') }}
-                  </h2>
+              <div class="flex flex-col gap-3 mb-4 sm:flex-row sm:items-start sm:justify-between">
+                <div class="min-w-0">
+                  <div class="flex items-center gap-2">
+                    <h2 class="text-base font-semibold text-slate-950 dark:text-white">
+                      {{ t('native-observe-version-health') }}
+                    </h2>
+                    <IconRocket class="w-5 h-5 text-sky-500 shrink-0" />
+                  </div>
                   <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                    {{ t('native-observe-version-health-help') }}
+                    {{ versionHealthHelp }}
                   </p>
                 </div>
-                <IconRocket class="w-5 h-5 text-sky-500" />
+                <VersionGroupSelector :model-value="versionGroup" @update:model-value="selectVersionGroup" />
               </div>
               <div class="overflow-x-auto">
-                <table class="d-table d-table-sm w-full min-w-[760px]">
+                <table class="d-table d-table-sm w-full" :class="versionTableMinWidth">
                   <thead>
                     <tr>
                       <th class="whitespace-nowrap">
                         {{ t('native-observe-version') }}
+                      </th>
+                      <th v-if="showPlatformColumn" class="whitespace-nowrap">
+                        {{ t('native-observe-platform') }}
+                      </th>
+                      <th v-if="showChannelColumn" class="whitespace-nowrap">
+                        {{ t('native-observe-channel') }}
                       </th>
                       <th class="whitespace-nowrap">
                         {{ t('events') }}
@@ -479,9 +520,15 @@ watch([packageId, days], async () => {
                     </tr>
                   </thead>
                   <tbody>
-                    <tr v-for="version in topVersions" :key="version.version_name">
+                    <tr v-for="version in topVersions" :key="versionRowKey(version)">
                       <td class="font-medium text-slate-900 dark:text-slate-100">
                         {{ version.version_name }}
+                      </td>
+                      <td v-if="showPlatformColumn">
+                        {{ version.platform || '-' }}
+                      </td>
+                      <td v-if="showChannelColumn">
+                        {{ version.channel_name || '-' }}
                       </td>
                       <td>{{ formatCount(version.events) }}</td>
                       <td>{{ formatCount(version.devices) }}</td>
