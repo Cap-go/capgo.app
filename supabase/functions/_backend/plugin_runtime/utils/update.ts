@@ -26,6 +26,7 @@ import { getClientIP } from './rate_limit.ts'
 import { s3 } from './s3.ts'
 import { shouldQueuePluginNotifications } from './supabase_write_guard.ts'
 import { isUpdateEnumerationLimited, recordUpdateEnumerationMiss, updateEnumerationLimitedResponse } from './updateOracleGuard.ts'
+import { ENCRYPTION_KEY_ID_FORMAT_MIN_VERSION, usesCurrentEncryptionKeyIdFormat } from '../../utils/plugin_compatibility.ts'
 import { backgroundTask, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, fixSemver, isDeprecatedPluginVersion, isInternalVersionName } from './utils.ts'
 
 const PLAN_LIMIT: Array<'mau' | 'bandwidth' | 'storage'> = ['mau', 'bandwidth']
@@ -590,8 +591,8 @@ export async function updateWithPG(
 
   // Check for encryption key mismatch between device and bundle
   // Only check if both device and bundle have key_id set (encrypted bundle)
-  // Only enforce for plugin_version > 8.40.7 (transitional period for key_id format change from 4 to 20 chars)
-  if (body.key_id && version.key_id && body.key_id !== version.key_id && greaterThan(pluginVersion, parse('8.40.7'))) {
+  // Only enforce for plugin versions above ENCRYPTION_KEY_ID_FORMAT_MIN_VERSION (transitional period for key_id format change from 4 to 20 chars)
+  if (body.key_id && version.key_id && body.key_id !== version.key_id && usesCurrentEncryptionKeyIdFormat(pluginVersion)) {
     cloudlog({ requestId: c.get('requestId'), message: 'Encryption key mismatch', device_id, deviceKeyId: body.key_id, bundleKeyId: version.key_id, versionName: version.name })
     await sendStatsAndDevice(c, device, [{ action: 'keyMismatch', versionName: version.name }])
     return updateError200(c, 'key_id_mismatch', 'Device encryption key does not match bundle encryption key. The device may have a different public key than the one used to encrypt this bundle.', {
