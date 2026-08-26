@@ -1,7 +1,7 @@
 import type { Database } from '../src/types/supabase.types'
 import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
   APIKEY_TEST_ALL,
   APIKEY_TEST_UPLOAD,
@@ -9,14 +9,10 @@ import {
   getEndpointUrl,
   getSupabaseClient,
   ORG_ID,
-  resetAndSeedAppData,
-  resetAppData,
   USER_ID,
 } from './test-utils.ts'
 
-const id = randomUUID()
-const APP_ID = `com.demo.manifest-poison.${id}`
-const BUNDLE_NAME = `1.0.0-poison-${id.slice(0, 8)}`
+const APP_ID = 'com.demo.app'
 
 function createApiKeyClient(apikey: string) {
   const supabaseUrl = process.env.SUPABASE_URL as string
@@ -35,30 +31,42 @@ function createApiKeyClient(apikey: string) {
   })
 }
 
-function poisonManifestEntries(ownerOrg: string) {
+function poisonManifestEntries(ownerOrg: string, versionName: string) {
   const prefix = `orgs/${ownerOrg}/apps/${APP_ID}/delta`
   return [
     {
       file_name: 'poison.html',
-      s3_path: `${prefix}/poisonhash_poison.html`,
+      s3_path: `${prefix}/${versionName}_poisonhash_poison.html`,
       file_hash: 'poisonhash',
     },
   ]
 }
 
+async function patchVersionManifestAsApiKey(
+  apikey: string,
+  versionId: number,
+  manifest: Database['public']['CompositeTypes']['manifest_entry'][],
+) {
+  const supabaseUrl = process.env.SUPABASE_URL as string
+  const anonKey = process.env.SUPABASE_ANON_KEY as string
+
+  return fetch(`${supabaseUrl}/rest/v1/app_versions?id=eq.${versionId}`, {
+    method: 'PATCH',
+    headers: {
+      apikey: anonKey,
+      Authorization: `Bearer ${anonKey}`,
+      capgkey: apikey,
+      'Content-Type': 'application/json',
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify({ manifest }),
+  })
+}
+
 describe('manifest poison guard', () => {
-  beforeAll(async () => {
-    await resetAndSeedAppData(APP_ID)
-  })
-
-  afterAll(async () => {
-    await resetAppData(APP_ID)
-  })
-
   it.concurrent('blocks upload API key from poisoning manifest via app_versions.manifest on r2-direct', async () => {
     const adminClient = getSupabaseClient()
-    const uploaderClient = createApiKeyClient(APIKEY_TEST_UPLOAD)
-    const versionName = `${BUNDLE_NAME}-upload`
+    const versionName = `1.0.0-poison-upload-${randomUUID().slice(0, 8)}`
 
     const { data: version, error: insertError } = await adminClient
       .from('app_versions')
@@ -77,15 +85,15 @@ describe('manifest poison guard', () => {
     expect(insertError).toBeNull()
 
     try {
-      const { error: poisonError } = await uploaderClient
-        .from('app_versions')
-        .update({
-          manifest: poisonManifestEntries(version!.owner_org),
-        })
-        .eq('id', version!.id)
+      const response = await patchVersionManifestAsApiKey(
+        APIKEY_TEST_UPLOAD,
+        version!.id,
+        poisonManifestEntries(version!.owner_org, versionName),
+      )
 
-      expect(poisonError).not.toBeNull()
-      expect(poisonError?.message).toContain('bundle_already_ready')
+      expect(response.status).toBeGreaterThanOrEqual(400)
+      const body = await response.text()
+      expect(body).toContain('bundle_already_ready')
 
       const { data: manifestRows, error: manifestError } = await adminClient
         .from('manifest')
@@ -102,8 +110,7 @@ describe('manifest poison guard', () => {
 
   it.concurrent('blocks write API key from poisoning manifest via app_versions.manifest on r2-direct', async () => {
     const adminClient = getSupabaseClient()
-    const writeClient = createApiKeyClient(APIKEY_TEST_ALL)
-    const versionName = `${BUNDLE_NAME}-write`
+    const versionName = `1.0.0-poison-write-${randomUUID().slice(0, 8)}`
 
     const { data: version, error: insertError } = await adminClient
       .from('app_versions')
@@ -122,15 +129,15 @@ describe('manifest poison guard', () => {
     expect(insertError).toBeNull()
 
     try {
-      const { error: poisonError } = await writeClient
-        .from('app_versions')
-        .update({
-          manifest: poisonManifestEntries(version!.owner_org),
-        })
-        .eq('id', version!.id)
+      const response = await patchVersionManifestAsApiKey(
+        APIKEY_TEST_ALL,
+        version!.id,
+        poisonManifestEntries(version!.owner_org, versionName),
+      )
 
-      expect(poisonError).not.toBeNull()
-      expect(poisonError?.message).toContain('bundle_already_ready')
+      expect(response.status).toBeGreaterThanOrEqual(400)
+      const body = await response.text()
+      expect(body).toContain('bundle_already_ready')
 
       const { data: manifestRows, error: manifestError } = await adminClient
         .from('manifest')
@@ -145,9 +152,9 @@ describe('manifest poison guard', () => {
     }
   })
 
-  it('still allows legitimate manifest upload via set_manifest on r2-direct', async () => {
+  it.concurrent('still allows legitimate manifest upload via set_manifest on r2-direct', async () => {
     const adminClient = getSupabaseClient()
-    const versionName = `${BUNDLE_NAME}-legit`
+    const versionName = `1.0.0-poison-legit-${randomUUID().slice(0, 8)}`
 
     const { data: version, error: insertError } = await adminClient
       .from('app_versions')
@@ -178,30 +185,33 @@ describe('manifest poison guard', () => {
       ],
     }
 
-    const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': APIKEY_TEST_UPLOAD,
-      },
-      body: JSON.stringify(body),
-    })
+    try {
+      const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': APIKEY_TEST_UPLOAD,
+        },
+        body: JSON.stringify(body),
+      })
 
-    expect(response.status).toBe(200)
-    const json = await response.json() as { status: string, inserted: number }
-    expect(json.status).toBe('ok')
-    expect(json.inserted).toBe(1)
+      expect(response.status).toBe(200)
+      const json = await response.json() as { status: string, inserted: number }
+      expect(json.status).toBe('ok')
+      expect(json.inserted).toBe(1)
 
-    const { data: rows, error: manifestError } = await adminClient
-      .from('manifest')
-      .select('file_name, file_hash, s3_path')
-      .eq('app_version_id', version!.id)
+      const { data: rows, error: manifestError } = await adminClient
+        .from('manifest')
+        .select('file_name, file_hash, s3_path')
+        .eq('app_version_id', version!.id)
 
-    expect(manifestError).toBeNull()
-    expect(rows).toHaveLength(1)
-    expect(rows?.[0]?.file_name).toBe('index.html')
-
-    await adminClient.from('manifest').delete().eq('app_version_id', version!.id)
-    await adminClient.from('app_versions').delete().eq('id', version!.id)
+      expect(manifestError).toBeNull()
+      expect(rows).toHaveLength(1)
+      expect(rows?.[0]?.file_name).toBe('index.html')
+    }
+    finally {
+      await adminClient.from('manifest').delete().eq('app_version_id', version!.id)
+      await adminClient.from('app_versions').delete().eq('id', version!.id)
+    }
   })
 })

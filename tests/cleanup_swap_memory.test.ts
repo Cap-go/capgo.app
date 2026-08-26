@@ -144,19 +144,23 @@ describe('swap memory cleanup functions', () => {
     const versionRows = await executeSQL(
       `INSERT INTO public.app_versions (app_id, name, owner_org, storage_provider, comment)
        VALUES ($1, $2, $3::uuid, 'r2-direct', 'before')
-       RETURNING id`,
+       RETURNING id, name`,
       [appId, `1.0.0-${randomUUID().slice(0, 8)}`, orgId],
     )
     const versionId = versionRows[0]?.id as number
+    const versionName = versionRows[0]?.name as string
+    const canonicalR2Path = `orgs/${orgId}/apps/${appId}/${versionName}.zip`
 
     await executeSQL(
       `UPDATE public.app_versions
        SET
          comment = 'after',
-         manifest = ARRAY[ROW('a.js', 'apps/a.js', 'hash')::public.manifest_entry],
+         storage_provider = 'r2',
+         r2_path = $2,
+         manifest = ARRAY[ROW('a.js', $3, 'hash')::public.manifest_entry],
          native_packages = ARRAY['{"name":"cordova-plugin"}'::jsonb]
        WHERE id = $1`,
-      [versionId],
+      [versionId, canonicalR2Path, `orgs/${orgId}/apps/${appId}/delta/hash_a.js`],
     )
 
     const logs = await executeSQL(
@@ -210,14 +214,36 @@ describe('swap memory cleanup functions', () => {
   it('audit_log_trigger skips dual-storage migrate finalize', async () => {
     const appId = `com.swap.auditskip.${randomUUID().slice(0, 8)}`
     const orgId = (await executeSQL(`SELECT id FROM public.orgs ORDER BY created_at LIMIT 1`))[0]?.id as string
-    const versionId = await seedAuditAppVersion(appId, orgId)
+    const versionName = `1.0.0-${randomUUID().slice(0, 8)}`
+    const manifestPath = `orgs/${orgId}/apps/${appId}/delta/hash_a.js`
 
     await executeSQL(
-      `UPDATE public.app_versions
-       SET manifest = ARRAY[ROW('a.js', 'apps/a.js', 'hash')::public.manifest_entry]
-       WHERE id = $1`,
-      [versionId],
+      `INSERT INTO public.apps (app_id, name, icon_url, owner_org)
+       VALUES ($1, 'swap-audit-skip', '', $2::uuid)`,
+      [appId, orgId],
     )
+
+    const versionRows = await executeSQL(
+      `INSERT INTO public.app_versions (
+         app_id,
+         name,
+         owner_org,
+         storage_provider,
+         comment,
+         manifest
+       )
+       VALUES (
+         $1,
+         $2,
+         $3::uuid,
+         'r2-direct',
+         'seed',
+         ARRAY[ROW('a.js', $4, 'hash')::public.manifest_entry]
+       )
+       RETURNING id`,
+      [appId, versionName, orgId, manifestPath],
+    )
+    const versionId = versionRows[0]?.id as number
     await clearVersionAudits(versionId)
 
     await executeSQL(
