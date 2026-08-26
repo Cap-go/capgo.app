@@ -129,6 +129,26 @@ SELECT lives_ok(
 
 SELECT tests.authenticate_as('org_billing_guard_super');
 
+SELECT throws_ok(
+  $$
+    INSERT INTO public.orgs (id, created_by, name, management_email, customer_id)
+    VALUES (
+      '73000000-0000-4000-8000-000000000075'::uuid,
+      tests.get_supabase_uid('org_billing_guard_super'),
+      'Org customer_id insert blocked',
+      'org-customer-id-insert-blocked@test.local',
+      'cus_org_billing_guard_evil'
+    )
+  $$,
+  '42501',
+  'PERMISSION_DENIED_ORG_CUSTOMER_ID',
+  'user cannot insert org with customer_id'
+);
+
+SELECT tests.authenticate_as_service_role();
+SET LOCAL ROLE service_role;
+SET LOCAL "request.jwt.claim.role" = 'service_role';
+
 SELECT lives_ok(
   $$
     INSERT INTO public.orgs (id, created_by, name, management_email)
@@ -140,7 +160,7 @@ SELECT lives_ok(
     )
     ON CONFLICT (id) DO NOTHING
   $$,
-  'org creator can insert org without customer_id'
+  'service_role can insert org without customer_id'
 );
 
 SELECT is(
