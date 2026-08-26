@@ -1575,6 +1575,8 @@ jobs:
           fi
       - name: Run Supabase Start
         run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+      - name: Reset isolated Supabase database
+        run: bun run supabase:db:reset
       - name: Export isolated Supabase endpoints
         run: |
           bun scripts/supabase-worktree.ts with-env bun -e 'const apiUrl = new URL(process.env.SUPABASE_URL ?? ""); const dbUrl = process.env.SUPABASE_DB_URL ?? ""; if (!apiUrl.host || !dbUrl) throw new Error("Isolated Supabase status is missing API_URL or DB_URL."); console.log(`SUPABASE_FUNCTIONS_HEALTH_URL=http-get://${apiUrl.host}/functions/v1/ok`); console.log(`MAIN_SUPABASE_DB_URL=${dbUrl}`)' >> "$GITHUB_ENV"
