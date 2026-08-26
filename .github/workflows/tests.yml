@@ -1449,8 +1449,8 @@ jobs:
       contents: read
       actions: write
     concurrency:
-      # Isolate by event_name so push + pull_request on the same branch do not cancel pending jobs.
-      group: capgo-local-services-cli-${{ github.event_name }}-${{ github.repository }}
+      # Per-branch CLI stacks avoid cross-PR queue starvation on busy runner windows.
+      group: capgo-local-services-cli-${{ github.event_name }}-${{ github.repository }}-${{ github.head_ref || github.ref_name }}
       cancel-in-progress: false
     env:
       SUPABASE_WORKTREE_INSTANCE: cli-${{ github.run_id }}-${{ github.run_attempt }}
