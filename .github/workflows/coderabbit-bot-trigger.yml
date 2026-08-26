@@ -5,6 +5,7 @@ on:
     branches:
       - 'cursor/**'
       - 'feat/admin-famous-apps'
+      - 'posthog-self-driving/**'
   workflow_dispatch:
 
 concurrency:
@@ -68,10 +69,17 @@ jobs:
                 continue
               }
 
+              const needsFullReview = !latestCodeRabbitReview
+                || latestCodeRabbitReview.commit_id !== headSha
+                || latestCodeRabbitReview.state === 'CHANGES_REQUESTED'
+              const reviewCommand = needsFullReview
+                ? '@coderabbitai full review'
+                : '@coderabbitai review'
+
               await github.rest.issues.createComment({
                 owner,
                 repo,
                 issue_number: pr.number,
-                body: `${marker}\n@coderabbitai review`,
+                body: `${marker}\n${reviewCommand}`,
               })
             }
