@@ -164,6 +164,7 @@ function buildWorkersFileCacheRequests(fileId: string, checksum?: string | null)
     )
 }
 
+// Checksum is required so key=checksum cache variants are purged alongside path-only entries.
 export async function purgeFileReadCache(fileId: string, checksum?: string | null): Promise<void> {
   await markFileDeletedInCache(fileId)
 
