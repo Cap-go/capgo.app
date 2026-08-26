@@ -1169,6 +1169,17 @@ describe('rls policies with hashed api keys (via supabase sdk)', () => {
     const locker = await pool.connect()
     const binder = await pool.connect()
     let bindingCompleted = false
+    let bindingPromise: Promise<void> | undefined
+
+    const releaseClient = async (client: typeof locker) => {
+      try {
+        await client.query('ROLLBACK')
+      }
+      catch {
+        // Connection may already be idle after COMMIT.
+      }
+      client.release()
+    }
 
     try {
       await locker.query('BEGIN')
@@ -1177,7 +1188,7 @@ describe('rls policies with hashed api keys (via supabase sdk)', () => {
         [rbacId],
       )
 
-      const bindingPromise = (async () => {
+      bindingPromise = (async () => {
         await binder.query('BEGIN')
         try {
           await binder.query(
@@ -1216,14 +1227,17 @@ describe('rls policies with hashed api keys (via supabase sdk)', () => {
       expect(bindingCompleted).toBe(true)
     }
     finally {
+      await releaseClient(locker)
+      if (bindingPromise) {
+        await bindingPromise.catch(() => undefined)
+      }
+      await releaseClient(binder)
       await pool.query(
         `DELETE FROM public.role_bindings
          WHERE principal_id = $1::uuid
            AND reason = 'regenerate-lock-race-test'`,
         [rbacId],
       )
-      locker.release()
-      binder.release()
       await deleteApiKeysBestEffort([keyToRotate.id])
     }
   })

@@ -57,6 +57,16 @@ BEGIN
     RETURN OLD;
   END IF;
 
+  IF TG_OP = 'UPDATE' THEN
+    IF OLD.principal_type = public.rbac_principal_apikey() THEN
+      PERFORM public.lock_rbac_apikey_principal(OLD.principal_id);
+    END IF;
+    IF NEW.principal_type = public.rbac_principal_apikey() THEN
+      PERFORM public.lock_rbac_apikey_principal(NEW.principal_id);
+    END IF;
+    RETURN NEW;
+  END IF;
+
   IF NEW.principal_type = public.rbac_principal_apikey() THEN
     PERFORM public.lock_rbac_apikey_principal(NEW.principal_id);
   END IF;
@@ -97,7 +107,8 @@ BEGIN
   INTO v_target
   FROM public.apikeys
   WHERE public.apikeys.id = p_apikey_id
-    AND public.apikeys.user_id = v_user_id;
+    AND public.apikeys.user_id = v_user_id
+  FOR UPDATE;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'apikey_not_found'
