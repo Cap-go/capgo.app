@@ -79,6 +79,8 @@ await assert.rejects(
 )
 
 const originalFetch = globalThis.fetch
+const originalTelemetryDisabled = process.env.CAPGO_DISABLE_TELEMETRY
+process.env.CAPGO_DISABLE_TELEMETRY = 'true'
 const channelOptions = {
   apikey: 'ck_channel_add_duplicate_test',
   supaHost: 'https://local.test',
@@ -164,5 +166,10 @@ assert.match(
   /Cannot create channel: Channel production already exists but is not accessible with this API key/,
 )
 assert.equal(shouldCapturePosthogException(inaccessibleThrown), true)
+
+if (originalTelemetryDisabled === undefined)
+  delete process.env.CAPGO_DISABLE_TELEMETRY
+else
+  process.env.CAPGO_DISABLE_TELEMETRY = originalTelemetryDisabled
 
 console.log('✅ channel add duplicate handling tests passed')
