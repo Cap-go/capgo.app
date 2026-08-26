@@ -184,6 +184,17 @@ describe('[POST] /private/set_manifest', () => {
       }),
     })
     expect(legit.status).toBe(200)
+    const legitJson = await legit.json() as { status: string, inserted: number }
+    expect(legitJson.status).toBe('ok')
+    expect(legitJson.inserted).toBe(1)
+
+    const { data: rows, error: rowsErr } = await getSupabaseClient()
+      .from('manifest')
+      .select('file_name')
+      .eq('app_version_id', version!.id)
+
+    expect(rowsErr).toBeNull()
+    expect(rows?.map(row => row.file_name)).toEqual(['legacy.html'])
   })
 
   it('rejects finalized versions that have no manifest rows yet', async () => {
