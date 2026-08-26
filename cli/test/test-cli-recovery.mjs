@@ -232,12 +232,30 @@ await test('resolveLocalSemverFallback builds a local semver tag', () => {
 
 await test('resolveUpdaterPackageJsonPath picks the first existing comma-separated package.json', () => {
   const root = makeTempDir('updater-pkg')
+  writeFileSync(join(root, 'package.json'), '{}')
   const nested = join(root, 'apps', 'mobile')
   mkdirSync(nested, { recursive: true })
   writeFileSync(join(nested, 'package.json'), '{}')
   const missing = join(root, 'missing', 'package.json')
   const resolved = resolveUpdaterPackageJsonPath(`${missing},${join(nested, 'package.json')}`)
   assert.equal(resolved, join(nested, 'package.json'))
+})
+
+await test('resolveUpdaterPackageJsonPath resolves root-relative package.json options', () => {
+  const root = makeTempDir('updater-pkg-relative')
+  writeFileSync(join(root, 'package.json'), '{}')
+  const nested = join(root, 'apps', 'mobile')
+  mkdirSync(nested, { recursive: true })
+  writeFileSync(join(nested, 'package.json'), '{}')
+  const previousCwd = process.cwd()
+  try {
+    process.chdir(root)
+    const resolved = resolveUpdaterPackageJsonPath('missing/package.json,apps/mobile/package.json')
+    assert.equal(resolved, join(root, 'apps', 'mobile', 'package.json'))
+  }
+  finally {
+    process.chdir(previousCwd)
+  }
 })
 
 await test('zipBundleInternal silent notifyAppReady failure stays PostHog-capturable', async () => {

@@ -16,7 +16,7 @@ export function resolveUpdaterPackageJsonPath(packageJsonOption?: string): strin
   const paths = parsePackageJsonOptionPaths(packageJsonOption)
   if (paths?.length) {
     for (const path of paths) {
-      const resolved = resolve(path)
+      const resolved = resolve(root, path)
       if (existsSync(resolved))
         return resolved
     }
