@@ -1,30 +1,14 @@
--- Block direct PostgREST writes to orgs.customer_id unless the caller has
--- org.update_billing. Internal/service paths bypass via
--- is_internal_request_role.
+-- Block user-context writes to orgs.customer_id. Only service_role/postgres
+-- (is_internal_request_role) and the org-create bootstrap path may set it.
 --
--- Execution profile for guard_org_billing_columns (BEFORE UPDATE OF
+-- Execution profile for guard_org_billing_columns (BEFORE INSERT OR UPDATE OF
 -- customer_id):
--- - Frequency: at most once per row when customer_id actually changes (trigger
---   column list skips name/settings-only org updates). Console-scale billing
---   writes, not plugin hot path.
--- - Roles: authenticated and anon (capgkey) via PostgREST;
---   service_role/postgres bypass the RBAC gate through
---   is_internal_request_role(current_request_role()).
--- - Authorization path: one rbac_check_permission_request(org.update_billing,
---   org_id, NULL, NULL) per guarded update, which resolves auth.uid()/capgkey
---   once and walks org-scoped role_bindings.
--- - Cardinality: role_bindings per (principal, org) are typically single-digit;
---   permission inheritance stays bounded to that org scope (no app/channel
---   fan-out for this check).
--- - Indexes: role_bindings_principal_scope_idx (principal_type, principal_id,
---   scope_type, org_id, app_id, channel_id); role_bindings_scope_idx
---   (scope_type, org_id, app_id, channel_id); role_bindings_principal_org_idx
---   when present (principal_type, principal_id, org_id, expires_at).
--- - Worst case (authenticated org member with many bindings): Index Scan on
---   role_bindings_principal_scope_idx with org_id/scope_type filters; nested
---   permission-role lookups stay bounded to the caller's bindings. No
---   sequential scan over role_bindings in EXPLAIN (ANALYZE, BUFFERS) on local
---   seed data for org-scoped org.update_billing checks.
+-- - Frequency: once per org row when customer_id is supplied on INSERT or
+--   changes on UPDATE. Console-scale, not plugin hot path.
+-- - Roles: authenticated and anon (capgkey) via PostgREST are always denied
+--   unless org-create bootstrap GUC matches the row during AFTER INSERT setup.
+--   service_role/postgres bypass via is_internal_request_role().
+-- - Cardinality: single-row trigger; no table scans.
 
 CREATE OR REPLACE FUNCTION "public"."guard_org_billing_columns"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
@@ -32,21 +16,28 @@ CREATE OR REPLACE FUNCTION "public"."guard_org_billing_columns"() RETURNS "trigg
     AS $$
 DECLARE
   v_request_role text := public.current_request_role();
+  v_bootstrap_org_id text := pg_catalog.current_setting('capgo.org_creation_bootstrap_org_id', true);
 BEGIN
   IF public.is_internal_request_role(v_request_role) THEN
     RETURN NEW;
   END IF;
 
-  IF NEW.customer_id IS DISTINCT FROM OLD.customer_id THEN
-    IF NOT public.rbac_check_permission_request(
-      public.rbac_perm_org_update_billing(),
-      NEW.id,
-      NULL::character varying,
-      NULL::bigint
-    ) THEN
-      RAISE EXCEPTION 'PERMISSION_DENIED_ORG_UPDATE_BILLING'
-        USING ERRCODE = '42501';
-    END IF;
+  IF TG_OP = 'UPDATE'
+    AND NEW.customer_id IS DISTINCT FROM OLD.customer_id
+    AND v_bootstrap_org_id <> ''
+    AND v_bootstrap_org_id = NEW.id::text
+  THEN
+    RETURN NEW;
+  END IF;
+
+  IF TG_OP = 'INSERT' AND NEW.customer_id IS NOT NULL THEN
+    RAISE EXCEPTION 'PERMISSION_DENIED_ORG_CUSTOMER_ID'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF TG_OP = 'UPDATE' AND NEW.customer_id IS DISTINCT FROM OLD.customer_id THEN
+    RAISE EXCEPTION 'PERMISSION_DENIED_ORG_CUSTOMER_ID'
+      USING ERRCODE = '42501';
   END IF;
 
   RETURN NEW;
@@ -60,13 +51,102 @@ REVOKE ALL ON FUNCTION "public"."guard_org_billing_columns"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."guard_org_billing_columns"() TO "service_role";
 
 COMMENT ON FUNCTION "public"."guard_org_billing_columns"() IS
-  'BEFORE UPDATE OF customer_id guard. Runs once per changed customer_id (console billing writes, not plugin /updates). '
-  'User-context callers need org.update_billing via rbac_check_permission_request; service_role/postgres bypass. '
-  'Org-scoped RBAC lookups use role_bindings_principal_scope_idx / role_bindings_scope_idx (Index Scan at seed scale).';
+  'BEFORE INSERT/UPDATE OF customer_id guard. User/capgkey roles cannot write customer_id; '
+  'service_role/postgres bypass via is_internal_request_role. Org-create bootstrap may set '
+  'pending customer_id while capgo.org_creation_bootstrap_org_id matches the row id.';
 
 DROP TRIGGER IF EXISTS "guard_org_billing_columns" ON "public"."orgs";
+DROP TRIGGER IF EXISTS "guard_org_billing_columns_insert" ON "public"."orgs";
+
+CREATE TRIGGER "guard_org_billing_columns_insert"
+  BEFORE INSERT ON "public"."orgs"
+  FOR EACH ROW
+  EXECUTE FUNCTION "public"."guard_org_billing_columns"();
 
 CREATE TRIGGER "guard_org_billing_columns"
   BEFORE UPDATE OF "customer_id" ON "public"."orgs"
   FOR EACH ROW
   EXECUTE FUNCTION "public"."guard_org_billing_columns"();
+
+-- Keep bootstrap GUC active through pending customer_id assignment so the guard
+-- allows generate_org_user_stripe_info_on_org_create to finish for user inserts
+-- that omit customer_id (legacy/direct PostgREST path).
+CREATE OR REPLACE FUNCTION "public"."generate_org_user_stripe_info_on_org_create"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  solo_plan_stripe_id varchar;
+  pending_customer_id varchar;
+  trial_at_date timestamptz;
+  org_super_admin_role_id uuid;
+BEGIN
+  PERFORM set_config('capgo.org_creation_bootstrap_org_id', NEW.id::text, true);
+
+  INSERT INTO public.org_users (user_id, org_id, rbac_role_name, is_invite)
+  VALUES (NEW.created_by, NEW.id, public.rbac_role_org_super_admin(), false);
+
+  SELECT id INTO org_super_admin_role_id
+  FROM public.roles
+  WHERE name = public.rbac_role_org_super_admin()
+    AND scope_type = public.rbac_scope_org()
+  LIMIT 1;
+
+  IF org_super_admin_role_id IS NOT NULL THEN
+    INSERT INTO public.role_bindings (
+      principal_type, principal_id, role_id, scope_type, org_id,
+      granted_by, granted_at, reason, is_direct
+    ) VALUES (
+      public.rbac_principal_user(), NEW.created_by, org_super_admin_role_id, public.rbac_scope_org(), NEW.id,
+      NEW.created_by, now(), 'Organization creator', true
+    ) ON CONFLICT DO NOTHING;
+  END IF;
+
+  IF NEW.customer_id IS NOT NULL THEN
+    PERFORM set_config('capgo.org_creation_bootstrap_org_id', '', true);
+    RETURN NEW;
+  END IF;
+
+  SELECT stripe_id INTO solo_plan_stripe_id
+  FROM public.plans
+  WHERE name = 'Solo'
+  LIMIT 1;
+
+  IF solo_plan_stripe_id IS NULL THEN
+    PERFORM set_config('capgo.org_creation_bootstrap_org_id', '', true);
+    RAISE WARNING 'Solo plan not found, skipping sync stripe_info creation for org %', NEW.id;
+    RETURN NEW;
+  END IF;
+
+  pending_customer_id := 'pending_' || NEW.id::text;
+  trial_at_date := NOW() + INTERVAL '15 days';
+
+  INSERT INTO public.stripe_info (
+    customer_id,
+    product_id,
+    trial_at,
+    status,
+    is_good_plan
+  ) VALUES (
+    pending_customer_id,
+    solo_plan_stripe_id,
+    trial_at_date,
+    NULL,
+    true
+  );
+
+  UPDATE public.orgs
+  SET customer_id = pending_customer_id
+  WHERE id = NEW.id;
+
+  PERFORM set_config('capgo.org_creation_bootstrap_org_id', '', true);
+
+  RETURN NEW;
+END;
+$$;
+
+ALTER FUNCTION "public"."generate_org_user_stripe_info_on_org_create"() OWNER TO "postgres";
+
+REVOKE ALL ON FUNCTION "public"."generate_org_user_stripe_info_on_org_create"() FROM PUBLIC;
+
+GRANT ALL ON FUNCTION "public"."generate_org_user_stripe_info_on_org_create"() TO "service_role";

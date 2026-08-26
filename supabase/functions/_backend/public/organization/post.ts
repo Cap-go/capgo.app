@@ -290,7 +290,8 @@ export async function post(
       await insertOrgForApiKey(c, auth, newOrg)
     }
     else {
-      const { error: errorOrg } = await supabaseWithAuth(c, auth)
+      // customer_id is service-managed; user JWT cannot write it under org RLS/triggers.
+      const { error: errorOrg } = await supabaseAdmin(c)
         .from('orgs')
         .insert({
           ...newOrg,

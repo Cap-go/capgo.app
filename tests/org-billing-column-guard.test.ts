@@ -11,21 +11,21 @@ import {
 } from './test-utils.ts'
 
 if (!SUPABASE_BASE_URL)
-  throw new Error('SUPABASE_URL is required for org billing column guard tests')
+  throw new Error('SUPABASE_URL is required for org customer_id guard tests')
 if (!SUPABASE_ANON_KEY)
-  throw new Error('SUPABASE_ANON_KEY is required for org billing column guard tests')
+  throw new Error('SUPABASE_ANON_KEY is required for org customer_id guard tests')
 
 const serviceRoleSupabase = getSupabaseClient()
 
 const fixtureId = randomUUID()
 const orgId = randomUUID()
 let settingsAdminUserId: string
-let billingSuperAdminUserId: string
-const settingsAdminEmail = `org-billing-guard-admin-${fixtureId}@capgo.test`
-const billingSuperAdminEmail = `org-billing-guard-super-${fixtureId}@capgo.test`
+let superAdminUserId: string
+const settingsAdminEmail = `org-customer-id-guard-admin-${fixtureId}@capgo.test`
+const superAdminEmail = `org-customer-id-guard-super-${fixtureId}@capgo.test`
 const testPassword = `Capgo!${fixtureId}`
-const originalCustomerId = `cus_org_billing_guard_${fixtureId.replaceAll('-', '').slice(0, 18)}`
-const replacementCustomerId = `cus_org_billing_guard_alt_${fixtureId.replaceAll('-', '').slice(0, 14)}`
+const originalCustomerId = `cus_org_customer_id_guard_${fixtureId.replaceAll('-', '').slice(0, 16)}`
+const replacementCustomerId = `cus_org_customer_id_guard_alt_${fixtureId.replaceAll('-', '').slice(0, 12)}`
 
 async function bindOrgRole(userId: string, roleName: string) {
   const [role] = await executeSQL(
@@ -41,7 +41,7 @@ async function bindOrgRole(userId: string, roleName: string) {
        granted_by, reason, is_direct
      ) VALUES (
        public.rbac_principal_user(), $1::uuid, $2::uuid, public.rbac_scope_org(), $3::uuid,
-       $1::uuid, 'org billing column guard fixture', true
+       $1::uuid, 'org customer_id guard fixture', true
      )
      ON CONFLICT DO NOTHING`,
     [userId, role.id, orgId],
@@ -70,9 +70,10 @@ async function patchOrg(headers: Record<string, string>, body: Record<string, un
   return { response, data }
 }
 
-describe('org billing column guard', () => {
+describe('org customer_id guard', () => {
   let settingsAdminHeaders: Record<string, string>
-  let billingSuperAdminHeaders: Record<string, string>
+  let superAdminHeaders: Record<string, string>
+  const createdOrgIds: string[] = []
 
   beforeAll(async () => {
     const { data: settingsAdminAuth, error: settingsAdminAuthError } = await serviceRoleSupabase.auth.admin.createUser({
@@ -83,23 +84,23 @@ describe('org billing column guard', () => {
     if (settingsAdminAuthError)
       throw settingsAdminAuthError
 
-    const { data: billingSuperAdminAuth, error: billingSuperAdminAuthError } = await serviceRoleSupabase.auth.admin.createUser({
-      email: billingSuperAdminEmail,
+    const { data: superAdminAuth, error: superAdminAuthError } = await serviceRoleSupabase.auth.admin.createUser({
+      email: superAdminEmail,
       password: testPassword,
       email_confirm: true,
     })
-    if (billingSuperAdminAuthError)
-      throw billingSuperAdminAuthError
+    if (superAdminAuthError)
+      throw superAdminAuthError
 
     await executeSQL(
       `INSERT INTO public.users (id, email, first_name)
-       VALUES ($1::uuid, $2, 'Org Billing Guard Admin'), ($3::uuid, $4, 'Org Billing Guard Super')
+       VALUES ($1::uuid, $2, 'Org Customer ID Guard Admin'), ($3::uuid, $4, 'Org Customer ID Guard Super')
        ON CONFLICT (id) DO NOTHING`,
-      [settingsAdminAuth.user.id, settingsAdminEmail, billingSuperAdminAuth.user.id, billingSuperAdminEmail],
+      [settingsAdminAuth.user.id, settingsAdminEmail, superAdminAuth.user.id, superAdminEmail],
     )
 
     settingsAdminUserId = settingsAdminAuth.user.id
-    billingSuperAdminUserId = billingSuperAdminAuth.user.id
+    superAdminUserId = superAdminAuth.user.id
 
     await executeSQL(
       `INSERT INTO public.stripe_info (
@@ -112,7 +113,7 @@ describe('org billing column guard', () => {
     await executeSQL(
       `INSERT INTO public.orgs (id, created_by, name, management_email, customer_id)
        VALUES ($1::uuid, $2::uuid, $3, $4, $5)`,
-      [orgId, billingSuperAdminUserId, `Org billing guard ${fixtureId}`, settingsAdminEmail, originalCustomerId],
+      [orgId, superAdminUserId, `Org customer_id guard ${fixtureId}`, settingsAdminEmail, originalCustomerId],
     )
 
     await executeSQL(
@@ -123,28 +124,36 @@ describe('org billing column guard', () => {
     )
 
     await bindOrgRole(settingsAdminUserId, 'org_admin')
+    await bindOrgRole(superAdminUserId, 'org_super_admin')
 
     settingsAdminHeaders = await getAuthHeadersForCredentials(settingsAdminEmail, testPassword)
-    billingSuperAdminHeaders = await getAuthHeadersForCredentials(billingSuperAdminEmail, testPassword)
+    superAdminHeaders = await getAuthHeadersForCredentials(superAdminEmail, testPassword)
   })
 
   afterAll(async () => {
+    if (createdOrgIds.length > 0) {
+      await executeSQL(
+        'DELETE FROM public.stripe_info WHERE customer_id = ANY($1::text[])',
+        [createdOrgIds.map(id => `pending_${id}`)],
+      )
+      await executeSQL('DELETE FROM public.orgs WHERE id = ANY($1::uuid[])', [createdOrgIds])
+    }
     await executeSQL('DELETE FROM public.orgs WHERE id = $1::uuid', [orgId])
     await executeSQL(
       'DELETE FROM public.stripe_info WHERE customer_id = ANY($1::text[])',
       [[originalCustomerId, replacementCustomerId]],
     )
     await serviceRoleSupabase.auth.admin.deleteUser(settingsAdminUserId)
-    await serviceRoleSupabase.auth.admin.deleteUser(billingSuperAdminUserId)
+    await serviceRoleSupabase.auth.admin.deleteUser(superAdminUserId)
   })
 
-  it('blocks org.update_settings principals from changing customer_id via PostgREST', async () => {
+  it('blocks org_admin from changing customer_id via PostgREST', async () => {
     const { response, data } = await patchOrg(settingsAdminHeaders, { customer_id: null })
 
     expect(response.status).toBe(403)
     expect(data).toMatchObject({
       code: '42501',
-      message: 'PERMISSION_DENIED_ORG_UPDATE_BILLING',
+      message: 'PERMISSION_DENIED_ORG_CUSTOMER_ID',
     })
 
     const { data: orgRow, error: readError } = await serviceRoleSupabase
@@ -157,8 +166,18 @@ describe('org billing column guard', () => {
     expect(orgRow?.customer_id).toBe(originalCustomerId)
   })
 
-  it('still allows org.update_settings principals to change cosmetic org fields', async () => {
-    const updatedName = `Org billing guard renamed ${fixtureId}`
+  it('blocks org_super_admin from changing customer_id via PostgREST', async () => {
+    const { response, data } = await patchOrg(superAdminHeaders, { customer_id: replacementCustomerId })
+
+    expect(response.status).toBe(403)
+    expect(data).toMatchObject({
+      code: '42501',
+      message: 'PERMISSION_DENIED_ORG_CUSTOMER_ID',
+    })
+  })
+
+  it('still allows org settings principals to change cosmetic org fields', async () => {
+    const updatedName = `Org customer_id guard renamed ${fixtureId}`
 
     const { response, data } = await patchOrg(settingsAdminHeaders, { name: updatedName })
 
@@ -175,25 +194,10 @@ describe('org billing column guard', () => {
     expect(orgRow?.name).toBe(updatedName)
   })
 
-  it('allows org.update_billing principals to change customer_id via PostgREST', async () => {
-    const { response } = await patchOrg(billingSuperAdminHeaders, { customer_id: replacementCustomerId })
-
-    expect(response.status).toBe(200)
-
-    const { data: orgRow, error: readError } = await serviceRoleSupabase
-      .from('orgs')
-      .select('customer_id')
-      .eq('id', orgId)
-      .single()
-
-    expect(readError).toBeNull()
-    expect(orgRow?.customer_id).toBe(replacementCustomerId)
-  })
-
   it('allows service_role to change customer_id via PostgREST', async () => {
     const { error } = await serviceRoleSupabase
       .from('orgs')
-      .update({ customer_id: originalCustomerId })
+      .update({ customer_id: replacementCustomerId })
       .eq('id', orgId)
 
     expect(error).toBeNull()
@@ -205,6 +209,39 @@ describe('org billing column guard', () => {
       .single()
 
     expect(readError).toBeNull()
-    expect(orgRow?.customer_id).toBe(originalCustomerId)
+    expect(orgRow?.customer_id).toBe(replacementCustomerId)
+  })
+
+  it('assigns pending customer_id when creating an org via the organization API', async () => {
+    const orgName = `Org customer_id guard create ${fixtureId}`
+
+    const response = await fetchTestRequest(getEndpointUrl('/organization'), {
+      method: 'POST',
+      headers: {
+        ...settingsAdminHeaders,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: orgName,
+        email: settingsAdminEmail,
+        estimatedMau: 1000,
+        intent: 'ota',
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    const payload = await response.json() as { id?: string }
+    expect(payload.id).toBeTruthy()
+    createdOrgIds.push(payload.id!)
+
+    const { data: orgRow, error: readError } = await serviceRoleSupabase
+      .from('orgs')
+      .select('customer_id, name')
+      .eq('id', payload.id!)
+      .single()
+
+    expect(readError).toBeNull()
+    expect(orgRow?.name).toBe(orgName)
+    expect(orgRow?.customer_id).toBe(`pending_${payload.id}`)
   })
 })
