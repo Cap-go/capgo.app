@@ -148,6 +148,7 @@ describe('manifest poison guard', () => {
     try {
       const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
         method: 'POST',
+        retryUnsafe: true,
         headers: {
           'Content-Type': 'application/json',
           'Authorization': APIKEY_TEST_UPLOAD,

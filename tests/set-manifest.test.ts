@@ -73,6 +73,7 @@ describe('[POST] /private/set_manifest', () => {
 
     const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',
+      retryUnsafe: true,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': APIKEY_TEST_ALL,
@@ -109,6 +110,7 @@ describe('[POST] /private/set_manifest', () => {
     // Idempotent retry
     const retry = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',
+      retryUnsafe: true,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': APIKEY_TEST_ALL,
@@ -140,6 +142,7 @@ describe('[POST] /private/set_manifest', () => {
 
     const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',
+      retryUnsafe: true,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': APIKEY_TEST_ALL,
@@ -169,6 +172,7 @@ describe('[POST] /private/set_manifest', () => {
 
     const legit = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',
+      retryUnsafe: true,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': APIKEY_TEST_ALL,
@@ -215,6 +219,7 @@ describe('[POST] /private/set_manifest', () => {
 
     const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',
+      retryUnsafe: true,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': APIKEY_TEST_ALL,
@@ -257,6 +262,7 @@ describe('[POST] /private/set_manifest', () => {
 
     const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',
+      retryUnsafe: true,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': APIKEY_TEST_ALL,
@@ -276,6 +282,7 @@ describe('[POST] /private/set_manifest', () => {
   it('rejects missing versions and non-uploadable storage providers', async () => {
     const missing = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',
+      retryUnsafe: true,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': APIKEY_TEST_ALL,
@@ -308,6 +315,7 @@ describe('[POST] /private/set_manifest', () => {
 
     const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',
+      retryUnsafe: true,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': APIKEY_TEST_ALL,

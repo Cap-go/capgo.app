@@ -502,19 +502,37 @@ function isTransientGatewayDeath(status: number, body: string): boolean {
     || body.includes(CLOUDFLARE_WORKER_RESTART_RESPONSE)
 }
 
+export interface FetchTestRequestOptions extends RequestInit {
+  /** Retry transient gateway 502/503 on mutating methods when the endpoint is idempotent. */
+  retryUnsafe?: boolean
+}
+
+function isReplaySafeHttpMethod(method: string | undefined): boolean {
+  switch ((method ?? 'GET').toUpperCase()) {
+    case 'GET':
+    case 'HEAD':
+    case 'OPTIONS':
+      return true
+    default:
+      return false
+  }
+}
+
 /**
  * Send one request. Application 4xx/5xx are test evidence and are not retried.
  * Only transient gateway 502/503 (isolate crash/reload) is retried — same signals
- * the CI warm step already treats as non-ready.
+ * the CI warm step already treats as non-ready. Mutating methods are not retried
+ * unless retryUnsafe is set (caller asserts idempotency).
  */
 export async function fetchTestRequest(
   url: string,
-  options?: RequestInit,
+  options?: FetchTestRequestOptions,
 ): Promise<Response> {
-  const maxAttempts = 3
+  const { retryUnsafe = false, ...fetchOptions } = options ?? {}
+  const maxAttempts = isReplaySafeHttpMethod(fetchOptions.method) || retryUnsafe ? 3 : 1
   let lastResponse: Response | undefined
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const response = await fetch(url, options)
+    const response = await fetch(url, fetchOptions)
     lastResponse = response
     if (response.status !== 502 && response.status !== 503)
       return response
