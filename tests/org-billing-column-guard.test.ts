@@ -21,8 +21,8 @@ const serviceRoleSupabase = getSupabaseClient()
 
 const fixtureId = randomUUID()
 const orgId = randomUUID()
-let settingsAdminUserId = randomUUID()
-let billingSuperAdminUserId = randomUUID()
+let settingsAdminUserId: string
+let billingSuperAdminUserId: string
 const settingsAdminEmail = `org-billing-guard-admin-${fixtureId}@capgo.test`
 const billingSuperAdminEmail = `org-billing-guard-super-${fixtureId}@capgo.test`
 const testPassword = `Capgo!${fixtureId}`
