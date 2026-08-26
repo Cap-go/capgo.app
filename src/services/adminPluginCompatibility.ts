@@ -16,6 +16,7 @@ export {
 export interface PluginCompatibilityTrendPoint {
   date: string
   version_breakdown: Record<string, number>
+  major_breakdown?: Record<string, number>
   devices_last_month?: number | null
 }
 

@@ -96,11 +96,32 @@ async function loadPluginBreakdown() {
   }
 }
 
-const devicesTotal = computed(() => pluginBreakdown.value?.devices_last_month || 0)
-const devicesIos = computed(() => pluginBreakdown.value?.devices_last_month_ios || 0)
-const devicesAndroid = computed(() => pluginBreakdown.value?.devices_last_month_android || 0)
+const latestSnapshotPoint = computed(() => {
+  const breakdown = pluginBreakdown.value
+  if (!breakdown)
+    return null
+
+  if (hasPluginVersionBreakdown(breakdown.version_breakdown))
+    return breakdown
+
+  const trendPoint = getLatestNonEmptyPluginTrendPoint(breakdown.trend ?? [])
+  if (!trendPoint)
+    return breakdown
+
+  return {
+    ...breakdown,
+    date: trendPoint.date,
+    version_breakdown: trendPoint.version_breakdown,
+    major_breakdown: trendPoint.major_breakdown ?? {},
+    devices_last_month: trendPoint.devices_last_month || breakdown.devices_last_month,
+  }
+})
+
+const devicesTotal = computed(() => latestSnapshotPoint.value?.devices_last_month || 0)
+const devicesIos = computed(() => latestSnapshotPoint.value?.devices_last_month_ios || 0)
+const devicesAndroid = computed(() => latestSnapshotPoint.value?.devices_last_month_android || 0)
 const snapshotDate = computed(() => {
-  const date = pluginBreakdown.value?.date
+  const date = latestSnapshotPoint.value?.date
   return date ? formatLocalDate(date) || date : '-'
 })
 
@@ -111,7 +132,7 @@ const thresholdValue = computed(() => {
 })
 
 const versionEntries = computed(() => {
-  const breakdown = pluginBreakdown.value?.version_breakdown ?? {}
+  const breakdown = latestSnapshotPoint.value?.version_breakdown ?? {}
   return Object.entries(breakdown)
     .map(([version, percent]) => ({
       version,
@@ -123,7 +144,7 @@ const versionEntries = computed(() => {
 })
 
 const majorEntries = computed(() => {
-  const breakdown = pluginBreakdown.value?.major_breakdown ?? {}
+  const breakdown = latestSnapshotPoint.value?.major_breakdown ?? {}
   return Object.entries(breakdown)
     .map(([version, percent]) => ({
       version,
@@ -140,12 +161,15 @@ const majorValues = computed(() => majorEntries.value.map(entry => entry.percent
 
 const hasVersionData = computed(() => versionEntries.value.length > 0)
 const hasMajorData = computed(() => majorEntries.value.length > 0)
-const versionLadderEntries = computed(() => (pluginBreakdown.value?.version_ladder ?? []).slice(0, maxVersionRows))
+const versionLadderEntries = computed(() => (latestSnapshotPoint.value?.version_ladder ?? []).slice(0, maxVersionRows))
 const hasVersionLadderData = computed(() => versionLadderEntries.value.length > 0)
 
-const versionCountTotal = computed(() => Object.keys(pluginBreakdown.value?.version_breakdown ?? {}).length)
+const versionCountTotal = computed(() => Object.keys(latestSnapshotPoint.value?.version_breakdown ?? {}).length)
 const versionCountShown = computed(() => versionEntries.value.length)
 const versionTrendPoints = computed(() => pluginBreakdown.value?.trend ?? [])
+const populatedVersionTrendPoints = computed(() => (
+  versionTrendPoints.value.filter(point => hasPluginVersionBreakdown(point.version_breakdown))
+))
 
 function formatPercent(value: number) {
   return `${formatNumberValue(Number(value || 0), { maximumFractionDigits: 2 })}%`
@@ -186,25 +210,25 @@ function buildTrendSeries(
 }
 
 const topVersionsForTrend = computed(() => {
-  const latestPoint = versionTrendPoints.value[versionTrendPoints.value.length - 1]
-  return getTopBreakdownEntries(latestPoint, 'version_breakdown', thresholdValue.value, maxTrendVersions)
+  const latestPoint = getLatestNonEmptyPluginTrendPoint(versionTrendPoints.value)
+  return getTopBreakdownEntries(latestPoint ?? undefined, 'version_breakdown', thresholdValue.value, maxTrendVersions)
 })
 const versionTrendSeries = computed(() => {
-  if (versionTrendPoints.value.length === 0 || topVersionsForTrend.value.length === 0)
+  if (populatedVersionTrendPoints.value.length === 0 || topVersionsForTrend.value.length === 0)
     return []
 
-  return buildTrendSeries(versionTrendPoints.value, topVersionsForTrend.value, 'version_breakdown')
+  return buildTrendSeries(populatedVersionTrendPoints.value, topVersionsForTrend.value, 'version_breakdown')
 })
 const hasVersionTrendData = computed(() => versionTrendSeries.value.length > 0)
 const topMajorVersionsForTrend = computed(() => {
-  const latestPoint = versionTrendPoints.value[versionTrendPoints.value.length - 1]
-  return getTopBreakdownEntries(latestPoint, 'major_breakdown', 0, maxTrendMajorVersions)
+  const latestPoint = getLatestNonEmptyPluginTrendPoint(versionTrendPoints.value)
+  return getTopBreakdownEntries(latestPoint ?? undefined, 'major_breakdown', 0, maxTrendMajorVersions)
 })
 const majorTrendSeries = computed(() => {
-  if (versionTrendPoints.value.length === 0 || topMajorVersionsForTrend.value.length === 0)
+  if (populatedVersionTrendPoints.value.length === 0 || topMajorVersionsForTrend.value.length === 0)
     return []
 
-  return buildTrendSeries(versionTrendPoints.value, topMajorVersionsForTrend.value, 'major_breakdown')
+  return buildTrendSeries(populatedVersionTrendPoints.value, topMajorVersionsForTrend.value, 'major_breakdown')
 })
 const hasMajorTrendData = computed(() => majorTrendSeries.value.length > 0)
 
@@ -216,10 +240,10 @@ const channelSelfStoreTrendSeries = computed(() => buildPluginCompatibilityTrend
 const hasChannelSelfStoreTrendData = computed(() => channelSelfStoreTrendSeries.value.length > 0)
 const latestCompatibilityTrendPoint = computed(() => getLatestNonEmptyPluginTrendPoint(versionTrendPoints.value))
 const knownPluginVersionDeviceCount = computed(() => {
-  if (!hasPluginVersionBreakdown(pluginBreakdown.value?.version_breakdown))
+  if (!hasPluginVersionBreakdown(latestSnapshotPoint.value?.version_breakdown))
     return null
 
-  return estimateKnownPluginVersionDevicesFromLadder(pluginBreakdown.value?.version_ladder)
+  return estimateKnownPluginVersionDevicesFromLadder(latestSnapshotPoint.value?.version_ladder)
 })
 const channelSelfStoreLatestBucket = computed(() => {
   const point = latestCompatibilityTrendPoint.value
@@ -375,29 +399,56 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
-            <ChartCard
-              chart-id="channel-self-store-compatibility"
-              title="Channel self-store (legacy vs current)"
-              :is-loading="isLoadingBreakdown"
-              :has-data="hasChannelSelfStoreTrendData"
-              no-data-message="No channel self-store compatibility trend data available"
-            >
-              <template #header>
-                <div class="flex flex-col gap-1">
-                  <h2 class="text-2xl font-semibold leading-tight dark:text-white text-slate-600">
-                    Channel self-store (legacy vs current)
-                  </h2>
-                  <p class="text-xs text-slate-500 dark:text-slate-400">
-                    {{ CHANNEL_SELF_STORE_CUTOFF_CAPTION }}
-                  </p>
-                </div>
-              </template>
-              <AdminStackedBarChart
-                :series="channelSelfStoreTrendSeries"
+            <div class="space-y-6">
+              <ChartCard
+                chart-id="channel-self-store-compatibility"
+                title="Channel self-store (legacy vs current)"
                 :is-loading="isLoadingBreakdown"
-                accessible-borders
-              />
-              <div class="grid grid-cols-1 gap-4 mt-6 md:grid-cols-2">
+                :has-data="hasChannelSelfStoreTrendData"
+                no-data-message="No channel self-store compatibility trend data available"
+              >
+                <template #header>
+                  <div class="flex flex-col gap-1">
+                    <h2 id="channel-self-store-title" class="text-2xl font-semibold leading-tight dark:text-white text-slate-600">
+                      Channel self-store (legacy vs current)
+                    </h2>
+                    <p id="channel-self-store-description" class="text-xs text-slate-500 dark:text-slate-400">
+                      {{ CHANNEL_SELF_STORE_CUTOFF_CAPTION }}
+                    </p>
+                  </div>
+                </template>
+                <div role="group" aria-labelledby="channel-self-store-title" aria-describedby="channel-self-store-description" class="h-full">
+                  <AdminStackedBarChart
+                    :series="channelSelfStoreTrendSeries"
+                    :is-loading="isLoadingBreakdown"
+                    accessible-borders
+                  />
+                  <table class="sr-only">
+                    <caption>{{ CHANNEL_SELF_STORE_CUTOFF_CAPTION }}</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">
+                          Date
+                        </th>
+                        <th v-for="item in channelSelfStoreTrendSeries" :key="item.label" scope="col">
+                          {{ item.label }}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="(point, index) in channelSelfStoreTrendSeries[0]?.data ?? []" :key="point.date">
+                        <th scope="row">
+                          {{ point.date }}
+                        </th>
+                        <td v-for="item in channelSelfStoreTrendSeries" :key="item.label">
+                          {{ item.data[index]?.value ?? 0 }}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </ChartCard>
+              <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <AdminStatsCard
                   title="Legacy share (latest)"
                   :value="formatPercent(channelSelfStoreLatestBucket.legacyPercent)"
@@ -413,31 +464,58 @@ displayStore.defaultBack = '/dashboard'
                   :subtitle="formatDeviceEstimateSubtitle(channelSelfStoreLatestBucket.currentDevices)"
                 />
               </div>
-            </ChartCard>
+            </div>
 
-            <ChartCard
-              chart-id="encryption-key-id-compatibility"
-              title="Encryption (legacy vs current)"
-              :is-loading="isLoadingBreakdown"
-              :has-data="hasEncryptionTrendData"
-              no-data-message="No encryption compatibility trend data available"
-            >
-              <template #header>
-                <div class="flex flex-col gap-1">
-                  <h2 class="text-2xl font-semibold leading-tight dark:text-white text-slate-600">
-                    Encryption (legacy vs current)
-                  </h2>
-                  <p class="text-xs text-slate-500 dark:text-slate-400">
-                    {{ ENCRYPTION_KEY_ID_CUTOFF_CAPTION }}
-                  </p>
-                </div>
-              </template>
-              <AdminStackedBarChart
-                :series="encryptionTrendSeries"
+            <div class="space-y-6">
+              <ChartCard
+                chart-id="encryption-key-id-compatibility"
+                title="Encryption (legacy vs current)"
                 :is-loading="isLoadingBreakdown"
-                accessible-borders
-              />
-              <div class="grid grid-cols-1 gap-4 mt-6 md:grid-cols-2">
+                :has-data="hasEncryptionTrendData"
+                no-data-message="No encryption compatibility trend data available"
+              >
+                <template #header>
+                  <div class="flex flex-col gap-1">
+                    <h2 id="encryption-key-id-title" class="text-2xl font-semibold leading-tight dark:text-white text-slate-600">
+                      Encryption (legacy vs current)
+                    </h2>
+                    <p id="encryption-key-id-description" class="text-xs text-slate-500 dark:text-slate-400">
+                      {{ ENCRYPTION_KEY_ID_CUTOFF_CAPTION }}
+                    </p>
+                  </div>
+                </template>
+                <div role="group" aria-labelledby="encryption-key-id-title" aria-describedby="encryption-key-id-description" class="h-full">
+                  <AdminStackedBarChart
+                    :series="encryptionTrendSeries"
+                    :is-loading="isLoadingBreakdown"
+                    accessible-borders
+                  />
+                  <table class="sr-only">
+                    <caption>{{ ENCRYPTION_KEY_ID_CUTOFF_CAPTION }}</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">
+                          Date
+                        </th>
+                        <th v-for="item in encryptionTrendSeries" :key="item.label" scope="col">
+                          {{ item.label }}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="(point, index) in encryptionTrendSeries[0]?.data ?? []" :key="point.date">
+                        <th scope="row">
+                          {{ point.date }}
+                        </th>
+                        <td v-for="item in encryptionTrendSeries" :key="item.label">
+                          {{ item.data[index]?.value ?? 0 }}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </ChartCard>
+              <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <AdminStatsCard
                   title="Legacy share (latest)"
                   :value="formatPercent(encryptionLatestBucket.legacyPercent)"
@@ -453,7 +531,7 @@ displayStore.defaultBack = '/dashboard'
                   :subtitle="formatDeviceEstimateSubtitle(encryptionLatestBucket.currentDevices)"
                 />
               </div>
-            </ChartCard>
+            </div>
           </div>
 
           <ChartCard

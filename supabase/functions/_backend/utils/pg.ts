@@ -16,6 +16,7 @@ import { getClientDbRegionSB } from './geolocation.ts'
 import { REQUIRED_GLOBAL_STATS_SHARDS } from './global_stats.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { buildAdminOnboardingWizardDropoff, getAdminOnboardingActivationMetrics } from './onboardingFunnel.ts'
+import { hasPluginVersionBreakdown } from './plugin_compatibility.ts'
 import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { getRolloutDecision } from './rollout.ts'
@@ -3991,6 +3992,16 @@ export async function getAdminOnboardingFunnel(
   }
 }
 
+function pickPluginBreakdownSnapshotRow(rows: any[]) {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (hasPluginVersionBreakdown(parseBreakdownJson(row.plugin_version_breakdown)))
+      return row
+  }
+
+  return rows.at(-1)
+}
+
 export async function getAdminPluginBreakdown(
   c: Context,
   start_date: string,
@@ -4043,17 +4054,17 @@ export async function getAdminPluginBreakdown(
         devices_last_month: Number(row.devices_last_month) || 0,
       }
     })
-    const latestRow = rows.at(-1)!
-    const latestDate = latestRow.date instanceof Date ? latestRow.date.toISOString().split('T')[0] : String(latestRow.date)
-    const versionBreakdown = parseBreakdownJson(latestRow.plugin_version_breakdown)
-    const majorBreakdown = parseBreakdownJson(latestRow.plugin_major_breakdown)
-    const versionLadder = parsePluginVersionLadderJson(latestRow.plugin_version_ladder)
+    const snapshotRow = pickPluginBreakdownSnapshotRow(rows)
+    const latestDate = snapshotRow.date instanceof Date ? snapshotRow.date.toISOString().split('T')[0] : String(snapshotRow.date)
+    const versionBreakdown = parseBreakdownJson(snapshotRow.plugin_version_breakdown)
+    const majorBreakdown = parseBreakdownJson(snapshotRow.plugin_major_breakdown)
+    const versionLadder = parsePluginVersionLadderJson(snapshotRow.plugin_version_ladder)
 
     return {
       date: latestDate,
-      devices_last_month: Number(latestRow.devices_last_month) || 0,
-      devices_last_month_ios: Number(latestRow.devices_last_month_ios) || 0,
-      devices_last_month_android: Number(latestRow.devices_last_month_android) || 0,
+      devices_last_month: Number(snapshotRow.devices_last_month) || 0,
+      devices_last_month_ios: Number(snapshotRow.devices_last_month_ios) || 0,
+      devices_last_month_android: Number(snapshotRow.devices_last_month_android) || 0,
       version_breakdown: versionBreakdown,
       major_breakdown: majorBreakdown,
       version_ladder: versionLadder,
