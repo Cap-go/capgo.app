@@ -140,6 +140,10 @@ describe('swap memory cleanup functions', () => {
       [appId, orgId],
     )
 
+    const versionName = `1.0.0-${randomUUID().slice(0, 8)}`
+    const canonicalR2Path = `orgs/${orgId}/apps/${appId}/${versionName}.zip`
+    const manifestPath = `orgs/${orgId}/apps/${appId}/delta/hash_a.js`
+
     const versionRows = await executeSQL(
       `INSERT INTO public.app_versions (
          app_id,
@@ -162,10 +166,10 @@ describe('swap memory cleanup functions', () => {
        RETURNING id`,
       [
         appId,
-        `1.0.0-${randomUUID().slice(0, 8)}`,
+        versionName,
         orgId,
-        `orgs/${orgId}/apps/${appId}/delta/hash_a.js`,
-        `orgs/${orgId}/apps/${appId}/1.0.0-seed.zip`,
+        manifestPath,
+        canonicalR2Path,
       ],
     )
     const versionId = versionRows[0]?.id as number
