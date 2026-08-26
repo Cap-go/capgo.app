@@ -117,6 +117,16 @@ describe('published CLI contract helpers', () => {
     ])
   })
 
+  it.concurrent('marks unknown rpc casts as unresolved instead of zero-arg', () => {
+    const source = `
+      await supabase.rpc('get_user_id' as unknown as never, { apikey })
+    `
+
+    expect(extractPublishedCliRpcCallsFromSource(source)).toEqual([
+      { name: 'get_user_id', argKeys: null },
+    ])
+  })
+
   it.concurrent('matches postgrest overloads from provided rpc argument keys', () => {
     expect(rpcCallMatchesOverload(
       { name: 'get_user_id', argKeys: ['apikey'] },

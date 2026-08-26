@@ -285,7 +285,7 @@ export function extractArgKeysFromRpcCall(source: string, afterRpcNameIndex: num
 
   const commaMatch = source.slice(cursor).match(/^\s*,/)
   if (!commaMatch)
-    return []
+    return null
 
   cursor += commaMatch[0].length
   const afterComma = source.slice(cursor).trimStart()

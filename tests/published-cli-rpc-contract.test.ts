@@ -72,13 +72,22 @@ async function loadFunctionPrivileges(pool: Pool, functionName: string): Promise
   const result = await pool.query<FunctionPrivilegeRow>(`
     SELECT
       p.oid::regprocedure::text AS proc,
-      p.proargnames AS "argNames",
+      CASE
+        WHEN p.proargnames IS NULL THEN NULL
+        WHEN p.proargmodes IS NULL THEN p.proargnames
+        ELSE ARRAY(
+          SELECT name
+          FROM unnest(p.proargnames, p.proargmodes) AS a(name, mode)
+          WHERE a.mode IN ('i', 'b', 'v')
+        )
+      END AS "argNames",
       COALESCE(p.pronargdefaults, 0) AS "defaultCount",
       p.pronargs AS "argCount",
       has_function_privilege('anon', p.oid, 'EXECUTE') AS "anonExec"
     FROM pg_proc AS p
     INNER JOIN pg_namespace AS n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public'
+      AND p.prokind = 'f'
       AND p.proname = $1
     ORDER BY 1
   `, [functionName])
@@ -141,11 +150,10 @@ describe('CRITICAL published CLI RPC contract', () => {
       }
 
       const overloadsToCheck = call.argKeys === null ? overloads : matches
-      const lacksAnonExec = overloadsToCheck.some(overload => !overload.anonExec)
+      const hasAnonExec = overloadsToCheck.some(overload => overload.anonExec)
 
-      if (lacksAnonExec) {
+      if (!hasAnonExec) {
         const procList = overloadsToCheck
-          .filter(overload => !overload.anonExec)
           .map(overload => overload.proc)
           .join(', ')
         missing.push(`${procList || call.name} required by ${formatPublishedCliRpcCall(call)}`)
