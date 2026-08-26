@@ -268,6 +268,11 @@ await test('buildUpdaterInstallInvocation uses bun add when updater is not decla
   assert.deepEqual(invocation, { command: 'bun', args: ['add', '@capgo/capacitor-updater@latest'] })
 })
 
+await test('buildUpdaterInstallInvocation uses pnpm add when updater is not declared', () => {
+  const invocation = buildUpdaterInstallInvocation({ pm: 'pnpm', installCommand: 'pnpm install' }, '^7.0.0', null)
+  assert.deepEqual(invocation, { command: 'pnpm', args: ['add', '@capgo/capacitor-updater@^7.0.0'] })
+})
+
 await test('buildUpdaterInstallInvocation restores declared yarn deps via install', () => {
   const invocation = buildUpdaterInstallInvocation({ pm: 'yarn', installCommand: 'yarn install' }, '^7.0.0', '^7.0.0')
   assert.deepEqual(invocation, { command: 'yarn', args: ['install'] })
