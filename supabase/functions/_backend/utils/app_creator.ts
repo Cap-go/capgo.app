@@ -5,7 +5,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function resolveAppCreatorEmail(claimedEmail?: string, storedEmail?: string): string | undefined {
-  return claimedEmail ?? storedEmail
+  return claimedEmail || storedEmail
 }
 
 export function addAppCreatorToOnboarding(onboarding: unknown, userId: string, email?: string): Record<string, unknown> {

@@ -34,6 +34,7 @@ describe('app creator metadata', () => {
 
   it.concurrent('uses the stored user email when JWT claims do not contain one', () => {
     expect(resolveAppCreatorEmail(undefined, 'creator@capgo.app')).toBe('creator@capgo.app')
+    expect(resolveAppCreatorEmail('', 'creator@capgo.app')).toBe('creator@capgo.app')
   })
 
   it.concurrent('omits invalid or missing creator metadata', () => {
