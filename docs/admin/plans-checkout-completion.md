@@ -28,6 +28,10 @@ The observation window is 24 hours after checkout start (`CHECKOUT_ATTRIBUTION_M
 
 Until that deadline passes, an unattributed paid transition remains **pending** instead of **not completed**.
 
+## Admin UI
+
+The Plans admin dashboard renders this cohort as a stacked daily chart (**Completed checkout**, **Not completed**, **Pending**) on the checkout completion card.
+
 ## Limits
 
 - Completion is inferred from org-level billing transitions, not per Stripe checkout session.
