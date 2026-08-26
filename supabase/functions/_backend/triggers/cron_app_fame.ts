@@ -1,5 +1,5 @@
 import type { Context } from 'hono'
-import type { AppFameCandidate, AppFameDecision } from '../utils/app_fame.ts'
+import type { AppFameCandidate } from '../utils/app_fame.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { AiBinding } from '../utils/workers_ai.ts'
 import { sql } from 'drizzle-orm'
