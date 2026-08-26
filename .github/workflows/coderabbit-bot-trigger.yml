@@ -48,22 +48,40 @@ jobs:
                 repo,
                 pull_number: pr.number,
               })
-              const latestCodeRabbitReview = reviews
+              const codeRabbitReviews = reviews
                 .filter(review => review.user?.login === 'coderabbitai[bot]')
-                .pop()
+              const latestCodeRabbitReview = codeRabbitReviews.at(-1)
+
+              const headApproved = reviews.some(review =>
+                review.commit_id === headSha
+                && review.state === 'APPROVED'
+                && review.user?.type === 'User'
+                && (review.author_association === 'MEMBER'
+                  || review.author_association === 'OWNER')
+              )
+
+              const staleChangeRequests = codeRabbitReviews.filter(review =>
+                review.state === 'CHANGES_REQUESTED'
+                && review.commit_id !== headSha
+              )
+              if (staleChangeRequests.length > 0 && headApproved) {
+                for (const review of staleChangeRequests) {
+                  await github.rest.pulls.dismissReview({
+                    owner,
+                    repo,
+                    pull_number: pr.number,
+                    review_id: review.id,
+                    message: `Superseded: maintainer approved HEAD ${headSha.slice(0, 7)} after addressing prior CodeRabbit feedback.`,
+                  })
+                  console.log(`Dismissed stale CodeRabbit review ${review.id} on PR #${pr.number}`)
+                }
+              }
 
               // Skip only when CodeRabbit already approved this SHA (COMMENTED does not clear CHANGES_REQUESTED).
               if (
                 latestCodeRabbitReview?.state === 'CHANGES_REQUESTED'
                 && latestCodeRabbitReview.commit_id !== headSha
               ) {
-                const headApproved = reviews.some(review =>
-                  review.commit_id === headSha
-                  && review.state === 'APPROVED'
-                  && review.user?.type === 'User'
-                  && (review.author_association === 'MEMBER'
-                    || review.author_association === 'OWNER')
-                )
                 if (headApproved) {
                   await github.rest.pulls.dismissReview({
                     owner,
@@ -73,7 +91,6 @@ jobs:
                     message: `Superseded: maintainer approved HEAD ${headSha.slice(0, 7)} after addressing prior CodeRabbit feedback.`,
                   })
                   console.log(`Dismissed stale CodeRabbit review on PR #${pr.number}`)
-                  continue
                 }
               }
 
