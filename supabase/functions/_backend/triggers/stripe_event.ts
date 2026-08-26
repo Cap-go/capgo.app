@@ -6,6 +6,8 @@ import type { Database } from '../utils/supabase.types.ts'
 import { eq, sql } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 import { isBentoConfigured, syncBentoSubscriberTags, trackBentoEvent } from '../utils/bento.ts'
+import { purgeOnPremCacheForOrg, purgePlanCacheForOrg } from '../utils/cloudflare_cache_purge.ts'
+import { handleAutoTopUpPaymentIntent } from '../utils/credit_auto_top_up.ts'
 import { getFallbackCreditProductId } from '../utils/credits.ts'
 import { BRES, quickError, simpleError } from '../utils/hono.ts'
 import { middlewareStripeWebhook } from '../utils/hono_middleware_stripe.ts'
@@ -18,7 +20,6 @@ import { ensureCustomerMetadata, getCreditCheckoutDetails, getStripe, syncStripe
 import { normalizeBillingEmail } from '../utils/stripe_event.ts'
 import { customerToSegmentOrg, supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
-import { purgeOnPremCacheForOrg, purgePlanCacheForOrg } from '../utils/cloudflare_cache_purge.ts'
 import { backgroundTask, isStripeConfigured } from '../utils/utils.ts'
 
 export const app = new Hono<MiddlewareKeyVariablesStripe>()
@@ -60,8 +61,8 @@ interface RevenueMovement {
 }
 
 type PersistRevenueMovementResult = 'applied' | 'duplicate' | 'missing' | 'stale'
-type BentoSegmentUpdate = { segments: string[], deleteSegments: string[] }
-type BentoSubscriberTagUpdate = { email: string, segments: string[], deleteSegments: string[] }
+interface BentoSegmentUpdate { segments: string[], deleteSegments: string[] }
+interface BentoSubscriberTagUpdate { email: string, segments: string[], deleteSegments: string[] }
 const BENTO_CHARGE_SUCCEEDED_EVENT = 'org:charge_succeeded'
 
 const ZERO_REVENUE_MOVEMENT: RevenueMovement = {
@@ -1420,6 +1421,11 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
 
   if (isCheckoutSession) {
     return handleCheckoutSessionCompleted(c, stripeEvent, org, stripeData.data.customer_id)
+  }
+
+  if (stripeEvent.type === 'payment_intent.succeeded') {
+    await handleAutoTopUpPaymentIntent(c, stripeEvent, org.id)
+    return c.json(BRES)
   }
 
   const { data: customer } = await supabaseAdmin(c)

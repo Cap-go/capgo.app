@@ -2555,6 +2555,9 @@ export type Database = {
           enforce_encrypted_bundles: boolean
           enforce_hashed_api_keys: boolean
           enforcing_2fa: boolean
+          auto_top_up_enabled: boolean
+          auto_top_up_last_attempt_at: string | null
+          auto_top_up_threshold: number
           has_usage_credits: boolean
           id: string
           last_stats_updated_at: string | null
@@ -2579,6 +2582,9 @@ export type Database = {
           enforce_encrypted_bundles?: boolean
           enforce_hashed_api_keys?: boolean
           enforcing_2fa?: boolean
+          auto_top_up_enabled?: boolean
+          auto_top_up_last_attempt_at?: string | null
+          auto_top_up_threshold?: number
           has_usage_credits?: boolean
           id?: string
           last_stats_updated_at?: string | null
@@ -2603,6 +2609,9 @@ export type Database = {
           enforce_encrypted_bundles?: boolean
           enforce_hashed_api_keys?: boolean
           enforcing_2fa?: boolean
+          auto_top_up_enabled?: boolean
+          auto_top_up_last_attempt_at?: string | null
+          auto_top_up_threshold?: number
           has_usage_credits?: boolean
           id?: string
           last_stats_updated_at?: string | null
@@ -5517,6 +5526,16 @@ export type Database = {
           next_expiration: string
           total_credits: number
           transaction_id: number
+        }[]
+      }
+      try_claim_credit_auto_top_up: {
+        Args: { p_org_id: string }
+        Returns: {
+          available_credits: number
+          auto_top_up_enabled: boolean
+          auto_top_up_threshold: number
+          claimed: boolean
+          customer_id: string
         }[]
       }
       total_bundle_storage_bytes: { Args: never; Returns: number }
