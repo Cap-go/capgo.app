@@ -141,7 +141,6 @@ describe('swap memory cleanup functions', () => {
     )
 
     const versionName = `1.0.0-${randomUUID().slice(0, 8)}`
-    const canonicalR2Path = `orgs/${orgId}/apps/${appId}/${versionName}.zip`
     const manifestPath = `orgs/${orgId}/apps/${appId}/delta/hash_a.js`
 
     const versionRows = await executeSQL(
@@ -151,17 +150,15 @@ describe('swap memory cleanup functions', () => {
          owner_org,
          storage_provider,
          comment,
-         manifest,
-         r2_path
+         manifest
        )
        VALUES (
          $1,
          $2,
          $3::uuid,
-         'r2',
+         'r2-direct',
          'before',
-         ARRAY[ROW('a.js', $4, 'hash')::public.manifest_entry],
-         $5
+         ARRAY[ROW('a.js', $4, 'hash')::public.manifest_entry]
        )
        RETURNING id`,
       [
@@ -169,15 +166,22 @@ describe('swap memory cleanup functions', () => {
         versionName,
         orgId,
         manifestPath,
-        canonicalR2Path,
       ],
     )
     const versionId = versionRows[0]?.id as number
 
     await executeSQL(
+      `INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash)
+       VALUES ($1, 'a.js', $2, 'hash')`,
+      [versionId, manifestPath],
+    )
+
+    await executeSQL(
       `UPDATE public.app_versions
        SET
          comment = 'after',
+         manifest = NULL,
+         manifest_count = 1,
          native_packages = ARRAY['{"name":"cordova-plugin"}'::jsonb]
        WHERE id = $1`,
       [versionId],
@@ -204,6 +208,7 @@ describe('swap memory cleanup functions', () => {
     expect(logs[0]?.changed_fields).toContain('native_packages')
 
     await executeSQL(`DELETE FROM public.audit_logs WHERE record_id = $1 AND table_name = 'app_versions'`, [String(versionId)])
+    await executeSQL(`DELETE FROM public.manifest WHERE app_version_id = $1`, [versionId])
     await executeSQL(`DELETE FROM public.app_versions WHERE id = $1`, [versionId])
     await executeSQL(`DELETE FROM public.apps WHERE app_id = $1`, [appId])
   })
