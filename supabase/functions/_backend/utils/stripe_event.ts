@@ -118,7 +118,52 @@ function invoiceUpcoming(event: Stripe.InvoiceUpcomingEvent, data: StripeData['d
   return data
 }
 
-function getStripeCustomerId(customer: Stripe.Charge['customer'] | Stripe.Checkout.Session['customer']): string {
+export const TRANSFER_INVOICE_FOOTER = 'For US bank wires: instruct your bank to send OUR (sender pays all correspondent/intermediary fees) so the full invoice amount arrives. Do not use SHA/shared fees.'
+export const TRANSFER_INVOICE_FOOTER_MARKER = 'OUR (sender pays all correspondent'
+
+const TRANSFER_INVOICE_PAYMENT_METHOD_TYPES = new Set([
+  'customer_balance',
+  'us_bank_account',
+  'ach_credit_transfer',
+  'ach_debit',
+  'sepa_debit',
+  'acss_debit',
+  'bacs_debit',
+  'au_becs_debit',
+])
+
+type TransferInvoiceShape = Pick<Stripe.Invoice, 'collection_method' | 'payment_settings'>
+
+export function isTransferInvoice(invoice: TransferInvoiceShape) {
+  if (invoice.collection_method === 'send_invoice')
+    return true
+
+  const paymentMethodTypes = invoice.payment_settings?.payment_method_types ?? []
+  return paymentMethodTypes.some(type => TRANSFER_INVOICE_PAYMENT_METHOD_TYPES.has(type))
+}
+
+export function shouldStampTransferInvoiceFooter(
+  invoice: TransferInvoiceShape & Pick<Stripe.Invoice, 'status' | 'footer'>,
+) {
+  if (invoice.status !== 'draft')
+    return false
+  if (!isTransferInvoice(invoice))
+    return false
+  if (invoice.footer?.includes(TRANSFER_INVOICE_FOOTER_MARKER))
+    return false
+  return true
+}
+
+function invoiceCreatedOrUpdated(event: Stripe.InvoiceCreatedEvent | Stripe.InvoiceUpdatedEvent, data: StripeData['data']) {
+  const invoice = event.data.object
+  data.status = 'updated'
+  data.customer_id = getStripeCustomerId(invoice.customer)
+  return data
+}
+
+function getStripeCustomerId(
+  customer: Stripe.Charge['customer'] | Stripe.Checkout.Session['customer'] | Stripe.Invoice['customer'],
+): string {
   if (!customer)
     return ''
   if (typeof customer === 'string')
@@ -170,6 +215,9 @@ export function extractDataEvent(c: Context, event: Stripe.Event): StripeData {
   }
   else if (event.type === 'invoice.upcoming') {
     data = invoiceUpcoming(event, data)
+  }
+  else if (event.type === 'invoice.created' || event.type === 'invoice.updated') {
+    data = invoiceCreatedOrUpdated(event, data)
   }
   else if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
     const session = event.data.object as Stripe.Checkout.Session

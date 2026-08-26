@@ -15,7 +15,7 @@ import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { ensureCustomerMetadata, getCreditCheckoutDetails, getStripe, syncStripeCustomerCountry } from '../utils/stripe.ts'
-import { normalizeBillingEmail } from '../utils/stripe_event.ts'
+import { isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER } from '../utils/stripe_event.ts'
 import { customerToSegmentOrg, supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { purgeOnPremCacheForOrg, purgePlanCacheForOrg } from '../utils/cloudflare_cache_purge.ts'
@@ -1013,6 +1013,48 @@ async function customerSourceExpiring(c: Context, org: Org) {
   return c.json(BRES)
 }
 
+async function invoiceCreatedOrUpdated(c: Context, stripeEvent: Stripe.InvoiceCreatedEvent | Stripe.InvoiceUpdatedEvent) {
+  const invoice = stripeEvent.data.object
+
+  if (!shouldStampTransferInvoiceFooter(invoice)) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'Skipping transfer invoice footer stamp',
+      invoiceId: invoice.id,
+      status: invoice.status,
+      collectionMethod: invoice.collection_method,
+      paymentMethodTypes: invoice.payment_settings?.payment_method_types,
+      isTransferInvoice: isTransferInvoice(invoice),
+    })
+    return c.json(BRES)
+  }
+
+  try {
+    await getStripe(c).invoices.update(invoice.id, {
+      footer: TRANSFER_INVOICE_FOOTER,
+    })
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'Stamped transfer invoice footer',
+      invoiceId: invoice.id,
+      customerId: invoice.customer,
+    })
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'Failed to stamp transfer invoice footer',
+      invoiceId: invoice.id,
+      error,
+    })
+    throw simpleError('transfer_invoice_footer_update_failed', 'Failed to update transfer invoice footer', {
+      invoiceId: invoice.id,
+    })
+  }
+
+  return c.json(BRES)
+}
+
 async function invoiceUpcoming(c: Context, org: Org, stripeEvent: Stripe.InvoiceUpcomingEvent, stripeData: StripeData) {
   const invoice = stripeEvent.data.object as any
   let planName = null
@@ -1441,6 +1483,9 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
   else if (stripeEvent.type === 'invoice.upcoming') {
     return invoiceUpcoming(c, org, stripeEvent, stripeData)
   }
+  else if (stripeEvent.type === 'invoice.created' || stripeEvent.type === 'invoice.updated') {
+    return invoiceCreatedOrUpdated(c, stripeEvent)
+  }
   else if (stripeEvent.type === 'charge.succeeded') {
     // Canonical dunning exit. Do not also emit this from subscription.updated:
     // Stripe sends both, and a plan change is not proof of payment recovery.
@@ -1540,6 +1585,7 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
 
 export const stripeEventTestUtils = {
   BENTO_CHARGE_SUCCEEDED_EVENT,
+  TRANSFER_INVOICE_FOOTER,
   buildBillingBentoTagUpdates,
   uniqueBillingEmails,
   buildSubscriptionEventMetadata,
@@ -1556,4 +1602,6 @@ export const stripeEventTestUtils = {
   didStripeCustomerEmailChange,
   shouldReplaceOrgManagementEmail,
   shouldTrackOrganizationUpgrade,
+  isTransferInvoice,
+  shouldStampTransferInvoiceFooter,
 }
