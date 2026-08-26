@@ -2682,6 +2682,7 @@ export interface AdminPluginBreakdown {
     date: string
     version_breakdown: Record<string, number>
     major_breakdown: Record<string, number>
+    devices_last_month: number
   }>
 }
 
@@ -4039,6 +4040,7 @@ export async function getAdminPluginBreakdown(
         date,
         version_breakdown: parseBreakdownJson(row.plugin_version_breakdown),
         major_breakdown: parseBreakdownJson(row.plugin_major_breakdown),
+        devices_last_month: Number(row.devices_last_month) || 0,
       }
     })
     const latestRow = rows.at(-1)!
