@@ -1,18 +1,16 @@
-import type { Database } from '~/types/supabase.types'
 import { randomUUID } from 'node:crypto'
-import { env } from 'node:process'
-import { createClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   executeSQL,
+  fetchTestRequest,
+  getAuthHeadersForCredentials,
+  getEndpointUrl,
   getSupabaseClient,
+  SUPABASE_ANON_KEY,
+  SUPABASE_BASE_URL,
 } from './test-utils.ts'
 
-const SUPABASE_URL = (env.SUPABASE_URL ?? '').replace(/\/$/, '')
-const SUPABASE_ANON_KEY = env.SUPABASE_ANON_KEY ?? ''
-const USE_CLOUDFLARE_WORKERS = env.USE_CLOUDFLARE_WORKERS === 'true'
-
-if (!SUPABASE_URL)
+if (!SUPABASE_BASE_URL)
   throw new Error('SUPABASE_URL is required for org billing column guard tests')
 if (!SUPABASE_ANON_KEY)
   throw new Error('SUPABASE_ANON_KEY is required for org billing column guard tests')
@@ -28,22 +26,6 @@ const billingSuperAdminEmail = `org-billing-guard-super-${fixtureId}@capgo.test`
 const testPassword = `Capgo!${fixtureId}`
 const originalCustomerId = `cus_org_billing_guard_${fixtureId.replaceAll('-', '').slice(0, 18)}`
 const replacementCustomerId = `cus_org_billing_guard_alt_${fixtureId.replaceAll('-', '').slice(0, 14)}`
-
-async function createAuthenticatedClient(email: string, password: string) {
-  const client = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-    },
-  })
-
-  const { error } = await client.auth.signInWithPassword({ email, password })
-  if (error)
-    throw error
-
-  return client
-}
 
 async function bindOrgRole(userId: string, roleName: string) {
   const [role] = await executeSQL(
@@ -66,9 +48,31 @@ async function bindOrgRole(userId: string, roleName: string) {
   )
 }
 
-describe.skipIf(USE_CLOUDFLARE_WORKERS)('org billing column guard', () => {
-  let settingsAdminClient: Awaited<ReturnType<typeof createAuthenticatedClient>>
-  let billingSuperAdminClient: Awaited<ReturnType<typeof createAuthenticatedClient>>
+function withRestHeaders(headers: Record<string, string>) {
+  return {
+    ...headers,
+    'apikey': SUPABASE_ANON_KEY,
+    'Content-Type': 'application/json',
+  }
+}
+
+async function patchOrg(headers: Record<string, string>, body: Record<string, unknown>) {
+  const response = await fetchTestRequest(getEndpointUrl(`/rest/v1/orgs?id=eq.${orgId}`), {
+    method: 'PATCH',
+    headers: {
+      ...withRestHeaders(headers),
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify(body),
+  })
+  const text = await response.text()
+  const data = text ? JSON.parse(text) as unknown : null
+  return { response, data }
+}
+
+describe('org billing column guard', () => {
+  let settingsAdminHeaders: Record<string, string>
+  let billingSuperAdminHeaders: Record<string, string>
 
   beforeAll(async () => {
     const { data: settingsAdminAuth, error: settingsAdminAuthError } = await serviceRoleSupabase.auth.admin.createUser({
@@ -113,17 +117,15 @@ describe.skipIf(USE_CLOUDFLARE_WORKERS)('org billing column guard', () => {
 
     await executeSQL(
       `INSERT INTO public.org_users (user_id, org_id, rbac_role_name, is_invite)
-       VALUES ($1::uuid, $3::uuid, public.rbac_role_org_admin(), false),
-              ($2::uuid, $3::uuid, public.rbac_role_org_super_admin(), false)
+       VALUES ($1::uuid, $2::uuid, public.rbac_role_org_admin(), false)
        ON CONFLICT DO NOTHING`,
-      [settingsAdminUserId, billingSuperAdminUserId, orgId],
+      [settingsAdminUserId, orgId],
     )
 
     await bindOrgRole(settingsAdminUserId, 'org_admin')
-    await bindOrgRole(billingSuperAdminUserId, 'org_super_admin')
 
-    settingsAdminClient = await createAuthenticatedClient(settingsAdminEmail, testPassword)
-    billingSuperAdminClient = await createAuthenticatedClient(billingSuperAdminEmail, testPassword)
+    settingsAdminHeaders = await getAuthHeadersForCredentials(settingsAdminEmail, testPassword)
+    billingSuperAdminHeaders = await getAuthHeadersForCredentials(billingSuperAdminEmail, testPassword)
   })
 
   afterAll(async () => {
@@ -137,15 +139,13 @@ describe.skipIf(USE_CLOUDFLARE_WORKERS)('org billing column guard', () => {
   })
 
   it('blocks org.update_settings principals from changing customer_id via PostgREST', async () => {
-    const { data, error } = await settingsAdminClient
-      .from('orgs')
-      .update({ customer_id: null })
-      .eq('id', orgId)
-      .select('customer_id')
+    const { response, data } = await patchOrg(settingsAdminHeaders, { customer_id: null })
 
-    expect(error?.code).toBe('42501')
-    expect(error?.message ?? '').toContain('PERMISSION_DENIED_ORG_UPDATE_BILLING')
-    expect(data).toBeNull()
+    expect(response.status).toBe(403)
+    expect(data).toMatchObject({
+      code: '42501',
+      message: 'PERMISSION_DENIED_ORG_UPDATE_BILLING',
+    })
 
     const { data: orgRow, error: readError } = await serviceRoleSupabase
       .from('orgs')
@@ -160,12 +160,10 @@ describe.skipIf(USE_CLOUDFLARE_WORKERS)('org billing column guard', () => {
   it('still allows org.update_settings principals to change cosmetic org fields', async () => {
     const updatedName = `Org billing guard renamed ${fixtureId}`
 
-    const { error } = await settingsAdminClient
-      .from('orgs')
-      .update({ name: updatedName })
-      .eq('id', orgId)
+    const { response, data } = await patchOrg(settingsAdminHeaders, { name: updatedName })
 
-    expect(error).toBeNull()
+    expect(response.status).toBe(200)
+    expect(Array.isArray(data)).toBe(true)
 
     const { data: orgRow, error: readError } = await serviceRoleSupabase
       .from('orgs')
@@ -178,12 +176,9 @@ describe.skipIf(USE_CLOUDFLARE_WORKERS)('org billing column guard', () => {
   })
 
   it('allows org.update_billing principals to change customer_id via PostgREST', async () => {
-    const { error } = await billingSuperAdminClient
-      .from('orgs')
-      .update({ customer_id: replacementCustomerId })
-      .eq('id', orgId)
+    const { response } = await patchOrg(billingSuperAdminHeaders, { customer_id: replacementCustomerId })
 
-    expect(error).toBeNull()
+    expect(response.status).toBe(200)
 
     const { data: orgRow, error: readError } = await serviceRoleSupabase
       .from('orgs')
