@@ -108,22 +108,6 @@ jobs:
 
               // Skip only when CodeRabbit already approved this SHA (COMMENTED does not clear CHANGES_REQUESTED).
               if (
-                latestCodeRabbitReview?.state === 'CHANGES_REQUESTED'
-                && latestCodeRabbitReview.commit_id !== headSha
-              ) {
-                if (headApproved) {
-                  await github.rest.pulls.dismissReview({
-                    owner,
-                    repo,
-                    pull_number: pr.number,
-                    review_id: latestCodeRabbitReview.id,
-                    message: `Superseded: maintainer approved HEAD ${headSha.slice(0, 7)} after addressing prior CodeRabbit feedback.`,
-                  })
-                  console.log(`Dismissed stale CodeRabbit review on PR #${pr.number}`)
-                }
-              }
-
-              if (
                 latestCodeRabbitReview?.commit_id === headSha
                 && latestCodeRabbitReview.state === 'APPROVED'
               ) {
