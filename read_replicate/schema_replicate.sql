@@ -400,6 +400,9 @@ CREATE TABLE public.orgs (
     website text,
     stats_refresh_requested_at timestamp without time zone,
     onboarding jsonb DEFAULT '{"intent": "unknown"}'::jsonb NOT NULL,
+    auto_top_up_enabled boolean DEFAULT false NOT NULL,
+    auto_top_up_threshold numeric(18,6) DEFAULT 10 NOT NULL,
+    auto_top_up_last_attempt_at timestamp with time zone,
     CONSTRAINT orgs_max_apikey_expiration_days_valid CHECK (((max_apikey_expiration_days IS NULL) OR ((max_apikey_expiration_days >= 1) AND (max_apikey_expiration_days <= 365)))),
     CONSTRAINT orgs_onboarding_valid CHECK (((jsonb_typeof(onboarding) = 'object'::text) AND ((NOT (onboarding ? 'intent'::text)) OR ((onboarding ->> 'intent'::text) = ANY (ARRAY['unknown'::text, 'ota'::text, 'builder'::text, 'both'::text, 'exploring'::text]))))),
     CONSTRAINT orgs_password_policy_config_min_length_check CHECK (((password_policy_config IS NULL) OR ((jsonb_typeof(password_policy_config) = 'object'::text) AND ((NOT (password_policy_config ? 'min_length'::text)) OR ((jsonb_typeof((password_policy_config -> 'min_length'::text)) = 'number'::text) AND (((password_policy_config ->> 'min_length'::text))::numeric = trunc(((password_policy_config ->> 'min_length'::text))::numeric)) AND ((((password_policy_config ->> 'min_length'::text))::numeric >= (6)::numeric) AND (((password_policy_config ->> 'min_length'::text))::numeric <= (72)::numeric))))))),
@@ -581,6 +584,14 @@ ALTER TABLE ONLY public.onboarding_demo_data
 
 ALTER TABLE ONLY public.org_users
     ADD CONSTRAINT org_users_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: orgs orgs_auto_top_up_threshold_min; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.orgs
+    ADD CONSTRAINT orgs_auto_top_up_threshold_min CHECK (((auto_top_up_threshold >= (10)::numeric) AND (auto_top_up_threshold = trunc(auto_top_up_threshold)) AND (auto_top_up_threshold < 'Infinity'::numeric) AND (auto_top_up_threshold > '-Infinity'::numeric))) NOT VALID;
 
 
 --

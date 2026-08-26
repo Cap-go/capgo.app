@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(23);
+SELECT plan(33);
 
 DO $$
 BEGIN
@@ -846,6 +846,265 @@ SELECT
         ),
         -10::numeric,
         'usage_credit_ledger aggregates deduction amounts by overage event'
+    );
+
+SELECT
+    is(
+        (
+            SELECT auto_top_up_enabled
+            FROM public.orgs
+            WHERE id = (SELECT org_id FROM test_credit_context)
+        ),
+        false,
+        'auto top-up is off by default'
+    );
+
+SELECT
+    is(
+        (
+            SELECT auto_top_up_threshold
+            FROM public.orgs
+            WHERE id = (SELECT org_id FROM test_credit_context)
+        ),
+        10::numeric,
+        'auto top-up threshold defaults to 10'
+    );
+
+SELECT
+    throws_ok(
+        $sql$
+      UPDATE public.orgs
+      SET auto_top_up_threshold = 9
+      WHERE id = (SELECT org_id FROM test_credit_context)
+    $sql$,
+        'new row for relation "orgs" violates check constraint "orgs_auto_top_up_threshold_min"',
+        'auto top-up threshold cannot be below 10'
+    );
+
+SELECT
+    is(
+        (
+            SELECT claimed
+            FROM public.try_claim_credit_auto_top_up((SELECT org_id FROM test_credit_context))
+        ),
+        false,
+        'try_claim_credit_auto_top_up does not claim when auto top-up is disabled'
+    );
+
+CREATE TEMP TABLE test_credit_consume_context AS
+WITH user_insert AS (
+    SELECT id FROM auth.users WHERE email = 'credits-test@example.com' LIMIT 1
+),
+org_insert AS (
+    INSERT INTO public.orgs (
+        id,
+        created_by,
+        name,
+        management_email
+    )
+    SELECT
+        gen_random_uuid(),
+        user_insert.id,
+        'Credits Consume Org',
+        'credits-consume@example.com'
+    FROM user_insert
+    RETURNING id
+)
+SELECT id AS org_id FROM org_insert;
+
+INSERT INTO public.usage_credit_grants (
+    org_id,
+    credits_total,
+    credits_consumed,
+    granted_at,
+    expires_at,
+    source
+)
+VALUES (
+    (SELECT org_id FROM test_credit_consume_context),
+    5,
+    0,
+    now(),
+    now() + interval '2 days',
+    'manual'
+);
+
+SELECT
+    results_eq(
+        $$
+        SELECT credits_applied, credits_remaining
+        FROM public.apply_usage_overage(
+          (SELECT org_id FROM test_credit_consume_context),
+          'mau'::public.credit_metric_type,
+          100,
+          timestamptz '2031-01-01 00:00:00+00',
+          timestamptz '2031-02-01 00:00:00+00',
+          '{}'::jsonb
+        )
+        $$,
+        $$ VALUES (5::numeric, 5::numeric) $$,
+        'partial grant covers 5 of 10 required credits and leaves remainder unpaid'
+    );
+
+INSERT INTO public.usage_credit_grants (
+    org_id,
+    credits_total,
+    credits_consumed,
+    granted_at,
+    expires_at,
+    source
+)
+VALUES (
+    (SELECT org_id FROM test_credit_consume_context),
+    20,
+    0,
+    now(),
+    now() + interval '30 days',
+    'manual'
+);
+
+SELECT
+    results_eq(
+        $$
+        SELECT credits_applied, credits_remaining
+        FROM public.apply_usage_overage(
+          (SELECT org_id FROM test_credit_consume_context),
+          'mau'::public.credit_metric_type,
+          100,
+          timestamptz '2031-01-01 00:00:00+00',
+          timestamptz '2031-02-01 00:00:00+00',
+          '{}'::jsonb
+        )
+        $$,
+        $$ VALUES (5::numeric, 0::numeric) $$,
+        'new grant after a partial debit consumes leftover unpaid overage'
+    );
+
+INSERT INTO public.usage_credit_grants (
+    org_id,
+    credits_total,
+    credits_consumed,
+    granted_at,
+    expires_at,
+    source
+)
+VALUES
+    (
+        (SELECT org_id FROM test_credit_consume_context),
+        4,
+        0,
+        now(),
+        now() + interval '3 days',
+        'manual'
+    ),
+    (
+        (SELECT org_id FROM test_credit_consume_context),
+        8,
+        0,
+        now(),
+        now() + interval '12 days',
+        'manual'
+    );
+
+SELECT
+    is(
+        (
+            SELECT credits_applied
+            FROM public.apply_usage_overage(
+              (SELECT org_id FROM test_credit_consume_context),
+              'mau'::public.credit_metric_type,
+              60,
+              timestamptz '2031-03-01 00:00:00+00',
+              timestamptz '2031-04-01 00:00:00+00',
+              '{}'::jsonb
+            )
+        ),
+        6::numeric,
+        'FIFO apply uses the soonest-expiring grant first then the next grant'
+    );
+
+CREATE TEMP TABLE test_credit_expired_context AS
+WITH org_insert AS (
+    INSERT INTO public.orgs (
+        id,
+        created_by,
+        name,
+        management_email
+    )
+    SELECT
+        gen_random_uuid(),
+        created_by,
+        'Credits Expired Org',
+        'credits-expired@example.com'
+    FROM public.orgs
+    WHERE id = (SELECT org_id FROM test_credit_consume_context)
+    RETURNING id
+)
+SELECT id AS org_id FROM org_insert;
+
+INSERT INTO public.usage_credit_grants (
+    org_id,
+    credits_total,
+    credits_consumed,
+    granted_at,
+    expires_at,
+    source
+)
+VALUES (
+    (SELECT org_id FROM test_credit_expired_context),
+    3,
+    0,
+    now() - interval '2 days',
+    now() - interval '1 day',
+    'manual'
+);
+
+SELECT
+    results_eq(
+        $$
+        SELECT credits_applied, credits_remaining
+        FROM public.apply_usage_overage(
+          (SELECT org_id FROM test_credit_expired_context),
+          'mau'::public.credit_metric_type,
+          50,
+          timestamptz '2031-05-01 00:00:00+00',
+          timestamptz '2031-06-01 00:00:00+00',
+          '{}'::jsonb
+        )
+        $$,
+        $$ VALUES (0::numeric, 5::numeric) $$,
+        'expired grants are ignored and unpaid remainder is returned'
+    );
+
+UPDATE public.usage_credit_grants
+SET credits_consumed = credits_total
+WHERE org_id = (SELECT org_id FROM test_credit_consume_context);
+
+UPDATE public.orgs
+SET
+    auto_top_up_enabled = true,
+    auto_top_up_threshold = 10,
+    auto_top_up_last_attempt_at = NULL
+WHERE id = (SELECT org_id FROM test_credit_consume_context);
+
+SELECT
+    is(
+        (
+            SELECT claimed
+            FROM public.try_claim_credit_auto_top_up((SELECT org_id FROM test_credit_consume_context))
+        ),
+        true,
+        'try_claim_credit_auto_top_up claims when enabled and available credits are below threshold'
+    );
+
+SELECT
+    is(
+        (
+            SELECT claimed
+            FROM public.try_claim_credit_auto_top_up((SELECT org_id FROM test_credit_consume_context))
+        ),
+        false,
+        'try_claim_credit_auto_top_up respects the one-hour cooldown'
     );
 
 SELECT *

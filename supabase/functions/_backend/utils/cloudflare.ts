@@ -1373,6 +1373,86 @@ export async function readDevicesCF(c: Context, params: ReadDevicesParams, custo
   return [] as DeviceRes[]
 }
 
+const DEVICE_PLATFORM_CHANNEL_LOOKUP_CHUNK = 200
+const DEVICE_PLATFORM_CHANNEL_LOOKUP_CONCURRENCY = 4
+
+function platformOsFromCFDouble(platform: number | null | undefined): string {
+  if (platform === 1)
+    return 'ios'
+  if (platform === 2)
+    return 'electron'
+  if (platform === 0)
+    return 'android'
+  return 'unknown'
+}
+
+/**
+ * Resolve latest platform + default_channel for a set of device ids from DEVICE_INFO.
+ * Used by native observe version breakdown when grouping by platform/channel.
+ */
+export async function readDevicePlatformChannelByIdsCF(
+  c: Context,
+  appId: string,
+  deviceIds: string[],
+): Promise<Map<string, { platform: string, channel_name: string }>> {
+  const result = new Map<string, { platform: string, channel_name: string }>()
+  if (!c.env.DEVICE_INFO || !deviceIds.length)
+    return result
+
+  const uniqueIds = [...new Set(deviceIds.filter(Boolean))]
+  const chunks: string[][] = []
+  for (let i = 0; i < uniqueIds.length; i += DEVICE_PLATFORM_CHANNEL_LOOKUP_CHUNK)
+    chunks.push(uniqueIds.slice(i, i + DEVICE_PLATFORM_CHANNEL_LOOKUP_CHUNK))
+
+  if (!chunks.length)
+    return result
+
+  let chunkCursor = 0
+  async function lookupChunk(chunk: string[]) {
+    const devicesList = chunk.map(id => `'${escapeSqlString(id)}'`).join(', ')
+    const query = `SELECT
+  device_id,
+  platform,
+  channel_name
+FROM (
+  SELECT
+    blob1 AS device_id,
+    argMax(double1, timestamp) AS platform,
+    argMax(blob7, timestamp) AS channel_name
+  FROM device_info
+  WHERE index1 = '${escapeSqlString(appId)}'
+    AND blob1 IN (${devicesList})
+  GROUP BY blob1
+)`
+
+    cloudlog({ requestId: c.get('requestId'), message: 'readDevicePlatformChannelByIdsCF query', deviceCount: chunk.length })
+    try {
+      const rows = await runQueryToCFA<{ device_id: string, platform: number, channel_name: string }>(c, query)
+      for (const row of rows) {
+        result.set(row.device_id, {
+          platform: platformOsFromCFDouble(row.platform),
+          channel_name: row.channel_name?.trim() ? row.channel_name : 'unknown',
+        })
+      }
+    }
+    catch (e) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading device platform/channel map', error: serializeError(e), query })
+    }
+  }
+
+  async function lookupWorker() {
+    while (chunkCursor < chunks.length) {
+      const chunk = chunks[chunkCursor++]!
+      await lookupChunk(chunk)
+    }
+  }
+
+  const workerCount = Math.min(DEVICE_PLATFORM_CHANNEL_LOOKUP_CONCURRENCY, chunks.length)
+  await Promise.all(Array.from({ length: workerCount }, () => lookupWorker()))
+
+  return result
+}
+
 interface StatRowCF {
   app_id: string
   device_id: string
