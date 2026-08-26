@@ -167,7 +167,7 @@ function buildWorkersFileCacheRequests(fileId: string, checksum?: string | null)
 // Per-DC cache delete/marker calls are best-effort accelerators. The globally durable
 // deletion gate is isAttachmentVersionDeleted's primary-DB lookup on app_versions.r2_path
 // (deleted/deleted_at), which the serve path checks before returning cached bytes or
-// restoring to R2. Workers CachedFiles also short-circuits on the local deleted marker.
+// restoring to R2 (see files.ts cache-hit guard). Workers CachedFiles also short-circuits on the local deleted marker.
 // Checksum is required so key=checksum cache variants are purged alongside path-only entries.
 export async function purgeFileReadCache(fileId: string, checksum?: string | null): Promise<void> {
   await markFileDeletedInCache(fileId)
