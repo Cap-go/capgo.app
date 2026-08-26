@@ -5,6 +5,7 @@
 -- but r2_path updates, manifest writes, and finalize (r2-direct -> r2) remain
 -- allowed until upload completes. Channel linkage is intentionally NOT part of
 -- the freeze gate (upload-complete is storage_provider != r2-direct).
+-- Channel triggers call RBAC before lock_channel_bundle_lifecycle (no oracle).
 --
 -- Execution profile (check_encrypted_bundle_on_insert):
 -- - Where: BEFORE INSERT OR UPDATE OF name, app_id, session_key, key_id,
