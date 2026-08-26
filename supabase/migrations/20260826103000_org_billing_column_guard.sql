@@ -133,7 +133,6 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  pending_customer_id := 'pending_' || NEW.id::text;
   trial_at_date := NOW() + INTERVAL '15 days';
 
   INSERT INTO public.stripe_info (
