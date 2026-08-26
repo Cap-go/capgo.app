@@ -1,7 +1,32 @@
 -- Block PostgREST writes to app_versions.manifest while a bundle is still
 -- in-progress (storage_provider = r2-direct). Legitimate delta uploads use
 -- POST /private/set_manifest, which inserts into public.manifest directly.
--- Legacy CLIs finalize with r2-direct -> r2 in the same UPDATE.
+
+CREATE OR REPLACE FUNCTION public.app_version_manifest_jsonb_unmigrated(
+  p_version_id bigint,
+  p_manifest public.manifest_entry[]
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SET search_path = ''
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM pg_catalog.unnest(p_manifest) AS entry(file_name, s3_path, file_hash)
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM public.manifest AS m
+      WHERE m.app_version_id = p_version_id
+        AND m.s3_path = entry.s3_path
+        AND m.file_hash = entry.file_hash
+    )
+  );
+$$;
+
+ALTER FUNCTION public.app_version_manifest_jsonb_unmigrated(bigint, public.manifest_entry[]) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.app_version_manifest_jsonb_unmigrated(bigint, public.manifest_entry[]) FROM PUBLIC;
+GRANT ALL ON FUNCTION public.app_version_manifest_jsonb_unmigrated(bigint, public.manifest_entry[]) TO service_role;
 
 CREATE OR REPLACE FUNCTION "public"."check_encrypted_bundle_on_insert"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
@@ -14,7 +39,27 @@ DECLARE
   bundle_is_encrypted boolean;
   bundle_key_id varchar(20);
   bundle_was_ready boolean;
+  r2_direct_manifest_err constant text :=
+    'r2_direct_manifest_jsonb: Use POST /private/set_manifest for in-progress '
+    || 'r2-direct uploads instead of app_versions.manifest jsonb.';
 BEGIN
+  IF TG_OP = 'INSERT'
+    AND NEW.storage_provider = 'r2-direct'
+    AND NEW.manifest IS NOT NULL
+  THEN
+    PERFORM public.pg_log('deny: BUNDLE_CONTENT_LOCKED_TRIGGER',
+      pg_catalog.jsonb_build_object(
+        'org_id', NEW.owner_org,
+        'app_id', NEW.app_id,
+        'version_name', NEW.name,
+        'user_id', NEW.user_id,
+        'old_storage_provider', NULL,
+        'new_storage_provider', NEW.storage_provider,
+        'reason', 'r2_direct_manifest_jsonb'
+      ));
+    RAISE EXCEPTION '%', r2_direct_manifest_err;
+  END IF;
+
   IF TG_OP = 'UPDATE' THEN
     IF pg_catalog.current_setting('capgo.reclaim_manifest_null', true) = 'on'
       AND NEW.manifest IS NULL
@@ -34,17 +79,7 @@ BEGIN
 
     IF NEW.manifest IS NULL
       AND OLD.manifest IS NOT NULL
-      AND EXISTS (
-        SELECT 1
-        FROM pg_catalog.unnest(OLD.manifest) AS entry(file_name, s3_path, file_hash)
-        WHERE NOT EXISTS (
-          SELECT 1
-          FROM public.manifest AS m
-          WHERE m.app_version_id = OLD.id
-            AND m.s3_path = entry.s3_path
-            AND m.file_hash = entry.file_hash
-        )
-      )
+      AND public.app_version_manifest_jsonb_unmigrated(OLD.id, OLD.manifest)
     THEN
       RAISE EXCEPTION '%',
         'bundle_manifest_not_migrated: Cannot clear app_versions.manifest '
@@ -67,17 +102,7 @@ BEGIN
         OR (
           NEW.manifest IS NULL
           AND OLD.manifest IS NOT NULL
-          AND EXISTS (
-            SELECT 1
-            FROM pg_catalog.unnest(OLD.manifest) AS entry(file_name, s3_path, file_hash)
-            WHERE NOT EXISTS (
-              SELECT 1
-              FROM public.manifest AS m
-              WHERE m.app_version_id = OLD.id
-                AND m.s3_path = entry.s3_path
-                AND m.file_hash = entry.file_hash
-            )
-          )
+          AND public.app_version_manifest_jsonb_unmigrated(OLD.id, OLD.manifest)
         )
         OR NEW.native_packages IS DISTINCT FROM OLD.native_packages
       )
@@ -114,9 +139,7 @@ BEGIN
           'new_storage_provider', NEW.storage_provider,
           'reason', 'r2_direct_manifest_jsonb'
         ));
-      RAISE EXCEPTION '%',
-        'bundle_already_ready: Bundle content cannot be changed '
-        || 'after upload is complete. Upload a new bundle instead.';
+      RAISE EXCEPTION '%', r2_direct_manifest_err;
     END IF;
   END IF;
 
@@ -135,17 +158,7 @@ BEGIN
       OR (
         NEW.manifest IS NULL
         AND OLD.manifest IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1
-          FROM pg_catalog.unnest(OLD.manifest) AS entry(file_name, s3_path, file_hash)
-          WHERE NOT EXISTS (
-            SELECT 1
-            FROM public.manifest AS m
-            WHERE m.app_version_id = OLD.id
-              AND m.s3_path = entry.s3_path
-              AND m.file_hash = entry.file_hash
-          )
-        )
+        AND NOT public.app_version_manifest_jsonb_unmigrated(OLD.id, OLD.manifest)
       )
     )
   THEN

@@ -1,7 +1,7 @@
 -- In-progress r2-direct versions must not accept app_versions.manifest jsonb writes.
 BEGIN;
 
-SELECT plan(3);
+SELECT plan(4);
 
 SELECT tests.authenticate_as_service_role();
 SELECT tests.create_supabase_user('r2_direct_manifest_block_owner', 'r2_direct_manifest_block_owner@test.local');
@@ -61,6 +61,40 @@ SET
 
 SELECT throws_ok(
   $sql$
+    INSERT INTO public.app_versions (
+      app_id,
+      name,
+      owner_org,
+      user_id,
+      storage_provider,
+      checksum,
+      manifest,
+      deleted
+    )
+    VALUES (
+      'com.test.r2direct.manifest.block',
+      '1.0.0-insert-poison',
+      '70000000-0000-4000-8000-000000000073',
+      tests.get_supabase_uid('r2_direct_manifest_block_owner'),
+      'r2-direct',
+      'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+      ARRAY[
+        ROW(
+          'index.html',
+          'orgs/70000000-0000-4000-8000-000000000073/apps/com.test.r2direct.manifest.block/delta/insert_poison_index.html',
+          'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+        )::public.manifest_entry
+      ],
+      false
+    )
+  $sql$,
+  'P0001',
+  'r2_direct_manifest_jsonb: Use POST /private/set_manifest for in-progress r2-direct uploads instead of app_versions.manifest jsonb.',
+  'in-progress r2-direct cannot INSERT manifest jsonb'
+);
+
+SELECT throws_ok(
+  $sql$
     UPDATE public.app_versions
     SET manifest = ARRAY[
       ROW(
@@ -73,7 +107,7 @@ SELECT throws_ok(
       AND name = '1.0.0-in-progress'
   $sql$,
   'P0001',
-  'bundle_already_ready: Bundle content cannot be changed after upload is complete. Upload a new bundle instead.',
+  'r2_direct_manifest_jsonb: Use POST /private/set_manifest for in-progress r2-direct uploads instead of app_versions.manifest jsonb.',
   'in-progress r2-direct cannot UPDATE manifest jsonb'
 );
 
@@ -94,7 +128,7 @@ SELECT throws_ok(
       AND name = '1.0.0-in-progress'
   $sql$,
   'P0001',
-  'bundle_already_ready: Bundle content cannot be changed after upload is complete. Upload a new bundle instead.',
+  'r2_direct_manifest_jsonb: Use POST /private/set_manifest for in-progress r2-direct uploads instead of app_versions.manifest jsonb.',
   'r2-direct cannot set manifest jsonb while finalizing to r2'
 );
 

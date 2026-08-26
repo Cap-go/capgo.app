@@ -165,7 +165,7 @@ describe('[POST] /private/set_manifest', () => {
            updated_at = now()
        WHERE id = $1`,
       [version!.id, `orgs/${version!.owner_org}/apps/${APP_ID}/delta/legacy_legacy.html`],
-    )).rejects.toThrow(/bundle_already_ready/)
+    )).rejects.toThrow(/r2_direct_manifest_jsonb/)
 
     const legit = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',

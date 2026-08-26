@@ -142,6 +142,7 @@ describe('swap memory cleanup functions', () => {
 
     const versionName = `1.0.0-${randomUUID().slice(0, 8)}`
     const manifestPath = `orgs/${orgId}/apps/${appId}/delta/hash_a.js`
+    const canonicalR2Path = `orgs/${orgId}/apps/${appId}/${versionName}.zip`
 
     const versionRows = await executeSQL(
       `INSERT INTO public.app_versions (
@@ -150,15 +151,17 @@ describe('swap memory cleanup functions', () => {
          owner_org,
          storage_provider,
          comment,
-         manifest
+         manifest,
+         r2_path
        )
        VALUES (
          $1,
          $2,
          $3::uuid,
-         'r2-direct',
+         'r2',
          'before',
-         ARRAY[ROW('a.js', $4, 'hash')::public.manifest_entry]
+         ARRAY[ROW('a.js', $4, 'hash')::public.manifest_entry],
+         $5
        )
        RETURNING id`,
       [
@@ -166,6 +169,7 @@ describe('swap memory cleanup functions', () => {
         versionName,
         orgId,
         manifestPath,
+        canonicalR2Path,
       ],
     )
     const versionId = versionRows[0]?.id as number
@@ -255,18 +259,26 @@ describe('swap memory cleanup functions', () => {
          owner_org,
          storage_provider,
          comment,
-         manifest
+         manifest,
+         r2_path
        )
        VALUES (
          $1,
          $2,
          $3::uuid,
-         'r2-direct',
+         'r2',
          'seed',
-         ARRAY[ROW('a.js', $4, 'hash')::public.manifest_entry]
+         ARRAY[ROW('a.js', $4, 'hash')::public.manifest_entry],
+         $5
        )
        RETURNING id`,
-      [appId, versionName, orgId, manifestPath],
+      [
+        appId,
+        versionName,
+        orgId,
+        manifestPath,
+        `orgs/${orgId}/apps/${appId}/${versionName}.zip`,
+      ],
     )
     const versionId = versionRows[0]?.id as number
     await clearVersionAudits(versionId)

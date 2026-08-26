@@ -259,11 +259,12 @@ async function updateIt(c: Context, record: Database['public']['Tables']['app_ve
     }
   }
 
-  // Handle manifest entries (reload when the queue payload omitted the jsonb column).
   // In-progress r2-direct uploads must use POST /private/set_manifest instead.
-  const recordWithManifest = await ensureVersionManifest(c, record)
-  if (recordWithManifest.manifest && recordWithManifest.storage_provider !== 'r2-direct')
-    await handleManifest(c, recordWithManifest)
+  if (record.storage_provider !== 'r2-direct') {
+    const recordWithManifest = await ensureVersionManifest(c, record)
+    if (recordWithManifest.manifest)
+      await handleManifest(c, recordWithManifest)
+  }
 
   return c.json(BRES)
 }

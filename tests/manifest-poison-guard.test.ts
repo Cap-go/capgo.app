@@ -13,6 +13,9 @@ import {
 
 const APP_ID = 'com.demo.app'
 
+const R2_DIRECT_MANIFEST_ERR = 'r2_direct_manifest_jsonb'
+const SET_MANIFEST_PATH = '/private/set_manifest'
+
 function poisonManifestEntries(ownerOrg: string, versionName: string) {
   const prefix = `orgs/${ownerOrg}/apps/${APP_ID}/delta`
   return [
@@ -68,28 +71,41 @@ describe('manifest poison guard', () => {
       .single()
 
     expect(insertError).toBeNull()
+    expect(version).not.toBeNull()
+    if (!version)
+      return
 
     try {
       const response = await patchVersionManifestAsApiKey(
         apikey,
-        version!.id,
-        poisonManifestEntries(version!.owner_org, versionName),
+        version.id,
+        poisonManifestEntries(version.owner_org, versionName),
       )
 
       expect(response.status).toBeGreaterThanOrEqual(400)
       const body = await response.text()
-      expect(body).toContain('bundle_already_ready')
+      expect(body).toContain(R2_DIRECT_MANIFEST_ERR)
+      expect(body).toContain(SET_MANIFEST_PATH)
+
+      const { data: versionRow, error: versionError } = await adminClient
+        .from('app_versions')
+        .select('manifest')
+        .eq('id', version.id)
+        .single()
+
+      expect(versionError).toBeNull()
+      expect(versionRow?.manifest).toBeNull()
 
       const { data: manifestRows, error: manifestError } = await adminClient
         .from('manifest')
         .select('id')
-        .eq('app_version_id', version!.id)
+        .eq('app_version_id', version.id)
 
       expect(manifestError).toBeNull()
       expect(manifestRows).toHaveLength(0)
     }
     finally {
-      await adminClient.from('app_versions').delete().eq('id', version!.id)
+      await adminClient.from('app_versions').delete().eq('id', version.id)
     }
   })
 
