@@ -1,7 +1,8 @@
--- GHSA-5rg9-rhwj-wj76: channel-linked / OTA-selectable r2-direct versions
--- were treated as "not ready" and stayed mutable via PostgREST. Lock
--- checksum/session_key/key_id on those rows. Unlinked in-progress r2-direct
--- rows can still finalize (r2-direct -> r2).
+-- GHSA-5rg9-rhwj-wj76: r2-direct staging rows were treated as "not ready" and
+-- stayed mutable via PostgREST after checksum/session_key were set. Upload is
+-- complete once storage_provider is no longer r2-direct; during r2-direct staging
+-- with checksum set, identity fields lock but r2_path updates and finalize
+-- (r2-direct -> r2) remain allowed.
 
 CREATE OR REPLACE FUNCTION "public"."check_encrypted_bundle_on_insert"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
@@ -13,7 +14,9 @@ DECLARE
   org_required_key varchar(21);
   bundle_is_encrypted boolean;
   bundle_key_id varchar(20);
-  bundle_was_ready boolean;
+  bundle_upload_complete boolean;
+  bundle_identity_locked boolean;
+  is_r2_direct_finalize boolean;
 BEGIN
   IF TG_OP = 'UPDATE' THEN
     IF pg_catalog.current_setting('capgo.reclaim_manifest_null', true) = 'on'
@@ -51,9 +54,9 @@ BEGIN
         || 'until every entry exists in public.manifest.';
     END IF;
 
-    bundle_was_ready := OLD.storage_provider IS DISTINCT FROM 'r2-direct';
+    bundle_upload_complete := OLD.storage_provider IS DISTINCT FROM 'r2-direct';
 
-    IF bundle_was_ready
+    IF bundle_upload_complete
       AND (
         NEW.name IS DISTINCT FROM OLD.name
         OR NEW.app_id IS DISTINCT FROM OLD.app_id
@@ -90,80 +93,60 @@ BEGIN
           'user_id', OLD.user_id,
           'old_storage_provider', OLD.storage_provider,
           'new_storage_provider', NEW.storage_provider,
-          'reason', 'bundle_ready'
+          'reason', 'bundle_upload_complete'
         ));
       RAISE EXCEPTION '%',
         'bundle_already_ready: Bundle content cannot be changed '
         || 'after upload is complete. Upload a new bundle instead.';
     END IF;
 
-    -- GHSA-5rg9-rhwj-wj76: /updates serves channel-linked r2-direct rows.
-    -- Lock checksum/session_key/key_id, manifest, and delivery metadata on those
-    -- OTA-selectable in-progress rows. Finalize (r2-direct -> r2 + r2_path)
-    -- and other non-delivery metadata stay allowed.
-    --
-    -- Execution profile (app_versions BEFORE UPDATE trigger, console upload path):
-    -- - Runs once per UPDATE row when storage_provider is still r2-direct and a
-    --   protected field (checksum/session_key/key_id/manifest/delivery metadata) changes.
-    -- - Role: service_role / authenticated via PostgREST; trigger is SECURITY
-    --   DEFINER on app_versions.
-    -- - Cardinality: channels is console-scale (low thousands); each lookup is
-    --   bounded by app_version PK (OLD.id) against indexed FK columns.
-    -- - Indexes: finx_channels_version(version), idx_channels_rollout_version
-    --   (rollout_version) WHERE rollout_version IS NOT NULL — BitmapOr of two
-    --   Index Scans in EXPLAIN (ANALYZE, BUFFERS) on local seed data.
-    -- - Serialization: acquire FOR UPDATE on OLD.id before the channels lookup
-    --   so a concurrent promotion cannot link the version between the check and
-    --   the write. lock_channel_bundle_lifecycle() uses the same row-lock
-    --   order (FOR UPDATE in deterministic bundle-id order) for promotion.
-    IF NOT bundle_was_ready THEN
-      PERFORM 1
-      FROM public.app_versions AS version
-      WHERE version.id = OLD.id
-      FOR UPDATE;
+    -- GHSA-5rg9-rhwj-wj76: CLI/TUS creates r2-direct rows with checksum before
+    -- finalize. Lock identity fields once checksum is set; still allow r2_path
+    -- writes and the one-shot finalize (r2-direct -> r2).
+    IF OLD.storage_provider = 'r2-direct' THEN
+      bundle_identity_locked := NULLIF(BTRIM(COALESCE(OLD.checksum, '')), '') IS NOT NULL;
 
-      IF EXISTS (
-        SELECT 1
-        FROM public.channels AS ch
-        WHERE ch.version = OLD.id
-           OR ch.rollout_version = OLD.id
-      )
-      AND (
-        NEW.session_key IS DISTINCT FROM OLD.session_key
-        OR NEW.key_id IS DISTINCT FROM OLD.key_id
-        OR NEW.checksum IS DISTINCT FROM OLD.checksum
-        OR NEW.external_url IS DISTINCT FROM OLD.external_url
-        OR (NEW.manifest IS DISTINCT FROM OLD.manifest AND NEW.manifest IS NOT NULL)
-        OR (
-          NEW.manifest IS NULL
-          AND OLD.manifest IS NOT NULL
-          AND EXISTS (
-            SELECT 1
-            FROM pg_catalog.unnest(OLD.manifest) AS entry(file_name, s3_path, file_hash)
-            WHERE NOT EXISTS (
+      is_r2_direct_finalize := (
+        NEW.storage_provider = 'r2'
+        AND NEW.name IS NOT DISTINCT FROM OLD.name
+        AND NEW.app_id IS NOT DISTINCT FROM OLD.app_id
+        AND NEW.session_key IS NOT DISTINCT FROM OLD.session_key
+        AND NEW.key_id IS NOT DISTINCT FROM OLD.key_id
+        AND NEW.checksum IS NOT DISTINCT FROM OLD.checksum
+        AND NEW.external_url IS NOT DISTINCT FROM OLD.external_url
+        AND NEW.native_packages IS NOT DISTINCT FROM OLD.native_packages
+      );
+
+      IF bundle_identity_locked
+        AND (
+          NEW.name IS DISTINCT FROM OLD.name
+          OR NEW.app_id IS DISTINCT FROM OLD.app_id
+          OR NEW.session_key IS DISTINCT FROM OLD.session_key
+          OR NEW.key_id IS DISTINCT FROM OLD.key_id
+          OR NEW.checksum IS DISTINCT FROM OLD.checksum
+          OR NEW.external_url IS DISTINCT FROM OLD.external_url
+          OR NEW.native_packages IS DISTINCT FROM OLD.native_packages
+          OR (NEW.manifest IS DISTINCT FROM OLD.manifest AND NEW.manifest IS NOT NULL)
+          OR (
+            NEW.manifest IS NULL
+            AND OLD.manifest IS NOT NULL
+            AND EXISTS (
               SELECT 1
-              FROM public.manifest AS m
-              WHERE m.app_version_id = OLD.id
-                AND m.s3_path = entry.s3_path
-                AND m.file_hash = entry.file_hash
+              FROM pg_catalog.unnest(OLD.manifest) AS entry(file_name, s3_path, file_hash)
+              WHERE NOT EXISTS (
+                SELECT 1
+                FROM public.manifest AS m
+                WHERE m.app_version_id = OLD.id
+                  AND m.s3_path = entry.s3_path
+                  AND m.file_hash = entry.file_hash
+              )
             )
           )
-        )
-        OR (
-          NEW.storage_provider IS DISTINCT FROM OLD.storage_provider
-          AND NOT (
-            OLD.storage_provider = 'r2-direct'
-            AND NEW.storage_provider = 'r2'
+          OR (
+            NEW.storage_provider IS DISTINCT FROM OLD.storage_provider
+            AND NOT is_r2_direct_finalize
           )
         )
-        OR (
-          NEW.r2_path IS DISTINCT FROM OLD.r2_path
-          AND NOT (
-            OLD.storage_provider = 'r2-direct'
-            AND NEW.storage_provider = 'r2'
-          )
-        )
-      )
       THEN
         PERFORM public.pg_log('deny: BUNDLE_CONTENT_LOCKED_TRIGGER',
           pg_catalog.jsonb_build_object(
@@ -173,7 +156,7 @@ BEGIN
             'user_id', OLD.user_id,
             'old_storage_provider', OLD.storage_provider,
             'new_storage_provider', NEW.storage_provider,
-            'reason', 'ota_selectable_r2_direct'
+            'reason', 'r2_direct_identity_locked'
           ));
         RAISE EXCEPTION '%',
           'bundle_already_ready: Bundle content cannot be changed '

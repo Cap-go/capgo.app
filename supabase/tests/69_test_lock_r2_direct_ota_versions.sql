@@ -1,16 +1,17 @@
--- GHSA-5rg9-rhwj-wj76: channel-linked r2-direct versions must lock
--- checksum/session_key. Unlinked in-progress r2-direct can still finalize.
+-- GHSA-5rg9-rhwj-wj76: upload-complete bundles lock all content fields.
+-- r2-direct staging with checksum locks identity fields; finalize and r2_path
+-- writes remain allowed until storage_provider flips to r2.
 BEGIN;
 
-SELECT plan(8);
+SELECT plan(11);
 
 SELECT tests.authenticate_as_service_role();
-SELECT tests.create_supabase_user('r2_direct_ota_lock_owner', 'r2_direct_ota_lock_owner@test.local');
+SELECT tests.create_supabase_user('r2_direct_upload_lock_owner', 'r2_direct_upload_lock_owner@test.local');
 
 INSERT INTO public.users (id, email, created_at, updated_at)
 VALUES (
-  tests.get_supabase_uid('r2_direct_ota_lock_owner'),
-  'r2_direct_ota_lock_owner@test.local',
+  tests.get_supabase_uid('r2_direct_upload_lock_owner'),
+  'r2_direct_upload_lock_owner@test.local',
   NOW(),
   NOW()
 )
@@ -18,20 +19,20 @@ ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO public.orgs (id, created_by, name, management_email)
 VALUES (
-  '70000000-0000-4000-8000-000000000070',
-  tests.get_supabase_uid('r2_direct_ota_lock_owner'),
-  'r2-direct OTA lock org',
-  'r2-direct-ota-lock@test.local'
+  '70000000-0000-4000-8000-000000000071',
+  tests.get_supabase_uid('r2_direct_upload_lock_owner'),
+  'r2-direct upload lock org',
+  'r2-direct-upload-lock@test.local'
 )
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO public.apps (app_id, icon_url, user_id, name, owner_org)
 VALUES (
-  'com.test.r2direct.ota.lock',
+  'com.test.r2direct.upload.lock',
   '',
-  tests.get_supabase_uid('r2_direct_ota_lock_owner'),
-  'r2-direct OTA lock app',
-  '70000000-0000-4000-8000-000000000070'
+  tests.get_supabase_uid('r2_direct_upload_lock_owner'),
+  'r2-direct upload lock app',
+  '70000000-0000-4000-8000-000000000071'
 )
 ON CONFLICT (app_id) DO NOTHING;
 
@@ -48,36 +49,36 @@ INSERT INTO public.app_versions (
 )
 VALUES
   (
-    'com.test.r2direct.ota.lock',
-    '1.0.0-linked',
-    '70000000-0000-4000-8000-000000000070',
-    tests.get_supabase_uid('r2_direct_ota_lock_owner'),
+    'com.test.r2direct.upload.lock',
+    '1.0.0-staged',
+    '70000000-0000-4000-8000-000000000071',
+    tests.get_supabase_uid('r2_direct_upload_lock_owner'),
     'r2-direct',
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    'session-key-linked',
-    'initial linked comment',
+    'session-key-staged',
+    'staged comment',
     false
   ),
   (
-    'com.test.r2direct.ota.lock',
-    '1.0.0-rollout',
-    '70000000-0000-4000-8000-000000000070',
-    tests.get_supabase_uid('r2_direct_ota_lock_owner'),
+    'com.test.r2direct.upload.lock',
+    '1.0.0-in-progress',
+    '70000000-0000-4000-8000-000000000071',
+    tests.get_supabase_uid('r2_direct_upload_lock_owner'),
     'r2-direct',
+    NULL,
+    NULL,
+    'in-progress comment',
+    false
+  ),
+  (
+    'com.test.r2direct.upload.lock',
+    '1.0.0-finalized',
+    '70000000-0000-4000-8000-000000000071',
+    tests.get_supabase_uid('r2_direct_upload_lock_owner'),
+    'r2',
     'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-    'session-key-rollout',
-    'initial rollout comment',
-    false
-  ),
-  (
-    'com.test.r2direct.ota.lock',
-    '1.0.0-unlinked',
-    '70000000-0000-4000-8000-000000000070',
-    tests.get_supabase_uid('r2_direct_ota_lock_owner'),
-    'r2-direct',
-    'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
-    'session-key-unlinked',
-    'initial unlinked comment',
+    'session-key-finalized',
+    'finalized comment',
     false
   )
 ON CONFLICT (name, app_id) DO UPDATE
@@ -85,131 +86,97 @@ SET
   storage_provider = EXCLUDED.storage_provider,
   checksum = EXCLUDED.checksum,
   session_key = EXCLUDED.session_key,
+  r2_path = EXCLUDED.r2_path,
   comment = EXCLUDED.comment,
   deleted = false;
 
-INSERT INTO public.channels (
-  id,
-  name,
-  app_id,
-  version,
-  rollout_version,
-  public,
-  disable_auto_update_under_native,
-  disable_auto_update,
-  ios,
-  android,
-  electron,
-  allow_device_self_set,
-  allow_emulator,
-  allow_device,
-  allow_dev,
-  allow_prod,
-  owner_org,
-  created_by
-)
-SELECT
-  7000701,
-  'ota-lock',
-  'com.test.r2direct.ota.lock',
-  linked.id,
-  rollout.id,
-  false,
-  true,
-  'major'::public.disable_update,
-  true,
-  true,
-  false,
-  false,
-  false,
-  false,
-  false,
-  true,
-  '70000000-0000-4000-8000-000000000070'::uuid,
-  tests.get_supabase_uid('r2_direct_ota_lock_owner')
-FROM public.app_versions AS linked
-CROSS JOIN public.app_versions AS rollout
-WHERE linked.app_id = 'com.test.r2direct.ota.lock'
-  AND linked.name = '1.0.0-linked'
-  AND rollout.app_id = 'com.test.r2direct.ota.lock'
-  AND rollout.name = '1.0.0-rollout'
-ON CONFLICT (id) DO UPDATE
-SET
-  version = EXCLUDED.version,
-  rollout_version = EXCLUDED.rollout_version;
+UPDATE public.app_versions
+SET r2_path = 'orgs/70000000-0000-4000-8000-000000000071/apps/com.test.r2direct.upload.lock/1.0.0-finalized.zip'
+WHERE app_id = 'com.test.r2direct.upload.lock'
+  AND name = '1.0.0-finalized';
 
 SELECT throws_ok(
   $sql$
     UPDATE public.app_versions
     SET checksum = 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
-    WHERE app_id = 'com.test.r2direct.ota.lock'
-      AND name = '1.0.0-linked'
+    WHERE app_id = 'com.test.r2direct.upload.lock'
+      AND name = '1.0.0-staged'
   $sql$,
   'P0001',
   'bundle_already_ready: Bundle content cannot be changed after upload is complete. Upload a new bundle instead.',
-  'channel-linked r2-direct cannot UPDATE checksum'
+  'staged r2-direct cannot UPDATE checksum'
 );
 
 SELECT throws_ok(
   $sql$
     UPDATE public.app_versions
     SET session_key = 'session-key-mutated'
-    WHERE app_id = 'com.test.r2direct.ota.lock'
-      AND name = '1.0.0-linked'
+    WHERE app_id = 'com.test.r2direct.upload.lock'
+      AND name = '1.0.0-staged'
   $sql$,
   'P0001',
   'bundle_already_ready: Bundle content cannot be changed after upload is complete. Upload a new bundle instead.',
-  'channel-linked r2-direct cannot UPDATE session_key'
+  'staged r2-direct cannot UPDATE session_key'
 );
 
 SELECT throws_ok(
   $sql$
     UPDATE public.app_versions
-    SET checksum = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
-    WHERE app_id = 'com.test.r2direct.ota.lock'
-      AND name = '1.0.0-rollout'
+    SET key_id = 'mutated-key-id'
+    WHERE app_id = 'com.test.r2direct.upload.lock'
+      AND name = '1.0.0-staged'
   $sql$,
   'P0001',
   'bundle_already_ready: Bundle content cannot be changed after upload is complete. Upload a new bundle instead.',
-  'rollout-linked r2-direct cannot UPDATE checksum'
+  'staged r2-direct cannot UPDATE key_id'
 );
 
 SELECT throws_ok(
   $sql$
     UPDATE public.app_versions
     SET external_url = 'https://evil.example/bundle.zip'
-    WHERE app_id = 'com.test.r2direct.ota.lock'
-      AND name = '1.0.0-linked'
+    WHERE app_id = 'com.test.r2direct.upload.lock'
+      AND name = '1.0.0-staged'
   $sql$,
   'P0001',
   'bundle_already_ready: Bundle content cannot be changed after upload is complete. Upload a new bundle instead.',
-  'channel-linked r2-direct cannot UPDATE external_url'
+  'staged r2-direct cannot UPDATE external_url'
 );
 
 SELECT throws_ok(
   $sql$
     UPDATE public.app_versions
     SET storage_provider = 'external'
-    WHERE app_id = 'com.test.r2direct.ota.lock'
-      AND name = '1.0.0-linked'
+    WHERE app_id = 'com.test.r2direct.upload.lock'
+      AND name = '1.0.0-staged'
   $sql$,
   'P0001',
   'bundle_already_ready: Bundle content cannot be changed after upload is complete. Upload a new bundle instead.',
-  'channel-linked r2-direct cannot redirect storage_provider away from finalize'
+  'staged r2-direct cannot redirect storage_provider away from finalize'
 );
 
 SELECT throws_ok(
   $sql$
     UPDATE public.app_versions
-    SET manifest = ARRAY[
-      ROW('index.html', 'orgs/70000000-0000-4000-8000-000000000070/apps/com.test.r2direct.ota.lock/index.html', 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff')::public.manifest_entry
-    ]
-    WHERE app_id = 'com.test.r2direct.ota.lock'
-      AND name = '1.0.0-linked'
+    SET checksum = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+    WHERE app_id = 'com.test.r2direct.upload.lock'
+      AND name = '1.0.0-finalized'
   $sql$,
   'P0001',
   'bundle_already_ready: Bundle content cannot be changed after upload is complete. Upload a new bundle instead.',
-  'channel-linked r2-direct cannot UPDATE manifest'
+  'finalized r2 bundle cannot UPDATE checksum'
+);
+
+SELECT throws_ok(
+  $sql$
+    UPDATE public.app_versions
+    SET r2_path = 'orgs/70000000-0000-4000-8000-000000000071/apps/com.test.r2direct.upload.lock/rewritten.zip'
+    WHERE app_id = 'com.test.r2direct.upload.lock'
+      AND name = '1.0.0-finalized'
+  $sql$,
+  'P0001',
+  'bundle_already_ready: Bundle content cannot be changed after upload is complete. Upload a new bundle instead.',
+  'finalized r2 bundle cannot UPDATE r2_path'
 );
 
 SELECT lives_ok(
@@ -217,21 +184,43 @@ SELECT lives_ok(
     UPDATE public.app_versions
     SET
       storage_provider = 'r2',
-      r2_path = 'orgs/70000000-0000-4000-8000-000000000070/apps/com.test.r2direct.ota.lock/1.0.0-unlinked.zip'
-    WHERE app_id = 'com.test.r2direct.ota.lock'
-      AND name = '1.0.0-unlinked'
+      r2_path = 'orgs/70000000-0000-4000-8000-000000000071/apps/com.test.r2direct.upload.lock/1.0.0-staged.zip'
+    WHERE app_id = 'com.test.r2direct.upload.lock'
+      AND name = '1.0.0-staged'
   $sql$,
-  'unlinked in-progress r2-direct can finalize to r2'
+  'staged r2-direct can finalize to r2'
 );
 
 SELECT lives_ok(
   $sql$
     UPDATE public.app_versions
-    SET comment = 'updated linked comment'
-    WHERE app_id = 'com.test.r2direct.ota.lock'
-      AND name = '1.0.0-linked'
+    SET r2_path = 'orgs/70000000-0000-4000-8000-000000000071/apps/com.test.r2direct.upload.lock/1.0.0-in-progress.zip'
+    WHERE app_id = 'com.test.r2direct.upload.lock'
+      AND name = '1.0.0-in-progress'
   $sql$,
-  'channel-linked r2-direct can still update non-delivery metadata'
+  'in-progress r2-direct without checksum can UPDATE r2_path'
+);
+
+SELECT lives_ok(
+  $sql$
+    UPDATE public.app_versions
+    SET
+      checksum = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+      session_key = 'session-key-first-set'
+    WHERE app_id = 'com.test.r2direct.upload.lock'
+      AND name = '1.0.0-in-progress'
+  $sql$,
+  'in-progress r2-direct can set checksum and session_key once'
+);
+
+SELECT lives_ok(
+  $sql$
+    UPDATE public.app_versions
+    SET comment = 'updated staged comment'
+    WHERE app_id = 'com.test.r2direct.upload.lock'
+      AND name = '1.0.0-staged'
+  $sql$,
+  'staged r2-direct can still update non-content metadata'
 );
 
 SELECT * FROM finish();
