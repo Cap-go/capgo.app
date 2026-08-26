@@ -38,6 +38,7 @@ jobs:
               return
             }
 
+            // Maintainer approval after CodeRabbit CHANGES_REQUESTED supersedes stale bot reviews.
             for (const pr of prs) {
               const headSha = context.eventName === 'push'
                 ? context.sha
