@@ -38,7 +38,7 @@ jobs:
               return
             }
 
-            // Maintainer approval after CodeRabbit CHANGES_REQUESTED supersedes stale bot reviews.
+            // Only org members/owners can supersede a stale CodeRabbit review.
             for (const pr of prs) {
               const headSha = context.eventName === 'push'
                 ? context.sha
