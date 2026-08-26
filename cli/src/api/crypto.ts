@@ -3,6 +3,7 @@ import {
   constants,
   createCipheriv,
   createDecipheriv,
+  createPublicKey,
   generateKeyPairSync,
   privateEncrypt,
   publicDecrypt,
@@ -136,6 +137,10 @@ export function createRSA(): RSAKeys {
       format: 'pem',
     }) as string,
   }
+}
+
+export function derivePublicKeyFromPrivate(privateKeyPem: string): string {
+  return createPublicKey(privateKeyPem).export({ type: 'pkcs1', format: 'pem' }) as string
 }
 
 /**

@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.15"
+    PostgrestVersion: "14.17"
   }
   graphql_public: {
     Tables: {
@@ -122,6 +122,56 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "users"
             referencedColumns: ["id"]
+          },
+        ]
+      }
+      app_fame: {
+        Row: {
+          app_id: string
+          category: string | null
+          checked_at: string
+          confidence: number
+          created_at: string
+          fame_score: number
+          known_as: string | null
+          model: string
+          summary: string
+          tier: string
+          updated_at: string
+        }
+        Insert: {
+          app_id: string
+          category?: string | null
+          checked_at?: string
+          confidence: number
+          created_at?: string
+          fame_score: number
+          known_as?: string | null
+          model?: string
+          summary?: string
+          tier: string
+          updated_at?: string
+        }
+        Update: {
+          app_id?: string
+          category?: string | null
+          checked_at?: string
+          confidence?: number
+          created_at?: string
+          fame_score?: number
+          known_as?: string | null
+          model?: string
+          summary?: string
+          tier?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "app_fame_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: true
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
           },
         ]
       }
@@ -1613,6 +1663,7 @@ export type Database = {
           apps_with_cli_onboarding_builds_24h: number
           apps_with_manual_builds_24h: number
           apps_with_preview: number
+          apps_with_store_url: number
           average_ltv: number
           build_avg_seconds_day_android: number
           build_avg_seconds_day_ios: number
@@ -1725,6 +1776,7 @@ export type Database = {
           apps_with_cli_onboarding_builds_24h?: number
           apps_with_manual_builds_24h?: number
           apps_with_preview?: number
+          apps_with_store_url?: number
           average_ltv?: number
           build_avg_seconds_day_android?: number
           build_avg_seconds_day_ios?: number
@@ -1837,6 +1889,7 @@ export type Database = {
           apps_with_cli_onboarding_builds_24h?: number
           apps_with_manual_builds_24h?: number
           apps_with_preview?: number
+          apps_with_store_url?: number
           average_ltv?: number
           build_avg_seconds_day_android?: number
           build_avg_seconds_day_ios?: number

@@ -11,9 +11,21 @@ import { useRouter } from 'vue-router'
 import AdminBarChart from '~/components/admin/AdminBarChart.vue'
 import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
 import AdminMultiLineChart from '~/components/admin/AdminMultiLineChart.vue'
+import AdminStackedBarChart from '~/components/admin/AdminStackedBarChart.vue'
 import AdminStatsCard from '~/components/admin/AdminStatsCard.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import PageLoader from '~/components/PageLoader.vue'
+import {
+  bucketPluginVersionBreakdown,
+  buildPluginCompatibilityTrendSeries,
+  CHANNEL_SELF_STORE_CUTOFF_CAPTION,
+  ENCRYPTION_KEY_ID_CUTOFF_CAPTION,
+  estimateKnownPluginVersionDevicesFromLadder,
+  getLatestNonEmptyPluginTrendPoint,
+  hasPluginVersionBreakdown,
+  isLegacyChannelSelfStorePluginVersion,
+  isLegacyEncryptionKeyIdPluginVersion,
+} from '~/services/adminPluginCompatibility'
 import { formatLocalDate } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
@@ -24,6 +36,7 @@ interface PluginBreakdownTrendPoint {
   date: string
   version_breakdown: Record<string, number>
   major_breakdown: Record<string, number>
+  devices_last_month?: number
 }
 
 interface PluginVersionTopApp {
@@ -195,6 +208,58 @@ const majorTrendSeries = computed(() => {
 })
 const hasMajorTrendData = computed(() => majorTrendSeries.value.length > 0)
 
+const channelSelfStoreTrendSeries = computed(() => buildPluginCompatibilityTrendSeries(
+  versionTrendPoints.value,
+  isLegacyChannelSelfStorePluginVersion,
+  { legacy: 'Legacy', current: 'Current' },
+))
+const hasChannelSelfStoreTrendData = computed(() => channelSelfStoreTrendSeries.value.length > 0)
+const latestCompatibilityTrendPoint = computed(() => getLatestNonEmptyPluginTrendPoint(versionTrendPoints.value))
+const knownPluginVersionDeviceCount = computed(() => {
+  if (!hasPluginVersionBreakdown(pluginBreakdown.value?.version_breakdown))
+    return null
+
+  return estimateKnownPluginVersionDevicesFromLadder(pluginBreakdown.value?.version_ladder)
+})
+const channelSelfStoreLatestBucket = computed(() => {
+  const point = latestCompatibilityTrendPoint.value
+  if (!point) {
+    return bucketPluginVersionBreakdown({}, isLegacyChannelSelfStorePluginVersion)
+  }
+
+  return bucketPluginVersionBreakdown(
+    point.version_breakdown,
+    isLegacyChannelSelfStorePluginVersion,
+    knownPluginVersionDeviceCount.value,
+  )
+})
+
+const encryptionTrendSeries = computed(() => buildPluginCompatibilityTrendSeries(
+  versionTrendPoints.value,
+  isLegacyEncryptionKeyIdPluginVersion,
+  { legacy: 'Legacy', current: 'Current' },
+))
+const hasEncryptionTrendData = computed(() => encryptionTrendSeries.value.length > 0)
+const encryptionLatestBucket = computed(() => {
+  const point = latestCompatibilityTrendPoint.value
+  if (!point) {
+    return bucketPluginVersionBreakdown({}, isLegacyEncryptionKeyIdPluginVersion)
+  }
+
+  return bucketPluginVersionBreakdown(
+    point.version_breakdown,
+    isLegacyEncryptionKeyIdPluginVersion,
+    knownPluginVersionDeviceCount.value,
+  )
+})
+
+function formatDeviceEstimateSubtitle(value: number | null) {
+  if (value == null)
+    return 'Device estimate unavailable'
+
+  return `~${formatNumberValue(value, { maximumFractionDigits: 0 })} devices`
+}
+
 watch(() => adminStore.activeDateRange, () => {
   loadPluginBreakdown()
 }, { deep: true })
@@ -308,6 +373,88 @@ displayStore.defaultBack = '/dashboard'
               :suggested-max="100"
             />
           </ChartCard>
+
+          <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
+            <ChartCard
+              chart-id="channel-self-store-compatibility"
+              title="Channel self-store (legacy vs current)"
+              :is-loading="isLoadingBreakdown"
+              :has-data="hasChannelSelfStoreTrendData"
+              no-data-message="No channel self-store compatibility trend data available"
+            >
+              <template #header>
+                <div class="flex flex-col gap-1">
+                  <h2 class="text-2xl font-semibold leading-tight dark:text-white text-slate-600">
+                    Channel self-store (legacy vs current)
+                  </h2>
+                  <p class="text-xs text-slate-500 dark:text-slate-400">
+                    {{ CHANNEL_SELF_STORE_CUTOFF_CAPTION }}
+                  </p>
+                </div>
+              </template>
+              <AdminStackedBarChart
+                :series="channelSelfStoreTrendSeries"
+                :is-loading="isLoadingBreakdown"
+                accessible-borders
+              />
+              <div class="grid grid-cols-1 gap-4 mt-6 md:grid-cols-2">
+                <AdminStatsCard
+                  title="Legacy share (latest)"
+                  :value="formatPercent(channelSelfStoreLatestBucket.legacyPercent)"
+                  color-class="text-orange-500"
+                  :is-loading="isLoadingBreakdown"
+                  :subtitle="formatDeviceEstimateSubtitle(channelSelfStoreLatestBucket.legacyDevices)"
+                />
+                <AdminStatsCard
+                  title="Current share (latest)"
+                  :value="formatPercent(channelSelfStoreLatestBucket.currentPercent)"
+                  color-class="text-emerald-500"
+                  :is-loading="isLoadingBreakdown"
+                  :subtitle="formatDeviceEstimateSubtitle(channelSelfStoreLatestBucket.currentDevices)"
+                />
+              </div>
+            </ChartCard>
+
+            <ChartCard
+              chart-id="encryption-key-id-compatibility"
+              title="Encryption (legacy vs current)"
+              :is-loading="isLoadingBreakdown"
+              :has-data="hasEncryptionTrendData"
+              no-data-message="No encryption compatibility trend data available"
+            >
+              <template #header>
+                <div class="flex flex-col gap-1">
+                  <h2 class="text-2xl font-semibold leading-tight dark:text-white text-slate-600">
+                    Encryption (legacy vs current)
+                  </h2>
+                  <p class="text-xs text-slate-500 dark:text-slate-400">
+                    {{ ENCRYPTION_KEY_ID_CUTOFF_CAPTION }}
+                  </p>
+                </div>
+              </template>
+              <AdminStackedBarChart
+                :series="encryptionTrendSeries"
+                :is-loading="isLoadingBreakdown"
+                accessible-borders
+              />
+              <div class="grid grid-cols-1 gap-4 mt-6 md:grid-cols-2">
+                <AdminStatsCard
+                  title="Legacy share (latest)"
+                  :value="formatPercent(encryptionLatestBucket.legacyPercent)"
+                  color-class="text-orange-500"
+                  :is-loading="isLoadingBreakdown"
+                  :subtitle="formatDeviceEstimateSubtitle(encryptionLatestBucket.legacyDevices)"
+                />
+                <AdminStatsCard
+                  title="Current share (latest)"
+                  :value="formatPercent(encryptionLatestBucket.currentPercent)"
+                  color-class="text-emerald-500"
+                  :is-loading="isLoadingBreakdown"
+                  :subtitle="formatDeviceEstimateSubtitle(encryptionLatestBucket.currentDevices)"
+                />
+              </div>
+            </ChartCard>
+          </div>
 
           <ChartCard
             chart-id="version-ladder"

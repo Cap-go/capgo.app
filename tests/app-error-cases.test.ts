@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { BASE_URL, createDirectApiKeyWithBindings, fetchTestRequest, getAuthHeaders, getSupabaseClient, NON_ACCESS_APP_NAME, resetAndSeedAppData, resetAppData, USER_ID } from './test-utils.ts'
+import { BASE_URL, createDirectApiKeyWithBindings, fetchTestRequest, getAuthHeaders, getSupabaseClient, NON_ACCESS_APP_NAME, resetAndSeedAppData, resetAppData, USER_EMAIL, USER_ID } from './test-utils.ts'
 
 const id = randomUUID().replace(/-/g, '').slice(0, 12)
 const APPNAME = `com.app.error.${id}`
 const DELETE_APP_ID = `${APPNAME}.delete`
 const NOT_FOUND_APP_ID = `${APPNAME}.notfound`
 const PUT_APP_ID = `${APPNAME}.put`
+const CREATOR_APP_ID = `${APPNAME}.creator`
 const testOrgId = randomUUID()
 const testStripeCustomerId = `cus_app_error_${id}`
 let testApiKeyId: number | null = null
@@ -46,6 +47,7 @@ afterAll(async () => {
   // Clean up any test apps created during tests
   await getSupabaseClient().from('apps').delete().eq('app_id', DELETE_APP_ID)
   await getSupabaseClient().from('apps').delete().eq('app_id', PUT_APP_ID)
+  await getSupabaseClient().from('apps').delete().eq('app_id', CREATOR_APP_ID)
   await getSupabaseClient().from('apps').delete().eq('app_id', NOT_FOUND_APP_ID)
   if (testApiKeyId !== null) {
     await fetchTestRequest(`${BASE_URL}/apikey/${testApiKeyId}`, {
@@ -59,6 +61,23 @@ afterAll(async () => {
 }, 60000)
 
 describe('[POST] /app - Error Cases', () => {
+  it('records the authenticated app creator', async () => {
+    const response = await fetchTestRequest(`${BASE_URL}/app`, {
+      method: 'POST',
+      headers: testHeaders,
+      body: JSON.stringify({
+        owner_org: testOrgId,
+        app_id: CREATOR_APP_ID,
+        name: 'Creator Test App',
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    const data = await response.json() as { onboarding: { created_by_email?: string, created_by_user_id?: string } }
+    expect(data.onboarding.created_by_email).toBe(USER_EMAIL)
+    expect(data.onboarding.created_by_user_id).toBe(USER_ID)
+  })
+
   it('should return 400 when name is missing', async () => {
     const response = await fetchTestRequest(`${BASE_URL}/app`, {
       method: 'POST',

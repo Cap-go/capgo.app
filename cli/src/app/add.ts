@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { intro, log, outro } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { getInvocationSource } from '../analytics/track'
-import { defaultAppIconPath, getAppIconStoragePath, newIconPath } from '../api/app'
+import { getAppIconStoragePath, newIconPath } from '../api/app'
 import { checkAlerts } from '../api/update'
 import { isAiAgentEnvironment } from '../init/onboarding-source'
 import { CliUserError } from '../shared/cli-user-error'
@@ -84,7 +84,7 @@ async function createAppViaApi(
     ownerOrg: string
     appId: string
     name: string
-    iconUrl: string
+    iconUrl?: string
     createdFromOnboarding: boolean
     onboardingSource?: 'cli' | 'mcp' | 'ai'
     supaHost?: string
@@ -112,7 +112,7 @@ async function createAppViaApi(
       owner_org: params.ownerOrg,
       app_id: params.appId,
       name: params.name,
-      icon: params.iconUrl,
+      ...(params.iconUrl ? { icon: params.iconUrl } : {}),
       need_onboarding: false,
       created_from_onboarding: params.createdFromOnboarding,
       onboarding: params.onboardingSource
@@ -202,7 +202,7 @@ export async function addAppInternal(
   }
 
   const iconPath = getAppIconStoragePath(organizationUid, appId)
-  let iconUrl = defaultAppIconPath
+  let iconUrl: string | undefined
 
   // Icon upload is best-effort. Storage RLS issues must not block app creation;
   // the web onboarding path already continues without an icon on upload failure.
@@ -218,7 +218,7 @@ export async function addAppInternal(
 
     if (error && !isStorageObjectConflict(error)) {
       if (!silent)
-        log.warn(`Could not upload app icon (${formatError(error)}). Continuing with the default icon.`)
+        log.warn(`Could not upload app icon (${formatError(error)}). Continuing without an icon.`)
     }
     else {
       // A conflict can be an orphaned icon from an earlier attempt whose POST failed.

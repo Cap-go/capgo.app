@@ -69,6 +69,7 @@ const optionDescriptions = {
   nodeModules: `Paths to node_modules directories for monorepos (comma-separated)`,
   capacitorConfig: `Capacitor config source to update (useful with dynamic monorepo configs)`,
   verbose: `Enable verbose output with detailed logging`,
+  ignoreNotifyAppReady: `Skip notifyAppReady() check (not recommended — updates may roll back)`,
 }
 
 /** Collector for repeatable CLI options (e.g. --ios-provisioning-profile used multiple times) */
@@ -252,6 +253,7 @@ Example: npx @capgo/cli@latest bundle upload com.example.app --path ./dist --cha
   .option('--bundle-url', `Prints bundle URL into stdout`)
   .option('--no-key', `Ignore signing key and send clear update`)
   .option('--no-code-check', `Ignore checking if notifyAppReady() is called in source code and index present in root folder`)
+  .option('--ignore-notify-app-ready', optionDescriptions.ignoreNotifyAppReady)
   .option('--display-iv-session', `Show in the console the IV and session key used to encrypt the update`)
   .option('-b, --bundle <bundle>', `Bundle version number of the bundle to upload`)
   .option('--link <link>', `Link to external resource (e.g. GitHub release)`)
@@ -388,12 +390,12 @@ Example: npx @capgo/cli@latest bundle encrypt ./myapp.zip CHECKSUM`)
   .option('--package-json <packageJson>', optionDescriptions.packageJson)
 
 bundle
-  .command('decrypt [zipPath] [checksum]')
+  .command('decrypt [zipPath] [ivSessionKey]')
   .description(`🔓 Decrypt an encrypted bundle (mainly for testing).
 
 Prints base64 session key for verification.
 
-Example: npx @capgo/cli@latest bundle decrypt ./myapp_encrypted.zip CHECKSUM`)
+Example: npx @capgo/cli@latest bundle decrypt ./myapp_encrypted.zip IV_BASE64:SESSION_KEY_BASE64`)
   .action(decryptZip)
   .option('--key <key>', `Custom path for private signing key`)
   .option('--key-data <keyData>', `Private signing key`)
@@ -413,6 +415,7 @@ Example: npx @capgo/cli@latest bundle zip com.example.app --path ./dist`)
   .option('-n, --name <name>', `Name of the zip file`)
   .option('-j, --json', `Output in JSON`)
   .option('--no-code-check', `Ignore checking if notifyAppReady() is called in source code and index present in root folder`)
+  .option('--ignore-notify-app-ready', optionDescriptions.ignoreNotifyAppReady)
   .option('--key-v2', `Use encryption v2`)
   .option('--package-json <packageJson>', optionDescriptions.packageJson)
 

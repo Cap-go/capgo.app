@@ -21,6 +21,7 @@ import { sql } from 'drizzle-orm'
 import { HTTPException } from 'hono/http-exception'
 import { quickError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
+import { isTransientPgError } from './pg_errors.ts'
 import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
 
 // =============================================================================
@@ -89,81 +90,6 @@ export interface PermissionScope {
   channelId?: number
 }
 
-const TRANSIENT_NODE_ERROR_CODES = new Set([
-  'ECONNREFUSED',
-  'ECONNRESET',
-  'ECONNABORTED',
-  'ETIMEDOUT',
-  'ENETUNREACH',
-  'EHOSTUNREACH',
-  'EPIPE',
-  'EAI_AGAIN',
-  'ENOTFOUND',
-])
-
-// Postgres SQLSTATE classes/codes that mean the connection itself failed.
-const TRANSIENT_PG_SQLSTATES = new Set([
-  '08000', // connection_exception
-  '08001', // sqlclient_unable_to_establish_sqlconnection
-  '08003', // connection_does_not_exist
-  '08004', // sqlserver_rejected_establishment_of_sqlconnection
-  '08006', // connection_failure
-  '08007', // transaction_resolution_unknown
-  '08P01', // protocol_violation
-  '57P01', // admin_shutdown
-  '57P02', // crash_shutdown
-  '57P03', // cannot_connect_now
-  '53300', // too_many_connections
-  '53400', // configuration_limit_exceeded
-  '57014', // query_canceled (statement_timeout / lock_timeout)
-])
-
-const TRANSIENT_ERROR_MESSAGE_RE = /connection (?:terminated|ended|closed|refused|reset)|timeout exceeded when trying to connect|connect(?:ion)? timed? ?out|canceling statement due to (?:statement|lock) timeout|network(?: |_)?error|socket hang up|hyperdrive|too many clients already/i
-
-function readErrorField(error: unknown, key: string): unknown {
-  if (!error || typeof error !== 'object')
-    return undefined
-  return (error as Record<string, unknown>)[key]
-}
-
-/**
- * Walk Drizzle/node-postgres cause chains for connection/timeout signals.
- * Invalid query params (e.g. bad UUID cast 22P02) are NOT transient — those
- * must keep looking like ACL deny so authz endpoints stay stable.
- */
-function isTransientPermissionCheckError(error: unknown, depth = 0): boolean {
-  if (!error || depth > 6)
-    return false
-
-  if (typeof error === 'string')
-    return TRANSIENT_ERROR_MESSAGE_RE.test(error)
-
-  const code = readErrorField(error, 'code')
-  if (typeof code === 'string') {
-    if (TRANSIENT_NODE_ERROR_CODES.has(code) || TRANSIENT_PG_SQLSTATES.has(code))
-      return true
-  }
-
-  const message = readErrorField(error, 'message')
-  if (typeof message === 'string' && TRANSIENT_ERROR_MESSAGE_RE.test(message))
-    return true
-
-  const errno = readErrorField(error, 'errno')
-  if (typeof errno === 'string' && TRANSIENT_NODE_ERROR_CODES.has(errno))
-    return true
-
-  const cause = readErrorField(error, 'cause')
-  if (cause !== undefined && isTransientPermissionCheckError(cause, depth + 1))
-    return true
-
-  const errors = readErrorField(error, 'errors')
-  if (Array.isArray(errors)) {
-    return errors.some(entry => isTransientPermissionCheckError(entry, depth + 1))
-  }
-
-  return false
-}
-
 /**
  * Permission helpers must never map infrastructure failures to "denied".
  * Callers treat `false` as ACL deny (401/403). Transient Hyperdrive/Postgres
@@ -180,7 +106,7 @@ function handlePermissionCheckError(
   if (error instanceof HTTPException)
     throw error
 
-  const transient = isTransientPermissionCheckError(error)
+  const transient = isTransientPgError(error)
 
   cloudlogErr({
     requestId: c.get('requestId'),
@@ -485,6 +411,100 @@ export async function checkPermissionPg(
 // =============================================================================
 // Utility Functions
 // =============================================================================
+
+/**
+ * Match invite_user_to_org_rbac: caller max org priority_rank must be
+ * >= the assignable target role's priority_rank.
+ */
+export async function canCallerAssignOrgRole(
+  c: Context<MiddlewareKeyVariables>,
+  orgId: string,
+  roleName?: string | null,
+): Promise<boolean> {
+  const auth = c.get('auth')
+  if (!auth?.userId)
+    return false
+
+  const targetRoleName = roleName?.trim()
+  if (!targetRoleName)
+    return false
+
+  const apikeyString = auth.apikey?.key ?? c.get('capgkey') ?? null
+
+  let principalType = 'user'
+  let principalId = auth.userId
+  if (auth.authType === 'apikey' && auth.apikey?.rbac_id) {
+    principalType = 'apikey'
+    principalId = auth.apikey.rbac_id
+  }
+  else if (auth.apikey?.rbac_id && apikeyString) {
+    principalType = 'apikey'
+    principalId = auth.apikey.rbac_id
+  }
+  if (!principalId)
+    return false
+
+  let pgClient
+  try {
+    pgClient = await getPgClient(c)
+    const result = await pgClient.query<{ allowed: boolean }>(`
+      WITH target_role AS (
+        SELECT r.priority_rank
+        FROM public.roles r
+        WHERE r.name = $4
+          AND r.scope_type = public.rbac_scope_org()
+          AND r.is_assignable = true
+        LIMIT 1
+      ),
+      active_caller_bindings AS (
+        SELECT rb.role_id
+        FROM public.role_bindings rb
+        WHERE rb.principal_type = $1
+          AND rb.principal_id = $2::uuid
+          AND rb.org_id = $3::uuid
+          AND rb.scope_type = public.rbac_scope_org()
+          AND (rb.expires_at IS NULL OR rb.expires_at > now())
+
+        UNION ALL
+
+        SELECT rb.role_id
+        FROM public.group_members gm
+        INNER JOIN public.groups g
+          ON g.id = gm.group_id
+          AND g.org_id = $3::uuid
+        INNER JOIN public.role_bindings rb
+          ON rb.principal_type = public.rbac_principal_group()
+          AND rb.principal_id = gm.group_id
+          AND rb.org_id = g.org_id
+          AND rb.scope_type = public.rbac_scope_org()
+        WHERE $1 = public.rbac_principal_user()
+          AND gm.user_id = $2::uuid
+          AND (rb.expires_at IS NULL OR rb.expires_at > now())
+      ),
+      caller_priority AS (
+        SELECT COALESCE(MAX(r.priority_rank), 0) AS max_priority
+        FROM active_caller_bindings acb
+        INNER JOIN public.roles r
+          ON r.id = acb.role_id
+          AND r.scope_type = public.rbac_scope_org()
+      )
+      SELECT
+        (SELECT max_priority FROM caller_priority) >= COALESCE(
+          (SELECT priority_rank FROM target_role),
+          2147483647
+        ) AS allowed
+    `, [principalType, principalId, orgId, targetRoleName])
+
+    return result.rows[0]?.allowed === true
+  }
+  catch (e) {
+    return handlePermissionCheckError(c, 'org.update_user_roles', { orgId }, e, 'checkPermission')
+  }
+  finally {
+    if (pgClient)
+      closeClient(c, pgClient)
+  }
+}
 
 /**
  * Infer the scope type from a permission key.

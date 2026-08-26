@@ -46,6 +46,9 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'app-getting-started', path: '/app/com.demo.app/getting-started', auth: true },
   { slug: 'app-settings', path: '/app/com.demo.app/settings', auth: true },
   { slug: 'app-settings-access', path: '/app/com.demo.app/settings/access', auth: true },
+  { slug: 'org-settings', path: '/settings/organization', auth: true },
+  { slug: 'org-settings-team', path: '/settings/organization/members', auth: true },
+  { slug: 'org-settings-billing', path: '/settings/organization/plans', auth: true },
   { slug: 'channels', path: '/app/com.demo.app/channels', auth: true },
   {
     slug: 'devices',

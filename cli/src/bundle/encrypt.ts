@@ -6,7 +6,10 @@ import { parse } from '@std/semver'
 import { trackEvent } from '../analytics/track'
 import { encryptChecksum, encryptChecksumV3, encryptSource, generateSessionKey } from '../api/crypto'
 import { checkAlerts } from '../api/update'
-import { baseKeyV2, findRoot, formatError, getConfig, getInstalledVersion, isDeprecatedPluginVersion } from '../utils'
+import { ensurePublicKeyFromPrivateKey, ensurePublicKeyInConfig } from '../recovery/public-key'
+import { CliUserError } from '../shared/cli-user-error'
+import { baseKeyV2, canPromptInteractively, findRoot, formatError, getConfigForWrite, getInstalledVersion, isDeprecatedPluginVersion } from '../utils'
+import { requireChecksum, requireExistingZipPath, requireZipPath } from './validate-inputs'
 
 export type { EncryptResult } from '../schemas/bundle'
 
@@ -17,6 +20,14 @@ const HEX_CHECKSUM_MIN_VERSION_V7 = '7.30.0'
 
 function emitJsonError(error: unknown) {
   console.error(formatError(error))
+}
+
+function emitCliUserJsonError(error: CliUserError) {
+  if (/^Zip not found at /i.test(error.message)) {
+    emitJsonError({ error: 'zip_not_found', message: error.message })
+    return
+  }
+  emitJsonError({ error: error.message })
 }
 
 export async function encryptZipInternal(
@@ -34,26 +45,40 @@ export async function encryptZipInternal(
   }
 
   try {
-    const extConfig = await getConfig()
+    requireZipPath(zipPath)
+    checksum = requireChecksum(checksum)
+    requireExistingZipPath(zipPath)
+
+    const interactive = canPromptInteractively({ silent: json || silent })
+    const userSuppliedPrivateKey = options.keyData !== undefined || options.key !== undefined
+    const keyPath = options.key || baseKeyV2
+    let privateKey = options.keyData || ''
+    if (!privateKey && existsSync(keyPath))
+      privateKey = readFileSync(keyPath, 'utf8')
+
+    let extConfig = await getConfigForWrite()
+    const hasPublicKeyInConfig = !!extConfig.config.plugins?.CapacitorUpdater?.publicKey
+
+    if (!hasPublicKeyInConfig) {
+      if (privateKey) {
+        await ensurePublicKeyFromPrivateKey(privateKey, { silent: silent || json, json })
+      }
+      else if (!userSuppliedPrivateKey) {
+        await ensurePublicKeyInConfig({ interactive, silent: silent || json, json })
+      }
+      extConfig = await getConfigForWrite()
+    }
+
+    if (!privateKey && existsSync(keyPath))
+      privateKey = readFileSync(keyPath, 'utf8')
 
     const hasPrivateKeyInConfig = !!extConfig.config.plugins?.CapacitorUpdater?.privateKey
-    const hasPublicKeyInConfig = !!extConfig.config.plugins?.CapacitorUpdater?.publicKey
+    const refreshedHasPublicKey = !!extConfig.config.plugins?.CapacitorUpdater?.publicKey
 
     if (hasPrivateKeyInConfig && shouldShowPrompts)
       log.warning('There is still a privateKey in the config')
 
-    if (!existsSync(zipPath)) {
-      const message = `Zip not found at the path ${zipPath}`
-      if (!silent) {
-        if (json)
-          emitJsonError({ error: 'zip_not_found' })
-        else
-          log.error(`Error: ${message}`)
-      }
-      throw new Error(message)
-    }
-
-    if (!hasPublicKeyInConfig) {
+    if (!refreshedHasPublicKey && !(userSuppliedPrivateKey && !privateKey)) {
       if (!silent) {
         if (json)
           emitJsonError({ error: 'missing_public_key' })
@@ -63,10 +88,7 @@ export async function encryptZipInternal(
       throw new Error('Missing public key in config')
     }
 
-    const keyPath = options.key || baseKeyV2
-    let privateKey = options.keyData || ''
-
-    if (!existsSync(keyPath) && !privateKey) {
+    if (!privateKey) {
       if (!silent) {
         if (json) {
           emitJsonError({ error: 'missing_key' })
@@ -77,9 +99,6 @@ export async function encryptZipInternal(
         }
       }
       throw new Error('Missing private key')
-    }
-    else if (existsSync(keyPath)) {
-      privateKey = readFileSync(keyPath, 'utf8')
     }
 
     if (privateKey && !privateKey.startsWith('-----BEGIN RSA PRIVATE KEY-----')) {
@@ -151,6 +170,16 @@ export async function encryptZipInternal(
     }
   }
   catch (error) {
+    if (error instanceof CliUserError) {
+      if (!silent) {
+        if (options.json)
+          emitCliUserJsonError(error)
+        else
+          log.error(`Error: ${error.message}`)
+      }
+      throw error
+    }
+
     if (!silent) {
       if (options.json)
         emitJsonError(error)
