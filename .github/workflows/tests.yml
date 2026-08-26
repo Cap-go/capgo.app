@@ -2,7 +2,8 @@ name: Run tests
 
 concurrency:
   # Include event_name so push and pull_request on the same branch do not cancel each other.
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'workflow_call' && github.sha || github.head_ref || github.ref_name || github.ref }}
+  # Include PR head SHA so re-triggers on the same commit do not cancel an in-flight run.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'workflow_call' && github.sha || (github.event_name == 'pull_request' && format('{0}-{1}', github.head_ref || github.ref_name, github.event.pull_request.head.sha) || github.head_ref || github.ref_name || github.ref) }}
   # Keep in-progress pull_request suites running; duplicate synchronize events were
   # cancelling shards mid-queue and leaving cancelled required checks on the PR.
   cancel-in-progress: ${{ github.event_name != 'pull_request' }}
@@ -323,13 +324,13 @@ jobs:
       actions: write
     concurrency:
       # Isolate by event_name so push + pull_request on the same branch do not cancel pending jobs.
-      group: capgo-local-services-backend-${{ github.event_name }}-${{ github.repository }}-${{ matrix.shard }}
+      group: capgo-local-services-backend-${{ github.event_name }}-${{ github.repository }}-${{ matrix.shard }}-${{ github.sha }}
       cancel-in-progress: false
     env:
       SUPABASE_WORKTREE_INSTANCE: backend-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard_id }}
       SUPABASE_WORKTREE_PORT_OFFSET: ${{ matrix.supabase_port_offset }}
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           - shard: 1/6
@@ -489,7 +490,7 @@ jobs:
       contents: read
       actions: write
     concurrency:
-      group: capgo-local-services-backend-plugin-${{ github.event_name }}-${{ github.repository }}
+      group: capgo-local-services-backend-plugin-${{ github.event_name }}-${{ github.repository }}-${{ github.sha }}
       cancel-in-progress: false
     env:
       SUPABASE_WORKTREE_INSTANCE: backend-plugin-${{ github.run_id }}-${{ github.run_attempt }}
@@ -599,7 +600,7 @@ jobs:
       contents: read
     concurrency:
       # Isolate by event_name so push + pull_request on the same branch do not cancel pending jobs.
-      group: capgo-local-services-backend-sql-${{ github.event_name }}-${{ github.repository }}
+      group: capgo-local-services-backend-sql-${{ github.event_name }}-${{ github.repository }}-${{ github.sha }}
       cancel-in-progress: false
     env:
       SUPABASE_WORKTREE_INSTANCE: backend-sql-${{ github.run_id }}-${{ github.run_attempt }}
@@ -669,7 +670,7 @@ jobs:
       contents: read
     concurrency:
       # Isolate by event_name so push + pull_request on the same branch do not cancel pending jobs.
-      group: capgo-local-services-backend-sql-catalog-${{ github.event_name }}-${{ github.repository }}
+      group: capgo-local-services-backend-sql-catalog-${{ github.event_name }}-${{ github.repository }}-${{ github.sha }}
       cancel-in-progress: false
     env:
       SUPABASE_WORKTREE_INSTANCE: backend-sql-catalog-${{ github.run_id }}-${{ github.run_attempt }}
@@ -741,7 +742,7 @@ jobs:
       contents: read
     concurrency:
       # Isolate by event_name so push + pull_request on the same branch do not cancel pending jobs.
-      group: capgo-local-services-cloudflare-${{ github.event_name }}-${{ github.repository }}-${{ matrix.shard }}
+      group: capgo-local-services-cloudflare-${{ github.event_name }}-${{ github.repository }}-${{ matrix.shard }}-${{ github.sha }}
       cancel-in-progress: false
     env:
       SUPABASE_WORKTREE_INSTANCE: cloudflare-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard_id }}
@@ -749,7 +750,7 @@ jobs:
       CLOUDFLARE_WORKER_PORT_OFFSET: ${{ matrix.cloudflare_worker_port_offset }}
       CLOUDFLARE_PERSIST_DIR: .context/cloudflare-workers-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.supabase_port_offset }}
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           - shard: 1/8
@@ -883,7 +884,7 @@ jobs:
     permissions:
       contents: read
     concurrency:
-      group: capgo-local-services-cloudflare-plugin-${{ github.event_name }}-${{ github.repository }}
+      group: capgo-local-services-cloudflare-plugin-${{ github.event_name }}-${{ github.repository }}-${{ github.sha }}
       cancel-in-progress: false
     env:
       SUPABASE_WORKTREE_INSTANCE: cloudflare-plugin-${{ github.run_id }}-${{ github.run_attempt }}
@@ -998,7 +999,7 @@ jobs:
       contents: read
     concurrency:
       # Isolate by event_name so push + pull_request on the same branch do not cancel pending jobs.
-      group: capgo-local-services-playwright-${{ github.event_name }}-${{ github.repository }}-${{ matrix.shard }}
+      group: capgo-local-services-playwright-${{ github.event_name }}-${{ github.repository }}-${{ matrix.shard }}-${{ github.sha }}
       cancel-in-progress: false
     strategy:
       fail-fast: false

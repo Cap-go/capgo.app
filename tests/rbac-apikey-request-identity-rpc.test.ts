@@ -278,7 +278,7 @@ describe('app_versions RBAC update policy', () => {
         .select('id, deleted')
 
       if (deletedError) {
-        expect(deletedError.message.toLowerCase()).toContain('row')
+        expect(deletedError.message).toMatch(/PERMISSION_DENIED_BUNDLE_DELETE/i)
       }
       else {
         expect(deletedUpdate).toEqual([])
