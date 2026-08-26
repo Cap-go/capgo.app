@@ -69,8 +69,12 @@ jobs:
                 comment.user?.login === 'github-actions[bot]'
                 && comment.body?.includes(marker)
               )
-              // Allow retry when a prior trigger hit rate limits and no review exists for headSha.
-              if (alreadyTriggered && latestCodeRabbitReview?.commit_id === headSha) {
+              // Skip only when a prior trigger already produced a non-blocking review on headSha.
+              if (
+                alreadyTriggered
+                && latestCodeRabbitReview?.commit_id === headSha
+                && latestCodeRabbitReview.state !== 'CHANGES_REQUESTED'
+              ) {
                 console.log(`CodeRabbit trigger already completed for PR #${pr.number} at ${headSha}`)
                 continue
               }
