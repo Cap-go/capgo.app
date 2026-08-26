@@ -3,9 +3,12 @@ name: Run tests
 concurrency:
   # Include event_name so push and pull_request on the same branch do not cancel each other.
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'workflow_call' && github.sha || github.head_ref || github.ref_name || github.ref }}
-  cancel-in-progress: true
+  # Keep in-progress pull_request suites running; duplicate synchronize events were
+  # cancelling shards mid-queue and leaving cancelled required checks on the PR.
+  cancel-in-progress: ${{ github.event_name != 'pull_request' }}
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches-ignore:
