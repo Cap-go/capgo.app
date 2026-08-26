@@ -5,15 +5,17 @@ test.describe('SSO Login Flow', () => {
     await page.goto('/login/')
   })
 
-  test('should show email only on first paint', async ({ page }) => {
+  test('should show email, password, and 2FA on first paint', async ({ page }) => {
     await expect(page.locator('[data-test="email"]')).toBeVisible()
-    await expect(page.locator('[data-test="submit"]')).toBeHidden()
+    await expect(page.locator('[data-test="password"]')).toBeVisible()
+    await expect(page.locator('[data-test="2fa-code"]')).toBeVisible()
+    await expect(page.locator('[data-test="submit"]')).toBeVisible()
+    await expect(page.locator('[data-test="verify"]')).toHaveCount(0)
     await expect(page.locator('[data-test="sso-login"]')).toHaveCount(0)
-    await expect(page.locator('[data-test="password"]')).toHaveCount(1)
-    await expect(page.locator('[data-password-ready="false"]')).toHaveCount(1)
+    await expect(page.locator('[data-password-ready="true"]')).toHaveCount(1)
   })
 
-  test('should reveal password for non-SSO domains', async ({ page }) => {
+  test('should keep password for non-SSO domains', async ({ page }) => {
     await page.route('**/private/sso/check-domain', async (route) => {
       await route.fulfill({
         status: 200,
@@ -27,6 +29,7 @@ test.describe('SSO Login Flow', () => {
     await domainCheck
     await expect(page.locator('[data-password-ready="true"]')).toHaveCount(1)
     await expect(page.locator('[data-test="password"]')).toBeVisible()
+    await expect(page.locator('[data-test="2fa-code"]')).toBeVisible()
     await expect(page.locator('[data-test="submit"]')).toBeVisible()
     await expect(page.locator('[data-test="sso-login"]')).toHaveCount(0)
   })
@@ -67,6 +70,8 @@ test.describe('SSO Login Flow', () => {
     await expect(page.locator('[data-test="sso-login"]')).toBeVisible({ timeout: 10000 })
     await expect(page.locator('[data-password-ready="false"]')).toHaveCount(1)
     await expect(page.locator('[data-test="submit"]')).toBeHidden()
+    await expect(page.locator('[data-test="password"]')).toBeHidden()
+    await expect(page.locator('[data-test="2fa-code"]')).toBeHidden()
   })
 
   test('should keep email editable on mobile when the domain has SSO', async ({ page }) => {

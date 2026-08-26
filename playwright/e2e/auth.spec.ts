@@ -5,12 +5,16 @@ test.describe('Authentication', () => {
     await page.goto('/login/')
   })
 
-  test('should keep the password field in the form but hidden until the domain is known', async ({ page }) => {
+  test('should show email, password, and 2FA together for password managers', async ({ page }) => {
     await expect(page.locator('[data-test="email"]')).toBeVisible()
-    await expect(page.locator('[data-test="submit"]')).toBeHidden()
+    await expect(page.locator('[data-test="password"]')).toBeVisible()
+    await expect(page.locator('[data-test="2fa-code"]')).toBeVisible()
+    await expect(page.locator('[data-test="submit"]')).toBeVisible()
+    await expect(page.locator('[data-test="verify"]')).toHaveCount(0)
     await expect(page.locator('[data-test="sso-login"]')).toHaveCount(0)
-    await expect(page.locator('[data-test="password"]')).toHaveCount(1)
-    await expect(page.locator('[data-password-ready="false"]')).toHaveCount(1)
+    await expect(page.locator('[data-password-ready="true"]')).toHaveCount(1)
+    await expect(page.locator('input[autocomplete="username"]')).toHaveCount(1)
+    await expect(page.locator('input[autocomplete="current-password"]')).toHaveCount(1)
     await expect(page.locator('input[autocomplete="one-time-code"]')).toHaveCount(1)
   })
 

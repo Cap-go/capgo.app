@@ -36,13 +36,12 @@ const router = useRouter()
 const { t } = useI18n()
 const captchaComponent = ref<InstanceType<typeof VueTurnstile> | null>(null)
 
-// Keep email, password, and OTP in one form so password managers can fill them
-// with a single biometric prompt. Password stays hidden until the domain is
-// known not to use SSO. SSO domains never show a password field.
+// Keep email, password, and OTP visible in one form so password managers can
+// fill them in a single prompt. Opacity-0 / 1px fields are skipped by Apple
+// Passwords and Bitwarden. Hide password + OTP only after SSO is confirmed.
 const emailForLogin = ref('')
 const hasSso = ref(false)
 const lastCheckedEmail = ref('')
-const passwordPathReady = ref(false)
 const domainCheckTimeoutMs = 5000
 const domainCheckDebounceMs = 350
 const isCheckingSavedSession = ref(true)
@@ -54,16 +53,8 @@ let domainCheckSeq = 0
 const version = import.meta.env.VITE_APP_VERSION
 const isLoginStep = computed(() => statusAuth.value === 'login')
 const emailValidation = computed(() => (isLoginStep.value ? 'required:trim|email' : ''))
-const passwordValidation = computed(() => (passwordPathReady.value ? 'required:trim' : ''))
+const passwordValidation = computed(() => (isLoginStep.value && !hasSso.value ? 'required:trim' : ''))
 const mfaValidation = computed(() => (statusAuth.value === '2fa' ? 'required|mfa_code_validation' : ''))
-const autofillPreserveHiddenStyle = {
-  position: 'absolute',
-  width: '1px',
-  height: '1px',
-  opacity: '0',
-  overflow: 'hidden',
-  pointerEvents: 'none',
-} as const
 const mfaRegex = /^(?:\d{6}|\d{3} \d{3})$/
 const shouldBlockForCaptcha = computed(() => !!captchaKey.value && captchaStatus.value === 'loading' && !turnstileToken.value)
 const loginHeroChips = computed(() => [
@@ -387,7 +378,6 @@ async function refreshSsoForEmail(email: string) {
       return
     hasSso.value = result.has_sso
     lastCheckedEmail.value = trimmed
-    passwordPathReady.value = !result.has_sso
   }
   catch (error) {
     if (!isCurrentDomainCheck(seq, trimmed))
@@ -395,7 +385,6 @@ async function refreshSsoForEmail(email: string) {
     console.error('SSO domain check failed', error)
     hasSso.value = false
     lastCheckedEmail.value = ''
-    passwordPathReady.value = true
   }
 }
 
@@ -423,19 +412,15 @@ watch(emailForLogin, (email) => {
 
   if (!isCompletableEmail(trimmed)) {
     hasSso.value = false
-    passwordPathReady.value = false
     lastCheckedEmail.value = ''
     return
   }
 
-  if (lastCheckedEmail.value === trimmed) {
-    passwordPathReady.value = !hasSso.value
+  if (lastCheckedEmail.value === trimmed)
     return
-  }
 
   if (domain !== lastDomain) {
     hasSso.value = false
-    passwordPathReady.value = false
     lastCheckedEmail.value = ''
   }
 
@@ -953,46 +938,31 @@ onMounted(checkLogin)
                           {{ t('continue-with-sso') }}
                         </button>
                       </div>
-
-                      <!--
-                        Keep password in the form from first paint so password managers can fill
-                        it with the email. Reveal it only after the domain is known not to use SSO.
-                      -->
-                      <div
-                        :style="passwordPathReady ? undefined : autofillPreserveHiddenStyle"
-                        :data-password-ready="passwordPathReady ? 'true' : 'false'"
-                      >
-                        <FormKit
-                          id="passwordInput"
-                          type="password"
-                          :placeholder="t('password')"
-                          name="password"
-                          :label="t('password')"
-                          :prefix-icon="iconPassword"
-                          :validation="passwordValidation"
-                          enterkeyhint="send"
-                          autocomplete="current-password"
-                          data-test="password"
-                        />
-                      </div>
-
-                      <div v-if="!!captchaKey">
-                        <VueTurnstile
-                          ref="captchaComponent"
-                          v-model="turnstileToken"
-                          size="flexible"
-                          :site-key="captchaKey"
-                          @error="handleCaptchaUnavailable('Turnstile error', $event)"
-                          @unsupported="handleCaptchaUnavailable('Turnstile unsupported')"
-                        />
-                      </div>
                     </div>
 
                     <!--
-                      Keep the OTP field mounted (not display:none) so Apple Passwords can fill
-                      a TOTP during the same prompt. Reveal it only when MFA is required.
+                      Email, password, and OTP must stay visible (not opacity 0) or Apple
+                      Passwords / Bitwarden skip them. Hide password + OTP only for SSO.
                     -->
-                    <div :style="statusAuth === '2fa' ? undefined : autofillPreserveHiddenStyle">
+                    <div
+                      v-show="isLoginStep && !hasSso"
+                      :data-password-ready="hasSso ? 'false' : 'true'"
+                    >
+                      <FormKit
+                        id="passwordInput"
+                        type="password"
+                        :placeholder="t('password')"
+                        name="password"
+                        :label="t('password')"
+                        :prefix-icon="iconPassword"
+                        :validation="passwordValidation"
+                        enterkeyhint="send"
+                        autocomplete="current-password"
+                        data-test="password"
+                      />
+                    </div>
+
+                    <div v-show="!hasSso">
                       <FormKit
                         v-model="mfaCode"
                         type="text"
@@ -1013,38 +983,26 @@ onMounted(checkLogin)
                       />
                     </div>
 
-                    <FormKitMessages data-test="form-error" />
-
-                    <div v-show="passwordPathReady">
-                      <div class="inline-flex justify-center items-center w-full">
-                        <button
-                          type="submit"
-                          data-test="submit"
-                          :disabled="statusAuth === '2fa' || isLoading || shouldBlockForCaptcha || isCheckingSavedSession"
-                          :aria-busy="isLoading ? 'true' : 'false'"
-                          :class="authPrimaryButtonClass"
-                        >
-                          <svg
-                            v-if="isLoading" class="inline-block mr-3 -ml-1 w-5 h-5 text-white align-middle animate-spin"
-                            xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" data-test="loading"
-                          >
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                            <path
-                              class="opacity-75" fill="currentColor"
-                              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                            />
-                          </svg>
-                          {{ t('log-in') }}
-                        </button>
-                      </div>
+                    <div v-show="isLoginStep && !!captchaKey">
+                      <VueTurnstile
+                        v-if="!!captchaKey"
+                        ref="captchaComponent"
+                        v-model="turnstileToken"
+                        size="flexible"
+                        :site-key="captchaKey"
+                        @error="handleCaptchaUnavailable('Turnstile error', $event)"
+                        @unsupported="handleCaptchaUnavailable('Turnstile unsupported')"
+                      />
                     </div>
 
-                    <div v-show="statusAuth === '2fa'">
+                    <FormKitMessages data-test="form-error" />
+
+                    <div v-show="statusAuth === '2fa' || !hasSso">
                       <div class="inline-flex justify-center items-center w-full">
                         <button
                           type="submit"
-                          data-test="verify"
-                          :disabled="statusAuth !== '2fa' || isLoading"
+                          :data-test="statusAuth === '2fa' ? 'verify' : 'submit'"
+                          :disabled="isLoading || (statusAuth !== '2fa' && (shouldBlockForCaptcha || isCheckingSavedSession))"
                           :aria-busy="isLoading ? 'true' : 'false'"
                           :class="authPrimaryButtonClass"
                         >
@@ -1058,7 +1016,7 @@ onMounted(checkLogin)
                               d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
                             />
                           </svg>
-                          {{ t('verify') }}
+                          {{ statusAuth === '2fa' ? t('verify') : t('log-in') }}
                         </button>
                       </div>
                     </div>
@@ -1076,7 +1034,7 @@ onMounted(checkLogin)
                         {{ t('create-a-free-account') }}
                       </a>
                       <button
-                        v-show="passwordPathReady"
+                        v-show="!hasSso"
                         type="button"
                         data-test="forgot-password"
                         :class="authInlineLinkClass"
