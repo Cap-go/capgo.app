@@ -1,5 +1,5 @@
 import type { Context } from 'hono'
-import type { AuthInfo, MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { z } from 'zod'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { trackBentoEvent } from '../utils/bento.ts'
@@ -8,7 +8,7 @@ import { BRES, createHono, parseBody, quickError, useCors } from '../utils/hono.
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
-import { checkPermission } from '../utils/rbac.ts'
+import { canCallerAssignOrgRole, checkPermission } from '../utils/rbac.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { getEnv } from '../utils/utils.ts'
 import { version } from '../utils/version.ts'
@@ -54,62 +54,6 @@ export function getInviteResendRequiredPermission(
   if (roleName === 'org_super_admin')
     return canUpdateUserRoles ? null : 'org.update_user_roles'
   return canInviteUser ? null : 'org.invite_user'
-}
-
-async function canCallerResendInviteRole(
-  c: AppContext,
-  auth: AuthInfo,
-  orgId: string,
-  roleName?: string | null,
-) {
-  const targetRoleName = roleName?.trim()
-  if (!targetRoleName)
-    return false
-
-  let principalType = 'user'
-  let principalId = auth.userId
-  if (auth.authType === 'apikey' && auth.apikey?.rbac_id) {
-    principalType = 'apikey'
-    principalId = auth.apikey.rbac_id
-  }
-  if (!principalId)
-    return false
-
-  const pgClient = getPgClient(c)
-  try {
-    const result = await pgClient.query<{ allowed: boolean }>(`
-      WITH target_role AS (
-        SELECT r.priority_rank
-        FROM public.roles r
-        WHERE r.name = $4
-          AND r.scope_type = public.rbac_scope_org()
-          AND r.is_assignable = true
-        LIMIT 1
-      ),
-      caller_priority AS (
-        SELECT COALESCE(MAX(r.priority_rank), 0) AS max_priority
-        FROM public.role_bindings rb
-        JOIN public.roles r
-          ON r.id = rb.role_id
-          AND r.scope_type = rb.scope_type
-        WHERE rb.principal_type = $1
-          AND rb.principal_id = $2::uuid
-          AND rb.scope_type = public.rbac_scope_org()
-          AND rb.org_id = $3::uuid
-          AND (rb.expires_at IS NULL OR rb.expires_at > now())
-      )
-      SELECT
-        (SELECT max_priority FROM caller_priority) >= COALESCE(
-          (SELECT priority_rank FROM target_role),
-          2147483647
-        ) AS allowed
-    `, [principalType, principalId, orgId, targetRoleName])
-
-    return result.rows[0]?.allowed === true
-  }
-  finally {
-    closeClient(c, pgClient)
-  }
 }
 
 async function lockInviteNotification(c: AppContext, orgId: string, userId: string) {
@@ -294,9 +238,8 @@ app.post('/', middlewareAuth, async (c) => {
     })
   }
 
-  const canManageInviteRole = await canCallerResendInviteRole(
+  const canManageInviteRole = await canCallerAssignOrgRole(
     c,
-    authContext,
     body.org_id,
     membership.rbac_role_name,
   )

@@ -413,6 +413,100 @@ export async function checkPermissionPg(
 // =============================================================================
 
 /**
+ * Match invite_user_to_org_rbac: caller max org priority_rank must be
+ * >= the assignable target role's priority_rank.
+ */
+export async function canCallerAssignOrgRole(
+  c: Context<MiddlewareKeyVariables>,
+  orgId: string,
+  roleName?: string | null,
+): Promise<boolean> {
+  const auth = c.get('auth')
+  if (!auth?.userId)
+    return false
+
+  const targetRoleName = roleName?.trim()
+  if (!targetRoleName)
+    return false
+
+  const apikeyString = auth.apikey?.key ?? c.get('capgkey') ?? null
+
+  let principalType = 'user'
+  let principalId = auth.userId
+  if (auth.authType === 'apikey' && auth.apikey?.rbac_id) {
+    principalType = 'apikey'
+    principalId = auth.apikey.rbac_id
+  }
+  else if (auth.apikey?.rbac_id && apikeyString) {
+    principalType = 'apikey'
+    principalId = auth.apikey.rbac_id
+  }
+  if (!principalId)
+    return false
+
+  let pgClient
+  try {
+    pgClient = await getPgClient(c)
+    const result = await pgClient.query<{ allowed: boolean }>(`
+      WITH target_role AS (
+        SELECT r.priority_rank
+        FROM public.roles r
+        WHERE r.name = $4
+          AND r.scope_type = public.rbac_scope_org()
+          AND r.is_assignable = true
+        LIMIT 1
+      ),
+      active_caller_bindings AS (
+        SELECT rb.role_id
+        FROM public.role_bindings rb
+        WHERE rb.principal_type = $1
+          AND rb.principal_id = $2::uuid
+          AND rb.org_id = $3::uuid
+          AND rb.scope_type = public.rbac_scope_org()
+          AND (rb.expires_at IS NULL OR rb.expires_at > now())
+
+        UNION ALL
+
+        SELECT rb.role_id
+        FROM public.group_members gm
+        INNER JOIN public.groups g
+          ON g.id = gm.group_id
+          AND g.org_id = $3::uuid
+        INNER JOIN public.role_bindings rb
+          ON rb.principal_type = public.rbac_principal_group()
+          AND rb.principal_id = gm.group_id
+          AND rb.org_id = g.org_id
+          AND rb.scope_type = public.rbac_scope_org()
+        WHERE $1 = public.rbac_principal_user()
+          AND gm.user_id = $2::uuid
+          AND (rb.expires_at IS NULL OR rb.expires_at > now())
+      ),
+      caller_priority AS (
+        SELECT COALESCE(MAX(r.priority_rank), 0) AS max_priority
+        FROM active_caller_bindings acb
+        INNER JOIN public.roles r
+          ON r.id = acb.role_id
+          AND r.scope_type = public.rbac_scope_org()
+      )
+      SELECT
+        (SELECT max_priority FROM caller_priority) >= COALESCE(
+          (SELECT priority_rank FROM target_role),
+          2147483647
+        ) AS allowed
+    `, [principalType, principalId, orgId, targetRoleName])
+
+    return result.rows[0]?.allowed === true
+  }
+  catch (e) {
+    return handlePermissionCheckError(c, 'org.update_user_roles', { orgId }, e, 'checkPermission')
+  }
+  finally {
+    if (pgClient)
+      closeClient(c, pgClient)
+  }
+}
+
+/**
  * Infer the scope type from a permission key.
  */
 export function getScopeTypeFromPermission(permission: Permission): ScopeType {
