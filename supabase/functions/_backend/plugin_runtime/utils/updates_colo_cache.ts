@@ -22,7 +22,7 @@
 
 import type { Context } from 'hono'
 import type { AppOwnerPostgresResult, getDrizzleClient, PlanAction } from './pg.ts'
-import { CacheHelper } from './cache.ts'
+import { CACHE_PUT_TIMEOUT_MS, CacheHelper } from './cache.ts'
 import { cloudlog } from './logging.ts'
 import {
   getAppOwnerPostgres,
@@ -123,8 +123,15 @@ async function loadAppCacheToken(helper: CacheHelper, appId: string): Promise<st
     if (cached?.t)
       return cached.t
     const token = crypto.randomUUID()
-    await helper.putJson(request, { t: token }, TOKEN_TTL_SECONDS)
+    // Another isolate may have initialized or bumped while we generated.
+    const beforePut = await helper.matchJson<TokenPayload>(request)
+    if (beforePut?.t)
+      return beforePut.t
+    await helper.putJson(request, { t: token }, TOKEN_TTL_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
     const after = await helper.matchJson<TokenPayload>(request)
+    // Prefer a concurrent invalidator's token over our candidate write.
+    if (after?.t && after.t !== token)
+      return after.t
     return after?.t ?? token
   })
 }
@@ -159,7 +166,11 @@ export async function bumpAppCacheToken(c: Context, appId: string): Promise<bool
   return runSerializedTokenOp(appId, async () => {
     const helper = new CacheHelper(c)
     const request = buildCacheRequest(TOKEN_CACHE_PATH, { app_id: appId })
-    await helper.putJson(request, { t: crypto.randomUUID() }, TOKEN_TTL_SECONDS)
+    const token = crypto.randomUUID()
+    await helper.putJson(request, { t: token }, TOKEN_TTL_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
+    const stored = await helper.matchJson<TokenPayload>(request)
+    if (!stored?.t)
+      return false
     await clearNegativeOwnerStreak(helper, appId)
     return true
   })
@@ -197,7 +208,7 @@ export async function cachedGetAppOwner(
   }
   if (owner !== null)
     await clearNegativeOwnerStreak(helper, appId)
-  await helper.putJson(request, { owner }, owner === null ? await negativeOwnerTtl(c, helper, appId) : payloadTtlSeconds(c))
+  await helper.putJson(request, { owner }, owner === null ? await negativeOwnerTtl(c, helper, appId) : payloadTtlSeconds(c), { timeoutMs: CACHE_PUT_TIMEOUT_MS })
   return owner
 }
 
@@ -209,7 +220,7 @@ async function negativeOwnerTtl(c: Context, helper: CacheHelper, appId: string):
   const streakRequest = buildCacheRequest(NEGATIVE_STREAK_PATH, { app_id: appId })
   const streak = await helper.matchJson<{ first: number }>(streakRequest)
   if (!streak) {
-    await helper.putJson(streakRequest, { first: Date.now() }, NEGATIVE_STREAK_TTL_SECONDS)
+    await helper.putJson(streakRequest, { first: Date.now() }, NEGATIVE_STREAK_TTL_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
     return payloadTtlSeconds(c)
   }
   return Date.now() - streak.first > NEGATIVE_ESCALATION_AFTER_MS ? negativeTtlSeconds(c) : payloadTtlSeconds(c)
@@ -244,7 +255,6 @@ export async function cachedRequestInfos(options: CachedRequestInfosOptions): Pr
     defaultChannel,
     drizzleClient,
     channelDeviceCount,
-    manifestBundleCount,
     rolloutChannelCount,
     rolloutPausedVersionNames,
     currentVersionName,
@@ -252,7 +262,6 @@ export async function cachedRequestInfos(options: CachedRequestInfosOptions): Pr
     channelSelfOverrideChannelId,
   } = options
   const shouldQueryChannelOverride = channelDeviceCount === undefined || channelDeviceCount === null ? true : channelDeviceCount > 0
-  const shouldFetchRolloutManifest = manifestBundleCount === undefined || manifestBundleCount === null ? true : manifestBundleCount > 0
   const isPausedRolloutVersion = Array.isArray(rolloutPausedVersionNames) && rolloutPausedVersionNames.includes(currentVersionName)
   const rollout = (rolloutChannelCount ?? 0) > 0 || isPausedRolloutVersion
 
@@ -291,7 +300,7 @@ export async function cachedRequestInfos(options: CachedRequestInfosOptions): Pr
     deviceId: device_id,
     currentVersionName,
     drizzleClient,
-    includeManifest: shouldFetchRolloutManifest,
+    includeManifest: false,
     manifestLoader: (versionId: number) => cachedManifestEntries(c, app_id, versionId, drizzleClient),
   }
   const channelOverride = await resolveRolloutChannelDataPostgres(c, channelOverrideRaw, rolloutArgs)
@@ -339,7 +348,7 @@ async function cachedChannelLookup(c: Context, options: CachedChannelLookupOptio
   }
   const channel = await load()
   // `undefined` is not JSON-representable; store null and map back on read.
-  await helper.putJson(request, { channel: channel ?? null }, payloadTtlSeconds(c))
+  await helper.putJson(request, { channel: channel ?? null }, payloadTtlSeconds(c), { timeoutMs: CACHE_PUT_TIMEOUT_MS })
   return channel
 }
 
@@ -363,6 +372,6 @@ async function cachedManifestEntries(
     return cached.entries
   const entries = await requestManifestEntriesPostgres(c, versionId, drizzleClient)
   if (entries.length > 0)
-    await helper.putJson(request, { entries }, MANIFEST_TTL_SECONDS)
+    await helper.putJson(request, { entries }, MANIFEST_TTL_SECONDS, { timeoutMs: CACHE_PUT_TIMEOUT_MS })
   return entries
 }

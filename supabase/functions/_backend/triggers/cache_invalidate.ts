@@ -36,8 +36,8 @@ export function parsePluginInvalidateUrls(raw: string): string[] {
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', middlewareAPISecret, async (c) => {
-  const body = await parseBody<{ app_ids?: unknown }>(c)
-  const appIds = Array.isArray(body.app_ids)
+  const body = await parseBody<{ app_ids?: unknown }>(c).catch(() => null)
+  const appIds = body && Array.isArray(body.app_ids)
     ? body.app_ids.filter((appId): appId is string => typeof appId === 'string' && appId.length > 0)
     : []
   if (appIds.length === 0) {

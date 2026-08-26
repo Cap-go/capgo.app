@@ -195,13 +195,18 @@ AFTER DELETE ON public.apps
 REFERENCING OLD TABLE AS old_rows
 FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
 
--- app_versions: UPDATE only (r2_path/checksum/deleted change after a channel
--- may already point at the version; freshly inserted rows are not yet
--- referenced by any channel).
+-- app_versions: UPDATE when bundle metadata changes; DELETE when a version row
+-- is removed so cached update data cannot keep pointing at a deleted version.
 DROP TRIGGER IF EXISTS invalidate_updates_cache_app_versions_upd ON public.app_versions;
 CREATE TRIGGER invalidate_updates_cache_app_versions_upd
 AFTER UPDATE ON public.app_versions
 REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
+
+DROP TRIGGER IF EXISTS invalidate_updates_cache_app_versions_del ON public.app_versions;
+CREATE TRIGGER invalidate_updates_cache_app_versions_del
+AFTER DELETE ON public.app_versions
+REFERENCING OLD TABLE AS old_rows
 FOR EACH STATEMENT EXECUTE FUNCTION public.invalidate_updates_cache_stmt();
 
 -- manifest: cached inside channel payloads and per-version entries; bundle

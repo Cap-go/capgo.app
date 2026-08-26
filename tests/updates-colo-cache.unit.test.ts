@@ -302,13 +302,12 @@ describe('updates colo cache', () => {
     expect(pg.requestInfosChannelPostgresRollout).toHaveBeenCalledTimes(1)
   })
 
-  it('token bump also invalidates cached rollout manifests', async () => {
-    ;(pg.requestInfosChannelPostgresRollout as any).mockResolvedValue({
+  it('rollout path does not prefetch manifests before /updates gates them', async () => {
+    ;(pg.requestInfosChannelPostgresRollout as any).mockResolvedValueOnce({
       ...structuredClone(CHANNEL_ROW),
       rolloutVersion: { id: 43, name: '1.2.4', manifest_count: 2 },
       channels: { ...structuredClone(CHANNEL_ROW.channels), rollout_version: 43, rollout_enabled: true, rollout_percentage_bps: 10000, rollout_id: 'r-1', rollout_paused_at: null, rollout_cache_ttl_seconds: 2592000 },
     })
-    ;(pg.requestManifestEntriesPostgres as any).mockResolvedValue([{ file_name: 'a', file_hash: 'h', s3_path: 'p' }])
     const c = makeContext()
     const options = {
       c,
@@ -324,11 +323,7 @@ describe('updates colo cache', () => {
       currentVersionName: '1.0.0',
     }
     await cachedRequestInfos(options)
-    await cachedRequestInfos({ ...options, c: makeContext() })
-    expect(pg.requestManifestEntriesPostgres).toHaveBeenCalledTimes(1)
-    await bumpAppCacheToken(makeContext(), 'com.demo.app')
-    await cachedRequestInfos({ ...options, c: makeContext() })
-    expect(pg.requestManifestEntriesPostgres).toHaveBeenCalledTimes(2)
+    expect(pg.requestManifestEntriesPostgres).not.toHaveBeenCalled()
   })
 })
 
@@ -515,5 +510,19 @@ describe('cache invalidate fanout (triggers)', () => {
       body: JSON.stringify({ app_ids: ['com.demo.app'] }),
     })
     expect(response.status).toBe(400)
+  })
+
+  it('treats a JSON null body as an empty fanout request', async () => {
+    stubFullEnv()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const app = buildApp()
+    const response = await app.request('/cache_invalidate', {
+      method: 'POST',
+      headers: { 'apisecret': 'api-secret', 'Content-Type': 'application/json' },
+      body: 'null',
+    })
+    expect(response.status).toBe(200)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

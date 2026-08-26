@@ -18,6 +18,7 @@ const STATEMENT_TRIGGERS = [
   ['apps', 'invalidate_updates_cache_apps_upd'],
   ['apps', 'invalidate_updates_cache_apps_del'],
   ['app_versions', 'invalidate_updates_cache_app_versions_upd'],
+  ['app_versions', 'invalidate_updates_cache_app_versions_del'],
   ['manifest', 'invalidate_updates_cache_manifest_insert'],
   ['manifest', 'invalidate_updates_cache_manifest_upd'],
   ['manifest', 'invalidate_updates_cache_manifest_delete'],
@@ -96,21 +97,37 @@ describe('updates cache invalidation (postgres)', () => {
   it.concurrent('notify dedupes and sends one chunked request per 100 apps', async () => {
     const marker = `chunk-${randomUUID()}`
     const appIds = Array.from({ length: 150 }, (_, i) => `${marker}.app.${i % 120}`)
-    await pool.query('SELECT public.notify_updates_cache_invalidation($1::text[])', [appIds])
-    const bodies = await queuedBodiesFor(pool, marker)
-    expect(bodies).toHaveLength(2)
-    expect(bodies[0]).toHaveLength(100)
-    expect(bodies[1]).toHaveLength(20)
-    expect(new Set(bodies.flat()).size).toBe(120)
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query('SELECT public.notify_updates_cache_invalidation($1::text[])', [appIds])
+      const bodies = await queuedBodiesFor(client, marker)
+      expect(bodies).toHaveLength(2)
+      expect(bodies[0]).toHaveLength(100)
+      expect(bodies[1]).toHaveLength(20)
+      expect(new Set(bodies.flat()).size).toBe(120)
+      await client.query('ROLLBACK')
+    }
+    finally {
+      client.release()
+    }
   })
 
   it.concurrent('notify caps runaway payloads at 1000 apps', async () => {
     const marker = `cap-${randomUUID()}`
     const appIds = Array.from({ length: 1200 }, (_, i) => `${marker}.app.${i}`)
-    await pool.query('SELECT public.notify_updates_cache_invalidation($1::text[])', [appIds])
-    const bodies = await queuedBodiesFor(pool, marker)
-    expect(bodies).toHaveLength(10)
-    expect(bodies.flat()).toHaveLength(1000)
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query('SELECT public.notify_updates_cache_invalidation($1::text[])', [appIds])
+      const bodies = await queuedBodiesFor(client, marker)
+      expect(bodies).toHaveLength(10)
+      expect(bodies.flat()).toHaveLength(1000)
+      await client.query('ROLLBACK')
+    }
+    finally {
+      client.release()
+    }
   })
 
   it.concurrent('notify ignores empty input without queueing anything', async () => {

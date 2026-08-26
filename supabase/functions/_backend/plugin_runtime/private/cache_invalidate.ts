@@ -41,5 +41,7 @@ app.post('/', async (c) => {
   const results = await Promise.all(appIds.map(appId => bumpAppCacheToken(c, appId)))
   const bumped = results.filter(Boolean).length
   cloudlog({ requestId: c.get('requestId'), message: 'updates cache invalidated', appIds, bumped, enabled: isUpdatesCacheEnabled(c) })
+  if (bumped < appIds.length)
+    throw quickError(503, 'cache_invalidate_failed', `Failed to invalidate ${appIds.length - bumped} app(s)`)
   return c.json({ ...BRES, bumped })
 })
