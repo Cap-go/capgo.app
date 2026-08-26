@@ -26,7 +26,7 @@ import { getClientIP } from './rate_limit.ts'
 import { s3 } from './s3.ts'
 import { shouldQueuePluginNotifications } from './supabase_write_guard.ts'
 import { isUpdateEnumerationLimited, recordUpdateEnumerationMiss, updateEnumerationLimitedResponse } from './updateOracleGuard.ts'
-import { usesCurrentEncryptionKeyIdFormat } from '../../utils/plugin_compatibility.ts'
+import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 import { backgroundTask, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, fixSemver, isDeprecatedPluginVersion, isInternalVersionName } from './utils.ts'
 
 const PLAN_LIMIT: Array<'mau' | 'bandwidth' | 'storage'> = ['mau', 'bandwidth']
