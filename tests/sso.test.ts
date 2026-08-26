@@ -2260,6 +2260,7 @@ describe('[PATCH] /private/sso/providers/:id', () => {
 })
 
 describe('sso_providers PostgREST provider_id guards', () => {
+  // Regression coverage for service-role-only provider_id binding.
   async function getOrgAdminSupabaseClient() {
     if (!SUPABASE_BASE_URL || !SUPABASE_ANON_KEY)
       throw new Error('SUPABASE_URL or SUPABASE_ANON_KEY is missing for SSO provider_id guard tests')
