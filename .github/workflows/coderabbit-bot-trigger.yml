@@ -13,7 +13,7 @@ concurrency:
 
 permissions:
   issues: write
-  pull-requests: write
+  pull-requests: read
 
 jobs:
   trigger:
