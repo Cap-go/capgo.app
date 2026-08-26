@@ -69,6 +69,9 @@ export async function encryptZipInternal(
       extConfig = await getConfigForWrite()
     }
 
+    if (!privateKey && existsSync(keyPath))
+      privateKey = readFileSync(keyPath, 'utf8')
+
     const hasPrivateKeyInConfig = !!extConfig.config.plugins?.CapacitorUpdater?.privateKey
     const refreshedHasPublicKey = !!extConfig.config.plugins?.CapacitorUpdater?.publicKey
 

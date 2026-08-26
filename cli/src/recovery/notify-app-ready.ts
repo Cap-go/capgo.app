@@ -133,8 +133,8 @@ function usesCommonJsModuleFormat(filePath: string, content: string): boolean {
 }
 
 export function resolveCapacitorUpdaterIdentifier(content: string): string | undefined {
-  const aliasImport = content.match(/\bimport\s*\{[^}]*\bCapacitorUpdater\b\s+as\s+(\w+)/)
-  if (aliasImport?.[1] && hasNotifyAppReadyMethod(content, aliasImport[1]))
+  const aliasImport = content.match(/\bimport\s*\{[^}]*\bCapacitorUpdater\b\s+as\s+(\w+)[^}]*\}\s*from\s*['"]@capgo\/capacitor-updater['"]/)
+  if (aliasImport?.[1])
     return aliasImport[1]
 
   const cjsAlias = content.match(/\b(?:var|let|const)\s*\{[^}]*\bCapacitorUpdater\s*:\s*(\w+)[^}]*\}\s*=\s*require\s*\(\s*['"]@capgo\/capacitor-updater['"]\s*\)/)
