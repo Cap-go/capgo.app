@@ -446,7 +446,7 @@ export async function canCallerAssignOrgRole(
 
   let pgClient
   try {
-    pgClient = getPgClient(c)
+    pgClient = await getPgClient(c)
     const result = await pgClient.query<{ allowed: boolean }>(`
       WITH target_role AS (
         SELECT r.priority_rank
@@ -498,7 +498,7 @@ export async function canCallerAssignOrgRole(
     return result.rows[0]?.allowed === true
   }
   catch (e) {
-    return handlePermissionCheckError(c, 'org.update_user_roles', { orgId }, e, 'checkPermission')
+    return handlePermissionCheckError(c, 'org.update_user_roles', { orgId }, e, 'canCallerAssignOrgRole')
   }
   finally {
     if (pgClient)

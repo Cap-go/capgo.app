@@ -186,7 +186,7 @@ describe('[POST] /private/invite_new_user_to_org rank guards', () => {
     }
   })
 
-  it.concurrent('returns forbidden when an org_member invites org_admin', async () => {
+  it.concurrent('returns forbidden when an org_member without invite_user invites org_admin', async () => {
     const fixture = await createInviteNewUserFixture({
       extraMembers: [{ userId: USER_ID_NONMEMBER, roleName: 'org_member' }],
     })
