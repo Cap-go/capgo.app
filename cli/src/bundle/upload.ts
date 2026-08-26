@@ -510,6 +510,9 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
     if (!noKey && !options.oldEncryption && (keyV2 || options.keyDataV2 || existsSync(baseKeyV2))) {
       uploadFail('Encrypted updates are not supported by @capgo/react-native-updater yet. Use --no-key to upload this bundle.')
     }
+    if (options.forceCrc32Checksum === true) {
+      uploadFail('--force-crc32-checksum is not supported for @capgo/react-native-updater; SHA-256 checksums are required.')
+    }
     // RN updater uses Capgo file-level delta + SHA256 from day one
     useSha256 = true
   }
