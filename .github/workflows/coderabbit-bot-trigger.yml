@@ -48,6 +48,7 @@ jobs:
                 .filter(review => review.user?.login === 'coderabbitai[bot]')
                 .pop()
 
+              // Skip only when CodeRabbit already left a non-blocking review on this SHA.
               if (
                 latestCodeRabbitReview?.commit_id === headSha
                 && latestCodeRabbitReview.state !== 'CHANGES_REQUESTED'
@@ -62,12 +63,17 @@ jobs:
                 repo,
                 issue_number: pr.number,
               })
-              if (comments.some(comment =>
+              const alreadyTriggered = comments.some(comment =>
                 comment.user?.login === 'github-actions[bot]'
                 && comment.body?.includes(marker)
-              )) {
-                console.log(`CodeRabbit trigger already posted for PR #${pr.number}`)
+              )
+              // Allow retry when a prior trigger hit rate limits and no review exists for headSha.
+              if (alreadyTriggered && latestCodeRabbitReview?.commit_id === headSha) {
+                console.log(`CodeRabbit trigger already completed for PR #${pr.number} at ${headSha}`)
                 continue
+              }
+              if (alreadyTriggered) {
+                console.log(`Retrying CodeRabbit trigger for PR #${pr.number}; prior trigger had no review on ${headSha}`)
               }
 
               await github.rest.issues.createComment({
