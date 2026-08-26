@@ -66,18 +66,6 @@ VALUES
   ),
   (
     'com.test.r2direct.upload.lock',
-    '1.0.0-metadata',
-    '70000000-0000-4000-8000-000000000071',
-    tests.get_supabase_uid('r2_direct_upload_lock_owner'),
-    'r2-direct',
-    'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
-    'session-key-metadata',
-    NULL,
-    'metadata comment',
-    false
-  ),
-  (
-    'com.test.r2direct.upload.lock',
     '1.0.0-in-progress',
     '70000000-0000-4000-8000-000000000071',
     tests.get_supabase_uid('r2_direct_upload_lock_owner'),
@@ -222,11 +210,11 @@ SELECT lives_ok(
 SELECT lives_ok(
   $sql$
     UPDATE public.app_versions
-    SET comment = 'updated metadata comment'
+    SET comment = 'updated in-progress comment'
     WHERE app_id = 'com.test.r2direct.upload.lock'
-      AND name = '1.0.0-metadata'
+      AND name = '1.0.0-in-progress'
   $sql$,
-  'staged r2-direct can still update non-content metadata'
+  'checksum-locked r2-direct can still update non-content metadata'
 );
 
 SELECT * FROM finish();
