@@ -128,8 +128,11 @@ describe('manifest poison guard', () => {
       .single()
 
     expect(insertError).toBeNull()
+    expect(version).not.toBeNull()
+    if (!version)
+      return
 
-    const prefix = `orgs/${version!.owner_org}/apps/${APP_ID}/delta`
+    const prefix = `orgs/${version.owner_org}/apps/${APP_ID}/delta`
     const body = {
       app_id: APP_ID,
       name: versionName,
@@ -160,15 +163,17 @@ describe('manifest poison guard', () => {
       const { data: rows, error: manifestError } = await adminClient
         .from('manifest')
         .select('file_name, file_hash, s3_path')
-        .eq('app_version_id', version!.id)
+        .eq('app_version_id', version.id)
 
       expect(manifestError).toBeNull()
       expect(rows).toHaveLength(1)
       expect(rows?.[0]?.file_name).toBe('index.html')
     }
     finally {
-      await adminClient.from('manifest').delete().eq('app_version_id', version!.id)
-      await adminClient.from('app_versions').delete().eq('id', version!.id)
+      if (version) {
+        await adminClient.from('manifest').delete().eq('app_version_id', version.id)
+        await adminClient.from('app_versions').delete().eq('id', version.id)
+      }
     }
   })
 })
