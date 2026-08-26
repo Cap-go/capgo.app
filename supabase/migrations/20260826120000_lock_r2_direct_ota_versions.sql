@@ -368,6 +368,8 @@ BEGIN
 
   -- A blank target is the native/builtin channel state; an initial target needs
   -- app-level promotion, while changing an existing target is channel-scoped.
+  -- INSERT with rollout_version but no version still requires promotion RBAC
+  -- before lock_channel_bundle_lifecycle to avoid bundle-existence oracle leaks.
   IF v_request_role NOT IN ('service_role', 'postgres')
     AND pg_catalog.current_setting('capgo.seed_channel_targets', true) IS DISTINCT FROM 'true'
   THEN
