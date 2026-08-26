@@ -56,10 +56,11 @@ jobs:
                 latestCodeRabbitReview?.state === 'CHANGES_REQUESTED'
                 && latestCodeRabbitReview.commit_id !== headSha
               ) {
+                const codeRabbitSubmittedAt = Date.parse(latestCodeRabbitReview.submitted_at)
                 const headApproved = reviews.some(review =>
-                  review.commit_id === headSha
-                  && review.state === 'APPROVED'
+                  review.state === 'APPROVED'
                   && review.user?.type === 'User'
+                  && Date.parse(review.submitted_at) >= codeRabbitSubmittedAt
                 )
                 if (headApproved) {
                   await github.rest.pulls.dismissReview({
