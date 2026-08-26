@@ -420,7 +420,7 @@ export async function addAppInternal(
       appAlreadyExists = true
     }
     else if (duplicateOutcome === 'duplicate_taken') {
-      const takenMessage = `App ID ${appId} is already taken`
+      const takenMessage = `App ID ${appId} already exists`
       if (!silent)
         log.error(`Could not add app: ${takenMessage}`)
       throw new Error(`Could not add app: ${takenMessage}`)
