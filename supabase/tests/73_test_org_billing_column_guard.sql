@@ -34,7 +34,7 @@ ON CONFLICT (customer_id) DO NOTHING;
 INSERT INTO public.orgs (id, created_by, name, management_email, customer_id)
 VALUES (
   '73000000-0000-4000-8000-000000000073',
-  tests.get_supabase_uid('org_billing_guard_admin'),
+  tests.get_supabase_uid('org_billing_guard_super'),
   'Org billing column guard',
   'org-billing-guard@test.local',
   'cus_org_billing_guard_730001'
@@ -93,6 +93,8 @@ SELECT lives_ok(
 );
 
 SELECT tests.authenticate_as_service_role();
+SET LOCAL ROLE service_role;
+SET LOCAL "request.jwt.claim.role" = 'service_role';
 
 SELECT lives_ok(
   $$

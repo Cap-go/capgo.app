@@ -108,7 +108,7 @@ describe.skipIf(USE_CLOUDFLARE_WORKERS)('org billing column guard', () => {
     await executeSQL(
       `INSERT INTO public.orgs (id, created_by, name, management_email, customer_id)
        VALUES ($1::uuid, $2::uuid, $3, $4, $5)`,
-      [orgId, settingsAdminUserId, `Org billing guard ${fixtureId}`, settingsAdminEmail, originalCustomerId],
+      [orgId, billingSuperAdminUserId, `Org billing guard ${fixtureId}`, settingsAdminEmail, originalCustomerId],
     )
 
     await executeSQL(
