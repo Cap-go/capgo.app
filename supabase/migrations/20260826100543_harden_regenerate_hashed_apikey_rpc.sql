@@ -58,11 +58,27 @@ BEGIN
   END IF;
 
   IF TG_OP = 'UPDATE' THEN
-    IF OLD.principal_type = public.rbac_principal_apikey() THEN
-      PERFORM public.lock_rbac_apikey_principal(OLD.principal_id);
-    END IF;
-    IF NEW.principal_type = public.rbac_principal_apikey() THEN
-      PERFORM public.lock_rbac_apikey_principal(NEW.principal_id);
+    IF OLD.principal_type = public.rbac_principal_apikey()
+      AND NEW.principal_type = public.rbac_principal_apikey()
+      AND OLD.principal_id IS NOT NULL
+      AND NEW.principal_id IS NOT NULL
+    THEN
+      IF OLD.principal_id = NEW.principal_id THEN
+        PERFORM public.lock_rbac_apikey_principal(OLD.principal_id);
+      ELSIF OLD.principal_id < NEW.principal_id THEN
+        PERFORM public.lock_rbac_apikey_principal(OLD.principal_id);
+        PERFORM public.lock_rbac_apikey_principal(NEW.principal_id);
+      ELSE
+        PERFORM public.lock_rbac_apikey_principal(NEW.principal_id);
+        PERFORM public.lock_rbac_apikey_principal(OLD.principal_id);
+      END IF;
+    ELSE
+      IF OLD.principal_type = public.rbac_principal_apikey() THEN
+        PERFORM public.lock_rbac_apikey_principal(OLD.principal_id);
+      END IF;
+      IF NEW.principal_type = public.rbac_principal_apikey() THEN
+        PERFORM public.lock_rbac_apikey_principal(NEW.principal_id);
+      END IF;
     END IF;
     RETURN NEW;
   END IF;
@@ -75,11 +91,15 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION public.lock_rbac_apikey_principal_on_binding() OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.lock_rbac_apikey_principal_on_binding() FROM PUBLIC;
-GRANT ALL ON FUNCTION public.lock_rbac_apikey_principal_on_binding() TO service_role;
+ALTER FUNCTION public.lock_rbac_apikey_principal_on_binding()
+  OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.lock_rbac_apikey_principal_on_binding()
+  FROM PUBLIC;
+GRANT ALL ON FUNCTION public.lock_rbac_apikey_principal_on_binding()
+  TO service_role;
 
-DROP TRIGGER IF EXISTS lock_rbac_apikey_principal_on_binding ON public.role_bindings;
+DROP TRIGGER IF EXISTS lock_rbac_apikey_principal_on_binding
+  ON public.role_bindings;
 CREATE TRIGGER lock_rbac_apikey_principal_on_binding
 BEFORE INSERT OR UPDATE OR DELETE ON public.role_bindings
 FOR EACH ROW
