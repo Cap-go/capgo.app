@@ -3,7 +3,6 @@ package app.capgo.rnupdater
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
-import android.provider.Settings
 import java.util.UUID
 
 object CapgoConfig {
@@ -70,12 +69,15 @@ object CapgoConfig {
     }
   }
 
+  private val deviceIdRegex = Regex(
+    "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+  )
+
   fun deviceId(context: Context): String {
     val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     val existing = prefs.getString(KEY_DEVICE, null)
-    if (!existing.isNullOrEmpty()) return existing
-    val androidId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
-    val id = (androidId ?: UUID.randomUUID().toString()).take(36)
+    if (!existing.isNullOrEmpty() && deviceIdRegex.matches(existing)) return existing
+    val id = UUID.randomUUID().toString()
     prefs.edit().putString(KEY_DEVICE, id).apply()
     return id
   }

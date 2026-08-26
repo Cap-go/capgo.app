@@ -507,6 +507,9 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
     uploadFail('Cannot find @capgo/capacitor-updater or @capgo/react-native-updater in node_modules, please install one first with your package manager')
   }
   else if (updaterPackage.kind === 'react-native') {
+    if (!noKey && !options.oldEncryption && (keyV2 || options.keyDataV2 || existsSync(baseKeyV2))) {
+      uploadFail('Encrypted updates are not supported by @capgo/react-native-updater yet. Use --no-key to upload this bundle.')
+    }
     // RN updater uses Capgo file-level delta + SHA256 from day one
     useSha256 = true
   }
@@ -527,6 +530,9 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
     log.info(`Encryption ignored`)
   }
   else if ((keyV2 || existsSync(baseKeyV2) || options.keyDataV2) && !options.oldEncryption) {
+    if (updaterPackage.kind === 'react-native') {
+      uploadFail('@capgo/react-native-updater does not support encrypted bundles yet. Use --no-key or remove signing keys from the project.')
+    }
     const privateKey = typeof keyV2 === 'string' ? keyV2 : baseKeyV2
     let keyDataV2 = options.keyDataV2 || ''
     if (!keyDataV2 && !existsSync(privateKey))

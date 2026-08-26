@@ -2,6 +2,7 @@ package app.capgo.rnupdater
 
 import android.content.Context
 import android.os.Build
+import java.util.concurrent.Executors
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -10,6 +11,10 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 object CapgoHttp {
+  private val statsExecutor = Executors.newSingleThreadExecutor { runnable ->
+    Thread(runnable, "capgo-rn-stats").apply { isDaemon = true }
+  }
+
   private val client: OkHttpClient = OkHttpClient.Builder()
     .connectTimeout(20, TimeUnit.SECONDS)
     .readTimeout(60, TimeUnit.SECONDS)
@@ -63,13 +68,15 @@ object CapgoHttp {
   fun sendStats(context: Context, action: String, versionName: String, oldVersion: String = "") {
     val statsUrl = CapgoConfig.statsUrl(context)
     if (statsUrl.isEmpty()) return
-    try {
-      val body = createInfoObject(context, versionName)
-        .put("action", action)
-        .put("old_version_name", oldVersion)
-      postJson(statsUrl, body)
-    } catch (_: Exception) {
-      // best-effort
+    val body = createInfoObject(context, versionName)
+      .put("action", action)
+      .put("old_version_name", oldVersion)
+    statsExecutor.execute {
+      try {
+        postJson(statsUrl, body)
+      } catch (_: Exception) {
+        // best-effort
+      }
     }
   }
 }

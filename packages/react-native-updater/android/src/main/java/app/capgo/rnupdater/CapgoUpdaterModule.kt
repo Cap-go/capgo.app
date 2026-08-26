@@ -113,8 +113,10 @@ class CapgoUpdaterModule(private val reactContext: ReactApplicationContext) :
     for (i in 0 until readable.size()) {
       val entry = readable.getMap(i) ?: continue
       val o = JSONObject()
+      if (!entry.hasKey("file_name") || entry.isNull("file_name")) continue
+      if (!entry.hasKey("download_url") || entry.isNull("download_url")) continue
       o.put("file_name", entry.getString("file_name"))
-      o.put("file_hash", if (entry.hasKey("file_hash")) entry.getString("file_hash") else "")
+      o.put("file_hash", if (entry.hasKey("file_hash") && !entry.isNull("file_hash")) entry.getString("file_hash") else "")
       o.put("download_url", entry.getString("download_url"))
       manifest.put(o)
     }

@@ -3,6 +3,7 @@ import { Command } from 'commander'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { log } from '@clack/prompts'
 
 const pack = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8')) as { version: string }
 import { runBundle } from './bundle.js'
@@ -60,6 +61,6 @@ try {
   await program.parseAsync(process.argv)
 }
 catch (error) {
-  console.error(error instanceof Error ? error.message : error)
+  log.error(error instanceof Error ? error.message : String(error))
   process.exit(1)
 }

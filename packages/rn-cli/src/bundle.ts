@@ -47,11 +47,18 @@ function copyAssets(fromDir: string, toDir: string) {
   }
 }
 
-export function validateExportLayout(dir: string): void {
-  const required = ['index.android.bundle', 'main.jsbundle']
-  for (const file of required) {
-    if (!existsSync(join(dir, file))) {
-      throw new Error(`Missing required export file: ${file}`)
+export function validateExportLayout(dir: string, platforms: string[]): void {
+  const requiredByPlatform: Record<string, string[]> = {
+    android: ['index.android.bundle'],
+    ios: ['main.jsbundle'],
+  }
+  for (const platform of platforms) {
+    const required = requiredByPlatform[platform]
+    if (!required) continue
+    for (const file of required) {
+      if (!existsSync(join(dir, file))) {
+        throw new Error(`Missing required export file for ${platform}: ${file}`)
+      }
     }
   }
 }
@@ -72,8 +79,8 @@ export async function runBundle(options: BundleOptions): Promise<string> {
   mkdirSync(out, { recursive: true })
   mkdirSync(join(out, 'assets'), { recursive: true })
 
-  const s = spinner()
-  s.start(`Exporting Metro bundles (${platforms.join(', ')})`)
+  const s = process.stdout.isTTY ? spinner() : null
+  if (s) s.start(`Exporting Metro bundles (${platforms.join(', ')})`)
 
   const metroBin = findMetroBin(project)
   const useNode = metroBin.endsWith('.js')
@@ -101,11 +108,11 @@ export async function runBundle(options: BundleOptions): Promise<string> {
       }
     }
 
-    s.stop(color.green(`Export ready at ${out}`))
-    validateExportLayout(out)
+    if (s) s.stop(color.green(`Export ready at ${out}`))
+    validateExportLayout(out, platforms)
   }
   catch (error) {
-    s.stop(color.red('Export failed'))
+    if (s) s.stop(color.red('Export failed'))
     throw error
   }
 

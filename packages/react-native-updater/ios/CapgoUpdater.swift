@@ -54,11 +54,91 @@ public class CapgoUpdater: RCTEventEmitter {
   private static func rollbackIfNotReady() {
     let defaults = UserDefaults.standard
     if defaults.bool(forKey: "capgo_app_ready") { return }
-    guard let previous = defaults.string(forKey: "capgo_previous_bundle_id"),
-          bundleReady(id: previous) else { return }
-    defaults.set(previous, forKey: "capgo_current_bundle_id")
+    let failedId = defaults.string(forKey: "capgo_current_bundle_id") ?? "builtin"
+    let failedVersion = bundleVersion(id: failedId)
+    if let previous = defaults.string(forKey: "capgo_previous_bundle_id"),
+       bundleReady(id: previous) {
+      defaults.set(previous, forKey: "capgo_current_bundle_id")
+      defaults.removeObject(forKey: "capgo_next_bundle_id")
+      defaults.set(true, forKey: "capgo_app_ready")
+      let targetVersion = bundleVersion(id: previous)
+      sendStaticStats(action: "rollback", versionName: targetVersion, oldVersion: failedVersion)
+      return
+    }
+    let current = defaults.string(forKey: "capgo_current_bundle_id") ?? "builtin"
+    if current == "builtin" {
+      defaults.set(true, forKey: "capgo_app_ready")
+      return
+    }
+    rollbackToBuiltinStatic(oldVersion: failedVersion, action: "rollback")
+  }
+
+  private static func rollbackToBuiltinStatic(oldVersion: String, action: String) {
+    let defaults = UserDefaults.standard
+    defaults.set("builtin", forKey: "capgo_current_bundle_id")
     defaults.removeObject(forKey: "capgo_next_bundle_id")
+    defaults.removeObject(forKey: "capgo_previous_bundle_id")
     defaults.set(true, forKey: "capgo_app_ready")
+    sendStaticStats(action: action, versionName: "builtin", oldVersion: oldVersion)
+  }
+
+  private static func bundleVersion(id: String) -> String {
+    if id == "builtin" { return "builtin" }
+    guard let bundles = loadStaticIndex(),
+          let match = bundles.first(where: { ($0["id"] as? String) == id }),
+          let version = match["version"] as? String else { return id }
+    return version
+  }
+
+  private static func isSimulatorEnv() -> Bool {
+    #if targetEnvironment(simulator)
+    return true
+    #else
+    return false
+    #endif
+  }
+
+  private static func sendStaticStats(action: String, versionName: String, oldVersion: String = "") {
+    DispatchQueue.global(qos: .utility).async {
+      let statsUrl = Bundle.main.object(forInfoDictionaryKey: "CapgoStatsUrl") as? String
+        ?? CapgoUpdater.defaultStatsUrl
+      guard let endpoint = URL(string: statsUrl) else { return }
+      let deviceKey = "capgo_device_id"
+      let uuidPattern = #"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"#
+      var deviceId = UserDefaults.standard.string(forKey: deviceKey) ?? ""
+      if deviceId.isEmpty || deviceId.range(of: uuidPattern, options: .regularExpression) == nil {
+        deviceId = UUID().uuidString
+        UserDefaults.standard.set(deviceId, forKey: deviceKey)
+      }
+      let body: [String: Any] = [
+        "platform": "ios",
+        "device_id": deviceId,
+        "app_id": Bundle.main.object(forInfoDictionaryKey: "CapgoAppId") as? String
+          ?? Bundle.main.bundleIdentifier
+          ?? "unknown",
+        "custom_id": "",
+        "version_build": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0",
+        "version_code": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0",
+        "version_os": UIDevice.current.systemVersion,
+        "version_name": versionName,
+        "plugin_version": CapgoUpdater.pluginVersion,
+        "is_emulator": isSimulatorEnv(),
+        "is_prod": !isSimulatorEnv(),
+        "install_source": "react-native",
+        "defaultChannel": UserDefaults.standard.string(forKey: "capgo_default_channel")
+          ?? (Bundle.main.object(forInfoDictionaryKey: "CapgoDefaultChannel") as? String)
+          ?? "",
+        "action": action,
+        "old_version_name": oldVersion,
+      ]
+      guard let payload = try? JSONSerialization.data(withJSONObject: body) else { return }
+      var request = URLRequest(url: endpoint)
+      request.httpMethod = "POST"
+      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+      request.setValue("CapgoRNUpdater/\(CapgoUpdater.pluginVersion)", forHTTPHeaderField: "User-Agent")
+      request.httpBody = payload
+      URLSession(configuration: .ephemeral).dataTask(with: request).resume()
+    }
   }
 
   private static func bundleReady(id: String) -> Bool {
@@ -116,8 +196,11 @@ public class CapgoUpdater: RCTEventEmitter {
 
   private func deviceId() -> String {
     let key = "capgo_device_id"
-    if let existing = UserDefaults.standard.string(forKey: key), !existing.isEmpty {
-      return String(existing.prefix(36))
+    let uuidPattern = #"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"#
+    if let existing = UserDefaults.standard.string(forKey: key),
+       !existing.isEmpty,
+       existing.range(of: uuidPattern, options: .regularExpression) != nil {
+      return existing
     }
     let id = UUID().uuidString
     UserDefaults.standard.set(id, forKey: key)
@@ -476,28 +559,28 @@ public class CapgoUpdater: RCTEventEmitter {
   }
 
   @objc func next(_ options: NSDictionary, resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
-    guard let id = options["id"] as? String else {
-      reject("next_fail", "id required", nil)
-      return
+    queue.async {
+      guard let id = options["id"] as? String else {
+        reject("next_fail", "id required", nil)
+        return
+      }
+      guard CapgoUpdater.bundleReady(id: id) else {
+        reject("next_fail", "bundle not found or not ready", nil)
+        return
+      }
+      UserDefaults.standard.set(id, forKey: "capgo_next_bundle_id")
+      let record = self.bundleMap(id: id)
+      self.sendStats(action: "set_next", versionName: record["version"] as? String ?? id)
+      resolve(record)
     }
-    guard CapgoUpdater.bundleReady(id: id) else {
-      reject("next_fail", "bundle not found or not ready", nil)
-      return
-    }
-    UserDefaults.standard.set(id, forKey: "capgo_next_bundle_id")
-    let record = bundleMap(id: id)
-    sendStats(action: "set_next", versionName: record["version"] as? String ?? id)
-    resolve(record)
   }
 
   @objc func reset(_ _: NSDictionary, resolver resolve: @escaping RCTPromiseResolveBlock, rejecter _: @escaping RCTPromiseRejectBlock) {
-    let old = currentVersionName()
-    UserDefaults.standard.set("builtin", forKey: "capgo_current_bundle_id")
-    UserDefaults.standard.removeObject(forKey: "capgo_next_bundle_id")
-    UserDefaults.standard.removeObject(forKey: "capgo_previous_bundle_id")
-    UserDefaults.standard.set(true, forKey: "capgo_app_ready")
-    sendStats(action: "reset", versionName: "builtin", oldVersion: old)
-    resolve(bundleMap(id: "builtin"))
+    queue.async {
+      let old = self.currentVersionName()
+      CapgoUpdater.rollbackToBuiltinStatic(oldVersion: old, action: "reset")
+      resolve(self.bundleMap(id: "builtin"))
+    }
   }
 
   @objc func current(_ resolve: RCTPromiseResolveBlock, rejecter _: RCTPromiseRejectBlock) {

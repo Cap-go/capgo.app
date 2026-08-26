@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { log, spinner } from '@clack/prompts'
 import color from 'picocolors'
 import { runBundle } from './bundle.js'
@@ -54,8 +54,8 @@ export async function runUpload(appId: string, options: UploadOptions): Promise<
     return
   }
 
-  const s = spinner()
-  s.start('Uploading to Capgo with file-level delta')
+  const s = process.stdout.isTTY ? spinner() : null
+  if (s) s.start('Uploading to Capgo with file-level delta')
 
   const useDelta = options.delta !== false
   if (!useDelta && options.deltaOnly) {
@@ -67,6 +67,7 @@ export async function runUpload(appId: string, options: UploadOptions): Promise<
     '--path', exportPath,
     '--channel', options.channel,
     '--no-code-check',
+    '--package-json', join(project, 'package.json'),
   ]
 
   if (useDelta) args.push('--delta')
@@ -96,10 +97,10 @@ export async function runUpload(appId: string, options: UploadOptions): Promise<
 
   try {
     await run(cmd, cmdArgs, project)
-    s.stop(color.green('Upload complete'))
+    if (s) s.stop(color.green('Upload complete'))
   }
   catch (error) {
-    s.stop(color.red('Upload failed'))
+    if (s) s.stop(color.red('Upload failed'))
     throw error
   }
 }

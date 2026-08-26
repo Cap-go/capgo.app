@@ -59,6 +59,10 @@ enum CapgoBrotli {
       }
       return output
     }
-    throw NSError(domain: "capgo.brotli", code: 1, userInfo: [NSLocalizedDescriptionKey: "Brotli decompress failed"])
+    throw NSError(
+      domain: "capgo.brotli",
+      code: 1,
+      userInfo: [NSLocalizedDescriptionKey: "Brotli requires iOS 15 or newer"],
+    )
   }
 }

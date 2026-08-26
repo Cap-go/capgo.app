@@ -201,11 +201,6 @@ object CapgoDownloader {
     }
   }
 
-  private fun findCachedByHash(context: Context, hash: String, exclude: File): File? {
-    if (hash.length != 64) return null
-    return buildHashIndex(context, exclude)[hash.lowercase()]
-  }
-
   private fun walkFiles(dir: File): Sequence<File> = sequence {
     dir.listFiles()?.forEach { f ->
       if (f.isDirectory) yieldAll(walkFiles(f)) else yield(f)

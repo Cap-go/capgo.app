@@ -50,7 +50,7 @@ enum ZipArchive {
         if method == 0 {
           outData = payload
         } else if method == 8 {
-          outData = try inflateRaw(payload)
+          outData = try inflateRaw(payload, allowEmpty: payload.isEmpty)
         } else {
           throw NSError(domain: "capgo.zip", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unsupported zip method \(method)"])
         }
@@ -81,7 +81,7 @@ enum ZipArchive {
       | (UInt32(data[o + 3]) << 24)
   }
 
-  private static func inflateRaw(_ data: Data) throws -> Data {
+  private static func inflateRaw(_ data: Data, allowEmpty: Bool = false) throws -> Data {
     var stream = compression_stream()
     var status = compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB)
     guard status != COMPRESSION_STATUS_ERROR else {
@@ -124,7 +124,7 @@ enum ZipArchive {
       }
     }
 
-    if output.isEmpty {
+    if output.isEmpty && !allowEmpty {
       throw NSError(domain: "capgo.zip", code: 2, userInfo: [NSLocalizedDescriptionKey: "Deflate failed"])
     }
     return output
