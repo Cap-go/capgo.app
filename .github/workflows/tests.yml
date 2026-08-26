@@ -1581,6 +1581,7 @@ jobs:
       - id: bootstrap_published_cli_edge_server
         name: Bootstrap Edge server
         env:
+          CAPGO_PREVENT_BACKGROUND_FUNCTIONS: 'true'
           BACKGROUND_SERVICE_NAME: Bootstrap Edge server
           BACKGROUND_RUN_COMMAND: exec bun scripts/supabase-worktree.ts functions serve
           BACKGROUND_LOG_PATH: ${{ runner.temp }}/bootstrap-published-cli-edge-server.log

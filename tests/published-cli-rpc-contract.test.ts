@@ -52,19 +52,48 @@ async function loadFunctionPrivileges(pool: Pool, functionName: string): Promise
   const result = await pool.query<FunctionPrivilegeRow>(`
     SELECT
       p.oid::regprocedure::text AS proc,
-      CASE
-        WHEN p.proargmodes IS NULL THEN p.proargnames
-        ELSE (
-          SELECT array_agg(args.arg_name ORDER BY args.ordinality)
-          FROM unnest(p.proargnames, p.proargmodes) WITH ORDINALITY AS args(arg_name, arg_mode, ordinality)
-          WHERE args.arg_mode IN ('i', 'b', 'v')
-        )
-      END AS "argNames",
-      COALESCE(p.pronargdefaults, 0) AS "defaultCount",
-      p.pronargs AS "argCount",
+      input_args.arg_names AS "argNames",
+      input_args.default_count AS "defaultCount",
+      input_args.arg_count AS "argCount",
       has_function_privilege('anon', p.oid, 'EXECUTE') AS "anonExec"
     FROM pg_proc AS p
     INNER JOIN pg_namespace AS n ON n.oid = p.pronamespace
+    CROSS JOIN LATERAL (
+      SELECT
+        CASE
+          WHEN p.proargmodes IS NULL THEN p.proargnames
+          ELSE (
+            SELECT array_agg(args.arg_name ORDER BY args.ordinality)
+            FROM unnest(p.proargnames, p.proargmodes) WITH ORDINALITY AS args(arg_name, arg_mode, ordinality)
+            WHERE args.arg_mode IN ('i', 'b', 'v')
+          )
+        END AS arg_names,
+        COALESCE(
+          CASE
+            WHEN p.proargmodes IS NULL THEN array_length(p.proargnames, 1)
+            ELSE (
+              SELECT count(*)::int
+              FROM unnest(p.proargmodes) AS modes(arg_mode)
+              WHERE modes.arg_mode IN ('i', 'b', 'v')
+            )
+          END,
+          0,
+        ) AS arg_count,
+        LEAST(
+          COALESCE(p.pronargdefaults, 0),
+          COALESCE(
+            CASE
+              WHEN p.proargmodes IS NULL THEN array_length(p.proargnames, 1)
+              ELSE (
+                SELECT count(*)::int
+                FROM unnest(p.proargmodes) AS modes(arg_mode)
+                WHERE modes.arg_mode IN ('i', 'b', 'v')
+              )
+            END,
+            0,
+          ),
+        ) AS default_count
+    ) AS input_args
     WHERE n.nspname = 'public'
       AND p.proname = $1
       AND p.prokind = 'f'
