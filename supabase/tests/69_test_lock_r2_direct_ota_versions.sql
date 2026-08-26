@@ -36,6 +36,9 @@ VALUES (
 )
 ON CONFLICT (app_id) DO NOTHING;
 
+DELETE FROM public.app_versions
+WHERE app_id = 'com.test.r2direct.upload.lock';
+
 INSERT INTO public.app_versions (
   app_id,
   name,
@@ -44,6 +47,7 @@ INSERT INTO public.app_versions (
   storage_provider,
   checksum,
   session_key,
+  r2_path,
   comment,
   deleted
 )
@@ -56,6 +60,7 @@ VALUES
     'r2-direct',
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'session-key-staged',
+    NULL,
     'staged comment',
     false
   ),
@@ -65,6 +70,7 @@ VALUES
     '70000000-0000-4000-8000-000000000071',
     tests.get_supabase_uid('r2_direct_upload_lock_owner'),
     'r2-direct',
+    NULL,
     NULL,
     NULL,
     'in-progress comment',
@@ -78,22 +84,10 @@ VALUES
     'r2',
     'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
     'session-key-finalized',
+    'orgs/70000000-0000-4000-8000-000000000071/apps/com.test.r2direct.upload.lock/1.0.0-finalized.zip',
     'finalized comment',
     false
-  )
-ON CONFLICT (name, app_id) DO UPDATE
-SET
-  storage_provider = EXCLUDED.storage_provider,
-  checksum = EXCLUDED.checksum,
-  session_key = EXCLUDED.session_key,
-  r2_path = EXCLUDED.r2_path,
-  comment = EXCLUDED.comment,
-  deleted = false;
-
-UPDATE public.app_versions
-SET r2_path = 'orgs/70000000-0000-4000-8000-000000000071/apps/com.test.r2direct.upload.lock/1.0.0-finalized.zip'
-WHERE app_id = 'com.test.r2direct.upload.lock'
-  AND name = '1.0.0-finalized';
+  );
 
 SELECT throws_ok(
   $sql$
