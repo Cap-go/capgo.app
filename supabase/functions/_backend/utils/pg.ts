@@ -1541,6 +1541,7 @@ export interface AdminGlobalStatsTrend {
   apps_active: number
   apps_with_preview: number
   users_with_2fa: number
+  apps_with_store_url: number
   users: number
   users_active: number
   paying: number
@@ -1681,6 +1682,7 @@ export async function getAdminGlobalStatsTrend(
         gs.apps_active::int AS apps_active,
         COALESCE(NULLIF(to_jsonb(gs) ->> 'apps_with_preview', '')::int, 0)::int AS apps_with_preview,
         COALESCE(NULLIF(to_jsonb(gs) ->> 'users_with_2fa', '')::int, 0)::int AS users_with_2fa,
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'apps_with_store_url', '')::int, 0)::int AS apps_with_store_url,
         gs.users::int AS users,
         gs.users_active::int AS users_active,
         gs.paying::int AS paying,
@@ -1850,6 +1852,7 @@ export async function getAdminGlobalStatsTrend(
       apps_active: Number(row.apps_active) || 0,
       apps_with_preview: Number(row.apps_with_preview) || 0,
       users_with_2fa: Number(row.users_with_2fa) || 0,
+      apps_with_store_url: Number(row.apps_with_store_url) || 0,
       users: Number(row.users) || 0,
       users_active: Number(row.users_active) || 0,
       paying: Number(row.paying) || 0,
