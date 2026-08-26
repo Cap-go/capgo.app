@@ -279,6 +279,33 @@ SELECT throws_ok(
   'org admin cannot retarget an app-scoped binding to a non-member'
 );
 
+SELECT throws_ok(
+  $$INSERT INTO public.role_bindings (
+      principal_type,
+      principal_id,
+      role_id,
+      scope_type,
+      org_id,
+      app_id,
+      granted_by
+    )
+    SELECT
+      public.rbac_principal_apikey(),
+      (SELECT rbac_id FROM membership_test_apikey_reject_rbac),
+      roles.id,
+      public.rbac_scope_app(),
+      '70000000-0000-4000-8000-000000009976',
+      apps.id,
+      tests.get_supabase_uid('rbac_membership_admin')
+    FROM public.roles
+    JOIN public.apps ON apps.app_id = 'com.test.rbac.membership.ghsa9976'
+    WHERE roles.name = public.rbac_role_app_reader()
+      AND roles.scope_type = public.rbac_scope_app()$$,
+  '42501',
+  'new row violates row-level security policy for table "role_bindings"',
+  'org admin cannot grant an app-scoped role to an apikey without org-scope binding or org-member owner'
+);
+
 SELECT lives_ok(
   $$INSERT INTO public.role_bindings (
       principal_type,
@@ -428,33 +455,6 @@ SELECT lives_ok(
     WHERE roles.name = public.rbac_role_app_reader()
       AND roles.scope_type = public.rbac_scope_app()$$,
   'org admin can grant an app-scoped role to an apikey with its own org-scope binding'
-);
-
-SELECT throws_ok(
-  $$INSERT INTO public.role_bindings (
-      principal_type,
-      principal_id,
-      role_id,
-      scope_type,
-      org_id,
-      app_id,
-      granted_by
-    )
-    SELECT
-      public.rbac_principal_apikey(),
-      (SELECT rbac_id FROM membership_test_apikey_reject_rbac),
-      roles.id,
-      public.rbac_scope_app(),
-      '70000000-0000-4000-8000-000000009976',
-      apps.id,
-      tests.get_supabase_uid('rbac_membership_admin')
-    FROM public.roles
-    JOIN public.apps ON apps.app_id = 'com.test.rbac.membership.ghsa9976'
-    WHERE roles.name = public.rbac_role_app_reader()
-      AND roles.scope_type = public.rbac_scope_app()$$,
-  '42501',
-  'new row violates row-level security policy for table "role_bindings"',
-  'org admin cannot grant an app-scoped role to an apikey without org-scope binding or org-member owner'
 );
 
 SELECT lives_ok(
