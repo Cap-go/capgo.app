@@ -3299,6 +3299,16 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  IF TG_OP = 'INSERT'
+    AND COALESCE(NEW.is_invite, false) IS NOT TRUE
+  THEN
+    PERFORM public.pg_log(
+      'deny: ORG_USER_ACTIVE_INSERT',
+      pg_catalog.jsonb_build_object('org_id', NEW.org_id, 'uid', v_actor_id)
+    );
+    RAISE EXCEPTION 'Admins cannot insert active org memberships!';
+  END IF;
+
   IF TG_OP = 'UPDATE'
     AND (
       NEW.org_id IS DISTINCT FROM OLD.org_id
@@ -3383,6 +3393,7 @@ BEGIN
     WHERE role_bindings.principal_type = public.rbac_principal_apikey()
       AND role_bindings.principal_id = v_principal_id
       AND role_bindings.org_id = NEW.org_id
+      AND role_bindings.scope_type = public.rbac_scope_org()
       AND (
         role_bindings.expires_at IS NULL
         OR role_bindings.expires_at > pg_catalog.now()
@@ -3396,6 +3407,7 @@ BEGIN
       WHERE role_bindings.principal_type = public.rbac_principal_user()
         AND role_bindings.principal_id = v_principal_id
         AND role_bindings.org_id = NEW.org_id
+        AND role_bindings.scope_type = public.rbac_scope_org()
         AND (
           role_bindings.expires_at IS NULL
           OR role_bindings.expires_at > pg_catalog.now()
@@ -3412,6 +3424,7 @@ BEGIN
         ON role_bindings.principal_type = public.rbac_principal_group()
         AND role_bindings.principal_id = group_members.group_id
         AND role_bindings.org_id = groups.org_id
+        AND role_bindings.scope_type = public.rbac_scope_org()
       WHERE group_members.user_id = v_principal_id
         AND (
           role_bindings.expires_at IS NULL
@@ -5624,6 +5637,57 @@ $$;
 
 
 ALTER FUNCTION "public"."enforce_apikey_role_binding_expiration_policy"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."enforce_app_versions_delete_permission"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  -- Prefer current_request_role over auth.role()/session_user: pgTAP and
+  -- PostgREST API-key traffic set the role GUC (and/or JWT role) to anon while
+  -- session_user stays postgres. Falling back to session_user would skip the
+  -- guard for those callers.
+  v_request_role text := public.current_request_role();
+BEGIN
+  IF NOT (
+    NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
+    OR (NEW.deleted IS TRUE AND OLD.deleted IS NOT TRUE)
+  ) THEN
+    RETURN NEW;
+  END IF;
+
+  IF public.is_internal_request_role(v_request_role) THEN
+    RETURN NEW;
+  END IF;
+
+  IF v_request_role IS DISTINCT FROM 'anon'
+    AND v_request_role IS DISTINCT FROM 'authenticated'
+  THEN
+    RAISE EXCEPTION 'PERMISSION_DENIED_BUNDLE_DELETE'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF NOT public.rbac_check_permission_request(
+    public.rbac_perm_bundle_delete(),
+    OLD.owner_org,
+    OLD.app_id,
+    NULL::bigint
+  ) THEN
+    RAISE EXCEPTION 'PERMISSION_DENIED_BUNDLE_DELETE'
+      USING ERRCODE = '42501';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."enforce_app_versions_delete_permission"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."enforce_app_versions_delete_permission"() IS 'Requires bundle.delete when a user-context write changes deleted or deleted_at.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."enforce_channel_update_package_bundle"() RETURNS "trigger"
@@ -14103,7 +14167,13 @@ BEGIN
       p_channel_id
     );
 
-    IF v_channel_scope THEN
+    IF v_channel_scope
+      AND public.rbac_principal_has_org_binding(
+        public.rbac_principal_apikey(),
+        v_api_key.rbac_id,
+        v_effective_org_id
+      )
+    THEN
       SELECT o.is_allowed INTO v_override
       FROM public.channel_permission_overrides o
       WHERE o.principal_type = public.rbac_principal_apikey()
@@ -14145,7 +14215,13 @@ BEGIN
     p_channel_id
   );
 
-  IF v_channel_scope THEN
+  IF v_channel_scope
+    AND public.rbac_principal_has_org_binding(
+      public.rbac_principal_user(),
+      v_effective_user_id,
+      v_effective_org_id
+    )
+  THEN
     SELECT o.is_allowed INTO v_override
     FROM public.channel_permission_overrides o
     WHERE o.principal_type = public.rbac_principal_user()
@@ -15209,6 +15285,57 @@ CREATE OR REPLACE FUNCTION "public"."rbac_principal_group"() RETURNS "text"
 
 
 ALTER FUNCTION "public"."rbac_principal_group"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."rbac_principal_has_org_binding"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid") RETURNS boolean
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  SELECT CASE
+    WHEN p_org_id IS NULL OR p_principal_id IS NULL OR p_principal_type IS NULL THEN false
+    WHEN p_principal_type = public.rbac_principal_group() THEN EXISTS (
+      SELECT 1
+      FROM public.groups
+      WHERE groups.id = p_principal_id
+        AND groups.org_id = p_org_id
+    )
+    WHEN p_principal_type = public.rbac_principal_user() THEN (
+      EXISTS (
+        SELECT 1
+        FROM public.role_bindings
+        WHERE role_bindings.principal_type = p_principal_type
+          AND role_bindings.principal_id = p_principal_id
+          AND role_bindings.org_id = p_org_id
+          AND (role_bindings.expires_at IS NULL OR role_bindings.expires_at > pg_catalog.now())
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM public.group_members AS group_member
+        INNER JOIN public.role_bindings AS group_binding
+          ON group_binding.principal_type = public.rbac_principal_group()
+          AND group_binding.principal_id = group_member.group_id
+        WHERE group_member.user_id = p_principal_id
+          AND group_binding.org_id = p_org_id
+          AND (group_binding.expires_at IS NULL OR group_binding.expires_at > pg_catalog.now())
+      )
+    )
+    ELSE EXISTS (
+      SELECT 1
+      FROM public.role_bindings
+      WHERE role_bindings.principal_type = p_principal_type
+        AND role_bindings.principal_id = p_principal_id
+        AND role_bindings.org_id = p_org_id
+        AND (role_bindings.expires_at IS NULL OR role_bindings.expires_at > pg_catalog.now())
+    )
+  END;
+$$;
+
+
+ALTER FUNCTION "public"."rbac_principal_has_org_binding"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."rbac_principal_has_org_binding"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid") IS 'True when the principal still has a non-expired role binding in the org (direct or via group membership for users) or the group belongs to the org. Called once per channel-scoped rbac_check_permission_direct (console/RLS only). Indexed lookups on role_bindings_principal_org_idx and idx_group_members_user_id_group_id; no table scan on role_bindings at seed scale.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."rbac_principal_user"() RETURNS "text"
@@ -20405,7 +20532,9 @@ CREATE TABLE IF NOT EXISTS "public"."global_stats" (
     "notifications_sent_last_month" bigint DEFAULT 0 NOT NULL,
     "notifications_opened_last_month" bigint DEFAULT 0 NOT NULL,
     "apps_with_preview" bigint DEFAULT 0 NOT NULL,
-    "plan_credits" integer DEFAULT 0 NOT NULL
+    "plan_credits" integer DEFAULT 0 NOT NULL,
+    "users_with_2fa" bigint DEFAULT 0 NOT NULL,
+    "apps_with_store_url" bigint DEFAULT 0 NOT NULL
 );
 
 
@@ -20725,6 +20854,14 @@ COMMENT ON COLUMN "public"."global_stats"."apps_with_preview" IS 'Number of apps
 
 
 COMMENT ON COLUMN "public"."global_stats"."plan_credits" IS 'Orgs with remaining unexpired usage credits and no active Stripe plan or trial at snapshot day end.';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."users_with_2fa" IS 'Snapshot of users with at least one verified MFA factor at UTC day end.';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."apps_with_store_url" IS 'Number of apps with at least one App Store or Google Play link at snapshot day end.';
 
 
 
@@ -23068,6 +23205,10 @@ CREATE INDEX "role_bindings_parent_binding_id_idx" ON "public"."role_bindings" U
 
 
 
+CREATE INDEX "role_bindings_principal_org_idx" ON "public"."role_bindings" USING "btree" ("principal_type", "principal_id", "org_id", "expires_at");
+
+
+
 CREATE INDEX "role_bindings_principal_scope_idx" ON "public"."role_bindings" USING "btree" ("principal_type", "principal_id", "scope_type", "org_id", "app_id", "channel_id");
 
 
@@ -23200,7 +23341,7 @@ CREATE OR REPLACE TRIGGER "check_if_org_can_exist_org_users" AFTER DELETE ON "pu
 
 
 
-CREATE OR REPLACE TRIGGER "check_privileges" BEFORE INSERT OR UPDATE OF "user_id", "org_id", "rbac_role_name" ON "public"."org_users" FOR EACH ROW WHEN ((("current_setting"('request.jwt.claim.role'::"text", true) = 'authenticated'::"text") AND COALESCE((NOT ("current_setting"('request.jwt.claim.email'::"text", true) = ANY (ARRAY['bot@capgo.app'::"text", 'test@capgo.app'::"text"]))), true))) EXECUTE FUNCTION "public"."check_org_user_privileges"();
+CREATE OR REPLACE TRIGGER "check_privileges" BEFORE INSERT OR UPDATE OF "user_id", "org_id", "rbac_role_name", "is_invite" ON "public"."org_users" FOR EACH ROW WHEN ((("current_setting"('request.jwt.claim.role'::"text", true) = ANY (ARRAY['authenticated'::"text", 'anon'::"text"])) AND COALESCE((NOT ("current_setting"('request.jwt.claim.email'::"text", true) = ANY (ARRAY['bot@capgo.app'::"text", 'test@capgo.app'::"text"]))), true))) EXECUTE FUNCTION "public"."check_org_user_privileges"();
 
 
 
@@ -23217,6 +23358,10 @@ CREATE OR REPLACE TRIGGER "credit_usage_alert_on_transactions" AFTER INSERT ON "
 
 
 CREATE OR REPLACE TRIGGER "credit_usage_posthog_on_transactions" AFTER INSERT ON "public"."usage_credit_transactions" FOR EACH ROW EXECUTE FUNCTION "public"."enqueue_credit_usage_posthog_event"();
+
+
+
+CREATE OR REPLACE TRIGGER "enforce_app_versions_delete_permission" BEFORE UPDATE OF "deleted", "deleted_at" ON "public"."app_versions" FOR EACH ROW EXECUTE FUNCTION "public"."enforce_app_versions_delete_permission"();
 
 
 
@@ -25915,6 +26060,11 @@ GRANT ALL ON FUNCTION "public"."enforce_apikey_role_binding_expiration_policy"()
 
 
 
+REVOKE ALL ON FUNCTION "public"."enforce_app_versions_delete_permission"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."enforce_app_versions_delete_permission"() TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."enforce_channel_update_package_bundle"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."enforce_channel_update_package_bundle"() TO "service_role";
 
@@ -27343,6 +27493,11 @@ GRANT ALL ON FUNCTION "public"."rbac_principal_apikey"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."rbac_principal_group"() TO "anon";
 GRANT ALL ON FUNCTION "public"."rbac_principal_group"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."rbac_principal_group"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."rbac_principal_has_org_binding"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."rbac_principal_has_org_binding"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid") TO "service_role";
 
 
 

@@ -817,7 +817,7 @@ describe('global stats metric helpers', () => {
   })
   it.concurrent('snapshots users with verified 2FA in the core global stats shard', () => {
     const source = readFileSync(new URL('../supabase/functions/_backend/triggers/global_stats.ts', import.meta.url), 'utf8')
-    const countFn = source.match(/async function countUsersWith2fa[\s\S]*?async function getTrialExtensionStats/)?.[0] ?? ''
+    const countFn = source.match(/async function countUsersWith2fa[\s\S]*?async function countAppsWithStoreUrl/)?.[0] ?? ''
     const coreShard = source.match(/async function runCoreGlobalStatsShard[\s\S]*?async function getRegistersToday/)?.[0] ?? ''
 
     expect(countFn).toContain('auth.mfa_factors')
@@ -833,6 +833,22 @@ describe('global stats metric helpers', () => {
     // Name-match only: a generic PGRST204/42703 must not drop the other optional column.
     expect(source).toContain('.includes(\'apps_with_preview\')')
     expect(source).toContain('.includes(\'users_with_2fa\')')
+  })
+
+  it.concurrent('snapshots apps with at least one store URL in the core global stats shard', () => {
+    const source = readFileSync(new URL('../supabase/functions/_backend/triggers/global_stats.ts', import.meta.url), 'utf8')
+    const countFn = source.match(/async function countAppsWithStoreUrl[\s\S]*?async function getTrialExtensionStats/)?.[0] ?? ''
+    const coreShard = source.match(/async function runCoreGlobalStatsShard[\s\S]*?async function getRegistersToday/)?.[0] ?? ''
+
+    expect(countFn).toContain('apps.ios_store_url')
+    expect(countFn).toContain('apps.android_store_url')
+    expect(countFn).toContain('[^[:space:]]')
+    expect(countFn).toContain('apps.created_at <')
+    expect(countFn).toContain('snapshotEnd')
+    expect(coreShard).toContain('countAppsWithStoreUrl(c, window.prevDayEnd)')
+    expect(coreShard).toContain('apps_with_store_url,')
+    expect(source).toContain('apps_with_store_url?: number')
+    expect(source).toContain('isMissingAppsWithStoreUrlColumnError')
   })
 
   it.concurrent('normalizes global stats retry payload counts', () => {

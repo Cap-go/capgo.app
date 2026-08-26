@@ -1,4 +1,5 @@
 import type { BundleDecryptOptions, DecryptResult } from '../schemas/bundle'
+import { Buffer } from 'node:buffer'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { cwd } from 'node:process'
 import { intro, log, outro } from '@clack/prompts'
@@ -7,7 +8,9 @@ import { trackEvent } from '../analytics/track'
 import { decryptChecksum, decryptChecksumV3, decryptSource } from '../api/crypto'
 import { checkAlerts } from '../api/update'
 import { getChecksum } from '../checksum'
+import { CliUserError } from '../shared/cli-user-error'
 import { baseKeyPubV2, findRoot, formatError, getConfig, getInstalledVersion, isDeprecatedPluginVersion } from '../utils'
+import { requireExistingZipPath, requireIvSessionKey, requireZipPath } from './validate-inputs'
 
 export type { DecryptResult } from '../schemas/bundle'
 
@@ -30,6 +33,15 @@ function resolvePublicKey(options: BundleDecryptOptions, extConfig: Awaited<Retu
   return { publicKey, fallbackKeyPath }
 }
 
+function toIvSessionKeyDecryptError(error: unknown): CliUserError | null {
+  if (!(error instanceof Error))
+    return null
+  if (/RSA routines/i.test(error.message)) {
+    return new CliUserError('Unable to decrypt ivSessionKey with the configured public key. Verify the ivSessionKey and public key.')
+  }
+  return null
+}
+
 export async function decryptZipInternal(
   zipPath: string,
   ivsessionKey: string,
@@ -40,14 +52,12 @@ export async function decryptZipInternal(
     intro('Decrypt zip file')
 
   try {
-    await checkAlerts()
+    requireZipPath(zipPath)
+    requireIvSessionKey(ivsessionKey)
+    requireExistingZipPath(zipPath)
 
-    if (!existsSync(zipPath)) {
-      const message = `Zip not found at the path ${zipPath}`
-      if (!silent)
-        log.error(message)
-      throw new Error(message)
-    }
+    if (!silent)
+      await checkAlerts()
 
     const extConfig = await getConfig()
 
@@ -69,7 +79,16 @@ export async function decryptZipInternal(
 
     const zipFile = readFileSync(zipPath)
 
-    const decodedZip = decryptSource(zipFile, ivsessionKey, options.keyData ?? publicKey)
+    let decodedZip: Buffer
+    try {
+      decodedZip = decryptSource(zipFile, ivsessionKey, options.keyData ?? publicKey)
+    }
+    catch (error) {
+      const ivSessionKeyError = toIvSessionKeyDecryptError(error)
+      if (ivSessionKeyError)
+        throw ivSessionKeyError
+      throw error
+    }
     const outputPath = `${zipPath}_decrypted.zip`
     writeFileSync(outputPath, decodedZip)
 
@@ -125,6 +144,12 @@ export async function decryptZipInternal(
     return { outputPath, checksumMatches }
   }
   catch (error) {
+    if (error instanceof CliUserError) {
+      if (!silent)
+        log.error(`Error: ${error.message}`)
+      throw error
+    }
+
     if (!silent)
       log.error(`Error decrypting zip file ${formatError(error)}`)
     throw error instanceof Error ? error : new Error(String(error))

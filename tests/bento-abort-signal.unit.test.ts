@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { syncBentoSubscriberTags, trackBentoEvents, unsubscribeBento } from '../supabase/functions/_backend/utils/bento.ts'
+import { getBentoSubscriberEmailByUuid, syncBentoSubscriberTags, trackBentoEvents, unsubscribeBento } from '../supabase/functions/_backend/utils/bento.ts'
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
   cloudlog: vi.fn(),
@@ -94,6 +94,32 @@ describe('bento abort signals', () => {
     expect(fetchMock).toHaveBeenCalledOnce()
     const [url, init] = fetchMock.mock.calls[0]!
     expect(String(url)).toBe('https://app.bentonow.com/api/v1/batch/events?site_uuid=site-uuid-value')
+    expect(init?.signal).toBe(controller.signal)
+  })
+
+  it('forwards the optional subscriber uuid lookup signal to the GET fetch', async () => {
+    const fetchMock = vi.fn<(
+      input: string | URL | Request,
+      init?: RequestInit,
+    ) => Promise<Response>>(async () => new Response(JSON.stringify({
+      data: { attributes: { email: 'looked.up@example.com' } },
+    }), {
+      headers: { 'content-type': 'application/json' },
+      status: 200,
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const controller = new AbortController()
+    await expect(getBentoSubscriberEmailByUuid(
+      createContext(),
+      '11111111-1111-4111-8111-111111111111',
+      controller.signal,
+    )).resolves.toBe('looked.up@example.com')
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(String(url)).toContain('/api/v1/fetch/subscribers')
+    expect(init?.method).toBe('GET')
     expect(init?.signal).toBe(controller.signal)
   })
 

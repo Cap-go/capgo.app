@@ -977,6 +977,147 @@ export async function withAuthenticatedUser<T>(
   })
 }
 
+export type SqlQueryFn = (
+  text: string,
+  params?: Array<string | number | null>,
+) => Promise<{ rows: Array<Record<string, unknown>>, rowCount?: number | null }>
+
+export async function setAuthenticatedClaim(query: SqlQueryFn, userId: string): Promise<void> {
+  await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claim.sub', userId])
+  await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claim.role', 'authenticated'])
+  await query(`SELECT set_config($1, $2, true)`, [
+    'request.jwt.claims',
+    JSON.stringify({
+      sub: userId,
+      role: 'authenticated',
+      aud: 'authenticated',
+    }),
+  ])
+  await query('SET LOCAL ROLE authenticated')
+}
+
+export async function setServiceRoleClaim(query: SqlQueryFn): Promise<void> {
+  await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claim.role', 'service_role'])
+  await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claims', JSON.stringify({ role: 'service_role' })])
+  await query('SET LOCAL ROLE service_role')
+}
+
+export async function setAnonCapgkeyClaim(query: SqlQueryFn, capgkey: string): Promise<void> {
+  await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claim.role', 'anon'])
+  await query(`SELECT set_config($1, $2, true)`, ['request.headers', JSON.stringify({ capgkey })])
+  await query('SET LOCAL ROLE anon')
+}
+
+export async function createOrgOwnedByUser(
+  query: SqlQueryFn,
+  ownerId: string,
+  labelPrefix: string,
+): Promise<string> {
+  const orgId = randomUUID()
+  await setServiceRoleClaim(query)
+  await query(
+    `
+      INSERT INTO public.orgs (id, name, management_email, created_by)
+      VALUES ($1::uuid, $2, $3, $4::uuid)
+    `,
+    [orgId, `${labelPrefix} ${orgId}`, `${labelPrefix.toLowerCase().replace(/\s+/g, '-')}-${orgId}@capgo.app`, ownerId],
+  )
+  return orgId
+}
+
+export async function createOrgAdminApiKey(
+  query: SqlQueryFn,
+  options: {
+    orgId: string
+    ownerId: string
+    label: string
+  },
+): Promise<string> {
+  const { orgId, ownerId, label } = options
+  const apiKey = randomUUID()
+  const apiKeyResult = await query(
+    `
+      INSERT INTO public.apikeys (user_id, key, name)
+      VALUES ($1::uuid, $2, $3)
+      RETURNING rbac_id
+    `,
+    [ownerId, apiKey, label],
+  )
+  const apiKeyRbacId = apiKeyResult.rows[0]?.rbac_id as string | undefined
+  if (!apiKeyRbacId)
+    throw new Error(`Failed to create API key for ${label}`)
+
+  const bindingResult = await query(
+    `
+      INSERT INTO public.role_bindings (
+        principal_type, principal_id, role_id, scope_type, org_id, granted_by, is_direct
+      )
+      SELECT
+        public.rbac_principal_apikey(),
+        $1::uuid,
+        roles.id,
+        public.rbac_scope_org(),
+        $2::uuid,
+        $3::uuid,
+        true
+      FROM public.roles
+      WHERE roles.name = public.rbac_role_org_super_admin()
+        AND roles.scope_type = public.rbac_scope_org()
+      RETURNING id
+    `,
+    [apiKeyRbacId, orgId, ownerId],
+  )
+  if (bindingResult.rowCount !== 1)
+    throw new Error(`Failed to bind org super admin role for API key ${label}`)
+
+  return apiKey
+}
+
+export async function insertPendingOrgInvitation(
+  query: SqlQueryFn,
+  options: {
+    orgId: string
+    inviteeId: string
+    roleName: string
+    grantedBy: string
+  },
+): Promise<void> {
+  const { orgId, inviteeId, roleName, grantedBy } = options
+  await query(
+    `
+      INSERT INTO public.org_users (org_id, user_id, rbac_role_name, is_invite)
+      VALUES ($1::uuid, $2::uuid, $3, true)
+    `,
+    [orgId, inviteeId, roleName],
+  )
+  const bindingResult = await query(
+    `
+      INSERT INTO public.role_bindings (
+        principal_type, principal_id, role_id, scope_type, org_id,
+        granted_by, granted_at, expires_at, reason, is_direct
+      )
+      SELECT
+        public.rbac_principal_user(),
+        $1::uuid,
+        roles.id,
+        public.rbac_scope_org(),
+        $2::uuid,
+        $3::uuid,
+        now(),
+        now() - INTERVAL '1 second',
+        'Pending invitation',
+        true
+      FROM public.roles
+      WHERE roles.name = $4
+        AND roles.scope_type = public.rbac_scope_org()
+      RETURNING id
+    `,
+    [inviteeId, orgId, grantedBy, roleName],
+  )
+  if (bindingResult.rowCount !== 1)
+    throw new Error(`Failed to create pending invitation binding for role ${roleName}`)
+}
+
 export async function withAnonymousCapgkey<T>(
   db: Pool,
   capgkey: string,

@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { syncBentoSubscriberTags, trackBentoEvent, trackBentoEvents, unsubscribeBento } from '../supabase/functions/_backend/utils/bento.ts'
+import { getBentoSubscriberEmailByUuid, parseBentoSubscriberEmail, syncBentoSubscriberTags, trackBentoEvent, trackBentoEvents, unsubscribeBento } from '../supabase/functions/_backend/utils/bento.ts'
 
 const { cloudlogErrMock, getEnvMock } = vi.hoisted(() => ({
   cloudlogErrMock: vi.fn(),
@@ -348,6 +348,55 @@ describe('bento response acceptance and configuration', () => {
       queueAcknowledgement(acknowledgement)
 
       await expect(unsubscribeBento(createContext(), 'unsubscribed.user@example.com')).resolves.toBe(false)
+    })
+  })
+
+  describe('getBentoSubscriberEmailByUuid', () => {
+    const visitorUuid = '11111111-1111-4111-8111-111111111111'
+
+    it('returns the subscriber email from a GET lookup', async () => {
+      queueAcknowledgement({
+        data: {
+          attributes: { email: 'User@Example.com', uuid: visitorUuid },
+          id: '1',
+          type: 'visitors',
+        },
+      })
+
+      await expect(getBentoSubscriberEmailByUuid(createContext(), visitorUuid)).resolves.toBe('user@example.com')
+
+      const [url, init] = fetchMock.mock.calls[0]!
+      expect(String(url)).toContain('/api/v1/fetch/subscribers')
+      expect(String(url)).toContain(`uuid=${visitorUuid}`)
+      expect(init?.method).toBe('GET')
+      expect(init?.body).toBeUndefined()
+    })
+
+    it('returns null when Bento has no subscriber for the uuid', async () => {
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 404 }))
+
+      await expect(getBentoSubscriberEmailByUuid(createContext(), visitorUuid)).resolves.toBeNull()
+    })
+
+    it('returns undefined when Bento is not configured', async () => {
+      getEnvMock.mockReturnValue('')
+
+      await expect(getBentoSubscriberEmailByUuid(createContext(), visitorUuid)).resolves.toBeUndefined()
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('parseBentoSubscriberEmail', () => {
+    it('reads JSON:API subscriber attributes', () => {
+      expect(parseBentoSubscriberEmail({
+        data: { attributes: { email: ' User@Example.com ' } },
+      })).toBe('user@example.com')
+    })
+
+    it('returns null for missing or invalid payloads', () => {
+      expect(parseBentoSubscriberEmail(null)).toBeNull()
+      expect(parseBentoSubscriberEmail({ data: null })).toBeNull()
+      expect(parseBentoSubscriberEmail({ data: { attributes: { email: 1 } } })).toBeNull()
     })
   })
 })

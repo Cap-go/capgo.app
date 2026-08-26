@@ -55,4 +55,5 @@ export interface Tab<T = TableRow> {
   badge?: string
   onClick?: (elem: T | undefined) => void
   redirect?: boolean
+  children?: Tab<T>[]
 }

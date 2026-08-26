@@ -101,6 +101,26 @@ describe('admin stats validation', () => {
     expect(parsed.success).toBe(true)
   })
 
+  it.concurrent('accepts the famous apps metric', () => {
+    const parsed = safeParseSchema(adminStatsBodySchema, {
+      ...baseBody,
+      metric_category: 'famous_apps',
+      min_score: 55,
+      search: 'bank',
+      tier: 'iconic',
+      limit: 50,
+      offset: 0,
+    })
+
+    expect(parsed.success).toBe(true)
+    if (!parsed.success)
+      return
+
+    expect(parsed.data.metric_category).toBe('famous_apps')
+    expect(parsed.data.min_score).toBe(55)
+    expect(parsed.data.tier).toBe('iconic')
+  })
+
   it.concurrent('accepts the trial plan breakdown metric', () => {
     const parsed = safeParseSchema(adminStatsBodySchema, {
       ...baseBody,

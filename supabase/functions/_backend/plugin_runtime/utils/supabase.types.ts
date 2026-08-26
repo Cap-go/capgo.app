@@ -1546,6 +1546,7 @@ export type Database = {
           apps_with_manual_builds_24h: number
           apps_with_preview: number
           users_with_2fa: number
+          apps_with_store_url: number
           average_ltv: number
           build_avg_seconds_day_android: number
           build_avg_seconds_day_ios: number
@@ -1648,6 +1649,7 @@ export type Database = {
           apps_with_manual_builds_24h?: number
           apps_with_preview?: number
           users_with_2fa?: number
+          apps_with_store_url?: number
           average_ltv?: number
           build_avg_seconds_day_android?: number
           build_avg_seconds_day_ios?: number
@@ -1750,6 +1752,7 @@ export type Database = {
           apps_with_manual_builds_24h?: number
           apps_with_preview?: number
           users_with_2fa?: number
+          apps_with_store_url?: number
           average_ltv?: number
           build_avg_seconds_day_android?: number
           build_avg_seconds_day_ios?: number
