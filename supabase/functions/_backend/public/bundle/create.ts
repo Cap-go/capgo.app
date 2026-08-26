@@ -168,41 +168,21 @@ async function checkVersionExists(c: Context, appId: string, apikey: Database['p
   }
 }
 
-function checkEncryptedBundleEnforcement(appWithOrg: AppWithOrg, sessionKey: string | undefined, keyId: string | undefined): void {
+function checkEncryptedBundleEnforcement(appWithOrg: AppWithOrg): void {
   // If org doesn't enforce encrypted bundles, allow
   if (!appWithOrg.orgs.enforce_encrypted_bundles) {
     return
   }
 
-  // Check if bundle is encrypted (has a non-empty session_key)
-  if (!sessionKey || sessionKey === '') {
-    throw simpleError('encryption_required', 'This organization requires all bundles to be encrypted. Please upload an encrypted bundle with a session_key.', {
-      enforce_encrypted_bundles: true,
-    })
-  }
-
-  // If org requires a specific encryption key, check it matches
-  const requiredKey = appWithOrg.orgs.required_encryption_key
-  if (requiredKey && requiredKey !== '') {
-    // Bundle must have a key_id
-    if (!keyId || keyId === '') {
-      throw simpleError('encryption_key_required', 'This organization requires bundles to be encrypted with a specific key. The uploaded bundle does not have a key_id.', {
-        enforce_encrypted_bundles: true,
-        required_encryption_key: true,
-      })
-    }
-
-    // Check if the key_id matches the required key (compare first N characters)
-    // key_id is 20 chars, required_encryption_key is up to 21 chars
-    const matches = keyId === requiredKey.substring(0, 20) || keyId.startsWith(requiredKey)
-    if (!matches) {
-      throw simpleError('encryption_key_mismatch', 'This organization requires bundles to be encrypted with a specific key. The uploaded bundle was encrypted with a different key.', {
-        enforce_encrypted_bundles: true,
-        required_encryption_key: true,
-        expected_key_prefix: `${requiredKey.substring(0, 4)}...`,
-      })
-    }
-  }
+  // POST /bundle only registers external_url rows (storage_provider: external).
+  // Org enforcement requires server-verifiable encryption; Capgo never fetches
+  // customer URLs (SSRF), so caller-supplied session_key/key_id is not proof.
+  // Clients must use direct upload (CLI bundle upload without -e) instead.
+  // Version gating would preserve the bypass for older API clients.
+  throw simpleError('encryption_required', 'This organization requires all bundles to be encrypted. External URL bundles cannot be used because Capgo cannot verify their encryption. Upload the bundle directly instead.', {
+    enforce_encrypted_bundles: true,
+    external_url: true,
+  })
 }
 
 async function insertBundle(c: Context, body: CreateBundleBody, ownerOrg: string, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<any> {
@@ -259,7 +239,7 @@ export async function createBundle(c: Context<MiddlewareKeyVariables>, body: Cre
   const appWithOrg = await getAppOrganization(c, body.app_id)
 
   // Check encrypted bundle enforcement
-  checkEncryptedBundleEnforcement(appWithOrg, body.session_key, body.key_id)
+  checkEncryptedBundleEnforcement(appWithOrg)
 
   await checkVersionExists(c, body.app_id, apikey, body.version)
 

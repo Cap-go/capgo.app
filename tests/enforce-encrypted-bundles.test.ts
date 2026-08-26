@@ -305,7 +305,7 @@ describe('[Encrypted Bundles Enforcement]', () => {
       })
     })
 
-    it('should allow encrypted bundle via API when enforcement is enabled', async () => {
+    it('should reject external_url bundle with fake session_key when enforcement is enabled', async () => {
       await withEncryptedBundleEnforcement(async () => {
         const response = await fetch(getEndpointUrl('/bundle'), {
           method: 'POST',
@@ -316,10 +316,14 @@ describe('[Encrypted Bundles Enforcement]', () => {
             checksum: 'b2c3d4e5f6789abcdef123456789abcdef123456789abcdef123456789abcde',
             external_url: 'https://example.com/bundle-encrypted.zip',
             session_key: 'encrypted-session-key-for-api-test',
+            key_id: 'a'.repeat(20),
           }),
         })
 
-        expect(response.ok).toBe(true)
+        expect(response.ok).toBe(false)
+        const data = await response.json() as { error?: string, message?: string }
+        expect(data.error).toBe('encryption_required')
+        expect(data.message, `unexpected encryption rejection body: ${JSON.stringify(data)}`).toMatch(/external/i)
       })
     })
 
