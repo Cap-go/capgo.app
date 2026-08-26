@@ -107,6 +107,16 @@ describe('published CLI contract helpers', () => {
     ])
   })
 
+  it.concurrent('marks dynamic rpc args as unresolved instead of zero-arg', () => {
+    const source = `
+      await supabase.rpc('is_allowed_action_org_action', args)
+    `
+
+    expect(extractPublishedCliRpcCallsFromSource(source)).toEqual([
+      { name: 'is_allowed_action_org_action', argKeys: null },
+    ])
+  })
+
   it.concurrent('matches postgrest overloads from provided rpc argument keys', () => {
     expect(rpcCallMatchesOverload(
       { name: 'get_user_id', argKeys: ['apikey'] },
@@ -156,5 +166,12 @@ describe('published CLI contract helpers', () => {
       1,
       2,
     )).toBe(false)
+
+    expect(rpcCallMatchesOverload(
+      { name: 'is_allowed_action_org_action', argKeys: null },
+      [],
+      0,
+      0,
+    )).toBe(true)
   })
 })

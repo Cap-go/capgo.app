@@ -87,6 +87,9 @@ async function loadFunctionPrivileges(pool: Pool, functionName: string): Promise
 }
 
 function resolveMatchingOverloads(call: PublishedCliRpcCall, rows: FunctionPrivilegeRow[]) {
+  if (call.argKeys === null)
+    return rows
+
   return rows.filter(row => rpcCallMatchesOverload(
     call,
     row.argNames,
@@ -130,12 +133,18 @@ describe('CRITICAL published CLI RPC contract', () => {
       expect(overloads.length, `${call.name} is missing from public schema`).toBeGreaterThan(0)
 
       const matches = resolveMatchingOverloads(call, overloads)
-      expect(matches.length, `No overload matched ${formatPublishedCliRpcCall(call)}`).toBeGreaterThan(0)
+      if (call.argKeys === null) {
+        expect(overloads.length, `${call.name} is missing from public schema`).toBeGreaterThan(0)
+      }
+      else {
+        expect(matches.length, `No overload matched ${formatPublishedCliRpcCall(call)}`).toBeGreaterThan(0)
+      }
 
-      const lacksAnonExec = matches.some(overload => !overload.anonExec)
+      const overloadsToCheck = call.argKeys === null ? overloads : matches
+      const lacksAnonExec = overloadsToCheck.some(overload => !overload.anonExec)
 
       if (lacksAnonExec) {
-        const procList = matches
+        const procList = overloadsToCheck
           .filter(overload => !overload.anonExec)
           .map(overload => overload.proc)
           .join(', ')
