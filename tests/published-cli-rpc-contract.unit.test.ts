@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   comparePublishedCliTags,
   extractPublishedCliRpcCallsFromSource,
+  normalizePublishedCliNpmVersions,
   resolveLatestPublishedCliTag,
   resolvePublishedCliNpmInstallVersion,
   resolvePublishedCliRpcSourceTag,
@@ -44,6 +45,11 @@ describe('published CLI contract helpers', () => {
     })
 
     expect(tag).toBe('cli-8.42.5')
+  })
+
+  it.concurrent('normalizes single-string npm versions responses', () => {
+    expect(normalizePublishedCliNpmVersions('8.42.3')).toEqual(['8.42.3'])
+    expect(normalizePublishedCliNpmVersions(['8.42.1', '8.42.3'])).toEqual(['8.42.1', '8.42.3'])
   })
 
   it.concurrent('uses the highest published npm version at or below the git tag', () => {

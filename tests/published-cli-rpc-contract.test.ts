@@ -43,10 +43,30 @@ interface FunctionPrivilegeRow {
   anonExec: boolean
 }
 
-const publishedCliTag = resolveLatestPublishedCliTag()
-const publishedCliNpmVersion = resolvePublishedCliNpmInstallVersion(publishedCliTag)
-const publishedCliRpcSourceTag = resolvePublishedCliRpcSourceTag(publishedCliTag, publishedCliNpmVersion)
-const publishedCliRpcCalls = extractPublishedCliRpcCalls(publishedCliRpcSourceTag)
+interface PublishedCliContractContext {
+  tag: string
+  npmVersion: string
+  rpcSourceTag: string
+  rpcCalls: PublishedCliRpcCall[]
+}
+
+let publishedCliContract: PublishedCliContractContext | undefined
+
+function loadPublishedCliContract(): PublishedCliContractContext {
+  if (!publishedCliContract) {
+    const tag = resolveLatestPublishedCliTag()
+    const npmVersion = resolvePublishedCliNpmInstallVersion(tag)
+    const rpcSourceTag = resolvePublishedCliRpcSourceTag(tag, npmVersion)
+    publishedCliContract = {
+      tag,
+      npmVersion,
+      rpcSourceTag,
+      rpcCalls: extractPublishedCliRpcCalls(rpcSourceTag),
+    }
+  }
+
+  return publishedCliContract
+}
 
 async function loadFunctionPrivileges(pool: Pool, functionName: string): Promise<FunctionPrivilegeRow[]> {
   const result = await pool.query<FunctionPrivilegeRow>(`
@@ -88,22 +108,24 @@ function createAnonymousApiKeyClient(apikey: string) {
   })
 }
 
-describe(`CRITICAL published CLI RPC contract (${publishedCliRpcSourceTag} / npm ${publishedCliNpmVersion})`, () => {
+describe('CRITICAL published CLI RPC contract', () => {
   let pool: Pool
+  let contract: PublishedCliContractContext
 
   beforeAll(() => {
+    contract = loadPublishedCliContract()
     pool = new Pool({ connectionString: POSTGRES_URL })
-    expect(publishedCliRpcCalls.length).toBeGreaterThan(0)
+    expect(contract.rpcCalls.length, `No RPC calls extracted from ${contract.rpcSourceTag}`).toBeGreaterThan(0)
   })
 
   afterAll(async () => {
     await pool.end()
   })
 
-  it.concurrent(`keeps anon EXECUTE on every RPC still called by ${publishedCliRpcSourceTag}`, async () => {
+  it.concurrent('keeps anon EXECUTE on every RPC still called by the published CLI', async () => {
     const missing: string[] = []
 
-    for (const call of publishedCliRpcCalls) {
+    for (const call of contract.rpcCalls) {
       const overloads = await loadFunctionPrivileges(pool, call.name)
       expect(overloads.length, `${call.name} is missing from public schema`).toBeGreaterThan(0)
 
@@ -121,7 +143,7 @@ describe(`CRITICAL published CLI RPC contract (${publishedCliRpcSourceTag} / npm
       }
     }
 
-    expect(missing, `Published CLI ${publishedCliRpcSourceTag} would break in production:\n${missing.join('\n')}`).toEqual([])
+    expect(missing, `Published CLI ${contract.rpcSourceTag} would break in production:\n${missing.join('\n')}`).toEqual([])
   })
 
   it.concurrent(`published CLI identity RPC get_user_id({ apikey }) MUST succeed for valid API keys`, async () => {
@@ -135,9 +157,9 @@ describe(`CRITICAL published CLI RPC contract (${publishedCliRpcSourceTag} / npm
     expect(data).toBe(USER_ID)
   })
 
-  it.concurrent(`published @capgo/cli@${publishedCliNpmVersion} app list MUST succeed against this schema`, async () => {
+  it.concurrent('published @capgo/cli app list MUST succeed against this schema', async () => {
     const { stdout, stderr } = await execFileAsync('bunx', [
-      `@capgo/cli@${publishedCliNpmVersion}`,
+      `@capgo/cli@${contract.npmVersion}`,
       'app',
       'list',
       '-a',

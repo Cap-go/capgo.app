@@ -63,12 +63,22 @@ function defaultNpmRunner(args: string[]): string {
   return execFileSync('npm', args, { encoding: 'utf8' }).trim()
 }
 
+export function normalizePublishedCliNpmVersions(parsed: unknown): string[] {
+  if (Array.isArray(parsed))
+    return parsed.filter((version): version is string => typeof version === 'string')
+
+  if (typeof parsed === 'string')
+    return [parsed]
+
+  throw new Error(`Unexpected @capgo/cli versions response: ${JSON.stringify(parsed)}`)
+}
+
 export function resolvePublishedCliNpmInstallVersion(
   tag: string,
   runNpm: NpmRunner = defaultNpmRunner,
 ): string {
   const targetVersion = resolvePublishedCliNpmVersion(tag)
-  const publishedVersions = JSON.parse(runNpm(['view', '@capgo/cli', 'versions', '--json'])) as string[]
+  const publishedVersions = normalizePublishedCliNpmVersions(JSON.parse(runNpm(['view', '@capgo/cli', 'versions', '--json'])))
 
   if (publishedVersions.includes(targetVersion))
     return targetVersion
