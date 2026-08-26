@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { BASE_URL, getBaseData, headers, PLUGIN_BASE_URL, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils.ts'
+import { BASE_URL, getBaseData, headers, PLUGIN_BASE_URL, resetAndSeedAppData, resetAppData, resetAppDataStats, warmEdgeEndpoint } from './test-utils.ts'
 
 // Rate limiting uses Cloudflare Workers Cache API, which isn't available in Supabase Edge Functions
 const USE_CLOUDFLARE = env.USE_CLOUDFLARE_WORKERS === 'true'
@@ -54,26 +54,16 @@ function sleep(ms: number): Promise<void> {
 }
 
 // The limiter counts requests in a one-second window anchored to the first request
-// (see channelSelfRateLimit.ts) and its cache counter is not atomic under concurrent
-// requests, so bursts must be sequential AND finish inside the window to trip it.
-// Send sequential requests within the window budget; when a slow runner lets the
-// window expire before the limit trips, wait out the counter and retry the round.
-const WINDOW_BUDGET_MS = 900
-
+// (see channelSelfRateLimit.ts). Send limit+1 sequential requests as fast as the runner
+// allows; when a slow endpoint lets the window expire mid-burst, wait out the counter
+// and retry with a fresh burst.
 async function hitRateLimit(makeRequest: (deviceId: string) => Promise<Response>, deviceId: string): Promise<Response | null> {
-  for (let round = 0; round < 4; round++) {
-    const roundStart = Date.now()
-    let sent = 0
-    while (Date.now() - roundStart < WINDOW_BUDGET_MS) {
+  for (let round = 0; round < 6; round++) {
+    for (let sent = 0; sent < OP_LIMIT_PER_SECOND + 1; sent++) {
       const response = await makeRequest(deviceId)
-      sent += 1
       if (response.status === 429)
         return response
-      // Three times the limit landed inside one window without a 429: the limiter is broken.
-      if (sent >= OP_LIMIT_PER_SECOND * 3)
-        return null
     }
-    // Window expired before the limit could trip; let the counter reset and retry.
     await sleep(1100)
   }
   return null
@@ -114,6 +104,18 @@ async function testRateLimitBehavior(
 
 beforeAll(async () => {
   await resetAndSeedAppData(APPNAME)
+  if (USE_CLOUDFLARE) {
+    await warmEdgeEndpoint(`${PLUGIN_BASE_URL}/channel_self`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(getBaseData(APPNAME)),
+    })
+    await warmEdgeEndpoint(`${BASE_URL}/device`, {
+      method: 'DELETE',
+      headers,
+      body: JSON.stringify({ app_id: APPNAME, device_id: randomUUID().toLowerCase() }),
+    })
+  }
 })
 
 afterAll(async () => {
