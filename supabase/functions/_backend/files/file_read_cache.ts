@@ -122,10 +122,10 @@ export async function markFileDeletedInCache(fileId: string): Promise<void> {
 let sharedReadOnlyPool: ReturnType<typeof getPgClient> | null = null
 let sharedReadOnlyPoolUrl: string | null = null
 
-function getSharedReadOnlyPgClient(c: Context): ReturnType<typeof getPgClient> {
-  const dbUrl = getDatabaseURL(c, true)
+function getSharedDeletedLookupPgClient(c: Context): ReturnType<typeof getPgClient> {
+  const dbUrl = getDatabaseURL(c, false)
   if (!sharedReadOnlyPool || sharedReadOnlyPoolUrl !== dbUrl) {
-    sharedReadOnlyPool = getPgClient(c, true)
+    sharedReadOnlyPool = getPgClient(c, false)
     sharedReadOnlyPoolUrl = dbUrl
   }
   return sharedReadOnlyPool
@@ -184,7 +184,7 @@ export async function isAttachmentVersionDeleted(c: Context, fileId: string): Pr
     return true
 
   try {
-    const pgClient = getSharedReadOnlyPgClient(c)
+    const pgClient = getSharedDeletedLookupPgClient(c)
     const result = await pgClient.query<{ deleted: boolean | null, deleted_at: string | null }>(
       `
         SELECT deleted, deleted_at
