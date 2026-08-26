@@ -110,29 +110,46 @@ export function resolvePublishedCliRpcSourceTag(
   }
 }
 
-export function extractArgKeysFromRpcCall(source: string, afterRpcNameIndex: number): string[] {
-  let cursor = afterRpcNameIndex
-  const castMatch = source.slice(cursor).match(/^\s*as\s+any/)
-  if (castMatch)
-    cursor += castMatch[0].length
+function findMatchingCloseParen(source: string, openParenIndex: number): number {
+  let depth = 0
+  let inString: '"' | '\'' | '`' | null = null
+  let escaped = false
 
-  const remainder = source.slice(cursor).trimStart()
-  if (remainder.startsWith(')'))
-    return []
+  for (let index = openParenIndex; index < source.length; index++) {
+    const char = source[index]
 
-  const commaMatch = source.slice(cursor).match(/^\s*,/)
-  if (!commaMatch)
-    return []
+    if (inString) {
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (char === '\\') {
+        escaped = true
+        continue
+      }
+      if (char === inString)
+        inString = null
+      continue
+    }
 
-  cursor += commaMatch[0].length
-  const afterComma = source.slice(cursor).trimStart()
-  if (!afterComma.startsWith('{'))
-    return []
+    if (char === '"' || char === '\'' || char === '`') {
+      inString = char
+      continue
+    }
 
-  const objectStart = source.indexOf('{', cursor)
-  if (objectStart === -1)
-    return []
+    if (char === '(')
+      depth++
+    else if (char === ')') {
+      depth--
+      if (depth === 0)
+        return index
+    }
+  }
 
+  return -1
+}
+
+function extractKeysFromObjectLiteral(source: string, objectStart: number): string[] {
   let depth = 0
   let inString: '"' | '\'' | '`' | null = null
   let escaped = false
@@ -191,6 +208,85 @@ export function extractArgKeysFromRpcCall(source: string, afterRpcNameIndex: num
   }
 
   return []
+}
+
+function extractArgKeysFromRpcArgExpression(source: string, argStart: number, rpcCloseParen: number): string[] {
+  const keys = new Set<string>()
+  let inString: '"' | '\'' | '`' | null = null
+  let escaped = false
+  let braceDepth = 0
+
+  for (let index = argStart; index < rpcCloseParen; index++) {
+    const char = source[index]
+
+    if (inString) {
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (char === '\\') {
+        escaped = true
+        continue
+      }
+      if (char === inString)
+        inString = null
+      continue
+    }
+
+    if (char === '"' || char === '\'' || char === '`') {
+      inString = char
+      continue
+    }
+
+    if (char === '{') {
+      if (braceDepth === 0) {
+        for (const key of extractKeysFromObjectLiteral(source, index))
+          keys.add(key)
+      }
+      braceDepth++
+      continue
+    }
+
+    if (char === '}')
+      braceDepth--
+  }
+
+  return [...keys].sort()
+}
+
+export function extractArgKeysFromRpcCall(source: string, afterRpcNameIndex: number): string[] {
+  const rpcOpenParenIndex = source.lastIndexOf('(', afterRpcNameIndex)
+  if (rpcOpenParenIndex === -1)
+    return []
+
+  const rpcCloseParen = findMatchingCloseParen(source, rpcOpenParenIndex)
+  if (rpcCloseParen === -1)
+    return []
+
+  let cursor = afterRpcNameIndex
+  const castMatch = source.slice(cursor).match(/^\s*as\s+any/)
+  if (castMatch)
+    cursor += castMatch[0].length
+
+  const remainder = source.slice(cursor).trimStart()
+  if (remainder.startsWith(')'))
+    return []
+
+  const commaMatch = source.slice(cursor).match(/^\s*,/)
+  if (!commaMatch)
+    return []
+
+  cursor += commaMatch[0].length
+  const afterComma = source.slice(cursor).trimStart()
+  if (afterComma.startsWith('{')) {
+    const objectStart = source.indexOf('{', cursor)
+    if (objectStart === -1 || objectStart >= rpcCloseParen)
+      return []
+
+    return extractKeysFromObjectLiteral(source, objectStart)
+  }
+
+  return extractArgKeysFromRpcArgExpression(source, cursor, rpcCloseParen)
 }
 
 function splitTopLevelArgSegments(source: string): string[] {

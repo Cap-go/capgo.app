@@ -75,6 +75,18 @@ describe('published CLI contract helpers', () => {
     ])
   })
 
+  it.concurrent('unions rpc arg keys from ternary object literals', () => {
+    const source = `
+      await supabase
+        .rpc('has_usage_credits_org', appId ? { orgid: orgId, appid: appId } : { orgid: orgId })
+        .single()
+    `
+
+    expect(extractPublishedCliRpcCallsFromSource(source)).toEqual([
+      { name: 'has_usage_credits_org', argKeys: ['appid', 'orgid'] },
+    ])
+  })
+
   it.concurrent('extracts multiline rpc args from chained supabase calls', () => {
     const source = `
       const { data: bundleRows } = await withSupabaseSource('channels.currentBundleName', () => supabase
