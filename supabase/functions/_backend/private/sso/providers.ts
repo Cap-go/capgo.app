@@ -155,10 +155,10 @@ app.post('/', async (c) => {
   }
 
   try {
-    const supabase = supabaseWithAuth(c, auth) as any
+    const admin = supabaseAdmin(c) as any
     const dnsVerificationToken = generateDnsVerificationToken()
 
-    const { data, error } = await supabase
+    const { data, error } = await admin
       .from('sso_providers')
       .insert({
         org_id: body.org_id,
