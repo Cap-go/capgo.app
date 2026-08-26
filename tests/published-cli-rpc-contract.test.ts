@@ -52,22 +52,14 @@ async function loadFunctionPrivileges(pool: Pool, functionName: string): Promise
   const result = await pool.query<FunctionPrivilegeRow>(`
     SELECT
       p.oid::regprocedure::text AS proc,
-      CASE
-        WHEN p.proargmodes IS NULL THEN p.proargnames
-        ELSE (
-          SELECT array_agg(args.arg_name ORDER BY args.ordinality)
-          FROM unnest(p.proargnames, p.proargmodes) WITH ORDINALITY AS args(arg_name, arg_mode, ordinality)
-          WHERE args.arg_mode IN ('i', 'b', 'v')
-        )
-      END AS "argNames",
-      LEAST(COALESCE(p.pronargdefaults, 0), p.pronargs) AS "defaultCount",
+      p.proargnames AS "argNames",
+      COALESCE(p.pronargdefaults, 0) AS "defaultCount",
       p.pronargs AS "argCount",
       has_function_privilege('anon', p.oid, 'EXECUTE') AS "anonExec"
     FROM pg_proc AS p
     INNER JOIN pg_namespace AS n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public'
       AND p.proname = $1
-      AND p.prokind = 'f'
     ORDER BY 1
   `, [functionName])
 
