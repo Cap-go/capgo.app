@@ -53,6 +53,7 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **--bundle-url** | <code>boolean</code> | Prints bundle URL into stdout |
 | **--no-key** | <code>boolean</code> | Ignore signing key and send clear update |
 | **--no-code-check** | <code>boolean</code> | Ignore checking if notifyAppReady() is called in source code and index present in root folder |
+| **--ignore-notify-app-ready** | <code>boolean</code> | Skip notifyAppReady() check (not recommended — updates may roll back) |
 | **--display-iv-session** | <code>boolean</code> | Show in the console the IV and session key used to encrypt the update |
 | **-b** | <code>string</code> | Bundle version number of the bundle to upload |
 | **--link** | <code>string</code> | Link to external resource (e.g. GitHub release) |
@@ -256,7 +257,7 @@ Prints base64 session key for verification.
 **Example:**
 
 ```bash
-npx @capgo/cli@latest bundle decrypt ./myapp_encrypted.zip CHECKSUM
+npx @capgo/cli@latest bundle decrypt ./myapp_encrypted.zip IV_BASE64:SESSION_KEY_BASE64
 ```
 
 **Options:**
@@ -292,6 +293,7 @@ npx @capgo/cli@latest bundle zip com.example.app --path ./dist
 | **-n** | <code>string</code> | Name of the zip file |
 | **-j** | <code>boolean</code> | Output in JSON |
 | **--no-code-check** | <code>boolean</code> | Ignore checking if notifyAppReady() is called in source code and index present in root folder |
+| **--ignore-notify-app-ready** | <code>boolean</code> | Skip notifyAppReady() check (not recommended — updates may roll back) |
 | **--key-v2** | <code>boolean</code> | Use encryption v2 |
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
 
