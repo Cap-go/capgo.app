@@ -3,7 +3,7 @@ name: Run tests
 concurrency:
   # Include event_name so push and pull_request on the same branch do not cancel each other.
   # Include PR head SHA so re-triggers on the same commit do not cancel an in-flight run.
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'workflow_call' && github.sha || (github.event_name == 'pull_request' && format('{0}-{1}', github.head_ref || github.ref_name, github.event.pull_request.head.sha) || github.head_ref || github.ref_name || github.ref) }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'workflow_call' && github.sha || (github.event_name == 'pull_request' && format('{0}-{1}', github.head_ref || github.ref_name, github.event.pull_request.head.sha) || format('{0}-{1}', github.head_ref || github.ref_name || github.ref, github.sha)) }}
   # Keep in-progress pull_request suites running; duplicate synchronize events were
   # cancelling shards mid-queue and leaving cancelled required checks on the PR.
   cancel-in-progress: ${{ github.event_name != 'pull_request' }}
