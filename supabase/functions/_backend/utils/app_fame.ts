@@ -132,6 +132,30 @@ function extractAppsArray(record: Record<string, unknown>): unknown[] | null {
   return Array.isArray(record.apps) ? record.apps : null
 }
 
+const FAME_APPS_WRAPPER_KEYS = ['response', 'result', 'output'] as const
+
+function findAppsArrayInEnvelope(value: unknown, visited: WeakSet<object>): unknown[] | null {
+  const record = parseJsonObjectFromAiText(value) ?? recordOf(value)
+  if (!record)
+    return null
+
+  const apps = extractAppsArray(record)
+  if (apps)
+    return apps
+
+  if (visited.has(record))
+    return null
+  visited.add(record)
+
+  for (const key of FAME_APPS_WRAPPER_KEYS) {
+    const nestedApps = findAppsArrayInEnvelope(record[key], visited)
+    if (nestedApps)
+      return nestedApps
+  }
+
+  return null
+}
+
 export function parseFameAppsPayload(value: unknown): unknown[] | null {
   const roots: unknown[] = []
   if (value !== undefined && value !== null)
@@ -142,23 +166,9 @@ export function parseFameAppsPayload(value: unknown): unknown[] | null {
     roots.push(text)
 
   for (const root of roots) {
-    const record = parseJsonObjectFromAiText(root)
-    if (!record)
-      continue
-
-    const apps = extractAppsArray(record)
+    const apps = findAppsArrayInEnvelope(root, new WeakSet())
     if (apps)
       return apps
-
-    for (const key of ['response', 'result', 'output']) {
-      const nested = record[key]
-      const nestedRecord = parseJsonObjectFromAiText(nested) ?? recordOf(nested)
-      if (!nestedRecord)
-        continue
-      const nestedApps = extractAppsArray(nestedRecord)
-      if (nestedApps)
-        return nestedApps
-    }
   }
 
   return null

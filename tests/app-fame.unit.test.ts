@@ -122,6 +122,20 @@ describe('app fame scoring', () => {
     }])
   })
 
+  it.concurrent('extracts apps arrays from deeply nested response envelopes', () => {
+    expect(parseFameAppsPayload({
+      response: {
+        result: {
+          apps: [{
+            app_id: 'com.bank.app',
+          }],
+        },
+      },
+    })).toEqual([{
+      app_id: 'com.bank.app',
+    }])
+  })
+
   it.concurrent('parses JSON text wrapped in markdown fences', () => {
     const { decisions, missingAppIds } = parseFameDecisions(`
       \`\`\`json
@@ -183,7 +197,7 @@ describe('app fame scoring', () => {
     expect(result.missingAppIds).toEqual([])
   })
 
-  it('falls back to json_object when json_schema returns no parseable apps', async () => {
+  it.concurrent('falls back to json_object when json_schema returns no parseable apps', async () => {
     const run = vi.fn()
       .mockResolvedValueOnce({ response: 'not parseable' })
       .mockResolvedValueOnce({
