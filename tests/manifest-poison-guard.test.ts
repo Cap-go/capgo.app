@@ -1,6 +1,5 @@
 import type { Database } from '../src/types/supabase.types'
 import { randomUUID } from 'node:crypto'
-import { createClient } from '@supabase/supabase-js'
 import { describe, expect, it } from 'vitest'
 import {
   APIKEY_TEST_ALL,
@@ -13,23 +12,6 @@ import {
 } from './test-utils.ts'
 
 const APP_ID = 'com.demo.app'
-
-function createApiKeyClient(apikey: string) {
-  const supabaseUrl = process.env.SUPABASE_URL as string
-  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY as string
-
-  return createClient<Database>(supabaseUrl, supabaseAnonKey, {
-    global: {
-      headers: {
-        capgkey: apikey,
-      },
-    },
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  })
-}
 
 function poisonManifestEntries(ownerOrg: string, versionName: string) {
   const prefix = `orgs/${ownerOrg}/apps/${APP_ID}/delta`
@@ -53,20 +35,23 @@ async function patchVersionManifestAsApiKey(
   return fetch(`${supabaseUrl}/rest/v1/app_versions?id=eq.${versionId}`, {
     method: 'PATCH',
     headers: {
-      apikey: anonKey,
-      Authorization: `Bearer ${anonKey}`,
-      capgkey: apikey,
+      'apikey': anonKey,
+      'Authorization': `Bearer ${anonKey}`,
+      'capgkey': apikey,
       'Content-Type': 'application/json',
-      Prefer: 'return=minimal',
+      'Prefer': 'return=minimal',
     },
     body: JSON.stringify({ manifest }),
   })
 }
 
 describe('manifest poison guard', () => {
-  it.concurrent('blocks upload API key from poisoning manifest via app_versions.manifest on r2-direct', async () => {
+  it.concurrent.each([
+    ['upload', APIKEY_TEST_UPLOAD],
+    ['write', APIKEY_TEST_ALL],
+  ])('blocks %s API key from poisoning manifest via app_versions.manifest on r2-direct', async (_label, apikey) => {
     const adminClient = getSupabaseClient()
-    const versionName = `1.0.0-poison-upload-${randomUUID().slice(0, 8)}`
+    const versionName = `1.0.0-poison-${randomUUID().slice(0, 8)}`
 
     const { data: version, error: insertError } = await adminClient
       .from('app_versions')
@@ -86,51 +71,7 @@ describe('manifest poison guard', () => {
 
     try {
       const response = await patchVersionManifestAsApiKey(
-        APIKEY_TEST_UPLOAD,
-        version!.id,
-        poisonManifestEntries(version!.owner_org, versionName),
-      )
-
-      expect(response.status).toBeGreaterThanOrEqual(400)
-      const body = await response.text()
-      expect(body).toContain('bundle_already_ready')
-
-      const { data: manifestRows, error: manifestError } = await adminClient
-        .from('manifest')
-        .select('id')
-        .eq('app_version_id', version!.id)
-
-      expect(manifestError).toBeNull()
-      expect(manifestRows).toHaveLength(0)
-    }
-    finally {
-      await adminClient.from('app_versions').delete().eq('id', version!.id)
-    }
-  })
-
-  it.concurrent('blocks write API key from poisoning manifest via app_versions.manifest on r2-direct', async () => {
-    const adminClient = getSupabaseClient()
-    const versionName = `1.0.0-poison-write-${randomUUID().slice(0, 8)}`
-
-    const { data: version, error: insertError } = await adminClient
-      .from('app_versions')
-      .insert({
-        app_id: APP_ID,
-        name: versionName,
-        checksum: randomUUID().replaceAll('-', ''),
-        owner_org: ORG_ID,
-        user_id: USER_ID,
-        storage_provider: 'r2-direct',
-        deleted: false,
-      })
-      .select('id, owner_org')
-      .single()
-
-    expect(insertError).toBeNull()
-
-    try {
-      const response = await patchVersionManifestAsApiKey(
-        APIKEY_TEST_ALL,
+        apikey,
         version!.id,
         poisonManifestEntries(version!.owner_org, versionName),
       )

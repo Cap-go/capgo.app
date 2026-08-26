@@ -121,7 +121,7 @@ describe('[POST] /private/set_manifest', () => {
     expect(retryJson.inserted).toBe(0)
   })
 
-  it('rejects paths outside the app prefix and keeps old jsonb upload compatible', async () => {
+  it('rejects paths outside the app prefix and blocks r2-direct manifest jsonb writes', async () => {
     const otherBundle = `${BUNDLE_NAME}-legacy`
     const { data: version, error } = await getSupabaseClient()
       .from('app_versions')
@@ -156,8 +156,7 @@ describe('[POST] /private/set_manifest', () => {
     })
     expect(response.status).toBe(400)
 
-    // Legacy CLI path: writing jsonb onto app_versions.manifest still works.
-    await executeSQL(
+    await expect(executeSQL(
       `UPDATE public.app_versions
        SET storage_provider = 'r2',
            manifest = ARRAY[
@@ -166,16 +165,25 @@ describe('[POST] /private/set_manifest', () => {
            updated_at = now()
        WHERE id = $1`,
       [version!.id, `orgs/${version!.owner_org}/apps/${APP_ID}/delta/legacy_legacy.html`],
-    )
+    )).rejects.toThrow(/bundle_already_ready/)
 
-    const { data: legacyVersion } = await getSupabaseClient()
-      .from('app_versions')
-      .select('manifest')
-      .eq('id', version!.id)
-      .single()
-
-    expect(Array.isArray(legacyVersion?.manifest)).toBe(true)
-    expect(legacyVersion?.manifest?.length).toBe(1)
+    const legit = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': APIKEY_TEST_ALL,
+      },
+      body: JSON.stringify({
+        app_id: APP_ID,
+        name: otherBundle,
+        manifest: [{
+          file_name: 'legacy.html',
+          s3_path: `orgs/${version!.owner_org}/apps/${APP_ID}/delta/legacy_legacy.html`,
+          file_hash: 'legacyhash',
+        }],
+      }),
+    })
+    expect(legit.status).toBe(200)
   })
 
   it('rejects finalized versions that have no manifest rows yet', async () => {

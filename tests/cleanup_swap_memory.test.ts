@@ -7,7 +7,6 @@ describe('swap memory cleanup functions', () => {
     await cleanupPostgresClient()
   })
 
-
   it('cleanup_queue_messages skips queues whose archive tables are missing', async () => {
     const queueName = `cleanup_missing_${randomUUID().slice(0, 8)}`
     await executeSQL(
@@ -142,25 +141,42 @@ describe('swap memory cleanup functions', () => {
     )
 
     const versionRows = await executeSQL(
-      `INSERT INTO public.app_versions (app_id, name, owner_org, storage_provider, comment)
-       VALUES ($1, $2, $3::uuid, 'r2-direct', 'before')
-       RETURNING id, name`,
-      [appId, `1.0.0-${randomUUID().slice(0, 8)}`, orgId],
+      `INSERT INTO public.app_versions (
+         app_id,
+         name,
+         owner_org,
+         storage_provider,
+         comment,
+         manifest,
+         r2_path
+       )
+       VALUES (
+         $1,
+         $2,
+         $3::uuid,
+         'r2',
+         'before',
+         ARRAY[ROW('a.js', $4, 'hash')::public.manifest_entry],
+         $5
+       )
+       RETURNING id`,
+      [
+        appId,
+        `1.0.0-${randomUUID().slice(0, 8)}`,
+        orgId,
+        `orgs/${orgId}/apps/${appId}/delta/hash_a.js`,
+        `orgs/${orgId}/apps/${appId}/1.0.0-seed.zip`,
+      ],
     )
     const versionId = versionRows[0]?.id as number
-    const versionName = versionRows[0]?.name as string
-    const canonicalR2Path = `orgs/${orgId}/apps/${appId}/${versionName}.zip`
 
     await executeSQL(
       `UPDATE public.app_versions
        SET
          comment = 'after',
-         storage_provider = 'r2',
-         r2_path = $2,
-         manifest = ARRAY[ROW('a.js', $3, 'hash')::public.manifest_entry],
          native_packages = ARRAY['{"name":"cordova-plugin"}'::jsonb]
        WHERE id = $1`,
-      [versionId, canonicalR2Path, `orgs/${orgId}/apps/${appId}/delta/hash_a.js`],
+      [versionId],
     )
 
     const logs = await executeSQL(
@@ -449,7 +465,6 @@ describe('swap memory cleanup functions', () => {
     }
   })
 
-
   it('app_versions_manifest_present_idx exists as valid partial index on id', async () => {
     const rows = await executeSQL(
       `SELECT
@@ -467,6 +482,4 @@ describe('swap memory cleanup functions', () => {
     expect(String(rows[0]?.indexdef)).toContain('(id)')
     expect(String(rows[0]?.indexdef).toLowerCase()).toContain('manifest is not null')
   })
-
-
 })

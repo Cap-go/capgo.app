@@ -1,7 +1,7 @@
 -- In-progress r2-direct versions must not accept app_versions.manifest jsonb writes.
 BEGIN;
 
-SELECT plan(2);
+SELECT plan(3);
 
 SELECT tests.authenticate_as_service_role();
 SELECT tests.create_supabase_user('r2_direct_manifest_block_owner', 'r2_direct_manifest_block_owner@test.local');
@@ -77,7 +77,7 @@ SELECT throws_ok(
   'in-progress r2-direct cannot UPDATE manifest jsonb'
 );
 
-SELECT lives_ok(
+SELECT throws_ok(
   $sql$
     UPDATE public.app_versions
     SET
@@ -93,7 +93,21 @@ SELECT lives_ok(
     WHERE app_id = 'com.test.r2direct.manifest.block'
       AND name = '1.0.0-in-progress'
   $sql$,
-  'legacy finalize can still set manifest while moving r2-direct -> r2'
+  'P0001',
+  'bundle_already_ready: Bundle content cannot be changed after upload is complete. Upload a new bundle instead.',
+  'r2-direct cannot set manifest jsonb while finalizing to r2'
+);
+
+SELECT lives_ok(
+  $sql$
+    UPDATE public.app_versions
+    SET
+      storage_provider = 'r2',
+      r2_path = 'orgs/70000000-0000-4000-8000-000000000073/apps/com.test.r2direct.manifest.block/1.0.0-in-progress.zip'
+    WHERE app_id = 'com.test.r2direct.manifest.block'
+      AND name = '1.0.0-in-progress'
+  $sql$,
+  'r2-direct can finalize to r2 without manifest jsonb'
 );
 
 SELECT * FROM finish();

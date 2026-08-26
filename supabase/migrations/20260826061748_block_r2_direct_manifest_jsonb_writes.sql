@@ -97,8 +97,10 @@ BEGIN
         || 'after upload is complete. Upload a new bundle instead.';
     END IF;
 
+    -- In-progress r2-direct uploads must use POST /private/set_manifest.
+    -- Block any non-null manifest jsonb write, including r2-direct -> r2 finalize
+    -- requests that try to smuggle manifest rows through on_version_update.
     IF OLD.storage_provider = 'r2-direct'
-      AND NEW.storage_provider = 'r2-direct'
       AND NEW.manifest IS DISTINCT FROM OLD.manifest
       AND NEW.manifest IS NOT NULL
     THEN
