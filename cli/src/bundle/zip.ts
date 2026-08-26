@@ -19,8 +19,14 @@ import {
   regexSemver,
   zipFile,
 } from '../utils'
-import { checkIndexPosition, searchInDirectory } from './check'
-import { recoverInvalidSemverBundle, recoverMissingUpdater, recoverMissingWebDirPath, resolveLocalSemverFallback } from '../recovery/bundle-zip'
+import { getUpdaterInstallState } from '../init/updater'
+import {
+  recoverInvalidSemverBundle,
+  recoverMissingUpdater,
+  recoverMissingWebDirPath,
+  resolveLocalSemverFallback,
+  resolveUpdaterPackageJsonPath,
+} from '../recovery/bundle-zip'
 import { ensureNotifyAppReadyInBuildFolder, buildCiNotifyAppReadyMessage } from '../recovery/notify-app-ready'
 import { parsePackageJsonOptionPaths, resolveAppIdWithRecovery } from '../recovery/app-id'
 
@@ -140,17 +146,20 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
       checksumSpinner.start('Calculating checksum')
 
     const root = findRoot(cwd())
-    let updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
+    const resolvedPackageJson = resolveUpdaterPackageJsonPath(options.packageJson)
+    let updaterInstallState = getUpdaterInstallState(resolvedPackageJson)
 
-    if (!updaterVersion && interactive && await recoverMissingUpdater(options.packageJson))
-      updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
+    if (!updaterInstallState.ready && interactive && await recoverMissingUpdater(options.packageJson))
+      updaterInstallState = getUpdaterInstallState(resolvedPackageJson)
 
-    if (!updaterVersion) {
+    if (!updaterInstallState.ready) {
       const warning = 'Cannot find @capgo/capacitor-updater in node_modules, please install it first with your package manager'
       if (!silent)
         log.warn(warning)
       throw new Error(warning)
     }
+
+    let updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
 
     let useSha256 = false
     let coerced

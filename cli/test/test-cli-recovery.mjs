@@ -278,6 +278,32 @@ await test('buildUpdaterInstallInvocation restores declared yarn deps via instal
   assert.deepEqual(invocation, { command: 'yarn', args: ['install'] })
 })
 
+await test('zipBundleInternal rejects declared updater missing from node_modules', async () => {
+  const root = makeTempDir('zip-declared-updater')
+  writeFileSync(join(root, 'package.json'), JSON.stringify({
+    dependencies: { '@capgo/capacitor-updater': '^7.0.0' },
+  }))
+  const webDir = join(root, 'www')
+  mkdirSync(webDir)
+  writeFileSync(join(webDir, 'index.html'), '<html></html>')
+  writeFileSync(join(webDir, 'main.js'), 'console.log("hello")')
+  const previousCwd = process.cwd()
+  process.chdir(root)
+  try {
+    await assert.rejects(
+      () => zipBundleInternal('com.example.app', { path: webDir, bundle: '1.0.0' }, true),
+      (error) => {
+        assert.match(error.message, /Cannot find @capgo\/capacitor-updater in node_modules/)
+        assert.equal(shouldCapturePosthogException(error), true)
+        return true
+      },
+    )
+  }
+  finally {
+    process.chdir(previousCwd)
+  }
+})
+
 await test('zipBundleInternal silent notifyAppReady failure stays PostHog-capturable', async () => {
   const root = makeTempDir('zip-silent')
   const webDir = join(root, 'www')
