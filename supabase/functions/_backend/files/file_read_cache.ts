@@ -119,16 +119,16 @@ export async function markFileDeletedInCache(fileId: string): Promise<void> {
   }))
 }
 
-let sharedReadOnlyPool: ReturnType<typeof getPgClient> | null = null
-let sharedReadOnlyPoolUrl: string | null = null
+let sharedDeletedLookupPool: ReturnType<typeof getPgClient> | null = null
+let sharedDeletedLookupPoolUrl: string | null = null
 
-function getSharedDeletedLookupPgClient(c: Context): ReturnType<typeof getPgClient> {
+function getDeletedLookupPgClient(c: Context): ReturnType<typeof getPgClient> {
   const dbUrl = getDatabaseURL(c, false)
-  if (!sharedReadOnlyPool || sharedReadOnlyPoolUrl !== dbUrl) {
-    sharedReadOnlyPool = getPgClient(c, false)
-    sharedReadOnlyPoolUrl = dbUrl
+  if (!sharedDeletedLookupPool || sharedDeletedLookupPoolUrl !== dbUrl) {
+    sharedDeletedLookupPool = getPgClient(c, false)
+    sharedDeletedLookupPoolUrl = dbUrl
   }
-  return sharedReadOnlyPool
+  return sharedDeletedLookupPool
 }
 
 function buildFileReadCacheRequestsForPath(fileId: string, checksum?: string | null): Request[] {
@@ -183,8 +183,12 @@ export async function isAttachmentVersionDeleted(c: Context, fileId: string): Pr
   if (await hasDeletedFileMarker(fileId))
     return true
 
+  // app_versions.r2_path only tracks bundle zip objects, not arbitrary attachment uploads.
+  if (!fileId.endsWith('.zip'))
+    return false
+
   try {
-    const pgClient = getSharedDeletedLookupPgClient(c)
+    const pgClient = getDeletedLookupPgClient(c)
     const result = await pgClient.query<{ deleted: boolean | null, deleted_at: string | null }>(
       `
         SELECT deleted, deleted_at
