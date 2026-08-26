@@ -29,6 +29,7 @@ import {
 } from '../recovery/bundle-zip'
 import { ensureNotifyAppReadyInBuildFolder, buildCiNotifyAppReadyMessage } from '../recovery/notify-app-ready'
 import { parsePackageJsonOptionPaths, resolveAppIdWithRecovery } from '../recovery/app-id'
+import { checkIndexPosition, searchInDirectory } from './check'
 
 export type { ZipResult } from '../schemas/bundle'
 

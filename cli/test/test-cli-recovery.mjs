@@ -291,7 +291,7 @@ await test('zipBundleInternal rejects declared updater missing from node_modules
   process.chdir(root)
   try {
     await assert.rejects(
-      () => zipBundleInternal('com.example.app', { path: webDir, bundle: '1.0.0' }, true),
+      () => zipBundleInternal('com.example.app', { path: webDir, bundle: '1.0.0', ignoreNotifyAppReady: true }, true),
       (error) => {
         assert.match(error.message, /Cannot find @capgo\/capacitor-updater in node_modules/)
         assert.equal(shouldCapturePosthogException(error), true)
