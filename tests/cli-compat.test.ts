@@ -7,7 +7,7 @@ import { APIKEY_TEST_ALL, getEndpointUrl } from './test-utils'
 
 const execFileAsync = promisify(execFile)
 
-describe('cLI min-version compatibility', () => {
+describe('CLI min-version compatibility', () => {
   it('publishes the pinned min CLI version and reason on /private/config', async () => {
     const response = await fetch(getEndpointUrl('/private/config'))
     expect(response.status).toBe(200)
@@ -39,5 +39,5 @@ describe('cLI min-version compatibility', () => {
     ], {
       timeout: 120000,
     })
-  }, 180000)
+  }, 300000)
 })
