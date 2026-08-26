@@ -1021,8 +1021,8 @@ async function captureAuthContext(query: SqlQueryFn): Promise<AuthContextSnapsho
 }
 
 async function restoreAuthContext(query: SqlQueryFn, context: AuthContextSnapshot): Promise<void> {
-  await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claim.role', context.jwtRole ?? ''])
-  await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claims', context.jwtClaims ?? ''])
+  await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claim.role', context.jwtRole])
+  await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claims', context.jwtClaims])
 
   if (context.sqlRole === 'authenticated' || context.sqlRole === 'anon' || context.sqlRole === 'service_role')
     await query(`SET LOCAL ROLE ${context.sqlRole}`)
