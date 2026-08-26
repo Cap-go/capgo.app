@@ -14103,7 +14103,13 @@ BEGIN
       p_channel_id
     );
 
-    IF v_channel_scope THEN
+    IF v_channel_scope
+      AND public.rbac_principal_has_org_binding(
+        public.rbac_principal_apikey(),
+        v_api_key.rbac_id,
+        v_effective_org_id
+      )
+    THEN
       SELECT o.is_allowed INTO v_override
       FROM public.channel_permission_overrides o
       WHERE o.principal_type = public.rbac_principal_apikey()
@@ -14145,7 +14151,13 @@ BEGIN
     p_channel_id
   );
 
-  IF v_channel_scope THEN
+  IF v_channel_scope
+    AND public.rbac_principal_has_org_binding(
+      public.rbac_principal_user(),
+      v_effective_user_id,
+      v_effective_org_id
+    )
+  THEN
     SELECT o.is_allowed INTO v_override
     FROM public.channel_permission_overrides o
     WHERE o.principal_type = public.rbac_principal_user()
@@ -15209,6 +15221,57 @@ CREATE OR REPLACE FUNCTION "public"."rbac_principal_group"() RETURNS "text"
 
 
 ALTER FUNCTION "public"."rbac_principal_group"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."rbac_principal_has_org_binding"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid") RETURNS boolean
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  SELECT CASE
+    WHEN p_org_id IS NULL OR p_principal_id IS NULL OR p_principal_type IS NULL THEN false
+    WHEN p_principal_type = public.rbac_principal_group() THEN EXISTS (
+      SELECT 1
+      FROM public.groups
+      WHERE groups.id = p_principal_id
+        AND groups.org_id = p_org_id
+    )
+    WHEN p_principal_type = public.rbac_principal_user() THEN (
+      EXISTS (
+        SELECT 1
+        FROM public.role_bindings
+        WHERE role_bindings.principal_type = p_principal_type
+          AND role_bindings.principal_id = p_principal_id
+          AND role_bindings.org_id = p_org_id
+          AND (role_bindings.expires_at IS NULL OR role_bindings.expires_at > pg_catalog.now())
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM public.group_members AS group_member
+        INNER JOIN public.role_bindings AS group_binding
+          ON group_binding.principal_type = public.rbac_principal_group()
+          AND group_binding.principal_id = group_member.group_id
+        WHERE group_member.user_id = p_principal_id
+          AND group_binding.org_id = p_org_id
+          AND (group_binding.expires_at IS NULL OR group_binding.expires_at > pg_catalog.now())
+      )
+    )
+    ELSE EXISTS (
+      SELECT 1
+      FROM public.role_bindings
+      WHERE role_bindings.principal_type = p_principal_type
+        AND role_bindings.principal_id = p_principal_id
+        AND role_bindings.org_id = p_org_id
+        AND (role_bindings.expires_at IS NULL OR role_bindings.expires_at > pg_catalog.now())
+    )
+  END;
+$$;
+
+
+ALTER FUNCTION "public"."rbac_principal_has_org_binding"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."rbac_principal_has_org_binding"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid") IS 'True when the principal still has a non-expired role binding in the org (direct or via group membership for users) or the group belongs to the org. Called once per channel-scoped rbac_check_permission_direct (console/RLS only). Indexed lookups on role_bindings_principal_org_idx and idx_group_members_user_id_group_id; no table scan on role_bindings at seed scale.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."rbac_principal_user"() RETURNS "text"
@@ -20405,7 +20468,8 @@ CREATE TABLE IF NOT EXISTS "public"."global_stats" (
     "notifications_sent_last_month" bigint DEFAULT 0 NOT NULL,
     "notifications_opened_last_month" bigint DEFAULT 0 NOT NULL,
     "apps_with_preview" bigint DEFAULT 0 NOT NULL,
-    "plan_credits" integer DEFAULT 0 NOT NULL
+    "plan_credits" integer DEFAULT 0 NOT NULL,
+    "users_with_2fa" bigint DEFAULT 0 NOT NULL
 );
 
 
@@ -20725,6 +20789,10 @@ COMMENT ON COLUMN "public"."global_stats"."apps_with_preview" IS 'Number of apps
 
 
 COMMENT ON COLUMN "public"."global_stats"."plan_credits" IS 'Orgs with remaining unexpired usage credits and no active Stripe plan or trial at snapshot day end.';
+
+
+
+COMMENT ON COLUMN "public"."global_stats"."users_with_2fa" IS 'Snapshot of users with at least one verified MFA factor at UTC day end.';
 
 
 
@@ -23065,6 +23133,10 @@ CREATE UNIQUE INDEX "role_bindings_org_scope_uniq" ON "public"."role_bindings" U
 
 
 CREATE INDEX "role_bindings_parent_binding_id_idx" ON "public"."role_bindings" USING "btree" ("parent_binding_id") WHERE ("parent_binding_id" IS NOT NULL);
+
+
+
+CREATE INDEX "role_bindings_principal_org_idx" ON "public"."role_bindings" USING "btree" ("principal_type", "principal_id", "org_id", "expires_at");
 
 
 
@@ -27343,6 +27415,11 @@ GRANT ALL ON FUNCTION "public"."rbac_principal_apikey"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."rbac_principal_group"() TO "anon";
 GRANT ALL ON FUNCTION "public"."rbac_principal_group"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."rbac_principal_group"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."rbac_principal_has_org_binding"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."rbac_principal_has_org_binding"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid") TO "service_role";
 
 
 
