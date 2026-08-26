@@ -254,7 +254,7 @@ export function rpcCallMatchesOverload(
   const names = argNames ?? []
 
   if (call.argKeys.length === 0)
-    return true
+    return argCount === 0 || defaultCount === argCount
 
   const provided = new Set(call.argKeys)
   if (!call.argKeys.every(key => names.includes(key)))

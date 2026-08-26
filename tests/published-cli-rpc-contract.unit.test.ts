@@ -123,6 +123,6 @@ describe('published CLI contract helpers', () => {
       ['p_app_id', 'p_channel_id'],
       0,
       2,
-    )).toBe(true)
+    )).toBe(false)
   })
 })

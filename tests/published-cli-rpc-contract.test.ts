@@ -110,9 +110,7 @@ describe(`CRITICAL published CLI RPC contract (${publishedCliRpcSourceTag} / npm
       const matches = resolveMatchingOverloads(call, overloads)
       expect(matches.length, `No overload matched ${formatPublishedCliRpcCall(call)}`).toBeGreaterThan(0)
 
-      const lacksAnonExec = call.argKeys.length === 0
-        ? !matches.some(overload => overload.anonExec)
-        : matches.some(overload => !overload.anonExec)
+      const lacksAnonExec = matches.some(overload => !overload.anonExec)
 
       if (lacksAnonExec) {
         const procList = matches
