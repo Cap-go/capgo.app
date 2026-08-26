@@ -1,6 +1,7 @@
 -- Block client PostgREST writes to provider_id on public.sso_providers.
 -- provider_id binds a Capgo SSO row to a Supabase Auth SSO provider and must
 -- only be set by service_role / internal paths (private API create, tests).
+-- Complements 20260826100000_sso_providers_block_direct_active_insert.sql.
 
 DROP POLICY IF EXISTS "allow_org_admins_insert_sso_providers"
   ON public.sso_providers;
