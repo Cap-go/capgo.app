@@ -14,7 +14,7 @@ import {
   CHANNEL_SELF_STORE_MIN_V8,
   CHANNEL_SELF_STORE_PLACEHOLDER_PLUGIN_VERSION,
   isLegacyChannelSelfStorePluginVersion,
-} from '../plugin_runtime/utils/plugin_compatibility.ts'
+} from './plugin_compatibility.ts'
 import { isDeprecatedPluginVersion } from './utils.ts'
 
 const CHANNEL_SELF_CACHE_PATH = '/.channel-self-override-v1'
