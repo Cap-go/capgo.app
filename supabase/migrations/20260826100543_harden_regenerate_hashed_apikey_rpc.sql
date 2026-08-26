@@ -58,6 +58,7 @@ BEGIN
   END IF;
 
   IF TG_OP = 'UPDATE' THEN
+  -- Lock distinct apikey principals in UUID order to avoid exchange deadlocks.
     IF OLD.principal_type = public.rbac_principal_apikey()
       AND NEW.principal_type = public.rbac_principal_apikey()
       AND OLD.principal_id IS NOT NULL
