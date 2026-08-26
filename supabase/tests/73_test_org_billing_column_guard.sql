@@ -21,14 +21,23 @@ INSERT INTO public.stripe_info (
   trial_at,
   is_good_plan
 )
-VALUES (
-  'cus_org_billing_guard_730001',
-  'succeeded',
-  'prod_LQIregjtNduh4q',
-  'sub_org_billing_guard_730001',
-  NOW() + INTERVAL '15 days',
-  true
-)
+VALUES
+  (
+    'cus_org_billing_guard_730001',
+    'succeeded',
+    'prod_LQIregjtNduh4q',
+    'sub_org_billing_guard_730001',
+    NOW() + INTERVAL '15 days',
+    true
+  ),
+  (
+    'cus_org_billing_guard_730002',
+    'succeeded',
+    'prod_LQIregjtNduh4q',
+    'sub_org_billing_guard_730002',
+    NOW() + INTERVAL '15 days',
+    true
+  )
 ON CONFLICT (customer_id) DO NOTHING;
 
 INSERT INTO public.orgs (id, created_by, name, management_email, customer_id)
@@ -62,8 +71,7 @@ SELECT
   true
 FROM (
   VALUES
-    (tests.get_supabase_uid('org_billing_guard_admin'), public.rbac_role_org_admin()),
-    (tests.get_supabase_uid('org_billing_guard_super'), public.rbac_role_org_super_admin())
+    (tests.get_supabase_uid('org_billing_guard_admin'), public.rbac_role_org_admin())
 ) AS members(user_id, role_name)
 CROSS JOIN public.roles AS roles
 WHERE roles.name = members.role_name
@@ -99,7 +107,7 @@ SET LOCAL "request.jwt.claim.role" = 'service_role';
 SELECT lives_ok(
   $$
     UPDATE public.orgs
-    SET customer_id = 'cus_org_billing_guard_730001'
+    SET customer_id = 'cus_org_billing_guard_730002'
     WHERE id = '73000000-0000-4000-8000-000000000073'::uuid
   $$,
   'service_role can update org customer_id'
@@ -113,7 +121,7 @@ SELECT lives_ok(
     SET customer_id = 'cus_org_billing_guard_730001'
     WHERE id = '73000000-0000-4000-8000-000000000073'::uuid
   $$,
-  'org_super_admin can update org customer_id with org.update_billing'
+  'org creator super admin can update org customer_id with org.update_billing'
 );
 
 SELECT tests.clear_authentication();
