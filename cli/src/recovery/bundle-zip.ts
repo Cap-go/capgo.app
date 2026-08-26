@@ -29,6 +29,37 @@ function resolveUpdaterInstallVersion(declaredVersion: string | null): string {
   return trimmed || 'latest'
 }
 
+export function buildUpdaterInstallInvocation(
+  pm: { pm: string, installCommand: string },
+  versionToInstall: string,
+  declaredVersion: string | null,
+): { command: string, args: string[] } | null {
+  const packageSpec = `${CAPGO_UPDATER_PACKAGE}@${versionToInstall}`
+  const installParts = pm.installCommand.split(/\s+/).filter(Boolean)
+  const command = installParts[0]
+  if (!command)
+    return null
+
+  const hasDeclaration = !!declaredVersion?.trim()
+  if (!hasDeclaration) {
+    switch (pm.pm) {
+      case 'yarn':
+        return { command: 'yarn', args: ['add', packageSpec] }
+      case 'bun':
+        return { command: 'bun', args: ['add', packageSpec] }
+      case 'pnpm':
+        return { command: 'pnpm', args: ['add', packageSpec] }
+      default:
+        return { command, args: [...installParts.slice(1), packageSpec] }
+    }
+  }
+
+  if (pm.pm === 'yarn' || pm.pm === 'bun')
+    return { command, args: installParts.slice(1) }
+
+  return { command, args: [...installParts.slice(1), '--force', packageSpec] }
+}
+
 export async function recoverInvalidSemverBundle(bundle: string, fallback: string): Promise<string | null> {
   log.warn(`Bundle version "${bundle}" is not valid semver (https://semver.org/).`)
   const useFallback = await pConfirm({
@@ -75,13 +106,12 @@ export async function recoverMissingUpdater(packageJsonPath?: string): Promise<b
     return false
 
   const pm = getPMAndCommand()
-  const installParts = pm.installCommand.split(/\s+/).filter(Boolean)
-  const command = installParts[0]
-  if (!command)
+  const versionToInstall = resolveUpdaterInstallVersion(installState.declaredVersion)
+  const invocation = buildUpdaterInstallInvocation(pm, versionToInstall, installState.declaredVersion)
+  if (!invocation)
     return false
 
-  const versionToInstall = resolveUpdaterInstallVersion(installState.declaredVersion)
-  const result = spawnSync(command, [...installParts.slice(1), '--force', `${CAPGO_UPDATER_PACKAGE}@${versionToInstall}`], {
+  const result = spawnSync(invocation.command, invocation.args, {
     cwd: dirname(resolvedPackageJson),
     stdio: 'inherit',
     shell: false,

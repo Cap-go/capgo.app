@@ -22,7 +22,7 @@ import {
   injectNotifyAppReadyIntoJs,
   patchNotifyAppReadyInBuildFolder,
 } from '../src/recovery/notify-app-ready.ts'
-import { resolveLocalSemverFallback, resolveUpdaterPackageJsonPath } from '../src/recovery/bundle-zip.ts'
+import { resolveLocalSemverFallback, resolveUpdaterPackageJsonPath, buildUpdaterInstallInvocation } from '../src/recovery/bundle-zip.ts'
 import { zipBundleInternal } from '../src/bundle/zip.ts'
 
 const tempDirs = []
@@ -256,6 +256,21 @@ await test('resolveUpdaterPackageJsonPath resolves root-relative package.json op
   finally {
     process.chdir(previousCwd)
   }
+})
+
+await test('buildUpdaterInstallInvocation uses yarn add when updater is not declared', () => {
+  const invocation = buildUpdaterInstallInvocation({ pm: 'yarn', installCommand: 'yarn install' }, '^7.0.0', null)
+  assert.deepEqual(invocation, { command: 'yarn', args: ['add', '@capgo/capacitor-updater@^7.0.0'] })
+})
+
+await test('buildUpdaterInstallInvocation uses bun add when updater is not declared', () => {
+  const invocation = buildUpdaterInstallInvocation({ pm: 'bun', installCommand: 'bun install' }, 'latest', null)
+  assert.deepEqual(invocation, { command: 'bun', args: ['add', '@capgo/capacitor-updater@latest'] })
+})
+
+await test('buildUpdaterInstallInvocation restores declared yarn deps via install', () => {
+  const invocation = buildUpdaterInstallInvocation({ pm: 'yarn', installCommand: 'yarn install' }, '^7.0.0', '^7.0.0')
+  assert.deepEqual(invocation, { command: 'yarn', args: ['install'] })
 })
 
 await test('zipBundleInternal silent notifyAppReady failure stays PostHog-capturable', async () => {
