@@ -59,6 +59,7 @@ jobs:
           pr_json="$(gh pr list \
             --repo "$GITHUB_REPOSITORY" \
             --state open \
+            --limit 1000 \
             --json number,headRefName,headRepository 2>/tmp/gh-pr-list.err)"
           gh_status=$?
           set -e
@@ -196,6 +197,7 @@ jobs:
             pr_json="$(gh pr list \
               --repo "$GITHUB_REPOSITORY" \
               --state open \
+              --limit 1000 \
               --json number,headRefName,headRepository 2>/tmp/gh-pr-list.err)"
             gh_status=$?
             set -e
