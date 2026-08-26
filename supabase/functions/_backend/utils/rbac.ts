@@ -498,7 +498,7 @@ export async function canCallerAssignOrgRole(
     return result.rows[0]?.allowed === true
   }
   catch (e) {
-    return handlePermissionCheckError(c, 'org.update_user_roles', { orgId }, e, 'canCallerAssignOrgRole')
+    return handlePermissionCheckError(c, 'org.update_user_roles', { orgId }, e, 'checkPermission')
   }
   finally {
     if (pgClient)
