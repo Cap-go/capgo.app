@@ -3,7 +3,7 @@ import type { Options } from '../api/app'
 import type { Database } from '../types/supabase.types'
 import { existsSync, readFileSync } from 'node:fs'
 import { intro, log, outro } from '@clack/prompts'
-import { checkAppExistsAndHasPermissionOrgErr, defaultAppIconPath, getAppIconStoragePath, resolveAppSetIconPath } from '../api/app'
+import { checkAppExistsAndHasPermissionOrgErr, getAppIconStoragePath, resolveAppSetIconPath } from '../api/app'
 import { assertChannelExists, disableDownloadChannels as disableAllDownloadChannels, setDefaultDownloadChannel } from './default-channels'
 import { normalizeStoreUrl } from './store-url'
 import {
@@ -112,7 +112,7 @@ export async function setAppInternal(appId: string, options: Options, silent = f
   let iconBuff: Buffer | undefined
   let iconType: string | undefined
   const iconPath = getAppIconStoragePath(organizationUid, appId)
-  let iconUrl: string | undefined = defaultAppIconPath
+  let iconUrl: string | undefined
 
   const iconToUpload = resolveAppSetIconPath(icon)
   if (iconToUpload) {

@@ -37,21 +37,17 @@ function getBentoHeaders(c: Context) {
   }
 }
 
-async function bentoFetch(c: Context, path: string, siteUuid: string, body: any, signal?: AbortSignal) {
-  const headers = getBentoHeaders(c)
-  if (!headers)
-    return null
-
+function bentoApiUrl(path: string, siteUuid: string, query?: Record<string, string>) {
   const url = new URL(`https://app.bentonow.com/api/v1/${path}`)
   url.searchParams.set('site_uuid', siteUuid)
+  if (query) {
+    for (const [key, value] of Object.entries(query))
+      url.searchParams.set(key, value)
+  }
+  return url
+}
 
-  const response = await fetch(url.toString(), {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal,
-  })
-
+async function readBentoJson(response: Response) {
   if (!response.ok) {
     try {
       await response.body?.cancel()
@@ -67,6 +63,94 @@ async function bentoFetch(c: Context, path: string, siteUuid: string, body: any,
   }
   catch {
     throw new Error(`Bento API returned invalid JSON: ${response.status}`)
+  }
+}
+
+async function bentoFetch(c: Context, path: string, siteUuid: string, body: any, signal?: AbortSignal) {
+  const headers = getBentoHeaders(c)
+  if (!headers)
+    return null
+
+  const response = await fetch(bentoApiUrl(path, siteUuid).toString(), {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+    signal,
+  })
+
+  return await readBentoJson(response)
+}
+
+async function bentoGet(c: Context, path: string, siteUuid: string, query: Record<string, string>, signal?: AbortSignal) {
+  const headers = getBentoHeaders(c)
+  if (!headers)
+    return null
+
+  const response = await fetch(bentoApiUrl(path, siteUuid, query).toString(), {
+    method: 'GET',
+    headers,
+    signal,
+  })
+
+  if (response.status === 404) {
+    try {
+      await response.body?.cancel()
+    }
+    catch {
+      // Unknown subscriber — treat as a miss, not a transport failure.
+    }
+    return null
+  }
+
+  return await readBentoJson(response)
+}
+
+export function parseBentoSubscriberEmail(result: unknown): string | null {
+  if (!result || typeof result !== 'object')
+    return null
+
+  const data = (result as { data?: unknown }).data
+  if (!data || typeof data !== 'object')
+    return null
+
+  const attributes = (data as { attributes?: unknown }).attributes
+  if (!attributes || typeof attributes !== 'object')
+    return null
+
+  const email = (attributes as { email?: unknown }).email
+  if (typeof email !== 'string')
+    return null
+
+  const normalized = email.trim().toLowerCase()
+  return normalized.includes('@') ? normalized : null
+}
+
+/**
+ * Resolve a Bento visitor UUID to an email.
+ * `undefined` means Bento is off or the lookup failed; `null` means no subscriber.
+ */
+export async function getBentoSubscriberEmailByUuid(
+  c: Context,
+  uuid: string,
+  signal?: AbortSignal,
+): Promise<string | null | undefined> {
+  if (!isBentoConfigured(c))
+    return undefined
+
+  try {
+    const siteUuid = getEnv(c, 'BENTO_SITE_UUID')
+    const result = await bentoGet(c, 'fetch/subscribers', siteUuid, { uuid }, signal)
+    if (result == null)
+      return null
+    return parseBentoSubscriberEmail(result)
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'getBentoSubscriberEmailByUuid error',
+      error: serializeError(error),
+    })
+    return undefined
   }
 }
 

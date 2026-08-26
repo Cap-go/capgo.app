@@ -1541,6 +1541,7 @@ export interface AdminGlobalStatsTrend {
   apps_active: number
   apps_with_preview: number
   users_with_2fa: number
+  apps_with_store_url: number
   users: number
   users_active: number
   paying: number
@@ -1681,6 +1682,7 @@ export async function getAdminGlobalStatsTrend(
         gs.apps_active::int AS apps_active,
         COALESCE(NULLIF(to_jsonb(gs) ->> 'apps_with_preview', '')::int, 0)::int AS apps_with_preview,
         COALESCE(NULLIF(to_jsonb(gs) ->> 'users_with_2fa', '')::int, 0)::int AS users_with_2fa,
+        COALESCE(NULLIF(to_jsonb(gs) ->> 'apps_with_store_url', '')::int, 0)::int AS apps_with_store_url,
         gs.users::int AS users,
         gs.users_active::int AS users_active,
         gs.paying::int AS paying,
@@ -1850,6 +1852,7 @@ export async function getAdminGlobalStatsTrend(
       apps_active: Number(row.apps_active) || 0,
       apps_with_preview: Number(row.apps_with_preview) || 0,
       users_with_2fa: Number(row.users_with_2fa) || 0,
+      apps_with_store_url: Number(row.apps_with_store_url) || 0,
       users: Number(row.users) || 0,
       users_active: Number(row.users_active) || 0,
       paying: Number(row.paying) || 0,
@@ -2821,6 +2824,177 @@ export async function getAdminOrganizationInsights(
   catch (e: unknown) {
     logPgError(c, 'getAdminOrganizationInsights', e)
     return { organizations: [], total: 0, plan_options: [] }
+  }
+  finally {
+    if (pgClient)
+      await closeClient(c, pgClient)
+  }
+}
+
+export type AdminFamousAppTier = 'unknown' | 'niche' | 'notable' | 'famous' | 'iconic'
+
+export interface AdminFamousAppRow {
+  app_id: string
+  app_name: string | null
+  icon_url: string | null
+  ios_store_url: string | null
+  android_store_url: string | null
+  org_id: string
+  org_name: string
+  fame_score: number
+  confidence: number
+  tier: AdminFamousAppTier
+  category: string | null
+  known_as: string | null
+  summary: string
+  model: string
+  checked_at: string
+  device_count: number
+}
+
+export interface AdminFamousAppsResult {
+  apps: AdminFamousAppRow[]
+  total: number
+  pending_count: number
+  iconic_count: number
+  famous_count: number
+  notable_count: number
+}
+
+interface AdminFamousAppsFilters {
+  limit?: number
+  offset?: number
+  search?: string
+  min_score?: number
+  tier?: AdminFamousAppTier
+}
+
+/**
+ * Lists AI-scored app reputation for the admin dashboard.
+ * Ranked by fame_score, not device counts. Service-role / platform-admin only.
+ */
+export async function getAdminFamousApps(
+  c: Context,
+  filters: AdminFamousAppsFilters = {},
+): Promise<AdminFamousAppsResult> {
+  const empty: AdminFamousAppsResult = {
+    apps: [],
+    total: 0,
+    pending_count: 0,
+    iconic_count: 0,
+    famous_count: 0,
+    notable_count: 0,
+  }
+  let pgClient: ReturnType<typeof getPgClient> | undefined
+  try {
+    pgClient = getPgClient(c)
+    const drizzleClient = getDrizzleClient(pgClient)
+    const safeLimit = Math.max(1, Math.min(Math.floor(filters.limit ?? 50), 500))
+    const safeOffset = Math.max(0, Math.floor(filters.offset ?? 0))
+    const minScore = Math.max(0, Math.min(Math.floor(filters.min_score ?? 0), 100))
+    const trimmedSearch = filters.search?.trim()
+    const searchFilter = trimmedSearch
+      ? sql`AND (
+          a.app_id ILIKE ${`%${trimmedSearch}%`}
+          OR COALESCE(a.name, '') ILIKE ${`%${trimmedSearch}%`}
+          OR COALESCE(f.known_as, '') ILIKE ${`%${trimmedSearch}%`}
+          OR COALESCE(o.name, '') ILIKE ${`%${trimmedSearch}%`}
+        )`
+      : sql``
+    const tierFilter = filters.tier ? sql`AND f.tier = ${filters.tier}` : sql``
+
+    const dataQuery = sql`
+      SELECT
+        a.app_id,
+        a.name AS app_name,
+        a.icon_url,
+        a.ios_store_url,
+        a.android_store_url,
+        o.id::text AS org_id,
+        o.name AS org_name,
+        f.fame_score,
+        f.confidence,
+        f.tier,
+        f.category,
+        f.known_as,
+        f.summary,
+        f.model,
+        f.checked_at,
+        COALESCE(a.channel_device_count, 0)::bigint AS device_count
+      FROM public.app_fame AS f
+      JOIN public.apps AS a ON a.app_id = f.app_id
+      JOIN public.orgs AS o ON o.id = a.owner_org
+      WHERE f.fame_score >= ${minScore}
+        ${tierFilter}
+        ${searchFilter}
+      ORDER BY f.fame_score DESC, f.confidence DESC, a.app_id ASC
+      LIMIT ${safeLimit}
+      OFFSET ${safeOffset}
+    `
+    const countQuery = sql`
+      SELECT COUNT(*)::int AS total
+      FROM public.app_fame AS f
+      JOIN public.apps AS a ON a.app_id = f.app_id
+      JOIN public.orgs AS o ON o.id = a.owner_org
+      WHERE f.fame_score >= ${minScore}
+        ${tierFilter}
+        ${searchFilter}
+    `
+    const summaryQuery = sql`
+      SELECT
+        COUNT(*) FILTER (WHERE f.tier = 'iconic')::int AS iconic_count,
+        COUNT(*) FILTER (WHERE f.tier = 'famous')::int AS famous_count,
+        COUNT(*) FILTER (WHERE f.tier = 'notable')::int AS notable_count
+      FROM public.app_fame AS f
+    `
+    const pendingQuery = sql`
+      SELECT COUNT(*)::int AS pending_count
+      FROM public.apps AS a
+      LEFT JOIN public.app_fame AS f ON f.app_id = a.app_id
+      WHERE f.app_id IS NULL
+        AND a.app_id NOT LIKE 'com.demo.%'
+        AND a.app_id NOT LIKE 'com.capdemo.%'
+    `
+
+    const [result, countResult, summaryResult, pendingResult] = await Promise.all([
+      drizzleClient.execute(dataQuery),
+      drizzleClient.execute(countQuery),
+      drizzleClient.execute(summaryQuery),
+      drizzleClient.execute(pendingQuery),
+    ])
+
+    const apps: AdminFamousAppRow[] = result.rows.map((row: any) => ({
+      app_id: String(row.app_id || ''),
+      app_name: row.app_name ?? null,
+      icon_url: row.icon_url ?? null,
+      ios_store_url: row.ios_store_url ?? null,
+      android_store_url: row.android_store_url ?? null,
+      org_id: String(row.org_id || ''),
+      org_name: String(row.org_name || ''),
+      fame_score: Number(row.fame_score) || 0,
+      confidence: Number(row.confidence) || 0,
+      tier: (row.tier || 'unknown') as AdminFamousAppTier,
+      category: row.category ?? null,
+      known_as: row.known_as ?? null,
+      summary: String(row.summary || ''),
+      model: String(row.model || ''),
+      checked_at: normalizeTimestamp(row.checked_at) ?? '',
+      device_count: Number(row.device_count) || 0,
+    }))
+
+    const summary = summaryResult.rows[0] as any
+    return {
+      apps,
+      total: Number((countResult.rows[0] as any)?.total) || 0,
+      pending_count: Number((pendingResult.rows[0] as any)?.pending_count) || 0,
+      iconic_count: Number(summary?.iconic_count) || 0,
+      famous_count: Number(summary?.famous_count) || 0,
+      notable_count: Number(summary?.notable_count) || 0,
+    }
+  }
+  catch (e: unknown) {
+    logPgError(c, 'getAdminFamousApps', e)
+    return empty
   }
   finally {
     if (pgClient)

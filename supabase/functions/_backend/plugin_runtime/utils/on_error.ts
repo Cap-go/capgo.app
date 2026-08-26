@@ -4,6 +4,7 @@ import { DrizzleError, entityKind, TransactionRollbackError } from 'drizzle-orm'
 import { sendDiscordAlert500 } from './discord.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
 import { capturePosthogException } from './posthog.ts'
+import { isTransientDatabaseError, readPgErrorCode, readQuickErrorOriginalCause } from './pg_errors.ts'
 import { backgroundTask } from './utils.ts'
 
 const drizzleErrorNames = new Set(['DrizzleError', 'DrizzleQueryError', 'TransactionRollbackError'])
@@ -70,6 +71,43 @@ function shouldSuppressQueueRetryAlert(c: Context): boolean {
   return Boolean(queueName) && readCount !== null && maxReads !== null && readCount < maxReads
 }
 
+const upstreamUnavailableResponse: SimpleErrorResponse = {
+  error: 'upstream_unavailable',
+  message: 'Database temporarily unavailable',
+  moreInfo: {},
+}
+
+function isDrizzleErrorObject(e: unknown): boolean {
+  return e instanceof DrizzleError
+    || e instanceof TransactionRollbackError
+    || (typeof e === 'object' && e !== null && ((
+      typeof (e as any)[entityKind] === 'string' && drizzleErrorNames.has((e as any)[entityKind])
+    ) || (
+      typeof (e as any).name === 'string' && drizzleErrorNames.has((e as any).name)
+    )))
+}
+
+function logTransientPgError(c: Context, functionName: string, e: unknown, kind: 'transient_pg_error' | 'drizzle_error') {
+  const pgErrorCode = readPgErrorCode(e)
+  const moreInfo: Record<string, unknown> = {}
+  if (pgErrorCode)
+    moreInfo.pgErrorCode = pgErrorCode
+  if (kind === 'drizzle_error')
+    moreInfo.drizzleErrorCause = serializeError((e as Error).cause)
+
+  cloudlogErr({
+    requestId: c.get('requestId'),
+    functionName,
+    kind,
+    method: c.req.method,
+    url: c.req.url,
+    errorMessage: (e as Error)?.message ?? 'Unknown error',
+    stack: serializeError(e)?.stack ?? 'N/A',
+    transient: true,
+    ...(Object.keys(moreInfo).length > 0 ? { moreInfo } : {}),
+  })
+}
+
 export function onError(functionName: string) {
   return async (e: any, c: Context) => {
     let body = 'N/A'
@@ -114,15 +152,15 @@ export function onError(functionName: string) {
     }
 
     const isHttpException = e && typeof e === 'object' && typeof e.status === 'number' && typeof e.getResponse === 'function'
-    // DrizzleError detection: check for known Drizzle error classes or entityKind
-    const isDrizzleError
-      = e instanceof DrizzleError
-        || e instanceof TransactionRollbackError
-        || (typeof e === 'object' && e !== null && ((
-          typeof (e as any)[entityKind] === 'string' && drizzleErrorNames.has((e as any)[entityKind])
-        ) || (
-          typeof (e as any).name === 'string' && drizzleErrorNames.has((e as any).name)
-        )))
+    const isDrizzleError = isDrizzleErrorObject(e)
+
+    if (isHttpException) {
+      const originalCause = readQuickErrorOriginalCause(e)
+      if (originalCause !== undefined && isTransientDatabaseError(originalCause)) {
+        logTransientPgError(c, functionName, originalCause, isDrizzleErrorObject(originalCause) ? 'drizzle_error' : 'transient_pg_error')
+        return c.json(upstreamUnavailableResponse, 503)
+      }
+    }
 
     if (isHttpException) {
       // Extract error details from the cause (set by quickError)
@@ -201,8 +239,11 @@ export function onError(functionName: string) {
       }
       return c.json(res, e.status)
     }
+    if (isTransientDatabaseError(e)) {
+      logTransientPgError(c, functionName, e, isDrizzleError ? 'drizzle_error' : 'transient_pg_error')
+      return c.json(upstreamUnavailableResponse, 503)
+    }
     if (isDrizzleError) {
-      // Log Drizzle errors with more detailed information
       cloudlogErr({
         requestId: c.get('requestId'),
         functionName,

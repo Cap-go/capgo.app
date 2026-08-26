@@ -11,6 +11,7 @@ import IconPuzzle from '~icons/heroicons/puzzle-piece'
 import IconSignal from '~icons/heroicons/signal'
 import IconUsers from '~icons/heroicons/user-group'
 import IconBuild from '~icons/heroicons/wrench-screwdriver'
+import IconSparkles from '~icons/lucide/sparkles'
 
 export const adminTabs: Tab[] = [
   { label: 'builder', icon: IconBuild, key: '/builder' },
@@ -22,6 +23,7 @@ export const adminTabs: Tab[] = [
   { label: 'users', icon: IconUsers, key: '/users' },
   { label: 'frontend-onboarding', icon: IconChartBar, key: '/frontend-onboarding' },
   { label: 'admin-organizations', icon: IconBuildingOffice, key: '/organizations' },
+  { label: 'famous-apps', icon: IconSparkles, key: '/famous-apps' },
   { label: 'revenue', icon: IconBanknotes, key: '/revenue' },
   { label: 'plans-analytics-title', icon: IconChartBar, key: '/plans' },
   { label: 'credits', icon: IconCurrencyDollar, key: '/credits' },

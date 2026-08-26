@@ -672,11 +672,10 @@ describe('rbac permission system', () => {
           sharedBundleSoftDeleteError = error
         }
         await query('ROLLBACK TO SAVEPOINT preview_shared_bundle_soft_delete')
-        expect((sharedBundleSoftDeleteError as { message?: string } | undefined)?.message).toContain('PREVIEW_APIKEY_CANNOT_MUTATE_SHARED_BUNDLE')
+        expect((sharedBundleSoftDeleteError as { message?: string } | undefined)?.message).toContain('PERMISSION_DENIED_BUNDLE_DELETE')
 
-        // RLS remains the defense in depth for direct PostgREST soft-deletes
-        // of an otherwise unreferenced bundle. The service-role cleanup route
-        // is intentionally the only preview lifecycle path that can delete it.
+        // enforce_app_versions_delete_permission rejects preview keys without
+        // bundle.delete before RLS on direct PostgREST soft-deletes.
         await query('SAVEPOINT preview_unreferenced_bundle_soft_delete')
         let unreferencedBundleSoftDeleteError: unknown
         try {
@@ -690,7 +689,7 @@ describe('rbac permission system', () => {
           unreferencedBundleSoftDeleteError = error
         }
         await query('ROLLBACK TO SAVEPOINT preview_unreferenced_bundle_soft_delete')
-        expect((unreferencedBundleSoftDeleteError as { message?: string } | undefined)?.message).toMatch(/row-level security/i)
+        expect((unreferencedBundleSoftDeleteError as { message?: string } | undefined)?.message).toContain('PERMISSION_DENIED_BUNDLE_DELETE')
 
         const foreignDeletion = await query(`
           DELETE FROM public.channels

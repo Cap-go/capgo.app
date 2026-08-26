@@ -4,7 +4,11 @@ import { log } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { CliUserError } from '../shared/cli-user-error'
 import { isTransientNetworkError } from '../shared/network-error'
-import { TWO_FACTOR_COMPLIANCE_NETWORK_MESSAGE, throwTwoFactorComplianceRpcError } from '../shared/two-factor-compliance'
+import {
+  callTwoFactorComplianceRpcWithRetry,
+  throwTwoFactorComplianceRpcError,
+  warnAndContinueTwoFactorPreflightNetworkFailure,
+} from '../shared/two-factor-compliance'
 import { appAddHintMessage, formatCapgoApiErrorBody, getCapgoCliHttpStatus, hasCliPermission, invokeCapgoCliApi, isCapgoManagedSupabaseHost, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
 
 export async function checkAppExists(
@@ -201,15 +205,19 @@ export async function check2FAComplianceForApp(
   // TODO(cli-http): no Capgo HTTP equivalent for reject_access_due_to_2fa_for_app yet
   // Use the new reject_access_due_to_2fa_for_app function
   // This handles getting the org, user identity (JWT or API key), and checking 2FA compliance
-  const { data: shouldReject, error: rejectError } = await supabase
-    .rpc('reject_access_due_to_2fa_for_app', { app_id: appid })
+  const { data: shouldReject, error: rejectError } = await callTwoFactorComplianceRpcWithRetry(() =>
+    supabase.rpc('reject_access_due_to_2fa_for_app', { app_id: appid }),
+  )
 
   if (rejectError) {
-    if (!silent) {
-      if (isTransientNetworkError(rejectError))
-        log.error(TWO_FACTOR_COMPLIANCE_NETWORK_MESSAGE)
-      else
-        log.error(`Cannot check 2FA compliance: ${rejectError.message}`)
+    if (!silent && !isTransientNetworkError(rejectError))
+      log.error(`Cannot check 2FA compliance: ${rejectError.message}`)
+    if (isTransientNetworkError(rejectError)) {
+      await warnAndContinueTwoFactorPreflightNetworkFailure({
+        silent,
+        telemetryFunctionName: 'check2FAComplianceForApp',
+      })
+      return
     }
     throwTwoFactorComplianceRpcError(rejectError)
   }
@@ -274,7 +282,6 @@ export async function checkAppExistsAndHasPermissionOrgErr(
 export type { AppOptions as Options } from '../schemas/app'
 
 export const newIconPath = 'assets/icon.png'
-export const defaultAppIconPath = 'public/capgo.png'
 
 export function resolveAppSetIconPath(explicitIcon?: string): string | undefined {
   return explicitIcon

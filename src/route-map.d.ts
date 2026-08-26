@@ -87,6 +87,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/admin/dashboard/famous-apps': RouteRecordInfo<
+      '/admin/dashboard/famous-apps',
+      '/admin/dashboard/famous-apps',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/admin/dashboard/frontend-onboarding': RouteRecordInfo<
       '/admin/dashboard/frontend-onboarding',
       '/admin/dashboard/frontend-onboarding',
@@ -754,6 +761,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/admin/dashboard/debug.vue': {
       routes:
         | '/admin/dashboard/debug'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/admin/dashboard/famous-apps.vue': {
+      routes:
+        | '/admin/dashboard/famous-apps'
       views:
         | never
       pathParamNames:
