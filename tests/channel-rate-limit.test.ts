@@ -59,6 +59,7 @@ function sleep(ms: number): Promise<void> {
 // and retry with a fresh burst.
 async function hitRateLimit(makeRequest: (deviceId: string) => Promise<Response>, deviceId: string): Promise<Response | null> {
   for (let round = 0; round < 6; round++) {
+    // Send limit+1 back-to-back; slow runners may span multiple 1s windows.
     for (let sent = 0; sent < OP_LIMIT_PER_SECOND + 1; sent++) {
       const response = await makeRequest(deviceId)
       if (response.status === 429)
