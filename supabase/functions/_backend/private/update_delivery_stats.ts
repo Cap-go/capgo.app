@@ -801,9 +801,8 @@ app.post('/', middlewareAuth, async (c) => {
 
   if (scope === 'platform') {
     await assertPlatformAdmin(c)
-    const platformDays = normalizePlatformPeriodDays(days)
-    // Fail-open for AE read failures lives in readUpdateDeliveryStats; cache/Postgres errors propagate.
-    return c.json(await readUpdateDeliveryStats(c, scope, platformDays))
+    // 90-day cap is applied inside readUpdateDeliveryStats for platform scope only.
+    return c.json(await readUpdateDeliveryStats(c, scope, days))
   }
 
   if (scope === 'app') {

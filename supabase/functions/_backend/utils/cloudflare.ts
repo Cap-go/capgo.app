@@ -2032,11 +2032,23 @@ export async function readPlatformUpdateDeliveryStatsCF(
       }
     }
 
+    const allChunksSucceeded = chunkResults.length === chunks.length
     let overviewRow = mergePlatformUpdateDeliveryOverviewRows(chunkResults.map(result => result.overviewRow))
-    if (chunks.length > 1) {
-      overviewRow = {
-        ...overviewRow,
-        devices: await queryPlatformUpdateDeliveryDeviceCount(c, params),
+    if (chunks.length > 1 && allChunksSucceeded) {
+      try {
+        overviewRow = {
+          ...overviewRow,
+          devices: await queryPlatformUpdateDeliveryDeviceCount(c, params),
+        }
+      }
+      catch (error) {
+        cloudlogErr({
+          requestId: c.get('requestId'),
+          message: 'Platform update delivery device count query failed',
+          error: serializeError(error),
+          period_start: params.period_start,
+          end_date: params.end_date,
+        })
       }
     }
 
