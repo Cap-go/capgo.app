@@ -129,7 +129,7 @@ describe('deleted bundle cache', () => {
     expect(queryMock).not.toHaveBeenCalled()
   })
 
-  it('purges file cache keys and writes a deleted marker', async () => {
+  it('purges path and key=checksum cache entries and writes a deleted marker', async () => {
     const cache = createCache()
     globalThis.caches = { default: cache } as any
 
