@@ -3,15 +3,10 @@ import {
   hasPluginVersionBreakdown,
 } from '../../supabase/functions/_backend/utils/plugin_compatibility.ts'
 
-export type {
-  PluginVersionCompatibilityBucket,
-} from '../../supabase/functions/_backend/utils/plugin_compatibility.ts'
-
 export {
   bucketPluginVersionBreakdown,
   CHANNEL_SELF_STORE_CUTOFF_CAPTION,
   ENCRYPTION_KEY_ID_CUTOFF_CAPTION,
-  hasPluginVersionBreakdown,
   isLegacyChannelSelfStorePluginVersion,
   isLegacyEncryptionKeyIdPluginVersion,
 } from '../../supabase/functions/_backend/utils/plugin_compatibility.ts'
