@@ -14,6 +14,8 @@ assert.doesNotMatch(appAddSource, /\bensureAppDoesNotExist\b/)
 assert.match(appAddSource, /method:\s*'POST'/)
 assert.match(appAddSource, /appId === 'io\.ionic\.starter'/)
 assert.match(appAddSource, /upsert:\s*false/)
+assert.doesNotMatch(appAddSource, /\bdefaultAppIconPath\b/)
+assert.match(appAddSource, /\.\.\.\(params\.iconUrl \? \{ icon: params\.iconUrl \} : \{\}\)/)
 
 assert.equal(isStorageObjectConflict({ statusCode: '409' }), true)
 assert.equal(isStorageObjectConflict({ status: 409 }), true)
