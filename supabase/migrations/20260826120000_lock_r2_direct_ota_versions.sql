@@ -376,7 +376,9 @@ BEGIN
         USING ERRCODE = '42501';
     END IF;
 
-    IF NOT (TG_OP = 'INSERT' AND NEW.version IS NULL)
+    -- Blank version on INSERT is the native channel state, but a rollout target still
+    -- needs promotion permission before bundle existence checks run.
+    IF NOT (TG_OP = 'INSERT' AND NEW.version IS NULL AND NEW.rollout_version IS NULL)
       AND NOT public.rbac_check_permission_request(
         public.rbac_perm_channel_promote_bundle(),
         v_owner_org,
