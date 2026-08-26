@@ -102,7 +102,8 @@ BEGIN
 
     -- GHSA-5rg9-rhwj-wj76: CLI/TUS creates r2-direct rows with checksum before
     -- finalize. Lock identity fields once checksum is set; still allow r2_path
-    -- writes and the one-shot finalize (r2-direct -> r2).
+    -- writes, manifest updates, and the one-shot finalize (r2-direct -> r2).
+    -- Channel linkage is intentionally not part of this gate.
     IF OLD.storage_provider = 'r2-direct' THEN
       bundle_identity_locked := NULLIF(BTRIM(COALESCE(OLD.checksum, '')), '') IS NOT NULL;
 
