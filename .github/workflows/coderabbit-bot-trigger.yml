@@ -6,6 +6,8 @@ on:
       - 'cursor/**'
       - 'feat/admin-famous-apps'
       - 'fix/security-ghsa-*'
+  pull_request_review:
+    types: [submitted]
   workflow_dispatch:
 
 concurrency:
