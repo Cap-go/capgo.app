@@ -132,11 +132,11 @@ describe('org customer_id guard', () => {
 
   afterAll(async () => {
     if (createdOrgIds.length > 0) {
+      await executeSQL('DELETE FROM public.orgs WHERE id = ANY($1::uuid[])', [createdOrgIds])
       await executeSQL(
         'DELETE FROM public.stripe_info WHERE customer_id = ANY($1::text[])',
         [createdOrgIds.map(id => `pending_${id}`)],
       )
-      await executeSQL('DELETE FROM public.orgs WHERE id = ANY($1::uuid[])', [createdOrgIds])
     }
     await executeSQL('DELETE FROM public.orgs WHERE id = $1::uuid', [orgId])
     await executeSQL(
