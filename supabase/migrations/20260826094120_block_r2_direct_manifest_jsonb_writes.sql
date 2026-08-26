@@ -1,6 +1,20 @@
 -- Block PostgREST writes to app_versions.manifest while a bundle is still
 -- in-progress (storage_provider = r2-direct). Legitimate delta uploads use
 -- POST /private/set_manifest, which inserts into public.manifest directly.
+--
+-- Execution profile for app_version_manifest_jsonb_unmigrated:
+-- - Called from check_encrypted_bundle_on_insert on public.app_versions
+--   INSERT/UPDATE when manifest jsonb is cleared or compared (at most once
+--   per affected row).
+-- - Roles: service_role only; not exposed to anon/authenticated PostgREST.
+-- - Frequency: console/API app_versions writes; not plugin /updates hot path.
+-- - Cardinality: p_manifest is bounded by bundle file count (thousands of
+--   entries at most); each entry probes public.manifest via app_version_id.
+-- - Indexes: idx_manifest_app_version_id on (app_version_id); per-entry
+--   s3_path/file_hash filter on the index-scanned row set.
+-- - Worst case: Nested Loop from unnest(p_manifest) to Index Scan on
+--   idx_manifest_app_version_id with s3_path/file_hash filters. Bounded by
+--   manifest entry count, not table cardinality.
 
 CREATE OR REPLACE FUNCTION public.app_version_manifest_jsonb_unmigrated(
   p_version_id bigint,
@@ -24,9 +38,15 @@ AS $$
   );
 $$;
 
-ALTER FUNCTION public.app_version_manifest_jsonb_unmigrated(bigint, public.manifest_entry[]) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.app_version_manifest_jsonb_unmigrated(bigint, public.manifest_entry[]) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.app_version_manifest_jsonb_unmigrated(bigint, public.manifest_entry[]) TO service_role;
+ALTER FUNCTION public.app_version_manifest_jsonb_unmigrated(
+  bigint, public.manifest_entry[]
+) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.app_version_manifest_jsonb_unmigrated(
+  bigint, public.manifest_entry[]
+) FROM PUBLIC;
+GRANT ALL ON FUNCTION public.app_version_manifest_jsonb_unmigrated(
+  bigint, public.manifest_entry[]
+) TO service_role;
 
 CREATE OR REPLACE FUNCTION "public"."check_encrypted_bundle_on_insert"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
