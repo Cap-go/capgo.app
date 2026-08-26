@@ -20,6 +20,16 @@ describe('cli user Bento event registry', () => {
     })?.bentoEvent).toBe(bentoEvent)
   })
 
+  it('maps every frontend login to repeatable Bento delivery', () => {
+    expect(buildMappedUserBentoEvent({
+      sourceEvent: 'User Login',
+      observedAt: '2026-08-26T10:00:00.000Z',
+    })).toMatchObject({
+      bentoEvent: 'user:login',
+      delivery: 'every',
+    })
+  })
+
   it('maps every frontend onboarding restart with only allowlisted details', () => {
     expect(buildMappedUserBentoEvent({
       sourceEvent: 'onboarding_resume_restarted',
