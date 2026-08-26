@@ -186,7 +186,10 @@ describe('on_version_update deleted version cleanup', () => {
   it('moves the bundle to trash and clears stored size for soft-deleted versions', async () => {
     const response = await deleteIt(createContext(), createVersion())
     expect(response.status).toBe(200)
-    expect(purgeFileReadCache).toHaveBeenCalledWith('orgs/org-1/apps/com.cleanup.test/1.0.0.zip')
+    expect(purgeFileReadCache).toHaveBeenCalledWith(
+      'orgs/org-1/apps/com.cleanup.test/1.0.0.zip',
+      'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    )
     expect(moveObjectToTrash).toHaveBeenCalledWith(expect.anything(), 'orgs/org-1/apps/com.cleanup.test/1.0.0.zip')
     expect(appVersionsMetaUpdate).toHaveBeenCalledWith({ size: 0 })
   })
