@@ -3,11 +3,15 @@ import { describe, expect, it } from 'vitest'
 import {
   bucketPluginVersionBreakdown,
   ENCRYPTION_KEY_ID_FORMAT_MIN_VERSION,
+  estimateKnownPluginVersionDevicesFromLadder,
   hasPluginVersionBreakdown,
   isLegacyChannelSelfStorePluginVersion,
   isLegacyEncryptionKeyIdPluginVersion,
 } from '../supabase/functions/_backend/utils/plugin_compatibility.ts'
-import { buildPluginCompatibilityTrendSeries } from '../src/services/adminPluginCompatibility.ts'
+import {
+  buildPluginCompatibilityTrendSeries,
+  getLatestNonEmptyPluginTrendPoint,
+} from '../src/services/adminPluginCompatibility.ts'
 
 describe('plugin compatibility version gates', () => {
   const channelSelfCases: Array<[string, boolean]> = [
@@ -68,7 +72,7 @@ describe('bucketPluginVersionBreakdown', () => {
     expect(bucket.currentDevices).toBe(7000)
   })
 
-  it.concurrent('returns null device counts when devices_last_month is missing', () => {
+  it.concurrent('returns null device counts when known-version device total is missing', () => {
     const bucket = bucketPluginVersionBreakdown(
       { '8.40.6': 100 },
       isLegacyEncryptionKeyIdPluginVersion,
@@ -103,6 +107,33 @@ describe('hasPluginVersionBreakdown', () => {
 
   it.concurrent('returns true when any version has share', () => {
     expect(hasPluginVersionBreakdown({ '8.41.0': 0.1 })).toBe(true)
+  })
+})
+
+describe('estimateKnownPluginVersionDevicesFromLadder', () => {
+  it.concurrent('estimates total devices from one ladder row', () => {
+    expect(estimateKnownPluginVersionDevicesFromLadder([
+      { device_count: 700, percent: 70 },
+      { device_count: 300, percent: 30 },
+    ])).toBe(1000)
+  })
+
+  it.concurrent('returns null when ladder has no usable rows', () => {
+    expect(estimateKnownPluginVersionDevicesFromLadder([])).toBeNull()
+    expect(estimateKnownPluginVersionDevicesFromLadder([
+      { device_count: 0, percent: 0 },
+    ])).toBeNull()
+  })
+})
+
+describe('getLatestNonEmptyPluginTrendPoint', () => {
+  it.concurrent('returns the last trend point with a non-empty breakdown', () => {
+    const point = getLatestNonEmptyPluginTrendPoint([
+      { date: '2026-01-01', version_breakdown: { '7.34.0': 100 } },
+      { date: '2026-01-02', version_breakdown: {} },
+    ])
+
+    expect(point?.date).toBe('2026-01-01')
   })
 })
 

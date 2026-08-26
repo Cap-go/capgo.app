@@ -20,6 +20,9 @@ import {
   buildPluginCompatibilityTrendSeries,
   CHANNEL_SELF_STORE_CUTOFF_CAPTION,
   ENCRYPTION_KEY_ID_CUTOFF_CAPTION,
+  estimateKnownPluginVersionDevicesFromLadder,
+  getLatestNonEmptyPluginTrendPoint,
+  hasPluginVersionBreakdown,
   isLegacyChannelSelfStorePluginVersion,
   isLegacyEncryptionKeyIdPluginVersion,
 } from '~/services/adminPluginCompatibility'
@@ -211,11 +214,25 @@ const channelSelfStoreTrendSeries = computed(() => buildPluginCompatibilityTrend
   { legacy: 'Legacy', current: 'Current' },
 ))
 const hasChannelSelfStoreTrendData = computed(() => channelSelfStoreTrendSeries.value.length > 0)
-const channelSelfStoreLatestBucket = computed(() => bucketPluginVersionBreakdown(
-  pluginBreakdown.value?.version_breakdown ?? {},
-  isLegacyChannelSelfStorePluginVersion,
-  pluginBreakdown.value?.devices_last_month,
-))
+const latestCompatibilityTrendPoint = computed(() => getLatestNonEmptyPluginTrendPoint(versionTrendPoints.value))
+const knownPluginVersionDeviceCount = computed(() => {
+  if (!hasPluginVersionBreakdown(pluginBreakdown.value?.version_breakdown))
+    return null
+
+  return estimateKnownPluginVersionDevicesFromLadder(pluginBreakdown.value?.version_ladder)
+})
+const channelSelfStoreLatestBucket = computed(() => {
+  const point = latestCompatibilityTrendPoint.value
+  if (!point) {
+    return bucketPluginVersionBreakdown({}, isLegacyChannelSelfStorePluginVersion)
+  }
+
+  return bucketPluginVersionBreakdown(
+    point.version_breakdown,
+    isLegacyChannelSelfStorePluginVersion,
+    knownPluginVersionDeviceCount.value,
+  )
+})
 
 const encryptionTrendSeries = computed(() => buildPluginCompatibilityTrendSeries(
   versionTrendPoints.value,
@@ -223,16 +240,24 @@ const encryptionTrendSeries = computed(() => buildPluginCompatibilityTrendSeries
   { legacy: 'Legacy', current: 'Current' },
 ))
 const hasEncryptionTrendData = computed(() => encryptionTrendSeries.value.length > 0)
-const encryptionLatestBucket = computed(() => bucketPluginVersionBreakdown(
-  pluginBreakdown.value?.version_breakdown ?? {},
-  isLegacyEncryptionKeyIdPluginVersion,
-  pluginBreakdown.value?.devices_last_month,
-))
+const encryptionLatestBucket = computed(() => {
+  const point = latestCompatibilityTrendPoint.value
+  if (!point) {
+    return bucketPluginVersionBreakdown({}, isLegacyEncryptionKeyIdPluginVersion)
+  }
 
-function formatDeviceEstimate(value: number | null) {
+  return bucketPluginVersionBreakdown(
+    point.version_breakdown,
+    isLegacyEncryptionKeyIdPluginVersion,
+    knownPluginVersionDeviceCount.value,
+  )
+})
+
+function formatDeviceEstimateSubtitle(value: number | null) {
   if (value == null)
-    return '-'
-  return formatNumberValue(value, { maximumFractionDigits: 0 })
+    return 'Device estimate unavailable'
+
+  return `~${formatNumberValue(value, { maximumFractionDigits: 0 })} devices`
 }
 
 watch(() => adminStore.activeDateRange, () => {
@@ -378,14 +403,14 @@ displayStore.defaultBack = '/dashboard'
                   :value="formatPercent(channelSelfStoreLatestBucket.legacyPercent)"
                   color-class="text-orange-500"
                   :is-loading="isLoadingBreakdown"
-                  :subtitle="`~${formatDeviceEstimate(channelSelfStoreLatestBucket.legacyDevices)} devices`"
+                  :subtitle="formatDeviceEstimateSubtitle(channelSelfStoreLatestBucket.legacyDevices)"
                 />
                 <AdminStatsCard
                   title="Current share (latest)"
                   :value="formatPercent(channelSelfStoreLatestBucket.currentPercent)"
                   color-class="text-emerald-500"
                   :is-loading="isLoadingBreakdown"
-                  :subtitle="`~${formatDeviceEstimate(channelSelfStoreLatestBucket.currentDevices)} devices`"
+                  :subtitle="formatDeviceEstimateSubtitle(channelSelfStoreLatestBucket.currentDevices)"
                 />
               </div>
             </ChartCard>
@@ -418,14 +443,14 @@ displayStore.defaultBack = '/dashboard'
                   :value="formatPercent(encryptionLatestBucket.legacyPercent)"
                   color-class="text-orange-500"
                   :is-loading="isLoadingBreakdown"
-                  :subtitle="`~${formatDeviceEstimate(encryptionLatestBucket.legacyDevices)} devices`"
+                  :subtitle="formatDeviceEstimateSubtitle(encryptionLatestBucket.legacyDevices)"
                 />
                 <AdminStatsCard
                   title="Current share (latest)"
                   :value="formatPercent(encryptionLatestBucket.currentPercent)"
                   color-class="text-emerald-500"
                   :is-loading="isLoadingBreakdown"
-                  :subtitle="`~${formatDeviceEstimate(encryptionLatestBucket.currentDevices)} devices`"
+                  :subtitle="formatDeviceEstimateSubtitle(encryptionLatestBucket.currentDevices)"
                 />
               </div>
             </ChartCard>

@@ -64,10 +64,29 @@ export function hasPluginVersionBreakdown(versionBreakdown: Record<string, numbe
   return Object.values(versionBreakdown).some(value => Number(value) > 0)
 }
 
+export interface PluginVersionLadderEstimateInput {
+  device_count: number
+  percent: number
+}
+
+/** Estimates devices with a known plugin version from one ladder row (same population as version_breakdown). */
+export function estimateKnownPluginVersionDevicesFromLadder(
+  versionLadder: PluginVersionLadderEstimateInput[] | null | undefined,
+): number | null {
+  if (!versionLadder?.length)
+    return null
+
+  const anchor = versionLadder.find(entry => entry.device_count > 0 && entry.percent > 0)
+  if (!anchor)
+    return null
+
+  return Math.round(anchor.device_count / (anchor.percent / 100))
+}
+
 export function bucketPluginVersionBreakdown(
   versionBreakdown: Record<string, number>,
   isLegacy: (pluginVersion: string) => boolean,
-  devicesLastMonth?: number | null,
+  knownVersionDeviceCount?: number | null,
 ): PluginVersionCompatibilityBucket {
   let legacyPercent = 0
   let currentPercent = 0
@@ -83,7 +102,7 @@ export function bucketPluginVersionBreakdown(
       currentPercent += percent
   }
 
-  const devices = Number(devicesLastMonth) || 0
+  const devices = Number(knownVersionDeviceCount) || 0
   if (devices <= 0) {
     return {
       legacyPercent,

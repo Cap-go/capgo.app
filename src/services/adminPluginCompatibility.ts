@@ -7,6 +7,8 @@ export {
   bucketPluginVersionBreakdown,
   CHANNEL_SELF_STORE_CUTOFF_CAPTION,
   ENCRYPTION_KEY_ID_CUTOFF_CAPTION,
+  estimateKnownPluginVersionDevicesFromLadder,
+  hasPluginVersionBreakdown,
   isLegacyChannelSelfStorePluginVersion,
   isLegacyEncryptionKeyIdPluginVersion,
 } from '../../supabase/functions/_backend/utils/plugin_compatibility.ts'
@@ -26,6 +28,18 @@ export interface PluginCompatibilityChartSeries {
 const LEGACY_COLOR = '#f97316'
 const CURRENT_COLOR = '#10b981'
 
+export function getLatestNonEmptyPluginTrendPoint(
+  points: PluginCompatibilityTrendPoint[],
+): PluginCompatibilityTrendPoint | null {
+  for (let index = points.length - 1; index >= 0; index -= 1) {
+    const point = points[index]
+    if (point && hasPluginVersionBreakdown(point.version_breakdown))
+      return point
+  }
+
+  return null
+}
+
 export function buildPluginCompatibilityTrendSeries(
   points: PluginCompatibilityTrendPoint[],
   isLegacy: (pluginVersion: string) => boolean,
@@ -35,11 +49,7 @@ export function buildPluginCompatibilityTrendSeries(
     .filter(point => hasPluginVersionBreakdown(point.version_breakdown))
     .map(point => ({
       date: point.date,
-      bucket: bucketPluginVersionBreakdown(
-        point.version_breakdown,
-        isLegacy,
-        point.devices_last_month,
-      ),
+      bucket: bucketPluginVersionBreakdown(point.version_breakdown, isLegacy),
     }))
 
   if (buckets.length === 0)

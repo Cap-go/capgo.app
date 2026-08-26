@@ -8,10 +8,11 @@ export {
   CHANNEL_SELF_STORE_PLACEHOLDER_PLUGIN_VERSION,
   ENCRYPTION_KEY_ID_CUTOFF_CAPTION,
   ENCRYPTION_KEY_ID_FORMAT_MIN_VERSION,
+  estimateKnownPluginVersionDevicesFromLadder,
   hasPluginVersionBreakdown,
   isLegacyChannelSelfStorePluginVersion,
   isLegacyEncryptionKeyIdPluginVersion,
   usesCurrentEncryptionKeyIdFormat,
 } from '../plugin_runtime/utils/plugin_compatibility.ts'
 
-export type { PluginVersionCompatibilityBucket } from '../plugin_runtime/utils/plugin_compatibility.ts'
+export type { PluginVersionCompatibilityBucket, PluginVersionLadderEstimateInput } from '../plugin_runtime/utils/plugin_compatibility.ts'
