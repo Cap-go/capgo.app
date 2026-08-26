@@ -195,8 +195,8 @@ BEGIN
             'reason', 'r2_direct_identity_locked'
           ));
         RAISE EXCEPTION '%',
-          'bundle_already_ready: Bundle content cannot be changed '
-          || 'after upload is complete. Upload a new bundle instead.';
+          'bundle_identity_locked: Bundle identity fields cannot be changed '
+          || 'after checksum, session_key, or key_id are first set during upload.';
       END IF;
     END IF;
   END IF;
