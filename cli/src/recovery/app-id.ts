@@ -149,9 +149,13 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
   const interactive = options.interactive ?? false
   const json = options.json ?? false
 
-  const resolved = getAppId(options.explicitAppId, options.config)
-  if (resolved)
-    return resolved
+  const explicitAppId = options.explicitAppId?.trim()
+  if (explicitAppId)
+    return explicitAppId
+
+  const configAppId = getAppId(undefined, options.config)
+  if (configAppId && isValidAppId(configAppId))
+    return configAppId
 
   const candidates = collectAppIdCandidates(options.config, findRoot(cwd()), options.packageJsonPaths)
   if (candidates.length === 1) {

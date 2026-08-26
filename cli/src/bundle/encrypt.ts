@@ -51,20 +51,19 @@ export async function encryptZipInternal(
 
     const interactive = canPromptInteractively({ silent: json || silent })
     const userSuppliedPrivateKey = options.keyData !== undefined || options.key !== undefined
+    const keyPath = options.key || baseKeyV2
+    let privateKey = options.keyData || ''
+    if (!privateKey && existsSync(keyPath))
+      privateKey = readFileSync(keyPath, 'utf8')
 
     let extConfig = await getConfigForWrite()
     const hasPublicKeyInConfig = !!extConfig.config.plugins?.CapacitorUpdater?.publicKey
 
     if (!hasPublicKeyInConfig) {
-      if (userSuppliedPrivateKey) {
-        const keyPath = options.key || baseKeyV2
-        let privateKey = options.keyData || ''
-        if (!privateKey && existsSync(keyPath))
-          privateKey = readFileSync(keyPath, 'utf8')
-        if (privateKey)
-          await ensurePublicKeyFromPrivateKey(privateKey, { silent: silent || json, json })
+      if (privateKey) {
+        await ensurePublicKeyFromPrivateKey(privateKey, { silent: silent || json, json })
       }
-      else {
+      else if (!userSuppliedPrivateKey) {
         await ensurePublicKeyInConfig({ interactive, silent: silent || json, json })
       }
       extConfig = await getConfigForWrite()
@@ -76,7 +75,7 @@ export async function encryptZipInternal(
     if (hasPrivateKeyInConfig && shouldShowPrompts)
       log.warning('There is still a privateKey in the config')
 
-    if (!refreshedHasPublicKey) {
+    if (!refreshedHasPublicKey && !(userSuppliedPrivateKey && !privateKey)) {
       if (!silent) {
         if (json)
           emitJsonError({ error: 'missing_public_key' })
@@ -85,12 +84,6 @@ export async function encryptZipInternal(
       }
       throw new Error('Missing public key in config')
     }
-
-    const keyPath = options.key || baseKeyV2
-    let privateKey = options.keyData || ''
-
-    if (!privateKey && existsSync(keyPath))
-      privateKey = readFileSync(keyPath, 'utf8')
 
     if (!privateKey) {
       if (!silent) {

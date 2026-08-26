@@ -134,7 +134,7 @@ function usesCommonJsModuleFormat(filePath: string, content: string): boolean {
 
 export function resolveCapacitorUpdaterIdentifier(content: string): string | undefined {
   const aliasImport = content.match(/\bimport\s*\{[^}]*\bCapacitorUpdater\b\s+as\s+(\w+)/)
-  if (aliasImport?.[1])
+  if (aliasImport?.[1] && hasNotifyAppReadyMethod(content, aliasImport[1]))
     return aliasImport[1]
 
   const cjsAlias = content.match(/\b(?:var|let|const)\s*\{[^}]*\bCapacitorUpdater\s*:\s*(\w+)[^}]*\}\s*=\s*require\s*\(\s*['"]@capgo\/capacitor-updater['"]\s*\)/)
@@ -145,17 +145,23 @@ export function resolveCapacitorUpdaterIdentifier(content: string): string | und
   if (cjsNamed)
     return 'CapacitorUpdater'
 
-  const namedImport = content.match(/\bimport\s*\{[^}]*\b(CapacitorUpdater)\b[^}]*\}/)
+  const namedImport = content.match(/\bimport\s*\{[^}]*\b(CapacitorUpdater)\b[^}]*\}\s*from\s*['"]@capgo\/capacitor-updater['"]/)
   if (namedImport?.[1])
     return namedImport[1]
 
-  if (/\b(?:var|let|const)\s+CapacitorUpdater\b/.test(content))
-    return 'CapacitorUpdater'
-
-  if (/\bCapacitorUpdater\s*\.\s*\w+/.test(content))
+  if (/\b(?:var|let|const)\s+CapacitorUpdater\b/.test(content) && hasNotifyAppReadyMethod(content, 'CapacitorUpdater'))
     return 'CapacitorUpdater'
 
   return undefined
+}
+
+function hasNotifyAppReadyMethod(content: string, identifier: string): boolean {
+  const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  if (new RegExp(`\\b(?:var|let|const)\\s+${escaped}\\s*=\\s*\\{[^}]*\\bnotifyAppReady\\s*(?:\\(|:)`).test(content))
+    return true
+  if (new RegExp(`\\b${escaped}\\s*\\.\\s*notifyAppReady\\s*(?:\\(|=)`).test(content))
+    return true
+  return false
 }
 
 export function hasCallableCapacitorUpdaterBinding(content: string): boolean {

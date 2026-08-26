@@ -13,6 +13,7 @@ import {
   collectAppIdCandidates,
   isValidAppId,
   parsePackageJsonOptionPaths,
+  resolveAppIdWithRecovery,
 } from '../src/recovery/app-id.ts'
 import {
   findBuildEntryJsPath,
@@ -156,6 +157,31 @@ await test('injectNotifyAppReadyIntoBuildJs uses CapacitorUpdater from mixed Com
   const input = 'const { CapacitorUpdater, App } = require(\'@capgo/capacitor-updater\')\nconsole.log("boot")\n'
   const output = injectNotifyAppReadyIntoBuildJs(input)
   assert.match(output, /CapacitorUpdater\.notifyAppReady\(\)/)
+})
+
+await test('injectNotifyAppReadyIntoBuildJs skips empty CapacitorUpdater bindings', () => {
+  const input = 'var CapacitorUpdater = {};\nconsole.log("boot")\n'
+  assert.equal(injectNotifyAppReadyIntoBuildJs(input), undefined)
+})
+
+await test('resolveAppIdWithRecovery ignores invalid config appId values', async () => {
+  const root = makeTempDir('appid-invalid-config')
+  const previousCwd = process.cwd()
+  process.chdir(root)
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'demo' }))
+  try {
+    await assert.rejects(
+      () => resolveAppIdWithRecovery({
+        config: { appId: 'io.ionic.starter' },
+        interactive: false,
+        json: true,
+      }),
+      /missing_app_id/,
+    )
+  }
+  finally {
+    process.chdir(previousCwd)
+  }
 })
 
 await test('patchNotifyAppReadyInBuildFolder skips bundles without CapacitorUpdater', () => {
