@@ -4,6 +4,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+export function resolveAppCreatorEmail(claimedEmail?: string, storedEmail?: string): string | undefined {
+  return claimedEmail ?? storedEmail
+}
+
 export function addAppCreatorToOnboarding(onboarding: unknown, userId: string, email?: string): Record<string, unknown> {
   return {
     ...(isRecord(onboarding) ? onboarding : {}),
