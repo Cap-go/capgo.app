@@ -28,6 +28,15 @@ The observation window is 24 hours after checkout start (`CHECKOUT_ATTRIBUTION_M
 
 Until that deadline passes, an attributed checkout without a qualifying paid transition remains **pending** instead of **not completed**.
 
+## Billing evidence window
+
+Plans analytics loads billing transitions through the later of:
+
+- the selected range end, plus one checkout attribution window (for checkouts attributed near the range boundary), and
+- the PostHog query helper's additional 24-hour buffer.
+
+That keeps paid transitions inside the observation deadline available when classifying range-edge checkouts.
+
 ## Admin UI
 
 The Plans admin dashboard renders this cohort as a stacked daily chart (**Completed checkout**, **Not completed**, **Pending**) on the checkout completion card.
