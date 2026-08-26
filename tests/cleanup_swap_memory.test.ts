@@ -264,8 +264,8 @@ describe('swap memory cleanup functions', () => {
 
     await executeSQL(
       `INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash)
-       VALUES ($1, 'a.js', 'apps/a.js', 'hash')`,
-      [versionId],
+       VALUES ($1, 'a.js', $2, 'hash')`,
+      [versionId, manifestPath],
     )
     await executeSQL(
       `UPDATE public.app_versions
