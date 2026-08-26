@@ -15,30 +15,49 @@ import { backgroundTask } from '../utils/utils.ts'
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', middlewareAPISecret, triggerValidator('orgs', 'INSERT'), async (c) => {
-  const record = c.get('webhookBody') as Database['public']['Tables']['orgs']['Row']
-  cloudlog({ requestId: c.get('requestId'), message: 'record', record })
+  const queuedRecord = c.get('webhookBody') as Database['public']['Tables']['orgs']['Row']
+  cloudlog({ requestId: c.get('requestId'), message: 'record', record: queuedRecord })
 
-  if (!record.id) {
+  if (!queuedRecord.id) {
     cloudlog({ requestId: c.get('requestId'), message: 'No id' })
-    throw simpleError('no_id', 'No id', { record })
+    throw simpleError('no_id', 'No id', { record: queuedRecord })
   }
+
+  // INSERT queue payloads omit customer_id when org-create assigns it in a later
+  // AFTER INSERT trigger; reload the committed row before Stripe bootstrap.
+  const { data: orgRow, error: orgLoadError } = await supabaseAdmin(c)
+    .from('orgs')
+    .select('*')
+    .eq('id', queuedRecord.id)
+    .single()
+
+  if (orgLoadError || !orgRow) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'org create reload failed, using queue payload',
+      orgId: queuedRecord.id,
+      error: orgLoadError?.message,
+    })
+  }
+
+  const org = orgRow ?? queuedRecord
 
   let trialPlanName: string | null | undefined
-  if (!record.customer_id) {
-    trialPlanName = await createStripeCustomer(c, record)
+  if (!org.customer_id) {
+    trialPlanName = await createStripeCustomer(c, org)
   }
-  else if (record.customer_id.startsWith('pending_')) {
-    trialPlanName = await finalizePendingStripeCustomer(c, record)
+  else if (org.customer_id.startsWith('pending_')) {
+    trialPlanName = await finalizePendingStripeCustomer(c, org)
   }
 
   if (trialPlanName) {
     const { data: creator, error: creatorError } = await supabaseAdmin(c)
       .from('users')
       .select('email')
-      .eq('id', record.created_by)
+      .eq('id', org.created_by)
       .maybeSingle()
     if (creatorError)
-      cloudlog({ requestId: c.get('requestId'), message: 'trial plan Bento creator lookup failed', userId: record.created_by, error: creatorError })
+      cloudlog({ requestId: c.get('requestId'), message: 'trial plan Bento creator lookup failed', userId: org.created_by, error: creatorError })
     if (creator?.email) {
       await backgroundTask(c, syncBentoSubscriberTags(c, {
         email: creator.email.trim().toLowerCase(),
@@ -49,25 +68,25 @@ app.post('/', middlewareAPISecret, triggerValidator('orgs', 'INSERT'), async (c)
 
   await backgroundTask(c, groupIdentifyPosthog(c, {
     groupType: 'organization',
-    groupKey: record.id,
+    groupKey: org.id,
     properties: {
-      name: record.name,
-      management_email: record.management_email,
-      customer_id: record.customer_id,
-      created_by: record.created_by,
-      created_at: record.created_at,
-      website: record.website,
+      name: org.name,
+      management_email: org.management_email,
+      customer_id: org.customer_id,
+      created_by: org.created_by,
+      created_at: org.created_at,
+      website: org.website,
     },
   }))
 
-  const onboardingIntent = parseOrgOnboardingIntent(record.onboarding)
+  const onboardingIntent = parseOrgOnboardingIntent(org.onboarding)
   const onboardingBentoData = buildOnboardingIntentBentoEventData(c, onboardingIntent, {
-    id: record.id,
-    name: record.name,
-    website: record.website,
+    id: org.id,
+    name: org.name,
+    website: org.website,
   })
 
-  await syncOrgOnboardingIntentForOrg(c, record)
+  await syncOrgOnboardingIntentForOrg(c, org)
 
   await sendEventToTracking(c, {
     bento: {
@@ -75,13 +94,13 @@ app.post('/', middlewareAPISecret, triggerValidator('orgs', 'INSERT'), async (c)
       data: onboardingBentoData,
       event: 'org:created',
       preferenceKey: 'onboarding',
-      uniqId: `org:created:${record.id}`,
+      uniqId: `org:created:${org.id}`,
     },
     channel: 'org-created',
     event: 'Org Created',
     sentToBento: true,
-    user_id: record.id,
-    groups: { organization: record.id },
+    user_id: org.id,
+    groups: { organization: org.id },
   })
 
   return c.json(BRES)
