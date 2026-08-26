@@ -290,10 +290,6 @@ displayStore.defaultBack = '/dashboard'
       <div class="w-full h-full px-4 pt-2 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
         <AdminFilterBar hide-date-picker />
 
-        <p class="mb-4 text-sm text-slate-600 dark:text-slate-300">
-          {{ t('famous-apps-subtitle') }}
-        </p>
-
         <div class="grid grid-cols-1 gap-6 mb-6 sm:grid-cols-2 lg:grid-cols-4">
           <AdminStatsCard
             :title="t('famous-apps-iconic')"
@@ -328,9 +324,6 @@ displayStore.defaultBack = '/dashboard'
               <h3 class="text-lg font-semibold">
                 {{ t('famous-apps') }}
               </h3>
-              <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                {{ t('famous-apps-devices-hint') }}
-              </p>
             </div>
 
             <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:min-w-[480px]">

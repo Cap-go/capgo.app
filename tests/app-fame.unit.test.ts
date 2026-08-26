@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import { describe, expect, it, vi } from 'vitest'
 import {
   fameTierFromScore,
+  parseFameAppsPayload,
   parseFameDecisions,
   scoreAppsWithAi,
 } from '../supabase/functions/_backend/utils/app_fame.ts'
@@ -90,6 +91,37 @@ describe('app fame scoring', () => {
     expect(missingAppIds).toEqual([])
   })
 
+  it.concurrent('parses nested object Workers AI envelopes', () => {
+    const { decisions, missingAppIds } = parseFameDecisions({
+      response: {
+        apps: [{
+          app_id: 'com.bank.app',
+          fame_score: '80',
+          confidence: '70',
+          category: 'finance',
+          known_as: 'National Bank',
+          summary: 'Major national consumer bank.',
+        }],
+      },
+    }, new Set(['com.bank.app']))
+
+    expect(decisions).toHaveLength(1)
+    expect(decisions[0]?.fame_score).toBe(80)
+    expect(missingAppIds).toEqual([])
+  })
+
+  it.concurrent('extracts apps arrays from nested response objects', () => {
+    expect(parseFameAppsPayload({
+      response: {
+        apps: [{
+          app_id: 'com.bank.app',
+        }],
+      },
+    })).toEqual([{
+      app_id: 'com.bank.app',
+    }])
+  })
+
   it.concurrent('parses JSON text wrapped in markdown fences', () => {
     const { decisions, missingAppIds } = parseFameDecisions(`
       \`\`\`json
@@ -149,5 +181,39 @@ describe('app fame scoring', () => {
       summary: 'Well-known regional newspaper.',
     }])
     expect(result.missingAppIds).toEqual([])
+  })
+
+  it('falls back to json_object when json_schema returns no parseable apps', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce({ response: 'not parseable' })
+      .mockResolvedValueOnce({
+        apps: [{
+          app_id: 'com.media.app',
+          fame_score: 42,
+          confidence: 50,
+          category: 'media',
+          known_as: 'City Paper',
+          summary: 'Regional publication.',
+        }],
+      })
+    const c = {
+      env: {},
+      get: () => 'req-2',
+    } as unknown as Context
+
+    const result = await scoreAppsWithAi(c, { run }, [{
+      app_id: 'com.media.app',
+      name: 'City Paper',
+      icon_url: null,
+      ios_store_url: null,
+      android_store_url: null,
+      org_name: 'Press Org',
+      org_website: null,
+    }])
+
+    expect(run).toHaveBeenCalledTimes(2)
+    expect(run.mock.calls[0]?.[1]?.response_format).toEqual(expect.objectContaining({ type: 'json_schema' }))
+    expect(run.mock.calls[1]?.[1]?.response_format).toEqual({ type: 'json_object' })
+    expect(result.decisions[0]?.fame_score).toBe(42)
   })
 })
