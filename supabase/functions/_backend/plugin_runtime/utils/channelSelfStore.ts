@@ -2,21 +2,15 @@ import type { Context } from 'hono'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import type { Database } from './supabase.types.ts'
-import { parse } from '@std/semver'
 import { getRuntimeKey } from 'hono/adapter'
 import { CacheHelper } from './cache.ts'
 import { quickError } from './hono.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
-import { isDeprecatedPluginVersion } from './utils.ts'
+import { CHANNEL_SELF_STORE_PLACEHOLDER_PLUGIN_VERSION, isLegacyChannelSelfStorePluginVersion } from './plugin_compatibility.ts'
 
 const CHANNEL_SELF_CACHE_PATH = '/.channel-self-override-v1'
 const CHANNEL_SELF_CACHE_TTL_SECONDS = 60
 const CHANNEL_SELF_KV_CACHE_TTL_SECONDS = 60
-const CHANNEL_SELF_STORE_MIN_V5 = '5.34.0'
-const CHANNEL_SELF_STORE_MIN_V6 = '6.34.0'
-const CHANNEL_SELF_STORE_MIN_V7 = '7.34.0'
-const CHANNEL_SELF_STORE_MIN_V8 = '8.0.0'
-const CHANNEL_SELF_STORE_PLACEHOLDER_PLUGIN_VERSION = '0.0.0'
 
 // TODO: Delete this legacy channel_self KV/cache bridge once old plugin versions are no longer used. // NOSONAR
 // The cache layer only exists for those old versions so channel_self writes do not hit the primary database.
@@ -100,15 +94,8 @@ function shouldRequireChannelSelfStore() {
 export function shouldSyncChannelSelfOverrideForPluginVersion(pluginVersion: string | null | undefined) {
   if (!pluginVersion)
     return false
-  if (pluginVersion === CHANNEL_SELF_STORE_PLACEHOLDER_PLUGIN_VERSION)
-    return true
 
-  try {
-    return isDeprecatedPluginVersion(parse(pluginVersion), CHANNEL_SELF_STORE_MIN_V5, CHANNEL_SELF_STORE_MIN_V6, CHANNEL_SELF_STORE_MIN_V7, CHANNEL_SELF_STORE_MIN_V8)
-  }
-  catch {
-    return false
-  }
+  return isLegacyChannelSelfStorePluginVersion(pluginVersion)
 }
 
 function shouldDeleteChannelSelfOverrideForPluginVersion(pluginVersion: string | null | undefined) {
@@ -117,12 +104,7 @@ function shouldDeleteChannelSelfOverrideForPluginVersion(pluginVersion: string |
   if (pluginVersion === CHANNEL_SELF_STORE_PLACEHOLDER_PLUGIN_VERSION)
     return true
 
-  try {
-    return isDeprecatedPluginVersion(parse(pluginVersion), CHANNEL_SELF_STORE_MIN_V5, CHANNEL_SELF_STORE_MIN_V6, CHANNEL_SELF_STORE_MIN_V7, CHANNEL_SELF_STORE_MIN_V8)
-  }
-  catch {
-    return true
-  }
+  return isLegacyChannelSelfStorePluginVersion(pluginVersion)
 }
 
 async function getChannelSelfOverridePluginVersion(c: ChannelSelfContext, supabase: ChannelSelfDeviceClient, appId: string, deviceId: string) {

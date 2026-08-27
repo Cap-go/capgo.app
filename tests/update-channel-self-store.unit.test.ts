@@ -6,6 +6,7 @@ const requestInfosPostgresMock = vi.fn()
 const requestInfosChannelPostgresMock = vi.fn()
 const requestInfosChannelDevicePostgresMock = vi.fn()
 const getChannelSelfOverrideMock = vi.fn()
+const getDevicePluginVersionPgMock = vi.fn()
 
 ;(globalThis as any).EdgeRuntime = undefined
 
@@ -16,10 +17,14 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/appStatus.ts', () =
   setAppStatus: vi.fn(() => Promise.resolve()),
 }))
 
-vi.mock('../supabase/functions/_backend/plugin_runtime/utils/channelSelfStore.ts', () => ({
-  getChannelSelfOverride: getChannelSelfOverrideMock,
-  isChannelSelfStoreEnabled: vi.fn(() => true),
-}))
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/channelSelfStore.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/plugin_runtime/utils/channelSelfStore.ts')>()
+  return {
+    ...actual,
+    getChannelSelfOverride: getChannelSelfOverrideMock,
+    isChannelSelfStoreEnabled: vi.fn(() => true),
+  }
+})
 
 vi.mock('../supabase/functions/_backend/plugin_runtime/utils/downloadUrl.ts', () => ({
   getBundleUrl: vi.fn(),
@@ -37,6 +42,7 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/org_email_notificat
 vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pg.ts', () => ({
   closeClient: vi.fn(() => Promise.resolve()),
   getAppOwnerPostgres: getAppOwnerPostgresMock,
+  getDevicePluginVersionPg: getDevicePluginVersionPgMock,
   getDrizzleClient: vi.fn(() => ({})),
   getPgClient: vi.fn(() => Promise.resolve({ client: 'pg' })),
   requestInfosChannelDevicePostgres: requestInfosChannelDevicePostgresMock,
@@ -60,6 +66,7 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/plugin_stats.ts', (
 describe('updates channel_self store override routing', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    getDevicePluginVersionPgMock.mockResolvedValue('7.33.0')
     getAppStatusMock.mockResolvedValue({ status: null, allow_device_custom_id: true, block_provider_infra_requests: false, cacheHit: false })
     requestInfosChannelPostgresMock.mockResolvedValue(null)
     requestInfosChannelDevicePostgresMock.mockResolvedValue(null)
@@ -82,7 +89,7 @@ describe('updates channel_self store override routing', () => {
     requestInfosPostgresMock.mockRejectedValue(new Error('stop-after-request-infos'))
   })
 
-  it('queries KV-backed channel_self override only for old plugin versions', async () => {
+  it('queries KV-backed channel_self override only for legacy device plugin versions', async () => {
     const { updateWithPG } = await import('../supabase/functions/_backend/plugin_runtime/utils/update.ts')
     const app = new Hono()
     const buildBody = (pluginVersion: string) => ({
@@ -120,6 +127,7 @@ describe('updates channel_self store override routing', () => {
 
     getChannelSelfOverrideMock.mockClear()
     requestInfosPostgresMock.mockClear()
+    getDevicePluginVersionPgMock.mockResolvedValue('7.34.0')
 
     const newResponse = await app.fetch(new Request('http://localhost/new'), { CHANNEL_SELF_STORE: {} }, { waitUntil: () => { } } as any)
 
@@ -138,6 +146,7 @@ describe('updates channel_self store override routing', () => {
 
     getChannelSelfOverrideMock.mockResolvedValue(null)
     requestInfosPostgresMock.mockClear()
+    getDevicePluginVersionPgMock.mockResolvedValue('7.33.0')
 
     const oldMissingKvResponse = await app.fetch(new Request('http://localhost/old-missing-kv'), { CHANNEL_SELF_STORE: {} }, { waitUntil: () => { } } as any)
 
@@ -200,6 +209,8 @@ describe('updates channel_self store override routing', () => {
       plan_valid: true,
       block_provider_infra_requests: false,
     })
+    getChannelSelfOverrideMock.mockResolvedValue(null)
+    getDevicePluginVersionPgMock.mockResolvedValue('7.34.0')
 
     const app = new Hono()
     app.get('/', c => updateWithPG(c, {

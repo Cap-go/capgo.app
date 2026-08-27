@@ -646,64 +646,37 @@ it('[POST] with a version that does not exist', async () => {
 })
 
 it.skipIf(USE_CLOUDFLARE)('[POST] /channel_self creates new channel_device with owner_org', async () => {
-  // This test ensures that when a NEW device sets a channel for the first time,
-  // the channel_devices record is created with all required fields including owner_org
-  // This specifically tests the INSERT path of the upsert operation
+  // Unauthenticated channel_self no longer persists durable overrides.
   await resetAndSeedAppData(APPNAME)
 
-  // First, enable allow_device_self_set for beta channel (non-default channel)
-  const { error: channelUpdateError, data: betaChannel } = await getSupabaseClient()
+  const { error: channelUpdateError } = await getSupabaseClient()
     .from('channels')
     .update({ allow_device_self_set: true })
     .eq('name', 'beta')
     .eq('app_id', APPNAME)
-    .select('id, owner_org')
-    .single()
 
   expect(channelUpdateError).toBeNull()
-  expect(betaChannel).toBeTruthy()
 
   try {
-    // Use a brand new device_id that has never been in channel_devices
     const data = getUniqueBaseData(APPNAME)
     data.device_id = randomUUID().toLowerCase()
-    data.channel = 'beta' // Use non-default channel to trigger INSERT
+    data.channel = 'beta'
 
-    // Verify no existing channel_devices record for this device
-    const { data: existingRecord } = await getSupabaseClient()
-      .from('channel_devices')
-      .select('*')
-      .eq('device_id', data.device_id)
-      .eq('app_id', APPNAME)
-
-    expect(existingRecord).toHaveLength(0)
-
-    // Call POST endpoint to set channel (this triggers INSERT in upsert)
     const response = await fetchEndpoint('POST', data)
     expect(response.ok).toBeTruthy()
     expect(await response.json()).toEqual({ status: 'ok' })
 
-    // Verify channel_devices record was created with owner_org
     const { data: channelDevice, error: channelDeviceError } = await getSupabaseClient()
       .from('channel_devices')
       .select('device_id, app_id, channel_id, owner_org')
       .eq('device_id', data.device_id)
       .eq('app_id', APPNAME)
-      .single()
+      .maybeSingle()
 
     expect(channelDeviceError).toBeNull()
-    expect(channelDevice).toBeTruthy()
-    expect(channelDevice!.device_id).toBe(data.device_id)
-    expect(channelDevice!.app_id).toBe(APPNAME)
-    expect(channelDevice!.owner_org).toBeTruthy() // Most important: owner_org must be set
-    expect(typeof channelDevice!.owner_org).toBe('string')
-    expect(channelDevice!.channel_id).toBe(betaChannel!.id)
-
-    // Verify owner_org matches the channel's owner_org
-    expect(channelDevice!.owner_org).toBe(betaChannel!.owner_org)
+    expect(channelDevice).toBeNull()
   }
   finally {
-    // Reset beta channel to not allow self set
     const { error: resetError } = await getSupabaseClient()
       .from('channels')
       .update({ allow_device_self_set: false })
@@ -758,7 +731,8 @@ it.skipIf(USE_CLOUDFLARE)('[POST] /channel_self with default channel', async () 
 
     expect(channelDeviceError).toBeNull()
     expect(channelDevice).toBeTruthy()
-    expect(channelDevice).toHaveLength(0)
+    expect(channelDevice).toHaveLength(1)
+    expect(channelDevice![0].channel_id).toBe(noAccessData!.id)
   }
   finally {
     const { error: channelUpdateError } = await getSupabaseClient().from('channels').update({ allow_device_self_set: false }).eq('name', 'no_access').eq('app_id', APPNAME)
@@ -891,7 +865,7 @@ it.skipIf(USE_CLOUDFLARE)('[PUT] /channel_self (with overwrite)', async () => {
     expect(status).toBeTruthy()
 
     expect(status).toBe('override')
-    expect(channel).toBe('no_access')
+    expect(channel).toBe('production')
   }
   finally {
     const { error } = await withSupabaseCall(() =>
@@ -1005,7 +979,7 @@ describe.skipIf(!USE_CLOUDFLARE)('[POST/PUT/DELETE] /channel_self Cloudflare KV 
     expect(count).toBe(0)
   }
 
-  it('stores old plugin overrides outside channel_devices', async () => {
+  it('does not persist old plugin overrides outside channel_devices', async () => {
     await resetAndSeedAppData(APPNAME)
 
     const { error: channelUpdateError } = await getSupabaseClient()
@@ -1028,6 +1002,7 @@ describe.skipIf(!USE_CLOUDFLARE)('[POST/PUT/DELETE] /channel_self Cloudflare KV 
       expect(await postResponse.json()).toEqual({ status: 'ok' })
       await expectNoChannelDeviceRow(data.device_id)
 
+      data.channel = 'beta'
       const putResponse = await fetchEndpoint('PUT', data)
       expect(putResponse.ok).toBeTruthy()
       expect(await putResponse.json()).toMatchObject({ channel: 'beta', status: 'override' })
@@ -1038,6 +1013,7 @@ describe.skipIf(!USE_CLOUDFLARE)('[POST/PUT/DELETE] /channel_self Cloudflare KV 
       expect(await deleteResponse.json()).toEqual({ status: 'ok' })
       await expectNoChannelDeviceRow(data.device_id)
 
+      delete data.channel
       const afterDeleteResponse = await fetchEndpoint('PUT', data)
       expect(afterDeleteResponse.ok).toBeTruthy()
       expect(await afterDeleteResponse.json()).toMatchObject({ status: 'default' })
@@ -1215,20 +1191,17 @@ describe('[POST] /channel_self - new plugin version (>= 7.34.0) behavior', () =>
     }
   })
 
-  it.skipIf(USE_CLOUDFLARE)('should leave old channel_devices entry untouched when migrating from old to new version', async () => {
+  it.skipIf(USE_CLOUDFLARE)('should not persist overrides when spoofing old plugin_version', async () => {
     const deviceId = randomUUID()
     const data = getUniqueBaseData(APPNAME)
     data.device_id = deviceId
 
-    // Enable allow_device_self_set for beta channel (non-default channel)
     await getSupabaseClient()
       .from('channels')
       .update({ allow_device_self_set: true })
       .eq('name', 'beta')
       .eq('app_id', APPNAME)
 
-    // Also enable it for a second channel so the migration request can avoid
-    // the "same set max once per 1 second" limiter (keyed by channel).
     await getSupabaseClient()
       .from('channels')
       .update({ allow_device_self_set: true })
@@ -1236,24 +1209,21 @@ describe('[POST] /channel_self - new plugin version (>= 7.34.0) behavior', () =>
       .eq('app_id', APPNAME)
 
     try {
-      // First, set channel with old version (stores in channel_devices)
       data.plugin_version = '7.33.0'
-      data.channel = 'beta' // Use non-default channel
+      data.channel = 'beta'
 
       const oldResponse = await fetchEndpoint('POST', data)
       expect(oldResponse.status).toBe(200)
 
-      // Verify it was stored in channel_devices
-      const { data: oldChannelDevice } = await getSupabaseClient()
+      const { data: channelDevice } = await getSupabaseClient()
         .from('channel_devices')
         .select('*')
         .eq('device_id', deviceId)
         .eq('app_id', APPNAME)
         .maybeSingle()
 
-      expect(oldChannelDevice).toBeTruthy()
+      expect(channelDevice).toBeNull()
 
-      // Then, set channel with new version (should not read or write old server-side storage)
       data.plugin_version = '7.34.0'
       data.channel = 'development'
 
@@ -1264,7 +1234,6 @@ describe('[POST] /channel_self - new plugin version (>= 7.34.0) behavior', () =>
       expect(result.status).toBe('ok')
       expect(result.allowSet).toBe(true)
 
-      // Verify old entry was left untouched
       const { data: newChannelDevice } = await getSupabaseClient()
         .from('channel_devices')
         .select('*')
@@ -1272,8 +1241,7 @@ describe('[POST] /channel_self - new plugin version (>= 7.34.0) behavior', () =>
         .eq('app_id', APPNAME)
         .maybeSingle()
 
-      expect(newChannelDevice).toBeTruthy()
-      expect(newChannelDevice?.channel_id).toBe(oldChannelDevice?.channel_id)
+      expect(newChannelDevice).toBeNull()
     }
     finally {
       await getSupabaseClient()

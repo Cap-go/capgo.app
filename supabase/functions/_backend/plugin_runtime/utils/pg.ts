@@ -1570,6 +1570,29 @@ export async function getAppVersionsByAppIdPg(
   }
 }
 
+export async function getDevicePluginVersionPg(
+  c: Context,
+  appId: string,
+  deviceId: string,
+  drizzleClient: ReturnType<typeof getDrizzleClient>,
+): Promise<string | null> {
+  try {
+    const result = await drizzleClient.execute(sql`
+      SELECT plugin_version
+      FROM public.devices
+      WHERE app_id = ${appId}
+        AND device_id = ${deviceId.toLowerCase()}
+      LIMIT 1
+    `)
+    const row = result.rows[0] as { plugin_version?: string | null } | undefined
+    return row?.plugin_version ?? null
+  }
+  catch (e: unknown) {
+    logPgError(c, 'getDevicePluginVersionPg', e)
+    return null
+  }
+}
+
 export async function getChannelDeviceOverridePg(
   c: Context,
   appId: string,

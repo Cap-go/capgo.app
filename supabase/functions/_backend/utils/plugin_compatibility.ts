@@ -12,6 +12,7 @@ export {
   hasPluginVersionBreakdown,
   isLegacyChannelSelfStorePluginVersion,
   isLegacyEncryptionKeyIdPluginVersion,
+  shouldHonorPersistedChannelOverride,
   usesCurrentEncryptionKeyIdFormat,
 } from '../plugin_runtime/utils/plugin_compatibility.ts'
 

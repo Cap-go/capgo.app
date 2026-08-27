@@ -4,24 +4,21 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { PluginPgClient } from '../utils/pg.ts'
 import type { DeviceLink } from '../utils/plugin_parser.ts'
 import type { StandardSchema } from '../utils/schema_validation.ts'
-import type { Database } from '../utils/supabase.types.ts'
 import { parse } from '@std/semver'
 import { Hono } from 'hono/tiny'
 import { getAppStatus, setAppStatus } from '../utils/appStatus.ts'
 import { checkChannelSelfIPRateLimit, isChannelSelfRateLimited, recordChannelSelfIPRequest, recordChannelSelfRequest } from '../utils/channelSelfRateLimit.ts'
-import { deleteChannelSelfOverride, getChannelSelfOverride, isChannelSelfStoreEnabled, setChannelSelfOverride } from '../utils/channelSelfStore.ts'
 import { BRES, parseBody, quickError, simpleError200, simpleRateLimit } from '../utils/hono.ts'
 import { invalidIpInfo } from '../utils/invalids_ip.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { sendNotifOrgCached } from '../utils/notifications.ts'
 import { sendNotifToOrgMembersCached } from '../utils/org_email_notifications.ts'
-import { closeClient, deleteChannelDevicePg, getAppByIdPg, getAppOwnerPostgres, getChannelByIdPg, getChannelByNamePg, getChannelDeviceOverridePg, getChannelsPg, getCompatibleChannelsPg, getDrizzleClient, getMainChannelsPg, getPgClient, setReplicationLagHeader, upsertChannelDevicePg } from '../utils/pg.ts'
+import { closeClient, getAppByIdPg, getAppOwnerPostgres, getChannelByNamePg, getCompatibleChannelsPg, getDrizzleClient, getPgClient, setReplicationLagHeader } from '../utils/pg.ts'
 import { convertQueryToBody, makeDevice, parsePluginBody } from '../utils/plugin_parser.ts'
 import { sendStatsAndDevice } from '../utils/plugin_stats.ts'
-import { channelSelfGetRequestSchema, channelSelfRequestSchema, isDevicePlatform } from '../utils/plugin_validation.ts'
+import { channelSelfGetRequestSchema, channelSelfRequestSchema } from '../utils/plugin_validation.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { buildRateLimitInfo, onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
-import { logSkippedSupabaseWrite, shouldSkipChannelSelfPostgresFallback } from '../utils/supabase_write_guard.ts'
 import { backgroundTask, isDeprecatedPluginVersion, isLimited } from '../utils/utils.ts'
 
 // Minimum versions for local channel storage behavior
@@ -104,7 +101,6 @@ async function recordChannelSelfRequestSafely(
 
 type AppOwnerResult = Awaited<ReturnType<typeof getAppOwnerPostgres>>
 type AppStatusResult = Awaited<ReturnType<typeof getAppStatus>>
-type ChannelSelfOverrideResult = Awaited<ReturnType<typeof getChannelDeviceOverridePg>>
 type ChannelSelfDeviceOperation = 'set' | 'get' | 'delete'
 
 async function assertChannelSelfCachedStatus(
@@ -180,82 +176,6 @@ function isChannelSelfLocalChannelStorageVersion(c: Context, body: DeviceLink, o
   }
 }
 
-async function getChannelSelfOverrideForDevice(
-  c: Context<MiddlewareKeyVariables>,
-  appId: string,
-  deviceId: string,
-  drizzleClient: ReturnType<typeof getDrizzleClient>,
-): Promise<ChannelSelfOverrideResult> {
-  if (isChannelSelfStoreEnabled(c)) {
-    const storedOverride = await getChannelSelfOverride(c, appId, deviceId)
-    if (!storedOverride)
-      return null
-
-    const channel = await getChannelByIdPg(c, appId, storedOverride.channel_id.id, drizzleClient)
-    if (!channel)
-      return null
-
-    return {
-      app_id: storedOverride.app_id,
-      device_id: storedOverride.device_id,
-      channel_id: {
-        id: channel.id,
-        allow_device_self_set: channel.allow_device_self_set,
-        name: channel.name,
-      },
-    }
-  }
-
-  return getChannelDeviceOverridePg(c, appId, deviceId, drizzleClient)
-}
-
-async function deleteChannelSelfOverrideForDevice(
-  c: Context<MiddlewareKeyVariables>,
-  appId: string,
-  deviceId: string,
-  drizzleClient: ReturnType<typeof getDrizzleClient>,
-) {
-  if (isChannelSelfStoreEnabled(c))
-    return deleteChannelSelfOverride(c, appId, deviceId)
-
-  if (shouldSkipChannelSelfPostgresFallback(c)) {
-    logSkippedSupabaseWrite(c, 'deleteChannelDevicePg fallback')
-    return false
-  }
-
-  return deleteChannelDevicePg(c, appId, deviceId, drizzleClient)
-}
-
-async function upsertChannelSelfOverrideForDevice(
-  c: Context<MiddlewareKeyVariables>,
-  appId: string,
-  deviceId: string,
-  channel: NonNullable<Awaited<ReturnType<typeof getChannelByNamePg>>>,
-  drizzleClient: ReturnType<typeof getDrizzleClient>,
-) {
-  if (isChannelSelfStoreEnabled(c)) {
-    return setChannelSelfOverride(c, appId, deviceId, {
-      app_id: appId,
-      device_id: deviceId,
-      channel_id: {
-        id: channel.id,
-      },
-    })
-  }
-
-  if (shouldSkipChannelSelfPostgresFallback(c)) {
-    logSkippedSupabaseWrite(c, 'upsertChannelDevicePg fallback')
-    return false
-  }
-
-  return upsertChannelDevicePg(c, {
-    device_id: deviceId,
-    channel_id: channel.id,
-    app_id: appId,
-    owner_org: channel.owner_org,
-  }, drizzleClient)
-}
-
 async function prepareChannelSelfDeviceRequest(
   c: Context,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
@@ -294,33 +214,11 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
   const { appOwner: validatedAppOwner, device } = requestContext
 
   const isNewVersion = isChannelSelfLocalChannelStorageVersion(c, body, 'POST')
-  // Only old versions use server-side channel_self storage.
-  const dataChannelOverride = isNewVersion ? null : await getChannelSelfOverrideForDevice(c, app_id, device_id, drizzleClient)
 
   if (!channel) {
     return simpleError200(c, 'cannot_override', 'Missing channel')
   }
-  if (dataChannelOverride && !dataChannelOverride.channel_id.allow_device_self_set) {
-    // Send weekly notification to org about self-assignment rejection
-    backgroundTask(c, sendNotifToOrgMembersCached(
-      c,
-      'device:channel_self_set_rejected',
-      'channel_self_rejected',
-      {
-        channel_name: dataChannelOverride.channel_id.name,
-        channel_id: dataChannelOverride.channel_id.id,
-        device_id: dataChannelOverride.device_id,
-        app_id,
-      },
-      validatedAppOwner.owner_org,
-      `${app_id}`,
-      '0 0 * * 0', // Weekly on Sunday at midnight
-      drizzleClient,
-    ))
-    return simpleError200(c, 'cannot_override', 'Cannot change device override current channel don\'t allow it')
-  }
-  // if channel set channel_override to it
-  // get channel by name - Read operation can use v2 flag
+
   const dataChannel = await getChannelByNamePg(c, app_id, channel, drizzleClient as ReturnType<typeof getDrizzleClient>)
 
   if (!dataChannel) {
@@ -328,7 +226,6 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
   }
 
   if (!dataChannel.allow_device_self_set) {
-    // Send weekly notification to org about self-assignment rejection
     backgroundTask(c, sendNotifToOrgMembersCached(
       c,
       'device:channel_self_set_rejected',
@@ -353,68 +250,15 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     return simpleError200(c, 'channel_self_set_not_allowed', 'This channel does not allow devices to self associate', { channel, app_id })
   }
 
-  // For vX.34.0+: only validate. Do not read or write server-side channel_self storage.
+  // Unauthenticated plugin traffic only validates channel selection; durable overrides
+  // require an authenticated actor (dashboard/API) or a legacy plugin device binding.
+  await sendStatsAndDevice(c, device, [{ action: 'setChannel' }])
   if (isNewVersion) {
-    // Return validation result only (plugin will store locally)
-    await sendStatsAndDevice(c, device, [{ action: 'setChannel' }])
     return c.json({
       status: 'ok',
       allowSet: dataChannel.allow_device_self_set,
     })
   }
-
-  // Old behavior (< v7.34.0): persist the override server-side.
-  // Get the main channel - Read operation can use v2 flag
-  const mainChannel = await getMainChannelsPg(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>)
-
-  // We DO NOT return if there is no main channel as it's not a critical error
-  // We will just set the override as the user requested
-  let mainChannelName = null as string | null
-  if (mainChannel && mainChannel.length > 0) {
-    const devicePlatform = body.platform as Database['public']['Enums']['platform_os']
-    const finalChannel = mainChannel.find((channel: { name: string, ios: boolean, android: boolean, electron: boolean }) => channel[devicePlatform])
-    mainChannelName = (finalChannel !== undefined) ? finalChannel.name : null
-  }
-
-  // const mainChannelName = (!dbMainChannelError && mainChannel) ? mainChannel.name : null
-  if (!mainChannel || mainChannel.length === 0)
-    cloudlog({ requestId: c.get('requestId'), message: 'Cannot find main channel' })
-
-  if (mainChannelName && mainChannelName === channel) {
-    // Write operation - use the PG client created by the route handler
-
-    const success = await deleteChannelSelfOverrideForDevice(c, app_id, device_id, drizzleClient)
-    if (!success) {
-      return simpleError200(c, 'override_not_allowed', `Cannot remove channel override`)
-    }
-
-    cloudlog({ requestId: c.get('requestId'), message: 'main channel set, removing override' })
-    await sendStatsAndDevice(c, device, [{ action: 'setChannel' }])
-    return c.json(BRES)
-  }
-  // if dataChannelOverride is same from dataChannel and exist then do nothing
-  if (dataChannelOverride?.channel_id.id === dataChannel.id) {
-    // already set
-    cloudlog({ requestId: c.get('requestId'), message: 'channel already set' })
-    return c.json(BRES)
-  }
-
-  cloudlog({ requestId: c.get('requestId'), message: 'setting channel' })
-
-  // Write operations - use the PG client created by the route handler
-
-  if (dataChannelOverride) {
-    const success = await deleteChannelSelfOverrideForDevice(c, app_id, device_id, drizzleClient)
-    if (!success) {
-      return simpleError200(c, 'override_not_allowed', `Cannot remove channel override`)
-    }
-  }
-  const success = await upsertChannelSelfOverrideForDevice(c, app_id, device_id, dataChannel, drizzleClient)
-  if (!success) {
-    return simpleError200(c, 'override_not_allowed', `Cannot do channel override`)
-  }
-
-  await sendStatsAndDevice(c, device, [{ action: 'setChannel' }])
   return c.json(BRES)
 }
 
@@ -428,65 +272,21 @@ async function put(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient
   }
   const { device } = requestContext
 
-  const isNewVersion = isChannelSelfLocalChannelStorageVersion(c, body, 'PUT')
+  const channelOverride = body.channel
 
-  // For vX.34.0+: Use channel from request body (plugin sends its local channelOverride)
-  if (isNewVersion) {
-    cloudlog({ requestId: c.get('requestId'), message: 'Plugin vX.34.0+ detected in getChannel, using channel from request body' })
-    const channelOverride = body.channel
-
-    if (channelOverride) {
-      // Return the channel they sent (it's stored locally)
-      await sendStatsAndDevice(c, device, [{ action: 'getChannel' }])
-      return c.json({
-        channel: channelOverride,
-        status: 'override',
-        allowSet: true, // Already validated when they set it
-      })
-    }
-    else {
-      // No override, use defaultChannel logic
-      const channelName = defaultChannel || 'production' // Fallback to production if no defaultChannel
-      await sendStatsAndDevice(c, device, [{ action: 'getChannel' }])
-      return c.json({
-        channel: channelName,
-        status: 'default',
-      })
-    }
-  }
-
-  // Old behavior (< v7.34.0): query server-side override storage.
-  // Read operations can use v2 flag
-  const dataChannel = await getChannelsPg(c, app_id, defaultChannel ? { defaultChannel } : { public: true }, drizzleClient as ReturnType<typeof getDrizzleClient>)
-
-  const dataChannelOverride = await getChannelSelfOverrideForDevice(c, app_id, device_id, drizzleClient)
-  if (dataChannelOverride?.channel_id) {
+  if (channelOverride) {
     await sendStatsAndDevice(c, device, [{ action: 'getChannel' }])
     return c.json({
-      channel: dataChannelOverride.channel_id.name,
+      channel: channelOverride,
       status: 'override',
-      allowSet: dataChannelOverride.channel_id.allow_device_self_set,
+      allowSet: true,
     })
   }
-  if (!dataChannel || dataChannel.length === 0) {
-    return simpleError200(c, 'channel_not_found', 'Cannot find channel')
-  }
 
-  if (!isDevicePlatform(body.platform)) {
-    return simpleError200(c, 'invalid_platform', 'Invalid device platform', { platform: body.platform })
-  }
-
-  const platform = body.platform
-  const finalChannel = defaultChannel
-    ? dataChannel.find((channel: { name: string }) => channel.name === defaultChannel)
-    : dataChannel.find((channel: { ios: boolean, android: boolean, electron: boolean }) => channel[platform])
-
-  if (!finalChannel) {
-    return simpleError200(c, 'channel_not_found', 'Cannot find channel')
-  }
+  const channelName = defaultChannel || 'production'
   await sendStatsAndDevice(c, device, [{ action: 'getChannel' }])
   return c.json({
-    channel: finalChannel.name,
+    channel: channelName,
     status: 'default',
   })
 }
@@ -503,56 +303,9 @@ async function deleteOverride(c: Context, drizzleClient: ReturnType<typeof getDr
   if ('response' in requestContext) {
     return requestContext.response
   }
-  const { appOwner: validatedAppOwner, device } = requestContext
+  const { device } = requestContext
 
-  const isNewVersion = isChannelSelfLocalChannelStorageVersion(c, body, 'DELETE')
-
-  // For vX.34.0+: do not read or write server-side channel_self storage.
-  const dataChannelOverride = isNewVersion ? null : await getChannelSelfOverrideForDevice(c, app_id, device_id, drizzleClient)
-
-  if (isNewVersion) {
-    await sendStatsAndDevice(c, device, [{ action: 'setChannel' }])
-    return c.json(BRES)
-  }
-
-  // Old behavior (< v7.34.0): Validate and delete the server-side override.
-
-  if (!dataChannelOverride?.channel_id) {
-    return simpleError200(c, 'cannot_override', 'Cannot change device override current channel don\'t allow it')
-  }
-
-  if (!dataChannelOverride.channel_id.allow_device_self_set) {
-    // Send weekly notification to org about self-assignment rejection
-    backgroundTask(c, sendNotifToOrgMembersCached(
-      c,
-      'device:channel_self_set_rejected',
-      'channel_self_rejected',
-      {
-        channel_name: dataChannelOverride.channel_id.name,
-        app_id,
-      },
-      validatedAppOwner.owner_org,
-      `${app_id}`,
-      '0 0 * * 0', // Weekly on Sunday at midnight
-      drizzleClient,
-    ))
-    return simpleError200(c, 'cannot_override', 'Cannot change device override current channel don\'t allow it')
-  }
-
-  // Write operation - use the PG client created by the route handler
-
-  const success = await deleteChannelSelfOverrideForDevice(c, app_id, device_id, drizzleClient)
-  if (!success) {
-    return simpleError200(c, 'override_not_allowed', `Cannot delete channel override`)
-  }
-
-  try {
-    await sendStatsAndDevice(c, device, [{ action: 'setChannel' }])
-  }
-  catch (error) {
-    // Override already deleted — keep BRES so clients do not retry into override_not_allowed.
-    cloudlog({ requestId: c.get('requestId'), message: 'setChannel stats failed after override delete', error })
-  }
+  await sendStatsAndDevice(c, device, [{ action: 'setChannel' }])
   return c.json(BRES)
 }
 
@@ -672,16 +425,8 @@ async function runChannelSelfDeviceOperation(
     return simpleRateLimit({ app_id: bodyParsed.app_id, device_id: bodyParsed.device_id, ...buildRateLimitInfo(rateLimitStatus.resetAt) })
   }
 
-  // Old KV-backed requests and new local-storage requests can use the read replica.
-  const canUseReadReplica = isChannelSelfStoreEnabled(c) || isChannelSelfLocalChannelStorageVersion(c, bodyParsed, operationLabel)
-  if (!canUseReadReplica && shouldSkipChannelSelfPostgresFallback(c)) {
-    await recordChannelSelfRequestSafely(c, bodyParsed.app_id, bodyParsed.device_id, operation, channel)
-    await recordChannelSelfIPRateLimitSafely(c, bodyParsed.app_id)
-    logSkippedSupabaseWrite(c, 'channel_self channel_devices fallback')
-    return simpleError200(c, 'channel_self_server_storage_unavailable', 'Server channel_self storage unavailable')
-  }
-
-  const pgClient = await getPgClient(c, canUseReadReplica)
+  // Plugin channel_self never writes durable overrides; read replica is always sufficient.
+  const pgClient = await getPgClient(c, true)
 
   return await runChannelSelfWithPgClient(
     c,

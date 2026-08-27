@@ -1,4 +1,3 @@
-import type { SemVer } from '@std/semver'
 import type { Context } from 'hono'
 import type { ManifestEntry } from './downloadUrl.ts'
 import type { MiddlewareKeyVariables } from './hono.ts'
@@ -19,24 +18,21 @@ import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
-import { closeClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDrizzleClient, getPgClient, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
+import { closeClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDrizzleClient, getDevicePluginVersionPg, getPgClient, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader } from './pg.ts'
 import { makeDevice } from './plugin_parser.ts'
 import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
 import { getClientIP } from './rate_limit.ts'
 import { s3 } from './s3.ts'
 import { shouldQueuePluginNotifications } from './supabase_write_guard.ts'
 import { isUpdateEnumerationLimited, recordUpdateEnumerationMiss, updateEnumerationLimitedResponse } from './updateOracleGuard.ts'
-import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
+import { shouldSyncChannelSelfOverrideForPluginVersion } from './channelSelfStore.ts'
+import { shouldHonorPersistedChannelOverride, usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 import { backgroundTask, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, fixSemver, isDeprecatedPluginVersion, isInternalVersionName } from './utils.ts'
 
 const PLAN_LIMIT: Array<'mau' | 'bandwidth' | 'storage'> = ['mau', 'bandwidth']
 // Bound speculative channel prefetch wait so a hung second Hyperdrive client
 // cannot stall /updates after owner is already ready.
 const CHANNEL_PREFETCH_WAIT_MS = 50
-const CHANNEL_SELF_STORE_MIN_V5 = '5.34.0'
-const CHANNEL_SELF_STORE_MIN_V6 = '6.34.0'
-const CHANNEL_SELF_STORE_MIN_V7 = '7.34.0'
-const CHANNEL_SELF_STORE_MIN_V8 = '8.0.0'
 
 type AutoUpdateBlockReason = 'major' | 'minor' | 'patch' | 'metadata' | 'under_native'
 
@@ -289,8 +285,19 @@ function hasChannelSelfStoreBinding(c: Context) {
   return Boolean((c as Context<MiddlewareKeyVariables>).env?.CHANNEL_SELF_STORE)
 }
 
-function usesLegacyChannelSelfStoreVersion(pluginVersion: SemVer) {
-  return isDeprecatedPluginVersion(pluginVersion, CHANNEL_SELF_STORE_MIN_V5, CHANNEL_SELF_STORE_MIN_V6, CHANNEL_SELF_STORE_MIN_V7, CHANNEL_SELF_STORE_MIN_V8)
+function shouldHonorChannelOverrideResult(
+  channelOverride: { channels?: { allow_device_self_set?: boolean } | null } | null | undefined,
+  devicePluginVersion: string | null,
+) {
+  if (!channelOverride?.channels)
+    return channelOverride ?? null
+
+  return shouldHonorPersistedChannelOverride(
+    devicePluginVersion,
+    channelOverride.channels.allow_device_self_set ?? false,
+  )
+    ? channelOverride
+    : null
 }
 
 async function getStoredChannelSelfOverride(c: Context, appId: string, deviceId: string) {
@@ -427,12 +434,17 @@ export async function updateWithPG(
     appOwner.block_provider_infra_requests,
   )
   const pluginVersion = parse(plugin_version)
-  const shouldUseChannelSelfStore = usesLegacyChannelSelfStoreVersion(pluginVersion) && hasChannelSelfStoreBinding(c)
+  const channelDeviceCount = appOwner.channel_device_count ?? 0
+  const effectiveChannelDeviceCount = channelDeviceCount
+  let devicePluginVersion: string | null = null
+  if (effectiveChannelDeviceCount > 0 || hasChannelSelfStoreBinding(c)) {
+    devicePluginVersion = await getDevicePluginVersionPg(c, app_id, device_id, drizzleClient)
+  }
+  const shouldUseChannelSelfStore = hasChannelSelfStoreBinding(c)
+    && shouldSyncChannelSelfOverrideForPluginVersion(devicePluginVersion)
   const channelSelfOverride = shouldUseChannelSelfStore
     ? await getStoredChannelSelfOverride(c, app_id, device_id)
     : null
-  const channelDeviceCount = appOwner.channel_device_count ?? 0
-  const effectiveChannelDeviceCount = channelDeviceCount
   const manifestBundleCount = appOwner.manifest_bundle_count ?? 0
   const rolloutChannelCount = appOwner.rollout_channel_count ?? 0
   const rolloutPausedVersionNames = appOwner.rollout_paused_version_names ?? []
@@ -511,14 +523,17 @@ export async function updateWithPG(
   if (canUseChannelPrefetch) {
     let channelOverride: Awaited<ReturnType<typeof requestInfosChannelDevicePostgres>> | null = null
     if (effectiveChannelDeviceCount > 0) {
-      channelOverride = await requestInfosChannelDevicePostgres(
-        c,
-        app_id,
-        device_id,
-        drizzleClient,
-        false,
-        false,
-      ) ?? null
+      channelOverride = shouldHonorChannelOverrideResult(
+        await requestInfosChannelDevicePostgres(
+          c,
+          app_id,
+          device_id,
+          drizzleClient,
+          false,
+          false,
+        ) ?? null,
+        devicePluginVersion,
+      )
     }
     requestedInto = { channelData: prefetchedChannel, channelOverride }
     if (pathTiming)
@@ -549,8 +564,9 @@ export async function updateWithPG(
   const requestInfosMs = Math.round(performance.now() - startRequestInfos)
   if (pathTiming)
     pathTiming.requestInfosMs = requestInfosMs
-  const { channelOverride } = requestedInto
+  const { channelOverride: rawChannelOverride } = requestedInto
   let { channelData } = requestedInto
+  const channelOverride = shouldHonorChannelOverrideResult(rawChannelOverride, devicePluginVersion)
 
   if (!channelData && !channelOverride) {
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot get channel or override', id: app_id, date: new Date().toISOString() })

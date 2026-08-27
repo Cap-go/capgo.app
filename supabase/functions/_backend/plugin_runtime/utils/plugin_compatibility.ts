@@ -34,6 +34,20 @@ export function isLegacyChannelSelfStorePluginVersion(pluginVersion: string): bo
   }
 }
 
+/** Honor durable overrides only for forced dashboard/API assignments or legacy plugin devices. */
+export function shouldHonorPersistedChannelOverride(
+  devicePluginVersion: string | null | undefined,
+  allowDeviceSelfSet: boolean,
+): boolean {
+  if (!allowDeviceSelfSet)
+    return true
+
+  if (!devicePluginVersion)
+    return false
+
+  return isLegacyChannelSelfStorePluginVersion(devicePluginVersion)
+}
+
 export function usesCurrentEncryptionKeyIdFormat(parsedPluginVersion: SemVer): boolean {
   return greaterThan(parsedPluginVersion, parse(ENCRYPTION_KEY_ID_FORMAT_MIN_VERSION))
 }
