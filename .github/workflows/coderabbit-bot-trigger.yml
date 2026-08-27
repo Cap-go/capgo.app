@@ -30,16 +30,9 @@ jobs:
             const { owner, repo } = context.repo
 
             let prs
+            let reviewEventReview = null
             if (context.eventName === 'pull_request_review') {
-              const review = context.payload.review
-              if (review.state !== 'APPROVED') {
-                console.log(`Ignoring non-approval review state: ${review.state}`)
-                return
-              }
-              if (review.user?.login === 'coderabbitai[bot]') {
-                console.log('Ignoring CodeRabbit approval event')
-                return
-              }
+              reviewEventReview = context.payload.review
               const pr = context.payload.pull_request
               const branch = pr.head.ref
               const allowed =
@@ -122,6 +115,17 @@ jobs:
                     message: `Superseded: maintainer approved HEAD ${headSha.slice(0, 7)} after addressing prior CodeRabbit feedback.`,
                   })
                   console.log(`Dismissed stale CodeRabbit review ${review.id} on PR #${pr.number}`)
+                }
+              }
+
+              if (context.eventName === 'pull_request_review') {
+                if (reviewEventReview.state !== 'APPROVED') {
+                  console.log(`Ignoring non-approval review state for trigger: ${reviewEventReview.state}`)
+                  continue
+                }
+                if (reviewEventReview.user?.login === 'coderabbitai[bot]') {
+                  console.log('Ignoring CodeRabbit review event for trigger')
+                  continue
                 }
               }
 
