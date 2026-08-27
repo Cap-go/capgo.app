@@ -267,7 +267,7 @@ npx @capgo/cli build credentials save --platform android \
 - Requires `--app-id <APP_ID>`.
 - Requires exactly one output mode:
   - `--raw` writes only the exact stored value to stdout, with no trailing newline. Failures go to stderr and exit with status `1`.
-  - `--file <PATH>` creates a new `0600` file and never overwrites an existing path. Use `--decode-base64` to write decoded bytes; otherwise the saved value is written as stored.
+  - `--file <PATH>` creates a new `0600` file and never overwrites an existing path. Interactive runs prompt before decoding values that look like Base64; `--decode-base64` forces decoding. A negative response or non-interactive run preserves the stored text.
 - Use `--local` or `--global` when the app has saved credentials in both stores. Use `--platform ios|android` when the value is ambiguous across platforms.
 
 ```bash

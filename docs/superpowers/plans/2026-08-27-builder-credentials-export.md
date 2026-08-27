@@ -873,7 +873,7 @@ Run:
 ```sh
 bun run --cwd cli build
 bun run --cwd cli generate-docs
-node cli/dist/index.js generate-docs --folder cli/webdocs
+bun cli/dist/index.js generate-docs --folder cli/webdocs
 ```
 
 Expected: the CLI README and `webdocs/build.mdx` include the new export command,
@@ -885,7 +885,7 @@ generated webdoc changes if the generator touches them without content changes.
 Add this section after `build credentials update` in
 `cli/skills/native-builds/SKILL.md`:
 
-```md
+````md
 ### `build credentials export <VARIABLE>`
 
 - Exports one value from saved Builder credentials; environment variables are never used.
@@ -901,7 +901,8 @@ Add this section after `build credentials update` in
 npx @capgo/cli@latest build credentials export ANDROID_KEYSTORE_FILE \
   --app-id com.example.app --platform android --file ./release.keystore --decode-base64
 ```
-```
+
+````
 
 - [ ] **Step 3: Run formatting, required CLI gates, and full tests**
 
@@ -914,9 +915,9 @@ bun run --cwd cli build
 bun run --cwd cli test:mcp
 bun run --cwd cli test:bundle
 bun run cli:test
-node cli/dist/index.js build credentials export --help
-node cli/dist/index.js --help
-node cli/dist/index.js --version
+bun cli/dist/index.js build credentials export --help
+bun cli/dist/index.js --help
+bun cli/dist/index.js --version
 ```
 
 Expected: every command exits 0. The export help contains the raw stdout,
