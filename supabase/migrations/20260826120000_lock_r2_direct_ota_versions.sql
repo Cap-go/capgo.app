@@ -5,7 +5,7 @@
 -- but r2_path updates, public.manifest writes via /private/set_manifest, and
 -- finalize (r2-direct -> r2) remain allowed until upload completes. PostgREST
 -- app_versions.manifest jsonb writes on r2-direct are blocked separately
--- (20260826101500_block_r2_direct_manifest_jsonb_writes).
+-- (20260826101500; re-applied in this migration after function replace).
 -- allowed until upload completes. Channel linkage is intentionally NOT part of
 -- the freeze gate (upload-complete is storage_provider != r2-direct). Staged
 -- r2-direct rows may still UPDATE r2_path while channel-linked so upload
