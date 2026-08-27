@@ -2,7 +2,10 @@
 -- stayed mutable via PostgREST after checksum/session_key were set. Upload is
 -- complete once storage_provider is no longer r2-direct; during r2-direct
 -- staging, identity fields lock after first set (checksum/session_key/key_id)
--- but r2_path updates, manifest writes, and finalize (r2-direct -> r2) remain
+-- but r2_path updates, public.manifest writes via /private/set_manifest, and
+-- finalize (r2-direct -> r2) remain allowed until upload completes. PostgREST
+-- app_versions.manifest jsonb writes on r2-direct are blocked separately
+-- (20260826101500_block_r2_direct_manifest_jsonb_writes).
 -- allowed until upload completes. Channel linkage is intentionally NOT part of
 -- the freeze gate (upload-complete is storage_provider != r2-direct). Staged
 -- r2-direct rows may still UPDATE r2_path while channel-linked so upload
@@ -65,7 +68,27 @@ DECLARE
   bundle_upload_complete boolean;
   bundle_identity_locked boolean;
   is_r2_direct_finalize boolean;
+  r2_direct_manifest_err constant text :=
+    'r2_direct_manifest_jsonb: Use POST /private/set_manifest for in-progress '
+    || 'r2-direct uploads instead of app_versions.manifest jsonb.';
 BEGIN
+  IF TG_OP = 'INSERT'
+    AND NEW.storage_provider = 'r2-direct'
+    AND NEW.manifest IS NOT NULL
+  THEN
+    PERFORM public.pg_log('deny: BUNDLE_CONTENT_LOCKED_TRIGGER',
+      pg_catalog.jsonb_build_object(
+        'org_id', NEW.owner_org,
+        'app_id', NEW.app_id,
+        'version_name', NEW.name,
+        'user_id', NEW.user_id,
+        'old_storage_provider', NULL,
+        'new_storage_provider', NEW.storage_provider,
+        'reason', 'r2_direct_manifest_jsonb'
+      ));
+    RAISE EXCEPTION '%', r2_direct_manifest_err;
+  END IF;
+
   IF TG_OP = 'UPDATE' THEN
     IF pg_catalog.current_setting('capgo.reclaim_manifest_null', true) = 'on'
       AND NEW.manifest IS NULL
@@ -85,17 +108,7 @@ BEGIN
 
     IF NEW.manifest IS NULL
       AND OLD.manifest IS NOT NULL
-      AND EXISTS (
-        SELECT 1
-        FROM pg_catalog.unnest(OLD.manifest) AS entry(file_name, s3_path, file_hash)
-        WHERE NOT EXISTS (
-          SELECT 1
-          FROM public.manifest AS m
-          WHERE m.app_version_id = OLD.id
-            AND m.s3_path = entry.s3_path
-            AND m.file_hash = entry.file_hash
-        )
-      )
+      AND public.app_version_manifest_jsonb_unmigrated(OLD.id, OLD.manifest)
     THEN
       RAISE EXCEPTION '%',
         'bundle_manifest_not_migrated: Cannot clear app_versions.manifest '
@@ -118,17 +131,7 @@ BEGIN
         OR (
           NEW.manifest IS NULL
           AND OLD.manifest IS NOT NULL
-          AND EXISTS (
-            SELECT 1
-            FROM pg_catalog.unnest(OLD.manifest) AS entry(file_name, s3_path, file_hash)
-            WHERE NOT EXISTS (
-              SELECT 1
-              FROM public.manifest AS m
-              WHERE m.app_version_id = OLD.id
-                AND m.s3_path = entry.s3_path
-                AND m.file_hash = entry.file_hash
-            )
-          )
+          AND public.app_version_manifest_jsonb_unmigrated(OLD.id, OLD.manifest)
         )
         OR NEW.native_packages IS DISTINCT FROM OLD.native_packages
       )
@@ -148,11 +151,29 @@ BEGIN
         || 'after upload is complete. Upload a new bundle instead.';
     END IF;
 
+    -- In-progress r2-direct uploads must use POST /private/set_manifest.
+    IF OLD.storage_provider = 'r2-direct'
+      AND NEW.manifest IS DISTINCT FROM OLD.manifest
+      AND NEW.manifest IS NOT NULL
+    THEN
+      PERFORM public.pg_log('deny: BUNDLE_CONTENT_LOCKED_TRIGGER',
+        pg_catalog.jsonb_build_object(
+          'org_id', OLD.owner_org,
+          'app_id', OLD.app_id,
+          'version_name', OLD.name,
+          'user_id', OLD.user_id,
+          'old_storage_provider', OLD.storage_provider,
+          'new_storage_provider', NEW.storage_provider,
+          'reason', 'r2_direct_manifest_jsonb'
+        ));
+      RAISE EXCEPTION '%', r2_direct_manifest_err;
+    END IF;
+
     -- GHSA-5rg9-rhwj-wj76: CLI/TUS creates r2-direct rows with checksum before
     -- finalize. Lock identity fields after first set (checksum/session_key/
-    -- key_id); still allow r2_path writes, manifest updates, and the one-shot
-    -- finalize (r2-direct -> r2). Blank-checksum in-progress rows stay writable
-    -- for upload completion; channel linkage is not the freeze gate.
+    -- key_id); still allow r2_path writes and the one-shot finalize
+    -- (r2-direct -> r2). Blank-checksum in-progress rows stay writable for
+    -- upload completion; channel linkage is not the freeze gate.
     IF OLD.storage_provider = 'r2-direct' THEN
       bundle_identity_locked := (
         NULLIF(BTRIM(COALESCE(OLD.checksum, '')), '') IS NOT NULL
@@ -218,17 +239,7 @@ BEGIN
       OR (
         NEW.manifest IS NULL
         AND OLD.manifest IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1
-          FROM pg_catalog.unnest(OLD.manifest) AS entry(file_name, s3_path, file_hash)
-          WHERE NOT EXISTS (
-            SELECT 1
-            FROM public.manifest AS m
-            WHERE m.app_version_id = OLD.id
-              AND m.s3_path = entry.s3_path
-              AND m.file_hash = entry.file_hash
-          )
-        )
+        AND NOT public.app_version_manifest_jsonb_unmigrated(OLD.id, OLD.manifest)
       )
     )
   THEN
