@@ -83,14 +83,19 @@ GRANT EXECUTE ON FUNCTION public.enforce_sso_provider_client_update_guard()
   TO service_role;
 
 COMMENT ON FUNCTION public.enforce_sso_provider_client_update_guard() IS
-  'BEFORE INSERT/UPDATE trigger on public.sso_providers (per row). Runs on every '
-  'client write; internal roles (service_role, postgres, supabase_admin) bypass. '
-  'Client roles cannot set or change provider_id, dns_verified_at, domain, status, '
-  'or enforce_sso. Executing roles: anon, authenticated via PostgREST; internal '
-  'roles for verify-dns and /private/sso/providers create/PATCH. Table cardinality: '
-  'low per org (typically 1-5 rows); trigger touches only the inserted/updated row. '
-  'Indexes: not applicable (no table scans). Worst-case EXPLAIN (ANALYZE, BUFFERS): '
-  'not run; trigger logic is O(1) field comparisons on OLD/NEW with no SQL queries.';
+  'BEFORE INSERT/UPDATE trigger on public.sso_providers (per row). Runs on '
+  'every client write; internal roles (service_role, postgres, supabase_admin) '
+  'bypass. Client roles cannot set or change provider_id, dns_verified_at, '
+  'domain, status, or enforce_sso. Executing roles: anon, authenticated via '
+  'PostgREST; internal roles for verify-dns and /private/sso/providers '
+  'create/PATCH. Table cardinality: low per org (typically 1-5 rows); trigger '
+  'touches only the inserted/updated row. Indexes: sso_providers_pkey for '
+  'UPDATE by id. Worst-case EXPLAIN (ANALYZE, BUFFERS) on local seed (org '
+  'JWT, Demo org 046a36ac): INSERT pending_verification without provider_id -> '
+  'Insert on sso_providers with enforce_sso_provider_client_insert_guard '
+  '(~0.7ms trigger); UPDATE metadata_url by id -> Index Scan on '
+  'sso_providers_pkey plus rbac_check_permission_request; no seq scan. Blocked '
+  'provider_id INSERT/UPDATE raise before plan completes.';
 
 DROP TRIGGER IF EXISTS enforce_sso_provider_client_insert_guard
   ON public.sso_providers;
