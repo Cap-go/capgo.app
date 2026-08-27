@@ -2,7 +2,7 @@
 -- pending_verification inserts remain the client path without provider_id.
 BEGIN;
 
-SELECT plan(14);
+SELECT plan(15);
 
 SELECT tests.authenticate_as_service_role();
 SELECT tests.create_supabase_user(
@@ -349,6 +349,16 @@ SELECT lives_ok(
     WHERE id = '71000000-0000-4000-8000-000000000072'
   $$,
   'service_role can set provider_id on a pending SSO provider'
+);
+
+SELECT is(
+  (
+    SELECT provider_id
+    FROM public.sso_providers
+    WHERE id = '71000000-0000-4000-8000-000000000072'
+  ),
+  'prov_service_role_bound',
+  'service_role provider_id update persisted on pending SSO provider'
 );
 
 SELECT tests.clear_authentication();
