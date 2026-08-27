@@ -513,9 +513,10 @@ export interface RolePermissionCheckScope {
 }
 
 /**
- * Returns true when the caller already holds every permission granted by the role
- * at the binding scope. Used to block API-key role minting from exceeding the
- * caller's own effective permissions.
+ * Returns true when the caller already holds every deploy-capable permission
+ * (app/channel/bundle) granted by the role at the binding scope. Org-only
+ * permissions are enforced separately via deny-list and priority rank so
+ * apikey_manager can still mint baseline org_member keys.
  */
 export async function callerHoldsAllRolePermissions(
   drizzleClient: ReturnType<typeof getDrizzleClient>,
@@ -533,6 +534,11 @@ export async function callerHoldsAllRolePermissions(
         INNER JOIN public.permissions AS permission
           ON permission.id = role_permission.permission_id
         WHERE role_permission.role_id = ${roleId}::uuid
+          AND (
+            permission.key LIKE 'app.%'
+            OR permission.key LIKE 'channel.%'
+            OR permission.key LIKE 'bundle.%'
+          )
           AND NOT public.rbac_check_permission_direct(
             permission.key,
             ${callerUserId}::uuid,
