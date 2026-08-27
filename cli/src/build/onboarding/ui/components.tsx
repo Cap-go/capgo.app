@@ -264,11 +264,10 @@ export const FilteredTextInput: FC<{
   onSubmit: (value: string) => void
 }> = ({ placeholder = '', filter = '=', allowedPattern, maxLength, transform, mask = false, initialValue = '', onSubmit }) => {
   const [value, setValue] = useState(() => applyConstraints(initialValue, { filter, allowedPattern, maxLength, transform }))
-  // PTY harnesses often paste a full path then Enter in one burst; useInput's
-  // return handler can run before React re-renders with the updated state, so
-  // read the latest buffer from a ref updated synchronously in setState.
+  // PTY harnesses often paste a full path then Enter in one burst; Ink can emit
+  // multiple parsed input events before React evaluates queued setState updaters.
+  // Keep the live buffer in a ref updated synchronously before setValue.
   const valueRef = useRef(value)
-  valueRef.current = value
 
   useInput((input, key) => {
     if (key.return) {
@@ -276,11 +275,9 @@ export const FilteredTextInput: FC<{
       return
     }
     if (key.backspace || key.delete) {
-      setValue(prev => {
-        const next = prev.slice(0, -1)
-        valueRef.current = next
-        return next
-      })
+      const next = valueRef.current.slice(0, -1)
+      valueRef.current = next
+      setValue(next)
       return
     }
     // Ignore control characters, arrows, etc.
@@ -289,11 +286,9 @@ export const FilteredTextInput: FC<{
     }
     // Append input then apply the full constraint pipeline (paste-safe).
     if (input) {
-      setValue(prev => {
-        const next = applyConstraints(prev + input, { filter, allowedPattern, maxLength, transform })
-        valueRef.current = next
-        return next
-      })
+      const next = applyConstraints(valueRef.current + input, { filter, allowedPattern, maxLength, transform })
+      valueRef.current = next
+      setValue(next)
     }
   })
 

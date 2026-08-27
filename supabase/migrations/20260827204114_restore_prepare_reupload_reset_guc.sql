@@ -1,6 +1,22 @@
 -- Restore prepare_reupload_reset GUC bypass dropped when
 -- 20260826101500_block_r2_direct_manifest_jsonb_writes.sql replaced
 -- check_encrypted_bundle_on_insert without the bundle/prepare re-upload path.
+--
+-- Execution profile (app_versions BEFORE INSERT OR UPDATE OF name, app_id,
+-- session_key, key_id, storage_provider, r2_path, external_url, checksum,
+-- manifest, native_packages):
+-- - Where: once per inserted/updated app_versions row when encryption or bundle
+--   lock rules apply; prepare_reupload_reset branch is service-role-only.
+-- - Frequency: console-scale bundle uploads (hundreds/day), not plugin path.
+-- - Roles: service_role for bundle/prepare re-upload reset; authenticated
+--   API-key/JWT traffic hits encryption enforcement on normal writes.
+-- - Cardinality: single row (NEW.app_id / OLD.app_id) → one apps lookup by
+--   app_id PK, then one orgs lookup by orgs.id PK when encryption is checked.
+-- - Indexes: apps PK on app_id; orgs PK on id; app_version_manifest_jsonb_
+--   unmigrated uses manifest PK on (version_id, file_name).
+-- - Worst-case EXPLAIN (ANALYZE, BUFFERS) on local seed (update app_versions
+--   row for encrypted org): trigger body does Index Scan on apps_pkey then
+--   Index Scan on orgs_pkey; no seq scan on apps/orgs/app_versions.
 CREATE OR REPLACE FUNCTION "public"."check_encrypted_bundle_on_insert"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
