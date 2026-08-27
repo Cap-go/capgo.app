@@ -56,6 +56,29 @@ describe('org_users require pending invite on insert', () => {
     })
   }
 
+  it('restores caller auth context after createOrgOwnedByUser', async () => {
+    await setAuthenticatedClaim(query, USER_ID)
+    const before = await query(`
+      SELECT
+        current_user AS sql_role,
+        current_setting('request.jwt.claim.role', true) AS jwt_role,
+        current_setting('request.jwt.claims', true) AS jwt_claims
+    `)
+
+    await createOrgOwnedByUser(query, USER_ID, 'Auth restore org')
+
+    const after = await query(`
+      SELECT
+        current_user AS sql_role,
+        current_setting('request.jwt.claim.role', true) AS jwt_role,
+        current_setting('request.jwt.claims', true) AS jwt_claims
+    `)
+
+    expect(after.rows[0]?.sql_role).toBe(before.rows[0]?.sql_role)
+    expect(after.rows[0]?.jwt_role).toBe(before.rows[0]?.jwt_role)
+    expect(after.rows[0]?.jwt_claims).toBe(before.rows[0]?.jwt_claims)
+  })
+
   it('rejects org admin direct INSERT of an active third-party membership', async () => {
     const orgId = await createOrgOwnedByUser(query, USER_ID, 'Invite insert org')
 

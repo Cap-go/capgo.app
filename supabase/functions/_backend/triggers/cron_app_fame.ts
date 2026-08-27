@@ -9,7 +9,7 @@ import {
   APP_FAME_STALE_DAYS,
   scoreAppsWithAi,
 } from '../utils/app_fame.ts'
-import { BRES, middlewareAPISecret } from '../utils/hono.ts'
+import { BRES, middlewareAPISecret, quickError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient, logPgError } from '../utils/pg.ts'
 
@@ -18,8 +18,8 @@ export const app = new Hono<MiddlewareKeyVariables>()
 export async function processAppFameBatch(c: Context<MiddlewareKeyVariables>): Promise<{ scored: number, skipped: number }> {
   const ai = c.env.AI as AiBinding | undefined
   if (!ai) {
-    cloudlog({ requestId: c.get('requestId'), message: 'cron_app_fame skipped, Workers AI binding missing' })
-    return { scored: 0, skipped: 0 }
+    cloudlogErr({ requestId: c.get('requestId'), message: 'cron_app_fame skipped, Workers AI binding missing' })
+    throw quickError(503, 'ai_unavailable', 'Workers AI binding is not configured')
   }
 
   let pgClient: ReturnType<typeof getPgClient> | undefined
@@ -75,7 +75,10 @@ export async function processAppFameBatch(c: Context<MiddlewareKeyVariables>): P
         candidateCount: candidates.length,
         model,
       })
-      return { scored: 0, skipped: candidates.length }
+      throw quickError(502, 'ai_invalid_response', 'Workers AI returned no usable app fame scores', {
+        candidateCount: candidates.length,
+        model,
+      })
     }
 
     for (const decision of decisions) {

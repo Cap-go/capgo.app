@@ -168,6 +168,7 @@ export const APIKEY_MANAGEMENT_ORG_SUPER_ADMIN = 'c9d0e1f2-a3b4-4c5d-8e6f-7a8b9c
 export const APIKEY_MANAGEMENT_APIKEY_MANAGER = 'd1e2f3a4-b5c6-4d7e-8f90-a1b2c3d4e5f6'
 export const APIKEY_MANAGEMENT_APIKEY_MANAGER_ID = 113
 export const ORG_ID = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+export const ORG_ID_CREDIT_AUTO_TOP_UP = 'b8c9d0e1-f2a3-4b4c-9d5e-6f7a8b9c0dc7'
 export const STRIPE_INFO_CUSTOMER_ID = 'cus_Q38uE91NP8Ufqc' // Customer ID for ORG_ID
 export const NON_OWNER_ORG_ID = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'
 export const USER_ID = '6aa76066-55ef-4238-ade6-0b32334a4097'
@@ -492,20 +493,47 @@ export const headersInternal = {
 
 /** Kong proxy body when the Deno isolate dies mid-request under shard load. */
 const KONG_UPSTREAM_INVALID_RESPONSE = 'An invalid response was received from the upstream server'
+/** Cloudflare workerd body when the isolate reloads mid-request. */
+const CLOUDFLARE_WORKER_RESTART_RESPONSE = 'Your worker restarted mid-request'
+
+function isTransientGatewayDeath(status: number, body: string): boolean {
+  if (status !== 502 && status !== 503)
+    return false
+  return body.includes(KONG_UPSTREAM_INVALID_RESPONSE)
+    || body.includes(CLOUDFLARE_WORKER_RESTART_RESPONSE)
+}
+
+export interface FetchTestRequestOptions extends RequestInit {
+  /** Retry transient gateway 502/503 on mutating methods when the endpoint is idempotent. */
+  retryUnsafe?: boolean
+}
+
+function isReplaySafeHttpMethod(method: string | undefined): boolean {
+  switch ((method ?? 'GET').toUpperCase()) {
+    case 'GET':
+    case 'HEAD':
+    case 'OPTIONS':
+      return true
+    default:
+      return false
+  }
+}
 
 /**
  * Send one request. Application 4xx/5xx are test evidence and are not retried.
- * Only Kong's upstream-invalid 502/503 (isolate crash/reload) is retried — same
- * signal the CI warm step already treats as non-ready.
+ * Only transient gateway 502/503 (isolate crash/reload) is retried — same signals
+ * the CI warm step already treats as non-ready. Mutating methods are not retried
+ * unless retryUnsafe is set (caller asserts idempotency).
  */
 export async function fetchTestRequest(
   url: string,
-  options?: RequestInit,
+  options?: FetchTestRequestOptions,
 ): Promise<Response> {
-  const maxAttempts = 3
+  const { retryUnsafe = false, ...fetchOptions } = options ?? {}
+  const maxAttempts = isReplaySafeHttpMethod(fetchOptions.method) || retryUnsafe ? 3 : 1
   let lastResponse: Response | undefined
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const response = await fetch(url, options)
+    const response = await fetch(url, fetchOptions)
     lastResponse = response
     if (response.status !== 502 && response.status !== 503)
       return response
@@ -513,8 +541,7 @@ export async function fetchTestRequest(
     const body = await response.clone().text().catch(() => '<unreadable body>')
     console.error(`[fetchTestRequest] gateway status=${response.status} attempt=${attempt}/${maxAttempts} url=${url} body=${body.slice(0, 800)}`)
 
-    const isKongUpstreamDeath = body.includes(KONG_UPSTREAM_INVALID_RESPONSE)
-    if (!isKongUpstreamDeath || attempt === maxAttempts)
+    if (!isTransientGatewayDeath(response.status, body) || attempt === maxAttempts)
       return response
 
     await new Promise(resolve => setTimeout(resolve, 250 * attempt))
@@ -998,6 +1025,37 @@ export async function setServiceRoleClaim(query: SqlQueryFn): Promise<void> {
   await query('SET LOCAL ROLE service_role')
 }
 
+type AuthContextSnapshot = {
+  sqlRole: string
+  jwtRole: string | null
+  jwtClaims: string | null
+}
+
+async function captureAuthContext(query: SqlQueryFn): Promise<AuthContextSnapshot> {
+  const result = await query(`
+    SELECT
+      current_user AS sql_role,
+      current_setting('request.jwt.claim.role', true) AS jwt_role,
+      current_setting('request.jwt.claims', true) AS jwt_claims
+  `)
+  const row = result.rows[0] ?? {}
+  return {
+    sqlRole: String(row.sql_role ?? ''),
+    jwtRole: row.jwt_role == null ? null : String(row.jwt_role),
+    jwtClaims: row.jwt_claims == null ? null : String(row.jwt_claims),
+  }
+}
+
+async function restoreAuthContext(query: SqlQueryFn, context: AuthContextSnapshot): Promise<void> {
+  await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claim.role', context.jwtRole])
+  await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claims', context.jwtClaims])
+
+  if (context.sqlRole === 'authenticated' || context.sqlRole === 'anon' || context.sqlRole === 'service_role')
+    await query(`SET LOCAL ROLE ${context.sqlRole}`)
+  else
+    await query('RESET ROLE')
+}
+
 export async function setAnonCapgkeyClaim(query: SqlQueryFn, capgkey: string): Promise<void> {
   await query(`SELECT set_config($1, $2, true)`, ['request.jwt.claim.role', 'anon'])
   await query(`SELECT set_config($1, $2, true)`, ['request.headers', JSON.stringify({ capgkey })])
@@ -1010,14 +1068,20 @@ export async function createOrgOwnedByUser(
   labelPrefix: string,
 ): Promise<string> {
   const orgId = randomUUID()
+  const previousContext = await captureAuthContext(query)
   await setServiceRoleClaim(query)
-  await query(
-    `
-      INSERT INTO public.orgs (id, name, management_email, created_by)
-      VALUES ($1::uuid, $2, $3, $4::uuid)
-    `,
-    [orgId, `${labelPrefix} ${orgId}`, `${labelPrefix.toLowerCase().replace(/\s+/g, '-')}-${orgId}@capgo.app`, ownerId],
-  )
+  try {
+    await query(
+      `
+        INSERT INTO public.orgs (id, name, management_email, created_by)
+        VALUES ($1::uuid, $2, $3, $4::uuid)
+      `,
+      [orgId, `${labelPrefix} ${orgId}`, `${labelPrefix.toLowerCase().replace(/\s+/g, '-')}-${orgId}@capgo.app`, ownerId],
+    )
+  }
+  finally {
+    await restoreAuthContext(query, previousContext)
+  }
   return orgId
 }
 
