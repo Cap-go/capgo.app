@@ -28,6 +28,8 @@ jobs:
         with:
           script: |
             const { owner, repo } = context.repo
+            const reviewState = state => String(state).toUpperCase()
+            const isApproved = state => reviewState(state) === 'APPROVED'
 
             let prs
             let reviewEventReview = null
@@ -89,13 +91,22 @@ jobs:
                 .filter(review => review.user?.login === 'coderabbitai[bot]')
               const latestCodeRabbitReview = codeRabbitReviews.at(-1)
 
-              const headApproved = reviews.some(review =>
+              const headApprovedFromList = reviews.some(review =>
                 review.commit_id === headSha
                 && review.state === 'APPROVED'
                 && review.user?.type === 'User'
                 && (review.author_association === 'MEMBER'
                   || review.author_association === 'OWNER')
               )
+              const eventMaintainerApprovedHead = context.eventName === 'pull_request_review'
+                && reviewEventReview
+                && isApproved(reviewEventReview.state)
+                && reviewEventReview.user?.login !== 'coderabbitai[bot]'
+                && reviewEventReview.user?.type === 'User'
+                && (reviewEventReview.author_association === 'MEMBER'
+                  || reviewEventReview.author_association === 'OWNER')
+                && reviewEventReview.commit_id === headSha
+              const headApproved = headApprovedFromList || eventMaintainerApprovedHead
 
               const staleChangeRequests = codeRabbitReviews.filter(review =>
                 review.state === 'CHANGES_REQUESTED'
@@ -119,7 +130,7 @@ jobs:
                   console.log(`Skipping trigger for stale review event: live HEAD ${liveHeadSha} differs from event snapshot ${eventHeadSha}`)
                   continue
                 }
-                if (reviewEventReview.state !== 'APPROVED') {
+                if (!isApproved(reviewEventReview.state)) {
                   console.log(`Ignoring non-approval review state for trigger: ${reviewEventReview.state}`)
                   continue
                 }
