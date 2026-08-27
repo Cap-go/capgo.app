@@ -161,7 +161,9 @@ afterAll(async () => {
 
   for (const userId of [apikeyManagerUserId, deployManagerUserId, bootstrapUserId]) {
     if (userId) {
-      await supabase.auth.admin.deleteUser(userId)
+      const { error } = await supabase.auth.admin.deleteUser(userId)
+      if (error)
+        throw error
     }
   }
 })
