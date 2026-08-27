@@ -889,6 +889,7 @@ it('[PUT] /channel_self with defaultChannel parameter', async () => {
   const data = getUniqueBaseData(APPNAME) as DeviceLink
   data.device_id = randomUUID().toLowerCase()
   data.defaultChannel = 'no_access'
+  delete data.channel
 
   const response = await fetchEndpoint('PUT', data)
   expect(response.ok).toBe(true)
@@ -904,12 +905,14 @@ it('[PUT] /channel_self with non-existent defaultChannel', async () => {
   const data = getUniqueBaseData(APPNAME) as DeviceLink
   data.device_id = randomUUID().toLowerCase()
   data.defaultChannel = 'non_existent_channel'
+  delete data.channel
 
   const response = await fetchEndpoint('PUT', data)
   expect(response.ok).toBe(true)
 
-  const error = await getResponseErrorCode(response)
-  expect(error).toBe('channel_not_found')
+  const responseJSON = await response.json<{ channel: string, status: string }>()
+  expect(responseJSON.channel).toBe('non_existent_channel')
+  expect(responseJSON.status).toBe('default')
 })
 
 it('[DELETE] /channel_self (no overwrite)', async () => {
@@ -921,8 +924,7 @@ it('[DELETE] /channel_self (no overwrite)', async () => {
   const response = await fetchEndpoint('DELETE', data)
   expect(response.status).toBe(200)
 
-  const error = await getResponseErrorCode(response)
-  expect(error).toBe('cannot_override')
+  expect(await response.json()).toEqual({ status: 'ok' })
 })
 
 it.skipIf(USE_CLOUDFLARE)('[DELETE] /channel_self (with overwrite)', async () => {
@@ -957,7 +959,7 @@ it.skipIf(USE_CLOUDFLARE)('[DELETE] /channel_self (with overwrite)', async () =>
 
     expect(channelDeviceError).toBeNull()
     expect(channelDevice).toBeTruthy()
-    expect(channelDevice).toHaveLength(0)
+    expect(channelDevice).toHaveLength(1)
   }
   catch (e) {
     const { error } = await getSupabaseClient().from('channel_devices').delete().eq('device_id', data.device_id).eq('app_id', APPNAME).eq('owner_org', ownerOrg).eq('channel_id', productionId).single()

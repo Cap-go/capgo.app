@@ -515,8 +515,25 @@ describe('channel device count gating', () => {
 
   async function cleanupDevice(deviceId: string) {
     await supabase.from('channel_devices').delete().eq('app_id', APP_NAME_UPDATE).eq('device_id', deviceId)
+    await supabase.from('devices').delete().eq('app_id', APP_NAME_UPDATE).eq('device_id', deviceId)
     await processChannelDeviceQueue()
     await supabase.from('apps').update({ channel_device_count: 0 }).eq('app_id', APP_NAME_UPDATE)
+  }
+
+  async function seedLegacyPluginDevice(deviceId: string) {
+    await supabase.from('devices').upsert({
+      app_id: APP_NAME_UPDATE,
+      device_id: deviceId,
+      plugin_version: '7.0.0',
+      platform: 'android',
+      version_name: '1.0.0',
+      version_build: '1.0.0',
+      os_version: '13',
+      custom_id: '',
+      is_prod: true,
+      is_emulator: false,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'app_id,device_id' })
   }
 
   it('uses device overrides when count is positive', async () => {
@@ -528,6 +545,7 @@ describe('channel device count gating', () => {
       owner_org: ORG_ID,
     })
     await processChannelDeviceQueue()
+    await seedLegacyPluginDevice(deviceId)
 
     const baseData = getBaseData(APP_NAME_UPDATE)
     baseData.device_id = deviceId
@@ -1142,6 +1160,8 @@ describe('update scenarios', () => {
 
     // Process the channel device count queue to update the app's channel_device_count
     await getSupabaseClient().rpc('process_channel_device_counts_queue' as any, { batch_size: 10 })
+
+    await seedLegacyPluginDevice(uuid)
 
     await updateChannel('no_access', {
       disableAutoUpdate: 'none',
