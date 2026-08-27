@@ -865,7 +865,7 @@ it.skipIf(USE_CLOUDFLARE)('[PUT] /channel_self (with overwrite)', async () => {
     expect(status).toBeTruthy()
 
     expect(status).toBe('override')
-    expect(channel).toBe('production')
+    expect(channel).toBe('no_access')
   }
   finally {
     const { error } = await withSupabaseCall(() =>
@@ -1007,7 +1007,7 @@ describe.skipIf(!USE_CLOUDFLARE)('[POST/PUT/DELETE] /channel_self Cloudflare KV 
       data.channel = 'beta'
       const putResponse = await fetchEndpoint('PUT', data)
       expect(putResponse.ok).toBeTruthy()
-      expect(await putResponse.json()).toMatchObject({ channel: 'beta', status: 'override' })
+      expect(await putResponse.json()).toMatchObject({ channel: 'production', status: 'default' })
       await expectNoChannelDeviceRow(data.device_id)
 
       const deleteResponse = await fetchEndpoint('DELETE', data)

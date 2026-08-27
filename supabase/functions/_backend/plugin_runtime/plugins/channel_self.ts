@@ -13,10 +13,11 @@ import { invalidIpInfo } from '../utils/invalids_ip.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { sendNotifOrgCached } from '../utils/notifications.ts'
 import { sendNotifToOrgMembersCached } from '../utils/org_email_notifications.ts'
-import { closeClient, getAppByIdPg, getAppOwnerPostgres, getChannelByNamePg, getCompatibleChannelsPg, getDrizzleClient, getPgClient, setReplicationLagHeader } from '../utils/pg.ts'
+import { shouldHonorPersistedChannelOverride } from '../utils/plugin_compatibility.ts'
+import { closeClient, getAppByIdPg, getAppOwnerPostgres, getChannelByNamePg, getChannelDeviceOverridePg, getChannelsPg, getCompatibleChannelsPg, getDevicePluginVersionPg, getDrizzleClient, getPgClient, setReplicationLagHeader } from '../utils/pg.ts'
+import { channelSelfGetRequestSchema, channelSelfRequestSchema, isDevicePlatform } from '../utils/plugin_validation.ts'
 import { convertQueryToBody, makeDevice, parsePluginBody } from '../utils/plugin_parser.ts'
 import { sendStatsAndDevice } from '../utils/plugin_stats.ts'
-import { channelSelfGetRequestSchema, channelSelfRequestSchema } from '../utils/plugin_validation.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { buildRateLimitInfo, onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
 import { backgroundTask, isDeprecatedPluginVersion, isLimited } from '../utils/utils.ts'
@@ -272,21 +273,64 @@ async function put(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient
   }
   const { device } = requestContext
 
-  const channelOverride = body.channel
+  const isNewVersion = isChannelSelfLocalChannelStorageVersion(c, body, 'PUT')
 
-  if (channelOverride) {
+  // Modern plugins keep channel selection local; echo request body only for vX.34.0+.
+  if (isNewVersion) {
+    const channelOverride = body.channel
+
+    if (channelOverride) {
+      await sendStatsAndDevice(c, device, [{ action: 'getChannel' }])
+      return c.json({
+        channel: channelOverride,
+        status: 'override',
+        allowSet: true,
+      })
+    }
+
+    const channelName = defaultChannel || 'production'
     await sendStatsAndDevice(c, device, [{ action: 'getChannel' }])
     return c.json({
-      channel: channelOverride,
-      status: 'override',
-      allowSet: true,
+      channel: channelName,
+      status: 'default',
     })
   }
 
-  const channelName = defaultChannel || 'production'
+  // Legacy plugins: honor durable overrides only when binding guarantees match /updates.
+  const storedOverride = await getChannelDeviceOverridePg(c, app_id, device_id, drizzleClient)
+  if (storedOverride) {
+    const devicePluginVersion = await getDevicePluginVersionPg(c, app_id, device_id, drizzleClient)
+    if (shouldHonorPersistedChannelOverride(devicePluginVersion, storedOverride.channel_id.allow_device_self_set)) {
+      await sendStatsAndDevice(c, device, [{ action: 'getChannel' }])
+      return c.json({
+        channel: storedOverride.channel_id.name,
+        status: 'override',
+        allowSet: storedOverride.channel_id.allow_device_self_set,
+      })
+    }
+  }
+
+  const dataChannel = await getChannelsPg(c, app_id, defaultChannel ? { defaultChannel } : { public: true }, drizzleClient as ReturnType<typeof getDrizzleClient>)
+
+  if (!dataChannel || dataChannel.length === 0) {
+    return simpleError200(c, 'channel_not_found', 'Cannot find channel')
+  }
+
+  if (!isDevicePlatform(body.platform)) {
+    return simpleError200(c, 'invalid_platform', 'Invalid device platform', { platform: body.platform })
+  }
+
+  const platform = body.platform
+  const finalChannel = defaultChannel
+    ? dataChannel.find((channel: { name: string }) => channel.name === defaultChannel)
+    : dataChannel.find((channel: { ios: boolean, android: boolean, electron: boolean }) => channel[platform])
+
+  if (!finalChannel) {
+    return simpleError200(c, 'channel_not_found', 'Cannot find channel')
+  }
   await sendStatsAndDevice(c, device, [{ action: 'getChannel' }])
   return c.json({
-    channel: channelName,
+    channel: finalChannel.name,
     status: 'default',
   })
 }
