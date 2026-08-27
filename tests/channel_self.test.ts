@@ -904,6 +904,7 @@ it('[PUT] /channel_self with non-existent defaultChannel', async () => {
 
   const data = getUniqueBaseData(APPNAME) as DeviceLink
   data.device_id = randomUUID().toLowerCase()
+  data.plugin_version = '7.34.0'
   data.defaultChannel = 'non_existent_channel'
   delete data.channel
 

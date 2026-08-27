@@ -8,6 +8,7 @@ const getChannelByIdPgMock = vi.fn()
 const getChannelByNamePgMock = vi.fn()
 const getChannelsPgMock = vi.fn()
 const getChannelDeviceOverridePgMock = vi.fn()
+const getDevicePluginVersionPgMock = vi.fn(() => Promise.resolve(null))
 const upsertChannelDevicePgMock = vi.fn(() => Promise.resolve(true))
 
 ;(globalThis as any).EdgeRuntime = undefined
@@ -47,6 +48,7 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pg.ts', () => ({
   getChannelDeviceOverridePg: getChannelDeviceOverridePgMock,
   getChannelsPg: getChannelsPgMock,
   getCompatibleChannelsPg: vi.fn(),
+  getDevicePluginVersionPg: getDevicePluginVersionPgMock,
   getDrizzleClient: getDrizzleClientMock,
   getMainChannelsPg: vi.fn(),
   getPgClient: getPgClientMock,
@@ -144,6 +146,7 @@ describe('channel_self PUT database routing', () => {
       },
     ])
     getChannelDeviceOverridePgMock.mockResolvedValue(null)
+    getDevicePluginVersionPgMock.mockResolvedValue(null)
     getChannelByNamePgMock.mockResolvedValue({
       id: 12,
       name: 'beta',
@@ -174,13 +177,13 @@ describe('channel_self PUT database routing', () => {
     expect(getPgClientMock).toHaveBeenCalledWith(expect.anything(), true)
   })
 
-  it('does not read KV overrides on PUT for old plugin versions', async () => {
+  it('reads channel_devices overrides on PUT for old plugin versions without KV', async () => {
     const kv = createKvStore()
     const response = await fetchPut('7.33.0', { CHANNEL_SELF_STORE: kv })
 
     expect(response.status).toBe(200)
     expect(getPgClientMock).toHaveBeenCalledWith(expect.anything(), true)
-    expect(getChannelDeviceOverridePgMock).not.toHaveBeenCalled()
+    expect(getChannelDeviceOverridePgMock).toHaveBeenCalled()
     expect(kv.get).not.toHaveBeenCalled()
     expect(await response.json()).toMatchObject({
       channel: 'production',
