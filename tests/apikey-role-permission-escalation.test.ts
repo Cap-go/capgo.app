@@ -51,22 +51,26 @@ beforeAll(async () => {
     ON CONFLICT (id) DO NOTHING
   `, [APIKEY_MANAGER_USER_ID, DEPLOY_MANAGER_USER_ID, APIKEY_MANAGER_EMAIL, DEPLOY_MANAGER_EMAIL, passwordHash])
 
-  await supabase.from('orgs').insert({
-    id: ORG_ID,
-    created_by: APIKEY_MANAGER_USER_ID,
-    name: `API Key Escalation Org ${TEST_ID}`,
-    management_email: APIKEY_MANAGER_EMAIL,
-  })
+  await executeSQL(`
+    INSERT INTO public.users (id, email, first_name, last_name, created_at, updated_at)
+    VALUES
+      ($1::uuid, $3, 'Apikey', 'Manager', NOW(), NOW()),
+      ($2::uuid, $4, 'Deploy', 'Manager', NOW(), NOW())
+    ON CONFLICT (id) DO UPDATE
+    SET email = EXCLUDED.email
+  `, [APIKEY_MANAGER_USER_ID, DEPLOY_MANAGER_USER_ID, APIKEY_MANAGER_EMAIL, DEPLOY_MANAGER_EMAIL])
 
-  await supabase.from('users').upsert([
-    { id: APIKEY_MANAGER_USER_ID, email: APIKEY_MANAGER_EMAIL, first_name: 'Apikey', last_name: 'Manager' },
-    { id: DEPLOY_MANAGER_USER_ID, email: DEPLOY_MANAGER_EMAIL, first_name: 'Deploy', last_name: 'Manager' },
-  ])
+  await executeSQL(`
+    INSERT INTO public.orgs (id, created_by, name, management_email, created_at, updated_at)
+    VALUES ($1::uuid, $2::uuid, $3, $4, NOW(), NOW())
+  `, [ORG_ID, APIKEY_MANAGER_USER_ID, `API Key Escalation Org ${TEST_ID}`, APIKEY_MANAGER_EMAIL])
 
-  await supabase.from('org_users').insert([
-    { org_id: ORG_ID, user_id: APIKEY_MANAGER_USER_ID, rbac_role_name: 'apikey_manager', is_invite: false },
-    { org_id: ORG_ID, user_id: DEPLOY_MANAGER_USER_ID, rbac_role_name: 'apikey_manager', is_invite: false },
-  ])
+  await executeSQL(`
+    INSERT INTO public.org_users (org_id, user_id, rbac_role_name, is_invite, created_at, updated_at)
+    VALUES
+      ($1::uuid, $2::uuid, public.rbac_role_apikey_manager(), false, NOW(), NOW()),
+      ($1::uuid, $3::uuid, public.rbac_role_apikey_manager(), false, NOW(), NOW())
+  `, [ORG_ID, APIKEY_MANAGER_USER_ID, DEPLOY_MANAGER_USER_ID])
 
   await executeSQL(`
     INSERT INTO public.role_bindings (
