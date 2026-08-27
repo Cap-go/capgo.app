@@ -1015,7 +1015,7 @@ onMounted(checkLogin)
 
                     <FormKitMessages data-test="form-error" />
 
-                    <div v-show="passwordPathReady">
+                    <div v-show="passwordPathReady && isLoginStep">
                       <div class="inline-flex justify-center items-center w-full">
                         <button
                           type="submit"
