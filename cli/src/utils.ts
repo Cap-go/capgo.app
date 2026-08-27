@@ -2065,8 +2065,11 @@ export async function lookupUploadVersionId(
   options?: CapgoCliHostOptions,
 ): Promise<number> {
   const { data, error } = await lookupUploadVersion(apikey, appId, name, options)
-  if (error || data?.id == null)
-    throw new Error('Cannot get version id, cannot set channel')
+  if (error)
+    throw new Error(`Cannot get version id: ${await formatCapgoCliApiError(error)}`)
+
+  if (data?.id == null)
+    throw new Error('Cannot get version id: version lookup response did not include id')
 
   return data.id
 }
