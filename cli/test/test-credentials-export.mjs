@@ -630,7 +630,7 @@ await test('export parser diagnostics escape terminal controls', () => {
   assert.equal(result.stdout, '')
   assert.equal(result.stderr.includes(unsafeOption), false)
   for (const escaped of ['\\u000a', '\\u001b', '\\u0085', '\\u2028', '\\u2029', '\\u202e', '\\u2066'])
-    assert.match(result.stderr, new RegExp(escaped.replace('\\', '\\\\')))
+    assert.match(result.stderr, new RegExp(escaped.replaceAll('\\', '\\\\')))
 })
 
 await test('success logs quote terminal-unsafe user paths and variable names', () => {
@@ -644,7 +644,7 @@ await test('success logs quote terminal-unsafe user paths and variable names', (
   assert.equal(result.stdout.includes(unsafe), false)
   assert.match(result.stdout, /Exported "line\\n/)
   for (const escaped of ['\\n', '\\u001b', '\\u0085', '\\u2028', '\\u2029', '\\u202e', '\\u2066'])
-    assert.match(result.stdout, new RegExp(escaped.replace('\\', '\\\\')))
+    assert.match(result.stdout, new RegExp(escaped.replaceAll('\\', '\\\\')))
   assert.match(result.stdout, /to ".*line\\n.*\.txt"/)
 })
 
