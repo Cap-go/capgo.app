@@ -324,7 +324,7 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
     })
     // Do not gate on helper.available — it is sync-racy before ensureCache resolves.
     const cachedDevice = await trackDeviceCache.matchJson<DeviceCachePayload>(trackDeviceCacheRequest)
-    const deviceForWrite: DeviceWithoutCreatedAt = cachedDevice && !('plugin_version' in device)
+    const deviceForWrite: DeviceWithoutCreatedAt = cachedDevice && device.plugin_version === undefined
       ? { ...device, plugin_version: cachedDevice.plugin_version }
       : device
     if (cachedDevice && !hasComparableDeviceChanged(cachedDevice, deviceForWrite)) {
