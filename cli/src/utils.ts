@@ -1928,9 +1928,14 @@ export async function getDefaultUploadChannelViaHttp(
     },
   )
 
-  if (error || data?.default_upload_channel == null) {
+  if (error) {
     const config = await getRemoteConfig()
     throw new Error(`Cannot find default upload channel: ${await formatCapgoCliApiError(error)}. You can set it here: ${config.hostWeb}/app/${appId}/info`)
+  }
+
+  if (data?.default_upload_channel == null) {
+    const config = await getRemoteConfig()
+    throw new Error(`Cannot find default upload channel: app has no default_upload_channel configured. You can set it here: ${config.hostWeb}/app/${appId}/info`)
   }
 
   return data.default_upload_channel

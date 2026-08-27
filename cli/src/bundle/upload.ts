@@ -262,13 +262,8 @@ async function verifyCompatibility(ctx: UploadHttpCtx, pm: pmType, options: Opti
       if (!lastMinUpdateVersion || !regexSemver.test(lastMinUpdateVersion))
         uploadFail('Invalid remote min update version, skipping auto setting compatibility')
 
-      try {
-        minUpdateVersion = lastMinUpdateVersion
-        spinner.stop(`Auto set min-update-version to ${minUpdateVersion}`)
-      }
-      catch {
-        uploadFail(`Cannot auto set compatibility, invalid data ${JSON.stringify(channelData)}`)
-      }
+      minUpdateVersion = lastMinUpdateVersion
+      spinner.stop(`Auto set min-update-version to ${minUpdateVersion}`)
     }
     else {
       spinner.stop(`Bundle compatible with ${channel} channel`)
