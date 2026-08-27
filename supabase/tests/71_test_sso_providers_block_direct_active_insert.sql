@@ -212,6 +212,7 @@ SELECT throws_ok(
 );
 
 SELECT tests.authenticate_as_service_role();
+SELECT set_config('request.jwt.claim.role', 'service_role', true);
 
 INSERT INTO public.sso_providers (
   id,
@@ -315,6 +316,7 @@ SELECT throws_ok(
 );
 
 SELECT tests.authenticate_as_service_role();
+SELECT set_config('request.jwt.claim.role', 'service_role', true);
 
 SELECT lives_ok(
   $$
