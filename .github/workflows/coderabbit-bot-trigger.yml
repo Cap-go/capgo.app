@@ -69,14 +69,7 @@ jobs:
               })
               const liveHeadSha = livePr.head.sha
 
-              if (context.eventName === 'pull_request_review') {
-                const eventHeadSha = pr.head.sha
-                if (liveHeadSha !== eventHeadSha) {
-                  console.log(`Skipping stale review event: live HEAD ${liveHeadSha} differs from event snapshot ${eventHeadSha}`)
-                  continue
-                }
-              }
-              else if (context.sha !== liveHeadSha) {
+              if (context.eventName === 'push' && context.sha !== liveHeadSha) {
                 console.log(`Skipping stale push event: pushed ${context.sha} but live HEAD is ${liveHeadSha}`)
                 continue
               }
@@ -84,6 +77,9 @@ jobs:
               const headSha = context.eventName === 'push'
                 ? context.sha
                 : liveHeadSha
+              const eventHeadSha = context.eventName === 'pull_request_review'
+                ? pr.head.sha
+                : null
               const reviews = await github.paginate(github.rest.pulls.listReviews, {
                 owner,
                 repo,
@@ -119,6 +115,10 @@ jobs:
               }
 
               if (context.eventName === 'pull_request_review') {
+                if (eventHeadSha !== liveHeadSha) {
+                  console.log(`Skipping trigger for stale review event: live HEAD ${liveHeadSha} differs from event snapshot ${eventHeadSha}`)
+                  continue
+                }
                 if (reviewEventReview.state !== 'APPROVED') {
                   console.log(`Ignoring non-approval review state for trigger: ${reviewEventReview.state}`)
                   continue
