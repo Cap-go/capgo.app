@@ -98,6 +98,14 @@ testing against Cloudflare Workers.
   - `triggers/` - Database triggers and CRON functions
   - `utils/` - Shared utilities and database schemas
 
+### Plugin endpoint security triage (HARD RULE)
+
+`/channel_self`, `/updates`, and `/stats` are public plugin endpoints in `plugins/`. They take no API key, JWT, or device secret — the client asserts `device_id`. That is the product.
+
+- Unauthenticated SET on `/channel_self` (POST/DELETE persist, client-controlled `plugin_version`, `device_id` spoof) is **intended behavior**. It is **NOT** a security issue.
+- Do **not** open a security-fix PR or keep a GHSA open for "missing auth on channel_self set". Closed: GHSA-g9h5 / PR #3222. Same class as GHSA-469v (GET `/channel_self` enumeration is already documented as intended).
+- Dashboard/API forced overrides on private channels remain a separate, authenticated path. Do **not** "fix" the public plugin set path.
+
 ### Production Scale Guardrails
 
 Capgo production data is large enough that "small queue" designs are
