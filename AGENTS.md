@@ -32,7 +32,8 @@ when working with code in this repository.
   tests (requires running Supabase; this is what CI shards across runners; CLI
   integration tests run via `bun test:cli`)
 - `bun test:backend` - Run backend tests excluding CLI tests
-- `bun test:cli` - Run CLI-specific tests
+- `bun test:cli` - Run CLI-specific tests (workspace CLI plus
+  `tests/cli-compat.test.ts`, which pins `@capgo/cli` to `MIN_CLI_VERSION`)
 - `bun test:local` - Legacy alias for the default monorepo backend test run
 - `bun test:front` - Run Playwright frontend tests
 - `bun test:all:local` - Legacy alias for `bun test:all`
@@ -1081,6 +1082,51 @@ else {
 - Removing support for old request formats
 
 **When in doubt, support both old and new behavior based on plugin version detection.**
+
+## CLI Minimum Version
+
+Source of truth: `supabase/functions/_backend/utils/cliMinVersion.ts`.
+
+`GET /private/config` returns:
+
+- `minCliVersion` — oldest `@capgo/cli` still supported
+- `minCliVersionReason` — user-facing explanation shown when the CLI is below
+  that floor
+
+The CLI reads those fields during remote config fetch. If the running CLI is
+older than `minCliVersion`, it stops and tells the user they must update,
+including the reason.
+
+### Compat tests
+
+The min version is the pin for CLI compatibility tests, not workspace `@latest`.
+
+- `tests/cli-compat.test.ts` installs `@capgo/cli@${MIN_CLI_VERSION}` and runs it
+  against the current API.
+- Workspace `tests/cli*` coverage is for the current CLI. It does not replace
+  the min-version pin.
+
+When you raise `MIN_CLI_VERSION`, update `MIN_CLI_VERSION_REASON` in the same
+change and keep `tests/cli-compat.test.ts` passing against the new pin.
+
+### ALWAYS ASK before raising (or not raising)
+
+When a change can break older CLIs (public API, upload/auth/encryption protocol,
+request/response shape, required headers, error codes the CLI parses):
+
+You MUST ask the user before finishing:
+
+1. Should we raise `MIN_CLI_VERSION`?
+2. Is this a security concern?
+
+Rules:
+
+- **Security** (auth bypass, secret leak, unsigned/unsafe upload, and similar):
+  recommend raising, and put the why in `MIN_CLI_VERSION_REASON`.
+- **Not security** (new optional field, additive endpoint, old CLI still works):
+  default to **not** raising. Customers take time to update.
+- Never raise silently. Never leave a stale reason.
+- Never lower the min version without an explicit user request.
 
 ## Deployment
 

@@ -4,6 +4,8 @@
 - Every CLI build must also run the bundle integrity test (`bun run test:bundle`).
 - Treat failures in these tests as release blockers.
 - End-to-end CLI testing is done in the Capgo repo; in this CLI repo, focus tests on behavior specific to the CLI code and avoid treating backend end-to-end coverage as belonging here.
+- Capgo publishes `minCliVersion` + `minCliVersionReason` on `GET /private/config`. The CLI must refuse to continue when it is older than that floor, and must show the reason plus `npx @capgo/cli@latest`. Do not hardcode the floor in the CLI; read it from config.
+- In the Capgo repo, CLI compatibility tests pin to `MIN_CLI_VERSION` from `supabase/functions/_backend/utils/cliMinVersion.ts`. Before changing public CLI/API contracts, ask whether to raise that floor and whether the change is a security concern. See the Capgo repo `AGENTS.md` section "CLI Minimum Version".
 - Keep `src/index.ts` limited to CLI command registration, options, and wiring.
 - Put command implementation logic in dedicated modules/handlers instead of inline `.action(...)` bodies in `src/index.ts`.
 - When adding or changing a CLI command, prefer an exported command handler function in a dedicated module and wire it from `src/index.ts`.

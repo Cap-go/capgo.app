@@ -1,6 +1,7 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { resolveCliUsageIdentity, trackCliUsage } from '../utils/cli_usage.ts'
+import { MIN_CLI_VERSION, MIN_CLI_VERSION_REASON } from '../utils/cliMinVersion.ts'
 import { useCors } from '../utils/hono.ts'
 import { backgroundTask, existInEnv, getEnv, isStripeConfigured } from '../utils/utils.ts'
 
@@ -33,8 +34,10 @@ app.get('/', async (c) => {
 
   return c.json({
     supaHost: existInEnv(c, 'SUPABASE_REPLICATE_URL') ? getEnv(c, 'SUPABASE_REPLICATE_URL') : getEnv(c, 'SUPABASE_URL'),
-    supbaseId: getEnv(c, 'SUPABASE_URL')?.split('//')[1].split('.')[0].split(':')[0],
+    supbaseId: getEnv(c, 'SUPABASE_URL')?.split('//')[1]?.split('.')[0]?.split(':')[0] ?? '',
     supaKey: getEnv(c, 'SUPABASE_ANON_KEY'),
     stripeEnabled: isStripeConfigured(c),
+    minCliVersion: MIN_CLI_VERSION,
+    minCliVersionReason: MIN_CLI_VERSION_REASON,
   })
 })
