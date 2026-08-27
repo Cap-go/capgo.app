@@ -14,6 +14,7 @@ const APP_UUID = randomUUID()
 const PUBLIC_APP_ID = `com.apikey.escalation.${TEST_ID}`
 const APIKEY_MANAGER_USER_ID = randomUUID()
 const DEPLOY_MANAGER_USER_ID = randomUUID()
+const ORG_BOOTSTRAP_USER_ID = randomUUID()
 const APIKEY_MANAGER_EMAIL = `apikey-manager-only-${TEST_ID}@capgo.app`
 const DEPLOY_MANAGER_EMAIL = `apikey-deploy-manager-${TEST_ID}@capgo.app`
 const CHANNEL_NAME = `escalation-channel-${TEST_ID.slice(0, 8)}`
@@ -46,31 +47,41 @@ beforeAll(async () => {
       id, instance_id, aud, role, email, encrypted_password,
       email_confirmed_at, created_at, updated_at, confirmation_token
     ) VALUES
-      ($1::uuid, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', $3, $5, NOW(), NOW(), NOW(), ''),
-      ($2::uuid, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', $4, $5, NOW(), NOW(), NOW(), '')
+      ($1::uuid, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', $4, $6, NOW(), NOW(), NOW(), ''),
+      ($2::uuid, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', $5, $6, NOW(), NOW(), NOW(), ''),
+      ($3::uuid, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', $7, $6, NOW(), NOW(), NOW(), '')
     ON CONFLICT (id) DO NOTHING
-  `, [APIKEY_MANAGER_USER_ID, DEPLOY_MANAGER_USER_ID, APIKEY_MANAGER_EMAIL, DEPLOY_MANAGER_EMAIL, passwordHash])
+  `, [
+    APIKEY_MANAGER_USER_ID,
+    DEPLOY_MANAGER_USER_ID,
+    ORG_BOOTSTRAP_USER_ID,
+    APIKEY_MANAGER_EMAIL,
+    DEPLOY_MANAGER_EMAIL,
+    passwordHash,
+    `apikey-escalation-bootstrap-${TEST_ID}@capgo.app`,
+  ])
 
   await executeSQL(`
     INSERT INTO public.users (id, email, first_name, last_name, created_at, updated_at)
     VALUES
-      ($1::uuid, $3, 'Apikey', 'Manager', NOW(), NOW()),
-      ($2::uuid, $4, 'Deploy', 'Manager', NOW(), NOW())
+      ($1::uuid, $4, 'Apikey', 'Manager', NOW(), NOW()),
+      ($2::uuid, $5, 'Deploy', 'Manager', NOW(), NOW()),
+      ($3::uuid, $6, 'Org', 'Bootstrap', NOW(), NOW())
     ON CONFLICT (id) DO UPDATE
     SET email = EXCLUDED.email
-  `, [APIKEY_MANAGER_USER_ID, DEPLOY_MANAGER_USER_ID, APIKEY_MANAGER_EMAIL, DEPLOY_MANAGER_EMAIL])
+  `, [
+    APIKEY_MANAGER_USER_ID,
+    DEPLOY_MANAGER_USER_ID,
+    ORG_BOOTSTRAP_USER_ID,
+    APIKEY_MANAGER_EMAIL,
+    DEPLOY_MANAGER_EMAIL,
+    `apikey-escalation-bootstrap-${TEST_ID}@capgo.app`,
+  ])
 
   await executeSQL(`
     INSERT INTO public.orgs (id, created_by, name, management_email, created_at, updated_at)
     VALUES ($1::uuid, $2::uuid, $3, $4, NOW(), NOW())
-  `, [ORG_ID, APIKEY_MANAGER_USER_ID, `API Key Escalation Org ${TEST_ID}`, APIKEY_MANAGER_EMAIL])
-
-  await executeSQL(`
-    INSERT INTO public.org_users (org_id, user_id, rbac_role_name, is_invite, created_at, updated_at)
-    VALUES
-      ($1::uuid, $2::uuid, public.rbac_role_apikey_manager(), false, NOW(), NOW()),
-      ($1::uuid, $3::uuid, public.rbac_role_apikey_manager(), false, NOW(), NOW())
-  `, [ORG_ID, APIKEY_MANAGER_USER_ID, DEPLOY_MANAGER_USER_ID])
+  `, [ORG_ID, ORG_BOOTSTRAP_USER_ID, `API Key Escalation Org ${TEST_ID}`, APIKEY_MANAGER_EMAIL])
 
   await executeSQL(`
     INSERT INTO public.role_bindings (
@@ -151,15 +162,12 @@ afterAll(async () => {
   await supabase.from('channels').delete().eq('app_id', PUBLIC_APP_ID)
   await supabase.from('app_versions').delete().eq('app_id', PUBLIC_APP_ID)
   await supabase.from('apps').delete().eq('app_id', PUBLIC_APP_ID)
-  await executeSQL(`
-    DELETE FROM public.role_bindings
-    WHERE org_id = $1::uuid
-      OR principal_id IN ($2::uuid, $3::uuid)
-  `, [ORG_ID, APIKEY_MANAGER_USER_ID, DEPLOY_MANAGER_USER_ID])
-  await supabase.from('org_users').delete().eq('org_id', ORG_ID)
   await supabase.from('orgs').delete().eq('id', ORG_ID)
-  await supabase.from('users').delete().in('id', [APIKEY_MANAGER_USER_ID, DEPLOY_MANAGER_USER_ID])
-  await executeSQL(`DELETE FROM auth.users WHERE id IN ($1::uuid, $2::uuid)`, [APIKEY_MANAGER_USER_ID, DEPLOY_MANAGER_USER_ID])
+  await supabase.from('users').delete().in('id', [APIKEY_MANAGER_USER_ID, DEPLOY_MANAGER_USER_ID, ORG_BOOTSTRAP_USER_ID])
+  await executeSQL(
+    `DELETE FROM auth.users WHERE id IN ($1::uuid, $2::uuid, $3::uuid)`,
+    [APIKEY_MANAGER_USER_ID, DEPLOY_MANAGER_USER_ID, ORG_BOOTSTRAP_USER_ID],
+  )
 })
 
 describe('apikey role binding permission escalation guard', () => {
