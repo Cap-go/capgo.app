@@ -1,4 +1,3 @@
-import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { createHono, getBodyOrQuery, parseBody, quickError } from '../../utils/hono.ts'
 import { version } from '../../utils/version.ts'

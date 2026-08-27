@@ -1,4 +1,3 @@
-import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { BRES, createHono, parseBody, quickError, simpleError } from '../utils/hono.ts'
 import { version } from '../utils/version.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
