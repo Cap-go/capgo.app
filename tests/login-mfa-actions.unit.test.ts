@@ -1,11 +1,9 @@
-import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-
-const loginSource = readFileSync(new URL('../src/pages/login.vue', import.meta.url), 'utf8')
+import { getLoginActionVisibility } from '../src/utils/loginActions'
 
 describe('login MFA actions', () => {
-  it.concurrent('shows only the verify action during the MFA step', () => {
-    expect(loginSource).toContain('<div v-show="passwordPathReady && isLoginStep">')
-    expect(loginSource).toContain('<div v-show="statusAuth === \'2fa\'">')
+  it.concurrent('shows exactly one action for each ready authentication step', () => {
+    expect(getLoginActionVisibility('login', true)).toEqual({ login: true, verify: false })
+    expect(getLoginActionVisibility('2fa', true)).toEqual({ login: false, verify: true })
   })
 })

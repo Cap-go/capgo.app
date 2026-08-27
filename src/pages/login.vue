@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Factor } from '@supabase/supabase-js'
 import type { Ref } from 'vue'
+import type { LoginAuthStatus } from '~/utils/loginActions'
 import { Capacitor } from '@capacitor/core'
 import { setErrors } from '@formkit/core'
 import { FormKit, FormKitMessages } from '@formkit/vue'
@@ -17,6 +18,7 @@ import { hideLoader } from '~/services/loader'
 import { autoAuth, defaultApiHost, hashEmail, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { isCapgoDomainReferrer, isDirectLoginLanding } from '~/utils/capgoReferrer'
+import { getLoginActionVisibility } from '~/utils/loginActions'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
 const route = useRoute('/login')
@@ -25,7 +27,7 @@ const isLoading = ref(false)
 const isMobile = ref(Capacitor.isNativePlatform())
 const turnstileToken = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
-const statusAuth: Ref<'login' | '2fa'> = ref('login')
+const statusAuth: Ref<LoginAuthStatus> = ref('login')
 const mfaLoginFactor: Ref<Factor | null> = ref(null)
 const mfaChallengeId: Ref<string> = ref('')
 const mfaCode = ref('')
@@ -53,6 +55,7 @@ let domainCheckSeq = 0
 
 const version = import.meta.env.VITE_APP_VERSION
 const isLoginStep = computed(() => statusAuth.value === 'login')
+const loginActionVisibility = computed(() => getLoginActionVisibility(statusAuth.value, passwordPathReady.value))
 const emailValidation = computed(() => (isLoginStep.value ? 'required:trim|email' : ''))
 const passwordValidation = computed(() => (passwordPathReady.value ? 'required:trim' : ''))
 const mfaValidation = computed(() => (statusAuth.value === '2fa' ? 'required|mfa_code_validation' : ''))
@@ -1015,7 +1018,7 @@ onMounted(checkLogin)
 
                     <FormKitMessages data-test="form-error" />
 
-                    <div v-show="passwordPathReady && isLoginStep">
+                    <div v-show="loginActionVisibility.login">
                       <div class="inline-flex justify-center items-center w-full">
                         <button
                           type="submit"
@@ -1039,7 +1042,7 @@ onMounted(checkLogin)
                       </div>
                     </div>
 
-                    <div v-show="statusAuth === '2fa'">
+                    <div v-show="loginActionVisibility.verify">
                       <div class="inline-flex justify-center items-center w-full">
                         <button
                           type="submit"
