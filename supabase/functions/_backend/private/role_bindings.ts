@@ -10,7 +10,7 @@ import { assertJwtMfaAssurance } from '../utils/jwt_mfa_assurance.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { schema } from '../utils/postgres_schema.ts'
-import { checkPermission, checkPermissionPg } from '../utils/rbac.ts'
+import { callerHoldsAllRolePermissions, checkPermission, checkPermissionPg } from '../utils/rbac.ts'
 import { version } from '../utils/version.ts'
 import {
   appIdParamSchema,
@@ -141,9 +141,13 @@ async function validateScopedAppOwnership(
   orgId: string,
   appId?: string | null,
   channelId?: RoleBindingBody['channel_id'],
-): Promise<ValidationResult<{ channelRbacId: string | null }>> {
+): Promise<ValidationResult<{
+  channelRbacId: string | null
+  publicAppId: string | null
+  legacyChannelId: number | null
+}>> {
   if (scopeType !== 'app' && scopeType !== 'channel') {
-    return { ok: true, data: { channelRbacId: null } }
+    return { ok: true, data: { channelRbacId: null, publicAppId: null, legacyChannelId: null } }
   }
 
   const [app] = await drizzle
@@ -172,7 +176,10 @@ async function validateScopedAppOwnership(
     const legacyChannelRowId = getLegacyChannelRowId(channelId)
     const normalizedChannelId = typeof channelId === 'string' ? channelId.trim() : `${channelId}`
     const [channel] = await drizzle
-      .select({ rbacId: schema.channels.rbac_id })
+      .select({
+        rbacId: schema.channels.rbac_id,
+        legacyId: schema.channels.id,
+      })
       .from(schema.channels)
       .where(
         and(
@@ -189,10 +196,24 @@ async function validateScopedAppOwnership(
       return { ok: false, status: 404, error: 'Channel not found in this app/org' }
     }
 
-    return { ok: true, data: { channelRbacId: channel.rbacId } }
+    return {
+      ok: true,
+      data: {
+        channelRbacId: channel.rbacId,
+        publicAppId: app.publicAppId,
+        legacyChannelId: channel.legacyId,
+      },
+    }
   }
 
-  return { ok: true, data: { channelRbacId: null } }
+  return {
+    ok: true,
+    data: {
+      channelRbacId: null,
+      publicAppId: app.publicAppId,
+      legacyChannelId: null,
+    },
+  }
 }
 
 export function validateRoleScope(roleScopeType: string, bindingScopeType: string): ValidationResult<null> {
@@ -633,6 +654,24 @@ export async function createRoleBindingForPrincipal(
     return { ok: false, status: scopedAppValidation.status, error: scopedAppValidation.error }
   }
   const normalizedChannelId = scopedAppValidation.data.channelRbacId
+  const { publicAppId, legacyChannelId } = scopedAppValidation.data
+
+  // 5b. API-key bindings: caller must already hold every permission the role grants
+  if (principal_type === 'apikey' && authType === 'jwt') {
+    const holdsAllPermissions = await callerHoldsAllRolePermissions(
+      drizzle,
+      callerPrincipalId,
+      role.id,
+      {
+        orgId: org_id,
+        publicAppId,
+        channelId: legacyChannelId,
+      },
+    )
+    if (!holdsAllPermissions) {
+      return { ok: false, status: 403, error: 'Cannot assign a role whose permissions exceed your own' }
+    }
+  }
 
   // 6. Principal existence & org-membership check
   if (!options?.skipPrincipalValidation) {
