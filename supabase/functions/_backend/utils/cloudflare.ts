@@ -326,7 +326,10 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
     })
     // Do not gate on helper.available — it is sync-racy before ensureCache resolves.
     const cachedDevice = await trackDeviceCache.matchJson<DeviceCachePayload>(trackDeviceCacheRequest)
-    if (cachedDevice && !hasComparableDeviceChanged(cachedDevice, device)) {
+    const deviceForWrite: DeviceWithoutCreatedAt = cachedDevice && !('plugin_version' in device)
+      ? { ...device, plugin_version: cachedDevice.plugin_version }
+      : device
+    if (cachedDevice && !hasComparableDeviceChanged(cachedDevice, deviceForWrite)) {
       outcome = 'cache_hit'
       cloudlog({
         requestId: c.get('requestId'),
@@ -339,7 +342,7 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
       return
     }
 
-    const comparableDevice = toComparableDevice(device)
+    const comparableDevice = toComparableDevice(deviceForWrite)
 
     // Write to Analytics Engine - this is the primary store now (sync; needs no waitUntil)
     cloudlog({ requestId: c.get('requestId'), message: 'Writing to Analytics Engine DEVICE_INFO' })
