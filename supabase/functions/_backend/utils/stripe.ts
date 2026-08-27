@@ -3,6 +3,17 @@ import type { Database } from './supabase.types.ts'
 import Stripe from 'stripe'
 import { simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
+import type { BillingAccount } from './stripe_billing_account.ts'
+import {
+  DEFAULT_BILLING_ACCOUNT,
+  assertStripeAccountConfigured,
+  getStripeSecretKey,
+  isStripeAccountConfigured,
+  resolveBillingAccount,
+  resolvePlanPriceId,
+} from './stripe_billing_account.ts'
+
+export type { BillingAccount } from './stripe_billing_account.ts'
 import { supabaseAdmin } from './supabase.ts'
 import { getEnv, isStripeConfigured, trimTrailingSlashes } from './utils.ts'
 
@@ -54,8 +65,8 @@ function buildSupabaseDashboardLink(c: Context, customerId: string): string | nu
 
 export type StripeEnvironment = 'live' | 'test'
 
-export function resolveStripeEnvironment(c: Context): StripeEnvironment {
-  const secretKey = getEnv(c, 'STRIPE_SECRET_KEY') || ''
+export function resolveStripeEnvironment(c: Context, account: BillingAccount = DEFAULT_BILLING_ACCOUNT): StripeEnvironment {
+  const secretKey = getStripeSecretKey(c, account)
   if (secretKey.startsWith('sk_live') || secretKey.startsWith('rk_live'))
     return 'live'
   return 'test'
@@ -89,14 +100,15 @@ export function isStripeEmulatorEnabled(c: Context): boolean {
   return getStripeApiBaseUrl(c) !== null
 }
 
-export function getStripe(c: Context): Stripe {
+export function getStripe(c: Context, account: BillingAccount = DEFAULT_BILLING_ACCOUNT): Stripe {
+  assertStripeAccountConfigured(c, account)
   const apiBaseUrl = getStripeApiBaseUrl(c)
   const apiPort = apiBaseUrl
     ? Number.parseInt(apiBaseUrl.port || (apiBaseUrl.protocol === 'https:' ? '443' : '80'), 10)
     : undefined
   type StripeApiVersion = NonNullable<ConstructorParameters<typeof Stripe>[1]>['apiVersion']
 
-  return new Stripe(getEnv(c, 'STRIPE_SECRET_KEY'), {
+  return new Stripe(getStripeSecretKey(c, account), {
     // Keep the pinned runtime API version even when the installed SDK types lag behind it.
     apiVersion: '2026-03-25.dahlia' as StripeApiVersion,
     httpClient: Stripe.createFetchHttpClient(),
@@ -108,6 +120,11 @@ export function getStripe(c: Context): Stripe {
         }
       : {}),
   })
+}
+
+async function stripeForCustomer(c: Context, customerId: string) {
+  const account = await resolveBillingAccount(c, customerId)
+  return getStripe(c, account)
 }
 
 function getLicensedSubscriptionItem(items: Stripe.SubscriptionItem[] | undefined) {
@@ -146,7 +163,8 @@ export async function getSubscriptionData(c: Context, customerId: string, subscr
     cloudlog({ requestId: c.get('requestId'), message: 'Fetching subscription data', customerId, subscriptionId })
 
     // Retrieve the specific subscription from Stripe
-    const subscription = await getStripe(c).subscriptions.retrieve(subscriptionId, {
+    const stripe = await stripeForCustomer(c, customerId)
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
       expand: ['items.data.price'], // Correct expand path for retrieve
     })
 
@@ -189,14 +207,22 @@ export async function getSubscriptionData(c: Context, customerId: string, subscr
 /**
  * Fetches cancellation details for a Stripe subscription, if available.
  */
-export async function getCancellationDetails(c: Context, subscriptionId: string | null): Promise<Stripe.Subscription.CancellationDetails | null> {
+export async function getCancellationDetails(
+  c: Context,
+  subscriptionId: string | null,
+  customerId?: string | null,
+): Promise<Stripe.Subscription.CancellationDetails | null> {
   if (!subscriptionId)
     return null
-  if (!isStripeConfigured(c))
+
+  const account = customerId
+    ? await resolveBillingAccount(c, customerId)
+    : DEFAULT_BILLING_ACCOUNT
+  if (!isStripeAccountConfigured(c, account))
     return null
 
   try {
-    const subscription = await getStripe(c).subscriptions.retrieve(subscriptionId)
+    const subscription = await getStripe(c, account).subscriptions.retrieve(subscriptionId)
     return subscription.cancellation_details ?? null
   }
   catch (error) {
@@ -209,7 +235,8 @@ async function getActiveSubscription(c: Context, customerId: string, subscriptio
   cloudlog({ requestId: c.get('requestId'), message: 'Stored subscription not tracked or not found, checking for others.', customerId, storedSubscriptionId: subscriptionId })
 
   for (const status of TRACKED_STRIPE_SUBSCRIPTION_STATUSES) {
-    const subscriptions = await getStripe(c).subscriptions.list({
+    const stripe = await stripeForCustomer(c, customerId)
+    const subscriptions = await stripe.subscriptions.list({
       customer: customerId,
       status,
       limit: 1,
@@ -227,7 +254,8 @@ async function getActiveSubscription(c: Context, customerId: string, subscriptio
 }
 
 export async function syncSubscriptionData(c: Context, customerId: string, subscriptionId: string | null): Promise<void> {
-  if (!isStripeConfigured(c))
+  const account = await resolveBillingAccount(c, customerId)
+  if (!isStripeAccountConfigured(c, account))
     return
   try {
     // Get subscription data from Stripe using the ID stored in our DB
@@ -312,35 +340,41 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
 }
 
 export async function createPortal(c: Context, customerId: string, callbackUrl: string) {
-  if (!isStripeConfigured(c))
+  const account = await resolveBillingAccount(c, customerId)
+  if (!isStripeAccountConfigured(c, account))
     return { url: '' }
   const allowedReturnUrl = getAllowedRedirectUrl(c, callbackUrl, 'return_url')
-  const session = await getStripe(c).billingPortal.sessions.create({
+  const session = await getStripe(c, account).billingPortal.sessions.create({
     customer: customerId,
     return_url: allowedReturnUrl,
   })
   return { url: session.url }
 }
 
-export function updateCustomerEmail(c: Context, customerId: string, newEmail: string) {
-  if (!isStripeConfigured(c))
-    return Promise.resolve()
-  return getStripe(c).customers.update(customerId, { email: newEmail, metadata: { email: newEmail } },
-  )
+export async function updateCustomerEmail(c: Context, customerId: string, newEmail: string) {
+  const account = await resolveBillingAccount(c, customerId)
+  if (!isStripeAccountConfigured(c, account))
+    return
+  return getStripe(c, account).customers.update(customerId, { email: newEmail, metadata: { email: newEmail } })
 }
 
-export function updateCustomerOrganizationName(c: Context, customerId: string, newName: string) {
-  if (!isStripeConfigured(c))
-    return Promise.resolve()
-  return getStripe(c).customers.update(customerId, { name: newName })
+export async function updateCustomerOrganizationName(c: Context, customerId: string, newName: string) {
+  const account = await resolveBillingAccount(c, customerId)
+  if (!isStripeAccountConfigured(c, account))
+    return
+  return getStripe(c, account).customers.update(customerId, { name: newName })
 }
 
 export async function getStripeCustomerName(c: Context, customerId: string | null | undefined): Promise<string | null | undefined> {
-  if (!customerId || !isStripeConfigured(c))
+  if (!customerId)
+    return undefined
+
+  const account = await resolveBillingAccount(c, customerId)
+  if (!isStripeAccountConfigured(c, account))
     return undefined
 
   try {
-    const customer = await getStripe(c).customers.retrieve(customerId)
+    const customer = await getStripe(c, account).customers.retrieve(customerId)
     if (customer.deleted)
       return null
     return customer.name ?? null
@@ -370,11 +404,15 @@ export function normalizeStripeCountryCode(country: string | null | undefined): 
 }
 
 export async function getStripeCustomerCountry(c: Context, customerId: string | null | undefined): Promise<string | null | undefined> {
-  if (!customerId || !isStripeConfigured(c))
+  if (!customerId)
+    return undefined
+
+  const account = await resolveBillingAccount(c, customerId)
+  if (!isStripeAccountConfigured(c, account))
     return undefined
 
   try {
-    const customer = await getStripe(c).customers.retrieve(customerId)
+    const customer = await getStripe(c, account).customers.retrieve(customerId)
     if (customer.deleted)
       return null
     return normalizeStripeCountryCode(customer.address?.country ?? null)
@@ -386,7 +424,11 @@ export async function getStripeCustomerCountry(c: Context, customerId: string | 
 }
 
 export async function syncStripeCustomerCountry(c: Context, customerId: string | null | undefined): Promise<string | null | undefined> {
-  if (!customerId || !isStripeConfigured(c))
+  if (!customerId)
+    return undefined
+
+  const account = await resolveBillingAccount(c, customerId)
+  if (!isStripeAccountConfigured(c, account))
     return undefined
 
   const customerCountry = await getStripeCustomerCountry(c, customerId)
@@ -410,16 +452,18 @@ export async function syncStripeCustomerCountry(c: Context, customerId: string |
 }
 
 export async function cancelSubscription(c: Context, customerId: string) {
-  if (!isStripeConfigured(c))
+  const account = await resolveBillingAccount(c, customerId)
+  if (!isStripeAccountConfigured(c, account))
     return
 
+  const stripe = getStripe(c, account)
   let succeeded = true
-  for await (const subscription of getStripe(c).subscriptions.list({ customer: customerId, status: 'all' })) {
+  for await (const subscription of stripe.subscriptions.list({ customer: customerId, status: 'all' })) {
     if (subscription.status === 'canceled' || subscription.status === 'incomplete_expired')
       continue
 
     try {
-      await getStripe(c).subscriptions.cancel(subscription.id)
+      await stripe.subscriptions.cancel(subscription.id)
     }
     catch (error) {
       succeeded = false
@@ -429,11 +473,11 @@ export async function cancelSubscription(c: Context, customerId: string) {
   return succeeded
 }
 
-async function getStoredPlanPriceId(c: Context, planId: string, recurrence: string): Promise<string | null> {
+async function getStoredPlanPriceId(c: Context, planId: string, recurrence: string, account: BillingAccount): Promise<string | null> {
   try {
     const { data, error } = await supabaseAdmin(c)
       .from('plans')
-      .select('price_m_id, price_y_id')
+      .select('price_m_id, price_y_id, price_m_id_us, price_y_id_us, stripe_id, stripe_id_us')
       .eq('stripe_id', planId)
       .single()
 
@@ -442,7 +486,7 @@ async function getStoredPlanPriceId(c: Context, planId: string, recurrence: stri
       return null
     }
 
-    return recurrence === 'year' ? data.price_y_id : data.price_m_id
+    return resolvePlanPriceId(data, account, recurrence)
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'getStoredPlanPriceId', planId, recurrence, error })
@@ -450,12 +494,12 @@ async function getStoredPlanPriceId(c: Context, planId: string, recurrence: stri
   }
 }
 
-async function getPriceIds(c: Context, planId: string, recurrence: string): Promise<{ priceId: string | null }> {
+async function getPriceIds(c: Context, planId: string, recurrence: string, account: BillingAccount): Promise<{ priceId: string | null }> {
   let priceId = null
-  if (!isStripeConfigured(c))
+  if (!isStripeAccountConfigured(c, account))
     return { priceId }
   try {
-    const prices = await listPricesByProduct(c, planId)
+    const prices = await listPricesByProduct(c, planId, account)
     cloudlog({ requestId: c.get('requestId'), message: 'prices stripe', prices })
     prices.data.forEach((price) => {
       if (price.recurring?.interval === recurrence && price.active && price.recurring?.usage_type === 'licensed')
@@ -466,7 +510,7 @@ async function getPriceIds(c: Context, planId: string, recurrence: string): Prom
     cloudlog({ requestId: c.get('requestId'), message: 'search err', error: err })
   }
   if (!priceId) {
-    priceId = await getStoredPlanPriceId(c, planId, recurrence)
+    priceId = await getStoredPlanPriceId(c, planId, recurrence, account)
     cloudlog({ requestId: c.get('requestId'), message: 'prices fallback', planId, recurrence, priceId })
   }
   return { priceId }
@@ -542,9 +586,10 @@ function getAffonsoReferralMetadata(affonsoReferral?: string | null): Record<str
 }
 
 export async function createCheckout(c: Context, customerId: string, recurrence: string, planId: string, successUrl: string, cancelUrl: string, clientReferenceId?: string, attributionId?: string, datafastAttribution?: DatafastAttribution, affonsoReferral?: string | null) {
-  if (!isStripeConfigured(c))
+  const account = await resolveBillingAccount(c, customerId)
+  if (!isStripeAccountConfigured(c, account))
     return { url: '' }
-  const prices = await getPriceIds(c, planId, recurrence)
+  const prices = await getPriceIds(c, planId, recurrence, account)
   cloudlog({ requestId: c.get('requestId'), message: 'prices', prices })
   if (!prices.priceId)
     return Promise.reject(new Error('Cannot find price'))
@@ -555,7 +600,7 @@ export async function createCheckout(c: Context, customerId: string, recurrence:
   }
   const allowedSuccessUrl = getAllowedRedirectUrl(c, successUrl, 'success_url')
   const allowedCancelUrl = getAllowedRedirectUrl(c, cancelUrl, 'cancel_url')
-  const session = await getStripe(c).checkout.sessions.create({
+  const session = await getStripe(c, account).checkout.sessions.create({
     allow_promotion_codes: true,
     billing_address_collection: 'auto',
     mode: 'subscription',
@@ -580,19 +625,19 @@ export async function createCheckout(c: Context, customerId: string, recurrence:
   return { url: session.url }
 }
 
-async function listPricesByProduct(c: Context, productId: string, active?: boolean) {
-  return await getStripe(c).prices.list({
+async function listPricesByProduct(c: Context, productId: string, account: BillingAccount, active?: boolean) {
+  return await getStripe(c, account).prices.list({
     product: productId,
     ...(active === undefined ? {} : { active }),
     limit: 100,
   })
 }
 
-export async function getOneTimePriceId(c: Context, productId: string): Promise<string | null> {
-  if (!isStripeConfigured(c))
+export async function getOneTimePriceId(c: Context, productId: string, account: BillingAccount = DEFAULT_BILLING_ACCOUNT): Promise<string | null> {
+  if (!isStripeAccountConfigured(c, account))
     return null
   try {
-    const prices = await listPricesByProduct(c, productId, true)
+    const prices = await listPricesByProduct(c, productId, account, true)
 
     for (const price of prices.data) {
       if (price.type === 'one_time' && price.active)
@@ -616,10 +661,11 @@ export async function createOneTimeCheckout(
   datafastAttribution?: DatafastAttribution,
   affonsoReferral?: string | null,
 ) {
-  if (!isStripeConfigured(c))
+  const account = await resolveBillingAccount(c, customerId)
+  if (!isStripeAccountConfigured(c, account))
     return { url: '' }
 
-  const priceId = await getOneTimePriceId(c, productId)
+  const priceId = await getOneTimePriceId(c, productId, account)
   if (!priceId)
     throw new Error(`Cannot find one-time price for product ${productId}`)
 
@@ -627,7 +673,7 @@ export async function createOneTimeCheckout(
   const allowedCancelUrl = getAllowedRedirectUrl(c, cancelUrl, 'cancel_url')
   const successUrlWithFlag = allowedSuccessUrl.includes('?') ? `${allowedSuccessUrl}&success=true` : `${allowedSuccessUrl}?success=true`
 
-  const session = await getStripe(c).checkout.sessions.create({
+  const session = await getStripe(c, account).checkout.sessions.create({
     billing_address_collection: 'auto',
     mode: 'payment',
     customer: customerId,
@@ -675,9 +721,20 @@ export async function createOneTimeCheckout(
   return { url: session.url }
 }
 
-export async function getCreditCheckoutDetails(c: Context, session: Stripe.Checkout.Session, expectedProductId: string): Promise<CreditCheckoutDetails> {
+export async function getCreditCheckoutDetails(
+  c: Context,
+  session: Stripe.Checkout.Session,
+  expectedProductId: string,
+  customerId?: string | null,
+): Promise<CreditCheckoutDetails> {
+  const stripeCustomerId = customerId
+    ?? (typeof session.customer === 'string' ? session.customer : session.customer?.id ?? '')
+  const account = stripeCustomerId
+    ? await resolveBillingAccount(c, stripeCustomerId)
+    : DEFAULT_BILLING_ACCOUNT
+
   try {
-    const lineItems = await getStripe(c).checkout.sessions.listLineItems(session.id, {
+    const lineItems = await getStripe(c, account).checkout.sessions.listLineItems(session.id, {
       expand: ['data.price.product'],
       limit: 100,
     })
@@ -776,8 +833,15 @@ export interface StripeCustomer {
   }
 }
 
-export async function createCustomer(c: Context, email: string, userId: string, orgId: string, name: string) {
-  cloudlog({ requestId: c.get('requestId'), message: 'createCustomer', email, userId, orgId, name })
+export async function createCustomer(
+  c: Context,
+  email: string,
+  userId: string,
+  orgId: string,
+  name: string,
+  billingAccount: BillingAccount = DEFAULT_BILLING_ACCOUNT,
+) {
+  cloudlog({ requestId: c.get('requestId'), message: 'createCustomer', email, userId, orgId, name, billingAccount })
   const baseConsoleUrl = trimTrailingSlashes(getEnv(c, 'WEBAPP_URL') || '')
   const metadata: Record<string, string> = {
     user_id: userId,
@@ -786,13 +850,14 @@ export async function createCustomer(c: Context, email: string, userId: string, 
   if (baseConsoleUrl) {
     metadata.log_as = `${baseConsoleUrl}/log-as/${userId}`
   }
-  if (!isStripeConfigured(c)) {
-    cloudlog({ requestId: c.get('requestId'), message: 'createCustomer no stripe key', email, userId, name })
+  if (!isStripeAccountConfigured(c, billingAccount)) {
+    cloudlog({ requestId: c.get('requestId'), message: 'createCustomer no stripe key', email, userId, name, billingAccount })
     // create a fake customer id like stripe one and random id
     const randomId = crypto.randomUUID().replaceAll('-', '').slice(0, 24)
     return { id: `cus_${randomId}`, email, name, metadata }
   }
-  const customer = await getStripe(c).customers.create({
+  const stripe = getStripe(c, billingAccount)
+  const customer = await stripe.customers.create({
     email,
     name,
     metadata,
@@ -801,7 +866,7 @@ export async function createCustomer(c: Context, email: string, userId: string, 
   const supabaseLink = buildSupabaseDashboardLink(c, customer.id)
   if (supabaseLink) {
     metadata.supabase = supabaseLink
-    await getStripe(c).customers.update(customer.id, { metadata })
+    await stripe.customers.update(customer.id, { metadata })
   }
   return customer
 }
@@ -809,7 +874,9 @@ export async function createCustomer(c: Context, email: string, userId: string, 
 export async function ensureCustomerMetadata(c: Context, customerId: string, orgId: string, userId?: string | null) {
   if (!customerId)
     return
-  if (!isStripeConfigured(c))
+
+  const account = await resolveBillingAccount(c, customerId)
+  if (!isStripeAccountConfigured(c, account))
     return
 
   const baseConsoleUrl = trimTrailingSlashes(getEnv(c, 'WEBAPP_URL') || '')
@@ -828,17 +895,17 @@ export async function ensureCustomerMetadata(c: Context, customerId: string, org
     metadata.supabase = supabaseLink
 
   try {
-    await getStripe(c).customers.update(customerId, { metadata })
+    await getStripe(c, account).customers.update(customerId, { metadata })
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'ensureCustomerMetadata', error })
   }
 }
 
-export async function removeOldSubscription(c: Context, subscriptionId: string) {
-  if (!isStripeConfigured(c))
+export async function removeOldSubscription(c: Context, subscriptionId: string, account: BillingAccount = DEFAULT_BILLING_ACCOUNT) {
+  if (!isStripeAccountConfigured(c, account))
     return Promise.resolve()
-  cloudlog({ requestId: c.get('requestId'), message: 'removeOldSubscription', id: subscriptionId })
-  const deletedSubscription = await getStripe(c).subscriptions.cancel(subscriptionId)
+  cloudlog({ requestId: c.get('requestId'), message: 'removeOldSubscription', id: subscriptionId, billingAccount: account })
+  const deletedSubscription = await getStripe(c, account).subscriptions.cancel(subscriptionId)
   return deletedSubscription
 }

@@ -175,6 +175,7 @@ export const users = pgTable('users', {
 export const stripe_info = pgTable('stripe_info', {
   id: bigint('id', { mode: 'number' }).primaryKey().notNull(),
   customer_id: text('customer_id'),
+  billing_account: text('billing_account').notNull().default('ee'),
   customer_country: varchar('customer_country', { length: 2 }),
   product_id: varchar('product_id'),
   status: text('status'),
@@ -191,7 +192,11 @@ export const plans = pgTable('plans', {
   id: uuid('id').primaryKey().notNull(),
   name: varchar('name').notNull(),
   stripe_id: varchar('stripe_id').notNull(),
+  stripe_id_us: varchar('stripe_id_us'),
+  price_m_id_us: varchar('price_m_id_us'),
+  price_y_id_us: varchar('price_y_id_us'),
   credit_id: text('credit_id').notNull(),
+  credit_id_us: text('credit_id_us'),
   native_build_concurrency: integer('native_build_concurrency').notNull().default(2),
 })
 

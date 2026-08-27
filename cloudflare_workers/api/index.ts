@@ -89,7 +89,7 @@ import { app as on_version_update } from '../../supabase/functions/_backend/trig
 import { app as pluginNotifications } from '../../supabase/functions/_backend/triggers/plugin_notifications.ts'
 import { app as queue_consumer } from '../../supabase/functions/_backend/triggers/queue_consumer.ts'
 import { app as send_email } from '../../supabase/functions/_backend/triggers/send_email.ts'
-import { app as stripe_event } from '../../supabase/functions/_backend/triggers/stripe_event.ts'
+import { app as stripe_event, appUs as stripe_event_us } from '../../supabase/functions/_backend/triggers/stripe_event.ts'
 import { app as webhook_delivery } from '../../supabase/functions/_backend/triggers/webhook_delivery.ts'
 import { app as webhook_dispatcher } from '../../supabase/functions/_backend/triggers/webhook_dispatcher.ts'
 import { BRES, createAllCatch, createHono } from '../../supabase/functions/_backend/utils/hono.ts'
@@ -211,6 +211,7 @@ appTriggers.route('/on_version_delete', on_version_delete)
 appTriggers.route('/on_manifest_create', on_manifest_create)
 appTriggers.route('/on_deploy_history_create', on_deploy_history_create)
 appTriggers.route('/stripe_event', stripe_event)
+appTriggers.route('/stripe_event_us', stripe_event_us)
 appTriggers.route('/on_organization_create', on_organization_create)
 appTriggers.route('/cron_stat_app', cron_stat_app)
 appTriggers.route('/cron_stat_org', cron_stat_org)

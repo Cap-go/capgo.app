@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { Database } from './supabase.types.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { createCustomer } from './stripe.ts'
+import { getNewCustomersBillingAccount } from './stripe_billing_account.ts'
 import { getDefaultPlan, getStripeCustomer, supabaseAdmin } from './supabase.ts'
 
 /**
@@ -11,7 +12,8 @@ import { getDefaultPlan, getStripeCustomer, supabaseAdmin } from './supabase.ts'
  * the plugin isolate graph.
  */
 export async function createStripeCustomer(c: Context, org: Database['public']['Tables']['orgs']['Row']) {
-  const customer = await createCustomer(c, org.management_email, org.created_by, org.id, org.name)
+  const billingAccount = getNewCustomersBillingAccount(c)
+  const customer = await createCustomer(c, org.management_email, org.created_by, org.id, org.name, billingAccount)
   const trial_at = new Date()
   trial_at.setDate(trial_at.getDate() + 15)
   const plan = org.customer_id?.startsWith('pending_')
@@ -38,6 +40,7 @@ export async function createStripeCustomer(c: Context, org: Database['public']['
       product_id: selectedPlan.stripe_id,
       customer_id: customer.id,
       trial_at: trial_at.toISOString(),
+      billing_account: billingAccount,
     })
   if (createInfoError) {
     cloudlog({ requestId: c.get('requestId'), message: 'createInfoError', createInfoError })

@@ -14,6 +14,7 @@ import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { createOneTimeCheckout, getCreditCheckoutDetails, getStripe, isStripeEmulatorEnabled } from '../utils/stripe.ts'
+import { resolveBillingAccount, resolvePlanCreditId } from '../utils/stripe_billing_account.ts'
 import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
 import { getEnv } from '../utils/utils.ts'
 
@@ -234,9 +235,11 @@ async function getCreditTopUpProductId(c: AppContext, customerId: string, token:
   const supabase = supabaseClient(c, token)
   const { data: stripeInfo, error: stripeInfoError } = await supabase
     .from('stripe_info')
-    .select('product_id')
+    .select('product_id, billing_account')
     .eq('customer_id', customerId)
     .single()
+
+  const account = await resolveBillingAccount(c, customerId)
 
   if (stripeInfoError || !stripeInfo?.product_id) {
     const log = stripeInfoError ? cloudlogErr : cloudlog
@@ -261,11 +264,12 @@ async function getCreditTopUpProductId(c: AppContext, customerId: string, token:
 
   const { data: plan, error: planError } = await supabase
     .from('plans')
-    .select('credit_id, name')
+    .select('credit_id, credit_id_us, name')
     .eq('stripe_id', stripeInfo.product_id)
     .single()
 
-  if (planError || !plan?.credit_id) {
+  const creditId = plan ? resolvePlanCreditId(plan, account) : null
+  if (planError || !creditId) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'credit_top_up_product_missing',
@@ -286,7 +290,7 @@ async function getCreditTopUpProductId(c: AppContext, customerId: string, token:
     return { productId }
   }
 
-  return { productId: plan.credit_id }
+  return { productId: creditId }
 }
 
 async function resolveOrgStripeContext(c: AppContext, orgId: string) {
@@ -593,7 +597,8 @@ app.post('/complete-top-up', middlewareAuth, async (c) => {
   const { customerId, token } = await resolveOrgStripeContext(c, body.orgId)
   const supabase = supabaseClient(c, token)
 
-  const stripe = getStripe(c)
+  const account = await resolveBillingAccount(c, customerId)
+  const stripe = getStripe(c, account)
   const session = await resolveCheckoutSession(c, stripe, supabase, body.orgId, customerId, body.sessionId)
   const resolvedSessionId = session.id
 
@@ -609,7 +614,7 @@ app.post('/complete-top-up', middlewareAuth, async (c) => {
   const { productId } = await getCreditTopUpProductId(c, customerId, token)
   const paymentIntentId = getCheckoutSessionPaymentIntentId(session)
 
-  const { creditQuantity, itemsSummary } = await getCreditCheckoutDetails(c, session, productId)
+  const { creditQuantity, itemsSummary } = await getCreditCheckoutDetails(c, session, productId, customerId)
 
   if (creditQuantity <= 0)
     throw simpleError('credit_product_not_found', 'Checkout session does not include the credit product')
