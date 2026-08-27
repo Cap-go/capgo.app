@@ -6,23 +6,44 @@ import {
   getAuthHeadersForCredentials,
   getSupabaseClient,
   USER_PASSWORD,
-  USER_PASSWORD_HASH,
 } from './test-utils.ts'
 
 const TEST_ID = randomUUID()
 const ORG_ID = randomUUID()
 const APP_UUID = randomUUID()
 const PUBLIC_APP_ID = `com.apikey.escalation.${TEST_ID}`
-const APIKEY_MANAGER_USER_ID = randomUUID()
-const DEPLOY_MANAGER_USER_ID = randomUUID()
-const ORG_BOOTSTRAP_USER_ID = randomUUID()
 const APIKEY_MANAGER_EMAIL = `apikey-manager-only-${TEST_ID}@capgo.app`
 const DEPLOY_MANAGER_EMAIL = `apikey-deploy-manager-${TEST_ID}@capgo.app`
+const BOOTSTRAP_EMAIL = `apikey-escalation-bootstrap-${TEST_ID}@capgo.app`
 const CHANNEL_NAME = `escalation-channel-${TEST_ID.slice(0, 8)}`
 
+let apikeyManagerUserId: string
+let deployManagerUserId: string
+let bootstrapUserId: string
 let apikeyManagerHeaders: Record<string, string>
 let deployManagerHeaders: Record<string, string>
 let channelLegacyId: number
+
+async function createConfirmedAuthUser(email: string, password = USER_PASSWORD) {
+  const supabase = getSupabaseClient()
+  const { data, error } = await supabase.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+  })
+  if (error || !data.user) {
+    throw error ?? new Error(`Failed to create auth user for ${email}`)
+  }
+
+  const { error: userError } = await supabase.from('users').insert({
+    id: data.user.id,
+    email,
+  })
+  if (userError)
+    throw userError
+
+  return data.user.id
+}
 
 async function createApiKeyWithBindings(
   headers: Record<string, string>,
@@ -41,46 +62,19 @@ async function createApiKeyWithBindings(
 
 beforeAll(async () => {
   const supabase = getSupabaseClient()
-  const bootstrapEmail = `apikey-escalation-bootstrap-${TEST_ID}@capgo.app`
 
-  await executeSQL(`
-    INSERT INTO auth.users (id, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_user_meta_data)
-    VALUES
-      ($1::uuid, $4, $7, NOW(), NOW(), NOW(), '{}'::jsonb),
-      ($2::uuid, $5, $7, NOW(), NOW(), NOW(), '{}'::jsonb),
-      ($3::uuid, $6, $7, NOW(), NOW(), NOW(), '{}'::jsonb)
-    ON CONFLICT (id) DO NOTHING
-  `, [
-    APIKEY_MANAGER_USER_ID,
-    DEPLOY_MANAGER_USER_ID,
-    ORG_BOOTSTRAP_USER_ID,
-    APIKEY_MANAGER_EMAIL,
-    DEPLOY_MANAGER_EMAIL,
-    bootstrapEmail,
-    USER_PASSWORD_HASH,
-  ])
+  bootstrapUserId = await createConfirmedAuthUser(BOOTSTRAP_EMAIL)
+  apikeyManagerUserId = await createConfirmedAuthUser(APIKEY_MANAGER_EMAIL)
+  deployManagerUserId = await createConfirmedAuthUser(DEPLOY_MANAGER_EMAIL)
 
-  await executeSQL(`
-    INSERT INTO public.users (id, email, first_name, last_name, created_at, updated_at)
-    VALUES
-      ($1::uuid, $4, 'Apikey', 'Manager', NOW(), NOW()),
-      ($2::uuid, $5, 'Deploy', 'Manager', NOW(), NOW()),
-      ($3::uuid, $6, 'Org', 'Bootstrap', NOW(), NOW())
-    ON CONFLICT (id) DO UPDATE
-    SET email = EXCLUDED.email
-  `, [
-    APIKEY_MANAGER_USER_ID,
-    DEPLOY_MANAGER_USER_ID,
-    ORG_BOOTSTRAP_USER_ID,
-    APIKEY_MANAGER_EMAIL,
-    DEPLOY_MANAGER_EMAIL,
-    `apikey-escalation-bootstrap-${TEST_ID}@capgo.app`,
-  ])
-
-  await executeSQL(`
-    INSERT INTO public.orgs (id, created_by, name, management_email, created_at, updated_at)
-    VALUES ($1::uuid, $2::uuid, $3, $4, NOW(), NOW())
-  `, [ORG_ID, ORG_BOOTSTRAP_USER_ID, `API Key Escalation Org ${TEST_ID}`, APIKEY_MANAGER_EMAIL])
+  const { error: orgError } = await supabase.from('orgs').insert({
+    id: ORG_ID,
+    created_by: bootstrapUserId,
+    name: `API Key Escalation Org ${TEST_ID}`,
+    management_email: APIKEY_MANAGER_EMAIL,
+  })
+  if (orgError)
+    throw orgError
 
   await executeSQL(`
     INSERT INTO public.role_bindings (
@@ -95,16 +89,18 @@ beforeAll(async () => {
     JOIN public.roles roles
       ON roles.name = principal.role_name
       AND roles.scope_type = public.rbac_scope_org()
-  `, [ORG_ID, APIKEY_MANAGER_USER_ID, DEPLOY_MANAGER_USER_ID])
+  `, [ORG_ID, apikeyManagerUserId, deployManagerUserId])
 
-  await supabase.from('apps').insert({
+  const { error: appError } = await supabase.from('apps').insert({
     id: APP_UUID,
     app_id: PUBLIC_APP_ID,
     owner_org: ORG_ID,
     icon_url: 'apikey-escalation-test-icon',
     name: `Escalation App ${TEST_ID}`,
-    user_id: APIKEY_MANAGER_USER_ID,
+    user_id: apikeyManagerUserId,
   })
+  if (appError)
+    throw appError
 
   const versionName = `escalation-version-${TEST_ID.slice(0, 8)}`
   const { data: version, error: versionError } = await supabase
@@ -113,7 +109,7 @@ beforeAll(async () => {
       app_id: PUBLIC_APP_ID,
       name: versionName,
       owner_org: ORG_ID,
-      user_id: APIKEY_MANAGER_USER_ID,
+      user_id: apikeyManagerUserId,
       checksum: `checksum-${TEST_ID}`,
       storage_provider: 'r2',
       r2_path: `orgs/${ORG_ID}/apps/${PUBLIC_APP_ID}/${versionName}.zip`,
@@ -131,7 +127,7 @@ beforeAll(async () => {
       name: CHANNEL_NAME,
       version: version.id,
       owner_org: ORG_ID,
-      created_by: APIKEY_MANAGER_USER_ID,
+      created_by: apikeyManagerUserId,
       public: false,
       allow_emulator: false,
     })
@@ -150,7 +146,7 @@ beforeAll(async () => {
     FROM public.roles roles
     WHERE roles.name = public.rbac_role_app_developer()
       AND roles.scope_type = public.rbac_scope_app()
-  `, [ORG_ID, DEPLOY_MANAGER_USER_ID, APP_UUID])
+  `, [ORG_ID, deployManagerUserId, APP_UUID])
 
   apikeyManagerHeaders = await getAuthHeadersForCredentials(APIKEY_MANAGER_EMAIL, USER_PASSWORD)
   deployManagerHeaders = await getAuthHeadersForCredentials(DEPLOY_MANAGER_EMAIL, USER_PASSWORD)
@@ -162,11 +158,12 @@ afterAll(async () => {
   await supabase.from('app_versions').delete().eq('app_id', PUBLIC_APP_ID)
   await supabase.from('apps').delete().eq('app_id', PUBLIC_APP_ID)
   await supabase.from('orgs').delete().eq('id', ORG_ID)
-  await supabase.from('users').delete().in('id', [APIKEY_MANAGER_USER_ID, DEPLOY_MANAGER_USER_ID, ORG_BOOTSTRAP_USER_ID])
-  await executeSQL(
-    `DELETE FROM auth.users WHERE id IN ($1::uuid, $2::uuid, $3::uuid)`,
-    [APIKEY_MANAGER_USER_ID, DEPLOY_MANAGER_USER_ID, ORG_BOOTSTRAP_USER_ID],
-  )
+
+  for (const userId of [apikeyManagerUserId, deployManagerUserId, bootstrapUserId]) {
+    if (userId) {
+      await supabase.auth.admin.deleteUser(userId)
+    }
+  }
 })
 
 describe('apikey role binding permission escalation guard', () => {
