@@ -885,11 +885,7 @@ export function formatCapgoApiErrorBody(body: unknown): string {
 }
 
 export async function formatCapgoCliApiError(error: unknown): Promise<string> {
-  const payload = await readCapgoCliApiErrorPayload(error)
-  const formatted = formatCapgoApiErrorBody(payload)
-  if (formatted)
-    return formatted
-  return formatError(error)
+  return formatCapgoCliInvokeError(error)
 }
 
 export type CapgoCliHostOptions = Pick<CapgoCliInvokeOptions, 'supaHost' | 'supaAnon'>
@@ -1773,13 +1769,13 @@ export async function fetchUploadChannelViaHttp(
   )
 }
 
-export async function hasCliPermissionViaHttp(
+async function invokeCliPermissionViaHttp(
   apikey: string,
   permissionKey: string,
   scope: { orgId?: string | null, appId?: string | null, channelId?: number | null } = {},
   options?: CapgoCliHostOptions,
-): Promise<boolean> {
-  const { data, error } = await invokeCapgoCliApi<{ allowed?: boolean }>('private/cli/check-permission', {
+) {
+  return invokeCapgoCliApi<{ allowed?: boolean }>('private/cli/check-permission', {
     apikey,
     method: 'POST',
     body: {
@@ -1791,6 +1787,15 @@ export async function hasCliPermissionViaHttp(
     supaHost: options?.supaHost,
     supaAnon: options?.supaAnon,
   })
+}
+
+export async function hasCliPermissionViaHttp(
+  apikey: string,
+  permissionKey: string,
+  scope: { orgId?: string | null, appId?: string | null, channelId?: number | null } = {},
+  options?: CapgoCliHostOptions,
+): Promise<boolean> {
+  const { data, error } = await invokeCliPermissionViaHttp(apikey, permissionKey, scope, options)
 
   if (error) {
     log.error(`Cannot check permission ${permissionKey}`)
@@ -1807,18 +1812,7 @@ export async function tryHasCliPermissionViaHttp(
   scope: { orgId?: string | null, appId?: string | null, channelId?: number | null } = {},
   options?: CapgoCliHostOptions,
 ): Promise<boolean> {
-  const { data, error } = await invokeCapgoCliApi<{ allowed?: boolean }>('private/cli/check-permission', {
-    apikey,
-    method: 'POST',
-    body: {
-      permission_key: permissionKey,
-      org_id: scope.orgId ?? null,
-      app_id: scope.appId ?? null,
-      channel_id: scope.channelId ?? null,
-    },
-    supaHost: options?.supaHost,
-    supaAnon: options?.supaAnon,
-  })
+  const { data, error } = await invokeCliPermissionViaHttp(apikey, permissionKey, scope, options)
 
   if (error) {
     log.warn(`Cannot check optional permission ${permissionKey}: ${await formatCapgoCliApiError(error)}`)
@@ -1970,8 +1964,11 @@ export async function resolveUserIdFromApiKeyViaHttp(
     supaAnon: options?.supaAnon,
   })
 
-  if (error || !data?.user_id)
+  if (error)
     throw new Error(`Cannot resolve API key user: ${await formatCapgoCliApiError(error)}`)
+
+  if (!data?.user_id)
+    throw new Error('Cannot resolve API key user: API key response did not include user_id')
 
   return data.user_id
 }
@@ -2002,7 +1999,11 @@ export async function checkCompatibilityCloudViaHttp(
   if (error)
     throw new Error(`Error fetching native packages: ${await formatCapgoCliApiError(error)}`)
 
-  const nativePackages = (data?.channel?.version_info?.native_packages ?? []) as NativePackage[]
+  const rawNativePackages = data?.channel?.version_info?.native_packages
+  if (rawNativePackages != null && !Array.isArray(rawNativePackages))
+    throw new Error('Invalid remote native package data: native_packages must be an array')
+
+  const nativePackages = (Array.isArray(rawNativePackages) ? rawNativePackages : []) as NativePackage[]
   const mappedRemoteNativePackages = convertNativePackages(nativePackages)
 
   const finalDependencies: Compatibility[] = dependenciesObject

@@ -141,11 +141,7 @@ function pickUpsertFields(body: PrepareUploadBody) {
   }
 }
 
-export async function prepareUpload(
-  c: Context<MiddlewareKeyVariables>,
-  body: PrepareUploadBody,
-  apikey: Database['public']['Tables']['apikeys']['Row'],
-): Promise<Response> {
+function validatePrepareUploadRequest(body: PrepareUploadBody): string {
   if (!body.app_id)
     throw simpleError('missing_app_id', 'Missing app_id', { body })
   if (!isValidAppId(body.app_id))
@@ -165,6 +161,64 @@ export async function prepareUpload(
     })
   }
 
+  if (storageProvider === 'external') {
+    const externalUrl = body.external_url
+    if (typeof externalUrl !== 'string' || externalUrl.trim() === '')
+      throw simpleError('missing_external_url', 'Missing external_url for external storage provider', { body })
+  }
+
+  return storageProvider
+}
+
+async function updateExistingVersion(
+  c: Context<MiddlewareKeyVariables>,
+  supabase: ReturnType<typeof supabaseApikey>,
+  existing: ExistingVersionRow,
+  versionName: string,
+  upsertFields: ReturnType<typeof pickUpsertFields>,
+  storageProvider: string,
+): Promise<Response> {
+  if (existing.deleted)
+    throw simpleError('version_name_taken', 'Version name already exists (including deleted versions)', { version: versionName })
+
+  if (existing.storage_provider
+    && existing.storage_provider !== COMPLETED_UPLOAD_STORAGE_PROVIDER
+    && !PREPARE_STORAGE_PROVIDERS.has(existing.storage_provider)) {
+    throw simpleError('version_not_uploadable', 'Version is not in an uploadable state', {
+      storage_provider: existing.storage_provider,
+    })
+  }
+
+  const resetForReupload = existing.storage_provider === COMPLETED_UPLOAD_STORAGE_PROVIDER
+  const updateFields = resetForReupload
+    ? { ...upsertFields, storage_provider: storageProvider, r2_path: null }
+    : upsertFields
+
+  if (resetForReupload) {
+    const updated = await updateVersionForReupload(c, existing.id, updateFields)
+    return c.json({ status: 'ok', version: updated })
+  }
+
+  const { data: updated, error: updateError } = await supabase
+    .from('app_versions')
+    .update(updateFields)
+    .eq('id', existing.id)
+    .select('id, name, storage_provider')
+    .single()
+
+  if (updateError || !updated)
+    throw simpleError('cannot_prepare_upload', 'Cannot update bundle version for upload', { supabaseError: updateError })
+
+  return c.json({ status: 'ok', version: updated })
+}
+
+export async function prepareUpload(
+  c: Context<MiddlewareKeyVariables>,
+  body: PrepareUploadBody,
+  apikey: Database['public']['Tables']['apikeys']['Row'],
+): Promise<Response> {
+  const storageProvider = validatePrepareUploadRequest(body)
+
   if (!(await checkPermission(c, 'app.upload_bundle', { appId: body.app_id })))
     throw simpleError('cannot_prepare_upload', 'You cannot upload bundles for this app', { app_id: body.app_id })
 
@@ -173,43 +227,10 @@ export async function prepareUpload(
 
   const existing = await loadExistingVersion(c, body.app_id, body.name)
   const supabase = supabaseApikey(c, apikey.key)
-
   const upsertFields = pickUpsertFields(body)
 
-  if (existing) {
-    if (existing.deleted)
-      throw simpleError('version_name_taken', 'Version name already exists (including deleted versions)', { version: body.name })
-
-    if (existing.storage_provider
-      && existing.storage_provider !== COMPLETED_UPLOAD_STORAGE_PROVIDER
-      && !PREPARE_STORAGE_PROVIDERS.has(existing.storage_provider)) {
-      throw simpleError('version_not_uploadable', 'Version is not in an uploadable state', {
-        storage_provider: existing.storage_provider,
-      })
-    }
-
-    const resetForReupload = existing.storage_provider === COMPLETED_UPLOAD_STORAGE_PROVIDER
-    const updateFields = resetForReupload
-      ? { ...upsertFields, storage_provider: storageProvider, r2_path: null }
-      : upsertFields
-
-    if (resetForReupload) {
-      const updated = await updateVersionForReupload(c, existing.id, updateFields)
-      return c.json({ status: 'ok', version: updated })
-    }
-
-    const { data: updated, error: updateError } = await supabase
-      .from('app_versions')
-      .update(updateFields)
-      .eq('id', existing.id)
-      .select('id, name, storage_provider')
-      .single()
-
-    if (updateError || !updated)
-      throw simpleError('cannot_prepare_upload', 'Cannot update bundle version for upload', { supabaseError: updateError })
-
-    return c.json({ status: 'ok', version: updated })
-  }
+  if (existing)
+    return await updateExistingVersion(c, supabase, existing, body.name, upsertFields, storageProvider)
 
   const insertRow: Database['public']['Tables']['app_versions']['Insert'] = {
     app_id: body.app_id,
@@ -235,10 +256,19 @@ export async function prepareUpload(
 
 export const app = honoFactory.createApp()
 
-function requirePrepareUploadBody(body: PrepareUploadBody | null | undefined): PrepareUploadBody {
+function requirePrepareUploadBody(body: unknown): PrepareUploadBody {
   if (body === null || body === undefined || typeof body !== 'object' || Array.isArray(body))
     throw simpleError('invalid_json_body', 'Invalid JSON body', { body })
-  return body
+
+  const record = body as Record<string, unknown>
+  if (typeof record.app_id !== 'string' || record.app_id.trim() === '')
+    throw simpleError('missing_app_id', 'Missing app_id', { body })
+  if (typeof record.name !== 'string' || record.name.trim() === '')
+    throw simpleError('missing_version', 'Missing bundle version name', { body })
+  if (record.external_url !== undefined && record.external_url !== null && typeof record.external_url !== 'string')
+    throw simpleError('invalid_external_url', 'external_url must be a string', { body })
+
+  return body as PrepareUploadBody
 }
 
 app.post('/', middlewareKey({ usePostgres: true, readOnly: false }), async (c) => {

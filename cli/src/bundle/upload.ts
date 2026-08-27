@@ -258,11 +258,11 @@ async function verifyCompatibility(ctx: UploadHttpCtx, pm: pmType, options: Opti
       }
     }
     else if (autoMinUpdateVersion) {
-      try {
-        const lastMinUpdateVersion = channelData.version_info?.min_update_version
-        if (!lastMinUpdateVersion || !regexSemver.test(lastMinUpdateVersion))
-          uploadFail('Invalid remote min update version, skipping auto setting compatibility')
+      const lastMinUpdateVersion = channelData.version_info?.min_update_version
+      if (!lastMinUpdateVersion || !regexSemver.test(lastMinUpdateVersion))
+        uploadFail('Invalid remote min update version, skipping auto setting compatibility')
 
+      try {
         minUpdateVersion = lastMinUpdateVersion
         spinner.stop(`Auto set min-update-version to ${minUpdateVersion}`)
       }
