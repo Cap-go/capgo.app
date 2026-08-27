@@ -1,6 +1,6 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import { Hono } from 'hono/tiny'
-import { BRES, parseBody, quickError, simpleError } from '../utils/hono.ts'
+import { BRES, createHono, parseBody, quickError, simpleError } from '../utils/hono.ts'
+import { version } from '../utils/version.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
@@ -31,7 +31,7 @@ function requireFinishTusUploadBody(body: unknown): FinishTusUploadBody | Respon
   return { app_id, name, owner_org }
 }
 
-export const app = new Hono<MiddlewareKeyVariables>()
+export const app = createHono('', version)
 
 app.post('/', middlewareKey(), async (c) => {
   const parsedBody = requireFinishTusUploadBody(await parseBody<unknown>(c))

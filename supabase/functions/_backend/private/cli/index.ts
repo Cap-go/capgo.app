@@ -1,7 +1,7 @@
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
-import { Hono } from 'hono/tiny'
-import { getBodyOrQuery, parseBody, quickError } from '../../utils/hono.ts'
+import { createHono, getBodyOrQuery, parseBody, quickError } from '../../utils/hono.ts'
+import { version } from '../../utils/version.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { getAppOrganization } from '../../public/bundle/create.ts'
@@ -9,7 +9,6 @@ import {
   isAllowedActionOrg,
   isPayingOrg,
   isTrialOrg,
-  supabaseAdmin,
   supabaseApikey,
 } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
@@ -66,7 +65,7 @@ async function assertOrgUploadReadScope(
   return null
 }
 
-export const app = new Hono<MiddlewareKeyVariables>()
+export const app = createHono('', version)
 
 app.get('/user-id', middlewareKey(), async (c) => {
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
@@ -104,7 +103,8 @@ app.post('/check-plan-upload', middlewareKey(), async (c) => {
   if (scopeError)
     return scopeError
 
-  const supabase = supabaseAdmin(c)
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  const supabase = supabaseApikey(c, apikey.key ?? c.get('capgkey'))
   const validPlan = body.app_id
     ? await (async () => {
         const { data, error } = await supabase.rpc('is_allowed_action_org_action', {
