@@ -6,6 +6,7 @@ import {
   getAuthHeadersForCredentials,
   getSupabaseClient,
   USER_PASSWORD,
+  USER_PASSWORD_HASH,
 } from './test-utils.ts'
 
 const TEST_ID = randomUUID()
@@ -40,16 +41,14 @@ async function createApiKeyWithBindings(
 
 beforeAll(async () => {
   const supabase = getSupabaseClient()
-  const passwordHash = '$2a$10$0CErXxryZPucjJWq3O7qXeTJgN.tnNU5XCZy9pXKDWRi/aS9W7UFi'
+  const bootstrapEmail = `apikey-escalation-bootstrap-${TEST_ID}@capgo.app`
 
   await executeSQL(`
-    INSERT INTO auth.users (
-      id, instance_id, aud, role, email, encrypted_password,
-      email_confirmed_at, created_at, updated_at, confirmation_token
-    ) VALUES
-      ($1::uuid, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', $4, $6, NOW(), NOW(), NOW(), ''),
-      ($2::uuid, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', $5, $6, NOW(), NOW(), NOW(), ''),
-      ($3::uuid, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', $7, $6, NOW(), NOW(), NOW(), '')
+    INSERT INTO auth.users (id, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_user_meta_data)
+    VALUES
+      ($1::uuid, $4, $7, NOW(), NOW(), NOW(), '{}'::jsonb),
+      ($2::uuid, $5, $7, NOW(), NOW(), NOW(), '{}'::jsonb),
+      ($3::uuid, $6, $7, NOW(), NOW(), NOW(), '{}'::jsonb)
     ON CONFLICT (id) DO NOTHING
   `, [
     APIKEY_MANAGER_USER_ID,
@@ -57,8 +56,8 @@ beforeAll(async () => {
     ORG_BOOTSTRAP_USER_ID,
     APIKEY_MANAGER_EMAIL,
     DEPLOY_MANAGER_EMAIL,
-    passwordHash,
-    `apikey-escalation-bootstrap-${TEST_ID}@capgo.app`,
+    bootstrapEmail,
+    USER_PASSWORD_HASH,
   ])
 
   await executeSQL(`
