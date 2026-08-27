@@ -1788,7 +1788,7 @@ Examples:
 #### <a id="build-credentials-export"></a> 🔹 **Export**
 
 ```bash
-npx @capgo/cli@latest build credentials export VARIABLE --app-id com.example.app --raw
+npx @capgo/cli@latest build credentials export
 ```
 
 Export one saved Builder credential or configuration value.
@@ -1801,6 +1801,7 @@ configuration is used; environment variables are never exported.
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **--app-id** | <code>string</code> | App ID whose saved Builder value will be exported (required) |
+| **--appId** | <code>string</code> | Compatibility alias for --app-id |
 | **--platform** | <code>string</code> | Platform: ios or android (required when saved platform values are ambiguous) |
 | **--local** | <code>boolean</code> | Export only from the project-local .capgo-credentials.json |
 | **--global** | <code>boolean</code> | Export only from ~/.capgo-credentials/credentials.json |
