@@ -493,20 +493,47 @@ export const headersInternal = {
 
 /** Kong proxy body when the Deno isolate dies mid-request under shard load. */
 const KONG_UPSTREAM_INVALID_RESPONSE = 'An invalid response was received from the upstream server'
+/** Cloudflare workerd body when the isolate reloads mid-request. */
+const CLOUDFLARE_WORKER_RESTART_RESPONSE = 'Your worker restarted mid-request'
+
+function isTransientGatewayDeath(status: number, body: string): boolean {
+  if (status !== 502 && status !== 503)
+    return false
+  return body.includes(KONG_UPSTREAM_INVALID_RESPONSE)
+    || body.includes(CLOUDFLARE_WORKER_RESTART_RESPONSE)
+}
+
+export interface FetchTestRequestOptions extends RequestInit {
+  /** Retry transient gateway 502/503 on mutating methods when the endpoint is idempotent. */
+  retryUnsafe?: boolean
+}
+
+function isReplaySafeHttpMethod(method: string | undefined): boolean {
+  switch ((method ?? 'GET').toUpperCase()) {
+    case 'GET':
+    case 'HEAD':
+    case 'OPTIONS':
+      return true
+    default:
+      return false
+  }
+}
 
 /**
  * Send one request. Application 4xx/5xx are test evidence and are not retried.
- * Only Kong's upstream-invalid 502/503 (isolate crash/reload) is retried — same
- * signal the CI warm step already treats as non-ready.
+ * Only transient gateway 502/503 (isolate crash/reload) is retried — same signals
+ * the CI warm step already treats as non-ready. Mutating methods are not retried
+ * unless retryUnsafe is set (caller asserts idempotency).
  */
 export async function fetchTestRequest(
   url: string,
-  options?: RequestInit,
+  options?: FetchTestRequestOptions,
 ): Promise<Response> {
-  const maxAttempts = 3
+  const { retryUnsafe = false, ...fetchOptions } = options ?? {}
+  const maxAttempts = isReplaySafeHttpMethod(fetchOptions.method) || retryUnsafe ? 3 : 1
   let lastResponse: Response | undefined
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const response = await fetch(url, options)
+    const response = await fetch(url, fetchOptions)
     lastResponse = response
     if (response.status !== 502 && response.status !== 503)
       return response
@@ -514,8 +541,7 @@ export async function fetchTestRequest(
     const body = await response.clone().text().catch(() => '<unreadable body>')
     console.error(`[fetchTestRequest] gateway status=${response.status} attempt=${attempt}/${maxAttempts} url=${url} body=${body.slice(0, 800)}`)
 
-    const isKongUpstreamDeath = body.includes(KONG_UPSTREAM_INVALID_RESPONSE)
-    if (!isKongUpstreamDeath || attempt === maxAttempts)
+    if (!isTransientGatewayDeath(response.status, body) || attempt === maxAttempts)
       return response
 
     await new Promise(resolve => setTimeout(resolve, 250 * attempt))

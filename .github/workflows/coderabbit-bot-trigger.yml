@@ -11,6 +11,8 @@ concurrency:
   group: coderabbit-bot-trigger-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
+# pull-requests: write is required: GITHUB_TOKEN gets 403 on issues.createComment
+# for PRs when only pull-requests: read is granted (see run 32975845301).
 permissions:
   issues: write
   pull-requests: write
@@ -36,7 +38,9 @@ jobs:
             }
 
             for (const pr of prs) {
-              const headSha = pr.head.sha
+              const headSha = context.eventName === 'push'
+                ? context.sha
+                : pr.head.sha
               const reviews = await github.paginate(github.rest.pulls.listReviews, {
                 owner,
                 repo,
@@ -46,11 +50,12 @@ jobs:
                 .filter(review => review.user?.login === 'coderabbitai[bot]')
                 .pop()
 
+              // Skip only when CodeRabbit already approved this SHA (COMMENTED does not clear CHANGES_REQUESTED).
               if (
                 latestCodeRabbitReview?.commit_id === headSha
-                && latestCodeRabbitReview.state !== 'CHANGES_REQUESTED'
+                && latestCodeRabbitReview.state === 'APPROVED'
               ) {
-                console.log(`CodeRabbit already reviewed PR #${pr.number} at ${headSha}`)
+                console.log(`CodeRabbit already approved PR #${pr.number} at ${headSha}`)
                 continue
               }
 
@@ -60,12 +65,21 @@ jobs:
                 repo,
                 issue_number: pr.number,
               })
-              if (comments.some(comment =>
+              const alreadyTriggered = comments.some(comment =>
                 comment.user?.login === 'github-actions[bot]'
                 && comment.body?.includes(marker)
-              )) {
-                console.log(`CodeRabbit trigger already posted for PR #${pr.number}`)
+              )
+              // Skip only when a prior trigger already produced an approval on headSha.
+              if (
+                alreadyTriggered
+                && latestCodeRabbitReview?.commit_id === headSha
+                && latestCodeRabbitReview.state === 'APPROVED'
+              ) {
+                console.log(`CodeRabbit trigger already completed for PR #${pr.number} at ${headSha}`)
                 continue
+              }
+              if (alreadyTriggered) {
+                console.log(`Retrying CodeRabbit trigger for PR #${pr.number}; prior trigger had no review on ${headSha}`)
               }
 
               await github.rest.issues.createComment({

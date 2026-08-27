@@ -73,6 +73,7 @@ describe('[POST] /private/set_manifest', () => {
 
     const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',
+      retryUnsafe: true,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': APIKEY_TEST_ALL,
@@ -109,6 +110,7 @@ describe('[POST] /private/set_manifest', () => {
     // Idempotent retry
     const retry = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',
+      retryUnsafe: true,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': APIKEY_TEST_ALL,
@@ -121,7 +123,7 @@ describe('[POST] /private/set_manifest', () => {
     expect(retryJson.inserted).toBe(0)
   })
 
-  it('rejects paths outside the app prefix and keeps old jsonb upload compatible', async () => {
+  it('rejects paths outside the app prefix and blocks r2-direct manifest jsonb writes', async () => {
     const otherBundle = `${BUNDLE_NAME}-legacy`
     const { data: version, error } = await getSupabaseClient()
       .from('app_versions')
@@ -140,6 +142,7 @@ describe('[POST] /private/set_manifest', () => {
 
     const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',
+      retryUnsafe: true,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': APIKEY_TEST_ALL,
@@ -156,8 +159,7 @@ describe('[POST] /private/set_manifest', () => {
     })
     expect(response.status).toBe(400)
 
-    // Legacy CLI path: writing jsonb onto app_versions.manifest still works.
-    await executeSQL(
+    await expect(executeSQL(
       `UPDATE public.app_versions
        SET storage_provider = 'r2',
            manifest = ARRAY[
@@ -166,16 +168,37 @@ describe('[POST] /private/set_manifest', () => {
            updated_at = now()
        WHERE id = $1`,
       [version!.id, `orgs/${version!.owner_org}/apps/${APP_ID}/delta/legacy_legacy.html`],
-    )
+    )).rejects.toThrow(/r2_direct_manifest_jsonb/)
 
-    const { data: legacyVersion } = await getSupabaseClient()
-      .from('app_versions')
-      .select('manifest')
-      .eq('id', version!.id)
-      .single()
+    const legit = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
+      method: 'POST',
+      retryUnsafe: true,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': APIKEY_TEST_ALL,
+      },
+      body: JSON.stringify({
+        app_id: APP_ID,
+        name: otherBundle,
+        manifest: [{
+          file_name: 'legacy.html',
+          s3_path: `orgs/${version!.owner_org}/apps/${APP_ID}/delta/legacy_legacy.html`,
+          file_hash: 'legacyhash',
+        }],
+      }),
+    })
+    expect(legit.status).toBe(200)
+    const legitJson = await legit.json() as { status: string, inserted: number }
+    expect(legitJson.status).toBe('ok')
+    expect(legitJson.inserted).toBe(1)
 
-    expect(Array.isArray(legacyVersion?.manifest)).toBe(true)
-    expect(legacyVersion?.manifest?.length).toBe(1)
+    const { data: rows, error: rowsErr } = await getSupabaseClient()
+      .from('manifest')
+      .select('file_name')
+      .eq('app_version_id', version!.id)
+
+    expect(rowsErr).toBeNull()
+    expect(rows?.map(row => row.file_name)).toEqual(['legacy.html'])
   })
 
   it('rejects finalized versions that have no manifest rows yet', async () => {
@@ -196,6 +219,7 @@ describe('[POST] /private/set_manifest', () => {
 
     const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',
+      retryUnsafe: true,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': APIKEY_TEST_ALL,
@@ -238,6 +262,7 @@ describe('[POST] /private/set_manifest', () => {
 
     const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',
+      retryUnsafe: true,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': APIKEY_TEST_ALL,
@@ -257,6 +282,7 @@ describe('[POST] /private/set_manifest', () => {
   it('rejects missing versions and non-uploadable storage providers', async () => {
     const missing = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',
+      retryUnsafe: true,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': APIKEY_TEST_ALL,
@@ -289,6 +315,7 @@ describe('[POST] /private/set_manifest', () => {
 
     const response = await fetchTestRequest(getEndpointUrl('/private/set_manifest'), {
       method: 'POST',
+      retryUnsafe: true,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': APIKEY_TEST_ALL,
