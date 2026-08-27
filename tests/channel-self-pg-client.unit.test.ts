@@ -160,11 +160,11 @@ describe('channel_self PUT database routing', () => {
     })
   })
 
-  it('uses primary for old plugin channel_devices read-after-write consistency', async () => {
+  it('always uses read replica for channel_self device operations', async () => {
     const response = await fetchPut('7.33.0')
 
     expect(response.status).toBe(200)
-    expect(getPgClientMock).toHaveBeenCalledWith(expect.anything(), false)
+    expect(getPgClientMock).toHaveBeenCalledWith(expect.anything(), true)
   })
 
   it('uses replica for new plugin local channel storage reads', async () => {
@@ -174,17 +174,21 @@ describe('channel_self PUT database routing', () => {
     expect(getPgClientMock).toHaveBeenCalledWith(expect.anything(), true)
   })
 
-  it('uses replica and KV for old plugin reads when channel self store is bound', async () => {
+  it('does not read KV overrides on PUT for old plugin versions', async () => {
     const kv = createKvStore()
     const response = await fetchPut('7.33.0', { CHANNEL_SELF_STORE: kv })
 
     expect(response.status).toBe(200)
     expect(getPgClientMock).toHaveBeenCalledWith(expect.anything(), true)
     expect(getChannelDeviceOverridePgMock).not.toHaveBeenCalled()
-    expect(kv.get).toHaveBeenCalled()
+    expect(kv.get).not.toHaveBeenCalled()
+    expect(await response.json()).toMatchObject({
+      channel: 'production',
+      status: 'default',
+    })
   })
 
-  it('resolves KV channel id through current channel metadata for old plugin reads', async () => {
+  it('returns request-local channel on PUT without consulting KV', async () => {
     const kv = createKvStore()
     kv.values.set(channelSelfStoreKey(), JSON.stringify({
       app_id: 'com.test.app',
@@ -199,27 +203,20 @@ describe('channel_self PUT database routing', () => {
 
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({
-      channel: 'beta-current',
-      status: 'override',
-      allowSet: true,
+      channel: 'production',
+      status: 'default',
     })
-    expect(getChannelByIdPgMock).toHaveBeenCalledWith(expect.anything(), 'com.test.app', 12, expect.anything())
+    expect(getChannelByIdPgMock).not.toHaveBeenCalled()
   })
 
-  it('uses replica and KV for old plugin writes when channel self store is bound', async () => {
+  it('does not persist old plugin overrides to KV on POST', async () => {
     const kv = createKvStore()
     const response = await fetchPost('7.33.0', { CHANNEL_SELF_STORE: kv })
 
     expect(response.status).toBe(200)
     expect(getPgClientMock).toHaveBeenCalledWith(expect.anything(), true)
     expect(upsertChannelDevicePgMock).not.toHaveBeenCalled()
-    expect(kv.put).toHaveBeenCalled()
-    expect(JSON.parse(kv.put.mock.calls[0][1])).toEqual({
-      app_id: 'com.test.app',
-      device_id: '11111111-1111-4111-8111-111111111111',
-      channel_id: 12,
-      updated_at: expect.any(String),
-    })
+    expect(kv.put).not.toHaveBeenCalled()
   })
 
   it('does not query KV for new plugin channel self storage when store is bound', async () => {

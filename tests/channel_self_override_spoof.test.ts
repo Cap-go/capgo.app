@@ -68,9 +68,13 @@ describe('/channel_self spoofed override persistence', () => {
       device_id: victimDeviceId,
       plugin_version: '7.34.0',
       platform: 'android',
-      version: '1.0.0',
+      version_name: '1.0.0',
       version_build: '1.0.0',
-      owner_org: orgRow!.owner_org,
+      os_version: '13',
+      custom_id: '',
+      is_prod: true,
+      is_emulator: false,
+      updated_at: new Date().toISOString(),
     }, { onConflict: 'app_id,device_id' })
 
     const spoofData = getUniqueBaseData(APPNAME)

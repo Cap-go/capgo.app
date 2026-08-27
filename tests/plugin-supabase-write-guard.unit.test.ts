@@ -251,40 +251,11 @@ describe('plugin Supabase write policy', () => {
     await expect(sendNotifToOrgMembersOnce(context, 'org:missing_payment', 'usage_limit', {}, 'org-1', 'uniq-1', {} as any)).resolves.toBe(false)
   })
 
-  it.concurrent('blocks legacy channel_self PostgreSQL storage fallback in the Worker route', async () => {
-    const { Hono } = await import('hono/tiny')
-    const { app: channelSelfApp } = await import('../supabase/functions/_backend/plugin_runtime/plugins/channel_self.ts')
-    const wrapper = new Hono()
-    wrapper.use('*', async (c, next) => {
-      ;(c as any).set('skipSupabaseStatsFallback', true)
-      ;(c as any).set('skipSupabaseNotificationWrites', true)
-      ;(c as any).set('queuePluginNotifications', true)
-      ;(c as any).set('skipChannelSelfPostgresFallback', true)
-      ;(c as any).set('requireReadReplica', true)
-      await next()
-    })
-    wrapper.route('/channel_self', channelSelfApp)
-
-    const response = await wrapper.request('/channel_self', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        app_id: 'com.test.app',
-        device_id: '00000000-0000-4000-8000-000000000001',
-        version_name: '1.0.0',
-        version_build: '1.0.0',
-        version_os: '17.0',
-        platform: 'ios',
-        is_emulator: false,
-        is_prod: true,
-        plugin_version: '7.33.0',
-        channel: 'beta',
-      }),
-    })
-
-    await expect(response.json()).resolves.toMatchObject({
-      error: 'channel_self_server_storage_unavailable',
-    })
+  it.concurrent('channel_self route no longer depends on PostgreSQL fallback writes', () => {
+    const source = readFileSync('supabase/functions/_backend/plugin_runtime/plugins/channel_self.ts', 'utf8')
+    expect(source).not.toContain('channel_self_server_storage_unavailable')
+    expect(source).not.toContain('shouldSkipChannelSelfPostgresFallback')
+    expect(source).not.toContain('upsertChannelDevicePg')
   })
 
   it.concurrent('does not use channel_self KV or fall back to DB notifications when plugin queue KV is missing', async () => {

@@ -285,10 +285,12 @@ function hasChannelSelfStoreBinding(c: Context) {
   return Boolean((c as Context<MiddlewareKeyVariables>).env?.CHANNEL_SELF_STORE)
 }
 
+type ChannelOverrideResult = Awaited<ReturnType<typeof requestInfosChannelDevicePostgres>>
+
 function shouldHonorChannelOverrideResult(
-  channelOverride: { channels?: { allow_device_self_set?: boolean } | null } | null | undefined,
+  channelOverride: ChannelOverrideResult | null,
   devicePluginVersion: string | null,
-) {
+): ChannelOverrideResult | null {
   if (!channelOverride?.channels)
     return channelOverride ?? null
 
