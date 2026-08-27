@@ -17,6 +17,7 @@ import { shouldHonorPersistedChannelOverride } from '../utils/plugin_compatibili
 import { closeClient, getAppByIdPg, getAppOwnerPostgres, getChannelByNamePg, getChannelDeviceOverridePg, getChannelsPg, getCompatibleChannelsPg, getDevicePluginVersionPg, getDrizzleClient, getPgClient, setReplicationLagHeader } from '../utils/pg.ts'
 import { channelSelfGetRequestSchema, channelSelfRequestSchema, isDevicePlatform } from '../utils/plugin_validation.ts'
 import { convertQueryToBody, makeDevice, parsePluginBody } from '../utils/plugin_parser.ts'
+import type { DeviceWithoutCreatedAt } from '../utils/types.ts'
 import { sendStatsAndDevice } from '../utils/plugin_stats.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { buildRateLimitInfo, onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
@@ -29,6 +30,15 @@ const CHANNEL_SELF_MIN_V7 = '7.34.0'
 const CHANNEL_SELF_MIN_V8 = '8.0.0'
 
 const PLAN_MAU_ACTIONS: Array<'mau'> = ['mau']
+
+function channelSelfStatsDevice(device: ReturnType<typeof makeDevice>): DeviceWithoutCreatedAt {
+  const { plugin_version: _pluginVersion, ...deviceWithoutPluginVersion } = device
+  return deviceWithoutPluginVersion
+}
+
+function sendChannelSelfStats(c: Context, device: ReturnType<typeof makeDevice>, statsActions: Parameters<typeof sendStatsAndDevice>[2]) {
+  return sendStatsAndDevice(c, channelSelfStatsDevice(device), statsActions)
+}
 
 async function blockProviderInfrastructure(c: Context, route: string, shouldBlockProviderInfrastructure: boolean) {
   if (!shouldBlockProviderInfrastructure)
@@ -116,7 +126,7 @@ async function assertChannelSelfCachedStatus(
     return onPremiseAppResponse(c)
   }
   if (cachedAppStatus.status === 'cancelled') {
-    await sendStatsAndDevice(c, device, [{ action: 'needPlanUpgrade' }])
+    await sendChannelSelfStats(c, device, [{ action: 'needPlanUpgrade' }])
     return onPremiseAppResponse(c)
   }
 }
@@ -140,7 +150,7 @@ async function assertChannelSelfAppOwnerPlanValid(
   if (!appOwner.plan_valid) {
     await setAppStatus(c, appId, 'cancelled', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests)
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot update, upgrade plan to continue to update', id: appId })
-    await sendStatsAndDevice(c, device, [{ action: 'needPlanUpgrade' }])
+    await sendChannelSelfStats(c, device, [{ action: 'needPlanUpgrade' }])
 
     // Send weekly notification about missing payment (not configurable - payment related)
     const payload = deviceId
@@ -253,7 +263,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
 
   // Unauthenticated plugin traffic only validates channel selection; durable overrides
   // require an authenticated actor (dashboard/API) or a legacy plugin device binding.
-  await sendStatsAndDevice(c, device, [{ action: 'setChannel' }])
+  await sendChannelSelfStats(c, device, [{ action: 'setChannel' }])
   if (isNewVersion) {
     return c.json({
       status: 'ok',
@@ -280,7 +290,7 @@ async function put(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient
     const channelOverride = body.channel
 
     if (channelOverride) {
-      await sendStatsAndDevice(c, device, [{ action: 'getChannel' }])
+      await sendChannelSelfStats(c, device, [{ action: 'getChannel' }])
       return c.json({
         channel: channelOverride,
         status: 'override',
@@ -289,7 +299,7 @@ async function put(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient
     }
 
     const channelName = defaultChannel || 'production'
-    await sendStatsAndDevice(c, device, [{ action: 'getChannel' }])
+    await sendChannelSelfStats(c, device, [{ action: 'getChannel' }])
     return c.json({
       channel: channelName,
       status: 'default',
@@ -301,7 +311,7 @@ async function put(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient
   if (storedOverride) {
     const devicePluginVersion = await getDevicePluginVersionPg(c, app_id, device_id, drizzleClient)
     if (shouldHonorPersistedChannelOverride(devicePluginVersion, storedOverride.channel_id.allow_device_self_set)) {
-      await sendStatsAndDevice(c, device, [{ action: 'getChannel' }])
+      await sendChannelSelfStats(c, device, [{ action: 'getChannel' }])
       return c.json({
         channel: storedOverride.channel_id.name,
         status: 'override',
@@ -328,7 +338,7 @@ async function put(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient
   if (!finalChannel) {
     return simpleError200(c, 'channel_not_found', 'Cannot find channel')
   }
-  await sendStatsAndDevice(c, device, [{ action: 'getChannel' }])
+  await sendChannelSelfStats(c, device, [{ action: 'getChannel' }])
   return c.json({
     channel: finalChannel.name,
     status: 'default',
@@ -349,7 +359,7 @@ async function deleteOverride(c: Context, drizzleClient: ReturnType<typeof getDr
   }
   const { device } = requestContext
 
-  await sendStatsAndDevice(c, device, [{ action: 'setChannel' }])
+  await sendChannelSelfStats(c, device, [{ action: 'setChannel' }])
   return c.json(BRES)
 }
 

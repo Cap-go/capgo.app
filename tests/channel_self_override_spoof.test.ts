@@ -119,23 +119,14 @@ describe('/channel_self spoofed override persistence', () => {
     forcedOverrideBody.version_name = '0.0.0'
     forcedOverrideBody.version_build = '0.0.0'
 
-    const { data: productionChannel } = await supabase
-      .from('channels')
-      .select('id')
-      .eq('name', 'production')
-      .eq('app_id', APPNAME)
-      .single()
-
-    expect(productionChannel).toBeTruthy()
-
     await supabase
       .from('channels')
       .update({ public: false, allow_device_self_set: false })
-      .eq('id', productionChannel!.id)
+      .eq('id', betaChannel!.id)
 
     await supabase.from('channel_devices').insert({
       app_id: APPNAME,
-      channel_id: productionChannel!.id,
+      channel_id: betaChannel!.id,
       device_id: attackerDeviceId,
       owner_org: betaChannel!.owner_org,
     })
@@ -144,14 +135,10 @@ describe('/channel_self spoofed override persistence', () => {
     const forcedResponse = await postUpdate(forcedOverrideBody)
     expect(forcedResponse.status).toBe(200)
     const forcedJson = await forcedResponse.json<{ version?: string }>()
-    expect(forcedJson.version).toBe('1.0.0')
+    expect(forcedJson.version).toBe('1.361.0')
 
     await supabase.from('channel_devices').delete().eq('app_id', APPNAME).in('device_id', [victimDeviceId, attackerDeviceId])
     await supabase.from('devices').delete().eq('app_id', APPNAME).in('device_id', [victimDeviceId, attackerDeviceId])
-    await supabase
-      .from('channels')
-      .update({ public: true, allow_device_self_set: true })
-      .eq('id', productionChannel!.id)
     await supabase
       .from('channels')
       .update({ allow_device_self_set: false })

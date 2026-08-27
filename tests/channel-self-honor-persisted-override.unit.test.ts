@@ -12,5 +12,6 @@ describe('shouldHonorPersistedChannelOverride', () => {
     expect(shouldHonorPersistedChannelOverride('7.33.9', true)).toBe(true)
     expect(shouldHonorPersistedChannelOverride('7.34.0', true)).toBe(false)
     expect(shouldHonorPersistedChannelOverride(null, true)).toBe(false)
+    expect(shouldHonorPersistedChannelOverride('0.0.0', true)).toBe(true)
   })
 })

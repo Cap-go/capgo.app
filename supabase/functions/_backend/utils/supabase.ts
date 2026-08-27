@@ -1372,6 +1372,7 @@ export async function trackDevicesSB(c: Context, device: DeviceWithoutCreatedAt)
         ...device,
         ...(requestedCustomId === null ? { custom_id: existingRow.custom_id ?? '' } : {}),
         ...(requestedInstallSource === null ? { install_source: existingRow.install_source ?? undefined } : {}),
+        ...(!('plugin_version' in device) ? { plugin_version: existingRow.plugin_version ?? undefined } : {}),
       }
     : device
 
