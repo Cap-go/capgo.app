@@ -2,7 +2,7 @@ import type { FC } from 'react'
 import { Box, Text, useInput, useStdout } from 'ink'
 import Spinner from 'ink-spinner'
 // src/build/onboarding/ui/components.tsx
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import stringWidth from 'string-width'
 import { computeMaxScrollOffset, pickVisibleLines } from '../ai-fit.js'
 import type { DiffLine } from '../diff-utils.js'
@@ -264,14 +264,23 @@ export const FilteredTextInput: FC<{
   onSubmit: (value: string) => void
 }> = ({ placeholder = '', filter = '=', allowedPattern, maxLength, transform, mask = false, initialValue = '', onSubmit }) => {
   const [value, setValue] = useState(() => applyConstraints(initialValue, { filter, allowedPattern, maxLength, transform }))
+  // PTY harnesses often paste a full path then Enter in one burst; useInput's
+  // return handler can run before React re-renders with the updated state, so
+  // read the latest buffer from a ref updated synchronously in setState.
+  const valueRef = useRef(value)
+  valueRef.current = value
 
   useInput((input, key) => {
     if (key.return) {
-      onSubmit(value)
+      onSubmit(valueRef.current)
       return
     }
     if (key.backspace || key.delete) {
-      setValue(prev => prev.slice(0, -1))
+      setValue(prev => {
+        const next = prev.slice(0, -1)
+        valueRef.current = next
+        return next
+      })
       return
     }
     // Ignore control characters, arrows, etc.
@@ -280,7 +289,11 @@ export const FilteredTextInput: FC<{
     }
     // Append input then apply the full constraint pipeline (paste-safe).
     if (input) {
-      setValue(prev => applyConstraints(prev + input, { filter, allowedPattern, maxLength, transform }))
+      setValue(prev => {
+        const next = applyConstraints(prev + input, { filter, allowedPattern, maxLength, transform })
+        valueRef.current = next
+        return next
+      })
     }
   })
 
