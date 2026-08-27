@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: coderabbit-bot-trigger-${{ github.workflow }}-${{ github.ref }}
+  group: coderabbit-bot-trigger-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 # pull-requests: write is required: GITHUB_TOKEN gets 403 on issues.createComment
@@ -69,9 +69,28 @@ jobs:
 
             // Only org members/owners can supersede a stale CodeRabbit review.
             for (const pr of prs) {
+              const { data: livePr } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: pr.number,
+              })
+              const liveHeadSha = livePr.head.sha
+
+              if (context.eventName === 'pull_request_review') {
+                const eventHeadSha = pr.head.sha
+                if (liveHeadSha !== eventHeadSha) {
+                  console.log(`Skipping stale review event: live HEAD ${liveHeadSha} differs from event snapshot ${eventHeadSha}`)
+                  continue
+                }
+              }
+              else if (context.sha !== liveHeadSha) {
+                console.log(`Skipping stale push event: pushed ${context.sha} but live HEAD is ${liveHeadSha}`)
+                continue
+              }
+
               const headSha = context.eventName === 'push'
                 ? context.sha
-                : pr.head.sha
+                : liveHeadSha
               const reviews = await github.paginate(github.rest.pulls.listReviews, {
                 owner,
                 repo,
