@@ -782,7 +782,9 @@ let remoteConfigInFlight: Promise<CapgoConfig> | null = null
 export async function getRemoteConfig(silent = false, signal?: AbortSignal) {
   // call host + /api/get_config and parse the result as json using fetch
   // Always return a shallow copy so callers cannot mutate the process-wide cache.
-  /** Return a defensive copy after enforcing the API-published minimum CLI version. */
+  /**
+   * Return a defensive copy after enforcing the API-published minimum CLI version.
+   */
   const finish = (config: CapgoConfig) => {
     const copy = { ...config }
     assertMinCliVersion(copy, undefined, silent)
