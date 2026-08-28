@@ -2,7 +2,7 @@
 # Must sit above the well-known catch-all. Use 302/303/307, never host the form on this path.
 # https://w3c.github.io/webappsec-change-password-url/
 /.well-known/change-password /settings/account/change-password 302
-# Chrome probes this reserved path so SPA catch-alls are not treated as a real change-password page.
+# Chrome probes this reserved path so the SPA fallback is not treated as a real change-password page.
 /.well-known/resource-that-should-not-exist-whose-status-code-should-not-be-200 /404 404
 /.well-known/* /deepLink/:splat 200
 
