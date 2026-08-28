@@ -43,6 +43,7 @@ describe('well-known change-password', () => {
     const jsonCatchAllIndex = headers.indexOf('/.well-known/*')
     expect(changePasswordIndex).toBeGreaterThanOrEqual(0)
     expect(changePasswordIndex).toBeLessThan(jsonCatchAllIndex)
-    expect(headers).toContain('Content-Type: text/html; charset=utf-8')
+    expect(headers.slice(changePasswordIndex, jsonCatchAllIndex))
+      .toContain('Content-Type: text/html; charset=utf-8')
   })
 })
