@@ -1501,6 +1501,36 @@
       "type": "jsonb"
     },
     {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "support_channel_type",
+      "notNull": false,
+      "position": 23,
+      "table": "orgs",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "support_channel_url",
+      "notNull": false,
+      "position": 24,
+      "table": "orgs",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "support_channel_set_at",
+      "notNull": false,
+      "position": 25,
+      "table": "orgs",
+      "type": "timestamp with time zone"
+    },
+    {
       "default": "now()",
       "generated": "",
       "identity": "",
@@ -1968,6 +1998,20 @@
     {
       "definition": "CHECK (required_encryption_key IS NULL OR (length(required_encryption_key::text) = ANY (ARRAY[20, 21])))",
       "name": "orgs_required_encryption_key_valid",
+      "table": "orgs",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (support_channel_type IS NULL OR (support_channel_type = ANY (ARRAY['slack'::text, 'discord'::text, 'teams'::text])))",
+      "name": "orgs_support_channel_type_check",
+      "table": "orgs",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (support_channel_type IS NULL AND support_channel_url IS NULL OR support_channel_type IS NOT NULL AND support_channel_url IS NOT NULL AND char_length(support_channel_url) <= 2048 AND support_channel_url ~ '^https://'::text)",
+      "name": "orgs_support_channel_url_check",
       "table": "orgs",
       "type": "c",
       "valid": true
