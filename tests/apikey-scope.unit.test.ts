@@ -55,7 +55,7 @@ describe('api key manager role assignment guard', () => {
     })
   })
 
-  it('allows a non-destructive app role without role management', async () => {
+  it('allows a non-destructive app role without role management at the deny-list layer', async () => {
     checkPermissionMock.mockResolvedValue(false)
 
     await expect(assertApiKeyManagerCanAssignBindings(context, auth, [{

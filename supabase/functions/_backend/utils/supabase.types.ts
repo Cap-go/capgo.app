@@ -2548,6 +2548,9 @@ export type Database = {
       }
       orgs: {
         Row: {
+          auto_top_up_enabled: boolean
+          auto_top_up_last_attempt_at: string | null
+          auto_top_up_threshold: number
           created_at: string | null
           created_by: string
           customer_id: string | null
@@ -2575,6 +2578,9 @@ export type Database = {
           website: string | null
         }
         Insert: {
+          auto_top_up_enabled?: boolean
+          auto_top_up_last_attempt_at?: string | null
+          auto_top_up_threshold?: number
           created_at?: string | null
           created_by: string
           customer_id?: string | null
@@ -2602,6 +2608,9 @@ export type Database = {
           website?: string | null
         }
         Update: {
+          auto_top_up_enabled?: boolean
+          auto_top_up_last_attempt_at?: string | null
+          auto_top_up_threshold?: number
           created_at?: string | null
           created_by?: string
           customer_id?: string | null
@@ -5542,6 +5551,16 @@ export type Database = {
       transfer_app: {
         Args: { p_app_id: string; p_new_org_id: string }
         Returns: undefined
+      }
+      try_claim_credit_auto_top_up: {
+        Args: { p_org_id: string }
+        Returns: {
+          auto_top_up_enabled: boolean
+          auto_top_up_threshold: number
+          available_credits: number
+          claimed: boolean
+          customer_id: string
+        }[]
       }
       update_app_versions_retention: { Args: never; Returns: undefined }
       update_org_invite_role_rbac: {

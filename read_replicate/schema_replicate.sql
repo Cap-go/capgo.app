@@ -400,6 +400,9 @@ CREATE TABLE public.orgs (
     website text,
     stats_refresh_requested_at timestamp without time zone,
     onboarding jsonb DEFAULT '{"intent": "unknown"}'::jsonb NOT NULL,
+    auto_top_up_enabled boolean DEFAULT false NOT NULL,
+    auto_top_up_threshold numeric(18,6) DEFAULT 10 NOT NULL,
+    auto_top_up_last_attempt_at timestamp with time zone,
     support_channel_type text,
     support_channel_url text,
     support_channel_set_at timestamp with time zone,
@@ -586,6 +589,14 @@ ALTER TABLE ONLY public.onboarding_demo_data
 
 ALTER TABLE ONLY public.org_users
     ADD CONSTRAINT org_users_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: orgs orgs_auto_top_up_threshold_min; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.orgs
+    ADD CONSTRAINT orgs_auto_top_up_threshold_min CHECK (((auto_top_up_threshold >= (10)::numeric) AND (auto_top_up_threshold = trunc(auto_top_up_threshold)) AND (auto_top_up_threshold < 'Infinity'::numeric) AND (auto_top_up_threshold > '-Infinity'::numeric))) NOT VALID;
 
 
 --

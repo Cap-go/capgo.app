@@ -506,6 +506,54 @@ export async function canCallerAssignOrgRole(
   }
 }
 
+export interface RolePermissionCheckScope {
+  orgId: string
+  publicAppId?: string | null
+  channelId?: number | null
+}
+
+/**
+ * Returns true when the caller already holds every deploy-capable permission
+ * (app/channel/bundle) granted by the role at the binding scope. Org-only
+ * permissions are enforced separately via deny-list and priority rank so
+ * apikey_manager can still mint baseline org_member keys.
+ */
+export async function callerHoldsAllRolePermissions(
+  drizzleClient: ReturnType<typeof getDrizzleClient>,
+  callerUserId: string,
+  roleId: string,
+  scope: RolePermissionCheckScope,
+): Promise<boolean> {
+  const { orgId, publicAppId = null, channelId = null } = scope
+
+  const result = await drizzleClient.execute(
+    sql`
+      SELECT EXISTS (
+        SELECT 1
+        FROM public.role_permissions AS role_permission
+        INNER JOIN public.permissions AS permission
+          ON permission.id = role_permission.permission_id
+        WHERE role_permission.role_id = ${roleId}::uuid
+          AND (
+            permission.key LIKE 'app.%'
+            OR permission.key LIKE 'channel.%'
+            OR permission.key LIKE 'bundle.%'
+          )
+          AND NOT public.rbac_check_permission_direct(
+            permission.key,
+            ${callerUserId}::uuid,
+            ${orgId}::uuid,
+            ${publicAppId},
+            ${channelId}::bigint,
+            NULL
+          )
+      ) AS missing_permission
+    `,
+  )
+
+  return (result.rows[0] as { missing_permission?: boolean } | undefined)?.missing_permission !== true
+}
+
 /**
  * Infer the scope type from a permission key.
  */

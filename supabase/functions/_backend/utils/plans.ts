@@ -2,9 +2,11 @@ import type { Context } from 'hono'
 import type { getDrizzleClient } from './pg.ts'
 import type { PlanUsage } from './supabase.ts'
 import type { Database } from './supabase.types.ts'
+import { maybeAutoTopUpCredits } from './credit_auto_top_up.ts'
 import { quickError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { sendNotifToOrgMembers, sendNotifToOrgMembersOnce } from './org_email_notifications.ts'
+import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent } from './org_onboarding_intent.ts'
 import { syncSubscriptionData } from './stripe.ts'
 import {
   getCurrentPlanNameOrg,
@@ -22,7 +24,6 @@ import {
   set_storage_exceeded,
   supabaseAdmin,
 } from './supabase.ts'
-import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent } from './org_onboarding_intent.ts'
 import { sendEventToTracking } from './tracking.ts'
 import { isStripeConfigured } from './utils.ts'
 
@@ -380,14 +381,18 @@ async function userAbovePlan(c: Context, org: {
       if (unpaid > 0)
         hasUnpaidOverage = true
     }
-    else if (metric.key === 'mau')
+    else if (metric.key === 'mau') {
       await set_mau_exceeded(c, org.customer_id, false, orgId)
-    else if (metric.key === 'storage')
+    }
+    else if (metric.key === 'storage') {
       await set_storage_exceeded(c, org.customer_id, false, orgId)
-    else if (metric.key === 'bandwidth')
+    }
+    else if (metric.key === 'bandwidth') {
       await set_bandwidth_exceeded(c, org.customer_id, false, orgId)
-    else if (metric.key === 'build_time')
+    }
+    else if (metric.key === 'build_time') {
       await set_build_time_exceeded(c, orgId, false)
+    }
   }
 
   if (!hasUnpaidOverage) {
@@ -578,7 +583,7 @@ export async function updatePlanStatus(c: Context, org: any, finalIsGoodPlan: bo
       plan_usage: Math.round(normalizedUsage.total_percent),
     })
     .eq('customer_id', org.customer_id!)
-    .then()
+    .throwOnError()
 }
 
 // New function for cron_stat_org - handles is_good_plan + plan % + exceeded flags
@@ -589,26 +594,40 @@ export async function checkPlanStatusOnly(c: Context, orgId: string, drizzleClie
   const org = await getOrgWithCustomerInfo(c, orgId)
 
   // Handle trial organizations
-  if (await handleTrialOrg(c, orgId, org)) {
-    return // Trial handled, exit early
+  const trialHandled = await handleTrialOrg(c, orgId, org)
+  let planStatusWriteError: unknown
+  if (!trialHandled) {
+    // Calculate plan status and usage
+    let planStatus: { is_good_plan: boolean, percentUsage: PlanUsage } | undefined
+    try {
+      planStatus = await calculatePlanStatusFresh(c, orgId)
+    }
+    catch (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'calculatePlanStatus failed', orgId, error })
+    }
+    if (planStatus) {
+      const { is_good_plan, percentUsage } = planStatus
+      // Credits can restore final plan eligibility, so retain the raw usage threshold separately.
+      const isAbovePlan = percentUsage.total_percent > 100
+      try {
+        const finalIsGoodPlan = await handleOrgNotificationsAndEvents(c, org, orgId, is_good_plan, percentUsage, drizzleClient)
+        await updatePlanStatus(c, org, finalIsGoodPlan, isAbovePlan, percentUsage)
+      }
+      catch (error) {
+        planStatusWriteError = error
+        cloudlogErr({ requestId: c.get('requestId'), message: 'plan status write failed', orgId, error })
+      }
+    }
   }
 
-  // Calculate plan status and usage
-  let planStatus: { is_good_plan: boolean, percentUsage: PlanUsage }
   try {
-    planStatus = await calculatePlanStatusFresh(c, orgId)
+    await maybeAutoTopUpCredits(c, orgId)
   }
   catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'calculatePlanStatus failed', orgId, error })
-    return
+    cloudlogErr({ requestId: c.get('requestId'), message: 'credit auto top-up failed', orgId, error })
   }
-  const { is_good_plan, percentUsage } = planStatus
-  // Credits can restore final plan eligibility, so retain the raw usage threshold separately.
-  const isAbovePlan = percentUsage.total_percent > 100
-
-  // Update plan status in database
-  const finalIsGoodPlan = await handleOrgNotificationsAndEvents(c, org, orgId, is_good_plan, percentUsage, drizzleClient)
-  await updatePlanStatus(c, org, finalIsGoodPlan, isAbovePlan, percentUsage)
+  if (planStatusWriteError)
+    throw planStatusWriteError
 }
 
 // New function for cron_sync_sub - handles subscription sync + events

@@ -588,7 +588,7 @@ async function listPricesByProduct(c: Context, productId: string, active?: boole
   })
 }
 
-async function getOneTimePriceId(c: Context, productId: string): Promise<string | null> {
+export async function getOneTimePriceId(c: Context, productId: string): Promise<string | null> {
   if (!isStripeConfigured(c))
     return null
   try {
@@ -656,6 +656,14 @@ export async function createOneTimeCheckout(
             }),
       },
     ],
+    custom_text: {
+      submit: {
+        message: 'Your card may be saved so you can later enable optional credit auto top-up in organization settings.',
+      },
+    },
+    payment_intent_data: {
+      setup_future_usage: 'off_session',
+    },
     metadata: {
       productId,
       orgId: clientReferenceId ?? '',

@@ -1501,12 +1501,42 @@
       "type": "jsonb"
     },
     {
+      "default": "false",
+      "generated": "",
+      "identity": "",
+      "name": "auto_top_up_enabled",
+      "notNull": true,
+      "position": 23,
+      "table": "orgs",
+      "type": "boolean"
+    },
+    {
+      "default": "10",
+      "generated": "",
+      "identity": "",
+      "name": "auto_top_up_threshold",
+      "notNull": true,
+      "position": 24,
+      "table": "orgs",
+      "type": "numeric(18,6)"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "auto_top_up_last_attempt_at",
+      "notNull": false,
+      "position": 25,
+      "table": "orgs",
+      "type": "timestamp with time zone"
+    },
+    {
       "default": null,
       "generated": "",
       "identity": "",
       "name": "support_channel_type",
       "notNull": false,
-      "position": 23,
+      "position": 26,
       "table": "orgs",
       "type": "text"
     },
@@ -1516,7 +1546,7 @@
       "identity": "",
       "name": "support_channel_url",
       "notNull": false,
-      "position": 24,
+      "position": 27,
       "table": "orgs",
       "type": "text"
     },
@@ -1526,7 +1556,7 @@
       "identity": "",
       "name": "support_channel_set_at",
       "notNull": false,
-      "position": 25,
+      "position": 28,
       "table": "orgs",
       "type": "timestamp with time zone"
     },
@@ -1966,6 +1996,13 @@
       "table": "org_users",
       "type": "p",
       "valid": true
+    },
+    {
+      "definition": "CHECK (auto_top_up_threshold >= 10::numeric AND auto_top_up_threshold = trunc(auto_top_up_threshold) AND auto_top_up_threshold < 'Infinity'::numeric AND auto_top_up_threshold > '-Infinity'::numeric) NOT VALID",
+      "name": "orgs_auto_top_up_threshold_min",
+      "table": "orgs",
+      "type": "c",
+      "valid": false
     },
     {
       "definition": "CHECK (max_apikey_expiration_days IS NULL OR max_apikey_expiration_days >= 1 AND max_apikey_expiration_days <= 365)",

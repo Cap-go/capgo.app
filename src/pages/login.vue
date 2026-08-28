@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Factor } from '@supabase/supabase-js'
 import type { Ref } from 'vue'
+import type { LoginAuthStatus } from '~/utils/loginActions'
 import { Capacitor } from '@capacitor/core'
 import { setErrors } from '@formkit/core'
 import { FormKit, FormKitMessages } from '@formkit/vue'
@@ -10,6 +11,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
+import IconScanQrCode from '~icons/lucide/scan-qr-code'
 import iconEmail from '~icons/oui/email?raw'
 import iconPassword from '~icons/ph/key?raw'
 import mfaIcon from '~icons/simple-icons/2fas?raw'
@@ -17,6 +19,7 @@ import { hideLoader } from '~/services/loader'
 import { autoAuth, defaultApiHost, hashEmail, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { isCapgoDomainReferrer, isDirectLoginLanding } from '~/utils/capgoReferrer'
+import { getLoginActionVisibility } from '~/utils/loginActions'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
 const route = useRoute('/login')
@@ -25,7 +28,7 @@ const isLoading = ref(false)
 const isMobile = ref(Capacitor.isNativePlatform())
 const turnstileToken = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
-const statusAuth: Ref<'login' | '2fa'> = ref('login')
+const statusAuth: Ref<LoginAuthStatus> = ref('login')
 const mfaLoginFactor: Ref<Factor | null> = ref(null)
 const mfaChallengeId: Ref<string> = ref('')
 const mfaCode = ref('')
@@ -54,6 +57,7 @@ let domainCheckSeq = 0
 
 const version = import.meta.env.VITE_APP_VERSION
 const isLoginStep = computed(() => statusAuth.value === 'login')
+const loginActionVisibility = computed(() => getLoginActionVisibility(statusAuth.value, passwordPathReady.value))
 const emailValidation = computed(() => (isLoginStep.value ? 'required:trim|email' : ''))
 const passwordValidation = computed(() => (passwordPathReady.value ? 'required:trim' : ''))
 const mfaValidation = computed(() => (statusAuth.value === '2fa' ? 'required|mfa_code_validation' : ''))
@@ -1020,7 +1024,7 @@ onMounted(checkLogin)
 
                     <FormKitMessages data-test="form-error" />
 
-                    <div v-show="passwordPathReady">
+                    <div v-show="loginActionVisibility.login">
                       <div class="inline-flex justify-center items-center w-full">
                         <button
                           type="submit"
@@ -1044,7 +1048,7 @@ onMounted(checkLogin)
                       </div>
                     </div>
 
-                    <div v-show="statusAuth === '2fa'">
+                    <div v-show="loginActionVisibility.verify">
                       <div class="inline-flex justify-center items-center w-full">
                         <button
                           type="submit"
@@ -1109,7 +1113,8 @@ onMounted(checkLogin)
               <button type="button" class="mt-3" :class="authGhostButtonClass" @click="openSupport">
                 {{ t("support") }}
               </button>
-              <button type="button" v-if="isMobile" class="mt-3" :class="authGhostButtonClass" @click="openScan">
+              <button v-if="isMobile" type="button" class="mt-3 inline-flex items-center gap-2" :class="authGhostButtonClass" @click="openScan">
+                <IconScanQrCode class="h-4 w-4" aria-hidden="true" />
                 {{ t("test-bundle") }}
               </button>
             </section>
