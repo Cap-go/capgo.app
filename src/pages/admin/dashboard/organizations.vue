@@ -147,41 +147,56 @@ function adoptionPercent(count: number, total: number) {
   return Math.round((count / total) * 1000) / 10
 }
 
-const ssoChartSeries = computed(() => [{
-  label: t('enterprise-count'),
-  color: '#2563eb',
-  data: adoptionTrend.value.map(point => ({ date: point.date, value: point.enterprise_count })),
-}, {
-  label: t('enterprise-sso-count'),
-  color: '#10b981',
-  data: adoptionTrend.value.map(point => ({ date: point.date, value: point.sso_count })),
-}])
+function trendPoints(pick: (point: EnterpriseAdoptionPoint) => number) {
+  return adoptionTrend.value.map(point => ({ date: point.date, value: pick(point) }))
+}
 
-const channelChartSeries = computed(() => [{
-  label: t('enterprise-count'),
-  color: '#2563eb',
-  data: adoptionTrend.value.map(point => ({ date: point.date, value: point.enterprise_count })),
-}, {
-  label: t('enterprise-channel-count'),
-  color: '#8b5cf6',
-  data: adoptionTrend.value.map(point => ({ date: point.date, value: point.channel_count })),
-}])
-
-const adoptionChartSeries = computed(() => [{
-  label: t('enterprise-sso-adoption'),
-  color: '#10b981',
-  data: adoptionTrend.value.map(point => ({
-    date: point.date,
-    value: adoptionPercent(point.sso_count, point.enterprise_count),
-  })),
-}, {
-  label: t('enterprise-channel-adoption'),
-  color: '#8b5cf6',
-  data: adoptionTrend.value.map(point => ({
-    date: point.date,
-    value: adoptionPercent(point.channel_count, point.enterprise_count),
-  })),
-}])
+const enterpriseCharts = computed(() => {
+  const enterpriseSeries = {
+    label: t('enterprise-count'),
+    color: '#2563eb',
+    data: trendPoints(point => point.enterprise_count),
+  }
+  return [
+    {
+      id: 'enterprise-sso',
+      titleKey: 'enterprise-sso-chart-title',
+      descriptionKey: 'enterprise-sso-chart-description',
+      valueSuffix: '',
+      series: [enterpriseSeries, {
+        label: t('enterprise-sso-count'),
+        color: '#10b981',
+        data: trendPoints(point => point.sso_count),
+      }],
+    },
+    {
+      id: 'enterprise-channel',
+      titleKey: 'enterprise-channel-chart-title',
+      descriptionKey: 'enterprise-channel-chart-description',
+      valueSuffix: '',
+      series: [enterpriseSeries, {
+        label: t('enterprise-channel-count'),
+        color: '#8b5cf6',
+        data: trendPoints(point => point.channel_count),
+      }],
+    },
+    {
+      id: 'enterprise-adoption',
+      titleKey: 'enterprise-adoption-chart-title',
+      descriptionKey: 'enterprise-adoption-chart-description',
+      valueSuffix: '%',
+      series: [{
+        label: t('enterprise-sso-adoption'),
+        color: '#10b981',
+        data: trendPoints(point => adoptionPercent(point.sso_count, point.enterprise_count)),
+      }, {
+        label: t('enterprise-channel-adoption'),
+        color: '#8b5cf6',
+        data: trendPoints(point => adoptionPercent(point.channel_count, point.enterprise_count)),
+      }],
+    },
+  ]
+})
 
 const hasAdoptionData = computed(() => adoptionTrend.value.some(point => point.enterprise_count > 0 || point.sso_count > 0 || point.channel_count > 0))
 
@@ -574,57 +589,27 @@ displayStore.defaultBack = '/dashboard'
 
         <div class="grid grid-cols-1 gap-6 mb-6">
           <ChartCard
-            chart-id="enterprise-sso"
-            :title="t('enterprise-sso-chart-title')"
+            v-for="chart in enterpriseCharts"
+            :key="chart.id"
+            :chart-id="chart.id"
+            :title="t(chart.titleKey)"
             :is-loading="isLoadingAdoption"
             :has-data="hasAdoptionData"
             :no-data-message="t('no-data')"
           >
             <template #header>
               <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
-                {{ t('enterprise-sso-chart-title') }}
+                {{ t(chart.titleKey) }}
               </h2>
               <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                {{ t('enterprise-sso-chart-description') }}
+                {{ t(chart.descriptionKey) }}
               </p>
             </template>
-            <AdminMultiLineChart :series="ssoChartSeries" :is-loading="isLoadingAdoption" />
-          </ChartCard>
-
-          <ChartCard
-            chart-id="enterprise-channel"
-            :title="t('enterprise-channel-chart-title')"
-            :is-loading="isLoadingAdoption"
-            :has-data="hasAdoptionData"
-            :no-data-message="t('no-data')"
-          >
-            <template #header>
-              <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
-                {{ t('enterprise-channel-chart-title') }}
-              </h2>
-              <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                {{ t('enterprise-channel-chart-description') }}
-              </p>
-            </template>
-            <AdminMultiLineChart :series="channelChartSeries" :is-loading="isLoadingAdoption" />
-          </ChartCard>
-
-          <ChartCard
-            chart-id="enterprise-adoption"
-            :title="t('enterprise-adoption-chart-title')"
-            :is-loading="isLoadingAdoption"
-            :has-data="hasAdoptionData"
-            :no-data-message="t('no-data')"
-          >
-            <template #header>
-              <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
-                {{ t('enterprise-adoption-chart-title') }}
-              </h2>
-              <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                {{ t('enterprise-adoption-chart-description') }}
-              </p>
-            </template>
-            <AdminMultiLineChart :series="adoptionChartSeries" :is-loading="isLoadingAdoption" value-suffix="%" />
+            <AdminMultiLineChart
+              :series="chart.series"
+              :is-loading="isLoadingAdoption"
+              :value-suffix="chart.valueSuffix"
+            />
           </ChartCard>
         </div>
 
