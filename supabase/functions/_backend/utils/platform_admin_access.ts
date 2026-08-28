@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from './hono.ts'
-import { middlewareAPISecret, quickError } from './hono.ts'
+import { middlewareAPISecret, quickError, simpleError } from './hono.ts'
 import { getClaimsFromJWT } from './hono_jwt.ts'
 import { cloudlogErr } from './logging.ts'
 import { supabaseClient } from './supabase.ts'
@@ -51,4 +51,18 @@ export async function validatePlatformAdminOrApiSecret(
     cloudlogErr({ requestId: c.get('requestId'), message: `${options.logPrefix}_not_admin`, userId: claims.sub })
     throw quickError(403, 'not_admin', options.forbiddenMessage)
   }
+}
+
+export async function requireJwtPlatformAdmin(c: PlatformAdminContext, forbiddenMessage: string): Promise<string> {
+  const auth = c.get('auth')
+  if (!auth?.userId || auth.authType !== 'jwt' || !auth.jwt)
+    throw simpleError('not_admin', forbiddenMessage)
+
+  const { data: isAdmin, error } = await supabaseClient(c, auth.jwt).rpc('is_platform_admin')
+  if (error || !isAdmin) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'is_admin_error', error, userId: auth.userId })
+    throw simpleError('not_admin', forbiddenMessage)
+  }
+
+  return auth.userId
 }
