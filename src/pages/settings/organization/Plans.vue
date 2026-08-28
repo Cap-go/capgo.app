@@ -496,7 +496,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
             <button
               v-if="!isMobile"
               type="button"
-              class="inline-flex w-fit max-w-full shrink-0 items-center whitespace-nowrap rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:bg-blue-900/40 dark:text-blue-100 dark:hover:bg-blue-800 dark:hover:text-white dark:focus-visible:ring-offset-gray-800"
+              class="d-btn d-btn-sm inline-flex h-auto min-h-0 w-fit max-w-full shrink-0 items-center whitespace-nowrap rounded-full border-none bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:bg-blue-900/40 dark:text-blue-100 dark:hover:bg-blue-800 dark:hover:text-white dark:focus-visible:ring-offset-gray-800"
               @click="openSupport()"
             >
               {{ t('need-more-contact-us') }}
