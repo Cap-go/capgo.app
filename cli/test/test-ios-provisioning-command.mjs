@@ -2,6 +2,9 @@
 
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
+import { spawnSync } from 'node:child_process'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { makeProfileXml } from './prescan/helpers.ts'
 import { DuplicateProfileError, runIosProvisioningCommand } from '../src/build/ios-provisioning-command.ts'
 
@@ -421,6 +424,17 @@ await test('duplicate replacement requires a second interactive confirmation and
   })
   await assert.rejects(runIosProvisioningCommand({}, deleteFailure.deps), /could not delete all existing/i)
   assert.equal(deleteFailure.state.writes.length, 0)
+})
+
+await test('registers lowercase ios-provisioning help with only the supported command options', () => {
+  const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+  const help = spawnSync(process.execPath, [resolve(cliDir, 'dist/index.js'), 'build', 'credentials', 'ios-provisioning', '--help'], { encoding: 'utf8' })
+  assert.equal(help.status, 0, help.stderr)
+  assert.match(help.stdout, /Usage: @capgo\/cli build credentials ios-provisioning \[options\]/)
+  assert.match(help.stdout, /--local/)
+  assert.match(help.stdout, /--global/)
+  assert.match(help.stdout, /npx @capgo\/cli@latest build credentials ios-provisioning/)
+  assert.doesNotMatch(help.stdout, /--app-?[iI]d|--yes/)
 })
 
 console.log(`\n✅ iOS provisioning command tests passed (${passed})`)
