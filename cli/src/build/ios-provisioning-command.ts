@@ -8,6 +8,7 @@ import { cwd, exit } from 'node:process'
 import { confirm, isCancel, log } from '@clack/prompts'
 import { canPromptInteractively, formatError, getAppId, getConfig } from '../utils'
 import { loadSavedCredentials, updateSavedCredentials } from './credentials'
+import { decodeCredentialBase64 } from './credentials-base64'
 import { resolveCredentialsStore } from './credentials-store-selection'
 import { analyzeProvisioningCoverage, parseProvisioningMap } from './ios-provisioning-map'
 import { DuplicateProfileError, createProfile, deleteProfile, ensureBundleId, findCertBySha1, generateJwt, verifyApiKey } from './onboarding/apple-api'
@@ -56,6 +57,107 @@ function requireP8Credentials(credentials: NonNullable<SavedCredentials['ios']>)
   const missing = required.filter(key => !credentials[key])
   if (missing.length > 0) {
     throw new Error(`App-specific password credentials are not supported for provisioning profile generation. Save a complete App Store Connect .p8 key and signing certificate first. Missing: ${missing.join(', ')}`)
+  }
+}
+
+function safeCause(error: unknown, secrets: string[]): string {
+  let message = formatError(error)
+  for (const secret of secrets.filter(value => value.length >= 4))
+    message = message.replaceAll(secret, '[REDACTED]')
+  return message
+}
+
+async function prepareAppleCredentials(credentials: NonNullable<SavedCredentials['ios']>, deps: IosProvisioningCommandDeps) {
+  requireP8Credentials(credentials)
+  const encodedKey = credentials.APPLE_KEY_CONTENT!
+  let p8Content: string
+  try {
+    p8Content = decodeCredentialBase64(encodedKey).toString('utf8')
+  }
+  catch {
+    throw new Error('The saved App Store Connect .p8 key is invalid')
+  }
+  const secrets = [encodedKey, p8Content, credentials.BUILD_CERTIFICATE_BASE64!, credentials.P12_PASSWORD ?? '']
+  const freshToken = () => {
+    try {
+      return deps.generateJwt(credentials.APPLE_KEY_ID!, credentials.APPLE_ISSUER_ID!, p8Content)
+    }
+    catch {
+      throw new Error('The saved App Store Connect .p8 key is invalid')
+    }
+  }
+
+  try {
+    await deps.verifyApiKey(freshToken())
+  }
+  catch (error) {
+    throw new Error(`The saved App Store Connect .p8 key is invalid or does not have access: ${safeCause(error, secrets)}`)
+  }
+
+  let certificateSha1: string
+  try {
+    certificateSha1 = deps.openP12(credentials.BUILD_CERTIFICATE_BASE64!, credentials.P12_PASSWORD ?? '').sha1
+  }
+  catch {
+    throw new Error('The saved iOS signing certificate or P12 password is invalid')
+  }
+
+  let certificate
+  try {
+    certificate = await deps.findCertBySha1(freshToken(), certificateSha1)
+  }
+  catch (error) {
+    throw new Error(`Cannot verify the saved signing certificate in App Store Connect: ${safeCause(error, secrets)}`)
+  }
+  if (!certificate)
+    throw new Error('The saved iOS signing certificate is not available to this App Store Connect .p8 key')
+  return { certificateId: certificate.id, freshToken, secrets }
+}
+
+async function createTargetProfile(
+  target: ProvisioningTargetGroup,
+  certificateId: string,
+  freshToken: () => string,
+  secrets: string[],
+  deps: IosProvisioningCommandDeps,
+) {
+  let bundleResource
+  try {
+    bundleResource = await deps.ensureBundleId(freshToken(), target.bundleId)
+  }
+  catch (error) {
+    throw new Error(`Could not prepare the Apple bundle id for ${formatTargets([target])}: ${safeCause(error, secrets)}`)
+  }
+
+  const create = () => deps.createProfile(freshToken(), bundleResource.bundleIdResourceId, certificateId, target.bundleId)
+  try {
+    return await create()
+  }
+  catch (error) {
+    if (!(error instanceof DuplicateProfileError))
+      throw new Error(`Could not create a provisioning profile for ${formatTargets([target])}: ${safeCause(error, secrets)}`)
+
+    const replace = await confirmRequired(
+      deps,
+      `Replace these existing Capgo provisioning profiles for ${formatTargets([target])}? ${error.profiles.map(profile => profile.name).join(', ')}`,
+    )
+    if (!replace)
+      throw new Error(`Provisioning profile replacement was declined for ${formatTargets([target])}`)
+
+    for (const profile of error.profiles) {
+      try {
+        await deps.deleteProfile(freshToken(), profile.id)
+      }
+      catch {
+        throw new Error(`Could not delete all existing Capgo provisioning profiles for ${formatTargets([target])}. The saved map was not changed for this target.`)
+      }
+    }
+    try {
+      return await create()
+    }
+    catch {
+      throw new Error(`Existing Capgo provisioning profiles were deleted, but the replacement for ${formatTargets([target])} could not be created. Retry the command.`)
+    }
   }
 }
 
@@ -112,8 +214,25 @@ export async function runIosProvisioningCommand(options: IosProvisioningOptions,
     return
   }
 
-  requireP8Credentials(credentials)
-  throw new Error(`Dedicated provisioning profile generation is required for: ${formatTargets(generationTargets)}`)
+  const apple = await prepareAppleCredentials(credentials, deps)
+  const generate = await confirmRequired(
+    deps,
+    `Generate App Store provisioning profiles for these targets? ${formatTargets(generationTargets)}`,
+  )
+  if (!generate)
+    throw new Error('Provisioning profile generation was declined; no Apple resources were changed')
+
+  for (const target of generationTargets) {
+    const profile = await createTargetProfile(target, apple.certificateId, apple.freshToken, apple.secrets, deps)
+    const updated = {
+      ...map,
+      [target.bundleId]: { profile: profile.profileContent, name: profile.profileName },
+    }
+    await deps.persistMap(project.appId, source, updated)
+    map = updated
+    deps.logInfo(`Saved a provisioning profile for ${formatTargets([target])}.`)
+  }
+  deps.logInfo('All iOS targets have provisioning profiles saved in Capgo.')
 }
 
 async function loadDefaultProject(): Promise<IosProvisioningProject> {
