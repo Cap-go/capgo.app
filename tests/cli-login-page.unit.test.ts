@@ -178,6 +178,7 @@ describe('/login-cli page contract', () => {
   it.concurrent('supports a direct AI setup prompt containing the prepared key', () => {
     const page = readFileSync(pagePath, 'utf8')
     expect(page).toContain(`const aiMode = computed(() => route.query.ai === '1')`)
+    expect(page).toContain('route.query.intent')
     expect(page).toContain('buildCliAiSetupPrompt({')
     expect(page).toContain('organizationStore.getAppsByOrgId(organization.gid)')
     expect(page).toContain('eligibleIds.has(organization.gid)')
@@ -204,6 +205,22 @@ describe('/login-cli page contract', () => {
     expect(copiedPrompt).toContain('App: "Test App" (Capgo app ID: `com.test.app`)')
     expect(copiedPrompt).toContain('## 8. Test the first live update')
     expect(copiedPrompt.match(new RegExp(preparedKey, 'g'))).toHaveLength(1)
+  })
+
+  it('copies the Builder prompt when requested by route intent', async () => {
+    route.query = { ai: '1', intent: 'builder' }
+    const container = mountLoginCliPage()
+    await flushPromises()
+
+    const copyButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.includes(messages['cli-login-ai-copy']))
+    copyButton?.click()
+    await flushPromises()
+
+    const copiedPrompt = clipboardWrite.mock.calls[0]?.[0] as string
+    expect(copiedPrompt).toContain(`login ${preparedKey}`)
+    expect(copiedPrompt).toContain('start_capgo_builder_onboarding')
+    expect(copiedPrompt).not.toContain('## 8. Test the first live update')
   })
 
   it.concurrent('keeps the route out of normal onboarding redirects', () => {

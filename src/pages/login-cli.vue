@@ -55,7 +55,7 @@ const aiPrompt = computed(() => {
     apiKey: secret.value,
     organizations: aiPromptOrganizations.value,
     skippedOrganizations: aiPromptSkippedOrganizations.value,
-  })
+  }, route.query.intent)
 })
 const revealButtonRef = useTemplateRef<HTMLButtonElement>('revealButtonRef')
 const revealDialogRef = useTemplateRef<HTMLElement>('revealDialogRef')
