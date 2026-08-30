@@ -13,6 +13,7 @@ export class ProvisioningMapError extends Error {
 export interface ProvisioningMapEntry {
   profile: string
   name: string
+  readonly bundleId: string
 }
 
 export type ProvisioningMap = Record<string, ProvisioningMapEntry>
@@ -45,6 +46,13 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 function invalidMap(message: string): never {
   throw new ProvisioningMapError('invalid', message)
+}
+
+/** Cache the parsed bundle ID without changing the persisted { profile, name } contract. */
+export function createProvisioningMapEntry(profile: string, name: string, bundleId: string): ProvisioningMapEntry {
+  const entry = { profile, name } as ProvisioningMapEntry
+  Object.defineProperty(entry, 'bundleId', { value: bundleId })
+  return entry
 }
 
 export function parseProvisioningMap(raw: unknown): ProvisioningMap {
@@ -82,7 +90,7 @@ export function parseProvisioningMap(raw: unknown): ProvisioningMap {
 
     try {
       const detail = parseMobileprovisionDetailedFromBase64(profile)
-      map[bundleId] = { profile, name: detail.name }
+      map[bundleId] = createProvisioningMapEntry(profile, detail.name, detail.bundleId)
     }
     catch {
       invalidMap(`The saved provisioning profile for ${bundleId} is invalid`)
@@ -133,8 +141,7 @@ export function analyzeProvisioningCoverage(targets: PbxTarget[], map: Provision
   }>()
 
   for (const [sourceKey, entry] of Object.entries(map)) {
-    const wildcardBundleId = parseMobileprovisionDetailedFromBase64(entry.profile).bundleId
-    const matchingTargets = missing.filter(target => wildcardBundleMatches(wildcardBundleId, target.bundleId))
+    const matchingTargets = missing.filter(target => wildcardBundleMatches(entry.bundleId, target.bundleId))
     if (matchingTargets.length === 0)
       continue
     const existing = matchingWildcards.get(entry.profile)

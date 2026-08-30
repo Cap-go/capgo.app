@@ -438,7 +438,7 @@ await test('duplicate replacement requires a second interactive confirmation and
 
 await test('registers lowercase ios-provisioning help with only the supported command options', () => {
   const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-  const help = spawnSync(process.execPath, [resolve(cliDir, 'dist/index.js'), 'build', 'credentials', 'ios-provisioning', '--help'], { encoding: 'utf8' })
+  const help = spawnSync(process.execPath, [resolve(cliDir, 'src/index.ts'), 'build', 'credentials', 'ios-provisioning', '--help'], { encoding: 'utf8' })
   assert.equal(help.status, 0, help.stderr)
   assert.match(help.stdout, /Usage: @capgo\/cli build credentials ios-provisioning \[options\]/)
   assert.match(help.stdout, /--local/)

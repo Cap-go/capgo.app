@@ -10,7 +10,7 @@ import { canPromptInteractively, formatError, getAppId, getConfig } from '../uti
 import { loadSavedCredentials, updateSavedCredentials } from './credentials'
 import { decodeCredentialBase64 } from './credentials-base64'
 import { resolveCredentialsStore } from './credentials-store-selection'
-import { analyzeProvisioningCoverage, isConcreteBundleId, parseProvisioningMap } from './ios-provisioning-map'
+import { analyzeProvisioningCoverage, createProvisioningMapEntry, isConcreteBundleId, parseProvisioningMap } from './ios-provisioning-map'
 import { DuplicateProfileError, createProfile, deleteProfile, ensureBundleId, findCertBySha1, generateJwt, verifyApiKey } from './onboarding/apple-api'
 import { findSignableTargets, findXcodeProject } from './pbxproj-parser'
 import { getPlatformDirFromCapacitorConfig } from './platform-paths'
@@ -201,7 +201,7 @@ export async function runIosProvisioningCommand(options: IosProvisioningOptions,
     if (accepted) {
       const repaired = { ...map }
       for (const target of coverage.wildcardReuse.targets)
-        repaired[target.bundleId] = { ...coverage.wildcardReuse.entry }
+        repaired[target.bundleId] = coverage.wildcardReuse.entry
       await deps.persistMap(project.appId, source, repaired)
       map = repaired
       coverage = analyzeProvisioningCoverage(project.targets, map)
@@ -229,7 +229,7 @@ export async function runIosProvisioningCommand(options: IosProvisioningOptions,
     const profile = await createTargetProfile(target, apple.certificateId, apple.freshToken, apple.secrets, deps)
     const updated = {
       ...map,
-      [target.bundleId]: { profile: profile.profileContent, name: profile.profileName },
+      [target.bundleId]: createProvisioningMapEntry(profile.profileContent, profile.profileName, target.bundleId),
     }
     await deps.persistMap(project.appId, source, updated)
     map = updated

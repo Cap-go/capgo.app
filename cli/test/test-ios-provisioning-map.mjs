@@ -61,6 +61,12 @@ test('canonicalizes legacy and object entries with the embedded profile name', (
     'com.example.app': { profile: appProfile, name: 'Canonical App' },
     'com.example.widget': { profile: widgetProfile, name: 'Canonical Widget' },
   })
+  assert.equal(parsed['com.example.app'].bundleId, 'com.example.app')
+  assert.equal(parsed['com.example.widget'].bundleId, 'com.example.widget')
+  assert.equal(JSON.stringify(parsed), mapJson({
+    'com.example.app': { profile: appProfile, name: 'Canonical App' },
+    'com.example.widget': { profile: widgetProfile, name: 'Canonical Widget' },
+  }))
 })
 
 test('uses exact map keys for coverage and groups duplicate target bundle IDs', () => {
