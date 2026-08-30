@@ -21,8 +21,8 @@ const APP_PREVIEW_LIMIT = 5
 type AuthenticationDestination = 'ota' | 'builder' | 'choose-first'
 
 const AUTHENTICATION_CONTINUATION: Record<AuthenticationDestination, string> = {
-  ota: 'After authentication succeeds, continue to Section 2 and recommend the guided `init` flow.',
-  builder: 'After authentication succeeds, continue to the Capgo MCP installation section. Do not configure Capgo Builder manually.',
+  'ota': 'After authentication succeeds, continue to Section 2 and recommend the guided `init` flow.',
+  'builder': 'After authentication succeeds, continue to the Capgo MCP installation section. Do not configure Capgo Builder manually.',
   'choose-first': 'After authentication succeeds, ask which Capgo product I want to configure first. Do not begin either setup before I answer.',
 }
 
