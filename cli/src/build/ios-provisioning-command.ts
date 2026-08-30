@@ -10,7 +10,7 @@ import { canPromptInteractively, formatError, getAppId, getConfig } from '../uti
 import { loadSavedCredentials, updateSavedCredentials } from './credentials'
 import { decodeCredentialBase64 } from './credentials-base64'
 import { resolveCredentialsStore } from './credentials-store-selection'
-import { analyzeProvisioningCoverage, parseProvisioningMap } from './ios-provisioning-map'
+import { analyzeProvisioningCoverage, isConcreteBundleId, parseProvisioningMap } from './ios-provisioning-map'
 import { DuplicateProfileError, createProfile, deleteProfile, ensureBundleId, findCertBySha1, generateJwt, verifyApiKey } from './onboarding/apple-api'
 import { findSignableTargets, findXcodeProject } from './pbxproj-parser'
 import { getPlatformDirFromCapacitorConfig } from './platform-paths'
@@ -162,13 +162,16 @@ async function createTargetProfile(
 }
 
 export async function runIosProvisioningCommand(options: IosProvisioningOptions, deps: IosProvisioningCommandDeps): Promise<void> {
+  if (options.local && options.global)
+    throw new Error('Cannot use --local and --global together')
+
   const project = await deps.loadProject()
   if (!project.appId)
     throw new Error('The Capacitor project does not define an app id')
   if (project.targets.length === 0)
     throw new Error('The iOS Xcode project has no signable targets')
 
-  const unresolved = project.targets.filter(target => !target.bundleId || target.bundleId.includes('$(') || target.bundleId.includes('${') || target.bundleId.includes('*'))
+  const unresolved = project.targets.filter(target => !isConcreteBundleId(target.bundleId))
   if (unresolved.length > 0)
     throw new Error(`Cannot resolve the bundle id for: ${unresolved.map(target => target.name).join(', ')}`)
 

@@ -125,6 +125,16 @@ await test('uses the Capacitor app id for source selection and follows shared sp
   await assert.rejects(runIosProvisioningCommand({}, deps), /pass --local or --global/i)
   assert.equal(loadedAppId, 'com.example.app')
   await runIosProvisioningCommand({ local: true }, deps)
+
+  let storeReads = 0
+  const invalid = baseDeps({
+    loadStores: async () => {
+      storeReads++
+      return { local: exact, global: exact }
+    },
+  })
+  await assert.rejects(runIosProvisioningCommand({ local: true, global: true }, invalid.deps), /cannot use --local and --global together/i)
+  assert.equal(storeReads, 0)
 })
 
 await test('requires existing iOS credentials and a valid nonempty provisioning map', async () => {
