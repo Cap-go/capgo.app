@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
@@ -251,7 +251,7 @@ await test('resolveUpdaterPackageJsonPath resolves root-relative package.json op
   try {
     process.chdir(root)
     const resolved = resolveUpdaterPackageJsonPath('missing/package.json,apps/mobile/package.json')
-    assert.equal(resolved, join(root, 'apps', 'mobile', 'package.json'))
+    assert.equal(resolved, realpathSync(join(root, 'apps', 'mobile', 'package.json')))
   }
   finally {
     process.chdir(previousCwd)
