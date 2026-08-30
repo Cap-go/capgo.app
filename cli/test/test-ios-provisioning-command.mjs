@@ -179,7 +179,12 @@ await test('confirms one wildcard reuse and persists exact canonical entries in 
   await runIosProvisioningCommand({}, deps)
 
   assert.equal(state.prompts.length, 1)
-  assert.match(state.prompts[0], /App.*com\.example\.app.*Widget.*com\.example\.app\.widget/s)
+  assert.equal(state.prompts[0], `Update the provisioning profile map so these targets reuse "Wildcard Profile"?
+
+  • App
+    Bundle ID: com.example.app
+  • Widget
+    Bundle ID: com.example.app.widget`)
   assert.equal(state.writes.length, 1)
   assert.equal(state.writes[0].source, 'local')
   assert.deepEqual(state.writes[0].value['com.example.app'], { profile: wildcard, name: 'Wildcard Profile' })
@@ -334,6 +339,12 @@ await test('generates targets sequentially with fresh JWTs and persists after ea
   await runIosProvisioningCommand({}, deps)
 
   assert.equal(state.prompts.length, 1)
+  assert.equal(state.prompts[0], `Generate App Store provisioning profiles for these targets?
+
+  • App
+    Bundle ID: com.example.app
+  • Widget
+    Bundle ID: com.example.app.widget`)
   assert.equal(state.writes.length, 2)
   assert.ok(state.writes[0].value['com.example.app'])
   assert.equal(state.writes[0].value['com.example.app.widget'], undefined)

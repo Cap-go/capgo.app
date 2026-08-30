@@ -46,6 +46,12 @@ function formatTargets(targets: ProvisioningTargetGroup[]): string {
   return targets.map(target => `${target.targetNames.join('/')} (${target.bundleId})`).join(', ')
 }
 
+function formatTargetList(targets: ProvisioningTargetGroup[]): string {
+  return targets
+    .map(target => `  • ${target.targetNames.join('/')}\n    Bundle ID: ${target.bundleId}`)
+    .join('\n')
+}
+
 async function confirmRequired(deps: IosProvisioningCommandDeps, message: string): Promise<boolean> {
   if (!deps.canPrompt())
     throw new Error('This change requires confirmation in an interactive terminal. Run the command locally and retry.')
@@ -196,7 +202,7 @@ export async function runIosProvisioningCommand(options: IosProvisioningOptions,
   if (coverage.wildcardReuse) {
     const accepted = await confirmRequired(
       deps,
-      `Update the provisioning profile map so these targets reuse "${coverage.wildcardReuse.entry.name}"? ${formatTargets(coverage.wildcardReuse.targets)}`,
+      `Update the provisioning profile map so these targets reuse "${coverage.wildcardReuse.entry.name}"?\n\n${formatTargetList(coverage.wildcardReuse.targets)}`,
     )
     if (accepted) {
       const repaired = { ...map }
@@ -220,7 +226,7 @@ export async function runIosProvisioningCommand(options: IosProvisioningOptions,
   const apple = await prepareAppleCredentials(credentials, deps)
   const generate = await confirmRequired(
     deps,
-    `Generate App Store provisioning profiles for these targets? ${formatTargets(generationTargets)}`,
+    `Generate App Store provisioning profiles for these targets?\n\n${formatTargetList(generationTargets)}`,
   )
   if (!generate)
     throw new Error('Provisioning profile generation was declined; no Apple resources were changed')
