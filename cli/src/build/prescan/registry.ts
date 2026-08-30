@@ -37,7 +37,7 @@ import {
 import { credentialsSaved } from './checks/credentials'
 import { ascKeyValid, p12Expiry, p12LegacyEncryption, p12Opens } from './checks/ios-certs'
 import { infoplistSanity } from './checks/ios-plist'
-import { certProfilePairing, profileBundleMatch, profileExpiry, profileTypeVsMode, targetsCovered } from './checks/ios-profiles'
+import { certProfilePairing, profileBundleMatch, profileExpiry, profileTypeVsMode, targetsCovered, wildcardProfileTargets } from './checks/ios-profiles'
 import {
   allowNavigationWildcard,
   serverCleartext,
@@ -119,7 +119,7 @@ export const ALL_CHECKS: PrescanCheck[] = [
   // ios certs / profiles / plist
   p12Opens, { ...p12LegacyEncryption, enforceAfter: IOS_P12_LEGACY_ENFORCE_AFTER },
   p12Expiry, profileExpiry, profileBundleMatch, profileTypeVsMode,
-  certProfilePairing, targetsCovered, infoplistSanity, ascKeyValid,
+  certProfilePairing, targetsCovered, wildcardProfileTargets, infoplistSanity, ascKeyValid,
   // android keystore / project
   keystoreOpens, keystoreExpiry, cordovaVarsPresent, gradlePropsHeuristics,
   playSaJson, flavorExists, agp8PackageAttr,
