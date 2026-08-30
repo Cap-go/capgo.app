@@ -317,10 +317,11 @@ Expected: PASS with no failed tests.
 - [ ] **Step 2: Run repository lint before validation**
 
 ```bash
+bun lint:fix
 bun lint
 ```
 
-Expected: PASS with no lint errors.
+Expected: the formatter completes, then lint passes with no errors.
 
 - [ ] **Step 3: Run frontend type checking**
 
@@ -335,8 +336,8 @@ Expected: PASS with no TypeScript or Vue errors.
 Run:
 
 ```bash
-git diff 3346033bd --stat
-git diff --check 3346033bd
+git diff 3346033bd..HEAD --stat
+git diff --check 3346033bd..HEAD
 git status --short
 ```
 
@@ -354,4 +355,4 @@ Confirm from the focused tests that:
 
 - [ ] **Step 6: Prepare and open the pull request**
 
-Invoke the repository-required `pr-ready` workflow, push the branch, and open a pull request whose title does not start with `[CODEX]`. Include the intent mapping and verification commands in the PR body.
+Invoke the repository-required `pr-ready` workflow, push the branch, and open a pull request whose title does not start with `[CODEX]`. The PR body must contain `Summary (AI generated)`, `Motivation (AI generated)`, `Business Impact (AI generated)`, and `Test Plan (AI generated)` sections. Include the intent mapping and verification commands in those sections.
