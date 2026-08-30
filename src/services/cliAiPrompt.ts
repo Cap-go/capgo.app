@@ -18,6 +18,13 @@ export interface CliAiPromptInput {
 }
 
 const APP_PREVIEW_LIMIT = 5
+type AuthenticationDestination = 'ota' | 'builder' | 'choose-first'
+
+const AUTHENTICATION_CONTINUATION: Record<AuthenticationDestination, string> = {
+  ota: 'After authentication succeeds, continue to Section 2 and recommend the guided `init` flow.',
+  builder: 'After authentication succeeds, continue to the Capgo MCP installation section. Do not configure Capgo Builder manually.',
+  'choose-first': 'After authentication succeeds, ask which Capgo product I want to configure first. Do not begin either setup before I answer.',
+}
 
 function promptLabel(value: string | null | undefined, fallback: string): string {
   return value?.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim() || fallback
@@ -60,7 +67,7 @@ function formatOrganization(organization: CliAiPromptOrganization): string {
   ].join('\n')
 }
 
-function buildAuthenticationSection(apiKey: string): string {
+function buildAuthenticationSection(apiKey: string, destination: AuthenticationDestination = 'ota'): string {
   return `You are helping me configure Capgo for my mobile app.
 
 ## 1. Mandatory Capgo authentication
@@ -97,8 +104,48 @@ Authentication requirements:
 - Do not repeat or display the key in explanations or your final response.
 - After authentication succeeds, do not include the API key in subsequent commands.
 - For now, only complete authentication. Do not run \`init\` during this stage.
-- After authentication succeeds, continue to Section 2 and recommend the guided \`init\` flow.`
+- ${AUTHENTICATION_CONTINUATION[destination]}`
 }
+
+const BUILDER_MCP_SECTION = `## Install Capgo MCP and start Builder onboarding
+
+Capgo Builder setup must be conducted through Capgo MCP. Do not configure signing, credentials, native builds, or store access manually.
+
+Determine which supported MCP client you are currently running in. Use its install-mcp client identifier:
+
+- Codex: \`codex\`
+- Cursor: \`cursor\`
+- Claude Code: \`claude-code\`
+- Windsurf: \`windsurf\`
+- VS Code: \`vscode\`
+- Zed: \`zed\`
+
+If you cannot identify the current client safely, ask me which client I use and wait for my answer.
+
+Replace \`{MCP_CLIENT}\` with the chosen identifier and install Capgo MCP:
+
+npx install-mcp 'npx @capgo/cli@latest mcp' --client {MCP_CLIENT}
+
+After installation, check whether Capgo MCP tools are available in the current session.
+
+- If the tools are unavailable until restart, tell me to restart the AI client. Do not pretend onboarding has started. Tell me that after restart I can say: “Continue Capgo Builder setup. Verify Capgo MCP is connected, then call start_capgo_builder_onboarding.” Stop and wait for the restart.
+- If the tools are available without restart, continue immediately.
+
+Once Capgo MCP is available, call \`start_capgo_builder_onboarding\` immediately. If I already named iOS or Android, pass that platform; otherwise omit it and let the tool ask.
+
+Follow every result's \`next\` instruction exactly. Use \`capgo_builder_onboarding_next_step\` and \`capgo_builder_onboarding_explain\` only as directed until setup is complete. Do not replace the MCP flow with manual repository inspection or web research, and do not claim success unless the onboarding tools report completion.`
+
+const CHOOSE_FIRST_SECTION = `## Choose what to configure first
+
+Ask me this question exactly and wait for my answer:
+
+“What would you like to configure first: Capgo Live Updates or Capgo Builder?”
+
+Do not start both setup flows concurrently.
+
+- If I choose Capgo Live Updates, follow the complete Live Updates branch below first.
+- If I choose Capgo Builder, follow the complete Builder branch below first.
+- After the selected setup completes, offer to configure the other product. Start it only if I agree.`
 
 const INIT_RECOMMENDATION_SECTION = `## 2. Choose guided init or AI-led setup
 
@@ -507,9 +554,8 @@ The test succeeds when:
 - The application calls \`notifyAppReady()\` without subsequently rolling back.
 - No \`cap sync\`, \`cap copy\`, or equivalent synchronization occurred after the test change was created.`
 
-export function buildCliAiSetupPrompt(input: CliAiPromptInput): string {
+function otaSections(input: CliAiPromptInput): string[] {
   return [
-    buildAuthenticationSection(input.apiKey),
     INIT_RECOMMENDATION_SECTION,
     buildOrganizationSection(input),
     CHANNEL_SECTION,
@@ -517,5 +563,37 @@ export function buildCliAiSetupPrompt(input: CliAiPromptInput): string {
     NOTIFY_APP_READY_SECTION,
     FIRST_UPLOAD_SECTION,
     FIRST_UPDATE_TEST_SECTION,
+  ]
+}
+
+function normalizeCliAiPromptIntent(value: unknown): 'ota' | 'builder' | 'both' | 'exploring' {
+  return value === 'builder' || value === 'both' || value === 'exploring' || value === 'ota'
+    ? value
+    : 'ota'
+}
+
+export function buildCliAiSetupPrompt(input: CliAiPromptInput, rawIntent?: unknown): string {
+  const intent = normalizeCliAiPromptIntent(rawIntent)
+  if (intent === 'builder') {
+    return [
+      buildAuthenticationSection(input.apiKey, 'builder'),
+      BUILDER_MCP_SECTION,
+    ].join('\n\n')
+  }
+
+  if (intent === 'both' || intent === 'exploring') {
+    return [
+      buildAuthenticationSection(input.apiKey, 'choose-first'),
+      CHOOSE_FIRST_SECTION,
+      '# Capgo Live Updates branch',
+      ...otaSections(input),
+      '# Capgo Builder branch',
+      BUILDER_MCP_SECTION,
+    ].join('\n\n')
+  }
+
+  return [
+    buildAuthenticationSection(input.apiKey),
+    ...otaSections(input),
   ].join('\n\n')
 }
