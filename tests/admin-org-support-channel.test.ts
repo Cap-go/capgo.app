@@ -170,13 +170,16 @@ describe('[POST] /private/admin_stats enterprise_adoption', () => {
     })
     expect(setResponse.status).toBe(200)
 
+    const endDate = new Date()
+    endDate.setUTCHours(23, 59, 59, 0)
+
     const response = await fetchTestRequest(getEndpointUrl('/private/admin_stats'), {
       method: 'POST',
       headers: adminHeaders,
       body: JSON.stringify({
         metric_category: 'enterprise_adoption',
         start_date: '2026-01-01T00:00:00.000Z',
-        end_date: '2026-08-28T23:59:59.000Z',
+        end_date: endDate.toISOString(),
       }),
     })
 
