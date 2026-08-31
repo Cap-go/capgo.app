@@ -1,4 +1,5 @@
 import { WorkerEntrypoint } from 'cloudflare:workers'
+import { FILE_READ_TRACKING_QUERY_PARAMS, getAttachmentFileIdFromReadPath, hasDeletedFileMarker } from '../../supabase/functions/_backend/files/file_read_cache.ts'
 import { app as files } from '../../supabase/functions/_backend/files/files.ts'
 import { handlePreviewRequest, isPreviewSubdomain } from '../../supabase/functions/_backend/files/preview.ts'
 import { app as download_link } from '../../supabase/functions/_backend/private/download_link.ts'
@@ -11,7 +12,6 @@ export { AttachmentUploadHandler, UploadHandler } from '../../supabase/functions
 
 const functionName = 'files'
 const app = createHono(functionName, version)
-const TRACKING_QUERY_PARAMS = ['device_id'] as const
 
 type CachedFilesLoopback = {
   fetch: (request: Request, init?: { cf?: { cacheKey: string } }) => Promise<Response>
@@ -66,7 +66,7 @@ function isCacheablePreviewRead(request: Request): boolean {
 function buildWorkersCacheKey(request: Request): string | null {
   const url = new URL(request.url)
   if (isCacheableAttachmentRead(request))
-    return `/files-cache${url.pathname}${normalizeSearch(url, TRACKING_QUERY_PARAMS)}`
+    return `/files-cache${url.pathname}${normalizeSearch(url, FILE_READ_TRACKING_QUERY_PARAMS)}`
 
   if (isCacheablePreviewRead(request)) {
     const hostname = getRequestHostname(request).toLowerCase()
@@ -108,6 +108,23 @@ export const filesWorkerCacheTestUtils = {
 
 export default {
   async fetch(request: Request, env: Cloudflare.Env, ctx: FilesExecutionContext): Promise<Response> {
+    const rawFileId = getAttachmentFileIdFromReadPath(new URL(request.url).pathname)
+    let fileId: string | null = rawFileId
+    if (rawFileId) {
+      try {
+        fileId = decodeURIComponent(rawFileId)
+      }
+      catch {
+        // Let the files handler return its invalid-path response.
+      }
+    }
+    if (fileId && await hasDeletedFileMarker(fileId)) {
+      return new Response(JSON.stringify({ error: 'not_found', message: 'Not found' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
     const cacheKey = buildWorkersCacheKey(request)
     const cachedFiles = ctx.exports?.CachedFiles
     if (cacheKey && cachedFiles)
