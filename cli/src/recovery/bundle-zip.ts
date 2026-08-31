@@ -16,9 +16,16 @@ export function resolveUpdaterPackageJsonPath(packageJsonOption?: string): strin
   const paths = parsePackageJsonOptionPaths(packageJsonOption)
   if (paths?.length) {
     for (const path of paths) {
-      const resolved = resolve(root, path)
-      if (existsSync(resolved))
-        return resolved
+      // Relative paths are written from where the CLI runs, so try cwd before
+      // the monorepo root: in a workspace package (e.g. apps/mobile),
+      // ./package.json must mean the app's package.json, not the workspace
+      // root's, which findRoot resolves to. This matches how getBundleVersion
+      // and getAllPackagesDependencies read the same option.
+      for (const baseDir of [cwd(), root]) {
+        const resolved = resolve(baseDir, path)
+        if (existsSync(resolved))
+          return resolved
+      }
     }
   }
   return join(root, 'package.json')
