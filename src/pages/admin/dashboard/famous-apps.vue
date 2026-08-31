@@ -78,6 +78,7 @@ const notableCount = ref(0)
 const searchQuery = ref('')
 const minScore = ref(55)
 const selectedTier = ref<FameTierFilter>('all')
+const failedIconAppIds = ref<Set<string>>(new Set())
 let loadAppsSequence = 0
 let searchReloadTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -87,6 +88,18 @@ function formatNumber(value: number) {
 
 function formatTier(tier: FameTier) {
   return t(TIER_LABEL_KEYS[tier])
+}
+
+function markIconFailed(appId: string) {
+  if (failedIconAppIds.value.has(appId))
+    return
+  const next = new Set(failedIconAppIds.value)
+  next.add(appId)
+  failedIconAppIds.value = next
+}
+
+function initialsFor(name: string) {
+  return name.slice(0, 2).toUpperCase()
 }
 
 function cancelDebouncedSearchReload() {
@@ -141,6 +154,7 @@ async function loadApps() {
     iconicCount.value = payload.data?.iconic_count ?? 0
     famousCount.value = payload.data?.famous_count ?? 0
     notableCount.value = payload.data?.notable_count ?? 0
+    failedIconAppIds.value = new Set()
     loadFailed.value = false
   }
   catch (error) {
@@ -184,16 +198,18 @@ const appColumns = computed<TableColumn[]>(() => [
     sortable: false,
     renderFunction: (item: FamousApp) => {
       const displayName = item.known_as || item.app_name || item.app_id
+      const showIcon = Boolean(item.icon_url) && !failedIconAppIds.value.has(item.app_id)
       return h('div', { class: 'flex min-w-0 items-center gap-3' }, [
-        item.icon_url
+        showIcon
           ? h('img', {
               src: item.icon_url,
               alt: displayName,
               class: 'h-10 w-10 shrink-0 rounded-lg object-cover',
+              onError: () => markIconFailed(item.app_id),
             })
           : h('div', {
               class: 'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-200 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-200',
-            }, displayName.slice(0, 2).toUpperCase()),
+            }, initialsFor(displayName)),
         h('div', { class: 'min-w-0' }, [
           h('p', { class: 'truncate font-medium text-slate-900 dark:text-white' }, displayName),
           h('p', { class: 'truncate font-mono text-xs font-normal text-slate-500 dark:text-slate-400' }, item.app_id),

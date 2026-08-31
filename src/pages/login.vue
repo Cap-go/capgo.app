@@ -11,6 +11,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
+import IconScanQrCode from '~icons/lucide/scan-qr-code'
 import iconEmail from '~icons/oui/email?raw'
 import iconPassword from '~icons/ph/key?raw'
 import mfaIcon from '~icons/simple-icons/2fas?raw'
@@ -1107,7 +1108,8 @@ onMounted(checkLogin)
               <button type="button" class="mt-3" :class="authGhostButtonClass" @click="openSupport">
                 {{ t("support") }}
               </button>
-              <button type="button" v-if="isMobile" class="mt-3" :class="authGhostButtonClass" @click="openScan">
+              <button v-if="isMobile" type="button" class="mt-3 inline-flex items-center gap-2" :class="authGhostButtonClass" @click="openScan">
+                <IconScanQrCode class="h-4 w-4" aria-hidden="true" />
                 {{ t("test-bundle") }}
               </button>
             </section>
