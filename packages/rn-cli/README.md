@@ -25,7 +25,7 @@ npx @capgo/rn-cli@latest upload com.example.app --channel production
 npx @capgo/rn-cli@latest init
 ```
 
-`upload` scans React Native native modules (`react-native.config.js`, podspec, `android/` / `ios/`), compares them to the channel metadata, then uploads through `@capgo/cli` with `--ignore-metadata-check` so Capacitor metadata logic is not used.
+`upload` scans React Native native modules, compares them to the channel metadata, then uploads through the shared `@capgo/cli` upload library (no subprocess) with precomputed `native_packages`.
 
 ## Export layout
 

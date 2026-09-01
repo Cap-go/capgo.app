@@ -153,6 +153,19 @@ test('--native-packages-file with --ignore-metadata-check is allowed', () => {
   }))
 })
 
+test('precomputed nativePackages without --ignore-metadata-check is rejected', () => {
+  assert.throws(
+    () => checkValidOptions({
+      nativePackages: [{ name: '@capgo/react-native-updater', version: '0.1.0' }],
+    }),
+    (error) => {
+      assert.ok(error instanceof Error)
+      assert.match(error.message, /--ignore-metadata-check/)
+      return true
+    },
+  )
+})
+
 test('--rollout-advance with --dry-upload is rejected', () => {
   assert.throws(
     () => checkValidOptions({ rolloutAdvance: true, dryUpload: true }),

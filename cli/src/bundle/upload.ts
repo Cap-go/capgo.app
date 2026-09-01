@@ -243,9 +243,8 @@ async function verifyCompatibility(supabase: SupabaseType, pm: pmType, options: 
   const ignoreMetadataCheck = options.ignoreMetadataCheck
   const autoMinUpdateVersion = options.autoMinUpdateVersion
   let minUpdateVersion = options.minUpdateVersion
-  const precomputedNativePackages = options.nativePackagesFile
-    ? loadNativePackagesFromFile(options.nativePackagesFile)
-    : undefined
+  const precomputedNativePackages = options.nativePackages
+    ?? (options.nativePackagesFile ? loadNativePackagesFromFile(options.nativePackagesFile) : undefined)
 
   const { data: channelData, error: channelError } = await supabase
     .from('channels')
@@ -357,7 +356,7 @@ async function verifyCompatibility(supabase: SupabaseType, pm: pmType, options: 
         .map(a => [a.name, a]))
     : new Map()
 
-  const nativePackages = options.nativePackagesFile
+  const nativePackages = precomputedNativePackages !== undefined
     ? precomputedNativePackages
     : ((hashedLocalDependencies.size > 0 || !options.ignoreMetadataCheck)
         ? Array.from(hashedLocalDependencies, ([name, value]) => ({
@@ -2244,6 +2243,9 @@ export function checkValidOptions(options: OptionsUpload) {
   }
   if (options.nativePackagesFile && !options.ignoreMetadataCheck) {
     uploadFail('--native-packages-file requires --ignore-metadata-check (React Native metadata is checked by @capgo/rn-cli)')
+  }
+  if (options.nativePackages && !options.ignoreMetadataCheck) {
+    uploadFail('Precomputed native_packages require --ignore-metadata-check (React Native metadata is checked by @capgo/rn-cli)')
   }
 }
 

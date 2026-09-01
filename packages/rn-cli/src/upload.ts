@@ -1,9 +1,8 @@
-import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { log, spinner } from '@clack/prompts'
 import color from 'picocolors'
+import { findSavedKey, uploadBundle } from '@capgo/cli/sdk'
 import { runBundle } from './bundle.js'
 import { runCompatibilityCheck, scanNativePackagesForUpload } from './compatibility.js'
 
@@ -19,22 +18,10 @@ export interface UploadOptions {
   deltaOnly?: boolean
   delta?: boolean
   dryRun?: boolean
-  capgoCli: string
   ignoreMetadataCheck?: boolean
   failOnIncompatible?: boolean
   nodeModules?: string
   packageJson?: string
-}
-
-function run(cmd: string, args: string[], cwd: string): Promise<void> {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(cmd, args, { cwd, stdio: 'inherit', shell: false, env: process.env })
-    child.on('error', reject)
-    child.on('exit', (code) => {
-      if (code === 0) resolvePromise()
-      else reject(new Error(`${cmd} exited with ${code}`))
-    })
-  })
 }
 
 export async function runUpload(appId: string, options: UploadOptions): Promise<void> {
@@ -74,62 +61,38 @@ export async function runUpload(appId: string, options: UploadOptions): Promise<
   }
 
   const nativePackages = await scanNativePackagesForUpload(project, packageJsonPath, options.nodeModules)
-  const metadataDir = mkdtempSync(join(tmpdir(), 'capgo-rn-metadata-'))
-  const nativePackagesFile = join(metadataDir, 'native-packages.json')
-  writeFileSync(nativePackagesFile, JSON.stringify(nativePackages))
-
-  const s = process.stdout.isTTY ? spinner() : null
-  if (s) s.start('Uploading to Capgo with file-level delta')
-
   const useDelta = options.delta !== false
   if (!useDelta && options.deltaOnly) {
     throw new Error('--delta-only cannot be combined with --no-delta')
   }
-  const args = [
-    'bundle', 'upload',
+
+  const s = process.stdout.isTTY ? spinner() : null
+  if (s) s.start('Uploading to Capgo with file-level delta')
+
+  const result = await uploadBundle({
     appId,
-    '--path', exportPath,
-    '--channel', options.channel,
-    '--no-code-check',
-    '--ignore-metadata-check',
-    '--native-packages-file', nativePackagesFile,
-    '--package-json', packageJsonPath,
-  ]
+    path: exportPath,
+    channel: options.channel,
+    apikey: options.apikey ?? findSavedKey(),
+    bundle: options.bundle,
+    packageJsonPaths: packageJsonPath,
+    nodeModules: options.nodeModules,
+    disableCodeCheck: true,
+    ignoreCompatibilityCheck: true,
+    nativePackages,
+    delta: useDelta,
+    deltaOnly: options.deltaOnly,
+  })
 
-  if (useDelta) args.push('--delta')
-  if (options.deltaOnly) args.push('--delta-only')
-  if (options.apikey) args.push('--apikey', options.apikey)
-  if (options.bundle) args.push('--bundle', options.bundle)
-  if (options.nodeModules) args.push('--node-modules', options.nodeModules)
-
-  const localCapgoJs = resolve(project, 'node_modules', '@capgo/cli', 'dist', 'index.js')
-  const monorepoCapgoJs = resolve(project, '..', '..', 'cli', 'dist', 'index.js')
-  const monorepoFromPackages = resolve(project, '..', 'cli', 'dist', 'index.js')
-
-  let cmd = options.capgoCli
-  let cmdArgs = args
-  if (existsSync(localCapgoJs)) {
-    cmd = process.execPath
-    cmdArgs = [localCapgoJs, ...args]
-  }
-  else if (existsSync(monorepoCapgoJs)) {
-    cmd = process.execPath
-    cmdArgs = [monorepoCapgoJs, ...args]
-  }
-  else if (existsSync(monorepoFromPackages)) {
-    cmd = process.execPath
-    cmdArgs = [monorepoFromPackages, ...args]
-  }
-
-  try {
-    await run(cmd, cmdArgs, project)
-    if (s) s.stop(color.green('Upload complete'))
-  }
-  catch (error) {
+  if (!result.success) {
     if (s) s.stop(color.red('Upload failed'))
-    throw error
+    throw new Error(result.error ?? 'Upload failed')
   }
-  finally {
-    rmSync(metadataDir, { recursive: true, force: true })
+
+  if (result.skipped) {
+    if (s) s.stop(color.yellow(`Upload skipped: ${result.reason ?? 'unknown reason'}`))
+    return
   }
+
+  if (s) s.stop(color.green('Upload complete'))
 }

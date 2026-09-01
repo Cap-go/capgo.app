@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { optionsBaseSchema } from './base'
+import { nativePackageSchema } from './common'
 
 // ============================================================================
 // Bundle Upload Options Schema
@@ -36,6 +37,7 @@ export const optionsUploadSchema = optionsBaseSchema.extend({
   autoBump: z.enum(['major', 'minor', 'patch', 'metadata', 'ai']).optional(),
   ignoreMetadataCheck: z.boolean().optional(),
   nativePackagesFile: z.string().optional(),
+  nativePackages: z.array(nativePackageSchema).optional(),
   failOnIncompatible: z.boolean().optional(),
   ignoreChecksumCheck: z.boolean().optional(),
   forceCrc32Checksum: z.boolean().optional(),

@@ -45,7 +45,6 @@ program
   .option('--delta-only', 'Upload delta files only (no zip)', false)
   .option('--no-delta', 'Disable delta upload')
   .option('--dry-run', 'Bundle only, do not upload', false)
-  .option('--capgo-cli <bin>', 'Capgo CLI binary', 'capgo')
   .option('--package-json <path>', 'Path to package.json (monorepos)')
   .option('--node-modules <paths>', 'Comma-separated node_modules roots (monorepos)')
   .option('--ignore-metadata-check', 'Skip channel native metadata compatibility check before upload', false)
