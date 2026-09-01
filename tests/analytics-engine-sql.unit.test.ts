@@ -54,6 +54,12 @@ describe('analytics engine sql lint rules', () => {
     expect(lintAnalyticsEngineSql(
       "SELECT coalesce(double1, NULL) FROM app_log",
     ).map(issue => issue.rule)).not.toContain('no-if-untyped-null')
+    expect(lintAnalyticsEngineSql(
+      "SELECT sum(if(blob2 = 'set', 1, 0)) AS succeeded FROM app_log WHERE blob2 IN ('set', NULL)",
+    ).map(issue => issue.rule)).not.toContain('no-if-untyped-null')
+    expect(lintAnalyticsEngineSql(
+      "SELECT if(blob2 IN ('set', NULL), 1, 0) FROM app_log",
+    ).map(issue => issue.rule)).not.toContain('no-if-untyped-null')
   })
 })
 

@@ -9,6 +9,42 @@ interface AnalyticsEngineSqlLintRule {
   message: string
 }
 
+function isBareNullArg(arg: string): boolean {
+  return arg.trim() === 'NULL'
+}
+
+function ifCallHasBareNullArg(sql: string, openParenIndex: number): boolean {
+  let depth = 0
+  let argStart = openParenIndex + 1
+  for (let i = openParenIndex; i < sql.length; i++) {
+    const char = sql[i]
+    if (char === '(') {
+      depth++
+      continue
+    }
+    if (char === ',' && depth === 1) {
+      if (isBareNullArg(sql.slice(argStart, i)))
+        return true
+      argStart = i + 1
+      continue
+    }
+    if (char === ')') {
+      if (depth === 1)
+        return isBareNullArg(sql.slice(argStart, i))
+      depth--
+    }
+  }
+  return false
+}
+
+function hasUntypedNullIfBranch(sql: string): boolean {
+  for (const match of sql.matchAll(/\bif\s*\(/gi)) {
+    if (ifCallHasBareNullArg(sql, match.index + match[0].length - 1))
+      return true
+  }
+  return false
+}
+
 export const ANALYTICS_ENGINE_SQL_LINT_RULES: AnalyticsEngineSqlLintRule[] = [
   {
     id: 'no-count-star',
@@ -52,9 +88,7 @@ export const ANALYTICS_ENGINE_SQL_LINT_RULES: AnalyticsEngineSqlLintRule[] = [
   },
   {
     id: 'no-if-untyped-null',
-    // Require if( plus a comma-separated NULL. Do not use if\s*\([^)]* — nested IN()
-    // closes the first paren and would miss if(blob2 IN (...), double1, NULL).
-    test: sql => /\bif\s*\(/i.test(sql) && /,\s*NULL\s*[,)]/.test(sql),
+    test: hasUntypedNullIfBranch,
     message: 'Analytics Engine SQL IF() branches must share a type; untyped NULL cannot pair with Double or DateTime',
   },
 ]
