@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { stripeEventTestUtils } from '../supabase/functions/_backend/triggers/stripe_event.ts'
+import { orgEmailNotificationTestUtils } from '../supabase/functions/_backend/utils/org_email_notifications.ts'
 import { extractDataEvent } from '../supabase/functions/_backend/utils/stripe_event.ts'
 
 const mockContext = {
@@ -44,9 +45,17 @@ describe('stripe billing Bento tag updates', () => {
   })
 })
 
-describe('dunning Bento stop event', () => {
-  it.concurrent('uses a Capgo event so Bento can exit dunning for billing contacts', () => {
+describe('dunning Bento events', () => {
+  it.concurrent('uses Capgo events so Bento can start and stop dunning for every org member', () => {
+    expect(stripeEventTestUtils.BENTO_FAILED_PAYMENT_EVENT).toBe('org:failed_payment')
     expect(stripeEventTestUtils.BENTO_CHARGE_SUCCEEDED_EVENT).toBe('org:charge_succeeded')
+    expect(stripeEventTestUtils.BENTO_DUNNING_EVENT_AUDIENCE).toBe('all')
+    expect(stripeEventTestUtils.BENTO_TAG_AUDIENCE).toBe('billing')
+    expect(orgEmailNotificationTestUtils.AUDIENCE_ROLE_NAMES.all).toEqual([])
+    expect(orgEmailNotificationTestUtils.AUDIENCE_ROLE_NAMES.billing).toEqual([
+      'org_super_admin',
+      'org_billing_admin',
+    ])
   })
 })
 
