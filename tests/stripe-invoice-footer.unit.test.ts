@@ -52,6 +52,15 @@ describe('transfer invoice footer helpers', () => {
     }))).toBe(false)
   })
 
+  it.concurrent('does not treat direct-debit payment method types as transfer invoices', () => {
+    for (const paymentMethodType of ['ach_debit', 'sepa_debit', 'acss_debit', 'bacs_debit', 'au_becs_debit']) {
+      expect(stripeEventTestUtils.isTransferInvoice(makeInvoice({
+        collectionMethod: 'charge_automatically',
+        paymentMethodTypes: [paymentMethodType],
+      }))).toBe(false)
+    }
+  })
+
   it.concurrent('stamps draft transfer invoices without the OUR footer marker', () => {
     expect(stripeEventTestUtils.shouldStampTransferInvoiceFooter(makeInvoice({
       status: 'draft',
@@ -100,6 +109,32 @@ describe('transfer invoice footer helpers', () => {
       footer: existingFooter,
       status: 'draft',
     }))).toBe(false)
+  })
+
+  it.concurrent('appends to the live invoice footer instead of a stale webhook snapshot', () => {
+    const staleEventInvoice = makeInvoice({
+      footer: null,
+      status: 'draft',
+    })
+    const liveInvoice = makeInvoice({
+      footer: 'Include PO #12345 on the wire memo.',
+      status: 'draft',
+    })
+
+    expect(stripeEventTestUtils.getTransferInvoiceFooterUpdate(staleEventInvoice)).toBe(
+      stripeEventTestUtils.TRANSFER_INVOICE_FOOTER,
+    )
+    expect(stripeEventTestUtils.getTransferInvoiceFooterUpdate(liveInvoice)).toBe(
+      `Include PO #12345 on the wire memo.\n\n${stripeEventTestUtils.TRANSFER_INVOICE_FOOTER}`,
+    )
+  })
+
+  it.concurrent('skips stamping when a delayed created event arrives after the invoice is finalized', () => {
+    const staleEventInvoice = makeInvoice({ status: 'draft' })
+    const liveInvoice = makeInvoice({ status: 'open' })
+
+    expect(stripeEventTestUtils.shouldStampTransferInvoiceFooter(staleEventInvoice)).toBe(true)
+    expect(stripeEventTestUtils.getTransferInvoiceFooterUpdate(liveInvoice)).toBeNull()
   })
 })
 

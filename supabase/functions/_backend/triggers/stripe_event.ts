@@ -15,7 +15,7 @@ import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { ensureCustomerMetadata, getCreditCheckoutDetails, getStripe, syncStripeCustomerCountry } from '../utils/stripe.ts'
-import { buildTransferInvoiceFooter, isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER, TRANSFER_INVOICE_FOOTER_MAX_LENGTH } from '../utils/stripe_event.ts'
+import { buildTransferInvoiceFooter, getTransferInvoiceFooterUpdate, isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER, TRANSFER_INVOICE_FOOTER_MAX_LENGTH } from '../utils/stripe_event.ts'
 import { customerToSegmentOrg, supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { purgeOnPremCacheForOrg, purgePlanCacheForOrg } from '../utils/cloudflare_cache_purge.ts'
@@ -1014,55 +1014,58 @@ async function customerSourceExpiring(c: Context, org: Org) {
 }
 
 async function invoiceCreatedOrUpdated(c: Context, stripeEvent: Stripe.InvoiceCreatedEvent | Stripe.InvoiceUpdatedEvent) {
-  const invoice = stripeEvent.data.object
+  const eventInvoice = stripeEvent.data.object
 
-  if (!shouldStampTransferInvoiceFooter(invoice)) {
+  if (!shouldStampTransferInvoiceFooter(eventInvoice)) {
     cloudlog({
       requestId: c.get('requestId'),
       message: 'Skipping transfer invoice footer stamp',
-      invoiceId: invoice.id,
-      status: invoice.status,
-      collectionMethod: invoice.collection_method,
-      paymentMethodTypes: invoice.payment_settings?.payment_method_types,
-      isTransferInvoice: isTransferInvoice(invoice),
-    })
-    return c.json(BRES)
-  }
-
-  const footer = buildTransferInvoiceFooter(invoice.footer)
-  if (!footer) {
-    cloudlog({
-      requestId: c.get('requestId'),
-      message: 'Skipping transfer invoice footer stamp: footer would exceed Stripe length limit',
-      invoiceId: invoice.id,
-      status: invoice.status,
-      existingFooterLength: invoice.footer?.length ?? 0,
-      footerMaxLength: TRANSFER_INVOICE_FOOTER_MAX_LENGTH,
-      isTransferInvoice: isTransferInvoice(invoice),
+      invoiceId: eventInvoice.id,
+      status: eventInvoice.status,
+      collectionMethod: eventInvoice.collection_method,
+      paymentMethodTypes: eventInvoice.payment_settings?.payment_method_types,
+      isTransferInvoice: isTransferInvoice(eventInvoice),
     })
     return c.json(BRES)
   }
 
   try {
-    await getStripe(c).invoices.update(invoice.id, {
+    const liveInvoice = await getStripe(c).invoices.retrieve(eventInvoice.id)
+    const footer = getTransferInvoiceFooterUpdate(liveInvoice)
+    if (!footer) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'Skipping transfer invoice footer stamp after live invoice retrieve',
+        invoiceId: liveInvoice.id,
+        status: liveInvoice.status,
+        collectionMethod: liveInvoice.collection_method,
+        paymentMethodTypes: liveInvoice.payment_settings?.payment_method_types,
+        existingFooterLength: liveInvoice.footer?.length ?? 0,
+        footerMaxLength: TRANSFER_INVOICE_FOOTER_MAX_LENGTH,
+        isTransferInvoice: isTransferInvoice(liveInvoice),
+      })
+      return c.json(BRES)
+    }
+
+    await getStripe(c).invoices.update(eventInvoice.id, {
       footer,
     })
     cloudlog({
       requestId: c.get('requestId'),
       message: 'Stamped transfer invoice footer',
-      invoiceId: invoice.id,
-      customerId: invoice.customer,
+      invoiceId: eventInvoice.id,
+      customerId: eventInvoice.customer,
     })
   }
   catch (error) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'Failed to stamp transfer invoice footer',
-      invoiceId: invoice.id,
+      invoiceId: eventInvoice.id,
       error,
     })
     throw simpleError('transfer_invoice_footer_update_failed', 'Failed to update transfer invoice footer', {
-      invoiceId: invoice.id,
+      invoiceId: eventInvoice.id,
     })
   }
 
@@ -1620,4 +1623,5 @@ export const stripeEventTestUtils = {
   isTransferInvoice,
   shouldStampTransferInvoiceFooter,
   buildTransferInvoiceFooter,
+  getTransferInvoiceFooterUpdate,
 }

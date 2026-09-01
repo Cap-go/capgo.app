@@ -126,14 +126,19 @@ const TRANSFER_INVOICE_PAYMENT_METHOD_TYPES = new Set([
   'customer_balance',
   'us_bank_account',
   'ach_credit_transfer',
-  'ach_debit',
-  'sepa_debit',
-  'acss_debit',
-  'bacs_debit',
-  'au_becs_debit',
 ])
 
-type TransferInvoiceShape = Pick<Stripe.Invoice, 'collection_method' | 'payment_settings'>
+type TransferInvoiceShape = {
+  collection_method?: Stripe.Invoice.CollectionMethod | null
+  payment_settings?: {
+    payment_method_types?: string[] | null
+  } | null
+}
+
+type TransferInvoiceFooterShape = TransferInvoiceShape & {
+  footer?: string | null
+  status?: Stripe.Invoice.Status | null
+}
 
 export function isTransferInvoice(invoice: TransferInvoiceShape) {
   if (invoice.collection_method === 'send_invoice')
@@ -155,8 +160,17 @@ export function buildTransferInvoiceFooter(existingFooter?: string | null) {
   return combined
 }
 
+export function getTransferInvoiceFooterUpdate(
+  invoice: TransferInvoiceFooterShape,
+) {
+  if (!shouldStampTransferInvoiceFooter(invoice))
+    return null
+
+  return buildTransferInvoiceFooter(invoice.footer)
+}
+
 export function shouldStampTransferInvoiceFooter(
-  invoice: TransferInvoiceShape & Pick<Stripe.Invoice, 'status' | 'footer'>,
+  invoice: TransferInvoiceFooterShape,
 ) {
   if (invoice.status !== 'draft')
     return false
