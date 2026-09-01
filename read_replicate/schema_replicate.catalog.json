@@ -1789,6 +1789,16 @@
       "position": 26,
       "table": "stripe_info",
       "type": "boolean"
+    },
+    {
+      "default": "'ee'::text",
+      "generated": "",
+      "identity": "",
+      "name": "billing_account",
+      "notNull": true,
+      "position": 27,
+      "table": "stripe_info",
+      "type": "text"
     }
   ],
   "constraints": [
@@ -2021,6 +2031,13 @@
       "name": "unique_name_created_by",
       "table": "orgs",
       "type": "u",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (billing_account = ANY (ARRAY['ee'::text, 'us'::text]))",
+      "name": "stripe_info_billing_account_check",
+      "table": "stripe_info",
+      "type": "c",
       "valid": true
     },
     {

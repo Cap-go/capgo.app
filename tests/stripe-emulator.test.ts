@@ -33,21 +33,47 @@ function expectCheckoutUrlOnEmulator(url: string, baseUrl: string) {
   expect(checkoutUrl.pathname).toMatch(/^\/checkout\/cs_/)
 }
 
-function mockStoredPlanPrices(priceMonthId: string, priceYearId: string) {
+function mockStripeDbLookups(priceMonthId: string, priceYearId: string) {
+  const rowResult = {
+    maybeSingle: vi.fn().mockResolvedValue({
+      data: { billing_account: 'ee' },
+      error: null,
+    }),
+    single: vi.fn().mockResolvedValue({
+      data: {
+        billing_account: 'ee',
+        price_m_id: priceMonthId,
+        price_y_id: priceYearId,
+        price_m_id_us: null,
+        price_y_id_us: null,
+        stripe_id: 'plan_test',
+        stripe_id_us: null,
+      },
+      error: null,
+    }),
+  }
+
   mockedSupabaseAdmin.mockReturnValue({
-    from: vi.fn().mockReturnValue({
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          single: vi.fn().mockResolvedValue({
-            data: {
-              price_m_id: priceMonthId,
-              price_y_id: priceYearId,
-            },
+    from: vi.fn(() => ({
+      select: vi.fn(() => ({
+        eq: vi.fn(() => rowResult),
+      })),
+    })),
+  })
+}
+
+function mockBillingAccountLookup() {
+  mockedSupabaseAdmin.mockReturnValue({
+    from: vi.fn(() => ({
+      select: vi.fn(() => ({
+        eq: vi.fn(() => ({
+          maybeSingle: vi.fn().mockResolvedValue({
+            data: { billing_account: 'ee' },
             error: null,
           }),
-        }),
-      }),
-    }),
+        })),
+      })),
+    })),
   })
 }
 
@@ -160,7 +186,7 @@ describe('stripe emulator integration', () => {
       },
     })
 
-    mockStoredPlanPrices(monthlyPrice.id, yearlyPrice.id)
+    mockStripeDbLookups(monthlyPrice.id, yearlyPrice.id)
 
     const checkout = await createCheckout(
       context,
@@ -205,6 +231,8 @@ describe('stripe emulator integration', () => {
       currency: 'usd',
       unit_amount: 100,
     })
+
+    mockBillingAccountLookup()
 
     const checkout = await createOneTimeCheckout(
       context,
