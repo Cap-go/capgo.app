@@ -3,6 +3,24 @@
 This file provides guidance to AI agents (Claude Code, Cursor, Copilot, etc.)
 when working with code in this repository.
 
+## MUST NOT — never publish private customer data
+
+**This repository is public.** Chat, tickets, and internal messages may contain
+customer emails, names, org IDs, app IDs, API keys, or other private data.
+Private context in a conversation does **not** authorize putting it in git.
+
+### You MUST NOT
+
+- Put customer emails, names, phone numbers, or other PII in source, comments,
+  tests, fixtures, commit messages, PR titles, PR bodies, issue bodies, or
+  review comments.
+- Copy private details from chat "for context" into a public PR, issue, or
+  commit.
+- Use a real customer identifier as a seed, example, or reproduction case.
+
+Describe the bug in generic terms. If a fixture identity is required, invent a
+clearly fake one (`customer-onboarding@example.com`).
+
 ## MUST NOT — never break already-published CLI versions
 
 **We cannot break `@capgo/cli` releases that customers already run in production.**
