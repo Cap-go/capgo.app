@@ -45,6 +45,13 @@ function emitJsonError(error: unknown) {
   console.error(formatError(error))
 }
 
+function emitCliUserJsonError(error: CliUserError) {
+  if (error.context?.message)
+    emitJsonError({ error: error.message, message: error.context.message })
+  else
+    emitJsonError({ error: error.message })
+}
+
 export async function zipBundleInternal(appId: string, options: BundleZipOptions, silent = false): Promise<ZipResult> {
   const { json } = options
   let { bundle, path } = options
@@ -129,7 +136,9 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
         }
         else {
           throw json
-            ? new Error('notifyAppReady_not_in_source_code')
+            ? new CliUserError('notifyAppReady_not_in_source_code', {
+                message: buildCiNotifyAppReadyMessage(path),
+              })
             : new CliUserError(buildCiNotifyAppReadyMessage(path))
         }
       }
@@ -235,10 +244,15 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
   }
   catch (error) {
     if (!silent) {
-      if (json)
-        emitJsonError(error)
-      else
+      if (json) {
+        if (error instanceof CliUserError)
+          emitCliUserJsonError(error)
+        else
+          emitJsonError(error)
+      }
+      else {
         log.error(formatError(error))
+      }
     }
     throw error instanceof Error ? error : new Error(String(error))
   }

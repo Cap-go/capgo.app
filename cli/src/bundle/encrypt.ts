@@ -68,8 +68,11 @@ export async function encryptZipInternal(
           await ensurePublicKeyInConfig({ interactive, silent: silent || json, json })
         }
         catch (error) {
-          if (!interactive && error instanceof Error)
+          if (!interactive && error instanceof Error
+            && /missing public key|missing_public_key/i.test(error.message)
+            && !(error instanceof CliUserError)) {
             throw new CliUserError(error.message)
+          }
           throw error
         }
       }
