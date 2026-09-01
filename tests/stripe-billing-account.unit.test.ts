@@ -161,4 +161,37 @@ describe('stripe billing account scaffolding', () => {
     const { resolveBillingAccount } = await import('../supabase/functions/_backend/utils/stripe_billing_account.ts')
     expect(await resolveBillingAccount(createContext(), 'cus_missing')).toBe('ee')
   })
+
+  it('routes new US orgs to US when US Stripe is ready', async () => {
+    mockedEnv.STRIPE_SECRET_KEY_US = 'sk_test_us'
+    mockedEnv.STRIPE_WEBHOOK_SECRET_US = 'whsec_test_us'
+    const { resolveNewOrgBillingAccount } = await import('../supabase/functions/_backend/utils/stripe_billing_account.ts')
+    expect(resolveNewOrgBillingAccount(createContext(), 'US')).toBe('us')
+    expect(resolveNewOrgBillingAccount(createContext(), 'us')).toBe('us')
+  })
+
+  it('keeps non-US orgs on EE even when US Stripe is ready', async () => {
+    mockedEnv.STRIPE_SECRET_KEY_US = 'sk_test_us'
+    mockedEnv.STRIPE_WEBHOOK_SECRET_US = 'whsec_test_us'
+    const { resolveNewOrgBillingAccount } = await import('../supabase/functions/_backend/utils/stripe_billing_account.ts')
+    expect(resolveNewOrgBillingAccount(createContext(), 'FR')).toBe('ee')
+  })
+
+  it('falls back to EE for US orgs when US Stripe is not ready', async () => {
+    const { resolveNewOrgBillingAccount } = await import('../supabase/functions/_backend/utils/stripe_billing_account.ts')
+    expect(resolveNewOrgBillingAccount(createContext(), 'US')).toBe('ee')
+  })
+
+  it('reads request country from Cloudflare headers', async () => {
+    mockedEnv.STRIPE_SECRET_KEY_US = 'sk_test_us'
+    mockedEnv.STRIPE_WEBHOOK_SECRET_US = 'whsec_test_us'
+    const context = {
+      get: (key: string) => key === 'requestId' ? 'request-id' : undefined,
+      req: {
+        header: (name: string) => name.toLowerCase() === 'cf-ipcountry' ? 'US' : undefined,
+      },
+    } as any
+    const { resolveNewOrgBillingAccount } = await import('../supabase/functions/_backend/utils/stripe_billing_account.ts')
+    expect(resolveNewOrgBillingAccount(context)).toBe('us')
+  })
 })

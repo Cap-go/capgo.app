@@ -49,9 +49,13 @@ SET search_path = ''
 AS $$
 DECLARE
   solo_plan_stripe_id varchar;
+  solo_plan_stripe_id_us varchar;
   pending_customer_id varchar;
   trial_at_date timestamptz;
   org_super_admin_role_id uuid;
+  owner_country varchar;
+  selected_billing_account text := 'ee';
+  selected_product_id varchar;
 BEGIN
   PERFORM set_config('capgo.org_creation_bootstrap_org_id', NEW.id::text, true);
 
@@ -94,12 +98,31 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  SELECT stripe_id INTO solo_plan_stripe_id
+  SELECT country INTO owner_country
+  FROM public.users
+  WHERE id = NEW.created_by
+  LIMIT 1;
+
+  IF UPPER(BTRIM(COALESCE(owner_country, ''))) = 'US' THEN
+    selected_billing_account := 'us';
+  END IF;
+
+  SELECT stripe_id, stripe_id_us INTO solo_plan_stripe_id, solo_plan_stripe_id_us
   FROM public.plans
   WHERE name = 'Solo'
   LIMIT 1;
 
-  IF solo_plan_stripe_id IS NULL THEN
+  selected_product_id := solo_plan_stripe_id;
+  IF selected_billing_account = 'us'
+    AND solo_plan_stripe_id_us IS NOT NULL
+    AND BTRIM(solo_plan_stripe_id_us) <> '' THEN
+    selected_product_id := solo_plan_stripe_id_us;
+  ELSE
+    selected_billing_account := 'ee';
+    selected_product_id := solo_plan_stripe_id;
+  END IF;
+
+  IF selected_product_id IS NULL THEN
     PERFORM set_config('capgo.org_creation_bootstrap_org_id', '', true);
     RAISE WARNING 'Solo plan not found, skipping sync stripe_info creation for org %', NEW.id;
     RETURN NEW;
@@ -116,11 +139,11 @@ BEGIN
     billing_account
   ) VALUES (
     pending_customer_id,
-    solo_plan_stripe_id,
+    selected_product_id,
     trial_at_date,
     NULL,
     true,
-    'ee'
+    selected_billing_account
   );
 
   UPDATE public.orgs

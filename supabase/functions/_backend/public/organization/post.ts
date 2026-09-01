@@ -8,6 +8,10 @@ import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { assertJwtMfaAssurance } from '../../utils/jwt_mfa_assurance.ts'
 import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 import { parseOrgOnboardingIntent } from '../../utils/org_onboarding_intent.ts'
+import {
+  resolveNewOrgBillingAccount,
+  resolvePlanProductId,
+} from '../../utils/stripe_billing_account.ts'
 import { normalizeWebsiteUrl } from './website.ts'
 
 const MAX_ESTIMATED_MAU = 1_000_000
@@ -24,6 +28,7 @@ const bodySchema = z.object({
   website: z.string().optional(),
   intent: z.enum(['ota', 'builder', 'both', 'exploring', 'unknown']).optional(),
   startingOut: z.boolean().optional(),
+  country: z.string().max(2).optional(),
 })
 
 
@@ -36,7 +41,7 @@ async function getInitialPlanForMau(c: Context<MiddlewareKeyVariables>, estimate
   const adminClient = supabaseAdmin(c)
   const { data: plan, error } = await adminClient
     .from('plans')
-    .select('name, stripe_id, mau')
+    .select('name, stripe_id, stripe_id_us, mau')
     .gte('mau', estimatedMau)
     .order('mau', { ascending: true })
     .limit(1)
@@ -49,7 +54,13 @@ async function getInitialPlanForMau(c: Context<MiddlewareKeyVariables>, estimate
   return plan
 }
 
-async function createPendingStripeInfo(c: Context<MiddlewareKeyVariables>, orgId: string, estimatedMau: number) {
+async function createPendingStripeInfo(
+  c: Context<MiddlewareKeyVariables>,
+  orgId: string,
+  estimatedMau: number,
+  country?: string | null,
+) {
+  const billingAccount = resolveNewOrgBillingAccount(c, country)
   const plan = await getInitialPlanForMau(c, estimatedMau)
   const pendingCustomerId = `pending_${orgId}`
   const trialAt = new Date()
@@ -59,7 +70,8 @@ async function createPendingStripeInfo(c: Context<MiddlewareKeyVariables>, orgId
     .from('stripe_info')
     .insert({
       customer_id: pendingCustomerId,
-      product_id: plan.stripe_id,
+      product_id: resolvePlanProductId(plan, billingAccount),
+      billing_account: billingAccount,
       trial_at: trialAt.toISOString(),
       status: null,
       is_good_plan: true,
@@ -72,11 +84,11 @@ async function createPendingStripeInfo(c: Context<MiddlewareKeyVariables>, orgId
   return pendingCustomerId
 }
 
-async function getOwnerEmail(c: Context<MiddlewareKeyVariables>, auth: AuthInfo) {
+async function getOwnerProfile(c: Context<MiddlewareKeyVariables>, auth: AuthInfo) {
   if (auth.authType === 'jwt') {
     const { data: self, error } = await supabaseWithAuth(c, auth)
       .from('users')
-      .select('email')
+      .select('email, country')
       .eq('id', auth.userId)
       .single()
 
@@ -84,22 +96,22 @@ async function getOwnerEmail(c: Context<MiddlewareKeyVariables>, auth: AuthInfo)
       throw simpleError('cannot_get_user', 'Cannot get user', { error: error?.message })
     }
 
-    return self.email
+    return { email: self.email, country: self.country }
   }
 
   let pgClient
   try {
     pgClient = getPgClient(c)
-    const result = await pgClient.query<{ email: string }>(
-      'SELECT email FROM public.users WHERE id = $1::uuid LIMIT 1',
+    const result = await pgClient.query<{ email: string, country: string | null }>(
+      'SELECT email, country FROM public.users WHERE id = $1::uuid LIMIT 1',
       [auth.userId],
     )
-    const email = result.rows[0]?.email
-    if (!email) {
+    const profile = result.rows[0]
+    if (!profile?.email) {
       throw simpleError('cannot_get_user', 'Cannot get user')
     }
 
-    return email
+    return { email: profile.email, country: profile.country }
   }
   finally {
     if (pgClient) {
@@ -268,9 +280,9 @@ export async function post(
   }
 
   await ensureApiKeyCanCreateOrganization(c, auth)
-  const ownerEmail = await getOwnerEmail(c, auth)
+  const ownerProfile = await getOwnerProfile(c, auth)
   const orgId = crypto.randomUUID()
-  const pendingCustomerId = await createPendingStripeInfo(c, orgId, estimatedMau)
+  const pendingCustomerId = await createPendingStripeInfo(c, orgId, estimatedMau, body.country ?? ownerProfile.country)
   const onboarding = {
     intent: parseOrgOnboardingIntent({ intent: body.intent }),
     starting_out: body.startingOut ?? false,
@@ -279,7 +291,7 @@ export async function post(
     id: orgId,
     name: body.name,
     created_by: auth.userId,
-    management_email: body.email ?? ownerEmail,
+    management_email: body.email ?? ownerProfile.email,
     customer_id: pendingCustomerId,
     website,
     onboarding,

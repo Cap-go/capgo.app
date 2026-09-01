@@ -149,7 +149,7 @@ export async function getAffonsoReferral() {
   }
 }
 
-export async function openCheckout(priceId: string, successUrl: string, cancelUrl: string, isYear: boolean, orgId: string) {
+export async function openCheckout(planName: string, successUrl: string, cancelUrl: string, isYear: boolean, orgId: string) {
   //   console.log('openCheckout')
   const supabase = useSupabase()
   const session = await supabase.auth.getSession()
@@ -160,7 +160,7 @@ export async function openCheckout(priceId: string, successUrl: string, cancelUr
   try {
     const resp = await invokeCapgoApi('private/stripe_checkout', {
       body: JSON.stringify({
-        priceId,
+        planName,
         successUrl,
         cancelUrl,
         recurrence: isYear ? 'year' : 'month',

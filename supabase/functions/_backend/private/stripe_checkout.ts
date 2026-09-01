@@ -5,11 +5,13 @@ import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { createCheckout } from '../utils/stripe.ts'
-import { supabaseClient } from '../utils/supabase.ts'
+import { resolveBillingAccount, resolvePlanProductId } from '../utils/stripe_billing_account.ts'
+import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
 import { getEnv } from '../utils/utils.ts'
 
 interface CheckoutData {
-  priceId: string
+  priceId?: string
+  planName?: string
   clientReferenceId?: string
   recurrence: 'month' | 'year'
   attributionId?: string
@@ -24,6 +26,27 @@ interface CheckoutData {
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.use('/', useCors)
+
+async function resolveCheckoutPlanProductId(c: Parameters<typeof createCheckout>[0], customerId: string, body: CheckoutData) {
+  if (body.planName) {
+    const account = await resolveBillingAccount(c, customerId)
+    const { data: plan, error } = await supabaseAdmin(c)
+      .from('plans')
+      .select('stripe_id, stripe_id_us, name')
+      .eq('name', body.planName)
+      .single()
+
+    if (error || !plan)
+      throw simpleError('invalid_plan', 'Invalid plan', { planName: body.planName })
+
+    return resolvePlanProductId(plan, account)
+  }
+
+  if (body.priceId)
+    return body.priceId
+
+  throw simpleError('no_plan_provided', 'No plan provided')
+}
 
 app.post('/', middlewareAuth, async (c) => {
   const body = await parseBody<CheckoutData>(c)
@@ -58,8 +81,10 @@ app.post('/', middlewareAuth, async (c) => {
   if (!await checkPermission(c, 'org.update_billing', { orgId: body.orgId }))
     throw simpleError('not_authorize', 'Not authorize')
 
+  const planProductId = await resolveCheckoutPlanProductId(c, org.customer_id, body)
+
   cloudlog({ requestId: c.get('requestId'), message: 'user', org })
-  const checkout = await createCheckout(c, org.customer_id, body.recurrence ?? 'month', body.priceId ?? 'price_1KkINoGH46eYKnWwwEi97h1B', body.successUrl ?? `${getEnv(c, 'WEBAPP_URL')}/app/usage`, body.cancelUrl ?? `${getEnv(c, 'WEBAPP_URL')}/app/usage`, body.clientReferenceId, body.attributionId, {
+  const checkout = await createCheckout(c, org.customer_id, body.recurrence ?? 'month', planProductId, body.successUrl ?? `${getEnv(c, 'WEBAPP_URL')}/app/usage`, body.cancelUrl ?? `${getEnv(c, 'WEBAPP_URL')}/app/usage`, body.clientReferenceId, body.attributionId, {
     visitorId: body.datafastVisitorId,
     sessionId: body.datafastSessionId,
   }, body.affonsoReferral)

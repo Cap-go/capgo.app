@@ -2,7 +2,12 @@ import type { Context } from 'hono'
 import type { Database } from './supabase.types.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { createCustomer } from './stripe.ts'
-import { getNewCustomersBillingAccount } from './stripe_billing_account.ts'
+import {
+  getNewCustomersBillingAccount,
+  normalizeBillingAccount,
+  planProductIdOrFilter,
+  resolvePlanProductId,
+} from './stripe_billing_account.ts'
 import { getDefaultPlan, getStripeCustomer, supabaseAdmin } from './supabase.ts'
 
 /**
@@ -12,7 +17,12 @@ import { getDefaultPlan, getStripeCustomer, supabaseAdmin } from './supabase.ts'
  * the plugin isolate graph.
  */
 export async function createStripeCustomer(c: Context, org: Database['public']['Tables']['orgs']['Row']) {
-  const billingAccount = getNewCustomersBillingAccount(c)
+  let billingAccount = getNewCustomersBillingAccount(c)
+  if (org.customer_id?.startsWith('pending_')) {
+    const pendingStripeInfo = await getStripeCustomer(c, org.customer_id)
+    if (pendingStripeInfo?.billing_account)
+      billingAccount = normalizeBillingAccount(pendingStripeInfo.billing_account)
+  }
   const customer = await createCustomer(c, org.management_email, org.created_by, org.id, org.name, billingAccount)
   const trial_at = new Date()
   trial_at.setDate(trial_at.getDate() + 15)
@@ -23,7 +33,7 @@ export async function createStripeCustomer(c: Context, org: Database['public']['
         const { data } = await supabaseAdmin(c)
           .from('plans')
           .select()
-          .eq('stripe_id', pendingStripeInfo.product_id)
+          .or(planProductIdOrFilter(pendingStripeInfo.product_id))
           .single()
         return data
       })
@@ -37,7 +47,7 @@ export async function createStripeCustomer(c: Context, org: Database['public']['
   const { error: createInfoError } = await supabaseAdmin(c)
     .from('stripe_info')
     .insert({
-      product_id: selectedPlan.stripe_id,
+      product_id: resolvePlanProductId(selectedPlan, billingAccount),
       customer_id: customer.id,
       trial_at: trial_at.toISOString(),
       billing_account: billingAccount,

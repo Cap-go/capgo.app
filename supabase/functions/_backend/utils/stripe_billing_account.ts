@@ -67,6 +67,36 @@ export function getNewCustomersBillingAccount(c: Context): BillingAccount {
   return DEFAULT_BILLING_ACCOUNT
 }
 
+const ISO_COUNTRY_CODE_REGEX = /^[A-Z]{2}$/
+
+export function normalizeCountryCode(country: string | null | undefined): string | null {
+  if (!country)
+    return null
+
+  const normalized = country.trim().toUpperCase()
+  if (!ISO_COUNTRY_CODE_REGEX.test(normalized))
+    return null
+
+  return normalized
+}
+
+export function getRequestCountryCode(c: Context): string | null {
+  const headerNames = ['cf-ipcountry', 'CF-IPCountry', 'x-vercel-ip-country']
+  for (const headerName of headerNames) {
+    const normalized = normalizeCountryCode(c.req.header(headerName))
+    if (normalized)
+      return normalized
+  }
+  return null
+}
+
+export function resolveNewOrgBillingAccount(c: Context, country?: string | null): BillingAccount {
+  const normalizedCountry = normalizeCountryCode(country) ?? getRequestCountryCode(c)
+  if (normalizedCountry === 'US' && isStripeAccountReadyForNewCustomers(c, 'us'))
+    return 'us'
+  return getNewCustomersBillingAccount(c)
+}
+
 export async function resolveBillingAccount(c: Context, customerId: string): Promise<BillingAccount> {
   if (!customerId)
     return DEFAULT_BILLING_ACCOUNT
