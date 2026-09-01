@@ -7,7 +7,7 @@ import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../uti
 import { cloudlog } from '../utils/logging.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
-import { createStripeCustomer, finalizePendingStripeCustomer } from '../utils/stripe_org.ts'
+import { createStripeCustomer, finalizePendingStripeCustomer, isPendingStripeCustomerId } from '../utils/stripe_org.ts'
 import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent, syncOrgOnboardingIntentForOrg } from '../utils/org_onboarding_intent.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { backgroundTask } from '../utils/utils.ts'
@@ -46,7 +46,7 @@ app.post('/', middlewareAPISecret, triggerValidator('orgs', 'INSERT'), async (c)
   if (!org.customer_id) {
     trialPlanName = await createStripeCustomer(c, org)
   }
-  else if (org.customer_id.startsWith('pending_')) {
+  else if (isPendingStripeCustomerId(org.customer_id)) {
     trialPlanName = await finalizePendingStripeCustomer(c, org)
   }
 
@@ -86,7 +86,7 @@ app.post('/', middlewareAPISecret, triggerValidator('orgs', 'INSERT'), async (c)
     website: org.website,
   })
 
-  await syncOrgOnboardingIntentForOrg(c, org)
+  await backgroundTask(c, syncOrgOnboardingIntentForOrg(c, org))
 
   await sendEventToTracking(c, {
     bento: {

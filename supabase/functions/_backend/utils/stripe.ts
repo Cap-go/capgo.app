@@ -776,6 +776,14 @@ export interface StripeCustomer {
   }
 }
 
+export function orgStripeCustomerIdempotencyKey(orgId: string) {
+  return `org-customer:${orgId}`
+}
+
+function localOrgStripeCustomerId(orgId: string) {
+  return `cus_${orgId.replaceAll('-', '')}`
+}
+
 export async function createCustomer(c: Context, email: string, userId: string, orgId: string, name: string) {
   cloudlog({ requestId: c.get('requestId'), message: 'createCustomer', email, userId, orgId, name })
   const baseConsoleUrl = trimTrailingSlashes(getEnv(c, 'WEBAPP_URL') || '')
@@ -788,15 +796,14 @@ export async function createCustomer(c: Context, email: string, userId: string, 
   }
   if (!isStripeConfigured(c)) {
     cloudlog({ requestId: c.get('requestId'), message: 'createCustomer no stripe key', email, userId, name })
-    // create a fake customer id like stripe one and random id
-    const randomId = crypto.randomUUID().replaceAll('-', '').slice(0, 24)
-    return { id: `cus_${randomId}`, email, name, metadata }
+    return { id: localOrgStripeCustomerId(orgId), email, name, metadata }
   }
+  // Org-create queue retries must return the same customer instead of minting duplicates.
   const customer = await getStripe(c).customers.create({
     email,
     name,
     metadata,
-  })
+  }, { idempotencyKey: orgStripeCustomerIdempotencyKey(orgId) })
   // Add supabase dashboard link with the real customer ID after creation
   const supabaseLink = buildSupabaseDashboardLink(c, customer.id)
   if (supabaseLink) {
