@@ -1,12 +1,18 @@
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 
 export const ONBOARDING_ANALYTICS_VERSION = 4
+export const WEBNATIVE_PUBLISH_INTENT_ANALYTICS_VERSION = '5.A'
+export const WEBNATIVE_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION = '5.C'
+export type OnboardingAnalyticsVersion
+  = | typeof ONBOARDING_ANALYTICS_VERSION
+    | typeof WEBNATIVE_PUBLISH_INTENT_ANALYTICS_VERSION
+    | typeof WEBNATIVE_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION
 
 export type OnboardingAnalyticsFlow = 'pre_org' | 'existing_org'
 export type OnboardingAnalyticsStep = 'welcome' | 'intent' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'choice' | 'install' | 'setup'
 export type OnboardingCopyEvent = 'onboarding_ai_instructions_copied' | 'onboarding_cli_command_copied'
 export type OnboardingDevelopmentEnvironment = 'hosted_builder' | 'local_project' | 'exploring'
-export type OnboardingIntent = 'ota' | 'builder' | 'both' | 'exploring'
+export type OnboardingIntent = 'ota' | 'builder' | 'both' | 'exploring' | 'publish'
 export type OnboardingInteractionEvent
   = | 'onboarding_development_environment_selected'
     | 'onboarding_organization_import_opened'
@@ -69,6 +75,7 @@ interface CreateOnboardingTelemetryIdentityOptions {
   capture?: CaptureEvent
   flow: OnboardingAnalyticsFlow
   idFactory?: () => string
+  onboardingVersion?: () => OnboardingAnalyticsVersion
   supaHost: string
 }
 
@@ -105,6 +112,8 @@ export function resolveOnboardingAppIconSource(options: {
 export interface OnboardingInteractionProperties {
   development_environment?: OnboardingDevelopmentEnvironment
   invitation_count?: number
+  intent?: OnboardingIntent
+  starting_out?: boolean
 }
 
 export interface OnboardingCopyEventProperties {
@@ -193,7 +202,7 @@ export function createOnboardingTelemetryIdentity(options: CreateOnboardingTelem
       flow: options.flow,
       onboarding_attempt_id: activeAttemptId,
       onboarding_run_id: onboardingRunId,
-      onboarding_version: ONBOARDING_ANALYTICS_VERSION,
+      onboarding_version: options.onboardingVersion?.() ?? ONBOARDING_ANALYTICS_VERSION,
       ...(resumeCandidate.onboardingAttemptId ? { resume_onboarding_attempt_id: resumeCandidate.onboardingAttemptId } : {}),
       ...(resumeCandidate.lastRunId ? { resumed_from_run_id: resumeCandidate.lastRunId } : {}),
       saved_step: resumeCandidate.savedStep,
@@ -242,6 +251,7 @@ interface CreateOnboardingProgressTrackerOptions {
   now?: () => number
   onboardingAttemptId: string
   onboardingRunId: string
+  onboardingVersion?: () => OnboardingAnalyticsVersion
   resumed: boolean
   steps: readonly OnboardingAnalyticsStep[]
   supaHost: string
@@ -265,7 +275,7 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
       flow: options.flow,
       onboarding_attempt_id: options.onboardingAttemptId,
       onboarding_run_id: options.onboardingRunId,
-      onboarding_version: ONBOARDING_ANALYTICS_VERSION,
+      onboarding_version: options.onboardingVersion?.() ?? ONBOARDING_ANALYTICS_VERSION,
       resumed: options.resumed,
       step,
       step_index: stepIndex,

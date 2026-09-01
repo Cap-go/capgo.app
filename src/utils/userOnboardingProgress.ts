@@ -8,7 +8,7 @@ export const USER_ONBOARDING_STATUSES = ['in_progress', 'completed', 'abandoned'
 export const USER_ONBOARDING_STEPS = ['intent', 'details', 'organization', 'choice', 'install', 'setup'] as const
 export const USER_ONBOARDING_FLOWS = ['pre_org', 'existing_org'] as const
 export const USER_ONBOARDING_DEVELOPMENT_ENVIRONMENTS = ['hosted_builder', 'local_project', 'exploring'] as const satisfies readonly OnboardingDevelopmentEnvironment[]
-export const USER_ONBOARDING_INTENTS = ['ota', 'builder', 'both', 'exploring'] as const
+export const USER_ONBOARDING_INTENTS = ['ota', 'builder', 'both', 'exploring', 'publish'] as const
 export const USER_ONBOARDING_DETAILS_STEPS = ['name', 'app_id', 'icon'] as const
 
 export type UserOnboardingStatus = typeof USER_ONBOARDING_STATUSES[number]
@@ -231,11 +231,11 @@ export function buildUserOnboardingProgress(input: UserOnboardingProgressInput):
     updated_at: input.updatedAt ?? new Date().toISOString(),
   }
 
-  if (input.intent)
-    progress.intent = input.intent
-
   if (input.developmentEnvironment)
     progress.development_environment = input.developmentEnvironment
+
+  if (input.intent)
+    progress.intent = input.intent
 
   if (input.detailsStep)
     progress.details_step = input.detailsStep
@@ -302,8 +302,7 @@ export function shouldPromptOnboardingResume(
     return true
 
   return Boolean(
-    progress.development_environment
-    || progress.intent
+    progress.intent
     || (progress.details_step !== undefined && progress.details_step !== 'name')
     || progress.app_name
     || progress.existing_app === true

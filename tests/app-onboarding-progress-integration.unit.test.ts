@@ -10,6 +10,7 @@ const writerMocks = vi.hoisted(() => ({
   main: {
     auth: { id: 'user-bento-retry' },
     authGeneration: 1,
+    awaitInitialLoad: vi.fn(async () => undefined),
     isAdmin: false,
     plans: [],
     user: {
@@ -29,6 +30,13 @@ vi.mock('vue-router', () => ({
 }))
 vi.mock('vue-sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 vi.mock('~/services/onboardingTracking', () => ({ sendOnboardingEvent: vi.fn() }))
+vi.mock('~/services/capgoApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/services/capgoApi')>()
+  return {
+    ...actual,
+    invokeCapgoApi: vi.fn(async () => ({ data: { assignments: {} }, error: null })),
+  }
+})
 vi.mock('~/services/supabase', () => ({
   getLocalConfig: () => ({ supaHost: 'https://sb.capgo.app', supaKey: 'anon-key' }),
   isLocal: () => false,
@@ -274,7 +282,7 @@ describe('app onboarding progress analytics integration', () => {
     const resumeLoader = sourceBetween('async function loadResumeApp()', 'async function importStoreMetadata()')
     expect(resumeLoader).not.toContain('initializeProgressTracking')
     expect(resumeLoader).not.toContain('viewStep')
-    expect(resumeLoader).toContain("if (props.preOrg || resumeStep.value === 'setup')")
+    expect(resumeLoader).toContain('if (props.preOrg || resumeStep.value === \'setup\')')
 
     const mountedFlow = sourceBetween('onMounted(async () => {', 'onBeforeUnmount(() => {')
     expect(onboardingSource).toContain(`import { createOnboardingProgressPersistence, shouldInitializeOnboardingProgressTracking } from '~/utils/onboardingProgressPersistence'`)
@@ -450,7 +458,6 @@ describe('app onboarding progress analytics integration', () => {
     expect(transitionHelpers).toContain('void persistOnboardingProgress()')
 
     const intentTransition = sourceBetween('function continueFromIntent()', 'function continuePreOrgDetails()')
-    expect(intentTransition).toContain(`developmentEnvironment: selectedDevelopmentEnvironment.value`)
     expect(intentTransition).toContain(`intent: selectedIntent.value`)
 
     const appNameTransition = sourceBetween('function continueFromAppName()', 'function continueFromAppId()')
@@ -470,17 +477,27 @@ describe('app onboarding progress analytics integration', () => {
     expect(realSetupChoice).toContain('appId: createdApp.value.app_id')
   })
 
-  it.concurrent('recommends WebNativeApp only to hosted-builder users with the approved copy and CTAs', () => {
-    expect(onboardingSource).toContain(`selectedDevelopmentEnvironment.value === 'hosted_builder'`)
+  it.concurrent('loads stable backend flags and applies the A and C onboarding treatments', () => {
+    expect(onboardingSource).toContain(`invokeCapgoApi<OnboardingABTestsResponse>('private/onboarding_ab_tests'`)
+    expect(onboardingSource).toContain('await refreshOnboardingABTests()')
+    expect(onboardingSource).toContain(`flowStep.value === 'intent' && !welcomePending.value`)
+    expect(onboardingSource).toContain(`webNativePublishIntentTreatment.value`)
+    expect(onboardingSource).toContain(`webNativeDevelopmentEnvironmentTreatment.value`)
+    expect(onboardingSource).toContain(`shouldShowWebNativeRecommendation({`)
+    expect(onboardingSource).toContain(`developmentEnvironment: selectedDevelopmentEnvironment.value`)
+    expect(onboardingSource).toContain(`intent: selectedIntent.value`)
+    expect(onboardingSource).toContain(`startingOut: selectedUserCountStop.value?.startingOut === true`)
+    expect(onboardingSource).toContain(`resolveOnboardingAnalyticsVersion(onboardingForABTests.value)`)
+    expect(onboardingSource).not.toContain(`if (props.preOrg) {\n      await main.awaitInitialLoad()`)
     expect(onboardingSource).toContain(`const WEBNATIVE_APP_URL = 'https://webnativeapp.com/?ref=capgo'`)
+    expect(onboardingSource).toContain(`const publishIntentOption = { value: 'publish'`)
+    expect(onboardingSource).toContain(`data-test="\`onboarding-development-environment-\${option.value}\`"`)
+    expect(onboardingSource).toContain(`:data-test="\`onboarding-intent-\${option.value}\`"`)
     expect(onboardingSource).toContain('data-test="onboarding-webnative-check-website"')
     expect(onboardingSource).toContain('data-test="onboarding-webnative-continue-capgo"')
+    expect(englishMessages['organization-onboarding-intent-option-publish-label']).toBe('Publish my web application on the PlayStore/AppStore')
+    expect(englishMessages['organization-onboarding-intent-option-publish-desc']).toBe('Turn my existing website into an iOS and Android app.')
     expect(englishMessages['organization-onboarding-development-environment-question']).toBe('How do you currently build and publish your app?')
-    expect(englishMessages['organization-onboarding-development-environment-option-hosted_builder-label']).toBe('From a hosted AI/web builder')
-    expect(englishMessages['organization-onboarding-development-environment-option-hosted_builder-desc']).toBe('Lovable, Bolt, Base44, Replit, v0…')
-    expect(englishMessages['organization-onboarding-development-environment-option-local_project-label']).toBe('From a local project or repository')
-    expect(englishMessages['organization-onboarding-development-environment-option-local_project-desc']).toBe('VS Code, Cursor, terminal…')
-    expect(englishMessages['organization-onboarding-development-environment-option-exploring-label']).toBe('I’m still exploring')
     expect(englishMessages['organization-onboarding-webnative-title']).toBe('WebNativeApp may be a better fit')
     expect(englishMessages['organization-onboarding-webnative-description']).toContain('WebNativeApp can package it for iOS and Android')
     expect(englishMessages['organization-onboarding-webnative-check-website']).toBe('Check my website')

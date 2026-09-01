@@ -1,10 +1,32 @@
 {
   "new_emails": {
     "audience": "self_signup",
-    "branch_a_percentage": 50,
+    "treatment_percentage": 50,
+    "treatment_branch": "A",
+    "control_branch": "B",
     "branches": {
       "A": { "bento_tag": "ab:new_emails" },
       "B": { "bento_tag": "ab:no_new_emails" }
+    }
+  },
+  "webnativeapp_publish_intent": {
+    "audience": "self_signup",
+    "treatment_percentage": 25,
+    "treatment_branch": "A",
+    "control_branch": "B",
+    "branches": {
+      "A": { "bento_tag": "ab:webnativeapp_publish_intent" },
+      "B": { "bento_tag": "ab:no_webnativeapp_publish_intent" }
+    }
+  },
+  "webnativeapp_development_environment": {
+    "audience": "self_signup",
+    "treatment_percentage": 25,
+    "treatment_branch": "C",
+    "control_branch": "D",
+    "branches": {
+      "C": { "bento_tag": "ab:webnativeapp_development_environment" },
+      "D": { "bento_tag": "ab:no_webnativeapp_development_environment" }
     }
   }
 }

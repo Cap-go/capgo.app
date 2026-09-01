@@ -1,5 +1,5 @@
+import type { ABTestBranch, ABTestConfig } from '../supabase/functions/_backend/utils/ab_tests.ts'
 import { readFile } from 'node:fs/promises'
-import type { ABTestConfig } from '../supabase/functions/_backend/utils/ab_tests.ts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
@@ -49,16 +49,31 @@ async function loadABTestsModule() {
   return await import(/* @vite-ignore */ modulePath) as ABTestsModule
 }
 
-function testConfig(branchAPercentage = 50, audience: ABTestConfig['audience'] = 'self_signup'): ABTestsConfig {
+function testConfig(
+  treatmentPercentage = 50,
+  audience: ABTestConfig['audience'] = 'self_signup',
+  treatmentBranch: ABTestBranch = 'A',
+  controlBranch: ABTestBranch = 'B',
+): ABTestsConfig {
   return {
     new_emails: {
       audience,
-      branch_a_percentage: branchAPercentage,
+      control_branch: controlBranch,
+      treatment_branch: treatmentBranch,
+      treatment_percentage: treatmentPercentage,
       branches: {
-        A: { bento_tag: 'ab:new_emails' },
-        B: { bento_tag: 'ab:no_new_emails' },
+        [treatmentBranch]: { bento_tag: 'ab:new_emails' },
+        [controlBranch]: { bento_tag: 'ab:no_new_emails' },
       },
     },
+  }
+}
+
+function persistedAssignments(branches: { development?: 'C' | 'D', emails?: 'A' | 'B', publish?: 'A' | 'B' } = {}) {
+  return {
+    new_emails: { assigned_at: FIXED_DATE.toISOString(), branch: branches.emails ?? 'A' },
+    webnativeapp_publish_intent: { assigned_at: FIXED_DATE.toISOString(), branch: branches.publish ?? 'A' },
+    webnativeapp_development_environment: { assigned_at: FIXED_DATE.toISOString(), branch: branches.development ?? 'C' },
   }
 }
 
@@ -78,7 +93,7 @@ describe('new-user A/B test assignment', () => {
   it('declares the JSON import type required by the Supabase Deno runtime', async () => {
     const source = await readFile(new URL('../supabase/functions/_backend/utils/ab_tests.ts', import.meta.url), 'utf8')
 
-    expect(source).toContain("from './ab_tests.json' with { type: 'json' }")
+    expect(source).toContain('from \'./ab_tests.json\' with { type: \'json\' }')
   })
 
   it.each([
@@ -86,7 +101,7 @@ describe('new-user A/B test assignment', () => {
     [0.4999, 'A'],
     [0.5, 'B'],
     [0.9999, 'B'],
-  ] as const)('uses the configured 50%% boundary for random value %s', async (randomValue, branch) => {
+  ] as const)('uses the configured 50%% treatment boundary for random value %s', async (randomValue, branch) => {
     const { createABTestAssignments, validateABTestsConfig } = await loadABTestsModule()
     const config = validateABTestsConfig(testConfig())
 
@@ -106,7 +121,7 @@ describe('new-user A/B test assignment', () => {
   it.each([
     [0, 'B'],
     [100, 'A'],
-  ] as const)('uses %s%% branch-A allocation to always select branch %s', async (percentage, branch) => {
+  ] as const)('uses %s%% treatment allocation to always select branch %s', async (percentage, branch) => {
     const { createABTestAssignments, validateABTestsConfig } = await loadABTestsModule()
     const config = validateABTestsConfig(testConfig(percentage))
 
@@ -114,6 +129,23 @@ describe('new-user A/B test assignment', () => {
       { created_via_invite: false },
       config,
       () => 0.75,
+      () => FIXED_DATE,
+    ).new_emails?.branch).toBe(branch)
+  })
+
+  it.each([
+    [0, 'C'],
+    [0.2499, 'C'],
+    [0.25, 'D'],
+    [0.9999, 'D'],
+  ] as const)('supports a 25/75 C/D experiment for random value %s', async (randomValue, branch) => {
+    const { createABTestAssignments, validateABTestsConfig } = await loadABTestsModule()
+    const config = validateABTestsConfig(testConfig(25, 'self_signup', 'C', 'D'))
+
+    expect(createABTestAssignments(
+      { created_via_invite: false },
+      config,
+      () => randomValue,
       () => FIXED_DATE,
     ).new_emails?.branch).toBe(branch)
   })
@@ -156,6 +188,18 @@ describe('new-user A/B test assignment', () => {
       new_emails: {
         ...testConfig().new_emails,
         branches: { A: { bento_tag: 'ab:same' }, B: { bento_tag: 'ab:same' } },
+      },
+    }],
+    ['identical treatment and control branches', {
+      new_emails: {
+        ...testConfig().new_emails,
+        control_branch: 'A',
+      },
+    }],
+    ['an unconfigured treatment branch', {
+      new_emails: {
+        ...testConfig().new_emails,
+        treatment_branch: 'C',
       },
     }],
   ])('rejects %s', async (_label, config) => {
@@ -209,9 +253,7 @@ describe('new-user A/B test assignment', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0)
     pgQueryMock.mockResolvedValueOnce({
       rows: [{
-        abtests: {
-          new_emails: { assigned_at: FIXED_DATE.toISOString(), branch: 'B' },
-        },
+        abtests: persistedAssignments({ development: 'D', emails: 'B', publish: 'B' }),
       }],
     })
     const context = { get: vi.fn(() => 'request-id') } as never
@@ -224,15 +266,17 @@ describe('new-user A/B test assignment', () => {
     const [query, params] = pgQueryMock.mock.calls[0]!
     const normalizedQuery = String(query).replace(/\s+/g, ' ')
     expect(normalizedQuery).toContain('$2::jsonb || CASE')
-    expect(normalizedQuery).toContain("THEN onboarding->'abtests'")
+    expect(normalizedQuery).toContain('THEN onboarding->\'abtests\'')
     expect(params?.[0]).toBe(USER_ID)
     expect(JSON.parse(String(params?.[1]))).toMatchObject({
       new_emails: { branch: 'A' },
+      webnativeapp_development_environment: { branch: 'C' },
+      webnativeapp_publish_intent: { branch: 'A' },
     })
     expect(syncBentoSubscriberTagsMock).toHaveBeenCalledWith(context, {
-      deleteSegments: ['ab:new_emails'],
+      deleteSegments: ['ab:new_emails', 'ab:webnativeapp_publish_intent', 'ab:webnativeapp_development_environment'],
       email: 'new.user@example.com',
-      segments: ['ab:no_new_emails'],
+      segments: ['ab:no_new_emails', 'ab:no_webnativeapp_publish_intent', 'ab:no_webnativeapp_development_environment'],
     })
   })
 
@@ -240,9 +284,7 @@ describe('new-user A/B test assignment', () => {
     const { syncNewUserABTests } = await loadABTestsModule()
     pgQueryMock.mockResolvedValueOnce({
       rows: [{
-        abtests: {
-          new_emails: { assigned_at: FIXED_DATE.toISOString(), branch: 'A' },
-        },
+        abtests: persistedAssignments(),
       }],
     })
 
@@ -271,9 +313,7 @@ describe('new-user A/B test assignment', () => {
     const { syncNewUserABTests } = await loadABTestsModule()
     pgQueryMock.mockResolvedValueOnce({
       rows: [{
-        abtests: {
-          new_emails: { assigned_at: FIXED_DATE.toISOString(), branch: 'A' },
-        },
+        abtests: persistedAssignments(),
       }],
     })
     syncBentoSubscriberTagsMock.mockResolvedValueOnce(false)
@@ -288,9 +328,7 @@ describe('new-user A/B test assignment', () => {
     const { syncNewUserABTests } = await loadABTestsModule()
     pgQueryMock.mockResolvedValueOnce({
       rows: [{
-        abtests: {
-          new_emails: { assigned_at: FIXED_DATE.toISOString(), branch: 'A' },
-        },
+        abtests: persistedAssignments(),
       }],
     })
     syncBentoSubscriberTagsMock.mockResolvedValueOnce(undefined)
@@ -299,6 +337,43 @@ describe('new-user A/B test assignment', () => {
       created_via_invite: false,
       id: USER_ID,
     })).resolves.toBeUndefined()
+  })
+
+  it('assigns onboarding flags on demand and returns the persisted branches without rerolling them', async () => {
+    const { getOrCreateUserABTests } = await loadABTestsModule()
+    const persisted = persistedAssignments({ development: 'D', emails: 'B', publish: 'B' })
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    pgQueryMock
+      .mockResolvedValueOnce({ rows: [{ created_via_invite: false }] })
+      .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
+
+    await expect(getOrCreateUserABTests(
+      { get: vi.fn(() => 'request-id') } as never,
+      USER_ID,
+    )).resolves.toEqual(persisted)
+
+    expect(pgQueryMock).toHaveBeenCalledTimes(2)
+    const [selectQuery, selectParams] = pgQueryMock.mock.calls[0]!
+    expect(String(selectQuery).replace(/\s+/g, ' ')).toContain('FROM public.users WHERE id = $1::uuid')
+    expect(selectParams).toEqual([USER_ID])
+
+    const [, updateParams] = pgQueryMock.mock.calls[1]!
+    expect(JSON.parse(String(updateParams?.[1]))).toMatchObject({
+      webnativeapp_development_environment: { branch: 'C' },
+      webnativeapp_publish_intent: { branch: 'A' },
+    })
+    expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects on-demand assignment when the authenticated profile is missing', async () => {
+    const { getOrCreateUserABTests } = await loadABTestsModule()
+    pgQueryMock.mockResolvedValueOnce({ rows: [] })
+
+    await expect(getOrCreateUserABTests(
+      { get: vi.fn(() => 'request-id') } as never,
+      USER_ID,
+    )).rejects.toThrow('User not found')
+    expect(pgQueryMock).toHaveBeenCalledOnce()
   })
 
   it('does not touch persistence or Bento when no experiment matches the audience', async () => {

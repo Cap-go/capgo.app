@@ -21,7 +21,7 @@ const bodySchema = z.object({
   email: z.email().optional(),
   estimatedMau: estimatedMauSchema.optional(),
   website: z.string().optional(),
-  intent: z.enum(['ota', 'builder', 'both', 'exploring', 'unknown']).optional(),
+  intent: z.enum(['ota', 'builder', 'both', 'exploring', 'publish', 'unknown']).optional(),
   startingOut: z.boolean().optional(),
 })
 

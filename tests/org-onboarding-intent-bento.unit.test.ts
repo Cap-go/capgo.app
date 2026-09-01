@@ -56,6 +56,7 @@ describe('parseOrgOnboardingIntent', () => {
     expect(parseOrgOnboardingIntent({ intent: 'builder' })).toBe('builder')
     expect(parseOrgOnboardingIntent({ intent: 'both' })).toBe('both')
     expect(parseOrgOnboardingIntent({ intent: 'exploring' })).toBe('exploring')
+    expect(parseOrgOnboardingIntent({ intent: 'publish' })).toBe('publish')
   })
 })
 
@@ -68,6 +69,7 @@ describe('buildOnboardingIntentBentoTags', () => {
         'onboarding_intent:ota',
         'onboarding_intent:builder',
         'onboarding_intent:exploring',
+        'onboarding_intent:publish',
       ],
     })
   })
@@ -94,6 +96,13 @@ describe('buildOnboardingIntentBentoEventData', () => {
     expect(builder.onboarding_url).toBe('https://console.capgo.app/apps')
     expect(builder.onboarding_url_builder).toBe('https://console.capgo.app/apps')
     expect(builder.onboarding_url_ota).toBe('https://console.capgo.app/app/new')
+
+    const publish = buildOnboardingIntentBentoEventData(c, 'publish', {
+      id: 'org-1',
+      name: 'Acme',
+      website: 'https://acme.example/',
+    })
+    expect(publish.onboarding_url).toBe('https://console.capgo.app/apps')
   })
 })
 
@@ -120,6 +129,7 @@ describe('syncOrgOnboardingIntentBentoTags', () => {
             'onboarding_intent:ota',
             'onboarding_intent:both',
             'onboarding_intent:exploring',
+            'onboarding_intent:publish',
           ],
         },
         {
@@ -130,6 +140,7 @@ describe('syncOrgOnboardingIntentBentoTags', () => {
             'onboarding_intent:ota',
             'onboarding_intent:both',
             'onboarding_intent:exploring',
+            'onboarding_intent:publish',
           ],
         },
       ],

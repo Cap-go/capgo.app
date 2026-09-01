@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Database, Json } from '~/types/supabase.types'
+import type { OnboardingABTestAssignment } from '~/utils/onboardingABTests'
 import type {
   OnboardingAnalyticsStep,
   OnboardingCopyEvent,
@@ -60,6 +61,13 @@ import { useOrganizationStore } from '~/stores/organization'
 import { isValidAppId } from '~/utils/appId'
 import { useBeforeUnloadWarning } from '~/utils/beforeUnloadWarning'
 import {
+  hasWebNativeDevelopmentEnvironmentTreatment,
+  parseOnboardingABTestAssignments,
+  resolveOnboardingAnalyticsVersion,
+  shouldShowWebNativePublishIntent,
+  shouldShowWebNativeRecommendation,
+} from '~/utils/onboardingABTests'
+import {
   buildAlternativeAppIds,
   createOnboardingAppWithFallbackIds,
 } from '~/utils/onboardingAppCreateHelpers'
@@ -103,8 +111,27 @@ const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const dashboardAppsStore = useDashboardAppsStore()
 const onboardingUserId = computed(() => main.user?.id ?? main.auth?.id ?? null)
+const onboardingABTestAssignments = ref<Record<string, OnboardingABTestAssignment>>({})
+const onboardingForABTests = computed(() => {
+  const currentOnboarding = isRecord(main.user?.onboarding) ? main.user.onboarding : {}
+  const currentABTests = isRecord(currentOnboarding.abtests) ? currentOnboarding.abtests : {}
+  return {
+    ...currentOnboarding,
+    abtests: {
+      ...currentABTests,
+      ...onboardingABTestAssignments.value,
+    },
+  }
+})
 const config = getLocalConfig()
-const onboardingTelemetry = createOnboardingTelemetryIdentity({ flow: props.preOrg ? 'pre_org' : 'existing_org', supaHost: config.supaHost })
+const webNativePublishIntentTreatment = computed(() => shouldShowWebNativePublishIntent(onboardingForABTests.value))
+const webNativeDevelopmentEnvironmentTreatment = computed(() => hasWebNativeDevelopmentEnvironmentTreatment(onboardingForABTests.value))
+const onboardingAnalyticsVersion = () => resolveOnboardingAnalyticsVersion(onboardingForABTests.value)
+const onboardingTelemetry = createOnboardingTelemetryIdentity({
+  flow: props.preOrg ? 'pre_org' : 'existing_org',
+  onboardingVersion: onboardingAnalyticsVersion,
+  supaHost: config.supaHost,
+})
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
 const WELCOME_CANVAS_MEDIA_QUERY = '(min-width: 640px) and (min-height: 640px)'
 const WEBNATIVE_APP_URL = 'https://webnativeapp.com/?ref=capgo'
@@ -137,6 +164,10 @@ interface OrganizationWebsitePreview {
   icon: string | null
   name: string
   website: string
+}
+
+interface OnboardingABTestsResponse {
+  assignments: unknown
 }
 
 const isLoading = ref(true)
@@ -194,26 +225,23 @@ const organizationWebsiteInput = ref('')
 const websitePreview = ref<OrganizationWebsitePreview | null>(null)
 const showOrganizationInvite = ref(false)
 
-const intentOptions = [
+const standardIntentOptions = [
   { value: 'ota', icon: IconRefresh },
   { value: 'builder', icon: IconSmartphone },
   { value: 'both', icon: IconLayers },
   { value: 'exploring', icon: IconCompass },
 ] as const
-
+const publishIntentOption = { value: 'publish', icon: IconStore } as const
+const intentOptions = computed(() => webNativePublishIntentTreatment.value
+  ? [...standardIntentOptions, publishIntentOption]
+  : standardIntentOptions)
 const developmentEnvironmentOptions = [
   { value: 'hosted_builder', icon: IconGlobe, hasDescription: true },
   { value: 'local_project', icon: IconTerminal, hasDescription: true },
   { value: 'exploring', icon: IconCompass, hasDescription: false },
 ] as const
-
-const showWebNativeRecommendation = computed(() => (
-  selectedDevelopmentEnvironment.value === 'hosted_builder'
-  && !webNativeRecommendationDismissed.value
-  && !selectedIntent.value
-))
 const showCapgoIntentQuestion = computed(() => (
-  Boolean(selectedDevelopmentEnvironment.value) && !showWebNativeRecommendation.value
+  !webNativeDevelopmentEnvironmentTreatment.value || Boolean(selectedDevelopmentEnvironment.value)
 ))
 
 const fallbackUserCountStops: UserCountStop[] = [
@@ -231,8 +259,62 @@ const startingOutUserCountStop: UserCountStop = {
 const planNameOrder = ['Solo', 'Maker', 'Team', 'Enterprise'] as const
 
 const localCommand = isLocal(config.supaHost) ? ` --supa-host ${config.supaHost} --supa-anon ${config.supaKey}` : ''
-const usesBuilderSetupCommand = computed(() => selectedIntent.value === 'builder')
+const usesBuilderSetupCommand = computed(() => selectedIntent.value === 'builder' || selectedIntent.value === 'publish')
 const markedOnboardingFeatures = new Set<string>()
+let onboardingABTestsRequest: Promise<void> | null = null
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+async function refreshOnboardingABTests() {
+  if (!props.preOrg || !onboardingUserId.value)
+    return
+  if (onboardingABTestsRequest)
+    return await onboardingABTestsRequest
+
+  onboardingABTestsRequest = (async () => {
+    const { data, error } = await invokeCapgoApi<OnboardingABTestsResponse>('private/onboarding_ab_tests', {
+      method: 'POST',
+      retries: 1,
+    })
+    if (error) {
+      console.error('Cannot load onboarding A/B tests', error)
+      return
+    }
+
+    const assignments = parseOnboardingABTestAssignments(data?.assignments)
+    if (!assignments)
+      return
+
+    onboardingABTestAssignments.value = {
+      ...onboardingABTestAssignments.value,
+      ...assignments,
+    }
+    if (!main.user)
+      return
+
+    const currentOnboarding = isRecord(main.user.onboarding) ? main.user.onboarding : {}
+    const currentABTests = isRecord(currentOnboarding.abtests) ? currentOnboarding.abtests : {}
+    main.user = {
+      ...main.user,
+      onboarding: {
+        ...currentOnboarding,
+        abtests: {
+          ...currentABTests,
+          ...assignments,
+        },
+      } as Json,
+    }
+  })()
+
+  try {
+    await onboardingABTestsRequest
+  }
+  finally {
+    onboardingABTestsRequest = null
+  }
+}
 
 async function markOnboardingFeatureStarted(featureKey: 'cli_install' | 'ota' | 'builder') {
   const appId = createdApp.value?.app_id
@@ -396,10 +478,17 @@ const userCountStops = computed<UserCountStop[]>(() => {
   ]
 })
 const selectedUserCountStop = computed<UserCountStop | null>(() => estimatedUsersIndex.value === null ? null : userCountStops.value[Math.min(estimatedUsersIndex.value, userCountStops.value.length - 1)] ?? null)
+const showWebNativeRecommendation = computed(() => shouldShowWebNativeRecommendation({
+  developmentEnvironment: selectedDevelopmentEnvironment.value,
+  dismissed: webNativeRecommendationDismissed.value,
+  intent: selectedIntent.value,
+  onboarding: onboardingForABTests.value,
+  startingOut: selectedUserCountStop.value?.startingOut === true,
+}))
 const canCreatePreOrgOrganization = computed(() => {
   if (!orgNameInput.value.trim() || isImportingOrganizationWebsite.value)
     return false
-  return selectedUserCountStop.value !== null
+  return selectedUserCountStop.value !== null && !showWebNativeRecommendation.value
 })
 const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-title') : t('unified-onboarding-setup-ota-title'))
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
@@ -462,6 +551,7 @@ function initializeProgressTracking(resumed: boolean) {
 
   progressTracker = createOnboardingProgressTracker({
     flow: props.preOrg ? 'pre_org' : 'existing_org',
+    onboardingVersion: onboardingAnalyticsVersion,
     resumed,
     steps: trackedSteps,
     supaHost: config.supaHost,
@@ -661,7 +751,8 @@ function showWelcomeOnDesktop() {
   welcomePending.value = Boolean(props.preOrg && welcomeCanvasEligible.value)
 }
 
-function continueFromWelcome() {
+async function continueFromWelcome() {
+  await refreshOnboardingABTests()
   const nextStep = flowStep.value
   const nextAnalyticsStep = analyticsStepFor(nextStep)
   progressTracker?.completeStep('welcome', { nextStep: nextAnalyticsStep })
@@ -1475,19 +1566,19 @@ function hydrateIntentFromCurrentOrg() {
   if (typeof intent !== 'string')
     return
 
-  const supportedIntent = intentOptions.find(option => option.value === intent)?.value
+  const supportedIntent = intentOptions.value.find(option => option.value === intent)?.value
   if (supportedIntent)
     selectedIntent.value = supportedIntent
 }
 
 function continueFromIntent() {
-  if (!selectedDevelopmentEnvironment.value || !selectedIntent.value) {
+  if ((webNativeDevelopmentEnvironmentTreatment.value && !selectedDevelopmentEnvironment.value) || !selectedIntent.value) {
     toast.error(t('organization-onboarding-intent-required'))
     return
   }
 
   completeAndViewStep('details', {
-    developmentEnvironment: selectedDevelopmentEnvironment.value,
+    developmentEnvironment: selectedDevelopmentEnvironment.value ?? undefined,
     intent: selectedIntent.value,
   })
 }
@@ -1506,14 +1597,18 @@ function selectDevelopmentEnvironment(environment: OnboardingDevelopmentEnvironm
 
 function continueWithCapgoFromWebNativeRecommendation() {
   webNativeRecommendationDismissed.value = true
-  progressTracker?.trackStepEvent('onboarding_webnative_continue_with_capgo', 'intent', {
-    development_environment: 'hosted_builder',
+  trackOrganizationEvent('onboarding_webnative_continue_with_capgo', {
+    development_environment: selectedDevelopmentEnvironment.value ?? undefined,
+    intent: 'publish',
+    starting_out: true,
   })
 }
 
 function trackWebNativeRecommendationClick() {
-  progressTracker?.trackStepEvent('onboarding_webnative_recommendation_clicked', 'intent', {
-    development_environment: 'hosted_builder',
+  trackOrganizationEvent('onboarding_webnative_recommendation_clicked', {
+    development_environment: selectedDevelopmentEnvironment.value ?? undefined,
+    intent: 'publish',
+    starting_out: true,
   })
 }
 
@@ -1984,6 +2079,7 @@ onMounted(async () => {
   isHydratingOnboarding.value = true
   try {
     if (props.preOrg) {
+      await refreshOnboardingABTests()
       if (resumeAppId.value) {
         await organizationStore.awaitInitialLoad()
         const resumed = await loadResumeApp()
@@ -2047,6 +2143,8 @@ onMounted(async () => {
         initializeProgressTracking(resumedFlow)
       else
         pendingVisibilityChanges = []
+      if (props.preOrg && flowStep.value === 'intent' && !welcomePending.value)
+        void refreshOnboardingABTests()
     }
     finishOnboardingMount()
   }
@@ -2103,6 +2201,10 @@ watch(appName, (value) => {
 
 watch([orgNameInput, storeUrl, selectedDevelopmentEnvironment, selectedIntent, existingAppSetup, estimatedUsersIndex, manualAppId, importedStoreAppId], () => {
   schedulePersistOnboardingProgress()
+})
+
+watch([selectedDevelopmentEnvironment, selectedIntent], () => {
+  webNativeRecommendationDismissed.value = false
 })
 
 watch(appDetailsStep, () => {
@@ -2187,57 +2289,43 @@ defineExpose({
 
         <div v-if="props.preOrg && flowStep === 'intent'" class="onboarding-intent-card rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
           <div class="onboarding-intent-card-content space-y-6">
-            <div class="onboarding-intent-heading">
-              <p class="onboarding-intent-eyebrow text-sm font-semibold text-primary-500 dark:text-slate-300">
-                {{ t('unified-onboarding-step-intent') }}
-              </p>
-              <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                {{ t('organization-onboarding-development-environment-question') }}
-              </h2>
-            </div>
-            <div class="onboarding-development-environment-options grid gap-3 sm:grid-cols-3">
-              <button v-for="option in developmentEnvironmentOptions" :key="option.value" type="button" class="d-btn onboarding-development-environment-option group h-auto min-h-24 w-full items-start justify-start gap-3 whitespace-normal rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900" :class="whiteCardToggleButtonClass(selectedDevelopmentEnvironment === option.value)" :data-test="`onboarding-development-environment-${option.value}`" @click="selectDevelopmentEnvironment(option.value)">
-                <span class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500/10 text-primary-500"><component :is="option.icon" class="h-5 w-5" /></span>
-                <span class="min-w-0">
-                  <span class="block text-sm font-semibold text-slate-950 dark:text-white">{{ t(`organization-onboarding-development-environment-option-${option.value}-label`) }}</span>
-                  <span v-if="option.hasDescription" class="mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">{{ t(`organization-onboarding-development-environment-option-${option.value}-desc`) }}</span>
-                </span>
-              </button>
-            </div>
-
-            <div v-if="showWebNativeRecommendation" class="rounded-2xl border border-primary-500/30 bg-primary-500/5 p-5 dark:border-primary-400/30 dark:bg-primary-400/10" data-test="onboarding-webnative-recommendation">
-              <div class="flex gap-3">
-                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary-500 text-white"><IconSparkles class="h-5 w-5" /></span>
-                <div>
-                  <h3 class="text-lg font-semibold text-slate-950 dark:text-white">
-                    {{ t('organization-onboarding-webnative-title') }}
-                  </h3>
-                  <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                    {{ t('organization-onboarding-webnative-description') }}
-                  </p>
-                </div>
+            <template v-if="webNativeDevelopmentEnvironmentTreatment">
+              <div class="onboarding-intent-heading">
+                <p class="onboarding-intent-eyebrow text-sm font-semibold text-primary-500 dark:text-slate-300">
+                  {{ t('unified-onboarding-step-intent') }}
+                </p>
+                <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+                  {{ t('organization-onboarding-development-environment-question') }}
+                </h2>
               </div>
-              <div class="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-                <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" data-test="onboarding-webnative-continue-capgo" @click="continueWithCapgoFromWebNativeRecommendation()">
-                  {{ t('organization-onboarding-webnative-continue-capgo') }}
+              <div class="onboarding-development-environment-options grid gap-3 sm:grid-cols-3">
+                <button v-for="option in developmentEnvironmentOptions" :key="option.value" type="button" class="d-btn onboarding-development-environment-option group h-auto min-h-24 w-full items-start justify-start gap-3 whitespace-normal rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900" :class="whiteCardToggleButtonClass(selectedDevelopmentEnvironment === option.value)" :data-test="`onboarding-development-environment-${option.value}`" @click="selectDevelopmentEnvironment(option.value)">
+                  <span class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500/10 text-primary-500"><component :is="option.icon" class="h-5 w-5" /></span>
+                  <span class="min-w-0">
+                    <span class="block text-sm font-semibold text-slate-950 dark:text-white">{{ t(`organization-onboarding-development-environment-option-${option.value}-label`) }}</span>
+                    <span v-if="option.hasDescription" class="mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">{{ t(`organization-onboarding-development-environment-option-${option.value}-desc`) }}</span>
+                  </span>
                 </button>
-                <a :href="WEBNATIVE_APP_URL" target="_blank" rel="noopener noreferrer" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" data-test="onboarding-webnative-check-website" @click="trackWebNativeRecommendationClick()">
-                  {{ t('organization-onboarding-webnative-check-website') }}<IconArrowRight class="h-4 w-4" />
-                </a>
               </div>
-            </div>
+            </template>
 
-            <div v-if="showCapgoIntentQuestion" class="space-y-6 border-t border-slate-200 pt-6 dark:border-white/15">
+            <div v-if="showCapgoIntentQuestion" class="space-y-6" :class="{ 'border-t border-slate-200 pt-6 dark:border-white/15': webNativeDevelopmentEnvironmentTreatment }">
               <div>
-                <h3 class="text-xl font-semibold text-slate-950 dark:text-white">
+                <p v-if="!webNativeDevelopmentEnvironmentTreatment" class="onboarding-intent-eyebrow text-sm font-semibold text-primary-500 dark:text-slate-300">
+                  {{ t('unified-onboarding-step-intent') }}
+                </p>
+                <h3 v-if="webNativeDevelopmentEnvironmentTreatment" class="text-xl font-semibold text-slate-950 dark:text-white">
                   {{ t('organization-onboarding-intent-question') }}
                 </h3>
+                <h2 v-else class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+                  {{ t('organization-onboarding-intent-question') }}
+                </h2>
                 <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
                   {{ t('organization-onboarding-intent-hint') }}
                 </p>
               </div>
               <div class="onboarding-intent-options grid gap-3 sm:grid-cols-2">
-                <button v-for="option in intentOptions" :key="option.value" type="button" class="d-btn onboarding-intent-option group h-auto min-h-20 w-full items-start justify-start gap-3 whitespace-normal rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900" :class="whiteCardToggleButtonClass(selectedIntent === option.value)" :data-test="`onboarding-intent-${option.value}`" @click="selectedIntent = option.value">
+                <button v-for="option in intentOptions" :key="option.value" type="button" class="d-btn onboarding-intent-option group h-auto min-h-20 w-full items-start justify-start gap-3 whitespace-normal rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900" :class="[whiteCardToggleButtonClass(selectedIntent === option.value), { 'sm:col-span-2': option.value === 'publish' }]" :data-test="`onboarding-intent-${option.value}`" @click="selectedIntent = option.value">
                   <span class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500/10 text-primary-500"><component :is="option.icon" class="h-5 w-5" /></span>
                   <span class="min-w-0">
                     <span class="block text-sm font-semibold text-slate-950 dark:text-white">{{ t(`organization-onboarding-intent-option-${option.value}-label`) }}</span>
@@ -2839,11 +2927,34 @@ defineExpose({
                 </div>
               </div>
 
+              <div v-if="showWebNativeRecommendation" class="rounded-2xl border border-primary-500/30 bg-primary-500/5 p-5 dark:border-primary-400/30 dark:bg-primary-400/10" data-test="onboarding-webnative-recommendation">
+                <div class="flex gap-3">
+                  <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary-500 text-white"><IconSparkles class="h-5 w-5" /></span>
+                  <div>
+                    <h3 class="text-lg font-semibold text-slate-950 dark:text-white">
+                      {{ t('organization-onboarding-webnative-title') }}
+                    </h3>
+                    <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                      {{ t('organization-onboarding-webnative-description') }}
+                    </p>
+                  </div>
+                </div>
+                <div class="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                  <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" data-test="onboarding-webnative-continue-capgo" @click="continueWithCapgoFromWebNativeRecommendation()">
+                    {{ t('organization-onboarding-webnative-continue-capgo') }}
+                  </button>
+                  <a :href="WEBNATIVE_APP_URL" target="_blank" rel="noopener noreferrer" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" data-test="onboarding-webnative-check-website" @click="trackWebNativeRecommendationClick()">
+                    {{ t('organization-onboarding-webnative-check-website') }}<IconArrowRight class="h-4 w-4" />
+                  </a>
+                </div>
+              </div>
+
               <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/15">
                 <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" @click="viewPreviousStep('details')">
                   {{ t('button-back') }}
                 </button>
                 <button
+                  v-if="!showWebNativeRecommendation"
                   type="button"
                   class="d-btn min-h-12"
                   :class="whiteCardPrimaryButtonClass()"
