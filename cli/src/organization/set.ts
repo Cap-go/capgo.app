@@ -128,6 +128,8 @@ export async function setOrganizationInternal(
     throw new Error(`Cannot get organization details: ${formatError(orgError)}`)
   }
 
+  const orgName = orgData.name ?? orgId
+
   let { name, email, enforce2fa } = enrichedOptions
   const { passwordPolicy, minLength, requireUppercase, requireNumber, requireSpecial } = enrichedOptions
   const { requireApikeyExpiration, maxApikeyExpirationDays, enforceHashedApiKeys } = enrichedOptions
@@ -253,7 +255,7 @@ export async function setOrganizationInternal(
         org_id: orgId,
         tracking_version: 2,
         tags: {
-          'org-name': orgData.name,
+          'org-name': orgName,
           'enforce-2fa': enforce2fa.toString(),
         },
       }).catch(() => {})
@@ -262,7 +264,7 @@ export async function setOrganizationInternal(
         outro('Done ✅')
       }
 
-      return { orgId, name: orgData.name, email: orgData.management_email, enforce2fa }
+      return { orgId, name: orgName, email: orgData.management_email, enforce2fa }
     }
   }
 
@@ -348,7 +350,7 @@ export async function setOrganizationInternal(
         org_id: orgId,
         tracking_version: 2,
         tags: {
-          'org-name': orgData.name,
+          'org-name': orgName,
         },
       }).catch(() => {})
 
@@ -356,7 +358,7 @@ export async function setOrganizationInternal(
         outro('Done ✅')
       }
 
-      return { orgId, name: orgData.name, email: orgData.management_email, passwordPolicy }
+      return { orgId, name: orgName, email: orgData.management_email, passwordPolicy }
     }
   }
 
@@ -421,7 +423,7 @@ export async function setOrganizationInternal(
         org_id: orgId,
         tracking_version: 2,
         tags: {
-          'org-name': orgData.name,
+          'org-name': orgName,
         },
       }).catch(() => {})
 
@@ -429,7 +431,7 @@ export async function setOrganizationInternal(
         outro('Done ✅')
       }
 
-      return { orgId, name: orgData.name, email: orgData.management_email }
+      return { orgId, name: orgName, email: orgData.management_email }
     }
   }
 
@@ -488,7 +490,7 @@ export async function setOrganizationInternal(
     org_id: orgId,
     tracking_version: 2,
     tags: {
-      'org-name': name,
+          'org-name': name ?? orgName,
     },
   }).catch(() => {})
 

@@ -103,6 +103,9 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
     name?: string
     enforcing_2fa?: boolean
     password_policy_config?: PasswordPolicyConfig | null
+    require_apikey_expiration?: boolean
+    max_apikey_expiration_days?: number | null
+    enforce_hashed_api_keys?: boolean
   }>(`organization?orgId=${encodeURIComponent(orgId)}`, {
     apikey: enrichedOptions.apikey,
     method: 'GET',
@@ -246,7 +249,7 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
 
     log.info('')
 
-    displayMembers(memberInfoList, { orgName: orgData.name, hasPasswordPolicy }, silent)
+    displayMembers(memberInfoList, { orgName: orgData.name ?? orgId, hasPasswordPolicy }, silent)
     outro('Done ✅')
   }
 

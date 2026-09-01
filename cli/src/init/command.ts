@@ -5538,7 +5538,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     appId = getAppId(initialAppId, extConfig?.config)
   }
 
-  let organization: Organization
+  let organization: Organization | undefined
   if (resumed) {
     const resumedSnapshot = resumed
     // Fetch orgs to validate the saved one still exists and is accessible
@@ -5589,9 +5589,8 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
       }
     }
   }
-  else {
+  if (!organization)
     organization = await selectOrganizationForInit(supabase, options.apikey)
-  }
 
   const orgId = organization.gid
   globalOrgId = orgId
