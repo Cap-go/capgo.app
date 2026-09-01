@@ -281,7 +281,7 @@
     "ci-info": "^4.4.0",
     "commander": "^15.0.0",
     "eslint": "^10.7.0",
-    "git-format-staged": "4.0.1",
+    "git-format-staged": "4.0.2",
     "husky": "^9.1.7",
     "is-wsl": "^3.1.1",
     "micromatch": "^4.0.8",
