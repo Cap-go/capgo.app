@@ -1919,11 +1919,14 @@ async function openDashboard() {
   router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
 }
 
-function onCliStepsProgress(payload: { hasStartedCli: boolean, isTerminal: boolean }) {
+async function onCliStepsProgress(payload: { hasStartedCli: boolean, isTerminal: boolean }) {
   cliSetupStarted.value = payload.hasStartedCli
   if (!payload.isTerminal || !createdApp.value || didRedirectToGettingStarted)
     return
   didRedirectToGettingStarted = true
+  await persistOnboardingProgress('completed')
+  if (!createdApp.value)
+    return
   router.replace(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
 }
 

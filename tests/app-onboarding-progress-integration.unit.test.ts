@@ -501,6 +501,13 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain('pendingDashboardExplored = true')
     expect(onboardingSource).toContain('if (pendingDashboardExplored)')
 
+    const cliRedirect = sourceBetween('async function onCliStepsProgress(', 'function trackDashboardExplored(')
+    expect(cliRedirect).toContain(`await persistOnboardingProgress('completed')`)
+    expect(cliRedirect).toContain('router.replace')
+    expect(cliRedirect.indexOf(`await persistOnboardingProgress('completed')`)).toBeLessThan(cliRedirect.indexOf('router.replace'))
+    expect(onboardingSource).toContain(`if (current?.status === 'completed' && status !== 'completed')`)
+    expect(onboardingSource).toContain(`void persistOnboardingProgress('in_progress', { allowDisposed: true })`)
+
     const demoExit = sourceBetween('async function seedDemoData()', 'async function copyText(')
     expect(demoExit).toContain('window.dispatchEvent')
     expect(demoExit).toContain('allowOnboardingDashboardExploration')
