@@ -264,6 +264,11 @@ export function buildGettingStartedSteps(
   }))
 }
 
+export function areGettingStartedEssentialsDone(steps: GettingStartedStep[]): boolean {
+  const essential = steps.filter(step => step.group === 'essential')
+  return essential.length > 0 && essential.every(step => step.done)
+}
+
 export function gettingStartedProgress(steps: GettingStartedStep[]): {
   done: number
   total: number

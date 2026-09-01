@@ -13,6 +13,7 @@ import { useSupabase } from '~/services/supabase'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import {
+  areGettingStartedEssentialsDone,
   buildGettingStartedSteps,
   gettingStartedProgress,
   parseAppOnboardingLedger,
@@ -63,7 +64,7 @@ const stepGroups = computed(() => {
     { id: 'grow', titleKey: 'getting-started-grow', steps: grow, doneCount: grow.filter(step => step.done).length },
   ]
 })
-const allDone = computed(() => progress.value.done === progress.value.total && progress.value.total > 0)
+const allDone = computed(() => areGettingStartedEssentialsDone(steps.value))
 
 function acronym(name: string) {
   const trimmed = name.trim()

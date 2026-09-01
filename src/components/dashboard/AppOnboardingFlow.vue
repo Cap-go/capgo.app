@@ -1929,14 +1929,20 @@ async function onCliStepsProgress(payload: { hasStartedCli: boolean, isTerminal:
       appId: createdApp.value.app_id,
     })
   }
-  const persistResult = await persistOnboardingProgress('completed')
-  if (persistResult !== 'persisted') {
-    didRedirectToGettingStarted = false
-    return
+  const maxAttempts = 3
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const persistResult = await persistOnboardingProgress('completed')
+    if (persistResult === 'persisted') {
+      if (!createdApp.value)
+        return
+      router.replace(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
+      return
+    }
+    if (persistResult !== 'retryable_failure' || attempt === maxAttempts)
+      break
+    await new Promise(resolve => window.setTimeout(resolve, 400 * attempt))
   }
-  if (!createdApp.value)
-    return
-  router.replace(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
+  didRedirectToGettingStarted = false
 }
 
 function trackDashboardExplored() {

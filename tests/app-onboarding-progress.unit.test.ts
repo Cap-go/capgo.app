@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  areGettingStartedEssentialsDone,
   buildGettingStartedSteps,
   getAppOnboardingFeature,
   gettingStartedProgress,
@@ -226,6 +227,18 @@ describe('app onboarding progress ledger', () => {
     expect(steps.find(step => step.id === 'cli_install')?.done).toBe(true)
     expect(steps.find(step => step.id === 'cicd')?.done).toBe(false)
     expect(buildGettingStartedSteps({}, { cicdSetupValidated: true }).find(step => step.id === 'cicd')?.done).toBe(true)
+  })
+
+  it.concurrent('treats essentials as complete while Builder stays optional', () => {
+    const steps = buildGettingStartedSteps({
+      features: {
+        cli_install: { succeeded_at: '2026-08-02T00:00:00.000Z' },
+        ota: { succeeded_at: '2026-08-04T00:00:00.000Z', stage: 'store_live' },
+      },
+    }, { cicdSetupValidated: true, storeReleaseValidated: true })
+    expect(areGettingStartedEssentialsDone(steps)).toBe(true)
+    expect(steps.find(step => step.id === 'builder')?.done).toBe(false)
+    expect(gettingStartedProgress(steps).percent).toBe(80)
   })
 })
 

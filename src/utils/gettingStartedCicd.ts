@@ -140,6 +140,21 @@ export function markCicdSetupValidated(userId: string, appId: string) {
   saveCicdSetupProgress(userId, appId, { ...current, validated: true })
 }
 
+export function forgetCicdSetupProgress(userId: string, appId: string) {
+  if (!userId || !appId)
+    return
+
+  try {
+    localStorage.removeItem(cicdSetupStorageKey(userId, appId))
+  }
+  catch {
+    // Ignore blocked storage so tests and the checklist can still reset in-memory state.
+  }
+  const map = new Map(progressByKey.value)
+  map.delete(sessionKey(userId, appId))
+  progressByKey.value = map
+}
+
 export function buildCicdAiPrompt(appId: string, mode: CicdDeployMode): string {
   const workflow = cicdWorkflowSnippet(appId, mode)
   const releases = requiredCicdReleases(mode)
@@ -180,7 +195,7 @@ export function cicdModeInstruction(mode: CicdDeployMode): string {
     return 'Deploy from `main` only, to the `production` channel.'
   if (mode === 'prod_preprod')
     return 'Deploy from `main` to `production`, and from a `preprod` branch to the `preprod` channel.'
-  return 'Deploy from `main` to `production`, from a `preprod` branch to `preprod`, and from each pull request to a `pr-<number>` preview channel.'
+  return 'Deploy from `main` to `production`, from a `preprod` branch to `preprod`, and upload a `pr-<number>` preview from a maintainer-approved workflow run. Fork pull requests cannot use `CAPGO_TOKEN`.'
 }
 
 export function cicdReleaseInstruction(kind: CicdReleaseKind): string {
@@ -188,7 +203,7 @@ export function cicdReleaseInstruction(kind: CicdReleaseKind): string {
     return 'Push to `main` (or run the production job) and confirm a new bundle lands on the `production` channel.'
   if (kind === 'preprod')
     return 'Push to the `preprod` branch and confirm a new bundle lands on the `preprod` channel.'
-  return 'Open or update a pull request and confirm a `pr-<number>` channel received a bundle.'
+  return 'Run the workflow for an eligible pull request (Actions → Run workflow, channel `pr-<number>`) and confirm that channel received a bundle. Fork pull requests are excluded because they cannot use `CAPGO_TOKEN`.'
 }
 
 function cicdWorkflowSnippet(appId: string, mode: CicdDeployMode): string {
@@ -241,8 +256,20 @@ ${productionJob}
 ${preprodJob}`
   }
 
-  const prJob = `  deploy-pr:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+  const prBuildJob = `  build-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build`
+
+  const previewJob = `  deploy-preview:
+    if: github.event_name == 'workflow_dispatch' && inputs.preview_channel != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -252,9 +279,9 @@ ${preprodJob}`
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: Upload PR preview
+      - name: Upload preview
         run: |
-          CHANNEL="pr-\${{ github.event.number }}"
+          CHANNEL="\${{ inputs.preview_channel }}"
           npx @capgo/cli@latest channel add "$CHANNEL" ${appId} || true
           npx @capgo/cli@latest bundle upload ${appId} --channel "$CHANNEL" --auto-bump
         env:
@@ -265,8 +292,14 @@ on:
   push:
     branches: [main, preprod]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      preview_channel:
+        description: Preview channel (for example pr-12). Fork pull requests cannot use CAPGO_TOKEN.
+        required: false
 jobs:
 ${productionJob}
 ${preprodJob}
-${prJob}`
+${prBuildJob}
+${previewJob}`
 }
