@@ -18,6 +18,8 @@ import { clearCredentialsCommand, listCredentialsCommand, migrateCredentialsComm
 import { exportCredentialsCommand, isCredentialsExportInvocation } from './build/credentials-export-command'
 import { sanitizeCredentialsExportTerminalText, writeCredentialsExportStderr } from './build/credentials-export-terminal'
 import { manageCredentialsCommand } from './build/credentials-manage'
+import type { IosProvisioningOptions } from './build/ios-provisioning-command'
+import { iosProvisioningCommand } from './build/ios-provisioning-command'
 import { syncIosMarketingVersionCommand } from './build/ios-marketing-version'
 import { lastOutputCommand } from './build/last-output-command'
 import { checkBuildNeeded } from './build/needed'
@@ -1085,6 +1087,19 @@ Example:
   .option('--appId <appId>', 'Save the captured key into this app iOS build credentials')
   .option('--local', 'Save into the per-project .capgo-credentials.json instead of the global file')
   .option('--json', 'Print the captured Key ID / Issuer ID / .p8 path as JSON')
+
+buildCredentials
+  .command('ios-provisioning')
+  .description(`Set up provisioning profiles for every signable iOS target.
+
+Reuses an eligible saved wildcard profile after confirmation, or generates
+missing App Store profiles with the saved App Store Connect .p8 key.
+
+Example:
+  npx @capgo/cli@latest build credentials ios-provisioning`)
+  .option('--local', 'Use credentials from the current project')
+  .option('--global', 'Use credentials from the global store')
+  .action((options: IosProvisioningOptions) => iosProvisioningCommand(options))
 
 buildCredentials
   .command('save')

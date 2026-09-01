@@ -252,7 +252,7 @@ await test('resolveUpdaterPackageJsonPath resolves root-relative package.json op
   try {
     process.chdir(root)
     const resolved = resolveUpdaterPackageJsonPath('missing/package.json,apps/mobile/package.json')
-    assert.equal(resolved, join(root, 'apps', 'mobile', 'package.json'))
+    assert.equal(resolved, realpathSync(join(root, 'apps', 'mobile', 'package.json')))
   }
   finally {
     process.chdir(previousCwd)
