@@ -18,6 +18,7 @@ import {
   USER_EMAIL_APIKEY_MANAGEMENT,
   USER_ID,
   USER_PASSWORD,
+  warmEdgeEndpoint,
 } from './test-utils.ts'
 
 const id = randomUUID()
@@ -43,6 +44,8 @@ async function appKeyBody(name: string, appId = APPNAME, extra: Record<string, u
 beforeAll(async () => {
   authHeaders = await getAuthHeaders()
   await resetAndSeedAppData(APPNAME)
+  // Load the apikey isolate before concurrent POSTs from this file.
+  await warmEdgeEndpoint('/apikey', { method: 'GET', headers: authHeaders })
 })
 
 afterAll(async () => {
