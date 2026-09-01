@@ -37,13 +37,28 @@ export function isStripeSecretKeyConfigured(secretKey: string): boolean {
   return trimmed.startsWith('sk_') || trimmed.startsWith('rk_')
 }
 
+export function isStripeWebhookSecretConfigured(webhookSecret: string): boolean {
+  const trimmed = webhookSecret.trim()
+  if (!trimmed)
+    return false
+  return trimmed.startsWith('whsec_')
+}
+
 export function isStripeAccountConfigured(c: Context, account: BillingAccount = DEFAULT_BILLING_ACCOUNT): boolean {
   return isStripeSecretKeyConfigured(getStripeSecretKey(c, account))
 }
 
+export function isStripeAccountReadyForNewCustomers(c: Context, account: BillingAccount): boolean {
+  if (!isStripeAccountConfigured(c, account))
+    return false
+  if (account === 'us')
+    return isStripeWebhookSecretConfigured(getStripeWebhookSecret(c, account))
+  return true
+}
+
 export function getNewCustomersBillingAccount(c: Context): BillingAccount {
   const requested = normalizeBillingAccount(getEnv(c, 'STRIPE_NEW_CUSTOMERS_ACCOUNT'))
-  if (requested === 'us' && isStripeAccountConfigured(c, 'us'))
+  if (requested === 'us' && isStripeAccountReadyForNewCustomers(c, 'us'))
     return 'us'
   return DEFAULT_BILLING_ACCOUNT
 }
