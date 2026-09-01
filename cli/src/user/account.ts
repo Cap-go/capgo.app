@@ -24,7 +24,10 @@ export async function getUserIdInternal(options: Options, silent = false) {
       enrichedOptions.supaHost,
       enrichedOptions.supaAnon,
     )
-    const userId = await resolveUserIdFromApiKey(supabase, enrichedOptions.apikey)
+    const userId = await resolveUserIdFromApiKey(supabase, enrichedOptions.apikey, silent, {
+      supaHost: enrichedOptions.supaHost,
+      supaAnon: enrichedOptions.supaAnon,
+    })
 
     void trackEvent({ channel: 'account', event: 'Account Id Viewed', tags: {} })
 

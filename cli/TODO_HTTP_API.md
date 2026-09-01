@@ -36,4 +36,5 @@ CLI `src/` no longer calls `supabase.rpc`. Remaining supabase-js use is PostgRES
 - `cli/src/app/add.ts` — icon storage upload
 - `cli/src/bundle/upload.ts` — AI auto-bump manifest fetch still uses supabase-js
 - `cli/src/bundle/compatibility.ts` — native package reads when not using HTTP bundle payload
+- `cli/src/bundle/unlink.ts` — `checkVersionNotUsedInChannel` still uses supabase-js PostgREST
 - `cli/src/channel/set.ts` — `checkCompatibilityNativePackages` still needs supabase client

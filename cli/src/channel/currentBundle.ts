@@ -6,6 +6,7 @@ import { CliUserError } from '../shared/cli-user-error'
 import {
   fetchChannelCurrentBundleViaHttp,
   findSavedKey,
+  formatCapgoCliApiError,
   getAppId,
   getCapgoCliHttpStatus,
   getConfig,
@@ -66,9 +67,15 @@ export async function currentBundleInternal(channel: string, appId: string, opti
         log.error(`Error retrieving channel ${channel} for app ${appId}. Perhaps the channel does not exist?`)
       throw new CliUserError('Channel not found for app', { appId, channel })
     }
+    if (status === 404 && code === 'channel_bundle_unreadable') {
+      if (!silent)
+        log.error(`Error retrieving current bundle for channel ${channel}.`)
+      throw new CliUserError('Channel does not have a readable current bundle', { appId, channel })
+    }
+    const message = await formatCapgoCliApiError(error)
     if (!silent)
-      log.error(`Error retrieving current bundle for channel ${channel}.`)
-    throw new CliUserError('Channel does not have a readable current bundle', { appId, channel })
+      log.error(message)
+    throw new CliUserError(message, { appId, channel })
   }
 
   const bundleName = data?.bundle_name

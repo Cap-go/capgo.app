@@ -81,8 +81,9 @@ export async function setChannelInternal(channel: string, appId: string, options
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  await check2FAComplianceForApp(options.apikey, appId, silent, { supaHost: options.supaHost, supaAnon: options.supaAnon })
-  const userId = await resolveUserIdFromApiKey(supabase, options.apikey)
+  const host = { supaHost: options.supaHost, supaAnon: options.supaAnon }
+  await check2FAComplianceForApp(options.apikey, appId, silent, host)
+  const userId = await resolveUserIdFromApiKey(supabase, options.apikey, silent, host)
 
   const {
     bundle,

@@ -25,8 +25,8 @@ interface MemberInfo {
   email: string
   role: string
   is_tmp: boolean
-  has_2fa: boolean
-  password_policy_compliant: boolean
+  has_2fa: boolean | null
+  password_policy_compliant: boolean | null
 }
 
 interface DisplayOptions {
@@ -51,8 +51,10 @@ function displayMembers(data: MemberInfo[], options: DisplayOptions, silent: boo
 
   for (const row of data) {
     const status = row.is_tmp ? 'Invited' : 'Active'
-    const has2FA = row.has_2fa ? '✓ Yes' : '✗ No'
-    const passwordCompliant = row.password_policy_compliant ? '✓ Compliant' : '✗ Non-compliant'
+    const has2FA = row.has_2fa == null ? '—' : row.has_2fa ? '✓ Yes' : '✗ No'
+    const passwordCompliant = row.password_policy_compliant == null
+      ? '—'
+      : row.password_policy_compliant ? '✓ Compliant' : '✗ Non-compliant'
 
     const rowData = [
       row.email,
@@ -145,8 +147,14 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
     throw new Error(`Cannot get organization members: ${formatError(membersError)}`)
   }
 
-  const { data: compliance } = await fetchOrgMemberComplianceViaHttp(enrichedOptions.apikey!, orgId, hostOptions)
+  const { data: compliance, error: complianceError } = await fetchOrgMemberComplianceViaHttp(enrichedOptions.apikey!, orgId, hostOptions)
+  if (complianceError) {
+    if (!silent)
+      log.error(`Cannot get member compliance status: ${formatError(complianceError)}`)
+    throw new Error(`Cannot get member compliance status: ${formatError(complianceError)}`)
+  }
   const membersStatus = compliance?.members_2fa
+  const twoFaUnavailable = Boolean(compliance?.members_2fa_error) || !membersStatus
   if (compliance?.members_2fa_error) {
     if (!silent) {
       if (compliance.members_2fa_error.includes('NO_RIGHTS')) {
@@ -182,8 +190,10 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
       email: m.email,
       role: m.role,
       is_tmp: m.is_tmp,
-      has_2fa: twoFaStatus?.['2fa_enabled'] ?? false,
-      password_policy_compliant: pwPolicyStatus?.password_policy_compliant ?? false,
+      has_2fa: twoFaUnavailable ? null : (twoFaStatus?.['2fa_enabled'] ?? false),
+      password_policy_compliant: hasPasswordPolicy && (compliance?.members_password_error || !passwordPolicyStatus)
+        ? null
+        : (pwPolicyStatus?.password_policy_compliant ?? false),
     }
   })
 

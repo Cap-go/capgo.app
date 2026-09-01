@@ -138,6 +138,28 @@ describe('private/cli remaining RPC wrappers', () => {
     expect(data.orgs?.some(org => org.gid === ORG_ID)).toBe(true)
   })
 
+  it('rejects check-plan when app_id is an empty string', async () => {
+    const response = await fetch(getEndpointUrl('/private/cli/check-plan'), {
+      method: 'POST',
+      headers: scopedHeaders,
+      body: JSON.stringify({ org_id: ORG_ID, app_id: '' }),
+    })
+    const data = await response.json() as { error?: string }
+    expect(response.status).toBe(400)
+    expect(data.error).toBe('invalid_app_id')
+  })
+
+  it('rejects check-plan-upload when app_id is an empty string', async () => {
+    const response = await fetch(getEndpointUrl('/private/cli/check-plan-upload'), {
+      method: 'POST',
+      headers: scopedHeaders,
+      body: JSON.stringify({ org_id: ORG_ID, app_id: '' }),
+    })
+    const data = await response.json() as { error?: string }
+    expect(response.status).toBe(400)
+    expect(data.error).toBe('invalid_app_id')
+  })
+
   it('rejects check-plan for an org the apikey cannot read', async () => {
     const response = await fetch(getEndpointUrl('/private/cli/check-plan'), {
       method: 'POST',
