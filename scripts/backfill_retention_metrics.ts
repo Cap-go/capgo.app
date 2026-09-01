@@ -1224,19 +1224,20 @@ async function claimProcessedEventsPg(client: PgClient, movements: BackfillReven
 
     const values: string[] = []
     const placeholders = chunk.map((movement, index) => {
-      const offset = index * 3
-      values.push(movement.event_id, movement.customer_id, movement.date_id)
-      return `($${offset + 1}, $${offset + 2}, $${offset + 3})`
+      const offset = index * 4
+      values.push(movement.event_id, movement.customer_id, movement.date_id, 'ee')
+      return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4})`
     })
 
     const { rows } = await client.query<{ event_id: string }>(`
       INSERT INTO public.processed_stripe_events (
         event_id,
         customer_id,
-        date_id
+        date_id,
+        billing_account
       )
       VALUES ${placeholders.join(', ')}
-      ON CONFLICT (event_id) DO NOTHING
+      ON CONFLICT (billing_account, event_id) DO NOTHING
       RETURNING event_id
     `, values)
 

@@ -3,8 +3,8 @@ import Stripe from 'stripe'
 import { getFallbackCreditProductId } from './credits.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { getOneTimePriceId, getStripe, isStripeEmulatorEnabled } from './stripe.ts'
+import { isStripeAccountConfigured, normalizeBillingAccount, planProductIdOrFilter, resolveBillingAccount, resolvePlanCreditId } from './stripe_billing_account.ts'
 import { supabaseAdmin } from './supabase.ts'
-import { isStripeConfigured } from './utils.ts'
 
 export const MIN_AUTO_TOP_UP_THRESHOLD = 10
 export const AUTO_TOP_UP_KIND = 'credit_auto_top_up'
@@ -66,7 +66,8 @@ async function getAvailableCredits(c: Context, orgId: string): Promise<number> {
 }
 
 export async function customerHasSavedPaymentMethod(c: Context, customerId: string): Promise<boolean> {
-  if (!isStripeConfigured(c))
+  const account = await resolveBillingAccount(c, customerId)
+  if (!isStripeAccountConfigured(c, account))
     return false
   try {
     return Boolean(await getDefaultPaymentMethodId(c, customerId))
@@ -78,7 +79,8 @@ export async function customerHasSavedPaymentMethod(c: Context, customerId: stri
 }
 
 async function getDefaultPaymentMethodId(c: Context, customerId: string): Promise<string | null> {
-  const stripe = getStripe(c)
+  const account = await resolveBillingAccount(c, customerId)
+  const stripe = getStripe(c, account)
   const customer = await stripe.customers.retrieve(customerId)
   if (customer.deleted)
     return null
@@ -118,23 +120,25 @@ async function getCreditProductIdForCustomer(c: Context, customerId: string): Pr
 
   const { data: stripeInfo, error: stripeInfoError } = await supabaseAdmin(c)
     .from('stripe_info')
-    .select('product_id')
+    .select('product_id, billing_account')
     .eq('customer_id', customerId)
     .maybeSingle()
 
   if (stripeInfoError || !stripeInfo?.product_id)
     return await getFallbackCreditProductId(c, customerId, loadSoloPlan)
 
+  const account = normalizeBillingAccount(stripeInfo.billing_account)
   const { data: plan, error: planError } = await supabaseAdmin(c)
     .from('plans')
-    .select('credit_id, name')
-    .eq('stripe_id', stripeInfo.product_id)
+    .select('credit_id, credit_id_us, name')
+    .or(planProductIdOrFilter(stripeInfo.product_id))
     .maybeSingle()
 
-  if (planError || !plan?.credit_id)
+  const creditId = plan ? resolvePlanCreditId(plan, account) : null
+  if (planError || !creditId)
     return await getFallbackCreditProductId(c, customerId, loadSoloPlan)
 
-  return plan.credit_id
+  return creditId
 }
 
 export async function grantCreditsFromAutoTopUpPayment(
@@ -182,14 +186,15 @@ async function chargeOffSessionCredits(
     return null
   }
 
+  const account = await resolveBillingAccount(c, customerId)
   const productId = await getCreditProductIdForCustomer(c, customerId)
-  const priceId = await getOneTimePriceId(c, productId)
+  const priceId = await getOneTimePriceId(c, productId, account)
   if (!priceId) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_missing_price', orgId, productId })
     return null
   }
 
-  const stripe = getStripe(c)
+  const stripe = getStripe(c, account)
   const price = await stripe.prices.retrieve(priceId)
   const unitAmount = price.unit_amount
   if (!unitAmount || unitAmount <= 0) {
@@ -296,7 +301,17 @@ export async function saveAutoTopUpSettings(
 }
 
 export async function maybeAutoTopUpCredits(c: Context, orgId: string): Promise<void> {
-  if (!isStripeConfigured(c))
+  const { data: org, error: orgError } = await supabaseAdmin(c)
+    .from('orgs')
+    .select('customer_id')
+    .eq('id', orgId)
+    .maybeSingle()
+
+  if (orgError || !org?.customer_id)
+    return
+
+  const account = await resolveBillingAccount(c, org.customer_id)
+  if (!isStripeAccountConfigured(c, account))
     return
 
   const { data: claim, error: claimError } = await supabaseAdmin(c)

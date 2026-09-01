@@ -442,7 +442,9 @@ CREATE TABLE public.stripe_info (
     last_stripe_event_at timestamp with time zone,
     past_due_at timestamp with time zone,
     churn_reason text,
-    is_above_plan boolean
+    is_above_plan boolean,
+    billing_account text DEFAULT 'ee'::text NOT NULL,
+    CONSTRAINT stripe_info_billing_account_check CHECK ((billing_account = ANY (ARRAY['ee'::text, 'us'::text])))
 );
 
 ALTER TABLE ONLY public.stripe_info REPLICA IDENTITY FULL;

@@ -1,5 +1,5 @@
 import Stripe from 'stripe'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mockedEnv: Record<string, string> = {
   WEBAPP_URL: 'https://capgo.test',
@@ -52,6 +52,39 @@ function createPriceList(recurringInterval = 'month', type = 'recurring') {
     },
   ]
 }
+
+function mockBillingAccountLookup() {
+  const rowResult = {
+    maybeSingle: vi.fn().mockResolvedValue({
+      data: { billing_account: 'ee' },
+      error: null,
+    }),
+    single: vi.fn().mockResolvedValue({
+      data: {
+        billing_account: 'ee',
+        price_m_id: 'price_monthly_from_plan',
+        price_y_id: 'price_yearly_from_plan',
+        price_m_id_us: null,
+        price_y_id_us: null,
+        stripe_id: 'plan_test',
+        stripe_id_us: null,
+      },
+      error: null,
+    }),
+  }
+
+  mockedSupabaseAdmin.mockReturnValue({
+    from: vi.fn(() => ({
+      select: vi.fn(() => ({
+        eq: vi.fn(() => rowResult),
+      })),
+    })),
+  })
+}
+
+beforeEach(() => {
+  mockBillingAccountLookup()
+})
 
 afterEach(() => {
   delete mockedEnv.STRIPE_API_BASE_URL
@@ -348,10 +381,33 @@ describe('stripe redirect URL allowlist', () => {
       from: vi.fn().mockReturnValue({
         select: vi.fn().mockReturnValue({
           eq: vi.fn().mockReturnValue({
+            maybeSingle: vi.fn().mockResolvedValue({
+              data: { billing_account: 'ee' },
+              error: null,
+            }),
             single: vi.fn().mockResolvedValue({
               data: {
+                billing_account: 'ee',
                 price_m_id: 'price_monthly_from_plan',
                 price_y_id: 'price_yearly_from_plan',
+                price_m_id_us: null,
+                price_y_id_us: null,
+                stripe_id: 'prod_plan_test',
+                stripe_id_us: null,
+              },
+              error: null,
+            }),
+          }),
+          or: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({
+              data: {
+                billing_account: 'ee',
+                price_m_id: 'price_monthly_from_plan',
+                price_y_id: 'price_yearly_from_plan',
+                price_m_id_us: null,
+                price_y_id_us: null,
+                stripe_id: 'prod_plan_test',
+                stripe_id_us: null,
               },
               error: null,
             }),
@@ -389,7 +445,7 @@ describe('stripe redirect URL allowlist', () => {
       createContext(),
       'cus_123',
       'month',
-      'plan_test',
+      'prod_plan_test',
       '/app/success',
       '/app/cancel',
     )

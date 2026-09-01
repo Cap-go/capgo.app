@@ -2686,6 +2686,7 @@ export type Database = {
           build_time_unit: number
           created_at: string
           credit_id: string
+          credit_id_us: string | null
           description: string
           id: string
           market_desc: string | null
@@ -2696,8 +2697,11 @@ export type Database = {
           price_m_id: string
           price_y: number
           price_y_id: string
+          price_m_id_us: string | null
+          price_y_id_us: string | null
           storage: number
           stripe_id: string
+          stripe_id_us: string | null
           updated_at: string
         }
         Insert: {
@@ -2705,6 +2709,7 @@ export type Database = {
           build_time_unit?: number
           created_at?: string
           credit_id: string
+          credit_id_us?: string | null
           description?: string
           id?: string
           market_desc?: string | null
@@ -2713,10 +2718,13 @@ export type Database = {
           native_build_concurrency?: number
           price_m?: number
           price_m_id: string
+          price_m_id_us?: string | null
           price_y?: number
           price_y_id: string
+          price_y_id_us?: string | null
           storage: number
           stripe_id?: string
+          stripe_id_us?: string | null
           updated_at?: string
         }
         Update: {
@@ -2724,6 +2732,7 @@ export type Database = {
           build_time_unit?: number
           created_at?: string
           credit_id?: string
+          credit_id_us?: string | null
           description?: string
           id?: string
           market_desc?: string | null
@@ -2732,10 +2741,13 @@ export type Database = {
           native_build_concurrency?: number
           price_m?: number
           price_m_id?: string
+          price_m_id_us?: string | null
           price_y?: number
           price_y_id?: string
+          price_y_id_us?: string | null
           storage?: number
           stripe_id?: string
+          stripe_id_us?: string | null
           updated_at?: string
         }
         Relationships: []
@@ -2766,18 +2778,21 @@ export type Database = {
       }
       processed_stripe_events: {
         Row: {
+          billing_account: string
           created_at: string
           customer_id: string
           date_id: string
           event_id: string
         }
         Insert: {
+          billing_account?: string
           created_at?: string
           customer_id: string
           date_id: string
           event_id: string
         }
         Update: {
+          billing_account?: string
           created_at?: string
           customer_id?: string
           date_id?: string
@@ -3091,6 +3106,7 @@ export type Database = {
           created_at: string
           customer_country: string | null
           customer_id: string
+          billing_account: string
           id: number
           is_above_plan: boolean | null
           is_good_plan: boolean | null
@@ -3119,6 +3135,7 @@ export type Database = {
           created_at?: string
           customer_country?: string | null
           customer_id: string
+          billing_account?: string
           id?: number
           is_above_plan?: boolean | null
           is_good_plan?: boolean | null
@@ -3147,6 +3164,7 @@ export type Database = {
           created_at?: string
           customer_country?: string | null
           customer_id?: string
+          billing_account?: string
           id?: number
           is_above_plan?: boolean | null
           is_good_plan?: boolean | null

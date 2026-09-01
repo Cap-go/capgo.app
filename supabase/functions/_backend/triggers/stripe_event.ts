@@ -18,10 +18,11 @@ import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { ensureCustomerMetadata, getCreditCheckoutDetails, getStripe, syncStripeCustomerCountry } from '../utils/stripe.ts'
+import { DEFAULT_BILLING_ACCOUNT, isStripeAccountConfigured, resolveBillingAccount } from '../utils/stripe_billing_account.ts'
 import { buildTransferInvoiceFooter, getTransferInvoiceFooterUpdate, isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER, TRANSFER_INVOICE_FOOTER_MAX_LENGTH } from '../utils/stripe_event.ts'
 import { customerToSegmentOrg, supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
-import { backgroundTask, isStripeConfigured } from '../utils/utils.ts'
+import { backgroundTask } from '../utils/utils.ts'
 
 export const app = new Hono<MiddlewareKeyVariablesStripe>()
 
@@ -318,10 +319,14 @@ async function lookupOrgCreatorEmail(
 }
 
 async function retrieveStripeCustomerBillingEmail(c: Context, customerId: string): Promise<string | null> {
-  if (!customerId || !isStripeConfigured(c))
+  if (!customerId)
     return null
 
-  const customer = await getStripe(c).customers.retrieve(customerId)
+  const account = await resolveBillingAccount(c, customerId)
+  if (!isStripeAccountConfigured(c, account))
+    return null
+
+  const customer = await getStripe(c, account).customers.retrieve(customerId)
   if ('deleted' in customer && customer.deleted)
     return null
 
@@ -648,6 +653,8 @@ async function persistStripeInfoAndRevenueMovement(
   }
   const shouldRecordMovement = hasRevenueMovement(movement)
 
+  const billingAccount = c.get('billingAccount') ?? DEFAULT_BILLING_ACCOUNT
+
   if (Object.keys(transactionUpdateData).length === 0 && !shouldRecordMovement)
     return 'applied'
 
@@ -690,13 +697,15 @@ async function persistStripeInfoAndRevenueMovement(
     if (shouldRecordMovement) {
       const processedEvent = await pgClient.query(`
         INSERT INTO public.processed_stripe_events (
+          billing_account,
           event_id,
           customer_id,
           date_id
         )
-        VALUES ($1, $2, $3)
-        ON CONFLICT (event_id) DO NOTHING
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (billing_account, event_id) DO NOTHING
       `, [
+        billingAccount,
         stripeEventId,
         customerId,
         getEventDateId(eventOccurredAtIso),
@@ -1460,7 +1469,7 @@ async function cancelingOrFinished(
   return c.json(BRES)
 }
 
-app.post('/', middlewareStripeWebhook(), async (c) => {
+async function handleStripeEvent(c: Context) {
   const stripeData = c.get('stripeData')!
   const stripeEvent = c.get('stripeEvent')!
   const isCheckoutSession = isCheckoutSessionEvent(stripeEvent)
@@ -1613,7 +1622,12 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
     }
   }
   return cancelingOrFinished(c, stripeEvent, stripeData.data, customer)
-})
+}
+
+app.post('/', middlewareStripeWebhook('ee'), handleStripeEvent)
+
+export const appUs = new Hono<MiddlewareKeyVariablesStripe>()
+appUs.post('/', middlewareStripeWebhook('us'), handleStripeEvent)
 
 export const stripeEventTestUtils = {
   BENTO_CHARGE_SUCCEEDED_EVENT,

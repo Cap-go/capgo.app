@@ -141,7 +141,7 @@ const isTrial = computed(() => currentOrganization?.value ? (!currentOrganizatio
 const isCreditsOnly = computed(() => isCreditsOnlyOrg(currentOrganization?.value))
 
 async function prefetchStripeCheckoutUrl(plan: Database['public']['Tables']['plans']['Row'], isYear: boolean) {
-  if (!plan.stripe_id)
+  if (!plan.name)
     return
   const supabase = useSupabase()
   const session = await supabase.auth.getSession()
@@ -155,7 +155,7 @@ async function prefetchStripeCheckoutUrl(plan: Database['public']['Tables']['pla
   try {
     const resp = await invokeCapgoApi('private/stripe_checkout', {
       body: JSON.stringify({
-        priceId: plan.stripe_id,
+        planName: plan.name,
         successUrl,
         cancelUrl,
         recurrence: isYear ? 'year' : 'month',
@@ -252,7 +252,7 @@ async function openChangePlan(plan: Database['public']['Tables']['plans']['Row']
       }
     }
     else {
-      const didOpenCheckout = await openCheckout(plan.stripe_id, `${globalThis.location.href}?success=1`, `${globalThis.location.href}?cancel=1`, checkoutIsYearly, currentOrganization?.value?.gid ?? '')
+      const didOpenCheckout = await openCheckout(plan.name, `${globalThis.location.href}?success=1`, `${globalThis.location.href}?cancel=1`, checkoutIsYearly, currentOrganization?.value?.gid ?? '')
       if (didOpenCheckout)
         trackPlanCheckoutStarted(plan, checkoutIsYearly, 'direct')
     }
