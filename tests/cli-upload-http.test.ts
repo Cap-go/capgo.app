@@ -54,15 +54,26 @@ afterAll(async () => {
     ...(scopedApiKeyId !== undefined ? [scopedApiKeyId] : []),
   ]
   for (const rbacId of rbacIds) {
-    await executeSQL(
-      `DELETE FROM public.role_bindings
-       WHERE principal_type = public.rbac_principal_apikey()
-         AND principal_id = $1::uuid`,
-      [rbacId],
-    )
+    try {
+      await executeSQL(
+        `DELETE FROM public.role_bindings
+         WHERE principal_type = public.rbac_principal_apikey()
+           AND principal_id = $1::uuid`,
+        [rbacId],
+      )
+    }
+    catch (error) {
+      console.warn(`Failed to clean up role_binding ${rbacId}:`, error)
+    }
   }
-  for (const apiKeyId of apiKeyIds)
-    await executeSQL('DELETE FROM public.apikeys WHERE id = $1', [apiKeyId])
+  for (const apiKeyId of apiKeyIds) {
+    try {
+      await executeSQL('DELETE FROM public.apikeys WHERE id = $1', [apiKeyId])
+    }
+    catch (error) {
+      console.warn(`Failed to clean up API key ${apiKeyId}:`, error)
+    }
+  }
   await resetAppData(APPNAME)
 })
 
