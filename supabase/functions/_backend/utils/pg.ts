@@ -13,7 +13,7 @@ import { getChannelSelfOverride, isChannelSelfStoreEnabled } from './channelSelf
 import { getAdminOnboardingTelemetry } from './cloudflare.ts'
 import { DISPOSABLE_EMAIL_DOMAINS, PERSONAL_EMAIL_DOMAINS } from './emailClassification.ts'
 import { getClientDbRegionSB } from './geolocation.ts'
-import { REQUIRED_GLOBAL_STATS_SHARDS } from './global_stats.ts'
+import { hasRequiredGlobalStatsShards, REQUIRED_GLOBAL_STATS_SHARDS } from './global_stats.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { buildAdminOnboardingWizardDropoff, getAdminOnboardingActivationMetrics } from './onboardingFunnel.ts'
 import { hasPluginVersionBreakdown } from './plugin_compatibility.ts'
@@ -3995,7 +3995,15 @@ export async function getAdminOnboardingFunnel(
 function pickPluginBreakdownSnapshotRow(rows: any[]) {
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     const row = rows[index]
+    if (!hasRequiredGlobalStatsShards(row.completed_shards))
+      continue
     if (hasPluginVersionBreakdown(parseBreakdownJson(row.plugin_version_breakdown)))
+      return row
+  }
+
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (hasRequiredGlobalStatsShards(row.completed_shards))
       return row
   }
 
@@ -4022,7 +4030,8 @@ export async function getAdminPluginBreakdown(
         COALESCE(devices_last_month_android, 0)::int AS devices_last_month_android,
         plugin_version_breakdown,
         plugin_major_breakdown,
-        plugin_version_ladder
+        plugin_version_ladder,
+        completed_shards
       FROM global_stats
       WHERE date_id >= ${startDateOnly}
         AND date_id <= ${endDateOnly}

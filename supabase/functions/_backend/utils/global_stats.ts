@@ -24,3 +24,14 @@ export const GLOBAL_STATS_SHARDS = [
   'notifications',
   'native_notifications',
 ] as const
+
+export function hasRequiredGlobalStatsShards(completedShards: unknown): boolean {
+  if (!Array.isArray(completedShards))
+    return false
+
+  const completed = new Set(
+    completedShards.filter((shard): shard is string => typeof shard === 'string'),
+  )
+
+  return REQUIRED_GLOBAL_STATS_SHARDS.every(shard => completed.has(shard))
+}
