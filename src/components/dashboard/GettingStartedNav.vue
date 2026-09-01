@@ -78,13 +78,16 @@ async function persistDismiss(app: OrganizationApp) {
     app.app_id,
     withGettingStartedDismissed(current, parseAppOnboardingLedger(data).getting_started_dismissed_at ?? undefined),
   )
-  const { data: row } = await supabase
+  const { data: row, error: needError } = await supabase
     .from('apps')
     .select('need_onboarding')
     .eq('app_id', app.app_id)
     .maybeSingle()
-  if (row)
-    organizationStore.updateAppNeedOnboarding(app.app_id, row.need_onboarding)
+  if (needError || !row) {
+    organizationStore.updateAppNeedOnboarding(app.app_id, app.need_onboarding)
+    return
+  }
+  organizationStore.updateAppNeedOnboarding(app.app_id, row.need_onboarding)
 }
 
 function dismiss(app: OrganizationApp, event: Event) {

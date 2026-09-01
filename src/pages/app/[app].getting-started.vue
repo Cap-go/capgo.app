@@ -78,10 +78,11 @@ function acronym(name: string) {
 function applyOnboarding(onboarding: unknown, needOnboarding?: boolean, targetAppId = id.value) {
   if (!targetAppId)
     return
-  if (id.value === targetAppId && app.value?.app_id === targetAppId) {
+  const currentApp = app.value
+  if (id.value === targetAppId && currentApp && currentApp.app_id === targetAppId) {
     app.value = {
-      ...app.value,
-      onboarding: onboarding as typeof app.value.onboarding,
+      ...currentApp,
+      onboarding: onboarding as typeof currentApp.onboarding,
       ...(needOnboarding === undefined ? {} : { need_onboarding: needOnboarding }),
     }
   }
@@ -98,8 +99,9 @@ async function refreshNeedOnboarding(appId: string) {
     .maybeSingle()
   if (!data)
     return
-  if (app.value?.app_id === appId)
-    app.value = { ...app.value, need_onboarding: data.need_onboarding }
+  const currentApp = app.value
+  if (currentApp?.app_id === appId)
+    app.value = { ...currentApp, need_onboarding: data.need_onboarding }
   organizationStore.updateAppNeedOnboarding(appId, data.need_onboarding)
 }
 
@@ -173,9 +175,10 @@ async function hideGettingStarted() {
       throw error
     applyOnboarding(
       withGettingStartedDismissed(current, parseAppOnboardingLedger(data).getting_started_dismissed_at ?? undefined),
-      false,
+      undefined,
       appId,
     )
+    await refreshNeedOnboarding(appId)
     if (id.value === appId)
       await router.push(`/app/${encodeURIComponent(appId)}`)
   }
