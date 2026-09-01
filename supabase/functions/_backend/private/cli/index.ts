@@ -2,7 +2,7 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { createHono, getBodyOrQuery, parseBody, quickError } from '../../utils/hono.ts'
 import { version } from '../../utils/version.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
-import { checkPermission } from '../../utils/rbac.ts'
+import { checkPermission, type Permission } from '../../utils/rbac.ts'
 import { getAppOrganization } from '../../public/bundle/create.ts'
 import {
   isAllowedActionOrg,
@@ -56,12 +56,47 @@ function requireObjectBody<T extends object>(body: unknown): T | Response {
   return body as T
 }
 
+const CLI_APP_2FA_PERMISSIONS: Permission[] = [
+  'app.read',
+  'app.upload_bundle',
+  'app.create_channel',
+  'app.read_channels',
+  'app.read_bundles',
+  'bundle.delete',
+  'app.delete',
+  'app.update_settings',
+  'app.build_native',
+  'channel.read',
+  'channel.delete',
+  'channel.update_settings',
+]
+
+const CLI_ORG_2FA_PERMISSIONS: Permission[] = [
+  'org.read',
+  'org.update_settings',
+  'org.read_members',
+  'org.delete',
+  'org.create_app',
+]
+
+async function hasAnyPermission(
+  c: Parameters<typeof checkPermission>[0],
+  permissions: Permission[],
+  scope: { appId?: string, orgId?: string },
+): Promise<boolean> {
+  for (const permission of permissions) {
+    if (await checkPermission(c, permission, scope))
+      return true
+  }
+  return false
+}
+
 async function assertOrgUploadReadScope(
   c: Parameters<typeof checkPermission>[0],
   orgId: string,
   appId?: string | null,
 ): Promise<Response | null> {
-  if (appId) {
+  if (appId !== undefined && appId !== null) {
     if (typeof appId !== 'string' || !isValidAppId(appId))
       return quickError(400, 'invalid_app_id', 'App ID must be a reverse domain string', { app_id: appId })
 
@@ -195,10 +230,8 @@ app.post('/check-2fa-app', middlewareKey(), async (c) => {
   if (!isValidAppId(body.app_id))
     return quickError(400, 'invalid_app_id', 'App ID must be a reverse domain string', { app_id: body.app_id })
 
-  if (!(await checkPermission(c, 'app.upload_bundle', { appId: body.app_id }))
-    && !(await checkPermission(c, 'app.read', { appId: body.app_id }))) {
+  if (!(await hasAnyPermission(c, CLI_APP_2FA_PERMISSIONS, { appId: body.app_id })))
     return quickError(401, 'not_authorized', 'You cannot access this app', { app_id: body.app_id })
-  }
 
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   const apikeyString = apikey.key ?? c.get('capgkey')
@@ -260,7 +293,7 @@ async function assertOrgPlanScope(
   orgId: string,
   appId?: string | null,
 ): Promise<Response | null> {
-  if (appId) {
+  if (appId !== undefined && appId !== null) {
     if (typeof appId !== 'string' || !isValidAppId(appId))
       return quickError(400, 'invalid_app_id', 'App ID must be a reverse domain string', { app_id: appId })
 
@@ -383,11 +416,8 @@ app.post('/check-2fa-org', middlewareKey(), async (c) => {
   if (!body.org_id || typeof body.org_id !== 'string')
     return quickError(400, 'missing_org_id', 'Missing org_id', { body })
 
-  if (!(await checkPermission(c, 'org.read', { orgId: body.org_id }))
-    && !(await checkPermission(c, 'org.update_settings', { orgId: body.org_id }))
-    && !(await checkPermission(c, 'org.read_members', { orgId: body.org_id }))) {
+  if (!(await hasAnyPermission(c, CLI_ORG_2FA_PERMISSIONS, { orgId: body.org_id })))
     return quickError(401, 'not_authorized', 'You cannot access this organization', { org_id: body.org_id })
-  }
 
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   const { data: shouldReject, error } = await supabaseApikey(c, apikey.key ?? c.get('capgkey'))
@@ -460,8 +490,11 @@ app.get('/channel-current-bundle', middlewareKey(), async (c) => {
     p_channel_id: channelRow.id,
   })
 
+  if (bundleError)
+    return quickError(500, 'channel_lookup_failed', 'Cannot load current bundle', { error: bundleError })
+
   const bundleName = bundleRows?.[0]?.bundle_name
-  if (bundleError || !bundleName)
+  if (!bundleName)
     return quickError(404, 'channel_bundle_unreadable', 'Channel does not have a readable current bundle', { app_id: body.app_id, channel: body.channel })
 
   return c.json({ bundle_name: bundleName })

@@ -8,7 +8,7 @@ import {
   callTwoFactorComplianceRpcWithRetry,
   warnAndContinueTwoFactorPreflightNetworkFailure,
 } from '../shared/two-factor-compliance'
-import { appAddHintMessage, formatCapgoApiErrorBody, formatCapgoCliApiError, getCapgoCliHttpStatus, hasCliPermissionViaHttp, invokeCapgoCliApi, isCapgoManagedSupabaseHost, resolveCapgoPublicApiHost, show2FADeniedError, type CapgoCliHostOptions } from '../utils'
+import { appAddHintMessage, formatCapgoApiErrorBody, formatCapgoCliApiError, getCapgoCliHttpStatus, hasCliPermissionViaHttp, hostOptionsFromSupabase, invokeCapgoCliApi, resolveCapgoPublicApiHost, show2FADeniedError, type CapgoCliHostOptions } from '../utils'
 
 export async function checkAppExists(
   apikey: string,
@@ -236,19 +236,6 @@ export async function check2FAComplianceForApp(
     }
     show2FADeniedError()
   }
-}
-
-function hostOptionsFromSupabase(supabase: SupabaseClient<Database>) {
-  // supabase-js keeps these as protected fields; local/self-host tests still
-  // need the same host when Capgo HTTP existence checks replace PostgREST RPCs.
-  // Hosted Capgo clients must keep default api.capgo.app resolution — their
-  // supabaseUrl points at PostgREST, not the public Capgo HTTP API.
-  const client = supabase as SupabaseClient<Database> & { supabaseUrl?: string, supabaseKey?: string }
-  const supaHost = typeof client.supabaseUrl === 'string' ? client.supabaseUrl : undefined
-  const supaAnon = typeof client.supabaseKey === 'string' ? client.supabaseKey : undefined
-  if (supaHost && supaAnon && !isCapgoManagedSupabaseHost(supaHost))
-    return { supaHost, supaAnon }
-  return undefined
 }
 
 // lgtm[js/insecure-randomness] Permission gate only; this module does not generate secrets or tokens with Math.random.

@@ -5,7 +5,7 @@ import { chdir, cwd } from 'node:process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CAPGO_SERVER_CONFIG_MISSING_MESSAGE, createSupabaseClient, defaultApiHost } from '../src/utils.ts'
+import { CAPGO_SERVER_CONFIG_MISSING_MESSAGE, createSupabaseClient, defaultApiHost, hostOptionsFromSupabase, resolveCliHostOptions } from '../src/utils.ts'
 import { CliUserError } from '../src/shared/cli-user-error.ts'
 import { shouldCapturePosthogException } from '../src/posthog.ts'
 
@@ -83,6 +83,27 @@ try {
   assert.equal(
     new CliUserError(CAPGO_SERVER_CONFIG_MISSING_MESSAGE, { missingSupaHost: true }).message,
     new CliUserError(CAPGO_SERVER_CONFIG_MISSING_MESSAGE, { missingSupaHost: false, missingSupaKey: true }).message,
+  )
+
+  const selfHostClient = {
+    supabaseUrl: 'https://selfhost.example.com',
+    supabaseKey: 'anon-key',
+  }
+  assert.deepEqual(hostOptionsFromSupabase(selfHostClient), {
+    supaHost: 'https://selfhost.example.com',
+    supaAnon: 'anon-key',
+  })
+  assert.equal(hostOptionsFromSupabase({
+    supabaseUrl: 'https://sb.capgo.app',
+    supabaseKey: 'anon-key',
+  }), undefined)
+  assert.deepEqual(
+    resolveCliHostOptions(selfHostClient),
+    { supaHost: 'https://selfhost.example.com', supaAnon: 'anon-key' },
+  )
+  assert.deepEqual(
+    resolveCliHostOptions(selfHostClient, { supaHost: 'https://explicit.example.com', supaAnon: 'explicit-key' }),
+    { supaHost: 'https://explicit.example.com', supaAnon: 'explicit-key' },
   )
 
   console.log('createSupabaseClient missing-config tests passed')

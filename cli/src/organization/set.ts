@@ -176,7 +176,7 @@ export async function setOrganizationInternal(
           }
 
           if (membersWithout2FA.length > 0) {
-            const { data: members, error: membersListError } = await invokeCapgoCliApi<Array<{ uid: string, email: string }>>(
+            const { data: members } = await invokeCapgoCliApi<Array<{ uid: string, email: string }>>(
               `organization/members?orgId=${encodeURIComponent(orgId)}`,
               {
                 apikey: enrichedOptions.apikey,
@@ -186,12 +186,8 @@ export async function setOrganizationInternal(
               },
             )
 
-            if (membersListError) {
-              log.error(`Cannot get organization members: ${formatError(membersListError)}`)
-              throw new Error('Cannot get organization members')
-            }
-
-            // Create a Map for O(1) lookups instead of O(n) .find() calls
+            // Emails need org.read_members. Keys with only org.update_settings
+            // still warn using user ids from /private/cli/org-member-compliance.
             const membersByUid = new Map(members?.map(m => [m.uid, m]) || [])
             const emails = membersWithout2FA.map((member) => {
               const memberInfo = membersByUid.get(member.user_id)

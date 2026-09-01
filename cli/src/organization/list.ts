@@ -85,9 +85,10 @@ export async function listOrganizationsInternal(options: OptionsBase, silent = f
     })
   }
   catch (error) {
+    const message = error instanceof Error ? error.message : `Cannot get organizations: ${String(error)}`
     if (!silent)
-      log.error(`Cannot get organizations ${error instanceof Error ? error.message : String(error)}`)
-    throw error instanceof Error ? error : new Error(`Cannot get organizations: ${String(error)}`)
+      log.error(message)
+    throw error instanceof Error ? error : new Error(message)
   }
 
   void trackEvent({ channel: 'organization', event: 'Orgs Listed', tags: { org_count: organizations.length } })

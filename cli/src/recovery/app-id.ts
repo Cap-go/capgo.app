@@ -271,7 +271,10 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
         continue
       const appId = (entered as string).trim()
       const supabase = await createSupabaseClient(resolvedApikey, options.supaHost, options.supaAnon)
-      const organization = await getOrganizationWithPermission(supabase, resolvedApikey, 'org.create_app')
+      const organization = await getOrganizationWithPermission(supabase, resolvedApikey, 'org.create_app', {
+        supaHost: options.supaHost,
+        supaAnon: options.supaAnon,
+      })
       await addAppInternal(appId, { apikey: resolvedApikey, supaHost: options.supaHost, supaAnon: options.supaAnon }, organization, true)
       await persistAppIdToConfig(appId)
       log.success(`Created app ${appId} in Capgo`)

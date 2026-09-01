@@ -86,8 +86,9 @@ export async function cleanupBundleInternal(appId: string, options: BundleCleanu
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  await check2FAComplianceForApp(options.apikey, appId, silent, { supaHost: options.supaHost, supaAnon: options.supaAnon })
-  await resolveUserIdFromApiKey(supabase, options.apikey)
+  const host = { supaHost: options.supaHost, supaAnon: options.supaAnon }
+  await check2FAComplianceForApp(options.apikey, appId, silent, host)
+  await resolveUserIdFromApiKey(supabase, options.apikey, silent, host)
   await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'bundle.delete', silent, true)
 
   if (!silent)

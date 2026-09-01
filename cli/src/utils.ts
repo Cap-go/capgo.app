@@ -950,6 +950,30 @@ export function isCapgoManagedSupabaseHost(supaHost?: string): boolean {
   }
 }
 
+export function hostOptionsFromSupabase(supabase: SupabaseClient<Database>): CapgoCliHostOptions | undefined {
+  // supabase-js keeps these as protected fields; local/self-host still needs the
+  // same host when Capgo HTTP helpers replace PostgREST/RPC calls.
+  // Hosted Capgo clients must keep default api.capgo.app resolution — their
+  // supabaseUrl points at PostgREST, not the public Capgo HTTP API.
+  const client = supabase as SupabaseClient<Database> & { supabaseUrl?: string, supabaseKey?: string }
+  const supaHost = typeof client.supabaseUrl === 'string' ? client.supabaseUrl : undefined
+  const supaAnon = typeof client.supabaseKey === 'string' ? client.supabaseKey : undefined
+  if (supaHost && supaAnon && !isCapgoManagedSupabaseHost(supaHost))
+    return { supaHost, supaAnon }
+  return undefined
+}
+
+export function resolveCliHostOptions(
+  supabase?: SupabaseClient<Database> | null,
+  options?: CapgoCliHostOptions,
+): CapgoCliHostOptions | undefined {
+  if (options?.supaHost && options?.supaAnon)
+    return options
+  if (supabase)
+    return hostOptionsFromSupabase(supabase) ?? options
+  return options
+}
+
 /**
  * Resolve Capgo public API base URL for CLI mutations (app create/update, etc.).
  * Capgo cloud uses api.capgo.app. Self-host with only localSupa (default localApi)
@@ -2524,13 +2548,13 @@ export async function getOrganizationWithPermission(
 }
 
 export async function resolveUserIdFromApiKey(
-  _supabase: SupabaseClient<Database> | null,
+  supabase: SupabaseClient<Database> | null,
   apikey: string,
   silent = false,
   options?: CapgoCliHostOptions,
 ) {
   try {
-    return await resolveUserIdFromApiKeyViaHttp(apikey, options)
+    return await resolveUserIdFromApiKeyViaHttp(apikey, resolveCliHostOptions(supabase, options))
   }
   catch (userIdError) {
     if (!silent)
@@ -2546,13 +2570,13 @@ interface CliPermissionScope {
 }
 
 export async function hasCliPermission(
-  _supabase: SupabaseClient<Database> | null,
+  supabase: SupabaseClient<Database> | null,
   apikey: string,
   permissionKey: string,
   scope: CliPermissionScope = {},
   options?: CapgoCliHostOptions,
 ): Promise<boolean> {
-  return hasCliPermissionViaHttp(apikey, permissionKey, scope, options)
+  return hasCliPermissionViaHttp(apikey, permissionKey, scope, resolveCliHostOptions(supabase, options))
 }
 
 export async function assertCliPermission(

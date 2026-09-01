@@ -40,8 +40,8 @@ export async function deleteAppInternal(
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  // TODO(cli-http): identity still uses rpc via resolveUserIdFromApiKey
-  const userId = await resolveUserIdFromApiKey(supabase, options.apikey)
+  const host = { supaHost: options.supaHost, supaAnon: options.supaAnon }
+  const userId = await resolveUserIdFromApiKey(supabase, options.apikey, silent, host)
 
   await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.delete', silent)
 

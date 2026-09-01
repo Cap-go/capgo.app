@@ -2193,8 +2193,9 @@ async function maybeReusePendingOnboardingApp(
 async function selectOrganizationForInit(
   supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
   apikey: string,
+  hostOptions?: { supaHost?: string, supaAnon?: string },
 ): Promise<Organization> {
-  const { allOrganizations, allowedOrganizations } = await getOrganizationListWithPermission(supabase, apikey, 'org.create_app')
+  const { allOrganizations, allowedOrganizations } = await getOrganizationListWithPermission(supabase, apikey, 'org.create_app', hostOptions)
 
   const organizationUidRaw = allowedOrganizations.length > 1
     ? await pSelect({
@@ -5370,7 +5371,8 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  await resolveUserIdFromApiKey(supabase, options.apikey)
+  const hostOptions = { supaHost: options.supaHost, supaAnon: options.supaAnon }
+  await resolveUserIdFromApiKey(supabase, options.apikey, false, hostOptions)
   flushDeferredCommandInvocation(options.apikey)
   activeInitTelemetry?.setAuth('', options.apikey)
 
@@ -5549,14 +5551,14 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     catch (orgError) {
       pLog.error(`Cannot verify organization access: ${orgError instanceof Error ? orgError.message : JSON.stringify(orgError)}`)
       pLog.warn('Falling back to organization selection.')
-      organization = await selectOrganizationForInit(supabase, options.apikey)
+      organization = await selectOrganizationForInit(supabase, options.apikey, hostOptions)
       await discardResumedState()
     }
     if (allOrganizations) {
       const savedOrg = allOrganizations.find(org => org.gid === resumedSnapshot.orgId)
       const blocked2fa = savedOrg?.enforcing_2fa && !savedOrg['2fa_has_access']
       const hasCreateAppPermission = savedOrg && !resumedSnapshot.appId
-        ? await hasCliPermission(supabase, options.apikey, 'org.create_app', { orgId: savedOrg.gid }, { supaHost: options.supaHost, supaAnon: options.supaAnon })
+        ? await hasCliPermission(supabase, options.apikey, 'org.create_app', { orgId: savedOrg.gid }, hostOptions)
         : false
       const hasAppAccess = !savedOrg || !resumedSnapshot.appId
         ? true
@@ -5564,23 +5566,23 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
       if (!savedOrg) {
         pLog.warn(`Previously used organization "${resumedSnapshot.orgName}" is no longer available. Please select a new one.`)
-        organization = await selectOrganizationForInit(supabase, options.apikey)
+        organization = await selectOrganizationForInit(supabase, options.apikey, hostOptions)
         await discardResumedState()
       }
       else if (blocked2fa) {
         pLog.warn(`Organization "${savedOrg.name}" now requires 2FA. Enable it at ${consoleWebUrl('/settings/account')}`)
         pLog.warn('Please select a different organization or enable 2FA and try again.')
-        organization = await selectOrganizationForInit(supabase, options.apikey)
+        organization = await selectOrganizationForInit(supabase, options.apikey, hostOptions)
         await discardResumedState()
       }
       else if (!hasAppAccess) {
         pLog.warn(`Previously used app "${resumedSnapshot.appId}" is no longer available. Please select a different organization.`)
-        organization = await selectOrganizationForInit(supabase, options.apikey)
+        organization = await selectOrganizationForInit(supabase, options.apikey, hostOptions)
         await discardResumedState()
       }
       else if (!hasCreateAppPermission && !resumedSnapshot.appId) {
         pLog.warn(`You no longer have permission to create an app in "${savedOrg.name}". Please select a different organization.`)
-        organization = await selectOrganizationForInit(supabase, options.apikey)
+        organization = await selectOrganizationForInit(supabase, options.apikey, hostOptions)
         await discardResumedState()
       }
       else {
@@ -5590,7 +5592,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     }
   }
   if (!organization)
-    organization = await selectOrganizationForInit(supabase, options.apikey)
+    organization = await selectOrganizationForInit(supabase, options.apikey, hostOptions)
 
   const orgId = organization.gid
   globalOrgId = orgId
