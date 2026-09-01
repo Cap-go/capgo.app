@@ -199,7 +199,7 @@ describe('stripe emulator integration', () => {
 
     expect(checkout.url).toBeTruthy()
     expectCheckoutUrlOnEmulator(checkout.url as string, stripeApiBaseUrl)
-    expect(mockedSupabaseAdmin).toHaveBeenCalledTimes(1)
+    expect(mockedSupabaseAdmin).toHaveBeenCalledTimes(2)
 
     const sessions = await stripe.checkout.sessions.list({ limit: 10 })
     const session = sessions.data.find(candidate => candidate.url === checkout.url)
