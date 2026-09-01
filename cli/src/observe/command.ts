@@ -36,13 +36,13 @@ function parsePositiveInt(value: string | undefined, label: string) {
   return parsed
 }
 
-function parseObserveDays(value: string | undefined) {
+function parseObserveDays(value: string | undefined): ObserveOptions['days'] {
   const parsed = parsePositiveInt(value, '--days')
   if (parsed == null)
     return undefined
-  if (![1, 3, 7, 30].includes(parsed))
-    throw new CliUserError('--days must be 1, 3, 7, or 30')
-  return parsed
+  if (parsed === 1 || parsed === 3 || parsed === 7 || parsed === 30)
+    return parsed
+  throw new CliUserError('--days must be 1, 3, 7, or 30')
 }
 
 function parseObserveLimit(value: string | undefined) {
