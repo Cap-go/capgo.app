@@ -353,7 +353,11 @@ describe('app onboarding progress RPCs', () => {
     const ledger = parseAppOnboardingLedger(data)
     expect(ledger.refreshed_at).toBeTruthy()
     expect(ledger.features?.ota?.started_at).toBeTruthy()
-    expect(shouldSkipOnboardingResume(data)).toBe(true)
+    // A stored bundle is first-bundle time, not an install. Skip-resume still
+    // needs succeeded_at, dismiss, or CLI/AI setup. Completing need_onboarding
+    // is what stops the login splash after Verify.
+    expect(ledger.features?.ota?.succeeded_at).toBeFalsy()
+    expect(shouldSkipOnboardingResume(data)).toBe(false)
 
     const { data: app, error: readError } = await serviceRoleSupabase
       .from('apps')

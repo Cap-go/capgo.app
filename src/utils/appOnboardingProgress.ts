@@ -286,8 +286,9 @@ export function shouldSkipOnboardingResume(onboarding: unknown): boolean {
   const ledger = parseAppOnboardingLedger(onboarding)
   if (ledger.getting_started_dismissed_at)
     return true
-  // started_at is set when the user merely opens OTA setup. succeeded_at is
-  // written by ledger refresh when a real (non-builtin) bundle exists.
+  // started_at is set when the user opens OTA setup, and refresh also copies
+  // first-bundle time into it. succeeded_at is first device install. Do not
+  // skip on started_at or opening OTA setup would hide Getting Started.
   if (ledger.features?.ota?.succeeded_at)
     return true
   const outcome = setupOutcome(onboarding)
