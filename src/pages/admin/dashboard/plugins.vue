@@ -114,12 +114,12 @@ const latestSnapshotPoint = computed(() => {
 
   return {
     date: trendPoint.date,
-    devices_last_month: trendPoint.devices_last_month ?? 0,
-    devices_last_month_ios: trendPoint.devices_last_month_ios ?? 0,
-    devices_last_month_android: trendPoint.devices_last_month_android ?? 0,
+    devices_last_month: trendPoint.devices_last_month ?? breakdown.devices_last_month,
+    devices_last_month_ios: trendPoint.devices_last_month_ios ?? breakdown.devices_last_month_ios,
+    devices_last_month_android: trendPoint.devices_last_month_android ?? breakdown.devices_last_month_android,
     version_breakdown: trendPoint.version_breakdown,
     major_breakdown: trendPoint.major_breakdown ?? {},
-    version_ladder: trendPoint.version_ladder ?? [],
+    version_ladder: trendPoint.version_ladder ?? breakdown.version_ladder ?? [],
   }
 })
 

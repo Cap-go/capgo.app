@@ -4013,6 +4013,17 @@ function pickPluginBreakdownSnapshotRow(rows: any[]) {
   return rows.at(-1)
 }
 
+function getLatestNonEmptyPluginTrendRowDate(rows: any[]): string | null {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (hasPluginVersionBreakdown(parseBreakdownJson(row.plugin_version_breakdown))) {
+      return row.date instanceof Date ? row.date.toISOString().split('T')[0] : String(row.date)
+    }
+  }
+
+  return null
+}
+
 export async function getAdminPluginBreakdown(
   c: Context,
   start_date: string,
@@ -4057,6 +4068,8 @@ export async function getAdminPluginBreakdown(
       }
     }
 
+    const latestNonEmptyTrendDate = getLatestNonEmptyPluginTrendRowDate(rows)
+
     const trend = rows.map((row) => {
       const date = row.date instanceof Date ? row.date.toISOString().split('T')[0] : String(row.date)
       return {
@@ -4066,7 +4079,9 @@ export async function getAdminPluginBreakdown(
         devices_last_month: Number(row.devices_last_month) || 0,
         devices_last_month_ios: Number(row.devices_last_month_ios) || 0,
         devices_last_month_android: Number(row.devices_last_month_android) || 0,
-        version_ladder: parsePluginVersionLadderJson(row.plugin_version_ladder),
+        version_ladder: date === latestNonEmptyTrendDate
+          ? parsePluginVersionLadderJson(row.plugin_version_ladder)
+          : [],
       }
     })
     const snapshotRow = pickPluginBreakdownSnapshotRow(rows)
