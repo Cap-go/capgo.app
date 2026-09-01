@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
+import type { Database } from '../src/types/supabase.types'
 import { createClient } from '@supabase/supabase-js'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { fetchTestRequest, getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, USER_ADMIN_EMAIL, USER_EMAIL_NONMEMBER, USER_ID, USER_PASSWORD_NONMEMBER } from './test-utils.ts'
+import { fetchTestRequest, getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, USER_ADMIN_EMAIL, USER_EMAIL, USER_EMAIL_NONMEMBER, USER_ID, USER_PASSWORD, USER_PASSWORD_NONMEMBER } from './test-utils.ts'
 
 const SSO_TEST_ORG_ID = randomUUID()
 const SSO_TEST_CUSTOMER_ID = `cus_sso_test_${randomUUID()}`
@@ -2256,6 +2257,114 @@ describe('[PATCH] /private/sso/providers/:id', () => {
         pool.end(),
       ])
     }
+  })
+})
+
+describe('sso_providers PostgREST provider_id guards', () => {
+  // Regression coverage for service-role-only provider_id binding.
+  async function getOrgAdminSupabaseClient() {
+    if (!SUPABASE_BASE_URL || !SUPABASE_ANON_KEY)
+      throw new Error('SUPABASE_URL or SUPABASE_ANON_KEY is missing for SSO provider_id guard tests')
+
+    const client = createClient<Database>(SUPABASE_BASE_URL, SUPABASE_ANON_KEY, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    })
+
+    const { error } = await client.auth.signInWithPassword({
+      email: USER_EMAIL,
+      password: USER_PASSWORD,
+    })
+    if (error)
+      throw error
+
+    return client
+  }
+
+  it('rejects org-admin insert with provider_id', async () => {
+    const client = await getOrgAdminSupabaseClient()
+    const providerId = randomUUID()
+    const domain = `${randomUUID()}.sso.test`
+
+    const { error } = await client.from('sso_providers').insert({
+      id: providerId,
+      org_id: SSO_TEST_ORG_ID,
+      domain,
+      provider_id: `prov_${randomUUID()}`,
+      status: 'pending_verification',
+      enforce_sso: false,
+      dns_verification_token: `dns-${randomUUID()}`,
+    })
+
+    expect(error).not.toBeNull()
+    expect(error?.code).toBe('42501')
+    expect(error?.message).toContain('SSO_PROVIDER_PROVIDER_ID_CLIENT_WRITE_DENIED')
+  })
+
+  it('allows org-admin insert without provider_id', async () => {
+    const client = await getOrgAdminSupabaseClient()
+    const providerId = randomUUID()
+    const domain = `${randomUUID()}.sso.test`
+
+    const { error } = await client.from('sso_providers').insert({
+      id: providerId,
+      org_id: SSO_TEST_ORG_ID,
+      domain,
+      status: 'pending_verification',
+      enforce_sso: false,
+      dns_verification_token: `dns-${randomUUID()}`,
+    })
+
+    expect(error).toBeNull()
+
+    await getSupabaseClient().from('sso_providers').delete().eq('id', providerId)
+  })
+
+  it('rejects org-admin update of provider_id', async () => {
+    const providerId = randomUUID()
+    const domain = `${randomUUID()}.sso.test`
+
+    const { error: seedError } = await getSupabaseClient().from('sso_providers').insert({
+      id: providerId,
+      org_id: SSO_TEST_ORG_ID,
+      domain,
+      status: 'pending_verification',
+      enforce_sso: false,
+      dns_verification_token: `dns-${randomUUID()}`,
+    })
+    if (seedError)
+      throw seedError
+
+    try {
+      const client = await getOrgAdminSupabaseClient()
+      const { error } = await client.from('sso_providers')
+        .update({ provider_id: `prov_${randomUUID()}` })
+        .eq('id', providerId)
+
+      expect(error).not.toBeNull()
+      expect(error?.code).toBe('42501')
+      expect(error?.message).toContain('SSO_PROVIDER_PROVIDER_ID_CLIENT_WRITE_DENIED')
+    }
+    finally {
+      await getSupabaseClient().from('sso_providers').delete().eq('id', providerId)
+    }
+  })
+
+  it('still rejects org-admin active insert after provider_id hardening', async () => {
+    const client = await getOrgAdminSupabaseClient()
+
+    const { error } = await client.from('sso_providers').insert({
+      org_id: SSO_TEST_ORG_ID,
+      domain: `${randomUUID()}.sso.test`,
+      status: 'active',
+      enforce_sso: true,
+      dns_verification_token: `dns-${randomUUID()}`,
+    })
+
+    expect(error).not.toBeNull()
+    expect(error?.code).toBe('42501')
   })
 })
 
