@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { BASE_URL, createAppVersions, createDirectApiKeyWithBindings, fetchBundle, getSupabaseClient, headers, ORG_ID, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID } from './test-utils.ts'
+import { BASE_URL, createAppVersions, createDirectApiKeyWithBindings, executeSQL, fetchBundle, getPostgresClient, getSupabaseClient, headers, ORG_ID, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID } from './test-utils.ts'
 
 const id = randomUUID()
 const APPNAME = `com.app.b.${id}`
@@ -741,5 +741,43 @@ describe('[POST] /bundle/prepare and [GET] /bundle/lookup operations', () => {
     expect(error).toBeNull()
     expect(version?.storage_provider).toBe('r2-direct')
     expect(version?.r2_path).toBeNull()
+  })
+
+  it('ignores prepare_reupload_reset GUC for authenticated sessions', async () => {
+    const versionName = `9.9.6-guc-auth-${id.slice(0, 8)}`
+    const [inserted] = await executeSQL<{ id: number }>(
+      `INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider, r2_path, deleted)
+       VALUES ($1, $2, $3::uuid, $4::uuid, 'r2', $5, false)
+       RETURNING id`,
+      [APPNAME, versionName, ORG_ID, USER_ID, `orgs/${ORG_ID}/apps/${APPNAME}/${versionName}.zip`],
+    )
+    expect(inserted?.id).toBeTruthy()
+
+    const pool = await getPostgresClient()
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query('SELECT set_config($1, $2, true)', ['request.jwt.claim.role', 'authenticated'])
+      await client.query('SELECT set_config($1, $2, true)', [
+        'request.jwt.claims',
+        JSON.stringify({ role: 'authenticated', sub: USER_ID }),
+      ])
+      await client.query('SELECT set_config($1, $2, true)', ['capgo.prepare_reupload_reset', 'on'])
+      await expect(client.query(
+        `UPDATE public.app_versions
+         SET storage_provider = 'r2-direct', r2_path = NULL
+         WHERE id = $1`,
+        [inserted.id],
+      )).rejects.toThrow(/bundle_already_ready/)
+    }
+    finally {
+      try {
+        await client.query('ROLLBACK')
+      }
+      catch {
+        // Ignore rollback failures after the expected trigger exception.
+      }
+      client.release()
+    }
   })
 })
