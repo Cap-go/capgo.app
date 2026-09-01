@@ -128,7 +128,9 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
           }
         }
         else {
-          throw new CliUserError(buildCiNotifyAppReadyMessage(path))
+          throw json
+            ? new Error('notifyAppReady_not_in_source_code')
+            : new CliUserError(buildCiNotifyAppReadyMessage(path))
         }
       }
 
