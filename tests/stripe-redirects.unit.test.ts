@@ -392,7 +392,21 @@ describe('stripe redirect URL allowlist', () => {
                 price_y_id: 'price_yearly_from_plan',
                 price_m_id_us: null,
                 price_y_id_us: null,
-                stripe_id: 'plan_test',
+                stripe_id: 'prod_plan_test',
+                stripe_id_us: null,
+              },
+              error: null,
+            }),
+          }),
+          or: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({
+              data: {
+                billing_account: 'ee',
+                price_m_id: 'price_monthly_from_plan',
+                price_y_id: 'price_yearly_from_plan',
+                price_m_id_us: null,
+                price_y_id_us: null,
+                stripe_id: 'prod_plan_test',
                 stripe_id_us: null,
               },
               error: null,
@@ -431,7 +445,7 @@ describe('stripe redirect URL allowlist', () => {
       createContext(),
       'cus_123',
       'month',
-      'plan_test',
+      'prod_plan_test',
       '/app/success',
       '/app/cancel',
     )

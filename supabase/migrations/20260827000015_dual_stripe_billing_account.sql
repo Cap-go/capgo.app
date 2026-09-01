@@ -2,9 +2,14 @@
 -- EE remains the default; existing rows are backfilled to EE. US product/price IDs stay empty until configured.
 
 ALTER TABLE public.stripe_info
-  ADD COLUMN IF NOT EXISTS billing_account text NOT NULL DEFAULT 'ee',
+  ADD COLUMN IF NOT EXISTS billing_account text NOT NULL DEFAULT 'ee';
+
+ALTER TABLE public.stripe_info
   ADD CONSTRAINT stripe_info_billing_account_check
-    CHECK (billing_account IN ('ee', 'us'));
+    CHECK (billing_account IN ('ee', 'us')) NOT VALID;
+
+ALTER TABLE public.stripe_info
+  VALIDATE CONSTRAINT stripe_info_billing_account_check;
 
 UPDATE public.stripe_info
 SET billing_account = 'ee'
@@ -17,9 +22,14 @@ ALTER TABLE public.plans
   ADD COLUMN IF NOT EXISTS credit_id_us text;
 
 ALTER TABLE public.processed_stripe_events
-  ADD COLUMN IF NOT EXISTS billing_account text NOT NULL DEFAULT 'ee',
+  ADD COLUMN IF NOT EXISTS billing_account text NOT NULL DEFAULT 'ee';
+
+ALTER TABLE public.processed_stripe_events
   ADD CONSTRAINT processed_stripe_events_billing_account_check
-    CHECK (billing_account IN ('ee', 'us'));
+    CHECK (billing_account IN ('ee', 'us')) NOT VALID;
+
+ALTER TABLE public.processed_stripe_events
+  VALIDATE CONSTRAINT processed_stripe_events_billing_account_check;
 
 UPDATE public.processed_stripe_events
 SET billing_account = 'ee'

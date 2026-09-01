@@ -128,5 +128,7 @@ export function resolvePlanCreditId(plan: Pick<PlanStripeCatalogRow, 'credit_id'
 }
 
 export function planProductIdOrFilter(productId: string): string {
+  if (!/^prod_[A-Za-z0-9_]+$/.test(productId))
+    throw new Error(`Invalid Stripe product id: ${productId}`)
   return `stripe_id.eq.${productId},stripe_id_us.eq.${productId}`
 }

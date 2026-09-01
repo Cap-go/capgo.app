@@ -57,6 +57,7 @@ function mockStripeDbLookups(priceMonthId: string, priceYearId: string) {
     from: vi.fn(() => ({
       select: vi.fn(() => ({
         eq: vi.fn(() => rowResult),
+        or: vi.fn(() => rowResult),
       })),
     })),
   })

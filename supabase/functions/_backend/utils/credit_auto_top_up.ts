@@ -301,6 +301,19 @@ export async function saveAutoTopUpSettings(
 }
 
 export async function maybeAutoTopUpCredits(c: Context, orgId: string): Promise<void> {
+  const { data: org, error: orgError } = await supabaseAdmin(c)
+    .from('orgs')
+    .select('customer_id')
+    .eq('id', orgId)
+    .maybeSingle()
+
+  if (orgError || !org?.customer_id)
+    return
+
+  const account = await resolveBillingAccount(c, org.customer_id)
+  if (!isStripeAccountConfigured(c, account))
+    return
+
   const { data: claim, error: claimError } = await supabaseAdmin(c)
     .rpc('try_claim_credit_auto_top_up', { p_org_id: orgId })
     .maybeSingle()
@@ -311,9 +324,6 @@ export async function maybeAutoTopUpCredits(c: Context, orgId: string): Promise<
   }
 
   if (!claim?.claimed || !claim.customer_id)
-    return
-
-  if (!isStripeAccountConfigured(c, await resolveBillingAccount(c, claim.customer_id)))
     return
 
   const quantity = Math.floor(Number(claim.auto_top_up_threshold ?? 0))

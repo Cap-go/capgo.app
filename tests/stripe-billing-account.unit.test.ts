@@ -107,6 +107,12 @@ describe('stripe billing account scaffolding', () => {
     expect(getNewCustomersBillingAccount(createContext())).toBe('us')
   })
 
+  it('rejects invalid Stripe product ids in plan filters', async () => {
+    const { planProductIdOrFilter } = await import('../supabase/functions/_backend/utils/stripe_billing_account.ts')
+    expect(() => planProductIdOrFilter('plan_test')).toThrow('Invalid Stripe product id')
+    expect(planProductIdOrFilter('prod_plan_test')).toBe('stripe_id.eq.prod_plan_test,stripe_id_us.eq.prod_plan_test')
+  })
+
   it('uses EE secret key for default getStripe()', async () => {
     vi.mocked(Stripe).mockImplementation(function () {
       return {} as any
