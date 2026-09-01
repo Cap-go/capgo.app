@@ -10,7 +10,7 @@ interface AnalyticsEngineSqlLintRule {
 }
 
 function isBareNullArg(arg: string): boolean {
-  return arg.trim() === 'NULL'
+  return arg.trim().toLowerCase() === 'null'
 }
 
 function ifCallHasBareNullArg(sql: string, openParenIndex: number): boolean {
