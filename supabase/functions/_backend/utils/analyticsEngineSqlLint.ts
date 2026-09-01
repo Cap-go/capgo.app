@@ -14,13 +14,15 @@ function isBareNullArg(arg: string): boolean {
 }
 
 function skipSqlQuote(sql: string, quoteIndex: number): number {
-  for (let i = quoteIndex + 1; i < sql.length; i++) {
+  let i = quoteIndex + 1
+  while (i < sql.length) {
     if (sql[i] === "'" && sql[i + 1] === "'") {
-      i++
+      i += 2
       continue
     }
     if (sql[i] === "'")
       return i + 1
+    i++
   }
   return sql.length
 }
@@ -28,43 +30,46 @@ function skipSqlQuote(sql: string, quoteIndex: number): number {
 function ifCallHasBareNullArg(sql: string, openParenIndex: number): boolean {
   let depth = 0
   let argStart = openParenIndex + 1
-  for (let i = openParenIndex; i < sql.length; i++) {
-    const char = sql[i]
-    if (char === "'") {
-      i = skipSqlQuote(sql, i) - 1
+  let i = openParenIndex
+  while (i < sql.length) {
+    if (sql[i] === "'") {
+      i = skipSqlQuote(sql, i)
       continue
     }
+    const char = sql[i]
     if (char === '(') {
       depth++
-      continue
     }
-    if (char === ',' && depth === 1) {
+    else if (char === ',' && depth === 1) {
       if (isBareNullArg(sql.slice(argStart, i)))
         return true
       argStart = i + 1
-      continue
     }
-    if (char === ')') {
+    else if (char === ')') {
       if (depth === 1)
         return isBareNullArg(sql.slice(argStart, i))
       depth--
     }
+    i++
   }
   return false
 }
 
 function hasUntypedNullIfBranch(sql: string): boolean {
-  for (let i = 0; i < sql.length; i++) {
-    const char = sql[i]
-    if (char === "'") {
-      i = skipSqlQuote(sql, i) - 1
+  const ifOpen = /^if\s*\(/i
+  let i = 0
+  while (i < sql.length) {
+    if (sql[i] === "'") {
+      i = skipSqlQuote(sql, i)
       continue
     }
-    if ((char === 'i' || char === 'I') && (i === 0 || !/[A-Za-z0-9_]/.test(sql[i - 1]!))) {
-      const match = sql.slice(i).match(/^if\s*\(/i)
+    const prev = i === 0 ? '' : sql[i - 1]
+    if ((sql[i] === 'i' || sql[i] === 'I') && !/\w/.test(prev ?? '')) {
+      const match = ifOpen.exec(sql.slice(i))
       if (match && ifCallHasBareNullArg(sql, i + match[0].length - 1))
         return true
     }
+    i++
   }
   return false
 }
