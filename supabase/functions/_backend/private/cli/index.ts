@@ -407,7 +407,7 @@ app.post('/check-plan', middlewareKey(), async (c) => {
   if (rawActions != null) {
     if (!Array.isArray(rawActions) || rawActions.length === 0 || rawActions.some(action => typeof action !== 'string' || !isPlanAction(action)))
       return quickError(400, 'invalid_actions', 'actions must be a non-empty list of mau, storage, bandwidth, or build_time', { body })
-    actions = rawActions
+    actions = rawActions.filter(isPlanAction)
   }
 
   const scopeError = await assertOrgPlanScope(c, body.org_id, body.app_id)
