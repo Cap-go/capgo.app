@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildObserveFindings,
   buildObserveHandoffPrompt,
+  describeObserveSampleScan,
   extractRoute,
   groupObserveRoutes,
   normalizeObserveDays,
@@ -94,6 +95,16 @@ describe('observe query helpers', () => {
     expect(samples[0]?.device_id).toBe('slow')
     expect(normalizeObserveDays(14)).toBeNull()
     expect(normalizeObserveDays(7)).toBe(7)
+
+    const truncated = describeObserveSampleScan(500, 500, 'slowest')
+    expect(truncated).toMatchObject({
+      scanned: 500,
+      scan_limit: 500,
+      truncated: true,
+      ordered_by: 'created_at',
+      duration_sort: 'in_memory_over_recent_window',
+    })
+    expect(describeObserveSampleScan(12, 100, 'newest').duration_sort).toBeUndefined()
 
     const prompt = buildObserveHandoffPrompt({
       appId: 'com.demo.app',

@@ -45,6 +45,15 @@ function parseObserveDays(value: string | undefined) {
   return parsed
 }
 
+function parseObserveLimit(value: string | undefined) {
+  const parsed = parsePositiveInt(value, '--limit')
+  if (parsed == null)
+    return undefined
+  if (parsed > 100)
+    throw new CliUserError('--limit must be between 1 and 100')
+  return parsed
+}
+
 function parseObserveSort(value: string | undefined): ObserveOptions['sort'] | undefined {
   if (!value)
     return undefined
@@ -103,7 +112,7 @@ export async function observeCommand(
       deviceId,
       versionName: options.versionName,
       sort: parseObserveSort(options.sort),
-      limit: parsePositiveInt(options.limit, '--limit'),
+      limit: parseObserveLimit(options.limit),
       apikey: options.apikey,
       supaHost: options.supaHost,
       supaAnon: options.supaAnon,

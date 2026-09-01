@@ -94,6 +94,7 @@ export {
   loginOptionsSchema,
   observeOptionsObjectSchema,
   observeOptionsSchema,
+  observeDaysSchema,
   observeSortSchema,
   observeViewSchema,
   organizationInfoSchema,

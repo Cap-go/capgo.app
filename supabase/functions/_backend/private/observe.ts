@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import type { ObserveSort, ObserveView } from '../utils/observeQuery.ts'
+import type { ObservePeriodDays, ObserveSort, ObserveView } from '../utils/observeQuery.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
 import { nativeObserveActions, readNativeObserveStats } from './native_observe_stats.ts'
@@ -10,6 +10,7 @@ import { cloudlog } from '../utils/logging.ts'
 import {
   buildObserveFindings,
   buildObserveHandoffPrompt,
+  describeObserveSampleScan,
   extractRoute,
   groupObserveRoutes,
   isObserveView,
@@ -97,7 +98,10 @@ async function loadSamples(
   }>
 
   const samples = sortObserveSamples(rows.map(toObserveSample), input.sort)
-  return samples.slice(0, input.limit)
+  return {
+    samples: samples.slice(0, input.limit),
+    sample_scan: describeObserveSampleScan(rows.length, scanLimit, input.sort),
+  }
 }
 
 function sampleActionsForView(view: ObserveView, action?: string) {
@@ -116,6 +120,132 @@ function deviceTimelineNext(deviceId?: string) {
     : { view: 'summary' as const }
 }
 
+async function respondSummaryOrVersions(
+  c: Context<MiddlewareKeyVariables>,
+  input: { appId: string, days: ObservePeriodDays, view: 'summary' | 'versions' },
+) {
+  const stats = await readNativeObserveStats(c, input.appId, input.days, 'version')
+  if (input.view === 'versions') {
+    return c.json({
+      view: input.view,
+      app_id: input.appId,
+      period: stats.period,
+      versions: stats.versions,
+      releaseMarkers: stats.releaseMarkers,
+      agent_instructions: OBSERVE_AGENT_INSTRUCTIONS,
+    })
+  }
+
+  const findings = buildObserveFindings({
+    overview: stats.overview,
+    actionBreakdown: stats.actionBreakdown,
+    versions: stats.versions,
+  })
+  return c.json({
+    view: input.view,
+    app_id: input.appId,
+    period: stats.period,
+    overview: stats.overview,
+    actionBreakdown: stats.actionBreakdown.slice(0, 15),
+    versions: stats.versions.slice(0, 12),
+    releaseMarkers: stats.releaseMarkers,
+    findings,
+    handoff_prompt: buildObserveHandoffPrompt({
+      appId: input.appId,
+      days: input.days,
+      overview: stats.overview,
+      findings,
+    }),
+    agent_instructions: OBSERVE_AGENT_INSTRUCTIONS,
+    nav_contract: OBSERVE_NAV_CONTRACT,
+  })
+}
+
+async function respondEvents(
+  c: Context<MiddlewareKeyVariables>,
+  input: { appId: string, period: ReturnType<typeof periodForDays>, action?: string, versionName?: string },
+) {
+  const actions = input.action ? [input.action] : [...nativeObserveActions]
+  const insights = await readStatsInsights(c, {
+    app_id: input.appId,
+    start_date: input.period.start,
+    end_date: input.period.end_exclusive,
+    actions,
+    version_name: input.versionName,
+  })
+  return c.json({
+    view: 'events' as const,
+    app_id: input.appId,
+    period: input.period,
+    ...insights,
+    agent_instructions: OBSERVE_AGENT_INSTRUCTIONS,
+    next: deviceTimelineNext(insights.actions[0]?.latest_device_id),
+  })
+}
+
+async function respondSampleView(
+  c: Context<MiddlewareKeyVariables>,
+  input: {
+    appId: string
+    view: ObserveView
+    period: ReturnType<typeof periodForDays>
+    action?: string
+    deviceId?: string
+    versionName?: string
+    sort: ObserveSort
+    limit: number
+  },
+) {
+  const loaded = await loadSamples(c, {
+    appId: input.appId,
+    start: input.period.start,
+    endExclusive: input.period.end_exclusive,
+    actions: sampleActionsForView(input.view, input.action),
+    deviceId: input.deviceId,
+    versionName: input.versionName,
+    sort: input.view === 'device' ? 'oldest' : input.sort,
+    limit: input.view === 'device' ? Math.min(200, Math.max(input.limit, 50)) : input.limit,
+  })
+  const { samples, sample_scan } = loaded
+
+  if (input.view === 'routes') {
+    return c.json({
+      view: input.view,
+      app_id: input.appId,
+      period: input.period,
+      routes: groupObserveRoutes(samples),
+      samples: samples.filter(sample => extractRoute(sample.metadata)).slice(0, input.limit),
+      sample_scan,
+      nav_contract: OBSERVE_NAV_CONTRACT,
+      agent_instructions: OBSERVE_AGENT_INSTRUCTIONS,
+    })
+  }
+
+  if (input.view === 'device') {
+    return c.json({
+      view: input.view,
+      app_id: input.appId,
+      device_id: input.deviceId,
+      period: input.period,
+      events: samples,
+      sample_scan,
+      agent_instructions: 'This device timeline is the session substitute. Read events in created_at order to see launch, WebView, crashes, and navigations.',
+    })
+  }
+
+  return c.json({
+    view: input.view,
+    app_id: input.appId,
+    period: input.period,
+    samples,
+    sample_scan,
+    agent_instructions: OBSERVE_AGENT_INSTRUCTIONS,
+    next: deviceTimelineNext(samples[0]?.device_id),
+  })
+}
+
+// Mounted under createHono('private') in private/index.ts. Do not wrap this
+// sub-app with createHono: that would double middleware and add a Deno basePath.
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.use('*', useCors)
@@ -149,115 +279,22 @@ app.post('/', middlewareAuth(), async (c) => {
   if (view === 'device' && !deviceId)
     throw simpleError('missing_params', 'deviceId is required for view=device')
 
+  if ((view === 'summary' || view === 'versions') && versionName) {
+    throw simpleError(
+      'invalid_params',
+      'versionName is not supported for summary or versions. Use events, metrics, device, or routes.',
+    )
+  }
+
   if (!(await checkPermission(c, 'app.read', { appId })))
     throw simpleError('app_access_denied', 'You can\'t access this app', { app_id: appId })
 
   cloudlog({ requestId: c.get('requestId'), message: 'post private/observe body', body: { appId, view, days, action, deviceId, versionName, sort, limit } })
 
   const period = periodForDays(days)
-
-  if (view === 'summary' || view === 'versions') {
-    const stats = await readNativeObserveStats(c, appId, days, 'version')
-    const findings = buildObserveFindings({
-      overview: stats.overview,
-      actionBreakdown: stats.actionBreakdown,
-      versions: stats.versions,
-    })
-    const handoff_prompt = buildObserveHandoffPrompt({
-      appId,
-      days,
-      overview: stats.overview,
-      findings,
-    })
-
-    if (view === 'versions') {
-      return c.json({
-        view,
-        app_id: appId,
-        period: stats.period,
-        versions: stats.versions,
-        releaseMarkers: stats.releaseMarkers,
-        agent_instructions: OBSERVE_AGENT_INSTRUCTIONS,
-      })
-    }
-
-    return c.json({
-      view,
-      app_id: appId,
-      period: stats.period,
-      overview: stats.overview,
-      actionBreakdown: stats.actionBreakdown.slice(0, 15),
-      versions: stats.versions.slice(0, 12),
-      releaseMarkers: stats.releaseMarkers,
-      findings,
-      handoff_prompt,
-      agent_instructions: OBSERVE_AGENT_INSTRUCTIONS,
-      nav_contract: OBSERVE_NAV_CONTRACT,
-    })
-  }
-
-  if (view === 'events') {
-    const actions = action ? [action] : [...nativeObserveActions]
-    const insights = await readStatsInsights(c, {
-      app_id: appId,
-      start_date: period.start,
-      end_date: period.end_exclusive,
-      actions,
-      version_name: versionName,
-    })
-    return c.json({
-      view,
-      app_id: appId,
-      period,
-      ...insights,
-      agent_instructions: OBSERVE_AGENT_INSTRUCTIONS,
-      next: deviceTimelineNext(insights.actions[0]?.latest_device_id),
-    })
-  }
-
-  const sampleActions = sampleActionsForView(view, action)
-
-  const samples = await loadSamples(c, {
-    appId,
-    start: period.start,
-    endExclusive: period.end_exclusive,
-    actions: sampleActions,
-    deviceId,
-    versionName,
-    sort: view === 'device' ? 'oldest' : sort,
-    limit: view === 'device' ? Math.min(200, Math.max(limit, 50)) : limit,
-  })
-
-  if (view === 'routes') {
-    const routes = groupObserveRoutes(samples)
-    return c.json({
-      view,
-      app_id: appId,
-      period,
-      routes,
-      samples: samples.filter(sample => extractRoute(sample.metadata)).slice(0, limit),
-      nav_contract: OBSERVE_NAV_CONTRACT,
-      agent_instructions: OBSERVE_AGENT_INSTRUCTIONS,
-    })
-  }
-
-  if (view === 'device') {
-    return c.json({
-      view,
-      app_id: appId,
-      device_id: deviceId,
-      period,
-      events: samples,
-      agent_instructions: 'This device timeline is the session substitute. Read events in created_at order to see launch, WebView, crashes, and navigations.',
-    })
-  }
-
-  return c.json({
-    view,
-    app_id: appId,
-    period,
-    samples,
-    agent_instructions: OBSERVE_AGENT_INSTRUCTIONS,
-    next: deviceTimelineNext(samples[0]?.device_id),
-  })
+  if (view === 'summary' || view === 'versions')
+    return respondSummaryOrVersions(c, { appId, days, view })
+  if (view === 'events')
+    return respondEvents(c, { appId, period, action, versionName })
+  return respondSampleView(c, { appId, view, period, action, deviceId, versionName, sort, limit })
 })

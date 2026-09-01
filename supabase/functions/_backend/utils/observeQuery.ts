@@ -132,44 +132,74 @@ export function extractRoute(metadata: Record<string, string> | Record<string, u
   return null
 }
 
-export function buildObserveFindings(input: {
-  overview: ObserveOverviewInput
-  actionBreakdown: ObserveActionBreakdownRow[]
-  versions: ObserveVersionRow[]
-}): ObserveFinding[] {
-  const findings: ObserveFinding[] = []
-  const { overview } = input
-
-  if (overview.total_events <= 0) {
-    findings.push({
-      id: 'no_data',
-      severity: 'info',
-      title: 'No observe events in this period',
-      detail: 'Ship a newer updater plugin so launch, WebView, crash, and navigation events report here.',
-      next: { view: 'summary' },
-    })
-    return findings
-  }
-
-  const launchP90 = overview.launch_p90_ms
-  if (launchP90 != null && launchP90 >= CRITICAL_LAUNCH_P90_MS) {
-    findings.push({
+function launchP90Finding(launchP90: number | null): ObserveFinding | null {
+  if (launchP90 == null)
+    return null
+  if (launchP90 >= CRITICAL_LAUNCH_P90_MS) {
+    return {
       id: 'launch_p90_critical',
       severity: 'critical',
       title: 'Launch P90 is critically slow',
       detail: `Launch P90 is ${Math.round(launchP90)}ms (target under ${SLOW_LAUNCH_P90_MS}ms). Inspect the slowest app_launch_ready samples.`,
       next: { view: 'metrics', action: 'app_launch_ready', sort: 'slowest' },
-    })
+    }
   }
-  else if (launchP90 != null && launchP90 >= SLOW_LAUNCH_P90_MS) {
-    findings.push({
+  if (launchP90 >= SLOW_LAUNCH_P90_MS) {
+    return {
       id: 'launch_p90_slow',
       severity: 'warning',
       title: 'Launch P90 is slow',
       detail: `Launch P90 is ${Math.round(launchP90)}ms. Sort metrics slowest-first for app_launch_ready.`,
       next: { view: 'metrics', action: 'app_launch_ready', sort: 'slowest' },
-    })
+    }
   }
+  return null
+}
+
+function issueFreeFinding(issueFree: number | null): ObserveFinding | null {
+  if (issueFree == null)
+    return null
+  if (issueFree < ISSUE_FREE_CRITICAL) {
+    return {
+      id: 'issue_free_critical',
+      severity: 'critical',
+      title: 'Issue-free rate is low',
+      detail: `${issueFree.toFixed(1)}% of devices had no native/WebView issue. Inspect the top issue action.`,
+      next: { view: 'events', sort: 'newest' },
+    }
+  }
+  if (issueFree < ISSUE_FREE_WARNING) {
+    return {
+      id: 'issue_free_warning',
+      severity: 'warning',
+      title: 'Issue-free rate dropped',
+      detail: `${issueFree.toFixed(1)}% of devices had no native/WebView issue.`,
+      next: { view: 'events', sort: 'newest' },
+    }
+  }
+  return null
+}
+
+export function buildObserveFindings(input: {
+  overview: ObserveOverviewInput
+  actionBreakdown: ObserveActionBreakdownRow[]
+  versions: ObserveVersionRow[]
+}): ObserveFinding[] {
+  const { overview } = input
+  if (overview.total_events <= 0) {
+    return [{
+      id: 'no_data',
+      severity: 'info',
+      title: 'No observe events in this period',
+      detail: 'Ship a newer updater plugin so launch, WebView, crash, and navigation events report here.',
+      next: { view: 'summary' },
+    }]
+  }
+
+  const findings: ObserveFinding[] = []
+  const launchFinding = launchP90Finding(overview.launch_p90_ms)
+  if (launchFinding)
+    findings.push(launchFinding)
 
   if (overview.launch_timeout_count > 0) {
     findings.push({
@@ -181,25 +211,9 @@ export function buildObserveFindings(input: {
     })
   }
 
-  const issueFree = overview.issue_free_rate
-  if (issueFree != null && issueFree < ISSUE_FREE_CRITICAL) {
-    findings.push({
-      id: 'issue_free_critical',
-      severity: 'critical',
-      title: 'Issue-free rate is low',
-      detail: `${issueFree.toFixed(1)}% of devices had no native/WebView issue. Inspect the top issue action.`,
-      next: { view: 'events', sort: 'newest' },
-    })
-  }
-  else if (issueFree != null && issueFree < ISSUE_FREE_WARNING) {
-    findings.push({
-      id: 'issue_free_warning',
-      severity: 'warning',
-      title: 'Issue-free rate dropped',
-      detail: `${issueFree.toFixed(1)}% of devices had no native/WebView issue.`,
-      next: { view: 'events', sort: 'newest' },
-    })
-  }
+  const issueFinding = issueFreeFinding(overview.issue_free_rate)
+  if (issueFinding)
+    findings.push(issueFinding)
 
   const topIssue = input.actionBreakdown.find(row => row.is_issue && row.events > 0)
   if (topIssue) {
@@ -212,13 +226,12 @@ export function buildObserveFindings(input: {
     })
   }
 
-  const webviewP90 = overview.webview_load_p90_ms
-  if (webviewP90 != null && webviewP90 >= SLOW_LAUNCH_P90_MS) {
+  if (overview.webview_load_p90_ms != null && overview.webview_load_p90_ms >= SLOW_LAUNCH_P90_MS) {
     findings.push({
       id: 'webview_p90_slow',
       severity: 'warning',
       title: 'WebView load P90 is slow',
-      detail: `WebView page load P90 is ${Math.round(webviewP90)}ms. Check routes if metadata.route is present.`,
+      detail: `WebView page load P90 is ${Math.round(overview.webview_load_p90_ms)}ms. Check routes if metadata.route is present.`,
       next: { view: 'routes', action: 'webview_page_loaded', sort: 'slowest' },
     })
   }
@@ -327,6 +340,26 @@ function parseDurationMs(metadata: Record<string, string> | null): number | null
     }
   }
   return null
+}
+
+export interface ObserveSampleScan {
+  scanned: number
+  scan_limit: number
+  truncated: boolean
+  ordered_by: 'created_at'
+  duration_sort?: 'in_memory_over_recent_window'
+}
+
+export function describeObserveSampleScan(scanned: number, scanLimit: number, sort: ObserveSort): ObserveSampleScan {
+  const scan: ObserveSampleScan = {
+    scanned,
+    scan_limit: scanLimit,
+    truncated: scanned >= scanLimit,
+    ordered_by: 'created_at',
+  }
+  if (sort === 'slowest' || sort === 'fastest')
+    scan.duration_sort = 'in_memory_over_recent_window'
+  return scan
 }
 
 export function sortObserveSamples(samples: ObserveSample[], sort: ObserveSort): ObserveSample[] {
