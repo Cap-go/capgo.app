@@ -211,7 +211,7 @@
     },
     "cli": {
       "name": "@capgo/cli",
-      "version": "8.42.5",
+      "version": "8.45.1",
       "bin": {
         "capgo": "dist/index.js",
       },
@@ -264,7 +264,7 @@
         "ci-info": "^4.4.0",
         "commander": "^15.0.0",
         "eslint": "^10.7.0",
-        "git-format-staged": "4.0.1",
+        "git-format-staged": "4.0.2",
         "husky": "^9.1.7",
         "is-wsl": "^3.1.1",
         "micromatch": "^4.0.8",
@@ -2390,7 +2390,7 @@
 
     "get-tsconfig": ["get-tsconfig@4.14.0", "", { "dependencies": { "resolve-pkg-maps": "^1.0.0" } }, "sha512-yTb+8DXzDREzgvYmh6s9vHsSVCHeC0G3PI5bEXNBHtmshPnO+S5O7qgLEOn0I5QvMy6kpZN8K1NKGyilLb93wA=="],
 
-    "git-format-staged": ["git-format-staged@4.0.1", "", { "bin": { "git-format-staged": "git-format-staged" } }, "sha512-8C9Bw4VtZxa+VNMGh8Og8qG+rH527q+8un1SKpVgo3ZZXTCGI/U9a6oyJAFlfkeYFrOh7rTWWfH1NbL+63Sttw=="],
+    "git-format-staged": ["git-format-staged@4.0.2", "", { "bin": { "git-format-staged": "git-format-staged" } }, "sha512-0fHxU5ZyxeCrTL+8BWugZKxqqS2Ba6OGCdyTeZW7kQJVuLbmxWJ2eNGZTjPxVQ8FGovBZsXZCmPRD2VSOWE82g=="],
 
     "github-slugger": ["github-slugger@2.0.0", "", {}, "sha512-IaOQ9puYtjrkq7Y0Ygl9KDZnrf/aiUJYUpVf89y8kyaxbRG7Y1SrX/jaumrv81vc61+kiMempujsM3Yw7w5qcw=="],
 

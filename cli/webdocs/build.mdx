@@ -450,6 +450,30 @@ Examples:
 | **--platform** | <code>string</code> | Platform to manage: ios or android (optional, prompts to pick if omitted) |
 | **--local** | <code>boolean</code> | Only browse local .capgo-credentials.json |
 
+#### <a id="build-credentials-export"></a> 🔹 **Export**
+
+```bash
+npx @capgo/cli@latest build credentials export
+```
+
+Export one saved Builder credential or configuration value.
+Raw mode prints only the exact stored value to stdout with no trailing newline.
+All failures are written to stderr and exit with status 1. Saved local/global
+configuration is used; environment variables are never exported.
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--app-id** | <code>string</code> | App ID whose saved Builder value will be exported (required) |
+| **--appId** | <code>string</code> | Compatibility alias for --app-id |
+| **--platform** | <code>string</code> | Platform: ios or android (required when saved platform values are ambiguous) |
+| **--local** | <code>boolean</code> | Export only from the project-local .capgo-credentials.json |
+| **--global** | <code>boolean</code> | Export only from ~/.capgo-credentials/credentials.json |
+| **--file** | <code>string</code> | Write the value to a new file; existing destinations are never overwritten |
+| **--raw** | <code>boolean</code> | Write only the exact stored value to stdout without a trailing newline |
+| **--decode-base64** | <code>boolean</code> | Decode Base64 before file output; valid only with --file |
+
 #### <a id="build-credentials-migrate"></a> 🔹 **Migrate**
 
 ```bash

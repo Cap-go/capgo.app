@@ -3,6 +3,42 @@
 This file provides guidance to AI agents (Claude Code, Cursor, Copilot, etc.)
 when working with code in this repository.
 
+## MUST NOT — never break already-published CLI versions
+
+**We cannot break `@capgo/cli` releases that customers already run in production.**
+
+The last published CLI is the newest `cli-<semver>` git tag (and the matching
+`@capgo/cli` version on npm when it exists). Customers do not upgrade the CLI on
+every backend deploy.
+
+### You MUST NOT
+
+- Revoke `GRANT` / `EXECUTE` on an RPC that the last published CLI still calls
+  (for example `.rpc('get_user_id', { apikey })` on the anonymous API-key path).
+- Change backend identity resolution in ways that break the last published CLI
+  without shipping a CLI release that stops using the old path first.
+- Make CI pass by **inverting** published-CLI contract tests to expect permission
+  denied (`42501`). Those tests assert **success** — that is the contract.
+- Test only the PR-branch workspace CLI when validating RPC/grant changes. CI must
+  exercise the **published** npm CLI against the PR schema.
+
+### Before you revoke anon/service access on a CLI-facing RPC
+
+1. Ship a CLI release that no longer calls it.
+2. Wait for customers to upgrade (the `cli-*` tag must reflect the new behavior).
+3. Only then revoke or harden the RPC.
+
+### Where this is enforced
+
+- CI job: **`CRITICAL — Published CLI / do not break old CLI`**
+- Tests: `tests/published-cli-rpc-contract.test.ts` (live contract; do not invert)
+- Helpers: `scripts/published-cli-contract.ts` (parses `.rpc('...')` from the last `cli-*` tag)
+
+Org-perm / invite **oracle** RPCs (`invite_user_to_org_rbac`, `get_org_perm_for_apikey*`,
+`get_user_id(text,text)`, …) stay revoked for anonymous callers — see
+`tests/security-oracle-rpc-hardening.test.ts`. That is separate from the published
+CLI identity path (`get_user_id(text)` with a valid API key must keep working).
+
 ## Essential Development Commands
 
 ### Building and Development
@@ -32,7 +68,8 @@ when working with code in this repository.
   tests (requires running Supabase; this is what CI shards across runners; CLI
   integration tests run via `bun test:cli`)
 - `bun test:backend` - Run backend tests excluding CLI tests
-- `bun test:cli` - Run CLI-specific tests
+- `bun test:cli` - Run CLI-specific tests (workspace CLI plus
+  `tests/cli-compat.test.ts`, which pins `@capgo/cli` to `MIN_CLI_VERSION`)
 - `bun test:local` - Legacy alias for the default monorepo backend test run
 - `bun test:front` - Run Playwright frontend tests
 - `bun test:all:local` - Legacy alias for `bun test:all`
@@ -97,6 +134,14 @@ testing against Cloudflare Workers.
   - `public/` - Public API endpoints (app, bundle, device management)
   - `triggers/` - Database triggers and CRON functions
   - `utils/` - Shared utilities and database schemas
+
+### Plugin endpoint security triage (HARD RULE)
+
+`/channel_self`, `/updates`, and `/stats` are public plugin endpoints in `plugins/`. They take no API key, JWT, or device secret — the client asserts `device_id`. That is the product.
+
+- Unauthenticated SET on `/channel_self` (POST/DELETE persist, client-controlled `plugin_version`, `device_id` spoof) is **intended behavior**. It is **NOT** a security issue.
+- Do **not** open a security-fix PR or keep a GHSA open for "missing auth on channel_self set". Closed: GHSA-g9h5 / PR #3222. Same class as GHSA-469v (GET `/channel_self` enumeration is already documented as intended).
+- Dashboard/API forced overrides on private channels remain a separate, authenticated path. Do **not** "fix" the public plugin set path.
 
 ### Production Scale Guardrails
 
@@ -1073,6 +1118,51 @@ else {
 - Removing support for old request formats
 
 **When in doubt, support both old and new behavior based on plugin version detection.**
+
+## CLI Minimum Version
+
+Source of truth: `supabase/functions/_backend/utils/cliMinVersion.ts`.
+
+`GET /private/config` returns:
+
+- `minCliVersion` — oldest `@capgo/cli` still supported
+- `minCliVersionReason` — user-facing explanation shown when the CLI is below
+  that floor
+
+The CLI reads those fields during remote config fetch. If the running CLI is
+older than `minCliVersion`, it stops and tells the user they must update,
+including the reason.
+
+### Compat tests
+
+The min version is the pin for CLI compatibility tests, not workspace `@latest`.
+
+- `tests/cli-compat.test.ts` installs `@capgo/cli@${MIN_CLI_VERSION}` and runs it
+  against the current API.
+- Workspace `tests/cli*` coverage is for the current CLI. It does not replace
+  the min-version pin.
+
+When you raise `MIN_CLI_VERSION`, update `MIN_CLI_VERSION_REASON` in the same
+change and keep `tests/cli-compat.test.ts` passing against the new pin.
+
+### ALWAYS ASK before raising (or not raising)
+
+When a change can break older CLIs (public API, upload/auth/encryption protocol,
+request/response shape, required headers, error codes the CLI parses):
+
+You MUST ask the user before finishing:
+
+1. Should we raise `MIN_CLI_VERSION`?
+2. Is this a security concern?
+
+Rules:
+
+- **Security** (auth bypass, secret leak, unsigned/unsafe upload, and similar):
+  recommend raising, and put the why in `MIN_CLI_VERSION_REASON`.
+- **Not security** (new optional field, additive endpoint, old CLI still works):
+  default to **not** raising. Customers take time to update.
+- Never raise silently. Never leave a stale reason.
+- Never lower the min version without an explicit user request.
 
 ## Deployment
 

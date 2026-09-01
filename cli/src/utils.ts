@@ -15,7 +15,7 @@ import { homedir, platform as osPlatform } from 'node:os'
 import path, { dirname, join, relative, resolve, sep } from 'node:path'
 import { cwd, env, stdin, stdout } from 'node:process'
 import { findInstallCommand, findPackageManagerRunner, findPackageManagerType } from '@capgo/find-package-manager'
-import { confirm as confirmC, isCancel, log as clackLog, select, spinner as spinnerC } from '@clack/prompts'
+import { log as clackLog, confirm as confirmC, isCancel, select, spinner as spinnerC } from '@clack/prompts'
 import { canParse, format, lessThan, parse, parseRange, rangeIntersects } from '@std/semver'
 import { createClient, FunctionsHttpError } from '@supabase/supabase-js'
 import AdmZip from 'adm-zip'
@@ -25,24 +25,25 @@ import prettyjson from 'prettyjson'
 import * as tus from 'tus-js-client'
 import { buildCliRequestHeaders, validateCliRequestHeaderValue } from './analytics/cli-headers'
 import { getGlobalAnalyticsProps } from './analytics/global-props'
-import { getActiveUploadReporter } from './bundle/reporter'
 import { createTimedFetch, isSupabaseInstrumentationEnabled } from './analytics/supabase-perf'
+import { assertMinCliVersion } from './api/min-cli-version'
 import { sendCliEvent } from './app/debug'
+import { getActiveUploadReporter } from './bundle/reporter'
 import { findMonorepoRoot, findNXMonorepoRoot, isMonorepo, isNXMonorepo } from './capacitor-cli'
 import { getChecksum } from './checksum'
 import { loadConfig, loadConfigForWrite, writeConfig } from './config'
-import { isTruthyEnvValue, IOS_SYNC_VALIDATION_FAILED_MESSAGE } from './posthog'
+import { IOS_SYNC_VALIDATION_FAILED_MESSAGE, isTruthyEnvValue } from './posthog'
 import { getCliLoginCommand } from './runner-command'
 import { nativePackageSchema } from './schemas/common'
 import { safeParseSchema } from './schemas/schema_validation'
 import { CliUserError } from './shared/cli-user-error'
 import { isTransientNetworkError } from './shared/network-error'
+import { trimTrailingSlashes } from './shared/trim-trailing-slashes'
 import {
   callTwoFactorComplianceRpcWithRetry,
   throwTwoFactorComplianceRpcError,
   warnAndContinueTwoFactorPreflightNetworkFailure,
 } from './shared/two-factor-compliance'
-import { trimTrailingSlashes } from './shared/trim-trailing-slashes'
 import { formatApiErrorForCli, parseSecurityPolicyError } from './utils/security_policy_errors'
 
 export { trimTrailingSlashes }
@@ -843,6 +844,8 @@ interface CapgoConfig {
   hostWeb: string
   hostFilesApi: string
   hostApi: string
+  minCliVersion?: string
+  minCliVersionReason?: string
 }
 let cachedRemoteConfig: CapgoConfig | null = null
 let remoteConfigInFlight: Promise<CapgoConfig> | null = null
@@ -850,10 +853,18 @@ let remoteConfigInFlight: Promise<CapgoConfig> | null = null
 export async function getRemoteConfig(silent = false, signal?: AbortSignal) {
   // call host + /api/get_config and parse the result as json using fetch
   // Always return a shallow copy so callers cannot mutate the process-wide cache.
+  /**
+   * Return a defensive copy after enforcing the API-published minimum CLI version.
+   */
+  const finish = (config: CapgoConfig) => {
+    const copy = { ...config }
+    assertMinCliVersion(copy, undefined, silent)
+    return copy
+  }
   if (!signal && cachedRemoteConfig)
-    return { ...cachedRemoteConfig }
+    return finish(cachedRemoteConfig)
   if (!signal && remoteConfigInFlight)
-    return remoteConfigInFlight.then(config => ({ ...config }))
+    return remoteConfigInFlight.then(finish)
 
   const run = (async () => {
     const localConfig = await getLocalConfig(silent)
@@ -885,7 +896,7 @@ export async function getRemoteConfig(silent = false, signal?: AbortSignal) {
 
   if (!signal)
     remoteConfigInFlight = run
-  return run
+  return run.then(finish)
 }
 
 interface CapgoFilesConfig {
@@ -1012,7 +1023,6 @@ export interface CapgoCliInvokeOptions {
   supaAnon?: string
   signal?: AbortSignal
 }
-
 
 export function getCapgoCliHttpStatus(error: unknown): number | undefined {
   const context = (error as { context?: { status?: number } } | null)?.context

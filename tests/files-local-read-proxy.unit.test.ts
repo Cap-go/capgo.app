@@ -23,6 +23,7 @@ vi.mock('../supabase/functions/_backend/utils/discord.ts', () => ({
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   closeClient: () => Promise.resolve(),
   getAppOwnerPostgres: vi.fn(),
+  getDatabaseURL: vi.fn(() => 'postgres://test'),
   getDrizzleClient: vi.fn(() => ({})),
   getPgClient: getPgClientMock,
 }))
