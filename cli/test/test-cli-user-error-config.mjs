@@ -136,7 +136,8 @@ await test('zipBundleInternal throws CliUserError when notifyAppReady is missing
       () => zipBundleInternal('com.example.app', { path: webDir, bundle: '1.0.0' }, true),
       (error) => {
         assert.equal(error instanceof CliUserError, true)
-        assert.equal(error.message, 'notifyAppReady() is missing in build folder')
+        assert.match(error.message, /notifyAppReady\(\) is missing in the build folder/)
+        assert.match(error.message, /notify-app-ready/)
         assert.equal(shouldCapturePosthogException(error), false)
         return true
       },
@@ -159,7 +160,7 @@ await test('encryptZipInternal throws CliUserError when public key is missing fr
         () => encryptZipInternal(zipPath, 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', {}, true),
         (error) => {
           assert.equal(error instanceof CliUserError, true)
-          assert.equal(error.message, 'Missing public key in config')
+          assert.match(error.message, /Missing public key in config/)
           assert.equal(shouldCapturePosthogException(error), false)
           return true
         },

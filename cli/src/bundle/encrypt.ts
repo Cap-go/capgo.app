@@ -64,7 +64,14 @@ export async function encryptZipInternal(
         await ensurePublicKeyFromPrivateKey(privateKey, { silent: silent || json, json })
       }
       else if (!userSuppliedPrivateKey) {
-        await ensurePublicKeyInConfig({ interactive, silent: silent || json, json })
+        try {
+          await ensurePublicKeyInConfig({ interactive, silent: silent || json, json })
+        }
+        catch (error) {
+          if (!interactive && error instanceof Error)
+            throw new CliUserError(error.message)
+          throw error
+        }
       }
       extConfig = await getConfigForWrite()
     }

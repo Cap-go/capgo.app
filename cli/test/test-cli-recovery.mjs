@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import process from 'node:process'
 import vm from 'node:vm'
 import { shouldCapturePosthogException } from '../src/posthog.ts'
+import { CliUserError } from '../src/shared/cli-user-error.ts'
 import { saveKeyInternal } from '../src/key.ts'
 import { setConfigWriteTarget } from '../src/config/index.ts'
 import {
@@ -322,7 +323,7 @@ await test('zipBundleInternal rejects declared updater missing from node_modules
   }
 })
 
-await test('zipBundleInternal silent notifyAppReady failure stays PostHog-capturable', async () => {
+await test('zipBundleInternal silent notifyAppReady failure uses CliUserError', async () => {
   const root = makeTempDir('zip-silent')
   const webDir = join(root, 'www')
   mkdirSync(webDir)
@@ -332,8 +333,9 @@ await test('zipBundleInternal silent notifyAppReady failure stays PostHog-captur
   await assert.rejects(
     () => zipBundleInternal('com.example.app', { path: webDir, bundle: '1.0.0' }, true),
     (error) => {
+      assert.equal(error instanceof CliUserError, true)
       assert.match(error.message, /notifyAppReady\(\) is missing/)
-      assert.equal(shouldCapturePosthogException(error), true)
+      assert.equal(shouldCapturePosthogException(error), false)
       return true
     },
   )
