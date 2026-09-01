@@ -486,7 +486,7 @@ export async function setOrganizationInternal(
     org_id: orgId,
     tracking_version: 2,
     tags: {
-          'org-name': name ?? orgName,
+      'org-name': name,
     },
   }).catch(() => {})
 
