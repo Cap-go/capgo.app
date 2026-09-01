@@ -46,8 +46,14 @@ describe('analytics engine sql lint rules', () => {
       "SELECT min(if(blob2 = 'download_complete' AND double1 > 0, double1, NULL)) FROM app_log",
     ).map(issue => issue.rule)).toContain('no-if-untyped-null')
     expect(lintAnalyticsEngineSql(
+      "SELECT min(if(blob2 IN ('download_complete', 'download_zip_complete') AND double1 > 0, double1, NULL)) FROM app_log",
+    ).map(issue => issue.rule)).toContain('no-if-untyped-null')
+    expect(lintAnalyticsEngineSql(
       "SELECT min(if(blob2 = 'download_complete', NULL, double1)) FROM app_log",
     ).map(issue => issue.rule)).toContain('no-if-untyped-null')
+    expect(lintAnalyticsEngineSql(
+      "SELECT coalesce(double1, NULL) FROM app_log",
+    ).map(issue => issue.rule)).not.toContain('no-if-untyped-null')
   })
 })
 

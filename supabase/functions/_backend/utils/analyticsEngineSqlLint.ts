@@ -52,7 +52,9 @@ export const ANALYTICS_ENGINE_SQL_LINT_RULES: AnalyticsEngineSqlLintRule[] = [
   },
   {
     id: 'no-if-untyped-null',
-    test: sql => /,\s*NULL\s*[,)]/.test(sql),
+    // Require if( plus a comma-separated NULL. Do not use if\s*\([^)]* — nested IN()
+    // closes the first paren and would miss if(blob2 IN (...), double1, NULL).
+    test: sql => /\bif\s*\(/i.test(sql) && /,\s*NULL\s*[,)]/.test(sql),
     message: 'Analytics Engine SQL IF() branches must share a type; untyped NULL cannot pair with Double or DateTime',
   },
 ]
