@@ -581,14 +581,17 @@ export async function warmEdgeEndpoint(
   options: RequestInit = { method: 'POST', headers: { 'Content-Type': 'application/json', 'apisecret': API_SECRET }, body: '{}' },
 ): Promise<void> {
   const url = path.startsWith('http') ? path : getEndpointUrl(path)
+  let lastStatus = 0
   for (let attempt = 1; attempt <= 5; attempt++) {
     const response = await fetch(url, options)
     await response.text().catch(() => undefined)
+    lastStatus = response.status
     if (response.status !== 502 && response.status !== 503)
       return
     console.error(`[warmEdgeEndpoint] attempt=${attempt} status=${response.status} url=${url}`)
     await new Promise(resolve => setTimeout(resolve, 500 * attempt))
   }
+  throw new Error(`[warmEdgeEndpoint] isolate still returning ${lastStatus} after 5 attempts url=${url}`)
 }
 
 // Cache for prepared apps to avoid repeated seeding

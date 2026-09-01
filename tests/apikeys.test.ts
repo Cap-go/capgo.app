@@ -946,7 +946,9 @@ describe('[PUT] /apikey/:id operations', () => {
       const appBindings = await appApiKeyBindings(APPNAME, 'app_reader')
       // Cloudflare shards can 403 immediately after POST while the caller's
       // org.update_user_roles check still sees the pre-create binding state.
-      await vi.waitFor(async () => {
+      // Retry only that race (and gateway deaths). Permanent 401/404/409 fail now.
+      const putDeadline = Date.now() + 4000
+      while (true) {
         const updateResponse = await fetch(`${BASE_URL}/apikey/${createdKey.id}`, {
           method: 'PUT',
           headers: authHeaders,
@@ -954,11 +956,17 @@ describe('[PUT] /apikey/:id operations', () => {
             bindings: appBindings,
           }),
         })
-        if (updateResponse.status !== 200) {
-          const body = await updateResponse.text().catch(() => '')
-          throw new Error(`PUT /apikey/${createdKey.id} status=${updateResponse.status} body=${body.slice(0, 400)}`)
-        }
-      }, { timeout: 4000, interval: 150 })
+        if (updateResponse.status === 200)
+          break
+        const body = await updateResponse.text().catch(() => '')
+        const message = `PUT /apikey/${createdKey.id} status=${updateResponse.status} body=${body.slice(0, 400)}`
+        const retryable = updateResponse.status === 403
+          || updateResponse.status === 502
+          || updateResponse.status === 503
+        if (!retryable || Date.now() >= putDeadline)
+          throw new Error(message)
+        await new Promise(resolve => setTimeout(resolve, 150))
+      }
 
       await vi.waitFor(async () => {
         const { data: bindings, error } = await getSupabaseClient()

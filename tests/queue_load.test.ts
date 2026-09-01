@@ -139,9 +139,16 @@ describe('queue Load Test', () => {
     expect(initialRows[0].count).toBe('10')
 
     await fetchQueueSync(queueName)
-    await expect.poll(async () => {
+    // One concurrent POST to /triggers/ok can abort; the leftover stays
+    // invisible until VT (120s). Make it visible and sync again.
+    for (let attempt = 1; attempt <= 3; attempt++) {
       const { rows } = await pool.query(`SELECT count(*) as count FROM pgmq.q_${queueName}`)
-      return rows[0].count
-    }, { timeout: 8_000, interval: 250 }).toBe('0')
+      if (rows[0].count === '0')
+        return
+      await pool.query(`UPDATE pgmq.q_${queueName} SET vt = clock_timestamp() - interval '1 second'`)
+      await fetchQueueSync(queueName)
+    }
+    const { rows: leftover } = await pool.query(`SELECT count(*) as count FROM pgmq.q_${queueName}`)
+    expect(leftover[0].count).toBe('0')
   })
 })
