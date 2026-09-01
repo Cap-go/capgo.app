@@ -10,8 +10,11 @@ import {
   SUPABASE_ANON_KEY,
   SUPABASE_BASE_URL,
   USER_EMAIL,
+  USER_EMAIL_NONMEMBER,
   USER_ID,
+  USER_ID_NONMEMBER,
   USER_PASSWORD,
+  USER_PASSWORD_NONMEMBER,
 } from './test-utils.ts'
 
 const APP_RPC = `ob.rpc.${randomUUID().slice(0, 8)}`
@@ -33,6 +36,46 @@ function createAuthClient() {
       detectSessionInUrl: false,
     },
   })
+}
+
+async function bindAppReader(appId: string, userId: string) {
+  await executeSQL(`
+    INSERT INTO public.role_bindings (
+      principal_type,
+      principal_id,
+      role_id,
+      scope_type,
+      org_id,
+      app_id,
+      granted_by,
+      reason,
+      is_direct
+    )
+    SELECT
+      public.rbac_principal_user(),
+      $1::uuid,
+      roles.id,
+      public.rbac_scope_app(),
+      $2::uuid,
+      apps.id,
+      $3::uuid,
+      'Getting started reader regression',
+      true
+    FROM public.roles roles
+    INNER JOIN public.apps apps ON apps.app_id = $4
+    WHERE roles.name = public.rbac_role_app_reader()
+      AND roles.scope_type = public.rbac_scope_app()
+    ON CONFLICT DO NOTHING
+  `, [userId, ORG_ID, USER_ID, appId])
+}
+
+async function unbindAppReader(appId: string, userId: string) {
+  await executeSQL(`
+    DELETE FROM public.role_bindings
+    WHERE principal_type = public.rbac_principal_user()
+      AND principal_id = $1::uuid
+      AND app_id = (SELECT id FROM public.apps WHERE app_id = $2)
+  `, [userId, appId])
 }
 
 async function createApp(appId: string, needOnboarding = false) {
@@ -373,6 +416,39 @@ describe('app onboarding progress RPCs', () => {
       expect(parseAppOnboardingLedger(app?.onboarding).getting_started_dismissed_at).toBeTruthy()
     }
     finally {
+      await serviceRoleSupabase.from('apps').delete().eq('app_id', appId)
+    }
+  })
+
+  it('lets an app reader hide getting started without completing pending onboarding', async () => {
+    const appId = `ob.read.${randomUUID().slice(0, 8)}`
+    await createApp(appId, true)
+    await bindAppReader(appId, USER_ID_NONMEMBER)
+    try {
+      const authClient = createAuthClient()
+      const { error: signInError } = await authClient.auth.signInWithPassword({
+        email: USER_EMAIL_NONMEMBER,
+        password: USER_PASSWORD_NONMEMBER,
+      })
+      if (signInError)
+        throw signInError
+
+      const { data, error } = await authClient.rpc('dismiss_getting_started', {
+        p_app_id: appId,
+      })
+      expect(error).toBeNull()
+      expect(parseAppOnboardingLedger(data).getting_started_dismissed_at).toBeTruthy()
+
+      const { data: app, error: readError } = await serviceRoleSupabase
+        .from('apps')
+        .select('need_onboarding')
+        .eq('app_id', appId)
+        .single()
+      expect(readError).toBeNull()
+      expect(app?.need_onboarding).toBe(true)
+    }
+    finally {
+      await unbindAppReader(appId, USER_ID_NONMEMBER)
       await serviceRoleSupabase.from('apps').delete().eq('app_id', appId)
     }
   })

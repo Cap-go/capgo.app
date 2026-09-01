@@ -12,12 +12,13 @@
 --   idx_devices_app_id_plugin_version_production, idx_daily_version_app_id,
 --   idx_build_requests_app. Never scans all apps.
 -- - verify_getting_started: user-facing RPC, once per click. Indexed apps.app_id
---   lookup + one rbac_check_permission_request (app_read). Refreshes that app,
---   then completes need_onboarding when a real (non-demo) bundle exists.
+--   lookup + one rbac_check_permission_request (app_read). Refreshes that app.
+--   Completing need_onboarding (and demo cleanup) requires app.update_settings.
 -- - report_app_onboarding_setup: after merging setup, completes need_onboarding
 --   when outcome is completed or skipped (AI/CLI finished the 12 steps).
--- - dismiss_getting_started: still sets getting_started_dismissed_at; also tries
---   to complete need_onboarding so login no longer forces /onboarding/app.
+-- - dismiss_getting_started: still sets getting_started_dismissed_at with app_read;
+--   completing need_onboarding requires app.update_settings so a reader cannot
+--   fire cleanup_onboarding_app_data_on_complete.
 -- - Callers: authenticated console users who can already read the app. Not granted
 --   to anon. Internal helpers are service_role only.
 
@@ -255,7 +256,14 @@ BEGIN
 
   v_onboarding := public.refresh_one_app_onboarding_progress(p_app_id);
 
-  IF public.app_has_real_bundle(p_app_id)
+  -- Completing pending onboarding fires cleanup_onboarding_app_data_on_complete.
+  -- Keep that write behind app.update_settings so app readers cannot wipe demo data.
+  IF public.rbac_check_permission_request(
+    public.rbac_perm_app_update_settings(),
+    v_owner_org,
+    p_app_id,
+    NULL::bigint
+  ) AND public.app_has_real_bundle(p_app_id)
     AND NOT public.has_seeded_demo_data(p_app_id)
   THEN
     PERFORM public.try_complete_pending_onboarding(p_app_id);
@@ -276,7 +284,7 @@ GRANT ALL ON FUNCTION public.verify_getting_started(character varying) TO "authe
 GRANT ALL ON FUNCTION public.verify_getting_started(character varying) TO "service_role";
 
 COMMENT ON FUNCTION public.verify_getting_started(character varying) IS
-  'Refreshes Getting Started from live devices/bundles/builds for one app the caller can read. Completes need_onboarding when a real non-demo bundle exists. Once per click, indexed app_id lookups only.';
+  'Refreshes Getting Started from live devices/bundles/builds for one app the caller can read. Completes need_onboarding only when the caller also has app.update_settings and a real non-demo bundle exists. Once per click, indexed app_id lookups only.';
 
 CREATE OR REPLACE FUNCTION "public"."dismiss_getting_started"(
   "p_app_id" character varying
@@ -324,9 +332,16 @@ BEGIN
     WHERE apps.app_id = p_app_id;
   END IF;
 
-  -- Hide the login splash as well as the sidebar entry. Demo cleanup refusal
-  -- is swallowed so dismiss still sticks.
-  PERFORM public.try_complete_pending_onboarding(p_app_id);
+  -- Completing need_onboarding fires demo-data cleanup. Readers may hide the
+  -- checklist, but only app.update_settings may flip the shared pending flag.
+  IF public.rbac_check_permission_request(
+    public.rbac_perm_app_update_settings(),
+    v_owner_org,
+    p_app_id,
+    NULL::bigint
+  ) THEN
+    PERFORM public.try_complete_pending_onboarding(p_app_id);
+  END IF;
 
   SELECT apps.onboarding
   INTO v_onboarding
@@ -343,7 +358,7 @@ GRANT ALL ON FUNCTION public.dismiss_getting_started(character varying) TO "auth
 GRANT ALL ON FUNCTION public.dismiss_getting_started(character varying) TO "service_role";
 
 COMMENT ON FUNCTION public.dismiss_getting_started(character varying) IS
-  'Sets onboarding.getting_started_dismissed_at once when the caller can read the app, and tries to complete need_onboarding so login no longer forces the setup splash.';
+  'Sets onboarding.getting_started_dismissed_at once when the caller can read the app. Completes need_onboarding only when the caller also has app.update_settings, so a reader cannot trigger demo-data cleanup.';
 
 CREATE OR REPLACE FUNCTION "public"."report_app_onboarding_setup"(
   "p_app_id" character varying,
