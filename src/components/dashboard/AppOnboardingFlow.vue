@@ -36,6 +36,7 @@ import IconStore from '~icons/lucide/store'
 import IconTerminal from '~icons/lucide/terminal'
 import IconTrash from '~icons/lucide/trash-2'
 import IconUsers from '~icons/lucide/users-round'
+import OnboardingAltSetup from '~/components/dashboard/OnboardingAltSetup.vue'
 import { preserveAdminDashboardMinimize } from '~/services/adminDashboardPreferences'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
 import {
@@ -86,7 +87,6 @@ import {
 import AppOnboardingCliSteps from './AppOnboardingCliSteps.vue'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
 import AppOnboardingWelcome from './AppOnboardingWelcome.vue'
-import OnboardingAltSetup from '~/components/dashboard/OnboardingAltSetup.vue'
 import OrganizationOnboardingInvite from './OrganizationOnboardingInvite.vue'
 import TechnicalTeammateInviteCard from './TechnicalTeammateInviteCard.vue'
 
