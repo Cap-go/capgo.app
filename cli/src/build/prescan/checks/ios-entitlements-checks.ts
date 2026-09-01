@@ -323,6 +323,7 @@ export const appGroupsFormat: PrescanCheck = {
 const AGE_RANGE_PLUGIN = '@capgo/capacitor-age-range'
 const DECLARED_AGE_RANGE_KEY = 'com.apple.developer.declared-age-range'
 
+/** True when `name` is listed in package.json dependencies or devDependencies. */
 function packageHasDependency(projectDir: string, name: string): boolean {
   const raw = readTextIfExists(join(projectDir, 'package.json'))
   if (raw === null)

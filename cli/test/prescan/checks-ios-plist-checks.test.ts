@@ -389,6 +389,16 @@ describe('ios/plist-required-device-arm64 (upload-gated)', () => {
     const ctx = ctxFor(HEALTHY_BODY, { partial: { credentials: uploadCreds, distributionMode: 'app_store' } })
     expect(await plistRequiredDeviceArm64.run(ctx)).toEqual([])
   })
+  it('warns on dictionary-form armv7 without arm64', async () => {
+    const ctx = ctxFor(`${HEALTHY_BODY}<key>UIRequiredDeviceCapabilities</key><dict><key>armv7</key><true/></dict>`, { partial: { credentials: uploadCreds, distributionMode: 'app_store' } })
+    const f = await plistRequiredDeviceArm64.run(ctx)
+    expect(f[0]?.severity).toBe('warning')
+    expect(f[0]?.id).toBe('ios/plist-required-device-arm64')
+  })
+  it('passes dictionary-form when arm64 is true', async () => {
+    const ctx = ctxFor(`${HEALTHY_BODY}<key>UIRequiredDeviceCapabilities</key><dict><key>armv7</key><true/><key>arm64</key><true/></dict>`, { partial: { credentials: uploadCreds, distributionMode: 'app_store' } })
+    expect(await plistRequiredDeviceArm64.run(ctx)).toEqual([])
+  })
 })
 
 describe('partial / non-Capacitor project — all checks early-return []', () => {
