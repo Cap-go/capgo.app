@@ -5,9 +5,11 @@ export const ONBOARDING_ANALYTICS_VERSION = 4
 export type OnboardingAnalyticsFlow = 'pre_org' | 'existing_org'
 export type OnboardingAnalyticsStep = 'welcome' | 'intent' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'choice' | 'install' | 'setup'
 export type OnboardingCopyEvent = 'onboarding_ai_instructions_copied' | 'onboarding_cli_command_copied'
+export type OnboardingDevelopmentEnvironment = 'hosted_builder' | 'local_project' | 'exploring'
 export type OnboardingIntent = 'ota' | 'builder' | 'both' | 'exploring'
 export type OnboardingInteractionEvent
-  = | 'onboarding_organization_import_opened'
+  = | 'onboarding_development_environment_selected'
+    | 'onboarding_organization_import_opened'
     | 'onboarding_organization_import_submitted'
     | 'onboarding_organization_import_succeeded'
     | 'onboarding_organization_import_failed'
@@ -17,6 +19,8 @@ export type OnboardingInteractionEvent
     | 'onboarding_organization_invite_continued'
     | 'onboarding_technical_invite_opened'
     | 'onboarding_technical_invite_succeeded'
+    | 'onboarding_webnative_continue_with_capgo'
+    | 'onboarding_webnative_recommendation_clicked'
 export type OnboardingDetailsEvent
   = | 'onboarding_app_creation_failed'
     | 'onboarding_app_creation_started'
@@ -71,6 +75,7 @@ interface CreateOnboardingTelemetryIdentityOptions {
 export interface OnboardingStepCompletionProperties {
   appId?: string
   appName?: string
+  developmentEnvironment?: OnboardingDevelopmentEnvironment
   intent?: OnboardingIntent
   nextStep?: OnboardingAnalyticsStep
   storeImportUsed?: boolean
@@ -98,6 +103,7 @@ export function resolveOnboardingAppIconSource(options: {
 }
 
 export interface OnboardingInteractionProperties {
+  development_environment?: OnboardingDevelopmentEnvironment
   invitation_count?: number
 }
 
@@ -342,6 +348,8 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
       properties.app_id = completion.appId
     if (completion.appName)
       properties.app_name = completion.appName
+    if (completion.developmentEnvironment)
+      properties.development_environment = completion.developmentEnvironment
     if (completion.intent)
       properties.intent = completion.intent
     if (completion.storeImportUsed !== undefined)

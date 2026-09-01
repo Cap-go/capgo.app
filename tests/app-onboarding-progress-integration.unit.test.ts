@@ -67,6 +67,7 @@ vi.mock('~/stores/organization', () => ({
 
 const onboardingSource = readFileSync(new NodeUrl('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
 const sidebarSource = readFileSync(new NodeUrl('../src/components/Sidebar.vue', import.meta.url), 'utf8')
+const englishMessages = JSON.parse(readFileSync(new NodeUrl('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
 function sourceBetween(start: string, end: string) {
   const startIndex = onboardingSource.indexOf(start)
@@ -449,7 +450,8 @@ describe('app onboarding progress analytics integration', () => {
     expect(transitionHelpers).toContain('void persistOnboardingProgress()')
 
     const intentTransition = sourceBetween('function continueFromIntent()', 'function continuePreOrgDetails()')
-    expect(intentTransition).toContain(`completeAndViewStep('details', { intent: selectedIntent.value })`)
+    expect(intentTransition).toContain(`developmentEnvironment: selectedDevelopmentEnvironment.value`)
+    expect(intentTransition).toContain(`intent: selectedIntent.value`)
 
     const appNameTransition = sourceBetween('function continueFromAppName()', 'function continueFromAppId()')
     expect(appNameTransition).toContain(`completeAndViewAppDetailsStep('app_id', { appId: generatedAppId.value, appName: appName.value.trim() })`)
@@ -466,6 +468,23 @@ describe('app onboarding progress analytics integration', () => {
     const realSetupChoice = sourceBetween('function goToInstallStep()', 'function openDashboard()')
     expect(realSetupChoice).toContain(`completeAndViewStep('install', {`)
     expect(realSetupChoice).toContain('appId: createdApp.value.app_id')
+  })
+
+  it.concurrent('recommends WebNativeApp only to hosted-builder users with the approved copy and CTAs', () => {
+    expect(onboardingSource).toContain(`selectedDevelopmentEnvironment.value === 'hosted_builder'`)
+    expect(onboardingSource).toContain(`const WEBNATIVE_APP_URL = 'https://webnativeapp.com/?ref=capgo'`)
+    expect(onboardingSource).toContain('data-test="onboarding-webnative-check-website"')
+    expect(onboardingSource).toContain('data-test="onboarding-webnative-continue-capgo"')
+    expect(englishMessages['organization-onboarding-development-environment-question']).toBe('How do you currently build and publish your app?')
+    expect(englishMessages['organization-onboarding-development-environment-option-hosted_builder-label']).toBe('From a hosted AI/web builder')
+    expect(englishMessages['organization-onboarding-development-environment-option-hosted_builder-desc']).toBe('Lovable, Bolt, Base44, Replit, v0…')
+    expect(englishMessages['organization-onboarding-development-environment-option-local_project-label']).toBe('From a local project or repository')
+    expect(englishMessages['organization-onboarding-development-environment-option-local_project-desc']).toBe('VS Code, Cursor, terminal…')
+    expect(englishMessages['organization-onboarding-development-environment-option-exploring-label']).toBe('I’m still exploring')
+    expect(englishMessages['organization-onboarding-webnative-title']).toBe('WebNativeApp may be a better fit')
+    expect(englishMessages['organization-onboarding-webnative-description']).toContain('WebNativeApp can package it for iOS and Android')
+    expect(englishMessages['organization-onboarding-webnative-check-website']).toBe('Check my website')
+    expect(englishMessages['organization-onboarding-webnative-continue-capgo']).toBe('Continue with Capgo')
   })
 
   it.concurrent('reports back navigation as a new view without completing the abandoned step', () => {

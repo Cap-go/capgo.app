@@ -392,7 +392,12 @@ describe('onboarding progress analytics', () => {
 
     tracker.viewStep('intent')
     now = 1_125.9
-    tracker.completeStep('intent', { appName: 'Acme App', intent: 'ota', nextStep: 'details' })
+    tracker.completeStep('intent', {
+      appName: 'Acme App',
+      developmentEnvironment: 'local_project',
+      intent: 'ota',
+      nextStep: 'details',
+    })
     tracker.viewStep('details', 'intent')
 
     expect(capture.mock.calls.map(call => call[0])).toEqual([
@@ -404,6 +409,7 @@ describe('onboarding progress analytics', () => {
       duration_ms: 125,
       flow: 'pre_org',
       app_name: 'Acme App',
+      development_environment: 'local_project',
       intent: 'ota',
       next_step: 'details',
       onboarding_attempt_id: ATTEMPT_A1,
@@ -534,6 +540,31 @@ describe('onboarding progress analytics', () => {
         onboarding_run_id: RUN_R1,
         onboarding_version: ONBOARDING_ANALYTICS_VERSION,
         step: 'organization',
+      }),
+    )
+  })
+
+  it.concurrent('captures WebNative recommendations with the selected development environment', () => {
+    const capture = vi.fn()
+    const tracker = createOnboardingProgressTracker({
+      ...trackerIdentity,
+      capture,
+      flow: 'pre_org',
+      resumed: false,
+      steps,
+      supaHost: 'https://supabase.capgo.test',
+    })
+
+    tracker.trackStepEvent('onboarding_webnative_recommendation_clicked', 'intent', {
+      development_environment: 'hosted_builder',
+    })
+
+    expect(capture).toHaveBeenCalledWith(
+      'onboarding_webnative_recommendation_clicked',
+      'https://supabase.capgo.test',
+      expect.objectContaining({
+        development_environment: 'hosted_builder',
+        step: 'intent',
       }),
     )
   })

@@ -21,6 +21,7 @@ describe('user onboarding progress', () => {
       status: 'in_progress',
       step: 'organization',
       flow: 'pre_org',
+      development_environment: 'hosted_builder',
       intent: 'ota',
       details_step: 'icon',
       app_name: 'Acme',
@@ -34,6 +35,7 @@ describe('user onboarding progress', () => {
       status: 'in_progress',
       step: 'organization',
       flow: 'pre_org',
+      development_environment: 'hosted_builder',
       intent: 'ota',
       details_step: 'icon',
       app_name: 'Acme',
@@ -67,6 +69,7 @@ describe('user onboarding progress', () => {
       status: 'in_progress',
       step: 'details',
       flow: 'pre_org',
+      developmentEnvironment: 'local_project',
       intent: 'builder',
       detailsStep: 'app_id',
       appName: '  Hello  ',
@@ -84,6 +87,7 @@ describe('user onboarding progress', () => {
       status: 'in_progress',
       step: 'details',
       flow: 'pre_org',
+      development_environment: 'local_project',
       intent: 'builder',
       details_step: 'app_id',
       app_name: 'Hello',
@@ -105,6 +109,13 @@ describe('user onboarding progress', () => {
       flow: 'pre_org',
       updatedAt: '2026-08-15T00:00:00.000Z',
     }), 'pre_org')).toBe(false)
+    expect(shouldPromptOnboardingResume(buildUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'intent',
+      flow: 'pre_org',
+      developmentEnvironment: 'hosted_builder',
+      updatedAt: '2026-08-15T00:00:00.000Z',
+    }), 'pre_org')).toBe(true)
     expect(shouldPromptOnboardingResume(buildUserOnboardingProgress({
       status: 'in_progress',
       step: 'intent',

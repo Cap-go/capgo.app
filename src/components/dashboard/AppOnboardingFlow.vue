@@ -5,6 +5,7 @@ import type {
   OnboardingCopyEvent,
   OnboardingDetailsEvent,
   OnboardingDetailsEventProperties,
+  OnboardingDevelopmentEnvironment,
   OnboardingIntent,
   OnboardingInteractionEvent,
   OnboardingInteractionProperties,
@@ -106,6 +107,7 @@ const config = getLocalConfig()
 const onboardingTelemetry = createOnboardingTelemetryIdentity({ flow: props.preOrg ? 'pre_org' : 'existing_org', supaHost: config.supaHost })
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
 const WELCOME_CANVAS_MEDIA_QUERY = '(min-width: 640px) and (min-height: 640px)'
+const WEBNATIVE_APP_URL = 'https://webnativeapp.com/?ref=capgo'
 const removeBeforeUnloadWarning = useBeforeUnloadWarning(Boolean(props.preOrg))
 
 type AppRow = Omit<Database['public']['Tables']['apps']['Row'], 'onboarding'> & {
@@ -175,7 +177,9 @@ const manualAppId = ref('')
 const appIdSuggestions = ref<string[]>([])
 const appIdFeedback = ref('')
 const hasEditedAppId = ref(false)
+const selectedDevelopmentEnvironment = ref<OnboardingDevelopmentEnvironment | null>(null)
 const selectedIntent = ref<OnboardingIntent | null>(null)
+const webNativeRecommendationDismissed = ref(false)
 const orgNameInput = ref('')
 const hasEditedOrgName = ref(false)
 const estimatedUsersIndex = ref<number | null>(null)
@@ -196,6 +200,21 @@ const intentOptions = [
   { value: 'both', icon: IconLayers },
   { value: 'exploring', icon: IconCompass },
 ] as const
+
+const developmentEnvironmentOptions = [
+  { value: 'hosted_builder', icon: IconGlobe, hasDescription: true },
+  { value: 'local_project', icon: IconTerminal, hasDescription: true },
+  { value: 'exploring', icon: IconCompass, hasDescription: false },
+] as const
+
+const showWebNativeRecommendation = computed(() => (
+  selectedDevelopmentEnvironment.value === 'hosted_builder'
+  && !webNativeRecommendationDismissed.value
+  && !selectedIntent.value
+))
+const showCapgoIntentQuestion = computed(() => (
+  Boolean(selectedDevelopmentEnvironment.value) && !showWebNativeRecommendation.value
+))
 
 const fallbackUserCountStops: UserCountStop[] = [
   { value: 2000, label: '2K', planName: 'Solo' },
@@ -492,6 +511,7 @@ function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress'
     status,
     step: clampResumableOnboardingStep(flowStep.value, flow),
     flow,
+    developmentEnvironment: selectedDevelopmentEnvironment.value,
     intent: selectedIntent.value,
     detailsStep: appDetailsStep.value,
     appName: appName.value,
@@ -613,7 +633,9 @@ async function writeOnboardingProgress(
 function resetOnboardingForm() {
   flowStep.value = props.preOrg ? 'intent' : 'details'
   appDetailsStep.value = 'name'
+  selectedDevelopmentEnvironment.value = null
   selectedIntent.value = null
+  webNativeRecommendationDismissed.value = false
   existingApp.value = props.preOrg ? true : null
   existingAppSetup.value = props.preOrg ? 'manual' : null
   appName.value = ''
@@ -655,6 +677,8 @@ function applyOnboardingProgress(progress: ReturnType<typeof parseUserOnboarding
   flowStep.value = clampResumableOnboardingStep(progress.step, flow)
   if (progress.details_step)
     appDetailsStep.value = progress.details_step
+  if (progress.development_environment)
+    selectedDevelopmentEnvironment.value = progress.development_environment
   if (progress.intent)
     selectedIntent.value = progress.intent
   if (progress.existing_app === true || progress.existing_app === false)
@@ -1457,12 +1481,40 @@ function hydrateIntentFromCurrentOrg() {
 }
 
 function continueFromIntent() {
-  if (!selectedIntent.value) {
+  if (!selectedDevelopmentEnvironment.value || !selectedIntent.value) {
     toast.error(t('organization-onboarding-intent-required'))
     return
   }
 
-  completeAndViewStep('details', { intent: selectedIntent.value })
+  completeAndViewStep('details', {
+    developmentEnvironment: selectedDevelopmentEnvironment.value,
+    intent: selectedIntent.value,
+  })
+}
+
+function selectDevelopmentEnvironment(environment: OnboardingDevelopmentEnvironment) {
+  if (selectedDevelopmentEnvironment.value === environment)
+    return
+
+  selectedDevelopmentEnvironment.value = environment
+  selectedIntent.value = null
+  webNativeRecommendationDismissed.value = false
+  progressTracker?.trackStepEvent('onboarding_development_environment_selected', 'intent', {
+    development_environment: environment,
+  })
+}
+
+function continueWithCapgoFromWebNativeRecommendation() {
+  webNativeRecommendationDismissed.value = true
+  progressTracker?.trackStepEvent('onboarding_webnative_continue_with_capgo', 'intent', {
+    development_environment: 'hosted_builder',
+  })
+}
+
+function trackWebNativeRecommendationClick() {
+  progressTracker?.trackStepEvent('onboarding_webnative_recommendation_clicked', 'intent', {
+    development_environment: 'hosted_builder',
+  })
 }
 
 function continuePreOrgDetails() {
@@ -2049,7 +2101,7 @@ watch(appName, (value) => {
   schedulePersistOnboardingProgress()
 }, { immediate: true })
 
-watch([orgNameInput, storeUrl, selectedIntent, existingAppSetup, estimatedUsersIndex, manualAppId, importedStoreAppId], () => {
+watch([orgNameInput, storeUrl, selectedDevelopmentEnvironment, selectedIntent, existingAppSetup, estimatedUsersIndex, manualAppId, importedStoreAppId], () => {
   schedulePersistOnboardingProgress()
 })
 
@@ -2140,25 +2192,64 @@ defineExpose({
                 {{ t('unified-onboarding-step-intent') }}
               </p>
               <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                {{ t('organization-onboarding-intent-question') }}
+                {{ t('organization-onboarding-development-environment-question') }}
               </h2>
-              <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {{ t('organization-onboarding-intent-hint') }}
-              </p>
             </div>
-            <div class="onboarding-intent-options grid gap-3 sm:grid-cols-2">
-              <button v-for="option in intentOptions" :key="option.value" type="button" class="d-btn onboarding-intent-option group h-auto min-h-20 w-full items-start justify-start gap-3 whitespace-normal rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900" :class="whiteCardToggleButtonClass(selectedIntent === option.value)" :data-test="`onboarding-intent-${option.value}`" @click="selectedIntent = option.value">
+            <div class="onboarding-development-environment-options grid gap-3 sm:grid-cols-3">
+              <button v-for="option in developmentEnvironmentOptions" :key="option.value" type="button" class="d-btn onboarding-development-environment-option group h-auto min-h-24 w-full items-start justify-start gap-3 whitespace-normal rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900" :class="whiteCardToggleButtonClass(selectedDevelopmentEnvironment === option.value)" :data-test="`onboarding-development-environment-${option.value}`" @click="selectDevelopmentEnvironment(option.value)">
                 <span class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500/10 text-primary-500"><component :is="option.icon" class="h-5 w-5" /></span>
                 <span class="min-w-0">
-                  <span class="block text-sm font-semibold text-slate-950 dark:text-white">{{ t(`organization-onboarding-intent-option-${option.value}-label`) }}</span>
-                  <span class="onboarding-intent-option-description mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">{{ t(`organization-onboarding-intent-option-${option.value}-desc`) }}</span>
+                  <span class="block text-sm font-semibold text-slate-950 dark:text-white">{{ t(`organization-onboarding-development-environment-option-${option.value}-label`) }}</span>
+                  <span v-if="option.hasDescription" class="mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">{{ t(`organization-onboarding-development-environment-option-${option.value}-desc`) }}</span>
                 </span>
               </button>
             </div>
-            <div class="onboarding-intent-actions flex justify-end border-t border-slate-200 pt-6 dark:border-white/15">
-              <button type="button" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" data-test="app-onboarding-continue-intent" :disabled="!selectedIntent" @click="continueFromIntent()">
-                {{ t('unified-onboarding-continue-intent') }}<IconArrowRight class="h-4 w-4" />
-              </button>
+
+            <div v-if="showWebNativeRecommendation" class="rounded-2xl border border-primary-500/30 bg-primary-500/5 p-5 dark:border-primary-400/30 dark:bg-primary-400/10" data-test="onboarding-webnative-recommendation">
+              <div class="flex gap-3">
+                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary-500 text-white"><IconSparkles class="h-5 w-5" /></span>
+                <div>
+                  <h3 class="text-lg font-semibold text-slate-950 dark:text-white">
+                    {{ t('organization-onboarding-webnative-title') }}
+                  </h3>
+                  <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                    {{ t('organization-onboarding-webnative-description') }}
+                  </p>
+                </div>
+              </div>
+              <div class="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" data-test="onboarding-webnative-continue-capgo" @click="continueWithCapgoFromWebNativeRecommendation()">
+                  {{ t('organization-onboarding-webnative-continue-capgo') }}
+                </button>
+                <a :href="WEBNATIVE_APP_URL" target="_blank" rel="noopener noreferrer" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" data-test="onboarding-webnative-check-website" @click="trackWebNativeRecommendationClick()">
+                  {{ t('organization-onboarding-webnative-check-website') }}<IconArrowRight class="h-4 w-4" />
+                </a>
+              </div>
+            </div>
+
+            <div v-if="showCapgoIntentQuestion" class="space-y-6 border-t border-slate-200 pt-6 dark:border-white/15">
+              <div>
+                <h3 class="text-xl font-semibold text-slate-950 dark:text-white">
+                  {{ t('organization-onboarding-intent-question') }}
+                </h3>
+                <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  {{ t('organization-onboarding-intent-hint') }}
+                </p>
+              </div>
+              <div class="onboarding-intent-options grid gap-3 sm:grid-cols-2">
+                <button v-for="option in intentOptions" :key="option.value" type="button" class="d-btn onboarding-intent-option group h-auto min-h-20 w-full items-start justify-start gap-3 whitespace-normal rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900" :class="whiteCardToggleButtonClass(selectedIntent === option.value)" :data-test="`onboarding-intent-${option.value}`" @click="selectedIntent = option.value">
+                  <span class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500/10 text-primary-500"><component :is="option.icon" class="h-5 w-5" /></span>
+                  <span class="min-w-0">
+                    <span class="block text-sm font-semibold text-slate-950 dark:text-white">{{ t(`organization-onboarding-intent-option-${option.value}-label`) }}</span>
+                    <span class="onboarding-intent-option-description mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">{{ t(`organization-onboarding-intent-option-${option.value}-desc`) }}</span>
+                  </span>
+                </button>
+              </div>
+              <div class="onboarding-intent-actions flex justify-end border-t border-slate-200 pt-6 dark:border-white/15">
+                <button type="button" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" data-test="app-onboarding-continue-intent" :disabled="!selectedIntent" @click="continueFromIntent()">
+                  {{ t('unified-onboarding-continue-intent') }}<IconArrowRight class="h-4 w-4" />
+                </button>
+              </div>
             </div>
           </div>
         </div>
