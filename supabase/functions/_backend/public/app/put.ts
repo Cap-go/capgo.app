@@ -210,6 +210,8 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
         data = await persistAppOnboarding(c, appId, onboardingPatch, pgClient)
         if (!data)
           dbError = { message: 'App not found during onboarding progress update' }
+        else
+          completedPendingOnboarding = previousApp.need_onboarding === true && data.need_onboarding === false
       }
       catch (error) {
         dbError = { message: (error as Error)?.message }
@@ -242,6 +244,8 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
         completedPendingOnboarding = previousApp.need_onboarding === true && data.need_onboarding === false
       if (data && onboardingPatch)
         data = await persistAppOnboarding(c, appId, onboardingPatch) ?? data
+      if (data)
+        completedPendingOnboarding = previousApp.need_onboarding === true && data.need_onboarding === false
     }
   }
   finally {
