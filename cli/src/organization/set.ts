@@ -6,11 +6,13 @@ import { CliUserError } from '../shared/cli-user-error'
 import {
   assertOrgPermission,
   check2FAAccessForOrg,
-  createSupabaseClient,
+  fetchOrgMemberComplianceViaHttp,
   findSavedKey,
   formatError,
+  invokeCapgoCliApi,
   resolveCapgoPublicApiHost,
   resolveConfiguredCapgoPublicApiHost,
+  resolveUserIdFromApiKeyViaHttp,
   sendEvent,
 } from '../utils'
 
@@ -98,22 +100,27 @@ export async function setOrganizationInternal(
     throw new Error('Missing organization id')
   }
 
-  const supabase = await createSupabaseClient(
-    enrichedOptions.apikey,
-    enrichedOptions.supaHost,
-    enrichedOptions.supaAnon,
-  )
+  const hostOptions = { supaHost: enrichedOptions.supaHost, supaAnon: enrichedOptions.supaAnon }
   const organizationApiHost = await resolveOrganizationUpdateApiHost(enrichedOptions, silent)
-  await assertOrgPermission(supabase, enrichedOptions.apikey, 'org.update_settings', orgId, `Insufficient permissions to update organization ${orgId}`, silent)
+  await assertOrgPermission(null, enrichedOptions.apikey, 'org.update_settings', orgId, `Insufficient permissions to update organization ${orgId}`, silent, hostOptions)
 
-  await check2FAAccessForOrg(supabase, orgId, silent)
+  await check2FAAccessForOrg(enrichedOptions.apikey, orgId, silent, hostOptions)
 
-  // TODO(cli-http): GET organization omits enforcing_2fa/password_policy/security fields needed here
-  const { data: orgData, error: orgError } = await supabase
-    .from('orgs')
-    .select('name, management_email, created_by, enforcing_2fa, password_policy_config, require_apikey_expiration, max_apikey_expiration_days, enforce_hashed_api_keys')
-    .eq('id', orgId)
-    .single()
+  const { data: orgData, error: orgError } = await invokeCapgoCliApi<{
+    name?: string
+    management_email?: string
+    created_by?: string
+    enforcing_2fa?: boolean
+    password_policy_config?: PasswordPolicyConfig | null
+    require_apikey_expiration?: boolean
+    max_apikey_expiration_days?: number | null
+    enforce_hashed_api_keys?: boolean
+  }>(`organization?orgId=${encodeURIComponent(orgId)}`, {
+    apikey: enrichedOptions.apikey,
+    method: 'GET',
+    body: undefined,
+    ...hostOptions,
+  })
 
   if (orgError || !orgData) {
     if (!silent)
@@ -132,30 +139,26 @@ export async function setOrganizationInternal(
         // Enabling 2FA enforcement - check members and warn
         log.info('Checking organization members 2FA status...')
 
-        const { data: membersStatus, error: membersError } = await supabase
-          // TODO(cli-http): no HTTP equivalent for check_org_members_2fa_enabled
-          .rpc('check_org_members_2fa_enabled', { org_id: orgId })
+        const { data: compliance, error: membersError } = await fetchOrgMemberComplianceViaHttp(enrichedOptions.apikey, orgId, hostOptions)
 
-        if (membersError) {
-          log.error(`Cannot check members 2FA status: ${formatError(membersError)}`)
+        if (membersError || compliance?.members_2fa_error) {
+          log.error(`Cannot check members 2FA status: ${membersError ? formatError(membersError) : compliance?.members_2fa_error}`)
           throw new Error('Cannot check members 2FA status')
         }
 
-        // Also check if the current user has 2FA enabled
-        const { data: userHas2FA, error: user2FAError } = await supabase
-          // TODO(cli-http): no HTTP equivalent for has_2fa_enabled
-          .rpc('has_2fa_enabled')
-
-        if (user2FAError) {
-          log.error(`Cannot check your 2FA status: ${formatError(user2FAError)}`)
+        const membersStatus = compliance?.members_2fa
+        const userHas2FA = compliance?.caller_has_2fa
+        if (compliance?.caller_has_2fa_error) {
+          log.error(`Cannot check your 2FA status: ${compliance.caller_has_2fa_error}`)
           throw new Error('Cannot check your 2FA status')
         }
 
-        // Get current user ID to exclude from member count
-        const { data: currentUserId, error: identityError } = await supabase.rpc('request_actor_user_id') /* TODO(cli-http): identity RPC */
-
-        if (identityError || !currentUserId) {
-          log.error(`Cannot get current user identity: ${identityError ? formatError(identityError) : 'No user ID returned'}`)
+        let currentUserId: string
+        try {
+          currentUserId = await resolveUserIdFromApiKeyViaHttp(enrichedOptions.apikey, hostOptions)
+        }
+        catch (identityError) {
+          log.error(`Cannot get current user identity: ${formatError(identityError)}`)
           throw new Error('Cannot get current user identity')
         }
 
@@ -171,10 +174,15 @@ export async function setOrganizationInternal(
           }
 
           if (membersWithout2FA.length > 0) {
-            // Get member details
-            const { data: members, error: membersListError } = await supabase
-              // TODO(cli-http): prefer GET organization/members when only listing members
-              .rpc('get_org_members', { guild_id: orgId })
+            const { data: members, error: membersListError } = await invokeCapgoCliApi<Array<{ uid: string, email: string }>>(
+              `organization/members?orgId=${encodeURIComponent(orgId)}`,
+              {
+                apikey: enrichedOptions.apikey,
+                method: 'GET',
+                body: undefined,
+                ...hostOptions,
+              },
+            )
 
             if (membersListError) {
               log.error(`Cannot get organization members: ${formatError(membersListError)}`)
@@ -264,14 +272,13 @@ export async function setOrganizationInternal(
       if (passwordPolicy) {
         log.info('Configuring password policy for organization...')
 
-        // Check which members will be affected
-        const { data: membersStatus, error: membersError } = await supabase
-          // TODO(cli-http): no HTTP equivalent for check_org_members_password_policy
-          .rpc('check_org_members_password_policy', { org_id: orgId })
+        const { data: compliance, error: membersError } = await fetchOrgMemberComplianceViaHttp(enrichedOptions.apikey, orgId, hostOptions)
+        const membersStatus = compliance?.members_password
+        const policyErrorMessage = membersError ? formatError(membersError) : compliance?.members_password_error
 
-        if (membersError) {
-          if (!membersError.message?.includes('NO_RIGHTS')) {
-            log.warn(`Cannot check members password policy status: ${formatError(membersError)}`)
+        if (policyErrorMessage) {
+          if (!policyErrorMessage.includes('NO_RIGHTS')) {
+            log.warn(`Cannot check members password policy status: ${policyErrorMessage}`)
           }
         }
         else if (membersStatus) {

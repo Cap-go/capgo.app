@@ -2,25 +2,25 @@
 
 ## Missing endpoints (block full supabase-js removal)
 
-- [ ] GET organization v7-enriched fields (`get_orgs_v7` / rich org list with plan + warnings)
-- [ ] Password policy member status RPC (`check_org_members_password_policy`)
+- [x] GET organization v7-enriched fields (`GET /private/cli/orgs` wraps `get_orgs_v7`)
+- [x] Password policy / 2FA member status (`GET /private/cli/org-member-compliance`)
 - [ ] POST organization via API key (JWT-only `middlewareAuth` today)
 - [ ] Icon / storage uploads via Capgo HTTP (still supabase storage)
-- [ ] Channel-scoped current bundle HTTP that preserves `channel.read` RBAC (`get_channel_current_bundle_rbac`)
+- [x] Channel-scoped current bundle HTTP that preserves `channel.read` RBAC (`GET /private/cli/channel-current-bundle`)
 - [ ] PUT app fields still missing from HTTP: `allow_preview`, `build_timeout_seconds`, `default_upload_channel`
-- [ ] GET organization security fields (`enforcing_2fa`, `password_policy_config`, API-key policy flags)
+- [x] GET organization security fields (`enforcing_2fa`, `password_policy_config`, API-key policy flags)
 - [ ] GET channel fields still missing from HTTP response: `ios`, `android`, `owner_org`
 - [x] POST `bundle/prepare` — version upsert for CLI upload (`updateOrCreateVersion` → Capgo HTTP)
 - [x] GET `bundle/lookup` — version existence / latest name for auto-bump
 - [x] POST `private/finish_tus_upload` — set `r2_path` after TUS
-- [x] POST/GET `private/cli/*` — upload permission, plan check, warnings, 2FA app check, upload channel context, user id
+- [x] POST/GET `private/cli/*` — permission, plan, warnings, 2FA, orgs, current bundle, user id
 - [ ] Bundle compatibility `native_packages` dedicated endpoint (today via full GET bundle rows)
 - [ ] User-scoped storage cleanup path `apps/${appId}/${userId}` on app delete
 
 ## Partial (endpoint exists, CLI still needs more)
 
-- [ ] GET organization — usable for name/created_by/logo, not security settings
-- [ ] GET organization/members — member list migrated; 2FA/password enrichment still RPC
+- [x] GET organization — security settings now included in HTTP payload
+- [x] GET organization/members — member list + 2FA/password enrichment via `/private/cli/org-member-compliance`
 - [ ] PUT app — core settings migrated; preview/timeout/default upload channel still SDK
 - [ ] GET channel — list/find migrated; display defaults ios/android to false
 - [ ] GET/DELETE bundle — list/delete migrated; empty list currently returns API error that CLI maps to `[]`
@@ -29,16 +29,11 @@
 
 ## Still on supabase-js (file references)
 
-- `cli/src/utils.ts` — `resolveUserIdFromApiKey`, `hasCliPermission` / `assertCliPermission`, `checkPlanValid`, `updateOrCreateChannel` fallback, storage helpers
-- `cli/src/api/app.ts` — `check2FAComplianceForApp` uses HTTP when called with API key; legacy supabase RPC path kept for other commands
-- `cli/src/channel/currentBundle.ts` — channel row + `get_channel_current_bundle_rbac`
-- `cli/src/app/set.ts` — icon storage upload; `allow_preview` / `build_timeout_seconds` / `default_upload_channel`; download-channel helpers
+CLI `src/` no longer calls `supabase.rpc`. Remaining supabase-js use is PostgREST/storage, not RPC:
+
+- `cli/src/app/set.ts` — icon storage upload; `allow_preview` / `build_timeout_seconds` / `default_upload_channel`
 - `cli/src/app/delete.ts` — user-scoped storage cleanup
-- `cli/src/app/add.ts` — icon storage upload; org permission RPCs
-- `cli/src/organization/set.ts` — org security field reads + 2FA/password RPCs (writes already HTTP)
-- `cli/src/organization/members.ts` — org security settings select + 2FA/password RPCs (member list HTTP)
-- `cli/src/bundle/upload.ts` — migrated to Capgo HTTP for version upsert, channel context, permissions, plan checks, TUS finalize (AI auto-bump manifest fetch still uses supabase-js)
+- `cli/src/app/add.ts` — icon storage upload
+- `cli/src/bundle/upload.ts` — AI auto-bump manifest fetch still uses supabase-js
 - `cli/src/bundle/compatibility.ts` — native package reads when not using HTTP bundle payload
-- `cli/src/bundle/unlink.ts` — still uses permission/plan RPCs around HTTP unlink
 - `cli/src/channel/set.ts` — `checkCompatibilityNativePackages` still needs supabase client
-- `cli/src/preview/qr.ts` — 2FA + permission checks still SDK

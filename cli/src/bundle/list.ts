@@ -28,7 +28,7 @@ export async function listBundle(appId: string, options: OptionsBase, silent = f
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  await check2FAComplianceForApp(supabase, appId, silent)
+  await check2FAComplianceForApp(options.apikey, appId, silent, { supaHost: options.supaHost, supaAnon: options.supaAnon })
   await resolveUserIdFromApiKey(supabase, options.apikey)
   await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.read_bundles', silent, true)
 

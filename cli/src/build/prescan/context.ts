@@ -14,6 +14,8 @@ export interface BuildScanContextArgs {
   androidFlavor?: string
   apikey?: string
   supabase?: SupabaseClient<Database>
+  supaHost?: string
+  supaAnon?: string
   /** pre-merged credentials when called from build request (avoids double work) */
   credentials?: Record<string, string>
 }
@@ -46,5 +48,7 @@ export async function buildScanContext(args: BuildScanContextArgs): Promise<Scan
     androidFlavor: args.androidFlavor ?? credentials?.CAPGO_ANDROID_FLAVOR,
     apikey: args.apikey,
     supabase: args.supabase,
+    supaHost: args.supaHost,
+    supaAnon: args.supaAnon,
   }
 }

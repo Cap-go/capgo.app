@@ -26,7 +26,7 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  await check2FAComplianceForApp(supabase, appId, silent)
+  await check2FAComplianceForApp(options.apikey, appId, silent, { supaHost: options.supaHost, supaAnon: options.supaAnon })
 
   const httpOptions = {
     apikey: options.apikey,

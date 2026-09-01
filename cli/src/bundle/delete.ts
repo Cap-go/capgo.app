@@ -31,7 +31,7 @@ export async function deleteBundleInternal(bundleId: string, appId: string, opti
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  await check2FAComplianceForApp(supabase, appId, silent)
+  await check2FAComplianceForApp(options.apikey, appId, silent, { supaHost: options.supaHost, supaAnon: options.supaAnon })
   // TODO(cli-http): identity still uses rpc via resolveUserIdFromApiKey
   await resolveUserIdFromApiKey(supabase, options.apikey)
   await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'bundle.delete', silent, true)

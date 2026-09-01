@@ -53,7 +53,7 @@ describe('runPrescan', () => {
     expect(report.findings[0]?.enforceAfter).toBe(IOS_PRESCAN_EXPANSION_ENFORCE_AFTER)
   })
 
-  it('skips remote checks without supabase and reports one info finding', async () => {
+  it('skips remote checks without apikey and reports one info finding', async () => {
     const report = await runPrescan(baseCtx, [
       check({ id: 'r1', remote: true, run: async () => [{ id: 'r1', severity: 'error', title: 'x' }] }),
       check({ id: 'r2', remote: true }),

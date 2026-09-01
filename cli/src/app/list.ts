@@ -5,7 +5,7 @@ import { intro, log, outro } from '@clack/prompts'
 import { Table } from '@sauber/table'
 import { trackEvent } from '../analytics/track'
 import { checkAlerts } from '../api/update'
-import { createSupabaseClient, findSavedKey, formatError, getHumanDate, invokeCapgoCliApi, resolveUserIdFromApiKey } from '../utils'
+import { findSavedKey, formatError, getHumanDate, invokeCapgoCliApi, listOrgsViaHttp, resolveUserIdFromApiKey } from '../utils'
 
 interface AppListOptions extends OptionsBase {
   filterByOrgId?: string
@@ -123,10 +123,10 @@ export async function listAppInternal(options: AppListOptions, silent = false) {
     writePlain('Use provided API key')
   options.apikey = options.apikey || findSavedKey(false, outputText ? writePlain : undefined)
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon, Boolean(outputText))
-
-  // TODO(cli-http): identity still uses rpc via resolveUserIdFromApiKey
-  await resolveUserIdFromApiKey(supabase, options.apikey)
+  await resolveUserIdFromApiKey(null, options.apikey, Boolean(outputText), {
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
 
   if (!silent) {
     if (options.filterByOrgId) {
@@ -161,10 +161,11 @@ export async function listAppInternal(options: AppListOptions, silent = false) {
     else {
       const orgNames = new Map<string, string>()
       if (options.showOrg) {
-        const { data, error } = await supabase.rpc('get_orgs_v7')
-        if (error)
-          throw new Error(`Cannot get organizations: ${formatError(error)}`)
-        for (const org of data ?? [])
+        const orgs = await listOrgsViaHttp(options.apikey!, {
+          supaHost: options.supaHost,
+          supaAnon: options.supaAnon,
+        })
+        for (const org of orgs)
           orgNames.set(org.gid, org.name ?? 'Unknown')
       }
 

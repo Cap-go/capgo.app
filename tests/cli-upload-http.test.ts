@@ -126,6 +126,51 @@ describe('private/cli upload helpers', () => {
   })
 })
 
+describe('private/cli remaining RPC wrappers', () => {
+  it('lists orgs for the apikey user', async () => {
+    const response = await fetch(getEndpointUrl('/private/cli/orgs'), {
+      method: 'GET',
+      headers: scopedHeaders,
+    })
+    const data = await response.json() as { orgs?: Array<{ gid?: string }> }
+    expect(response.status).toBe(200)
+    expect(Array.isArray(data.orgs)).toBe(true)
+    expect(data.orgs?.some(org => org.gid === ORG_ID)).toBe(true)
+  })
+
+  it('rejects check-plan for an org the apikey cannot read', async () => {
+    const response = await fetch(getEndpointUrl('/private/cli/check-plan'), {
+      method: 'POST',
+      headers: scopedHeaders,
+      body: JSON.stringify({ org_id: OTHER_ORG_ID }),
+    })
+    const data = await response.json() as { error?: string }
+    expect(response.status).toBe(401)
+    expect(data.error).toBe('not_authorized')
+  })
+
+  it('rejects check-2fa-org for an org the apikey cannot access', async () => {
+    const response = await fetch(getEndpointUrl('/private/cli/check-2fa-org'), {
+      method: 'POST',
+      headers: scopedHeaders,
+      body: JSON.stringify({ org_id: OTHER_ORG_ID }),
+    })
+    const data = await response.json() as { error?: string }
+    expect(response.status).toBe(401)
+    expect(data.error).toBe('not_authorized')
+  })
+
+  it('rejects channel-current-bundle without app_id or channel', async () => {
+    const response = await fetch(getEndpointUrl('/private/cli/channel-current-bundle'), {
+      method: 'GET',
+      headers: scopedHeaders,
+    })
+    const data = await response.json() as { error?: string }
+    expect(response.status).toBe(400)
+    expect(data.error).toBe('missing_fields')
+  })
+})
+
 describe('private/finish_tus_upload validation', () => {
   it('rejects null JSON body without throwing', async () => {
     const response = await fetch(getEndpointUrl('/private/finish_tus_upload'), {

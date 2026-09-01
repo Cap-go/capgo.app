@@ -85,7 +85,7 @@ export async function addChannelInternal(channelId: string, appId: string, optio
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon, silent)
-  await check2FAComplianceForApp(supabase, appId, silent)
+  await check2FAComplianceForApp(options.apikey, appId, silent, { supaHost: options.supaHost, supaAnon: options.supaAnon })
   // TODO(cli-http): identity still uses request_actor_user_id via resolveUserIdFromApiKey
   await resolveUserIdFromApiKey(supabase, options.apikey)
   // Creating a channel needs the exact RBAC permission. The backend and channels

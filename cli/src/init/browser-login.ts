@@ -4,7 +4,7 @@ import { isCancel, log, password } from '@clack/prompts'
 import open from 'open'
 import { validateAndSaveKey } from '../auth/session'
 import { CliUserError } from '../shared/cli-user-error'
-import { consoleWebUrl, createSupabaseClient, resolveUserIdFromApiKey, sendEvent } from '../utils'
+import { consoleWebUrl, listOrgsViaHttp, resolveUserIdFromApiKey, sendEvent } from '../utils'
 
 interface BrowserLoginOptions extends SaveKeyOptions {
   local: boolean
@@ -38,12 +38,10 @@ async function promptForKey(): Promise<string | undefined> {
 }
 
 async function listOrganizationIds(key: string, options: BrowserLoginOptions): Promise<string[]> {
-  const supabase = await createSupabaseClient(key, options.supaHost, options.supaAnon, true)
-  await resolveUserIdFromApiKey(supabase, key, true)
-  const { data, error } = await supabase.rpc('get_orgs_v7')
-  if (error)
-    throw error
-  return (data ?? []).map(org => org.gid)
+  const host = { supaHost: options.supaHost, supaAnon: options.supaAnon }
+  await resolveUserIdFromApiKey(null, key, true, host)
+  const orgs = await listOrgsViaHttp(key, host)
+  return orgs.map(org => org.gid)
 }
 
 const defaults: BrowserLoginDependencies = {

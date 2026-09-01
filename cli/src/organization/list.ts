@@ -6,9 +6,8 @@ import { trackEvent } from '../analytics/track'
 import { checkAlerts } from '../api/update'
 import {
   consoleWebUrl,
-  createSupabaseClient,
   findSavedKey,
-  formatError,
+  listOrgsViaHttp,
   resolveUserIdFromApiKey,
 } from '../utils'
 
@@ -70,25 +69,26 @@ export async function listOrganizationsInternal(options: OptionsBase, silent = f
     throw new Error('Missing API key')
   }
 
-  const supabase = await createSupabaseClient(
-    enrichedOptions.apikey,
-    enrichedOptions.supaHost,
-    enrichedOptions.supaAnon,
-  )
-  await resolveUserIdFromApiKey(supabase, enrichedOptions.apikey)
+  await resolveUserIdFromApiKey(null, enrichedOptions.apikey, silent, {
+    supaHost: enrichedOptions.supaHost,
+    supaAnon: enrichedOptions.supaAnon,
+  })
 
   if (!silent)
     log.info('Getting organizations from Capgo')
 
-  const { error, data: allOrganizations } = await supabase.rpc('get_orgs_v7')
-
-  if (error) {
-    if (!silent)
-      log.error(`Cannot get organizations ${formatError(error)}`)
-    throw new Error(`Cannot get organizations: ${formatError(error)}`)
+  let organizations
+  try {
+    organizations = await listOrgsViaHttp(enrichedOptions.apikey, {
+      supaHost: enrichedOptions.supaHost,
+      supaAnon: enrichedOptions.supaAnon,
+    })
   }
-
-  const organizations = allOrganizations || []
+  catch (error) {
+    if (!silent)
+      log.error(`Cannot get organizations ${error instanceof Error ? error.message : String(error)}`)
+    throw error instanceof Error ? error : new Error(`Cannot get organizations: ${String(error)}`)
+  }
 
   void trackEvent({ channel: 'organization', event: 'Orgs Listed', tags: { org_count: organizations.length } })
 

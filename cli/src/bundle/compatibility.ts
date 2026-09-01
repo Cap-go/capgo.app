@@ -62,7 +62,7 @@ export async function checkCompatibilityInternal(
     enrichedOptions.supaHost,
     enrichedOptions.supaAnon,
   )
-  await check2FAComplianceForApp(supabase, resolvedAppId, silent)
+  await check2FAComplianceForApp(enrichedOptions.apikey, resolvedAppId, silent, { supaHost: enrichedOptions.supaHost, supaAnon: enrichedOptions.supaAnon })
   await checkAppExistsAndHasPermissionOrgErr(
     supabase,
     enrichedOptions.apikey,

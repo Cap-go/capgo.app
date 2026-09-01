@@ -4,28 +4,21 @@ import { checkAppExistsAndHasPermissionOrgErr } from '../src/api/app.ts'
 import { CliUserError } from '../src/shared/cli-user-error.ts'
 import { shouldCapturePosthogException } from '../src/posthog.ts'
 
-const calls = []
-const supabase = {
-  from() {
-    return {}
-  },
-  rpc(name, args) {
-    calls.push({ name, args })
-    if (name === 'cli_check_permission') {
-      return Promise.resolve({ data: true, error: null })
-    }
-    throw new Error(`Unexpected RPC call: ${name}`)
-  },
-}
-
 const originalFetch = globalThis.fetch
 const fetchCalls = []
+let permissionAllowed = true
 
 globalThis.fetch = async (input, init) => {
   const url = String(input)
-  fetchCalls.push({ url, method: init?.method ?? 'GET' })
+  fetchCalls.push({ url, method: init?.method ?? 'GET', body: init?.body })
   if (url.includes('/private/config')) {
     return new Response(JSON.stringify({}), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+  if (url.includes('/private/cli/check-permission')) {
+    return new Response(JSON.stringify({ allowed: permissionAllowed }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })
@@ -47,92 +40,63 @@ globalThis.fetch = async (input, init) => {
 
 try {
   await checkAppExistsAndHasPermissionOrgErr(
-    supabase,
     'ck_plain_cli_key',
     'com.example.app',
     'app.read_bundles',
-    true,
-    true,
+    { silent: true, skip2FACheck: true },
   )
 
-  assert.deepEqual(calls.map(call => call.name), ['cli_check_permission'])
+  assert.ok(fetchCalls.some(call => call.url.includes('/private/cli/check-permission')), 'expected HTTP permission check')
   assert.ok(fetchCalls.some(call => /\/app\/com\.example\.app$/.test(call.url)), 'expected GET app existence check')
-  assert.deepEqual(calls[0].args, {
-    apikey: 'ck_plain_cli_key',
+  const permissionCall = fetchCalls.find(call => call.url.includes('/private/cli/check-permission'))
+  assert.deepEqual(JSON.parse(permissionCall.body), {
     permission_key: 'app.read_bundles',
     org_id: null,
     app_id: 'com.example.app',
     channel_id: null,
   })
 
-  calls.length = 0
   fetchCalls.length = 0
 
   await checkAppExistsAndHasPermissionOrgErr(
-    supabase,
     'ck_channel_cli_key',
     'com.example.app',
     'channel.delete',
-    true,
-    true,
-    42,
+    { silent: true, skip2FACheck: true, channelId: 42 },
   )
 
-  assert.deepEqual(calls.map(call => call.name), ['cli_check_permission'])
   assert.equal(fetchCalls.filter(call => /\/app\//.test(call.url)).length, 0, 'channel-scoped checks skip app existence HTTP call')
-  assert.deepEqual(calls[0].args, {
-    apikey: 'ck_channel_cli_key',
+  assert.deepEqual(JSON.parse(fetchCalls.find(call => call.url.includes('/private/cli/check-permission')).body), {
     permission_key: 'channel.delete',
     org_id: null,
     app_id: 'com.example.app',
     channel_id: 42,
   })
-  calls.length = 0
   fetchCalls.length = 0
 
   await checkAppExistsAndHasPermissionOrgErr(
-    supabase,
     'ck_channel_update_key',
     'com.example.app',
     'channel.update_settings',
-    true,
-    true,
-    77,
+    { silent: true, skip2FACheck: true, channelId: 77 },
   )
 
-  assert.deepEqual(calls.map(call => call.name), ['cli_check_permission'])
-  assert.deepEqual(calls[0].args, {
-    apikey: 'ck_channel_update_key',
+  assert.deepEqual(JSON.parse(fetchCalls.find(call => call.url.includes('/private/cli/check-permission')).body), {
     permission_key: 'channel.update_settings',
     org_id: null,
     app_id: 'com.example.app',
     channel_id: 77,
   })
 
-  calls.length = 0
   fetchCalls.length = 0
-
-  const deniedSupabase = {
-    from() {
-      return {}
-    },
-    rpc(name, args) {
-      calls.push({ name, args })
-      if (name === 'cli_check_permission') {
-        return Promise.resolve({ data: false, error: null })
-      }
-      throw new Error(`Unexpected RPC call: ${name}`)
-    },
-  }
+  permissionAllowed = false
 
   await assert.rejects(
     () => checkAppExistsAndHasPermissionOrgErr(
-      deniedSupabase,
       'ck_denied_key',
       'com.example.app',
       'app.upload_bundle',
-      true,
-      true,
+      { silent: true, skip2FACheck: true },
     ),
     (error) => {
       assert.equal(error instanceof CliUserError, true)
@@ -149,7 +113,7 @@ try {
     },
   )
 
-  assert.deepEqual(calls.map(call => call.name), ['cli_check_permission'])
+  assert.ok(fetchCalls.some(call => call.url.includes('/private/cli/check-permission')), 'denied path still uses HTTP permission check')
 
   console.log('app permission helper tests passed')
 }
