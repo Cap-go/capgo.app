@@ -123,7 +123,7 @@ export async function listAppInternal(options: AppListOptions, silent = false) {
     writePlain('Use provided API key')
   options.apikey = options.apikey || findSavedKey(false, outputText ? writePlain : undefined)
 
-  await resolveUserIdFromApiKey(null, options.apikey, Boolean(outputText), {
+  await resolveUserIdFromApiKey(null, options.apikey, silent || Boolean(outputText), {
     supaHost: options.supaHost,
     supaAnon: options.supaAnon,
   })
@@ -161,12 +161,17 @@ export async function listAppInternal(options: AppListOptions, silent = false) {
     else {
       const orgNames = new Map<string, string>()
       if (options.showOrg) {
-        const orgs = await listOrgsViaHttp(options.apikey!, {
-          supaHost: options.supaHost,
-          supaAnon: options.supaAnon,
-        })
-        for (const org of orgs)
-          orgNames.set(org.gid, org.name ?? 'Unknown')
+        try {
+          const orgs = await listOrgsViaHttp(options.apikey!, {
+            supaHost: options.supaHost,
+            supaAnon: options.supaAnon,
+          })
+          for (const org of orgs)
+            orgNames.set(org.gid, org.name ?? 'Unknown')
+        }
+        catch (orgError) {
+          log.warn(`Cannot load organization names: ${formatError(orgError)}`)
+        }
       }
 
       log.info(`Active app in Capgo: ${allApps.length}`)
