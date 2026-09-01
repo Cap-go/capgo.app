@@ -136,6 +136,10 @@ export const SUPABASE_ANON_KEY = env.SUPABASE_ANON_KEY ?? ''
  * All other endpoints go to the API worker
  */
 export function getEndpointUrl(path: string): string {
+  // PostgREST is always served from the Supabase API host (also under Cloudflare CI).
+  if (path.startsWith('/rest/'))
+    return `${SUPABASE_BASE_URL}${path}`
+
   if (!USE_CLOUDFLARE) {
     // In CI, Node/Undici prefers IPv6 for localhost (::1). Supabase Edge runtime
     // is bound to IPv4 (127.0.0.1) in the workflow, so normalize to IPv4.
