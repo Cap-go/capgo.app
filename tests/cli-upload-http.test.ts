@@ -19,6 +19,7 @@ const OTHER_ORG_ID = ORG_ID_2
 let scopedHeaders: Record<string, string>
 let scopedApiKeyId: number | undefined
 let scopedApiKeyRbacId: string | undefined
+const extraApiKeys: Array<{ id: number, rbac_id: string }> = []
 
 beforeAll(async () => {
   await resetAndSeedAppData(APPNAME)
@@ -44,16 +45,24 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  if (scopedApiKeyRbacId) {
+  const rbacIds = [
+    ...extraApiKeys.map(key => key.rbac_id),
+    ...(scopedApiKeyRbacId ? [scopedApiKeyRbacId] : []),
+  ]
+  const apiKeyIds = [
+    ...extraApiKeys.map(key => key.id),
+    ...(scopedApiKeyId !== undefined ? [scopedApiKeyId] : []),
+  ]
+  for (const rbacId of rbacIds) {
     await executeSQL(
       `DELETE FROM public.role_bindings
        WHERE principal_type = public.rbac_principal_apikey()
          AND principal_id = $1::uuid`,
-      [scopedApiKeyRbacId],
+      [rbacId],
     )
   }
-  if (scopedApiKeyId !== undefined)
-    await executeSQL('DELETE FROM public.apikeys WHERE id = $1', [scopedApiKeyId])
+  for (const apiKeyId of apiKeyIds)
+    await executeSQL('DELETE FROM public.apikeys WHERE id = $1', [apiKeyId])
   await resetAppData(APPNAME)
 })
 
@@ -180,6 +189,92 @@ describe('private/cli remaining RPC wrappers', () => {
     const data = await response.json() as { error?: string }
     expect(response.status).toBe(401)
     expect(data.error).toBe('not_authorized')
+  })
+
+  it('rejects check-2fa-app for a billing-only key with no app or channel binding', async () => {
+    const apiKey = await createDirectApiKeyWithBindings({
+      userId: USER_ID,
+      key: randomUUID(),
+      name: `cli-upload-http-billing-${id}`,
+      orgId: ORG_ID,
+      roleName: 'org_billing_admin',
+    })
+    extraApiKeys.push({ id: apiKey.id, rbac_id: apiKey.rbac_id })
+
+    const response = await fetch(getEndpointUrl('/private/cli/check-2fa-app'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        capgkey: apiKey.key!,
+      },
+      body: JSON.stringify({ app_id: APPNAME }),
+    })
+    const data = await response.json() as { error?: string }
+    expect(response.status).toBe(401)
+    expect(data.error).toBe('not_authorized')
+  })
+
+  it('allows check-2fa-app for a channel-scoped key bound to that app', async () => {
+    const apiKey = await createDirectApiKeyWithBindings({
+      userId: USER_ID,
+      key: randomUUID(),
+      name: `cli-upload-http-channel-${id}`,
+      orgId: ORG_ID,
+      roleName: 'org_billing_admin',
+    })
+    extraApiKeys.push({ id: apiKey.id, rbac_id: apiKey.rbac_id })
+
+    const [app] = await executeSQL(
+      'SELECT id FROM public.apps WHERE app_id = $1 LIMIT 1',
+      [APPNAME],
+    )
+    const [channel] = await executeSQL(
+      `SELECT rbac_id FROM public.channels
+       WHERE app_id = $1 AND name = 'production'
+       LIMIT 1`,
+      [APPNAME],
+    )
+    expect(app?.id).toBeTruthy()
+    expect(channel?.rbac_id).toBeTruthy()
+
+    await executeSQL(
+      `INSERT INTO public.role_bindings (
+         principal_type, principal_id, role_id, scope_type, org_id, app_id, channel_id,
+         granted_by, reason, is_direct
+       )
+       SELECT
+         public.rbac_principal_apikey(), $1::uuid, r.id, public.rbac_scope_channel(),
+         $2::uuid, $3::uuid, $4::uuid, $5::uuid,
+         'CLI 2FA channel-scope preflight test', true
+       FROM public.roles r
+       WHERE r.name = public.rbac_role_channel_reader()
+         AND r.scope_type = public.rbac_scope_channel()`,
+      [apiKey.rbac_id, ORG_ID, app.id, channel.rbac_id, USER_ID],
+    )
+
+    const allowed = await fetch(getEndpointUrl('/private/cli/check-2fa-app'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        capgkey: apiKey.key!,
+      },
+      body: JSON.stringify({ app_id: APPNAME }),
+    })
+    const allowedData = await allowed.json() as { reject?: boolean, error?: string }
+    expect(allowed.status).toBe(200)
+    expect(typeof allowedData.reject).toBe('boolean')
+
+    const denied = await fetch(getEndpointUrl('/private/cli/check-2fa-app'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        capgkey: apiKey.key!,
+      },
+      body: JSON.stringify({ app_id: `com.cli.upload.http.other.${id}` }),
+    })
+    const deniedData = await denied.json() as { error?: string }
+    expect(denied.status).toBe(401)
+    expect(deniedData.error).toBe('not_authorized')
   })
 
   it('rejects channel-current-bundle without app_id or channel', async () => {
