@@ -622,9 +622,8 @@ async function readUpdateDeliveryStatsCF(
   endInclusive: Dayjs,
 ) {
   if (scope === 'platform') {
-    // In-engine aggregate of timed completes (double1). AE SQL cannot parse
-    // blob4 JSON or pair start/complete without untyped NULL IF() (CFA 422).
-    // Same metadata-only contract as the Postgres platform path.
+    // In-engine aggregate: prefer double1, else first-start/first-complete.
+    // CFA IF() cannot use untyped NULL next to Double/DateTime.
     const { dailyRows, overviewRow } = await readPlatformUpdateDeliveryStatsCF(c, {
       query_start: start.subtract(2, 'hour').toISOString(),
       period_start: start.toISOString(),
@@ -638,7 +637,7 @@ async function readUpdateDeliveryStatsCF(
         scope,
         event_count: 0,
         app_count: null,
-        allow_pairing: false,
+        allow_pairing: true,
         start: start.toISOString(),
         end: endExclusive.toISOString(),
       })

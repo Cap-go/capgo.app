@@ -52,7 +52,7 @@ export const ANALYTICS_ENGINE_SQL_LINT_RULES: AnalyticsEngineSqlLintRule[] = [
   },
   {
     id: 'no-if-untyped-null',
-    test: sql => /,\s*NULL\s*\)/.test(sql),
+    test: sql => /,\s*NULL\s*(?:,|\))/.test(sql),
     message: 'Analytics Engine SQL IF() branches must share a type; untyped NULL cannot pair with Double or DateTime',
   },
 ]
