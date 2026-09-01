@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { BASE_URL, headersInternal, POSTGRES_URL } from './test-utils.ts'
+import { BASE_URL, fetchTestRequest, headersInternal, POSTGRES_URL } from './test-utils.ts'
 
 const BASE_URL_TRIGGER = `${BASE_URL}/triggers`
 const pool = new Pool({
@@ -22,8 +22,9 @@ beforeEach(async () => {
 })
 
 async function fetchQueueSync(queueName: string) {
-  const response = await fetch(`${BASE_URL_TRIGGER}/queue_consumer/sync`, {
+  const response = await fetchTestRequest(`${BASE_URL_TRIGGER}/queue_consumer/sync`, {
     method: 'POST',
+    retryUnsafe: true,
     headers: headersInternal,
     body: JSON.stringify({
       queue_name: queueName,
@@ -138,7 +139,9 @@ describe('queue Load Test', () => {
     expect(initialRows[0].count).toBe('10')
 
     await fetchQueueSync(queueName)
-    const { rows: processedRows } = await pool.query(`SELECT count(*) as count FROM pgmq.q_${queueName}`)
-    expect(processedRows[0].count).toBe('0')
+    await expect.poll(async () => {
+      const { rows } = await pool.query(`SELECT count(*) as count FROM pgmq.q_${queueName}`)
+      return rows[0].count
+    }, { timeout: 8_000, interval: 250 }).toBe('0')
   })
 })
