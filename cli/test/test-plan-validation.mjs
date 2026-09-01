@@ -128,6 +128,25 @@ await test('checkPlanValid reports permission denial instead of billing upgrade 
   assert(!thrown.message.includes('Plan upgrade required'), 'Must not report a billing upgrade for RBAC denial')
 })
 
+await test('checkPlanValid treats result=allowed as success even without valid', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.includes('/private/config'))
+      return json({ hostWeb: 'https://console.capgo.app' })
+    if (url.includes('/private/cli/check-plan'))
+      return json({ result: 'allowed', trial_days: 0, is_paying: true, has_credits: false })
+    throw new Error(`Unexpected fetch: ${url}`)
+  }
+
+  try {
+    await utils.checkPlanValid('ck_key', 'org-id', 'com.example.app', false, HOST)
+  }
+  finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 await test('canOpenExternalUrl is disabled in CI-like environments', () => {
   assert(typeof utils.canOpenExternalUrl === 'function', 'Expected canOpenExternalUrl to be exported')
   assertEquals(utils.canOpenExternalUrl({

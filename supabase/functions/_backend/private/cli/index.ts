@@ -110,16 +110,19 @@ async function hasApiKeyBindingOnApp(
   // Match reject_access_due_to_2fa_for_app: a live app or channel binding on this app
   // is enough for 2FA preflight. Do not restrict to scope_type=app — that 401s
   // channel-only keys. Bundle-only bindings are not 2FA-preflight access.
-  const { data: binding } = await admin
+  const { data: binding, error: bindingError } = await admin
     .from('role_bindings')
     .select('id')
     .eq('principal_type', 'apikey')
     .eq('principal_id', apikey.rbac_id)
     .eq('app_id', appRow.id)
     .in('scope_type', ['app', 'channel'])
-    .or('expires_at.is.null,expires_at.gt.now()')
+    .or('expires_at.is.null,expires_at.gt.now')
     .limit(1)
     .maybeSingle()
+
+  if (bindingError)
+    return quickError(500, 'binding_lookup_failed', 'Cannot verify API key access to this app', { error: bindingError })
 
   return !!binding
 }

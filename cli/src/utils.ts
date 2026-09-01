@@ -1214,7 +1214,7 @@ export async function checkPlanValid(
 
   if (data?.result === 'permission_denied')
     await throwPlanPermissionDenied()
-  if (data?.result === 'billing_denied' || !data?.valid)
+  if (data?.result === 'billing_denied' || (data?.result !== 'allowed' && !data?.valid))
     await throwPlanUpgradeRequired(plansUrl, 'Plan upgrade required')
 
   if (shouldWarnTrialExpiry({
