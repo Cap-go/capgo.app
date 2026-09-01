@@ -3,6 +3,7 @@ import { stderr, stdout } from 'node:process'
 import { intro, log, outro } from '@clack/prompts'
 import { Table } from '@sauber/table'
 import { checkAlerts } from '../api/update'
+import { observeDaysSchema, observeOptionsObjectSchema } from '../schemas'
 import { CliUserError } from '../shared/cli-user-error'
 import { formatError, getAppId, getConfig } from '../utils'
 import { fetchObserve } from './api'
@@ -40,18 +41,20 @@ function parseObserveDays(value: string | undefined): ObserveOptions['days'] {
   const parsed = parsePositiveInt(value, '--days')
   if (parsed == null)
     return undefined
-  if (parsed === 1 || parsed === 3 || parsed === 7 || parsed === 30)
-    return parsed
-  throw new CliUserError('--days must be 1, 3, 7, or 30')
+  const result = observeDaysSchema.safeParse(parsed)
+  if (!result.success)
+    throw new CliUserError('--days must be 1, 3, 7, or 30')
+  return result.data
 }
 
 function parseObserveLimit(value: string | undefined) {
   const parsed = parsePositiveInt(value, '--limit')
   if (parsed == null)
     return undefined
-  if (parsed > 100)
+  const result = observeOptionsObjectSchema.shape.limit.safeParse(parsed)
+  if (!result.success)
     throw new CliUserError('--limit must be between 1 and 100')
-  return parsed
+  return result.data
 }
 
 function parseObserveSort(value: string | undefined): ObserveOptions['sort'] | undefined {
