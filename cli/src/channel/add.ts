@@ -6,6 +6,7 @@ import { trackEvent } from '../analytics/track'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { createChannel, findChannel } from '../api/channels'
 import { isChannelAlreadyExistsError } from '../init/channel-conflict'
+import { CliUserError } from '../shared/cli-user-error'
 import {
   createSupabaseClient,
   findSavedKey,
@@ -75,7 +76,7 @@ export async function addChannelInternal(channelId: string, appId: string, optio
   if (!options.apikey) {
     if (!silent)
       log.error('Missing API key, you need to provide an API key to upload your bundle')
-    throw new Error('Missing API key')
+    throw new CliUserError('Missing API key')
   }
 
   if (!appId) {
