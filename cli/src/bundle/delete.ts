@@ -2,6 +2,7 @@ import type { BundleDeleteOptions } from '../schemas/bundle'
 import { intro, log, outro } from '@clack/prompts'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { deleteSpecificVersion } from '../api/versions'
+import { CliUserError } from '../shared/cli-user-error'
 import { createSupabaseClient, findSavedKey, getAppId, getConfig, getOrganizationId, resolveUserIdFromApiKey, sendEvent } from '../utils'
 
 export async function deleteBundleInternal(bundleId: string, appId: string, options: BundleDeleteOptions, silent = false) {
@@ -21,7 +22,7 @@ export async function deleteBundleInternal(bundleId: string, appId: string, opti
   if (!appId) {
     if (!silent)
       log.error('Missing argument, you need to provide a appId, or be in a capacitor project')
-    throw new Error('Missing appId')
+    throw new CliUserError('Missing appId')
   }
 
   if (!bundleId) {

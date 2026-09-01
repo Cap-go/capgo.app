@@ -28,6 +28,7 @@ import {
   resolveUpdaterPackageJsonPath,
 } from '../recovery/bundle-zip'
 import { ensureNotifyAppReadyInBuildFolder, buildCiNotifyAppReadyMessage } from '../recovery/notify-app-ready'
+import { CliUserError } from '../shared/cli-user-error'
 import { parsePackageJsonOptionPaths, resolveAppIdWithRecovery } from '../recovery/app-id'
 import { checkIndexPosition, searchInDirectory } from './check'
 
@@ -42,6 +43,13 @@ function emitJson(value: unknown) {
 
 function emitJsonError(error: unknown) {
   console.error(formatError(error))
+}
+
+function emitCliUserJsonError(error: CliUserError) {
+  if (error.context?.message)
+    emitJsonError({ error: error.message, message: error.context.message })
+  else
+    emitJsonError({ error: error.message })
 }
 
 export async function zipBundleInternal(appId: string, options: BundleZipOptions, silent = false): Promise<ZipResult> {
@@ -72,7 +80,7 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
       intro(`Zipping ${resolvedAppId ?? 'app'}@${bundle}`)
 
     // Expected setup failures use plain Error (not CliUserError) so PostHog still captures
-    // real user aborts after declined recovery. notifyAppReady stays a bare Error too.
+    // real user aborts after declined recovery.
     if (bundle && !regexSemver.test(bundle)) {
       if (interactive) {
         const recoveredBundle = await recoverInvalidSemverBundle(bundle, resolveLocalSemverFallback(uuid))
@@ -116,13 +124,22 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
 
     if (shouldCheckNotifyAppReady) {
       if (!searchInDirectory(path, 'notifyAppReady')) {
-        const recovery = await ensureNotifyAppReadyInBuildFolder({
-          webDir: path,
-          interactive,
-          json,
-        })
-        if (recovery !== 'skipped' && !searchInDirectory(path, 'notifyAppReady')) {
-          throw new Error(buildCiNotifyAppReadyMessage(path))
+        if (interactive) {
+          const recovery = await ensureNotifyAppReadyInBuildFolder({
+            webDir: path,
+            interactive,
+            json,
+          })
+          if (recovery !== 'skipped' && !searchInDirectory(path, 'notifyAppReady')) {
+            throw new CliUserError('notifyAppReady() is missing in build folder')
+          }
+        }
+        else {
+          throw json
+            ? new CliUserError('notifyAppReady_not_in_source_code', {
+                message: buildCiNotifyAppReadyMessage(path),
+              })
+            : new CliUserError(buildCiNotifyAppReadyMessage(path))
         }
       }
 
@@ -227,10 +244,15 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
   }
   catch (error) {
     if (!silent) {
-      if (json)
-        emitJsonError(error)
-      else
+      if (json) {
+        if (error instanceof CliUserError)
+          emitCliUserJsonError(error)
+        else
+          emitJsonError(error)
+      }
+      else {
         log.error(formatError(error))
+      }
     }
     throw error instanceof Error ? error : new Error(String(error))
   }

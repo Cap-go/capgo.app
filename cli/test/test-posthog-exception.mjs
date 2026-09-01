@@ -285,7 +285,9 @@ try {
       { appId: 'com.other.app', requiredPermissionKey: 'app.upload_bundle' },
     ).message,
   )
-
+  assert.equal(shouldCapturePosthogException(new CliUserError('notifyAppReady() is missing in build folder')), false)
+  assert.equal(shouldCapturePosthogException(new CliUserError('Missing public key in config')), false)
+  assert.equal(shouldCapturePosthogException(new CliUserError('Missing appId')), false)
   // Two failures on different channels must be treated identically (one issue,
   // not one per channel), since the channel name lives in context, not the message.
   assert.equal(

@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../../types/supabase.types'
 import type { Platform, ScanContext } from './types'
 import { getConfig } from '../../utils'
+import { CliUserError } from '../../shared/cli-user-error'
 import { mergeCredentials } from '../credentials'
 import { withCwd } from '../cwd'
 
@@ -28,7 +29,7 @@ export async function buildScanContext(args: BuildScanContextArgs): Promise<Scan
   try { config = (await withCwd(args.projectDir, () => getConfig(true))).config }
   catch { config = undefined } // no capacitor project — checks degrade individually
   const appId = args.appId ?? config?.appId
-  if (!appId) throw new Error('Missing appId: pass it explicitly or run inside a Capacitor project')
+  if (!appId) throw new CliUserError('Missing appId: pass it explicitly or run inside a Capacitor project')
   const credentials = args.credentials
     ?? (await mergeCredentials(appId, args.platform) as Record<string, string> | undefined)
   return {
