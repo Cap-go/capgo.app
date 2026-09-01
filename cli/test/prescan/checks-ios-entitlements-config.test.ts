@@ -11,6 +11,7 @@ import {
   appGroupsFormat,
   apsEnvironmentVsMode,
   associatedDomainsFormat,
+  entitlementsDeclaredAgeRange,
   entitlementsVsProfileCapability,
 } from '../../src/build/prescan/checks/ios-entitlements-checks'
 import { makeCtx, makeProject } from './helpers'
@@ -433,6 +434,63 @@ describe('ios/entitlements-app-groups-format', () => {
   it('passes a well-formed group identifier', async () => {
     const ctx = ctxWithEntitlements('<key>com.apple.security.application-groups</key><array><string>group.com.demo.app</string></array>')
     expect(await appGroupsFormat.run(ctx)).toEqual([])
+  })
+})
+
+// ===========================================================================
+// §2.C  ios/entitlements-declared-age-range
+// ===========================================================================
+
+describe('ios/entitlements-declared-age-range', () => {
+  const pkgWithPlugin = JSON.stringify({ name: 'demo', dependencies: { '@capgo/capacitor-age-range': '8.1.12' } })
+  const pkgWithout = JSON.stringify({ name: 'demo', dependencies: {} })
+
+  it('does not apply without the plugin', () => {
+    const dir = makeProject({
+      'package.json': pkgWithout,
+      'ios/App/App/App.entitlements': entitlementsFile(''),
+    })
+    const ctx = makeCtx({ projectDir: dir, platform: 'ios', credentials: UPLOAD_CREDS })
+    expect(entitlementsDeclaredAgeRange.appliesTo?.(ctx)).toBe(false)
+  })
+
+  it('does not apply when not uploading', () => {
+    const dir = makeProject({
+      'package.json': pkgWithPlugin,
+      'ios/App/App/App.entitlements': entitlementsFile(''),
+    })
+    const ctx = makeCtx({ projectDir: dir, platform: 'ios' })
+    expect(entitlementsDeclaredAgeRange.appliesTo?.(ctx)).toBe(false)
+  })
+
+  it('warns when the plugin is present without the entitlement', async () => {
+    const dir = makeProject({
+      'package.json': pkgWithPlugin,
+      'ios/App/App/App.entitlements': entitlementsFile('<key>aps-environment</key><string>development</string>'),
+    })
+    const ctx = makeCtx({ projectDir: dir, platform: 'ios', credentials: UPLOAD_CREDS })
+    expect(entitlementsDeclaredAgeRange.appliesTo?.(ctx)).toBe(true)
+    const f = await entitlementsDeclaredAgeRange.run(ctx)
+    expect(f[0]?.severity).toBe('warning')
+    expect(f[0]?.id).toBe('ios/entitlements-declared-age-range')
+    expect(f[0]?.detail).toMatch(/Declared Age Range API/)
+    expect(f[0]?.detail).not.toMatch(/There was an error/)
+  })
+
+  it('warns when entitlements file is missing', async () => {
+    const dir = makeProject({ 'package.json': pkgWithPlugin })
+    const ctx = makeCtx({ projectDir: dir, platform: 'ios', credentials: UPLOAD_CREDS })
+    const f = await entitlementsDeclaredAgeRange.run(ctx)
+    expect(f[0]?.severity).toBe('warning')
+  })
+
+  it('passes when the entitlement is true', async () => {
+    const dir = makeProject({
+      'package.json': pkgWithPlugin,
+      'ios/App/App/App.entitlements': entitlementsFile('<key>com.apple.developer.declared-age-range</key><true/>'),
+    })
+    const ctx = makeCtx({ projectDir: dir, platform: 'ios', credentials: UPLOAD_CREDS })
+    expect(await entitlementsDeclaredAgeRange.run(ctx)).toEqual([])
   })
 })
 

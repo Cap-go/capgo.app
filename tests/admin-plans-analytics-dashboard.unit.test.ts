@@ -8,6 +8,7 @@ const validResponse: BackendPlansAnalyticsResponse = {
   traffic: { dates: ['2026-08-01'], uniqueVisitorOrganizations: [2], totalOpens: [4] },
   visitorBreakdown: [{ date: '2026-08-01', paying: 1, activeTrial: 1, expiredTrial: 0, canceled: 0, paymentProblem: 0, creditsOnly: 0, unknown: 0, total: 2 }],
   checkoutIntent: [{ date: '2026-08-01', startedCheckout: 1, didNotStart: 1 }],
+  checkoutCompletion: [{ date: '2026-08-01', completed: 1, notCompleted: 0, pending: 0 }],
   checkoutVisitorBreakdown: [{ date: '2026-08-01', paying: 1, activeTrial: 0, expiredTrial: 0, canceled: 0, paymentProblem: 0, creditsOnly: 0, unknown: 0, total: 1 }],
   dataQuality: {
     exactTrackingStartedAt: '2026-08-01T00:00:00Z',
@@ -37,8 +38,10 @@ const requiredMessages = {
   'plans-analytics-who-opened-checkout': 'Who opened checkout?',
   'plans-analytics-who-opened-checkout-description': 'Daily checkout starters by billing state at the attributed Plans opening',
   'plans-analytics-checkout-completion': 'Checkout completion',
-  'plans-analytics-checkout-completion-description': 'TODO — this graph will be implemented after reliable checkout-completion tracking is available.',
-  'plans-analytics-checkout-completion-link': 'Read the implementation requirements',
+  'plans-analytics-checkout-completion-description': 'Daily checkout starters attributed to each Plans-opening UTC day, counted once as completed (paid or upgraded), not completed, or still pending within the 24-hour observation window',
+  'plans-analytics-completed-checkout': 'Completed checkout',
+  'plans-analytics-not-completed': 'Not completed',
+  'plans-analytics-pending-completion': 'Pending',
   'plans-category-paying': 'Paying',
   'plans-category-active-trial': 'Active trial',
   'plans-category-expired-trial': 'Expired trial — never subscribed',
@@ -75,6 +78,7 @@ describe('admin Plans analytics dashboard', () => {
       traffic: { dates: [], uniqueVisitorOrganizations: [], totalOpens: [] },
       visitorBreakdown: [],
       checkoutIntent: [],
+      checkoutCompletion: [],
       checkoutVisitorBreakdown: [],
     }],
   ])('parses a valid %s', (_name, value) => {
@@ -151,6 +155,7 @@ describe('admin Plans analytics dashboard', () => {
       traffic: { dates: [], uniqueVisitorOrganizations: [], totalOpens: [] },
       visitorBreakdown: [],
       checkoutIntent: [],
+      checkoutCompletion: [],
       checkoutVisitorBreakdown: [],
       dataQuality: {
         ...validResponse.dataQuality,
@@ -163,6 +168,7 @@ describe('admin Plans analytics dashboard', () => {
       hasTraffic: false,
       hasVisitors: false,
       hasCheckoutIntent: false,
+      hasCheckoutCompletion: false,
       hasCheckoutVisitors: false,
       showPartialBillingWarning: true,
     })
@@ -211,6 +217,11 @@ describe('admin Plans analytics dashboard', () => {
       { label: 'plans-analytics-started-checkout', color: '#10b981', data: [{ date: '2026-08-01', value: 1 }] },
       { label: 'plans-analytics-did-not-start', color: '#94a3b8', data: [{ date: '2026-08-01', value: 1 }] },
     ])
+    expect(series.checkoutCompletion.map(({ label, color, data }) => ({ label, color, data }))).toEqual([
+      { label: 'plans-analytics-completed-checkout', color: '#2563eb', data: [{ date: '2026-08-01', value: 1 }] },
+      { label: 'plans-analytics-not-completed', color: '#94a3b8', data: [{ date: '2026-08-01', value: 0 }] },
+      { label: 'plans-analytics-pending-completion', color: '#f59e0b', data: [{ date: '2026-08-01', value: 0 }] },
+    ])
     expect(series.checkoutVisitors).toHaveLength(7)
     expect(series.checkoutVisitors.reduce((sum, item) => sum + item.data[0].value, 0)).toBe(1)
   })
@@ -243,14 +254,10 @@ describe('admin Plans analytics dashboard', () => {
     ])
     expect(tabs).toContain(`label: 'plans-analytics-title'`)
     expect(tabs).toContain(`key: '/plans'`)
-    expect(completionDoc).toContain('server-side `Checkout Completed` event')
-    expect(completionDoc).toContain('stable `checkout_attempt_id`')
-    expect(completionDoc).toContain('Stripe metadata')
-    expect(completionDoc).toContain('Stripe checkout session ID, product ID, recurrence, and completion timestamp')
+    expect(completionDoc).toContain('server-side billing evidence')
     expect(completionDoc).toContain('attributed Plans-opening UTC day')
-    expect(completionDoc).toContain('Completed or Not completed')
-    expect(completionDoc).toContain('pending until the agreed observation window')
-    expect(completionDoc).toContain('separate approved design')
+    expect(completionDoc).toContain('observation window')
+    expect(completionDoc).toContain('paid transition')
     const messages = JSON.parse(messagesText) as Record<string, unknown>
     for (const [key, expected] of Object.entries(requiredMessages)) {
       expect(messages).toHaveProperty(key)
@@ -288,9 +295,9 @@ describe('admin Plans analytics dashboard', () => {
 
     expect(page.match(/<ChartCard/g)).toHaveLength(5)
     expect(page.match(/<AdminMultiLineChart/g)).toHaveLength(1)
-    expect(page.match(/<AdminStackedBarChart/g)).toHaveLength(3)
-    expect(page.match(/accessible-borders/g)).toHaveLength(3)
-    expect(page.match(/<table/g)).toHaveLength(4)
+    expect(page.match(/<AdminStackedBarChart/g)).toHaveLength(4)
+    expect(page.match(/accessible-borders/g)).toHaveLength(4)
+    expect(page.match(/<table/g)).toHaveLength(5)
     expect(page.match(/class="sr-only"/g)?.length).toBeGreaterThanOrEqual(4)
     expect(page).toContain('<caption')
     expect(page).toContain('scope="col"')
@@ -299,6 +306,9 @@ describe('admin Plans analytics dashboard', () => {
     expect(page).toContain('t(\'plans-analytics-who-opened-description\')')
     expect(page).toContain('t(\'plans-analytics-checkout-intent-description\')')
     expect(page).toContain('t(\'plans-analytics-who-opened-checkout-description\')')
+    expect(page).toContain('t(\'plans-analytics-checkout-completion-description\')')
+    expect(page).toContain('hasCheckoutCompletion')
+    expect(page).toContain(':series="series.checkoutCompletion"')
 
     const cardTitles = [
       'plans-analytics-traffic',
@@ -328,10 +338,8 @@ describe('admin Plans analytics dashboard', () => {
     expect(page).not.toContain('setInterval')
     expect(page).not.toContain('setTimeout')
 
-    expect(page).toContain('t(\'plans-analytics-checkout-completion-description\')')
-    expect(page).toContain('https://github.com/Cap-go/capgo.app/blob/main/docs/admin/plans-checkout-completion.md')
-    expect(page).toContain('target="_blank"')
-    expect(page).toContain('rel="noopener noreferrer"')
+    expect(page).not.toContain('https://github.com/Cap-go/capgo.app/blob/main/docs/admin/plans-checkout-completion.md')
+    expect(page).not.toContain('plans-analytics-checkout-completion-link')
     expect(page).toContain('role="alert"')
     expect(page).toContain('role="status"')
   })

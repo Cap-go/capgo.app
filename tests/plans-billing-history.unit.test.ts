@@ -3,6 +3,7 @@ import type { OrganizationBillingHistory } from '../supabase/functions/_backend/
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   classifyPlansBillingAt,
+  hasCheckoutPaidCompletion,
   loadPlansBillingHistories,
 
 } from '../supabase/functions/_backend/utils/plans_billing_history.ts'
@@ -392,6 +393,23 @@ describe('loadPlansBillingHistories', () => {
 
     expect(Number.isNaN(history.revenueMovements[0]!.openingMrr)).toBe(true)
     expect(classifyPlansBillingAt(history, at)).toBe('unknown')
+  })
+
+  it('detects checkout completion from paid billing transitions after checkout start', () => {
+    const checkoutAt = Date.parse('2026-08-01T08:05:00Z')
+    const deadline = checkoutAt + 24 * 60 * 60 * 1000
+    const history = {
+      ...base(),
+      transitions: [{ timestampMs: checkoutAt + 60_000, kind: 'paid' as const }],
+    }
+
+    expect(hasCheckoutPaidCompletion(history, checkoutAt, deadline)).toBe(true)
+    expect(hasCheckoutPaidCompletion(history, checkoutAt + 120_000, deadline)).toBe(false)
+    expect(hasCheckoutPaidCompletion({
+      ...history,
+      paidAtMs: checkoutAt + 30_000,
+      transitions: [],
+    }, checkoutAt, deadline)).toBe(true)
   })
 
   it('does not open an unbounded database query for an empty organization set', async () => {

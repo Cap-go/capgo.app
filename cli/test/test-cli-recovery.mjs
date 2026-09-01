@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
@@ -29,7 +29,8 @@ const tempDirs = []
 let failures = 0
 
 function makeTempDir(name) {
-  const dir = mkdtempSync(join(tmpdir(), `capgo-cli-recovery-${name}-`))
+  // realpath so path assertions survive a symlinked tmpdir (macOS /var -> /private/var)
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), `capgo-cli-recovery-${name}-`)))
   tempDirs.push(dir)
   return dir
 }
@@ -252,6 +253,23 @@ await test('resolveUpdaterPackageJsonPath resolves root-relative package.json op
     process.chdir(root)
     const resolved = resolveUpdaterPackageJsonPath('missing/package.json,apps/mobile/package.json')
     assert.equal(resolved, join(root, 'apps', 'mobile', 'package.json'))
+  }
+  finally {
+    process.chdir(previousCwd)
+  }
+})
+
+await test('resolveUpdaterPackageJsonPath prefers cwd over the workspace root for relative paths', () => {
+  const root = makeTempDir('updater-pkg-workspace')
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ workspaces: ['apps/*'] }))
+  const nested = join(root, 'apps', 'mobile')
+  mkdirSync(nested, { recursive: true })
+  writeFileSync(join(nested, 'package.json'), '{}')
+  const previousCwd = process.cwd()
+  try {
+    process.chdir(nested)
+    const resolved = resolveUpdaterPackageJsonPath('./package.json')
+    assert.equal(resolved, join(nested, 'package.json'))
   }
   finally {
     process.chdir(previousCwd)

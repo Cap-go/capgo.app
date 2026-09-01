@@ -295,6 +295,21 @@ function billingEvidenceAt(history: BillingHistoryEvidence, timestampMs: number)
   }
 }
 
+export function hasCheckoutPaidCompletion(
+  history: BillingHistoryEvidence,
+  checkoutTimestampMs: number,
+  observationDeadlineMs: number,
+): boolean {
+  if (!Number.isFinite(checkoutTimestampMs) || !Number.isFinite(observationDeadlineMs))
+    return false
+
+  return billingEvidenceTimeline(history).some(event => (
+    event.kind === 'paid'
+    && event.timestampMs > checkoutTimestampMs
+    && event.timestampMs <= observationDeadlineMs
+  ))
+}
+
 export function classifyPlansBillingAt(history: BillingHistoryEvidence, timestampMs: number) {
   const evidence = billingEvidenceAt(history, timestampMs)
 

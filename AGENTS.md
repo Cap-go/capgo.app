@@ -3,6 +3,42 @@
 This file provides guidance to AI agents (Claude Code, Cursor, Copilot, etc.)
 when working with code in this repository.
 
+## MUST NOT — never break already-published CLI versions
+
+**We cannot break `@capgo/cli` releases that customers already run in production.**
+
+The last published CLI is the newest `cli-<semver>` git tag (and the matching
+`@capgo/cli` version on npm when it exists). Customers do not upgrade the CLI on
+every backend deploy.
+
+### You MUST NOT
+
+- Revoke `GRANT` / `EXECUTE` on an RPC that the last published CLI still calls
+  (for example `.rpc('get_user_id', { apikey })` on the anonymous API-key path).
+- Change backend identity resolution in ways that break the last published CLI
+  without shipping a CLI release that stops using the old path first.
+- Make CI pass by **inverting** published-CLI contract tests to expect permission
+  denied (`42501`). Those tests assert **success** — that is the contract.
+- Test only the PR-branch workspace CLI when validating RPC/grant changes. CI must
+  exercise the **published** npm CLI against the PR schema.
+
+### Before you revoke anon/service access on a CLI-facing RPC
+
+1. Ship a CLI release that no longer calls it.
+2. Wait for customers to upgrade (the `cli-*` tag must reflect the new behavior).
+3. Only then revoke or harden the RPC.
+
+### Where this is enforced
+
+- CI job: **`CRITICAL — Published CLI / do not break old CLI`**
+- Tests: `tests/published-cli-rpc-contract.test.ts` (live contract; do not invert)
+- Helpers: `scripts/published-cli-contract.ts` (parses `.rpc('...')` from the last `cli-*` tag)
+
+Org-perm / invite **oracle** RPCs (`invite_user_to_org_rbac`, `get_org_perm_for_apikey*`,
+`get_user_id(text,text)`, …) stay revoked for anonymous callers — see
+`tests/security-oracle-rpc-hardening.test.ts`. That is separate from the published
+CLI identity path (`get_user_id(text)` with a valid API key must keep working).
+
 ## Essential Development Commands
 
 ### Building and Development
