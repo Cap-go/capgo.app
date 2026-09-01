@@ -411,3 +411,26 @@ export const plistBackgroundModesSanity: PrescanCheck = {
     return findings
   },
 }
+
+export const plistRequiredDeviceArm64: PrescanCheck = {
+  id: 'ios/plist-required-device-arm64',
+  platforms: ['ios'],
+  appliesTo: ctx => hasInfoPlist(ctx) && willUploadToAppStore(ctx),
+  async run(ctx): Promise<Finding[]> {
+    const raw = readInfoPlist(ctx.projectDir)
+    if (raw === null)
+      return []
+    if (!plistHasKey(raw, 'UIRequiredDeviceCapabilities'))
+      return []
+    const caps = plistArrayStrings(raw, 'UIRequiredDeviceCapabilities')
+    if (caps.includes('arm64') || !caps.includes('armv7'))
+      return []
+    return [{
+      id: 'ios/plist-required-device-arm64',
+      severity: 'warning',
+      title: 'UIRequiredDeviceCapabilities lists armv7 without arm64',
+      detail: 'Requiring only armv7 marks the binary as 32-bit. App Store installs on iOS 26+ can fail with a generic download error.',
+      fix: 'Replace armv7 with arm64 in UIRequiredDeviceCapabilities (modern iPhones are 64-bit only).',
+    }]
+  },
+}

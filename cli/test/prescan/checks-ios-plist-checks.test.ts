@@ -16,6 +16,7 @@ import {
   plistLaunchStoryboard,
   plistOrientationsMultitasking,
   plistOrientationsPresent,
+  plistRequiredDeviceArm64,
   plistVersionBuildFormat,
   plistVersionShortFormat,
 } from '../../src/build/prescan/checks/ios-plist-checks'
@@ -80,6 +81,7 @@ const ALL_CHECKS = [
   plistOrientationsPresent,
   plistDisplayName,
   plistBackgroundModesSanity,
+  plistRequiredDeviceArm64,
 ]
 
 // Run a check honoring its appliesTo gate (returns [] when the gate is false),
@@ -359,6 +361,33 @@ describe('ios/plist-background-modes-sanity', () => {
       distributionMode: 'app_store',
     } })
     expect(await plistBackgroundModesSanity.run(ctx)).toEqual([])
+  })
+})
+
+describe('ios/plist-required-device-arm64 (upload-gated)', () => {
+  const uploadCreds = { APPLE_KEY_ID: 'ABCDE12345', APPLE_ISSUER_ID: '12345678-1234-1234-1234-123456789012', APPLE_KEY_CONTENT: 'x' }
+  it('does not apply when not uploading', () => {
+    const ctx = ctxFor(`${HEALTHY_BODY}<key>UIRequiredDeviceCapabilities</key><array><string>armv7</string></array>`)
+    expect(plistRequiredDeviceArm64.appliesTo?.(ctx)).toBe(false)
+  })
+  it('warns when uploading with armv7 and no arm64', async () => {
+    const ctx = ctxFor(`${HEALTHY_BODY}<key>UIRequiredDeviceCapabilities</key><array><string>armv7</string></array>`, { partial: { credentials: uploadCreds, distributionMode: 'app_store' } })
+    expect(plistRequiredDeviceArm64.appliesTo?.(ctx)).toBe(true)
+    const f = await plistRequiredDeviceArm64.run(ctx)
+    expect(f[0]?.severity).toBe('warning')
+    expect(f[0]?.id).toBe('ios/plist-required-device-arm64')
+  })
+  it('passes when arm64 is present', async () => {
+    const ctx = ctxFor(`${HEALTHY_BODY}<key>UIRequiredDeviceCapabilities</key><array><string>arm64</string></array>`, { partial: { credentials: uploadCreds, distributionMode: 'app_store' } })
+    expect(await plistRequiredDeviceArm64.run(ctx)).toEqual([])
+  })
+  it('passes when both armv7 and arm64 are present', async () => {
+    const ctx = ctxFor(`${HEALTHY_BODY}<key>UIRequiredDeviceCapabilities</key><array><string>armv7</string><string>arm64</string></array>`, { partial: { credentials: uploadCreds, distributionMode: 'app_store' } })
+    expect(await plistRequiredDeviceArm64.run(ctx)).toEqual([])
+  })
+  it('no finding when UIRequiredDeviceCapabilities is absent', async () => {
+    const ctx = ctxFor(HEALTHY_BODY, { partial: { credentials: uploadCreds, distributionMode: 'app_store' } })
+    expect(await plistRequiredDeviceArm64.run(ctx)).toEqual([])
   })
 })
 
