@@ -13,11 +13,27 @@ function isBareNullArg(arg: string): boolean {
   return arg.trim().toLowerCase() === 'null'
 }
 
+function skipSqlQuote(sql: string, quoteIndex: number): number {
+  for (let i = quoteIndex + 1; i < sql.length; i++) {
+    if (sql[i] === "'" && sql[i + 1] === "'") {
+      i++
+      continue
+    }
+    if (sql[i] === "'")
+      return i + 1
+  }
+  return sql.length
+}
+
 function ifCallHasBareNullArg(sql: string, openParenIndex: number): boolean {
   let depth = 0
   let argStart = openParenIndex + 1
   for (let i = openParenIndex; i < sql.length; i++) {
     const char = sql[i]
+    if (char === "'") {
+      i = skipSqlQuote(sql, i) - 1
+      continue
+    }
     if (char === '(') {
       depth++
       continue
@@ -38,9 +54,17 @@ function ifCallHasBareNullArg(sql: string, openParenIndex: number): boolean {
 }
 
 function hasUntypedNullIfBranch(sql: string): boolean {
-  for (const match of sql.matchAll(/\bif\s*\(/gi)) {
-    if (ifCallHasBareNullArg(sql, match.index + match[0].length - 1))
-      return true
+  for (let i = 0; i < sql.length; i++) {
+    const char = sql[i]
+    if (char === "'") {
+      i = skipSqlQuote(sql, i) - 1
+      continue
+    }
+    if ((char === 'i' || char === 'I') && (i === 0 || !/[A-Za-z0-9_]/.test(sql[i - 1]!))) {
+      const match = sql.slice(i).match(/^if\s*\(/i)
+      if (match && ifCallHasBareNullArg(sql, i + match[0].length - 1))
+        return true
+    }
   }
   return false
 }

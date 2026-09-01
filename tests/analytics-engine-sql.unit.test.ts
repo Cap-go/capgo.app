@@ -63,6 +63,12 @@ describe('analytics engine sql lint rules', () => {
     expect(lintAnalyticsEngineSql(
       "SELECT if(blob2 IN ('set', NULL), 1, 0) FROM app_log",
     ).map(issue => issue.rule)).not.toContain('no-if-untyped-null')
+    expect(lintAnalyticsEngineSql(
+      "SELECT if(1, 'x)', NULL) FROM app_log",
+    ).map(issue => issue.rule)).toContain('no-if-untyped-null')
+    expect(lintAnalyticsEngineSql(
+      "SELECT 'if(1, NULL, 2)' FROM app_log",
+    ).map(issue => issue.rule)).not.toContain('no-if-untyped-null')
   })
 })
 
