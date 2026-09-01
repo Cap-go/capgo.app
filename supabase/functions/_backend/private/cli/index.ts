@@ -8,6 +8,7 @@ import {
   isAllowedActionOrg,
   isPayingOrg,
   isTrialOrg,
+  supabaseAdmin,
   supabaseApikey,
 } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
@@ -66,9 +67,6 @@ const CLI_APP_2FA_PERMISSIONS: Permission[] = [
   'app.delete',
   'app.update_settings',
   'app.build_native',
-  'channel.read',
-  'channel.delete',
-  'channel.update_settings',
 ]
 
 const CLI_ORG_2FA_PERMISSIONS: Permission[] = [
@@ -89,6 +87,36 @@ async function hasAnyPermission(
       return true
   }
   return false
+}
+
+async function hasApiKeyBindingOnApp(
+  c: Parameters<typeof checkPermission>[0],
+  appId: string,
+): Promise<boolean> {
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row'] | undefined
+  if (!apikey?.rbac_id)
+    return false
+
+  const admin = supabaseAdmin(c)
+  const { data: appRow } = await admin
+    .from('apps')
+    .select('id')
+    .eq('app_id', appId)
+    .maybeSingle()
+  if (!appRow?.id)
+    return false
+
+  const { data: binding } = await admin
+    .from('role_bindings')
+    .select('id')
+    .eq('principal_type', 'apikey')
+    .eq('principal_id', apikey.rbac_id)
+    .eq('app_id', appRow.id)
+    .or('expires_at.is.null,expires_at.gt.now()')
+    .limit(1)
+    .maybeSingle()
+
+  return !!binding
 }
 
 async function assertOrgUploadReadScope(
@@ -230,8 +258,10 @@ app.post('/check-2fa-app', middlewareKey(), async (c) => {
   if (!isValidAppId(body.app_id))
     return quickError(400, 'invalid_app_id', 'App ID must be a reverse domain string', { app_id: body.app_id })
 
-  if (!(await hasAnyPermission(c, CLI_APP_2FA_PERMISSIONS, { appId: body.app_id })))
+  if (!(await hasAnyPermission(c, CLI_APP_2FA_PERMISSIONS, { appId: body.app_id }))
+    && !(await hasApiKeyBindingOnApp(c, body.app_id))) {
     return quickError(401, 'not_authorized', 'You cannot access this app', { app_id: body.app_id })
+  }
 
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   const apikeyString = apikey.key ?? c.get('capgkey')

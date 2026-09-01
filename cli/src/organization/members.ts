@@ -197,7 +197,14 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
     }
   })
 
-  void trackEvent({ channel: 'organization', event: 'Org Members Listed', tags: { member_count: memberInfoList.length, with_2fa_count: memberInfoList.filter(m => m.has_2fa).length } })
+  void trackEvent({
+    channel: 'organization',
+    event: 'Org Members Listed',
+    tags: {
+      member_count: memberInfoList.length,
+      with_2fa_count: memberInfoList.filter(m => m.has_2fa === true).length,
+    },
+  })
 
   if (!silent) {
     log.info(`Members found: ${memberInfoList.length}`)
@@ -244,17 +251,25 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
 
     // Display member summary
     const activeMembers = memberInfoList.filter(m => !m.is_tmp)
-    const membersWithout2FA = activeMembers.filter(m => !m.has_2fa)
+    const membersWith2FA = activeMembers.filter(m => m.has_2fa === true)
+    const membersWithout2FA = activeMembers.filter(m => m.has_2fa === false)
+    const membersUnknown2FA = activeMembers.filter(m => m.has_2fa == null)
 
     log.info('Member Summary:')
     log.info(`  Total active members: ${activeMembers.length}`)
-    log.info(`  Members with 2FA: ${activeMembers.length - membersWithout2FA.length}`)
+    log.info(`  Members with 2FA: ${membersWith2FA.length}`)
     log.info(`  Members without 2FA: ${membersWithout2FA.length}`)
+    if (membersUnknown2FA.length > 0)
+      log.info(`  Members with unknown 2FA: ${membersUnknown2FA.length}`)
 
     if (hasPasswordPolicy) {
-      const membersNonCompliant = activeMembers.filter(m => !m.password_policy_compliant)
-      log.info(`  Password policy compliant: ${activeMembers.length - membersNonCompliant.length}`)
+      const membersCompliant = activeMembers.filter(m => m.password_policy_compliant === true)
+      const membersNonCompliant = activeMembers.filter(m => m.password_policy_compliant === false)
+      const membersUnknownPassword = activeMembers.filter(m => m.password_policy_compliant == null)
+      log.info(`  Password policy compliant: ${membersCompliant.length}`)
       log.info(`  Password policy non-compliant: ${membersNonCompliant.length}`)
+      if (membersUnknownPassword.length > 0)
+        log.info(`  Password policy unknown: ${membersUnknownPassword.length}`)
     }
 
     log.info('')
