@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-01T07:08:03.354Z",
+  "generatedAt": "2026-09-01T07:07:15.218Z",
   "iterations": 80000,
   "agreement": {
     "valid": {
@@ -7,124 +7,104 @@
       "production_is_predicate": true,
       "zod_runtime": true,
       "zod_compiler_safeParse": true,
-      "zod_compiler_is": true,
-      "zod_45_compile_safeParse": true
+      "zod_compiler_is": true
     },
     "invalid": {
       "handrolled": false,
       "production_is_predicate": false,
       "zod_runtime": false,
       "zod_compiler_safeParse": false,
-      "zod_compiler_is": false,
-      "zod_45_compile_safeParse": false
+      "zod_compiler_is": false
     }
   },
   "rows": [
     {
       "name": "handrolled_valid",
       "iterations": 80000,
-      "wallMs": 10.060633999999993,
-      "cpuMs": 18.525,
-      "nsCpuPerOp": 231.5625,
+      "wallMs": 9.750984999999957,
+      "cpuMs": 19.912,
+      "nsCpuPerOp": 248.9,
       "successCount": 80000,
       "failCount": 0
     },
     {
       "name": "handrolled_mixed",
       "iterations": 80000,
-      "wallMs": 39.69019800000001,
-      "cpuMs": 67.396,
-      "nsCpuPerOp": 842.45,
+      "wallMs": 39.425117,
+      "cpuMs": 67.98,
+      "nsCpuPerOp": 849.75,
       "successCount": 60000,
       "failCount": 20000
     },
     {
       "name": "production_is_predicate_valid",
       "iterations": 80000,
-      "wallMs": 6.743633000000017,
-      "cpuMs": 7.755,
-      "nsCpuPerOp": 96.9375,
+      "wallMs": 6.650818000000015,
+      "cpuMs": 7.661,
+      "nsCpuPerOp": 95.7625,
       "successCount": 80000,
       "failCount": 0
     },
     {
       "name": "production_is_predicate_mixed",
       "iterations": 80000,
-      "wallMs": 5.680851999999987,
-      "cpuMs": 5.681,
-      "nsCpuPerOp": 71.0125,
+      "wallMs": 5.614571999999953,
+      "cpuMs": 5.615,
+      "nsCpuPerOp": 70.1875,
       "successCount": 60000,
       "failCount": 20000
     },
     {
       "name": "zod_runtime_valid",
       "iterations": 80000,
-      "wallMs": 46.69947299999998,
-      "cpuMs": 92.252,
-      "nsCpuPerOp": 1153.15,
+      "wallMs": 46.10893100000004,
+      "cpuMs": 88.566,
+      "nsCpuPerOp": 1107.075,
       "successCount": 80000,
       "failCount": 0
     },
     {
       "name": "zod_runtime_mixed",
       "iterations": 80000,
-      "wallMs": 81.27316100000002,
-      "cpuMs": 129.647,
-      "nsCpuPerOp": 1620.5874999999999,
+      "wallMs": 149.37332100000003,
+      "cpuMs": 171.854,
+      "nsCpuPerOp": 2148.175,
       "successCount": 60000,
       "failCount": 20000
     },
     {
       "name": "zod_compiler_safeParse_valid",
       "iterations": 80000,
-      "wallMs": 7.0414369999999735,
-      "cpuMs": 12.083,
-      "nsCpuPerOp": 151.0375,
+      "wallMs": 7.18936999999994,
+      "cpuMs": 12.528,
+      "nsCpuPerOp": 156.6,
       "successCount": 80000,
       "failCount": 0
     },
     {
       "name": "zod_compiler_safeParse_mixed",
       "iterations": 80000,
-      "wallMs": 6.640904000000035,
-      "cpuMs": 8.339,
-      "nsCpuPerOp": 104.2375,
+      "wallMs": 7.0108750000000555,
+      "cpuMs": 8.682,
+      "nsCpuPerOp": 108.525,
       "successCount": 60000,
       "failCount": 20000
     },
     {
       "name": "zod_compiler_is_valid",
       "iterations": 80000,
-      "wallMs": 6.9200120000000425,
-      "cpuMs": 7.126,
-      "nsCpuPerOp": 89.075,
+      "wallMs": 7.14659800000004,
+      "cpuMs": 7.416,
+      "nsCpuPerOp": 92.7,
       "successCount": 80000,
       "failCount": 0
     },
     {
       "name": "zod_compiler_is_mixed",
       "iterations": 80000,
-      "wallMs": 6.074190999999985,
-      "cpuMs": 6.075,
-      "nsCpuPerOp": 75.9375,
-      "successCount": 60000,
-      "failCount": 20000
-    },
-    {
-      "name": "zod_45_compile_safeParse_valid",
-      "iterations": 80000,
-      "wallMs": 11.860744999999952,
-      "cpuMs": 20.889,
-      "nsCpuPerOp": 261.1125,
-      "successCount": 80000,
-      "failCount": 0
-    },
-    {
-      "name": "zod_45_compile_safeParse_mixed",
-      "iterations": 80000,
-      "wallMs": 55.63736800000004,
-      "cpuMs": 56.942,
-      "nsCpuPerOp": 711.775,
+      "wallMs": 6.211227000000008,
+      "cpuMs": 6.213,
+      "nsCpuPerOp": 77.6625,
       "successCount": 60000,
       "failCount": 20000
     }

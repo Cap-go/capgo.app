@@ -205,7 +205,7 @@
         "vitest": "^4.1.10",
         "vue-tsc": "3.3.7",
         "wrangler": "^4.113.0",
-        "zod": "^4.4.3",
+        "zod": "^4.5.4",
         "zod-compiler": "^1.15.0",
       },
     },
@@ -234,7 +234,7 @@
         "rrweb-snapshot": "^2.1.1",
         "string-width": "^8.2.2",
         "typescript": "6.0.3",
-        "zod": "^4.4.3",
+        "zod": "^4.5.4",
       },
       "devDependencies": {
         "@antfu/eslint-config": "^9.2.0",
@@ -2803,7 +2803,7 @@
 
     "youch-core": ["youch-core@0.3.3", "", { "dependencies": { "@poppinss/exception": "^1.2.2", "error-stack-parser-es": "^1.0.5" } }, "sha512-ho7XuGjLaJ2hWHoK8yFnsUGy2Y5uDpqSTq1FkHLK4/oqKtyUU1AFbOOxY4IpC9f0fTLjwYbslUz0Po5BpD1wrA=="],
 
-    "zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
+    "zod": ["zod@4.5.4", "", {}, "sha512-sC95tT5iHHH9gtpj6A81kh+NEaRAUFN+qlUPDUbRfOMvNf5QCBqsb3WgvnpVtK5Y+4UfA6KqufotuTvMGiTlsA=="],
 
     "zod-compiler": ["zod-compiler@1.15.0", "", { "dependencies": { "@jridgewell/remapping": "^2.3.5", "acorn": "^8.16.0", "get-tsconfig": "^4.14.0", "jiti": "^2.7.0", "magic-string": "^0.30.21", "picomatch": "^4.0.4", "unplugin": "^3.0.0" }, "peerDependencies": { "@swc/core": ">=1.3.0", "zod": "^4.0.0" }, "optionalPeers": ["@swc/core"], "bin": { "zod-compiler": "dist/cli/index.js" } }, "sha512-wdPJxfow9p4SfCG0hLvnAZOjzseB+FGJViS/6Alc9nAg4dCdDQMcG5kCNdeLeB//wGE0E+r9AEYs1xi/1DZdZg=="],
 

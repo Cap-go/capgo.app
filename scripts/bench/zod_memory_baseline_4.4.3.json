@@ -1,0 +1,30 @@
+{
+  "generatedAt": "2026-09-01T07:07:20.769Z",
+  "zodVersion": "4.4.3",
+  "rows": [
+    {
+      "name": "import_zod_module",
+      "heapUsedDeltaBytes": 51,
+      "heapUsedDeltaMB": 0.00004863739013671875,
+      "rssDeltaBytes": 0,
+      "rssDeltaMB": 0,
+      "heapUsedMB": 1.6004981994628906
+    },
+    {
+      "name": "bare_z_string_schema",
+      "heapUsedDeltaBytes": 83356,
+      "heapUsedDeltaMB": 0.07949447631835938,
+      "rssDeltaBytes": 5373952,
+      "rssDeltaMB": 5.125,
+      "heapUsedMB": 1.680633544921875
+    },
+    {
+      "name": "update_request_object_schema",
+      "heapUsedDeltaBytes": 552,
+      "heapUsedDeltaMB": 0.00052642822265625,
+      "rssDeltaBytes": 131072,
+      "rssDeltaMB": 0.125,
+      "heapUsedMB": 1.6811647415161133
+    }
+  ]
+}

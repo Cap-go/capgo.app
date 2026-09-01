@@ -201,6 +201,7 @@
     "changelog:ai": "node scripts/generate-ai-changelog.mjs",
     "i18n:contexts": "node scripts/generate-translation-contexts.mjs",
     "bench:plugin-validation-cpu": "bun scripts/bench_plugin_validation_cpu.ts --save scripts/bench/plugin_validation_cpu_results.json",
+    "bench:zod-memory": "bun scripts/bench_zod_memory.ts --save scripts/bench/zod_memory_results.json",
     "bench:plugin-worker-cpu": "bun scripts/bench_plugin_worker_cpu.ts --save scripts/bench/plugin_worker_cpu_results.json",
     "bench:plugin-har-inspect": "bun scripts/bench_plugin_har_inspect.ts --save scripts/bench/plugin_har_inspect_results.json --har scripts/bench/plugin_endpoints.har",
     "bench:updates-manifest-path": "bun scripts/bench_updates_manifest_path.ts --files 5000 --noise-versions 40 --concurrency 50 --requests 800 --save scripts/bench/updates_manifest_path_results.json",
@@ -408,7 +409,7 @@
     "vitest": "^4.1.10",
     "vue-tsc": "3.3.7",
     "wrangler": "^4.113.0",
-    "zod": "^4.4.3",
+    "zod": "^4.5.4",
     "zod-compiler": "^1.15.0"
   },
   "gitmoji": {

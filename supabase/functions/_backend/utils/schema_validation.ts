@@ -125,3 +125,10 @@ export async function parseSchemaAsync<T>(schema: StandardSchema<T>, value: unkn
 
   return result.data
 }
+
+/** Pre-compile a Zod schema when z.compile() is available (Zod 4.5+). No-op on older Zod. */
+export function compileZodSchema<T extends z.ZodType>(schema: T): T {
+  if (typeof z.compile === 'function')
+    return z.compile(schema)
+  return schema
+}

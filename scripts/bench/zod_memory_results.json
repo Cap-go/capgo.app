@@ -1,0 +1,46 @@
+{
+  "generatedAt": "2026-09-01T07:08:03.411Z",
+  "zodVersion": "4.5.4",
+  "rows": [
+    {
+      "name": "import_zod_module",
+      "heapUsedDeltaBytes": -1179,
+      "heapUsedDeltaMB": -0.0011243820190429688,
+      "rssDeltaBytes": 0,
+      "rssDeltaMB": 0,
+      "heapUsedMB": 1.7031011581420898
+    },
+    {
+      "name": "bare_z_string_schema",
+      "heapUsedDeltaBytes": 43636,
+      "heapUsedDeltaMB": 0.041614532470703125,
+      "rssDeltaBytes": 1048576,
+      "rssDeltaMB": 1,
+      "heapUsedMB": 1.745356559753418
+    },
+    {
+      "name": "update_request_object_schema",
+      "heapUsedDeltaBytes": 552,
+      "heapUsedDeltaMB": 0.00052642822265625,
+      "rssDeltaBytes": 131072,
+      "rssDeltaMB": 0.125,
+      "heapUsedMB": 1.7458839416503906
+    },
+    {
+      "name": "z_compile_update_request",
+      "heapUsedDeltaBytes": 175287,
+      "heapUsedDeltaMB": 0.16716670989990234,
+      "rssDeltaBytes": 786432,
+      "rssDeltaMB": 0.75,
+      "heapUsedMB": 1.9130964279174805
+    },
+    {
+      "name": "compiled_schema_80k_valid_parse",
+      "heapUsedDeltaBytes": 56139,
+      "heapUsedDeltaMB": 0.05353832244873047,
+      "rssDeltaBytes": 12255232,
+      "rssDeltaMB": 11.6875,
+      "heapUsedMB": 2.028043746948242
+    }
+  ]
+}

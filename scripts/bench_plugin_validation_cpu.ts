@@ -112,14 +112,25 @@ async function main() {
   const { safeParseSchema } = await import(pathToFileURL(resolve(ROOT, 'supabase/functions/_backend/utils/schema_validation.ts')).href)
   const zodRuntime = await import(pathToFileURL(resolve(ROOT, 'scripts/bench/validation/plugin_schemas.zod.ts')).href)
   const zodCompiled = await import(pathToFileURL(resolve(ROOT, 'scripts/bench/validation/plugin_schemas.zod.compiled.ts')).href)
+  const { z } = await import('zod')
+
+  const compiledRuntimeSchema = typeof z.compile === 'function'
+    ? z.compile(zodRuntime.updateRequestSchemaZod)
+    : null
 
   const prodIs = await import(pathToFileURL(resolve(ROOT, 'supabase/functions/_backend/plugin_runtime/utils/plugin_schemas/update_request.is.ts')).href)
-  const validators = {
+  const validators: Record<string, (input: unknown) => boolean> = {
     handrolled: (input: unknown) => safeParseSchema(handrolled.updateRequestSchema, input).success,
     production_is_predicate: (input: unknown) => prodIs.isUpdateRequestBody(input),
     zod_runtime: (input: unknown) => zodRuntime.updateRequestSchemaZod.safeParse(input).success,
     zod_compiler_safeParse: (input: unknown) => zodCompiled.updateRequestSchemaZod.safeParse(input).success,
     zod_compiler_is: (input: unknown) => zodCompiled.updateRequestSchemaZod.is(input),
+  }
+
+  if (compiledRuntimeSchema) {
+    validators.zod_45_compile_safeParse = (input: unknown) => compiledRuntimeSchema.safeParse(input).success
+    if (typeof compiledRuntimeSchema.validate === 'function')
+      validators.zod_45_compile_validate = (input: unknown) => compiledRuntimeSchema.validate(input)
   }
 
   const valid = validPayload()
@@ -152,6 +163,9 @@ async function main() {
     ['zod_runtime_valid', 'handrolled_valid'],
     ['zod_compiler_is_valid', 'handrolled_valid'],
     ['zod_compiler_is_valid', 'zod_runtime_valid'],
+    ['zod_45_compile_safeParse_valid', 'zod_runtime_valid'],
+    ['zod_45_compile_validate_valid', 'zod_runtime_valid'],
+    ['zod_45_compile_validate_valid', 'production_is_predicate_valid'],
   ]
   console.log('\n=== Comparative deltas (A → B, negative means B faster) ===')
   for (const [a, b] of comparisons) {
