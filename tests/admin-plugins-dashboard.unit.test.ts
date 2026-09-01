@@ -2,18 +2,18 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
 describe('admin plugins dashboard layout', () => {
-  it.concurrent('keeps compatibility stats outside the ChartCard chart body', async () => {
+  it.concurrent('uses the existing funnel chart height box for compatibility stacked bars', async () => {
     const source = await readFile(new URL('../src/pages/admin/dashboard/plugins.vue', import.meta.url), 'utf8')
 
     const selfStoreChartCard = source.match(/chart-id="channel-self-store-compatibility"[\s\S]*?<\/ChartCard>/)?.[0] ?? ''
     const encryptionChartCard = source.match(/chart-id="encryption-key-id-compatibility"[\s\S]*?<\/ChartCard>/)?.[0] ?? ''
 
-    expect(selfStoreChartCard).toContain('role="group"')
-    expect(selfStoreChartCard).toContain('class="h-full"')
-    expect(selfStoreChartCard).not.toContain('<AdminStatsCard')
-    expect(encryptionChartCard).toContain('role="group"')
-    expect(encryptionChartCard).toContain('class="h-full"')
-    expect(encryptionChartCard).not.toContain('<AdminStatsCard')
+    expect(selfStoreChartCard).toContain('class="h-72 sm:h-80"')
+    expect(selfStoreChartCard).toContain('<AdminStackedBarChart')
+    expect(selfStoreChartCard).toContain('<AdminStatsCard')
+    expect(encryptionChartCard).toContain('class="h-72 sm:h-80"')
+    expect(encryptionChartCard).toContain('<AdminStackedBarChart')
+    expect(encryptionChartCard).toContain('<AdminStatsCard')
   })
 
   it.concurrent('falls back to the latest non-empty trend point for snapshot charts', async () => {

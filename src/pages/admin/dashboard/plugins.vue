@@ -399,56 +399,31 @@ displayStore.defaultBack = '/dashboard'
           </ChartCard>
 
           <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
-            <div class="space-y-6">
-              <ChartCard
-                chart-id="channel-self-store-compatibility"
-                title="Channel self-store (legacy vs current)"
-                :is-loading="isLoadingBreakdown"
-                :has-data="hasChannelSelfStoreTrendData"
-                no-data-message="No channel self-store compatibility trend data available"
-              >
-                <template #header>
-                  <div class="flex flex-col gap-1">
-                    <h2 id="channel-self-store-title" class="text-2xl font-semibold leading-tight dark:text-white text-slate-600">
-                      Channel self-store (legacy vs current)
-                    </h2>
-                    <p id="channel-self-store-description" class="text-xs text-slate-500 dark:text-slate-400">
-                      {{ CHANNEL_SELF_STORE_CUTOFF_CAPTION }}
-                    </p>
-                  </div>
-                </template>
-                <div role="group" aria-labelledby="channel-self-store-title" aria-describedby="channel-self-store-description" class="h-full">
-                  <AdminStackedBarChart
-                    :series="channelSelfStoreTrendSeries"
-                    :is-loading="isLoadingBreakdown"
-                    accessible-borders
-                  />
-                  <table class="sr-only">
-                    <caption>{{ CHANNEL_SELF_STORE_CUTOFF_CAPTION }}</caption>
-                    <thead>
-                      <tr>
-                        <th scope="col">
-                          Date
-                        </th>
-                        <th v-for="item in channelSelfStoreTrendSeries" :key="item.label" scope="col">
-                          {{ item.label }}
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="(point, index) in channelSelfStoreTrendSeries[0]?.data ?? []" :key="point.date">
-                        <th scope="row">
-                          {{ point.date }}
-                        </th>
-                        <td v-for="item in channelSelfStoreTrendSeries" :key="item.label">
-                          {{ item.data[index]?.value ?? 0 }}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
+            <ChartCard
+              chart-id="channel-self-store-compatibility"
+              title="Channel self-store (legacy vs current)"
+              :is-loading="isLoadingBreakdown"
+              :has-data="hasChannelSelfStoreTrendData"
+              no-data-message="No channel self-store compatibility trend data available"
+            >
+              <template #header>
+                <div class="flex flex-col gap-1">
+                  <h2 class="text-2xl font-semibold leading-tight dark:text-white text-slate-600">
+                    Channel self-store (legacy vs current)
+                  </h2>
+                  <p class="text-xs text-slate-500 dark:text-slate-400">
+                    {{ CHANNEL_SELF_STORE_CUTOFF_CAPTION }}
+                  </p>
                 </div>
-              </ChartCard>
-              <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+              </template>
+              <div class="h-72 sm:h-80">
+                <AdminStackedBarChart
+                  :series="channelSelfStoreTrendSeries"
+                  :is-loading="isLoadingBreakdown"
+                  accessible-borders
+                />
+              </div>
+              <div class="grid grid-cols-1 gap-4 mt-6 md:grid-cols-2">
                 <AdminStatsCard
                   title="Legacy share (latest)"
                   :value="formatPercent(channelSelfStoreLatestBucket.legacyPercent)"
@@ -464,58 +439,33 @@ displayStore.defaultBack = '/dashboard'
                   :subtitle="formatDeviceEstimateSubtitle(channelSelfStoreLatestBucket.currentDevices)"
                 />
               </div>
-            </div>
+            </ChartCard>
 
-            <div class="space-y-6">
-              <ChartCard
-                chart-id="encryption-key-id-compatibility"
-                title="Encryption (legacy vs current)"
-                :is-loading="isLoadingBreakdown"
-                :has-data="hasEncryptionTrendData"
-                no-data-message="No encryption compatibility trend data available"
-              >
-                <template #header>
-                  <div class="flex flex-col gap-1">
-                    <h2 id="encryption-key-id-title" class="text-2xl font-semibold leading-tight dark:text-white text-slate-600">
-                      Encryption (legacy vs current)
-                    </h2>
-                    <p id="encryption-key-id-description" class="text-xs text-slate-500 dark:text-slate-400">
-                      {{ ENCRYPTION_KEY_ID_CUTOFF_CAPTION }}
-                    </p>
-                  </div>
-                </template>
-                <div role="group" aria-labelledby="encryption-key-id-title" aria-describedby="encryption-key-id-description" class="h-full">
-                  <AdminStackedBarChart
-                    :series="encryptionTrendSeries"
-                    :is-loading="isLoadingBreakdown"
-                    accessible-borders
-                  />
-                  <table class="sr-only">
-                    <caption>{{ ENCRYPTION_KEY_ID_CUTOFF_CAPTION }}</caption>
-                    <thead>
-                      <tr>
-                        <th scope="col">
-                          Date
-                        </th>
-                        <th v-for="item in encryptionTrendSeries" :key="item.label" scope="col">
-                          {{ item.label }}
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="(point, index) in encryptionTrendSeries[0]?.data ?? []" :key="point.date">
-                        <th scope="row">
-                          {{ point.date }}
-                        </th>
-                        <td v-for="item in encryptionTrendSeries" :key="item.label">
-                          {{ item.data[index]?.value ?? 0 }}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
+            <ChartCard
+              chart-id="encryption-key-id-compatibility"
+              title="Encryption (legacy vs current)"
+              :is-loading="isLoadingBreakdown"
+              :has-data="hasEncryptionTrendData"
+              no-data-message="No encryption compatibility trend data available"
+            >
+              <template #header>
+                <div class="flex flex-col gap-1">
+                  <h2 class="text-2xl font-semibold leading-tight dark:text-white text-slate-600">
+                    Encryption (legacy vs current)
+                  </h2>
+                  <p class="text-xs text-slate-500 dark:text-slate-400">
+                    {{ ENCRYPTION_KEY_ID_CUTOFF_CAPTION }}
+                  </p>
                 </div>
-              </ChartCard>
-              <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+              </template>
+              <div class="h-72 sm:h-80">
+                <AdminStackedBarChart
+                  :series="encryptionTrendSeries"
+                  :is-loading="isLoadingBreakdown"
+                  accessible-borders
+                />
+              </div>
+              <div class="grid grid-cols-1 gap-4 mt-6 md:grid-cols-2">
                 <AdminStatsCard
                   title="Legacy share (latest)"
                   :value="formatPercent(encryptionLatestBucket.legacyPercent)"
@@ -531,7 +481,7 @@ displayStore.defaultBack = '/dashboard'
                   :subtitle="formatDeviceEstimateSubtitle(encryptionLatestBucket.currentDevices)"
                 />
               </div>
-            </div>
+            </ChartCard>
           </div>
 
           <ChartCard
