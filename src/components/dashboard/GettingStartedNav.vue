@@ -83,10 +83,8 @@ async function persistDismiss(app: OrganizationApp) {
     .select('need_onboarding')
     .eq('app_id', app.app_id)
     .maybeSingle()
-  if (needError || !row) {
-    organizationStore.updateAppNeedOnboarding(app.app_id, app.need_onboarding)
+  if (needError || !row)
     return
-  }
   organizationStore.updateAppNeedOnboarding(app.app_id, row.need_onboarding)
 }
 
