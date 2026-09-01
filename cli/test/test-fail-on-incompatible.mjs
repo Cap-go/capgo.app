@@ -134,6 +134,25 @@ test('--ignore-metadata-check alone does not trigger the conflict', () => {
   assert.doesNotThrow(() => checkValidOptions({ ignoreMetadataCheck: true }))
 })
 
+test('--native-packages-file without --ignore-metadata-check is rejected', () => {
+  assert.throws(
+    () => checkValidOptions({ nativePackagesFile: '/tmp/native-packages.json' }),
+    (error) => {
+      assert.ok(error instanceof Error)
+      assert.match(error.message, /--native-packages-file/)
+      assert.match(error.message, /--ignore-metadata-check/)
+      return true
+    },
+  )
+})
+
+test('--native-packages-file with --ignore-metadata-check is allowed', () => {
+  assert.doesNotThrow(() => checkValidOptions({
+    nativePackagesFile: '/tmp/native-packages.json',
+    ignoreMetadataCheck: true,
+  }))
+})
+
 test('--rollout-advance with --dry-upload is rejected', () => {
   assert.throws(
     () => checkValidOptions({ rolloutAdvance: true, dryUpload: true }),

@@ -1650,7 +1650,14 @@ export type {
   ZipBundleOptions,
 } from './schemas/sdk'
 export type { Database } from './types/supabase.types'
-export { createSupabaseClient } from './utils'
+export {
+  checkCompatibilityNativePackages,
+  createSupabaseClient,
+  findSavedKey,
+  getCompatibilityDetails,
+  isCompatible,
+} from './utils'
+export type { Compatibility, NativePackage } from './schemas/common'
 export {
   formatApiErrorForCli,
   getSecurityPolicyMessage,

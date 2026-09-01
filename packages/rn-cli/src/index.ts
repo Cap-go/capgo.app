@@ -7,6 +7,7 @@ import { log } from '@clack/prompts'
 
 const pack = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8')) as { version: string }
 import { runBundle } from './bundle.js'
+import { runCompatibility } from './compatibility.js'
 import { runInit } from './init.js'
 import { runUpload } from './upload.js'
 
@@ -31,7 +32,7 @@ program
 
 program
   .command('upload')
-  .description('Bundle (unless --path) and upload to Capgo with --delta')
+  .description('Bundle (unless --path), check React Native native metadata, and upload to Capgo with --delta')
   .argument('<appId>', 'Capgo app id (e.g. com.example.app)')
   .option('--project <path>', 'React Native project root', process.cwd())
   .option('--path <path>', 'Existing export directory (skip metro bundle)')
@@ -45,8 +46,26 @@ program
   .option('--no-delta', 'Disable delta upload')
   .option('--dry-run', 'Bundle only, do not upload', false)
   .option('--capgo-cli <bin>', 'Capgo CLI binary', 'capgo')
+  .option('--package-json <path>', 'Path to package.json (monorepos)')
+  .option('--node-modules <paths>', 'Comma-separated node_modules roots (monorepos)')
+  .option('--ignore-metadata-check', 'Skip channel native metadata compatibility check before upload', false)
+  .option('--fail-on-incompatible', 'Abort upload when native metadata is incompatible with the channel', false)
   .action(async (appId, opts) => {
     await runUpload(appId, opts)
+  })
+
+program
+  .command('compatibility')
+  .description('Check React Native native package metadata against a Capgo channel')
+  .argument('<appId>', 'Capgo app id')
+  .option('--project <path>', 'React Native project root', process.cwd())
+  .option('-c, --channel <channel>', 'Channel name', 'production')
+  .option('-a, --apikey <apikey>', 'Capgo API key')
+  .option('--package-json <path>', 'Path to package.json (monorepos)')
+  .option('--node-modules <paths>', 'Comma-separated node_modules roots (monorepos)')
+  .option('--text', 'Plain-text status output', false)
+  .action(async (appId, opts) => {
+    await runCompatibility(appId, opts)
   })
 
 program

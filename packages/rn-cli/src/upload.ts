@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { log, spinner } from '@clack/prompts'
 import color from 'picocolors'
 import { runBundle } from './bundle.js'
+import { runCompatibilityCheck, scanNativePackagesForUpload } from './compatibility.js'
 
 export interface UploadOptions {
   project: string
@@ -18,6 +20,10 @@ export interface UploadOptions {
   delta?: boolean
   dryRun?: boolean
   capgoCli: string
+  ignoreMetadataCheck?: boolean
+  failOnIncompatible?: boolean
+  nodeModules?: string
+  packageJson?: string
 }
 
 function run(cmd: string, args: string[], cwd: string): Promise<void> {
@@ -31,9 +37,9 @@ function run(cmd: string, args: string[], cwd: string): Promise<void> {
   })
 }
 
-
 export async function runUpload(appId: string, options: UploadOptions): Promise<void> {
   const project = resolve(options.project)
+  const packageJsonPath = options.packageJson ?? join(project, 'package.json')
   let exportPath = options.path ? resolve(project, options.path) : ''
 
   if (!exportPath) {
@@ -54,6 +60,24 @@ export async function runUpload(appId: string, options: UploadOptions): Promise<
     return
   }
 
+  if (!options.ignoreMetadataCheck) {
+    const compatibility = await runCompatibilityCheck(appId, {
+      project,
+      channel: options.channel,
+      apikey: options.apikey,
+      packageJson: packageJsonPath,
+      nodeModules: options.nodeModules,
+    })
+    if (compatibility.hasIncompatible && options.failOnIncompatible) {
+      throw new Error(`Upload aborted: bundle is incompatible with channel "${options.channel}". Remove --fail-on-incompatible to upload anyway.`)
+    }
+  }
+
+  const nativePackages = await scanNativePackagesForUpload(project, packageJsonPath, options.nodeModules)
+  const metadataDir = mkdtempSync(join(tmpdir(), 'capgo-rn-metadata-'))
+  const nativePackagesFile = join(metadataDir, 'native-packages.json')
+  writeFileSync(nativePackagesFile, JSON.stringify(nativePackages))
+
   const s = process.stdout.isTTY ? spinner() : null
   if (s) s.start('Uploading to Capgo with file-level delta')
 
@@ -67,15 +91,17 @@ export async function runUpload(appId: string, options: UploadOptions): Promise<
     '--path', exportPath,
     '--channel', options.channel,
     '--no-code-check',
-    '--package-json', join(project, 'package.json'),
+    '--ignore-metadata-check',
+    '--native-packages-file', nativePackagesFile,
+    '--package-json', packageJsonPath,
   ]
 
   if (useDelta) args.push('--delta')
   if (options.deltaOnly) args.push('--delta-only')
   if (options.apikey) args.push('--apikey', options.apikey)
   if (options.bundle) args.push('--bundle', options.bundle)
+  if (options.nodeModules) args.push('--node-modules', options.nodeModules)
 
-  // Prefer local @capgo/cli from monorepo/workspace
   const localCapgoJs = resolve(project, 'node_modules', '@capgo/cli', 'dist', 'index.js')
   const monorepoCapgoJs = resolve(project, '..', '..', 'cli', 'dist', 'index.js')
   const monorepoFromPackages = resolve(project, '..', 'cli', 'dist', 'index.js')
@@ -102,5 +128,8 @@ export async function runUpload(appId: string, options: UploadOptions): Promise<
   catch (error) {
     if (s) s.stop(color.red('Upload failed'))
     throw error
+  }
+  finally {
+    rmSync(metadataDir, { recursive: true, force: true })
   }
 }

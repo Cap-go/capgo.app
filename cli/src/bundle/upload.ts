@@ -3,6 +3,7 @@ import type { CapacitorConfig } from '../config'
 import type { UploadBundleResult } from '../schemas/bundle'
 import type { Database } from '../types/supabase.types'
 import type { Compatibility, manifestType } from '../utils'
+import type { NativePackage } from '../schemas/common'
 import type { UploadReporter, UploadSpinner } from './reporter'
 import type { OptionsUpload } from './upload_interface'
 import { randomUUID } from 'node:crypto'
@@ -26,6 +27,8 @@ import { showReplicationProgress } from '../replicationProgress'
 import { CliUserError } from '../shared/cli-user-error'
 import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
+import { nativePackageSchema } from '../schemas/common'
+import { safeParseSchema } from '../schemas/schema_validation'
 import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getBundleVersion, getCompatibilityDetails, getConfig, getCapgoUpdaterPackageVersion, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
 import type { AutoBumpLevel } from '../versionHelpers'
 import { autoBumpVersionBy, getVersionSuggestions, interactiveVersionBump, normalizeAutoBumpInput } from '../versionHelpers'
@@ -208,11 +211,41 @@ async function checkNotifyAppReady(options: OptionsUpload, path: string, interac
   }
 }
 
+function loadNativePackagesFromFile(filePath: string): NativePackage[] {
+  if (!existsSync(filePath))
+    uploadFail(`Native packages file not found: ${filePath}`)
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(readFileSync(filePath, 'utf-8'))
+  }
+  catch (error) {
+    uploadFail(`Invalid native packages JSON at ${filePath}: ${formatError(error)}`)
+  }
+
+  if (!Array.isArray(parsed))
+    uploadFail(`Native packages file must contain a JSON array: ${filePath}`)
+
+  const packages: NativePackage[] = []
+  for (const entry of parsed) {
+    const result = safeParseSchema(nativePackageSchema, entry)
+    if (!result.success) {
+      const errorMsg = result.error.issues.map(i => `${(i.path ?? []).join('.')}: ${i.message}`).join(', ')
+      uploadFail(`Invalid native package in ${filePath}: ${errorMsg}`)
+    }
+    packages.push(result.data)
+  }
+  return packages
+}
+
 async function verifyCompatibility(supabase: SupabaseType, pm: pmType, options: OptionsUpload, channel: string, appid: string, bundle: string, orgId: string) {
   // Check compatibility here
   const ignoreMetadataCheck = options.ignoreMetadataCheck
   const autoMinUpdateVersion = options.autoMinUpdateVersion
   let minUpdateVersion = options.minUpdateVersion
+  const precomputedNativePackages = options.nativePackagesFile
+    ? loadNativePackagesFromFile(options.nativePackagesFile)
+    : undefined
 
   const { data: channelData, error: channelError } = await supabase
     .from('channels')
@@ -324,15 +357,17 @@ async function verifyCompatibility(supabase: SupabaseType, pm: pmType, options: 
         .map(a => [a.name, a]))
     : new Map()
 
-  const nativePackages = (hashedLocalDependencies.size > 0 || !options.ignoreMetadataCheck)
-    ? Array.from(hashedLocalDependencies, ([name, value]) => ({
-        name,
-        version: value.version,
-        requested_version: value.requested_version,
-        ...(value.ios_checksum && { ios_checksum: value.ios_checksum }),
-        ...(value.android_checksum && { android_checksum: value.android_checksum }),
-      }))
-    : undefined
+  const nativePackages = options.nativePackagesFile
+    ? precomputedNativePackages
+    : ((hashedLocalDependencies.size > 0 || !options.ignoreMetadataCheck)
+        ? Array.from(hashedLocalDependencies, ([name, value]) => ({
+            name,
+            version: value.version,
+            requested_version: value.requested_version,
+            ...(value.ios_checksum && { ios_checksum: value.ios_checksum }),
+            ...(value.android_checksum && { android_checksum: value.android_checksum }),
+          }))
+        : undefined)
 
   return {
     nativePackages,
@@ -2206,6 +2241,9 @@ export function checkValidOptions(options: OptionsUpload) {
   }
   if (options.failOnIncompatible && options.ignoreMetadataCheck) {
     uploadFail('You cannot use --fail-on-incompatible together with --ignore-metadata-check — the metadata check is exactly what --fail-on-incompatible enforces. Remove one of them.')
+  }
+  if (options.nativePackagesFile && !options.ignoreMetadataCheck) {
+    uploadFail('--native-packages-file requires --ignore-metadata-check (React Native metadata is checked by @capgo/rn-cli)')
   }
 }
 

@@ -20,10 +20,13 @@
     "test": "bun test test/",
     "prepublishOnly": "bun run typecheck && bun run build && bun run test"
   },
-  "engines": {
+  "peerDependencies": {
+    "@capgo/cli": ">=8.0.0"
+  },
     "node": ">=20"
   },
   "dependencies": {
+    "@capgo/cli": "workspace:*",
     "@clack/prompts": "^0.11.0",
     "commander": "^14.0.0",
     "picocolors": "^1.1.1"

@@ -35,6 +35,7 @@ export const optionsUploadSchema = optionsBaseSchema.extend({
   autoSetBundle: z.boolean().optional(),
   autoBump: z.enum(['major', 'minor', 'patch', 'metadata', 'ai']).optional(),
   ignoreMetadataCheck: z.boolean().optional(),
+  nativePackagesFile: z.string().optional(),
   failOnIncompatible: z.boolean().optional(),
   ignoreChecksumCheck: z.boolean().optional(),
   forceCrc32Checksum: z.boolean().optional(),
