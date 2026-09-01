@@ -146,7 +146,13 @@ describe('on_organization_create stripe bootstrap', () => {
     expect(finalizePendingStripeCustomerMock).toHaveBeenCalledTimes(1)
   })
 
-  it('does not block org create on Bento onboarding sync', async () => {
+  it('routes Bento onboarding sync through a background task', async () => {
+    let resolveOnboarding: (value?: undefined) => void = () => {}
+    const onboardingPromise = new Promise<undefined>((resolve) => {
+      resolveOnboarding = resolve
+    })
+    syncOrgOnboardingIntentForOrgMock.mockReturnValue(onboardingPromise)
+    backgroundTaskMock.mockImplementation(async () => null)
     mockOrgReload(`pending_${ORG_ID}`)
     const { app } = await import('../supabase/functions/_backend/triggers/on_organization_create.ts')
 
@@ -162,6 +168,7 @@ describe('on_organization_create stripe bootstrap', () => {
 
     expect(response.status).toBe(200)
     expect(syncOrgOnboardingIntentForOrgMock).toHaveBeenCalledTimes(1)
-    expect(backgroundTaskMock).toHaveBeenCalledTimes(3)
+    expect(backgroundTaskMock.mock.calls.some(call => call[1] instanceof Promise)).toBe(true)
+    resolveOnboarding()
   })
 })

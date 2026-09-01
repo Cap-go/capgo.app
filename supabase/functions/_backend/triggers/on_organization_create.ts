@@ -4,7 +4,7 @@ import { Hono } from 'hono/tiny'
 import { syncBentoSubscriberTags } from '../utils/bento.ts'
 import { buildBillingPlanBentoTags } from '../utils/billing_bento_tags.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
-import { cloudlog } from '../utils/logging.ts'
+import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { createStripeCustomer, finalizePendingStripeCustomer, isPendingStripeCustomerId } from '../utils/stripe_org.ts'
@@ -86,7 +86,9 @@ app.post('/', middlewareAPISecret, triggerValidator('orgs', 'INSERT'), async (c)
     website: org.website,
   })
 
-  await backgroundTask(c, syncOrgOnboardingIntentForOrg(c, org))
+  await backgroundTask(c, syncOrgOnboardingIntentForOrg(c, org).catch((error) => {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'syncOrgOnboardingIntentForOrg failed', error })
+  }))
 
   await sendEventToTracking(c, {
     bento: {

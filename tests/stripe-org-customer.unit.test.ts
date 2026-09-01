@@ -22,11 +22,18 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   supabaseAdmin: supabaseAdminMock,
 }))
 
-const { createStripeCustomer, finalizePendingStripeCustomer, isPendingStripeCustomerId, isProvisionedStripeCustomerId } = await import('../supabase/functions/_backend/utils/stripe_org.ts')
+const {
+  createStripeCustomer,
+  finalizePendingStripeCustomer,
+  isLocalStripeCustomerId,
+  isPendingStripeCustomerId,
+  isProvisionedStripeCustomerId,
+} = await import('../supabase/functions/_backend/utils/stripe_org.ts')
 
 const ORG_ID = 'b0dfb856-7ed2-4420-bfca-64d67fe65a4e'
 const USER_ID = 'a1bb59b7-34b3-4e06-a0f1-2cc696f043dc'
 const PENDING_ID = `pending_${ORG_ID}`
+const LOCAL_ID = `cus_local_${ORG_ID.replaceAll('-', '')}`
 const CUSTOMER_ID = 'cus_VAgMn1agG4iQSC'
 const SOLO_PLAN = { name: 'Solo', stripe_id: 'prod_solo' }
 
@@ -46,6 +53,28 @@ function createOrg(customerId: string | null) {
   } as any
 }
 
+function orgUpdateQuery(
+  payload: { customer_id: string },
+  orgUpdate: (payload: { customer_id: string }, filters: Record<string, unknown>) => Promise<{ data: unknown, error: unknown }>,
+) {
+  const filters: Record<string, unknown> = {}
+  const thenable: any = {
+    eq(col: string, val: unknown) {
+      filters[col] = val
+      return thenable
+    },
+    is(col: string, val: unknown) {
+      filters[col] = val
+      return thenable
+    },
+    select() {
+      return thenable
+    },
+    maybeSingle: async () => await orgUpdate(payload, filters),
+  }
+  return thenable
+}
+
 function mockSupabase(options: {
   orgCustomerId: string | null
   insertError?: { code?: string, message?: string } | null
@@ -55,11 +84,13 @@ function mockSupabase(options: {
   const orgState = { customer_id: options.orgCustomerId }
   const stripeInfoInsert = vi.fn(async () => ({ error: options.insertError ?? null }))
   const stripeInfoDeleteEq = vi.fn(async () => ({ error: options.deleteError ?? null }))
-  const orgUpdate = vi.fn(async (payload: { customer_id: string }) => {
+  const orgUpdate = vi.fn(async (payload: { customer_id: string }, filters: Record<string, unknown> = {}) => {
     if (options.updateError)
-      return { error: options.updateError }
+      return { data: null, error: options.updateError }
+    if ('customer_id' in filters && orgState.customer_id !== filters.customer_id)
+      return { data: null, error: null }
     orgState.customer_id = payload.customer_id
-    return { error: null }
+    return { data: createOrg(payload.customer_id), error: null }
   })
 
   supabaseAdminMock.mockImplementation(() => ({
@@ -74,9 +105,7 @@ function mockSupabase(options: {
               }),
             }),
           }),
-          update: (payload: { customer_id: string }) => ({
-            eq: async () => await orgUpdate(payload),
-          }),
+          update: (payload: { customer_id: string }) => orgUpdateQuery(payload, orgUpdate),
         }
       }
       if (table === 'stripe_info') {
@@ -111,6 +140,12 @@ describe('stripe org customer helpers', () => {
     expect(isProvisionedStripeCustomerId(CUSTOMER_ID)).toBe(true)
     expect(isProvisionedStripeCustomerId(null)).toBe(false)
   })
+
+  it.concurrent('treats local fake ids as unprovisioned', () => {
+    expect(isLocalStripeCustomerId(LOCAL_ID)).toBe(true)
+    expect(isProvisionedStripeCustomerId(LOCAL_ID)).toBe(false)
+    expect(isLocalStripeCustomerId(CUSTOMER_ID)).toBe(false)
+  })
 })
 
 describe('createStripeCustomer', () => {
@@ -130,6 +165,41 @@ describe('createStripeCustomer', () => {
     expect(createCustomerMock).not.toHaveBeenCalled()
   })
 
+  it('creates a real customer when the org only has a local fake id', async () => {
+    const { orgUpdate } = mockSupabase({ orgCustomerId: LOCAL_ID })
+
+    const planName = await createStripeCustomer(createContext(), createOrg(LOCAL_ID))
+
+    expect(planName).toBe('Solo')
+    expect(createCustomerMock).toHaveBeenCalledTimes(1)
+    expect(orgUpdate).toHaveBeenCalledWith({ customer_id: CUSTOMER_ID }, expect.objectContaining({
+      id: ORG_ID,
+      customer_id: LOCAL_ID,
+    }))
+  })
+
+  it('throws when org reload fails so the queue can retry', async () => {
+    supabaseAdminMock.mockImplementation(() => ({
+      from: (table: string) => {
+        if (table === 'orgs') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({ data: null, error: { message: 'timeout' } }),
+              }),
+            }),
+          }
+        }
+        throw new Error(`unexpected table ${table}`)
+      },
+    }))
+
+    await expect(createStripeCustomer(createContext(), createOrg(PENDING_ID)))
+      .rejects
+      .toThrow('createStripeCustomer org reload failed')
+    expect(createCustomerMock).not.toHaveBeenCalled()
+  })
+
   it('reuses the Stripe customer when stripe_info insert hits a unique violation', async () => {
     const { orgUpdate, stripeInfoInsert } = mockSupabase({
       orgCustomerId: PENDING_ID,
@@ -141,44 +211,50 @@ describe('createStripeCustomer', () => {
     expect(planName).toBe('Solo')
     expect(createCustomerMock).toHaveBeenCalledTimes(1)
     expect(stripeInfoInsert).toHaveBeenCalledTimes(1)
-    expect(orgUpdate).toHaveBeenCalledWith({ customer_id: CUSTOMER_ID })
+    expect(orgUpdate).toHaveBeenCalledWith({ customer_id: CUSTOMER_ID }, expect.objectContaining({
+      id: ORG_ID,
+      customer_id: PENDING_ID,
+    }))
   })
 
   it('does not overwrite a different already-provisioned customer id', async () => {
     const existingId = 'cus_existing_org'
     createCustomerMock.mockResolvedValue({ id: CUSTOMER_ID })
-    getStripeCustomerMock.mockImplementation(async (_c: unknown, customerId: string) => {
-      if (customerId === PENDING_ID)
-        return { product_id: SOLO_PLAN.stripe_id }
-      return { product_id: SOLO_PLAN.stripe_id, customer_id: customerId }
+    getStripeCustomerMock.mockResolvedValue({ product_id: SOLO_PLAN.stripe_id })
+
+    const orgState = { customer_id: PENDING_ID as string | null }
+    const stripeInfoDeleteEq = vi.fn(async () => ({ error: null }))
+    const orgUpdate = vi.fn(async (payload: { customer_id: string }, filters: Record<string, unknown> = {}) => {
+      if ('customer_id' in filters && orgState.customer_id !== filters.customer_id)
+        return { data: null, error: null }
+      orgState.customer_id = payload.customer_id
+      return { data: createOrg(payload.customer_id), error: null }
     })
 
-    let orgSelectCount = 0
     supabaseAdminMock.mockImplementation(() => ({
       from: (table: string) => {
         if (table === 'orgs') {
           return {
             select: () => ({
               eq: () => ({
-                single: async () => {
-                  orgSelectCount += 1
-                  return {
-                    data: createOrg(orgSelectCount === 1 ? PENDING_ID : existingId),
-                    error: null,
-                  }
-                },
+                single: async () => ({
+                  data: createOrg(orgState.customer_id),
+                  error: null,
+                }),
               }),
             }),
-            update: () => ({
-              eq: async () => {
-                throw new Error('should not overwrite existing customer')
-              },
-            }),
+            update: (payload: { customer_id: string }) => {
+              orgState.customer_id = existingId
+              return orgUpdateQuery(payload, orgUpdate)
+            },
           }
         }
         if (table === 'stripe_info') {
           return {
             insert: async () => ({ error: null }),
+            delete: () => ({
+              eq: stripeInfoDeleteEq,
+            }),
           }
         }
         if (table === 'plans') {
@@ -199,6 +275,8 @@ describe('createStripeCustomer', () => {
 
     expect(planName).toBe('Solo')
     expect(createCustomerMock).toHaveBeenCalledTimes(1)
+    expect(orgState.customer_id).toBe(existingId)
+    expect(stripeInfoDeleteEq).toHaveBeenCalledWith('customer_id', CUSTOMER_ID)
   })
 })
 

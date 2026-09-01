@@ -780,8 +780,26 @@ export function orgStripeCustomerIdempotencyKey(orgId: string) {
   return `org-customer:${orgId}`
 }
 
-function localOrgStripeCustomerId(orgId: string) {
-  return `cus_${orgId.replaceAll('-', '')}`
+export function localOrgStripeCustomerId(orgId: string) {
+  return `cus_local_${orgId.replaceAll('-', '')}`
+}
+
+function isStripeIdempotencyMismatch(error: unknown) {
+  if (!error || typeof error !== 'object')
+    return false
+  const candidate = error as { type?: string, rawType?: string, message?: string }
+  const type = candidate.type ?? candidate.rawType
+  if (type === 'idempotency_error' || type === 'StripeIdempotencyError')
+    return true
+  return typeof candidate.message === 'string' && candidate.message.toLowerCase().includes('idempotent')
+}
+
+async function findExistingOrgStripeCustomer(c: Context, orgId: string) {
+  const result = await getStripe(c).customers.search({
+    query: `metadata['org_id']:'${orgId.replaceAll('\'', '')}'`,
+    limit: 10,
+  })
+  return result.data.toSorted((left, right) => left.created - right.created)[0] ?? null
 }
 
 export async function createCustomer(c: Context, email: string, userId: string, orgId: string, name: string) {
@@ -799,11 +817,34 @@ export async function createCustomer(c: Context, email: string, userId: string, 
     return { id: localOrgStripeCustomerId(orgId), email, name, metadata }
   }
   // Org-create queue retries must return the same customer instead of minting duplicates.
-  const customer = await getStripe(c).customers.create({
-    email,
-    name,
-    metadata,
-  }, { idempotencyKey: orgStripeCustomerIdempotencyKey(orgId) })
+  let customer: Stripe.Customer
+  try {
+    customer = await getStripe(c).customers.create({
+      email,
+      name,
+      metadata,
+    }, { idempotencyKey: orgStripeCustomerIdempotencyKey(orgId) })
+  }
+  catch (error) {
+    if (!isStripeIdempotencyMismatch(error))
+      throw error
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'createCustomer idempotency mismatch, searching existing customer',
+      orgId,
+    })
+    const existing = await findExistingOrgStripeCustomer(c, orgId)
+    if (!existing) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'createCustomer idempotency mismatch without existing customer',
+        orgId,
+        error,
+      })
+      throw error
+    }
+    customer = existing
+  }
   // Add supabase dashboard link with the real customer ID after creation
   const supabaseLink = buildSupabaseDashboardLink(c, customer.id)
   if (supabaseLink) {

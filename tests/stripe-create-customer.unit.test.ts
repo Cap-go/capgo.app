@@ -68,13 +68,47 @@ describe('createCustomer idempotency', () => {
 
   it('returns a deterministic local customer id when Stripe is not configured', async () => {
     mockedEnv.STRIPE_SECRET_KEY = ''
-    const { createCustomer } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    const { createCustomer, localOrgStripeCustomerId } = await import('../supabase/functions/_backend/utils/stripe.ts')
     const orgId = '48cf992a-c9ac-4591-863e-28fdccebdc30'
 
     const first = await createCustomer(createContext(), 'a@example.com', 'user-1', orgId, 'Lock Media LLC')
     const second = await createCustomer(createContext(), 'a@example.com', 'user-1', orgId, 'Lock Media LLC')
 
-    expect(first.id).toBe(`cus_${orgId.replaceAll('-', '')}`)
+    expect(first.id).toBe(localOrgStripeCustomerId(orgId))
+    expect(first.id.startsWith('cus_local_')).toBe(true)
     expect(second.id).toBe(first.id)
+  })
+
+  it('recovers the existing customer when Stripe idempotency params change', async () => {
+    const orgId = 'b0dfb856-7ed2-4420-bfca-64d67fe65a4e'
+    const createCustomerApi = vi.fn().mockRejectedValue({
+      type: 'idempotency_error',
+      message: 'Keys for idempotent requests can only be used with the same parameters they were first used with.',
+    })
+    const searchCustomerApi = vi.fn().mockResolvedValue({
+      data: [
+        { id: 'cus_newer', created: 200 },
+        { id: 'cus_older', created: 100 },
+      ],
+    })
+    const updateCustomerApi = vi.fn().mockResolvedValue({ id: 'cus_older' })
+    vi.mocked(Stripe).mockImplementation(function () {
+      return {
+        customers: {
+          create: createCustomerApi,
+          search: searchCustomerApi,
+          update: updateCustomerApi,
+        },
+      }
+    } as any)
+
+    const { createCustomer } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    const customer = await createCustomer(createContext(), 'owner@example.com', 'user-1', orgId, 'WN Hub')
+
+    expect(customer.id).toBe('cus_older')
+    expect(searchCustomerApi).toHaveBeenCalledWith({
+      query: `metadata['org_id']:'${orgId}'`,
+      limit: 10,
+    })
   })
 })

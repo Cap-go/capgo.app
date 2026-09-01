@@ -16,8 +16,12 @@ export function isPendingStripeCustomerId(customerId: string | null | undefined)
   return Boolean(customerId?.startsWith('pending_'))
 }
 
+export function isLocalStripeCustomerId(customerId: string | null | undefined) {
+  return Boolean(customerId?.startsWith('cus_local_'))
+}
+
 export function isProvisionedStripeCustomerId(customerId: string | null | undefined) {
-  return Boolean(customerId) && !isPendingStripeCustomerId(customerId)
+  return Boolean(customerId) && !isPendingStripeCustomerId(customerId) && !isLocalStripeCustomerId(customerId)
 }
 
 function isUniqueViolation(error: { code?: string, message?: string } | null | undefined) {
@@ -26,22 +30,48 @@ function isUniqueViolation(error: { code?: string, message?: string } | null | u
   return error.code === '23505' || Boolean(error.message?.toLowerCase().includes('duplicate'))
 }
 
-async function loadOrg(c: Context, orgId: string, fallback: OrgRow) {
+async function requireOrg(c: Context, orgId: string) {
   const { data, error } = await supabaseAdmin(c)
     .from('orgs')
     .select('*')
     .eq('id', orgId)
     .single()
   if (error || !data) {
-    cloudlog({
+    cloudlogErr({
       requestId: c.get('requestId'),
       message: 'createStripeCustomer org reload failed',
       orgId,
       error: error?.message,
     })
-    return fallback
+    throw new Error('createStripeCustomer org reload failed')
   }
   return data
+}
+
+async function linkOrgCustomer(c: Context, orgId: string, observedCustomerId: string | null, customerId: string) {
+  const query = supabaseAdmin(c)
+    .from('orgs')
+    .update({ customer_id: customerId })
+    .eq('id', orgId)
+  const filtered = observedCustomerId == null
+    ? query.is('customer_id', null)
+    : query.eq('customer_id', observedCustomerId)
+  return await filtered.select('customer_id').maybeSingle()
+}
+
+async function deleteUnusedStripeInfo(c: Context, customerId: string) {
+  const { error } = await supabaseAdmin(c)
+    .from('stripe_info')
+    .delete()
+    .eq('customer_id', customerId)
+  if (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'createStripeCustomer unused stripe_info delete failed',
+      customerId,
+      error,
+    })
+  }
 }
 
 async function resolveTrialPlan(c: Context, org: OrgRow) {
@@ -78,7 +108,7 @@ async function trialPlanNameForCustomer(c: Context, customerId: string, fallback
 }
 
 export async function createStripeCustomer(c: Context, org: OrgRow) {
-  const current = await loadOrg(c, org.id, org)
+  const current = await requireOrg(c, org.id)
 
   if (isProvisionedStripeCustomerId(current.customer_id)) {
     cloudlog({
@@ -113,8 +143,27 @@ export async function createStripeCustomer(c: Context, org: OrgRow) {
     return null
   }
 
-  const latest = await loadOrg(c, current.id, current)
-  if (isProvisionedStripeCustomerId(latest.customer_id) && latest.customer_id !== customer.id) {
+  const { data: linked, error: updateUserError } = await linkOrgCustomer(
+    c,
+    current.id,
+    current.customer_id,
+    customer.id,
+  )
+  if (updateUserError) {
+    cloudlog({ requestId: c.get('requestId'), message: 'updateUserError', updateUserError })
+    return null
+  }
+  if (linked?.customer_id === customer.id) {
+    if (current.customer_id && current.customer_id !== customer.id)
+      await deleteUnusedStripeInfo(c, current.customer_id)
+    cloudlog({ requestId: c.get('requestId'), message: 'stripe_info done' })
+    return selectedPlan.name
+  }
+
+  const latest = await requireOrg(c, current.id)
+  if (isProvisionedStripeCustomerId(latest.customer_id)) {
+    if (latest.customer_id !== customer.id)
+      await deleteUnusedStripeInfo(c, customer.id)
     cloudlog({
       requestId: c.get('requestId'),
       message: 'createStripeCustomer keeping existing customer_id',
@@ -125,18 +174,7 @@ export async function createStripeCustomer(c: Context, org: OrgRow) {
     return await trialPlanNameForCustomer(c, latest.customer_id!, selectedPlan.name)
   }
 
-  const { error: updateUserError } = await supabaseAdmin(c)
-    .from('orgs')
-    .update({
-      customer_id: customer.id,
-    })
-    .eq('id', current.id)
-  if (updateUserError) {
-    cloudlog({ requestId: c.get('requestId'), message: 'updateUserError', updateUserError })
-    return null
-  }
-  cloudlog({ requestId: c.get('requestId'), message: 'stripe_info done' })
-  return selectedPlan.name
+  throw new Error('createStripeCustomer customer_id link raced')
 }
 
 export async function finalizePendingStripeCustomer(c: Context, org: OrgRow) {
