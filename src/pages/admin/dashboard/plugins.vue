@@ -26,6 +26,7 @@ import {
   isLegacyChannelSelfStorePluginVersion,
   isLegacyEncryptionKeyIdPluginVersion,
 } from '~/services/adminPluginCompatibility'
+import type { PluginCompatibilityTrendPoint } from '~/services/adminPluginCompatibility'
 import { formatLocalDate } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
@@ -35,7 +36,7 @@ import { useMainStore } from '~/stores/main'
 interface PluginBreakdownTrendPoint {
   date: string
   version_breakdown: Record<string, number>
-  major_breakdown: Record<string, number>
+  major_breakdown?: Record<string, number>
   devices_last_month?: number
 }
 
@@ -176,7 +177,7 @@ function formatPercent(value: number) {
 }
 
 function getTopBreakdownEntries(
-  latestPoint: PluginBreakdownTrendPoint | undefined,
+  latestPoint: PluginCompatibilityTrendPoint | undefined,
   key: PluginBreakdownKey,
   minPercent: number,
   limit: number,
