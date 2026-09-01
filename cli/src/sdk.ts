@@ -28,6 +28,7 @@ import type {
   GetStatsOptions,
   ListOrganizationsOptions,
   LoginOptions,
+  ObserveOptions,
   OrganizationInfo,
   ProbeOptions,
   RequestBuildOptions,
@@ -1251,6 +1252,44 @@ export class CapgoSDK {
     }
   }
 
+  /**
+   * Query Capgo Observe (launch, issues, routes, device timelines).
+   * Start with view=summary; follow findings.next. Use --json / MCP for agents.
+   */
+  async observe(options: ObserveOptions): Promise<SDKResult<Record<string, unknown>>> {
+    try {
+      const apikey = options.apikey || this.apikey || findSavedKey(true)
+      const localConfig = await getLocalConfig()
+      const response = await fetch(`${localConfig.hostApi}/private/observe`, {
+        method: 'POST',
+        headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', 'capgkey': apikey }),
+        body: JSON.stringify({
+          appId: options.appId,
+          view: options.view ?? 'summary',
+          days: options.days,
+          action: options.action,
+          deviceId: options.deviceId,
+          versionName: options.versionName,
+          sort: options.sort,
+          limit: options.limit,
+        }),
+      })
+
+      const payload = await response.json().catch(() => ({})) as Record<string, unknown>
+      if (!response.ok) {
+        const message = typeof payload.message === 'string'
+          ? payload.message
+          : `HTTP error! status: ${response.status}`
+        throw new Error(message)
+      }
+
+      return { success: true, data: payload }
+    }
+    catch (error) {
+      return createErrorResult(error)
+    }
+  }
+
   // ==========================================================================
   // Miscellaneous Helpers
   // ==========================================================================
@@ -1577,6 +1616,19 @@ export async function getStats(options: GetStatsOptions): Promise<SDKResult<Devi
   return sdk.getStats(options)
 }
 
+/**
+ * Query Capgo Observe (functional API).
+ * Start with view=summary and follow findings.next. view=device is the session timeline.
+ */
+export async function getObserve(options: ObserveOptions): Promise<SDKResult<Record<string, unknown>>> {
+  const sdk = new CapgoSDK({
+    apikey: options.apikey,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
+  return sdk.observe(options)
+}
+
 export async function probeUpdates(options: ProbeOptions): Promise<SDKResult<ProbeInternalResult>> {
   const sdk = new CapgoSDK()
   return sdk.probe(options)
@@ -1633,6 +1685,7 @@ export type {
   GetStatsOptions,
   ListOrganizationsOptions,
   LoginOptions,
+  ObserveOptions,
   OrganizationInfo,
   ProbeOptions,
   RequestBuildOptions,

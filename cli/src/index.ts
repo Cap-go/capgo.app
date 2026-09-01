@@ -1,6 +1,6 @@
 import { cwd, exit } from 'node:process'
 import { log } from '@clack/prompts'
-import { InvalidArgumentError, Option, program } from 'commander'
+import { type Command, InvalidArgumentError, Option, program } from 'commander'
 import pack from '../package.json'
 import { categorizeCliError } from './analytics/error-category'
 import { applyCommandAnalyticsOptOut, applyRawCommandAnalyticsOptOut } from './analytics/opt-out'
@@ -51,6 +51,7 @@ import { createKey, deleteOldKey, saveKeyCommand } from './key'
 import { login } from './login'
 import { startMcpServer } from './mcp/server'
 import { setupNotifications } from './notifications/setup'
+import { type ObserveCliOptions, observeCommand } from './observe/command'
 import { addOrganization, deleteOrganization, listMembers, listOrganizations, setOrganization } from './organization'
 import { capturePosthogException, getCommandPath, shouldCapturePosthogException } from './posthog'
 import { getPreviewQr } from './preview/qr'
@@ -1305,6 +1306,103 @@ Example: npx @capgo/cli@latest probe --platform ios`)
   .option('--platform <platform>', 'Platform to probe: ios or android')
   .action(probe)
 
+function addObserveQueryOptions(command: Command) {
+  return command
+    .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+    .option('--days <days>', 'Lookback window in days: 1, 3, 7, or 30 (default: 7)')
+    .option('--action <action>', 'Filter by stats action, for example app_launch_ready or app_nav')
+    .option('--sort <sort>', 'Sort samples: slowest, fastest, newest, or oldest')
+    .option('--limit <limit>', 'Max rows to return')
+    .option('--version-name <versionName>', 'Filter by bundle version name')
+    .option('--json', 'Output as JSON')
+    .option('--supa-host <supaHost>', optionDescriptions.supaHost)
+    .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+}
+
+const observe = program
+  .command('observe')
+  .description(`📊 Query Capgo Observe metrics so you can act on launch, crash, WebView, and navigation data.
+
+Start with summary and follow the findings. Capgo has no session id: use observe device DEVICE_ID for a device timeline.
+Navigation does not need Expo Router. Listen to history.pushState, history.replaceState, popstate, hashchange, and Capacitor App appUrlOpen, then send action=app_nav with metadata.route.
+
+Example: npx @capgo/cli@latest observe summary`)
+
+addObserveQueryOptions(
+  observe
+    .command('summary [appId]')
+    .description(`📊 Actionable Observe findings for an app.
+
+Start here. Each finding includes a next view to query.
+
+Example: npx @capgo/cli@latest observe summary`)
+    .action(async (appId: string | undefined, options: ObserveCliOptions) => {
+      await observeCommand('summary', appId, options)
+    }),
+)
+
+addObserveQueryOptions(
+  observe
+    .command('metrics [appId]')
+    .description(`📈 Sample Observe timings, slowest first by default.
+
+Use --action app_launch_ready or app_nav, and --sort slowest to find outliers.
+
+Example: npx @capgo/cli@latest observe metrics --action app_launch_ready --sort slowest --json`)
+    .action(async (appId: string | undefined, options: ObserveCliOptions) => {
+      await observeCommand('metrics', appId, options)
+    }),
+)
+
+addObserveQueryOptions(
+  observe
+    .command('events [appId]')
+    .description(`📋 Observe action counts and latest devices.
+
+Example: npx @capgo/cli@latest observe events --action app_crash_native`)
+    .action(async (appId: string | undefined, options: ObserveCliOptions) => {
+      await observeCommand('events', appId, options)
+    }),
+)
+
+addObserveQueryOptions(
+  observe
+    .command('device [deviceId] [appId]')
+    .description(`📱 Device timeline (session substitute) for one device_id.
+
+Capgo has no session id. Read events in time order to see launch, WebView, crashes, and navigations.
+
+Example: npx @capgo/cli@latest observe device DEVICE_ID --json`)
+    .option('-d, --device <device>', 'Device ID')
+    .action(async (deviceId: string | undefined, appId: string | undefined, options: ObserveCliOptions) => {
+      await observeCommand('device', appId, options, deviceId)
+    }),
+)
+
+addObserveQueryOptions(
+  observe
+    .command('versions [appId]')
+    .description(`📦 Observe breakdown by bundle version.
+
+Example: npx @capgo/cli@latest observe versions`)
+    .action(async (appId: string | undefined, options: ObserveCliOptions) => {
+      await observeCommand('versions', appId, options)
+    }),
+)
+
+addObserveQueryOptions(
+  observe
+    .command('routes [appId]')
+    .description(`🧭 Per-screen Observe timings from metadata.route or action=app_nav.
+
+No Expo Router required. The app should listen to history/popstate/hashchange/appUrlOpen and send metadata.route.
+
+Example: npx @capgo/cli@latest observe routes --json`)
+    .action(async (appId: string | undefined, options: ObserveCliOptions) => {
+      await observeCommand('routes', appId, options)
+    }),
+)
+
 program
   .command('generate-docs [filePath]')
   .description('Generate Markdown documentation for CLI commands - either for README or individual files')
@@ -1328,7 +1426,7 @@ Selected tools exposed via MCP:
   - capgo_list_organizations, capgo_add_organization
   - capgo_star_repository
   - capgo_star_all_repositories
-  - capgo_get_account_id, capgo_doctor, capgo_get_stats
+  - capgo_get_account_id, capgo_doctor, capgo_get_stats, capgo_observe
   - capgo_request_build, capgo_generate_encryption_keys
 
 Example usage with Claude Desktop:

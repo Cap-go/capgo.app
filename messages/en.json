@@ -87,6 +87,7 @@
   "action-app-memory-warning": "iOS memory warning",
   "action-app-moved-to-background": "App moved to background",
   "action-app-moved-to-foreground": "App moved to foreground",
+  "action-app-nav": "Screen navigation",
   "action-backend-refusal": "Rejected - unsupported plugin version",
   "action-blocked-by-server-url": "Blocked by server URL policy",
   "action-cannot-get-bundle": "Unable to retrieve bundle",

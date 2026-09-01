@@ -5320,6 +5320,7 @@ export type Database = {
         | "app_launch_start"
         | "app_launch_ready"
         | "app_launch_timeout"
+        | "app_nav"
         | "webview_dom_content_loaded"
         | "webview_page_loaded"
       stripe_status:
@@ -5600,6 +5601,7 @@ export const Constants = {
         "app_launch_start",
         "app_launch_ready",
         "app_launch_timeout",
+        "app_nav",
         "webview_dom_content_loaded",
         "webview_page_loaded",
       ],

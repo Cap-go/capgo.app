@@ -449,6 +449,26 @@ export const deviceStatsSchema = z.object({
 
 export type DeviceStats = z.infer<typeof deviceStatsSchema>
 
+export const observeViewSchema = z.enum(['summary', 'metrics', 'events', 'device', 'versions', 'routes'])
+export const observeSortSchema = z.enum(['slowest', 'fastest', 'newest', 'oldest'])
+
+export const observeOptionsSchema = z.object({
+  appId: z.string().describe('App ID'),
+  view: observeViewSchema.optional().describe('Start with summary, then follow findings.next. device is the session timeline.'),
+  days: z.number().optional().describe('Lookback window: 1, 3, 7, or 30 (default 7)'),
+  action: z.string().optional().describe('Filter by stats action, e.g. app_launch_ready or app_nav'),
+  deviceId: z.string().optional().describe('Required for view=device. Device timeline substitutes for a session id.'),
+  versionName: z.string().optional().describe('Filter by bundle version name'),
+  sort: observeSortSchema.optional().describe('Sort samples: slowest, fastest, newest, oldest'),
+  limit: z.number().optional().describe('Max rows to return (default 20, max 100)'),
+  apikey: z.string().optional(),
+  supaHost: z.string().optional(),
+  supaAnon: z.string().optional(),
+})
+
+export type ObserveOptions = z.infer<typeof observeOptionsSchema>
+export type ObserveView = z.infer<typeof observeViewSchema>
+
 // ============================================================================
 // SDK Probe Schemas
 // ============================================================================
