@@ -49,15 +49,19 @@ async function persistAppOnboarding(
     const row = result.rows[0] as Database['public']['Tables']['apps']['Row'] | undefined
     if (!row)
       return undefined
-    await client.query(
-      `SELECT public.try_complete_pending_onboarding_if_setup_done($1)`,
+    const completeResult = await client.query<{ completed: boolean }>(
+      `SELECT public.try_complete_pending_onboarding_if_setup_done($1) AS completed`,
       [appId],
     )
-    const completed = await client.query(
+    const completed = completeResult.rows[0]?.completed === true
+    const refreshed = await client.query(
       `SELECT * FROM public.apps WHERE app_id = $1`,
       [appId],
     )
-    return (completed.rows[0] ?? row) as Database['public']['Tables']['apps']['Row']
+    return {
+      app: (refreshed.rows[0] ?? row) as Database['public']['Tables']['apps']['Row'],
+      completed,
+    }
   }
   finally {
     if (opened)
@@ -192,8 +196,11 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
           if (!data)
             dbError = { message: 'App not found during onboarding completion' }
         }
-        if (data && onboardingPatch)
-          data = await persistAppOnboarding(c, appId, onboardingPatch, pgClient) ?? data
+        if (data && onboardingPatch) {
+          const persisted = await persistAppOnboarding(c, appId, onboardingPatch, pgClient)
+          if (persisted)
+            data = persisted.app
+        }
       }
       catch (error) {
         dbError = { message: (error as Error)?.message }
@@ -207,11 +214,14 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     else if (onboardingPatch && !hasSettingsPayload) {
       const pgClient = getPgClient(c)
       try {
-        data = await persistAppOnboarding(c, appId, onboardingPatch, pgClient)
-        if (!data)
+        const persisted = await persistAppOnboarding(c, appId, onboardingPatch, pgClient)
+        if (!persisted) {
           dbError = { message: 'App not found during onboarding progress update' }
-        else
-          completedPendingOnboarding = previousApp.need_onboarding === true && data.need_onboarding === false
+        }
+        else {
+          data = persisted.app
+          completedPendingOnboarding = persisted.completed
+        }
       }
       catch (error) {
         dbError = { message: (error as Error)?.message }
@@ -242,10 +252,13 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
       dbError = updateResult.error
       if (data)
         completedPendingOnboarding = previousApp.need_onboarding === true && data.need_onboarding === false
-      if (data && onboardingPatch)
-        data = await persistAppOnboarding(c, appId, onboardingPatch) ?? data
-      if (data)
-        completedPendingOnboarding = previousApp.need_onboarding === true && data.need_onboarding === false
+      if (data && onboardingPatch) {
+        const persisted = await persistAppOnboarding(c, appId, onboardingPatch)
+        if (persisted) {
+          data = persisted.app
+          completedPendingOnboarding = completedPendingOnboarding || persisted.completed
+        }
+      }
     }
   }
   finally {
