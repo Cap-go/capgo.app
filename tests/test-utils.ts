@@ -445,19 +445,35 @@ async function signInAndBuildAuthHeaders(email: string, password: string): Promi
     },
   })
 
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  })
+  // AuthRetryableFetchError (status 0 / fetch failed) is a transient GoTrue
+  // miss under shard load, not a credential failure. Retry like fetchTestRequest.
+  let lastError: unknown
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    })
+    if (!error && data.session?.access_token) {
+      return {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${data.session.access_token}`,
+      }
+    }
 
-  if (error || !data.session?.access_token) {
-    throw error ?? new Error('Unable to obtain JWT for tests')
+    lastError = error ?? new Error('Unable to obtain JWT for tests')
+    const retryable = Boolean(
+      error
+      && typeof error === 'object'
+      && ('name' in error)
+      && error.name === 'AuthRetryableFetchError',
+    )
+    if (!retryable || attempt === 3)
+      throw lastError
+
+    await new Promise(resolve => setTimeout(resolve, 200 * attempt))
   }
 
-  return {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${data.session.access_token}`,
-  }
+  throw lastError ?? new Error('Unable to obtain JWT for tests')
 }
 
 export async function getAuthHeaders(): Promise<Record<string, string>> {
