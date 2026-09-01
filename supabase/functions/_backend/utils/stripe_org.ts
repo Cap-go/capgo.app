@@ -192,8 +192,13 @@ export async function finalizePendingStripeCustomer(c: Context, org: OrgRow) {
     .eq('id', org.id)
     .single()
 
-  if (!isProvisionedStripeCustomerId(updatedOrg?.customer_id)) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'finalizePendingStripeCustomer: org still has pending customer_id, skipping delete' })
+  const linkedCustomerId = updatedOrg?.customer_id
+  if (!isProvisionedStripeCustomerId(linkedCustomerId) && !isLocalStripeCustomerId(linkedCustomerId)) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'finalizePendingStripeCustomer: org customer_id not finalized, skipping delete',
+      linkedCustomerId,
+    })
     return
   }
 

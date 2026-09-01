@@ -794,12 +794,26 @@ function isStripeIdempotencyMismatch(error: unknown) {
   return typeof candidate.message === 'string' && candidate.message.toLowerCase().includes('idempotent')
 }
 
-async function findExistingOrgStripeCustomer(c: Context, orgId: string) {
+function oldestCustomer(customers: Stripe.Customer[]) {
+  return customers.toSorted((left, right) => left.created - right.created)[0] ?? null
+}
+
+function customerMatchesOrg(customer: Stripe.Customer, orgId: string) {
+  return customer.metadata?.org_id === orgId
+}
+
+async function findExistingOrgStripeCustomer(c: Context, orgId: string, email: string) {
   const result = await getStripe(c).customers.search({
     query: `metadata['org_id']:'${orgId.replaceAll('\'', '')}'`,
     limit: 10,
   })
-  return result.data.toSorted((left, right) => left.created - right.created)[0] ?? null
+  const fromSearch = oldestCustomer(result.data)
+  if (fromSearch)
+    return fromSearch
+
+  // Search is eventually consistent; list by email is a bounded read-after-write fallback.
+  const listed = await getStripe(c).customers.list({ email, limit: 100 })
+  return oldestCustomer(listed.data.filter(customer => customerMatchesOrg(customer, orgId)))
 }
 
 export async function createCustomer(c: Context, email: string, userId: string, orgId: string, name: string) {
@@ -833,7 +847,7 @@ export async function createCustomer(c: Context, email: string, userId: string, 
       message: 'createCustomer idempotency mismatch, searching existing customer',
       orgId,
     })
-    const existing = await findExistingOrgStripeCustomer(c, orgId)
+    const existing = await findExistingOrgStripeCustomer(c, orgId, email)
     if (!existing) {
       cloudlogErr({
         requestId: c.get('requestId'),

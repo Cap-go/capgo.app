@@ -111,4 +111,37 @@ describe('createCustomer idempotency', () => {
       limit: 10,
     })
   })
+
+  it('falls back to listing by email when Stripe search has not indexed the customer yet', async () => {
+    const orgId = 'b0dfb856-7ed2-4420-bfca-64d67fe65a4e'
+    const createCustomerApi = vi.fn().mockRejectedValue({
+      type: 'idempotency_error',
+      message: 'Keys for idempotent requests can only be used with the same parameters they were first used with.',
+    })
+    const searchCustomerApi = vi.fn().mockResolvedValue({ data: [] })
+    const listCustomerApi = vi.fn().mockResolvedValue({
+      data: [
+        { id: 'cus_other', created: 50, metadata: { org_id: 'other-org' } },
+        { id: 'cus_newer', created: 200, metadata: { org_id: orgId } },
+        { id: 'cus_older', created: 100, metadata: { org_id: orgId } },
+      ],
+    })
+    const updateCustomerApi = vi.fn().mockResolvedValue({ id: 'cus_older' })
+    vi.mocked(Stripe).mockImplementation(function () {
+      return {
+        customers: {
+          create: createCustomerApi,
+          search: searchCustomerApi,
+          list: listCustomerApi,
+          update: updateCustomerApi,
+        },
+      }
+    } as any)
+
+    const { createCustomer } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    const customer = await createCustomer(createContext(), 'owner@example.com', 'user-1', orgId, 'WN Hub')
+
+    expect(customer.id).toBe('cus_older')
+    expect(listCustomerApi).toHaveBeenCalledWith({ email: 'owner@example.com', limit: 100 })
+  })
 })

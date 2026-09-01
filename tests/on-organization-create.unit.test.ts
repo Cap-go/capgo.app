@@ -171,4 +171,23 @@ describe('on_organization_create stripe bootstrap', () => {
     expect(backgroundTaskMock.mock.calls.some(call => call[1] instanceof Promise)).toBe(true)
     resolveOnboarding()
   })
+
+  it('keeps the trigger successful when onboarding sync fails', async () => {
+    syncOrgOnboardingIntentForOrgMock.mockRejectedValue(new Error('bento down'))
+    mockOrgReload(`pending_${ORG_ID}`)
+    const { app } = await import('../supabase/functions/_backend/triggers/on_organization_create.ts')
+
+    const response = await app.request('http://localhost/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        table: 'orgs',
+        type: 'INSERT',
+        record: createOrg(null),
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(syncOrgOnboardingIntentForOrgMock).toHaveBeenCalledTimes(1)
+  })
 })

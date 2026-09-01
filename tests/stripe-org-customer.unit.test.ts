@@ -297,4 +297,15 @@ describe('finalizePendingStripeCustomer', () => {
     expect(createCustomerMock).not.toHaveBeenCalled()
     expect(stripeInfoDeleteEq).toHaveBeenCalledWith('customer_id', PENDING_ID)
   })
+
+  it('cleans up the pending stripe_info row when only a local customer id is linked', async () => {
+    createCustomerMock.mockResolvedValue({ id: LOCAL_ID })
+    const { stripeInfoDeleteEq } = mockSupabase({ orgCustomerId: PENDING_ID })
+
+    const planName = await finalizePendingStripeCustomer(createContext(), createOrg(PENDING_ID))
+
+    expect(planName).toBe('Solo')
+    expect(createCustomerMock).toHaveBeenCalledTimes(1)
+    expect(stripeInfoDeleteEq).toHaveBeenCalledWith('customer_id', PENDING_ID)
+  })
 })
