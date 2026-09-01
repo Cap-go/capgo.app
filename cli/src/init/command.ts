@@ -37,7 +37,7 @@ import { copyToClipboard, revealInFinder } from '../support/clipboard'
 import { contactSupport } from '../support/contact-support'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log'
 import { uploadSupportLogs } from '../support/support-upload'
-import { canPromptInteractively, consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
+import { canPromptInteractively, consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, listOrgsViaHttp, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
 import { loginInitInBrowser, shouldStartInitBrowserLogin } from './browser-login'
 import { isChannelAlreadyExistsError } from './channel-conflict'
@@ -1383,13 +1383,13 @@ async function validateResumedOnboardingAccess(
   hostOptions?: { supaHost?: string, supaAnon?: string },
 ): Promise<string | undefined> {
   try {
-    const { error: orgError, data: organizations } = await supabase.rpc('get_orgs_v7')
-    if (orgError || !organizations)
+    const organizations = await listOrgsViaHttp(apikey, hostOptions)
+    if (!organizations.length)
       return 'Could not verify whether the saved onboarding organization is still available. Starting fresh.'
 
     const organization = organizations.find(org => org.gid === resume.orgId)
     const hasCreateAppPermission = organization && !resume.appId
-      ? await hasCliPermission(supabase, apikey, 'org.create_app', { orgId: organization.gid })
+      ? await hasCliPermission(supabase, apikey, 'org.create_app', { orgId: organization.gid }, hostOptions)
       : false
     const hasAppAccess = !organization || !resume.appId
       ? true
@@ -5542,18 +5542,21 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   if (resumed) {
     const resumedSnapshot = resumed
     // Fetch orgs to validate the saved one still exists and is accessible
-    const { error: orgError, data: allOrganizations } = await supabase.rpc('get_orgs_v7')
-    if (orgError || !allOrganizations) {
-      pLog.error(`Cannot verify organization access: ${orgError ? JSON.stringify(orgError) : 'no data returned'}`)
+    let allOrganizations
+    try {
+      allOrganizations = await listOrgsViaHttp(options.apikey, { supaHost: options.supaHost, supaAnon: options.supaAnon })
+    }
+    catch (orgError) {
+      pLog.error(`Cannot verify organization access: ${orgError instanceof Error ? orgError.message : JSON.stringify(orgError)}`)
       pLog.warn('Falling back to organization selection.')
       organization = await selectOrganizationForInit(supabase, options.apikey)
       await discardResumedState()
     }
-    else {
+    if (allOrganizations) {
       const savedOrg = allOrganizations.find(org => org.gid === resumedSnapshot.orgId)
       const blocked2fa = savedOrg?.enforcing_2fa && !savedOrg['2fa_has_access']
       const hasCreateAppPermission = savedOrg && !resumedSnapshot.appId
-        ? await hasCliPermission(supabase, options.apikey, 'org.create_app', { orgId: savedOrg.gid })
+        ? await hasCliPermission(supabase, options.apikey, 'org.create_app', { orgId: savedOrg.gid }, { supaHost: options.supaHost, supaAnon: options.supaAnon })
         : false
       const hasAppAccess = !savedOrg || !resumedSnapshot.appId
         ? true

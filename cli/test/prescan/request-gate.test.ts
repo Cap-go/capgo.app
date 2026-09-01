@@ -118,24 +118,24 @@ describe('play-sa-access probe is gated by PLAY_CONFIG_JSON presence in the thre
 
 // Integration tests that drive the REAL requestBuildInternal through the gate
 // and the relocated permission backstop. They are hermetic: every fetch is
-// routed through a spy, so no Supabase RPC, no /private/config, and no
+// routed through a spy, so no Capgo HTTP, no /private/config, and no
 // /build/request ever leaves the process. The spy lets us (a) control the
-// cli_check_permission result, (b) observe whether /build/request was POSTed.
+// /private/cli/check-permission result, (b) observe whether /build/request was POSTed.
 //
 // A capacitor.config.json + minimal Android credentials get the run PAST
 // getConfig and the credential-validation step so it reaches the gate/assert.
 // supaHost/supaAnon make createSupabaseClient build a real client pointed at a
-// fake URL whose RPC/select calls the spy answers.
+// fake URL whose HTTP calls the spy answers.
 interface GateProbe {
   postedBuildRequest: boolean
   urls: string[]
 }
 
 /**
- * Route all outbound fetch. cli_check_permission returns `permission`; the
+ * Route all outbound fetch. /private/cli/check-permission returns `{ allowed }`; the
  * /build/request POST is recorded (and answered 200) so a regression that
  * reached the POST would still flip postedBuildRequest to true; everything
- * else (getRemoteConfig, apps select) gets a benign empty 200.
+ * else (getRemoteConfig, GET app) gets a benign empty 200.
  */
 function installGateFetchSpy(permission: boolean): GateProbe {
   const probe: GateProbe = { postedBuildRequest: false, urls: [] }
@@ -144,15 +144,13 @@ function installGateFetchSpy(permission: boolean): GateProbe {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     probe.urls.push(url)
-    if (url.includes('cli_check_permission'))
-      return json(permission)
+    if (url.includes('/private/cli/check-permission'))
+      return json({ allowed: permission })
     if (url.includes('/build/request')) {
       probe.postedBuildRequest = true
       return json({ jobId: 'should-never-be-reached' })
     }
-    // apps select (getOrganizationId), getRemoteConfig, and any other supabase
-    // call: a benign empty payload. getOrganizationId's empty result is
-    // swallowed (orgId=''), exactly as in production.
+    // GET app, getRemoteConfig, and any other Capgo HTTP call: a benign empty payload.
     return json({})
   }) as typeof fetch
   return probe

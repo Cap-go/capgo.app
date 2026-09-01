@@ -276,7 +276,7 @@ export async function getBuildNeeded(
     enrichedOptions.supaAnon,
   )
 
-  await check2FAComplianceForApp(supabase, resolvedAppId, true)
+  await check2FAComplianceForApp(enrichedOptions.apikey, resolvedAppId, true, { supaHost: enrichedOptions.supaHost, supaAnon: enrichedOptions.supaAnon })
   await checkAppExistsAndHasPermissionOrgErr(
     supabase,
     enrichedOptions.apikey,

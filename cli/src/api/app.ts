@@ -6,10 +6,9 @@ import { CliUserError } from '../shared/cli-user-error'
 import { isTransientNetworkError } from '../shared/network-error'
 import {
   callTwoFactorComplianceRpcWithRetry,
-  throwTwoFactorComplianceRpcError,
   warnAndContinueTwoFactorPreflightNetworkFailure,
 } from '../shared/two-factor-compliance'
-import { appAddHintMessage, formatCapgoApiErrorBody, formatCapgoCliApiError, getCapgoCliHttpStatus, hasCliPermission, hasCliPermissionViaHttp, invokeCapgoCliApi, isCapgoManagedSupabaseHost, resolveCapgoPublicApiHost, show2FADeniedError, type CapgoCliHostOptions } from '../utils'
+import { appAddHintMessage, formatCapgoApiErrorBody, formatCapgoCliApiError, getCapgoCliHttpStatus, hasCliPermissionViaHttp, invokeCapgoCliApi, isCapgoManagedSupabaseHost, resolveCapgoPublicApiHost, show2FADeniedError, type CapgoCliHostOptions } from '../utils'
 
 export async function checkAppExists(
   apikey: string,
@@ -202,40 +201,14 @@ function isSupabaseClient(value: unknown): value is SupabaseClient<Database> {
 }
 
 export async function check2FAComplianceForApp(
-  apikeyOrSupabase: string | SupabaseClient<Database>,
+  apikey: string,
   appid: string,
   silent = false,
   options?: CapgoCliHostOptions,
 ): Promise<void> {
-  if (typeof apikeyOrSupabase !== 'string') {
-    const { data: shouldReject, error: rejectError } = await callTwoFactorComplianceRpcWithRetry(() =>
-      apikeyOrSupabase.rpc('reject_access_due_to_2fa_for_app', { app_id: appid }),
-    )
-
-    if (rejectError) {
-      if (!silent && !isTransientNetworkError(rejectError))
-        log.error(`Cannot check 2FA compliance: ${rejectError.message}`)
-      if (isTransientNetworkError(rejectError)) {
-        await warnAndContinueTwoFactorPreflightNetworkFailure({
-          silent,
-          telemetryFunctionName: 'check2FAComplianceForApp',
-        })
-        return
-      }
-      throwTwoFactorComplianceRpcError(rejectError)
-    }
-
-    if (shouldReject) {
-      if (silent)
-        throw new Error('2FA required for this organization')
-      show2FADeniedError()
-    }
-    return
-  }
-
   const { data, error } = await callTwoFactorComplianceRpcWithRetry<{ reject?: boolean }>(() =>
     invokeCapgoCliApi<{ reject?: boolean }>('private/cli/check-2fa-app', {
-      apikey: apikeyOrSupabase,
+      apikey,
       method: 'POST',
       body: { app_id: appid },
       supaHost: options?.supaHost,
@@ -325,12 +298,8 @@ export async function checkAppExistsAndHasPermissionOrgErr(
 
   const isChannelScopedPermission = resolvedChannelId != null && requiredPermissionKey.startsWith('channel.')
 
-  if (!skip2FACheck) {
-    if (isSupabaseClient(apikeyOrSupabase))
-      await check2FAComplianceForApp(apikeyOrSupabase, appid, silent)
-    else
-      await check2FAComplianceForApp(apikey, appid, silent, hostOptions)
-  }
+  if (!skip2FACheck)
+    await check2FAComplianceForApp(apikey, appid, silent, hostOptions)
 
   if (!isChannelScopedPermission && !(await checkAppExists(apikey, appid, hostOptions))) {
     const msg = appAddHintMessage(appid)
@@ -339,9 +308,12 @@ export async function checkAppExistsAndHasPermissionOrgErr(
     throw new Error(msg)
   }
 
-  const allowed = await (isSupabaseClient(apikeyOrSupabase)
-    ? hasCliPermission(apikeyOrSupabase, apikey, requiredPermissionKey, { appId: appid, channelId: resolvedChannelId })
-    : hasCliPermissionViaHttp(apikey, requiredPermissionKey, { appId: appid, channelId: resolvedChannelId }, hostOptions))
+  const allowed = await hasCliPermissionViaHttp(
+    apikey,
+    requiredPermissionKey,
+    { appId: appid, channelId: resolvedChannelId },
+    hostOptions,
+  )
 
   if (!allowed) {
     const userMessage = `Insufficient permissions for app ${appid}. Required RBAC permission for this action: ${requiredPermissionKey}.`

@@ -69,12 +69,14 @@ describe('init browser login', () => {
   })
 
   it('resolves plain API-key identity before listing organizations', () => {
-    const resolveUserId = helperSource.indexOf('await resolveUserIdFromApiKey(supabase, key, true)')
-    const listOrganizations = helperSource.indexOf("await supabase.rpc('get_orgs_v7')")
+    const resolveUserId = helperSource.indexOf('await resolveUserIdFromApiKey(null, key, true, host)')
+    const listOrganizations = helperSource.indexOf('await listOrgsViaHttp(key, host)')
 
     expect(resolveUserId).toBeGreaterThanOrEqual(0)
     expect(listOrganizations).toBeGreaterThanOrEqual(0)
     expect(resolveUserId).toBeLessThan(listOrganizations)
+    expect(helperSource).toContain('listOrgsViaHttp')
+    expect(helperSource).not.toContain("await supabase.rpc('get_orgs_v7')")
   })
 
   it('opens the correlated URL, saves the masked input, and notifies every org', async () => {

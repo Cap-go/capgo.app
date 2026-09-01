@@ -33,6 +33,23 @@ interface UploadChannelQuery {
   channel: string
 }
 
+interface CheckPlanBody {
+  org_id: string
+  app_id?: string | null
+  actions?: string[] | null
+}
+
+interface Check2faOrgBody {
+  org_id: string
+}
+
+const PLAN_ACTIONS = ['mau', 'storage', 'bandwidth', 'build_time'] as const
+type PlanAction = typeof PLAN_ACTIONS[number]
+
+function isPlanAction(value: string): value is PlanAction {
+  return (PLAN_ACTIONS as readonly string[]).includes(value)
+}
+
 function requireObjectBody<T extends object>(body: unknown): T | Response {
   if (body === null || typeof body !== 'object' || Array.isArray(body))
     return quickError(400, 'invalid_json_body', 'Invalid JSON body', { body })
@@ -233,7 +250,219 @@ app.get('/upload-channel', middlewareKey(), async (c) => {
     return quickError(500, 'channel_lookup_failed', 'Cannot load channel for upload', { error })
 
   if (!data)
-    return c.json({ channel: null })
+    return c.json({ channel: null, apikey_user_id: apikey.user_id })
 
   return c.json({ channel: data, apikey_user_id: apikey.user_id })
+})
+
+async function assertOrgPlanScope(
+  c: Parameters<typeof checkPermission>[0],
+  orgId: string,
+  appId?: string | null,
+): Promise<Response | null> {
+  if (appId) {
+    if (typeof appId !== 'string' || !isValidAppId(appId))
+      return quickError(400, 'invalid_app_id', 'App ID must be a reverse domain string', { app_id: appId })
+
+    const allowed = await checkPermission(c, 'app.read', { appId })
+      || await checkPermission(c, 'app.upload_bundle', { appId })
+      || await checkPermission(c, 'bundle.delete', { appId })
+    if (!allowed)
+      return quickError(401, 'not_authorized', 'You cannot access this app', { app_id: appId })
+
+    const appWithOrg = await getAppOrganization(c, appId)
+    if (appWithOrg.owner_org !== orgId)
+      return quickError(403, 'org_mismatch', 'App does not belong to the requested organization', { org_id: orgId, app_id: appId })
+
+    return null
+  }
+
+  if (!(await checkPermission(c, 'org.read', { orgId })))
+    return quickError(401, 'not_authorized', 'You cannot read this organization', { org_id: orgId })
+
+  return null
+}
+
+async function resolvePlanResult(
+  supabase: ReturnType<typeof supabaseApikey>,
+  orgId: string,
+  actions: PlanAction[],
+  appId?: string | null,
+): Promise<{ result: 'allowed' | 'billing_denied' | 'permission_denied' } | Response> {
+  const orgScoped = await supabase.rpc('is_allowed_action_org_action', {
+    orgid: orgId,
+    actions,
+  })
+  if (orgScoped.error)
+    return quickError(500, 'plan_check_failed', 'Cannot validate plan', { error: orgScoped.error })
+
+  if (!appId) {
+    return { result: orgScoped.data === true ? 'allowed' : 'billing_denied' }
+  }
+
+  const appScoped = await supabase.rpc('is_allowed_action_org_action', {
+    orgid: orgId,
+    actions,
+    appid: appId,
+  })
+  if (appScoped.error)
+    return quickError(500, 'plan_check_failed', 'Cannot validate plan', { error: appScoped.error })
+
+  if (appScoped.data === true)
+    return { result: 'allowed' }
+  if (orgScoped.data === true)
+    return { result: 'permission_denied' }
+  return { result: 'billing_denied' }
+}
+
+app.get('/orgs', middlewareKey(), async (c) => {
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  const supabase = supabaseApikey(c, apikey.key ?? c.get('capgkey'))
+  const { data, error } = await supabase.rpc('get_orgs_v7')
+  if (error)
+    return quickError(500, 'orgs_failed', 'Cannot load organizations', { error })
+
+  return c.json({ orgs: data ?? [] })
+})
+
+app.post('/check-plan', middlewareKey(), async (c) => {
+  const bodyResult = requireObjectBody<CheckPlanBody>(await parseBody<unknown>(c))
+  if (bodyResult instanceof Response)
+    return bodyResult
+  const body = bodyResult
+
+  if (!body.org_id || typeof body.org_id !== 'string')
+    return quickError(400, 'missing_org_id', 'Missing org_id', { body })
+
+  const rawActions = body.actions
+  let actions: PlanAction[] = [...PLAN_ACTIONS]
+  if (rawActions != null) {
+    if (!Array.isArray(rawActions) || rawActions.length === 0 || rawActions.some(action => typeof action !== 'string' || !isPlanAction(action)))
+      return quickError(400, 'invalid_actions', 'actions must be a non-empty list of mau, storage, bandwidth, or build_time', { body })
+    actions = rawActions
+  }
+
+  const scopeError = await assertOrgPlanScope(c, body.org_id, body.app_id)
+  if (scopeError)
+    return scopeError
+
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  const supabase = supabaseApikey(c, apikey.key ?? c.get('capgkey'))
+  const planResult = await resolvePlanResult(supabase, body.org_id, actions, body.app_id)
+  if (planResult instanceof Response)
+    return planResult
+
+  const creditsArgs = body.app_id
+    ? { orgid: body.org_id, appid: body.app_id }
+    : { orgid: body.org_id }
+
+  const [trialDays, isPaying, creditsResult] = await Promise.all([
+    isTrialOrg(c, body.org_id),
+    isPayingOrg(c, body.org_id),
+    supabase.rpc('has_usage_credits_org', creditsArgs).single(),
+  ])
+
+  if (creditsResult.error)
+    return quickError(500, 'plan_check_failed', 'Cannot validate upload credits', { error: creditsResult.error })
+
+  return c.json({
+    result: planResult.result,
+    valid: planResult.result === 'allowed',
+    trial_days: trialDays,
+    is_paying: isPaying,
+    has_credits: creditsResult.data === true,
+  })
+})
+
+app.post('/check-2fa-org', middlewareKey(), async (c) => {
+  const bodyResult = requireObjectBody<Check2faOrgBody>(await parseBody<unknown>(c))
+  if (bodyResult instanceof Response)
+    return bodyResult
+  const body = bodyResult
+
+  if (!body.org_id || typeof body.org_id !== 'string')
+    return quickError(400, 'missing_org_id', 'Missing org_id', { body })
+
+  if (!(await checkPermission(c, 'org.read', { orgId: body.org_id }))
+    && !(await checkPermission(c, 'org.update_settings', { orgId: body.org_id }))
+    && !(await checkPermission(c, 'org.read_members', { orgId: body.org_id }))) {
+    return quickError(401, 'not_authorized', 'You cannot access this organization', { org_id: body.org_id })
+  }
+
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  const { data: shouldReject, error } = await supabaseApikey(c, apikey.key ?? c.get('capgkey'))
+    .rpc('reject_access_due_to_2fa_for_org', { org_id: body.org_id })
+
+  if (error)
+    return quickError(500, 'check_2fa_failed', 'Cannot check 2FA compliance', { error })
+
+  return c.json({ reject: shouldReject === true })
+})
+
+app.get('/org-member-compliance', middlewareKey(), async (c) => {
+  const body = await getBodyOrQuery<{ org_id?: string }>(c)
+  if (!body.org_id)
+    return quickError(400, 'missing_org_id', 'Missing org_id', { body })
+
+  if (!(await checkPermission(c, 'org.read_members', { orgId: body.org_id }))
+    && !(await checkPermission(c, 'org.update_settings', { orgId: body.org_id }))) {
+    return quickError(401, 'not_authorized', 'You cannot access this organization', { org_id: body.org_id })
+  }
+
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  const supabase = supabaseApikey(c, apikey.key ?? c.get('capgkey'))
+
+  const [members2fa, membersPassword, caller2fa] = await Promise.all([
+    supabase.rpc('check_org_members_2fa_enabled', { org_id: body.org_id }),
+    supabase.rpc('check_org_members_password_policy', { org_id: body.org_id }),
+    supabase.rpc('has_2fa_enabled'),
+  ])
+
+  return c.json({
+    members_2fa: members2fa.error ? null : (members2fa.data ?? []),
+    members_2fa_error: members2fa.error?.message ?? null,
+    members_password: membersPassword.error ? null : (membersPassword.data ?? []),
+    members_password_error: membersPassword.error?.message ?? null,
+    caller_has_2fa: caller2fa.error ? null : caller2fa.data === true,
+    caller_has_2fa_error: caller2fa.error?.message ?? null,
+  })
+})
+
+app.get('/channel-current-bundle', middlewareKey(), async (c) => {
+  const body = await getBodyOrQuery<{ app_id?: string, channel?: string }>(c)
+  if (!body.app_id || !body.channel)
+    return quickError(400, 'missing_fields', 'Missing app_id or channel', { body })
+  if (!isValidAppId(body.app_id))
+    return quickError(400, 'invalid_app_id', 'App ID must be a reverse domain string', { app_id: body.app_id })
+
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  const supabase = supabaseApikey(c, apikey.key ?? c.get('capgkey'))
+  const { data: channelRow, error: channelError } = await supabase
+    .from('channels')
+    .select('id, version')
+    .eq('app_id', body.app_id)
+    .eq('name', body.channel)
+    .maybeSingle()
+
+  if (channelError)
+    return quickError(500, 'channel_lookup_failed', 'Cannot load channel', { error: channelError })
+  if (!channelRow)
+    return quickError(404, 'channel_not_found', 'Channel not found for app', { app_id: body.app_id, channel: body.channel })
+
+  if (!(await checkPermission(c, 'channel.read', { appId: body.app_id, channelId: channelRow.id })))
+    return quickError(401, 'not_authorized', 'You cannot read this channel', { app_id: body.app_id, channel: body.channel })
+
+  if (!channelRow.version)
+    return quickError(404, 'channel_has_no_bundle', 'Channel does not have a bundle linked', { app_id: body.app_id, channel: body.channel })
+
+  const { data: bundleRows, error: bundleError } = await supabase.rpc('get_channel_current_bundle_rbac', {
+    p_app_id: body.app_id,
+    p_channel_id: channelRow.id,
+  })
+
+  const bundleName = bundleRows?.[0]?.bundle_name
+  if (bundleError || !bundleName)
+    return quickError(404, 'channel_bundle_unreadable', 'Channel does not have a readable current bundle', { app_id: body.app_id, channel: body.channel })
+
+  return c.json({ bundle_name: bundleName })
 })

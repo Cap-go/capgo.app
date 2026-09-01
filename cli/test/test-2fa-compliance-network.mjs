@@ -12,59 +12,7 @@ import {
 } from '../src/shared/two-factor-compliance.ts'
 import { check2FAAccessForOrg } from '../src/utils.ts'
 
-function makeSupabaseWithRpcError(message) {
-  return {
-    rpc(name) {
-      if (name === 'reject_access_due_to_2fa_for_app' || name === 'reject_access_due_to_2fa_for_org')
-        return Promise.resolve({ data: null, error: { message } })
-      throw new Error(`Unexpected RPC call: ${name}`)
-    },
-  }
-}
-
-function makeSupabaseWithRetryableNetworkError(succeedAfterAttempts) {
-  let attempts = 0
-  return {
-    rpc(name) {
-      if (name === 'reject_access_due_to_2fa_for_app' || name === 'reject_access_due_to_2fa_for_org') {
-        attempts += 1
-        if (attempts < succeedAfterAttempts)
-          return Promise.resolve({ data: null, error: { message: 'TypeError: fetch failed' } })
-        return Promise.resolve({ data: false, error: null })
-      }
-      throw new Error(`Unexpected RPC call: ${name}`)
-    },
-    get attempts() {
-      return attempts
-    },
-  }
-}
-
-function makeSupabaseWithPersistentNetworkError() {
-  let attempts = 0
-  return {
-    rpc(name) {
-      if (name === 'reject_access_due_to_2fa_for_app' || name === 'reject_access_due_to_2fa_for_org') {
-        attempts += 1
-        return Promise.resolve({ data: null, error: { message: 'TypeError: fetch failed' } })
-      }
-      throw new Error(`Unexpected RPC call: ${name}`)
-    },
-    get attempts() {
-      return attempts
-    },
-  }
-}
-
-function makeSupabaseWithRejectResult() {
-  return {
-    rpc(name) {
-      if (name === 'reject_access_due_to_2fa_for_app' || name === 'reject_access_due_to_2fa_for_org')
-        return Promise.resolve({ data: true, error: null })
-      throw new Error(`Unexpected RPC call: ${name}`)
-    },
-  }
-}
+const HOST = { supaHost: 'https://fake.supabase.co', supaAnon: 'fake-anon' }
 
 assert.equal(isTransientNetworkError(new Error('TypeError: fetch failed')), true)
 assert.equal(isTransientNetworkError({ message: 'ECONNREFUSED' }), true)
@@ -77,44 +25,92 @@ const nestedCause = new Error('TypeError: fetch failed', {
 })
 assert.equal(isTransientNetworkError(nestedCause), true)
 
-const networkSupabase = makeSupabaseWithPersistentNetworkError()
+const originalFetch = globalThis.fetch
 
-await check2FAComplianceForApp(networkSupabase, 'com.example.app', true)
-assert.equal(networkSupabase.attempts, TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS)
+function json(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
 
-const orgNetworkSupabase = makeSupabaseWithPersistentNetworkError()
-await check2FAAccessForOrg(orgNetworkSupabase, 'org_123', true)
-assert.equal(orgNetworkSupabase.attempts, TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS)
+function installFetch(handler) {
+  globalThis.fetch = async (input, init) => handler(String(input), init)
+}
 
-const retrySupabase = makeSupabaseWithRetryableNetworkError(2)
-await check2FAComplianceForApp(retrySupabase, 'com.example.app', true)
-assert.equal(retrySupabase.attempts, 2)
+try {
+  let networkAttempts = 0
+  installFetch(async (url) => {
+    if (url.includes('/private/cli/check-2fa-app') || url.includes('/private/cli/check-2fa-org')) {
+      networkAttempts += 1
+      throw new TypeError('fetch failed')
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  await check2FAComplianceForApp('ck_key', 'com.example.app', true, HOST)
+  assert.equal(networkAttempts, TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS)
 
-await assert.rejects(
-  () => check2FAComplianceForApp(makeSupabaseWithRejectResult(), 'com.example.app', true),
-  (error) => {
-    assert.equal(error instanceof Error, true)
-    assert.equal(error.message, '2FA required for this organization')
-    assert.equal(error instanceof TwoFactorComplianceNetworkError, false)
-    return true
-  },
-)
+  let orgNetworkAttempts = 0
+  installFetch(async (url) => {
+    if (url.includes('/private/cli/check-2fa-org')) {
+      orgNetworkAttempts += 1
+      throw new TypeError('fetch failed')
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  await check2FAAccessForOrg('ck_key', 'org_123', true, HOST)
+  assert.equal(orgNetworkAttempts, TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS)
 
-const appErrorSupabase = makeSupabaseWithRpcError('permission denied for function reject_access_due_to_2fa_for_app')
+  let retryAttempts = 0
+  installFetch(async (url) => {
+    if (url.includes('/private/cli/check-2fa-app')) {
+      retryAttempts += 1
+      if (retryAttempts < 2)
+        throw new TypeError('fetch failed')
+      return json({ reject: false })
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  await check2FAComplianceForApp('ck_key', 'com.example.app', true, HOST)
+  assert.equal(retryAttempts, 2)
 
-await assert.rejects(
-  () => check2FAComplianceForApp(appErrorSupabase, 'com.example.app', true),
-  (error) => {
-    assert.equal(error instanceof Error, true)
-    assert.equal(error instanceof TwoFactorComplianceNetworkError, false)
-    assert.match(error.message, /Cannot check 2FA compliance/)
-    assert.equal(shouldCapturePosthogException(error), true)
-    return true
-  },
-)
+  installFetch(async (url) => {
+    if (url.includes('/private/cli/check-2fa-app'))
+      return json({ reject: true })
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  await assert.rejects(
+    () => check2FAComplianceForApp('ck_key', 'com.example.app', true, HOST),
+    (error) => {
+      assert.equal(error instanceof Error, true)
+      assert.equal(error.message, '2FA required for this organization')
+      assert.equal(error instanceof TwoFactorComplianceNetworkError, false)
+      return true
+    },
+  )
 
-assert.equal(shouldCapturePosthogException(new TwoFactorComplianceNetworkError()), true)
-assert.equal(new TwoFactorComplianceNetworkError().message, TWO_FACTOR_COMPLIANCE_NETWORK_MESSAGE)
-assert.equal(new TwoFactorComplianceNetworkError() instanceof CliUserError, false)
+  installFetch(async (url) => {
+    if (url.includes('/private/cli/check-2fa-app'))
+      return json({ error: 'permission denied for function reject_access_due_to_2fa_for_app' }, 403)
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  await assert.rejects(
+    () => check2FAComplianceForApp('ck_key', 'com.example.app', true, HOST),
+    (error) => {
+      assert.equal(error instanceof Error, true)
+      assert.equal(error instanceof TwoFactorComplianceNetworkError, false)
+      assert.match(error.message, /Cannot check 2FA compliance/)
+      assert.equal(shouldCapturePosthogException(error), true)
+      return true
+    },
+  )
 
-console.log('2FA compliance network failure tests passed')
+  assert.equal(shouldCapturePosthogException(new TwoFactorComplianceNetworkError()), true)
+  assert.equal(new TwoFactorComplianceNetworkError().message, TWO_FACTOR_COMPLIANCE_NETWORK_MESSAGE)
+  assert.equal(new TwoFactorComplianceNetworkError() instanceof CliUserError, false)
+
+  console.log('2FA compliance network failure tests passed')
+}
+finally {
+  globalThis.fetch = originalFetch
+}

@@ -6,7 +6,7 @@ import { checkAlerts } from '../api/update'
 import {
   assertOrgPermission,
   check2FAAccessForOrg,
-  createSupabaseClient,
+  fetchOrgMemberComplianceViaHttp,
   findSavedKey,
   formatError,
   invokeCapgoCliApi,
@@ -95,21 +95,20 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
     throw new Error('Missing organization id')
   }
 
-  const supabase = await createSupabaseClient(
-    enrichedOptions.apikey,
-    enrichedOptions.supaHost,
-    enrichedOptions.supaAnon,
-  )
-  await assertOrgPermission(supabase, enrichedOptions.apikey, 'org.read_members', orgId, `Insufficient permissions to list members of organization ${orgId}`, silent)
-  await check2FAAccessForOrg(supabase, orgId, silent)
+  const hostOptions = { supaHost: enrichedOptions.supaHost, supaAnon: enrichedOptions.supaAnon }
+  await assertOrgPermission(null, enrichedOptions.apikey, 'org.read_members', orgId, `Insufficient permissions to list members of organization ${orgId}`, silent, hostOptions)
+  await check2FAAccessForOrg(enrichedOptions.apikey, orgId, silent, hostOptions)
 
-  // TODO(cli-http): GET organization omits security settings (enforcing_2fa, password_policy_config, ...)
-  // Get organization name and security settings
-  const { data: orgData, error: orgError } = await supabase
-    .from('orgs')
-    .select('name, enforcing_2fa, password_policy_config, require_apikey_expiration, max_apikey_expiration_days, enforce_hashed_api_keys')
-    .eq('id', orgId)
-    .single()
+  const { data: orgData, error: orgError } = await invokeCapgoCliApi<{
+    name?: string
+    enforcing_2fa?: boolean
+    password_policy_config?: PasswordPolicyConfig | null
+  }>(`organization?orgId=${encodeURIComponent(orgId)}`, {
+    apikey: enrichedOptions.apikey,
+    method: 'GET',
+    body: undefined,
+    ...hostOptions,
+  })
 
   if (orgError || !orgData) {
     if (!silent)
@@ -143,43 +142,31 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
     throw new Error(`Cannot get organization members: ${formatError(membersError)}`)
   }
 
-  // TODO(cli-http): no HTTP equivalent for check_org_members_2fa_enabled
-  // Get 2FA status for all members (only super_admins can call this)
-  const { data: membersStatus, error: statusError } = await supabase
-    .rpc('check_org_members_2fa_enabled', { org_id: orgId })
-
-  if (statusError) {
+  const { data: compliance } = await fetchOrgMemberComplianceViaHttp(enrichedOptions.apikey!, orgId, hostOptions)
+  const membersStatus = compliance?.members_2fa
+  if (compliance?.members_2fa_error) {
     if (!silent) {
-      if (statusError.message?.includes('NO_RIGHTS')) {
+      if (compliance.members_2fa_error.includes('NO_RIGHTS')) {
         log.warn('You need super_admin rights to view 2FA status of members')
       }
       else {
-        log.error(`Cannot get 2FA status: ${formatError(statusError)}`)
+        log.error(`Cannot get 2FA status: ${compliance.members_2fa_error}`)
       }
     }
-    // Continue without 2FA status
   }
 
-  // Get password policy compliance status (only if password policy is enabled)
   let passwordPolicyStatus: Array<{ user_id: string, password_policy_compliant: boolean }> | null = null
   if (hasPasswordPolicy) {
-    // TODO(cli-http): no HTTP equivalent for check_org_members_password_policy
-    const { data: policyStatus, error: policyError } = await supabase
-      .rpc('check_org_members_password_policy', { org_id: orgId })
-
-    if (policyError) {
+    passwordPolicyStatus = compliance?.members_password ?? null
+    if (compliance?.members_password_error) {
       if (!silent) {
-        if (policyError.message?.includes('NO_RIGHTS')) {
+        if (compliance.members_password_error.includes('NO_RIGHTS')) {
           log.warn('You need super_admin rights to view password policy compliance status')
         }
         else {
-          log.warn(`Cannot get password policy status: ${formatError(policyError)}`)
+          log.warn(`Cannot get password policy status: ${compliance.members_password_error}`)
         }
       }
-      // Continue without password policy status
-    }
-    else {
-      passwordPolicyStatus = policyStatus
     }
   }
 

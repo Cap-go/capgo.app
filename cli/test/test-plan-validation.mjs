@@ -36,161 +36,91 @@ function assertEquals(actual, expected, message) {
     throw new Error(message || `Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
 }
 
-await test('checks an app-scoped key through the app-aware plan RPC', async () => {
-  assert(typeof utils.isAllowedPlanActions === 'function', 'Expected isAllowedPlanActions to be exported')
+const HOST = { supaHost: 'https://fake.supabase.co', supaAnon: 'fake-anon' }
+
+function json(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+await test('checks an app-scoped key through Capgo HTTP plan API', async () => {
+  assert(typeof utils.checkPlanValid === 'function', 'Expected checkPlanValid to be exported')
 
   const calls = []
-  const supabase = {
-    rpc: async (name, args) => {
-      calls.push({ name, args })
-      return { data: true, error: null }
-    },
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (input, init) => {
+    const url = String(input)
+    calls.push({ url, method: init?.method, body: init?.body })
+    if (url.includes('/private/config'))
+      return json({ hostWeb: 'https://console.capgo.app' })
+    if (url.includes('/private/cli/check-plan'))
+      return json({ result: 'allowed', valid: true, trial_days: 0, is_paying: true, has_credits: false })
+    throw new Error(`Unexpected fetch: ${url}`)
   }
 
-  const allowed = await utils.isAllowedPlanActions(
-    supabase,
-    'org-id',
-    ['mau', 'storage', 'bandwidth', 'build_time'],
-    'com.example.app',
-  )
-
-  assertEquals(allowed, true)
-  assertEquals(calls, [{
-    name: 'is_allowed_action_org_action',
-    args: {
-      orgid: 'org-id',
+  try {
+    await utils.checkPlanValid('ck_key', 'org-id', 'com.example.app', false, HOST)
+    const planCall = calls.find(call => String(call.url).includes('/private/cli/check-plan'))
+    assert(planCall, 'Expected HTTP plan check')
+    assertEquals(JSON.parse(planCall.body), {
+      org_id: 'org-id',
+      app_id: 'com.example.app',
       actions: ['mau', 'storage', 'bandwidth', 'build_time'],
-      appid: 'com.example.app',
-    },
-  }])
+    })
+  }
+  finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
-await test('surfaces plan RPC errors instead of reporting an invalid plan', async () => {
-  assert(typeof utils.isAllowedPlanActions === 'function', 'Expected isAllowedPlanActions to be exported')
-
-  const supabase = {
-    rpc: async () => ({
-      data: null,
-      error: { message: 'permission lookup failed' },
-    }),
+await test('surfaces plan HTTP errors instead of reporting an invalid plan', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.includes('/private/config'))
+      return json({ hostWeb: 'https://console.capgo.app' })
+    if (url.includes('/private/cli/check-plan'))
+      return json({ error: 'permission lookup failed' }, 500)
+    throw new Error(`Unexpected fetch: ${url}`)
   }
 
   let thrown
   try {
-    await utils.isAllowedPlanActions(supabase, 'org-id', ['storage'], 'com.example.app')
+    await utils.checkPlanValid('ck_key', 'org-id', 'com.example.app', false, HOST)
   }
   catch (error) {
     thrown = error
   }
+  finally {
+    globalThis.fetch = originalFetch
+  }
 
-  assert(thrown instanceof Error, 'Expected the RPC error to be thrown')
+  assert(thrown instanceof Error, 'Expected the HTTP error to be thrown')
   assert(thrown.message.includes('Cannot validate plan'), `Unexpected error: ${thrown.message}`)
-})
-
-await test('falls back to organization validation when the app-aware RPC is unavailable', async () => {
-  const calls = []
-  const supabase = {
-    rpc: (name, args) => {
-      calls.push({ name, args })
-      if (name === 'is_allowed_action_org_action') {
-        return Promise.resolve({
-          data: null,
-          error: {
-            code: 'PGRST202',
-            message: 'Could not find the function in the schema cache',
-          },
-        })
-      }
-      return {
-        single: async () => ({ data: true, error: null }),
-      }
-    },
-  }
-
-  const allowed = await utils.isAllowedPlanActions(
-    supabase,
-    'org-id',
-    ['storage'],
-    'com.example.app',
-  )
-
-  assertEquals(allowed, true)
-  assertEquals(calls, [
-    {
-      name: 'is_allowed_action_org_action',
-      args: {
-        orgid: 'org-id',
-        actions: ['storage'],
-        appid: 'com.example.app',
-      },
-    },
-    {
-      name: 'is_allowed_action_org',
-      args: { orgid: 'org-id' },
-    },
-  ])
-})
-
-await test('surfaces organization plan RPC errors instead of reporting an invalid plan', async () => {
-  const supabase = {
-    rpc: () => ({
-      single: async () => ({
-        data: null,
-        error: { message: 'organization lookup failed' },
-      }),
-    }),
-  }
-
-  let thrown
-  try {
-    await utils.isAllowedActionOrg(supabase, 'org-id')
-  }
-  catch (error) {
-    thrown = error
-  }
-
-  assert(thrown instanceof Error, 'Expected the organization RPC error to be thrown')
-  assert(thrown.message.includes('Cannot validate plan'), `Unexpected error: ${thrown.message}`)
-})
-
-await test('treats app-scoped RBAC denial as permission_denied when org plan is allowed', async () => {
-  const supabase = {
-    rpc: async (name, args) => {
-      if (name === 'is_allowed_action_org_action' && args.appid)
-        return { data: false, error: null }
-      if (name === 'is_allowed_action_org_action')
-        return { data: true, error: null }
-      throw new Error(`Unexpected RPC ${name}`)
-    },
-  }
-
-  const result = await utils.resolveMeteredPlanAllowed(
-    supabase,
-    'org-id',
-    ['mau', 'storage', 'bandwidth', 'build_time'],
-    'com.example.app',
-  )
-
-  assertEquals(result, 'permission_denied')
 })
 
 await test('checkPlanValid reports permission denial instead of billing upgrade copy', async () => {
-  const supabase = {
-    rpc: async (name, args) => {
-      if (name === 'is_allowed_action_org_action' && args.appid)
-        return { data: false, error: null }
-      if (name === 'is_allowed_action_org_action')
-        return { data: true, error: null }
-      throw new Error(`Unexpected RPC ${name}`)
-    },
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.includes('/private/config'))
+      return json({ hostWeb: 'https://console.capgo.app' })
+    if (url.includes('/private/cli/check-plan'))
+      return json({ result: 'permission_denied', valid: false, trial_days: 0, is_paying: true, has_credits: false })
+    throw new Error(`Unexpected fetch: ${url}`)
   }
 
   let thrown
   try {
-    await utils.checkPlanValid(supabase, 'org-id', 'com.example.app', false)
+    await utils.checkPlanValid('ck_key', 'org-id', 'com.example.app', false, HOST)
   }
   catch (error) {
     thrown = error
+  }
+  finally {
+    globalThis.fetch = originalFetch
   }
 
   assert(thrown instanceof Error, 'Expected plan validation to throw')
