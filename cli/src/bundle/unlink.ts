@@ -2,6 +2,7 @@ import { intro, log, outro } from '@clack/prompts'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { checkVersionNotUsedInChannel } from '../api/channels'
 import { getVersionData } from '../api/versions'
+import { CliUserError } from '../shared/cli-user-error'
 import {
   checkPlanValid,
   createSupabaseClient,
@@ -54,7 +55,7 @@ export async function unlinkDeviceInternal(
     if (!resolvedAppId) {
       if (!silent)
         log.error('Missing argument, you need to provide an appId, or be in a capacitor project')
-      throw new Error('Missing appId')
+      throw new CliUserError('Missing appId')
     }
 
     if (!bundle) {

@@ -64,7 +64,17 @@ export async function encryptZipInternal(
         await ensurePublicKeyFromPrivateKey(privateKey, { silent: silent || json, json })
       }
       else if (!userSuppliedPrivateKey) {
-        await ensurePublicKeyInConfig({ interactive, silent: silent || json, json })
+        try {
+          await ensurePublicKeyInConfig({ interactive, silent: silent || json, json })
+        }
+        catch (error) {
+          if (!interactive && error instanceof Error
+            && /missing public key|missing_public_key/i.test(error.message)
+            && !(error instanceof CliUserError)) {
+            throw new CliUserError(error.message)
+          }
+          throw error
+        }
       }
       extConfig = await getConfigForWrite()
     }
@@ -85,7 +95,7 @@ export async function encryptZipInternal(
         else
           log.warning('Warning: Missing Public Key in config')
       }
-      throw new Error('Missing public key in config')
+      throw new CliUserError('Missing public key in config')
     }
 
     if (!privateKey) {

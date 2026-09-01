@@ -4,6 +4,7 @@ import { trackEvent } from '../analytics/track'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { checkAlerts } from '../api/update'
 import { displayBundles, getActiveAppVersions } from '../api/versions'
+import { CliUserError } from '../shared/cli-user-error'
 import { createSupabaseClient, findSavedKey, getAppId, getConfig, resolveUserIdFromApiKey } from '../utils'
 
 export async function listBundle(appId: string, options: OptionsBase, silent = false) {
@@ -24,7 +25,7 @@ export async function listBundle(appId: string, options: OptionsBase, silent = f
   if (!appId) {
     if (!silent)
       log.error('Missing argument, you need to provide a appid, or be in a capacitor project')
-    throw new Error('Missing appId')
+    throw new CliUserError('Missing appId')
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
