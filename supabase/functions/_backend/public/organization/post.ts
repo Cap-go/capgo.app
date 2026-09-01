@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { assertJwtMfaAssurance } from '../../utils/jwt_mfa_assurance.ts'
 import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 import { parseOrgOnboardingIntent } from '../../utils/org_onboarding_intent.ts'
 import { normalizeWebsiteUrl } from './website.ts'
@@ -193,12 +194,11 @@ async function insertOrgForApiKey(
          name,
          created_by,
          management_email,
-         customer_id,
          website,
          onboarding
        )
-       VALUES ($1::uuid, $2::varchar, $3::uuid, $4::varchar, $5::varchar, $6::varchar, $7::jsonb)`,
-      [org.id, org.name, org.created_by, org.management_email, org.customer_id, org.website, JSON.stringify(org.onboarding)],
+       VALUES ($1::uuid, $2::varchar, $3::uuid, $4::varchar, $5::varchar, $6::jsonb)`,
+      [org.id, org.name, org.created_by, org.management_email, org.website, JSON.stringify(org.onboarding)],
     )
 
     await dbClient.query(
@@ -290,11 +290,19 @@ export async function post(
       await insertOrgForApiKey(c, auth, newOrg)
     }
     else {
+      await assertJwtMfaAssurance(c, auth)
+
+      // Omit customer_id: org-create trigger links pre-created pending stripe_info.
+      const { id, name, created_by, management_email, website: orgWebsite, onboarding: orgOnboarding } = newOrg
       const { error: errorOrg } = await supabaseWithAuth(c, auth)
         .from('orgs')
         .insert({
-          ...newOrg,
-          onboarding,
+          id,
+          name,
+          created_by,
+          management_email,
+          website: orgWebsite,
+          onboarding: orgOnboarding,
         })
 
       if (errorOrg) {
