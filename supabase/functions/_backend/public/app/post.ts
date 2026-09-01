@@ -84,7 +84,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
       android_store_url: body.android_store_url ?? null,
       onboarding: applyAppOnboardingPatch(addAppCreatorToOnboarding({}, auth.userId, creatorEmail), {
         source: isAppOnboardingSource(body.onboarding?.source) ? body.onboarding.source : 'manual',
-        ...(body.need_onboarding
+        ...(body.need_onboarding === true
           ? { steps: { add_app: { status: 'done' as const } } }
           : {}),
       }),

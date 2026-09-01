@@ -81,9 +81,9 @@ function toggleRelease(kind: CicdReleaseKind, checked: boolean) {
 async function copyAiPrompt() {
   if (!aiPrompt.value)
     return
+  helpMethod.value = 'ai'
   try {
     await navigator.clipboard.writeText(aiPrompt.value)
-    helpMethod.value = 'ai'
     toast.success(t('copied-to-clipboard'))
   }
   catch (error) {
@@ -166,6 +166,7 @@ function confirmSetup() {
           rel="noopener noreferrer"
           class="d-btn d-btn-sm h-11 min-h-11"
           :class="onboardingSecondaryButtonClass"
+          @click="helpMethod = 'docs'"
         >
           {{ t('getting-started-cicd-open-github-docs') }}
         </a>

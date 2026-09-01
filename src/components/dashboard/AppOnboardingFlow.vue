@@ -1924,7 +1924,16 @@ async function onCliStepsProgress(payload: { hasStartedCli: boolean, isTerminal:
   if (!payload.isTerminal || !createdApp.value || didRedirectToGettingStarted)
     return
   didRedirectToGettingStarted = true
-  await persistOnboardingProgress('completed')
+  if (flowStep.value === 'install' || flowStep.value === 'setup') {
+    progressTracker?.completeStep(flowStep.value, {
+      appId: createdApp.value.app_id,
+    })
+  }
+  const persistResult = await persistOnboardingProgress('completed')
+  if (persistResult !== 'persisted') {
+    didRedirectToGettingStarted = false
+    return
+  }
   if (!createdApp.value)
     return
   router.replace(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)

@@ -212,6 +212,7 @@ function cicdWorkflowSnippet(appId: string, mode: CicdDeployMode): string {
 on:
   push:
     branches: [main]
+jobs:
 ${productionJob}`
   }
 
@@ -235,12 +236,13 @@ ${productionJob}`
 on:
   push:
     branches: [main, preprod]
+jobs:
 ${productionJob}
 ${preprodJob}`
   }
 
   const prJob = `  deploy-pr:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -263,6 +265,7 @@ on:
   push:
     branches: [main, preprod]
   pull_request:
+jobs:
 ${productionJob}
 ${preprodJob}
 ${prJob}`

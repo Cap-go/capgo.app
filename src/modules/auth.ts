@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NavigationGuardNext, RouteLocationNormalized } from 'vue-router'
 import type { UserModule } from '~/types'
+import { isTerminalAppOnboarding } from '~/services/appOnboarding'
 import { hideLoader } from '~/services/loader'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { setUser } from '~/services/posthog'
@@ -292,6 +293,7 @@ async function guard(
       extras: {
         storeReleaseValidated: isStoreReleaseValidated(userId ?? '', app.app_id),
         cicdSetupValidated: isCicdSetupValidated(userId ?? '', app.app_id),
+        cliSetupCompleted: isTerminalAppOnboarding(app.onboarding),
       },
       ledger: parseAppOnboardingLedger(app.onboarding),
       needOnboarding: false,

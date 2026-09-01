@@ -32,6 +32,8 @@ const steps = computed(() => APP_ONBOARDING_STEP_IDS.map(id => ({
 
 const doneCount = computed(() => steps.value.filter(step => step.status === 'done' || step.status === 'skipped').length)
 const isTerminal = computed(() => onboarding.value.outcome === 'completed' || onboarding.value.outcome === 'skipped')
+const hasStartedCli = computed(() => hasStartedCliSetup(onboarding.value))
+const progressSignature = computed(() => `${hasStartedCli.value}:${isTerminal.value}:${doneCount.value}`)
 
 watch(() => props.initialOnboarding, (value) => {
   onboarding.value = parseAppOnboarding(value)
@@ -42,17 +44,13 @@ watch(doneCount, (count) => {
     isOpen.value = true
 }, { immediate: true })
 
-watch(
-  [onboarding, doneCount, isTerminal],
-  () => {
-    emit('progress', {
-      hasStartedCli: hasStartedCliSetup(onboarding.value),
-      isTerminal: isTerminal.value,
-      doneCount: doneCount.value,
-    })
-  },
-  { immediate: true, deep: true },
-)
+watch(progressSignature, () => {
+  emit('progress', {
+    hasStartedCli: hasStartedCli.value,
+    isTerminal: isTerminal.value,
+    doneCount: doneCount.value,
+  })
+}, { immediate: true })
 
 function stopPolling() {
   if (pollTimer !== null) {

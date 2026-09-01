@@ -35,6 +35,9 @@ describe('getting started CI/CD setup', () => {
     expect(prompt).toContain('CHANNEL="pr-')
     expect(prompt).toContain('github.event.number')
     expect(prompt).toContain('CAPGO_TOKEN')
+    expect(prompt).toContain('\njobs:\n')
+    expect(prompt).toContain("github.event.pull_request.head.repo.full_name == github.repository")
+    expect(buildCicdAiPrompt('com.demo.app', 'prod')).toContain('\njobs:\n')
   })
 
   it('is complete only after every required release is checked', () => {

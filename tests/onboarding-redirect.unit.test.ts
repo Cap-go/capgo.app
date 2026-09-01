@@ -168,6 +168,14 @@ describe('post-CLI getting started redirect', () => {
     expect(getGettingStartedContinueRedirect({
       ...options,
       path: '/dashboard',
+      ledger: {
+        ...options.ledger,
+        getting_started_dismissed_at: '2026-08-14T00:00:00.000Z',
+      },
+    })).toBeNull()
+    expect(getGettingStartedContinueRedirect({
+      ...options,
+      path: '/dashboard',
       extras: { cicdSetupValidated: true, storeReleaseValidated: true, cliSetupCompleted: true },
       ledger: {
         features: {
@@ -175,6 +183,21 @@ describe('post-CLI getting started redirect', () => {
           ota: { succeeded_at: '2026-08-14T00:00:00.000Z', stage: 'store_live' },
         },
       },
+    })).toBeNull()
+  })
+
+  it('does not bounce to getting started after dashboard exploration is granted', async () => {
+    const { allowOnboardingDashboardExploration, getGettingStartedContinueRedirect } = await import('../src/utils/onboardingRedirect.ts')
+    allowOnboardingDashboardExploration('user-1', 'com.example.app')
+    expect(getGettingStartedContinueRedirect({
+      appId: 'com.example.app',
+      appCount: 1,
+      createdAt: '2026-08-03T23:00:01.000Z',
+      ledger: { features: { cli_install: { succeeded_at: '2026-08-14T00:00:00.000Z' } } },
+      needOnboarding: false,
+      organizationCount: 1,
+      path: '/dashboard',
+      userId: 'user-1',
     })).toBeNull()
   })
 })

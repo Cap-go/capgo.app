@@ -46,11 +46,12 @@ const iconLoading = computed(() => orgApp.value?.icon_url_loading === true)
 
 const ledger = computed(() => parseAppOnboardingLedger(app.value?.onboarding))
 const userId = computed(() => main.user?.id ?? main.auth?.id ?? '')
+const cliSetupCompleted = ref(isTerminalAppOnboarding(app.value?.onboarding))
 const steps = computed(() => buildGettingStartedSteps(ledger.value, {
   builderDone: builderDone.value,
   storeReleaseValidated: isStoreReleaseValidated(userId.value, id.value),
   cicdSetupValidated: isCicdSetupValidated(userId.value, id.value),
-  cliSetupCompleted: isTerminalAppOnboarding(app.value?.onboarding),
+  cliSetupCompleted: cliSetupCompleted.value,
 }))
 const progress = computed(() => gettingStartedProgress(steps.value))
 const focusedStepId = computed(() => steps.value.find(step => step.group === 'essential' && !step.done)?.id)
@@ -73,6 +74,15 @@ function acronym(name: string) {
   const second = parts.length > 1 ? (parts[1]?.[0] ?? '') : (parts[0]?.[1] ?? '')
   return (first + second).toUpperCase()
 }
+
+function onCliInstallProgress(payload: { isTerminal: boolean }) {
+  cliSetupCompleted.value = payload.isTerminal
+}
+
+watch(() => app.value?.onboarding, (value) => {
+  if (isTerminalAppOnboarding(value))
+    cliSetupCompleted.value = true
+})
 
 async function checkBuilderDone(appId: string) {
   const token = ++builderReqToken
@@ -292,6 +302,7 @@ watch(() => id.value, async (appId) => {
                 class="mt-3"
                 :app-id="id"
                 :initial-onboarding="app.onboarding"
+                @progress="onCliInstallProgress"
               />
               <GettingStartedCicdPanel
                 v-if="step.id === 'cicd' && !step.done && userId"
