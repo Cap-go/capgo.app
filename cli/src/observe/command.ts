@@ -4,7 +4,8 @@ import { intro, log, outro } from '@clack/prompts'
 import { Table } from '@sauber/table'
 import { checkAlerts } from '../api/update'
 import { CliUserError } from '../shared/cli-user-error'
-import { findSavedKey, formatCapgoCliInvokeError, formatError, getAppId, getConfig, invokeCapgoCliApi } from '../utils'
+import { formatError, getAppId, getConfig } from '../utils'
+import { fetchObserve } from './api'
 
 export interface ObserveCliOptions {
   apikey?: string
@@ -73,29 +74,6 @@ function printFindings(findings: ObserveFinding[] | undefined) {
     if (finding.detail)
       log.message(`${finding.title}: ${finding.detail}`)
   }
-}
-
-export async function fetchObserve(options: ObserveOptions): Promise<Record<string, unknown>> {
-  const apikey = options.apikey || findSavedKey(true)
-  const { data, error } = await invokeCapgoCliApi<Record<string, unknown>>('private/observe', {
-    apikey,
-    method: 'POST',
-    body: {
-      appId: options.appId,
-      view: options.view ?? 'summary',
-      days: options.days,
-      action: options.action,
-      deviceId: options.deviceId,
-      versionName: options.versionName,
-      sort: options.sort,
-      limit: options.limit,
-    },
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
-  })
-  if (error)
-    throw new CliUserError(await formatCapgoCliInvokeError(error))
-  return data ?? {}
 }
 
 export async function observeCommand(

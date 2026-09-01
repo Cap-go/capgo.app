@@ -71,7 +71,7 @@ import { resolveCapacitorConfigTargetPath, withConfigWriteTarget } from './confi
 import { starAllRepositories as starAllRepositoriesInternal, starRepository } from './github'
 import { createKeyInternal, deleteOldPrivateKeyInternal, saveKeyInternal } from './key'
 import { loginInternal } from './login'
-import { fetchObserve } from './observe/command'
+import { fetchObserve } from './observe/api'
 import { addOrganizationInternal } from './organization/add'
 import { deleteOrganizationInternal } from './organization/delete'
 import { listOrganizationsInternal } from './organization/list'

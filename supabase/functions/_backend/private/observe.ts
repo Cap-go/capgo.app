@@ -96,13 +96,18 @@ async function loadSamples(
     metadata?: Record<string, string> | string | null
   }>
 
-  const samples = sortObserveSamples(
-    rows
-      .filter(row => !input.versionName || row.version_name === input.versionName)
-      .map(toObserveSample),
-    input.sort,
-  )
+  const samples = sortObserveSamples(rows.map(toObserveSample), input.sort)
   return samples.slice(0, input.limit)
+}
+
+function sampleActionsForView(view: ObserveView, action?: string) {
+  if (action)
+    return [action]
+  if (view === 'device')
+    return [...nativeObserveActions]
+  if (view === 'routes')
+    return ['app_nav', 'webview_page_loaded', 'webview_dom_content_loaded']
+  return [...defaultMetricActions]
 }
 
 function deviceTimelineNext(deviceId?: string) {
@@ -210,13 +215,7 @@ app.post('/', middlewareAuth(), async (c) => {
     })
   }
 
-  const sampleActions = action
-    ? [action]
-    : view === 'device'
-      ? [...nativeObserveActions]
-      : view === 'routes'
-        ? ['app_nav', 'webview_page_loaded', 'webview_dom_content_loaded']
-        : [...defaultMetricActions]
+  const sampleActions = sampleActionsForView(view, action)
 
   const samples = await loadSamples(c, {
     appId,
