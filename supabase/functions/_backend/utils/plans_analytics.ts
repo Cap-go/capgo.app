@@ -1,5 +1,5 @@
 import type { Context } from 'hono'
-import type { DailyBillingPoint, DailyCheckoutIntentPoint, PlansBehaviorEvent } from './plans_analytics_model.ts'
+import type { DailyBillingPoint, DailyCheckoutCompletionPoint, DailyCheckoutIntentPoint, PlansBehaviorEvent } from './plans_analytics_model.ts'
 import type { BillingTransition } from './plans_billing_history.ts'
 import type { PosthogReadFailureReason, PosthogReadResult } from './posthog_read.ts'
 import { cloudlog } from './logging.ts'
@@ -11,6 +11,7 @@ import {
 } from './plans_analytics_model.ts'
 import {
   classifyPlansBillingAt,
+  hasCheckoutPaidCompletion,
   loadPlansBillingHistories,
 } from './plans_billing_history.ts'
 import { MAX_POSTHOG_RESPONSE_BYTES, queryPosthogHogql } from './posthog_read.ts'
@@ -29,6 +30,7 @@ export interface PlansAnalyticsResponse {
   traffic: { dates: string[], uniqueVisitorOrganizations: number[], totalOpens: number[] }
   visitorBreakdown: DailyBillingPoint[]
   checkoutIntent: DailyCheckoutIntentPoint[]
+  checkoutCompletion: DailyCheckoutCompletionPoint[]
   checkoutVisitorBreakdown: DailyBillingPoint[]
   dataQuality: {
     exactTrackingStartedAt: string | null
@@ -174,7 +176,9 @@ function emptyPlansAnalyticsResponse(
     attributedCheckouts: [],
     startMs,
     endMs,
+    nowMs: Date.now(),
     classifyAt: () => 'unknown',
+    isCheckoutCompleted: () => false,
   })
 
   return {
@@ -362,10 +366,11 @@ export async function getAdminPlansAnalytics(
   for (let offset = 0; offset < orgIds.length; offset += TRANSITION_ORG_BATCH_SIZE) {
     transitionBatches.push(orgIds.slice(offset, offset + TRANSITION_ORG_BATCH_SIZE))
   }
+  const billingTransitionsEndIso = safeIso(range.endMs + CHECKOUT_ATTRIBUTION_MS)!
   for (let offset = 0; offset < transitionBatches.length; offset += TRANSITION_QUERY_CONCURRENCY) {
     const wave = transitionBatches.slice(offset, offset + TRANSITION_QUERY_CONCURRENCY)
     const transitionResults = await Promise.all(wave.map(batch => (
-      queryPosthogHogql(c, buildBillingTransitionsQuery(range.endIso, batch), { maxResponseBytes: MAX_TRANSITION_RESPONSE_BYTES })
+      queryPosthogHogql(c, buildBillingTransitionsQuery(billingTransitionsEndIso, batch), { maxResponseBytes: MAX_TRANSITION_RESPONSE_BYTES })
     )))
     const transitionFailure = failedResult(transitionResults)
     if (transitionFailure) {
@@ -419,12 +424,23 @@ export async function getAdminPlansAnalytics(
     attributedCheckouts,
     startMs: range.startMs,
     endMs: range.endMs,
+    nowMs: Date.now(),
     classifyAt: (orgId, timestampMs) => {
       const history = histories.get(orgId)
       const category = history ? classifyPlansBillingAt(history, timestampMs) : 'unknown'
       if (category === 'unknown')
         unknownOrganizations.add(orgId)
       return category
+    },
+    isCheckoutCompleted: (orgId, checkoutTimestampMs) => {
+      const history = histories.get(orgId)
+      if (!history)
+        return false
+      return hasCheckoutPaidCompletion(
+        history,
+        checkoutTimestampMs,
+        checkoutTimestampMs + CHECKOUT_ATTRIBUTION_MS,
+      )
     },
   })
 

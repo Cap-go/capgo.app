@@ -1,4 +1,5 @@
 import type { Context } from 'hono'
+import type { Database } from '../../utils/supabase.types.ts'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import { z } from 'zod'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
@@ -155,10 +156,10 @@ app.post('/', async (c) => {
   }
 
   try {
-    const supabase = supabaseWithAuth(c, auth) as any
+    const admin = supabaseAdmin(c)
     const dnsVerificationToken = generateDnsVerificationToken()
 
-    const { data, error } = await supabase
+    const { data, error } = await admin
       .from('sso_providers')
       .insert({
         org_id: body.org_id,
@@ -300,10 +301,10 @@ app.patch('/:id', async (c) => {
     throw simpleError('invalid_body', 'No updatable fields provided')
   }
 
-  const admin = supabaseAdmin(c) as any
+  const admin = supabaseAdmin(c)
   const { data: updatedProvider, error: updateError } = await admin
     .from('sso_providers')
-    .update(updates)
+    .update(updates as Database['public']['Tables']['sso_providers']['Update'])
     .eq('id', id)
     .select('*')
     .single()
