@@ -4889,6 +4889,7 @@ export type Database = {
         | "webview_content_process_terminated"
         | "os_version_changed"
         | "native_app_version_changed"
+        | "app_nav"
       stripe_status:
         | "created"
         | "succeeded"
@@ -5158,6 +5159,7 @@ export const Constants = {
         "webview_content_process_terminated",
         "os_version_changed",
         "native_app_version_changed",
+        "app_nav",
       ],
       stripe_status: [
         "created",

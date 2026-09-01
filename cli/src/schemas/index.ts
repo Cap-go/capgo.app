@@ -92,6 +92,7 @@ export {
   getStatsOptionsSchema,
   listOrganizationsOptionsSchema,
   loginOptionsSchema,
+  observeOptionsObjectSchema,
   observeOptionsSchema,
   observeSortSchema,
   observeViewSchema,

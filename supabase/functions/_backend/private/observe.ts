@@ -76,6 +76,9 @@ async function loadSamples(
     limit: number
   },
 ) {
+  const scanLimit = input.sort === 'slowest' || input.sort === 'fastest'
+    ? OBSERVE_SAMPLE_SCAN_LIMIT
+    : Math.min(OBSERVE_SAMPLE_SCAN_LIMIT, Math.max(input.limit * 10, 100))
   const rows = await readStats(c, {
     app_id: input.appId,
     start_date: input.start,
@@ -84,7 +87,7 @@ async function loadSamples(
     deviceIds: input.deviceId ? [input.deviceId] : undefined,
     version_name: input.versionName,
     order: [{ key: 'created_at', sortable: input.sort === 'oldest' ? 'asc' : 'desc' }],
-    limit: Math.min(OBSERVE_SAMPLE_SCAN_LIMIT, Math.max(input.limit * 10, 100)),
+    limit: scanLimit,
   }) as Array<{
     device_id?: string
     action?: string
@@ -93,8 +96,19 @@ async function loadSamples(
     metadata?: Record<string, string> | string | null
   }>
 
-  const samples = sortObserveSamples(rows.map(toObserveSample), input.sort)
+  const samples = sortObserveSamples(
+    rows
+      .filter(row => !input.versionName || row.version_name === input.versionName)
+      .map(toObserveSample),
+    input.sort,
+  )
   return samples.slice(0, input.limit)
+}
+
+function deviceTimelineNext(deviceId?: string) {
+  return deviceId
+    ? { view: 'device' as const, deviceId }
+    : { view: 'summary' as const }
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -192,17 +206,17 @@ app.post('/', middlewareAuth(), async (c) => {
       period,
       ...insights,
       agent_instructions: OBSERVE_AGENT_INSTRUCTIONS,
-      next: insights.actions[0]
-        ? { view: 'device' as const, deviceId: insights.actions[0].latest_device_id, action: insights.actions[0].action }
-        : { view: 'summary' as const },
+      next: deviceTimelineNext(insights.actions[0]?.latest_device_id),
     })
   }
 
   const sampleActions = action
     ? [action]
-    : view === 'routes'
-      ? ['app_nav', 'webview_page_loaded', 'webview_dom_content_loaded']
-      : [...defaultMetricActions]
+    : view === 'device'
+      ? [...nativeObserveActions]
+      : view === 'routes'
+        ? ['app_nav', 'webview_page_loaded', 'webview_dom_content_loaded']
+        : [...defaultMetricActions]
 
   const samples = await loadSamples(c, {
     appId,
@@ -245,8 +259,6 @@ app.post('/', middlewareAuth(), async (c) => {
     period,
     samples,
     agent_instructions: OBSERVE_AGENT_INSTRUCTIONS,
-    next: samples[0]
-      ? { view: 'device' as const, deviceId: samples[0].device_id, action: samples[0].action }
-      : { view: 'summary' as const },
+    next: deviceTimelineNext(samples[0]?.device_id),
   })
 })

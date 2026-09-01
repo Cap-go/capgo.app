@@ -77,6 +77,13 @@ describe('observe query helpers', () => {
     expect(routes[0]).toMatchObject({ route: '/checkout', events: 2, devices: 2 })
     expect(routes[0]?.p90_ms).toBeGreaterThan(900)
     expect(extractRoute({ path: '/settings' })).toBe('/settings')
+    expect(extractRoute({ route: 12 } as Record<string, unknown>)).toBeNull()
+    expect(toObserveSample({
+      device_id: 'bad',
+      action: 'app_launch_ready',
+      created_at: '2026-09-01T10:04:00Z',
+      metadata: { duration_ms: '999999999' },
+    }).duration_ms).toBeNull()
   })
 
   it.concurrent('sorts samples slowest-first and builds a handoff prompt for agents', () => {

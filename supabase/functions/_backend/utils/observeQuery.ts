@@ -11,6 +11,7 @@ export const OBSERVE_DEFAULT_DAYS: ObservePeriodDays = 7
 export const OBSERVE_DEFAULT_LIMIT = 20
 export const OBSERVE_MAX_LIMIT = 100
 export const OBSERVE_SAMPLE_SCAN_LIMIT = 500
+const OBSERVE_MAX_DURATION_MS = 7_200_000
 
 const SLOW_LAUNCH_P90_MS = 3_000
 const CRITICAL_LAUNCH_P90_MS = 5_000
@@ -119,11 +120,12 @@ export function normalizeObserveLimit(value: unknown): number {
   return Math.min(OBSERVE_MAX_LIMIT, Math.max(1, value))
 }
 
-export function extractRoute(metadata: Record<string, string> | null | undefined): string | null {
+export function extractRoute(metadata: Record<string, string> | Record<string, unknown> | null | undefined): string | null {
   if (!metadata)
     return null
   for (const key of ['route', 'path', 'url'] as const) {
-    const raw = metadata[key]?.trim()
+    const value = metadata[key]
+    const raw = typeof value === 'string' ? value.trim() : ''
     if (raw)
       return raw.slice(0, 200)
   }
@@ -280,7 +282,9 @@ export function toObserveSample(row: {
   duration_ms?: number | null
 }): ObserveSample {
   const metadata = normalizeMetadata(row.metadata)
-  const durationFromRow = typeof row.duration_ms === 'number' && Number.isFinite(row.duration_ms) ? row.duration_ms : null
+  const durationFromRow = typeof row.duration_ms === 'number' && Number.isFinite(row.duration_ms) && row.duration_ms >= 0 && row.duration_ms <= OBSERVE_MAX_DURATION_MS
+    ? row.duration_ms
+    : null
   return {
     device_id: row.device_id ?? '',
     action: row.action ?? '',
@@ -314,11 +318,11 @@ function parseDurationMs(metadata: Record<string, string> | null): number | null
     return null
   for (const key of ['duration_ms', 'duration'] as const) {
     const raw = metadata[key]
-    if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0)
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 && raw <= OBSERVE_MAX_DURATION_MS)
       return raw
     if (typeof raw === 'string' && /^\d+(?:\.\d+)?$/.test(raw)) {
       const value = Number(raw)
-      if (Number.isFinite(value) && value >= 0)
+      if (Number.isFinite(value) && value >= 0 && value <= OBSERVE_MAX_DURATION_MS)
         return value
     }
   }

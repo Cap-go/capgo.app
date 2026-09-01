@@ -452,7 +452,7 @@ export type DeviceStats = z.infer<typeof deviceStatsSchema>
 export const observeViewSchema = z.enum(['summary', 'metrics', 'events', 'device', 'versions', 'routes'])
 export const observeSortSchema = z.enum(['slowest', 'fastest', 'newest', 'oldest'])
 
-export const observeOptionsSchema = z.object({
+export const observeOptionsObjectSchema = z.object({
   appId: z.string().describe('App ID'),
   view: observeViewSchema.optional().describe('Start with summary, then follow findings.next. device is the session timeline.'),
   days: z.number().optional().describe('Lookback window: 1, 3, 7, or 30 (default 7)'),
@@ -465,6 +465,21 @@ export const observeOptionsSchema = z.object({
   supaHost: z.string().optional(),
   supaAnon: z.string().optional(),
 })
+
+export function refineObserveDeviceId(
+  value: { view?: z.infer<typeof observeViewSchema>, deviceId?: string },
+  ctx: z.RefinementCtx,
+) {
+  if (value.view === 'device' && !value.deviceId?.trim()) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['deviceId'],
+      message: 'deviceId is required for view=device',
+    })
+  }
+}
+
+export const observeOptionsSchema = observeOptionsObjectSchema.superRefine(refineObserveDeviceId)
 
 export type ObserveOptions = z.infer<typeof observeOptionsSchema>
 export type ObserveView = z.infer<typeof observeViewSchema>

@@ -71,6 +71,7 @@ import { resolveCapacitorConfigTargetPath, withConfigWriteTarget } from './confi
 import { starAllRepositories as starAllRepositoriesInternal, starRepository } from './github'
 import { createKeyInternal, deleteOldPrivateKeyInternal, saveKeyInternal } from './key'
 import { loginInternal } from './login'
+import { fetchObserve } from './observe/command'
 import { addOrganizationInternal } from './organization/add'
 import { deleteOrganizationInternal } from './organization/delete'
 import { listOrganizationsInternal } from './organization/list'
@@ -1258,32 +1259,13 @@ export class CapgoSDK {
    */
   async observe(options: ObserveOptions): Promise<SDKResult<Record<string, unknown>>> {
     try {
-      const apikey = options.apikey || this.apikey || findSavedKey(true)
-      const localConfig = await getLocalConfig()
-      const response = await fetch(`${localConfig.hostApi}/private/observe`, {
-        method: 'POST',
-        headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', 'capgkey': apikey }),
-        body: JSON.stringify({
-          appId: options.appId,
-          view: options.view ?? 'summary',
-          days: options.days,
-          action: options.action,
-          deviceId: options.deviceId,
-          versionName: options.versionName,
-          sort: options.sort,
-          limit: options.limit,
-        }),
+      const data = await fetchObserve({
+        ...options,
+        apikey: options.apikey || this.apikey,
+        supaHost: options.supaHost || this.supaHost,
+        supaAnon: options.supaAnon || this.supaAnon,
       })
-
-      const payload = await response.json().catch(() => ({})) as Record<string, unknown>
-      if (!response.ok) {
-        const message = typeof payload.message === 'string'
-          ? payload.message
-          : `HTTP error! status: ${response.status}`
-        throw new Error(message)
-      }
-
-      return { success: true, data: payload }
+      return { success: true, data }
     }
     catch (error) {
       return createErrorResult(error)

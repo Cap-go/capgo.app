@@ -1,11 +1,10 @@
 import type { ObserveOptions, ObserveView } from '../schemas/sdk'
-import { stdout } from 'node:process'
+import { stderr, stdout } from 'node:process'
 import { intro, log, outro } from '@clack/prompts'
 import { Table } from '@sauber/table'
-import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { checkAlerts } from '../api/update'
 import { CliUserError } from '../shared/cli-user-error'
-import { findSavedKey, formatError, getAppId, getConfig, getLocalConfig } from '../utils'
+import { findSavedKey, formatCapgoCliInvokeError, formatError, getAppId, getConfig, invokeCapgoCliApi } from '../utils'
 
 export interface ObserveCliOptions {
   apikey?: string
@@ -78,11 +77,10 @@ function printFindings(findings: ObserveFinding[] | undefined) {
 
 export async function fetchObserve(options: ObserveOptions): Promise<Record<string, unknown>> {
   const apikey = options.apikey || findSavedKey(true)
-  const localConfig = await getLocalConfig()
-  const response = await fetch(`${localConfig.hostApi}/private/observe`, {
+  const { data, error } = await invokeCapgoCliApi<Record<string, unknown>>('private/observe', {
+    apikey,
     method: 'POST',
-    headers: buildCliRequestHeaders({ 'Content-Type': 'application/json', 'capgkey': apikey }),
-    body: JSON.stringify({
+    body: {
       appId: options.appId,
       view: options.view ?? 'summary',
       days: options.days,
@@ -91,19 +89,13 @@ export async function fetchObserve(options: ObserveOptions): Promise<Record<stri
       versionName: options.versionName,
       sort: options.sort,
       limit: options.limit,
-    }),
+    },
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
   })
-
-  const payload = await response.json().catch(() => ({})) as Record<string, unknown>
-  if (!response.ok) {
-    const message = typeof payload.error === 'string'
-      ? payload.error
-      : typeof payload.message === 'string'
-        ? payload.message
-        : `HTTP error! status: ${response.status}`
-    throw new CliUserError(message)
-  }
-  return payload
+  if (error)
+    throw new CliUserError(await formatCapgoCliInvokeError(error))
+  return data ?? {}
 }
 
 export async function observeCommand(
@@ -112,9 +104,10 @@ export async function observeCommand(
   options: ObserveCliOptions,
   deviceIdArg?: string,
 ) {
-  intro('Capgo Observe')
+  if (!options.json)
+    intro('Capgo Observe')
   try {
-    await checkAlerts()
+    await checkAlerts(options.json ? { warn: message => stderr.write(`${message}\n`) } : undefined)
     const extConfig = await getConfig()
     const appId = getAppId(appIdArg, extConfig?.config)
     if (!appId)
@@ -140,7 +133,6 @@ export async function observeCommand(
 
     if (options.json) {
       writeJson(payload)
-      outro('Done')
       return
     }
 
@@ -222,7 +214,11 @@ export async function observeCommand(
     outro('Done')
   }
   catch (error) {
-    log.error(formatError(error))
+    const message = formatError(error)
+    if (options.json)
+      stderr.write(`${message}\n`)
+    else
+      log.error(message)
     throw error
   }
 }
