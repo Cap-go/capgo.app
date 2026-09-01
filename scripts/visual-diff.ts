@@ -881,7 +881,9 @@ async function runPipeline(options: CliOptions) {
       console.log('[visual-diff] no visual differences detected')
   }
   finally {
-    if (!options.skipGitCheckout) {
+    // GitHub Actions discards the workspace. Restoring the merge commit and
+    // reinstalling can hang with no output after the report is already written.
+    if (!options.skipGitCheckout && !process.env.GITHUB_ACTIONS) {
       try {
         const currentRef = git(['rev-parse', 'HEAD'])
         if (currentRef !== originalRef) {
