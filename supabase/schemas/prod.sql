@@ -957,7 +957,6 @@ DECLARE
   v_existing_credits_debited numeric := 0;
   v_required numeric := 0;
   v_credits_to_apply numeric := 0;
-  v_credits_available numeric := 0;
   v_latest_event_id uuid;
   v_latest_overage_amount numeric;
   v_needs_new_record boolean := false;
@@ -1049,21 +1048,24 @@ BEGIN
   v_credits_to_apply := GREATEST(v_required - v_existing_credits_debited, 0);
   v_remaining := v_credits_to_apply;
 
-  -- Check if there are any credits available in grants
-  SELECT COALESCE(SUM(GREATEST(credits_total - credits_consumed, 0)), 0)
-  INTO v_credits_available
-  FROM public.usage_credit_grants
-  WHERE org_id = p_org_id
-    AND expires_at >= now();
-
   -- Determine if we need a new record:
   -- 1. No existing record for this cycle (first overage)
   -- 2. Overage amount changed significantly (more than 1%)
-  -- 3. We have NEW credits available AND we need to apply them
+  -- 3. Unpaid credits remain AND a grant row can actually be consumed
+  --    (same predicate as the apply loop: unexpired and not fully consumed)
   v_needs_new_record := v_latest_event_id IS NULL
     OR (v_latest_overage_amount IS NOT NULL
         AND ABS(v_latest_overage_amount - p_overage_amount) / NULLIF(v_latest_overage_amount, 0) > 0.01)
-    OR (v_credits_to_apply > 0 AND v_credits_available > 0 AND v_existing_credits_debited = 0);
+    OR (
+      v_credits_to_apply > 0
+      AND EXISTS (
+        SELECT 1
+        FROM public.usage_credit_grants
+        WHERE org_id = p_org_id
+          AND expires_at >= now()
+          AND credits_consumed < credits_total
+      )
+    );
 
   -- Only create new record if needed
   IF v_needs_new_record THEN
@@ -6026,6 +6028,51 @@ ALTER FUNCTION "public"."enforce_role_binding_role_scope"() OWNER TO "postgres";
 
 
 COMMENT ON FUNCTION "public"."enforce_role_binding_role_scope"() IS 'Rejects role_bindings writes where the bound role family does not match the binding scope_type.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."enforce_sso_provider_client_update_guard"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_request_role text := public.current_request_role();
+BEGIN
+  -- service_role / postgres / supabase_admin keep full write access
+  -- (verify-dns, private API PATCH, tests).
+  IF public.is_internal_request_role(v_request_role) THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.dns_verified_at IS DISTINCT FROM OLD.dns_verified_at THEN
+    RAISE EXCEPTION 'SSO_PROVIDER_DNS_VERIFICATION_CLIENT_WRITE_DENIED'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF NEW.domain IS DISTINCT FROM OLD.domain THEN
+    RAISE EXCEPTION 'SSO_PROVIDER_DOMAIN_CHANGE_DENIED'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF NEW.status IS DISTINCT FROM OLD.status THEN
+    RAISE EXCEPTION 'SSO_PROVIDER_STATUS_PROMOTION_DENIED'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF NEW.enforce_sso IS DISTINCT FROM OLD.enforce_sso THEN
+    RAISE EXCEPTION 'SSO_PROVIDER_ENFORCE_SSO_DENIED'
+      USING ERRCODE = '42501';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."enforce_sso_provider_client_update_guard"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."enforce_sso_provider_client_update_guard"() IS 'BEFORE UPDATE trigger on public.sso_providers (per row). Runs on every client UPDATE; internal roles (service_role, postgres, supabase_admin) bypass. Executing roles: anon, authenticated via PostgREST; internal roles for verify-dns and /private/sso/providers PATCH. Table cardinality: low per org (typically 1-5 rows); trigger touches only the updated row. Indexes: not applicable (no table scans). Worst-case EXPLAIN (ANALYZE, BUFFERS): not run; trigger logic is O(1) field comparisons on OLD/NEW with no SQL queries.';
 
 
 
@@ -18731,6 +18778,63 @@ $$;
 ALTER FUNCTION "public"."trigger_webhook_on_audit_log"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."try_claim_credit_auto_top_up"("p_org_id" "uuid") RETURNS TABLE("claimed" boolean, "auto_top_up_enabled" boolean, "auto_top_up_threshold" numeric, "customer_id" "text", "available_credits" numeric)
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_org public.orgs%ROWTYPE;
+  v_available numeric := 0;
+BEGIN
+  IF p_org_id IS NULL THEN
+    RETURN QUERY SELECT false, false, 10::numeric, NULL::text, 0::numeric;
+    RETURN;
+  END IF;
+
+  SELECT * INTO v_org
+  FROM public.orgs
+  WHERE id = p_org_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, false, 10::numeric, NULL::text, 0::numeric;
+    RETURN;
+  END IF;
+
+  SELECT COALESCE((
+    SELECT balances.available_credits
+    FROM public.usage_credit_balances AS balances
+    WHERE balances.org_id = p_org_id
+  ), 0) INTO v_available;
+
+  IF NOT v_org.auto_top_up_enabled THEN
+    RETURN QUERY SELECT false, false, v_org.auto_top_up_threshold::numeric, v_org.customer_id::text, v_available;
+    RETURN;
+  END IF;
+
+  IF v_available >= v_org.auto_top_up_threshold THEN
+    RETURN QUERY SELECT false, true, v_org.auto_top_up_threshold::numeric, v_org.customer_id::text, v_available;
+    RETURN;
+  END IF;
+
+  IF v_org.auto_top_up_last_attempt_at IS NOT NULL
+     AND v_org.auto_top_up_last_attempt_at > now() - interval '1 hour' THEN
+    RETURN QUERY SELECT false, true, v_org.auto_top_up_threshold::numeric, v_org.customer_id::text, v_available;
+    RETURN;
+  END IF;
+
+  UPDATE public.orgs
+  SET auto_top_up_last_attempt_at = now()
+  WHERE id = p_org_id;
+
+  RETURN QUERY SELECT true, true, v_org.auto_top_up_threshold::numeric, v_org.customer_id::text, v_available;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."try_claim_credit_auto_top_up"("p_org_id" "uuid") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."update_app_versions_retention"() RETURNS "void"
     LANGUAGE "plpgsql"
     SET "search_path" TO ''
@@ -19469,6 +19573,39 @@ ALTER TABLE "public"."apikeys" ALTER COLUMN "id" ADD GENERATED BY DEFAULT AS IDE
     NO MAXVALUE
     CACHE 1
 );
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."app_fame" (
+    "app_id" character varying NOT NULL,
+    "fame_score" smallint NOT NULL,
+    "confidence" smallint NOT NULL,
+    "tier" "text" NOT NULL,
+    "category" "text",
+    "known_as" "text",
+    "summary" "text" DEFAULT ''::"text" NOT NULL,
+    "model" "text" DEFAULT ''::"text" NOT NULL,
+    "checked_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "app_fame_confidence_range" CHECK ((("confidence" >= 0) AND ("confidence" <= 100))),
+    CONSTRAINT "app_fame_score_range" CHECK ((("fame_score" >= 0) AND ("fame_score" <= 100))),
+    CONSTRAINT "app_fame_tier_check" CHECK (("tier" = ANY (ARRAY['unknown'::"text", 'niche'::"text", 'notable'::"text", 'famous'::"text", 'iconic'::"text"])))
+);
+
+
+ALTER TABLE "public"."app_fame" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."app_fame" IS 'AI-assessed public reputation for Capgo apps. Admin observability only.';
+
+
+
+COMMENT ON COLUMN "public"."app_fame"."fame_score" IS '0-100 public-brand reputation. Independent of device counts.';
+
+
+
+COMMENT ON COLUMN "public"."app_fame"."tier" IS 'unknown <30, niche <55, notable <75, famous <90, iconic >=90.';
 
 
 
@@ -21144,6 +21281,9 @@ CREATE TABLE IF NOT EXISTS "public"."orgs" (
     "website" "text",
     "stats_refresh_requested_at" timestamp without time zone,
     "onboarding" "jsonb" DEFAULT '{"intent": "unknown"}'::"jsonb" NOT NULL,
+    "auto_top_up_enabled" boolean DEFAULT false NOT NULL,
+    "auto_top_up_threshold" numeric(18,6) DEFAULT 10 NOT NULL,
+    "auto_top_up_last_attempt_at" timestamp with time zone,
     CONSTRAINT "orgs_max_apikey_expiration_days_valid" CHECK ((("max_apikey_expiration_days" IS NULL) OR (("max_apikey_expiration_days" >= 1) AND ("max_apikey_expiration_days" <= 365)))),
     CONSTRAINT "orgs_onboarding_valid" CHECK ((("jsonb_typeof"("onboarding") = 'object'::"text") AND ((NOT ("onboarding" ? 'intent'::"text")) OR (("onboarding" ->> 'intent'::"text") = ANY (ARRAY['unknown'::"text", 'ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text"]))))),
     CONSTRAINT "orgs_password_policy_config_min_length_check" CHECK ((("password_policy_config" IS NULL) OR (("jsonb_typeof"("password_policy_config") = 'object'::"text") AND ((NOT ("password_policy_config" ? 'min_length'::"text")) OR (("jsonb_typeof"(("password_policy_config" -> 'min_length'::"text")) = 'number'::"text") AND ((("password_policy_config" ->> 'min_length'::"text"))::numeric = "trunc"((("password_policy_config" ->> 'min_length'::"text"))::numeric)) AND (((("password_policy_config" ->> 'min_length'::"text"))::numeric >= (6)::numeric) AND ((("password_policy_config" ->> 'min_length'::"text"))::numeric <= (72)::numeric))))))),
@@ -21193,6 +21333,18 @@ COMMENT ON COLUMN "public"."orgs"."has_usage_credits" IS 'True only with positiv
 
 
 COMMENT ON COLUMN "public"."orgs"."onboarding" IS 'Onboarding answers (extensible JSONB). Currently: {"intent": unknown|ota|builder|both|exploring}. Used for segmentation and to tailor the org experience.';
+
+
+
+COMMENT ON COLUMN "public"."orgs"."auto_top_up_enabled" IS 'When true, the plan-check cron charges the saved card if available credits fall below auto_top_up_threshold. Default false.';
+
+
+
+COMMENT ON COLUMN "public"."orgs"."auto_top_up_threshold" IS 'Credit balance (USD/credits, 1:1) that triggers an automatic top-up of this same amount. Minimum 10.';
+
+
+
+COMMENT ON COLUMN "public"."orgs"."auto_top_up_last_attempt_at" IS 'Last automatic top-up attempt. Used as a cooldown so cron does not create overlapping charges.';
 
 
 
@@ -22114,6 +22266,11 @@ ALTER TABLE ONLY "public"."apikeys"
 
 
 
+ALTER TABLE ONLY "public"."app_fame"
+    ADD CONSTRAINT "app_fame_pkey" PRIMARY KEY ("app_id");
+
+
+
 ALTER TABLE ONLY "public"."app_metrics_cache"
     ADD CONSTRAINT "app_metrics_cache_pkey" PRIMARY KEY ("id");
 
@@ -22394,6 +22551,11 @@ ALTER TABLE ONLY "public"."org_users"
 
 
 
+ALTER TABLE "public"."orgs"
+    ADD CONSTRAINT "orgs_auto_top_up_threshold_min" CHECK ((("auto_top_up_threshold" >= (10)::numeric) AND ("auto_top_up_threshold" = "trunc"("auto_top_up_threshold")) AND ("auto_top_up_threshold" < 'Infinity'::numeric) AND ("auto_top_up_threshold" > '-Infinity'::numeric))) NOT VALID;
+
+
+
 ALTER TABLE ONLY "public"."orgs"
     ADD CONSTRAINT "orgs_pkey" PRIMARY KEY ("id");
 
@@ -22570,6 +22732,14 @@ ALTER TABLE ONLY "public"."webhooks"
 
 
 CREATE INDEX "apikeys_key_idx" ON "public"."apikeys" USING "btree" ("key");
+
+
+
+CREATE INDEX "app_fame_checked_at_idx" ON "public"."app_fame" USING "btree" ("checked_at");
+
+
+
+CREATE INDEX "app_fame_score_idx" ON "public"."app_fame" USING "btree" ("fame_score" DESC, "checked_at" DESC);
 
 
 
@@ -23389,6 +23559,10 @@ COMMENT ON TRIGGER "enforce_role_binding_role_scope" ON "public"."role_bindings"
 
 
 
+CREATE OR REPLACE TRIGGER "enforce_sso_provider_client_update_guard" BEFORE UPDATE ON "public"."sso_providers" FOR EACH ROW EXECUTE FUNCTION "public"."enforce_sso_provider_client_update_guard"();
+
+
+
 CREATE OR REPLACE TRIGGER "force_valid_apikey_name" BEFORE INSERT OR UPDATE ON "public"."apikeys" FOR EACH ROW EXECUTE FUNCTION "public"."auto_apikey_name_by_id"();
 
 
@@ -23689,6 +23863,11 @@ ALTER TABLE ONLY "public"."apikey_global_permissions"
 
 ALTER TABLE ONLY "public"."apikeys"
     ADD CONSTRAINT "apikeys_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."app_fame"
+    ADD CONSTRAINT "app_fame_app_id_fkey" FOREIGN KEY ("app_id") REFERENCES "public"."apps"("app_id") ON DELETE CASCADE;
 
 
 
@@ -24487,6 +24666,10 @@ CREATE POLICY "Deny delete on apikey_global_permissions" ON "public"."apikey_glo
 
 
 
+CREATE POLICY "Deny delete on app_fame" ON "public"."app_fame" AS RESTRICTIVE FOR DELETE TO "anon", "authenticated" USING (false);
+
+
+
 CREATE POLICY "Deny delete on cli_usage" ON "public"."cli_usage" AS RESTRICTIVE FOR DELETE TO "anon", "authenticated" USING (false);
 
 
@@ -24531,6 +24714,10 @@ CREATE POLICY "Deny insert on apikey_global_permissions" ON "public"."apikey_glo
 
 
 
+CREATE POLICY "Deny insert on app_fame" ON "public"."app_fame" AS RESTRICTIVE FOR INSERT TO "anon", "authenticated" WITH CHECK (false);
+
+
+
 CREATE POLICY "Deny insert on cli_usage" ON "public"."cli_usage" AS RESTRICTIVE FOR INSERT TO "anon", "authenticated" WITH CHECK (false);
 
 
@@ -24552,6 +24739,10 @@ CREATE POLICY "Deny insert via RBAC" ON "public"."deploy_history" FOR INSERT WIT
 
 
 CREATE POLICY "Deny select on apikey_global_permissions" ON "public"."apikey_global_permissions" AS RESTRICTIVE FOR SELECT TO "anon", "authenticated" USING (false);
+
+
+
+CREATE POLICY "Deny select on app_fame" ON "public"."app_fame" AS RESTRICTIVE FOR SELECT TO "anon", "authenticated" USING (false);
 
 
 
@@ -24584,6 +24775,10 @@ CREATE POLICY "Deny update for org members" ON "public"."usage_overage_events" A
 
 
 CREATE POLICY "Deny update on apikey_global_permissions" ON "public"."apikey_global_permissions" AS RESTRICTIVE FOR UPDATE TO "anon", "authenticated" USING (false) WITH CHECK (false);
+
+
+
+CREATE POLICY "Deny update on app_fame" ON "public"."app_fame" AS RESTRICTIVE FOR UPDATE TO "anon", "authenticated" USING (false) WITH CHECK (false);
 
 
 
@@ -24715,7 +24910,7 @@ CREATE POLICY "Users can read own security status" ON "public"."user_security" F
 
 
 
-CREATE POLICY "allow_org_admins_insert_sso_providers" ON "public"."sso_providers" FOR INSERT TO "anon", "authenticated" WITH CHECK ("public"."rbac_check_permission_request"("public"."rbac_perm_org_update_settings"(), "org_id", NULL::character varying, NULL::bigint));
+CREATE POLICY "allow_org_admins_insert_sso_providers" ON "public"."sso_providers" FOR INSERT TO "anon", "authenticated" WITH CHECK (("public"."rbac_check_permission_request"("public"."rbac_perm_org_update_settings"(), "org_id", NULL::character varying, NULL::bigint) AND ("status" = 'pending_verification'::"text") AND ("enforce_sso" IS NOT TRUE) AND ("dns_verified_at" IS NULL)));
 
 
 
@@ -24735,6 +24930,9 @@ ALTER TABLE "public"."apikey_global_permissions" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."apikeys" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."app_fame" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."app_metrics_cache" ENABLE ROW LEVEL SECURITY;
@@ -26090,6 +26288,11 @@ GRANT ALL ON FUNCTION "public"."enforce_public_channel_app_settings_permission"(
 
 
 GRANT ALL ON FUNCTION "public"."enforce_role_binding_role_scope"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."enforce_sso_provider_client_update_guard"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."enforce_sso_provider_client_update_guard"() TO "service_role";
 
 
 
@@ -27982,6 +28185,11 @@ REVOKE ALL ON FUNCTION "public"."trigger_webhook_on_audit_log"() FROM PUBLIC;
 
 
 
+REVOKE ALL ON FUNCTION "public"."try_claim_credit_auto_top_up"("p_org_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."try_claim_credit_auto_top_up"("p_org_id" "uuid") TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."update_app_versions_retention"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."update_app_versions_retention"() TO "service_role";
 
@@ -28114,6 +28322,10 @@ GRANT ALL ON SEQUENCE "public"."apikey_global_permissions_id_seq" TO "service_ro
 GRANT ALL ON SEQUENCE "public"."apikeys_id_seq" TO "anon";
 GRANT ALL ON SEQUENCE "public"."apikeys_id_seq" TO "authenticated";
 GRANT ALL ON SEQUENCE "public"."apikeys_id_seq" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."app_fame" TO "service_role";
 
 
 

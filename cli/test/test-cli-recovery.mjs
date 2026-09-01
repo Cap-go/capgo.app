@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
@@ -22,12 +22,15 @@ import {
   injectNotifyAppReadyIntoJs,
   patchNotifyAppReadyInBuildFolder,
 } from '../src/recovery/notify-app-ready.ts'
+import { resolveLocalSemverFallback, resolveUpdaterPackageJsonPath, buildUpdaterInstallInvocation } from '../src/recovery/bundle-zip.ts'
+import { zipBundleInternal } from '../src/bundle/zip.ts'
 
 const tempDirs = []
 let failures = 0
 
 function makeTempDir(name) {
-  const dir = mkdtempSync(join(tmpdir(), `capgo-cli-recovery-${name}-`))
+  // realpath so path assertions survive a symlinked tmpdir (macOS /var -> /private/var)
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), `capgo-cli-recovery-${name}-`)))
   tempDirs.push(dir)
   return dir
 }
@@ -222,6 +225,118 @@ await test('isValidAppId rejects reserved and malformed ids', () => {
   assert.equal(isValidAppId('com.example.app'), true)
   assert.equal(isValidAppId('io.ionic.starter'), false)
   assert.equal(isValidAppId('bad id'), false)
+})
+
+await test('resolveLocalSemverFallback builds a local semver tag', () => {
+  assert.equal(resolveLocalSemverFallback('abc123'), '0.0.1-beta.local-abc123')
+})
+
+await test('resolveUpdaterPackageJsonPath picks the first existing comma-separated package.json', () => {
+  const root = makeTempDir('updater-pkg')
+  writeFileSync(join(root, 'package.json'), '{}')
+  const nested = join(root, 'apps', 'mobile')
+  mkdirSync(nested, { recursive: true })
+  writeFileSync(join(nested, 'package.json'), '{}')
+  const missing = join(root, 'missing', 'package.json')
+  const resolved = resolveUpdaterPackageJsonPath(`${missing},${join(nested, 'package.json')}`)
+  assert.equal(resolved, join(nested, 'package.json'))
+})
+
+await test('resolveUpdaterPackageJsonPath resolves root-relative package.json options', () => {
+  const root = makeTempDir('updater-pkg-relative')
+  writeFileSync(join(root, 'package.json'), '{}')
+  const nested = join(root, 'apps', 'mobile')
+  mkdirSync(nested, { recursive: true })
+  writeFileSync(join(nested, 'package.json'), '{}')
+  const previousCwd = process.cwd()
+  try {
+    process.chdir(root)
+    const resolved = resolveUpdaterPackageJsonPath('missing/package.json,apps/mobile/package.json')
+    assert.equal(resolved, join(root, 'apps', 'mobile', 'package.json'))
+  }
+  finally {
+    process.chdir(previousCwd)
+  }
+})
+
+await test('resolveUpdaterPackageJsonPath prefers cwd over the workspace root for relative paths', () => {
+  const root = makeTempDir('updater-pkg-workspace')
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ workspaces: ['apps/*'] }))
+  const nested = join(root, 'apps', 'mobile')
+  mkdirSync(nested, { recursive: true })
+  writeFileSync(join(nested, 'package.json'), '{}')
+  const previousCwd = process.cwd()
+  try {
+    process.chdir(nested)
+    const resolved = resolveUpdaterPackageJsonPath('./package.json')
+    assert.equal(resolved, join(nested, 'package.json'))
+  }
+  finally {
+    process.chdir(previousCwd)
+  }
+})
+
+await test('buildUpdaterInstallInvocation uses yarn add when updater is not declared', () => {
+  const invocation = buildUpdaterInstallInvocation({ pm: 'yarn', installCommand: 'yarn install' }, '^7.0.0', null)
+  assert.deepEqual(invocation, { command: 'yarn', args: ['add', '@capgo/capacitor-updater@^7.0.0'] })
+})
+
+await test('buildUpdaterInstallInvocation uses bun add when updater is not declared', () => {
+  const invocation = buildUpdaterInstallInvocation({ pm: 'bun', installCommand: 'bun install' }, 'latest', null)
+  assert.deepEqual(invocation, { command: 'bun', args: ['add', '@capgo/capacitor-updater@latest'] })
+})
+
+await test('buildUpdaterInstallInvocation uses pnpm add when updater is not declared', () => {
+  const invocation = buildUpdaterInstallInvocation({ pm: 'pnpm', installCommand: 'pnpm install' }, '^7.0.0', null)
+  assert.deepEqual(invocation, { command: 'pnpm', args: ['add', '@capgo/capacitor-updater@^7.0.0'] })
+})
+
+await test('buildUpdaterInstallInvocation restores declared yarn deps via install', () => {
+  const invocation = buildUpdaterInstallInvocation({ pm: 'yarn', installCommand: 'yarn install' }, '^7.0.0', '^7.0.0')
+  assert.deepEqual(invocation, { command: 'yarn', args: ['install'] })
+})
+
+await test('zipBundleInternal rejects declared updater missing from node_modules', async () => {
+  const root = makeTempDir('zip-declared-updater')
+  writeFileSync(join(root, 'package.json'), JSON.stringify({
+    dependencies: { '@capgo/capacitor-updater': '^7.0.0' },
+  }))
+  const webDir = join(root, 'www')
+  mkdirSync(webDir)
+  writeFileSync(join(webDir, 'index.html'), '<html></html>')
+  writeFileSync(join(webDir, 'main.js'), 'console.log("hello")')
+  const previousCwd = process.cwd()
+  process.chdir(root)
+  try {
+    await assert.rejects(
+      () => zipBundleInternal('com.example.app', { path: webDir, bundle: '1.0.0', ignoreNotifyAppReady: true }, true),
+      (error) => {
+        assert.match(error.message, /Cannot find @capgo\/capacitor-updater in node_modules/)
+        assert.equal(shouldCapturePosthogException(error), true)
+        return true
+      },
+    )
+  }
+  finally {
+    process.chdir(previousCwd)
+  }
+})
+
+await test('zipBundleInternal silent notifyAppReady failure stays PostHog-capturable', async () => {
+  const root = makeTempDir('zip-silent')
+  const webDir = join(root, 'www')
+  mkdirSync(webDir)
+  writeFileSync(join(webDir, 'index.html'), '<html></html>')
+  writeFileSync(join(webDir, 'main.js'), 'console.log("hello")')
+
+  await assert.rejects(
+    () => zipBundleInternal('com.example.app', { path: webDir, bundle: '1.0.0' }, true),
+    (error) => {
+      assert.match(error.message, /notifyAppReady\(\) is missing/)
+      assert.equal(shouldCapturePosthogException(error), true)
+      return true
+    },
+  )
 })
 
 await test('failed recovery errors stay visible to PostHog exception capture', () => {

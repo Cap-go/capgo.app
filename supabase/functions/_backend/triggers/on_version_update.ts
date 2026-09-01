@@ -3,6 +3,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { eq } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
+import { purgeFileReadCache } from '../files/file_read_cache.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { persistVersionManifestEntries } from '../utils/manifest_persist.ts'
@@ -259,10 +260,12 @@ async function updateIt(c: Context, record: Database['public']['Tables']['app_ve
     }
   }
 
-  // Handle manifest entries (reload when the queue payload omitted the jsonb column)
-  const recordWithManifest = await ensureVersionManifest(c, record)
-  if (recordWithManifest.manifest)
-    await handleManifest(c, recordWithManifest)
+  // In-progress r2-direct uploads must use POST /private/set_manifest instead.
+  if (record.storage_provider !== 'r2-direct') {
+    const recordWithManifest = await ensureVersionManifest(c, record)
+    if (recordWithManifest.manifest)
+      await handleManifest(c, recordWithManifest)
+  }
 
   return c.json(BRES)
 }
@@ -424,6 +427,20 @@ async function deleteManifest(c: Context, record: Database['public']['Tables']['
 
 export async function deleteIt(c: Context, record: Database['public']['Tables']['app_versions']['Row']) {
   cloudlog({ requestId: c.get('requestId'), message: 'Delete', r2_path: record.r2_path })
+
+  if (record.r2_path) {
+    try {
+      await purgeFileReadCache(record.r2_path, record.checksum)
+    }
+    catch (error) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'purgeFileReadCache failed during version delete',
+        r2_path: record.r2_path,
+        error,
+      })
+    }
+  }
 
   // Manifest files: trash R2 first, then drop DB rows. Must finish before ACK.
   await deleteManifest(c, record)
