@@ -18,6 +18,18 @@ export interface PluginCompatibilityTrendPoint {
   version_breakdown: Record<string, number>
   major_breakdown?: Record<string, number>
   devices_last_month?: number | null
+  devices_last_month_ios?: number | null
+  devices_last_month_android?: number | null
+  version_ladder?: Array<{
+    version: string
+    device_count: number
+    percent: number
+    top_apps: Array<{
+      app_id: string
+      device_count: number
+      share: number
+    }>
+  }>
 }
 
 export interface PluginCompatibilityChartSeries {

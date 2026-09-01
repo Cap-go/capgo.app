@@ -2684,6 +2684,9 @@ export interface AdminPluginBreakdown {
     version_breakdown: Record<string, number>
     major_breakdown: Record<string, number>
     devices_last_month: number
+    devices_last_month_ios: number
+    devices_last_month_android: number
+    version_ladder: AdminPluginVersionLadderEntry[]
   }>
 }
 
@@ -4061,6 +4064,9 @@ export async function getAdminPluginBreakdown(
         version_breakdown: parseBreakdownJson(row.plugin_version_breakdown),
         major_breakdown: parseBreakdownJson(row.plugin_major_breakdown),
         devices_last_month: Number(row.devices_last_month) || 0,
+        devices_last_month_ios: Number(row.devices_last_month_ios) || 0,
+        devices_last_month_android: Number(row.devices_last_month_android) || 0,
+        version_ladder: parsePluginVersionLadderJson(row.plugin_version_ladder),
       }
     })
     const snapshotRow = pickPluginBreakdownSnapshotRow(rows)

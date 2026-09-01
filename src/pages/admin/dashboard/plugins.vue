@@ -38,6 +38,9 @@ interface PluginBreakdownTrendPoint {
   version_breakdown: Record<string, number>
   major_breakdown?: Record<string, number>
   devices_last_month?: number
+  devices_last_month_ios?: number
+  devices_last_month_android?: number
+  version_ladder?: PluginVersionLadderEntry[]
 }
 
 interface PluginVersionTopApp {
@@ -110,11 +113,13 @@ const latestSnapshotPoint = computed(() => {
     return breakdown
 
   return {
-    ...breakdown,
     date: trendPoint.date,
+    devices_last_month: trendPoint.devices_last_month ?? 0,
+    devices_last_month_ios: trendPoint.devices_last_month_ios ?? 0,
+    devices_last_month_android: trendPoint.devices_last_month_android ?? 0,
     version_breakdown: trendPoint.version_breakdown,
     major_breakdown: trendPoint.major_breakdown ?? {},
-    devices_last_month: trendPoint.devices_last_month || breakdown.devices_last_month,
+    version_ladder: trendPoint.version_ladder ?? [],
   }
 })
 
@@ -171,6 +176,9 @@ const versionTrendPoints = computed(() => pluginBreakdown.value?.trend ?? [])
 const populatedVersionTrendPoints = computed(() => (
   versionTrendPoints.value.filter(point => hasPluginVersionBreakdown(point.version_breakdown))
 ))
+const populatedMajorTrendPoints = computed(() => (
+  versionTrendPoints.value.filter(point => hasPluginVersionBreakdown(point.major_breakdown ?? {}))
+))
 
 function formatPercent(value: number) {
   return `${formatNumberValue(Number(value || 0), { maximumFractionDigits: 2 })}%`
@@ -222,14 +230,14 @@ const versionTrendSeries = computed(() => {
 })
 const hasVersionTrendData = computed(() => versionTrendSeries.value.length > 0)
 const topMajorVersionsForTrend = computed(() => {
-  const latestPoint = getLatestNonEmptyPluginTrendPoint(versionTrendPoints.value)
+  const latestPoint = populatedMajorTrendPoints.value[populatedMajorTrendPoints.value.length - 1]
   return getTopBreakdownEntries(latestPoint ?? undefined, 'major_breakdown', 0, maxTrendMajorVersions)
 })
 const majorTrendSeries = computed(() => {
-  if (populatedVersionTrendPoints.value.length === 0 || topMajorVersionsForTrend.value.length === 0)
+  if (populatedMajorTrendPoints.value.length === 0 || topMajorVersionsForTrend.value.length === 0)
     return []
 
-  return buildTrendSeries(populatedVersionTrendPoints.value, topMajorVersionsForTrend.value, 'major_breakdown')
+  return buildTrendSeries(populatedMajorTrendPoints.value, topMajorVersionsForTrend.value, 'major_breakdown')
 })
 const hasMajorTrendData = computed(() => majorTrendSeries.value.length > 0)
 

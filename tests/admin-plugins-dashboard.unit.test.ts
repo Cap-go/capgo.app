@@ -22,6 +22,7 @@ describe('admin plugins dashboard layout', () => {
     expect(source).toContain('getLatestNonEmptyPluginTrendPoint')
     expect(source).toContain('const latestSnapshotPoint = computed')
     expect(source).toContain('populatedVersionTrendPoints')
+    expect(source).toContain('populatedMajorTrendPoints')
     expect(source).not.toContain('resolvePluginBreakdownSnapshot')
     expect(source).not.toContain('chart-height')
     expect(source).not.toContain('ADMIN_PLUGINS_CHART_HEIGHT_PX')
