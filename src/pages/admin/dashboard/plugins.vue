@@ -4,6 +4,7 @@ meta:
 </route>
 
 <script setup lang="ts">
+import type { PluginCompatibilityTrendPoint } from '~/services/adminPluginCompatibility'
 import { FormKit } from '@formkit/vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -35,8 +36,11 @@ import { useMainStore } from '~/stores/main'
 interface PluginBreakdownTrendPoint {
   date: string
   version_breakdown: Record<string, number>
-  major_breakdown: Record<string, number>
+  major_breakdown?: Record<string, number>
   devices_last_month?: number
+  devices_last_month_ios?: number
+  devices_last_month_android?: number
+  version_ladder?: PluginVersionLadderEntry[]
 }
 
 interface PluginVersionTopApp {
@@ -96,11 +100,34 @@ async function loadPluginBreakdown() {
   }
 }
 
-const devicesTotal = computed(() => pluginBreakdown.value?.devices_last_month || 0)
-const devicesIos = computed(() => pluginBreakdown.value?.devices_last_month_ios || 0)
-const devicesAndroid = computed(() => pluginBreakdown.value?.devices_last_month_android || 0)
+const latestSnapshotPoint = computed(() => {
+  const breakdown = pluginBreakdown.value
+  if (!breakdown)
+    return null
+
+  if (hasPluginVersionBreakdown(breakdown.version_breakdown))
+    return breakdown
+
+  const trendPoint = getLatestNonEmptyPluginTrendPoint(breakdown.trend ?? [])
+  if (!trendPoint)
+    return breakdown
+
+  return {
+    date: trendPoint.date,
+    devices_last_month: trendPoint.devices_last_month ?? breakdown.devices_last_month,
+    devices_last_month_ios: trendPoint.devices_last_month_ios ?? breakdown.devices_last_month_ios,
+    devices_last_month_android: trendPoint.devices_last_month_android ?? breakdown.devices_last_month_android,
+    version_breakdown: trendPoint.version_breakdown,
+    major_breakdown: trendPoint.major_breakdown ?? {},
+    version_ladder: trendPoint.version_ladder ?? breakdown.version_ladder ?? [],
+  }
+})
+
+const devicesTotal = computed(() => latestSnapshotPoint.value?.devices_last_month || 0)
+const devicesIos = computed(() => latestSnapshotPoint.value?.devices_last_month_ios || 0)
+const devicesAndroid = computed(() => latestSnapshotPoint.value?.devices_last_month_android || 0)
 const snapshotDate = computed(() => {
-  const date = pluginBreakdown.value?.date
+  const date = latestSnapshotPoint.value?.date
   return date ? formatLocalDate(date) || date : '-'
 })
 
@@ -111,7 +138,7 @@ const thresholdValue = computed(() => {
 })
 
 const versionEntries = computed(() => {
-  const breakdown = pluginBreakdown.value?.version_breakdown ?? {}
+  const breakdown = latestSnapshotPoint.value?.version_breakdown ?? {}
   return Object.entries(breakdown)
     .map(([version, percent]) => ({
       version,
@@ -123,7 +150,7 @@ const versionEntries = computed(() => {
 })
 
 const majorEntries = computed(() => {
-  const breakdown = pluginBreakdown.value?.major_breakdown ?? {}
+  const breakdown = latestSnapshotPoint.value?.major_breakdown ?? {}
   return Object.entries(breakdown)
     .map(([version, percent]) => ({
       version,
@@ -140,19 +167,25 @@ const majorValues = computed(() => majorEntries.value.map(entry => entry.percent
 
 const hasVersionData = computed(() => versionEntries.value.length > 0)
 const hasMajorData = computed(() => majorEntries.value.length > 0)
-const versionLadderEntries = computed(() => (pluginBreakdown.value?.version_ladder ?? []).slice(0, maxVersionRows))
+const versionLadderEntries = computed(() => (latestSnapshotPoint.value?.version_ladder ?? []).slice(0, maxVersionRows))
 const hasVersionLadderData = computed(() => versionLadderEntries.value.length > 0)
 
-const versionCountTotal = computed(() => Object.keys(pluginBreakdown.value?.version_breakdown ?? {}).length)
+const versionCountTotal = computed(() => Object.keys(latestSnapshotPoint.value?.version_breakdown ?? {}).length)
 const versionCountShown = computed(() => versionEntries.value.length)
 const versionTrendPoints = computed(() => pluginBreakdown.value?.trend ?? [])
+const populatedVersionTrendPoints = computed(() => (
+  versionTrendPoints.value.filter(point => hasPluginVersionBreakdown(point.version_breakdown))
+))
+const populatedMajorTrendPoints = computed(() => (
+  versionTrendPoints.value.filter(point => hasPluginVersionBreakdown(point.major_breakdown ?? {}))
+))
 
 function formatPercent(value: number) {
   return `${formatNumberValue(Number(value || 0), { maximumFractionDigits: 2 })}%`
 }
 
 function getTopBreakdownEntries(
-  latestPoint: PluginBreakdownTrendPoint | undefined,
+  latestPoint: PluginCompatibilityTrendPoint | undefined,
   key: PluginBreakdownKey,
   minPercent: number,
   limit: number,
@@ -186,25 +219,25 @@ function buildTrendSeries(
 }
 
 const topVersionsForTrend = computed(() => {
-  const latestPoint = versionTrendPoints.value[versionTrendPoints.value.length - 1]
-  return getTopBreakdownEntries(latestPoint, 'version_breakdown', thresholdValue.value, maxTrendVersions)
+  const latestPoint = getLatestNonEmptyPluginTrendPoint(versionTrendPoints.value)
+  return getTopBreakdownEntries(latestPoint ?? undefined, 'version_breakdown', thresholdValue.value, maxTrendVersions)
 })
 const versionTrendSeries = computed(() => {
-  if (versionTrendPoints.value.length === 0 || topVersionsForTrend.value.length === 0)
+  if (populatedVersionTrendPoints.value.length === 0 || topVersionsForTrend.value.length === 0)
     return []
 
-  return buildTrendSeries(versionTrendPoints.value, topVersionsForTrend.value, 'version_breakdown')
+  return buildTrendSeries(populatedVersionTrendPoints.value, topVersionsForTrend.value, 'version_breakdown')
 })
 const hasVersionTrendData = computed(() => versionTrendSeries.value.length > 0)
 const topMajorVersionsForTrend = computed(() => {
-  const latestPoint = versionTrendPoints.value[versionTrendPoints.value.length - 1]
-  return getTopBreakdownEntries(latestPoint, 'major_breakdown', 0, maxTrendMajorVersions)
+  const latestPoint = populatedMajorTrendPoints.value[populatedMajorTrendPoints.value.length - 1]
+  return getTopBreakdownEntries(latestPoint ?? undefined, 'major_breakdown', 0, maxTrendMajorVersions)
 })
 const majorTrendSeries = computed(() => {
-  if (versionTrendPoints.value.length === 0 || topMajorVersionsForTrend.value.length === 0)
+  if (populatedMajorTrendPoints.value.length === 0 || topMajorVersionsForTrend.value.length === 0)
     return []
 
-  return buildTrendSeries(versionTrendPoints.value, topMajorVersionsForTrend.value, 'major_breakdown')
+  return buildTrendSeries(populatedMajorTrendPoints.value, topMajorVersionsForTrend.value, 'major_breakdown')
 })
 const hasMajorTrendData = computed(() => majorTrendSeries.value.length > 0)
 
@@ -216,10 +249,10 @@ const channelSelfStoreTrendSeries = computed(() => buildPluginCompatibilityTrend
 const hasChannelSelfStoreTrendData = computed(() => channelSelfStoreTrendSeries.value.length > 0)
 const latestCompatibilityTrendPoint = computed(() => getLatestNonEmptyPluginTrendPoint(versionTrendPoints.value))
 const knownPluginVersionDeviceCount = computed(() => {
-  if (!hasPluginVersionBreakdown(pluginBreakdown.value?.version_breakdown))
+  if (!hasPluginVersionBreakdown(latestSnapshotPoint.value?.version_breakdown))
     return null
 
-  return estimateKnownPluginVersionDevicesFromLadder(pluginBreakdown.value?.version_ladder)
+  return estimateKnownPluginVersionDevicesFromLadder(latestSnapshotPoint.value?.version_ladder)
 })
 const channelSelfStoreLatestBucket = computed(() => {
   const point = latestCompatibilityTrendPoint.value
@@ -392,11 +425,13 @@ displayStore.defaultBack = '/dashboard'
                   </p>
                 </div>
               </template>
-              <AdminStackedBarChart
-                :series="channelSelfStoreTrendSeries"
-                :is-loading="isLoadingBreakdown"
-                accessible-borders
-              />
+              <div class="h-72 sm:h-80">
+                <AdminStackedBarChart
+                  :series="channelSelfStoreTrendSeries"
+                  :is-loading="isLoadingBreakdown"
+                  accessible-borders
+                />
+              </div>
               <div class="grid grid-cols-1 gap-4 mt-6 md:grid-cols-2">
                 <AdminStatsCard
                   title="Legacy share (latest)"
@@ -432,11 +467,13 @@ displayStore.defaultBack = '/dashboard'
                   </p>
                 </div>
               </template>
-              <AdminStackedBarChart
-                :series="encryptionTrendSeries"
-                :is-loading="isLoadingBreakdown"
-                accessible-borders
-              />
+              <div class="h-72 sm:h-80">
+                <AdminStackedBarChart
+                  :series="encryptionTrendSeries"
+                  :is-loading="isLoadingBreakdown"
+                  accessible-borders
+                />
+              </div>
               <div class="grid grid-cols-1 gap-4 mt-6 md:grid-cols-2">
                 <AdminStatsCard
                   title="Legacy share (latest)"
