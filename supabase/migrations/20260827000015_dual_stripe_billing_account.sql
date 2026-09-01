@@ -74,9 +74,23 @@ BEGIN
     ) ON CONFLICT DO NOTHING;
   END IF;
 
-  PERFORM set_config('capgo.org_creation_bootstrap_org_id', '', true);
-
   IF NEW.customer_id IS NOT NULL THEN
+    PERFORM set_config('capgo.org_creation_bootstrap_org_id', '', true);
+    RETURN NEW;
+  END IF;
+
+  pending_customer_id := 'pending_' || NEW.id::text;
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.stripe_info
+    WHERE customer_id = pending_customer_id
+  ) THEN
+    UPDATE public.orgs
+    SET customer_id = pending_customer_id
+    WHERE id = NEW.id;
+
+    PERFORM set_config('capgo.org_creation_bootstrap_org_id', '', true);
     RETURN NEW;
   END IF;
 
@@ -86,11 +100,11 @@ BEGIN
   LIMIT 1;
 
   IF solo_plan_stripe_id IS NULL THEN
+    PERFORM set_config('capgo.org_creation_bootstrap_org_id', '', true);
     RAISE WARNING 'Solo plan not found, skipping sync stripe_info creation for org %', NEW.id;
     RETURN NEW;
   END IF;
 
-  pending_customer_id := 'pending_' || NEW.id::text;
   trial_at_date := NOW() + INTERVAL '15 days';
 
   INSERT INTO public.stripe_info (
@@ -112,6 +126,8 @@ BEGIN
   UPDATE public.orgs
   SET customer_id = pending_customer_id
   WHERE id = NEW.id;
+
+  PERFORM set_config('capgo.org_creation_bootstrap_org_id', '', true);
 
   RETURN NEW;
 END;
