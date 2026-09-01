@@ -153,7 +153,7 @@ function confirmSetup() {
           target="_blank"
           rel="noopener noreferrer"
           class="d-btn d-btn-sm h-11 min-h-11"
-          :class="onboardingSecondaryButtonClass()"
+          :class="onboardingSecondaryButtonClass"
           data-test="getting-started-cicd-docs"
           @click="helpMethod = 'docs'"
         >
@@ -164,14 +164,14 @@ function confirmSetup() {
           target="_blank"
           rel="noopener noreferrer"
           class="d-btn d-btn-sm h-11 min-h-11"
-          :class="onboardingSecondaryButtonClass()"
+          :class="onboardingSecondaryButtonClass"
         >
           {{ t('getting-started-cicd-open-github-docs') }}
         </a>
         <button
           type="button"
           class="d-btn d-btn-sm h-11 min-h-11"
-          :class="onboardingSecondaryButtonClass()"
+          :class="onboardingSecondaryButtonClass"
           data-test="getting-started-cicd-copy-ai"
           @click="helpMethod = 'ai'; void copyAiPrompt()"
         >
@@ -220,7 +220,7 @@ function confirmSetup() {
       v-if="progress.mode"
       type="button"
       class="d-btn h-11 min-h-11"
-      :class="onboardingPrimaryButtonClass()"
+      :class="onboardingPrimaryButtonClass"
       :disabled="!canConfirm"
       data-test="getting-started-cicd-confirm"
       @click="confirmSetup"
