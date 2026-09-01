@@ -4,6 +4,7 @@ meta:
 </route>
 
 <script setup lang="ts">
+import type { PluginCompatibilityTrendPoint } from '~/services/adminPluginCompatibility'
 import { FormKit } from '@formkit/vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -26,7 +27,6 @@ import {
   isLegacyChannelSelfStorePluginVersion,
   isLegacyEncryptionKeyIdPluginVersion,
 } from '~/services/adminPluginCompatibility'
-import type { PluginCompatibilityTrendPoint } from '~/services/adminPluginCompatibility'
 import { formatLocalDate } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
