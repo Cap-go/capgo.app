@@ -12,7 +12,8 @@
 --   idx_devices_app_id_plugin_version_production, idx_daily_version_app_id,
 --   idx_build_requests_app. Never scans all apps.
 -- - verify_getting_started: user-facing RPC, once per click. Indexed apps.app_id
---   lookup + one rbac_check_permission_request (app_read). Refreshes that app.
+--   lookup + two rbac_check_permission_request calls (app_read always, then
+--   app.update_settings before completing need_onboarding). Refreshes that app.
 --   Completing need_onboarding (and demo cleanup) requires app.update_settings.
 -- - report_app_onboarding_setup: after merging setup, completes need_onboarding
 --   when outcome is completed or skipped (AI/CLI finished the 12 steps).
