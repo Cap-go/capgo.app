@@ -1,8 +1,8 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
-import { applyAppOnboardingPatch, isAppOnboardingSource } from '../../utils/appOnboarding.ts'
 import { addAppCreatorToOnboarding, resolveAppCreatorEmail } from '../../utils/app_creator.ts'
+import { applyAppOnboardingPatch, isAppOnboardingSource } from '../../utils/appOnboarding.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
@@ -84,6 +84,9 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
       android_store_url: body.android_store_url ?? null,
       onboarding: applyAppOnboardingPatch(addAppCreatorToOnboarding({}, auth.userId, creatorEmail), {
         source: isAppOnboardingSource(body.onboarding?.source) ? body.onboarding.source : 'manual',
+        ...(body.need_onboarding
+          ? { steps: { add_app: { status: 'done' as const } } }
+          : {}),
       }),
     }
     const result = await pgClient.query(

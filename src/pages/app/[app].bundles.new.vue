@@ -6,6 +6,11 @@ import StepsBundle from '~/components/dashboard/StepsBundle.vue'
 import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
+import {
+  isLiveUpdateGuide,
+  liveUpdateChannelPath,
+  pickProductionChannel,
+} from '~/utils/gettingStartedLiveUpdate'
 
 const route = useRoute('/app/[app].bundles.new')
 const router = useRouter()
@@ -26,6 +31,7 @@ const lacksSecurityAccess = computed(() => {
 })
 
 const isOnboarding = computed(() => (bundlesCount.value ?? 0) === 0)
+const liveUpdateGuide = computed(() => isLiveUpdateGuide(route.query.guide))
 
 async function fetchBundlesCount() {
   const orgId = organizationStore.currentOrganization?.gid
@@ -44,12 +50,34 @@ async function fetchBundlesCount() {
   bundlesCount.value = count ?? 0
 }
 
-function onClose() {
-  router.push(`/app/${encodeURIComponent(appId.value)}/bundles`)
+function bundlesListPath() {
+  return `/app/${encodeURIComponent(appId.value)}/bundles`
 }
 
-function onDone() {
-  router.push(`/app/${encodeURIComponent(appId.value)}/bundles?refresh=true`)
+function onClose() {
+  if (liveUpdateGuide.value) {
+    router.push(`/app/${encodeURIComponent(appId.value)}/getting-started`)
+    return
+  }
+  router.push(bundlesListPath())
+}
+
+async function resolveLiveUpdateNextPath() {
+  const { data } = await supabase
+    .from('channels')
+    .select('id, name, public')
+    .eq('app_id', appId.value)
+
+  const channel = pickProductionChannel(data ?? [])
+  return liveUpdateChannelPath(appId.value, channel?.id)
+}
+
+async function onDone() {
+  if (liveUpdateGuide.value) {
+    router.push(await resolveLiveUpdateNextPath())
+    return
+  }
+  router.push(`${bundlesListPath()}?refresh=true`)
 }
 
 async function init() {
@@ -71,7 +99,9 @@ watch(() => appId.value, () => init())
 
 onMounted(() => {
   displayStore.NavTitle = ''
-  displayStore.defaultBack = `/app/${encodeURIComponent(appId.value)}/bundles`
+  displayStore.defaultBack = liveUpdateGuide.value
+    ? `/app/${encodeURIComponent(appId.value)}/getting-started`
+    : `/app/${encodeURIComponent(appId.value)}/bundles`
   init()
 })
 </script>

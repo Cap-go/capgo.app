@@ -39,6 +39,7 @@ import IconUsers from '~icons/lucide/users-round'
 import { preserveAdminDashboardMinimize } from '~/services/adminDashboardPreferences'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
 import {
+  hasStartedCliSetup,
   parseAppOnboarding,
 } from '~/services/appOnboarding'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
@@ -85,6 +86,7 @@ import {
 import AppOnboardingCliSteps from './AppOnboardingCliSteps.vue'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
 import AppOnboardingWelcome from './AppOnboardingWelcome.vue'
+import OnboardingAltSetup from './OnboardingAltSetup.vue'
 import OrganizationOnboardingInvite from './OrganizationOnboardingInvite.vue'
 import TechnicalTeammateInviteCard from './TechnicalTeammateInviteCard.vue'
 
@@ -150,6 +152,8 @@ const isSeedingDemo = ref(false)
 const isCliCommandVisible = ref(false)
 const apiKey = ref<string | null>(null)
 const createdApp = ref<AppRow | null>(null)
+const cliSetupStarted = ref(false)
+let didRedirectToGettingStarted = false
 const preOrgCreatedOrganizationId = ref<string | null>(null)
 const preOrgShouldInvite = ref(false)
 const reportedSetupSource = ref<'manual' | 'cli' | 'mcp' | 'ai' | null>(null)
@@ -160,6 +164,7 @@ const showLanguageSelector = computed(() => (
   || (flowStep.value === 'setup' && Boolean(createdApp.value))
   || (!props.preOrg && flowStep.value === 'install' && Boolean(createdApp.value))
 ))
+const compressAltSetup = computed(() => cliSetupStarted.value || hasStartedCliSetup(createdApp.value?.onboarding))
 const selectedIconFile = ref<File | null>(null)
 const localIconPreview = ref('')
 const storeIconPreview = ref('')
@@ -1914,6 +1919,14 @@ async function openDashboard() {
   router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
 }
 
+function onCliStepsProgress(payload: { hasStartedCli: boolean, isTerminal: boolean }) {
+  cliSetupStarted.value = payload.hasStartedCli
+  if (!payload.isTerminal || !createdApp.value || didRedirectToGettingStarted)
+    return
+  didRedirectToGettingStarted = true
+  router.replace(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
+}
+
 function trackDashboardExplored() {
   if (!progressTracker) {
     pendingDashboardExplored = true
@@ -2823,34 +2836,37 @@ defineExpose({
             :key="createdApp.app_id"
             :app-id="createdApp.app_id"
             :initial-onboarding="createdApp.onboarding"
+            @progress="onCliStepsProgress"
           />
 
-          <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
-            <TechnicalTeammateInviteCard
-              analytics-channel="onboarding-v3"
-              :show-manual-setup-link="false"
-              :tracking-version="3"
-              @opened="onTechnicalInviteOpened"
-              @success="onTechnicalInviteSucceeded"
-            />
-          </div>
-
-          <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
-            <div class="flex flex-wrap items-start justify-between gap-3">
-              <div class="max-w-2xl">
-                <p class="font-medium text-slate-950 dark:text-white">
-                  {{ t('app-onboarding-ai-help-title') }}
-                </p>
-                <p class="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {{ t('app-onboarding-ai-help-caption') }}
-                </p>
-              </div>
-              <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="copyAiInstructions">
-                <IconCopy class="h-4 w-4" />
-                {{ t('app-onboarding-ai-help-button') }}
-              </button>
+          <OnboardingAltSetup :compressed="compressAltSetup">
+            <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
+              <TechnicalTeammateInviteCard
+                analytics-channel="onboarding-v3"
+                :show-manual-setup-link="false"
+                :tracking-version="3"
+                @opened="onTechnicalInviteOpened"
+                @success="onTechnicalInviteSucceeded"
+              />
             </div>
-          </div>
+
+            <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="max-w-2xl">
+                  <p class="font-medium text-slate-950 dark:text-white">
+                    {{ t('app-onboarding-ai-help-title') }}
+                  </p>
+                  <p class="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                    {{ t('app-onboarding-ai-help-caption') }}
+                  </p>
+                </div>
+                <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="copyAiInstructions">
+                  <IconCopy class="h-4 w-4" />
+                  {{ t('app-onboarding-ai-help-button') }}
+                </button>
+              </div>
+            </div>
+          </OnboardingAltSetup>
 
           <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
             <button type="button" class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
@@ -2980,24 +2996,27 @@ defineExpose({
               :key="createdApp.app_id"
               :app-id="createdApp.app_id"
               :initial-onboarding="createdApp.onboarding"
+              @progress="onCliStepsProgress"
             />
 
-            <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
-              <div class="flex flex-wrap items-start justify-between gap-3">
-                <div class="max-w-2xl">
-                  <p class="font-medium text-slate-950 dark:text-white">
-                    {{ t('app-onboarding-ai-help-title') }}
-                  </p>
-                  <p class="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                    {{ t('app-onboarding-ai-help-caption') }}
-                  </p>
+            <OnboardingAltSetup :compressed="compressAltSetup">
+              <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                  <div class="max-w-2xl">
+                    <p class="font-medium text-slate-950 dark:text-white">
+                      {{ t('app-onboarding-ai-help-title') }}
+                    </p>
+                    <p class="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                      {{ t('app-onboarding-ai-help-caption') }}
+                    </p>
+                  </div>
+                  <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="copyAiInstructions">
+                    <IconCopy class="h-4 w-4" />
+                    {{ t('app-onboarding-ai-help-button') }}
+                  </button>
                 </div>
-                <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="copyAiInstructions">
-                  <IconCopy class="h-4 w-4" />
-                  {{ t('app-onboarding-ai-help-button') }}
-                </button>
               </div>
-            </div>
+            </OnboardingAltSetup>
 
             <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
               <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" :disabled="isSeedingDemo" @click="viewPreviousStep('choice')">

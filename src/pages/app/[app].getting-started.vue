@@ -6,7 +6,9 @@ import { useRouter } from 'vue-router'
 import IconCheck from '~icons/lucide/check'
 import AppOnboardingCliSteps from '~/components/dashboard/AppOnboardingCliSteps.vue'
 import AppPageFrame from '~/components/dashboard/AppPageFrame.vue'
+import GettingStartedCicdPanel from '~/components/dashboard/GettingStartedCicdPanel.vue'
 import { useAppPage } from '~/composables/useAppPage'
+import { isTerminalAppOnboarding } from '~/services/appOnboarding'
 import { useSupabase } from '~/services/supabase'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
@@ -15,10 +17,12 @@ import {
   gettingStartedProgress,
   parseAppOnboardingLedger,
 } from '~/utils/appOnboardingProgress'
+import { isCicdSetupValidated } from '~/utils/gettingStartedCicd'
 import {
   isStoreReleaseValidated,
   markStoreReleaseValidated,
 } from '~/utils/gettingStartedDismiss'
+import { liveUpdateUploadPath } from '~/utils/gettingStartedLiveUpdate'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -45,8 +49,11 @@ const userId = computed(() => main.user?.id ?? main.auth?.id ?? '')
 const steps = computed(() => buildGettingStartedSteps(ledger.value, {
   builderDone: builderDone.value,
   storeReleaseValidated: isStoreReleaseValidated(userId.value, id.value),
+  cicdSetupValidated: isCicdSetupValidated(userId.value, id.value),
+  cliSetupCompleted: isTerminalAppOnboarding(app.value?.onboarding),
 }))
 const progress = computed(() => gettingStartedProgress(steps.value))
+const focusedStepId = computed(() => steps.value.find(step => step.group === 'essential' && !step.done)?.id)
 const stepGroups = computed(() => {
   const essential = steps.value.filter(step => step.group === 'essential')
   const grow = steps.value.filter(step => step.group === 'grow')
@@ -101,13 +108,15 @@ function runStep(step: GettingStartedStep) {
     return
   }
   if (step.id === 'live_update') {
-    void router.push(`/app/${encodeURIComponent(id.value)}/bundles`)
+    void router.push(liveUpdateUploadPath(id.value))
     return
   }
   if (step.id === 'store_release') {
     storeModal.value?.openModal()
     return
   }
+  if (step.id === 'cicd')
+    return
   builderModalOpen.value = true
 }
 
@@ -236,6 +245,7 @@ watch(() => id.value, async (appId) => {
               v-for="step in group.steps"
               :key="step.id"
               class="px-4 py-3"
+              :class="step.id === focusedStepId ? 'bg-azure-50/70 dark:bg-azure-950/20' : ''"
               :data-test="`getting-started-step-${step.id}`"
             >
               <div class="flex items-center gap-3">
@@ -261,7 +271,7 @@ watch(() => id.value, async (appId) => {
                   {{ t('getting-started-done') }}
                 </span>
                 <button
-                  v-else
+                  v-else-if="step.id !== 'cicd'"
                   type="button"
                   class="d-btn d-btn-ghost d-btn-sm h-11 min-h-11 shrink-0 px-3 text-azure-700 dark:text-azure-300"
                   data-test="getting-started-step-action"
@@ -270,12 +280,23 @@ watch(() => id.value, async (appId) => {
                   {{ t(step.actionKey) }}
                 </button>
               </div>
+              <p
+                v-if="step.id === 'cli_install' && step.done"
+                class="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300"
+              >
+                {{ t('getting-started-self-test-hint') }}
+              </p>
               <AppOnboardingCliSteps
                 v-if="step.id === 'cli_install'"
                 :key="id"
                 class="mt-3"
                 :app-id="id"
                 :initial-onboarding="app.onboarding"
+              />
+              <GettingStartedCicdPanel
+                v-if="step.id === 'cicd' && !step.done && userId"
+                :app-id="id"
+                :user-id="userId"
               />
             </li>
           </ul>

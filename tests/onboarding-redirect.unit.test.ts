@@ -131,3 +131,50 @@ describe('onboarding dashboard redirect', () => {
     })).toBe(false)
   })
 })
+
+describe('post-CLI getting started redirect', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.resetModules()
+    window.sessionStorage.clear()
+  })
+
+  it('sends a finished CLI user back to getting started from dashboard and leftover onboarding routes', async () => {
+    const { getGettingStartedContinueRedirect } = await import('../src/utils/onboardingRedirect.ts')
+    const options = {
+      appId: 'com.example.app',
+      appCount: 1,
+      createdAt: '2026-08-03T23:00:01.000Z',
+      ledger: { features: { cli_install: { succeeded_at: '2026-08-14T00:00:00.000Z' } } },
+      needOnboarding: false,
+      organizationCount: 1,
+      userId: 'user-1',
+    }
+
+    expect(getGettingStartedContinueRedirect({ ...options, path: '/dashboard' })).toEqual({
+      path: '/app/com.example.app/getting-started',
+    })
+    expect(getGettingStartedContinueRedirect({ ...options, path: '/apps' })).toEqual({
+      path: '/app/com.example.app/getting-started',
+    })
+    expect(getGettingStartedContinueRedirect({ ...options, path: '/onboarding/app' })).toEqual({
+      path: '/app/com.example.app/getting-started',
+    })
+    expect(getGettingStartedContinueRedirect({ ...options, path: '/app/new' })).toEqual({
+      path: '/app/com.example.app/getting-started',
+    })
+    expect(getGettingStartedContinueRedirect({ ...options, path: '/settings/account' })).toBeNull()
+    expect(getGettingStartedContinueRedirect({ ...options, path: '/dashboard', needOnboarding: true })).toBeNull()
+    expect(getGettingStartedContinueRedirect({
+      ...options,
+      path: '/dashboard',
+      extras: { cicdSetupValidated: true, storeReleaseValidated: true, cliSetupCompleted: true },
+      ledger: {
+        features: {
+          cli_install: { succeeded_at: '2026-08-14T00:00:00.000Z' },
+          ota: { succeeded_at: '2026-08-14T00:00:00.000Z', stage: 'store_live' },
+        },
+      },
+    })).toBeNull()
+  })
+})

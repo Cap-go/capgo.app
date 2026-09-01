@@ -11,7 +11,10 @@ import { sendEvent } from '~/services/tracking'
 import { clearWebsitePaidUserCookie, setWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
-import { getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
+import { parseAppOnboardingLedger } from '~/utils/appOnboardingProgress'
+import { isCicdSetupValidated } from '~/utils/gettingStartedCicd'
+import { isStoreReleaseValidated } from '~/utils/gettingStartedDismiss'
+import { getGettingStartedContinueRedirect, getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
 import { hasPendingInviteSkip } from '~/utils/pendingInviteSkip'
 import { getPlans, isPlatformAdmin } from './../services/supabase'
 
@@ -256,7 +259,7 @@ async function guard(
 
     const { data: apps, error } = await supabase
       .from('apps')
-      .select('app_id, need_onboarding')
+      .select('app_id, need_onboarding, onboarding')
       .eq('owner_org', selectableOrganizations[0].gid)
       .limit(2)
 
@@ -266,14 +269,35 @@ async function guard(
     }
 
     const app = apps?.[0]
-    return getOnboardingResumeRedirect({
-      appId: app?.need_onboarding ? app.app_id : null,
+    const userId = sessionUser?.id
+    if (app?.need_onboarding) {
+      return getOnboardingResumeRedirect({
+        appId: app.app_id,
+        appCount: apps?.length ?? 0,
+        createdAt: sessionUser?.created_at,
+        organizationCount: selectableOrganizations.length,
+        path: to.path,
+        resumeAppId: typeof to.query.resume === 'string' ? to.query.resume : null,
+        userId,
+      })
+    }
+
+    if (!app?.app_id)
+      return null
+
+    return getGettingStartedContinueRedirect({
+      appId: app.app_id,
       appCount: apps?.length ?? 0,
       createdAt: sessionUser?.created_at,
+      extras: {
+        storeReleaseValidated: isStoreReleaseValidated(userId ?? '', app.app_id),
+        cicdSetupValidated: isCicdSetupValidated(userId ?? '', app.app_id),
+      },
+      ledger: parseAppOnboardingLedger(app.onboarding),
+      needOnboarding: false,
       organizationCount: selectableOrganizations.length,
       path: to.path,
-      resumeAppId: typeof to.query.resume === 'string' ? to.query.resume : null,
-      userId: sessionUser?.id,
+      userId,
     })
   }
 

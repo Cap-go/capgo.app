@@ -5,12 +5,16 @@ import { useI18n } from 'vue-i18n'
 import IconCheck from '~icons/lucide/check'
 import IconChevronDown from '~icons/lucide/chevron-down'
 import IconMinus from '~icons/lucide/minus'
-import { APP_ONBOARDING_STEP_IDS, parseAppOnboarding } from '~/services/appOnboarding'
+import { APP_ONBOARDING_STEP_IDS, hasStartedCliSetup, parseAppOnboarding } from '~/services/appOnboarding'
 import { useSupabase } from '~/services/supabase'
 
 const props = defineProps<{
   appId: string
   initialOnboarding?: unknown
+}>()
+
+const emit = defineEmits<{
+  progress: [{ hasStartedCli: boolean, isTerminal: boolean, doneCount: number }]
 }>()
 
 const { t } = useI18n()
@@ -37,6 +41,18 @@ watch(doneCount, (count) => {
   if (count > 0)
     isOpen.value = true
 }, { immediate: true })
+
+watch(
+  [onboarding, doneCount, isTerminal],
+  () => {
+    emit('progress', {
+      hasStartedCli: hasStartedCliSetup(onboarding.value),
+      isTerminal: isTerminal.value,
+      doneCount: doneCount.value,
+    })
+  },
+  { immediate: true, deep: true },
+)
 
 function stopPolling() {
   if (pollTimer !== null) {

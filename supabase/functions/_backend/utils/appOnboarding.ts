@@ -97,6 +97,18 @@ function parseSteps(value: unknown): AppOnboardingState['steps'] {
   return steps
 }
 
+export function hasStartedCliSetup(value: unknown): boolean {
+  const onboarding = parseAppOnboarding(value)
+  if (onboarding.source === 'cli' || onboarding.source === 'mcp')
+    return true
+  return APP_ONBOARDING_STEP_IDS.some(id => id !== 'add_app' && Boolean(onboarding.steps[id]))
+}
+
+export function isTerminalAppOnboarding(value: unknown): boolean {
+  const outcome = parseAppOnboarding(value).outcome
+  return outcome === 'completed' || outcome === 'skipped'
+}
+
 export function parseAppOnboarding(value: unknown): AppOnboardingState {
   const fallback = defaultAppOnboarding()
   const raw = parseSetupRecord(value)

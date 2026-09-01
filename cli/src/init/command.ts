@@ -1,6 +1,7 @@
 import type { Buffer } from 'node:buffer'
 import type { ExistingOrganizationApp, Options, PendingOnboardingApp } from '../api/app'
 import type { UploadReporter } from '../bundle/upload'
+import type { LoginMethod } from '../login'
 import type { Organization } from '../utils'
 import type { SupportedPackageManager } from './command-execution'
 import type { InitCodeDiff, InitEncryptionPhase, InitEncryptionSummary } from './runtime'
@@ -12,15 +13,15 @@ import { chdir, cwd, env, exit, platform, stderr, stdin, stdout } from 'node:pro
 import { canParse, format, increment, lessThan, parse } from '@std/semver'
 import open from 'open'
 import tmp from 'tmp'
+import { flushDeferredCommandInvocation } from '../analytics/track'
 import { checkAppIdsExist, completePendingOnboardingApp, findAppInOrganization, listPendingOnboardingApps } from '../api/app'
 import { checkVersionStatus } from '../api/update'
-import { flushDeferredCommandInvocation } from '../analytics/track'
 import { addAppInternal } from '../app/add'
 import { sendCliEvent, waitLog } from '../app/debug'
 import { deleteAppInternal } from '../app/delete'
-import { resolveInitCommandInput } from '../auth/command-input'
 import { getInfoInternal } from '../app/info'
 import { WAIT_LOG_CONTINUE_HINT } from '../app/wait-log-query'
+import { resolveInitCommandInput } from '../auth/command-input'
 import { canUseFilePicker, openPackageJsonPicker } from '../build/onboarding/file-picker'
 import { getPlatformDirFromCapacitorConfig } from '../build/platform-paths'
 import { uploadBundleInternal } from '../bundle/upload'
@@ -28,7 +29,6 @@ import { addChannelInternal } from '../channel/add'
 import { getConfigWriteTarget, resolveCapacitorConfigTargetPath, setConfigWriteTarget, writeConfigUpdater } from '../config'
 import { getRepoStarStatus, isRepoStarredInSession, starAllRepositories, starRepository } from '../github'
 import { createKeyInternal } from '../key'
-import type { LoginMethod } from '../login'
 import { doLoginExists, LOGIN_METHOD_OPTIONS, loginInternal } from '../login'
 import { writeOnboardingSupportBundle, writeSupportBundleFiles } from '../onboarding-support'
 import { showReplicationProgress } from '../replicationProgress'
@@ -4548,20 +4548,28 @@ async function selectPlatformStep(orgId: string, apikey: string, config?: Capaci
   }
 }
 
+async function confirmDeviceWasLaunched(orgId: string, apikey: string): Promise<'completed' | 'skipped'> {
+  const launched = await pConfirm({
+    message: 'Did you launch the app on a device or simulator?',
+  })
+  await cancelCommand(launched, orgId, apikey)
+  return launched ? 'completed' : 'skipped'
+}
+
 async function runDeviceStep(orgId: string, apikey: string, appId: string, platform: 'ios' | 'android', projectDir = cwd()): Promise<'completed' | 'skipped'> {
   const pm = getPMAndCommand()
   const doRun = await pConfirm({ message: `Run ${appId} on ${platform.toUpperCase()} device now to test the initial version?` })
   await cancelCommand(doRun, orgId, apikey)
   if (!doRun) {
     await markStep(orgId, apikey, 'run-device', appId)
-    return 'skipped'
+    return confirmDeviceWasLaunched(orgId, apikey)
   }
 
   const runCommand = await resolveRunDeviceCommand(() => exitCanceledInitOnboarding(orgId, apikey), pm, platform, projectDir)
   if (!runCommand.args) {
-    pLog.info(`Skipped device launch. You can run it manually in ${projectDir} with: ${runCommand.command}`)
+    pLog.info(`Skipped Capgo device launch. You can run it manually in ${projectDir} with: ${runCommand.command}`)
     await markStep(orgId, apikey, 'run-device', appId)
-    return 'skipped'
+    return confirmDeviceWasLaunched(orgId, apikey)
   }
 
   const s = pSpinner()
@@ -4635,7 +4643,7 @@ async function runDeviceStep(orgId: string, apikey: string, appId: string, platf
       pLog.info(`You can run the app manually in ${projectDir} with: ${runCommand.command}`)
     }
     await markStep(orgId, apikey, 'run-device', appId)
-    return 'skipped'
+    return confirmDeviceWasLaunched(orgId, apikey)
   }
   else {
     s.stop(`App started ✅`)
@@ -5617,6 +5625,17 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
   if (pendingOnboardingSelection.reusedPendingApp) {
     stepToSkip = Math.max(stepToSkip, 1)
+    // The console already created this app. Report add_app as done without
+    // writing step_done=1, which would rewind a later resume checkpoint.
+    if (globalReportContext?.apikey && appId) {
+      void reportInitOnboardingStep(globalReportContext.apikey, appId, 1, 'done', {
+        supaHost: globalReportContext.supaHost,
+        supaAnon: globalReportContext.supaAnon,
+        outcome: 'in_progress',
+      }).catch((error) => {
+        pLog.warn(`Cannot report reused app as added:\n${formatError(error)}`)
+      })
+    }
   }
   let pkgVersion = getBundleVersion(undefined, globalPathToPackageJson) || '1.0.0'
   let delta = globalDelta
@@ -5775,11 +5794,12 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     `${pm.runner} @capgo/cli@latest bundle upload --bundle <new-version> --channel ${globalChannelName}`,
     `${pm.runner} @capgo/cli@latest app debug`,
   )
-  pLog.info(`If you want to run another full OTA self-test after onboarding:`)
+  pLog.info(`Self-test the update on your own device:`)
   pLog.info(`1. Make a visible change`)
   pLog.info(`2. Build web assets only: ${pm.pm} run build`)
   pLog.info(`3. Upload with a new version: ${pm.runner} @capgo/cli@latest bundle upload --bundle <new-version> --channel ${globalChannelName}`)
-  pLog.warn(`Do not run "${pm.runner} cap sync" before validating the OTA update.`)
+  pLog.info(`4. Background the app and reopen it so it can fetch the update`)
+  pLog.warn(`Do not run "${pm.runner} cap sync" for this self-test.`)
   pLog.warn('Reason: cap sync puts your local build directly in the native app, which bypasses the Capgo OTA path.')
   pLog.info(`If you have any issue try to use the debug command \`${pm.runner} @capgo/cli@latest app debug\``)
   const didChooseSkills = await maybeInstallCapgoSkills()
