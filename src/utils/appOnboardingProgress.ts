@@ -277,15 +277,18 @@ function setupOutcome(value: unknown): string | null {
   if (!isRecord(value))
     return null
   const setup = isRecord(value.setup) ? value.setup : value
-  return typeof setup.outcome === 'string' ? setup.outcome : null
+  if (typeof setup.outcome === 'string')
+    return setup.outcome
+  return typeof value.outcome === 'string' ? value.outcome : null
 }
 
 export function shouldSkipOnboardingResume(onboarding: unknown): boolean {
   const ledger = parseAppOnboardingLedger(onboarding)
   if (ledger.getting_started_dismissed_at)
     return true
-  const ota = ledger.features?.ota ?? {}
-  if (ota.started_at || ota.succeeded_at)
+  // started_at is set when the user merely opens OTA setup. succeeded_at is
+  // written by ledger refresh when a real (non-builtin) bundle exists.
+  if (ledger.features?.ota?.succeeded_at)
     return true
   const outcome = setupOutcome(onboarding)
   return outcome === 'completed' || outcome === 'skipped'

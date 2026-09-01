@@ -493,9 +493,6 @@ describe('app onboarding progress analytics integration', () => {
     expect(dashboardExit).toContain('appId: createdApp.value.app_id')
     expect(dashboardExit).toContain(`await persistOnboardingProgress('completed')`)
     expect(dashboardExit).toContain('/getting-started')
-    expect(dashboardExit).toContain('async function skipOnboardingSplash()')
-    expect(dashboardExit).toContain('dismiss_getting_started')
-    expect(onboardingSource).toContain('data-test="app-onboarding-dont-show-again"')
     expect(dashboardExit.indexOf('completeStep')).toBeLessThan(dashboardExit.indexOf('router.push'))
     expect(dashboardExit).toContain('window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))')
     expect(onboardingSource).toContain('progressTracker?.trackDashboardExplored(createdApp.value?.app_id)')
@@ -503,6 +500,11 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain('window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)')
     expect(onboardingSource).toContain('pendingDashboardExplored = true')
     expect(onboardingSource).toContain('if (pendingDashboardExplored)')
+
+    const splashDismiss = sourceBetween('async function skipOnboardingSplash()', 'async function leaveSplashIfAlreadySetup()')
+    expect(splashDismiss).toContain('dismiss_getting_started')
+    expect(splashDismiss).toContain('updateAppOnboarding')
+    expect(onboardingSource).toContain('data-test="app-onboarding-dont-show-again"')
 
     const demoExit = sourceBetween('async function seedDemoData()', 'async function copyText(')
     expect(demoExit).toContain('window.dispatchEvent')

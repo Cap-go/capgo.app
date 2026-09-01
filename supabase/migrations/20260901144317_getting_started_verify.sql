@@ -78,6 +78,9 @@ BEGIN
     RETURN false;
   END IF;
 
+  -- CLI/AI report_app_onboarding_setup marks setup.outcome without filling every
+  -- canonical checklist step. That terminal outcome is enough to stop the splash.
+
   RETURN public.try_complete_pending_onboarding(p_app_id);
 END;
 $$;
@@ -87,7 +90,7 @@ REVOKE ALL ON FUNCTION public.try_complete_pending_onboarding_if_setup_done(char
 GRANT ALL ON FUNCTION public.try_complete_pending_onboarding_if_setup_done(character varying) TO "service_role";
 
 COMMENT ON FUNCTION public.try_complete_pending_onboarding_if_setup_done(character varying) IS
-  'Internal. Completes pending onboarding when apps.onboarding.setup.outcome is completed or skipped. Indexed apps.app_id lookup.';
+  'Internal. Completes pending onboarding when CLI/AI reports setup.outcome completed or skipped. That terminal outcome is the contract; do not require every canonical checklist step. Indexed apps.app_id lookup.';
 
 CREATE OR REPLACE FUNCTION "public"."refresh_one_app_onboarding_progress"(
   "p_app_id" character varying

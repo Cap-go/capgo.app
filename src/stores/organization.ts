@@ -524,6 +524,7 @@ export const useOrganizationStore = defineStore('organization', () => {
   const updateAppNeedOnboarding = (appId: string, needOnboarding: boolean) => {
     if (!_appsByAppId.value.get(appId))
       return
+    appOnboardingWriteGen.set(appId, (appOnboardingWriteGen.get(appId) ?? 0) + 1)
     writeAppFields(appId, { need_onboarding: needOnboarding })
   }
 

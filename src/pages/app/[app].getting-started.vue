@@ -75,13 +75,19 @@ function acronym(name: string) {
   return (first + second).toUpperCase()
 }
 
-function applyOnboarding(onboarding: unknown, needOnboarding?: boolean) {
-  if (!id.value || !app.value)
+function applyOnboarding(onboarding: unknown, needOnboarding?: boolean, targetAppId = id.value) {
+  if (!targetAppId)
     return
-  app.value = { ...app.value, onboarding: onboarding as typeof app.value.onboarding }
-  organizationStore.updateAppOnboarding(id.value, onboarding as typeof app.value.onboarding)
+  if (id.value === targetAppId && app.value?.app_id === targetAppId) {
+    app.value = {
+      ...app.value,
+      onboarding: onboarding as typeof app.value.onboarding,
+      ...(needOnboarding === undefined ? {} : { need_onboarding: needOnboarding }),
+    }
+  }
+  organizationStore.updateAppOnboarding(targetAppId, onboarding as NonNullable<typeof app.value>['onboarding'])
   if (needOnboarding !== undefined)
-    organizationStore.updateAppNeedOnboarding(id.value, needOnboarding)
+    organizationStore.updateAppNeedOnboarding(targetAppId, needOnboarding)
 }
 
 async function refreshNeedOnboarding(appId: string) {
@@ -90,8 +96,11 @@ async function refreshNeedOnboarding(appId: string) {
     .select('need_onboarding')
     .eq('app_id', appId)
     .maybeSingle()
-  if (data)
-    organizationStore.updateAppNeedOnboarding(appId, data.need_onboarding)
+  if (!data)
+    return
+  if (app.value?.app_id === appId)
+    app.value = { ...app.value, need_onboarding: data.need_onboarding }
+  organizationStore.updateAppNeedOnboarding(appId, data.need_onboarding)
 }
 
 async function checkBuilderDone(appId: string) {
@@ -132,7 +141,7 @@ async function verifySteps(options: { silent?: boolean } = {}) {
     if (error)
       throw error
     if (data)
-      applyOnboarding(data)
+      applyOnboarding(data, undefined, appId)
     await refreshNeedOnboarding(appId)
     if (!options.silent)
       toast.success(t('getting-started-verify-done'))
@@ -155,7 +164,7 @@ async function hideGettingStarted() {
   const current = app.value.onboarding ?? {}
   const previousNeed = app.value.need_onboarding
   isDismissing.value = true
-  applyOnboarding(withGettingStartedDismissed(current), false)
+  applyOnboarding(withGettingStartedDismissed(current), false, appId)
   try {
     const { data, error } = await supabase.rpc('dismiss_getting_started', {
       p_app_id: appId,
@@ -165,12 +174,14 @@ async function hideGettingStarted() {
     applyOnboarding(
       withGettingStartedDismissed(current, parseAppOnboardingLedger(data).getting_started_dismissed_at ?? undefined),
       false,
+      appId,
     )
-    await router.push(`/app/${encodeURIComponent(appId)}`)
+    if (id.value === appId)
+      await router.push(`/app/${encodeURIComponent(appId)}`)
   }
   catch (error) {
     console.error('Failed to hide getting started', error)
-    applyOnboarding(withoutGettingStartedDismissed(current), previousNeed)
+    applyOnboarding(withoutGettingStartedDismissed(current), previousNeed, appId)
     toast.error(t('getting-started-dismiss-error'))
   }
   finally {

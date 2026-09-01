@@ -1924,9 +1924,11 @@ async function skipOnboardingSplash() {
   try {
     const appId = createdApp.value.app_id
     await supabase.rpc('verify_getting_started', { p_app_id: appId })
-    const { error } = await supabase.rpc('dismiss_getting_started', { p_app_id: appId })
+    const { data, error } = await supabase.rpc('dismiss_getting_started', { p_app_id: appId })
     if (error)
       throw error
+    if (data != null)
+      organizationStore.updateAppOnboarding(appId, data)
     organizationStore.updateAppNeedOnboarding(appId, false)
     window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
     allowOnboardingDashboardExploration(onboardingUserId.value, appId)
@@ -1947,6 +1949,8 @@ async function leaveSplashIfAlreadySetup() {
   if (!app)
     return false
   const { data } = await supabase.rpc('verify_getting_started', { p_app_id: app.app_id })
+  if (data != null)
+    organizationStore.updateAppOnboarding(app.app_id, data)
   const skip = data != null
     ? shouldSkipOnboardingResume(data as unknown)
     : shouldSkipOnboardingResume(app.onboarding)

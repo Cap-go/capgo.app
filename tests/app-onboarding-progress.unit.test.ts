@@ -234,12 +234,16 @@ describe('getting started dismiss storage', () => {
     })).toBe(true)
     expect(shouldSkipOnboardingResume({
       features: { ota: { started_at: '2026-09-01T00:00:00.000Z' } },
-    })).toBe(true)
+    })).toBe(false)
     expect(shouldSkipOnboardingResume({
       features: { ota: { succeeded_at: '2026-09-01T00:00:00.000Z' } },
     })).toBe(true)
     expect(shouldSkipOnboardingResume({
       setup: { outcome: 'completed' },
+    })).toBe(true)
+    expect(shouldSkipOnboardingResume({
+      outcome: 'completed',
+      setup: {},
     })).toBe(true)
     expect(shouldSkipOnboardingResume({
       setup: { outcome: 'skipped' },
