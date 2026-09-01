@@ -940,14 +940,21 @@ describe('[PUT] /apikey/:id operations', () => {
       createData = await createResponse.json<{ id: number, rbac_id: string }>()
 
       const appBindings = await appApiKeyBindings(APPNAME, 'app_reader')
-      const updateResponse = await fetch(`${BASE_URL}/apikey/${createData.id}`, {
-        method: 'PUT',
-        headers: authHeaders,
-        body: JSON.stringify({
-          bindings: appBindings,
-        }),
-      })
-      expect(updateResponse.status).toBe(200)
+      // Cloudflare shards can 403 immediately after POST while the caller's
+      // org.update_user_roles check still sees the pre-create binding state.
+      await vi.waitFor(async () => {
+        const updateResponse = await fetch(`${BASE_URL}/apikey/${createData.id}`, {
+          method: 'PUT',
+          headers: authHeaders,
+          body: JSON.stringify({
+            bindings: appBindings,
+          }),
+        })
+        if (updateResponse.status !== 200) {
+          const body = await updateResponse.text().catch(() => '')
+          throw new Error(`PUT /apikey/${createData.id} status=${updateResponse.status} body=${body.slice(0, 400)}`)
+        }
+      }, { timeout: 4000, interval: 150 })
 
       await vi.waitFor(async () => {
         const { data: bindings, error } = await getSupabaseClient()
