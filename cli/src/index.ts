@@ -15,6 +15,8 @@ import { listApp } from './app/list'
 import { setApp } from './app/set'
 import { setSetting } from './app/setting'
 import { clearCredentialsCommand, listCredentialsCommand, migrateCredentialsCommand, saveCredentialsCommand, updateCredentialsCommand } from './build/credentials-command'
+import { exportCredentialsCommand, isCredentialsExportInvocation } from './build/credentials-export-command'
+import { sanitizeCredentialsExportTerminalText, writeCredentialsExportStderr } from './build/credentials-export-terminal'
 import { manageCredentialsCommand } from './build/credentials-manage'
 import { syncIosMarketingVersionCommand } from './build/ios-marketing-version'
 import { lastOutputCommand } from './build/last-output-command'
@@ -1245,6 +1247,23 @@ Examples:
   .option('--local', 'Only browse local .capgo-credentials.json')
 
 buildCredentials
+  .command('export <variable>')
+  .description(`Export one saved Builder credential or configuration value.
+
+Raw mode prints only the exact stored value to stdout with no trailing newline.
+All failures are written to stderr and exit with status 1. Saved local/global
+configuration is used; environment variables are never exported.`)
+  .action(exportCredentialsCommand)
+  .option('--app-id <appId>', 'App ID whose saved Builder value will be exported (required)')
+  .addOption(new Option('--appId <appId>', 'Compatibility alias for --app-id').hideHelp())
+  .option('--platform <platform>', 'Platform: ios or android (required when saved platform values are ambiguous)')
+  .option('--local', 'Export only from the project-local .capgo-credentials.json')
+  .option('--global', 'Export only from ~/.capgo-credentials/credentials.json')
+  .option('--file <path>', 'Write the value to a new file; existing destinations are never overwritten')
+  .option('--raw', 'Write only the exact stored value to stdout without a trailing newline')
+  .option('--decode-base64', 'Decode Base64 before file output; valid only with --file')
+
+buildCredentials
   .command('migrate')
   .description(`Migrate legacy provisioning profile to the new multi-target format.
 
@@ -1360,7 +1379,10 @@ void (async () => {
         : Promise.resolve(false)
       // For actual errors, show just the message without the full stack trace
       if (commanderError.message) {
-        log.error(commanderError.message)
+        if (isCredentialsExportInvocation(process.argv))
+          await writeCredentialsExportStderr(`${sanitizeCredentialsExportTerminalText(commanderError.message)}\n`).catch(() => {})
+        else
+          log.error(commanderError.message)
       }
       const exitCode = commanderError.exitCode ?? 1
       // Track the failure for usage analytics regardless of exception-capture

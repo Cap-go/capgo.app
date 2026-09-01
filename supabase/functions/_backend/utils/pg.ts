@@ -19,6 +19,7 @@ import { buildAdminOnboardingWizardDropoff, getAdminOnboardingActivationMetrics 
 import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { getRolloutDecision } from './rollout.ts'
+import { createPlatformAdminSignedImageUrl } from './storage.ts'
 import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
 
 const REPLICATION_LAG_THRESHOLD_SECONDS = 180
@@ -2964,10 +2965,10 @@ export async function getAdminFamousApps(
       drizzleClient.execute(pendingQuery),
     ])
 
-    const apps: AdminFamousAppRow[] = result.rows.map((row: any) => ({
+    const apps: AdminFamousAppRow[] = await Promise.all(result.rows.map(async (row: any) => ({
       app_id: String(row.app_id || ''),
       app_name: row.app_name ?? null,
-      icon_url: row.icon_url ?? null,
+      icon_url: await createPlatformAdminSignedImageUrl(c, row.icon_url ?? null),
       ios_store_url: row.ios_store_url ?? null,
       android_store_url: row.android_store_url ?? null,
       org_id: String(row.org_id || ''),
@@ -2981,7 +2982,7 @@ export async function getAdminFamousApps(
       model: String(row.model || ''),
       checked_at: normalizeTimestamp(row.checked_at) ?? '',
       device_count: Number(row.device_count) || 0,
-    }))
+    })))
 
     const summary = summaryResult.rows[0] as any
     return {

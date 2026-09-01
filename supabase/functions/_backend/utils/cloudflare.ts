@@ -1373,6 +1373,86 @@ export async function readDevicesCF(c: Context, params: ReadDevicesParams, custo
   return [] as DeviceRes[]
 }
 
+const DEVICE_PLATFORM_CHANNEL_LOOKUP_CHUNK = 200
+const DEVICE_PLATFORM_CHANNEL_LOOKUP_CONCURRENCY = 4
+
+function platformOsFromCFDouble(platform: number | null | undefined): string {
+  if (platform === 1)
+    return 'ios'
+  if (platform === 2)
+    return 'electron'
+  if (platform === 0)
+    return 'android'
+  return 'unknown'
+}
+
+/**
+ * Resolve latest platform + default_channel for a set of device ids from DEVICE_INFO.
+ * Used by native observe version breakdown when grouping by platform/channel.
+ */
+export async function readDevicePlatformChannelByIdsCF(
+  c: Context,
+  appId: string,
+  deviceIds: string[],
+): Promise<Map<string, { platform: string, channel_name: string }>> {
+  const result = new Map<string, { platform: string, channel_name: string }>()
+  if (!c.env.DEVICE_INFO || !deviceIds.length)
+    return result
+
+  const uniqueIds = [...new Set(deviceIds.filter(Boolean))]
+  const chunks: string[][] = []
+  for (let i = 0; i < uniqueIds.length; i += DEVICE_PLATFORM_CHANNEL_LOOKUP_CHUNK)
+    chunks.push(uniqueIds.slice(i, i + DEVICE_PLATFORM_CHANNEL_LOOKUP_CHUNK))
+
+  if (!chunks.length)
+    return result
+
+  let chunkCursor = 0
+  async function lookupChunk(chunk: string[]) {
+    const devicesList = chunk.map(id => `'${escapeSqlString(id)}'`).join(', ')
+    const query = `SELECT
+  device_id,
+  platform,
+  channel_name
+FROM (
+  SELECT
+    blob1 AS device_id,
+    argMax(double1, timestamp) AS platform,
+    argMax(blob7, timestamp) AS channel_name
+  FROM device_info
+  WHERE index1 = '${escapeSqlString(appId)}'
+    AND blob1 IN (${devicesList})
+  GROUP BY blob1
+)`
+
+    cloudlog({ requestId: c.get('requestId'), message: 'readDevicePlatformChannelByIdsCF query', deviceCount: chunk.length })
+    try {
+      const rows = await runQueryToCFA<{ device_id: string, platform: number, channel_name: string }>(c, query)
+      for (const row of rows) {
+        result.set(row.device_id, {
+          platform: platformOsFromCFDouble(row.platform),
+          channel_name: row.channel_name?.trim() ? row.channel_name : 'unknown',
+        })
+      }
+    }
+    catch (e) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading device platform/channel map', error: serializeError(e), query })
+    }
+  }
+
+  async function lookupWorker() {
+    while (chunkCursor < chunks.length) {
+      const chunk = chunks[chunkCursor++]!
+      await lookupChunk(chunk)
+    }
+  }
+
+  const workerCount = Math.min(DEVICE_PLATFORM_CHANNEL_LOOKUP_CONCURRENCY, chunks.length)
+  await Promise.all(Array.from({ length: workerCount }, () => lookupWorker()))
+
+  return result
+}
+
 interface StatRowCF {
   app_id: string
   device_id: string
@@ -1589,6 +1669,10 @@ export async function readUpdateDeliveryTimingEventsCF(
 const PLATFORM_DELIVERY_END_ACTIONS_SQL = '\'download_complete\', \'download_zip_complete\''
 const PLATFORM_DELIVERY_START_ACTIONS_SQL = '\'download_0\', \'download_zip_start\', \'download_manifest_start\''
 const PLATFORM_DELIVERY_MAX_MS = 7_200_000
+/** Keep each AE scan bounded; admin 90-day windows merge these chunks. */
+export const PLATFORM_DELIVERY_CF_CHUNK_DAYS = 7
+export const PLATFORM_DELIVERY_CF_CHUNK_CONCURRENCY = 4
+const PLATFORM_DELIVERY_PAIRING_LOOKBACK_MS = 2 * 60 * 60 * 1000
 
 export interface PlatformUpdateDeliveryDailyCFRow {
   day: string
@@ -1684,6 +1768,18 @@ WHERE duration_ms > 0
   AND day >= '${platformDeliveryDaySql(params.period_start)}'`
 }
 
+/** Single-row distinct device count for the full platform window (not chunked). */
+export function buildPlatformUpdateDeliveryDeviceCountCFQuery(params: BuildPlatformUpdateDeliveryStatsCFQueryParams): string {
+  return `SELECT
+  COUNT(DISTINCT app_device) AS devices
+FROM (
+  ${buildPlatformUpdateDeliveryDeliveriesSubquery(params)}
+)
+WHERE duration_ms > 0
+  AND duration_ms <= ${PLATFORM_DELIVERY_MAX_MS}
+  AND day >= '${platformDeliveryDaySql(params.period_start)}'`
+}
+
 function toPlatformDeliveryMetric(value: number | string | null | undefined): number | null {
   if (value === null || value === undefined || value === '')
     return null
@@ -1696,6 +1792,192 @@ function toPlatformDeliveryCount(value: number | string | null | undefined): num
   return Number.isFinite(numeric) ? Math.max(0, Math.round(numeric)) : 0
 }
 
+function emptyPlatformUpdateDeliveryOverviewRow(): PlatformUpdateDeliveryOverviewCFRow {
+  return { samples: 0, devices: 0, p50_ms: null, p75_ms: null, p95_ms: null, p99_ms: null }
+}
+
+function normalizePlatformUpdateDeliveryDailyRow(row: {
+  day: string
+  samples: number | string
+  devices: number | string
+  p50_ms: number | string | null
+  p75_ms: number | string | null
+  p95_ms: number | string | null
+  p99_ms: number | string | null
+}): PlatformUpdateDeliveryDailyCFRow {
+  return {
+    day: typeof row.day === 'string' ? row.day.slice(0, 10) : String(row.day).slice(0, 10),
+    samples: toPlatformDeliveryCount(row.samples),
+    devices: toPlatformDeliveryCount(row.devices),
+    p50_ms: toPlatformDeliveryMetric(row.p50_ms),
+    p75_ms: toPlatformDeliveryMetric(row.p75_ms),
+    p95_ms: toPlatformDeliveryMetric(row.p95_ms),
+    p99_ms: toPlatformDeliveryMetric(row.p99_ms),
+  }
+}
+
+function normalizePlatformUpdateDeliveryOverviewRow(row: {
+  samples: number | string | null | undefined
+  devices: number | string | null | undefined
+  p50_ms: number | string | null
+  p75_ms: number | string | null
+  p95_ms: number | string | null
+  p99_ms: number | string | null
+} | undefined): PlatformUpdateDeliveryOverviewCFRow {
+  return {
+    samples: toPlatformDeliveryCount(row?.samples),
+    devices: toPlatformDeliveryCount(row?.devices),
+    p50_ms: toPlatformDeliveryMetric(row?.p50_ms),
+    p75_ms: toPlatformDeliveryMetric(row?.p75_ms),
+    p95_ms: toPlatformDeliveryMetric(row?.p95_ms),
+    p99_ms: toPlatformDeliveryMetric(row?.p99_ms),
+  }
+}
+
+type PlatformDeliveryPercentileKey = 'p50_ms' | 'p75_ms' | 'p95_ms' | 'p99_ms'
+
+function mergePlatformDeliveryPercentile(
+  rows: Array<Pick<PlatformUpdateDeliveryOverviewCFRow, PlatformDeliveryPercentileKey | 'samples'>>,
+  key: PlatformDeliveryPercentileKey,
+): number | null {
+  let weightedSum = 0
+  let weight = 0
+  for (const row of rows) {
+    const value = row[key]
+    if (value === null || row.samples <= 0)
+      continue
+    weightedSum += value * row.samples
+    weight += row.samples
+  }
+  return weight > 0 ? weightedSum / weight : null
+}
+
+/** Split long admin windows into bounded AE scans with pairing lookback on each chunk. */
+export function splitPlatformUpdateDeliveryStatsParams(
+  params: BuildPlatformUpdateDeliveryStatsCFQueryParams,
+  chunkDays = PLATFORM_DELIVERY_CF_CHUNK_DAYS,
+): BuildPlatformUpdateDeliveryStatsCFQueryParams[] {
+  const periodStartMs = Date.parse(params.period_start)
+  const endMs = Date.parse(params.end_date)
+  if (!Number.isFinite(periodStartMs) || !Number.isFinite(endMs) || endMs <= periodStartMs)
+    return [params]
+
+  const periodMs = endMs - periodStartMs
+  const chunkMs = chunkDays * 24 * 60 * 60 * 1000
+  if (periodMs <= chunkMs)
+    return [params]
+
+  const chunks: BuildPlatformUpdateDeliveryStatsCFQueryParams[] = []
+  for (let chunkStartMs = periodStartMs; chunkStartMs < endMs; chunkStartMs += chunkMs) {
+    const chunkEndMs = Math.min(chunkStartMs + chunkMs, endMs)
+    chunks.push({
+      query_start: new Date(chunkStartMs - PLATFORM_DELIVERY_PAIRING_LOOKBACK_MS).toISOString(),
+      period_start: new Date(chunkStartMs).toISOString(),
+      end_date: new Date(chunkEndMs).toISOString(),
+    })
+  }
+  return chunks
+}
+
+function mergePlatformDeliveryDailyRow(
+  left: PlatformUpdateDeliveryDailyCFRow,
+  right: PlatformUpdateDeliveryDailyCFRow,
+): PlatformUpdateDeliveryDailyCFRow {
+  const rows = [left, right]
+  const samples = left.samples + right.samples
+  if (samples <= 0)
+    return { ...left, samples: 0, devices: 0, p50_ms: null, p75_ms: null, p95_ms: null, p99_ms: null }
+
+  return {
+    day: left.day,
+    samples,
+    devices: left.devices + right.devices,
+    p50_ms: mergePlatformDeliveryPercentile(rows, 'p50_ms'),
+    p75_ms: mergePlatformDeliveryPercentile(rows, 'p75_ms'),
+    p95_ms: mergePlatformDeliveryPercentile(rows, 'p95_ms'),
+    p99_ms: mergePlatformDeliveryPercentile(rows, 'p99_ms'),
+  }
+}
+
+export function mergePlatformUpdateDeliveryDailyRows(
+  rows: PlatformUpdateDeliveryDailyCFRow[],
+): PlatformUpdateDeliveryDailyCFRow[] {
+  const byDay = new Map<string, PlatformUpdateDeliveryDailyCFRow>()
+  for (const row of rows) {
+    const existing = byDay.get(row.day)
+    byDay.set(row.day, existing ? mergePlatformDeliveryDailyRow(existing, row) : row)
+  }
+  return [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day))
+}
+
+/** Approximate overview percentiles from chunk overviews weighted by sample count. */
+export function mergePlatformUpdateDeliveryOverviewRows(
+  rows: PlatformUpdateDeliveryOverviewCFRow[],
+): PlatformUpdateDeliveryOverviewCFRow {
+  if (rows.length === 0)
+    return emptyPlatformUpdateDeliveryOverviewRow()
+  if (rows.length === 1)
+    return rows[0]!
+
+  const samples = rows.reduce((sum, row) => sum + row.samples, 0)
+  if (samples <= 0)
+    return emptyPlatformUpdateDeliveryOverviewRow()
+
+  return {
+    samples,
+    // Approximate upper bound when callers do not replace devices with a full-window scan.
+    devices: rows.reduce((sum, row) => sum + row.devices, 0),
+    p50_ms: mergePlatformDeliveryPercentile(rows, 'p50_ms'),
+    p75_ms: mergePlatformDeliveryPercentile(rows, 'p75_ms'),
+    p95_ms: mergePlatformDeliveryPercentile(rows, 'p95_ms'),
+    p99_ms: mergePlatformDeliveryPercentile(rows, 'p99_ms'),
+  }
+}
+
+async function queryPlatformUpdateDeliveryDeviceCount(
+  c: Context,
+  params: BuildPlatformUpdateDeliveryStatsCFQueryParams,
+): Promise<number> {
+  const query = buildPlatformUpdateDeliveryDeviceCountCFQuery(params)
+  const result = await runQueryToCFA<{ devices: number | string }>(c, query)
+  return toPlatformDeliveryCount(result[0]?.devices)
+}
+
+async function queryPlatformUpdateDeliveryStatsChunk(
+  c: Context,
+  params: BuildPlatformUpdateDeliveryStatsCFQueryParams,
+): Promise<{
+  dailyRows: PlatformUpdateDeliveryDailyCFRow[]
+  overviewRow: PlatformUpdateDeliveryOverviewCFRow
+}> {
+  const dailyQuery = buildPlatformUpdateDeliveryDailyCFQuery(params)
+  const overviewQuery = buildPlatformUpdateDeliveryOverviewCFQuery(params)
+  const [daily, overview] = await Promise.all([
+    runQueryToCFA<{
+      day: string
+      samples: number | string
+      devices: number | string
+      p50_ms: number | string | null
+      p75_ms: number | string | null
+      p95_ms: number | string | null
+      p99_ms: number | string | null
+    }>(c, dailyQuery),
+    runQueryToCFA<{
+      samples: number | string
+      devices: number | string
+      p50_ms: number | string | null
+      p75_ms: number | string | null
+      p95_ms: number | string | null
+      p99_ms: number | string | null
+    }>(c, overviewQuery),
+  ])
+
+  return {
+    dailyRows: daily.map(normalizePlatformUpdateDeliveryDailyRow),
+    overviewRow: normalizePlatformUpdateDeliveryOverviewRow(overview[0]),
+  }
+}
+
 export async function readPlatformUpdateDeliveryStatsCF(
   c: Context,
   params: BuildPlatformUpdateDeliveryStatsCFQueryParams,
@@ -1706,61 +1988,73 @@ export async function readPlatformUpdateDeliveryStatsCF(
   if (!c.env.APP_LOG) {
     return {
       dailyRows: [],
-      overviewRow: { samples: 0, devices: 0, p50_ms: null, p75_ms: null, p95_ms: null, p99_ms: null },
+      overviewRow: emptyPlatformUpdateDeliveryOverviewRow(),
     }
   }
 
-  // AE SQL has no UNION/ROLLUP, so daily series and true overview percentiles
-  // cannot share one statement. Two parallel queries beat 90 sequential scans.
-  const dailyQuery = buildPlatformUpdateDeliveryDailyCFQuery(params)
-  const overviewQuery = buildPlatformUpdateDeliveryOverviewCFQuery(params)
+  const chunks = splitPlatformUpdateDeliveryStatsParams(params)
   cloudlog({
     requestId: c.get('requestId'),
     message: 'readPlatformUpdateDeliveryStatsCF query',
-    dailyQuery,
-    overviewQuery,
+    chunk_count: chunks.length,
+    period_start: params.period_start,
+    end_date: params.end_date,
   })
 
   try {
-    const [daily, overview] = await Promise.all([
-      runQueryToCFA<{
-        day: string
-        samples: number | string
-        devices: number | string
-        p50_ms: number | string | null
-        p75_ms: number | string | null
-        p95_ms: number | string | null
-        p99_ms: number | string | null
-      }>(c, dailyQuery),
-      runQueryToCFA<{
-        samples: number | string
-        devices: number | string
-        p50_ms: number | string | null
-        p75_ms: number | string | null
-        p95_ms: number | string | null
-        p99_ms: number | string | null
-      }>(c, overviewQuery),
-    ])
+    const chunkResults: Array<{
+      dailyRows: PlatformUpdateDeliveryDailyCFRow[]
+      overviewRow: PlatformUpdateDeliveryOverviewCFRow
+    }> = []
 
-    const overviewRow = overview[0]
+    for (let index = 0; index < chunks.length; index += PLATFORM_DELIVERY_CF_CHUNK_CONCURRENCY) {
+      const batch = chunks.slice(index, index + PLATFORM_DELIVERY_CF_CHUNK_CONCURRENCY)
+      const batchResults = await Promise.allSettled(batch.map(chunk => queryPlatformUpdateDeliveryStatsChunk(c, chunk)))
+      batchResults.forEach((result, offset) => {
+        if (result.status === 'fulfilled') {
+          chunkResults.push(result.value)
+          return
+        }
+        cloudlogErr({
+          requestId: c.get('requestId'),
+          message: 'Platform update delivery chunk failed',
+          error: serializeError(result.reason),
+          period_start: batch[offset]?.period_start,
+          end_date: batch[offset]?.end_date,
+        })
+      })
+    }
+
+    if (chunkResults.length === 0) {
+      return {
+        dailyRows: [],
+        overviewRow: emptyPlatformUpdateDeliveryOverviewRow(),
+      }
+    }
+
+    const allChunksSucceeded = chunkResults.length === chunks.length
+    let overviewRow = mergePlatformUpdateDeliveryOverviewRows(chunkResults.map(result => result.overviewRow))
+    if (chunks.length > 1 && allChunksSucceeded) {
+      try {
+        overviewRow = {
+          ...overviewRow,
+          devices: await queryPlatformUpdateDeliveryDeviceCount(c, params),
+        }
+      }
+      catch (error) {
+        cloudlogErr({
+          requestId: c.get('requestId'),
+          message: 'Platform update delivery device count query failed',
+          error: serializeError(error),
+          period_start: params.period_start,
+          end_date: params.end_date,
+        })
+      }
+    }
+
     return {
-      dailyRows: daily.map(row => ({
-        day: typeof row.day === 'string' ? row.day.slice(0, 10) : String(row.day).slice(0, 10),
-        samples: toPlatformDeliveryCount(row.samples),
-        devices: toPlatformDeliveryCount(row.devices),
-        p50_ms: toPlatformDeliveryMetric(row.p50_ms),
-        p75_ms: toPlatformDeliveryMetric(row.p75_ms),
-        p95_ms: toPlatformDeliveryMetric(row.p95_ms),
-        p99_ms: toPlatformDeliveryMetric(row.p99_ms),
-      })),
-      overviewRow: {
-        samples: toPlatformDeliveryCount(overviewRow?.samples),
-        devices: toPlatformDeliveryCount(overviewRow?.devices),
-        p50_ms: toPlatformDeliveryMetric(overviewRow?.p50_ms),
-        p75_ms: toPlatformDeliveryMetric(overviewRow?.p75_ms),
-        p95_ms: toPlatformDeliveryMetric(overviewRow?.p95_ms),
-        p99_ms: toPlatformDeliveryMetric(overviewRow?.p99_ms),
-      },
+      dailyRows: mergePlatformUpdateDeliveryDailyRows(chunkResults.flatMap(result => result.dailyRows)),
+      overviewRow,
     }
   }
   catch (e) {
@@ -1768,8 +2062,9 @@ export async function readPlatformUpdateDeliveryStatsCF(
       requestId: c.get('requestId'),
       message: 'Error reading platform update delivery stats',
       error: serializeError(e),
-      dailyQuery,
-      overviewQuery,
+      chunk_count: chunks.length,
+      period_start: params.period_start,
+      end_date: params.end_date,
     })
     throw e
   }

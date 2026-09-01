@@ -411,3 +411,46 @@ export const plistBackgroundModesSanity: PrescanCheck = {
     return findings
   },
 }
+
+/**
+ * UIRequiredDeviceCapabilities may be an array of strings or a dict of
+ * capability → bool. Array members are required; dict keys with <true/> are
+ * required. Empty / unreadable forms return [].
+ */
+function requiredDeviceCapabilities(raw: string): string[] {
+  const fromArray = plistArrayStrings(raw, 'UIRequiredDeviceCapabilities')
+  if (fromArray.length > 0)
+    return fromArray
+  const dict = plistDictBlock(raw, 'UIRequiredDeviceCapabilities')
+  if (dict === null)
+    return []
+  const keys: string[] = []
+  for (const m of dict.matchAll(/<key>([\s\S]*?)<\/key>\s*<(true|false)\s*\/>/g)) {
+    if (m[2] === 'true')
+      keys.push(m[1].trim())
+  }
+  return keys
+}
+
+export const plistRequiredDeviceArm64: PrescanCheck = {
+  id: 'ios/plist-required-device-arm64',
+  platforms: ['ios'],
+  appliesTo: ctx => hasInfoPlist(ctx) && willUploadToAppStore(ctx),
+  async run(ctx): Promise<Finding[]> {
+    const raw = readInfoPlist(ctx.projectDir)
+    if (raw === null)
+      return []
+    if (!plistHasKey(raw, 'UIRequiredDeviceCapabilities'))
+      return []
+    const caps = requiredDeviceCapabilities(raw)
+    if (caps.includes('arm64') || !caps.includes('armv7'))
+      return []
+    return [{
+      id: 'ios/plist-required-device-arm64',
+      severity: 'warning',
+      title: 'UIRequiredDeviceCapabilities lists armv7 without arm64',
+      detail: 'Requiring only armv7 marks the binary as 32-bit. App Store installs on iOS 26+ can fail with a generic download error.',
+      fix: 'Replace armv7 with arm64 in UIRequiredDeviceCapabilities (modern iPhones are 64-bit only).',
+    }]
+  },
+}

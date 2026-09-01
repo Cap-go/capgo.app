@@ -1,3 +1,4 @@
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readdirSync } from 'node:fs'
 import path from 'node:path'
 import VueI18n from '@intlify/unplugin-vue-i18n/vite'
@@ -86,6 +87,44 @@ function getFaviconTheme(isLocalDevServer = false): FaviconTheme {
   return branchTheme ?? productionFaviconTheme
 }
 
+function normalizeDevServerPath(url: string | undefined) {
+  const requestPath = (url ?? '').split('?')[0]
+  if (requestPath.length > 1 && requestPath.endsWith('/'))
+    return requestPath.slice(0, -1)
+  return requestPath
+}
+
+function wellKnownPasswordManagerPlugin(): Plugin {
+  const changePasswordPath = '/.well-known/change-password'
+  const probePath = '/.well-known/resource-that-should-not-exist-whose-status-code-should-not-be-200'
+
+  function middleware(req: IncomingMessage, res: ServerResponse, next: () => void) {
+    const requestPath = normalizeDevServerPath(req.url)
+    if (requestPath === changePasswordPath) {
+      res.statusCode = 302
+      res.setHeader('Location', '/settings/account/change-password')
+      res.end()
+      return
+    }
+    if (requestPath === probePath) {
+      res.statusCode = 404
+      res.end()
+      return
+    }
+    next()
+  }
+
+  return {
+    name: 'well-known-password-manager',
+    configureServer(server) {
+      server.middlewares.use(middleware)
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(middleware)
+    },
+  }
+}
+
 function envFaviconPlugin(): Plugin {
   return {
     name: 'capgo-env-favicon',
@@ -153,6 +192,7 @@ export default defineConfig({
     },
   },
   plugins: [
+    wellKnownPasswordManagerPlugin(),
     envFaviconPlugin(),
     tailwindcss(),
     formkit({}),

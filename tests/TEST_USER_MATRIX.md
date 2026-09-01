@@ -16,6 +16,7 @@ Legend: R = reads user records only (no direct auth/public users writes detected
 | tests/bundle-semver-validation.test.ts | USER_ID | R | Shared |
 | tests/channel_devices/channel_deletion.test.ts | USER_ID | R | Shared |
 | tests/channel_devices/channel_self_delete.test.ts | USER_ID | R | Shared |
+| tests/cli-compat.test.ts | USER_ID | R | Shared |
 | tests/cli-channel.test.ts | USER_ID | R | Shared |
 | tests/cli-hashed-apikey.test.ts | USER_ID, USER_ID_RLS | R | Shared |
 | tests/cli-s3.test.ts | USER_ID | R | Shared |

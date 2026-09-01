@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const retryGetMock = vi.fn()
 const createStatsBandwidthMock = vi.fn()
+const queryMock = vi.fn()
+const closeClientMock = vi.fn()
+const getPgClientMock = vi.fn(() => ({ query: queryMock }))
 
 vi.mock('hono/adapter', async (importOriginal) => {
   const actual = await importOriginal<typeof import('hono/adapter')>()
@@ -14,6 +17,14 @@ vi.mock('hono/adapter', async (importOriginal) => {
 vi.mock('../supabase/functions/_backend/utils/discord.ts', () => ({
   sendDiscordAlert500: () => Promise.resolve(),
   sendDiscordAlert: () => Promise.resolve(),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  closeClient: closeClientMock,
+  getAppOwnerPostgres: vi.fn(),
+  getDatabaseURL: vi.fn(() => 'postgres://test'),
+  getDrizzleClient: vi.fn(() => ({})),
+  getPgClient: getPgClientMock,
 }))
 
 vi.mock('../supabase/functions/_backend/files/retry.ts', () => ({
@@ -64,9 +75,14 @@ describe('files bandwidth tracking', () => {
   beforeEach(() => {
     vi.resetModules()
     vi.clearAllMocks()
+    queryMock.mockResolvedValue({ rows: [] })
     globalThis.caches = {
       default: {
-        match: async () => null,
+        match: async (request: Request) => {
+          if (new URL(request.url).pathname.startsWith('/deleted/'))
+            return null
+          return null
+        },
         put: async () => { },
       },
     } as any
@@ -101,12 +117,16 @@ describe('files bandwidth tracking', () => {
   it('does not track bandwidth for cached HEAD reads', async () => {
     globalThis.caches = {
       default: {
-        match: async () => new Response(null, {
-          headers: {
-            'cache-control': 'public, max-age=3600',
-            'content-length': '3478395',
-          },
-        }),
+        match: async (request: Request) => {
+          if (new URL(request.url).pathname.startsWith('/deleted/'))
+            return null
+          return new Response(null, {
+            headers: {
+              'cache-control': 'public, max-age=3600',
+              'content-length': '3478395',
+            },
+          })
+        },
         put: async () => { },
       },
     } as any

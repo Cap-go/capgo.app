@@ -233,3 +233,39 @@ export async function completeCreditTopUp(orgId: string, sessionId?: string | nu
     throw error
   }
 }
+
+export async function getCreditAutoTopUp(orgId: string) {
+  if (!orgId)
+    return null
+  const { data, error } = await invokeCapgoApi(`private/credits/auto-top-up?orgId=${encodeURIComponent(orgId)}`, {
+    method: 'GET',
+  })
+  if (error) {
+    console.error('Failed to load credit auto top-up', error)
+    throw error
+  }
+  return data as {
+    enabled: boolean
+    threshold: number
+    hasPaymentMethod: boolean
+    availableCredits: number
+  } | null
+}
+
+export async function saveCreditAutoTopUp(orgId: string, enabled: boolean, threshold: number) {
+  if (!orgId)
+    return null
+  const { data, error } = await invokeCapgoApi('private/credits/auto-top-up', {
+    body: JSON.stringify({ orgId, enabled, threshold }),
+  })
+  if (error) {
+    console.error('Failed to save credit auto top-up', error)
+    throw error
+  }
+  return data as {
+    enabled: boolean
+    threshold: number
+    hasPaymentMethod: boolean
+    availableCredits: number
+  } | null
+}

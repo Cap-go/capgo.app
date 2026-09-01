@@ -47,6 +47,7 @@ import {
   appGroupsFormat,
   apsEnvironmentVsMode,
   associatedDomainsFormat,
+  entitlementsDeclaredAgeRange,
   entitlementsVsProfileCapability,
 } from './checks/ios-entitlements-checks'
 import {
@@ -58,6 +59,7 @@ import {
   plistLaunchStoryboard,
   plistOrientationsMultitasking,
   plistOrientationsPresent,
+  plistRequiredDeviceArm64,
   plistVersionBuildFormat,
   plistVersionShortFormat,
 } from './checks/ios-plist-checks'
@@ -96,14 +98,14 @@ const IOS_EXPANSION_CHECKS: PrescanCheck[] = [
   plistBundleIdFormat, plistVersionShortFormat, plistVersionBuildFormat,
   plistEncryptionCompliance, plistAtsArbitraryLoads, plistLaunchStoryboard,
   plistOrientationsMultitasking, plistOrientationsPresent, plistDisplayName,
-  plistBackgroundModesSanity,
+  plistBackgroundModesSanity, plistRequiredDeviceArm64,
   // ios xcode (project / build settings)
   deploymentTargetCapacitor, signingTeam, bundleIdMismatchAcrossConfigs,
   enableBitcodeLeftover, swiftVersionSanity, noAppTarget,
   multipleAppTargets,
   // ios entitlements / capabilities
   entitlementsVsProfileCapability, apsEnvironmentVsMode,
-  associatedDomainsFormat, appGroupsFormat,
+  associatedDomainsFormat, appGroupsFormat, entitlementsDeclaredAgeRange,
   // ios capacitor config
   serverUrlShipped, serverCleartext, allowNavigationWildcard,
   // ios pods / spm / app icons

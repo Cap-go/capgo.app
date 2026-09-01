@@ -482,7 +482,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
       <!-- Header Section -->
       <div class="flex flex-col items-center justify-between gap-4 mb-6 sm:flex-row shrink-0">
         <div class="flex-1">
-          <div class="flex items-center gap-3">
+          <div class="flex flex-wrap items-center gap-3">
             <h1 class="text-3xl font-bold text-gray-900 dark:text-white">
               {{ t(showExpiredTrialState ? 'trial-ended-title' : 'plan-pricing-plans') }}
             </h1>
@@ -494,9 +494,9 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
             </span>
             <!-- Custom Plan Trigger -->
             <button
-              type="button"
               v-if="!isMobile"
-              class="items-center hidden px-3 py-1 text-xs font-medium text-blue-700 transition-colors rounded-full bg-blue-50 lg:inline-flex dark:text-blue-300 hover:bg-blue-100 dark:bg-blue-900/30"
+              type="button"
+              class="d-btn d-btn-sm inline-flex h-auto min-h-0 w-fit max-w-full shrink-0 items-center whitespace-nowrap rounded-full border-none bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:bg-blue-900/40 dark:text-blue-100 dark:hover:bg-blue-800 dark:hover:text-white dark:focus-visible:ring-offset-gray-800"
               @click="openSupport()"
             >
               {{ t('need-more-contact-us') }}
@@ -627,6 +627,12 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
         </div>
       </div>
 
+      <!-- Org billing scope: keep next to plan cards, before later CTAs -->
+      <div v-if="!isMobile" class="mt-4 text-xs text-center text-gray-500 dark:text-gray-400 shrink-0">
+        {{ t('plan-page-warn').replace('%ORG_NAME%', currentOrganization?.name ?? '') }}
+        <a class="text-blue-600 hover:underline dark:text-blue-300" href="https://capgo.app/docs/docs/webapp/payment/">{{ t('plan-page-warn-2') }}</a>
+      </div>
+
       <!-- Credits CTA: under prices so plan cards stay visible without scrolling -->
       <CreditsCta v-if="!isMobile" class="mt-6 shrink-0" :credits-only="isCreditsOnly" />
 
@@ -651,12 +657,6 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
             <IconArrowRight class="h-3.5 w-3.5" aria-hidden="true" />
           </a>
         </div>
-      </div>
-
-      <!-- Footer / Contact -->
-      <div v-if="!isMobile" class="mt-4 text-xs text-center text-gray-500 dark:text-gray-400 shrink-0">
-        {{ t('plan-page-warn').replace('%ORG_NAME%', currentOrganization?.name ?? '') }}
-        <a class="text-blue-600 hover:underline" href="https://capgo.app/docs/docs/webapp/payment/">{{ t('plan-page-warn-2') }}</a>
       </div>
     </div>
 

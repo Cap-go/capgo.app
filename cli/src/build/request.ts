@@ -68,6 +68,7 @@ import { offerSupportUploadBeforeAi } from '../support/support-upload-prompt.js'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { assertCliPermission, canPromptInteractively, createSupabaseClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, trimTrailingSlashes, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import { syncAndroidVersion } from './android-version'
+import { createBuildCancellationSignalHandler, requestBuildCancellation } from './cancellation'
 import { mergeCredentials, MIN_OUTPUT_RETENTION_SECONDS, parseAndroidPlayStoreReleaseStatus, parseAndroidPlayStoreTrack, parseInAppUpdatePriority, parseOptionalBoolean, parseOutputRetentionSeconds } from './credentials'
 import { buildProvisioningMap } from './credentials-command'
 import { withCwd } from './cwd'
@@ -2212,46 +2213,29 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       log.info('Streaming build logs...')
 
       const abortController = new AbortController()
-      let cancelRequested = false
-      const cancelBuild = async () => {
-        if (cancelRequested)
-          return
-        cancelRequested = true
-        const cancelAbort = new AbortController()
-        const timeout = setTimeout(() => cancelAbort.abort(), 4000)
-        try {
-          await fetch(`${host}/build/cancel/${buildRequest.job_id}`, {
-            method: 'POST',
-            headers: buildCliRequestHeaders({
-              'Content-Type': 'application/json',
-              authorization: options.apikey,
-            }),
-            body: JSON.stringify({ app_id: appId }),
-            signal: cancelAbort.signal,
-          })
-        }
-        catch (err) {
-          appendInternalLog(`build cancel request errored (ignored): ${err instanceof Error ? err.message : String(err)}`)
-          // ignore cancellation errors
-        }
-        finally {
-          clearTimeout(timeout)
-        }
-      }
-
-      const onSigint = async () => {
-        try {
-          if (cancelRequested) {
-            process.exit(1)
-          }
+      const onSigint = createBuildCancellationSignalHandler({
+        requestCancellation: () => requestBuildCancellation({
+          url: `${host}/build/cancel/${buildRequest.job_id}`,
+          headers: buildCliRequestHeaders({
+            'Content-Type': 'application/json',
+            authorization: options.apikey,
+          }),
+          appId,
+        }),
+        onCancellationStarted: () => {
           log.warn('Canceling build... (press Ctrl+C again to force quit)')
-          await cancelBuild()
-          abortController.abort()
-        }
-        catch {
-          // Prevent unhandled rejection from crashing the process
-        }
-      }
+        },
+        onCancellationResult: (result) => {
+          if (result.ok) {
+            log.success('Build cancellation requested.')
+            return
+          }
+          appendInternalLog(result.message)
+          log.warn(`${result.message}. The remote build may still be running.`)
+        },
+        abortLogStream: () => abortController.abort(),
+        forceExit: code => process.exit(code),
+      })
 
       process.on('SIGINT', onSigint)
 
