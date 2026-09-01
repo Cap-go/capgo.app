@@ -17,7 +17,7 @@ import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { ensureCustomerMetadata, getCreditCheckoutDetails, getStripe, syncStripeCustomerCountry } from '../utils/stripe.ts'
-import { normalizeBillingEmail } from '../utils/stripe_event.ts'
+import { buildTransferInvoiceFooter, getTransferInvoiceFooterUpdate, isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER, TRANSFER_INVOICE_FOOTER_MAX_LENGTH } from '../utils/stripe_event.ts'
 import { customerToSegmentOrg, supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { backgroundTask, isStripeConfigured } from '../utils/utils.ts'
@@ -1014,6 +1014,65 @@ async function customerSourceExpiring(c: Context, org: Org) {
   return c.json(BRES)
 }
 
+async function invoiceCreatedOrUpdated(c: Context, stripeEvent: Stripe.InvoiceCreatedEvent | Stripe.InvoiceUpdatedEvent) {
+  const eventInvoice = stripeEvent.data.object
+
+  if (!shouldStampTransferInvoiceFooter(eventInvoice)) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'Skipping transfer invoice footer stamp',
+      invoiceId: eventInvoice.id,
+      status: eventInvoice.status,
+      collectionMethod: eventInvoice.collection_method,
+      paymentMethodTypes: eventInvoice.payment_settings?.payment_method_types,
+      isTransferInvoice: isTransferInvoice(eventInvoice),
+    })
+    return c.json(BRES)
+  }
+
+  try {
+    const liveInvoice = await getStripe(c).invoices.retrieve(eventInvoice.id)
+    const footer = getTransferInvoiceFooterUpdate(liveInvoice)
+    if (!footer) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'Skipping transfer invoice footer stamp after live invoice retrieve',
+        invoiceId: liveInvoice.id,
+        status: liveInvoice.status,
+        collectionMethod: liveInvoice.collection_method,
+        paymentMethodTypes: liveInvoice.payment_settings?.payment_method_types,
+        existingFooterLength: liveInvoice.footer?.length ?? 0,
+        footerMaxLength: TRANSFER_INVOICE_FOOTER_MAX_LENGTH,
+        isTransferInvoice: isTransferInvoice(liveInvoice),
+      })
+      return c.json(BRES)
+    }
+
+    await getStripe(c).invoices.update(eventInvoice.id, {
+      footer,
+    })
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'Stamped transfer invoice footer',
+      invoiceId: eventInvoice.id,
+      customerId: eventInvoice.customer,
+    })
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'Failed to stamp transfer invoice footer',
+      invoiceId: eventInvoice.id,
+      error,
+    })
+    throw simpleError('transfer_invoice_footer_update_failed', 'Failed to update transfer invoice footer', {
+      invoiceId: eventInvoice.id,
+    })
+  }
+
+  return c.json(BRES)
+}
+
 async function invoiceUpcoming(c: Context, org: Org, stripeEvent: Stripe.InvoiceUpcomingEvent, stripeData: StripeData) {
   const invoice = stripeEvent.data.object as any
   let planName = null
@@ -1447,6 +1506,9 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
   else if (stripeEvent.type === 'invoice.upcoming') {
     return invoiceUpcoming(c, org, stripeEvent, stripeData)
   }
+  else if (stripeEvent.type === 'invoice.created' || stripeEvent.type === 'invoice.updated') {
+    return invoiceCreatedOrUpdated(c, stripeEvent)
+  }
   else if (stripeEvent.type === 'charge.succeeded') {
     // Canonical dunning exit. Do not also emit this from subscription.updated:
     // Stripe sends both, and a plan change is not proof of payment recovery.
@@ -1546,6 +1608,8 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
 
 export const stripeEventTestUtils = {
   BENTO_CHARGE_SUCCEEDED_EVENT,
+  TRANSFER_INVOICE_FOOTER,
+  TRANSFER_INVOICE_FOOTER_MAX_LENGTH,
   buildBillingBentoTagUpdates,
   uniqueBillingEmails,
   buildSubscriptionEventMetadata,
@@ -1562,4 +1626,8 @@ export const stripeEventTestUtils = {
   didStripeCustomerEmailChange,
   shouldReplaceOrgManagementEmail,
   shouldTrackOrganizationUpgrade,
+  isTransferInvoice,
+  shouldStampTransferInvoiceFooter,
+  buildTransferInvoiceFooter,
+  getTransferInvoiceFooterUpdate,
 }
