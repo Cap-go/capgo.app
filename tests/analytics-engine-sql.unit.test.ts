@@ -40,6 +40,12 @@ describe('analytics engine sql lint rules', () => {
     expect(lintAnalyticsEngineSql('SELECT COUNT() AS total FROM device_info')).toEqual([])
     expect(lintAnalyticsEngineSql('SELECT COUNT(DISTINCT blob1) AS total FROM device_info')).toEqual([])
   })
+
+  it.concurrent('flags untyped NULL IF() branches', () => {
+    expect(lintAnalyticsEngineSql(
+      "SELECT min(if(blob2 = 'download_complete' AND double1 > 0, double1, NULL)) FROM app_log",
+    ).map(issue => issue.rule)).toContain('no-if-untyped-null')
+  })
 })
 
 describe('analytics engine sql fixtures', () => {

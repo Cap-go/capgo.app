@@ -50,6 +50,11 @@ export const ANALYTICS_ENGINE_SQL_LINT_RULES: AnalyticsEngineSqlLintRule[] = [
     test: sql => /\b(?:FROM|JOIN)\s+[\w.]+\s+(?:AS\s+)?[a-z]\w*\s+(?:,|WHERE|LEFT|RIGHT|INNER|JOIN|GROUP|ORDER|LIMIT|$)/i.test(sql),
     message: 'Table aliases in FROM/JOIN are unsupported by Analytics Engine SQL',
   },
+  {
+    id: 'no-if-untyped-null',
+    test: sql => /,\s*NULL\s*\)/.test(sql),
+    message: 'Analytics Engine SQL IF() branches must share a type; untyped NULL cannot pair with Double or DateTime',
+  },
 ]
 
 export function lintAnalyticsEngineSql(sql: string): AnalyticsEngineSqlLintIssue[] {

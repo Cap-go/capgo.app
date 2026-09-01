@@ -622,10 +622,9 @@ async function readUpdateDeliveryStatsCF(
   endInclusive: Dayjs,
 ) {
   if (scope === 'platform') {
-    // In-engine aggregate: pair start/complete and use double1 when present.
-    // AE SQL cannot parse blob4 JSON duration; trackLogsCF already copies
-    // metadata duration into double1. Raw 50k-row day scans miss untimed
-    // completes and 90 sequential queries time out.
+    // In-engine aggregate of timed completes (double1). AE SQL cannot parse
+    // blob4 JSON or pair start/complete without untyped NULL IF() (CFA 422).
+    // Same metadata-only contract as the Postgres platform path.
     const { dailyRows, overviewRow } = await readPlatformUpdateDeliveryStatsCF(c, {
       query_start: start.subtract(2, 'hour').toISOString(),
       period_start: start.toISOString(),
@@ -639,7 +638,7 @@ async function readUpdateDeliveryStatsCF(
         scope,
         event_count: 0,
         app_count: null,
-        allow_pairing: true,
+        allow_pairing: false,
         start: start.toISOString(),
         end: endExclusive.toISOString(),
       })

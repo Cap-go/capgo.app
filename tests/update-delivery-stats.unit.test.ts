@@ -50,7 +50,11 @@ describe('update delivery stats helpers', () => {
 
     expect(daily).toContain('quantileExactWeighted(0.50)(duration_ms, sample_weight)')
     expect(daily).toContain('quantileExactWeighted(0.99)(duration_ms, sample_weight)')
-    expect(daily).toContain('blob2 IN (\'download_complete\', \'download_zip_complete\', \'download_0\', \'download_zip_start\', \'download_manifest_start\')')
+    expect(daily).toContain('blob2 IN (\'download_complete\', \'download_zip_complete\')')
+    expect(daily).toContain('AND double1 > 0')
+    expect(daily).toContain('min(double1) AS duration_ms')
+    expect(daily).not.toContain('download_0')
+    expect(daily).not.toContain(', NULL)')
     expect(daily).toContain('format(\'{}:{}\', index1, blob1) AS app_device')
     expect(daily).toContain('COUNT(DISTINCT app_device) AS devices')
     expect(daily).toContain('GROUP BY day')
@@ -59,6 +63,8 @@ describe('update delivery stats helpers', () => {
     expect(overview).toContain('COUNT(DISTINCT app_device) AS devices')
     expect(overview).not.toContain('GROUP BY day')
     expect(overview).toContain('AND day >= \'2026-07-02\'')
+    expect(overview).toContain('min(double1) AS duration_ms')
+    expect(overview).not.toContain(', NULL)')
   })
 
   it.concurrent('splits long platform windows into bounded AE chunks', () => {
