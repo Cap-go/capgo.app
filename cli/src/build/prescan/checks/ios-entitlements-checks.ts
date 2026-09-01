@@ -350,7 +350,7 @@ export const entitlementsDeclaredAgeRange: PrescanCheck = {
       id: 'ios/entitlements-declared-age-range',
       severity: 'warning',
       title: `${AGE_RANGE_PLUGIN} is installed without the Declared Age Range entitlement`,
-      detail: 'iOS 26+ App Store age assurance (Australia, Brazil, Singapore 18+ downloads) requires com.apple.developer.declared-age-range. Missing it, the system dialog fails with "There was an error. Please try later."',
+      detail: 'The plugin calls Apple\'s Declared Age Range API. Without com.apple.developer.declared-age-range signed into the binary, in-app age-range requests fail.',
       fix: 'Add com.apple.developer.declared-age-range=<true/> to App.entitlements, enable Declared Age Range on the App ID, and set CODE_SIGN_ENTITLEMENTS.',
     }]
   },

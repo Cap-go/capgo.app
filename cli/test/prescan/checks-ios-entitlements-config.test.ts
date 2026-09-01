@@ -473,6 +473,8 @@ describe('ios/entitlements-declared-age-range', () => {
     const f = await entitlementsDeclaredAgeRange.run(ctx)
     expect(f[0]?.severity).toBe('warning')
     expect(f[0]?.id).toBe('ios/entitlements-declared-age-range')
+    expect(f[0]?.detail).toMatch(/Declared Age Range API/)
+    expect(f[0]?.detail).not.toMatch(/There was an error/)
   })
 
   it('warns when entitlements file is missing', async () => {
