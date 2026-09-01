@@ -83,6 +83,7 @@ async function copyAiPrompt() {
     return
   try {
     await navigator.clipboard.writeText(aiPrompt.value)
+    helpMethod.value = 'ai'
     toast.success(t('copied-to-clipboard'))
   }
   catch (error) {
@@ -173,7 +174,7 @@ function confirmSetup() {
           class="d-btn d-btn-sm h-11 min-h-11"
           :class="onboardingSecondaryButtonClass"
           data-test="getting-started-cicd-copy-ai"
-          @click="helpMethod = 'ai'; void copyAiPrompt()"
+          @click="void copyAiPrompt()"
         >
           <IconCopy class="h-4 w-4" />
           {{ t('getting-started-cicd-copy-ai') }}

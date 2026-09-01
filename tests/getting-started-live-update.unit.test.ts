@@ -17,6 +17,10 @@ describe('getting started live update routing', () => {
       { id: 2, name: 'dev', public: false },
       { id: 4, name: 'production', public: false },
     ])).toEqual({ id: 4, name: 'production', public: false })
+    expect(pickProductionChannel([
+      { id: 2, name: 'dev', public: false },
+      { id: 7, name: 'Production', public: false },
+    ])).toEqual({ id: 7, name: 'Production', public: false })
     expect(pickProductionChannel([{ id: 2, name: 'dev', public: false }])).toBeNull()
   })
 

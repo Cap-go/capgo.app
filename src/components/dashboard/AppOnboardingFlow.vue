@@ -86,7 +86,7 @@ import {
 import AppOnboardingCliSteps from './AppOnboardingCliSteps.vue'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
 import AppOnboardingWelcome from './AppOnboardingWelcome.vue'
-import OnboardingAltSetup from './OnboardingAltSetup.vue'
+import OnboardingAltSetup from '~/components/dashboard/OnboardingAltSetup.vue'
 import OrganizationOnboardingInvite from './OrganizationOnboardingInvite.vue'
 import TechnicalTeammateInviteCard from './TechnicalTeammateInviteCard.vue'
 

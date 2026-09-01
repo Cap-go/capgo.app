@@ -123,7 +123,7 @@ export function saveCicdSetupProgress(userId: string, appId: string, progress: C
   const next = {
     mode: progress.mode,
     releases: { ...progress.releases },
-    validated: progress.validated || isCicdSetupComplete(progress),
+    validated: progress.validated,
   }
   writeStorage(cicdSetupStorageKey(userId, appId), JSON.stringify(next))
   const map = new Map(progressByKey.value)
@@ -132,7 +132,7 @@ export function saveCicdSetupProgress(userId: string, appId: string, progress: C
 }
 
 export function isCicdSetupValidated(userId: string, appId: string) {
-  return isCicdSetupComplete(loadCicdSetupProgress(userId, appId))
+  return loadCicdSetupProgress(userId, appId).validated
 }
 
 export function markCicdSetupValidated(userId: string, appId: string) {

@@ -6,6 +6,7 @@ import {
   cicdModeInstruction,
   cicdSetupStorageKey,
   isCicdSetupComplete,
+  isCicdSetupValidated,
   loadCicdSetupProgress,
   markCicdSetupValidated,
   requiredCicdReleases,
@@ -53,8 +54,10 @@ describe('getting started CI/CD setup', () => {
       validated: false,
     })
     expect(isCicdSetupComplete(loadCicdSetupProgress('user-1', 'com.demo.app'))).toBe(true)
+    expect(isCicdSetupValidated('user-1', 'com.demo.app')).toBe(false)
 
     markCicdSetupValidated('user-1', 'com.demo.app')
     expect(loadCicdSetupProgress('user-1', 'com.demo.app').validated).toBe(true)
+    expect(isCicdSetupValidated('user-1', 'com.demo.app')).toBe(true)
   })
 })

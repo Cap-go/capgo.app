@@ -5,7 +5,7 @@ export interface LiveUpdateChannelRef {
 }
 
 export function pickProductionChannel<T extends LiveUpdateChannelRef>(channels: T[]): T | null {
-  return channels.find(channel => channel.public) ?? channels.find(channel => channel.name === 'production') ?? null
+  return channels.find(channel => channel.public) ?? channels.find(channel => channel.name.toLowerCase() === 'production') ?? null
 }
 
 export function liveUpdateChannelPath(appId: string, channelId: number | null | undefined): string {
