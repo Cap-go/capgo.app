@@ -1947,9 +1947,10 @@ async function leaveSplashIfAlreadySetup() {
   if (!app)
     return false
   const { data } = await supabase.rpc('verify_getting_started', { p_app_id: app.app_id })
-  if (data)
-    createdApp.value = { ...app, onboarding: data as typeof app.onboarding }
-  if (!shouldSkipOnboardingResume(data ?? app.onboarding))
+  const verifiedOnboarding = data as unknown
+  if (verifiedOnboarding)
+    createdApp.value = { ...app, onboarding: verifiedOnboarding as typeof app.onboarding }
+  if (!shouldSkipOnboardingResume(verifiedOnboarding ?? app.onboarding))
     return false
   allowOnboardingDashboardExploration(onboardingUserId.value, app.app_id)
   await persistOnboardingProgress('completed')

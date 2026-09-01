@@ -15,13 +15,22 @@ interface DashboardExploration {
 // example in private or restricted browsing contexts.
 let dashboardExplorationFallback: DashboardExploration | null = null
 
-function canUseWebStorage(storage: Storage | undefined) {
-  try {
-    return typeof window !== 'undefined' && storage !== undefined
+function webStorages(): Storage[] {
+  if (typeof window === 'undefined')
+    return []
+
+  const storages: Storage[] = []
+  for (const key of ['localStorage', 'sessionStorage'] as const) {
+    try {
+      const storage = window[key]
+      if (storage)
+        storages.push(storage)
+    }
+    catch {
+      // Storage can be missing or blocked in private / non-browser contexts.
+    }
   }
-  catch {
-    return false
-  }
+  return storages
 }
 
 function parseExploration(raw: string | null): DashboardExploration | null {
@@ -44,21 +53,22 @@ function parseExploration(raw: string | null): DashboardExploration | null {
 }
 
 function readStoredExploration(): DashboardExploration | null {
-  if (canUseWebStorage(window.localStorage)) {
-    const fromLocal = parseExploration(window.localStorage.getItem(DASHBOARD_EXPLORATION_STORAGE_KEY))
-    if (fromLocal)
-      return fromLocal
+  for (const storage of webStorages()) {
+    try {
+      const parsed = parseExploration(storage.getItem(DASHBOARD_EXPLORATION_STORAGE_KEY))
+      if (parsed)
+        return parsed
+    }
+    catch {
+      // Ignore unreadable storage.
+    }
   }
-  if (canUseWebStorage(window.sessionStorage))
-    return parseExploration(window.sessionStorage.getItem(DASHBOARD_EXPLORATION_STORAGE_KEY))
   return null
 }
 
 function writeStoredExploration(state: DashboardExploration) {
   const raw = JSON.stringify(state)
-  for (const storage of [window.localStorage, window.sessionStorage]) {
-    if (!canUseWebStorage(storage))
-      continue
+  for (const storage of webStorages()) {
     try {
       storage.setItem(DASHBOARD_EXPLORATION_STORAGE_KEY, raw)
     }
