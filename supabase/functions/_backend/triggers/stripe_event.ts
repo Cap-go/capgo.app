@@ -15,7 +15,7 @@ import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { ensureCustomerMetadata, getCreditCheckoutDetails, getStripe, syncStripeCustomerCountry } from '../utils/stripe.ts'
-import { isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER } from '../utils/stripe_event.ts'
+import { buildTransferInvoiceFooter, isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER, TRANSFER_INVOICE_FOOTER_MAX_LENGTH } from '../utils/stripe_event.ts'
 import { customerToSegmentOrg, supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { purgeOnPremCacheForOrg, purgePlanCacheForOrg } from '../utils/cloudflare_cache_purge.ts'
@@ -1029,9 +1029,23 @@ async function invoiceCreatedOrUpdated(c: Context, stripeEvent: Stripe.InvoiceCr
     return c.json(BRES)
   }
 
+  const footer = buildTransferInvoiceFooter(invoice.footer)
+  if (!footer) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'Skipping transfer invoice footer stamp: footer would exceed Stripe length limit',
+      invoiceId: invoice.id,
+      status: invoice.status,
+      existingFooterLength: invoice.footer?.length ?? 0,
+      footerMaxLength: TRANSFER_INVOICE_FOOTER_MAX_LENGTH,
+      isTransferInvoice: isTransferInvoice(invoice),
+    })
+    return c.json(BRES)
+  }
+
   try {
     await getStripe(c).invoices.update(invoice.id, {
-      footer: TRANSFER_INVOICE_FOOTER,
+      footer,
     })
     cloudlog({
       requestId: c.get('requestId'),
@@ -1586,6 +1600,7 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
 export const stripeEventTestUtils = {
   BENTO_CHARGE_SUCCEEDED_EVENT,
   TRANSFER_INVOICE_FOOTER,
+  TRANSFER_INVOICE_FOOTER_MAX_LENGTH,
   buildBillingBentoTagUpdates,
   uniqueBillingEmails,
   buildSubscriptionEventMetadata,
@@ -1604,4 +1619,5 @@ export const stripeEventTestUtils = {
   shouldTrackOrganizationUpgrade,
   isTransferInvoice,
   shouldStampTransferInvoiceFooter,
+  buildTransferInvoiceFooter,
 }

@@ -120,6 +120,7 @@ function invoiceUpcoming(event: Stripe.InvoiceUpcomingEvent, data: StripeData['d
 
 export const TRANSFER_INVOICE_FOOTER = 'For US bank wires: instruct your bank to send OUR (sender pays all correspondent/intermediary fees) so the full invoice amount arrives. Do not use SHA/shared fees.'
 export const TRANSFER_INVOICE_FOOTER_MARKER = 'OUR (sender pays all correspondent'
+export const TRANSFER_INVOICE_FOOTER_MAX_LENGTH = 5000
 
 const TRANSFER_INVOICE_PAYMENT_METHOD_TYPES = new Set([
   'customer_balance',
@@ -142,6 +143,18 @@ export function isTransferInvoice(invoice: TransferInvoiceShape) {
   return paymentMethodTypes.some(type => TRANSFER_INVOICE_PAYMENT_METHOD_TYPES.has(type))
 }
 
+export function buildTransferInvoiceFooter(existingFooter?: string | null) {
+  const trimmedExisting = existingFooter?.trim()
+  if (!trimmedExisting)
+    return TRANSFER_INVOICE_FOOTER
+
+  const combined = `${trimmedExisting}\n\n${TRANSFER_INVOICE_FOOTER}`
+  if (combined.length > TRANSFER_INVOICE_FOOTER_MAX_LENGTH)
+    return null
+
+  return combined
+}
+
 export function shouldStampTransferInvoiceFooter(
   invoice: TransferInvoiceShape & Pick<Stripe.Invoice, 'status' | 'footer'>,
 ) {
@@ -151,7 +164,7 @@ export function shouldStampTransferInvoiceFooter(
     return false
   if (invoice.footer?.includes(TRANSFER_INVOICE_FOOTER_MARKER))
     return false
-  return true
+  return buildTransferInvoiceFooter(invoice.footer) !== null
 }
 
 function invoiceCreatedOrUpdated(event: Stripe.InvoiceCreatedEvent | Stripe.InvoiceUpdatedEvent, data: StripeData['data']) {

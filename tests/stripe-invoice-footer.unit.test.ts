@@ -85,6 +85,22 @@ describe('transfer invoice footer helpers', () => {
       'For US bank wires: instruct your bank to send OUR (sender pays all correspondent/intermediary fees) so the full invoice amount arrives. Do not use SHA/shared fees.',
     )
   })
+
+  it.concurrent('appends the transfer footer to an existing draft invoice footer', () => {
+    const existingFooter = 'Include PO #12345 on the wire memo. Contact billing@example.com for tax forms.'
+    expect(stripeEventTestUtils.buildTransferInvoiceFooter(existingFooter)).toBe(
+      `${existingFooter}\n\n${stripeEventTestUtils.TRANSFER_INVOICE_FOOTER}`,
+    )
+  })
+
+  it.concurrent('returns null when appending would exceed the Stripe footer length limit', () => {
+    const existingFooter = 'x'.repeat(stripeEventTestUtils.TRANSFER_INVOICE_FOOTER_MAX_LENGTH)
+    expect(stripeEventTestUtils.buildTransferInvoiceFooter(existingFooter)).toBeNull()
+    expect(stripeEventTestUtils.shouldStampTransferInvoiceFooter(makeInvoice({
+      footer: existingFooter,
+      status: 'draft',
+    }))).toBe(false)
+  })
 })
 
 describe('invoice.created and invoice.updated webhook extraction', () => {
