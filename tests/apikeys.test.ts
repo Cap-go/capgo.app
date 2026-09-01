@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
   APIKEY_MANAGEMENT_APIKEY_MANAGER,
   APIKEY_MANAGEMENT_APIKEY_MANAGER_ID,
@@ -934,7 +934,7 @@ describe('[PUT] /apikey/:id operations', () => {
       const createResponse = await fetch(`${BASE_URL}/apikey`, {
         method: 'POST',
         headers: authHeaders,
-        body: JSON.stringify(orgKeyBody('temp-key-update-bindings')),
+        body: JSON.stringify(orgKeyBody(`temp-key-update-bindings-${randomUUID()}`)),
       })
       expect(createResponse.status).toBe(200)
       createData = await createResponse.json<{ id: number, rbac_id: string }>()
@@ -949,21 +949,22 @@ describe('[PUT] /apikey/:id operations', () => {
       })
       expect(updateResponse.status).toBe(200)
 
-      const { data: bindings, error } = await getSupabaseClient()
-        .from('role_bindings')
-        .select('scope_type, app_id, roles(name)')
-        .eq('principal_type', 'apikey')
-        .eq('principal_id', createData.rbac_id)
+      await vi.waitFor(async () => {
+        const { data: bindings, error } = await getSupabaseClient()
+          .from('role_bindings')
+          .select('scope_type, app_id, roles(name)')
+          .eq('principal_type', 'apikey')
+          .eq('principal_id', createData!.rbac_id)
 
-      expect(error).toBeNull()
-      const bindingRows = (bindings || []) as any[]
-      expect(bindingRows).toEqual([
-        expect.objectContaining({
-          scope_type: 'app',
-          app_id: appBindings[0].app_id,
-          roles: expect.objectContaining({ name: 'app_reader' }),
-        }),
-      ])
+        expect(error).toBeNull()
+        expect(bindings).toEqual([
+          expect.objectContaining({
+            scope_type: 'app',
+            app_id: appBindings[0].app_id,
+            roles: expect.objectContaining({ name: 'app_reader' }),
+          }),
+        ])
+      }, { timeout: 4000, interval: 150 })
     }
     finally {
       if (createData) {
