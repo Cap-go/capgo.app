@@ -802,18 +802,27 @@ function customerMatchesOrg(customer: Stripe.Customer, orgId: string) {
   return customer.metadata?.org_id === orgId
 }
 
-async function findExistingOrgStripeCustomer(c: Context, orgId: string, email: string) {
+async function searchOrgStripeCustomer(c: Context, orgId: string) {
   const result = await getStripe(c).customers.search({
     query: `metadata['org_id']:'${orgId.replaceAll('\'', '')}'`,
     limit: 10,
   })
-  const fromSearch = oldestCustomer(result.data)
+  return oldestCustomer(result.data)
+}
+
+async function findExistingOrgStripeCustomer(c: Context, orgId: string, email: string) {
+  const fromSearch = await searchOrgStripeCustomer(c, orgId)
   if (fromSearch)
     return fromSearch
 
   // Search is eventually consistent; list by email is a bounded read-after-write fallback.
   const listed = await getStripe(c).customers.list({ email, limit: 100 })
-  return oldestCustomer(listed.data.filter(customer => customerMatchesOrg(customer, orgId)))
+  const fromList = oldestCustomer(listed.data.filter(customer => customerMatchesOrg(customer, orgId)))
+  if (fromList)
+    return fromList
+
+  // Email may have changed before Search indexed the original customer.
+  return await searchOrgStripeCustomer(c, orgId)
 }
 
 export async function createCustomer(c: Context, email: string, userId: string, orgId: string, name: string) {

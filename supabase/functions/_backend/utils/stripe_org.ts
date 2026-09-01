@@ -17,7 +17,7 @@ export function isPendingStripeCustomerId(customerId: string | null | undefined)
 }
 
 export function isLocalStripeCustomerId(customerId: string | null | undefined) {
-  return Boolean(customerId?.startsWith('cus_local_'))
+  return Boolean(customerId?.startsWith('cus_local_') || (customerId && /^cus_[0-9a-f]{32}$/.test(customerId)))
 }
 
 export function isProvisionedStripeCustomerId(customerId: string | null | undefined) {

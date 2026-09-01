@@ -142,8 +142,11 @@ describe('stripe org customer helpers', () => {
   })
 
   it.concurrent('treats local fake ids as unprovisioned', () => {
+    const legacyLocalId = `cus_${ORG_ID.replaceAll('-', '')}`
     expect(isLocalStripeCustomerId(LOCAL_ID)).toBe(true)
     expect(isProvisionedStripeCustomerId(LOCAL_ID)).toBe(false)
+    expect(isLocalStripeCustomerId(legacyLocalId)).toBe(true)
+    expect(isProvisionedStripeCustomerId(legacyLocalId)).toBe(false)
     expect(isLocalStripeCustomerId(CUSTOMER_ID)).toBe(false)
   })
 })
