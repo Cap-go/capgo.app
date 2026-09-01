@@ -13,13 +13,13 @@ const {
 }))
 
 vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({
-  createCustomer: (...args: unknown[]) => createCustomerMock(...args),
+  createCustomer: createCustomerMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  getDefaultPlan: (...args: unknown[]) => getDefaultPlanMock(...args),
-  getStripeCustomer: (...args: unknown[]) => getStripeCustomerMock(...args),
-  supabaseAdmin: (...args: unknown[]) => supabaseAdminMock(...args),
+  getDefaultPlan: getDefaultPlanMock,
+  getStripeCustomer: getStripeCustomerMock,
+  supabaseAdmin: supabaseAdminMock,
 }))
 
 const { createStripeCustomer, finalizePendingStripeCustomer, isPendingStripeCustomerId, isProvisionedStripeCustomerId } = await import('../supabase/functions/_backend/utils/stripe_org.ts')

@@ -17,31 +17,31 @@ const {
 }))
 
 vi.mock('../supabase/functions/_backend/utils/stripe_org.ts', () => ({
-  createStripeCustomer: (...args: unknown[]) => createStripeCustomerMock(...args),
-  finalizePendingStripeCustomer: (...args: unknown[]) => finalizePendingStripeCustomerMock(...args),
+  createStripeCustomer: createStripeCustomerMock,
+  finalizePendingStripeCustomer: finalizePendingStripeCustomerMock,
   isPendingStripeCustomerId: (customerId: string | null | undefined) => Boolean(customerId?.startsWith('pending_')),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: (...args: unknown[]) => supabaseAdminMock(...args),
+  supabaseAdmin: supabaseAdminMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/utils.ts', async () => {
   const actual = await vi.importActual('../supabase/functions/_backend/utils/utils.ts')
   return {
     ...actual,
-    backgroundTask: (...args: unknown[]) => backgroundTaskMock(...args),
+    backgroundTask: backgroundTaskMock,
   }
 })
 
 vi.mock('../supabase/functions/_backend/utils/org_onboarding_intent.ts', () => ({
   parseOrgOnboardingIntent: () => 'ota',
   buildOnboardingIntentBentoEventData: () => ({ org_id: 'org' }),
-  syncOrgOnboardingIntentForOrg: (...args: unknown[]) => syncOrgOnboardingIntentForOrgMock(...args),
+  syncOrgOnboardingIntentForOrg: syncOrgOnboardingIntentForOrgMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/tracking.ts', () => ({
-  sendEventToTracking: (...args: unknown[]) => sendEventToTrackingMock(...args),
+  sendEventToTracking: sendEventToTrackingMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
