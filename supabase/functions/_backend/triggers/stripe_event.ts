@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type Stripe from 'stripe'
 import type { MiddlewareKeyVariablesStripe } from '../utils/hono_middleware_stripe.ts'
+import type { NotificationAudience } from '../utils/org_email_notifications.ts'
 import type { StripeData, StripeWebhookStatus } from '../utils/stripe.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { eq, sql } from 'drizzle-orm'
@@ -64,6 +65,9 @@ type PersistRevenueMovementResult = 'applied' | 'duplicate' | 'missing' | 'stale
 interface BentoSegmentUpdate { segments: string[], deleteSegments: string[] }
 interface BentoSubscriberTagUpdate { email: string, segments: string[], deleteSegments: string[] }
 const BENTO_CHARGE_SUCCEEDED_EVENT = 'org:charge_succeeded'
+const BENTO_FAILED_PAYMENT_EVENT = 'org:failed_payment'
+const BENTO_DUNNING_EVENT_AUDIENCE: NotificationAudience = 'all'
+const BENTO_TAG_AUDIENCE: NotificationAudience = 'billing'
 
 const ZERO_REVENUE_MOVEMENT: RevenueMovement = {
   currentMrr: 0,
@@ -346,13 +350,18 @@ async function requireLiveStripeCustomerBillingEmail(c: Context, customerId: str
   }
 }
 
-async function getBillingBentoEmails(c: Context, org: Org, customerId: string) {
+async function getBillingBentoEmails(
+  c: Context,
+  org: Org,
+  customerId: string,
+  audience: NotificationAudience = BENTO_TAG_AUDIENCE,
+) {
   const emails: Array<string | null | undefined> = [org.management_email]
   const pgClient = getPgClient(c, true)
 
   try {
     const drizzleClient = getDrizzleClient(pgClient)
-    const { emails: memberEmails } = await getOrgAdminMemberEmailsForTags(c, org.id, drizzleClient, 'billing')
+    const { emails: memberEmails } = await getOrgAdminMemberEmailsForTags(c, org.id, drizzleClient, audience)
     emails.push(...memberEmails)
 
     const creatorEmail = await lookupOrgCreatorEmail(c, drizzleClient, org)
@@ -415,7 +424,7 @@ async function trackBillingBentoEvent(
   if (!isBentoConfigured(c))
     return
 
-  const emails = uniqueBillingEmails(await getBillingBentoEmails(c, org, customerId))
+  const emails = uniqueBillingEmails(await getBillingBentoEmails(c, org, customerId, BENTO_DUNNING_EVENT_AUDIENCE))
   if (emails.length === 0) {
     cloudlog({
       requestId: c.get('requestId'),
@@ -1467,7 +1476,7 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
       cloudlog({ requestId: c.get('requestId'), message: 'Skipping failed payment email because org has active usage credits', orgId: org.id })
     }
     else {
-      await trackBillingBentoEvent(c, org, stripeData.data.customer_id, 'org:failed_payment')
+      await trackBillingBentoEvent(c, org, stripeData.data.customer_id, BENTO_FAILED_PAYMENT_EVENT)
     }
     // Update the database with failed status
     await updateStripeInfo(c, stripeData)
@@ -1546,6 +1555,9 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
 
 export const stripeEventTestUtils = {
   BENTO_CHARGE_SUCCEEDED_EVENT,
+  BENTO_FAILED_PAYMENT_EVENT,
+  BENTO_DUNNING_EVENT_AUDIENCE,
+  BENTO_TAG_AUDIENCE,
   buildBillingBentoTagUpdates,
   uniqueBillingEmails,
   buildSubscriptionEventMetadata,
