@@ -2709,6 +2709,7 @@ export type Database = {
           build_time_unit?: number
           created_at?: string
           credit_id: string
+          credit_id_us?: string | null
           description?: string
           id?: string
           market_desc?: string | null
@@ -2717,10 +2718,13 @@ export type Database = {
           native_build_concurrency?: number
           price_m?: number
           price_m_id: string
+          price_m_id_us?: string | null
           price_y?: number
           price_y_id: string
+          price_y_id_us?: string | null
           storage: number
           stripe_id?: string
+          stripe_id_us?: string | null
           updated_at?: string
         }
         Update: {
@@ -2728,6 +2732,7 @@ export type Database = {
           build_time_unit?: number
           created_at?: string
           credit_id?: string
+          credit_id_us?: string | null
           description?: string
           id?: string
           market_desc?: string | null
@@ -2736,10 +2741,13 @@ export type Database = {
           native_build_concurrency?: number
           price_m?: number
           price_m_id?: string
+          price_m_id_us?: string | null
           price_y?: number
           price_y_id?: string
+          price_y_id_us?: string | null
           storage?: number
           stripe_id?: string
+          stripe_id_us?: string | null
           updated_at?: string
         }
         Relationships: []

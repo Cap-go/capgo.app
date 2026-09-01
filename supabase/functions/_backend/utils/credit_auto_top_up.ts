@@ -3,7 +3,7 @@ import Stripe from 'stripe'
 import { getFallbackCreditProductId } from './credits.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { getOneTimePriceId, getStripe, isStripeEmulatorEnabled } from './stripe.ts'
-import { resolveBillingAccount, resolvePlanCreditId, isStripeAccountConfigured } from './stripe_billing_account.ts'
+import { isStripeAccountConfigured, normalizeBillingAccount, planProductIdOrFilter, resolveBillingAccount, resolvePlanCreditId } from './stripe_billing_account.ts'
 import { supabaseAdmin } from './supabase.ts'
 
 export const MIN_AUTO_TOP_UP_THRESHOLD = 10
@@ -127,11 +127,11 @@ async function getCreditProductIdForCustomer(c: Context, customerId: string): Pr
   if (stripeInfoError || !stripeInfo?.product_id)
     return await getFallbackCreditProductId(c, customerId, loadSoloPlan)
 
-  const account = await resolveBillingAccount(c, customerId)
+  const account = normalizeBillingAccount(stripeInfo.billing_account)
   const { data: plan, error: planError } = await supabaseAdmin(c)
     .from('plans')
     .select('credit_id, credit_id_us, name')
-    .eq('stripe_id', stripeInfo.product_id)
+    .or(planProductIdOrFilter(stripeInfo.product_id))
     .maybeSingle()
 
   const creditId = plan ? resolvePlanCreditId(plan, account) : null
@@ -301,9 +301,6 @@ export async function saveAutoTopUpSettings(
 }
 
 export async function maybeAutoTopUpCredits(c: Context, orgId: string): Promise<void> {
-  if (!isStripeAccountConfigured(c, 'ee'))
-    return
-
   const { data: claim, error: claimError } = await supabaseAdmin(c)
     .rpc('try_claim_credit_auto_top_up', { p_org_id: orgId })
     .maybeSingle()
@@ -314,6 +311,9 @@ export async function maybeAutoTopUpCredits(c: Context, orgId: string): Promise<
   }
 
   if (!claim?.claimed || !claim.customer_id)
+    return
+
+  if (!isStripeAccountConfigured(c, await resolveBillingAccount(c, claim.customer_id)))
     return
 
   const quantity = Math.floor(Number(claim.auto_top_up_threshold ?? 0))

@@ -9,6 +9,7 @@ import {
   assertStripeAccountConfigured,
   getStripeSecretKey,
   isStripeAccountConfigured,
+  planProductIdOrFilter,
   resolveBillingAccount,
   resolvePlanPriceId,
 } from './stripe_billing_account.ts'
@@ -234,8 +235,8 @@ export async function getCancellationDetails(
 async function getActiveSubscription(c: Context, customerId: string, subscriptionId: string | null) {
   cloudlog({ requestId: c.get('requestId'), message: 'Stored subscription not tracked or not found, checking for others.', customerId, storedSubscriptionId: subscriptionId })
 
+  const stripe = await stripeForCustomer(c, customerId)
   for (const status of TRACKED_STRIPE_SUBSCRIPTION_STATUSES) {
-    const stripe = await stripeForCustomer(c, customerId)
     const subscriptions = await stripe.subscriptions.list({
       customer: customerId,
       status,
@@ -478,7 +479,7 @@ async function getStoredPlanPriceId(c: Context, planId: string, recurrence: stri
     const { data, error } = await supabaseAdmin(c)
       .from('plans')
       .select('price_m_id, price_y_id, price_m_id_us, price_y_id_us, stripe_id, stripe_id_us')
-      .eq('stripe_id', planId)
+      .or(planProductIdOrFilter(planId))
       .single()
 
     if (error) {

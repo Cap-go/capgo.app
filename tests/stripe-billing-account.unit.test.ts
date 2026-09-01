@@ -84,6 +84,21 @@ describe('stripe billing account scaffolding', () => {
     expect(getNewCustomersBillingAccount(createContext())).toBe('ee')
   })
 
+  it('keeps new customers on EE when only US webhook secret is set without API key', async () => {
+    mockedEnv.STRIPE_NEW_CUSTOMERS_ACCOUNT = 'us'
+    mockedEnv.STRIPE_WEBHOOK_SECRET_US = 'whsec_test_us'
+    const { getNewCustomersBillingAccount } = await import('../supabase/functions/_backend/utils/stripe_billing_account.ts')
+    expect(getNewCustomersBillingAccount(createContext())).toBe('ee')
+  })
+
+  it('rejects prefix-only US API and webhook secrets for new customer routing', async () => {
+    mockedEnv.STRIPE_NEW_CUSTOMERS_ACCOUNT = 'us'
+    mockedEnv.STRIPE_SECRET_KEY_US = 'sk_'
+    mockedEnv.STRIPE_WEBHOOK_SECRET_US = 'whsec_'
+    const { getNewCustomersBillingAccount } = await import('../supabase/functions/_backend/utils/stripe_billing_account.ts')
+    expect(getNewCustomersBillingAccount(createContext())).toBe('ee')
+  })
+
   it('routes new customers to US only when both US API key and webhook secret are configured', async () => {
     mockedEnv.STRIPE_NEW_CUSTOMERS_ACCOUNT = 'us'
     mockedEnv.STRIPE_SECRET_KEY_US = 'sk_test_us'

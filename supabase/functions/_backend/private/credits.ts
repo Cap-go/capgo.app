@@ -14,7 +14,7 @@ import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { createOneTimeCheckout, getCreditCheckoutDetails, getStripe, isStripeEmulatorEnabled } from '../utils/stripe.ts'
-import { resolveBillingAccount, resolvePlanCreditId } from '../utils/stripe_billing_account.ts'
+import { normalizeBillingAccount, planProductIdOrFilter, resolveBillingAccount, resolvePlanCreditId } from '../utils/stripe_billing_account.ts'
 import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
 import { getEnv } from '../utils/utils.ts'
 
@@ -239,8 +239,6 @@ async function getCreditTopUpProductId(c: AppContext, customerId: string, token:
     .eq('customer_id', customerId)
     .single()
 
-  const account = await resolveBillingAccount(c, customerId)
-
   if (stripeInfoError || !stripeInfo?.product_id) {
     const log = stripeInfoError ? cloudlogErr : cloudlog
     log({
@@ -262,10 +260,11 @@ async function getCreditTopUpProductId(c: AppContext, customerId: string, token:
     return { productId }
   }
 
+  const account = normalizeBillingAccount(stripeInfo.billing_account)
   const { data: plan, error: planError } = await supabase
     .from('plans')
     .select('credit_id, credit_id_us, name')
-    .eq('stripe_id', stripeInfo.product_id)
+    .or(planProductIdOrFilter(stripeInfo.product_id))
     .single()
 
   const creditId = plan ? resolvePlanCreditId(plan, account) : null

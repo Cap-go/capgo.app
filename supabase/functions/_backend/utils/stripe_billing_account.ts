@@ -34,14 +34,18 @@ export function isStripeSecretKeyConfigured(secretKey: string): boolean {
   const trimmed = secretKey.trim()
   if (!trimmed)
     return false
-  return trimmed.startsWith('sk_') || trimmed.startsWith('rk_')
+  if (trimmed.startsWith('sk_'))
+    return trimmed.length > 3
+  if (trimmed.startsWith('rk_'))
+    return trimmed.length > 3
+  return false
 }
 
 export function isStripeWebhookSecretConfigured(webhookSecret: string): boolean {
   const trimmed = webhookSecret.trim()
-  if (!trimmed)
+  if (!trimmed.startsWith('whsec_'))
     return false
-  return trimmed.startsWith('whsec_')
+  return trimmed.length > 6
 }
 
 export function isStripeAccountConfigured(c: Context, account: BillingAccount = DEFAULT_BILLING_ACCOUNT): boolean {
@@ -112,14 +116,17 @@ export function resolvePlanPriceId(
 ): string | null {
   if (account === 'us') {
     const usPriceId = recurrence === 'year' ? plan.price_y_id_us : plan.price_m_id_us
-    if (usPriceId)
-      return usPriceId
+    return usPriceId ?? null
   }
   return recurrence === 'year' ? plan.price_y_id : plan.price_m_id
 }
 
 export function resolvePlanCreditId(plan: Pick<PlanStripeCatalogRow, 'credit_id' | 'credit_id_us'>, account: BillingAccount): string | null {
-  if (account === 'us' && plan.credit_id_us)
-    return plan.credit_id_us
+  if (account === 'us')
+    return plan.credit_id_us ?? null
   return plan.credit_id
+}
+
+export function planProductIdOrFilter(productId: string): string {
+  return `stripe_id.eq.${productId},stripe_id_us.eq.${productId}`
 }
