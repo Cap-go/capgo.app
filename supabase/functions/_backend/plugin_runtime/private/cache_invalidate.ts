@@ -14,8 +14,7 @@ import { BRES, parseBody, quickError } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { bumpAppCacheToken, isUpdatesCacheEnabled } from '../utils/updates_colo_cache.ts'
 import { existInEnv, getEnv } from '../utils/utils.ts'
-
-export const MAX_INVALIDATE_APPS = 100
+import { MAX_INVALIDATE_APPS } from '../../utils/updates_cache_invalidation.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
