@@ -273,6 +273,24 @@ export function shouldShowGettingStartedNav(ledger: AppOnboardingLedger, extras?
     .some(step => step.group === 'essential' && !step.done)
 }
 
+function setupOutcome(value: unknown): string | null {
+  if (!isRecord(value))
+    return null
+  const setup = isRecord(value.setup) ? value.setup : value
+  return typeof setup.outcome === 'string' ? setup.outcome : null
+}
+
+export function shouldSkipOnboardingResume(onboarding: unknown): boolean {
+  const ledger = parseAppOnboardingLedger(onboarding)
+  if (ledger.getting_started_dismissed_at)
+    return true
+  const ota = ledger.features?.ota ?? {}
+  if (ota.started_at || ota.succeeded_at)
+    return true
+  const outcome = setupOutcome(onboarding)
+  return outcome === 'completed' || outcome === 'skipped'
+}
+
 export function onboardingNextStepMessageKeys(ledger: AppOnboardingLedger): {
   titleKey: string
   descKey: string

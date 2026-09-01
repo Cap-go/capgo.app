@@ -3,7 +3,10 @@ import type { GettingStartedStep } from '~/utils/appOnboardingProgress'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import { toast } from 'vue-sonner'
 import IconCheck from '~icons/lucide/check'
+import IconRefreshCw from '~icons/lucide/refresh-cw'
+import IconX from '~icons/lucide/x'
 import AppOnboardingCliSteps from '~/components/dashboard/AppOnboardingCliSteps.vue'
 import AppPageFrame from '~/components/dashboard/AppPageFrame.vue'
 import { useAppPage } from '~/composables/useAppPage'
@@ -14,6 +17,8 @@ import {
   buildGettingStartedSteps,
   gettingStartedProgress,
   parseAppOnboardingLedger,
+  withGettingStartedDismissed,
+  withoutGettingStartedDismissed,
 } from '~/utils/appOnboardingProgress'
 import {
   isStoreReleaseValidated,
@@ -33,7 +38,10 @@ const { id, app, isLoading } = useAppPage({
 const storeModal = useTemplateRef<{ openModal: () => void }>('storeModal')
 const builderModalOpen = ref(false)
 const builderDone = ref(false)
+const isVerifying = ref(false)
+const isDismissing = ref(false)
 let builderReqToken = 0
+let verifyReqToken = 0
 
 const orgApp = computed(() => id.value ? organizationStore.getAppByAppId(id.value) : undefined)
 const appName = computed(() => app.value?.name || orgApp.value?.name || id.value)
@@ -67,6 +75,25 @@ function acronym(name: string) {
   return (first + second).toUpperCase()
 }
 
+function applyOnboarding(onboarding: unknown, needOnboarding?: boolean) {
+  if (!id.value || !app.value)
+    return
+  app.value = { ...app.value, onboarding: onboarding as typeof app.value.onboarding }
+  organizationStore.updateAppOnboarding(id.value, onboarding as typeof app.value.onboarding)
+  if (needOnboarding !== undefined)
+    organizationStore.updateAppNeedOnboarding(id.value, needOnboarding)
+}
+
+async function refreshNeedOnboarding(appId: string) {
+  const { data } = await supabase
+    .from('apps')
+    .select('need_onboarding')
+    .eq('app_id', appId)
+    .maybeSingle()
+  if (data)
+    organizationStore.updateAppNeedOnboarding(appId, data.need_onboarding)
+}
+
 async function checkBuilderDone(appId: string) {
   const token = ++builderReqToken
   builderDone.value = false
@@ -87,6 +114,67 @@ async function checkBuilderDone(appId: string) {
   }
   catch (error) {
     console.error('Cannot load getting started builder status', error)
+  }
+}
+
+async function verifySteps(options: { silent?: boolean } = {}) {
+  if (!id.value || isVerifying.value)
+    return
+  const appId = id.value
+  const token = ++verifyReqToken
+  isVerifying.value = true
+  try {
+    const { data, error } = await supabase.rpc('verify_getting_started', {
+      p_app_id: appId,
+    })
+    if (token !== verifyReqToken)
+      return
+    if (error)
+      throw error
+    if (data)
+      applyOnboarding(data)
+    await refreshNeedOnboarding(appId)
+    if (!options.silent)
+      toast.success(t('getting-started-verify-done'))
+  }
+  catch (error) {
+    console.error('Cannot verify getting started', error)
+    if (!options.silent)
+      toast.error(t('getting-started-verify-error'))
+  }
+  finally {
+    if (token === verifyReqToken)
+      isVerifying.value = false
+  }
+}
+
+async function hideGettingStarted() {
+  if (!id.value || !app.value || isDismissing.value)
+    return
+  const appId = id.value
+  const current = app.value.onboarding ?? {}
+  const previousNeed = app.value.need_onboarding
+  isDismissing.value = true
+  applyOnboarding(withGettingStartedDismissed(current), false)
+  try {
+    const { data, error } = await supabase.rpc('dismiss_getting_started', {
+      p_app_id: appId,
+    })
+    if (error)
+      throw error
+    applyOnboarding(
+      withGettingStartedDismissed(current, parseAppOnboardingLedger(data).getting_started_dismissed_at ?? undefined),
+      false,
+    )
+    await router.push(`/app/${encodeURIComponent(appId)}`)
+  }
+  catch (error) {
+    console.error('Failed to hide getting started', error)
+    applyOnboarding(withoutGettingStartedDismissed(current), previousNeed)
+    toast.error(t('getting-started-dismiss-error'))
+  }
+  finally {
+    isDismissing.value = false
   }
 }
 
@@ -124,6 +212,12 @@ watch(() => id.value, async (appId) => {
     organizationStore.setCurrentOrganization(appOrganization.gid)
   void checkBuilderDone(appId)
 }, { immediate: true })
+
+watch(() => app.value?.app_id, (appId) => {
+  if (!appId)
+    return
+  void verifySteps({ silent: true })
+})
 </script>
 
 <template>
@@ -180,7 +274,7 @@ watch(() => id.value, async (appId) => {
         </div>
       </div>
 
-      <div class="mt-6 flex items-end justify-between gap-4">
+      <div class="mt-6 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 class="text-2xl font-semibold text-slate-950 dark:text-white">
             {{ t('getting-started') }}
@@ -189,9 +283,33 @@ watch(() => id.value, async (appId) => {
             {{ t('getting-started-description') }}
           </p>
         </div>
-        <p class="shrink-0 tabular-nums text-sm font-medium text-slate-500 dark:text-slate-400">
-          {{ t('getting-started-count', { done: progress.done, total: progress.total }) }}
-        </p>
+        <div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            class="d-btn d-btn-ghost d-btn-sm h-11 min-h-11 px-3"
+            data-test="getting-started-verify"
+            :disabled="isVerifying || isDismissing"
+            :aria-label="t('getting-started-verify')"
+            @click="verifySteps()"
+          >
+            <IconRefreshCw class="size-4" :class="isVerifying ? 'animate-spin' : ''" />
+            {{ t('getting-started-verify') }}
+          </button>
+          <button
+            type="button"
+            class="d-btn d-btn-ghost d-btn-sm h-11 min-h-11 px-3"
+            data-test="getting-started-hide"
+            :disabled="isVerifying || isDismissing"
+            :aria-label="t('getting-started-dont-show-again')"
+            @click="hideGettingStarted"
+          >
+            <IconX class="size-4" />
+            {{ t('getting-started-dont-show-again') }}
+          </button>
+          <p class="tabular-nums text-sm font-medium text-slate-500 dark:text-slate-400">
+            {{ t('getting-started-count', { done: progress.done, total: progress.total }) }}
+          </p>
+        </div>
       </div>
 
       <div class="mt-4">

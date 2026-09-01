@@ -32,5 +32,15 @@ describe('onboarding exploration banner', () => {
       organizationAppCount: 1,
       organizationCount: 1,
     })).toBeNull()
+
+    expect(getOnboardingExploreBannerAppId({
+      app: {
+        app_id: 'com.example.pending',
+        need_onboarding: true,
+        onboarding: { setup: { outcome: 'completed' } },
+      },
+      organizationAppCount: 1,
+      organizationCount: 1,
+    })).toBeNull()
   })
 })

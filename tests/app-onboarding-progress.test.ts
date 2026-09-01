@@ -2,7 +2,7 @@ import type { Database } from '~/types/supabase.types'
 import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { parseAppOnboardingLedger, shouldShowGettingStartedNav } from '../src/utils/appOnboardingProgress.ts'
+import { parseAppOnboardingLedger, shouldShowGettingStartedNav, shouldSkipOnboardingResume } from '../src/utils/appOnboardingProgress.ts'
 import {
   executeSQL,
   getSupabaseClient,
@@ -18,6 +18,8 @@ const APP_RPC = `ob.rpc.${randomUUID().slice(0, 8)}`
 const APP_INSERT = `ob.ins.${randomUUID().slice(0, 8)}`
 const APP_TESTFLIGHT = `ob.tf.${randomUUID().slice(0, 8)}`
 const APP_STORE = `ob.st.${randomUUID().slice(0, 8)}`
+const APP_VERIFY = `ob.vf.${randomUUID().slice(0, 8)}`
+const APP_SETUP = `ob.su.${randomUUID().slice(0, 8)}`
 const DEVICE_TF = randomUUID().toLowerCase()
 const DEVICE_STORE = randomUUID().toLowerCase()
 
@@ -33,12 +35,13 @@ function createAuthClient() {
   })
 }
 
-async function createApp(appId: string) {
+async function createApp(appId: string, needOnboarding = false) {
   const { error } = await serviceRoleSupabase.from('apps').insert({
     app_id: appId,
     owner_org: ORG_ID,
     name: 'Onboarding progress test app',
     icon_url: 'https://example.com/icon.png',
+    need_onboarding: needOnboarding,
   })
   if (error)
     throw error
@@ -81,6 +84,8 @@ beforeAll(async () => {
   await createApp(APP_RPC)
   await createApp(APP_TESTFLIGHT)
   await createApp(APP_STORE)
+  await createApp(APP_VERIFY, true)
+  await createApp(APP_SETUP, true)
   await insertDevice(APP_TESTFLIGHT, DEVICE_TF, 'testflight')
   await insertDevice(APP_STORE, DEVICE_STORE, 'app_store')
 })
@@ -88,7 +93,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await serviceRoleSupabase.from('devices').delete().eq('app_id', APP_TESTFLIGHT)
   await serviceRoleSupabase.from('devices').delete().eq('app_id', APP_STORE)
-  await serviceRoleSupabase.from('apps').delete().in('app_id', [APP_RPC, APP_INSERT, APP_TESTFLIGHT, APP_STORE])
+  await serviceRoleSupabase.from('app_versions').delete().eq('app_id', APP_VERIFY)
+  await serviceRoleSupabase.from('apps').delete().in('app_id', [APP_RPC, APP_INSERT, APP_TESTFLIGHT, APP_STORE, APP_VERIFY, APP_SETUP])
 })
 
 describe('app onboarding progress RPCs', () => {
@@ -267,5 +273,107 @@ describe('app onboarding progress RPCs', () => {
     const refreshed = await refreshUntil(APP_RPC)
     expect(refreshed.getting_started_dismissed_at).toBe(firstDismissedAt)
     expect(refreshed.features?.cli_install?.started_at).toBeTruthy()
+  })
+
+  it('must reject unauthenticated verify_getting_started', async () => {
+    const anon = createAuthClient()
+    const { error } = await anon.rpc('verify_getting_started', {
+      p_app_id: APP_VERIFY,
+    })
+    expect(error).toBeTruthy()
+  })
+
+  it('verifies live bundles onto the getting started ledger and completes pending onboarding', async () => {
+    const { error: versionError } = await serviceRoleSupabase.from('app_versions').insert({
+      app_id: APP_VERIFY,
+      name: '1.0.1',
+      owner_org: ORG_ID,
+      user_id: USER_ID,
+      storage_provider: 'r2',
+      r2_path: `orgs/${ORG_ID}/apps/${APP_VERIFY}/1.0.1.zip`,
+    })
+    if (versionError)
+      throw versionError
+
+    const authClient = createAuthClient()
+    const { error: signInError } = await authClient.auth.signInWithPassword({
+      email: USER_EMAIL,
+      password: USER_PASSWORD,
+    })
+    if (signInError)
+      throw signInError
+
+    const { data, error } = await authClient.rpc('verify_getting_started', {
+      p_app_id: APP_VERIFY,
+    })
+    expect(error).toBeNull()
+    const ledger = parseAppOnboardingLedger(data)
+    expect(ledger.refreshed_at).toBeTruthy()
+    expect(ledger.features?.ota?.started_at).toBeTruthy()
+    expect(shouldSkipOnboardingResume(data)).toBe(true)
+
+    const { data: app, error: readError } = await serviceRoleSupabase
+      .from('apps')
+      .select('need_onboarding')
+      .eq('app_id', APP_VERIFY)
+      .single()
+    expect(readError).toBeNull()
+    expect(app?.need_onboarding).toBe(false)
+  })
+
+  it('completes pending onboarding when CLI/AI setup reports completed', async () => {
+    const authClient = createAuthClient()
+    const { error: signInError } = await authClient.auth.signInWithPassword({
+      email: USER_EMAIL,
+      password: USER_PASSWORD,
+    })
+    if (signInError)
+      throw signInError
+
+    const { data, error } = await authClient.rpc('report_app_onboarding_setup', {
+      p_app_id: APP_SETUP,
+      p_patch: { outcome: 'completed' },
+    })
+    expect(error).toBeNull()
+    expect(shouldSkipOnboardingResume(data)).toBe(true)
+
+    const { data: app, error: readError } = await serviceRoleSupabase
+      .from('apps')
+      .select('need_onboarding')
+      .eq('app_id', APP_SETUP)
+      .single()
+    expect(readError).toBeNull()
+    expect(app?.need_onboarding).toBe(false)
+  })
+
+  it('completes pending onboarding when getting started is hidden', async () => {
+    const appId = `ob.hide.${randomUUID().slice(0, 8)}`
+    await createApp(appId, true)
+    try {
+      const authClient = createAuthClient()
+      const { error: signInError } = await authClient.auth.signInWithPassword({
+        email: USER_EMAIL,
+        password: USER_PASSWORD,
+      })
+      if (signInError)
+        throw signInError
+
+      const { error } = await authClient.rpc('dismiss_getting_started', {
+        p_app_id: appId,
+      })
+      expect(error).toBeNull()
+
+      const { data: app, error: readError } = await serviceRoleSupabase
+        .from('apps')
+        .select('need_onboarding, onboarding')
+        .eq('app_id', appId)
+        .single()
+      expect(readError).toBeNull()
+      expect(app?.need_onboarding).toBe(false)
+      expect(parseAppOnboardingLedger(app?.onboarding).getting_started_dismissed_at).toBeTruthy()
+    }
+    finally {
+      await serviceRoleSupabase.from('apps').delete().eq('app_id', appId)
+    }
   })
 })

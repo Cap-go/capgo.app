@@ -40,12 +40,24 @@ async function persistAppOnboarding(
   try {
     const result = await client.query(
       `UPDATE public.apps
-       SET onboarding = public.merge_app_onboarding_setup(onboarding, $2::jsonb)
+       SET onboarding = public.merge_app_onboarding_setup(onboarding, $2::jsonb),
+           updated_at = now()
        WHERE app_id = $1
        RETURNING *`,
       [appId, JSON.stringify(patch)],
     )
-    return result.rows[0] as Database['public']['Tables']['apps']['Row'] | undefined
+    const row = result.rows[0] as Database['public']['Tables']['apps']['Row'] | undefined
+    if (!row)
+      return undefined
+    await client.query(
+      `SELECT public.try_complete_pending_onboarding_if_setup_done($1)`,
+      [appId],
+    )
+    const completed = await client.query(
+      `SELECT * FROM public.apps WHERE app_id = $1`,
+      [appId],
+    )
+    return (completed.rows[0] ?? row) as Database['public']['Tables']['apps']['Row']
   }
   finally {
     if (opened)
