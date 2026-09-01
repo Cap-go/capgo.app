@@ -81,95 +81,99 @@ await assert.rejects(
 const originalFetch = globalThis.fetch
 const originalTelemetryDisabled = process.env.CAPGO_DISABLE_TELEMETRY
 process.env.CAPGO_DISABLE_TELEMETRY = 'true'
-const channelOptions = {
-  apikey: 'ck_channel_add_duplicate_test',
-  supaHost: 'https://local.test',
-  supaAnon: 'anon-key',
-}
 
-function jsonResponse(body, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  })
-}
-
-async function runAddChannelInternalDuplicateTest(readable) {
-  globalThis.fetch = async (input, init) => {
-    const url = String(input)
-    const method = init?.method ?? 'GET'
-
-    if (url.includes('/private/config')) {
-      return jsonResponse({
-        supaHost: channelOptions.supaHost,
-        supaKey: channelOptions.supaAnon,
-        hostApi: 'https://api.capgo.app',
-      })
-    }
-    if (url.includes('/rpc/reject_access_due_to_2fa_for_app')) {
-      return jsonResponse(false)
-    }
-    if (url.includes('/rpc/request_actor_user_id')) {
-      return jsonResponse('user-123')
-    }
-    if (url.includes('/rpc/cli_check_permission')) {
-      return jsonResponse(true)
-    }
-    if (method === 'POST' && url.includes('/functions/v1/channel')) {
-      return jsonResponse({
-        message: 'duplicate key value violates unique constraint "unique_name_app_id"',
-        code: '23505',
-      }, 409)
-    }
-    if (method === 'GET' && url.includes('/functions/v1/app/com.example.app')) {
-      return jsonResponse({ app_id: 'com.example.app', owner_org: 'org_123' })
-    }
-    if (url.includes('/rest/v1/channels')) {
-      if (readable) {
-        return jsonResponse({ name: 'production', app_id: 'com.example.app' })
-      }
-      return jsonResponse({
-        code: 'PGRST116',
-        details: 'Results contain 0 rows',
-        hint: null,
-        message: 'JSON object requested, multiple (or no) rows returned',
-      }, 406)
-    }
-    if (method === 'POST' && url.includes('/private/events')) {
-      return jsonResponse({ status: 'ok' })
-    }
-
-    throw new Error(`Unexpected fetch: ${method} ${url}`)
-  }
-
-  try {
-    return await addChannelInternal('production', 'com.example.app', channelOptions, true)
-  }
-  finally {
-    globalThis.fetch = originalFetch
-  }
-}
-
-const readableResult = await runAddChannelInternalDuplicateTest(true)
-assert.deepEqual(readableResult, { name: 'production' })
-
-let inaccessibleThrown
 try {
-  await runAddChannelInternalDuplicateTest(false)
-}
-catch (error) {
-  inaccessibleThrown = error
-}
-assert.ok(inaccessibleThrown instanceof Error)
-assert.match(
-  inaccessibleThrown.message,
-  /Cannot create channel: Channel production already exists but is not accessible with this API key/,
-)
-assert.equal(shouldCapturePosthogException(inaccessibleThrown), true)
+  const channelOptions = {
+    apikey: 'ck_channel_add_duplicate_test',
+    supaHost: 'https://local.test',
+    supaAnon: 'anon-key',
+  }
 
-if (originalTelemetryDisabled === undefined)
-  delete process.env.CAPGO_DISABLE_TELEMETRY
-else
-  process.env.CAPGO_DISABLE_TELEMETRY = originalTelemetryDisabled
+  function jsonResponse(body, status = 200) {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  async function runAddChannelInternalDuplicateTest(readable) {
+    globalThis.fetch = async (input, init) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+
+      if (url.includes('/private/config')) {
+        return jsonResponse({
+          supaHost: channelOptions.supaHost,
+          supaKey: channelOptions.supaAnon,
+          hostApi: 'https://api.capgo.app',
+        })
+      }
+      if (url.includes('/rpc/reject_access_due_to_2fa_for_app')) {
+        return jsonResponse(false)
+      }
+      if (url.includes('/rpc/request_actor_user_id')) {
+        return jsonResponse('user-123')
+      }
+      if (url.includes('/rpc/cli_check_permission')) {
+        return jsonResponse(true)
+      }
+      if (method === 'POST' && url.includes('/functions/v1/channel')) {
+        return jsonResponse({
+          message: 'duplicate key value violates unique constraint "unique_name_app_id"',
+          code: '23505',
+        }, 409)
+      }
+      if (method === 'GET' && url.includes('/functions/v1/app/com.example.app')) {
+        return jsonResponse({ app_id: 'com.example.app', owner_org: 'org_123' })
+      }
+      if (url.includes('/rest/v1/channels')) {
+        if (readable) {
+          return jsonResponse({ name: 'production', app_id: 'com.example.app' })
+        }
+        return jsonResponse({
+          code: 'PGRST116',
+          details: 'Results contain 0 rows',
+          hint: null,
+          message: 'JSON object requested, multiple (or no) rows returned',
+        }, 406)
+      }
+      if (method === 'POST' && url.includes('/private/events')) {
+        return jsonResponse({ status: 'ok' })
+      }
+
+      throw new Error(`Unexpected fetch: ${method} ${url}`)
+    }
+
+    try {
+      return await addChannelInternal('production', 'com.example.app', channelOptions, true)
+    }
+    finally {
+      globalThis.fetch = originalFetch
+    }
+  }
+
+  const readableResult = await runAddChannelInternalDuplicateTest(true)
+  assert.deepEqual(readableResult, { name: 'production' })
+
+  let inaccessibleThrown
+  try {
+    await runAddChannelInternalDuplicateTest(false)
+  }
+  catch (error) {
+    inaccessibleThrown = error
+  }
+  assert.ok(inaccessibleThrown instanceof Error)
+  assert.match(
+    inaccessibleThrown.message,
+    /Cannot create channel: Channel production already exists but is not accessible with this API key/,
+  )
+  assert.equal(shouldCapturePosthogException(inaccessibleThrown), true)
+}
+finally {
+  if (originalTelemetryDisabled === undefined)
+    delete process.env.CAPGO_DISABLE_TELEMETRY
+  else
+    process.env.CAPGO_DISABLE_TELEMETRY = originalTelemetryDisabled
+}
 
 console.log('✅ channel add duplicate handling tests passed')
