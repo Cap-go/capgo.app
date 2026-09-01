@@ -137,18 +137,20 @@ REVOKE ALL ON FUNCTION public.invalidate_updates_cache_stmt() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.invalidate_updates_cache_stmt() FROM anon, authenticated;
 
 COMMENT ON FUNCTION public.invalidate_updates_cache_stmt() IS
-  'Statement-level AFTER trigger on channels, channel_devices, apps, app_versions, '
-  'manifest, orgs, and stripe_info. Runs once per SQL statement (not per row); '
-  'transition tables bound the fan-in to changed rows only. Executing role: '
-  'postgres via SECURITY DEFINER trigger; reachable only from internal DML, not '
-  'PostgREST. Cardinality: channels/apps/app_versions/manifest rows are scoped '
-  'by app_id in the transition table; orgs updates join public.apps on '
-  'apps.owner_org (finx_apps_owner_org); stripe_info updates/deletes join '
-  'public.orgs on orgs.customer_id (idx_orgs_customer_id, unique customer_id) '
-  'then public.apps on apps.owner_org. Worst-case stripe_info bulk UPDATE '
-  'EXPLAIN (ANALYZE, BUFFERS) on local seed: HashAggregate over ~1 transition '
-  'row -> Nested Loop on orgs (Index Scan idx_orgs_customer_id) -> Index Only '
-  'Scan on finx_apps_owner_org; no sequential scans on apps/orgs/stripe_info.';
+  'Statement-level AFTER trigger on channels, channel_devices, apps, '
+  'app_versions, manifest, orgs, and stripe_info. Runs once per SQL '
+  'statement (not per row); transition tables bound the fan-in to changed '
+  'rows only. Executing role: postgres via SECURITY DEFINER trigger; '
+  'reachable only from internal DML, not PostgREST. Cardinality: '
+  'channels/apps/app_versions/manifest rows are scoped by app_id in the '
+  'transition table; orgs updates join public.apps on apps.owner_org '
+  '(finx_apps_owner_org); stripe_info updates/deletes join public.orgs on '
+  'orgs.customer_id (idx_orgs_customer_id, unique customer_id) then '
+  'public.apps on apps.owner_org. Worst-case stripe_info bulk UPDATE '
+  'EXPLAIN (ANALYZE, BUFFERS) on local seed: HashAggregate over ~1 '
+  'transition row -> Nested Loop on orgs (Index Scan idx_orgs_customer_id) '
+  '-> Index Only Scan on finx_apps_owner_org; no sequential scans on '
+  'apps/orgs/stripe_info.';
 
 -- channels: any change moves versions/flags devices resolve against.
 DROP TRIGGER IF EXISTS invalidate_updates_cache_channels_ins ON public.channels;
