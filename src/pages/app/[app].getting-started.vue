@@ -249,7 +249,7 @@ watch(() => id.value, async (appId) => {
               v-for="step in group.steps"
               :key="step.id"
               class="px-4 py-3"
-              :class="step.id === focusedStepId ? 'bg-azure-50/70 dark:bg-azure-950/20' : ''"
+              :class="step.id === focusedStepId && step.id !== 'cli_install' && step.id !== 'cicd' ? 'bg-azure-50/70 dark:bg-azure-950/20' : ''"
               :data-test="`getting-started-step-${step.id}`"
             >
               <div class="flex items-center gap-3">
