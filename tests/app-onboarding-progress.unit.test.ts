@@ -12,6 +12,7 @@ import {
   parseAppOnboardingStage,
   rankAppOnboardingStage,
   shouldShowGettingStartedNav,
+  shouldSkipOnboardingResume,
   shouldShowOnboardingNextStep,
   withGettingStartedDismissed,
   withoutGettingStartedDismissed,
@@ -224,6 +225,32 @@ describe('getting started dismiss storage', () => {
       features: {},
       getting_started_dismissed_at: dismissedAt,
     })).toEqual({ features: {} })
+  })
+
+  it.concurrent('skips the login splash after dismiss, shipped bundles, or finished CLI setup', () => {
+    expect(shouldSkipOnboardingResume({})).toBe(false)
+    expect(shouldSkipOnboardingResume({
+      getting_started_dismissed_at: '2026-09-01T00:00:00.000Z',
+    })).toBe(true)
+    expect(shouldSkipOnboardingResume({
+      features: { ota: { started_at: '2026-09-01T00:00:00.000Z' } },
+    })).toBe(false)
+    expect(shouldSkipOnboardingResume({
+      features: { ota: { succeeded_at: '2026-09-01T00:00:00.000Z' } },
+    })).toBe(true)
+    expect(shouldSkipOnboardingResume({
+      setup: { outcome: 'completed' },
+    })).toBe(true)
+    expect(shouldSkipOnboardingResume({
+      outcome: 'completed',
+      setup: {},
+    })).toBe(true)
+    expect(shouldSkipOnboardingResume({
+      setup: { outcome: 'skipped' },
+    })).toBe(true)
+    expect(shouldSkipOnboardingResume({
+      setup: { outcome: 'in_progress' },
+    })).toBe(false)
   })
 
   it.concurrent('uses a per-app store-release key', () => {

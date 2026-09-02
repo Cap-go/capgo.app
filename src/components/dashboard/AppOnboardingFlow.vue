@@ -57,6 +57,7 @@ import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { isValidAppId } from '~/utils/appId'
+import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { useBeforeUnloadWarning } from '~/utils/beforeUnloadWarning'
 import {
   buildAlternativeAppIds,
@@ -147,6 +148,7 @@ const isImportingStore = ref(false)
 const isImportingStoreIcon = ref(false)
 const isResumeIconLoading = ref(false)
 const isSeedingDemo = ref(false)
+const isHidingSplash = ref(false)
 const isCliCommandVisible = ref(false)
 const apiKey = ref<string | null>(null)
 const createdApp = ref<AppRow | null>(null)
@@ -1914,6 +1916,52 @@ async function openDashboard() {
   router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
 }
 
+async function skipOnboardingSplash() {
+  if (!createdApp.value || isHidingSplash.value)
+    return
+
+  isHidingSplash.value = true
+  try {
+    const appId = createdApp.value.app_id
+    await supabase.rpc('verify_getting_started', { p_app_id: appId })
+    const { data, error } = await supabase.rpc('dismiss_getting_started', { p_app_id: appId })
+    if (error)
+      throw error
+    if (data != null)
+      organizationStore.updateAppOnboarding(appId, data)
+    organizationStore.updateAppNeedOnboarding(appId, false)
+    window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
+    allowOnboardingDashboardExploration(onboardingUserId.value, appId)
+    await persistOnboardingProgress('completed')
+    await router.push(`/app/${encodeURIComponent(appId)}`)
+  }
+  catch (error) {
+    console.error('Cannot hide onboarding splash', error)
+    toast.error(t('getting-started-dismiss-error'))
+  }
+  finally {
+    isHidingSplash.value = false
+  }
+}
+
+async function leaveSplashIfAlreadySetup() {
+  const app = createdApp.value
+  if (!app)
+    return false
+  const { data } = await supabase.rpc('verify_getting_started', { p_app_id: app.app_id })
+  if (data != null)
+    organizationStore.updateAppOnboarding(app.app_id, data)
+  const skip = data != null
+    ? shouldSkipOnboardingResume(data as unknown)
+    : shouldSkipOnboardingResume(app.onboarding)
+  if (!skip)
+    return false
+  allowOnboardingDashboardExploration(onboardingUserId.value, app.app_id)
+  await persistOnboardingProgress('completed')
+  await router.push(`/app/${encodeURIComponent(app.app_id)}`)
+  return true
+}
+
 function trackDashboardExplored() {
   if (!progressTracker) {
     pendingDashboardExplored = true
@@ -1937,6 +1985,10 @@ onMounted(async () => {
         const resumed = await loadResumeApp()
         if (resumed) {
           resumedFlow = true
+          if (await leaveSplashIfAlreadySetup()) {
+            onboardingProgressPersistence.abort()
+            return
+          }
           void loadApiKey().catch((error) => {
             console.error('Cannot ensure API key', error)
             toast.error(t('app-onboarding-toast-apikey-error'))
@@ -1963,6 +2015,10 @@ onMounted(async () => {
       appDetailsStep.value = 'name'
       existingApp.value = null
       existingAppSetup.value = null
+    }
+    else if (await leaveSplashIfAlreadySetup()) {
+      onboardingProgressPersistence.abort()
+      return
     }
 
     void loadApiKey().catch((error) => {
@@ -2853,7 +2909,21 @@ defineExpose({
           </div>
 
           <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
-            <button type="button" class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
+            <button
+              type="button"
+              class="d-btn min-h-11"
+              :class="whiteCardSecondaryButtonClass()"
+              data-test="app-onboarding-dont-show-again"
+              :aria-label="t('app-onboarding-dont-show-again')"
+              :disabled="isSeedingDemo || isHidingSplash"
+              @click="skipOnboardingSplash"
+            >
+              <IconLoader v-if="isHidingSplash" class="h-4 w-4 animate-spin" />
+              <template v-else>
+                {{ t('app-onboarding-dont-show-again') }}
+              </template>
+            </button>
+            <button type="button" class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo || isHidingSplash" @click="openDashboard">
               <IconLoader v-if="isSeedingDemo" class="h-4 w-4 animate-spin" />
               <template v-else>
                 {{ t('app-onboarding-explore-dashboard') }}
@@ -3000,16 +3070,32 @@ defineExpose({
             </div>
 
             <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" :disabled="isSeedingDemo" @click="viewPreviousStep('choice')">
+              <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" :disabled="isSeedingDemo || isHidingSplash" @click="viewPreviousStep('choice')">
                 {{ t('button-back') }}
               </button>
-              <button type="button" class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
-                <IconLoader v-if="isSeedingDemo" class="h-4 w-4 animate-spin" />
-                <template v-else>
-                  {{ t('app-onboarding-explore-dashboard') }}
-                  <IconArrowRight class="h-4 w-4" />
-                </template>
-              </button>
+              <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center">
+                <button
+                  type="button"
+                  class="d-btn min-h-11"
+                  :class="whiteCardSecondaryButtonClass()"
+                  data-test="app-onboarding-dont-show-again"
+                  :aria-label="t('app-onboarding-dont-show-again')"
+                  :disabled="isSeedingDemo || isHidingSplash"
+                  @click="skipOnboardingSplash"
+                >
+                  <IconLoader v-if="isHidingSplash" class="h-4 w-4 animate-spin" />
+                  <template v-else>
+                    {{ t('app-onboarding-dont-show-again') }}
+                  </template>
+                </button>
+                <button type="button" class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo || isHidingSplash" @click="openDashboard">
+                  <IconLoader v-if="isSeedingDemo" class="h-4 w-4 animate-spin" />
+                  <template v-else>
+                    {{ t('app-onboarding-explore-dashboard') }}
+                    <IconArrowRight class="h-4 w-4" />
+                  </template>
+                </button>
+              </div>
             </div>
           </div>
         </div>

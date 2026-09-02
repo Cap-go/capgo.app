@@ -9,8 +9,16 @@ describe('getting started CLI onboarding accordion', () => {
     const messages = JSON.parse(await readFile(new URL('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
     const gettingStarted = await readFile(new URL('../src/pages/app/[app].getting-started.vue', import.meta.url), 'utf8')
-    expect(source).toContain('<AppOnboardingCliSteps')
-    expect(gettingStarted).toContain('<AppOnboardingCliSteps')
+    expect(gettingStarted).toContain('data-test="getting-started-verify"')
+    expect(gettingStarted).toContain('data-test="getting-started-hide"')
+    expect(gettingStarted).toContain('verify_getting_started')
+    expect(gettingStarted).toContain('dismiss_getting_started')
+    expect(source).toContain('data-test="app-onboarding-dont-show-again"')
+    expect(source).toContain('skipOnboardingSplash')
+    expect(source).toContain('leaveSplashIfAlreadySetup')
+    expect(messages['getting-started-verify']).toBeTruthy()
+    expect(messages['getting-started-dont-show-again']).toBeTruthy()
+    expect(messages['app-onboarding-dont-show-again']).toBeTruthy()
     expect(source).toContain('reportOnboardingPatch({ source: \'ai\' })')
     expect(source).toContain('switched_to_manual')
     expect(accordion).toContain('data-test="app-onboarding-cli-steps"')

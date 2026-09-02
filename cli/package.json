@@ -1,7 +1,7 @@
 {
   "name": "@capgo/cli",
   "type": "module",
-  "version": "8.45.3",
+  "version": "8.46.0",
   "description": "A CLI to upload to capgo servers",
   "author": "Martin martin@capgo.app",
   "license": "Apache 2.0",

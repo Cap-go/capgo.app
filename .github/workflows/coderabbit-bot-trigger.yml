@@ -6,11 +6,14 @@ on:
       - 'cursor/**'
       - 'fix/**'
       - 'feat/admin-famous-apps'
+      - 'fix/security-ghsa-*'
+  pull_request_review:
+    types: [submitted]
   workflow_dispatch:
 
 concurrency:
-  group: coderabbit-bot-trigger-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  group: coderabbit-bot-trigger-${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
 
 # pull-requests: write is required: GITHUB_TOKEN gets 403 on issues.createComment
 # for PRs when only pull-requests: read is granted (see run 32975845301).
@@ -26,30 +29,117 @@ jobs:
         with:
           script: |
             const { owner, repo } = context.repo
-            const branch = context.ref.replace('refs/heads/', '')
-            const prs = await github.paginate(github.rest.pulls.list, {
-              owner,
-              repo,
-              head: `${owner}:${branch}`,
-              state: 'open',
-            })
+            const reviewState = state => String(state).toUpperCase()
+            const isApproved = state => reviewState(state) === 'APPROVED'
+
+            let prs
+            let reviewEventReview = null
+            if (context.eventName === 'pull_request_review') {
+              reviewEventReview = context.payload.review
+              const pr = context.payload.pull_request
+              const branch = pr.head.ref
+              const allowed =
+                branch.startsWith('cursor/')
+                || branch === 'feat/admin-famous-apps'
+                || branch.startsWith('fix/security-ghsa-')
+              if (!allowed) {
+                console.log(`Skipping PR branch ${branch}`)
+                return
+              }
+              prs = [pr]
+            }
+            else {
+              const branch = context.ref.replace('refs/heads/', '')
+              prs = await github.paginate(github.rest.pulls.list, {
+                owner,
+                repo,
+                head: `${owner}:${branch}`,
+                state: 'open',
+              })
+            }
+
             if (prs.length === 0) {
               console.log('No open PR for this branch')
               return
             }
 
+            // Only org members/owners can supersede a stale CodeRabbit review.
             for (const pr of prs) {
+              const { data: livePr } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: pr.number,
+              })
+              const liveHeadSha = livePr.head.sha
+
+              if (context.eventName === 'push' && context.sha !== liveHeadSha) {
+                console.log(`Skipping stale push event: pushed ${context.sha} but live HEAD is ${liveHeadSha}`)
+                continue
+              }
+
               const headSha = context.eventName === 'push'
                 ? context.sha
-                : pr.head.sha
+                : liveHeadSha
+              const eventHeadSha = context.eventName === 'pull_request_review'
+                ? pr.head.sha
+                : null
               const reviews = await github.paginate(github.rest.pulls.listReviews, {
                 owner,
                 repo,
                 pull_number: pr.number,
               })
-              const latestCodeRabbitReview = reviews
+              const codeRabbitReviews = reviews
                 .filter(review => review.user?.login === 'coderabbitai[bot]')
-                .pop()
+              const latestCodeRabbitReview = codeRabbitReviews.at(-1)
+
+              const headApprovedFromList = reviews.some(review =>
+                review.commit_id === headSha
+                && review.state === 'APPROVED'
+                && review.user?.type === 'User'
+                && (review.author_association === 'MEMBER'
+                  || review.author_association === 'OWNER')
+              )
+              const eventMaintainerApprovedHead = context.eventName === 'pull_request_review'
+                && reviewEventReview
+                && isApproved(reviewEventReview.state)
+                && reviewEventReview.user?.login !== 'coderabbitai[bot]'
+                && reviewEventReview.user?.type === 'User'
+                && (reviewEventReview.author_association === 'MEMBER'
+                  || reviewEventReview.author_association === 'OWNER')
+                && reviewEventReview.commit_id === headSha
+              const headApproved = headApprovedFromList || eventMaintainerApprovedHead
+
+              const staleChangeRequests = codeRabbitReviews.filter(review =>
+                review.state === 'CHANGES_REQUESTED'
+                && review.commit_id !== headSha
+              )
+              if (staleChangeRequests.length > 0 && headApproved) {
+                for (const review of staleChangeRequests) {
+                  await github.rest.pulls.dismissReview({
+                    owner,
+                    repo,
+                    pull_number: pr.number,
+                    review_id: review.id,
+                    message: `Superseded: maintainer approved HEAD ${headSha.slice(0, 7)} after addressing prior CodeRabbit feedback.`,
+                  })
+                  console.log(`Dismissed stale CodeRabbit review ${review.id} on PR #${pr.number}`)
+                }
+              }
+
+              if (context.eventName === 'pull_request_review') {
+                if (eventHeadSha !== liveHeadSha) {
+                  console.log(`Skipping trigger for stale review event: live HEAD ${liveHeadSha} differs from event snapshot ${eventHeadSha}`)
+                  continue
+                }
+                if (!isApproved(reviewEventReview.state)) {
+                  console.log(`Ignoring non-approval review state for trigger: ${reviewEventReview.state}`)
+                  continue
+                }
+                if (reviewEventReview.user?.login === 'coderabbitai[bot]') {
+                  console.log('Ignoring CodeRabbit review event for trigger')
+                  continue
+                }
+              }
 
               // Skip only when CodeRabbit already approved this SHA (COMMENTED does not clear CHANGES_REQUESTED).
               if (

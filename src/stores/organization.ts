@@ -493,12 +493,11 @@ export const useOrganizationStore = defineStore('organization', () => {
 
   const appOnboardingWriteGen = new Map<string, number>()
 
-  const writeAppOnboarding = (appId: string, onboarding: OrganizationApp['onboarding']) => {
+  const writeAppFields = (appId: string, patch: Partial<OrganizationApp>) => {
     const existing = _appsByAppId.value.get(appId)
     if (!existing)
       return
-
-    const next = { ...existing, onboarding }
+    const next = { ...existing, ...patch }
     const nextByAppId = new Map(_appsByAppId.value)
     nextByAppId.set(appId, next)
     _appsByAppId.value = nextByAppId
@@ -511,11 +510,22 @@ export const useOrganizationStore = defineStore('organization', () => {
     _appsByOrgId.value = nextByOrgId
   }
 
+  const writeAppOnboarding = (appId: string, onboarding: OrganizationApp['onboarding']) => {
+    writeAppFields(appId, { onboarding })
+  }
+
   const updateAppOnboarding = (appId: string, onboarding: OrganizationApp['onboarding'] | null | undefined) => {
     if (!_appsByAppId.value.get(appId) || onboarding == null)
       return
     appOnboardingWriteGen.set(appId, (appOnboardingWriteGen.get(appId) ?? 0) + 1)
     writeAppOnboarding(appId, onboarding)
+  }
+
+  const updateAppNeedOnboarding = (appId: string, needOnboarding: boolean) => {
+    if (!_appsByAppId.value.get(appId))
+      return
+    appOnboardingWriteGen.set(appId, (appOnboardingWriteGen.get(appId) ?? 0) + 1)
+    writeAppFields(appId, { need_onboarding: needOnboarding })
   }
 
   let appsOnboardingRefreshGen = 0
@@ -529,7 +539,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     const writeGenSnapshot = new Map(appOnboardingWriteGen)
     const { data, error } = await supabase
       .from('apps')
-      .select('app_id, onboarding')
+      .select('app_id, onboarding, need_onboarding')
       .in('owner_org', orgIds)
 
     if (error) {
@@ -541,7 +551,10 @@ export const useOrganizationStore = defineStore('organization', () => {
     for (const row of data ?? []) {
       if ((appOnboardingWriteGen.get(row.app_id) ?? 0) !== (writeGenSnapshot.get(row.app_id) ?? 0))
         continue
-      writeAppOnboarding(row.app_id, row.onboarding)
+      writeAppFields(row.app_id, {
+        onboarding: row.onboarding,
+        need_onboarding: row.need_onboarding,
+      })
     }
   }
 
@@ -869,6 +882,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     getAppsByOrgId,
     awaitInitialLoad,
     updateAppOnboarding,
+    updateAppNeedOnboarding,
     refreshAppsOnboarding,
     deleteOrganization,
     canDeleteOrganization,

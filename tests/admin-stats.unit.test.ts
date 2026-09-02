@@ -101,6 +101,15 @@ describe('admin stats validation', () => {
     expect(parsed.success).toBe(true)
   })
 
+  it.concurrent('accepts the enterprise adoption metric', () => {
+    const parsed = safeParseSchema(adminStatsBodySchema, {
+      ...baseBody,
+      metric_category: 'enterprise_adoption',
+    })
+
+    expect(parsed.success).toBe(true)
+  })
+
   it.concurrent('accepts the famous apps metric', () => {
     const parsed = safeParseSchema(adminStatsBodySchema, {
       ...baseBody,

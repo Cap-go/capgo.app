@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "12.265.1",
+  "version": "12.266.3",
   "private": true,
   "workspaces": [
     "cli",
@@ -352,7 +352,7 @@
     "@capgo/cli": "workspace:*",
     "@cloudflare/workers-types": "5.20260722.1",
     "@codspeed/vitest-plugin": "^5.7.1",
-    "@formkit/core": "2.1.0",
+    "@formkit/core": "2.1.2",
     "@iconify-json/simple-icons": "^1.2.91",
     "@iconify/json": "^2.2.504",
     "@intlify/unplugin-vue-i18n": "^11.2.4",
