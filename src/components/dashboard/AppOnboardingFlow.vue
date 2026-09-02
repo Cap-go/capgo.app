@@ -133,6 +133,7 @@ const onboardingTelemetry = createOnboardingTelemetryIdentity({
   supaHost: config.supaHost,
 })
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
+const ONBOARDING_AB_TEST_WAIT_TIMEOUT_MS = 3_000
 const WELCOME_CANVAS_MEDIA_QUERY = '(min-width: 640px) and (min-height: 640px)'
 const WEBNATIVE_APP_URL = 'https://webnativeapp.com/?ref=capgo'
 const removeBeforeUnloadWarning = useBeforeUnloadWarning(Boolean(props.preOrg))
@@ -267,11 +268,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-async function refreshOnboardingABTests() {
+function refreshOnboardingABTests(): Promise<void> {
   if (!props.preOrg || !onboardingUserId.value)
-    return
+    return Promise.resolve()
   if (onboardingABTestsRequest)
-    return await onboardingABTestsRequest
+    return onboardingABTestsRequest
 
   onboardingABTestsRequest = (async () => {
     const { data, error } = await invokeCapgoApi<OnboardingABTestsResponse>('private/onboarding_ab_tests', {
@@ -306,13 +307,24 @@ async function refreshOnboardingABTests() {
         },
       } as Json,
     }
-  })()
+  })().catch((error) => {
+    console.error('Cannot load onboarding A/B tests', error)
+  })
+
+  return onboardingABTestsRequest
+}
+
+async function waitForOnboardingABTests() {
+  let timeoutId: number | undefined
+  const timeout = new Promise<void>((resolve) => {
+    timeoutId = window.setTimeout(resolve, ONBOARDING_AB_TEST_WAIT_TIMEOUT_MS)
+  })
 
   try {
-    await onboardingABTestsRequest
+    await Promise.race([refreshOnboardingABTests(), timeout])
   }
   finally {
-    onboardingABTestsRequest = null
+    window.clearTimeout(timeoutId)
   }
 }
 
@@ -752,7 +764,7 @@ function showWelcomeOnDesktop() {
 }
 
 async function continueFromWelcome() {
-  await refreshOnboardingABTests()
+  await waitForOnboardingABTests()
   const nextStep = flowStep.value
   const nextAnalyticsStep = analyticsStepFor(nextStep)
   progressTracker?.completeStep('welcome', { nextStep: nextAnalyticsStep })
@@ -2079,7 +2091,7 @@ onMounted(async () => {
   isHydratingOnboarding.value = true
   try {
     if (props.preOrg) {
-      await refreshOnboardingABTests()
+      void refreshOnboardingABTests()
       if (resumeAppId.value) {
         await organizationStore.awaitInitialLoad()
         const resumed = await loadResumeApp()
@@ -2143,9 +2155,9 @@ onMounted(async () => {
         initializeProgressTracking(resumedFlow)
       else
         pendingVisibilityChanges = []
-      if (props.preOrg && flowStep.value === 'intent' && !welcomePending.value)
-        void refreshOnboardingABTests()
     }
+    if (props.preOrg && !welcomePending.value)
+      await waitForOnboardingABTests()
     finishOnboardingMount()
   }
 })

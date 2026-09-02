@@ -479,8 +479,12 @@ describe('app onboarding progress analytics integration', () => {
 
   it.concurrent('loads stable backend flags and applies the A and C onboarding treatments', () => {
     expect(onboardingSource).toContain(`invokeCapgoApi<OnboardingABTestsResponse>('private/onboarding_ab_tests'`)
-    expect(onboardingSource).toContain('await refreshOnboardingABTests()')
-    expect(onboardingSource).toContain(`flowStep.value === 'intent' && !welcomePending.value`)
+    expect(onboardingSource).toContain('const ONBOARDING_AB_TEST_WAIT_TIMEOUT_MS = 3_000')
+    expect(onboardingSource).toContain('void refreshOnboardingABTests()')
+    expect(onboardingSource).toContain('await waitForOnboardingABTests()')
+    expect(onboardingSource).toContain('Promise.race([refreshOnboardingABTests(), timeout])')
+    expect(onboardingSource).toContain('if (props.preOrg && !welcomePending.value)')
+    expect(onboardingSource).not.toContain('onboardingABTestsRequest = null')
     expect(onboardingSource).toContain(`webNativePublishIntentTreatment.value`)
     expect(onboardingSource).toContain(`webNativeDevelopmentEnvironmentTreatment.value`)
     expect(onboardingSource).toContain(`shouldShowWebNativeRecommendation({`)
