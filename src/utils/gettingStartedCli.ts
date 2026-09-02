@@ -5,10 +5,15 @@ export function capgoLocalCliArgs(supaHost: string, supaAnon: string, isLocalHos
 }
 
 export function buildCapgoOtaCliInitCommand(apiKey: string, extraArgs: string[]) {
+  const npx = 'npx'
+  const pkg = '@capgo/cli@latest'
+  const subcommand = 'i'
   const extra = extraArgs.length > 0 ? ` ${extraArgs.join(' ')}` : ''
   return {
-    subcommand: 'i',
+    npx,
+    pkg,
+    subcommand,
     extraArgs,
-    command: `npx @capgo/cli@latest i ${apiKey}${extra}`,
+    command: `${npx} ${pkg} ${subcommand} ${apiKey}${extra}`,
   }
 }

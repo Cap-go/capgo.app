@@ -226,8 +226,8 @@ onMounted(() => {
       @click="copyCliCommand"
     >
       <code class="block whitespace-pre-wrap break-all text-sm">
-        <span class="text-slate-500">npx</span>
-        <span class="text-sky-300"> @capgo/cli@latest</span>
+        <span class="text-slate-500">{{ cliParts.npx }}</span>
+        <span class="text-sky-300"> {{ cliParts.pkg }}</span>
         <span class="font-bold text-violet-300">&nbsp;{{ cliParts.subcommand }}</span>
         <span class="text-emerald-300">&nbsp;{{ apiKey }}</span>
         <template v-for="(arg, index) in cliParts.extraArgs" :key="`${arg}-${index}`">

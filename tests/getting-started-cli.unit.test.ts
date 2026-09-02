@@ -18,6 +18,8 @@ describe('getting started CLI setup panel', () => {
       'anon-key',
     ])
     expect(buildCapgoOtaCliInitCommand('capgo_key', [])).toEqual({
+      npx: 'npx',
+      pkg: '@capgo/cli@latest',
       subcommand: 'i',
       extraArgs: [],
       command: 'npx @capgo/cli@latest i capgo_key',
@@ -40,6 +42,8 @@ describe('getting started CLI setup panel', () => {
     expect(commandMarkup).toContain('text-emerald-300')
     expect(commandMarkup).toContain('text-cyan-300')
     expect(commandMarkup).not.toContain('text-pumpkin-orange-700')
+    expect(commandMarkup).toContain('{{ cliParts.npx }}')
+    expect(commandMarkup).toContain('{{ cliParts.pkg }}')
     expect(panelSource).toContain('<AppOnboardingCliSteps')
     expect(panelSource).toContain('<OnboardingAltSetup')
     expect(panelSource).toContain('<TechnicalTeammateInviteCard')
