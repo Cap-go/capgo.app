@@ -46,43 +46,59 @@ function skipSqlComment(sql: string, index: number): number {
   return index
 }
 
+interface IfArgWalk {
+  depth: number
+  arg: string
+}
+
+function skipQuotedOrCommentedArg(sql: string, index: number, walk: IfArgWalk): number | null {
+  if (sql[index] === "'") {
+    const next = skipSqlQuote(sql, index)
+    if (walk.depth >= 1)
+      walk.arg += sql.slice(index, next)
+    return next
+  }
+  const afterComment = skipSqlComment(sql, index)
+  return afterComment === index ? null : afterComment
+}
+
+function consumeIfArgChar(walk: IfArgWalk, char: string): boolean | null {
+  if (char === '(') {
+    walk.depth++
+    if (walk.depth > 1)
+      walk.arg += char
+    return null
+  }
+  if (char === ',' && walk.depth === 1) {
+    if (isBareNullArg(walk.arg))
+      return true
+    walk.arg = ''
+    return null
+  }
+  if (char === ')') {
+    if (walk.depth === 1)
+      return isBareNullArg(walk.arg)
+    walk.arg += char
+    walk.depth--
+    return null
+  }
+  if (walk.depth >= 1)
+    walk.arg += char
+  return null
+}
+
 function ifCallHasBareNullArg(sql: string, openParenIndex: number): boolean {
-  let depth = 0
-  let arg = ''
+  const walk: IfArgWalk = { depth: 0, arg: '' }
   let i = openParenIndex
   while (i < sql.length) {
-    if (sql[i] === "'") {
-      const next = skipSqlQuote(sql, i)
-      if (depth >= 1)
-        arg += sql.slice(i, next)
-      i = next
+    const skipped = skipQuotedOrCommentedArg(sql, i, walk)
+    if (skipped !== null) {
+      i = skipped
       continue
     }
-    const afterComment = skipSqlComment(sql, i)
-    if (afterComment !== i) {
-      i = afterComment
-      continue
-    }
-    const char = sql[i]
-    if (char === '(') {
-      depth++
-      if (depth > 1)
-        arg += char
-    }
-    else if (char === ',' && depth === 1) {
-      if (isBareNullArg(arg))
-        return true
-      arg = ''
-    }
-    else if (char === ')') {
-      if (depth === 1)
-        return isBareNullArg(arg)
-      arg += char
-      depth--
-    }
-    else if (depth >= 1) {
-      arg += char
-    }
+    const found = consumeIfArgChar(walk, sql[i] ?? '')
+    if (found !== null)
+      return found
     i++
   }
   return false
