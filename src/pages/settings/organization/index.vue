@@ -40,13 +40,10 @@ let loadSupportChannelSequence = 0
 
 async function loadSupportChannel(orgId: string | undefined) {
   const sequence = ++loadSupportChannelSequence
-  if (!orgId) {
-    if (sequence === loadSupportChannelSequence) {
-      supportChannelType.value = null
-      supportChannelUrl.value = null
-    }
+  supportChannelType.value = null
+  supportChannelUrl.value = null
+  if (!orgId)
     return
-  }
 
   const { data, error } = await supabase
     .from('orgs')
@@ -72,7 +69,9 @@ watch(currentOrganization, (newOrg) => {
     orgName.value = newOrg.name
     email.value = newOrg.management_email
     void loadSupportChannel(newOrg.gid)
+    return
   }
+  void loadSupportChannel(undefined)
 })
 
 const canUpdateOrgSettings = computedAsync(async () => {
