@@ -39,6 +39,7 @@ describe('app onboarding API key loading state', () => {
     expect(mountedFlow).not.toContain('void loadApiKey()')
     expect(mountedFlow).not.toContain('await loadApiKey()')
     expect(panelSource).toContain('void loadApiKey().catch')
+    expect(panelSource).toContain("watch(() => organizationStore.getOrgByAppId(props.appId)?.gid")
   })
 
   it.concurrent('targets the created app when provisioning the Getting Started API key', () => {
@@ -47,8 +48,12 @@ describe('app onboarding API key loading state', () => {
       panelSource.indexOf('function loadApiKey()'),
     )
 
+    expect(keyLoader).toContain('await organizationStore.awaitInitialLoad()')
+    expect(keyLoader).toContain('organizationStore.getOrgByAppId(props.appId)')
+    expect(keyLoader).toContain('if (!orgId)')
     expect(keyLoader).toContain('appId: props.appId')
     expect(keyLoader).not.toContain('resumeAppId')
+    expect(keyLoader).not.toContain('currentOrganization')
   })
 
   it.concurrent('renders ready commands as native DaisyUI buttons', () => {

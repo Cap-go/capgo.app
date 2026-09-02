@@ -48,6 +48,8 @@ describe('getting started CLI setup panel', () => {
     expect(onboardingSource).not.toContain("flowStep === 'setup' && createdApp")
     expect(onboardingSource).not.toContain('app-onboarding-command-show')
     expect(onboardingSource).not.toContain('void loadApiKey()')
+    expect(panelSource).toContain('organizationStore.getOrgByAppId(props.appId)')
+    expect(panelSource).toContain('await organizationStore.awaitInitialLoad()')
     expect(onboardingSource).toContain('await goToGettingStarted()')
     expect(panelSource).toContain(':compressed="false"')
 

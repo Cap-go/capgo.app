@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconCopy from '~icons/ion/copy-outline'
@@ -65,7 +65,11 @@ async function ensureApiKey() {
   if (!userId)
     return
 
-  const orgId = organizationStore.currentOrganization?.gid
+  await organizationStore.awaitInitialLoad()
+  const orgId = organizationStore.getOrgByAppId(props.appId)?.gid
+  if (!orgId)
+    return
+
   const existingKey = await findUsablePlainApiKey(supabase, userId, orgId, props.appId)
   if (existingKey) {
     apiKey.value = existingKey
@@ -192,6 +196,15 @@ async function copyAiInstructions() {
 function onCliStepsProgress(payload: { isTerminal: boolean }) {
   emit('progress', { isTerminal: payload.isTerminal })
 }
+
+watch(() => organizationStore.getOrgByAppId(props.appId)?.gid, (orgId) => {
+  if (!orgId || apiKey.value)
+    return
+  void loadApiKey().catch((error) => {
+    console.error('Cannot ensure API key', error)
+    toast.error(t('app-onboarding-toast-apikey-error'))
+  })
+})
 
 onMounted(() => {
   void markOnboardingFeatureStarted()

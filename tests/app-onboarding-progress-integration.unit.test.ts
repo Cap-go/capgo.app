@@ -490,6 +490,7 @@ describe('app onboarding progress analytics integration', () => {
 
     const gettingStartedExit = sourceBetween('async function goToGettingStarted()', 'function goToInstallStep()')
     expect(gettingStartedExit).toContain('progressTracker?.completeStep(analyticsStepFor(flowStep.value), { appId })')
+    expect(gettingStartedExit).toContain(`if (await persistOnboardingProgress('completed') === 'retryable_failure')`)
     expect(gettingStartedExit).toContain(`await persistOnboardingProgress('completed')`)
     expect(gettingStartedExit).toContain('/getting-started')
     expect(gettingStartedExit).not.toContain('allowOnboardingDashboardExploration')

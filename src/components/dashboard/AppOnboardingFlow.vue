@@ -1628,7 +1628,8 @@ async function goToGettingStarted() {
 
   const appId = createdApp.value.app_id
   progressTracker?.completeStep(analyticsStepFor(flowStep.value), { appId })
-  await persistOnboardingProgress('completed')
+  if (await persistOnboardingProgress('completed') === 'retryable_failure')
+    await persistOnboardingProgress('completed')
   await router.replace(`/app/${encodeURIComponent(appId)}/getting-started`)
 }
 
