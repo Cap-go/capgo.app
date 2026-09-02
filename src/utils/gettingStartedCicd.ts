@@ -284,7 +284,7 @@ ${preprodJob}`
           CHANNEL: \${{ inputs.preview_channel }}
           CAPGO_TOKEN: \${{ secrets.CAPGO_TOKEN }}
         run: |
-          echo "$CHANNEL" | grep -Eq '^pr-[0-9]+$' || { echo "Preview channel must match pr-<number>" >&2; exit 1; }
+          [[ "$CHANNEL" =~ ^pr-[0-9]+$ ]] || { echo "Preview channel must match pr-<number>" >&2; exit 1; }
           npx @capgo/cli@latest channel add "$CHANNEL" ${appId} || true
           npx @capgo/cli@latest bundle upload ${appId} --channel "$CHANNEL" --auto-bump`
 
