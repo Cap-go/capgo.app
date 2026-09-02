@@ -564,8 +564,13 @@ export class CapgoSDK {
           autoBump: normalizeAutoBumpInput(options.autoBump),
           selfAssign: options.selfAssign,
           packageJson: options.packageJsonPaths,
+          nodeModules: options.nodeModules,
           ignoreMetadataCheck: options.ignoreCompatibilityCheck,
+          nativePackages: options.nativePackages,
+          nativePackagesFile: options.nativePackagesFile,
           codeCheck: !options.disableCodeCheck, // disable if requested, otherwise check
+          delta: options.delta,
+          deltaOnly: options.deltaOnly,
           zip: options.useZip, // use legacy zip upload if requested
         }
 
@@ -1650,7 +1655,14 @@ export type {
   ZipBundleOptions,
 } from './schemas/sdk'
 export type { Database } from './types/supabase.types'
-export { createSupabaseClient } from './utils'
+export {
+  checkCompatibilityNativePackages,
+  createSupabaseClient,
+  findSavedKey,
+  getCompatibilityDetails,
+  isCompatible,
+} from './utils'
+export type { Compatibility, NativePackage } from './schemas/common'
 export {
   formatApiErrorForCli,
   getSecurityPolicyMessage,

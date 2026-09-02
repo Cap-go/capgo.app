@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { buildCredentialsSchema } from './build'
-import { localizedReleaseNotesSchema, rejectConflictingBooleanGroup } from './common'
+import { localizedReleaseNotesSchema, nativePackageSchema, rejectConflictingBooleanGroup } from './common'
 
 export const capacitorConfigOptionSchema = z.string().min(1).describe('Capacitor config source to update')
 
@@ -100,8 +100,13 @@ export const uploadOptionsSchema = z.object({
   ]).optional(),
   selfAssign: z.boolean().optional(),
   packageJsonPaths: z.string().optional(),
+  nodeModules: z.string().optional(),
   ignoreCompatibilityCheck: z.boolean().optional(),
   disableCodeCheck: z.boolean().optional(),
+  delta: z.boolean().optional(),
+  deltaOnly: z.boolean().optional(),
+  nativePackages: z.array(nativePackageSchema).optional(),
+  nativePackagesFile: z.string().optional(),
   useZip: z.boolean().optional(),
   capacitorConfig: capacitorConfigOptionSchema.optional(),
 })

@@ -3,10 +3,12 @@ import type { CapacitorConfig } from '../config'
 import type { UploadBundleResult } from '../schemas/bundle'
 import type { Database } from '../types/supabase.types'
 import type { Compatibility, manifestType } from '../utils'
+import type { NativePackage } from '../schemas/common'
 import type { UploadReporter, UploadSpinner } from './reporter'
 import type { OptionsUpload } from './upload_interface'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { cwd } from 'node:process'
 import { S3Client } from '@bradenmacdonald/s3-lite-client'
 import { confirm as pConfirm, isCancel as pIsCancel, select as pSelect } from '@clack/prompts'
@@ -25,7 +27,9 @@ import { showReplicationProgress } from '../replicationProgress'
 import { CliUserError } from '../shared/cli-user-error'
 import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
-import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
+import { nativePackageSchema } from '../schemas/common'
+import { safeParseSchema } from '../schemas/schema_validation'
+import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getBundleVersion, getCompatibilityDetails, getConfig, getCapgoUpdaterPackageVersion, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
 import type { AutoBumpLevel } from '../versionHelpers'
 import { autoBumpVersionBy, getVersionSuggestions, interactiveVersionBump, normalizeAutoBumpInput } from '../versionHelpers'
 import { resolveAutoBumpLevelFromAi } from './auto-bump-ai'
@@ -173,8 +177,16 @@ async function getAppIdAndPath(appId: string | undefined, options: OptionsUpload
   return { appid: finalAppId, path }
 }
 
+function isReactNativeExportFolder(path: string) {
+  return existsSync(join(path, 'index.android.bundle')) || existsSync(join(path, 'main.jsbundle'))
+}
+
 async function checkNotifyAppReady(options: OptionsUpload, path: string, interactive: boolean) {
   if (options.codeCheck === false || options.ignoreNotifyAppReady)
+    return
+
+  // React Native Metro exports do not embed notifyAppReady / index.html in the bundle folder.
+  if (isReactNativeExportFolder(path))
     return
 
   if (!searchInDirectory(path, 'notifyAppReady')) {
@@ -199,11 +211,40 @@ async function checkNotifyAppReady(options: OptionsUpload, path: string, interac
   }
 }
 
+function loadNativePackagesFromFile(filePath: string): NativePackage[] {
+  if (!existsSync(filePath))
+    uploadFail(`Native packages file not found: ${filePath}`)
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(readFileSync(filePath, 'utf-8'))
+  }
+  catch (error) {
+    uploadFail(`Invalid native packages JSON at ${filePath}: ${formatError(error)}`)
+  }
+
+  if (!Array.isArray(parsed))
+    uploadFail(`Native packages file must contain a JSON array: ${filePath}`)
+
+  const packages: NativePackage[] = []
+  for (const entry of parsed) {
+    const result = safeParseSchema(nativePackageSchema, entry)
+    if (!result.success) {
+      const errorMsg = result.error.issues.map(i => `${(i.path ?? []).join('.')}: ${i.message}`).join(', ')
+      uploadFail(`Invalid native package in ${filePath}: ${errorMsg}`)
+    }
+    packages.push(result.data)
+  }
+  return packages
+}
+
 async function verifyCompatibility(supabase: SupabaseType, pm: pmType, options: OptionsUpload, channel: string, appid: string, bundle: string, orgId: string) {
   // Check compatibility here
   const ignoreMetadataCheck = options.ignoreMetadataCheck
   const autoMinUpdateVersion = options.autoMinUpdateVersion
   let minUpdateVersion = options.minUpdateVersion
+  const precomputedNativePackages = options.nativePackages
+    ?? (options.nativePackagesFile ? loadNativePackagesFromFile(options.nativePackagesFile) : undefined)
 
   const { data: channelData, error: channelError } = await supabase
     .from('channels')
@@ -315,15 +356,17 @@ async function verifyCompatibility(supabase: SupabaseType, pm: pmType, options: 
         .map(a => [a.name, a]))
     : new Map()
 
-  const nativePackages = (hashedLocalDependencies.size > 0 || !options.ignoreMetadataCheck)
-    ? Array.from(hashedLocalDependencies, ([name, value]) => ({
-        name,
-        version: value.version,
-        requested_version: value.requested_version,
-        ...(value.ios_checksum && { ios_checksum: value.ios_checksum }),
-        ...(value.android_checksum && { android_checksum: value.android_checksum }),
-      }))
-    : undefined
+  const nativePackages = precomputedNativePackages !== undefined
+    ? precomputedNativePackages
+    : ((hashedLocalDependencies.size > 0 || !options.ignoreMetadataCheck)
+        ? Array.from(hashedLocalDependencies, ([name, value]) => ({
+            name,
+            version: value.version,
+            requested_version: value.requested_version,
+            ...(value.ios_checksum && { ios_checksum: value.ios_checksum }),
+            ...(value.android_checksum && { android_checksum: value.android_checksum }),
+          }))
+        : undefined)
 
   return {
     nativePackages,
@@ -484,7 +527,8 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
   zipped = await zipFile(path)
   s.message(`Calculating checksum`)
   const root = findRoot(cwd())
-  const updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
+  const updaterPackage = await getCapgoUpdaterPackageVersion(root, options.packageJson)
+  const updaterVersion = updaterPackage?.version ?? null
   let useSha256 = false
   let coerced
   try {
@@ -493,15 +537,25 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
   catch {
     coerced = undefined
   }
-  if (!updaterVersion) {
-    uploadFail('Cannot find @capgo/capacitor-updater in node_modules, please install it first with your package manager')
+  if (!updaterPackage) {
+    uploadFail('Cannot find @capgo/capacitor-updater or @capgo/react-native-updater in node_modules, please install one first with your package manager')
+  }
+  else if (updaterPackage.kind === 'react-native') {
+    if (!noKey && !options.oldEncryption && (keyV2 || options.keyDataV2 || existsSync(baseKeyV2))) {
+      uploadFail('Encrypted updates are not supported by @capgo/react-native-updater yet. Use --no-key to upload this bundle.')
+    }
+    if (options.forceCrc32Checksum === true) {
+      uploadFail('--force-crc32-checksum is not supported for @capgo/react-native-updater; SHA-256 checksums are required.')
+    }
+    // RN updater uses Capgo file-level delta + SHA256 from day one
+    useSha256 = true
   }
   else if (coerced) {
     // Use SHA256 for v5.10.0+, v6.25.0+ and v7.0.30+
     useSha256 = !isDeprecatedPluginVersion(coerced, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7)
   }
-  else if (updaterVersion === 'link:@capgo/capacitor-updater' || updaterVersion === 'file:..' || updaterVersion === 'file:../') {
-    log.warn('Using local @capgo/capacitor-updater. Assuming latest version for checksum calculation.')
+  else if (updaterVersion === 'link:@capgo/capacitor-updater' || updaterVersion === 'file:..' || updaterVersion === 'file:../' || updaterVersion === 'link:@capgo/react-native-updater') {
+    log.warn(`Using local ${updaterPackage.packageName}. Assuming latest version for checksum calculation.`)
     useSha256 = true
   }
   const forceCrc32 = options.forceCrc32Checksum === true
@@ -513,6 +567,9 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
     log.info(`Encryption ignored`)
   }
   else if ((keyV2 || existsSync(baseKeyV2) || options.keyDataV2) && !options.oldEncryption) {
+    if (updaterPackage.kind === 'react-native') {
+      uploadFail('@capgo/react-native-updater does not support encrypted bundles yet. Use --no-key or remove signing keys from the project.')
+    }
     const privateKey = typeof keyV2 === 'string' ? keyV2 : baseKeyV2
     let keyDataV2 = options.keyDataV2 || ''
     if (!keyDataV2 && !existsSync(privateKey))
@@ -2183,6 +2240,12 @@ export function checkValidOptions(options: OptionsUpload) {
   }
   if (options.failOnIncompatible && options.ignoreMetadataCheck) {
     uploadFail('You cannot use --fail-on-incompatible together with --ignore-metadata-check — the metadata check is exactly what --fail-on-incompatible enforces. Remove one of them.')
+  }
+  if (options.nativePackagesFile && !options.ignoreMetadataCheck) {
+    uploadFail('--native-packages-file requires --ignore-metadata-check (React Native metadata is checked by @capgo/rn-cli)')
+  }
+  if (options.nativePackages && !options.ignoreMetadataCheck) {
+    uploadFail('Precomputed native_packages require --ignore-metadata-check (React Native metadata is checked by @capgo/rn-cli)')
   }
 }
 

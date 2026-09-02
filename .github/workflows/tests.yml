@@ -999,8 +999,8 @@ jobs:
     permissions:
       contents: read
     concurrency:
-      # Isolate by event_name so push + pull_request on the same branch do not cancel pending jobs.
-      group: capgo-local-services-playwright-${{ github.event_name }}-${{ github.repository }}-${{ matrix.shard }}-${{ github.sha }}
+      # Isolate by event, PR number (or run_id for non-PR events), and strategy.job-index.
+      group: capgo-local-services-playwright-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-${{ strategy.job-index }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
@@ -1232,8 +1232,8 @@ jobs:
     if: needs.changes.outputs.run_cli == 'true'
     name: CLI POSIX paths (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # windows-2022 often needs >5m for bun install + CLI zip under shared runners.
-    timeout-minutes: 10
+    # windows-2022 often needs >10m for bun install + CLI zip under shared runners.
+    timeout-minutes: 12
     strategy:
       matrix:
         os: [windows-2025, windows-2022]

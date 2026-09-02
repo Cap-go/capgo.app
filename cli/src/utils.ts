@@ -392,6 +392,77 @@ function returnVersion(version: string) {
  * @param rootDir - The root directory of the project
  * @param packageJsonPath - Optional custom package.json path provided by user (takes priority if provided)
  */
+
+export const CAPGO_CAPACITOR_UPDATER_PACKAGE = '@capgo/capacitor-updater'
+export const CAPGO_RN_UPDATER_PACKAGE = '@capgo/react-native-updater'
+
+export interface CapgoUpdaterPackageVersion {
+  packageName: string
+  version: string
+  kind: 'capacitor' | 'react-native'
+}
+
+/**
+ * Resolve either Capacitor or React Native Capgo updater package version.
+ * RN updater always supports file-level delta + brotli (shipped with those features).
+ */
+function readPackageDependencyNames(rootDir: string, packageJsonPath?: string): Set<string> {
+  const names = new Set<string>()
+  const candidates = packageJsonPath
+    ? packageJsonPath.split(',').map(p => p.trim()).filter(Boolean).map(p => resolve(rootDir, p))
+    : [resolve(rootDir, 'package.json')]
+  for (const file of candidates) {
+    if (!existsSync(file))
+      continue
+    try {
+      const pkg = JSON.parse(readFileSync(file, 'utf-8')) as {
+        dependencies?: Record<string, string>
+        devDependencies?: Record<string, string>
+        optionalDependencies?: Record<string, string>
+      }
+      for (const bucket of [pkg.dependencies, pkg.devDependencies, pkg.optionalDependencies]) {
+        if (!bucket)
+          continue
+        for (const name of Object.keys(bucket))
+          names.add(name)
+      }
+    }
+    catch {
+      // ignore invalid package.json
+    }
+  }
+  return names
+}
+
+export async function getCapgoUpdaterPackageVersion(
+  rootDir: string = cwd(),
+  packageJsonPath?: string,
+): Promise<CapgoUpdaterPackageVersion | null> {
+  const declared = readPackageDependencyNames(rootDir, packageJsonPath)
+  const prefersReactNative = declared.has(CAPGO_RN_UPDATER_PACKAGE) && !declared.has(CAPGO_CAPACITOR_UPDATER_PACKAGE)
+  const prefersCapacitor = declared.has(CAPGO_CAPACITOR_UPDATER_PACKAGE)
+
+  if (prefersReactNative) {
+    const reactNative = await getInstalledVersion(CAPGO_RN_UPDATER_PACKAGE, rootDir, packageJsonPath)
+    if (reactNative) {
+      return { packageName: CAPGO_RN_UPDATER_PACKAGE, version: reactNative, kind: 'react-native' }
+    }
+  }
+
+  if (prefersCapacitor || !prefersReactNative) {
+    const capacitor = await getInstalledVersion(CAPGO_CAPACITOR_UPDATER_PACKAGE, rootDir, packageJsonPath)
+    if (capacitor) {
+      return { packageName: CAPGO_CAPACITOR_UPDATER_PACKAGE, version: capacitor, kind: 'capacitor' }
+    }
+  }
+
+  const reactNative = await getInstalledVersion(CAPGO_RN_UPDATER_PACKAGE, rootDir, packageJsonPath)
+  if (reactNative) {
+    return { packageName: CAPGO_RN_UPDATER_PACKAGE, version: reactNative, kind: 'react-native' }
+  }
+  return null
+}
+
 export async function getInstalledVersion(packageName: string, rootDir: string = cwd(), packageJsonPath?: string): Promise<string | null> {
   const providedPackageJsonFiles = packageJsonPath
     ? packageJsonPath
