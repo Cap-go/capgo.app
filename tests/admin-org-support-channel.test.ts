@@ -116,7 +116,7 @@ describe('[POST] /private/admin_org_support_channel', () => {
 
     expect(cleared?.support_channel_type).toBeNull()
     expect(cleared?.support_channel_url).toBeNull()
-    expect(cleared?.support_channel_set_at).toBeNull()
+    expect(cleared?.support_channel_set_at).toBe(saved?.support_channel_set_at)
   })
 
   it('blocks direct client writes to support channel columns', async () => {

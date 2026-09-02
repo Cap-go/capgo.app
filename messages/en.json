@@ -2585,6 +2585,8 @@
   "support-channel-clear": "Clear channel",
   "support-channel-description": "Your dedicated Capgo support channel. Open it to talk with the Capgo team.",
   "support-channel-discord": "Discord",
+  "support-channel-error-updating": "Failed to update support channel",
+  "support-channel-fill-all-fields": "Please fill in the channel type and HTTPS link",
   "support-channel-none": "Not set",
   "support-channel-open": "Open channel",
   "support-channel-save": "Save channel",

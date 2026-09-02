@@ -2975,6 +2975,8 @@
   "support-channel-clear": "Used in Capgo web console areas: pages/admin/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "support-channel-description": "Used in Capgo web console areas: pages/settings/organization. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "support-channel-discord": "Used in Capgo web console areas: pages/admin/dashboard, pages/settings/organization. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "support-channel-error-updating": "Used in Capgo web console areas: pages/admin/dashboard. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "support-channel-fill-all-fields": "Used in Capgo web console areas: pages/admin/dashboard. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "support-channel-none": "Used in Capgo web console areas: pages/admin/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "support-channel-open": "Used in Capgo web console areas: pages/settings/organization. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "support-channel-save": "Used in Capgo web console areas: pages/admin/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

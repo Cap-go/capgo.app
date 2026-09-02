@@ -36,18 +36,26 @@ const orgName = ref(currentOrganization.value?.name ?? '')
 const email = ref(currentOrganization.value?.management_email ?? '')
 const supportChannelType = ref<'slack' | 'discord' | 'teams' | null>(null)
 const supportChannelUrl = ref<string | null>(null)
+let loadSupportChannelSequence = 0
 
 async function loadSupportChannel(orgId: string | undefined) {
-  supportChannelType.value = null
-  supportChannelUrl.value = null
-  if (!orgId)
+  const sequence = ++loadSupportChannelSequence
+  if (!orgId) {
+    if (sequence === loadSupportChannelSequence) {
+      supportChannelType.value = null
+      supportChannelUrl.value = null
+    }
     return
+  }
 
   const { data, error } = await supabase
     .from('orgs')
     .select('support_channel_type, support_channel_url')
     .eq('id', orgId)
     .maybeSingle()
+
+  if (sequence !== loadSupportChannelSequence)
+    return
 
   if (error) {
     console.error('Failed to load organization support channel', error)

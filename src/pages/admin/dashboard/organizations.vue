@@ -5,7 +5,7 @@ meta:
 
 <script setup lang="ts">
 import type { TableColumn } from '~/components/comp_def'
-import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -92,8 +92,12 @@ const channelEditorOrg = ref<OrganizationInsight | null>(null)
 const channelEditorType = ref<SupportChannelType | ''>('')
 const channelEditorUrl = ref('')
 const isSavingChannel = ref(false)
+const channelEditorBoxRef = ref<HTMLElement | null>(null)
+const channelTypeSelectRef = ref<HTMLSelectElement | null>(null)
 let loadOrganizationsSequence = 0
+let loadAdoptionSequence = 0
 let searchReloadTimer: ReturnType<typeof setTimeout> | undefined
+let channelEditorRestoreFocus: HTMLElement | null = null
 
 function formatNumber(value: number) {
   return formatNumberValue(value)
@@ -201,21 +205,62 @@ const enterpriseCharts = computed(() => {
 const hasAdoptionData = computed(() => adoptionTrend.value.some(point => point.enterprise_count > 0 || point.sso_count > 0 || point.channel_count > 0))
 
 async function loadEnterpriseAdoption(forceRefresh = false) {
+  const sequence = ++loadAdoptionSequence
   isLoadingAdoption.value = true
   try {
     const payload = await adminStore.fetchStats('enterprise_adoption', forceRefresh) as EnterpriseAdoptionResponse
+    if (sequence !== loadAdoptionSequence)
+      return
     adoptionTrend.value = Array.isArray(payload?.trend) ? payload.trend : []
   }
   catch (error) {
+    if (sequence !== loadAdoptionSequence)
+      return
     console.error('[Admin Dashboard Organizations] Error loading enterprise adoption:', error)
     adoptionTrend.value = []
   }
   finally {
-    isLoadingAdoption.value = false
+    if (sequence === loadAdoptionSequence)
+      isLoadingAdoption.value = false
+  }
+}
+
+function getChannelEditorFocusable() {
+  const root = channelEditorBoxRef.value
+  if (!root)
+    return [] as HTMLElement[]
+  return Array.from(root.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )).filter(el => !el.hasAttribute('disabled') && el.offsetParent !== null)
+}
+
+function onChannelEditorKeydown(e: KeyboardEvent) {
+  if (!channelEditorOpen.value)
+    return
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    closeChannelEditor()
+    return
+  }
+  if (e.key !== 'Tab')
+    return
+  const focusable = getChannelEditorFocusable()
+  if (!focusable.length)
+    return
+  const first = focusable[0]!
+  const last = focusable[focusable.length - 1]!
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault()
+    last.focus()
+  }
+  else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault()
+    first.focus()
   }
 }
 
 function openChannelEditor(item: OrganizationInsight) {
+  channelEditorRestoreFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
   channelEditorOrg.value = item
   channelEditorType.value = item.support_channel_type ?? ''
   channelEditorUrl.value = item.support_channel_url ?? ''
@@ -237,7 +282,7 @@ async function saveSupportChannel(clear = false) {
   const supportChannelType = clear ? null : (channelEditorType.value || null)
   const supportChannelUrl = clear ? null : (channelEditorUrl.value.trim() || null)
   if (!clear && (!supportChannelType || !supportChannelUrl)) {
-    toast.error(t('sso-fill-all-fields'))
+    toast.error(t('support-channel-fill-all-fields'))
     return
   }
 
@@ -281,7 +326,7 @@ async function saveSupportChannel(clear = false) {
   }
   catch (error) {
     console.error('[Admin Dashboard Organizations] Error saving support channel:', error)
-    toast.error(t('sso-error-updating'))
+    toast.error(t('support-channel-error-updating'))
   }
   finally {
     isSavingChannel.value = false
@@ -575,7 +620,23 @@ onMounted(async () => {
   displayStore.NavTitle = t('admin-organizations')
 })
 
-onBeforeUnmount(cancelDebouncedSearchReload)
+watch(channelEditorOpen, async (open) => {
+  if (open) {
+    window.addEventListener('keydown', onChannelEditorKeydown)
+    await nextTick()
+    channelTypeSelectRef.value?.focus()
+    return
+  }
+  window.removeEventListener('keydown', onChannelEditorKeydown)
+  await nextTick()
+  channelEditorRestoreFocus?.focus()
+  channelEditorRestoreFocus = null
+})
+
+onBeforeUnmount(() => {
+  cancelDebouncedSearchReload()
+  window.removeEventListener('keydown', onChannelEditorKeydown)
+})
 
 displayStore.NavTitle = t('admin-organizations')
 displayStore.defaultBack = '/dashboard'
@@ -692,9 +753,18 @@ displayStore.defaultBack = '/dashboard'
     <div
       v-if="channelEditorOpen"
       class="d-modal d-modal-open"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="admin-support-channel-title"
     >
-      <div class="d-modal-box w-[calc(100vw-2rem)] max-w-md rounded-lg border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
-        <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
+      <div
+        ref="channelEditorBoxRef"
+        class="d-modal-box w-[calc(100vw-2rem)] max-w-md rounded-lg border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+      >
+        <h3
+          id="admin-support-channel-title"
+          class="text-lg font-semibold text-slate-900 dark:text-white"
+        >
           {{ t('support-channel-title') }}
         </h3>
         <p v-if="channelEditorOrg" class="mt-1 text-sm text-slate-500 dark:text-slate-400">
@@ -706,6 +776,7 @@ displayStore.defaultBack = '/dashboard'
           </label>
           <select
             id="admin-support-channel-type"
+            ref="channelTypeSelectRef"
             v-model="channelEditorType"
             class="w-full d-select d-select-bordered d-select-sm"
             :aria-label="t('support-channel-type')"

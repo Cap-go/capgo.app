@@ -78,7 +78,7 @@ BEGIN
 
   IF NEW.support_channel_url IS NULL THEN
     NEW.support_channel_type := NULL;
-    NEW.support_channel_set_at := NULL;
+    NEW.support_channel_set_at := OLD.support_channel_set_at;
   ELSIF OLD.support_channel_url IS NULL THEN
     NEW.support_channel_set_at := COALESCE(NEW.support_channel_set_at, now());
   ELSE
@@ -94,12 +94,17 @@ REVOKE ALL ON FUNCTION public.guard_org_support_channel() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.guard_org_support_channel() TO service_role;
 
 COMMENT ON FUNCTION public.guard_org_support_channel() IS
-  'BEFORE INSERT OR UPDATE trigger on public.orgs (per row). Blocks client writes '
-  'to support_channel_* columns; internal roles (service_role, postgres, '
-  'supabase_admin) bypass. Also stamps support_channel_set_at on first set and '
-  'clears it when the URL is removed. Table cardinality: orgs is large, but the '
-  'trigger is O(1) OLD/NEW field comparisons with no SQL queries. Indexes: not '
-  'applicable.';
+  'BEFORE INSERT OR UPDATE trigger on public.orgs (per row). Runs once per '
+  'inserted or updated org row. Blocks client writes to support_channel_* '
+  'columns; internal roles (service_role, postgres, supabase_admin) bypass. '
+  'Stamps support_channel_set_at on first set and keeps it when the URL is '
+  'cleared so adoption history stays stable. Table cardinality: orgs is '
+  'large; trigger is O(1) OLD/NEW field comparisons with no SQL queries. '
+  'Indexes: not applicable. Worst-case EXPLAIN (ANALYZE, BUFFERS) on local '
+  'seed (17 orgs): UPDATE orgs SET support_channel_type = '
+  'support_channel_type WHERE id = $1 -> Seq Scan (table too small for '
+  'index; production uses orgs_pkey). Trigger guard_org_support_channel: '
+  'time=1.781 calls=1. No extra heap scans from this trigger.';
 
 DROP TRIGGER IF EXISTS guard_org_support_channel ON public.orgs;
 CREATE TRIGGER guard_org_support_channel
