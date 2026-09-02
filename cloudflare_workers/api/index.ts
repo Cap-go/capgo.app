@@ -2,6 +2,7 @@ import type { ExecutionContext, ScheduledController } from '@cloudflare/workers-
 import type { Bindings } from '../../supabase/functions/_backend/utils/cloudflare.ts'
 import { app as accept_invitation } from '../../supabase/functions/_backend/private/accept_invitation.ts'
 import { app as admin_credits } from '../../supabase/functions/_backend/private/admin_credits.ts'
+import { app as admin_org_support_channel } from '../../supabase/functions/_backend/private/admin_org_support_channel.ts'
 import { app as admin_stats } from '../../supabase/functions/_backend/private/admin_stats.ts'
 import { app as channel_device } from '../../supabase/functions/_backend/private/channel_device.ts'
 import { app as channel_stats } from '../../supabase/functions/_backend/private/channel_stats.ts'
@@ -138,6 +139,7 @@ appPrivate.route('/invite_existing_user_to_org', invite_existing_user_to_org)
 appPrivate.route('/set_org_email', set_org_email)
 appPrivate.route('/validate_password_compliance', validate_password_compliance)
 appPrivate.route('/admin_credits', admin_credits)
+appPrivate.route('/admin_org_support_channel', admin_org_support_channel)
 appPrivate.route('/admin_stats', admin_stats)
 appPrivate.route('/stats', stats_priv)
 appPrivate.route('/channel_stats', channel_stats)

@@ -75,18 +75,28 @@ async function persistDismiss(app: OrganizationApp) {
   if (error) {
     console.error('Failed to dismiss getting started', error)
     organizationStore.updateAppOnboarding(app.app_id, withoutGettingStartedDismissed(current))
+    organizationStore.updateAppNeedOnboarding(app.app_id, app.need_onboarding)
     return
   }
   organizationStore.updateAppOnboarding(
     app.app_id,
     withGettingStartedDismissed(current, parseAppOnboardingLedger(data).getting_started_dismissed_at ?? undefined),
   )
+  const { data: row, error: needError } = await supabase
+    .from('apps')
+    .select('need_onboarding')
+    .eq('app_id', app.app_id)
+    .maybeSingle()
+  if (needError || !row)
+    return
+  organizationStore.updateAppNeedOnboarding(app.app_id, row.need_onboarding)
 }
 
 function dismiss(app: OrganizationApp, event: Event) {
   event.preventDefault()
   event.stopPropagation()
   organizationStore.updateAppOnboarding(app.app_id, withGettingStartedDismissed(app.onboarding))
+  organizationStore.updateAppNeedOnboarding(app.app_id, false)
   void persistDismiss(app)
   if (isActive(app.app_id))
     void router.push(`/app/${encodeURIComponent(app.app_id)}`)

@@ -2386,6 +2386,9 @@ export type Database = {
           required_encryption_key: string | null
           stats_refresh_requested_at: string | null
           stats_updated_at: string | null
+          support_channel_set_at: string | null
+          support_channel_type: string | null
+          support_channel_url: string | null
           updated_at: string | null
           website: string | null
         }
@@ -2410,6 +2413,9 @@ export type Database = {
           required_encryption_key?: string | null
           stats_refresh_requested_at?: string | null
           stats_updated_at?: string | null
+          support_channel_set_at?: string | null
+          support_channel_type?: string | null
+          support_channel_url?: string | null
           updated_at?: string | null
           website?: string | null
         }
@@ -2434,6 +2440,9 @@ export type Database = {
           required_encryption_key?: string | null
           stats_refresh_requested_at?: string | null
           stats_updated_at?: string | null
+          support_channel_set_at?: string | null
+          support_channel_type?: string | null
+          support_channel_url?: string | null
           updated_at?: string | null
           website?: string | null
         }
@@ -5209,6 +5218,7 @@ export type Database = {
         Args: { plain_key: string; stored_hash: string }
         Returns: boolean
       }
+      verify_getting_started: { Args: { p_app_id: string }; Returns: Json }
       verify_mfa: { Args: never; Returns: boolean }
     }
     Enums: {

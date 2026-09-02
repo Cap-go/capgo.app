@@ -54,12 +54,28 @@ test.describe('SSO Login Flow', () => {
     await expect.poll(() => checks).toBeGreaterThan(1)
   })
 
-  test('should use SSO only when the domain has SSO', async ({ page }) => {
+  test('should keep password login when SSO is available but not enforced', async ({ page }) => {
     await page.route('**/private/sso/check-domain', async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({ has_sso: true, enforce_sso: false }),
+      })
+    })
+
+    await page.fill('[data-test="email"]', 'user@sso.example')
+    await expect(page.locator('[data-test="sso-login"]')).toBeVisible({ timeout: 10000 })
+    await expect(page.locator('[data-password-ready="true"]')).toHaveCount(1)
+    await expect(page.locator('[data-test="password"]')).toBeVisible()
+    await expect(page.locator('[data-test="submit"]')).toBeVisible()
+  })
+
+  test('should hide password login when SSO is enforced', async ({ page }) => {
+    await page.route('**/private/sso/check-domain', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ has_sso: true, enforce_sso: true }),
       })
     })
 

@@ -2498,6 +2498,9 @@ export interface AdminOrganizationInsightRow {
   paid_at: string | null
   registered_at: string
   distribution_stage: string | null
+  has_sso: boolean
+  support_channel_type: 'slack' | 'discord' | 'teams' | null
+  support_channel_url: string | null
 }
 
 export interface AdminOrganizationInsightsResult {
@@ -2575,7 +2578,15 @@ export async function getAdminOrganizationInsights(
           o.created_at AS registered_at,
           si.paid_at,
           p.name AS plan_name,
-          ${billingTypeExpression} AS billing_type
+          ${billingTypeExpression} AS billing_type,
+          o.support_channel_type,
+          o.support_channel_url,
+          EXISTS (
+            SELECT 1
+            FROM sso_providers sp
+            WHERE sp.org_id = o.id
+              AND sp.status = 'active'
+          ) AS has_sso
         FROM orgs o
         LEFT JOIN stripe_info si ON si.customer_id = o.customer_id
         LEFT JOIN plans p ON p.stripe_id = si.product_id
@@ -2619,6 +2630,9 @@ export async function getAdminOrganizationInsights(
           filtered.paid_at,
           filtered.plan_name,
           filtered.billing_type,
+          filtered.support_channel_type,
+          filtered.support_channel_url,
+          filtered.has_sso,
           COALESCE(vur.failed_update_count, 0)::bigint AS failed_update_count,
           COALESCE(vur.install_count, 0)::bigint AS install_count,
           COALESCE(vur.update_attempt_count, 0)::bigint AS update_attempt_count,
@@ -2751,7 +2765,10 @@ export async function getAdminOrganizationInsights(
         lb.last_build_at,
         filtered.paid_at,
         filtered.registered_at,
-        stage.distribution_stage
+        stage.distribution_stage,
+        filtered.has_sso,
+        filtered.support_channel_type,
+        filtered.support_channel_url
       FROM filtered_orgs filtered
       LEFT JOIN apps_by_org apps ON apps.org_id = filtered.org_id
       LEFT JOIN members_by_org members ON members.org_id = filtered.org_id
@@ -2816,6 +2833,9 @@ export async function getAdminOrganizationInsights(
       paid_at: normalizeTimestamp(row.paid_at),
       registered_at: normalizeTimestamp(row.registered_at) ?? '',
       distribution_stage: row.distribution_stage ?? null,
+      has_sso: row.has_sso === true,
+      support_channel_type: row.support_channel_type ?? null,
+      support_channel_url: row.support_channel_url ?? null,
     }))
 
     const total = Number((countResult.rows[0] as any)?.total) || 0
@@ -2830,6 +2850,109 @@ export async function getAdminOrganizationInsights(
   catch (e: unknown) {
     logPgError(c, 'getAdminOrganizationInsights', e)
     return { organizations: [], total: 0, plan_options: [] }
+  }
+  finally {
+    if (pgClient)
+      await closeClient(c, pgClient)
+  }
+}
+
+export interface AdminEnterpriseAdoptionPoint {
+  date: string
+  enterprise_count: number
+  sso_count: number
+  channel_count: number
+}
+
+export interface AdminEnterpriseAdoptionResult {
+  trend: AdminEnterpriseAdoptionPoint[]
+}
+
+/**
+ * Daily cumulative counts of paid Enterprise orgs, plus how many of those
+ * orgs have active SSO and a Capgo-admin support channel.
+ */
+export async function getAdminEnterpriseAdoption(
+  c: Context,
+  start_date: string,
+  end_date: string,
+): Promise<AdminEnterpriseAdoptionResult> {
+  let pgClient: ReturnType<typeof getPgClient> | undefined
+  try {
+    pgClient = getPgClient(c)
+    const drizzleClient = getDrizzleClient(pgClient)
+    const { startDay, seriesEndDay } = getAdminUtcDateRange(start_date, end_date)
+
+    const query = sql`
+      WITH date_series AS (
+        SELECT generate_series(
+          ${startDay.toISOString()}::timestamptz::date,
+          ${seriesEndDay.toISOString()}::timestamptz::date,
+          interval '1 day'
+        )::date AS date
+      ),
+      enterprise_orgs AS (
+        SELECT
+          o.id,
+          COALESCE(si.paid_at, o.created_at)::date AS started_on
+        FROM orgs o
+        INNER JOIN stripe_info si ON si.customer_id = o.customer_id
+        INNER JOIN plans p ON p.stripe_id = si.product_id
+        WHERE p.name = 'Enterprise'
+          AND si.status = 'succeeded'
+      ),
+      sso_orgs AS (
+        SELECT
+          sp.org_id,
+          GREATEST(MIN(sp.created_at)::date, MIN(e.started_on)) AS sso_on
+        FROM sso_providers sp
+        INNER JOIN enterprise_orgs e ON e.id = sp.org_id
+        WHERE sp.status = 'active'
+        GROUP BY sp.org_id
+      ),
+      channel_orgs AS (
+        SELECT
+          e.id,
+          GREATEST(o.support_channel_set_at::date, e.started_on) AS channel_on
+        FROM orgs o
+        INNER JOIN enterprise_orgs e ON e.id = o.id
+        WHERE o.support_channel_set_at IS NOT NULL
+      )
+      SELECT
+        ds.date::text AS date,
+        (
+          SELECT COUNT(*)::int
+          FROM enterprise_orgs e
+          WHERE e.started_on <= ds.date
+        ) AS enterprise_count,
+        (
+          SELECT COUNT(*)::int
+          FROM sso_orgs s
+          WHERE s.sso_on <= ds.date
+        ) AS sso_count,
+        (
+          SELECT COUNT(*)::int
+          FROM channel_orgs c
+          WHERE c.channel_on <= ds.date
+        ) AS channel_count
+      FROM date_series ds
+      ORDER BY ds.date ASC
+    `
+
+    const result = await drizzleClient.execute(query)
+    const trend: AdminEnterpriseAdoptionPoint[] = result.rows.map((row: any) => ({
+      date: String(row.date),
+      enterprise_count: Number(row.enterprise_count) || 0,
+      sso_count: Number(row.sso_count) || 0,
+      channel_count: Number(row.channel_count) || 0,
+    }))
+
+    cloudlog({ requestId: c.get('requestId'), message: 'getAdminEnterpriseAdoption result', resultCount: trend.length })
+    return { trend }
+  }
+  catch (e: unknown) {
+    logPgError(c, 'getAdminEnterpriseAdoption', e)
+    return { trend: [] }
   }
   finally {
     if (pgClient)

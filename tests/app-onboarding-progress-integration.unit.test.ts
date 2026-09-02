@@ -273,8 +273,8 @@ describe('app onboarding progress analytics integration', () => {
     expect(resumeLoader).not.toContain('initializeProgressTracking')
     expect(resumeLoader).not.toContain('viewStep')
     expect(resumeLoader).toContain('pendingGettingStartedAppId = data.app_id')
-    expect(resumeLoader).toContain("resumeStep.value === 'choice'")
-    expect(resumeLoader).not.toContain("flowStep.value = 'setup'")
+    expect(resumeLoader).toContain('resumeStep.value === \'choice\'')
+    expect(resumeLoader).not.toContain('flowStep.value = \'setup\'')
 
     const mountedFlow = sourceBetween('onMounted(async () => {', 'onBeforeUnmount(() => {')
     expect(onboardingSource).toContain(`import { createOnboardingProgressPersistence, shouldInitializeOnboardingProgressTracking } from '~/utils/onboardingProgressPersistence'`)
@@ -501,6 +501,12 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain('window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)')
     expect(onboardingSource).toContain('pendingDashboardExplored = true')
     expect(onboardingSource).toContain('if (pendingDashboardExplored)')
+
+    const splashSkip = sourceBetween('async function leaveSplashIfAlreadySetup()', 'function trackDashboardExplored()')
+    expect(splashSkip).toContain('verify_getting_started')
+    expect(splashSkip).toContain('shouldSkipOnboardingResume')
+    expect(splashSkip).toContain('updateAppOnboarding')
+    expect(onboardingSource).toContain('leaveSplashIfAlreadySetup')
 
     const demoExit = sourceBetween('async function seedDemoData()', 'async function goToGettingStarted()')
     expect(demoExit).toContain('window.dispatchEvent')

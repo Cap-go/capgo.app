@@ -11,7 +11,7 @@ import { getAdminFrontendOnboardingAnalytics } from '../utils/frontend_onboardin
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { getAdminCancelledOrganizations, getAdminCustomerCountryBreakdown, getAdminDeploymentsTrend, getAdminEmailTypeBreakdown, getAdminFamousApps, getAdminGlobalStatsTrend, getAdminOnboardingFunnel, getAdminOrganizationInsights, getAdminPluginBreakdown, getAdminTrialOrganizations, getAdminTrialPlanBreakdown } from '../utils/pg.ts'
+import { getAdminCancelledOrganizations, getAdminCustomerCountryBreakdown, getAdminDeploymentsTrend, getAdminEmailTypeBreakdown, getAdminEnterpriseAdoption, getAdminFamousApps, getAdminGlobalStatsTrend, getAdminOnboardingFunnel, getAdminOrganizationInsights, getAdminPluginBreakdown, getAdminTrialOrganizations, getAdminTrialPlanBreakdown } from '../utils/pg.ts'
 import { getAdminPlansAnalytics } from '../utils/plans_analytics.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { getCancellationDetails } from '../utils/stripe.ts'
@@ -52,6 +52,7 @@ const metricCategories = [
   'frontend_onboarding_analytics',
   'plans_analytics',
   'famous_apps',
+  'enterprise_adoption',
 ] as const
 
 const isoUtcDatetimeSchema = z.string().refine(
@@ -356,6 +357,10 @@ app.post('/', middlewareAuth, async (c) => {
           min_score,
           tier,
         })
+        break
+
+      case 'enterprise_adoption':
+        result = await getAdminEnterpriseAdoption(c, start_date, end_date)
         break
 
       default:

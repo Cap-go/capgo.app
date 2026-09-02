@@ -51,6 +51,7 @@ import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { isValidAppId } from '~/utils/appId'
+import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { useBeforeUnloadWarning } from '~/utils/beforeUnloadWarning'
 import {
   buildAlternativeAppIds,
@@ -1640,6 +1641,24 @@ function goToInstallStep() {
   void goToGettingStarted()
 }
 
+async function leaveSplashIfAlreadySetup() {
+  const app = createdApp.value
+  if (!app)
+    return false
+  const { data } = await supabase.rpc('verify_getting_started', { p_app_id: app.app_id })
+  if (data != null)
+    organizationStore.updateAppOnboarding(app.app_id, data)
+  const skip = data != null
+    ? shouldSkipOnboardingResume(data as unknown)
+    : shouldSkipOnboardingResume(app.onboarding)
+  if (!skip)
+    return false
+  allowOnboardingDashboardExploration(onboardingUserId.value, app.app_id)
+  await persistOnboardingProgress('completed')
+  await router.push(`/app/${encodeURIComponent(app.app_id)}`)
+  return true
+}
+
 function trackDashboardExplored() {
   if (!progressTracker) {
     pendingDashboardExplored = true
@@ -1663,6 +1682,10 @@ onMounted(async () => {
         const resumed = await loadResumeApp()
         if (resumed) {
           resumedFlow = true
+          if (await leaveSplashIfAlreadySetup()) {
+            onboardingProgressPersistence.abort()
+            return
+          }
           return
         }
       }
@@ -1685,6 +1708,9 @@ onMounted(async () => {
       appDetailsStep.value = 'name'
       existingApp.value = null
       existingAppSetup.value = null
+    }
+    else if (await leaveSplashIfAlreadySetup()) {
+      onboardingProgressPersistence.abort()
     }
   }
   finally {

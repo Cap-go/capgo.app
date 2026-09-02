@@ -12,7 +12,7 @@ import { sendEvent } from '~/services/tracking'
 import { clearWebsitePaidUserCookie, setWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
-import { parseAppOnboardingLedger } from '~/utils/appOnboardingProgress'
+import { parseAppOnboardingLedger, shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { isCicdSetupValidated } from '~/utils/gettingStartedCicd'
 import { isStoreReleaseValidated } from '~/utils/gettingStartedDismiss'
 import { getGettingStartedContinueRedirect, getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
@@ -271,6 +271,8 @@ async function guard(
 
     const app = apps?.[0]
     const userId = sessionUser?.id
+    if (app && shouldSkipOnboardingResume(app.onboarding))
+      return null
     if (app?.need_onboarding) {
       return getOnboardingResumeRedirect({
         appId: app.app_id,

@@ -1669,6 +1669,7 @@ export async function readUpdateDeliveryTimingEventsCF(
 const PLATFORM_DELIVERY_END_ACTIONS_SQL = '\'download_complete\', \'download_zip_complete\''
 const PLATFORM_DELIVERY_START_ACTIONS_SQL = '\'download_0\', \'download_zip_start\', \'download_manifest_start\''
 const PLATFORM_DELIVERY_MAX_MS = 7_200_000
+const PLATFORM_DELIVERY_TS_SENTINEL_SQL = 'toDateTime(\'2100-01-01 00:00:00\')'
 /** Keep each AE scan bounded; admin 90-day windows merge these chunks. */
 export const PLATFORM_DELIVERY_CF_CHUNK_DAYS = 7
 export const PLATFORM_DELIVERY_CF_CHUNK_CONCURRENCY = 4
@@ -1705,17 +1706,14 @@ function platformDeliveryDaySql(value: string): string {
 
 /**
  * Pair start/complete in AE instead of pulling 50k raw rows per day.
- * AE SQL has no JOIN/UNION/JSON extract, so this is an explicit approximation:
- * one sample per app+device+version+UTC day using first start and first complete
- * (or double1 when the complete already has duration). Same-day multi-attempts
- * and untimed pairs that cross UTC midnight can drop or skew; blob4 metadata
- * duration cannot be parsed in-engine. trackLogsCF already writes duration to
- * double1 when metadata has it.
+ * Prefer double1 (trackLogsCF copies metadata duration there). Untyped NULL in
+ * IF() 422s (Double/DateTime vs Null), so duration uses avgIf and timestamps
+ * use a typed DateTime sentinel that min() ignores when a real event exists.
  */
 function buildPlatformUpdateDeliveryDeliveriesSubquery(params: BuildPlatformUpdateDeliveryStatsCFQueryParams): string {
-  const metaDurationSql = `min(if(blob2 IN (${PLATFORM_DELIVERY_END_ACTIONS_SQL}) AND double1 > 0, double1, NULL))`
-  const startTsSql = `min(if(blob2 IN (${PLATFORM_DELIVERY_START_ACTIONS_SQL}), timestamp, NULL))`
-  const endTsSql = `min(if(blob2 IN (${PLATFORM_DELIVERY_END_ACTIONS_SQL}), timestamp, NULL))`
+  const metaDurationSql = `avgIf(double1, blob2 IN (${PLATFORM_DELIVERY_END_ACTIONS_SQL}) AND double1 > 0)`
+  const startTsSql = `min(if(blob2 IN (${PLATFORM_DELIVERY_START_ACTIONS_SQL}), timestamp, ${PLATFORM_DELIVERY_TS_SENTINEL_SQL}))`
+  const endTsSql = `min(if(blob2 IN (${PLATFORM_DELIVERY_END_ACTIONS_SQL}), timestamp, ${PLATFORM_DELIVERY_TS_SENTINEL_SQL}))`
 
   return `SELECT
   formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS day,
@@ -1724,7 +1722,7 @@ function buildPlatformUpdateDeliveryDeliveriesSubquery(params: BuildPlatformUpda
   if(
     ${metaDurationSql} > 0,
     ${metaDurationSql},
-    (toUnixTimestamp(${endTsSql}) - toUnixTimestamp(${startTsSql})) * 1000
+    (toUnixTimestamp(${endTsSql}) - toUnixTimestamp(${startTsSql})) * 1000.0
   ) AS duration_ms
 FROM app_log
 WHERE timestamp >= toDateTime('${formatDateCF(params.query_start)}')

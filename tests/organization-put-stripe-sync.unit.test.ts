@@ -108,6 +108,9 @@ function createOrgRow(overrides: Partial<OrgRow> & Pick<OrgRow, 'id' | 'name' | 
     required_encryption_key: null,
     stats_refresh_requested_at: null,
     stats_updated_at: null,
+    support_channel_set_at: null,
+    support_channel_type: null,
+    support_channel_url: null,
     updated_at: null,
     website: 'https://old.example',
   }

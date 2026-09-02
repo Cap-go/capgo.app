@@ -112,7 +112,7 @@
     "npm:@clack/prompts@^1.7.0": "1.7.0",
     "npm:@cloudflare/workers-types@5.20260722.1": "5.20260722.1",
     "npm:@codspeed/vitest-plugin@^5.7.1": "5.7.1_tinybench@2.9.0_vite@8.1.5__@types+node@26.2.0__sass@1.101.3__yaml@2.9.0_vitest@4.1.11_@types+node@26.2.0_@vitest+coverage-v8@4.1.11_@vitest+ui@4.1.11_happy-dom@20.11.6_sass@1.101.3",
-    "npm:@formkit/core@2.1.0": "2.1.0",
+    "npm:@formkit/core@2.1.2": "2.1.2",
     "npm:@formkit/i18n@^2.1.0": "2.1.0",
     "npm:@formkit/icons@^2.1.0": "2.1.0",
     "npm:@formkit/themes@2.1.0": "2.1.0",
@@ -2188,8 +2188,8 @@
         "vue-demi"
       ]
     },
-    "@formkit/core@2.1.0": {
-      "integrity": "sha512-ifP8sRoH0ekwBVbu+u83zWGP+596Hg4ji2kBLiYKkPpM7oLJYg7ZSmQtj9PVn9hcFYQwUL5zA6VsZx6JwOl3pQ==",
+    "@formkit/core@2.1.2": {
+      "integrity": "sha512-uv3NUXQkqyjvT2VILdcDWvO99Ql69zA93RiInqBXMyuA6UyFTJvc/LQt352diP951k0bDGWG4ar0g1GI2/EtYQ==",
       "dependencies": [
         "@formkit/utils"
       ]
@@ -2243,8 +2243,8 @@
         "@formkit/core"
       ]
     },
-    "@formkit/utils@2.1.0": {
-      "integrity": "sha512-yPGg0Uj0jp0N5h6AL+flJMRWksoZPtPu96Slb6i4GKraRKeJG6PbwCutWg9j6UiWqTsNX42Bz0Zsh9s6UxdziA=="
+    "@formkit/utils@2.1.2": {
+      "integrity": "sha512-ZbPWhmQKkx5ojGW+r14WfrubnhWWdeTlm/rTiVjZExFQhsmQa6hCu35l0z/EeLb04UhXjoZP/IXBJ+/QU5ZMGw=="
     },
     "@formkit/validation@2.1.0": {
       "integrity": "sha512-l/d9ni7Fr+ISyuQDDaCJxXa3ypOdLGwHri8K2r6t52HAy5aX5RnVDpchfdencbSKfdygNc36b5gBPzgoZ4B2uw==",
@@ -9612,7 +9612,7 @@
         "npm:@capgo/capacitor-zip@^8.1.16",
         "npm:@cloudflare/workers-types@5.20260722.1",
         "npm:@codspeed/vitest-plugin@^5.7.1",
-        "npm:@formkit/core@2.1.0",
+        "npm:@formkit/core@2.1.2",
         "npm:@formkit/i18n@^2.1.0",
         "npm:@formkit/icons@^2.1.0",
         "npm:@formkit/themes@2.1.0",
