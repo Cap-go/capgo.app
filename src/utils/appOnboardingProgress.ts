@@ -273,6 +273,28 @@ export function shouldShowGettingStartedNav(ledger: AppOnboardingLedger, extras?
     .some(step => step.group === 'essential' && !step.done)
 }
 
+function setupOutcome(value: unknown): string | null {
+  if (!isRecord(value))
+    return null
+  const setup = isRecord(value.setup) ? value.setup : value
+  if (typeof setup.outcome === 'string')
+    return setup.outcome
+  return typeof value.outcome === 'string' ? value.outcome : null
+}
+
+export function shouldSkipOnboardingResume(onboarding: unknown): boolean {
+  const ledger = parseAppOnboardingLedger(onboarding)
+  if (ledger.getting_started_dismissed_at)
+    return true
+  // started_at is set when the user opens OTA setup, and refresh also copies
+  // first-bundle time into it. succeeded_at is first device install. Do not
+  // skip on started_at or opening OTA setup would hide Getting Started.
+  if (ledger.features?.ota?.succeeded_at)
+    return true
+  const outcome = setupOutcome(onboarding)
+  return outcome === 'completed' || outcome === 'skipped'
+}
+
 export function onboardingNextStepMessageKeys(ledger: AppOnboardingLedger): {
   titleKey: string
   descKey: string

@@ -11,6 +11,7 @@ import { sendEvent } from '~/services/tracking'
 import { clearWebsitePaidUserCookie, setWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
+import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
 import { hasPendingInviteSkip } from '~/utils/pendingInviteSkip'
 import { getPlans, isPlatformAdmin } from './../services/supabase'
@@ -256,7 +257,7 @@ async function guard(
 
     const { data: apps, error } = await supabase
       .from('apps')
-      .select('app_id, need_onboarding')
+      .select('app_id, need_onboarding, onboarding')
       .eq('owner_org', selectableOrganizations[0].gid)
       .limit(2)
 
@@ -266,6 +267,8 @@ async function guard(
     }
 
     const app = apps?.[0]
+    if (app && shouldSkipOnboardingResume(app.onboarding))
+      return null
     return getOnboardingResumeRedirect({
       appId: app?.need_onboarding ? app.app_id : null,
       appCount: apps?.length ?? 0,

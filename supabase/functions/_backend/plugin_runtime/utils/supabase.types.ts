@@ -5218,6 +5218,7 @@ export type Database = {
         Args: { plain_key: string; stored_hash: string }
         Returns: boolean
       }
+      verify_getting_started: { Args: { p_app_id: string }; Returns: Json }
       verify_mfa: { Args: never; Returns: boolean }
     }
     Enums: {

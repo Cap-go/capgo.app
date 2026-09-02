@@ -501,6 +501,11 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain('pendingDashboardExplored = true')
     expect(onboardingSource).toContain('if (pendingDashboardExplored)')
 
+    const splashDismiss = sourceBetween('async function skipOnboardingSplash()', 'async function leaveSplashIfAlreadySetup()')
+    expect(splashDismiss).toContain('dismiss_getting_started')
+    expect(splashDismiss).toContain('updateAppOnboarding')
+    expect(onboardingSource).toContain('data-test="app-onboarding-dont-show-again"')
+
     const demoExit = sourceBetween('async function seedDemoData()', 'async function copyText(')
     expect(demoExit).toContain('window.dispatchEvent')
     expect(demoExit).toContain('allowOnboardingDashboardExploration')
