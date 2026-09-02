@@ -285,7 +285,6 @@ describe('app onboarding progress analytics integration', () => {
       'await organizationStore.awaitInitialLoad()',
       'const resumed = await loadResumeApp()',
       'resumedFlow = true',
-      'void loadApiKey()',
       'return',
       'const resumeResult = await maybeResumeSavedOnboarding()',
     ])
@@ -483,7 +482,7 @@ describe('app onboarding progress analytics integration', () => {
   })
 
   it.concurrent('completes account onboarding when leaving for getting started and leaves demo selection incomplete', () => {
-    const demoAction = sourceBetween('async function seedDemoData()', 'async function copyText(')
+    const demoAction = sourceBetween('async function seedDemoData()', 'async function goToGettingStarted()')
     expect(demoAction).not.toContain('completeStep')
     expect(demoAction).not.toContain('completeAndViewStep')
     expect(demoAction).toContain('allowOnboardingDashboardExploration')
@@ -502,7 +501,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain('pendingDashboardExplored = true')
     expect(onboardingSource).toContain('if (pendingDashboardExplored)')
 
-    const demoExit = sourceBetween('async function seedDemoData()', 'async function copyText(')
+    const demoExit = sourceBetween('async function seedDemoData()', 'async function goToGettingStarted()')
     expect(demoExit).toContain('window.dispatchEvent')
     expect(demoExit).toContain('allowOnboardingDashboardExploration')
     expect(demoExit.indexOf('window.dispatchEvent')).toBeLessThan(demoExit.indexOf('allowOnboardingDashboardExploration'))

@@ -2,7 +2,6 @@
 import type { Database, Json } from '~/types/supabase.types'
 import type {
   OnboardingAnalyticsStep,
-  OnboardingCopyEvent,
   OnboardingDetailsEvent,
   OnboardingDetailsEventProperties,
   OnboardingIntent,
@@ -17,7 +16,6 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import IconCopy from '~icons/ion/copy-outline'
 import IconAppWindow from '~icons/lucide/app-window'
 import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheck from '~icons/lucide/check'
@@ -37,12 +35,11 @@ import IconTerminal from '~icons/lucide/terminal'
 import IconTrash from '~icons/lucide/trash-2'
 import IconUsers from '~icons/lucide/users-round'
 import { preserveAdminDashboardMinimize } from '~/services/adminDashboardPreferences'
-import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { uploadOrgLogoFile } from '~/services/photos'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
-import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
+import { getLocalConfig, useSupabase } from '~/services/supabase'
 import {
   MAX_USER_ONBOARDING_WRITE_ATTEMPTS,
   mergeUserOnboardingProgress,
@@ -142,8 +139,6 @@ const isImportingStore = ref(false)
 const isImportingStoreIcon = ref(false)
 const isResumeIconLoading = ref(false)
 const isSeedingDemo = ref(false)
-const isCliCommandVisible = ref(false)
-const apiKey = ref<string | null>(null)
 const createdApp = ref<AppRow | null>(null)
 let pendingGettingStartedAppId: string | null = null
 const preOrgCreatedOrganizationId = ref<string | null>(null)
@@ -202,30 +197,6 @@ const startingOutUserCountStop: UserCountStop = {
 }
 const planNameOrder = ['Solo', 'Maker', 'Team', 'Enterprise'] as const
 
-const localCommand = isLocal(config.supaHost) ? ` --supa-host ${config.supaHost} --supa-anon ${config.supaKey}` : ''
-const usesBuilderSetupCommand = computed(() => selectedIntent.value === 'builder')
-const cliSubcommand = computed(() => usesBuilderSetupCommand.value ? 'build init' : 'i')
-const cliCommand = computed(() => {
-  const key = apiKey.value
-  if (!key)
-    return ''
-
-  if (usesBuilderSetupCommand.value)
-    return `npx @capgo/cli@latest build init -a ${key}${localCommand}`
-
-  return `npx @capgo/cli@latest i ${key}${localCommand}`
-})
-const cliCommandArgs = computed(() => {
-  const args: string[] = []
-
-  if (usesBuilderSetupCommand.value && apiKey.value)
-    args.push('-a', apiKey.value)
-
-  if (isLocal(config.supaHost))
-    args.push('--supa-host', config.supaHost, '--supa-anon', config.supaKey)
-
-  return args
-})
 const currentOrg = computed(() => organizationStore.currentOrganization)
 const resumeAppId = computed(() => {
   const value = route.query.resume
@@ -791,46 +762,6 @@ async function loadResumeIconPreview(rawIconUrl: string | null | undefined, appI
     if (run === resumeIconLoadRun)
       isResumeIconLoading.value = false
   }
-}
-
-async function ensureApiKey() {
-  const userId = main.user?.id
-  if (!userId)
-    return
-
-  const appId = createdApp.value?.app_id
-  const existingKey = await findUsablePlainApiKey(supabase, userId, currentOrg.value?.gid, appId)
-  if (existingKey) {
-    apiKey.value = existingKey
-    return
-  }
-
-  const { data: claimsData } = await supabase.auth.getClaims()
-  const claimsUserId = claimsData?.claims?.sub
-  if (!claimsUserId)
-    return
-
-  const { data, error: createError } = await createDefaultApiKey(supabase, 'api-key', {
-    orgId: currentOrg.value?.gid,
-    appId,
-  })
-  if (createError)
-    throw createError
-
-  apiKey.value = typeof data?.key === 'string'
-    ? data.key
-    : await findUsablePlainApiKey(supabase, claimsUserId, currentOrg.value?.gid, appId)
-}
-
-let apiKeyLoadingPromise: Promise<void> | null = null
-function loadApiKey() {
-  if (apiKey.value)
-    return Promise.resolve()
-
-  apiKeyLoadingPromise ??= ensureApiKey().finally(() => {
-    apiKeyLoadingPromise = null
-  })
-  return apiKeyLoadingPromise
 }
 
 async function loadResumeApp() {
@@ -1691,50 +1622,6 @@ async function seedDemoData() {
   }
 }
 
-async function copyText(text: string) {
-  try {
-    await navigator.clipboard.writeText(text)
-    toast.success(t('copied-to-clipboard'))
-    return true
-  }
-  catch (error) {
-    console.error('Failed to copy text', error)
-    dialogStore.openDialog({
-      title: t('cannot-copy'),
-      description: text,
-      buttons: [
-        {
-          text: t('button-cancel'),
-          role: 'cancel',
-        },
-      ],
-    })
-    await dialogStore.onDialogDismiss()
-    return false
-  }
-}
-
-function trackSuccessfulCopy(event: OnboardingCopyEvent) {
-  const orgId = currentOrg.value?.gid
-  const appId = createdApp.value?.app_id || generatedAppId.value || undefined
-  progressTracker?.trackCopyEvent(event, {
-    ...(appId ? { app_id: appId } : {}),
-    ...(existingApp.value !== null ? { existing_app: existingApp.value } : {}),
-    ...(selectedIntent.value ? { intent: selectedIntent.value } : {}),
-    ...(orgId ? { org_id: orgId } : {}),
-    setup_command: usesBuilderSetupCommand.value ? 'builder' : 'ota',
-  })
-}
-
-async function copyCliCommand() {
-  if (!apiKey.value)
-    return
-
-  const copied = await copyText(cliCommand.value)
-  if (copied)
-    trackSuccessfulCopy('onboarding_cli_command_copied')
-}
-
 async function goToGettingStarted() {
   if (!createdApp.value)
     return
@@ -1749,7 +1636,6 @@ function goToInstallStep() {
   if (!createdApp.value)
     return
 
-  isCliCommandVisible.value = false
   void goToGettingStarted()
 }
 
@@ -1776,10 +1662,6 @@ onMounted(async () => {
         const resumed = await loadResumeApp()
         if (resumed) {
           resumedFlow = true
-          void loadApiKey().catch((error) => {
-            console.error('Cannot ensure API key', error)
-            toast.error(t('app-onboarding-toast-apikey-error'))
-          })
           return
         }
       }
@@ -1803,11 +1685,6 @@ onMounted(async () => {
       existingApp.value = null
       existingAppSetup.value = null
     }
-
-    void loadApiKey().catch((error) => {
-      console.error('Cannot ensure API key', error)
-      toast.error(t('app-onboarding-toast-apikey-error'))
-    })
   }
   finally {
     isHydratingOnboarding.value = false
@@ -2332,59 +2209,6 @@ defineExpose({
                       <span v-else>{{ appDetailsPrimaryActionLabel }}</span>
                       <IconArrowRight v-if="!isSubmitting" class="h-4 w-4" />
                     </button>
-                  </div>
-                </div>
-              </div>
-
-              <div v-if="!props.preOrg && appDetailsStep === 'icon'" class="pt-1">
-                <button
-                  v-if="!isCliCommandVisible"
-                  type="button"
-                  class="text-[11px] text-slate-400/70 underline-offset-2 transition hover:text-slate-500 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-slate-500/70 dark:hover:text-slate-400"
-                  @click="isCliCommandVisible = true"
-                >
-                  {{ t('app-onboarding-command-show') }}
-                </button>
-
-                <div
-                  v-else
-                  class="space-y-3 rounded-xl border border-slate-200/80 bg-slate-50/60 p-4 dark:border-white/10 dark:bg-slate-950/40"
-                >
-                  <div class="flex items-start justify-between gap-3">
-                    <p class="text-xs leading-5 text-slate-500 dark:text-slate-400">
-                      {{ t('app-onboarding-command-help') }}
-                    </p>
-                    <button
-                      type="button"
-                      class="shrink-0 text-[11px] text-slate-400 underline-offset-2 transition hover:text-slate-600 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-slate-500 dark:hover:text-slate-300"
-                      @click="isCliCommandVisible = false"
-                    >
-                      {{ t('app-onboarding-command-hide') }}
-                    </button>
-                  </div>
-                  <button
-                    v-if="apiKey"
-                    type="button"
-                    class="d-btn group relative h-auto min-h-0 w-full justify-start whitespace-normal rounded-xl border-0 bg-slate-950 p-4 pr-14 text-left font-normal ring-1 ring-white/10 transition hover:bg-slate-950 hover:ring-white/20"
-                    :aria-label="t('app-onboarding-command-copy')"
-                    @click="copyCliCommand"
-                  >
-                    <code class="block whitespace-pre-wrap break-all text-sm">
-                      <span class="text-slate-500">npx</span>
-                      <span class="text-sky-300"> @capgo/cli@latest</span>
-                      <span class="font-bold text-violet-300">&nbsp;{{ cliSubcommand }}</span>
-                      <span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>
-                      <template v-for="(arg, index) in cliCommandArgs" :key="`${arg}-${index}`">
-                        <span :class="index % 2 === 0 ? 'text-amber-300' : 'text-cyan-300'"> {{ arg }}</span>
-                      </template>
-                    </code>
-                    <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
-                  </button>
-                  <div v-else class="rounded-xl bg-slate-950 p-4 pr-14 ring-1 ring-white/10" role="status">
-                    <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300">
-                      <Spinner size="w-5 h-5" />
-                      <span>{{ t('app-onboarding-command-apikey-loading') }}</span>
-                    </div>
                   </div>
                 </div>
               </div>

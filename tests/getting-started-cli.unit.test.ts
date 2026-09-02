@@ -46,7 +46,10 @@ describe('getting started CLI setup panel', () => {
     expect(onboardingSource).not.toContain('<OnboardingAltSetup')
     expect(onboardingSource).not.toContain('<TechnicalTeammateInviteCard')
     expect(onboardingSource).not.toContain("flowStep === 'setup' && createdApp")
+    expect(onboardingSource).not.toContain('app-onboarding-command-show')
+    expect(onboardingSource).not.toContain('void loadApiKey()')
     expect(onboardingSource).toContain('await goToGettingStarted()')
+    expect(panelSource).toContain(':compressed="false"')
 
     for (const id of APP_ONBOARDING_STEP_IDS)
       expect(messages[`app-onboarding-cli-step-${id}`]).toBeTruthy()

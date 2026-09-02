@@ -7,7 +7,6 @@ import AppOnboardingCliSteps from '~/components/dashboard/AppOnboardingCliSteps.
 import OnboardingAltSetup from '~/components/dashboard/OnboardingAltSetup.vue'
 import TechnicalTeammateInviteCard from '~/components/dashboard/TechnicalTeammateInviteCard.vue'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
-import { hasStartedCliSetup } from '~/services/appOnboarding'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -34,7 +33,6 @@ const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
 const config = getLocalConfig()
 const apiKey = ref<string | null>(null)
-const cliStarted = ref(hasStartedCliSetup(props.initialOnboarding))
 let apiKeyLoadingPromise: Promise<void> | null = null
 const markedFeatures = new Set<string>()
 
@@ -44,7 +42,6 @@ const cliParts = computed(() => {
     return null
   return buildCapgoOtaCliInitCommand(apiKey.value, extraArgs.value)
 })
-const compressAltSetup = computed(() => cliStarted.value || hasStartedCliSetup(props.initialOnboarding))
 
 function createAiHelpPrompt() {
   const command = cliParts.value?.command
@@ -192,8 +189,7 @@ async function copyAiInstructions() {
   }
 }
 
-function onCliStepsProgress(payload: { hasStartedCli: boolean, isTerminal: boolean }) {
-  cliStarted.value = payload.hasStartedCli
+function onCliStepsProgress(payload: { isTerminal: boolean }) {
   emit('progress', { isTerminal: payload.isTerminal })
 }
 
@@ -250,7 +246,7 @@ onMounted(() => {
       @progress="onCliStepsProgress"
     />
 
-    <OnboardingAltSetup :compressed="compressAltSetup">
+    <OnboardingAltSetup :compressed="false">
       <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-950/90 dark:text-slate-200">
         <TechnicalTeammateInviteCard
           analytics-channel="onboarding-v3"
