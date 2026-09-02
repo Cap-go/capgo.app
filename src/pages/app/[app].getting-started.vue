@@ -4,9 +4,9 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import IconCheck from '~icons/lucide/check'
-import AppOnboardingCliSteps from '~/components/dashboard/AppOnboardingCliSteps.vue'
 import AppPageFrame from '~/components/dashboard/AppPageFrame.vue'
 import GettingStartedCicdPanel from '~/components/dashboard/GettingStartedCicdPanel.vue'
+import GettingStartedCliPanel from '~/components/dashboard/GettingStartedCliPanel.vue'
 import { useAppPage } from '~/composables/useAppPage'
 import { isTerminalAppOnboarding } from '~/services/appOnboarding'
 import { useSupabase } from '~/services/supabase'
@@ -111,13 +111,6 @@ async function checkBuilderDone(appId: string) {
 function runStep(step: GettingStartedStep) {
   if (step.done)
     return
-  if (step.id === 'cli_install') {
-    if (app.value?.need_onboarding)
-      void router.push({ path: '/app/new', query: { resume: id.value } })
-    else
-      void router.push(`/app/${encodeURIComponent(id.value)}/devices`)
-    return
-  }
   if (step.id === 'live_update') {
     void router.push(liveUpdateUploadPath(id.value))
     return
@@ -282,7 +275,7 @@ watch(() => id.value, async (appId) => {
                   {{ t('getting-started-done') }}
                 </span>
                 <button
-                  v-else-if="step.id !== 'cicd'"
+                  v-else-if="step.id !== 'cicd' && step.id !== 'cli_install'"
                   type="button"
                   class="d-btn d-btn-ghost d-btn-sm h-11 min-h-11 shrink-0 px-3 text-azure-700 dark:text-azure-300"
                   data-test="getting-started-step-action"
@@ -297,11 +290,12 @@ watch(() => id.value, async (appId) => {
               >
                 {{ t('getting-started-self-test-hint') }}
               </p>
-              <AppOnboardingCliSteps
+              <GettingStartedCliPanel
                 v-if="step.id === 'cli_install'"
                 :key="id"
-                class="mt-3"
                 :app-id="id"
+                :app-name="appName"
+                :existing-app="app.existing_app"
                 :initial-onboarding="app.onboarding"
                 @progress="onCliInstallProgress"
               />

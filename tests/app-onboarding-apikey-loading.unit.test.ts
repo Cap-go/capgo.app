@@ -68,17 +68,17 @@ describe('app onboarding API key loading state', () => {
   })
 
   it.concurrent('always includes the API key and tracks successful copy actions', () => {
-    const copyHandlerStart = onboardingSource.indexOf('async function copyAiInstructions()')
-    const copyHandlerEnd = onboardingSource.indexOf('function goToInstallStep()', copyHandlerStart)
+    const panelSource = readFileSync(new URL('../src/components/dashboard/GettingStartedCliPanel.vue', import.meta.url), 'utf8')
+    const copyHandlerStart = panelSource.indexOf('async function copyAiInstructions()')
+    const copyHandlerEnd = panelSource.indexOf('function onCliStepsProgress(', copyHandlerStart)
     expect(copyHandlerStart).toBeGreaterThanOrEqual(0)
     expect(copyHandlerEnd).toBeGreaterThan(copyHandlerStart)
-    const copyHandler = onboardingSource.slice(copyHandlerStart, copyHandlerEnd)
+    const copyHandler = panelSource.slice(copyHandlerStart, copyHandlerEnd)
 
     expect(copyHandler).toContain('await loadApiKey()')
     expect(copyHandler).toContain('if (!apiKey.value)')
     expect(copyHandler).toContain('await copyText(createAiHelpPrompt())')
-    expect(copyHandler).toContain("trackSuccessfulCopy('onboarding_ai_instructions_copied')")
-    expect(copyHandler).not.toContain('dialogStore.openDialog({')
+    expect(copyHandler).toContain("sendOnboardingEvent('onboarding_ai_instructions_copied'")
     expect(copyHandler).not.toContain('redactedCliCommand')
     expect(onboardingSource).toContain("trackSuccessfulCopy('onboarding_cli_command_copied')")
   })

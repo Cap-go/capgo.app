@@ -276,6 +276,8 @@ export function clampResumableOnboardingStep(
 ): UserOnboardingStep {
   if (flow === 'pre_org' && (step === 'choice' || step === 'install' || step === 'setup'))
     return 'organization'
+  if (flow === 'existing_org' && (step === 'install' || step === 'setup'))
+    return 'choice'
   return step
 }
 

@@ -144,8 +144,7 @@ export function getOnboardingResumeRedirect(options: {
     return null
 
   return {
-    path: '/onboarding/app',
-    query: { resume: options.appId, step: 'setup' },
+    path: `/app/${encodeURIComponent(options.appId)}/getting-started`,
   }
 }
 

@@ -143,7 +143,7 @@ describe('user onboarding progress', () => {
 
   it.concurrent('clamps post-org steps back to organization for the pre-org wizard', () => {
     expect(clampResumableOnboardingStep('setup', 'pre_org')).toBe('organization')
-    expect(clampResumableOnboardingStep('install', 'existing_org')).toBe('install')
+    expect(clampResumableOnboardingStep('install', 'existing_org')).toBe('choice')
     expect(clampResumableOnboardingStep('details', 'pre_org')).toBe('details')
   })
 
