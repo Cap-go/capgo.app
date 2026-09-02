@@ -141,4 +141,60 @@ test.describe('Observe sections', () => {
     await popover.locator('[data-test="log-row-metadata-copy"]').click()
     await expect.poll(() => page.locator('body').getAttribute('data-copied-log-metadata')).toContain('notify_app_ready')
   })
+
+  test('shows a failed manifest filename in metadata instead of the version column', async ({ page }) => {
+    const now = new Date().toISOString()
+    await page.route('**/private/stats', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.continue()
+        return
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            app_id: 'com.demo.app',
+            device_id: 'b3e532e8-256c-4509-b1d4-beec93a71edb',
+            action: 'update_fail',
+            version_name: '2.36.2+8ebc69',
+            created_at: now,
+          },
+          {
+            app_id: 'com.demo.app',
+            device_id: '33333333-3333-3333-3333-333333333333',
+            action: 'download_manifest_file_fail',
+            version_name: '2.36.2+8ebc69:assets/index-8ebc69aabbcc.js',
+            created_at: now,
+          },
+        ]),
+      })
+    })
+
+    await page.goto('/app/com.demo.app/observe/logs')
+    await expect(page.locator('#custom_table tbody tr')).toHaveCount(2)
+
+    const longVersionRow = page.locator('#custom_table tbody tr', { hasText: 'b3e532e8' })
+    const manifestFailRow = page.locator('#custom_table tbody tr', { hasText: '33333333' })
+
+    await expect(longVersionRow.locator('[data-test="log-row-version"]')).toHaveText('2.36.2+8ebc69')
+    await expect(longVersionRow.locator('[data-test="log-row-action"]')).toHaveText('Update process failed')
+    await expect(longVersionRow.locator('[data-test="log-row-metadata"]')).toHaveCount(0)
+
+    const versionBox = await longVersionRow.locator('[data-test="log-row-version"]').boundingBox()
+    const actionBox = await longVersionRow.locator('[data-test="log-row-action"]').boundingBox()
+    expect(versionBox).toBeTruthy()
+    expect(actionBox).toBeTruthy()
+    expect((versionBox?.x ?? 0) + (versionBox?.width ?? 0)).toBeLessThanOrEqual((actionBox?.x ?? 0) + 1)
+
+    await expect(manifestFailRow.locator('[data-test="log-row-version"]')).toHaveText('2.36.2+8ebc69')
+    await expect(manifestFailRow).not.toContainText('assets/index-8ebc69aabbcc.js')
+    await expect(manifestFailRow.locator('[data-test="log-row-metadata"]')).toHaveCount(1)
+
+    await manifestFailRow.locator('[data-test="log-row-metadata"]').click()
+    const popover = page.locator('[data-test="log-row-metadata-popover"]')
+    await expect(popover).toBeVisible()
+    await expect(popover).toContainText(/"filename"/)
+    await expect(popover).toContainText('assets/index-8ebc69aabbcc.js')
+  })
 })

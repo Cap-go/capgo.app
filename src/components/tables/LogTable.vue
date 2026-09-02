@@ -10,6 +10,7 @@ import LogMetadataPopover from '~/components/tables/LogMetadataPopover.vue'
 import { formatDate } from '~/services/date'
 import { getDateRangeForPreset, getTimeWindowPageRange, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
 import { getLogDocUrl } from '~/services/logDocLinks'
+import { logRowDisplayMetadata, parseLogVersionName } from '~/services/logTableDisplay'
 import { actionToFilter, createActionFilterState, failureActionFilterKeys, filterToAction, observeActionFilterKeys, updateActionFilterKeys } from '~/services/statsActions'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
@@ -36,27 +37,6 @@ function getActiveOrder(columns: TableColumn[]) {
     .map(col => ({ key: col.key, sortable: col.sortable }))
 }
 
-interface ParsedVersionName {
-  version: string
-  filename: string | null
-  isFileSpecific: boolean
-}
-
-function parseVersionName(versionName: string): ParsedVersionName {
-  const colonIndex = versionName.indexOf(':')
-  if (colonIndex > 0) {
-    return {
-      version: versionName.substring(0, colonIndex),
-      filename: versionName.substring(colonIndex + 1),
-      isFileSpecific: true,
-    }
-  }
-  return {
-    version: versionName,
-    filename: null,
-    isFileSpecific: false,
-  }
-}
 const columns: Ref<TableColumn[]> = ref<TableColumn[]>([])
 const router = useRouter()
 const route = useRoute()
@@ -93,22 +73,6 @@ function initializeDateRange(): [Date, Date] {
 }
 
 const range = ref<[Date, Date]>(initializeDateRange())
-function normalizeMetadata(metadata: LogData['metadata']): Record<string, string> | null {
-  if (!metadata)
-    return null
-  if (typeof metadata === 'string') {
-    try {
-      const parsed = JSON.parse(metadata)
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
-        return parsed as Record<string, string>
-    }
-    catch {
-      return null
-    }
-    return null
-  }
-  return metadata
-}
 const filterShortcuts = [
   { label: 'filter-shortcut-all-fail', filters: failureActionFilterKeys },
   { label: 'filter-shortcut-updates', filters: updateActionFilterKeys },
@@ -315,7 +279,7 @@ columns.value = [
   {
     label: t('device-id'),
     key: 'device_id',
-    class: 'w-[33%] truncate',
+    class: 'w-[28%] overflow-hidden truncate',
     mobile: true,
     sortable: true,
     head: true,
@@ -324,14 +288,16 @@ columns.value = [
   {
     label: t('version'),
     key: 'version_name',
-    class: 'w-[8%] whitespace-nowrap md:px-3!',
+    class: 'w-[16%] max-w-0 overflow-hidden md:px-3!',
     mobile: false,
     sortable: false,
-    displayFunction: (elem: Element) => {
-      const parsed = parseVersionName(elem.version_name)
-      return parsed.isFileSpecific
-        ? `${parsed.version} (${parsed.filename})`
-        : parsed.version
+    renderFunction: (elem: Element) => {
+      const version = parseLogVersionName(elem.version_name).version
+      return h('span', {
+        'class': 'block truncate',
+        'title': version,
+        'data-test': 'log-row-version',
+      }, version)
     },
     onClick: (elem: Element) => openOneVersion(elem),
   },
@@ -339,21 +305,22 @@ columns.value = [
     label: t('action'),
     key: 'action',
     mobile: true,
-    class: 'w-[44%] min-w-0',
+    class: 'w-[41%] min-w-0 overflow-hidden',
     sortable: true,
     head: true,
     renderFunction: (elem: Element) => {
       const actionLabel = formatAction(elem)
-      const metadata = normalizeMetadata(elem.metadata)
+      const metadata = logRowDisplayMetadata(elem.version_name, elem.metadata)
       return h('div', { class: 'flex w-full min-w-0 items-center gap-1.5' }, [
         h('a', {
-          href: getLogDocUrl(elem.action),
-          target: '_blank',
-          rel: 'noopener noreferrer',
-          title: actionLabel,
-          class: 'min-w-0 truncate hover:underline',
+          'href': getLogDocUrl(elem.action),
+          'target': '_blank',
+          'rel': 'noopener noreferrer',
+          'title': actionLabel,
+          'class': 'min-w-0 truncate hover:underline',
+          'data-test': 'log-row-action',
         }, actionLabel),
-        metadata && Object.keys(metadata).length
+        metadata
           ? h(LogMetadataPopover, { json: JSON.stringify(metadata, null, 2) })
           : null,
       ])
@@ -377,7 +344,7 @@ async function openOneVersion(one: Element) {
   if (!one.version) {
     const loadingToastId = toast.loading(t('loading-version'))
     // Extract version from composite format if present (e.g., "1.2.3:main.js" -> "1.2.3")
-    const parsed = parseVersionName(one.version_name)
+    const parsed = parseLogVersionName(one.version_name)
     const versionName = parsed.version
 
     const { data: versionRecord, error } = await supabase
