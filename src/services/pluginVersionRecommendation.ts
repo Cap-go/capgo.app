@@ -30,6 +30,7 @@ export interface PluginMajorStats {
   behindDevices: number
   currentDevices: number
   unsupported: boolean
+  statusResolved: boolean
 }
 
 export interface PluginVersionRecommendationRow extends PluginVersionRow {
@@ -51,6 +52,7 @@ export interface PluginVersionRecommendation {
   behindShare: number
   currentDevices: number
   fleetDevices: number
+  statusResolved: boolean
   majors: PluginMajorStats[]
   rows: PluginVersionRecommendationRow[]
 }
@@ -134,10 +136,11 @@ export function buildPluginVersionRecommendation(
     return null
 
   const fleetDevices = versions[0]?.total_devices ?? versions.reduce((sum, row) => sum + row.devices, 0)
+  const tagsKnown = distTags !== null
   const dominant = versions[0]
   const dominantMajor = pluginMajorFromVersion(dominant.plugin_version)
   const dominantLatest = dominantMajor === null ? null : latestTagForMajor(dominantMajor, distTags)
-  const unsupported = isUnsupportedPluginMajor(dominantMajor) && dominantMajor !== null
+  const unsupported = tagsKnown && isUnsupportedPluginMajor(dominantMajor) && dominantMajor !== null
   const needsUpdate = unsupported || (
     !!dominantLatest && isPluginVersionBehind(dominant.plugin_version, dominantLatest.version)
   )
@@ -165,13 +168,21 @@ export function buildPluginVersionRecommendation(
       const devices = bucket.reduce((sum, row) => sum + row.devices, 0)
       const latest = latestTagForMajor(major, distTags)
       const unsupportedMajor = isUnsupportedPluginMajor(major)
-      const behindDevices = bucket.reduce((sum, row) => {
-        if (unsupportedMajor)
-          return sum + row.devices
-        if (latest && isPluginVersionBehind(row.plugin_version, latest.version))
-          return sum + row.devices
-        return sum
-      }, 0)
+      const statusResolved = tagsKnown && (unsupportedMajor || latest !== null)
+      const behindDevices = statusResolved
+        ? bucket.reduce((sum, row) => {
+            if (unsupportedMajor || (latest && isPluginVersionBehind(row.plugin_version, latest.version)))
+              return sum + row.devices
+            return sum
+          }, 0)
+        : 0
+      const currentDevices = statusResolved && latest
+        ? bucket.reduce((sum, row) => {
+            if (isPluginVersionBehind(row.plugin_version, latest.version))
+              return sum
+            return sum + row.devices
+          }, 0)
+        : 0
       return {
         major,
         devices,
@@ -180,13 +191,15 @@ export function buildPluginVersionRecommendation(
         npmTag: latest?.tag ?? null,
         installPackage: latest ? installPackageForTag(latest.tag) : null,
         behindDevices,
-        currentDevices: Math.max(0, devices - behindDevices),
+        currentDevices,
         unsupported: unsupportedMajor,
+        statusResolved,
       }
     })
 
   const behindDevices = majors.reduce((sum, major) => sum + major.behindDevices, 0)
-  const currentDevices = Math.max(0, fleetDevices - behindDevices)
+  const currentDevices = majors.reduce((sum, major) => sum + major.currentDevices, 0)
+  const statusResolved = tagsKnown && rows.every(row => row.status !== 'unknown')
   const installPackage = dominantLatest && !unsupported
     ? installPackageForTag(dominantLatest.tag)
     : null
@@ -204,6 +217,7 @@ export function buildPluginVersionRecommendation(
     behindShare: fleetDevices > 0 ? (behindDevices / fleetDevices) * 100 : 0,
     currentDevices,
     fleetDevices,
+    statusResolved,
     majors,
     rows,
   }
@@ -222,6 +236,7 @@ export async function fetchUpdaterDistTags(): Promise<PluginDistTags | null> {
         headers: {
           accept: 'application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*',
         },
+        signal: AbortSignal.timeout(10_000),
       })
       if (!response.ok)
         return null

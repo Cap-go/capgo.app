@@ -52,6 +52,8 @@ describe('buildPluginVersionRecommendation', () => {
     expect(recommendation?.unsupported).toBe(false)
     expect(recommendation?.behindDevices).toBe(80)
     expect(recommendation?.behindShare).toBe(80)
+    expect(recommendation?.statusResolved).toBe(true)
+    expect(recommendation?.currentDevices).toBe(20)
     expect(recommendation?.majors).toEqual([
       expect.objectContaining({
         major: 6,
@@ -60,6 +62,7 @@ describe('buildPluginVersionRecommendation', () => {
         behindDevices: 80,
         currentDevices: 20,
         unsupported: false,
+        statusResolved: true,
       }),
     ])
     expect(recommendation?.rows[0]).toMatchObject({ plugin_version: '6.14.0', status: 'behind', latestForMajor: '6.50.2' })
@@ -102,13 +105,16 @@ describe('buildPluginVersionRecommendation', () => {
     expect(recommendation?.behindDevices).toBe(3)
   })
 
-  it.concurrent('still flags unsupported majors when npm tags are unavailable', () => {
+  it.concurrent('does not treat unsupported majors as resolved until npm tags are known', () => {
     const recommendation = buildPluginVersionRecommendation([
       { plugin_version: '4.15.3', devices: 2, total_devices: 2 },
     ], null)
 
-    expect(recommendation?.needsUpdate).toBe(true)
-    expect(recommendation?.unsupported).toBe(true)
+    expect(recommendation?.needsUpdate).toBe(false)
+    expect(recommendation?.unsupported).toBe(false)
+    expect(recommendation?.statusResolved).toBe(false)
+    expect(recommendation?.behindDevices).toBe(0)
+    expect(recommendation?.currentDevices).toBe(0)
     expect(recommendation?.recommendedVersion).toBeNull()
     expect(recommendation?.rows[0]?.status).toBe('unsupported')
   })
@@ -119,6 +125,31 @@ describe('buildPluginVersionRecommendation', () => {
     ], null)
 
     expect(recommendation?.needsUpdate).toBe(false)
+    expect(recommendation?.statusResolved).toBe(false)
+    expect(recommendation?.behindDevices).toBe(0)
+    expect(recommendation?.currentDevices).toBe(0)
+    expect(recommendation?.majors[0]).toMatchObject({
+      behindDevices: 0,
+      currentDevices: 0,
+      statusResolved: false,
+    })
+    expect(recommendation?.rows[0]?.status).toBe('unknown')
+  })
+
+  it.concurrent('does not count a supported major as current when no matching dist-tag exists', () => {
+    const recommendation = buildPluginVersionRecommendation([
+      { plugin_version: '9.1.0', devices: 4, total_devices: 4 },
+    ], distTags)
+
+    expect(recommendation?.statusResolved).toBe(false)
+    expect(recommendation?.behindDevices).toBe(0)
+    expect(recommendation?.currentDevices).toBe(0)
+    expect(recommendation?.majors[0]).toMatchObject({
+      major: 9,
+      behindDevices: 0,
+      currentDevices: 0,
+      statusResolved: false,
+    })
     expect(recommendation?.rows[0]?.status).toBe('unknown')
   })
 
@@ -145,5 +176,27 @@ describe('fetchUpdaterDistTags', () => {
   it('returns null when the npm registry request fails', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 500 })))
     await expect(fetchUpdaterDistTags()).resolves.toBeNull()
+  })
+
+  it('deduplicates concurrent requests', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ 'dist-tags': distTags }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const [first, second] = await Promise.all([fetchUpdaterDistTags(), fetchUpdaterDistTags()])
+
+    expect(first).toEqual(distTags)
+    expect(second).toEqual(distTags)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries after a failed request', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('nope', { status: 500 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ 'dist-tags': distTags }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchUpdaterDistTags()).resolves.toBeNull()
+    await expect(fetchUpdaterDistTags()).resolves.toEqual(distTags)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })

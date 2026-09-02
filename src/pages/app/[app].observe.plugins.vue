@@ -46,14 +46,22 @@ const { stats, statsLoading, fetchStats: fetchPluginStats } = useNativeObserveSt
 const pluginVersions = computed(() => stats.value?.pluginVersions ?? [])
 const pluginFleetDevices = computed(() => pluginVersions.value[0]?.total_devices ?? 0)
 const dominantPluginVersion = computed(() => pluginVersions.value[0] ?? null)
-const otherPluginDevices = computed(() => Math.max(0, pluginFleetDevices.value - (dominantPluginVersion.value?.devices ?? 0)))
-const recommendation = computed(() => buildPluginVersionRecommendation(pluginVersions.value, distTags.value))
+const recommendation = computed(() => {
+  if (statsLoading.value)
+    return null
+  return buildPluginVersionRecommendation(pluginVersions.value, distTags.value)
+})
 const recommendationRows = computed(() => recommendation.value?.rows ?? pluginVersions.value.map(version => ({
   ...version,
   major: null,
   latestForMajor: null,
   status: 'unknown' as const,
 })))
+const behindDevicesDisplay = computed(() => {
+  if (!recommendation.value?.statusResolved)
+    return null
+  return recommendation.value.behindDevices
+})
 
 function formatCount(value: number | null | undefined) {
   return formatNumberValue(Math.round(value ?? 0))
@@ -90,16 +98,19 @@ function statusBadgeClass(status: PluginVersionStatus) {
 }
 
 async function copyInstallCommand(command: string) {
-  await navigator.clipboard.writeText(command)
-  toast.success(t('copied-to-clipboard'))
+  try {
+    await navigator.clipboard.writeText(command)
+    toast.success(t('copied-to-clipboard'))
+  }
+  catch (error) {
+    console.error('Failed to copy:', error)
+    toast.error(t('cannot-copy'))
+  }
 }
 
-watch(packageId, () => {
+watch(packageId, async () => {
   displayStore.NavTitle = t('observe')
   displayStore.defaultBack = '/apps'
-}, { immediate: true })
-
-watch(packageId, async () => {
   const [, tags] = await Promise.all([
     fetchPluginStats(),
     fetchUpdaterDistTags(),
@@ -176,7 +187,7 @@ watch(packageId, async () => {
                 {{ t('native-observe-plugin-behind-stats', {
                   count: formatCount(recommendation.behindDevices),
                   share: formatPercent(recommendation.behindShare),
-                }) }}
+                }, recommendation.behindDevices) }}
               </p>
               <div v-if="recommendation.installCommand" class="flex flex-col gap-2 mt-3 sm:flex-row sm:items-center">
                 <code class="min-w-0 flex-1 px-3 py-2 text-sm break-all rounded-md bg-white/80 text-slate-800 dark:bg-slate-900/70 dark:text-slate-100">{{ recommendation.installCommand }}</code>
@@ -256,7 +267,7 @@ watch(packageId, async () => {
                 {{ t('native-observe-plugin-devices-behind') }}
               </div>
               <div class="mt-2 text-2xl font-semibold tabular-nums text-slate-950 dark:text-white">
-                {{ formatCount(recommendation?.behindDevices ?? otherPluginDevices) }}
+                {{ behindDevicesDisplay === null ? '-' : formatCount(behindDevicesDisplay) }}
               </div>
             </div>
           </div>
@@ -308,7 +319,7 @@ watch(packageId, async () => {
                       {{ formatCount(major.devices) }}
                     </td>
                     <td class="px-3 py-3 text-right tabular-nums text-slate-600 dark:text-slate-300">
-                      {{ formatCount(major.behindDevices) }}
+                      {{ major.statusResolved ? formatCount(major.behindDevices) : '-' }}
                     </td>
                     <td class="px-0 py-3 text-right tabular-nums text-slate-600 dark:text-slate-300">
                       {{ formatPercent(major.share) }}

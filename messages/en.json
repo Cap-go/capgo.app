@@ -1792,7 +1792,7 @@
   "native-observe-platform": "Platform",
   "native-observe-plugin-adoption": "Updater plugin adoption",
   "native-observe-plugin-adoption-help": "Current production devices grouped by their reported updater plugin version.",
-  "native-observe-plugin-behind-stats": "{count} devices ({share}) are not on the latest updater for their Capacitor major.",
+  "native-observe-plugin-behind-stats": "{count} device ({share}) is not on the latest updater for its Capacitor major. | {count} devices ({share}) are not on the latest updater for their Capacitor major.",
   "native-observe-plugin-capacitor-major": "Capacitor major",
   "native-observe-plugin-devices-behind": "Devices behind",
   "native-observe-plugin-distribution": "Plugin version distribution",
