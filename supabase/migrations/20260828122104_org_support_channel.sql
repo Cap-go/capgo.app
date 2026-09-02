@@ -29,7 +29,7 @@ ALTER TABLE public.orgs
       support_channel_type IS NOT NULL
       AND support_channel_url IS NOT NULL
       AND char_length(support_channel_url) <= 2048
-      AND support_channel_url ~ '^https://[^/\s]+'
+      AND support_channel_url ~ '^https://[^/\s]+\S*$'
     )
   );
 

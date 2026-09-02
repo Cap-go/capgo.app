@@ -2047,7 +2047,7 @@
       "valid": true
     },
     {
-      "definition": "CHECK (support_channel_type IS NULL AND support_channel_url IS NULL OR support_channel_type IS NOT NULL AND support_channel_url IS NOT NULL AND char_length(support_channel_url) <= 2048 AND support_channel_url ~ '^https://[^/\\s]+'::text)",
+      "definition": "CHECK (support_channel_type IS NULL AND support_channel_url IS NULL OR support_channel_type IS NOT NULL AND support_channel_url IS NOT NULL AND char_length(support_channel_url) <= 2048 AND support_channel_url ~ '^https://[^/\\s]+\\S*$'::text)",
       "name": "orgs_support_channel_url_check",
       "table": "orgs",
       "type": "c",
