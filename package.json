@@ -408,7 +408,7 @@
     "vitest": "^4.1.10",
     "vue-tsc": "3.3.7",
     "wrangler": "^4.113.0",
-    "zod": "^4.4.3",
+    "zod": "^4.5.4",
     "zod-compiler": "^1.15.0"
   },
   "gitmoji": {
