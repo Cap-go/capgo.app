@@ -48,26 +48,40 @@ function skipSqlComment(sql: string, index: number): number {
 
 function ifCallHasBareNullArg(sql: string, openParenIndex: number): boolean {
   let depth = 0
-  let argStart = openParenIndex + 1
+  let arg = ''
   let i = openParenIndex
   while (i < sql.length) {
     if (sql[i] === "'") {
-      i = skipSqlQuote(sql, i)
+      const next = skipSqlQuote(sql, i)
+      if (depth >= 1)
+        arg += sql.slice(i, next)
+      i = next
+      continue
+    }
+    const afterComment = skipSqlComment(sql, i)
+    if (afterComment !== i) {
+      i = afterComment
       continue
     }
     const char = sql[i]
     if (char === '(') {
       depth++
+      if (depth > 1)
+        arg += char
     }
     else if (char === ',' && depth === 1) {
-      if (isBareNullArg(sql.slice(argStart, i)))
+      if (isBareNullArg(arg))
         return true
-      argStart = i + 1
+      arg = ''
     }
     else if (char === ')') {
       if (depth === 1)
-        return isBareNullArg(sql.slice(argStart, i))
+        return isBareNullArg(arg)
+      arg += char
       depth--
+    }
+    else if (depth >= 1) {
+      arg += char
     }
     i++
   }

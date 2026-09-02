@@ -78,6 +78,18 @@ describe('analytics engine sql lint rules', () => {
     expect(lintAnalyticsEngineSql(
       'SELECT if(1, NULL, 0) FROM app_log -- if(1, NULL, 0)',
     ).map(issue => issue.rule)).toContain('no-if-untyped-null')
+    expect(lintAnalyticsEngineSql(
+      'SELECT if(1, NULL /* ) */, 0) FROM app_log',
+    ).map(issue => issue.rule)).toContain('no-if-untyped-null')
+    expect(lintAnalyticsEngineSql(
+      'SELECT if(1 /* , */, NULL) FROM app_log',
+    ).map(issue => issue.rule)).toContain('no-if-untyped-null')
+    expect(lintAnalyticsEngineSql(
+      'SELECT if(1, /* NULL */, 0) FROM app_log',
+    ).map(issue => issue.rule)).not.toContain('no-if-untyped-null')
+    expect(lintAnalyticsEngineSql(
+      'SELECT if(1, NULL -- )\n, 0) FROM app_log',
+    ).map(issue => issue.rule)).toContain('no-if-untyped-null')
   })
 })
 
