@@ -16,8 +16,19 @@ export function isPendingStripeCustomerId(customerId: string | null | undefined)
   return Boolean(customerId?.startsWith('pending_'))
 }
 
+// Production (pre-this-PR) generateFakeCustomerId used
+// `cus_${randomUUID().replaceAll('-', '').slice(0, 24)}` — 24 lowercase hex.
+// This PR briefly used the full 32-hex uuid without dashes.
+// Real Stripe ids are mixed-case ~14 chars (e.g. cus_VAgMn1agG4iQSC), not 24/32 hex.
+const LEGACY_FAKE_STRIPE_CUSTOMER_ID_RE = /^cus_[0-9a-f]{24}$/
+const INTERMEDIATE_FAKE_STRIPE_CUSTOMER_ID_RE = /^cus_[0-9a-f]{32}$/
+
 export function isLocalStripeCustomerId(customerId: string | null | undefined) {
-  return Boolean(customerId?.startsWith('cus_local_') || (customerId && /^cus_[0-9a-f]{32}$/.test(customerId)))
+  if (!customerId)
+    return false
+  return customerId.startsWith('cus_local_')
+    || LEGACY_FAKE_STRIPE_CUSTOMER_ID_RE.test(customerId)
+    || INTERMEDIATE_FAKE_STRIPE_CUSTOMER_ID_RE.test(customerId)
 }
 
 export function isProvisionedStripeCustomerId(customerId: string | null | undefined) {

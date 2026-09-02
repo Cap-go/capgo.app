@@ -142,12 +142,19 @@ describe('stripe org customer helpers', () => {
   })
 
   it.concurrent('treats local fake ids as unprovisioned', () => {
-    const legacyLocalId = `cus_${ORG_ID.replaceAll('-', '')}`
+    const intermediateLocalId = `cus_${ORG_ID.replaceAll('-', '')}`
+    // Match the production generator this PR replaced:
+    // `cus_${randomUUID().replaceAll('-', '').slice(0, 24)}`
+    const legacy24HexLocalId = `cus_${crypto.randomUUID().replaceAll('-', '').slice(0, 24)}`
+    expect(legacy24HexLocalId).toMatch(/^cus_[0-9a-f]{24}$/)
     expect(isLocalStripeCustomerId(LOCAL_ID)).toBe(true)
     expect(isProvisionedStripeCustomerId(LOCAL_ID)).toBe(false)
-    expect(isLocalStripeCustomerId(legacyLocalId)).toBe(true)
-    expect(isProvisionedStripeCustomerId(legacyLocalId)).toBe(false)
+    expect(isLocalStripeCustomerId(intermediateLocalId)).toBe(true)
+    expect(isProvisionedStripeCustomerId(intermediateLocalId)).toBe(false)
+    expect(isLocalStripeCustomerId(legacy24HexLocalId)).toBe(true)
+    expect(isProvisionedStripeCustomerId(legacy24HexLocalId)).toBe(false)
     expect(isLocalStripeCustomerId(CUSTOMER_ID)).toBe(false)
+    expect(isProvisionedStripeCustomerId(CUSTOMER_ID)).toBe(true)
   })
 })
 
@@ -178,6 +185,20 @@ describe('createStripeCustomer', () => {
     expect(orgUpdate).toHaveBeenCalledWith({ customer_id: CUSTOMER_ID }, expect.objectContaining({
       id: ORG_ID,
       customer_id: LOCAL_ID,
+    }))
+  })
+
+  it('creates a real customer when the org has a pre-PR 24-hex fake id', async () => {
+    const legacy24HexLocalId = `cus_${crypto.randomUUID().replaceAll('-', '').slice(0, 24)}`
+    const { orgUpdate } = mockSupabase({ orgCustomerId: legacy24HexLocalId })
+
+    const planName = await createStripeCustomer(createContext(), createOrg(legacy24HexLocalId))
+
+    expect(planName).toBe('Solo')
+    expect(createCustomerMock).toHaveBeenCalledTimes(1)
+    expect(orgUpdate).toHaveBeenCalledWith({ customer_id: CUSTOMER_ID }, expect.objectContaining({
+      id: ORG_ID,
+      customer_id: legacy24HexLocalId,
     }))
   })
 
