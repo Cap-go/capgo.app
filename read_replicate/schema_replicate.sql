@@ -411,7 +411,7 @@ CREATE TABLE public.orgs (
     CONSTRAINT orgs_password_policy_config_min_length_check CHECK (((password_policy_config IS NULL) OR ((jsonb_typeof(password_policy_config) = 'object'::text) AND ((NOT (password_policy_config ? 'min_length'::text)) OR ((jsonb_typeof((password_policy_config -> 'min_length'::text)) = 'number'::text) AND (((password_policy_config ->> 'min_length'::text))::numeric = trunc(((password_policy_config ->> 'min_length'::text))::numeric)) AND ((((password_policy_config ->> 'min_length'::text))::numeric >= (6)::numeric) AND (((password_policy_config ->> 'min_length'::text))::numeric <= (72)::numeric))))))),
     CONSTRAINT orgs_required_encryption_key_valid CHECK (((required_encryption_key IS NULL) OR (length((required_encryption_key)::text) = ANY (ARRAY[20, 21])))),
     CONSTRAINT orgs_support_channel_type_check CHECK (((support_channel_type IS NULL) OR (support_channel_type = ANY (ARRAY['slack'::text, 'discord'::text, 'teams'::text])))),
-    CONSTRAINT orgs_support_channel_url_check CHECK ((((support_channel_type IS NULL) AND (support_channel_url IS NULL)) OR ((support_channel_type IS NOT NULL) AND (support_channel_url IS NOT NULL) AND (char_length(support_channel_url) <= 2048) AND (support_channel_url ~ '^https://'::text))))
+    CONSTRAINT orgs_support_channel_url_check CHECK ((((support_channel_type IS NULL) AND (support_channel_url IS NULL)) OR ((support_channel_type IS NOT NULL) AND (support_channel_url IS NOT NULL) AND (char_length(support_channel_url) <= 2048) AND (support_channel_url ~ '^https://[^/\s]+'::text))))
 );
 
 ALTER TABLE ONLY public.orgs REPLICA IDENTITY FULL;
