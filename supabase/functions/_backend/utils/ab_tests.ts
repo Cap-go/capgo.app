@@ -1,10 +1,11 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import type { Database } from './supabase.types.ts'
+import { sql } from 'drizzle-orm'
 import rawABTestsConfig from './ab_tests.json' with { type: 'json' }
 import { syncBentoSubscriberTags } from './bento.ts'
 import { quickError } from './hono.ts'
-import { closeClient, getPgClient } from './pg.ts'
+import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
 
 export type ABTestAudience = 'all' | 'self_signup'
 export type ABTestBranch = 'A' | 'B' | 'C' | 'D'
@@ -23,7 +24,8 @@ export interface ABTestAssignment {
 }
 
 type ABTestsConfig = Record<string, ABTestConfig>
-type AssignmentUser = Pick<Database['public']['Tables']['users']['Row'], 'created_via_invite'>
+type AssignmentAudienceUser = Pick<Database['public']['Tables']['users']['Row'], 'created_via_invite'>
+type AssignmentUser = AssignmentAudienceUser & Record<string, unknown> & { abtests: unknown }
 type SyncUser = Pick<Database['public']['Tables']['users']['Row'], 'created_via_invite' | 'id'>
 const AB_TEST_BRANCHES = ['A', 'B', 'C', 'D'] as const
 
@@ -101,7 +103,7 @@ export function validateABTestsConfig(value: unknown): ABTestsConfig {
 export const AB_TESTS_CONFIG = validateABTestsConfig(rawABTestsConfig)
 
 export function createABTestAssignments(
-  user: AssignmentUser,
+  user: AssignmentAudienceUser,
   config = AB_TESTS_CONFIG,
   random = Math.random,
   now = () => new Date(),
@@ -123,14 +125,17 @@ export function createABTestAssignments(
   return assignments
 }
 
-function readPersistedAssignments(value: unknown, testNames: string[]) {
-  if (!isRecord(value))
-    quickError(500, 'ab_test_assignment_failed', 'A/B test assignment failed')
-
+function readExistingAssignments(value: unknown, testNames: string[]) {
+  const storedAssignments = isRecord(value) ? value : {}
   const assignments: Record<string, ABTestAssignment> = {}
+  const missing: string[] = []
   for (const testName of testNames) {
     const test = AB_TESTS_CONFIG[testName]
-    const assignment = value[testName]
+    const assignment = storedAssignments[testName]
+    if (assignment === undefined) {
+      missing.push(testName)
+      continue
+    }
     const branch = isRecord(assignment) ? assignment.branch : undefined
     if (!test
       || !isRecord(assignment)
@@ -144,7 +149,50 @@ function readPersistedAssignments(value: unknown, testNames: string[]) {
       branch,
     }
   }
-  return assignments
+  return { assignments, missing }
+}
+
+function readPersistedAssignments(value: unknown, testNames: string[]) {
+  const existing = readExistingAssignments(value, testNames)
+  if (existing.missing.length > 0)
+    quickError(500, 'ab_test_assignment_failed', 'A/B test assignment failed', { testNames: existing.missing })
+  return existing.assignments
+}
+
+function eligibleTestNames(user: AssignmentAudienceUser) {
+  return Object.entries(AB_TESTS_CONFIG)
+    .filter(([, test]) => test.audience !== 'self_signup' || !user.created_via_invite)
+    .map(([testName]) => testName)
+}
+
+function configForTests(testNames: string[]): ABTestsConfig {
+  return Object.fromEntries(testNames.map(testName => [testName, AB_TESTS_CONFIG[testName]]))
+}
+
+async function readAssignmentUser(
+  c: Context<MiddlewareKeyVariables>,
+  userId: string,
+): Promise<AssignmentUser | undefined> {
+  const pgPool = getPgClient(c, true)
+  try {
+    const pgClient = await pgPool.connect()
+    try {
+      const result = await pgClient.query<AssignmentUser>(
+        `SELECT created_via_invite, onboarding->'abtests' AS abtests
+         FROM public.users
+         WHERE id = $1::uuid
+         LIMIT 1`,
+        [userId],
+      )
+      return result.rows[0]
+    }
+    finally {
+      pgClient.release(true)
+    }
+  }
+  finally {
+    await closeClient(c, pgPool)
+  }
 }
 
 async function persistABTestAssignments(
@@ -189,36 +237,58 @@ export async function getOrCreateUserABTests(
   c: Context<MiddlewareKeyVariables>,
   userId: string,
 ) {
-  const pgPool = getPgClient(c)
-  let user: AssignmentUser | undefined
+  const replicaUser = await readAssignmentUser(c, userId)
+  if (replicaUser) {
+    const testNames = eligibleTestNames(replicaUser)
+    const existing = readExistingAssignments(replicaUser.abtests, testNames)
+    if (existing.missing.length === 0)
+      return existing.assignments
+  }
+
+  const pgPool = getPgClient(c, false)
   try {
-    const pgClient = await pgPool.connect()
-    try {
-      const result = await pgClient.query<AssignmentUser>(
-        `SELECT created_via_invite
-         FROM public.users
-         WHERE id = $1::uuid
-         LIMIT 1`,
-        [userId],
-      )
-      user = result.rows[0]
-    }
-    finally {
-      pgClient.release(true)
-    }
+    const drizzle = getDrizzleClient(pgPool)
+    return await drizzle.transaction(async (tx) => {
+      const lockedUserResult = await tx.execute<AssignmentUser>(sql`
+        SELECT created_via_invite, onboarding->'abtests' AS abtests
+        FROM public.users
+        WHERE id = ${userId}::uuid
+        FOR UPDATE
+      `)
+      const user = lockedUserResult.rows[0]
+      if (!user)
+        quickError(404, 'user_not_found', 'User not found')
+
+      const testNames = eligibleTestNames(user)
+      if (testNames.length === 0)
+        return {}
+
+      const existing = readExistingAssignments(user.abtests, testNames)
+      if (existing.missing.length === 0)
+        return existing.assignments
+
+      const candidates = createABTestAssignments(user, configForTests(existing.missing))
+      const updateResult = await tx.execute<{ abtests?: unknown }>(sql`
+        UPDATE public.users
+        SET onboarding = COALESCE(onboarding, '{}'::jsonb)
+          || pg_catalog.jsonb_build_object(
+            'abtests',
+            CASE
+              WHEN pg_catalog.jsonb_typeof(onboarding->'abtests') = 'object'
+                THEN onboarding->'abtests'
+              ELSE '{}'::jsonb
+            END || ${JSON.stringify(candidates)}::jsonb
+          )
+        WHERE id = ${userId}::uuid
+        RETURNING onboarding->'abtests' AS abtests
+      `)
+      const updated = updateResult.rows[0]
+      return readPersistedAssignments(updated?.abtests, testNames)
+    })
   }
   finally {
     await closeClient(c, pgPool)
   }
-
-  if (!user)
-    quickError(404, 'user_not_found', 'User not found')
-
-  const candidates = createABTestAssignments(user)
-  if (Object.keys(candidates).length === 0)
-    return {}
-
-  return await persistABTestAssignments(c, userId, candidates)
 }
 
 export async function syncNewUserABTests(

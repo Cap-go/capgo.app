@@ -4,6 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
   closeClientMock,
+  drizzleExecuteMock,
+  drizzleTransactionMock,
+  getDrizzleClientMock,
   getPgClientMock,
   pgConnectMock,
   pgQueryMock,
@@ -16,8 +19,15 @@ const {
   ) => Promise<{ rows: Record<string, unknown>[] }>>(async () => ({ rows: [] }))
   const pgReleaseMock = vi.fn<(destroy?: Error | boolean) => void>(() => undefined)
   const pgConnectMock = vi.fn(async () => ({ query: pgQueryMock, release: pgReleaseMock }))
+  const drizzleExecuteMock = vi.fn(async () => ({ rows: [] as Record<string, unknown>[] }))
+  const drizzleTransactionMock = vi.fn(async (callback: (tx: { execute: typeof drizzleExecuteMock }) => Promise<unknown>) => {
+    return await callback({ execute: drizzleExecuteMock })
+  })
   return {
     closeClientMock: vi.fn(async () => undefined),
+    drizzleExecuteMock,
+    drizzleTransactionMock,
+    getDrizzleClientMock: vi.fn(() => ({ transaction: drizzleTransactionMock })),
     getPgClientMock: vi.fn(() => ({ connect: pgConnectMock })),
     pgConnectMock,
     pgQueryMock,
@@ -35,6 +45,7 @@ vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   closeClient: closeClientMock,
+  getDrizzleClient: getDrizzleClientMock,
   getPgClient: getPgClientMock,
 }))
 
@@ -82,6 +93,9 @@ describe('new-user A/B test assignment', () => {
     vi.clearAllMocks()
     pgConnectMock.mockImplementation(async () => ({ query: pgQueryMock, release: pgReleaseMock }))
     getPgClientMock.mockImplementation(() => ({ connect: pgConnectMock }))
+    getDrizzleClientMock.mockImplementation(() => ({ transaction: drizzleTransactionMock }))
+    drizzleTransactionMock.mockImplementation(async callback => await callback({ execute: drizzleExecuteMock }))
+    drizzleExecuteMock.mockResolvedValue({ rows: [] })
     closeClientMock.mockResolvedValue(undefined)
     syncBentoSubscriberTagsMock.mockResolvedValue(true)
   })
@@ -94,6 +108,15 @@ describe('new-user A/B test assignment', () => {
     const source = await readFile(new URL('../supabase/functions/_backend/utils/ab_tests.ts', import.meta.url), 'utf8')
 
     expect(source).toContain('from \'./ab_tests.json\' with { type: \'json\' }')
+  })
+
+  it('uses a replica fast path and a locked Drizzle transaction for missing assignments', async () => {
+    const source = await readFile(new URL('../supabase/functions/_backend/utils/ab_tests.ts', import.meta.url), 'utf8')
+
+    expect(source).toContain('getPgClient(c, true)')
+    expect(source).toContain('getPgClient(c, false)')
+    expect(source).toContain('drizzle.transaction(async (tx) =>')
+    expect(source).toContain('FOR UPDATE')
   })
 
   it.each([
@@ -339,41 +362,82 @@ describe('new-user A/B test assignment', () => {
     })).resolves.toBeUndefined()
   })
 
-  it('assigns onboarding flags on demand and returns the persisted branches without rerolling them', async () => {
+  it('returns complete assignments from the replica without touching the primary database', async () => {
     const { getOrCreateUserABTests } = await loadABTestsModule()
     const persisted = persistedAssignments({ development: 'D', emails: 'B', publish: 'B' })
-    vi.spyOn(Math, 'random').mockReturnValue(0)
-    pgQueryMock
-      .mockResolvedValueOnce({ rows: [{ created_via_invite: false }] })
-      .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
+    const context = { get: vi.fn(() => 'request-id') } as never
+    pgQueryMock.mockResolvedValueOnce({ rows: [{ abtests: persisted, created_via_invite: false }] })
 
     await expect(getOrCreateUserABTests(
-      { get: vi.fn(() => 'request-id') } as never,
+      context,
       USER_ID,
     )).resolves.toEqual(persisted)
 
-    expect(pgQueryMock).toHaveBeenCalledTimes(2)
+    expect(pgQueryMock).toHaveBeenCalledOnce()
     const [selectQuery, selectParams] = pgQueryMock.mock.calls[0]!
-    expect(String(selectQuery).replace(/\s+/g, ' ')).toContain('FROM public.users WHERE id = $1::uuid')
+    expect(String(selectQuery).replace(/\s+/g, ' ')).toContain("SELECT created_via_invite, onboarding->'abtests' AS abtests")
     expect(selectParams).toEqual([USER_ID])
+    expect(getPgClientMock).toHaveBeenCalledOnce()
+    expect(getPgClientMock).toHaveBeenCalledWith(context, true)
+    expect(getDrizzleClientMock).not.toHaveBeenCalled()
+  })
 
-    const [, updateParams] = pgQueryMock.mock.calls[1]!
-    expect(JSON.parse(String(updateParams?.[1]))).toMatchObject({
-      webnativeapp_development_environment: { branch: 'C' },
-      webnativeapp_publish_intent: { branch: 'A' },
-    })
+  it('locks the primary user row and assigns only missing tests inside one transaction', async () => {
+    const { getOrCreateUserABTests } = await loadABTestsModule()
+    const existing = {
+      new_emails: { assigned_at: FIXED_DATE.toISOString(), branch: 'B' },
+    }
+    const persisted = persistedAssignments({ development: 'C', emails: 'B', publish: 'A' })
+    const context = { get: vi.fn(() => 'request-id') } as never
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0)
+    pgQueryMock.mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false }] })
+    drizzleExecuteMock
+      .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false }] })
+      .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
+
+    await expect(getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
+
+    expect(getPgClientMock.mock.calls).toEqual([[context, true], [context, false]])
+    expect(drizzleTransactionMock).toHaveBeenCalledOnce()
+    expect(drizzleExecuteMock).toHaveBeenCalledTimes(2)
+    expect(random).toHaveBeenCalledTimes(2)
+    expect(closeClientMock).toHaveBeenCalledTimes(2)
     expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
+  })
+
+  it('rechecks the locked primary row and never regenerates completed assignments', async () => {
+    const { getOrCreateUserABTests } = await loadABTestsModule()
+    const partial = {
+      new_emails: { assigned_at: FIXED_DATE.toISOString(), branch: 'B' },
+    }
+    const persisted = persistedAssignments({ development: 'D', emails: 'B', publish: 'B' })
+    const context = { get: vi.fn(() => 'request-id') } as never
+    const random = vi.spyOn(Math, 'random')
+    pgQueryMock.mockResolvedValueOnce({ rows: [{ abtests: partial, created_via_invite: false }] })
+    drizzleExecuteMock.mockResolvedValueOnce({ rows: [{ abtests: persisted, created_via_invite: false }] })
+
+    await expect(getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
+
+    expect(drizzleTransactionMock).toHaveBeenCalledOnce()
+    expect(drizzleExecuteMock).toHaveBeenCalledOnce()
+    expect(random).not.toHaveBeenCalled()
+    expect(closeClientMock).toHaveBeenCalledTimes(2)
   })
 
   it('rejects on-demand assignment when the authenticated profile is missing', async () => {
     const { getOrCreateUserABTests } = await loadABTestsModule()
+    const context = { get: vi.fn(() => 'request-id') } as never
     pgQueryMock.mockResolvedValueOnce({ rows: [] })
+    drizzleExecuteMock.mockResolvedValueOnce({ rows: [] })
 
     await expect(getOrCreateUserABTests(
-      { get: vi.fn(() => 'request-id') } as never,
+      context,
       USER_ID,
     )).rejects.toThrow('User not found')
     expect(pgQueryMock).toHaveBeenCalledOnce()
+    expect(getPgClientMock.mock.calls).toEqual([[context, true], [context, false]])
+    expect(drizzleTransactionMock).toHaveBeenCalledOnce()
+    expect(closeClientMock).toHaveBeenCalledTimes(2)
   })
 
   it('does not touch persistence or Bento when no experiment matches the audience', async () => {
