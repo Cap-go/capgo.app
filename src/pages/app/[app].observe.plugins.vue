@@ -51,12 +51,16 @@ const recommendation = computed(() => {
     return null
   return buildPluginVersionRecommendation(pluginVersions.value, distTags.value)
 })
-const recommendationRows = computed(() => recommendation.value?.rows ?? pluginVersions.value.map(version => ({
-  ...version,
-  major: null,
-  latestForMajor: null,
-  status: 'unknown' as const,
-})))
+const recommendationRows = computed(() => {
+  if (statsLoading.value)
+    return []
+  return recommendation.value?.rows ?? pluginVersions.value.map(version => ({
+    ...version,
+    major: null,
+    latestForMajor: null,
+    status: 'unknown' as const,
+  }))
+})
 const behindDevicesDisplay = computed(() => {
   if (!recommendation.value?.statusResolved)
     return null

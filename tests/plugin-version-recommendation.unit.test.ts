@@ -199,4 +199,20 @@ describe('fetchUpdaterDistTags', () => {
     await expect(fetchUpdaterDistTags()).resolves.toEqual(distTags)
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
+
+  it('fetches when AbortSignal.timeout is unavailable', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ 'dist-tags': distTags }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const originalTimeout = AbortSignal.timeout
+    Object.defineProperty(AbortSignal, 'timeout', { configurable: true, value: undefined })
+
+    try {
+      await expect(fetchUpdaterDistTags()).resolves.toEqual(distTags)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal)
+    }
+    finally {
+      Object.defineProperty(AbortSignal, 'timeout', { configurable: true, value: originalTimeout })
+    }
+  })
 })

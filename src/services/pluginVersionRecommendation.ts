@@ -231,12 +231,20 @@ export async function fetchUpdaterDistTags(): Promise<PluginDistTags | null> {
     return distTagInFlight
 
   distTagInFlight = (async () => {
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const signal = typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.timeout(10_000)
+      : (() => {
+          const controller = new AbortController()
+          timeout = setTimeout(() => controller.abort(), 10_000)
+          return controller.signal
+        })()
     try {
       const response = await fetch(NPM_REGISTRY_URL, {
         headers: {
           accept: 'application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*',
         },
-        signal: AbortSignal.timeout(10_000),
+        signal,
       })
       if (!response.ok)
         return null
@@ -251,6 +259,8 @@ export async function fetchUpdaterDistTags(): Promise<PluginDistTags | null> {
       return null
     }
     finally {
+      if (timeout)
+        clearTimeout(timeout)
       distTagInFlight = null
     }
   })()
