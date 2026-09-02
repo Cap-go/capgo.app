@@ -9,6 +9,125 @@ interface AnalyticsEngineSqlLintRule {
   message: string
 }
 
+function isBareNullArg(arg: string): boolean {
+  return arg.trim().toLowerCase() === 'null'
+}
+
+function skipSqlQuote(sql: string, quoteIndex: number): number {
+  let i = quoteIndex + 1
+  while (i < sql.length) {
+    if (sql[i] === "'" && sql[i + 1] === "'") {
+      i += 2
+      continue
+    }
+    if (sql[i] === "'")
+      return i + 1
+    i++
+  }
+  return sql.length
+}
+
+function skipSqlComment(sql: string, index: number): number {
+  if (sql.startsWith('--', index)) {
+    let i = index + 2
+    while (i < sql.length && sql[i] !== '\n')
+      i++
+    return i < sql.length ? i + 1 : i
+  }
+  if (sql.startsWith('/*', index)) {
+    let i = index + 2
+    while (i < sql.length) {
+      if (sql[i] === '*' && sql[i + 1] === '/')
+        return i + 2
+      i++
+    }
+    return sql.length
+  }
+  return index
+}
+
+interface IfArgWalk {
+  depth: number
+  arg: string
+}
+
+function skipQuotedOrCommentedArg(sql: string, index: number, walk: IfArgWalk): number | null {
+  if (sql[index] === "'") {
+    const next = skipSqlQuote(sql, index)
+    if (walk.depth >= 1)
+      walk.arg += sql.slice(index, next)
+    return next
+  }
+  const afterComment = skipSqlComment(sql, index)
+  return afterComment === index ? null : afterComment
+}
+
+function consumeIfArgChar(walk: IfArgWalk, char: string): boolean | null {
+  if (char === '(') {
+    walk.depth++
+    if (walk.depth > 1)
+      walk.arg += char
+    return null
+  }
+  if (char === ',' && walk.depth === 1) {
+    if (isBareNullArg(walk.arg))
+      return true
+    walk.arg = ''
+    return null
+  }
+  if (char === ')') {
+    if (walk.depth === 1)
+      return isBareNullArg(walk.arg)
+    walk.arg += char
+    walk.depth--
+    return null
+  }
+  if (walk.depth >= 1)
+    walk.arg += char
+  return null
+}
+
+function ifCallHasBareNullArg(sql: string, openParenIndex: number): boolean {
+  const walk: IfArgWalk = { depth: 0, arg: '' }
+  let i = openParenIndex
+  while (i < sql.length) {
+    const skipped = skipQuotedOrCommentedArg(sql, i, walk)
+    if (skipped !== null) {
+      i = skipped
+      continue
+    }
+    const found = consumeIfArgChar(walk, sql[i] ?? '')
+    if (found !== null)
+      return found
+    i++
+  }
+  return false
+}
+
+function hasUntypedNullIfBranch(sql: string): boolean {
+  const ifOpen = /^if\s*\(/i
+  let i = 0
+  while (i < sql.length) {
+    if (sql[i] === "'") {
+      i = skipSqlQuote(sql, i)
+      continue
+    }
+    const afterComment = skipSqlComment(sql, i)
+    if (afterComment !== i) {
+      i = afterComment
+      continue
+    }
+    const prev = i === 0 ? '' : sql[i - 1]
+    if ((sql[i] === 'i' || sql[i] === 'I') && !/\w/.test(prev ?? '')) {
+      const match = ifOpen.exec(sql.slice(i))
+      if (match && ifCallHasBareNullArg(sql, i + match[0].length - 1))
+        return true
+    }
+    i++
+  }
+  return false
+}
+
 export const ANALYTICS_ENGINE_SQL_LINT_RULES: AnalyticsEngineSqlLintRule[] = [
   {
     id: 'no-count-star',
@@ -49,6 +168,11 @@ export const ANALYTICS_ENGINE_SQL_LINT_RULES: AnalyticsEngineSqlLintRule[] = [
     id: 'no-from-table-alias',
     test: sql => /\b(?:FROM|JOIN)\s+[\w.]+\s+(?:AS\s+)?[a-z]\w*\s+(?:,|WHERE|LEFT|RIGHT|INNER|JOIN|GROUP|ORDER|LIMIT|$)/i.test(sql),
     message: 'Table aliases in FROM/JOIN are unsupported by Analytics Engine SQL',
+  },
+  {
+    id: 'no-if-untyped-null',
+    test: hasUntypedNullIfBranch,
+    message: 'Analytics Engine SQL IF() branches must share a type; untyped NULL cannot pair with Double or DateTime',
   },
 ]
 
