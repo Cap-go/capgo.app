@@ -149,7 +149,7 @@
         "@capgo/cli": "workspace:*",
         "@cloudflare/workers-types": "5.20260722.1",
         "@codspeed/vitest-plugin": "^5.7.1",
-        "@formkit/core": "2.1.0",
+        "@formkit/core": "2.1.2",
         "@iconify-json/simple-icons": "^1.2.91",
         "@iconify/json": "^2.2.504",
         "@intlify/unplugin-vue-i18n": "^11.2.4",
@@ -211,7 +211,7 @@
     },
     "cli": {
       "name": "@capgo/cli",
-      "version": "8.45.1",
+      "version": "8.46.0",
       "bin": {
         "capgo": "dist/index.js",
       },
@@ -765,7 +765,7 @@
 
     "@floating-ui/vue": ["@floating-ui/vue@1.1.11", "", { "dependencies": { "@floating-ui/dom": "^1.7.6", "@floating-ui/utils": "^0.2.11", "vue-demi": ">=0.13.0" } }, "sha512-HzHKCNVxnGS35r9fCHBc3+uCnjw9IWIlCPL683cGgM9Kgj2BiAl8x1mS7vtvP6F9S/e/q4O6MApwSHj8hNLGfw=="],
 
-    "@formkit/core": ["@formkit/core@2.1.0", "", { "dependencies": { "@formkit/utils": "^2.1.0" } }, "sha512-ifP8sRoH0ekwBVbu+u83zWGP+596Hg4ji2kBLiYKkPpM7oLJYg7ZSmQtj9PVn9hcFYQwUL5zA6VsZx6JwOl3pQ=="],
+    "@formkit/core": ["@formkit/core@2.1.2", "", { "dependencies": { "@formkit/utils": "^2.1.2" } }, "sha512-uv3NUXQkqyjvT2VILdcDWvO99Ql69zA93RiInqBXMyuA6UyFTJvc/LQt352diP951k0bDGWG4ar0g1GI2/EtYQ=="],
 
     "@formkit/dev": ["@formkit/dev@2.1.0", "", { "dependencies": { "@formkit/core": "^2.1.0", "@formkit/utils": "^2.1.0" } }, "sha512-V30OsLcRFdmKsES0IEyHgnWnSlMQ6vymqYlShIr2H9Zskaqsg4soZ9ePnahwkj7aW3JR5drDy0JC9HhdcPJApQ=="],
 
@@ -781,7 +781,7 @@
 
     "@formkit/themes": ["@formkit/themes@2.1.0", "", { "dependencies": { "@formkit/core": "^2.1.0" } }, "sha512-LyP1vygx+tbbWydSPYfMAEUBnaIlSHvoLB2wjvNMpbRTea03hjFwXT9MX/O8TDtmjd489/LltBPtjmswTbOdGg=="],
 
-    "@formkit/utils": ["@formkit/utils@2.1.0", "", {}, "sha512-yPGg0Uj0jp0N5h6AL+flJMRWksoZPtPu96Slb6i4GKraRKeJG6PbwCutWg9j6UiWqTsNX42Bz0Zsh9s6UxdziA=="],
+    "@formkit/utils": ["@formkit/utils@2.1.2", "", {}, "sha512-ZbPWhmQKkx5ojGW+r14WfrubnhWWdeTlm/rTiVjZExFQhsmQa6hCu35l0z/EeLb04UhXjoZP/IXBJ+/QU5ZMGw=="],
 
     "@formkit/validation": ["@formkit/validation@2.1.0", "", { "dependencies": { "@formkit/core": "^2.1.0", "@formkit/observer": "^2.1.0", "@formkit/utils": "^2.1.0" } }, "sha512-l/d9ni7Fr+ISyuQDDaCJxXa3ypOdLGwHri8K2r6t52HAy5aX5RnVDpchfdencbSKfdygNc36b5gBPzgoZ4B2uw=="],
 
@@ -2846,6 +2846,20 @@
     "@eslint-community/eslint-plugin-eslint-comments/ignore": ["ignore@7.0.5", "", {}, "sha512-Hs59xBNfUIunMFgWAbGX5cq6893IbWg4KnrjbYwX3tx0ztorVgTDA6B2sxf8ejHJ4wz8BqGUMYlnzNBer5NvGg=="],
 
     "@eslint-community/eslint-utils/eslint-visitor-keys": ["eslint-visitor-keys@3.4.3", "", {}, "sha512-wpc+LXeiyiisxPlEkUzU6svyS1frIO3Mgxj1fdy7Pm8Ygzguax2N3Fa/D/ag1WqbOprdI+uY6wMUl8/a2G+iag=="],
+
+    "@formkit/dev/@formkit/utils": ["@formkit/utils@2.1.0", "", {}, "sha512-yPGg0Uj0jp0N5h6AL+flJMRWksoZPtPu96Slb6i4GKraRKeJG6PbwCutWg9j6UiWqTsNX42Bz0Zsh9s6UxdziA=="],
+
+    "@formkit/i18n/@formkit/utils": ["@formkit/utils@2.1.0", "", {}, "sha512-yPGg0Uj0jp0N5h6AL+flJMRWksoZPtPu96Slb6i4GKraRKeJG6PbwCutWg9j6UiWqTsNX42Bz0Zsh9s6UxdziA=="],
+
+    "@formkit/inputs/@formkit/utils": ["@formkit/utils@2.1.0", "", {}, "sha512-yPGg0Uj0jp0N5h6AL+flJMRWksoZPtPu96Slb6i4GKraRKeJG6PbwCutWg9j6UiWqTsNX42Bz0Zsh9s6UxdziA=="],
+
+    "@formkit/observer/@formkit/utils": ["@formkit/utils@2.1.0", "", {}, "sha512-yPGg0Uj0jp0N5h6AL+flJMRWksoZPtPu96Slb6i4GKraRKeJG6PbwCutWg9j6UiWqTsNX42Bz0Zsh9s6UxdziA=="],
+
+    "@formkit/rules/@formkit/utils": ["@formkit/utils@2.1.0", "", {}, "sha512-yPGg0Uj0jp0N5h6AL+flJMRWksoZPtPu96Slb6i4GKraRKeJG6PbwCutWg9j6UiWqTsNX42Bz0Zsh9s6UxdziA=="],
+
+    "@formkit/validation/@formkit/utils": ["@formkit/utils@2.1.0", "", {}, "sha512-yPGg0Uj0jp0N5h6AL+flJMRWksoZPtPu96Slb6i4GKraRKeJG6PbwCutWg9j6UiWqTsNX42Bz0Zsh9s6UxdziA=="],
+
+    "@formkit/vue/@formkit/utils": ["@formkit/utils@2.1.0", "", {}, "sha512-yPGg0Uj0jp0N5h6AL+flJMRWksoZPtPu96Slb6i4GKraRKeJG6PbwCutWg9j6UiWqTsNX42Bz0Zsh9s6UxdziA=="],
 
     "@img/sharp-wasm32/@emnapi/runtime": ["@emnapi/runtime@1.10.0", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-ewvYlk86xUoGI0zQRNq/mC+16R1QeDlKQy21Ki3oSYXNgLb45GV1P6A0M+/s6nyCuNDqe5VpaY84BzXGwVbwFA=="],
 
