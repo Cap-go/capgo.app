@@ -7,7 +7,7 @@ import { getDrizzleClient, getPgClient } from './pg.ts'
 import * as schema from './postgres_schema.ts'
 import { getEnv, trimTrailingSlashes } from './utils.ts'
 
-export const ORG_ONBOARDING_INTENTS = ['unknown', 'ota', 'builder', 'both', 'exploring'] as const
+export const ORG_ONBOARDING_INTENTS = ['unknown', 'ota', 'builder', 'both', 'exploring', 'publish'] as const
 export type OrgOnboardingIntent = typeof ORG_ONBOARDING_INTENTS[number]
 
 export function parseOrgOnboardingIntent(onboarding: unknown): OrgOnboardingIntent {
@@ -42,7 +42,7 @@ export function buildOnboardingIntentBentoEventData(
   const onboardingUrlBuilder = baseUrl ? `${baseUrl}/apps` : null
 
   let onboardingUrl: string | null = onboardingUrlOta
-  if (intent === 'builder')
+  if (intent === 'builder' || intent === 'publish')
     onboardingUrl = onboardingUrlBuilder
   else if (intent === 'exploring' || intent === 'unknown')
     onboardingUrl = baseUrl ? `${baseUrl}/apps` : null

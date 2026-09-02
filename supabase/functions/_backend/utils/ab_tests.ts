@@ -1,18 +1,21 @@
-import type { Database } from './supabase.types.ts'
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from './hono.ts'
+import type { Database } from './supabase.types.ts'
+import { sql } from 'drizzle-orm'
 import rawABTestsConfig from './ab_tests.json' with { type: 'json' }
 import { syncBentoSubscriberTags } from './bento.ts'
 import { quickError } from './hono.ts'
-import { closeClient, getPgClient } from './pg.ts'
+import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
 
 export type ABTestAudience = 'all' | 'self_signup'
-export type ABTestBranch = 'A' | 'B'
+export type ABTestBranch = 'A' | 'B' | 'C' | 'D'
 
 export interface ABTestConfig {
   audience: ABTestAudience
-  branch_a_percentage: number
-  branches: Record<ABTestBranch, { bento_tag: string }>
+  branches: Record<string, { bento_tag: string }>
+  control_branch: ABTestBranch
+  treatment_branch: ABTestBranch
+  treatment_percentage: number
 }
 
 export interface ABTestAssignment {
@@ -21,8 +24,10 @@ export interface ABTestAssignment {
 }
 
 type ABTestsConfig = Record<string, ABTestConfig>
-type AssignmentUser = Pick<Database['public']['Tables']['users']['Row'], 'created_via_invite'>
+type AssignmentAudienceUser = Pick<Database['public']['Tables']['users']['Row'], 'created_via_invite'>
+type AssignmentUser = AssignmentAudienceUser & Record<string, unknown> & { abtests: unknown }
 type SyncUser = Pick<Database['public']['Tables']['users']['Row'], 'created_via_invite' | 'id'>
+const AB_TEST_BRANCHES = ['A', 'B', 'C', 'D'] as const
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -30,6 +35,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function invalidConfig(testName?: string): never {
   throw new Error(`Invalid A/B test configuration${testName ? ` for ${testName}` : ''}`)
+}
+
+function isABTestBranch(value: unknown): value is ABTestBranch {
+  return typeof value === 'string' && (AB_TEST_BRANCHES as readonly string[]).includes(value)
 }
 
 export function validateABTestsConfig(value: unknown): ABTestsConfig {
@@ -43,7 +52,9 @@ export function validateABTestsConfig(value: unknown): ABTestsConfig {
       invalidConfig(testName)
 
     const audience = entry.audience
-    const percentage = entry.branch_a_percentage
+    const percentage = entry.treatment_percentage
+    const treatmentBranch = entry.treatment_branch
+    const controlBranch = entry.control_branch
     const branches = entry.branches
     if ((audience !== 'all' && audience !== 'self_signup')
       || typeof percentage !== 'number'
@@ -51,31 +62,37 @@ export function validateABTestsConfig(value: unknown): ABTestsConfig {
       || percentage < 0
       || percentage > 100
       || !isRecord(branches)
-      || !isRecord(branches.A)
-      || !isRecord(branches.B)) {
+      || !isABTestBranch(treatmentBranch)
+      || !isABTestBranch(controlBranch)
+      || treatmentBranch === controlBranch
+      || Object.keys(branches).length !== 2
+      || !isRecord(branches[treatmentBranch])
+      || !isRecord(branches[controlBranch])) {
       invalidConfig(testName)
     }
 
-    const branchATag = branches.A.bento_tag
-    const branchBTag = branches.B.bento_tag
-    if (typeof branchATag !== 'string'
-      || typeof branchBTag !== 'string'
-      || !branchATag.trim()
-      || !branchBTag.trim()
-      || branchATag === branchBTag
-      || bentoTags.has(branchATag)
-      || bentoTags.has(branchBTag)) {
+    const treatmentTag = branches[treatmentBranch].bento_tag
+    const controlTag = branches[controlBranch].bento_tag
+    if (typeof treatmentTag !== 'string'
+      || typeof controlTag !== 'string'
+      || !treatmentTag.trim()
+      || !controlTag.trim()
+      || treatmentTag === controlTag
+      || bentoTags.has(treatmentTag)
+      || bentoTags.has(controlTag)) {
       invalidConfig(testName)
     }
-    bentoTags.add(branchATag)
-    bentoTags.add(branchBTag)
+    bentoTags.add(treatmentTag)
+    bentoTags.add(controlTag)
 
     config[testName] = {
       audience,
-      branch_a_percentage: percentage,
+      control_branch: controlBranch,
+      treatment_branch: treatmentBranch,
+      treatment_percentage: percentage,
       branches: {
-        A: { bento_tag: branchATag },
-        B: { bento_tag: branchBTag },
+        [treatmentBranch]: { bento_tag: treatmentTag },
+        [controlBranch]: { bento_tag: controlTag },
       },
     }
   }
@@ -86,7 +103,7 @@ export function validateABTestsConfig(value: unknown): ABTestsConfig {
 export const AB_TESTS_CONFIG = validateABTestsConfig(rawABTestsConfig)
 
 export function createABTestAssignments(
-  user: AssignmentUser,
+  user: AssignmentAudienceUser,
   config = AB_TESTS_CONFIG,
   random = Math.random,
   now = () => new Date(),
@@ -101,31 +118,81 @@ export function createABTestAssignments(
     assignedAt ??= now().toISOString()
     assignments[testName] = {
       assigned_at: assignedAt,
-      branch: random() * 100 < test.branch_a_percentage ? 'A' : 'B',
+      branch: random() * 100 < test.treatment_percentage ? test.treatment_branch : test.control_branch,
     }
   }
 
   return assignments
 }
 
-function readPersistedAssignments(value: unknown, testNames: string[]) {
-  if (!isRecord(value))
-    quickError(500, 'ab_test_assignment_failed', 'A/B test assignment failed')
-
+function readExistingAssignments(value: unknown, testNames: string[]) {
+  const storedAssignments = isRecord(value) ? value : {}
   const assignments: Record<string, ABTestAssignment> = {}
+  const missing: string[] = []
   for (const testName of testNames) {
-    const assignment = value[testName]
-    if (!isRecord(assignment)
+    const test = AB_TESTS_CONFIG[testName]
+    const assignment = storedAssignments[testName]
+    if (assignment === undefined) {
+      missing.push(testName)
+      continue
+    }
+    const branch = isRecord(assignment) ? assignment.branch : undefined
+    if (!test
+      || !isRecord(assignment)
       || typeof assignment.assigned_at !== 'string'
-      || (assignment.branch !== 'A' && assignment.branch !== 'B')) {
+      || !isABTestBranch(branch)
+      || (branch !== test.treatment_branch && branch !== test.control_branch)) {
       quickError(500, 'ab_test_assignment_failed', 'A/B test assignment failed', { testName })
     }
     assignments[testName] = {
       assigned_at: assignment.assigned_at,
-      branch: assignment.branch,
+      branch,
     }
   }
-  return assignments
+  return { assignments, missing }
+}
+
+function readPersistedAssignments(value: unknown, testNames: string[]) {
+  const existing = readExistingAssignments(value, testNames)
+  if (existing.missing.length > 0)
+    quickError(500, 'ab_test_assignment_failed', 'A/B test assignment failed', { testNames: existing.missing })
+  return existing.assignments
+}
+
+function eligibleTestNames(user: AssignmentAudienceUser) {
+  return Object.entries(AB_TESTS_CONFIG)
+    .filter(([, test]) => test.audience !== 'self_signup' || !user.created_via_invite)
+    .map(([testName]) => testName)
+}
+
+function configForTests(testNames: string[]): ABTestsConfig {
+  return Object.fromEntries(testNames.map(testName => [testName, AB_TESTS_CONFIG[testName]]))
+}
+
+async function readAssignmentUser(
+  c: Context<MiddlewareKeyVariables>,
+  userId: string,
+): Promise<AssignmentUser | undefined> {
+  const pgPool = getPgClient(c, true)
+  try {
+    const pgClient = await pgPool.connect()
+    try {
+      const result = await pgClient.query<AssignmentUser>(
+        `SELECT created_via_invite, onboarding->'abtests' AS abtests
+         FROM public.users
+         WHERE id = $1::uuid
+         LIMIT 1`,
+        [userId],
+      )
+      return result.rows[0]
+    }
+    finally {
+      pgClient.release(true)
+    }
+  }
+  finally {
+    await closeClient(c, pgPool)
+  }
 }
 
 async function persistABTestAssignments(
@@ -166,6 +233,64 @@ async function persistABTestAssignments(
   return readPersistedAssignments(persisted, Object.keys(candidates))
 }
 
+export async function getOrCreateUserABTests(
+  c: Context<MiddlewareKeyVariables>,
+  userId: string,
+) {
+  const replicaUser = await readAssignmentUser(c, userId)
+  if (replicaUser) {
+    const testNames = eligibleTestNames(replicaUser)
+    const existing = readExistingAssignments(replicaUser.abtests, testNames)
+    if (existing.missing.length === 0)
+      return existing.assignments
+  }
+
+  const pgPool = getPgClient(c, false)
+  try {
+    const drizzle = getDrizzleClient(pgPool)
+    return await drizzle.transaction(async (tx) => {
+      const lockedUserResult = await tx.execute<AssignmentUser>(sql`
+        SELECT created_via_invite, onboarding->'abtests' AS abtests
+        FROM public.users
+        WHERE id = ${userId}::uuid
+        FOR UPDATE
+      `)
+      const user = lockedUserResult.rows[0]
+      if (!user)
+        quickError(404, 'user_not_found', 'User not found')
+
+      const testNames = eligibleTestNames(user)
+      if (testNames.length === 0)
+        return {}
+
+      const existing = readExistingAssignments(user.abtests, testNames)
+      if (existing.missing.length === 0)
+        return existing.assignments
+
+      const candidates = createABTestAssignments(user, configForTests(existing.missing))
+      const updateResult = await tx.execute<{ abtests?: unknown }>(sql`
+        UPDATE public.users
+        SET onboarding = COALESCE(onboarding, '{}'::jsonb)
+          || pg_catalog.jsonb_build_object(
+            'abtests',
+            CASE
+              WHEN pg_catalog.jsonb_typeof(onboarding->'abtests') = 'object'
+                THEN onboarding->'abtests'
+              ELSE '{}'::jsonb
+            END || ${JSON.stringify(candidates)}::jsonb
+          )
+        WHERE id = ${userId}::uuid
+        RETURNING onboarding->'abtests' AS abtests
+      `)
+      const updated = updateResult.rows[0]
+      return readPersistedAssignments(updated?.abtests, testNames)
+    })
+  }
+  finally {
+    await closeClient(c, pgPool)
+  }
+}
+
 export async function syncNewUserABTests(
   c: Context<MiddlewareKeyVariables>,
   email: string,
@@ -180,10 +305,11 @@ export async function syncNewUserABTests(
   const segments: string[] = []
   const deleteSegments: string[] = []
   for (const testName of testNames) {
+    const test = AB_TESTS_CONFIG[testName]
     const branch = assignments[testName].branch
-    const oppositeBranch: ABTestBranch = branch === 'A' ? 'B' : 'A'
-    segments.push(AB_TESTS_CONFIG[testName].branches[branch].bento_tag)
-    deleteSegments.push(AB_TESTS_CONFIG[testName].branches[oppositeBranch].bento_tag)
+    const oppositeBranch = branch === test.treatment_branch ? test.control_branch : test.treatment_branch
+    segments.push(test.branches[branch].bento_tag)
+    deleteSegments.push(test.branches[oppositeBranch].bento_tag)
   }
 
   const result = await syncBentoSubscriberTags(c, { email, segments, deleteSegments })

@@ -1,12 +1,14 @@
 import type {
   OnboardingAnalyticsFlow,
+  OnboardingDevelopmentEnvironment,
   OnboardingIntent,
 } from '~/utils/onboardingProgressAnalytics'
 
 export const USER_ONBOARDING_STATUSES = ['in_progress', 'completed', 'abandoned'] as const
 export const USER_ONBOARDING_STEPS = ['intent', 'details', 'organization', 'choice', 'install', 'setup'] as const
 export const USER_ONBOARDING_FLOWS = ['pre_org', 'existing_org'] as const
-export const USER_ONBOARDING_INTENTS = ['ota', 'builder', 'both', 'exploring'] as const
+export const USER_ONBOARDING_DEVELOPMENT_ENVIRONMENTS = ['hosted_builder', 'local_project', 'exploring'] as const satisfies readonly OnboardingDevelopmentEnvironment[]
+export const USER_ONBOARDING_INTENTS = ['ota', 'builder', 'both', 'exploring', 'publish'] as const
 export const USER_ONBOARDING_DETAILS_STEPS = ['name', 'app_id', 'icon'] as const
 
 export type UserOnboardingStatus = typeof USER_ONBOARDING_STATUSES[number]
@@ -17,6 +19,7 @@ export interface UserOnboardingProgress {
   status: UserOnboardingStatus
   step: UserOnboardingStep
   flow: OnboardingAnalyticsFlow
+  development_environment?: OnboardingDevelopmentEnvironment
   intent?: OnboardingIntent
   details_step?: UserOnboardingDetailsStep
   app_name?: string
@@ -38,6 +41,7 @@ export const USER_ONBOARDING_PROGRESS_FIELDS = {
   app_name: true,
   completed_at: true,
   details_step: true,
+  development_environment: true,
   estimated_users_index: true,
   existing_app: true,
   existing_app_setup: true,
@@ -57,6 +61,7 @@ export interface UserOnboardingProgressInput {
   status: UserOnboardingStatus
   step: UserOnboardingStep
   flow: OnboardingAnalyticsFlow
+  developmentEnvironment?: OnboardingDevelopmentEnvironment | null
   intent?: OnboardingIntent | null
   detailsStep?: UserOnboardingDetailsStep
   appName?: string
@@ -139,6 +144,9 @@ function applyOptionalUserOnboardingFields(
   progress: UserOnboardingProgress,
   raw: Record<string, unknown>,
 ): UserOnboardingProgress {
+  if (isOneOf(raw.development_environment, USER_ONBOARDING_DEVELOPMENT_ENVIRONMENTS))
+    progress.development_environment = raw.development_environment
+
   if (isOneOf(raw.intent, USER_ONBOARDING_INTENTS))
     progress.intent = raw.intent
 
@@ -222,6 +230,9 @@ export function buildUserOnboardingProgress(input: UserOnboardingProgressInput):
     flow: input.flow,
     updated_at: input.updatedAt ?? new Date().toISOString(),
   }
+
+  if (input.developmentEnvironment)
+    progress.development_environment = input.developmentEnvironment
 
   if (input.intent)
     progress.intent = input.intent

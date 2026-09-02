@@ -10,6 +10,7 @@ const writerMocks = vi.hoisted(() => ({
   main: {
     auth: { id: 'user-bento-retry' },
     authGeneration: 1,
+    awaitInitialLoad: vi.fn(async () => undefined),
     isAdmin: false,
     plans: [],
     user: {
@@ -29,6 +30,13 @@ vi.mock('vue-router', () => ({
 }))
 vi.mock('vue-sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 vi.mock('~/services/onboardingTracking', () => ({ sendOnboardingEvent: vi.fn() }))
+vi.mock('~/services/capgoApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/services/capgoApi')>()
+  return {
+    ...actual,
+    invokeCapgoApi: vi.fn(async () => ({ data: { assignments: {} }, error: null })),
+  }
+})
 vi.mock('~/services/supabase', () => ({
   getLocalConfig: () => ({ supaHost: 'https://sb.capgo.app', supaKey: 'anon-key' }),
   isLocal: () => false,
@@ -67,6 +75,7 @@ vi.mock('~/stores/organization', () => ({
 
 const onboardingSource = readFileSync(new NodeUrl('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
 const sidebarSource = readFileSync(new NodeUrl('../src/components/Sidebar.vue', import.meta.url), 'utf8')
+const englishMessages = JSON.parse(readFileSync(new NodeUrl('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
 function sourceBetween(start: string, end: string) {
   const startIndex = onboardingSource.indexOf(start)
@@ -273,7 +282,7 @@ describe('app onboarding progress analytics integration', () => {
     const resumeLoader = sourceBetween('async function loadResumeApp()', 'async function importStoreMetadata()')
     expect(resumeLoader).not.toContain('initializeProgressTracking')
     expect(resumeLoader).not.toContain('viewStep')
-    expect(resumeLoader).toContain("if (props.preOrg || resumeStep.value === 'setup')")
+    expect(resumeLoader).toContain('if (props.preOrg || resumeStep.value === \'setup\')')
 
     const mountedFlow = sourceBetween('onMounted(async () => {', 'onBeforeUnmount(() => {')
     expect(onboardingSource).toContain(`import { createOnboardingProgressPersistence, shouldInitializeOnboardingProgressTracking } from '~/utils/onboardingProgressPersistence'`)
@@ -449,7 +458,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(transitionHelpers).toContain('void persistOnboardingProgress()')
 
     const intentTransition = sourceBetween('function continueFromIntent()', 'function continuePreOrgDetails()')
-    expect(intentTransition).toContain(`completeAndViewStep('details', { intent: selectedIntent.value })`)
+    expect(intentTransition).toContain(`intent: selectedIntent.value`)
 
     const appNameTransition = sourceBetween('function continueFromAppName()', 'function continueFromAppId()')
     expect(appNameTransition).toContain(`completeAndViewAppDetailsStep('app_id', { appId: generatedAppId.value, appName: appName.value.trim() })`)
@@ -466,6 +475,37 @@ describe('app onboarding progress analytics integration', () => {
     const realSetupChoice = sourceBetween('function goToInstallStep()', 'function openDashboard()')
     expect(realSetupChoice).toContain(`completeAndViewStep('install', {`)
     expect(realSetupChoice).toContain('appId: createdApp.value.app_id')
+  })
+
+  it.concurrent('loads stable backend flags and applies the A and C onboarding treatments', () => {
+    expect(onboardingSource).toContain(`invokeCapgoApi<OnboardingABTestsResponse>('private/onboarding_ab_tests'`)
+    expect(onboardingSource).toContain('const ONBOARDING_AB_TEST_WAIT_TIMEOUT_MS = 3_000')
+    expect(onboardingSource).toContain('void refreshOnboardingABTests()')
+    expect(onboardingSource).toContain('await waitForOnboardingABTests()')
+    expect(onboardingSource).toContain('Promise.race([refreshOnboardingABTests(), timeout])')
+    expect(onboardingSource).toContain('if (props.preOrg && !welcomePending.value)')
+    expect(onboardingSource).not.toContain('onboardingABTestsRequest = null')
+    expect(onboardingSource).toContain(`webNativePublishIntentTreatment.value`)
+    expect(onboardingSource).toContain(`webNativeDevelopmentEnvironmentTreatment.value`)
+    expect(onboardingSource).toContain(`shouldShowWebNativeRecommendation({`)
+    expect(onboardingSource).toContain(`developmentEnvironment: selectedDevelopmentEnvironment.value`)
+    expect(onboardingSource).toContain(`intent: selectedIntent.value`)
+    expect(onboardingSource).toContain(`startingOut: selectedUserCountStop.value?.startingOut === true`)
+    expect(onboardingSource).toContain(`resolveOnboardingAnalyticsVersion(onboardingForABTests.value)`)
+    expect(onboardingSource).not.toContain(`if (props.preOrg) {\n      await main.awaitInitialLoad()`)
+    expect(onboardingSource).toContain(`const WEBNATIVE_APP_URL = 'https://webnativeapp.com/?ref=capgo'`)
+    expect(onboardingSource).toContain(`const publishIntentOption = { value: 'publish'`)
+    expect(onboardingSource).toContain(`data-test="\`onboarding-development-environment-\${option.value}\`"`)
+    expect(onboardingSource).toContain(`:data-test="\`onboarding-intent-\${option.value}\`"`)
+    expect(onboardingSource).toContain('data-test="onboarding-webnative-check-website"')
+    expect(onboardingSource).toContain('data-test="onboarding-webnative-continue-capgo"')
+    expect(englishMessages['organization-onboarding-intent-option-publish-label']).toBe('Publish my web application on the PlayStore/AppStore')
+    expect(englishMessages['organization-onboarding-intent-option-publish-desc']).toBe('Turn my existing website into an iOS and Android app.')
+    expect(englishMessages['organization-onboarding-development-environment-question']).toBe('How do you currently build and publish your app?')
+    expect(englishMessages['organization-onboarding-webnative-title']).toBe('WebNativeApp may be a better fit')
+    expect(englishMessages['organization-onboarding-webnative-description']).toContain('WebNativeApp can package it for iOS and Android')
+    expect(englishMessages['organization-onboarding-webnative-check-website']).toBe('Check my website')
+    expect(englishMessages['organization-onboarding-webnative-continue-capgo']).toBe('Continue with Capgo')
   })
 
   it.concurrent('reports back navigation as a new view without completing the abandoned step', () => {
