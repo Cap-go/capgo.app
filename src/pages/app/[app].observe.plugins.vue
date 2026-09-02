@@ -132,7 +132,7 @@ watch(packageId, async () => {
 
       <template v-else>
         <section
-          v-if="recommendation"
+          v-if="recommendation && (recommendation.unsupported || recommendation.recommendedVersion)"
           data-test="observe-plugin-upgrade"
           class="p-4 border rounded-lg shadow-sm"
           :class="recommendation.needsUpdate
