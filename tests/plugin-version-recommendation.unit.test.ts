@@ -201,7 +201,7 @@ describe('fetchUpdaterDistTags', () => {
   })
 
   it('fetches when AbortSignal.timeout is unavailable', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ 'dist-tags': distTags }), { status: 200 }))
+    const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) => new Response(JSON.stringify({ 'dist-tags': distTags }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     const originalTimeout = AbortSignal.timeout
     Object.defineProperty(AbortSignal, 'timeout', { configurable: true, value: undefined })
