@@ -2900,7 +2900,7 @@ export async function getAdminEnterpriseAdoption(
       sso_orgs AS (
         SELECT
           sp.org_id,
-          MIN(sp.created_at)::date AS sso_on
+          GREATEST(MIN(sp.created_at)::date, MIN(e.started_on)) AS sso_on
         FROM sso_providers sp
         INNER JOIN enterprise_orgs e ON e.id = sp.org_id
         WHERE sp.status = 'active'
@@ -2908,12 +2908,11 @@ export async function getAdminEnterpriseAdoption(
       ),
       channel_orgs AS (
         SELECT
-          o.id,
-          o.support_channel_set_at::date AS channel_on
+          e.id,
+          GREATEST(o.support_channel_set_at::date, e.started_on) AS channel_on
         FROM orgs o
         INNER JOIN enterprise_orgs e ON e.id = o.id
-        WHERE o.support_channel_url IS NOT NULL
-          AND o.support_channel_set_at IS NOT NULL
+        WHERE o.support_channel_set_at IS NOT NULL
       )
       SELECT
         ds.date::text AS date,

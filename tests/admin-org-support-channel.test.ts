@@ -193,9 +193,17 @@ describe('[POST] /private/admin_stats enterprise_adoption', () => {
 
     expect(payload.success).toBe(true)
     expect(payload.data.trend.length).toBeGreaterThan(0)
-    const latest = payload.data.trend[payload.data.trend.length - 1]
-    expect(latest.enterprise_count).toBeGreaterThanOrEqual(1)
-    expect(latest.channel_count).toBeGreaterThanOrEqual(1)
-    expect(latest.sso_count).toBeGreaterThanOrEqual(0)
+
+    const { data: savedChannel } = await getSupabaseClient()
+      .from('orgs')
+      .select('support_channel_set_at')
+      .eq('id', TEST_ORG_ID)
+      .single()
+    expect(savedChannel?.support_channel_set_at).toBeTruthy()
+    const channelOn = savedChannel!.support_channel_set_at!.slice(0, 10)
+    const point = payload.data.trend.find(row => row.date >= channelOn)
+    expect(point).toBeTruthy()
+    expect(point!.enterprise_count).toBeGreaterThanOrEqual(1)
+    expect(point!.channel_count).toBeGreaterThanOrEqual(1)
   })
 })

@@ -59,10 +59,12 @@ export async function requireJwtPlatformAdmin(c: PlatformAdminContext, forbidden
     throw simpleError('not_admin', forbiddenMessage)
 
   const { data: isAdmin, error } = await supabaseClient(c, auth.jwt).rpc('is_platform_admin')
-  if (error || !isAdmin) {
+  if (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'is_admin_error', error, userId: auth.userId })
-    throw simpleError('not_admin', forbiddenMessage)
+    throw simpleError('is_admin_error', 'Unable to verify admin rights', { error })
   }
+  if (!isAdmin)
+    throw simpleError('not_admin', forbiddenMessage)
 
   return auth.userId
 }

@@ -28,7 +28,6 @@ const { currentOrganization } = storeToRefs(organizationStore)
 displayStore.NavTitle = t('organization')
 onMounted(async () => {
   await organizationStore.dedupFetchOrganizations()
-  await loadSupportChannel(currentOrganization.value?.gid)
   isLoading.value = false
 })
 
@@ -72,7 +71,7 @@ watch(currentOrganization, (newOrg) => {
     return
   }
   void loadSupportChannel(undefined)
-})
+}, { immediate: true })
 
 const canUpdateOrgSettings = computedAsync(async () => {
   if (!currentOrganization.value)

@@ -239,7 +239,8 @@ function onChannelEditorKeydown(e: KeyboardEvent) {
     return
   if (e.key === 'Escape') {
     e.preventDefault()
-    closeChannelEditor()
+    if (!isSavingChannel.value)
+      closeChannelEditor()
     return
   }
   if (e.key !== 'Tab')
@@ -598,7 +599,6 @@ watch(() => adminStore.activeDateRange, () => {
 
 watch(() => adminStore.refreshTrigger, () => {
   loadOrganizationsImmediately()
-  loadEnterpriseAdoption()
 })
 
 watch([selectedPlan, selectedBilling, paidOnly], () => {
