@@ -157,7 +157,7 @@ test.describe('Observe sections', () => {
             app_id: 'com.demo.app',
             device_id: 'b3e532e8-256c-4509-b1d4-beec93a71edb',
             action: 'update_fail',
-            version_name: '2.36.2+8ebc69',
+            version_name: '2.36.2+8ebc69-intentionally-long-bundle-version-that-would-overlap-the-action-column',
             created_at: now,
           },
           {
@@ -177,7 +177,10 @@ test.describe('Observe sections', () => {
     const longVersionRow = page.locator('#custom_table tbody tr', { hasText: 'b3e532e8' })
     const manifestFailRow = page.locator('#custom_table tbody tr', { hasText: '33333333' })
 
-    await expect(longVersionRow.locator('[data-test="log-row-version"]')).toHaveText('2.36.2+8ebc69')
+    const longVersion = '2.36.2+8ebc69-intentionally-long-bundle-version-that-would-overlap-the-action-column'
+    const compositeVersion = '2.36.2+8ebc69:assets/index-8ebc69aabbcc.js'
+    await expect(longVersionRow.locator('[data-test="log-row-version"]')).toHaveText(longVersion)
+    await expect(longVersionRow.locator('[data-test="log-row-version"]')).toHaveAttribute('title', longVersion)
     await expect(longVersionRow.locator('[data-test="log-row-action"]')).toHaveText('Update process failed')
     await expect(longVersionRow.locator('[data-test="log-row-metadata"]')).toHaveCount(0)
 
@@ -188,8 +191,15 @@ test.describe('Observe sections', () => {
     expect((versionBox?.x ?? 0) + (versionBox?.width ?? 0)).toBeLessThanOrEqual((actionBox?.x ?? 0) + 1)
 
     await expect(manifestFailRow.locator('[data-test="log-row-version"]')).toHaveText('2.36.2+8ebc69')
+    await expect(manifestFailRow.locator('[data-test="log-row-version"]')).toHaveAttribute('title', compositeVersion)
     await expect(manifestFailRow).not.toContainText('assets/index-8ebc69aabbcc.js')
     await expect(manifestFailRow.locator('[data-test="log-row-metadata"]')).toHaveCount(1)
+
+    const manifestVersionBox = await manifestFailRow.locator('[data-test="log-row-version"]').boundingBox()
+    const manifestActionBox = await manifestFailRow.locator('[data-test="log-row-action"]').boundingBox()
+    expect(manifestVersionBox).toBeTruthy()
+    expect(manifestActionBox).toBeTruthy()
+    expect((manifestVersionBox?.x ?? 0) + (manifestVersionBox?.width ?? 0)).toBeLessThanOrEqual((manifestActionBox?.x ?? 0) + 1)
 
     await manifestFailRow.locator('[data-test="log-row-metadata"]').click()
     const popover = page.locator('[data-test="log-row-metadata-popover"]')

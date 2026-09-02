@@ -295,7 +295,7 @@ columns.value = [
       const version = parseLogVersionName(elem.version_name).version
       return h('span', {
         'class': 'block truncate',
-        'title': version,
+        'title': elem.version_name,
         'data-test': 'log-row-version',
       }, version)
     },
