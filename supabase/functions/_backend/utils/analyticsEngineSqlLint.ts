@@ -27,6 +27,25 @@ function skipSqlQuote(sql: string, quoteIndex: number): number {
   return sql.length
 }
 
+function skipSqlComment(sql: string, index: number): number {
+  if (sql.startsWith('--', index)) {
+    let i = index + 2
+    while (i < sql.length && sql[i] !== '\n')
+      i++
+    return i < sql.length ? i + 1 : i
+  }
+  if (sql.startsWith('/*', index)) {
+    let i = index + 2
+    while (i < sql.length) {
+      if (sql[i] === '*' && sql[i + 1] === '/')
+        return i + 2
+      i++
+    }
+    return sql.length
+  }
+  return index
+}
+
 function ifCallHasBareNullArg(sql: string, openParenIndex: number): boolean {
   let depth = 0
   let argStart = openParenIndex + 1
@@ -61,6 +80,11 @@ function hasUntypedNullIfBranch(sql: string): boolean {
   while (i < sql.length) {
     if (sql[i] === "'") {
       i = skipSqlQuote(sql, i)
+      continue
+    }
+    const afterComment = skipSqlComment(sql, i)
+    if (afterComment !== i) {
+      i = afterComment
       continue
     }
     const prev = i === 0 ? '' : sql[i - 1]
