@@ -141,7 +141,7 @@ watch(packageId, async () => {
         </p>
       </div>
 
-      <div v-if="statsLoading && !stats" class="flex items-center justify-center h-80">
+      <div v-if="statsLoading" class="flex items-center justify-center h-80">
         <Spinner size="w-12 h-12" />
       </div>
 
