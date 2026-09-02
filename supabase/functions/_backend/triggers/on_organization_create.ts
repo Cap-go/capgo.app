@@ -4,10 +4,10 @@ import { Hono } from 'hono/tiny'
 import { syncBentoSubscriberTags } from '../utils/bento.ts'
 import { buildBillingPlanBentoTags } from '../utils/billing_bento_tags.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
-import { cloudlog } from '../utils/logging.ts'
+import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
-import { createStripeCustomer, finalizePendingStripeCustomer } from '../utils/stripe_org.ts'
+import { createStripeCustomer, finalizePendingStripeCustomer, isPendingStripeCustomerId } from '../utils/stripe_org.ts'
 import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent, syncOrgOnboardingIntentForOrg } from '../utils/org_onboarding_intent.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { backgroundTask } from '../utils/utils.ts'
@@ -46,7 +46,7 @@ app.post('/', middlewareAPISecret, triggerValidator('orgs', 'INSERT'), async (c)
   if (!org.customer_id) {
     trialPlanName = await createStripeCustomer(c, org)
   }
-  else if (org.customer_id.startsWith('pending_')) {
+  else if (isPendingStripeCustomerId(org.customer_id)) {
     trialPlanName = await finalizePendingStripeCustomer(c, org)
   }
 
@@ -86,7 +86,9 @@ app.post('/', middlewareAPISecret, triggerValidator('orgs', 'INSERT'), async (c)
     website: org.website,
   })
 
-  await syncOrgOnboardingIntentForOrg(c, org)
+  await backgroundTask(c, syncOrgOnboardingIntentForOrg(c, org).catch((error) => {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'syncOrgOnboardingIntentForOrg failed', error })
+  }))
 
   await sendEventToTracking(c, {
     bento: {
