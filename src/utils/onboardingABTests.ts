@@ -85,8 +85,6 @@ export function shouldShowWebNativeRecommendation(options: {
   if (options.dismissed || options.intent !== 'publish' || !options.startingOut)
     return false
 
-  if (hasWebNativeDevelopmentEnvironmentTreatment(options.onboarding))
-    return options.developmentEnvironment === 'hosted_builder'
-
-  return hasWebNativePublishIntentTreatment(options.onboarding)
+  return hasWebNativeDevelopmentEnvironmentTreatment(options.onboarding)
+    && options.developmentEnvironment === 'hosted_builder'
 }

@@ -70,12 +70,13 @@ describe('webNativeApp onboarding A/B tests', () => {
     expect(hasWebNativeDevelopmentEnvironmentTreatment(onboardingFor('B', 'C'))).toBe(true)
   })
 
-  it.concurrent('requires the hosted-builder answer for C but not for A-only recommendations', () => {
+  it.concurrent('requires treatment C and the hosted-builder answer for recommendations', () => {
     const publishOnly = onboardingFor('A', 'D')
     const qualified = onboardingFor('B', 'C')
     const base = { dismissed: false, intent: 'publish' as const, startingOut: true }
 
-    expect(shouldShowWebNativeRecommendation({ ...base, developmentEnvironment: null, onboarding: publishOnly })).toBe(true)
+    expect(shouldShowWebNativeRecommendation({ ...base, developmentEnvironment: null, onboarding: publishOnly })).toBe(false)
+    expect(shouldShowWebNativeRecommendation({ ...base, developmentEnvironment: 'hosted_builder', onboarding: publishOnly })).toBe(false)
     expect(shouldShowWebNativeRecommendation({ ...base, developmentEnvironment: 'hosted_builder', onboarding: qualified })).toBe(true)
     expect(shouldShowWebNativeRecommendation({ ...base, developmentEnvironment: 'local_project', onboarding: qualified })).toBe(false)
     expect(shouldShowWebNativeRecommendation({ ...base, developmentEnvironment: 'hosted_builder', onboarding: onboardingFor('B', 'D') })).toBe(false)
