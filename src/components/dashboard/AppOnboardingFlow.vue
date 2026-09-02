@@ -1822,7 +1822,6 @@ onMounted(async () => {
     }
     if (pendingGettingStartedAppId && !onboardingFlowDisposed) {
       await router.replace(`/app/${encodeURIComponent(pendingGettingStartedAppId)}/getting-started`)
-      return
     }
     function finishOnboardingMount() {
       if (onboardingFlowDisposed || onboardingProgressPersistence.isAborted())
@@ -1840,7 +1839,8 @@ onMounted(async () => {
       else
         pendingVisibilityChanges = []
     }
-    finishOnboardingMount()
+    if (!pendingGettingStartedAppId || onboardingFlowDisposed)
+      finishOnboardingMount()
   }
 })
 
