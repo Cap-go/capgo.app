@@ -208,7 +208,7 @@ export function cicdReleaseInstruction(kind: CicdReleaseKind): string {
 
 function cicdWorkflowSnippet(appId: string, mode: CicdDeployMode): string {
   const productionJob = `  deploy-production:
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -232,7 +232,7 @@ ${productionJob}`
   }
 
   const preprodJob = `  deploy-preprod:
-    if: github.ref == 'refs/heads/preprod'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/preprod'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -280,12 +280,13 @@ ${preprodJob}`
       - run: npm ci
       - run: npm run build
       - name: Upload preview
-        run: |
-          CHANNEL="\${{ inputs.preview_channel }}"
-          npx @capgo/cli@latest channel add "$CHANNEL" ${appId} || true
-          npx @capgo/cli@latest bundle upload ${appId} --channel "$CHANNEL" --auto-bump
         env:
-          CAPGO_TOKEN: \${{ secrets.CAPGO_TOKEN }}`
+          CHANNEL: \${{ inputs.preview_channel }}
+          CAPGO_TOKEN: \${{ secrets.CAPGO_TOKEN }}
+        run: |
+          echo "$CHANNEL" | grep -Eq '^pr-[0-9]+$' || { echo "Preview channel must match pr-<number>" >&2; exit 1; }
+          npx @capgo/cli@latest channel add "$CHANNEL" ${appId} || true
+          npx @capgo/cli@latest bundle upload ${appId} --channel "$CHANNEL" --auto-bump`
 
   return `name: Capgo live update
 on:

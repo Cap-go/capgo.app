@@ -46,6 +46,11 @@ describe('getting started CI/CD setup', () => {
     expect(buildPr).not.toContain('CAPGO_TOKEN')
     expect(preview).toContain('CAPGO_TOKEN')
     expect(preview).toContain('github.event_name == \'workflow_dispatch\'')
+    expect(preview).toContain('CHANNEL: ${{ inputs.preview_channel }}')
+    expect(preview).toContain('^pr-[0-9]+$')
+    expect(preview).not.toContain('CHANNEL="${{ inputs.preview_channel }}"')
+    expect(prompt).toContain("github.event_name == 'push' && github.ref == 'refs/heads/main'")
+    expect(prompt).toContain("github.event_name == 'push' && github.ref == 'refs/heads/preprod'")
     expect(buildCicdAiPrompt('com.demo.app', 'prod')).toContain('\njobs:\n')
   })
 
