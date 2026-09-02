@@ -803,11 +803,23 @@ function customerMatchesOrg(customer: Stripe.Customer, orgId: string) {
 }
 
 async function searchOrgStripeCustomer(c: Context, orgId: string) {
-  const result = await getStripe(c).customers.search({
-    query: `metadata['org_id']:'${orgId.replaceAll('\'', '')}'`,
-    limit: 10,
-  })
-  return oldestCustomer(result.data)
+  try {
+    const result = await getStripe(c).customers.search({
+      query: `metadata['org_id']:'${orgId.replaceAll('\'', '')}'`,
+      limit: 10,
+    })
+    return oldestCustomer(result.data)
+  }
+  catch (error) {
+    // Search is a separate Stripe service (unavailable in some regions, distinct rate limits).
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'searchOrgStripeCustomer failed',
+      orgId,
+      error,
+    })
+    return null
+  }
 }
 
 async function findExistingOrgStripeCustomer(c: Context, orgId: string, email: string) {
