@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { shouldBlockIncompatibleUpload } from '../src/bundle/builder-cta.ts'
 import { checkValidOptions } from '../src/bundle/upload.ts'
 import { rejectOrAcceptIncompatibleChannelBundle } from '../src/channel/set.ts'
-import { uploadOptionsSchema } from '../src/schemas/sdk.ts'
+import { updateChannelOptionsSchema, uploadOptionsSchema } from '../src/schemas/sdk.ts'
 
 let failures = 0
 
@@ -184,6 +184,24 @@ test('SDK uploadOptionsSchema accepts acceptIncompatible alone', () => {
     acceptIncompatible: true,
   })
   assert.equal(result.success, true)
+})
+
+test('SDK uploadOptionsSchema rejects string acceptIncompatible', () => {
+  const result = uploadOptionsSchema.safeParse({
+    appId: 'com.example.app',
+    path: './dist',
+    acceptIncompatible: 'false',
+  })
+  assert.equal(result.success, false)
+})
+
+test('SDK updateChannelOptionsSchema rejects string acceptIncompatible', () => {
+  const result = updateChannelOptionsSchema.safeParse({
+    channelId: 'production',
+    appId: 'com.example.app',
+    acceptIncompatible: 'false',
+  })
+  assert.equal(result.success, false)
 })
 
 test('--rollout-advance with --dry-upload is rejected', () => {
