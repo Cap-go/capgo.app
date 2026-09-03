@@ -69,6 +69,9 @@ describe('getting started CLI setup panel', () => {
     expect(gettingStarted).toContain('step.id === focusedStepId && step.id !== \'cli_install\' && step.id !== \'cicd\' && step.id !== \'live_update\'')
     expect(panelSource).toContain('data-test="getting-started-cli-panel"')
     expect(panelSource).toContain('data-test="getting-started-cli-command-copy"')
+    expect(panelSource).toContain('data-test="getting-started-cli-command-loading"')
+    expect(panelSource).toContain('organizationStore.currentOrganization?.gid')
+    expect(panelSource).toContain('claimsData?.claims?.sub ?? userId')
     const commandMarkup = panelSource.match(/<code class="[\s\S]*?<\/code>/)?.[0] ?? ''
     expect(commandMarkup).toContain('text-slate-500')
     expect(commandMarkup).toContain('text-sky-300')

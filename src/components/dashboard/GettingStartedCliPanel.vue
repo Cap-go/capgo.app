@@ -61,12 +61,15 @@ function createAiHelpPrompt() {
 }
 
 async function ensureApiKey() {
-  const userId = main.user?.id
+  const userId = main.user?.id ?? main.auth?.id
   if (!userId)
     return
 
   await organizationStore.awaitInitialLoad()
+  // New apps are created after the last org fetch, so the app-id map can still
+  // miss. currentOrganization is set during onboarding create.
   const orgId = organizationStore.getOrgByAppId(props.appId)?.gid
+    ?? organizationStore.currentOrganization?.gid
   if (!orgId)
     return
 
@@ -77,9 +80,7 @@ async function ensureApiKey() {
   }
 
   const { data: claimsData } = await supabase.auth.getClaims()
-  const claimsUserId = claimsData?.claims?.sub
-  if (!claimsUserId)
-    return
+  const claimsUserId = claimsData?.claims?.sub ?? userId
 
   const { data, error: createError } = await createDefaultApiKey(supabase, 'api-key', {
     orgId,
@@ -197,14 +198,20 @@ function onCliStepsProgress(payload: { isTerminal: boolean }) {
   emit('progress', { isTerminal: payload.isTerminal })
 }
 
-watch(() => organizationStore.getOrgByAppId(props.appId)?.gid, (orgId) => {
-  if (!orgId || apiKey.value)
-    return
-  void loadApiKey().catch((error) => {
-    console.error('Cannot ensure API key', error)
-    toast.error(t('app-onboarding-toast-apikey-error'))
-  })
-})
+watch(
+  () => [
+    main.user?.id ?? main.auth?.id,
+    organizationStore.getOrgByAppId(props.appId)?.gid ?? organizationStore.currentOrganization?.gid,
+  ] as const,
+  ([userId, orgId]) => {
+    if (!userId || !orgId || apiKey.value)
+      return
+    void loadApiKey().catch((error) => {
+      console.error('Cannot ensure API key', error)
+      toast.error(t('app-onboarding-toast-apikey-error'))
+    })
+  },
+)
 
 onMounted(() => {
   void markOnboardingFeatureStarted()
@@ -236,7 +243,12 @@ onMounted(() => {
       </code>
       <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
     </button>
-    <div v-else class="rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10" role="status">
+    <div
+      v-else
+      class="rounded-2xl bg-slate-950 p-5 pr-14 ring-1 ring-white/10"
+      data-test="getting-started-cli-command-loading"
+      role="status"
+    >
       <div class="flex min-h-6 items-center gap-3 text-sm text-slate-300">
         <Spinner size="w-5 h-5" />
         <span>{{ t('app-onboarding-command-apikey-loading') }}</span>

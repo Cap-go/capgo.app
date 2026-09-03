@@ -100,6 +100,7 @@ test.describe('Registration', () => {
     await expect(page).toHaveURL(/\/app\/[^/]+\/getting-started/)
     await expect(page.locator('[data-test="getting-started-cli-panel"]')).toBeVisible({ timeout: 60000 })
     await expect(page.locator('[data-test="getting-started-cli-command-copy"]')).toBeVisible({ timeout: 60000 })
+    await expect(page.locator('[data-test="getting-started-cli-command-loading"]')).toHaveCount(0)
     await expect(page.locator('[data-test="onboarding-technical-invite"]')).toBeVisible()
     await expect(page.locator('[data-test="getting-started-cli-copy-ai"]')).toBeVisible()
   })
