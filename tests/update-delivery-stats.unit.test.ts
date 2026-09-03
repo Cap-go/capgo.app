@@ -98,8 +98,11 @@ describe('update delivery stats helpers', () => {
       ['devices', buildPlatformUpdateDeliveryDeviceCountCFQuery(params)],
     ] as const
 
-    for (const [name, query] of queries) {
+    const results = await Promise.all(queries.map(async ([name, query]) => {
       const result = await validateAnalyticsEngineSqlLive(accountId, token, query)
+      return [name, result] as const
+    }))
+    for (const [name, result] of results) {
       expect(result, `${name} ${JSON.stringify(result)}`).toEqual({ ok: true })
     }
   }, 60_000)
