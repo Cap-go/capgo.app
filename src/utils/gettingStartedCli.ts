@@ -17,3 +17,20 @@ export function buildCapgoOtaCliInitCommand(apiKey: string, extraArgs: string[])
     command: `${npx} ${pkg} ${subcommand} ${apiKey}${extra}`,
   }
 }
+
+export function buildCapgoBundleUploadCommand(appId: string, extraArgs: string[]) {
+  const npx = 'npx'
+  const pkg = '@capgo/cli@latest'
+  const subcommand = 'bundle upload'
+  const channelArgs = ['--channel', 'production']
+  const allExtra = [...channelArgs, ...extraArgs]
+  const extra = allExtra.length > 0 ? ` ${allExtra.join(' ')}` : ''
+  return {
+    npx,
+    pkg,
+    subcommand,
+    appId,
+    extraArgs: allExtra,
+    command: `${npx} ${pkg} ${subcommand} ${appId}${extra}`,
+  }
+}

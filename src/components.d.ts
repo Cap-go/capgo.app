@@ -82,6 +82,7 @@ declare module 'vue' {
     FilterModal: typeof import('./components/FilterModal.vue')['default']
     GettingStartedCicdPanel: typeof import('./components/dashboard/GettingStartedCicdPanel.vue')['default']
     GettingStartedCliPanel: typeof import('./components/dashboard/GettingStartedCliPanel.vue')['default']
+    GettingStartedLiveUpdatePanel: typeof import('./components/dashboard/GettingStartedLiveUpdatePanel.vue')['default']
     GettingStartedNav: typeof import('./components/dashboard/GettingStartedNav.vue')['default']
     GitHubProfileDialog: typeof import('./components/dashboard/GitHubProfileDialog.vue')['default']
     GroupsRbacManager: typeof import('./components/organization/GroupsRbacManager.vue')['default']

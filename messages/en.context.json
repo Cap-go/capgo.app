@@ -1734,7 +1734,7 @@
   "getting-started-live-update": "Used in Capgo web console areas: utils. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "getting-started-live-update-desc": "Used in Capgo web console areas: utils. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "getting-started-percent": "Used in Capgo web console areas: pages/app. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "getting-started-self-test-hint": "Used in Capgo web console areas: pages/app. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "getting-started-self-test-hint": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "getting-started-store-release-desc": "Used in Capgo web console areas: utils, pages/app. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "github-stars-trend": "Used in Capgo web console. Role: UI label about \"github stars trend\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "github-username": "Used in Capgo web console areas: components/dashboard, composables, pages/settings/account. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

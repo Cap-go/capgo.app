@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   buildCicdAiPrompt,
@@ -16,6 +18,7 @@ import {
 
 const TEST_USER = 'getting-started-cicd-unit-user'
 const TEST_APP = 'com.test.gettingstarted.cicd.app'
+const panelSource = readFileSync(resolve('src/components/dashboard/GettingStartedCicdPanel.vue'), 'utf8')
 
 describe('getting started CI/CD setup', () => {
   afterEach(() => {
@@ -50,8 +53,8 @@ describe('getting started CI/CD setup', () => {
     expect(preview).toContain('[[ "$CHANNEL" =~ ^pr-[0-9]+$ ]]')
     expect(preview).not.toContain('CHANNEL="${{ inputs.preview_channel }}"')
     expect(preview).not.toContain('grep -Eq')
-    expect(prompt).toContain("github.event_name == 'push' && github.ref == 'refs/heads/main'")
-    expect(prompt).toContain("github.event_name == 'push' && github.ref == 'refs/heads/preprod'")
+    expect(prompt).toContain('github.event_name == \'push\' && github.ref == \'refs/heads/main\'')
+    expect(prompt).toContain('github.event_name == \'push\' && github.ref == \'refs/heads/preprod\'')
     expect(buildCicdAiPrompt('com.demo.app', 'prod')).toContain('\njobs:\n')
   })
 
@@ -77,5 +80,20 @@ describe('getting started CI/CD setup', () => {
     markCicdSetupValidated(TEST_USER, TEST_APP)
     expect(loadCicdSetupProgress(TEST_USER, TEST_APP).validated).toBe(true)
     expect(isCicdSetupValidated(TEST_USER, TEST_APP)).toBe(true)
+  })
+
+  it.concurrent('lets users copy an AI prompt or open docs, then mark CI/CD done', () => {
+    expect(panelSource).toContain('data-test="getting-started-cicd-docs"')
+    expect(panelSource).toContain('data-test="getting-started-cicd-copy-ai"')
+    expect(panelSource).toContain('data-test="getting-started-cicd-confirm"')
+    expect(panelSource).toContain('buildCicdAiPrompt(props.appId, \'prod\')')
+    expect(panelSource).toContain('helpMethod.value = \'ai\'')
+    expect(panelSource).toContain('markCicdSetupValidated')
+    expect(panelSource).toContain('emit(\'validated\')')
+    expect(panelSource).not.toContain(':disabled="!canConfirm"')
+    expect(panelSource).not.toContain('getting-started-cicd-mode-')
+    expect(panelSource).not.toContain('getting-started-cicd-release-')
+    expect(panelSource).not.toContain('CICD_GITHUB_ACTIONS_DOCS_URL')
+    expect(panelSource).not.toContain('name="getting-started-cicd-mode"')
   })
 })
