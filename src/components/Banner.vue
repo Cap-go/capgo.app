@@ -71,6 +71,12 @@ const statusDetail = computed(() => {
   return t('trial-days-left', { count: status.value.trialDaysLeft })
 })
 
+const statusAriaLabel = computed(() => {
+  if (statusDetail.value)
+    return `${statusLabel.value}, ${statusDetail.value}`
+  return statusLabel.value
+})
+
 const badgeClass = computed(() => {
   switch (status.value.tone) {
     case 'trial':
@@ -100,10 +106,13 @@ const bannerColor = computed(() => {
     class="flex items-center ml-auto space-x-2 sm:space-x-3"
     data-test="org-billing-banner"
   >
-    <a
-      :href="billingCtaHref"
-      class="flex items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500"
-      :aria-label="statusDetail ? `${statusLabel}, ${statusDetail}` : statusLabel"
+    <component
+      :is="showCta ? 'div' : 'a'"
+      v-bind="showCta ? {} : { href: billingCtaHref }"
+      role="status"
+      class="flex items-center gap-2"
+      :class="showCta ? '' : 'rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500'"
+      :aria-label="statusAriaLabel"
     >
       <span
         class="d-badge d-badge-sm font-semibold"
@@ -120,7 +129,7 @@ const bannerColor = computed(() => {
       >
         {{ statusDetail }}
       </span>
-    </a>
+    </component>
     <a
       v-if="showCta"
       :href="billingCtaHref"
@@ -138,10 +147,13 @@ const bannerColor = computed(() => {
     class="flex gap-2 justify-end items-center px-2 bg-gray-200 sm:px-4 min-h-12 sm:min-h-16 dark:bg-gray-800/90"
     data-test="org-billing-banner"
   >
-    <a
-      :href="billingCtaHref"
-      class="flex items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500"
-      :aria-label="statusDetail ? `${statusLabel}, ${statusDetail}` : statusLabel"
+    <component
+      :is="showCta ? 'div' : 'a'"
+      v-bind="showCta ? {} : { href: billingCtaHref }"
+      role="status"
+      class="flex items-center gap-2"
+      :class="showCta ? '' : 'rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500'"
+      :aria-label="statusAriaLabel"
     >
       <span
         class="d-badge d-badge-sm font-semibold"
@@ -158,7 +170,7 @@ const bannerColor = computed(() => {
       >
         {{ statusDetail }}
       </span>
-    </a>
+    </component>
     <a
       v-if="showCta"
       :href="billingCtaHref"
