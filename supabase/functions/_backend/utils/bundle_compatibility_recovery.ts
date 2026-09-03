@@ -98,6 +98,11 @@ export interface BundleCompatibilityBentoInput {
   disableAutoUpdate: string | null | undefined
   /** `min_update_version` of the new bundle; gates the `version_number` strategy. */
   minUpdateVersion: string | null | undefined
+  /**
+   * True when the caller explicitly accepted this native incompatibility
+   * (`--accept-incompatible` / console confirm). Skip the crash-warning email.
+   */
+  incompatibilityAccepted?: boolean
 }
 
 /**
@@ -118,6 +123,10 @@ export function buildBundleCompatibilityBentoEvent(input: BundleCompatibilityBen
   // live (the upload overwrote the channel's version). PostHog still records the
   // event upstream regardless of this.
   if (!input.channelOverwritten)
+    return undefined
+  // Caller marked the mismatch as handled (runtime plugin guards, etc.).
+  // Still tracked in PostHog; do not email the crash warning.
+  if (input.incompatibilityAccepted)
     return undefined
 
   const source = input.source ?? 'unknown'

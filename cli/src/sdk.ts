@@ -565,6 +565,7 @@ export class CapgoSDK {
           selfAssign: options.selfAssign,
           packageJson: options.packageJsonPaths,
           ignoreMetadataCheck: options.ignoreCompatibilityCheck,
+          acceptIncompatible: options.acceptIncompatible,
           codeCheck: !options.disableCodeCheck, // disable if requested, otherwise check
           zip: options.useZip, // use legacy zip upload if requested
         }
@@ -906,6 +907,7 @@ export class CapgoSDK {
         latestRemote: false,
         packageJson: undefined,
         ignoreMetadataCheck: false,
+        acceptIncompatible: options.acceptIncompatible,
       }
 
       await setChannelInternal(options.channelId, options.appId, internalOptions, true)

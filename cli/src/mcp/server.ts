@@ -212,6 +212,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       autoSetBundle,
       autoBump,
       encrypt,
+      acceptIncompatible,
       capacitorConfig,
     }) => {
       const result = await sdk.uploadBundle({
@@ -228,6 +229,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
         autoSetBundle,
         autoBump,
         encrypt,
+        acceptIncompatible,
         capacitorConfig,
       })
       if (!result.success) {
@@ -434,7 +436,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       description: 'Update channel settings including linked bundle and targeting options',
       inputSchema: mcpUpdateChannelInputSchema,
     },
-    async ({ appId, channelId, bundle, state, downgrade, ios, android, selfAssign, disableAutoUpdate, dev, emulator, device, prod, rolloutBundle, rolloutPercentage, rolloutPercentageBps, rolloutEnable, rolloutDisable, rolloutPause, rolloutResume, rolloutRollback, rolloutPromote, rolloutCacheTtlSeconds, autoPauseEnabled, autoPauseDisabled, autoPauseWindowMinutes, autoPauseFailureRateBps, autoPauseConfidence, autoPauseMinAttempts, autoPauseMinFailures, autoPauseAction, autoPauseCooldownMinutes }) => {
+    async ({ appId, channelId, bundle, state, downgrade, ios, android, selfAssign, disableAutoUpdate, dev, emulator, device, prod, rolloutBundle, rolloutPercentage, rolloutPercentageBps, rolloutEnable, rolloutDisable, rolloutPause, rolloutResume, rolloutRollback, rolloutPromote, rolloutCacheTtlSeconds, autoPauseEnabled, autoPauseDisabled, autoPauseWindowMinutes, autoPauseFailureRateBps, autoPauseConfidence, autoPauseMinAttempts, autoPauseMinFailures, autoPauseAction, autoPauseCooldownMinutes, acceptIncompatible }) => {
       const payload = parseSchema(updateChannelOptionsSchema, {
         appId,
         channelId,
@@ -468,6 +470,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
         autoPauseMinFailures,
         autoPauseAction,
         autoPauseCooldownMinutes,
+        acceptIncompatible,
       })
       const result = await sdk.updateChannel(payload)
       if (!result.success) {

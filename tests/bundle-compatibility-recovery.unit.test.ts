@@ -62,6 +62,10 @@ describe('buildBundleCompatibilityBentoEvent', () => {
     expect(buildBundleCompatibilityBentoEvent({ ...base, channelOverwritten: undefined })).toBeUndefined()
   })
 
+  it.concurrent('returns undefined when the caller accepted the incompatibility', () => {
+    expect(buildBundleCompatibilityBentoEvent({ ...base, incompatibilityAccepted: true })).toBeUndefined()
+  })
+
   it.concurrent('falls back to the old version in uniqId when the new version is absent', () => {
     const r = buildBundleCompatibilityBentoEvent({ ...base, versionNewId: undefined, versionNewName: undefined })
     expect(r).toBeDefined()
@@ -202,6 +206,14 @@ describe('buildBundleCompatibilityBentoEvent event split', () => {
   it.concurrent('emits the warning event when versions are unparseable even on a gating strategy', () => {
     const r = buildBundleCompatibilityBentoEvent({ ...base, versionOldName: 'builtin', versionNewName: 'nightly', disableAutoUpdate: 'minor' })
     expect(r!.event).toBe('bundle_incompatible')
+  })
+
+  it.concurrent('skips both emails when the caller accepted the incompatibility', () => {
+    expect(buildBundleCompatibilityBentoEvent({
+      ...incident,
+      disableAutoUpdate: 'minor',
+      incompatibilityAccepted: true,
+    })).toBeUndefined()
   })
 
   it.concurrent('returns undefined for a gating strategy when the channel was not overwritten', () => {

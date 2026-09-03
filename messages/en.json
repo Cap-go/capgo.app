@@ -2582,7 +2582,7 @@
   "sending-invitation": "Sending...",
   "session_key": "IvSessionKey",
   "set-bundle": "Set bundle to channel",
-  "set-even-not-compatible": "This bundle is not compatible with the channel. Would you like to set it anyway? Open the Dependencies page to see which native packages changed.",
+  "set-even-not-compatible": "This bundle's native dependencies don't match the channel. If your app already handles missing native plugins at runtime, you can accept this incompatibility and set it anyway.",
   "set-expiration-date": "Set expiration date",
   "setting-change-details": "Setting Change Details",
   "setting-changed": "Setting Changed",

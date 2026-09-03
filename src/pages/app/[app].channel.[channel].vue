@@ -462,7 +462,7 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
     toast.error(t('bundle-not-compatible-with-channel', { channel: channel.value.name }))
 
     dialogStore.openDialog({
-      title: t('confirm-action'),
+      title: t('compatibility-accept-title'),
       description: t('set-even-not-compatible'),
       buttons: [
         {
@@ -481,7 +481,7 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
           },
         },
         {
-          text: t('button-confirm'),
+          text: t('compatibility-accept'),
           role: 'primary',
         },
       ],

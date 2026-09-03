@@ -36,6 +36,7 @@ export const optionsUploadSchema = optionsBaseSchema.extend({
   autoBump: z.enum(['major', 'minor', 'patch', 'metadata', 'ai']).optional(),
   ignoreMetadataCheck: z.boolean().optional(),
   failOnIncompatible: z.boolean().optional(),
+  acceptIncompatible: z.boolean().optional(),
   ignoreChecksumCheck: z.boolean().optional(),
   forceCrc32Checksum: z.boolean().optional(),
   timeout: z.number().optional(),

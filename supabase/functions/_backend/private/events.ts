@@ -314,7 +314,27 @@ async function buildBundleIncompatibleBentoEvent(
     return undefined
 
   const tags = trackedBody.tags ?? {}
+  const incompatibilityAccepted = tags.incompatibility_accepted === true
+    || tags.incompatibility_accepted === 'true'
   const incompatibleChannel = typeof tags.channel === 'string' ? tags.channel : undefined
+  const apikeyId = c.get('apikey')?.id
+
+  if (incompatibilityAccepted) {
+    await backgroundTask(c, trackPosthogEvent(c, {
+      event: BUNDLE_INCOMPATIBLE_EMAIL_EVENT,
+      user_id: typeof trackedBody.user_id === 'string' ? trackedBody.user_id : undefined,
+      channel: 'bundle',
+      setPersonProperties: false,
+      groups: { organization: onboardingOrgId },
+      tags: {
+        outcome: 'skipped_accepted',
+        app_id: appId,
+        ...(incompatibleChannel ? { channel_name: incompatibleChannel } : {}),
+      },
+      nonPersonTags: apikeyId === undefined ? undefined : { apikey_id: apikeyId },
+    }))
+    return undefined
+  }
 
   let updateStrategy: string | null = null
   if (incompatibleChannel) {
@@ -352,7 +372,6 @@ async function buildBundleIncompatibleBentoEvent(
     versionNewName,
     minUpdateVersion,
   })
-  const apikeyId = c.get('apikey')?.id
 
   await backgroundTask(c, trackPosthogEvent(c, {
     event: BUNDLE_INCOMPATIBLE_EMAIL_EVENT,
@@ -395,6 +414,7 @@ async function buildBundleIncompatibleBentoEvent(
     appName: appResult.data?.name ?? undefined,
     disableAutoUpdate: updateStrategy,
     minUpdateVersion,
+    incompatibilityAccepted,
   })
 }
 
@@ -449,7 +469,7 @@ app.post('/', middlewareAuth(), async (c) => {
   // the version bump keeps the bundle off devices running the previous native
   // build, the breaking change was done correctly and the calmer
   // `bundle_incompatible_expected` event is emitted instead of the crash warning.
-  // Both outcomes are recorded in PostHog (sent vs sent_expected).
+  // Both outcomes are recorded in PostHog (sent vs sent_expected vs skipped_accepted).
   const bundleIncompatibleBentoEvent: BentoTrackingPayload | undefined = await buildBundleIncompatibleBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
   const aiInstructionsCopiedBentoEvent = buildAiInstructionsCopiedBentoEvent({
     appId,
