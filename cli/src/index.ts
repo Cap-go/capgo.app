@@ -73,6 +73,7 @@ const optionDescriptions = {
   verbose: `Enable verbose output with detailed logging`,
   ignoreNotifyAppReady: `Skip notifyAppReady() check (not recommended — updates may roll back)`,
   acceptIncompatible: `Accept native-package incompatibility as handled (still checks and warns, continues, skips the crash-warning email). Use this when your app already guards missing plugins at runtime.`,
+  acceptIncompatibleChannel: `Accept native-package incompatibility as handled (still checks and warns, sets the channel instead of failing). Use this when your app already guards missing plugins at runtime.`,
 }
 
 /** Collector for repeatable CLI options (e.g. --ios-provisioning-profile used multiple times) */
@@ -643,7 +644,7 @@ Example: npx @capgo/cli@latest channel set production com.example.app --bundle 1
   .option('--send-update-notification', `Send a native update-check notification to devices after updating the linked channel bundle`)
   .option('--package-json <packageJson>', optionDescriptions.packageJson)
   .option('--ignore-metadata-check', `Ignore checking node_modules compatibility if present in the bundle`)
-  .option('--accept-incompatible', `Accept native-package incompatibility as handled (still checks and warns, sets the channel instead of failing). Use this when your app already guards missing plugins at runtime. Cannot be combined with --ignore-metadata-check.`)
+  .option('--accept-incompatible', `${optionDescriptions.acceptIncompatibleChannel} Cannot be combined with --ignore-metadata-check.`)
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
 
