@@ -123,6 +123,12 @@ describe('analytics engine sql lint rules', () => {
     expect(lintAnalyticsEngineSql(
       'SELECT avgIf(double1, 1) FROM app_log -- countIf(1)',
     ).map(issue => issue.rule)).toContain('no-conditional-agg-if')
+    expect(lintAnalyticsEngineSql(
+      "SELECT 'it\\'s avgIf(' FROM app_log",
+    ).map(issue => issue.rule)).not.toContain('no-conditional-agg-if')
+    expect(lintAnalyticsEngineSql(
+      "SELECT 'foo\\\\', avgIf(double1, 1) FROM app_log",
+    ).map(issue => issue.rule)).toContain('no-conditional-agg-if')
   })
 })
 

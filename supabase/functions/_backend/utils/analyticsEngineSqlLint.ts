@@ -16,6 +16,10 @@ function isBareNullArg(arg: string): boolean {
 function skipSqlQuote(sql: string, quoteIndex: number): number {
   let i = quoteIndex + 1
   while (i < sql.length) {
+    if (sql[i] === '\\') {
+      i += 2
+      continue
+    }
     if (sql[i] === "'" && sql[i + 1] === "'") {
       i += 2
       continue
