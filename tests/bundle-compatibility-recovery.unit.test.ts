@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BUNDLE_INCOMPATIBLE_EVENT, buildBundleCompatibilityBentoEvent, isBreakingChangeGatedByChannelStrategy } from '../supabase/functions/_backend/utils/bundle_compatibility_recovery.ts'
+import { BUNDLE_INCOMPATIBLE_EVENT, buildBundleCompatibilityBentoEvent, bundleIncompatibleEmailOutcome, isBreakingChangeGatedByChannelStrategy, isCliTrueTag } from '../supabase/functions/_backend/utils/bundle_compatibility_recovery.ts'
 
 const base = {
   event: BUNDLE_INCOMPATIBLE_EVENT,
@@ -64,6 +64,21 @@ describe('buildBundleCompatibilityBentoEvent', () => {
 
   it.concurrent('returns undefined when the caller accepted the incompatibility', () => {
     expect(buildBundleCompatibilityBentoEvent({ ...base, incompatibilityAccepted: true })).toBeUndefined()
+  })
+
+  it.concurrent('parses CLI boolean tags as true or the string true', () => {
+    expect(isCliTrueTag(true)).toBe(true)
+    expect(isCliTrueTag('true')).toBe(true)
+    expect(isCliTrueTag(false)).toBe(false)
+    expect(isCliTrueTag('false')).toBe(false)
+    expect(isCliTrueTag(undefined)).toBe(false)
+  })
+
+  it.concurrent('maps accepted incompatibility to the skipped_accepted email outcome', () => {
+    expect(bundleIncompatibleEmailOutcome(true, false)).toBe('skipped_accepted')
+    expect(bundleIncompatibleEmailOutcome(true, true)).toBe('skipped_accepted')
+    expect(bundleIncompatibleEmailOutcome(false, true)).toBe('sent_expected')
+    expect(bundleIncompatibleEmailOutcome(false, false)).toBe('sent')
   })
 
   it.concurrent('falls back to the old version in uniqId when the new version is absent', () => {

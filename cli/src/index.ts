@@ -643,7 +643,7 @@ Example: npx @capgo/cli@latest channel set production com.example.app --bundle 1
   .option('--send-update-notification', `Send a native update-check notification to devices after updating the linked channel bundle`)
   .option('--package-json <packageJson>', optionDescriptions.packageJson)
   .option('--ignore-metadata-check', `Ignore checking node_modules compatibility if present in the bundle`)
-  .option('--accept-incompatible', `${optionDescriptions.acceptIncompatible} Cannot be combined with --ignore-metadata-check.`)
+  .option('--accept-incompatible', `Accept native-package incompatibility as handled (still checks and warns, sets the channel instead of failing). Use this when your app already guards missing plugins at runtime. Cannot be combined with --ignore-metadata-check.`)
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
 

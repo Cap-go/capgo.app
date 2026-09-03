@@ -24,6 +24,23 @@ export const BUNDLE_INCOMPATIBLE_BENTO_EVENT = 'bundle_incompatible'
  */
 export const BUNDLE_INCOMPATIBLE_EXPECTED_BENTO_EVENT = 'bundle_incompatible_expected'
 
+/** CLI tracking tags send booleans as `true` or the string `'true'`. */
+export function isCliTrueTag(value: unknown): boolean {
+  return value === true || value === 'true'
+}
+
+export type BundleIncompatibleEmailOutcome = 'skipped_accepted' | 'sent_expected' | 'sent'
+
+/** PostHog `Bundle Incompatible Email` outcome recorded by `/private/events`. */
+export function bundleIncompatibleEmailOutcome(
+  incompatibilityAccepted: boolean,
+  gatedByStrategy: boolean,
+): BundleIncompatibleEmailOutcome {
+  if (incompatibilityAccepted)
+    return 'skipped_accepted'
+  return gatedByStrategy ? 'sent_expected' : 'sent'
+}
+
 /**
  * Pure: does the channel's `disable_auto_update` strategy already keep this
  * bundle away from devices still running the previous (incompatible) native

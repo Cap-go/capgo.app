@@ -995,7 +995,7 @@ npx @capgo/cli@latest channel set production com.example.app --bundle 1.0.0 --st
 | **--send-update-notification** | <code>boolean</code> | Send a native update-check notification to devices after updating the linked channel bundle |
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
 | **--ignore-metadata-check** | <code>boolean</code> | Ignore checking node_modules compatibility if present in the bundle |
-| **--accept-incompatible** | <code>boolean</code> | Accept native-package incompatibility as handled (still checks and warns, continues, skips the crash-warning email). Use this when your app already guards missing plugins at runtime. Cannot be combined with --ignore-metadata-check. |
+| **--accept-incompatible** | <code>boolean</code> | Accept native-package incompatibility as handled (still checks and warns, sets the channel instead of failing). Use this when your app already guards missing plugins at runtime. Cannot be combined with --ignore-metadata-check. |
 | **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
 | **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
 

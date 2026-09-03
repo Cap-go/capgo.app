@@ -4,7 +4,7 @@ import type { BentoTrackingPayload, TrackOptions } from '../utils/tracking.ts'
 import { Hono } from 'hono/tiny'
 import { APP_TOO_LARGE_EVENT, buildAppTooLargeBentoEvent } from '../utils/app_too_large_tracking.ts'
 import { buildBuilderOnboardingBentoEvent, BUILDER_RECOVERY_MILESTONES } from '../utils/builder_onboarding_recovery.ts'
-import { buildBundleCompatibilityBentoEvent, BUNDLE_INCOMPATIBLE_EVENT, isBreakingChangeGatedByChannelStrategy } from '../utils/bundle_compatibility_recovery.ts'
+import { BUNDLE_INCOMPATIBLE_EVENT, buildBundleCompatibilityBentoEvent, bundleIncompatibleEmailOutcome, isBreakingChangeGatedByChannelStrategy, isCliTrueTag } from '../utils/bundle_compatibility_recovery.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -308,14 +308,12 @@ async function buildBundleIncompatibleBentoEvent(
   appId: string | undefined,
   trackedBody: TrackOptions,
 ) {
-  const channelOverwritten = trackedBody.tags?.channel_overwritten === true
-    || trackedBody.tags?.channel_overwritten === 'true'
+  const channelOverwritten = isCliTrueTag(trackedBody.tags?.channel_overwritten)
   if (!onboardingOrgId || !appId || trackedBody.event !== BUNDLE_INCOMPATIBLE_EVENT || !channelOverwritten)
     return undefined
 
   const tags = trackedBody.tags ?? {}
-  const incompatibilityAccepted = tags.incompatibility_accepted === true
-    || tags.incompatibility_accepted === 'true'
+  const incompatibilityAccepted = isCliTrueTag(tags.incompatibility_accepted)
   const incompatibleChannel = typeof tags.channel === 'string' ? tags.channel : undefined
   const apikeyId = c.get('apikey')?.id
 
@@ -327,7 +325,7 @@ async function buildBundleIncompatibleBentoEvent(
       setPersonProperties: false,
       groups: { organization: onboardingOrgId },
       tags: {
-        outcome: 'skipped_accepted',
+        outcome: bundleIncompatibleEmailOutcome(true, false),
         app_id: appId,
         ...(incompatibleChannel ? { channel_name: incompatibleChannel } : {}),
       },
@@ -380,7 +378,7 @@ async function buildBundleIncompatibleBentoEvent(
     setPersonProperties: false,
     groups: { organization: onboardingOrgId },
     tags: {
-      outcome: gatedByStrategy ? 'sent_expected' : 'sent',
+      outcome: bundleIncompatibleEmailOutcome(false, gatedByStrategy),
       update_strategy: updateStrategy ?? 'unknown',
       app_id: appId,
       ...(incompatibleChannel ? { channel_name: incompatibleChannel } : {}),
