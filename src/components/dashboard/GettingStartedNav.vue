@@ -4,6 +4,7 @@ import { computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconX from '~icons/lucide/x'
+import { isTerminalAppOnboarding } from '~/services/appOnboarding'
 import { useSupabase } from '~/services/supabase'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
@@ -13,6 +14,7 @@ import {
   withGettingStartedDismissed,
   withoutGettingStartedDismissed,
 } from '~/utils/appOnboardingProgress'
+import { isCicdSetupValidated } from '~/utils/gettingStartedCicd'
 import { isStoreReleaseValidated } from '~/utils/gettingStartedDismiss'
 
 const props = withDefaults(defineProps<{
@@ -37,6 +39,8 @@ const apps = computed(() => {
   return organizationStore.getAppsByOrgId(orgId).filter((app) => {
     return shouldShowGettingStartedNav(parseAppOnboardingLedger(app.onboarding), {
       storeReleaseValidated: isStoreReleaseValidated(userId.value, app.app_id),
+      cicdSetupValidated: isCicdSetupValidated(userId.value, app.app_id),
+      cliSetupCompleted: isTerminalAppOnboarding(app.onboarding),
     })
   })
 })

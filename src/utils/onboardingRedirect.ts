@@ -1,4 +1,5 @@
-import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
+import type { GettingStartedStepExtras } from '~/utils/appOnboardingProgress'
+import { shouldShowGettingStartedNav, shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 
 // August uses Central European Summer Time (UTC+2).
 export const ONBOARDING_REDIRECT_CUTOFF = Date.parse('2026-08-04T01:00:00+02:00')
@@ -175,7 +176,37 @@ export function getOnboardingResumeRedirect(options: {
     return null
 
   return {
-    path: '/onboarding/app',
-    query: { resume: options.appId, step: 'setup' },
+    path: `/app/${encodeURIComponent(options.appId)}/getting-started`,
+  }
+}
+
+const GETTING_STARTED_CONTINUE_PATHS = new Set(['/dashboard', '/apps', '/onboarding/app', '/app/new'])
+
+export function getGettingStartedContinueRedirect(options: {
+  appId: string | null | undefined
+  appCount: number
+  createdAt: string | null | undefined
+  extras?: GettingStartedStepExtras
+  ledger: Parameters<typeof shouldShowGettingStartedNav>[0]
+  needOnboarding: boolean
+  organizationCount: number
+  path: string
+  userId: string | null | undefined
+}) {
+  if (options.needOnboarding)
+    return null
+  if (canExploreOnboardingDashboard(options.userId))
+    return null
+  if (!isNewOnboardingUser(options.createdAt))
+    return null
+  if (options.organizationCount !== 1 || options.appCount !== 1 || !options.appId)
+    return null
+  if (!shouldShowGettingStartedNav(options.ledger, options.extras))
+    return null
+  if (!GETTING_STARTED_CONTINUE_PATHS.has(options.path))
+    return null
+
+  return {
+    path: `/app/${encodeURIComponent(options.appId)}/getting-started`,
   }
 }

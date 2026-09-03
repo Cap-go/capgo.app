@@ -2,57 +2,72 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const onboardingSource = readFileSync(new URL('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
+const panelSource = readFileSync(new URL('../src/components/dashboard/GettingStartedCliPanel.vue', import.meta.url), 'utf8')
 const englishMessages = JSON.parse(readFileSync(new URL('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
 describe('app onboarding API key loading state', () => {
-  it.concurrent('does not render the terminal alternative before an organization exists', () => {
-    expect(onboardingSource).toContain('<div v-if="!props.preOrg && appDetailsStep === \'icon\'" class="pt-1">')
+  it.concurrent('keeps CLI setup off account onboarding until Getting Started', () => {
+    expect(onboardingSource).not.toContain('app-onboarding-command-show')
+    expect(onboardingSource).not.toContain("t('app-onboarding-command-apikey-loading')")
+    expect(onboardingSource).not.toContain('void loadApiKey()')
+    expect(onboardingSource).not.toContain('async function ensureApiKey()')
+    expect(onboardingSource).not.toContain('async function copyCliCommand()')
   })
 
   it.concurrent('replaces every incomplete CLI command with the shared loading treatment', () => {
-    expect(onboardingSource).not.toContain("{{ apiKey ?? '[APIKEY]' }}")
-    expect(onboardingSource).toContain('<Spinner')
-    expect(onboardingSource).toContain("t('app-onboarding-command-apikey-loading')")
-    expect(onboardingSource).not.toMatch(/role="status">\s*<div[^>]*aria-live="polite"/)
+    expect(panelSource).not.toContain("{{ apiKey ?? '[APIKEY]' }}")
+    expect(panelSource).toContain('<Spinner')
+    expect(panelSource).toContain("t('app-onboarding-command-apikey-loading')")
+    expect(panelSource).not.toMatch(/role="status">\s*<div[^>]*aria-live="polite"/)
   })
 
   it.concurrent('prevents copying the CLI command until its API key is ready', () => {
-    expect(onboardingSource).toContain('if (!apiKey.value)')
+    expect(panelSource).toContain('if (!command)')
+    expect(panelSource).toContain('if (!apiKey.value)')
   })
 
-  it.concurrent('renders a resumed app without waiting for API key provisioning', () => {
+  it.concurrent('loads the API key on Getting Started instead of account onboarding', () => {
     const resumeLoader = onboardingSource.slice(
       onboardingSource.indexOf('async function loadResumeApp()'),
       onboardingSource.indexOf('async function importStoreMetadata('),
     )
     const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
     const resumeLoadIndex = mountedFlow.indexOf('const resumed = await loadResumeApp()')
-    const apiKeyProvisioningIndex = mountedFlow.indexOf('void loadApiKey().catch')
 
     expect(resumeLoader).not.toContain('ensureApiKey')
     expect(resumeLoadIndex).toBeGreaterThanOrEqual(0)
-    expect(apiKeyProvisioningIndex).toBeGreaterThanOrEqual(0)
-    expect(resumeLoadIndex).toBeLessThan(apiKeyProvisioningIndex)
+    expect(mountedFlow).not.toContain('void loadApiKey()')
     expect(mountedFlow).not.toContain('await loadApiKey()')
+    expect(panelSource).toContain('void loadApiKey().catch')
+    expect(panelSource).toContain('organizationStore.getOrgByAppId(props.appId)?.gid')
+    expect(panelSource).toContain('organizationStore.currentOrganization?.gid')
+    expect(panelSource).toContain('main.user?.id ?? main.auth?.id')
+    expect(panelSource).toContain('claimsData?.claims?.sub ?? userId')
   })
 
-  it.concurrent('targets the created app when a stale resume falls back to replacement creation', () => {
-    const keyLoader = onboardingSource.slice(
-      onboardingSource.indexOf('async function ensureApiKey()'),
-      onboardingSource.indexOf('let apiKeyLoadingPromise'),
+  it.concurrent('targets the created app when provisioning the Getting Started API key', () => {
+    const keyLoader = panelSource.slice(
+      panelSource.indexOf('async function ensureApiKey()'),
+      panelSource.indexOf('function loadApiKey()'),
     )
 
-    expect(keyLoader).toContain('const appId = createdApp.value?.app_id')
-    expect(keyLoader).not.toContain('resumeAppId.value')
+    expect(keyLoader).toContain('await organizationStore.awaitInitialLoad()')
+    expect(keyLoader).toContain('organizationStore.getOrgByAppId(props.appId)')
+    expect(keyLoader).toContain('organizationStore.currentOrganization?.gid')
+    expect(keyLoader).toContain('if (!orgId)')
+    expect(keyLoader).toContain('appId: props.appId')
+    expect(keyLoader).not.toContain('resumeAppId')
   })
 
   it.concurrent('renders ready commands as native DaisyUI buttons', () => {
-    expect(onboardingSource).toMatch(/<button\s+v-if="apiKey"/)
-    expect(onboardingSource).not.toContain(':role="apiKey ? \'button\' : \'status\'"')
+    expect(panelSource).toMatch(/<button\s+v-if="cliParts"/)
+    expect(panelSource).not.toContain(':role="apiKey ? \'button\' : \'status\'"')
   })
 
-  it.concurrent('keeps builder API keys exclusively in the API key flag', () => {
-    expect(onboardingSource).toContain('<span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>')
+  it.concurrent('uses the OTA init command on Getting Started', () => {
+    expect(panelSource).toContain('buildCapgoOtaCliInitCommand')
+    expect(panelSource).not.toContain('build init')
+    expect(onboardingSource).not.toContain('build init')
   })
 
   it.concurrent('provides secure onboarding copy in the English locale', () => {
@@ -68,18 +83,18 @@ describe('app onboarding API key loading state', () => {
   })
 
   it.concurrent('always includes the API key and tracks successful copy actions', () => {
-    const copyHandlerStart = onboardingSource.indexOf('async function copyAiInstructions()')
-    const copyHandlerEnd = onboardingSource.indexOf('function goToInstallStep()', copyHandlerStart)
+    const copyHandlerStart = panelSource.indexOf('async function copyAiInstructions()')
+    const copyHandlerEnd = panelSource.indexOf('function onCliStepsProgress(', copyHandlerStart)
     expect(copyHandlerStart).toBeGreaterThanOrEqual(0)
     expect(copyHandlerEnd).toBeGreaterThan(copyHandlerStart)
-    const copyHandler = onboardingSource.slice(copyHandlerStart, copyHandlerEnd)
+    const copyHandler = panelSource.slice(copyHandlerStart, copyHandlerEnd)
 
     expect(copyHandler).toContain('await loadApiKey()')
     expect(copyHandler).toContain('if (!apiKey.value)')
     expect(copyHandler).toContain('await copyText(createAiHelpPrompt())')
-    expect(copyHandler).toContain("trackSuccessfulCopy('onboarding_ai_instructions_copied')")
-    expect(copyHandler).not.toContain('dialogStore.openDialog({')
+    expect(copyHandler).toContain("sendOnboardingEvent('onboarding_ai_instructions_copied'")
     expect(copyHandler).not.toContain('redactedCliCommand')
-    expect(onboardingSource).toContain("trackSuccessfulCopy('onboarding_cli_command_copied')")
+    expect(panelSource).toContain("sendOnboardingEvent('onboarding_cli_command_copied'")
+    expect(onboardingSource).not.toContain("trackSuccessfulCopy('onboarding_cli_command_copied')")
   })
 })

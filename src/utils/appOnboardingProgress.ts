@@ -165,7 +165,7 @@ export function shouldShowOnboardingNextStep(ledger: AppOnboardingLedger): boole
   return nextOnboardingAction(ledger).stage !== 'store_live'
 }
 
-export const GETTING_STARTED_STEP_IDS = ['cli_install', 'live_update', 'store_release', 'builder'] as const
+export const GETTING_STARTED_STEP_IDS = ['cli_install', 'store_release', 'live_update', 'cicd', 'builder'] as const
 export type GettingStartedStepId = typeof GETTING_STARTED_STEP_IDS[number]
 export type GettingStartedGroup = 'essential' | 'grow'
 
@@ -181,6 +181,8 @@ export interface GettingStartedStep {
 export interface GettingStartedStepExtras {
   builderDone?: boolean
   storeReleaseValidated?: boolean
+  cicdSetupValidated?: boolean
+  cliSetupCompleted?: boolean
 }
 
 const GETTING_STARTED_STEP_DEFS: Array<Omit<GettingStartedStep, 'done'>> = [
@@ -192,6 +194,13 @@ const GETTING_STARTED_STEP_DEFS: Array<Omit<GettingStartedStep, 'done'>> = [
     actionKey: 'getting-started-action-setup',
   },
   {
+    id: 'store_release',
+    group: 'essential',
+    titleKey: 'store-release-validation-badge',
+    descKey: 'getting-started-store-release-desc',
+    actionKey: 'getting-started-action-ship',
+  },
+  {
     id: 'live_update',
     group: 'essential',
     titleKey: 'getting-started-live-update',
@@ -199,11 +208,11 @@ const GETTING_STARTED_STEP_DEFS: Array<Omit<GettingStartedStep, 'done'>> = [
     actionKey: 'getting-started-action-setup',
   },
   {
-    id: 'store_release',
+    id: 'cicd',
     group: 'essential',
-    titleKey: 'store-release-validation-badge',
-    descKey: 'onboarding-next-ota-store-desc',
-    actionKey: 'getting-started-action-validate',
+    titleKey: 'getting-started-cicd',
+    descKey: 'getting-started-cicd-desc',
+    actionKey: 'getting-started-action-setup',
   },
   {
     id: 'builder',
@@ -231,14 +240,17 @@ export function isGettingStartedStepDone(
   const stage = onboardingStage(ledger)
 
   if (id === 'cli_install') {
-    return Boolean(cliInstall.succeeded_at)
+    return extras?.cliSetupCompleted === true
+      || Boolean(cliInstall.succeeded_at)
       || Boolean(ota.succeeded_at)
       || rankAppOnboardingStage(stage) > rankAppOnboardingStage('local_only')
   }
-  if (id === 'live_update')
-    return Boolean(ota.succeeded_at)
   if (id === 'store_release')
     return stage === 'store_live' || extras?.storeReleaseValidated === true
+  if (id === 'live_update')
+    return Boolean(ota.succeeded_at)
+  if (id === 'cicd')
+    return extras?.cicdSetupValidated === true
   return extras?.builderDone === true || Boolean(builder.succeeded_at)
 }
 
@@ -250,6 +262,11 @@ export function buildGettingStartedSteps(
     ...def,
     done: isGettingStartedStepDone(ledger, def.id, extras),
   }))
+}
+
+export function areGettingStartedEssentialsDone(steps: GettingStartedStep[]): boolean {
+  const essential = steps.filter(step => step.group === 'essential')
+  return essential.length > 0 && essential.every(step => step.done)
 }
 
 export function gettingStartedProgress(steps: GettingStartedStep[]): {

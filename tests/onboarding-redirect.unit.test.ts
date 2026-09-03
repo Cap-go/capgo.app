@@ -18,7 +18,7 @@ describe('onboarding dashboard redirect', () => {
   const eligibleUser = '2026-08-03T23:00:01.000Z'
 
   it('redirects an eligible user with one pending app to its setup flow', async () => {
-    const expectedResume = { path: '/onboarding/app', query: { resume: 'com.example.app', step: 'setup' } }
+    const expectedResume = { path: '/app/com.example.app/getting-started' }
     await expect(getRedirect({
       appId: 'com.example.app',
       appCount: 1,
@@ -71,7 +71,7 @@ describe('onboarding dashboard redirect', () => {
     expect(module.getOnboardingResumeAppId('user-1')).toBe('com.example.app')
     expect(module.getOnboardingResumeAppId('user-2')).toBeNull()
     expect(module.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-1' })).toBeNull()
-    expect(module.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-2' })).toEqual({ path: '/onboarding/app', query: { resume: 'com.example.app', step: 'setup' } })
+    expect(module.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-2' })).toEqual({ path: '/app/com.example.app/getting-started' })
 
     // Reloading the page drops module memory but keeps session storage.
     vi.resetModules()
@@ -141,5 +141,76 @@ describe('onboarding dashboard redirect', () => {
       resumeAppId: 'com.example.app',
       userId: 'user-1',
     })).toBe(false)
+  })
+})
+
+describe('post-CLI getting started redirect', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.resetModules()
+    window.sessionStorage.clear()
+    window.localStorage.clear()
+  })
+
+  it('sends a finished CLI user back to getting started from dashboard and leftover onboarding routes', async () => {
+    const { getGettingStartedContinueRedirect } = await import('../src/utils/onboardingRedirect.ts')
+    const options = {
+      appId: 'com.example.app',
+      appCount: 1,
+      createdAt: '2026-08-03T23:00:01.000Z',
+      ledger: { features: { cli_install: { succeeded_at: '2026-08-14T00:00:00.000Z' } } },
+      needOnboarding: false,
+      organizationCount: 1,
+      userId: 'user-1',
+    }
+
+    expect(getGettingStartedContinueRedirect({ ...options, path: '/dashboard' })).toEqual({
+      path: '/app/com.example.app/getting-started',
+    })
+    expect(getGettingStartedContinueRedirect({ ...options, path: '/apps' })).toEqual({
+      path: '/app/com.example.app/getting-started',
+    })
+    expect(getGettingStartedContinueRedirect({ ...options, path: '/onboarding/app' })).toEqual({
+      path: '/app/com.example.app/getting-started',
+    })
+    expect(getGettingStartedContinueRedirect({ ...options, path: '/app/new' })).toEqual({
+      path: '/app/com.example.app/getting-started',
+    })
+    expect(getGettingStartedContinueRedirect({ ...options, path: '/settings/account' })).toBeNull()
+    expect(getGettingStartedContinueRedirect({ ...options, path: '/dashboard', needOnboarding: true })).toBeNull()
+    expect(getGettingStartedContinueRedirect({
+      ...options,
+      path: '/dashboard',
+      ledger: {
+        ...options.ledger,
+        getting_started_dismissed_at: '2026-08-14T00:00:00.000Z',
+      },
+    })).toBeNull()
+    expect(getGettingStartedContinueRedirect({
+      ...options,
+      path: '/dashboard',
+      extras: { cicdSetupValidated: true, storeReleaseValidated: true, cliSetupCompleted: true },
+      ledger: {
+        features: {
+          cli_install: { succeeded_at: '2026-08-14T00:00:00.000Z' },
+          ota: { succeeded_at: '2026-08-14T00:00:00.000Z', stage: 'store_live' },
+        },
+      },
+    })).toBeNull()
+  })
+
+  it('does not bounce to getting started after dashboard exploration is granted', async () => {
+    const { allowOnboardingDashboardExploration, getGettingStartedContinueRedirect } = await import('../src/utils/onboardingRedirect.ts')
+    allowOnboardingDashboardExploration('user-1', 'com.example.app')
+    expect(getGettingStartedContinueRedirect({
+      appId: 'com.example.app',
+      appCount: 1,
+      createdAt: '2026-08-03T23:00:01.000Z',
+      ledger: { features: { cli_install: { succeeded_at: '2026-08-14T00:00:00.000Z' } } },
+      needOnboarding: false,
+      organizationCount: 1,
+      path: '/dashboard',
+      userId: 'user-1',
+    })).toBeNull()
   })
 })

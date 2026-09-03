@@ -119,7 +119,7 @@ describe('pre-organization onboarding v3', () => {
   })
 
   it.concurrent('classifies restored draft icon data as a file in creation telemetry', () => {
-    const iconSource = sliceBetween(onboardingSource, 'const selectedAppIconSource = computed', 'function createAiHelpPrompt()')
+    const iconSource = sliceBetween(onboardingSource, 'const selectedAppIconSource = computed', 'const appOnboardingSteps = computed')
     expect(iconSource).toContain('resolveOnboardingAppIconSource({')
     expect(iconSource).toContain('hasSelectedIconFile: Boolean(selectedIconFile.value)')
     expect(iconSource).toContain('localIconPreview: localIconPreview.value')
@@ -215,7 +215,7 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain('website: websitePreview.value?.website')
     expect(onboardingSource).toContain("selectedStop.planName !== 'Solo'")
     expect(onboardingSource).toContain('<OrganizationOnboardingInvite')
-    expect(onboardingSource).toContain("completeAndViewStep('setup', { appId: createdApp.value.app_id })")
+    expect(onboardingSource).toContain('void goToGettingStarted()')
   })
 
   it.concurrent('keeps the organization website tooltip clear of the panel and viewport edges', () => {
@@ -269,23 +269,18 @@ describe('pre-organization onboarding v3', () => {
     const organizationCreation = sliceBetween(onboardingSource, 'async function createOrganizationAndApp()', 'async function createAppRecord(')
     expect(organizationCreation).toContain('preOrgCreatedOrganizationId.value = data.id')
     expect(organizationCreation).toContain('await completePreOrgAppCreation(data.id, shouldInvite)')
-    expect(organizationCreation).toContain("await createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })")
+    expect(organizationCreation).toContain("await createAppRecord({ nextStep: 'organization' })")
 
     const appCreation = sliceBetween(onboardingSource, 'async function createAppRecord(', 'async function seedDemoData()')
     expect(appCreation).toContain('returnToAppIdAfterConflict()')
   })
 
-  it.concurrent('shows technical delegation unconditionally on pre-org setup', () => {
-    expect(onboardingSource).toContain("flowStep === 'setup' && createdApp")
+  it.concurrent('sends pre-org users to getting started after organization creation', () => {
+    expect(onboardingSource).toContain('await goToGettingStarted()')
+    expect(onboardingSource).not.toContain("flowStep === 'setup' && createdApp")
     expect(onboardingSource).toContain("!props.preOrg && flowStep === 'choice'")
-    const setup = sliceBetween(onboardingSource, "flowStep === 'setup' && createdApp", "!props.preOrg && flowStep === 'choice'")
-    expect(setup).toContain('<TechnicalTeammateInviteCard')
-    expect(setup).toContain('analytics-channel="onboarding-v3"')
-    expect(setup).toContain(':show-manual-setup-link="false"')
-    expect(setup).toContain(':tracking-version="3"')
-    expect(setup).toContain("t('onboarding-manual-setup-prefix')")
-    expect(setup.indexOf("t('onboarding-manual-setup-prefix')")).toBeLessThan(setup.indexOf('<TechnicalTeammateInviteCard'))
-    expect(setup.indexOf('<AppOnboardingCliSteps')).toBeLessThan(setup.indexOf('<TechnicalTeammateInviteCard'))
-    expect(setup).not.toContain('selectedUserCountStop')
+    expect(onboardingSource).not.toContain('<TechnicalTeammateInviteCard')
+    expect(onboardingSource).not.toContain('<OnboardingAltSetup')
+    expect(onboardingSource).not.toContain('@progress="onCliStepsProgress"')
   })
 })

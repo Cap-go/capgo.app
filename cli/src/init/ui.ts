@@ -76,8 +76,9 @@ export function renderInitOnboardingComplete(appId: string, nextUploadCommand: s
     title: 'Onboarding Complete',
     completionLines: [
       `${appId} is now wired for Capgo OTA updates.`,
+      'Self-test on your device: make a visible change, run a web build only, then upload.',
+      'Background the app and reopen it to fetch the update. Do not run cap sync for this test.',
       `Next upload · ${nextUploadCommand}`,
-      'Important · Avoid running cap sync again until the OTA path is validated on-device.',
       `Debug · ${debugCommand}`,
     ],
     tone: 'green',

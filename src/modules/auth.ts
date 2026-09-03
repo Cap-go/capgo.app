@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NavigationGuardNext, RouteLocationNormalized } from 'vue-router'
 import type { UserModule } from '~/types'
+import { isTerminalAppOnboarding } from '~/services/appOnboarding'
 import { hideLoader } from '~/services/loader'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { setUser } from '~/services/posthog'
@@ -11,8 +12,10 @@ import { sendEvent } from '~/services/tracking'
 import { clearWebsitePaidUserCookie, setWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
-import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
-import { getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
+import { parseAppOnboardingLedger, shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
+import { isCicdSetupValidated } from '~/utils/gettingStartedCicd'
+import { isStoreReleaseValidated } from '~/utils/gettingStartedDismiss'
+import { getGettingStartedContinueRedirect, getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
 import { hasPendingInviteSkip } from '~/utils/pendingInviteSkip'
 import { getPlans, isPlatformAdmin } from './../services/supabase'
 
@@ -267,16 +270,38 @@ async function guard(
     }
 
     const app = apps?.[0]
+    const userId = sessionUser?.id
     if (app && shouldSkipOnboardingResume(app.onboarding))
       return null
-    return getOnboardingResumeRedirect({
-      appId: app?.need_onboarding ? app.app_id : null,
+    if (app?.need_onboarding) {
+      return getOnboardingResumeRedirect({
+        appId: app.app_id,
+        appCount: apps?.length ?? 0,
+        createdAt: sessionUser?.created_at,
+        organizationCount: selectableOrganizations.length,
+        path: to.path,
+        resumeAppId: typeof to.query.resume === 'string' ? to.query.resume : null,
+        userId,
+      })
+    }
+
+    if (!app?.app_id)
+      return null
+
+    return getGettingStartedContinueRedirect({
+      appId: app.app_id,
       appCount: apps?.length ?? 0,
       createdAt: sessionUser?.created_at,
+      extras: {
+        storeReleaseValidated: isStoreReleaseValidated(userId ?? '', app.app_id),
+        cicdSetupValidated: isCicdSetupValidated(userId ?? '', app.app_id),
+        cliSetupCompleted: isTerminalAppOnboarding(app.onboarding),
+      },
+      ledger: parseAppOnboardingLedger(app.onboarding),
+      needOnboarding: false,
       organizationCount: selectableOrganizations.length,
       path: to.path,
-      resumeAppId: typeof to.query.resume === 'string' ? to.query.resume : null,
-      userId: sessionUser?.id,
+      userId,
     })
   }
 

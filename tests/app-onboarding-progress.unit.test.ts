@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  areGettingStartedEssentialsDone,
   buildGettingStartedSteps,
   getAppOnboardingFeature,
   gettingStartedProgress,
@@ -129,9 +130,10 @@ describe('app onboarding progress ledger', () => {
 
   it.concurrent('builds getting started checklist from ledger stages', () => {
     const empty = buildGettingStartedSteps({})
+    expect(empty.map(step => step.id)).toEqual(['cli_install', 'store_release', 'live_update', 'cicd', 'builder'])
     expect(empty.every(step => !step.done)).toBe(true)
     expect(shouldShowGettingStartedNav({})).toBe(true)
-    expect(gettingStartedProgress(empty)).toEqual({ done: 0, total: 4, percent: 0 })
+    expect(gettingStartedProgress(empty)).toEqual({ done: 0, total: 5, percent: 0 })
 
     const live = buildGettingStartedSteps({
       features: {
@@ -139,13 +141,18 @@ describe('app onboarding progress ledger', () => {
         ota: { started_at: '2026-08-03T00:00:00.000Z', succeeded_at: '2026-08-04T00:00:00.000Z', stage: 'store_live' },
         builder: { succeeded_at: '2026-08-05T00:00:00.000Z' },
       },
-    })
+    }, { cicdSetupValidated: true })
     expect(live.every(step => step.done)).toBe(true)
     expect(shouldShowGettingStartedNav({
       features: {
         ota: { succeeded_at: '2026-08-04T00:00:00.000Z', stage: 'store_live' },
       },
-    })).toBe(false)
+    })).toBe(true)
+    expect(shouldShowGettingStartedNav({
+      features: {
+        ota: { succeeded_at: '2026-08-04T00:00:00.000Z', stage: 'store_live' },
+      },
+    }, { cicdSetupValidated: true })).toBe(false)
     expect(gettingStartedProgress(live).percent).toBe(100)
   })
 
@@ -162,7 +169,13 @@ describe('app onboarding progress ledger', () => {
         cli_install: { succeeded_at: '2026-08-02T00:00:00.000Z' },
         ota: { succeeded_at: '2026-08-04T00:00:00.000Z', stage: 'store_live' },
       },
-    })).toBe(false)
+    })).toBe(true)
+    expect(shouldShowGettingStartedNav({
+      features: {
+        cli_install: { succeeded_at: '2026-08-02T00:00:00.000Z' },
+        ota: { succeeded_at: '2026-08-04T00:00:00.000Z', stage: 'store_live' },
+      },
+    }, { cicdSetupValidated: true })).toBe(false)
   })
 
   it.concurrent('does not mark live_update done from a device stage alone', () => {
@@ -201,7 +214,32 @@ describe('app onboarding progress ledger', () => {
         cli_install: { succeeded_at: '2026-08-02T00:00:00.000Z' },
         ota: { succeeded_at: '2026-08-04T00:00:00.000Z', stage: 'testflight' },
       },
-    }, { storeReleaseValidated: true })).toBe(false)
+    }, { storeReleaseValidated: true })).toBe(true)
+    expect(shouldShowGettingStartedNav({
+      features: {
+        cli_install: { succeeded_at: '2026-08-02T00:00:00.000Z' },
+        ota: { succeeded_at: '2026-08-04T00:00:00.000Z', stage: 'testflight' },
+      },
+    }, { storeReleaseValidated: true, cicdSetupValidated: true })).toBe(false)
+  })
+
+  it.concurrent('marks CLI install done from terminal CLI setup and CI/CD from extras', () => {
+    const steps = buildGettingStartedSteps({}, { cliSetupCompleted: true })
+    expect(steps.find(step => step.id === 'cli_install')?.done).toBe(true)
+    expect(steps.find(step => step.id === 'cicd')?.done).toBe(false)
+    expect(buildGettingStartedSteps({}, { cicdSetupValidated: true }).find(step => step.id === 'cicd')?.done).toBe(true)
+  })
+
+  it.concurrent('treats essentials as complete while Builder stays optional', () => {
+    const steps = buildGettingStartedSteps({
+      features: {
+        cli_install: { succeeded_at: '2026-08-02T00:00:00.000Z' },
+        ota: { succeeded_at: '2026-08-04T00:00:00.000Z', stage: 'store_live' },
+      },
+    }, { cicdSetupValidated: true, storeReleaseValidated: true })
+    expect(areGettingStartedEssentialsDone(steps)).toBe(true)
+    expect(steps.find(step => step.id === 'builder')?.done).toBe(false)
+    expect(gettingStartedProgress(steps).percent).toBe(80)
   })
 })
 

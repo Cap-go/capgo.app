@@ -1,9 +1,12 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { INIT_ONBOARDING_STEP_IDS } from '../cli/src/init/onboarding-steps'
 import {
   APP_ONBOARDING_STEP_IDS,
   applyAppOnboardingPatch,
   defaultAppOnboarding,
+  hasStartedCliSetup,
+  isTerminalAppOnboarding,
   mergeAppOnboarding,
   parseAppOnboarding,
   parseAppOnboardingPatch,
@@ -115,5 +118,37 @@ describe('app onboarding merge', () => {
     expect(parseAppOnboardingPatch({ source: 'web' })).toBeNull()
     expect(parseAppOnboardingPatch({ steps: { not_a_step: { status: 'done' } } })).toBeNull()
     expect(parseAppOnboardingPatch({ source: 'ai' })).toEqual({ source: 'ai' })
+  })
+
+  it.concurrent('treats console pending-app creation as add_app done without starting CLI setup', () => {
+    const next = applyAppOnboardingPatch({}, {
+      source: 'manual',
+      steps: { add_app: { status: 'done' } },
+    }, () => '2026-08-14T10:00:00.000Z')
+    expect(parseAppOnboarding(next).steps.add_app?.status).toBe('done')
+    expect(hasStartedCliSetup(next)).toBe(false)
+    expect(isTerminalAppOnboarding(next)).toBe(false)
+  })
+
+  it.concurrent('detects CLI start from source or later steps', () => {
+    expect(hasStartedCliSetup({ source: 'cli', steps: { add_app: { status: 'done' } } })).toBe(true)
+    expect(hasStartedCliSetup({
+      source: 'manual',
+      steps: { add_channel: { status: 'done' } },
+    })).toBe(true)
+    expect(isTerminalAppOnboarding({ outcome: 'completed' })).toBe(true)
+    expect(isTerminalAppOnboarding({ outcome: 'skipped' })).toBe(true)
+    expect(isTerminalAppOnboarding({ outcome: 'in_progress' })).toBe(false)
+  })
+
+  it.concurrent('keeps reused pending apps and device launches on the CLI checklist', () => {
+    const commandSource = readFileSync(new URL('../cli/src/init/command.ts', import.meta.url), 'utf8')
+    const uiSource = readFileSync(new URL('../cli/src/init/ui.ts', import.meta.url), 'utf8')
+    expect(commandSource).toContain('reportInitOnboardingStep(globalReportContext.apikey, appId, 1, \'done\'')
+    expect(commandSource).toContain('writing step_done=1')
+    expect(commandSource).toContain('Did you launch the app on a device or simulator?')
+    expect(commandSource).toContain('return confirmDeviceWasLaunched(orgId, apikey)')
+    expect(uiSource).toContain('Self-test on your device')
+    expect(uiSource).toContain('Do not run cap sync for this test')
   })
 })

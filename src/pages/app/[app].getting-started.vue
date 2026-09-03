@@ -7,19 +7,24 @@ import { toast } from 'vue-sonner'
 import IconCheck from '~icons/lucide/check'
 import IconRefreshCw from '~icons/lucide/refresh-cw'
 import IconX from '~icons/lucide/x'
-import AppOnboardingCliSteps from '~/components/dashboard/AppOnboardingCliSteps.vue'
 import AppPageFrame from '~/components/dashboard/AppPageFrame.vue'
+import GettingStartedCicdPanel from '~/components/dashboard/GettingStartedCicdPanel.vue'
+import GettingStartedCliPanel from '~/components/dashboard/GettingStartedCliPanel.vue'
+import GettingStartedLiveUpdatePanel from '~/components/dashboard/GettingStartedLiveUpdatePanel.vue'
 import { useAppPage } from '~/composables/useAppPage'
+import { isTerminalAppOnboarding } from '~/services/appOnboarding'
 import { useSupabase } from '~/services/supabase'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import {
+  areGettingStartedEssentialsDone,
   buildGettingStartedSteps,
   gettingStartedProgress,
   parseAppOnboardingLedger,
   withGettingStartedDismissed,
   withoutGettingStartedDismissed,
 } from '~/utils/appOnboardingProgress'
+import { isCicdSetupValidated } from '~/utils/gettingStartedCicd'
 import {
   isStoreReleaseValidated,
   markStoreReleaseValidated,
@@ -50,9 +55,13 @@ const iconLoading = computed(() => orgApp.value?.icon_url_loading === true)
 
 const ledger = computed(() => parseAppOnboardingLedger(app.value?.onboarding))
 const userId = computed(() => main.user?.id ?? main.auth?.id ?? '')
+const cliSetupCompleted = ref(isTerminalAppOnboarding(app.value?.onboarding))
+const cicdSetupValidated = ref(false)
 const steps = computed(() => buildGettingStartedSteps(ledger.value, {
   builderDone: builderDone.value,
   storeReleaseValidated: isStoreReleaseValidated(userId.value, id.value),
+  cicdSetupValidated: cicdSetupValidated.value,
+  cliSetupCompleted: cliSetupCompleted.value,
 }))
 const progress = computed(() => gettingStartedProgress(steps.value))
 const stepGroups = computed(() => {
@@ -63,7 +72,7 @@ const stepGroups = computed(() => {
     { id: 'grow', titleKey: 'getting-started-grow', steps: grow, doneCount: grow.filter(step => step.done).length },
   ]
 })
-const allDone = computed(() => progress.value.done === progress.value.total && progress.value.total > 0)
+const allDone = computed(() => areGettingStartedEssentialsDone(steps.value))
 
 function acronym(name: string) {
   const trimmed = name.trim()
@@ -74,6 +83,19 @@ function acronym(name: string) {
   const second = parts.length > 1 ? (parts[1]?.[0] ?? '') : (parts[0]?.[1] ?? '')
   return (first + second).toUpperCase()
 }
+
+function onCliInstallProgress(payload: { isTerminal: boolean }) {
+  cliSetupCompleted.value = payload.isTerminal
+}
+
+function onCicdValidated() {
+  cicdSetupValidated.value = true
+}
+
+watch(() => app.value?.onboarding, (value) => {
+  if (isTerminalAppOnboarding(value))
+    cliSetupCompleted.value = true
+})
 
 function applyOnboarding(onboarding: unknown, needOnboarding?: boolean, targetAppId = id.value) {
   if (!targetAppId)
@@ -195,22 +217,12 @@ async function hideGettingStarted() {
 function runStep(step: GettingStartedStep) {
   if (step.done)
     return
-  if (step.id === 'cli_install') {
-    if (app.value?.need_onboarding)
-      void router.push({ path: '/app/new', query: { resume: id.value } })
-    else
-      void router.push(`/app/${encodeURIComponent(id.value)}/devices`)
-    return
-  }
-  if (step.id === 'live_update') {
-    void router.push(`/app/${encodeURIComponent(id.value)}/bundles`)
-    return
-  }
   if (step.id === 'store_release') {
     storeModal.value?.openModal()
     return
   }
-  builderModalOpen.value = true
+  if (step.id === 'builder')
+    builderModalOpen.value = true
 }
 
 function onStoreReleaseApplied(appId: string) {
@@ -232,6 +244,10 @@ watch(() => app.value?.app_id, (appId) => {
     return
   void verifySteps({ silent: true })
 })
+
+watch(() => [userId.value, id.value], ([uid, appId]) => {
+  cicdSetupValidated.value = Boolean(uid && appId && isCicdSetupValidated(uid, appId))
+}, { immediate: true })
 </script>
 
 <template>
@@ -393,7 +409,7 @@ watch(() => app.value?.app_id, (appId) => {
                   {{ t('getting-started-done') }}
                 </span>
                 <button
-                  v-else
+                  v-else-if="step.id !== 'cicd' && step.id !== 'cli_install' && step.id !== 'live_update'"
                   type="button"
                   class="d-btn d-btn-ghost d-btn-sm h-11 min-h-11 shrink-0 px-3 text-azure-700 dark:text-azure-300"
                   data-test="getting-started-step-action"
@@ -402,12 +418,24 @@ watch(() => app.value?.app_id, (appId) => {
                   {{ t(step.actionKey) }}
                 </button>
               </div>
-              <AppOnboardingCliSteps
+              <GettingStartedCliPanel
                 v-if="step.id === 'cli_install'"
                 :key="id"
-                class="mt-3"
                 :app-id="id"
+                :app-name="appName"
+                :existing-app="app.existing_app"
                 :initial-onboarding="app.onboarding"
+                @progress="onCliInstallProgress"
+              />
+              <GettingStartedLiveUpdatePanel
+                v-if="step.id === 'live_update'"
+                :app-id="id"
+              />
+              <GettingStartedCicdPanel
+                v-if="step.id === 'cicd' && !step.done && userId"
+                :app-id="id"
+                :user-id="userId"
+                @validated="onCicdValidated"
               />
             </li>
           </ul>
