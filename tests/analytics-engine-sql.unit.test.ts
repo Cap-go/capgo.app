@@ -91,6 +91,21 @@ describe('analytics engine sql lint rules', () => {
       'SELECT if(1, NULL -- )\n, 0) FROM app_log',
     ).map(issue => issue.rule)).toContain('no-if-untyped-null')
   })
+
+  it.concurrent('flags avgIf/sumIf/countIf because they expand to IF(..., NULL)', () => {
+    expect(lintAnalyticsEngineSql(
+      'SELECT avgIf(double1, blob2 IN (\'download_complete\', \'download_zip_complete\') AND double1 > 0) FROM app_log',
+    ).map(issue => issue.rule)).toContain('no-conditional-agg-if')
+    expect(lintAnalyticsEngineSql(
+      'SELECT sumIf(double1, double1 > 0) FROM app_log',
+    ).map(issue => issue.rule)).toContain('no-conditional-agg-if')
+    expect(lintAnalyticsEngineSql(
+      'SELECT countIf(blob2 = \'download_complete\') FROM app_log',
+    ).map(issue => issue.rule)).toContain('no-conditional-agg-if')
+    expect(lintAnalyticsEngineSql(
+      'SELECT max(if(blob2 = \'download_complete\' AND double1 > 0, double1, 0.0)) FROM app_log',
+    ).map(issue => issue.rule)).not.toContain('no-conditional-agg-if')
+  })
 })
 
 describe('analytics engine sql fixtures', () => {

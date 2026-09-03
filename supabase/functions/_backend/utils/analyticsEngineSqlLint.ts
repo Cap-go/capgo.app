@@ -174,6 +174,11 @@ export const ANALYTICS_ENGINE_SQL_LINT_RULES: AnalyticsEngineSqlLintRule[] = [
     test: hasUntypedNullIfBranch,
     message: 'Analytics Engine SQL IF() branches must share a type; untyped NULL cannot pair with Double or DateTime',
   },
+  {
+    id: 'no-conditional-agg-if',
+    test: sql => /\b(?:avgIf|sumIf|countIf)\s*\(/i.test(sql),
+    message: 'avgIf/sumIf/countIf expand to if(expr, NULL) which Analytics Engine rejects (Double/DateTime vs Null). Use if(cond, value, 0.0) or a typed DateTime sentinel instead.',
+  },
 ]
 
 export function lintAnalyticsEngineSql(sql: string): AnalyticsEngineSqlLintIssue[] {
