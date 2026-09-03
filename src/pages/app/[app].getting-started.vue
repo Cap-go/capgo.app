@@ -64,7 +64,6 @@ const steps = computed(() => buildGettingStartedSteps(ledger.value, {
   cliSetupCompleted: cliSetupCompleted.value,
 }))
 const progress = computed(() => gettingStartedProgress(steps.value))
-const focusedStepId = computed(() => steps.value.find(step => step.group === 'essential' && !step.done)?.id)
 const stepGroups = computed(() => {
   const essential = steps.value.filter(step => step.group === 'essential')
   const grow = steps.value.filter(step => step.group === 'grow')
@@ -385,7 +384,6 @@ watch(() => [userId.value, id.value], ([uid, appId]) => {
               v-for="step in group.steps"
               :key="step.id"
               class="px-4 py-3"
-              :class="step.id === focusedStepId && step.id !== 'cli_install' && step.id !== 'cicd' && step.id !== 'live_update' ? 'bg-azure-50/70 dark:bg-azure-950/20' : ''"
               :data-test="`getting-started-step-${step.id}`"
             >
               <div class="flex items-center gap-3">
