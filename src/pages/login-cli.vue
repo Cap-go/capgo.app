@@ -9,8 +9,10 @@ import IconCheckCircle from '~icons/heroicons/check-circle'
 import IconClipboard from '~icons/heroicons/clipboard-document'
 import IconEye from '~icons/heroicons/eye'
 import IconEyeSlash from '~icons/heroicons/eye-slash'
+import IconInformationCircle from '~icons/heroicons/information-circle'
 import IconKey from '~icons/heroicons/key'
 import IconSparkles from '~icons/heroicons/sparkles'
+import CliLoginSkippedOrganizations from '~/components/CliLoginSkippedOrganizations.vue'
 import { buildCliAiSetupPrompt } from '~/services/cliAiPrompt'
 import {
   createCliLoginKeyDependencies,
@@ -319,9 +321,7 @@ onBeforeUnmount(() => {
         <p class="d-alert d-alert-warning">
           {{ t('cli-login-no-eligible') }}
         </p>
-        <p v-if="skippedNames.length" class="text-sm">
-          {{ t('cli-login-skipped-organizations', { organizations: skippedNames.join(', ') }) }}
-        </p>
+        <CliLoginSkippedOrganizations v-if="skippedNames.length" :organizations="skippedNames" />
         <button class="d-btn" type="button" @click="router.push('/dashboard')">
           {{ t('dashboard') }}
         </button>
@@ -343,9 +343,12 @@ onBeforeUnmount(() => {
               <IconClipboard class="h-4 w-4" /> {{ t('cli-login-ai-copy') }}
             </button>
           </div>
-          <p class="d-alert d-alert-warning text-sm">
-            {{ t('cli-login-ai-security-warning') }}
-          </p>
+          <div class="flex items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/60">
+            <IconInformationCircle class="mt-0.5 h-5 w-5 shrink-0 text-azure-500" aria-hidden="true" />
+            <p class="text-sm leading-6 text-slate-600 dark:text-slate-300">
+              {{ t('cli-login-ai-security-warning') }}
+            </p>
+          </div>
         </template>
         <template v-else>
           <p class="text-slate-600 dark:text-slate-300">
@@ -384,9 +387,7 @@ onBeforeUnmount(() => {
         <p v-if="expiresAt" class="text-sm text-amber-700 dark:text-amber-300">
           {{ t('cli-login-expiration-warning', { date: formatLocalDate(expiresAt) }) }}
         </p>
-        <p v-if="skippedNames.length" class="text-sm text-amber-700 dark:text-amber-300">
-          {{ t('cli-login-skipped-organizations', { organizations: skippedNames.join(', ') }) }}
-        </p>
+        <CliLoginSkippedOrganizations v-if="skippedNames.length" :organizations="skippedNames" />
         <output v-if="!aiMode" class="flex items-center text-sm" :class="realtimeUnavailable ? 'text-amber-700' : 'text-slate-500'">
           <template v-if="realtimeUnavailable">
             {{ t('cli-login-realtime-unavailable') }}
