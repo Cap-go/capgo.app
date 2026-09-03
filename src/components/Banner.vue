@@ -109,7 +109,7 @@ const bannerColor = computed(() => {
     <component
       :is="showCta ? 'div' : 'a'"
       v-bind="showCta ? {} : { href: billingCtaHref }"
-      role="status"
+      :role="showCta ? 'status' : undefined"
       class="flex items-center gap-2"
       :class="showCta ? '' : 'rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500'"
       :aria-label="statusAriaLabel"
@@ -150,7 +150,7 @@ const bannerColor = computed(() => {
     <component
       :is="showCta ? 'div' : 'a'"
       v-bind="showCta ? {} : { href: billingCtaHref }"
-      role="status"
+      :role="showCta ? 'status' : undefined"
       class="flex items-center gap-2"
       :class="showCta ? '' : 'rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500'"
       :aria-label="statusAriaLabel"

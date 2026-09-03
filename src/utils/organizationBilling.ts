@@ -90,6 +90,8 @@ export function resolveOrgBillingStatus(
   }
 
   if (paying && !org.can_use_more) {
+    // Over-quota paid orgs with remaining credits still have can_use_more=true
+    // in get_orgs_v7, so they correctly fall through to plan_active.
     const hasCredits = Number(org.credit_available ?? 0) > 0
     return {
       kind: hasCredits ? 'limit_reached_credits' : 'limit_reached',
