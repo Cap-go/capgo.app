@@ -377,6 +377,7 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
       search: 'demo',
       actions: ['get', 'set'],
       deviceIds: [SAMPLE_DEVICE_ID],
+      version_name: '1.2.3',
       order: [{ key: 'created_at', sortable: 'desc' }],
       limit: 10,
     }))

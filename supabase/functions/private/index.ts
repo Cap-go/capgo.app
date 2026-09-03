@@ -20,6 +20,7 @@ import { app as invite_new_user_to_org } from '../_backend/private/invite_new_us
 import { app as latency } from '../_backend/private/latency.ts'
 import { app as log_as } from '../_backend/private/log_as.ts'
 import { app as native_observe_stats } from '../_backend/private/native_observe_stats.ts'
+import { app as observe } from '../_backend/private/observe.ts'
 import { app as org_notification_stats } from '../_backend/private/org_notification_stats.ts'
 // Webapps API
 import { app as plans } from '../_backend/private/plans.ts'
@@ -65,6 +66,7 @@ appGlobal.route('/create_device', create_device)
 appGlobal.route('/channel_stats', channel_stats)
 appGlobal.route('/bundle_install_stats', bundle_install_stats)
 appGlobal.route('/native_observe_stats', native_observe_stats)
+appGlobal.route('/observe', observe)
 appGlobal.route('/org_notification_stats', org_notification_stats)
 appGlobal.route('/download_link', download_link)
 appGlobal.route('/log_as', log_as)

@@ -54,8 +54,12 @@ function getCommandEmoji(cmdName: string): string {
     emoji = '🔒'
   else if (cmdName.includes('decrypt'))
     emoji = '🔓'
-  else if (cmdName.includes('debug'))
+    else if (cmdName.includes('debug'))
     emoji = '🐞'
+    else if (cmdName === 'device')
+    emoji = '📱'
+    else if (cmdName === 'observe' || cmdName === 'summary' || cmdName === 'metrics' || cmdName === 'events' || cmdName === 'routes' || cmdName === 'versions')
+    emoji = '📊'
   else if (cmdName === 'run')
     emoji = '📱'
   else if (cmdName.includes('doctor'))

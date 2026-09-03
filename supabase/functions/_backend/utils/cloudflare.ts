@@ -1493,6 +1493,11 @@ export async function readStatsCF(c: Context, params: ReadStatsParams) {
     }
   }
 
+  let versionFilter = ''
+  if (params.version_name) {
+    versionFilter = `AND blob3 = '${escapeSqlString(params.version_name)}'`
+  }
+
   let searchFilter = ''
   if (params.search) {
     const searchLower = params.search.toLowerCase()
@@ -1525,7 +1530,7 @@ export async function readStatsCF(c: Context, params: ReadStatsParams) {
   timestamp as created_at
 FROM app_log
 WHERE
-  app_id = '${escapeSqlString(params.app_id)}' ${deviceFilter} ${actionsFilter} ${searchFilter} ${startFilter} ${endFilter}
+  app_id = '${escapeSqlString(params.app_id)}' ${deviceFilter} ${actionsFilter} ${versionFilter} ${searchFilter} ${startFilter} ${endFilter}
 GROUP BY app_id, created_at, action, device_id, version_name, metadata
 ${orderFilter}
 LIMIT ${limit}`

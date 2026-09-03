@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
   APIKEY_MANAGEMENT_APIKEY_MANAGER,
   APIKEY_MANAGEMENT_APIKEY_MANAGER_ID,
@@ -18,6 +18,7 @@ import {
   USER_EMAIL_APIKEY_MANAGEMENT,
   USER_ID,
   USER_PASSWORD,
+  warmEdgeEndpoint,
 } from './test-utils.ts'
 
 const id = randomUUID()
@@ -43,6 +44,8 @@ async function appKeyBody(name: string, appId = APPNAME, extra: Record<string, u
 beforeAll(async () => {
   authHeaders = await getAuthHeaders()
   await resetAndSeedAppData(APPNAME)
+  // Load the apikey isolate before concurrent POSTs from this file.
+  await warmEdgeEndpoint('/apikey', { method: 'GET', headers: authHeaders })
 })
 
 afterAll(async () => {
@@ -934,36 +937,53 @@ describe('[PUT] /apikey/:id operations', () => {
       const createResponse = await fetch(`${BASE_URL}/apikey`, {
         method: 'POST',
         headers: authHeaders,
-        body: JSON.stringify(orgKeyBody('temp-key-update-bindings')),
+        body: JSON.stringify(orgKeyBody(`temp-key-update-bindings-${randomUUID()}`)),
       })
       expect(createResponse.status).toBe(200)
       createData = await createResponse.json<{ id: number, rbac_id: string }>()
+      const createdKey = createData
 
       const appBindings = await appApiKeyBindings(APPNAME, 'app_reader')
-      const updateResponse = await fetch(`${BASE_URL}/apikey/${createData.id}`, {
-        method: 'PUT',
-        headers: authHeaders,
-        body: JSON.stringify({
-          bindings: appBindings,
-        }),
-      })
-      expect(updateResponse.status).toBe(200)
+      // Cloudflare shards can 403 immediately after POST while the caller's
+      // org.update_user_roles check still sees the pre-create binding state.
+      // Retry only that race (and gateway deaths). Permanent 401/404/409 fail now.
+      const putDeadline = Date.now() + 4000
+      while (true) {
+        const updateResponse = await fetch(`${BASE_URL}/apikey/${createdKey.id}`, {
+          method: 'PUT',
+          headers: authHeaders,
+          body: JSON.stringify({
+            bindings: appBindings,
+          }),
+        })
+        if (updateResponse.status === 200)
+          break
+        const body = await updateResponse.text().catch(() => '')
+        const message = `PUT /apikey/${createdKey.id} status=${updateResponse.status} body=${body.slice(0, 400)}`
+        const retryable = updateResponse.status === 403
+          || updateResponse.status === 502
+          || updateResponse.status === 503
+        if (!retryable || Date.now() >= putDeadline)
+          throw new Error(message)
+        await new Promise(resolve => setTimeout(resolve, 150))
+      }
 
-      const { data: bindings, error } = await getSupabaseClient()
-        .from('role_bindings')
-        .select('scope_type, app_id, roles(name)')
-        .eq('principal_type', 'apikey')
-        .eq('principal_id', createData.rbac_id)
+      await vi.waitFor(async () => {
+        const { data: bindings, error } = await getSupabaseClient()
+          .from('role_bindings')
+          .select('scope_type, app_id, roles(name)')
+          .eq('principal_type', 'apikey')
+          .eq('principal_id', createdKey.rbac_id)
 
-      expect(error).toBeNull()
-      const bindingRows = (bindings || []) as any[]
-      expect(bindingRows).toEqual([
-        expect.objectContaining({
-          scope_type: 'app',
-          app_id: appBindings[0].app_id,
-          roles: expect.objectContaining({ name: 'app_reader' }),
-        }),
-      ])
+        expect(error).toBeNull()
+        expect(bindings).toEqual([
+          expect.objectContaining({
+            scope_type: 'app',
+            app_id: appBindings[0].app_id,
+            roles: expect.objectContaining({ name: 'app_reader' }),
+          }),
+        ])
+      }, { timeout: 4000, interval: 150 })
     }
     finally {
       if (createData) {
