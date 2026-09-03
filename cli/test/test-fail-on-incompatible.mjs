@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import { shouldBlockIncompatibleUpload } from '../src/bundle/builder-cta.ts'
 import { checkValidOptions } from '../src/bundle/upload.ts'
 import { rejectOrAcceptIncompatibleChannelBundle } from '../src/channel/set.ts'
+import { uploadOptionsSchema } from '../src/schemas/sdk.ts'
 
 let failures = 0
 
@@ -161,6 +162,28 @@ test('--accept-incompatible together with --ignore-metadata-check is rejected', 
 
 test('--accept-incompatible alone does not trigger a conflict', () => {
   assert.doesNotThrow(() => checkValidOptions({ acceptIncompatible: true }))
+})
+
+test('SDK uploadOptionsSchema rejects acceptIncompatible with ignoreCompatibilityCheck', () => {
+  const result = uploadOptionsSchema.safeParse({
+    appId: 'com.example.app',
+    path: './dist',
+    acceptIncompatible: true,
+    ignoreCompatibilityCheck: true,
+  })
+  assert.equal(result.success, false)
+  if (result.success)
+    return
+  assert.ok(result.error.issues.some(issue => issue.path.includes('ignoreCompatibilityCheck')))
+})
+
+test('SDK uploadOptionsSchema accepts acceptIncompatible alone', () => {
+  const result = uploadOptionsSchema.safeParse({
+    appId: 'com.example.app',
+    path: './dist',
+    acceptIncompatible: true,
+  })
+  assert.equal(result.success, true)
 })
 
 test('--rollout-advance with --dry-upload is rejected', () => {

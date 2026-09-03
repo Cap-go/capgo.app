@@ -469,7 +469,7 @@ app.post('/', middlewareAuth(), async (c) => {
   // the version bump keeps the bundle off devices running the previous native
   // build, the breaking change was done correctly and the calmer
   // `bundle_incompatible_expected` event is emitted instead of the crash warning.
-  // Both outcomes are recorded in PostHog (sent vs sent_expected vs skipped_accepted).
+  // All three outcomes are recorded in PostHog (sent vs sent_expected vs skipped_accepted).
   const bundleIncompatibleBentoEvent: BentoTrackingPayload | undefined = await buildBundleIncompatibleBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
   const aiInstructionsCopiedBentoEvent = buildAiInstructionsCopiedBentoEvent({
     appId,

@@ -540,6 +540,10 @@ export class CapgoSDK {
    */
   async uploadBundle(options: UploadOptions): Promise<UploadResult> {
     try {
+      if (options.acceptIncompatible && options.ignoreCompatibilityCheck) {
+        throw new Error('You cannot use acceptIncompatible together with ignoreCompatibilityCheck — accepting a mismatch requires running the compatibility check. Remove one of them.')
+      }
+
       return await withCapacitorConfigTarget(options.capacitorConfig, async () => {
         // Convert SDK options to internal format
         const internalOptions: OptionsUpload = {
