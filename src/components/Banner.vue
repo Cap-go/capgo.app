@@ -19,13 +19,13 @@ const isMobile = Capacitor.isNativePlatform()
 const lacksSecurityAccess = computed(() => {
   const org = organizationStore.currentOrganization
   const lacks2FA = org?.enforcing_2fa === true && org?.['2fa_has_access'] === false
-  const lacksPassword = org?.password_policy_config?.enabled && org?.password_has_access === false
+  const lacksPassword = org?.password_policy_config?.enabled === true && org?.password_has_access === false
   return lacks2FA || lacksPassword
 })
 const status = computed(() => resolveOrgBillingStatus(organizationStore.currentOrganization, {
-  stripeEnabled: stripeEnabled.value,
+  stripeEnabled: !!stripeEnabled.value,
   lacksSecurityAccess: lacksSecurityAccess.value,
-  organizationFailed: organizationStore.currentOrganizationFailed,
+  organizationFailed: !!organizationStore.currentOrganizationFailed,
 }))
 const billingCtaHref = computed(() => {
   if (isMobile)
