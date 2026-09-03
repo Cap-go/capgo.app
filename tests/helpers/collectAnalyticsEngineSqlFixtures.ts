@@ -3,6 +3,7 @@ import {
   buildNativeObservePluginTotalDevicesCFQuery,
   buildNativeObservePluginVersionsCFQuery,
   buildPlatformUpdateDeliveryDailyCFQuery,
+  buildPlatformUpdateDeliveryDeviceCountCFQuery,
   buildPlatformUpdateDeliveryOverviewCFQuery,
   buildReadDevicesCFQuery,
   buildUpdateDeliveryTimingEventsCFQuery,
@@ -291,6 +292,14 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
       {
         name: 'buildPlatformUpdateDeliveryOverviewCFQuery.platform',
         query: buildPlatformUpdateDeliveryOverviewCFQuery({
+          query_start: '2026-05-31T22:00:00.000Z',
+          period_start: SAMPLE_START,
+          end_date: SAMPLE_END,
+        }),
+      },
+      {
+        name: 'buildPlatformUpdateDeliveryDeviceCountCFQuery.platform',
+        query: buildPlatformUpdateDeliveryDeviceCountCFQuery({
           query_start: '2026-05-31T22:00:00.000Z',
           period_start: SAMPLE_START,
           end_date: SAMPLE_END,

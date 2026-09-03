@@ -623,7 +623,7 @@ async function readUpdateDeliveryStatsCF(
 ) {
   if (scope === 'platform') {
     // In-engine aggregate: prefer double1, else first-start/first-complete.
-    // CFA IF() cannot use untyped NULL next to Double/DateTime.
+    // CFA if() needs matching branch types; avgIf expands to if(..., NULL) and 422s.
     const { dailyRows, overviewRow } = await readPlatformUpdateDeliveryStatsCF(c, {
       query_start: start.subtract(2, 'hour').toISOString(),
       period_start: start.toISOString(),

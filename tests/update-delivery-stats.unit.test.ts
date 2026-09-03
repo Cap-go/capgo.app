@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { updateDeliveryStatsTestUtils } from '../supabase/functions/_backend/private/update_delivery_stats.ts'
 import {
+  hasAnalyticsEngineLiveValidationConfig,
+  lintAnalyticsEngineSql,
+  validateAnalyticsEngineSqlLive,
+} from '../supabase/functions/_backend/utils/analyticsEngineSqlLint.ts'
+import {
   buildPlatformUpdateDeliveryDailyCFQuery,
   buildPlatformUpdateDeliveryDeviceCountCFQuery,
   buildPlatformUpdateDeliveryOverviewCFQuery,
@@ -51,10 +56,14 @@ describe('update delivery stats helpers', () => {
     expect(daily).toContain('quantileExactWeighted(0.50)(duration_ms, sample_weight)')
     expect(daily).toContain('quantileExactWeighted(0.99)(duration_ms, sample_weight)')
     expect(daily).toContain('blob2 IN (\'download_complete\', \'download_zip_complete\', \'download_0\', \'download_zip_start\', \'download_manifest_start\')')
-    expect(daily).toContain('avgIf(double1, blob2 IN (\'download_complete\', \'download_zip_complete\') AND double1 > 0)')
+    expect(daily).toContain('max(if(blob2 IN (\'download_complete\', \'download_zip_complete\') AND double1 > 0, double1, 0.0))')
     expect(daily).toContain('toDateTime(\'2100-01-01 00:00:00\')')
     expect(daily).toContain('* 1000.0')
+    expect(daily).not.toContain('avgIf(')
+    expect(daily).not.toContain('sumIf(')
+    expect(daily).not.toContain('countIf(')
     expect(daily).not.toContain(', NULL)')
+    expect(daily).not.toContain(', 0)')
     expect(daily).toContain('format(\'{}:{}\', index1, blob1) AS app_device')
     expect(daily).toContain('COUNT(DISTINCT app_device) AS devices')
     expect(daily).toContain('GROUP BY day')
@@ -63,9 +72,40 @@ describe('update delivery stats helpers', () => {
     expect(overview).toContain('COUNT(DISTINCT app_device) AS devices')
     expect(overview).not.toContain('GROUP BY day')
     expect(overview).toContain('AND day >= \'2026-07-02\'')
-    expect(overview).toContain('avgIf(double1, blob2 IN (\'download_complete\', \'download_zip_complete\') AND double1 > 0)')
+    expect(overview).toContain('max(if(blob2 IN (\'download_complete\', \'download_zip_complete\') AND double1 > 0, double1, 0.0))')
+    expect(overview).not.toContain('avgIf(')
     expect(overview).not.toContain(', NULL)')
+    expect(lintAnalyticsEngineSql(daily)).toEqual([])
+    expect(lintAnalyticsEngineSql(overview)).toEqual([])
   })
+
+  it('parses platform delivery queries against live Analytics Engine', async () => {
+    if (!hasAnalyticsEngineLiveValidationConfig()) {
+      console.warn('Skipping live AE check: CF_ANALYTICS_TOKEN / CF_ACCOUNT_ANALYTICS_ID not set')
+      return
+    }
+
+    const params = {
+      query_start: '2026-08-31T22:00:00.000Z',
+      period_start: '2026-09-01T00:00:00.000Z',
+      end_date: '2026-09-02T00:00:00.000Z',
+    }
+    const accountId = process.env.CF_ACCOUNT_ANALYTICS_ID!
+    const token = process.env.CF_ANALYTICS_TOKEN!
+    const queries = [
+      ['daily', buildPlatformUpdateDeliveryDailyCFQuery(params)],
+      ['overview', buildPlatformUpdateDeliveryOverviewCFQuery(params)],
+      ['devices', buildPlatformUpdateDeliveryDeviceCountCFQuery(params)],
+    ] as const
+
+    const results = await Promise.all(queries.map(async ([name, query]) => {
+      const result = await validateAnalyticsEngineSqlLive(accountId, token, query)
+      return [name, result] as const
+    }))
+    for (const [name, result] of results) {
+      expect(result, `${name} ${JSON.stringify(result)}`).toEqual({ ok: true })
+    }
+  }, 60_000)
 
   it.concurrent('splits long platform windows into bounded AE chunks', () => {
     const params = {
