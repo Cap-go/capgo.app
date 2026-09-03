@@ -1732,6 +1732,7 @@
   "getting-started-essential": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "getting-started-grow": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "getting-started-live-update": "Used in Capgo web console areas: utils. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "getting-started-live-update-command-copy": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "getting-started-live-update-desc": "Used in Capgo web console areas: utils. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "getting-started-percent": "Used in Capgo web console areas: pages/app. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "getting-started-self-test-hint": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconCopy from '~icons/ion/copy-outline'
 import { getLocalConfig, isLocal } from '~/services/supabase'
+import { useDialogV2Store } from '~/stores/dialogv2'
 import { buildCapgoBundleUploadCommand, capgoLocalCliArgs } from '~/utils/gettingStartedCli'
 
 const props = defineProps<{
@@ -11,6 +12,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+const dialogStore = useDialogV2Store()
 const config = getLocalConfig()
 const extraArgs = computed(() => capgoLocalCliArgs(config.supaHost, config.supaKey, isLocal(config.supaHost)))
 const cliParts = computed(() => buildCapgoBundleUploadCommand(props.appId, extraArgs.value))
@@ -22,7 +24,17 @@ async function copyUploadCommand() {
   }
   catch (error) {
     console.error('Failed to copy bundle upload command', error)
-    toast.error(t('cannot-copy'))
+    dialogStore.openDialog({
+      title: t('cannot-copy'),
+      description: cliParts.value.command,
+      buttons: [
+        {
+          text: t('button-cancel'),
+          role: 'cancel',
+        },
+      ],
+    })
+    await dialogStore.onDialogDismiss()
   }
 }
 </script>
@@ -33,7 +45,7 @@ async function copyUploadCommand() {
       type="button"
       class="d-btn group relative h-auto min-h-0 w-full justify-start whitespace-normal rounded-2xl border-0 bg-slate-950 p-5 pr-14 text-left font-normal ring-1 ring-white/10 transition hover:bg-slate-950 hover:ring-white/20"
       data-test="getting-started-live-update-command-copy"
-      :aria-label="t('app-onboarding-command-copy')"
+      :aria-label="t('getting-started-live-update-command-copy')"
       @click="copyUploadCommand"
     >
       <code class="block whitespace-pre-wrap break-all text-sm">

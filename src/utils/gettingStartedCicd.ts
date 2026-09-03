@@ -177,7 +177,7 @@ Please:
 1. Add or update \`.github/workflows/capgo-live-update.yml\` for this setup.
 2. Create the Capgo channels that this workflow needs if they do not exist yet.
 3. Tell me exactly which GitHub secret to add.
-4. After the workflow is in the repo, help me run one CI/CD release for each target below so I can confirm it works.
+4. After the workflow is in the repo, tell me how to confirm a production upload when I am ready.
 
 Required CI/CD releases:
 ${releases}

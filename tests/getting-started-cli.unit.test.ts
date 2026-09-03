@@ -49,6 +49,8 @@ describe('getting started CLI setup panel', () => {
     expect(liveUpdatePanelSource).toContain('data-test="getting-started-live-update-command-copy"')
     expect(liveUpdatePanelSource).toContain('buildCapgoBundleUploadCommand')
     expect(liveUpdatePanelSource).toContain('t(\'getting-started-self-test-hint\')')
+    expect(liveUpdatePanelSource).toContain('t(\'getting-started-live-update-command-copy\')')
+    expect(liveUpdatePanelSource).toContain('dialogStore.openDialog')
     const uploadMarkup = liveUpdatePanelSource.match(/<code class="[\s\S]*?<\/code>/)?.[0] ?? ''
     expect(uploadMarkup).toContain('text-slate-500')
     expect(uploadMarkup).toContain('text-sky-300')
@@ -61,6 +63,7 @@ describe('getting started CLI setup panel', () => {
     expect(uploadMarkup).toContain('{{ cliParts.subcommand }}')
     expect(uploadMarkup).toContain('{{ cliParts.appId }}')
     expect(messages['getting-started-live-update']).toBe('Deploy to a production device')
+    expect(messages['getting-started-live-update-command-copy']).toBe('Copy bundle upload command')
     expect(gettingStarted).toContain('@progress="onCliInstallProgress"')
     expect(gettingStarted).toContain('step.id !== \'cicd\' && step.id !== \'cli_install\' && step.id !== \'live_update\'')
     expect(gettingStarted).toContain('step.id === focusedStepId && step.id !== \'cli_install\' && step.id !== \'cicd\' && step.id !== \'live_update\'')
