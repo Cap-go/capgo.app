@@ -288,7 +288,7 @@ describe('[POST] /updates', () => {
         allow_dev: false,
         allow_prod: true,
         ios: true,
-        android: false,
+        android: true,
       })
       .throwOnError()
 
