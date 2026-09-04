@@ -53,6 +53,8 @@ export type BuildCredentials = z.infer<typeof buildCredentialsSchema>
 // Build Request Options Schema
 // ============================================================================
 
+export const buildCacheOptionSchema = z.boolean().optional()
+
 export const buildRequestOptionsSchema = optionsBaseSchema.extend({
   path: z.string().optional(),
   nodeModules: z.string().optional(),
@@ -108,6 +110,7 @@ export const buildRequestOptionsSchema = optionsBaseSchema.extend({
   prescanWarn: z.array(z.string()).optional(),
   failOnWarnings: z.boolean().optional(),
   builderJourneyId: z.string().optional(),
+  cache: buildCacheOptionSchema,
 })
 
 export type BuildRequestOptions = z.infer<typeof buildRequestOptionsSchema>

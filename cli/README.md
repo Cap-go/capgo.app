@@ -1427,6 +1427,7 @@ and/or to Capgo storage as a time-limited download link (--output-upload).
    `npx @capgo/cli@latest build credentials save --appId <app-id> --platform <ios|android>`
 Android AAB only (no Play upload): npx @capgo/cli@latest build request com.example.app --platform android --no-playstore-upload --output-upload
 iOS IPA only (no TestFlight upload): npx @capgo/cli@latest build request com.example.app --platform ios --ios-distribution ad_hoc --output-upload
+Disable Xcode compilation cache: npx @capgo/cli@latest build request com.example.app --platform ios --no-cache
 
 **Example:**
 
@@ -1484,6 +1485,7 @@ npx @capgo/cli@latest build request com.example.app --platform ios --path .
 | **--sync-android-version** | <code>boolean</code> | Android: sync versionName in android/app/build.gradle from package.json before uploading the project. Fails unless versionName is a standalone quoted string literal. |
 | **--ai-analytics** | <code>boolean</code> | On build failure, send logs to Capgo AI for diagnosis. In interactive terminals this skips the upfront confirmation; in CI this auto-uploads and prints the analysis to stderr. |
 | **--no-prescan** | <code>boolean</code> | Skip the automatic pre-build scan |
+| **--no-cache** | <code>boolean</code> | Disable Xcode compilation cache for this build (default: cache enabled) |
 | **--prescan-ignore-fatal** | <code>boolean</code> | Run the pre-build scan but never block the build (report only) |
 | **--prescan-skip** | <code>string</code> | Skip specific prescan check(s) by id (repeatable or comma-separated). Other checks still run. |
 | **--prescan-warn** | <code>string</code> | Downgrade specific prescan check(s) to warning by id (repeatable or comma-separated). Check still runs. |
