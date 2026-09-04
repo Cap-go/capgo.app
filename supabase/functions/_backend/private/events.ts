@@ -423,13 +423,6 @@ async function buildBundleIncompatibleBentoEvent(
     minUpdateVersion,
   })
 
-  await trackBundleIncompatibleEmail(c, {
-    ...emailBase,
-    incompatibilityAccepted: false,
-    gatedByStrategy,
-    updateStrategy,
-  })
-
   const [orgResult, appResult] = await Promise.all([
     supabase.from('orgs').select('id, name').eq('id', onboardingOrgId).single(),
     supabase.from('apps').select('name').eq('app_id', appId).single(),
@@ -440,6 +433,13 @@ async function buildBundleIncompatibleBentoEvent(
     cloudlog({ requestId: c.get('requestId'), message: 'bundle incompatible bento lookup failed; skipping signal', org: orgResult.error, app: appResult.error })
     return undefined
   }
+
+  await trackBundleIncompatibleEmail(c, {
+    ...emailBase,
+    incompatibilityAccepted: false,
+    gatedByStrategy,
+    updateStrategy,
+  })
 
   return buildBundleCompatibilityBentoEvent({
     event: trackedBody.event,
