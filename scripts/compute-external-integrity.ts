@@ -4,7 +4,9 @@
  *
  * Usage:
  *   bun run security:compute-integrity -- <url> [<url>...]
- *   bun run security:compute-integrity -- --file scripts/external-integrity-sources.json
+ *
+ * Example:
+ *   bun run security:compute-integrity -- "https://fonts.bunny.net/css?family=inter:400"
  *
  * Never invent integrity attributes — always regenerate from this script when a
  * pinned third-party asset changes.
