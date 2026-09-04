@@ -11,7 +11,7 @@ describe('security response headers', () => {
   it.concurrent('declares the synced CSP for the console app static responses', () => {
     expect(consoleHeaders).toContain(`Content-Security-Policy: ${CONSOLE_CONTENT_SECURITY_POLICY}`)
     expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('default-src \'self\'')
-    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('script-src \'self\' \'unsafe-inline\' https://challenges.cloudflare.com https://static.cloudflareinsights.com https://psthg.capgo.app')
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('script-src \'self\' https://challenges.cloudflare.com https://static.cloudflareinsights.com https://psthg.capgo.app')
     expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('frame-src \'self\' https://challenges.cloudflare.com')
     expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('frame-ancestors \'none\'')
     expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('https://api.capgo.app')

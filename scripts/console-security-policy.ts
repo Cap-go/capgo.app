@@ -5,13 +5,63 @@
  *   bun run security:sync-headers
  */
 
+import configs from '../configs.json'
+
 export interface ConsoleCspOptions {
   /** Local Vite dev server — allow http/ws to localhost. */
   dev?: boolean
 }
 
 function joinSources(sources: string[]) {
-  return sources.join(' ')
+  return [...new Set(sources)].join(' ')
+}
+
+function addConnectOrigin(sources: Set<string>, raw: string) {
+  if (!raw)
+    return
+
+  if (raw.includes('://')) {
+    try {
+      const url = new URL(raw)
+      sources.add(url.origin)
+      if (url.protocol === 'https:')
+        sources.add(`wss://${url.host}`)
+      else if (url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1'))
+        sources.add(`ws://${url.host}`)
+    }
+    catch {
+      // Ignore invalid configured URLs.
+    }
+    return
+  }
+
+  const host = raw.split('/')[0]
+  if (host.includes('localhost') || host.startsWith('127.')) {
+    sources.add(`http://${host}`)
+    sources.add(`ws://${host}`)
+  }
+  else {
+    sources.add(`https://${host}`)
+  }
+}
+
+function getConfiguredConnectSources(dev: boolean): string[] {
+  const sources = new Set<string>()
+  const envKeys = dev
+    ? (['prod', 'preprod', 'development', 'local'] as const)
+    : (['prod', 'preprod', 'development'] as const)
+
+  for (const env of envKeys) {
+    const supaUrl = configs.supa_url?.[env]
+    if (typeof supaUrl === 'string')
+      addConnectOrigin(sources, supaUrl)
+
+    const apiDomain = configs.api_domain?.[env]
+    if (typeof apiDomain === 'string')
+      addConnectOrigin(sources, apiDomain)
+  }
+
+  return [...sources]
 }
 
 export function buildConsoleContentSecurityPolicy(options: ConsoleCspOptions = {}): string {
@@ -19,7 +69,6 @@ export function buildConsoleContentSecurityPolicy(options: ConsoleCspOptions = {
 
   const scriptSrc = joinSources([
     '\'self\'',
-    '\'unsafe-inline\'', // index.html bootstraps theme before the Vue bundle loads
     'https://challenges.cloudflare.com', // Cloudflare Turnstile
     'https://static.cloudflareinsights.com', // Cloudflare Web Analytics (if enabled)
     'https://psthg.capgo.app', // first-party PostHog reverse proxy
@@ -52,19 +101,15 @@ export function buildConsoleContentSecurityPolicy(options: ConsoleCspOptions = {
   const connectSrc = joinSources([
     '\'self\'',
     'blob:',
-    'https://sb.capgo.app',
     'https://*.supabase.co',
-    'https://api.capgo.app',
-    'https://api.preprod.capgo.app',
-    'https://api.dev.capgo.app',
+    'wss://*.supabase.co',
     'https://psthg.capgo.app',
     'https://eu.posthog.com',
     'https://eu.i.posthog.com',
     'https://challenges.cloudflare.com',
     'https://api.github.com',
     'https://registry.npmjs.org',
-    'wss://sb.capgo.app',
-    'wss://*.supabase.co',
+    ...getConfiguredConnectSources(dev),
     ...(dev
       ? [
           'http://localhost:*',

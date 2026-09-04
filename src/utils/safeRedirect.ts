@@ -1,4 +1,40 @@
+import configs from '../../configs.json'
+
 const SCHEME_LIKE_PATH = /^[a-z][a-z0-9+.-]*:/i
+
+function hasControlCharacters(path: string): boolean {
+  for (let i = 0; i < path.length; i++) {
+    const code = path.charCodeAt(i)
+    if (code < 0x20 || code === 0x7F)
+      return true
+  }
+  return false
+}
+
+function normalizeRedirectPath(path: string): string | null {
+  try {
+    const url = new URL(path, 'http://localhost')
+    if (url.origin !== 'http://localhost')
+      return null
+    return `${url.pathname}${url.search}${url.hash}`
+  }
+  catch {
+    return null
+  }
+}
+
+function addConfiguredHost(hosts: Set<string>, raw: string | undefined) {
+  if (typeof raw !== 'string' || !raw)
+    return
+
+  const withScheme = raw.includes('://') ? raw : `https://${raw}`
+  try {
+    hosts.add(new URL(withScheme).hostname)
+  }
+  catch {
+    // Ignore invalid configured hosts.
+  }
+}
 
 /**
  * Validates in-app redirect targets from query params (`to`, `return_to`, …).
@@ -18,13 +54,17 @@ export function validateRedirectPath(
   if (SCHEME_LIKE_PATH.test(path))
     return fallback
 
-  if (path.includes('\\'))
+  if (path.includes('\\') || hasControlCharacters(path))
     return fallback
 
-  if (options?.blockedPrefixes?.some(prefix => path.startsWith(prefix)))
+  const normalized = normalizeRedirectPath(path)
+  if (!normalized || !normalized.startsWith('/'))
     return fallback
 
-  return path
+  if (options?.blockedPrefixes?.some(prefix => normalized.startsWith(prefix)))
+    return fallback
+
+  return normalized
 }
 
 /**
@@ -43,7 +83,9 @@ export function isAllowedConfirmationUrl(urlValue: string, options: {
   }
 
   if (options.allowLocalDev) {
-    if (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1')
+    const isLocalhost = url.hostname === 'localhost' || url.hostname.endsWith('.localhost')
+    const isLoopback = url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1'
+    if ((isLocalhost || isLoopback) && url.protocol === 'http:')
       return true
   }
 
@@ -58,14 +100,12 @@ export function getAllowedConfirmationHosts() {
 
   for (const envKey of ['VITE_APP_URL', 'VITE_SUPABASE_URL'] as const) {
     const raw = import.meta.env[envKey]
-    if (typeof raw !== 'string' || !raw)
-      continue
-    try {
-      hosts.add(new URL(raw).hostname)
-    }
-    catch {
-      // Ignore invalid build-time URLs.
-    }
+    addConfiguredHost(hosts, raw)
+  }
+
+  if (hosts.size === 0) {
+    addConfiguredHost(hosts, configs.base_domain?.prod)
+    addConfiguredHost(hosts, configs.supa_url?.prod)
   }
 
   return [...hosts]

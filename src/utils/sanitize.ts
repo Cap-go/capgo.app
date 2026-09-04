@@ -26,6 +26,14 @@ function escapeHtmlForSsr(text: string): string {
     .replaceAll('\'', '&#39;')
 }
 
+export function isLocalDevHost(hostname: string): boolean {
+  return hostname === 'localhost'
+    || hostname.endsWith('.localhost')
+    || hostname === '127.0.0.1'
+    || hostname === '::1'
+    || hostname === '[::1]'
+}
+
 export function sanitizeHtml(value: unknown): string {
   if (value == null)
     return ''
@@ -62,9 +70,7 @@ export function sanitizeHttpUrl(value: unknown): string | null {
     return null
   }
 
-  const isLocalhost = url.hostname === 'localhost' || url.hostname.endsWith('.localhost')
-  const isLoopback = url.hostname === '127.0.0.1' || url.hostname === '::1'
-  const allowsLocalHttp = (isLocalhost || isLoopback) && url.protocol === 'http:'
+  const allowsLocalHttp = isLocalDevHost(url.hostname) && url.protocol === 'http:'
   const allowsHttps = url.protocol === 'https:'
 
   if (!allowsHttps && !allowsLocalHttp)
@@ -80,7 +86,7 @@ export function isSafeImageFetchUrl(value: unknown): boolean {
 
   try {
     const url = new URL(sanitized)
-    return url.protocol === 'https:' || url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+    return url.protocol === 'https:' || (url.protocol === 'http:' && isLocalDevHost(url.hostname))
   }
   catch {
     return false

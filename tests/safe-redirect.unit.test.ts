@@ -28,6 +28,16 @@ describe('validateRedirectPath', () => {
     expect(validateRedirectPath('/settings/account', '/dashboard', { blockedPrefixes: ['/onboarding'] }))
       .toBe('/settings/account')
   })
+
+  it.concurrent('rejects C0 control characters', () => {
+    expect(validateRedirectPath('/settings\u0007account')).toBe('/dashboard')
+  })
+
+  it.concurrent('normalizes dot segments before blocked-prefix checks', () => {
+    expect(validateRedirectPath('/onboarding/../settings/account', '/dashboard', { blockedPrefixes: ['/onboarding'] }))
+      .toBe('/settings/account')
+    expect(validateRedirectPath('/settings/./account')).toBe('/settings/account')
+  })
 })
 
 describe('isAllowedConfirmationUrl', () => {
@@ -43,11 +53,19 @@ describe('isAllowedConfirmationUrl', () => {
     })).toBe(false)
   })
 
-  it.concurrent('allows localhost in dev mode', () => {
+  it.concurrent('allows localhost http only in dev mode', () => {
     expect(isAllowedConfirmationUrl('http://localhost:5173/confirm', {
       allowedHosts: ['console.capgo.app'],
       allowLocalDev: true,
     })).toBe(true)
+    expect(isAllowedConfirmationUrl('https://localhost:5173/confirm', {
+      allowedHosts: ['console.capgo.app'],
+      allowLocalDev: true,
+    })).toBe(false)
+    expect(isAllowedConfirmationUrl('javascript:alert(1)', {
+      allowedHosts: ['console.capgo.app'],
+      allowLocalDev: true,
+    })).toBe(false)
   })
 })
 
@@ -58,6 +76,19 @@ describe('getAllowedConfirmationHosts', () => {
     try {
       const hosts = getAllowedConfirmationHosts()
       expect(hosts).toEqual(['console.capgo.app', 'sb.capgo.app'])
+    }
+    finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it.concurrent('falls back to production config hosts when build env is empty', () => {
+    vi.stubEnv('VITE_APP_URL', '')
+    vi.stubEnv('VITE_SUPABASE_URL', '')
+    try {
+      const hosts = getAllowedConfirmationHosts()
+      expect(hosts).toContain('console.capgo.app')
+      expect(hosts).toContain('sb.capgo.app')
     }
     finally {
       vi.unstubAllEnvs()
