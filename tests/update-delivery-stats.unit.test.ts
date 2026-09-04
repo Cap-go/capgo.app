@@ -122,6 +122,23 @@ describe('update delivery stats helpers', () => {
     ])
   })
 
+  it.concurrent('swallows partial chunk failures only for platform, and never caches them', () => {
+    const partial = [new Error('chunk-2')]
+    expect(updateDeliveryStatsTestUtils.resolveDeliveryChunkFailures(partial, 3, true)).toBe(1)
+    expect(() => updateDeliveryStatsTestUtils.resolveDeliveryChunkFailures(partial, 3, false))
+      .toThrow('chunk-2')
+
+    const allFailed = [new Error('a'), new Error('b')]
+    expect(() => updateDeliveryStatsTestUtils.resolveDeliveryChunkFailures(allFailed, 2, true))
+      .toThrow('a')
+    expect(() => updateDeliveryStatsTestUtils.resolveDeliveryChunkFailures(allFailed, 2, false))
+      .toThrow('a')
+
+    expect(updateDeliveryStatsTestUtils.shouldCacheUpdateDeliveryStats(10, 0)).toBe(true)
+    expect(updateDeliveryStatsTestUtils.shouldCacheUpdateDeliveryStats(10, 1)).toBe(false)
+    expect(updateDeliveryStatsTestUtils.shouldCacheUpdateDeliveryStats(0, 0)).toBe(false)
+  })
+
   it.concurrent('caps platform delivery period days at 90', () => {
     expect(updateDeliveryStatsTestUtils.normalizePlatformPeriodDays(30)).toBe(30)
     expect(updateDeliveryStatsTestUtils.normalizePlatformPeriodDays(90)).toBe(90)

@@ -21,7 +21,7 @@ const maxPeriodDays = 365
 const maxPlatformDeliveryPeriodDays = 90
 const maxDeliveryMs = 7_200_000
 const pairingLookbackMs = 2 * 60 * 60 * 1000
-const PLATFORM_DELIVERY_CF_CHUNK_CONCURRENCY = 6
+const DELIVERY_CF_CHUNK_CONCURRENCY = 4
 const UPDATE_DELIVERY_STATS_CACHE_TTL_SECONDS = 300
 const UPDATE_DELIVERY_STATS_CACHE_PATH = '/.update-delivery-stats'
 type UpdateDeliveryPeriodDays = number
@@ -591,6 +591,22 @@ function buildDeliveryDayChunks(start: Dayjs, endExclusive: Dayjs) {
   return chunks
 }
 
+function resolveDeliveryChunkFailures(
+  failures: unknown[],
+  chunkCount: number,
+  swallowChunkErrors: boolean,
+): number {
+  if (failures.length === chunkCount && chunkCount > 0)
+    throw failures[0]
+  if (failures.length > 0 && !swallowChunkErrors)
+    throw failures[0]
+  return failures.length
+}
+
+function shouldCacheUpdateDeliveryStats(sampleCount: number, failedChunks: number): boolean {
+  return sampleCount > 0 && failedChunks === 0
+}
+
 async function mapSettledInBatches<T, R>(
   items: T[],
   concurrency: number,
@@ -659,12 +675,8 @@ async function readUpdateDeliverySamplesCF(
     })
   }
 
-  if (failures.length === chunks.length && chunks.length > 0)
-    throw failures[0]
-  if (failures.length > 0 && !params.swallowChunkErrors)
-    throw failures[0]
-
-  return samples
+  const failedChunks = resolveDeliveryChunkFailures(failures, chunks.length, params.swallowChunkErrors)
+  return { samples, failedChunks }
 }
 
 async function readUpdateDeliveryStatsCF(
@@ -689,11 +701,11 @@ async function readUpdateDeliveryStatsCF(
     appIds = await listOrgAppIds(c, scopeId)
   }
 
-  const samples = await readUpdateDeliverySamplesCF(c, {
+  const { samples, failedChunks } = await readUpdateDeliverySamplesCF(c, {
     start,
     endExclusive,
     appIds,
-    concurrency: scope === 'platform' ? PLATFORM_DELIVERY_CF_CHUNK_CONCURRENCY : 1,
+    concurrency: DELIVERY_CF_CHUNK_CONCURRENCY,
     swallowChunkErrors: scope === 'platform',
   })
   const { dailyRows, overviewRow } = aggregateDeliverySamples(samples)
@@ -704,6 +716,7 @@ async function readUpdateDeliveryStatsCF(
       message: 'update_delivery_stats CF produced zero samples',
       scope,
       sample_count: samples.length,
+      failed_chunks: failedChunks,
       app_count: appIds?.length ?? null,
       allow_pairing: true,
       start: start.toISOString(),
@@ -711,15 +724,18 @@ async function readUpdateDeliveryStatsCF(
     })
   }
 
-  return buildUpdateDeliveryResponse({
-    labels,
-    days,
-    start: start.toISOString(),
-    end: endInclusive.toISOString(),
-    scope,
-    dailyRows,
-    overviewRow,
-  })
+  return {
+    failedChunks,
+    response: buildUpdateDeliveryResponse({
+      labels,
+      days,
+      start: start.toISOString(),
+      end: endInclusive.toISOString(),
+      scope,
+      dailyRows,
+      overviewRow,
+    }),
+  }
 }
 
 async function readUpdateDeliveryStats(
@@ -748,7 +764,7 @@ async function readUpdateDeliveryStats(
   // Same dual-path pattern as private/stats: Analytics Engine in prod, Postgres locally.
   if (c.env.APP_LOG) {
     try {
-      const cfResponse = await readUpdateDeliveryStatsCF(
+      const { response: cfResponse, failedChunks } = await readUpdateDeliveryStatsCF(
         c,
         scope,
         effectiveDays,
@@ -758,8 +774,8 @@ async function readUpdateDeliveryStats(
         endExclusive,
         endInclusive,
       )
-      // Avoid caching empty windows — AE ingest lag or sparse orgs should retry next load.
-      if (cfResponse.overview.samples > 0)
+      // Avoid caching empty windows or partial platform reads from failed AE chunks.
+      if (shouldCacheUpdateDeliveryStats(cfResponse.overview.samples, failedChunks))
         await cache.putJson(cacheKey, cfResponse, UPDATE_DELIVERY_STATS_CACHE_TTL_SECONDS)
       return cfResponse
     }
@@ -853,6 +869,8 @@ export const updateDeliveryStatsTestUtils = {
   buildDeliveriesFromEvents,
   buildDeliveryDayChunks,
   aggregateDeliverySamples,
+  resolveDeliveryChunkFailures,
+  shouldCacheUpdateDeliveryStats,
   generateDateLabels,
   normalizePeriodDays,
   normalizePlatformPeriodDays,
