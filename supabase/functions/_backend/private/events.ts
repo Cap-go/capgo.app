@@ -434,6 +434,7 @@ async function buildBundleIncompatibleBentoEvent(
     return undefined
   }
 
+  // Track sent/sent_expected only after lookup succeeds so PostHog matches Bento.
   await trackBundleIncompatibleEmail(c, {
     ...emailBase,
     incompatibilityAccepted: false,
