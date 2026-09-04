@@ -6,7 +6,7 @@ import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
-import { parseStatsDurationMs, readPlatformUpdateDeliveryStatsCF, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
+import { MAX_ANALYTICS_QUERY_LIMIT, parseStatsDurationMs, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
@@ -21,6 +21,7 @@ const maxPeriodDays = 365
 const maxPlatformDeliveryPeriodDays = 90
 const maxDeliveryMs = 7_200_000
 const pairingLookbackMs = 2 * 60 * 60 * 1000
+const DELIVERY_CF_CHUNK_CONCURRENCY = 4
 const UPDATE_DELIVERY_STATS_CACHE_TTL_SECONDS = 300
 const UPDATE_DELIVERY_STATS_CACHE_PATH = '/.update-delivery-stats'
 type UpdateDeliveryPeriodDays = number
@@ -578,37 +579,103 @@ async function readUpdateDeliveryStatsSB(
   }
 }
 
-async function readUpdateDeliveryTimingEventsCFChunked(
+function buildDeliveryDayChunks(start: Dayjs, endExclusive: Dayjs) {
+  const chunks: Array<{ start: Dayjs, end: Dayjs }> = []
+  let cursor = start
+  while (cursor.isBefore(endExclusive)) {
+    const nextUtcDay = cursor.utc().startOf('day').add(1, 'day')
+    const end = nextUtcDay.isBefore(endExclusive) ? nextUtcDay : endExclusive
+    chunks.push({ start: cursor, end })
+    cursor = end
+  }
+  return chunks
+}
+
+function resolveDeliveryChunkFailures(
+  failures: unknown[],
+  chunkCount: number,
+  swallowChunkErrors: boolean,
+): number {
+  if (failures.length === chunkCount && chunkCount > 0)
+    throw failures[0]
+  if (failures.length > 0 && !swallowChunkErrors)
+    throw failures[0]
+  return failures.length
+}
+
+function shouldCacheUpdateDeliveryStats(sampleCount: number, failedChunks: number): boolean {
+  return sampleCount > 0 && failedChunks === 0
+}
+
+async function mapSettledInBatches<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>,
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = []
+  const size = Math.max(1, concurrency)
+  for (let index = 0; index < items.length; index += size) {
+    const batch = items.slice(index, index + size)
+    results.push(...await Promise.allSettled(batch.map(item => mapper(item))))
+  }
+  return results
+}
+
+async function readUpdateDeliverySamplesCF(
   c: Context<MiddlewareKeyVariables>,
   params: {
-    queryStart: Dayjs
+    start: Dayjs
     endExclusive: Dayjs
-    actions: string[]
     appIds?: string[]
-    requireDuration?: boolean
+    concurrency: number
+    swallowChunkErrors: boolean
   },
 ) {
-  // AE SQL has a hard row cap and no JOIN. Fetch UTC day windows so busy apps
-  // keep coverage across the whole period instead of only the newest 50k rows.
-  const events: UpdateDeliveryTimingEventCF[] = []
-  let cursor = params.queryStart.utc().startOf('day')
-  const end = params.endExclusive.utc()
-
-  while (cursor.isBefore(end)) {
-    const next = cursor.add(1, 'day')
-    const chunkEnd = next.isBefore(end) ? next : end
-    const chunk = await readUpdateDeliveryTimingEventsCF(c, {
-      start_date: cursor.toISOString(),
-      end_date: chunkEnd.toISOString(),
-      actions: params.actions,
+  // Same pairing as app/org: raw start+complete events, then JS pair.
+  // Daily windows stay under AE's 50k row cap; pair per chunk so platform
+  // does not hold 30 days of raw events. Each chunk overlaps 2h for midnight pairs.
+  const chunks = buildDeliveryDayChunks(params.start, params.endExclusive)
+  const settled = await mapSettledInBatches(chunks, params.concurrency, async (chunk) => {
+    const events = await readUpdateDeliveryTimingEventsCF(c, {
+      start_date: chunk.start.subtract(2, 'hour').toISOString(),
+      end_date: chunk.end.toISOString(),
+      actions: [...timingActions],
       app_ids: params.appIds,
-      require_duration: params.requireDuration,
     })
-    events.push(...chunk)
-    cursor = next
+    if (events.length >= MAX_ANALYTICS_QUERY_LIMIT) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'update_delivery_stats CF chunk hit AE row cap',
+        event_count: events.length,
+        chunk_start: chunk.start.toISOString(),
+        chunk_end: chunk.end.toISOString(),
+      })
+    }
+    return buildDeliveriesFromEvents(events, {
+      periodStartMs: Math.max(chunk.start.valueOf(), params.start.valueOf()),
+      allowPairing: true,
+    })
+  })
+
+  const samples: DeliverySample[] = []
+  const failures: unknown[] = []
+  for (const [index, result] of settled.entries()) {
+    if (result.status === 'fulfilled') {
+      samples.push(...result.value)
+      continue
+    }
+    failures.push(result.reason)
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'update_delivery_stats CF chunk failed',
+      error: serializeError(result.reason),
+      chunk_start: chunks[index]?.start.toISOString(),
+      chunk_end: chunks[index]?.end.toISOString(),
+    })
   }
 
-  return events
+  const failedChunks = resolveDeliveryChunkFailures(failures, chunks.length, params.swallowChunkErrors)
+  return { samples, failedChunks }
 }
 
 async function readUpdateDeliveryStatsCF(
@@ -621,64 +688,24 @@ async function readUpdateDeliveryStatsCF(
   endExclusive: Dayjs,
   endInclusive: Dayjs,
 ) {
-  if (scope === 'platform') {
-    // In-engine aggregate: prefer double1, else first-start/first-complete.
-    // CFA if() needs matching branch types; avgIf expands to if(..., NULL) and 422s.
-    const { dailyRows, overviewRow } = await readPlatformUpdateDeliveryStatsCF(c, {
-      query_start: start.subtract(2, 'hour').toISOString(),
-      period_start: start.toISOString(),
-      end_date: endExclusive.toISOString(),
-    })
-
-    if (toCount(overviewRow.samples) === 0) {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'update_delivery_stats CF produced zero samples',
-        scope,
-        event_count: 0,
-        app_count: null,
-        allow_pairing: true,
-        start: start.toISOString(),
-        end: endExclusive.toISOString(),
-      })
-    }
-
-    return buildUpdateDeliveryResponse({
-      labels,
-      days,
-      start: start.toISOString(),
-      end: endInclusive.toISOString(),
-      scope,
-      dailyRows,
-      overviewRow,
-    })
-  }
-
-  const queryStart = start.subtract(2, 'hour')
-
   let appIds: string[] | undefined
   if (scope === 'app') {
     if (!scopeId)
       throw simpleError('missing_params', 'app_id is required for app scope')
     appIds = [scopeId]
   }
-  else {
+  else if (scope === 'org') {
     if (!scopeId)
       throw simpleError('missing_params', 'org_id is required for org scope')
     appIds = await listOrgAppIds(c, scopeId)
   }
 
-  const events = await readUpdateDeliveryTimingEventsCFChunked(c, {
-    queryStart,
+  const { samples, failedChunks } = await readUpdateDeliverySamplesCF(c, {
+    start,
     endExclusive,
-    actions: [...timingActions],
     appIds,
-    requireDuration: false,
-  })
-
-  const samples = buildDeliveriesFromEvents(events, {
-    periodStartMs: start.valueOf(),
-    allowPairing: true,
+    concurrency: DELIVERY_CF_CHUNK_CONCURRENCY,
+    swallowChunkErrors: scope === 'platform',
   })
   const { dailyRows, overviewRow } = aggregateDeliverySamples(samples)
 
@@ -687,7 +714,8 @@ async function readUpdateDeliveryStatsCF(
       requestId: c.get('requestId'),
       message: 'update_delivery_stats CF produced zero samples',
       scope,
-      event_count: events.length,
+      sample_count: samples.length,
+      failed_chunks: failedChunks,
       app_count: appIds?.length ?? null,
       allow_pairing: true,
       start: start.toISOString(),
@@ -695,15 +723,18 @@ async function readUpdateDeliveryStatsCF(
     })
   }
 
-  return buildUpdateDeliveryResponse({
-    labels,
-    days,
-    start: start.toISOString(),
-    end: endInclusive.toISOString(),
-    scope,
-    dailyRows,
-    overviewRow,
-  })
+  return {
+    failedChunks,
+    response: buildUpdateDeliveryResponse({
+      labels,
+      days,
+      start: start.toISOString(),
+      end: endInclusive.toISOString(),
+      scope,
+      dailyRows,
+      overviewRow,
+    }),
+  }
 }
 
 async function readUpdateDeliveryStats(
@@ -732,7 +763,7 @@ async function readUpdateDeliveryStats(
   // Same dual-path pattern as private/stats: Analytics Engine in prod, Postgres locally.
   if (c.env.APP_LOG) {
     try {
-      const cfResponse = await readUpdateDeliveryStatsCF(
+      const { response: cfResponse, failedChunks } = await readUpdateDeliveryStatsCF(
         c,
         scope,
         effectiveDays,
@@ -742,8 +773,8 @@ async function readUpdateDeliveryStats(
         endExclusive,
         endInclusive,
       )
-      // Avoid caching empty windows — AE ingest lag or sparse orgs should retry next load.
-      if (cfResponse.overview.samples > 0)
+      // Avoid caching empty windows or partial platform reads from failed AE chunks.
+      if (shouldCacheUpdateDeliveryStats(cfResponse.overview.samples, failedChunks))
         await cache.putJson(cacheKey, cfResponse, UPDATE_DELIVERY_STATS_CACHE_TTL_SECONDS)
       return cfResponse
     }
@@ -835,7 +866,10 @@ export const updateDeliveryStatsTestUtils = {
   buildUpdateDeliveryResponse,
   buildEmptyUpdateDeliveryResponse,
   buildDeliveriesFromEvents,
+  buildDeliveryDayChunks,
   aggregateDeliverySamples,
+  resolveDeliveryChunkFailures,
+  shouldCacheUpdateDeliveryStats,
   generateDateLabels,
   normalizePeriodDays,
   normalizePlatformPeriodDays,
