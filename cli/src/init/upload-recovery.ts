@@ -1,3 +1,5 @@
+import { resolve } from 'node:path'
+
 export const MONOREPO_ROOT_PATHS_NOTE = 'These must be the monorepo/workspace root paths — the workspace package.json and the hoisted node_modules folder — not the app package under apps/ or packages/.'
 
 export const MONOREPO_UPLOAD_RETRY_HINT = 'If this app lives in a monorepo, retry the upload with the monorepo root package.json and the monorepo root node_modules paths (not the app package folder).'
@@ -30,6 +32,14 @@ export function joinUniqueUploadPaths(...paths: Array<string | undefined>): stri
     }
   }
   return result.length ? result.join(',') : undefined
+}
+
+export function resolveUploadPaths(paths: string | undefined, baseDir: string): string | undefined {
+  if (!paths)
+    return undefined
+  return joinUniqueUploadPaths(
+    ...paths.split(',').map(part => part.trim()).filter(Boolean).map(part => resolve(baseDir, part)),
+  )
 }
 
 export function withMonorepoUploadRetryHint(error: string): string {
