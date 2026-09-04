@@ -208,11 +208,11 @@ export async function isAttachmentVersionDeleted(c: Context, fileId: string): Pr
   catch (error) {
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'isAttachmentVersionDeleted lookup failed, failing closed',
+      message: 'isAttachmentVersionDeleted lookup failed, failing open',
       fileId,
       error: error instanceof Error ? error.message : String(error),
     })
-    return true
+    return false
   }
 }
 
