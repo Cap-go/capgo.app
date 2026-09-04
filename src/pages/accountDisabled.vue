@@ -6,6 +6,7 @@ import { toast } from 'vue-sonner'
 import { authGhostButtonClass, authPrimaryButtonClass, authSecondaryButtonClass } from '~/components/auth/pageStyles'
 import { useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
+import { validateRedirectPath } from '~/utils/safeRedirect'
 import { useMainStore } from '~/stores/main'
 
 const { t } = useI18n()
@@ -26,12 +27,11 @@ const error = ref<string | null>(null)
 const isRestoring = ref(false)
 let intervalId: NodeJS.Timeout | null = null
 
-const restoreTarget = computed(() => {
-  const target = typeof route.query.to === 'string' ? route.query.to : ''
-  if (target.startsWith('/') && target !== '/accountDisabled')
-    return target
-  return '/dashboard'
-})
+const restoreTarget = computed(() => validateRedirectPath(
+  typeof route.query.to === 'string' ? route.query.to : '',
+  '/dashboard',
+  { blockedPrefixes: ['/accountDisabled'] },
+))
 
 async function handleRestore() {
   if (isRestoring.value)

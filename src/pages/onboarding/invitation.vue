@@ -14,6 +14,7 @@ import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
+import { validateRedirectPath } from '~/utils/safeRedirect'
 import { clearPendingInviteSkip, rememberPendingInviteSkip } from '~/utils/pendingInviteSkip'
 
 const route = useRoute()
@@ -40,13 +41,11 @@ const title = computed(() => hasMultipleInvitations.value
 const subtitle = computed(() => hasMultipleInvitations.value
   ? t('pending-invite-subtitle-multiple')
   : t('pending-invite-subtitle'))
-const targetPath = computed(() => {
-  const target = typeof route.query.to === 'string' ? route.query.to : ''
-  const isOnboardingTarget = /^\/onboarding(?:\/|\?|$)/.test(target)
-  if (target.startsWith('/') && !isOnboardingTarget)
-    return target
-  return '/dashboard'
-})
+const targetPath = computed(() => validateRedirectPath(
+  typeof route.query.to === 'string' ? route.query.to : '',
+  '/dashboard',
+  { blockedPrefixes: ['/onboarding'] },
+))
 
 function getPendingInviteOrganizations() {
   return organizationStore.organizations.filter(org => isPendingOrganizationInvite(org))

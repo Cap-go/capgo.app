@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
+import { CONSOLE_CONTENT_SECURITY_POLICY } from '../scripts/console-security-policy.ts'
 import apiWorker from '../cloudflare_workers/api/index.ts'
 import pluginWorker from '../cloudflare_workers/plugin/index.ts'
 import { API_CONTENT_SECURITY_POLICY, createAllCatch, createHono, getAllowedCorsOrigin, useCors } from '../supabase/functions/_backend/utils/hono.ts'
@@ -7,13 +8,14 @@ import { API_CONTENT_SECURITY_POLICY, createAllCatch, createHono, getAllowedCors
 const consoleHeaders = readFileSync(new URL('../public/_headers', import.meta.url), 'utf8')
 
 describe('security response headers', () => {
-  it.concurrent('declares a CSP for the console app static responses', () => {
-    expect(consoleHeaders).toContain('Content-Security-Policy: default-src \'self\'')
-    expect(consoleHeaders).toContain('script-src \'self\' \'unsafe-inline\' https://challenges.cloudflare.com https://static.cloudflareinsights.com https://psthg.capgo.app')
-    expect(consoleHeaders).toContain('style-src \'self\' \'unsafe-inline\' https://fonts.bunny.net')
-    expect(consoleHeaders).toContain('frame-src \'self\' https://challenges.cloudflare.com')
-    expect(consoleHeaders).toContain('frame-ancestors \'none\'')
-    expect(consoleHeaders).toContain('connect-src \'self\' blob: https: wss:')
+  it.concurrent('declares the synced CSP for the console app static responses', () => {
+    expect(consoleHeaders).toContain(`Content-Security-Policy: ${CONSOLE_CONTENT_SECURITY_POLICY}`)
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('default-src \'self\'')
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('script-src \'self\' \'unsafe-inline\' https://challenges.cloudflare.com https://static.cloudflareinsights.com https://psthg.capgo.app')
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('frame-src \'self\' https://challenges.cloudflare.com')
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('frame-ancestors \'none\'')
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('https://api.capgo.app')
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('fonts.bunny.net')
   })
 
   it.concurrent.each([

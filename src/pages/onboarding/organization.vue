@@ -29,6 +29,7 @@ import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { clearOnboardingAppDraft, loadOnboardingAppDraft } from '~/utils/onboardingAppDraft'
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
+import { validateRedirectPath } from '~/utils/safeRedirect'
 
 type OnboardingStep = 'details' | 'logo' | 'invite'
 type OnboardingMode = 'website' | 'name' | 'app-name' | null
@@ -249,9 +250,11 @@ async function goBack() {
     return
   }
 
-  const fallbackPath = typeof route.query.to === 'string' && route.query.to && !route.query.to.startsWith('/onboarding/')
-    ? route.query.to
-    : '/login'
+  const fallbackPath = validateRedirectPath(
+    typeof route.query.to === 'string' ? route.query.to : '',
+    '/login',
+    { blockedPrefixes: ['/onboarding'] },
+  )
   await router.push(fallbackPath)
 }
 
@@ -281,7 +284,9 @@ async function syncRouteQuery(nextStep: OnboardingStep, orgId = createdOrgId.val
     query: {
       ...(orgId ? { org: orgId } : {}),
       ...(typeof route.query.source === 'string' ? { source: route.query.source } : {}),
-      ...(typeof route.query.to === 'string' ? { to: route.query.to } : {}),
+      ...(typeof route.query.to === 'string'
+        ? { to: validateRedirectPath(route.query.to, '/dashboard', { blockedPrefixes: ['/onboarding'] }) }
+        : {}),
       step: nextStep,
     },
   })

@@ -4,6 +4,7 @@ import type { OnboardingAppDraft } from '~/utils/onboardingAppDraft'
 import {
   createOnboardingAppWithFallbackIds,
 } from '~/utils/onboardingAppCreateHelpers'
+import { isSafeImageFetchUrl } from '~/utils/sanitize'
 
 type AppRow = Database['public']['Tables']['apps']['Row']
 
@@ -35,6 +36,8 @@ async function uploadIconFromDraft(
       blob = new Blob([bytes], { type: contentType })
     }
     else {
+      if (!isSafeImageFetchUrl(iconSource))
+        return
       const response = await fetch(iconSource)
       const contentType = response.headers.get('content-type')?.split(';')[0]?.trim() ?? ''
       if (!response.ok || !contentType.startsWith('image/'))

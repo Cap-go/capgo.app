@@ -17,6 +17,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { pushEvent } from '~/services/posthog'
 import { getLocalConfig } from '~/services/supabase'
+import { sanitizeHtml } from '~/utils/sanitize'
 
 const props = defineProps<{ open: boolean, appId?: string }>()
 const emit = defineEmits<{ close: [] }>()
@@ -142,14 +143,14 @@ function startTerminal(p: 'ios' | 'android') {
   if (!el)
     return
   if (reduce) {
-    el.innerHTML = staticTerminal(p)
+    el.innerHTML = sanitizeHtml(staticTerminal(p))
     return
   }
   let buf = ''
   let idx = 0
   const script = makeScript(p)
   const render = () => {
-    el.innerHTML = buf
+    el.innerHTML = sanitizeHtml(buf)
     el.scrollTop = el.scrollHeight
   }
   const runSpin = (label: string, doneHtml: string, ms: number, onDone: () => void) => {

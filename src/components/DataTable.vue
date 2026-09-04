@@ -2,7 +2,7 @@
 import type { TableColumn } from './comp_def'
 import { FormKit } from '@formkit/vue'
 import { useDebounceFn } from '@vueuse/core'
-import DOMPurify from 'dompurify'
+import { sanitizeHtml } from '~/utils/sanitize'
 import {
   computed,
   nextTick,
@@ -421,7 +421,7 @@ function displayValueKey(elem: any, col: TableColumn | undefined) {
     return ''
   const text = col.displayFunction ? col.displayFunction(elem) : elem[col.key]
   if (col.sanitizeHtml)
-    return DOMPurify.sanitize(text)
+    return sanitizeHtml(text)
   return text
 }
 
