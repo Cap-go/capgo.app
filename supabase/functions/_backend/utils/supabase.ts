@@ -5,7 +5,7 @@ import type { PoolClient } from 'pg'
 import type { BillingPlanBentoState } from './billing_bento_tags.ts'
 import type { AuthInfo } from './hono.ts'
 import type { Database } from './supabase.types.ts'
-import type { DeviceWithoutCreatedAt, NativeVersionUsage, Order, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
+import type { DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, Order, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
 import { createClient } from '@supabase/supabase-js'
 import { HTTPException } from 'hono/http-exception'
 import { buildBillingPlanBentoTags } from './billing_bento_tags.ts'
@@ -1466,6 +1466,27 @@ export async function readNativeVersionUsageSB(c: Context, app_id: string, perio
   }
 
   return (data ?? []) as unknown as NativeVersionUsage[]
+}
+
+export async function readNativeActiveDevicesSummarySB(
+  c: Context,
+  app_id: string,
+  period_start: string,
+  period_end: string,
+  supabase: SupabaseClient<Database>,
+): Promise<NativeActiveDevicesByPlatformRow[]> {
+  const { data, error } = await supabase
+    .rpc('read_native_active_devices_summary' as any, { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
+
+  if (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native active devices summary', error })
+    throw error
+  }
+
+  return (data ?? []).map((row: { platform?: string | null, devices?: number | string | null }) => ({
+    platform: row.platform ?? 'unknown',
+    devices: Math.max(0, Number(row.devices) || 0),
+  }))
 }
 
 export async function readDeviceVersionCountsSB(c: Context, app_id: string, channelName?: string): Promise<Record<string, number>> {

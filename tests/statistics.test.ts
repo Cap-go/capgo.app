@@ -177,9 +177,16 @@ describe('[GET] /statistics operations with and without subkey', () => {
         headers: headersStats,
       })
       expect(getNativeUsage.status).toBe(200)
-      const nativeUsageData = await getNativeUsage.json() as { labels: string[], datasets: Array<{ label: string, metaCounts: number[] }> }
+      const nativeUsageData = await getNativeUsage.json() as {
+        labels: string[]
+        datasets: Array<{ label: string, metaCounts: number[] }>
+        activeDevices?: { android: number, ios: number, electron: number, unknown: number, total: number }
+        dailyPlatformActive?: { android: number[], ios: number[], total: number[] }
+      }
       expect(nativeUsageData).toHaveProperty('labels')
       expect(nativeUsageData).toHaveProperty('datasets')
+      expect(nativeUsageData).toHaveProperty('activeDevices')
+      expect(nativeUsageData).toHaveProperty('dailyPlatformActive')
 
       if (process.env.USE_CLOUDFLARE_WORKERS !== 'true') {
         const dayIndex = nativeUsageData.labels.indexOf(fromDate)
@@ -190,6 +197,13 @@ describe('[GET] /statistics operations with and without subkey', () => {
         expect(iosVersion?.metaCounts[dayIndex]).toBe(1)
         expect(androidVersion?.metaCounts[dayIndex]).toBe(1)
         expect(electronVersion?.metaCounts[dayIndex]).toBe(1)
+        expect(nativeUsageData.activeDevices?.ios).toBe(1)
+        expect(nativeUsageData.activeDevices?.android).toBe(1)
+        expect(nativeUsageData.activeDevices?.electron).toBe(1)
+        expect(nativeUsageData.activeDevices?.total).toBe(3)
+        expect(nativeUsageData.dailyPlatformActive?.ios[dayIndex]).toBe(1)
+        expect(nativeUsageData.dailyPlatformActive?.android[dayIndex]).toBe(1)
+        expect(nativeUsageData.dailyPlatformActive?.total[dayIndex]).toBe(3)
       }
     }
     finally {
