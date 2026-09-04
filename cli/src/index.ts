@@ -268,6 +268,7 @@ Example: npx @capgo/cli@latest bundle upload com.example.app --path ./dist --cha
   .option('--auto-min-update-version', `Set the min update version based on native packages`)
   .option('--ignore-metadata-check', `Ignores the metadata (node_modules) check when uploading`)
   .option('--fail-on-incompatible', `Fail the upload (exit non-zero) instead of uploading when the bundle is incompatible with the channel's current native packages. In an interactive terminal you can still choose a native build; declining fails. Cannot be combined with --ignore-metadata-check.`)
+  .option('--fail-on-active-rollout', `Fail the upload (exit non-zero) when a target channel has an active progressive rollout and this upload would link the bundle as stable (without --rollout or --rollout-advance). Use in CI to block accidental rollout resets.`)
   .option('--ignore-checksum-check', `Ignores the checksum check when uploading`)
   .option('--force-crc32-checksum', `Force CRC32 checksum for upload (override auto-detection)`)
   .option('--timeout <timeout>', `Timeout for the upload process in seconds`)
