@@ -9,7 +9,7 @@ import { middlewareAuth } from '../../utils/hono_middleware.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError, isRetryablePostgrestResult, retryWithBackoff } from '../../utils/retry.ts'
-import { readNativeVersionUsage } from '../../utils/stats.ts'
+import { readNativeActiveDevicesSummary, readNativeVersionUsage } from '../../utils/stats.ts'
 import { supabaseApikey, supabaseClient } from '../../utils/supabase.ts'
 import { isStripeConfigured } from '../../utils/utils.ts'
 import { buildDailyReportedCountsByName, convertCountsToPercentagesByName, fillMissingDailyCounts } from '../../utils/version_stats_helpers.ts'
@@ -127,6 +127,23 @@ interface NativeVersionUsageRow {
   platform: string
   version_build: string
   devices: number | null
+}
+
+interface NativeActiveDevicesSummary {
+  android: number
+  ios: number
+  electron: number
+  unknown: number
+  total: number
+}
+
+interface NativeDailyPlatformActive {
+  labels: string[]
+  android: number[]
+  ios: number[]
+  electron: number[]
+  unknown: number[]
+  total: number[]
 }
 
 interface AppMetricRow {
@@ -719,6 +736,81 @@ function normalizeNativePlatform(platform: string | null | undefined) {
   return platform?.trim().toLowerCase() || 'unknown'
 }
 
+function summarizeNativeActiveDevices(rows: Array<{ platform: string, devices: number }>): NativeActiveDevicesSummary {
+  const summary: NativeActiveDevicesSummary = {
+    android: 0,
+    ios: 0,
+    electron: 0,
+    unknown: 0,
+    total: 0,
+  }
+
+  rows.forEach((row) => {
+    const platform = normalizeNativePlatform(row.platform)
+    const devices = Math.max(0, Number(row.devices) || 0)
+    if (platform === 'total') {
+      summary.total = devices
+      return
+    }
+    if (platform === 'android') {
+      summary.android = devices
+      return
+    }
+    if (platform === 'ios') {
+      summary.ios = devices
+      return
+    }
+    if (platform === 'electron') {
+      summary.electron = devices
+      return
+    }
+    summary.unknown += devices
+  })
+
+  if (summary.total === 0) {
+    summary.total = summary.android + summary.ios + summary.electron + summary.unknown
+  }
+
+  return summary
+}
+
+function buildDailyPlatformActiveTotals(rows: NativeVersionUsageRow[], dates: string[]): NativeDailyPlatformActive {
+  const dateIndexByLabel = new Map(dates.map((date, index) => [date, index]))
+  const android = Array.from({ length: dates.length }).fill(0) as number[]
+  const ios = Array.from({ length: dates.length }).fill(0) as number[]
+  const electron = Array.from({ length: dates.length }).fill(0) as number[]
+  const unknown = Array.from({ length: dates.length }).fill(0) as number[]
+
+  rows.forEach((row) => {
+    const date = dayjs(row.date).utc().format('YYYY-MM-DD')
+    const index = dateIndexByLabel.get(date)
+    if (index === undefined)
+      return
+
+    const devices = Math.max(0, Number(row.devices) || 0)
+    const platform = normalizeNativePlatform(row.platform)
+    if (platform === 'android')
+      android[index] += devices
+    else if (platform === 'ios')
+      ios[index] += devices
+    else if (platform === 'electron')
+      electron[index] += devices
+    else
+      unknown[index] += devices
+  })
+
+  const total = dates.map((_date, index) => android[index] + ios[index] + electron[index] + unknown[index])
+
+  return {
+    labels: dates,
+    android,
+    ios,
+    electron,
+    unknown,
+    total,
+  }
+}
+
 function formatNativePlatform(platform: string | null | undefined) {
   const normalized = normalizeNativePlatform(platform)
   if (normalized === 'ios')
@@ -777,8 +869,20 @@ async function getNativeVersionUsage(c: Context, appId: string, from: Date, to: 
   const startDate = dayjs(from).utc().startOf('day').format('YYYY-MM-DD')
   const endDate = dayjs(to).utc().startOf('day').add(1, 'day').format('YYYY-MM-DD')
   let nativeVersionUsage: NativeVersionUsageRow[]
+  let activeDevicesSummary: NativeActiveDevicesSummary = {
+    android: 0,
+    ios: 0,
+    electron: 0,
+    unknown: 0,
+    total: 0,
+  }
   try {
-    nativeVersionUsage = await readNativeVersionUsage(c, appId, startDate, endDate, supabase) as NativeVersionUsageRow[]
+    const [usageRows, summaryRows] = await Promise.all([
+      readNativeVersionUsage(c, appId, startDate, endDate, supabase) as Promise<NativeVersionUsageRow[]>,
+      readNativeActiveDevicesSummary(c, appId, startDate, endDate, supabase),
+    ])
+    nativeVersionUsage = usageRows
+    activeDevicesSummary = summarizeNativeActiveDevices(summaryRows)
   }
   catch (error) {
     return { data: null, error }
@@ -789,6 +893,7 @@ async function getNativeVersionUsage(c: Context, appId: string, from: Date, to: 
   const activeVersions = getActiveVersionsByName(seriesNames, dailyCounts)
   const datasets = createDatasetsByName(activeVersions, dates, dailyPercentages, dailyCounts)
   const latestVersion = getLatestDayVersionShare(activeVersions, dates, dailyCounts)
+  const dailyPlatformActive = buildDailyPlatformActiveTotals(nativeVersionUsage, dates)
 
   return {
     data: {
@@ -798,6 +903,8 @@ async function getNativeVersionUsage(c: Context, appId: string, from: Date, to: 
         name: latestVersion.name,
         percentage: latestVersion.percentage.toFixed(1),
       },
+      activeDevices: activeDevicesSummary,
+      dailyPlatformActive,
     },
     error: null,
   }
@@ -882,6 +989,12 @@ export const bundleUsageTestUtils = {
   getActiveVersionsByName,
   createDatasetsByName,
   getLatestDayVersionShare,
+}
+
+export const nativeUsageTestUtils = {
+  summarizeNativeActiveDevices,
+  buildDailyPlatformActiveTotals,
+  normalizeNativePlatform,
 }
 
 function getLatestDayVersionShare(

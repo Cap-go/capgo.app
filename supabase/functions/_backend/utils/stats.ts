@@ -3,9 +3,9 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import type { StatsLogDimensions, VersionAction } from './plugin_stats.ts'
 import type { Database } from './supabase.types.ts'
-import type { DeviceRes, DeviceWithoutCreatedAt, NativeVersionUsage, ReadDevicesParams, ReadDevicesResponse, ReadStatsInsightsParams, ReadStatsParams, StatsActions, StatsInsightAction, StatsInsightDaily, StatsInsightDevice, StatsInsightsResult, StatsInsightVersion, StatsMetadata, VersionCompareFilter, VersionUsage, VersionUsageChannel } from './types.ts'
+import type { DeviceRes, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, ReadDevicesParams, ReadDevicesResponse, ReadStatsInsightsParams, ReadStatsParams, StatsActions, StatsInsightAction, StatsInsightDaily, StatsInsightDevice, StatsInsightsResult, StatsInsightVersion, StatsMetadata, VersionCompareFilter, VersionUsage, VersionUsageChannel } from './types.ts'
 import { getRuntimeKey } from 'hono/adapter'
-import { countDevicesCF, countInstallSourcesCF, countUpdatesFromLogsCF, countUpdatesFromLogsExternalCF, getAppsFromCF, getUpdateStatsCF, readBandwidthUsageCF, readDevicesCF, readDeviceUsageCF, readDeviceVersionCountsCF, readNativeVersionUsageCF, readStatsCF, readStatsInsightsCF, readStatsVersionCF, trackDevicesCF } from './cloudflare.ts'
+import { countDevicesCF, countInstallSourcesCF, countUpdatesFromLogsCF, countUpdatesFromLogsExternalCF, getAppsFromCF, getUpdateStatsCF, readBandwidthUsageCF, readDevicesCF, readDeviceUsageCF, readDeviceVersionCountsCF, readNativeActiveDevicesSummaryCF, readNativeVersionUsageCF, readStatsCF, readStatsInsightsCF, readStatsVersionCF, trackDevicesCF } from './cloudflare.ts'
 import { isDemoApp } from './demo.ts'
 import { normalizeDeviceCountryCode } from './deviceComparison.ts'
 import { simpleError } from './hono.ts'
@@ -20,7 +20,7 @@ import {
   onPremStats,
 } from './plugin_stats.ts'
 import { normalizeStatsInsightDate, normalizeStatsInsightNumber, sortStatsInsightTotals } from './statsInsights.ts'
-import { countDevicesSB, countInstallSourcesSB, getAppsFromSB, getUpdateStatsSB, readBandwidthUsageSB, readDevicesSB, readDeviceUsageSB, readDeviceVersionCountsSB, readNativeVersionUsageSB, readStatsInsightsSB, readStatsSB, readStatsStorageSB, readStatsVersionSB, supabaseWithAuth, trackBandwidthUsageSB, trackDevicesSB, trackDeviceUsageSB, trackLogsSB, trackMetaSB, trackVersionUsageSB } from './supabase.ts'
+import { countDevicesSB, countInstallSourcesSB, getAppsFromSB, getUpdateStatsSB, readBandwidthUsageSB, readDevicesSB, readDeviceUsageSB, readDeviceVersionCountsSB, readNativeActiveDevicesSummarySB, readNativeVersionUsageSB, readStatsInsightsSB, readStatsSB, readStatsStorageSB, readStatsVersionSB, supabaseWithAuth, trackBandwidthUsageSB, trackDevicesSB, trackDeviceUsageSB, trackLogsSB, trackMetaSB, trackVersionUsageSB } from './supabase.ts'
 import { logSkippedSupabaseWrite, shouldSkipSupabaseStatsFallback } from './supabase_write_guard.ts'
 import { DEFAULT_LIMIT } from './types.ts'
 import { backgroundTask, getEnv, isInternalVersionName } from './utils.ts'
@@ -179,6 +179,18 @@ export function readNativeVersionUsage(c: Context, app_id: string, start_date: s
   if (!c.env.DEVICE_USAGE)
     return readNativeVersionUsageSB(c, app_id, start_date, end_date, supabase)
   return readNativeVersionUsageCF(c, app_id, start_date, end_date)
+}
+
+export function readNativeActiveDevicesSummary(
+  c: Context,
+  app_id: string,
+  start_date: string,
+  end_date: string,
+  supabase: SupabaseClient<Database>,
+): Promise<NativeActiveDevicesByPlatformRow[]> {
+  if (!c.env.DEVICE_USAGE)
+    return readNativeActiveDevicesSummarySB(c, app_id, start_date, end_date, supabase)
+  return readNativeActiveDevicesSummaryCF(c, app_id, start_date, end_date)
 }
 function hasAnalyticsEngineReadConfig(c: Context): boolean {
   const token = getEnv(c, 'CF_ANALYTICS_TOKEN')
