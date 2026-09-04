@@ -2,9 +2,6 @@ import type { Context } from 'hono'
 import {
   buildNativeObservePluginTotalDevicesCFQuery,
   buildNativeObservePluginVersionsCFQuery,
-  buildPlatformUpdateDeliveryDailyCFQuery,
-  buildPlatformUpdateDeliveryDeviceCountCFQuery,
-  buildPlatformUpdateDeliveryOverviewCFQuery,
   buildReadDevicesCFQuery,
   buildUpdateDeliveryTimingEventsCFQuery,
   countDevicesCF,
@@ -272,37 +269,29 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
         }),
       },
       {
-        name: 'buildUpdateDeliveryTimingEventsCFQuery.platformRequireDuration',
+        name: 'buildUpdateDeliveryTimingEventsCFQuery.platformPairing',
+        query: buildUpdateDeliveryTimingEventsCFQuery({
+          start_date: SAMPLE_START,
+          end_date: SAMPLE_END,
+          actions: [
+            'download_complete',
+            'download_zip_complete',
+            'download_0',
+            'download_zip_start',
+            'download_manifest_start',
+          ],
+          require_duration: false,
+          limit: 50_000,
+        }),
+      },
+      {
+        name: 'buildUpdateDeliveryTimingEventsCFQuery.requireDuration',
         query: buildUpdateDeliveryTimingEventsCFQuery({
           start_date: SAMPLE_START,
           end_date: SAMPLE_END,
           actions: ['download_complete', 'download_zip_complete'],
           require_duration: true,
           limit: 50_000,
-        }),
-      },
-      {
-        name: 'buildPlatformUpdateDeliveryDailyCFQuery.platform',
-        query: buildPlatformUpdateDeliveryDailyCFQuery({
-          query_start: '2026-05-31T22:00:00.000Z',
-          period_start: SAMPLE_START,
-          end_date: SAMPLE_END,
-        }),
-      },
-      {
-        name: 'buildPlatformUpdateDeliveryOverviewCFQuery.platform',
-        query: buildPlatformUpdateDeliveryOverviewCFQuery({
-          query_start: '2026-05-31T22:00:00.000Z',
-          period_start: SAMPLE_START,
-          end_date: SAMPLE_END,
-        }),
-      },
-      {
-        name: 'buildPlatformUpdateDeliveryDeviceCountCFQuery.platform',
-        query: buildPlatformUpdateDeliveryDeviceCountCFQuery({
-          query_start: '2026-05-31T22:00:00.000Z',
-          period_start: SAMPLE_START,
-          end_date: SAMPLE_END,
         }),
       },
       {
