@@ -209,6 +209,166 @@ describe('[POST] /updates', () => {
     const json = await response.json<UpdateRes>()
     expect(json.error).toBe('no_channel')
     expect(json.version).toBeUndefined()
+    expect(json.url).toBeUndefined()
+  })
+
+  it('clears channel targets when a linked bundle is soft-deleted', async () => {
+    const supabase = getSupabaseClient()
+    const versionName = `1.0.${Math.floor(Math.random() * 100000) + 1000}`
+    const channelName = `unlink-on-delete-${randomUUID().slice(0, 8)}`
+
+    const version = await createAppVersions(versionName, APP_NAME_UPDATE, {
+      external_url: `https://example.com/${channelName}.zip`,
+    })
+
+    const { data: insertedChannel } = await supabase
+      .from('channels')
+      .insert({
+        name: channelName,
+        app_id: APP_NAME_UPDATE,
+        version: version.id,
+        owner_org: ORG_ID,
+        created_by: USER_ID,
+        public: false,
+        disable_auto_update_under_native: false,
+        disable_auto_update: 'none',
+        allow_device_self_set: true,
+        allow_emulator: false,
+        allow_device: true,
+        allow_dev: false,
+        allow_prod: true,
+        ios: true,
+        android: false,
+      })
+      .select('id, version, rollout_version')
+      .single()
+      .throwOnError()
+
+    expect(insertedChannel.version).toBe(version.id)
+
+    await supabase
+      .from('app_versions')
+      .update({ deleted: true })
+      .eq('id', version.id)
+      .throwOnError()
+
+    const { data: channelAfterDelete } = await supabase
+      .from('channels')
+      .select('version, rollout_version')
+      .eq('id', insertedChannel.id)
+      .single()
+      .throwOnError()
+
+    expect(channelAfterDelete.version).toBeNull()
+  })
+
+  it('does not return a download URL for a soft-deleted channel bundle', async () => {
+    const supabase = getSupabaseClient()
+    const versionName = `1.0.${Math.floor(Math.random() * 100000) + 1000}`
+    const channelName = `deleted-no-url-${randomUUID().slice(0, 8)}`
+
+    const version = await createAppVersions(versionName, APP_NAME_UPDATE, {
+      external_url: `https://example.com/${channelName}.zip`,
+    })
+
+    await supabase
+      .from('channels')
+      .insert({
+        name: channelName,
+        app_id: APP_NAME_UPDATE,
+        version: version.id,
+        owner_org: ORG_ID,
+        created_by: USER_ID,
+        public: false,
+        disable_auto_update_under_native: false,
+        disable_auto_update: 'none',
+        allow_device_self_set: true,
+        allow_emulator: false,
+        allow_device: true,
+        allow_dev: false,
+        allow_prod: true,
+        ios: true,
+        android: true,
+      })
+      .throwOnError()
+
+    const baseData = getBaseData(APP_NAME_UPDATE)
+    baseData.defaultChannel = channelName
+    baseData.version_build = '0.0.0'
+    baseData.version_name = '0.0.0'
+
+    const beforeDeleteResponse = await postUpdate(baseData)
+    expect(beforeDeleteResponse.status).toBe(200)
+    const beforeDeleteJson = await beforeDeleteResponse.json<UpdateRes>()
+    expect(beforeDeleteJson.url).toBeTruthy()
+    expect(beforeDeleteJson.version).toBe(versionName)
+
+    await supabase
+      .from('app_versions')
+      .update({ deleted: true })
+      .eq('id', version.id)
+      .throwOnError()
+
+    const response = await postUpdate(baseData)
+    expect(response.status).toBe(200)
+
+    const json = await response.json<UpdateRes>()
+    expect(json.url).toBeUndefined()
+    expect(json.version).not.toBe(versionName)
+  })
+
+  it('does not return a download URL when only deleted_at is set', async () => {
+    const supabase = getSupabaseClient()
+    const versionName = `1.0.${Math.floor(Math.random() * 100000) + 1000}`
+    const channelName = `deleted-at-only-${randomUUID().slice(0, 8)}`
+
+    const version = await createAppVersions(versionName, APP_NAME_UPDATE, {
+      external_url: `https://example.com/${channelName}.zip`,
+    })
+
+    await supabase
+      .from('channels')
+      .insert({
+        name: channelName,
+        app_id: APP_NAME_UPDATE,
+        version: version.id,
+        owner_org: ORG_ID,
+        created_by: USER_ID,
+        public: false,
+        disable_auto_update_under_native: false,
+        disable_auto_update: 'none',
+        allow_device_self_set: true,
+        allow_emulator: false,
+        allow_device: true,
+        allow_dev: false,
+        allow_prod: true,
+        ios: true,
+        android: true,
+      })
+      .throwOnError()
+
+    const baseData = getBaseData(APP_NAME_UPDATE)
+    baseData.defaultChannel = channelName
+    baseData.version_build = '0.0.0'
+    baseData.version_name = '0.0.0'
+
+    const beforeDeleteResponse = await postUpdate(baseData)
+    expect(beforeDeleteResponse.status).toBe(200)
+    const beforeDeleteJson = await beforeDeleteResponse.json<UpdateRes>()
+    expect(beforeDeleteJson.url).toBeTruthy()
+
+    await supabase
+      .from('app_versions')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', version.id)
+      .throwOnError()
+
+    const response = await postUpdate(baseData)
+    expect(response.status).toBe(200)
+
+    const json = await response.json<UpdateRes>()
+    expect(json.url).toBeUndefined()
+    expect(json.version).not.toBe(versionName)
   })
 
   it('ignores deleted device override bundles and falls back to the normal channel selection', async () => {
