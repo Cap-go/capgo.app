@@ -50,6 +50,21 @@ export async function useChartData(supabase: SupabaseClient, appId: string, from
       name: string
       percentage: string
     }
+    activeDevices?: {
+      android: number
+      ios: number
+      electron: number
+      unknown: number
+      total: number
+    }
+    dailyPlatformActive?: {
+      labels: string[]
+      android: number[]
+      ios: number[]
+      electron: number[]
+      unknown: number[]
+      total: number[]
+    }
   }
 
   const chartDataFromApi = data as ChartData
@@ -72,6 +87,8 @@ export async function useChartData(supabase: SupabaseClient, appId: string, from
       }
     }),
     latestVersion: chartDataFromApi.latestVersion,
+    activeDevices: chartDataFromApi.activeDevices,
+    dailyPlatformActive: chartDataFromApi.dailyPlatformActive,
   }
   chartDataCache.value.set(cacheKey, finalData)
   return finalData

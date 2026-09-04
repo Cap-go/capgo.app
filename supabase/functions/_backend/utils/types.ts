@@ -132,6 +132,28 @@ export interface NativeVersionUsage {
   devices: number
 }
 
+export interface NativeActiveDevicesByPlatformRow {
+  platform: string
+  devices: number
+}
+
+export interface NativeActiveDevicesSummary {
+  android: number
+  ios: number
+  electron: number
+  unknown: number
+  total: number
+}
+
+export interface NativeDailyPlatformActive {
+  labels: string[]
+  android: number[]
+  ios: number[]
+  electron: number[]
+  unknown: number[]
+  total: number[]
+}
+
 export interface ReadDevicesParams {
   app_id: string
   /** Exact version_name match. Pass a string for one bundle, or an array for OR across bundles. */
