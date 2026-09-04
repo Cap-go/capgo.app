@@ -391,7 +391,7 @@ async function buildBundleIncompatibleBentoEvent(
   const tags = trackedBody.tags ?? {}
   const incompatibilityAccepted = isCliTrueTag(tags.incompatibility_accepted)
   const incompatibleChannel = optionalTagString(tags.channel)
-  const apikeyId = c.get('apikey')?.id
+  const apikeyId = toIdString(c.get('apikey')?.id)
   const emailBase = {
     userId: trackedBody.user_id,
     orgId: onboardingOrgId,
