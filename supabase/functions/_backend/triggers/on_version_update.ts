@@ -3,7 +3,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { eq } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
-import { purgeFileReadCache } from '../files/file_read_cache.ts'
+import { isVersionDeleted, purgeFileReadCache } from '../files/file_read_cache.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { persistVersionManifestEntries } from '../utils/manifest_persist.ts'
@@ -120,9 +120,12 @@ function getDeletedVersionAction(
   record: Database['public']['Tables']['app_versions']['Row'],
   oldRecord?: Database['public']['Tables']['app_versions']['Row'] | null,
 ): DeletedVersionAction {
-  if (!record.deleted_at)
+  if (!isVersionDeleted(record))
     return 'continue'
-  if (record.deleted_at !== oldRecord?.deleted_at)
+
+  const deletionStateChanged = record.deleted !== oldRecord?.deleted
+    || record.deleted_at !== oldRecord?.deleted_at
+  if (deletionStateChanged)
     return 'delete'
   if (record.manifest || (record.manifest_count ?? 0) > 0)
     return 'cleanup_manifest'

@@ -870,8 +870,10 @@ function activeChannelVersionJoin(
 ) {
   const conditions = [
     eq(channelVersionColumn, versionAlias.id),
-    or(eq(versionAlias.deleted, false), eq(versionAlias.name, 'builtin')),
-    isNull(versionAlias.deleted_at),
+    or(
+      and(eq(versionAlias.deleted, false), isNull(versionAlias.deleted_at)),
+      eq(versionAlias.name, 'builtin'),
+    ),
   ]
 
   if (channelAppIdColumn)

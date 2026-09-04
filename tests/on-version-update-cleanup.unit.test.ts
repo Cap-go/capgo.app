@@ -92,6 +92,11 @@ const {
 })
 
 vi.mock('../supabase/functions/_backend/files/file_read_cache.ts', () => ({
+  isVersionDeleted: (row: { deleted?: boolean | null, deleted_at?: string | Date | null } | null | undefined) => {
+    if (!row)
+      return false
+    return row.deleted === true || row.deleted_at != null
+  },
   purgeFileReadCache,
 }))
 
