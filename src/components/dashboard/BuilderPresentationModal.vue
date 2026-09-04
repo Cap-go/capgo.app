@@ -17,6 +17,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { pushEvent } from '~/services/posthog'
 import { getLocalConfig } from '~/services/supabase'
+import { sanitizeHtml } from '~/utils/sanitize'
 
 const props = defineProps<{ open: boolean, appId?: string }>()
 const emit = defineEmits<{ close: [] }>()
@@ -124,6 +125,28 @@ function makeScript(p: 'ios' | 'android'): TermStep[] {
   ]
 }
 
+function appendTrustedQrImage(container: HTMLElement) {
+  if (!qrDataUrl)
+    return
+
+  const qrLine = container.querySelector('.bp-qr-line')
+  if (!qrLine || qrLine.querySelector('img.bp-qr'))
+    return
+
+  const img = document.createElement('img')
+  img.className = 'bp-qr'
+  img.src = qrDataUrl
+  img.alt = 'QR code — scan to install the build on your device'
+  qrLine.insertBefore(img, qrLine.firstChild)
+}
+
+function renderTerminalBody(el: HTMLElement, html: string, withQr = false) {
+  el.innerHTML = sanitizeHtml(html)
+  if (withQr)
+    appendTrustedQrImage(el)
+  el.scrollTop = el.scrollHeight
+}
+
 function staticTerminal(p: 'ios' | 'android'): string {
   const cmd = `<span class="prompt">$ </span><span class="cmd">npx @capgo/cli@latest build request</span> <span class="flag">--platform</span> <span class="val">${p}</span>`
   if (p === 'android') {
@@ -142,15 +165,14 @@ function startTerminal(p: 'ios' | 'android') {
   if (!el)
     return
   if (reduce) {
-    el.innerHTML = staticTerminal(p)
+    el.innerHTML = sanitizeHtml(staticTerminal(p))
     return
   }
   let buf = ''
   let idx = 0
   const script = makeScript(p)
-  const render = () => {
-    el.innerHTML = buf
-    el.scrollTop = el.scrollHeight
+  const render = (withQr = false) => {
+    renderTerminalBody(el, buf, withQr)
   }
   const runSpin = (label: string, doneHtml: string, ms: number, onDone: () => void) => {
     let frame = 0
@@ -203,8 +225,8 @@ function startTerminal(p: 'ios' | 'android') {
     if (myGen !== termGen)
       return
     if (idx >= script.length) {
-      buf += `\n\n<span class="ok">✔</span> Ready to install on a real device:\n<span class="bp-qr-line"><img class="bp-qr" src="${qrDataUrl}" alt="QR code — scan to install the build on your device" /><span class="bp-qr-meta"><span class="kw">▸ Scan to install on your device</span><span class="dim">no cable, no Xcode — just your phone camera</span></span></span>`
-      render()
+      buf += '\n\n<span class="ok">✔</span> Ready to install on a real device:\n<span class="bp-qr-line"><span class="bp-qr-meta"><span class="kw">▸ Scan to install on your device</span><span class="dim">no cable, no Xcode — just your phone camera</span></span></span>'
+      render(true)
       return
     }
     const s = script[idx++]

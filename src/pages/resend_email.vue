@@ -12,6 +12,7 @@ import { getRecentEmailOtpVerification, sendEmailOtpVerification, verifyEmailOtp
 import { useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { useMainStore } from '~/stores/main'
+import { validateRedirectPath } from '~/utils/safeRedirect'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
 const { t } = useI18n()
@@ -30,7 +31,9 @@ const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const currentUserId = ref('')
 const currentUserEmail = ref('')
 const emailVerificationBlockingReason = computed(() => route.query.reason === 'email_not_verified')
-const returnTo = computed(() => (typeof route.query.return_to === 'string' ? route.query.return_to : ''))
+const rawReturnToQuery = computed(() => typeof route.query.return_to === 'string' ? route.query.return_to : '')
+const returnTo = computed(() => validateRedirectPath(rawReturnToQuery.value, '/settings/account'))
+const attemptedDestination = computed(() => validateRedirectPath(rawReturnToQuery.value, rawReturnToQuery.value))
 const usesEmailOtpFlow = computed(() => emailVerificationBlockingReason.value && !!currentUserId.value && !!currentUserEmail.value)
 
 async function submit(form: { email: string }) {
@@ -61,7 +64,7 @@ async function loadDeleteEmailVerificationState() {
 
     const { isVerified } = await getRecentEmailOtpVerification(supabase, currentUserId.value)
     if (isVerified)
-      await router.replace(returnTo.value || '/settings/account')
+      await router.replace(returnTo.value)
   }
   catch (error) {
     console.error('Cannot load email verification state', error)
@@ -143,8 +146,8 @@ onMounted(async () => {
         <p class="mt-2 text-sm leading-6">
           {{ t('email-not-verified-banner-body') }}
         </p>
-        <p v-if="returnTo" class="mt-3 text-xs font-medium tracking-[0.12em] uppercase">
-          {{ t('attempted-destination') }} {{ returnTo }}
+        <p v-if="rawReturnToQuery" class="mt-3 text-xs font-medium tracking-[0.12em] uppercase">
+          {{ t('attempted-destination') }} {{ attemptedDestination }}
         </p>
       </div>
 

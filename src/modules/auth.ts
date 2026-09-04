@@ -14,6 +14,7 @@ import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/orga
 import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
 import { hasPendingInviteSkip } from '~/utils/pendingInviteSkip'
+import { validateRedirectPath } from '~/utils/safeRedirect'
 import { getPlans, isPlatformAdmin } from './../services/supabase'
 
 async function updateUser(
@@ -172,9 +173,7 @@ function getAccountDisabledRedirect(to: RouteLocationNormalized) {
 
 function getPostRestorePath(to: RouteLocationNormalized) {
   const target = typeof to.query.to === 'string' ? to.query.to : ''
-  if (target.startsWith('/') && target !== '/accountDisabled')
-    return target
-  return '/dashboard'
+  return validateRedirectPath(target, '/dashboard', { blockedPrefixes: ['/accountDisabled'] })
 }
 
 async function guard(
