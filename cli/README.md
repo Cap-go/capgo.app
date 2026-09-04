@@ -86,6 +86,10 @@ npx @capgo/cli@latest bundle upload com.example.app \
 Add `--fail-on-incompatible` when CI must stop instead of uploading a bundle that
 cannot safely update the current native build.
 
+Add `--accept-incompatible` when the mismatch is intentional (for example your
+JavaScript already checks that a native plugin exists before using it). The
+upload still warns, but Capgo will not send the crash-warning email.
+
 ## Documentation
 
 The most complete [documentation is here](https://capgo.app/docs/).
@@ -419,7 +423,8 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **--min-update-version** | <code>string</code> | Minimal version required to update to this version. Used only if the disable auto update is set to metadata in channel |
 | **--auto-min-update-version** | <code>boolean</code> | Set the min update version based on native packages |
 | **--ignore-metadata-check** | <code>boolean</code> | Ignores the metadata (node_modules) check when uploading |
-| **--fail-on-incompatible** | <code>boolean</code> | Fail the upload (exit non-zero) instead of uploading when the bundle is incompatible with the channel's current native packages. In an interactive terminal you can still choose a native build; declining fails. Cannot be combined with --ignore-metadata-check. |
+| **--fail-on-incompatible** | <code>boolean</code> | Fail the upload (exit non-zero) instead of uploading when the bundle is incompatible with the channel's current native packages. In an interactive terminal you can still choose a native build; declining fails. Cannot be combined with --ignore-metadata-check or --accept-incompatible. |
+| **--accept-incompatible** | <code>boolean</code> | Accept native-package incompatibility as handled (still checks and warns, continues, skips the crash-warning email). Use this when your app already guards missing plugins at runtime. Cannot be combined with --fail-on-incompatible or --ignore-metadata-check. |
 | **--ignore-checksum-check** | <code>boolean</code> | Ignores the checksum check when uploading |
 | **--force-crc32-checksum** | <code>boolean</code> | Force CRC32 checksum for upload (override auto-detection) |
 | **--timeout** | <code>string</code> | Timeout for the upload process in seconds |
@@ -997,6 +1002,7 @@ npx @capgo/cli@latest channel set production com.example.app --bundle 1.0.0 --st
 | **--send-update-notification** | <code>boolean</code> | Send a native update-check notification to devices after updating the linked channel bundle |
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
 | **--ignore-metadata-check** | <code>boolean</code> | Ignore checking node_modules compatibility if present in the bundle |
+| **--accept-incompatible** | <code>boolean</code> | Accept native-package incompatibility as handled (still checks and warns, sets the channel instead of failing). Use this when your app already guards missing plugins at runtime. Cannot be combined with --ignore-metadata-check. |
 | **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
 | **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
 

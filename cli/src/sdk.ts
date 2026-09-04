@@ -76,6 +76,7 @@ import { addOrganizationInternal } from './organization/add'
 import { deleteOrganizationInternal } from './organization/delete'
 import { listOrganizationsInternal } from './organization/list'
 import { setOrganizationInternal } from './organization/set'
+import { updateChannelOptionsSchema, uploadOptionsSchema } from './schemas/sdk'
 import { CliUserError } from './shared/cli-user-error'
 import { getUserIdInternal } from './user/account'
 import { createSupabaseClient, findSavedKey, getConfig, getLocalConfig } from './utils'
@@ -542,37 +543,39 @@ export class CapgoSDK {
    */
   async uploadBundle(options: UploadOptions): Promise<UploadResult> {
     try {
-      return await withCapacitorConfigTarget(options.capacitorConfig, async () => {
+      const parsed = uploadOptionsSchema.parse(options)
+      return await withCapacitorConfigTarget(parsed.capacitorConfig, async () => {
         // Convert SDK options to internal format
         const internalOptions: OptionsUpload = {
-          apikey: options.apikey || this.apikey || findSavedKey(true),
-          supaHost: options.supaHost || this.supaHost,
-          supaAnon: options.supaAnon || this.supaAnon,
-          path: options.path,
-          bundle: options.bundle,
-          channel: options.channel,
-          rollout: options.rollout,
-          rolloutPercentageBps: options.rolloutPercentageBps,
-          rolloutCacheTtlSeconds: options.rolloutCacheTtlSeconds,
-          external: options.external,
-          key: options.encrypt !== false, // default true unless explicitly false
-          keyV2: options.encryptionKey,
-          timeout: options.timeout,
-          tus: options.useTus,
-          comment: options.comment,
-          minUpdateVersion: options.minUpdateVersion,
-          autoMinUpdateVersion: options.autoMinUpdateVersion,
-          autoSetBundle: options.autoSetBundle,
-          autoBump: normalizeAutoBumpInput(options.autoBump),
-          selfAssign: options.selfAssign,
-          packageJson: options.packageJsonPaths,
-          ignoreMetadataCheck: options.ignoreCompatibilityCheck,
-          codeCheck: !options.disableCodeCheck, // disable if requested, otherwise check
-          zip: options.useZip, // use legacy zip upload if requested
+          apikey: parsed.apikey || this.apikey || findSavedKey(true),
+          supaHost: parsed.supaHost || this.supaHost,
+          supaAnon: parsed.supaAnon || this.supaAnon,
+          path: parsed.path,
+          bundle: parsed.bundle,
+          channel: parsed.channel,
+          rollout: parsed.rollout,
+          rolloutPercentageBps: parsed.rolloutPercentageBps,
+          rolloutCacheTtlSeconds: parsed.rolloutCacheTtlSeconds,
+          external: parsed.external,
+          key: parsed.encrypt !== false, // default true unless explicitly false
+          keyV2: parsed.encryptionKey,
+          timeout: parsed.timeout,
+          tus: parsed.useTus,
+          comment: parsed.comment,
+          minUpdateVersion: parsed.minUpdateVersion,
+          autoMinUpdateVersion: parsed.autoMinUpdateVersion,
+          autoSetBundle: parsed.autoSetBundle,
+          autoBump: normalizeAutoBumpInput(parsed.autoBump),
+          selfAssign: parsed.selfAssign,
+          packageJson: parsed.packageJsonPaths,
+          ignoreMetadataCheck: parsed.ignoreCompatibilityCheck,
+          acceptIncompatible: parsed.acceptIncompatible,
+          codeCheck: !parsed.disableCodeCheck, // disable if requested, otherwise check
+          zip: parsed.useZip, // use legacy zip upload if requested
         }
 
         // Call internal upload function but suppress CLI behaviors
-        const uploadResponse = await uploadBundleInternal(options.appId, internalOptions, true)
+        const uploadResponse = await uploadBundleInternal(parsed.appId, internalOptions, true)
 
         return {
           success: uploadResponse.success,
@@ -869,48 +872,50 @@ export class CapgoSDK {
    */
   async updateChannel(options: UpdateChannelOptions): Promise<SDKResult> {
     try {
+      const parsed = updateChannelOptionsSchema.parse(options)
       const internalOptions: OptionsSetChannel = {
-        apikey: options.apikey || this.apikey || findSavedKey(true),
-        supaHost: options.supaHost || this.supaHost,
-        supaAnon: options.supaAnon || this.supaAnon,
-        bundle: options.bundle ?? undefined,
-        state: options.state,
-        downgrade: options.downgrade,
-        ios: options.ios,
-        android: options.android,
-        selfAssign: options.selfAssign,
-        disableAutoUpdate: options.disableAutoUpdate ?? undefined,
-        updatePackage: options.updatePackage,
-        dev: options.dev,
-        emulator: options.emulator,
-        device: options.device,
-        prod: options.prod,
-        rolloutBundle: options.rolloutBundle,
-        rolloutPercentage: options.rolloutPercentage,
-        rolloutPercentageBps: options.rolloutPercentageBps,
-        rolloutEnable: options.rolloutEnable,
-        rolloutDisable: options.rolloutDisable,
-        rolloutPause: options.rolloutPause,
-        rolloutResume: options.rolloutResume,
-        rolloutRollback: options.rolloutRollback,
-        rolloutPromote: options.rolloutPromote,
-        rolloutCacheTtlSeconds: options.rolloutCacheTtlSeconds,
-        autoPauseEnabled: options.autoPauseEnabled,
-        autoPauseDisabled: options.autoPauseDisabled,
-        autoPauseWindowMinutes: options.autoPauseWindowMinutes,
-        autoPauseFailureRateBps: options.autoPauseFailureRateBps,
-        autoPauseConfidence: options.autoPauseConfidence,
-        autoPauseMinAttempts: options.autoPauseMinAttempts,
-        autoPauseMinFailures: options.autoPauseMinFailures,
-        autoPauseAction: options.autoPauseAction,
-        autoPauseCooldownMinutes: options.autoPauseCooldownMinutes,
+        apikey: parsed.apikey || this.apikey || findSavedKey(true),
+        supaHost: parsed.supaHost || this.supaHost,
+        supaAnon: parsed.supaAnon || this.supaAnon,
+        bundle: parsed.bundle ?? undefined,
+        state: parsed.state,
+        downgrade: parsed.downgrade,
+        ios: parsed.ios,
+        android: parsed.android,
+        selfAssign: parsed.selfAssign,
+        disableAutoUpdate: parsed.disableAutoUpdate ?? undefined,
+        updatePackage: parsed.updatePackage,
+        dev: parsed.dev,
+        emulator: parsed.emulator,
+        device: parsed.device,
+        prod: parsed.prod,
+        rolloutBundle: parsed.rolloutBundle,
+        rolloutPercentage: parsed.rolloutPercentage,
+        rolloutPercentageBps: parsed.rolloutPercentageBps,
+        rolloutEnable: parsed.rolloutEnable,
+        rolloutDisable: parsed.rolloutDisable,
+        rolloutPause: parsed.rolloutPause,
+        rolloutResume: parsed.rolloutResume,
+        rolloutRollback: parsed.rolloutRollback,
+        rolloutPromote: parsed.rolloutPromote,
+        rolloutCacheTtlSeconds: parsed.rolloutCacheTtlSeconds,
+        autoPauseEnabled: parsed.autoPauseEnabled,
+        autoPauseDisabled: parsed.autoPauseDisabled,
+        autoPauseWindowMinutes: parsed.autoPauseWindowMinutes,
+        autoPauseFailureRateBps: parsed.autoPauseFailureRateBps,
+        autoPauseConfidence: parsed.autoPauseConfidence,
+        autoPauseMinAttempts: parsed.autoPauseMinAttempts,
+        autoPauseMinFailures: parsed.autoPauseMinFailures,
+        autoPauseAction: parsed.autoPauseAction,
+        autoPauseCooldownMinutes: parsed.autoPauseCooldownMinutes,
         latest: false,
         latestRemote: false,
         packageJson: undefined,
         ignoreMetadataCheck: false,
+        acceptIncompatible: parsed.acceptIncompatible,
       }
 
-      await setChannelInternal(options.channelId, options.appId, internalOptions, true)
+      await setChannelInternal(parsed.channelId, parsed.appId, internalOptions, true)
 
       return { success: true }
     }
