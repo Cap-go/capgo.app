@@ -158,6 +158,7 @@ interface BuildLogger {
 - `--output-retention <duration>`: `1h` to `7d`
 - `--skip-build-number-bump`
 - `--no-skip-build-number-bump`
+- `--no-cache`: disable Xcode compilation cache for this build (default: cache enabled). Example: `npx @capgo/cli@latest build request com.example.app --platform ios --no-cache`
 
 ## Local credential management
 

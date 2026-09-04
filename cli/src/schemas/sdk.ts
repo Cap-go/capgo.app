@@ -390,6 +390,7 @@ export const requestBuildOptionsSchema = z.object({
   prescanIgnoreFatal: z.boolean().optional(),
   prescanSkip: z.array(z.string()).optional(),
   prescanWarn: z.array(z.string()).optional(),
+  cache: z.boolean().optional(),
 })
 
 export type RequestBuildOptions = z.infer<typeof requestBuildOptionsSchema>

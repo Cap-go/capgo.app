@@ -108,6 +108,7 @@ export const buildRequestOptionsSchema = optionsBaseSchema.extend({
   prescanWarn: z.array(z.string()).optional(),
   failOnWarnings: z.boolean().optional(),
   builderJourneyId: z.string().optional(),
+  cache: z.boolean().optional(),
 })
 
 export type BuildRequestOptions = z.infer<typeof buildRequestOptionsSchema>
