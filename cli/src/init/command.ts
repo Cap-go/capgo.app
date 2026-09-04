@@ -48,7 +48,7 @@ import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisab
 import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitLogSkip, waitForInitStreamingContinue } from './runtime'
 import { createInitTelemetry, mergeInitProgressTelemetry, parseInitProgressTelemetry } from './telemetry'
 import { formatInitResumeMessage, initOnboardingSteps, renderInitOnboardingComplete, renderInitOnboardingFrame, renderInitOnboardingWelcome } from './ui'
-import { getBundleUploadFailureRecoveryOptions, joinUniqueUploadPaths, MONOREPO_ROOT_PATHS_NOTE } from './upload-recovery'
+import { getBundleUploadFailureRecoveryOptions, joinUniqueUploadPaths, MONOREPO_ROOT_PATHS_NOTE, resolveUploadPaths } from './upload-recovery'
 import { CAPACITOR_SPLASH_SCREEN_PACKAGE, CAPGO_UPDATER_PACKAGE, getSplashScreenInstallState, getUpdaterInstallState } from './updater'
 
 interface SuperOptions extends Options {
@@ -156,6 +156,7 @@ let globalMainFilePath: string | undefined
 
 let tmpObject: tmp.FileResult['name'] | undefined
 let globalPathToPackageJson: string | undefined
+let globalUploadPackageJsonPath: string | undefined
 let globalNodeModulesPath: string | undefined
 let globalChannelName = defaultChannel
 let globalPlatform: 'ios' | 'android' = 'ios'
@@ -1323,6 +1324,7 @@ function markStepDone(step: number, pathToPackageJson?: string, channelName?: st
       encryptionSummary: globalEncryptionSummary,
       autoTestChange: globalAutoTestChange,
       nodeModulesPath: globalNodeModulesPath,
+      uploadPackageJsonPath: globalUploadPackageJsonPath,
     }
     writeFileSync(getTmpObjectPath(), JSON.stringify(mergeInitProgressTelemetry(progress, activeInitTelemetry?.getProgressMetadata())))
     if (pathToPackageJson) {
@@ -1429,6 +1431,7 @@ async function tryResumeOnboarding(
       configLoadDir,
       mainFilePath,
       nodeModulesPath,
+      uploadPackageJsonPath,
       channelName,
       platform,
       delta,
@@ -1514,6 +1517,9 @@ async function tryResumeOnboarding(
       setConfigWriteTarget(globalCapacitorConfigPath)
       if (typeof nodeModulesPath === 'string' && nodeModulesPath.length > 0) {
         globalNodeModulesPath = nodeModulesPath
+      }
+      if (typeof uploadPackageJsonPath === 'string' && uploadPackageJsonPath.length > 0) {
+        globalUploadPackageJsonPath = uploadPackageJsonPath
       }
       if (channelName) {
         globalChannelName = channelName
@@ -1608,6 +1614,7 @@ async function tryResumeOnboarding(
     setInitEncryptionSummary(undefined)
     globalAutoTestChange = undefined
     globalNodeModulesPath = undefined
+    globalUploadPackageJsonPath = undefined
     return undefined
   }
   catch (err) {
@@ -1620,6 +1627,7 @@ async function tryResumeOnboarding(
     setInitEncryptionSummary(undefined)
     globalAutoTestChange = undefined
     globalNodeModulesPath = undefined
+    globalUploadPackageJsonPath = undefined
     return undefined
   }
 }
@@ -1627,6 +1635,7 @@ async function tryResumeOnboarding(
 function cleanupStepsDone() {
   globalAutoTestChange = undefined
   globalNodeModulesPath = undefined
+  globalUploadPackageJsonPath = undefined
   if (!tmpObject) {
     return
   }
@@ -1765,9 +1774,10 @@ async function promptForMonorepoRootUploadPaths(
     'Monorepo root node_modules path:',
     join(rootDir, 'node_modules'),
   )
+  const promptCwd = cwd()
   return {
-    packageJson: joinUniqueUploadPaths(currentPackageJson, packageJson),
-    nodeModules: joinUniqueUploadPaths(currentNodeModules, nodeModules),
+    packageJson: joinUniqueUploadPaths(currentPackageJson, resolveUploadPaths(packageJson, promptCwd)),
+    nodeModules: joinUniqueUploadPaths(currentNodeModules, resolveUploadPaths(nodeModules, promptCwd)),
   }
 }
 
@@ -4965,7 +4975,7 @@ async function maybeOfferAutoTestCleanup(orgId: string, apikey: string, appId: s
     `--bundle ${cleanupVersion}`,
     `--channel ${globalChannelName}`,
     delta ? '--delta-only' : '',
-    globalPathToPackageJson ? `--package-json ${globalPathToPackageJson}` : '',
+    (globalUploadPackageJsonPath ?? globalPathToPackageJson) ? `--package-json ${globalUploadPackageJsonPath ?? globalPathToPackageJson}` : '',
     globalNodeModulesPath ? `--node-modules ${globalNodeModulesPath}` : '',
   ].filter(Boolean).join(' ')
 
@@ -4985,7 +4995,7 @@ async function uploadStep(orgId: string, apikey: string, appId: string, newVersi
   await cancelCommand(doBundle, orgId, apikey)
   if (doBundle) {
     let nodeModulesPath: string | undefined = globalNodeModulesPath
-    let uploadPackageJsonPath = selectedPackageJsonPath
+    let uploadPackageJsonPath = globalUploadPackageJsonPath ?? selectedPackageJsonPath
     const isMonorepo = projectIsMonorepo(cwd())
     let warnedMonorepo = false
 
@@ -5008,6 +5018,7 @@ async function uploadStep(orgId: string, apikey: string, appId: string, newVersi
         const paths = await promptForMonorepoRootUploadPaths(orgId, apikey, uploadPackageJsonPath, nodeModulesPath)
         uploadPackageJsonPath = paths.packageJson
         nodeModulesPath = paths.nodeModules
+        globalUploadPackageJsonPath = uploadPackageJsonPath
         globalNodeModulesPath = nodeModulesPath
       }
       return 'retry'
@@ -5140,7 +5151,7 @@ async function uploadStep(orgId: string, apikey: string, appId: string, newVersi
       `--bundle ${newVersion}`,
       `--channel ${globalChannelName}`,
       delta ? '--delta-only' : '',
-      globalPathToPackageJson ? `--package-json ${globalPathToPackageJson}` : '',
+      (globalUploadPackageJsonPath ?? globalPathToPackageJson) ? `--package-json ${globalUploadPackageJsonPath ?? globalPathToPackageJson}` : '',
       globalNodeModulesPath ? `--node-modules ${globalNodeModulesPath}` : '',
     ]
     const manualUploadCommand = manualUploadCommandParts.filter(Boolean).join(' ')
@@ -5577,6 +5588,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     stepToSkip = 0
     resumed = undefined
     globalNodeModulesPath = undefined
+    globalUploadPackageJsonPath = undefined
     globalChannelName = defaultChannel
     globalPlatform = 'ios'
     globalDelta = false
