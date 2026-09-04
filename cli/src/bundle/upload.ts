@@ -37,6 +37,13 @@ import { parsePackageJsonOptionPaths, resolveAppIdWithRecovery } from '../recove
 import { prepareBundlePartialFiles, uploadPartial } from './partial'
 import { clackUploadReporter, getUploadReporter, runWithUploadReporter } from './reporter'
 import { formatUploadChannels, getChannelsToAssignByChecksum, parseUploadChannels } from './upload-channels'
+import {
+  formatActiveRolloutResetWarning,
+  formatFailOnActiveRolloutMessage,
+  formatStableChannelLinkSuccess,
+  hasActiveRollout,
+  shouldFailOnActiveRollout,
+} from './upload-channel-link'
 
 type SupabaseType = Awaited<ReturnType<typeof createSupabaseClient>>
 type pmType = ReturnType<typeof getPMAndCommand>
@@ -619,7 +626,7 @@ async function uploadBundleToCapgoCloud(apikey: string, supabase: SupabaseType, 
   }
 
   if (options.dryUpload) {
-    spinner.stop(`Dry run, bundle not uploaded\nBundle uploaded 💪 in 0 seconds`)
+    spinner.stop(`Dry run, bundle zip not uploaded`)
     if (options.verbose)
       log.info(`[Verbose] Dry upload mode - skipping actual upload`)
     return
@@ -778,7 +785,7 @@ async function uploadBundleToCapgoCloud(apikey: string, supabase: SupabaseType, 
 
   const endTime = performance.now()
   const uploadTime = ((endTime - startTime) / 1000).toFixed(2)
-  spinner.stop(`Bundle uploaded 💪 in (${uploadTime} seconds)`)
+  spinner.stop(`Bundle zip uploaded in ${uploadTime} seconds`)
 
   if (options.verbose) {
     log.info(`[Verbose] Upload successful:`)
@@ -988,6 +995,7 @@ async function preflightRequiredChannelAssignments(
   apikey: string,
   appid: string,
   channels: string[],
+  options: OptionsUpload,
   selfAssign = false,
   rolloutPercentageBps?: number,
   rolloutAdvance = false,
@@ -1000,6 +1008,9 @@ async function preflightRequiredChannelAssignments(
 
     if (targetChannel) {
       uploadTargetChannels.set(channel, targetChannel)
+      if (shouldFailOnActiveRollout(options, targetChannel))
+        uploadFail(formatFailOnActiveRolloutMessage(channel))
+
       const canPromoteTargetChannel = await hasCliPermission(supabase, apikey, 'channel.promote_bundle', { appId: appid, channelId: targetChannel.id })
       if (!canPromoteTargetChannel)
         uploadFail('Cannot set channel because this API key lacks channel.promote_bundle for the target channel')
@@ -1054,12 +1065,18 @@ async function formatFunctionInvokeError(error: unknown): Promise<string> {
 async function promoteExistingChannel(
   apikey: string,
   appid: string,
+  bundle: string,
+  channel: string,
   versionId: number,
   targetChannel: UploadTargetChannel,
   localConfig: localConfigType,
   displayBundleUrl: boolean,
   options?: { supaHost?: string, supaAnon?: string },
 ): Promise<boolean> {
+  const clearedActiveRollout = hasActiveRollout(targetChannel)
+  if (clearedActiveRollout)
+    log.warn(formatActiveRolloutResetWarning(channel))
+
   const { error } = await invokeCapgoCliApi('bundle', {
     apikey,
     method: 'PUT',
@@ -1077,13 +1094,11 @@ async function promoteExistingChannel(
   }
 
   const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${targetChannel.id}`
-  if (targetChannel.rollout_enabled && targetChannel.rollout_version != null) {
-    log.warn('This channel has an active progressive rollout. Linking this bundle as the stable version resets that rollout, so devices receive the new bundle instead of the previous rollout target.')
-  }
-  else if (targetChannel.public) {
+  log.success(formatStableChannelLinkSuccess(channel, bundle, clearedActiveRollout))
+  if (targetChannel.public) {
     log.info('Your update is now available in your public channel 🎉')
   }
-  else {
+  else if (!clearedActiveRollout) {
     log.info(`Link device to this bundle to try it: ${bundleUrl}`)
   }
 
@@ -1126,12 +1141,16 @@ async function setVersionInChannel(
       const canUpdateChannelSettings = await hasCliPermission(supabase, apikey, 'channel.update_settings', { appId: appid, channelId: targetChannel.id })
       if (!canUpdateChannelSettings) {
         log.warn('Cannot enable device self-assign because this API key lacks channel.update_settings')
-        return promoteExistingChannel(apikey, appid, versionId, targetChannel, localConfig, displayBundleUrl, cliHost)
+        return promoteExistingChannel(apikey, appid, bundle, channel, versionId, targetChannel, localConfig, displayBundleUrl, cliHost)
       }
     }
 
     if (!selfAssign)
-      return promoteExistingChannel(apikey, appid, versionId, targetChannel, localConfig, displayBundleUrl, cliHost)
+      return promoteExistingChannel(apikey, appid, bundle, channel, versionId, targetChannel, localConfig, displayBundleUrl, cliHost)
+
+    const clearedActiveRollout = hasActiveRollout(targetChannel)
+    if (clearedActiveRollout)
+      log.warn(formatActiveRolloutResetWarning(channel))
 
     const { error: dbError3, data } = await updateOrCreateChannel(supabase, {
       name: channel,
@@ -1146,13 +1165,11 @@ async function setVersionInChannel(
     }
     if (data?.id) {
       const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${data.id}`
-      if (targetChannel.rollout_enabled && targetChannel.rollout_version != null) {
-        log.warn('This channel has an active progressive rollout. Linking this bundle as the stable version resets that rollout, so devices receive the new bundle instead of the previous rollout target.')
-      }
-      else if (data.public) {
+      log.success(formatStableChannelLinkSuccess(channel, bundle, clearedActiveRollout))
+      if (data.public) {
         log.info('Your update is now available in your public channel 🎉')
       }
-      else {
+      else if (!clearedActiveRollout) {
         log.info(`Link device to this bundle to try it: ${bundleUrl}`)
       }
       if (displayBundleUrl)
@@ -1200,6 +1217,7 @@ async function setVersionInChannel(
     }
 
     const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${createdChannelId}`
+    log.success(formatStableChannelLinkSuccess(channel, bundle, false))
     if (createdChannelPublic)
       log.info('Your update is now available in your public channel 🎉')
     else
@@ -1274,9 +1292,9 @@ async function setRolloutVersionInChannel(
 
   const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${targetChannel.id}`
   if (promoteCurrentRollout)
-    log.info(`Promoted the previous rollout to stable on ${channel} and set @${bundle} as the new rollout target (${formatRolloutPercentage(rolloutPercentageBps)})`)
+    log.success(`Promoted the previous rollout to stable on ${channel} and set @${bundle} as the new rollout target (${formatRolloutPercentage(rolloutPercentageBps)})`)
   else
-    log.info(`Set ${appid} channel ${channel} rollout target to @${bundle} (${formatRolloutPercentage(rolloutPercentageBps)})`)
+    log.success(`Set ${appid} channel ${channel} rollout target to @${bundle} (${formatRolloutPercentage(rolloutPercentageBps)})`)
   if (displayBundleUrl)
     log.info(`Bundle url: ${bundleUrl}`)
   return true
@@ -1639,7 +1657,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   }
   const channelAssignmentRequired = channelsToAssign.length > 0
   const uploadTargetChannels = channelAssignmentRequired
-    ? await preflightRequiredChannelAssignments(supabase, apikey, appid, channelsToAssign, !!options.selfAssign, rolloutPercentageBps, !!options.rolloutAdvance)
+    ? await preflightRequiredChannelAssignments(supabase, apikey, appid, channelsToAssign, options, !!options.selfAssign, rolloutPercentageBps, !!options.rolloutAdvance)
     : new Map<string, UploadTargetChannel | null>()
   const versionData = {
     name: bundle,
@@ -2107,8 +2125,15 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     }
   }
 
-  if (!silent && !result.skipped)
-    getUploadReporter().outro('Time to share your update to the world 🌍')
+  if (!silent && !result.skipped) {
+    if (result.updatedChannels?.length) {
+      const linkedChannelLabel = formatUploadChannels(result.updatedChannels)
+      getUploadReporter().outro(`Upload complete: bundle published and linked to ${linkedChannelLabel} 🌍`)
+    }
+    else {
+      getUploadReporter().outro('Bundle published to Capgo Cloud. No channel was updated.')
+    }
+  }
 
   return result
 }
@@ -2183,6 +2208,9 @@ export function checkValidOptions(options: OptionsUpload) {
   }
   if (options.failOnIncompatible && options.ignoreMetadataCheck) {
     uploadFail('You cannot use --fail-on-incompatible together with --ignore-metadata-check — the metadata check is exactly what --fail-on-incompatible enforces. Remove one of them.')
+  }
+  if (options.failOnActiveRollout && options.dryUpload) {
+    uploadFail('You cannot use --fail-on-active-rollout with --dry-upload because dry upload does not update channels')
   }
 }
 
