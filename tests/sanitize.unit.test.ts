@@ -6,8 +6,10 @@ describe('sanitizeHttpUrl', () => {
     expect(sanitizeHttpUrl('https://example.com/path')).toBe('https://example.com/path')
   })
 
-  it.concurrent('rejects javascript and missing schemes', () => {
+  it.concurrent('rejects javascript, data, vbscript, and missing schemes', () => {
     expect(sanitizeHttpUrl('javascript:alert(1)')).toBeNull()
+    expect(sanitizeHttpUrl('data:text/html,alert(1)')).toBeNull()
+    expect(sanitizeHttpUrl('vbscript:msgbox(1)')).toBeNull()
     expect(sanitizeHttpUrl('not-a-url')).toBeNull()
     expect(sanitizeHttpUrl('http://evil.example')).toBeNull()
   })

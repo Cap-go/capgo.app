@@ -8,7 +8,10 @@ describe('sanitizeHtml node fallback', () => {
 
     try {
       const { sanitizeHtml } = await import('../src/utils/sanitize.ts')
-      expect(sanitizeHtml('<p>Hello<script>alert(1)</script></p>')).toBe('Helloalert(1)')
+      expect(sanitizeHtml('<p>Hello<script>alert(1)</script></p>'))
+        .toBe('&lt;p&gt;Hello&lt;script&gt;alert(1)&lt;/script&gt;&lt;/p&gt;')
+      expect(sanitizeHtml('<<script>alert(1)//'))
+        .toBe('&lt;&lt;script&gt;alert(1)//')
     }
     finally {
       globalThis.window = originalWindow

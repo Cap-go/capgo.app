@@ -17,6 +17,15 @@ const HTML_ALLOWED_TAGS = [
 
 const HTML_ALLOWED_ATTR = ['class', 'href', 'rel', 'target', 'title']
 
+function escapeHtmlForSsr(text: string): string {
+  return text
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('\'', '&#39;')
+}
+
 export function sanitizeHtml(value: unknown): string {
   if (value == null)
     return ''
@@ -25,7 +34,7 @@ export function sanitizeHtml(value: unknown): string {
     return ''
 
   if (typeof window === 'undefined')
-    return text.replace(/<[^>]+>/g, '')
+    return escapeHtmlForSsr(text)
 
   return createDOMPurify(window).sanitize(text, {
     ALLOWED_TAGS: HTML_ALLOWED_TAGS,
@@ -55,10 +64,10 @@ export function sanitizeHttpUrl(value: unknown): string | null {
 
   const isLocalhost = url.hostname === 'localhost' || url.hostname.endsWith('.localhost')
   const isLoopback = url.hostname === '127.0.0.1' || url.hostname === '::1'
-  if (url.protocol !== 'https:' && !isLocalhost && !isLoopback)
-    return null
+  const allowsLocalHttp = (isLocalhost || isLoopback) && url.protocol === 'http:'
+  const allowsHttps = url.protocol === 'https:'
 
-  if (url.protocol === 'javascript:' || url.protocol === 'data:')
+  if (!allowsHttps && !allowsLocalHttp)
     return null
 
   return url.toString()
