@@ -38,8 +38,7 @@ BEGIN
   GROUP BY usage_rows.usage_platform
   UNION ALL
   SELECT 'total'::character varying AS platform, COUNT(DISTINCT usage_rows.device_id)::bigint AS devices
-  FROM usage_rows
-  ORDER BY platform;
+  FROM usage_rows;
 END;
 $$;
 
