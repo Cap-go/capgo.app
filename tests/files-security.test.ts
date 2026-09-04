@@ -297,8 +297,20 @@ describe('attachment reads after app deletion', () => {
       headers: {
         Authorization: deleteKey!,
       },
+      // DELETE is mutating, but this call is retry-safe: a wrangler isolate
+      // reload can 503 after the app row is already gone, and the second
+      // attempt then returns the post-delete deny (400/401).
+      retryUnsafe: true,
     })
-    expect(deleteResponse.status).toBe(200)
+    if (deleteResponse.status !== 200)
+      expect([400, 401]).toContain(deleteResponse.status)
+
+    const { data: remainingApp } = await getSupabaseClient()
+      .from('apps')
+      .select('app_id')
+      .eq('app_id', appId)
+      .maybeSingle()
+    expect(remainingApp).toBeNull()
 
     const readAfterDelete = await fetch(getEndpointUrl(`/files/read/attachments/${filePath}`))
     expect(readAfterDelete.status).toBe(200)

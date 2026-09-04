@@ -303,16 +303,18 @@ export async function addAppInternal(
   ensureOptions(appId, options, silent)
 
   const supabase = await createSupabaseClient(options.apikey!, options.supaHost, options.supaAnon)
-  const userId = await resolveUserIdFromApiKey(supabase, options.apikey)
+  const host = { supaHost: options.supaHost, supaAnon: options.supaAnon }
+  const userId = await resolveUserIdFromApiKey(supabase, options.apikey, silent, host)
 
   if (!organization)
-    organization = await getOrganizationWithPermission(supabase, options.apikey, 'org.create_app')
+    organization = await getOrganizationWithPermission(supabase, options.apikey, 'org.create_app', host)
 
   const organizationUid = organization.gid
 
   await assertCliPermission(supabase, options.apikey, 'org.create_app', { orgId: organizationUid }, {
     message: `Insufficient permissions to create an app in organization ${organizationUid}`,
     silent,
+    ...host,
   })
 
   let { name, icon } = options

@@ -27,7 +27,7 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  await check2FAComplianceForApp(supabase, appId, silent)
+  await check2FAComplianceForApp(options.apikey, appId, silent, { supaHost: options.supaHost, supaAnon: options.supaAnon })
 
   const httpOptions = {
     apikey: options.apikey,
@@ -51,7 +51,7 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
   }
   await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'channel.delete', silent, true, channel.id)
   const canDeleteBundle = options.deleteBundle
-    ? await hasCliPermission(supabase, options.apikey, 'bundle.delete', { appId })
+    ? await hasCliPermission(supabase, options.apikey, 'bundle.delete', { appId }, { supaHost: options.supaHost, supaAnon: options.supaAnon })
     : false
 
   const orgId = await getOrganizationId(options.apikey, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })

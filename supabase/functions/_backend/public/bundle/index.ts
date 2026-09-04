@@ -7,6 +7,8 @@ import { aiBumpLevel } from './ai_bump_level.ts'
 import { createBundle } from './create.ts'
 import { deleteBundle } from './delete.ts'
 import { get } from './get.ts'
+import { app as lookupApp } from './lookup.ts'
+import { app as prepareUploadApp } from './prepare_upload.ts'
 import { setChannel } from './set_channel.ts'
 import { app as updateMetadataApp } from './update_metadata.ts'
 
@@ -16,6 +18,8 @@ const writeBundleMiddleware = middlewareKey({ usePostgres: true, readOnly: false
 
 // Add the route for updating bundle metadata
 app.route('/metadata', updateMetadataApp)
+app.route('/lookup', lookupApp)
+app.route('/prepare', prepareUploadApp)
 
 app.get('/', middlewareKey(), async (c) => {
   const body = await getBodyOrQuery<GetLatest>(c)

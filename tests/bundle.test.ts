@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { BASE_URL, createAppVersions, createDirectApiKeyWithBindings, fetchBundle, getSupabaseClient, headers, ORG_ID, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID } from './test-utils.ts'
+import { BASE_URL, createAppVersions, createDirectApiKeyWithBindings, executeSQL, fetchBundle, getPostgresClient, getSupabaseClient, headers, ORG_ID, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID } from './test-utils.ts'
 
 const id = randomUUID()
 const APPNAME = `com.app.b.${id}`
@@ -622,5 +622,162 @@ describe('[PUT] /bundle RBAC channel overrides', () => {
 
     expect(error).toBeNull()
     expect(channel?.version).toBe(originalVersionId)
+  })
+})
+
+describe('[POST] /bundle/prepare and [GET] /bundle/lookup operations', () => {
+  const prepareVersion = `9.9.9-prepare-${id.slice(0, 8)}`
+
+  it('creates an uploadable version row and latest lookup returns it', async () => {
+    const response = await fetch(`${BASE_URL}/bundle/prepare`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        name: prepareVersion,
+        storage_provider: 'r2-direct',
+        cli_version: '99.0.0-test',
+      }),
+    })
+
+    const data = await response.json() as { status?: string, version?: { id?: number, name?: string } }
+    expect(response.status).toBe(200)
+    expect(data.status).toBe('ok')
+    expect(data.version?.name).toBe(prepareVersion)
+
+    const lookup = await fetch(`${BASE_URL}/bundle/lookup?app_id=${encodeURIComponent(APPNAME)}&name=${encodeURIComponent(prepareVersion)}`, {
+      method: 'GET',
+      headers,
+    })
+    const lookupData = await lookup.json() as { exists?: boolean, id?: number }
+    expect(lookup.status).toBe(200)
+    expect(lookupData.exists).toBe(true)
+    expect(lookupData.id).toBe(data.version?.id)
+
+    const latest = await fetch(`${BASE_URL}/bundle/lookup?app_id=${encodeURIComponent(APPNAME)}&latest=true`, {
+      method: 'GET',
+      headers,
+    })
+    const latestData = await latest.json() as { name?: string | null }
+    expect(latest.status).toBe(200)
+    expect(latestData.name).toBe(prepareVersion)
+  })
+
+  it('rejects invalid storage_provider on create', async () => {
+    const response = await fetch(`${BASE_URL}/bundle/prepare`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        name: `9.9.8-bad-storage-${id.slice(0, 8)}`,
+        storage_provider: 'r2',
+      }),
+    })
+
+    const data = await response.json() as { error?: string }
+    expect(response.status).toBe(400)
+    expect(data.error).toBe('invalid_storage_provider')
+  })
+
+  it('rejects non-HTTPS external_url on prepare', async () => {
+    const response = await fetch(`${BASE_URL}/bundle/prepare`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        name: `9.9.8-bad-url-${id.slice(0, 8)}`,
+        storage_provider: 'external',
+        external_url: 'http://example.com/bundle.zip',
+      }),
+    })
+
+    const data = await response.json() as { error?: string }
+    expect(response.status).toBe(400)
+    expect(data.error).toBe('invalid_protocol')
+  })
+
+  it('resets completed r2 versions back to r2-direct for re-upload', async () => {
+    const versionName = `9.9.7-reprepare-${id.slice(0, 8)}`
+    const supabase = getSupabaseClient()
+
+    const prepareResponse = await fetch(`${BASE_URL}/bundle/prepare`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        name: versionName,
+        storage_provider: 'r2-direct',
+      }),
+    })
+    expect(prepareResponse.status).toBe(200)
+
+    const { error: markCompleteError } = await supabase
+      .from('app_versions')
+      .update({ storage_provider: 'r2', r2_path: `orgs/${ORG_ID}/apps/${APPNAME}/${versionName}.zip` })
+      .eq('app_id', APPNAME)
+      .eq('name', versionName)
+    expect(markCompleteError).toBeNull()
+
+    const rePrepareResponse = await fetch(`${BASE_URL}/bundle/prepare`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        name: versionName,
+        storage_provider: 'r2-direct',
+      }),
+    })
+    const rePrepareData = await rePrepareResponse.json() as { status?: string, version?: { storage_provider?: string } }
+    expect(rePrepareResponse.status).toBe(200)
+    expect(rePrepareData.status).toBe('ok')
+    expect(rePrepareData.version?.storage_provider).toBe('r2-direct')
+
+    const { data: version, error } = await supabase
+      .from('app_versions')
+      .select('storage_provider, r2_path')
+      .eq('app_id', APPNAME)
+      .eq('name', versionName)
+      .single()
+    expect(error).toBeNull()
+    expect(version?.storage_provider).toBe('r2-direct')
+    expect(version?.r2_path).toBeNull()
+  })
+
+  it('ignores prepare_reupload_reset GUC for authenticated sessions', async () => {
+    const versionName = `9.9.6-guc-auth-${id.slice(0, 8)}`
+    const [inserted] = await executeSQL<{ id: number }>(
+      `INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider, r2_path, deleted)
+       VALUES ($1, $2, $3::uuid, $4::uuid, 'r2', $5, false)
+       RETURNING id`,
+      [APPNAME, versionName, ORG_ID, USER_ID, `orgs/${ORG_ID}/apps/${APPNAME}/${versionName}.zip`],
+    )
+    expect(inserted?.id).toBeTruthy()
+
+    const pool = await getPostgresClient()
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query('SELECT set_config($1, $2, true)', ['request.jwt.claim.role', 'authenticated'])
+      await client.query('SELECT set_config($1, $2, true)', [
+        'request.jwt.claims',
+        JSON.stringify({ role: 'authenticated', sub: USER_ID }),
+      ])
+      await client.query('SELECT set_config($1, $2, true)', ['capgo.prepare_reupload_reset', 'on'])
+      await expect(client.query(
+        `UPDATE public.app_versions
+         SET storage_provider = 'r2-direct', r2_path = NULL
+         WHERE id = $1`,
+        [inserted.id],
+      )).rejects.toThrow(/bundle_already_ready/)
+    }
+    finally {
+      try {
+        await client.query('ROLLBACK')
+      }
+      catch {
+        // Ignore rollback failures after the expected trigger exception.
+      }
+      client.release()
+    }
   })
 })

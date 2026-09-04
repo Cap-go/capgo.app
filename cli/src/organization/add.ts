@@ -32,7 +32,10 @@ export async function addOrganizationInternal(options: OrganizationAddOptions, s
     enrichedOptions.supaHost,
     enrichedOptions.supaAnon,
   )
-  const userId = await resolveUserIdFromApiKey(supabase, enrichedOptions.apikey)
+  const userId = await resolveUserIdFromApiKey(supabase, enrichedOptions.apikey, silent, {
+    supaHost: enrichedOptions.supaHost,
+    supaAnon: enrichedOptions.supaAnon,
+  })
 
   let { name, email } = enrichedOptions
 

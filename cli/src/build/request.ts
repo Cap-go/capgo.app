@@ -1941,6 +1941,8 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     await assertCliPermission(supabase, options.apikey, 'app.build_native', { appId }, {
       message: `Capgo rejected this API key: missing app.build_native permission for app ${appId}.`,
       silent,
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
     })
 
     // Request build from Capgo backend (POST /build/request)

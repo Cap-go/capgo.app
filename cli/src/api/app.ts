@@ -6,10 +6,9 @@ import { CliUserError } from '../shared/cli-user-error'
 import { isTransientNetworkError } from '../shared/network-error'
 import {
   callTwoFactorComplianceRpcWithRetry,
-  throwTwoFactorComplianceRpcError,
   warnAndContinueTwoFactorPreflightNetworkFailure,
 } from '../shared/two-factor-compliance'
-import { appAddHintMessage, formatCapgoApiErrorBody, getCapgoCliHttpStatus, hasCliPermission, invokeCapgoCliApi, isCapgoManagedSupabaseHost, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
+import { appAddHintMessage, formatCapgoApiErrorBody, formatCapgoCliApiError, getCapgoCliHttpStatus, hasCliPermissionViaHttp, hostOptionsFromSupabase, invokeCapgoCliApi, resolveCapgoPublicApiHost, show2FADeniedError, type CapgoCliHostOptions } from '../utils'
 
 export async function checkAppExists(
   apikey: string,
@@ -197,32 +196,41 @@ export async function checkAppIdsExist(
   return results
 }
 
+function isSupabaseClient(value: unknown): value is SupabaseClient<Database> {
+  return typeof value === 'object' && value !== null
+}
+
 export async function check2FAComplianceForApp(
-  supabase: SupabaseClient<Database>,
+  apikey: string,
   appid: string,
   silent = false,
+  options?: CapgoCliHostOptions,
 ): Promise<void> {
-  // TODO(cli-http): no Capgo HTTP equivalent for reject_access_due_to_2fa_for_app yet
-  // Use the new reject_access_due_to_2fa_for_app function
-  // This handles getting the org, user identity (JWT or API key), and checking 2FA compliance
-  const { data: shouldReject, error: rejectError } = await callTwoFactorComplianceRpcWithRetry(() =>
-    supabase.rpc('reject_access_due_to_2fa_for_app', { app_id: appid }),
+  const { data, error } = await callTwoFactorComplianceRpcWithRetry<{ reject?: boolean }>(() =>
+    invokeCapgoCliApi<{ reject?: boolean }>('private/cli/check-2fa-app', {
+      apikey,
+      method: 'POST',
+      body: { app_id: appid },
+      supaHost: options?.supaHost,
+      supaAnon: options?.supaAnon,
+    }),
   )
 
-  if (rejectError) {
-    if (!silent && !isTransientNetworkError(rejectError))
-      log.error(`Cannot check 2FA compliance: ${rejectError.message}`)
-    if (isTransientNetworkError(rejectError)) {
+  if (error) {
+    if (!silent && !isTransientNetworkError(error))
+      log.error(`Cannot check 2FA compliance: ${await formatCapgoCliApiError(error)}`)
+    if (isTransientNetworkError(error)) {
       await warnAndContinueTwoFactorPreflightNetworkFailure({
         silent,
         telemetryFunctionName: 'check2FAComplianceForApp',
       })
       return
     }
-    throwTwoFactorComplianceRpcError(rejectError)
+    const msg = await formatCapgoCliApiError(error)
+    throw new Error(`Cannot check 2FA compliance: ${msg}`)
   }
 
-  if (shouldReject) {
+  if (data?.reject) {
     if (silent) {
       throw new Error('2FA required for this organization')
     }
@@ -230,43 +238,71 @@ export async function check2FAComplianceForApp(
   }
 }
 
-function hostOptionsFromSupabase(supabase: SupabaseClient<Database>) {
-  // supabase-js keeps these as protected fields; local/self-host tests still
-  // need the same host when Capgo HTTP existence checks replace PostgREST RPCs.
-  // Hosted Capgo clients must keep default api.capgo.app resolution — their
-  // supabaseUrl points at PostgREST, not the public Capgo HTTP API.
-  const client = supabase as SupabaseClient<Database> & { supabaseUrl?: string, supabaseKey?: string }
-  const supaHost = typeof client.supabaseUrl === 'string' ? client.supabaseUrl : undefined
-  const supaAnon = typeof client.supabaseKey === 'string' ? client.supabaseKey : undefined
-  if (supaHost && supaAnon && !isCapgoManagedSupabaseHost(supaHost))
-    return { supaHost, supaAnon }
-  return undefined
-}
-
+// lgtm[js/insecure-randomness] Permission gate only; this module does not generate secrets or tokens with Math.random.
 export async function checkAppExistsAndHasPermissionOrgErr(
-  supabase: SupabaseClient<Database>,
-  apikey: string,
-  appid: string,
-  requiredPermissionKey: string,
-  silent = false,
-  skip2FACheck = false,
+  apikeyOrSupabase: string | SupabaseClient<Database>,
+  appidOrApikey: string,
+  requiredPermissionKeyOrAppid?: string,
+  optionsOrSilent?: (CapgoCliHostOptions & { silent?: boolean, skip2FACheck?: boolean, channelId?: number | null }) | boolean | string,
+  skip2FACheckOrSilent?: boolean,
+  channelIdOrSkip2FA?: number | null | boolean,
   channelId?: number | null,
 ) {
-  const isChannelScopedPermission = channelId != null && requiredPermissionKey.startsWith('channel.')
+  let apikey: string
+  let appid: string
+  let requiredPermissionKey: string
+  let silent: boolean
+  let skip2FACheck: boolean
+  let resolvedChannelId: number | null
+  let hostOptions: CapgoCliHostOptions | undefined
 
-  // Check 2FA compliance first (unless already checked earlier)
+  if (isSupabaseClient(apikeyOrSupabase)) {
+    apikey = appidOrApikey
+    appid = requiredPermissionKeyOrAppid!
+    requiredPermissionKey = optionsOrSilent as string
+    silent = skip2FACheckOrSilent ?? false
+    skip2FACheck = channelIdOrSkip2FA === true
+    resolvedChannelId = typeof channelId === 'number' ? channelId : null
+    hostOptions = hostOptionsFromSupabase(apikeyOrSupabase)
+  }
+  else if (typeof optionsOrSilent === 'object' && optionsOrSilent !== null) {
+    apikey = apikeyOrSupabase
+    appid = appidOrApikey
+    requiredPermissionKey = requiredPermissionKeyOrAppid!
+    silent = optionsOrSilent.silent ?? false
+    skip2FACheck = optionsOrSilent.skip2FACheck ?? false
+    resolvedChannelId = optionsOrSilent.channelId ?? null
+    hostOptions = optionsOrSilent
+  }
+  else {
+    apikey = apikeyOrSupabase
+    appid = appidOrApikey
+    requiredPermissionKey = requiredPermissionKeyOrAppid!
+    silent = typeof optionsOrSilent === 'boolean' ? optionsOrSilent : false
+    skip2FACheck = skip2FACheckOrSilent ?? false
+    resolvedChannelId = typeof channelIdOrSkip2FA === 'number' ? channelIdOrSkip2FA : (channelId ?? null)
+  }
+
+  const isChannelScopedPermission = resolvedChannelId != null && requiredPermissionKey.startsWith('channel.')
+
   if (!skip2FACheck)
-    await check2FAComplianceForApp(supabase, appid, silent)
+    await check2FAComplianceForApp(apikey, appid, silent, hostOptions)
 
-  // Keep local/self-host Capgo HTTP traffic on the same host as this supabase client.
-  if (!isChannelScopedPermission && !(await checkAppExists(apikey, appid, hostOptionsFromSupabase(supabase)))) {
+  if (!isChannelScopedPermission && !(await checkAppExists(apikey, appid, hostOptions))) {
     const msg = appAddHintMessage(appid)
     if (!silent)
       log.error(msg)
     throw new Error(msg)
   }
 
-  if (!(await hasCliPermission(supabase, apikey, requiredPermissionKey, { appId: appid, channelId: channelId ?? null }))) {
+  const allowed = await hasCliPermissionViaHttp(
+    apikey,
+    requiredPermissionKey,
+    { appId: appid, channelId: resolvedChannelId },
+    hostOptions,
+  )
+
+  if (!allowed) {
     const userMessage = `Insufficient permissions for app ${appid}. Required RBAC permission for this action: ${requiredPermissionKey}.`
     if (!silent)
       log.error(userMessage)

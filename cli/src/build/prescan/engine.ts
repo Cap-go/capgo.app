@@ -51,8 +51,8 @@ export async function runPrescan(ctx: ScanContext, checks: PrescanCheck[], optio
       })
     }
   }
-  const remoteSkipped = applicable.filter(c => c.remote && !ctx.supabase)
-  const runnable = applicable.filter(c => !(c.remote && !ctx.supabase))
+  const remoteSkipped = applicable.filter(c => c.remote && !ctx.apikey)
+  const runnable = applicable.filter(c => !(c.remote && !ctx.apikey))
 
   findings.push(...(await Promise.all(runnable.map(c => runIsolated(c, ctx, timeoutMs)))).flat())
 

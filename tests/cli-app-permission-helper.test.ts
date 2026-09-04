@@ -4,17 +4,19 @@ const hasCliPermissionMock = vi.hoisted(() => vi.fn())
 const invokeCapgoCliApiMock = vi.hoisted(() => vi.fn())
 const getCapgoCliHttpStatusMock = vi.hoisted(() => vi.fn())
 
-vi.mock('../cli/src/utils', () => ({
-  appAddHintMessage: (appId: string) => `App ${appId} does not exist, run first \`bunx @capgo/cli app add ${appId}\` to create it`,
-  getPMAndCommand: () => ({ runner: 'bunx' }),
-  hasCliPermission: hasCliPermissionMock,
-  invokeCapgoCliApi: invokeCapgoCliApiMock,
-  getCapgoCliHttpStatus: getCapgoCliHttpStatusMock,
-  isCapgoManagedSupabaseHost: () => false,
-  show2FADeniedError: vi.fn(() => {
-    throw new Error('2FA required')
-  }),
-}))
+vi.mock('../cli/src/utils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../cli/src/utils')>()
+  return {
+    ...actual,
+    getPMAndCommand: () => ({ runner: 'bunx' }),
+    hasCliPermissionViaHttp: hasCliPermissionMock,
+    invokeCapgoCliApi: invokeCapgoCliApiMock,
+    getCapgoCliHttpStatus: getCapgoCliHttpStatusMock,
+    show2FADeniedError: vi.fn(() => {
+      throw new Error('2FA required')
+    }),
+  }
+})
 
 const { checkAppExistsAndHasPermissionOrgErr } = await import('../cli/src/api/app')
 
@@ -22,6 +24,7 @@ function createSupabaseMock() {
   return {
     supabaseUrl: 'http://127.0.0.1:54321',
     supabaseKey: 'test-anon',
+    from: vi.fn(() => ({})),
     rpc: vi.fn(),
   }
 }
@@ -48,9 +51,12 @@ describe('CLI app permission helper', () => {
     )).resolves.toBe(true)
 
     expect(invokeCapgoCliApiMock).not.toHaveBeenCalled()
-    expect(hasCliPermissionMock).toHaveBeenCalledWith(supabase, 'test-key', 'channel.delete', {
+    expect(hasCliPermissionMock).toHaveBeenCalledWith('test-key', 'channel.delete', {
       appId: 'com.test.app',
       channelId: 123,
+    }, {
+      supaHost: 'http://127.0.0.1:54321',
+      supaAnon: 'test-anon',
     })
   })
 

@@ -583,20 +583,48 @@ export function applyAppflowInput(step: AppflowStep, progress: AppflowProgress, 
       return { ...base, androidDistGapfill: input.value === 'generate' ? 'generate' : 'skip' }
     case 'p8-upgrade-prompt':
       return { ...base, p8Upgrade: input.value === 'convert' ? 'convert' : 'skip' }
-    case 'p8-source-select':
-      return { ...base, p8Source: input.value === 'provide' ? 'provide' : 'generate' }
+    case 'p8-source-select': {
+      const p8Source = input.value === 'provide' ? 'provide' : 'generate'
+      // Starting the manual .p8 path must not reuse stale p8Path/key/issuer
+      // values from an earlier attempt (native iOS clears keyId on path change).
+      if (p8Source === 'provide') {
+        return {
+          ...base,
+          p8Source,
+          p8Path: undefined,
+          p8KeyId: undefined,
+          p8IssuerId: undefined,
+        }
+      }
+      return { ...base, p8Source }
+    }
     case 'input-p8-path': {
       // Store the path and auto-extract the ASC Key ID from an AuthKey_<id>.p8
       // filename (mirrors the native iOS provide path). A non-matching filename
       // leaves p8KeyId unset so the next step prompts for it.
       const p8Path = (input.text ?? input.value ?? '').trim()
+      if (!p8Path)
+        return base
       const extracted = extractKeyIdFromP8Path(p8Path)
-      return { ...base, p8Path, ...(extracted ? { p8KeyId: extracted } : {}) }
+      return {
+        ...base,
+        p8Path,
+        p8KeyId: extracted || undefined,
+        p8IssuerId: undefined,
+      }
     }
-    case 'input-p8-key-id':
-      return { ...base, p8KeyId: (input.text ?? input.value ?? '').trim() }
-    case 'input-p8-issuer-id':
-      return { ...base, p8IssuerId: (input.text ?? input.value ?? '').trim() }
+    case 'input-p8-key-id': {
+      const p8KeyId = (input.text ?? input.value ?? '').trim()
+      if (!p8KeyId)
+        return base
+      return { ...base, p8KeyId, p8IssuerId: undefined }
+    }
+    case 'input-p8-issuer-id': {
+      const p8IssuerId = (input.text ?? input.value ?? '').trim()
+      if (!p8IssuerId)
+        return base
+      return { ...base, p8IssuerId }
+    }
     case 'handoff-build':
       // On 'build', the Appflow API work is done — switch progress.appId from the
       // Appflow hex id to the Capgo app id (the Capacitor config appId) so the
