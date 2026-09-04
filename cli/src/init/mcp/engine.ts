@@ -4,6 +4,7 @@ import type { ChoiceOption, LiveUpdatePhase, NextStepResult, Platform } from './
 import type { LiveUpdateProgress } from './progress.js'
 import { LIVE_UPDATE_ROADMAP, LIVE_UPDATE_RULES, NEXT_STEP_TOOL } from './contract.js'
 import { explainForState } from './explanations.js'
+import { withMonorepoUploadRetryHint } from '../upload-recovery.js'
 import { initOnboardingSteps } from '../ui.js'
 import { clearSession, getSession, mergeSession } from './session-state.js'
 
@@ -475,7 +476,7 @@ async function runAutoEffect(deps: EngineDeps, facts: LiveUpdateFacts, state: st
         encrypt: progress?.encryptionEnabled,
       })
       if (!res.ok)
-        return { ok: false, error: res.error ?? 'Upload failed' }
+        return { ok: false, error: withMonorepoUploadRetryHint(res.error ?? 'Upload failed') }
       mergeProgress(deps, progress, { step_done: 10, appId })
       return { ok: true }
     }
