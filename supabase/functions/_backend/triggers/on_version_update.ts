@@ -68,6 +68,54 @@ function versionUpdateLogFields(
 
 type DeletedVersionAction = 'continue' | 'delete' | 'cleanup_manifest' | 'skip'
 
+async function unlinkChannelsFromDeletedVersion(
+  c: Context,
+  record: Database['public']['Tables']['app_versions']['Row'],
+) {
+  if (!record.app_id)
+    return
+
+  const { error } = await supabaseAdmin(c)
+    .from('channels')
+    .update({
+      version: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('app_id', record.app_id)
+    .eq('version', record.id)
+
+  if (error) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'error unlinking channels.version for deleted bundle',
+      error,
+      id: record.id,
+      app_id: record.app_id,
+    })
+    throw simpleError('cannot_unlink_deleted_channel_version', 'Cannot unlink channels from deleted bundle', { id: record.id }, error)
+  }
+
+  const { error: rolloutError } = await supabaseAdmin(c)
+    .from('channels')
+    .update({
+      rollout_version: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('app_id', record.app_id)
+    .eq('rollout_version', record.id)
+
+  if (rolloutError) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'error unlinking channels.rollout_version for deleted bundle',
+      error: rolloutError,
+      id: record.id,
+      app_id: record.app_id,
+    })
+    throw simpleError('cannot_unlink_deleted_channel_rollout_version', 'Cannot unlink channel rollout from deleted bundle', { id: record.id }, rolloutError)
+  }
+}
+
 function getDeletedVersionAction(
   record: Database['public']['Tables']['app_versions']['Row'],
   oldRecord?: Database['public']['Tables']['app_versions']['Row'] | null,
@@ -428,6 +476,8 @@ async function deleteManifest(c: Context, record: Database['public']['Tables']['
 export async function deleteIt(c: Context, record: Database['public']['Tables']['app_versions']['Row']) {
   cloudlog({ requestId: c.get('requestId'), message: 'Delete', r2_path: record.r2_path })
 
+  await unlinkChannelsFromDeletedVersion(c, record)
+
   if (record.r2_path) {
     try {
       await purgeFileReadCache(record.r2_path, record.checksum)
@@ -543,4 +593,5 @@ app.post('/', middlewareAPISecret, triggerValidator('app_versions', 'UPDATE'), a
 export const onVersionUpdateTestUtils = {
   getDeletedVersionAction,
   deleteManifest,
+  unlinkChannelsFromDeletedVersion,
 }

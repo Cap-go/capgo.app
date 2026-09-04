@@ -27,7 +27,7 @@ import { s3 } from './s3.ts'
 import { shouldQueuePluginNotifications } from './supabase_write_guard.ts'
 import { isUpdateEnumerationLimited, recordUpdateEnumerationMiss, updateEnumerationLimitedResponse } from './updateOracleGuard.ts'
 import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
-import { backgroundTask, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, fixSemver, isDeprecatedPluginVersion, isInternalVersionName } from './utils.ts'
+import { backgroundTask, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, fixSemver, isDeprecatedPluginVersion, isInternalVersionName, isVersionDeleted } from './utils.ts'
 
 const PLAN_LIMIT: Array<'mau' | 'bandwidth' | 'storage'> = ['mau', 'bandwidth']
 // Bound speculative channel prefetch wait so a hung second Hyperdrive client
@@ -576,6 +576,21 @@ export async function updateWithPG(
   // External URLs and old plugins cannot consume delta manifests — keep a zip.
   const serveZip = updatePackage !== 'delta' || !pluginSupportsManifest || Boolean(version.external_url)
   const serveDelta = updatePackage !== 'zip' && pluginSupportsManifest && !version.external_url
+
+  if (!isInternalVersionName(version.name) && isVersionDeleted(version)) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'Channel or override targets a soft-deleted bundle',
+      id: app_id,
+      versionId: version.id,
+      versionName: version.name,
+      channel: channelData.channels.name,
+      channelOverride: Boolean(channelOverride),
+    })
+    await sendStatsAndDevice(c, device, [{ action: 'deletedBundle', versionName: version.name }])
+    return updateError200(c, 'no_bundle', 'Cannot get bundle')
+  }
+
   // device.version = versionData ? versionData.id : version.id
 
   // App-level manifest_bundle_count gates whether we may load files later.

@@ -813,6 +813,8 @@ function getVersionSelect(
     min_update_version: sql<string | null>`${versionAlias.min_update_version}`.as(`${prefix}minUpdateVersion`),
     manifest_count: sql<number>`${versionAlias.manifest_count}`.as(`${prefix}manifest_count`),
     r2_path: sql`${versionAlias.r2_path}`.mapWith(versionAlias.r2_path).as(`${prefix}r2_path`),
+    deleted: sql<boolean>`COALESCE(${versionAlias.deleted}, false)`.as(`${prefix}deleted`),
+    deleted_at: sql<string | null>`${versionAlias.deleted_at}`.as(`${prefix}deleted_at`),
   }
 
   if (includeMetadata) {
@@ -869,6 +871,7 @@ function activeChannelVersionJoin(
   const conditions = [
     eq(channelVersionColumn, versionAlias.id),
     or(eq(versionAlias.deleted, false), eq(versionAlias.name, 'builtin')),
+    isNull(versionAlias.deleted_at),
   ]
 
   if (channelAppIdColumn)
