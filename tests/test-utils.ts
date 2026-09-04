@@ -445,19 +445,37 @@ async function signInAndBuildAuthHeaders(email: string, password: string): Promi
     },
   })
 
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  })
+  // AuthRetryableFetchError (status 0 / fetch failed) is a transient GoTrue
+  // miss under shard load, not a credential failure. Retry like fetchTestRequest.
+  let lastError: unknown = new Error('Unable to obtain JWT for tests')
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    })
+    if (!error && data.session?.access_token) {
+      return {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${data.session.access_token}`,
+      }
+    }
 
-  if (error || !data.session?.access_token) {
-    throw error ?? new Error('Unable to obtain JWT for tests')
+    lastError = error ?? new Error('Unable to obtain JWT for tests')
+    const retryable = Boolean(
+      error
+      && typeof error === 'object'
+      && ('name' in error)
+      && error.name === 'AuthRetryableFetchError',
+    )
+    if (!retryable)
+      throw lastError
+    if (attempt === 3)
+      break
+
+    await new Promise(resolve => setTimeout(resolve, 200 * attempt))
   }
 
-  return {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${data.session.access_token}`,
-  }
+  throw lastError
 }
 
 export async function getAuthHeaders(): Promise<Record<string, string>> {
@@ -563,14 +581,17 @@ export async function warmEdgeEndpoint(
   options: RequestInit = { method: 'POST', headers: { 'Content-Type': 'application/json', 'apisecret': API_SECRET }, body: '{}' },
 ): Promise<void> {
   const url = path.startsWith('http') ? path : getEndpointUrl(path)
+  let lastStatus = 0
   for (let attempt = 1; attempt <= 5; attempt++) {
     const response = await fetch(url, options)
     await response.text().catch(() => undefined)
+    lastStatus = response.status
     if (response.status !== 502 && response.status !== 503)
       return
     console.error(`[warmEdgeEndpoint] attempt=${attempt} status=${response.status} url=${url}`)
     await new Promise(resolve => setTimeout(resolve, 500 * attempt))
   }
+  throw new Error(`[warmEdgeEndpoint] isolate still returning ${lastStatus} after 5 attempts url=${url}`)
 }
 
 // Cache for prepared apps to avoid repeated seeding

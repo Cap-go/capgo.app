@@ -98,7 +98,7 @@ interface BuildNativeObserveResponseInput {
   releaseMarkers: NativeObserveReleaseMarker[]
 }
 
-const nativeObserveActions = [
+export const nativeObserveActions = [
   'app_crash',
   'app_crash_native',
   'app_anr',
@@ -118,6 +118,7 @@ const nativeObserveActions = [
   'webview_content_process_terminated',
   'webview_dom_content_loaded',
   'webview_page_loaded',
+  'app_nav',
   'os_version_changed',
   'native_app_version_changed',
 ] as const
@@ -941,7 +942,7 @@ async function readNativeObserveStatsCF(
   })
 }
 
-async function readNativeObserveStats(
+export async function readNativeObserveStats(
   c: Context<MiddlewareKeyVariables>,
   appId: string,
   days: NativeObservePeriodDays,

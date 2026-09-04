@@ -16,6 +16,10 @@ function isBareNullArg(arg: string): boolean {
 function skipSqlQuote(sql: string, quoteIndex: number): number {
   let i = quoteIndex + 1
   while (i < sql.length) {
+    if (sql[i] === '\\') {
+      i += 2
+      continue
+    }
     if (sql[i] === "'" && sql[i + 1] === "'") {
       i += 2
       continue
@@ -104,6 +108,26 @@ function ifCallHasBareNullArg(sql: string, openParenIndex: number): boolean {
   return false
 }
 
+function sqlHasBareCall(sql: string, call: RegExp): boolean {
+  let i = 0
+  while (i < sql.length) {
+    if (sql[i] === "'") {
+      i = skipSqlQuote(sql, i)
+      continue
+    }
+    const afterComment = skipSqlComment(sql, i)
+    if (afterComment !== i) {
+      i = afterComment
+      continue
+    }
+    const prev = i === 0 ? '' : sql[i - 1]
+    if (!/\w/.test(prev ?? '') && call.test(sql.slice(i)))
+      return true
+    i++
+  }
+  return false
+}
+
 function hasUntypedNullIfBranch(sql: string): boolean {
   const ifOpen = /^if\s*\(/i
   let i = 0
@@ -126,6 +150,10 @@ function hasUntypedNullIfBranch(sql: string): boolean {
     i++
   }
   return false
+}
+
+function hasConditionalAggIf(sql: string): boolean {
+  return sqlHasBareCall(sql, /^(?:avgIf|sumIf|countIf)\s*\(/i)
 }
 
 export const ANALYTICS_ENGINE_SQL_LINT_RULES: AnalyticsEngineSqlLintRule[] = [
@@ -173,6 +201,11 @@ export const ANALYTICS_ENGINE_SQL_LINT_RULES: AnalyticsEngineSqlLintRule[] = [
     id: 'no-if-untyped-null',
     test: hasUntypedNullIfBranch,
     message: 'Analytics Engine SQL IF() branches must share a type; untyped NULL cannot pair with Double or DateTime',
+  },
+  {
+    id: 'no-conditional-agg-if',
+    test: hasConditionalAggIf,
+    message: 'avgIf/sumIf/countIf expand to if(expr, NULL) which Analytics Engine rejects (Double/DateTime vs Null). Use if(cond, value, 0.0) or a typed DateTime sentinel instead.',
   },
 ]
 

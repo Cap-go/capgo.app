@@ -28,6 +28,7 @@ import type {
   GetStatsOptions,
   ListOrganizationsOptions,
   LoginOptions,
+  ObserveOptions,
   OrganizationInfo,
   ProbeOptions,
   RequestBuildOptions,
@@ -70,6 +71,7 @@ import { resolveCapacitorConfigTargetPath, withConfigWriteTarget } from './confi
 import { starAllRepositories as starAllRepositoriesInternal, starRepository } from './github'
 import { createKeyInternal, deleteOldPrivateKeyInternal, saveKeyInternal } from './key'
 import { loginInternal } from './login'
+import { fetchObserve } from './observe/api'
 import { addOrganizationInternal } from './organization/add'
 import { deleteOrganizationInternal } from './organization/delete'
 import { listOrganizationsInternal } from './organization/list'
@@ -1251,6 +1253,25 @@ export class CapgoSDK {
     }
   }
 
+  /**
+   * Query Capgo Observe (launch, issues, routes, device timelines).
+   * Start with view=summary; follow findings.next. Use --json / MCP for agents.
+   */
+  async observe(options: ObserveOptions): Promise<SDKResult<Record<string, unknown>>> {
+    try {
+      const data = await fetchObserve({
+        ...options,
+        apikey: options.apikey || this.apikey,
+        supaHost: options.supaHost || this.supaHost,
+        supaAnon: options.supaAnon || this.supaAnon,
+      })
+      return { success: true, data }
+    }
+    catch (error) {
+      return createErrorResult(error)
+    }
+  }
+
   // ==========================================================================
   // Miscellaneous Helpers
   // ==========================================================================
@@ -1577,6 +1598,19 @@ export async function getStats(options: GetStatsOptions): Promise<SDKResult<Devi
   return sdk.getStats(options)
 }
 
+/**
+ * Query Capgo Observe (functional API).
+ * Start with view=summary and follow findings.next. view=device is the session timeline.
+ */
+export async function getObserve(options: ObserveOptions): Promise<SDKResult<Record<string, unknown>>> {
+  const sdk = new CapgoSDK({
+    apikey: options.apikey,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
+  return sdk.observe(options)
+}
+
 export async function probeUpdates(options: ProbeOptions): Promise<SDKResult<ProbeInternalResult>> {
   const sdk = new CapgoSDK()
   return sdk.probe(options)
@@ -1633,6 +1667,7 @@ export type {
   GetStatsOptions,
   ListOrganizationsOptions,
   LoginOptions,
+  ObserveOptions,
   OrganizationInfo,
   ProbeOptions,
   RequestBuildOptions,

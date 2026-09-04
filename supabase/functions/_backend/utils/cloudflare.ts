@@ -1493,6 +1493,11 @@ export async function readStatsCF(c: Context, params: ReadStatsParams) {
     }
   }
 
+  let versionFilter = ''
+  if (params.version_name) {
+    versionFilter = `AND blob3 = '${escapeSqlString(params.version_name)}'`
+  }
+
   let searchFilter = ''
   if (params.search) {
     const searchLower = params.search.toLowerCase()
@@ -1525,7 +1530,7 @@ export async function readStatsCF(c: Context, params: ReadStatsParams) {
   timestamp as created_at
 FROM app_log
 WHERE
-  app_id = '${escapeSqlString(params.app_id)}' ${deviceFilter} ${actionsFilter} ${searchFilter} ${startFilter} ${endFilter}
+  app_id = '${escapeSqlString(params.app_id)}' ${deviceFilter} ${actionsFilter} ${versionFilter} ${searchFilter} ${startFilter} ${endFilter}
 GROUP BY app_id, created_at, action, device_id, version_name, metadata
 ${orderFilter}
 LIMIT ${limit}`
@@ -1670,6 +1675,8 @@ const PLATFORM_DELIVERY_END_ACTIONS_SQL = '\'download_complete\', \'download_zip
 const PLATFORM_DELIVERY_START_ACTIONS_SQL = '\'download_0\', \'download_zip_start\', \'download_manifest_start\''
 const PLATFORM_DELIVERY_MAX_MS = 7_200_000
 const PLATFORM_DELIVERY_TS_SENTINEL_SQL = 'toDateTime(\'2100-01-01 00:00:00\')'
+/** Typed Double so if() branches match. Bare 0 is Int and 422s against double1. */
+const PLATFORM_DELIVERY_DURATION_SENTINEL_SQL = '0.0'
 /** Keep each AE scan bounded; admin 90-day windows merge these chunks. */
 export const PLATFORM_DELIVERY_CF_CHUNK_DAYS = 7
 export const PLATFORM_DELIVERY_CF_CHUNK_CONCURRENCY = 4
@@ -1706,12 +1713,16 @@ function platformDeliveryDaySql(value: string): string {
 
 /**
  * Pair start/complete in AE instead of pulling 50k raw rows per day.
- * Prefer double1 (trackLogsCF copies metadata duration there). Untyped NULL in
- * IF() 422s (Double/DateTime vs Null), so duration uses avgIf and timestamps
- * use a typed DateTime sentinel that min() ignores when a real event exists.
+ * Prefer double1 (trackLogsCF copies metadata duration there).
+ *
+ * Analytics Engine if() requires both branches to share a type
+ * (https://developers.cloudflare.com/analytics/analytics-engine/sql-reference/conditional-functions/).
+ * avgIf/sumIf/countIf rewrite to if(cond, expr, NULL) and 422 with Double vs Null.
+ * Use max() + typed 0.0 so a real duration wins; 0 means fall back to
+ * first-start/first-complete. Timestamps use a typed DateTime sentinel.
  */
 function buildPlatformUpdateDeliveryDeliveriesSubquery(params: BuildPlatformUpdateDeliveryStatsCFQueryParams): string {
-  const metaDurationSql = `avgIf(double1, blob2 IN (${PLATFORM_DELIVERY_END_ACTIONS_SQL}) AND double1 > 0)`
+  const metaDurationSql = `max(if(blob2 IN (${PLATFORM_DELIVERY_END_ACTIONS_SQL}) AND double1 > 0, double1, ${PLATFORM_DELIVERY_DURATION_SENTINEL_SQL}))`
   const startTsSql = `min(if(blob2 IN (${PLATFORM_DELIVERY_START_ACTIONS_SQL}), timestamp, ${PLATFORM_DELIVERY_TS_SENTINEL_SQL}))`
   const endTsSql = `min(if(blob2 IN (${PLATFORM_DELIVERY_END_ACTIONS_SQL}), timestamp, ${PLATFORM_DELIVERY_TS_SENTINEL_SQL}))`
 

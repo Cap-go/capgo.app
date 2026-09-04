@@ -119,6 +119,7 @@ describe('[POST] /private/sso/check-domain', () => {
   it('should return has_sso=false for non-SSO domain', async () => {
     const response = await fetchTestRequest(getEndpointUrl('/private/sso/check-domain'), {
       method: 'POST',
+      retryUnsafe: true,
       headers: authHeaders,
       body: JSON.stringify({ email: 'user@no-sso-configured-domain.com' }),
     })
@@ -131,6 +132,7 @@ describe('[POST] /private/sso/check-domain', () => {
   it('should return 400 for invalid email', async () => {
     const response = await fetchTestRequest(getEndpointUrl('/private/sso/check-domain'), {
       method: 'POST',
+      retryUnsafe: true,
       headers: authHeaders,
       body: JSON.stringify({ email: 'not-a-valid-email' }),
     })
@@ -159,6 +161,7 @@ describe('[POST] /private/sso/check-domain', () => {
     try {
       const response = await fetchTestRequest(getEndpointUrl('/private/sso/check-domain'), {
         method: 'POST',
+        retryUnsafe: true,
         headers: authHeaders,
         body: JSON.stringify({ email: `user@${expectedDomain.toUpperCase()}` }),
       })
