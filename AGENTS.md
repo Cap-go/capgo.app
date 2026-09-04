@@ -295,6 +295,13 @@ Capgo relies on two layered caches for plugin endpoints (`/updates`, `/stats`, `
 
 **Implication:** Keep the `429` + error payloads for on-prem and plan-upgrade responses; otherwise the edge caches and status cache effectiveness are broken.
 
+### Files read cache (deleted bundle gate)
+
+`isAttachmentVersionDeleted` in `file_read_cache.ts` is the durable gate for deleted bundle
+`.zip` reads on `/files/read`. It must **fail open** on Postgres/Hyperdrive lookup errors
+(treat as not deleted) so transient DB blips do not 404 live bundles that still exist in R2
+or edge cache. Still return deleted when the DB row is deleted or a deleted marker is set.
+
 ### Key Frontend Directories
 
 - **`src/components/`** - Reusable Vue components
