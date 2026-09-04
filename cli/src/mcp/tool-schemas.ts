@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { buildCacheOptionSchema } from '../schemas/build'
 import { capacitorConfigOptionSchema, observeOptionsObjectSchema, refineObserveDeviceId } from '../schemas/sdk'
 
 export const mcpAddAppInputSchema = z.object({
@@ -143,7 +144,7 @@ export const mcpRequestBuildInputSchema = z.object({
   platform: z.enum(['ios', 'android']),
   path: z.string().optional(),
   nodeModules: z.string().optional(),
-  cache: z.boolean().optional().describe('When false, disables Xcode compilation cache for this build. Omit or true to use the default (cache enabled).'),
+  cache: buildCacheOptionSchema.describe('When false, disables compilation cache for this build. Omit or true to use the default (cache enabled).'),
 })
 
 export const mcpGenerateEncryptionKeysInputSchema = z.object({

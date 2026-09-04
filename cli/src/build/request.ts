@@ -1846,7 +1846,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     }
 
     if (options.cache === false) {
-      log.info('ℹ️  --no-cache specified, Xcode compilation cache disabled for this build')
+      log.info(`ℹ️  --no-cache specified, compilation cache disabled for this ${platform} build`)
     }
 
     log.info('✓ Using credentials (merged from CLI args, env vars, and saved file)')
