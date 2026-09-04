@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions, Plugin } from 'chart.js'
 import type { TooltipClickHandler } from '~/services/chartTooltip'
+import type { NativeActiveDevicesSummary, NativeDailyPlatformActive } from '~/services/nativeDeviceStats'
 import type { Organization } from '~/stores/organization'
 import { useDark } from '@vueuse/core'
 import { CategoryScale, Chart, Filler, LinearScale, LineElement, PointElement, Tooltip } from 'chart.js'
@@ -21,8 +22,6 @@ import {
   generateDemoNativeActiveSummary,
   getLatestNonZeroIndex,
   normalizeNativeActiveDevicesSummary,
-  type NativeActiveDevicesSummary,
-  type NativeDailyPlatformActive,
 } from '~/services/nativeDeviceStats'
 import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
@@ -676,7 +675,7 @@ async function loadThirtyDaySummary(forceRefetch = false) {
     && cachedThirtyDaySummaryData.value.range.startDate.getTime() === startDate.getTime()
     && cachedThirtyDaySummaryData.value.range.endDate.getTime() === endDate.getTime()
 
-  if (cacheIsValid && !forceRefetch) {
+  if (cacheIsValid && !forceRefetch && cachedThirtyDaySummaryData.value) {
     rawThirtyDayChartData.value = cachedThirtyDaySummaryData.value.data
     return
   }

@@ -68,23 +68,29 @@ const chartData = computed<ChartData<'line'> | null>(() => {
   }
 })
 
-const chartOptions = computed<ChartOptions<'line'>>(() => ({
-  maintainAspectRatio: false,
-  scales: createChartScales(isDark.value, {
-    yTickCallback: (tickValue: string | number) => {
-      const numericValue = typeof tickValue === 'number' ? tickValue : Number(tickValue)
-      return Number.isFinite(numericValue) ? formatNumberValue(numericValue) : tickValue
-    },
-  }),
-  plugins: {
+const chartOptions = computed<ChartOptions<'line'>>(() => {
+  const pluginOptions = {
     legend: {
       display: true,
-      position: 'bottom',
+      position: 'bottom' as const,
     },
     title: { display: false },
     tooltip: createTooltipConfig(true, false, false),
-  },
-}))
+  } as const
+
+  return {
+    maintainAspectRatio: false,
+    scales: createChartScales(isDark.value, {
+      yTickCallback: (tickValue: string | number) => {
+        const numericValue = typeof tickValue === 'number' ? tickValue : Number(tickValue)
+        if (!Number.isFinite(numericValue))
+          return String(tickValue)
+        return formatNumberValue(numericValue)
+      },
+    }),
+    plugins: pluginOptions as unknown as NonNullable<ChartOptions<'line'>['plugins']>,
+  }
+})
 </script>
 
 <template>
