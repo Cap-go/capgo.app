@@ -946,7 +946,8 @@ and/or to Capgo storage as a time-limited download link (--output-upload).
 
 Example: npx @capgo/cli@latest build request com.example.app --platform ios --path .
 Android AAB only (no Play upload): npx @capgo/cli@latest build request com.example.app --platform android --no-playstore-upload --output-upload
-iOS IPA only (no TestFlight upload): npx @capgo/cli@latest build request com.example.app --platform ios --ios-distribution ad_hoc --output-upload`)
+iOS IPA only (no TestFlight upload): npx @capgo/cli@latest build request com.example.app --platform ios --ios-distribution ad_hoc --output-upload
+Disable Xcode compilation cache: npx @capgo/cli@latest build request com.example.app --platform ios --no-cache`)
   .action(requestBuildCommand)
   .option('--path <path>', `Path to the project directory to build (default: current directory)`)
   .option('--node-modules <nodeModules>', optionDescriptions.nodeModules)
@@ -996,6 +997,7 @@ iOS IPA only (no TestFlight upload): npx @capgo/cli@latest build request com.exa
   .option('--sync-android-version', 'Android: sync versionName in android/app/build.gradle from package.json before uploading the project. Fails unless versionName is a standalone quoted string literal.')
   .option('--ai-analytics', 'On build failure, send logs to Capgo AI for diagnosis. In interactive terminals this skips the upfront confirmation; in CI this auto-uploads and prints the analysis to stderr.')
   .option('--no-prescan', 'Skip the automatic pre-build scan')
+  .option('--no-cache', 'Disable Xcode compilation cache for this build (default: cache enabled)')
   .option('--prescan-ignore-fatal', 'Run the pre-build scan but never block the build (report only)')
   .option('--prescan-skip <checkId>', 'Skip specific prescan check(s) by id (repeatable or comma-separated). Other checks still run.', collect, [])
   .option('--prescan-warn <checkId>', 'Downgrade specific prescan check(s) to warning by id (repeatable or comma-separated). Check still runs.', collect, [])

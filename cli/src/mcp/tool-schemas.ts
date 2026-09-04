@@ -143,6 +143,7 @@ export const mcpRequestBuildInputSchema = z.object({
   platform: z.enum(['ios', 'android']),
   path: z.string().optional(),
   nodeModules: z.string().optional(),
+  cache: z.boolean().optional().describe('When false, disables Xcode compilation cache for this build. Omit or true to use the default (cache enabled).'),
 })
 
 export const mcpGenerateEncryptionKeysInputSchema = z.object({
