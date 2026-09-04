@@ -1776,8 +1776,8 @@ async function promptForMonorepoRootUploadPaths(
   )
   const promptCwd = cwd()
   return {
-    packageJson: joinUniqueUploadPaths(currentPackageJson, resolveUploadPaths(packageJson, promptCwd)),
-    nodeModules: joinUniqueUploadPaths(currentNodeModules, resolveUploadPaths(nodeModules, promptCwd)),
+    packageJson: joinUniqueUploadPaths(resolveUploadPaths(packageJson, promptCwd), currentPackageJson),
+    nodeModules: joinUniqueUploadPaths(resolveUploadPaths(nodeModules, promptCwd), currentNodeModules),
   }
 }
 
