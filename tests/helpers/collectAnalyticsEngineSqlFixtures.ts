@@ -280,17 +280,6 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
             'download_zip_start',
             'download_manifest_start',
           ],
-          require_duration: false,
-          limit: 50_000,
-        }),
-      },
-      {
-        name: 'buildUpdateDeliveryTimingEventsCFQuery.requireDuration',
-        query: buildUpdateDeliveryTimingEventsCFQuery({
-          start_date: SAMPLE_START,
-          end_date: SAMPLE_END,
-          actions: ['download_complete', 'download_zip_complete'],
-          require_duration: true,
           limit: 50_000,
         }),
       },

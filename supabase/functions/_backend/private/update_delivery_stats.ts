@@ -641,7 +641,6 @@ async function readUpdateDeliverySamplesCF(
       end_date: chunk.end.toISOString(),
       actions: [...timingActions],
       app_ids: params.appIds,
-      require_duration: false,
     })
     if (events.length >= MAX_ANALYTICS_QUERY_LIMIT) {
       cloudlog({

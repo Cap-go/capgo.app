@@ -1576,11 +1576,6 @@ export interface ReadUpdateDeliveryTimingEventsCFParams {
   /** When set, restrict to these version names (blob3). */
   version_names?: string[]
   limit?: number
-  /**
-   * When true, keep the AE row budget on timed completes only.
-   * App/org/platform pairing leaves this false so start events stay available.
-   */
-  require_duration?: boolean
 }
 
 export function buildUpdateDeliveryTimingEventsCFQuery(params: ReadUpdateDeliveryTimingEventsCFParams): string {
@@ -1600,10 +1595,6 @@ export function buildUpdateDeliveryTimingEventsCFQuery(params: ReadUpdateDeliver
           : `AND blob3 IN (${params.version_names.map(name => `'${escapeSqlString(name)}'`).join(', ')})`
       )
     : ''
-  // Prefer double1 (written by trackLogsCF) and keep blob4 duration for older rows.
-  const durationFilter = params.require_duration
-    ? `AND (double1 > 0 OR position('duration' IN blob4) > 0)`
-    : ''
 
   return `SELECT
   index1 AS app_id,
@@ -1620,7 +1611,6 @@ WHERE
   AND blob2 IN (${actionsList})
   ${appFilter}
   ${versionFilter}
-  ${durationFilter}
 ORDER BY created_at ASC
 LIMIT ${limit}`
 }

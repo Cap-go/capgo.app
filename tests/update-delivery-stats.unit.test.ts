@@ -36,7 +36,6 @@ describe('update delivery stats helpers', () => {
         'download_zip_start',
         'download_manifest_start',
       ],
-      require_duration: false,
       limit: 50_000,
     })
 
@@ -63,7 +62,6 @@ describe('update delivery stats helpers', () => {
         'download_zip_start',
         'download_manifest_start',
       ],
-      require_duration: false,
       limit: 50_000,
     })
     const result = await validateAnalyticsEngineSqlLive(
@@ -165,7 +163,6 @@ describe('update delivery stats helpers', () => {
       end_date: '2026-07-02T00:00:00.000Z',
       actions: ['download_complete', 'download_0'],
       app_ids: ['com.demo.app'],
-      require_duration: false,
       limit: 10,
     })
 
