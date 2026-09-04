@@ -6,8 +6,8 @@ import { toast } from 'vue-sonner'
 import { authGhostButtonClass, authPrimaryButtonClass, authSecondaryButtonClass } from '~/components/auth/pageStyles'
 import { useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
-import { validateRedirectPath } from '~/utils/safeRedirect'
 import { useMainStore } from '~/stores/main'
+import { validateRedirectPath } from '~/utils/safeRedirect'
 
 const { t } = useI18n()
 const route = useRoute()

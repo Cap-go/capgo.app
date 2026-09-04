@@ -14,8 +14,8 @@ import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
-import { validateRedirectPath } from '~/utils/safeRedirect'
 import { clearPendingInviteSkip, rememberPendingInviteSkip } from '~/utils/pendingInviteSkip'
+import { validateRedirectPath } from '~/utils/safeRedirect'
 
 const route = useRoute()
 const router = useRouter()
