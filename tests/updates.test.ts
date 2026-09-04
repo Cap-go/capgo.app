@@ -318,6 +318,10 @@ describe('[POST] /updates', () => {
   })
 
   it('ignores deleted device override bundles and falls back to the normal channel selection', async () => {
+    const supabase = getSupabaseClient()
+    const versionName = `1.0.${Math.floor(Math.random() * 100000) + 1000}`
+    const channelName = `deleted-override-${randomUUID().slice(0, 8)}`
+    const deviceId = randomUUID().toLowerCase()
 
     const version = await createAppVersions(versionName, APP_NAME_UPDATE, {
       external_url: `https://example.com/${channelName}.zip`,

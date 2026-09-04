@@ -587,7 +587,7 @@ export async function updateWithPG(
       channel: channelData.channels.name,
       channelOverride: Boolean(channelOverride),
     })
-    await sendStatsAndDevice(c, device, [{ action: 'deletedBundle', versionName: version.name }])
+    await sendStatsAndDevice(c, device, [{ action: 'missingBundle', versionName: version.name }])
     return updateError200(c, 'no_bundle', 'Cannot get bundle')
   }
 
