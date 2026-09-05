@@ -16,8 +16,35 @@ export const CONSOLE_PAGES: WebMcpConsolePage[] = [
   'account_settings',
 ]
 
+const GLOBAL_PAGE_PATHS: Partial<Record<WebMcpConsolePage, string>> = {
+  dashboard: '/dashboard',
+  apps: '/apps',
+  org_settings: '/settings/organization',
+  account_settings: '/settings/account',
+}
+
+const APP_PAGE_SUFFIXES: Partial<Record<WebMcpConsolePage, string>> = {
+  app_overview: '',
+  app_bundles: '/bundles',
+  app_channels: '/channels',
+  app_devices: '/devices',
+  app_settings: '/settings',
+  app_observe_updater: '/observe/updater',
+  app_observe_logs: '/observe/logs',
+}
+
 function appPathSegment(appId: string): string {
   return encodeURIComponent(appId)
+}
+
+function appBasePath(appId: string): string {
+  return `/app/${appPathSegment(appId)}`
+}
+
+function requireAppId(appId: string | undefined, page: WebMcpConsolePage): string {
+  if (!appId)
+    throw new Error(`appId is required for ${page}`)
+  return appId
 }
 
 export function buildConsoleNavigatePath(
@@ -28,52 +55,27 @@ export function buildConsoleNavigatePath(
     channelId?: number
   } = {},
 ): string {
-  switch (page) {
-    case 'dashboard':
-      return '/dashboard'
-    case 'apps':
-      return '/apps'
-    case 'org_settings':
-      return '/settings/organization'
-    case 'account_settings':
-      return '/settings/account'
-    case 'app_overview':
-      if (!options.appId)
-        throw new Error('appId is required for app_overview')
-      return `/app/${appPathSegment(options.appId)}`
-    case 'app_bundles':
-      if (!options.appId)
-        throw new Error('appId is required for app_bundles')
-      return `/app/${appPathSegment(options.appId)}/bundles`
-    case 'app_channels':
-      if (!options.appId)
-        throw new Error('appId is required for app_channels')
-      return `/app/${appPathSegment(options.appId)}/channels`
-    case 'app_devices':
-      if (!options.appId)
-        throw new Error('appId is required for app_devices')
-      return `/app/${appPathSegment(options.appId)}/devices`
-    case 'app_settings':
-      if (!options.appId)
-        throw new Error('appId is required for app_settings')
-      return `/app/${appPathSegment(options.appId)}/settings`
-    case 'app_observe_updater':
-      if (!options.appId)
-        throw new Error('appId is required for app_observe_updater')
-      return `/app/${appPathSegment(options.appId)}/observe/updater`
-    case 'app_observe_logs':
-      if (!options.appId)
-        throw new Error('appId is required for app_observe_logs')
-      return `/app/${appPathSegment(options.appId)}/observe/logs`
-    case 'app_bundle_detail':
-      if (!options.appId || options.bundleId == null)
-        throw new Error('appId and bundleId are required for app_bundle_detail')
-      return `/app/${appPathSegment(options.appId)}/bundle/${options.bundleId}`
-    case 'app_channel_detail':
-      if (!options.appId || options.channelId == null)
-        throw new Error('appId and channelId are required for app_channel_detail')
-      return `/app/${appPathSegment(options.appId)}/channel/${options.channelId}`
-    default:
-      throw new Error(`Unsupported console page: ${String(page)}`)
+  const globalPath = GLOBAL_PAGE_PATHS[page]
+  if (globalPath)
+    return globalPath
+
+  const appSuffix = APP_PAGE_SUFFIXES[page]
+  if (appSuffix != null)
+    return `${appBasePath(requireAppId(options.appId, page))}${appSuffix}`
+
+  if (page === 'app_bundle_detail') {
+    const appId = requireAppId(options.appId, page)
+    if (options.bundleId == null)
+      throw new Error('appId and bundleId are required for app_bundle_detail')
+    return `${appBasePath(appId)}/bundle/${options.bundleId}`
   }
+
+  if (page === 'app_channel_detail') {
+    const appId = requireAppId(options.appId, page)
+    if (options.channelId == null)
+      throw new Error('appId and channelId are required for app_channel_detail')
+    return `${appBasePath(appId)}/channel/${options.channelId}`
+  }
+
+  throw new Error(`Unsupported console page: ${String(page)}`)
 }
