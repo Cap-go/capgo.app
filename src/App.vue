@@ -8,6 +8,8 @@ const SupportUsernamesPrompt = defineAsyncComponent(() => import('~/components/d
 const route = useRoute()
 const display = useDisplayStore()
 
+useWebMcp()
+
 watch(
   () => route.path,
   (path) => {
