@@ -15,12 +15,22 @@ vi.mock('../supabase/functions/_backend/utils/ab_tests.ts', () => ({
   getOrCreateUserABTests: getOrCreateUserABTestsMock,
 }))
 
-vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', () => ({
-  middlewareAuth: () => async (c: { set: (key: string, value: unknown) => void }, next: () => Promise<void>) => {
-    c.set('auth', authState.value)
-    await next()
-  },
-}))
+vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/hono_middleware.ts')>()
+  return {
+    ...actual,
+    middlewareAuth: () => {
+      const realAuth = actual.middlewareAuth()
+      return async (c: Parameters<typeof realAuth>[0], next: () => Promise<void>) => {
+        if (!authState.value?.userId)
+          return realAuth(c, next)
+
+        c.set('auth', authState.value)
+        await next()
+      }
+    },
+  }
+})
 
 describe('onboarding A/B test endpoint', () => {
   beforeEach(() => {
@@ -54,6 +64,7 @@ describe('onboarding A/B test endpoint', () => {
     const response = await app.request('http://local/', { method: 'POST' })
 
     expect(response.status).toBe(401)
+    await expect(response.text()).resolves.toContain('No JWT, apikey or subkey provided')
     expect(getOrCreateUserABTestsMock).not.toHaveBeenCalled()
   })
 })

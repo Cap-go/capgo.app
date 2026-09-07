@@ -488,7 +488,9 @@ describe('app onboarding progress analytics integration', () => {
   })
 
   it.concurrent('loads stable backend flags and applies the A and C onboarding treatments', () => {
+    const workerSource = readFileSync(new NodeUrl('../cloudflare_workers/api/index.ts', import.meta.url), 'utf8')
     expect(onboardingSource).toContain(`invokeCapgoApi<OnboardingABTestsResponse>('private/onboarding_ab_tests'`)
+    expect(workerSource).toContain("appPrivate.route('/onboarding_ab_tests', onboarding_ab_tests)")
     expect(onboardingSource).toContain('const ONBOARDING_AB_TEST_WAIT_TIMEOUT_MS = 3_000')
     expect(onboardingSource).toContain('void refreshOnboardingABTests()')
     expect(onboardingSource).toContain('await waitForOnboardingABTests()')

@@ -433,6 +433,7 @@ describe('onboarding progress analytics', () => {
     now = 1_125.9
     tracker.completeStep('intent', {
       appName: 'Acme App',
+      developmentEnvironment: 'skipped',
       intent: 'ota',
       nextStep: 'details',
     })
@@ -447,6 +448,7 @@ describe('onboarding progress analytics', () => {
       duration_ms: 125,
       flow: 'pre_org',
       app_name: 'Acme App',
+      development_environment: 'skipped',
       intent: 'ota',
       next_step: 'details',
       onboarding_attempt_id: ATTEMPT_A1,
@@ -468,6 +470,32 @@ describe('onboarding progress analytics', () => {
       step_index: 1,
       total_steps: 4,
     })
+  })
+
+  it.concurrent('serializes hosted_builder development_environment on step completion', () => {
+    const capture = vi.fn()
+    const tracker = createOnboardingProgressTracker({
+      ...trackerIdentity,
+      capture,
+      flow: 'pre_org',
+      resumed: false,
+      steps,
+      supaHost: 'https://supabase.capgo.test',
+    })
+
+    tracker.viewStep('intent')
+    tracker.completeStep('intent', {
+      developmentEnvironment: 'hosted_builder',
+      intent: 'publish',
+      nextStep: 'details',
+    })
+
+    expect(capture.mock.calls[1]?.[2]).toEqual(expect.objectContaining({
+      development_environment: 'hosted_builder',
+      intent: 'publish',
+      next_step: 'details',
+      step: 'intent',
+    }))
   })
 
   it.concurrent('associates app-details interaction events with the active onboarding attempt', () => {
