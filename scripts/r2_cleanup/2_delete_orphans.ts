@@ -7,7 +7,14 @@
  */
 
 import { CopyObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
-import { getR2TrashKey, resolveR2CleanupDeleteMode, R2_TRASH_PREFIX } from './delete_mode.ts'
+import {
+  ConcurrencyLimiter,
+  encodeS3CopySource,
+  getR2TrashKey,
+  isLiveR2Key,
+  resolveR2CleanupDeleteMode,
+  R2_TRASH_PREFIX,
+} from './delete_mode.ts'
 
 // Load environment from prod file
 const envFile = await Bun.file('./internal/cloudflare/.env.prod').text()
@@ -37,9 +44,15 @@ const s3 = new S3Client({
   forcePathStyle: true,
 })
 
+const limiter = new ConcurrencyLimiter(CONCURRENCY)
+
 let totalProcessed = 0
 let totalErrors = 0
 let totalToProcess = 0
+
+function filterLiveKeys(keys: string[]): string[] {
+  return keys.filter(isLiveR2Key)
+}
 
 async function countPrefix(prefix: string): Promise<number> {
   let continuationToken: string | undefined
@@ -55,7 +68,7 @@ async function countPrefix(prefix: string): Promise<number> {
 
     if (response.Contents) {
       for (const obj of response.Contents) {
-        if (obj.Key && !obj.Key.startsWith(R2_TRASH_PREFIX))
+        if (obj.Key && isLiveR2Key(obj.Key))
           count += 1
       }
     }
@@ -69,22 +82,36 @@ async function countPrefix(prefix: string): Promise<number> {
 }
 
 async function processKey(key: string): Promise<void> {
-  if (key.startsWith(R2_TRASH_PREFIX))
-    return
+  return limiter.run(async () => {
+    if (!isLiveR2Key(key))
+      return
 
-  if (deleteMode === 'dry_run') {
-    totalProcessed += 1
-    return
-  }
+    if (deleteMode === 'dry_run') {
+      totalProcessed += 1
+      return
+    }
 
-  if (deleteMode === 'trash') {
-    const trashKey = getR2TrashKey(key)
+    if (deleteMode === 'trash') {
+      const trashKey = getR2TrashKey(key)
+      try {
+        await s3.send(new CopyObjectCommand({
+          Bucket: S3_BUCKET,
+          CopySource: encodeS3CopySource(S3_BUCKET, key),
+          Key: trashKey,
+        }))
+        await s3.send(new DeleteObjectCommand({
+          Bucket: S3_BUCKET,
+          Key: key,
+        }))
+        totalProcessed += 1
+      }
+      catch {
+        totalErrors += 1
+      }
+      return
+    }
+
     try {
-      await s3.send(new CopyObjectCommand({
-        Bucket: S3_BUCKET,
-        CopySource: `${S3_BUCKET}/${key}`,
-        Key: trashKey,
-      }))
       await s3.send(new DeleteObjectCommand({
         Bucket: S3_BUCKET,
         Key: key,
@@ -94,24 +121,12 @@ async function processKey(key: string): Promise<void> {
     catch {
       totalErrors += 1
     }
-    return
-  }
-
-  try {
-    await s3.send(new DeleteObjectCommand({
-      Bucket: S3_BUCKET,
-      Key: key,
-    }))
-    totalProcessed += 1
-  }
-  catch {
-    totalErrors += 1
-  }
+  })
 }
 
-async function streamProcessPrefix(prefix: string): Promise<void> {
+async function collectPrefixKeys(prefix: string): Promise<string[]> {
+  const keys: string[] = []
   let continuationToken: string | undefined
-  let batch: string[] = []
 
   while (true) {
     const response = await s3.send(new ListObjectsV2Command({
@@ -123,14 +138,9 @@ async function streamProcessPrefix(prefix: string): Promise<void> {
 
     if (response.Contents) {
       for (const obj of response.Contents) {
-        if (obj.Key)
-          batch.push(obj.Key)
+        if (obj.Key && isLiveR2Key(obj.Key))
+          keys.push(obj.Key)
       }
-    }
-
-    while (batch.length >= CONCURRENCY) {
-      const toProcess = batch.splice(0, CONCURRENCY)
-      await Promise.all(toProcess.map(processKey))
     }
 
     if (!response.IsTruncated)
@@ -138,30 +148,33 @@ async function streamProcessPrefix(prefix: string): Promise<void> {
     continuationToken = response.NextContinuationToken
   }
 
-  if (batch.length > 0)
-    await Promise.all(batch.map(processKey))
+  return keys
 }
 
 async function processFiles(keys: string[]): Promise<void> {
-  for (let i = 0; i < keys.length; i += CONCURRENCY) {
-    const batch = keys.slice(i, i + CONCURRENCY)
-    await Promise.all(batch.map(processKey))
-  }
+  const liveKeys = filterLiveKeys(keys)
+  await Promise.all(liveKeys.map(processKey))
 }
 
 async function permanentDeleteBatch(keys: string[]): Promise<void> {
-  if (deleteMode !== 'permanent' || keys.length === 0)
+  if (deleteMode !== 'permanent')
+    return
+
+  const liveKeys = filterLiveKeys(keys)
+  if (liveKeys.length === 0)
     return
 
   try {
-    await s3.send(new DeleteObjectsCommand({
+    const response = await s3.send(new DeleteObjectsCommand({
       Bucket: S3_BUCKET,
-      Delete: { Objects: keys.map(k => ({ Key: k })), Quiet: true },
+      Delete: { Objects: liveKeys.map(k => ({ Key: k })), Quiet: true },
     }))
-    totalProcessed += keys.length
+    const batchErrors = response.Errors ?? []
+    totalErrors += batchErrors.length
+    totalProcessed += liveKeys.length - batchErrors.length
   }
   catch {
-    totalErrors += keys.length
+    totalErrors += liveKeys.length
   }
 }
 
@@ -183,7 +196,7 @@ async function main() {
   const data = await inputFile.json()
   const allPaths = data.orphanedPaths as { path: string, type: string }[]
 
-  const files = allPaths.filter(p => p.path.endsWith('.zip')).map(p => p.path)
+  const files = filterLiveKeys(allPaths.filter(p => p.path.endsWith('.zip')).map(p => p.path))
   const folders = allPaths.filter(p => !p.path.endsWith('.zip')).map(p => p.path)
 
   console.log(`Files to process: ${files.length}`)
@@ -219,10 +232,8 @@ async function main() {
       const batches: string[][] = []
       for (let i = 0; i < files.length; i += 999)
         batches.push(files.slice(i, i + 999))
-      for (let i = 0; i < batches.length; i += CONCURRENCY) {
-        const batchGroup = batches.slice(i, i + CONCURRENCY)
-        await Promise.all(batchGroup.map(batch => permanentDeleteBatch(batch)))
-      }
+      for (const batch of batches)
+        await permanentDeleteBatch(batch)
     }
     else {
       await processFiles(files)
@@ -231,10 +242,19 @@ async function main() {
 
   if (folders.length > 0) {
     console.log(`\nProcessing ${folders.length} folders...`)
-    for (let i = 0; i < folders.length; i += CONCURRENCY) {
-      const batch = folders.slice(i, i + CONCURRENCY)
-      await Promise.all(batch.map(f => streamProcessPrefix(f)))
-      process.stdout.write(`\r  Progress: ${Math.min(i + CONCURRENCY, folders.length)}/${folders.length} folders | ${totalProcessed} objects processed`)
+    for (let i = 0; i < folders.length; i++) {
+      const folderKeys = await collectPrefixKeys(folders[i]!)
+      if (deleteMode === 'permanent') {
+        const batches: string[][] = []
+        for (let j = 0; j < folderKeys.length; j += 999)
+          batches.push(folderKeys.slice(j, j + 999))
+        for (const batch of batches)
+          await permanentDeleteBatch(batch)
+      }
+      else {
+        await processFiles(folderKeys)
+      }
+      process.stdout.write(`\r  Progress: ${i + 1}/${folders.length} folders | ${totalProcessed} objects processed`)
     }
   }
 

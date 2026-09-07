@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const R2_TRASH_PREFIX = 'deleted-after-7-days/'
 
 const mocks = vi.hoisted(() => {
-  const copyObject = vi.fn(async () => {})
-  const deleteObject = vi.fn(async () => {})
+  const copyObject = vi.fn<(source: { sourceKey: string }, destination: string) => Promise<void>>(async () => {})
+  const deleteObject = vi.fn<(key: string) => Promise<void>>(async () => {})
   const listObjects = vi.fn<() => AsyncGenerator<{ key: string }>>()
 
   class S3Client {
@@ -59,6 +59,8 @@ describe('moveObjectsWithPrefixToTrash', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.unstubAllGlobals()
+    copyObject.mockImplementation(async () => {})
+    deleteObject.mockImplementation(async () => {})
   })
 
   it('moves listed objects into deleted-after-7-days and deletes the source keys', async () => {
@@ -168,11 +170,15 @@ describe('moveObjectsWithPrefixToTrash', () => {
 
     let inFlight = 0
     let maxInFlight = 0
-    copyObject.mockImplementation(async () => {
+    copyObject.mockImplementation(async (source: { sourceKey: string }, destination: string) => {
+      expect(destination).toBe(`${R2_TRASH_PREFIX}${source.sourceKey}`)
       inFlight += 1
       maxInFlight = Math.max(maxInFlight, inFlight)
       await new Promise(resolve => setTimeout(resolve, 5))
       inFlight -= 1
+    })
+    deleteObject.mockImplementation(async (key: string) => {
+      expect(keys).toContain(key)
     })
 
     const c = await makeContext()
@@ -181,6 +187,12 @@ describe('moveObjectsWithPrefixToTrash', () => {
     expect(movedCount).toBe(25)
     expect(maxInFlight).toBeLessThanOrEqual(10)
     expect(maxInFlight).toBeGreaterThan(1)
+    expect(copyObject).toHaveBeenCalledTimes(25)
+    expect(deleteObject).toHaveBeenCalledTimes(25)
+    for (const key of keys) {
+      expect(copyObject).toHaveBeenCalledWith({ sourceKey: key }, `${R2_TRASH_PREFIX}${key}`)
+      expect(deleteObject).toHaveBeenCalledWith(key)
+    }
   })
 })
 
@@ -188,6 +200,8 @@ describe('deleteObjectsWithPrefix', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.unstubAllGlobals()
+    copyObject.mockImplementation(async () => {})
+    deleteObject.mockImplementation(async () => {})
   })
 
   it('is blocked unless ALLOW_PERMANENT_R2_DELETE=true', async () => {
@@ -206,13 +220,11 @@ describe('deleteObjectsWithPrefix', () => {
       yield { key }
     })
 
-    vi.stubEnv('ALLOW_PERMANENT_R2_DELETE', 'true')
-    const c = await makeContext()
+    const c = await makeContext({ ALLOW_PERMANENT_R2_DELETE: 'true' })
     const deletedCount = await s3.deleteObjectsWithPrefix(c, 'orgs/org-1/apps/com.test.app/')
 
     expect(deletedCount).toBe(1)
     expect(deleteObject).toHaveBeenCalledWith(key)
     expect(copyObject).not.toHaveBeenCalled()
-    vi.unstubAllEnvs()
   })
 })
