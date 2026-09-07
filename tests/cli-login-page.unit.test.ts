@@ -14,7 +14,10 @@ const clipboardWrite = vi.hoisted(() => vi.fn())
 const cliLoginMocks = vi.hoisted(() => ({
   createCliLoginKeyDependencies: vi.fn(() => ({})),
   getCliLoginDestination: vi.fn(() => '/dashboard'),
-  isCliAiQuery: vi.fn((value: unknown) => String(value ?? '').replace(/\/+$/, '') === '1'),
+  isCliAiQuery: vi.fn((value: unknown) => {
+    const raw = Array.isArray(value) ? value[0] : value
+    return typeof raw === 'string' && raw.replace(/\/+$/, '') === '1'
+  }),
   isMatchingCliLoginEvent: vi.fn(() => false),
   isValidCliLoginSession: vi.fn(() => true),
   prepareCliLoginKey: vi.fn(),
