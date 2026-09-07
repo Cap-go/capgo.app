@@ -168,13 +168,11 @@ describe('moveObjectsWithPrefixToTrash', () => {
 
     let inFlight = 0
     let maxInFlight = 0
-    const originalCopy = copyObject.getMockImplementation()
-    copyObject.mockImplementation(async (...args: unknown[]) => {
+    copyObject.mockImplementation(async () => {
       inFlight += 1
       maxInFlight = Math.max(maxInFlight, inFlight)
       await new Promise(resolve => setTimeout(resolve, 5))
       inFlight -= 1
-      return originalCopy?.(...args)
     })
 
     const c = await makeContext()
