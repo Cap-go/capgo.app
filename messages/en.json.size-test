@@ -1,0 +1,5 @@
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "2fa": "Manage 2FA",
+  "test-key": "test-value"
+}
