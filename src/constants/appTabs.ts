@@ -15,6 +15,6 @@ export const appTabs: Tab[] = [
   { label: 'bundles', icon: IconCube, key: '/bundles' },
   { label: 'channels', icon: IconChannel, key: '/channels' },
   { label: 'devices', icon: IconDevice, key: '/devices' },
-  { label: 'notifications', icon: IconBell, key: '/notifications', badge: 'beta' },
+  { label: 'notifications', icon: IconBell, key: '/notifications' },
   { label: 'builds', icon: IconBuild, key: '/builds' },
 ]

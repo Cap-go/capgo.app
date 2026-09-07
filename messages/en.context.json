@@ -2065,7 +2065,6 @@
   "notification-active-providers": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "notification-api-sends": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "notification-audience-json": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "notification-beta-description": "Used in Capgo web console areas: pages/app. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "notification-body": "Used in Capgo web console. Role: short UI label about \"notification body\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "notification-broadcast-queued": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "notification-broadcasts": "Used in Capgo web console areas: pages/app. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

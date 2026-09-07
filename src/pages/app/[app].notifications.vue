@@ -650,15 +650,9 @@ watch(activeNotificationTab, () => {
           <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-lg md:rounded-lg dark:bg-gray-800 border-slate-300 dark:border-slate-900">
             <div class="flex flex-col gap-4 px-4 py-4 border-b sm:flex-row sm:items-center sm:justify-between border-slate-200 dark:border-slate-700">
               <div class="min-w-0">
-                <div class="flex flex-wrap items-center gap-2">
-                  <h1 class="text-lg font-semibold leading-6 text-gray-900 dark:text-gray-100">
-                    {{ t('notification-title') }}
-                  </h1>
-                  <span class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t('beta') }}</span>
-                </div>
-                <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                  {{ t('notification-beta-description') }}
-                </p>
+                <h1 class="text-lg font-semibold leading-6 text-gray-900 dark:text-gray-100">
+                  {{ t('notification-title') }}
+                </h1>
               </div>
               <button type="button" class="self-start d-btn d-btn-sm d-btn-outline sm:self-auto" :disabled="isLoading" @click="() => refreshData()">
                 <span v-if="isLoading" class="d-loading d-loading-spinner d-loading-xs" />

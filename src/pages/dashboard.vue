@@ -32,7 +32,7 @@ const { currentOrganization } = storeToRefs(organizationStore)
 const dashboardTabs = computed<Tab[]>(() => [
   { label: 'dashboard-tab-usage', icon: IconChart, key: 'usage' },
   { label: 'update-delivery-latency', icon: IconTimer, key: 'delivery', badge: 'beta' },
-  { label: 'notifications', icon: IconBell, key: 'notifications', badge: 'beta' },
+  { label: 'notifications', icon: IconBell, key: 'notifications' },
 ])
 
 const lacksSecurityAccess = computed(() => {

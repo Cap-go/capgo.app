@@ -168,7 +168,6 @@ watch(
           <h2 class="text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
             {{ t('org-notification-stats-title') }}
           </h2>
-          <span class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t('beta') }}</span>
           <span
             v-if="forceDemo"
             class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-slate-300 bg-slate-100 text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
