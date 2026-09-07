@@ -27,7 +27,7 @@ describe('app onboarding API key loading state', () => {
     )
     const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
     const resumeLoadIndex = mountedFlow.indexOf('const resumed = await loadResumeApp()')
-    const apiKeyProvisioningIndex = mountedFlow.indexOf('void loadApiKey().catch')
+    const apiKeyProvisioningIndex = mountedFlow.indexOf('startApiKeyLoading()')
 
     expect(resumeLoader).not.toContain('ensureApiKey')
     expect(resumeLoadIndex).toBeGreaterThanOrEqual(0)
@@ -45,6 +45,21 @@ describe('app onboarding API key loading state', () => {
     expect(keyLoader).toContain('const userId = main.user?.id ?? main.auth?.id')
     expect(keyLoader).toContain('const appId = createdApp.value?.app_id')
     expect(keyLoader).not.toContain('resumeAppId.value')
+  })
+
+  it.concurrent('retries API key loading from both CLI entry points', () => {
+    const showCommand = onboardingSource.slice(
+      onboardingSource.indexOf('function showCliCommand()'),
+      onboardingSource.indexOf('async function reportOnboardingPatch('),
+    )
+    const installNavigation = onboardingSource.slice(
+      onboardingSource.indexOf('function goToInstallStep()'),
+      onboardingSource.indexOf('async function openDashboard()'),
+    )
+
+    expect(showCommand).toContain('startApiKeyLoading()')
+    expect(installNavigation).toContain('startApiKeyLoading()')
+    expect(onboardingSource).toContain('@click="showCliCommand"')
   })
 
   it.concurrent('renders ready commands as native DaisyUI buttons', () => {

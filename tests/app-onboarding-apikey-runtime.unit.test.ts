@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createApp } from 'vue'
+import { createApp, nextTick } from 'vue'
 import AppOnboardingFlow from '../src/components/dashboard/AppOnboardingFlow.vue'
 
 const runtimeMocks = vi.hoisted(() => {
@@ -120,12 +120,47 @@ async function mountFlow(query: Record<string, string> = {}) {
   return mounted
 }
 
+function element<T extends Element>(container: Element, selector: string) {
+  const value = container.querySelector<T>(selector)
+  if (!value)
+    throw new Error(`Missing onboarding element: ${selector}`)
+  return value
+}
+
+async function click(container: Element, selector: string) {
+  element<HTMLButtonElement>(container, selector).click()
+  await nextTick()
+}
+
+async function reachIconStep(container: Element) {
+  await vi.waitFor(() => expect(container.querySelector('[data-test="app-onboarding-name"]')).not.toBeNull())
+  await click(container, '[data-test="app-onboarding-existing-no"]')
+
+  const nameInput = element<HTMLInputElement>(container, '[data-test="app-onboarding-name"]')
+  nameInput.value = 'Runtime onboarding app'
+  nameInput.dispatchEvent(new Event('input', { bubbles: true }))
+  await nextTick()
+
+  await click(container, '[data-test="app-onboarding-continue"]')
+  await vi.waitFor(() => expect(container.querySelector('[data-test="app-onboarding-skip-app-id"]')).not.toBeNull())
+  await click(container, '[data-test="app-onboarding-skip-app-id"]')
+  await vi.waitFor(() => expect(container.textContent).toContain('app-onboarding-command-show'))
+}
+
+function buttonWithText(container: Element, text: string) {
+  const button = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+    .find(candidate => candidate.textContent?.includes(text))
+  if (!button)
+    throw new Error(`Missing onboarding button with text: ${text}`)
+  return button
+}
+
 beforeEach(() => {
   runtimeMocks.query = {}
   runtimeMocks.createApp.mockClear()
-  runtimeMocks.createDefaultApiKey.mockClear()
+  runtimeMocks.createDefaultApiKey.mockReset()
   runtimeMocks.createDefaultApiKey.mockResolvedValue({ data: { key: 'runtime-created-api-key' }, error: null })
-  runtimeMocks.findUsablePlainApiKey.mockClear()
+  runtimeMocks.findUsablePlainApiKey.mockReset()
   runtimeMocks.findUsablePlainApiKey.mockResolvedValue('runtime-api-key')
   runtimeMocks.main.awaitInitialLoad.mockClear()
   runtimeMocks.main.user = { id: runtimeMocks.main.auth.id, onboarding: {} }
@@ -172,6 +207,51 @@ describe('app onboarding API key runtime loading', () => {
       runtimeMocks.organizationStore.currentOrganization.gid,
       undefined,
     )
+  })
+
+  it('retries a settled failed load when the CLI command is revealed', async () => {
+    const loadError = new Error('transient API-key failure')
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    runtimeMocks.findUsablePlainApiKey
+      .mockRejectedValueOnce(loadError)
+      .mockResolvedValueOnce('runtime-retried-api-key')
+
+    try {
+      const { container } = await mountFlow()
+      await vi.waitFor(() => expect(consoleError).toHaveBeenCalledWith('Cannot ensure API key', loadError))
+      await reachIconStep(container)
+
+      buttonWithText(container, 'app-onboarding-command-show').click()
+
+      await vi.waitFor(() => expect(runtimeMocks.findUsablePlainApiKey).toHaveBeenCalledTimes(2))
+    }
+    finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('retries a settled failed load when entering the install step', async () => {
+    const loadError = new Error('transient API-key failure')
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    runtimeMocks.findUsablePlainApiKey
+      .mockRejectedValueOnce(loadError)
+      .mockResolvedValueOnce('runtime-retried-api-key')
+
+    try {
+      const { container } = await mountFlow()
+      await vi.waitFor(() => expect(consoleError).toHaveBeenCalledWith('Cannot ensure API key', loadError))
+      await reachIconStep(container)
+      await click(container, '[data-test="app-onboarding-continue"]')
+      await vi.waitFor(() => expect(runtimeMocks.createApp).toHaveBeenCalledTimes(1))
+      await vi.waitFor(() => expect(container.textContent).toContain('app-onboarding-choice-real-title'))
+
+      buttonWithText(container, 'app-onboarding-choice-real-title').click()
+
+      await vi.waitFor(() => expect(runtimeMocks.findUsablePlainApiKey).toHaveBeenCalledTimes(2))
+    }
+    finally {
+      consoleError.mockRestore()
+    }
   })
 
   it('shares an in-flight key load across concurrent onboarding component instances', async () => {
