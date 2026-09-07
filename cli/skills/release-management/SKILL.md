@@ -67,6 +67,7 @@ Use this skill for OTA update workflows in Capgo Cloud.
   - `--auto-min-update-version`
   - `--ignore-metadata-check`
   - `--fail-on-incompatible` (fail the upload instead of uploading when the bundle is incompatible with a target channel's current native packages; cannot be combined with `--ignore-metadata-check`)
+  - `--fail-on-active-rollout` (fail the upload when a target channel has an active progressive rollout and this upload would link the bundle as stable without `--rollout` or `--rollout-advance`; use in CI to block accidental rollout resets)
   - `--ignore-checksum-check`
   - `--force-crc32-checksum`
   - `--timeout <timeout>`

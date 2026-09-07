@@ -86,6 +86,10 @@ npx @capgo/cli@latest bundle upload com.example.app \
 Add `--fail-on-incompatible` when CI must stop instead of uploading a bundle that
 cannot safely update the current native build.
 
+Add `--fail-on-active-rollout` when CI must stop instead of linking a bundle as
+stable on a channel that still has an active progressive rollout (without
+`--rollout` or `--rollout-advance`).
+
 ## Documentation
 
 The most complete [documentation is here](https://capgo.app/docs/).
@@ -420,6 +424,7 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **--auto-min-update-version** | <code>boolean</code> | Set the min update version based on native packages |
 | **--ignore-metadata-check** | <code>boolean</code> | Ignores the metadata (node_modules) check when uploading |
 | **--fail-on-incompatible** | <code>boolean</code> | Fail the upload (exit non-zero) instead of uploading when the bundle is incompatible with the channel's current native packages. In an interactive terminal you can still choose a native build; declining fails. Cannot be combined with --ignore-metadata-check. |
+| **--fail-on-active-rollout** | <code>boolean</code> | Fail the upload (exit non-zero) when a target channel has an active progressive rollout and this upload would link the bundle as stable (without --rollout or --rollout-advance). Use in CI to block accidental rollout resets. |
 | **--ignore-checksum-check** | <code>boolean</code> | Ignores the checksum check when uploading |
 | **--force-crc32-checksum** | <code>boolean</code> | Force CRC32 checksum for upload (override auto-detection) |
 | **--timeout** | <code>string</code> | Timeout for the upload process in seconds |
