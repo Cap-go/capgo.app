@@ -19345,6 +19345,41 @@ COMMENT ON FUNCTION "public"."try_complete_pending_onboarding_if_setup_done"("p_
 
 
 
+CREATE OR REPLACE FUNCTION "public"."unlink_channels_from_deleted_version"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  IF NOT (
+    (NEW.deleted IS TRUE AND OLD.deleted IS NOT TRUE)
+    OR (NEW.deleted_at IS NOT NULL AND OLD.deleted_at IS DISTINCT FROM NEW.deleted_at)
+  ) THEN
+    RETURN NEW;
+  END IF;
+
+  -- Same bypass internal cleanup uses (soft_delete_versions_for_long_canceled_orgs).
+  PERFORM pg_catalog.set_config('capgo.seed_channel_targets', 'true', true);
+
+  UPDATE public.channels AS c
+  SET
+    version = CASE WHEN c.version = NEW.id THEN NULL ELSE c.version END,
+    rollout_version = CASE WHEN c.rollout_version = NEW.id THEN NULL ELSE c.rollout_version END,
+    updated_at = pg_catalog.now()
+  WHERE c.app_id = NEW.app_id
+    AND (c.version = NEW.id OR c.rollout_version = NEW.id);
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."unlink_channels_from_deleted_version"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."unlink_channels_from_deleted_version"() IS 'Clears channels.version and channels.rollout_version when a bundle is soft-deleted.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."update_app_versions_retention"() RETURNS "void"
     LANGUAGE "plpgsql"
     SET "search_path" TO ''
@@ -24468,6 +24503,10 @@ CREATE OR REPLACE TRIGGER "trg_sync_org_has_usage_credits" AFTER INSERT OR DELET
 
 
 
+CREATE OR REPLACE TRIGGER "unlink_channels_from_deleted_version" AFTER UPDATE OF "deleted", "deleted_at" ON "public"."app_versions" FOR EACH ROW EXECUTE FUNCTION "public"."unlink_channels_from_deleted_version"();
+
+
+
 CREATE OR REPLACE TRIGGER "update_apps_build_timeout_updated_at" BEFORE INSERT OR UPDATE ON "public"."apps" FOR EACH ROW EXECUTE FUNCTION "public"."update_apps_build_timeout_updated_at"();
 
 
@@ -28861,6 +28900,11 @@ GRANT ALL ON FUNCTION "public"."try_complete_pending_onboarding"("p_app_id" char
 
 REVOKE ALL ON FUNCTION "public"."try_complete_pending_onboarding_if_setup_done"("p_app_id" character varying) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."try_complete_pending_onboarding_if_setup_done"("p_app_id" character varying) TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."unlink_channels_from_deleted_version"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."unlink_channels_from_deleted_version"() TO "service_role";
 
 
 
