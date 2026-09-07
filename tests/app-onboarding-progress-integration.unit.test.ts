@@ -554,7 +554,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(englishMessages['organization-onboarding-development-environment-skip']).toBe('Skip')
     expect(englishMessages['organization-onboarding-webnative-title']).toBe('WebNativeApp may be a better fit')
     expect(englishMessages['organization-onboarding-webnative-description']).toContain('WebNativeApp can package it for iOS and Android')
-    expect(englishMessages['organization-onboarding-webnative-check-website']).toBe('Check my website')
+    expect(englishMessages['organization-onboarding-webnative-check-website']).toBe('Check WebNativeApp')
     expect(englishMessages['organization-onboarding-webnative-continue-capgo']).toBe('Continue with Capgo')
   })
 
