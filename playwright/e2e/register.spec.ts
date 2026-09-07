@@ -18,10 +18,12 @@ async function continuePastWelcome(page: Page) {
   await continueButton.click()
 }
 
-async function revealIntentOptions(page: Page) {
-  const localProjectOption = page.locator('[data-test="onboarding-development-environment-local_project"]')
-  if (await localProjectOption.isVisible())
-    await localProjectOption.click()
+async function continuePastDevelopmentEnvironmentIfShown(page: Page) {
+  const assistantOption = page.locator('[data-test="onboarding-development-environment-ai_assistant"]')
+  if (await assistantOption.isVisible()) {
+    await assistantOption.click()
+    await page.click('[data-test="app-onboarding-continue-development-environment"]')
+  }
 }
 
 async function forceWebNativeOnboardingTreatments(email: string, password: string) {
@@ -125,9 +127,9 @@ test.describe('Registration', () => {
 
     await page.waitForURL(/\/onboarding\/app/)
     await continuePastWelcome(page)
-    await revealIntentOptions(page)
     await page.click('[data-test="onboarding-intent-ota"]')
     await page.click('[data-test="app-onboarding-continue-intent"]')
+    await continuePastDevelopmentEnvironmentIfShown(page)
 
     await expect(page.locator('[data-test="app-onboarding-existing-yes"]')).toHaveCount(0)
     await expect(page.locator('[data-test="app-onboarding-existing-no"]')).toHaveCount(0)
@@ -176,9 +178,9 @@ test.describe('Registration', () => {
 
     await page.waitForURL(/\/onboarding\/app/)
     await continuePastWelcome(page)
-    await revealIntentOptions(page)
     await page.click('[data-test="onboarding-intent-ota"]')
     await page.click('[data-test="app-onboarding-continue-intent"]')
+    await continuePastDevelopmentEnvironmentIfShown(page)
     await page.fill('[data-test="app-onboarding-name"]', appName)
     await continueFromAppNameToIcon(page)
     await Promise.all([
@@ -205,7 +207,6 @@ test.describe('Registration', () => {
     await expect(page.locator('[data-test="onboarding-resume-restart"]')).toBeVisible()
     await page.locator('[data-test="onboarding-resume-restart"]').click()
     await continuePastWelcome(page)
-    await revealIntentOptions(page)
     await expect(page.locator('[data-test="onboarding-intent-ota"]')).toBeVisible()
     await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveCount(0)
   })
@@ -230,12 +231,17 @@ test.describe('Registration', () => {
     await expect(page.locator('[data-test="onboarding-resume-continue"]')).toBeVisible()
     await page.locator('[data-test="onboarding-resume-continue"]').click()
 
-    await expect(page.locator('[data-test="onboarding-development-environment-hosted_builder"]')).toBeVisible()
-    await expect(page.locator('[data-test="onboarding-intent-publish"]')).toHaveCount(0)
-    await page.click('[data-test="onboarding-development-environment-hosted_builder"]')
     await expect(page.locator('[data-test="onboarding-intent-publish"]')).toBeVisible()
+    await expect(page.locator('[data-test="onboarding-development-environment-hosted_builder"]')).toHaveCount(0)
     await page.click('[data-test="onboarding-intent-publish"]')
     await page.click('[data-test="app-onboarding-continue-intent"]')
+    await expect(page.locator('[data-test="onboarding-development-environment-hosted_builder"]')).toBeVisible()
+    await expect(page.locator('[data-test="onboarding-intent-publish"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="app-onboarding-skip-development-environment"]')).toBeVisible()
+    await expect(page.locator('[data-test="app-onboarding-continue-development-environment"]')).toHaveCount(0)
+    await page.click('[data-test="onboarding-development-environment-hosted_builder"]')
+    await expect(page.locator('[data-test="app-onboarding-continue-development-environment"]')).toBeVisible()
+    await page.click('[data-test="app-onboarding-continue-development-environment"]')
     await page.fill('[data-test="app-onboarding-name"]', appName)
     await continueFromAppNameToOrganization(page)
 

@@ -9,6 +9,8 @@ import { getEnv, trimTrailingSlashes } from './utils.ts'
 
 export const ORG_ONBOARDING_INTENTS = ['unknown', 'ota', 'builder', 'both', 'exploring', 'publish'] as const
 export type OrgOnboardingIntent = typeof ORG_ONBOARDING_INTENTS[number]
+export const ORG_ONBOARDING_DEVELOPMENT_ENVIRONMENTS = ['hosted_builder', 'ai_assistant', 'hand_coded', 'other', 'local_project', 'exploring', 'skipped'] as const
+export type OrgOnboardingDevelopmentEnvironment = typeof ORG_ONBOARDING_DEVELOPMENT_ENVIRONMENTS[number]
 
 export function parseOrgOnboardingIntent(onboarding: unknown): OrgOnboardingIntent {
   if (!onboarding || typeof onboarding !== 'object' || !('intent' in onboarding))
@@ -19,6 +21,17 @@ export function parseOrgOnboardingIntent(onboarding: unknown): OrgOnboardingInte
     return intent as OrgOnboardingIntent
 
   return 'unknown'
+}
+
+export function parseOrgOnboardingDevelopmentEnvironment(onboarding: unknown): OrgOnboardingDevelopmentEnvironment {
+  if (!onboarding || typeof onboarding !== 'object' || !('development_environment' in onboarding))
+    return 'skipped'
+
+  const developmentEnvironment = (onboarding as { development_environment?: unknown }).development_environment
+  if (typeof developmentEnvironment === 'string' && (ORG_ONBOARDING_DEVELOPMENT_ENVIRONMENTS as readonly string[]).includes(developmentEnvironment))
+    return developmentEnvironment as OrgOnboardingDevelopmentEnvironment
+
+  return 'skipped'
 }
 
 export function buildOnboardingIntentBentoTags(intent: OrgOnboardingIntent): { segments: string[], deleteSegments: string[] } {

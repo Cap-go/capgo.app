@@ -79,6 +79,8 @@ const estimatedUsersIndex = ref<number | null>(null)
 // Org-level onboarding intent: what the user wants to do with Capgo first.
 // Persisted on the new org (orgs.onboarding jsonb, keyed by `intent`) by the
 // function, and mirrored to PostHog for segmentation. Asked once per org.
+// `development_environment` is also stored on orgs.onboarding. This extra-org
+// flow does not ask that question, so it is persisted as `skipped`.
 const selectedIntent = ref<string | null>(null)
 const intentOptions = [
   { value: 'ota', icon: IconRefresh },
@@ -426,6 +428,7 @@ async function createOrganization() {
         estimatedMau: selectedUserCountStop.value.value,
         website: normalizedWebsite,
         intent: selectedIntent.value,
+        developmentEnvironment: 'skipped',
       },
     })
 
@@ -783,12 +786,12 @@ onUnmounted(() => {
                 v-for="option in intentOptions"
                 :key="option.value"
                 type="button"
-                class="group flex min-h-20 items-start gap-3 rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
+                class="group flex min-h-20 items-center gap-3 rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
                 :class="whiteCardToggleButtonClass(selectedIntent === option.value)"
                 :data-test="`onboarding-intent-${option.value}`"
                 @click="selectedIntent = option.value"
               >
-                <span class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500/10 text-primary-500 dark:bg-primary-500/20">
+                <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500/10 text-primary-500 dark:bg-primary-500/20">
                   <component :is="option.icon" class="h-5 w-5" />
                 </span>
                 <span class="min-w-0">
@@ -829,7 +832,7 @@ onUnmounted(() => {
                 <button
                   v-if="appDraft"
                   type="button"
-                  class="group flex min-h-24 items-start gap-3 rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
+                  class="group flex min-h-24 items-center gap-3 rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
                   :class="whiteCardToggleButtonClass(mode === 'app-name')"
                   data-test="onboarding-mode-app-name"
                   @click="mode = 'app-name'"
@@ -847,7 +850,7 @@ onUnmounted(() => {
                 </button>
                 <button
                   type="button"
-                  class="group flex min-h-24 items-start gap-3 rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
+                  class="group flex min-h-24 items-center gap-3 rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
                   :class="whiteCardToggleButtonClass(mode === 'website')"
                   data-test="onboarding-mode-website"
                   @click="mode = 'website'"
@@ -865,7 +868,7 @@ onUnmounted(() => {
                 </button>
                 <button
                   type="button"
-                  class="group flex min-h-24 items-start gap-3 rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
+                  class="group flex min-h-24 items-center gap-3 rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
                   :class="whiteCardToggleButtonClass(mode === 'name')"
                   data-test="onboarding-mode-name"
                   @click="mode = 'name'"

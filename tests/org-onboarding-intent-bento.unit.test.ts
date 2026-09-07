@@ -33,6 +33,7 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
 import {
   buildOnboardingIntentBentoEventData,
   buildOnboardingIntentBentoTags,
+  parseOrgOnboardingDevelopmentEnvironment,
   parseOrgOnboardingIntent,
   syncOrgOnboardingIntentBentoTags,
   syncOrgOnboardingIntentForOrg,
@@ -57,6 +58,24 @@ describe('parseOrgOnboardingIntent', () => {
     expect(parseOrgOnboardingIntent({ intent: 'both' })).toBe('both')
     expect(parseOrgOnboardingIntent({ intent: 'exploring' })).toBe('exploring')
     expect(parseOrgOnboardingIntent({ intent: 'publish' })).toBe('publish')
+  })
+})
+
+describe('parseOrgOnboardingDevelopmentEnvironment', () => {
+  it.concurrent('returns skipped when the question was not asked or stored', () => {
+    expect(parseOrgOnboardingDevelopmentEnvironment(null)).toBe('skipped')
+    expect(parseOrgOnboardingDevelopmentEnvironment({})).toBe('skipped')
+    expect(parseOrgOnboardingDevelopmentEnvironment({ development_environment: 'invalid' })).toBe('skipped')
+    expect(parseOrgOnboardingDevelopmentEnvironment({ development_environment: 'skipped' })).toBe('skipped')
+  })
+
+  it.concurrent('returns the stored development environment when valid', () => {
+    expect(parseOrgOnboardingDevelopmentEnvironment({ development_environment: 'hosted_builder' })).toBe('hosted_builder')
+    expect(parseOrgOnboardingDevelopmentEnvironment({ development_environment: 'ai_assistant' })).toBe('ai_assistant')
+    expect(parseOrgOnboardingDevelopmentEnvironment({ development_environment: 'hand_coded' })).toBe('hand_coded')
+    expect(parseOrgOnboardingDevelopmentEnvironment({ development_environment: 'other' })).toBe('other')
+    expect(parseOrgOnboardingDevelopmentEnvironment({ development_environment: 'local_project' })).toBe('local_project')
+    expect(parseOrgOnboardingDevelopmentEnvironment({ development_environment: 'exploring' })).toBe('exploring')
   })
 })
 

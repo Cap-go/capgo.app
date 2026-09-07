@@ -11,9 +11,16 @@ ADD CONSTRAINT "orgs_onboarding_valid" CHECK (
       = ANY (ARRAY['unknown'::"text", 'ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text", 'publish'::"text"])
     )
   )
+  AND (
+    (NOT ("onboarding" ? 'development_environment'::"text"))
+    OR (
+      ("jsonb_typeof"(("onboarding" -> 'development_environment'::"text")) = 'string'::"text")
+      AND (("onboarding" ->> 'development_environment'::"text") = ANY (ARRAY['hosted_builder'::"text", 'ai_assistant'::"text", 'hand_coded'::"text", 'other'::"text", 'local_project'::"text", 'exploring'::"text", 'skipped'::"text"]))
+    )
+  )
 );
 
-COMMENT ON COLUMN "public"."orgs"."onboarding" IS 'Onboarding answers (extensible JSONB). Currently: {"intent": unknown|ota|builder|both|exploring|publish}. Used for segmentation and to tailor the org experience.';
+COMMENT ON COLUMN "public"."orgs"."onboarding" IS 'Onboarding answers (extensible JSONB). Currently: {"intent": unknown|ota|builder|both|exploring|publish, "starting_out": boolean, "development_environment": hosted_builder|ai_assistant|hand_coded|other|local_project|exploring|skipped}. Used for segmentation and to tailor the org experience.';
 
 ALTER TABLE "public"."users"
 DROP CONSTRAINT "users_onboarding_valid";
@@ -33,7 +40,7 @@ ADD CONSTRAINT "users_onboarding_valid" CHECK (
     (NOT ("onboarding" ? 'step'::"text"))
     OR (
       ("jsonb_typeof"(("onboarding" -> 'step'::"text")) = 'string'::"text")
-      AND (("onboarding" ->> 'step'::"text") = ANY (ARRAY['intent'::"text", 'details'::"text", 'organization'::"text", 'choice'::"text", 'install'::"text", 'setup'::"text"]))
+      AND (("onboarding" ->> 'step'::"text") = ANY (ARRAY['intent'::"text", 'publish_app_question'::"text", 'details'::"text", 'organization'::"text", 'choice'::"text", 'install'::"text", 'setup'::"text"]))
     )
   )
   AND (
@@ -47,7 +54,7 @@ ADD CONSTRAINT "users_onboarding_valid" CHECK (
     (NOT ("onboarding" ? 'development_environment'::"text"))
     OR (
       ("jsonb_typeof"(("onboarding" -> 'development_environment'::"text")) = 'string'::"text")
-      AND (("onboarding" ->> 'development_environment'::"text") = ANY (ARRAY['hosted_builder'::"text", 'local_project'::"text", 'exploring'::"text"]))
+      AND (("onboarding" ->> 'development_environment'::"text") = ANY (ARRAY['hosted_builder'::"text", 'ai_assistant'::"text", 'hand_coded'::"text", 'other'::"text", 'local_project'::"text", 'exploring'::"text", 'skipped'::"text"]))
     )
   )
   AND (

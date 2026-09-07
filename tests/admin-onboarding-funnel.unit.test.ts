@@ -298,6 +298,7 @@ describe('admin onboarding wizard drop-off', () => {
     ])).toEqual([
       { step: 'not_started', count: 1 },
       { step: 'intent', count: 0 },
+      { step: 'publish_app_question', count: 0 },
       { step: 'details', count: 7 },
       { step: 'organization', count: 0 },
       { step: 'choice', count: 0 },

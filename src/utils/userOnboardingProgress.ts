@@ -5,9 +5,9 @@ import type {
 } from '~/utils/onboardingProgressAnalytics'
 
 export const USER_ONBOARDING_STATUSES = ['in_progress', 'completed', 'abandoned'] as const
-export const USER_ONBOARDING_STEPS = ['intent', 'details', 'organization', 'choice', 'install', 'setup'] as const
+export const USER_ONBOARDING_STEPS = ['intent', 'publish_app_question', 'details', 'organization', 'choice', 'install', 'setup'] as const
 export const USER_ONBOARDING_FLOWS = ['pre_org', 'existing_org'] as const
-export const USER_ONBOARDING_DEVELOPMENT_ENVIRONMENTS = ['hosted_builder', 'local_project', 'exploring'] as const satisfies readonly OnboardingDevelopmentEnvironment[]
+export const USER_ONBOARDING_DEVELOPMENT_ENVIRONMENTS = ['hosted_builder', 'ai_assistant', 'hand_coded', 'other', 'local_project', 'exploring', 'skipped'] as const satisfies readonly OnboardingDevelopmentEnvironment[]
 export const USER_ONBOARDING_INTENTS = ['ota', 'builder', 'both', 'exploring', 'publish'] as const
 export const USER_ONBOARDING_DETAILS_STEPS = ['name', 'app_id', 'icon'] as const
 
@@ -21,6 +21,7 @@ export interface UserOnboardingProgress {
   flow: OnboardingAnalyticsFlow
   development_environment?: OnboardingDevelopmentEnvironment
   intent?: OnboardingIntent
+  publish_app_question?: true
   details_step?: UserOnboardingDetailsStep
   app_name?: string
   app_id?: string
@@ -51,6 +52,7 @@ export const USER_ONBOARDING_PROGRESS_FIELDS = {
   last_run_id: true,
   onboarding_attempt_id: true,
   org_name: true,
+  publish_app_question: true,
   status: true,
   step: true,
   store_url: true,
@@ -63,6 +65,7 @@ export interface UserOnboardingProgressInput {
   flow: OnboardingAnalyticsFlow
   developmentEnvironment?: OnboardingDevelopmentEnvironment | null
   intent?: OnboardingIntent | null
+  publishAppQuestion?: boolean
   detailsStep?: UserOnboardingDetailsStep
   appName?: string
   appId?: string
@@ -149,6 +152,9 @@ function applyOptionalUserOnboardingFields(
 
   if (isOneOf(raw.intent, USER_ONBOARDING_INTENTS))
     progress.intent = raw.intent
+
+  if (raw.publish_app_question === true)
+    progress.publish_app_question = true
 
   if (isOneOf(raw.details_step, USER_ONBOARDING_DETAILS_STEPS))
     progress.details_step = raw.details_step
@@ -237,6 +243,9 @@ export function buildUserOnboardingProgress(input: UserOnboardingProgressInput):
   if (input.intent)
     progress.intent = input.intent
 
+  if (input.publishAppQuestion || input.step === 'publish_app_question')
+    progress.publish_app_question = true
+
   if (input.detailsStep)
     progress.details_step = input.detailsStep
 
@@ -290,6 +299,35 @@ export function clampResumableOnboardingStep(
   return step
 }
 
+export function resumableOnboardingFlowStep(
+  progress: UserOnboardingProgress,
+  flow: OnboardingAnalyticsFlow,
+): UserOnboardingStep {
+  const step = clampResumableOnboardingStep(progress.step, flow)
+  if (progress.publish_app_question === true && (step === 'intent' || step === 'publish_app_question'))
+    return 'publish_app_question'
+  return step
+}
+
+export function fallbackUsersOnboardingProgressForLegacyConstraint(
+  progress: UserOnboardingProgress,
+): UserOnboardingProgress {
+  if (progress.step !== 'publish_app_question')
+    return progress
+  return {
+    ...progress,
+    step: 'intent',
+    publish_app_question: true,
+  }
+}
+
+export function isUsersOnboardingCheckConstraintError(error: { code?: string, message?: string } | null | undefined): boolean {
+  if (!error)
+    return false
+  return error.code === '23514'
+    || (typeof error.message === 'string' && error.message.includes('users_onboarding_valid'))
+}
+
 export function shouldPromptOnboardingResume(
   progress: UserOnboardingProgress | null,
   flow: OnboardingAnalyticsFlow,
@@ -303,6 +341,7 @@ export function shouldPromptOnboardingResume(
 
   return Boolean(
     progress.intent
+    || progress.publish_app_question
     || (progress.details_step !== undefined && progress.details_step !== 'name')
     || progress.app_name
     || progress.existing_app === true

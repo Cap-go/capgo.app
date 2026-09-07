@@ -33,7 +33,7 @@ describe('WebNative onboarding schema constraints', () => {
       `UPDATE public.users
        SET onboarding = jsonb_build_object(
          'status', 'in_progress',
-         'step', 'intent',
+         'step', 'publish_app_question',
          'flow', 'pre_org',
          'development_environment', 'hosted_builder',
          'intent', 'publish'
@@ -54,6 +54,18 @@ describe('WebNative onboarding schema constraints', () => {
       [orgId, `WebNative schema ${orgId}`, email, userId],
     )
     expect(orgs[0]?.onboarding).toEqual({ intent: 'publish' })
+
+    const orgsWithEnvironment = await executeSQL<{ onboarding: Record<string, unknown> }>(
+      `UPDATE public.orgs
+       SET onboarding = jsonb_build_object('intent', 'publish', 'development_environment', 'skipped')
+       WHERE id = $1
+       RETURNING onboarding`,
+      [orgId],
+    )
+    expect(orgsWithEnvironment[0]?.onboarding).toEqual({
+      intent: 'publish',
+      development_environment: 'skipped',
+    })
   })
 
   it('rejects unsupported onboarding values', async () => {
@@ -62,6 +74,13 @@ describe('WebNative onboarding schema constraints', () => {
        SET onboarding = jsonb_build_object('development_environment', 'unsupported')
        WHERE id = $1`,
       [userId],
+    )).rejects.toMatchObject({ code: '23514' })
+
+    await expect(executeSQL(
+      `UPDATE public.orgs
+       SET onboarding = jsonb_build_object('development_environment', 'unsupported')
+       WHERE id = $1`,
+      [orgId],
     )).rejects.toMatchObject({ code: '23514' })
 
     await expect(executeSQL(
