@@ -160,6 +160,20 @@ describe('app onboarding API key runtime loading', () => {
     expect(runtimeMocks.createDefaultApiKey).not.toHaveBeenCalled()
   })
 
+  it('uses the authenticated user ID while the public profile is still loading', async () => {
+    runtimeMocks.main.user = null
+
+    await mountFlow()
+
+    await vi.waitFor(() => expect(runtimeMocks.findUsablePlainApiKey).toHaveBeenCalledTimes(1))
+    expect(runtimeMocks.findUsablePlainApiKey).toHaveBeenCalledWith(
+      expect.anything(),
+      runtimeMocks.main.auth.id,
+      runtimeMocks.organizationStore.currentOrganization.gid,
+      undefined,
+    )
+  })
+
   it('shares an in-flight key load across concurrent onboarding component instances', async () => {
     let finishLookup: ((key: string | null) => void) | undefined
     runtimeMocks.findUsablePlainApiKey.mockImplementation(() => new Promise((resolve) => {

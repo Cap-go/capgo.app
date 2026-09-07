@@ -892,7 +892,7 @@ function loadApiKey() {
   if (apiKey.value)
     return Promise.resolve()
 
-  const userId = main.user?.id
+  const userId = main.user?.id ?? main.auth?.id
   if (!userId)
     return Promise.resolve()
 

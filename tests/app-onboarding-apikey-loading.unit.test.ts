@@ -42,7 +42,7 @@ describe('app onboarding API key loading state', () => {
       onboardingSource.indexOf('async function loadResumeApp()'),
     )
 
-    expect(keyLoader).toContain('const userId = main.user?.id')
+    expect(keyLoader).toContain('const userId = main.user?.id ?? main.auth?.id')
     expect(keyLoader).toContain('const appId = createdApp.value?.app_id')
     expect(keyLoader).not.toContain('resumeAppId.value')
   })
