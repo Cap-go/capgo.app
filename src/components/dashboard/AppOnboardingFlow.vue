@@ -867,7 +867,7 @@ async function loadResumeIconPreview(rawIconUrl: string | null | undefined, appI
 }
 
 async function ensureApiKey() {
-  const userId = main.user?.id
+  const userId = main.user?.id ?? main.auth?.id
   if (!userId)
     return
 

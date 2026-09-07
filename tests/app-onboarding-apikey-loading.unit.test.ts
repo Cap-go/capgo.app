@@ -10,9 +10,9 @@ describe('app onboarding API key loading state', () => {
   })
 
   it.concurrent('replaces every incomplete CLI command with the shared loading treatment', () => {
-    expect(onboardingSource).not.toContain("{{ apiKey ?? '[APIKEY]' }}")
+    expect(onboardingSource).not.toContain('{{ apiKey ?? \'[APIKEY]\' }}')
     expect(onboardingSource).toContain('<Spinner')
-    expect(onboardingSource).toContain("t('app-onboarding-command-apikey-loading')")
+    expect(onboardingSource).toContain('t(\'app-onboarding-command-apikey-loading\')')
     expect(onboardingSource).not.toMatch(/role="status">\s*<div[^>]*aria-live="polite"/)
   })
 
@@ -68,6 +68,7 @@ describe('app onboarding API key loading state', () => {
       onboardingSource.indexOf('let apiKeyLoadingPromise'),
     )
 
+    expect(keyLoader).toContain('const userId = main.user?.id ?? main.auth?.id')
     expect(keyLoader).toContain('const appId = createdApp.value?.app_id')
     expect(keyLoader).not.toContain('resumeAppId.value')
   })
@@ -103,9 +104,9 @@ describe('app onboarding API key loading state', () => {
     expect(copyHandler).toContain('await loadApiKey()')
     expect(copyHandler).toContain('if (!apiKey.value)')
     expect(copyHandler).toContain('await copyText(createAiHelpPrompt())')
-    expect(copyHandler).toContain("trackSuccessfulCopy('onboarding_ai_instructions_copied')")
+    expect(copyHandler).toContain('trackSuccessfulCopy(\'onboarding_ai_instructions_copied\')')
     expect(copyHandler).not.toContain('dialogStore.openDialog({')
     expect(copyHandler).not.toContain('redactedCliCommand')
-    expect(onboardingSource).toContain("trackSuccessfulCopy('onboarding_cli_command_copied')")
+    expect(onboardingSource).toContain('trackSuccessfulCopy(\'onboarding_cli_command_copied\')')
   })
 })
