@@ -241,6 +241,33 @@ async function deleteObjectsWithPrefix(c: Context, prefix: string): Promise<numb
   return deletedCount
 }
 
+async function moveObjectsWithPrefixToTrash(c: Context, prefix: string): Promise<number> {
+  const client = initS3(c)
+  let movedCount = 0
+
+  for await (const object of client.listObjects({ prefix })) {
+    if (object.key.startsWith(R2_TRASH_PREFIX))
+      continue
+
+    try {
+      const moved = await moveObjectToTrash(c, object.key)
+      if (moved)
+        movedCount += 1
+    }
+    catch (error) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'moveObjectsWithPrefixToTrash item failed',
+        prefix,
+        key: object.key,
+        error,
+      })
+    }
+  }
+
+  return movedCount
+}
+
 async function checkIfExist(c: Context, fileId: string | null) {
   if (!fileId) {
     cloudlog({ requestId: c.get('requestId'), message: 'checkIfExist skipped empty fileId' })
@@ -559,6 +586,7 @@ export const s3 = {
   deleteObject,
   getSizeDiagnostics,
   moveObjectToTrash,
+  moveObjectsWithPrefixToTrash,
   deleteObjectsWithPrefix,
   checkIfExist,
   getSignedUrl,

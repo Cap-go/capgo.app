@@ -166,11 +166,11 @@ export async function deleteApp(c: Context<MiddlewareKeyVariables>, appId: strin
 
   if (appStoragePrefix) {
     try {
-      const deletedObjectCount = await s3.deleteObjectsWithPrefix(c, appStoragePrefix)
-      cloudlog({ requestId: c.get('requestId'), message: 'deleted app storage objects', count: deletedObjectCount, app_id: appId })
+      const trashedObjectCount = await s3.moveObjectsWithPrefixToTrash(c, appStoragePrefix)
+      cloudlog({ requestId: c.get('requestId'), message: 'moved app storage objects to trash', count: trashedObjectCount, app_id: appId })
     }
     catch (error) {
-      cloudlog({ requestId: c.get('requestId'), message: 'error deleting app storage objects', error, app_id: appId })
+      cloudlog({ requestId: c.get('requestId'), message: 'error moving app storage objects to trash', error, app_id: appId })
     }
   }
 
