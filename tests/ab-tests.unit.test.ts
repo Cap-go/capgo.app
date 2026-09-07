@@ -380,6 +380,22 @@ describe('new-user A/B test assignment', () => {
     expect(getPgClientMock).toHaveBeenCalledOnce()
     expect(getPgClientMock).toHaveBeenCalledWith(context, true)
     expect(getDrizzleClientMock).not.toHaveBeenCalled()
+    expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the primary database when the replica lookup fails', async () => {
+    const { getOrCreateUserABTests } = await loadABTestsModule()
+    const persisted = persistedAssignments({ development: 'D', emails: 'B', publish: 'B' })
+    const context = { get: vi.fn(() => 'request-id') } as never
+    pgConnectMock.mockRejectedValueOnce(new Error('replica unavailable'))
+    drizzleExecuteMock.mockResolvedValueOnce({ rows: [{ abtests: persisted, created_via_invite: false, email: 'user@example.com' }] })
+
+    await expect(getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
+
+    expect(getPgClientMock.mock.calls).toEqual([[context, true], [context, false]])
+    expect(drizzleTransactionMock).toHaveBeenCalledOnce()
+    expect(drizzleExecuteMock).toHaveBeenCalledOnce()
+    expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
   })
 
   it('locks the primary user row and assigns only missing tests inside one transaction', async () => {
@@ -392,7 +408,7 @@ describe('new-user A/B test assignment', () => {
     const random = vi.spyOn(Math, 'random').mockReturnValue(0)
     pgQueryMock.mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false }] })
     drizzleExecuteMock
-      .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false }] })
+      .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false, email: 'user@example.com' }] })
       .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
 
     await expect(getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
@@ -402,7 +418,17 @@ describe('new-user A/B test assignment', () => {
     expect(drizzleExecuteMock).toHaveBeenCalledTimes(2)
     expect(random).toHaveBeenCalledTimes(2)
     expect(closeClientMock).toHaveBeenCalledTimes(2)
-    expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledWith(context, {
+      deleteSegments: expect.arrayContaining([
+        'ab:no_webnativeapp_development_environment',
+        'ab:no_webnativeapp_publish_intent',
+      ]),
+      email: 'user@example.com',
+      segments: expect.arrayContaining([
+        'ab:webnativeapp_development_environment',
+        'ab:webnativeapp_publish_intent',
+      ]),
+    })
   })
 
   it('rechecks the locked primary row and never regenerates completed assignments', async () => {

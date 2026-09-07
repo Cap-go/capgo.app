@@ -290,12 +290,15 @@ function refreshOnboardingABTests(): Promise<void> {
     })
     if (error) {
       console.error('Cannot load onboarding A/B tests', error)
+      onboardingABTestsRequest = null
       return
     }
 
     const assignments = parseOnboardingABTestAssignments(data?.assignments)
-    if (!assignments)
+    if (!assignments) {
+      onboardingABTestsRequest = null
       return
+    }
 
     onboardingABTestAssignments.value = {
       ...onboardingABTestAssignments.value,
@@ -317,6 +320,7 @@ function refreshOnboardingABTests(): Promise<void> {
       } as Json,
     }
   })().catch((error) => {
+    onboardingABTestsRequest = null
     console.error('Cannot load onboarding A/B tests', error)
   })
 

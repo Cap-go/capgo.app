@@ -35,6 +35,7 @@ describe('webNativeApp onboarding A/B tests', () => {
   it.concurrent('configures independent 25/75 self-signup experiments', () => {
     expect(abTestsConfig[WEBNATIVE_PUBLISH_INTENT_AB_TEST]).toEqual({
       audience: 'self_signup',
+      comment: 'Shows a \'convert my webapp to mobile\' intent option. Does not change the rest of the flow by itself.',
       control_branch: 'B',
       treatment_branch: 'A',
       treatment_percentage: 25,
@@ -45,6 +46,7 @@ describe('webNativeApp onboarding A/B tests', () => {
     })
     expect(abTestsConfig[WEBNATIVE_DEVELOPMENT_ENVIRONMENT_AB_TEST]).toEqual({
       audience: 'self_signup',
+      comment: 'Asks what tools people use to build. Combined with publish + hosted_builder + starting out, this can recommend WebNativeApp.',
       control_branch: 'D',
       treatment_branch: 'C',
       treatment_percentage: 25,

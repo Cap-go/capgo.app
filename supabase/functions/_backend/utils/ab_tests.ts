@@ -5,6 +5,7 @@ import { sql } from 'drizzle-orm'
 import rawABTestsConfig from './ab_tests.json' with { type: 'json' }
 import { syncBentoSubscriberTags } from './bento.ts'
 import { quickError } from './hono.ts'
+import { cloudlogErr } from './logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
 
 export type ABTestAudience = 'all' | 'self_signup'
@@ -233,11 +234,47 @@ async function persistABTestAssignments(
   return readPersistedAssignments(persisted, Object.keys(candidates))
 }
 
+async function syncCreatedABTestTags(
+  c: Context<MiddlewareKeyVariables>,
+  email: unknown,
+  created: Record<string, ABTestAssignment>,
+) {
+  if (typeof email !== 'string' || !email.trim() || Object.keys(created).length === 0)
+    return
+
+  const segments: string[] = []
+  const deleteSegments: string[] = []
+  for (const [testName, assignment] of Object.entries(created)) {
+    const test = AB_TESTS_CONFIG[testName]
+    const oppositeBranch = assignment.branch === test.treatment_branch ? test.control_branch : test.treatment_branch
+    segments.push(test.branches[assignment.branch].bento_tag)
+    deleteSegments.push(test.branches[oppositeBranch].bento_tag)
+  }
+
+  const result = await syncBentoSubscriberTags(c, {
+    deleteSegments,
+    email: email.trim(),
+    segments,
+  })
+  if (result === false) {
+    cloudlogErr({
+      message: 'on-demand A/B Bento sync failed',
+      requestId: c.get('requestId'),
+    })
+  }
+}
+
 export async function getOrCreateUserABTests(
   c: Context<MiddlewareKeyVariables>,
   userId: string,
 ) {
-  const replicaUser = await readAssignmentUser(c, userId)
+  let replicaUser: AssignmentUser | undefined
+  try {
+    replicaUser = await readAssignmentUser(c, userId)
+  }
+  catch {
+    replicaUser = undefined
+  }
   if (replicaUser) {
     const testNames = eligibleTestNames(replicaUser)
     const existing = readExistingAssignments(replicaUser.abtests, testNames)
@@ -248,9 +285,9 @@ export async function getOrCreateUserABTests(
   const pgPool = getPgClient(c, false)
   try {
     const drizzle = getDrizzleClient(pgPool)
-    return await drizzle.transaction(async (tx) => {
-      const lockedUserResult = await tx.execute<AssignmentUser>(sql`
-        SELECT created_via_invite, onboarding->'abtests' AS abtests
+    const result = await drizzle.transaction(async (tx) => {
+      const lockedUserResult = await tx.execute<AssignmentUser & { email?: string | null }>(sql`
+        SELECT created_via_invite, email, onboarding->'abtests' AS abtests
         FROM public.users
         WHERE id = ${userId}::uuid
         FOR UPDATE
@@ -261,11 +298,11 @@ export async function getOrCreateUserABTests(
 
       const testNames = eligibleTestNames(user)
       if (testNames.length === 0)
-        return {}
+        return { assignments: {}, created: {} as Record<string, ABTestAssignment>, email: user.email }
 
       const existing = readExistingAssignments(user.abtests, testNames)
       if (existing.missing.length === 0)
-        return existing.assignments
+        return { assignments: existing.assignments, created: {} as Record<string, ABTestAssignment>, email: user.email }
 
       const candidates = createABTestAssignments(user, configForTests(existing.missing))
       const updateResult = await tx.execute<{ abtests?: unknown }>(sql`
@@ -283,8 +320,14 @@ export async function getOrCreateUserABTests(
         RETURNING onboarding->'abtests' AS abtests
       `)
       const updated = updateResult.rows[0]
-      return readPersistedAssignments(updated?.abtests, testNames)
+      return {
+        assignments: readPersistedAssignments(updated?.abtests, testNames),
+        created: candidates,
+        email: user.email,
+      }
     })
+    await syncCreatedABTestTags(c, result.email, result.created)
+    return result.assignments
   }
   finally {
     await closeClient(c, pgPool)

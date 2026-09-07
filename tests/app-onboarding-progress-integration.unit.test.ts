@@ -494,7 +494,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain('await waitForOnboardingABTests()')
     expect(onboardingSource).toContain('Promise.race([refreshOnboardingABTests(), timeout])')
     expect(onboardingSource).toContain('if (props.preOrg && !welcomePending.value)')
-    expect(onboardingSource).not.toContain('onboardingABTestsRequest = null')
+    expect(onboardingSource).toContain('onboardingABTestsRequest = null')
     expect(onboardingSource).toContain(`webNativePublishIntentTreatment.value`)
     expect(onboardingSource).toContain(`webNativeDevelopmentEnvironmentTreatment.value`)
     expect(onboardingSource).toContain(`shouldShowWebNativeRecommendation({`)
