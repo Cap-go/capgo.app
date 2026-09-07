@@ -65,14 +65,19 @@ export interface CliLoginKeyDependencies {
   }) => Promise<{ key: string | null }>
 }
 
+export interface CliSkippedOrganization {
+  id: string
+  name: string
+}
+
 export type CliLoginKeyPreparation
-  = | { status: 'empty', skippedOrganizationNames: string[] }
+  = | { status: 'empty', skippedOrganizations: CliSkippedOrganization[] }
     | {
       status: 'ready'
       keyName: string
       secret: string
       eligibleOrgIds: string[]
-      skippedOrganizationNames: string[]
+      skippedOrganizations: CliSkippedOrganization[]
       policy: CliKeyPolicy
       reused: boolean
     }
@@ -210,9 +215,12 @@ export async function prepareCliLoginKey(
     return { organization, eligible }
   }))
   const eligible = checks.filter(check => check.eligible).map(check => check.organization)
-  const skippedOrganizationNames = checks.filter(check => !check.eligible).map(check => check.organization.name)
+  const skippedOrganizations = checks.filter(check => !check.eligible).map(check => ({
+    id: check.organization.gid,
+    name: check.organization.name,
+  }))
   if (!eligible.length)
-    return { status: 'empty', skippedOrganizationNames }
+    return { status: 'empty', skippedOrganizations }
 
   const expectedBindings: CliKeyBinding[] = eligible.map(organization => ({
     role_name: roleForCliKey(organization.role)!,
@@ -249,7 +257,7 @@ export async function prepareCliLoginKey(
       keyName: key.name,
       secret: key.key!,
       eligibleOrgIds: eligible.map(org => org.gid),
-      skippedOrganizationNames,
+      skippedOrganizations,
       policy,
       reused: true,
     }
@@ -270,7 +278,7 @@ export async function prepareCliLoginKey(
     keyName,
     secret: created.key,
     eligibleOrgIds: eligible.map(org => org.gid),
-    skippedOrganizationNames,
+    skippedOrganizations,
     policy,
     reused: false,
   }

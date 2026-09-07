@@ -91,7 +91,7 @@ beforeEach(() => {
     keyName: 'Capgo CLI',
     secret: preparedKey,
     eligibleOrgIds: ['org-1'],
-    skippedOrganizationNames: [],
+    skippedOrganizations: [],
     policy: { hashed: false, expiresAt: null },
     reused: false,
   })

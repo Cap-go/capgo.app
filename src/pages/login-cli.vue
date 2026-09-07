@@ -42,7 +42,7 @@ const revealDialogOpen = ref(false)
 const reused = ref(false)
 const hashed = ref(false)
 const expiresAt = ref<string | null>(null)
-const skippedNames = ref<string[]>([])
+const skippedOrganizations = ref<Array<{ id: string, name: string }>>([])
 const realtimeUnavailable = ref(false)
 const destination = ref('/dashboard')
 const channels: RealtimeChannel[] = []
@@ -140,7 +140,7 @@ async function prepare(): Promise<void> {
       organizationStore.organizations,
       createCliLoginKeyDependencies(supabase, userId),
     )
-    skippedNames.value = result.skippedOrganizationNames
+    skippedOrganizations.value = result.skippedOrganizations
     if (result.status === 'empty') {
       state.value = 'empty'
       return
@@ -321,7 +321,7 @@ onBeforeUnmount(() => {
         <p class="d-alert d-alert-warning">
           {{ t('cli-login-no-eligible') }}
         </p>
-        <CliLoginSkippedOrganizations v-if="skippedNames.length" :organizations="skippedNames" />
+        <CliLoginSkippedOrganizations v-if="skippedOrganizations.length" :organizations="skippedOrganizations" />
         <button class="d-btn" type="button" @click="router.push('/dashboard')">
           {{ t('dashboard') }}
         </button>
@@ -387,7 +387,7 @@ onBeforeUnmount(() => {
         <p v-if="expiresAt" class="text-sm text-amber-700 dark:text-amber-300">
           {{ t('cli-login-expiration-warning', { date: formatLocalDate(expiresAt) }) }}
         </p>
-        <CliLoginSkippedOrganizations v-if="skippedNames.length" :organizations="skippedNames" />
+        <CliLoginSkippedOrganizations v-if="skippedOrganizations.length" :organizations="skippedOrganizations" has-key />
         <output v-if="!aiMode" class="flex items-center text-sm" :class="realtimeUnavailable ? 'text-amber-700' : 'text-slate-500'">
           <template v-if="realtimeUnavailable">
             {{ t('cli-login-realtime-unavailable') }}

@@ -150,7 +150,12 @@ describe('prepareCliLoginKey', () => {
     ], io, now)
 
     expect(result.status).toBe('ready')
-    expect(result.skippedOrganizationNames).toEqual(['Member', 'Invite', 'Security', 'Blocked'])
+    expect(result.skippedOrganizations).toEqual([
+      { id: 'member', name: 'Member' },
+      { id: 'invite', name: 'Invite' },
+      { id: 'security', name: 'Security' },
+      { id: 'blocked', name: 'Blocked' },
+    ])
     expect(io.createKey).toHaveBeenCalledWith(expect.objectContaining({
       name: 'Capgo CLI',
       global_permissions: [],
@@ -286,7 +291,7 @@ describe('prepareCliLoginKey', () => {
       org({ role: 'org_member' }),
     ], io, now)).resolves.toEqual({
       status: 'empty',
-      skippedOrganizationNames: ['Alpha'],
+      skippedOrganizations: [{ id: 'org-a', name: 'Alpha' }],
     })
     expect(io.listMetadata).not.toHaveBeenCalled()
     expect(io.createKey).not.toHaveBeenCalled()
