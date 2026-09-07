@@ -14,6 +14,10 @@ const clipboardWrite = vi.hoisted(() => vi.fn())
 const cliLoginMocks = vi.hoisted(() => ({
   createCliLoginKeyDependencies: vi.fn(() => ({})),
   getCliLoginDestination: vi.fn(() => '/dashboard'),
+  isCliAiQuery: vi.fn((value: unknown) => {
+    const raw = Array.isArray(value) ? value[0] : value
+    return typeof raw === 'string' && raw.replace(/\/+$/, '') === '1'
+  }),
   isMatchingCliLoginEvent: vi.fn(() => false),
   isValidCliLoginSession: vi.fn(() => true),
   prepareCliLoginKey: vi.fn(),
@@ -91,7 +95,7 @@ beforeEach(() => {
     keyName: 'Capgo CLI',
     secret: preparedKey,
     eligibleOrgIds: ['org-1'],
-    skippedOrganizationNames: [],
+    skippedOrganizations: [],
     policy: { hashed: false, expiresAt: null },
     reused: false,
   })
@@ -177,7 +181,7 @@ describe('/login-cli page contract', () => {
 
   it.concurrent('supports a direct AI setup prompt containing the prepared key', () => {
     const page = readFileSync(pagePath, 'utf8')
-    expect(page).toContain(`const aiMode = computed(() => route.query.ai === '1')`)
+    expect(page).toContain('const aiMode = computed(() => isCliAiQuery(route.query.ai))')
     expect(page).toContain('buildCliAiSetupPrompt({')
     expect(page).toContain('organizationStore.getAppsByOrgId(organization.gid)')
     expect(page).toContain('eligibleIds.has(organization.gid)')
@@ -207,7 +211,7 @@ describe('/login-cli page contract', () => {
   })
 
   it.concurrent('keeps the route out of normal onboarding redirects', () => {
-    expect(auth).toContain(`const isCliLoginRoute = to.path === '/login-cli'`)
+    expect(auth).toContain('const isCliLoginRoute = isCliLoginPath(to.path)')
     expect(auth.match(/if \(isCliLoginRoute\)/g)).toHaveLength(3)
   })
 
