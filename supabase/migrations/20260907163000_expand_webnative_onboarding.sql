@@ -1,9 +1,7 @@
--- DROP/ADD are short ACCESS EXCLUSIVE. Backfill sits between them so it is
--- not held under the DDL lock, and so user rows that already use a new
--- step are not rechecked against the old users_onboarding_valid list.
-
-ALTER TABLE "public"."orgs"
-DROP CONSTRAINT IF EXISTS "orgs_onboarding_valid";
+-- Backfill first. In a single migration transaction, DROP CONSTRAINT keeps
+-- ACCESS EXCLUSIVE until commit, so the cleanup must not sit after it.
+-- The old users CHECK already forbids step publish_app_question, so this
+-- UPDATE cannot 23514 on that step.
 
 UPDATE "public"."orgs"
 SET "onboarding" = "onboarding" - 'intent'
@@ -20,6 +18,9 @@ WHERE ("onboarding" ? 'development_environment'::"text")
     ("jsonb_typeof"(("onboarding" -> 'development_environment'::"text")) IS DISTINCT FROM 'string'::"text")
     OR (("onboarding" ->> 'development_environment'::"text") <> ALL (ARRAY['hosted_builder'::"text", 'ai_assistant'::"text", 'hand_coded'::"text", 'other'::"text", 'local_project'::"text", 'exploring'::"text", 'skipped'::"text"]))
   );
+
+ALTER TABLE "public"."orgs"
+DROP CONSTRAINT IF EXISTS "orgs_onboarding_valid";
 
 ALTER TABLE "public"."orgs"
 ADD CONSTRAINT "orgs_onboarding_valid" CHECK (
@@ -42,9 +43,6 @@ ADD CONSTRAINT "orgs_onboarding_valid" CHECK (
 
 COMMENT ON COLUMN "public"."orgs"."onboarding" IS 'Onboarding answers (extensible JSONB). Currently: {"intent": unknown|ota|builder|both|exploring|publish, "starting_out": boolean, "development_environment": hosted_builder|ai_assistant|hand_coded|other|local_project|exploring|skipped}. Used for segmentation and to tailor the org experience.';
 
-ALTER TABLE "public"."users"
-DROP CONSTRAINT IF EXISTS "users_onboarding_valid";
-
 -- Wizard progress never allows org default intent "unknown". Historical rows
 -- that still have it would 23514 on the next row update under the new CHECK.
 UPDATE "public"."users"
@@ -62,6 +60,9 @@ WHERE ("onboarding" ? 'development_environment'::"text")
     ("jsonb_typeof"(("onboarding" -> 'development_environment'::"text")) IS DISTINCT FROM 'string'::"text")
     OR (("onboarding" ->> 'development_environment'::"text") <> ALL (ARRAY['hosted_builder'::"text", 'ai_assistant'::"text", 'hand_coded'::"text", 'other'::"text", 'local_project'::"text", 'exploring'::"text", 'skipped'::"text"]))
   );
+
+ALTER TABLE "public"."users"
+DROP CONSTRAINT IF EXISTS "users_onboarding_valid";
 
 ALTER TABLE "public"."users"
 ADD CONSTRAINT "users_onboarding_valid" CHECK (
