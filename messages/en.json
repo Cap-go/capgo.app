@@ -1,1 +1,4 @@
-LOAD_FROM_FILE
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "2fa": "Manage 2FA"
+}
