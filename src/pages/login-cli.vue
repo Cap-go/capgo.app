@@ -378,9 +378,12 @@ onBeforeUnmount(() => {
           <p class="text-xs text-slate-500">
             {{ t('cli-login-copy-note') }}
           </p>
-          <p class="d-alert d-alert-warning text-sm">
-            {{ t('cli-login-security-warning') }}
-          </p>
+          <div class="flex items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/60">
+            <IconInformationCircle class="mt-0.5 h-5 w-5 shrink-0 text-azure-500" aria-hidden="true" />
+            <p class="text-sm leading-6 text-slate-600 dark:text-slate-300">
+              {{ t('cli-login-security-warning') }}
+            </p>
+          </div>
         </template>
         <p v-if="hashed" class="text-sm text-amber-700 dark:text-amber-300">
           {{ t('cli-login-hashed-warning') }}
