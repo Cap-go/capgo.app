@@ -969,7 +969,7 @@
   "cli-login-reveal-dialog-description": "Reveal this key only if your screen is private. You can copy it without showing it instead.",
   "cli-login-reveal-dialog-title": "Reveal this API key?",
   "cli-login-reveal-key": "Reveal API key",
-  "cli-login-security-warning": "Only paste this key into terminals and tools you trust.",
+  "cli-login-security-warning": "This is your Capgo API key. Paste it only into a trusted terminal or tool. You can rotate it later if needed.",
   "cli-login-skipped-description": "This key gives no access to these organizations. You will not be able to set up an app for these organizations:",
   "cli-login-skipped-description-empty": "No API key was created. These organizations cannot be set up from this login:",
   "cli-login-skipped-hint": "Accept any pending invitation, ask an admin of the organization for the right role, or complete its security requirements, then",
