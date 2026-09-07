@@ -1,7 +1,7 @@
 -- All backfills first. In one migration transaction, ALTER TABLE keeps
 -- ACCESS EXCLUSIVE until commit, so no table scan can sit after the first
 -- constraint swap. The old users CHECK already forbids step
--- publish_app_question, so those UPDATEs cannot 23514 on that step.
+-- publish_app_question, so those row updates cannot 23514 on that step.
 
 UPDATE "public"."orgs"
 SET "onboarding" = "onboarding" - 'intent'
