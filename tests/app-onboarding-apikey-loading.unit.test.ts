@@ -27,7 +27,7 @@ describe('app onboarding API key loading state', () => {
     )
     const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
     const resumeLoadIndex = mountedFlow.indexOf('const resumed = await loadResumeApp()')
-    const apiKeyProvisioningIndex = mountedFlow.indexOf('startApiKeyLoading()')
+    const apiKeyProvisioningIndex = mountedFlow.indexOf('void loadApiKey().catch')
 
     expect(resumeLoader).not.toContain('ensureApiKey')
     expect(resumeLoadIndex).toBeGreaterThanOrEqual(0)
@@ -36,40 +36,13 @@ describe('app onboarding API key loading state', () => {
     expect(mountedFlow).not.toContain('await loadApiKey()')
   })
 
-  it.concurrent('does not provision an API key when an empty new-app flow is opened', () => {
-    const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
-    const standardFlow = mountedFlow.slice(
-      mountedFlow.indexOf('await main.awaitInitialLoad()'),
-      mountedFlow.indexOf('\n  finally {'),
-    )
-
-    expect(standardFlow).toContain('if (resumed)')
-    expect(standardFlow).toContain('startApiKeyLoading()')
-    expect(standardFlow.match(/startApiKeyLoading\(\)/g)).toHaveLength(1)
-  })
-
-  it.concurrent('starts API key provisioning when the user reveals or enters CLI setup', () => {
-    const showCommand = onboardingSource.slice(
-      onboardingSource.indexOf('function showCliCommand()'),
-      onboardingSource.indexOf('async function reportOnboardingPatch('),
-    )
-    const installNavigation = onboardingSource.slice(
-      onboardingSource.indexOf('function goToInstallStep()'),
-      onboardingSource.indexOf('async function openDashboard()'),
-    )
-
-    expect(showCommand).toContain('startApiKeyLoading()')
-    expect(installNavigation).toContain('startApiKeyLoading()')
-    expect(onboardingSource).toContain('@click="showCliCommand"')
-  })
-
   it.concurrent('targets the created app when a stale resume falls back to replacement creation', () => {
     const keyLoader = onboardingSource.slice(
-      onboardingSource.indexOf('async function ensureApiKey()'),
-      onboardingSource.indexOf('let apiKeyLoadingPromise'),
+      onboardingSource.indexOf('async function ensureApiKey('),
+      onboardingSource.indexOf('async function loadResumeApp()'),
     )
 
-    expect(keyLoader).toContain('const userId = main.user?.id ?? main.auth?.id')
+    expect(keyLoader).toContain('const userId = main.user?.id')
     expect(keyLoader).toContain('const appId = createdApp.value?.app_id')
     expect(keyLoader).not.toContain('resumeAppId.value')
   })

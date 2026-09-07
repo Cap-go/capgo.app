@@ -37,7 +37,7 @@ import IconTerminal from '~icons/lucide/terminal'
 import IconTrash from '~icons/lucide/trash-2'
 import IconUsers from '~icons/lucide/users-round'
 import { preserveAdminDashboardMinimize } from '~/services/adminDashboardPreferences'
-import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
+import { createDefaultApiKey, findUsablePlainApiKey, shareInFlightApiKeyLoad } from '~/services/apikeys'
 import {
   parseAppOnboarding,
 } from '~/services/appOnboarding'
@@ -866,50 +866,41 @@ async function loadResumeIconPreview(rawIconUrl: string | null | undefined, appI
   }
 }
 
-async function ensureApiKey() {
-  const userId = main.user?.id ?? main.auth?.id
-  if (!userId)
-    return
-
-  const appId = createdApp.value?.app_id
-  const existingKey = await findUsablePlainApiKey(supabase, userId, currentOrg.value?.gid, appId)
-  if (existingKey) {
-    apiKey.value = existingKey
-    return
-  }
+async function ensureApiKey(userId: string, orgId?: string | null, appId?: string | null): Promise<string | null> {
+  const existingKey = await findUsablePlainApiKey(supabase, userId, orgId, appId)
+  if (existingKey)
+    return existingKey
 
   const { data: claimsData } = await supabase.auth.getClaims()
   const claimsUserId = claimsData?.claims?.sub
   if (!claimsUserId)
-    return
+    return null
 
   const { data, error: createError } = await createDefaultApiKey(supabase, 'api-key', {
-    orgId: currentOrg.value?.gid,
+    orgId,
     appId,
   })
   if (createError)
     throw createError
 
-  apiKey.value = typeof data?.key === 'string'
+  return typeof data?.key === 'string'
     ? data.key
-    : await findUsablePlainApiKey(supabase, claimsUserId, currentOrg.value?.gid, appId)
+    : await findUsablePlainApiKey(supabase, claimsUserId, orgId, appId)
 }
 
-let apiKeyLoadingPromise: Promise<void> | null = null
 function loadApiKey() {
   if (apiKey.value)
     return Promise.resolve()
 
-  apiKeyLoadingPromise ??= ensureApiKey().finally(() => {
-    apiKeyLoadingPromise = null
-  })
-  return apiKeyLoadingPromise
-}
+  const userId = main.user?.id
+  if (!userId)
+    return Promise.resolve()
 
-function startApiKeyLoading() {
-  void loadApiKey().catch((error) => {
-    console.error('Cannot ensure API key', error)
-    toast.error(t('app-onboarding-toast-apikey-error'))
+  const orgId = currentOrg.value?.gid
+  const appId = createdApp.value?.app_id
+  return shareInFlightApiKeyLoad({ userId, orgId, appId }, () => ensureApiKey(userId, orgId, appId)).then((key) => {
+    if (key)
+      apiKey.value = key
   })
 }
 
@@ -1843,11 +1834,6 @@ async function copyCliCommand() {
     trackSuccessfulCopy('onboarding_cli_command_copied')
 }
 
-function showCliCommand() {
-  isCliCommandVisible.value = true
-  startApiKeyLoading()
-}
-
 async function reportOnboardingPatch(patch: { source?: 'manual' | 'cli' | 'mcp' | 'ai', outcome?: 'in_progress' | 'completed' | 'skipped' | 'switched_to_manual' }) {
   const app = createdApp.value
   if (!app)
@@ -1898,7 +1884,6 @@ function goToInstallStep() {
     return
 
   isCliCommandVisible.value = false
-  startApiKeyLoading()
   completeAndViewStep('install', {
     appId: createdApp.value.app_id,
   })
@@ -2002,7 +1987,10 @@ onMounted(async () => {
             onboardingProgressPersistence.abort()
             return
           }
-          startApiKeyLoading()
+          void loadApiKey().catch((error) => {
+            console.error('Cannot ensure API key', error)
+            toast.error(t('app-onboarding-toast-apikey-error'))
+          })
           return
         }
       }
@@ -2031,8 +2019,10 @@ onMounted(async () => {
       return
     }
 
-    if (resumed)
-      startApiKeyLoading()
+    void loadApiKey().catch((error) => {
+      console.error('Cannot ensure API key', error)
+      toast.error(t('app-onboarding-toast-apikey-error'))
+    })
   }
   finally {
     isHydratingOnboarding.value = false
@@ -2561,7 +2551,7 @@ defineExpose({
                   v-if="!isCliCommandVisible"
                   type="button"
                   class="text-[11px] text-slate-400/70 underline-offset-2 transition hover:text-slate-500 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-slate-500/70 dark:hover:text-slate-400"
-                  @click="showCliCommand"
+                  @click="isCliCommandVisible = true"
                 >
                   {{ t('app-onboarding-command-show') }}
                 </button>
