@@ -1,3 +1,5 @@
+import type { Context } from 'hono'
+import type { MiddlewareKeyVariables } from '../supabase/functions/_backend/utils/hono.ts'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { app } from '../supabase/functions/_backend/private/onboarding_ab_tests.ts'
 
@@ -21,11 +23,16 @@ vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', async (import
     ...actual,
     middlewareAuth: () => {
       const realAuth = actual.middlewareAuth()
-      return async (c: Parameters<typeof realAuth>[0], next: () => Promise<void>) => {
+      return async (c: Context<MiddlewareKeyVariables>, next: () => Promise<void>) => {
         if (!authState.value?.userId)
           return realAuth(c, next)
 
-        c.set('auth', authState.value)
+        c.set('auth', {
+          authType: 'jwt',
+          userId: authState.value.userId,
+          jwt: null,
+          apikey: null,
+        })
         await next()
       }
     },
