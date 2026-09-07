@@ -58,6 +58,7 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'DELETE'), async (c)
     }
     catch (error) {
       cloudlog({ requestId: c.get('requestId'), message: 'error moving app storage objects to trash', error, app_id: record.app_id })
+      throw error
     }
   }
 

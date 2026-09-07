@@ -1,11 +1,13 @@
 /**
- * Script 2: Delete orphaned R2 paths - FAST parallel deletion
+ * Script 2: Delete orphaned R2 paths
  *
- * Just reads paths from script 1 and deletes everything in parallel.
- * No collecting, no waiting - stream delete while listing.
+ * Default: dry-run (count only).
+ * Execute: DRY_RUN=false moves orphans to deleted-after-7-days/ (7-day trash).
+ * Permanent delete requires ALLOW_PERMANENT_R2_DELETE=true (ops-only).
  */
 
-import { DeleteObjectsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
+import { CopyObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
+import { getR2TrashKey, resolveR2CleanupDeleteMode, R2_TRASH_PREFIX } from './delete_mode.ts'
 
 // Load environment from prod file
 const envFile = await Bun.file('./internal/cloudflare/.env.prod').text()
@@ -21,9 +23,12 @@ for (const line of envFile.split('\n')) {
 
 const INPUT_FILE = './tmp/r2_cleanup/1_orphaned_paths.json'
 const S3_BUCKET = env.S3_BUCKET || 'capgo'
-const CONCURRENCY = 50 // High parallelism
+const CONCURRENCY = 50
 
-let DRY_RUN = true
+const deleteMode = resolveR2CleanupDeleteMode({
+  DRY_RUN: process.env.DRY_RUN,
+  ALLOW_PERMANENT_R2_DELETE: process.env.ALLOW_PERMANENT_R2_DELETE,
+})
 
 const s3 = new S3Client({
   credentials: { accessKeyId: env.S3_ACCESS_KEY_ID, secretAccessKey: env.S3_SECRET_ACCESS_KEY },
@@ -32,11 +37,10 @@ const s3 = new S3Client({
   forcePathStyle: true,
 })
 
-let totalDeleted = 0
+let totalProcessed = 0
 let totalErrors = 0
-let totalToDelete = 0
+let totalToProcess = 0
 
-// Count objects under a prefix without deleting
 async function countPrefix(prefix: string): Promise<number> {
   let continuationToken: string | undefined
   let count = 0
@@ -49,8 +53,12 @@ async function countPrefix(prefix: string): Promise<number> {
       MaxKeys: 1000,
     }))
 
-    if (response.Contents)
-      count += response.Contents.length
+    if (response.Contents) {
+      for (const obj of response.Contents) {
+        if (obj.Key && !obj.Key.startsWith(R2_TRASH_PREFIX))
+          count += 1
+      }
+    }
 
     if (!response.IsTruncated)
       break
@@ -60,8 +68,48 @@ async function countPrefix(prefix: string): Promise<number> {
   return count
 }
 
-// Stream delete a prefix: list and delete simultaneously
-async function streamDelete(prefix: string): Promise<void> {
+async function processKey(key: string): Promise<void> {
+  if (key.startsWith(R2_TRASH_PREFIX))
+    return
+
+  if (deleteMode === 'dry_run') {
+    totalProcessed += 1
+    return
+  }
+
+  if (deleteMode === 'trash') {
+    const trashKey = getR2TrashKey(key)
+    try {
+      await s3.send(new CopyObjectCommand({
+        Bucket: S3_BUCKET,
+        CopySource: `${S3_BUCKET}/${key}`,
+        Key: trashKey,
+      }))
+      await s3.send(new DeleteObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: key,
+      }))
+      totalProcessed += 1
+    }
+    catch {
+      totalErrors += 1
+    }
+    return
+  }
+
+  try {
+    await s3.send(new DeleteObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: key,
+    }))
+    totalProcessed += 1
+  }
+  catch {
+    totalErrors += 1
+  }
+}
+
+async function streamProcessPrefix(prefix: string): Promise<void> {
   let continuationToken: string | undefined
   let batch: string[] = []
 
@@ -80,19 +128,9 @@ async function streamDelete(prefix: string): Promise<void> {
       }
     }
 
-    // Delete immediately when we have 999
-    while (batch.length >= 999) {
-      const toDelete = batch.splice(0, 999)
-      if (!DRY_RUN) {
-        try {
-          await s3.send(new DeleteObjectsCommand({
-            Bucket: S3_BUCKET,
-            Delete: { Objects: toDelete.map(k => ({ Key: k })), Quiet: true },
-          }))
-        }
-        catch { totalErrors += toDelete.length }
-      }
-      totalDeleted += toDelete.length
+    while (batch.length >= CONCURRENCY) {
+      const toProcess = batch.splice(0, CONCURRENCY)
+      await Promise.all(toProcess.map(processKey))
     }
 
     if (!response.IsTruncated)
@@ -100,68 +138,58 @@ async function streamDelete(prefix: string): Promise<void> {
     continuationToken = response.NextContinuationToken
   }
 
-  // Delete remaining
-  if (batch.length > 0) {
-    if (!DRY_RUN) {
-      try {
-        await s3.send(new DeleteObjectsCommand({
-          Bucket: S3_BUCKET,
-          Delete: { Objects: batch.map(k => ({ Key: k })), Quiet: true },
-        }))
-      }
-      catch { totalErrors += batch.length }
-    }
-    totalDeleted += batch.length
+  if (batch.length > 0)
+    await Promise.all(batch.map(processKey))
+}
+
+async function processFiles(keys: string[]): Promise<void> {
+  for (let i = 0; i < keys.length; i += CONCURRENCY) {
+    const batch = keys.slice(i, i + CONCURRENCY)
+    await Promise.all(batch.map(processKey))
   }
 }
 
-// Delete single files directly - in parallel batches
-async function deleteFiles(keys: string[]): Promise<void> {
-  const batches: string[][] = []
-  for (let i = 0; i < keys.length; i += 999) {
-    batches.push(keys.slice(i, i + 999))
-  }
+async function permanentDeleteBatch(keys: string[]): Promise<void> {
+  if (deleteMode !== 'permanent' || keys.length === 0)
+    return
 
-  // Delete all batches in parallel (CONCURRENCY at a time)
-  for (let i = 0; i < batches.length; i += CONCURRENCY) {
-    const batchGroup = batches.slice(i, i + CONCURRENCY)
-    await Promise.all(batchGroup.map(async (batch) => {
-      if (!DRY_RUN) {
-        try {
-          await s3.send(new DeleteObjectsCommand({
-            Bucket: S3_BUCKET,
-            Delete: { Objects: batch.map(k => ({ Key: k })), Quiet: true },
-          }))
-        }
-        catch { totalErrors += batch.length }
-      }
-      totalDeleted += batch.length
+  try {
+    await s3.send(new DeleteObjectsCommand({
+      Bucket: S3_BUCKET,
+      Delete: { Objects: keys.map(k => ({ Key: k })), Quiet: true },
     }))
+    totalProcessed += keys.length
+  }
+  catch {
+    totalErrors += keys.length
   }
 }
 
 async function main() {
-  console.log(`\n=== Delete Orphaned R2 Paths ===`)
-  console.log(`Mode: ${DRY_RUN ? 'DRY RUN' : 'LIVE DELETE'}`)
-  console.log(`Concurrency: ${CONCURRENCY}\n`)
+  console.log('\n=== Orphaned R2 Cleanup ===')
+  console.log(`Mode: ${deleteMode}`)
+  console.log(`Concurrency: ${CONCURRENCY}`)
+  if (deleteMode === 'permanent') {
+    console.warn('WARNING: ALLOW_PERMANENT_R2_DELETE=true — objects will be permanently deleted')
+  }
+  console.log()
 
   const inputFile = Bun.file(INPUT_FILE)
   if (!await inputFile.exists()) {
-    console.error(`Run script 1 first`)
+    console.error('Run script 1 first')
     process.exit(1)
   }
 
   const data = await inputFile.json()
   const allPaths = data.orphanedPaths as { path: string, type: string }[]
 
-  // Separate files from folders
   const files = allPaths.filter(p => p.path.endsWith('.zip')).map(p => p.path)
   const folders = allPaths.filter(p => !p.path.endsWith('.zip')).map(p => p.path)
 
-  console.log(`Files to delete: ${files.length}`)
-  console.log(`Folders to delete: ${folders.length}`)
+  console.log(`Files to process: ${files.length}`)
+  console.log(`Folders to process: ${folders.length}`)
 
-  console.log('\nCounting total objects to delete (this can take time)...')
+  console.log('\nCounting total objects (this can take time)...')
   let folderObjects = 0
   if (folders.length > 0) {
     for (let i = 0; i < folders.length; i += CONCURRENCY) {
@@ -173,54 +201,50 @@ async function main() {
     process.stdout.write('\n')
   }
 
-  totalToDelete = files.length + folderObjects
-  console.log(`\nTotal objects to delete: ${totalToDelete}`)
+  totalToProcess = files.length + folderObjects
+  console.log(`\nTotal objects to process: ${totalToProcess}`)
 
-  // Ask user after counting
-  process.stdout.write('\nDo you want to actually DELETE files? (yes/no): ')
-  for await (const line of console) {
-    const answer = line.trim().toLowerCase()
-    if (answer === 'yes' || answer === 'y') {
-      DRY_RUN = false
-      break
-    }
-    if (answer === 'no' || answer === 'n')
-      break
-    process.stdout.write('Please answer yes or no: ')
-  }
-  if (DRY_RUN) {
-    console.log('\nAborting delete (dry run).')
+  if (deleteMode === 'dry_run') {
+    console.log('\nDry run complete — no objects changed. Set DRY_RUN=false to move orphans to trash.')
     return
   }
 
-  // Progress ticker
   const ticker = setInterval(() => {
-    process.stdout.write(`\r  Deleted: ${totalDeleted} | Errors: ${totalErrors}`)
+    process.stdout.write(`\r  Processed: ${totalProcessed} | Errors: ${totalErrors}`)
   }, 500)
 
-  // Delete all files in parallel batches
   if (files.length > 0) {
-    console.log(`\nDeleting ${files.length} files...`)
-    await deleteFiles(files)
+    console.log(`\nProcessing ${files.length} files...`)
+    if (deleteMode === 'permanent') {
+      const batches: string[][] = []
+      for (let i = 0; i < files.length; i += 999)
+        batches.push(files.slice(i, i + 999))
+      for (let i = 0; i < batches.length; i += CONCURRENCY) {
+        const batchGroup = batches.slice(i, i + CONCURRENCY)
+        await Promise.all(batchGroup.map(batch => permanentDeleteBatch(batch)))
+      }
+    }
+    else {
+      await processFiles(files)
+    }
   }
 
-  // Delete all folders in parallel (CONCURRENCY at a time)
   if (folders.length > 0) {
-    console.log(`\nDeleting ${folders.length} folders in parallel...`)
+    console.log(`\nProcessing ${folders.length} folders...`)
     for (let i = 0; i < folders.length; i += CONCURRENCY) {
       const batch = folders.slice(i, i + CONCURRENCY)
-      await Promise.all(batch.map(f => streamDelete(f)))
-      process.stdout.write(`\r  Progress: ${Math.min(i + CONCURRENCY, folders.length)}/${folders.length} folders | ${totalDeleted} files deleted`)
+      await Promise.all(batch.map(f => streamProcessPrefix(f)))
+      process.stdout.write(`\r  Progress: ${Math.min(i + CONCURRENCY, folders.length)}/${folders.length} folders | ${totalProcessed} objects processed`)
     }
   }
 
   clearInterval(ticker)
 
-  console.log(`\n\n=== Done ===`)
-  console.log(`Total deleted: ${totalDeleted}`)
+  console.log('\n\n=== Done ===')
+  console.log(`Total processed: ${totalProcessed}`)
   console.log(`Errors: ${totalErrors}`)
-  if (DRY_RUN)
-    console.log(`\n(DRY RUN - nothing actually deleted)`)
+  if (deleteMode === 'trash')
+    console.log(`Objects moved under ${R2_TRASH_PREFIX} (lifecycle deletes after ~7 days)`)
 }
 
 await main()

@@ -75,10 +75,27 @@ function initS3(c: Context) {
   return client
 }
 
-const R2_TRASH_PREFIX = 'deleted-after-7-days/'
+export const R2_TRASH_PREFIX = 'deleted-after-7-days/'
+const PREFIX_TRASH_CONCURRENCY = 10
+
+export class TrashMoveError extends Error {
+  readonly failedKeys: string[]
+  readonly prefix: string
+
+  constructor(prefix: string, failedKeys: string[]) {
+    super(`Failed to move ${failedKeys.length} object(s) to trash for prefix ${prefix}`)
+    this.name = 'TrashMoveError'
+    this.prefix = prefix
+    this.failedKeys = failedKeys
+  }
+}
 
 function getTrashPath(fileId: string) {
   return `${R2_TRASH_PREFIX}${fileId}`
+}
+
+function isPermanentR2DeleteAllowed(c: Context): boolean {
+  return getEnv(c, 'ALLOW_PERMANENT_R2_DELETE') === 'true'
 }
 
 export async function getPath(
@@ -219,6 +236,15 @@ async function moveObjectToTrash(c: Context, fileId: string) {
 }
 
 async function deleteObjectsWithPrefix(c: Context, prefix: string): Promise<number> {
+  if (!isPermanentR2DeleteAllowed(c)) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'deleteObjectsWithPrefix blocked — permanent R2 delete is ops-only',
+      prefix,
+    })
+    throw new Error('deleteObjectsWithPrefix requires ALLOW_PERMANENT_R2_DELETE=true; use moveObjectsWithPrefixToTrash for product deletes')
+  }
+
   const client = initS3(c)
   let deletedCount = 0
 
@@ -228,13 +254,14 @@ async function deleteObjectsWithPrefix(c: Context, prefix: string): Promise<numb
       deletedCount += 1
     }
     catch (error) {
-      cloudlog({
+      cloudlogErr({
         requestId: c.get('requestId'),
         message: 'deleteObjectsWithPrefix item failed',
         prefix,
         key: object.key,
         error,
       })
+      throw error
     }
   }
 
@@ -243,26 +270,52 @@ async function deleteObjectsWithPrefix(c: Context, prefix: string): Promise<numb
 
 async function moveObjectsWithPrefixToTrash(c: Context, prefix: string): Promise<number> {
   const client = initS3(c)
-  let movedCount = 0
+  const keysToMove: string[] = []
 
   for await (const object of client.listObjects({ prefix })) {
-    if (object.key.startsWith(R2_TRASH_PREFIX))
-      continue
+    if (!object.key.startsWith(R2_TRASH_PREFIX))
+      keysToMove.push(object.key)
+  }
 
+  const failedKeys: string[] = []
+  let movedCount = 0
+
+  async function moveKey(key: string) {
     try {
-      const moved = await moveObjectToTrash(c, object.key)
-      if (moved)
-        movedCount += 1
+      const moved = await moveObjectToTrash(c, key)
+      if (!moved) {
+        failedKeys.push(key)
+        return
+      }
+      movedCount += 1
     }
     catch (error) {
-      cloudlog({
+      cloudlogErr({
         requestId: c.get('requestId'),
         message: 'moveObjectsWithPrefixToTrash item failed',
         prefix,
-        key: object.key,
+        key,
         error,
       })
+      failedKeys.push(key)
     }
+  }
+
+  for (let i = 0; i < keysToMove.length; i += PREFIX_TRASH_CONCURRENCY) {
+    const batch = keysToMove.slice(i, i + PREFIX_TRASH_CONCURRENCY)
+    await Promise.all(batch.map(moveKey))
+  }
+
+  if (failedKeys.length > 0) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'moveObjectsWithPrefixToTrash failed closed',
+      prefix,
+      failedCount: failedKeys.length,
+      movedCount,
+      failedKeys,
+    })
+    throw new TrashMoveError(prefix, failedKeys)
   }
 
   return movedCount

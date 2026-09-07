@@ -4,7 +4,7 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { BRES, simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { s3 } from '../../utils/s3.ts'
+import { s3, TrashMoveError } from '../../utils/s3.ts'
 import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
@@ -171,6 +171,13 @@ export async function deleteApp(c: Context<MiddlewareKeyVariables>, appId: strin
     }
     catch (error) {
       cloudlog({ requestId: c.get('requestId'), message: 'error moving app storage objects to trash', error, app_id: appId })
+      if (error instanceof TrashMoveError) {
+        throw simpleError('cannot_trash_app_storage', 'Cannot move app storage objects to trash', {
+          app_id: appId,
+          failedCount: error.failedKeys.length,
+        }, error)
+      }
+      throw simpleError('cannot_trash_app_storage', 'Cannot move app storage objects to trash', { app_id: appId }, error)
     }
   }
 
