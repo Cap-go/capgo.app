@@ -4,7 +4,6 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { BRES, simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { s3, TrashMoveError } from '../../utils/s3.ts'
 import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
@@ -29,7 +28,6 @@ export async function deleteApp(c: Context<MiddlewareKeyVariables>, appId: strin
     .select('owner_org')
     .eq('app_id', appId)
     .single()
-  const appStoragePrefix = app?.owner_org ? `orgs/${app.owner_org}/apps/${appId}/` : null
 
   // Delete app icon from storage before deleting the app
   // App icons are stored at: images/org/{org_id}/{app_id}/icon
@@ -162,23 +160,6 @@ export async function deleteApp(c: Context<MiddlewareKeyVariables>, appId: strin
 
   if (dbError) {
     throw simpleError('cannot_delete_app', 'Cannot delete app', { supabaseError: dbError })
-  }
-
-  if (appStoragePrefix) {
-    try {
-      const trashedObjectCount = await s3.moveObjectsWithPrefixToTrash(c, appStoragePrefix)
-      cloudlog({ requestId: c.get('requestId'), message: 'moved app storage objects to trash', count: trashedObjectCount, app_id: appId })
-    }
-    catch (error) {
-      cloudlog({ requestId: c.get('requestId'), message: 'error moving app storage objects to trash', error, app_id: appId })
-      if (error instanceof TrashMoveError) {
-        throw simpleError('cannot_trash_app_storage', 'Cannot move app storage objects to trash', {
-          app_id: appId,
-          failedCount: error.failedKeys.length,
-        }, error)
-      }
-      throw simpleError('cannot_trash_app_storage', 'Cannot move app storage objects to trash', { app_id: appId }, error)
-    }
   }
 
   return c.json(BRES)

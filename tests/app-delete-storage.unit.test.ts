@@ -107,11 +107,10 @@ describe('on_app_delete storage cleanup', () => {
 })
 
 describe('product delete source audit', () => {
-  it('public app delete uses trash helper only', () => {
+  it('public app delete relies on on_app_delete trigger for R2 trash', () => {
     const source = readFileSync('./supabase/functions/_backend/public/app/delete.ts', 'utf8')
-    expect(source).toContain('moveObjectsWithPrefixToTrash')
     expect(source).not.toContain('deleteObjectsWithPrefix')
-    expect(source).toContain('TrashMoveError')
+    expect(source).not.toContain('moveObjectsWithPrefixToTrash')
   })
 
   it('plugin_runtime s3 omits permanent delete helpers', () => {
