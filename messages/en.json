@@ -1,1 +1,6 @@
-{"$schema":"https://inlang.com/schema/inlang-message-format","2fa":"Manage 2FA"}
+{
+  "$schema": "https://inlang.com/schema/inlang-message-format",
+  "2fa": "Manage 2FA",
+  "2fa-all-members-compliant": "All organization members have 2FA enabled.",
+  "2fa-code": "2FA authentication code"
+}
