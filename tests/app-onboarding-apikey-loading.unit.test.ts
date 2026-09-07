@@ -27,13 +27,39 @@ describe('app onboarding API key loading state', () => {
     )
     const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
     const resumeLoadIndex = mountedFlow.indexOf('const resumed = await loadResumeApp()')
-    const apiKeyProvisioningIndex = mountedFlow.indexOf('void loadApiKey().catch')
+    const apiKeyProvisioningIndex = mountedFlow.indexOf('startApiKeyLoading()')
 
     expect(resumeLoader).not.toContain('ensureApiKey')
     expect(resumeLoadIndex).toBeGreaterThanOrEqual(0)
     expect(apiKeyProvisioningIndex).toBeGreaterThanOrEqual(0)
     expect(resumeLoadIndex).toBeLessThan(apiKeyProvisioningIndex)
     expect(mountedFlow).not.toContain('await loadApiKey()')
+  })
+
+  it.concurrent('does not provision an API key when an empty new-app flow is opened', () => {
+    const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
+    const standardFlow = mountedFlow.slice(
+      mountedFlow.indexOf('await main.awaitInitialLoad()'),
+      mountedFlow.indexOf('\n  finally {'),
+    )
+
+    expect(standardFlow).toContain('if (resumed)\n      startApiKeyLoading()')
+    expect(standardFlow.match(/startApiKeyLoading\(\)/g)).toHaveLength(1)
+  })
+
+  it.concurrent('starts API key provisioning when the user reveals or enters CLI setup', () => {
+    const showCommand = onboardingSource.slice(
+      onboardingSource.indexOf('function showCliCommand()'),
+      onboardingSource.indexOf('async function reportOnboardingPatch('),
+    )
+    const installNavigation = onboardingSource.slice(
+      onboardingSource.indexOf('function goToInstallStep()'),
+      onboardingSource.indexOf('async function openDashboard()'),
+    )
+
+    expect(showCommand).toContain('startApiKeyLoading()')
+    expect(installNavigation).toContain('startApiKeyLoading()')
+    expect(onboardingSource).toContain('@click="showCliCommand"')
   })
 
   it.concurrent('targets the created app when a stale resume falls back to replacement creation', () => {

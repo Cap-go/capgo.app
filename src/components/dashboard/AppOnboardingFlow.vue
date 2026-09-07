@@ -906,6 +906,13 @@ function loadApiKey() {
   return apiKeyLoadingPromise
 }
 
+function startApiKeyLoading() {
+  void loadApiKey().catch((error) => {
+    console.error('Cannot ensure API key', error)
+    toast.error(t('app-onboarding-toast-apikey-error'))
+  })
+}
+
 async function loadResumeApp() {
   if (!resumeAppId.value || !currentOrg.value?.gid)
     return false
@@ -1836,6 +1843,11 @@ async function copyCliCommand() {
     trackSuccessfulCopy('onboarding_cli_command_copied')
 }
 
+function showCliCommand() {
+  isCliCommandVisible.value = true
+  startApiKeyLoading()
+}
+
 async function reportOnboardingPatch(patch: { source?: 'manual' | 'cli' | 'mcp' | 'ai', outcome?: 'in_progress' | 'completed' | 'skipped' | 'switched_to_manual' }) {
   const app = createdApp.value
   if (!app)
@@ -1886,6 +1898,7 @@ function goToInstallStep() {
     return
 
   isCliCommandVisible.value = false
+  startApiKeyLoading()
   completeAndViewStep('install', {
     appId: createdApp.value.app_id,
   })
@@ -1989,10 +2002,7 @@ onMounted(async () => {
             onboardingProgressPersistence.abort()
             return
           }
-          void loadApiKey().catch((error) => {
-            console.error('Cannot ensure API key', error)
-            toast.error(t('app-onboarding-toast-apikey-error'))
-          })
+          startApiKeyLoading()
           return
         }
       }
@@ -2021,10 +2031,8 @@ onMounted(async () => {
       return
     }
 
-    void loadApiKey().catch((error) => {
-      console.error('Cannot ensure API key', error)
-      toast.error(t('app-onboarding-toast-apikey-error'))
-    })
+    if (resumed)
+      startApiKeyLoading()
   }
   finally {
     isHydratingOnboarding.value = false
@@ -2553,7 +2561,7 @@ defineExpose({
                   v-if="!isCliCommandVisible"
                   type="button"
                   class="text-[11px] text-slate-400/70 underline-offset-2 transition hover:text-slate-500 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-slate-500/70 dark:hover:text-slate-400"
-                  @click="isCliCommandVisible = true"
+                  @click="showCliCommand"
                 >
                   {{ t('app-onboarding-command-show') }}
                 </button>

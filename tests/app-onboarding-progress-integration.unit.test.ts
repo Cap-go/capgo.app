@@ -284,7 +284,7 @@ describe('app onboarding progress analytics integration', () => {
       'await organizationStore.awaitInitialLoad()',
       'const resumed = await loadResumeApp()',
       'resumedFlow = true',
-      'void loadApiKey()',
+      'startApiKeyLoading()',
       'return',
       'const resumeResult = await maybeResumeSavedOnboarding()',
     ])
