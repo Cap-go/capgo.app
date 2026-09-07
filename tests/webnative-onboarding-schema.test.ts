@@ -68,6 +68,35 @@ describe('WebNative onboarding schema constraints', () => {
     })
   })
 
+  it('rejects user progress that still carries org default intent unknown', async () => {
+    await expect(executeSQL(
+      `UPDATE public.users
+       SET onboarding = jsonb_build_object(
+         'status', 'in_progress',
+         'step', 'intent',
+         'flow', 'pre_org',
+         'intent', 'unknown'
+       )
+       WHERE id = $1`,
+      [userId],
+    )).rejects.toMatchObject({ code: '23514' })
+  })
+
+  it('keeps org default intent unknown updatable after the new CHECK', async () => {
+    const updated = await executeSQL<{ onboarding: Record<string, unknown> }>(
+      `UPDATE public.orgs
+       SET onboarding = jsonb_build_object('intent', 'unknown', 'starting_out', true, 'development_environment', 'skipped')
+       WHERE id = $1
+       RETURNING onboarding`,
+      [orgId],
+    )
+    expect(updated[0]?.onboarding).toEqual({
+      intent: 'unknown',
+      starting_out: true,
+      development_environment: 'skipped',
+    })
+  })
+
   it('rejects unsupported onboarding values', async () => {
     await expect(executeSQL(
       `UPDATE public.users
