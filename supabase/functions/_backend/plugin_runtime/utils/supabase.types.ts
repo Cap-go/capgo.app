@@ -2096,6 +2096,7 @@ export type Database = {
           id: string
           owner_org: string
           provider: string
+          secret_ciphertext: string | null
           secret_ref: string | null
           status: string
           updated_at: string
@@ -2108,6 +2109,7 @@ export type Database = {
           id?: string
           owner_org: string
           provider: string
+          secret_ciphertext?: string | null
           secret_ref?: string | null
           status: string
           updated_at?: string
@@ -2120,6 +2122,7 @@ export type Database = {
           id?: string
           owner_org?: string
           provider?: string
+          secret_ciphertext?: string | null
           secret_ref?: string | null
           status?: string
           updated_at?: string
