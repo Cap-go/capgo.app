@@ -6,7 +6,7 @@ const R2_TRASH_PREFIX = 'deleted-after-7-days/'
 const mocks = vi.hoisted(() => {
   const copyObject = vi.fn(async () => {})
   const deleteObject = vi.fn(async () => {})
-  const listObjects = vi.fn(async function* () {})
+  const listObjects = vi.fn<() => AsyncGenerator<{ key: string }>>()
 
   class S3Client {
     copyObject = copyObject
