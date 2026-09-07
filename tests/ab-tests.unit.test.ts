@@ -408,7 +408,7 @@ describe('new-user A/B test assignment', () => {
     const random = vi.spyOn(Math, 'random').mockReturnValue(0)
     pgQueryMock.mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false }] })
     drizzleExecuteMock
-      .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false, email: 'user@example.com' }] })
+      .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false, email: 'User@Example.com' }] })
       .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
 
     await expect(getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)

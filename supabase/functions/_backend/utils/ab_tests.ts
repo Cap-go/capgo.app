@@ -253,7 +253,7 @@ async function syncCreatedABTestTags(
 
   const result = await syncBentoSubscriberTags(c, {
     deleteSegments,
-    email: email.trim(),
+    email: email.trim().toLowerCase(),
     segments,
   })
   if (result === false) {
@@ -283,9 +283,14 @@ export async function getOrCreateUserABTests(
   }
 
   const pgPool = getPgClient(c, false)
+  let result: {
+    assignments: Record<string, ABTestAssignment>
+    created: Record<string, ABTestAssignment>
+    email?: string | null
+  }
   try {
     const drizzle = getDrizzleClient(pgPool)
-    const result = await drizzle.transaction(async (tx) => {
+    result = await drizzle.transaction(async (tx) => {
       const lockedUserResult = await tx.execute<AssignmentUser & { email?: string | null }>(sql`
         SELECT created_via_invite, email, onboarding->'abtests' AS abtests
         FROM public.users
@@ -326,12 +331,12 @@ export async function getOrCreateUserABTests(
         email: user.email,
       }
     })
-    await syncCreatedABTestTags(c, result.email, result.created)
-    return result.assignments
   }
   finally {
     await closeClient(c, pgPool)
   }
+  await syncCreatedABTestTags(c, result.email, result.created)
+  return result.assignments
 }
 
 export async function syncNewUserABTests(
