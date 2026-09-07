@@ -2154,7 +2154,7 @@
   "organization-onboarding-intent-option-publish-desc": "Turn my existing website into an iOS and Android app.",
   "organization-onboarding-intent-required": "Pick what you'd like to do first.",
   "organization-onboarding-webnative-title": "WebNativeApp may be a better fit",
-  "organization-onboarding-webnative-description": "If your web app is already live at a public URL, WebNativeApp can package it for iOS and Android and keep it updated from your website—without setting up the Capgo CLI.",
+  "organization-onboarding-webnative-description": "If your web app is already live at a public URL, WebNativeApp can package it for iOS and Android and keep it updated from your website - without setting up the Capgo CLI.",
   "organization-onboarding-webnative-check-website": "Check WebNativeApp",
   "organization-onboarding-webnative-continue-capgo": "Continue with Capgo",
   "organization-onboarding-logo-helper": "Recommended: square image, 256x256 or larger",
