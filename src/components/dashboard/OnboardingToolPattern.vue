@@ -23,7 +23,7 @@ const tiles = computed(() => {
     const start = (row * 11 + col * 7 + row * col * 5) % icons.length
     let src = icons[start]!
     for (let step = 0; step < icons.length; step++) {
-      const candidate = icons[(start + step * 3) % icons.length]!
+      const candidate = icons[(start + step) % icons.length]!
       if (candidate !== left && candidate !== up && candidate !== upLeft && candidate !== upRight) {
         src = candidate
         break
