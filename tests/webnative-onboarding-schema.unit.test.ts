@@ -6,21 +6,25 @@ const webnativeOnboardingMigration = readFileSync(
   'utf8',
 )
 
-describe('WebNative onboarding schema migration', () => {
-  it.concurrent('backfills invalid historical keys before the new CHECKs', () => {
-    const usersDrop = webnativeOnboardingMigration.indexOf('DROP CONSTRAINT IF EXISTS "users_onboarding_valid"')
-    const usersIntentBackfill = webnativeOnboardingMigration.indexOf(`SET "onboarding" = "onboarding" - 'intent'`, usersDrop)
-    const usersAdd = webnativeOnboardingMigration.indexOf('ADD CONSTRAINT "users_onboarding_valid"')
+describe('webnative onboarding schema migration', () => {
+  it.concurrent('backfills invalid historical keys before the new constraints', () => {
+    const orgsIntentBackfill = webnativeOnboardingMigration.indexOf(`SET "onboarding" = "onboarding" - 'intent'`)
+    const orgsEnvironmentBackfill = webnativeOnboardingMigration.indexOf(`SET "onboarding" = "onboarding" - 'development_environment'`, orgsIntentBackfill)
     const orgsDrop = webnativeOnboardingMigration.indexOf('DROP CONSTRAINT IF EXISTS "orgs_onboarding_valid"')
-    const orgsIntentBackfill = webnativeOnboardingMigration.indexOf(`SET "onboarding" = "onboarding" - 'intent'`, orgsDrop)
     const orgsAdd = webnativeOnboardingMigration.indexOf('ADD CONSTRAINT "orgs_onboarding_valid"')
+    const usersIntentBackfill = webnativeOnboardingMigration.indexOf(`SET "onboarding" = "onboarding" - 'intent'`, orgsAdd)
+    const usersEnvironmentBackfill = webnativeOnboardingMigration.indexOf(`SET "onboarding" = "onboarding" - 'development_environment'`, usersIntentBackfill)
+    const usersDrop = webnativeOnboardingMigration.indexOf('DROP CONSTRAINT IF EXISTS "users_onboarding_valid"')
+    const usersAdd = webnativeOnboardingMigration.indexOf('ADD CONSTRAINT "users_onboarding_valid"')
 
-    expect(orgsDrop).toBeGreaterThan(-1)
-    expect(orgsIntentBackfill).toBeGreaterThan(orgsDrop)
-    expect(orgsAdd).toBeGreaterThan(orgsIntentBackfill)
-    expect(usersDrop).toBeGreaterThan(orgsAdd)
-    expect(usersIntentBackfill).toBeGreaterThan(usersDrop)
-    expect(usersAdd).toBeGreaterThan(usersIntentBackfill)
+    expect(orgsIntentBackfill).toBeGreaterThan(-1)
+    expect(orgsEnvironmentBackfill).toBeGreaterThan(orgsIntentBackfill)
+    expect(orgsDrop).toBeGreaterThan(orgsEnvironmentBackfill)
+    expect(orgsAdd).toBeGreaterThan(orgsDrop)
+    expect(usersIntentBackfill).toBeGreaterThan(orgsAdd)
+    expect(usersEnvironmentBackfill).toBeGreaterThan(usersIntentBackfill)
+    expect(usersDrop).toBeGreaterThan(usersEnvironmentBackfill)
+    expect(usersAdd).toBeGreaterThan(usersDrop)
     expect(webnativeOnboardingMigration).toContain(`<> ALL (ARRAY['ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text", 'publish'::"text"])`)
     expect(webnativeOnboardingMigration).toContain(`<> ALL (ARRAY['unknown'::"text", 'ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text", 'publish'::"text"])`)
   })

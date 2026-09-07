@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { executeSQL, USER_PASSWORD_HASH } from './test-utils.ts'
 
-describe('WebNative onboarding schema constraints', () => {
+describe('webnative onboarding schema constraints', () => {
   const userId = randomUUID()
   const orgId = randomUUID()
   const email = `webnative-onboarding-schema-${randomUUID()}@test.com`
@@ -20,9 +20,16 @@ describe('WebNative onboarding schema constraints', () => {
        ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email`,
       [userId, email],
     )
+
+    await executeSQL(
+      `INSERT INTO public.orgs (id, name, management_email, created_by, onboarding)
+       VALUES ($1, $2, $3, $4, jsonb_build_object('intent', 'publish'))`,
+      [orgId, `WebNative schema ${orgId}`, email, userId],
+    )
   })
 
   afterAll(async () => {
+    await executeSQL('DELETE FROM public.stripe_info WHERE customer_id = $1', [`pending_${orgId}`])
     await executeSQL('DELETE FROM public.orgs WHERE id = $1', [orgId])
     await executeSQL('DELETE FROM public.users WHERE id = $1', [userId])
     await executeSQL('DELETE FROM auth.users WHERE id = $1', [userId])
@@ -48,10 +55,8 @@ describe('WebNative onboarding schema constraints', () => {
     })
 
     const orgs = await executeSQL<{ onboarding: Record<string, unknown> }>(
-      `INSERT INTO public.orgs (id, name, management_email, created_by, onboarding)
-       VALUES ($1, $2, $3, $4, jsonb_build_object('intent', 'publish'))
-       RETURNING onboarding`,
-      [orgId, `WebNative schema ${orgId}`, email, userId],
+      'SELECT onboarding FROM public.orgs WHERE id = $1',
+      [orgId],
     )
     expect(orgs[0]?.onboarding).toEqual({ intent: 'publish' })
 
