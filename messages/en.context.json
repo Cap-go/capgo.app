@@ -960,6 +960,7 @@
   "cli-login-skipped-reason-role": "Used in Capgo web console areas: components. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cli-login-skipped-reason-security": "Used in Capgo web console areas: components. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cli-login-skipped-reasons-intro": "Used in Capgo web console areas: components. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cli-login-skipped-refresh": "Used in Capgo web console areas: components. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cli-login-skipped-title": "Used in Capgo web console areas: components. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cli-login-success-title": "Used in Capgo web console areas: pages. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cli-login-title": "Used in Capgo web console areas: pages. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

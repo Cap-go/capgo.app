@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NavigationGuardNext, RouteLocationNormalized } from 'vue-router'
 import type { UserModule } from '~/types'
+import { isCliLoginPath } from '~/services/cliLogin'
 import { hideLoader } from '~/services/loader'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { setUser } from '~/services/posthog'
@@ -194,7 +195,7 @@ async function guard(
     ? to.query.invite_org
     : null
   const isAdminRoute = to.path.startsWith('/admin')
-  const isCliLoginRoute = to.path === '/login-cli'
+  const isCliLoginRoute = isCliLoginPath(to.path)
   const organizationFetchOptions = { loadImages: !isCliLoginRoute }
 
   async function tryLoadOrganizations(fetcher: () => Promise<void>) {

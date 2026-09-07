@@ -8,6 +8,10 @@ defineProps<{
 }>()
 
 const { t } = useI18n()
+
+function reloadPage(): void {
+  window.location.reload()
+}
 </script>
 
 <template>
@@ -36,7 +40,16 @@ const { t } = useI18n()
             <li>{{ t('cli-login-skipped-reason-security') }}</li>
           </ul>
         </div>
-        <p>{{ t('cli-login-skipped-hint') }}</p>
+        <p>
+          {{ t('cli-login-skipped-hint') }}
+          <button
+            class="font-medium text-slate-900 underline decoration-slate-400 underline-offset-2 hover:decoration-slate-600 dark:text-slate-100 dark:hover:decoration-slate-300"
+            type="button"
+            @click="reloadPage"
+          >
+            {{ t('cli-login-skipped-refresh') }}
+          </button>
+        </p>
       </div>
     </div>
   </div>

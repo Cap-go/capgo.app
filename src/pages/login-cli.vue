@@ -17,6 +17,7 @@ import { buildCliAiSetupPrompt } from '~/services/cliAiPrompt'
 import {
   createCliLoginKeyDependencies,
   getCliLoginDestination,
+  isCliAiQuery,
   isMatchingCliLoginEvent,
   isValidCliLoginSession,
   prepareCliLoginKey,
@@ -48,7 +49,7 @@ const destination = ref('/dashboard')
 const channels: RealtimeChannel[] = []
 const aiPromptOrganizations = ref<CliAiPromptOrganization[]>([])
 const aiPromptSkippedOrganizations = ref<Array<{ id: string, name: string }>>([])
-const aiMode = computed(() => route.query.ai === '1')
+const aiMode = computed(() => isCliAiQuery(route.query.ai))
 const displayedKey = computed(() => revealed.value && secret.value ? secret.value : hiddenKey)
 const aiPrompt = computed(() => {
   if (!secret.value || aiPromptOrganizations.value.length === 0)

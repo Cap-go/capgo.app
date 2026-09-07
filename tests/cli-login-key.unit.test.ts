@@ -3,6 +3,8 @@ import {
   aggregateCliKeyPolicy,
   canonicalizeCliBindings,
   getCliLoginDestination,
+  isCliAiQuery,
+  isCliLoginPath,
   isMatchingCliLoginEvent,
   isValidCliLoginSession,
   nextManagedCliKeyName,
@@ -111,6 +113,13 @@ describe('CLI login key model', () => {
     const session = 'AbCdEfGhIjKlMnOpQrStUv'
     expect(isValidCliLoginSession(session)).toBe(true)
     expect(isValidCliLoginSession('short')).toBe(false)
+    expect(isCliAiQuery('1')).toBe(true)
+    expect(isCliAiQuery('1/')).toBe(true)
+    expect(isCliAiQuery(['1/'])).toBe(true)
+    expect(isCliAiQuery('0')).toBe(false)
+    expect(isCliLoginPath('/login-cli')).toBe(true)
+    expect(isCliLoginPath('/login-cli/')).toBe(true)
+    expect(isCliLoginPath('/login')).toBe(false)
     expect(isMatchingCliLoginEvent({
       event: 'User CLI login',
       channel: 'user-login',

@@ -157,6 +157,15 @@ export function isValidCliLoginSession(value: unknown): value is string {
   return typeof value === 'string' && /^[\w-]{22,}$/.test(value)
 }
 
+export function isCliAiQuery(value: unknown): boolean {
+  const raw = Array.isArray(value) ? value[0] : value
+  return typeof raw === 'string' && raw.replace(/\/+$/, '') === '1'
+}
+
+export function isCliLoginPath(path: string): boolean {
+  return path.replace(/\/+$/, '') === '/login-cli'
+}
+
 export function isMatchingCliLoginEvent(
   payload: { event?: string, channel?: string, description?: string },
   session: string,
