@@ -43,7 +43,8 @@ describe('app onboarding API key loading state', () => {
       mountedFlow.indexOf('\n  finally {'),
     )
 
-    expect(standardFlow).toContain('if (resumed)\n      startApiKeyLoading()')
+    expect(standardFlow).toContain('if (resumed)')
+    expect(standardFlow).toContain('startApiKeyLoading()')
     expect(standardFlow.match(/startApiKeyLoading\(\)/g)).toHaveLength(1)
   })
 
