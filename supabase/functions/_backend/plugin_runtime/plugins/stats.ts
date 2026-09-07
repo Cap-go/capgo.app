@@ -150,6 +150,8 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     return { success: true }
   }
 
+  // Client body.channel is ignored for version_usage; only defaultChannel and
+  // server-side overrides (channel_devices / channel_self store) may attribute installs.
   let effectiveStatsChannelPromise: ReturnType<typeof getEffectiveDeviceChannelNamePostgres> | undefined
   const getEffectiveStatsChannel = () => {
     effectiveStatsChannelPromise ??= getEffectiveDeviceChannelNamePostgres(c, app_id, device.device_id, normalizeStatsChannelName(device.default_channel), device.platform, appOwner.channel_device_count > 0, drizzleClient as ReturnType<typeof getDrizzleClient>)

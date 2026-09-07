@@ -54,6 +54,8 @@ export function buildOnboardingIntentBentoEventData(
   const onboardingUrlOta = baseUrl ? `${baseUrl}/app/new` : null
   const onboardingUrlBuilder = baseUrl ? `${baseUrl}/apps` : null
 
+  // Bento emails need a next-step URL. Publish is a “make a native app” path, so it
+  // uses the same dashboard landing as builder instead of the OTA create-app flow.
   let onboardingUrl: string | null = onboardingUrlOta
   if (intent === 'builder' || intent === 'publish')
     onboardingUrl = onboardingUrlBuilder

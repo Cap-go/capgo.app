@@ -10,6 +10,7 @@
     }
   },
   "webnativeapp_publish_intent": {
+    "comment": "Shows a 'convert my webapp to mobile' intent option. Does not change the rest of the flow by itself.",
     "audience": "self_signup",
     "treatment_percentage": 25,
     "treatment_branch": "A",
@@ -20,6 +21,7 @@
     }
   },
   "webnativeapp_development_environment": {
+    "comment": "Asks what tools people use to build. Combined with publish + hosted_builder + starting out, this can recommend WebNativeApp.",
     "audience": "self_signup",
     "treatment_percentage": 25,
     "treatment_branch": "C",

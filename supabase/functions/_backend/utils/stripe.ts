@@ -776,6 +776,67 @@ export interface StripeCustomer {
   }
 }
 
+export function orgStripeCustomerIdempotencyKey(orgId: string) {
+  return `org-customer:${orgId}`
+}
+
+export function localOrgStripeCustomerId(orgId: string) {
+  return `cus_local_${orgId.replaceAll('-', '')}`
+}
+
+function isStripeIdempotencyMismatch(error: unknown) {
+  if (!error || typeof error !== 'object')
+    return false
+  const candidate = error as { type?: string, rawType?: string, message?: string }
+  const type = candidate.type ?? candidate.rawType
+  if (type === 'idempotency_error' || type === 'StripeIdempotencyError')
+    return true
+  return typeof candidate.message === 'string' && candidate.message.toLowerCase().includes('idempotent')
+}
+
+function oldestCustomer(customers: Stripe.Customer[]) {
+  return customers.toSorted((left, right) => left.created - right.created)[0] ?? null
+}
+
+function customerMatchesOrg(customer: Stripe.Customer, orgId: string) {
+  return customer.metadata?.org_id === orgId
+}
+
+async function searchOrgStripeCustomer(c: Context, orgId: string) {
+  try {
+    const result = await getStripe(c).customers.search({
+      query: `metadata['org_id']:'${orgId.replaceAll('\'', '')}'`,
+      limit: 10,
+    })
+    return oldestCustomer(result.data)
+  }
+  catch (error) {
+    // Search is a separate Stripe service (unavailable in some regions, distinct rate limits).
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'searchOrgStripeCustomer failed',
+      orgId,
+      error,
+    })
+    return null
+  }
+}
+
+async function findExistingOrgStripeCustomer(c: Context, orgId: string, email: string) {
+  const fromSearch = await searchOrgStripeCustomer(c, orgId)
+  if (fromSearch)
+    return fromSearch
+
+  // Search is eventually consistent; list by email is a bounded read-after-write fallback.
+  const listed = await getStripe(c).customers.list({ email, limit: 100 })
+  const fromList = oldestCustomer(listed.data.filter(customer => customerMatchesOrg(customer, orgId)))
+  if (fromList)
+    return fromList
+
+  // Email may have changed before Search indexed the original customer.
+  return await searchOrgStripeCustomer(c, orgId)
+}
+
 export async function createCustomer(c: Context, email: string, userId: string, orgId: string, name: string) {
   cloudlog({ requestId: c.get('requestId'), message: 'createCustomer', email, userId, orgId, name })
   const baseConsoleUrl = trimTrailingSlashes(getEnv(c, 'WEBAPP_URL') || '')
@@ -788,15 +849,37 @@ export async function createCustomer(c: Context, email: string, userId: string, 
   }
   if (!isStripeConfigured(c)) {
     cloudlog({ requestId: c.get('requestId'), message: 'createCustomer no stripe key', email, userId, name })
-    // create a fake customer id like stripe one and random id
-    const randomId = crypto.randomUUID().replaceAll('-', '').slice(0, 24)
-    return { id: `cus_${randomId}`, email, name, metadata }
+    return { id: localOrgStripeCustomerId(orgId), email, name, metadata }
   }
-  const customer = await getStripe(c).customers.create({
-    email,
-    name,
-    metadata,
-  })
+  // Org-create queue retries must return the same customer instead of minting duplicates.
+  let customer: Stripe.Customer
+  try {
+    customer = await getStripe(c).customers.create({
+      email,
+      name,
+      metadata,
+    }, { idempotencyKey: orgStripeCustomerIdempotencyKey(orgId) })
+  }
+  catch (error) {
+    if (!isStripeIdempotencyMismatch(error))
+      throw error
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'createCustomer idempotency mismatch, searching existing customer',
+      orgId,
+    })
+    const existing = await findExistingOrgStripeCustomer(c, orgId, email)
+    if (!existing) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'createCustomer idempotency mismatch without existing customer',
+        orgId,
+        error,
+      })
+      throw error
+    }
+    customer = existing
+  }
   // Add supabase dashboard link with the real customer ID after creation
   const supabaseLink = buildSupabaseDashboardLink(c, customer.id)
   if (supabaseLink) {

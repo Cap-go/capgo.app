@@ -1,8 +1,8 @@
--- GHSA-xg7v-83qv-qfff: org admins cannot forge an active enforce_sso provider
--- via direct PostgREST INSERT. pending_verification inserts remain the client path.
+-- Org admins cannot forge provider_id on SSO providers via PostgREST.
+-- pending_verification inserts remain the client path without provider_id.
 BEGIN;
 
-SELECT plan(11);
+SELECT plan(15);
 
 SELECT tests.authenticate_as_service_role();
 SELECT tests.create_supabase_user(
@@ -58,7 +58,6 @@ SELECT throws_ok(
     INSERT INTO public.sso_providers (
       org_id,
       domain,
-      provider_id,
       status,
       enforce_sso,
       dns_verification_token
@@ -66,7 +65,6 @@ SELECT throws_ok(
     VALUES (
       '71000000-0000-4000-8000-000000000071',
       'forged-active.sso.test',
-      'prov_forged_active',
       'active',
       true,
       'dns-forged-active'
@@ -82,7 +80,6 @@ SELECT throws_ok(
     INSERT INTO public.sso_providers (
       org_id,
       domain,
-      provider_id,
       status,
       enforce_sso,
       dns_verification_token
@@ -90,7 +87,6 @@ SELECT throws_ok(
     VALUES (
       '71000000-0000-4000-8000-000000000071',
       'forged-enforce-pending.sso.test',
-      'prov_forged_enforce_pending',
       'pending_verification',
       true,
       'dns-forged-enforce-pending'
@@ -106,7 +102,6 @@ SELECT throws_ok(
     INSERT INTO public.sso_providers (
       org_id,
       domain,
-      provider_id,
       status,
       enforce_sso,
       dns_verification_token,
@@ -115,7 +110,6 @@ SELECT throws_ok(
     VALUES (
       '71000000-0000-4000-8000-000000000071',
       'forged-verified.sso.test',
-      'prov_forged_verified',
       'verified',
       false,
       'dns-forged-verified',
@@ -127,10 +121,9 @@ SELECT throws_ok(
   'org admin cannot insert a pre-verified SSO provider'
 );
 
-SELECT lives_ok(
+SELECT throws_ok(
   $$
     INSERT INTO public.sso_providers (
-      id,
       org_id,
       domain,
       provider_id,
@@ -139,16 +132,50 @@ SELECT lives_ok(
       dns_verification_token
     )
     VALUES (
+      '71000000-0000-4000-8000-000000000071',
+      'forged-provider-id.sso.test',
+      'prov_forged_provider_id',
+      'pending_verification',
+      false,
+      'dns-forged-provider-id'
+    )
+  $$,
+  '42501',
+  'SSO_PROVIDER_PROVIDER_ID_CLIENT_WRITE_DENIED',
+  'org admin cannot insert pending_verification with provider_id via PostgREST'
+);
+
+SELECT lives_ok(
+  $$
+    INSERT INTO public.sso_providers (
+      id,
+      org_id,
+      domain,
+      status,
+      enforce_sso,
+      dns_verification_token
+    )
+    VALUES (
       '71000000-0000-4000-8000-000000000072',
       '71000000-0000-4000-8000-000000000071',
       'pending-ok.sso.test',
-      'prov_pending_ok',
       'pending_verification',
       false,
       'dns-pending-ok'
     )
   $$,
-  'org admin can insert a pending_verification SSO provider'
+  'org admin can insert a pending_verification SSO provider without provider_id'
+);
+
+SELECT throws_ok(
+  $$
+    UPDATE public.sso_providers
+    SET provider_id = 'prov_hijacked'
+    WHERE id = '71000000-0000-4000-8000-000000000072'
+  $$,
+  '42501',
+  'SSO_PROVIDER_PROVIDER_ID_CLIENT_WRITE_DENIED',
+  'org admin cannot change provider_id via PostgREST'
 );
 
 SELECT throws_ok(
@@ -185,6 +212,7 @@ SELECT throws_ok(
 );
 
 SELECT tests.authenticate_as_service_role();
+SELECT set_config('request.jwt.claim.role', 'service_role', true);
 
 INSERT INTO public.sso_providers (
   id,
@@ -288,6 +316,7 @@ SELECT throws_ok(
 );
 
 SELECT tests.authenticate_as_service_role();
+SELECT set_config('request.jwt.claim.role', 'service_role', true);
 
 SELECT lives_ok(
   $$
@@ -311,6 +340,25 @@ SELECT lives_ok(
     )
   $$,
   'service_role can still insert a legitimate active SSO provider'
+);
+
+SELECT lives_ok(
+  $$
+    UPDATE public.sso_providers
+    SET provider_id = 'prov_service_role_bound'
+    WHERE id = '71000000-0000-4000-8000-000000000072'
+  $$,
+  'service_role can set provider_id on a pending SSO provider'
+);
+
+SELECT is(
+  (
+    SELECT provider_id
+    FROM public.sso_providers
+    WHERE id = '71000000-0000-4000-8000-000000000072'
+  ),
+  'prov_service_role_bound',
+  'service_role provider_id update persisted on pending SSO provider'
 );
 
 SELECT tests.clear_authentication();

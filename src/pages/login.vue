@@ -41,9 +41,10 @@ const captchaComponent = ref<InstanceType<typeof VueTurnstile> | null>(null)
 
 // Keep email, password, and OTP in one form so password managers can fill them
 // with a single biometric prompt. Password stays hidden until the domain is
-// known not to use SSO. SSO domains never show a password field.
+// known not to enforce SSO. Optional SSO still shows password login.
 const emailForLogin = ref('')
 const hasSso = ref(false)
+const enforceSso = ref(false)
 const lastCheckedEmail = ref('')
 const passwordPathReady = ref(false)
 const domainCheckTimeoutMs = 5000
@@ -390,14 +391,16 @@ async function refreshSsoForEmail(email: string) {
     if (!isCurrentDomainCheck(seq, trimmed))
       return
     hasSso.value = result.has_sso
+    enforceSso.value = result.has_sso && result.enforce_sso === true
     lastCheckedEmail.value = trimmed
-    passwordPathReady.value = !result.has_sso
+    passwordPathReady.value = !enforceSso.value
   }
   catch (error) {
     if (!isCurrentDomainCheck(seq, trimmed))
       return
     console.error('SSO domain check failed', error)
     hasSso.value = false
+    enforceSso.value = false
     lastCheckedEmail.value = ''
     passwordPathReady.value = true
   }
@@ -427,18 +430,20 @@ watch(emailForLogin, (email) => {
 
   if (!isCompletableEmail(trimmed)) {
     hasSso.value = false
+    enforceSso.value = false
     passwordPathReady.value = false
     lastCheckedEmail.value = ''
     return
   }
 
   if (lastCheckedEmail.value === trimmed) {
-    passwordPathReady.value = !hasSso.value
+    passwordPathReady.value = !enforceSso.value
     return
   }
 
   if (domain !== lastDomain) {
     hasSso.value = false
+    enforceSso.value = false
     passwordPathReady.value = false
     lastCheckedEmail.value = ''
   }
@@ -465,7 +470,7 @@ async function handleLoginSubmit(form: { email: string, password: string, code?:
     console.error('SSO domain check failed', error)
   }
 
-  if (hasSso.value) {
+  if (enforceSso.value) {
     await handleSsoLogin()
     return
   }
@@ -932,7 +937,7 @@ onMounted(checkLogin)
                       />
 
                       <p v-if="hasSso" class="text-sm text-slate-600 dark:text-slate-300">
-                        {{ t('sso-detected') }}
+                        {{ enforceSso ? t('sso-required') : t('sso-detected') }}
                       </p>
 
                       <div v-if="hasSso">
@@ -960,7 +965,7 @@ onMounted(checkLogin)
 
                       <!--
                         Keep password in the form from first paint so password managers can fill
-                        it with the email. Reveal it only after the domain is known not to use SSO.
+                        it with the email. Reveal it after the domain is known not to enforce SSO.
                       -->
                       <div
                         :style="passwordPathReady ? undefined : autofillPreserveHiddenStyle"

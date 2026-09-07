@@ -45,7 +45,7 @@ async function refreshPendingOnboardingApp() {
 
   const { data, error } = await supabase
     .from('apps')
-    .select('app_id, need_onboarding')
+    .select('app_id, need_onboarding, onboarding')
     .eq('owner_org', singleOrganization.gid)
     .limit(1)
     .maybeSingle()

@@ -3,6 +3,7 @@ import { intro, log, outro } from '@clack/prompts'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { delChannel, findChannel, findVersionsLinkedToChannel, isVersionLinkedToOtherChannel } from '../api/channels'
 import { deleteAppVersion } from '../api/versions'
+import { CliUserError } from '../shared/cli-user-error'
 import { createSupabaseClient, findSavedKey, formatError, getAppId, getConfig, getOrganizationId, hasCliPermission, invokeCapgoCliApi, sendEvent } from '../utils'
 
 export async function deleteChannelInternal(channelId: string, appId: string, options: ChannelDeleteOptions, silent = false) {
@@ -22,7 +23,7 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
   if (!appId) {
     if (!silent)
       log.error('Missing argument, you need to provide a appId, or be in a capacitor project')
-    throw new Error('Missing appId')
+    throw new CliUserError('Missing appId')
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)

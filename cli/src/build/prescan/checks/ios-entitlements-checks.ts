@@ -11,7 +11,9 @@ import type { Finding, PrescanCheck, ScanContext } from '../types'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseMobileprovisionDetailedFromBase64 } from '../../mobileprovision-parser'
-import { entArray, entString, readAppEntitlements } from '../ios-entitlements'
+import { readTextIfExists } from '../gradle'
+import { entArray, entBool, entString, readAppEntitlements } from '../ios-entitlements'
+import { willUploadToAppStore } from '../upload-intent'
 import { plistArrayStrings } from './ios-plist-read'
 import { parseProvisioningMap } from './ios-profiles'
 
@@ -314,6 +316,42 @@ export const appGroupsFormat: PrescanCheck = {
       title: `${bad.length} app group identifier(s) have an invalid format`,
       detail: `invalid: ${bad.join(', ')}`,
       fix: 'Name app groups "group.<reverse-dns>" (lowercase, no whitespace) and register them in the portal',
+    }]
+  },
+}
+
+const AGE_RANGE_PLUGIN = '@capgo/capacitor-age-range'
+const DECLARED_AGE_RANGE_KEY = 'com.apple.developer.declared-age-range'
+
+/** True when `name` is listed in package.json dependencies or devDependencies. */
+function packageHasDependency(projectDir: string, name: string): boolean {
+  const raw = readTextIfExists(join(projectDir, 'package.json'))
+  if (raw === null)
+    return false
+  try {
+    const pkg = JSON.parse(raw) as { dependencies?: Record<string, string>, devDependencies?: Record<string, string> }
+    const deps = { ...pkg.devDependencies, ...pkg.dependencies }
+    return typeof deps[name] === 'string'
+  }
+  catch {
+    return false
+  }
+}
+
+export const entitlementsDeclaredAgeRange: PrescanCheck = {
+  id: 'ios/entitlements-declared-age-range',
+  platforms: ['ios'],
+  appliesTo: ctx => packageHasDependency(ctx.projectDir, AGE_RANGE_PLUGIN) && willUploadToAppStore(ctx),
+  async run(ctx): Promise<Finding[]> {
+    const app = readAppEntitlements(ctx.projectDir, ctx.appId)
+    if (app !== null && entBool(app.raw, DECLARED_AGE_RANGE_KEY) === true)
+      return []
+    return [{
+      id: 'ios/entitlements-declared-age-range',
+      severity: 'warning',
+      title: `${AGE_RANGE_PLUGIN} is installed without the Declared Age Range entitlement`,
+      detail: 'The plugin calls Apple\'s Declared Age Range API. Without com.apple.developer.declared-age-range signed into the binary, in-app age-range requests fail.',
+      fix: 'Add com.apple.developer.declared-age-range=<true/> to App.entitlements, enable Declared Age Range on the App ID, and set CODE_SIGN_ENTITLEMENTS.',
     }]
   },
 }

@@ -61,6 +61,7 @@ declare module 'vue' {
     ChannelTable: typeof import('./components/tables/ChannelTable.vue')['default']
     ChartCard: typeof import('./components/dashboard/ChartCard.vue')['default']
     ChartLegend: typeof import('./components/dashboard/ChartLegend.vue')['default']
+    CliLoginSkippedOrganizations: typeof import('./components/CliLoginSkippedOrganizations.vue')['default']
     CompatibilityBanner: typeof import('./components/dashboard/CompatibilityBanner.vue')['default']
     ConnectAppPicker: typeof import('./components/connect/ConnectAppPicker.vue')['default']
     copy: typeof import('./components/dashboard/OnboardingPublishIntentIconWebPage copy.vue')['default']

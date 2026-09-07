@@ -21,6 +21,7 @@ import {
   mcpGetStatsInputSchema,
   mcpListBundlesInputSchema,
   mcpListChannelsInputSchema,
+  mcpObserveInputSchema,
   mcpProbeInputSchema,
   mcpRequestBuildInputSchema,
   mcpUpdateAppInputSchema,
@@ -618,6 +619,35 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
         limit,
         rangeStart,
         rangeEnd,
+      })
+      if (!result.success) {
+        return formatMcpError(result)
+      }
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify(result.data, null, 2),
+        }],
+      }
+    },
+  )
+
+  server.registerTool(
+    'capgo_observe',
+    {
+      description: 'Query Capgo Observe launch, crash, WebView, and navigation metrics. Start with view=summary and follow findings.next. Use view=device as the session timeline. Per-screen data needs metadata.route or action=app_nav from history/popstate/hashchange/appUrlOpen (no Expo Router).',
+      inputSchema: mcpObserveInputSchema,
+    },
+    async ({ appId, view, days, action, deviceId, versionName, sort, limit }) => {
+      const result = await sdk.observe({
+        appId,
+        view,
+        days,
+        action,
+        deviceId,
+        versionName,
+        sort,
+        limit,
       })
       if (!result.success) {
         return formatMcpError(result)

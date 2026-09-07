@@ -1,5 +1,6 @@
 import { app as accept_invitation } from '../_backend/private/accept_invitation.ts'
 import { app as admin_credits } from '../_backend/private/admin_credits.ts'
+import { app as admin_org_support_channel } from '../_backend/private/admin_org_support_channel.ts'
 import { app as admin_stats } from '../_backend/private/admin_stats.ts'
 import { app as bundle_install_stats } from '../_backend/private/bundle_install_stats.ts'
 import { app as channel_device } from '../_backend/private/channel_device.ts'
@@ -19,6 +20,7 @@ import { app as invite_new_user_to_org } from '../_backend/private/invite_new_us
 import { app as latency } from '../_backend/private/latency.ts'
 import { app as log_as } from '../_backend/private/log_as.ts'
 import { app as native_observe_stats } from '../_backend/private/native_observe_stats.ts'
+import { app as observe } from '../_backend/private/observe.ts'
 import { app as onboarding_ab_tests } from '../_backend/private/onboarding_ab_tests.ts'
 import { app as org_notification_stats } from '../_backend/private/org_notification_stats.ts'
 // Webapps API
@@ -65,11 +67,13 @@ appGlobal.route('/create_device', create_device)
 appGlobal.route('/channel_stats', channel_stats)
 appGlobal.route('/bundle_install_stats', bundle_install_stats)
 appGlobal.route('/native_observe_stats', native_observe_stats)
+appGlobal.route('/observe', observe)
 appGlobal.route('/onboarding_ab_tests', onboarding_ab_tests)
 appGlobal.route('/org_notification_stats', org_notification_stats)
 appGlobal.route('/download_link', download_link)
 appGlobal.route('/log_as', log_as)
 appGlobal.route('/admin_credits', admin_credits)
+appGlobal.route('/admin_org_support_channel', admin_org_support_channel)
 appGlobal.route('/admin_stats', admin_stats)
 appGlobal.route('/stats', stats_priv)
 appGlobal.route('/stripe_checkout', stripe_checkout)

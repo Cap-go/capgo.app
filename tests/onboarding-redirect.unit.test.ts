@@ -7,6 +7,7 @@ describe('onboarding dashboard redirect', () => {
     vi.restoreAllMocks()
     vi.resetModules()
     window.sessionStorage.clear()
+    window.localStorage.clear()
   })
 
   async function getRedirect(options: Parameters<(typeof import('../src/utils/onboardingRedirect.ts'))['getOnboardingResumeRedirect']>[0]) {
@@ -76,6 +77,17 @@ describe('onboarding dashboard redirect', () => {
     vi.resetModules()
     const refreshedModule = await import('../src/utils/onboardingRedirect.ts')
     expect(refreshedModule.getOnboardingResumeAppId('user-1')).toBe('com.example.app')
+    expect(refreshedModule.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-1' })).toBeNull()
+  })
+
+  it('keeps dashboard exploration granted after a new login in the same browser', async () => {
+    const module = await import('../src/utils/onboardingRedirect.ts')
+    module.allowOnboardingDashboardExploration('user-1', 'com.example.app')
+    expect(window.localStorage.getItem('capgo:onboarding-dashboard-exploration')).toContain('user-1')
+
+    vi.resetModules()
+    window.sessionStorage.clear()
+    const refreshedModule = await import('../src/utils/onboardingRedirect.ts')
     expect(refreshedModule.getOnboardingResumeRedirect({ appId: 'com.example.app', appCount: 1, createdAt: eligibleUser, organizationCount: 1, path: '/apps', resumeAppId: null, userId: 'user-1' })).toBeNull()
   })
 

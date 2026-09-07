@@ -56,6 +56,7 @@ export const statsActionFilters = [
   ['action-webview-content-process-terminated', 'webview_content_process_terminated'],
   ['action-webview-dom-content-loaded', 'webview_dom_content_loaded'],
   ['action-webview-page-loaded', 'webview_page_loaded'],
+  ['action-app-nav', 'app_nav'],
   ['action-os-version-changed', 'os_version_changed'],
   ['action-native-app-version-changed', 'native_app_version_changed'],
   ['action-uninstall', 'uninstall'],
@@ -156,6 +157,7 @@ const observeActions = new Set<string>([
   'webview_content_process_terminated',
   'webview_dom_content_loaded',
   'webview_page_loaded',
+  'app_nav',
   'os_version_changed',
   'native_app_version_changed',
 ])

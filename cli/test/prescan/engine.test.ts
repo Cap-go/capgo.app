@@ -150,28 +150,29 @@ describe('fixture helpers', () => {
 })
 
 describe('registry', () => {
-  it('contains all 82 checks with unique ids', () => {
+  it('contains all 84 checks with unique ids', () => {
     const ids = ALL_CHECKS.map(c => c.id)
     expect(new Set(ids).size).toBe(ids.length)
-    expect(ids.length).toBe(82)
+    expect(ids.length).toBe(84)
     for (const expected of [
       'shared/apikey-permission', 'shared/app-exists', 'shared/credentials-saved',
       'shared/cap-sync-stale', 'shared/node-linker-layout', 'shared/bundle-id-consistency',
       'ios/p12-opens', 'ios/p12-legacy-encryption', 'ios/p12-expiry', 'ios/profile-expiry', 'ios/profile-bundle-match',
       'ios/profile-type-vs-mode', 'ios/cert-profile-pairing', 'ios/targets-covered',
       'ios/infoplist-sanity', 'ios/asc-key-valid',
-      // 10 ios plist checks
+      // 11 ios plist checks
       'ios/plist-bundle-id-format', 'ios/plist-version-short-format', 'ios/plist-version-build-format',
       'ios/plist-encryption-compliance', 'ios/plist-ats-arbitrary-loads', 'ios/plist-launch-storyboard',
       'ios/plist-orientations-multitasking', 'ios/plist-orientations-present', 'ios/plist-display-name',
-      'ios/plist-background-modes-sanity',
+      'ios/plist-background-modes-sanity', 'ios/plist-required-device-arm64',
       // 7 ios xcode checks
       'ios/xcode-deployment-target-capacitor', 'ios/xcode-signing-team', 'ios/xcode-bundle-id-mismatch-across-configs',
       'ios/xcode-enable-bitcode-leftover', 'ios/xcode-swift-version-sanity', 'ios/xcode-no-app-target',
       'ios/xcode-multiple-app-targets',
-      // 4 ios entitlements checks
+      // 5 ios entitlements checks
       'ios/entitlements-vs-profile-capability', 'ios/entitlements-aps-environment-vs-mode',
       'ios/entitlements-associated-domains-format', 'ios/entitlements-app-groups-format',
+      'ios/entitlements-declared-age-range',
       // 3 ios capacitor config checks
       'ios/capacitor-server-url-shipped', 'ios/capacitor-server-cleartext', 'ios/capacitor-allow-navigation-wildcard',
       // 9 ios pods/spm/appicon checks
@@ -196,9 +197,9 @@ describe('registry', () => {
     ]) expect(ids).toContain(expected)
   })
 
-  it('defers exactly the 33 iOS expansion checks until the hard-coded deadline', () => {
+  it('defers exactly the 35 iOS expansion checks until the hard-coded deadline', () => {
     const deferred = ALL_CHECKS.filter(check => check.enforceAfter === IOS_PRESCAN_EXPANSION_ENFORCE_AFTER)
-    expect(deferred.length).toBe(33)
+    expect(deferred.length).toBe(35)
     expect(deferred.every(check => check.id.startsWith('ios/'))).toBe(true)
     expect(ALL_CHECKS.find(check => check.id === 'ios/p12-opens')?.enforceAfter).toBeUndefined()
   })

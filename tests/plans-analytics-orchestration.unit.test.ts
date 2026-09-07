@@ -214,6 +214,7 @@ describe('plans analytics orchestration', () => {
 
     expect(queries[0]).toContain('event IN (\'User visit\', \'Checkout Started\')')
     expect(queries[1]).toContain(`properties.$group_key IN ('${ORG_A}', '${ORG_B}')`)
+    expect(queries[1]).toContain('2026-08-04T00:00:00.000Z')
     expect(queries[1]).not.toContain(ORG_X)
     expect(queries[2]).toContain('SELECT min(timestamp) AS exact_tracking_started_at')
     expect(loadPlansBillingHistories).toHaveBeenCalledWith(context, [ORG_A, ORG_B], '2026-08-01', '2026-08-02', new Map())
@@ -557,6 +558,45 @@ describe('plans analytics orchestration', () => {
     expect(result.visitorBreakdown[0]).toMatchObject({ activeTrial: 1, unknown: 1, total: 2 })
     expect(result.checkoutVisitorBreakdown[0]).toMatchObject({ unknown: 1, total: 1 })
     expect(result.dataQuality.unknownBillingOrganizations).toBe(1)
+  })
+
+  it('counts a final-range checkout as completed when the paid transition lands after range end but before the completion deadline', async () => {
+    const openingMs = Date.parse('2026-08-01T23:00:00.000Z')
+    const checkoutMs = Date.parse('2026-08-02T22:00:00.000Z')
+    const paidMs = Date.parse('2026-08-03T12:00:00.000Z')
+    const transitionQueries: string[] = []
+    vi.mocked(queryPosthogHogql).mockImplementation(async (_context, query) => {
+      if (query.includes('event IN (\'User visit\', \'Checkout Started\')')) {
+        return connected([
+          behavior({ timestamp_ms: openingMs, org_id: ORG_A }),
+          behavior({ timestamp_ms: checkoutMs, event: 'Checkout Started', org_id: ORG_A }),
+        ])
+      }
+      if (query.includes('event IN (\'User subscribe\'')) {
+        transitionQueries.push(query)
+        return connected([
+          {
+            timestamp_ms: paidMs,
+            event: 'User subscribe',
+            group_key: ORG_A,
+            group_type: 'organization',
+            grouped_org_id: '',
+            plan_status: 'succeeded',
+            event_plan_status: null,
+            canceled_at: null,
+          },
+        ])
+      }
+      return connected()
+    })
+    vi.mocked(loadPlansBillingHistories).mockImplementation(async (_context, orgIds, _startDate, _endDate, transitions) => new Map(
+      orgIds.map(orgId => [orgId, history(orgId, { transitions: transitions.get(orgId) ?? [] })]),
+    ))
+
+    const result = await getAdminPlansAnalytics(context, start, end)
+
+    expect(transitionQueries[0]).toContain('2026-08-04T00:00:00.000Z')
+    expect(result.checkoutCompletion[0]).toMatchObject({ date: '2026-08-01', completed: 1, notCompleted: 0, pending: 0 })
   })
 
   it.each([

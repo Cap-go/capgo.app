@@ -18,6 +18,7 @@ import { checkPermissionPg } from '../utils/rbac.ts'
 import { createStatsBandwidth } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 import { backgroundTask } from '../utils/utils.ts'
+import { buildFileReadCacheRequest, getFileReadCache, isAttachmentVersionDeleted } from './file_read_cache.ts'
 import { app as files_config } from './files_config.ts'
 import { parseUploadMetadata } from './parse.ts'
 import { DEFAULT_RETRY_PARAMS, RetryBucket } from './retry.ts'
@@ -32,7 +33,6 @@ const ATTACHMENT_PREFIX = 'attachments'
 const ATTACHMENT_PLAN_LIMIT: Array<'mau' | 'bandwidth' | 'storage'> = ['mau', 'bandwidth', 'storage']
 const TUS_UPLOAD_CONTENT_TYPE = 'application/offset+octet-stream'
 const FILE_READ_CACHE_CONTROL = 'public, max-age=31536000, immutable'
-const TRACKING_QUERY_PARAMS = ['device_id']
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -406,9 +406,9 @@ async function getSupabaseStorageResponse(c: Context, fileId: string): Promise<R
 
 async function getHandler(c: Context): Promise<Response> {
   const fileId = c.get('fileId')
-  // It is imperative that files are read without any database read to avoid bottlenecks and keep file downloads highly available, especially under heavy load.
-  // This was designed that way, and access to a file that is going to be deleted is not important compared to download availability.
-  // Do not add DB or R2 checks before serving the file; if the file is missing in R2, a 404 is expected.
+  // File reads stay off the primary DB. A deleted version may still be in the
+  // edge cache after R2 trash; check the deleted marker or one indexed r2_path
+  // lookup before serving or restoring that cache entry.
 
   cloudlog({ requestId: c.get('requestId'), message: 'getHandler files', fileId })
   if (getRuntimeKey() !== 'workerd') {
@@ -423,35 +423,39 @@ async function getHandler(c: Context): Promise<Response> {
     return c.json({ error: 'not_found', message: 'Not found' }, 404)
   }
 
-  // Support for deno cache or CF cache do not remove this
-  // @ts-expect-error-next-line
-  const cache = getRuntimeKey() === 'workerd' ? caches.default : caches
+  const cache = await getFileReadCache()
   const rawFileId = getRawAttachmentRouteId(c)
   const candidateKeys = getSafeAttachmentReadCandidateKeys(fileId, rawFileId)
-  const cacheUrl = new URL(c.req.url)
-  for (const queryParam of TRACKING_QUERY_PARAMS) {
-    cacheUrl.searchParams.delete(queryParam)
-  }
-  cacheUrl.searchParams.set('range', c.req.header('range') || '')
-  cacheUrl.searchParams.sort()
-  const cacheKey = new Request(cacheUrl, c.req)
-  let response = await cache.match(cacheKey)
+  const cacheKey = buildFileReadCacheRequest(c.req.raw)
+  let response = cache ? await cache.match(cacheKey) : null
   if (response != null) {
-    response = ensureNoTransformResponse(response)
+    if (await isAttachmentVersionDeleted(c, fileId)) {
+      cloudlog({ requestId: c.get('requestId'), message: 'getHandler files cache hit for deleted version', fileId })
+      return c.json({ error: 'not_found', message: 'Not found' }, 404)
+    }
+
+    const cachedResponse = ensureNoTransformResponse(response)
+    response = cachedResponse
     cloudlog({ requestId: c.get('requestId'), message: 'getHandler files cache hit' })
     if (c.req.raw.method !== 'HEAD') {
-      await saveBandwidthUsage(c, getTransferredBytesFromResponse(response))
+      await saveBandwidthUsage(c, getTransferredBytesFromResponse(cachedResponse))
     }
-    // Best-effort restore: if file is cached but missing in R2, write it back.
+    // Best-effort restore: if a live file is cached but missing in R2, write it back.
     await backgroundTask(c, async () => {
       try {
+        if (await isAttachmentVersionDeleted(c, fileId))
+          return
+
         const retryBucket = new RetryBucket(bucket, DEFAULT_RETRY_PARAMS)
         const existingObject = await headFirstExistingAttachmentCandidate(retryBucket, candidateKeys)
         if (existingObject != null)
           return
 
-        const cached = response.clone()
+        const cached = cachedResponse.clone()
         const data = await cached.arrayBuffer()
+        if (await isAttachmentVersionDeleted(c, fileId))
+          return
+
         const contentType = cached.headers.get('content-type') || undefined
         const httpMetadata = buildFileHttpMetadata(contentType, cached.headers.get('cache-control'))
         await bucket.put(fileId, data, { httpMetadata })
@@ -464,7 +468,12 @@ async function getHandler(c: Context): Promise<Response> {
         cloudlog({ requestId: c.get('requestId'), message: 'Failed to restore cached file to R2', fileId, error: String(err) })
       }
     })
-    return response
+    return cachedResponse
+  }
+
+  if (await isAttachmentVersionDeleted(c, fileId)) {
+    cloudlog({ requestId: c.get('requestId'), message: 'getHandler files cache miss for deleted version', fileId })
+    return c.json({ error: 'not_found', message: 'Not found' }, 404)
   }
 
   const rangeHeaderFromRequest = c.req.header('range')
@@ -521,10 +530,12 @@ async function getHandler(c: Context): Promise<Response> {
   }
   headers.set('Content-Disposition', `attachment; filename="${object.key}"`)
   response = new Response(object.body, { headers })
-  await backgroundTask(c, () => {
-    cloudlog({ requestId: c.get('requestId'), message: 'getHandler files cache saved', fileId })
-    cache.put(cacheKey, response.clone())
-  })
+  if (cache && !await isAttachmentVersionDeleted(c, fileId)) {
+    await backgroundTask(c, () => {
+      cloudlog({ requestId: c.get('requestId'), message: 'getHandler files cache saved', fileId })
+      return cache.put(cacheKey, response.clone())
+    })
+  }
   return response
 }
 

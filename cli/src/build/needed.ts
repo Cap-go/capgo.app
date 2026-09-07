@@ -8,6 +8,7 @@ import { difference, parse } from '@std/semver'
 import { trackEvent } from '../analytics/track'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { formatTable } from '../terminal-table'
+import { CliUserError } from '../shared/cli-user-error'
 import {
   checkCompatibilityCloud,
   createSupabaseClient,
@@ -263,7 +264,7 @@ export async function getBuildNeeded(
   if (!resolvedAppId) {
     if (configError instanceof Error)
       throw configError
-    throw new Error('Missing appId')
+    throw new CliUserError('Missing appId')
   }
 
   if (!enrichedOptions.apikey)

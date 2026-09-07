@@ -2,6 +2,7 @@ import type { OptionsBase } from '../schemas/base'
 import { intro, log, outro } from '@clack/prompts'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { displayChannels, getActiveChannels } from '../api/channels'
+import { CliUserError } from '../shared/cli-user-error'
 import { createSupabaseClient, findSavedKey, getAppId, getConfig, getOrganizationId, sendEvent } from '../utils'
 
 export async function listChannelsInternal(appId: string, options: OptionsBase, silent = false) {
@@ -21,7 +22,7 @@ export async function listChannelsInternal(appId: string, options: OptionsBase, 
   if (!appId) {
     if (!silent)
       log.error('Missing argument, you need to provide a appId, or be in a capacitor project')
-    throw new Error('Missing appId')
+    throw new CliUserError('Missing appId')
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)

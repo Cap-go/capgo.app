@@ -1,11 +1,11 @@
 <script setup lang="ts">
-const COLS = 5
-const ROWS = 7
-
 const props = defineProps<{
   icons: string[]
   muted?: boolean
 }>()
+
+const COLS = 5
+const ROWS = 7
 
 const tiles = computed(() => {
   const icons = props.icons

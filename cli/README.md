@@ -183,6 +183,13 @@ Capgo continues to load the root config while writing only the selected source. 
 - 🔹 [Notifications](#notifications)
   - [Setup](#notifications-setup)
 - 🔹 [Probe](#probe)
+- 📊 [Observe](#observe)
+  - [Summary](#observe-summary)
+  - [Metrics](#observe-metrics)
+  - [Events](#observe-events)
+  - [Device](#observe-device)
+  - [Versions](#observe-versions)
+  - [Routes](#observe-routes)
 - 🔹 [Generate-docs](#generate-docs)
 - 🔹 [Mcp](#mcp)
 
@@ -224,7 +231,7 @@ npx @capgo/cli@latest init YOUR_API_KEY com.example.app
 
 📱 Run Capacitor apps on devices from the CLI.
 
-### <a id="run-device"></a> 🔹 **Device**
+### <a id="run-device"></a> 📱 **Device**
 
 ```bash
 npx @capgo/cli@latest run device
@@ -1889,6 +1896,186 @@ npx @capgo/cli@latest probe --platform ios
 | **--platform** | <code>string</code> | Platform to probe: ios or android |
 
 
+## <a id="observe"></a> 📊 **Observe**
+
+📊 Query Capgo Observe metrics so you can act on launch, crash, WebView, and navigation data.
+Start with summary and follow the findings. Capgo has no session id: use observe device DEVICE_ID for a device timeline.
+Navigation does not need Expo Router. Listen to history.pushState, history.replaceState, popstate, hashchange, and Capacitor App appUrlOpen, then send action=app_nav with metadata.route.
+
+### <a id="observe-summary"></a> 📊 **Summary**
+
+```bash
+npx @capgo/cli@latest observe summary
+```
+
+📊 Actionable Observe findings for an app.
+Start here. Each finding includes a next view to query.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest observe summary
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
+| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
+| **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
+| **--limit** | <code>string</code> | Max rows to return |
+| **--version-name** | <code>string</code> | Filter by bundle version name |
+| **--json** | <code>boolean</code> | Output as JSON |
+| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
+| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+
+### <a id="observe-metrics"></a> 📊 **Metrics**
+
+```bash
+npx @capgo/cli@latest observe metrics
+```
+
+📈 Sample Observe timings, slowest first by default.
+Use --action app_launch_ready or app_nav, and --sort slowest to find outliers.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest observe metrics --action app_launch_ready --sort slowest --json
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
+| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
+| **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
+| **--limit** | <code>string</code> | Max rows to return |
+| **--version-name** | <code>string</code> | Filter by bundle version name |
+| **--json** | <code>boolean</code> | Output as JSON |
+| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
+| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+
+### <a id="observe-events"></a> 📊 **Events**
+
+```bash
+npx @capgo/cli@latest observe events
+```
+
+📋 Observe action counts and latest devices.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest observe events --action app_crash_native
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
+| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
+| **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
+| **--limit** | <code>string</code> | Max rows to return |
+| **--version-name** | <code>string</code> | Filter by bundle version name |
+| **--json** | <code>boolean</code> | Output as JSON |
+| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
+| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+
+### <a id="observe-device"></a> 📱 **Device**
+
+```bash
+npx @capgo/cli@latest observe device
+```
+
+📱 Device timeline (session substitute) for one device_id.
+Capgo has no session id. Read events in time order to see launch, WebView, crashes, and navigations.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest observe device DEVICE_ID --json
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-d** | <code>string</code> | Device ID |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
+| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
+| **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
+| **--limit** | <code>string</code> | Max rows to return |
+| **--version-name** | <code>string</code> | Filter by bundle version name |
+| **--json** | <code>boolean</code> | Output as JSON |
+| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
+| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+
+### <a id="observe-versions"></a> 📊 **Versions**
+
+```bash
+npx @capgo/cli@latest observe versions
+```
+
+📦 Observe breakdown by bundle version.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest observe versions
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
+| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
+| **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
+| **--limit** | <code>string</code> | Max rows to return |
+| **--version-name** | <code>string</code> | Filter by bundle version name |
+| **--json** | <code>boolean</code> | Output as JSON |
+| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
+| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+
+### <a id="observe-routes"></a> 📊 **Routes**
+
+```bash
+npx @capgo/cli@latest observe routes
+```
+
+🧭 Per-screen Observe timings from metadata.route or action=app_nav.
+No Expo Router required. The app should listen to history/popstate/hashchange/appUrlOpen and send metadata.route.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest observe routes --json
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
+| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
+| **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
+| **--limit** | <code>string</code> | Max rows to return |
+| **--version-name** | <code>string</code> | Filter by bundle version name |
+| **--json** | <code>boolean</code> | Output as JSON |
+| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
+| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+
+
 ## <a id="mcp"></a> 🔹 **Mcp**
 
 ```bash
@@ -1906,7 +2093,7 @@ Selected tools exposed via MCP:
   - capgo_list_organizations, capgo_add_organization
   - capgo_star_repository
   - capgo_star_all_repositories
-  - capgo_get_account_id, capgo_doctor, capgo_get_stats
+  - capgo_get_account_id, capgo_doctor, capgo_get_stats, capgo_observe
   - capgo_request_build, capgo_generate_encryption_keys
 Example usage with Claude Desktop:
   Add to claude_desktop_config.json:

@@ -13,9 +13,10 @@ import { getChannelSelfOverride, isChannelSelfStoreEnabled } from './channelSelf
 import { getAdminOnboardingTelemetry } from './cloudflare.ts'
 import { DISPOSABLE_EMAIL_DOMAINS, PERSONAL_EMAIL_DOMAINS } from './emailClassification.ts'
 import { getClientDbRegionSB } from './geolocation.ts'
-import { REQUIRED_GLOBAL_STATS_SHARDS } from './global_stats.ts'
+import { hasRequiredGlobalStatsShards, REQUIRED_GLOBAL_STATS_SHARDS } from './global_stats.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { getAdminOnboardingActivationMetrics } from './onboardingFunnel.ts'
+import { hasPluginVersionBreakdown } from './plugin_compatibility.ts'
 import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { getRolloutDecision } from './rollout.ts'
@@ -812,6 +813,8 @@ function getVersionSelect(
     min_update_version: sql<string | null>`${versionAlias.min_update_version}`.as(`${prefix}minUpdateVersion`),
     manifest_count: sql<number>`${versionAlias.manifest_count}`.as(`${prefix}manifest_count`),
     r2_path: sql`${versionAlias.r2_path}`.mapWith(versionAlias.r2_path).as(`${prefix}r2_path`),
+    deleted: sql<boolean>`COALESCE(${versionAlias.deleted}, false)`.as(`${prefix}deleted`),
+    deleted_at: sql<string | null>`${versionAlias.deleted_at}`.as(`${prefix}deleted_at`),
   }
 
   if (includeMetadata) {
@@ -867,7 +870,10 @@ function activeChannelVersionJoin(
 ) {
   const conditions = [
     eq(channelVersionColumn, versionAlias.id),
-    or(eq(versionAlias.deleted, false), eq(versionAlias.name, 'builtin')),
+    or(
+      and(eq(versionAlias.deleted, false), isNull(versionAlias.deleted_at)),
+      eq(versionAlias.name, 'builtin'),
+    ),
   ]
 
   if (channelAppIdColumn)
@@ -2683,6 +2689,9 @@ export interface AdminPluginBreakdown {
     version_breakdown: Record<string, number>
     major_breakdown: Record<string, number>
     devices_last_month: number
+    devices_last_month_ios: number
+    devices_last_month_android: number
+    version_ladder: AdminPluginVersionLadderEntry[]
   }>
 }
 
@@ -3991,6 +4000,35 @@ export async function getAdminOnboardingFunnel(
   }
 }
 
+function pickPluginBreakdownSnapshotRow(rows: any[]) {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (!hasRequiredGlobalStatsShards(row.completed_shards))
+      continue
+    if (hasPluginVersionBreakdown(parseBreakdownJson(row.plugin_version_breakdown)))
+      return row
+  }
+
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (hasRequiredGlobalStatsShards(row.completed_shards))
+      return row
+  }
+
+  return rows.at(-1)
+}
+
+function getLatestNonEmptyPluginTrendRowDate(rows: any[]): string | null {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (hasPluginVersionBreakdown(parseBreakdownJson(row.plugin_version_breakdown))) {
+      return row.date instanceof Date ? row.date.toISOString().split('T')[0] : String(row.date)
+    }
+  }
+
+  return null
+}
+
 export async function getAdminPluginBreakdown(
   c: Context,
   start_date: string,
@@ -4011,7 +4049,8 @@ export async function getAdminPluginBreakdown(
         COALESCE(devices_last_month_android, 0)::int AS devices_last_month_android,
         plugin_version_breakdown,
         plugin_major_breakdown,
-        plugin_version_ladder
+        plugin_version_ladder,
+        completed_shards
       FROM global_stats
       WHERE date_id >= ${startDateOnly}
         AND date_id <= ${endDateOnly}
@@ -4034,6 +4073,8 @@ export async function getAdminPluginBreakdown(
       }
     }
 
+    const latestNonEmptyTrendDate = getLatestNonEmptyPluginTrendRowDate(rows)
+
     const trend = rows.map((row) => {
       const date = row.date instanceof Date ? row.date.toISOString().split('T')[0] : String(row.date)
       return {
@@ -4041,19 +4082,24 @@ export async function getAdminPluginBreakdown(
         version_breakdown: parseBreakdownJson(row.plugin_version_breakdown),
         major_breakdown: parseBreakdownJson(row.plugin_major_breakdown),
         devices_last_month: Number(row.devices_last_month) || 0,
+        devices_last_month_ios: Number(row.devices_last_month_ios) || 0,
+        devices_last_month_android: Number(row.devices_last_month_android) || 0,
+        version_ladder: date === latestNonEmptyTrendDate
+          ? parsePluginVersionLadderJson(row.plugin_version_ladder)
+          : [],
       }
     })
-    const latestRow = rows.at(-1)!
-    const latestDate = latestRow.date instanceof Date ? latestRow.date.toISOString().split('T')[0] : String(latestRow.date)
-    const versionBreakdown = parseBreakdownJson(latestRow.plugin_version_breakdown)
-    const majorBreakdown = parseBreakdownJson(latestRow.plugin_major_breakdown)
-    const versionLadder = parsePluginVersionLadderJson(latestRow.plugin_version_ladder)
+    const snapshotRow = pickPluginBreakdownSnapshotRow(rows)
+    const latestDate = snapshotRow.date instanceof Date ? snapshotRow.date.toISOString().split('T')[0] : String(snapshotRow.date)
+    const versionBreakdown = parseBreakdownJson(snapshotRow.plugin_version_breakdown)
+    const majorBreakdown = parseBreakdownJson(snapshotRow.plugin_major_breakdown)
+    const versionLadder = parsePluginVersionLadderJson(snapshotRow.plugin_version_ladder)
 
     return {
       date: latestDate,
-      devices_last_month: Number(latestRow.devices_last_month) || 0,
-      devices_last_month_ios: Number(latestRow.devices_last_month_ios) || 0,
-      devices_last_month_android: Number(latestRow.devices_last_month_android) || 0,
+      devices_last_month: Number(snapshotRow.devices_last_month) || 0,
+      devices_last_month_ios: Number(snapshotRow.devices_last_month_ios) || 0,
+      devices_last_month_android: Number(snapshotRow.devices_last_month_android) || 0,
       version_breakdown: versionBreakdown,
       major_breakdown: majorBreakdown,
       version_ladder: versionLadder,

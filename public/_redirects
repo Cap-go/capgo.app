@@ -3,7 +3,6 @@
 # https://w3c.github.io/webappsec-change-password-url/
 /.well-known/change-password /settings/account/change-password 302
 # Chrome probes this reserved path so the SPA fallback is not treated as a real change-password page.
-/.well-known/resource-that-should-not-exist-whose-status-code-should-not-be-200 /404 404
 /.well-known/* /deepLink/:splat 200
 
 /dashboard/settings/plans /settings/organization/plans

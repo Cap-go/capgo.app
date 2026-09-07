@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { capacitorConfigOptionSchema } from '../schemas/sdk'
+import { capacitorConfigOptionSchema, observeOptionsObjectSchema, refineObserveDeviceId } from '../schemas/sdk'
 
 export const mcpAddAppInputSchema = z.object({
   appId: z.string(),
@@ -131,6 +131,12 @@ export const mcpGetStatsInputSchema = z.object({
   rangeStart: z.string().optional(),
   rangeEnd: z.string().optional(),
 })
+
+export const mcpObserveInputSchema = observeOptionsObjectSchema.omit({
+  apikey: true,
+  supaHost: true,
+  supaAnon: true,
+}).superRefine(refineObserveDeviceId)
 
 export const mcpRequestBuildInputSchema = z.object({
   appId: z.string(),

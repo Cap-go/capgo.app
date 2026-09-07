@@ -11,6 +11,11 @@ domains:
       - webdocs/star.mdx
       - webdocs/star-all.mdx
       - src/index.ts
+  - name: observe
+    summary: Query Observe findings, launch and WebView timings, device timelines, and per-screen routes from the CLI and MCP.
+    primary_sources:
+      - webdocs/observe.mdx
+      - src/index.ts
   - name: ota-release-management
     summary: OTA bundle uploads, channel operations, preview QR codes, compatibility checks, cleanup, and encryption-key workflows.
     primary_sources:

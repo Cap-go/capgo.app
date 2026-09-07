@@ -4,6 +4,7 @@ import { intro, log } from '@clack/prompts'
 import { trackEvent } from '../analytics/track'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { formatTable } from '../terminal-table'
+import { CliUserError } from '../shared/cli-user-error'
 import {
   checkCompatibilityCloud,
   createSupabaseClient,
@@ -54,7 +55,7 @@ export async function checkCompatibilityInternal(
   if (!resolvedAppId) {
     if (!silent)
       log.error('Missing argument, you need to provide an appId, or be in a capacitor project')
-    throw new Error('Missing appId')
+    throw new CliUserError('Missing appId')
   }
 
   const supabase = await createSupabaseClient(

@@ -1,5 +1,5 @@
 ALTER TABLE "public"."orgs"
-DROP CONSTRAINT "orgs_onboarding_valid";
+DROP CONSTRAINT IF EXISTS "orgs_onboarding_valid";
 
 ALTER TABLE "public"."orgs"
 ADD CONSTRAINT "orgs_onboarding_valid" CHECK (
@@ -18,12 +18,12 @@ ADD CONSTRAINT "orgs_onboarding_valid" CHECK (
       AND (("onboarding" ->> 'development_environment'::"text") = ANY (ARRAY['hosted_builder'::"text", 'ai_assistant'::"text", 'hand_coded'::"text", 'other'::"text", 'local_project'::"text", 'exploring'::"text", 'skipped'::"text"]))
     )
   )
-);
+) NOT VALID;
 
 COMMENT ON COLUMN "public"."orgs"."onboarding" IS 'Onboarding answers (extensible JSONB). Currently: {"intent": unknown|ota|builder|both|exploring|publish, "starting_out": boolean, "development_environment": hosted_builder|ai_assistant|hand_coded|other|local_project|exploring|skipped}. Used for segmentation and to tailor the org experience.';
 
 ALTER TABLE "public"."users"
-DROP CONSTRAINT "users_onboarding_valid";
+DROP CONSTRAINT IF EXISTS "users_onboarding_valid";
 
 ALTER TABLE "public"."users"
 ADD CONSTRAINT "users_onboarding_valid" CHECK (
