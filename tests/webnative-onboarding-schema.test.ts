@@ -29,8 +29,8 @@ describe('webnative onboarding schema constraints', () => {
   })
 
   afterAll(async () => {
-    await executeSQL('DELETE FROM public.stripe_info WHERE customer_id = $1', [`pending_${orgId}`])
     await executeSQL('DELETE FROM public.orgs WHERE id = $1', [orgId])
+    await executeSQL('DELETE FROM public.stripe_info WHERE customer_id = $1', [`pending_${orgId}`])
     await executeSQL('DELETE FROM public.users WHERE id = $1', [userId])
     await executeSQL('DELETE FROM auth.users WHERE id = $1', [userId])
   })
