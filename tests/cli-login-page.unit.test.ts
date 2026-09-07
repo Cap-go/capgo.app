@@ -232,6 +232,7 @@ describe('/login-cli page contract', () => {
     expect(messages['cli-login-direct-description']).toContain(`{'@'}capgo/cli{'@'}latest`)
     expect(messages['cli-login-paste-instruction']).toContain('terminal')
     expect(messages['cli-login-security-warning']).toContain('rotate')
+    expect(messages['cli-login-security-warning']).toContain('Capgo API key')
     expect(messages['cli-login-copy-note']).toContain('hidden')
     expect(messages['cli-login-waiting']).toContain('Waiting')
     expect(messages['cli-login-success-title']).toContain('successful')
