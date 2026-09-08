@@ -10,6 +10,7 @@ import {
   createNotificationIdentityProof,
   deriveNativeNotificationIdentity,
   deriveRecipientKey,
+  encryptProviderSecret,
   enqueueNativeNotificationFanout,
   getAllNotificationBuckets,
   getNotificationBucket,
@@ -140,6 +141,7 @@ interface ProviderBody {
   status?: string
   config?: Record<string, unknown>
   secretRef?: string | null
+  secretMaterial?: string | null
 }
 
 interface SendBody {
@@ -186,6 +188,7 @@ interface ProviderConfigRow {
   status: string
   config: Record<string, unknown> | null
   secret_ref: string | null
+  secret_ciphertext: string | null
 }
 
 interface OwnerOrgRow {
@@ -263,7 +266,7 @@ async function getNotificationProviderConfigs(c: Context<MiddlewareKeyVariables>
     pgClient = getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(sql`
-      SELECT provider, status, config, secret_ref
+      SELECT provider, status, config, secret_ref, secret_ciphertext
       FROM public.notification_provider_configs
       WHERE app_id = ${appId}
         AND status = 'configured'
@@ -274,6 +277,7 @@ async function getNotificationProviderConfigs(c: Context<MiddlewareKeyVariables>
       status: row.status,
       config: row.config ?? {},
       secretRef: row.secret_ref,
+      secretCiphertext: row.secret_ciphertext,
     }))
   }
   finally {
@@ -363,7 +367,28 @@ function resolveProviderConfigProvider(body: ProviderBody): NativeNotificationPr
   throw simpleError('invalid_platform', 'Invalid notification platform')
 }
 
-function resolveProviderSecretRef(appId: string, provider: NativeNotificationProvider, status: string, value: string | null | undefined) {
+async function getExistingProviderSecretCiphertext(c: Context<MiddlewareKeyVariables>, appId: string, provider: NativeNotificationProvider): Promise<string | null> {
+  let pgClient: ReturnType<typeof getPgClient> | undefined
+  try {
+    pgClient = getPgClient(c)
+    const drizzleClient = getDrizzleClient(pgClient)
+    const result = await drizzleClient.execute(sql`
+      SELECT secret_ciphertext
+      FROM public.notification_provider_configs
+      WHERE app_id = ${appId}
+        AND provider = ${provider}
+      LIMIT 1
+    `)
+    const ciphertext = (result.rows[0] as { secret_ciphertext?: string | null } | undefined)?.secret_ciphertext
+    return typeof ciphertext === 'string' && ciphertext ? ciphertext : null
+  }
+  finally {
+    if (pgClient)
+      closeClient(c, pgClient)
+  }
+}
+
+function resolveProviderSecretRef(appId: string, provider: NativeNotificationProvider, status: string, value: string | null | undefined, hasUploadedSecret: boolean, hasStoredSecret: boolean) {
   const expected = expectedProviderSecretRef(appId, provider)
   const requested = typeof value === 'string' ? value.trim() : ''
   if (requested && requested !== expected) {
@@ -372,7 +397,37 @@ function resolveProviderSecretRef(appId: string, provider: NativeNotificationPro
       expectedSecretRef: expected,
     })
   }
-  return status === 'configured' ? expected : requested || null
+  if (status === 'configured') {
+    if (hasUploadedSecret)
+      return requested || null
+    if (requested)
+      return requested
+    if (hasStoredSecret)
+      return null
+    return expected
+  }
+  return requested || null
+}
+
+function assertProviderSecretMaterial(provider: NativeNotificationProvider, secretMaterial: string) {
+  const trimmed = secretMaterial.trim()
+  if (!trimmed)
+    throw simpleError('missing_notification_secret_material', 'Missing notification platform secret material')
+  if (provider === 'apns') {
+    if (!trimmed.includes('-----BEGIN PRIVATE KEY-----'))
+      throw simpleError('invalid_notification_ios_secret', 'iOS push key must be a PEM .p8 private key')
+    return
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+      throw new Error('invalid')
+    if (!optionalConfigString(parsed, 'private_key'))
+      throw new Error('invalid')
+  }
+  catch {
+    throw simpleError('invalid_notification_android_secret', 'Android push credential must be a service account JSON file')
+  }
 }
 
 function optionalConfigString(config: Record<string, unknown>, key: string): string {
@@ -380,12 +435,12 @@ function optionalConfigString(config: Record<string, unknown>, key: string): str
   return typeof value === 'string' ? value.trim() : ''
 }
 
-function assertProviderConfigReady(provider: NativeNotificationProvider, status: string, config: Record<string, unknown>, secretRef: string | null) {
+function assertProviderConfigReady(provider: NativeNotificationProvider, status: string, config: Record<string, unknown>, secretRef: string | null, hasSecretCiphertext: boolean) {
   if (status !== 'configured')
     return
 
-  if (!secretRef)
-    throw simpleError('missing_notification_secret_ref', 'Missing notification platform secret reference')
+  if (!secretRef && !hasSecretCiphertext)
+    throw simpleError('missing_notification_secret', 'Missing notification platform secret')
 
   if (provider === 'fcm' && !optionalConfigString(config, 'projectId'))
     throw simpleError('missing_notification_provider_project_id', 'Missing Android push project id')
@@ -427,6 +482,7 @@ function publicProviderConfig(row: Record<string, unknown>) {
     status: row.status,
     config: row.config,
     secret_ref: row.secret_ref,
+    has_secret: Boolean(row.secret_ciphertext),
   }
 }
 
@@ -872,7 +928,7 @@ app.get('/providers', middlewareAuth(), async (c) => {
     pgClient = getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(sql`
-      SELECT id, created_at, updated_at, owner_org::text, app_id, provider, status, config, secret_ref
+      SELECT id, created_at, updated_at, owner_org::text, app_id, provider, status, config, secret_ref, secret_ciphertext
       FROM public.notification_provider_configs
       WHERE app_id = ${appId}
       ORDER BY provider ASC
@@ -893,19 +949,33 @@ app.put('/providers', middlewareAuth(), async (c) => {
   const status = body.status && ['draft', 'configured', 'disabled', 'error'].includes(body.status) ? body.status : 'draft'
   const ownerOrg = await getAppOwnerOrg(c, appId)
   const config = assertOptionalRecord(body.config, 'config')
-  const secretRef = resolveProviderSecretRef(appId, provider, status, body.secretRef)
-  assertProviderConfigReady(provider, status, config, secretRef)
+  const secretMaterial = typeof body.secretMaterial === 'string' ? body.secretMaterial.trim() : ''
+  const hasUploadedSecret = Boolean(secretMaterial)
+  if (hasUploadedSecret)
+    assertProviderSecretMaterial(provider, secretMaterial)
+  const existingSecretCiphertext = status === 'configured' && !hasUploadedSecret
+    ? await getExistingProviderSecretCiphertext(c, appId, provider)
+    : null
+  const hasStoredSecret = Boolean(existingSecretCiphertext)
+  const secretCiphertext = hasUploadedSecret ? await encryptProviderSecret(c, secretMaterial) : null
+  const secretRef = resolveProviderSecretRef(appId, provider, status, body.secretRef, hasUploadedSecret, hasStoredSecret)
+  assertProviderConfigReady(provider, status, config, secretRef, hasUploadedSecret || hasStoredSecret)
   const auth = c.get('auth')
   let pgClient: ReturnType<typeof getPgClient> | undefined
   try {
     pgClient = getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(sql`
-      INSERT INTO public.notification_provider_configs (owner_org, app_id, provider, status, config, secret_ref, created_by)
-      VALUES (${ownerOrg}::uuid, ${appId}, ${provider}, ${status}, ${JSON.stringify(config)}::jsonb, ${secretRef}, ${auth?.userId ?? null}::uuid)
+      INSERT INTO public.notification_provider_configs (owner_org, app_id, provider, status, config, secret_ref, secret_ciphertext, created_by)
+      VALUES (${ownerOrg}::uuid, ${appId}, ${provider}, ${status}, ${JSON.stringify(config)}::jsonb, ${secretRef}, ${secretCiphertext}, ${auth?.userId ?? null}::uuid)
       ON CONFLICT (app_id, provider)
-      DO UPDATE SET updated_at = now(), status = EXCLUDED.status, config = EXCLUDED.config, secret_ref = EXCLUDED.secret_ref
-      RETURNING id, created_at, updated_at, owner_org::text, app_id, provider, status, config, secret_ref
+      DO UPDATE SET
+        updated_at = now(),
+        status = EXCLUDED.status,
+        config = EXCLUDED.config,
+        secret_ref = EXCLUDED.secret_ref,
+        secret_ciphertext = COALESCE(EXCLUDED.secret_ciphertext, notification_provider_configs.secret_ciphertext)
+      RETURNING id, created_at, updated_at, owner_org::text, app_id, provider, status, config, secret_ref, secret_ciphertext
     `)
     return c.json(publicProviderConfig(result.rows[0] as Record<string, unknown>))
   }
