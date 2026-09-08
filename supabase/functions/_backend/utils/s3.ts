@@ -270,15 +270,9 @@ async function deleteObjectsWithPrefix(c: Context, prefix: string): Promise<numb
 
 async function moveObjectsWithPrefixToTrash(c: Context, prefix: string): Promise<number> {
   const client = initS3(c)
-  const keysToMove: string[] = []
-
-  for await (const object of client.listObjects({ prefix })) {
-    if (!object.key.startsWith(R2_TRASH_PREFIX))
-      keysToMove.push(object.key)
-  }
-
   const failedKeys: string[] = []
   let movedCount = 0
+  let batch: string[] = []
 
   async function moveKey(key: string) {
     try {
@@ -301,10 +295,25 @@ async function moveObjectsWithPrefixToTrash(c: Context, prefix: string): Promise
     }
   }
 
-  for (let i = 0; i < keysToMove.length; i += PREFIX_TRASH_CONCURRENCY) {
-    const batch = keysToMove.slice(i, i + PREFIX_TRASH_CONCURRENCY)
-    await Promise.all(batch.map(moveKey))
+  async function flushBatch() {
+    if (batch.length === 0)
+      return
+
+    const currentBatch = batch
+    batch = []
+    await Promise.all(currentBatch.map(moveKey))
   }
+
+  for await (const object of client.listObjects({ prefix })) {
+    if (object.key.startsWith(R2_TRASH_PREFIX))
+      continue
+
+    batch.push(object.key)
+    if (batch.length >= PREFIX_TRASH_CONCURRENCY)
+      await flushBatch()
+  }
+
+  await flushBatch()
 
   if (failedKeys.length > 0) {
     cloudlogErr({

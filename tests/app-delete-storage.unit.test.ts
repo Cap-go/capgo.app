@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const moveObjectsWithPrefixToTrash = vi.fn()
@@ -20,6 +19,11 @@ vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
   },
 }))
 
+const checkPermission = vi.fn(async () => true)
+vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
+  checkPermission,
+}))
+
 const insert = vi.fn(async () => ({ error: null }))
 const deleteEq = vi.fn(async () => ({ error: null }))
 const deleteFn = vi.fn(() => ({ eq: deleteEq }))
@@ -38,8 +42,22 @@ const supabaseAdmin = vi.fn(() => ({
   storage: { from: storageFrom },
 }))
 
+const apiDeleteEq = vi.fn(async () => ({ error: null }))
+const apiDelete = vi.fn(() => ({ eq: apiDeleteEq }))
+const apiSelectSingle = vi.fn(async () => ({ data: { owner_org: 'org-1' }, error: null }))
+const apiSelectEq = vi.fn(() => ({ single: apiSelectSingle }))
+const apiSelect = vi.fn(() => ({ eq: apiSelectEq }))
+const apiFrom = vi.fn(() => ({
+  select: apiSelect,
+  delete: apiDelete,
+}))
+const supabaseApikey = vi.fn(() => ({
+  from: apiFrom,
+}))
+
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   supabaseAdmin,
+  supabaseApikey,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/hono.ts', async () => {
@@ -51,6 +69,8 @@ vi.mock('../supabase/functions/_backend/utils/hono.ts', async () => {
 })
 
 const { app } = await import('../supabase/functions/_backend/triggers/on_app_delete.ts')
+const { deleteApp } = await import('../supabase/functions/_backend/public/app/delete.ts')
+const { s3: pluginRuntimeS3 } = await import('../supabase/functions/_backend/plugin_runtime/utils/s3.ts')
 
 function deletePayload(record: Record<string, unknown>) {
   return {
@@ -59,6 +79,13 @@ function deletePayload(record: Record<string, unknown>) {
     schema: 'public',
     old_record: record,
   }
+}
+
+function makeDeleteAppContext() {
+  return {
+    get: (key: string) => key === 'requestId' ? 'req-delete-app' : undefined,
+    json: vi.fn((body: unknown) => ({ body })),
+  } as any
 }
 
 describe('on_app_delete storage cleanup', () => {
@@ -106,17 +133,33 @@ describe('on_app_delete storage cleanup', () => {
   })
 })
 
-describe('product delete source audit', () => {
-  it('public app delete relies on on_app_delete trigger for R2 trash', () => {
-    const source = readFileSync('./supabase/functions/_backend/public/app/delete.ts', 'utf8')
-    expect(source).not.toContain('deleteObjectsWithPrefix')
-    expect(source).not.toContain('moveObjectsWithPrefixToTrash')
+describe('public deleteApp storage contract', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    checkPermission.mockResolvedValue(true)
+    apiDeleteEq.mockResolvedValue({ error: null })
+    apiSelectSingle.mockResolvedValue({ data: { owner_org: 'org-1' }, error: null })
+    storageList.mockResolvedValue({ data: [] })
   })
 
-  it('plugin_runtime s3 omits permanent delete helpers', () => {
-    const source = readFileSync('./supabase/functions/_backend/plugin_runtime/utils/s3.ts', 'utf8')
-    expect(source).not.toContain('deleteObjectsWithPrefix')
-    expect(source).not.toContain('moveObjectToTrash')
-    expect(source).not.toContain('moveObjectsWithPrefixToTrash')
+  it('deletes the app row without direct R2 trash or permanent delete calls', async () => {
+    const response = await deleteApp(
+      makeDeleteAppContext(),
+      'com.test.app',
+      { key: 'capgo_test_key' } as any,
+    )
+
+    expect(response).toBeDefined()
+    expect(moveObjectsWithPrefixToTrash).not.toHaveBeenCalled()
+    expect(deleteObjectsWithPrefix).not.toHaveBeenCalled()
+    expect(deleteEq).toHaveBeenCalledWith('app_id', 'com.test.app')
+  })
+})
+
+describe('plugin_runtime s3 surface', () => {
+  it('omits trash and permanent delete helpers from the hot-path export', () => {
+    expect(pluginRuntimeS3).not.toHaveProperty('deleteObjectsWithPrefix')
+    expect(pluginRuntimeS3).not.toHaveProperty('moveObjectToTrash')
+    expect(pluginRuntimeS3).not.toHaveProperty('moveObjectsWithPrefixToTrash')
   })
 })

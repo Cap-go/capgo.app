@@ -170,8 +170,11 @@ describe('moveObjectsWithPrefixToTrash', () => {
 
     let inFlight = 0
     let maxInFlight = 0
+    const trashedDestinations = new Set<string>()
+    const deletedSources = new Set<string>()
     copyObject.mockImplementation(async (source: { sourceKey: string }, destination: string) => {
       expect(destination).toBe(`${R2_TRASH_PREFIX}${source.sourceKey}`)
+      trashedDestinations.add(destination)
       inFlight += 1
       maxInFlight = Math.max(maxInFlight, inFlight)
       await new Promise(resolve => setTimeout(resolve, 5))
@@ -179,6 +182,7 @@ describe('moveObjectsWithPrefixToTrash', () => {
     })
     deleteObject.mockImplementation(async (key: string) => {
       expect(keys).toContain(key)
+      deletedSources.add(key)
     })
 
     const c = await makeContext()
@@ -189,7 +193,11 @@ describe('moveObjectsWithPrefixToTrash', () => {
     expect(maxInFlight).toBeGreaterThan(1)
     expect(copyObject).toHaveBeenCalledTimes(25)
     expect(deleteObject).toHaveBeenCalledTimes(25)
+    expect(trashedDestinations.size).toBe(25)
+    expect(deletedSources.size).toBe(25)
     for (const key of keys) {
+      expect(trashedDestinations.has(`${R2_TRASH_PREFIX}${key}`)).toBe(true)
+      expect(deletedSources.has(key)).toBe(true)
       expect(copyObject).toHaveBeenCalledWith({ sourceKey: key }, `${R2_TRASH_PREFIX}${key}`)
       expect(deleteObject).toHaveBeenCalledWith(key)
     }
