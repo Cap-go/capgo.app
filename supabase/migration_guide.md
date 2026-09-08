@@ -71,3 +71,54 @@ This command will clear all data and revert schema changes made to the local dat
 
 
 By following these steps, you can safely add and deploy Supabase migration changes to your project's database schema.
+
+## Vanilla Postgres 17 (Phase 0 compatibility path)
+
+Capgo keeps the Supabase CLI as the migration runner. For Phase 0 of leaving the full
+Supabase Docker stack, you can apply the same `supabase/migrations/` tree against a
+plain `postgres:17` container. This is **additive**: `bun run supabase:start` remains
+the default local path.
+
+### Start vanilla Postgres
+
+```bash
+bun run postgres:vanilla:up
+```
+
+`docker-compose.yml` exposes Postgres on `127.0.0.1:5432` with:
+
+- user: `postgres`
+- password: `postgres`
+- database: `capgo`
+
+### Apply migrations
+
+```bash
+bun run postgres:vanilla:push
+```
+
+This runs `bunx supabase db push --db-url postgresql://postgres:postgres@127.0.0.1:5432/capgo?sslmode=disable`
+and writes a timestamped log under `.context/vanilla-postgres/`.
+
+Override the URL when needed:
+
+```bash
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/capgo bun run postgres:vanilla:push
+```
+
+### Create new migrations (unchanged)
+
+```bash
+bunx supabase migration new <feature_slug>
+```
+
+Edit the generated file under `supabase/migrations/`, test on the full Supabase stack
+with `bun run supabase:db:reset`, and optionally re-run `bun run postgres:vanilla:push`
+to see what still depends on Supabase-only pieces.
+
+### Known gaps on vanilla Postgres
+
+See [vanilla_postgres_inventory.md](./vanilla_postgres_inventory.md) for the categorized
+inventory from the Phase 0 apply attempt (extensions, auth/storage schemas, roles, hooks,
+queues). Expect the baseline squash migration to fail early without Supabase extensions
+and platform schemas.
