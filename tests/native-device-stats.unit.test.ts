@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { nativeUsageTestUtils } from '../supabase/functions/_backend/public/statistics/index.ts'
 import {
   buildDailyPlatformActiveFromDatasets,
-  calculatePeriodEvolutionPercent,
   calculateSummaryEvolutionPercent,
   normalizeNativeActiveDevicesSummary,
   parseNativeSeriesPlatform,
@@ -50,12 +49,6 @@ describe('native device stats helpers', () => {
     expect(calculateSummaryEvolutionPercent(150, 100)).toBe(50)
     expect(calculateSummaryEvolutionPercent(0, 0)).toBeUndefined()
     expect(calculateSummaryEvolutionPercent(10, 0)).toBe(100)
-  })
-
-  it('calculates period evolution from first to last non-zero day', () => {
-    expect(calculatePeriodEvolutionPercent([10, 12, 15])).toBe(50)
-    expect(calculatePeriodEvolutionPercent([0, 0, 8])).toBe(0)
-    expect(calculatePeriodEvolutionPercent([12, 12])).toBe(0)
   })
 })
 

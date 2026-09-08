@@ -201,9 +201,9 @@ describe('[GET] /statistics operations with and without subkey', () => {
         expect(nativeUsageData.activeDevices?.android).toBeGreaterThanOrEqual(1)
         expect(nativeUsageData.activeDevices?.electron).toBeGreaterThanOrEqual(1)
         expect(nativeUsageData.activeDevices?.total).toBeGreaterThanOrEqual(3)
-        expect(nativeUsageData.dailyPlatformActive?.ios[dayIndex]).toBeGreaterThanOrEqual(1)
-        expect(nativeUsageData.dailyPlatformActive?.android[dayIndex]).toBeGreaterThanOrEqual(1)
-        expect(nativeUsageData.dailyPlatformActive?.total[dayIndex]).toBeGreaterThanOrEqual(3)
+        expect(nativeUsageData.dailyPlatformActive?.ios[dayIndex]).toBe(1)
+        expect(nativeUsageData.dailyPlatformActive?.android[dayIndex]).toBe(1)
+        expect(nativeUsageData.dailyPlatformActive?.total[dayIndex]).toBe(3)
       }
     }
     finally {

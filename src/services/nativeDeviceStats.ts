@@ -94,22 +94,6 @@ export function buildDailyPlatformActiveFromDatasets(labels: string[], datasets:
   }
 }
 
-export function getLatestNonZeroIndex(values: number[]): number {
-  for (let index = values.length - 1; index >= 0; index--) {
-    if (values[index] > 0)
-      return index
-  }
-  return values.length - 1
-}
-
-export function getFirstNonZeroIndex(values: number[]): number {
-  for (let index = 0; index < values.length; index++) {
-    if (values[index] > 0)
-      return index
-  }
-  return 0
-}
-
 export function calculateSummaryEvolutionPercent(current?: number, previous?: number): number | undefined {
   if (current === undefined || previous === undefined)
     return undefined
@@ -121,24 +105,6 @@ export function calculateSummaryEvolutionPercent(current?: number, previous?: nu
     return currentValue > 0 ? 100 : undefined
 
   return ((currentValue - previousValue) / previousValue) * 100
-}
-
-/** @deprecated Use calculateSummaryEvolutionPercent with period totals instead. */
-export function calculatePeriodEvolutionPercent(values: number[]): number | undefined {
-  if (!values.length)
-    return undefined
-
-  const startIndex = getFirstNonZeroIndex(values)
-  const endIndex = getLatestNonZeroIndex(values)
-  const startValue = values[startIndex] ?? 0
-  const endValue = values[endIndex] ?? 0
-
-  if (startIndex === endIndex)
-    return 0
-  if (startValue <= 0)
-    return endValue > 0 ? 100 : 0
-
-  return ((endValue - startValue) / startValue) * 100
 }
 
 export function generateDemoNativeActiveSummary(days: number): NativeActiveDevicesSummary {

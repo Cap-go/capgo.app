@@ -764,14 +764,15 @@ async function loadData(forceRefetch = false) {
   }
 
   const currentToken = ++requestToken
+  const requestedAppId = activeAppId.value
   isLoading.value = true
   rawChartData.value = null
   currentRange.value = { startDate, endDate }
 
   try {
-    const data = await useChartData(supabase, activeAppId.value, startDate, endDate, props.usageKind === 'native' ? 'native' : 'bundle')
+    const data = await useChartData(supabase, requestedAppId, startDate, endDate, props.usageKind === 'native' ? 'native' : 'bundle')
 
-    if (currentToken !== requestToken)
+    if (currentToken !== requestToken || requestedAppId !== activeAppId.value)
       return
 
     rawChartData.value = data
@@ -786,11 +787,11 @@ async function loadData(forceRefetch = false) {
     }
 
     if (isNativeUsage.value)
-      await loadThirtyDaySummary(forceRefetch, currentToken, activeAppId.value)
+      await loadThirtyDaySummary(forceRefetch, currentToken, requestedAppId)
   }
   catch (error) {
     console.error('[DevicesStats] Error fetching chart data:', error)
-    if (currentToken !== requestToken)
+    if (currentToken !== requestToken || requestedAppId !== activeAppId.value)
       return
     rawChartData.value = null
   }
