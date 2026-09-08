@@ -155,6 +155,7 @@ async function openTab(tab: Tab) {
     : getOnboardingResumeAppId(onboardingUserId)
   const requiresOnboardingExplorationConfirmation = shouldConfirmOnboardingDashboardExploration({
     currentPath: route.path,
+    currentSource: typeof route.query.source === 'string' ? route.query.source : null,
     destination: tab.key,
     resumeAppId: onboardingResumeAppId,
     userId: onboardingUserId,
