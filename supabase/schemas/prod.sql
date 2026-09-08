@@ -21754,6 +21754,7 @@ CREATE TABLE IF NOT EXISTS "public"."notification_provider_configs" (
     "config" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
     "secret_ref" "text",
     "created_by" "uuid",
+    "secret_ciphertext" "text",
     CONSTRAINT "notification_provider_configs_provider_check" CHECK (("provider" = ANY (ARRAY['fcm'::"text", 'apns'::"text"]))),
     CONSTRAINT "notification_provider_configs_status_check" CHECK (("status" = ANY (ARRAY['draft'::"text", 'configured'::"text", 'disabled'::"text", 'error'::"text"])))
 );
@@ -21763,6 +21764,10 @@ ALTER TABLE "public"."notification_provider_configs" OWNER TO "postgres";
 
 
 COMMENT ON TABLE "public"."notification_provider_configs" IS 'Low-cardinality native notification provider configuration. Per-device push tokens are stored only as encrypted Cloudflare Analytics Engine events, not in Postgres.';
+
+
+
+COMMENT ON COLUMN "public"."notification_provider_configs"."secret_ciphertext" IS 'AES-GCM encrypted push credential material for hosted Capgo. Null when using worker env secret_ref (self-host).';
 
 
 

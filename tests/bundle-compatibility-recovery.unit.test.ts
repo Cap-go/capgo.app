@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BUNDLE_INCOMPATIBLE_EVENT, buildBundleCompatibilityBentoEvent, isBreakingChangeGatedByChannelStrategy } from '../supabase/functions/_backend/utils/bundle_compatibility_recovery.ts'
+import { BUNDLE_INCOMPATIBLE_EVENT, buildBundleCompatibilityBentoEvent, bundleIncompatibleEmailOutcome, isBreakingChangeGatedByChannelStrategy, isCliTrueTag } from '../supabase/functions/_backend/utils/bundle_compatibility_recovery.ts'
 
 const base = {
   event: BUNDLE_INCOMPATIBLE_EVENT,
@@ -60,6 +60,25 @@ describe('buildBundleCompatibilityBentoEvent', () => {
 
   it.concurrent('returns undefined when channel_overwritten is missing', () => {
     expect(buildBundleCompatibilityBentoEvent({ ...base, channelOverwritten: undefined })).toBeUndefined()
+  })
+
+  it.concurrent('returns undefined when the caller accepted the incompatibility', () => {
+    expect(buildBundleCompatibilityBentoEvent({ ...base, incompatibilityAccepted: true })).toBeUndefined()
+  })
+
+  it.concurrent('parses CLI boolean tags as true or the string true', () => {
+    expect(isCliTrueTag(true)).toBe(true)
+    expect(isCliTrueTag('true')).toBe(true)
+    expect(isCliTrueTag(false)).toBe(false)
+    expect(isCliTrueTag('false')).toBe(false)
+    expect(isCliTrueTag(undefined)).toBe(false)
+  })
+
+  it.concurrent('maps accepted incompatibility to the skipped_accepted email outcome', () => {
+    expect(bundleIncompatibleEmailOutcome(true, false)).toBe('skipped_accepted')
+    expect(bundleIncompatibleEmailOutcome(true, true)).toBe('skipped_accepted')
+    expect(bundleIncompatibleEmailOutcome(false, true)).toBe('sent_expected')
+    expect(bundleIncompatibleEmailOutcome(false, false)).toBe('sent')
   })
 
   it.concurrent('falls back to the old version in uniqId when the new version is absent', () => {
@@ -202,6 +221,14 @@ describe('buildBundleCompatibilityBentoEvent event split', () => {
   it.concurrent('emits the warning event when versions are unparseable even on a gating strategy', () => {
     const r = buildBundleCompatibilityBentoEvent({ ...base, versionOldName: 'builtin', versionNewName: 'nightly', disableAutoUpdate: 'minor' })
     expect(r!.event).toBe('bundle_incompatible')
+  })
+
+  it.concurrent('skips both emails when the caller accepted the incompatibility', () => {
+    expect(buildBundleCompatibilityBentoEvent({
+      ...incident,
+      disableAutoUpdate: 'minor',
+      incompatibilityAccepted: true,
+    })).toBeUndefined()
   })
 
   it.concurrent('returns undefined for a gating strategy when the channel was not overwritten', () => {
