@@ -191,6 +191,7 @@ let requestToken = 0
 const cachedBillingData = ref<{ data: ChartApiData, range: { startDate: Date, endDate: Date } } | null>(null)
 const cached30DayData = ref<{ data: ChartApiData, range: { startDate: Date, endDate: Date } } | null>(null)
 const cachedThirtyDaySummaryData = ref<{ data: ChartApiData, range: { startDate: Date, endDate: Date } } | null>(null)
+const isFetchingThirtyDaySummary = ref(false)
 
 const latestVersion = computed(() => {
   const chartData = rawChartData.value
@@ -582,7 +583,7 @@ const iosActiveEvolution = computed(() => calculateSummaryEvolutionPercent(
   selectedPeriodPreviousActiveDevices.value?.ios,
 ))
 const showNativeKpis = computed(() => isNativeUsage.value)
-const isThirtyDaySummaryLoading = computed(() => isLoading.value && isNativeUsage.value && periodDays.value !== 30)
+const isThirtyDaySummaryLoading = computed(() => isFetchingThirtyDaySummary.value || (isLoading.value && isNativeUsage.value && periodDays.value !== 30))
 
 const todayLineOptions = computed(() => {
   if (!props.useBillingPeriod || !currentRange.value)
@@ -683,6 +684,7 @@ async function loadThirtyDaySummary(forceRefetch = false, loadToken?: number, lo
     return
   }
 
+  isFetchingThirtyDaySummary.value = true
   try {
     const data = await useChartData(supabase, expectedAppId, startDate, endDate, 'native')
     if (loadToken !== undefined && loadToken !== requestToken)
@@ -700,6 +702,10 @@ async function loadThirtyDaySummary(forceRefetch = false, loadToken?: number, lo
     if (expectedAppId !== activeAppId.value)
       return
     rawThirtyDayChartData.value = null
+  }
+  finally {
+    if ((loadToken === undefined || loadToken === requestToken) && expectedAppId === activeAppId.value)
+      isFetchingThirtyDaySummary.value = false
   }
 }
 
@@ -752,12 +758,9 @@ async function loadData(forceRefetch = false) {
     const requestedAppId = activeAppId.value
     rawChartData.value = cachedData.data
     currentRange.value = cachedData.range
-    if (isNativeUsage.value) {
-      isLoading.value = true
+    isLoading.value = false
+    if (isNativeUsage.value)
       await loadThirtyDaySummary(false, cacheToken, requestedAppId)
-    }
-    if (cacheToken === requestToken && requestedAppId === activeAppId.value)
-      isLoading.value = false
     return
   }
 
