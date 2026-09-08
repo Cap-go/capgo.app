@@ -169,6 +169,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId: TEST_ORG_ID }),
+      retryUnsafe: true,
     })
     expect(response.status).toBe(200)
 
@@ -237,6 +238,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId: TEST_ORG_ID }),
+      retryUnsafe: true,
     })
     expect(response.status).toBe(200)
 
@@ -308,6 +310,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId: TEST_ORG_ID }),
+      retryUnsafe: true,
     })
     expect(response.status).toBe(200)
 
@@ -378,6 +381,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId: TEST_ORG_ID }),
+      retryUnsafe: true,
     })
 
     // Verify MAU is exceeded
@@ -402,6 +406,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId: TEST_ORG_ID }),
+      retryUnsafe: true,
     })
     expect(response.status).toBe(200)
 
@@ -431,6 +436,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId: TEST_ORG_ID }),
+      retryUnsafe: true,
     })
 
     // Verify storage is exceeded
@@ -454,6 +460,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId: TEST_ORG_ID }),
+      retryUnsafe: true,
     })
     expect(response.status).toBe(200)
 
@@ -493,6 +500,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId: TEST_ORG_ID }),
+      retryUnsafe: true,
     })
 
     // Verify bandwidth is exceeded
@@ -517,6 +525,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId: TEST_ORG_ID }),
+      retryUnsafe: true,
     })
     expect(response.status).toBe(200)
 
