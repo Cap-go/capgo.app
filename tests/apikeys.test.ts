@@ -8,6 +8,7 @@ import {
   appApiKeyBindings,
   BASE_URL,
   executeSQL,
+  fetchTestRequest,
   getAuthHeaders,
   getAuthHeadersForCredentials,
   getSupabaseClient,
@@ -39,6 +40,18 @@ async function appKeyBody(name: string, appId = APPNAME, extra: Record<string, u
     bindings: await appApiKeyBindings(appId),
     ...extra,
   }
+}
+
+async function postApiKey(
+  body: unknown,
+  headers: Record<string, string> = authHeaders,
+) {
+  return fetchTestRequest(`${BASE_URL}/apikey`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+    retryUnsafe: true,
+  })
 }
 
 beforeAll(async () => {
@@ -130,11 +143,7 @@ describe('[GET] /apikey operations', () => {
 describe('[POST] /apikey operations', () => {
   it('create api key', async () => {
     const keyName = 'test-key-creation'
-    const response = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify(orgKeyBody(keyName)),
-    })
+    const response = await postApiKey(orgKeyBody(keyName))
     const data = await response.json<{ key: string, id: number }>()
     expect(response.status).toBe(200)
     expect(data).toHaveProperty('key')
@@ -151,11 +160,7 @@ describe('[POST] /apikey operations', () => {
   it('create api key latency', async () => {
     const createdIds: number[] = []
     try {
-      const warmup = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify(orgKeyBody(`latency-warmup-${id.slice(0, 8)}`)),
-      })
+      const warmup = await postApiKey(orgKeyBody(`latency-warmup-${id.slice(0, 8)}`))
       expect(warmup.status).toBe(200)
       const warmupData = await warmup.json<{ id: number }>()
       createdIds.push(warmupData.id)
@@ -163,11 +168,7 @@ describe('[POST] /apikey operations', () => {
       const samples: number[] = []
       for (let index = 0; index < 5; index += 1) {
         const startedAt = performance.now()
-        const response = await fetch(`${BASE_URL}/apikey`, {
-          method: 'POST',
-          headers: authHeaders,
-          body: JSON.stringify(orgKeyBody(`latency-${id.slice(0, 8)}-${index}`)),
-        })
+        const response = await postApiKey(orgKeyBody(`latency-${id.slice(0, 8)}-${index}`))
         samples.push(performance.now() - startedAt)
         expect(response.status).toBe(200)
         const data = await response.json<{ id: number }>()
@@ -198,13 +199,9 @@ describe('[POST] /apikey operations', () => {
 
   it.concurrent('creates an app-only preview key bound to its owning organization', async () => {
     const appBindings = await appApiKeyBindings(APPNAME, 'app_preview')
-    const response = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        name: `app-preview-key-${id.slice(0, 8)}`,
-        bindings: appBindings,
-      }),
+    const response = await postApiKey({
+      name: `app-preview-key-${id.slice(0, 8)}`,
+      bindings: appBindings,
     })
     expect(response.status).toBe(200)
     const data = await response.json<{ id: number, rbac_id: string }>()
@@ -238,11 +235,7 @@ describe('[POST] /apikey operations', () => {
   })
 
   it('app-limited key cannot create another API key', async () => {
-    const limitedCreatorResponse = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify(await appKeyBody('app-key-creator')),
-    })
+    const limitedCreatorResponse = await postApiKey(await appKeyBody('app-key-creator'))
     expect(limitedCreatorResponse.status).toBe(200)
     const limitedCreatorData = await limitedCreatorResponse.json<{ id: number, key: string }>()
 
@@ -270,20 +263,12 @@ describe('[POST] /apikey operations', () => {
     const createdKeyIds: number[] = []
 
     try {
-      const limitedResponse = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify(await appKeyBody('app-management-blocked')),
-      })
+      const limitedResponse = await postApiKey(await appKeyBody('app-management-blocked'))
       expect(limitedResponse.status).toBe(200)
       const limitedData = await limitedResponse.json<{ id: number, key: string }>()
       createdKeyIds.push(limitedData.id)
 
-      const siblingResponse = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify(orgKeyBody('sibling-management-target')),
-      })
+      const siblingResponse = await postApiKey(orgKeyBody('sibling-management-target'))
       expect(siblingResponse.status).toBe(200)
       const siblingData = await siblingResponse.json<{ id: number }>()
       createdKeyIds.push(siblingData.id)
@@ -344,22 +329,14 @@ describe('[POST] /apikey operations', () => {
     const orgId = orgApiKeyBindings()[0].org_id
 
     try {
-      const managerResponse = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify(orgKeyBody('org-management-blocked', {
-          bindings: orgApiKeyBindings(orgId, 'org_member'),
-        })),
-      })
+      const managerResponse = await postApiKey(orgKeyBody('org-management-blocked', {
+        bindings: orgApiKeyBindings(orgId, 'org_member'),
+      }))
       expect(managerResponse.status).toBe(200)
       const managerData = await managerResponse.json<{ id: number, key: string }>()
       createdKeyIds.push(managerData.id)
 
-      const siblingResponse = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify(orgKeyBody('org-sibling-management-target')),
-      })
+      const siblingResponse = await postApiKey(orgKeyBody('org-sibling-management-target'))
       expect(siblingResponse.status).toBe(200)
       const siblingData = await siblingResponse.json<{ id: number }>()
       createdKeyIds.push(siblingData.id)
