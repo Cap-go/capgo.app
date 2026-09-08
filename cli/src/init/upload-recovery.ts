@@ -1,4 +1,6 @@
 import { resolve } from 'node:path'
+import { shellQuotePath } from '../app/info'
+import { formatRunnerCommand } from '../runner-command'
 
 export const MONOREPO_ROOT_PATHS_NOTE = 'These must be the monorepo/workspace root paths — the workspace package.json and the hoisted node_modules folder — not the app package under apps/ or packages/.'
 
@@ -40,6 +42,31 @@ export function resolveUploadPaths(paths: string | undefined, baseDir: string): 
   return joinUniqueUploadPaths(
     ...paths.split(',').map(part => part.trim()).filter(Boolean).map(part => resolve(baseDir, part)),
   )
+}
+
+export function formatBundleUploadRunnerCommand(
+  runner: string,
+  appId: string,
+  options: {
+    bundle?: string
+    channel?: string
+    deltaOnly?: boolean
+    packageJson?: string
+    nodeModules?: string
+  },
+): string {
+  const args: string[] = ['@capgo/cli@latest', 'bundle', 'upload', appId]
+  if (options.bundle)
+    args.push('--bundle', options.bundle)
+  if (options.channel)
+    args.push('--channel', options.channel)
+  if (options.deltaOnly)
+    args.push('--delta-only')
+  if (options.packageJson)
+    args.push('--package-json', shellQuotePath(options.packageJson))
+  if (options.nodeModules)
+    args.push('--node-modules', shellQuotePath(options.nodeModules))
+  return formatRunnerCommand(runner, args)
 }
 
 export function withMonorepoUploadRetryHint(error: string): string {

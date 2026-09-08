@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
+  formatBundleUploadRunnerCommand,
   getBundleUploadFailureRecoveryOptions,
   joinUniqueUploadPaths,
   MONOREPO_ROOT_PATHS_NOTE,
@@ -36,6 +37,25 @@ assert.equal(resolveUploadPaths('./package.json,./apps/mobile/package.json', pro
 assert.equal(resolveUploadPaths('/already/absolute/package.json', promptCwd), '/already/absolute/package.json')
 assert.equal(resolveUploadPaths('./node_modules', promptCwd), '/workspace/app/node_modules')
 
+assert.match(
+  formatBundleUploadRunnerCommand('npx -y', 'com.example.app', {
+    bundle: '1.0.1',
+    channel: 'production',
+    packageJson: '/Users/a/My Project/package.json',
+    nodeModules: '/Users/a/My Project/node_modules',
+  }),
+  /--package-json '\/Users\/a\/My Project\/package\.json'/,
+)
+assert.match(
+  formatBundleUploadRunnerCommand('npx -y', 'com.example.app', {
+    bundle: '1.0.1',
+    channel: 'production',
+    packageJson: '/Users/a/My Project/package.json',
+    nodeModules: '/Users/a/My Project/node_modules',
+  }),
+  /--node-modules '\/Users\/a\/My Project\/node_modules'/,
+)
+
 assert.equal(withMonorepoUploadRetryHint(''), MONOREPO_UPLOAD_RETRY_HINT)
 assert.equal(
   withMonorepoUploadRetryHint('Missing dependencies or invalid dependencies'),
@@ -52,10 +72,11 @@ assert.match(command, /Monorepo root package\.json path:/)
 assert.match(command, /Monorepo root node_modules path:/)
 assert.match(command, /promptForMonorepoRootUploadPaths/)
 assert.match(command, /resolveUploadPaths\(packageJson, promptCwd\)/)
-assert.match(command, /joinUniqueUploadPaths\(resolveUploadPaths\(packageJson, promptCwd\), currentPackageJson\)/)
-assert.match(command, /joinUniqueUploadPaths\(resolveUploadPaths\(nodeModules, promptCwd\), currentNodeModules\)/)
+assert.match(command, /joinUniqueUploadPaths\(resolveUploadPaths\(packageJson, promptCwd\), resolveUploadPaths\(currentPackageJson, promptCwd\)\)/)
+assert.match(command, /joinUniqueUploadPaths\(resolveUploadPaths\(nodeModules, promptCwd\), resolveUploadPaths\(currentNodeModules, promptCwd\)\)/)
 assert.match(command, /globalUploadPackageJsonPath/)
-assert.match(command, /packageJson: uploadPackageJsonPath/)
+assert.match(command, /formatBundleUploadRunnerCommand/)
+assert.match(command, /resolveUploadPaths\(currentPackageJson, promptCwd\)/)
 assert.match(command, /nodeModules: nodeModulesPath/)
 assert.doesNotMatch(command, /packageJson: isMonorepo \? selectedPackageJsonPath/)
 

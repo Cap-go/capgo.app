@@ -48,7 +48,7 @@ import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisab
 import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitLogSkip, waitForInitStreamingContinue } from './runtime'
 import { createInitTelemetry, mergeInitProgressTelemetry, parseInitProgressTelemetry } from './telemetry'
 import { formatInitResumeMessage, initOnboardingSteps, renderInitOnboardingComplete, renderInitOnboardingFrame, renderInitOnboardingWelcome } from './ui'
-import { getBundleUploadFailureRecoveryOptions, joinUniqueUploadPaths, MONOREPO_ROOT_PATHS_NOTE, resolveUploadPaths } from './upload-recovery'
+import { formatBundleUploadRunnerCommand, getBundleUploadFailureRecoveryOptions, joinUniqueUploadPaths, MONOREPO_ROOT_PATHS_NOTE, resolveUploadPaths } from './upload-recovery'
 import { CAPACITOR_SPLASH_SCREEN_PACKAGE, CAPGO_UPDATER_PACKAGE, getSplashScreenInstallState, getUpdaterInstallState } from './updater'
 
 interface SuperOptions extends Options {
@@ -1776,8 +1776,8 @@ async function promptForMonorepoRootUploadPaths(
   )
   const promptCwd = cwd()
   return {
-    packageJson: joinUniqueUploadPaths(resolveUploadPaths(packageJson, promptCwd), currentPackageJson),
-    nodeModules: joinUniqueUploadPaths(resolveUploadPaths(nodeModules, promptCwd), currentNodeModules),
+    packageJson: joinUniqueUploadPaths(resolveUploadPaths(packageJson, promptCwd), resolveUploadPaths(currentPackageJson, promptCwd)),
+    nodeModules: joinUniqueUploadPaths(resolveUploadPaths(nodeModules, promptCwd), resolveUploadPaths(currentNodeModules, promptCwd)),
   }
 }
 
@@ -4970,14 +4970,13 @@ async function maybeOfferAutoTestCleanup(orgId: string, apikey: string, appId: s
 
   const pm = getPMAndCommand()
   const cleanupVersion = getSuggestedCleanupBundleVersion(currentVersion)
-  const cleanupUploadCommand = [
-    `${pm.runner} @capgo/cli@latest bundle upload ${appId}`,
-    `--bundle ${cleanupVersion}`,
-    `--channel ${globalChannelName}`,
-    delta ? '--delta-only' : '',
-    (globalUploadPackageJsonPath ?? globalPathToPackageJson) ? `--package-json ${globalUploadPackageJsonPath ?? globalPathToPackageJson}` : '',
-    globalNodeModulesPath ? `--node-modules ${globalNodeModulesPath}` : '',
-  ].filter(Boolean).join(' ')
+  const cleanupUploadCommand = formatBundleUploadRunnerCommand(pm.runner, appId, {
+    bundle: cleanupVersion,
+    channel: globalChannelName,
+    deltaOnly: delta,
+    packageJson: globalUploadPackageJsonPath ?? globalPathToPackageJson,
+    nodeModules: globalNodeModulesPath,
+  })
 
   pLog.info(reverted
     ? 'Build and upload one more cleanup bundle so the onboarding test change disappears from the installed app.'
@@ -5146,15 +5145,13 @@ async function uploadStep(orgId: string, apikey: string, appId: string, newVersi
     }
   }
   else {
-    const manualUploadCommandParts = [
-      `${pm.runner} @capgo/cli@latest bundle upload ${appId}`,
-      `--bundle ${newVersion}`,
-      `--channel ${globalChannelName}`,
-      delta ? '--delta-only' : '',
-      (globalUploadPackageJsonPath ?? globalPathToPackageJson) ? `--package-json ${globalUploadPackageJsonPath ?? globalPathToPackageJson}` : '',
-      globalNodeModulesPath ? `--node-modules ${globalNodeModulesPath}` : '',
-    ]
-    const manualUploadCommand = manualUploadCommandParts.filter(Boolean).join(' ')
+    const manualUploadCommand = formatBundleUploadRunnerCommand(pm.runner, appId, {
+      bundle: newVersion,
+      channel: globalChannelName,
+      deltaOnly: delta,
+      packageJson: globalUploadPackageJsonPath ?? globalPathToPackageJson,
+      nodeModules: globalNodeModulesPath,
+    })
     pLog.info(`Upload yourself from ${selectedProjectDir} with command: ${manualUploadCommand}`)
     if (projectIsMonorepo(cwd())) {
       pLog.info(MONOREPO_ROOT_PATHS_NOTE)
