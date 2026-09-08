@@ -137,6 +137,130 @@ describe('update delivery stats helpers', () => {
     expect(updateDeliveryStatsTestUtils.shouldCacheUpdateDeliveryStats(0, 0)).toBe(false)
   })
 
+  it.concurrent('recovers full percentiles when a day exceeds the AE row cap', () => {
+    const dayStart = Date.parse('2026-07-02T00:00:00.000Z')
+    const pairingLookbackMs = 2 * 60 * 60 * 1000
+    const pageLimit = 50_000
+    const events: Array<{
+      app_id: string
+      device_id: string
+      action: string
+      version_name: string
+      metadata: null
+      duration_ms: null
+      created_at: string
+    }> = []
+
+    for (let i = 0; i < 25_000; i += 1) {
+      const startMs = dayStart + i * 1000
+      const endMs = startMs + 100
+      events.push(
+        {
+          app_id: 'com.demo.app',
+          device_id: `device-${i}`,
+          action: 'download_0',
+          version_name: '1.0.0',
+          metadata: null,
+          duration_ms: null,
+          created_at: new Date(startMs).toISOString(),
+        },
+        {
+          app_id: 'com.demo.app',
+          device_id: `device-${i}`,
+          action: 'download_complete',
+          version_name: '1.0.0',
+          metadata: null,
+          duration_ms: null,
+          created_at: new Date(endMs).toISOString(),
+        },
+      )
+    }
+
+    const noonMs = dayStart + 12 * 60 * 60 * 1000
+    for (let i = 0; i < 5_000; i += 1) {
+      const startMs = noonMs + i * 1000
+      const endMs = startMs + 60_000
+      events.push(
+        {
+          app_id: 'com.demo.app',
+          device_id: `slow-${i}`,
+          action: 'download_0',
+          version_name: '1.0.0',
+          metadata: null,
+          duration_ms: null,
+          created_at: new Date(startMs).toISOString(),
+        },
+        {
+          app_id: 'com.demo.app',
+          device_id: `slow-${i}`,
+          action: 'download_complete',
+          version_name: '1.0.0',
+          metadata: null,
+          duration_ms: null,
+          created_at: new Date(endMs).toISOString(),
+        },
+      )
+    }
+
+    const sorted = [...events].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
+    const windowStartMs = dayStart
+    const windowEndMs = dayStart + 24 * 60 * 60 * 1000
+    const queryStartMs = windowStartMs
+
+    const paginate = () => {
+      const merged: typeof events = []
+      let cursorStart = Math.max(windowStartMs - pairingLookbackMs, queryStartMs)
+      let incomplete = false
+
+      while (true) {
+        const batch = sorted.filter((event) => {
+          const ts = Date.parse(event.created_at)
+          return ts >= cursorStart && ts < windowEndMs
+        }).slice(0, pageLimit)
+
+        if (batch.length === 0)
+          break
+
+        merged.push(...batch)
+        if (batch.length < pageLimit)
+          break
+
+        const lastTs = Date.parse(batch[batch.length - 1]!.created_at)
+        if (lastTs >= windowEndMs || lastTs <= cursorStart) {
+          incomplete = true
+          break
+        }
+        cursorStart = lastTs
+      }
+
+      return {
+        events: updateDeliveryStatsTestUtils.dedupeDeliveryEvents(merged),
+        incomplete,
+      }
+    }
+
+    const truncated = updateDeliveryStatsTestUtils.buildDeliveriesFromEvents(
+      sorted.slice(0, pageLimit),
+      { periodStartMs: windowStartMs, allowPairing: true },
+    )
+    const { events: paginatedEvents, incomplete } = paginate()
+    const recovered = updateDeliveryStatsTestUtils.buildDeliveriesFromEvents(
+      paginatedEvents,
+      { periodStartMs: windowStartMs, allowPairing: true },
+    )
+
+    const truncatedOverview = updateDeliveryStatsTestUtils.aggregateDeliverySamples(truncated).overviewRow
+    const recoveredOverview = updateDeliveryStatsTestUtils.aggregateDeliverySamples(recovered).overviewRow
+
+    expect(incomplete).toBe(false)
+    expect(truncatedOverview.samples).toBe(25_000)
+    expect(truncatedOverview.p95_ms).toBe(100)
+    expect(recoveredOverview.samples).toBe(30_000)
+    expect(recoveredOverview.p95_ms).toBe(60_000)
+    expect(updateDeliveryStatsTestUtils.shouldCacheUpdateDeliveryStats(recoveredOverview.samples, 0)).toBe(true)
+    expect(updateDeliveryStatsTestUtils.shouldCacheUpdateDeliveryStats(truncatedOverview.samples, 1)).toBe(false)
+  })
+
   it.concurrent('caps platform delivery period days at 90', () => {
     expect(updateDeliveryStatsTestUtils.normalizePlatformPeriodDays(30)).toBe(30)
     expect(updateDeliveryStatsTestUtils.normalizePlatformPeriodDays(90)).toBe(90)

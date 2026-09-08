@@ -621,6 +621,86 @@ async function mapSettledInBatches<T, R>(
   return results
 }
 
+function deliveryEventKey(event: UpdateDeliveryTimingEventCF): string {
+  return `${event.app_id}\0${event.device_id}\0${event.action}\0${event.version_name}\0${event.created_at}`
+}
+
+function dedupeDeliveryEvents(events: UpdateDeliveryTimingEventCF[]): UpdateDeliveryTimingEventCF[] {
+  const seen = new Set<string>()
+  const deduped: UpdateDeliveryTimingEventCF[] = []
+  for (const event of events) {
+    const key = deliveryEventKey(event)
+    if (seen.has(key))
+      continue
+    seen.add(key)
+    deduped.push(event)
+  }
+  return deduped
+}
+
+async function readUpdateDeliveryChunkEventsCF(
+  c: Context<MiddlewareKeyVariables>,
+  params: {
+    queryStart: Dayjs
+    windowStart: Dayjs
+    windowEnd: Dayjs
+    appIds?: string[]
+  },
+): Promise<{ events: UpdateDeliveryTimingEventCF[], incomplete: boolean }> {
+  const merged: UpdateDeliveryTimingEventCF[] = []
+  let cursorStart = params.windowStart.subtract(2, 'hour')
+  if (cursorStart.isBefore(params.queryStart))
+    cursorStart = params.queryStart
+  const queryEnd = params.windowEnd
+
+  while (true) {
+    const batch = await readUpdateDeliveryTimingEventsCF(c, {
+      start_date: cursorStart.toISOString(),
+      end_date: queryEnd.toISOString(),
+      actions: [...timingActions],
+      app_ids: params.appIds,
+    })
+
+    if (batch.length === 0)
+      break
+
+    merged.push(...batch)
+
+    if (batch.length < MAX_ANALYTICS_QUERY_LIMIT)
+      break
+
+    const lastEvent = batch[batch.length - 1]
+    if (!lastEvent) {
+      return { events: dedupeDeliveryEvents(merged), incomplete: true }
+    }
+
+    const nextStart = dayjs.utc(lastEvent.created_at)
+    if (!nextStart.isBefore(queryEnd) || nextStart.isSame(cursorStart)) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'update_delivery_stats CF chunk could not paginate past AE row cap',
+        event_count: batch.length,
+        window_start: params.windowStart.toISOString(),
+        window_end: params.windowEnd.toISOString(),
+        cursor_start: cursorStart.toISOString(),
+      })
+      return { events: dedupeDeliveryEvents(merged), incomplete: true }
+    }
+
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'update_delivery_stats CF chunk hit AE row cap, paginating',
+      event_count: batch.length,
+      window_start: params.windowStart.toISOString(),
+      window_end: params.windowEnd.toISOString(),
+      next_cursor: nextStart.toISOString(),
+    })
+    cursorStart = nextStart
+  }
+
+  return { events: dedupeDeliveryEvents(merged), incomplete: false }
+}
+
 async function readUpdateDeliverySamplesCF(
   c: Context<MiddlewareKeyVariables>,
   params: {
@@ -636,32 +716,29 @@ async function readUpdateDeliverySamplesCF(
   // does not hold 30 days of raw events. Each chunk overlaps 2h for midnight pairs.
   const chunks = buildDeliveryDayChunks(params.start, params.endExclusive)
   const settled = await mapSettledInBatches(chunks, params.concurrency, async (chunk) => {
-    const events = await readUpdateDeliveryTimingEventsCF(c, {
-      start_date: chunk.start.subtract(2, 'hour').toISOString(),
-      end_date: chunk.end.toISOString(),
-      actions: [...timingActions],
-      app_ids: params.appIds,
+    const { events, incomplete } = await readUpdateDeliveryChunkEventsCF(c, {
+      queryStart: params.start,
+      windowStart: chunk.start,
+      windowEnd: chunk.end,
+      appIds: params.appIds,
     })
-    if (events.length >= MAX_ANALYTICS_QUERY_LIMIT) {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'update_delivery_stats CF chunk hit AE row cap',
-        event_count: events.length,
-        chunk_start: chunk.start.toISOString(),
-        chunk_end: chunk.end.toISOString(),
-      })
-    }
-    return buildDeliveriesFromEvents(events, {
+    if (incomplete && !params.swallowChunkErrors)
+      throw simpleError('fetch_error', 'Update delivery sample set too large for this period')
+    const samples = buildDeliveriesFromEvents(events, {
       periodStartMs: Math.max(chunk.start.valueOf(), params.start.valueOf()),
       allowPairing: true,
     })
+    return { samples, incomplete }
   })
 
   const samples: DeliverySample[] = []
   const failures: unknown[] = []
+  let incompleteChunks = 0
   for (const [index, result] of settled.entries()) {
     if (result.status === 'fulfilled') {
-      samples.push(...result.value)
+      samples.push(...result.value.samples)
+      if (result.value.incomplete)
+        incompleteChunks += 1
       continue
     }
     failures.push(result.reason)
@@ -675,6 +752,7 @@ async function readUpdateDeliverySamplesCF(
   }
 
   const failedChunks = resolveDeliveryChunkFailures(failures, chunks.length, params.swallowChunkErrors)
+    + incompleteChunks
   return { samples, failedChunks }
 }
 
@@ -870,6 +948,7 @@ export const updateDeliveryStatsTestUtils = {
   aggregateDeliverySamples,
   resolveDeliveryChunkFailures,
   shouldCacheUpdateDeliveryStats,
+  dedupeDeliveryEvents,
   generateDateLabels,
   normalizePeriodDays,
   normalizePlatformPeriodDays,
