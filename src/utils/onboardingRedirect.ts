@@ -117,14 +117,35 @@ export function canExploreOnboardingDashboard(userId: string | null | undefined)
   return !!matchingDashboardExploration(userId)
 }
 
+const ONBOARDING_CONSOLE_ESCAPE_DESTINATIONS = new Set([
+  '/dashboard',
+  '/apps',
+  '/apikeys',
+  '/scan',
+])
+
+function isPreCreateOnboardingPath(path: string | null | undefined) {
+  if (!path)
+    return false
+  return path === '/app/new'
+    || path === '/onboarding/app'
+    || path.startsWith('/onboarding/')
+}
+
 export function shouldConfirmOnboardingDashboardExploration(options: {
+  currentPath?: string | null | undefined
   destination: string
   resumeAppId: string | null | undefined
   userId: string | null | undefined
 }) {
-  return options.destination === '/dashboard'
-    && !!options.resumeAppId
-    && !canExploreOnboardingDashboard(options.userId)
+  if (!ONBOARDING_CONSOLE_ESCAPE_DESTINATIONS.has(options.destination))
+    return false
+  if (canExploreOnboardingDashboard(options.userId))
+    return false
+
+  // Confirm before empty-product escapes while a first-app create is still in
+  // progress — either a resumed pending app, or the active /app/new flow.
+  return !!options.resumeAppId || isPreCreateOnboardingPath(options.currentPath)
 }
 
 export function getOnboardingResumeAppId(userId: string | null | undefined) {
