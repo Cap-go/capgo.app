@@ -33,20 +33,40 @@ function expectCheckoutUrlOnEmulator(url: string, baseUrl: string) {
   expect(checkoutUrl.pathname).toMatch(/^\/checkout\/cs_/)
 }
 
-function mockStoredPlanPrices(priceMonthId: string, priceYearId: string) {
+function mockCheckoutAdmin(planProductId: string, priceMonthId: string, priceYearId: string) {
+  const planRow = {
+    stripe_id: planProductId,
+    stripe_id_us: null,
+    price_m_id: priceMonthId,
+    price_y_id: priceYearId,
+    price_m_id_us: null,
+    price_y_id_us: null,
+  }
+
   mockedSupabaseAdmin.mockReturnValue({
-    from: vi.fn().mockReturnValue({
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          single: vi.fn().mockResolvedValue({
-            data: {
-              price_m_id: priceMonthId,
-              price_y_id: priceYearId,
-            },
-            error: null,
+    from: vi.fn().mockImplementation((table: string) => {
+      if (table === 'stripe_info') {
+        return {
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+            }),
+          }),
+        }
+      }
+
+      return {
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({ data: planRow, error: null }),
+            maybeSingle: vi.fn().mockResolvedValue({ data: planRow, error: null }),
+          }),
+          or: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({ data: planRow, error: null }),
+            maybeSingle: vi.fn().mockResolvedValue({ data: planRow, error: null }),
           }),
         }),
-      }),
+      }
     }),
   })
 }
@@ -160,7 +180,7 @@ describe('stripe emulator integration', () => {
       },
     })
 
-    mockStoredPlanPrices(monthlyPrice.id, yearlyPrice.id)
+    mockCheckoutAdmin(product.id, monthlyPrice.id, yearlyPrice.id)
 
     const checkout = await createCheckout(
       context,
@@ -173,7 +193,7 @@ describe('stripe emulator integration', () => {
 
     expect(checkout.url).toBeTruthy()
     expectCheckoutUrlOnEmulator(checkout.url as string, stripeApiBaseUrl)
-    expect(mockedSupabaseAdmin).toHaveBeenCalledTimes(1)
+    expect(mockedSupabaseAdmin).toHaveBeenCalledTimes(3)
 
     const sessions = await stripe.checkout.sessions.list({ limit: 10 })
     const session = sessions.data.find(candidate => candidate.url === checkout.url)
