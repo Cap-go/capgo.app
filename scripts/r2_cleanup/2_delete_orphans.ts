@@ -108,16 +108,7 @@ async function processKey(key: string): Promise<void> {
       return
     }
 
-    try {
-      await s3.send(new DeleteObjectCommand({
-        Bucket: S3_BUCKET,
-        Key: key,
-      }))
-      totalProcessed += 1
-    }
-    catch {
-      totalErrors += 1
-    }
+    // permanent mode is handled by permanentDeleteBatch in streamProcessPrefix
   })
 }
 

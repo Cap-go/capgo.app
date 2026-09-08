@@ -30,6 +30,10 @@ export function encodeS3CopySource(bucket: string, key: string): string {
   return `${bucket}/${encodeS3LiteCopySourceKey(key)}`
 }
 
+export function isAlreadyMovedToTrash(trashExists: boolean, sourceExists: boolean): boolean {
+  return trashExists && !sourceExists
+}
+
 export class ConcurrencyLimiter {
   private inFlight = 0
   private readonly queue: Array<() => void> = []

@@ -3,7 +3,7 @@ import { writeFileSync, existsSync, readFileSync } from 'fs'
 import { S3Client as S3ClientLite } from '@bradenmacdonald/s3-lite-client/'
 import { Pool } from 'pg'
 import { Context } from 'vm'
-import { encodeS3CopySource, getR2TrashKey, ConcurrencyLimiter, isLiveR2Key } from './r2_trash_utils.ts'
+import { encodeS3CopySource, getR2TrashKey, ConcurrencyLimiter, isAlreadyMovedToTrash, isLiveR2Key, resolveOpsDeleteMode } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const CHECKPOINT_FILE = './objects_checkpoint.json'
@@ -1518,25 +1518,33 @@ async function copy_cleanup_candidates_direct() {
 }
 
 async function delete_cleanup_candidates() {
-    const permanent = process.env.ALLOW_PERMANENT_R2_DELETE === 'true'
-    if (permanent) {
+    const deleteMode = resolveOpsDeleteMode({
+        DRY_RUN: process.env.DRY_RUN,
+        ALLOW_PERMANENT_R2_DELETE: process.env.ALLOW_PERMANENT_R2_DELETE,
+    })
+
+    if (deleteMode === 'permanent')
         console.warn('WARNING: ALLOW_PERMANENT_R2_DELETE=true — permanently deleting files from the main bucket!')
-    }
-    else {
+    else if (deleteMode === 'trash')
         console.log('Moving cleanup candidates to 7-day trash (set ALLOW_PERMANENT_R2_DELETE=true for permanent delete)')
-    }
+    else
+        console.log('Dry-run mode: listing cleanup candidates without modifying storage')
+
     console.log('🔄 Processing cleanup candidates in the main bucket...')
 
     // Safety check - ensure this is intentional
     console.log('\n🛡️  SAFETY CHECKS:')
     console.log('   - Make sure you have backed up these files first')
-    if (permanent) {
+    if (deleteMode === 'permanent') {
         console.log('   - This operation cannot be undone')
         console.log('   - Files will be permanently removed from main bucket')
     }
-    else {
+    else if (deleteMode === 'trash') {
         console.log('   - Files move to deleted-after-7-days/ and remain recoverable for seven days')
         console.log('   - Source keys are removed from their live paths after the trash copy succeeds')
+    }
+    else {
+        console.log('   - No objects will be modified in dry-run mode')
     }
 
     // Check if cleanup_candidates.json exists
@@ -1564,21 +1572,37 @@ async function delete_cleanup_candidates() {
     const totalSize = toDelete.reduce((sum: number, file: any) => sum + (file.size?? 0), 0)
     const totalSizeGB = (totalSize / (1024 * 1024 * 1024)).toFixed(2)
 
-    console.log(`💾 Total size to delete: ${totalSizeGB} GB`)
+    console.log(`💾 Total size to ${deleteMode === 'dry_run' ? 'inspect' : 'process'}: ${totalSizeGB} GB`)
     console.log(`📁 From bucket: ${S3_BUCKET}`)
+
+    if (deleteMode === 'dry_run') {
+        for (const file of toDelete)
+            console.log(`Would process: ${file.key}`)
+        console.log(`✅ Dry-run complete for ${toDelete.length} live candidates`)
+        return
+    }
 
     // Initialize S3 client
     console.log('🔗 Connecting to R2...')
     const s3 = await initS3()
 
-    const deleteMode = permanent ? 'permanent' : 'trash'
     const PROCESS_CONCURRENCY = 20
     const limiter = new ConcurrencyLimiter(PROCESS_CONCURRENCY)
     let processedCount = 0
 
+    async function objectExists(key: string): Promise<boolean> {
+        try {
+            await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
+            return true
+        }
+        catch {
+            return false
+        }
+    }
+
     async function processCandidate(file: { key: string }): Promise<{ key: string, success: boolean, error: string | null, skipped?: boolean }> {
         try {
-            if (permanent) {
+            if (deleteMode === 'permanent') {
                 await s3.send(new DeleteObjectCommand({
                     Bucket: S3_BUCKET,
                     Key: file.key,
@@ -1594,14 +1618,11 @@ async function delete_cleanup_candidates() {
                     }))
                 }
                 catch (copyError: any) {
-                    try {
-                        await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: trashKey }))
-                        await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: file.key }))
-                        throw copyError
-                    }
-                    catch {
+                    const trashExists = await objectExists(trashKey)
+                    const sourceExists = await objectExists(file.key)
+                    if (isAlreadyMovedToTrash(trashExists, sourceExists))
                         return { key: file.key, success: true, error: null, skipped: true }
-                    }
+                    return { key: file.key, success: false, error: copyError.message }
                 }
 
                 try {

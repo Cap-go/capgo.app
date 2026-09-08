@@ -3,6 +3,7 @@ import {
   ConcurrencyLimiter,
   encodeS3CopySource,
   getR2TrashKey,
+  isAlreadyMovedToTrash,
   isLiveR2Key,
   resolveOpsDeleteMode,
   R2_TRASH_PREFIX,
@@ -42,6 +43,15 @@ describe('isLiveR2Key', () => {
   it('treats deleted-after-7-days keys as not live', () => {
     expect(isLiveR2Key(`${R2_TRASH_PREFIX}orgs/org-1/a.zip`)).toBe(false)
     expect(isLiveR2Key('orgs/org-1/a.zip')).toBe(true)
+  })
+})
+
+describe('isAlreadyMovedToTrash', () => {
+  it('is true only when trash exists and source is gone', () => {
+    expect(isAlreadyMovedToTrash(true, false)).toBe(true)
+    expect(isAlreadyMovedToTrash(true, true)).toBe(false)
+    expect(isAlreadyMovedToTrash(false, false)).toBe(false)
+    expect(isAlreadyMovedToTrash(false, true)).toBe(false)
   })
 })
 
