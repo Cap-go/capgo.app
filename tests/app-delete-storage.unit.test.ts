@@ -156,7 +156,7 @@ describe('public deleteApp storage contract', () => {
       { key: 'capgo_test_key' } as any,
     )
 
-    expect(response).toBeDefined()
+    expect(response).toEqual({ body: { status: 'ok' } })
     expect(moveObjectsWithPrefixToTrash).not.toHaveBeenCalled()
     expect(deleteObjectsWithPrefix).not.toHaveBeenCalled()
     expect(deletedTables).toContain('apps')
