@@ -45,6 +45,19 @@ function addConnectOrigin(sources: Set<string>, raw: string) {
   }
 }
 
+function getDeployTimeConnectOverrides(): string[] {
+  const overrides: string[] = []
+  const supaUrl = process.env.SUPA_URL
+  const apiDomain = process.env.API_DOMAIN
+
+  if (typeof supaUrl === 'string' && supaUrl)
+    overrides.push(supaUrl)
+  if (typeof apiDomain === 'string' && apiDomain)
+    overrides.push(apiDomain)
+
+  return overrides
+}
+
 function getConfiguredConnectSources(dev: boolean): string[] {
   const sources = new Set<string>()
   const envKeys = dev
@@ -60,6 +73,9 @@ function getConfiguredConnectSources(dev: boolean): string[] {
     if (typeof apiDomain === 'string')
       addConnectOrigin(sources, apiDomain)
   }
+
+  for (const raw of getDeployTimeConnectOverrides())
+    addConnectOrigin(sources, raw)
 
   return [...sources]
 }

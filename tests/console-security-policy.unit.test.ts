@@ -22,6 +22,29 @@ describe('console content security policy', () => {
     expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('https://api.dev.capgo.app')
   })
 
+  it('includes self-hosted deploy-time connect overrides from env', () => {
+    const previousSupaUrl = process.env.SUPA_URL
+    const previousApiDomain = process.env.API_DOMAIN
+    process.env.SUPA_URL = 'https://selfhost.supabase.co'
+    process.env.API_DOMAIN = 'api.selfhost.example'
+    try {
+      const policy = buildConsoleContentSecurityPolicy()
+      expect(policy).toContain('https://selfhost.supabase.co')
+      expect(policy).toContain('wss://selfhost.supabase.co')
+      expect(policy).toContain('https://api.selfhost.example')
+    }
+    finally {
+      if (previousSupaUrl === undefined)
+        delete process.env.SUPA_URL
+      else
+        process.env.SUPA_URL = previousSupaUrl
+      if (previousApiDomain === undefined)
+        delete process.env.API_DOMAIN
+      else
+        process.env.API_DOMAIN = previousApiDomain
+    }
+  })
+
   it.concurrent('allows bundle preview fetch hosts in connect-src', () => {
     expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('https://*.preview.capgo.app')
     expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('https://*.preview.preprod.capgo.app')

@@ -41,15 +41,4 @@
   else if (typeof mediaQuery.addListener === 'function') {
     mediaQuery.addListener(onSystemThemeChange)
   }
-
-  window.__setTheme = function (theme) {
-    if (theme === 'auto') {
-      localStorage.setItem('theme', 'auto')
-      applyTheme(mediaQuery.matches)
-    }
-    else {
-      localStorage.setItem('theme', theme)
-      applyTheme(theme === 'dark')
-    }
-  }
 })()

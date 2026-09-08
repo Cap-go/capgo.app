@@ -78,13 +78,6 @@ function isPrivateOrLoopbackHost(hostname: string): boolean {
   if (lower.startsWith('fc') || lower.startsWith('fd'))
     return true
 
-  const v4mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
-  if (v4mapped) {
-    const parts = v4mapped[1].match(/^(\d+)\.(\d+)\./)
-    if (parts)
-      return isPrivateIpv4(Number(parts[1]), Number(parts[2]))
-  }
-
   // User-supplied icon URLs must use DNS hostnames, not raw IPv6 literals.
   return true
 }

@@ -1,8 +1,6 @@
 import configs from '../../configs.json'
 import { isLocalDevHost } from './sanitize'
 
-const SCHEME_LIKE_PATH = /^[a-z][a-z0-9+.-]*:/i
-
 function hasControlCharacters(path: string): boolean {
   for (let i = 0; i < path.length; i++) {
     const code = path.charCodeAt(i)
@@ -52,9 +50,6 @@ export function validateRedirectPath(
   if (!path.startsWith('/') || path.startsWith('//'))
     return fallback
 
-  if (SCHEME_LIKE_PATH.test(path))
-    return fallback
-
   if (path.includes('\\') || hasControlCharacters(path))
     return fallback
 
@@ -95,10 +90,8 @@ export function isAllowedConfirmationUrl(urlValue: string, options: {
 export function getAllowedConfirmationHosts() {
   const hosts = new Set<string>()
 
-  for (const envKey of ['VITE_APP_URL', 'VITE_SUPABASE_URL'] as const) {
-    const raw = import.meta.env[envKey]
-    addConfiguredHost(hosts, raw)
-  }
+  addConfiguredHost(hosts, import.meta.env.VITE_APP_URL)
+  addConfiguredHost(hosts, import.meta.env.VITE_SUPABASE_URL)
 
   if (hosts.size === 0) {
     addConfiguredHost(hosts, configs.base_domain?.prod)

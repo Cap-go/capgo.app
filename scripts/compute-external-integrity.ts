@@ -4,6 +4,7 @@
  *
  * Usage:
  *   bun run security:compute-integrity -- <url> [<url>...]
+ *   bun run security:compute-integrity -- --file docs/external-integrity-sources.json
  *
  * Example:
  *   bun run security:compute-integrity -- "https://fonts.bunny.net/css?family=inter:400"
