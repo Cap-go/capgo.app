@@ -3,7 +3,7 @@ import { writeFileSync, existsSync, readFileSync } from 'fs'
 import { S3Client as S3ClientLite } from '@bradenmacdonald/s3-lite-client/'
 import { Pool } from 'pg'
 import { Context } from 'vm'
-import { encodeS3CopySource, getR2TrashKey } from './r2_trash_utils.ts'
+import { encodeS3CopySource, getR2TrashKey, ConcurrencyLimiter } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const CHECKPOINT_FILE = './objects_checkpoint.json'
@@ -1565,10 +1565,13 @@ async function delete_cleanup_candidates() {
     console.log('🔗 Connecting to R2...')
     const s3 = await initS3()
 
-    // Delete files in parallel
-    console.log('⚡ Deleting files from main bucket...')
+    const deleteMode = permanent ? 'permanent' : 'trash'
+    const limiter = new ConcurrencyLimiter(20)
+    let processedCount = 0
 
-    const deleteOperations = toDelete.map(async (file: any, index: number) => {
+    console.log(`⚡ Processing files from main bucket (mode: ${deleteMode})...`)
+
+    const results = await Promise.all(toDelete.map((file: any) => limiter.run(async () => {
         try {
             if (permanent) {
                 await s3.send(new DeleteObjectCommand({
@@ -1589,10 +1592,9 @@ async function delete_cleanup_candidates() {
                 }))
             }
 
-            // Log progress every 10 files
-            if ((index + 1) % 10 === 0) {
-                console.log(`📊 Progress: ${index + 1}/${toDelete.length} files processed`)
-            }
+            processedCount += 1
+            if (processedCount % 10 === 0)
+                console.log(`📊 Progress: ${processedCount}/${toDelete.length} files processed`)
 
             return {
                 key: file.key,
@@ -1608,10 +1610,7 @@ async function delete_cleanup_candidates() {
                 error: error.message,
             }
         }
-    })
-
-    // Execute all delete operations in parallel
-    const results = await Promise.all(deleteOperations)
+    })))
 
     // Analyze results
     const successful = results.filter(r => r.success)
@@ -1619,8 +1618,8 @@ async function delete_cleanup_candidates() {
 
     console.log('\n📊 Delete Results:')
     console.log('================')
-    console.log(`✅ Successfully deleted: ${successful.length} files`)
-    console.log(`❌ Failed to delete: ${failed.length} files`)
+    console.log(`✅ Successfully processed: ${successful.length} files`)
+    console.log(`❌ Failed to process: ${failed.length} files`)
 
     if (failed.length > 0) {
         console.log('\n💥 Failed deletions:')
@@ -1632,16 +1631,17 @@ async function delete_cleanup_candidates() {
     // Save delete results
     const deleteReport = {
         generated: new Date().toISOString(),
+        deleteMode,
         summary: {
             totalFiles: toDelete.length,
-            successfulDeletions: successful.length,
-            failedDeletions: failed.length,
-            totalSizeDeleted: totalSize,
-            totalSizeDeletedGB: parseFloat(totalSizeGB),
-            sourceBucket: S3_BUCKET
+            successfulProcessed: successful.length,
+            failedProcessed: failed.length,
+            totalSizeProcessed: totalSize,
+            totalSizeProcessedGB: parseFloat(totalSizeGB),
+            sourceBucket: S3_BUCKET,
         },
-        successful: successful,
-        failed: failed
+        successful,
+        failed,
     }
 
     const reportFile = './delete_report.json'

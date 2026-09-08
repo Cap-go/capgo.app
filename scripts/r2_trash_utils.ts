@@ -20,10 +20,14 @@ export function isLiveR2Key(key: string): boolean {
   return !key.startsWith(R2_TRASH_PREFIX)
 }
 
+/** Per-segment encoding for clients that pass sourceKey into x-amz-copy-source without encoding. */
+export function encodeS3LiteCopySourceKey(key: string): string {
+  return key.split('/').map(segment => encodeURIComponent(segment)).join('/')
+}
+
 /** AWS CopySource: bucket/key with per-segment URL encoding for non-ASCII/reserved chars. */
 export function encodeS3CopySource(bucket: string, key: string): string {
-  const encodedKey = key.split('/').map(segment => encodeURIComponent(segment)).join('/')
-  return `${bucket}/${encodedKey}`
+  return `${bucket}/${encodeS3LiteCopySourceKey(key)}`
 }
 
 export class ConcurrencyLimiter {

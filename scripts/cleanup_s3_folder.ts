@@ -9,7 +9,7 @@
  */
 /// <reference lib="deno.ns" />
 import { S3Client } from 'https://deno.land/x/s3_lite_client@0.7.0/mod.ts'
-import { ConcurrencyLimiter, getR2TrashKey, isLiveR2Key, resolveOpsDeleteMode, R2_TRASH_PREFIX } from './r2_trash_utils.ts'
+import { ConcurrencyLimiter, encodeS3LiteCopySourceKey, getR2TrashKey, isLiveR2Key, resolveOpsDeleteMode, R2_TRASH_PREFIX } from './r2_trash_utils.ts'
 
 const folderToDelete = 'orgs'
 if (!folderToDelete) {
@@ -38,7 +38,7 @@ const limiter = new ConcurrencyLimiter(CONCURRENCY)
 
 async function moveObjectToTrash(key: string): Promise<void> {
   const trashKey = getR2TrashKey(key)
-  await s3client.copyObject({ sourceKey: key }, trashKey)
+  await s3client.copyObject({ sourceKey: encodeS3LiteCopySourceKey(key) }, trashKey)
   await s3client.deleteObject(key)
 }
 

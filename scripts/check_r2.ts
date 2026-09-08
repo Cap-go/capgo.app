@@ -75,10 +75,15 @@ async function main() {
         const chunk = toDelete.splice(0, 999)
         console.log('permanent delete batch')
         try {
-          await s3.send(new DeleteObjectsCommand({
+          const response = await s3.send(new DeleteObjectsCommand({
             Bucket: S3_BUCKET,
             Delete: { Objects: chunk },
           }))
+          const batchErrors = response.Errors ?? []
+          if (batchErrors.length > 0) {
+            console.error('Failed to permanently delete objects:', batchErrors)
+            errorCount += batchErrors.length
+          }
         }
         catch (error) {
           console.error('Failed to permanently delete batch:', error)

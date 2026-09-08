@@ -123,6 +123,23 @@ describe('moveObjectsWithPrefixToTrash', () => {
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
+  it('retains source when copyObject rejects after existence check', async () => {
+    const prefix = 'orgs/org-1/apps/com.test.app/'
+    const key = `${prefix}copy-fail.zip`
+
+    listObjects.mockImplementation(async function* () {
+      yield { key }
+    })
+    mockHeadStatus(200)
+    copyObject.mockRejectedValue(new Error('copy failed'))
+
+    const c = await makeContext()
+    await expect(s3.moveObjectsWithPrefixToTrash(c, prefix)).rejects.toBeInstanceOf(TrashMoveError)
+
+    expect(copyObject).toHaveBeenCalledTimes(1)
+    expect(deleteObject).not.toHaveBeenCalled()
+  })
+
   it('fails closed when moveObjectToTrash returns false', async () => {
     const prefix = 'orgs/org-1/apps/com.test.app/'
     const failingKey = `${prefix}fail.zip`
