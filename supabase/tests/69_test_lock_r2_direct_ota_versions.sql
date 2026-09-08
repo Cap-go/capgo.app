@@ -214,7 +214,7 @@ SELECT lives_ok(
 SELECT lives_ok(
   $sql$
     UPDATE public.app_versions
-    SET r2_path = 'orgs/70000000-0000-4000-8000-000000000071/apps/com.test.r2direct.upload.lock/1.0.0-in-progress-locked.zip'
+    SET r2_path = 'orgs/70000000-0000-4000-8000-000000000071/apps/com.test.r2direct.upload.lock/1.0.0-in-progress.zip'
     WHERE app_id = 'com.test.r2direct.upload.lock'
       AND name = '1.0.0-in-progress'
   $sql$,
