@@ -7,7 +7,7 @@
 -- Metadata assertion below uses 1.0.0-in-progress after checksum lock.
 BEGIN;
 
-SELECT plan(11);
+SELECT plan(12);
 
 SELECT tests.authenticate_as_service_role();
 SELECT tests.create_supabase_user('r2_direct_upload_lock_owner', 'r2_direct_upload_lock_owner@test.local');
@@ -209,6 +209,16 @@ SELECT lives_ok(
       AND name = '1.0.0-in-progress'
   $sql$,
   'in-progress r2-direct can set checksum and session_key once'
+);
+
+SELECT lives_ok(
+  $sql$
+    UPDATE public.app_versions
+    SET r2_path = 'orgs/70000000-0000-4000-8000-000000000071/apps/com.test.r2direct.upload.lock/1.0.0-in-progress-locked.zip'
+    WHERE app_id = 'com.test.r2direct.upload.lock'
+      AND name = '1.0.0-in-progress'
+  $sql$,
+  'checksum-locked r2-direct can still UPDATE r2_path'
 );
 
 SELECT lives_ok(
