@@ -1,4 +1,4 @@
-import { _Object, CopyObjectCommand, DeleteObjectCommand, ListObjectsV2Command, ListObjectsV2CommandOutput, S3Client, HeadObjectCommand, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3'
+import { _Object, CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, ListObjectsV2CommandOutput, S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3'
 import { writeFileSync, existsSync, readFileSync } from 'fs'
 import { S3Client as S3ClientLite } from '@bradenmacdonald/s3-lite-client/'
 import { Pool } from 'pg'
@@ -1572,12 +1572,11 @@ async function delete_cleanup_candidates() {
     const s3 = await initS3()
 
     const deleteMode = permanent ? 'permanent' : 'trash'
-    const limiter = new ConcurrencyLimiter(20)
+    const PROCESS_CONCURRENCY = 20
+    const limiter = new ConcurrencyLimiter(PROCESS_CONCURRENCY)
     let processedCount = 0
 
-    console.log(`⚡ Processing files from main bucket (mode: ${deleteMode})...`)
-
-    const results = await Promise.all(toDelete.map((file: any) => limiter.run(async () => {
+    async function processCandidate(file: { key: string }): Promise<{ key: string, success: boolean, error: string | null, skipped?: boolean }> {
         try {
             if (permanent) {
                 await s3.send(new DeleteObjectCommand({
@@ -1587,36 +1586,58 @@ async function delete_cleanup_candidates() {
             }
             else {
                 const trashKey = getR2TrashKey(file.key)
-                await s3.send(new CopyObjectCommand({
-                    Bucket: S3_BUCKET,
-                    CopySource: encodeS3CopySource(S3_BUCKET, file.key),
-                    Key: trashKey,
-                }))
-                await s3.send(new DeleteObjectCommand({
-                    Bucket: S3_BUCKET,
-                    Key: file.key,
-                }))
+                try {
+                    await s3.send(new CopyObjectCommand({
+                        Bucket: S3_BUCKET,
+                        CopySource: encodeS3CopySource(S3_BUCKET, file.key),
+                        Key: trashKey,
+                    }))
+                }
+                catch (copyError: any) {
+                    try {
+                        await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: trashKey }))
+                        await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: file.key }))
+                        throw copyError
+                    }
+                    catch {
+                        return { key: file.key, success: true, error: null, skipped: true }
+                    }
+                }
+
+                try {
+                    await s3.send(new DeleteObjectCommand({
+                        Bucket: S3_BUCKET,
+                        Key: file.key,
+                    }))
+                }
+                catch (deleteError: any) {
+                    return {
+                        key: file.key,
+                        success: false,
+                        error: `Copied to trash but failed to delete source: ${deleteError.message}`,
+                    }
+                }
             }
 
-            processedCount += 1
-            if (processedCount % 10 === 0)
-                console.log(`📊 Progress: ${processedCount}/${toDelete.length} files processed`)
-
-            return {
-                key: file.key,
-                success: true,
-                error: null,
-            }
+            return { key: file.key, success: true, error: null }
         }
         catch (error: any) {
             console.error(`❌ Error processing ${file.key}:`, error.message)
-            return {
-                key: file.key,
-                success: false,
-                error: error.message,
-            }
+            return { key: file.key, success: false, error: error.message }
         }
-    })))
+    }
+
+    console.log(`⚡ Processing files from main bucket (mode: ${deleteMode})...`)
+
+    const results: Array<{ key: string, success: boolean, error: string | null, skipped?: boolean }> = []
+    for (let i = 0; i < toDelete.length; i += PROCESS_CONCURRENCY) {
+        const batch = toDelete.slice(i, i + PROCESS_CONCURRENCY)
+        const batchResults = await Promise.all(batch.map((file: { key: string }) => limiter.run(() => processCandidate(file))))
+        results.push(...batchResults)
+        processedCount += batchResults.length
+        if (processedCount % 10 === 0 || processedCount === toDelete.length)
+            console.log(`📊 Progress: ${processedCount}/${toDelete.length} files processed`)
+    }
 
     // Analyze results
     const successful = results.filter(r => r.success)

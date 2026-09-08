@@ -90,24 +90,29 @@ async function main() {
           CopySource: encodeS3CopySource(S3_BUCKET, key),
           Key: trashKey,
         }))
+      }
+      catch (copyError) {
+        try {
+          await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: trashKey }))
+          await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
+          console.error(`Failed to trash ${key}:`, copyError)
+          return 'failed'
+        }
+        catch {
+          return 'skipped'
+        }
+      }
+
+      try {
         await s3.send(new DeleteObjectCommand({
           Bucket: S3_BUCKET,
           Key: key,
         }))
         return 'ok'
       }
-      catch (error) {
-        try {
-          await s3.send(new HeadObjectCommand({
-            Bucket: S3_BUCKET,
-            Key: trashKey,
-          }))
-          return 'skipped'
-        }
-        catch {
-          console.error(`Failed to trash ${key}:`, error)
-          return 'failed'
-        }
+      catch (deleteError) {
+        console.error(`Copied ${key} to trash but failed to delete source:`, deleteError)
+        return 'failed'
       }
     }
 
