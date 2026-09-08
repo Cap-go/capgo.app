@@ -142,6 +142,9 @@ function loadCliTypeScript(): unknown {
   return cliTypeScriptModule
 }
 
+// Node 20 (CLI minimum) loads `.ts` configs through requireTS + the CLI's own
+// runtime TypeScript dependency. Native `import()` of `.ts` is only used as a
+// recovery path on Bun and Node.js 22+, where the runtime can load TypeScript.
 function supportsNativeTypeScriptImport(): boolean {
   if (process.versions.bun)
     return true
@@ -221,21 +224,10 @@ export async function loadConfig(): Promise<ExtConfigPairs | undefined> {
       path: getConfigWriteTarget() ?? configPath,
     }
   }
-  try {
-    const config = await loadConfigCap()
-    return {
-      config: config.app.extConfig,
-      path: getConfigWriteTarget() ?? config.app.extConfigFilePath,
-    }
-  }
-  catch (error) {
-    if (configPath && extname(configPath) === '.ts' && projectTypeScriptLacksClassicApi(cwd())) {
-      return {
-        config: await loadConfigTarget(configPath),
-        path: getConfigWriteTarget() ?? configPath,
-      }
-    }
-    throw error
+  const config = await loadConfigCap()
+  return {
+    config: config.app.extConfig,
+    path: getConfigWriteTarget() ?? config.app.extConfigFilePath,
   }
 }
 
