@@ -1575,6 +1575,12 @@ export interface ReadUpdateDeliveryTimingEventsCFParams {
   app_ids?: string[]
   /** When set, restrict to these version names (blob3). */
   version_names?: string[]
+  after_cursor?: {
+    created_at: string
+    app_id: string
+    device_id: string
+    action: string
+  }
   limit?: number
 }
 
@@ -1595,6 +1601,26 @@ export function buildUpdateDeliveryTimingEventsCFQuery(params: ReadUpdateDeliver
           : `AND blob3 IN (${params.version_names.map(name => `'${escapeSqlString(name)}'`).join(', ')})`
       )
     : ''
+  const cursorFilter = params.after_cursor
+    ? `AND (
+  timestamp > toDateTime('${formatDateCF(params.after_cursor.created_at)}')
+  OR (
+    timestamp = toDateTime('${formatDateCF(params.after_cursor.created_at)}')
+    AND (
+      index1 > '${escapeSqlString(params.after_cursor.app_id)}'
+      OR (
+        index1 = '${escapeSqlString(params.after_cursor.app_id)}'
+        AND blob1 > '${escapeSqlString(params.after_cursor.device_id)}'
+      )
+      OR (
+        index1 = '${escapeSqlString(params.after_cursor.app_id)}'
+        AND blob1 = '${escapeSqlString(params.after_cursor.device_id)}'
+        AND blob2 > '${escapeSqlString(params.after_cursor.action)}'
+      )
+    )
+  )
+)`
+    : ''
 
   return `SELECT
   index1 AS app_id,
@@ -1611,6 +1637,7 @@ WHERE
   AND blob2 IN (${actionsList})
   ${appFilter}
   ${versionFilter}
+  ${cursorFilter}
 ORDER BY created_at ASC, app_id ASC, device_id ASC, blob2 ASC
 LIMIT ${limit}`
 }

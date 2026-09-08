@@ -638,6 +638,12 @@ type ReadDeliveryChunkPage = (params: {
   start_date: string
   end_date: string
   app_ids?: string[]
+  after_cursor?: {
+    created_at: string
+    app_id: string
+    device_id: string
+    action: string
+  }
 }) => Promise<UpdateDeliveryTimingEventCF[]>
 
 async function paginateUpdateDeliveryChunkSamples(
@@ -650,23 +656,27 @@ async function paginateUpdateDeliveryChunkSamples(
 ): Promise<{ samples: DeliverySample[], incomplete: boolean }> {
   const samples: DeliverySample[] = []
   const periodStartMs = params.windowStart.valueOf()
-  let cursorStart = params.windowStart.subtract(2, 'hour')
+  const queryStart = params.windowStart.subtract(2, 'hour')
+  let afterCursor: {
+    created_at: string
+    app_id: string
+    device_id: string
+    action: string
+  } | undefined
   let carryStarts: UpdateDeliveryTimingEventCF[] = []
-  let skipRows = 0
 
   for (let page = 0; page < MAX_DELIVERY_CHUNK_PAGES; page += 1) {
     const batch = await readPage({
-      start_date: cursorStart.toISOString(),
+      start_date: queryStart.toISOString(),
       end_date: params.windowEnd.toISOString(),
       app_ids: params.appIds,
+      after_cursor: afterCursor,
     })
-    const pageEvents = batch.slice(skipRows)
-    skipRows = 0
 
-    if (pageEvents.length === 0)
+    if (batch.length === 0)
       return { samples, incomplete: false }
 
-    const events = [...carryStarts, ...pageEvents]
+    const events = [...carryStarts, ...batch]
     samples.push(...buildDeliveriesFromEvents(events, {
       periodStartMs,
       allowPairing: true,
@@ -679,25 +689,30 @@ async function paginateUpdateDeliveryChunkSamples(
     if (!lastEvent)
       return { samples, incomplete: true }
 
-    const lastTs = lastEvent.created_at
-    const lastTsMs = dayjs.utc(lastTs)
+    const lastTsMs = dayjs.utc(lastEvent.created_at)
     if (!lastTsMs.isBefore(params.windowEnd))
-      return { samples, incomplete: true }
-
-    const boundaryCount = batch.filter(event => event.created_at === lastTs).length
-    if (boundaryCount > 1)
       return { samples, incomplete: true }
 
     if (page === MAX_DELIVERY_CHUNK_PAGES - 1)
       return { samples, incomplete: true }
 
-    skipRows = boundaryCount
-    if (lastTsMs.isSame(cursorStart) && skipRows > 0)
+    const nextCursor = {
+      created_at: lastEvent.created_at,
+      app_id: lastEvent.app_id,
+      device_id: lastEvent.device_id,
+      action: lastEvent.action,
+    }
+    if (afterCursor
+      && afterCursor.created_at === nextCursor.created_at
+      && afterCursor.app_id === nextCursor.app_id
+      && afterCursor.device_id === nextCursor.device_id
+      && afterCursor.action === nextCursor.action) {
       return { samples, incomplete: true }
+    }
 
     const carryMinMs = lastTsMs.valueOf() - pairingLookbackMs
     carryStarts = collectCarryStartEvents(events, carryMinMs)
-    cursorStart = lastTsMs
+    afterCursor = nextCursor
   }
 
   return { samples, incomplete: true }
@@ -715,6 +730,7 @@ async function readUpdateDeliveryChunkEventsCF(
     pageParams => readUpdateDeliveryTimingEventsCF(c, {
       start_date: pageParams.start_date,
       end_date: pageParams.end_date,
+      after_cursor: pageParams.after_cursor,
       actions: [...timingActions],
       app_ids: pageParams.app_ids,
     }),

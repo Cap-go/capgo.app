@@ -7,7 +7,7 @@ import {
   lintAnalyticsEngineSql,
   validateAnalyticsEngineSqlLive,
 } from '../supabase/functions/_backend/utils/analyticsEngineSqlLint.ts'
-import { buildUpdateDeliveryTimingEventsCFQuery } from '../supabase/functions/_backend/utils/cloudflare.ts'
+import { buildUpdateDeliveryTimingEventsCFQuery, MAX_ANALYTICS_QUERY_LIMIT } from '../supabase/functions/_backend/utils/cloudflare.ts'
 
 dayjs.extend(utc)
 
@@ -141,7 +141,7 @@ describe('update delivery stats helpers', () => {
     const dayStart = Date.parse('2026-07-02T00:00:00.000Z')
     const windowStart = dayjs.utc('2026-07-02T00:00:00.000Z')
     const windowEnd = dayjs.utc('2026-07-03T00:00:00.000Z')
-    const pageLimit = 50_000
+    const pageLimit = MAX_ANALYTICS_QUERY_LIMIT
     const events: Array<{
       app_id: string
       device_id: string
@@ -203,16 +203,52 @@ describe('update delivery stats helpers', () => {
       )
     }
 
-    const sorted = [...events].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
+    const sorted = [...events].sort((a, b) => {
+      const ts = Date.parse(a.created_at) - Date.parse(b.created_at)
+      if (ts !== 0)
+        return ts
+      const app = a.app_id.localeCompare(b.app_id)
+      if (app !== 0)
+        return app
+      const device = a.device_id.localeCompare(b.device_id)
+      if (device !== 0)
+        return device
+      return a.action.localeCompare(b.action)
+    })
     const readPage = async (pageParams: {
       start_date: string
       end_date: string
+      after_cursor?: {
+        created_at: string
+        app_id: string
+        device_id: string
+        action: string
+      }
     }) => {
       const startMs = Date.parse(pageParams.start_date)
       const endMs = Date.parse(pageParams.end_date)
       const filtered = sorted.filter((event) => {
         const ts = Date.parse(event.created_at)
-        return ts >= startMs && ts < endMs
+        if (ts < startMs || ts >= endMs)
+          return false
+        if (!pageParams.after_cursor)
+          return true
+        const cursor = pageParams.after_cursor
+        const eventTs = Date.parse(event.created_at)
+        const cursorTs = Date.parse(cursor.created_at)
+        if (eventTs > cursorTs)
+          return true
+        if (eventTs < cursorTs)
+          return false
+        if (event.app_id > cursor.app_id)
+          return true
+        if (event.app_id < cursor.app_id)
+          return false
+        if (event.device_id > cursor.device_id)
+          return true
+        if (event.device_id < cursor.device_id)
+          return false
+        return event.action > cursor.action
       })
       return filtered.slice(0, pageLimit)
     }
