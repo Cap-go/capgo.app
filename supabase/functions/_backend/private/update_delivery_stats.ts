@@ -636,7 +636,6 @@ function collectCarryStartEvents(
 
 type ReadDeliveryChunkPage = (params: {
   start_date: string
-  start_exclusive: boolean
   end_date: string
   app_ids?: string[]
 }) => Promise<UpdateDeliveryTimingEventCF[]>
@@ -653,20 +652,21 @@ async function paginateUpdateDeliveryChunkSamples(
   const periodStartMs = params.windowStart.valueOf()
   let cursorStart = params.windowStart.subtract(2, 'hour')
   let carryStarts: UpdateDeliveryTimingEventCF[] = []
-  let startExclusive = false
+  let skipRows = 0
 
   for (let page = 0; page < MAX_DELIVERY_CHUNK_PAGES; page += 1) {
     const batch = await readPage({
       start_date: cursorStart.toISOString(),
-      start_exclusive: startExclusive,
       end_date: params.windowEnd.toISOString(),
       app_ids: params.appIds,
     })
+    const pageEvents = batch.slice(skipRows)
+    skipRows = 0
 
-    if (batch.length === 0)
+    if (pageEvents.length === 0)
       return { samples, incomplete: false }
 
-    const events = [...carryStarts, ...batch]
+    const events = [...carryStarts, ...pageEvents]
     samples.push(...buildDeliveriesFromEvents(events, {
       periodStartMs,
       allowPairing: true,
@@ -679,17 +679,21 @@ async function paginateUpdateDeliveryChunkSamples(
     if (!lastEvent)
       return { samples, incomplete: true }
 
-    const lastTs = dayjs.utc(lastEvent.created_at)
-    if (!lastTs.isBefore(params.windowEnd) || (startExclusive && lastTs.isSame(cursorStart)))
+    const lastTs = lastEvent.created_at
+    const lastTsMs = dayjs.utc(lastTs)
+    if (!lastTsMs.isBefore(params.windowEnd))
       return { samples, incomplete: true }
 
     if (page === MAX_DELIVERY_CHUNK_PAGES - 1)
       return { samples, incomplete: true }
 
-    const carryMinMs = lastTs.valueOf() - pairingLookbackMs
+    skipRows = batch.filter(event => event.created_at === lastTs).length
+    if (skipRows === 0)
+      return { samples, incomplete: true }
+
+    const carryMinMs = lastTsMs.valueOf() - pairingLookbackMs
     carryStarts = collectCarryStartEvents(events, carryMinMs)
-    cursorStart = lastTs
-    startExclusive = true
+    cursorStart = lastTsMs
   }
 
   return { samples, incomplete: true }
@@ -706,7 +710,6 @@ async function readUpdateDeliveryChunkEventsCF(
   return paginateUpdateDeliveryChunkSamples(
     pageParams => readUpdateDeliveryTimingEventsCF(c, {
       start_date: pageParams.start_date,
-      start_exclusive: pageParams.start_exclusive,
       end_date: pageParams.end_date,
       actions: [...timingActions],
       app_ids: pageParams.app_ids,

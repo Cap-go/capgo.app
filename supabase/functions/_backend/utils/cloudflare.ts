@@ -1575,8 +1575,6 @@ export interface ReadUpdateDeliveryTimingEventsCFParams {
   app_ids?: string[]
   /** When set, restrict to these version names (blob3). */
   version_names?: string[]
-  /** Use strict `timestamp > start_date` for AE pagination follow-up pages. */
-  start_exclusive?: boolean
   limit?: number
 }
 
@@ -1597,7 +1595,6 @@ export function buildUpdateDeliveryTimingEventsCFQuery(params: ReadUpdateDeliver
           : `AND blob3 IN (${params.version_names.map(name => `'${escapeSqlString(name)}'`).join(', ')})`
       )
     : ''
-  const startComparator = params.start_exclusive ? '>' : '>='
 
   return `SELECT
   index1 AS app_id,
@@ -1609,7 +1606,7 @@ export function buildUpdateDeliveryTimingEventsCFQuery(params: ReadUpdateDeliver
   timestamp AS created_at
 FROM app_log
 WHERE
-  timestamp ${startComparator} toDateTime('${formatDateCF(params.start_date)}')
+  timestamp >= toDateTime('${formatDateCF(params.start_date)}')
   AND timestamp < toDateTime('${formatDateCF(params.end_date)}')
   AND blob2 IN (${actionsList})
   ${appFilter}

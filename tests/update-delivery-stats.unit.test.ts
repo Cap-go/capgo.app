@@ -206,15 +206,12 @@ describe('update delivery stats helpers', () => {
     const sorted = [...events].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
     const readPage = async (pageParams: {
       start_date: string
-      start_exclusive: boolean
       end_date: string
     }) => {
       const startMs = Date.parse(pageParams.start_date)
       const endMs = Date.parse(pageParams.end_date)
       const filtered = sorted.filter((event) => {
         const ts = Date.parse(event.created_at)
-        if (pageParams.start_exclusive)
-          return ts > startMs && ts < endMs
         return ts >= startMs && ts < endMs
       })
       return filtered.slice(0, pageLimit)
