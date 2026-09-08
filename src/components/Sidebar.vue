@@ -175,9 +175,14 @@ async function openTab(tab: Tab) {
       return
     // Primary = stay in setup (safe default). Secondary = explore anyway.
     if (dialogStore.lastButtonRole === 'primary') {
-      if (onboardingResumeAppId)
-        return router.push({ path: '/app/new', query: { resume: onboardingResumeAppId } })
-      return router.push({ path: '/app/new' })
+      const stepQuery = typeof route.query.step === 'string' ? { step: route.query.step } : {}
+      if (onboardingResumeAppId) {
+        return router.push({
+          path: '/app/new',
+          query: { resume: onboardingResumeAppId, ...stepQuery },
+        })
+      }
+      return router.push({ path: '/app/new', query: stepQuery })
     }
     if (dialogStore.lastButtonRole !== 'secondary')
       return

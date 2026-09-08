@@ -1735,7 +1735,19 @@ function hydrateIntentFromCurrentOrg() {
     selectedIntent.value = supportedIntent
 }
 
+let intentAdvanceTimer: ReturnType<typeof setTimeout> | undefined
+let intentAdvanceGeneration = 0
+
+function clearIntentAdvanceTimer() {
+  if (intentAdvanceTimer === undefined)
+    return
+  window.clearTimeout(intentAdvanceTimer)
+  intentAdvanceTimer = undefined
+}
+
 function continueFromIntent() {
+  clearIntentAdvanceTimer()
+  intentAdvanceGeneration += 1
   if (!selectedIntent.value) {
     toast.error(t('organization-onboarding-intent-required'))
     return
@@ -1832,9 +1844,14 @@ function trackWebNativeRecommendationClick() {
 }
 
 function selectIntentAndContinue(intent: OnboardingIntent) {
+  clearIntentAdvanceTimer()
   selectedIntent.value = intent
   // Brief selected-state flash so the choice feels acknowledged before advance.
-  window.setTimeout(() => {
+  const generation = ++intentAdvanceGeneration
+  intentAdvanceTimer = window.setTimeout(() => {
+    intentAdvanceTimer = undefined
+    if (generation !== intentAdvanceGeneration)
+      return
     if (selectedIntent.value !== intent || flowStep.value !== 'intent')
       return
     continueFromGoal()
@@ -2437,6 +2454,9 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   onboardingFlowDisposed = true
   clearScheduledOnboardingProgress()
+  clearIntentAdvanceTimer()
+  intentAdvanceGeneration += 1
+  window.clearTimeout(persistFieldsTimer)
   window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   document.removeEventListener('visibilitychange', trackOnboardingVisibilityChange)
   detailsFieldTracker.dispose()

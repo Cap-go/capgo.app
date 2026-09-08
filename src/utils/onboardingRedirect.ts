@@ -127,6 +127,9 @@ const ONBOARDING_CONSOLE_ESCAPE_DESTINATIONS = new Set([
 function isPreCreateOnboardingPath(path: string | null | undefined) {
   if (!path)
     return false
+  // Org-switcher / add-another-org uses /onboarding/organization — not first-app create.
+  if (path === '/onboarding/organization' || path.startsWith('/onboarding/organization/'))
+    return false
   return path === '/app/new'
     || path === '/onboarding/app'
     || path.startsWith('/onboarding/')
