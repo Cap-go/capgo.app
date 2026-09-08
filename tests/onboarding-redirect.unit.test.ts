@@ -179,6 +179,14 @@ describe('onboarding dashboard redirect', () => {
       destination: '/dashboard',
       resumeAppId: null,
       userId: 'user-1',
+    })).toBe(true)
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/onboarding/organization',
+      currentSource: 'org-switcher',
+      destination: '/dashboard',
+      resumeAppId: null,
+      userId: 'user-1',
     })).toBe(false)
 
     expect(module.shouldConfirmOnboardingDashboardExploration({

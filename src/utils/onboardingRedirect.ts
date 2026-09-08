@@ -124,12 +124,20 @@ const ONBOARDING_CONSOLE_ESCAPE_DESTINATIONS = new Set([
   '/scan',
 ])
 
-function isPreCreateOnboardingPath(path: string | null | undefined) {
+function isPreCreateOnboardingPath(
+  path: string | null | undefined,
+  options?: { source?: string | null },
+) {
   if (!path)
     return false
-  // Org-switcher / add-another-org uses /onboarding/organization — not first-app create.
-  if (path === '/onboarding/organization' || path.startsWith('/onboarding/organization/'))
+  // /onboarding/organization is shared: first-app create hard-gates, but
+  // org-switcher / add-another-org should not.
+  if (
+    (path === '/onboarding/organization' || path.startsWith('/onboarding/organization/'))
+    && options?.source === 'org-switcher'
+  ) {
     return false
+  }
   return path === '/app/new'
     || path === '/onboarding/app'
     || path.startsWith('/onboarding/')
@@ -137,6 +145,7 @@ function isPreCreateOnboardingPath(path: string | null | undefined) {
 
 export function shouldConfirmOnboardingDashboardExploration(options: {
   currentPath?: string | null | undefined
+  currentSource?: string | null
   destination: string
   resumeAppId: string | null | undefined
   userId: string | null | undefined
@@ -148,7 +157,9 @@ export function shouldConfirmOnboardingDashboardExploration(options: {
 
   // Confirm before empty-product escapes while a first-app create is still in
   // progress — either a resumed pending app, or the active /app/new flow.
-  return !!options.resumeAppId || isPreCreateOnboardingPath(options.currentPath)
+  return !!options.resumeAppId || isPreCreateOnboardingPath(options.currentPath, {
+    source: options.currentSource,
+  })
 }
 
 export function getOnboardingResumeAppId(userId: string | null | undefined) {
