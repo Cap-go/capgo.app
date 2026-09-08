@@ -87,4 +87,26 @@ describe('stripe billing account helpers', () => {
     expect(() => getPlanPriceId(incompleteUsPlan, 'us', 'month')).toThrow(IncompleteUsPlanConfigError)
     expect(() => getPlanCreditProductId({ ...SOLO_PLAN, credit_id_us: null }, 'us')).toThrow(IncompleteUsPlanConfigError)
   })
+
+  it('defaults to ee when admin client is unavailable but throws on lookup errors', async () => {
+    const context = createContext()
+    const lookupError = { message: 'connection refused', code: 'PGRST000' }
+
+    const adminModule = await import('../supabase/functions/_backend/utils/supabase.ts')
+    const billingModule = await import('../supabase/functions/_backend/utils/stripe_billing.ts')
+
+    vi.spyOn(adminModule, 'supabaseAdmin').mockReturnValueOnce(undefined as any)
+    await expect(billingModule.getBillingAccountForCustomer(context, 'cus_test')).resolves.toBe('ee')
+
+    vi.spyOn(adminModule, 'supabaseAdmin').mockReturnValueOnce({
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => ({ data: null, error: lookupError }),
+          }),
+        }),
+      }),
+    } as any)
+    await expect(billingModule.getBillingAccountForCustomer(context, 'cus_test')).rejects.toEqual(lookupError)
+  })
 })

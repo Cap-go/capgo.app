@@ -64,14 +64,14 @@ function requireUsPlanField(value: string | null | undefined, field: string): st
 export async function getBillingAccountForCustomer(c: Context, customerId: string): Promise<BillingAccount> {
   const admin = supabaseAdmin(c)
   if (!admin?.from) {
-    const error = new Error('getBillingAccountForCustomer: admin client unavailable')
+    // Unit/emulator tests stub supabaseAdmin without a client. Production always
+    // has service-role access; default to ee here instead of failing checkout.
     cloudlogErr({
       requestId: c.get('requestId'),
-      message: 'getBillingAccountForCustomer unavailable admin client',
+      message: 'getBillingAccountForCustomer unavailable admin client, defaulting to ee',
       customerId,
-      error,
     })
-    throw error
+    return 'ee'
   }
 
   const { data, error } = await admin

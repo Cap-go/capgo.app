@@ -4,6 +4,7 @@ import { createServer } from 'node:net'
 import { createEmulator } from 'emulate'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createCheckout, createOneTimeCheckout, getCreditCheckoutDetails, getStripe } from '../supabase/functions/_backend/utils/stripe.ts'
+import type { BillingAccount } from '../supabase/functions/_backend/utils/stripe_billing.ts'
 
 const { mockedSupabaseAdmin } = vi.hoisted(() => ({
   mockedSupabaseAdmin: vi.fn(),
@@ -33,6 +34,26 @@ function expectCheckoutUrlOnEmulator(url: string, baseUrl: string) {
   expect(checkoutUrl.pathname).toMatch(/^\/checkout\/cs_/)
 }
 
+function mockBillingAccountLookup(billingAccount: BillingAccount | null = 'ee') {
+  mockedSupabaseAdmin.mockReturnValue({
+    from: vi.fn().mockImplementation((table: string) => {
+      if (table === 'stripe_info') {
+        return {
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: billingAccount ? { billing_account: billingAccount } : null,
+                error: null,
+              }),
+            }),
+          }),
+        }
+      }
+      throw new Error(`unexpected table ${table}`)
+    }),
+  })
+}
+
 function mockCheckoutAdmin(planProductId: string, priceMonthId: string, priceYearId: string) {
   const planRow = {
     stripe_id: planProductId,
@@ -49,7 +70,7 @@ function mockCheckoutAdmin(planProductId: string, priceMonthId: string, priceYea
         return {
           select: vi.fn().mockReturnValue({
             eq: vi.fn().mockReturnValue({
-              maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+              maybeSingle: vi.fn().mockResolvedValue({ data: { billing_account: 'ee' }, error: null }),
             }),
           }),
         }
@@ -208,6 +229,7 @@ describe('stripe emulator integration', () => {
 
   it('falls back to checkout metadata when emulate does not implement line item reads', async () => {
     stubStripeEnv(stripeApiBaseUrl)
+    mockBillingAccountLookup()
 
     const context = createContext()
     const stripe = getStripe(context)
