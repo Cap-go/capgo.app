@@ -192,6 +192,7 @@ const cachedBillingData = ref<{ data: ChartApiData, range: { startDate: Date, en
 const cached30DayData = ref<{ data: ChartApiData, range: { startDate: Date, endDate: Date } } | null>(null)
 const cachedThirtyDaySummaryData = ref<{ data: ChartApiData, range: { startDate: Date, endDate: Date } } | null>(null)
 const isFetchingThirtyDaySummary = ref(false)
+let thirtyDaySummaryRequestToken = 0
 
 const latestVersion = computed(() => {
   const chartData = rawChartData.value
@@ -684,6 +685,7 @@ async function loadThirtyDaySummary(forceRefetch = false, loadToken?: number, lo
     return
   }
 
+  const summaryToken = ++thirtyDaySummaryRequestToken
   isFetchingThirtyDaySummary.value = true
   try {
     const data = await useChartData(supabase, expectedAppId, startDate, endDate, 'native')
@@ -704,7 +706,7 @@ async function loadThirtyDaySummary(forceRefetch = false, loadToken?: number, lo
     rawThirtyDayChartData.value = null
   }
   finally {
-    if ((loadToken === undefined || loadToken === requestToken) && expectedAppId === activeAppId.value)
+    if (summaryToken === thirtyDaySummaryRequestToken)
       isFetchingThirtyDaySummary.value = false
   }
 }
