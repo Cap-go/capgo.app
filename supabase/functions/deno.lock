@@ -13,11 +13,11 @@
     "npm:cron-schedule@6.0.0": "6.0.0",
     "npm:dayjs@1.11.21": "1.11.21",
     "npm:discord-api-types@~0.38.48": "0.38.48",
-    "npm:drizzle-orm@1.0.0-rc.3": "1.0.0-rc.3_@cloudflare+workers-types@4.20260526.1_@types+pg@8.20.0_pg@8.21.0_zod@4.4.3",
+    "npm:drizzle-orm@1.0.0-rc.3": "1.0.0-rc.3_@cloudflare+workers-types@4.20260526.1_@types+pg@8.20.0_pg@8.21.0_zod@4.5.4",
     "npm:hono@4.12.23": "4.12.23",
     "npm:pg@8.21.0": "8.21.0",
     "npm:stripe@22.1.1": "22.1.1",
-    "npm:zod@^4.4.3": "4.4.3"
+    "npm:zod@^4.5.4": "4.5.4"
   },
   "jsr": {
     "@bradenmacdonald/s3-lite-client@0.9.6": {
@@ -112,7 +112,7 @@
     "discord-api-types@0.38.48": {
       "integrity": "sha512-WFUE/2o0lBlLeCQonQ+Pu2RqHAqbytBJ2RlXR91gzk05InSS6k9ShzzLYoymrA4c2oRgRKGE7/VqQJNNdGWSxQ=="
     },
-    "drizzle-orm@1.0.0-rc.3_@cloudflare+workers-types@4.20260526.1_@types+pg@8.20.0_pg@8.21.0_zod@4.4.3": {
+    "drizzle-orm@1.0.0-rc.3_@cloudflare+workers-types@4.20260526.1_@types+pg@8.20.0_pg@8.21.0_zod@4.5.4": {
       "integrity": "sha512-akZOa5UxapFbdBG8IDkfBRpSZJpMHaOJtGgp7oi1oHaiU8S3KN92waHo2l5aRuv1D9tMGYpv3BQFOsiGcNjLTQ==",
       "dependencies": [
         "@cloudflare/workers-types",
@@ -210,8 +210,8 @@
     "xtend@4.0.2": {
       "integrity": "sha512-LKYU1iAXJXUgAXn9URjiu+MWhyUXHsvfp7mcuYm9dSUKK0/CjtrUwFAxD82/mCWbtLsGjFIad0wIsod4zrTAEQ=="
     },
-    "zod@4.4.3": {
-      "integrity": "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="
+    "zod@4.5.4": {
+      "integrity": "sha512-sC95tT5iHHH9gtpj6A81kh+NEaRAUFN+qlUPDUbRfOMvNf5QCBqsb3WgvnpVtK5Y+4UfA6KqufotuTvMGiTlsA=="
     }
   },
   "workspace": {
@@ -231,7 +231,7 @@
       "npm:hono@4.12.23",
       "npm:pg@8.21.0",
       "npm:stripe@22.1.1",
-      "npm:zod@^4.4.3"
+      "npm:zod@^4.5.4"
     ]
   }
 }
