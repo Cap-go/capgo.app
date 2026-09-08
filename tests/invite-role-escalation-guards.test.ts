@@ -262,6 +262,63 @@ describe('invite role escalation guards', () => {
     expect(result.rows[0]?.status).toBe('INVITER_NOT_FOUND')
   })
 
+  it('rejects accept_tmp_user_invitation when the invitee is already an active org member', async () => {
+    const orgId = await createOrgOwnedByUser(query, USER_ID, 'Tmp invite already member org')
+    await bindOrgRole(orgId, USER_ID_NONMEMBER, 'org_member')
+    const email = `already-member-${randomUUID()}@capgo.app`
+    const magicString = await insertTmpInvite({
+      orgId,
+      email,
+      roleName: 'org_admin',
+      invitedBy: USER_ID,
+    })
+
+    await setServiceRoleClaim(query)
+    const result = await query(
+      `SELECT public.accept_tmp_user_invitation($1, $2::uuid) AS status`,
+      [magicString, USER_ID_NONMEMBER],
+    )
+    expect(result.rows[0]?.status).toBe('ALREADY_MEMBER')
+
+    const invite = await query(
+      `SELECT id FROM public.tmp_users WHERE invite_magic_string = $1`,
+      [magicString],
+    )
+    expect(invite.rows.length).toBe(1)
+  })
+
+  it('records the inviter as granted_by when accepting a tmp_users invitation', async () => {
+    const orgId = await createOrgOwnedByUser(query, USER_ID, 'Tmp invite granted_by org')
+    const email = `granted-by-${randomUUID()}@capgo.app`
+    const magicString = await insertTmpInvite({
+      orgId,
+      email,
+      roleName: 'org_member',
+      invitedBy: USER_ID,
+    })
+
+    await setServiceRoleClaim(query)
+    const acceptResult = await query(
+      `SELECT public.accept_tmp_user_invitation($1, $2::uuid) AS status`,
+      [magicString, USER_ID_NONMEMBER],
+    )
+    expect(acceptResult.rows[0]?.status).toBe('OK')
+
+    const binding = await query(
+      `
+        SELECT granted_by
+        FROM public.role_bindings
+        WHERE principal_type = public.rbac_principal_user()
+          AND principal_id = $1::uuid
+          AND org_id = $2::uuid
+          AND scope_type = public.rbac_scope_org()
+          AND reason = 'Accepted invitation'
+      `,
+      [USER_ID_NONMEMBER, orgId],
+    )
+    expect(binding.rows[0]?.granted_by).toBe(USER_ID)
+  })
+
   it('rejects assert_principal_can_grant_org_role for escalated tmp invite roles', async () => {
     const orgId = await createOrgOwnedByUser(query, USER_ID, 'Tmp invite assert org')
     await bindOrgRole(orgId, USER_ID_2, 'org_admin')

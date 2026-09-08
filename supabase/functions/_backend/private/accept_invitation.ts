@@ -153,32 +153,13 @@ async function ensureOrgMembership(
   magicInviteString: string,
 ) {
   const pgClient = getPgClient(c)
+  let status: string | undefined
   try {
     const result = await pgClient.query<{ accept_tmp_user_invitation: string }>(
       `SELECT public.accept_tmp_user_invitation($1, $2::uuid) AS accept_tmp_user_invitation`,
       [magicInviteString, userId],
     )
-
-    const status = result.rows[0]?.accept_tmp_user_invitation
-    if (status === 'OK')
-      return
-
-    if (status === 'NO_INVITE') {
-      return quickError(404, 'failed_to_accept_invitation', 'Invitation not found', { error: 'Invitation not found' })
-    }
-
-    // Legacy invites without invited_by_user_id must be reissued by an org admin.
-    if (status === 'INVITER_NOT_FOUND') {
-      return quickError(403, 'failed_to_accept_invitation', 'Invitation must be reissued before acceptance', {
-        error: 'Missing invitation inviter',
-      })
-    }
-
-    if (status === 'ROLE_NOT_FOUND') {
-      return quickError(500, 'failed_to_accept_invitation', 'Failed to resolve RBAC role', { error: 'Role not found' })
-    }
-
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation', { error: status ?? 'Unknown status' })
+    status = result.rows[0]?.accept_tmp_user_invitation
   }
   catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -192,6 +173,32 @@ async function ensureOrgMembership(
   finally {
     await closeClient(c, pgClient)
   }
+
+  if (status === 'OK')
+    return
+
+  if (status === 'NO_INVITE') {
+    return quickError(404, 'failed_to_accept_invitation', 'Invitation not found', { error: 'Invitation not found' })
+  }
+
+  // Legacy invites without invited_by_user_id must be reissued by an org admin.
+  if (status === 'INVITER_NOT_FOUND') {
+    return quickError(403, 'failed_to_accept_invitation', 'Invitation must be reissued before acceptance', {
+      error: 'Missing invitation inviter',
+    })
+  }
+
+  if (status === 'ALREADY_MEMBER') {
+    return quickError(409, 'already_org_member', 'User is already a member of this organization', {
+      error: 'User already has active org membership',
+    })
+  }
+
+  if (status === 'ROLE_NOT_FOUND') {
+    return quickError(500, 'failed_to_accept_invitation', 'Failed to resolve RBAC role', { error: 'Role not found' })
+  }
+
+  return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation', { error: status ?? 'Unknown status' })
 }
 
 app.post('/', async (c) => {

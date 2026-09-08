@@ -284,18 +284,31 @@ BEGIN
       AND org_users.org_id = v_invite.org_id
       AND org_users.app_id IS NULL
       AND org_users.channel_id IS NULL
+      AND org_users.is_invite IS FALSE
   ) THEN
+    RETURN 'ALREADY_MEMBER';
+  END IF;
+
+  -- Keep is_invite true until after the accepted binding is inserted.
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.org_users
+    WHERE org_users.user_id = p_user_id
+      AND org_users.org_id = v_invite.org_id
+      AND org_users.app_id IS NULL
+      AND org_users.channel_id IS NULL
+  ) THEN
+    INSERT INTO public.org_users (user_id, org_id, rbac_role_name, is_invite)
+    VALUES (p_user_id, v_invite.org_id, v_rbac_role_name, true);
+  ELSE
     UPDATE public.org_users
     SET rbac_role_name = v_rbac_role_name,
-        is_invite = false,
         updated_at = now()
     WHERE org_users.user_id = p_user_id
       AND org_users.org_id = v_invite.org_id
       AND org_users.app_id IS NULL
-      AND org_users.channel_id IS NULL;
-  ELSE
-    INSERT INTO public.org_users (user_id, org_id, rbac_role_name, is_invite)
-    VALUES (p_user_id, v_invite.org_id, v_rbac_role_name, false);
+      AND org_users.channel_id IS NULL
+      AND org_users.is_invite IS TRUE;
   END IF;
 
   DELETE FROM public.role_bindings
@@ -320,11 +333,21 @@ BEGIN
     v_role_id,
     public.rbac_scope_org(),
     v_invite.org_id,
-    p_user_id,
+    v_invite.invited_by_user_id,
     now(),
     'Accepted invitation',
     true
   );
+
+  UPDATE public.org_users
+  SET is_invite = false,
+      rbac_role_name = v_rbac_role_name,
+      updated_at = now()
+  WHERE org_users.user_id = p_user_id
+    AND org_users.org_id = v_invite.org_id
+    AND org_users.app_id IS NULL
+    AND org_users.channel_id IS NULL
+    AND org_users.is_invite IS TRUE;
 
   DELETE FROM public.tmp_users
   WHERE tmp_users.id = v_invite.id;
