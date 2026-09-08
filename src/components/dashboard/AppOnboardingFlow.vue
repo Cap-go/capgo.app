@@ -1741,7 +1741,7 @@ let intentAdvanceGeneration = 0
 function clearIntentAdvanceTimer() {
   if (intentAdvanceTimer === undefined)
     return
-  window.clearTimeout(intentAdvanceTimer)
+  clearTimeout(intentAdvanceTimer)
   intentAdvanceTimer = undefined
 }
 
@@ -1848,7 +1848,7 @@ function selectIntentAndContinue(intent: OnboardingIntent) {
   selectedIntent.value = intent
   // Brief selected-state flash so the choice feels acknowledged before advance.
   const generation = ++intentAdvanceGeneration
-  intentAdvanceTimer = window.setTimeout(() => {
+  intentAdvanceTimer = setTimeout(() => {
     intentAdvanceTimer = undefined
     if (generation !== intentAdvanceGeneration)
       return
