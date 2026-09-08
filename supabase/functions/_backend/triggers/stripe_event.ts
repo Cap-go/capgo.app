@@ -28,10 +28,6 @@ function getWebhookBillingAccount(c: Context): BillingAccount {
   return c.get('stripeBillingAccount') ?? 'ee'
 }
 
-function getWebhookStripe(c: Context) {
-  return getStripe(c, getWebhookBillingAccount(c))
-}
-
 async function assertStripeBillingAccount(
   c: Context,
   customer: Pick<StripeInfoRow, 'billing_account' | 'customer_id'>,

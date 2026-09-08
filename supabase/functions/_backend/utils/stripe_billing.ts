@@ -9,7 +9,7 @@ export interface PlanStripeIds {
   stripe_id: string
   price_m_id: string
   price_y_id: string
-  credit_id: string
+  credit_id?: string
   stripe_id_us?: string | null
   price_m_id_us?: string | null
   price_y_id_us?: string | null
@@ -82,7 +82,7 @@ export async function getBillingAccountForCustomer(c: Context, customerId: strin
   }
 }
 
-export function getPlanProductId(plan: PlanStripeIds, account: BillingAccount): string {
+export function getPlanProductId(plan: Pick<PlanStripeIds, 'stripe_id' | 'stripe_id_us'>, account: BillingAccount): string {
   if (account === 'us' && plan.stripe_id_us)
     return plan.stripe_id_us
   return plan.stripe_id
@@ -101,7 +101,7 @@ export function getPlanPriceId(plan: PlanStripeIds, account: BillingAccount, rec
 export function getPlanCreditProductId(plan: PlanStripeIds, account: BillingAccount): string {
   if (account === 'us' && plan.credit_id_us)
     return plan.credit_id_us
-  return plan.credit_id
+  return plan.credit_id ?? ''
 }
 
 export function planProductIdOrFilter(productId: string): string {
