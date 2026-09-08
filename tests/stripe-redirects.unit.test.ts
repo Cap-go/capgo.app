@@ -103,6 +103,26 @@ describe('stripe redirect URL allowlist', () => {
     })
   })
 
+  it('returns empty portal url when stripe is not configured for the billing account', async () => {
+    mockedEnv.STRIPE_SECRET_KEY = ''
+
+    const createSession = vi.fn()
+    vi.mocked(Stripe).mockImplementation(function () {
+      return {
+        billingPortal: {
+          sessions: { create: createSession },
+        },
+      } as any
+    } as any)
+
+    const { createPortal } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    const result = await createPortal(createContext(), 'cus_123', '/app/usage')
+
+    expect(result.url).toBe('')
+    expect(createSession).not.toHaveBeenCalled()
+    mockedEnv.STRIPE_SECRET_KEY = 'sk_test_123'
+  })
+
   it('rejects external return URLs for billing portal', async () => {
     const createSession = vi.fn()
     const stripeClient = {

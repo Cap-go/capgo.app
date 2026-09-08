@@ -144,13 +144,26 @@ function getLicensedSubscriptionItem(items: Stripe.SubscriptionItem[] | undefine
   return items?.find(item => item.plan.usage_type === 'licensed') ?? items?.[0] ?? null
 }
 
-async function getStripeContextForCustomer(c: Context, customerId: string) {
-  const billingAccount = await getBillingAccountForCustomer(c, customerId)
+function buildStripeContext(c: Context, billingAccount: BillingAccount) {
+  const configured = isStripeConfiguredForAccount(c, billingAccount)
+  if (!configured) {
+    return {
+      billingAccount,
+      configured: false as const,
+      stripe: null,
+    }
+  }
+
   return {
     billingAccount,
+    configured: true as const,
     stripe: getStripe(c, billingAccount),
-    configured: isStripeConfiguredForAccount(c, billingAccount),
   }
+}
+
+async function getStripeContextForCustomer(c: Context, customerId: string) {
+  const billingAccount = await getBillingAccountForCustomer(c, customerId)
+  return buildStripeContext(c, billingAccount)
 }
 
 function getSubscriptionProductId(c: Context, item: Stripe.SubscriptionItem | null) {
@@ -185,7 +198,7 @@ export async function getSubscriptionData(c: Context, customerId: string, subscr
     cloudlog({ requestId: c.get('requestId'), message: 'Fetching subscription data', customerId, subscriptionId })
 
     const stripeContext = billingAccount
-      ? { billingAccount, stripe: getStripe(c, billingAccount), configured: isStripeConfiguredForAccount(c, billingAccount) }
+      ? buildStripeContext(c, billingAccount)
       : await getStripeContextForCustomer(c, customerId)
     if (!stripeContext.configured)
       return null
@@ -254,7 +267,7 @@ async function getActiveSubscription(c: Context, customerId: string, subscriptio
   cloudlog({ requestId: c.get('requestId'), message: 'Stored subscription not tracked or not found, checking for others.', customerId, storedSubscriptionId: subscriptionId })
 
   const stripeContext = billingAccount
-    ? { billingAccount, stripe: getStripe(c, billingAccount), configured: isStripeConfiguredForAccount(c, billingAccount) }
+    ? buildStripeContext(c, billingAccount)
     : await getStripeContextForCustomer(c, customerId)
   if (!stripeContext.configured)
     return null
