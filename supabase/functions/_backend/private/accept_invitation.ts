@@ -194,7 +194,7 @@ async function assertInvitationRoleGrantable(
     return quickError(500, 'failed_to_accept_invitation', 'Failed to validate invitation role', { error: message })
   }
   finally {
-    await closeClient(pgClient)
+    await closeClient(c, pgClient)
   }
 }
 
