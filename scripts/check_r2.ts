@@ -1,12 +1,13 @@
 /* eslint-disable node/prefer-global/process */
 import type { _Object, ListObjectsV2CommandOutput } from '@aws-sdk/client-s3'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'// supabase.types.ts'
-import { CopyObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
+import { CopyObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { createClient } from '@supabase/supabase-js'
 import { ConcurrencyLimiter, encodeS3CopySource, getR2TrashKey, isLiveR2Key, resolveOpsDeleteMode } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const MAGIC_TO_DELETE = './tmp/magic_to_delete6.txt'
+const DELETE_CONCURRENCY = 20
 
 async function main() {
   if (process.env.MAKE_COPY === '1') {
@@ -79,7 +80,36 @@ async function main() {
     else
       console.warn('DELETE_FILES=1: moving objects to 7-day trash (set ALLOW_PERMANENT_R2_DELETE=true for permanent delete)')
 
-    const limiter = new ConcurrencyLimiter(20)
+    const limiter = new ConcurrencyLimiter(DELETE_CONCURRENCY)
+
+    async function moveKeyToTrash(key: string): Promise<'ok' | 'skipped' | 'failed'> {
+      const trashKey = getR2TrashKey(key)
+      try {
+        await s3.send(new CopyObjectCommand({
+          Bucket: S3_BUCKET,
+          CopySource: encodeS3CopySource(S3_BUCKET, key),
+          Key: trashKey,
+        }))
+        await s3.send(new DeleteObjectCommand({
+          Bucket: S3_BUCKET,
+          Key: key,
+        }))
+        return 'ok'
+      }
+      catch (error) {
+        try {
+          await s3.send(new HeadObjectCommand({
+            Bucket: S3_BUCKET,
+            Key: trashKey,
+          }))
+          return 'skipped'
+        }
+        catch {
+          console.error(`Failed to trash ${key}:`, error)
+          return 'failed'
+        }
+      }
+    }
 
     if (deleteMode === 'permanent') {
       const toDelete = keys.map(key => ({ Key: key }))
@@ -104,24 +134,11 @@ async function main() {
       }
     }
     else {
-      await Promise.all(keys.map(key => limiter.run(async () => {
-        const trashKey = getR2TrashKey(key)
-        try {
-          await s3.send(new CopyObjectCommand({
-            Bucket: S3_BUCKET,
-            CopySource: encodeS3CopySource(S3_BUCKET, key),
-            Key: trashKey,
-          }))
-          await s3.send(new DeleteObjectCommand({
-            Bucket: S3_BUCKET,
-            Key: key,
-          }))
-        }
-        catch (error) {
-          console.error(`Failed to trash ${key}:`, error)
-          errorCount += 1
-        }
-      })))
+      for (let i = 0; i < keys.length; i += DELETE_CONCURRENCY) {
+        const batch = keys.slice(i, i + DELETE_CONCURRENCY)
+        const results = await Promise.all(batch.map(key => limiter.run(() => moveKeyToTrash(key))))
+        errorCount += results.filter(result => result === 'failed').length
+      }
     }
 
     if (errorCount > 0)
