@@ -7,7 +7,7 @@ Efficiently find and remove orphaned files from R2 storage that are not present 
 The cleanup process uses 2 scripts:
 
 1. **Script 1**: Find orphaned paths using hierarchical listing (fast, doesn't list all 4.8M files)
-2. **Script 2**: Move orphaned paths to 7-day trash (default) or permanently delete (ops-only)
+2. **Script 2**: Dry-run orphaned paths by default; move them to 7-day trash when executed, or permanently delete them with the ops-only flag
 
 ## How It Works
 
