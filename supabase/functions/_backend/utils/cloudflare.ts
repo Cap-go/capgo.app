@@ -1611,7 +1611,7 @@ WHERE
   AND blob2 IN (${actionsList})
   ${appFilter}
   ${versionFilter}
-ORDER BY created_at ASC
+ORDER BY created_at ASC, app_id ASC, device_id ASC, blob2 ASC
 LIMIT ${limit}`
 }
 

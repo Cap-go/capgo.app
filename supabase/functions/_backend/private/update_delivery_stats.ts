@@ -684,11 +684,15 @@ async function paginateUpdateDeliveryChunkSamples(
     if (!lastTsMs.isBefore(params.windowEnd))
       return { samples, incomplete: true }
 
+    const boundaryCount = batch.filter(event => event.created_at === lastTs).length
+    if (boundaryCount > 1)
+      return { samples, incomplete: true }
+
     if (page === MAX_DELIVERY_CHUNK_PAGES - 1)
       return { samples, incomplete: true }
 
-    skipRows = batch.filter(event => event.created_at === lastTs).length
-    if (skipRows === 0)
+    skipRows = boundaryCount
+    if (lastTsMs.isSame(cursorStart) && skipRows > 0)
       return { samples, incomplete: true }
 
     const carryMinMs = lastTsMs.valueOf() - pairingLookbackMs
