@@ -34,6 +34,24 @@ export function isLocalDevHost(hostname: string): boolean {
     || hostname === '[::1]'
 }
 
+function isPrivateOrLoopbackHost(hostname: string): boolean {
+  if (isLocalDevHost(hostname))
+    return true
+
+  const ipv4 = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
+  if (!ipv4)
+    return false
+
+  const first = Number(ipv4[1])
+  const second = Number(ipv4[2])
+  return first === 0
+    || first === 10
+    || first === 127
+    || (first === 169 && second === 254)
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 192 && second === 168)
+}
+
 export function sanitizeHtml(value: unknown): string {
   if (value == null)
     return ''
@@ -86,7 +104,9 @@ export function isSafeImageFetchUrl(value: unknown): boolean {
 
   try {
     const url = new URL(sanitized)
-    return url.protocol === 'https:' || (url.protocol === 'http:' && isLocalDevHost(url.hostname))
+    if (url.protocol !== 'https:')
+      return false
+    return !isPrivateOrLoopbackHost(url.hostname)
   }
   catch {
     return false

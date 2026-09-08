@@ -28,8 +28,8 @@ Capgo ships browser security controls in the console web app. This note covers
 
 ## Known residual risks (document, do not hide)
 
-- `index.html` includes a small inline theme bootstrap script. CSP keeps
-  `'unsafe-inline'` for `script-src` until a nonce/hash migration is justified.
+- Theme bootstrapping runs from same-origin `public/theme-bootstrap.js` before the
+  Vue bundle loads. CSP no longer needs `'unsafe-inline'` for `script-src`.
 - PostHog and Cloudflare Turnstile load vendor scripts from their CDNs without
   SRI because the files are not byte-stable. They remain explicit CSP
   allowlist entries.

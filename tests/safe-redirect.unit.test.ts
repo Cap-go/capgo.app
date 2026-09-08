@@ -70,7 +70,7 @@ describe('isAllowedConfirmationUrl', () => {
 })
 
 describe('getAllowedConfirmationHosts', () => {
-  it.concurrent('parses configured app and supabase hosts', () => {
+  it('parses configured app and supabase hosts', () => {
     vi.stubEnv('VITE_APP_URL', 'https://console.capgo.app')
     vi.stubEnv('VITE_SUPABASE_URL', 'https://sb.capgo.app')
     try {
@@ -82,7 +82,7 @@ describe('getAllowedConfirmationHosts', () => {
     }
   })
 
-  it.concurrent('falls back to production config hosts when build env is empty', () => {
+  it('falls back to production config hosts when build env is empty', () => {
     vi.stubEnv('VITE_APP_URL', '')
     vi.stubEnv('VITE_SUPABASE_URL', '')
     try {

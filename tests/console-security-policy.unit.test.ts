@@ -15,16 +15,22 @@ describe('console content security policy', () => {
     expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toMatch(/script-src[^;]*'unsafe-inline'/)
   })
 
-  it.concurrent('includes configured API and Supabase connect sources', () => {
+  it.concurrent('includes production API and Supabase connect sources only', () => {
     expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('https://sb.capgo.app')
     expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('https://api.capgo.app')
-    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('https://api.preprod.capgo.app')
-    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('https://api.dev.capgo.app')
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('https://api.preprod.capgo.app')
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('https://api.dev.capgo.app')
+  })
+
+  it.concurrent('allows bundle preview fetch hosts in connect-src', () => {
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('https://*.preview.capgo.app')
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('https://*.preview.preprod.capgo.app')
   })
 
   it.concurrent('allows localhost only in dev mode', () => {
     const devPolicy = buildConsoleContentSecurityPolicy({ dev: true })
     expect(devPolicy).toContain('http://localhost:*')
+    expect(devPolicy).toContain('https://api.preprod.capgo.app')
     expect(devPolicy).not.toContain('upgrade-insecure-requests')
   })
 

@@ -49,7 +49,7 @@ function getConfiguredConnectSources(dev: boolean): string[] {
   const sources = new Set<string>()
   const envKeys = dev
     ? (['prod', 'preprod', 'development', 'local'] as const)
-    : (['prod', 'preprod', 'development'] as const)
+    : (['prod'] as const)
 
   for (const env of envKeys) {
     const supaUrl = configs.supa_url?.[env]
@@ -63,6 +63,13 @@ function getConfiguredConnectSources(dev: boolean): string[] {
 
   return [...sources]
 }
+
+const PREVIEW_CONNECT_SOURCES = [
+  'https://*.preview.capgo.app',
+  'https://*.preview.preprod.capgo.app',
+  'https://*.preview.dev.capgo.app',
+  'https://*.preview.development.capgo.app',
+]
 
 export function buildConsoleContentSecurityPolicy(options: ConsoleCspOptions = {}): string {
   const dev = options.dev === true
@@ -109,6 +116,7 @@ export function buildConsoleContentSecurityPolicy(options: ConsoleCspOptions = {
     'https://challenges.cloudflare.com',
     'https://api.github.com',
     'https://registry.npmjs.org',
+    ...PREVIEW_CONNECT_SOURCES,
     ...getConfiguredConnectSources(dev),
     ...(dev
       ? [
@@ -126,10 +134,7 @@ export function buildConsoleContentSecurityPolicy(options: ConsoleCspOptions = {
     'https://checkout.stripe.com',
     'https://billing.stripe.com',
     'https://js.stripe.com',
-    'https://*.preview.capgo.app',
-    'https://*.preview.preprod.capgo.app',
-    'https://*.preview.dev.capgo.app',
-    'https://*.preview.development.capgo.app',
+    ...PREVIEW_CONNECT_SOURCES,
   ])
 
   const directives = [

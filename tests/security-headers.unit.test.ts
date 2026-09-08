@@ -15,6 +15,7 @@ describe('security response headers', () => {
     expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('frame-src \'self\' https://challenges.cloudflare.com')
     expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('frame-ancestors \'none\'')
     expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('https://api.capgo.app')
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('https://*.preview.capgo.app')
     expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('fonts.bunny.net')
   })
 

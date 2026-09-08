@@ -34,14 +34,15 @@ describe('sanitizeHttpUrl', () => {
 })
 
 describe('isSafeImageFetchUrl', () => {
-  it.concurrent('accepts https image sources only', () => {
+  it.concurrent('accepts public https image sources only', () => {
     expect(isSafeImageFetchUrl('https://cdn.example/icon.png')).toBe(true)
     expect(isSafeImageFetchUrl('http://cdn.example/icon.png')).toBe(false)
   })
 
-  it.concurrent('accepts localhost http image sources', () => {
-    expect(isSafeImageFetchUrl('http://localhost/icon.png')).toBe(true)
-    expect(isSafeImageFetchUrl('http://127.0.0.1/icon.png')).toBe(true)
-    expect(isSafeImageFetchUrl('http://[::1]/icon.png')).toBe(true)
+  it.concurrent('rejects loopback and private https image sources', () => {
+    expect(isSafeImageFetchUrl('https://localhost/icon.png')).toBe(false)
+    expect(isSafeImageFetchUrl('https://127.0.0.1/icon.png')).toBe(false)
+    expect(isSafeImageFetchUrl('http://127.0.0.1/icon.png')).toBe(false)
+    expect(isSafeImageFetchUrl('https://192.168.0.10/icon.png')).toBe(false)
   })
 })

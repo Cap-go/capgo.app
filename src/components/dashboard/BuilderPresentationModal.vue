@@ -147,6 +147,8 @@ function renderTerminalBody(el: HTMLElement, html: string, withQr = false) {
   el.scrollTop = el.scrollHeight
 }
 
+const TERMINAL_QR_PLACEHOLDER = '<span class="bp-qr-line"><span class="bp-qr-meta"><span class="kw">▸ Scan to install on your device</span><span class="dim">no cable, no Xcode — just your phone camera</span></span></span>'
+
 function staticTerminal(p: 'ios' | 'android'): string {
   const cmd = `<span class="prompt">$ </span><span class="cmd">npx @capgo/cli@latest build request</span> <span class="flag">--platform</span> <span class="val">${p}</span>`
   if (p === 'android') {
@@ -165,7 +167,7 @@ function startTerminal(p: 'ios' | 'android') {
   if (!el)
     return
   if (reduce) {
-    el.innerHTML = sanitizeHtml(staticTerminal(p))
+    renderTerminalBody(el, `${staticTerminal(p)}\n${TERMINAL_QR_PLACEHOLDER}`, true)
     return
   }
   let buf = ''
@@ -225,7 +227,7 @@ function startTerminal(p: 'ios' | 'android') {
     if (myGen !== termGen)
       return
     if (idx >= script.length) {
-      buf += '\n\n<span class="ok">✔</span> Ready to install on a real device:\n<span class="bp-qr-line"><span class="bp-qr-meta"><span class="kw">▸ Scan to install on your device</span><span class="dim">no cable, no Xcode — just your phone camera</span></span></span>'
+      buf += `\n\n<span class="ok">✔</span> Ready to install on a real device:\n${TERMINAL_QR_PLACEHOLDER}`
       render(true)
       return
     }

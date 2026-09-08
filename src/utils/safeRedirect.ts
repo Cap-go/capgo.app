@@ -1,4 +1,5 @@
 import configs from '../../configs.json'
+import { isLocalDevHost } from './sanitize'
 
 const SCHEME_LIKE_PATH = /^[a-z][a-z0-9+.-]*:/i
 
@@ -82,12 +83,8 @@ export function isAllowedConfirmationUrl(urlValue: string, options: {
     return false
   }
 
-  if (options.allowLocalDev) {
-    const isLocalhost = url.hostname === 'localhost' || url.hostname.endsWith('.localhost')
-    const isLoopback = url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1'
-    if ((isLocalhost || isLoopback) && url.protocol === 'http:')
-      return true
-  }
+  if (options.allowLocalDev && isLocalDevHost(url.hostname) && url.protocol === 'http:')
+    return true
 
   if (url.protocol !== 'https:')
     return false

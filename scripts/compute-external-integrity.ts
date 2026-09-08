@@ -35,9 +35,18 @@ function parseArgs(argv: string[]) {
 }
 
 async function fetchBytes(url: string) {
-  const response = await fetch(url)
+  const parsed = new URL(url)
+  if (parsed.protocol !== 'https:')
+    throw new Error(`Only HTTPS sources are allowed: ${url}`)
+
+  const response = await fetch(url, { redirect: 'follow' })
   if (!response.ok)
     throw new Error(`HTTP ${response.status} for ${url}`)
+
+  const finalUrl = new URL(response.url)
+  if (finalUrl.protocol !== 'https:')
+    throw new Error(`Final URL must stay HTTPS: ${finalUrl.href}`)
+
   return Buffer.from(await response.arrayBuffer())
 }
 
@@ -49,7 +58,7 @@ function toIntegrity(buffer: Buffer, algorithm: 'sha256' | 'sha384' | 'sha512' =
 async function main() {
   const sources = parseArgs(process.argv.slice(2))
   if (sources.length === 0) {
-    console.error('Provide at least one URL or --file <json>')
+    console.error('Provide at least one HTTPS URL')
     process.exit(1)
   }
 
