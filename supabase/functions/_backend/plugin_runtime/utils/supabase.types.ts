@@ -3651,6 +3651,10 @@ export type Database = {
     }
     Functions: {
       accept_invitation_to_org: { Args: { org_id: string }; Returns: string }
+      accept_tmp_user_invitation: {
+        Args: { p_invite_magic_string: string; p_user_id: string }
+        Returns: string
+      }
       acknowledge_compatibility_event: {
         Args: { event_id: number; note: string }
         Returns: undefined

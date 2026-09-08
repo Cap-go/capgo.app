@@ -84,17 +84,21 @@ describe('invite role escalation guards', () => {
     orgId: string
     email: string
     roleName: string
-    invitedBy: string
+    invitedBy: string | null
+    magicString?: string
   }) {
+    const magicString = options.magicString ?? `magic-${randomUUID()}`
     await setServiceRoleClaim(query)
     await query(
       `
         INSERT INTO public.tmp_users (
-          email, org_id, rbac_role_name, first_name, last_name, invited_by_user_id
-        ) VALUES ($1, $2::uuid, $3, 'Escalation', 'Target', $4::uuid)
+          email, org_id, rbac_role_name, first_name, last_name,
+          invited_by_user_id, invite_magic_string
+        ) VALUES ($1, $2::uuid, $3, 'Escalation', 'Target', $4::uuid, $5)
       `,
-      [options.email, options.orgId, options.roleName, options.invitedBy],
+      [options.email, options.orgId, options.roleName, options.invitedBy, magicString],
     )
+    return magicString
   }
 
   it('blocks org_admin from escalating a tmp_users invite to org_super_admin', async () => {
@@ -238,6 +242,24 @@ describe('invite role escalation guards', () => {
 
     expect(thrown).toBeTruthy()
     expect((thrown as Error).message).toContain('Admins cannot elevate privileges!')
+  })
+
+  it('rejects accept_tmp_user_invitation when invited_by_user_id is null', async () => {
+    const orgId = await createOrgOwnedByUser(query, USER_ID, 'Legacy tmp invite org')
+    const email = `legacy-invite-${randomUUID()}@capgo.app`
+    const magicString = await insertTmpInvite({
+      orgId,
+      email,
+      roleName: 'org_member',
+      invitedBy: null,
+    })
+
+    await setServiceRoleClaim(query)
+    const result = await query(
+      `SELECT public.accept_tmp_user_invitation($1, $2::uuid) AS status`,
+      [magicString, USER_ID_NONMEMBER],
+    )
+    expect(result.rows[0]?.status).toBe('INVITER_NOT_FOUND')
   })
 
   it('rejects assert_principal_can_grant_org_role for escalated tmp invite roles', async () => {

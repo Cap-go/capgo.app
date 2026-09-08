@@ -147,43 +147,38 @@ async function ensurePublicUserRowExists(
   }
 }
 
-async function assertInvitationRoleGrantable(
+async function ensureOrgMembership(
   c: Parameters<typeof useSupabaseAdmin>[0],
-  invitation: {
-    org_id: string
-    email: string
-    rbac_role_name?: string | null
-    invited_by_user_id?: string | null
-  },
-  rbacRoleName: string,
+  userId: string,
+  magicInviteString: string,
 ) {
   const pgClient = getPgClient(c)
   try {
-    const inviterResult = invitation.invited_by_user_id
-      ? { rows: [{ inviter_id: invitation.invited_by_user_id }] }
-      : await pgClient.query<{ inviter_id: string | null }>(
-        `
-          SELECT tmp_users.invited_by_user_id AS inviter_id
-          FROM public.tmp_users
-          WHERE tmp_users.org_id = $1::uuid
-            AND tmp_users.email = $2
-            AND tmp_users.rbac_role_name = $3
-          LIMIT 1
-        `,
-        [invitation.org_id, invitation.email, rbacRoleName],
-      )
+    const result = await pgClient.query<{ accept_tmp_user_invitation: string }>(
+      `SELECT public.accept_tmp_user_invitation($1, $2::uuid) AS accept_tmp_user_invitation`,
+      [magicInviteString, userId],
+    )
 
-    const inviterId = inviterResult.rows[0]?.inviter_id
-    if (!inviterId) {
-      return quickError(403, 'failed_to_accept_invitation', 'Invitation inviter could not be validated', {
+    const status = result.rows[0]?.accept_tmp_user_invitation
+    if (status === 'OK')
+      return
+
+    if (status === 'NO_INVITE') {
+      return quickError(404, 'failed_to_accept_invitation', 'Invitation not found', { error: 'Invitation not found' })
+    }
+
+    // Legacy invites without invited_by_user_id must be reissued by an org admin.
+    if (status === 'INVITER_NOT_FOUND') {
+      return quickError(403, 'failed_to_accept_invitation', 'Invitation must be reissued before acceptance', {
         error: 'Missing invitation inviter',
       })
     }
 
-    await pgClient.query(
-      `SELECT public.assert_principal_can_grant_org_role($1::uuid, $2::uuid, $3, 'accept_new_user_invitation')`,
-      [invitation.org_id, inviterId, rbacRoleName],
-    )
+    if (status === 'ROLE_NOT_FOUND') {
+      return quickError(500, 'failed_to_accept_invitation', 'Failed to resolve RBAC role', { error: 'Role not found' })
+    }
+
+    return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation', { error: status ?? 'Unknown status' })
   }
   catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -192,116 +187,10 @@ async function assertInvitationRoleGrantable(
         error: message,
       })
     }
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to validate invitation role', { error: message })
+    return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation', { error: message })
   }
   finally {
     await closeClient(c, pgClient)
-  }
-}
-
-async function ensureOrgMembership(
-  c: Parameters<typeof useSupabaseAdmin>[0],
-  supabaseAdmin: ReturnType<typeof useSupabaseAdmin>,
-  userId: string,
-  invitation: any,
-) {
-  const rbacRoleName = typeof invitation.rbac_role_name === 'string'
-    ? invitation.rbac_role_name.trim()
-    : ''
-
-  if (!rbacRoleName) {
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to resolve RBAC role', { error: 'Missing RBAC role name' })
-  }
-
-  const grantableError = await assertInvitationRoleGrantable(c, invitation, rbacRoleName)
-  if (grantableError)
-    return grantableError
-
-  let rbacRoleId: string | null = null
-
-  const { data: role, error: roleError } = await supabaseAdmin
-    .from('roles')
-    .select('id')
-    .eq('name', rbacRoleName)
-    .eq('scope_type', 'org')
-    .single()
-
-  if (roleError || !role) {
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to resolve RBAC role', { error: roleError?.message ?? 'Role not found' })
-  }
-
-  rbacRoleId = role.id
-
-  // Avoid creating duplicates: org_users does not have a unique constraint on (org_id, user_id).
-  const { data: existingMembershipRows, error: existingMembershipError } = await supabaseAdmin
-    .from('org_users')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('org_id', invitation.org_id)
-    .is('app_id', null)
-    .is('channel_id', null)
-
-  if (existingMembershipError) {
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to check existing org membership', { error: existingMembershipError.message })
-  }
-
-  if (existingMembershipRows && existingMembershipRows.length > 0) {
-    const { error: updateMembershipError } = await supabaseAdmin
-      .from('org_users')
-      .update({
-        rbac_role_name: rbacRoleName,
-        is_invite: false,
-      })
-      .eq('user_id', userId)
-      .eq('org_id', invitation.org_id)
-      .is('app_id', null)
-      .is('channel_id', null)
-
-    if (updateMembershipError) {
-      return quickError(500, 'failed_to_accept_invitation', 'Failed to update org membership', { error: updateMembershipError.message })
-    }
-  }
-  else {
-    const { error: insertIntoMainTableError } = await supabaseAdmin.from('org_users').insert({
-      user_id: userId,
-      org_id: invitation.org_id,
-      rbac_role_name: rbacRoleName,
-      is_invite: false,
-    })
-
-    if (insertIntoMainTableError) {
-      return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation insert into org_users', { error: insertIntoMainTableError.message })
-    }
-  }
-
-  const { error: deleteBindingError } = await supabaseAdmin
-    .from('role_bindings')
-    .delete()
-    .eq('principal_type', 'user')
-    .eq('principal_id', userId)
-    .eq('scope_type', 'org')
-    .eq('org_id', invitation.org_id)
-
-  if (deleteBindingError) {
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to clear existing RBAC role bindings', { error: deleteBindingError.message })
-  }
-
-  const { error: insertBindingError } = await supabaseAdmin
-    .from('role_bindings')
-    .insert({
-      principal_type: 'user',
-      principal_id: userId,
-      role_id: rbacRoleId as string,
-      scope_type: 'org',
-      org_id: invitation.org_id,
-      granted_by: userId,
-      granted_at: new Date().toISOString(),
-      reason: 'Accepted invitation',
-      is_direct: true,
-    })
-
-  if (insertBindingError) {
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to create RBAC role binding', { error: insertBindingError.message })
   }
 }
 
@@ -376,15 +265,9 @@ app.post('/', async (c) => {
     }
 
     const userId = session.user?.id ?? existingUser.id
-    const membershipError = await ensureOrgMembership(c, supabaseAdmin, userId, invitation)
+    const membershipError = await ensureOrgMembership(c, userId, baseBody.magic_invite_string)
     if (membershipError)
       return membershipError
-
-    // Remove the invite only after the org membership is created successfully.
-    const { error: tmpUserDeleteError } = await supabaseAdmin.from('tmp_users').delete().eq('invite_magic_string', baseBody.magic_invite_string)
-    if (tmpUserDeleteError) {
-      return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation delete tmp_users', { error: tmpUserDeleteError.message })
-    }
 
     return c.json({
       access_token: session.session?.access_token,
@@ -445,14 +328,9 @@ app.post('/', async (c) => {
         if (publicUserError)
           return publicUserError
 
-        const membershipError = await ensureOrgMembership(c, supabaseAdmin, session.user.id, invitation)
+        const membershipError = await ensureOrgMembership(c, session.user.id, body.magic_invite_string)
         if (membershipError)
           return membershipError
-
-        const { error: tmpUserDeleteError } = await supabaseAdmin.from('tmp_users').delete().eq('invite_magic_string', body.magic_invite_string)
-        if (tmpUserDeleteError) {
-          return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation delete tmp_users', { error: tmpUserDeleteError.message })
-        }
 
         return c.json({
           access_token: session.session?.access_token,
@@ -530,16 +408,11 @@ app.post('/', async (c) => {
       return quickError(400, 'sign_in_failed', 'Sign in failed, please retry', { error: sessionError.message })
     }
 
-    const membershipError = await ensureOrgMembership(c, supabaseAdmin, user.user.id, invitation)
+    const membershipError = await ensureOrgMembership(c, user.user.id, body.magic_invite_string)
     if (membershipError) {
       didRollback = true
       await rollbackCreatedUser(c, user.user.id)
       return membershipError
-    }
-    // Remove the invite only after the account + org membership are created successfully.
-    const { error: tmpUserDeleteError } = await supabaseAdmin.from('tmp_users').delete().eq('invite_magic_string', body.magic_invite_string)
-    if (tmpUserDeleteError) {
-      return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation delete tmp_users', { error: tmpUserDeleteError.message })
     }
 
     return c.json({

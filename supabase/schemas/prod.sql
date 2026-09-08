@@ -433,6 +433,8 @@ DECLARE
   role_id uuid;
   v_inviter_id uuid;
 BEGIN
+  PERFORM public.lock_rbac_orgs(accept_invitation_to_org.org_id);
+
   SELECT public.org_users.*
   INTO invite
   FROM public.org_users
@@ -499,8 +501,6 @@ BEGIN
   IF v_inviter_id IS NULL THEN
     RETURN 'INVITER_NOT_FOUND';
   END IF;
-
-  PERFORM public.lock_rbac_orgs(invite_org_id);
 
   PERFORM public.assert_principal_can_grant_org_role(
     invite_org_id,
@@ -1764,6 +1764,134 @@ $$;
 
 
 ALTER FUNCTION "public"."assert_principal_can_grant_org_role"("p_org_id" "uuid", "p_principal_id" "uuid", "p_role_name" "text", "p_mutation" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."accept_tmp_user_invitation"("p_invite_magic_string" "text", "p_user_id" "uuid") RETURNS "text"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    SET "row_security" TO 'off'
+    AS $$
+DECLARE
+  v_org_id uuid;
+  v_invite public.tmp_users%ROWTYPE;
+  v_role_id uuid;
+  v_rbac_role_name text;
+BEGIN
+  SELECT tmp_users.org_id
+  INTO v_org_id
+  FROM public.tmp_users
+  WHERE tmp_users.invite_magic_string = p_invite_magic_string
+    AND tmp_users.cancelled_at IS NULL
+  LIMIT 1;
+
+  IF v_org_id IS NULL THEN
+    RETURN 'NO_INVITE';
+  END IF;
+
+  PERFORM public.lock_rbac_orgs(v_org_id);
+
+  SELECT tmp_users.*
+  INTO v_invite
+  FROM public.tmp_users
+  WHERE tmp_users.invite_magic_string = p_invite_magic_string
+    AND tmp_users.cancelled_at IS NULL
+  FOR UPDATE
+  LIMIT 1;
+
+  IF v_invite.id IS NULL THEN
+    RETURN 'NO_INVITE';
+  END IF;
+
+  v_rbac_role_name := pg_catalog.btrim(v_invite.rbac_role_name);
+  IF v_rbac_role_name IS NULL OR v_rbac_role_name = '' THEN
+    RETURN 'ROLE_NOT_FOUND';
+  END IF;
+
+  -- Invites created before invited_by_user_id was recorded lack inviter attribution.
+  IF v_invite.invited_by_user_id IS NULL THEN
+    RETURN 'INVITER_NOT_FOUND';
+  END IF;
+
+  PERFORM public.assert_principal_can_grant_org_role(
+    v_invite.org_id,
+    v_invite.invited_by_user_id,
+    v_rbac_role_name,
+    'accept_tmp_user_invitation'
+  );
+
+  SELECT roles.id
+  INTO v_role_id
+  FROM public.roles
+  WHERE roles.name = v_rbac_role_name
+    AND roles.scope_type = public.rbac_scope_org()
+    AND roles.is_assignable = true
+  LIMIT 1;
+
+  IF v_role_id IS NULL THEN
+    RETURN 'ROLE_NOT_FOUND';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.org_users
+    WHERE org_users.user_id = p_user_id
+      AND org_users.org_id = v_invite.org_id
+      AND org_users.app_id IS NULL
+      AND org_users.channel_id IS NULL
+  ) THEN
+    UPDATE public.org_users
+    SET rbac_role_name = v_rbac_role_name,
+        is_invite = false,
+        updated_at = now()
+    WHERE org_users.user_id = p_user_id
+      AND org_users.org_id = v_invite.org_id
+      AND org_users.app_id IS NULL
+      AND org_users.channel_id IS NULL;
+  ELSE
+    INSERT INTO public.org_users (user_id, org_id, rbac_role_name, is_invite)
+    VALUES (p_user_id, v_invite.org_id, v_rbac_role_name, false);
+  END IF;
+
+  DELETE FROM public.role_bindings
+  WHERE role_bindings.principal_type = public.rbac_principal_user()
+    AND role_bindings.principal_id = p_user_id
+    AND role_bindings.scope_type = public.rbac_scope_org()
+    AND role_bindings.org_id = v_invite.org_id;
+
+  INSERT INTO public.role_bindings (
+    principal_type,
+    principal_id,
+    role_id,
+    scope_type,
+    org_id,
+    granted_by,
+    granted_at,
+    reason,
+    is_direct
+  ) VALUES (
+    public.rbac_principal_user(),
+    p_user_id,
+    v_role_id,
+    public.rbac_scope_org(),
+    v_invite.org_id,
+    p_user_id,
+    now(),
+    'Accepted invitation',
+    true
+  );
+
+  DELETE FROM public.tmp_users
+  WHERE tmp_users.id = v_invite.id;
+
+  RETURN 'OK';
+END;
+$$;
+
+
+ALTER FUNCTION "public"."accept_tmp_user_invitation"("p_invite_magic_string" "text", "p_user_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."accept_tmp_user_invitation"("p_invite_magic_string" "text", "p_user_id" "uuid") IS 'Atomically validates inviter rank and finalizes a tmp_users invitation (org membership + role binding + invite delete).';
 
 
 CREATE OR REPLACE FUNCTION "public"."audit_log_trigger"() RETURNS "trigger"
@@ -26543,6 +26671,11 @@ GRANT USAGE ON SCHEMA "rbac_internal" TO "service_role";
 REVOKE ALL ON FUNCTION "public"."accept_invitation_to_org"("org_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."accept_invitation_to_org"("org_id" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."accept_invitation_to_org"("org_id" "uuid") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."accept_tmp_user_invitation"("p_invite_magic_string" "text", "p_user_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."accept_tmp_user_invitation"("p_invite_magic_string" "text", "p_user_id" "uuid") TO "service_role";
 
 
 
