@@ -27,7 +27,6 @@ vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
 const deletedTables: string[] = []
 const insert = vi.fn(async () => ({ error: null }))
 const deleteEq = vi.fn(async () => ({ error: null }))
-const deleteFn = vi.fn(() => ({ eq: deleteEq }))
 const storageList = vi.fn(async () => ({ data: [] }))
 const storageRemove = vi.fn(async () => ({ error: null }))
 const storageFrom = vi.fn(() => ({
