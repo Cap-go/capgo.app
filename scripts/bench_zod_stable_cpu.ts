@@ -15,10 +15,13 @@
 
 import { spawnSync } from 'node:child_process'
 import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { performance } from 'node:perf_hooks'
 
-const ROOT = resolve(process.argv[2] ?? resolve(import.meta.dirname, '..'))
+const SCRIPT_PATH = fileURLToPath(import.meta.url)
+const cliArgs = process.argv.slice(2)
+const memWorkerCase = cliArgs[0] === '--mem-worker' ? cliArgs[1] : undefined
+const ROOT = resolve(memWorkerCase ? cliArgs[2] : cliArgs[0] ?? resolve(import.meta.dirname, '..'))
 const RUNS = Math.max(1, Number.parseInt(process.env.BENCH_RUNS ?? '1', 10) || 1)
 const ITERATIONS = 80_000
 
@@ -44,13 +47,27 @@ function forceGc() {
     globalThis.gc()
 }
 
+async function readZodVersion(root: string) {
+  const mod = await import(pathToFileURL(resolve(root, 'node_modules/zod/package.json')).href) as {
+    default?: { version?: string }
+    version?: string
+  }
+  return mod.default?.version ?? mod.version ?? 'unknown'
+}
+
+async function importZodFromRoot(root: string) {
+  return import(pathToFileURL(resolve(root, 'node_modules/zod/index.js')).href)
+}
+
 function ensureCompiledZod() {
   const out = resolve(ROOT, 'scripts/bench/validation/plugin_schemas.zod.compiled.ts')
   const src = resolve(ROOT, 'scripts/bench/validation/plugin_schemas.zod.ts')
-  const result = spawnSync('bunx', ['zod-compiler', 'generate', src, '-o', out, '--emit', 'bag'], {
+  const result = spawnSync(process.execPath, ['x', 'zod-compiler', 'generate', src, '-o', out, '--emit', 'bag'], {
     cwd: ROOT,
     encoding: 'utf8',
   })
+  if (result.status === null)
+    throw new Error(`zod-compiler generate failed to start: ${result.error?.message ?? 'unknown error'}`)
   if (result.status !== 0)
     throw new Error(`zod-compiler generate failed:\n${result.stdout}\n${result.stderr}`)
 }
@@ -132,19 +149,6 @@ function summarizeCpu(name: string, iterations: number, samples: number[]) {
   }
 }
 
-function measureMemOnce(name: string, fn: () => void) {
-  forceGc()
-  const before = process.memoryUsage()
-  fn()
-  forceGc()
-  const after = process.memoryUsage()
-  return {
-    name,
-    heapUsedDeltaMB: (after.heapUsed - before.heapUsed) / 1024 / 1024,
-    rssDeltaMB: (after.rss - before.rss) / 1024 / 1024,
-  }
-}
-
 function summarizeMem(name: string, samples: Array<{ heapUsedDeltaMB: number, rssDeltaMB: number }>) {
   const heapUsedDeltaMB = samples.reduce((sum, row) => sum + row.heapUsedDeltaMB, 0) / samples.length
   const rssDeltaMB = samples.reduce((sum, row) => sum + row.rssDeltaMB, 0) / samples.length
@@ -156,13 +160,57 @@ function summarizeMem(name: string, samples: Array<{ heapUsedDeltaMB: number, rs
   }
 }
 
+function measureMemInChild(caseName: string) {
+  const result = spawnSync(process.execPath, [SCRIPT_PATH, '--mem-worker', caseName, ROOT], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: process.env,
+  })
+  if (result.status === null)
+    throw new Error(`memory worker failed to start for ${caseName}: ${result.error?.message ?? 'unknown error'}`)
+  if (result.status !== 0)
+    throw new Error(`memory worker ${caseName} failed:\n${result.stdout}\n${result.stderr}`)
+  return JSON.parse(result.stdout.trim()) as { heapUsedDeltaMB: number, rssDeltaMB: number }
+}
+
+async function runMemWorker(caseName: string, root: string) {
+  const zodRuntime = await import(pathToFileURL(resolve(root, 'scripts/bench/validation/plugin_schemas.zod.ts')).href)
+  const { z } = await importZodFromRoot(root)
+  const valid = validUpdatePayload()
+  const retained: unknown[] = []
+
+  forceGc()
+  const before = process.memoryUsage()
+
+  if (caseName === '80k_runtime_parse_heap_rss') {
+    for (let i = 0; i < ITERATIONS; i++)
+      retained.push(zodRuntime.updateRequestSchemaZod.safeParse(valid))
+  }
+  else if (caseName === '100x_z_string_heap') {
+    for (let i = 0; i < 100; i++)
+      retained.push(z.string())
+  }
+  else {
+    throw new Error(`unknown memory worker case: ${caseName}`)
+  }
+
+  forceGc()
+  const after = process.memoryUsage()
+  void retained.length
+
+  console.log(JSON.stringify({
+    heapUsedDeltaMB: (after.heapUsed - before.heapUsed) / 1024 / 1024,
+    rssDeltaMB: (after.rss - before.rss) / 1024 / 1024,
+  }))
+}
+
 async function main() {
   ensureCompiledZod()
 
   const prodIs = await import(pathToFileURL(resolve(ROOT, 'supabase/functions/_backend/plugin_runtime/utils/plugin_schemas/update_request.is.ts')).href)
   const zodRuntime = await import(pathToFileURL(resolve(ROOT, 'scripts/bench/validation/plugin_schemas.zod.ts')).href)
   const zodCompiled = await import(pathToFileURL(resolve(ROOT, 'scripts/bench/validation/plugin_schemas.zod.compiled.ts')).href)
-  const { z } = await import('zod')
+  const { z } = await importZodFromRoot(ROOT)
 
   const orgSchema = z.object({
     id: z.uuid(),
@@ -216,34 +264,18 @@ async function main() {
     cpuRows.push(summarizeCpu(testCase.name, ITERATIONS, samples))
   }
 
-  const memCases: Array<{ name: string, fn: () => void }> = [
-    {
-      name: '80k_runtime_parse_heap_rss',
-      fn: () => {
-        for (let i = 0; i < ITERATIONS; i++)
-          zodRuntime.updateRequestSchemaZod.safeParse(valid)
-      },
-    },
-    {
-      name: '100x_z_string_heap',
-      fn: () => {
-        for (let i = 0; i < 100; i++)
-          z.string()
-      },
-    },
-  ]
-
+  const memCaseNames = ['80k_runtime_parse_heap_rss', '100x_z_string_heap'] as const
   const memRows: MemRow[] = []
-  for (const testCase of memCases) {
+  for (const caseName of memCaseNames) {
     const samples = []
     for (let run = 0; run < RUNS; run++)
-      samples.push(measureMemOnce(testCase.name, testCase.fn))
-    memRows.push(summarizeMem(testCase.name, samples))
+      samples.push(measureMemInChild(caseName))
+    memRows.push(summarizeMem(caseName, samples))
   }
 
-  const zodPkg = await import(pathToFileURL(resolve(ROOT, 'node_modules/zod/package.json')).href) as { version?: string }
+  const zodVersion = await readZodVersion(ROOT)
 
-  console.log(`\n=== Zod stable CPU + memory bench (zod@${zodPkg.version ?? 'unknown'}, runs=${RUNS}) ===`)
+  console.log(`\n=== Zod stable CPU + memory bench (zod@${zodVersion}, runs=${RUNS}) ===`)
   console.log('\nCPU (lower ns/op is better):')
   for (const row of cpuRows) {
     console.log(
@@ -251,7 +283,7 @@ async function main() {
     )
   }
 
-  console.log('\nMemory (lower delta is better):')
+  console.log('\nMemory (lower delta is better; each case runs in a fresh child process):')
   for (const row of memRows) {
     console.log(
       `${row.name.padEnd(40)} heap Δ ${row.heapUsedDeltaMB.toFixed(3).padStart(8)} MB | rss Δ ${row.rssDeltaMB.toFixed(3).padStart(8)} MB`,
@@ -259,7 +291,15 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error)
-  process.exit(1)
-})
+if (memWorkerCase) {
+  runMemWorker(memWorkerCase, ROOT).catch((error) => {
+    console.error(error)
+    process.exit(1)
+  })
+}
+else {
+  main().catch((error) => {
+    console.error(error)
+    process.exit(1)
+  })
+}
