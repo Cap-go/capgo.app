@@ -211,6 +211,8 @@ SELECT lives_ok(
   'in-progress r2-direct can set checksum and session_key once'
 );
 
+-- Test 11 re-applies the canonical upload_link path after checksum lock; guard_app_version_r2_path
+-- rejects any other filename for this version name (see 70_test_app_version_r2_path_guard.sql).
 SELECT lives_ok(
   $sql$
     UPDATE public.app_versions
