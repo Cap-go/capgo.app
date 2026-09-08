@@ -76,6 +76,7 @@ const planFeatureLabelKeysByPlan: Record<string, string[]> = {
     'plan-feature-priority-email-support',
     'plan-feature-custom-domain',
     'plan-feature-direct-chat-support',
+    'plan-feature-dedicated-builder',
     'plan-feature-service-sla',
     'plan-feature-soc2-certified',
   ],

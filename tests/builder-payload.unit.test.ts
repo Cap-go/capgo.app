@@ -86,6 +86,48 @@ describe('builder payload shape', () => {
     ])
   })
 
+  it.concurrent('adds dedicated pool preference when routing is active', () => {
+    const payload = buildBuilderPayload({
+      orgId: 'org-dedicated',
+      actorUserId: 'user-1',
+      uploadPath: 'path.zip',
+      platform: 'ios',
+      buildOptions: {},
+      buildCredentials: {},
+      poolRouting: {
+        preferDedicated: true,
+        allowSharedFallback: true,
+        poolId: 'pool-42',
+        workerName: 'worker-42',
+      },
+    })
+
+    expect(payload.poolPreference).toBe('dedicated')
+    expect(payload.allowSharedFallback).toBe(true)
+    expect(payload.poolId).toBe('pool-42')
+  })
+
+  it.concurrent('omits poolId when dedicated routing has no pool assigned yet', () => {
+    const payload = buildBuilderPayload({
+      orgId: 'org-dedicated',
+      actorUserId: 'user-1',
+      uploadPath: 'path.zip',
+      platform: 'android',
+      buildOptions: {},
+      buildCredentials: {},
+      poolRouting: {
+        preferDedicated: true,
+        allowSharedFallback: false,
+        poolId: null,
+        workerName: null,
+      },
+    })
+
+    expect(payload.poolPreference).toBe('dedicated')
+    expect(payload.allowSharedFallback).toBe(false)
+    expect(payload).not.toHaveProperty('poolId')
+  })
+
   it.concurrent('drops timeoutSeconds from buildOptions', () => {
     const payload = buildBuilderPayload({
       orgId: 'org-timeout',
