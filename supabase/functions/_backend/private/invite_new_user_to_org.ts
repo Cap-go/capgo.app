@@ -152,6 +152,10 @@ app.post('/', middlewareAuth, async (c) => {
   const rbacRoleName = res.rbacRoleName
   const inviteCreatorUser = res.inviteCreatorUser
   const org = res.org
+  const authContext = c.get('auth')
+  if (!authContext?.userId) {
+    throw simpleError('failed_to_invite_user', 'Failed to invite user', {}, 'Not authorized')
+  }
 
   // Use admin client for tmp_users operations since RLS blocks all access on that table
   const supabaseAdminClient = supabaseAdmin(c)
@@ -195,6 +199,7 @@ app.post('/', middlewareAuth, async (c) => {
         first_name: body.first_name,
         last_name: body.last_name,
         rbac_role_name: rbacRoleName,
+        invited_by_user_id: authContext.userId,
         invite_magic_string: generateInviteMagicString(),
       })
       .eq('email', body.email)
@@ -215,6 +220,7 @@ app.post('/', middlewareAuth, async (c) => {
       rbac_role_name: rbacRoleName,
       first_name: body.first_name,
       last_name: body.last_name,
+      invited_by_user_id: authContext.userId,
     }).select('*').single()
 
     if (createUserError) {

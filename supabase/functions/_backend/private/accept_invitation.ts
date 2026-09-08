@@ -5,6 +5,7 @@ import { safeParseSchema } from '../utils/schema_validation.ts'
 import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { getEffectivePasswordMinLength, getPasswordPolicyValidationErrors } from '../utils/password_policy.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
 import { emptySupabase, supabaseAdmin as useSupabaseAdmin } from '../utils/supabase.ts'
 import { syncUserPreferenceTags } from '../utils/user_preferences.ts'
 import { getEnv } from '../utils/utils.ts'
@@ -146,7 +147,59 @@ async function ensurePublicUserRowExists(
   }
 }
 
+async function assertInvitationRoleGrantable(
+  c: Parameters<typeof useSupabaseAdmin>[0],
+  invitation: {
+    org_id: string
+    rbac_role_name?: string | null
+    invited_by_user_id?: string | null
+  },
+  rbacRoleName: string,
+) {
+  const pgClient = getPgClient(c)
+  try {
+    const inviterResult = invitation.invited_by_user_id
+      ? { rows: [{ inviter_id: invitation.invited_by_user_id }] }
+      : await pgClient.query<{ inviter_id: string | null }>(
+        `
+          SELECT COALESCE(tmp_users.invited_by_user_id, orgs.created_by) AS inviter_id
+          FROM public.tmp_users
+          JOIN public.orgs ON orgs.id = tmp_users.org_id
+          WHERE tmp_users.org_id = $1::uuid
+            AND tmp_users.rbac_role_name = $2
+          LIMIT 1
+        `,
+        [invitation.org_id, rbacRoleName],
+      )
+
+    const inviterId = inviterResult.rows[0]?.inviter_id
+    if (!inviterId) {
+      return quickError(403, 'failed_to_accept_invitation', 'Invitation inviter could not be validated', {
+        error: 'Missing invitation inviter',
+      })
+    }
+
+    await pgClient.query(
+      `SELECT public.assert_principal_can_grant_org_role($1::uuid, $2::uuid, $3, 'accept_new_user_invitation')`,
+      [invitation.org_id, inviterId, rbacRoleName],
+    )
+  }
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (message.includes('Admins cannot elevate privileges!')) {
+      return quickError(403, 'failed_to_accept_invitation', 'Invitation role exceeds inviter privileges', {
+        error: message,
+      })
+    }
+    return quickError(500, 'failed_to_accept_invitation', 'Failed to validate invitation role', { error: message })
+  }
+  finally {
+    await closeClient(pgClient)
+  }
+}
+
 async function ensureOrgMembership(
+  c: Parameters<typeof useSupabaseAdmin>[0],
   supabaseAdmin: ReturnType<typeof useSupabaseAdmin>,
   userId: string,
   invitation: any,
@@ -158,6 +211,10 @@ async function ensureOrgMembership(
   if (!rbacRoleName) {
     return quickError(500, 'failed_to_accept_invitation', 'Failed to resolve RBAC role', { error: 'Missing RBAC role name' })
   }
+
+  const grantableError = await assertInvitationRoleGrantable(c, invitation, rbacRoleName)
+  if (grantableError)
+    return grantableError
 
   let rbacRoleId: string | null = null
 
@@ -318,7 +375,7 @@ app.post('/', async (c) => {
     }
 
     const userId = session.user?.id ?? existingUser.id
-    const membershipError = await ensureOrgMembership(supabaseAdmin, userId, invitation)
+    const membershipError = await ensureOrgMembership(c, supabaseAdmin, userId, invitation)
     if (membershipError)
       return membershipError
 
@@ -387,7 +444,7 @@ app.post('/', async (c) => {
         if (publicUserError)
           return publicUserError
 
-        const membershipError = await ensureOrgMembership(supabaseAdmin, session.user.id, invitation)
+        const membershipError = await ensureOrgMembership(c, supabaseAdmin, session.user.id, invitation)
         if (membershipError)
           return membershipError
 
@@ -472,7 +529,7 @@ app.post('/', async (c) => {
       return quickError(400, 'sign_in_failed', 'Sign in failed, please retry', { error: sessionError.message })
     }
 
-    const membershipError = await ensureOrgMembership(supabaseAdmin, user.user.id, invitation)
+    const membershipError = await ensureOrgMembership(c, supabaseAdmin, user.user.id, invitation)
     if (membershipError) {
       didRollback = true
       await rollbackCreatedUser(c, user.user.id)
