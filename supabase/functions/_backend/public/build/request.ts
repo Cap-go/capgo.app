@@ -17,6 +17,8 @@ export interface RequestBuildBody {
   credentials?: Record<string, string>
   build_options?: Record<string, unknown>
   build_credentials?: Record<string, string>
+  /** When false, builder must skip compilation cache restore. Omit or true = default enabled. */
+  cache_enabled?: boolean
 }
 
 export interface RequestBuildResponse {
@@ -42,6 +44,7 @@ interface ValidBuildRequestBody {
   build_config: Json
   build_options: Record<string, unknown>
   build_credentials: Record<string, string>
+  cache_enabled?: boolean
 }
 
 function throwBuilderUnavailable(message: string, moreInfo: Record<string, unknown> = {}, cause?: unknown): never {
@@ -55,10 +58,12 @@ function throwBuilderUnavailable(message: string, moreInfo: Record<string, unkno
 export function buildBuilderPayload(input: {
   orgId: string
   actorUserId: string
+  appId: string
   uploadPath: string
   platform: string
   buildOptions: Record<string, unknown>
   buildCredentials: Record<string, string>
+  cacheEnabled?: boolean
 }) {
   const buildOptions = { ...input.buildOptions }
   delete buildOptions.timeoutSeconds
@@ -69,10 +74,13 @@ export function buildBuilderPayload(input: {
     // actorUserId is the human user who triggered the build (apikey.user_id). The builder
     // uses it as the PostHog distinct_id so its build events join this same person.
     actorUserId: input.actorUserId,
+    // appId keys Capacitor compilation cache in the builder when cache is enabled.
+    appId: input.appId,
     artifactKey: input.uploadPath,
     fastlane: { lane: input.platform },
     buildOptions,
     buildCredentials: input.buildCredentials,
+    ...(input.cacheEnabled === false ? { cache_enabled: false } : {}),
   }
 }
 
@@ -92,6 +100,7 @@ function validateBuildRequestBody(c: Context, body: RequestBuildBody, userId: st
     build_config = {},
     build_options = {},
     build_credentials = {},
+    cache_enabled,
   } = body
 
   cloudlog({
@@ -142,6 +151,11 @@ function validateBuildRequestBody(c: Context, body: RequestBuildBody, userId: st
     throw simpleError('invalid_parameter', 'build_config must be an object')
   }
 
+  if (cache_enabled !== undefined && typeof cache_enabled !== 'boolean') {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Invalid cache_enabled type' })
+    throw simpleError('invalid_parameter', 'cache_enabled must be a boolean')
+  }
+
   return {
     app_id,
     platform: platform as 'ios' | 'android',
@@ -149,6 +163,7 @@ function validateBuildRequestBody(c: Context, body: RequestBuildBody, userId: st
     build_config: build_config as Json,
     build_options,
     build_credentials,
+    cache_enabled,
   }
 }
 
@@ -240,8 +255,9 @@ async function createBuilderJob(c: Context, input: {
   uploadPath: string
   buildOptions: Record<string, unknown>
   buildCredentials: Record<string, string>
+  cacheEnabled?: boolean
 }): Promise<BuilderJobResponse> {
-  const { builderUrl, builderApiKey, orgId, actorUserId, appId, platform, uploadPath, buildOptions, buildCredentials } = input
+  const { builderUrl, builderApiKey, orgId, actorUserId, appId, platform, uploadPath, buildOptions, buildCredentials, cacheEnabled } = input
   cloudlog({
     requestId: c.get('requestId'),
     message: 'Calling builder API',
@@ -262,10 +278,12 @@ async function createBuilderJob(c: Context, input: {
       body: JSON.stringify(buildBuilderPayload({
         orgId,
         actorUserId,
+        appId,
         uploadPath,
         platform,
         buildOptions,
         buildCredentials,
+        cacheEnabled,
       })),
     })
 
@@ -437,6 +455,7 @@ export async function requestBuild(
     build_config,
     build_options,
     build_credentials,
+    cache_enabled,
   } = validateBuildRequestBody(c, body, apikey.user_id)
 
   await ensureBuildPermission(c, app_id, apikey.user_id)
@@ -475,6 +494,7 @@ export async function requestBuild(
     uploadPath: upload_path,
     buildOptions: build_options,
     buildCredentials: build_credentials,
+    cacheEnabled: cache_enabled,
   })
 
   ensureBuilderUploadUrl(c, builderUrl, builderApiKey, builderJob)
