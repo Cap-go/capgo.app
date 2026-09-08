@@ -154,13 +154,11 @@ async function openTab(tab: Tab) {
     ? resumeQueryAppId
     : getOnboardingResumeAppId(onboardingUserId)
   const requiresOnboardingExplorationConfirmation = shouldConfirmOnboardingDashboardExploration({
+    currentPath: route.path,
     destination: tab.key,
     resumeAppId: onboardingResumeAppId,
     userId: onboardingUserId,
   })
-
-  if (tab.key === '/apikeys' && isPendingOnboardingResume)
-    allowOnboardingDashboardExploration(onboardingUserId, onboardingResumeAppId)
 
   if (requiresOnboardingExplorationConfirmation) {
     emit('closeSidebar')
@@ -168,17 +166,20 @@ async function openTab(tab: Tab) {
       title: t('app-onboarding-explore-dashboard-confirm-title'),
       description: t('app-onboarding-explore-dashboard-confirm-description'),
       buttons: [
-        { text: t('app-onboarding-continue-setup'), role: 'secondary' },
-        { text: t('app-onboarding-explore-dashboard'), role: 'primary' },
+        { text: t('app-onboarding-continue-setup'), role: 'primary' },
+        { text: t('app-onboarding-explore-dashboard'), role: 'secondary' },
       ],
     })
     const wasCanceled = await dialogStore.onDialogDismiss()
     if (wasCanceled)
       return
-    if (dialogStore.lastButtonRole === 'secondary') {
-      return router.push({ path: '/app/new', query: { resume: onboardingResumeAppId } })
+    // Primary = stay in setup (safe default). Secondary = explore anyway.
+    if (dialogStore.lastButtonRole === 'primary') {
+      if (onboardingResumeAppId)
+        return router.push({ path: '/app/new', query: { resume: onboardingResumeAppId } })
+      return router.push({ path: '/app/new' })
     }
-    if (dialogStore.lastButtonRole !== 'primary')
+    if (dialogStore.lastButtonRole !== 'secondary')
       return
 
     window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
