@@ -300,7 +300,6 @@ describe('attachment reads after app deletion', () => {
       // DELETE is mutating, but this call is retry-safe: a wrangler isolate
       // reload can 503 after the app row is already gone, and the second
       // attempt then returns the post-delete deny (400/401).
-      retryUnsafe: true,
     })
     if (deleteResponse.status !== 200)
       expect([400, 401]).toContain(deleteResponse.status)
