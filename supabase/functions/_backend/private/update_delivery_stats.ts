@@ -646,6 +646,12 @@ type ReadDeliveryChunkPage = (params: {
   }
 }) => Promise<UpdateDeliveryTimingEventCF[]>
 
+function normalizeEventCreatedAt(createdAt: string | Date): string {
+  if (createdAt instanceof Date)
+    return createdAt.toISOString()
+  return createdAt
+}
+
 async function paginateUpdateDeliveryChunkSamples(
   readPage: ReadDeliveryChunkPage,
   params: {
@@ -697,7 +703,7 @@ async function paginateUpdateDeliveryChunkSamples(
       return { samples, incomplete: true }
 
     const duplicateBoundaryRows = batch.filter(event =>
-      event.created_at === lastEvent.created_at
+      normalizeEventCreatedAt(event.created_at) === normalizeEventCreatedAt(lastEvent.created_at)
       && event.app_id === lastEvent.app_id
       && event.device_id === lastEvent.device_id
       && event.action === lastEvent.action,
@@ -706,7 +712,7 @@ async function paginateUpdateDeliveryChunkSamples(
       return { samples, incomplete: true }
 
     const nextCursor = {
-      created_at: lastEvent.created_at,
+      created_at: normalizeEventCreatedAt(lastEvent.created_at),
       app_id: lastEvent.app_id,
       device_id: lastEvent.device_id,
       action: lastEvent.action,
