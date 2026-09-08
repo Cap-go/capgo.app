@@ -796,7 +796,7 @@ async function loadData(forceRefetch = false) {
     rawChartData.value = null
   }
   finally {
-    if (currentToken === requestToken) {
+    if (currentToken === requestToken && requestedAppId === activeAppId.value) {
       isLoading.value = false
     }
   }
