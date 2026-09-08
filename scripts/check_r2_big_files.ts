@@ -3,7 +3,7 @@ import { writeFileSync, existsSync, readFileSync } from 'fs'
 import { S3Client as S3ClientLite } from '@bradenmacdonald/s3-lite-client/'
 import { Pool } from 'pg'
 import { Context } from 'vm'
-import { encodeS3CopySource, getR2TrashKey, ConcurrencyLimiter } from './r2_trash_utils.ts'
+import { encodeS3CopySource, getR2TrashKey, ConcurrencyLimiter, isLiveR2Key } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const CHECKPOINT_FILE = './objects_checkpoint.json'
