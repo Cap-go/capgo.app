@@ -41,8 +41,13 @@ describe('isSafeImageFetchUrl', () => {
 
   it.concurrent('rejects loopback and private https image sources', () => {
     expect(isSafeImageFetchUrl('https://localhost/icon.png')).toBe(false)
+    expect(isSafeImageFetchUrl('https://localhost./icon.png')).toBe(false)
     expect(isSafeImageFetchUrl('https://127.0.0.1/icon.png')).toBe(false)
     expect(isSafeImageFetchUrl('http://127.0.0.1/icon.png')).toBe(false)
     expect(isSafeImageFetchUrl('https://192.168.0.10/icon.png')).toBe(false)
+    expect(isSafeImageFetchUrl('https://[::1]/icon.png')).toBe(false)
+    expect(isSafeImageFetchUrl('https://[fc00::1]/icon.png')).toBe(false)
+    expect(isSafeImageFetchUrl('https://[fe80::1]/icon.png')).toBe(false)
+    expect(isSafeImageFetchUrl('https://[::ffff:127.0.0.1]/icon.png')).toBe(false)
   })
 })

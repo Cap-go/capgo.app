@@ -26,30 +26,67 @@ function escapeHtmlForSsr(text: string): string {
     .replaceAll('\'', '&#39;')
 }
 
-export function isLocalDevHost(hostname: string): boolean {
-  return hostname === 'localhost'
-    || hostname.endsWith('.localhost')
-    || hostname === '127.0.0.1'
-    || hostname === '::1'
-    || hostname === '[::1]'
+function normalizeHostname(hostname: string): string {
+  return hostname.replace(/\.$/, '').toLowerCase()
 }
 
-function isPrivateOrLoopbackHost(hostname: string): boolean {
-  if (isLocalDevHost(hostname))
-    return true
+export function isLocalDevHost(hostname: string): boolean {
+  const host = normalizeHostname(hostname)
+  return host === 'localhost'
+    || host.endsWith('.localhost')
+    || host === '127.0.0.1'
+    || host === '::1'
+    || host === '[::1]'
+}
 
-  const ipv4 = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
-  if (!ipv4)
-    return false
+function parseIpv6Literal(hostname: string): string | null {
+  const host = normalizeHostname(hostname)
+  if (host.startsWith('[') && host.endsWith(']'))
+    return host.slice(1, -1)
+  if (host.includes(':') && !host.includes('.'))
+    return host
+  return null
+}
 
-  const first = Number(ipv4[1])
-  const second = Number(ipv4[2])
+function isPrivateIpv4(first: number, second: number): boolean {
   return first === 0
     || first === 10
     || first === 127
     || (first === 169 && second === 254)
     || (first === 172 && second >= 16 && second <= 31)
     || (first === 192 && second === 168)
+}
+
+function isPrivateOrLoopbackHost(hostname: string): boolean {
+  const host = normalizeHostname(hostname)
+  if (isLocalDevHost(host))
+    return true
+
+  const ipv4 = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
+  if (ipv4)
+    return isPrivateIpv4(Number(ipv4[1]), Number(ipv4[2]))
+
+  const ipv6 = parseIpv6Literal(host)
+  if (!ipv6)
+    return false
+
+  const lower = ipv6.toLowerCase()
+  if (lower === '::1' || lower === '0:0:0:0:0:0:0:1')
+    return true
+  if (lower.startsWith('fe80:'))
+    return true
+  if (lower.startsWith('fc') || lower.startsWith('fd'))
+    return true
+
+  const v4mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
+  if (v4mapped) {
+    const parts = v4mapped[1].match(/^(\d+)\.(\d+)\./)
+    if (parts)
+      return isPrivateIpv4(Number(parts[1]), Number(parts[2]))
+  }
+
+  // User-supplied icon URLs must use DNS hostnames, not raw IPv6 literals.
+  return true
 }
 
 export function sanitizeHtml(value: unknown): string {
