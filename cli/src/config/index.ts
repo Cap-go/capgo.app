@@ -6,7 +6,6 @@ import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path
 import { cwd } from 'node:process'
 import { pathToFileURL } from 'node:url'
 import { log } from '@clack/prompts'
-import ts from 'typescript'
 import type { CapacitorConfig, ExtConfigPairs } from '../schemas/config'
 import { formatJSObject, loadConfig as loadConfigCap, requireTS, writeConfig as writeConfigCap } from '../capacitor-cli'
 import { CliUserError } from '../shared/cli-user-error'
@@ -129,6 +128,27 @@ function projectTypeScriptLacksClassicApi(dir: string): boolean {
   return !isTypeScriptCompiler(resolveProjectTypeScript(dir))
 }
 
+let cliTypeScriptModule: unknown
+
+function loadCliTypeScript(): unknown {
+  if (cliTypeScriptModule === undefined) {
+    try {
+      cliTypeScriptModule = createRequire(import.meta.url)('typescript')
+    }
+    catch {
+      cliTypeScriptModule = null
+    }
+  }
+  return cliTypeScriptModule
+}
+
+function supportsNativeTypeScriptImport(): boolean {
+  if (process.versions.bun)
+    return true
+  const major = Number(process.versions.node.split('.')[0])
+  return Number.isFinite(major) && major >= 22
+}
+
 export async function loadConfigTarget(filePath: string): Promise<CapacitorConfig> {
   const extension = extname(filePath)
   if (extension === '.json')
@@ -151,20 +171,25 @@ export async function loadConfigTarget(filePath: string): Promise<CapacitorConfi
   }
   // Prefer a project compiler that still has the classic API. TypeScript 7
   // dropped it (`require('typescript')` is only version metadata), so fall
-  // back to the CLI's own bundled TypeScript 6. Never hand a TS7 stub to
-  // Capacitor's requireTS — that reads `ModuleKind.CommonJS` unguarded.
-  const typescript = isTypeScriptCompiler(projectTypeScript) ? projectTypeScript : ts
+  // back to the CLI's own runtime TypeScript dependency. Never hand a TS7 stub
+  // to Capacitor's requireTS — that reads `ModuleKind.CommonJS` unguarded.
+  const typescript = isTypeScriptCompiler(projectTypeScript) ? projectTypeScript : loadCliTypeScript()
   let configModule: Record<string, unknown>
   if (isTypeScriptCompiler(typescript)) {
     try {
       configModule = await Promise.resolve(requireTS(typescript, filePath)) as Record<string, unknown>
     }
-    catch {
+    catch (requireTsError) {
+      if (!supportsNativeTypeScriptImport())
+        throw requireTsError
       configModule = await dynamicImport(pathToFileURL(resolve(filePath)).href)
     }
   }
-  else {
+  else if (supportsNativeTypeScriptImport()) {
     configModule = await dynamicImport(pathToFileURL(resolve(filePath)).href)
+  }
+  else {
+    throw new Error('Could not load a usable TypeScript compiler for the Capacitor config')
   }
   const exportedConfig = configModule.default ?? configModule
   return (typeof exportedConfig === 'function' ? await exportedConfig() : await exportedConfig) as CapacitorConfig
@@ -204,7 +229,7 @@ export async function loadConfig(): Promise<ExtConfigPairs | undefined> {
     }
   }
   catch (error) {
-    if (configPath && extname(configPath) === '.ts') {
+    if (configPath && extname(configPath) === '.ts' && projectTypeScriptLacksClassicApi(cwd())) {
       return {
         config: await loadConfigTarget(configPath),
         path: getConfigWriteTarget() ?? configPath,
