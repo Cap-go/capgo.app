@@ -257,8 +257,8 @@ describe('update delivery stats helpers', () => {
     expect(truncatedOverview.p95_ms).toBe(100)
     expect(recoveredOverview.samples).toBe(30_000)
     expect(recoveredOverview.p95_ms).toBe(60_000)
-    expect(updateDeliveryStatsTestUtils.shouldCacheUpdateDeliveryStats(recoveredOverview.samples, 0)).toBe(true)
-    expect(updateDeliveryStatsTestUtils.shouldCacheUpdateDeliveryStats(truncatedOverview.samples, 1)).toBe(false)
+    expect(updateDeliveryStatsTestUtils.shouldCacheUpdateDeliveryStats(Number(recoveredOverview.samples), 0)).toBe(true)
+    expect(updateDeliveryStatsTestUtils.shouldCacheUpdateDeliveryStats(Number(truncatedOverview.samples), 1)).toBe(false)
   })
 
   it.concurrent('caps platform delivery period days at 90', () => {
