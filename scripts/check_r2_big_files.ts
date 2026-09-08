@@ -1551,7 +1551,7 @@ async function delete_cleanup_candidates() {
 
     // Load cleanup candidates file
     const cleanupData = JSON.parse(readFileSync(cleanupFile, 'utf-8'))
-    const toDelete = cleanupData.toDelete ?? []
+    const toDelete = (cleanupData.toDelete ?? []).filter((file: { key?: string }) => file.key && isLiveR2Key(file.key))
 
     if (toDelete.length === 0) {
         console.log('✅ No files to delete - cleanup candidates is empty')
