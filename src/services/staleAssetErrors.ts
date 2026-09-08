@@ -61,9 +61,17 @@ export function isComponentResolutionErrorMessage(message: string | undefined): 
   return COMPONENT_RESOLUTION_ERROR_PATTERNS.some(pattern => pattern.test(message))
 }
 
+interface PostHogStackFrame {
+  filename?: unknown
+  in_app?: unknown
+}
+
 interface PostHogExceptionLike {
   value?: unknown
   $exception_value?: unknown
+  stacktrace?: {
+    frames?: PostHogStackFrame[]
+  }
 }
 
 interface PostHogEventLike {
@@ -71,7 +79,38 @@ interface PostHogEventLike {
   properties?: {
     $exception_list?: PostHogExceptionLike[]
     $exception_values?: unknown[]
+    $current_url?: unknown
   }
+}
+
+function stripUrlQueryAndHash(url: string | undefined): string | undefined {
+  if (!url)
+    return undefined
+
+  const cutIndex = url.search(/[?#]/)
+  return cutIndex === -1 ? url : url.slice(0, cutIndex)
+}
+
+// A snippet pasted into the browser console, injected by an extension, or run by
+// an AI browser agent surfaces as an $exception whose only in-app frame points at
+// the HTML document itself. Code we ship always runs from a hashed chunk under
+// `/assets/`, so an in-app frame whose file is the page URL is never ours.
+export function isInjectedDocumentCodeException(exception: PostHogExceptionLike | undefined, currentUrl: unknown): boolean {
+  const documentUrl = stripUrlQueryAndHash(typeof currentUrl === 'string' ? currentUrl : undefined)
+  if (!documentUrl)
+    return false
+
+  const frames = exception?.stacktrace?.frames
+  if (!Array.isArray(frames))
+    return false
+
+  const inAppFrames = frames.filter(frame => frame?.in_app === true)
+  if (inAppFrames.length === 0)
+    return false
+
+  return inAppFrames.every(frame =>
+    stripUrlQueryAndHash(typeof frame.filename === 'string' ? frame.filename : undefined) === documentUrl,
+  )
 }
 
 export function shouldSuppressPostHogExceptionEvent(event: PostHogEventLike): boolean {
@@ -84,7 +123,10 @@ export function shouldSuppressPostHogExceptionEvent(event: PostHogEventLike): bo
     return true
 
   const fallbackValue = getErrorMessage(event.properties?.$exception_values?.[0])
-  return isSuppressibleNoiseErrorMessage(fallbackValue)
+  if (isSuppressibleNoiseErrorMessage(fallbackValue))
+    return true
+
+  return isInjectedDocumentCodeException(exception, event.properties?.$current_url)
 }
 
 function isSuppressibleNoiseErrorMessage(message: string | undefined): boolean {

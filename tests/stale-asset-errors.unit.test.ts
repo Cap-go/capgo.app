@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { getErrorMessage, isComponentResolutionErrorMessage, isKnownCrawlerNoiseErrorMessage, isStaleAssetErrorMessage, isTransientNetworkErrorMessage, shouldSuppressPostHogExceptionEvent } from '../src/services/staleAssetErrors'
+import { getErrorMessage, isComponentResolutionErrorMessage, isInjectedDocumentCodeException, isKnownCrawlerNoiseErrorMessage, isStaleAssetErrorMessage, isTransientNetworkErrorMessage, shouldSuppressPostHogExceptionEvent } from '../src/services/staleAssetErrors'
 
 describe('stale asset error helpers', () => {
   it('matches the stale asset errors currently seen in PostHog', () => {
@@ -62,6 +62,63 @@ describe('stale asset error helpers', () => {
     expect(isComponentResolutionErrorMessage(new Error('Couldn\'t resolve component "default" at "/app/:app"').message)).toBe(true)
     expect(isComponentResolutionErrorMessage('Navigation cancelled from "/" to "/apps" with a new navigation.')).toBe(false)
     expect(isComponentResolutionErrorMessage(undefined)).toBe(false)
+  })
+
+  it('detects code injected into the page (console paste, extension, AI browser agent)', () => {
+    const injected = {
+      stacktrace: {
+        frames: [{ filename: 'https://console.capgo.app/apps', function: 'global code', lineno: 1, colno: 103, in_app: true }],
+      },
+    }
+    // Frame file is the page URL itself, current_url only differs by query string
+    expect(isInjectedDocumentCodeException(injected, 'https://console.capgo.app/apps?page=1&sort_last_upload_at=desc')).toBe(true)
+    expect(isInjectedDocumentCodeException(injected, 'https://console.capgo.app/apps')).toBe(true)
+  })
+
+  it('does not treat our own bundled-asset frames as injected code', () => {
+    const shipped = {
+      stacktrace: {
+        frames: [{ filename: 'https://console.capgo.app/assets/dashboard-rYp22gdI.js', lineno: 12, colno: 5, in_app: true }],
+      },
+    }
+    expect(isInjectedDocumentCodeException(shipped, 'https://console.capgo.app/apps?page=1')).toBe(false)
+    // No frames, no current_url, or a non-in-app document frame are all left alone
+    expect(isInjectedDocumentCodeException({}, 'https://console.capgo.app/apps')).toBe(false)
+    expect(isInjectedDocumentCodeException({
+      stacktrace: { frames: [{ filename: 'https://console.capgo.app/apps', in_app: true }] },
+    }, undefined)).toBe(false)
+    expect(isInjectedDocumentCodeException({
+      stacktrace: { frames: [{ filename: 'https://console.capgo.app/apps', in_app: false }] },
+    }, 'https://console.capgo.app/apps')).toBe(false)
+  })
+
+  it('suppresses the console-paste TypeError seen on the apps list page', () => {
+    expect(shouldSuppressPostHogExceptionEvent({
+      event: '$exception',
+      properties: {
+        $current_url: 'https://console.capgo.app/apps?page=1&sort_last_upload_at=desc',
+        $exception_list: [{
+          value: 'undefined is not an object (evaluating \'Array.from(document.querySelectorAll(\'td\')).find(e=>e.innerText.includes(\'Coolpacas: Cosmic Defense\')).outerHTML\')',
+          stacktrace: {
+            frames: [{ filename: 'https://console.capgo.app/apps', function: 'global code', lineno: 1, colno: 103, in_app: true }],
+          },
+        }],
+      },
+    })).toBe(true)
+
+    // A genuine app error on the same page keeps its bundled-asset frame and is not dropped
+    expect(shouldSuppressPostHogExceptionEvent({
+      event: '$exception',
+      properties: {
+        $current_url: 'https://console.capgo.app/apps?page=1',
+        $exception_list: [{
+          value: 'Cannot read properties of undefined (reading \'digest\')',
+          stacktrace: {
+            frames: [{ filename: 'https://console.capgo.app/assets/apps-DvVF29Ec.js', lineno: 42, colno: 9, in_app: true }],
+          },
+        }],
+      },
+    })).toBe(false)
   })
 
   it('extracts useful messages from arbitrary rejection values', () => {
