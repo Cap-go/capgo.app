@@ -962,8 +962,44 @@ WHERE
   }
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native active devices summary', error: serializeError(e), query: platformQuery })
+    throw e
   }
-  return []
+}
+
+export async function readNativeDailyPlatformActiveCF(
+  c: Context,
+  app_id: string,
+  period_start: string,
+  period_end: string,
+): Promise<Array<{ date: string, platform: string, devices: number }>> {
+  if (!c.env.DEVICE_USAGE)
+    return []
+
+  const query = `SELECT
+  formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
+  if(blob4 != '', blob4, if(double1 = 1, 'ios', if(double1 = 2, 'electron', if(double1 = 0, 'android', 'unknown')))) AS platform,
+  COUNT(DISTINCT blob1) AS devices
+FROM device_usage
+WHERE
+  index1 = '${escapeSqlString(app_id)}'
+  AND timestamp >= toDateTime('${formatDateCF(period_start)}')
+  AND timestamp < toDateTime('${formatDateCF(period_end)}')
+GROUP BY date, platform
+ORDER BY date, platform`
+
+  cloudlog({ requestId: c.get('requestId'), message: 'readNativeDailyPlatformActiveCF query', query })
+  try {
+    const rows = await runQueryToCFA<{ date: string, platform: string, devices: number | string }>(c, query)
+    return rows.map(row => ({
+      date: row.date,
+      platform: row.platform || 'unknown',
+      devices: Math.max(0, Number(row.devices) || 0),
+    }))
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native daily platform active', error: serializeError(e), query })
+    throw e
+  }
 }
 
 export async function readDeviceVersionCountsCF(c: Context, app_id: string, channelName?: string): Promise<Record<string, number>> {

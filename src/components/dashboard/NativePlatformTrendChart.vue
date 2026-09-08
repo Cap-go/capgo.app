@@ -6,8 +6,9 @@ import { CategoryScale, Chart, Filler, LinearScale, LineElement, PointElement, T
 import { computed } from 'vue'
 import { Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
-import { createChartScales } from '~/services/chartConfig'
+import { createChartScales, createLegendConfig } from '~/services/chartConfig'
 import { createTooltipConfig } from '~/services/chartTooltip'
+import { utcCalendarDayAsLocalDate } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import ChartCard from './ChartCard.vue'
 
@@ -69,13 +70,15 @@ const chartData = computed<ChartData<'line'> | null>(() => {
 })
 
 const chartOptions = computed<ChartOptions<'line'>>(() => {
+  const firstLabel = props.dailyPlatformActive?.labels[0]
+  const tooltipDateStart = firstLabel
+    ? utcCalendarDayAsLocalDate(new Date(`${firstLabel}T00:00:00.000Z`))
+    : false
+
   const pluginOptions = {
-    legend: {
-      display: true,
-      position: 'bottom' as const,
-    },
+    legend: createLegendConfig(isDark.value, true, { position: 'bottom' }),
     title: { display: false },
-    tooltip: createTooltipConfig(true, false, false),
+    tooltip: createTooltipConfig(true, false, tooltipDateStart),
   } as const
 
   return {

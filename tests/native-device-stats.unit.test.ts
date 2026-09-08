@@ -3,6 +3,7 @@ import { nativeUsageTestUtils } from '../supabase/functions/_backend/public/stat
 import {
   buildDailyPlatformActiveFromDatasets,
   calculatePeriodEvolutionPercent,
+  calculateSummaryEvolutionPercent,
   normalizeNativeActiveDevicesSummary,
   parseNativeSeriesPlatform,
 } from '../src/services/nativeDeviceStats.ts'
@@ -45,6 +46,12 @@ describe('native device stats helpers', () => {
     })
   })
 
+  it('calculates summary evolution from period totals', () => {
+    expect(calculateSummaryEvolutionPercent(150, 100)).toBe(50)
+    expect(calculateSummaryEvolutionPercent(0, 0)).toBeUndefined()
+    expect(calculateSummaryEvolutionPercent(10, 0)).toBe(100)
+  })
+
   it('calculates period evolution from first to last non-zero day', () => {
     expect(calculatePeriodEvolutionPercent([10, 12, 15])).toBe(50)
     expect(calculatePeriodEvolutionPercent([0, 0, 8])).toBe(0)
@@ -67,11 +74,11 @@ describe('native usage backend helpers', () => {
     })
   })
 
-  it('builds daily platform totals from native usage rows', () => {
+  it('builds daily platform totals from distinct daily platform rows', () => {
     expect(nativeUsageTestUtils.buildDailyPlatformActiveTotals([
-      { date: '2024-10-24', platform: 'ios', version_build: '1.0.0', devices: 2 },
-      { date: '2024-10-24', platform: 'android', version_build: '1.0.0', devices: 3 },
-      { date: '2024-10-25', platform: 'ios', version_build: '1.1.0', devices: 4 },
+      { date: '2024-10-24', platform: 'ios', devices: 2 },
+      { date: '2024-10-24', platform: 'android', devices: 3 },
+      { date: '2024-10-25', platform: 'ios', devices: 4 },
     ], ['2024-10-24', '2024-10-25'])).toEqual({
       labels: ['2024-10-24', '2024-10-25'],
       android: [3, 0],

@@ -57,6 +57,13 @@ export async function useChartData(supabase: SupabaseClient, appId: string, from
       unknown: number
       total: number
     }
+    previousPeriodActiveDevices?: {
+      android: number
+      ios: number
+      electron: number
+      unknown: number
+      total: number
+    }
     dailyPlatformActive?: {
       labels: string[]
       android: number[]
@@ -88,6 +95,7 @@ export async function useChartData(supabase: SupabaseClient, appId: string, from
     }),
     latestVersion: chartDataFromApi.latestVersion,
     activeDevices: chartDataFromApi.activeDevices,
+    previousPeriodActiveDevices: chartDataFromApi.previousPeriodActiveDevices,
     dailyPlatformActive: chartDataFromApi.dailyPlatformActive,
   }
   chartDataCache.value.set(cacheKey, finalData)

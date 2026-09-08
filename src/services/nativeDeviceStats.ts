@@ -110,6 +110,20 @@ export function getFirstNonZeroIndex(values: number[]): number {
   return 0
 }
 
+export function calculateSummaryEvolutionPercent(current?: number, previous?: number): number | undefined {
+  if (current === undefined || previous === undefined)
+    return undefined
+
+  const currentValue = Math.max(0, Number(current) || 0)
+  const previousValue = Math.max(0, Number(previous) || 0)
+
+  if (previousValue <= 0)
+    return currentValue > 0 ? 100 : undefined
+
+  return ((currentValue - previousValue) / previousValue) * 100
+}
+
+/** @deprecated Use calculateSummaryEvolutionPercent with period totals instead. */
 export function calculatePeriodEvolutionPercent(values: number[]): number | undefined {
   if (!values.length)
     return undefined
@@ -137,6 +151,17 @@ export function generateDemoNativeActiveSummary(days: number): NativeActiveDevic
     electron: 12,
     unknown: 3,
     total: android + ios + 15,
+  }
+}
+
+export function generateDemoPreviousNativeActiveSummary(days: number): NativeActiveDevicesSummary {
+  const current = generateDemoNativeActiveSummary(days)
+  return {
+    android: Math.round(current.android * 0.92),
+    ios: Math.round(current.ios * 0.9),
+    electron: current.electron,
+    unknown: current.unknown,
+    total: Math.round(current.total * 0.91),
   }
 }
 

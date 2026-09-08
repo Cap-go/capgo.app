@@ -17,10 +17,10 @@ import { formatUtcDateParam, generateChartDayLabels, getChartDateRange, getLastN
 import { formatNumberValue } from '~/services/formatLocale'
 import {
   buildDailyPlatformActiveFromDatasets,
-  calculatePeriodEvolutionPercent,
+  calculateSummaryEvolutionPercent,
   generateDemoDailyPlatformActive,
   generateDemoNativeActiveSummary,
-  getLatestNonZeroIndex,
+  generateDemoPreviousNativeActiveSummary,
   normalizeNativeActiveDevicesSummary,
 } from '~/services/nativeDeviceStats'
 import { useSupabase } from '~/services/supabase'
@@ -113,6 +113,7 @@ interface ChartApiData {
   labels: string[]
   datasets: ChartDataset[]
   activeDevices?: NativeActiveDevicesSummary
+  previousPeriodActiveDevices?: NativeActiveDevicesSummary
   dailyPlatformActive?: NativeDailyPlatformActive
 }
 
@@ -510,33 +511,24 @@ const isDemoMode = computed(() => shouldShowDashboardDemoData({
 
 const hasData = computed(() => !!(processedChartData.value && processedChartData.value.datasets.length > 0) || isDemoMode.value)
 
-function summaryFromDailyPlatformActive(daily: NativeDailyPlatformActive | null): NativeActiveDevicesSummary {
-  if (!daily || !daily.labels.length)
-    return normalizeNativeActiveDevicesSummary(null)
-
-  const latestIndex = Math.max(0, getLatestNonZeroIndex(daily.total))
-  return normalizeNativeActiveDevicesSummary({
-    android: daily.android[latestIndex] ?? 0,
-    ios: daily.ios[latestIndex] ?? 0,
-    electron: daily.electron[latestIndex] ?? 0,
-    unknown: daily.unknown[latestIndex] ?? 0,
-    total: daily.total[latestIndex] ?? 0,
-  })
-}
-
-const selectedPeriodActiveDevices = computed(() => {
+const selectedPeriodActiveDevices = computed((): NativeActiveDevicesSummary | null => {
   if (isDemoMode.value)
     return generateDemoNativeActiveSummary(periodDays.value)
 
   if (rawChartData.value?.activeDevices)
     return normalizeNativeActiveDevicesSummary(rawChartData.value.activeDevices)
 
-  if (!rawChartData.value)
-    return normalizeNativeActiveDevicesSummary(null)
+  return null
+})
 
-  return summaryFromDailyPlatformActive(
-    buildDailyPlatformActiveFromDatasets(rawChartData.value.labels, rawChartData.value.datasets),
-  )
+const selectedPeriodPreviousActiveDevices = computed((): NativeActiveDevicesSummary | null => {
+  if (isDemoMode.value)
+    return generateDemoPreviousNativeActiveSummary(periodDays.value)
+
+  if (rawChartData.value?.previousPeriodActiveDevices)
+    return normalizeNativeActiveDevicesSummary(rawChartData.value.previousPeriodActiveDevices)
+
+  return null
 })
 
 const thirtyDayActiveDevices = computed(() => {
@@ -577,9 +569,18 @@ const selectedPeriodLabel = computed(() => {
   return t('thirty-days')
 })
 
-const totalActiveEvolution = computed(() => calculatePeriodEvolutionPercent(selectedPeriodDailyPlatformActive.value?.total ?? []))
-const androidActiveEvolution = computed(() => calculatePeriodEvolutionPercent(selectedPeriodDailyPlatformActive.value?.android ?? []))
-const iosActiveEvolution = computed(() => calculatePeriodEvolutionPercent(selectedPeriodDailyPlatformActive.value?.ios ?? []))
+const totalActiveEvolution = computed(() => calculateSummaryEvolutionPercent(
+  selectedPeriodActiveDevices.value?.total,
+  selectedPeriodPreviousActiveDevices.value?.total,
+))
+const androidActiveEvolution = computed(() => calculateSummaryEvolutionPercent(
+  selectedPeriodActiveDevices.value?.android,
+  selectedPeriodPreviousActiveDevices.value?.android,
+))
+const iosActiveEvolution = computed(() => calculateSummaryEvolutionPercent(
+  selectedPeriodActiveDevices.value?.ios,
+  selectedPeriodPreviousActiveDevices.value?.ios,
+))
 const showNativeKpis = computed(() => isNativeUsage.value)
 const isThirtyDaySummaryLoading = computed(() => isLoading.value && isNativeUsage.value && periodDays.value !== 30)
 
@@ -659,11 +660,13 @@ const chartOptions = computed<ChartOptions<'line'>>(() => {
 
 const chartPlugins = [verticalLinePlugin, todayLinePlugin] as unknown as Plugin<'line'>[]
 
-async function loadThirtyDaySummary(forceRefetch = false) {
+async function loadThirtyDaySummary(forceRefetch = false, loadToken?: number, loadAppId?: string) {
   if (!isNativeUsage.value || !activeAppId.value || props.forceDemo) {
     rawThirtyDayChartData.value = null
     return
   }
+
+  const expectedAppId = loadAppId ?? activeAppId.value
 
   if (periodDays.value === 30) {
     rawThirtyDayChartData.value = rawChartData.value
@@ -681,13 +684,21 @@ async function loadThirtyDaySummary(forceRefetch = false) {
   }
 
   try {
-    const data = await useChartData(supabase, activeAppId.value, startDate, endDate, 'native')
+    const data = await useChartData(supabase, expectedAppId, startDate, endDate, 'native')
+    if (loadToken !== undefined && loadToken !== requestToken)
+      return
+    if (expectedAppId !== activeAppId.value)
+      return
     rawThirtyDayChartData.value = data
     if (data)
       cachedThirtyDaySummaryData.value = { data, range: { startDate, endDate } }
   }
   catch (error) {
     console.error('[DevicesStats] Error fetching 30-day native summary:', error)
+    if (loadToken !== undefined && loadToken !== requestToken)
+      return
+    if (expectedAppId !== activeAppId.value)
+      return
     rawThirtyDayChartData.value = null
   }
 }
@@ -775,7 +786,7 @@ async function loadData(forceRefetch = false) {
     }
 
     if (isNativeUsage.value)
-      await loadThirtyDaySummary(forceRefetch)
+      await loadThirtyDaySummary(forceRefetch, currentToken, activeAppId.value)
   }
   catch (error) {
     console.error('[DevicesStats] Error fetching chart data:', error)
@@ -937,7 +948,7 @@ watch(
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <NativeDeviceMetricCard
             :title="t('native-active-devices-android')"
-            :value="selectedPeriodActiveDevices.android"
+            :value="selectedPeriodActiveDevices?.android"
             :subtitle="selectedPeriodLabel"
             :evolution="androidActiveEvolution"
             :is-loading="isLoading"
@@ -945,7 +956,7 @@ watch(
           />
           <NativeDeviceMetricCard
             :title="t('native-active-devices-ios')"
-            :value="selectedPeriodActiveDevices.ios"
+            :value="selectedPeriodActiveDevices?.ios"
             :subtitle="selectedPeriodLabel"
             :evolution="iosActiveEvolution"
             :is-loading="isLoading"
@@ -953,7 +964,7 @@ watch(
           />
           <NativeDeviceMetricCard
             :title="t('native-active-devices-total')"
-            :value="selectedPeriodActiveDevices.total"
+            :value="selectedPeriodActiveDevices?.total"
             :subtitle="selectedPeriodLabel"
             :evolution="totalActiveEvolution"
             :is-loading="isLoading"
