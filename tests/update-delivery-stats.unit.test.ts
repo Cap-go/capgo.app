@@ -137,9 +137,10 @@ describe('update delivery stats helpers', () => {
     expect(updateDeliveryStatsTestUtils.shouldCacheUpdateDeliveryStats(0, 0)).toBe(false)
   })
 
-  it.concurrent('recovers full percentiles when a day exceeds the AE row cap', () => {
+  it.concurrent('recovers full percentiles when a day exceeds the AE row cap', async () => {
     const dayStart = Date.parse('2026-07-02T00:00:00.000Z')
-    const pairingLookbackMs = 2 * 60 * 60 * 1000
+    const windowStart = dayjs.utc('2026-07-02T00:00:00.000Z')
+    const windowEnd = dayjs.utc('2026-07-03T00:00:00.000Z')
     const pageLimit = 50_000
     const events: Array<{
       app_id: string
@@ -203,50 +204,29 @@ describe('update delivery stats helpers', () => {
     }
 
     const sorted = [...events].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
-    const windowStartMs = dayStart
-    const windowEndMs = dayStart + 24 * 60 * 60 * 1000
-    const queryStartMs = windowStartMs
-
-    const paginate = () => {
-      const merged: typeof events = []
-      let cursorStart = Math.max(windowStartMs - pairingLookbackMs, queryStartMs)
-      let incomplete = false
-
-      while (true) {
-        const batch = sorted.filter((event) => {
-          const ts = Date.parse(event.created_at)
-          return ts >= cursorStart && ts < windowEndMs
-        }).slice(0, pageLimit)
-
-        if (batch.length === 0)
-          break
-
-        merged.push(...batch)
-        if (batch.length < pageLimit)
-          break
-
-        const lastTs = Date.parse(batch[batch.length - 1]!.created_at)
-        if (lastTs >= windowEndMs || lastTs <= cursorStart) {
-          incomplete = true
-          break
-        }
-        cursorStart = lastTs
-      }
-
-      return {
-        events: updateDeliveryStatsTestUtils.dedupeDeliveryEvents(merged),
-        incomplete,
-      }
+    const readPage = async (pageParams: {
+      start_date: string
+      start_exclusive: boolean
+      end_date: string
+    }) => {
+      const startMs = Date.parse(pageParams.start_date)
+      const endMs = Date.parse(pageParams.end_date)
+      const filtered = sorted.filter((event) => {
+        const ts = Date.parse(event.created_at)
+        if (pageParams.start_exclusive)
+          return ts > startMs && ts < endMs
+        return ts >= startMs && ts < endMs
+      })
+      return filtered.slice(0, pageLimit)
     }
 
     const truncated = updateDeliveryStatsTestUtils.buildDeliveriesFromEvents(
       sorted.slice(0, pageLimit),
-      { periodStartMs: windowStartMs, allowPairing: true },
+      { periodStartMs: dayStart, allowPairing: true },
     )
-    const { events: paginatedEvents, incomplete } = paginate()
-    const recovered = updateDeliveryStatsTestUtils.buildDeliveriesFromEvents(
-      paginatedEvents,
-      { periodStartMs: windowStartMs, allowPairing: true },
+    const { samples: recovered, incomplete } = await updateDeliveryStatsTestUtils.paginateUpdateDeliveryChunkSamples(
+      readPage,
+      { windowStart, windowEnd },
     )
 
     const truncatedOverview = updateDeliveryStatsTestUtils.aggregateDeliverySamples(truncated).overviewRow
