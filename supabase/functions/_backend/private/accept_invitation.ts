@@ -151,6 +151,7 @@ async function assertInvitationRoleGrantable(
   c: Parameters<typeof useSupabaseAdmin>[0],
   invitation: {
     org_id: string
+    email: string
     rbac_role_name?: string | null
     invited_by_user_id?: string | null
   },
