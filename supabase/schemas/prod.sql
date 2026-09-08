@@ -497,11 +497,10 @@ BEGIN
   END IF;
 
   IF v_inviter_id IS NULL THEN
-    SELECT orgs.created_by
-    INTO v_inviter_id
-    FROM public.orgs
-    WHERE orgs.id = invite_org_id;
+    RETURN 'INVITER_NOT_FOUND';
   END IF;
+
+  PERFORM public.lock_rbac_orgs(invite_org_id);
 
   PERFORM public.assert_principal_can_grant_org_role(
     invite_org_id,

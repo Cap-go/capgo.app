@@ -76,12 +76,6 @@ GRANT EXECUTE ON FUNCTION public.assert_principal_can_grant_org_role(uuid, uuid,
 ALTER TABLE public.tmp_users
   ADD COLUMN IF NOT EXISTS invited_by_user_id uuid;
 
-UPDATE public.tmp_users tu
-SET invited_by_user_id = orgs.created_by
-FROM public.orgs
-WHERE tu.org_id = orgs.id
-  AND tu.invited_by_user_id IS NULL;
-
 CREATE OR REPLACE FUNCTION public.update_tmp_invite_role_rbac(
   p_org_id uuid,
   p_email text,
@@ -293,11 +287,10 @@ BEGIN
   END IF;
 
   IF v_inviter_id IS NULL THEN
-    SELECT orgs.created_by
-    INTO v_inviter_id
-    FROM public.orgs
-    WHERE orgs.id = invite_org_id;
+    RETURN 'INVITER_NOT_FOUND';
   END IF;
+
+  PERFORM public.lock_rbac_orgs(invite_org_id);
 
   PERFORM public.assert_principal_can_grant_org_role(
     invite_org_id,

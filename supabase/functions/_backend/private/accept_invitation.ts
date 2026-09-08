@@ -162,14 +162,14 @@ async function assertInvitationRoleGrantable(
       ? { rows: [{ inviter_id: invitation.invited_by_user_id }] }
       : await pgClient.query<{ inviter_id: string | null }>(
         `
-          SELECT COALESCE(tmp_users.invited_by_user_id, orgs.created_by) AS inviter_id
+          SELECT tmp_users.invited_by_user_id AS inviter_id
           FROM public.tmp_users
-          JOIN public.orgs ON orgs.id = tmp_users.org_id
           WHERE tmp_users.org_id = $1::uuid
-            AND tmp_users.rbac_role_name = $2
+            AND tmp_users.email = $2
+            AND tmp_users.rbac_role_name = $3
           LIMIT 1
         `,
-        [invitation.org_id, rbacRoleName],
+        [invitation.org_id, invitation.email, rbacRoleName],
       )
 
     const inviterId = inviterResult.rows[0]?.inviter_id
