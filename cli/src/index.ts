@@ -73,6 +73,8 @@ const optionDescriptions = {
   capacitorConfig: `Capacitor config source to update (useful with dynamic monorepo configs)`,
   verbose: `Enable verbose output with detailed logging`,
   ignoreNotifyAppReady: `Skip notifyAppReady() check (not recommended — updates may roll back)`,
+  acceptIncompatible: `Accept native-package incompatibility as handled (still checks and warns, continues, skips the crash-warning email). Use this when your app already guards missing plugins at runtime.`,
+  acceptIncompatibleChannel: `Accept native-package incompatibility as handled (still checks and warns, sets the channel instead of failing). Use this when your app already guards missing plugins at runtime.`,
 }
 
 /** Collector for repeatable CLI options (e.g. --ios-provisioning-profile used multiple times) */
@@ -267,7 +269,8 @@ Example: npx @capgo/cli@latest bundle upload com.example.app --path ./dist --cha
   )
   .option('--auto-min-update-version', `Set the min update version based on native packages`)
   .option('--ignore-metadata-check', `Ignores the metadata (node_modules) check when uploading`)
-  .option('--fail-on-incompatible', `Fail the upload (exit non-zero) instead of uploading when the bundle is incompatible with the channel's current native packages. In an interactive terminal you can still choose a native build; declining fails. Cannot be combined with --ignore-metadata-check.`)
+  .option('--fail-on-incompatible', `Fail the upload (exit non-zero) instead of uploading when the bundle is incompatible with the channel's current native packages. In an interactive terminal you can still choose a native build; declining fails. Cannot be combined with --ignore-metadata-check or --accept-incompatible.`)
+  .option('--accept-incompatible', `${optionDescriptions.acceptIncompatible} Cannot be combined with --fail-on-incompatible or --ignore-metadata-check.`)
   .option('--ignore-checksum-check', `Ignores the checksum check when uploading`)
   .option('--force-crc32-checksum', `Force CRC32 checksum for upload (override auto-detection)`)
   .option('--timeout <timeout>', `Timeout for the upload process in seconds`)
@@ -642,6 +645,7 @@ Example: npx @capgo/cli@latest channel set production com.example.app --bundle 1
   .option('--send-update-notification', `Send a native update-check notification to devices after updating the linked channel bundle`)
   .option('--package-json <packageJson>', optionDescriptions.packageJson)
   .option('--ignore-metadata-check', `Ignore checking node_modules compatibility if present in the bundle`)
+  .option('--accept-incompatible', `${optionDescriptions.acceptIncompatibleChannel} Cannot be combined with --ignore-metadata-check.`)
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
 

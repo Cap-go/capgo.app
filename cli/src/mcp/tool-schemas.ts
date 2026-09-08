@@ -32,6 +32,7 @@ export const mcpUploadBundleInputSchema = z.object({
   autoSetBundle: z.boolean().optional(),
   autoBump: z.enum(['major', 'minor', 'patch', 'metadata', 'ai']).optional().describe('Semver part to bump from latest remote version (default minor when set via CLI without value); ai classifies via Capgo Workers AI'),
   encrypt: z.boolean().optional(),
+  acceptIncompatible: z.boolean().optional().describe('Accept native-package incompatibility as handled (still checks and warns, continues, skips the crash-warning email)'),
   capacitorConfig: capacitorConfigOptionSchema.optional(),
 })
 
@@ -102,6 +103,7 @@ export const mcpUpdateChannelInputSchema = z.object({
   autoPauseMinFailures: z.number().int().min(0).nullable().optional(),
   autoPauseAction: z.enum(['pause', 'rollback', 'notify']).optional(),
   autoPauseCooldownMinutes: z.number().int().min(0).max(10080).optional(),
+  acceptIncompatible: z.boolean().optional().describe('Accept native-package incompatibility as handled (still checks and warns, sets the channel instead of failing)'),
 })
 
 export const mcpDeleteChannelInputSchema = z.object({
