@@ -111,6 +111,7 @@ describe('invite role escalation guards', () => {
     await setAuthenticatedClaim(query, USER_ID_2)
 
     let thrown: unknown
+    await query('SAVEPOINT invite_escalation_block')
     try {
       await query(
         `SELECT public.update_tmp_invite_role_rbac($1::uuid, $2, $3)`,
@@ -119,11 +120,13 @@ describe('invite role escalation guards', () => {
     }
     catch (error) {
       thrown = error
+      await query('ROLLBACK TO SAVEPOINT invite_escalation_block')
     }
 
     expect(thrown).toBeTruthy()
     expect((thrown as Error).message).toContain('Admins cannot elevate privileges!')
 
+    await setServiceRoleClaim(query)
     const invite = await query(
       `SELECT rbac_role_name FROM public.tmp_users WHERE org_id = $1::uuid AND email = $2`,
       [orgId, email],
@@ -148,6 +151,7 @@ describe('invite role escalation guards', () => {
     )
     expect(result.rows[0]?.status).toBe('OK')
 
+    await setServiceRoleClaim(query)
     const invite = await query(
       `SELECT rbac_role_name FROM public.tmp_users WHERE org_id = $1::uuid AND email = $2`,
       [orgId, email],
