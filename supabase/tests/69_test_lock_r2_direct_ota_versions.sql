@@ -4,6 +4,7 @@
 -- comment) and clearing manifest once migrated to public.manifest remain allowed.
 -- r2-direct staging locks identity fields after first set; r2_path/manifest writes
 -- and finalize (r2-direct -> r2) stay allowed until upload completes.
+-- Metadata assertion below uses 1.0.0-in-progress after checksum lock.
 BEGIN;
 
 SELECT plan(11);
