@@ -111,13 +111,22 @@ export function isStripeEmulatorEnabled(c: Context): boolean {
 }
 
 export function getStripe(c: Context, account: BillingAccount = 'ee'): Stripe {
+  const secretKey = getStripeSecretKey(c, account).trim()
+  if (!secretKey) {
+    throw simpleError(
+      'stripe_not_configured',
+      `Stripe secret key is not configured for billing account ${account}`,
+      { account },
+    )
+  }
+
   const apiBaseUrl = getStripeApiBaseUrl(c)
   const apiPort = apiBaseUrl
     ? Number.parseInt(apiBaseUrl.port || (apiBaseUrl.protocol === 'https:' ? '443' : '80'), 10)
     : undefined
   type StripeApiVersion = NonNullable<ConstructorParameters<typeof Stripe>[1]>['apiVersion']
 
-  return new Stripe(getStripeSecretKey(c, account), {
+  return new Stripe(secretKey, {
     // Keep the pinned runtime API version even when the installed SDK types lag behind it.
     apiVersion: '2026-03-25.dahlia' as StripeApiVersion,
     httpClient: Stripe.createFetchHttpClient(),

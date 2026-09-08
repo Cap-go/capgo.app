@@ -1505,6 +1505,18 @@ async function stripeEventHandler(c: Context<MiddlewareKeyVariablesStripe>) {
   // find email from user with customer_id
   const org = await getOrg(c, stripeData)
 
+  const { data: customer, error: customerError } = await supabaseAdmin(c)
+    .from('stripe_info')
+    .select()
+    .eq('customer_id', stripeData.data.customer_id)
+    .single()
+
+  if (customerError || !customer) {
+    throw simpleError('no_customer_found', 'no customer found', { stripeData, customerError })
+  }
+
+  await assertStripeBillingAccount(c, customer)
+
   await ensureCustomerMetadata(c, stripeData.data.customer_id, org.id, org.created_by)
   stripeData.data.customer_country = await syncStripeCustomerCountry(c, stripeData.data.customer_id)
 
@@ -1516,18 +1528,6 @@ async function stripeEventHandler(c: Context<MiddlewareKeyVariablesStripe>) {
     await handleAutoTopUpPaymentIntent(c, stripeEvent, org.id)
     return c.json(BRES)
   }
-
-  const { data: customer } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .select()
-    .eq('customer_id', stripeData.data.customer_id)
-    .single()
-
-  if (!customer) {
-    throw simpleError('no_customer_found', 'no customer found', { stripeData })
-  }
-
-  await assertStripeBillingAccount(c, customer)
 
   if (stripeEvent.type === 'customer.source.expiring') {
     return customerSourceExpiring(c, org)

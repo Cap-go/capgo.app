@@ -1,5 +1,5 @@
 import Stripe from 'stripe'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mockedEnv: Record<string, string> = {
   WEBAPP_URL: 'https://capgo.test',
@@ -53,6 +53,21 @@ function createPriceList(recurringInterval = 'month', type = 'recurring') {
   ]
 }
 
+function mockBillingAccountLookup(billingAccount = 'ee') {
+  mockedSupabaseAdmin.mockReturnValue({
+    from: vi.fn().mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          maybeSingle: vi.fn().mockResolvedValue({
+            data: { billing_account: billingAccount },
+            error: null,
+          }),
+        }),
+      }),
+    }),
+  })
+}
+
 afterEach(() => {
   delete mockedEnv.STRIPE_API_BASE_URL
   mockedSupabaseAdmin.mockReset()
@@ -60,6 +75,10 @@ afterEach(() => {
 })
 
 describe('stripe redirect URL allowlist', () => {
+  beforeEach(() => {
+    mockBillingAccountLookup()
+  })
+
   it('allows same-origin return URLs for billing portal', async () => {
     const createSession = vi.fn().mockResolvedValue({ url: 'https://pay.capgo.test/p/session' })
     const stripeClient = {

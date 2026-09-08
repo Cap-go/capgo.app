@@ -39,7 +39,14 @@ const USER_ID = 'a1bb59b7-34b3-4e06-a0f1-2cc696f043dc'
 const PENDING_ID = `pending_${ORG_ID}`
 const LOCAL_ID = `cus_local_${ORG_ID.replaceAll('-', '')}`
 const CUSTOMER_ID = 'cus_VAgMn1agG4iQSC'
-const SOLO_PLAN = { name: 'Solo', stripe_id: 'prod_solo' }
+const SOLO_PLAN = {
+  name: 'Solo',
+  stripe_id: 'prod_solo',
+  stripe_id_us: 'prod_solo_us',
+  price_m_id_us: 'price_solo_m_us',
+  price_y_id_us: 'price_solo_y_us',
+  credit_id_us: 'prod_credits_us',
+}
 
 function createContext() {
   return {
@@ -188,10 +195,37 @@ describe('createStripeCustomer', () => {
 
     expect(planName).toBe('Solo')
     expect(createCustomerMock).toHaveBeenCalledTimes(1)
+    expect(createCustomerMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      'ee',
+    )
     expect(orgUpdate).toHaveBeenCalledWith({ customer_id: CUSTOMER_ID }, expect.objectContaining({
       id: ORG_ID,
       customer_id: LOCAL_ID,
     }))
+  })
+
+  it('uses pending stripe_info billing_account when finalizing a pending org', async () => {
+    getStripeCustomerMock.mockResolvedValue({
+      product_id: 'prod_solo_us',
+      billing_account: 'us',
+    })
+    mockSupabase({ orgCustomerId: PENDING_ID })
+
+    await createStripeCustomer(createContext(), createOrg(PENDING_ID))
+
+    expect(createCustomerMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      'us',
+    )
   })
 
   it('creates a real customer when the org has a pre-PR 24-hex fake id', async () => {

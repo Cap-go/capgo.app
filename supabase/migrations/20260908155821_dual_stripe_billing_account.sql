@@ -18,7 +18,8 @@ ALTER TABLE public.stripe_info
   ADD CONSTRAINT stripe_info_billing_account_check
   CHECK (billing_account IN ('ee', 'us'));
 
-COMMENT ON COLUMN public.stripe_info.billing_account IS 'Stripe Connect account for this customer: ee (Capgo OÜ legacy) or us (CodepushGo LLC).';
+COMMENT ON COLUMN public.stripe_info.billing_account IS
+  'Stripe account: ee (Capgo OÜ legacy) or us (CodepushGo LLC).';
 
 ALTER TABLE public.plans
   ADD COLUMN IF NOT EXISTS stripe_id_us character varying,
@@ -26,10 +27,14 @@ ALTER TABLE public.plans
   ADD COLUMN IF NOT EXISTS price_y_id_us character varying,
   ADD COLUMN IF NOT EXISTS credit_id_us text;
 
-COMMENT ON COLUMN public.plans.stripe_id_us IS 'Stripe product id on the US Stripe account.';
-COMMENT ON COLUMN public.plans.price_m_id_us IS 'Monthly Stripe price id on the US Stripe account.';
-COMMENT ON COLUMN public.plans.price_y_id_us IS 'Yearly Stripe price id on the US Stripe account.';
-COMMENT ON COLUMN public.plans.credit_id_us IS 'Stripe product id for credit top-ups on the US Stripe account.';
+COMMENT ON COLUMN public.plans.stripe_id_us IS
+  'Stripe product id on the US Stripe account.';
+COMMENT ON COLUMN public.plans.price_m_id_us IS
+  'Monthly Stripe price id on the US Stripe account.';
+COMMENT ON COLUMN public.plans.price_y_id_us IS
+  'Yearly Stripe price id on the US Stripe account.';
+COMMENT ON COLUMN public.plans.credit_id_us IS
+  'Stripe product id for credit top-ups on the US Stripe account.';
 
 UPDATE public.plans SET
   stripe_id_us = 'prod_VDt1FTF7XJxyMR',
@@ -59,7 +64,7 @@ UPDATE public.plans SET
   credit_id_us = 'prod_VDt2YB5GrYFnII'
 WHERE name = 'Enterprise';
 
--- product_id may reference either plans.stripe_id (EE) or plans.stripe_id_us (US).
+-- product_id references EE plans.stripe_id or US plans.stripe_id_us.
 ALTER TABLE public.stripe_info
   DROP CONSTRAINT IF EXISTS stripe_info_product_id_fkey;
 
@@ -73,13 +78,26 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  IF NOT EXISTS (
-    SELECT 1
-    FROM public.plans
-    WHERE public.plans.stripe_id = NEW.product_id
-       OR public.plans.stripe_id_us = NEW.product_id
-  ) THEN
-    RAISE EXCEPTION 'stripe_info.product_id % is not a known plan product id', NEW.product_id;
+  IF NEW.billing_account = 'us' THEN
+    IF NOT EXISTS (
+      SELECT 1
+      FROM public.plans
+      WHERE public.plans.stripe_id_us = NEW.product_id
+    ) THEN
+      RAISE EXCEPTION
+        'stripe_info.product_id % is not a known US plan product id',
+        NEW.product_id;
+    END IF;
+  ELSE
+    IF NOT EXISTS (
+      SELECT 1
+      FROM public.plans
+      WHERE public.plans.stripe_id = NEW.product_id
+    ) THEN
+      RAISE EXCEPTION
+        'stripe_info.product_id % is not a known EE plan product id',
+        NEW.product_id;
+    END IF;
   END IF;
 
   RETURN NEW;
@@ -94,6 +112,78 @@ GRANT ALL ON FUNCTION public.validate_stripe_info_product_id() TO service_role;
 DROP TRIGGER IF EXISTS validate_stripe_info_product_id ON public.stripe_info;
 
 CREATE TRIGGER validate_stripe_info_product_id
-  BEFORE INSERT OR UPDATE OF product_id ON public.stripe_info
+  BEFORE INSERT OR UPDATE OF product_id, billing_account ON public.stripe_info
   FOR EACH ROW
   EXECUTE FUNCTION public.validate_stripe_info_product_id();
+
+CREATE OR REPLACE FUNCTION public.prevent_orphan_stripe_info_plan_ids()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    IF EXISTS (
+      SELECT 1
+      FROM public.stripe_info
+      WHERE public.stripe_info.billing_account = 'ee'
+        AND public.stripe_info.product_id = OLD.stripe_id
+    ) THEN
+      RAISE EXCEPTION
+        'Cannot delete plan: stripe_info rows reference plans.stripe_id %',
+        OLD.stripe_id;
+    END IF;
+
+    IF OLD.stripe_id_us IS NOT NULL AND EXISTS (
+      SELECT 1
+      FROM public.stripe_info
+      WHERE public.stripe_info.billing_account = 'us'
+        AND public.stripe_info.product_id = OLD.stripe_id_us
+    ) THEN
+      RAISE EXCEPTION
+        'Cannot delete plan: stripe_info rows reference plans.stripe_id_us %',
+        OLD.stripe_id_us;
+    END IF;
+
+    RETURN OLD;
+  END IF;
+
+  IF OLD.stripe_id IS DISTINCT FROM NEW.stripe_id AND EXISTS (
+    SELECT 1
+    FROM public.stripe_info
+    WHERE public.stripe_info.billing_account = 'ee'
+      AND public.stripe_info.product_id = OLD.stripe_id
+  ) THEN
+    RAISE EXCEPTION
+      'Cannot change plans.stripe_id %: referenced by stripe_info (ee)',
+      OLD.stripe_id;
+  END IF;
+
+  IF OLD.stripe_id_us IS DISTINCT FROM NEW.stripe_id_us
+    AND OLD.stripe_id_us IS NOT NULL
+    AND EXISTS (
+      SELECT 1
+      FROM public.stripe_info
+      WHERE public.stripe_info.billing_account = 'us'
+        AND public.stripe_info.product_id = OLD.stripe_id_us
+    ) THEN
+    RAISE EXCEPTION
+      'Cannot change plans.stripe_id_us %: referenced by stripe_info (us)',
+      OLD.stripe_id_us;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+ALTER FUNCTION public.prevent_orphan_stripe_info_plan_ids() OWNER TO postgres;
+
+REVOKE ALL ON FUNCTION public.prevent_orphan_stripe_info_plan_ids() FROM PUBLIC;
+GRANT ALL ON FUNCTION public.prevent_orphan_stripe_info_plan_ids() TO service_role;
+
+DROP TRIGGER IF EXISTS prevent_orphan_stripe_info_plan_ids ON public.plans;
+
+CREATE TRIGGER prevent_orphan_stripe_info_plan_ids
+  BEFORE UPDATE OF stripe_id, stripe_id_us OR DELETE ON public.plans
+  FOR EACH ROW
+  EXECUTE FUNCTION public.prevent_orphan_stripe_info_plan_ids();

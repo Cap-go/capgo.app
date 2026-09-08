@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { Database } from './supabase.types.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { createCustomer, getNewCustomersBillingAccount, getPlanProductId, planProductIdOrFilter, type BillingAccount } from './stripe.ts'
+import { createCustomer, getNewCustomersBillingAccount, getPlanProductId, normalizeBillingAccount, planProductIdOrFilter, type BillingAccount } from './stripe.ts'
 import { getDefaultPlan, getStripeCustomer, supabaseAdmin } from './supabase.ts'
 
 type OrgRow = Database['public']['Tables']['orgs']['Row']
@@ -107,6 +107,15 @@ async function resolveTrialPlan(c: Context, org: OrgRow, billingAccount: Billing
   }
 }
 
+async function resolveBillingAccountForCreate(c: Context, org: OrgRow): Promise<BillingAccount> {
+  if (isPendingStripeCustomerId(org.customer_id)) {
+    const pendingStripeInfo = await getStripeCustomer(c, org.customer_id!)
+    if (pendingStripeInfo?.billing_account)
+      return normalizeBillingAccount(pendingStripeInfo.billing_account)
+  }
+  return getNewCustomersBillingAccount(c)
+}
+
 async function trialPlanNameForCustomer(c: Context, customerId: string, fallbackPlanName?: string | null) {
   const stripeInfo = await getStripeCustomer(c, customerId)
   if (stripeInfo?.product_id) {
@@ -137,7 +146,7 @@ export async function createStripeCustomer(c: Context, org: OrgRow) {
     return await trialPlanNameForCustomer(c, current.customer_id!)
   }
 
-  const billingAccount = getNewCustomersBillingAccount(c)
+  const billingAccount = await resolveBillingAccountForCreate(c, current)
   const selectedPlan = await resolveTrialPlan(c, current, billingAccount)
   if (!selectedPlan) {
     cloudlog({ requestId: c.get('requestId'), message: 'no default plan' })

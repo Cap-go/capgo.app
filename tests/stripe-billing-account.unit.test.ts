@@ -17,6 +17,7 @@ import {
   getPlanCreditProductId,
   getPlanPriceId,
   getPlanProductId,
+  IncompleteUsPlanConfigError,
   getStripeSecretKeyEnvName,
   getStripeWebhookSecretEnvName,
   normalizeBillingAccount,
@@ -78,5 +79,12 @@ describe('stripe billing account helpers', () => {
 
   it('builds dual-product lookup filter', () => {
     expect(planProductIdOrFilter('prod_VDt1FTF7XJxyMR')).toBe('stripe_id.eq.prod_VDt1FTF7XJxyMR,stripe_id_us.eq.prod_VDt1FTF7XJxyMR')
+  })
+
+  it('rejects incomplete US plan config instead of falling back to EE ids', () => {
+    const incompleteUsPlan = { ...SOLO_PLAN, stripe_id_us: null, price_m_id_us: null }
+    expect(() => getPlanProductId(incompleteUsPlan, 'us')).toThrow(IncompleteUsPlanConfigError)
+    expect(() => getPlanPriceId(incompleteUsPlan, 'us', 'month')).toThrow(IncompleteUsPlanConfigError)
+    expect(() => getPlanCreditProductId({ ...SOLO_PLAN, credit_id_us: null }, 'us')).toThrow(IncompleteUsPlanConfigError)
   })
 })

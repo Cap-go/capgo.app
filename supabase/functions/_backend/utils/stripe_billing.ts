@@ -48,43 +48,54 @@ export function isStripeConfiguredForAccount(c: Context, account: BillingAccount
   return secretKey.startsWith('sk_') || secretKey.startsWith('rk_')
 }
 
-export async function getBillingAccountForCustomer(c: Context, customerId: string): Promise<BillingAccount> {
-  try {
-    const admin = supabaseAdmin(c)
-    if (!admin?.from)
-      return 'ee'
-
-    const { data, error } = await admin
-      .from('stripe_info')
-      .select('billing_account')
-      .eq('customer_id', customerId)
-      .maybeSingle()
-
-    if (error) {
-      cloudlogErr({
-        requestId: c.get('requestId'),
-        message: 'getBillingAccountForCustomer',
-        customerId,
-        error,
-      })
-    }
-
-    return normalizeBillingAccount(data?.billing_account)
+export class IncompleteUsPlanConfigError extends Error {
+  constructor(field: string) {
+    super(`Plan missing US Stripe identifier: ${field}`)
+    this.name = 'IncompleteUsPlanConfigError'
   }
-  catch (error) {
+}
+
+function requireUsPlanField(value: string | null | undefined, field: string): string {
+  if (!value)
+    throw new IncompleteUsPlanConfigError(field)
+  return value
+}
+
+export async function getBillingAccountForCustomer(c: Context, customerId: string): Promise<BillingAccount> {
+  const admin = supabaseAdmin(c)
+  if (!admin?.from) {
+    const error = new Error('getBillingAccountForCustomer: admin client unavailable')
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'getBillingAccountForCustomer unavailable admin client',
       customerId,
       error,
     })
-    return 'ee'
+    throw error
   }
+
+  const { data, error } = await admin
+    .from('stripe_info')
+    .select('billing_account')
+    .eq('customer_id', customerId)
+    .maybeSingle()
+
+  if (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'getBillingAccountForCustomer',
+      customerId,
+      error,
+    })
+    throw error
+  }
+
+  return normalizeBillingAccount(data?.billing_account)
 }
 
 export function getPlanProductId(plan: Pick<PlanStripeIds, 'stripe_id' | 'stripe_id_us'>, account: BillingAccount): string {
-  if (account === 'us' && plan.stripe_id_us)
-    return plan.stripe_id_us
+  if (account === 'us')
+    return requireUsPlanField(plan.stripe_id_us, 'stripe_id_us')
   return plan.stripe_id
 }
 
@@ -92,15 +103,15 @@ export function getPlanPriceId(plan: PlanStripeIds, account: BillingAccount, rec
   const yearly = recurrence === 'year'
   if (account === 'us') {
     return yearly
-      ? (plan.price_y_id_us ?? plan.price_y_id)
-      : (plan.price_m_id_us ?? plan.price_m_id)
+      ? requireUsPlanField(plan.price_y_id_us, 'price_y_id_us')
+      : requireUsPlanField(plan.price_m_id_us, 'price_m_id_us')
   }
   return yearly ? plan.price_y_id : plan.price_m_id
 }
 
 export function getPlanCreditProductId(plan: PlanStripeIds, account: BillingAccount): string {
-  if (account === 'us' && plan.credit_id_us)
-    return plan.credit_id_us
+  if (account === 'us')
+    return requireUsPlanField(plan.credit_id_us, 'credit_id_us')
   return plan.credit_id ?? ''
 }
 
