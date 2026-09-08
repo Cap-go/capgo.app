@@ -1530,8 +1530,14 @@ async function delete_cleanup_candidates() {
     // Safety check - ensure this is intentional
     console.log('\n🛡️  SAFETY CHECKS:')
     console.log('   - Make sure you have backed up these files first')
-    console.log('   - This operation cannot be undone')
-    console.log('   - Files will be permanently removed from main bucket')
+    if (permanent) {
+        console.log('   - This operation cannot be undone')
+        console.log('   - Files will be permanently removed from main bucket')
+    }
+    else {
+        console.log('   - Files move to deleted-after-7-days/ and remain recoverable for seven days')
+        console.log('   - Source keys are removed from their live paths after the trash copy succeeds')
+    }
 
     // Check if cleanup_candidates.json exists
     const cleanupFile = './cleanup_candidates.json'

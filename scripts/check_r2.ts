@@ -3,7 +3,7 @@ import type { _Object, ListObjectsV2CommandOutput } from '@aws-sdk/client-s3'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'// supabase.types.ts'
 import { CopyObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { createClient } from '@supabase/supabase-js'
-import { encodeS3CopySource, getR2TrashKey } from './r2_trash_utils.ts'
+import { ConcurrencyLimiter, encodeS3CopySource, getR2TrashKey, isLiveR2Key, resolveOpsDeleteMode } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const MAGIC_TO_DELETE = './tmp/magic_to_delete6.txt'
@@ -59,17 +59,29 @@ async function main() {
 
   else if (process.env.DELETE_FILES === '1') {
     const s3 = await initS3()
-    const permanent = process.env.ALLOW_PERMANENT_R2_DELETE === 'true'
-    if (permanent)
+    const deleteMode = resolveOpsDeleteMode({
+      DRY_RUN: process.env.DRY_RUN,
+      ALLOW_PERMANENT_R2_DELETE: process.env.ALLOW_PERMANENT_R2_DELETE,
+    })
+    const files = JSON.parse(await Bun.file(MAGIC_TO_DELETE).text()) as _Object[]
+    const keys = files.map(file => file.Key ?? '').filter(key => key && isLiveR2Key(key))
+    let errorCount = 0
+
+    if (deleteMode === 'dry_run') {
+      console.log(`DELETE_FILES=1 dry-run: would process ${keys.length} live objects`)
+      for (const key of keys)
+        console.log(`Would process: ${key}`)
+      return
+    }
+
+    if (deleteMode === 'permanent')
       console.warn('WARNING: ALLOW_PERMANENT_R2_DELETE=true — permanently deleting objects')
     else
       console.warn('DELETE_FILES=1: moving objects to 7-day trash (set ALLOW_PERMANENT_R2_DELETE=true for permanent delete)')
 
-    const files = JSON.parse(await Bun.file(MAGIC_TO_DELETE).text()) as _Object[]
-    const keys = files.map(file => file.Key ?? '').filter(Boolean)
-    let errorCount = 0
+    const limiter = new ConcurrencyLimiter(20)
 
-    if (permanent) {
+    if (deleteMode === 'permanent') {
       const toDelete = keys.map(key => ({ Key: key }))
       while (toDelete.length > 0) {
         const chunk = toDelete.splice(0, 999)
@@ -92,7 +104,7 @@ async function main() {
       }
     }
     else {
-      for (const key of keys) {
+      await Promise.all(keys.map(key => limiter.run(async () => {
         const trashKey = getR2TrashKey(key)
         try {
           await s3.send(new CopyObjectCommand({
@@ -109,7 +121,7 @@ async function main() {
           console.error(`Failed to trash ${key}:`, error)
           errorCount += 1
         }
-      }
+      })))
     }
 
     if (errorCount > 0)
