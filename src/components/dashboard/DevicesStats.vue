@@ -748,10 +748,14 @@ async function loadData(forceRefetch = false) {
     && cachedData.range.endDate.getTime() === endDate.getTime()
 
   if (cacheIsValid && !forceRefetch) {
-    requestToken++
+    const cacheToken = ++requestToken
+    const requestedAppId = activeAppId.value
     rawChartData.value = cachedData.data
     currentRange.value = cachedData.range
-    isLoading.value = false
+    if (isNativeUsage.value)
+      await loadThirtyDaySummary(false, cacheToken, requestedAppId)
+    if (cacheToken === requestToken && requestedAppId === activeAppId.value)
+      isLoading.value = false
     return
   }
 

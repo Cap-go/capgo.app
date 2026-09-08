@@ -152,8 +152,6 @@ describe('[GET] /statistics operations with and without subkey', () => {
 
   it('should get native version usage statistics without subkey', async () => {
     const dedicatedApp = `com.stats.native.${randomUUID().replaceAll('-', '')}`
-    await createStatsSiblingApp(dedicatedApp)
-
     const prefix = `native-version-${randomUUID()}`
     const fromDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0]
     const toDate = new Date().toISOString().split('T')[0]
@@ -164,17 +162,19 @@ describe('[GET] /statistics operations with and without subkey', () => {
     const androidLabel = `Android ${versionA}`
     const electronLabel = `Electron ${versionB}`
 
-    await getSupabaseClient()
-      .from('device_usage')
-      .insert([
-        { app_id: dedicatedApp, device_id: `${prefix}-a`, org_id: ORG_ID_STATS, platform: 'ios', timestamp, version_build: versionA },
-        { app_id: dedicatedApp, device_id: `${prefix}-a`, org_id: ORG_ID_STATS, platform: 'ios', timestamp, version_build: versionA },
-        { app_id: dedicatedApp, device_id: `${prefix}-b`, org_id: ORG_ID_STATS, platform: 'android', timestamp, version_build: versionA },
-        { app_id: dedicatedApp, device_id: `${prefix}-c`, org_id: ORG_ID_STATS, platform: 'electron', timestamp, version_build: versionB },
-      ])
-      .throwOnError()
-
     try {
+      await createStatsSiblingApp(dedicatedApp)
+
+      await getSupabaseClient()
+        .from('device_usage')
+        .insert([
+          { app_id: dedicatedApp, device_id: `${prefix}-a`, org_id: ORG_ID_STATS, platform: 'ios', timestamp, version_build: versionA },
+          { app_id: dedicatedApp, device_id: `${prefix}-a`, org_id: ORG_ID_STATS, platform: 'ios', timestamp, version_build: versionA },
+          { app_id: dedicatedApp, device_id: `${prefix}-b`, org_id: ORG_ID_STATS, platform: 'android', timestamp, version_build: versionA },
+          { app_id: dedicatedApp, device_id: `${prefix}-c`, org_id: ORG_ID_STATS, platform: 'electron', timestamp, version_build: versionB },
+        ])
+        .throwOnError()
+
       const getNativeUsage = await fetch(`${BASE_URL}/statistics/app/${dedicatedApp}/native_usage?from=${fromDate}&to=${toDate}`, {
         method: 'GET',
         headers: headersStats,
