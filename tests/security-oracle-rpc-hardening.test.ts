@@ -55,6 +55,10 @@ function isPermissionDenied(error: { code?: string, message?: string } | null) {
   return error?.code === '42501' || /permission denied/i.test(error?.message ?? '')
 }
 
+function isNoRights(error: { message?: string } | null) {
+  return /NO_RIGHTS/i.test(error?.message ?? '')
+}
+
 describe('anonymous oracle RPC hardening', () => {
   it.concurrent('blocks invite_user_to_org_rbac for anonymous callers', async () => {
     const client = createAnonymousClient()
@@ -127,6 +131,69 @@ describe('anonymous oracle RPC hardening', () => {
     expect(v1Result.data).toBeNull()
     expect(v2Result.data).toBeNull()
     expect(invalidKeyResult.data).toBeNull()
+  })
+
+  it.concurrent('blocks anonymous execute on member/org oracle RPCs', async () => {
+    const client = createAnonymousClient()
+    const missingOrgId = randomUUID()
+
+    const revokedCalls = await Promise.all([
+      client.rpc('get_org_members_rbac', { p_org_id: ORG_ID }),
+      client.rpc('get_org_members_rbac', { p_org_id: missingOrgId }),
+      client.rpc('is_member_of_org', { user_id: USER_ID, org_id: ORG_ID }),
+      client.rpc('is_member_of_org', { user_id: USER_ID, org_id: missingOrgId }),
+      client.rpc('update_org_invite_role_rbac', {
+        p_org_id: ORG_ID,
+        p_user_id: USER_ID,
+        p_new_role_name: 'org_member',
+      }),
+      client.rpc('update_tmp_invite_role_rbac', {
+        p_org_id: ORG_ID,
+        p_email: 'oracle-test@capgo.app',
+        p_new_role_name: 'org_member',
+      }),
+    ])
+
+    for (const result of revokedCalls) {
+      expect(isPermissionDenied(result.error)).toBe(true)
+      expect(result.data).toBeNull()
+    }
+  })
+
+  it.concurrent('does not leak org existence through check_org_members_2fa_enabled', async () => {
+    const client = createAnonymousClient()
+    const missingOrgId = randomUUID()
+
+    const existingOrgResult = await client.rpc('check_org_members_2fa_enabled', {
+      org_id: ORG_ID,
+    })
+    const missingOrgResult = await client.rpc('check_org_members_2fa_enabled', {
+      org_id: missingOrgId,
+    })
+
+    expect(isNoRights(existingOrgResult.error)).toBe(true)
+    expect(isNoRights(missingOrgResult.error)).toBe(true)
+    expect(existingOrgResult.error?.message).toBe(missingOrgResult.error?.message)
+    expect(existingOrgResult.data).toBeNull()
+    expect(missingOrgResult.data).toBeNull()
+  })
+
+  it.concurrent('does not leak org existence through check_org_members_password_policy', async () => {
+    const client = createAnonymousClient()
+    const missingOrgId = randomUUID()
+
+    const existingOrgResult = await client.rpc('check_org_members_password_policy', {
+      org_id: ORG_ID,
+    })
+    const missingOrgResult = await client.rpc('check_org_members_password_policy', {
+      org_id: missingOrgId,
+    })
+
+    expect(isNoRights(existingOrgResult.error)).toBe(true)
+    expect(isNoRights(missingOrgResult.error)).toBe(true)
+    expect(existingOrgResult.error?.message).toBe(missingOrgResult.error?.message)
+    expect(existingOrgResult.data).toBeNull()
+    expect(missingOrgResult.data).toBeNull()
   })
 
   it.concurrent('keeps invite_user_to_org_rbac callable for authenticated callers', async () => {
