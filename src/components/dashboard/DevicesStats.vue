@@ -720,6 +720,7 @@ async function loadData(forceRefetch = false) {
 
   // If forceDemo is true (payment failed), use demo data instead of fetching
   if (props.forceDemo) {
+    requestToken++
     const { startDate, endDate } = getDateRange()
     const days = Math.floor((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1
     const demoData = generateDemoDevicesData(days, props.usageKind)
