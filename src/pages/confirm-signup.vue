@@ -6,6 +6,7 @@ import IconLoader from '~icons/lucide/loader-2'
 import IconTriangleAlert from '~icons/lucide/triangle-alert'
 import { authGhostButtonClass, authSecondaryButtonClass } from '~/components/auth/pageStyles'
 import { openSupport } from '~/services/support'
+import { getAllowedConfirmationHosts, isAllowedConfirmationUrl } from '~/utils/safeRedirect'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -13,43 +14,7 @@ const isRedirecting = ref(true)
 const error = ref('')
 const invalidConfirmationMessage = 'Invalid confirmation URL. Please check your email link.'
 const redirectErrorMessage = 'Error redirecting to confirmation page. Please try again.'
-
-// Get the allowed hostname from VITE_APP_URL
-const allowedHost = (() => {
-  try {
-    return new URL(import.meta.env.VITE_APP_URL).hostname
-  }
-  catch {
-    return ''
-  }
-})()
-
-// Also allow Supabase host for confirmation URLs
-const allowedSupabaseHost = (() => {
-  try {
-    return new URL(import.meta.env.VITE_SUPABASE_URL).hostname
-  }
-  catch {
-    return ''
-  }
-})()
-
-function isAllowedConfirmationUrl(urlValue: string) {
-  const url = new URL(urlValue, window.location.origin)
-
-  // Allow localhost in dev mode
-  if (import.meta.env.DEV) {
-    if (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1')
-      return true
-  }
-
-  // Only allow https
-  if (url.protocol !== 'https:')
-    return false
-
-  // Only allow exact hostnames from VITE_APP_URL or VITE_SUPABASE_URL
-  return url.hostname === allowedHost || url.hostname === allowedSupabaseHost
-}
+const allowedConfirmationHosts = getAllowedConfirmationHosts()
 onMounted(() => {
   const confirmationUrl = route.query.confirmation_url as string
 
@@ -62,7 +27,10 @@ onMounted(() => {
   try {
     // Decode the URL if needed and redirect immediately
     const decodedUrl = decodeURIComponent(confirmationUrl)
-    if (!isAllowedConfirmationUrl(decodedUrl)) {
+    if (!isAllowedConfirmationUrl(decodedUrl, {
+      allowedHosts: allowedConfirmationHosts,
+      allowLocalDev: import.meta.env.DEV,
+    })) {
       isRedirecting.value = false
       error.value = invalidConfirmationMessage
       return
