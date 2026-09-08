@@ -24,6 +24,7 @@ vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
   checkPermission,
 }))
 
+const deletedTables: string[] = []
 const insert = vi.fn(async () => ({ error: null }))
 const deleteEq = vi.fn(async () => ({ error: null }))
 const deleteFn = vi.fn(() => ({ eq: deleteEq }))
@@ -33,10 +34,15 @@ const storageFrom = vi.fn(() => ({
   list: storageList,
   remove: storageRemove,
 }))
-const from = vi.fn(() => ({
-  insert,
-  delete: deleteFn,
-}))
+const from = vi.fn((table: string) => {
+  return {
+    insert,
+    delete: () => {
+      deletedTables.push(table)
+      return { eq: deleteEq }
+    },
+  }
+})
 const supabaseAdmin = vi.fn(() => ({
   from,
   storage: { from: storageFrom },
@@ -136,8 +142,10 @@ describe('on_app_delete storage cleanup', () => {
 describe('public deleteApp storage contract', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    deletedTables.length = 0
     checkPermission.mockResolvedValue(true)
     apiDeleteEq.mockResolvedValue({ error: null })
+    deleteEq.mockResolvedValue({ error: null })
     apiSelectSingle.mockResolvedValue({ data: { owner_org: 'org-1' }, error: null })
     storageList.mockResolvedValue({ data: [] })
   })
@@ -152,6 +160,7 @@ describe('public deleteApp storage contract', () => {
     expect(response).toBeDefined()
     expect(moveObjectsWithPrefixToTrash).not.toHaveBeenCalled()
     expect(deleteObjectsWithPrefix).not.toHaveBeenCalled()
+    expect(deletedTables).toContain('apps')
     expect(deleteEq).toHaveBeenCalledWith('app_id', 'com.test.app')
   })
 })

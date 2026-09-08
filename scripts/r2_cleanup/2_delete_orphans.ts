@@ -165,10 +165,7 @@ async function streamProcessPrefix(prefix: string): Promise<void> {
       .map(obj => obj.Key)
       .filter((key): key is string => Boolean(key && isLiveR2Key(key)))
 
-    if (deleteMode === 'dry_run') {
-      totalProcessed += liveKeys.length
-    }
-    else if (deleteMode === 'permanent') {
+    if (deleteMode === 'permanent') {
       for (let i = 0; i < liveKeys.length; i += 999)
         await permanentDeleteBatch(liveKeys.slice(i, i + 999))
     }

@@ -55,11 +55,27 @@ async function processKey(key: string): Promise<void> {
   })
 }
 
-async function processKeyBatch(keys: string[]): Promise<void> {
+async function processKeyBatch(keys: string[]): Promise<{ succeeded: number, failed: number }> {
+  let succeeded = 0
+  let failed = 0
+
   for (let i = 0; i < keys.length; i += CONCURRENCY) {
     const batch = keys.slice(i, i + CONCURRENCY)
-    await Promise.all(batch.map(key => processKey(key)))
+    const results = await Promise.allSettled(batch.map(key => processKey(key)))
+    for (const [index, result] of results.entries()) {
+      if (result.status === 'fulfilled') {
+        succeeded += 1
+        continue
+      }
+
+      failed += 1
+      console.error(`Failed to process ${batch[index]}:`, result.reason)
+      if (deleteMode === 'trash')
+        throw result.reason
+    }
   }
+
+  return { succeeded, failed }
 }
 
 async function processFolder() {
@@ -86,18 +102,9 @@ async function processFolder() {
       return
     }
 
-    for (const key of batch) {
-      try {
-        await processKey(key)
-        processedCount += 1
-      }
-      catch (error) {
-        errorCount += 1
-        console.error(`Failed to process ${key}:`, error)
-        if (deleteMode === 'trash')
-          throw error
-      }
-    }
+    const { succeeded, failed } = await processKeyBatch(batch)
+    processedCount += succeeded
+    errorCount += failed
   }
 
   try {
