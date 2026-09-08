@@ -174,6 +174,9 @@ BEGIN
     -- key_id); still allow r2_path writes and the one-shot finalize
     -- (r2-direct -> r2). Blank-checksum in-progress rows stay writable for
     -- upload completion; channel linkage is not the freeze gate.
+    -- r2_path stays mutable while storage_provider = r2-direct (even when
+    -- channel-linked) so finalize can set the object key; only checksum,
+    -- session_key, and key_id are identity-locked here.
     IF OLD.storage_provider = 'r2-direct' THEN
       bundle_identity_locked := (
         NULLIF(BTRIM(COALESCE(OLD.checksum, '')), '') IS NOT NULL
