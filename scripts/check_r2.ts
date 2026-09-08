@@ -3,6 +3,7 @@ import type { _Object, ListObjectsV2CommandOutput } from '@aws-sdk/client-s3'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'// supabase.types.ts'
 import { CopyObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { createClient } from '@supabase/supabase-js'
+import { encodeS3CopySource, getR2TrashKey } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const MAGIC_TO_DELETE = './tmp/magic_to_delete6.txt'
@@ -58,20 +59,56 @@ async function main() {
 
   else if (process.env.DELETE_FILES === '1') {
     const s3 = await initS3()
+    const permanent = process.env.ALLOW_PERMANENT_R2_DELETE === 'true'
+    if (permanent)
+      console.warn('WARNING: ALLOW_PERMANENT_R2_DELETE=true — permanently deleting objects')
+    else
+      console.warn('DELETE_FILES=1: moving objects to 7-day trash (set ALLOW_PERMANENT_R2_DELETE=true for permanent delete)')
+
     const files = JSON.parse(await Bun.file(MAGIC_TO_DELETE).text()) as _Object[]
-    // eslint-disable-next-line style/max-statements-per-line
-    const toDelete = files.map((file) => { return { Key: file.Key ?? '' } })
-    while (toDelete.length > 0) {
-      const chunk = toDelete.splice(0, 999)
-      console.log('delete!')
-      const command = new DeleteObjectsCommand({
-        Bucket: S3_BUCKET,
-        Delete: {
-          Objects: chunk,
-        },
-      })
-      s3.send(command)
+    const keys = files.map(file => file.Key ?? '').filter(Boolean)
+    let errorCount = 0
+
+    if (permanent) {
+      const toDelete = keys.map(key => ({ Key: key }))
+      while (toDelete.length > 0) {
+        const chunk = toDelete.splice(0, 999)
+        console.log('permanent delete batch')
+        try {
+          await s3.send(new DeleteObjectsCommand({
+            Bucket: S3_BUCKET,
+            Delete: { Objects: chunk },
+          }))
+        }
+        catch (error) {
+          console.error('Failed to permanently delete batch:', error)
+          errorCount += chunk.length
+        }
+      }
     }
+    else {
+      for (const key of keys) {
+        const trashKey = getR2TrashKey(key)
+        try {
+          await s3.send(new CopyObjectCommand({
+            Bucket: S3_BUCKET,
+            CopySource: encodeS3CopySource(S3_BUCKET, key),
+            Key: trashKey,
+          }))
+          await s3.send(new DeleteObjectCommand({
+            Bucket: S3_BUCKET,
+            Key: key,
+          }))
+        }
+        catch (error) {
+          console.error(`Failed to trash ${key}:`, error)
+          errorCount += 1
+        }
+      }
+    }
+
+    if (errorCount > 0)
+      process.exit(1)
     return
   }
 

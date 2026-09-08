@@ -3,6 +3,7 @@ import { writeFileSync, existsSync, readFileSync } from 'fs'
 import { S3Client as S3ClientLite } from '@bradenmacdonald/s3-lite-client/'
 import { Pool } from 'pg'
 import { Context } from 'vm'
+import { encodeS3CopySource, getR2TrashKey } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const CHECKPOINT_FILE = './objects_checkpoint.json'
@@ -36,7 +37,7 @@ async function main() {
         console.error('  prepare_cleanup_zip - Find orphaned zip files in R2 with no database records')
         console.error('  copy_cleanup_candidates_to_backup_bucket - Copy cleanup candidates to backup bucket')
         console.error('  copy_cleanup_candidates_direct - Copy cleanup candidates using direct S3 copy (faster but may not work on R2)')
-        console.error('  delete_cleanup_candidates - Delete orphaned files from main bucket (USE WITH CAUTION!)')
+        console.error('  delete_cleanup_candidates - Move orphaned files to 7-day trash (ALLOW_PERMANENT_R2_DELETE=true for permanent)')
         process.exit(1)
     }
 
@@ -1517,8 +1518,14 @@ async function copy_cleanup_candidates_direct() {
 }
 
 async function delete_cleanup_candidates() {
-    console.log('⚠️  DANGER: This will PERMANENTLY DELETE files from the main bucket!')
-    console.log('🔄 Deleting cleanup candidates from main bucket...')
+    const permanent = process.env.ALLOW_PERMANENT_R2_DELETE === 'true'
+    if (permanent) {
+        console.warn('WARNING: ALLOW_PERMANENT_R2_DELETE=true — permanently deleting files from the main bucket!')
+    }
+    else {
+        console.log('Moving cleanup candidates to 7-day trash (set ALLOW_PERMANENT_R2_DELETE=true for permanent delete)')
+    }
+    console.log('🔄 Processing cleanup candidates in the main bucket...')
 
     // Safety check - ensure this is intentional
     console.log('\n🛡️  SAFETY CHECKS:')
@@ -1563,29 +1570,42 @@ async function delete_cleanup_candidates() {
 
     const deleteOperations = toDelete.map(async (file: any, index: number) => {
         try {
-            const deleteCommand = new DeleteObjectCommand({
-                Bucket: S3_BUCKET,
-                Key: file.key
-            })
-
-            await s3.send(deleteCommand)
+            if (permanent) {
+                await s3.send(new DeleteObjectCommand({
+                    Bucket: S3_BUCKET,
+                    Key: file.key,
+                }))
+            }
+            else {
+                const trashKey = getR2TrashKey(file.key)
+                await s3.send(new CopyObjectCommand({
+                    Bucket: S3_BUCKET,
+                    CopySource: encodeS3CopySource(S3_BUCKET, file.key),
+                    Key: trashKey,
+                }))
+                await s3.send(new DeleteObjectCommand({
+                    Bucket: S3_BUCKET,
+                    Key: file.key,
+                }))
+            }
 
             // Log progress every 10 files
             if ((index + 1) % 10 === 0) {
-                console.log(`📊 Progress: ${index + 1}/${toDelete.length} files deleted`)
+                console.log(`📊 Progress: ${index + 1}/${toDelete.length} files processed`)
             }
 
             return {
                 key: file.key,
                 success: true,
-                error: null
+                error: null,
             }
-        } catch (error: any) {
-            console.error(`❌ Error deleting ${file.key}:`, error.message)
+        }
+        catch (error: any) {
+            console.error(`❌ Error processing ${file.key}:`, error.message)
             return {
                 key: file.key,
                 success: false,
-                error: error.message
+                error: error.message,
             }
         }
     })
@@ -1629,12 +1649,15 @@ async function delete_cleanup_candidates() {
 
     console.log(`\n📝 Delete report saved to: ${reportFile}`)
 
+    if (failed.length > 0) {
+        console.log(`\n⚠️  ${failed.length} files failed to process`)
+        console.log('💡 Review failed operations in the report')
+        process.exit(1)
+    }
+
     if (successful.length === toDelete.length) {
-        console.log('\n🎉 All files successfully deleted from main bucket!')
+        console.log(`\n🎉 All files successfully ${permanent ? 'deleted from' : 'moved to trash from'} main bucket!`)
         console.log('✅ Cleanup operation completed successfully')
-    } else {
-        console.log(`\n⚠️  ${failed.length} files failed to delete`)
-        console.log('💡 Review failed deletions in the report')
     }
 
     console.log(`\n📈 Summary:`)
