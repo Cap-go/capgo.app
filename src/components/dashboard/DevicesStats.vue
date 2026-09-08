@@ -748,8 +748,10 @@ async function loadData(forceRefetch = false) {
     && cachedData.range.endDate.getTime() === endDate.getTime()
 
   if (cacheIsValid && !forceRefetch) {
+    requestToken++
     rawChartData.value = cachedData.data
     currentRange.value = cachedData.range
+    isLoading.value = false
     return
   }
 

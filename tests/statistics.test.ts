@@ -151,6 +151,9 @@ describe('[GET] /statistics operations with and without subkey', () => {
   })
 
   it('should get native version usage statistics without subkey', async () => {
+    const dedicatedApp = `com.stats.native.${randomUUID().replaceAll('-', '')}`
+    await createStatsSiblingApp(dedicatedApp)
+
     const prefix = `native-version-${randomUUID()}`
     const fromDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0]
     const toDate = new Date().toISOString().split('T')[0]
@@ -164,15 +167,15 @@ describe('[GET] /statistics operations with and without subkey', () => {
     await getSupabaseClient()
       .from('device_usage')
       .insert([
-        { app_id: APPNAME, device_id: `${prefix}-a`, org_id: ORG_ID_STATS, platform: 'ios', timestamp, version_build: versionA },
-        { app_id: APPNAME, device_id: `${prefix}-a`, org_id: ORG_ID_STATS, platform: 'ios', timestamp, version_build: versionA },
-        { app_id: APPNAME, device_id: `${prefix}-b`, org_id: ORG_ID_STATS, platform: 'android', timestamp, version_build: versionA },
-        { app_id: APPNAME, device_id: `${prefix}-c`, org_id: ORG_ID_STATS, platform: 'electron', timestamp, version_build: versionB },
+        { app_id: dedicatedApp, device_id: `${prefix}-a`, org_id: ORG_ID_STATS, platform: 'ios', timestamp, version_build: versionA },
+        { app_id: dedicatedApp, device_id: `${prefix}-a`, org_id: ORG_ID_STATS, platform: 'ios', timestamp, version_build: versionA },
+        { app_id: dedicatedApp, device_id: `${prefix}-b`, org_id: ORG_ID_STATS, platform: 'android', timestamp, version_build: versionA },
+        { app_id: dedicatedApp, device_id: `${prefix}-c`, org_id: ORG_ID_STATS, platform: 'electron', timestamp, version_build: versionB },
       ])
       .throwOnError()
 
     try {
-      const getNativeUsage = await fetch(`${BASE_URL}/statistics/app/${APPNAME}/native_usage?from=${fromDate}&to=${toDate}`, {
+      const getNativeUsage = await fetch(`${BASE_URL}/statistics/app/${dedicatedApp}/native_usage?from=${fromDate}&to=${toDate}`, {
         method: 'GET',
         headers: headersStats,
       })
@@ -197,13 +200,13 @@ describe('[GET] /statistics operations with and without subkey', () => {
         expect(iosVersion?.metaCounts[dayIndex]).toBe(1)
         expect(androidVersion?.metaCounts[dayIndex]).toBe(1)
         expect(electronVersion?.metaCounts[dayIndex]).toBe(1)
-        expect(nativeUsageData.activeDevices?.ios).toBeGreaterThanOrEqual(1)
-        expect(nativeUsageData.activeDevices?.android).toBeGreaterThanOrEqual(1)
-        expect(nativeUsageData.activeDevices?.electron).toBeGreaterThanOrEqual(1)
-        expect(nativeUsageData.activeDevices?.total).toBeGreaterThanOrEqual(3)
-        expect(nativeUsageData.dailyPlatformActive?.ios[dayIndex]).toBeGreaterThanOrEqual(1)
-        expect(nativeUsageData.dailyPlatformActive?.android[dayIndex]).toBeGreaterThanOrEqual(1)
-        expect(nativeUsageData.dailyPlatformActive?.total[dayIndex]).toBeGreaterThanOrEqual(3)
+        expect(nativeUsageData.activeDevices?.ios).toBe(1)
+        expect(nativeUsageData.activeDevices?.android).toBe(1)
+        expect(nativeUsageData.activeDevices?.electron).toBe(1)
+        expect(nativeUsageData.activeDevices?.total).toBe(3)
+        expect(nativeUsageData.dailyPlatformActive?.ios[dayIndex]).toBe(1)
+        expect(nativeUsageData.dailyPlatformActive?.android[dayIndex]).toBe(1)
+        expect(nativeUsageData.dailyPlatformActive?.total[dayIndex]).toBe(3)
       }
     }
     finally {
@@ -212,6 +215,7 @@ describe('[GET] /statistics operations with and without subkey', () => {
         .delete()
         .like('device_id', `${prefix}%`)
         .throwOnError()
+      await deleteAppByAppId(dedicatedApp)
     }
   })
 

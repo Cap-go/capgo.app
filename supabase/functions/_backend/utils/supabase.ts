@@ -1458,7 +1458,7 @@ export async function readStatsVersionSB(c: Context, app_id: string, period_star
 
 export async function readNativeVersionUsageSB(c: Context, app_id: string, period_start: string, period_end: string, supabase: SupabaseClient<Database>): Promise<NativeVersionUsage[]> {
   const { data, error } = await supabase
-    .rpc('read_native_version_usage' as any, { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
+    .rpc('read_native_version_usage', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
 
   if (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native version usage', error })
@@ -1476,7 +1476,7 @@ export async function readNativeActiveDevicesSummarySB(
   supabase: SupabaseClient<Database>,
 ): Promise<NativeActiveDevicesByPlatformRow[]> {
   const { data, error } = await supabase
-    .rpc('read_native_active_devices_summary' as any, { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
+    .rpc('read_native_active_devices_summary', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
 
   if (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native active devices summary', error })
@@ -1497,7 +1497,7 @@ export async function readNativeDailyPlatformActiveSB(
   supabase: SupabaseClient<Database>,
 ): Promise<Array<{ date: string, platform: string, devices: number }>> {
   const { data, error } = await supabase
-    .rpc('read_native_daily_platform_active' as any, { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
+    .rpc('read_native_daily_platform_active', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
 
   if (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native daily platform active', error })
