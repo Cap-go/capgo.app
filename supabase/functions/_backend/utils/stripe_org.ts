@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { Database } from './supabase.types.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { createCustomer } from './stripe.ts'
+import { createCustomer, getNewCustomersBillingAccount, getPlanProductId, planProductIdOrFilter, type BillingAccount } from './stripe.ts'
 import { getDefaultPlan, getStripeCustomer, supabaseAdmin } from './supabase.ts'
 
 type OrgRow = Database['public']['Tables']['orgs']['Row']
@@ -85,7 +85,7 @@ async function deleteUnusedStripeInfo(c: Context, customerId: string) {
   }
 }
 
-async function resolveTrialPlan(c: Context, org: OrgRow) {
+async function resolveTrialPlan(c: Context, org: OrgRow, billingAccount: BillingAccount) {
   const pendingPlan = isPendingStripeCustomerId(org.customer_id)
     ? await getStripeCustomer(c, org.customer_id!).then(async (pendingStripeInfo) => {
         if (!pendingStripeInfo?.product_id)
@@ -93,12 +93,18 @@ async function resolveTrialPlan(c: Context, org: OrgRow) {
         const { data } = await supabaseAdmin(c)
           .from('plans')
           .select()
-          .eq('stripe_id', pendingStripeInfo.product_id)
+          .or(planProductIdOrFilter(pendingStripeInfo.product_id))
           .single()
         return data
       })
     : null
-  return pendingPlan ?? await getDefaultPlan(c)
+  const plan = pendingPlan ?? await getDefaultPlan(c)
+  if (!plan)
+    return null
+  return {
+    ...plan,
+    stripe_id: getPlanProductId(plan, billingAccount),
+  }
 }
 
 async function trialPlanNameForCustomer(c: Context, customerId: string, fallbackPlanName?: string | null) {
@@ -107,7 +113,7 @@ async function trialPlanNameForCustomer(c: Context, customerId: string, fallback
     const { data } = await supabaseAdmin(c)
       .from('plans')
       .select('name')
-      .eq('stripe_id', stripeInfo.product_id)
+      .or(planProductIdOrFilter(stripeInfo.product_id))
       .maybeSingle()
     if (data?.name)
       return data.name
@@ -131,16 +137,17 @@ export async function createStripeCustomer(c: Context, org: OrgRow) {
     return await trialPlanNameForCustomer(c, current.customer_id!)
   }
 
-  const selectedPlan = await resolveTrialPlan(c, current)
+  const billingAccount = getNewCustomersBillingAccount(c)
+  const selectedPlan = await resolveTrialPlan(c, current, billingAccount)
   if (!selectedPlan) {
     cloudlog({ requestId: c.get('requestId'), message: 'no default plan' })
     throw new Error('no default plan')
   }
 
-  const customer = await createCustomer(c, current.management_email, current.created_by, current.id, current.name)
+  const customer = await createCustomer(c, current.management_email, current.created_by, current.id, current.name, billingAccount)
   const trial_at = new Date()
   trial_at.setDate(trial_at.getDate() + 15)
-  cloudlog({ requestId: c.get('requestId'), message: 'createInfo', plan: selectedPlan, customer })
+  cloudlog({ requestId: c.get('requestId'), message: 'createInfo', plan: selectedPlan, customer, billingAccount })
 
   const { error: createInfoError } = await supabaseAdmin(c)
     .from('stripe_info')
@@ -148,6 +155,7 @@ export async function createStripeCustomer(c: Context, org: OrgRow) {
       product_id: selectedPlan.stripe_id,
       customer_id: customer.id,
       trial_at: trial_at.toISOString(),
+      billing_account: billingAccount,
     })
   if (createInfoError && !isUniqueViolation(createInfoError)) {
     cloudlog({ requestId: c.get('requestId'), message: 'createInfoError', createInfoError })

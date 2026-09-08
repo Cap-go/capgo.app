@@ -12,9 +12,13 @@ const {
   supabaseAdminMock: vi.fn(),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({
-  createCustomer: createCustomerMock,
-}))
+vi.mock('../supabase/functions/_backend/utils/stripe.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/stripe.ts')>()
+  return {
+    ...actual,
+    createCustomer: createCustomerMock,
+  }
+})
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   getDefaultPlan: getDefaultPlanMock,
@@ -117,12 +121,14 @@ function mockSupabase(options: {
         }
       }
       if (table === 'plans') {
+        const planQueryResult = {
+          single: async () => ({ data: SOLO_PLAN, error: null }),
+          maybeSingle: async () => ({ data: { name: SOLO_PLAN.name }, error: null }),
+        }
         return {
           select: () => ({
-            eq: () => ({
-              single: async () => ({ data: SOLO_PLAN, error: null }),
-              maybeSingle: async () => ({ data: { name: SOLO_PLAN.name }, error: null }),
-            }),
+            eq: () => planQueryResult,
+            or: () => planQueryResult,
           }),
         }
       }
@@ -282,12 +288,14 @@ describe('createStripeCustomer', () => {
           }
         }
         if (table === 'plans') {
+          const planQueryResult = {
+            single: async () => ({ data: SOLO_PLAN, error: null }),
+            maybeSingle: async () => ({ data: { name: SOLO_PLAN.name }, error: null }),
+          }
           return {
             select: () => ({
-              eq: () => ({
-                single: async () => ({ data: SOLO_PLAN, error: null }),
-                maybeSingle: async () => ({ data: { name: SOLO_PLAN.name }, error: null }),
-              }),
+              eq: () => planQueryResult,
+              or: () => planQueryResult,
             }),
           }
         }

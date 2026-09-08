@@ -355,6 +355,26 @@ describe('stripe redirect URL allowlist', () => {
               },
               error: null,
             }),
+            maybeSingle: vi.fn().mockResolvedValue({
+              data: { billing_account: 'ee' },
+              error: null,
+            }),
+          }),
+          or: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({
+              data: {
+                price_m_id: 'price_monthly_from_plan',
+                price_y_id: 'price_yearly_from_plan',
+              },
+              error: null,
+            }),
+            maybeSingle: vi.fn().mockResolvedValue({
+              data: {
+                price_m_id: 'price_monthly_from_plan',
+                price_y_id: 'price_yearly_from_plan',
+              },
+              error: null,
+            }),
           }),
         }),
       }),

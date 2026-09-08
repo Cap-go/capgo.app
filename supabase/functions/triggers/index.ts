@@ -31,6 +31,7 @@ import { app as pluginNotifications } from '../_backend/triggers/plugin_notifica
 import { app as queue_consumer } from '../_backend/triggers/queue_consumer.ts'
 import { app as send_email } from '../_backend/triggers/send_email.ts'
 import { app as stripe_event } from '../_backend/triggers/stripe_event.ts'
+import { app as stripe_event_us } from '../_backend/triggers/stripe_event_us.ts'
 import { app as webhook_delivery } from '../_backend/triggers/webhook_delivery.ts'
 import { app as webhook_dispatcher } from '../_backend/triggers/webhook_dispatcher.ts'
 import { createAllCatch, createHono } from '../_backend/utils/hono.ts'
@@ -72,6 +73,7 @@ appGlobal.route('/on_version_update', on_version_update)
 appGlobal.route('/on_version_delete', on_version_delete)
 appGlobal.route('/on_manifest_create', on_manifest_create)
 appGlobal.route('/stripe_event', stripe_event)
+appGlobal.route('/stripe_event_us', stripe_event_us)
 appGlobal.route('/on_organization_create', on_organization_create)
 appGlobal.route('/on_org_update', on_org_update)
 appGlobal.route('/cron_stat_app', cron_stat_app)
