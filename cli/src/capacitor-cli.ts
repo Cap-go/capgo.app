@@ -25,7 +25,7 @@ export interface CapacitorCliConfig {
   }
 }
 
-export const requireTS: (typescript: unknown, filePath: string) => Record<string, unknown> = requireTSUntyped
+export const requireTS: (typescript: unknown, filePath: string) => Record<string, unknown> | Promise<Record<string, unknown>> = requireTSUntyped
 // Serializes a config object the way Capacitor formats its own `.ts` writes, so
 // the `.js` config we emit reads identically to the `.ts` one Capacitor produces.
 export const formatJSObject: (value: unknown) => string = formatJSObjectUntyped
