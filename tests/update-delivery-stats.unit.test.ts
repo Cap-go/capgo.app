@@ -215,6 +215,7 @@ describe('update delivery stats helpers', () => {
         return device
       return a.action.localeCompare(b.action)
     })
+    const toSecondMs = (iso: string) => Math.floor(Date.parse(iso) / 1000) * 1000
     const readPage = async (pageParams: {
       start_date: string
       end_date: string
@@ -225,17 +226,17 @@ describe('update delivery stats helpers', () => {
         action: string
       }
     }) => {
-      const startMs = Date.parse(pageParams.start_date)
+      const startMs = toSecondMs(pageParams.start_date)
       const endMs = Date.parse(pageParams.end_date)
       const filtered = sorted.filter((event) => {
-        const ts = Date.parse(event.created_at)
-        if (ts < startMs || ts >= endMs)
+        const ts = toSecondMs(event.created_at)
+        if (ts < startMs || Date.parse(event.created_at) >= endMs)
           return false
         if (!pageParams.after_cursor)
           return true
         const cursor = pageParams.after_cursor
-        const eventTs = Date.parse(event.created_at)
-        const cursorTs = Date.parse(cursor.created_at)
+        const eventTs = toSecondMs(event.created_at)
+        const cursorTs = toSecondMs(cursor.created_at)
         if (eventTs > cursorTs)
           return true
         if (eventTs < cursorTs)

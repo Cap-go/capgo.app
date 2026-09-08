@@ -696,6 +696,15 @@ async function paginateUpdateDeliveryChunkSamples(
     if (page === MAX_DELIVERY_CHUNK_PAGES - 1)
       return { samples, incomplete: true }
 
+    const duplicateBoundaryRows = batch.filter(event =>
+      event.created_at === lastEvent.created_at
+      && event.app_id === lastEvent.app_id
+      && event.device_id === lastEvent.device_id
+      && event.action === lastEvent.action,
+    ).length
+    if (duplicateBoundaryRows > 1)
+      return { samples, incomplete: true }
+
     const nextCursor = {
       created_at: lastEvent.created_at,
       app_id: lastEvent.app_id,
