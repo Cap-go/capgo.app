@@ -92,6 +92,22 @@ describe('stale asset error helpers', () => {
     }, 'https://console.capgo.app/apps')).toBe(false)
   })
 
+  it('does not treat first-party inline theme-script frames as injected code', () => {
+    const themeBootstrap = {
+      stacktrace: {
+        frames: [{ filename: 'https://console.capgo.app/apps', function: 'applyTheme', lineno: 32, colno: 11, in_app: true }],
+      },
+    }
+    expect(isInjectedDocumentCodeException(themeBootstrap, 'https://console.capgo.app/apps')).toBe(false)
+
+    const matchMediaCallback = {
+      stacktrace: {
+        frames: [{ filename: 'https://console.capgo.app/apps', function: '', lineno: 62, colno: 11, in_app: true }],
+      },
+    }
+    expect(isInjectedDocumentCodeException(matchMediaCallback, 'https://console.capgo.app/apps')).toBe(false)
+  })
+
   it('suppresses the console-paste TypeError seen on the apps list page', () => {
     expect(shouldSuppressPostHogExceptionEvent({
       event: '$exception',
@@ -115,6 +131,20 @@ describe('stale asset error helpers', () => {
           value: 'Cannot read properties of undefined (reading \'digest\')',
           stacktrace: {
             frames: [{ filename: 'https://console.capgo.app/assets/apps-DvVF29Ec.js', lineno: 42, colno: 9, in_app: true }],
+          },
+        }],
+      },
+    })).toBe(false)
+
+    // Owned inline theme-script errors (matchMedia change callback) are kept
+    expect(shouldSuppressPostHogExceptionEvent({
+      event: '$exception',
+      properties: {
+        $current_url: 'https://console.capgo.app/apps',
+        $exception_list: [{
+          value: 'Cannot read properties of null (reading \'matches\')',
+          stacktrace: {
+            frames: [{ filename: 'https://console.capgo.app/apps', function: '', lineno: 62, colno: 22, in_app: true }],
           },
         }],
       },

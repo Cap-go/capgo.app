@@ -63,6 +63,8 @@ export function isComponentResolutionErrorMessage(message: string | undefined): 
 
 interface PostHogStackFrame {
   filename?: unknown
+  function?: unknown
+  lineno?: unknown
   in_app?: unknown
 }
 
@@ -91,10 +93,42 @@ function stripUrlQueryAndHash(url: string | undefined): string | undefined {
   return cutIndex === -1 ? url : url.slice(0, cutIndex)
 }
 
+// First-party inline script in index.html (theme bootstrap before Vue loads).
+const FIRST_PARTY_INLINE_FRAME_FUNCTIONS = new Set([
+  'applyTheme',
+  '__setTheme',
+])
+
+function isDocumentUrlFrame(frame: PostHogStackFrame, documentUrl: string): boolean {
+  return stripUrlQueryAndHash(typeof frame.filename === 'string' ? frame.filename : undefined) === documentUrl
+}
+
+function isFirstPartyInlineFrame(frame: PostHogStackFrame): boolean {
+  const func = typeof frame.function === 'string' ? frame.function : ''
+  return FIRST_PARTY_INLINE_FRAME_FUNCTIONS.has(func)
+}
+
+// Console paste, extensions, and AI browser agents typically surface as
+// `global code` at line 1 on the page URL. Require that signature so we do not
+// drop real errors from our owned inline theme script, which also stacks against
+// the document URL but uses normal function names and line numbers.
+function hasInjectedCodeFrameSignature(frame: PostHogStackFrame): boolean {
+  const func = typeof frame.function === 'string' ? frame.function : ''
+  const lineno = typeof frame.lineno === 'number' ? frame.lineno : undefined
+
+  if (func === 'global code' || func === 'eval' || func === 'eval code')
+    return true
+
+  if (lineno === 1 && (func === '' || func === '<anonymous>' || func === 'global code'))
+    return true
+
+  return false
+}
+
 // A snippet pasted into the browser console, injected by an extension, or run by
-// an AI browser agent surfaces as an $exception whose only in-app frame points at
-// the HTML document itself. Code we ship always runs from a hashed chunk under
-// `/assets/`, so an in-app frame whose file is the page URL is never ours.
+// an AI browser agent surfaces as an $exception whose in-app frames all point at
+// the HTML document with a console/eval signature. Bundled app code runs from
+// hashed chunks under `/assets/`; our inline theme bootstrap is allowlisted.
 export function isInjectedDocumentCodeException(exception: PostHogExceptionLike | undefined, currentUrl: unknown): boolean {
   const documentUrl = stripUrlQueryAndHash(typeof currentUrl === 'string' ? currentUrl : undefined)
   if (!documentUrl)
@@ -108,9 +142,13 @@ export function isInjectedDocumentCodeException(exception: PostHogExceptionLike 
   if (inAppFrames.length === 0)
     return false
 
-  return inAppFrames.every(frame =>
-    stripUrlQueryAndHash(typeof frame.filename === 'string' ? frame.filename : undefined) === documentUrl,
-  )
+  if (!inAppFrames.every(frame => isDocumentUrlFrame(frame, documentUrl)))
+    return false
+
+  if (inAppFrames.some(frame => isFirstPartyInlineFrame(frame)))
+    return false
+
+  return inAppFrames.some(frame => hasInjectedCodeFrameSignature(frame))
 }
 
 export function shouldSuppressPostHogExceptionEvent(event: PostHogEventLike): boolean {
