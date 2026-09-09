@@ -46,8 +46,8 @@ ADD CONSTRAINT "orgs_onboarding_valid" CHECK (
   AND (
     (NOT ("onboarding" ? 'intent'::"text"))
     OR (
-      ("jsonb_typeof"(("onboarding" -> 'intent'::"text")) = 'string'::"text")
-      AND (("onboarding" ->> 'intent'::"text") = ANY (ARRAY['unknown'::"text", 'ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text", 'publish'::"text"]))
+      ("onboarding" ->> 'intent'::"text")
+      = ANY (ARRAY['unknown'::"text", 'ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text", 'publish'::"text"])
     )
   )
   AND (
