@@ -175,16 +175,10 @@ async function openTab(tab: Tab) {
     if (wasCanceled)
       return
     // Primary = stay in setup (safe default). Secondary = explore anyway.
-    if (dialogStore.lastButtonRole === 'primary') {
-      const stepQuery = typeof route.query.step === 'string' ? { step: route.query.step } : {}
-      if (onboardingResumeAppId) {
-        return router.push({
-          path: '/app/new',
-          query: { resume: onboardingResumeAppId, ...stepQuery },
-        })
-      }
-      return router.push({ path: '/app/new', query: stepQuery })
-    }
+    // Already on an active pre-create route when this dialog fires — do not
+    // navigate away (esp. /onboarding/organization?org=&step=logo|invite).
+    if (dialogStore.lastButtonRole === 'primary')
+      return
     if (dialogStore.lastButtonRole !== 'secondary')
       return
 
