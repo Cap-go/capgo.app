@@ -130,17 +130,14 @@ function isPreCreateOnboardingPath(
 ) {
   if (!path)
     return false
+  if (path === '/app/new' || path === '/onboarding/app')
+    return true
   // /onboarding/organization is shared: first-app create hard-gates, but
-  // org-switcher / add-another-org should not.
-  if (
-    (path === '/onboarding/organization' || path.startsWith('/onboarding/organization/'))
-    && options?.source === 'org-switcher'
-  ) {
-    return false
-  }
-  return path === '/app/new'
-    || path === '/onboarding/app'
-    || path.startsWith('/onboarding/')
+  // org-switcher / add-another-org should not. Other /onboarding/* routes
+  // (invitation, set_password, …) are not first-app create.
+  if (path === '/onboarding/organization' || path.startsWith('/onboarding/organization/'))
+    return options?.source !== 'org-switcher'
+  return false
 }
 
 export function shouldConfirmOnboardingDashboardExploration(options: {
