@@ -2012,11 +2012,11 @@
       "valid": true
     },
     {
-      "definition": "CHECK (jsonb_typeof(onboarding) = 'object'::text AND (NOT onboarding ? 'intent'::text OR jsonb_typeof(onboarding -> 'intent'::text) = 'string'::text AND ((onboarding ->> 'intent'::text) = ANY (ARRAY['unknown'::text, 'ota'::text, 'builder'::text, 'both'::text, 'exploring'::text, 'publish'::text]))) AND (NOT onboarding ? 'development_environment'::text OR jsonb_typeof(onboarding -> 'development_environment'::text) = 'string'::text AND ((onboarding ->> 'development_environment'::text) = ANY (ARRAY['hosted_builder'::text, 'ai_assistant'::text, 'hand_coded'::text, 'other'::text, 'local_project'::text, 'exploring'::text, 'skipped'::text])))) NOT VALID",
+      "definition": "CHECK (jsonb_typeof(onboarding) = 'object'::text AND (NOT onboarding ? 'intent'::text OR jsonb_typeof(onboarding -> 'intent'::text) = 'string'::text AND ((onboarding ->> 'intent'::text) = ANY (ARRAY['unknown'::text, 'ota'::text, 'builder'::text, 'both'::text, 'exploring'::text, 'publish'::text]))) AND (NOT onboarding ? 'development_environment'::text OR jsonb_typeof(onboarding -> 'development_environment'::text) = 'string'::text AND ((onboarding ->> 'development_environment'::text) = ANY (ARRAY['hosted_builder'::text, 'ai_assistant'::text, 'hand_coded'::text, 'other'::text, 'local_project'::text, 'exploring'::text, 'skipped'::text]))))",
       "name": "orgs_onboarding_valid",
       "table": "orgs",
       "type": "c",
-      "valid": false
+      "valid": true
     },
     {
       "definition": "CHECK (password_policy_config IS NULL OR jsonb_typeof(password_policy_config) = 'object'::text AND (NOT password_policy_config ? 'min_length'::text OR jsonb_typeof(password_policy_config -> 'min_length'::text) = 'number'::text AND ((password_policy_config ->> 'min_length'::text)::numeric) = trunc((password_policy_config ->> 'min_length'::text)::numeric) AND ((password_policy_config ->> 'min_length'::text)::numeric) >= 6::numeric AND ((password_policy_config ->> 'min_length'::text)::numeric) <= 72::numeric))",

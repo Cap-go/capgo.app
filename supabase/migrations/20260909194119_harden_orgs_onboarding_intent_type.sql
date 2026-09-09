@@ -1,3 +1,10 @@
+-- Rows written after 20260909163000 can carry JSON null intent: the interim orgs
+-- CHECK only enforced allowed text values via ->>, and SQL NULL passes CHECK.
+UPDATE "public"."orgs"
+SET "onboarding" = "onboarding" - 'intent'
+WHERE ("onboarding" ? 'intent'::"text")
+  AND ("jsonb_typeof"(("onboarding" -> 'intent'::"text")) IS DISTINCT FROM 'string'::"text");
+
 ALTER TABLE "public"."orgs"
 DROP CONSTRAINT IF EXISTS "orgs_onboarding_valid";
 
@@ -19,3 +26,6 @@ ADD CONSTRAINT "orgs_onboarding_valid" CHECK (
     )
   )
 ) NOT VALID;
+
+ALTER TABLE "public"."orgs"
+VALIDATE CONSTRAINT "orgs_onboarding_valid";
