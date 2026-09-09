@@ -68,6 +68,7 @@ describe('pre-organization onboarding v3', () => {
     expect(metadataImport).toContain('storeAppIdLookupFailed.value = appIdLookupFailed')
     expect(metadataImport).not.toContain("throw new Error('Apple lookup did not return an App ID')")
     expect(onboardingSource).toContain('const shouldShowStoreAppIdLookupWarning = computed(() => storeAppIdLookupFailed.value && !manualAppId.value.trim())')
+    expect(sliceBetween(onboardingSource, 'function onStoreUrlInput', 'function onIconStoreUrlInput')).toContain('storeAppIdLookupFailed.value = false')
     expect(metadataImport.indexOf('storeAppNamePreview.value =')).toBeLessThan(metadataImport.indexOf('await fetchAppleBundleId(requestedUrl)'))
     expect(metadataImport.indexOf('storeIconPreview.value = importedIcon')).toBeLessThan(metadataImport.indexOf('await fetchAppleBundleId(requestedUrl)'))
     expect(metadataImport).toContain('const manualAppIdAtRequest = manualAppId.value')

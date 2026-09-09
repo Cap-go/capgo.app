@@ -1500,6 +1500,7 @@ function onAppIdInput(event: Event) {
 }
 
 function onStoreUrlInput(event: Event) {
+  storeAppIdLookupFailed.value = false
   detailsFieldTracker.schedule('onboarding_store_url_entered', 'store_url', 'app_id', (event.target as HTMLInputElement).value)
 }
 
