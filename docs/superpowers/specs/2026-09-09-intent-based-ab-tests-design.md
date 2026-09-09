@@ -110,8 +110,9 @@ Bento reconciliation from the latest committed user state:
    branch tags, which also cleans up historical drift.
 3. The endpoint rereads the committed state under another short, bounded lock.
    If the desired tags changed while Bento was running, it repeats with the
-   newest state. This prevents a slower request from leaving stale tags without
-   holding a database lock across network latency.
+   newest state, up to three delivery attempts within the same five-second
+   deadline. This prevents a slower request from leaving stale tags without
+   holding a database lock across network latency or retrying indefinitely.
 
 A Bento, timeout, or reconciliation-read failure is logged but does not restore
 an ineligible database assignment or fail the otherwise successful endpoint

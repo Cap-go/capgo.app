@@ -32,6 +32,7 @@ type AssignmentAudienceUser = Pick<Database['public']['Tables']['users']['Row'],
 type AssignmentUser = AssignmentAudienceUser & Record<string, unknown> & { abtests: unknown }
 type SyncUser = Pick<Database['public']['Tables']['users']['Row'], 'created_via_invite' | 'id'>
 const AB_TEST_BRANCHES = ['A', 'B', 'C', 'D'] as const
+const BENTO_AB_TEST_SYNC_MAX_ATTEMPTS = 3
 const BENTO_AB_TEST_SYNC_TIMEOUT_MS = 5_000
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -340,7 +341,9 @@ async function syncCurrentUserABTestTags(
   try {
     const signal = AbortSignal.timeout(BENTO_AB_TEST_SYNC_TIMEOUT_MS)
     let user = await readLockedABTestUser(drizzle, userId)
-    while (user) {
+    let attempt = 0
+    while (user && attempt < BENTO_AB_TEST_SYNC_MAX_ATTEMPTS) {
+      attempt += 1
       const tagUpdate = buildBentoTagUpdate(user)
       if (!tagUpdate)
         return

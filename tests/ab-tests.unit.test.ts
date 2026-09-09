@@ -645,6 +645,37 @@ describe('new-user A/B test assignment', () => {
     expect(signal).toBeInstanceOf(AbortSignal)
   })
 
+  it('caps Bento reconciliation attempts when the desired state keeps changing', async () => {
+    const module = await loadABTestsModule()
+    installIntentTest(module)
+    const standardAssignments = persistedAssignments({ development: 'D', emails: 'B', publish: 'B' })
+    const assigned = {
+      ...standardAssignments,
+      [INTENT_TEST_NAME]: intentAssignment(),
+    }
+    const context = { get: vi.fn(() => 'request-id') } as never
+    drizzleExecuteMock
+      .mockResolvedValueOnce({ rows: [{ abtests: standardAssignments, created_via_invite: false, email: 'User@Example.com', intent: 'ota' }] })
+      .mockResolvedValueOnce({ rows: [{ abtests: assigned }] })
+
+    for (const branch of ['A', 'B', 'A', 'B'] as const) {
+      queueBentoSnapshot({
+        abtests: {
+          ...standardAssignments,
+          [INTENT_TEST_NAME]: intentAssignment(branch),
+        },
+        created_via_invite: false,
+        email: 'User@Example.com',
+        intent: 'ota',
+      })
+    }
+
+    await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(assigned)
+
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledTimes(3)
+    expect(drizzleTransactionMock).toHaveBeenCalledTimes(5)
+  })
+
   it('treats a malformed current branch as unassigned during Bento reconciliation', async () => {
     const module = await loadABTestsModule()
     installIntentTest(module)
