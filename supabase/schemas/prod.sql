@@ -3178,8 +3178,17 @@ CREATE OR REPLACE FUNCTION "public"."check_org_members_2fa_enabled"("org_id" "uu
     SET "search_path" TO ''
     AS $$
 BEGIN
-  IF NOT public.is_internal_request_role(public.current_request_role())
-    AND (
+  -- Internal callers keep a distinguishable missing-org signal; non-internal
+  -- callers still collapse missing-org into NO_RIGHTS (anon oracle closed).
+  IF public.is_internal_request_role(public.current_request_role()) THEN
+    IF NOT EXISTS (
+      SELECT 1
+      FROM public.orgs
+      WHERE public.orgs.id = check_org_members_2fa_enabled.org_id
+    ) THEN
+      RAISE EXCEPTION 'ORG_NOT_FOUND';
+    END IF;
+  ELSIF (
       NOT EXISTS (
         SELECT 1
         FROM public.orgs
@@ -3220,8 +3229,17 @@ CREATE OR REPLACE FUNCTION "public"."check_org_members_password_policy"("org_id"
     SET "search_path" TO ''
     AS $$
 BEGIN
-  IF NOT public.is_internal_request_role(public.current_request_role())
-    AND (
+  -- Internal callers keep a distinguishable missing-org signal; non-internal
+  -- callers still collapse missing-org into NO_RIGHTS (anon oracle closed).
+  IF public.is_internal_request_role(public.current_request_role()) THEN
+    IF NOT EXISTS (
+      SELECT 1
+      FROM public.orgs
+      WHERE public.orgs.id = check_org_members_password_policy.org_id
+    ) THEN
+      RAISE EXCEPTION 'ORG_NOT_FOUND';
+    END IF;
+  ELSIF (
       NOT EXISTS (
         SELECT 1
         FROM public.orgs
@@ -3244,7 +3262,10 @@ BEGIN
     au.email::text,
     u.first_name::text,
     u.last_name::text,
-    public.user_meets_password_policy(rb.principal_id, check_org_members_password_policy.org_id) AS password_policy_compliant
+    public.user_meets_password_policy(
+      rb.principal_id,
+      check_org_members_password_policy.org_id
+    ) AS password_policy_compliant
   FROM public.role_bindings rb
   JOIN public.roles r ON r.id = rb.role_id
     AND r.scope_type = rb.scope_type
