@@ -103,7 +103,7 @@ bunx vitest run tests/release-scope.test.ts
 
 Expected: all release-scope tests pass.
 
-- [ ] **Step 5: Commit cumulative scope**
+- [x] **Step 5: Commit cumulative scope**
 
 ```bash
 git add scripts/release-scope.ts tests/release-scope.test.ts
@@ -210,7 +210,7 @@ bunx vitest run tests/publish-release.test.ts tests/release-scope.test.ts tests/
 
 Expected: all focused version-workflow tests pass.
 
-- [ ] **Step 6: Commit atomic publication**
+- [x] **Step 6: Commit atomic publication**
 
 ```bash
 git add scripts/publish-release.ts tests/publish-release.test.ts .github/workflows/bump_version.yml tests/capgo-release-workflow.unit.test.ts
@@ -309,7 +309,7 @@ bunx vitest run tests/resolve-deploy-tag.test.ts tests/deploy-scope.test.ts test
 
 Expected: all focused deployment tests pass.
 
-- [ ] **Step 6: Commit latest-tag deployment retries**
+- [x] **Step 6: Commit latest-tag deployment retries**
 
 ```bash
 git add scripts/resolve-deploy-tag.ts tests/resolve-deploy-tag.test.ts .github/workflows/build_and_deploy.yml tests/capgo-release-workflow.unit.test.ts tests/read-replica-release-workflow.unit.test.ts
@@ -322,7 +322,7 @@ git commit -m "fix(ci): rerun deployments from latest tag"
 - Verify all files above
 - Update plan checkboxes as work completes
 
-- [ ] **Step 1: Run formatting and lint**
+- [x] **Step 1: Run formatting and lint**
 
 Run:
 
@@ -332,7 +332,7 @@ bun lint
 
 Expected: exit code 0.
 
-- [ ] **Step 2: Run type checking**
+- [x] **Step 2: Run type checking**
 
 Run:
 
@@ -342,7 +342,7 @@ bun typecheck
 
 Expected: exit code 0.
 
-- [ ] **Step 3: Run the complete focused release suite**
+- [x] **Step 3: Run the complete focused release suite**
 
 Run:
 
@@ -352,7 +352,7 @@ bunx vitest run tests/release-scope.test.ts tests/publish-release.test.ts tests/
 
 Expected: exit code 0 with all tests passing.
 
-- [ ] **Step 4: Inspect the final diff and repository status**
+- [x] **Step 4: Inspect the final diff and repository status**
 
 Run:
 
