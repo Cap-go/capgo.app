@@ -216,6 +216,7 @@ describe('onboarding dashboard redirect', () => {
     })).toBeNull()
   })
 
+  // Invitation/set_password are not first-app create paths (allowlist regression).
   it('confirms console escapes during pre-create onboarding even without resumeAppId', async () => {
     const module = await import('../src/utils/onboardingRedirect.ts')
 
