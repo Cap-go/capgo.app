@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { Database } from '../utils/supabase.types.ts'
 import { S3Client } from '@bradenmacdonald/s3-lite-client'
+import type { RawS3LiteClient } from '../../../../scripts/r2_trash_utils.ts'
 import { conditionalDeleteSource, encodeS3LiteCopySourceKey, isObjectNotFoundError } from '../../../../scripts/r2_trash_utils.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { getManifestStorageCandidateKeys } from './manifest_encoding.ts'
@@ -216,7 +217,7 @@ async function moveObjectToTrash(c: Context, fileId: string) {
     return false
   }
 
-  const deleteResult = await conditionalDeleteSource(client, fileId, afterCopyEtag)
+  const deleteResult = await conditionalDeleteSource(client as RawS3LiteClient, fileId, afterCopyEtag)
   if (deleteResult === 'deleted') {
     cloudlog({ requestId: c.get('requestId'), message: 'moved R2 object to trash', fileId, trashPath })
     return true

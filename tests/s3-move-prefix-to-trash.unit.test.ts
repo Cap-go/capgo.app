@@ -187,7 +187,8 @@ describe('moveObjectsWithPrefixToTrash', () => {
       await new Promise(resolve => setTimeout(resolve, 5))
       inFlight -= 1
     })
-    makeRequest.mockImplementation(async (options: { objectName?: string }) => {
+    makeRequest.mockImplementation(async (...args: unknown[]) => {
+      const options = args[0] as { objectName?: string }
       if (options.objectName)
         deletedSources.add(options.objectName)
       return new Response(null, { status: 204 })
