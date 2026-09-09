@@ -2215,9 +2215,9 @@ async function reportOnboardingPatch(patch: { source?: 'manual' | 'cli' | 'mcp' 
   try {
     if (patch.source)
       reportedSetupSource.value = patch.source
-    const { error } = await supabase.rpc('report_app_onboarding_setup', {
-      p_app_id: app.app_id,
-      p_patch: patch as never,
+    const { error } = await invokeCapgoApi(`app/${encodeURIComponent(app.app_id)}`, {
+      method: 'PUT',
+      body: { onboarding: patch },
     })
     if (error)
       throw error
