@@ -105,16 +105,24 @@ let authHeaders: Record<string, string>
 const apiKeyIds: number[] = []
 
 async function createAppApiKey(name: string, roleName = 'app_preview'): Promise<ApiKeyResponse> {
-  const createResponse = await fetch(`${BASE_URL}/apikey`, {
-    method: 'POST',
-    headers: authHeaders,
-    body: JSON.stringify({
-      name,
-      bindings: await appApiKeyBindings(APPNAME, roleName),
-    }),
+  const body = JSON.stringify({
+    name,
+    bindings: await appApiKeyBindings(APPNAME, roleName),
   })
+  let createResponse: Response | undefined
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    createResponse = await fetch(`${BASE_URL}/apikey`, {
+      method: 'POST',
+      headers: authHeaders,
+      body,
+    })
+    if (createResponse.status !== 502 && createResponse.status !== 503)
+      break
+    console.error(`[createAppApiKey] attempt=${attempt} status=${createResponse.status}`)
+    await new Promise(resolve => setTimeout(resolve, 500 * attempt))
+  }
 
-  expect(createResponse.status).toBe(200)
+  expect(createResponse?.status).toBe(200)
   const apiKey = await createResponse.json<ApiKeyResponse>()
   apiKeyIds.push(apiKey.id)
   expect(apiKey.key).toBeTruthy()
