@@ -1091,6 +1091,7 @@ async function prepare_cleanup_zip() {
         key: string
         size: number
         lastModified: Date | null
+        etag?: string | null
         reason: string
         error: string | null
     }
@@ -1127,6 +1128,7 @@ async function prepare_cleanup_zip() {
                     key: zipFile.Key ?? '',
                     size: zipFile.Size?? 0,
                     lastModified: zipFile.LastModified || null,
+                    etag: zipFile.ETag ?? null,
                     reason: 'No matching app_versions record found',
                     error: null
                 })
@@ -1608,7 +1610,7 @@ async function delete_cleanup_candidates() {
         }
     }
 
-    async function processCandidate(file: { key: string, size?: number, lastModified?: string | Date | null }): Promise<{ key: string, success: boolean, error: string | null, skipped?: boolean }> {
+    async function processCandidate(file: { key: string, size?: number, lastModified?: string | Date | null, etag?: string | null }): Promise<{ key: string, success: boolean, error: string | null, skipped?: boolean }> {
         try {
             let sourceEtag: string | undefined
             try {
@@ -1632,6 +1634,14 @@ async function delete_cleanup_candidates() {
                         }
                     }
                 }
+                if (file.etag && head.ETag && file.etag !== head.ETag) {
+                    return {
+                        key: file.key,
+                        success: false,
+                        error: 'Cleanup candidate stale: object etag changed since prepare_cleanup_zip',
+                        skipped: true,
+                    }
+                }
                 sourceEtag = head.ETag
             }
             catch (headError: any) {
@@ -1645,10 +1655,24 @@ async function delete_cleanup_candidates() {
             }
 
             if (deleteMode === 'permanent') {
-                await s3.send(new DeleteObjectCommand({
-                    Bucket: S3_BUCKET,
-                    Key: file.key,
-                }))
+                try {
+                    await s3.send(new DeleteObjectCommand({
+                        Bucket: S3_BUCKET,
+                        Key: file.key,
+                        IfMatch: sourceEtag,
+                    }))
+                }
+                catch (deleteError: any) {
+                    if (isPreconditionFailedError(deleteError)) {
+                        return {
+                            key: file.key,
+                            success: false,
+                            error: 'Cleanup candidate stale: live object changed before permanent delete',
+                            skipped: true,
+                        }
+                    }
+                    throw deleteError
+                }
             }
             else {
                 const trashKey = getR2TrashKey(file.key)

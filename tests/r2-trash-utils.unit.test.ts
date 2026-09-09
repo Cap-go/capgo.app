@@ -3,10 +3,12 @@ import {
   ConcurrencyLimiter,
   encodeS3CopySource,
   getR2TrashKey,
+  getUniqueR2TrashKey,
   isAlreadyMovedToTrash,
   isLiveR2Key,
   isObjectNotFoundError,
   isPreconditionFailedError,
+  asS3LiteTrashClient,
   moveS3LiteObjectToTrash,
   resolveOpsDeleteMode,
   R2_TRASH_PREFIX,
@@ -39,6 +41,13 @@ describe('getR2TrashKey', () => {
   it('leaves already-trashed keys unchanged', () => {
     const trashed = 'deleted-after-7-days/orgs/org-1/apps/com.test/1.0.0.zip'
     expect(getR2TrashKey(trashed)).toBe(trashed)
+  })
+})
+
+describe('getUniqueR2TrashKey', () => {
+  it('prefixes with a unique suffix to avoid overwriting prior trash copies', () => {
+    expect(getUniqueR2TrashKey('orgs/org-1/a.zip', '1700000000'))
+      .toBe('deleted-after-7-days/1700000000/orgs/org-1/a.zip')
   })
 })
 
@@ -79,6 +88,9 @@ describe('isObjectNotFoundError', () => {
     expect(isObjectNotFoundError({ $metadata: { httpStatusCode: 503 } })).toBe(false)
     expect(isObjectNotFoundError(null)).toBe(false)
     expect(isObjectNotFoundError('NotFound')).toBe(false)
+    expect(isObjectNotFoundError({ status: 404 })).toBe(true)
+    expect(isObjectNotFoundError({ statusCode: 404 })).toBe(true)
+    expect(isObjectNotFoundError({ code: 'not found' })).toBe(true)
   })
 })
 
@@ -97,8 +109,8 @@ describe('moveS3LiteObjectToTrash', () => {
       { sourceKey: 'orgs/org-1/apps/com.test/file%20name.zip' },
       `${R2_TRASH_PREFIX}${key}`,
     )
-    expect(statObject).toHaveBeenCalledTimes(3)
-    expect(deleteObject).toHaveBeenCalledWith(key)
+    expect(statObject).toHaveBeenCalledTimes(2)
+    expect(deleteObject).toHaveBeenCalledWith(key, { ifMatch: etag })
   })
 
   it('skips delete when the live object changes after copy', async () => {
@@ -145,10 +157,34 @@ describe('moveS3LiteObjectToTrash', () => {
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
-  it('recognizes s3-lite not-found error shapes', () => {
-    expect(isObjectNotFoundError({ status: 404 })).toBe(true)
-    expect(isObjectNotFoundError({ statusCode: 404 })).toBe(true)
-    expect(isObjectNotFoundError({ code: 'not found' })).toBe(true)
+  it('returns skipped_changed when delete ifMatch fails', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const etag = '"before"'
+    const copyObject = vi.fn(async () => undefined)
+    const deleteObject = vi.fn(async () => {
+      throw { name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } }
+    })
+    const statObject = vi.fn(async () => ({ etag }))
+
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
+
+    expect(result).toBe('skipped_changed')
+    expect(deleteObject).toHaveBeenCalledWith(key, { ifMatch: etag })
+  })
+})
+
+describe('asS3LiteTrashClient', () => {
+  it('rejects delete when etag changed since preflight stat', async () => {
+    const raw = {
+      copyObject: vi.fn(),
+      statObject: vi.fn(async () => ({ etag: '"after"' })),
+      deleteObject: vi.fn(),
+    }
+    const client = asS3LiteTrashClient(raw)
+
+    await expect(client.deleteObject('key', { ifMatch: '"before"' }))
+      .rejects.toEqual({ name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } })
+    expect(raw.deleteObject).not.toHaveBeenCalled()
   })
 })
 

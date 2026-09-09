@@ -3,7 +3,7 @@ import type { _Object, ListObjectsV2CommandOutput } from '@aws-sdk/client-s3'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'// supabase.types.ts'
 import { CopyObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { createClient } from '@supabase/supabase-js'
-import { ConcurrencyLimiter, encodeS3CopySource, getR2TrashKey, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, resolveOpsDeleteMode } from './r2_trash_utils.ts'
+import { ConcurrencyLimiter, encodeS3CopySource, getR2TrashKey, getUniqueR2TrashKey, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, resolveOpsDeleteMode } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const MAGIC_TO_DELETE = './tmp/magic_to_delete6.txt'
@@ -96,7 +96,10 @@ async function main() {
     }
 
     async function moveKeyToTrash(key: string): Promise<'ok' | 'skipped' | 'failed'> {
-      const trashKey = getR2TrashKey(key)
+      const defaultTrashKey = getR2TrashKey(key)
+      const trashKey = await objectExists(defaultTrashKey)
+        ? getUniqueR2TrashKey(key)
+        : defaultTrashKey
       let sourceEtag: string | undefined
       try {
         const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
@@ -120,7 +123,7 @@ async function main() {
         try {
           const trashExists = await objectExists(trashKey)
           const sourceExists = await objectExists(key)
-          if (isAlreadyMovedToTrash(trashExists, sourceExists))
+          if (isAlreadyMovedToTrash(trashExists, sourceExists) || !sourceExists)
             return 'skipped'
         }
         catch (headError) {

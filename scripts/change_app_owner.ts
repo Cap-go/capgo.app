@@ -3,7 +3,7 @@ import type { Database } from '../supabase/functions/_backend/utils/supabase.typ
 import { ensureFile } from 'https://deno.land/std/fs/ensure_file.ts'
 import { S3Client } from 'https://deno.land/x/s3_lite_client@0.7.0/mod.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js'
-import { moveS3LiteObjectToTrash } from './r2_trash_utils.ts'
+import { asS3LiteTrashClient, moveS3LiteObjectToTrash } from './r2_trash_utils.ts'
 
 const supabaseUrl = 'https://sb.capgo.app'
 const supabaseServiceRole = '***'
@@ -11,7 +11,7 @@ const appToTransfer = 'com.demo.app'
 const newOwnerEmail = 'admin@capgo.app'
 
 async function main() {
-  const s3client = new S3Client({
+  const rawS3client = new S3Client({
     endPoint: '9ee3d7479a3c359681e3fab2c8cb22c0.r2.cloudflarestorage.com',
     useSSL: true,
     region: 'auto',
@@ -19,6 +19,7 @@ async function main() {
     secretKey: '***',
     bucket: 'capgo',
   })
+  const trashClient = asS3LiteTrashClient(rawS3client)
 
   const supabase = createClient<Database>(supabaseUrl, supabaseServiceRole, {
     auth: {
@@ -60,18 +61,18 @@ async function main() {
   }
 
   console.log(`Listing objects for ${oldUserId}`)
-  for await (const obj of s3client.listObjects({ prefix: `apps/${oldUserId}/` })) {
+  for await (const obj of rawS3client.listObjects({ prefix: `apps/${oldUserId}/` })) {
     console.log(`Processing ${obj.key}`)
-    const getObj = await s3client.getObject(obj.key)
+    const getObj = await rawS3client.getObject(obj.key)
     await ensureFile(`/tmp/move-tmp/${obj.key}`)
     const file = await Deno.create(`/tmp/move-tmp/${obj.key}`)
     await getObj.body?.pipeTo(file.writable)
 
-    await s3client.copyObject({ sourceKey: obj.key }, obj.key.replace(oldUserId, newUserId))
+    await rawS3client.copyObject({ sourceKey: obj.key }, obj.key.replace(oldUserId, newUserId))
     try {
-      const trashResult = await moveS3LiteObjectToTrash(s3client, obj.key)
-      if (trashResult === 'skipped_changed')
-        throw new Error(`Copied ${obj.key} to new owner key but live source changed before trash delete`)
+      const trashResult = await moveS3LiteObjectToTrash(trashClient, obj.key)
+      if (trashResult !== 'moved')
+        throw new Error(`Copied ${obj.key} to new owner key but failed to trash source object (${trashResult})`)
     }
     catch (error) {
       throw new Error(`Copied ${obj.key} to new owner key but failed to trash source object`, { cause: error })

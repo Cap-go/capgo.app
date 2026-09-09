@@ -16,6 +16,13 @@ export function getR2TrashKey(sourceKey: string): string {
   return `${R2_TRASH_PREFIX}${sourceKey}`
 }
 
+/** Unique trash destination when the default key already holds a prior deletion. */
+export function getUniqueR2TrashKey(sourceKey: string, suffix = Date.now().toString()): string {
+  if (sourceKey.startsWith(R2_TRASH_PREFIX))
+    return sourceKey
+  return `${R2_TRASH_PREFIX}${suffix}/${sourceKey}`
+}
+
 export function isLiveR2Key(key: string): boolean {
   return !key.startsWith(R2_TRASH_PREFIX)
 }
@@ -27,8 +34,30 @@ export function encodeS3LiteCopySourceKey(key: string): string {
 
 export type S3LiteTrashClient = {
   copyObject: (options: { sourceKey: string }, destinationKey: string) => Promise<unknown>
-  deleteObject: (key: string) => Promise<unknown>
+  deleteObject: (key: string, options?: { ifMatch?: string }) => Promise<unknown>
   statObject: (key: string) => Promise<{ etag: string }>
+}
+
+type RawS3LiteClient = {
+  copyObject: S3LiteTrashClient['copyObject']
+  deleteObject: (key: string) => Promise<unknown>
+  statObject: S3LiteTrashClient['statObject']
+}
+
+/** Wrap s3_lite_client with etag-checked deletes (library has no native If-Match). */
+export function asS3LiteTrashClient(s3client: RawS3LiteClient): S3LiteTrashClient {
+  return {
+    copyObject: (options, destinationKey) => s3client.copyObject(options, destinationKey),
+    statObject: key => s3client.statObject(key),
+    deleteObject: async (key, options) => {
+      if (options?.ifMatch) {
+        const stat = await s3client.statObject(key)
+        if (stat.etag !== options.ifMatch)
+          throw { name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } }
+      }
+      await s3client.deleteObject(key)
+    },
+  }
 }
 
 export type S3LiteTrashMoveResult = 'moved' | 'skipped_missing' | 'skipped_changed'
@@ -71,17 +100,13 @@ export async function moveS3LiteObjectToTrash(s3client: S3LiteTrashClient, key: 
     return 'skipped_changed'
 
   try {
-    const beforeDelete = await s3client.statObject(key)
-    if (sourceEtag && beforeDelete.etag !== sourceEtag)
-      return 'skipped_changed'
+    await s3client.deleteObject(key, sourceEtag ? { ifMatch: sourceEtag } : undefined)
   }
   catch (error) {
-    if (isObjectNotFoundError(error))
-      return 'moved'
+    if (isPreconditionFailedError(error))
+      return 'skipped_changed'
     throw error
   }
-
-  await s3client.deleteObject(key)
   return 'moved'
 }
 

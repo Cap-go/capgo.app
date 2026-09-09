@@ -9,7 +9,7 @@
  */
 /// <reference lib="deno.ns" />
 import { S3Client } from 'https://deno.land/x/s3_lite_client@0.7.0/mod.ts'
-import { ConcurrencyLimiter, isLiveR2Key, moveS3LiteObjectToTrash, resolveOpsDeleteMode, R2_TRASH_PREFIX } from './r2_trash_utils.ts'
+import { asS3LiteTrashClient, ConcurrencyLimiter, isLiveR2Key, moveS3LiteObjectToTrash, resolveOpsDeleteMode, R2_TRASH_PREFIX } from './r2_trash_utils.ts'
 
 const folderToDelete = 'orgs'
 if (!folderToDelete) {
@@ -25,7 +25,7 @@ const deleteMode = resolveOpsDeleteMode({
   ALLOW_PERMANENT_R2_DELETE: Deno.env.get('ALLOW_PERMANENT_R2_DELETE'),
 })
 
-const s3client = new S3Client({
+const rawS3client = new S3Client({
   endPoint: '***.r2.cloudflarestorage.com',
   useSSL: true,
   region: 'auto',
@@ -33,6 +33,8 @@ const s3client = new S3Client({
   secretKey: '***',
   bucket: 'backuptmp',
 })
+
+const s3client = asS3LiteTrashClient(rawS3client)
 
 const limiter = new ConcurrencyLimiter(CONCURRENCY)
 
@@ -51,7 +53,7 @@ async function processKey(key: string): Promise<void> {
     }
 
     console.log(`Permanently deleting: ${key}`)
-    await s3client.deleteObject(key)
+    await rawS3client.deleteObject(key)
   })
 }
 
