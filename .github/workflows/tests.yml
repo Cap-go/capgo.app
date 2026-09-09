@@ -881,7 +881,7 @@ jobs:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 7
     name: Run Cloudflare plugin tests (serial)
     permissions:
       contents: read
@@ -915,7 +915,7 @@ jobs:
       - name: Install dependencies
         run: bun install
       - name: Run Supabase Start
-        run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+        run: bash .github/scripts/start-supabase-worktree-with-retry.sh
       - name: Export isolated test endpoints
         run: |
           {
