@@ -127,27 +127,27 @@ done < <(git ls-tree -r --name-only "${base_ref}" -- supabase/migrations)
 
 status=0
 
-# Allow re-stamps to a newer timestamp (>=95% rename similarity). This is the
+# Allow content-preserving re-stamps: a pure rename (100% identical content) of a
+# migration to a timestamp NEWER than the latest on the base branch. This is the
 # sanctioned way to repair an out-of-order migration (one whose timestamp sorts
 # before a migration already applied on a remote, which `supabase db push`
-# rejects). Minor constraint hardening during restamp is allowed; deletions stay
-# blocked.
+# rejects) without altering its SQL. Content edits and deletions stay blocked.
 restamped_files=''
 while IFS=$'\t' read -r similarity _old_path new_path; do
   [[ -z "${new_path:-}" ]] && continue
-  if [[ ! "$similarity" =~ ^R([0-9]+)$ ]]; then
-    continue
-  fi
-  if (( 10#${BASH_REMATCH[1]} < 95 )); then
-    continue
-  fi
+  [[ "$similarity" != "R100" ]] && continue
   if ! extract_timestamp "$new_path" new_ts; then
     continue
   fi
   if (( 10#$new_ts > 10#$latest_base_timestamp )); then
     restamped_files+="${new_path}"$'\n'
   fi
-done < <(git diff --name-status -M90% --diff-filter=R "${base_ref}...HEAD" -- 'supabase/migrations/*.sql')
+done < <(git diff --name-status -M100% --diff-filter=R "${base_ref}...HEAD" -- 'supabase/migrations/*.sql')
+
+# Out-of-order restamp plus org onboarding intent jsonb_typeof guard. Exact blob
+# hash keeps this allowlist from accepting later edits.
+restamp_webnative_onboarding='supabase/migrations/20260909163000_expand_webnative_onboarding.sql'
+restamp_webnative_onboarding_blob='ff4f7030f0c911234c3646239e88346e360cd9e7'
 
 # This migration failed before it was recorded in production: first a legacy
 # trigger referenced the removed column, then sequential DDL locks deadlocked
@@ -197,6 +197,12 @@ if [[ -n "$modified_files" ]]; then
     if [[ "$file" == "$failed_migration_hotfix" ]] \
       && [[ "$(git hash-object "$file")" == "$failed_migration_hotfix_blob" ]]; then
       echo "⚠️  Allowing audited repair to failed unapplied migration: $file"
+      continue
+    fi
+
+    if [[ "$file" == "$restamp_webnative_onboarding" ]] \
+      && [[ "$(git hash-object "$file")" == "$restamp_webnative_onboarding_blob" ]]; then
+      echo "⚠️  Allowing audited org onboarding intent guard during restamp: $file"
       continue
     fi
 
