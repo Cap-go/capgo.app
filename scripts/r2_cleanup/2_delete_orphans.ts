@@ -139,7 +139,8 @@ async function permanentDeleteBatch(keys: string[]): Promise<void> {
     totalErrors += batchErrors.length
     totalProcessed += liveKeys.length - batchErrors.length
   }
-  catch {
+  catch (error) {
+    console.error(`Failed to permanently delete batch (${liveKeys.length} keys):`, error)
     totalErrors += liveKeys.length
   }
 }

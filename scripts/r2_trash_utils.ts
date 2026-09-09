@@ -60,8 +60,7 @@ export function isObjectNotFoundError(error: unknown): boolean {
   if (err.$metadata?.httpStatusCode === 404)
     return true
 
-  const code = err.name ?? err.Code
-  return code === 'NotFound' || code === 'NoSuchKey' || code === '404'
+  return [err.name, err.Code].some(code => code === 'NotFound' || code === 'NoSuchKey' || code === '404')
 }
 
 export class ConcurrencyLimiter {

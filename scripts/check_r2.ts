@@ -59,7 +59,6 @@ async function main() {
   }
 
   else if (process.env.DELETE_FILES === '1') {
-    const s3 = await initS3()
     const deleteMode = resolveOpsDeleteMode({
       DRY_RUN: process.env.DRY_RUN,
       ALLOW_PERMANENT_R2_DELETE: process.env.ALLOW_PERMANENT_R2_DELETE,
@@ -74,6 +73,8 @@ async function main() {
         console.log(`Would process: ${key}`)
       return
     }
+
+    const s3 = await initS3()
 
     if (deleteMode === 'permanent')
       console.warn('WARNING: ALLOW_PERMANENT_R2_DELETE=true — permanently deleting objects')
@@ -364,7 +365,16 @@ export function initS3() {
     // signingEscapePath: storageEndpoint !== '127.0.0.1:54321/storage/v1/s3',
   }
 
-  console.log({ message: 'initS3', params })
+  console.log({
+    message: 'initS3',
+    params: {
+      ...params,
+      credentials: {
+        accessKeyId: access_key_id,
+        secretAccessKey: '[redacted]',
+      },
+    },
+  })
 
   return new S3Client({ ...params })
 }

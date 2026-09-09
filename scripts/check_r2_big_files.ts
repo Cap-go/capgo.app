@@ -1720,8 +1720,8 @@ async function delete_cleanup_candidates() {
     }
 
     console.log(`\n📈 Summary:`)
-    console.log(`   📦 Files deleted: ${successful.length}/${toDelete.length}`)
-    console.log(`   💾 Size deleted: ${totalSizeGB} GB`)
+    console.log(`   📦 Files ${deleteMode === 'permanent' ? 'deleted' : 'moved to trash'}: ${successful.length}/${toDelete.length}`)
+    console.log(`   💾 Size ${deleteMode === 'permanent' ? 'deleted' : 'moved to trash'}: ${totalSizeGB} GB`)
     console.log(`   📁 Source bucket: ${S3_BUCKET}`)
 }
 
