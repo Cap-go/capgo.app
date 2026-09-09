@@ -29,7 +29,7 @@
 - Modify: `tests/release-scope.test.ts`
 - Modify: `scripts/release-scope.ts`
 
-- [ ] **Step 1: Replace the push-only regression with failing cumulative-scope tests**
+- [x] **Step 1: Replace the push-only regression with failing cumulative-scope tests**
 
 Add tests that call a new `resolvePendingReleaseScope()` API. The key case must model a Capgo change followed by a CLI-only triggering commit and expect the Capgo change to remain releasable:
 
@@ -53,7 +53,7 @@ and alpha resolution invokes:
 ['describe', '--tags', '--match', 'capgo-*-alpha.*', '--abbrev=0', 'head']
 ```
 
-- [ ] **Step 2: Run the focused test and verify it fails**
+- [x] **Step 2: Run the focused test and verify it fails**
 
 Run:
 
@@ -63,7 +63,7 @@ bunx vitest run tests/release-scope.test.ts
 
 Expected: failure because `resolvePendingReleaseScope` is not exported.
 
-- [ ] **Step 3: Implement latest-tag scope resolution**
+- [x] **Step 3: Implement latest-tag scope resolution**
 
 Add the following public result and resolver shape to `scripts/release-scope.ts`:
 
@@ -93,7 +93,7 @@ bun scripts/release-scope.ts <component> --latest-alpha <after>
 
 and emit `base=`, `should_release=`, and `release_as=`.
 
-- [ ] **Step 4: Run the focused tests**
+- [x] **Step 4: Run the focused tests**
 
 Run:
 

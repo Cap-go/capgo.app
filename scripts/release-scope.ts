@@ -5,6 +5,12 @@ export type Component = 'capgo' | 'cli' | 'notifications'
 export type ReleaseAs = 'patch' | 'minor' | 'major'
 type GitRunner = (args: string[]) => string
 
+export interface PendingReleaseScope {
+  base: string | null
+  releaseAs: ReleaseAs
+  shouldRelease: boolean
+}
+
 const capgoRootMatchers = [
   /^package\.json$/,
   /^bun\.lock$/,
@@ -132,9 +138,8 @@ export function toReleaseAs(severity: number): ReleaseAs {
 
   return 'patch'
 }
-export function resolveReleaseScope(component: Component, before: string, after: string, run: GitRunner = runGit) {
-  const commits = getCommitShas(before, after, run)
 
+function resolveCommitsScope(component: Component, commits: string[], run: GitRunner) {
   let shouldRelease = false
   let highestSeverity = 0
 
@@ -151,22 +156,71 @@ export function resolveReleaseScope(component: Component, before: string, after:
 
   return {
     shouldRelease,
-    releaseAs: shouldRelease ? toReleaseAs(highestSeverity) : 'patch',
+    releaseAs: shouldRelease ? toReleaseAs(highestSeverity) : 'patch' as ReleaseAs,
+  }
+}
+
+export function resolveReleaseScope(component: Component, before: string, after: string, run: GitRunner = runGit) {
+  const commits = getCommitShas(before, after, run)
+
+  return resolveCommitsScope(component, commits, run)
+}
+
+export function resolvePendingReleaseScope(
+  component: Component,
+  after: string,
+  includePrereleaseTags: boolean,
+  run: GitRunner = runGit,
+): PendingReleaseScope {
+  const describeArgs = includePrereleaseTags
+    ? ['describe', '--tags', '--match', `${component}-*-alpha.*`, '--abbrev=0', after]
+    : [
+        'describe',
+        '--tags',
+        '--match',
+        `${component}-[0-9]*`,
+        '--exclude',
+        `${component}-*-alpha.*`,
+        '--abbrev=0',
+        after,
+      ]
+
+  let base: string | null = null
+  try {
+    base = run(describeArgs) || null
+  }
+  catch {
+    base = null
+  }
+
+  const range = base ? `${base}..${after}` : after
+  const commitsOutput = run(['rev-list', '--reverse', range])
+  const commits = commitsOutput ? commitsOutput.split('\n').filter(Boolean) : []
+  const scope = resolveCommitsScope(component, commits, run)
+
+  return {
+    base,
+    ...scope,
   }
 }
 
 if (import.meta.main) {
   const componentArg = process.argv[2]
-  const before = process.argv[3] ?? ''
+  const modeOrBefore = process.argv[3] ?? ''
   const after = process.argv[4] ?? 'HEAD'
 
   if (componentArg !== 'capgo' && componentArg !== 'cli' && componentArg !== 'notifications') {
-    console.error('Usage: bun scripts/release-scope.ts <capgo|cli|notifications> [before] [after]')
+    console.error('Usage: bun scripts/release-scope.ts <capgo|cli|notifications> [--latest-stable|--latest-alpha|before] [after]')
     process.exit(1)
   }
 
-  const scope = resolveReleaseScope(componentArg, before, after)
+  const isLatestMode = modeOrBefore === '--latest-stable' || modeOrBefore === '--latest-alpha'
+  const scope = isLatestMode
+    ? resolvePendingReleaseScope(componentArg, after, modeOrBefore === '--latest-alpha')
+    : resolveReleaseScope(componentArg, modeOrBefore, after)
 
+  if ('base' in scope)
+    console.log(`base=${scope.base ?? ''}`)
   console.log(`should_release=${scope.shouldRelease}`)
   console.log(`release_as=${scope.releaseAs}`)
 }

@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { matchesComponent, resolveReleaseScope } from '../scripts/release-scope.ts'
+import {
+  matchesComponent,
+  resolvePendingReleaseScope,
+  resolveReleaseScope,
+} from '../scripts/release-scope.ts'
 
 describe('release scope matching', () => {
   it.concurrent('does not publish packages for release infrastructure changes', () => {
@@ -150,34 +154,124 @@ describe('release scope matching', () => {
     expect(matchesComponent('notifications', files)).toBe(false)
   })
 
-  it.concurrent('only evaluates component paths from the current push', () => {
-    for (const [component, previousTag, componentFile] of [
-      ['cli', 'cli-8.25.11', 'cli/src/posthog.ts'],
-      ['notifications', 'notifications-0.1.10', 'packages/capacitor-notifications/src/index.ts'],
-    ] as const) {
-      const run = (args: string[]) => {
-        const key = args.join(' ')
-        const responses: Record<string, string> = {
-          [`describe --tags --match ${component}-[0-9]* --abbrev=0 head-capgo-only`]: previousTag,
-          [`rev-list --reverse ${previousTag}..head-capgo-only`]: `${component}-change\ncapgo-change`,
-          'rev-list --reverse current-push-parent..head-capgo-only': 'capgo-change',
-          [`show --format= --name-only ${component}-change`]: componentFile,
-          'show --format= --name-only capgo-change': 'src/pages/index.vue',
-          [`log -1 --format=%s ${component}-change`]: `feat(${component}): previous change`,
-          [`log -1 --format=%b ${component}-change`]: '',
-        }
-
-        if (key in responses) {
-          return responses[key]
-        }
-
-        throw new Error(`Unexpected git call: ${key}`)
+  it.concurrent('keeps earlier failed component changes pending after a later merge', () => {
+    const run = (args: string[]) => {
+      const key = args.join(' ')
+      const responses: Record<string, string> = {
+        'describe --tags --match capgo-[0-9]* --exclude capgo-*-alpha.* --abbrev=0 head-cli-only': 'capgo-12.0.0',
+        'rev-list --reverse capgo-12.0.0..head-cli-only': 'capgo-change\ncli-change',
+        'show --format= --name-only capgo-change': 'src/pages/index.vue',
+        'show --format= --name-only cli-change': 'cli/src/index.ts',
+        'log -1 --format=%s capgo-change': 'feat: pending console change',
+        'log -1 --format=%b capgo-change': '',
       }
 
-      expect(resolveReleaseScope(component, 'current-push-parent', 'head-capgo-only', run)).toEqual({
-        shouldRelease: false,
-        releaseAs: 'patch',
-      })
+      if (key in responses) {
+        return responses[key]
+      }
+
+      throw new Error(`Unexpected git call: ${key}`)
     }
+
+    expect(resolvePendingReleaseScope('capgo', 'head-cli-only', false, run)).toEqual({
+      base: 'capgo-12.0.0',
+      shouldRelease: true,
+      releaseAs: 'minor',
+    })
+  })
+
+  it.concurrent('uses the latest stable component tag as the production baseline', () => {
+    const calls: string[][] = []
+    const run = (args: string[]) => {
+      calls.push(args)
+      const key = args.join(' ')
+      const responses: Record<string, string> = {
+        'describe --tags --match cli-[0-9]* --exclude cli-*-alpha.* --abbrev=0 head': 'cli-8.50.2',
+        'rev-list --reverse cli-8.50.2..head': '',
+      }
+
+      if (key in responses) {
+        return responses[key]
+      }
+
+      throw new Error(`Unexpected git call: ${key}`)
+    }
+
+    expect(resolvePendingReleaseScope('cli', 'head', false, run)).toEqual({
+      base: 'cli-8.50.2',
+      shouldRelease: false,
+      releaseAs: 'patch',
+    })
+    expect(calls).toContainEqual([
+      'describe',
+      '--tags',
+      '--match',
+      'cli-[0-9]*',
+      '--exclude',
+      'cli-*-alpha.*',
+      '--abbrev=0',
+      'head',
+    ])
+  })
+
+  it.concurrent('uses the latest alpha component tag as the development baseline', () => {
+    const calls: string[][] = []
+    const run = (args: string[]) => {
+      calls.push(args)
+      const key = args.join(' ')
+      const responses: Record<string, string> = {
+        'describe --tags --match notifications-*-alpha.* --abbrev=0 head': 'notifications-0.2.0-alpha.3',
+        'rev-list --reverse notifications-0.2.0-alpha.3..head': '',
+      }
+
+      if (key in responses) {
+        return responses[key]
+      }
+
+      throw new Error(`Unexpected git call: ${key}`)
+    }
+
+    expect(resolvePendingReleaseScope('notifications', 'head', true, run)).toEqual({
+      base: 'notifications-0.2.0-alpha.3',
+      shouldRelease: false,
+      releaseAs: 'patch',
+    })
+    expect(calls).toContainEqual([
+      'describe',
+      '--tags',
+      '--match',
+      'notifications-*-alpha.*',
+      '--abbrev=0',
+      'head',
+    ])
+  })
+
+  it.concurrent('evaluates the full reachable history when no component tag exists', () => {
+    const run = (args: string[]) => {
+      const key = args.join(' ')
+      if (key === 'describe --tags --match capgo-[0-9]* --exclude capgo-*-alpha.* --abbrev=0 first-head') {
+        throw new Error('fatal: No names found, cannot describe anything.')
+      }
+
+      const responses: Record<string, string> = {
+        'rev-list --reverse first-head': 'root\nfirst-head',
+        'show --format= --name-only root': 'README.md',
+        'show --format= --name-only first-head': 'src/main.ts',
+        'log -1 --format=%s first-head': 'fix: first release',
+        'log -1 --format=%b first-head': '',
+      }
+
+      if (key in responses) {
+        return responses[key]
+      }
+
+      throw new Error(`Unexpected git call: ${key}`)
+    }
+
+    expect(resolvePendingReleaseScope('capgo', 'first-head', false, run)).toEqual({
+      base: null,
+      shouldRelease: true,
+      releaseAs: 'patch',
+    })
   })
 })
