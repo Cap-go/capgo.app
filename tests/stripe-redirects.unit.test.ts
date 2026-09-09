@@ -70,6 +70,7 @@ function mockBillingAccountLookup(billingAccount = 'ee') {
 
 afterEach(() => {
   delete mockedEnv.STRIPE_API_BASE_URL
+  mockedEnv.STRIPE_SECRET_KEY = 'sk_test_123'
   mockedSupabaseAdmin.mockReset()
   vi.restoreAllMocks()
 })
@@ -120,7 +121,6 @@ describe('stripe redirect URL allowlist', () => {
 
     expect(result.url).toBe('')
     expect(createSession).not.toHaveBeenCalled()
-    mockedEnv.STRIPE_SECRET_KEY = 'sk_test_123'
   })
 
   it('rejects external return URLs for billing portal', async () => {
