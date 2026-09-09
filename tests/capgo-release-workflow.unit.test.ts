@@ -1,5 +1,20 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
+
+interface WorkflowStep {
+  name?: string
+  uses?: string
+  with?: Record<string, string>
+}
+
+interface WorkflowJob {
+  steps?: WorkflowStep[]
+}
+
+interface WorkflowDefinition {
+  jobs?: Record<string, WorkflowJob>
+}
 
 const workflowPaths = {
   bump: new URL('../.github/workflows/bump_version.yml', import.meta.url),
@@ -10,6 +25,10 @@ const workflowPaths = {
 
 async function readWorkflow(path: URL): Promise<string> {
   return readFile(path, 'utf8')
+}
+
+function parseWorkflow(source: string): WorkflowDefinition {
+  return parse(source) as WorkflowDefinition
 }
 
 function getStep(workflow: string, name: string): string {
@@ -23,23 +42,37 @@ function getStep(workflow: string, name: string): string {
 
 describe('native-aware Capgo release workflow', () => {
   it.concurrent('reruns deployment against the newest immutable environment tag', async () => {
-    const workflow = await readWorkflow(workflowPaths.deploy)
-    const deploymentJobs = workflow.slice(workflow.indexOf('  supabase_deploy:'))
-    const checkoutSteps = deploymentJobs.split('uses: actions/checkout@v6').slice(1)
+    const workflowSource = await readWorkflow(workflowPaths.deploy)
+    const workflow = parseWorkflow(workflowSource)
+    const jobs = workflow.jobs ?? {}
+    const targetCheckout = jobs.changes?.steps?.find(step => step.name === 'Checkout deployment target')
+    const downstreamCheckoutSteps = Object.entries(jobs)
+      .filter(([jobName]) => jobName !== 'changes')
+      .flatMap(([, job]) => job.steps ?? [])
+      .filter(step => step.uses?.startsWith('actions/checkout@'))
+    const allCheckoutSteps = Object.values(jobs)
+      .flatMap(job => job.steps ?? [])
+      .filter(step => step.uses?.startsWith('actions/checkout@'))
 
-    expect(workflow).toContain("group: ${{ github.workflow }}-${{ contains(github.ref_name, '-alpha.') && 'alpha' || 'production' }}")
-    expect(workflow).toContain('cancel-in-progress: false')
-    expect(workflow).toContain('deploy_tag: ${{ steps.target.outputs.deploy_tag }}')
-    expect(workflow).toContain('deploy_sha: ${{ steps.target.outputs.deploy_sha }}')
-    expect(workflow).toContain('is_alpha: ${{ steps.target.outputs.is_alpha }}')
-    expect(workflow).toContain('bun scripts/resolve-deploy-tag.ts')
-    expect(workflow).toContain('bun scripts/deploy-scope.ts "${{ steps.target.outputs.deploy_tag }}"')
-    expect(checkoutSteps.length).toBeGreaterThan(0)
-    for (const checkout of checkoutSteps)
-      expect(checkout.slice(0, 180)).toContain('ref: ${{ needs.changes.outputs.deploy_tag }}')
-    expect(workflow).toContain('tag_name: ${{ needs.changes.outputs.deploy_tag }}')
-    expect(workflow).toContain("prerelease: ${{ needs.changes.outputs.is_alpha == 'true' }}")
-    expect(deploymentJobs).not.toContain('github.ref')
+    expect(workflowSource).toContain("group: ${{ github.workflow }}-${{ contains(github.ref_name, '-alpha.') && 'alpha' || 'production' }}")
+    expect(workflowSource).toContain('cancel-in-progress: false')
+    expect(workflowSource).toContain('deploy_tag: ${{ steps.target.outputs.deploy_tag }}')
+    expect(workflowSource).toContain('deploy_sha: ${{ steps.target.outputs.deploy_sha }}')
+    expect(workflowSource).toContain('is_alpha: ${{ steps.target.outputs.is_alpha }}')
+    expect(workflowSource).toContain('bun scripts/resolve-deploy-tag.ts')
+    expect(workflowSource).toContain('bun scripts/deploy-scope.ts "${{ steps.target.outputs.deploy_tag }}"')
+    expect(targetCheckout).toMatchObject({
+      uses: 'actions/checkout@v6',
+      with: { ref: '${{ steps.target.outputs.deploy_tag }}' },
+    })
+    expect(downstreamCheckoutSteps.length).toBeGreaterThan(0)
+    for (const checkout of downstreamCheckoutSteps)
+      expect(checkout.with?.ref).toBe('${{ needs.changes.outputs.deploy_tag }}')
+    for (const checkout of allCheckoutSteps)
+      expect(checkout.uses).toBe('actions/checkout@v6')
+    expect(workflowSource).toContain('tag_name: ${{ needs.changes.outputs.deploy_tag }}')
+    expect(workflowSource).toContain("prerelease: ${{ needs.changes.outputs.is_alpha == 'true' }}")
+    expect(workflowSource.slice(workflowSource.indexOf('  supabase_deploy:'))).not.toContain('github.ref')
   })
 
   it.concurrent('keeps post-merge tests and publishes release refs atomically', async () => {
