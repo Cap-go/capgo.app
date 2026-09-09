@@ -125,11 +125,18 @@ beforeAll(async () => {
   authHeaders = await getAuthHeaders()
   await resetAndSeedAppData(APPNAME, seedOptions)
   await warmEdgeEndpoint('/apikey', { method: 'GET', headers: authHeaders })
-  await warmEdgeEndpoint('/apikey', {
+  const warmResponse = await fetch(`${BASE_URL}/apikey`, {
     method: 'POST',
     headers: authHeaders,
-    body: JSON.stringify({ name: `warm-${id}`, bindings: [] }),
+    body: JSON.stringify({
+      name: `warm-${id}`,
+      bindings: await appApiKeyBindings(APPNAME, 'app_preview'),
+    }),
   })
+  if (warmResponse.status === 200) {
+    const warmed = await warmResponse.json<ApiKeyResponse>()
+    apiKeyIds.push(warmed.id)
+  }
 })
 
 afterAll(async () => {
