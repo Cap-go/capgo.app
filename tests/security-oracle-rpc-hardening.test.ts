@@ -267,8 +267,8 @@ describe('anonymous oracle RPC hardening', () => {
 
     const orgInviteOutcome = orgInviteUpdate.error?.message ?? orgInviteUpdate.data
     const tmpInviteOutcome = tmpInviteUpdate.error?.message ?? tmpInviteUpdate.data
-    expect(String(orgInviteOutcome)).toMatch(/NO_INVITATION|ROLE_NOT_FOUND|OK/i)
-    expect(String(tmpInviteOutcome)).toMatch(/NO_INVITATION|ROLE_NOT_FOUND|OK/i)
+    expect(String(orgInviteOutcome)).toMatch(/NO_INVITATION|ROLE_NOT_FOUND/i)
+    expect(String(tmpInviteOutcome)).toMatch(/NO_INVITATION|ROLE_NOT_FOUND/i)
   })
 })
 
