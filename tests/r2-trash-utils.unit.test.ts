@@ -95,10 +95,16 @@ describe('isObjectNotFoundError', () => {
   })
 })
 
+type MakeRequestArgs = {
+  method: string
+  objectName: string
+  headers?: Headers
+}
+
 function makeAtomicDeleteClient(etag = '"abc123"') {
   const copyObject = vi.fn(async () => undefined)
   const deleteObject = vi.fn(async () => undefined)
-  const makeRequest = vi.fn(async () => new Response(null, { status: 204 }))
+  const makeRequest = vi.fn<(args: MakeRequestArgs) => Promise<Response>>(async () => new Response(null, { status: 204 }))
   const statObject = vi.fn()
     .mockRejectedValueOnce({ name: 'NotFound' })
     .mockResolvedValue({ etag })
@@ -120,7 +126,8 @@ describe('moveS3LiteObjectToTrash', () => {
     )
     expect(statObject).toHaveBeenCalledTimes(3)
     expect(makeRequest).toHaveBeenCalledOnce()
-    expect(makeRequest.mock.calls[0][0].headers?.get('If-Match')).toBe(etag)
+    const deleteCall = makeRequest.mock.calls[0]![0]
+    expect(deleteCall.headers?.get('If-Match')).toBe(etag)
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
@@ -221,15 +228,16 @@ describe('conditionalDeleteSource', () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const etag = '"before"'
     const deleteObject = vi.fn(async () => undefined)
-    const makeRequest = vi.fn(async () => new Response(null, { status: 204 }))
+    const makeRequest = vi.fn<(args: MakeRequestArgs) => Promise<Response>>(async () => new Response(null, { status: 204 }))
 
     const result = await conditionalDeleteSource({ deleteObject, makeRequest }, key, etag)
 
     expect(result).toBe('deleted')
     expect(makeRequest).toHaveBeenCalledOnce()
-    expect(makeRequest.mock.calls[0][0].method).toBe('DELETE')
-    expect(makeRequest.mock.calls[0][0].objectName).toBe(key)
-    expect(makeRequest.mock.calls[0][0].headers?.get('If-Match')).toBe(etag)
+    const deleteCall = makeRequest.mock.calls[0]![0]
+    expect(deleteCall.method).toBe('DELETE')
+    expect(deleteCall.objectName).toBe(key)
+    expect(deleteCall.headers?.get('If-Match')).toBe(etag)
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
