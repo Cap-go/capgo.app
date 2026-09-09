@@ -504,6 +504,7 @@
   "app-onboarding-store-help": "Used in app onboarding flow. Role: helper or description text about \"app onboarding store help\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "app-onboarding-store-import-button": "Used in Capgo web console areas: components/dashboard. Role: button or action label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "app-onboarding-store-imported-help": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "app-onboarding-store-imported-missing-app-id": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "app-onboarding-store-link-label": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "app-onboarding-store-link-placeholder": "Used in Capgo web console areas: components/dashboard. Role: input placeholder. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "app-onboarding-store-screenshot-alt": "Used in app onboarding flow. Role: UI label about \"app onboarding store screenshot alt\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

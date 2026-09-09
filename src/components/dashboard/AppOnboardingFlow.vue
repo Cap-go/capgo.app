@@ -139,6 +139,7 @@ const onboardingTelemetry = createOnboardingTelemetryIdentity({
   onboardingVersion: onboardingAnalyticsVersion,
   supaHost: config.supaHost,
 })
+const APPLE_LOOKUP_TIMEOUT_MS = 5_000
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
 const ONBOARDING_AB_TEST_WAIT_TIMEOUT_MS = 3_000
 const WELCOME_CANVAS_MEDIA_QUERY = '(min-width: 640px) and (min-height: 640px)'
@@ -217,6 +218,7 @@ const manualAppId = ref('')
 const appIdSuggestions = ref<string[]>([])
 const appIdFeedback = ref('')
 const hasEditedAppId = ref(false)
+const storeAppIdLookupFailed = ref(false)
 const selectedDevelopmentEnvironment = ref<OnboardingDevelopmentEnvironment | null>(null)
 const skippedPublishAppQuestion = ref(false)
 const selectedIntent = ref<OnboardingIntent | null>(null)
@@ -412,6 +414,7 @@ const resumeStep = computed(() => {
 const canUseStoreImportPreview = computed(() => useImportedStoreIcon.value && !!storeIconPreview.value)
 const iconPreview = computed(() => localIconPreview.value || (canUseStoreImportPreview.value ? storeIconPreview.value : '') || '')
 const hasImportedStoreMetadata = computed(() => existingAppSetup.value === 'import' && !!(importedStoreAppId.value || storeIconPreview.value || storeAppNamePreview.value))
+const shouldShowStoreAppIdLookupWarning = computed(() => storeAppIdLookupFailed.value && !manualAppId.value.trim())
 const suggestedAppId = computed(() => {
   if (createdApp.value)
     return createdApp.value.app_id
@@ -441,6 +444,8 @@ const appDetailsPrimaryActionLabel = computed(() => {
 })
 const appNameInitial = computed(() => Array.from(appName.value.trim())[0]?.toLocaleUpperCase() ?? '')
 const selectedAppIdSource = computed<NonNullable<OnboardingDetailsEventProperties['app_id_source']>>(() => {
+  if (!hasEditedAppId.value && existingAppSetup.value === 'import' && importedStoreAppId.value.trim())
+    return 'store'
   if (manualAppId.value.trim())
     return 'manual'
   if (existingAppSetup.value === 'import' && importedStoreAppId.value.trim())
@@ -1029,6 +1034,7 @@ function resetStoreImportState() {
   storeAppNamePreview.value = ''
   useImportedStoreIcon.value = false
   importedStoreAppId.value = ''
+  storeAppIdLookupFailed.value = false
   isImportingStore.value = false
   isStoreImportOpen.value = false
   isStoreIconImportOpen.value = false
@@ -1138,6 +1144,55 @@ async function loadResumeApp() {
   return true
 }
 
+async function fetchAppleBundleId(rawUrl: string) {
+  try {
+    const parsedUrl = new URL(rawUrl)
+    if (parsedUrl.hostname.toLowerCase() !== 'apps.apple.com')
+      return null
+
+    const storeId = /\/id(\d+)(?:[/?#]|$)/i.exec(parsedUrl.pathname)?.[1]
+    if (!storeId)
+      return ''
+
+    const storeCountry = /^\/([a-z]{2})(?:\/|$)/i.exec(parsedUrl.pathname)?.[1]
+    const lookupCountries = storeCountry ? [storeCountry.toLowerCase(), null] : [null]
+
+    for (const country of lookupCountries) {
+      const lookupUrl = new URL('https://itunes.apple.com/lookup')
+      lookupUrl.searchParams.set('id', storeId)
+      if (country)
+        lookupUrl.searchParams.set('country', country)
+
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), APPLE_LOOKUP_TIMEOUT_MS)
+      try {
+        const response = await fetch(lookupUrl.toString(), {
+          headers: { accept: 'application/json' },
+          signal: controller.signal,
+        })
+        if (!response.ok)
+          continue
+
+        const data = await response.json() as { results?: Array<{ bundleId?: string }> }
+        const result = data.results?.find(item => item.bundleId?.trim())
+        if (result?.bundleId)
+          return result.bundleId.trim()
+      }
+      catch {
+        continue
+      }
+      finally {
+        clearTimeout(timeoutId)
+      }
+    }
+
+    return ''
+  }
+  catch {
+    return ''
+  }
+}
+
 async function importStoreMetadata() {
   const requestedUrl = storeUrl.value.trim()
   if (!requestedUrl)
@@ -1148,6 +1203,8 @@ async function importStoreMetadata() {
   existingAppSetup.value = 'import'
   trackDetailsEvent('onboarding_store_import_submitted')
   const requestedRun = ++storeImportRun
+  const manualAppIdAtRequest = manualAppId.value
+  storeAppIdLookupFailed.value = false
   isImportingStore.value = true
   try {
     const { data, error } = await invokeCapgoApi('app/store-metadata', {
@@ -1181,7 +1238,28 @@ async function importStoreMetadata() {
       useImportedStoreIcon.value = false
     }
 
-    importedStoreAppId.value = typeof data?.app_id === 'string' ? data.app_id.trim() : ''
+    let importedAppId = typeof data?.app_id === 'string' ? data.app_id.trim() : ''
+    let appIdLookupFailed = !importedAppId && data?.app_id_lookup_failed === true
+    if (!importedAppId && !appIdLookupFailed) {
+      const appleBundleId = await fetchAppleBundleId(requestedUrl)
+      if (requestedRun !== storeImportRun || existingAppSetup.value !== 'import' || storeUrl.value.trim() !== requestedUrl)
+        return
+      if (appleBundleId !== null) {
+        if (appleBundleId)
+          importedAppId = appleBundleId
+        else
+          appIdLookupFailed = true
+      }
+    }
+
+    storeAppIdLookupFailed.value = appIdLookupFailed
+    importedStoreAppId.value = importedAppId
+    if (importedAppId && manualAppId.value === manualAppIdAtRequest) {
+      manualAppId.value = importedAppId
+      hasEditedAppId.value = false
+      appIdFeedback.value = ''
+      appIdSuggestions.value = []
+    }
 
     if (props.preOrg)
       existingApp.value = true
@@ -1422,6 +1500,7 @@ function onAppIdInput(event: Event) {
 }
 
 function onStoreUrlInput(event: Event) {
+  storeAppIdLookupFailed.value = false
   detailsFieldTracker.schedule('onboarding_store_url_entered', 'store_url', 'app_id', (event.target as HTMLInputElement).value)
 }
 
@@ -2576,10 +2655,13 @@ defineExpose({
                 :class="{ 'onboarding-details-preview-app-id': appDetailsStep === 'app_id' }"
               >
                 <div class="onboarding-details-preview-icon relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-[1.4rem] bg-slate-950 text-white shadow-lg shadow-slate-950/15 ring-1 ring-white/10 dark:bg-white dark:text-slate-950 dark:shadow-black/20">
-                  <span class="absolute -right-3 -top-3 h-10 w-10 rounded-full bg-primary-500/90" aria-hidden="true" />
-                  <span class="absolute -bottom-4 -left-2 h-11 w-11 rounded-full bg-emerald-400/80" aria-hidden="true" />
-                  <span v-if="appNameInitial" class="relative text-2xl font-bold tracking-tight">{{ appNameInitial }}</span>
-                  <IconSparkles v-else class="relative h-7 w-7" aria-hidden="true" />
+                  <img v-if="iconPreview" :src="iconPreview" :alt="t('app-onboarding-icon-preview-alt')" class="h-full w-full object-cover">
+                  <template v-else>
+                    <span class="absolute -right-3 -top-3 h-10 w-10 rounded-full bg-primary-500/90" aria-hidden="true" />
+                    <span class="absolute -bottom-4 -left-2 h-11 w-11 rounded-full bg-emerald-400/80" aria-hidden="true" />
+                    <span v-if="appNameInitial" class="relative text-2xl font-bold tracking-tight">{{ appNameInitial }}</span>
+                    <IconSparkles v-else class="relative h-7 w-7" aria-hidden="true" />
+                  </template>
                 </div>
                 <p class="mt-3 max-w-full truncate text-base font-semibold text-slate-950 dark:text-white">
                   {{ appName.trim() || t('app-onboarding-preview-placeholder') }}
@@ -2744,9 +2826,11 @@ defineExpose({
                       </button>
                     </div>
                     <p class="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400" aria-live="polite">
-                      {{ hasImportedStoreMetadata
-                        ? t('app-onboarding-store-imported-help')
-                        : t('app-onboarding-v2-store-import-help') }}
+                      {{ shouldShowStoreAppIdLookupWarning
+                        ? t('app-onboarding-store-imported-missing-app-id')
+                        : hasImportedStoreMetadata
+                          ? t('app-onboarding-store-imported-help')
+                          : t('app-onboarding-v2-store-import-help') }}
                     </p>
                   </div>
                 </div>

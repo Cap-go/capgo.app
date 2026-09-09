@@ -534,6 +534,7 @@
   "app-onboarding-store-help": "Paste your App Store or Google Play link and Capgo will import the app name, icon, and App ID when available.",
   "app-onboarding-store-import-button": "Import app details",
   "app-onboarding-store-imported-help": "Store import is done. Review the app name and App ID before continuing.",
+  "app-onboarding-store-imported-missing-app-id": "Store details were imported, but Apple did not return an App ID. Enter one manually or skip this step.",
   "app-onboarding-store-link-label": "App Store or Google Play link",
   "app-onboarding-store-link-placeholder": "https://apps.apple.com/... or https://play.google.com/store/apps/details?id=com.example.app",
   "app-onboarding-store-screenshot-alt": "Store screenshot preview",
