@@ -249,7 +249,7 @@ function compareConstraints(
     const actualConstraint = actualConstraints.get(key)
     if (expectedConstraint.type === 'c') {
       // Publisher CHECK constraints are optional on read-only logical subscribers.
-      // Missing CHECKs are ignored; stale subscriber CHECKs must not block deploy.
+      // Missing CHECK constraints are ignored; stale subscriber CHECK constraints must not block deploy.
       if (
         actualConstraint
         && actualConstraint.type !== 'c'
