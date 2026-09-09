@@ -80,6 +80,7 @@ BEGIN
   END IF;
 
   IF NEW.billing_account = 'us' THEN
+    PERFORM pg_advisory_xact_lock(hashtext('us:' || NEW.product_id));
     IF NOT EXISTS (
       SELECT 1
       FROM public.plans
@@ -90,6 +91,7 @@ BEGIN
         NEW.product_id;
     END IF;
   ELSE
+    PERFORM pg_advisory_xact_lock(hashtext('ee:' || NEW.product_id));
     IF NOT EXISTS (
       SELECT 1
       FROM public.plans
@@ -124,6 +126,11 @@ SET search_path = ''
 AS $$
 BEGIN
   IF TG_OP = 'DELETE' THEN
+    PERFORM pg_advisory_xact_lock(hashtext('ee:' || OLD.stripe_id));
+    IF OLD.stripe_id_us IS NOT NULL THEN
+      PERFORM pg_advisory_xact_lock(hashtext('us:' || OLD.stripe_id_us));
+    END IF;
+
     IF EXISTS (
       SELECT 1
       FROM public.stripe_info
@@ -149,6 +156,10 @@ BEGIN
     RETURN OLD;
   END IF;
 
+  IF OLD.stripe_id IS DISTINCT FROM NEW.stripe_id THEN
+    PERFORM pg_advisory_xact_lock(hashtext('ee:' || OLD.stripe_id));
+  END IF;
+
   IF OLD.stripe_id IS DISTINCT FROM NEW.stripe_id AND EXISTS (
     SELECT 1
     FROM public.stripe_info
@@ -158,6 +169,10 @@ BEGIN
     RAISE EXCEPTION
       'Cannot change plans.stripe_id %: referenced by stripe_info (ee)',
       OLD.stripe_id;
+  END IF;
+
+  IF OLD.stripe_id_us IS DISTINCT FROM NEW.stripe_id_us AND OLD.stripe_id_us IS NOT NULL THEN
+    PERFORM pg_advisory_xact_lock(hashtext('us:' || OLD.stripe_id_us));
   END IF;
 
   IF OLD.stripe_id_us IS DISTINCT FROM NEW.stripe_id_us

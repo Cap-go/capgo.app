@@ -35,6 +35,7 @@ interface PgTransactionClient {
 }
 
 async function getInitialPlanForMau(c: Context<MiddlewareKeyVariables>, estimatedMau: number) {
+  const billingAccount = getNewCustomersBillingAccount(c)
   const adminClient = supabaseAdmin(c)
   const { data: plan, error } = await adminClient
     .from('plans')
@@ -44,8 +45,15 @@ async function getInitialPlanForMau(c: Context<MiddlewareKeyVariables>, estimate
     .limit(1)
     .single()
 
-  if (error || !plan?.stripe_id) {
-    throw simpleError('cannot_get_plan', 'Cannot get plan', { error: error?.message, estimatedMau })
+  if (error || !plan) {
+    throw simpleError('cannot_get_plan', 'Cannot get plan', { error: error?.message, estimatedMau, billingAccount })
+  }
+
+  try {
+    getPlanProductId(plan, billingAccount)
+  }
+  catch {
+    throw simpleError('cannot_get_plan', 'Cannot get plan', { estimatedMau, billingAccount, plan: plan.name })
   }
 
   return plan
