@@ -167,7 +167,6 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       const createResponse = await fetchTestRequest(getEndpointUrl('/private/role_bindings'), {
         method: 'POST',
         headers: authHeaders,
-        retryUnsafe: true,
         body: JSON.stringify({
           principal_type: 'user',
           principal_id: USER_ID,
@@ -288,7 +287,6 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       const createResponse = await fetchTestRequest(getEndpointUrl('/private/role_bindings'), {
         method: 'POST',
         headers: authHeaders,
-        retryUnsafe: true,
         body: JSON.stringify({
           principal_type: 'user',
           principal_id: USER_ID_2,
@@ -617,7 +615,6 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       const createResponse = await fetchTestRequest(getEndpointUrl('/private/role_bindings'), {
         method: 'POST',
         headers: authHeaders,
-        retryUnsafe: true,
         body: JSON.stringify({
           principal_type: 'user',
           principal_id: USER_ID,
