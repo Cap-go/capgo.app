@@ -364,6 +364,24 @@ describe('scoped write API keys cannot cross organization boundaries', () => {
       })
 
     expect(uploadError).toBeNull()
+
+    const scopedHeaders = {
+      'Content-Type': 'application/json',
+      'capgkey': scopedKey,
+    }
+    await warmEdgeEndpoint(`${BASE_URL}/organization?orgId=${targetOrgId}`, {
+      method: 'DELETE',
+      headers: scopedHeaders,
+    })
+    await warmEdgeEndpoint(`${BASE_URL}/organization/members`, {
+      method: 'POST',
+      headers: scopedHeaders,
+      body: JSON.stringify({
+        orgId: targetOrgId,
+        email: USER_ADMIN_EMAIL,
+        invite_type: 'org_member',
+      }),
+    })
   })
 
   afterAll(async () => {
