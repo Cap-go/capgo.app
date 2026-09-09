@@ -26,6 +26,3 @@ ADD CONSTRAINT "orgs_onboarding_valid" CHECK (
     )
   )
 ) NOT VALID;
-
-ALTER TABLE "public"."orgs"
-VALIDATE CONSTRAINT "orgs_onboarding_valid";

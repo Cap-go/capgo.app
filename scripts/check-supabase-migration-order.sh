@@ -147,6 +147,7 @@ done < <(git diff --name-status -M100% --diff-filter=R "${base_ref}...HEAD" -- '
 # Out-of-order restamp plus org onboarding intent jsonb_typeof guard. Exact blob
 # hash keeps this allowlist from accepting later edits.
 restamp_webnative_onboarding='supabase/migrations/20260909163000_expand_webnative_onboarding.sql'
+restamp_webnative_onboarding_source='supabase/migrations/20260907163000_expand_webnative_onboarding.sql'
 restamp_webnative_onboarding_blob='ff4f7030f0c911234c3646239e88346e360cd9e7'
 
 # This migration failed before it was recorded in production: first a legacy
@@ -200,7 +201,9 @@ if [[ -n "$modified_files" ]]; then
       continue
     fi
 
+    restamp_rename_source="$(git diff --name-status -M50% "${base_ref}...HEAD" -- 'supabase/migrations/*.sql' | awk -F '\t' -v new_path="$restamp_webnative_onboarding" '$1 ~ /^R/ && $3 == new_path { print $2; exit }')"
     if [[ "$file" == "$restamp_webnative_onboarding" ]] \
+      && [[ "$restamp_rename_source" == "$restamp_webnative_onboarding_source" ]] \
       && [[ "$(git hash-object "$file")" == "$restamp_webnative_onboarding_blob" ]] \
       && [[ -n "$ts" ]] \
       && (( 10#$ts > 10#$latest_base_timestamp )); then
