@@ -110,12 +110,11 @@ async function postUpdateAfterChannelMutation(data: Partial<ReturnType<typeof ge
 beforeAll(async () => {
   await resetAndSeedAppData(APP_NAME_UPDATE)
   if (!USE_CLOUDFLARE) {
-    const warmPayload = getBaseData(APP_NAME_UPDATE)
-    warmPayload.device_id = `warm-${id}`
+    // Prime the isolate only — invalid payload returns 4xx without persisting device rows.
     await warmEdgeEndpoint(getEndpointUrl('/updates'), {
       method: 'POST',
       headers,
-      body: JSON.stringify(warmPayload),
+      body: '{}',
     })
   }
 }, 60_000)
