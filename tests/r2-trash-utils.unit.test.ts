@@ -61,8 +61,12 @@ describe('isObjectNotFoundError', () => {
     expect(isObjectNotFoundError({ name: 'NotFound' })).toBe(true)
     expect(isObjectNotFoundError({ name: 'NoSuchKey' })).toBe(true)
     expect(isObjectNotFoundError({ $metadata: { httpStatusCode: 404 } })).toBe(true)
+    expect(isObjectNotFoundError({ Code: 'NoSuchKey' })).toBe(true)
+    expect(isObjectNotFoundError({ Code: '404' })).toBe(true)
     expect(isObjectNotFoundError({ name: 'AccessDenied' })).toBe(false)
     expect(isObjectNotFoundError({ $metadata: { httpStatusCode: 503 } })).toBe(false)
+    expect(isObjectNotFoundError(null)).toBe(false)
+    expect(isObjectNotFoundError('NotFound')).toBe(false)
   })
 })
 
