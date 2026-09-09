@@ -5,11 +5,13 @@ set -euo pipefail
 # Requires: Docker, docker compose, and the Supabase CLI (bunx supabase).
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/vanilla-postgres-env.sh
+source "$ROOT_DIR/scripts/vanilla-postgres-env.sh"
 cd "$ROOT_DIR"
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 SERVICE="${VANILLA_POSTGRES_SERVICE:-postgres}"
-DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:5432/capgo?sslmode=disable}"
+DATABASE_URL="${DATABASE_URL:-postgresql://${VANILLA_POSTGRES_USER}:${VANILLA_POSTGRES_PASSWORD}@127.0.0.1:5432/${VANILLA_POSTGRES_DB}?sslmode=disable}"
 
 compose() {
   docker compose -f "$COMPOSE_FILE" "$@"
@@ -23,7 +25,7 @@ ensure_postgres() {
 
   echo "Waiting for Postgres to accept connections ..."
   for _ in $(seq 1 60); do
-    if compose exec -T "$SERVICE" pg_isready -U postgres -d capgo >/dev/null 2>&1; then
+    if compose exec -T "$SERVICE" pg_isready -U "$VANILLA_POSTGRES_USER" -d "$VANILLA_POSTGRES_DB" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1

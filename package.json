@@ -28,7 +28,7 @@
     "supabase:db:reset": "bun scripts/supabase-worktree.ts db reset",
     "supabase:functions:serve": "bun scripts/supabase-worktree.ts functions serve",
     "supabase:with-env": "bun scripts/supabase-worktree.ts with-env",
-    "postgres:vanilla:up": "docker compose -f docker-compose.yml up -d postgres",
+    "postgres:vanilla:up": "bash -c 'source scripts/vanilla-postgres-env.sh && docker compose -f docker-compose.yml up -d postgres'",
     "postgres:vanilla:down": "docker compose -f docker-compose.yml down",
     "postgres:vanilla:push": "bash scripts/vanilla-postgres-push.sh",
     "env:hard-setup": "bun run supabase:stop && bun run supabase:start && bun run supabase:db:reset",

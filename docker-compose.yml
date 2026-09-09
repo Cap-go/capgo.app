@@ -8,9 +8,9 @@ services:
     ports:
       - '5432:5432'
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: capgo
+      POSTGRES_USER: ${VANILLA_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${VANILLA_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${VANILLA_POSTGRES_DB}
     volumes:
       - capgo_vanilla_postgres_data:/var/lib/postgresql/data
     healthcheck:

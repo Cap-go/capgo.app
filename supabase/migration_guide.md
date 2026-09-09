@@ -85,11 +85,9 @@ the default local path.
 bun run postgres:vanilla:up
 ```
 
-`docker-compose.yml` exposes Postgres on `127.0.0.1:5432` with:
-
-- user: `postgres`
-- password: `postgres`
-- database: `capgo`
+`docker-compose.yml` exposes Postgres on `127.0.0.1:5432`. Credentials are injected by
+`scripts/vanilla-postgres-env.sh` (defaults: user/password `postgres`, database `capgo`).
+Override with `VANILLA_POSTGRES_USER`, `VANILLA_POSTGRES_PASSWORD`, or `VANILLA_POSTGRES_DB`.
 
 ### Apply migrations
 
@@ -103,7 +101,7 @@ and writes a timestamped log under `.context/vanilla-postgres/`.
 Override the URL when needed:
 
 ```bash
-DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/capgo bun run postgres:vanilla:push
+DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:5432/capgo?sslmode=disable' bun run postgres:vanilla:push
 ```
 
 ### Create new migrations (unchanged)
