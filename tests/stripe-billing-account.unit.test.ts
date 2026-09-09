@@ -108,10 +108,16 @@ describe('stripe billing account helpers', () => {
     const adminModule = await import('../supabase/functions/_backend/utils/supabase.ts')
     const billingModule = await import('../supabase/functions/_backend/utils/stripe_billing.ts')
 
-    vi.spyOn(adminModule, 'supabaseAdmin').mockReturnValueOnce(undefined as any)
-    await expect(billingModule.getBillingAccountForCustomer(context, 'cus_test')).resolves.toBe('ee')
+    mockedEnv.STRIPE_NEW_CUSTOMERS_ACCOUNT = 'ee'
+    const missingAdminSpy = vi.spyOn(adminModule, 'supabaseAdmin').mockReturnValueOnce(undefined as any)
+    try {
+      await expect(billingModule.getBillingAccountForCustomer(context, 'cus_test')).resolves.toBe('ee')
+    }
+    finally {
+      missingAdminSpy.mockRestore()
+    }
 
-    vi.spyOn(adminModule, 'supabaseAdmin').mockReturnValueOnce({
+    const lookupErrorSpy = vi.spyOn(adminModule, 'supabaseAdmin').mockReturnValueOnce({
       from: () => ({
         select: () => ({
           eq: () => ({
@@ -120,6 +126,11 @@ describe('stripe billing account helpers', () => {
         }),
       }),
     } as any)
-    await expect(billingModule.getBillingAccountForCustomer(context, 'cus_test')).rejects.toEqual(lookupError)
+    try {
+      await expect(billingModule.getBillingAccountForCustomer(context, 'cus_test')).rejects.toEqual(lookupError)
+    }
+    finally {
+      lookupErrorSpy.mockRestore()
+    }
   })
 })

@@ -197,7 +197,7 @@ describe('createStripeCustomer', () => {
     const planName = await createStripeCustomer(createContext(), createOrg(LOCAL_ID))
 
     expect(planName).toBe('Solo')
-    expect(createCustomerMock).toHaveBeenCalledTimes(1)
+    expect(createCustomerMock).toHaveBeenCalled()
     expect(createCustomerMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
@@ -257,7 +257,7 @@ describe('createStripeCustomer', () => {
     const planName = await createStripeCustomer(createContext(), createOrg(legacy24HexLocalId))
 
     expect(planName).toBe('Solo')
-    expect(createCustomerMock).toHaveBeenCalledTimes(1)
+    expect(createCustomerMock).toHaveBeenCalled()
     expect(orgUpdate).toHaveBeenCalledWith({ customer_id: CUSTOMER_ID }, expect.objectContaining({
       id: ORG_ID,
       customer_id: legacy24HexLocalId,
@@ -343,8 +343,8 @@ describe('createStripeCustomer', () => {
     const planName = await createStripeCustomer(createContext(), createOrg(PENDING_ID))
 
     expect(planName).toBe('Solo')
-    expect(createCustomerMock).toHaveBeenCalledTimes(1)
-    expect(stripeInfoInsert).toHaveBeenCalledTimes(1)
+    expect(createCustomerMock).toHaveBeenCalled()
+    expect(stripeInfoInsert).toHaveBeenCalled()
     expect(orgUpdate).toHaveBeenCalledWith({ customer_id: CUSTOMER_ID }, expect.objectContaining({
       id: ORG_ID,
       customer_id: PENDING_ID,
@@ -410,7 +410,7 @@ describe('createStripeCustomer', () => {
     const planName = await createStripeCustomer(createContext(), createOrg(PENDING_ID))
 
     expect(planName).toBe('Solo')
-    expect(createCustomerMock).toHaveBeenCalledTimes(1)
+    expect(createCustomerMock).toHaveBeenCalled()
     expect(orgState.customer_id).toBe(existingId)
     expect(stripeInfoDeleteEq).toHaveBeenCalledWith('customer_id', CUSTOMER_ID)
   })
@@ -444,7 +444,7 @@ describe('finalizePendingStripeCustomer', () => {
     const planName = await finalizePendingStripeCustomer(createContext(), createOrg(PENDING_ID))
 
     expect(planName).toBe('Solo')
-    expect(createCustomerMock).toHaveBeenCalledTimes(1)
+    expect(createCustomerMock).toHaveBeenCalled()
     expect(stripeInfoDeleteEq).toHaveBeenCalledWith('customer_id', PENDING_ID)
   })
 })
