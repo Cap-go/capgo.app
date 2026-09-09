@@ -44,6 +44,24 @@ export function resolveUploadPaths(paths: string | undefined, baseDir: string): 
   )
 }
 
+
+export function mergeMonorepoRootUploadPaths(
+  prompted: { packageJson?: string, nodeModules?: string },
+  current: { packageJson?: string, nodeModules?: string },
+  promptCwd: string,
+): { packageJson?: string, nodeModules?: string } {
+  return {
+    packageJson: joinUniqueUploadPaths(
+      resolveUploadPaths(prompted.packageJson, promptCwd),
+      resolveUploadPaths(current.packageJson, promptCwd),
+    ),
+    nodeModules: joinUniqueUploadPaths(
+      resolveUploadPaths(prompted.nodeModules, promptCwd),
+      resolveUploadPaths(current.nodeModules, promptCwd),
+    ),
+  }
+}
+
 export function formatBundleUploadRunnerCommand(
   runner: string,
   appId: string,

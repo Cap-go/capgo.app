@@ -48,7 +48,7 @@ import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisab
 import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitLogSkip, waitForInitStreamingContinue } from './runtime'
 import { createInitTelemetry, mergeInitProgressTelemetry, parseInitProgressTelemetry } from './telemetry'
 import { formatInitResumeMessage, initOnboardingSteps, renderInitOnboardingComplete, renderInitOnboardingFrame, renderInitOnboardingWelcome } from './ui'
-import { formatBundleUploadRunnerCommand, getBundleUploadFailureRecoveryOptions, joinUniqueUploadPaths, MONOREPO_ROOT_PATHS_NOTE, resolveUploadPaths } from './upload-recovery'
+import { formatBundleUploadRunnerCommand, getBundleUploadFailureRecoveryOptions, mergeMonorepoRootUploadPaths, MONOREPO_ROOT_PATHS_NOTE } from './upload-recovery'
 import { CAPACITOR_SPLASH_SCREEN_PACKAGE, CAPGO_UPDATER_PACKAGE, getSplashScreenInstallState, getUpdaterInstallState } from './updater'
 
 interface SuperOptions extends Options {
@@ -1775,10 +1775,11 @@ async function promptForMonorepoRootUploadPaths(
     join(rootDir, 'node_modules'),
   )
   const promptCwd = cwd()
-  return {
-    packageJson: joinUniqueUploadPaths(resolveUploadPaths(packageJson, promptCwd), resolveUploadPaths(currentPackageJson, promptCwd)),
-    nodeModules: joinUniqueUploadPaths(resolveUploadPaths(nodeModules, promptCwd), resolveUploadPaths(currentNodeModules, promptCwd)),
-  }
+  return mergeMonorepoRootUploadPaths(
+    { packageJson, nodeModules },
+    { packageJson: currentPackageJson, nodeModules: currentNodeModules },
+    promptCwd,
+  )
 }
 
 /**

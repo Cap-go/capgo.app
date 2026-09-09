@@ -5,6 +5,7 @@ import {
   formatBundleUploadRunnerCommand,
   getBundleUploadFailureRecoveryOptions,
   joinUniqueUploadPaths,
+  mergeMonorepoRootUploadPaths,
   MONOREPO_ROOT_PATHS_NOTE,
   MONOREPO_UPLOAD_RETRY_HINT,
   resolveUploadPaths,
@@ -66,18 +67,47 @@ assert.equal(
   `already hinted\n${MONOREPO_UPLOAD_RETRY_HINT}`,
 )
 
+assert.deepEqual(
+  mergeMonorepoRootUploadPaths(
+    { packageJson: './package.json', nodeModules: './node_modules' },
+    { packageJson: './apps/mobile/package.json', nodeModules: './apps/mobile/node_modules' },
+    promptCwd,
+  ),
+  {
+    packageJson: '/workspace/app/package.json,/workspace/app/apps/mobile/package.json',
+    nodeModules: '/workspace/app/node_modules,/workspace/app/apps/mobile/node_modules',
+  },
+)
+assert.deepEqual(
+  mergeMonorepoRootUploadPaths(
+    { packageJson: '/root/package.json', nodeModules: '/root/node_modules' },
+    { packageJson: '/root/package.json', nodeModules: '/root/node_modules' },
+    promptCwd,
+  ),
+  {
+    packageJson: '/root/package.json',
+    nodeModules: '/root/node_modules',
+  },
+)
+assert.deepEqual(
+  mergeMonorepoRootUploadPaths(
+    { packageJson: './package.json', nodeModules: undefined },
+    { packageJson: undefined, nodeModules: './node_modules' },
+    promptCwd,
+  ),
+  {
+    packageJson: '/workspace/app/package.json',
+    nodeModules: '/workspace/app/node_modules',
+  },
+)
+
 assert.match(command, /getBundleUploadFailureRecoveryOptions/)
 assert.match(command, /retry-with-monorepo-paths/)
 assert.match(command, /Monorepo root package\.json path:/)
 assert.match(command, /Monorepo root node_modules path:/)
 assert.match(command, /promptForMonorepoRootUploadPaths/)
-assert.match(command, /resolveUploadPaths\(packageJson, promptCwd\)/)
-assert.match(command, /joinUniqueUploadPaths\(resolveUploadPaths\(packageJson, promptCwd\), resolveUploadPaths\(currentPackageJson, promptCwd\)\)/)
-assert.match(command, /joinUniqueUploadPaths\(resolveUploadPaths\(nodeModules, promptCwd\), resolveUploadPaths\(currentNodeModules, promptCwd\)\)/)
+assert.match(command, /mergeMonorepoRootUploadPaths/)
 assert.match(command, /globalUploadPackageJsonPath/)
 assert.match(command, /formatBundleUploadRunnerCommand/)
-assert.match(command, /resolveUploadPaths\(currentPackageJson, promptCwd\)/)
-assert.match(command, /nodeModules: nodeModulesPath/)
-assert.doesNotMatch(command, /packageJson: isMonorepo \? selectedPackageJsonPath/)
 
 console.log('✅ init upload monorepo recovery tests passed')
