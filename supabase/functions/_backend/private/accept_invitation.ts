@@ -168,6 +168,11 @@ async function ensureOrgMembership(
         error: message,
       })
     }
+    if (message.includes('MEMBERSHIP_NOT_FINALIZED')) {
+      return quickError(409, 'failed_to_accept_invitation', 'Invitation membership could not be finalized', {
+        error: 'Pending org membership row missing or invalid',
+      })
+    }
     return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation', { error: message })
   }
   finally {
