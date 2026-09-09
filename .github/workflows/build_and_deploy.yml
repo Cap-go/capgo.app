@@ -51,7 +51,7 @@ jobs:
       - name: Checkout deployment target
         uses: actions/checkout@v6
         with:
-          ref: ${{ steps.target.outputs.deploy_tag }}
+          ref: ${{ steps.target.outputs.deploy_sha }}
           fetch-depth: 0
           filter: blob:none
       - name: Resolve deploy scope
@@ -75,7 +75,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.changes.outputs.deploy_tag }}
+          ref: ${{ needs.changes.outputs.deploy_sha }}
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -146,7 +146,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.changes.outputs.deploy_tag }}
+          ref: ${{ needs.changes.outputs.deploy_sha }}
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -178,7 +178,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.changes.outputs.deploy_tag }}
+          ref: ${{ needs.changes.outputs.deploy_sha }}
           fetch-depth: 0
           filter: blob:none
       - uses: actions/setup-node@v6
@@ -265,7 +265,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.changes.outputs.deploy_tag }}
+          ref: ${{ needs.changes.outputs.deploy_sha }}
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -297,7 +297,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.changes.outputs.deploy_tag }}
+          ref: ${{ needs.changes.outputs.deploy_sha }}
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -329,7 +329,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.changes.outputs.deploy_tag }}
+          ref: ${{ needs.changes.outputs.deploy_sha }}
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -394,7 +394,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.changes.outputs.deploy_tag }}
+          ref: ${{ needs.changes.outputs.deploy_sha }}
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -433,7 +433,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.changes.outputs.deploy_tag }}
+          ref: ${{ needs.changes.outputs.deploy_sha }}
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -481,7 +481,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.changes.outputs.deploy_tag }}
+          ref: ${{ needs.changes.outputs.deploy_sha }}
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
         with:

@@ -79,6 +79,17 @@ function runGit(args: string[]): string {
   }).trim()
 }
 
+function isDescribeWithoutMatchingTag(error: unknown): boolean {
+  if (!(error instanceof Error))
+    return false
+
+  const stderr = typeof (error as NodeJS.ErrnoException & { stderr?: string }).stderr === 'string'
+    ? (error as NodeJS.ErrnoException & { stderr: string }).stderr
+    : ''
+  const message = `${error.message}\n${stderr}`
+  return /no names found|no tags exactly match|not enough tags|not a valid object name/i.test(message)
+}
+
 function getCommitShas(before: string, after: string, run: GitRunner = runGit): string[] {
   const isZero = before === '' || /^0+$/.test(before)
 
@@ -189,7 +200,9 @@ export function resolvePendingReleaseScope(
   try {
     base = run(describeArgs) || null
   }
-  catch {
+  catch (error) {
+    if (!isDescribeWithoutMatchingTag(error))
+      throw error
     base = null
   }
 

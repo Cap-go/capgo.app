@@ -94,16 +94,20 @@ export function publishReleaseAtomically(
     return 'published'
   }
   catch (error) {
-    let branchMoved = false
+    let remoteSha: string | undefined
     try {
-      branchMoved = readRemoteBranchSha(options.remote, options.branch, run) !== options.expectedBranchSha
+      remoteSha = readRemoteBranchSha(options.remote, options.branch, run)
     }
     catch {
       // Preserve the original push failure when the remote cannot be inspected.
     }
 
-    if (branchMoved)
-      return 'superseded'
+    if (remoteSha) {
+      if (remoteSha === run(['rev-parse', 'HEAD']))
+        return 'published'
+      if (remoteSha !== options.expectedBranchSha)
+        return 'superseded'
+    }
 
     throw error
   }

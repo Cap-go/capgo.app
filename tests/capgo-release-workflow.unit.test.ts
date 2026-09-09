@@ -63,11 +63,11 @@ describe('native-aware Capgo release workflow', () => {
     expect(workflowSource).toContain('bun scripts/deploy-scope.ts "${{ steps.target.outputs.deploy_tag }}"')
     expect(targetCheckout).toMatchObject({
       uses: 'actions/checkout@v6',
-      with: { ref: '${{ steps.target.outputs.deploy_tag }}' },
+      with: { ref: '${{ steps.target.outputs.deploy_sha }}' },
     })
     expect(downstreamCheckoutSteps.length).toBeGreaterThan(0)
     for (const checkout of downstreamCheckoutSteps)
-      expect(checkout.with?.ref).toBe('${{ needs.changes.outputs.deploy_tag }}')
+      expect(checkout.with?.ref).toBe('${{ needs.changes.outputs.deploy_sha }}')
     for (const checkout of allCheckoutSteps)
       expect(checkout.uses).toBe('actions/checkout@v6')
     expect(workflowSource).toContain('tag_name: ${{ needs.changes.outputs.deploy_tag }}')

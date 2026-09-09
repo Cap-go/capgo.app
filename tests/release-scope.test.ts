@@ -246,6 +246,16 @@ describe('release scope matching', () => {
     ])
   })
 
+  it.concurrent('rethrows unexpected git describe failures', () => {
+    const run = () => {
+      throw new Error('fatal: unable to access network')
+    }
+
+    expect(() => resolvePendingReleaseScope('capgo', 'head', false, run)).toThrow(
+      'fatal: unable to access network',
+    )
+  })
+
   it.concurrent('evaluates the full reachable history when no component tag exists', () => {
     const run = (args: string[]) => {
       const key = args.join(' ')

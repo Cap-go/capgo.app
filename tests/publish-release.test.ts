@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { publishReleaseAtomically } from '../scripts/publish-release.ts'
 
 const testedSha = '1111111111111111111111111111111111111111'
+const releaseSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 const newerSha = '2222222222222222222222222222222222222222'
 
 describe('atomic release publication', () => {
@@ -70,6 +71,8 @@ describe('atomic release publication', () => {
         return 'capgo-12.0.1'
       if (args[0] === 'push')
         throw pushError
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD')
+        return releaseSha
 
       throw new Error(`Unexpected git call: ${args.join(' ')}`)
     }
@@ -83,6 +86,34 @@ describe('atomic release publication', () => {
     expect(remoteReads).toBe(2)
   })
 
+  it.concurrent('treats a lost push response as published when remote matches local HEAD', () => {
+    let remoteReads = 0
+    const pushError = new Error('network timeout')
+    const run = (args: string[]) => {
+      if (args[0] === 'ls-remote') {
+        remoteReads += 1
+        const sha = remoteReads === 1 ? testedSha : releaseSha
+        return `${sha}\trefs/heads/main`
+      }
+      if (args[0] === 'tag')
+        return 'capgo-12.0.1'
+      if (args[0] === 'push')
+        throw pushError
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD')
+        return releaseSha
+
+      throw new Error(`Unexpected git call: ${args.join(' ')}`)
+    }
+
+    expect(publishReleaseAtomically({
+      branch: 'main',
+      expectedBranchSha: testedSha,
+      knownTags: [],
+      remote: 'origin',
+    }, run)).toBe('published')
+    expect(remoteReads).toBe(2)
+  })
+
   it.concurrent('preserves genuine push failures when the branch did not move', () => {
     const pushError = new Error('permission denied')
     const run = (args: string[]) => {
@@ -92,6 +123,8 @@ describe('atomic release publication', () => {
         return 'capgo-12.0.1'
       if (args[0] === 'push')
         throw pushError
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD')
+        return releaseSha
 
       throw new Error(`Unexpected git call: ${args.join(' ')}`)
     }
