@@ -1197,6 +1197,13 @@ You are not allowed to deploy on your own, unless if asked. Same for git you
 never git push on main branch, add or commit unless asked.
 You can do it in others branches
 
+## Frontend security operations
+
+Console CSP, SRI maintenance, sanitization helpers, and redirect validation are
+documented in [docs/frontend-security.md](docs/frontend-security.md). Review
+that checklist when touching `public/_headers`, external scripts, or user-controlled
+HTML/URL rendering.
+
 ## Graphify
 
 The project-scoped Graphify skill lives at `.agents/skills/graphify/SKILL.md`.

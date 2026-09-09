@@ -23,58 +23,7 @@
 <body class="overflow-hidden h-full antialiased font-inter">
   <div id="app-loader"></div>
   <div id="app" class="overflow-hidden h-full"></div>
-  <script>
-    // Initialize theme before Vue app loads to prevent flash
-    (function () {
-      function applyTheme(isDark) {
-        const html = document.documentElement;
-        if (isDark) {
-          html.classList.add('dark');
-          html.dataset.theme = 'capgodark';
-        } else {
-          html.classList.remove('dark');
-          html.dataset.theme = 'capgolight';
-        }
-      }
-
-      // Check for saved theme preference or default to system preference
-      const savedTheme = localStorage.getItem('theme');
-      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-
-      // Determine initial theme
-      let isDark;
-      if (savedTheme === 'dark') {
-        isDark = true;
-      } else if (savedTheme === 'light') {
-        isDark = false;
-      } else {
-        // No saved preference, use system preference
-        isDark = mediaQuery.matches;
-      }
-
-      applyTheme(isDark);
-
-      // Listen for system preference changes (only if no saved preference)
-      mediaQuery.addEventListener('change', function (e) {
-        const currentSavedTheme = localStorage.getItem('theme');
-        // Only auto-switch if user hasn't set a manual preference
-        if (!currentSavedTheme || currentSavedTheme === 'auto') {
-          applyTheme(e.matches);
-        }
-      });
-
-      // Expose theme toggle function globally for Vue to use
-      window.__setTheme = function (theme) {
-        if (theme === 'auto') {
-          localStorage.setItem('theme', 'auto');
-          applyTheme(mediaQuery.matches);
-        } else {
-          localStorage.setItem('theme', theme);
-          applyTheme(theme === 'dark');
-        }
-      };
-    })();
-  </script>
+  <script src="/theme-bootstrap.js"></script>
   <script type="module" src="/src/main.ts"></script>
 </body>
 
