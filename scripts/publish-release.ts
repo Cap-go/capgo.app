@@ -72,7 +72,7 @@ function getNewTags(knownTags: readonly string[], run: GitRunner): string[] {
 
 function readRemoteTagSha(remote: string, tag: string, run: GitRunner): string | null {
   const ref = `refs/tags/${tag}`
-  const output = run(['ls-remote', remote, ref])
+  const output = run(['ls-remote', '--refs', '--tags', remote, ref])
   const [line, ...extraLines] = output.split('\n').filter(Boolean)
   const match = line?.match(/^([0-9a-f]{40,64})\trefs\/tags\/(.+)$/i)
 
@@ -82,18 +82,13 @@ function readRemoteTagSha(remote: string, tag: string, run: GitRunner): string |
   return match[1]
 }
 
-function remoteMatchesLocalPublication(
+function remoteTagsMatchLocal(
   remote: string,
-  branch: string,
   newTags: readonly string[],
   run: GitRunner,
 ): boolean {
-  const localHead = run(['rev-parse', 'HEAD'])
-  if (readRemoteBranchSha(remote, branch, run) !== localHead)
-    return false
-
   for (const tag of newTags) {
-    const localTagSha = run(['rev-parse', tag])
+    const localTagSha = run(['rev-parse', `refs/tags/${tag}`])
     const remoteTagSha = readRemoteTagSha(remote, tag, run)
     if (!remoteTagSha || remoteTagSha !== localTagSha)
       return false
@@ -126,20 +121,17 @@ export function publishReleaseAtomically(
     return 'published'
   }
   catch (error) {
-    let remoteSha: string | undefined
     try {
-      remoteSha = readRemoteBranchSha(options.remote, options.branch, run)
-    }
-    catch {
-      // Preserve the original push failure when the remote cannot be inspected.
-    }
-
-    if (remoteSha) {
+      const remoteSha = readRemoteBranchSha(options.remote, options.branch, run)
       const localHead = run(['rev-parse', 'HEAD'])
-      if (remoteMatchesLocalPublication(options.remote, options.branch, newTags, run))
+
+      if (remoteSha === localHead && remoteTagsMatchLocal(options.remote, newTags, run))
         return 'published'
       if (remoteSha !== localHead && remoteSha !== options.expectedBranchSha)
         return 'superseded'
+    }
+    catch {
+      // Preserve the original push failure when the remote state cannot be fully verified.
     }
 
     throw error
