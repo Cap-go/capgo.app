@@ -1406,6 +1406,10 @@ export function splitPayload(
   return { buildOptions, buildCredentials }
 }
 
+/**
+ * Run the full Capgo cloud build pipeline: request a job, upload sources, stream
+ * logs, poll status, and optionally capture logs for AI analysis or support.
+ */
 export async function requestBuildInternal(appId: string, options: BuildRequestOptions, silent = false, logger?: BuildLogger): Promise<BuildRequestResult> {
   // Start the verbose internal log so API errors + the support flow's bundle have
   // content (no-op if already started by a wrapping onboarding run).
