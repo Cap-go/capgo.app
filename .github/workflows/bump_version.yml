@@ -35,19 +35,34 @@ jobs:
           filter: blob:none
       - name: Setup bun
         run: bash scripts/setup-bun.sh
+      - name: Resolve release environment
+        id: release_environment
+        run: |
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            echo "scope_mode=--latest-stable" >> "$GITHUB_OUTPUT"
+          else
+            echo "scope_mode=--latest-alpha" >> "$GITHUB_OUTPUT"
+          fi
       - name: Resolve Capgo release scope
         id: capgo
-        run: bun scripts/release-scope.ts capgo "${{ github.event.before }}" "${{ github.sha }}" >> "$GITHUB_OUTPUT"
+        run: bun scripts/release-scope.ts capgo "${{ steps.release_environment.outputs.scope_mode }}" "${{ github.sha }}" >> "$GITHUB_OUTPUT"
       - name: Resolve CLI release scope
         id: cli
-        run: bun scripts/release-scope.ts cli "${{ github.event.before }}" "${{ github.sha }}" >> "$GITHUB_OUTPUT"
+        run: bun scripts/release-scope.ts cli "${{ steps.release_environment.outputs.scope_mode }}" "${{ github.sha }}" >> "$GITHUB_OUTPUT"
       - name: Resolve notifications plugin release scope
         id: notifications
-        run: bun scripts/release-scope.ts notifications "${{ github.event.before }}" "${{ github.sha }}" >> "$GITHUB_OUTPUT"
+        run: bun scripts/release-scope.ts notifications "${{ steps.release_environment.outputs.scope_mode }}" "${{ github.sha }}" >> "$GITHUB_OUTPUT"
       - name: Resolve migration scope
         id: migration_scope
+        env:
+          CAPGO_BASE: ${{ steps.capgo.outputs.base }}
         run: |
-          if git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" | grep -q '^supabase/migrations/'; then
+          if [ -n "$CAPGO_BASE" ]; then
+            changed_files="$(git diff --name-only "$CAPGO_BASE" "${{ github.sha }}")"
+          else
+            changed_files="$(git ls-tree -r --name-only "${{ github.sha }}")"
+          fi
+          if grep -q '^supabase/migrations/' <<< "$changed_files"; then
             echo "has_migration_changes=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_migration_changes=false" >> "$GITHUB_OUTPUT"
@@ -77,6 +92,8 @@ jobs:
     name: Bump versions and create tags
     permissions:
       contents: write
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
     steps:
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -93,6 +110,10 @@ jobs:
       - name: Install dependencies
         if: ${{ needs.changes.outputs.run_capgo == 'true' || needs.changes.outputs.run_cli == 'true' || needs.changes.outputs.run_notifications == 'true' }}
         run: bun install --frozen-lockfile
+      - name: Record tested release state
+        run: |
+          git rev-parse HEAD > "$RUNNER_TEMP/release-base-sha"
+          git tag --list | sort > "$RUNNER_TEMP/release-tags-before"
       - name: Resolve Capgo native release bump
         id: capgo_version
         if: ${{ needs.changes.outputs.run_capgo == 'true' }}
@@ -228,18 +249,26 @@ jobs:
               fi
             fi
           fi
-      - name: Push to origin
+      - name: Publish release atomically
+        id: publish
+        env:
+          RELEASE_REMOTE_URL: https://x-access-token:${{ secrets.PERSONAL_ACCESS_TOKEN }}@github.com/${{ github.repository }}.git
         run: |
           set -e
 
-          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          remote_repo="https://${GITHUB_ACTOR}:${{ secrets.PERSONAL_ACCESS_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git"
-          git pull --rebase=false $remote_repo $CURRENT_BRANCH
-          git push $remote_repo HEAD:$CURRENT_BRANCH --follow-tags --tags
+          status="$(bun scripts/publish-release.ts \
+            "$GITHUB_REF_NAME" \
+            "$(< "$RUNNER_TEMP/release-base-sha")" \
+            "$RUNNER_TEMP/release-tags-before")"
+          if [ "$status" = "published" ]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
 
   sync_schema_types:
     needs: [changes, bump-version]
-    if: ${{ github.ref == 'refs/heads/main' && needs.changes.outputs.has_migration_changes == 'true' && !startsWith(github.event.head_commit.message, 'chore(release):') && !startsWith(github.event.head_commit.message, 'chore(auto-sync):') }}
+    if: ${{ github.ref == 'refs/heads/main' && needs.changes.outputs.has_migration_changes == 'true' && needs.bump-version.outputs.published == 'true' && !startsWith(github.event.head_commit.message, 'chore(release):') && !startsWith(github.event.head_commit.message, 'chore(auto-sync):') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

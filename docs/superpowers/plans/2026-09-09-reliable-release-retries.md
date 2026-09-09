@@ -118,7 +118,7 @@ git commit -m "fix(ci): preserve unreleased component scope"
 - Modify: `.github/workflows/bump_version.yml`
 - Modify: `tests/capgo-release-workflow.unit.test.ts`
 
-- [ ] **Step 1: Write failing publisher and workflow contract tests**
+- [x] **Step 1: Write failing publisher and workflow contract tests**
 
 Define tests around this public API:
 
@@ -145,7 +145,7 @@ Test these exact behaviors:
 
 Extend the workflow contract test to require the complete reusable `test` job, `needs: [changes, test]`, a known-tags snapshot, `publish-release.ts`, and no `git pull` in the publication step.
 
-- [ ] **Step 2: Run the tests and verify they fail**
+- [x] **Step 2: Run the tests and verify they fail**
 
 Run:
 
@@ -155,7 +155,7 @@ bunx vitest run tests/publish-release.test.ts tests/capgo-release-workflow.unit.
 
 Expected: failures for the missing publisher and old pull-based workflow.
 
-- [ ] **Step 3: Implement the atomic publisher**
+- [x] **Step 3: Implement the atomic publisher**
 
 Implement `scripts/publish-release.ts` with `execFileSync('git', args)` and strict ref validation. Read the remote branch with:
 
@@ -177,7 +177,7 @@ Build the publication arguments as:
 
 On the CLI path, read known tags from the supplied snapshot file, print `published` or `superseded` to stdout, and write a human-readable reason to stderr.
 
-- [ ] **Step 4: Wire atomic publication into the existing bump workflow**
+- [x] **Step 4: Wire atomic publication into the existing bump workflow**
 
 Change all three scope steps to use `--latest-stable` on `main` and `--latest-alpha` on `development`. Preserve the reusable full `test` job unchanged.
 
@@ -200,7 +200,7 @@ echo "published=$([[ "$status" = published ]] && echo true || echo false)" >> "$
 
 Pass the credentialed remote through `RELEASE_REMOTE_URL`. Give the step `id: publish` and expose `published` as a job output. Gate `sync_schema_types` on `needs.bump-version.outputs.published == 'true'` so superseded runs cannot create an auto-sync race.
 
-- [ ] **Step 5: Run the focused tests**
+- [x] **Step 5: Run the focused tests**
 
 Run:
 

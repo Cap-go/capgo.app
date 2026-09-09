@@ -22,6 +22,22 @@ function getStep(workflow: string, name: string): string {
 }
 
 describe('native-aware Capgo release workflow', () => {
+  it.concurrent('keeps post-merge tests and publishes release refs atomically', async () => {
+    const workflow = await readWorkflow(workflowPaths.bump)
+
+    expect(workflow).toContain('test:\n    needs: changes')
+    expect(workflow).toContain('uses: ./.github/workflows/tests.yml')
+    expect(workflow).toContain('needs: [changes, test]')
+    expect(workflow).toContain("needs.test.result == 'success'")
+    expect(workflow).toContain('--latest-stable')
+    expect(workflow).toContain('--latest-alpha')
+    expect(workflow).toContain('release-base-sha')
+    expect(workflow).toContain('release-tags-before')
+    expect(workflow).toContain('scripts/publish-release.ts')
+    expect(workflow).toContain("needs.bump-version.outputs.published == 'true'")
+    expect(workflow).not.toContain('git pull')
+  })
+
   it.concurrent('decides the Capgo version after tests and before standard-version', async () => {
     const workflow = await readWorkflow(workflowPaths.bump)
     const decision = getStep(workflow, 'Resolve Capgo native release bump')
