@@ -97,6 +97,32 @@ describe('read-replica schema compatibility', () => {
     expect(readReplicaSchemaCompatibilityIssues(expected, actual)).toEqual([])
   })
 
+  it.concurrent('ignores stale subscriber CHECK definitions in subscriber compatibility mode', () => {
+    const expected = catalog()
+    expected.constraints = [{
+      table: 'orgs',
+      name: 'orgs_onboarding_valid',
+      type: 'c',
+      definition: 'CHECK (jsonb_typeof(onboarding) = \'object\'::text AND (NOT onboarding ? \'intent\'::text OR ((onboarding ->> \'intent\'::text) = ANY (ARRAY[\'publish\'::text])))) NOT VALID',
+      valid: false,
+    }]
+    const actual = structuredClone(expected)
+    actual.constraints[0] = {
+      ...actual.constraints[0],
+      definition: 'CHECK (jsonb_typeof(onboarding) = \'object\'::text AND (NOT onboarding ? \'intent\'::text OR ((onboarding ->> \'intent\'::text) = ANY (ARRAY[\'unknown\'::text]))))',
+      valid: true,
+    }
+
+    expect(readReplicaSubscriberCompatibilityIssues(expected, actual)).toEqual([])
+    expect(readReplicaSchemaCompatibilityIssues(expected, actual)).toEqual([
+      {
+        kind: 'constraint',
+        object: 'orgs.orgs_onboarding_valid',
+        reason: 'subscriber CHECK constraint differs',
+      },
+    ])
+  })
+
   it.concurrent('rejects structural drift across selected schema objects', () => {
     const expected = catalog()
     const actual = catalog()

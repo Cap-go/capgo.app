@@ -582,6 +582,45 @@ describe('read-replica additive schema sync', () => {
     })
   })
 
+  it.concurrent('reconciles a stale subscriber CHECK constraint with drop and add', () => {
+    const expected = {
+      tables: [{ name: 'orgs' }],
+      columns: [],
+      constraints: [{
+        table: 'orgs',
+        name: 'orgs_onboarding_valid',
+        type: 'c' as const,
+        definition: 'CHECK (jsonb_typeof(onboarding) = \'object\'::text AND (NOT onboarding ? \'intent\'::text OR ((onboarding ->> \'intent\'::text) = ANY (ARRAY[\'publish\'::text])))) NOT VALID',
+        valid: false,
+      }],
+      indexes: [],
+    }
+    const current = structuredClone(expected)
+    current.constraints[0] = {
+      ...current.constraints[0],
+      definition: 'CHECK (jsonb_typeof(onboarding) = \'object\'::text AND (NOT onboarding ? \'intent\'::text OR ((onboarding ->> \'intent\'::text) = ANY (ARRAY[\'unknown\'::text]))))',
+      valid: true,
+    }
+
+    expect(planReadReplicaSchemaSync(expected, current)).toEqual({
+      statements: [
+        {
+          kind: 'drop_check_constraint',
+          table: 'orgs',
+          name: 'orgs_onboarding_valid',
+          sql: 'ALTER TABLE public."orgs" DROP CONSTRAINT IF EXISTS "orgs_onboarding_valid"',
+        },
+        {
+          kind: 'check_constraint',
+          table: 'orgs',
+          name: 'orgs_onboarding_valid',
+          sql: 'ALTER TABLE public."orgs" ADD CONSTRAINT "orgs_onboarding_valid" CHECK (jsonb_typeof(onboarding) = \'object\'::text AND (NOT onboarding ? \'intent\'::text OR ((onboarding ->> \'intent\'::text) = ANY (ARRAY[\'publish\'::text])))) NOT VALID',
+        },
+      ],
+      skipped: [],
+    })
+  })
+
   it.concurrent('replaces the selected helper function from the primary catalog', async () => {
     const expected = {
       tables: [{ name: 'apps' }],
