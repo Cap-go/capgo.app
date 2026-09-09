@@ -676,6 +676,49 @@ describe('new-user A/B test assignment', () => {
     expect(drizzleTransactionMock).toHaveBeenCalledTimes(5)
   })
 
+  it('clears experiment tags from the previous email before syncing a changed email', async () => {
+    const module = await loadABTestsModule()
+    installIntentTest(module)
+    const standardAssignments = persistedAssignments({ development: 'D', emails: 'B', publish: 'B' })
+    const assigned = {
+      ...standardAssignments,
+      [INTENT_TEST_NAME]: intentAssignment(),
+    }
+    const context = { get: vi.fn(() => 'request-id') } as never
+    drizzleExecuteMock
+      .mockResolvedValueOnce({ rows: [{ abtests: standardAssignments, created_via_invite: false, email: 'Old@Example.com', intent: 'ota' }] })
+      .mockResolvedValueOnce({ rows: [{ abtests: assigned }] })
+
+    const oldEmailUser = { abtests: assigned, created_via_invite: false, email: 'Old@Example.com', intent: 'ota' }
+    const newEmailUser = { abtests: assigned, created_via_invite: false, email: 'New@Example.com', intent: 'ota' }
+    queueBentoSnapshot(oldEmailUser)
+    queueBentoSnapshot(newEmailUser)
+    queueBentoSnapshot(newEmailUser)
+
+    await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(assigned)
+
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledTimes(3)
+    const [, oldEmailUpdate] = syncBentoSubscriberTagsMock.mock.calls[0]!
+    const [, oldEmailCleanup] = syncBentoSubscriberTagsMock.mock.calls[1]!
+    const [, newEmailUpdate] = syncBentoSubscriberTagsMock.mock.calls[2]!
+    expect(oldEmailUpdate).toEqual(expect.objectContaining({
+      email: 'old@example.com',
+      segments: expect.arrayContaining(['ab:intent_targeted']),
+    }))
+    expect(oldEmailCleanup).toEqual({
+      deleteSegments: expect.arrayContaining([
+        'ab:intent_targeted',
+        'ab:no_intent_targeted',
+      ]),
+      email: 'old@example.com',
+      segments: [],
+    })
+    expect(newEmailUpdate).toEqual(expect.objectContaining({
+      email: 'new@example.com',
+      segments: expect.arrayContaining(['ab:intent_targeted']),
+    }))
+  })
+
   it('treats a malformed current branch as unassigned during Bento reconciliation', async () => {
     const module = await loadABTestsModule()
     installIntentTest(module)

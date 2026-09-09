@@ -314,6 +314,17 @@ function sameBentoTagUpdate(
   return JSON.stringify(left) === JSON.stringify(right)
 }
 
+function buildBentoTagCleanup(email: string) {
+  return {
+    deleteSegments: Object.values(AB_TESTS_CONFIG).flatMap(test => [
+      test.branches[test.treatment_branch].bento_tag,
+      test.branches[test.control_branch].bento_tag,
+    ]),
+    email,
+    segments: [],
+  }
+}
+
 async function readLockedABTestUser(
   drizzle: ReturnType<typeof getDrizzleClient>,
   userId: string,
@@ -360,8 +371,25 @@ async function syncCurrentUserABTestTags(
         return
 
       const latestUser = await readLockedABTestUser(drizzle, userId)
-      if (sameBentoTagUpdate(tagUpdate, latestUser ? buildBentoTagUpdate(latestUser) : undefined))
+      const latestTagUpdate = latestUser ? buildBentoTagUpdate(latestUser) : undefined
+      if (sameBentoTagUpdate(tagUpdate, latestTagUpdate))
         return
+
+      if (latestTagUpdate?.email !== tagUpdate.email) {
+        if (attempt >= BENTO_AB_TEST_SYNC_MAX_ATTEMPTS)
+          return
+        attempt += 1
+        const cleanupResult = await syncBentoSubscriberTags(c, buildBentoTagCleanup(tagUpdate.email), signal)
+        if (cleanupResult === false) {
+          cloudlogErr({
+            message: 'on-demand A/B Bento email cleanup failed',
+            requestId: c.get('requestId'),
+          })
+          return
+        }
+        if (cleanupResult === undefined)
+          return
+      }
       user = latestUser
     }
   }
