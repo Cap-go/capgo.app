@@ -124,7 +124,7 @@ const ONBOARDING_CONSOLE_ESCAPE_DESTINATIONS = new Set([
   '/scan',
 ])
 
-function isPreCreateOnboardingPath(
+export function isPreCreateOnboardingPath(
   path: string | null | undefined,
   options?: { source?: string | null },
 ) {
@@ -140,8 +140,26 @@ function isPreCreateOnboardingPath(
   return false
 }
 
+export function getOnboardingContinueSetupRoute(options: {
+  currentPath?: string | null
+  currentSource?: string | null
+  currentStep?: string | null
+  resumeAppId: string | null | undefined
+}) {
+  if (isPreCreateOnboardingPath(options.currentPath, { source: options.currentSource }))
+    return null
+  if (!options.resumeAppId)
+    return null
+
+  const query: Record<string, string> = { resume: options.resumeAppId }
+  if (typeof options.currentStep === 'string' && options.currentStep)
+    query.step = options.currentStep
+
+  return { path: '/app/new', query }
+}
+
 export function shouldConfirmOnboardingDashboardExploration(options: {
-  currentPath?: string | null | undefined
+  currentPath?: string | null
   currentSource?: string | null
   destination: string
   resumeAppId: string | null | undefined
