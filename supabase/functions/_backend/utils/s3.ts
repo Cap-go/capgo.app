@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import type { Database } from '../utils/supabase.types.ts'
 import { S3Client } from '@bradenmacdonald/s3-lite-client'
 import type { RawS3LiteClient } from './r2_trash_shared.ts'
-import { conditionalDeleteSource, encodeS3LiteCopySourceKey, isObjectNotFoundError } from './r2_trash_shared.ts'
+import { conditionalDeleteSource, encodeS3LiteCopySourceKey, isObjectNotFoundError, resolveAvailableR2TrashKey } from './r2_trash_shared.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { getManifestStorageCandidateKeys } from './manifest_encoding.ts'
 import { getEnv } from './utils.ts'
@@ -92,10 +92,6 @@ export class TrashMoveError extends Error {
   }
 }
 
-function getTrashPath(fileId: string) {
-  return `${R2_TRASH_PREFIX}${fileId}`
-}
-
 function isPermanentR2DeleteAllowed(c: Context): boolean {
   return getEnv(c, 'ALLOW_PERMANENT_R2_DELETE') === 'true'
 }
@@ -165,12 +161,13 @@ async function moveObjectToTrash(c: Context, fileId: string) {
     return true
 
   const client = initS3(c)
-  const trashPath = getTrashPath(fileId)
 
   let sourceEtag: string | undefined
+  let sourceLastModified: Date | undefined
   try {
     const stat = await client.statObject(fileId)
     sourceEtag = stat.etag
+    sourceLastModified = stat.lastModified
   }
   catch (error) {
     if (isMissingObjectError(error) || isObjectNotFoundError(error)) {
@@ -181,8 +178,17 @@ async function moveObjectToTrash(c: Context, fileId: string) {
     return false
   }
 
-  if (!sourceEtag) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object missing ETag before trash move, source retained', fileId })
+  if (!sourceEtag || !sourceLastModified) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object missing ETag or Last-Modified before trash move, source retained', fileId })
+    return false
+  }
+
+  let trashPath: string
+  try {
+    trashPath = await resolveAvailableR2TrashKey(client as RawS3LiteClient, fileId, sourceEtag)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to allocate trash destination', fileId, error: serializeStorageError(error) })
     return false
   }
 
@@ -199,9 +205,11 @@ async function moveObjectToTrash(c: Context, fileId: string) {
   }
 
   let afterCopyEtag: string | undefined
+  let afterCopyLastModified: Date | undefined
   try {
     const afterCopy = await client.statObject(fileId)
     afterCopyEtag = afterCopy.etag
+    afterCopyLastModified = afterCopy.lastModified
   }
   catch (error) {
     if (isMissingObjectError(error) || isObjectNotFoundError(error)) {
@@ -217,7 +225,12 @@ async function moveObjectToTrash(c: Context, fileId: string) {
     return false
   }
 
-  const deleteResult = await conditionalDeleteSource(client as RawS3LiteClient, fileId, afterCopyEtag)
+  const deleteResult = await conditionalDeleteSource(
+    client as RawS3LiteClient,
+    fileId,
+    afterCopyEtag,
+    afterCopyLastModified ?? sourceLastModified,
+  )
   if (deleteResult === 'deleted') {
     cloudlog({ requestId: c.get('requestId'), message: 'moved R2 object to trash', fileId, trashPath })
     return true
@@ -300,15 +313,11 @@ async function moveObjectsWithPrefixToTrash(c: Context, prefix: string): Promise
     await Promise.all(currentBatch.map(moveKey))
   }
 
-  const keys: string[] = []
-  for await (const object of client.listObjects({ prefix })) {
-    if (!object.key.startsWith(R2_TRASH_PREFIX))
-      keys.push(object.key)
-  }
-
   try {
-    for (const key of keys) {
-      batch.push(key)
+    for await (const object of client.listObjects({ prefix })) {
+      if (object.key.startsWith(R2_TRASH_PREFIX))
+        continue
+      batch.push(object.key)
       if (batch.length >= PREFIX_TRASH_CONCURRENCY)
         await flushBatch()
     }

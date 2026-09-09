@@ -146,6 +146,11 @@ async function main() {
         return 'failed'
       }
 
+      if (!sourceEtag) {
+        console.warn(`Failed ${key}: live object has no ETag; source retained`)
+        return 'failed'
+      }
+
       try {
         await s3.send(new DeleteObjectCommand({
           Bucket: S3_BUCKET,
@@ -217,6 +222,11 @@ async function main() {
           return 'failed'
         }
         console.error(`Failed to trash ${key}:`, copyError)
+        return 'failed'
+      }
+
+      if (!sourceEtag) {
+        console.warn(`Skipped delete for ${key}: live object has no ETag; source retained`)
         return 'failed'
       }
 

@@ -117,7 +117,12 @@ export async function resolveTrashDestinationKey(
   throw new Error(`Failed to allocate unique trash destination for ${sourceKey}`)
 }
 
-async function resolveAvailableR2TrashKey(
+/** HTTP-date for R2 DeleteObject conditional deletes (x-amz-if-match-last-modified-time). */
+export function formatR2ConditionalDeleteLastModified(lastModified: Date): string {
+  return lastModified.toUTCString()
+}
+
+export async function resolveAvailableR2TrashKey(
   s3client: Pick<RawS3LiteClient, 'statObject'>,
   key: string,
   sourceEtag?: string,
@@ -163,8 +168,8 @@ export type S3LiteMakeRequest = (options: {
 
 export type S3LiteTrashClient = {
   copyObject: (options: { sourceKey: string }, destinationKey: string) => Promise<unknown>
-  deleteObject: (key: string, options?: { ifMatch?: string }) => Promise<unknown>
-  statObject: (key: string) => Promise<{ etag: string }>
+  deleteObject: (key: string, options?: { ifMatch?: string, lastModified?: Date }) => Promise<unknown>
+  statObject: (key: string) => Promise<{ etag: string, lastModified?: Date }>
 }
 
 export type RawS3LiteClient = {
@@ -172,21 +177,23 @@ export type RawS3LiteClient = {
   deleteObject: (key: string) => Promise<unknown>
   statObject: S3LiteTrashClient['statObject']
   listObjects?: (options: { prefix: string }) => AsyncIterable<{ key: string }>
-  /** s3_lite_client public API — required for atomic If-Match deletes. */
+  /** s3_lite_client public API — required for R2 conditional deletes. */
   makeRequest?: S3LiteMakeRequest
 }
 
 export type ConditionalDeleteResult = 'deleted' | 'skipped_changed' | 'skipped_missing'
 
-/** Permanent delete with live stat + atomic If-Match (used by ops scripts). */
+/** Permanent delete with live stat + R2 conditional delete (used by ops scripts). */
 export async function permanentDeleteSourceIfMatch(
   s3client: Pick<RawS3LiteClient, 'statObject' | 'deleteObject' | 'makeRequest'>,
   key: string,
 ): Promise<ConditionalDeleteResult> {
   let sourceEtag: string | undefined
+  let sourceLastModified: Date | undefined
   try {
     const stat = await s3client.statObject(key)
     sourceEtag = stat.etag
+    sourceLastModified = stat.lastModified
   }
   catch (error) {
     if (isObjectNotFoundError(error))
@@ -194,26 +201,28 @@ export async function permanentDeleteSourceIfMatch(
     throw error
   }
 
-  return conditionalDeleteSource(s3client, key, sourceEtag)
+  return conditionalDeleteSource(s3client, key, sourceEtag, sourceLastModified)
 }
 
 /**
- * Atomic If-Match delete via s3_lite makeRequest when available.
- * Without makeRequest, retain the source — stat-then-delete races with concurrent writers.
+ * Conditional delete via s3_lite makeRequest when available.
+ * R2 DeleteObject honors x-amz-if-match-last-modified-time, not standard If-Match.
+ * Without makeRequest or lastModified, retain the source — stat-then-delete races with concurrent writers.
  */
 export async function conditionalDeleteSource(
   s3client: Pick<RawS3LiteClient, 'deleteObject' | 'makeRequest'>,
   key: string,
   expectedEtag: string | undefined,
+  sourceLastModified?: Date,
 ): Promise<ConditionalDeleteResult> {
-  if (!expectedEtag)
+  if (!expectedEtag || !sourceLastModified)
     return 'skipped_changed'
 
   if (!s3client.makeRequest)
     return 'skipped_changed'
 
   const headers = new Headers()
-  headers.set('If-Match', expectedEtag)
+  headers.set('x-amz-if-match-last-modified-time', formatR2ConditionalDeleteLastModified(sourceLastModified))
 
   try {
     await s3client.makeRequest({
@@ -239,8 +248,8 @@ export function asS3LiteTrashClient(s3client: RawS3LiteClient): S3LiteTrashClien
     copyObject: (options, destinationKey) => s3client.copyObject(options, destinationKey),
     statObject: key => s3client.statObject(key),
     deleteObject: async (key, options) => {
-      if (options?.ifMatch) {
-        const result = await conditionalDeleteSource(s3client, key, options.ifMatch)
+      if (options?.ifMatch !== undefined) {
+        const result = await conditionalDeleteSource(s3client, key, options.ifMatch, options.lastModified)
         if (result === 'skipped_changed')
           throw { name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } }
         return
@@ -257,10 +266,15 @@ export type S3LiteTrashMoveResult = 'moved' | 'skipped_missing' | 'skipped_chang
 
 /** Move a live object to 7-day trash via s3_lite_client (encodes copy source path segments). */
 export async function moveS3LiteObjectToTrash(s3client: RawS3LiteClient, key: string): Promise<S3LiteTrashMoveResult> {
+  if (!isLiveR2Key(key))
+    return 'moved'
+
   let sourceEtag: string | undefined
+  let sourceLastModified: Date | undefined
   try {
     const stat = await s3client.statObject(key)
     sourceEtag = stat.etag
+    sourceLastModified = stat.lastModified
   }
   catch (error) {
     if (isObjectNotFoundError(error))
@@ -268,7 +282,7 @@ export async function moveS3LiteObjectToTrash(s3client: RawS3LiteClient, key: st
     throw error
   }
 
-  if (!sourceEtag)
+  if (!sourceEtag || !sourceLastModified)
     return 'skipped_changed'
 
   const trashKey = await resolveAvailableR2TrashKey(s3client, key, sourceEtag)
@@ -283,9 +297,11 @@ export async function moveS3LiteObjectToTrash(s3client: RawS3LiteClient, key: st
   }
 
   let afterCopyEtag: string | undefined
+  let afterCopyLastModified: Date | undefined
   try {
     const afterCopy = await s3client.statObject(key)
     afterCopyEtag = afterCopy.etag
+    afterCopyLastModified = afterCopy.lastModified
   }
   catch (error) {
     if (isObjectNotFoundError(error))
@@ -296,7 +312,12 @@ export async function moveS3LiteObjectToTrash(s3client: RawS3LiteClient, key: st
   if (sourceEtag && afterCopyEtag !== sourceEtag)
     return 'skipped_changed'
 
-  const deleteResult = await conditionalDeleteSource(s3client, key, afterCopyEtag ?? sourceEtag)
+  const deleteResult = await conditionalDeleteSource(
+    s3client,
+    key,
+    afterCopyEtag ?? sourceEtag,
+    afterCopyLastModified ?? sourceLastModified,
+  )
   if (deleteResult === 'skipped_changed')
     return 'skipped_changed'
   return 'moved'

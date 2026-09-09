@@ -1707,6 +1707,14 @@ async function delete_cleanup_candidates() {
                 }
             }
 
+            if (!sourceEtag) {
+                return {
+                    key: file.key,
+                    success: false,
+                    error: 'Live object has no ETag; source retained',
+                }
+            }
+
             if (deleteMode === 'permanent') {
                 try {
                     await s3.send(new DeleteObjectCommand({
@@ -1721,7 +1729,7 @@ async function delete_cleanup_candidates() {
                     if (isPreconditionFailedError(deleteError)) {
                         return {
                             key: file.key,
-                            success: false,
+                            success: true,
                             error: 'Cleanup candidate stale: live object changed before permanent delete',
                             skipped: true,
                         }
