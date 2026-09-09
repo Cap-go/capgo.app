@@ -89,6 +89,8 @@ DECLARE
   role_id uuid;
   role_priority integer;
 BEGIN
+  PERFORM public.lock_rbac_orgs(p_org_id);
+
   SELECT r.id, r.priority_rank
   INTO role_id, role_priority
   FROM public.roles r
@@ -127,8 +129,6 @@ BEGIN
     'tmp_invite_role_update'
   );
 
-  PERFORM public.lock_rbac_orgs(p_org_id);
-
   UPDATE public.tmp_users
   SET rbac_role_name = p_new_role_name,
       updated_at = now()
@@ -157,6 +157,8 @@ DECLARE
   role_id uuid;
   role_priority integer;
 BEGIN
+  PERFORM public.lock_rbac_orgs(p_org_id);
+
   SELECT r.id, r.priority_rank
   INTO role_id, role_priority
   FROM public.roles r
@@ -194,8 +196,6 @@ BEGIN
     role_priority,
     'org_invite_role_update'
   );
-
-  PERFORM public.lock_rbac_orgs(p_org_id);
 
   UPDATE public.org_users
   SET rbac_role_name = p_new_role_name,
@@ -395,6 +395,7 @@ DECLARE
   role_name text;
   role_id uuid;
   v_inviter_id uuid;
+  v_finalize_rows integer;
 BEGIN
   PERFORM public.lock_rbac_orgs(accept_invitation_to_org.org_id);
 
@@ -519,6 +520,11 @@ BEGIN
   WHERE public.org_users.user_id = invite_user_id
     AND public.org_users.org_id = invite_org_id
     AND public.org_users.is_invite IS TRUE;
+
+  GET DIAGNOSTICS v_finalize_rows = ROW_COUNT;
+  IF v_finalize_rows = 0 THEN
+    RETURN 'MEMBERSHIP_NOT_FINALIZED';
+  END IF;
 
   RETURN 'OK';
 END;
