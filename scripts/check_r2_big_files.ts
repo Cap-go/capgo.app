@@ -1574,19 +1574,51 @@ async function delete_cleanup_candidates() {
         return
     }
 
-    console.log(`📦 Found ${toDelete.length} files to delete from main bucket`)
+    console.log(`📦 Found ${toDelete.length} cleanup candidates in ${cleanupFile}`)
+
+    console.log('🔗 Revalidating candidates against current app_versions...')
+    const mockContext = {} as Context
+    const pool = getPgClient(mockContext)
+    let candidatesToProcess = toDelete
+    try {
+        const candidateKeys = candidatesToProcess.map((file: { key: string }) => file.key)
+        const result = await pool.query(
+            'SELECT r2_path FROM app_versions WHERE r2_path = ANY($1)',
+            [candidateKeys],
+        )
+        const existingPaths = new Set(result.rows.map((row: { r2_path: string }) => row.r2_path))
+        const beforeCount = candidatesToProcess.length
+        candidatesToProcess = candidatesToProcess.filter((file: { key: string }) => !existingPaths.has(file.key))
+        const skippedCount = beforeCount - candidatesToProcess.length
+        if (skippedCount > 0)
+            console.log(`⏭️  Skipping ${skippedCount} candidates that now have app_versions records`)
+    }
+    catch (error) {
+        console.error('❌ Failed to revalidate cleanup candidates against database:', error)
+        process.exit(1)
+    }
+    finally {
+        await pool.end()
+    }
+
+    if (candidatesToProcess.length === 0) {
+        console.log('✅ No orphaned files remain after DB revalidation')
+        return
+    }
+
+    console.log(`📦 Processing ${candidatesToProcess.length} orphaned files from main bucket`)
 
     // Calculate total size
-    const totalSize = toDelete.reduce((sum: number, file: any) => sum + (file.size?? 0), 0)
+    const totalSize = candidatesToProcess.reduce((sum: number, file: any) => sum + (file.size?? 0), 0)
     const totalSizeGB = (totalSize / (1024 * 1024 * 1024)).toFixed(2)
 
     console.log(`💾 Total size to ${deleteMode === 'dry_run' ? 'inspect' : 'process'}: ${totalSizeGB} GB`)
     console.log(`📁 From bucket: ${S3_BUCKET}`)
 
     if (deleteMode === 'dry_run') {
-        for (const file of toDelete)
+        for (const file of candidatesToProcess)
             console.log(`Would process: ${file.key}`)
-        console.log(`✅ Dry-run complete for ${toDelete.length} live candidates`)
+        console.log(`✅ Dry-run complete for ${candidatesToProcess.length} live candidates`)
         return
     }
 
@@ -1738,13 +1770,13 @@ async function delete_cleanup_candidates() {
     console.log(`⚡ Processing files from main bucket (mode: ${deleteMode})...`)
 
     const results: Array<{ key: string, success: boolean, error: string | null, skipped?: boolean }> = []
-    for (let i = 0; i < toDelete.length; i += PROCESS_CONCURRENCY) {
-        const batch = toDelete.slice(i, i + PROCESS_CONCURRENCY)
+    for (let i = 0; i < candidatesToProcess.length; i += PROCESS_CONCURRENCY) {
+        const batch = candidatesToProcess.slice(i, i + PROCESS_CONCURRENCY)
         const batchResults = await Promise.all(batch.map((file: { key: string }) => limiter.run(() => processCandidate(file))))
         results.push(...batchResults)
         processedCount += batchResults.length
-        if (processedCount % 10 === 0 || processedCount === toDelete.length)
-            console.log(`📊 Progress: ${processedCount}/${toDelete.length} files processed`)
+        if (processedCount % 10 === 0 || processedCount === candidatesToProcess.length)
+            console.log(`📊 Progress: ${processedCount}/${candidatesToProcess.length} files processed`)
     }
 
     // Analyze results
@@ -1768,7 +1800,7 @@ async function delete_cleanup_candidates() {
         generated: new Date().toISOString(),
         deleteMode,
         summary: {
-            totalFiles: toDelete.length,
+            totalFiles: candidatesToProcess.length,
             successfulProcessed: successful.length,
             failedProcessed: failed.length,
             totalSizeProcessed: totalSize,
@@ -1790,13 +1822,13 @@ async function delete_cleanup_candidates() {
         process.exit(1)
     }
 
-    if (successful.length === toDelete.length) {
+    if (successful.length === candidatesToProcess.length) {
         console.log(`\n🎉 All files successfully ${deleteMode === 'permanent' ? 'deleted from' : 'moved to trash from'} main bucket!`)
         console.log('✅ Cleanup operation completed successfully')
     }
 
     console.log(`\n📈 Summary:`)
-    console.log(`   📦 Files ${deleteMode === 'permanent' ? 'deleted' : 'moved to trash'}: ${successful.length}/${toDelete.length}`)
+    console.log(`   📦 Files ${deleteMode === 'permanent' ? 'deleted' : 'moved to trash'}: ${successful.length}/${candidatesToProcess.length}`)
     console.log(`   💾 Size ${deleteMode === 'permanent' ? 'deleted' : 'moved to trash'}: ${totalSizeGB} GB`)
     console.log(`   📁 Source bucket: ${S3_BUCKET}`)
 }
