@@ -2,6 +2,7 @@ export type R2CleanupDeleteMode = 'dry_run' | 'trash' | 'permanent'
 
 export {
   ConcurrencyLimiter,
+  createAwsTrashDestinationResolver,
   encodeS3CopySource,
   getR2TrashKey,
   getUniqueR2TrashKey,
@@ -11,6 +12,7 @@ export {
   isPreconditionFailedError,
   R2_TRASH_PREFIX,
   resolveOpsDeleteMode,
+  resolveTrashDestinationKey,
 } from '../r2_trash_utils.ts'
 
 import { resolveOpsDeleteMode } from '../r2_trash_utils.ts'

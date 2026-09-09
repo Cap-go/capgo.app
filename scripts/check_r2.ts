@@ -3,7 +3,7 @@ import type { _Object, ListObjectsV2CommandOutput } from '@aws-sdk/client-s3'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'// supabase.types.ts'
 import { CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { createClient } from '@supabase/supabase-js'
-import { ConcurrencyLimiter, encodeS3CopySource, getR2TrashKey, getUniqueR2TrashKey, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, resolveOpsDeleteMode } from './r2_trash_utils.ts'
+import { ConcurrencyLimiter, createAwsTrashDestinationResolver, encodeS3CopySource, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const MAGIC_TO_DELETE = './tmp/magic_to_delete6.txt'
@@ -64,7 +64,7 @@ async function main() {
       ALLOW_PERMANENT_R2_DELETE: process.env.ALLOW_PERMANENT_R2_DELETE,
     })
     const files = JSON.parse(await Bun.file(MAGIC_TO_DELETE).text()) as _Object[]
-    const candidates = files
+    let candidates = files
       .filter(file => file.Key && isLiveR2Key(file.Key))
       .map(file => ({ key: file.Key!, etag: file.ETag }))
     let errorCount = 0
@@ -73,6 +73,33 @@ async function main() {
       console.log(`DELETE_FILES=1 dry-run: would process ${candidates.length} live objects`)
       for (const { key } of candidates)
         console.log(`Would process: ${key}`)
+      return
+    }
+
+    const supabase = supabaseAdmin()
+    console.log('Revalidating candidates against current app_versions...')
+    const candidateKeys = candidates.map(candidate => candidate.key)
+    const existingPaths = new Set<string>()
+    for (let i = 0; i < candidateKeys.length; i += 500) {
+      const batch = candidateKeys.slice(i, i + 500)
+      const { data, error } = await supabase
+        .from('app_versions')
+        .select('r2_path')
+        .in('r2_path', batch)
+      if (error) {
+        console.error('Failed to revalidate candidates against app_versions:', error)
+        process.exit(1)
+      }
+      for (const row of data ?? [])
+        existingPaths.add(row.r2_path)
+    }
+    const beforeCount = candidates.length
+    candidates = candidates.filter(candidate => !existingPaths.has(candidate.key))
+    const skippedCount = beforeCount - candidates.length
+    if (skippedCount > 0)
+      console.log(`Skipping ${skippedCount} candidates that now have app_versions records`)
+    if (candidates.length === 0) {
+      console.log('No orphaned files remain after DB revalidation')
       return
     }
 
@@ -104,8 +131,8 @@ async function main() {
         const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
         sourceEtag = head.ETag
         if (candidateEtag && sourceEtag && candidateEtag !== sourceEtag) {
-          console.warn(`Skipped ${key}: live object etag changed since discovery`)
-          return 'skipped'
+          console.warn(`Failed ${key}: live object etag changed since discovery`)
+          return 'failed'
         }
       }
       catch (headError) {
@@ -127,27 +154,21 @@ async function main() {
         if (isObjectNotFoundError(deleteError))
           return 'skipped'
         if (isPreconditionFailedError(deleteError)) {
-          console.warn(`Skipped permanent delete for ${key}: live object changed since discovery`)
-          return 'skipped'
+          console.warn(`Failed permanent delete for ${key}: live object changed since discovery`)
+          return 'failed'
         }
         console.error(`Failed to permanently delete ${key}:`, deleteError)
         return 'failed'
       }
     }
 
+    const trashDestinationResolver = createAwsTrashDestinationResolver(async (objectKey) => {
+      const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: objectKey }))
+      return { etag: head.ETag }
+    })
+
     async function moveKeyToTrash(candidate: { key: string, etag?: string }): Promise<'ok' | 'skipped' | 'failed'> {
       const { key, etag: candidateEtag } = candidate
-      let trashKey: string
-      try {
-        const defaultTrashKey = getR2TrashKey(key)
-        trashKey = await objectExists(defaultTrashKey)
-          ? getUniqueR2TrashKey(key)
-          : defaultTrashKey
-      }
-      catch (headError) {
-        console.error(`Failed to check trash destination for ${key}:`, headError)
-        return 'failed'
-      }
       let sourceEtag: string | undefined
       try {
         const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
@@ -161,6 +182,15 @@ async function main() {
         if (isObjectNotFoundError(headError))
           return 'skipped'
         console.error(`Failed to head ${key} before trash:`, headError)
+        return 'failed'
+      }
+
+      let trashKey: string
+      try {
+        trashKey = await resolveTrashDestinationKey(trashDestinationResolver, key, sourceEtag)
+      }
+      catch (headError) {
+        console.error(`Failed to allocate trash destination for ${key}:`, headError)
         return 'failed'
       }
 
@@ -210,7 +240,7 @@ async function main() {
       for (let i = 0; i < candidates.length; i += DELETE_CONCURRENCY) {
         const batch = candidates.slice(i, i + DELETE_CONCURRENCY)
         const results = await Promise.all(batch.map(candidate => limiter.run(() => permanentDeleteCandidate(candidate))))
-        errorCount += results.filter(result => result === 'failed').length
+        errorCount += results.filter(result => result !== 'ok' && result !== 'skipped').length
       }
     }
     else {

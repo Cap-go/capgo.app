@@ -28,24 +28,83 @@ export function getUniqueR2TrashKey(sourceKey: string, suffix?: string): string 
   return `${R2_TRASH_PREFIX}${suffix ?? createUniqueR2TrashSuffix()}/${sourceKey}`
 }
 
-async function resolveAvailableR2TrashKey(s3client: Pick<RawS3LiteClient, 'statObject'>, key: string): Promise<string> {
-  const candidates = [
-    getR2TrashKey(key),
-    ...Array.from({ length: 10 }, () => getUniqueR2TrashKey(key)),
-  ]
+export type TrashDestinationResolver = {
+  keyExists: (key: string) => Promise<boolean>
+  getEtag: (key: string) => Promise<string | undefined>
+}
 
-  for (const trashKey of candidates) {
-    try {
-      await s3client.statObject(trashKey)
-    }
-    catch (error) {
-      if (isObjectNotFoundError(error))
-        return trashKey
-      throw error
-    }
+/** Build a TrashDestinationResolver from a HeadObject-style callback. */
+export function createAwsTrashDestinationResolver(
+  headObject: (key: string) => Promise<{ etag?: string }>,
+): TrashDestinationResolver {
+  return {
+    keyExists: async (key) => {
+      try {
+        await headObject(key)
+        return true
+      }
+      catch (error) {
+        if (isObjectNotFoundError(error))
+          return false
+        throw error
+      }
+    },
+    getEtag: async (key) => {
+      const head = await headObject(key)
+      return head.etag
+    },
+  }
+}
+
+/**
+ * Pick a trash destination without concurrent default-key overwrites.
+ * Reuses the default trash key only when it already holds this source etag (idempotent rerun).
+ * Otherwise allocates a unique suffix path.
+ */
+export async function resolveTrashDestinationKey(
+  resolver: TrashDestinationResolver,
+  sourceKey: string,
+  sourceEtag?: string,
+  maxUniqueAttempts = 10,
+): Promise<string> {
+  const defaultTrashKey = getR2TrashKey(sourceKey)
+  if (await resolver.keyExists(defaultTrashKey)) {
+    const trashEtag = await resolver.getEtag(defaultTrashKey)
+    if (sourceEtag && trashEtag === sourceEtag)
+      return defaultTrashKey
   }
 
-  throw new Error(`Failed to allocate unique trash destination for ${key}`)
+  for (let i = 0; i < maxUniqueAttempts; i++) {
+    const candidate = getUniqueR2TrashKey(sourceKey)
+    if (!await resolver.keyExists(candidate))
+      return candidate
+  }
+
+  throw new Error(`Failed to allocate unique trash destination for ${sourceKey}`)
+}
+
+async function resolveAvailableR2TrashKey(
+  s3client: Pick<RawS3LiteClient, 'statObject'>,
+  key: string,
+  sourceEtag?: string,
+): Promise<string> {
+  return resolveTrashDestinationKey({
+    keyExists: async (trashKey) => {
+      try {
+        await s3client.statObject(trashKey)
+        return true
+      }
+      catch (error) {
+        if (isObjectNotFoundError(error))
+          return false
+        throw error
+      }
+    },
+    getEtag: async (trashKey) => {
+      const stat = await s3client.statObject(trashKey)
+      return stat.etag
+    },
+  }, key, sourceEtag)
 }
 
 export function isLiveR2Key(key: string): boolean {
@@ -144,7 +203,9 @@ export function asS3LiteTrashClient(s3client: RawS3LiteClient): S3LiteTrashClien
       }
       await s3client.deleteObject(key)
     },
-    listObjects: s3client.listObjects,
+    listObjects: s3client.listObjects
+      ? s3client.listObjects.bind(s3client)
+      : undefined,
   }
 }
 
@@ -152,8 +213,6 @@ export type S3LiteTrashMoveResult = 'moved' | 'skipped_missing' | 'skipped_chang
 
 /** Move a live object to 7-day trash via s3_lite_client (encodes copy source path segments). */
 export async function moveS3LiteObjectToTrash(s3client: RawS3LiteClient, key: string): Promise<S3LiteTrashMoveResult> {
-  const trashKey = await resolveAvailableR2TrashKey(s3client, key)
-
   let sourceEtag: string | undefined
   try {
     const stat = await s3client.statObject(key)
@@ -164,6 +223,8 @@ export async function moveS3LiteObjectToTrash(s3client: RawS3LiteClient, key: st
       return 'skipped_missing'
     throw error
   }
+
+  const trashKey = await resolveAvailableR2TrashKey(s3client, key, sourceEtag)
 
   try {
     await s3client.copyObject({ sourceKey: encodeS3LiteCopySourceKey(key) }, trashKey)

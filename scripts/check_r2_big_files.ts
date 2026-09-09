@@ -3,7 +3,7 @@ import { writeFileSync, existsSync, readFileSync } from 'fs'
 import { S3Client as S3ClientLite } from '@bradenmacdonald/s3-lite-client/'
 import { Pool } from 'pg'
 import { Context } from 'vm'
-import { encodeS3CopySource, getR2TrashKey, getUniqueR2TrashKey, ConcurrencyLimiter, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, resolveOpsDeleteMode } from './r2_trash_utils.ts'
+import { createAwsTrashDestinationResolver, encodeS3CopySource, ConcurrencyLimiter, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const CHECKPOINT_FILE = './objects_checkpoint.json'
@@ -1642,6 +1642,11 @@ async function delete_cleanup_candidates() {
         }
     }
 
+    const trashDestinationResolver = createAwsTrashDestinationResolver(async (objectKey) => {
+        const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: objectKey }))
+        return { etag: head.ETag }
+    })
+
     async function processCandidate(file: { key: string, size?: number, lastModified?: string | Date | null, etag?: string | null }): Promise<{ key: string, success: boolean, error: string | null, skipped?: boolean, size?: number }> {
         try {
             let sourceEtag: string | undefined
@@ -1695,6 +1700,8 @@ async function delete_cleanup_candidates() {
                     }))
                 }
                 catch (deleteError: any) {
+                    if (isObjectNotFoundError(deleteError))
+                        return { key: file.key, success: true, error: null, skipped: true }
                     if (isPreconditionFailedError(deleteError)) {
                         return {
                             key: file.key,
@@ -1707,10 +1714,7 @@ async function delete_cleanup_candidates() {
                 }
             }
             else {
-                const defaultTrashKey = getR2TrashKey(file.key)
-                const trashKey = await objectExists(defaultTrashKey)
-                    ? getUniqueR2TrashKey(file.key)
-                    : defaultTrashKey
+                const trashKey = await resolveTrashDestinationKey(trashDestinationResolver, file.key, sourceEtag)
 
                 try {
                     await s3.send(new CopyObjectCommand({
@@ -1744,6 +1748,8 @@ async function delete_cleanup_candidates() {
                     }))
                 }
                 catch (deleteError: any) {
+                    if (isObjectNotFoundError(deleteError))
+                        return { key: file.key, success: true, error: null, skipped: true }
                     if (isPreconditionFailedError(deleteError))
                         return {
                             key: file.key,

@@ -9,14 +9,14 @@
 import { CopyObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import {
   ConcurrencyLimiter,
+  createAwsTrashDestinationResolver,
   encodeS3CopySource,
-  getR2TrashKey,
-  getUniqueR2TrashKey,
   isAlreadyMovedToTrash,
   isLiveR2Key,
   isObjectNotFoundError,
   isPreconditionFailedError,
   resolveR2CleanupDeleteMode,
+  resolveTrashDestinationKey,
   R2_TRASH_PREFIX,
 } from './delete_mode.ts'
 
@@ -50,6 +50,11 @@ const s3 = new S3Client({
 })
 
 const limiter = new ConcurrencyLimiter(CONCURRENCY)
+
+const trashDestinationResolver = createAwsTrashDestinationResolver(async (objectKey) => {
+  const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: objectKey }))
+  return { etag: head.ETag }
+})
 
 let totalProcessed = 0
 let totalErrors = 0
@@ -122,13 +127,10 @@ async function processKey(key: string): Promise<void> {
 
       let trashKey: string
       try {
-        const defaultTrashKey = getR2TrashKey(key)
-        trashKey = await objectExists(defaultTrashKey)
-          ? getUniqueR2TrashKey(key)
-          : defaultTrashKey
+        trashKey = await resolveTrashDestinationKey(trashDestinationResolver, key, sourceEtag)
       }
       catch (headError) {
-        console.error(`Failed to check trash destination for ${key}:`, headError)
+        console.error(`Failed to allocate trash destination for ${key}:`, headError)
         totalErrors += 1
         return
       }

@@ -12,6 +12,7 @@ import {
   asS3LiteTrashClient,
   moveS3LiteObjectToTrash,
   resolveOpsDeleteMode,
+  resolveTrashDestinationKey,
   R2_TRASH_PREFIX,
 } from '../scripts/r2_trash_utils.ts'
 
@@ -106,8 +107,10 @@ function makeAtomicDeleteClient(etag = '"abc123"') {
   const deleteObject = vi.fn(async () => undefined)
   const makeRequest = vi.fn<(args: MakeRequestArgs) => Promise<Response>>(async () => new Response(null, { status: 204 }))
   const statObject = vi.fn()
-    .mockRejectedValueOnce({ name: 'NotFound' })
-    .mockResolvedValue({ etag })
+    .mockResolvedValueOnce({ etag }) // source
+    .mockRejectedValueOnce({ name: 'NotFound' }) // default trash slot free
+    .mockRejectedValueOnce({ name: 'NotFound' }) // unique candidate free
+    .mockResolvedValueOnce({ etag }) // after copy
   return { copyObject, deleteObject, makeRequest, statObject }
 }
 
@@ -120,11 +123,10 @@ describe('moveS3LiteObjectToTrash', () => {
     const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key)
 
     expect(result).toBe('moved')
-    expect(copyObject).toHaveBeenCalledWith(
-      { sourceKey: 'orgs/org-1/apps/com.test/file%20name.zip' },
-      `${R2_TRASH_PREFIX}${key}`,
-    )
-    expect(statObject).toHaveBeenCalledTimes(3)
+    const copyCalls = copyObject.mock.calls as unknown as Array<[{ sourceKey: string }, string]>
+    expect(copyCalls[0][0]).toEqual({ sourceKey: 'orgs/org-1/apps/com.test/file%20name.zip' })
+    expect(copyCalls[0][1]).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${key}$`))
+    expect(statObject).toHaveBeenCalledTimes(4)
     expect(makeRequest).toHaveBeenCalledOnce()
     const deleteCall = makeRequest.mock.calls[0]![0]
     expect(deleteCall.headers?.get('If-Match')).toBe(etag)
@@ -136,9 +138,10 @@ describe('moveS3LiteObjectToTrash', () => {
     const copyObject = vi.fn(async () => undefined)
     const deleteObject = vi.fn(async () => undefined)
     const statObject = vi.fn()
-      .mockRejectedValueOnce({ name: 'NotFound' })
-      .mockResolvedValueOnce({ etag: '"before"' })
-      .mockResolvedValueOnce({ etag: '"after"' })
+      .mockResolvedValueOnce({ etag: '"before"' }) // source
+      .mockRejectedValueOnce({ name: 'NotFound' }) // default trash slot
+      .mockRejectedValueOnce({ name: 'NotFound' }) // unique candidate
+      .mockResolvedValueOnce({ etag: '"after"' }) // changed after copy
 
     const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
 
@@ -154,8 +157,9 @@ describe('moveS3LiteObjectToTrash', () => {
     })
     const deleteObject = vi.fn(async () => undefined)
     const statObject = vi.fn()
-      .mockRejectedValueOnce({ name: 'NotFound' })
-      .mockResolvedValueOnce({ etag: '"before"' })
+      .mockResolvedValueOnce({ etag: '"before"' }) // source
+      .mockRejectedValueOnce({ name: 'NotFound' }) // default trash slot
+      .mockRejectedValueOnce({ name: 'NotFound' }) // unique candidate
 
     const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
 
@@ -169,9 +173,10 @@ describe('moveS3LiteObjectToTrash', () => {
     const copyObject = vi.fn(async () => undefined)
     const deleteObject = vi.fn(async () => undefined)
     const statObject = vi.fn()
-      .mockRejectedValueOnce({ name: 'NotFound' })
-      .mockResolvedValueOnce({ etag: '"before"' })
-      .mockRejectedValueOnce({ status: 404, code: 'not found' })
+      .mockResolvedValueOnce({ etag: '"before"' }) // source
+      .mockRejectedValueOnce({ name: 'NotFound' }) // default trash slot
+      .mockRejectedValueOnce({ name: 'NotFound' }) // unique candidate
+      .mockRejectedValueOnce({ status: 404, code: 'not found' }) // gone after copy
 
     const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
 
@@ -179,17 +184,39 @@ describe('moveS3LiteObjectToTrash', () => {
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
-  it('uses a unique trash key when the default destination already exists', async () => {
+  it('reuses the default trash key when it already holds the same source etag', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const etag = '"before"'
     const copyObject = vi.fn(async () => undefined)
     const deleteObject = vi.fn(async () => undefined)
     const makeRequest = vi.fn(async () => new Response(null, { status: 204 }))
     const statObject = vi.fn()
-      .mockResolvedValueOnce({ etag }) // default trash exists
-      .mockRejectedValueOnce({ name: 'NotFound' }) // unique trash destination available
       .mockResolvedValueOnce({ etag }) // source
-      .mockResolvedValueOnce({ etag }) // after copy
+      .mockResolvedValueOnce({ etag }) // default trash exists
+      .mockResolvedValueOnce({ etag }) // default trash etag
+      .mockResolvedValue({ etag }) // after copy + any follow-up stat
+
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key)
+
+    expect(result).toBe('moved')
+    expect(copyObject).toHaveBeenCalledWith(
+      { sourceKey: key },
+      `${R2_TRASH_PREFIX}${key}`,
+    )
+  })
+
+  it('uses a unique trash key when the default destination holds a different object', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const etag = '"before"'
+    const copyObject = vi.fn(async () => undefined)
+    const deleteObject = vi.fn(async () => undefined)
+    const makeRequest = vi.fn(async () => new Response(null, { status: 204 }))
+    const statObject = vi.fn()
+      .mockResolvedValueOnce({ etag }) // source
+      .mockResolvedValueOnce({ etag: '"other"' }) // default trash exists
+      .mockResolvedValueOnce({ etag: '"other"' }) // default trash etag
+      .mockRejectedValueOnce({ name: 'NotFound' }) // unique candidate free
+      .mockResolvedValue({ etag }) // after copy + any follow-up stat
 
     const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key)
 
@@ -210,9 +237,10 @@ describe('moveS3LiteObjectToTrash', () => {
       throw { statusCode: 412, code: 'PreconditionFailed' }
     })
     const statObject = vi.fn()
-      .mockRejectedValueOnce({ name: 'NotFound' })
-      .mockResolvedValueOnce({ etag })
-      .mockResolvedValueOnce({ etag })
+      .mockResolvedValueOnce({ etag }) // source
+      .mockRejectedValueOnce({ name: 'NotFound' }) // default trash slot
+      .mockRejectedValueOnce({ name: 'NotFound' }) // unique candidate
+      .mockResolvedValueOnce({ etag }) // after copy
 
     const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key)
 
@@ -265,7 +293,58 @@ describe('conditionalDeleteSource', () => {
   })
 })
 
+describe('resolveTrashDestinationKey', () => {
+  it('allocates a unique path when the default trash slot is free', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const exists = vi.fn(async (trashKey: string) => trashKey === getR2TrashKey(key) ? false : false)
+    const getEtag = vi.fn(async () => '"etag"')
+
+    const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag }, key, '"etag"')
+
+    expect(trashKey).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${key}$`))
+    expect(trashKey).not.toBe(getR2TrashKey(key))
+  })
+
+  it('reuses the default trash key when it already holds the same source etag', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const etag = '"same"'
+    const exists = vi.fn(async (trashKey: string) => trashKey === getR2TrashKey(key))
+    const getEtag = vi.fn(async () => etag)
+
+    const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag }, key, etag)
+
+    expect(trashKey).toBe(getR2TrashKey(key))
+  })
+
+  it('allocates a unique path when the default trash key holds a different etag', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const exists = vi.fn(async (trashKey: string) => trashKey === getR2TrashKey(key))
+    const getEtag = vi.fn(async (trashKey: string) => trashKey === getR2TrashKey(key) ? '"other"' : undefined)
+
+    const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag }, key, '"current"')
+
+    expect(trashKey).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${key}$`))
+  })
+})
+
 describe('asS3LiteTrashClient', () => {
+  it('binds listObjects to the raw client', async () => {
+    async function* listObjects() {
+      yield { key: 'orgs/org-1/a.zip' }
+    }
+    const raw = {
+      copyObject: vi.fn(),
+      statObject: vi.fn(),
+      deleteObject: vi.fn(),
+      listObjects,
+    }
+    const client = asS3LiteTrashClient(raw)
+    const keys: string[] = []
+    for await (const obj of client.listObjects!({ prefix: 'orgs/' }))
+      keys.push(obj.key)
+    expect(keys).toEqual(['orgs/org-1/a.zip'])
+  })
+
   it('rejects delete when atomic If-Match delete fails', async () => {
     const raw = {
       copyObject: vi.fn(),
