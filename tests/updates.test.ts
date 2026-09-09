@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { parseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 
-import { APP_NAME, createAppVersions, getBaseData, getEndpointUrl, getSupabaseClient, getVersionFromAction, headers, ORG_ID, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID } from './test-utils.ts'
+import { APP_NAME, createAppVersions, getBaseData, getEndpointUrl, getSupabaseClient, getVersionFromAction, headers, ORG_ID, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
 
 const id = randomUUID()
 const APP_NAME_UPDATE = `${APP_NAME}.${id}`
@@ -109,6 +109,16 @@ async function postUpdateAfterChannelMutation(data: Partial<ReturnType<typeof ge
 
 beforeAll(async () => {
   await resetAndSeedAppData(APP_NAME_UPDATE)
+
+  // Warm the plugin worker before assertions. Cold first POST /updates can 502 under local workerd.
+  const warmData = getBaseData(APP_NAME_UPDATE)
+  await warmEdgeEndpoint(getEndpointUrl('/updates'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(warmData),
+  })
 }, 60_000)
 afterAll(async () => {
   await resetAppData(APP_NAME_UPDATE)

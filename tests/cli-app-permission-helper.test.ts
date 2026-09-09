@@ -20,13 +20,9 @@ vi.mock('../cli/src/utils', async (importOriginal) => {
 
 const { checkAppExistsAndHasPermissionOrgErr } = await import('../cli/src/api/app')
 
-function createSupabaseMock() {
-  return {
-    supabaseUrl: 'http://127.0.0.1:54321',
-    supabaseKey: 'test-anon',
-    from: vi.fn(() => ({})),
-    rpc: vi.fn(),
-  }
+const hostOptions = {
+  supaHost: 'http://127.0.0.1:54321',
+  supaAnon: 'test-anon',
 }
 
 describe('CLI app permission helper', () => {
@@ -38,45 +34,41 @@ describe('CLI app permission helper', () => {
   })
 
   it('does not require app-wide read before channel-scoped RBAC checks', async () => {
-    const supabase = createSupabaseMock()
-
     await expect(checkAppExistsAndHasPermissionOrgErr(
-      supabase as any,
       'test-key',
       'com.test.app',
       'channel.delete',
-      true,
-      true,
-      123,
+      {
+        ...hostOptions,
+        silent: true,
+        skip2FACheck: true,
+        channelId: 123,
+      },
     )).resolves.toBe(true)
 
     expect(invokeCapgoCliApiMock).not.toHaveBeenCalled()
     expect(hasCliPermissionMock).toHaveBeenCalledWith('test-key', 'channel.delete', {
       appId: 'com.test.app',
       channelId: 123,
-    }, {
-      supaHost: 'http://127.0.0.1:54321',
-      supaAnon: 'test-anon',
-    })
+    }, expect.objectContaining(hostOptions))
   })
 
   it('keeps the app existence precheck for app-scoped RBAC checks', async () => {
-    const supabase = createSupabaseMock()
-
     await expect(checkAppExistsAndHasPermissionOrgErr(
-      supabase as any,
       'test-key',
       'com.missing.app',
       'app.delete',
-      true,
-      true,
+      {
+        ...hostOptions,
+        silent: true,
+        skip2FACheck: true,
+      },
     )).rejects.toThrow('App com.missing.app does not exist')
 
     expect(invokeCapgoCliApiMock).toHaveBeenCalledWith('app/com.missing.app', expect.objectContaining({
       apikey: 'test-key',
       method: 'GET',
-      supaHost: 'http://127.0.0.1:54321',
-      supaAnon: 'test-anon',
+      ...hostOptions,
     }))
     expect(hasCliPermissionMock).not.toHaveBeenCalled()
   })

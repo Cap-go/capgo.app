@@ -3,7 +3,7 @@ import { intro, log, outro } from '@clack/prompts'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { displayChannels, getActiveChannels } from '../api/channels'
 import { CliUserError } from '../shared/cli-user-error'
-import { createSupabaseClient, findSavedKey, getAppId, getConfig, getOrganizationId, sendEvent } from '../utils'
+import { findSavedKey, getAppId, getConfig, getOrganizationId, sendEvent } from '../utils'
 
 export async function listChannelsInternal(appId: string, options: OptionsBase, silent = false) {
   if (!silent)
@@ -25,7 +25,6 @@ export async function listChannelsInternal(appId: string, options: OptionsBase, 
     throw new CliUserError('Missing appId')
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
   await check2FAComplianceForApp(options.apikey, appId, silent, { supaHost: options.supaHost, supaAnon: options.supaAnon })
   await checkAppExistsAndHasPermissionOrgErr(options.apikey, appId, 'app.read_channels', {
     supaHost: options.supaHost,

@@ -79,7 +79,7 @@ import { setOrganizationInternal } from './organization/set'
 import { requestBuildOptionsSchema, updateChannelOptionsSchema, uploadOptionsSchema } from './schemas/sdk'
 import { CliUserError } from './shared/cli-user-error'
 import { getUserIdInternal } from './user/account'
-import { createSupabaseClient, findSavedKey, getConfig, getLocalConfig } from './utils'
+import { findSavedKey, getConfig, getLocalConfig } from './utils'
 import { parseSecurityPolicyError } from './utils/security_policy_errors'
 import { normalizeAutoBumpInput } from './versionHelpers'
 
