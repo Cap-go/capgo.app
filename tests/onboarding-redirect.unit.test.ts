@@ -196,6 +196,20 @@ describe('onboarding dashboard redirect', () => {
       userId: 'user-1',
     })).toBe(true)
 
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/onboarding/invitation',
+      destination: '/dashboard',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(false)
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/onboarding/set_password',
+      destination: '/apps',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(false)
+
     module.allowOnboardingDashboardExploration('user-1', null)
 
     expect(module.shouldConfirmOnboardingDashboardExploration({
