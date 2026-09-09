@@ -3,7 +3,7 @@ import type { _Object, ListObjectsV2CommandOutput } from '@aws-sdk/client-s3'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'// supabase.types.ts'
 import { CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { createClient } from '@supabase/supabase-js'
-import { ConcurrencyLimiter, createAwsTrashDestinationResolver, encodeS3CopySource, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
+import { ConcurrencyLimiter, createAwsTrashDestinationResolver, encodeS3CopySource, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const MAGIC_TO_DELETE = './tmp/magic_to_delete6.txt'
@@ -69,37 +69,41 @@ async function main() {
       .map(file => ({ key: file.Key!, etag: file.ETag }))
     let errorCount = 0
 
-    if (deleteMode === 'dry_run') {
-      console.log(`DELETE_FILES=1 dry-run: would process ${candidates.length} live objects`)
-      for (const { key } of candidates)
-        console.log(`Would process: ${key}`)
-      return
-    }
-
     const supabase = supabaseAdmin()
     console.log('Revalidating candidates against current app_versions...')
-    const candidateKeys = candidates.map(candidate => candidate.key)
-    const existingPaths = new Set<string>()
-    for (let i = 0; i < candidateKeys.length; i += 500) {
-      const batch = candidateKeys.slice(i, i + 500)
-      const { data, error } = await supabase
-        .from('app_versions')
-        .select('r2_path')
-        .in('r2_path', batch)
-      if (error) {
-        console.error('Failed to revalidate candidates against app_versions:', error)
-        process.exit(1)
-      }
-      for (const row of data ?? [])
-        existingPaths.add(row.r2_path)
+    let skippedCount = 0
+    try {
+      const revalidated = await revalidateDeleteCandidatesAgainstAppVersions(
+        candidates,
+        async (batch) => {
+          const { data, error } = await supabase
+            .from('app_versions')
+            .select('r2_path')
+            .in('r2_path', batch)
+          if (error)
+            throw error
+          return (data ?? []).map(row => row.r2_path)
+        },
+      )
+      candidates = revalidated.candidates
+      skippedCount = revalidated.skippedCount
     }
-    const beforeCount = candidates.length
-    candidates = candidates.filter(candidate => !existingPaths.has(candidate.key))
-    const skippedCount = beforeCount - candidates.length
+    catch (error) {
+      console.error('Failed to revalidate candidates against app_versions:', error)
+      process.exit(1)
+    }
+
     if (skippedCount > 0)
       console.log(`Skipping ${skippedCount} candidates that now have app_versions records`)
     if (candidates.length === 0) {
       console.log('No orphaned files remain after DB revalidation')
+      return
+    }
+
+    if (deleteMode === 'dry_run') {
+      console.log(`DELETE_FILES=1 dry-run: would process ${candidates.length} live objects`)
+      for (const { key } of candidates)
+        console.log(`Would process: ${key}`)
       return
     }
 

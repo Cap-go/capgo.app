@@ -196,10 +196,8 @@ async function processKey(key: string): Promise<void> {
 }
 
 async function processKeyBatch(keys: string[]): Promise<void> {
-  for (let i = 0; i < keys.length; i += CONCURRENCY) {
-    const batch = keys.slice(i, i + CONCURRENCY)
-    await Promise.all(batch.map(key => processKey(key)))
-  }
+  // Work-conserving pool: ConcurrencyLimiter inside processKey keeps CONCURRENCY slots busy.
+  await Promise.all(keys.map(key => processKey(key)))
 }
 
 async function permanentDeleteBatch(keys: string[]): Promise<void> {

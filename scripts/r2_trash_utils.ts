@@ -1,5 +1,29 @@
 export type OpsDeleteMode = 'dry_run' | 'trash' | 'permanent'
 
+export type DeleteFileCandidate = { key: string, etag?: string }
+
+const REVALIDATION_BATCH_SIZE = 500
+
+/** Drop candidates that now have app_versions rows (shared by dry-run and execute paths). */
+export async function revalidateDeleteCandidatesAgainstAppVersions(
+  candidates: DeleteFileCandidate[],
+  lookupExistingPaths: (batch: string[]) => Promise<string[]>,
+): Promise<{ candidates: DeleteFileCandidate[], skippedCount: number }> {
+  const existingPaths = new Set<string>()
+  const candidateKeys = candidates.map(candidate => candidate.key)
+
+  for (let i = 0; i < candidateKeys.length; i += REVALIDATION_BATCH_SIZE) {
+    const batch = candidateKeys.slice(i, i + REVALIDATION_BATCH_SIZE)
+    const paths = await lookupExistingPaths(batch)
+    for (const path of paths)
+      existingPaths.add(path)
+  }
+
+  const beforeCount = candidates.length
+  const revalidated = candidates.filter(candidate => !existingPaths.has(candidate.key))
+  return { candidates: revalidated, skippedCount: beforeCount - revalidated.length }
+}
+
 export const R2_TRASH_PREFIX = 'deleted-after-7-days/'
 
 export function resolveOpsDeleteMode(env: Record<string, string | undefined>): OpsDeleteMode {
