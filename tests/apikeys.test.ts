@@ -8,7 +8,6 @@ import {
   appApiKeyBindings,
   BASE_URL,
   executeSQL,
-  fetchTestRequest,
   getAuthHeaders,
   getAuthHeadersForCredentials,
   getSupabaseClient,
@@ -26,6 +25,17 @@ const id = randomUUID()
 const APPNAME = `com.app.key.${id}`
 let authHeaders: Record<string, string>
 
+const TRANSIENT_GATEWAY_MARKERS = [
+  'An invalid response was received from the upstream server',
+  'Your worker restarted mid-request',
+]
+
+function isTransientGateway502503(status: number, body: string): boolean {
+  if (status !== 502 && status !== 503)
+    return false
+  return TRANSIENT_GATEWAY_MARKERS.some(marker => body.includes(marker))
+}
+
 function orgKeyBody(name: string, extra: Record<string, unknown> = {}) {
   return {
     name,
@@ -42,22 +52,71 @@ async function appKeyBody(name: string, appId = APPNAME, extra: Record<string, u
   }
 }
 
+async function deleteApiKeysByName(name: string, headers: Record<string, string>) {
+  const listResponse = await fetch(`${BASE_URL}/apikey`, { headers })
+  if (!listResponse.ok)
+    return
+
+  const keys = await listResponse.json() as Array<{ id: number, name: string }>
+  await Promise.all(keys.filter(key => key.name === name).map(async (key) => {
+    await fetch(`${BASE_URL}/apikey/${key.id}`, { method: 'DELETE', headers })
+  }))
+}
+
+let postApiKeyQueue: Promise<unknown> = Promise.resolve()
+
 async function postApiKey(
   body: unknown,
   headers: Record<string, string> = authHeaders,
+  rawBody = false,
 ) {
-  return fetchTestRequest(`${BASE_URL}/apikey`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  })
+  const run = async () => {
+    const keyName = !rawBody && typeof body === 'object' && body !== null && 'name' in body
+      ? String((body as { name: unknown }).name)
+      : undefined
+    const requestInit: RequestInit = {
+      method: 'POST',
+      headers,
+      body: rawBody ? String(body) : JSON.stringify(body),
+    }
+    const url = `${BASE_URL}/apikey`
+    const deadline = Date.now() + 15000
+
+    while (true) {
+      const response = await fetch(url, requestInit)
+      if (response.status !== 502 && response.status !== 503)
+        return response
+
+      const responseBody = await response.clone().text().catch(() => '')
+      if (!isTransientGateway502503(response.status, responseBody))
+        return response
+
+      // Create-safe retry: a 502 may have persisted the key without returning 200.
+      if (keyName)
+        await deleteApiKeysByName(keyName, headers)
+
+      if (Date.now() >= deadline)
+        return response
+
+      await new Promise(resolve => setTimeout(resolve, 300))
+    }
+  }
+
+  const result = postApiKeyQueue.then(run, run)
+  postApiKeyQueue = result.then(() => undefined, () => undefined)
+  return result
 }
 
 beforeAll(async () => {
   authHeaders = await getAuthHeaders()
   await resetAndSeedAppData(APPNAME)
-  // Load the apikey isolate before concurrent POSTs from this file.
+  // Warm GET and POST handlers before concurrent key creation in this file.
   await warmEdgeEndpoint('/apikey', { method: 'GET', headers: authHeaders })
+  await warmEdgeEndpoint('/apikey', {
+    method: 'POST',
+    headers: authHeaders,
+    body: JSON.stringify({}),
+  })
 })
 
 afterAll(async () => {
@@ -243,11 +302,7 @@ describe('[POST] /apikey operations', () => {
       'capgkey': limitedCreatorData.key,
     }
 
-    const escalationResponse = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: limitedHeaders,
-      body: JSON.stringify(await appKeyBody('blocked-key-creation')),
-    })
+    const escalationResponse = await postApiKey(await appKeyBody('blocked-key-creation'), limitedHeaders)
     const escalationData = await escalationResponse.json() as { error: string }
     expect(escalationResponse.status).toBe(400)
     expect(escalationData).toHaveProperty('error', 'cannot_create_apikey')
@@ -425,13 +480,9 @@ describe('[POST] /apikey operations', () => {
     }
 
     try {
-      const siblingResponse = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: dedicatedAuthHeaders,
-        body: JSON.stringify(orgKeyBody('org-super-admin-key-sibling-management-target', {
-          bindings: orgApiKeyBindings(ORG_ID_APIKEY_MANAGEMENT),
-        })),
-      })
+      const siblingResponse = await postApiKey(orgKeyBody('org-super-admin-key-sibling-management-target', {
+        bindings: orgApiKeyBindings(ORG_ID_APIKEY_MANAGEMENT),
+      }), dedicatedAuthHeaders)
       expect(siblingResponse.status).toBe(200)
       const siblingData = await siblingResponse.json<{ id: number }>()
       createdKeyIds.push(siblingData.id)
@@ -537,13 +588,9 @@ describe('[POST] /apikey operations', () => {
     const createdKeyIds: number[] = []
 
     try {
-      const siblingResponse = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: dedicatedAuthHeaders,
-        body: JSON.stringify(orgKeyBody('apikey-manager-sibling-target', {
-          bindings: orgApiKeyBindings(ORG_ID_APIKEY_MANAGEMENT, 'org_member'),
-        })),
-      })
+      const siblingResponse = await postApiKey(orgKeyBody('apikey-manager-sibling-target', {
+        bindings: orgApiKeyBindings(ORG_ID_APIKEY_MANAGEMENT, 'org_member'),
+      }), dedicatedAuthHeaders)
       expect(siblingResponse.status).toBe(200)
       const siblingData = await siblingResponse.json<{ id: number }>()
       createdKeyIds.push(siblingData.id)
@@ -553,13 +600,9 @@ describe('[POST] /apikey operations', () => {
       const listData = await listResponse.json<Array<{ id: number }>>()
       expect(listData.some(apikey => apikey.id === siblingData.id)).toBe(true)
 
-      const createResponse = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: managerKeyHeaders,
-        body: JSON.stringify(orgKeyBody('apikey-manager-created-sibling', {
-          bindings: orgApiKeyBindings(ORG_ID_APIKEY_MANAGEMENT, 'org_member'),
-        })),
-      })
+      const createResponse = await postApiKey(orgKeyBody('apikey-manager-created-sibling', {
+        bindings: orgApiKeyBindings(ORG_ID_APIKEY_MANAGEMENT, 'org_member'),
+      }), managerKeyHeaders)
       expect(createResponse.status).toBe(400)
       await expect(createResponse.json()).resolves.toHaveProperty('error', 'cannot_create_apikey')
 
@@ -580,46 +623,34 @@ describe('[POST] /apikey operations', () => {
       expect(bindingUpdateResponse.status).toBe(401)
       await expect(bindingUpdateResponse.json()).resolves.toHaveProperty('error', 'cannot_update_apikey')
 
-      const privilegedCreateResponse = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: managerKeyHeaders,
-        body: JSON.stringify(orgKeyBody('apikey-manager-blocked-privileged-create', {
-          bindings: orgApiKeyBindings(ORG_ID_APIKEY_MANAGEMENT, 'org_super_admin'),
-        })),
-      })
+      const privilegedCreateResponse = await postApiKey(orgKeyBody('apikey-manager-blocked-privileged-create', {
+        bindings: orgApiKeyBindings(ORG_ID_APIKEY_MANAGEMENT, 'org_super_admin'),
+      }), managerKeyHeaders)
       expect(privilegedCreateResponse.status).toBe(400)
       await expect(privilegedCreateResponse.json()).resolves.toHaveProperty('error', 'cannot_create_apikey')
 
-      const appAdminCreateResponse = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: managerKeyHeaders,
-        body: JSON.stringify({
-          name: 'apikey-manager-blocked-app-admin-create',
-          bindings: [{
-            role_name: 'app_admin',
-            scope_type: 'app',
-            org_id: ORG_ID_APIKEY_MANAGEMENT,
-            app_id: APPNAME,
-          }],
-        }),
-      })
+      const appAdminCreateResponse = await postApiKey({
+        name: 'apikey-manager-blocked-app-admin-create',
+        bindings: [{
+          role_name: 'app_admin',
+          scope_type: 'app',
+          org_id: ORG_ID_APIKEY_MANAGEMENT,
+          app_id: APPNAME,
+        }],
+      }, managerKeyHeaders)
       expect(appAdminCreateResponse.status).toBe(400)
       await expect(appAdminCreateResponse.json()).resolves.toHaveProperty('error', 'cannot_create_apikey')
 
-      const allowSystemRoleBypassResponse = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: managerKeyHeaders,
-        body: JSON.stringify({
-          name: 'apikey-manager-blocked-allow-system-role-bypass',
-          bindings: [{
-            role_name: 'app_admin',
-            scope_type: 'app',
-            org_id: ORG_ID_APIKEY_MANAGEMENT,
-            app_id: APPNAME,
-            allowSystemRole: true,
-          }],
-        }),
-      })
+      const allowSystemRoleBypassResponse = await postApiKey({
+        name: 'apikey-manager-blocked-allow-system-role-bypass',
+        bindings: [{
+          role_name: 'app_admin',
+          scope_type: 'app',
+          org_id: ORG_ID_APIKEY_MANAGEMENT,
+          app_id: APPNAME,
+          allowSystemRole: true,
+        }],
+      }, managerKeyHeaders)
       expect(allowSystemRoleBypassResponse.status).toBe(400)
       await expect(allowSystemRoleBypassResponse.json()).resolves.toHaveProperty('error', 'cannot_create_apikey')
 
@@ -661,14 +692,10 @@ describe('[POST] /apikey operations', () => {
     const createdKeyIds: number[] = []
 
     try {
-      const hashedSiblingResponse = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: dedicatedAuthHeaders,
-        body: JSON.stringify(orgKeyBody('apikey-manager-blocked-super-admin-hashed', {
-          bindings: orgApiKeyBindings(ORG_ID_APIKEY_MANAGEMENT, 'org_super_admin'),
-          hashed: true,
-        })),
-      })
+      const hashedSiblingResponse = await postApiKey(orgKeyBody('apikey-manager-blocked-super-admin-hashed', {
+        bindings: orgApiKeyBindings(ORG_ID_APIKEY_MANAGEMENT, 'org_super_admin'),
+        hashed: true,
+      }), dedicatedAuthHeaders)
       expect(hashedSiblingResponse.status).toBe(200)
       const hashedSibling = await hashedSiblingResponse.json<{ id: number, key: string }>()
       createdKeyIds.push(hashedSibling.id)
@@ -689,14 +716,10 @@ describe('[POST] /apikey operations', () => {
       })
       expect(oldHashedAuthResponse.status).toBe(200)
 
-      const plainSiblingResponse = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: dedicatedAuthHeaders,
-        body: JSON.stringify(orgKeyBody('apikey-manager-blocked-super-admin-plain', {
-          bindings: orgApiKeyBindings(ORG_ID_APIKEY_MANAGEMENT, 'org_super_admin'),
-          hashed: false,
-        })),
-      })
+      const plainSiblingResponse = await postApiKey(orgKeyBody('apikey-manager-blocked-super-admin-plain', {
+        bindings: orgApiKeyBindings(ORG_ID_APIKEY_MANAGEMENT, 'org_super_admin'),
+        hashed: false,
+      }), dedicatedAuthHeaders)
       expect(plainSiblingResponse.status).toBe(200)
       const plainSibling = await plainSiblingResponse.json<{ id: number, key: string }>()
       createdKeyIds.push(plainSibling.id)
@@ -751,49 +774,33 @@ describe('[POST] /apikey operations', () => {
       'capgkey': APIKEY_MANAGEMENT_ORG_SUPER_ADMIN,
     }
 
-    const createResponse = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: superAdminKeyHeaders,
-      body: JSON.stringify(orgKeyBody('org-super-admin-key-creation-blocked', {
-        bindings: orgApiKeyBindings(ORG_ID_APIKEY_MANAGEMENT, 'org_member'),
-      })),
-    })
+    const createResponse = await postApiKey(orgKeyBody('org-super-admin-key-creation-blocked', {
+      bindings: orgApiKeyBindings(ORG_ID_APIKEY_MANAGEMENT, 'org_member'),
+    }), superAdminKeyHeaders)
 
     expect(createResponse.status).toBe(400)
     await expect(createResponse.json()).resolves.toHaveProperty('error', 'cannot_create_apikey')
   })
 
   it('create api key with missing name', async () => {
-    const response = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({}),
-    })
+    const response = await postApiKey({}, authHeaders)
     expect(response.status).toBe(400)
     const data = await response.json() as { error: string }
     expect(data).toHaveProperty('error', 'name_is_required')
   })
 
   it('create api key with empty name', async () => {
-    const response = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({ name: '' }),
-    })
+    const response = await postApiKey({ name: '' }, authHeaders)
     expect(response.status).toBe(400)
     const data = await response.json() as { error: string }
     expect(data).toHaveProperty('error', 'name_is_required')
   })
 
   it('create api key with invalid binding scope', async () => {
-    const response = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        name: 'test-key',
-        bindings: [{ role_name: 'org_admin', scope_type: 'invalid', org_id: randomUUID() }],
-      }),
-    })
+    const response = await postApiKey({
+      name: 'test-key',
+      bindings: [{ role_name: 'org_admin', scope_type: 'invalid', org_id: randomUUID() }],
+    }, authHeaders)
     expect(response.status).toBe(400)
     const data = await response.json() as { error: string }
     expect(data).toHaveProperty('error', 'invalid_bindings')
@@ -801,14 +808,10 @@ describe('[POST] /apikey operations', () => {
 
   it('create api key with non-existent org_id', async () => {
     const nonExistentOrgId = randomUUID()
-    const response = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        name: 'test-key',
-        bindings: orgApiKeyBindings(nonExistentOrgId),
-      }),
-    })
+    const response = await postApiKey({
+      name: 'test-key',
+      bindings: orgApiKeyBindings(nonExistentOrgId),
+    }, authHeaders)
     expect(response.status).toBe(403)
     const data = await response.json() as { error: string }
     expect(data).toHaveProperty('error', 'forbidden_binding')
@@ -816,30 +819,22 @@ describe('[POST] /apikey operations', () => {
 
   it('create api key with non-existent app_id', async () => {
     const nonExistentAppId = randomUUID()
-    const response = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        name: 'test-key',
-        bindings: [{
-          role_name: 'app_admin',
-          scope_type: 'app',
-          org_id: orgApiKeyBindings()[0].org_id,
-          app_id: nonExistentAppId,
-        }],
-      }),
-    })
+    const response = await postApiKey({
+      name: 'test-key',
+      bindings: [{
+        role_name: 'app_admin',
+        scope_type: 'app',
+        org_id: orgApiKeyBindings()[0].org_id,
+        app_id: nonExistentAppId,
+      }],
+    }, authHeaders)
     expect(response.status).toBe(404)
     const data = await response.json() as { error: string }
     expect(data).toHaveProperty('error', 'binding_failed')
   })
 
   it('create api key with invalid JSON body', async () => {
-    const response = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: 'invalid json',
-    })
+    const response = await postApiKey('invalid json', authHeaders, true)
     expect(response.status).toBeGreaterThanOrEqual(400)
   })
 })
@@ -872,11 +867,7 @@ describe('[PUT] /apikey/:id operations', () => {
     try {
       for (const hashed of [false, true]) {
         const suffix = hashed ? 'hashed' : 'plain'
-        const createResponse = await fetch(`${BASE_URL}/apikey`, {
-          method: 'POST',
-          headers: authHeaders,
-          body: JSON.stringify(orgKeyBody(`temp-metadata-no-leak-${suffix}-${randomUUID()}`, { hashed })),
-        })
+        const createResponse = await postApiKey(orgKeyBody(`temp-metadata-no-leak-${suffix}-${randomUUID()}`, { hashed }))
         expect(createResponse.status).toBe(200)
         const createData = await createResponse.json<{ id: number }>()
         createdKeyIds.push(createData.id)
@@ -910,11 +901,7 @@ describe('[PUT] /apikey/:id operations', () => {
     let createData: { id: number, rbac_id: string } | undefined
 
     try {
-      const createResponse = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify(orgKeyBody(`temp-key-update-bindings-${randomUUID()}`)),
-      })
+      const createResponse = await postApiKey(orgKeyBody(`temp-key-update-bindings-${randomUUID()}`))
       expect(createResponse.status).toBe(200)
       createData = await createResponse.json<{ id: number, rbac_id: string }>()
       const createdKey = createData
@@ -1009,11 +996,7 @@ describe('[PUT] /apikey/:id operations', () => {
 
   it('update api key with unsupported org scope field has no valid fields', async () => {
     // Create a temporary key for this test
-    const createResponse = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify(orgKeyBody('temp-test-key')),
-    })
+    const createResponse = await postApiKey(orgKeyBody('temp-test-key'), authHeaders)
     const createData = await createResponse.json<{ id: number }>()
 
     const response = await fetch(`${BASE_URL}/apikey/${createData.id}`, {
@@ -1030,11 +1013,7 @@ describe('[PUT] /apikey/:id operations', () => {
 
   it('update api key with no valid fields', async () => {
     // Create a temporary key for this test
-    const createResponse = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify(orgKeyBody('temp-test-key-2')),
-    })
+    const createResponse = await postApiKey(orgKeyBody('temp-test-key-2'), authHeaders)
     const createData = await createResponse.json<{ id: number }>()
 
     const response = await fetch(`${BASE_URL}/apikey/${createData.id}`, {
@@ -1048,11 +1027,7 @@ describe('[PUT] /apikey/:id operations', () => {
   })
 
   it('regenerate plain api key (key changes and old key no longer works)', async () => {
-    const createResponse = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify(orgKeyBody('temp-plain-key-regenerate', { hashed: false })),
-    })
+    const createResponse = await postApiKey(orgKeyBody('temp-plain-key-regenerate', { hashed: false }), authHeaders)
     const createData = await createResponse.json<{ id: number, key: string }>()
     expect(createResponse.status).toBe(200)
     expect(typeof createData.key).toBe('string')
@@ -1085,11 +1060,7 @@ describe('[PUT] /apikey/:id operations', () => {
   })
 
   it('regenerate hashed api key (key changes and remains hashed in DB)', async () => {
-    const createResponse = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify(orgKeyBody('temp-hashed-key-regenerate', { hashed: true })),
-    })
+    const createResponse = await postApiKey(orgKeyBody('temp-hashed-key-regenerate', { hashed: true }), authHeaders)
     const createData = await createResponse.json<{ id: number, key: string, key_hash: string }>()
     expect(createResponse.status).toBe(200)
 
@@ -1131,11 +1102,7 @@ describe('[PUT] /apikey/:id operations', () => {
   })
 
   it('regenerate and update name in a single request', async () => {
-    const createResponse = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify(orgKeyBody('temp-key-regenerate-and-rename', { hashed: false })),
-    })
+    const createResponse = await postApiKey(orgKeyBody('temp-key-regenerate-and-rename', { hashed: false }), authHeaders)
     const createData = await createResponse.json<{ id: number, key: string }>()
     expect(createResponse.status).toBe(200)
 
@@ -1166,11 +1133,7 @@ describe('[PUT] /apikey/:id operations', () => {
 describe('[DELETE] /apikey/:id operations', () => {
   it('delete api key', async () => {
     // Create a key specifically for deletion
-    const createResponse = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify(orgKeyBody('key-to-delete')),
-    })
+    const createResponse = await postApiKey(orgKeyBody('key-to-delete'), authHeaders)
     const createData = await createResponse.json<{ id: number }>()
 
     const response = await fetch(`${BASE_URL}/apikey/${createData.id}`, {
@@ -1199,11 +1162,7 @@ describe('[DELETE] /apikey/:id operations', () => {
 
   it('delete already deleted api key', async () => {
     // Create and delete a key, then try to delete again
-    const createResponse = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify(orgKeyBody('key-to-double-delete')),
-    })
+    const createResponse = await postApiKey(orgKeyBody('key-to-double-delete'), authHeaders)
     const createData = await createResponse.json<{ id: number }>()
 
     // First deletion
@@ -1226,15 +1185,11 @@ describe('[DELETE] /apikey/:id operations', () => {
 describe('[POST] /apikey hashed key operations', () => {
   it('create hashed api key', async () => {
     const keyName = 'test-hashed-key'
-    const response = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        name: keyName,
-        hashed: true,
-        bindings: orgApiKeyBindings(),
-      }),
-    })
+    const response = await postApiKey({
+      name: keyName,
+      hashed: true,
+      bindings: orgApiKeyBindings(),
+    }, authHeaders)
     const data = await response.json<{ key: string, key_hash: string, id: number }>()
     expect(response.status).toBe(200)
     expect(data).toHaveProperty('key')
@@ -1276,15 +1231,11 @@ describe('[POST] /apikey hashed key operations', () => {
 
   it('create plain api key (hashed: false)', async () => {
     const keyName = 'test-plain-key-explicit'
-    const response = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        name: keyName,
-        hashed: false,
-        bindings: orgApiKeyBindings(),
-      }),
-    })
+    const response = await postApiKey({
+      name: keyName,
+      hashed: false,
+      bindings: orgApiKeyBindings(),
+    }, authHeaders)
     const data = await response.json<{ key: string, key_hash: string | null, id: number }>()
     expect(response.status).toBe(200)
     expect(data).toHaveProperty('key')
@@ -1318,15 +1269,11 @@ describe('[POST] /apikey hashed key operations', () => {
   })
 
   it('create hashed api key with V2 bindings', async () => {
-    const response = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        name: 'hashed-key-with-options',
-        hashed: true,
-        bindings: orgApiKeyBindings(),
-      }),
-    })
+    const response = await postApiKey({
+      name: 'hashed-key-with-options',
+      hashed: true,
+      bindings: orgApiKeyBindings(),
+    }, authHeaders)
     const data = await response.json<{ key: string, key_hash: string, id: number }>()
     expect(response.status).toBe(200)
     expect(data).toHaveProperty('key')
@@ -1341,15 +1288,11 @@ describe('[POST] /apikey hashed key operations', () => {
 
   it('hashed key can be used for authentication', async () => {
     // Create a hashed key
-    const createResponse = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        name: 'hashed-key-for-auth-test',
-        hashed: true,
-        bindings: orgApiKeyBindings(),
-      }),
-    })
+    const createResponse = await postApiKey({
+      name: 'hashed-key-for-auth-test',
+      hashed: true,
+      bindings: orgApiKeyBindings(),
+    }, authHeaders)
     const createData = await createResponse.json<{ key: string, id: number }>()
     expect(createResponse.status).toBe(200)
 
@@ -1378,16 +1321,12 @@ describe('[POST] /apikey hashed key operations', () => {
 describe('[POST] /apikey hashed key with expiration', () => {
   it('create hashed api key with expiration date', async () => {
     const futureDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() // 7 days from now
-    const response = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        name: 'hashed-key-with-expiration',
-        hashed: true,
-        expires_at: futureDate,
-        bindings: orgApiKeyBindings(),
-      }),
-    })
+    const response = await postApiKey({
+      name: 'hashed-key-with-expiration',
+      hashed: true,
+      expires_at: futureDate,
+      bindings: orgApiKeyBindings(),
+    }, authHeaders)
     const data = await response.json<{ key: string, key_hash: string, id: number, expires_at: string }>()
     expect(response.status).toBe(200)
     expect(data).toHaveProperty('key')
@@ -1420,16 +1359,12 @@ describe('[POST] /apikey hashed key with expiration', () => {
 
   it('hashed key with expiration can be used for authentication', async () => {
     const futureDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
-    const createResponse = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        name: 'hashed-key-expiration-auth-test',
-        hashed: true,
-        expires_at: futureDate,
-        bindings: orgApiKeyBindings(),
-      }),
-    })
+    const createResponse = await postApiKey({
+      name: 'hashed-key-expiration-auth-test',
+      hashed: true,
+      expires_at: futureDate,
+      bindings: orgApiKeyBindings(),
+    }, authHeaders)
     const createData = await createResponse.json<{ key: string, id: number }>()
     expect(createResponse.status).toBe(200)
 
@@ -1455,16 +1390,12 @@ describe('[POST] /apikey hashed key with expiration', () => {
 
   it('expired hashed key should be rejected for authentication', async () => {
     // Create a hashed key with future expiration
-    const createResponse = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        name: 'hashed-key-to-expire',
-        hashed: true,
-        expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-        bindings: orgApiKeyBindings(),
-      }),
-    })
+    const createResponse = await postApiKey({
+      name: 'hashed-key-to-expire',
+      hashed: true,
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      bindings: orgApiKeyBindings(),
+    }, authHeaders)
     const createData = await createResponse.json<{ key: string, id: number }>()
     expect(createResponse.status).toBe(200)
 
@@ -1490,15 +1421,11 @@ describe('[POST] /apikey hashed key with expiration', () => {
 describe('[RLS] hashed API key with direct Supabase SDK', () => {
   it('hashed key works with RLS via Supabase SDK (simulating CLI usage)', async () => {
     // Create a hashed key via API
-    const createResponse = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        name: 'hashed-key-rls-test',
-        hashed: true,
-        bindings: orgApiKeyBindings(),
-      }),
-    })
+    const createResponse = await postApiKey({
+      name: 'hashed-key-rls-test',
+      hashed: true,
+      bindings: orgApiKeyBindings(),
+    }, authHeaders)
     const createData = await createResponse.json<{ key: string, id: number }>()
     expect(createResponse.status).toBe(200)
 
@@ -1541,15 +1468,11 @@ describe('[RLS] hashed API key with direct Supabase SDK', () => {
 
   it('plain key still works with RLS via Supabase SDK', async () => {
     // Create a plain (non-hashed) key via API
-    const createResponse = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        name: 'plain-key-rls-test',
-        hashed: false,
-        bindings: orgApiKeyBindings(),
-      }),
-    })
+    const createResponse = await postApiKey({
+      name: 'plain-key-rls-test',
+      hashed: false,
+      bindings: orgApiKeyBindings(),
+    }, authHeaders)
     const createData = await createResponse.json<{ key: string, id: number }>()
     expect(createResponse.status).toBe(200)
 
@@ -1586,14 +1509,10 @@ describe('[RLS] hashed API key with direct Supabase SDK', () => {
     let createdKeyId: number | undefined
 
     try {
-      const createResponse = await fetch(`${BASE_URL}/apikey`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({
-          name: 'plain-key-rls-apikey-update-blocked',
-          hashed: false,
-          bindings: orgApiKeyBindings(),
-        }),
+      const createResponse = await postApiKey({
+        name: 'plain-key-rls-apikey-update-blocked',
+        hashed: false,
+        bindings: orgApiKeyBindings(),
       })
       const createData = await createResponse.json<{ key: string, id: number }>()
       expect(createResponse.status).toBe(200)
