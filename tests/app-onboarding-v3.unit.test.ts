@@ -54,6 +54,26 @@ describe('pre-organization onboarding v3', () => {
     expect(storeImport).toContain('class="d-btn min-h-11 w-full sm:w-auto"')
   })
 
+  it.concurrent('uses imported API metadata in the editable App ID and current icon preview', () => {
+    const metadataImport = sliceBetween(onboardingSource, 'async function importStoreMetadata()', 'function cancelPendingStoreIconImport()')
+    const appleLookup = sliceBetween(onboardingSource, 'async function fetchAppleBundleId(rawUrl: string)', 'async function importStoreMetadata()')
+    const detailsPreview = sliceBetween(onboardingSource, 'v-if="appDetailsStep !== \'icon\'"', '<div v-if="!props.preOrg && appDetailsStep === \'name\'"')
+    const appIdField = sliceBetween(onboardingSource, 'id="app-onboarding-app-id"', '<div class="mt-2 flex flex-wrap items-baseline')
+    const appIdSource = sliceBetween(onboardingSource, 'const selectedAppIdSource = computed', 'const selectedAppIconSource = computed')
+
+    expect(metadataImport).toContain('await fetchAppleBundleId(requestedUrl)')
+    expect(metadataImport).toContain('manualAppId.value = importedAppId')
+    expect(metadataImport).toContain('hasEditedAppId.value = false')
+    expect(appleLookup).toContain("new URL('https://itunes.apple.com/lookup')")
+    expect(appleLookup).toContain('result?.bundleId?.trim()')
+    expect(appleLookup).not.toContain('.text()')
+    expect(appIdSource.indexOf("return 'store'")).toBeLessThan(appIdSource.indexOf("return 'manual'"))
+    expect(detailsPreview).toContain('<img v-if="iconPreview"')
+    expect(detailsPreview).toContain(':src="iconPreview"')
+    expect(appIdField).toContain(':value="manualAppId"')
+    expect(appIdField).toContain('@input="onAppIdInput"')
+  })
+
   it.concurrent('renders the generated App ID as code without swallowing sentence punctuation', () => {
     expect(onboardingSource).toContain('keypath="app-onboarding-app-id-generated-helper"')
     expect(onboardingSource).toContain('<template #appId>')

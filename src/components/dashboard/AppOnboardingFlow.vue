@@ -441,6 +441,8 @@ const appDetailsPrimaryActionLabel = computed(() => {
 })
 const appNameInitial = computed(() => Array.from(appName.value.trim())[0]?.toLocaleUpperCase() ?? '')
 const selectedAppIdSource = computed<NonNullable<OnboardingDetailsEventProperties['app_id_source']>>(() => {
+  if (!hasEditedAppId.value && existingAppSetup.value === 'import' && importedStoreAppId.value.trim())
+    return 'store'
   if (manualAppId.value.trim())
     return 'manual'
   if (existingAppSetup.value === 'import' && importedStoreAppId.value.trim())
@@ -1138,6 +1140,37 @@ async function loadResumeApp() {
   return true
 }
 
+async function fetchAppleBundleId(rawUrl: string) {
+  try {
+    const parsedUrl = new URL(rawUrl)
+    if (parsedUrl.hostname.toLowerCase() !== 'apps.apple.com')
+      return null
+
+    const storeId = /\/id(\d+)(?:[/?#]|$)/i.exec(parsedUrl.pathname)?.[1]
+    if (!storeId)
+      return ''
+
+    const lookupUrl = new URL('https://itunes.apple.com/lookup')
+    lookupUrl.searchParams.set('id', storeId)
+    const storeCountry = /^\/([a-z]{2})(?:\/|$)/i.exec(parsedUrl.pathname)?.[1]
+    if (storeCountry)
+      lookupUrl.searchParams.set('country', storeCountry.toLowerCase())
+
+    const response = await fetch(lookupUrl.toString(), {
+      headers: { accept: 'application/json' },
+    })
+    if (!response.ok)
+      return ''
+
+    const data = await response.json() as { results?: Array<{ bundleId?: string }> }
+    const result = data.results?.find(item => item.bundleId?.trim())
+    return result?.bundleId?.trim() ?? ''
+  }
+  catch {
+    return ''
+  }
+}
+
 async function importStoreMetadata() {
   const requestedUrl = storeUrl.value.trim()
   if (!requestedUrl)
@@ -1161,6 +1194,18 @@ async function importStoreMetadata() {
     if (error)
       throw error
 
+    let importedAppId = typeof data?.app_id === 'string' ? data.app_id.trim() : ''
+    if (!importedAppId) {
+      const appleBundleId = await fetchAppleBundleId(requestedUrl)
+      if (requestedRun !== storeImportRun || existingAppSetup.value !== 'import' || storeUrl.value.trim() !== requestedUrl)
+        return
+      if (appleBundleId !== null) {
+        if (!appleBundleId)
+          throw new Error('Apple lookup did not return an App ID')
+        importedAppId = appleBundleId
+      }
+    }
+
     storeAppNamePreview.value = typeof data?.name === 'string' ? data.name.trim() : ''
     if (storeAppNamePreview.value) {
       if (!appName.value.trim())
@@ -1181,7 +1226,13 @@ async function importStoreMetadata() {
       useImportedStoreIcon.value = false
     }
 
-    importedStoreAppId.value = typeof data?.app_id === 'string' ? data.app_id.trim() : ''
+    importedStoreAppId.value = importedAppId
+    if (importedAppId) {
+      manualAppId.value = importedAppId
+      hasEditedAppId.value = false
+      appIdFeedback.value = ''
+      appIdSuggestions.value = []
+    }
 
     if (props.preOrg)
       existingApp.value = true
@@ -2576,10 +2627,13 @@ defineExpose({
                 :class="{ 'onboarding-details-preview-app-id': appDetailsStep === 'app_id' }"
               >
                 <div class="onboarding-details-preview-icon relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-[1.4rem] bg-slate-950 text-white shadow-lg shadow-slate-950/15 ring-1 ring-white/10 dark:bg-white dark:text-slate-950 dark:shadow-black/20">
-                  <span class="absolute -right-3 -top-3 h-10 w-10 rounded-full bg-primary-500/90" aria-hidden="true" />
-                  <span class="absolute -bottom-4 -left-2 h-11 w-11 rounded-full bg-emerald-400/80" aria-hidden="true" />
-                  <span v-if="appNameInitial" class="relative text-2xl font-bold tracking-tight">{{ appNameInitial }}</span>
-                  <IconSparkles v-else class="relative h-7 w-7" aria-hidden="true" />
+                  <img v-if="iconPreview" :src="iconPreview" :alt="t('app-onboarding-icon-preview-alt')" class="h-full w-full object-cover">
+                  <template v-else>
+                    <span class="absolute -right-3 -top-3 h-10 w-10 rounded-full bg-primary-500/90" aria-hidden="true" />
+                    <span class="absolute -bottom-4 -left-2 h-11 w-11 rounded-full bg-emerald-400/80" aria-hidden="true" />
+                    <span v-if="appNameInitial" class="relative text-2xl font-bold tracking-tight">{{ appNameInitial }}</span>
+                    <IconSparkles v-else class="relative h-7 w-7" aria-hidden="true" />
+                  </template>
                 </div>
                 <p class="mt-3 max-w-full truncate text-base font-semibold text-slate-950 dark:text-white">
                   {{ appName.trim() || t('app-onboarding-preview-placeholder') }}
