@@ -70,18 +70,61 @@ type RawS3LiteClient = {
   listObjects?: (options: { prefix: string }) => AsyncIterable<{ key: string }>
 }
 
+export type ConditionalDeleteResult = 'deleted' | 'skipped_changed' | 'skipped_missing'
+
+/**
+ * Best-effort etag-guarded delete for s3_lite clients (no native If-Match).
+ * Re-stats immediately before delete and never passes ignored options to raw deleteObject.
+ */
+export async function conditionalDeleteSource(
+  s3client: Pick<S3LiteTrashClient, 'statObject' | 'deleteObject'>,
+  key: string,
+  expectedEtag: string | undefined,
+): Promise<ConditionalDeleteResult> {
+  if (!expectedEtag) {
+    try {
+      await s3client.deleteObject(key)
+      return 'deleted'
+    }
+    catch (error) {
+      if (isObjectNotFoundError(error))
+        return 'skipped_missing'
+      throw error
+    }
+  }
+
+  try {
+    const stat = await s3client.statObject(key)
+    if (stat.etag !== expectedEtag)
+      return 'skipped_changed'
+  }
+  catch (error) {
+    if (isObjectNotFoundError(error))
+      return 'skipped_missing'
+    throw error
+  }
+
+  try {
+    await s3client.deleteObject(key)
+    return 'deleted'
+  }
+  catch (error) {
+    if (isObjectNotFoundError(error))
+      return 'skipped_missing'
+    throw error
+  }
+}
+
 /** Wrap s3_lite_client for trash moves. Listing stays on the raw client. */
 export function asS3LiteTrashClient(s3client: RawS3LiteClient): S3LiteTrashClient & Pick<RawS3LiteClient, 'listObjects'> {
   return {
     copyObject: (options, destinationKey) => s3client.copyObject(options, destinationKey),
     statObject: key => s3client.statObject(key),
-    // s3_lite has no atomic If-Match delete; callers verify etag immediately before calling.
     deleteObject: async (key, options) => {
       if (options?.ifMatch) {
-        const stat = await s3client.statObject(key)
-        if (stat.etag !== options.ifMatch)
+        const result = await conditionalDeleteSource(s3client, key, options.ifMatch)
+        if (result === 'skipped_changed')
           throw { name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } }
-        await s3client.deleteObject(key)
         return
       }
       await s3client.deleteObject(key)
@@ -130,14 +173,9 @@ export async function moveS3LiteObjectToTrash(s3client: S3LiteTrashClient, key: 
   if (sourceEtag && afterCopyEtag !== sourceEtag)
     return 'skipped_changed'
 
-  try {
-    await s3client.deleteObject(key, { ifMatch: afterCopyEtag ?? sourceEtag })
-  }
-  catch (error) {
-    if (isPreconditionFailedError(error))
-      return 'skipped_changed'
-    throw error
-  }
+  const deleteResult = await conditionalDeleteSource(s3client, key, afterCopyEtag ?? sourceEtag)
+  if (deleteResult === 'skipped_changed')
+    return 'skipped_changed'
   return 'moved'
 }
 

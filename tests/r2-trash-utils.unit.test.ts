@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   ConcurrencyLimiter,
+  conditionalDeleteSource,
   encodeS3CopySource,
   getR2TrashKey,
   getUniqueR2TrashKey,
@@ -111,8 +112,9 @@ describe('moveS3LiteObjectToTrash', () => {
       { sourceKey: 'orgs/org-1/apps/com.test/file%20name.zip' },
       `${R2_TRASH_PREFIX}${key}`,
     )
-    expect(statObject).toHaveBeenCalledTimes(3)
-    expect(deleteObject).toHaveBeenCalledWith(key, { ifMatch: etag })
+    expect(statObject).toHaveBeenCalledTimes(4)
+    expect(deleteObject).toHaveBeenCalledOnce()
+    expect(deleteObject).toHaveBeenCalledWith(key)
   })
 
   it('skips delete when the live object changes after copy', async () => {
@@ -173,13 +175,42 @@ describe('moveS3LiteObjectToTrash', () => {
       .mockRejectedValueOnce({ name: 'NotFound' }) // unique trash destination available
       .mockResolvedValueOnce({ etag }) // source
       .mockResolvedValueOnce({ etag }) // after copy
+      .mockResolvedValueOnce({ etag }) // pre-delete etag check
 
     const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
 
     expect(result).toBe('moved')
     expect(copyObject).toHaveBeenCalledOnce()
+    expect(deleteObject).toHaveBeenCalledOnce()
+    expect(deleteObject).toHaveBeenCalledWith(key)
     const copyCalls = copyObject.mock.calls as unknown as Array<[{ sourceKey: string }, string]>
     expect(copyCalls[0][1]).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${key}$`))
+  })
+})
+
+describe('conditionalDeleteSource', () => {
+  it('deletes only when the live etag still matches', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const etag = '"before"'
+    const statObject = vi.fn().mockResolvedValue({ etag })
+    const deleteObject = vi.fn(async () => undefined)
+
+    const result = await conditionalDeleteSource({ statObject, deleteObject }, key, etag)
+
+    expect(result).toBe('deleted')
+    expect(statObject).toHaveBeenCalledWith(key)
+    expect(deleteObject).toHaveBeenCalledWith(key)
+  })
+
+  it('skips delete when the live etag changed after copy', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const statObject = vi.fn().mockResolvedValue({ etag: '"after"' })
+    const deleteObject = vi.fn(async () => undefined)
+
+    const result = await conditionalDeleteSource({ statObject, deleteObject }, key, '"before"')
+
+    expect(result).toBe('skipped_changed')
+    expect(deleteObject).not.toHaveBeenCalled()
   })
 })
 

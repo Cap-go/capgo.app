@@ -1723,7 +1723,7 @@ async function delete_cleanup_candidates() {
                     try {
                         const trashExists = await objectExists(trashKey)
                         const sourceExists = await objectExists(file.key)
-                        if (isAlreadyMovedToTrash(trashExists, sourceExists))
+                        if (isAlreadyMovedToTrash(trashExists, sourceExists) || !sourceExists)
                             return { key: file.key, success: true, error: null, skipped: true }
                     }
                     catch (headError: any) {

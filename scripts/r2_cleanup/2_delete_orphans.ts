@@ -173,8 +173,8 @@ async function processKey(key: string): Promise<void> {
           return
         }
         if (isPreconditionFailedError(deleteError)) {
-          console.warn(`Skipped delete for ${key}: live object changed after copy`)
-          totalProcessed += 1
+          console.warn(`Skipped delete for ${key}: live object changed after copy; source key retained`)
+          totalErrors += 1
           return
         }
         console.error(`Copied ${key} to trash but failed to delete source:`, deleteError)
