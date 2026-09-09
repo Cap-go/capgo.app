@@ -67,7 +67,7 @@ describe('stale asset error helpers', () => {
   it('detects code injected into the page (console paste, extension, AI browser agent)', () => {
     const injected = {
       stacktrace: {
-        frames: [{ filename: 'https://console.capgo.app/apps', function: 'global code', lineno: 1, colno: 103, in_app: true }],
+        frames: [{ filename: 'https://console.capgo.app/apps', function: 'global code', lineno: 1, in_app: true }],
       },
     }
     // Frame file is the page URL itself, current_url only differs by query string
@@ -78,7 +78,7 @@ describe('stale asset error helpers', () => {
   it('does not treat our own bundled-asset frames as injected code', () => {
     const shipped = {
       stacktrace: {
-        frames: [{ filename: 'https://console.capgo.app/assets/dashboard-rYp22gdI.js', lineno: 12, colno: 5, in_app: true }],
+        frames: [{ filename: 'https://console.capgo.app/assets/dashboard-rYp22gdI.js', lineno: 12, in_app: true }],
       },
     }
     expect(isInjectedDocumentCodeException(shipped, 'https://console.capgo.app/apps?page=1')).toBe(false)
@@ -95,14 +95,14 @@ describe('stale asset error helpers', () => {
   it('does not treat first-party inline theme-script frames as injected code', () => {
     const themeBootstrap = {
       stacktrace: {
-        frames: [{ filename: 'https://console.capgo.app/apps', function: 'applyTheme', lineno: 32, colno: 11, in_app: true }],
+        frames: [{ filename: 'https://console.capgo.app/apps', function: 'applyTheme', lineno: 32, in_app: true }],
       },
     }
     expect(isInjectedDocumentCodeException(themeBootstrap, 'https://console.capgo.app/apps')).toBe(false)
 
     const matchMediaCallback = {
       stacktrace: {
-        frames: [{ filename: 'https://console.capgo.app/apps', function: '', lineno: 62, colno: 11, in_app: true }],
+        frames: [{ filename: 'https://console.capgo.app/apps', function: '', lineno: 62, in_app: true }],
       },
     }
     expect(isInjectedDocumentCodeException(matchMediaCallback, 'https://console.capgo.app/apps')).toBe(false)
@@ -116,7 +116,7 @@ describe('stale asset error helpers', () => {
         $exception_list: [{
           value: 'undefined is not an object (evaluating \'Array.from(document.querySelectorAll(\'td\')).find(e=>e.innerText.includes(\'Coolpacas: Cosmic Defense\')).outerHTML\')',
           stacktrace: {
-            frames: [{ filename: 'https://console.capgo.app/apps', function: 'global code', lineno: 1, colno: 103, in_app: true }],
+            frames: [{ filename: 'https://console.capgo.app/apps', function: 'global code', lineno: 1, in_app: true }],
           },
         }],
       },
@@ -130,7 +130,7 @@ describe('stale asset error helpers', () => {
         $exception_list: [{
           value: 'Cannot read properties of undefined (reading \'digest\')',
           stacktrace: {
-            frames: [{ filename: 'https://console.capgo.app/assets/apps-DvVF29Ec.js', lineno: 42, colno: 9, in_app: true }],
+            frames: [{ filename: 'https://console.capgo.app/assets/apps-DvVF29Ec.js', lineno: 42, in_app: true }],
           },
         }],
       },
@@ -144,7 +144,7 @@ describe('stale asset error helpers', () => {
         $exception_list: [{
           value: 'Cannot read properties of null (reading \'matches\')',
           stacktrace: {
-            frames: [{ filename: 'https://console.capgo.app/apps', function: '', lineno: 62, colno: 22, in_app: true }],
+            frames: [{ filename: 'https://console.capgo.app/apps', function: '', lineno: 62, in_app: true }],
           },
         }],
       },
