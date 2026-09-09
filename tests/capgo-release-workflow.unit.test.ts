@@ -72,7 +72,9 @@ describe('native-aware Capgo release workflow', () => {
       expect(checkout.uses).toBe('actions/checkout@v6')
     expect(workflowSource).toContain('tag_name: ${{ needs.changes.outputs.deploy_tag }}')
     expect(workflowSource).toContain("prerelease: ${{ needs.changes.outputs.is_alpha == 'true' }}")
-    expect(workflowSource.slice(workflowSource.indexOf('  supabase_deploy:'))).not.toContain('github.ref')
+    const supabaseDeployIndex = workflowSource.indexOf('  supabase_deploy:')
+    expect(supabaseDeployIndex).toBeGreaterThan(-1)
+    expect(workflowSource.slice(supabaseDeployIndex)).not.toContain('github.ref')
   })
 
   it.concurrent('keeps post-merge tests and publishes release refs atomically', async () => {
