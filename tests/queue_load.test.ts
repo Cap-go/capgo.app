@@ -24,7 +24,6 @@ beforeEach(async () => {
 async function fetchQueueSync(queueName: string) {
   const response = await fetchTestRequest(`${BASE_URL_TRIGGER}/queue_consumer/sync`, {
     method: 'POST',
-    retryUnsafe: true,
     headers: headersInternal,
     body: JSON.stringify({
       queue_name: queueName,

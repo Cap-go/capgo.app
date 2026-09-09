@@ -7,6 +7,7 @@ SELECT plan(11);
 SELECT tests.create_supabase_user('rbac_membership_admin', 'rbac-membership-admin@test.local');
 SELECT tests.create_supabase_user('rbac_membership_member', 'rbac-membership-member@test.local');
 SELECT tests.create_supabase_user('rbac_membership_outsider', 'rbac-membership-outsider@test.local');
+SELECT tests.create_supabase_user('rbac_membership_key_owner', 'rbac-membership-key-owner@test.local');
 
 SELECT tests.authenticate_as_service_role();
 SET LOCAL ROLE service_role;
@@ -16,7 +17,8 @@ INSERT INTO public.users (id, email, created_at, updated_at)
 VALUES
   (tests.get_supabase_uid('rbac_membership_admin'), 'rbac-membership-admin@test.local', NOW(), NOW()),
   (tests.get_supabase_uid('rbac_membership_member'), 'rbac-membership-member@test.local', NOW(), NOW()),
-  (tests.get_supabase_uid('rbac_membership_outsider'), 'rbac-membership-outsider@test.local', NOW(), NOW())
+  (tests.get_supabase_uid('rbac_membership_outsider'), 'rbac-membership-outsider@test.local', NOW(), NOW()),
+  (tests.get_supabase_uid('rbac_membership_key_owner'), 'rbac-membership-key-owner@test.local', NOW(), NOW())
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO public.orgs (id, created_by, name, management_email)
@@ -151,14 +153,14 @@ ON CONFLICT DO NOTHING;
 
 SELECT tests.create_v2_apikey(
   70997602,
-  tests.get_supabase_uid('rbac_membership_outsider'),
+  tests.get_supabase_uid('rbac_membership_key_owner'),
   'test-apikey-membership-org-scope-ghsa9976',
   'Apikey for org-scope membership path'
 );
 
 SELECT tests.create_v2_apikey(
   70997603,
-  tests.get_supabase_uid('rbac_membership_outsider'),
+  tests.get_supabase_uid('rbac_membership_key_owner'),
   'test-apikey-membership-reject-ghsa9976',
   'Apikey rejected without membership path'
 );
