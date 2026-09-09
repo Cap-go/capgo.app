@@ -95,26 +95,33 @@ describe('isObjectNotFoundError', () => {
   })
 })
 
+function makeAtomicDeleteClient(etag = '"abc123"') {
+  const copyObject = vi.fn(async () => undefined)
+  const deleteObject = vi.fn(async () => undefined)
+  const makeRequest = vi.fn(async () => new Response(null, { status: 204 }))
+  const statObject = vi.fn()
+    .mockRejectedValueOnce({ name: 'NotFound' })
+    .mockResolvedValue({ etag })
+  return { copyObject, deleteObject, makeRequest, statObject }
+}
+
 describe('moveS3LiteObjectToTrash', () => {
   it('encodes copy source path segments before moving to trash', async () => {
     const key = 'orgs/org-1/apps/com.test/file name.zip'
     const etag = '"abc123"'
-    const copyObject = vi.fn(async () => undefined)
-    const deleteObject = vi.fn(async () => undefined)
-    const statObject = vi.fn()
-      .mockRejectedValueOnce({ name: 'NotFound' })
-      .mockResolvedValue({ etag })
+    const { copyObject, deleteObject, makeRequest, statObject } = makeAtomicDeleteClient(etag)
 
-    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key)
 
     expect(result).toBe('moved')
     expect(copyObject).toHaveBeenCalledWith(
       { sourceKey: 'orgs/org-1/apps/com.test/file%20name.zip' },
       `${R2_TRASH_PREFIX}${key}`,
     )
-    expect(statObject).toHaveBeenCalledTimes(4)
-    expect(deleteObject).toHaveBeenCalledOnce()
-    expect(deleteObject).toHaveBeenCalledWith(key)
+    expect(statObject).toHaveBeenCalledTimes(3)
+    expect(makeRequest).toHaveBeenCalledOnce()
+    expect(makeRequest.mock.calls[0][0].headers?.get('If-Match')).toBe(etag)
+    expect(deleteObject).not.toHaveBeenCalled()
   })
 
   it('skips delete when the live object changes after copy', async () => {
@@ -170,44 +177,80 @@ describe('moveS3LiteObjectToTrash', () => {
     const etag = '"before"'
     const copyObject = vi.fn(async () => undefined)
     const deleteObject = vi.fn(async () => undefined)
+    const makeRequest = vi.fn(async () => new Response(null, { status: 204 }))
     const statObject = vi.fn()
       .mockResolvedValueOnce({ etag }) // default trash exists
       .mockRejectedValueOnce({ name: 'NotFound' }) // unique trash destination available
       .mockResolvedValueOnce({ etag }) // source
       .mockResolvedValueOnce({ etag }) // after copy
-      .mockResolvedValueOnce({ etag }) // pre-delete etag check
 
-    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key)
 
     expect(result).toBe('moved')
     expect(copyObject).toHaveBeenCalledOnce()
-    expect(deleteObject).toHaveBeenCalledOnce()
-    expect(deleteObject).toHaveBeenCalledWith(key)
+    expect(makeRequest).toHaveBeenCalledOnce()
+    expect(deleteObject).not.toHaveBeenCalled()
     const copyCalls = copyObject.mock.calls as unknown as Array<[{ sourceKey: string }, string]>
     expect(copyCalls[0][1]).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${key}$`))
+  })
+
+  it('retains source when atomic delete loses a concurrent writer race', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const etag = '"before"'
+    const copyObject = vi.fn(async () => undefined)
+    const deleteObject = vi.fn(async () => undefined)
+    const makeRequest = vi.fn(async () => {
+      throw { statusCode: 412, code: 'PreconditionFailed' }
+    })
+    const statObject = vi.fn()
+      .mockRejectedValueOnce({ name: 'NotFound' })
+      .mockResolvedValueOnce({ etag })
+      .mockResolvedValueOnce({ etag })
+
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key)
+
+    expect(result).toBe('skipped_changed')
+    expect(copyObject).toHaveBeenCalledOnce()
+    expect(makeRequest).toHaveBeenCalledOnce()
+    expect(deleteObject).not.toHaveBeenCalled()
   })
 })
 
 describe('conditionalDeleteSource', () => {
-  it('deletes only when the live etag still matches', async () => {
+  it('deletes atomically with If-Match when makeRequest is available', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const etag = '"before"'
-    const statObject = vi.fn().mockResolvedValue({ etag })
     const deleteObject = vi.fn(async () => undefined)
+    const makeRequest = vi.fn(async () => new Response(null, { status: 204 }))
 
-    const result = await conditionalDeleteSource({ statObject, deleteObject }, key, etag)
+    const result = await conditionalDeleteSource({ deleteObject, makeRequest }, key, etag)
 
     expect(result).toBe('deleted')
-    expect(statObject).toHaveBeenCalledWith(key)
-    expect(deleteObject).toHaveBeenCalledWith(key)
+    expect(makeRequest).toHaveBeenCalledOnce()
+    expect(makeRequest.mock.calls[0][0].method).toBe('DELETE')
+    expect(makeRequest.mock.calls[0][0].objectName).toBe(key)
+    expect(makeRequest.mock.calls[0][0].headers?.get('If-Match')).toBe(etag)
+    expect(deleteObject).not.toHaveBeenCalled()
   })
 
-  it('skips delete when the live etag changed after copy', async () => {
+  it('retains source when makeRequest is unavailable', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
-    const statObject = vi.fn().mockResolvedValue({ etag: '"after"' })
     const deleteObject = vi.fn(async () => undefined)
 
-    const result = await conditionalDeleteSource({ statObject, deleteObject }, key, '"before"')
+    const result = await conditionalDeleteSource({ deleteObject }, key, '"before"')
+
+    expect(result).toBe('skipped_changed')
+    expect(deleteObject).not.toHaveBeenCalled()
+  })
+
+  it('retains source when atomic delete returns precondition failed', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const deleteObject = vi.fn(async () => undefined)
+    const makeRequest = vi.fn(async () => {
+      throw { statusCode: 412, code: 'PreconditionFailed' }
+    })
+
+    const result = await conditionalDeleteSource({ deleteObject, makeRequest }, key, '"before"')
 
     expect(result).toBe('skipped_changed')
     expect(deleteObject).not.toHaveBeenCalled()
@@ -215,10 +258,27 @@ describe('conditionalDeleteSource', () => {
 })
 
 describe('asS3LiteTrashClient', () => {
-  it('rejects delete when etag changed since preflight stat', async () => {
+  it('rejects delete when atomic If-Match delete fails', async () => {
     const raw = {
       copyObject: vi.fn(),
-      statObject: vi.fn(async () => ({ etag: '"after"' })),
+      statObject: vi.fn(),
+      deleteObject: vi.fn(),
+      makeRequest: vi.fn(async () => {
+        throw { statusCode: 412, code: 'PreconditionFailed' }
+      }),
+    }
+    const client = asS3LiteTrashClient(raw)
+
+    await expect(client.deleteObject('key', { ifMatch: '"before"' }))
+      .rejects.toEqual({ name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } })
+    expect(raw.deleteObject).not.toHaveBeenCalled()
+    expect(raw.makeRequest).toHaveBeenCalledOnce()
+  })
+
+  it('retains source when ifMatch delete is requested without makeRequest', async () => {
+    const raw = {
+      copyObject: vi.fn(),
+      statObject: vi.fn(),
       deleteObject: vi.fn(),
     }
     const client = asS3LiteTrashClient(raw)

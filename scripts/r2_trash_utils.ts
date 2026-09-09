@@ -28,7 +28,7 @@ export function getUniqueR2TrashKey(sourceKey: string, suffix?: string): string 
   return `${R2_TRASH_PREFIX}${suffix ?? createUniqueR2TrashSuffix()}/${sourceKey}`
 }
 
-async function resolveAvailableR2TrashKey(s3client: S3LiteTrashClient, key: string): Promise<string> {
+async function resolveAvailableR2TrashKey(s3client: Pick<RawS3LiteClient, 'statObject'>, key: string): Promise<string> {
   const candidates = [
     getR2TrashKey(key),
     ...Array.from({ length: 10 }, () => getUniqueR2TrashKey(key)),
@@ -57,27 +57,40 @@ export function encodeS3LiteCopySourceKey(key: string): string {
   return key.split('/').map(segment => encodeURIComponent(segment)).join('/')
 }
 
+export type S3LiteMakeRequest = (options: {
+  method: string
+  objectName: string
+  headers?: Headers
+  bucketName?: string
+  query?: string | Record<string, string>
+  statusCode?: number
+  payload?: Uint8Array | string
+  returnBody?: boolean
+}) => Promise<Response>
+
 export type S3LiteTrashClient = {
   copyObject: (options: { sourceKey: string }, destinationKey: string) => Promise<unknown>
   deleteObject: (key: string, options?: { ifMatch?: string }) => Promise<unknown>
   statObject: (key: string) => Promise<{ etag: string }>
 }
 
-type RawS3LiteClient = {
+export type RawS3LiteClient = {
   copyObject: S3LiteTrashClient['copyObject']
   deleteObject: (key: string) => Promise<unknown>
   statObject: S3LiteTrashClient['statObject']
   listObjects?: (options: { prefix: string }) => AsyncIterable<{ key: string }>
+  /** s3_lite_client public API — required for atomic If-Match deletes. */
+  makeRequest?: S3LiteMakeRequest
 }
 
 export type ConditionalDeleteResult = 'deleted' | 'skipped_changed' | 'skipped_missing'
 
 /**
- * Best-effort etag-guarded delete for s3_lite clients (no native If-Match).
- * Re-stats immediately before delete and never passes ignored options to raw deleteObject.
+ * Atomic If-Match delete via s3_lite makeRequest when available.
+ * Without makeRequest, retain the source — stat-then-delete races with concurrent writers.
  */
 export async function conditionalDeleteSource(
-  s3client: Pick<S3LiteTrashClient, 'statObject' | 'deleteObject'>,
+  s3client: Pick<RawS3LiteClient, 'deleteObject' | 'makeRequest'>,
   key: string,
   expectedEtag: string | undefined,
 ): Promise<ConditionalDeleteResult> {
@@ -93,24 +106,26 @@ export async function conditionalDeleteSource(
     }
   }
 
-  try {
-    const stat = await s3client.statObject(key)
-    if (stat.etag !== expectedEtag)
-      return 'skipped_changed'
-  }
-  catch (error) {
-    if (isObjectNotFoundError(error))
-      return 'skipped_missing'
-    throw error
-  }
+  if (!s3client.makeRequest)
+    return 'skipped_changed'
+
+  const headers = new Headers()
+  headers.set('If-Match', expectedEtag)
 
   try {
-    await s3client.deleteObject(key)
+    await s3client.makeRequest({
+      method: 'DELETE',
+      objectName: key,
+      headers,
+      statusCode: 204,
+    })
     return 'deleted'
   }
   catch (error) {
     if (isObjectNotFoundError(error))
       return 'skipped_missing'
+    if (isPreconditionFailedError(error))
+      return 'skipped_changed'
     throw error
   }
 }
@@ -136,7 +151,7 @@ export function asS3LiteTrashClient(s3client: RawS3LiteClient): S3LiteTrashClien
 export type S3LiteTrashMoveResult = 'moved' | 'skipped_missing' | 'skipped_changed'
 
 /** Move a live object to 7-day trash via s3_lite_client (encodes copy source path segments). */
-export async function moveS3LiteObjectToTrash(s3client: S3LiteTrashClient, key: string): Promise<S3LiteTrashMoveResult> {
+export async function moveS3LiteObjectToTrash(s3client: RawS3LiteClient, key: string): Promise<S3LiteTrashMoveResult> {
   const trashKey = await resolveAvailableR2TrashKey(s3client, key)
 
   let sourceEtag: string | undefined
@@ -196,13 +211,15 @@ export function isPreconditionFailedError(error: unknown): boolean {
   const err = error as {
     name?: string
     Code?: string
+    code?: string
+    statusCode?: number
     $metadata?: { httpStatusCode?: number }
   }
 
-  if (err.$metadata?.httpStatusCode === 412)
+  if (err.$metadata?.httpStatusCode === 412 || err.statusCode === 412)
     return true
 
-  return [err.name, err.Code].some(code => code === 'PreconditionFailed')
+  return [err.name, err.Code, err.code].some(code => code === 'PreconditionFailed')
 }
 
 /** True only for confirmed object-absence from HeadObject (not transient/permission errors). */
