@@ -98,11 +98,13 @@ branches or lose a concurrent reconciliation decision.
 
 ## Bento Synchronization
 
-After the assignment transaction commits, the endpoint performs best-effort
-Bento reconciliation from the latest committed user state:
+The assignment transaction stores a pending Bento marker alongside any changed
+assignment map. After it commits, the endpoint reconciles from the latest
+committed user state:
 
 1. A short transaction sets a two-second lock timeout, locks and rereads the
-   user row, then commits before any external request.
+   user row, and persists the normalized email plus any previous email that
+   needs cleanup. It then commits before any external request.
 2. The endpoint computes the complete desired tag state for every configured
    experiment and calls Bento outside the row lock with a five-second abort
    signal. Eligible assignments add the selected branch tag and remove the
@@ -115,10 +117,13 @@ Bento reconciliation from the latest committed user state:
    limited to three Bento deliveries within the same five-second deadline.
    This prevents a slower request from leaving stale tags without holding a
    database lock across network latency or retrying indefinitely.
+4. Only a verified, converged delivery clears the pending marker and queued
+   email cleanups. Later assignment reads retry any remaining work even when
+   the assignment map is already complete.
 
 A Bento, timeout, or reconciliation-read failure is logged but does not restore
 an ineligible database assignment or fail the otherwise successful endpoint
-response, matching the existing on-demand synchronization policy.
+response. The durable pending marker keeps that best-effort failure retryable.
 
 ## Frontend Contract
 

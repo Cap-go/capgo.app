@@ -27,6 +27,12 @@ export interface ABTestAssignment {
   branch: ABTestBranch
 }
 
+interface ABTestBentoSyncState {
+  cleanup_emails: string[]
+  email?: string
+  pending: boolean
+}
+
 type ABTestsConfig = Record<string, ABTestConfig>
 type AssignmentAudienceUser = Pick<Database['public']['Tables']['users']['Row'], 'created_via_invite'> & { intent?: unknown }
 type AssignmentUser = AssignmentAudienceUser & Record<string, unknown> & { abtests: unknown }
@@ -37,6 +43,28 @@ const BENTO_AB_TEST_SYNC_TIMEOUT_MS = 5_000
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function normalizeEmail(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : undefined
+}
+
+function readBentoSyncState(value: unknown): ABTestBentoSyncState {
+  const record = isRecord(value) ? value : {}
+  const cleanupEmails = Array.isArray(record.cleanup_emails)
+    ? record.cleanup_emails.map(normalizeEmail).filter((email): email is string => email !== undefined)
+    : []
+  const email = normalizeEmail(record.email)
+  return {
+    cleanup_emails: [...new Set(cleanupEmails)],
+    ...(email ? { email } : {}),
+    pending: record.pending === true || cleanupEmails.length > 0,
+  }
+}
+
+function needsBentoSync(user: AssignmentUser, state: ABTestBentoSyncState) {
+  const email = normalizeEmail(user.email)
+  return state.pending || (state.email !== undefined && state.email !== email)
 }
 
 function invalidConfig(testName?: string): never {
@@ -218,6 +246,8 @@ async function readAssignmentUser(
     try {
       const result = await pgClient.query<AssignmentUser>(
         `SELECT created_via_invite,
+                email,
+                onboarding->'abtests_bento_sync' AS abtests_bento_sync,
                 onboarding->>'intent' AS intent,
                 onboarding->'abtests' AS abtests
          FROM public.users
@@ -275,7 +305,8 @@ async function persistABTestAssignments(
 }
 
 function buildBentoTagUpdate(user: AssignmentUser) {
-  if (typeof user.email !== 'string' || !user.email.trim())
+  const email = normalizeEmail(user.email)
+  if (!email)
     return undefined
 
   const storedAssignments = isRecord(user.abtests) ? user.abtests : {}
@@ -302,7 +333,7 @@ function buildBentoTagUpdate(user: AssignmentUser) {
 
   return {
     deleteSegments,
-    email: user.email.trim().toLowerCase(),
+    email,
     segments,
   }
 }
@@ -325,14 +356,18 @@ function buildBentoTagCleanup(email: string) {
   }
 }
 
-async function readLockedABTestUser(
+async function reconcileBentoSyncState(
   drizzle: ReturnType<typeof getDrizzleClient>,
   userId: string,
+  previousState: ABTestBentoSyncState,
+  cleanedEmails: Set<string>,
+  expectedTagUpdate?: ReturnType<typeof buildBentoTagUpdate>,
 ) {
   return await drizzle.transaction(async (tx) => {
     await tx.execute(sql`SET LOCAL lock_timeout = '2s'`)
     const currentUserResult = await tx.execute<AssignmentUser & { email?: string | null }>(sql`
       SELECT created_via_invite,
+             onboarding->'abtests_bento_sync' AS abtests_bento_sync,
              email,
              onboarding->>'intent' AS intent,
              onboarding->'abtests' AS abtests
@@ -340,7 +375,37 @@ async function readLockedABTestUser(
       WHERE id = ${userId}::uuid
       FOR UPDATE
     `)
-    return currentUserResult.rows[0]
+    const user = currentUserResult.rows[0]
+    if (!user)
+      return undefined
+
+    const storedState = isRecord(user.abtests_bento_sync)
+      ? readBentoSyncState(user.abtests_bento_sync)
+      : previousState
+    const email = normalizeEmail(user.email)
+    const cleanupEmails = new Set(storedState.cleanup_emails.filter(item => !cleanedEmails.has(item)))
+    if (storedState.email && storedState.email !== email && !cleanedEmails.has(storedState.email))
+      cleanupEmails.add(storedState.email)
+
+    const currentTagUpdate = buildBentoTagUpdate(user)
+    const complete = expectedTagUpdate !== undefined
+      && sameBentoTagUpdate(expectedTagUpdate, currentTagUpdate)
+      && cleanupEmails.size === 0
+    const state: ABTestBentoSyncState = {
+      cleanup_emails: [...cleanupEmails],
+      ...(email ? { email } : {}),
+      pending: !complete,
+    }
+    await tx.execute(sql`
+      UPDATE public.users
+      SET onboarding = COALESCE(onboarding, '{}'::jsonb)
+        || pg_catalog.jsonb_build_object(
+          'abtests_bento_sync',
+          ${JSON.stringify(state)}::jsonb
+        )
+      WHERE id = ${userId}::uuid
+    `)
+    return { complete, state, user }
   })
 }
 
@@ -348,17 +413,33 @@ async function syncCurrentUserABTestTags(
   c: Context<MiddlewareKeyVariables>,
   drizzle: ReturnType<typeof getDrizzleClient>,
   userId: string,
+  initialState: ABTestBentoSyncState,
 ) {
   try {
     const signal = AbortSignal.timeout(BENTO_AB_TEST_SYNC_TIMEOUT_MS)
-    let user = await readLockedABTestUser(drizzle, userId)
+    const cleanedEmails = new Set<string>()
+    let snapshot = await reconcileBentoSyncState(drizzle, userId, initialState, cleanedEmails)
     let attempt = 0
-    while (user && attempt < BENTO_AB_TEST_SYNC_MAX_ATTEMPTS) {
-      attempt += 1
-      const tagUpdate = buildBentoTagUpdate(user)
+    while (snapshot && attempt < BENTO_AB_TEST_SYNC_MAX_ATTEMPTS) {
+      const cleanupEmail = snapshot.state.cleanup_emails.find(email => !cleanedEmails.has(email))
+      if (cleanupEmail) {
+        attempt += 1
+        const cleanupResult = await syncBentoSubscriberTags(c, buildBentoTagCleanup(cleanupEmail), signal)
+        if (cleanupResult === false) {
+          cloudlogErr({
+            message: 'on-demand A/B Bento email cleanup failed',
+            requestId: c.get('requestId'),
+          })
+          return
+        }
+        cleanedEmails.add(cleanupEmail)
+        continue
+      }
+
+      const tagUpdate = buildBentoTagUpdate(snapshot.user)
       if (!tagUpdate)
         return
-
+      attempt += 1
       const result = await syncBentoSubscriberTags(c, tagUpdate, signal)
       if (result === false) {
         cloudlogErr({
@@ -367,30 +448,9 @@ async function syncCurrentUserABTestTags(
         })
         return
       }
-      if (result === undefined)
+      snapshot = await reconcileBentoSyncState(drizzle, userId, snapshot.state, cleanedEmails, tagUpdate)
+      if (snapshot?.complete)
         return
-
-      const latestUser = await readLockedABTestUser(drizzle, userId)
-      const latestTagUpdate = latestUser ? buildBentoTagUpdate(latestUser) : undefined
-      if (sameBentoTagUpdate(tagUpdate, latestTagUpdate))
-        return
-
-      if (latestTagUpdate?.email !== tagUpdate.email) {
-        if (attempt >= BENTO_AB_TEST_SYNC_MAX_ATTEMPTS)
-          return
-        attempt += 1
-        const cleanupResult = await syncBentoSubscriberTags(c, buildBentoTagCleanup(tagUpdate.email), signal)
-        if (cleanupResult === false) {
-          cloudlogErr({
-            message: 'on-demand A/B Bento email cleanup failed',
-            requestId: c.get('requestId'),
-          })
-          return
-        }
-        if (cleanupResult === undefined)
-          return
-      }
-      user = latestUser
     }
   }
   catch (error) {
@@ -419,17 +479,23 @@ export async function getOrCreateUserABTests(
     const testNames = eligibleTestNames(replicaUser)
     const existing = readExistingAssignments(replicaUser.abtests, testNames)
     const revoked = ineligibleAssignedTestNames(replicaUser.abtests, replicaUser)
-    if (existing.missing.length === 0 && revoked.length === 0)
+    const bentoSyncState = readBentoSyncState(replicaUser.abtests_bento_sync)
+    if (existing.missing.length === 0 && revoked.length === 0 && !needsBentoSync(replicaUser, bentoSyncState))
       return existing.assignments
   }
 
   const pgPool = getPgClient(c, false)
-  let result: { assignments: Record<string, ABTestAssignment>, needsBentoSync: boolean }
+  let result: {
+    assignments: Record<string, ABTestAssignment>
+    bentoSyncState: ABTestBentoSyncState
+    needsBentoSync: boolean
+  }
   try {
     const drizzle = getDrizzleClient(pgPool)
     result = await drizzle.transaction(async (tx) => {
       const lockedUserResult = await tx.execute<AssignmentUser & { email?: string | null }>(sql`
         SELECT created_via_invite,
+               onboarding->'abtests_bento_sync' AS abtests_bento_sync,
                email,
                onboarding->>'intent' AS intent,
                onboarding->'abtests' AS abtests
@@ -444,20 +510,36 @@ export async function getOrCreateUserABTests(
       const testNames = eligibleTestNames(user)
       const existing = readExistingAssignments(user.abtests, testNames)
       const revoked = ineligibleAssignedTestNames(user.abtests, user)
+      const bentoSyncState = readBentoSyncState(user.abtests_bento_sync)
       if (existing.missing.length === 0 && revoked.length === 0)
-        return { assignments: existing.assignments, needsBentoSync: false }
+        return {
+          assignments: existing.assignments,
+          bentoSyncState,
+          needsBentoSync: needsBentoSync(user, bentoSyncState),
+        }
 
       const candidates = createABTestAssignments(user, configForTests(existing.missing))
       const retainedAssignments = isRecord(user.abtests) ? { ...user.abtests } : {}
       for (const testName of revoked)
         delete retainedAssignments[testName]
       const nextAssignments = { ...retainedAssignments, ...candidates }
+      const email = normalizeEmail(user.email)
+      const cleanupEmails = new Set(bentoSyncState.cleanup_emails)
+      if (bentoSyncState.email && bentoSyncState.email !== email)
+        cleanupEmails.add(bentoSyncState.email)
+      const nextBentoSyncState: ABTestBentoSyncState = {
+        cleanup_emails: [...cleanupEmails],
+        ...(email ? { email } : {}),
+        pending: true,
+      }
       const updateResult = await tx.execute<{ abtests?: unknown }>(sql`
         UPDATE public.users
         SET onboarding = COALESCE(onboarding, '{}'::jsonb)
           || pg_catalog.jsonb_build_object(
             'abtests',
-            ${JSON.stringify(nextAssignments)}::jsonb
+            ${JSON.stringify(nextAssignments)}::jsonb,
+            'abtests_bento_sync',
+            ${JSON.stringify(nextBentoSyncState)}::jsonb
           )
         WHERE id = ${userId}::uuid
         RETURNING onboarding->'abtests' AS abtests
@@ -465,11 +547,12 @@ export async function getOrCreateUserABTests(
       const updated = updateResult.rows[0]
       return {
         assignments: readPersistedAssignments(updated?.abtests, testNames),
+        bentoSyncState: nextBentoSyncState,
         needsBentoSync: true,
       }
     })
     if (result.needsBentoSync)
-      await syncCurrentUserABTestTags(c, drizzle, userId)
+      await syncCurrentUserABTestTags(c, drizzle, userId, result.bentoSyncState)
   }
   finally {
     await closeClient(c, pgPool)
