@@ -244,6 +244,44 @@ describe('invite role escalation guards', () => {
     expect((thrown as Error).message).toContain('Admins cannot elevate privileges!')
   })
 
+  it('rejects accept_tmp_user_invitation when the invite role exceeds inviter rank', async () => {
+    const orgId = await createOrgOwnedByUser(query, USER_ID, 'Tmp invite accept escalation org')
+    await bindOrgRole(orgId, USER_ID_2, 'org_admin')
+    const email = `tmp-accept-escalation-${randomUUID()}@capgo.app`
+    const magicString = await insertTmpInvite({
+      orgId,
+      email,
+      roleName: 'org_member',
+      invitedBy: USER_ID_2,
+    })
+
+    await setServiceRoleClaim(query)
+    await query(
+      `UPDATE public.tmp_users SET rbac_role_name = public.rbac_role_org_super_admin() WHERE invite_magic_string = $1`,
+      [magicString],
+    )
+
+    let thrown: unknown
+    try {
+      await query(
+        `SELECT public.accept_tmp_user_invitation($1, $2::uuid) AS status`,
+        [magicString, USER_ID_NONMEMBER],
+      )
+    }
+    catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeTruthy()
+    expect((thrown as Error).message).toContain('Admins cannot elevate privileges!')
+
+    const invite = await query(
+      `SELECT id FROM public.tmp_users WHERE invite_magic_string = $1`,
+      [magicString],
+    )
+    expect(invite.rows.length).toBe(1)
+  })
+
   it('rejects accept_tmp_user_invitation when invited_by_user_id is null', async () => {
     const orgId = await createOrgOwnedByUser(query, USER_ID, 'Legacy tmp invite org')
     const email = `legacy-invite-${randomUUID()}@capgo.app`

@@ -1776,6 +1776,7 @@ DECLARE
   v_invite public.tmp_users%ROWTYPE;
   v_role_id uuid;
   v_rbac_role_name text;
+  v_finalize_rows integer;
 BEGIN
   SELECT tmp_users.org_id
   INTO v_org_id
@@ -1865,6 +1866,18 @@ BEGIN
       AND org_users.is_invite IS TRUE;
   END IF;
 
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.org_users
+    WHERE org_users.user_id = p_user_id
+      AND org_users.org_id = v_invite.org_id
+      AND org_users.app_id IS NULL
+      AND org_users.channel_id IS NULL
+      AND org_users.is_invite IS TRUE
+  ) THEN
+    RETURN 'MEMBERSHIP_NOT_FINALIZED';
+  END IF;
+
   DELETE FROM public.role_bindings
   WHERE role_bindings.principal_type = public.rbac_principal_user()
     AND role_bindings.principal_id = p_user_id
@@ -1902,6 +1915,11 @@ BEGIN
     AND org_users.app_id IS NULL
     AND org_users.channel_id IS NULL
     AND org_users.is_invite IS TRUE;
+
+  GET DIAGNOSTICS v_finalize_rows = ROW_COUNT;
+  IF v_finalize_rows = 0 THEN
+    RETURN 'MEMBERSHIP_NOT_FINALIZED';
+  END IF;
 
   DELETE FROM public.tmp_users
   WHERE tmp_users.id = v_invite.id;
@@ -19708,6 +19726,8 @@ BEGIN
     'org_invite_role_update'
   );
 
+  PERFORM public.lock_rbac_orgs(p_org_id);
+
   UPDATE public.org_users
   SET rbac_role_name = p_new_role_name,
       updated_at = now()
@@ -19895,6 +19915,8 @@ BEGIN
     role_priority,
     'tmp_invite_role_update'
   );
+
+  PERFORM public.lock_rbac_orgs(p_org_id);
 
   UPDATE public.tmp_users
   SET rbac_role_name = p_new_role_name,
