@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Add failing dual-auth integration coverage
+## Task 1: Add failing dual-auth integration coverage
 
 **Files:**
 - Modify: `tests/app.test.ts`
@@ -42,7 +42,7 @@ Add one request using a non-member JWT and assert `401`. Add another request wit
 
 The focused integration test requires local Supabase. Per the agreed lightweight workflow, delegate it to CI instead of starting Docker locally. The new JWT request should fail before the route switches away from `middlewareKey()`.
 
-### Task 2: Implement dual authentication without changing authorization
+## Task 2: Implement dual authentication without changing authorization
 
 **Files:**
 - Modify: `supabase/functions/_backend/utils/hono_middleware.ts`
@@ -74,7 +74,7 @@ Use `authClient` for the previous-app read and the general RLS-backed settings u
 
 CI runs the Supabase-backed tests, proving JWT and legacy key/subkey behavior without starting Docker locally.
 
-### Task 3: Verify repository contracts and prepare the PR
+## Task 3: Verify repository contracts and prepare the PR
 
 **Files:**
 - Verify: `supabase/functions/_backend/public/app/index.ts`
