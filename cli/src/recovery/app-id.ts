@@ -8,7 +8,7 @@ import { trackEvent } from '../analytics/track'
 import { addAppInternal } from '../app/add'
 import { getAppListPath } from '../app/list'
 import { extractApplicationIds } from '../build/onboarding/android/gradle-parser'
-import { createSupabaseClient, findRoot, findSavedKeySilent, formatError, getAppId, getConfigForWrite, getOrganizationWithPermission, invokeCapgoCliApi, PACKNAME } from '../utils'
+import { findRoot, findSavedKeySilent, formatError, getAppId, getConfigForWrite, getOrganizationWithPermission, invokeCapgoCliApi, PACKNAME } from '../utils'
 import { writeConfigUpdater } from '../config'
 
 const APP_ID_REGEX = /^[a-z0-9]+(?:\.[\w-]+)+$/i
@@ -270,8 +270,7 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
       if (pIsCancel(entered))
         continue
       const appId = (entered as string).trim()
-      const supabase = await createSupabaseClient(resolvedApikey, options.supaHost, options.supaAnon)
-      const organization = await getOrganizationWithPermission(supabase, resolvedApikey, 'org.create_app', {
+      const organization = await getOrganizationWithPermission(null, resolvedApikey, 'org.create_app', {
         supaHost: options.supaHost,
         supaAnon: options.supaAnon,
       })

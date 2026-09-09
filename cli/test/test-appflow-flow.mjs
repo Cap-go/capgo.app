@@ -149,7 +149,11 @@ assert.strictEqual(noPath.p8Path, undefined)
 const plainPath = f.appflowFlow.applyInput('input-p8-path', provChoice, { text: '/tmp/mykey.p8' })
 assert.strictEqual(plainPath.p8KeyId, undefined)
 assert.strictEqual(f.getAppflowResumeStep(plainPath), 'input-p8-key-id')
-const withKeyId = f.appflowFlow.applyInput('input-p8-key-id', plainPath, { text: 'MANUALKEY' })
+const withKeyId = f.appflowFlow.applyInput(
+  'input-p8-key-id',
+  { ...plainPath, p8IssuerId: 'stale-issuer' },
+  { text: 'MANUALKEY' },
+)
 assert.strictEqual(withKeyId.p8KeyId, 'MANUALKEY')
 assert.strictEqual(withKeyId.p8IssuerId, undefined)
 assert.strictEqual(f.getAppflowResumeStep(withKeyId), 'input-p8-issuer-id')

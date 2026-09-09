@@ -59,7 +59,7 @@ export async function currentBundleInternal(channel: string, appId: string, opti
     }
     if (status === 404 && code === 'channel_has_no_bundle') {
       if (!silent)
-        log.error(`Error retrieving channel ${channel} for app ${appId}. Perhaps the channel does not exist?`)
+        log.error(`Channel ${channel} for app ${appId} does not have a bundle linked.`)
       throw new CliUserError('Channel does not have a bundle linked', { appId, channel })
     }
     if (status === 404 && code === 'channel_not_found') {

@@ -72,13 +72,21 @@ app.post('/', middlewareKey(), async (c) => {
     })
   }
 
-  const { error: changeError } = await supabaseApikey(c, capgkey)
+  const { data: updatedRows, error: changeError } = await supabaseApikey(c, capgkey)
     .from('app_versions')
     .update({ r2_path: filePath })
     .eq('id', version.id)
+    .eq('deleted', false)
+    .eq('storage_provider', 'r2-direct')
+    .select('id')
 
   if (changeError)
     throw simpleError('cannot_update_supabase', 'Cannot update bundle path after TUS upload', { changeError })
+  if (!updatedRows?.length) {
+    return quickError(409, 'version_state_conflict', 'Version state changed during upload', {
+      version_id: version.id,
+    })
+  }
 
   cloudlog({ requestId: c.get('requestId'), message: 'finish_tus_upload', filePath, versionId: version.id })
   return c.json({ ...BRES, r2_path: filePath })

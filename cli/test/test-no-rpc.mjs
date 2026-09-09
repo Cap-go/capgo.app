@@ -25,7 +25,7 @@ for (const file of walk(srcRoot)) {
   if (rel === 'types/supabase.types.ts' || rel.startsWith('types/'))
     continue
   const source = readFileSync(file, 'utf8')
-  if (source.includes('.rpc('))
+  if (/\.rpc\s*\(/.test(source))
     offenders.push(rel)
 }
 

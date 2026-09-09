@@ -25,7 +25,7 @@ export interface PrepareUploadBody {
   manifest?: Database['public']['Tables']['app_versions']['Insert']['manifest']
 }
 
-const PREPARE_STORAGE_PROVIDERS = new Set(['r2-direct', 'external'])
+const PREPARE_STORAGE_PROVIDERS = new Set(['r2-direct', 'external', 'r2'])
 const COMPLETED_UPLOAD_STORAGE_PROVIDER = 'r2'
 const PREPARE_REUPLOAD_UPDATE_COLUMNS = new Set([
   'session_key',
@@ -156,7 +156,7 @@ function validatePrepareUploadRequest(body: PrepareUploadBody): string {
 
   const storageProvider = body.storage_provider ?? 'r2-direct'
   if (!PREPARE_STORAGE_PROVIDERS.has(storageProvider)) {
-    throw simpleError('invalid_storage_provider', 'storage_provider must be r2-direct or external', {
+    throw simpleError('invalid_storage_provider', 'storage_provider must be r2-direct, external, or r2', {
       storage_provider: storageProvider,
     })
   }
@@ -248,8 +248,17 @@ export async function prepareUpload(
     .select('id, name, storage_provider')
     .single()
 
-  if (insertError)
+  if (insertError) {
+    // Concurrent prepare can race the unique (name, app_id) constraint.
+    const isUniqueViolation = insertError.code === '23505'
+      || /duplicate key|unique/i.test(insertError.message ?? '')
+    if (isUniqueViolation) {
+      const raced = await loadExistingVersion(c, body.app_id, body.name)
+      if (raced)
+        return await updateExistingVersion(c, supabase, raced, body.name, upsertFields, storageProvider)
+    }
     throw simpleError('cannot_prepare_upload', 'Cannot create bundle version for upload', { supabaseError: insertError })
+  }
 
   return c.json({ status: 'ok', version: created })
 }

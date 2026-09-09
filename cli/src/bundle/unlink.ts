@@ -88,7 +88,7 @@ export async function unlinkDeviceInternal(
       true,
     )
 
-    await checkPlanValid(enrichedOptions.apikey!, orgId, resolvedAppId, true, { supaHost: enrichedOptions.supaHost, supaAnon: enrichedOptions.supaAnon })
+    await checkPlanValid(enrichedOptions.apikey!, orgId, resolvedAppId, !silent, { supaHost: enrichedOptions.supaHost, supaAnon: enrichedOptions.supaAnon })
 
     const versionData = await getVersionData(enrichedOptions.apikey!, resolvedAppId, bundle, {
       silent,

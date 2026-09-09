@@ -304,11 +304,12 @@ describe('attachment reads after app deletion', () => {
     if (deleteResponse.status !== 200)
       expect([400, 401]).toContain(deleteResponse.status)
 
-    const { data: remainingApp } = await getSupabaseClient()
+    const { data: remainingApp, error: remainingAppError } = await getSupabaseClient()
       .from('apps')
       .select('app_id')
       .eq('app_id', appId)
       .maybeSingle()
+    expect(remainingAppError).toBeNull()
     expect(remainingApp).toBeNull()
 
     const readAfterDelete = await fetch(getEndpointUrl(`/files/read/attachments/${filePath}`))
