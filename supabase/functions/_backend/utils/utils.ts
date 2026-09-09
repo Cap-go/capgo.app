@@ -226,8 +226,13 @@ function getContextEnv(c: Context): Record<string, string | undefined> {
   const merged: Record<string, string | undefined> = {}
   if (runtimeEnv && typeof runtimeEnv === 'object')
     Object.assign(merged, runtimeEnv as Record<string, string | undefined>)
-  if (contextEnv && typeof contextEnv === 'object')
-    Object.assign(merged, contextEnv)
+  if (contextEnv && typeof contextEnv === 'object') {
+    for (const key of Object.keys(contextEnv)) {
+      const value = contextEnv[key]
+      if (value !== undefined)
+        merged[key] = value
+    }
+  }
 
   return merged
 }

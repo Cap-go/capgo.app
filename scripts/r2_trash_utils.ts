@@ -25,6 +25,18 @@ export function encodeS3LiteCopySourceKey(key: string): string {
   return key.split('/').map(segment => encodeURIComponent(segment)).join('/')
 }
 
+export type S3LiteTrashClient = {
+  copyObject: (options: { sourceKey: string }, destinationKey: string) => Promise<unknown>
+  deleteObject: (key: string) => Promise<unknown>
+}
+
+/** Move a live object to 7-day trash via s3_lite_client (encodes copy source path segments). */
+export async function moveS3LiteObjectToTrash(s3client: S3LiteTrashClient, key: string): Promise<void> {
+  const trashKey = getR2TrashKey(key)
+  await s3client.copyObject({ sourceKey: encodeS3LiteCopySourceKey(key) }, trashKey)
+  await s3client.deleteObject(key)
+}
+
 /** AWS CopySource: bucket/key with per-segment URL encoding for non-ASCII/reserved chars. */
 export function encodeS3CopySource(bucket: string, key: string): string {
   return `${bucket}/${encodeS3LiteCopySourceKey(key)}`

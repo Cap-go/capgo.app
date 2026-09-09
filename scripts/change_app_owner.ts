@@ -3,18 +3,12 @@ import type { Database } from '../supabase/functions/_backend/utils/supabase.typ
 import { ensureFile } from 'https://deno.land/std/fs/ensure_file.ts'
 import { S3Client } from 'https://deno.land/x/s3_lite_client@0.7.0/mod.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js'
-import { getR2TrashKey } from './r2_trash_utils.ts'
+import { moveS3LiteObjectToTrash } from './r2_trash_utils.ts'
 
 const supabaseUrl = 'https://sb.capgo.app'
 const supabaseServiceRole = '***'
 const appToTransfer = 'com.demo.app'
 const newOwnerEmail = 'admin@capgo.app'
-
-async function moveObjectToTrash(s3client: S3Client, key: string): Promise<void> {
-  const trashKey = getR2TrashKey(key)
-  await s3client.copyObject({ sourceKey: key }, trashKey)
-  await s3client.deleteObject(key)
-}
 
 async function main() {
   const s3client = new S3Client({
@@ -75,7 +69,7 @@ async function main() {
 
     await s3client.copyObject({ sourceKey: obj.key }, obj.key.replace(oldUserId, newUserId))
     try {
-      await moveObjectToTrash(s3client, obj.key)
+      await moveS3LiteObjectToTrash(s3client, obj.key)
     }
     catch (error) {
       throw new Error(`Copied ${obj.key} to new owner key but failed to trash source object`, { cause: error })

@@ -102,7 +102,8 @@ async function processKey(key: string): Promise<void> {
         }))
         totalProcessed += 1
       }
-      catch {
+      catch (error) {
+        console.error(`Failed to trash ${key}:`, error)
         totalErrors += 1
       }
       return
@@ -133,6 +134,8 @@ async function permanentDeleteBatch(keys: string[]): Promise<void> {
       Delete: { Objects: liveKeys.map(k => ({ Key: k })), Quiet: true },
     }))
     const batchErrors = response.Errors ?? []
+    for (const err of batchErrors)
+      console.error(`Failed to permanently delete ${err.Key ?? 'unknown'}: ${err.Code ?? 'unknown'} ${err.Message ?? ''}`)
     totalErrors += batchErrors.length
     totalProcessed += liveKeys.length - batchErrors.length
   }

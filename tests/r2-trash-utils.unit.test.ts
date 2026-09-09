@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   ConcurrencyLimiter,
   encodeS3CopySource,
@@ -6,6 +6,7 @@ import {
   isAlreadyMovedToTrash,
   isLiveR2Key,
   isObjectNotFoundError,
+  moveS3LiteObjectToTrash,
   resolveOpsDeleteMode,
   R2_TRASH_PREFIX,
 } from '../scripts/r2_trash_utils.ts'
@@ -67,6 +68,22 @@ describe('isObjectNotFoundError', () => {
     expect(isObjectNotFoundError({ $metadata: { httpStatusCode: 503 } })).toBe(false)
     expect(isObjectNotFoundError(null)).toBe(false)
     expect(isObjectNotFoundError('NotFound')).toBe(false)
+  })
+})
+
+describe('moveS3LiteObjectToTrash', () => {
+  it('encodes copy source path segments before moving to trash', async () => {
+    const key = 'orgs/org-1/apps/com.test/file name.zip'
+    const copyObject = vi.fn(async () => undefined)
+    const deleteObject = vi.fn(async () => undefined)
+
+    await moveS3LiteObjectToTrash({ copyObject, deleteObject }, key)
+
+    expect(copyObject).toHaveBeenCalledWith(
+      { sourceKey: 'orgs/org-1/apps/com.test/file%20name.zip' },
+      `${R2_TRASH_PREFIX}${key}`,
+    )
+    expect(deleteObject).toHaveBeenCalledWith(key)
   })
 })
 
