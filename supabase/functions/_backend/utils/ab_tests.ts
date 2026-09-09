@@ -189,6 +189,15 @@ function eligibleTestNames(user: AssignmentAudienceUser) {
     .map(([testName]) => testName)
 }
 
+function ineligibleAssignedTestNames(value: unknown, user: AssignmentAudienceUser) {
+  const storedAssignments = isRecord(value) ? value : {}
+  return Object.entries(AB_TESTS_CONFIG)
+    .filter(([testName, test]) => test.intents !== undefined
+      && storedAssignments[testName] !== undefined
+      && !isEligibleForTest(user, test))
+    .map(([testName]) => testName)
+}
+
 function configForTests(testNames: string[]): ABTestsConfig {
   return Object.fromEntries(testNames.map(testName => [testName, AB_TESTS_CONFIG[testName]]))
 }
@@ -202,7 +211,9 @@ async function readAssignmentUser(
     const pgClient = await pgPool.connect()
     try {
       const result = await pgClient.query<AssignmentUser>(
-        `SELECT created_via_invite, onboarding->'abtests' AS abtests
+        `SELECT created_via_invite,
+                onboarding->>'intent' AS intent,
+                onboarding->'abtests' AS abtests
          FROM public.users
          WHERE id = $1::uuid
          LIMIT 1`,
@@ -301,7 +312,8 @@ export async function getOrCreateUserABTests(
   if (replicaUser) {
     const testNames = eligibleTestNames(replicaUser)
     const existing = readExistingAssignments(replicaUser.abtests, testNames)
-    if (existing.missing.length === 0)
+    const revoked = ineligibleAssignedTestNames(replicaUser.abtests, replicaUser)
+    if (existing.missing.length === 0 && revoked.length === 0)
       return existing.assignments
   }
 
@@ -310,12 +322,16 @@ export async function getOrCreateUserABTests(
     assignments: Record<string, ABTestAssignment>
     created: Record<string, ABTestAssignment>
     email?: string | null
+    revoked: string[]
   }
   try {
     const drizzle = getDrizzleClient(pgPool)
     result = await drizzle.transaction(async (tx) => {
       const lockedUserResult = await tx.execute<AssignmentUser & { email?: string | null }>(sql`
-        SELECT created_via_invite, email, onboarding->'abtests' AS abtests
+        SELECT created_via_invite,
+               email,
+               onboarding->>'intent' AS intent,
+               onboarding->'abtests' AS abtests
         FROM public.users
         WHERE id = ${userId}::uuid
         FOR UPDATE
@@ -325,24 +341,28 @@ export async function getOrCreateUserABTests(
         quickError(404, 'user_not_found', 'User not found')
 
       const testNames = eligibleTestNames(user)
-      if (testNames.length === 0)
-        return { assignments: {}, created: {} as Record<string, ABTestAssignment>, email: user.email }
-
       const existing = readExistingAssignments(user.abtests, testNames)
-      if (existing.missing.length === 0)
-        return { assignments: existing.assignments, created: {} as Record<string, ABTestAssignment>, email: user.email }
+      const revoked = ineligibleAssignedTestNames(user.abtests, user)
+      if (existing.missing.length === 0 && revoked.length === 0) {
+        return {
+          assignments: existing.assignments,
+          created: {} as Record<string, ABTestAssignment>,
+          email: user.email,
+          revoked,
+        }
+      }
 
       const candidates = createABTestAssignments(user, configForTests(existing.missing))
+      const retainedAssignments = isRecord(user.abtests) ? { ...user.abtests } : {}
+      for (const testName of revoked)
+        delete retainedAssignments[testName]
+      const nextAssignments = { ...retainedAssignments, ...candidates }
       const updateResult = await tx.execute<{ abtests?: unknown }>(sql`
         UPDATE public.users
         SET onboarding = COALESCE(onboarding, '{}'::jsonb)
           || pg_catalog.jsonb_build_object(
             'abtests',
-            CASE
-              WHEN pg_catalog.jsonb_typeof(onboarding->'abtests') = 'object'
-                THEN onboarding->'abtests'
-              ELSE '{}'::jsonb
-            END || ${JSON.stringify(candidates)}::jsonb
+            ${JSON.stringify(nextAssignments)}::jsonb
           )
         WHERE id = ${userId}::uuid
         RETURNING onboarding->'abtests' AS abtests
@@ -352,6 +372,7 @@ export async function getOrCreateUserABTests(
         assignments: readPersistedAssignments(updated?.abtests, testNames),
         created: candidates,
         email: user.email,
+        revoked,
       }
     })
   }
