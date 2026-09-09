@@ -73,37 +73,20 @@ async function withFetchDeadline<T>(
 async function deleteApiKeysByName(
   name: string,
   headers: Record<string, string>,
-  deadlineMs?: number,
+  deadlineMs: number,
 ) {
   try {
-    let keys: Array<{ id: number, name: string }>
-    if (deadlineMs === undefined) {
-      const listResponse = await fetch(`${BASE_URL}/apikey`, { headers })
+    const listed = await withFetchDeadline(deadlineMs, async (signal) => {
+      const listResponse = await fetch(`${BASE_URL}/apikey`, { headers, signal })
       if (!listResponse.ok)
-        return
-      keys = await listResponse.json()
-    }
-    else {
-      const listed = await withFetchDeadline(deadlineMs, async (signal) => {
-        const listResponse = await fetch(`${BASE_URL}/apikey`, { headers, signal })
-        if (!listResponse.ok)
-          return null
-        return await listResponse.json() as Array<{ id: number, name: string }>
-      })
-      if (listed === null)
-        return
-      keys = listed
-    }
+        return null
+      return await listResponse.json() as Array<{ id: number, name: string }>
+    })
+    if (listed === null)
+      return
 
-    const matchingKeys = keys.filter(key => key.name === name)
+    const matchingKeys = listed.filter(key => key.name === name)
     await Promise.allSettled(matchingKeys.map(async (key) => {
-      if (deadlineMs === undefined) {
-        const deleteResponse = await fetch(`${BASE_URL}/apikey/${key.id}`, { method: 'DELETE', headers })
-        if (!deleteResponse.ok)
-          throw new Error(`DELETE /apikey/${key.id} failed with ${deleteResponse.status}`)
-        return
-      }
-
       await withFetchDeadline(deadlineMs, async (signal) => {
         const deleteResponse = await fetch(`${BASE_URL}/apikey/${key.id}`, { method: 'DELETE', headers, signal })
         if (!deleteResponse.ok)
