@@ -136,7 +136,11 @@ async function getCreditProductIdForCustomer(c: Context, customerId: string): Pr
   if (planError || !plan)
     return await getFallbackCreditProductId(c, customerId, loadSoloPlan)
 
-  return getPlanCreditProductId(plan, billingAccount)
+  const creditProductId = getPlanCreditProductId(plan, billingAccount)
+  if (!creditProductId)
+    return await getFallbackCreditProductId(c, customerId, loadSoloPlan)
+
+  return creditProductId
 }
 
 export async function grantCreditsFromAutoTopUpPayment(

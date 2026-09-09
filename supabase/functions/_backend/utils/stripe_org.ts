@@ -90,11 +90,13 @@ async function resolveTrialPlan(c: Context, org: OrgRow, billingAccount: Billing
     ? await getStripeCustomer(c, org.customer_id).then(async (stripeInfo) => {
         if (!stripeInfo?.product_id)
           return null
-        const { data } = await supabaseAdmin(c)
+        const { data, error } = await supabaseAdmin(c)
           .from('plans')
           .select()
           .or(planProductIdOrFilter(stripeInfo.product_id))
-          .single()
+          .maybeSingle()
+        if (error)
+          throw error
         return data
       })
     : null

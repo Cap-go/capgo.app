@@ -287,7 +287,22 @@ async function getCreditTopUpProductId(c: AppContext, customerId: string, token:
     return { productId }
   }
 
-  return { productId: getPlanCreditProductId(plan, billingAccount) }
+  const productId = getPlanCreditProductId(plan, billingAccount)
+  if (!productId) {
+    const fallbackProductId = await getFallbackCreditProductId(c, customerId, async () => {
+      const { data, error } = await supabase
+        .from('plans')
+        .select('*')
+        .eq('name', 'Solo')
+        .single()
+      if (error)
+        throw error
+      return data ? { credit_id: getPlanCreditProductId(data, billingAccount) } : null
+    })
+    return { productId: fallbackProductId }
+  }
+
+  return { productId }
 }
 
 async function resolveOrgStripeContext(c: AppContext, orgId: string) {

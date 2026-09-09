@@ -130,7 +130,7 @@ function mockSupabase(options: {
       if (table === 'plans') {
         const planQueryResult = {
           single: async () => ({ data: SOLO_PLAN, error: null }),
-          maybeSingle: async () => ({ data: { name: SOLO_PLAN.name }, error: null }),
+          maybeSingle: async () => ({ data: SOLO_PLAN, error: null }),
         }
         return {
           select: () => ({
@@ -175,7 +175,10 @@ describe('createStripeCustomer', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     getDefaultPlanMock.mockResolvedValue(SOLO_PLAN)
-    getStripeCustomerMock.mockResolvedValue({ product_id: SOLO_PLAN.stripe_id })
+    getStripeCustomerMock.mockResolvedValue({
+      product_id: SOLO_PLAN.stripe_id,
+      billing_account: 'ee',
+    })
     createCustomerMock.mockResolvedValue({ id: CUSTOMER_ID })
   })
 
@@ -259,6 +262,54 @@ describe('createStripeCustomer', () => {
       id: ORG_ID,
       customer_id: legacy24HexLocalId,
     }))
+  })
+
+  it('throws when stored plan lookup fails so the queue can retry', async () => {
+    getStripeCustomerMock.mockResolvedValue({
+      product_id: SOLO_PLAN.stripe_id,
+      billing_account: 'ee',
+    })
+    const planLookupError = { message: 'timeout' }
+    supabaseAdminMock.mockImplementation(() => ({
+      from: (table: string) => {
+        if (table === 'orgs') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: createOrg(PENDING_ID),
+                  error: null,
+                }),
+              }),
+            }),
+            update: (payload: { customer_id: string }) => orgUpdateQuery(payload, vi.fn()),
+          }
+        }
+        if (table === 'stripe_info') {
+          return {
+            insert: vi.fn(async () => ({ error: null })),
+            delete: () => ({
+              eq: vi.fn(async () => ({ error: null })),
+            }),
+          }
+        }
+        if (table === 'plans') {
+          return {
+            select: () => ({
+              or: () => ({
+                maybeSingle: async () => ({ data: null, error: planLookupError }),
+              }),
+            }),
+          }
+        }
+        throw new Error(`unexpected table ${table}`)
+      },
+    }))
+
+    await expect(createStripeCustomer(createContext(), createOrg(PENDING_ID)))
+      .rejects
+      .toMatchObject(planLookupError)
+    expect(createCustomerMock).not.toHaveBeenCalled()
   })
 
   it('throws when org reload fails so the queue can retry', async () => {
@@ -369,7 +420,10 @@ describe('finalizePendingStripeCustomer', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     getDefaultPlanMock.mockResolvedValue(SOLO_PLAN)
-    getStripeCustomerMock.mockResolvedValue({ product_id: SOLO_PLAN.stripe_id })
+    getStripeCustomerMock.mockResolvedValue({
+      product_id: SOLO_PLAN.stripe_id,
+      billing_account: 'ee',
+    })
     createCustomerMock.mockResolvedValue({ id: CUSTOMER_ID })
   })
 

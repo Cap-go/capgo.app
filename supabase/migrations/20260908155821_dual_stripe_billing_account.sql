@@ -71,6 +71,7 @@ ALTER TABLE public.stripe_info
 CREATE OR REPLACE FUNCTION public.validate_stripe_info_product_id()
 RETURNS trigger
 LANGUAGE plpgsql
+SECURITY DEFINER
 SET search_path = ''
 AS $$
 BEGIN
@@ -179,7 +180,8 @@ $$;
 ALTER FUNCTION public.prevent_orphan_stripe_info_plan_ids() OWNER TO postgres;
 
 REVOKE ALL ON FUNCTION public.prevent_orphan_stripe_info_plan_ids() FROM PUBLIC;
-GRANT ALL ON FUNCTION public.prevent_orphan_stripe_info_plan_ids() TO service_role;
+GRANT ALL ON FUNCTION public.prevent_orphan_stripe_info_plan_ids()
+  TO service_role;
 
 DROP TRIGGER IF EXISTS prevent_orphan_stripe_info_plan_ids ON public.plans;
 

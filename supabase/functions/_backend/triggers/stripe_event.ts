@@ -855,6 +855,16 @@ async function writePaidAtAtomically(c: Context, customerId: string, eventOccurr
 
 async function getCreditTopUpProductIdFromCustomer(c: Context, customerId: string): Promise<string> {
   const billingAccount = await getBillingAccountForCustomer(c, customerId)
+  const fetchFallbackPlan = async () => {
+    const { data, error } = await supabaseAdmin(c)
+      .from('plans')
+      .select('*')
+      .eq('name', 'Solo')
+      .single()
+    if (error)
+      throw error
+    return data ? { credit_id: getPlanCreditProductId(data, billingAccount) } : null
+  }
   const { data: stripeInfo, error: stripeInfoError } = await supabaseAdmin(c)
     .from('stripe_info')
     .select('product_id')
@@ -868,16 +878,7 @@ async function getCreditTopUpProductIdFromCustomer(c: Context, customerId: strin
       customerId,
       error: stripeInfoError,
     })
-    return await getFallbackCreditProductId(c, customerId, async () => {
-      const { data, error } = await supabaseAdmin(c)
-        .from('plans')
-        .select('*')
-        .eq('name', 'Solo')
-        .single()
-      if (error)
-        throw error
-      return data ? { credit_id: getPlanCreditProductId(data, billingAccount) } : null
-    })
+    return await getFallbackCreditProductId(c, customerId, fetchFallbackPlan)
   }
 
   const { data: plan, error: planError } = await supabaseAdmin(c)
@@ -894,19 +895,14 @@ async function getCreditTopUpProductIdFromCustomer(c: Context, customerId: strin
       planStripeId: stripeInfo.product_id,
       error: planError,
     })
-    return await getFallbackCreditProductId(c, customerId, async () => {
-      const { data, error } = await supabaseAdmin(c)
-        .from('plans')
-        .select('*')
-        .eq('name', 'Solo')
-        .single()
-      if (error)
-        throw error
-      return data ? { credit_id: getPlanCreditProductId(data, billingAccount) } : null
-    })
+    return await getFallbackCreditProductId(c, customerId, fetchFallbackPlan)
   }
 
-  return getPlanCreditProductId(plan, billingAccount)
+  const creditProductId = getPlanCreditProductId(plan, billingAccount)
+  if (!creditProductId)
+    return await getFallbackCreditProductId(c, customerId, fetchFallbackPlan)
+
+  return creditProductId
 }
 
 async function handleCheckoutSessionCompleted(
