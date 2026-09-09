@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { shouldBlockIncompatibleUpload } from '../src/bundle/builder-cta.ts'
 import { checkValidOptions } from '../src/bundle/upload.ts'
 import { rejectOrAcceptIncompatibleChannelBundle } from '../src/channel/set.ts'
-import { updateChannelOptionsSchema, uploadOptionsSchema } from '../src/schemas/sdk.ts'
+import { requestBuildOptionsSchema, updateChannelOptionsSchema, uploadOptionsSchema } from '../src/schemas/sdk.ts'
 
 let failures = 0
 
@@ -193,6 +193,31 @@ test('SDK uploadOptionsSchema rejects string acceptIncompatible', () => {
     acceptIncompatible: 'false',
   })
   assert.equal(result.success, false)
+})
+
+test('SDK requestBuildOptionsSchema rejects non-string cacheKey', () => {
+  const result = requestBuildOptionsSchema.safeParse({
+    appId: 'com.example.app',
+    platform: 'ios',
+    cacheKey: 123,
+  })
+  assert.equal(result.success, false)
+})
+
+test('SDK requestBuildOptionsSchema trims cacheKey and omits whitespace-only values', () => {
+  const trimmed = requestBuildOptionsSchema.parse({
+    appId: 'com.example.app',
+    platform: 'ios',
+    cacheKey: '  prod  ',
+  })
+  assert.equal(trimmed.cacheKey, 'prod')
+
+  const omitted = requestBuildOptionsSchema.parse({
+    appId: 'com.example.app',
+    platform: 'ios',
+    cacheKey: '   ',
+  })
+  assert.equal(omitted.cacheKey, undefined)
 })
 
 test('SDK updateChannelOptionsSchema rejects string acceptIncompatible', () => {
