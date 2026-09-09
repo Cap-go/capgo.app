@@ -5,7 +5,7 @@ import { Pool } from 'pg'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { validatePrincipalAccess, validateRoleScope } from '../supabase/functions/_backend/private/role_bindings.ts'
 import { getDrizzleClient } from '../supabase/functions/_backend/utils/pg.ts'
-import { getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, USER_ID, USER_ID_2, USER_PASSWORD, executeSQL } from './test-utils.ts'
+import { fetchTestRequest, getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, USER_ID, USER_ID_2, USER_PASSWORD, executeSQL, warmEdgeEndpoint } from './test-utils.ts'
 
 let authHeaders: Record<string, string>
 let user2AuthHeaders: Record<string, string>
@@ -152,6 +152,10 @@ beforeAll(async () => {
 
   authHeaders = await getAuthHeaders()
   user2AuthHeaders = await getAuthHeadersForCredentials('test2@capgo.app', USER_PASSWORD)
+  await warmEdgeEndpoint(getEndpointUrl('/private/role_bindings'), {
+    method: 'GET',
+    headers: authHeaders,
+  })
 })
 
 // /private/role_bindings is currently served by the Supabase private functions stack, not the Cloudflare API worker.
@@ -160,9 +164,10 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
     const fixture = await createRoleBindingFixture()
 
     try {
-      const createResponse = await fetch(getEndpointUrl('/private/role_bindings'), {
+      const createResponse = await fetchTestRequest(getEndpointUrl('/private/role_bindings'), {
         method: 'POST',
         headers: authHeaders,
+        retryUnsafe: true,
         body: JSON.stringify({
           principal_type: 'user',
           principal_id: USER_ID,
@@ -280,9 +285,10 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       })
       expect(appAdminBindingError).toBeNull()
 
-      const createResponse = await fetch(getEndpointUrl('/private/role_bindings'), {
+      const createResponse = await fetchTestRequest(getEndpointUrl('/private/role_bindings'), {
         method: 'POST',
         headers: authHeaders,
+        retryUnsafe: true,
         body: JSON.stringify({
           principal_type: 'user',
           principal_id: USER_ID_2,
@@ -299,18 +305,20 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       expect(createResponse.status).toBe(200)
       expect(createData.channel_id).toBe(channel!.rbac_id)
 
-      const patchResponse = await fetch(getEndpointUrl(`/private/role_bindings/${createData.id}`), {
+      const patchResponse = await fetchTestRequest(getEndpointUrl(`/private/role_bindings/${createData.id}`), {
         method: 'PATCH',
         headers: authHeaders,
+        retryUnsafe: true,
         body: JSON.stringify({ role_name: 'channel_admin' }),
       })
       const patchData = await patchResponse.json() as { id: string, error?: string }
       expect(patchResponse.status).toBe(200)
       expect(patchData.id).toBe(createData.id)
 
-      const deleteResponse = await fetch(getEndpointUrl(`/private/role_bindings/${createData.id}`), {
+      const deleteResponse = await fetchTestRequest(getEndpointUrl(`/private/role_bindings/${createData.id}`), {
         method: 'DELETE',
         headers: authHeaders,
+        retryUnsafe: true,
       })
       const deleteData = await deleteResponse.json() as { success?: boolean, error?: string }
       expect(deleteResponse.status).toBe(200)
@@ -430,7 +438,7 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       ])
       expect(bindingError).toBeNull()
 
-      const response = await fetch(getEndpointUrl(`/private/role_bindings/app/${appUuid}/channel`), {
+      const response = await fetchTestRequest(getEndpointUrl(`/private/role_bindings/app/${appUuid}/channel`), {
         method: 'GET',
         headers: authHeaders,
       })
@@ -551,7 +559,7 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       })
       expect(appAdminBindingError).toBeNull()
 
-      const managerResponse = await fetch(getEndpointUrl(`/private/role_bindings/app/${appUuid}/principals`), {
+      const managerResponse = await fetchTestRequest(getEndpointUrl(`/private/role_bindings/app/${appUuid}/principals`), {
         method: 'GET',
         headers: authHeaders,
       })
@@ -582,7 +590,7 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
         .eq('app_id', appUuid)
       expect(appReaderBindingError).toBeNull()
 
-      const readerResponse = await fetch(getEndpointUrl(`/private/role_bindings/app/${appUuid}/principals`), {
+      const readerResponse = await fetchTestRequest(getEndpointUrl(`/private/role_bindings/app/${appUuid}/principals`), {
         method: 'GET',
         headers: authHeaders,
       })
@@ -606,9 +614,10 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
     const fixture = await createRoleBindingFixture()
 
     try {
-      const createResponse = await fetch(getEndpointUrl('/private/role_bindings'), {
+      const createResponse = await fetchTestRequest(getEndpointUrl('/private/role_bindings'), {
         method: 'POST',
         headers: authHeaders,
+        retryUnsafe: true,
         body: JSON.stringify({
           principal_type: 'user',
           principal_id: USER_ID,
@@ -674,9 +683,10 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       expect(bindingError).toBeNull()
       expect(binding?.id).toBeTruthy()
 
-      const deleteResponse = await fetch(getEndpointUrl(`/private/role_bindings/${binding!.id}`), {
+      const deleteResponse = await fetchTestRequest(getEndpointUrl(`/private/role_bindings/${binding!.id}`), {
         method: 'DELETE',
         headers: authHeaders,
+        retryUnsafe: true,
       })
 
       const deleteData = await deleteResponse.json() as { success?: boolean, error?: string }
@@ -820,9 +830,10 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       })
       expect(overrideError).toBeNull()
 
-      const deleteResponse = await fetch(getEndpointUrl(`/private/role_bindings/${targetBinding!.id}`), {
+      const deleteResponse = await fetchTestRequest(getEndpointUrl(`/private/role_bindings/${targetBinding!.id}`), {
         method: 'DELETE',
         headers: authHeaders,
+        retryUnsafe: true,
       })
       const deleteData = await deleteResponse.json() as { success?: boolean, error?: string }
 
@@ -957,9 +968,10 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
         .single()
       expect(orgBindingError).toBeNull()
 
-      const deleteResponse = await fetch(getEndpointUrl(`/private/role_bindings/${orgBinding!.id}`), {
+      const deleteResponse = await fetchTestRequest(getEndpointUrl(`/private/role_bindings/${orgBinding!.id}`), {
         method: 'DELETE',
         headers: authHeaders,
+        retryUnsafe: true,
       })
       const deleteData = await deleteResponse.json() as { success?: boolean, error?: string }
 
@@ -1106,9 +1118,10 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
         .single()
       expect(orgABindingError).toBeNull()
 
-      const deleteResponse = await fetch(getEndpointUrl(`/private/role_bindings/${orgABinding!.id}`), {
+      const deleteResponse = await fetchTestRequest(getEndpointUrl(`/private/role_bindings/${orgABinding!.id}`), {
         method: 'DELETE',
         headers: authHeaders,
+        retryUnsafe: true,
       })
       const deleteData = await deleteResponse.json() as { success?: boolean, error?: string }
 
@@ -1207,9 +1220,10 @@ describe.skipIf(USE_CLOUDFLARE)('[PATCH] /private/role_bindings/:binding_id', ()
 
       expect(targetBinding.role_id).toBe(superAdminRoleId)
 
-      const response = await fetch(getEndpointUrl(`/private/role_bindings/${targetBinding.id}`), {
+      const response = await fetchTestRequest(getEndpointUrl(`/private/role_bindings/${targetBinding.id}`), {
         method: 'PATCH',
         headers: authHeaders,
+        retryUnsafe: true,
         body: JSON.stringify({ role_name: 'org_member' }),
       })
       const data = await response.json() as { error: string }
@@ -1257,9 +1271,10 @@ describe.skipIf(USE_CLOUDFLARE)('[PATCH] /private/role_bindings/:binding_id', ()
       if (bindingError)
         throw bindingError
 
-      const response = await fetch(getEndpointUrl(`/private/role_bindings/${targetBinding.id}`), {
+      const response = await fetchTestRequest(getEndpointUrl(`/private/role_bindings/${targetBinding.id}`), {
         method: 'PATCH',
         headers: user2AuthHeaders,
+        retryUnsafe: true,
         body: JSON.stringify({ role_name: 'org_member' }),
       })
       const data = await response.json() as { error: string }

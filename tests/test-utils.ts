@@ -913,6 +913,7 @@ export async function postUpdate(data: object) {
       method: 'POST',
       headers,
       body: JSON.stringify(data),
+      retryUnsafe: true,
     },
   )
   if (response.status !== 200) {
