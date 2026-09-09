@@ -108,7 +108,7 @@ function readReplicaSchemaCompatibilityIssuesInternal(
 
   compareTables(expectedCatalog, actualCatalog, issues)
   compareColumns(expectedCatalog, actualCatalog, issues, allowSafeSubscriberOnlyObjects)
-  compareConstraints(expectedCatalog, actualCatalog, issues)
+  compareConstraints(expectedCatalog, actualCatalog, issues, allowSafeSubscriberOnlyObjects)
   compareIndexes(expectedCatalog, actualCatalog, issues, allowSafeSubscriberOnlyObjects)
   compareTypes(expectedCatalog, actualCatalog, issues, allowSafeSubscriberOnlyObjects)
   compareSequences(expectedCatalog, actualCatalog, issues, allowSafeSubscriberOnlyObjects)
@@ -235,7 +235,12 @@ function compareSubscriberOnlyColumns(
   }
 }
 
-function compareConstraints(expected: SchemaCatalog, actual: SchemaCatalog, issues: SchemaCompatibilityIssue[]): void {
+function compareConstraints(
+  expected: SchemaCatalog,
+  actual: SchemaCatalog,
+  issues: SchemaCompatibilityIssue[],
+  allowSafeSubscriberOnlyObjects: boolean,
+): void {
   const expectedConstraints = new Map((expected.constraints ?? []).map(constraint => [constraintKey(constraint), constraint]))
   const actualConstraints = new Map((actual.constraints ?? []).map(constraint => [constraintKey(constraint), constraint]))
 
@@ -243,12 +248,18 @@ function compareConstraints(expected: SchemaCatalog, actual: SchemaCatalog, issu
     const key = constraintKey(expectedConstraint)
     const actualConstraint = actualConstraints.get(key)
     if (expectedConstraint.type === 'c') {
+      // Publisher CHECK constraints are optional on read-only logical subscribers.
+      // Missing CHECKs are ignored; stale subscriber CHECKs must not block deploy.
       if (
         actualConstraint
-        && (
-          actualConstraint.type !== 'c'
-          || actualConstraint.definition !== expectedConstraint.definition
-        )
+        && actualConstraint.type !== 'c'
+      ) {
+        issues.push({ kind: 'constraint', object: key, reason: 'subscriber CHECK constraint differs' })
+      }
+      else if (
+        actualConstraint
+        && !allowSafeSubscriberOnlyObjects
+        && actualConstraint.definition !== expectedConstraint.definition
       ) {
         issues.push({ kind: 'constraint', object: key, reason: 'subscriber CHECK constraint differs' })
       }
