@@ -27,7 +27,6 @@ import {
   getOnboardingContinueSetupRoute,
   getOnboardingResumeAppId,
   getPendingFirstUploadAppId,
-  isActiveOnboardingSetupPath,
   ONBOARDING_DASHBOARD_EXPLORED_EVENT,
   shouldConfirmOnboardingDashboardExploration,
 } from '~/utils/onboardingRedirect'
