@@ -1721,7 +1721,7 @@ async function delete_cleanup_candidates() {
                     if (isPreconditionFailedError(deleteError)) {
                         return {
                             key: file.key,
-                            success: true,
+                            success: false,
                             error: 'Cleanup candidate stale: live object changed before permanent delete',
                             skipped: true,
                         }

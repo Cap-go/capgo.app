@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { Database } from '../utils/supabase.types.ts'
 import { S3Client } from '@bradenmacdonald/s3-lite-client'
+import { conditionalDeleteSource, encodeS3LiteCopySourceKey, isObjectNotFoundError } from '../../../../scripts/r2_trash_utils.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { getManifestStorageCandidateKeys } from './manifest_encoding.ts'
 import { getEnv } from './utils.ts'
@@ -158,81 +159,75 @@ function shouldUseSizeRangeFallback(size: number, headError: unknown): boolean {
   return !size && !isMissingObjectError(headError)
 }
 
-type ObjectPresence = 'present' | 'absent' | 'unknown'
-
-async function getObjectPresence(c: Context, fileId: string | null): Promise<ObjectPresence> {
-  if (!fileId)
-    return 'absent'
-
-  try {
-    const client = initS3(c)
-    const url = await client.getPresignedUrl('HEAD', fileId)
-    const response = await fetch(url, {
-      method: 'HEAD',
-      signal: AbortSignal.timeout(10_000),
-    })
-    await response.body?.cancel()
-
-    if (response.status === 404)
-      return 'absent'
-    if (response.status === 200)
-      return 'present'
-
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'getObjectPresence unexpected HEAD status',
-      fileId,
-      status: response.status,
-      statusText: response.statusText,
-    })
-    return 'unknown'
-  }
-  catch (error) {
-    if (isMissingObjectError(error))
-      return 'absent'
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'getObjectPresence failed',
-      fileId,
-      error: serializeStorageError(error),
-    })
-    return 'unknown'
-  }
-}
-
 async function moveObjectToTrash(c: Context, fileId: string) {
   if (fileId.startsWith(R2_TRASH_PREFIX))
     return true
 
-  // Only skip copy on a definitive absent object. Unknown HEAD must fail closed
-  // so callers keep DB tracking until trash succeeds.
-  const presence = await getObjectPresence(c, fileId)
-  if (presence === 'absent') {
-    cloudlog({ requestId: c.get('requestId'), message: 'R2 object missing before trash move, skip copy', fileId })
-    return true
+  const client = initS3(c)
+  const trashPath = getTrashPath(fileId)
+
+  let sourceEtag: string | undefined
+  try {
+    const stat = await client.statObject(fileId)
+    sourceEtag = stat.etag
   }
-  if (presence === 'unknown') {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object presence unknown, refuse trash skip', fileId })
+  catch (error) {
+    if (isMissingObjectError(error) || isObjectNotFoundError(error)) {
+      cloudlog({ requestId: c.get('requestId'), message: 'R2 object missing before trash move, skip copy', fileId })
+      return true
+    }
+    cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object stat failed before trash move', fileId, error: serializeStorageError(error) })
     return false
   }
 
-  const client = initS3(c)
-  const trashPath = getTrashPath(fileId)
+  if (!sourceEtag) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object missing ETag before trash move, source retained', fileId })
+    return false
+  }
+
   try {
-    await client.copyObject({ sourceKey: fileId }, trashPath)
-    await client.deleteObject(fileId)
+    await client.copyObject({ sourceKey: encodeS3LiteCopySourceKey(fileId) }, trashPath)
+  }
+  catch (error) {
+    if (isMissingObjectError(error) || isObjectNotFoundError(error)) {
+      cloudlog({ requestId: c.get('requestId'), message: 'R2 object disappeared during trash copy', fileId, error: serializeStorageError(error) })
+      return true
+    }
+    cloudlogErr({ requestId: c.get('requestId'), message: 'move R2 object to trash copy failed', fileId, trashPath, error: serializeStorageError(error) })
+    return false
+  }
+
+  let afterCopyEtag: string | undefined
+  try {
+    const afterCopy = await client.statObject(fileId)
+    afterCopyEtag = afterCopy.etag
+  }
+  catch (error) {
+    if (isMissingObjectError(error) || isObjectNotFoundError(error)) {
+      cloudlog({ requestId: c.get('requestId'), message: 'R2 object absent after trash copy', fileId })
+      return true
+    }
+    cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object stat failed after trash copy', fileId, error: serializeStorageError(error) })
+    return false
+  }
+
+  if (afterCopyEtag !== sourceEtag) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object changed after trash copy, source retained', fileId })
+    return false
+  }
+
+  const deleteResult = await conditionalDeleteSource(client, fileId, afterCopyEtag)
+  if (deleteResult === 'deleted') {
     cloudlog({ requestId: c.get('requestId'), message: 'moved R2 object to trash', fileId, trashPath })
     return true
   }
-  catch (error) {
-    if (isMissingObjectError(error)) {
-      cloudlog({ requestId: c.get('requestId'), message: 'R2 object disappeared during trash move', fileId, error: serializeStorageError(error) })
-      return true
-    }
-
-    cloudlogErr({ requestId: c.get('requestId'), message: 'move R2 object to trash failed', fileId, trashPath, error: serializeStorageError(error) })
-    return false
+  if (deleteResult === 'skipped_missing') {
+    cloudlog({ requestId: c.get('requestId'), message: 'R2 object absent before conditional delete', fileId })
+    return true
   }
+
+  cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object changed before conditional delete, source retained', fileId })
+  return false
 }
 
 async function deleteObjectsWithPrefix(c: Context, prefix: string): Promise<number> {
@@ -304,12 +299,15 @@ async function moveObjectsWithPrefixToTrash(c: Context, prefix: string): Promise
     await Promise.all(currentBatch.map(moveKey))
   }
 
-  try {
-    for await (const object of client.listObjects({ prefix })) {
-      if (object.key.startsWith(R2_TRASH_PREFIX))
-        continue
+  const keys: string[] = []
+  for await (const object of client.listObjects({ prefix })) {
+    if (!object.key.startsWith(R2_TRASH_PREFIX))
+      keys.push(object.key)
+  }
 
-      batch.push(object.key)
+  try {
+    for (const key of keys) {
+      batch.push(key)
       if (batch.length >= PREFIX_TRASH_CONCURRENCY)
         await flushBatch()
     }

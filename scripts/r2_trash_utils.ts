@@ -172,17 +172,8 @@ export async function conditionalDeleteSource(
   key: string,
   expectedEtag: string | undefined,
 ): Promise<ConditionalDeleteResult> {
-  if (!expectedEtag) {
-    try {
-      await s3client.deleteObject(key)
-      return 'deleted'
-    }
-    catch (error) {
-      if (isObjectNotFoundError(error))
-        return 'skipped_missing'
-      throw error
-    }
-  }
+  if (!expectedEtag)
+    return 'skipped_changed'
 
   if (!s3client.makeRequest)
     return 'skipped_changed'
@@ -242,6 +233,9 @@ export async function moveS3LiteObjectToTrash(s3client: RawS3LiteClient, key: st
       return 'skipped_missing'
     throw error
   }
+
+  if (!sourceEtag)
+    return 'skipped_changed'
 
   const trashKey = await resolveAvailableR2TrashKey(s3client, key, sourceEtag)
 

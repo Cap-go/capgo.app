@@ -309,6 +309,18 @@ describe('conditionalDeleteSource', () => {
     expect(result).toBe('skipped_changed')
     expect(deleteObject).not.toHaveBeenCalled()
   })
+
+  it('retains source when expected etag is missing', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const deleteObject = vi.fn(async () => undefined)
+    const makeRequest = vi.fn(async () => new Response(null, { status: 204 }))
+
+    const result = await conditionalDeleteSource({ deleteObject, makeRequest }, key, undefined)
+
+    expect(result).toBe('skipped_changed')
+    expect(makeRequest).not.toHaveBeenCalled()
+    expect(deleteObject).not.toHaveBeenCalled()
+  })
 })
 
 describe('permanentDeleteSourceIfMatch', () => {
@@ -353,6 +365,19 @@ describe('permanentDeleteSourceIfMatch', () => {
 
     expect(result).toBe('skipped_changed')
     expect(makeRequest).toHaveBeenCalledOnce()
+    expect(deleteObject).not.toHaveBeenCalled()
+  })
+
+  it('retains the source when the live object has no etag', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const statObject = vi.fn(async () => ({ etag: '' }))
+    const deleteObject = vi.fn()
+    const makeRequest = vi.fn()
+
+    const result = await permanentDeleteSourceIfMatch({ statObject, deleteObject, makeRequest }, key)
+
+    expect(result).toBe('skipped_changed')
+    expect(makeRequest).not.toHaveBeenCalled()
     expect(deleteObject).not.toHaveBeenCalled()
   })
 })

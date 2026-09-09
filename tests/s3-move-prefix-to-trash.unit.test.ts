@@ -1,28 +1,34 @@
 import { Hono } from 'hono'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { encodeS3LiteCopySourceKey } from '../scripts/r2_trash_utils.ts'
 
 const R2_TRASH_PREFIX = 'deleted-after-7-days/'
+const DEFAULT_ETAG = '"test-etag"'
 
 const mocks = vi.hoisted(() => {
   const copyObject = vi.fn<(source: { sourceKey: string }, destination: string) => Promise<void>>(async () => {})
   const deleteObject = vi.fn<(key: string) => Promise<void>>(async () => {})
   const listObjects = vi.fn<() => AsyncGenerator<{ key: string }>>()
+  const statObject = vi.fn<(key: string) => Promise<{ etag: string, size?: number }>>(async () => ({ etag: DEFAULT_ETAG }))
+  const makeRequest = vi.fn(async () => new Response(null, { status: 204 }))
 
   class S3Client {
     copyObject = copyObject
     deleteObject = deleteObject
     listObjects = listObjects
+    statObject = statObject
+    makeRequest = makeRequest
     getPresignedUrl = vi.fn(async () => 'https://storage.example/presigned')
   }
 
-  return { copyObject, deleteObject, listObjects, S3Client }
+  return { copyObject, deleteObject, listObjects, statObject, makeRequest, S3Client }
 })
 
 vi.mock('@bradenmacdonald/s3-lite-client', () => ({
   S3Client: mocks.S3Client,
 }))
 
-const { copyObject, deleteObject, listObjects } = mocks
+const { copyObject, deleteObject, listObjects, statObject, makeRequest } = mocks
 
 const { s3, TrashMoveError } = await import('../supabase/functions/_backend/utils/s3.ts')
 
@@ -47,20 +53,14 @@ async function makeContext(extraEnv: Record<string, string> = {}) {
   return ctx
 }
 
-function mockHeadStatus(status: number) {
-  vi.stubGlobal('fetch', vi.fn(async () => ({
-    status,
-    headers: new Headers(),
-    body: { cancel: vi.fn(async () => {}) },
-  })))
-}
-
 describe('moveObjectsWithPrefixToTrash', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.unstubAllGlobals()
     copyObject.mockImplementation(async () => {})
     deleteObject.mockImplementation(async () => {})
+    statObject.mockImplementation(async () => ({ etag: DEFAULT_ETAG }))
+    makeRequest.mockImplementation(async () => new Response(null, { status: 204 }))
   })
 
   it('moves listed objects into deleted-after-7-days and deletes the source keys', async () => {
@@ -71,16 +71,15 @@ describe('moveObjectsWithPrefixToTrash', () => {
     listObjects.mockImplementation(async function* () {
       yield { key: liveKey }
     })
-    mockHeadStatus(200)
 
     const c = await makeContext()
     const movedCount = await s3.moveObjectsWithPrefixToTrash(c, prefix)
 
     expect(movedCount).toBe(1)
-    expect(copyObject).toHaveBeenCalledWith({ sourceKey: liveKey }, trashedKey)
-    expect(deleteObject).toHaveBeenCalledWith(liveKey)
+    expect(copyObject).toHaveBeenCalledWith({ sourceKey: encodeS3LiteCopySourceKey(liveKey) }, trashedKey)
+    expect(makeRequest).toHaveBeenCalledOnce()
+    expect(deleteObject).not.toHaveBeenCalled()
     expect(copyObject).toHaveBeenCalledTimes(1)
-    expect(deleteObject).toHaveBeenCalledTimes(1)
   })
 
   it('skips keys already under deleted-after-7-days', async () => {
@@ -91,7 +90,6 @@ describe('moveObjectsWithPrefixToTrash', () => {
       yield { key: alreadyTrashedKey }
       yield { key: `${prefix}live.zip` }
     })
-    mockHeadStatus(200)
 
     const c = await makeContext()
     const movedCount = await s3.moveObjectsWithPrefixToTrash(c, prefix)
@@ -99,11 +97,11 @@ describe('moveObjectsWithPrefixToTrash', () => {
     expect(movedCount).toBe(1)
     expect(copyObject).toHaveBeenCalledTimes(1)
     expect(copyObject).toHaveBeenCalledWith(
-      { sourceKey: `${prefix}live.zip` },
+      { sourceKey: encodeS3LiteCopySourceKey(`${prefix}live.zip`) },
       `${R2_TRASH_PREFIX}${prefix}live.zip`,
     )
-    expect(deleteObject).toHaveBeenCalledTimes(1)
-    expect(deleteObject).toHaveBeenCalledWith(`${prefix}live.zip`)
+    expect(makeRequest).toHaveBeenCalledTimes(1)
+    expect(deleteObject).not.toHaveBeenCalled()
   })
 
   it('treats missing objects as success without permanent delete', async () => {
@@ -113,13 +111,14 @@ describe('moveObjectsWithPrefixToTrash', () => {
     listObjects.mockImplementation(async function* () {
       yield { key: missingKey }
     })
-    mockHeadStatus(404)
+    statObject.mockRejectedValue({ statusCode: 404, code: 'NotFound' })
 
     const c = await makeContext()
     const movedCount = await s3.moveObjectsWithPrefixToTrash(c, prefix)
 
     expect(movedCount).toBe(1)
     expect(copyObject).not.toHaveBeenCalled()
+    expect(makeRequest).not.toHaveBeenCalled()
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
@@ -130,13 +129,13 @@ describe('moveObjectsWithPrefixToTrash', () => {
     listObjects.mockImplementation(async function* () {
       yield { key }
     })
-    mockHeadStatus(200)
     copyObject.mockRejectedValue(new Error('copy failed'))
 
     const c = await makeContext()
     await expect(s3.moveObjectsWithPrefixToTrash(c, prefix)).rejects.toBeInstanceOf(TrashMoveError)
 
     expect(copyObject).toHaveBeenCalledTimes(1)
+    expect(makeRequest).not.toHaveBeenCalled()
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
@@ -150,29 +149,22 @@ describe('moveObjectsWithPrefixToTrash', () => {
       yield { key: successKey }
     })
 
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce({
-        status: 500,
-        headers: new Headers(),
-        body: { cancel: vi.fn(async () => {}) },
-      })
-      .mockResolvedValueOnce({
-        status: 200,
-        headers: new Headers(),
-        body: { cancel: vi.fn(async () => {}) },
-      })
-    vi.stubGlobal('fetch', fetchMock)
+    statObject.mockImplementation(async (key: string) => {
+      if (key === failingKey)
+        throw { statusCode: 500, code: 'InternalError' }
+      return { etag: DEFAULT_ETAG }
+    })
 
     const c = await makeContext()
     await expect(s3.moveObjectsWithPrefixToTrash(c, prefix)).rejects.toBeInstanceOf(TrashMoveError)
 
     expect(copyObject).toHaveBeenCalledTimes(1)
     expect(copyObject).toHaveBeenCalledWith(
-      { sourceKey: successKey },
+      { sourceKey: encodeS3LiteCopySourceKey(successKey) },
       `${R2_TRASH_PREFIX}${successKey}`,
     )
-    expect(deleteObject).toHaveBeenCalledTimes(1)
-    expect(deleteObject).toHaveBeenCalledWith(successKey)
+    expect(makeRequest).toHaveBeenCalledTimes(1)
+    expect(deleteObject).not.toHaveBeenCalled()
   })
 
   it('processes keys with bounded concurrency', async () => {
@@ -183,23 +175,22 @@ describe('moveObjectsWithPrefixToTrash', () => {
       for (const key of keys)
         yield { key }
     })
-    mockHeadStatus(200)
 
     let inFlight = 0
     let maxInFlight = 0
     const trashedDestinations = new Set<string>()
     const deletedSources = new Set<string>()
     copyObject.mockImplementation(async (source: { sourceKey: string }, destination: string) => {
-      expect(destination).toBe(`${R2_TRASH_PREFIX}${source.sourceKey}`)
       trashedDestinations.add(destination)
       inFlight += 1
       maxInFlight = Math.max(maxInFlight, inFlight)
       await new Promise(resolve => setTimeout(resolve, 5))
       inFlight -= 1
     })
-    deleteObject.mockImplementation(async (key: string) => {
-      expect(keys).toContain(key)
-      deletedSources.add(key)
+    makeRequest.mockImplementation(async (options: { objectName?: string }) => {
+      if (options.objectName)
+        deletedSources.add(options.objectName)
+      return new Response(null, { status: 204 })
     })
 
     const c = await makeContext()
@@ -209,14 +200,14 @@ describe('moveObjectsWithPrefixToTrash', () => {
     expect(maxInFlight).toBeLessThanOrEqual(10)
     expect(maxInFlight).toBeGreaterThan(1)
     expect(copyObject).toHaveBeenCalledTimes(25)
-    expect(deleteObject).toHaveBeenCalledTimes(25)
+    expect(makeRequest).toHaveBeenCalledTimes(25)
+    expect(deleteObject).not.toHaveBeenCalled()
     expect(trashedDestinations.size).toBe(25)
     expect(deletedSources.size).toBe(25)
     for (const key of keys) {
       expect(trashedDestinations.has(`${R2_TRASH_PREFIX}${key}`)).toBe(true)
       expect(deletedSources.has(key)).toBe(true)
-      expect(copyObject).toHaveBeenCalledWith({ sourceKey: key }, `${R2_TRASH_PREFIX}${key}`)
-      expect(deleteObject).toHaveBeenCalledWith(key)
+      expect(copyObject).toHaveBeenCalledWith({ sourceKey: encodeS3LiteCopySourceKey(key) }, `${R2_TRASH_PREFIX}${key}`)
     }
   })
 })
@@ -227,6 +218,8 @@ describe('deleteObjectsWithPrefix', () => {
     vi.unstubAllGlobals()
     copyObject.mockImplementation(async () => {})
     deleteObject.mockImplementation(async () => {})
+    statObject.mockImplementation(async () => ({ etag: DEFAULT_ETAG }))
+    makeRequest.mockImplementation(async () => new Response(null, { status: 204 }))
   })
 
   it('is blocked unless ALLOW_PERMANENT_R2_DELETE=true', async () => {
