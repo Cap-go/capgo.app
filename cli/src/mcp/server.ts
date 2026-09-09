@@ -674,13 +674,14 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       description: 'Request a native iOS/Android build from Capgo Cloud',
       inputSchema: mcpRequestBuildInputSchema,
     },
-    async ({ appId, platform, path, nodeModules, cache }) => {
+    async ({ appId, platform, path, nodeModules, cache, cacheKey }) => {
       const result = await sdk.requestBuild({
         appId,
         platform,
         path,
         nodeModules,
         cache,
+        cacheKey,
         // Credentials should be pre-saved using the CLI
       })
       if (!result.success) {

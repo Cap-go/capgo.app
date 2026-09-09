@@ -778,6 +778,7 @@ export class CapgoSDK {
         prescanSkip: options.prescanSkip,
         prescanWarn: options.prescanWarn,
         cache: options.cache,
+        cacheKey: options.cacheKey,
       }
 
       const result = await requestBuildInternal(options.appId, internalOptions, true)
