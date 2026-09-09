@@ -50,7 +50,6 @@ async function postApiKey(
     method: 'POST',
     headers,
     body: JSON.stringify(body),
-    retryUnsafe: true,
   })
 }
 

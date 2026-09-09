@@ -217,4 +217,52 @@ describe('anonymous oracle RPC hardening', () => {
     // Unknown email is read-only and proves authenticated execute still works.
     expect(data).toBe('NO_EMAIL')
   })
+
+  it.concurrent('keeps revoked member/org oracle RPCs callable for authenticated callers', async () => {
+    const authHeaders = await getAuthHeadersForCredentials(USER_EMAIL, USER_PASSWORD)
+    const client = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: {
+        headers: authHeaders,
+      },
+      auth: {
+        persistSession: false,
+      },
+    })
+
+    const members = await client.rpc('get_org_members_rbac', { p_org_id: ORG_ID })
+    expect(isPermissionDenied(members.error)).toBe(false)
+    expect(members.error).toBeNull()
+    expect(Array.isArray(members.data)).toBe(true)
+    expect((members.data ?? []).length).toBeGreaterThan(0)
+
+    const membership = await client.rpc('is_member_of_org', {
+      user_id: USER_ID,
+      org_id: ORG_ID,
+    })
+    expect(isPermissionDenied(membership.error)).toBe(false)
+    expect(membership.error).toBeNull()
+    expect(membership.data).toBe(true)
+
+    // Missing invite/user must not be EXECUTE denial — proves re-grant path.
+    const missingUserId = randomUUID()
+    const missingInviteEmail = `oracle-missing-invite-${randomUUID()}@capgo.app`
+    const orgInviteUpdate = await client.rpc('update_org_invite_role_rbac', {
+      p_org_id: ORG_ID,
+      p_user_id: missingUserId,
+      p_new_role_name: 'org_member',
+    })
+    const tmpInviteUpdate = await client.rpc('update_tmp_invite_role_rbac', {
+      p_org_id: ORG_ID,
+      p_email: missingInviteEmail,
+      p_new_role_name: 'org_member',
+    })
+
+    expect(isPermissionDenied(orgInviteUpdate.error)).toBe(false)
+    expect(isPermissionDenied(tmpInviteUpdate.error)).toBe(false)
+
+    const orgInviteOutcome = orgInviteUpdate.error?.message ?? orgInviteUpdate.data
+    const tmpInviteOutcome = tmpInviteUpdate.error?.message ?? tmpInviteUpdate.data
+    expect(String(orgInviteOutcome)).toMatch(/NO_INVITATION|ROLE_NOT_FOUND|OK/i)
+    expect(String(tmpInviteOutcome)).toMatch(/NO_INVITATION|ROLE_NOT_FOUND|OK/i)
+  })
 })
