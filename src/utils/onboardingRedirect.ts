@@ -94,6 +94,17 @@ function matchingDashboardExploration(userId: string | null | undefined): Dashbo
   return state?.userId === userId ? state : null
 }
 
+function hasScopedDashboardExplorationGrant(
+  userId: string | null | undefined,
+  resumeAppId: string | null | undefined,
+): boolean {
+  const state = matchingDashboardExploration(userId)
+  if (!state)
+    return false
+
+  return state.resumeAppId === (resumeAppId ?? null)
+}
+
 function matchesAppPath(path: string, appId: string) {
   const candidates = new Set([appId, encodeURIComponent(appId)])
   for (const candidate of candidates) {
@@ -113,8 +124,11 @@ export function allowOnboardingDashboardExploration(userId: string | null | unde
   writeStoredExploration(state)
 }
 
-export function canExploreOnboardingDashboard(userId: string | null | undefined) {
-  return !!matchingDashboardExploration(userId)
+export function canExploreOnboardingDashboard(
+  userId: string | null | undefined,
+  resumeAppId?: string | null,
+) {
+  return hasScopedDashboardExplorationGrant(userId, resumeAppId)
 }
 
 const ONBOARDING_CONSOLE_ESCAPE_DESTINATIONS = new Set([
@@ -167,7 +181,7 @@ export function shouldConfirmOnboardingDashboardExploration(options: {
 }) {
   if (!ONBOARDING_CONSOLE_ESCAPE_DESTINATIONS.has(options.destination))
     return false
-  if (canExploreOnboardingDashboard(options.userId))
+  if (canExploreOnboardingDashboard(options.userId, options.resumeAppId))
     return false
 
   // Confirm before empty-product escapes while a first-app create is still in
@@ -211,7 +225,7 @@ export function getOnboardingResumeRedirect(options: {
   resumeAppId: string | null | undefined
   userId: string | null | undefined
 }) {
-  if (canExploreOnboardingDashboard(options.userId))
+  if (canExploreOnboardingDashboard(options.userId, options.appId))
     return null
   if (!isNewOnboardingUser(options.createdAt))
     return null
