@@ -1,7 +1,5 @@
 -- Rows written after 20260909163000 can carry JSON null intent: the interim orgs
 -- CHECK only enforced allowed text values via ->>, and SQL NULL passes CHECK.
-LOCK TABLE "public"."orgs" IN SHARE ROW EXCLUSIVE MODE;
-
 UPDATE "public"."orgs"
 SET "onboarding" = "onboarding" - 'intent'
 WHERE ("onboarding" ? 'intent'::"text")

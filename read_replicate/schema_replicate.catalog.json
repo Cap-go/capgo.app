@@ -2016,7 +2016,7 @@
       "name": "orgs_onboarding_valid",
       "table": "orgs",
       "type": "c",
-      "valid": true
+      "valid": false
     },
     {
       "definition": "CHECK (password_policy_config IS NULL OR jsonb_typeof(password_policy_config) = 'object'::text AND (NOT password_policy_config ? 'min_length'::text OR jsonb_typeof(password_policy_config -> 'min_length'::text) = 'number'::text AND ((password_policy_config ->> 'min_length'::text)::numeric) = trunc((password_policy_config ->> 'min_length'::text)::numeric) AND ((password_policy_config ->> 'min_length'::text)::numeric) >= 6::numeric AND ((password_policy_config ->> 'min_length'::text)::numeric) <= 72::numeric))",

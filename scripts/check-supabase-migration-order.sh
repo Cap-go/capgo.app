@@ -201,7 +201,9 @@ if [[ -n "$modified_files" ]]; then
     fi
 
     if [[ "$file" == "$restamp_webnative_onboarding" ]] \
-      && [[ "$(git hash-object "$file")" == "$restamp_webnative_onboarding_blob" ]]; then
+      && [[ "$(git hash-object "$file")" == "$restamp_webnative_onboarding_blob" ]] \
+      && [[ -n "$ts" ]] \
+      && (( 10#$ts > 10#$latest_base_timestamp )); then
       echo "⚠️  Allowing audited org onboarding intent guard during restamp: $file"
       continue
     fi
