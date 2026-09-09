@@ -1802,8 +1802,8 @@ BEGIN
   FROM public.tmp_users
   WHERE tmp_users.invite_magic_string = p_invite_magic_string
     AND tmp_users.cancelled_at IS NULL
-  FOR UPDATE
-  LIMIT 1;
+  LIMIT 1
+  FOR UPDATE;
 
   IF v_invite.id IS NULL THEN
     RETURN 'NO_INVITE';
