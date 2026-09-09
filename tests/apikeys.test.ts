@@ -52,7 +52,10 @@ async function appKeyBody(name: string, appId = APPNAME, extra: Record<string, u
   }
 }
 
-async function fetchWithDeadline(url: string, init: RequestInit, deadlineMs: number) {
+async function withFetchDeadline<T>(
+  deadlineMs: number,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
   const remainingMs = deadlineMs - Date.now()
   if (remainingMs <= 0)
     throw new Error('Request timed out before fetch started')
@@ -60,7 +63,7 @@ async function fetchWithDeadline(url: string, init: RequestInit, deadlineMs: num
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), remainingMs)
   try {
-    return await fetch(url, { ...init, signal: controller.signal })
+    return await run(controller.signal)
   }
   finally {
     clearTimeout(timeout)
@@ -73,20 +76,39 @@ async function deleteApiKeysByName(
   deadlineMs?: number,
 ) {
   try {
-    const listResponse = deadlineMs === undefined
-      ? await fetch(`${BASE_URL}/apikey`, { headers })
-      : await fetchWithDeadline(`${BASE_URL}/apikey`, { headers }, deadlineMs)
-    if (!listResponse.ok)
-      return
+    let keys: Array<{ id: number, name: string }>
+    if (deadlineMs === undefined) {
+      const listResponse = await fetch(`${BASE_URL}/apikey`, { headers })
+      if (!listResponse.ok)
+        return
+      keys = await listResponse.json()
+    }
+    else {
+      const listed = await withFetchDeadline(deadlineMs, async (signal) => {
+        const listResponse = await fetch(`${BASE_URL}/apikey`, { headers, signal })
+        if (!listResponse.ok)
+          return null
+        return await listResponse.json() as Array<{ id: number, name: string }>
+      })
+      if (listed === null)
+        return
+      keys = listed
+    }
 
-    const keys = await listResponse.json() as Array<{ id: number, name: string }>
     const matchingKeys = keys.filter(key => key.name === name)
     await Promise.allSettled(matchingKeys.map(async (key) => {
-      const deleteResponse = deadlineMs === undefined
-        ? await fetch(`${BASE_URL}/apikey/${key.id}`, { method: 'DELETE', headers })
-        : await fetchWithDeadline(`${BASE_URL}/apikey/${key.id}`, { method: 'DELETE', headers }, deadlineMs)
-      if (!deleteResponse.ok)
-        throw new Error(`DELETE /apikey/${key.id} failed with ${deleteResponse.status}`)
+      if (deadlineMs === undefined) {
+        const deleteResponse = await fetch(`${BASE_URL}/apikey/${key.id}`, { method: 'DELETE', headers })
+        if (!deleteResponse.ok)
+          throw new Error(`DELETE /apikey/${key.id} failed with ${deleteResponse.status}`)
+        return
+      }
+
+      await withFetchDeadline(deadlineMs, async (signal) => {
+        const deleteResponse = await fetch(`${BASE_URL}/apikey/${key.id}`, { method: 'DELETE', headers, signal })
+        if (!deleteResponse.ok)
+          throw new Error(`DELETE /apikey/${key.id} failed with ${deleteResponse.status}`)
+      })
     }))
   }
   catch {
@@ -122,8 +144,11 @@ async function postApiKey(
       const timeout = setTimeout(() => controller.abort(), remainingMs)
 
       let response: Response
+      let responseBody = ''
       try {
         response = await fetch(url, { ...requestInit, signal: controller.signal })
+        if (response.status === 502 || response.status === 503)
+          responseBody = await response.clone().text().catch(() => '')
       }
       catch (error) {
         if (error instanceof Error && error.name === 'AbortError')
@@ -137,7 +162,6 @@ async function postApiKey(
       if (response.status !== 502 && response.status !== 503)
         return response
 
-      const responseBody = await response.clone().text().catch(() => '')
       if (!isTransientGateway502503(response.status, responseBody))
         return response
 
