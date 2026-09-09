@@ -32,6 +32,7 @@ type AssignmentAudienceUser = Pick<Database['public']['Tables']['users']['Row'],
 type AssignmentUser = AssignmentAudienceUser & Record<string, unknown> & { abtests: unknown }
 type SyncUser = Pick<Database['public']['Tables']['users']['Row'], 'created_via_invite' | 'id'>
 const AB_TEST_BRANCHES = ['A', 'B', 'C', 'D'] as const
+const BENTO_AB_TEST_SYNC_TIMEOUT_MS = 5_000
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -272,42 +273,69 @@ async function persistABTestAssignments(
   return readPersistedAssignments(persisted, Object.keys(candidates))
 }
 
-async function syncReconciledABTestTags(
-  c: Context<MiddlewareKeyVariables>,
-  email: unknown,
-  created: Record<string, ABTestAssignment>,
-  revoked: string[],
-) {
-  if (typeof email !== 'string'
-    || !email.trim()
-    || (Object.keys(created).length === 0 && revoked.length === 0)) {
-    return
-  }
-
+function buildBentoTagUpdate(user: AssignmentUser) {
+  const testNames = Object.keys(AB_TESTS_CONFIG)
+  const { assignments } = readExistingAssignments(user.abtests, testNames)
   const segments: string[] = []
   const deleteSegments: string[] = []
-  for (const [testName, assignment] of Object.entries(created)) {
-    const test = AB_TESTS_CONFIG[testName]
+
+  for (const [testName, test] of Object.entries(AB_TESTS_CONFIG)) {
+    const assignment = assignments[testName]
+    if (!assignment || !isEligibleForTest(user, test)) {
+      deleteSegments.push(
+        test.branches[test.treatment_branch].bento_tag,
+        test.branches[test.control_branch].bento_tag,
+      )
+      continue
+    }
+
     const oppositeBranch = assignment.branch === test.treatment_branch ? test.control_branch : test.treatment_branch
     segments.push(test.branches[assignment.branch].bento_tag)
     deleteSegments.push(test.branches[oppositeBranch].bento_tag)
   }
-  for (const testName of revoked) {
-    const test = AB_TESTS_CONFIG[testName]
-    deleteSegments.push(
-      test.branches[test.treatment_branch].bento_tag,
-      test.branches[test.control_branch].bento_tag,
-    )
-  }
 
-  const result = await syncBentoSubscriberTags(c, {
-    deleteSegments,
-    email: email.trim().toLowerCase(),
-    segments,
-  })
-  if (result === false) {
+  return { deleteSegments, segments }
+}
+
+async function syncCurrentUserABTestTags(
+  c: Context<MiddlewareKeyVariables>,
+  drizzle: ReturnType<typeof getDrizzleClient>,
+  userId: string,
+) {
+  try {
+    await drizzle.transaction(async (tx) => {
+      // This second row lock runs only after assignment commit. It serializes
+      // external updates while letting each waiter reread the newest state.
+      const currentUserResult = await tx.execute<AssignmentUser & { email?: string | null }>(sql`
+        SELECT created_via_invite,
+               email,
+               onboarding->>'intent' AS intent,
+               onboarding->'abtests' AS abtests
+        FROM public.users
+        WHERE id = ${userId}::uuid
+        FOR UPDATE
+      `)
+      const user = currentUserResult.rows[0]
+      if (!user || typeof user.email !== 'string' || !user.email.trim())
+        return
+
+      const tagUpdate = buildBentoTagUpdate(user)
+      const result = await syncBentoSubscriberTags(c, {
+        ...tagUpdate,
+        email: user.email.trim().toLowerCase(),
+      }, AbortSignal.timeout(BENTO_AB_TEST_SYNC_TIMEOUT_MS))
+      if (result === false) {
+        cloudlogErr({
+          message: 'on-demand A/B Bento sync failed',
+          requestId: c.get('requestId'),
+        })
+      }
+    })
+  }
+  catch (error) {
     cloudlogErr({
-      message: 'on-demand A/B Bento sync failed',
+      error,
+      message: 'on-demand A/B Bento reconciliation failed',
       requestId: c.get('requestId'),
     })
   }
@@ -335,10 +363,10 @@ export async function getOrCreateUserABTests(
   }
 
   const pgPool = getPgClient(c, false)
-  let assignments: Record<string, ABTestAssignment>
+  let result: { assignments: Record<string, ABTestAssignment>, needsBentoSync: boolean }
   try {
     const drizzle = getDrizzleClient(pgPool)
-    assignments = await drizzle.transaction(async (tx) => {
+    result = await drizzle.transaction(async (tx) => {
       const lockedUserResult = await tx.execute<AssignmentUser & { email?: string | null }>(sql`
         SELECT created_via_invite,
                email,
@@ -356,7 +384,7 @@ export async function getOrCreateUserABTests(
       const existing = readExistingAssignments(user.abtests, testNames)
       const revoked = ineligibleAssignedTestNames(user.abtests, user)
       if (existing.missing.length === 0 && revoked.length === 0)
-        return existing.assignments
+        return { assignments: existing.assignments, needsBentoSync: false }
 
       const candidates = createABTestAssignments(user, configForTests(existing.missing))
       const retainedAssignments = isRecord(user.abtests) ? { ...user.abtests } : {}
@@ -374,17 +402,18 @@ export async function getOrCreateUserABTests(
         RETURNING onboarding->'abtests' AS abtests
       `)
       const updated = updateResult.rows[0]
-      const reconciledAssignments = readPersistedAssignments(updated?.abtests, testNames)
-      // Keep the external tag update behind the same per-user row lock so
-      // concurrent intent reconciliations cannot reach Bento out of order.
-      await syncReconciledABTestTags(c, user.email, candidates, revoked)
-      return reconciledAssignments
+      return {
+        assignments: readPersistedAssignments(updated?.abtests, testNames),
+        needsBentoSync: true,
+      }
     })
+    if (result.needsBentoSync)
+      await syncCurrentUserABTestTags(c, drizzle, userId)
   }
   finally {
     await closeClient(c, pgPool)
   }
-  return assignments
+  return result.assignments
 }
 
 export async function syncNewUserABTests(
