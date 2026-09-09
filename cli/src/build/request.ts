@@ -367,6 +367,25 @@ export function buildJobCachePayload(input?: BuildJobCachePayloadInput): BuildJo
   return payload
 }
 
+export const FAILED_BUILD_CACHE_HINT
+  = 'Tip: if this looks cache-related (stale artifacts between RC/PROD or branches), retry with --cache-key <env> to isolate compilation cache, or --no-cache to skip cache restore.'
+
+/**
+ * Cache isolation tip after a failed native build.
+ * Skip it in caller-handled (Ink onboarding) mode: the TUI streams log.info into
+ * FullscreenBuildOutput, the extra line overflows the golden viewport, and
+ * --cache-key / --no-cache are not how the wizard retries.
+ */
+export function shouldLogFailedBuildCacheHint(options: {
+  cache?: boolean
+  cacheKey?: string
+  aiAnalysisMode?: 'auto-prompt' | 'caller-handled' | 'skip'
+}): boolean {
+  return options.cache !== false
+    && !options.cacheKey?.trim()
+    && options.aiAnalysisMode !== 'caller-handled'
+}
+
 /**
  * Stream build logs from the server via WebSocket.
  * Returns the final status if detected from the stream, or null if stream ended without status.
@@ -2346,8 +2365,12 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       }
       else if (finalStatus === 'failed') {
         log.error(`Build failed`)
-        if (options.cache !== false && !options.cacheKey?.trim()) {
-          log.info('Tip: if this looks cache-related (stale artifacts between RC/PROD or branches), retry with --cache-key <env> to isolate compilation cache, or --no-cache to skip cache restore.')
+        if (shouldLogFailedBuildCacheHint({
+          cache: options.cache,
+          cacheKey: options.cacheKey,
+          aiAnalysisMode,
+        })) {
+          log.info(FAILED_BUILD_CACHE_HINT)
         }
         // Non-interactive (CI/CD) failure with neither --ai-analytics nor
         // --send-logs: surface the discoverability tip here, INDEPENDENT of log
