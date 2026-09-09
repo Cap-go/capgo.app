@@ -7,6 +7,7 @@ import { syncBentoSubscriberTags } from './bento.ts'
 import { quickError } from './hono.ts'
 import { cloudlogErr } from './logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
+import { backgroundTask } from './utils.ts'
 
 export type ABTestAudience = 'all' | 'self_signup'
 export type ABTestBranch = 'A' | 'B' | 'C' | 'D'
@@ -65,6 +66,10 @@ function readBentoSyncState(value: unknown): ABTestBentoSyncState {
 function needsBentoSync(user: AssignmentUser, state: ABTestBentoSyncState) {
   const email = normalizeEmail(user.email)
   return state.pending || (state.email !== undefined && state.email !== email)
+}
+
+function sameBentoSyncState(left: ABTestBentoSyncState, right: ABTestBentoSyncState) {
+  return JSON.stringify(left) === JSON.stringify(right)
 }
 
 function invalidConfig(testName?: string): never {
@@ -388,23 +393,25 @@ async function reconcileBentoSyncState(
       cleanupEmails.add(storedState.email)
 
     const currentTagUpdate = buildBentoTagUpdate(user)
-    const complete = expectedTagUpdate !== undefined
-      && sameBentoTagUpdate(expectedTagUpdate, currentTagUpdate)
-      && cleanupEmails.size === 0
+    const complete = cleanupEmails.size === 0
+      && (currentTagUpdate === undefined
+        || (expectedTagUpdate !== undefined && sameBentoTagUpdate(expectedTagUpdate, currentTagUpdate)))
     const state: ABTestBentoSyncState = {
       cleanup_emails: [...cleanupEmails],
       ...(email ? { email } : {}),
       pending: !complete,
     }
-    await tx.execute(sql`
-      UPDATE public.users
-      SET onboarding = COALESCE(onboarding, '{}'::jsonb)
-        || pg_catalog.jsonb_build_object(
-          'abtests_bento_sync',
-          ${JSON.stringify(state)}::jsonb
-        )
-      WHERE id = ${userId}::uuid
-    `)
+    if (!sameBentoSyncState(state, storedState)) {
+      await tx.execute(sql`
+        UPDATE public.users
+        SET onboarding = COALESCE(onboarding, '{}'::jsonb)
+          || pg_catalog.jsonb_build_object(
+            'abtests_bento_sync',
+            ${JSON.stringify(state)}::jsonb
+          )
+        WHERE id = ${userId}::uuid
+      `)
+    }
     return { complete, state, user }
   })
 }
@@ -419,6 +426,8 @@ async function syncCurrentUserABTestTags(
     const signal = AbortSignal.timeout(BENTO_AB_TEST_SYNC_TIMEOUT_MS)
     const cleanedEmails = new Set<string>()
     let snapshot = await reconcileBentoSyncState(drizzle, userId, initialState, cleanedEmails)
+    if (snapshot?.complete)
+      return
     let attempt = 0
     while (snapshot && attempt < BENTO_AB_TEST_SYNC_MAX_ATTEMPTS) {
       const cleanupEmail = snapshot.state.cleanup_emails.find(email => !cleanedEmails.has(email))
@@ -437,8 +446,10 @@ async function syncCurrentUserABTestTags(
       }
 
       const tagUpdate = buildBentoTagUpdate(snapshot.user)
-      if (!tagUpdate)
+      if (!tagUpdate) {
+        await reconcileBentoSyncState(drizzle, userId, snapshot.state, cleanedEmails)
         return
+      }
       attempt += 1
       const result = await syncBentoSubscriberTags(c, tagUpdate, signal)
       if (result === false) {
@@ -485,6 +496,7 @@ export async function getOrCreateUserABTests(
   }
 
   const pgPool = getPgClient(c, false)
+  let closeInFinally = true
   let result: {
     assignments: Record<string, ABTestAssignment>
     bentoSyncState: ABTestBentoSyncState
@@ -551,11 +563,23 @@ export async function getOrCreateUserABTests(
         needsBentoSync: true,
       }
     })
-    if (result.needsBentoSync)
-      await syncCurrentUserABTestTags(c, drizzle, userId, result.bentoSyncState)
+    if (result.needsBentoSync) {
+      closeInFinally = false
+      const task = (async () => {
+        try {
+          await syncCurrentUserABTestTags(c, drizzle, userId, result.bentoSyncState)
+        }
+        finally {
+          await closeClient(c, pgPool)
+        }
+      })()
+      await backgroundTask(c, task)
+      return result.assignments
+    }
   }
   finally {
-    await closeClient(c, pgPool)
+    if (closeInFinally)
+      await closeClient(c, pgPool)
   }
   return result.assignments
 }

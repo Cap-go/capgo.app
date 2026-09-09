@@ -99,14 +99,14 @@ branches or lose a concurrent reconciliation decision.
 ## Bento Synchronization
 
 The assignment transaction stores a pending Bento marker alongside any changed
-assignment map. After it commits, the endpoint reconciles from the latest
-committed user state:
+assignment map. After it commits, the endpoint schedules reconciliation from
+the latest committed user state as background work:
 
 1. A short transaction sets a two-second lock timeout, locks and rereads the
    user row, and persists the normalized email plus any previous email that
    needs cleanup. It then commits before any external request.
-2. The endpoint computes the complete desired tag state for every configured
-   experiment and calls Bento outside the row lock with a five-second abort
+2. The background task computes the complete desired tag state for every
+   configured experiment and calls Bento outside the row lock with a five-second abort
    signal. Eligible assignments add the selected branch tag and remove the
    opposite tag. Unassigned, ineligible, or malformed assignments remove both
    branch tags, which also cleans up historical drift.
@@ -118,12 +118,17 @@ committed user state:
    This prevents a slower request from leaving stale tags without holding a
    database lock across network latency or retrying indefinitely.
 4. Only a verified, converged delivery clears the pending marker and queued
-   email cleanups. Later assignment reads retry any remaining work even when
-   the assignment map is already complete.
+   email cleanups. A user with no deliverable email and no queued cleanup is
+   already converged. State is written only when it changes, and later
+   assignment reads retry any remaining work even when the assignment map is
+   already complete.
 
 A Bento, timeout, or reconciliation-read failure is logged but does not restore
 an ineligible database assignment or fail the otherwise successful endpoint
 response. The durable pending marker keeps that best-effort failure retryable.
+The scheduled task owns and closes its database pool after reconciliation, so
+the response path does not wait for Bento without releasing the task's database
+resources early.
 
 ## Frontend Contract
 
@@ -157,7 +162,8 @@ Unit coverage will verify:
   assignments.
 - Revocation and creation can happen in the same transaction.
 - Bento reconciliation converges on the latest complete tag state, tolerates
-  malformed historical branches, and never holds a row lock during HTTP work.
+  malformed historical branches, handles users without an email, runs after the
+  response boundary, and never holds a row lock during HTTP work.
 - The authenticated endpoint keeps its existing request and response shape.
 
 The existing backend lint, typecheck, and unit suites provide regression
