@@ -8,6 +8,7 @@ import { Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { createChartScales, createLegendConfig } from '~/services/chartConfig'
 import { createTooltipConfig } from '~/services/chartTooltip'
+import { formatLocalDateShort } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import ChartCard from './ChartCard.vue'
 
@@ -39,12 +40,14 @@ const chartData = computed<ChartData<'line'> | null>(() => {
   if (!props.dailyPlatformActive)
     return null
 
+  const rawLabels = props.dailyPlatformActive.labels ?? []
+
   return {
-    labels: props.dailyPlatformActive.labels,
+    labels: rawLabels.map(label => formatLocalDateShort(label) || label),
     datasets: [
       {
         label: t('native-active-devices-android'),
-        data: props.dailyPlatformActive.android,
+        data: props.dailyPlatformActive.android ?? [],
         borderColor: '#10b981',
         backgroundColor: 'rgba(16, 185, 129, 0.15)',
         tension: 0.3,
@@ -55,7 +58,7 @@ const chartData = computed<ChartData<'line'> | null>(() => {
       },
       {
         label: t('native-active-devices-ios'),
-        data: props.dailyPlatformActive.ios,
+        data: props.dailyPlatformActive.ios ?? [],
         borderColor: '#119eff',
         backgroundColor: 'rgba(17, 158, 255, 0.15)',
         tension: 0.3,
@@ -69,7 +72,7 @@ const chartData = computed<ChartData<'line'> | null>(() => {
 })
 
 const chartOptions = computed<ChartOptions<'line'>>(() => {
-  const firstLabel = props.dailyPlatformActive?.labels[0]
+  const firstLabel = props.dailyPlatformActive?.labels?.[0]
   const tooltipDateStart = firstLabel
     ? new Date(`${firstLabel}T00:00:00.000Z`)
     : false
