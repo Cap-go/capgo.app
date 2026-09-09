@@ -68,10 +68,6 @@ function needsBentoSync(user: AssignmentUser, state: ABTestBentoSyncState) {
   return state.pending || (state.email !== undefined && state.email !== email)
 }
 
-function sameBentoSyncState(left: ABTestBentoSyncState, right: ABTestBentoSyncState) {
-  return JSON.stringify(left) === JSON.stringify(right)
-}
-
 function invalidConfig(testName?: string): never {
   throw new Error(`Invalid A/B test configuration${testName ? ` for ${testName}` : ''}`)
 }
@@ -348,6 +344,15 @@ function sameBentoTagUpdate(
   right: ReturnType<typeof buildBentoTagUpdate>,
 ) {
   return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function sameBentoSyncState(left: ABTestBentoSyncState, right: ABTestBentoSyncState) {
+  const normalize = (state: ABTestBentoSyncState) => ({
+    cleanup_emails: [...state.cleanup_emails].sort(),
+    email: state.email,
+    pending: state.pending,
+  })
+  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right))
 }
 
 function buildBentoTagCleanup(email: string) {

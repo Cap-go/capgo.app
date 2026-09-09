@@ -701,8 +701,8 @@ describe('new-user A/B test assignment', () => {
     const firstUser = { abtests: firstCommit, created_via_invite: false, email: 'User@Example.com', intent: 'ota' }
     const latestUser = { abtests: latestCommit, created_via_invite: false, email: 'User@Example.com', intent: 'builder' }
     queueBentoSnapshot(firstUser)
-    queueBentoSnapshot(latestUser)
     queueBentoSnapshot(latestUser, true)
+    queueBentoSnapshot(latestUser)
 
     await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(firstCommit)
 
@@ -768,7 +768,7 @@ describe('new-user A/B test assignment', () => {
     const newEmailUser = { abtests: assigned, created_via_invite: false, email: 'New@Example.com', intent: 'ota' }
     queueBentoSnapshot(oldEmailUser)
     queueBentoSnapshot(newEmailUser, true)
-    queueBentoSnapshot(newEmailUser, true)
+    queueBentoSnapshot(newEmailUser)
 
     await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(assigned)
 
@@ -826,10 +826,7 @@ describe('new-user A/B test assignment', () => {
       .mockResolvedValueOnce({ rows: [{ abtests: standardAssignments, created_via_invite: false, email: 'Old@Example.com', intent: 'ota' }] })
       .mockResolvedValueOnce({ rows: [{ abtests: assigned }] })
     queueBentoSnapshot(oldEmailUser)
-    queueBentoSnapshot(changedEmailUser, true)
-    drizzleExecuteMock.mockResolvedValueOnce({ rows: [newEmailUser] })
-    queueBentoSnapshot(newEmailUser)
-    queueBentoSnapshot(newEmailUser, true)
+    queueBentoSnapshot(changedEmailUser)
     syncBentoSubscriberTagsMock
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(false)
@@ -837,6 +834,11 @@ describe('new-user A/B test assignment', () => {
       .mockResolvedValueOnce(true)
 
     await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(assigned)
+
+    drizzleExecuteMock.mockResolvedValueOnce({ rows: [newEmailUser] })
+    queueBentoSnapshot(newEmailUser)
+    queueBentoSnapshot(newEmailUser, true)
+
     await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(assigned)
 
     expect(syncBentoSubscriberTagsMock).toHaveBeenCalledTimes(4)
