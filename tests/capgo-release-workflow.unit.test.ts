@@ -22,6 +22,26 @@ function getStep(workflow: string, name: string): string {
 }
 
 describe('native-aware Capgo release workflow', () => {
+  it.concurrent('reruns deployment against the newest immutable environment tag', async () => {
+    const workflow = await readWorkflow(workflowPaths.deploy)
+    const deploymentJobs = workflow.slice(workflow.indexOf('  supabase_deploy:'))
+    const checkoutSteps = deploymentJobs.split('uses: actions/checkout@v6').slice(1)
+
+    expect(workflow).toContain("group: ${{ github.workflow }}-${{ contains(github.ref_name, '-alpha.') && 'alpha' || 'production' }}")
+    expect(workflow).toContain('cancel-in-progress: false')
+    expect(workflow).toContain('deploy_tag: ${{ steps.target.outputs.deploy_tag }}')
+    expect(workflow).toContain('deploy_sha: ${{ steps.target.outputs.deploy_sha }}')
+    expect(workflow).toContain('is_alpha: ${{ steps.target.outputs.is_alpha }}')
+    expect(workflow).toContain('bun scripts/resolve-deploy-tag.ts')
+    expect(workflow).toContain('bun scripts/deploy-scope.ts "${{ steps.target.outputs.deploy_tag }}"')
+    expect(checkoutSteps.length).toBeGreaterThan(0)
+    for (const checkout of checkoutSteps)
+      expect(checkout.slice(0, 180)).toContain('ref: ${{ needs.changes.outputs.deploy_tag }}')
+    expect(workflow).toContain('tag_name: ${{ needs.changes.outputs.deploy_tag }}')
+    expect(workflow).toContain("prerelease: ${{ needs.changes.outputs.is_alpha == 'true' }}")
+    expect(deploymentJobs).not.toContain('github.ref')
+  })
+
   it.concurrent('keeps post-merge tests and publishes release refs atomically', async () => {
     const workflow = await readWorkflow(workflowPaths.bump)
 

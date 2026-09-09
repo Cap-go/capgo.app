@@ -1,8 +1,8 @@
 name: Build source code and deploy
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ contains(github.ref_name, '-alpha.') && 'alpha' || 'production' }}
+  cancel-in-progress: false
 
 on:
   push:
@@ -24,6 +24,9 @@ jobs:
       plugins: ${{ steps.scope.outputs.plugins }}
       supabase: ${{ steps.scope.outputs.supabase }}
       translation: ${{ steps.scope.outputs.translation }}
+      deploy_tag: ${{ steps.target.outputs.deploy_tag }}
+      deploy_sha: ${{ steps.target.outputs.deploy_sha }}
+      is_alpha: ${{ steps.target.outputs.is_alpha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -34,11 +37,26 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: Resolve latest deployment target
+        id: target
+        env:
+          IS_ALPHA_EVENT: ${{ contains(github.ref_name, '-alpha.') }}
+        run: |
+          if [ "$IS_ALPHA_EVENT" = "true" ]; then
+            mode="--alpha"
+          else
+            mode="--stable"
+          fi
+          bun scripts/resolve-deploy-tag.ts "$mode" >> "$GITHUB_OUTPUT"
+      - name: Checkout deployment target
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.target.outputs.deploy_tag }}
+          fetch-depth: 0
+          filter: blob:none
       - name: Resolve deploy scope
         id: scope
-        env:
-          REF_NAME: ${{ github.ref_name }}
-        run: bun scripts/deploy-scope.ts "$REF_NAME" >> "$GITHUB_OUTPUT"
+        run: bun scripts/deploy-scope.ts "${{ steps.target.outputs.deploy_tag }}" >> "$GITHUB_OUTPUT"
 
   # Tests already passed before tag was created, so just build and deploy
   supabase_deploy:
@@ -56,13 +74,15 @@ jobs:
           node-version: 24.x
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_tag }}
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
       - name: Set environment variable
         run: |
-          if [[ ${{ github.ref }} == *-alpha* ]]; then
+          if [ "${{ needs.changes.outputs.is_alpha }}" = "true" ]; then
             echo "SUPA_ENV=ALPHA" >> $GITHUB_ENV
           else
             echo "SUPA_ENV=PROD" >> $GITHUB_ENV
@@ -116,7 +136,7 @@ jobs:
 
   read_replica_schema:
     needs: changes
-    if: ${{ needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && !contains(github.ref_name, '-alpha') }}
+    if: ${{ needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && needs.changes.outputs.is_alpha != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     name: Reconcile production read-replica schema
@@ -125,6 +145,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_tag }}
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -156,6 +178,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ needs.changes.outputs.deploy_tag }}
           fetch-depth: 0
           filter: blob:none
       - uses: actions/setup-node@v6
@@ -169,7 +192,7 @@ jobs:
         run: bun install
       - name: Set environment variable
         run: |
-          if [[ ${{ github.ref }} == *-alpha* ]]; then
+          if [ "${{ needs.changes.outputs.is_alpha }}" = "true" ]; then
             echo "ENV=dev" >> $GITHUB_ENV
             echo "CHANNEL=dev" >> $GITHUB_ENV
           else
@@ -227,10 +250,11 @@ jobs:
 
             ---
 
-            🔗 **Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ steps.changelog.outputs.from_tag || github.ref_name }}...${{ steps.changelog.outputs.to_tag || github.ref_name }}
+            🔗 **Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ steps.changelog.outputs.from_tag || needs.changes.outputs.deploy_tag }}...${{ steps.changelog.outputs.to_tag || needs.changes.outputs.deploy_tag }}
           make_latest: true
           token: "${{ secrets.PERSONAL_ACCESS_TOKEN }}"
-          prerelease: ${{ contains(github.ref, '-alpha.') }}
+          tag_name: ${{ needs.changes.outputs.deploy_tag }}
+          prerelease: ${{ needs.changes.outputs.is_alpha == 'true' }}
 
   deploy_api:
     needs: [changes, supabase_deploy, read_replica_schema]
@@ -240,6 +264,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_tag }}
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -251,7 +277,7 @@ jobs:
         run: bun install
       - name: Set environment variable
         run: |
-          if [[ ${{ github.ref }} == *-alpha* ]]; then
+          if [ "${{ needs.changes.outputs.is_alpha }}" = "true" ]; then
             echo "ENV=dev" >> $GITHUB_ENV
           else
             echo "ENV=prod" >> $GITHUB_ENV
@@ -270,6 +296,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_tag }}
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -281,7 +309,7 @@ jobs:
         run: bun install
       - name: Set environment variable
         run: |
-          if [[ ${{ github.ref }} == *-alpha* ]]; then
+          if [ "${{ needs.changes.outputs.is_alpha }}" = "true" ]; then
             echo "ENV=dev" >> $GITHUB_ENV
           else
             echo "ENV=prod" >> $GITHUB_ENV
@@ -300,6 +328,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_tag }}
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -311,7 +341,7 @@ jobs:
         run: bun install
       - name: Set environment variable
         run: |
-          if [[ ${{ github.ref }} == *-alpha* ]]; then
+          if [ "${{ needs.changes.outputs.is_alpha }}" = "true" ]; then
             echo "ENV=dev" >> $GITHUB_ENV
           else
             echo "ENV=prod" >> $GITHUB_ENV
@@ -363,6 +393,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_tag }}
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -374,7 +406,7 @@ jobs:
         run: bun install
       - name: Set environment variable
         run: |
-          if [[ ${{ github.ref }} == *-alpha* ]]; then
+          if [ "${{ needs.changes.outputs.is_alpha }}" = "true" ]; then
             echo "ENV=dev" >> $GITHUB_ENV
           else
             echo "ENV=prod" >> $GITHUB_ENV
@@ -400,13 +432,15 @@ jobs:
           node-version: 24.x
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_tag }}
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
       - name: Set environment variable
         run: |
-          if [[ ${{ github.ref }} == *-alpha* ]]; then
+          if [ "${{ needs.changes.outputs.is_alpha }}" = "true" ]; then
             echo "BUILD_SCRIPT=build:dev" >> $GITHUB_ENV
           else
             echo "BUILD_SCRIPT=build" >> $GITHUB_ENV
@@ -446,13 +480,15 @@ jobs:
           node-version: 24.x
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_tag }}
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
       - name: Set environment variable
         run: |
-          if [[ ${{ github.ref }} == *-alpha* ]]; then
+          if [ "${{ needs.changes.outputs.is_alpha }}" = "true" ]; then
             echo "BUILD_SCRIPT=build:dev" >> $GITHUB_ENV
           else
             echo "BUILD_SCRIPT=build" >> $GITHUB_ENV

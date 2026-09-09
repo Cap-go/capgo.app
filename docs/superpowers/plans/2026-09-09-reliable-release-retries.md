@@ -226,7 +226,7 @@ git commit -m "fix(ci): publish release refs atomically"
 - Modify: `tests/capgo-release-workflow.unit.test.ts`
 - Modify: `tests/read-replica-release-workflow.unit.test.ts`
 
-- [ ] **Step 1: Write failing deploy-target and workflow tests**
+- [x] **Step 1: Write failing deploy-target and workflow tests**
 
 Define and test:
 
@@ -247,7 +247,7 @@ The stable test supplies Git-sorted tags containing stable and alpha versions an
 
 Extend workflow tests to require environment-level non-cancelling concurrency, target outputs from `changes`, all deployment checkouts using `needs.changes.outputs.deploy_tag`, deploy scope using that tag, and GitHub Release `tag_name` using that tag.
 
-- [ ] **Step 2: Run the tests and verify they fail**
+- [x] **Step 2: Run the tests and verify they fail**
 
 Run:
 
@@ -257,12 +257,18 @@ bunx vitest run tests/resolve-deploy-tag.test.ts tests/capgo-release-workflow.un
 
 Expected: failures for the missing resolver and stale `github.ref` workflow behavior.
 
-- [ ] **Step 3: Implement the deploy-tag resolver**
+- [x] **Step 3: Implement the deploy-tag resolver**
 
-Read tags in Git's version order:
+Read tags in Git's creation order, using version order only as a tie-breaker. This is required because the repository contains an older `capgo-13.0.0` tag while the active release line is currently `capgo-12.x`:
 
 ```ts
-run(['tag', '--list', 'capgo-[0-9]*', '--sort=-version:refname'])
+run([
+  'tag',
+  '--list',
+  'capgo-[0-9]*',
+  '--sort=-version:refname',
+  '--sort=-creatordate',
+])
 ```
 
 Filter stable tags by excluding `-alpha.` and alpha tags by requiring it. Resolve the chosen tag with `rev-list -n 1 <tag>`. The CLI prints GitHub outputs:
@@ -273,7 +279,7 @@ deploy_sha=<sha>
 is_alpha=<true|false>
 ```
 
-- [ ] **Step 4: Route the existing deployment workflow through the resolved tag**
+- [x] **Step 4: Route the existing deployment workflow through the resolved tag**
 
 Set concurrency to a stable/alpha environment group with `cancel-in-progress: false`. In `changes`, resolve the newest tag, expose its outputs, check out that tag, and run `deploy-scope.ts` against it.
 
@@ -293,7 +299,7 @@ prerelease: ${{ needs.changes.outputs.is_alpha == 'true' }}
 
 Keep the replica reconciliation dependency graph and all deploy failure behavior intact.
 
-- [ ] **Step 5: Run the focused deployment tests**
+- [x] **Step 5: Run the focused deployment tests**
 
 Run:
 

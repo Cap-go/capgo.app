@@ -56,7 +56,7 @@ describe('production read-replica release gate', () => {
         [
           'read_replica_schema:',
           '    needs: changes',
-          `    if: ${githubExpression('needs.changes.result == \'success\' && needs.changes.outputs.supabase == \'true\' && !contains(github.ref_name, \'-alpha\')')}`,
+          `    if: ${githubExpression('needs.changes.result == \'success\' && needs.changes.outputs.supabase == \'true\' && needs.changes.outputs.is_alpha != \'true\'')}`,
         ].join('\n'),
       )
       expect(workflow).toContain(
