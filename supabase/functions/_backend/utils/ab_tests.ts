@@ -335,15 +335,10 @@ export async function getOrCreateUserABTests(
   }
 
   const pgPool = getPgClient(c, false)
-  let result: {
-    assignments: Record<string, ABTestAssignment>
-    created: Record<string, ABTestAssignment>
-    email?: string | null
-    revoked: string[]
-  }
+  let assignments: Record<string, ABTestAssignment>
   try {
     const drizzle = getDrizzleClient(pgPool)
-    result = await drizzle.transaction(async (tx) => {
+    assignments = await drizzle.transaction(async (tx) => {
       const lockedUserResult = await tx.execute<AssignmentUser & { email?: string | null }>(sql`
         SELECT created_via_invite,
                email,
@@ -360,14 +355,8 @@ export async function getOrCreateUserABTests(
       const testNames = eligibleTestNames(user)
       const existing = readExistingAssignments(user.abtests, testNames)
       const revoked = ineligibleAssignedTestNames(user.abtests, user)
-      if (existing.missing.length === 0 && revoked.length === 0) {
-        return {
-          assignments: existing.assignments,
-          created: {} as Record<string, ABTestAssignment>,
-          email: user.email,
-          revoked,
-        }
-      }
+      if (existing.missing.length === 0 && revoked.length === 0)
+        return existing.assignments
 
       const candidates = createABTestAssignments(user, configForTests(existing.missing))
       const retainedAssignments = isRecord(user.abtests) ? { ...user.abtests } : {}
@@ -385,19 +374,17 @@ export async function getOrCreateUserABTests(
         RETURNING onboarding->'abtests' AS abtests
       `)
       const updated = updateResult.rows[0]
-      return {
-        assignments: readPersistedAssignments(updated?.abtests, testNames),
-        created: candidates,
-        email: user.email,
-        revoked,
-      }
+      const reconciledAssignments = readPersistedAssignments(updated?.abtests, testNames)
+      // Keep the external tag update behind the same per-user row lock so
+      // concurrent intent reconciliations cannot reach Bento out of order.
+      await syncReconciledABTestTags(c, user.email, candidates, revoked)
+      return reconciledAssignments
     })
   }
   finally {
     await closeClient(c, pgPool)
   }
-  await syncReconciledABTestTags(c, result.email, result.created, result.revoked)
-  return result.assignments
+  return assignments
 }
 
 export async function syncNewUserABTests(

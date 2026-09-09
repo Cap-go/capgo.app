@@ -538,9 +538,6 @@ describe('new-user A/B test assignment', () => {
     vi.useFakeTimers()
     vi.setSystemTime(FIXED_DATE)
     const random = vi.spyOn(Math, 'random').mockReturnValue(0)
-    pgQueryMock.mockResolvedValueOnce({
-      rows: [{ abtests: existing, created_via_invite: false, intent: 'ota' }],
-    })
     drizzleExecuteMock
       .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false, email: 'User@Example.com', intent: 'ota' }] })
       .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
@@ -549,6 +546,35 @@ describe('new-user A/B test assignment', () => {
 
     expect(drizzleExecuteMock).toHaveBeenCalledTimes(2)
     expect(random).toHaveBeenCalledOnce()
+  })
+
+  it('synchronizes Bento before the locked primary transaction commits', async () => {
+    const module = await loadABTestsModule()
+    installIntentTest(module)
+    const existing = persistedAssignments({ development: 'D', emails: 'B', publish: 'B' })
+    const persisted = {
+      ...existing,
+      [INTENT_TEST_NAME]: intentAssignment(),
+    }
+    const context = { get: vi.fn(() => 'request-id') } as never
+    const events: string[] = []
+    drizzleTransactionMock.mockImplementationOnce(async (callback) => {
+      events.push('transaction-started')
+      const result = await callback({ execute: drizzleExecuteMock })
+      events.push('transaction-committed')
+      return result
+    })
+    syncBentoSubscriberTagsMock.mockImplementationOnce(async () => {
+      events.push('bento-synced')
+      return true
+    })
+    drizzleExecuteMock
+      .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false, email: 'User@Example.com', intent: 'ota' }] })
+      .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
+
+    await module.getOrCreateUserABTests(context, USER_ID)
+
+    expect(events).toEqual(['transaction-started', 'bento-synced', 'transaction-committed'])
   })
 
   it.each([
@@ -569,9 +595,6 @@ describe('new-user A/B test assignment', () => {
       retired_experiment: retiredAssignment,
     }
     const context = { get: vi.fn(() => 'request-id') } as never
-    pgQueryMock.mockResolvedValueOnce({
-      rows: [{ abtests: existing, created_via_invite: false, intent }],
-    })
     drizzleExecuteMock
       .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false, email: 'User@Example.com', intent }] })
       .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
@@ -608,9 +631,6 @@ describe('new-user A/B test assignment', () => {
     vi.useFakeTimers()
     vi.setSystemTime(FIXED_DATE)
     const random = vi.spyOn(Math, 'random').mockReturnValue(0)
-    pgQueryMock.mockResolvedValueOnce({
-      rows: [{ abtests: existing, created_via_invite: false, intent: 'builder' }],
-    })
     drizzleExecuteMock
       .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false, email: 'User@Example.com', intent: 'builder' }] })
       .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
