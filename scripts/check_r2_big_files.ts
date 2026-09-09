@@ -1608,8 +1608,42 @@ async function delete_cleanup_candidates() {
         }
     }
 
-    async function processCandidate(file: { key: string }): Promise<{ key: string, success: boolean, error: string | null, skipped?: boolean }> {
+    async function processCandidate(file: { key: string, size?: number, lastModified?: string | Date | null }): Promise<{ key: string, success: boolean, error: string | null, skipped?: boolean }> {
         try {
+            let sourceEtag: string | undefined
+            try {
+                const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: file.key }))
+                if (file.size != null && head.ContentLength !== file.size) {
+                    return {
+                        key: file.key,
+                        success: false,
+                        error: 'Cleanup candidate stale: object size changed since prepare_cleanup_zip',
+                        skipped: true,
+                    }
+                }
+                if (file.lastModified && head.LastModified) {
+                    const candidateTime = new Date(file.lastModified).getTime()
+                    if (candidateTime !== head.LastModified.getTime()) {
+                        return {
+                            key: file.key,
+                            success: false,
+                            error: 'Cleanup candidate stale: object lastModified changed since prepare_cleanup_zip',
+                            skipped: true,
+                        }
+                    }
+                }
+                sourceEtag = head.ETag
+            }
+            catch (headError: any) {
+                if (isObjectNotFoundError(headError))
+                    return { key: file.key, success: true, error: null, skipped: true }
+                return {
+                    key: file.key,
+                    success: false,
+                    error: `Failed to head source before cleanup: ${headError.message}`,
+                }
+            }
+
             if (deleteMode === 'permanent') {
                 await s3.send(new DeleteObjectCommand({
                     Bucket: S3_BUCKET,
@@ -1618,20 +1652,6 @@ async function delete_cleanup_candidates() {
             }
             else {
                 const trashKey = getR2TrashKey(file.key)
-                let sourceEtag: string | undefined
-                try {
-                    const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: file.key }))
-                    sourceEtag = head.ETag
-                }
-                catch (headError: any) {
-                    if (isObjectNotFoundError(headError))
-                        return { key: file.key, success: true, error: null, skipped: true }
-                    return {
-                        key: file.key,
-                        success: false,
-                        error: `Failed to head source before trash: ${headError.message}`,
-                    }
-                }
 
                 try {
                     await s3.send(new CopyObjectCommand({

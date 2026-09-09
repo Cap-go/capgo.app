@@ -47,7 +47,14 @@ export async function moveS3LiteObjectToTrash(s3client: S3LiteTrashClient, key: 
     throw error
   }
 
-  await s3client.copyObject({ sourceKey: encodeS3LiteCopySourceKey(key) }, trashKey)
+  try {
+    await s3client.copyObject({ sourceKey: encodeS3LiteCopySourceKey(key) }, trashKey)
+  }
+  catch (error) {
+    if (isObjectNotFoundError(error))
+      return 'skipped_missing'
+    throw error
+  }
 
   let afterCopyEtag: string | undefined
   try {
@@ -62,6 +69,17 @@ export async function moveS3LiteObjectToTrash(s3client: S3LiteTrashClient, key: 
 
   if (sourceEtag && afterCopyEtag !== sourceEtag)
     return 'skipped_changed'
+
+  try {
+    const beforeDelete = await s3client.statObject(key)
+    if (sourceEtag && beforeDelete.etag !== sourceEtag)
+      return 'skipped_changed'
+  }
+  catch (error) {
+    if (isObjectNotFoundError(error))
+      return 'moved'
+    throw error
+  }
 
   await s3client.deleteObject(key)
   return 'moved'

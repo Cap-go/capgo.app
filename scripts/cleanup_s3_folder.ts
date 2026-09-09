@@ -41,10 +41,12 @@ async function processKey(key: string): Promise<void> {
     if (deleteMode === 'trash') {
       console.log(`Moving to trash: ${key}`)
       const result = await moveS3LiteObjectToTrash(s3client, key)
-      if (result === 'skipped_missing')
+      if (result === 'skipped_missing') {
         console.log(`Already absent: ${key}`)
-      else if (result === 'skipped_changed')
-        console.warn(`Copied ${key} to trash but live object changed before delete; source key retained`)
+        return
+      }
+      if (result === 'skipped_changed')
+        throw new Error(`Copied ${key} to trash but live object changed before delete; source key retained`)
       return
     }
 

@@ -69,7 +69,9 @@ async function main() {
 
     await s3client.copyObject({ sourceKey: obj.key }, obj.key.replace(oldUserId, newUserId))
     try {
-      await moveS3LiteObjectToTrash(s3client, obj.key)
+      const trashResult = await moveS3LiteObjectToTrash(s3client, obj.key)
+      if (trashResult === 'skipped_changed')
+        throw new Error(`Copied ${obj.key} to new owner key but live source changed before trash delete`)
     }
     catch (error) {
       throw new Error(`Copied ${obj.key} to new owner key but failed to trash source object`, { cause: error })

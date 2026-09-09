@@ -116,6 +116,21 @@ describe('moveS3LiteObjectToTrash', () => {
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
+  it('returns skipped_missing when the source disappears before copy', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const copyObject = vi.fn(async () => {
+      throw { status: 404, code: 'not found' }
+    })
+    const deleteObject = vi.fn(async () => undefined)
+    const statObject = vi.fn(async () => ({ etag: '"before"' }))
+
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
+
+    expect(result).toBe('skipped_missing')
+    expect(copyObject).toHaveBeenCalledOnce()
+    expect(deleteObject).not.toHaveBeenCalled()
+  })
+
   it('treats a missing source after copy as already moved', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const copyObject = vi.fn(async () => undefined)
