@@ -268,13 +268,17 @@ async function persistABTestAssignments(
   return readPersistedAssignments(persisted, Object.keys(candidates))
 }
 
-async function syncCreatedABTestTags(
+async function syncReconciledABTestTags(
   c: Context<MiddlewareKeyVariables>,
   email: unknown,
   created: Record<string, ABTestAssignment>,
+  revoked: string[],
 ) {
-  if (typeof email !== 'string' || !email.trim() || Object.keys(created).length === 0)
+  if (typeof email !== 'string'
+    || !email.trim()
+    || (Object.keys(created).length === 0 && revoked.length === 0)) {
     return
+  }
 
   const segments: string[] = []
   const deleteSegments: string[] = []
@@ -283,6 +287,13 @@ async function syncCreatedABTestTags(
     const oppositeBranch = assignment.branch === test.treatment_branch ? test.control_branch : test.treatment_branch
     segments.push(test.branches[assignment.branch].bento_tag)
     deleteSegments.push(test.branches[oppositeBranch].bento_tag)
+  }
+  for (const testName of revoked) {
+    const test = AB_TESTS_CONFIG[testName]
+    deleteSegments.push(
+      test.branches[test.treatment_branch].bento_tag,
+      test.branches[test.control_branch].bento_tag,
+    )
   }
 
   const result = await syncBentoSubscriberTags(c, {
@@ -379,7 +390,7 @@ export async function getOrCreateUserABTests(
   finally {
     await closeClient(c, pgPool)
   }
-  await syncCreatedABTestTags(c, result.email, result.created)
+  await syncReconciledABTestTags(c, result.email, result.created, result.revoked)
   return result.assignments
 }
 

@@ -19,7 +19,7 @@ const {
   ) => Promise<{ rows: Record<string, unknown>[] }>>(async () => ({ rows: [] }))
   const pgReleaseMock = vi.fn<(destroy?: Error | boolean) => void>(() => undefined)
   const pgConnectMock = vi.fn(async () => ({ query: pgQueryMock, release: pgReleaseMock }))
-  const drizzleExecuteMock = vi.fn(async () => ({ rows: [] as Record<string, unknown>[] }))
+  const drizzleExecuteMock = vi.fn<(query: unknown) => Promise<{ rows: Record<string, unknown>[] }>>(async () => ({ rows: [] }))
   const drizzleTransactionMock = vi.fn(async (callback: (tx: { execute: typeof drizzleExecuteMock }) => Promise<unknown>) => {
     return await callback({ execute: drizzleExecuteMock })
   })
@@ -56,6 +56,7 @@ const modulePath = '../supabase/functions/_backend/utils/ab_tests.ts'
 const FIXED_DATE = new Date('2026-08-23T12:34:56.000Z')
 const USER_ID = '11111111-1111-4111-8111-111111111111'
 const INTENT_TEST_NAME = 'intent_targeted'
+const BUILDER_INTENT_TEST_NAME = 'builder_intent_targeted'
 
 async function loadABTestsModule() {
   return await import(/* @vite-ignore */ modulePath) as ABTestsModule
@@ -83,18 +84,22 @@ function testConfig(
   }
 }
 
-function installIntentTest(module: ABTestsModule, intents: ABTestConfig['intents'] = ['ota']) {
+function installIntentTest(
+  module: ABTestsModule,
+  intents: ABTestConfig['intents'] = ['ota'],
+  testName = INTENT_TEST_NAME,
+) {
   const config = module.validateABTestsConfig({
-    [INTENT_TEST_NAME]: {
+    [testName]: {
       ...testConfig().new_emails,
       intents,
       branches: {
-        A: { bento_tag: 'ab:intent_targeted' },
-        B: { bento_tag: 'ab:no_intent_targeted' },
+        A: { bento_tag: `ab:${testName}` },
+        B: { bento_tag: `ab:no_${testName}` },
       },
     },
   })
-  module.AB_TESTS_CONFIG[INTENT_TEST_NAME] = config[INTENT_TEST_NAME]
+  module.AB_TESTS_CONFIG[testName] = config[testName]
 }
 
 function intentAssignment(branch: 'A' | 'B' = 'A') {
@@ -139,6 +144,8 @@ describe('new-user A/B test assignment', () => {
   afterEach(async () => {
     const module = await loadABTestsModule()
     delete module.AB_TESTS_CONFIG[INTENT_TEST_NAME]
+    delete module.AB_TESTS_CONFIG[BUILDER_INTENT_TEST_NAME]
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
@@ -386,6 +393,22 @@ describe('new-user A/B test assignment', () => {
     })
   })
 
+  it('skips intent-gated tests when the creation trigger runs before intent selection', async () => {
+    const module = await loadABTestsModule()
+    installIntentTest(module)
+    pgQueryMock.mockResolvedValueOnce({
+      rows: [{ abtests: persistedAssignments() }],
+    })
+
+    await module.syncNewUserABTests({ get: vi.fn(() => 'request-id') } as never, 'new.user@example.com', {
+      created_via_invite: false,
+      id: USER_ID,
+    })
+
+    const [, params] = pgQueryMock.mock.calls[0]!
+    expect(JSON.parse(String(params?.[1]))).not.toHaveProperty(INTENT_TEST_NAME)
+  })
+
   it('destroys the database client and closes the pool before Bento delivery', async () => {
     const { syncNewUserABTests } = await loadABTestsModule()
     pgQueryMock.mockResolvedValueOnce({
@@ -509,6 +532,8 @@ describe('new-user A/B test assignment', () => {
       [INTENT_TEST_NAME]: intentAssignment(),
     }
     const context = { get: vi.fn(() => 'request-id') } as never
+    vi.useFakeTimers()
+    vi.setSystemTime(FIXED_DATE)
     const random = vi.spyOn(Math, 'random').mockReturnValue(0)
     pgQueryMock.mockResolvedValueOnce({
       rows: [{ abtests: existing, created_via_invite: false, intent: 'ota' }],
@@ -555,6 +580,52 @@ describe('new-user A/B test assignment', () => {
     const updateParameters = collectSqlParameterValues(drizzleExecuteMock.mock.calls[1]?.[0])
     const assignmentsJson = updateParameters.find(value => typeof value === 'string' && value.startsWith('{'))
     expect(JSON.parse(String(assignmentsJson))).toEqual(persisted)
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledWith(context, {
+      deleteSegments: ['ab:intent_targeted', 'ab:no_intent_targeted'],
+      email: 'user@example.com',
+      segments: [],
+    })
+  })
+
+  it('revokes the old intent assignment and creates the new intent assignment atomically', async () => {
+    const module = await loadABTestsModule()
+    installIntentTest(module)
+    installIntentTest(module, ['builder'], BUILDER_INTENT_TEST_NAME)
+    const standardAssignments = persistedAssignments({ development: 'D', emails: 'B', publish: 'B' })
+    const existing = {
+      ...standardAssignments,
+      [INTENT_TEST_NAME]: intentAssignment(),
+    }
+    const persisted = {
+      ...standardAssignments,
+      [BUILDER_INTENT_TEST_NAME]: intentAssignment(),
+    }
+    const context = { get: vi.fn(() => 'request-id') } as never
+    vi.useFakeTimers()
+    vi.setSystemTime(FIXED_DATE)
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0)
+    pgQueryMock.mockResolvedValueOnce({
+      rows: [{ abtests: existing, created_via_invite: false, intent: 'builder' }],
+    })
+    drizzleExecuteMock
+      .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false, email: 'User@Example.com', intent: 'builder' }] })
+      .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
+
+    await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
+
+    expect(random).toHaveBeenCalledOnce()
+    const updateParameters = collectSqlParameterValues(drizzleExecuteMock.mock.calls[1]?.[0])
+    const assignmentsJson = updateParameters.find(value => typeof value === 'string' && value.startsWith('{'))
+    expect(JSON.parse(String(assignmentsJson))).toEqual(persisted)
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledWith(context, {
+      deleteSegments: [
+        'ab:no_builder_intent_targeted',
+        'ab:intent_targeted',
+        'ab:no_intent_targeted',
+      ],
+      email: 'user@example.com',
+      segments: ['ab:builder_intent_targeted'],
+    })
   })
 
   it('falls back to the primary database when the replica lookup fails', async () => {
