@@ -1235,6 +1235,8 @@ async function importStoreMetadata() {
 
     let importedAppId = typeof data?.app_id === 'string' ? data.app_id.trim() : ''
     if (!importedAppId) {
+      if (data?.app_id_lookup_failed === true)
+        throw new Error('Apple lookup did not return an App ID')
       const appleBundleId = await fetchAppleBundleId(requestedUrl)
       if (requestedRun !== storeImportRun || existingAppSetup.value !== 'import' || storeUrl.value.trim() !== requestedUrl)
         return

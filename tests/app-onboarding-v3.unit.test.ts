@@ -62,6 +62,7 @@ describe('pre-organization onboarding v3', () => {
     const appIdSource = sliceBetween(onboardingSource, 'const selectedAppIdSource = computed', 'const selectedAppIconSource = computed')
 
     expect(metadataImport).toContain('await fetchAppleBundleId(requestedUrl)')
+    expect(metadataImport.indexOf('data?.app_id_lookup_failed === true')).toBeLessThan(metadataImport.indexOf('await fetchAppleBundleId(requestedUrl)'))
     expect(metadataImport.indexOf('storeAppNamePreview.value =')).toBeLessThan(metadataImport.indexOf('await fetchAppleBundleId(requestedUrl)'))
     expect(metadataImport.indexOf('storeIconPreview.value = importedIcon')).toBeLessThan(metadataImport.indexOf('await fetchAppleBundleId(requestedUrl)'))
     expect(metadataImport).toContain('if (importedAppId && !hasEditedAppId.value)')
