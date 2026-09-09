@@ -53,14 +53,22 @@ async function appKeyBody(name: string, appId = APPNAME, extra: Record<string, u
 }
 
 async function deleteApiKeysByName(name: string, headers: Record<string, string>) {
-  const listResponse = await fetch(`${BASE_URL}/apikey`, { headers })
-  if (!listResponse.ok)
-    return
+  try {
+    const listResponse = await fetch(`${BASE_URL}/apikey`, { headers })
+    if (!listResponse.ok)
+      return
 
-  const keys = await listResponse.json() as Array<{ id: number, name: string }>
-  await Promise.all(keys.filter(key => key.name === name).map(async (key) => {
-    await fetch(`${BASE_URL}/apikey/${key.id}`, { method: 'DELETE', headers })
-  }))
+    const keys = await listResponse.json() as Array<{ id: number, name: string }>
+    const matchingKeys = keys.filter(key => key.name === name)
+    await Promise.allSettled(matchingKeys.map(async (key) => {
+      const deleteResponse = await fetch(`${BASE_URL}/apikey/${key.id}`, { method: 'DELETE', headers })
+      if (!deleteResponse.ok)
+        throw new Error(`DELETE /apikey/${key.id} failed with ${deleteResponse.status}`)
+    }))
+  }
+  catch {
+    // Best-effort cleanup before a create-safe retry; do not block the caller.
+  }
 }
 
 let postApiKeyQueue: Promise<unknown> = Promise.resolve()
@@ -83,7 +91,26 @@ async function postApiKey(
     const deadline = Date.now() + 15000
 
     while (true) {
-      const response = await fetch(url, requestInit)
+      const remainingMs = deadline - Date.now()
+      if (remainingMs <= 0)
+        throw new Error('POST /apikey timed out after 15s waiting for gateway response')
+
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), remainingMs)
+
+      let response: Response
+      try {
+        response = await fetch(url, { ...requestInit, signal: controller.signal })
+      }
+      catch (error) {
+        if (error instanceof Error && error.name === 'AbortError')
+          throw new Error('POST /apikey timed out after 15s waiting for gateway response')
+        throw error
+      }
+      finally {
+        clearTimeout(timeout)
+      }
+
       if (response.status !== 502 && response.status !== 503)
         return response
 
