@@ -97,7 +97,7 @@ describe('moveS3LiteObjectToTrash', () => {
       { sourceKey: 'orgs/org-1/apps/com.test/file%20name.zip' },
       `${R2_TRASH_PREFIX}${key}`,
     )
-    expect(statObject).toHaveBeenCalledTimes(2)
+    expect(statObject).toHaveBeenCalledTimes(3)
     expect(deleteObject).toHaveBeenCalledWith(key)
   })
 
