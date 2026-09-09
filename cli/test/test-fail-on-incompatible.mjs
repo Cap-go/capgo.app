@@ -204,6 +204,15 @@ test('SDK requestBuildOptionsSchema rejects non-string cacheKey', () => {
   assert.equal(result.success, false)
 })
 
+test('SDK requestBuildOptionsSchema rejects null cacheKey', () => {
+  const result = requestBuildOptionsSchema.safeParse({
+    appId: 'com.example.app',
+    platform: 'ios',
+    cacheKey: null,
+  })
+  assert.equal(result.success, false)
+})
+
 test('SDK requestBuildOptionsSchema trims cacheKey and omits whitespace-only values', () => {
   const trimmed = requestBuildOptionsSchema.parse({
     appId: 'com.example.app',

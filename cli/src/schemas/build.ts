@@ -56,7 +56,7 @@ export type BuildCredentials = z.infer<typeof buildCredentialsSchema>
 export const buildCacheOptionSchema = z.boolean().optional()
 
 export const buildCacheKeyOptionSchema = z.preprocess((value) => {
-  if (value === undefined || value === null)
+  if (value === undefined)
     return undefined
   if (typeof value !== 'string')
     return value
