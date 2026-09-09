@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { buildCacheKeyOptionSchema, buildCacheOptionSchema } from '../schemas/build'
+import { aiAnalysisModeSchema, buildCacheKeyOptionSchema, buildCacheOptionSchema } from '../schemas/build'
 import { capacitorConfigOptionSchema, observeOptionsObjectSchema, refineObserveDeviceId } from '../schemas/sdk'
 
 export const mcpAddAppInputSchema = z.object({
@@ -148,6 +148,7 @@ export const mcpRequestBuildInputSchema = z.object({
   nodeModules: z.string().optional(),
   cache: buildCacheOptionSchema.describe('When false, disables compilation cache for this build. Omit or true to use the default (cache enabled).'),
   cacheKey: buildCacheKeyOptionSchema.describe('Custom compilation cache key (e.g. rc, prod) to share or isolate cache between environments.'),
+  aiAnalysisMode: aiAnalysisModeSchema.optional(),
 })
 
 export const mcpGenerateEncryptionKeysInputSchema = z.object({
