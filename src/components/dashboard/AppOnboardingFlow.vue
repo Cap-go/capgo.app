@@ -1841,8 +1841,6 @@ function clearIntentAdvanceTimer() {
 }
 
 function continueFromIntent() {
-  clearIntentAdvanceTimer()
-  intentAdvanceGeneration += 1
   if (!selectedIntent.value) {
     toast.error(t('organization-onboarding-intent-required'))
     return
