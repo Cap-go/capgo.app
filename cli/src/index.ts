@@ -18,6 +18,8 @@ import { clearCredentialsCommand, listCredentialsCommand, migrateCredentialsComm
 import { exportCredentialsCommand, isCredentialsExportInvocation } from './build/credentials-export-command'
 import { sanitizeCredentialsExportTerminalText, writeCredentialsExportStderr } from './build/credentials-export-terminal'
 import { manageCredentialsCommand } from './build/credentials-manage'
+import type { IosProvisioningOptions } from './build/ios-provisioning-command'
+import { iosProvisioningCommand } from './build/ios-provisioning-command'
 import { syncIosMarketingVersionCommand } from './build/ios-marketing-version'
 import { lastOutputCommand } from './build/last-output-command'
 import { checkBuildNeeded } from './build/needed'
@@ -882,31 +884,23 @@ organisation
 
 const build = program
   .command('build')
-  .description(`🏗️  Manage native iOS/Android builds through Capgo Cloud.
+  .description(`Build native iOS and Android apps with Capgo Cloud.
 
-⚠️ Native cloud build requests are currently in LIMITED BETA. Access is restricted.
+Native cloud builds are currently in limited beta.
 
- 🔒 SECURITY GUARANTEE:
-    Build credentials are NEVER stored on Capgo servers.
-    They are used only during the build and auto-deleted after.
-    Build outputs may optionally be uploaded for time-limited download links.
+Quick start:
+  npx @capgo/cli@latest build init
+  npx @capgo/cli@latest build request <app-id> --platform <ios|android>
 
-📋 BEFORE BUILDING:
-   Save your credentials first:
-   npx @capgo/cli build credentials save --appId <your-app-id> --platform ios
-   npx @capgo/cli build credentials save --appId <your-app-id> --platform android
-
-📤 CAPTURE THE OUTPUT URL FROM CI:
-   Pass --output-record to persist the download URL + QR code, then read it
-   back with \`build last-output\`:
-   npx @capgo/cli build request <appId> --platform android --output-upload --output-record /tmp/build.json
-   URL=$(npx @capgo/cli build last-output --path /tmp/build.json --field outputUrl)`)
+Run npx @capgo/cli@latest build <command> --help for command-specific options.`)
 
 build
   .command('needed [appId]')
-  .description(`🧭 Print "yes" and exit with code 1 if a native build is required; otherwise print "no" and exit with code 0. Command failures exit with code 2.
+  .summary('Check whether a native build is required')
+  .description(`Print "yes" and exit with code 1 if a native build is required. Otherwise print "no" and exit with code 0. Command failures exit with code 2.
 
-Example: npx @capgo/cli@latest build needed com.example.app --channel production --verbose`)
+Example:
+  npx @capgo/cli@latest build needed com.example.app --channel production --verbose`)
   .action(checkBuildNeeded)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('-c, --channel <channel>', `Channel to compare against. Defaults to CapacitorUpdater.defaultChannel or the public default channel`)
@@ -919,6 +913,7 @@ Example: npx @capgo/cli@latest build needed com.example.app --channel production
 build
   .command('init')
   .alias('onboarding')
+  .summary('Configure build credentials interactively')
   .description('Set up build credentials interactively (iOS: certificates + profiles automated; Android: keystore + Google OAuth provisions GCP service account and Play Console invite)')
   .option('-a, --apikey <apikey>', 'API key to link to your account')
   .option('-p, --platform <platform>', 'Platform to onboard (ios or android). If omitted, auto-detects when only one native folder exists; prompts otherwise.')
@@ -936,28 +931,45 @@ build
 
 build
   .command('request [appId]')
+  .summary('Request a native build from Capgo Cloud')
   .description(`Request a native build from Capgo Cloud.
 
-This command zips your project and uploads it to Capgo for a remote native build.
-By default the finished artifact can go to the app store (when store credentials are saved)
-and/or to Capgo storage as a time-limited download link (--output-upload).
+The project is zipped and uploaded for a remote native build. The finished artifact can be sent to the app store, uploaded to Capgo for a time-limited download, or both.
 
- 🔒 SECURITY: Credentials are never stored on Capgo servers. They are auto-deleted
-    after build completion. Build outputs may optionally be uploaded for time-limited download links.
+Credentials are uploaded only for the build. Their temporary server copies are deleted after it finishes.
 
-📋 PREREQUISITE: Save credentials first with:
-   \`npx @capgo/cli@latest build credentials save --appId <app-id> --platform <ios|android>\`
+Before your first build:
+  npx @capgo/cli@latest build init
 
-Example: npx @capgo/cli@latest build request com.example.app --platform ios --path .
-Android AAB only (no Play upload): npx @capgo/cli@latest build request com.example.app --platform android --no-playstore-upload --output-upload
-iOS IPA only (no TestFlight upload): npx @capgo/cli@latest build request com.example.app --platform ios --ios-distribution ad_hoc --output-upload
-Disable Xcode compilation cache: npx @capgo/cli@latest build request com.example.app --platform ios --no-cache`)
+Examples:
+  iOS build:
+    npx @capgo/cli@latest build request com.example.app \\
+      --platform ios --path .
+
+  Android artifact without Play upload:
+    npx @capgo/cli@latest build request com.example.app \\
+      --platform android --no-playstore-upload --output-upload
+
+  iOS artifact without TestFlight upload:
+    npx @capgo/cli@latest build request com.example.app \\
+      --platform ios --ios-distribution ad_hoc --output-upload
+
+  Disable the Xcode compilation cache:
+    npx @capgo/cli@latest build request com.example.app \\
+      --platform ios --no-cache
+
+  Use a separate compilation cache:
+    npx @capgo/cli@latest build request com.example.app \\
+      --platform ios --cache-key prod`)
   .action(requestBuildCommand)
+  .optionsGroup('General options:')
+  .helpOption('-h, --help', 'Display help for command')
   .option('--path <path>', `Path to the project directory to build (default: current directory)`)
   .option('--node-modules <nodeModules>', optionDescriptions.nodeModules)
   .option('--platform <platform>', `Target platform: ios or android (required)`)
   .option('--build-mode <buildMode>', `Build mode: debug or release (default: release)`)
   // iOS credential CLI options (can also be set via env vars or saved credentials)
+  .optionsGroup('iOS options:')
   .option('--build-certificate-base64 <cert>', 'iOS: Base64-encoded .p12 certificate')
   .option('--p12-password <password>', 'iOS: Certificate password (optional if cert has no password)')
   .option('--apple-id <email>', 'iOS: Apple ID email for app-specific password uploads (alternative to App Store Connect API key)')
@@ -971,7 +983,10 @@ Disable Xcode compilation cache: npx @capgo/cli@latest build request com.example
   .option('--ios-target <target>', 'iOS: Xcode target for reading build settings (default: same as scheme)')
   .addOption(new Option('--ios-distribution <mode>', 'iOS: Distribution mode. app_store (default) uploads to TestFlight/App Store; ad_hoc skips store upload and builds an Ad Hoc IPA for device install. Use ad_hoc with --output-upload when the App Store app does not exist yet or you only need an IPA download.').choices(['app_store', 'ad_hoc']).default('app_store'))
   .option('--ios-provisioning-profile <mapping>', 'iOS: Provisioning profile path or bundleId=path mapping (repeatable)', collect, [])
+  .option('--no-cache', 'Disable Xcode compilation cache for this build (default: cache enabled)')
+  .option('--cache-key <key>', 'Custom compilation cache key for this build (e.g. rc, prod, feature-branch). Use to share or isolate cache between environments. Precedence over the default appId-only key; ignored when --no-cache is set.')
   // Android credential CLI options (can also be set via env vars or saved credentials)
+  .optionsGroup('Android options:')
   .option('--android-keystore-file <keystore>', 'Android: Base64-encoded keystore file')
   .option('--keystore-key-alias <alias>', 'Android: Keystore key alias')
   .option('--keystore-key-password <password>', 'Android: Keystore key password')
@@ -982,6 +997,7 @@ Disable Xcode compilation cache: npx @capgo/cli@latest build request com.example
   .addOption(new Option('--android-release-status <status>', 'Android: Google Play release status (draft, completed, inProgress, halted). Default without --submit-to-store-review: draft. With --submit-to-store-review and no status set: completed. Precedence: CLI > env > saved credentials').choices(['draft', 'completed', 'inProgress', 'halted']))
   .option('--in-app-update-priority <priority>', 'Android: Google Play in-app update priority for this release (integer 0–5; higher = more urgent). See https://developer.android.com/guide/playcore/in-app-updates. Precedence: CLI > env > saved credentials')
   .option('--no-playstore-upload', 'Android: do not upload the AAB/APK to Google Play for this build (ignores saved Play credentials). Use when the Play app does not exist yet, or you only want a Capgo download link. Requires --output-upload.')
+  .optionsGroup('Store options:')
   .option('--submit-to-store-review', 'After upload, submit the store release for review instead of leaving it as a draft/inactive build. On Android this defaults to the production track with release_status completed (override with --android-track / PLAY_STORE_TRACK and --android-release-status / PLAY_STORE_RELEASE_STATUS). On iOS this submits the processed TestFlight build to App Store review.')
   .option('--store-release-name <name>', 'Store release name/version label. Android sends this as the Google Play version_name; iOS uses it as the App Store version when creating or reusing the editable version.')
   .option('--store-release-notes <notes>', 'Default store release notes. Android uses this as the Play changelog; iOS uses it as the fallback App Store What\'s New text.')
@@ -989,6 +1005,7 @@ Disable Xcode compilation cache: npx @capgo/cli@latest build request com.example
   .option('--ios-testflight-groups <groups>', 'iOS: optional comma-separated TestFlight external group names or IDs for external beta distribution.')
   .option('--ios-automatic-release', 'iOS: automatically release the App Store version after Apple approval. Default is manual release.')
   .option('--no-ios-automatic-release', 'iOS: keep the App Store version waiting for manual release after Apple approval.')
+  .optionsGroup('Output and version options:')
   .option('--output-upload', 'Upload the finished IPA/APK/AAB to Capgo storage and print a time-limited download link (and QR). Use with --no-playstore-upload (Android) or --ios-distribution ad_hoc (iOS) when you only need the artifact and are not publishing to the store yet. Precedence: CLI > env > saved credentials')
   .option('--no-output-upload', 'Do not upload the finished IPA/APK/AAB to Capgo storage (no download link). Store upload still happens when Play/TestFlight credentials are configured. Precedence: CLI > env > saved credentials')
   .option('--output-retention <duration>', 'Override output link TTL for this build only (1h to 7d). Examples: 1h, 6h, 2d. Precedence: CLI > env > saved credentials')
@@ -999,36 +1016,44 @@ Disable Xcode compilation cache: npx @capgo/cli@latest build request com.example
   .option('--no-skip-marketing-version-bump', 'Override saved credentials to re-enable automatic marketing version bump for this build only.')
   .option('--sync-ios-version', 'iOS: sync the app version from package.json before uploading the project. Updates MARKETING_VERSION or CFBundleShortVersionString based on the Xcode Info.plist configuration.')
   .option('--sync-android-version', 'Android: sync versionName in android/app/build.gradle from package.json before uploading the project. Fails unless versionName is a standalone quoted string literal.')
+  .optionsGroup('Prescan and diagnostics options:')
   .option('--ai-analytics', 'On build failure, send logs to Capgo AI for diagnosis. In interactive terminals this skips the upfront confirmation; in CI this auto-uploads and prints the analysis to stderr.')
   .option('--no-prescan', 'Skip the automatic pre-build scan')
-  .option('--no-cache', 'Disable Xcode compilation cache for this build (default: cache enabled)')
   .option('--prescan-ignore-fatal', 'Run the pre-build scan but never block the build (report only)')
   .option('--prescan-skip <checkId>', 'Skip specific prescan check(s) by id (repeatable or comma-separated). Other checks still run.', collect, [])
   .option('--prescan-warn <checkId>', 'Downgrade specific prescan check(s) to warning by id (repeatable or comma-separated). Check still runs.', collect, [])
   .option('--fail-on-warnings', 'Treat prescan warnings as fatal')
   .option('--send-logs-to-support', 'On a CI/CD build failure, automatically upload the build logs to Capgo support (no email required). Capgo support is notified and will follow up by email. Additive to --ai-analytics.')
   .addOption(new Option('--send-logs', 'Deprecated alias for --send-logs-to-support').hideHelp())
+  .option('--verbose', optionDescriptions.verbose)
+  .optionsGroup('Capgo options:')
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
-  .option('--verbose', optionDescriptions.verbose)
 
 build
   .command('sync-ios-version')
+  .summary('Sync the local iOS marketing version')
   .description(`Sync the local iOS app version from package.json.
 
 Updates MARKETING_VERSION or CFBundleShortVersionString based on the Xcode Info.plist configuration.
 
-Example: npx @capgo/cli@latest build sync-ios-version --path .`)
+Example:
+  npx @capgo/cli@latest build sync-ios-version --path .`)
   .option('--path <path>', 'Path to the project directory (default: current directory)')
   .option('--check', 'Check only; exit non-zero when MARKETING_VERSION or CFBundleShortVersionString is out of sync')
   .action(syncIosMarketingVersionCommand)
 
 build
   .command('prescan [appId]')
+  .summary('Check for build problems before uploading')
   .description(`Scan your project and saved credentials for problems that would fail a cloud build — before uploading anything.
 
-Checks credentials (expiry, passwords, profile pairing), project state (cap sync, node_modules layout), and platform config. Runs automatically inside \`build request\`; this command runs it standalone (e.g. in CI).`)
+Checks credentials, project state, and platform configuration. This scan runs
+automatically inside \`build request\`; use this command to run it separately.
+
+Example:
+  npx @capgo/cli@latest build prescan com.example.app --platform ios`)
   .option('--platform <platform>', 'Target platform: ios or android (required)')
   .option('--path <path>', 'Path to the project directory (default: current directory)')
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
@@ -1046,6 +1071,7 @@ Checks credentials (expiry, passwords, profile pairing), project state (cap sync
 
 build
   .command('last-output')
+  .summary('Read a saved build output record')
   .description(`Read the build output record written by a previous \`build request --output-record\`.
 
 Prints the full JSON by default, a single field with --field, or the ASCII QR
@@ -1053,9 +1079,9 @@ code with --qr. Useful in CI to grab the download URL or QR for posting back
 to a PR or issue.
 
 Examples:
-  npx @capgo/cli build last-output --path /tmp/build.json
-  npx @capgo/cli build last-output --path /tmp/build.json --field outputUrl
-  npx @capgo/cli build last-output --path /tmp/build.json --qr`)
+  npx @capgo/cli@latest build last-output --path /tmp/build.json
+  npx @capgo/cli@latest build last-output --path /tmp/build.json --field outputUrl
+  npx @capgo/cli@latest build last-output --path /tmp/build.json --qr`)
   .action(lastOutputCommand)
   .option('--path <path>', 'Path to the JSON record written by --output-record (required)')
   .option('--field <field>', 'Print a single field (one of: jobId, appId, platform, buildMode, status, outputUrl, qrCodeAscii, qrCodePngPath, finishedAt, schemaVersion)')
@@ -1063,21 +1089,23 @@ Examples:
 
 const buildCredentials = build
   .command('credentials')
-  .description(`Manage build credentials stored locally on your machine.
+  .summary('Manage locally saved build credentials')
+  .description(`Manage locally saved build credentials.
 
-🔒 SECURITY:
-   - Credentials saved to ~/.capgo-credentials/credentials.json (global) or .capgo-credentials.json (local)
-   - When building, sent to Capgo but NEVER stored permanently
-   - Deleted from Capgo immediately after build
-   - Build outputs may optionally be uploaded for time-limited download links
+Credentials are stored in ~/.capgo-credentials/credentials.json globally, or
+in .capgo-credentials.json for one project. They are uploaded only for a build;
+their temporary server copies are deleted after it finishes.
 
-📚 DOCUMENTATION:
-   iOS setup: https://capgo.app/docs/cli/cloud-build/ios/
-   Android setup: https://capgo.app/docs/cli/cloud-build/android/`)
+Setup guides:
+  iOS: https://capgo.app/docs/cli/cloud-build/ios/
+  Android: https://capgo.app/docs/cli/cloud-build/android/
+
+Run npx @capgo/cli@latest build credentials <command> --help for command-specific options.`)
 
 buildCredentials
   .command('apple-key')
   .alias('asc-key')
+  .summary('Create an App Store Connect API key on macOS')
   .description(`Create an App Store Connect team API key with a guided macOS helper (macOS only).
 
 Opens a native window that walks you through Apple's App Store Connect UI in an
@@ -1086,7 +1114,7 @@ embedded browser, auto-captures the Issuer ID + Key ID, intercepts the one-time
 Progress statistics are forwarded to Capgo analytics (disable with CAPGO_DISABLE_TELEMETRY).
 
 Example:
-  npx @capgo/cli build credentials apple-key --appId com.example.app`)
+  npx @capgo/cli@latest build credentials apple-key --appId com.example.app`)
   .action((options: CreateAppleKeyOptions) => createAppleKeyCommand(options))
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('--appId <appId>', 'Save the captured key into this app iOS build credentials')
@@ -1094,47 +1122,55 @@ Example:
   .option('--json', 'Print the captured Key ID / Issuer ID / .p8 path as JSON')
 
 buildCredentials
+  .command('ios-provisioning')
+  .summary('Set up profiles for every signable iOS target')
+  .description(`Set up provisioning profiles for every signable iOS target.
+
+Reuses an eligible saved wildcard profile after confirmation, or generates
+missing App Store profiles with the saved App Store Connect .p8 key.
+
+Example:
+  npx @capgo/cli@latest build credentials ios-provisioning`)
+  .option('--local', 'Use credentials from the current project')
+  .option('--global', 'Use credentials from the global store')
+  .action((options: IosProvisioningOptions) => iosProvisioningCommand(options))
+
+buildCredentials
   .command('save')
-  .description(`Save build credentials locally for iOS or Android.
+  .summary('Save iOS or Android build credentials')
+  .description(`Save iOS or Android build credentials on this machine.
 
-Credentials are stored in:
-  - ~/.capgo-credentials/credentials.json (default, global)
-  - .capgo-credentials.json in project root (with --local flag)
+Credentials are stored globally by default. Use --local to store them in the
+current project's .capgo-credentials.json file instead.
 
-⚠️  REQUIRED BEFORE BUILDING: You must save credentials before requesting a build.
+Setup guides:
+  iOS: https://capgo.app/docs/cli/cloud-build/ios/
+  Android: https://capgo.app/docs/cli/cloud-build/android/
 
-🔒 These credentials are NEVER stored on Capgo servers permanently.
-   They are deleted immediately after the build completes.
+Examples:
+  iOS app with a widget extension:
+    npx @capgo/cli@latest build credentials save \\
+      --appId com.example.app --platform ios \\
+      --certificate ./cert.p12 --p12-password "password" \\
+      --ios-provisioning-profile ./profile.mobileprovision \\
+      --ios-provisioning-profile com.example.widget=./Widget.mobileprovision \\
+      --apple-key ./AuthKey.p8 --apple-key-id "KEY123" \\
+      --apple-issuer-id "issuer-uuid" --apple-team-id "team-id"
 
-📚 Setup guides:
-   iOS: https://capgo.app/docs/cli/cloud-build/ios/
-   Android: https://capgo.app/docs/cli/cloud-build/android/
-
-iOS Example:
-  npx @capgo/cli build credentials save --platform ios \\
-    --certificate ./cert.p12 --p12-password "password" \\
-    --ios-provisioning-profile ./profile.mobileprovision \\
-    --apple-key ./AuthKey.p8 --apple-key-id "KEY123" \\
-    --apple-issuer-id "issuer-uuid" --apple-team-id "team-id"
-
-Multi-target Example (app + widget extension):
-  npx @capgo/cli build credentials save --platform ios \\
-    --ios-provisioning-profile ./App.mobileprovision \\
-    --ios-provisioning-profile com.example.widget=./Widget.mobileprovision \\
-    ...
-
-Android Example:
-  npx @capgo/cli build credentials save --platform android \\
-    --keystore ./release.keystore --keystore-alias "my-key" \\
-    --keystore-key-password "key-pass" \\
-    --play-config ./service-account.json
-
-Local storage (per-project):
-  npx @capgo/cli build credentials save --local --platform ios ...`)
+  Android:
+    npx @capgo/cli@latest build credentials save \\
+      --appId com.example.app --platform android \\
+      --keystore ./release.keystore --keystore-alias "my-key" \\
+      --keystore-key-password "key-pass" \\
+      --play-config ./service-account.json`)
   .action(saveCredentialsCommand)
+  .optionsGroup('General options:')
+  .helpOption('-h, --help', 'Display help for command')
   .option('--appId <appId>', 'App ID (e.g., com.example.app) (required)')
   .option('--platform <platform>', 'Platform: ios or android (required)')
+  .option('--local', 'Save to .capgo-credentials.json in project root instead of global ~/.capgo-credentials/')
   // iOS options
+  .optionsGroup('iOS options:')
   .option('--certificate <path>', 'iOS: Path to .p12 certificate file')
   .option('--ios-provisioning-profile <mapping>', 'iOS: Provisioning profile path or bundleId=path (repeatable)', collect, [])
   .option('--p12-password <password>', 'iOS: Certificate password (optional if cert has no password)')
@@ -1147,6 +1183,7 @@ Local storage (per-project):
   .option('--apple-app-specific-password <password>', 'iOS: App-specific password (xxxx-xxxx-xxxx-xxxx) for TestFlight uploads')
   .option('--apple-app-id <id>', 'iOS: Numeric App Store Connect app id (required together with --apple-id and --apple-app-specific-password)')
   // Android options
+  .optionsGroup('Android options:')
   .option('--keystore <path>', 'Android: Path to keystore file (.keystore or .jks)')
   .option('--keystore-alias <alias>', 'Android: Keystore key alias')
   .option('--keystore-key-password <password>', 'Android: Keystore key password')
@@ -1154,8 +1191,7 @@ Local storage (per-project):
   .option('--play-config <path>', 'Android: Path to Play Store service account JSON')
   .option('--android-flavor <flavor>', 'Android: Product flavor to build (e.g. production). Required if your project has multiple flavors.')
   .option('--in-app-update-priority <priority>', 'Android: Google Play in-app update priority for future releases (integer 0–5; higher = more urgent). Omit to leave Play’s existing value untouched.')
-  // Storage option
-  .option('--local', 'Save to .capgo-credentials.json in project root instead of global ~/.capgo-credentials/')
+  .optionsGroup('Build defaults:')
   .option('--output-upload', 'Upload build outputs (IPA/APK/AAB) to Capgo storage and print download links')
   .option('--no-output-upload', 'Do not upload build outputs (IPA/APK/AAB) to Capgo storage')
   .option('--output-retention <duration>', 'Output link TTL: 1h to 7d (default: 1h). Examples: 1h, 6h, 2d')
@@ -1166,28 +1202,31 @@ Local storage (per-project):
 
 buildCredentials
   .command('list')
+  .summary('List saved credentials with secrets masked')
   .description(`List saved build credentials (passwords masked).
 
 Shows what credentials are currently saved (both global and local).
 
 Examples:
-  npx @capgo/cli build credentials list  # List all apps
-  npx @capgo/cli build credentials list --appId com.example.app  # List specific app`)
+  npx @capgo/cli@latest build credentials list
+  npx @capgo/cli@latest build credentials list --appId com.example.app
+  npx @capgo/cli@latest build credentials list --local`)
   .action(listCredentialsCommand)
   .option('--appId <appId>', 'App ID to list (optional, lists all if omitted)')
   .option('--local', 'List credentials from local .capgo-credentials.json only')
 
 buildCredentials
   .command('clear')
+  .summary('Remove saved build credentials')
   .description(`Clear saved build credentials.
 
 Remove credentials from storage.
 Use --appId and --platform to target specific credentials.
 
 Examples:
-  npx @capgo/cli build credentials clear  # Clear all apps (global)
-  npx @capgo/cli build credentials clear --local  # Clear local credentials
-  npx @capgo/cli build credentials clear --appId com.example.app --platform ios`)
+  npx @capgo/cli@latest build credentials clear
+  npx @capgo/cli@latest build credentials clear --local
+  npx @capgo/cli@latest build credentials clear --appId com.example.app --platform ios`)
   .action(clearCredentialsCommand)
   .option('--appId <appId>', 'App ID to clear (optional, clears all apps if omitted)')
   .option('--platform <platform>', 'Platform to clear: ios or android (optional, clears all platforms if omitted)')
@@ -1195,19 +1234,23 @@ Examples:
 
 buildCredentials
   .command('update')
+  .summary('Update selected saved credential fields')
   .description(`Update specific credentials without providing all of them again.
 
 Update existing credentials by providing only the fields you want to change.
 Platform is auto-detected from the options you provide.
 
 Examples:
-  npx @capgo/cli build credentials update --ios-provisioning-profile ./new-profile.mobileprovision
-  npx @capgo/cli build credentials update --local --keystore ./new-keystore.jks`)
+  npx @capgo/cli@latest build credentials update --ios-provisioning-profile ./new-profile.mobileprovision
+  npx @capgo/cli@latest build credentials update --local --keystore ./new-keystore.jks`)
   .action(updateCredentialsCommand)
+  .optionsGroup('General options:')
+  .helpOption('-h, --help', 'Display help for command')
   .option('--appId <appId>', 'App ID (auto-detected from capacitor.config if omitted)')
   .option('--platform <platform>', 'Platform: ios or android (auto-detected from options)')
   .option('--local', 'Update local .capgo-credentials.json instead of global')
   // iOS options
+  .optionsGroup('iOS options:')
   .option('--certificate <path>', 'Path to P12 certificate file')
   .option('--ios-provisioning-profile <mapping>', 'Provisioning profile path or bundleId=path (repeatable, additive by default)', collect, [])
   .option('--overwrite-ios-provisioning-map', 'Replace the entire provisioning map instead of merging (default: merge)')
@@ -1221,6 +1264,7 @@ Examples:
   .option('--apple-app-id <id>', 'iOS: Numeric App Store Connect app id (required together with --apple-id and --apple-app-specific-password)')
   .addOption(new Option('--ios-distribution <mode>', 'iOS: Distribution mode').choices(['app_store', 'ad_hoc']).default('app_store'))
   // Android options
+  .optionsGroup('Android options:')
   .option('--keystore <path>', 'Path to keystore file (.keystore or .jks)')
   .option('--keystore-alias <alias>', 'Keystore key alias')
   .option('--keystore-key-password <password>', 'Keystore key password')
@@ -1228,6 +1272,7 @@ Examples:
   .option('--play-config <path>', 'Path to Google Play service account JSON')
   .option('--android-flavor <flavor>', 'Android: Product flavor to build (e.g. production). Required if your project has multiple flavors.')
   .option('--in-app-update-priority <priority>', 'Android: Google Play in-app update priority for future releases (integer 0–5; higher = more urgent).')
+  .optionsGroup('Build defaults:')
   .option('--output-upload', 'Upload build outputs (IPA/APK/AAB) to Capgo storage and print download links')
   .option('--no-output-upload', 'Do not upload build outputs (IPA/APK/AAB) to Capgo storage')
   .option('--output-retention <duration>', 'Output link TTL: 1h to 7d. Examples: 1h, 6h, 2d')
@@ -1238,16 +1283,17 @@ Examples:
 
 buildCredentials
   .command('manage')
+  .summary('Manage saved credentials interactively')
   .description(`Interactively manage saved build credentials.
 
 Browse stored credentials, view what's configured, export a CI/CD-ready .env file,
 or delete a platform's credentials. Reuses the same TUI as \`capgo init\`.
 
 Examples:
-  npx @capgo/cli build credentials manage
-  npx @capgo/cli build credentials manage --appId com.example.app
-  npx @capgo/cli build credentials manage --appId com.example.app --platform ios
-  npx @capgo/cli build credentials manage --local`)
+  npx @capgo/cli@latest build credentials manage
+  npx @capgo/cli@latest build credentials manage --appId com.example.app
+  npx @capgo/cli@latest build credentials manage --appId com.example.app --platform ios
+  npx @capgo/cli@latest build credentials manage --local`)
   .action(manageCredentialsCommand)
   .option('--appId <appId>', 'App ID to manage (optional, prompts to pick if omitted)')
   .option('--platform <platform>', 'Platform to manage: ios or android (optional, prompts to pick if omitted)')
@@ -1255,11 +1301,15 @@ Examples:
 
 buildCredentials
   .command('export <variable>')
+  .summary('Export one saved credential value')
   .description(`Export one saved Builder credential or configuration value.
 
 Raw mode prints only the exact stored value to stdout with no trailing newline.
 All failures are written to stderr and exit with status 1. Saved local/global
-configuration is used; environment variables are never exported.`)
+configuration is used; environment variables are never exported.
+
+Example:
+  npx @capgo/cli@latest build credentials export BUILD_CERTIFICATE_BASE64 --app-id com.example.app --platform ios --raw`)
   .action(exportCredentialsCommand)
   .option('--app-id <appId>', 'App ID whose saved Builder value will be exported (required)')
   .addOption(new Option('--appId <appId>', 'Compatibility alias for --app-id').hideHelp())
@@ -1272,13 +1322,14 @@ configuration is used; environment variables are never exported.`)
 
 buildCredentials
   .command('migrate')
+  .summary('Migrate a legacy iOS provisioning profile')
   .description(`Migrate legacy provisioning profile to the new multi-target format.
 
 Converts BUILD_PROVISION_PROFILE_BASE64 to CAPGO_IOS_PROVISIONING_MAP.
 Discovers the main bundle ID from your Xcode project automatically.
 
 Example:
-  npx @capgo/cli build credentials migrate --platform ios`)
+  npx @capgo/cli@latest build credentials migrate --platform ios`)
   .action(migrateCredentialsCommand)
   .option('--appId <appId>', 'App ID (auto-detected from capacitor.config if omitted)')
   .option('--platform <platform>', 'Platform (only ios is supported)')

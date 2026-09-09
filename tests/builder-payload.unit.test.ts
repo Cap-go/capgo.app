@@ -90,6 +90,38 @@ describe('builder payload shape', () => {
     ])
   })
 
+  it.concurrent('forwards cache_key to builder payload for custom cache namespaces', () => {
+    const payload = buildBuilderPayload({
+      ...baseInput,
+      cacheKey: 'prod',
+    })
+
+    expect(payload.cache_key).toBe('prod')
+    expect(payload.cache_fingerprint_extra).toBe('prod')
+
+    const keys = Object.keys(payload).sort()
+    expect(keys).toEqual([
+      'actorUserId',
+      'appId',
+      'artifactKey',
+      'buildCredentials',
+      'buildOptions',
+      'cache_fingerprint_extra',
+      'cache_key',
+      'fastlane',
+      'userId',
+    ])
+  })
+
+  it.concurrent('omits cache_key when unset', () => {
+    const payload = buildBuilderPayload({
+      ...baseInput,
+    })
+
+    expect(payload).not.toHaveProperty('cache_key')
+    expect(payload).not.toHaveProperty('cache_fingerprint_extra')
+  })
+
   it.concurrent('forwards cache_enabled false when CLI opts out with --no-cache', () => {
     const payload = buildBuilderPayload({
       ...baseInput,

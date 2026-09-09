@@ -2487,7 +2487,6 @@ export function show2FADeniedError(organizationName?: string): never {
 }
 
 export async function filterOrgsByPermission(
-  _supabase: SupabaseClient<Database> | null,
   apikey: string,
   orgs: Organization[],
   permissionKey: string,
@@ -2503,7 +2502,6 @@ export async function filterOrgsByPermission(
 }
 
 export async function getOrganizationListWithPermission(
-  _supabase: SupabaseClient<Database> | null,
   apikey: string,
   permissionKey: string,
   options?: CapgoCliHostOptions,
@@ -2523,7 +2521,7 @@ export async function getOrganizationListWithPermission(
     throw new Error('No organizations available')
   }
 
-  const allowedOrganizations = await filterOrgsByPermission(null, apikey, allOrganizations, permissionKey, options)
+  const allowedOrganizations = await filterOrgsByPermission(apikey, allOrganizations, permissionKey, options)
 
   if (allowedOrganizations.length === 0) {
     log.error(`Could not find organization with permission: ${permissionKey}`)
@@ -2534,12 +2532,11 @@ export async function getOrganizationListWithPermission(
 }
 
 export async function getOrganizationWithPermission(
-  supabase: SupabaseClient<Database> | null,
   apikey: string,
   permissionKey: string,
   options?: CapgoCliHostOptions,
 ): Promise<Organization> {
-  const { allOrganizations, allowedOrganizations } = await getOrganizationListWithPermission(supabase, apikey, permissionKey, options)
+  const { allOrganizations, allowedOrganizations } = await getOrganizationListWithPermission(apikey, permissionKey, options)
 
   const organizationUidRaw = (allowedOrganizations.length > 1)
     ? await select({

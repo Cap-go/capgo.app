@@ -270,7 +270,7 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
       if (pIsCancel(entered))
         continue
       const appId = (entered as string).trim()
-      const organization = await getOrganizationWithPermission(null, resolvedApikey, 'org.create_app', {
+      const organization = await getOrganizationWithPermission(resolvedApikey, 'org.create_app', {
         supaHost: options.supaHost,
         supaAnon: options.supaAnon,
       })

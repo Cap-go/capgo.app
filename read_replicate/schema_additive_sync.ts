@@ -85,7 +85,9 @@ interface SchemaCatalog {
 
 type SyncStatementKind
   = | 'column'
+    | 'check_constraint'
     | 'constraint'
+    | 'drop_check_constraint'
     | 'function'
     | 'index'
     | 'invalid_index'
@@ -407,10 +409,46 @@ export function planReadReplicaSchemaSync(
     })
   }
   for (const constraint of expectedCatalog.constraints ?? []) {
-    // Publisher CHECK constraints do not need to exist on a read-only logical
-    // subscriber. Creating them here can only add avoidable replica writes.
-    if (constraint.type === 'c')
+    if (constraint.type === 'c') {
+      const actualConstraint = actualConstraintsByKey.get(
+        constraintKey(constraint),
+      )
+      // Missing publisher CHECK constraints stay optional on read-only subscribers.
+      if (!actualConstraint || constraintMatches(constraint, actualConstraint))
+        continue
+
+      const dropSql = buildDropCheckConstraintStatement(
+        constraint,
+        actualTables,
+      )
+      const addSql = buildAddCheckConstraintStatement(
+        constraint,
+        actualTables,
+      )
+      if (!dropSql || !addSql) {
+        skipped.push({
+          kind: 'constraint',
+          table: constraint.table,
+          name: constraint.name,
+          reason: 'check_constraint_conflict',
+        })
+        continue
+      }
+
+      statements.push({
+        kind: 'drop_check_constraint',
+        table: constraint.table,
+        name: constraint.name,
+        sql: dropSql,
+      })
+      statements.push({
+        kind: 'check_constraint',
+        table: constraint.table,
+        name: constraint.name,
+        sql: addSql,
+      })
       continue
+    }
 
     const actualConstraint = actualConstraintsByKey.get(
       constraintKey(constraint),
@@ -1175,6 +1213,35 @@ function buildCreateIndexStatement(
 
   return `CREATE ${unique}INDEX CONCURRENTLY IF NOT EXISTS ${quoteIdent(index.name)} ON ${quoteQualifiedTable(index.table)} ${indexTail}`
 }
+
+function buildDropCheckConstraintStatement(
+  constraint: Pick<SchemaConstraint, 'table' | 'name'>,
+  actualTables: Set<string>,
+): string | null {
+  if (!isSafeReplicaTable(constraint.table, actualTables))
+    return null
+  if (!isSafeQuotedIdentifier(constraint.name))
+    return null
+
+  return `ALTER TABLE ${quoteQualifiedTable(constraint.table)} DROP CONSTRAINT IF EXISTS ${quoteIdent(constraint.name)}`
+}
+
+function buildAddCheckConstraintStatement(
+  constraint: SchemaConstraint,
+  actualTables: Set<string>,
+): string | null {
+  if (
+    constraint.type !== 'c'
+    || !isSafeReplicaTable(constraint.table, actualTables)
+    || !isSafeQuotedIdentifier(constraint.name)
+    || !isSafeCheckConstraintDefinition(constraint.definition)
+  ) {
+    return null
+  }
+
+  return `ALTER TABLE ${quoteQualifiedTable(constraint.table)} ADD CONSTRAINT ${quoteIdent(constraint.name)} ${constraint.definition}`
+}
+
 function buildAttachConstraintStatement(
   constraint: SchemaConstraint,
   expectedIndex: SchemaIndex | undefined,
@@ -1490,6 +1557,13 @@ function isSafeSchemaDefinition(value: string): boolean {
     && !value.includes('--')
     && !value.includes('/*')
     && !value.includes('*/')
+  )
+}
+
+function isSafeCheckConstraintDefinition(value: string): boolean {
+  return (
+    value.startsWith('CHECK (')
+    && isSafeSchemaDefinition(value)
   )
 }
 

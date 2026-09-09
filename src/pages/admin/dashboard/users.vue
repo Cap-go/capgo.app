@@ -1070,6 +1070,7 @@ const onboardingFunnelStages = computed(() => {
 const wizardDropoffLabelKeys: Record<string, string> = {
   not_started: 'onboarding-wizard-not-started',
   intent: 'unified-onboarding-step-intent',
+  publish_app_question: 'onboarding-wizard-publish-app-question',
   details: 'app-onboarding-step-details',
   organization: 'unified-onboarding-step-organization',
   choice: 'app-onboarding-step-choice',

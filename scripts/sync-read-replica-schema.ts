@@ -145,9 +145,15 @@ function statementResolvesCompatibilityIssue(
 ): boolean {
   switch (issue.kind) {
     case 'column':
-    case 'constraint':
       return statement.kind === issue.kind
         && issue.object === `${statement.table}.${statement.name}`
+    case 'constraint':
+      return (
+        (statement.kind === 'constraint'
+          || statement.kind === 'drop_check_constraint'
+          || statement.kind === 'check_constraint')
+        && issue.object === `${statement.table}.${statement.name}`
+      )
     case 'type':
     case 'sequence':
     case 'function':
@@ -258,6 +264,14 @@ function assertGoogleReadReplicaSchemaStatement(
       assertSelectedReplicaTable(statement)
       assertConstraintStatement(statement)
       return
+    case 'drop_check_constraint':
+      assertSelectedReplicaTable(statement)
+      assertDropCheckConstraintStatement(statement)
+      return
+    case 'check_constraint':
+      assertSelectedReplicaTable(statement)
+      assertCheckConstraintStatement(statement)
+      return
     case 'type':
       assertTypeStatement(statement)
       return
@@ -304,6 +318,51 @@ function assertConstraintStatement(statement: ReadReplicaSchemaSyncStatement): v
       `Cloud SQL server-side import cannot atomically apply ${statement.kind} ${statement.table}.${statement.name} before primary migrations.`,
     )
   }
+}
+
+function assertDropCheckConstraintStatement(
+  statement: ReadReplicaSchemaSyncStatement,
+): void {
+  const expected = `ALTER TABLE public.${quoteSqlIdentifier(statement.table)} DROP CONSTRAINT IF EXISTS ${quoteSqlIdentifier(statement.name)}`
+  if (
+    !isSafeQuotedIdentifier(statement.name)
+    || statement.sql !== expected
+  ) {
+    throw new Error(
+      `Cloud SQL server-side import cannot atomically apply ${statement.kind} ${statement.table}.${statement.name} before primary migrations.`,
+    )
+  }
+}
+
+function assertCheckConstraintStatement(
+  statement: ReadReplicaSchemaSyncStatement,
+): void {
+  const expectedPrefix = `ALTER TABLE public.${quoteSqlIdentifier(statement.table)} ADD CONSTRAINT ${quoteSqlIdentifier(statement.name)} CHECK (`
+  if (
+    !isSafeQuotedIdentifier(statement.name)
+    || !statement.sql.startsWith(expectedPrefix)
+    || !isSafeCheckConstraintTail(statement.sql.slice(expectedPrefix.length))
+  ) {
+    throw new Error(
+      `Cloud SQL server-side import cannot atomically apply ${statement.kind} ${statement.table}.${statement.name} before primary migrations.`,
+    )
+  }
+}
+
+function isSafeCheckConstraintTail(value: string): boolean {
+  const body = value.endsWith(' NOT VALID')
+    ? value.slice(0, -' NOT VALID'.length)
+    : value
+
+  return (
+    body.length > 0
+    && body.endsWith(')')
+    && !value.includes('\0')
+    && !value.includes(';')
+    && !value.includes('--')
+    && !value.includes('/*')
+    && !value.includes('*/')
+  )
 }
 
 function assertTypeStatement(statement: ReadReplicaSchemaSyncStatement): void {

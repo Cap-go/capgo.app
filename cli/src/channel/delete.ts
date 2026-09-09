@@ -49,7 +49,13 @@ export async function deleteChannelInternal(channelId: string, appId: string, op
 
     throw new Error(`Channel ${channelId} not found`)
   }
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'channel.delete', silent, true, channel.id)
+  await checkAppExistsAndHasPermissionOrgErr(options.apikey, appId, 'channel.delete', {
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+    silent,
+    skip2FACheck: true,
+    channelId: channel.id,
+  })
   const canDeleteBundle = options.deleteBundle
     ? await hasCliPermission(supabase, options.apikey, 'bundle.delete', { appId }, { supaHost: options.supaHost, supaAnon: options.supaAnon })
     : false

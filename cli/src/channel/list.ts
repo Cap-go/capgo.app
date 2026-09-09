@@ -27,7 +27,12 @@ export async function listChannelsInternal(appId: string, options: OptionsBase, 
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
   await check2FAComplianceForApp(options.apikey, appId, silent, { supaHost: options.supaHost, supaAnon: options.supaAnon })
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.read_channels', silent, true)
+  await checkAppExistsAndHasPermissionOrgErr(options.apikey, appId, 'app.read_channels', {
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+    silent,
+    skip2FACheck: true,
+  })
   const orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
 
   if (!silent)

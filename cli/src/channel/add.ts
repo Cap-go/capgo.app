@@ -91,7 +91,12 @@ export async function addChannelInternal(channelId: string, appId: string, optio
   await resolveUserIdFromApiKey(supabase, options.apikey, silent, host)
   // Creating a channel needs the exact RBAC permission. The backend and channels
   // INSERT RLS remain authoritative, so a key without app.create_channel is denied.
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.create_channel', silent, true)
+  await checkAppExistsAndHasPermissionOrgErr(options.apikey, appId, 'app.create_channel', {
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+    silent,
+    skip2FACheck: true,
+  })
 
   if (!silent)
     log.info(`Creating channel ${appId}#${channelId} to Capgo`)

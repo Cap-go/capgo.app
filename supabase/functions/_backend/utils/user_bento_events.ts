@@ -202,6 +202,9 @@ function copyMappedFields(
     ) {
       target[field.key] = value
     }
+    else if (field.type === 'integer' && (value === '5.A' || value === '5.C')) {
+      target[field.key] = value
+    }
   }
 }
 

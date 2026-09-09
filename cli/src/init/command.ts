@@ -2195,7 +2195,7 @@ async function selectOrganizationForInit(
   apikey: string,
   hostOptions?: { supaHost?: string, supaAnon?: string },
 ): Promise<Organization> {
-  const { allOrganizations, allowedOrganizations } = await getOrganizationListWithPermission(supabase, apikey, 'org.create_app', hostOptions)
+  const { allOrganizations, allowedOrganizations } = await getOrganizationListWithPermission(apikey, 'org.create_app', hostOptions)
 
   const organizationUidRaw = allowedOrganizations.length > 1
     ? await pSelect({

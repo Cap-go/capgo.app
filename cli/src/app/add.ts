@@ -307,7 +307,7 @@ export async function addAppInternal(
   const userId = await resolveUserIdFromApiKey(supabase, options.apikey, silent, host)
 
   if (!organization)
-    organization = await getOrganizationWithPermission(supabase, options.apikey, 'org.create_app', host)
+    organization = await getOrganizationWithPermission(options.apikey, 'org.create_app', host)
 
   const organizationUid = organization.gid
 

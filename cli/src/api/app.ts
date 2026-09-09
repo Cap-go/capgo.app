@@ -8,7 +8,7 @@ import {
   callTwoFactorComplianceRpcWithRetry,
   warnAndContinueTwoFactorPreflightNetworkFailure,
 } from '../shared/two-factor-compliance'
-import { appAddHintMessage, formatCapgoApiErrorBody, formatCapgoCliApiError, getCapgoCliHttpStatus, hasCliPermissionViaHttp, hostOptionsFromSupabase, invokeCapgoCliApi, resolveCapgoPublicApiHost, show2FADeniedError, type CapgoCliHostOptions } from '../utils'
+import { appAddHintMessage, formatCapgoApiErrorBody, formatCapgoCliApiError, getCapgoCliHttpStatus, hasCliPermissionViaHttp, invokeCapgoCliApi, resolveCapgoPublicApiHost, show2FADeniedError, type CapgoCliHostOptions } from '../utils'
 
 export async function checkAppExists(
   apikey: string,
@@ -196,10 +196,6 @@ export async function checkAppIdsExist(
   return results
 }
 
-function isSupabaseClient(value: unknown): value is SupabaseClient<Database> {
-  return typeof value === 'object' && value !== null
-}
-
 export async function check2FAComplianceForApp(
   apikey: string,
   appid: string,
@@ -240,52 +236,33 @@ export async function check2FAComplianceForApp(
 
 // lgtm[js/insecure-randomness] Permission gate only; this module does not generate secrets or tokens with Math.random.
 export async function checkAppExistsAndHasPermissionOrgErr(
-  apikeyOrSupabase: string | SupabaseClient<Database>,
-  appidOrApikey: string,
-  requiredPermissionKeyOrAppid?: string,
-  optionsOrSilent?: (CapgoCliHostOptions & { silent?: boolean, skip2FACheck?: boolean, channelId?: number | null }) | boolean | string,
-  skip2FACheckOrSilent?: boolean,
-  channelIdOrSkip2FA?: number | null | boolean,
+  apikey: string,
+  appid: string,
+  requiredPermissionKey: string,
+  optionsOrSilent?: (CapgoCliHostOptions & { silent?: boolean, skip2FACheck?: boolean, channelId?: number | null }) | boolean,
+  skip2FACheck?: boolean,
   channelId?: number | null,
 ) {
-  let apikey: string
-  let appid: string
-  let requiredPermissionKey: string
   let silent: boolean
-  let skip2FACheck: boolean
+  let resolvedSkip2FACheck: boolean
   let resolvedChannelId: number | null
   let hostOptions: CapgoCliHostOptions | undefined
 
-  if (isSupabaseClient(apikeyOrSupabase)) {
-    apikey = appidOrApikey
-    appid = requiredPermissionKeyOrAppid!
-    requiredPermissionKey = optionsOrSilent as string
-    silent = skip2FACheckOrSilent ?? false
-    skip2FACheck = channelIdOrSkip2FA === true
-    resolvedChannelId = typeof channelId === 'number' ? channelId : null
-    hostOptions = hostOptionsFromSupabase(apikeyOrSupabase)
-  }
-  else if (typeof optionsOrSilent === 'object' && optionsOrSilent !== null) {
-    apikey = apikeyOrSupabase
-    appid = appidOrApikey
-    requiredPermissionKey = requiredPermissionKeyOrAppid!
+  if (typeof optionsOrSilent === 'object' && optionsOrSilent !== null) {
     silent = optionsOrSilent.silent ?? false
-    skip2FACheck = optionsOrSilent.skip2FACheck ?? false
+    resolvedSkip2FACheck = optionsOrSilent.skip2FACheck ?? false
     resolvedChannelId = optionsOrSilent.channelId ?? null
     hostOptions = optionsOrSilent
   }
   else {
-    apikey = apikeyOrSupabase
-    appid = appidOrApikey
-    requiredPermissionKey = requiredPermissionKeyOrAppid!
     silent = typeof optionsOrSilent === 'boolean' ? optionsOrSilent : false
-    skip2FACheck = skip2FACheckOrSilent ?? false
-    resolvedChannelId = typeof channelIdOrSkip2FA === 'number' ? channelIdOrSkip2FA : (channelId ?? null)
+    resolvedSkip2FACheck = skip2FACheck ?? false
+    resolvedChannelId = typeof channelId === 'number' ? channelId : null
   }
 
   const isChannelScopedPermission = resolvedChannelId != null && requiredPermissionKey.startsWith('channel.')
 
-  if (!skip2FACheck)
+  if (!resolvedSkip2FACheck)
     await check2FAComplianceForApp(apikey, appid, silent, hostOptions)
 
   if (!isChannelScopedPermission && !(await checkAppExists(apikey, appid, hostOptions))) {

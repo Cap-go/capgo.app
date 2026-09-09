@@ -340,9 +340,31 @@ async function fetchWithRetry(
 
 export type { BuildCredentials, BuildRequestOptions, BuildRequestResult } from '../schemas/build'
 
-/** Builder job API cache flag: omit when enabled (default), send false when opted out. */
-export function buildJobCachePayload(cache?: boolean): { cache_enabled?: false } {
-  return cache === false ? { cache_enabled: false } : {}
+export interface BuildJobCachePayloadInput {
+  cache?: boolean
+  cacheKey?: string
+}
+
+export interface BuildJobCachePayload {
+  cache_enabled?: false
+  cache_key?: string
+  cache_fingerprint_extra?: string
+}
+
+/** Builder job API cache fields: omit cache_enabled when enabled (default), send false when opted out. */
+export function buildJobCachePayload(input?: BuildJobCachePayloadInput): BuildJobCachePayload {
+  const payload: BuildJobCachePayload = {}
+  if (input?.cache === false)
+    payload.cache_enabled = false
+
+  const trimmedCacheKey = input?.cacheKey?.trim()
+  if (trimmedCacheKey) {
+    payload.cache_key = trimmedCacheKey
+    // Builder compatibility: accept cache_key (PR #190) and legacy cache_fingerprint_extra.
+    payload.cache_fingerprint_extra = trimmedCacheKey
+  }
+
+  return payload
 }
 
 /**
@@ -1842,11 +1864,14 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       build_mode: options.buildMode || 'release',
       build_options: buildOptionsPayload,
       build_credentials: buildCredentialsPayload,
-      ...buildJobCachePayload(options.cache),
+      ...buildJobCachePayload({ cache: options.cache, cacheKey: options.cacheKey }),
     }
 
     if (options.cache === false) {
       log.info(`ℹ️  --no-cache specified, compilation cache disabled for this ${platform} build`)
+    }
+    else if (options.cacheKey?.trim()) {
+      log.info(`ℹ️  --cache-key "${options.cacheKey.trim()}" specified for this ${platform} build`)
     }
 
     log.info('✓ Using credentials (merged from CLI args, env vars, and saved file)')
@@ -2212,7 +2237,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
         }),
         body: JSON.stringify({
           app_id: appId,
-          ...buildJobCachePayload(options.cache),
+          ...buildJobCachePayload({ cache: options.cache, cacheKey: options.cacheKey }),
         }),
       })
 
@@ -2323,6 +2348,9 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       }
       else if (finalStatus === 'failed') {
         log.error(`Build failed`)
+        if (options.cache !== false && !options.cacheKey?.trim()) {
+          log.info('Tip: if this looks cache-related (stale artifacts between RC/PROD or branches), retry with --cache-key <env> to isolate compilation cache, or --no-cache to skip cache restore.')
+        }
         // Non-interactive (CI/CD) failure with neither --ai-analytics nor
         // --send-logs: surface the discoverability tip here, INDEPENDENT of log
         // capture. The in-handler AI/decideCiFailureActions block below is gated

@@ -19,6 +19,8 @@ export interface RequestBuildBody {
   build_credentials?: Record<string, string>
   /** When false, builder must skip compilation cache restore. Omit or true = default enabled. */
   cache_enabled?: boolean
+  /** Custom cache namespace for compilation cache restore/save (e.g. rc, prod). */
+  cache_key?: string
 }
 
 export interface RequestBuildResponse {
@@ -45,6 +47,7 @@ interface ValidBuildRequestBody {
   build_options: Record<string, unknown>
   build_credentials: Record<string, string>
   cache_enabled?: boolean
+  cache_key?: string
 }
 
 function throwBuilderUnavailable(message: string, moreInfo: Record<string, unknown> = {}, cause?: unknown): never {
@@ -64,9 +67,12 @@ export function buildBuilderPayload(input: {
   buildOptions: Record<string, unknown>
   buildCredentials: Record<string, string>
   cacheEnabled?: boolean
+  cacheKey?: string
 }) {
   const buildOptions = { ...input.buildOptions }
   delete buildOptions.timeoutSeconds
+
+  const trimmedCacheKey = input.cacheKey?.trim()
 
   return {
     // userId carries the org_id (anonymized owner) — kept for backwards compat.
@@ -81,6 +87,13 @@ export function buildBuilderPayload(input: {
     buildOptions,
     buildCredentials: input.buildCredentials,
     ...(input.cacheEnabled === false ? { cache_enabled: false } : {}),
+    ...(trimmedCacheKey
+      ? {
+          cache_key: trimmedCacheKey,
+          // Builder compatibility: accept cache_key (PR #190) and legacy cache_fingerprint_extra.
+          cache_fingerprint_extra: trimmedCacheKey,
+        }
+      : {}),
   }
 }
 
@@ -101,6 +114,7 @@ function validateBuildRequestBody(c: Context, body: RequestBuildBody, userId: st
     build_options = {},
     build_credentials = {},
     cache_enabled,
+    cache_key,
   } = body
 
   cloudlog({
@@ -156,6 +170,13 @@ function validateBuildRequestBody(c: Context, body: RequestBuildBody, userId: st
     throw simpleError('invalid_parameter', 'cache_enabled must be a boolean')
   }
 
+  if (cache_key !== undefined) {
+    if (typeof cache_key !== 'string' || !cache_key.trim()) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Invalid cache_key type' })
+      throw simpleError('invalid_parameter', 'cache_key must be a non-empty string')
+    }
+  }
+
   return {
     app_id,
     platform: platform as 'ios' | 'android',
@@ -164,6 +185,7 @@ function validateBuildRequestBody(c: Context, body: RequestBuildBody, userId: st
     build_options,
     build_credentials,
     cache_enabled,
+    cache_key: cache_key?.trim(),
   }
 }
 
@@ -256,8 +278,9 @@ async function createBuilderJob(c: Context, input: {
   buildOptions: Record<string, unknown>
   buildCredentials: Record<string, string>
   cacheEnabled?: boolean
+  cacheKey?: string
 }): Promise<BuilderJobResponse> {
-  const { builderUrl, builderApiKey, orgId, actorUserId, appId, platform, uploadPath, buildOptions, buildCredentials, cacheEnabled } = input
+  const { builderUrl, builderApiKey, orgId, actorUserId, appId, platform, uploadPath, buildOptions, buildCredentials, cacheEnabled, cacheKey } = input
   cloudlog({
     requestId: c.get('requestId'),
     message: 'Calling builder API',
@@ -284,6 +307,7 @@ async function createBuilderJob(c: Context, input: {
         buildOptions,
         buildCredentials,
         cacheEnabled,
+        cacheKey,
       })),
     })
 
@@ -456,6 +480,7 @@ export async function requestBuild(
     build_options,
     build_credentials,
     cache_enabled,
+    cache_key,
   } = validateBuildRequestBody(c, body, apikey.user_id)
 
   await ensureBuildPermission(c, app_id, apikey.user_id)
@@ -495,6 +520,7 @@ export async function requestBuild(
     buildOptions: build_options,
     buildCredentials: build_credentials,
     cacheEnabled: cache_enabled,
+    cacheKey: cache_key,
   })
 
   ensureBuilderUploadUrl(c, builderUrl, builderApiKey, builderJob)

@@ -141,10 +141,7 @@ function pickUpsertFields(body: PrepareUploadBody) {
   }
 }
 
-function validatePrepareUploadRequest(
-  body: PrepareUploadBody,
-  existing?: ExistingVersionRow | null,
-): string {
+function validatePrepareUploadBasics(body: PrepareUploadBody): string {
   if (!body.app_id)
     throw simpleError('missing_app_id', 'Missing app_id', { body })
   if (!isValidAppId(body.app_id))
@@ -158,21 +155,8 @@ function validatePrepareUploadRequest(
     validateUrlFormat(body.external_url)
 
   const storageProvider = body.storage_provider ?? 'r2-direct'
-  if (storageProvider === COMPLETED_UPLOAD_STORAGE_PROVIDER) {
-    if (!existing) {
-      throw simpleError('invalid_storage_provider', 'storage_provider must be r2-direct or external', {
-        storage_provider: storageProvider,
-      })
-    }
-    if (existing.storage_provider !== 'r2-direct'
-      && existing.storage_provider !== COMPLETED_UPLOAD_STORAGE_PROVIDER) {
-      throw simpleError('invalid_storage_provider', 'storage_provider r2 is only valid when finalizing an r2-direct upload', {
-        storage_provider: storageProvider,
-        existing_storage_provider: existing.storage_provider,
-      })
-    }
-  }
-  else if (!PREPARE_INPUT_STORAGE_PROVIDERS.has(storageProvider)) {
+  if (storageProvider !== COMPLETED_UPLOAD_STORAGE_PROVIDER
+    && !PREPARE_INPUT_STORAGE_PROVIDERS.has(storageProvider)) {
     throw simpleError('invalid_storage_provider', 'storage_provider must be r2-direct or external', {
       storage_provider: storageProvider,
     })
@@ -185,6 +169,27 @@ function validatePrepareUploadRequest(
   }
 
   return storageProvider
+}
+
+function validatePrepareUploadStorageProvider(
+  storageProvider: string,
+  existing: ExistingVersionRow | null,
+): void {
+  if (storageProvider !== COMPLETED_UPLOAD_STORAGE_PROVIDER)
+    return
+
+  if (!existing) {
+    throw simpleError('invalid_storage_provider', 'storage_provider must be r2-direct or external', {
+      storage_provider: storageProvider,
+    })
+  }
+  if (existing.storage_provider !== 'r2-direct'
+    && existing.storage_provider !== COMPLETED_UPLOAD_STORAGE_PROVIDER) {
+    throw simpleError('invalid_storage_provider', 'storage_provider r2 is only valid when finalizing an r2-direct upload', {
+      storage_provider: storageProvider,
+      existing_storage_provider: existing.storage_provider,
+    })
+  }
 }
 
 async function updateExistingVersion(
@@ -237,11 +242,13 @@ export async function prepareUpload(
   body: PrepareUploadBody,
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ): Promise<Response> {
-  const existing = await loadExistingVersion(c, body.app_id, body.name)
-  const storageProvider = validatePrepareUploadRequest(body, existing)
+  const storageProvider = validatePrepareUploadBasics(body)
 
   if (!(await checkPermission(c, 'app.upload_bundle', { appId: body.app_id })))
     throw simpleError('cannot_prepare_upload', 'You cannot upload bundles for this app', { app_id: body.app_id })
+
+  const existing = await loadExistingVersion(c, body.app_id, body.name)
+  validatePrepareUploadStorageProvider(storageProvider, existing)
 
   const appWithOrg = await getAppOrganization(c, body.app_id)
   checkEncryptedBundleEnforcement(appWithOrg, body.session_key ?? undefined, body.key_id ?? undefined)

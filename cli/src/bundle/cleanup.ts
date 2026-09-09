@@ -89,7 +89,12 @@ export async function cleanupBundleInternal(appId: string, options: BundleCleanu
   const host = { supaHost: options.supaHost, supaAnon: options.supaAnon }
   await check2FAComplianceForApp(options.apikey, appId, silent, host)
   await resolveUserIdFromApiKey(supabase, options.apikey, silent, host)
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'bundle.delete', silent, true)
+  await checkAppExistsAndHasPermissionOrgErr(options.apikey, appId, 'bundle.delete', {
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+    silent,
+    skip2FACheck: true,
+  })
 
   if (!silent)
     log.info('Querying all available versions in Capgo')

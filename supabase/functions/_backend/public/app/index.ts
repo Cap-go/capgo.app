@@ -44,7 +44,7 @@ app.post('/', middlewareAuth(), async (c) => {
   return post(c, body)
 })
 
-app.put('/:id', middlewareKey(), async (c) => {
+app.put('/:id', middlewareAuth({ preferApiKey: true }), async (c) => {
   const id = c.req.param('id')
   const body = await getBodyOrQuery<{
     name?: string

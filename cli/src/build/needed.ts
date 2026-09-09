@@ -277,14 +277,12 @@ export async function getBuildNeeded(
   )
 
   await check2FAComplianceForApp(enrichedOptions.apikey, resolvedAppId, true, { supaHost: enrichedOptions.supaHost, supaAnon: enrichedOptions.supaAnon })
-  await checkAppExistsAndHasPermissionOrgErr(
-    supabase,
-    enrichedOptions.apikey,
-    resolvedAppId,
-    'app.read_bundles',
-    true,
-    true,
-  )
+  await checkAppExistsAndHasPermissionOrgErr(enrichedOptions.apikey, resolvedAppId, 'app.read_bundles', {
+    supaHost: enrichedOptions.supaHost,
+    supaAnon: enrichedOptions.supaAnon,
+    silent: true,
+    skip2FACheck: true,
+  })
 
   const channel = await resolveBuildNeededChannel(supabase, resolvedAppId, enrichedOptions, extConfig?.config)
   const compatibility = await checkCompatibilityCloud(

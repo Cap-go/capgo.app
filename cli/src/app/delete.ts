@@ -43,7 +43,11 @@ export async function deleteAppInternal(
   const host = { supaHost: options.supaHost, supaAnon: options.supaAnon }
   const userId = await resolveUserIdFromApiKey(supabase, options.apikey, silent, host)
 
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.delete', silent)
+  await checkAppExistsAndHasPermissionOrgErr(options.apikey, appId, 'app.delete', {
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+    silent,
+  })
 
   const { data: appData, error: appError } = await invokeCapgoCliApi<{
     owner_org?: string
