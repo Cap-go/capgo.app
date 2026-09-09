@@ -44,7 +44,7 @@ app.post('/', middlewareAuth(), async (c) => {
   return post(c, body)
 })
 
-app.put('/:id', middlewareKey(), async (c) => {
+app.put('/:id', middlewareAuth({ preferApiKey: true }), async (c) => {
   const id = c.req.param('id')
   const body = await getBodyOrQuery<{
     name?: string
@@ -59,10 +59,7 @@ app.put('/:id', middlewareKey(), async (c) => {
     android_store_url?: string | null
     onboarding?: unknown
   }>(c)
-  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
-  const subkey = c.get('subkey') as Database['public']['Tables']['apikeys']['Row'] | undefined
-  const keyToUse = subkey || apikey
-  return put(c, id, body, keyToUse)
+  return put(c, id, body)
 })
 
 app.delete('/:id', middlewareKey(), async (c) => {
