@@ -10,9 +10,12 @@ import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
 
 export type ABTestAudience = 'all' | 'self_signup'
 export type ABTestBranch = 'A' | 'B' | 'C' | 'D'
+export const AB_TEST_INTENTS = ['ota', 'builder', 'both', 'exploring', 'publish'] as const
+export type ABTestIntent = typeof AB_TEST_INTENTS[number]
 
 export interface ABTestConfig {
   audience: ABTestAudience
+  intents?: ABTestIntent[]
   branches: Record<string, { bento_tag: string }>
   control_branch: ABTestBranch
   treatment_branch: ABTestBranch
@@ -25,7 +28,7 @@ export interface ABTestAssignment {
 }
 
 type ABTestsConfig = Record<string, ABTestConfig>
-type AssignmentAudienceUser = Pick<Database['public']['Tables']['users']['Row'], 'created_via_invite'>
+type AssignmentAudienceUser = Pick<Database['public']['Tables']['users']['Row'], 'created_via_invite'> & { intent?: unknown }
 type AssignmentUser = AssignmentAudienceUser & Record<string, unknown> & { abtests: unknown }
 type SyncUser = Pick<Database['public']['Tables']['users']['Row'], 'created_via_invite' | 'id'>
 const AB_TEST_BRANCHES = ['A', 'B', 'C', 'D'] as const
@@ -40,6 +43,10 @@ function invalidConfig(testName?: string): never {
 
 function isABTestBranch(value: unknown): value is ABTestBranch {
   return typeof value === 'string' && (AB_TEST_BRANCHES as readonly string[]).includes(value)
+}
+
+function isABTestIntent(value: unknown): value is ABTestIntent {
+  return typeof value === 'string' && (AB_TEST_INTENTS as readonly string[]).includes(value)
 }
 
 export function validateABTestsConfig(value: unknown): ABTestsConfig {
@@ -57,6 +64,7 @@ export function validateABTestsConfig(value: unknown): ABTestsConfig {
     const treatmentBranch = entry.treatment_branch
     const controlBranch = entry.control_branch
     const branches = entry.branches
+    const intents = entry.intents
     if ((audience !== 'all' && audience !== 'self_signup')
       || typeof percentage !== 'number'
       || !Number.isInteger(percentage)
@@ -69,6 +77,13 @@ export function validateABTestsConfig(value: unknown): ABTestsConfig {
       || Object.keys(branches).length !== 2
       || !isRecord(branches[treatmentBranch])
       || !isRecord(branches[controlBranch])) {
+      invalidConfig(testName)
+    }
+    if (intents !== undefined
+      && (!Array.isArray(intents)
+        || intents.length === 0
+        || !intents.every(isABTestIntent)
+        || new Set(intents).size !== intents.length)) {
       invalidConfig(testName)
     }
 
@@ -88,6 +103,7 @@ export function validateABTestsConfig(value: unknown): ABTestsConfig {
 
     config[testName] = {
       audience,
+      ...(intents === undefined ? {} : { intents: [...intents] }),
       control_branch: controlBranch,
       treatment_branch: treatmentBranch,
       treatment_percentage: percentage,
@@ -103,6 +119,13 @@ export function validateABTestsConfig(value: unknown): ABTestsConfig {
 
 export const AB_TESTS_CONFIG = validateABTestsConfig(rawABTestsConfig)
 
+function isEligibleForTest(user: AssignmentAudienceUser, test: ABTestConfig) {
+  if (test.audience === 'self_signup' && user.created_via_invite)
+    return false
+  return test.intents === undefined
+    || (isABTestIntent(user.intent) && test.intents.includes(user.intent))
+}
+
 export function createABTestAssignments(
   user: AssignmentAudienceUser,
   config = AB_TESTS_CONFIG,
@@ -113,7 +136,7 @@ export function createABTestAssignments(
   let assignedAt: string | undefined
 
   for (const [testName, test] of Object.entries(config)) {
-    if (test.audience === 'self_signup' && user.created_via_invite)
+    if (!isEligibleForTest(user, test))
       continue
 
     assignedAt ??= now().toISOString()
@@ -162,7 +185,7 @@ function readPersistedAssignments(value: unknown, testNames: string[]) {
 
 function eligibleTestNames(user: AssignmentAudienceUser) {
   return Object.entries(AB_TESTS_CONFIG)
-    .filter(([, test]) => test.audience !== 'self_signup' || !user.created_via_invite)
+    .filter(([, test]) => isEligibleForTest(user, test))
     .map(([testName]) => testName)
 }
 

@@ -65,10 +65,12 @@ function testConfig(
   audience: ABTestConfig['audience'] = 'self_signup',
   treatmentBranch: ABTestBranch = 'A',
   controlBranch: ABTestBranch = 'B',
+  intents?: ABTestConfig['intents'],
 ): ABTestsConfig {
   return {
     new_emails: {
       audience,
+      ...(intents ? { intents } : {}),
       control_branch: controlBranch,
       treatment_branch: treatmentBranch,
       treatment_percentage: treatmentPercentage,
@@ -193,6 +195,51 @@ describe('new-user A/B test assignment', () => {
       () => 0,
       () => FIXED_DATE,
     ).new_emails?.branch).toBe('A')
+  })
+
+  it('accepts unique supported intent targeting', async () => {
+    const { validateABTestsConfig } = await loadABTestsModule()
+
+    expect(validateABTestsConfig(testConfig(50, 'self_signup', 'A', 'B', ['ota', 'both'])).new_emails?.intents)
+      .toEqual(['ota', 'both'])
+  })
+
+  it.each([
+    ['an empty list', []],
+    ['duplicate values', ['ota', 'ota']],
+    ['an unsupported value', ['unsupported']],
+  ])('rejects intent targeting with %s', async (_label, intents) => {
+    const { validateABTestsConfig } = await loadABTestsModule()
+
+    expect(() => validateABTestsConfig(testConfig(50, 'self_signup', 'A', 'B', intents as never)))
+      .toThrow('Invalid A/B test configuration')
+  })
+
+  it('requires an exact persisted intent before assigning an intent-gated test', async () => {
+    const { createABTestAssignments, validateABTestsConfig } = await loadABTestsModule()
+    const config = validateABTestsConfig(testConfig(50, 'self_signup', 'A', 'B', ['ota']))
+
+    expect(createABTestAssignments(
+      { created_via_invite: false },
+      config,
+      () => 0,
+      () => FIXED_DATE,
+    )).toEqual({})
+    expect(createABTestAssignments(
+      { created_via_invite: false, intent: 'both' },
+      config,
+      () => 0,
+      () => FIXED_DATE,
+    )).toEqual({})
+    expect(createABTestAssignments(
+      { created_via_invite: false, intent: 'ota' },
+      config,
+      () => 0,
+      () => FIXED_DATE,
+    ).new_emails).toEqual({
+      assigned_at: FIXED_DATE.toISOString(),
+      branch: 'A',
+    })
   })
 
   it.each([
