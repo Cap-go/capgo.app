@@ -107,12 +107,9 @@ describe('plugin endpoint request parsing', () => {
 })
 
 describe('plugin endpoint response shaping', () => {
-  // Prime module-level feature-support cache outside measured iterations.
-  resToVersion('8.45.0', 'https://files.capgo.app/bundle.zip', appVersion, manifestEntries, true)
-
   bench('/updates manifest response with metadata', () => {
     resToVersion('8.45.0', 'https://files.capgo.app/bundle.zip', appVersion, manifestEntries, true)
-  }, { warmupIterations: 5 })
+  })
 
   bench('/updates error kind classification', () => {
     for (const code of updateErrorCodes)
