@@ -760,7 +760,7 @@ async function foundJWT(c: Context, jwt: string) {
   })
 }
 
-export function middlewareAuth() {
+export function middlewareAuth(options: { preferApiKey?: boolean } = {}) {
   return honoFactory.createMiddleware(async (c, next) => {
     // Check if IP is rate limited due to failed auth attempts
     const ipRateLimited = await isIPRateLimited(c)
@@ -769,7 +769,7 @@ export function middlewareAuth() {
     }
 
     const { jwt, capgkey } = resolveAuthHeaders(c)
-    if (jwt) {
+    if (jwt && !(capgkey && options.preferApiKey)) {
       const res = await foundJWT(c, jwt)
       if (res) {
         return res

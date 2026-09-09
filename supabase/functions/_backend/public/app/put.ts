@@ -12,7 +12,7 @@ import { cloudlog } from '../../utils/logging.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { createSignedImageUrl, getStorageAllowedOrigins, resolveWritableImageValue } from '../../utils/storage.ts'
-import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
+import { supabaseAdmin, supabaseApikey, supabaseWithAuth } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
 interface UpdateApp {
@@ -86,12 +86,14 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
 
   const onboardingPatch = parseAppOnboardingPatch(body.onboarding)
   const canUpdateSettings = await checkPermission(c, 'app.update_settings', { appId })
+  const auth = c.get('auth')
+  const callerClient = auth ? supabaseWithAuth(c, auth) : supabaseApikey(c, apikey.key)
 
   // Service-role load is used when the key cannot update settings: pending
   // onboarding completion, or a valid onboarding progress patch. Authorization
   // still runs after this read and blocks unauthorized callers.
   const previousAppClient = canUpdateSettings || (body.need_onboarding !== false && !onboardingPatch)
-    ? supabaseApikey(c, apikey.key)
+    ? callerClient
     : supabaseAdmin(c)
   const { data: previousApp, error: previousAppError } = await previousAppClient
     .from('apps')
@@ -231,7 +233,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
       }
     }
     else {
-      const updateResult = await supabaseApikey(c, apikey.key)
+      const updateResult = await callerClient
         .from('apps')
         .update({
           name: body.name,
