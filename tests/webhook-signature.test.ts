@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { generateStandardWebhookSignature, generateWebhookSignature } from '../supabase/functions/_backend/utils/webhook.ts'
-import { BASE_URL, createDirectApiKeyWithBindings, getSupabaseClient, TEST_EMAIL, USER_ID } from './test-utils.ts'
+import { BASE_URL, createDirectApiKeyWithBindings, fetchTestRequest, getSupabaseClient, TEST_EMAIL, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
 
 // Test data
 const WEBHOOK_TEST_ORG_ID = randomUUID()
@@ -34,7 +34,7 @@ async function getCreatedDelivery(): Promise<WebhookDelivery> {
   if (!webhookId || !deliveryId)
     throw new Error('Webhook delivery was not created')
 
-  const response = await fetch(`${BASE_URL}/webhooks/deliveries?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${webhookId}`, { headers })
+  const response = await fetchTestRequest(`${BASE_URL}/webhooks/deliveries?orgId=${WEBHOOK_TEST_ORG_ID}&webhookId=${webhookId}`, { headers })
   const data = await response.json() as { deliveries: WebhookDelivery[] }
   expect(response.status, JSON.stringify(data)).toBe(200)
 
@@ -130,6 +130,11 @@ beforeAll(async () => {
     'Content-Type': 'application/json',
     'Authorization': apiKey.key,
   }
+
+  await warmEdgeEndpoint(`${BASE_URL}/webhooks?orgId=${WEBHOOK_TEST_ORG_ID}`, {
+    method: 'GET',
+    headers,
+  })
 })
 
 afterAll(async () => {
