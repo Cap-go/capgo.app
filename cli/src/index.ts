@@ -953,7 +953,8 @@ and/or to Capgo storage as a time-limited download link (--output-upload).
 Example: npx @capgo/cli@latest build request com.example.app --platform ios --path .
 Android AAB only (no Play upload): npx @capgo/cli@latest build request com.example.app --platform android --no-playstore-upload --output-upload
 iOS IPA only (no TestFlight upload): npx @capgo/cli@latest build request com.example.app --platform ios --ios-distribution ad_hoc --output-upload
-Disable Xcode compilation cache: npx @capgo/cli@latest build request com.example.app --platform ios --no-cache`)
+Disable Xcode compilation cache: npx @capgo/cli@latest build request com.example.app --platform ios --no-cache
+Separate RC and PROD caches: npx @capgo/cli@latest build request com.example.app --platform ios --cache-key prod`)
   .action(requestBuildCommand)
   .option('--path <path>', `Path to the project directory to build (default: current directory)`)
   .option('--node-modules <nodeModules>', optionDescriptions.nodeModules)
@@ -1004,6 +1005,7 @@ Disable Xcode compilation cache: npx @capgo/cli@latest build request com.example
   .option('--ai-analytics', 'On build failure, send logs to Capgo AI for diagnosis. In interactive terminals this skips the upfront confirmation; in CI this auto-uploads and prints the analysis to stderr.')
   .option('--no-prescan', 'Skip the automatic pre-build scan')
   .option('--no-cache', 'Disable Xcode compilation cache for this build (default: cache enabled)')
+  .option('--cache-key <key>', 'Custom compilation cache key for this build (e.g. rc, prod, feature-branch). Use to share or isolate cache between environments. Precedence over the default appId-only key; ignored when --no-cache is set.')
   .option('--prescan-ignore-fatal', 'Run the pre-build scan but never block the build (report only)')
   .option('--prescan-skip <checkId>', 'Skip specific prescan check(s) by id (repeatable or comma-separated). Other checks still run.', collect, [])
   .option('--prescan-warn <checkId>', 'Downgrade specific prescan check(s) to warning by id (repeatable or comma-separated). Check still runs.', collect, [])

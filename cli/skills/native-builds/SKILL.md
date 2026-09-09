@@ -159,6 +159,9 @@ interface BuildLogger {
 - `--skip-build-number-bump`
 - `--no-skip-build-number-bump`
 - `--no-cache`: disable Xcode compilation cache for this build (default: cache enabled). Example: `npx @capgo/cli@latest build request com.example.app --platform ios --no-cache`
+- `--cache-key <key>`: custom compilation cache namespace for this build (e.g. `rc`, `prod`, `feature/my-branch`). Use to share cache within an environment or isolate cache between RC and production. Ignored when `--no-cache` is set. Example RC vs PROD:
+  - RC: `npx @capgo/cli@latest build request com.example.app --platform ios --cache-key rc`
+  - PROD: `npx @capgo/cli@latest build request com.example.app --platform ios --cache-key prod`
 
 ## Local credential management
 
