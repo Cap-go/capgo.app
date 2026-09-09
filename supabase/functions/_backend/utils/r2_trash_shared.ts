@@ -40,9 +40,19 @@ export function getR2TrashKey(sourceKey: string): string {
   return `${R2_TRASH_PREFIX}${sourceKey}`
 }
 
+function randomAlphanumericSuffix(length = 8): string {
+  const alphabet = '0123456789abcdefghijklmnopqrstuvwxyz'
+  const bytes = new Uint8Array(length)
+  crypto.getRandomValues(bytes)
+  let out = ''
+  for (const byte of bytes)
+    out += alphabet[byte % alphabet.length]
+  return out
+}
+
 /** Collision-resistant suffix for same-ms concurrent trash moves. */
 export function createUniqueR2TrashSuffix(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  return `${Date.now()}-${randomAlphanumericSuffix()}`
 }
 
 /** Unique trash destination when the default key already holds a prior deletion. */

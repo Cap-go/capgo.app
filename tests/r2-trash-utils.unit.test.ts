@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   ConcurrencyLimiter,
   conditionalDeleteSource,
+  createUniqueR2TrashSuffix,
   permanentDeleteSourceIfMatch,
   encodeS3CopySource,
   getR2TrashKey,
@@ -51,6 +52,18 @@ describe('getUniqueR2TrashKey', () => {
   it('prefixes with a unique suffix to avoid overwriting prior trash copies', () => {
     expect(getUniqueR2TrashKey('orgs/org-1/a.zip', '1700000000'))
       .toBe('deleted-after-7-days/1700000000/orgs/org-1/a.zip')
+  })
+})
+
+describe('createUniqueR2TrashSuffix', () => {
+  it('uses timestamp plus a crypto-random alphanumeric suffix', () => {
+    const suffix = createUniqueR2TrashSuffix()
+    expect(suffix).toMatch(/^\d+-[0-9a-z]{8}$/)
+  })
+
+  it('produces distinct suffixes for concurrent callers', () => {
+    const suffixes = new Set(Array.from({ length: 20 }, () => createUniqueR2TrashSuffix()))
+    expect(suffixes.size).toBe(20)
   })
 })
 
