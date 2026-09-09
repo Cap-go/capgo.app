@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { BASE_URL, createDirectApiKeyWithBindings, fetchTestRequest, getAuthHeaders, getSupabaseClient, NON_ACCESS_APP_NAME, resetAndSeedAppData, resetAppData, USER_ID } from './test-utils.ts'
+import { BASE_URL, createDirectApiKeyWithBindings, fetchTestRequest, getAuthHeaders, getSupabaseClient, NON_ACCESS_APP_NAME, resetAndSeedAppData, resetAppData, USER_EMAIL, USER_ID } from './test-utils.ts'
 
 const id = randomUUID().replace(/-/g, '').slice(0, 12)
 const APPNAME = `com.app.error.${id}`
@@ -73,7 +73,8 @@ describe('[POST] /app - Error Cases', () => {
     })
 
     expect(response.status).toBe(200)
-    const data = await response.json() as { onboarding: { created_by_user_id?: string } }
+    const data = await response.json() as { onboarding: { created_by_email?: string, created_by_user_id?: string } }
+    expect(data.onboarding.created_by_email).toBe(USER_EMAIL)
     expect(data.onboarding.created_by_user_id).toBe(USER_ID)
   })
 

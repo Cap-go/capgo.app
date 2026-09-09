@@ -299,7 +299,8 @@ BEGIN
     ('e4f5a6b7-c8d9-4ea0-9f1a-2b3c4d5e6f70', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Overage Test Org', 'test@capgo.app', 'cus_overage_test_123'),
     ('e5f6a7b8-c9d0-4e1f-9a2b-3c4d5e6f7a82', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Private Error Test Org', 'test@capgo.app', NULL),
     ('f1a2b3c4-d5e6-4f70-8a9b-0c1d2e3f4a50', 'd0f1a2b3-c4d5-4e6f-8a90-b1c2d3e4f506', NOW(), NOW(), '', 'API Key Management Test Org', 'apikey-management@capgo.app', 'cus_apikey_management_test_123'),
-    ('a9b8c7d6-e5f4-4321-9876-543210fedcba', 'f8e7d6c5-b4a3-4291-8f7e-6d5c4b3a2910', NOW(), NOW(), '', 'JWT MFA Edge Test Org', 'jwt-mfa-edge-apikey@capgo.app', NULL);
+    ('a9b8c7d6-e5f4-4321-9876-543210fedcba', 'f8e7d6c5-b4a3-4291-8f7e-6d5c4b3a2910', NOW(), NOW(), '', 'JWT MFA Edge Test Org', 'jwt-mfa-edge-apikey@capgo.app', NULL),
+    ('b8c9d0e1-f2a3-4b4c-9d5e-6f7a8b9c0dc7', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Credit Auto Top-Up Test Org', 'test@capgo.app', NULL);
     ALTER TABLE public.orgs ENABLE TRIGGER generate_org_user_stripe_info_on_org_create;
 
     INSERT INTO public.usage_credit_grants (
@@ -524,7 +525,8 @@ BEGIN
     ('e4f5a6b7-c8d9-4ea0-9f1a-2b3c4d5e6f70', '6aa76066-55ef-4238-ade6-0b32334a4097', public.rbac_role_org_super_admin(), null, null, false),
     ('e5f6a7b8-c9d0-4e1f-9a2b-3c4d5e6f7a82', '6aa76066-55ef-4238-ade6-0b32334a4097', public.rbac_role_org_super_admin(), null, null, false),
     ('f1a2b3c4-d5e6-4f70-8a9b-0c1d2e3f4a50', 'd0f1a2b3-c4d5-4e6f-8a90-b1c2d3e4f506', public.rbac_role_org_super_admin(), null, null, false),
-    ('a9b8c7d6-e5f4-4321-9876-543210fedcba', 'f8e7d6c5-b4a3-4291-8f7e-6d5c4b3a2910', public.rbac_role_org_super_admin(), null, null, false);
+    ('a9b8c7d6-e5f4-4321-9876-543210fedcba', 'f8e7d6c5-b4a3-4291-8f7e-6d5c4b3a2910', public.rbac_role_org_super_admin(), null, null, false),
+    ('b8c9d0e1-f2a3-4b4c-9d5e-6f7a8b9c0dc7', '6aa76066-55ef-4238-ade6-0b32334a4097', public.rbac_role_org_super_admin(), null, null, false);
 
     INSERT INTO public.role_bindings (
       principal_type,

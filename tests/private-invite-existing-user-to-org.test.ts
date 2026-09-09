@@ -219,4 +219,33 @@ describe('[POST] /private/invite_existing_user_to_org', () => {
       await fixture.cleanup()
     }
   })
+
+  it.concurrent('allows an org super admin to resend a super admin invite', async () => {
+    const fixture = await createInviteTestFixture({
+      invitedRoleName: 'org_super_admin',
+    })
+    try {
+      const response = await postInviteExistingUserToOrg(authHeaders, {
+        email: USER_EMAIL_NONMEMBER,
+        org_id: fixture.orgId,
+      })
+
+      expect(response.status).toBe(200)
+      const data = await response.json() as { status: string }
+      expect(data.status).toBe('ok')
+
+      const { data: membership, error } = await fixture.supabase
+        .from('org_users')
+        .select('rbac_role_name, is_invite')
+        .eq('org_id', fixture.orgId)
+        .eq('user_id', USER_ID_NONMEMBER)
+        .single()
+      expect(error).toBeNull()
+      expect(membership?.rbac_role_name).toBe('org_super_admin')
+      expect(membership?.is_invite).toBe(true)
+    }
+    finally {
+      await fixture.cleanup()
+    }
+  })
 })

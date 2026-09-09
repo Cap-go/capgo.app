@@ -27,6 +27,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { cwd, env } from 'node:process'
 import { ensureSecureDirectory, readSafeFile, writeFileAtomic } from '../utils/safeWrites'
+import { quoteCredentialsExportTerminalValue } from './credentials-export-terminal'
 
 const CREDENTIALS_DIR = join(homedir(), '.capgo-credentials')
 const CREDENTIALS_FILE = join(CREDENTIALS_DIR, 'credentials.json')
@@ -134,28 +135,71 @@ async function fileToBase64(filePath: string): Promise<string> {
   return buffer.toString('base64')
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isValidSavedCredentialsFile(value: unknown): value is AllCredentials {
+  if (!isPlainRecord(value))
+    return false
+
+  for (const app of Object.values(value)) {
+    if (!isPlainRecord(app))
+      return false
+    for (const platform of ['ios', 'android']) {
+      if (!Object.hasOwn(app, platform))
+        continue
+      const fields = app[platform]
+      if (!isPlainRecord(fields) || Object.values(fields).some(field => typeof field !== 'string'))
+        return false
+    }
+  }
+  return true
+}
+
 /**
  * Load all credentials from file (global or local)
  */
-async function loadAllCredentials(local?: boolean): Promise<AllCredentials> {
+async function loadAllCredentials(local?: boolean, throwOnReadError = false): Promise<AllCredentials> {
+  const filePath = getCredentialsPath(local)
+  let content: string
   try {
-    const filePath = getCredentialsPath(local)
-    const content = await readSafeFile(filePath)
-    return JSON.parse(content) as AllCredentials
+    content = await readSafeFile(filePath)
   }
-  catch {
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+      return {}
+    if (throwOnReadError)
+      throw new Error(`Cannot read saved credentials file: ${quoteCredentialsExportTerminalValue(filePath)}`)
     return {}
   }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(content)
+  }
+  catch {
+    if (throwOnReadError)
+      throw new Error(`Cannot parse saved credentials file: ${quoteCredentialsExportTerminalValue(filePath)}`)
+    return {}
+  }
+  if (throwOnReadError && !isValidSavedCredentialsFile(parsed))
+    throw new Error(`Invalid saved credentials structure: ${quoteCredentialsExportTerminalValue(filePath)}`)
+  return parsed as AllCredentials
 }
 
 /**
  * Load saved credentials for a specific app
  * Checks local file first, then global file
  */
-export async function loadSavedCredentials(appId?: string, local?: boolean): Promise<SavedCredentials | null> {
+export async function loadSavedCredentials(
+  appId?: string,
+  local?: boolean,
+  throwOnReadError = false,
+): Promise<SavedCredentials | null> {
   // If local is explicitly set, only check that location
   if (local !== undefined) {
-    const all = await loadAllCredentials(local)
+    const all = await loadAllCredentials(local, throwOnReadError)
     if (!appId) {
       const appIds = Object.keys(all)
       if (appIds.length === 0)
@@ -166,8 +210,8 @@ export async function loadSavedCredentials(appId?: string, local?: boolean): Pro
   }
 
   // Otherwise, check local first, then global (local takes precedence)
-  const localAll = await loadAllCredentials(true)
-  const globalAll = await loadAllCredentials(false)
+  const localAll = await loadAllCredentials(true, throwOnReadError)
+  const globalAll = await loadAllCredentials(false, throwOnReadError)
 
   // If no appId provided, try to get default (backward compatibility)
   if (!appId) {

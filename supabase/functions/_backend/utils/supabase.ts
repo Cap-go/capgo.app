@@ -1525,6 +1525,11 @@ export async function readStatsSB(c: Context, params: ReadStatsParams) {
       query = query.in('action', params.actions as Database['public']['Enums']['stats_action'][])
   }
 
+  if (params.version_name) {
+    cloudlog({ requestId: c.get('requestId'), message: 'version_name', versionName: params.version_name })
+    query = query.eq('version_name', params.version_name)
+  }
+
   if (params.search) {
     cloudlog({ requestId: c.get('requestId'), message: 'search', search: params.search })
     const searchPattern = buildIlikeContainsPattern(params.search)

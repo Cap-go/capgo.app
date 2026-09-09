@@ -4,7 +4,7 @@ import type { BentoTrackingPayload, TrackOptions } from '../utils/tracking.ts'
 import { Hono } from 'hono/tiny'
 import { APP_TOO_LARGE_EVENT, buildAppTooLargeBentoEvent } from '../utils/app_too_large_tracking.ts'
 import { buildBuilderOnboardingBentoEvent, BUILDER_RECOVERY_MILESTONES } from '../utils/builder_onboarding_recovery.ts'
-import { buildBundleCompatibilityBentoEvent, BUNDLE_INCOMPATIBLE_EVENT, isBreakingChangeGatedByChannelStrategy } from '../utils/bundle_compatibility_recovery.ts'
+import { BUNDLE_INCOMPATIBLE_EVENT, buildBundleCompatibilityBentoEvent, bundleIncompatibleEmailOutcome, isBreakingChangeGatedByChannelStrategy, isCliTrueTag } from '../utils/bundle_compatibility_recovery.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -301,6 +301,82 @@ async function buildAppTooLargeTrackedBentoEvent(
   })
 }
 
+function optionalTagString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
+
+function optionalNonEmptyTagString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+function trackBundleIncompatibleEmail(
+  c: Context<MiddlewareKeyVariables>,
+  input: {
+    userId: unknown
+    orgId: string
+    appId: string
+    channelName: string | undefined
+    incompatibilityAccepted: boolean
+    gatedByStrategy: boolean
+    updateStrategy?: string | null
+    apikeyId: string | undefined
+  },
+) {
+  const tags: Record<string, unknown> = {
+    outcome: bundleIncompatibleEmailOutcome(input.incompatibilityAccepted, input.gatedByStrategy),
+    app_id: input.appId,
+  }
+  if (input.updateStrategy !== undefined)
+    tags.update_strategy = input.updateStrategy ?? 'unknown'
+  if (input.channelName)
+    tags.channel_name = input.channelName
+
+  return backgroundTask(c, trackPosthogEvent(c, {
+    event: BUNDLE_INCOMPATIBLE_EMAIL_EVENT,
+    user_id: typeof input.userId === 'string' ? input.userId : undefined,
+    channel: 'bundle',
+    setPersonProperties: false,
+    groups: { organization: input.orgId },
+    tags,
+    nonPersonTags: input.apikeyId === undefined ? undefined : { apikey_id: input.apikeyId },
+  }))
+}
+
+async function lookupChannelUpdateStrategy(
+  supabase: ReturnType<typeof supabaseWithAuth>,
+  appId: string,
+  channelName: string | undefined,
+) {
+  if (!channelName)
+    return null
+  const { data: channelRow } = await supabase
+    .from('channels')
+    .select('disable_auto_update')
+    .eq('app_id', appId)
+    .eq('name', channelName)
+    .maybeSingle()
+  return channelRow?.disable_auto_update ?? null
+}
+
+async function lookupVersionMinUpdate(
+  supabase: ReturnType<typeof supabaseWithAuth>,
+  appId: string,
+  versionNewName: string | undefined,
+): Promise<{ versionNewId: string | undefined, minUpdateVersion: string | null }> {
+  if (!versionNewName)
+    return { versionNewId: undefined, minUpdateVersion: null }
+  const { data: versionNewData } = await supabase
+    .from('app_versions')
+    .select('id, min_update_version')
+    .eq('app_id', appId)
+    .eq('name', versionNewName)
+    .maybeSingle()
+  return {
+    versionNewId: toIdString(versionNewData?.id),
+    minUpdateVersion: versionNewData?.min_update_version ?? null,
+  }
+}
+
 async function buildBundleIncompatibleBentoEvent(
   c: Context<MiddlewareKeyVariables>,
   supabase: ReturnType<typeof supabaseWithAuth>,
@@ -308,41 +384,35 @@ async function buildBundleIncompatibleBentoEvent(
   appId: string | undefined,
   trackedBody: TrackOptions,
 ) {
-  const channelOverwritten = trackedBody.tags?.channel_overwritten === true
-    || trackedBody.tags?.channel_overwritten === 'true'
+  const channelOverwritten = isCliTrueTag(trackedBody.tags?.channel_overwritten)
   if (!onboardingOrgId || !appId || trackedBody.event !== BUNDLE_INCOMPATIBLE_EVENT || !channelOverwritten)
     return undefined
 
   const tags = trackedBody.tags ?? {}
-  const incompatibleChannel = typeof tags.channel === 'string' ? tags.channel : undefined
-
-  let updateStrategy: string | null = null
-  if (incompatibleChannel) {
-    const { data: channelRow } = await supabase
-      .from('channels')
-      .select('disable_auto_update')
-      .eq('app_id', appId)
-      .eq('name', incompatibleChannel)
-      .maybeSingle()
-    updateStrategy = channelRow?.disable_auto_update ?? null
+  const incompatibilityAccepted = isCliTrueTag(tags.incompatibility_accepted)
+  const incompatibleChannel = optionalTagString(tags.channel)
+  const apikeyId = toIdString(c.get('apikey')?.id)
+  const emailBase = {
+    userId: trackedBody.user_id,
+    orgId: onboardingOrgId,
+    appId,
+    channelName: incompatibleChannel,
+    apikeyId,
   }
-  const versionNewName = typeof tags.version_new_name === 'string' && tags.version_new_name.length > 0
-    ? tags.version_new_name
-    : undefined
-  const versionOldName = typeof tags.version_old_name === 'string' ? tags.version_old_name : undefined
 
-  let versionNewId: string | undefined
-  let minUpdateVersion: string | null = null
-  if (versionNewName) {
-    const { data: versionNewData } = await supabase
-      .from('app_versions')
-      .select('id, min_update_version')
-      .eq('app_id', appId)
-      .eq('name', versionNewName)
-      .maybeSingle()
-    versionNewId = toIdString(versionNewData?.id)
-    minUpdateVersion = versionNewData?.min_update_version ?? null
+  if (incompatibilityAccepted) {
+    await trackBundleIncompatibleEmail(c, {
+      ...emailBase,
+      incompatibilityAccepted: true,
+      gatedByStrategy: false,
+    })
+    return undefined
   }
+
+  const updateStrategy = await lookupChannelUpdateStrategy(supabase, appId, incompatibleChannel)
+  const versionNewName = optionalNonEmptyTagString(tags.version_new_name)
+  const versionOldName = optionalTagString(tags.version_old_name)
+  const { versionNewId, minUpdateVersion } = await lookupVersionMinUpdate(supabase, appId, versionNewName)
 
   // Gated by the channel strategy: devices on the previous (incompatible) native
   // build never receive this bundle, so the breaking change was done correctly.
@@ -352,22 +422,6 @@ async function buildBundleIncompatibleBentoEvent(
     versionNewName,
     minUpdateVersion,
   })
-  const apikeyId = c.get('apikey')?.id
-
-  await backgroundTask(c, trackPosthogEvent(c, {
-    event: BUNDLE_INCOMPATIBLE_EMAIL_EVENT,
-    user_id: typeof trackedBody.user_id === 'string' ? trackedBody.user_id : undefined,
-    channel: 'bundle',
-    setPersonProperties: false,
-    groups: { organization: onboardingOrgId },
-    tags: {
-      outcome: gatedByStrategy ? 'sent_expected' : 'sent',
-      update_strategy: updateStrategy ?? 'unknown',
-      app_id: appId,
-      ...(incompatibleChannel ? { channel_name: incompatibleChannel } : {}),
-    },
-    nonPersonTags: apikeyId === undefined ? undefined : { apikey_id: apikeyId },
-  }))
 
   const [orgResult, appResult] = await Promise.all([
     supabase.from('orgs').select('id, name').eq('id', onboardingOrgId).single(),
@@ -380,13 +434,21 @@ async function buildBundleIncompatibleBentoEvent(
     return undefined
   }
 
+  // Track sent/sent_expected only after lookup succeeds so PostHog matches Bento.
+  await trackBundleIncompatibleEmail(c, {
+    ...emailBase,
+    incompatibilityAccepted: false,
+    gatedByStrategy,
+    updateStrategy,
+  })
+
   return buildBundleCompatibilityBentoEvent({
     event: trackedBody.event,
     orgId: onboardingOrgId,
     appId,
     channelOverwritten,
     channel: incompatibleChannel,
-    source: typeof tags.source === 'string' ? tags.source : undefined,
+    source: optionalTagString(tags.source),
     versionNewId,
     versionNewName,
     versionOldId: toIdString(tags.version_old_id),
@@ -395,6 +457,7 @@ async function buildBundleIncompatibleBentoEvent(
     appName: appResult.data?.name ?? undefined,
     disableAutoUpdate: updateStrategy,
     minUpdateVersion,
+    incompatibilityAccepted,
   })
 }
 
@@ -449,7 +512,7 @@ app.post('/', middlewareAuth(), async (c) => {
   // the version bump keeps the bundle off devices running the previous native
   // build, the breaking change was done correctly and the calmer
   // `bundle_incompatible_expected` event is emitted instead of the crash warning.
-  // Both outcomes are recorded in PostHog (sent vs sent_expected).
+  // All three outcomes are recorded in PostHog (sent vs sent_expected vs skipped_accepted).
   const bundleIncompatibleBentoEvent: BentoTrackingPayload | undefined = await buildBundleIncompatibleBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
   const aiInstructionsCopiedBentoEvent = buildAiInstructionsCopiedBentoEvent({
     appId,

@@ -2,7 +2,6 @@
 import type { TableColumn } from './comp_def'
 import { FormKit } from '@formkit/vue'
 import { useDebounceFn } from '@vueuse/core'
-import DOMPurify from 'dompurify'
 import {
   computed,
   nextTick,
@@ -30,6 +29,7 @@ import IconReload from '~icons/tabler/reload'
 import FilterModal from '~/components/FilterModal.vue'
 import { RenderCell } from '~/components/RenderCell'
 import { createClearedFilters } from '~/composables/useFilterModal'
+import { sanitizeHtml } from '~/utils/sanitize'
 
 interface Props {
   isLoading?: boolean
@@ -421,7 +421,7 @@ function displayValueKey(elem: any, col: TableColumn | undefined) {
     return ''
   const text = col.displayFunction ? col.displayFunction(elem) : elem[col.key]
   if (col.sanitizeHtml)
-    return DOMPurify.sanitize(text)
+    return sanitizeHtml(text)
   return text
 }
 

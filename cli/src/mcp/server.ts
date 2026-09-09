@@ -21,6 +21,7 @@ import {
   mcpGetStatsInputSchema,
   mcpListBundlesInputSchema,
   mcpListChannelsInputSchema,
+  mcpObserveInputSchema,
   mcpProbeInputSchema,
   mcpRequestBuildInputSchema,
   mcpUpdateAppInputSchema,
@@ -212,6 +213,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       autoSetBundle,
       autoBump,
       encrypt,
+      acceptIncompatible,
       capacitorConfig,
     }) => {
       const result = await sdk.uploadBundle({
@@ -228,6 +230,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
         autoSetBundle,
         autoBump,
         encrypt,
+        acceptIncompatible,
         capacitorConfig,
       })
       if (!result.success) {
@@ -434,7 +437,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       description: 'Update channel settings including linked bundle and targeting options',
       inputSchema: mcpUpdateChannelInputSchema,
     },
-    async ({ appId, channelId, bundle, state, downgrade, ios, android, selfAssign, disableAutoUpdate, dev, emulator, device, prod, rolloutBundle, rolloutPercentage, rolloutPercentageBps, rolloutEnable, rolloutDisable, rolloutPause, rolloutResume, rolloutRollback, rolloutPromote, rolloutCacheTtlSeconds, autoPauseEnabled, autoPauseDisabled, autoPauseWindowMinutes, autoPauseFailureRateBps, autoPauseConfidence, autoPauseMinAttempts, autoPauseMinFailures, autoPauseAction, autoPauseCooldownMinutes }) => {
+    async ({ appId, channelId, bundle, state, downgrade, ios, android, selfAssign, disableAutoUpdate, dev, emulator, device, prod, rolloutBundle, rolloutPercentage, rolloutPercentageBps, rolloutEnable, rolloutDisable, rolloutPause, rolloutResume, rolloutRollback, rolloutPromote, rolloutCacheTtlSeconds, autoPauseEnabled, autoPauseDisabled, autoPauseWindowMinutes, autoPauseFailureRateBps, autoPauseConfidence, autoPauseMinAttempts, autoPauseMinFailures, autoPauseAction, autoPauseCooldownMinutes, acceptIncompatible }) => {
       const payload = parseSchema(updateChannelOptionsSchema, {
         appId,
         channelId,
@@ -468,6 +471,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
         autoPauseMinFailures,
         autoPauseAction,
         autoPauseCooldownMinutes,
+        acceptIncompatible,
       })
       const result = await sdk.updateChannel(payload)
       if (!result.success) {
@@ -631,6 +635,35 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
     },
   )
 
+  server.registerTool(
+    'capgo_observe',
+    {
+      description: 'Query Capgo Observe launch, crash, WebView, and navigation metrics. Start with view=summary and follow findings.next. Use view=device as the session timeline. Per-screen data needs metadata.route or action=app_nav from history/popstate/hashchange/appUrlOpen (no Expo Router).',
+      inputSchema: mcpObserveInputSchema,
+    },
+    async ({ appId, view, days, action, deviceId, versionName, sort, limit }) => {
+      const result = await sdk.observe({
+        appId,
+        view,
+        days,
+        action,
+        deviceId,
+        versionName,
+        sort,
+        limit,
+      })
+      if (!result.success) {
+        return formatMcpError(result)
+      }
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify(result.data, null, 2),
+        }],
+      }
+    },
+  )
+
   // ============================================================================
   // Build Management Tools
   // ============================================================================
@@ -641,12 +674,14 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       description: 'Request a native iOS/Android build from Capgo Cloud',
       inputSchema: mcpRequestBuildInputSchema,
     },
-    async ({ appId, platform, path, nodeModules }) => {
+    async ({ appId, platform, path, nodeModules, cache, cacheKey }) => {
       const result = await sdk.requestBuild({
         appId,
         platform,
         path,
         nodeModules,
+        cache,
+        cacheKey,
         // Credentials should be pre-saved using the CLI
       })
       if (!result.success) {

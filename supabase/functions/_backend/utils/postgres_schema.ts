@@ -128,6 +128,9 @@ export const orgs = pgTable('orgs', {
   onboarding: jsonb('onboarding').notNull().default({ intent: 'unknown' }),
   email_preferences: jsonb('email_preferences'),
   has_usage_credits: boolean('has_usage_credits').notNull().default(false),
+  auto_top_up_enabled: boolean('auto_top_up_enabled').notNull().default(false),
+  auto_top_up_threshold: numeric('auto_top_up_threshold', { precision: 18, scale: 6 }).notNull().default('10'),
+  auto_top_up_last_attempt_at: timestamp('auto_top_up_last_attempt_at', { withTimezone: true }),
 })
 
 export const notifications = pgTable('notifications', {

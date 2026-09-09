@@ -3,6 +3,7 @@ import {
   buildNativeObservePluginTotalDevicesCFQuery,
   buildNativeObservePluginVersionsCFQuery,
   buildPlatformUpdateDeliveryDailyCFQuery,
+  buildPlatformUpdateDeliveryDeviceCountCFQuery,
   buildPlatformUpdateDeliveryOverviewCFQuery,
   buildReadDevicesCFQuery,
   buildUpdateDeliveryTimingEventsCFQuery,
@@ -297,6 +298,14 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
         }),
       },
       {
+        name: 'buildPlatformUpdateDeliveryDeviceCountCFQuery.platform',
+        query: buildPlatformUpdateDeliveryDeviceCountCFQuery({
+          query_start: '2026-05-31T22:00:00.000Z',
+          period_start: SAMPLE_START,
+          end_date: SAMPLE_END,
+        }),
+      },
+      {
         name: 'buildNativeObservePluginVersionsCFQuery.default',
         query: buildNativeObservePluginVersionsCFQuery(SAMPLE_APP_ID, 12),
       },
@@ -368,6 +377,7 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
       search: 'demo',
       actions: ['get', 'set'],
       deviceIds: [SAMPLE_DEVICE_ID],
+      version_name: '1.2.3',
       order: [{ key: 'created_at', sortable: 'desc' }],
       limit: 10,
     }))

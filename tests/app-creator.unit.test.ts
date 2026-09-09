@@ -3,6 +3,7 @@ import {
   addAppCreatorToOnboarding,
   buildAppCreatorEventDetails,
   getAppCreatorUserId,
+  resolveAppCreatorEmail,
 } from '../supabase/functions/_backend/utils/app_creator.ts'
 
 const creatorUserId = '6aa76066-55ef-4238-ade6-0b32334a4097'
@@ -29,6 +30,11 @@ describe('app creator metadata', () => {
       created_by_user_id: creatorUserId,
       created_by_email: 'creator@capgo.app',
     })
+  })
+
+  it.concurrent('uses the stored user email when JWT claims do not contain one', () => {
+    expect(resolveAppCreatorEmail(undefined, 'creator@capgo.app')).toBe('creator@capgo.app')
+    expect(resolveAppCreatorEmail('', 'creator@capgo.app')).toBe('creator@capgo.app')
   })
 
   it.concurrent('omits invalid or missing creator metadata', () => {

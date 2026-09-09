@@ -293,6 +293,7 @@ describe('attachment reads after app deletion', () => {
 
     const deleteResponse = await fetchTestRequest(`${BASE_URL}/app/${appId}`, {
       method: 'DELETE',
+      retryUnsafe: true,
       headers: {
         Authorization: deleteKey!,
       },

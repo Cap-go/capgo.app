@@ -1,5 +1,12 @@
 import type { Page } from '@playwright/test'
+import { env } from 'node:process'
+import { createClient } from '@supabase/supabase-js'
+import { getSupabaseWorktreeConfig } from '../../scripts/supabase-worktree-config'
 import { expect, test } from '../support/commands'
+
+const { ports: supabasePorts } = getSupabaseWorktreeConfig()
+const localSupabaseUrl = `http://127.0.0.1:${supabasePorts.api}`
+const localSupabaseAnonKey = env.SUPABASE_ANON_KEY || 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH'
 
 async function loginToOnboarding(page: Page, email: string, password: string) {
   await page.login(email, password, /\/onboarding\/app/)
@@ -9,6 +16,59 @@ async function continuePastWelcome(page: Page) {
   const continueButton = page.locator('[data-test="onboarding-welcome-continue"]')
   await expect(continueButton).toBeVisible()
   await continueButton.click()
+}
+
+async function continuePastDevelopmentEnvironmentIfShown(page: Page) {
+  const assistantOption = page.locator('[data-test="onboarding-development-environment-ai_assistant"]')
+  if (await assistantOption.isVisible()) {
+    await assistantOption.click()
+    await page.click('[data-test="app-onboarding-continue-development-environment"]')
+  }
+}
+
+async function forceWebNativeOnboardingTreatments(email: string, password: string) {
+  const supabase = createClient(localSupabaseUrl, localSupabaseAnonKey)
+  const { data: sessionData, error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+  if (signInError || !sessionData.user)
+    throw signInError ?? new Error('Cannot sign in treatment user')
+
+  const { data: profile, error: profileError } = await supabase
+    .from('users')
+    .select('onboarding')
+    .eq('id', sessionData.user.id)
+    .single()
+  if (profileError)
+    throw profileError
+
+  const onboarding = profile.onboarding && typeof profile.onboarding === 'object' && !Array.isArray(profile.onboarding)
+    ? profile.onboarding
+    : {}
+  const abtests = onboarding.abtests && typeof onboarding.abtests === 'object' && !Array.isArray(onboarding.abtests)
+    ? onboarding.abtests
+    : {}
+  const { error: updateError } = await supabase
+    .from('users')
+    .update({
+      onboarding: {
+        ...onboarding,
+        abtests: {
+          ...abtests,
+          webnativeapp_publish_intent: {
+            assigned_at: new Date().toISOString(),
+            branch: 'A',
+          },
+          webnativeapp_development_environment: {
+            assigned_at: new Date().toISOString(),
+            branch: 'C',
+          },
+        },
+      },
+    })
+    .eq('id', sessionData.user.id)
+  if (updateError)
+    throw updateError
+
+  await supabase.auth.signOut()
 }
 
 async function expectProtectedRouteRedirect(page: Page, targetPath: string, expectedUrl: RegExp, expectedSelector: string) {
@@ -69,6 +129,7 @@ test.describe('Registration', () => {
     await continuePastWelcome(page)
     await page.click('[data-test="onboarding-intent-ota"]')
     await page.click('[data-test="app-onboarding-continue-intent"]')
+    await continuePastDevelopmentEnvironmentIfShown(page)
 
     await expect(page.locator('[data-test="app-onboarding-existing-yes"]')).toHaveCount(0)
     await expect(page.locator('[data-test="app-onboarding-existing-no"]')).toHaveCount(0)
@@ -119,6 +180,7 @@ test.describe('Registration', () => {
     await continuePastWelcome(page)
     await page.click('[data-test="onboarding-intent-ota"]')
     await page.click('[data-test="app-onboarding-continue-intent"]')
+    await continuePastDevelopmentEnvironmentIfShown(page)
     await page.fill('[data-test="app-onboarding-name"]', appName)
     await continueFromAppNameToIcon(page)
     await Promise.all([
@@ -147,6 +209,50 @@ test.describe('Registration', () => {
     await continuePastWelcome(page)
     await expect(page.locator('[data-test="onboarding-intent-ota"]')).toBeVisible()
     await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveCount(0)
+  })
+
+  test('should recommend WebNativeApp to treatment users publishing without existing users', async ({ page }) => {
+    const uniqueSuffix = Date.now()
+    const email = `webnative-treatment-e2e-${uniqueSuffix}@example.com`
+    const password = 'Password123!'
+    const appName = `WebNative Treatment ${uniqueSuffix}`
+
+    await page.fill('[data-test="email"]', email)
+    await page.fill('[data-test="first_name"]', 'WebNative')
+    await page.fill('[data-test="last_name"]', 'Treatment')
+    await page.fill('[data-test="password"]', password)
+    await page.fill('[data-test="confirm-password"]', password)
+    await page.click('[data-test="submit"]')
+
+    await page.waitForURL(/\/onboarding\/app/)
+    await expect(page.locator('[data-test="onboarding-welcome-continue"]')).toBeVisible()
+    await forceWebNativeOnboardingTreatments(email, password)
+    await page.reload()
+    await expect(page.locator('[data-test="onboarding-resume-continue"]')).toBeVisible()
+    await page.locator('[data-test="onboarding-resume-continue"]').click()
+
+    await expect(page.locator('[data-test="onboarding-intent-publish"]')).toBeVisible()
+    await expect(page.locator('[data-test="onboarding-development-environment-hosted_builder"]')).toHaveCount(0)
+    await page.click('[data-test="onboarding-intent-publish"]')
+    await page.click('[data-test="app-onboarding-continue-intent"]')
+    await expect(page.locator('[data-test="onboarding-development-environment-hosted_builder"]')).toBeVisible()
+    await expect(page.locator('[data-test="onboarding-intent-publish"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="app-onboarding-skip-development-environment"]')).toBeVisible()
+    await expect(page.locator('[data-test="app-onboarding-continue-development-environment"]')).toHaveCount(0)
+    await page.click('[data-test="onboarding-development-environment-hosted_builder"]')
+    await expect(page.locator('[data-test="app-onboarding-continue-development-environment"]')).toBeVisible()
+    await page.click('[data-test="app-onboarding-continue-development-environment"]')
+    await page.fill('[data-test="app-onboarding-name"]', appName)
+    await continueFromAppNameToOrganization(page)
+
+    await page.locator('[data-test="onboarding-starting-out"]').click()
+    await expect(page.locator('[data-test="onboarding-webnative-recommendation"]')).toBeVisible()
+    await expect(page.locator('[data-test="onboarding-webnative-check-website"]')).toHaveAttribute('href', 'https://webnativeapp.com/?ref=capgo')
+    await expect(page.locator('[data-test="onboarding-create-org"]')).toHaveCount(0)
+
+    await page.click('[data-test="onboarding-webnative-continue-capgo"]')
+    await expect(page.locator('[data-test="onboarding-webnative-recommendation"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="onboarding-create-org"]')).toBeEnabled()
   })
 
   test('should allow new users to log out from org onboarding', async ({ page }) => {

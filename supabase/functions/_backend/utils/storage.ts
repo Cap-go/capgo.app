@@ -229,6 +229,10 @@ export async function createSignedImageUrl(
   if (!scope || !isAllowedImagePath(normalized, scope))
     return null
 
+  return signImagesObjectKey(c, normalized)
+}
+
+async function signImagesObjectKey(c: Context, normalized: string) {
   const { data, error } = await supabaseAdmin(c)
     .storage
     .from('images')
@@ -238,4 +242,43 @@ export async function createSignedImageUrl(
     return null
 
   return data.signedUrl
+}
+
+/**
+ * Sign any stored images-bucket object for the platform-admin dashboard.
+ * Must only be called from is_platform_admin paths. Skips org ownership so
+ * admins can preview logos for apps they do not belong to.
+ */
+export async function createPlatformAdminSignedImageUrl(
+  c: Context,
+  rawPath?: string | null,
+) {
+  if (!rawPath)
+    return null
+
+  const allowedOrigins = getStorageAllowedOrigins(c)
+
+  if (rawPath.includes('://')) {
+    try {
+      const url = new URL(rawPath)
+      const isOurStoragePath = isStorageImagePathname(url.pathname)
+        && allowedOrigins.includes(url.origin)
+      if (!isOurStoragePath)
+        return rawPath
+    }
+    catch {
+      return rawPath
+    }
+  }
+
+  const normalized = normalizeImagePath(rawPath, { allowedOrigins })
+  if (!normalized || hasUnsafeImagePathSegments(normalized) || !isOwnershipBearingImagePath(normalized))
+    return null
+
+  try {
+    return await signImagesObjectKey(c, normalized)
+  }
+  catch {
+    return null
+  }
 }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Factor } from '@supabase/supabase-js'
 import type { Ref } from 'vue'
+import type { LoginAuthStatus } from '~/utils/loginActions'
 import { Capacitor } from '@capacitor/core'
 import { setErrors } from '@formkit/core'
 import { FormKit, FormKitMessages } from '@formkit/vue'
@@ -10,6 +11,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
+import IconScanQrCode from '~icons/lucide/scan-qr-code'
 import iconEmail from '~icons/oui/email?raw'
 import iconPassword from '~icons/ph/key?raw'
 import mfaIcon from '~icons/simple-icons/2fas?raw'
@@ -17,6 +19,8 @@ import { hideLoader } from '~/services/loader'
 import { autoAuth, defaultApiHost, hashEmail, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { isCapgoDomainReferrer, isDirectLoginLanding } from '~/utils/capgoReferrer'
+import { getLoginActionVisibility } from '~/utils/loginActions'
+import { validateRedirectPath } from '~/utils/safeRedirect'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
 const route = useRoute('/login')
@@ -25,7 +29,7 @@ const isLoading = ref(false)
 const isMobile = ref(Capacitor.isNativePlatform())
 const turnstileToken = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
-const statusAuth: Ref<'login' | '2fa'> = ref('login')
+const statusAuth: Ref<LoginAuthStatus> = ref('login')
 const mfaLoginFactor: Ref<Factor | null> = ref(null)
 const mfaChallengeId: Ref<string> = ref('')
 const mfaCode = ref('')
@@ -38,9 +42,10 @@ const captchaComponent = ref<InstanceType<typeof VueTurnstile> | null>(null)
 
 // Keep email, password, and OTP in one form so password managers can fill them
 // with a single biometric prompt. Password stays hidden until the domain is
-// known not to use SSO. SSO domains never show a password field.
+// known not to enforce SSO. Optional SSO still shows password login.
 const emailForLogin = ref('')
 const hasSso = ref(false)
+const enforceSso = ref(false)
 const lastCheckedEmail = ref('')
 const passwordPathReady = ref(false)
 const domainCheckTimeoutMs = 5000
@@ -53,6 +58,7 @@ let domainCheckSeq = 0
 
 const version = import.meta.env.VITE_APP_VERSION
 const isLoginStep = computed(() => statusAuth.value === 'login')
+const loginActionVisibility = computed(() => getLoginActionVisibility(statusAuth.value, passwordPathReady.value))
 const emailValidation = computed(() => (isLoginStep.value ? 'required:trim|email' : ''))
 const passwordValidation = computed(() => (passwordPathReady.value ? 'required:trim' : ''))
 const mfaValidation = computed(() => (statusAuth.value === '2fa' ? 'required|mfa_code_validation' : ''))
@@ -206,12 +212,10 @@ onBeforeUnmount(() => {
 })
 
 async function nextLogin() {
-  if (route.query.to && typeof route.query.to === 'string') {
-    await router.replace(route.query.to)
-  }
-  else {
-    await router.replace('/dashboard')
-  }
+  const redirectTarget = typeof route.query.to === 'string'
+    ? validateRedirectPath(route.query.to)
+    : '/dashboard'
+  await router.replace(redirectTarget)
   setTimeout(async () => {
     isLoading.value = false
   }, 500)
@@ -386,14 +390,16 @@ async function refreshSsoForEmail(email: string) {
     if (!isCurrentDomainCheck(seq, trimmed))
       return
     hasSso.value = result.has_sso
+    enforceSso.value = result.has_sso && result.enforce_sso === true
     lastCheckedEmail.value = trimmed
-    passwordPathReady.value = !result.has_sso
+    passwordPathReady.value = !enforceSso.value
   }
   catch (error) {
     if (!isCurrentDomainCheck(seq, trimmed))
       return
     console.error('SSO domain check failed', error)
     hasSso.value = false
+    enforceSso.value = false
     lastCheckedEmail.value = ''
     passwordPathReady.value = true
   }
@@ -423,18 +429,20 @@ watch(emailForLogin, (email) => {
 
   if (!isCompletableEmail(trimmed)) {
     hasSso.value = false
+    enforceSso.value = false
     passwordPathReady.value = false
     lastCheckedEmail.value = ''
     return
   }
 
   if (lastCheckedEmail.value === trimmed) {
-    passwordPathReady.value = !hasSso.value
+    passwordPathReady.value = !enforceSso.value
     return
   }
 
   if (domain !== lastDomain) {
     hasSso.value = false
+    enforceSso.value = false
     passwordPathReady.value = false
     lastCheckedEmail.value = ''
   }
@@ -461,7 +469,7 @@ async function handleLoginSubmit(form: { email: string, password: string, code?:
     console.error('SSO domain check failed', error)
   }
 
-  if (hasSso.value) {
+  if (enforceSso.value) {
     await handleSsoLogin()
     return
   }
@@ -487,7 +495,7 @@ async function handleSsoLogin() {
   try {
     const redirectUrl = new URL('/sso-callback', globalThis.location.origin)
     if (route.query.to && typeof route.query.to === 'string') {
-      redirectUrl.searchParams.set('to', route.query.to)
+      redirectUrl.searchParams.set('to', validateRedirectPath(route.query.to))
     }
 
     const { data, error } = await supabase.auth.signInWithSSO({
@@ -928,7 +936,7 @@ onMounted(checkLogin)
                       />
 
                       <p v-if="hasSso" class="text-sm text-slate-600 dark:text-slate-300">
-                        {{ t('sso-detected') }}
+                        {{ enforceSso ? t('sso-required') : t('sso-detected') }}
                       </p>
 
                       <div v-if="hasSso">
@@ -956,7 +964,7 @@ onMounted(checkLogin)
 
                       <!--
                         Keep password in the form from first paint so password managers can fill
-                        it with the email. Reveal it only after the domain is known not to use SSO.
+                        it with the email. Reveal it after the domain is known not to enforce SSO.
                       -->
                       <div
                         :style="passwordPathReady ? undefined : autofillPreserveHiddenStyle"
@@ -1015,7 +1023,7 @@ onMounted(checkLogin)
 
                     <FormKitMessages data-test="form-error" />
 
-                    <div v-show="passwordPathReady">
+                    <div v-show="loginActionVisibility.login">
                       <div class="inline-flex justify-center items-center w-full">
                         <button
                           type="submit"
@@ -1039,7 +1047,7 @@ onMounted(checkLogin)
                       </div>
                     </div>
 
-                    <div v-show="statusAuth === '2fa'">
+                    <div v-show="loginActionVisibility.verify">
                       <div class="inline-flex justify-center items-center w-full">
                         <button
                           type="submit"
@@ -1104,7 +1112,8 @@ onMounted(checkLogin)
               <button type="button" class="mt-3" :class="authGhostButtonClass" @click="openSupport">
                 {{ t("support") }}
               </button>
-              <button type="button" v-if="isMobile" class="mt-3" :class="authGhostButtonClass" @click="openScan">
+              <button v-if="isMobile" type="button" class="mt-3 inline-flex items-center gap-2" :class="authGhostButtonClass" @click="openScan">
+                <IconScanQrCode class="h-4 w-4" aria-hidden="true" />
                 {{ t("test-bundle") }}
               </button>
             </section>

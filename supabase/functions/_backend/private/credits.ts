@@ -2,6 +2,12 @@ import type { Context } from 'hono'
 import type Stripe from 'stripe'
 import type { AuthInfo, MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
+import {
+  getAutoTopUpSettings,
+  MIN_AUTO_TOP_UP_THRESHOLD,
+  normalizeAutoTopUpThreshold,
+  saveAutoTopUpSettings,
+} from '../utils/credit_auto_top_up.ts'
 import { getFallbackCreditProductId } from '../utils/credits.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
@@ -707,4 +713,42 @@ app.post('/complete-top-up', middlewareAuth, async (c) => {
   }
 
   return c.json({ grant })
+})
+
+app.get('/auto-top-up', middlewareAuth, async (c) => {
+  const orgId = c.req.query('orgId') ?? c.req.query('org_id')
+  if (!orgId)
+    throw simpleError('missing_org_id', 'Organization id is required')
+  if (!await checkPermission(c, 'org.read_billing', { orgId }))
+    throw simpleError('not_authorized', 'Not authorized')
+
+  return c.json(await getAutoTopUpSettings(c as AppContext, orgId))
+})
+
+app.post('/auto-top-up', middlewareAuth, async (c) => {
+  const body = await parseBody<{ orgId?: string, enabled?: boolean, threshold?: number }>(c)
+  if (!body.orgId)
+    throw simpleError('missing_org_id', 'Organization id is required')
+  if (!await checkPermission(c, 'org.update_billing', { orgId: body.orgId }))
+    throw simpleError('not_authorized', 'Not authorized')
+
+  if (body.enabled !== undefined && typeof body.enabled !== 'boolean')
+    throw simpleError('invalid_enabled', 'enabled must be a boolean')
+
+  const threshold = normalizeAutoTopUpThreshold(body.threshold)
+  if (threshold === null)
+    throw simpleError('invalid_threshold', `Auto top-up amount must be at least ${MIN_AUTO_TOP_UP_THRESHOLD}`)
+
+  try {
+    return c.json(await saveAutoTopUpSettings(c as AppContext, body.orgId, body.enabled === true, threshold))
+  }
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (message === 'payment_method_required')
+      throw simpleError('payment_method_required', 'Add a card before enabling auto top-up')
+    if (message === 'stripe_customer_missing')
+      throw simpleError('stripe_customer_missing', 'Organization does not have a Stripe customer')
+    cloudlogErr({ requestId: c.get('requestId'), message: 'auto_top_up_save_failed', orgId: body.orgId, error })
+    throw simpleError('auto_top_up_save_failed', 'Failed to save auto top-up settings')
+  }
 })

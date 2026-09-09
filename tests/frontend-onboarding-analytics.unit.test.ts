@@ -86,8 +86,9 @@ describe('buildFrontendOnboardingHogql', () => {
     expect(query).toContain('JSONExtractString(toString(properties), \'flow\') = \'pre_org\'')
     expect(query).toContain('JSONExtractString(toString(properties), \'$host\') = \'console.capgo.app\'')
     expectAugust22ProductionHostFallback(query)
-    expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) AS onboarding_version')
-    expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) IN (1, 2, 3, 4)')
+    expect(query).toContain("multiIf(toString(properties.onboarding_version) IN ('5.A', '5.C'), 4, toIntOrZero(toString(properties.onboarding_version))) AS onboarding_version")
+    expect(query).toContain("toIntOrZero(toString(properties.onboarding_version)) IN (1, 2, 3, 4)")
+    expect(query).toContain("toString(properties.onboarding_version) IN ('5.A', '5.C')")
     expect(query).not.toContain('toInt64OrZero')
     expect(query).toContain('JSONExtractString(toString(properties), \'onboarding_attempt_id\')')
     expect(query).toContain('JSONExtractString(toString(properties), \'step\')')
@@ -135,6 +136,7 @@ describe('buildFrontendOnboardingWelcomeHogql', () => {
 
     expect(query).toContain("event = 'onboarding_step_viewed'")
     expect(query).toContain("toIntOrZero(toString(properties.onboarding_version)) = 4")
+    expect(query).toContain("toString(properties.onboarding_version) IN ('5.A', '5.C')")
     expect(query).toContain("JSONExtractString(toString(properties), 'flow') = 'pre_org'")
     expect(query).toContain("JSONExtractString(toString(properties), '$host') = 'console.capgo.app'")
     expectAugust22ProductionHostFallback(query)
@@ -167,6 +169,7 @@ describe('buildFrontendOnboardingTabSwitchHogql', () => {
     expect(query).toContain("JSONExtractString(toString(properties), '$host') = 'console.capgo.app'")
     expectAugust22ProductionHostFallback(query)
     expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) = 4')
+    expect(query).toContain("toString(properties.onboarding_version) IN ('5.A', '5.C')")
     expect(query).toContain("toString(toDate(toTimeZone(timestamp, 'UTC'))) AS date")
     expect(query).not.toContain("toDate(timestamp, 'UTC')")
     expect(query).toContain("step IN ('welcome', 'intent', 'app_name', 'app_id', 'app_icon', 'organization')")
@@ -646,6 +649,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         { attempt_id: ['array'], onboarding_version: 2, intent_ms: startMs + 1_000, details_ms: startMs + 2_000, total_attempts: 10 },
         { attempt_id: 'unknown-version', onboarding_version: 5, intent_ms: startMs + 1_000, total_attempts: 10 },
         { attempt_id: 'string-version', onboarding_version: '3', intent_ms: startMs + 1_000, total_attempts: 10 },
+        { attempt_id: 'webnative-label', onboarding_version: '5.A', intent_ms: startMs + 1_000, total_attempts: 10 },
         { attempt_id: 'boolean-step', onboarding_version: 4, intent_ms: startMs + 2_000, details_ms: true, organization_ms: [], setup_ms: {}, interaction_events: 'not-an-array', total_attempts: 10 },
         { attempt_id: 'valid', onboarding_version: 4, intent_ms: String(startMs + 1_000), details_ms: undefined, organization_ms: 0, setup_ms: 'not-a-number', interaction_events: [[' valid ', startMs + 2_000], ['', startMs + 2_000], ['missing-time'], 42, null], total_attempts: 10 },
       ],
@@ -670,9 +674,9 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     )
 
     expect(result).toMatchObject({
-      v4_kpis: { attempts: 2, completed: 0, completion_rate: 0 },
+      v4_kpis: { attempts: 3, completed: 0, completion_rate: 0 },
       funnels: { v4: [
-        { key: 'intent', reached: 2 },
+        { key: 'intent', reached: 3 },
         { key: 'app_name', reached: 0 },
         { key: 'app_id', reached: 0 },
         { key: 'app_icon', reached: 0 },

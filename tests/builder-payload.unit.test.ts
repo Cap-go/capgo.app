@@ -3,15 +3,21 @@ import { builderPayloadTestUtils } from '../supabase/functions/_backend/public/b
 
 const { buildBuilderPayload } = builderPayloadTestUtils
 
+const baseInput = {
+  orgId: 'org-123',
+  actorUserId: 'user-1',
+  appId: 'com.test.app',
+  uploadPath: 'orgs/org-123/apps/com.test/native-builds/session.zip',
+  platform: 'ios',
+  buildOptions: {},
+  buildCredentials: {},
+}
+
 describe('builder payload shape', () => {
   it.concurrent('maps build_options (snake_case input) to buildOptions (camelCase output)', () => {
     const payload = buildBuilderPayload({
-      orgId: 'org-123',
-      actorUserId: 'user-1',
-      uploadPath: 'orgs/org-123/apps/com.test/native-builds/session.zip',
-      platform: 'ios',
+      ...baseInput,
       buildOptions: { platform: 'ios', buildMode: 'release', cliVersion: '7.83.0' },
-      buildCredentials: {},
     })
 
     expect(payload).toHaveProperty('buildOptions')
@@ -22,11 +28,8 @@ describe('builder payload shape', () => {
 
   it.concurrent('maps build_credentials (snake_case input) to buildCredentials (camelCase output)', () => {
     const payload = buildBuilderPayload({
-      orgId: 'org-123',
-      actorUserId: 'user-1',
-      uploadPath: 'orgs/org-123/apps/com.test/native-builds/session.zip',
+      ...baseInput,
       platform: 'android',
-      buildOptions: {},
       buildCredentials: { KEYSTORE_KEY_ALIAS: 'alias', KEYSTORE_KEY_PASSWORD: 'val' },
     })
 
@@ -38,21 +41,19 @@ describe('builder payload shape', () => {
 
   it.concurrent('does not include a legacy flat credentials field', () => {
     const payload = buildBuilderPayload({
-      orgId: 'org-123',
-      actorUserId: 'user-1',
+      ...baseInput,
       uploadPath: 'path.zip',
-      platform: 'ios',
-      buildOptions: {},
       buildCredentials: { SOME_SECRET: 'val' },
     })
 
     expect(payload).not.toHaveProperty('credentials')
   })
 
-  it.concurrent('includes userId (org), actorUserId (human), artifactKey, and fastlane with correct values', () => {
+  it.concurrent('includes userId (org), actorUserId (human), appId, artifactKey, and fastlane with correct values', () => {
     const payload = buildBuilderPayload({
       orgId: 'org-456',
       actorUserId: 'user-789',
+      appId: 'com.example.app',
       uploadPath: 'orgs/org-456/apps/com.example/native-builds/uuid.zip',
       platform: 'android',
       buildOptions: {},
@@ -61,14 +62,16 @@ describe('builder payload shape', () => {
 
     expect(payload.userId).toBe('org-456')
     expect(payload.actorUserId).toBe('user-789')
+    expect(payload.appId).toBe('com.example.app')
     expect(payload.artifactKey).toBe('orgs/org-456/apps/com.example/native-builds/uuid.zip')
     expect(payload.fastlane).toEqual({ lane: 'android' })
   })
 
-  it.concurrent('contains exactly the expected top-level keys', () => {
+  it.concurrent('contains exactly the expected top-level keys when cache is enabled (default)', () => {
     const payload = buildBuilderPayload({
       orgId: 'org-789',
       actorUserId: 'user-1',
+      appId: 'com.test.app',
       uploadPath: 'path/to/artifact.zip',
       platform: 'ios',
       buildOptions: { foo: 'bar' },
@@ -78,6 +81,7 @@ describe('builder payload shape', () => {
     const keys = Object.keys(payload).sort()
     expect(keys).toEqual([
       'actorUserId',
+      'appId',
       'artifactKey',
       'buildCredentials',
       'buildOptions',
@@ -86,14 +90,75 @@ describe('builder payload shape', () => {
     ])
   })
 
+  it.concurrent('forwards cache_key to builder payload for custom cache namespaces', () => {
+    const payload = buildBuilderPayload({
+      ...baseInput,
+      cacheKey: 'prod',
+    })
+
+    expect(payload.cache_key).toBe('prod')
+    expect(payload.cache_fingerprint_extra).toBe('prod')
+
+    const keys = Object.keys(payload).sort()
+    expect(keys).toEqual([
+      'actorUserId',
+      'appId',
+      'artifactKey',
+      'buildCredentials',
+      'buildOptions',
+      'cache_fingerprint_extra',
+      'cache_key',
+      'fastlane',
+      'userId',
+    ])
+  })
+
+  it.concurrent('omits cache_key when unset', () => {
+    const payload = buildBuilderPayload({
+      ...baseInput,
+    })
+
+    expect(payload).not.toHaveProperty('cache_key')
+    expect(payload).not.toHaveProperty('cache_fingerprint_extra')
+  })
+
+  it.concurrent('forwards cache_enabled false when CLI opts out with --no-cache', () => {
+    const payload = buildBuilderPayload({
+      ...baseInput,
+      cacheEnabled: false,
+    })
+
+    expect(payload.cache_enabled).toBe(false)
+    expect(payload.appId).toBe('com.test.app')
+
+    const keys = Object.keys(payload).sort()
+    expect(keys).toEqual([
+      'actorUserId',
+      'appId',
+      'artifactKey',
+      'buildCredentials',
+      'buildOptions',
+      'cache_enabled',
+      'fastlane',
+      'userId',
+    ])
+  })
+
+  it.concurrent('omits cache_enabled when cache is enabled (default)', () => {
+    const payload = buildBuilderPayload({
+      ...baseInput,
+      cacheEnabled: true,
+    })
+
+    expect(payload).not.toHaveProperty('cache_enabled')
+    expect(payload.appId).toBe('com.test.app')
+  })
+
   it.concurrent('drops timeoutSeconds from buildOptions', () => {
     const payload = buildBuilderPayload({
-      orgId: 'org-timeout',
-      actorUserId: 'user-1',
+      ...baseInput,
       uploadPath: 'path/to/artifact.zip',
-      platform: 'ios',
       buildOptions: { platform: 'ios', timeoutSeconds: 999999 },
-      buildCredentials: {},
     })
 
     expect(payload.buildOptions).toEqual({ platform: 'ios' })
@@ -115,6 +180,7 @@ describe('builder payload shape', () => {
     const payload = buildBuilderPayload({
       orgId: 'org-test',
       actorUserId: 'user-1',
+      appId: 'com.complex.app',
       uploadPath: 'test/path.zip',
       platform: 'ios',
       buildOptions: complexOptions,

@@ -68,6 +68,7 @@ import { offerSupportUploadBeforeAi } from '../support/support-upload-prompt.js'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { assertCliPermission, canPromptInteractively, createSupabaseClient, findSavedKey, getConfig, getOrganizationId, getRemoteConfig, sendEvent, trimTrailingSlashes, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import { syncAndroidVersion } from './android-version'
+import { createBuildCancellationSignalHandler, requestBuildCancellation } from './cancellation'
 import { mergeCredentials, MIN_OUTPUT_RETENTION_SECONDS, parseAndroidPlayStoreReleaseStatus, parseAndroidPlayStoreTrack, parseInAppUpdatePriority, parseOptionalBoolean, parseOutputRetentionSeconds } from './credentials'
 import { buildProvisioningMap } from './credentials-command'
 import { withCwd } from './cwd'
@@ -338,6 +339,33 @@ async function fetchWithRetry(
 }
 
 export type { BuildCredentials, BuildRequestOptions, BuildRequestResult } from '../schemas/build'
+
+export interface BuildJobCachePayloadInput {
+  cache?: boolean
+  cacheKey?: string
+}
+
+export interface BuildJobCachePayload {
+  cache_enabled?: false
+  cache_key?: string
+  cache_fingerprint_extra?: string
+}
+
+/** Builder job API cache fields: omit cache_enabled when enabled (default), send false when opted out. */
+export function buildJobCachePayload(input?: BuildJobCachePayloadInput): BuildJobCachePayload {
+  const payload: BuildJobCachePayload = {}
+  if (input?.cache === false)
+    payload.cache_enabled = false
+
+  const trimmedCacheKey = input?.cacheKey?.trim()
+  if (trimmedCacheKey) {
+    payload.cache_key = trimmedCacheKey
+    // Builder compatibility: accept cache_key (PR #190) and legacy cache_fingerprint_extra.
+    payload.cache_fingerprint_extra = trimmedCacheKey
+  }
+
+  return payload
+}
 
 /**
  * Stream build logs from the server via WebSocket.
@@ -1836,6 +1864,14 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       build_mode: options.buildMode || 'release',
       build_options: buildOptionsPayload,
       build_credentials: buildCredentialsPayload,
+      ...buildJobCachePayload({ cache: options.cache, cacheKey: options.cacheKey }),
+    }
+
+    if (options.cache === false) {
+      log.info(`ℹ️  --no-cache specified, compilation cache disabled for this ${platform} build`)
+    }
+    else if (options.cacheKey?.trim()) {
+      log.info(`ℹ️  --cache-key "${options.cacheKey.trim()}" specified for this ${platform} build`)
     }
 
     log.info('✓ Using credentials (merged from CLI args, env vars, and saved file)')
@@ -2197,7 +2233,10 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
           'Content-Type': 'application/json',
           authorization: options.apikey,
         }),
-        body: JSON.stringify({ app_id: appId }),
+        body: JSON.stringify({
+          app_id: appId,
+          ...buildJobCachePayload({ cache: options.cache, cacheKey: options.cacheKey }),
+        }),
       })
 
       if (!startResponse.ok) {
@@ -2212,46 +2251,29 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       log.info('Streaming build logs...')
 
       const abortController = new AbortController()
-      let cancelRequested = false
-      const cancelBuild = async () => {
-        if (cancelRequested)
-          return
-        cancelRequested = true
-        const cancelAbort = new AbortController()
-        const timeout = setTimeout(() => cancelAbort.abort(), 4000)
-        try {
-          await fetch(`${host}/build/cancel/${buildRequest.job_id}`, {
-            method: 'POST',
-            headers: buildCliRequestHeaders({
-              'Content-Type': 'application/json',
-              authorization: options.apikey,
-            }),
-            body: JSON.stringify({ app_id: appId }),
-            signal: cancelAbort.signal,
-          })
-        }
-        catch (err) {
-          appendInternalLog(`build cancel request errored (ignored): ${err instanceof Error ? err.message : String(err)}`)
-          // ignore cancellation errors
-        }
-        finally {
-          clearTimeout(timeout)
-        }
-      }
-
-      const onSigint = async () => {
-        try {
-          if (cancelRequested) {
-            process.exit(1)
-          }
+      const onSigint = createBuildCancellationSignalHandler({
+        requestCancellation: () => requestBuildCancellation({
+          url: `${host}/build/cancel/${buildRequest.job_id}`,
+          headers: buildCliRequestHeaders({
+            'Content-Type': 'application/json',
+            authorization: options.apikey,
+          }),
+          appId,
+        }),
+        onCancellationStarted: () => {
           log.warn('Canceling build... (press Ctrl+C again to force quit)')
-          await cancelBuild()
-          abortController.abort()
-        }
-        catch {
-          // Prevent unhandled rejection from crashing the process
-        }
-      }
+        },
+        onCancellationResult: (result) => {
+          if (result.ok) {
+            log.success('Build cancellation requested.')
+            return
+          }
+          appendInternalLog(result.message)
+          log.warn(`${result.message}. The remote build may still be running.`)
+        },
+        abortLogStream: () => abortController.abort(),
+        forceExit: code => process.exit(code),
+      })
 
       process.on('SIGINT', onSigint)
 
@@ -2324,6 +2346,9 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       }
       else if (finalStatus === 'failed') {
         log.error(`Build failed`)
+        if (options.cache !== false && !options.cacheKey?.trim()) {
+          log.info('Tip: if this looks cache-related (stale artifacts between RC/PROD or branches), retry with --cache-key <env> to isolate compilation cache, or --no-cache to skip cache restore.')
+        }
         // Non-interactive (CI/CD) failure with neither --ai-analytics nor
         // --send-logs: surface the discoverability tip here, INDEPENDENT of log
         // capture. The in-handler AI/decideCiFailureActions block below is gated

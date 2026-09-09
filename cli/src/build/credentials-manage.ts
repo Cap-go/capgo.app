@@ -27,6 +27,7 @@ import {
   removeSavedCredentialKeys,
   updateSavedCredentials,
 } from './credentials'
+import { canDecodeCredentialBase64 } from './credentials-base64'
 import { escapeDotenvValue, renderEnvFile } from './env-render'
 import { onboardingBuilderCommand } from './onboarding/command'
 import { canUseFilePicker, openSaveFilePicker } from './onboarding/file-picker'
@@ -559,7 +560,7 @@ function describeFieldRow(row: FieldRow): string[] {
   lines.push(`${row.value.length} chars stored`)
   if (SECRET_KEYS.has(row.key))
     lines.push('marked as secret (hidden by default)')
-  if (canDecodeBase64(row.key, row.value))
+  if (canDecodeCredentialBase64(row.key, row.value))
     lines.push('decode-eligible (base64 → JSON / text)')
   if (row.knowledge?.type === 'boolean')
     lines.push('boolean field — Edit will offer true / false')
@@ -735,7 +736,7 @@ async function inspectAppCredentials(entry: AppEntry): Promise<InspectResult> {
 
 async function pickFieldRow(entry: AppEntry, rows: FieldRow[]): Promise<string | symbol> {
   const secretCount = rows.filter(row => SECRET_KEYS.has(row.key)).length
-  const decodableCount = rows.filter(row => canDecodeBase64(row.key, row.value)).length
+  const decodableCount = rows.filter(row => canDecodeCredentialBase64(row.key, row.value)).length
   const explainableCount = rows.filter(row => row.knowledge).length
 
   setManagerScreen({
@@ -763,7 +764,7 @@ async function pickFieldRow(entry: AppEntry, rows: FieldRow[]): Promise<string |
 }
 
 async function pickFieldAction(row: FieldRow): Promise<string | symbol> {
-  const decodable = canDecodeBase64(row.key, row.value)
+  const decodable = canDecodeCredentialBase64(row.key, row.value)
   const explainable = row.knowledge !== undefined
   const editLabel = pickEditLabel(row)
 
@@ -808,19 +809,6 @@ function previewValue(key: string, value: string): string {
   if (value.length > 60)
     return `${value.slice(0, 40)}… (${value.length} chars)`
   return value
-}
-
-function canDecodeBase64(key: string, value: string): boolean {
-  if (key === 'CAPGO_IOS_PROVISIONING_MAP')
-    return false
-  if (key.endsWith('_BASE64'))
-    return true
-  if (key === 'APPLE_KEY_CONTENT' || key === 'ANDROID_KEYSTORE_FILE' || key === 'PLAY_CONFIG_JSON')
-    return true
-  // Heuristic fallback: long string that matches base64 alphabet
-  if (value.length >= 32 && /^[A-Z0-9+/=\s]+$/i.test(value))
-    return true
-  return false
 }
 
 function actionShowField(row: FieldRow): void {

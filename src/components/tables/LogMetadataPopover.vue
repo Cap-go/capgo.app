@@ -74,7 +74,7 @@ function updatePopoverPosition() {
   const viewportH = window.innerHeight
   const maxHeight = Math.max(160, viewportH - margin * 2)
   const panel = popoverRef.value
-  const panelWidth = Math.min(panel?.offsetWidth || 352, viewportW - margin * 2)
+  const panelWidth = Math.min(panel?.offsetWidth || 448, viewportW - margin * 2)
   const panelHeight = Math.min(panel?.offsetHeight || 0, maxHeight)
 
   let left = rect.right - panelWidth
@@ -220,7 +220,7 @@ onUnmounted(() => {
       ref="popoverRef"
       role="dialog"
       :aria-labelledby="titleId"
-      class="fixed z-[100] flex max-h-[calc(100dvh-1.5rem)] w-[min(22rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-xl bg-white p-5 shadow-xl ring-1 ring-black/5 dark:bg-slate-900 dark:shadow-none dark:ring-white/10"
+      class="fixed z-[100] flex max-h-[calc(100dvh-1.5rem)] w-[min(28rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-xl bg-white p-5 shadow-xl ring-1 ring-black/5 dark:bg-slate-900 dark:shadow-none dark:ring-white/10"
       :style="popoverStyle"
       data-test="log-row-metadata-popover"
       @mouseenter="cancelClose"
@@ -229,7 +229,7 @@ onUnmounted(() => {
       <h3 :id="titleId" class="shrink-0 text-sm font-semibold text-slate-950 dark:text-white">
         {{ t('metadata') }}
       </h3>
-      <pre class="mt-3 min-h-0 flex-1 overflow-auto rounded-lg bg-slate-50 p-3 ring-1 ring-black/5 dark:bg-slate-800 dark:ring-white/10"><code class="font-mono text-sm whitespace-pre text-slate-700 dark:text-slate-200"><span
+      <pre class="mt-3 min-h-0 min-w-0 flex-1 overflow-auto rounded-lg bg-slate-50 p-3 ring-1 ring-black/5 dark:bg-slate-800 dark:ring-white/10"><code class="font-mono text-sm whitespace-pre text-slate-700 dark:text-slate-200"><span
         v-for="(token, index) in tokens"
         :key="index"
         :class="TOKEN_CLASS[token.kind]"

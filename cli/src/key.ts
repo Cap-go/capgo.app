@@ -41,7 +41,7 @@ export async function saveKeyInternal(options: SaveOptions, silent = false) {
     throw new Error('Missing public key')
   }
 
-  if (existsSync(keyPath))
+  if (!publicKey && existsSync(keyPath))
     publicKey = readFileSync(keyPath, 'utf8')
 
   if (!publicKey.startsWith('-----BEGIN RSA PUBLIC KEY-----')) {

@@ -3,6 +3,60 @@
 This file provides guidance to AI agents (Claude Code, Cursor, Copilot, etc.)
 when working with code in this repository.
 
+## MUST NOT — never publish private customer data
+
+**This repository is public.** Chat, tickets, and internal messages may contain
+customer emails, names, org IDs, app IDs, API keys, or other private data.
+Private context in a conversation does **not** authorize putting it in git.
+
+### You MUST NOT
+
+- Put customer emails, names, phone numbers, or other PII in source, comments,
+  tests, fixtures, commit messages, PR titles, PR bodies, issue bodies, or
+  review comments.
+- Copy private details from chat "for context" into a public PR, issue, or
+  commit.
+- Use a real customer identifier as a seed, example, or reproduction case.
+
+Describe the bug in generic terms. If a fixture identity is required, invent a
+clearly fake one (`customer-onboarding@example.com`).
+
+## MUST NOT — never break already-published CLI versions
+
+**We cannot break `@capgo/cli` releases that customers already run in production.**
+
+The last published CLI is the newest `cli-<semver>` git tag (and the matching
+`@capgo/cli` version on npm when it exists). Customers do not upgrade the CLI on
+every backend deploy.
+
+### You MUST NOT
+
+- Revoke `GRANT` / `EXECUTE` on an RPC that the last published CLI still calls
+  (for example `.rpc('get_user_id', { apikey })` on the anonymous API-key path).
+- Change backend identity resolution in ways that break the last published CLI
+  without shipping a CLI release that stops using the old path first.
+- Make CI pass by **inverting** published-CLI contract tests to expect permission
+  denied (`42501`). Those tests assert **success** — that is the contract.
+- Test only the PR-branch workspace CLI when validating RPC/grant changes. CI must
+  exercise the **published** npm CLI against the PR schema.
+
+### Before you revoke anon/service access on a CLI-facing RPC
+
+1. Ship a CLI release that no longer calls it.
+2. Wait for customers to upgrade (the `cli-*` tag must reflect the new behavior).
+3. Only then revoke or harden the RPC.
+
+### Where this is enforced
+
+- CI job: **`CRITICAL — Published CLI / do not break old CLI`**
+- Tests: `tests/published-cli-rpc-contract.test.ts` (live contract; do not invert)
+- Helpers: `scripts/published-cli-contract.ts` (parses `.rpc('...')` from the last `cli-*` tag)
+
+Org-perm / invite **oracle** RPCs (`invite_user_to_org_rbac`, `get_org_perm_for_apikey*`,
+`get_user_id(text,text)`, …) stay revoked for anonymous callers — see
+`tests/security-oracle-rpc-hardening.test.ts`. That is separate from the published
+CLI identity path (`get_user_id(text)` with a valid API key must keep working).
+
 ## Essential Development Commands
 
 ### Building and Development
@@ -32,7 +86,8 @@ when working with code in this repository.
   tests (requires running Supabase; this is what CI shards across runners; CLI
   integration tests run via `bun test:cli`)
 - `bun test:backend` - Run backend tests excluding CLI tests
-- `bun test:cli` - Run CLI-specific tests
+- `bun test:cli` - Run CLI-specific tests (workspace CLI plus
+  `tests/cli-compat.test.ts`, which pins `@capgo/cli` to `MIN_CLI_VERSION`)
 - `bun test:local` - Legacy alias for the default monorepo backend test run
 - `bun test:front` - Run Playwright frontend tests
 - `bun test:all:local` - Legacy alias for `bun test:all`
@@ -97,6 +152,14 @@ testing against Cloudflare Workers.
   - `public/` - Public API endpoints (app, bundle, device management)
   - `triggers/` - Database triggers and CRON functions
   - `utils/` - Shared utilities and database schemas
+
+### Plugin endpoint security triage (HARD RULE)
+
+`/channel_self`, `/updates`, and `/stats` are public plugin endpoints in `plugins/`. They take no API key, JWT, or device secret — the client asserts `device_id`. That is the product.
+
+- Unauthenticated SET on `/channel_self` (POST/DELETE persist, client-controlled `plugin_version`, `device_id` spoof) is **intended behavior**. It is **NOT** a security issue.
+- Do **not** open a security-fix PR or keep a GHSA open for "missing auth on channel_self set". Closed: GHSA-g9h5 / PR #3222. Same class as GHSA-469v (GET `/channel_self` enumeration is already documented as intended).
+- Dashboard/API forced overrides on private channels remain a separate, authenticated path. Do **not** "fix" the public plugin set path.
 
 ### Production Scale Guardrails
 
@@ -231,6 +294,13 @@ Capgo relies on two layered caches for plugin endpoints (`/updates`, `/stats`, `
 - **App status cache (Worker runtime)**: `supabase/functions/_backend/utils/appStatus.ts` stores `onprem` / `cancelled` / `cloud` for 60s using the Cache API to short-circuit DB lookups.
 
 **Implication:** Keep the `429` + error payloads for on-prem and plan-upgrade responses; otherwise the edge caches and status cache effectiveness are broken.
+
+### Files read cache (deleted bundle gate)
+
+`isAttachmentVersionDeleted` in `file_read_cache.ts` is the durable gate for deleted bundle
+`.zip` reads on `/files/read`. It must **fail open** on Postgres/Hyperdrive lookup errors
+(treat as not deleted) so transient DB blips do not 404 live bundles that still exist in R2
+or edge cache. Still return deleted when the DB row is deleted or a deleted marker is set.
 
 ### Key Frontend Directories
 
@@ -1074,6 +1144,51 @@ else {
 
 **When in doubt, support both old and new behavior based on plugin version detection.**
 
+## CLI Minimum Version
+
+Source of truth: `supabase/functions/_backend/utils/cliMinVersion.ts`.
+
+`GET /private/config` returns:
+
+- `minCliVersion` — oldest `@capgo/cli` still supported
+- `minCliVersionReason` — user-facing explanation shown when the CLI is below
+  that floor
+
+The CLI reads those fields during remote config fetch. If the running CLI is
+older than `minCliVersion`, it stops and tells the user they must update,
+including the reason.
+
+### Compat tests
+
+The min version is the pin for CLI compatibility tests, not workspace `@latest`.
+
+- `tests/cli-compat.test.ts` installs `@capgo/cli@${MIN_CLI_VERSION}` and runs it
+  against the current API.
+- Workspace `tests/cli*` coverage is for the current CLI. It does not replace
+  the min-version pin.
+
+When you raise `MIN_CLI_VERSION`, update `MIN_CLI_VERSION_REASON` in the same
+change and keep `tests/cli-compat.test.ts` passing against the new pin.
+
+### ALWAYS ASK before raising (or not raising)
+
+When a change can break older CLIs (public API, upload/auth/encryption protocol,
+request/response shape, required headers, error codes the CLI parses):
+
+You MUST ask the user before finishing:
+
+1. Should we raise `MIN_CLI_VERSION`?
+2. Is this a security concern?
+
+Rules:
+
+- **Security** (auth bypass, secret leak, unsigned/unsafe upload, and similar):
+  recommend raising, and put the why in `MIN_CLI_VERSION_REASON`.
+- **Not security** (new optional field, additive endpoint, old CLI still works):
+  default to **not** raising. Customers take time to update.
+- Never raise silently. Never leave a stale reason.
+- Never lower the min version without an explicit user request.
+
 ## Deployment
 
 The deployment happens automatically after GitHub CI/CD on main branch.
@@ -1081,6 +1196,13 @@ The deployment happens automatically after GitHub CI/CD on main branch.
 You are not allowed to deploy on your own, unless if asked. Same for git you
 never git push on main branch, add or commit unless asked.
 You can do it in others branches
+
+## Frontend security operations
+
+Console CSP, SRI maintenance, sanitization helpers, and redirect validation are
+documented in [docs/frontend-security.md](docs/frontend-security.md). Review
+that checklist when touching `public/_headers`, external scripts, or user-controlled
+HTML/URL rendering.
 
 ## Graphify
 

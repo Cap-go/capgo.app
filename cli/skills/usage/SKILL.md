@@ -10,6 +10,7 @@ Use this skill as the entry point for the Capgo CLI skill set.
 TanStack Intent skills should stay focused and under the validator line limit, so the Capgo CLI guidance is split into multiple skills:
 
 - `usage`: high-level command routing, shared invocation rules, and quick command selection.
+- `observe`: Observe query commands and MCP (`summary`, `metrics`, `events`, `device`, `versions`, `routes`).
 - `release-management`: OTA bundle, channel, and encryption-key workflows.
 - `native-builds`: native cloud build request and build-credential workflows.
 - `organization-management`: organization, account, and deprecated organisation-alias workflows.
@@ -31,6 +32,7 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 - `login [apikey]`: store an API key locally.
 - `doctor`: inspect installation health and gather troubleshooting details.
 - `probe`: test whether the update endpoint would deliver an update.
+- `observe summary|metrics|events|device|versions|routes`: query Observe findings, timings, device timelines, and per-screen routes. Start with `observe summary`. Use `observe device DEVICE_ID` as the session timeline. Navigation uses `app_nav` + `metadata.route` (history/popstate/hashchange/appUrlOpen, no Expo Router). Pass `--json` for agents.
 
 ### App-level operations
 
@@ -43,7 +45,7 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 
 ### Docs and agent integrations
 
-- `mcp`: start the Capgo MCP server for AI-agent integrations; pass `--capacitor-config <path>` when its config-writing tools should target an app-specific source.
+- `mcp`: start the Capgo MCP server for AI-agent integrations; pass `--capacitor-config <path>` when its config-writing tools should target an app-specific source. Observe queries use `capgo_observe` (start at `view=summary`).
 
 ### GitHub support commands
 
@@ -51,6 +53,13 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 - `star-all [repositories...]`: star all Capgo repositories matching the default filter, with delay and concurrency controls. The default set includes `capacitor-*` repositories plus `Cap-go/CLI`, `Cap-go/capgo`, and `Cap-go/capgo-skills`.
 
 ## Related skills
+
+### `observe`
+
+Load `skills/observe/SKILL.md` when working with:
+
+- `observe summary`, `observe metrics`, `observe events`, `observe device`, `observe versions`, `observe routes`
+- MCP `capgo_observe`
 
 ### `release-management`
 

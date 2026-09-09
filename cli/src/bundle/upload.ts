@@ -25,13 +25,15 @@ import { showReplicationProgress } from '../replicationProgress'
 import { CliUserError } from '../shared/cli-user-error'
 import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
-import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
+import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
 import type { AutoBumpLevel } from '../versionHelpers'
 import { autoBumpVersionBy, getVersionSuggestions, interactiveVersionBump, normalizeAutoBumpInput } from '../versionHelpers'
 import { resolveAutoBumpLevelFromAi } from './auto-bump-ai'
 import { maybePromptBuilderCta, shouldBlockIncompatibleUpload } from './builder-cta'
 import { checkIndexPosition, searchInDirectory } from './check'
 import { summarizeUploadCompatibility } from './compatibility'
+import { ensureNotifyAppReadyInBuildFolder } from '../recovery/notify-app-ready'
+import { parsePackageJsonOptionPaths, resolveAppIdWithRecovery } from '../recovery/app-id'
 import { prepareBundlePartialFiles, uploadPartial } from './partial'
 import { clackUploadReporter, getUploadReporter, runWithUploadReporter } from './reporter'
 import { formatUploadChannels, getChannelsToAssignByChecksum, parseUploadChannels } from './upload-channels'
@@ -145,8 +147,16 @@ function getApikey(options: OptionsUpload) {
   return apikey
 }
 
-function getAppIdAndPath(appId: string | undefined, options: OptionsUpload, config: CapacitorConfig) {
-  const finalAppId = getAppId(appId, config)
+async function getAppIdAndPath(appId: string | undefined, options: OptionsUpload, config: CapacitorConfig, interactive: boolean) {
+  const finalAppId = await resolveAppIdWithRecovery({
+    explicitAppId: appId,
+    config,
+    apikey: options.apikey || findSavedKey(true),
+    packageJsonPaths: parsePackageJsonOptionPaths(options.packageJson),
+    interactive,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
   const path = options.path || config?.webDir
 
   if (!finalAppId) {
@@ -163,19 +173,29 @@ function getAppIdAndPath(appId: string | undefined, options: OptionsUpload, conf
   return { appid: finalAppId, path }
 }
 
-function checkNotifyAppReady(options: OptionsUpload, path: string) {
-  const checkNotifyAppReady = options.codeCheck
+async function checkNotifyAppReady(options: OptionsUpload, path: string, interactive: boolean) {
+  if (options.codeCheck === false || options.ignoreNotifyAppReady)
+    return
 
-  if (typeof checkNotifyAppReady === 'undefined' || checkNotifyAppReady) {
-    const isPluginConfigured = searchInDirectory(path, 'notifyAppReady')
-    if (!isPluginConfigured) {
-      uploadFail(`notifyAppReady() is missing in the build folder of your app. see: https://capgo.app/docs/plugin/api/#notifyappready
-      If you are sure your app has this code, you can use the --no-code-check option`)
-    }
-    const foundIndex = checkIndexPosition(path)
-    if (!foundIndex) {
-      uploadFail(`index.html is missing in the root folder of ${path}`)
-    }
+  if (!searchInDirectory(path, 'notifyAppReady')) {
+    const recovery = await ensureNotifyAppReadyInBuildFolder({
+      webDir: path,
+      interactive,
+    })
+    if (recovery === 'skipped')
+      return
+  }
+
+  if (!searchInDirectory(path, 'notifyAppReady')) {
+    const message = `notifyAppReady() is missing in the build folder of your app. see: https://capgo.app/docs/plugins/updater/notifyappready
+      If you are sure your app has this code, you can use the --no-code-check or --ignore-notify-app-ready option`
+    log.error(message)
+    throw new Error(message.trim())
+  }
+
+  const foundIndex = checkIndexPosition(path)
+  if (!foundIndex) {
+    uploadFail(`index.html is missing in the root folder of ${path}`)
   }
 }
 
@@ -1351,7 +1371,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     log.info(`  - Max chunk size: ${Math.floor(fileConfig.maxChunkSize / 1024 / 1024)} MB`)
   }
 
-  const { appid, path } = getAppIdAndPath(preAppid, options, extConfig.config)
+  const { appid, path } = await getAppIdAndPath(preAppid, options, extConfig.config, interactive)
   if (options.verbose)
     log.info(`[Verbose] App ID: ${appid}, Build path: ${path}`)
 
@@ -1365,7 +1385,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   const defaultStorageProvider: Exclude<UploadBundleResult['storageProvider'], undefined> = options.external ? 'external' : 'r2-direct'
   let encryptionMethod: UploadBundleResult['encryptionMethod'] = 'none'
 
-  checkNotifyAppReady(options, path)
+  await checkNotifyAppReady(options, path, interactive)
   if (options.verbose)
     log.info(`[Verbose] Code check passed (notifyAppReady found and index.html present)`)
 
@@ -1574,8 +1594,9 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   // onboarding if the app has no build credentials, otherwise a native build.
   // Accepting skips this OTA upload (a native build supersedes it). Skipped
   // entirely for the programmatic SDK path (silent), which must not prompt,
-  // print, or emit CTA telemetry.
-  if (incompatible && !silent) {
+  // print, or emit CTA telemetry. Also skipped when `--accept-incompatible`
+  // is set: the caller already marked the mismatch as handled.
+  if (incompatible && !silent && !options.acceptIncompatible) {
     // CI / non-interactive with the flag: hard fail now, before the promotional
     // Builder ad prints (there is no escape-hatch prompt to offer).
     if (options.failOnIncompatible && !interactive)
@@ -1606,6 +1627,9 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     // Interactive and the user declined the native-build escape hatch.
     if (shouldBlockIncompatibleUpload({ incompatible, failOnIncompatible: !!options.failOnIncompatible, interactive, builderAction }))
       uploadFailIncompatible()
+  }
+  else if (incompatible && options.acceptIncompatible && !silent) {
+    log.warn('Proceeding because --accept-incompatible was set. The incompatible-bundle crash warning will not be emailed.')
   }
   if (options.verbose) {
     log.info(`[Verbose] Compatibility check completed:`)
@@ -2043,6 +2067,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
         version_new_name: bundle,
         ...(compatibilityResult.compatibility.versionOldId ? { version_old_id: compatibilityResult.compatibility.versionOldId } : {}),
         ...(compatibilityResult.compatibility.versionOldName ? { version_old_name: compatibilityResult.compatibility.versionOldName } : {}),
+        ...(options.acceptIncompatible ? { incompatibility_accepted: true } : {}),
       },
     })
   }
@@ -2096,7 +2121,8 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
 /**
  * Validate mutually-exclusive and dependent upload options, failing fast (via
  * `uploadFail`) before any network call. Exported so the option-conflict guards
- * (e.g. `--fail-on-incompatible` + `--ignore-metadata-check`) can be unit-tested
+ * (e.g. `--fail-on-incompatible` + `--ignore-metadata-check`, or
+ * `--accept-incompatible` + `--fail-on-incompatible`) can be unit-tested
  * directly.
  */
 export function checkValidOptions(options: OptionsUpload) {
@@ -2163,6 +2189,12 @@ export function checkValidOptions(options: OptionsUpload) {
   }
   if (options.failOnIncompatible && options.ignoreMetadataCheck) {
     uploadFail('You cannot use --fail-on-incompatible together with --ignore-metadata-check — the metadata check is exactly what --fail-on-incompatible enforces. Remove one of them.')
+  }
+  if (options.acceptIncompatible && options.failOnIncompatible) {
+    uploadFail('You cannot use --accept-incompatible together with --fail-on-incompatible — one continues despite a mismatch, the other refuses it. Remove one of them.')
+  }
+  if (options.acceptIncompatible && options.ignoreMetadataCheck) {
+    uploadFail('You cannot use --accept-incompatible together with --ignore-metadata-check — accepting a mismatch requires running the compatibility check. Remove one of them.')
   }
 }
 

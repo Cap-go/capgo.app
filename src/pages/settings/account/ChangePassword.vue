@@ -421,6 +421,17 @@ async function submit(form: { current_password: string, password: string, passwo
           <!-- Personal Info -->
           <section>
             <div class="mt-5 flex flex-col gap-4 sm:flex-row sm:flex-wrap">
+              <label for="change-password-username" class="sr-only">{{ t('email') }}</label>
+              <input
+                id="change-password-username"
+                type="email"
+                name="username"
+                autocomplete="username"
+                :value="mainStore.user?.email ?? mainStore.auth?.email ?? ''"
+                readonly
+                tabindex="-1"
+                class="sr-only"
+              >
               <FormKit
                 type="password"
                 name="current_password"
@@ -446,6 +457,7 @@ async function submit(form: { current_password: string, password: string, passwo
                 type="password"
                 name="password_confirm"
                 :prefix-icon="iconPassword"
+                autocomplete="new-password"
                 outer-class="sm:w-1/2"
                 :label="t('confirm-password')"
                 validation="required|confirm"

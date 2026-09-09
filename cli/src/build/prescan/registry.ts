@@ -37,7 +37,7 @@ import {
 import { credentialsSaved } from './checks/credentials'
 import { ascKeyValid, p12Expiry, p12LegacyEncryption, p12Opens } from './checks/ios-certs'
 import { infoplistSanity } from './checks/ios-plist'
-import { certProfilePairing, profileBundleMatch, profileExpiry, profileTypeVsMode, targetsCovered } from './checks/ios-profiles'
+import { certProfilePairing, profileBundleMatch, profileExpiry, profileTypeVsMode, targetsCovered, wildcardProfileTargets } from './checks/ios-profiles'
 import {
   allowNavigationWildcard,
   serverCleartext,
@@ -47,6 +47,7 @@ import {
   appGroupsFormat,
   apsEnvironmentVsMode,
   associatedDomainsFormat,
+  entitlementsDeclaredAgeRange,
   entitlementsVsProfileCapability,
 } from './checks/ios-entitlements-checks'
 import {
@@ -58,6 +59,7 @@ import {
   plistLaunchStoryboard,
   plistOrientationsMultitasking,
   plistOrientationsPresent,
+  plistRequiredDeviceArm64,
   plistVersionBuildFormat,
   plistVersionShortFormat,
 } from './checks/ios-plist-checks'
@@ -96,14 +98,14 @@ const IOS_EXPANSION_CHECKS: PrescanCheck[] = [
   plistBundleIdFormat, plistVersionShortFormat, plistVersionBuildFormat,
   plistEncryptionCompliance, plistAtsArbitraryLoads, plistLaunchStoryboard,
   plistOrientationsMultitasking, plistOrientationsPresent, plistDisplayName,
-  plistBackgroundModesSanity,
+  plistBackgroundModesSanity, plistRequiredDeviceArm64,
   // ios xcode (project / build settings)
   deploymentTargetCapacitor, signingTeam, bundleIdMismatchAcrossConfigs,
   enableBitcodeLeftover, swiftVersionSanity, noAppTarget,
   multipleAppTargets,
   // ios entitlements / capabilities
   entitlementsVsProfileCapability, apsEnvironmentVsMode,
-  associatedDomainsFormat, appGroupsFormat,
+  associatedDomainsFormat, appGroupsFormat, entitlementsDeclaredAgeRange,
   // ios capacitor config
   serverUrlShipped, serverCleartext, allowNavigationWildcard,
   // ios pods / spm / app icons
@@ -119,7 +121,7 @@ export const ALL_CHECKS: PrescanCheck[] = [
   // ios certs / profiles / plist
   p12Opens, { ...p12LegacyEncryption, enforceAfter: IOS_P12_LEGACY_ENFORCE_AFTER },
   p12Expiry, profileExpiry, profileBundleMatch, profileTypeVsMode,
-  certProfilePairing, targetsCovered, infoplistSanity, ascKeyValid,
+  certProfilePairing, targetsCovered, wildcardProfileTargets, infoplistSanity, ascKeyValid,
   // android keystore / project
   keystoreOpens, keystoreExpiry, cordovaVarsPresent, gradlePropsHeuristics,
   playSaJson, flavorExists, agp8PackageAttr,

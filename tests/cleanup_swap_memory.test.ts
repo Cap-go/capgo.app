@@ -7,7 +7,6 @@ describe('swap memory cleanup functions', () => {
     await cleanupPostgresClient()
   })
 
-
   it('cleanup_queue_messages skips queues whose archive tables are missing', async () => {
     const queueName = `cleanup_missing_${randomUUID().slice(0, 8)}`
     await executeSQL(
@@ -141,20 +140,54 @@ describe('swap memory cleanup functions', () => {
       [appId, orgId],
     )
 
+    const versionName = `1.0.0-${randomUUID().slice(0, 8)}`
+    const manifestPath = `orgs/${orgId}/apps/${appId}/delta/hash_a.js`
+    const canonicalR2Path = `orgs/${orgId}/apps/${appId}/${versionName}.zip`
+
     const versionRows = await executeSQL(
-      `INSERT INTO public.app_versions (app_id, name, owner_org, storage_provider, comment)
-       VALUES ($1, $2, $3::uuid, 'r2-direct', 'before')
+      `INSERT INTO public.app_versions (
+         app_id,
+         name,
+         owner_org,
+         storage_provider,
+         comment,
+         manifest,
+         r2_path,
+         native_packages
+       )
+       VALUES (
+         $1,
+         $2,
+         $3::uuid,
+         'r2',
+         'before',
+         ARRAY[ROW('a.js', $4, 'hash')::public.manifest_entry],
+         $5,
+         ARRAY['{"name":"cordova-plugin"}'::jsonb]
+       )
        RETURNING id`,
-      [appId, `1.0.0-${randomUUID().slice(0, 8)}`, orgId],
+      [
+        appId,
+        versionName,
+        orgId,
+        manifestPath,
+        canonicalR2Path,
+      ],
     )
     const versionId = versionRows[0]?.id as number
+
+    await executeSQL(
+      `INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash)
+       VALUES ($1, 'a.js', $2, 'hash')`,
+      [versionId, manifestPath],
+    )
 
     await executeSQL(
       `UPDATE public.app_versions
        SET
          comment = 'after',
-         manifest = ARRAY[ROW('a.js', 'apps/a.js', 'hash')::public.manifest_entry],
-         native_packages = ARRAY['{"name":"cordova-plugin"}'::jsonb]
+         manifest = NULL,
+         manifest_count = 1
        WHERE id = $1`,
       [versionId],
     )
@@ -177,9 +210,9 @@ describe('swap memory cleanup functions', () => {
     expect(logs[0]?.changed_fields).toContain('comment')
     // Fat payloads stay stripped, but field names remain for upload-time history.
     expect(logs[0]?.changed_fields).toContain('manifest')
-    expect(logs[0]?.changed_fields).toContain('native_packages')
 
     await executeSQL(`DELETE FROM public.audit_logs WHERE record_id = $1 AND table_name = 'app_versions'`, [String(versionId)])
+    await executeSQL(`DELETE FROM public.manifest WHERE app_version_id = $1`, [versionId])
     await executeSQL(`DELETE FROM public.app_versions WHERE id = $1`, [versionId])
     await executeSQL(`DELETE FROM public.apps WHERE app_id = $1`, [appId])
   })
@@ -210,20 +243,50 @@ describe('swap memory cleanup functions', () => {
   it('audit_log_trigger skips dual-storage migrate finalize', async () => {
     const appId = `com.swap.auditskip.${randomUUID().slice(0, 8)}`
     const orgId = (await executeSQL(`SELECT id FROM public.orgs ORDER BY created_at LIMIT 1`))[0]?.id as string
-    const versionId = await seedAuditAppVersion(appId, orgId)
+    const versionName = `1.0.0-${randomUUID().slice(0, 8)}`
+    const manifestPath = `orgs/${orgId}/apps/${appId}/delta/hash_a.js`
 
     await executeSQL(
-      `UPDATE public.app_versions
-       SET manifest = ARRAY[ROW('a.js', 'apps/a.js', 'hash')::public.manifest_entry]
-       WHERE id = $1`,
-      [versionId],
+      `INSERT INTO public.apps (app_id, name, icon_url, owner_org)
+       VALUES ($1, 'swap-audit-skip', '', $2::uuid)`,
+      [appId, orgId],
     )
+
+    const versionRows = await executeSQL(
+      `INSERT INTO public.app_versions (
+         app_id,
+         name,
+         owner_org,
+         storage_provider,
+         comment,
+         manifest,
+         r2_path
+       )
+       VALUES (
+         $1,
+         $2,
+         $3::uuid,
+         'r2',
+         'seed',
+         ARRAY[ROW('a.js', $4, 'hash')::public.manifest_entry],
+         $5
+       )
+       RETURNING id`,
+      [
+        appId,
+        versionName,
+        orgId,
+        manifestPath,
+        `orgs/${orgId}/apps/${appId}/${versionName}.zip`,
+      ],
+    )
+    const versionId = versionRows[0]?.id as number
     await clearVersionAudits(versionId)
 
     await executeSQL(
       `INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash)
-       VALUES ($1, 'a.js', 'apps/a.js', 'hash')`,
-      [versionId],
+       VALUES ($1, 'a.js', $2, 'hash')`,
+      [versionId, manifestPath],
     )
     await executeSQL(
       `UPDATE public.app_versions
@@ -423,7 +486,6 @@ describe('swap memory cleanup functions', () => {
     }
   })
 
-
   it('app_versions_manifest_present_idx exists as valid partial index on id', async () => {
     const rows = await executeSQL(
       `SELECT
@@ -441,6 +503,4 @@ describe('swap memory cleanup functions', () => {
     expect(String(rows[0]?.indexdef)).toContain('(id)')
     expect(String(rows[0]?.indexdef).toLowerCase()).toContain('manifest is not null')
   })
-
-
 })

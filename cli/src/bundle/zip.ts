@@ -9,9 +9,9 @@ import { checkAlerts } from '../api/update'
 import { getChecksum } from '../checksum'
 import {
   baseKeyV2,
+  canPromptInteractively,
   findRoot,
   formatError,
-  getAppId,
   getBundleVersion,
   getConfig,
   getInstalledVersion,
@@ -19,6 +19,17 @@ import {
   regexSemver,
   zipFile,
 } from '../utils'
+import { getUpdaterInstallState } from '../init/updater'
+import {
+  recoverInvalidSemverBundle,
+  recoverMissingUpdater,
+  recoverMissingWebDirPath,
+  resolveLocalSemverFallback,
+  resolveUpdaterPackageJsonPath,
+} from '../recovery/bundle-zip'
+import { ensureNotifyAppReadyInBuildFolder, buildCiNotifyAppReadyMessage } from '../recovery/notify-app-ready'
+import { CliUserError } from '../shared/cli-user-error'
+import { parsePackageJsonOptionPaths, resolveAppIdWithRecovery } from '../recovery/app-id'
 import { checkIndexPosition, searchInDirectory } from './check'
 
 export type { ZipResult } from '../schemas/bundle'
@@ -34,6 +45,13 @@ function emitJsonError(error: unknown) {
   console.error(formatError(error))
 }
 
+function emitCliUserJsonError(error: CliUserError) {
+  if (error.context?.message)
+    emitJsonError({ error: error.message, message: error.context.message })
+  else
+    emitJsonError({ error: error.message })
+}
+
 export async function zipBundleInternal(appId: string, options: BundleZipOptions, silent = false): Promise<ZipResult> {
   const { json } = options
   let { bundle, path } = options
@@ -45,27 +63,48 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
       await checkAlerts()
 
     const extConfig = await getConfig()
-    const resolvedAppId = getAppId(appId, extConfig?.config)
+    const interactive = canPromptInteractively({ silent: json || silent })
+    const resolvedAppId = await resolveAppIdWithRecovery({
+      explicitAppId: appId,
+      config: extConfig?.config,
+      packageJsonPaths: parsePackageJsonOptionPaths(options.packageJson),
+      interactive,
+      json,
+    })
 
     const uuid = randomUUID().split('-')[0]
     const packVersion = getBundleVersion('', options.packageJson)
-    bundle = bundle || packVersion || `0.0.1-beta.local-${uuid}`
+    bundle = bundle || packVersion || resolveLocalSemverFallback(uuid)
 
     if (shouldShowPrompts)
-      intro(`Zipping ${resolvedAppId}@${bundle}`)
+      intro(`Zipping ${resolvedAppId ?? 'app'}@${bundle}`)
 
+    // Expected setup failures use plain Error (not CliUserError) so PostHog still captures
+    // real user aborts after declined recovery.
     if (bundle && !regexSemver.test(bundle)) {
-      const message = `Your bundle name ${bundle}, is not valid it should follow semver convention : https://semver.org/`
-      if (!silent) {
-        if (json)
-          emitJsonError({ error: 'invalid_semver' })
-        else
-          log.error(message)
+      if (interactive) {
+        const recoveredBundle = await recoverInvalidSemverBundle(bundle, resolveLocalSemverFallback(uuid))
+        if (recoveredBundle)
+          bundle = recoveredBundle
       }
-      throw new Error('Invalid bundle version format')
+      if (!regexSemver.test(bundle)) {
+        const message = `Your bundle name ${bundle}, is not valid it should follow semver convention : https://semver.org/`
+        if (!silent) {
+          if (json)
+            emitJsonError({ error: 'invalid_semver' })
+          else
+            log.error(message)
+        }
+        throw new Error('Invalid bundle version format')
+      }
     }
 
     path = path || extConfig?.config?.webDir
+    if (!path && interactive) {
+      const recoveredPath = await recoverMissingWebDirPath('Enter the path to your built web assets (webDir):')
+      if (recoveredPath)
+        path = recoveredPath
+    }
 
     if (!resolvedAppId || !bundle || !path) {
       const message = 'Missing argument, you need to provide a appId and a bundle and a path, or be in a capacitor project'
@@ -81,22 +120,30 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
     if (shouldShowPrompts)
       log.info(`Started from path "${path}"`)
 
-    const shouldCheckNotifyAppReady = typeof options.codeCheck === 'undefined' ? true : options.codeCheck
+    const shouldCheckNotifyAppReady = options.codeCheck !== false && !options.ignoreNotifyAppReady
 
     if (shouldCheckNotifyAppReady) {
-      const isPluginConfigured = searchInDirectory(path, 'notifyAppReady')
-      if (!isPluginConfigured) {
-        if (!silent) {
-          if (json)
-            emitJsonError({ error: 'notifyAppReady_not_in_source_code' })
-          else
-            log.error('notifyAppReady() is missing in the build folder of your app. see: https://capgo.app/docs/plugin/api/#notifyappready')
+      if (!searchInDirectory(path, 'notifyAppReady')) {
+        if (interactive) {
+          const recovery = await ensureNotifyAppReadyInBuildFolder({
+            webDir: path,
+            interactive,
+            json,
+          })
+          if (recovery !== 'skipped' && !searchInDirectory(path, 'notifyAppReady')) {
+            throw new CliUserError('notifyAppReady() is missing in build folder')
+          }
         }
-        throw new Error('notifyAppReady() is missing in build folder')
+        else {
+          throw json
+            ? new CliUserError('notifyAppReady_not_in_source_code', {
+                message: buildCiNotifyAppReadyMessage(path),
+              })
+            : new CliUserError(buildCiNotifyAppReadyMessage(path))
+        }
       }
 
-      const foundIndex = checkIndexPosition(path)
-      if (!foundIndex) {
+      if (!checkIndexPosition(path)) {
         if (!silent) {
           if (json)
             emitJsonError({ error: 'index_html_not_found' })
@@ -117,14 +164,20 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
       checksumSpinner.start('Calculating checksum')
 
     const root = findRoot(cwd())
-    const updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
+    const resolvedPackageJson = resolveUpdaterPackageJsonPath(options.packageJson)
+    let updaterInstallState = getUpdaterInstallState(resolvedPackageJson)
 
-    if (!updaterVersion) {
+    if (!updaterInstallState.ready && interactive && await recoverMissingUpdater(options.packageJson))
+      updaterInstallState = getUpdaterInstallState(resolvedPackageJson)
+
+    if (!updaterInstallState.ready) {
       const warning = 'Cannot find @capgo/capacitor-updater in node_modules, please install it first with your package manager'
       if (!silent)
         log.warn(warning)
       throw new Error(warning)
     }
+
+    let updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
 
     let useSha256 = false
     let coerced
@@ -191,10 +244,15 @@ export async function zipBundleInternal(appId: string, options: BundleZipOptions
   }
   catch (error) {
     if (!silent) {
-      if (json)
-        emitJsonError(error)
-      else
+      if (json) {
+        if (error instanceof CliUserError)
+          emitCliUserJsonError(error)
+        else
+          emitJsonError(error)
+      }
+      else {
         log.error(formatError(error))
+      }
     }
     throw error instanceof Error ? error : new Error(String(error))
   }

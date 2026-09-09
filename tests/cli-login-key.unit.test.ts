@@ -3,6 +3,8 @@ import {
   aggregateCliKeyPolicy,
   canonicalizeCliBindings,
   getCliLoginDestination,
+  isCliAiQuery,
+  isCliLoginPath,
   isMatchingCliLoginEvent,
   isValidCliLoginSession,
   nextManagedCliKeyName,
@@ -111,6 +113,13 @@ describe('CLI login key model', () => {
     const session = 'AbCdEfGhIjKlMnOpQrStUv'
     expect(isValidCliLoginSession(session)).toBe(true)
     expect(isValidCliLoginSession('short')).toBe(false)
+    expect(isCliAiQuery('1')).toBe(true)
+    expect(isCliAiQuery('1/')).toBe(true)
+    expect(isCliAiQuery(['1/'])).toBe(true)
+    expect(isCliAiQuery('0')).toBe(false)
+    expect(isCliLoginPath('/login-cli')).toBe(true)
+    expect(isCliLoginPath('/login-cli/')).toBe(true)
+    expect(isCliLoginPath('/login')).toBe(false)
     expect(isMatchingCliLoginEvent({
       event: 'User CLI login',
       channel: 'user-login',
@@ -150,7 +159,12 @@ describe('prepareCliLoginKey', () => {
     ], io, now)
 
     expect(result.status).toBe('ready')
-    expect(result.skippedOrganizationNames).toEqual(['Member', 'Invite', 'Security', 'Blocked'])
+    expect(result.skippedOrganizations).toEqual([
+      { id: 'member', name: 'Member' },
+      { id: 'invite', name: 'Invite' },
+      { id: 'security', name: 'Security' },
+      { id: 'blocked', name: 'Blocked' },
+    ])
     expect(io.createKey).toHaveBeenCalledWith(expect.objectContaining({
       name: 'Capgo CLI',
       global_permissions: [],
@@ -286,7 +300,7 @@ describe('prepareCliLoginKey', () => {
       org({ role: 'org_member' }),
     ], io, now)).resolves.toEqual({
       status: 'empty',
-      skippedOrganizationNames: ['Alpha'],
+      skippedOrganizations: [{ id: 'org-a', name: 'Alpha' }],
     })
     expect(io.listMetadata).not.toHaveBeenCalled()
     expect(io.createKey).not.toHaveBeenCalled()

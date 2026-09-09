@@ -51,7 +51,7 @@ const globalStatsTrendData = ref<Array<{
 const isLoadingGlobalStatsTrend = ref(false)
 const deliveryLatencyDays = computed(() => {
   const { start, end } = adminStore.activeDateRange
-  return Math.max(1, Math.min(365, Math.ceil((end.getTime() - start.getTime()) / 86_400_000)))
+  return Math.max(1, Math.min(90, Math.ceil((end.getTime() - start.getTime()) / 86_400_000)))
 })
 
 async function loadGlobalStatsTrend() {

@@ -6,6 +6,7 @@ import { intro, log, outro } from '@clack/prompts'
 import { checkAppExistsAndHasPermissionOrgErr, getAppIconStoragePath, resolveAppSetIconPath } from '../api/app'
 import { assertChannelExists, disableDownloadChannels as disableAllDownloadChannels, setDefaultDownloadChannel } from './default-channels'
 import { normalizeStoreUrl } from './store-url'
+import { CliUserError } from '../shared/cli-user-error'
 import {
   createSupabaseClient,
   findSavedKey,
@@ -39,7 +40,7 @@ export async function setAppInternal(appId: string, options: Options, silent = f
   if (!appId) {
     if (!silent)
       log.error('Missing argument, you need to provide a appId, or be in a capacitor project')
-    throw new Error('Missing appId')
+    throw new CliUserError('Missing appId')
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)

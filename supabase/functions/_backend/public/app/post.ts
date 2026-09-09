@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { applyAppOnboardingPatch, isAppOnboardingSource } from '../../utils/appOnboarding.ts'
-import { addAppCreatorToOnboarding } from '../../utils/app_creator.ts'
+import { addAppCreatorToOnboarding, resolveAppCreatorEmail } from '../../utils/app_creator.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
@@ -58,27 +58,34 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
   }
   if (body.icon && !normalizedIcon)
     throw simpleError('invalid_icon_path', 'Icon path must belong to this app organization')
-  const dataInsert = {
-    owner_org: body.owner_org,
-    app_id: body.app_id,
-    icon_url: normalizedIcon ?? '',
-    name: body.name,
-    retention: 2592000,
-    default_upload_channel: 'dev',
-    need_onboarding: body.need_onboarding ?? false,
-    // Keep CLI init metrics independent from pending web-onboarding apps.
-    created_from_onboarding: body.created_from_onboarding ?? body.need_onboarding ?? false,
-    existing_app: body.existing_app ?? false,
-    ios_store_url: body.ios_store_url ?? null,
-    android_store_url: body.android_store_url ?? null,
-    onboarding: applyAppOnboardingPatch(addAppCreatorToOnboarding({}, auth.userId, auth.claims?.email), {
-      source: isAppOnboardingSource(body.onboarding?.source) ? body.onboarding.source : 'manual',
-    }),
-  }
   let pgClient
   let data: Database['public']['Tables']['apps']['Row'] | undefined
   try {
     pgClient = getPgClient(c)
+    const storedCreator = auth.claims?.email
+      ? undefined
+      : await pgClient.query<{ email: string }>('SELECT email FROM public.users WHERE id = $1 LIMIT 1', [auth.userId])
+    const creatorEmail = resolveAppCreatorEmail(auth.claims?.email, storedCreator?.rows[0]?.email)
+    if (!creatorEmail)
+      throw new Error(`Cannot resolve email for app creator ${auth.userId}`)
+
+    const dataInsert = {
+      owner_org: body.owner_org,
+      app_id: body.app_id,
+      icon_url: normalizedIcon ?? '',
+      name: body.name,
+      retention: 2592000,
+      default_upload_channel: 'dev',
+      need_onboarding: body.need_onboarding ?? false,
+      // Keep CLI init metrics independent from pending web-onboarding apps.
+      created_from_onboarding: body.created_from_onboarding ?? body.need_onboarding ?? false,
+      existing_app: body.existing_app ?? false,
+      ios_store_url: body.ios_store_url ?? null,
+      android_store_url: body.android_store_url ?? null,
+      onboarding: applyAppOnboardingPatch(addAppCreatorToOnboarding({}, auth.userId, creatorEmail), {
+        source: isAppOnboardingSource(body.onboarding?.source) ? body.onboarding.source : 'manual',
+      }),
+    }
     const result = await pgClient.query(
       `INSERT INTO public.apps (
          owner_org,

@@ -25,6 +25,7 @@ export const USER_BENTO_EVENT_NAMES = [
   'cli:onboarding_run_started',
   'onboarding:resume_restarted',
   'onboarding:step_completed',
+  'user:login',
 ] as const
 
 export type UserBentoEventName = typeof USER_BENTO_EVENT_NAMES[number]
@@ -43,6 +44,11 @@ const USER_BENTO_EVENT_REGISTRY = {
   'User CLI login': {
     bentoEvent: 'cli:login_successful',
     delivery: 'once',
+    fields: [],
+  },
+  'User Login': {
+    bentoEvent: 'user:login',
+    delivery: 'every',
     fields: [],
   },
   'onboarding-run-started': {
@@ -194,6 +200,9 @@ function copyMappedFields(
       && value >= field.min
       && value <= field.max
     ) {
+      target[field.key] = value
+    }
+    else if (field.type === 'integer' && (value === '5.A' || value === '5.C')) {
       target[field.key] = value
     }
   }

@@ -78,7 +78,7 @@ describe('admin famous apps', () => {
     const payload = await response.json() as {
       success: boolean
       data: {
-        apps: Array<{ app_id: string, fame_score: number, tier: string, known_as: string | null }>
+        apps: Array<{ app_id: string, fame_score: number, tier: string, known_as: string | null, icon_url: string | null }>
         iconic_count: number
         famous_count: number
         notable_count: number
@@ -97,6 +97,8 @@ describe('admin famous apps', () => {
     const nicheIndex = payload.data.apps.findIndex(app => app.app_id === nicheAppId)
     expect(famousIndex).toBeGreaterThanOrEqual(0)
     expect(nicheIndex).toBeGreaterThan(famousIndex)
+    expect(famous?.icon_url).toBe('https://example.com/bank.png')
+    expect(niche?.icon_url).toBe('https://example.com/util.png')
   })
 
   it('filters by minimum fame score', async () => {

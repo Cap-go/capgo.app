@@ -14,6 +14,10 @@ const clipboardWrite = vi.hoisted(() => vi.fn())
 const cliLoginMocks = vi.hoisted(() => ({
   createCliLoginKeyDependencies: vi.fn(() => ({})),
   getCliLoginDestination: vi.fn(() => '/dashboard'),
+  isCliAiQuery: vi.fn((value: unknown) => {
+    const raw = Array.isArray(value) ? value[0] : value
+    return typeof raw === 'string' && raw.replace(/\/+$/, '') === '1'
+  }),
   isMatchingCliLoginEvent: vi.fn(() => false),
   isValidCliLoginSession: vi.fn(() => true),
   prepareCliLoginKey: vi.fn(),
@@ -91,7 +95,7 @@ beforeEach(() => {
     keyName: 'Capgo CLI',
     secret: preparedKey,
     eligibleOrgIds: ['org-1'],
-    skippedOrganizationNames: [],
+    skippedOrganizations: [],
     policy: { hashed: false, expiresAt: null },
     reused: false,
   })
@@ -177,7 +181,8 @@ describe('/login-cli page contract', () => {
 
   it.concurrent('supports a direct AI setup prompt containing the prepared key', () => {
     const page = readFileSync(pagePath, 'utf8')
-    expect(page).toContain(`const aiMode = computed(() => route.query.ai === '1')`)
+    expect(page).toContain('const aiMode = computed(() => isCliAiQuery(route.query.ai))')
+    expect(page).toContain('route.query.intent')
     expect(page).toContain('buildCliAiSetupPrompt({')
     expect(page).toContain('organizationStore.getAppsByOrgId(organization.gid)')
     expect(page).toContain('eligibleIds.has(organization.gid)')
@@ -206,8 +211,24 @@ describe('/login-cli page contract', () => {
     expect(copiedPrompt.match(new RegExp(preparedKey, 'g'))).toHaveLength(1)
   })
 
+  it('copies the Builder prompt when requested by route intent', async () => {
+    route.query = { ai: '1', intent: 'builder' }
+    const container = mountLoginCliPage()
+    await flushPromises()
+
+    const copyButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.includes(messages['cli-login-ai-copy']))
+    copyButton?.click()
+    await flushPromises()
+
+    const copiedPrompt = clipboardWrite.mock.calls[0]?.[0] as string
+    expect(copiedPrompt).toContain(`login ${preparedKey}`)
+    expect(copiedPrompt).toContain('start_capgo_builder_onboarding')
+    expect(copiedPrompt).not.toContain('## 8. Test the first live update')
+  })
+
   it.concurrent('keeps the route out of normal onboarding redirects', () => {
-    expect(auth).toContain(`const isCliLoginRoute = to.path === '/login-cli'`)
+    expect(auth).toContain('const isCliLoginRoute = isCliLoginPath(to.path)')
     expect(auth.match(/if \(isCliLoginRoute\)/g)).toHaveLength(3)
   })
 
@@ -227,7 +248,9 @@ describe('/login-cli page contract', () => {
   it.concurrent('contains focused key, paste, warning, waiting, and success copy', () => {
     expect(messages['cli-login-direct-description']).toContain(`{'@'}capgo/cli{'@'}latest`)
     expect(messages['cli-login-paste-instruction']).toContain('terminal')
-    expect(messages['cli-login-security-warning']).toContain('trust')
+    expect(messages['cli-login-security-warning']).toContain('rotate')
+    expect(messages['cli-login-security-warning']).toContain('Capgo API key')
+    expect(messages['cli-login-security-warning']).toContain('trusted terminal or tool')
     expect(messages['cli-login-copy-note']).toContain('hidden')
     expect(messages['cli-login-waiting']).toContain('Waiting')
     expect(messages['cli-login-success-title']).toContain('successful')

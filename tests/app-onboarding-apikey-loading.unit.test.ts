@@ -10,9 +10,9 @@ describe('app onboarding API key loading state', () => {
   })
 
   it.concurrent('replaces every incomplete CLI command with the shared loading treatment', () => {
-    expect(onboardingSource).not.toContain("{{ apiKey ?? '[APIKEY]' }}")
+    expect(onboardingSource).not.toContain('{{ apiKey ?? \'[APIKEY]\' }}')
     expect(onboardingSource).toContain('<Spinner')
-    expect(onboardingSource).toContain("t('app-onboarding-command-apikey-loading')")
+    expect(onboardingSource).toContain('t(\'app-onboarding-command-apikey-loading\')')
     expect(onboardingSource).not.toMatch(/role="status">\s*<div[^>]*aria-live="polite"/)
   })
 
@@ -27,7 +27,7 @@ describe('app onboarding API key loading state', () => {
     )
     const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
     const resumeLoadIndex = mountedFlow.indexOf('const resumed = await loadResumeApp()')
-    const apiKeyProvisioningIndex = mountedFlow.indexOf('void loadApiKey().catch')
+    const apiKeyProvisioningIndex = mountedFlow.indexOf('startApiKeyLoading()')
 
     expect(resumeLoader).not.toContain('ensureApiKey')
     expect(resumeLoadIndex).toBeGreaterThanOrEqual(0)
@@ -38,12 +38,28 @@ describe('app onboarding API key loading state', () => {
 
   it.concurrent('targets the created app when a stale resume falls back to replacement creation', () => {
     const keyLoader = onboardingSource.slice(
-      onboardingSource.indexOf('async function ensureApiKey()'),
-      onboardingSource.indexOf('let apiKeyLoadingPromise'),
+      onboardingSource.indexOf('async function ensureApiKey('),
+      onboardingSource.indexOf('async function loadResumeApp()'),
     )
 
+    expect(keyLoader).toContain('const userId = main.user?.id ?? main.auth?.id')
     expect(keyLoader).toContain('const appId = createdApp.value?.app_id')
     expect(keyLoader).not.toContain('resumeAppId.value')
+  })
+
+  it.concurrent('retries API key loading from both CLI entry points', () => {
+    const showCommand = onboardingSource.slice(
+      onboardingSource.indexOf('function showCliCommand()'),
+      onboardingSource.indexOf('async function reportOnboardingPatch('),
+    )
+    const installNavigation = onboardingSource.slice(
+      onboardingSource.indexOf('function goToInstallStep()'),
+      onboardingSource.indexOf('async function openDashboard()'),
+    )
+
+    expect(showCommand).toContain('startApiKeyLoading()')
+    expect(installNavigation).toContain('startApiKeyLoading()')
+    expect(onboardingSource).toContain('@click="showCliCommand"')
   })
 
   it.concurrent('renders ready commands as native DaisyUI buttons', () => {
@@ -77,9 +93,9 @@ describe('app onboarding API key loading state', () => {
     expect(copyHandler).toContain('await loadApiKey()')
     expect(copyHandler).toContain('if (!apiKey.value)')
     expect(copyHandler).toContain('await copyText(createAiHelpPrompt())')
-    expect(copyHandler).toContain("trackSuccessfulCopy('onboarding_ai_instructions_copied')")
+    expect(copyHandler).toContain('trackSuccessfulCopy(\'onboarding_ai_instructions_copied\')')
     expect(copyHandler).not.toContain('dialogStore.openDialog({')
     expect(copyHandler).not.toContain('redactedCliCommand')
-    expect(onboardingSource).toContain("trackSuccessfulCopy('onboarding_cli_command_copied')")
+    expect(onboardingSource).toContain('trackSuccessfulCopy(\'onboarding_cli_command_copied\')')
   })
 })

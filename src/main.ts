@@ -175,6 +175,7 @@ const router = createRouter({
     { path: '/app', redirect: '/apps' },
     { path: '/settings/plans', redirect: '/settings/organization/plans' },
     { path: '/settings/usage', redirect: '/settings/organization/usage' },
+    { path: '/.well-known/change-password', redirect: '/settings/account/change-password' },
     { path: '/settings/change-password', redirect: '/settings/account/change-password' },
     { path: '/settings/changepassword', redirect: '/settings/account/change-password' },
     { path: '/settings/notifications', redirect: '/settings/account/notifications' },

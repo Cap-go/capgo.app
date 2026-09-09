@@ -158,6 +158,10 @@ interface BuildLogger {
 - `--output-retention <duration>`: `1h` to `7d`
 - `--skip-build-number-bump`
 - `--no-skip-build-number-bump`
+- `--no-cache`: disable Xcode compilation cache for this build (default: cache enabled). Example: `npx @capgo/cli@latest build request com.example.app --platform ios --no-cache`
+- `--cache-key <key>`: custom compilation cache namespace for this build (e.g. `rc`, `prod`, `feature/my-branch`). Use to share cache within an environment or isolate cache between RC and production. Ignored when `--no-cache` is set. Example RC vs PROD:
+  - RC: `npx @capgo/cli@latest build request com.example.app --platform ios --cache-key rc`
+  - PROD: `npx @capgo/cli@latest build request com.example.app --platform ios --cache-key prod`
 
 ## Local credential management
 
@@ -170,7 +174,7 @@ Credentials are stored locally, either globally in `~/.capgo-credentials/credent
 - Example iOS flow:
 
 ```bash
-npx @capgo/cli build credentials save --platform ios \
+npx @capgo/cli@latest build credentials save --platform ios \
   --certificate ./cert.p12 --p12-password "password" \
   --ios-provisioning-profile ./profile.mobileprovision \
   --apple-key ./AuthKey.p8 --apple-key-id "KEY123" \
@@ -180,7 +184,7 @@ npx @capgo/cli build credentials save --platform ios \
 - Example multi-target iOS flow:
 
 ```bash
-npx @capgo/cli build credentials save --platform ios \
+npx @capgo/cli@latest build credentials save --platform ios \
   --ios-provisioning-profile ./App.mobileprovision \
   --ios-provisioning-profile com.example.widget=./Widget.mobileprovision
 ```
@@ -188,7 +192,7 @@ npx @capgo/cli build credentials save --platform ios \
 - Example Android flow:
 
 ```bash
-npx @capgo/cli build credentials save --platform android \
+npx @capgo/cli@latest build credentials save --platform android \
   --keystore ./release.keystore --keystore-alias "my-key" \
   --keystore-key-password "key-pass" \
   --play-config ./service-account.json
@@ -227,8 +231,8 @@ npx @capgo/cli build credentials save --platform android \
 ### `build credentials list`
 
 - Examples:
-  - `npx @capgo/cli build credentials list`
-  - `npx @capgo/cli build credentials list --appId com.example.app`
+  - `npx @capgo/cli@latest build credentials list`
+  - `npx @capgo/cli@latest build credentials list --appId com.example.app`
 - Options:
   - `--appId <appId>`
   - `--local`
@@ -236,9 +240,9 @@ npx @capgo/cli build credentials save --platform android \
 ### `build credentials clear`
 
 - Examples:
-  - `npx @capgo/cli build credentials clear`
-  - `npx @capgo/cli build credentials clear --local`
-  - `npx @capgo/cli build credentials clear --appId com.example.app --platform ios`
+  - `npx @capgo/cli@latest build credentials clear`
+  - `npx @capgo/cli@latest build credentials clear --local`
+  - `npx @capgo/cli@latest build credentials clear --appId com.example.app --platform ios`
 - Options:
   - `--appId <appId>`
   - `--platform <platform>`
@@ -249,8 +253,8 @@ npx @capgo/cli build credentials save --platform android \
 - Use to update specific credential fields without re-entering all data.
 - Platform is auto-detected from the supplied options.
 - Examples:
-  - `npx @capgo/cli build credentials update --ios-provisioning-profile ./new-profile.mobileprovision`
-  - `npx @capgo/cli build credentials update --local --keystore ./new-keystore.jks`
+  - `npx @capgo/cli@latest build credentials update --ios-provisioning-profile ./new-profile.mobileprovision`
+  - `npx @capgo/cli@latest build credentials update --local --keystore ./new-keystore.jks`
 - Core options:
   - `--appId <appId>`
   - `--platform <platform>`
@@ -261,9 +265,38 @@ npx @capgo/cli build credentials save --platform android \
   - `--skip-build-number-bump`, `--no-skip-build-number-bump`
 - Supports the same iOS and Android credential fields as `build credentials save`.
 
+### `build credentials ios-provisioning`
+
+- Repairs missing App Store provisioning-profile entries for every signable target in the current Capacitor iOS project.
+- Reuses a compatible wildcard profile only after confirmation; otherwise uses saved App Store Connect API-key credentials to create target-specific profiles.
+- Use `--local` or `--global` to select the credential store. If both stores contain credentials for the app and neither option is passed, the command exits and asks you to choose one.
+
+```bash
+npx @capgo/cli@latest build credentials ios-provisioning --local
+```
+
+### `build credentials export <VARIABLE>`
+
+- Exports one value from saved Builder credentials only; environment variables are never used.
+- Requires `--app-id <APP_ID>`.
+- Requires exactly one output mode:
+  - `--raw` writes only the exact stored value to stdout, with no trailing newline. Failures go to stderr and exit with status `1`.
+  - `--file <PATH>` creates a new `0600` file and never overwrites an existing path. Interactive runs prompt before decoding values that look like Base64; `--decode-base64` forces decoding. A negative response or non-interactive run preserves the stored text.
+- Use `--local` or `--global` when the app has saved credentials in both stores. Use `--platform ios|android` when the value is ambiguous across platforms.
+
+```bash
+# Exact value for a CI secret or pipe: no newline is added.
+npx @capgo/cli@latest build credentials export P12_PASSWORD \
+  --app-id com.example.app --platform ios --raw
+
+# Create a new decoded keystore file; existing paths are refused.
+npx @capgo/cli@latest build credentials export ANDROID_KEYSTORE_FILE \
+  --app-id com.example.app --platform android --file ./release.keystore --decode-base64
+```
+
 ### `build credentials migrate`
 
-- Example: `npx @capgo/cli build credentials migrate --platform ios`
+- Example: `npx @capgo/cli@latest build credentials migrate --platform ios`
 - Notes:
   - Converts `BUILD_PROVISION_PROFILE_BASE64` to `CAPGO_IOS_PROVISIONING_MAP`.
   - Discovers the main bundle ID from the Xcode project automatically.

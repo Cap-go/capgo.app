@@ -28,6 +28,7 @@ import type {
   GetStatsOptions,
   ListOrganizationsOptions,
   LoginOptions,
+  ObserveOptions,
   OrganizationInfo,
   ProbeOptions,
   RequestBuildOptions,
@@ -70,10 +71,12 @@ import { resolveCapacitorConfigTargetPath, withConfigWriteTarget } from './confi
 import { starAllRepositories as starAllRepositoriesInternal, starRepository } from './github'
 import { createKeyInternal, deleteOldPrivateKeyInternal, saveKeyInternal } from './key'
 import { loginInternal } from './login'
+import { fetchObserve } from './observe/api'
 import { addOrganizationInternal } from './organization/add'
 import { deleteOrganizationInternal } from './organization/delete'
 import { listOrganizationsInternal } from './organization/list'
 import { setOrganizationInternal } from './organization/set'
+import { requestBuildOptionsSchema, updateChannelOptionsSchema, uploadOptionsSchema } from './schemas/sdk'
 import { CliUserError } from './shared/cli-user-error'
 import { getUserIdInternal } from './user/account'
 import { createSupabaseClient, findSavedKey, getConfig, getLocalConfig } from './utils'
@@ -540,37 +543,39 @@ export class CapgoSDK {
    */
   async uploadBundle(options: UploadOptions): Promise<UploadResult> {
     try {
-      return await withCapacitorConfigTarget(options.capacitorConfig, async () => {
+      const parsed = uploadOptionsSchema.parse(options)
+      return await withCapacitorConfigTarget(parsed.capacitorConfig, async () => {
         // Convert SDK options to internal format
         const internalOptions: OptionsUpload = {
-          apikey: options.apikey || this.apikey || findSavedKey(true),
-          supaHost: options.supaHost || this.supaHost,
-          supaAnon: options.supaAnon || this.supaAnon,
-          path: options.path,
-          bundle: options.bundle,
-          channel: options.channel,
-          rollout: options.rollout,
-          rolloutPercentageBps: options.rolloutPercentageBps,
-          rolloutCacheTtlSeconds: options.rolloutCacheTtlSeconds,
-          external: options.external,
-          key: options.encrypt !== false, // default true unless explicitly false
-          keyV2: options.encryptionKey,
-          timeout: options.timeout,
-          tus: options.useTus,
-          comment: options.comment,
-          minUpdateVersion: options.minUpdateVersion,
-          autoMinUpdateVersion: options.autoMinUpdateVersion,
-          autoSetBundle: options.autoSetBundle,
-          autoBump: normalizeAutoBumpInput(options.autoBump),
-          selfAssign: options.selfAssign,
-          packageJson: options.packageJsonPaths,
-          ignoreMetadataCheck: options.ignoreCompatibilityCheck,
-          codeCheck: !options.disableCodeCheck, // disable if requested, otherwise check
-          zip: options.useZip, // use legacy zip upload if requested
+          apikey: parsed.apikey || this.apikey || findSavedKey(true),
+          supaHost: parsed.supaHost || this.supaHost,
+          supaAnon: parsed.supaAnon || this.supaAnon,
+          path: parsed.path,
+          bundle: parsed.bundle,
+          channel: parsed.channel,
+          rollout: parsed.rollout,
+          rolloutPercentageBps: parsed.rolloutPercentageBps,
+          rolloutCacheTtlSeconds: parsed.rolloutCacheTtlSeconds,
+          external: parsed.external,
+          key: parsed.encrypt !== false, // default true unless explicitly false
+          keyV2: parsed.encryptionKey,
+          timeout: parsed.timeout,
+          tus: parsed.useTus,
+          comment: parsed.comment,
+          minUpdateVersion: parsed.minUpdateVersion,
+          autoMinUpdateVersion: parsed.autoMinUpdateVersion,
+          autoSetBundle: parsed.autoSetBundle,
+          autoBump: normalizeAutoBumpInput(parsed.autoBump),
+          selfAssign: parsed.selfAssign,
+          packageJson: parsed.packageJsonPaths,
+          ignoreMetadataCheck: parsed.ignoreCompatibilityCheck,
+          acceptIncompatible: parsed.acceptIncompatible,
+          codeCheck: !parsed.disableCodeCheck, // disable if requested, otherwise check
+          zip: parsed.useZip, // use legacy zip upload if requested
         }
 
         // Call internal upload function but suppress CLI behaviors
-        const uploadResponse = await uploadBundleInternal(options.appId, internalOptions, true)
+        const uploadResponse = await uploadBundleInternal(parsed.appId, internalOptions, true)
 
         return {
           success: uploadResponse.success,
@@ -729,16 +734,18 @@ export class CapgoSDK {
    */
   async requestBuild(options: RequestBuildOptions): Promise<SDKResult<{ jobId: string, uploadUrl: string, status: string }>> {
     try {
+      const parsed = requestBuildOptionsSchema.parse(options)
+
       // Convert BuildCredentials object to flattened CLI-compatible format
-      const creds = options.credentials
+      const creds = parsed.credentials
       const internalOptions: InternalBuildRequestOptions = {
-        apikey: options.apikey || this.apikey || findSavedKey(true),
-        supaHost: options.supaHost || this.supaHost,
-        supaAnon: options.supaAnon || this.supaAnon,
-        path: options.path,
-        nodeModules: options.nodeModules,
-        platform: options.platform,
-        userId: options.userId,
+        apikey: parsed.apikey || this.apikey || findSavedKey(true),
+        supaHost: parsed.supaHost || this.supaHost,
+        supaAnon: parsed.supaAnon || this.supaAnon,
+        path: parsed.path,
+        nodeModules: parsed.nodeModules,
+        platform: parsed.platform,
+        userId: parsed.userId,
         // Flatten BuildCredentials to individual fields
         buildCertificateBase64: creds?.BUILD_CERTIFICATE_BASE64,
         p12Password: creds?.P12_PASSWORD,
@@ -758,23 +765,25 @@ export class CapgoSDK {
         keystoreKeyPassword: creds?.KEYSTORE_KEY_PASSWORD,
         keystoreStorePassword: creds?.KEYSTORE_STORE_PASSWORD,
         playConfigJson: creds?.PLAY_CONFIG_JSON,
-        androidTrack: options.androidTrack ?? (creds?.PLAY_STORE_TRACK as 'internal' | 'alpha' | 'beta' | 'production' | undefined),
-        androidReleaseStatus: options.androidReleaseStatus ?? (creds?.PLAY_STORE_RELEASE_STATUS as 'draft' | 'completed' | 'inProgress' | 'halted' | undefined),
-        submitToStoreReview: options.submitToStoreReview ?? (creds?.CAPGO_STORE_SUBMIT_REVIEW === undefined ? undefined : creds.CAPGO_STORE_SUBMIT_REVIEW === 'true'),
-        storeReleaseName: options.storeReleaseName ?? creds?.CAPGO_STORE_RELEASE_NAME,
-        storeReleaseNotes: options.storeReleaseNotes ?? creds?.CAPGO_STORE_RELEASE_NOTES,
-        storeReleaseNotesLocalized: options.storeReleaseNotesLocalized ?? parseStoreReleaseNotesLocalizedJson(creds?.CAPGO_STORE_RELEASE_NOTES_LOCALIZED),
-        iosTestflightGroups: options.iosTestflightGroups ?? creds?.CAPGO_IOS_TESTFLIGHT_GROUPS,
-        iosAutomaticRelease: options.iosAutomaticRelease ?? (creds?.CAPGO_IOS_AUTOMATIC_RELEASE === undefined ? undefined : creds.CAPGO_IOS_AUTOMATIC_RELEASE === 'true'),
+        androidTrack: parsed.androidTrack ?? (creds?.PLAY_STORE_TRACK as 'internal' | 'alpha' | 'beta' | 'production' | undefined),
+        androidReleaseStatus: parsed.androidReleaseStatus ?? (creds?.PLAY_STORE_RELEASE_STATUS as 'draft' | 'completed' | 'inProgress' | 'halted' | undefined),
+        submitToStoreReview: parsed.submitToStoreReview ?? (creds?.CAPGO_STORE_SUBMIT_REVIEW === undefined ? undefined : creds.CAPGO_STORE_SUBMIT_REVIEW === 'true'),
+        storeReleaseName: parsed.storeReleaseName ?? creds?.CAPGO_STORE_RELEASE_NAME,
+        storeReleaseNotes: parsed.storeReleaseNotes ?? creds?.CAPGO_STORE_RELEASE_NOTES,
+        storeReleaseNotesLocalized: parsed.storeReleaseNotesLocalized ?? parseStoreReleaseNotesLocalizedJson(creds?.CAPGO_STORE_RELEASE_NOTES_LOCALIZED),
+        iosTestflightGroups: parsed.iosTestflightGroups ?? creds?.CAPGO_IOS_TESTFLIGHT_GROUPS,
+        iosAutomaticRelease: parsed.iosAutomaticRelease ?? (creds?.CAPGO_IOS_AUTOMATIC_RELEASE === undefined ? undefined : creds.CAPGO_IOS_AUTOMATIC_RELEASE === 'true'),
         // Prescan escape hatch: SDK callers own their output channel and cannot
         // pass CLI flags, so expose the gate controls directly.
-        prescan: options.prescan,
-        prescanIgnoreFatal: options.prescanIgnoreFatal,
-        prescanSkip: options.prescanSkip,
-        prescanWarn: options.prescanWarn,
+        prescan: parsed.prescan,
+        prescanIgnoreFatal: parsed.prescanIgnoreFatal,
+        prescanSkip: parsed.prescanSkip,
+        prescanWarn: parsed.prescanWarn,
+        cache: parsed.cache,
+        cacheKey: parsed.cacheKey,
       }
 
-      const result = await requestBuildInternal(options.appId, internalOptions, true)
+      const result = await requestBuildInternal(parsed.appId, internalOptions, true)
 
       if (result.success && result.jobId) {
         return {
@@ -867,48 +876,50 @@ export class CapgoSDK {
    */
   async updateChannel(options: UpdateChannelOptions): Promise<SDKResult> {
     try {
+      const parsed = updateChannelOptionsSchema.parse(options)
       const internalOptions: OptionsSetChannel = {
-        apikey: options.apikey || this.apikey || findSavedKey(true),
-        supaHost: options.supaHost || this.supaHost,
-        supaAnon: options.supaAnon || this.supaAnon,
-        bundle: options.bundle ?? undefined,
-        state: options.state,
-        downgrade: options.downgrade,
-        ios: options.ios,
-        android: options.android,
-        selfAssign: options.selfAssign,
-        disableAutoUpdate: options.disableAutoUpdate ?? undefined,
-        updatePackage: options.updatePackage,
-        dev: options.dev,
-        emulator: options.emulator,
-        device: options.device,
-        prod: options.prod,
-        rolloutBundle: options.rolloutBundle,
-        rolloutPercentage: options.rolloutPercentage,
-        rolloutPercentageBps: options.rolloutPercentageBps,
-        rolloutEnable: options.rolloutEnable,
-        rolloutDisable: options.rolloutDisable,
-        rolloutPause: options.rolloutPause,
-        rolloutResume: options.rolloutResume,
-        rolloutRollback: options.rolloutRollback,
-        rolloutPromote: options.rolloutPromote,
-        rolloutCacheTtlSeconds: options.rolloutCacheTtlSeconds,
-        autoPauseEnabled: options.autoPauseEnabled,
-        autoPauseDisabled: options.autoPauseDisabled,
-        autoPauseWindowMinutes: options.autoPauseWindowMinutes,
-        autoPauseFailureRateBps: options.autoPauseFailureRateBps,
-        autoPauseConfidence: options.autoPauseConfidence,
-        autoPauseMinAttempts: options.autoPauseMinAttempts,
-        autoPauseMinFailures: options.autoPauseMinFailures,
-        autoPauseAction: options.autoPauseAction,
-        autoPauseCooldownMinutes: options.autoPauseCooldownMinutes,
+        apikey: parsed.apikey || this.apikey || findSavedKey(true),
+        supaHost: parsed.supaHost || this.supaHost,
+        supaAnon: parsed.supaAnon || this.supaAnon,
+        bundle: parsed.bundle ?? undefined,
+        state: parsed.state,
+        downgrade: parsed.downgrade,
+        ios: parsed.ios,
+        android: parsed.android,
+        selfAssign: parsed.selfAssign,
+        disableAutoUpdate: parsed.disableAutoUpdate ?? undefined,
+        updatePackage: parsed.updatePackage,
+        dev: parsed.dev,
+        emulator: parsed.emulator,
+        device: parsed.device,
+        prod: parsed.prod,
+        rolloutBundle: parsed.rolloutBundle,
+        rolloutPercentage: parsed.rolloutPercentage,
+        rolloutPercentageBps: parsed.rolloutPercentageBps,
+        rolloutEnable: parsed.rolloutEnable,
+        rolloutDisable: parsed.rolloutDisable,
+        rolloutPause: parsed.rolloutPause,
+        rolloutResume: parsed.rolloutResume,
+        rolloutRollback: parsed.rolloutRollback,
+        rolloutPromote: parsed.rolloutPromote,
+        rolloutCacheTtlSeconds: parsed.rolloutCacheTtlSeconds,
+        autoPauseEnabled: parsed.autoPauseEnabled,
+        autoPauseDisabled: parsed.autoPauseDisabled,
+        autoPauseWindowMinutes: parsed.autoPauseWindowMinutes,
+        autoPauseFailureRateBps: parsed.autoPauseFailureRateBps,
+        autoPauseConfidence: parsed.autoPauseConfidence,
+        autoPauseMinAttempts: parsed.autoPauseMinAttempts,
+        autoPauseMinFailures: parsed.autoPauseMinFailures,
+        autoPauseAction: parsed.autoPauseAction,
+        autoPauseCooldownMinutes: parsed.autoPauseCooldownMinutes,
         latest: false,
         latestRemote: false,
         packageJson: undefined,
         ignoreMetadataCheck: false,
+        acceptIncompatible: parsed.acceptIncompatible,
       }
 
-      await setChannelInternal(options.channelId, options.appId, internalOptions, true)
+      await setChannelInternal(parsed.channelId, parsed.appId, internalOptions, true)
 
       return { success: true }
     }
@@ -1251,6 +1262,25 @@ export class CapgoSDK {
     }
   }
 
+  /**
+   * Query Capgo Observe (launch, issues, routes, device timelines).
+   * Start with view=summary; follow findings.next. Use --json / MCP for agents.
+   */
+  async observe(options: ObserveOptions): Promise<SDKResult<Record<string, unknown>>> {
+    try {
+      const data = await fetchObserve({
+        ...options,
+        apikey: options.apikey || this.apikey,
+        supaHost: options.supaHost || this.supaHost,
+        supaAnon: options.supaAnon || this.supaAnon,
+      })
+      return { success: true, data }
+    }
+    catch (error) {
+      return createErrorResult(error)
+    }
+  }
+
   // ==========================================================================
   // Miscellaneous Helpers
   // ==========================================================================
@@ -1577,6 +1607,19 @@ export async function getStats(options: GetStatsOptions): Promise<SDKResult<Devi
   return sdk.getStats(options)
 }
 
+/**
+ * Query Capgo Observe (functional API).
+ * Start with view=summary and follow findings.next. view=device is the session timeline.
+ */
+export async function getObserve(options: ObserveOptions): Promise<SDKResult<Record<string, unknown>>> {
+  const sdk = new CapgoSDK({
+    apikey: options.apikey,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
+  return sdk.observe(options)
+}
+
 export async function probeUpdates(options: ProbeOptions): Promise<SDKResult<ProbeInternalResult>> {
   const sdk = new CapgoSDK()
   return sdk.probe(options)
@@ -1633,6 +1676,7 @@ export type {
   GetStatsOptions,
   ListOrganizationsOptions,
   LoginOptions,
+  ObserveOptions,
   OrganizationInfo,
   ProbeOptions,
   RequestBuildOptions,

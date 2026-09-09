@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.17"
+    PostgrestVersion: "14.5"
   }
   graphql_public: {
     Tables: {
@@ -2245,6 +2245,7 @@ export type Database = {
           id: string
           owner_org: string
           provider: string
+          secret_ciphertext: string | null
           secret_ref: string | null
           status: string
           updated_at: string
@@ -2257,6 +2258,7 @@ export type Database = {
           id?: string
           owner_org: string
           provider: string
+          secret_ciphertext?: string | null
           secret_ref?: string | null
           status: string
           updated_at?: string
@@ -2269,6 +2271,7 @@ export type Database = {
           id?: string
           owner_org?: string
           provider?: string
+          secret_ciphertext?: string | null
           secret_ref?: string | null
           status?: string
           updated_at?: string
@@ -2548,6 +2551,9 @@ export type Database = {
       }
       orgs: {
         Row: {
+          auto_top_up_enabled: boolean
+          auto_top_up_last_attempt_at: string | null
+          auto_top_up_threshold: number
           created_at: string | null
           created_by: string
           customer_id: string | null
@@ -2568,10 +2574,16 @@ export type Database = {
           required_encryption_key: string | null
           stats_refresh_requested_at: string | null
           stats_updated_at: string | null
+          support_channel_set_at: string | null
+          support_channel_type: string | null
+          support_channel_url: string | null
           updated_at: string | null
           website: string | null
         }
         Insert: {
+          auto_top_up_enabled?: boolean
+          auto_top_up_last_attempt_at?: string | null
+          auto_top_up_threshold?: number
           created_at?: string | null
           created_by: string
           customer_id?: string | null
@@ -2592,10 +2604,16 @@ export type Database = {
           required_encryption_key?: string | null
           stats_refresh_requested_at?: string | null
           stats_updated_at?: string | null
+          support_channel_set_at?: string | null
+          support_channel_type?: string | null
+          support_channel_url?: string | null
           updated_at?: string | null
           website?: string | null
         }
         Update: {
+          auto_top_up_enabled?: boolean
+          auto_top_up_last_attempt_at?: string | null
+          auto_top_up_threshold?: number
           created_at?: string | null
           created_by?: string
           customer_id?: string | null
@@ -2616,6 +2634,9 @@ export type Database = {
           required_encryption_key?: string | null
           stats_refresh_requested_at?: string | null
           stats_updated_at?: string | null
+          support_channel_set_at?: string | null
+          support_channel_type?: string | null
+          support_channel_url?: string | null
           updated_at?: string | null
           website?: string | null
         }
@@ -3875,6 +3896,13 @@ export type Database = {
         Returns: boolean
       }
       app_has_real_bundle: { Args: { p_app_id: string }; Returns: boolean }
+      app_version_manifest_jsonb_unmigrated: {
+        Args: {
+          p_manifest: Database["public"]["CompositeTypes"]["manifest_entry"][]
+          p_version_id: number
+        }
+        Returns: boolean
+      }
       app_versions_readable_app_ids: { Args: never; Returns: string[] }
       apply_usage_overage: {
         Args: {
@@ -4980,6 +5008,10 @@ export type Database = {
         Args: { p_rollout_version_id: number; p_version_id: number }
         Returns: undefined
       }
+      lock_rbac_apikey_principal: {
+        Args: { p_rbac_id: string }
+        Returns: undefined
+      }
       lock_rbac_orgs: {
         Args: { p_first_org_id: string; p_second_org_id?: string }
         Returns: undefined
@@ -5345,6 +5377,10 @@ export type Database = {
         Args: { p_app_id: string; p_app_uuid: string; p_owner_org: string }
         Returns: undefined
       }
+      refresh_one_app_onboarding_progress: {
+        Args: { p_app_id: string }
+        Returns: Json
+      }
       refresh_orgs_has_usage_credits: { Args: never; Returns: undefined }
       regenerate_hashed_apikey: {
         Args: { p_apikey_id: number }
@@ -5534,6 +5570,24 @@ export type Database = {
         Args: { p_app_id: string; p_new_org_id: string }
         Returns: undefined
       }
+      try_claim_credit_auto_top_up: {
+        Args: { p_org_id: string }
+        Returns: {
+          auto_top_up_enabled: boolean
+          auto_top_up_threshold: number
+          available_credits: number
+          claimed: boolean
+          customer_id: string
+        }[]
+      }
+      try_complete_pending_onboarding: {
+        Args: { p_app_id: string }
+        Returns: boolean
+      }
+      try_complete_pending_onboarding_if_setup_done: {
+        Args: { p_app_id: string }
+        Returns: boolean
+      }
       update_app_versions_retention: { Args: never; Returns: undefined }
       update_org_invite_role_rbac: {
         Args: { p_new_role_name: string; p_org_id: string; p_user_id: string }
@@ -5569,6 +5623,7 @@ export type Database = {
         Returns: boolean
       }
       verify_email_otp_auth: { Args: never; Returns: boolean }
+      verify_getting_started: { Args: { p_app_id: string }; Returns: Json }
       verify_mfa: { Args: never; Returns: boolean }
     }
     Enums: {
@@ -5682,6 +5737,7 @@ export type Database = {
         | "app_launch_timeout"
         | "webview_dom_content_loaded"
         | "webview_page_loaded"
+        | "app_nav"
       stripe_status:
         | "created"
         | "succeeded"
@@ -5735,12 +5791,12 @@ export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -5764,11 +5820,11 @@ export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -5789,11 +5845,11 @@ export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -5814,11 +5870,11 @@ export type Enums<
   DefaultSchemaEnumNameOrOptions extends
     | keyof DefaultSchema["Enums"]
     | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -5831,11 +5887,11 @@ export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
     | keyof DefaultSchema["CompositeTypes"]
     | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never = never,
+    : never) = never,
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -5962,6 +6018,7 @@ export const Constants = {
         "app_launch_timeout",
         "webview_dom_content_loaded",
         "webview_page_loaded",
+        "app_nav",
       ],
       stripe_status: [
         "created",

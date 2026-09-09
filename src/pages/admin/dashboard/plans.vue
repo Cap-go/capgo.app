@@ -59,13 +59,14 @@ async function loadPlansAnalytics() {
 
 const series = computed(() => data.value
   ? buildPlansAnalyticsSeries(data.value, t)
-  : { traffic: [], visitors: [], checkoutIntent: [], checkoutVisitors: [] })
+  : { traffic: [], visitors: [], checkoutIntent: [], checkoutCompletion: [], checkoutVisitors: [] })
 
 const presentation = computed(() => buildPlansAnalyticsPresentationState(data.value, requestError.value, t))
 const unavailableMessage = computed(() => presentation.value.unavailableMessage)
 const hasTraffic = computed(() => presentation.value.hasTraffic)
 const hasVisitors = computed(() => presentation.value.hasVisitors)
 const hasCheckoutIntent = computed(() => presentation.value.hasCheckoutIntent)
+const hasCheckoutCompletion = computed(() => presentation.value.hasCheckoutCompletion)
 const hasCheckoutVisitors = computed(() => presentation.value.hasCheckoutVisitors)
 
 watch([
@@ -298,24 +299,45 @@ displayStore.defaultBack = '/dashboard'
             </div>
           </ChartCard>
 
-          <ChartCard chart-id="checkout-completion" :title="t('plans-analytics-checkout-completion')" :has-data="true">
+          <ChartCard
+            chart-id="checkout-completion"
+            :title="t('plans-analytics-checkout-completion')"
+            :is-loading="isLoadingStats"
+            :has-data="hasCheckoutCompletion"
+            :error-message="unavailableMessage ?? undefined"
+            :no-data-message="t('plans-analytics-empty')"
+          >
             <template #header>
-              <h2 class="text-xl font-semibold text-slate-900 dark:text-white sm:text-2xl">
+              <h2 id="plans-checkout-completion-title" class="text-xl font-semibold text-slate-900 dark:text-white sm:text-2xl">
                 {{ t('plans-analytics-checkout-completion') }}
               </h2>
-            </template>
-            <div class="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
-              <p class="max-w-2xl text-sm text-slate-600 dark:text-slate-300">
+              <p id="plans-checkout-completion-description" class="mt-1 text-sm text-slate-500 dark:text-slate-400">
                 {{ t('plans-analytics-checkout-completion-description') }}
               </p>
-              <a
-                href="https://github.com/Cap-go/capgo.app/blob/main/docs/admin/plans-checkout-completion.md"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="font-medium text-primary underline underline-offset-4 hover:no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-              >
-                {{ t('plans-analytics-checkout-completion-link') }}
-              </a>
+            </template>
+            <div role="group" aria-labelledby="plans-checkout-completion-title" aria-describedby="plans-checkout-completion-description" class="h-full">
+              <AdminStackedBarChart :series="series.checkoutCompletion" :is-loading="isLoadingStats" accessible-borders />
+              <table class="sr-only">
+                <caption>{{ t('plans-analytics-checkout-completion-description') }}</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">
+                      {{ t('date') }}
+                    </th><th v-for="item in series.checkoutCompletion" :key="item.label" scope="col">
+                      {{ item.label }}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(point, index) in series.checkoutCompletion[0]?.data ?? []" :key="point.date">
+                    <th scope="row">
+                      {{ point.date }}
+                    </th><td v-for="item in series.checkoutCompletion" :key="item.label">
+                      {{ item.data[index]?.value ?? 0 }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </ChartCard>
         </div>
