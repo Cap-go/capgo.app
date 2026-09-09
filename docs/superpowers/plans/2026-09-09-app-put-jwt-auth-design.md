@@ -12,7 +12,7 @@ This first PR changes only authentication and authenticated database-client sele
 
 The route will use the existing dual-auth `middlewareAuth()` middleware with a route-scoped option that prefers an explicit `capgkey` over `Authorization`. This preserves self-hosted CLI requests whose `Authorization` header contains the Supabase project token without changing authentication precedence on unrelated endpoints. Without `capgkey`, a UUID-shaped raw `Authorization` value remains an API key and a bearer/raw JWT remains a JWT.
 
-The app update handler will use `c.get('auth')` and `supabaseWithAuth()` rather than assuming `c.get('apikey')` exists. API-key and subkey contexts continue to create an API-key-scoped Supabase client. JWT contexts create a user-JWT Supabase client, so existing RLS and `checkPermission()` checks remain authoritative. Narrow onboarding-only writes that already run through explicit authorization and direct PostgreSQL keep their current behavior.
+The app update handler will prefer `c.get('auth')` and `supabaseWithAuth()`, retaining its existing API-key parameter only as a fallback for direct or legacy callers. API-key and subkey contexts continue to create an API-key-scoped Supabase client. JWT contexts create a user-JWT Supabase client, so existing RLS and `checkPermission()` checks remain authoritative. Narrow onboarding-only writes that already run through explicit authorization and direct PostgreSQL keep their current behavior.
 
 ## Compatibility and security
 

@@ -769,13 +769,7 @@ export function middlewareAuth(options: { preferApiKey?: boolean } = {}) {
     }
 
     const { jwt, capgkey } = resolveAuthHeaders(c)
-    if (capgkey && options.preferApiKey) {
-      const res = await foundAPIKey(c, capgkey)
-      if (res) {
-        return res
-      }
-    }
-    else if (jwt) {
+    if (jwt && !(capgkey && options.preferApiKey)) {
       const res = await foundJWT(c, jwt)
       if (res) {
         return res

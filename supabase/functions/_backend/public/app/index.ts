@@ -59,7 +59,10 @@ app.put('/:id', middlewareAuth({ preferApiKey: true }), async (c) => {
     android_store_url?: string | null
     onboarding?: unknown
   }>(c)
-  return put(c, id, body)
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  const subkey = c.get('subkey') as Database['public']['Tables']['apikeys']['Row'] | undefined
+  const keyToUse = subkey || apikey
+  return put(c, id, body, keyToUse)
 })
 
 app.delete('/:id', middlewareKey(), async (c) => {

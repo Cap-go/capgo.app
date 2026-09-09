@@ -4,7 +4,7 @@
 
 **Goal:** Allow `PUT /app/:appId` to authenticate signed-in users with Supabase JWTs without breaking API-key, subkey, published CLI, or self-hosted CLI callers.
 
-**Architecture:** Reuse `middlewareAuth()` at the route boundary with a route-scoped option that makes an explicit `capgkey` take precedence over a simultaneous project bearer token. Inside the handler, select the RLS-enforcing Supabase client from the normalized `AuthInfo` using `supabaseWithAuth()` instead of requiring an API-key row.
+**Architecture:** Reuse `middlewareAuth()` at the route boundary with a route-scoped option that makes an explicit `capgkey` take precedence over a simultaneous project bearer token. Inside the handler, select the RLS-enforcing Supabase client from normalized auth, retaining the existing API-key argument only as a legacy fallback.
 
 **Tech Stack:** TypeScript, Hono, Supabase/PostgREST, Vitest, Bun
 
@@ -55,7 +55,7 @@ Add an optional `preferApiKey` setting to `middlewareAuth()`. When enabled and `
 
 - [ ] **Step 2: Switch the route to dual authentication**
 
-Change the app PUT route from `middlewareKey()` to `middlewareAuth({ preferApiKey: true })`. Stop extracting and passing an API-key-only argument from the router.
+Change the app PUT route from `middlewareKey()` to `middlewareAuth({ preferApiKey: true })`. Keep passing the existing key argument as a fallback for direct or legacy handler callers.
 
 - [ ] **Step 3: Select the database client from `AuthInfo`**
 
@@ -63,9 +63,7 @@ In `public/app/put.ts`, obtain the normalized auth context and create the caller
 
 ```ts
 const auth = c.get('auth')
-if (!auth)
-  throw quickError(401, 'not_authorized', 'Not authorized')
-const authClient = supabaseWithAuth(c, auth)
+const authClient = auth ? supabaseWithAuth(c, auth) : supabaseApikey(c, apikey.key)
 ```
 
 Use `authClient` for the previous-app read and the general RLS-backed settings update. Keep the existing explicitly authorized direct-PostgreSQL onboarding paths unchanged.
