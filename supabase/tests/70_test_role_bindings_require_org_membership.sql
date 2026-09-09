@@ -313,6 +313,31 @@ SELECT lives_ok(
       role_id,
       scope_type,
       org_id,
+      app_id,
+      granted_by
+    )
+    SELECT
+      public.rbac_principal_apikey(),
+      (SELECT rbac_id FROM membership_test_apikey_org_scope_rbac),
+      roles.id,
+      public.rbac_scope_app(),
+      '70000000-0000-4000-8000-000000009976',
+      apps.id,
+      tests.get_supabase_uid('rbac_membership_admin')
+    FROM public.roles
+    JOIN public.apps ON apps.app_id = 'com.test.rbac.membership.ghsa9976'
+    WHERE roles.name = public.rbac_role_app_reader()
+      AND roles.scope_type = public.rbac_scope_app()$$,
+  'org admin can grant an app-scoped role to an apikey with its own org-scope binding'
+);
+
+SELECT lives_ok(
+  $$INSERT INTO public.role_bindings (
+      principal_type,
+      principal_id,
+      role_id,
+      scope_type,
+      org_id,
       granted_by
     )
     SELECT
@@ -340,7 +365,7 @@ SELECT throws_ok(
     )
     SELECT
       public.rbac_principal_user(),
-      tests.get_supabase_uid('rbac_membership_member'),
+      tests.get_supabase_uid('rbac_membership_admin'),
       roles.id,
       public.rbac_scope_app(),
       '00000000-0000-4000-8000-000000000099',
@@ -430,31 +455,6 @@ SELECT lives_ok(
     WHERE roles.name = public.rbac_role_app_reader()
       AND roles.scope_type = public.rbac_scope_app()$$,
   'org admin can grant an app-scoped role to an apikey whose owner is an org member'
-);
-
-SELECT lives_ok(
-  $$INSERT INTO public.role_bindings (
-      principal_type,
-      principal_id,
-      role_id,
-      scope_type,
-      org_id,
-      app_id,
-      granted_by
-    )
-    SELECT
-      public.rbac_principal_apikey(),
-      (SELECT rbac_id FROM membership_test_apikey_org_scope_rbac),
-      roles.id,
-      public.rbac_scope_app(),
-      '70000000-0000-4000-8000-000000009976',
-      apps.id,
-      tests.get_supabase_uid('rbac_membership_admin')
-    FROM public.roles
-    JOIN public.apps ON apps.app_id = 'com.test.rbac.membership.ghsa9976'
-    WHERE roles.name = public.rbac_role_app_reader()
-      AND roles.scope_type = public.rbac_scope_app()$$,
-  'org admin can grant an app-scoped role to an apikey with its own org-scope binding'
 );
 
 SELECT lives_ok(
