@@ -126,24 +126,16 @@ beforeAll(async () => {
   await resetAndSeedAppData(APPNAME, seedOptions)
   await warmEdgeEndpoint('/apikey', { method: 'GET', headers: authHeaders })
 
-  const warmBody = JSON.stringify({
-    name: `warm-${id}`,
-    bindings: await appApiKeyBindings(APPNAME, 'app_preview'),
+  const warmResponse = await fetch(`${BASE_URL}/apikey`, {
+    method: 'POST',
+    headers: authHeaders,
+    body: JSON.stringify({
+      name: `warm-${id}`,
+      bindings: await appApiKeyBindings(APPNAME, 'app_preview'),
+    }),
   })
-  let warmResponse: Response | undefined
-  for (let attempt = 1; attempt <= 5; attempt++) {
-    warmResponse = await fetch(`${BASE_URL}/apikey`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: warmBody,
-    })
-    if (warmResponse.status !== 502 && warmResponse.status !== 503)
-      break
-    console.error(`[warmApiKeyPost] attempt=${attempt} status=${warmResponse.status}`)
-    await new Promise(resolve => setTimeout(resolve, 500 * attempt))
-  }
-  if (!warmResponse?.ok)
-    throw new Error(`Failed to warm /apikey POST route: ${warmResponse?.status ?? 'no response'}`)
+  if (!warmResponse.ok)
+    throw new Error(`Failed to warm /apikey POST route: ${warmResponse.status}`)
   const warmed = await warmResponse.json<ApiKeyResponse>()
   apiKeyIds.push(warmed.id)
 })

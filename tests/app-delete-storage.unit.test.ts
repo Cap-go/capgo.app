@@ -49,11 +49,13 @@ const supabaseAdmin = vi.fn(() => ({
   storage: { from: storageFrom },
 }))
 
+const apiKeyClientDeleteEq = vi.fn(async () => ({ error: null }))
 const apiSelectSingle = vi.fn(async () => ({ data: { owner_org: 'org-1' }, error: null }))
 const apiSelectEq = vi.fn(() => ({ single: apiSelectSingle }))
 const apiSelect = vi.fn(() => ({ eq: apiSelectEq }))
 const apiFrom = vi.fn(() => ({
   select: apiSelect,
+  delete: () => ({ eq: apiKeyClientDeleteEq }),
 }))
 const supabaseApikey = vi.fn(() => ({
   from: apiFrom,
@@ -145,6 +147,7 @@ describe('public deleteApp storage contract', () => {
     for (const key of Object.keys(deleteEqByTable))
       delete deleteEqByTable[key]
     checkPermission.mockResolvedValue(true)
+    apiKeyClientDeleteEq.mockResolvedValue({ error: null })
     apiSelectSingle.mockResolvedValue({ data: { owner_org: 'org-1' }, error: null })
     storageList.mockResolvedValue({ data: [] })
   })
