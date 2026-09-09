@@ -177,6 +177,7 @@ Capgo continues to load the root config while writing only the selected source. 
   - [Last-output](#build-last-output)
   - [Credentials](#build-credentials)
     - [Apple-key](#build-credentials-apple-key)
+    - [Ios-provisioning](#build-credentials-ios-provisioning)
     - [Save](#build-credentials-save)
     - [List](#build-credentials-list)
     - [Clear](#build-credentials-clear)
@@ -1616,6 +1617,30 @@ Example:
 | **--appId** | <code>string</code> | Save the captured key into this app iOS build credentials |
 | **--local** | <code>boolean</code> | Save into the per-project .capgo-credentials.json instead of the global file |
 | **--json** | <code>boolean</code> | Print the captured Key ID / Issuer ID / .p8 path as JSON |
+
+#### <a id="build-credentials-ios-provisioning"></a> 🔹 **Ios-provisioning**
+
+```bash
+npx @capgo/cli@latest build credentials ios-provisioning
+```
+
+Set up provisioning profiles for every signable iOS target.
+Reuses an eligible saved wildcard profile after confirmation, or generates
+missing App Store profiles with the saved App Store Connect .p8 key.
+  npx @capgo/cli@latest build credentials ios-provisioning
+
+**Example:**
+
+```bash
+Example:
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--local** | <code>boolean</code> | Use credentials from the current project |
+| **--global** | <code>boolean</code> | Use credentials from the global store |
 
 #### <a id="build-credentials-save"></a> 🔹 **Save**
 
