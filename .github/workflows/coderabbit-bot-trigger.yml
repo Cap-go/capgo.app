@@ -177,6 +177,6 @@ jobs:
                 owner,
                 repo,
                 issue_number: pr.number,
-                body: `${marker}\n@coderabbitai review`,
+                body: `${marker}\n@coderabbitai resume\n@coderabbitai review`,
               })
             }
