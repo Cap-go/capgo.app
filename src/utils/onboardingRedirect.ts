@@ -307,13 +307,6 @@ export function shouldConfirmOnboardingDashboardExploration(options: {
     })
 }
 
-export function isActiveOnboardingSetupPath(
-  path: string | null | undefined,
-  options?: { source?: string | null },
-) {
-  return isPreCreateOnboardingPath(path, options)
-}
-
 export function getOnboardingResumeAppId(userId: string | null | undefined) {
   return matchingDashboardExploration(userId)?.resumeAppId ?? null
 }
