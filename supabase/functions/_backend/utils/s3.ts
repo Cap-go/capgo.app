@@ -304,16 +304,19 @@ async function moveObjectsWithPrefixToTrash(c: Context, prefix: string): Promise
     await Promise.all(currentBatch.map(moveKey))
   }
 
-  for await (const object of client.listObjects({ prefix })) {
-    if (object.key.startsWith(R2_TRASH_PREFIX))
-      continue
+  try {
+    for await (const object of client.listObjects({ prefix })) {
+      if (object.key.startsWith(R2_TRASH_PREFIX))
+        continue
 
-    batch.push(object.key)
-    if (batch.length >= PREFIX_TRASH_CONCURRENCY)
-      await flushBatch()
+      batch.push(object.key)
+      if (batch.length >= PREFIX_TRASH_CONCURRENCY)
+        await flushBatch()
+    }
   }
-
-  await flushBatch()
+  finally {
+    await flushBatch()
+  }
 
   if (failedKeys.length > 0) {
     cloudlogErr({

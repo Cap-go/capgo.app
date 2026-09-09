@@ -40,7 +40,11 @@ async function processKey(key: string): Promise<void> {
   return limiter.run(async () => {
     if (deleteMode === 'trash') {
       console.log(`Moving to trash: ${key}`)
-      await moveS3LiteObjectToTrash(s3client, key)
+      const result = await moveS3LiteObjectToTrash(s3client, key)
+      if (result === 'skipped_missing')
+        console.log(`Already absent: ${key}`)
+      else if (result === 'skipped_changed')
+        console.warn(`Copied ${key} to trash but live object changed before delete; source key retained`)
       return
     }
 

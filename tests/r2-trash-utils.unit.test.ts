@@ -90,8 +90,9 @@ describe('moveS3LiteObjectToTrash', () => {
     const deleteObject = vi.fn(async () => undefined)
     const statObject = vi.fn(async () => ({ etag }))
 
-    await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
 
+    expect(result).toBe('moved')
     expect(copyObject).toHaveBeenCalledWith(
       { sourceKey: 'orgs/org-1/apps/com.test/file%20name.zip' },
       `${R2_TRASH_PREFIX}${key}`,
@@ -108,10 +109,31 @@ describe('moveS3LiteObjectToTrash', () => {
       .mockResolvedValueOnce({ etag: '"before"' })
       .mockResolvedValueOnce({ etag: '"after"' })
 
-    await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
 
+    expect(result).toBe('skipped_changed')
     expect(copyObject).toHaveBeenCalledOnce()
     expect(deleteObject).not.toHaveBeenCalled()
+  })
+
+  it('treats a missing source after copy as already moved', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const copyObject = vi.fn(async () => undefined)
+    const deleteObject = vi.fn(async () => undefined)
+    const statObject = vi.fn()
+      .mockResolvedValueOnce({ etag: '"before"' })
+      .mockRejectedValueOnce({ status: 404, code: 'not found' })
+
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
+
+    expect(result).toBe('moved')
+    expect(deleteObject).not.toHaveBeenCalled()
+  })
+
+  it('recognizes s3-lite not-found error shapes', () => {
+    expect(isObjectNotFoundError({ status: 404 })).toBe(true)
+    expect(isObjectNotFoundError({ statusCode: 404 })).toBe(true)
+    expect(isObjectNotFoundError({ code: 'not found' })).toBe(true)
   })
 })
 

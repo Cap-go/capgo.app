@@ -1666,7 +1666,12 @@ async function delete_cleanup_candidates() {
                 }
                 catch (deleteError: any) {
                     if (isPreconditionFailedError(deleteError))
-                        return { key: file.key, success: true, error: null, skipped: true }
+                        return {
+                            key: file.key,
+                            success: false,
+                            error: 'Copied to trash but live object changed before delete; source key retained',
+                            skipped: true,
+                        }
                     return {
                         key: file.key,
                         success: false,

@@ -31,8 +31,10 @@ export type S3LiteTrashClient = {
   statObject: (key: string) => Promise<{ etag: string }>
 }
 
+export type S3LiteTrashMoveResult = 'moved' | 'skipped_missing' | 'skipped_changed'
+
 /** Move a live object to 7-day trash via s3_lite_client (encodes copy source path segments). */
-export async function moveS3LiteObjectToTrash(s3client: S3LiteTrashClient, key: string): Promise<void> {
+export async function moveS3LiteObjectToTrash(s3client: S3LiteTrashClient, key: string): Promise<S3LiteTrashMoveResult> {
   const trashKey = getR2TrashKey(key)
   let sourceEtag: string | undefined
   try {
@@ -41,17 +43,28 @@ export async function moveS3LiteObjectToTrash(s3client: S3LiteTrashClient, key: 
   }
   catch (error) {
     if (isObjectNotFoundError(error))
-      return
+      return 'skipped_missing'
     throw error
   }
 
   await s3client.copyObject({ sourceKey: encodeS3LiteCopySourceKey(key) }, trashKey)
 
-  const afterCopy = await s3client.statObject(key)
-  if (sourceEtag && afterCopy.etag !== sourceEtag)
-    return
+  let afterCopyEtag: string | undefined
+  try {
+    const afterCopy = await s3client.statObject(key)
+    afterCopyEtag = afterCopy.etag
+  }
+  catch (error) {
+    if (isObjectNotFoundError(error))
+      return 'moved'
+    throw error
+  }
+
+  if (sourceEtag && afterCopyEtag !== sourceEtag)
+    return 'skipped_changed'
 
   await s3client.deleteObject(key)
+  return 'moved'
 }
 
 /** AWS CopySource: bucket/key with per-segment URL encoding for non-ASCII/reserved chars. */
@@ -88,13 +101,21 @@ export function isObjectNotFoundError(error: unknown): boolean {
   const err = error as {
     name?: string
     Code?: string
+    code?: string
+    status?: number
+    statusCode?: number
     $metadata?: { httpStatusCode?: number }
   }
 
-  if (err.$metadata?.httpStatusCode === 404)
+  if ([err.$metadata?.httpStatusCode, err.status, err.statusCode].includes(404))
     return true
 
-  return [err.name, err.Code].some(code => code === 'NotFound' || code === 'NoSuchKey' || code === '404')
+  return [err.name, err.Code, err.code].some(code =>
+    code === 'NotFound'
+    || code === 'NoSuchKey'
+    || code === '404'
+    || code === 'not found',
+  )
 }
 
 export class ConcurrencyLimiter {
