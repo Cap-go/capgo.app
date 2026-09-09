@@ -25,7 +25,7 @@ export interface PrepareUploadBody {
   manifest?: Database['public']['Tables']['app_versions']['Insert']['manifest']
 }
 
-const PREPARE_STORAGE_PROVIDERS = new Set(['r2-direct', 'external', 'r2'])
+const PREPARE_INPUT_STORAGE_PROVIDERS = new Set(['r2-direct', 'external'])
 const COMPLETED_UPLOAD_STORAGE_PROVIDER = 'r2'
 const PREPARE_REUPLOAD_UPDATE_COLUMNS = new Set([
   'session_key',
@@ -141,7 +141,10 @@ function pickUpsertFields(body: PrepareUploadBody) {
   }
 }
 
-function validatePrepareUploadRequest(body: PrepareUploadBody): string {
+function validatePrepareUploadRequest(
+  body: PrepareUploadBody,
+  existing?: ExistingVersionRow | null,
+): string {
   if (!body.app_id)
     throw simpleError('missing_app_id', 'Missing app_id', { body })
   if (!isValidAppId(body.app_id))
@@ -155,8 +158,22 @@ function validatePrepareUploadRequest(body: PrepareUploadBody): string {
     validateUrlFormat(body.external_url)
 
   const storageProvider = body.storage_provider ?? 'r2-direct'
-  if (!PREPARE_STORAGE_PROVIDERS.has(storageProvider)) {
-    throw simpleError('invalid_storage_provider', 'storage_provider must be r2-direct, external, or r2', {
+  if (storageProvider === COMPLETED_UPLOAD_STORAGE_PROVIDER) {
+    if (!existing) {
+      throw simpleError('invalid_storage_provider', 'storage_provider must be r2-direct or external', {
+        storage_provider: storageProvider,
+      })
+    }
+    if (existing.storage_provider !== 'r2-direct'
+      && existing.storage_provider !== COMPLETED_UPLOAD_STORAGE_PROVIDER) {
+      throw simpleError('invalid_storage_provider', 'storage_provider r2 is only valid when finalizing an r2-direct upload', {
+        storage_provider: storageProvider,
+        existing_storage_provider: existing.storage_provider,
+      })
+    }
+  }
+  else if (!PREPARE_INPUT_STORAGE_PROVIDERS.has(storageProvider)) {
+    throw simpleError('invalid_storage_provider', 'storage_provider must be r2-direct or external', {
       storage_provider: storageProvider,
     })
   }
@@ -183,13 +200,14 @@ async function updateExistingVersion(
 
   if (existing.storage_provider
     && existing.storage_provider !== COMPLETED_UPLOAD_STORAGE_PROVIDER
-    && !PREPARE_STORAGE_PROVIDERS.has(existing.storage_provider)) {
+    && !PREPARE_INPUT_STORAGE_PROVIDERS.has(existing.storage_provider)) {
     throw simpleError('version_not_uploadable', 'Version is not in an uploadable state', {
       storage_provider: existing.storage_provider,
     })
   }
 
   const resetForReupload = existing.storage_provider === COMPLETED_UPLOAD_STORAGE_PROVIDER
+    && storageProvider !== COMPLETED_UPLOAD_STORAGE_PROVIDER
   const updateFields = resetForReupload
     ? { ...upsertFields, storage_provider: storageProvider, r2_path: null }
     : upsertFields
@@ -204,10 +222,12 @@ async function updateExistingVersion(
     .update(updateFields)
     .eq('id', existing.id)
     .select('id, name, storage_provider')
-    .single()
+    .maybeSingle()
 
-  if (updateError || !updated)
+  if (updateError)
     throw simpleError('cannot_prepare_upload', 'Cannot update bundle version for upload', { supabaseError: updateError })
+  if (!updated)
+    return c.json({ status: 'ok', version: null })
 
   return c.json({ status: 'ok', version: updated })
 }
@@ -217,15 +237,14 @@ export async function prepareUpload(
   body: PrepareUploadBody,
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ): Promise<Response> {
-  const storageProvider = validatePrepareUploadRequest(body)
+  const existing = await loadExistingVersion(c, body.app_id, body.name)
+  const storageProvider = validatePrepareUploadRequest(body, existing)
 
   if (!(await checkPermission(c, 'app.upload_bundle', { appId: body.app_id })))
     throw simpleError('cannot_prepare_upload', 'You cannot upload bundles for this app', { app_id: body.app_id })
 
   const appWithOrg = await getAppOrganization(c, body.app_id)
   checkEncryptedBundleEnforcement(appWithOrg, body.session_key ?? undefined, body.key_id ?? undefined)
-
-  const existing = await loadExistingVersion(c, body.app_id, body.name)
   const supabase = supabaseApikey(c, apikey.key)
   const upsertFields = pickUpsertFields(body)
 

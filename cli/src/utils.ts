@@ -884,6 +884,25 @@ export function normalizeSupabaseHost(host: string): string {
   return `${parsed.origin}${normalizedPath}`
 }
 
+function isLoopbackSupabaseHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase()
+  return normalized === 'localhost'
+    || normalized === '127.0.0.1'
+    || normalized === '::1'
+    || normalized.endsWith('.localhost')
+}
+
+/** Reject non-HTTPS custom Supabase hosts before sending API keys over the wire. */
+export function assertSecureSupabaseHost(host: string): string {
+  const normalized = normalizeSupabaseHost(host)
+  const parsed = new URL(normalized)
+  if (parsed.protocol === 'https:')
+    return normalized
+  if (parsed.protocol === 'http:' && isLoopbackSupabaseHostname(parsed.hostname))
+    return normalized
+  throw new Error('Supabase host must use HTTPS (HTTP is only allowed for localhost)')
+}
+
 export function formatCapgoApiErrorBody(body: unknown): string {
   if (!body || typeof body !== 'object')
     return ''
@@ -1053,7 +1072,7 @@ export async function invokeCapgoCliApi<T = any>(
   let base: string
   let anonKey: string | undefined = options.supaAnon
   if (options.supaHost && options.supaAnon && !isCapgoManagedSupabaseHost(options.supaHost)) {
-    base = `${normalizeSupabaseHost(options.supaHost)}/functions/v1`
+    base = `${assertSecureSupabaseHost(options.supaHost)}/functions/v1`
   }
   else {
     const localConfig = await getRemoteConfig(true)
@@ -1065,7 +1084,7 @@ export async function invokeCapgoCliApi<T = any>(
       && !isCapgoManagedSupabaseHost(localConfig.supaHost)
       && !(options.supaHost && isCapgoManagedSupabaseHost(options.supaHost))
     ) {
-      base = `${normalizeSupabaseHost(localConfig.supaHost)}/functions/v1`
+      base = `${assertSecureSupabaseHost(localConfig.supaHost)}/functions/v1`
     }
     else if (options.useFilesHost) {
       base = localConfig.hostFilesApi
@@ -1123,7 +1142,7 @@ export async function resolveCapgoPublicApiHost(
       const localConfig = await getLocalConfig(silent)
       return localConfig.hostApi
     }
-    return `${normalizeSupabaseHost(options.supaHost)}/functions/v1`
+    return `${assertSecureSupabaseHost(options.supaHost)}/functions/v1`
   }
 
   const localConfig = await getLocalConfig(silent)
@@ -1150,8 +1169,9 @@ export async function createSupabaseClient(apikey: string, supaHost?: string, su
       missingSupaKey: !config.supaKey,
     })
   }
-  const normalizedSupaHost = normalizeSupabaseHost(config.supaHost)
-  // Custom Supabase hosts are an explicit CLI feature; normalizeSupabaseHost constrains the accepted URL shape first.
+  const normalizedSupaHost = isCapgoManagedSupabaseHost(config.supaHost)
+    ? normalizeSupabaseHost(config.supaHost)
+    : assertSecureSupabaseHost(config.supaHost)
   return createClient<Database>(normalizedSupaHost, config.supaKey, { // NOSONAR
     auth: {
       persistSession: false,

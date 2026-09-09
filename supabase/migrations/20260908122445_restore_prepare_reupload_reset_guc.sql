@@ -1,22 +1,11 @@
--- Restore prepare_reupload_reset GUC bypass dropped when
--- 20260826101500_block_r2_direct_manifest_jsonb_writes.sql replaced
--- check_encrypted_bundle_on_insert without the bundle/prepare re-upload path.
+-- Restore prepare_reupload_reset GUC bypass on top of
+-- 20260908120000_lock_r2_direct_ota_versions.sql (GHSA-5rg9-rhwj-wj76 staged
+-- r2-direct identity locks). bundle/prepare uses the GUC to reset completed (r2)
+-- versions back to r2-direct for same-version re-upload.
 --
--- Execution profile (app_versions BEFORE INSERT OR UPDATE OF name, app_id,
--- session_key, key_id, storage_provider, r2_path, external_url, checksum,
--- manifest, native_packages):
--- - Where: once per inserted/updated app_versions row when encryption or bundle
---   lock rules apply; prepare_reupload_reset branch is service-role-only.
--- - Frequency: console-scale bundle uploads (hundreds/day), not plugin path.
--- - Roles: service_role for bundle/prepare re-upload reset; authenticated
---   API-key/JWT traffic hits encryption enforcement on normal writes.
--- - Cardinality: single row (NEW.app_id / OLD.app_id) → one apps lookup by
---   app_id PK, then one orgs lookup by orgs.id PK when encryption is checked.
--- - Indexes: apps PK on app_id; orgs PK on id; app_version_manifest_jsonb_
---   unmigrated uses manifest PK on (version_id, file_name).
--- - Worst-case EXPLAIN (ANALYZE, BUFFERS) on local seed (update app_versions
---   row for encrypted org): trigger body does Index Scan on apps_pkey then
---   Index Scan on orgs_pkey; no seq scan on apps/orgs/app_versions.
+-- Execution profile: see 20260908120000_lock_r2_direct_ota_versions.sql plus the
+-- prepare_reupload_reset branch (service-role-only, once per re-upload reset).
+
 CREATE OR REPLACE FUNCTION "public"."check_encrypted_bundle_on_insert"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -27,7 +16,9 @@ DECLARE
   org_required_key varchar(21);
   bundle_is_encrypted boolean;
   bundle_key_id varchar(20);
-  bundle_was_ready boolean;
+  bundle_upload_complete boolean;
+  bundle_identity_locked boolean;
+  is_r2_direct_finalize boolean;
   r2_direct_manifest_err constant text :=
     'r2_direct_manifest_jsonb: Use POST /private/set_manifest for in-progress '
     || 'r2-direct uploads instead of app_versions.manifest jsonb.';
@@ -75,7 +66,7 @@ BEGIN
         || 'until every entry exists in public.manifest.';
     END IF;
 
-    bundle_was_ready := OLD.storage_provider IS DISTINCT FROM 'r2-direct';
+    bundle_upload_complete := OLD.storage_provider IS DISTINCT FROM 'r2-direct';
 
     -- bundle/prepare (getPgClient) sets this GUC transaction-locally before resetting
     -- a completed (r2) version back to r2-direct for same-version re-upload.
@@ -84,7 +75,7 @@ BEGIN
     -- anon/authenticated traffic keeps session_user as postgres.
     IF pg_catalog.current_setting('capgo.prepare_reupload_reset', true) = 'on'
       AND public.is_internal_request_role(public.current_request_role())
-      AND bundle_was_ready
+      AND bundle_upload_complete
       AND NEW.storage_provider = 'r2-direct'
       AND NEW.name IS NOT DISTINCT FROM OLD.name
       AND NEW.app_id IS NOT DISTINCT FROM OLD.app_id
@@ -92,7 +83,8 @@ BEGIN
       RETURN NEW;
     END IF;
 
-    IF bundle_was_ready
+
+    IF bundle_upload_complete
       AND (
         NEW.name IS DISTINCT FROM OLD.name
         OR NEW.app_id IS DISTINCT FROM OLD.app_id
@@ -119,7 +111,7 @@ BEGIN
           'user_id', OLD.user_id,
           'old_storage_provider', OLD.storage_provider,
           'new_storage_provider', NEW.storage_provider,
-          'reason', 'bundle_ready'
+          'reason', 'bundle_upload_complete'
         ));
       RAISE EXCEPTION '%',
         'bundle_already_ready: Bundle content cannot be changed '
@@ -127,8 +119,6 @@ BEGIN
     END IF;
 
     -- In-progress r2-direct uploads must use POST /private/set_manifest.
-    -- Block any non-null manifest jsonb write, including r2-direct -> r2 finalize
-    -- requests that try to smuggle manifest rows through on_version_update.
     IF OLD.storage_provider = 'r2-direct'
       AND NEW.manifest IS DISTINCT FROM OLD.manifest
       AND NEW.manifest IS NOT NULL
@@ -144,6 +134,63 @@ BEGIN
           'reason', 'r2_direct_manifest_jsonb'
         ));
       RAISE EXCEPTION '%', r2_direct_manifest_err;
+    END IF;
+
+    -- GHSA-5rg9-rhwj-wj76: CLI/TUS creates r2-direct rows with checksum before
+    -- finalize. Lock identity fields after first set (checksum/session_key/
+    -- key_id); still allow r2_path writes and the one-shot finalize
+    -- (r2-direct -> r2). Blank-checksum in-progress rows stay writable for
+    -- upload completion; channel linkage is not the freeze gate.
+    -- r2_path stays mutable while storage_provider = r2-direct (even when
+    -- channel-linked) so finalize can set the object key; only checksum,
+    -- session_key, and key_id are identity-locked here.
+    IF OLD.storage_provider = 'r2-direct' THEN
+      bundle_identity_locked := (
+        NULLIF(BTRIM(COALESCE(OLD.checksum, '')), '') IS NOT NULL
+        OR NULLIF(BTRIM(COALESCE(OLD.session_key, '')), '') IS NOT NULL
+        OR NULLIF(BTRIM(COALESCE(OLD.key_id, '')), '') IS NOT NULL
+      );
+
+      is_r2_direct_finalize := (
+        NEW.storage_provider = 'r2'
+        AND NEW.name IS NOT DISTINCT FROM OLD.name
+        AND NEW.app_id IS NOT DISTINCT FROM OLD.app_id
+        AND NEW.session_key IS NOT DISTINCT FROM OLD.session_key
+        AND NEW.key_id IS NOT DISTINCT FROM OLD.key_id
+        AND NEW.checksum IS NOT DISTINCT FROM OLD.checksum
+        AND NEW.external_url IS NOT DISTINCT FROM OLD.external_url
+        AND NEW.native_packages IS NOT DISTINCT FROM OLD.native_packages
+      );
+
+      IF bundle_identity_locked
+        AND (
+          NEW.name IS DISTINCT FROM OLD.name
+          OR NEW.app_id IS DISTINCT FROM OLD.app_id
+          OR NEW.session_key IS DISTINCT FROM OLD.session_key
+          OR NEW.key_id IS DISTINCT FROM OLD.key_id
+          OR NEW.checksum IS DISTINCT FROM OLD.checksum
+          OR NEW.external_url IS DISTINCT FROM OLD.external_url
+          OR NEW.native_packages IS DISTINCT FROM OLD.native_packages
+          OR (
+            NEW.storage_provider IS DISTINCT FROM OLD.storage_provider
+            AND NOT is_r2_direct_finalize
+          )
+        )
+      THEN
+        PERFORM public.pg_log('deny: BUNDLE_CONTENT_LOCKED_TRIGGER',
+          pg_catalog.jsonb_build_object(
+            'org_id', OLD.owner_org,
+            'app_id', OLD.app_id,
+            'version_name', OLD.name,
+            'user_id', OLD.user_id,
+            'old_storage_provider', OLD.storage_provider,
+            'new_storage_provider', NEW.storage_provider,
+            'reason', 'r2_direct_identity_locked'
+          ));
+        RAISE EXCEPTION '%',
+          'bundle_identity_locked: Bundle identity fields cannot be changed '
+          || 'after checksum, session_key, or key_id are first set during upload.';
+      END IF;
     END IF;
   END IF;
 
