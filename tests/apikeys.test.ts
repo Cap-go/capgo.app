@@ -148,7 +148,7 @@ async function postApiKey(
       try {
         response = await fetch(url, { ...requestInit, signal: controller.signal })
         if (response.status === 502 || response.status === 503)
-          responseBody = await response.clone().text().catch(() => '')
+          responseBody = await response.clone().text()
       }
       catch (error) {
         if (error instanceof Error && error.name === 'AbortError')
