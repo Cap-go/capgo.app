@@ -537,7 +537,7 @@ const thirtyDayActiveDevices = computed(() => {
   if (isDemoMode.value)
     return generateDemoNativeActiveSummary(30)
 
-  if (periodDays.value === 30 && rawChartData.value?.activeDevices)
+  if (!props.useBillingPeriod && periodDays.value === 30 && rawChartData.value?.activeDevices)
     return normalizeNativeActiveDevicesSummary(rawChartData.value.activeDevices)
 
   if (rawThirtyDayChartData.value?.activeDevices)
@@ -584,7 +584,7 @@ const iosActiveEvolution = computed(() => calculateSummaryEvolutionPercent(
   selectedPeriodPreviousActiveDevices.value?.ios,
 ))
 const showNativeKpis = computed(() => isNativeUsage.value)
-const isThirtyDaySummaryLoading = computed(() => isFetchingThirtyDaySummary.value || (isLoading.value && isNativeUsage.value && periodDays.value !== 30))
+const isThirtyDaySummaryLoading = computed(() => isFetchingThirtyDaySummary.value || (isLoading.value && isNativeUsage.value && (props.useBillingPeriod || periodDays.value !== 30)))
 
 const todayLineOptions = computed(() => {
   if (!props.useBillingPeriod || !currentRange.value)
@@ -670,7 +670,7 @@ async function loadThirtyDaySummary(forceRefetch = false, loadToken?: number, lo
 
   const expectedAppId = loadAppId ?? activeAppId.value
 
-  if (periodDays.value === 30) {
+  if (!props.useBillingPeriod && periodDays.value === 30) {
     rawThirtyDayChartData.value = rawChartData.value
     return
   }

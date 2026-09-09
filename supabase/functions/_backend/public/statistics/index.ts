@@ -802,7 +802,7 @@ function buildDailyPlatformActiveTotals(rows: NativeDailyPlatformRow[], dates: s
     else if (platform === 'electron')
       electron[index] = devices
     else
-      unknown[index] = devices
+      unknown[index] += devices
   })
 
   const total = dates.map((_date, index) => android[index] + ios[index] + electron[index] + unknown[index])
