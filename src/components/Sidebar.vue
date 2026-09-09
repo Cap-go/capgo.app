@@ -24,6 +24,7 @@ import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import {
   allowOnboardingDashboardExploration,
+  getOnboardingContinueSetupRoute,
   getOnboardingResumeAppId,
   ONBOARDING_DASHBOARD_EXPLORED_EVENT,
   shouldConfirmOnboardingDashboardExploration,
@@ -174,11 +175,21 @@ async function openTab(tab: Tab) {
     const wasCanceled = await dialogStore.onDialogDismiss()
     if (wasCanceled)
       return
-    // Primary = stay in setup (safe default). Secondary = explore anyway.
-    // Already on an active pre-create route when this dialog fires — do not
-    // navigate away (esp. /onboarding/organization?org=&step=logo|invite).
-    if (dialogStore.lastButtonRole === 'primary')
+    // Primary = stay in setup on an active pre-create route, or return to it
+    // when the dialog fired only because resumeAppId is set on an escape path.
+    if (dialogStore.lastButtonRole === 'primary') {
+      const continueRoute = getOnboardingContinueSetupRoute({
+        currentPath: route.path,
+        currentSource: typeof route.query.source === 'string' ? route.query.source : null,
+        currentStep: typeof route.query.step === 'string' ? route.query.step : null,
+        resumeAppId: onboardingResumeAppId,
+      })
+      if (continueRoute) {
+        await router.push(continueRoute)
+        emit('closeSidebar')
+      }
       return
+    }
     if (dialogStore.lastButtonRole !== 'secondary')
       return
 

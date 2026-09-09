@@ -143,6 +143,42 @@ describe('onboarding dashboard redirect', () => {
     })).toBe(false)
   })
 
+  it('returns continue-setup route only off pre-create paths with resumeAppId', async () => {
+    const module = await import('../src/utils/onboardingRedirect.ts')
+
+    expect(module.getOnboardingContinueSetupRoute({
+      currentPath: '/onboarding/organization',
+      resumeAppId: 'com.example.app',
+    })).toBeNull()
+
+    expect(module.getOnboardingContinueSetupRoute({
+      currentPath: '/app/new',
+      resumeAppId: 'com.example.app',
+    })).toBeNull()
+
+    expect(module.getOnboardingContinueSetupRoute({
+      currentPath: '/apikeys',
+      resumeAppId: 'com.example.app',
+    })).toEqual({
+      path: '/app/new',
+      query: { resume: 'com.example.app' },
+    })
+
+    expect(module.getOnboardingContinueSetupRoute({
+      currentPath: '/dashboard',
+      currentStep: 'setup',
+      resumeAppId: 'com.example.app',
+    })).toEqual({
+      path: '/app/new',
+      query: { resume: 'com.example.app', step: 'setup' },
+    })
+
+    expect(module.getOnboardingContinueSetupRoute({
+      currentPath: '/apikeys',
+      resumeAppId: null,
+    })).toBeNull()
+  })
+
   it('confirms console escapes during pre-create onboarding even without resumeAppId', async () => {
     const module = await import('../src/utils/onboardingRedirect.ts')
 
