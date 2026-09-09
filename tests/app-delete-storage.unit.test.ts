@@ -26,7 +26,7 @@ vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
 
 const deletedTables: string[] = []
 const insert = vi.fn(async () => ({ error: null }))
-const deleteEq = vi.fn(async () => ({ error: null }))
+const deleteEqByTable: Record<string, ReturnType<typeof vi.fn>> = {}
 const storageList = vi.fn(async () => ({ data: [] }))
 const storageRemove = vi.fn(async () => ({ error: null }))
 const storageFrom = vi.fn(() => ({
@@ -38,7 +38,9 @@ const from = vi.fn((table: string) => {
     insert,
     delete: () => {
       deletedTables.push(table)
-      return { eq: deleteEq }
+      if (!deleteEqByTable[table])
+        deleteEqByTable[table] = vi.fn(async () => ({ error: null }))
+      return { eq: deleteEqByTable[table] }
     },
   }
 })
@@ -97,7 +99,8 @@ describe('on_app_delete storage cleanup', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     moveObjectsWithPrefixToTrash.mockResolvedValue(2)
-    deleteEq.mockResolvedValue({ error: null })
+    for (const eq of Object.values(deleteEqByTable))
+      eq.mockResolvedValue({ error: null })
     storageList.mockResolvedValue({ data: [] })
   })
 
@@ -142,9 +145,10 @@ describe('public deleteApp storage contract', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     deletedTables.length = 0
+    for (const key of Object.keys(deleteEqByTable))
+      delete deleteEqByTable[key]
     checkPermission.mockResolvedValue(true)
     apiDeleteEq.mockResolvedValue({ error: null })
-    deleteEq.mockResolvedValue({ error: null })
     apiSelectSingle.mockResolvedValue({ data: { owner_org: 'org-1' }, error: null })
     storageList.mockResolvedValue({ data: [] })
   })
@@ -160,7 +164,8 @@ describe('public deleteApp storage contract', () => {
     expect(moveObjectsWithPrefixToTrash).not.toHaveBeenCalled()
     expect(deleteObjectsWithPrefix).not.toHaveBeenCalled()
     expect(deletedTables).toContain('apps')
-    expect(deleteEq).toHaveBeenCalledWith('app_id', 'com.test.app')
+    expect(deleteEqByTable.apps).toBeDefined()
+    expect(deleteEqByTable.apps).toHaveBeenCalledWith('app_id', 'com.test.app')
   })
 })
 

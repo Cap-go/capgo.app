@@ -34,6 +34,24 @@ export function isAlreadyMovedToTrash(trashExists: boolean, sourceExists: boolea
   return trashExists && !sourceExists
 }
 
+/** True only for confirmed object-absence from HeadObject (not transient/permission errors). */
+export function isObjectNotFoundError(error: unknown): boolean {
+  if (!error || typeof error !== 'object')
+    return false
+
+  const err = error as {
+    name?: string
+    Code?: string
+    $metadata?: { httpStatusCode?: number }
+  }
+
+  if (err.$metadata?.httpStatusCode === 404)
+    return true
+
+  const code = err.name ?? err.Code
+  return code === 'NotFound' || code === 'NoSuchKey' || code === '404'
+}
+
 export class ConcurrencyLimiter {
   private inFlight = 0
   private readonly queue: Array<() => void> = []

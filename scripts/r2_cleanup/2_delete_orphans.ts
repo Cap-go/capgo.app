@@ -141,7 +141,8 @@ async function permanentDeleteBatch(keys: string[]): Promise<void> {
   }
 }
 
-async function streamProcessPrefix(prefix: string): Promise<void> {
+async function listPrefixKeys(prefix: string): Promise<string[]> {
+  const keys: string[] = []
   let continuationToken: string | undefined
 
   while (true) {
@@ -152,21 +153,28 @@ async function streamProcessPrefix(prefix: string): Promise<void> {
       MaxKeys: LIST_PAGE_SIZE,
     }))
 
-    const liveKeys = (response.Contents ?? [])
-      .map(obj => obj.Key)
-      .filter((key): key is string => Boolean(key && isLiveR2Key(key)))
-
-    if (deleteMode === 'permanent') {
-      for (let i = 0; i < liveKeys.length; i += 999)
-        await permanentDeleteBatch(liveKeys.slice(i, i + 999))
-    }
-    else {
-      await processKeyBatch(liveKeys)
+    for (const obj of response.Contents ?? []) {
+      if (obj.Key && isLiveR2Key(obj.Key))
+        keys.push(obj.Key)
     }
 
     if (!response.IsTruncated)
       break
     continuationToken = response.NextContinuationToken
+  }
+
+  return keys
+}
+
+async function streamProcessPrefix(prefix: string): Promise<void> {
+  const liveKeys = await listPrefixKeys(prefix)
+
+  if (deleteMode === 'permanent') {
+    for (let i = 0; i < liveKeys.length; i += 999)
+      await permanentDeleteBatch(liveKeys.slice(i, i + 999))
+  }
+  else {
+    await processKeyBatch(liveKeys)
   }
 }
 

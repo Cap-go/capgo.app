@@ -5,6 +5,7 @@ import {
   getR2TrashKey,
   isAlreadyMovedToTrash,
   isLiveR2Key,
+  isObjectNotFoundError,
   resolveOpsDeleteMode,
   R2_TRASH_PREFIX,
 } from '../scripts/r2_trash_utils.ts'
@@ -52,6 +53,16 @@ describe('isAlreadyMovedToTrash', () => {
     expect(isAlreadyMovedToTrash(true, true)).toBe(false)
     expect(isAlreadyMovedToTrash(false, false)).toBe(false)
     expect(isAlreadyMovedToTrash(false, true)).toBe(false)
+  })
+})
+
+describe('isObjectNotFoundError', () => {
+  it('recognizes confirmed absence errors only', () => {
+    expect(isObjectNotFoundError({ name: 'NotFound' })).toBe(true)
+    expect(isObjectNotFoundError({ name: 'NoSuchKey' })).toBe(true)
+    expect(isObjectNotFoundError({ $metadata: { httpStatusCode: 404 } })).toBe(true)
+    expect(isObjectNotFoundError({ name: 'AccessDenied' })).toBe(false)
+    expect(isObjectNotFoundError({ $metadata: { httpStatusCode: 503 } })).toBe(false)
   })
 })
 

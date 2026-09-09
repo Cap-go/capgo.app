@@ -3,7 +3,7 @@ import { writeFileSync, existsSync, readFileSync } from 'fs'
 import { S3Client as S3ClientLite } from '@bradenmacdonald/s3-lite-client/'
 import { Pool } from 'pg'
 import { Context } from 'vm'
-import { encodeS3CopySource, getR2TrashKey, ConcurrencyLimiter, isAlreadyMovedToTrash, isLiveR2Key, resolveOpsDeleteMode } from './r2_trash_utils.ts'
+import { encodeS3CopySource, getR2TrashKey, ConcurrencyLimiter, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, resolveOpsDeleteMode } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const CHECKPOINT_FILE = './objects_checkpoint.json'
@@ -1595,8 +1595,10 @@ async function delete_cleanup_candidates() {
             await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
             return true
         }
-        catch {
-            return false
+        catch (error) {
+            if (isObjectNotFoundError(error))
+                return false
+            throw error
         }
     }
 
@@ -1618,10 +1620,19 @@ async function delete_cleanup_candidates() {
                     }))
                 }
                 catch (copyError: any) {
-                    const trashExists = await objectExists(trashKey)
-                    const sourceExists = await objectExists(file.key)
-                    if (isAlreadyMovedToTrash(trashExists, sourceExists))
-                        return { key: file.key, success: true, error: null, skipped: true }
+                    try {
+                        const trashExists = await objectExists(trashKey)
+                        const sourceExists = await objectExists(file.key)
+                        if (isAlreadyMovedToTrash(trashExists, sourceExists))
+                            return { key: file.key, success: true, error: null, skipped: true }
+                    }
+                    catch (headError: any) {
+                        return {
+                            key: file.key,
+                            success: false,
+                            error: `Failed to verify trash resume state: ${headError.message}`,
+                        }
+                    }
                     return { key: file.key, success: false, error: copyError.message }
                 }
 
