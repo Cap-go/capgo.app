@@ -1642,7 +1642,7 @@ async function delete_cleanup_candidates() {
         }
     }
 
-    async function processCandidate(file: { key: string, size?: number, lastModified?: string | Date | null, etag?: string | null }): Promise<{ key: string, success: boolean, error: string | null, skipped?: boolean }> {
+    async function processCandidate(file: { key: string, size?: number, lastModified?: string | Date | null, etag?: string | null }): Promise<{ key: string, success: boolean, error: string | null, skipped?: boolean, size?: number }> {
         try {
             let sourceEtag: string | undefined
             try {
@@ -1759,7 +1759,7 @@ async function delete_cleanup_candidates() {
                 }
             }
 
-            return { key: file.key, success: true, error: null }
+            return { key: file.key, success: true, error: null, size: file.size ?? 0 }
         }
         catch (error: any) {
             console.error(`❌ Error processing ${file.key}:`, error.message)
@@ -1769,7 +1769,7 @@ async function delete_cleanup_candidates() {
 
     console.log(`⚡ Processing files from main bucket (mode: ${deleteMode})...`)
 
-    const results: Array<{ key: string, success: boolean, error: string | null, skipped?: boolean }> = []
+    const results: Array<{ key: string, success: boolean, error: string | null, skipped?: boolean, size?: number }> = []
     for (let i = 0; i < candidatesToProcess.length; i += PROCESS_CONCURRENCY) {
         const batch = candidatesToProcess.slice(i, i + PROCESS_CONCURRENCY)
         const batchResults = await Promise.all(batch.map((file: { key: string }) => limiter.run(() => processCandidate(file))))
@@ -1782,6 +1782,8 @@ async function delete_cleanup_candidates() {
     // Analyze results
     const successful = results.filter(r => r.success)
     const failed = results.filter(r => !r.success)
+    const processedSize = successful.reduce((sum, result) => sum + (result.size ?? 0), 0)
+    const processedSizeGB = (processedSize / (1024 * 1024 * 1024)).toFixed(2)
 
     console.log('\n📊 Delete Results:')
     console.log('================')
@@ -1803,8 +1805,10 @@ async function delete_cleanup_candidates() {
             totalFiles: candidatesToProcess.length,
             successfulProcessed: successful.length,
             failedProcessed: failed.length,
-            totalSizeProcessed: totalSize,
-            totalSizeProcessedGB: parseFloat(totalSizeGB),
+            totalSizeCandidates: totalSize,
+            totalSizeCandidatesGB: parseFloat(totalSizeGB),
+            totalSizeProcessed: processedSize,
+            totalSizeProcessedGB: parseFloat(processedSizeGB),
             sourceBucket: S3_BUCKET,
         },
         successful,
@@ -1829,7 +1833,7 @@ async function delete_cleanup_candidates() {
 
     console.log(`\n📈 Summary:`)
     console.log(`   📦 Files ${deleteMode === 'permanent' ? 'deleted' : 'moved to trash'}: ${successful.length}/${candidatesToProcess.length}`)
-    console.log(`   💾 Size ${deleteMode === 'permanent' ? 'deleted' : 'moved to trash'}: ${totalSizeGB} GB`)
+    console.log(`   💾 Size ${deleteMode === 'permanent' ? 'deleted' : 'moved to trash'}: ${processedSizeGB} GB`)
     console.log(`   📁 Source bucket: ${S3_BUCKET}`)
 }
 

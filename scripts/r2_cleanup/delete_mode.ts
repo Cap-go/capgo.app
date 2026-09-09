@@ -4,7 +4,11 @@ export {
   ConcurrencyLimiter,
   encodeS3CopySource,
   getR2TrashKey,
+  getUniqueR2TrashKey,
+  isAlreadyMovedToTrash,
   isLiveR2Key,
+  isObjectNotFoundError,
+  isPreconditionFailedError,
   R2_TRASH_PREFIX,
   resolveOpsDeleteMode,
 } from '../r2_trash_utils.ts'

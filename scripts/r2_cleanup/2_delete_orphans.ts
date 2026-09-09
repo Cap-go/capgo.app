@@ -6,12 +6,16 @@
  * Permanent delete requires ALLOW_PERMANENT_R2_DELETE=true (ops-only).
  */
 
-import { CopyObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
+import { CopyObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import {
   ConcurrencyLimiter,
   encodeS3CopySource,
   getR2TrashKey,
+  getUniqueR2TrashKey,
+  isAlreadyMovedToTrash,
   isLiveR2Key,
+  isObjectNotFoundError,
+  isPreconditionFailedError,
   resolveR2CleanupDeleteMode,
   R2_TRASH_PREFIX,
 } from './delete_mode.ts'
@@ -51,6 +55,18 @@ let totalProcessed = 0
 let totalErrors = 0
 let totalToProcess = 0
 
+async function objectExists(key: string): Promise<boolean> {
+  try {
+    await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
+    return true
+  }
+  catch (error) {
+    if (isObjectNotFoundError(error))
+      return false
+    throw error
+  }
+}
+
 async function countPrefix(prefix: string): Promise<number> {
   let continuationToken: string | undefined
   let count = 0
@@ -89,21 +105,79 @@ async function processKey(key: string): Promise<void> {
     }
 
     if (deleteMode === 'trash') {
-      const trashKey = getR2TrashKey(key)
+      let sourceEtag: string | undefined
+      try {
+        const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
+        sourceEtag = head.ETag
+      }
+      catch (headError) {
+        if (isObjectNotFoundError(headError)) {
+          totalProcessed += 1
+          return
+        }
+        console.error(`Failed to head ${key} before trash:`, headError)
+        totalErrors += 1
+        return
+      }
+
+      let trashKey: string
+      try {
+        const defaultTrashKey = getR2TrashKey(key)
+        trashKey = await objectExists(defaultTrashKey)
+          ? getUniqueR2TrashKey(key)
+          : defaultTrashKey
+      }
+      catch (headError) {
+        console.error(`Failed to check trash destination for ${key}:`, headError)
+        totalErrors += 1
+        return
+      }
+
       try {
         await s3.send(new CopyObjectCommand({
           Bucket: S3_BUCKET,
           CopySource: encodeS3CopySource(S3_BUCKET, key),
           Key: trashKey,
         }))
+      }
+      catch (copyError) {
+        try {
+          const trashExists = await objectExists(trashKey)
+          const sourceExists = await objectExists(key)
+          if (isAlreadyMovedToTrash(trashExists, sourceExists) || !sourceExists) {
+            totalProcessed += 1
+            return
+          }
+        }
+        catch (verifyError) {
+          console.error(`Failed to verify trash resume state for ${key}:`, verifyError)
+          totalErrors += 1
+          return
+        }
+        console.error(`Failed to trash ${key}:`, copyError)
+        totalErrors += 1
+        return
+      }
+
+      try {
         await s3.send(new DeleteObjectCommand({
           Bucket: S3_BUCKET,
           Key: key,
+          IfMatch: sourceEtag,
         }))
         totalProcessed += 1
       }
-      catch (error) {
-        console.error(`Failed to trash ${key}:`, error)
+      catch (deleteError) {
+        if (isObjectNotFoundError(deleteError)) {
+          totalProcessed += 1
+          return
+        }
+        if (isPreconditionFailedError(deleteError)) {
+          console.warn(`Skipped delete for ${key}: live object changed after copy`)
+          totalProcessed += 1
+          return
+        }
+        console.error(`Copied ${key} to trash but failed to delete source:`, deleteError)
         totalErrors += 1
       }
       return

@@ -83,7 +83,7 @@ describe('isObjectNotFoundError', () => {
     expect(isObjectNotFoundError({ $metadata: { httpStatusCode: 404 } })).toBe(true)
     expect(isObjectNotFoundError({ Code: 'NoSuchKey' })).toBe(true)
     expect(isObjectNotFoundError({ Code: '404' })).toBe(true)
-    expect(isObjectNotFoundError({ name: 'AccessDenied', Code: 'NoSuchKey' })).toBe(true)
+    expect(isObjectNotFoundError({ name: 'AccessDenied', Code: 'NoSuchKey' })).toBe(false)
     expect(isObjectNotFoundError({ name: 'AccessDenied' })).toBe(false)
     expect(isObjectNotFoundError({ $metadata: { httpStatusCode: 503 } })).toBe(false)
     expect(isObjectNotFoundError(null)).toBe(false)
@@ -112,7 +112,7 @@ describe('moveS3LiteObjectToTrash', () => {
       `${R2_TRASH_PREFIX}${key}`,
     )
     expect(statObject).toHaveBeenCalledTimes(3)
-    expect(deleteObject).toHaveBeenCalledWith(key)
+    expect(deleteObject).toHaveBeenCalledWith(key, { ifMatch: etag })
   })
 
   it('skips delete when the live object changes after copy', async () => {
@@ -170,6 +170,7 @@ describe('moveS3LiteObjectToTrash', () => {
     const deleteObject = vi.fn(async () => undefined)
     const statObject = vi.fn()
       .mockResolvedValueOnce({ etag }) // default trash exists
+      .mockRejectedValueOnce({ name: 'NotFound' }) // unique trash destination available
       .mockResolvedValueOnce({ etag }) // source
       .mockResolvedValueOnce({ etag }) // after copy
 
@@ -178,7 +179,7 @@ describe('moveS3LiteObjectToTrash', () => {
     expect(result).toBe('moved')
     expect(copyObject).toHaveBeenCalledOnce()
     const copyCalls = copyObject.mock.calls as unknown as Array<[{ sourceKey: string }, string]>
-    expect(copyCalls[0][1]).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+/${key}$`))
+    expect(copyCalls[0][1]).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${key}$`))
   })
 })
 

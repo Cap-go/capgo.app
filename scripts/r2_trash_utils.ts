@@ -16,11 +16,36 @@ export function getR2TrashKey(sourceKey: string): string {
   return `${R2_TRASH_PREFIX}${sourceKey}`
 }
 
+/** Collision-resistant suffix for same-ms concurrent trash moves. */
+export function createUniqueR2TrashSuffix(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 /** Unique trash destination when the default key already holds a prior deletion. */
-export function getUniqueR2TrashKey(sourceKey: string, suffix = Date.now().toString()): string {
+export function getUniqueR2TrashKey(sourceKey: string, suffix?: string): string {
   if (sourceKey.startsWith(R2_TRASH_PREFIX))
     return sourceKey
-  return `${R2_TRASH_PREFIX}${suffix}/${sourceKey}`
+  return `${R2_TRASH_PREFIX}${suffix ?? createUniqueR2TrashSuffix()}/${sourceKey}`
+}
+
+async function resolveAvailableR2TrashKey(s3client: S3LiteTrashClient, key: string): Promise<string> {
+  const candidates = [
+    getR2TrashKey(key),
+    ...Array.from({ length: 10 }, () => getUniqueR2TrashKey(key)),
+  ]
+
+  for (const trashKey of candidates) {
+    try {
+      await s3client.statObject(trashKey)
+    }
+    catch (error) {
+      if (isObjectNotFoundError(error))
+        return trashKey
+      throw error
+    }
+  }
+
+  throw new Error(`Failed to allocate unique trash destination for ${key}`)
 }
 
 export function isLiveR2Key(key: string): boolean {
@@ -69,15 +94,7 @@ export type S3LiteTrashMoveResult = 'moved' | 'skipped_missing' | 'skipped_chang
 
 /** Move a live object to 7-day trash via s3_lite_client (encodes copy source path segments). */
 export async function moveS3LiteObjectToTrash(s3client: S3LiteTrashClient, key: string): Promise<S3LiteTrashMoveResult> {
-  let trashKey = getR2TrashKey(key)
-  try {
-    await s3client.statObject(trashKey)
-    trashKey = getUniqueR2TrashKey(key)
-  }
-  catch (error) {
-    if (!isObjectNotFoundError(error))
-      throw error
-  }
+  const trashKey = await resolveAvailableR2TrashKey(s3client, key)
 
   let sourceEtag: string | undefined
   try {
@@ -114,7 +131,7 @@ export async function moveS3LiteObjectToTrash(s3client: S3LiteTrashClient, key: 
     return 'skipped_changed'
 
   try {
-    await s3client.deleteObject(key)
+    await s3client.deleteObject(key, { ifMatch: afterCopyEtag ?? sourceEtag })
   }
   catch (error) {
     if (isPreconditionFailedError(error))
@@ -166,6 +183,14 @@ export function isObjectNotFoundError(error: unknown): boolean {
 
   if ([err.$metadata?.httpStatusCode, err.status, err.statusCode].includes(404))
     return true
+
+  const permissionDenied = [err.name, err.Code, err.code].some(code =>
+    code === 'AccessDenied'
+    || code === 'Forbidden'
+    || code === 'Unauthorized',
+  )
+  if (permissionDenied)
+    return false
 
   return [err.name, err.Code, err.code].some(code =>
     code === 'NotFound'

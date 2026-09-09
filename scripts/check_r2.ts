@@ -1,7 +1,7 @@
 /* eslint-disable node/prefer-global/process */
 import type { _Object, ListObjectsV2CommandOutput } from '@aws-sdk/client-s3'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'// supabase.types.ts'
-import { CopyObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
+import { CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { createClient } from '@supabase/supabase-js'
 import { ConcurrencyLimiter, encodeS3CopySource, getR2TrashKey, getUniqueR2TrashKey, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, resolveOpsDeleteMode } from './r2_trash_utils.ts'
 
@@ -97,12 +97,57 @@ async function main() {
       }
     }
 
+    async function permanentDeleteCandidate(candidate: { key: string, etag?: string }): Promise<'ok' | 'skipped' | 'failed'> {
+      const { key, etag: candidateEtag } = candidate
+      let sourceEtag: string | undefined
+      try {
+        const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
+        sourceEtag = head.ETag
+        if (candidateEtag && sourceEtag && candidateEtag !== sourceEtag) {
+          console.warn(`Skipped ${key}: live object etag changed since discovery`)
+          return 'skipped'
+        }
+      }
+      catch (headError) {
+        if (isObjectNotFoundError(headError))
+          return 'skipped'
+        console.error(`Failed to head ${key} before permanent delete:`, headError)
+        return 'failed'
+      }
+
+      try {
+        await s3.send(new DeleteObjectCommand({
+          Bucket: S3_BUCKET,
+          Key: key,
+          IfMatch: sourceEtag,
+        }))
+        return 'ok'
+      }
+      catch (deleteError) {
+        if (isObjectNotFoundError(deleteError))
+          return 'skipped'
+        if (isPreconditionFailedError(deleteError)) {
+          console.warn(`Skipped permanent delete for ${key}: live object changed since discovery`)
+          return 'skipped'
+        }
+        console.error(`Failed to permanently delete ${key}:`, deleteError)
+        return 'failed'
+      }
+    }
+
     async function moveKeyToTrash(candidate: { key: string, etag?: string }): Promise<'ok' | 'skipped' | 'failed'> {
       const { key, etag: candidateEtag } = candidate
-      const defaultTrashKey = getR2TrashKey(key)
-      const trashKey = await objectExists(defaultTrashKey)
-        ? getUniqueR2TrashKey(key)
-        : defaultTrashKey
+      let trashKey: string
+      try {
+        const defaultTrashKey = getR2TrashKey(key)
+        trashKey = await objectExists(defaultTrashKey)
+          ? getUniqueR2TrashKey(key)
+          : defaultTrashKey
+      }
+      catch (headError) {
+        console.error(`Failed to check trash destination for ${key}:`, headError)
+        return 'failed'
+      }
       let sourceEtag: string | undefined
       try {
         const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
@@ -150,6 +195,8 @@ async function main() {
         return 'ok'
       }
       catch (deleteError) {
+        if (isObjectNotFoundError(deleteError))
+          return 'skipped'
         if (isPreconditionFailedError(deleteError)) {
           console.warn(`Skipped delete for ${key}: live object changed after copy (possible concurrent upload)`)
           return 'skipped'
@@ -160,25 +207,10 @@ async function main() {
     }
 
     if (deleteMode === 'permanent') {
-      const toDelete = candidates.map(({ key }) => ({ Key: key }))
-      while (toDelete.length > 0) {
-        const chunk = toDelete.splice(0, 999)
-        console.log('permanent delete batch')
-        try {
-          const response = await s3.send(new DeleteObjectsCommand({
-            Bucket: S3_BUCKET,
-            Delete: { Objects: chunk },
-          }))
-          const batchErrors = response.Errors ?? []
-          if (batchErrors.length > 0) {
-            console.error('Failed to permanently delete objects:', batchErrors)
-            errorCount += batchErrors.length
-          }
-        }
-        catch (error) {
-          console.error('Failed to permanently delete batch:', error)
-          errorCount += chunk.length
-        }
+      for (let i = 0; i < candidates.length; i += DELETE_CONCURRENCY) {
+        const batch = candidates.slice(i, i + DELETE_CONCURRENCY)
+        const results = await Promise.all(batch.map(candidate => limiter.run(() => permanentDeleteCandidate(candidate))))
+        errorCount += results.filter(result => result === 'failed').length
       }
     }
     else {
