@@ -262,6 +262,7 @@ describe('invite role escalation guards', () => {
     )
 
     let thrown: unknown
+    await query('SAVEPOINT tmp_invite_accept_escalation')
     try {
       await query(
         `SELECT public.accept_tmp_user_invitation($1, $2::uuid) AS status`,
@@ -270,6 +271,7 @@ describe('invite role escalation guards', () => {
     }
     catch (error) {
       thrown = error
+      await query('ROLLBACK TO SAVEPOINT tmp_invite_accept_escalation')
     }
 
     expect(thrown).toBeTruthy()
