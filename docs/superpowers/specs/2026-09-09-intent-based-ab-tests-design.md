@@ -78,10 +78,10 @@ new user has not selected an intent yet, it skips all intent-gated experiments.
 The backend treats `users.onboarding.intent` as the source of truth rather than
 accepting a caller-supplied intent.
 
-The replica fast path reads the audience fields, persisted intent, and stored
-assignments. It may return immediately only when every eligible experiment has
-a valid assignment and no stored intent-gated assignment is now ineligible.
-Otherwise, the request falls back to the primary database.
+The replica fast path remains available while no configured experiment uses
+intent targeting. As soon as any experiment declares `intents`, the endpoint
+bypasses the replica and reads the primary database so replication lag cannot
+evaluate a recently changed intent against stale assignments.
 
 On the primary database, one transaction locks the user row and then:
 
@@ -134,7 +134,8 @@ Unit coverage will verify:
   `both`.
 - Intent-gated experiments are skipped when intent is absent or invalid.
 - Non-intent experiments keep their current signup and on-demand behavior.
-- The replica fast path is used only for a complete, eligible, non-stale set.
+- The replica fast path remains available when no configured experiment is
+  intent-gated and is bypassed whenever authoritative intent is required.
 - The primary transaction creates newly eligible assignments and preserves
   existing eligible assignments.
 - Changing or clearing intent revokes only now-ineligible intent-gated

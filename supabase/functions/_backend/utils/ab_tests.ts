@@ -198,6 +198,10 @@ function ineligibleAssignedTestNames(value: unknown, user: AssignmentAudienceUse
     .map(([testName]) => testName)
 }
 
+function hasIntentGatedTests() {
+  return Object.values(AB_TESTS_CONFIG).some(test => test.intents !== undefined)
+}
+
 function configForTests(testNames: string[]): ABTestsConfig {
   return Object.fromEntries(testNames.map(testName => [testName, AB_TESTS_CONFIG[testName]]))
 }
@@ -314,11 +318,13 @@ export async function getOrCreateUserABTests(
   userId: string,
 ) {
   let replicaUser: AssignmentUser | undefined
-  try {
-    replicaUser = await readAssignmentUser(c, userId)
-  }
-  catch {
-    replicaUser = undefined
+  if (!hasIntentGatedTests()) {
+    try {
+      replicaUser = await readAssignmentUser(c, userId)
+    }
+    catch {
+      replicaUser = undefined
+    }
   }
   if (replicaUser) {
     const testNames = eligibleTestNames(replicaUser)

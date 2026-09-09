@@ -4,7 +4,7 @@
 
 **Goal:** Add exact onboarding-intent eligibility and request-time revocation to the backend A/B assignment system without changing any active experiment or frontend code.
 
-**Architecture:** Extend the checked-in experiment schema with an optional validated `intents` array and centralize audience-plus-intent eligibility in `ab_tests.ts`. The authenticated read/create endpoint will use the replica only for a complete, non-stale assignment set; otherwise a primary-row transaction will remove stale intent-gated assignments and create newly eligible ones atomically, followed by best-effort Bento tag reconciliation.
+**Architecture:** Extend the checked-in experiment schema with an optional validated `intents` array and centralize audience-plus-intent eligibility in `ab_tests.ts`. The authenticated read/create endpoint will preserve the replica fast path while no intent-gated experiment exists, then automatically use an authoritative primary-row transaction whenever intent targeting is configured; that transaction removes stale assignments and creates newly eligible ones atomically before best-effort Bento tag reconciliation.
 
 **Tech Stack:** TypeScript, Hono, Drizzle SQL, PostgreSQL JSONB, Vitest, Bun
 
@@ -159,9 +159,10 @@ function installIntentTest(module: ABTestsModule, intents: ABTestConfig['intents
 
 Tests must assert:
 
-- A replica row with `intent: 'ota'` and a complete assignment returns without primary access.
-- A replica row without intent does not create the intent-gated assignment.
-- A stored intent-gated assignment with `intent: 'builder'` forces primary reconciliation.
+- With no intent-gated config, a complete replica assignment set returns without primary access.
+- With any intent-gated config, the endpoint bypasses the replica even if it appears complete.
+- A primary row without intent does not create the intent-gated assignment.
+- A stored intent-gated assignment with `intent: 'builder'` is reconciled on the primary.
 - The primary update replaces only `onboarding.abtests`, preserving unconfigured stored keys in the computed JSON.
 - Revocation and creation can be returned from the same locked transaction.
 - Changing or clearing intent removes the stale key but preserves non-intent assignments.
@@ -170,20 +171,23 @@ Tests must assert:
 
 Run: `bun vitest run tests/ab-tests.unit.test.ts`
 
-Expected: FAIL because database reads omit intent and stale assignments are never removed.
+Expected: FAIL because intent-gated requests still trust the replica and stale assignments are never removed.
 
-- [ ] **Step 3: Read intent on replica and locked-primary paths**
+- [ ] **Step 3: Bypass the replica and read intent on the locked primary path**
 
-Update both projections to include the persisted source of truth:
+Keep the replica query for configurations without intent targeting. When any
+configured experiment declares `intents`, skip that query and use this locked
+primary projection as the persisted source of truth:
 
 ```sql
 SELECT created_via_invite,
+       email,
        onboarding->>'intent' AS intent,
        onboarding->'abtests' AS abtests
 FROM public.users
+WHERE id = $1::uuid
+FOR UPDATE
 ```
-
-The primary projection also keeps `email` and `FOR UPDATE`.
 
 - [ ] **Step 4: Detect ineligible stored intent assignments**
 
@@ -200,7 +204,9 @@ function ineligibleAssignedTestNames(value: unknown, user: AssignmentAudienceUse
 }
 ```
 
-The replica may return only when the eligible set is complete and this list is empty.
+The replica may return only when no experiment is intent-gated and the existing
+audience-only assignment set is complete. Intent-gated configurations always
+continue to the locked primary row.
 
 - [ ] **Step 5: Replace stale and missing assignments in one row-locked update**
 

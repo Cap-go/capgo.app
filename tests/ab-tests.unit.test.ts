@@ -489,23 +489,24 @@ describe('new-user A/B test assignment', () => {
     expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
   })
 
-  it('returns a complete intent-gated assignment from the replica for an exact intent match', async () => {
+  it('bypasses the replica when intent-gated tests require authoritative intent', async () => {
     const module = await loadABTestsModule()
     installIntentTest(module)
-    const persisted = {
-      ...persistedAssignments({ development: 'D', emails: 'B', publish: 'B' }),
+    const persisted = persistedAssignments({ development: 'D', emails: 'B', publish: 'B' })
+    const replicaAssignments = {
+      ...persisted,
       [INTENT_TEST_NAME]: intentAssignment('B'),
     }
     const context = { get: vi.fn(() => 'request-id') } as never
-    pgQueryMock.mockResolvedValueOnce({
-      rows: [{ abtests: persisted, created_via_invite: false, intent: 'ota' }],
-    })
+    drizzleExecuteMock
+      .mockResolvedValueOnce({ rows: [{ abtests: replicaAssignments, created_via_invite: false, email: 'User@Example.com', intent: 'builder' }] })
+      .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
 
     await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
 
-    expect(getPgClientMock).toHaveBeenCalledOnce()
-    expect(getPgClientMock).toHaveBeenCalledWith(context, true)
-    expect(getDrizzleClientMock).not.toHaveBeenCalled()
+    expect(getPgClientMock.mock.calls).toEqual([[context, false]])
+    expect(pgQueryMock).not.toHaveBeenCalled()
+    expect(drizzleExecuteMock).toHaveBeenCalledTimes(2)
   })
 
   it('does not assign an intent-gated test before intent is persisted', async () => {
@@ -513,14 +514,16 @@ describe('new-user A/B test assignment', () => {
     installIntentTest(module)
     const persisted = persistedAssignments({ development: 'D', emails: 'B', publish: 'B' })
     const context = { get: vi.fn(() => 'request-id') } as never
-    pgQueryMock.mockResolvedValueOnce({
-      rows: [{ abtests: persisted, created_via_invite: false, intent: null }],
+    drizzleExecuteMock.mockResolvedValueOnce({
+      rows: [{ abtests: persisted, created_via_invite: false, email: 'User@Example.com', intent: null }],
     })
 
     await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
 
-    expect(getPgClientMock).toHaveBeenCalledOnce()
-    expect(getDrizzleClientMock).not.toHaveBeenCalled()
+    expect(getPgClientMock.mock.calls).toEqual([[context, false]])
+    expect(pgQueryMock).not.toHaveBeenCalled()
+    expect(drizzleExecuteMock).toHaveBeenCalledOnce()
+    expect(syncBentoSubscriberTagsMock).not.toHaveBeenCalled()
   })
 
   it('creates an intent-gated assignment after an exact intent match is persisted', async () => {
@@ -575,7 +578,8 @@ describe('new-user A/B test assignment', () => {
 
     await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(standardAssignments)
 
-    expect(getPgClientMock.mock.calls).toEqual([[context, true], [context, false]])
+    expect(getPgClientMock.mock.calls).toEqual([[context, false]])
+    expect(pgQueryMock).not.toHaveBeenCalled()
     expect(drizzleExecuteMock).toHaveBeenCalledTimes(2)
     const updateParameters = collectSqlParameterValues(drizzleExecuteMock.mock.calls[1]?.[0])
     const assignmentsJson = updateParameters.find(value => typeof value === 'string' && value.startsWith('{'))
