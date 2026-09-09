@@ -2627,6 +2627,8 @@
   "setup-2fa-now": "Setup 2FA Now",
   "showing": "Showing",
   "showing-deliveries": "Showing {count} of {total} deliveries",
+  "sidebar-finish-first-update-confirm-description": "Capgo only starts working once a bundle is on a channel. Upload one (or start a Builder build) — it only takes a minute.",
+  "sidebar-finish-first-update-confirm-title": "Finish setting up your first update?",
   "since-paying": "Since paying",
   "sign-out": "Sign Out",
   "signature-example-title": "Node.js verification example:",

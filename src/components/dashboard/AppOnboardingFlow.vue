@@ -59,7 +59,7 @@ import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { isValidAppId } from '~/utils/appId'
-import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
+import { parseAppOnboardingLedger, shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { useBeforeUnloadWarning } from '~/utils/beforeUnloadWarning'
 import {
   hasWebNativeDevelopmentEnvironmentTreatment,
@@ -84,7 +84,7 @@ import {
   resolveOnboardingAppIconSource,
 } from '~/utils/onboardingProgressAnalytics'
 import { createOnboardingProgressPersistence, shouldInitializeOnboardingProgressTracking } from '~/utils/onboardingProgressPersistence'
-import { allowOnboardingDashboardExploration, ONBOARDING_DASHBOARD_EXPLORED_EVENT } from '~/utils/onboardingRedirect'
+import { allowOnboardingDashboardExploration, clearPendingFirstUploadAppId, ONBOARDING_DASHBOARD_EXPLORED_EVENT, setPendingFirstUploadAppId } from '~/utils/onboardingRedirect'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import {
   buildUserOnboardingProgress,
@@ -1127,6 +1127,8 @@ async function loadResumeApp() {
   }
 
   createdApp.value = data
+  if (data.need_onboarding)
+    setPendingFirstUploadAppId(onboardingUserId.value, data.app_id)
   appName.value = data.name ?? ''
   existingApp.value = data.existing_app ?? null
   storeUrl.value = data.ios_store_url ?? data.android_store_url ?? ''
@@ -2084,6 +2086,7 @@ async function createAppRecord(options?: { nextStep?: StandardFlowStep | PreOrgF
       .single()
 
     createdApp.value = refreshed ?? responseData
+    setPendingFirstUploadAppId(onboardingUserId.value, appId)
     trackDetailsEvent('onboarding_app_creation_succeeded', {
       app_id_source: creationAppIdSource,
       has_icon: creationIconSource !== 'none',
@@ -2281,8 +2284,9 @@ async function openDashboard() {
   const source = reportedSetupSource.value ?? current.source
   if (source !== 'manual' && current.outcome === 'in_progress')
     await reportOnboardingPatch({ outcome: 'switched_to_manual' })
-  window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
-  allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
+  // Keep the post-create hard-gate sticky until App Uploaded / Builder build
+  // started, or the user confirms Explore anyway in the sidebar dialog.
+  setPendingFirstUploadAppId(onboardingUserId.value, createdApp.value.app_id)
   await persistOnboardingProgress('completed')
   router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
 }
@@ -2322,11 +2326,13 @@ async function leaveSplashIfAlreadySetup() {
   const { data } = await supabase.rpc('verify_getting_started', { p_app_id: app.app_id })
   if (data != null)
     organizationStore.updateAppOnboarding(app.app_id, data)
-  const skip = data != null
-    ? shouldSkipOnboardingResume(data as unknown)
-    : shouldSkipOnboardingResume(app.onboarding)
-  if (!skip)
+  const onboarding = data != null ? data as unknown : app.onboarding
+  const skip = shouldSkipOnboardingResume(onboarding)
+  const builderStarted = Boolean(parseAppOnboardingLedger(onboarding).features?.builder?.started_at)
+  // App Uploaded / onboarding complete, or Builder build started — lift the sticky gate.
+  if (!skip && !builderStarted)
     return false
+  clearPendingFirstUploadAppId(onboardingUserId.value)
   allowOnboardingDashboardExploration(onboardingUserId.value, app.app_id)
   await persistOnboardingProgress('completed')
   await router.push(`/app/${encodeURIComponent(app.app_id)}`)

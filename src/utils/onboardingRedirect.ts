@@ -5,15 +5,22 @@ export const ONBOARDING_REDIRECT_CUTOFF = Date.parse('2026-08-04T01:00:00+02:00'
 export const ONBOARDING_DASHBOARD_EXPLORED_EVENT = 'capgo:onboarding-dashboard-explored'
 
 const DASHBOARD_EXPLORATION_STORAGE_KEY = 'capgo:onboarding-dashboard-exploration'
+const PENDING_FIRST_UPLOAD_STORAGE_KEY = 'capgo:onboarding-pending-first-upload'
 
 interface DashboardExploration {
   userId: string
   resumeAppId: string | null
 }
 
+interface PendingFirstUpload {
+  userId: string
+  appId: string
+}
+
 // Module memory keeps the grant alive when session storage is blocked, for
 // example in private or restricted browsing contexts.
 let dashboardExplorationFallback: DashboardExploration | null = null
+let pendingFirstUploadFallback: PendingFirstUpload | null = null
 
 function webStorages(): Storage[] {
   if (typeof window === 'undefined')
@@ -78,6 +85,79 @@ function writeStoredExploration(state: DashboardExploration) {
   }
 }
 
+function parsePendingFirstUpload(raw: string | null): PendingFirstUpload | null {
+  if (!raw)
+    return null
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (
+      parsed
+      && typeof parsed === 'object'
+      && typeof (parsed as { userId?: unknown }).userId === 'string'
+      && typeof (parsed as { appId?: unknown }).appId === 'string'
+    ) {
+      return {
+        userId: (parsed as { userId: string }).userId,
+        appId: (parsed as { appId: string }).appId,
+      }
+    }
+  }
+  catch {
+    // Ignore unreadable storage.
+  }
+  return null
+}
+
+function readStoredPendingFirstUpload(): PendingFirstUpload | null {
+  for (const storage of webStorages()) {
+    try {
+      const parsed = parsePendingFirstUpload(storage.getItem(PENDING_FIRST_UPLOAD_STORAGE_KEY))
+      if (parsed)
+        return parsed
+    }
+    catch {
+      // Ignore unreadable storage.
+    }
+  }
+  return null
+}
+
+function writeStoredPendingFirstUpload(state: PendingFirstUpload) {
+  const raw = JSON.stringify(state)
+  for (const storage of webStorages()) {
+    try {
+      storage.setItem(PENDING_FIRST_UPLOAD_STORAGE_KEY, raw)
+    }
+    catch {
+      // Storage can be blocked in private or restricted browsing contexts.
+    }
+  }
+}
+
+function removeStoredPendingFirstUpload() {
+  for (const storage of webStorages()) {
+    try {
+      storage.removeItem(PENDING_FIRST_UPLOAD_STORAGE_KEY)
+    }
+    catch {
+      // Ignore blocked storage.
+    }
+  }
+}
+
+function readPendingFirstUpload(): PendingFirstUpload | null {
+  if (pendingFirstUploadFallback)
+    return pendingFirstUploadFallback
+  return readStoredPendingFirstUpload()
+}
+
+function matchingPendingFirstUpload(userId: string | null | undefined): PendingFirstUpload | null {
+  if (!userId)
+    return null
+  const state = readPendingFirstUpload()
+  return state?.userId === userId ? state : null
+}
+
 function readDashboardExploration(): DashboardExploration | null {
   // In-memory grant is always the latest write in this tab. Prefer it so a
   // failed storage setItem cannot keep serving an older stored user.
@@ -122,6 +202,33 @@ export function allowOnboardingDashboardExploration(userId: string | null | unde
   const state: DashboardExploration = { userId, resumeAppId: resumeAppId ?? null }
   dashboardExplorationFallback = state
   writeStoredExploration(state)
+  // Explore anyway (and other explicit grants) end the post-create hard-gate.
+  clearPendingFirstUploadAppId(userId)
+}
+
+export function setPendingFirstUploadAppId(userId: string | null | undefined, appId: string | null | undefined) {
+  if (!userId || !appId)
+    return
+
+  const state: PendingFirstUpload = { userId, appId }
+  pendingFirstUploadFallback = state
+  writeStoredPendingFirstUpload(state)
+}
+
+export function getPendingFirstUploadAppId(userId: string | null | undefined) {
+  return matchingPendingFirstUpload(userId)?.appId ?? null
+}
+
+export function clearPendingFirstUploadAppId(userId: string | null | undefined) {
+  if (!userId)
+    return
+
+  const current = matchingPendingFirstUpload(userId)
+  if (!current)
+    return
+
+  pendingFirstUploadFallback = null
+  removeStoredPendingFirstUpload()
 }
 
 export function canExploreOnboardingDashboard(
@@ -184,11 +291,27 @@ export function shouldConfirmOnboardingDashboardExploration(options: {
   if (canExploreOnboardingDashboard(options.userId, options.resumeAppId))
     return false
 
-  // Confirm before empty-product escapes while a first-app create is still in
-  // progress — either a resumed pending app, or the active /app/new flow.
-  return !!options.resumeAppId || isPreCreateOnboardingPath(options.currentPath, {
-    source: options.currentSource,
-  })
+  // Org-switcher / add-another-org remains a power-user escape even when a
+  // first app still has a sticky pending-first-upload flag.
+  const onOrganizationOnboarding = options.currentPath === '/onboarding/organization'
+    || !!options.currentPath?.startsWith('/onboarding/organization/')
+  if (onOrganizationOnboarding && options.currentSource === 'org-switcher')
+    return false
+
+  // Confirm before empty-product escapes while first-app create or first-bundle
+  // setup is still in progress — resume id, sticky pending upload, or active path.
+  return !!options.resumeAppId
+    || !!getPendingFirstUploadAppId(options.userId)
+    || isPreCreateOnboardingPath(options.currentPath, {
+      source: options.currentSource,
+    })
+}
+
+export function isActiveOnboardingSetupPath(
+  path: string | null | undefined,
+  options?: { source?: string | null },
+) {
+  return isPreCreateOnboardingPath(path, options)
 }
 
 export function getOnboardingResumeAppId(userId: string | null | undefined) {
