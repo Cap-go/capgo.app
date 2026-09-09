@@ -3861,7 +3861,7 @@ export async function getAdminOnboardingFunnel(
           WHEN onboarding->>'status' = 'completed' THEN 'completed'
           WHEN onboarding->>'status' = 'abandoned' THEN 'abandoned'
           WHEN COALESCE(onboarding->>'step', '') = '' THEN 'not_started'
-          WHEN onboarding->>'step' IN ('intent', 'details', 'organization', 'choice', 'install', 'setup') THEN onboarding->>'step'
+          WHEN onboarding->>'step' IN ('intent', 'publish_app_question', 'details', 'organization', 'choice', 'install', 'setup') THEN onboarding->>'step'
           ELSE 'not_started'
         END as step,
         COUNT(*)::int as count
