@@ -1200,6 +1200,7 @@ async function importStoreMetadata() {
   existingAppSetup.value = 'import'
   trackDetailsEvent('onboarding_store_import_submitted')
   const requestedRun = ++storeImportRun
+  const manualAppIdAtRequest = manualAppId.value
   isImportingStore.value = true
   try {
     const { data, error } = await invokeCapgoApi('app/store-metadata', {
@@ -1248,8 +1249,9 @@ async function importStoreMetadata() {
     }
 
     importedStoreAppId.value = importedAppId
-    if (importedAppId && !hasEditedAppId.value) {
+    if (importedAppId && manualAppId.value === manualAppIdAtRequest) {
       manualAppId.value = importedAppId
+      hasEditedAppId.value = false
       appIdFeedback.value = ''
       appIdSuggestions.value = []
     }
