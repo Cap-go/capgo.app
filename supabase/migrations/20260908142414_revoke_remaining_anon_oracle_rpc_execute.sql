@@ -139,9 +139,13 @@ REVOKE ALL ON FUNCTION public.get_org_members_rbac(uuid) FROM anon;
 
 REVOKE ALL ON FUNCTION public.is_member_of_org(uuid, uuid) FROM anon;
 
-REVOKE ALL ON FUNCTION public.update_org_invite_role_rbac(uuid, uuid, text) FROM anon;
+REVOKE ALL ON FUNCTION public.update_org_invite_role_rbac(
+  uuid, uuid, text
+) FROM anon;
 
-REVOKE ALL ON FUNCTION public.update_tmp_invite_role_rbac(uuid, text, text) FROM anon;
+REVOKE ALL ON FUNCTION public.update_tmp_invite_role_rbac(
+  uuid, text, text
+) FROM anon;
 
 GRANT EXECUTE ON FUNCTION public.get_org_members_rbac(uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.get_org_members_rbac(uuid) TO service_role;
@@ -149,8 +153,16 @@ GRANT EXECUTE ON FUNCTION public.get_org_members_rbac(uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.is_member_of_org(uuid, uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.is_member_of_org(uuid, uuid) TO service_role;
 
-GRANT EXECUTE ON FUNCTION public.update_org_invite_role_rbac(uuid, uuid, text) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.update_org_invite_role_rbac(uuid, uuid, text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.update_org_invite_role_rbac(
+  uuid, uuid, text
+) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.update_org_invite_role_rbac(
+  uuid, uuid, text
+) TO service_role;
 
-GRANT EXECUTE ON FUNCTION public.update_tmp_invite_role_rbac(uuid, text, text) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.update_tmp_invite_role_rbac(uuid, text, text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.update_tmp_invite_role_rbac(
+  uuid, text, text
+) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.update_tmp_invite_role_rbac(
+  uuid, text, text
+) TO service_role;
