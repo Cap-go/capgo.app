@@ -254,6 +254,7 @@ export interface IosProvisioningCommandDeps {
   generateJwt: typeof generateJwt
   verifyApiKey: typeof verifyApiKey
   findCertBySha1: typeof findCertBySha1
+  openP12: typeof openP12
   ensureBundleId: typeof ensureBundleId
   createProfile: typeof createProfile
   deleteProfile: typeof deleteProfile
@@ -347,9 +348,9 @@ git commit -m "feat(cli): repair iOS provisioning maps"
 const bundleResource = await deps.ensureBundleId(freshToken(), target.bundleId)
 const profile = await deps.createProfile(
   freshToken(),
-  bundleResource.id,
+  bundleResource.bundleIdResourceId,
   distributionCertificate.id,
-  appId,
+  target.bundleId,
 )
 ```
 

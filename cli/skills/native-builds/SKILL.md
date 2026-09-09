@@ -262,6 +262,16 @@ npx @capgo/cli build credentials save --platform android \
   - `--skip-build-number-bump`, `--no-skip-build-number-bump`
 - Supports the same iOS and Android credential fields as `build credentials save`.
 
+### `build credentials ios-provisioning`
+
+- Repairs missing App Store provisioning-profile entries for every signable target in the current Capacitor iOS project.
+- Reuses a compatible wildcard profile only after confirmation; otherwise uses saved App Store Connect API-key credentials to create target-specific profiles.
+- Use `--local` or `--global` to select the credential store. If both stores contain credentials for the app and neither option is passed, the command exits and asks you to choose one.
+
+```bash
+npx @capgo/cli@latest build credentials ios-provisioning --local
+```
+
 ### `build credentials export <VARIABLE>`
 
 - Exports one value from saved Builder credentials only; environment variables are never used.
