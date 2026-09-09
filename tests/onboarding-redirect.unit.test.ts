@@ -143,6 +143,43 @@ describe('onboarding dashboard redirect', () => {
     })).toBe(false)
   })
 
+  it('scopes dashboard exploration grants to the active resumeAppId', async () => {
+    const module = await import('../src/utils/onboardingRedirect.ts')
+    module.allowOnboardingDashboardExploration('user-1', 'com.old.app')
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/onboarding/app',
+      destination: '/dashboard',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(true)
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      destination: '/dashboard',
+      resumeAppId: 'com.new.app',
+      userId: 'user-1',
+    })).toBe(true)
+
+    expect(module.getOnboardingResumeRedirect({
+      appId: 'com.new.app',
+      appCount: 1,
+      createdAt: eligibleUser,
+      organizationCount: 1,
+      path: '/apps',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toEqual({
+      path: '/onboarding/app',
+      query: { resume: 'com.new.app', step: 'setup' },
+    })
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      destination: '/dashboard',
+      resumeAppId: 'com.old.app',
+      userId: 'user-1',
+    })).toBe(false)
+  })
+
   it('returns continue-setup route only off pre-create paths with resumeAppId', async () => {
     const module = await import('../src/utils/onboardingRedirect.ts')
 

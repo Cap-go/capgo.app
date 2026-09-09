@@ -404,7 +404,7 @@ describe('auth guard SSO provisioning', () => {
           },
         },
       })
-      allowOnboardingDashboardExploration('user-456')
+      allowOnboardingDashboardExploration('user-456', 'com.test.pending-onboarding')
       const guard = await getGuard()
       const next = vi.fn()
 
