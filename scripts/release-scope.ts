@@ -87,7 +87,7 @@ function isDescribeWithoutMatchingTag(error: unknown): boolean {
     ? (error as NodeJS.ErrnoException & { stderr: string }).stderr
     : ''
   const message = `${error.message}\n${stderr}`
-  return /no names found|no tags exactly match|not enough tags|not a valid object name/i.test(message)
+  return /no names found|no tags can describe|no tags exactly match|not enough tags|not a valid object name/i.test(message)
 }
 
 function getCommitShas(before: string, after: string, run: GitRunner = runGit): string[] {

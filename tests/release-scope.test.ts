@@ -256,6 +256,34 @@ describe('release scope matching', () => {
     )
   })
 
+  it.concurrent('treats divergent history without a reachable tag as untagged', () => {
+    const run = (args: string[]) => {
+      const key = args.join(' ')
+      if (key === 'describe --tags --match capgo-[0-9]* --exclude capgo-*-alpha.* --abbrev=0 divergent-head') {
+        throw new Error('fatal: No tags can describe \'divergent-head\'.')
+      }
+
+      const responses: Record<string, string> = {
+        'rev-list --reverse divergent-head': 'root\ndivergent-head',
+        'show --format= --name-only root': 'README.md',
+        'show --format= --name-only divergent-head': 'src/main.ts',
+        'log -1 --format=%s divergent-head': 'fix: divergent release',
+        'log -1 --format=%b divergent-head': '',
+      }
+
+      if (key in responses)
+        return responses[key]
+
+      throw new Error(`Unexpected git call: ${key}`)
+    }
+
+    expect(resolvePendingReleaseScope('capgo', 'divergent-head', false, run)).toEqual({
+      base: null,
+      shouldRelease: true,
+      releaseAs: 'patch',
+    })
+  })
+
   it.concurrent('evaluates the full reachable history when no component tag exists', () => {
     const run = (args: string[]) => {
       const key = args.join(' ')
