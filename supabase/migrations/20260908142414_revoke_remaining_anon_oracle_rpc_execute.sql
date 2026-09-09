@@ -7,6 +7,7 @@
 --    get_user_id(text) and the capgkey-scoped helpers it still calls.
 -- 2) Remove distinguishable "Organization does not exist" vs "NO_RIGHTS"
 --    outcomes from org-member helpers that must remain anon-callable for CLI.
+--    Internal/service_role callers still get ORG_NOT_FOUND for a missing org.
 
 -- ---------------------------------------------------------------------------
 -- Fix org-member helpers: same denial for missing org and missing permission.
@@ -19,8 +20,17 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 BEGIN
-  IF NOT public.is_internal_request_role(public.current_request_role())
-    AND (
+  -- Internal callers keep a distinguishable missing-org signal; non-internal
+  -- callers still collapse missing-org into NO_RIGHTS (anon oracle closed).
+  IF public.is_internal_request_role(public.current_request_role()) THEN
+    IF NOT EXISTS (
+      SELECT 1
+      FROM public.orgs
+      WHERE public.orgs.id = check_org_members_2fa_enabled.org_id
+    ) THEN
+      RAISE EXCEPTION 'ORG_NOT_FOUND';
+    END IF;
+  ELSIF (
       NOT EXISTS (
         SELECT 1
         FROM public.orgs
@@ -67,8 +77,17 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 BEGIN
-  IF NOT public.is_internal_request_role(public.current_request_role())
-    AND (
+  -- Internal callers keep a distinguishable missing-org signal; non-internal
+  -- callers still collapse missing-org into NO_RIGHTS (anon oracle closed).
+  IF public.is_internal_request_role(public.current_request_role()) THEN
+    IF NOT EXISTS (
+      SELECT 1
+      FROM public.orgs
+      WHERE public.orgs.id = check_org_members_password_policy.org_id
+    ) THEN
+      RAISE EXCEPTION 'ORG_NOT_FOUND';
+    END IF;
+  ELSIF (
       NOT EXISTS (
         SELECT 1
         FROM public.orgs
