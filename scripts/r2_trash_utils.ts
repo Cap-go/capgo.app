@@ -46,6 +46,23 @@ export function isAlreadyMovedToTrash(trashExists: boolean, sourceExists: boolea
   return trashExists && !sourceExists
 }
 
+/** True when delete was skipped because the live object changed after copy (concurrent upload). */
+export function isPreconditionFailedError(error: unknown): boolean {
+  if (!error || typeof error !== 'object')
+    return false
+
+  const err = error as {
+    name?: string
+    Code?: string
+    $metadata?: { httpStatusCode?: number }
+  }
+
+  if (err.$metadata?.httpStatusCode === 412)
+    return true
+
+  return [err.name, err.Code].some(code => code === 'PreconditionFailed')
+}
+
 /** True only for confirmed object-absence from HeadObject (not transient/permission errors). */
 export function isObjectNotFoundError(error: unknown): boolean {
   if (!error || typeof error !== 'object')

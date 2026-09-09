@@ -3,7 +3,7 @@ import { writeFileSync, existsSync, readFileSync } from 'fs'
 import { S3Client as S3ClientLite } from '@bradenmacdonald/s3-lite-client/'
 import { Pool } from 'pg'
 import { Context } from 'vm'
-import { encodeS3CopySource, getR2TrashKey, ConcurrencyLimiter, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, resolveOpsDeleteMode } from './r2_trash_utils.ts'
+import { encodeS3CopySource, getR2TrashKey, ConcurrencyLimiter, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, resolveOpsDeleteMode } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const CHECKPOINT_FILE = './objects_checkpoint.json'
@@ -1559,7 +1559,13 @@ async function delete_cleanup_candidates() {
 
     // Load cleanup candidates file
     const cleanupData = JSON.parse(readFileSync(cleanupFile, 'utf-8'))
-    const toDelete = (cleanupData.toDelete ?? []).filter((file: { key?: string }) => file.key && isLiveR2Key(file.key))
+    const toDelete = (cleanupData.toDelete ?? []).filter((file: { key?: unknown }) => {
+        if (typeof file?.key !== 'string' || !file.key) {
+            console.warn('Skipping cleanup candidate with invalid key:', file)
+            return false
+        }
+        return isLiveR2Key(file.key)
+    })
 
     if (toDelete.length === 0) {
         console.log('✅ No files to delete - cleanup candidates is empty')
@@ -1612,6 +1618,21 @@ async function delete_cleanup_candidates() {
             }
             else {
                 const trashKey = getR2TrashKey(file.key)
+                let sourceEtag: string | undefined
+                try {
+                    const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: file.key }))
+                    sourceEtag = head.ETag
+                }
+                catch (headError: any) {
+                    if (isObjectNotFoundError(headError))
+                        return { key: file.key, success: true, error: null, skipped: true }
+                    return {
+                        key: file.key,
+                        success: false,
+                        error: `Failed to head source before trash: ${headError.message}`,
+                    }
+                }
+
                 try {
                     await s3.send(new CopyObjectCommand({
                         Bucket: S3_BUCKET,
@@ -1640,9 +1661,12 @@ async function delete_cleanup_candidates() {
                     await s3.send(new DeleteObjectCommand({
                         Bucket: S3_BUCKET,
                         Key: file.key,
+                        IfMatch: sourceEtag,
                     }))
                 }
                 catch (deleteError: any) {
+                    if (isPreconditionFailedError(deleteError))
+                        return { key: file.key, success: true, error: null, skipped: true }
                     return {
                         key: file.key,
                         success: false,

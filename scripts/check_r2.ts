@@ -3,7 +3,7 @@ import type { _Object, ListObjectsV2CommandOutput } from '@aws-sdk/client-s3'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'// supabase.types.ts'
 import { CopyObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { createClient } from '@supabase/supabase-js'
-import { ConcurrencyLimiter, encodeS3CopySource, getR2TrashKey, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, resolveOpsDeleteMode } from './r2_trash_utils.ts'
+import { ConcurrencyLimiter, encodeS3CopySource, getR2TrashKey, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, resolveOpsDeleteMode } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const MAGIC_TO_DELETE = './tmp/magic_to_delete6.txt'
@@ -97,6 +97,18 @@ async function main() {
 
     async function moveKeyToTrash(key: string): Promise<'ok' | 'skipped' | 'failed'> {
       const trashKey = getR2TrashKey(key)
+      let sourceEtag: string | undefined
+      try {
+        const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
+        sourceEtag = head.ETag
+      }
+      catch (headError) {
+        if (isObjectNotFoundError(headError))
+          return 'skipped'
+        console.error(`Failed to head ${key} before trash:`, headError)
+        return 'failed'
+      }
+
       try {
         await s3.send(new CopyObjectCommand({
           Bucket: S3_BUCKET,
@@ -123,10 +135,15 @@ async function main() {
         await s3.send(new DeleteObjectCommand({
           Bucket: S3_BUCKET,
           Key: key,
+          IfMatch: sourceEtag,
         }))
         return 'ok'
       }
       catch (deleteError) {
+        if (isPreconditionFailedError(deleteError)) {
+          console.warn(`Skipped delete for ${key}: live object changed after copy (possible concurrent upload)`)
+          return 'skipped'
+        }
         console.error(`Copied ${key} to trash but failed to delete source:`, deleteError)
         return 'failed'
       }

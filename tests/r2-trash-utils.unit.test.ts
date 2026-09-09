@@ -6,6 +6,7 @@ import {
   isAlreadyMovedToTrash,
   isLiveR2Key,
   isObjectNotFoundError,
+  isPreconditionFailedError,
   moveS3LiteObjectToTrash,
   resolveOpsDeleteMode,
   R2_TRASH_PREFIX,
@@ -54,6 +55,15 @@ describe('isAlreadyMovedToTrash', () => {
     expect(isAlreadyMovedToTrash(true, true)).toBe(false)
     expect(isAlreadyMovedToTrash(false, false)).toBe(false)
     expect(isAlreadyMovedToTrash(false, true)).toBe(false)
+  })
+})
+
+describe('isPreconditionFailedError', () => {
+  it('recognizes conditional delete mismatch errors', () => {
+    expect(isPreconditionFailedError({ name: 'PreconditionFailed' })).toBe(true)
+    expect(isPreconditionFailedError({ Code: 'PreconditionFailed' })).toBe(true)
+    expect(isPreconditionFailedError({ $metadata: { httpStatusCode: 412 } })).toBe(true)
+    expect(isPreconditionFailedError({ name: 'NotFound' })).toBe(false)
   })
 })
 
