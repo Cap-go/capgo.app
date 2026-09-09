@@ -373,7 +373,7 @@ export async function debugApp(appId: string, options: AppDebugOptions) {
   }
   if (!appId) {
     log.error('Missing argument, you need to provide a appId, or be in a capacitor project')
-    throw new Error('Missing appId')
+    throw new CliUserError('Missing appId')
   }
 
   const orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })

@@ -3,7 +3,7 @@ import type { DeviceLink, HttpMethod } from './test-utils.ts'
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { getBaseData, getSupabaseClient, PLUGIN_BASE_URL, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils.ts'
+import { fetchTestRequest, getBaseData, getEndpointUrl, getSupabaseClient, PLUGIN_BASE_URL, resetAndSeedAppData, resetAppData, resetAppDataStats, warmEdgeEndpoint } from './test-utils.ts'
 
 interface ChannelInfo {
   id: number
@@ -32,12 +32,10 @@ async function fetchEndpoint(method: HttpMethod, bodyIn: object) {
   }
 
   const body = method !== 'DELETE' ? JSON.stringify(bodyIn) : undefined
-  const response = await fetch(url, {
+  return fetchTestRequest(url.toString(), {
     method,
     body,
   })
-
-  return response
 }
 
 async function fetchGetChannels(queryParams: Record<string, string>) {
@@ -45,11 +43,9 @@ async function fetchGetChannels(queryParams: Record<string, string>) {
   for (const [key, value] of Object.entries(queryParams))
     url.searchParams.append(key, value)
 
-  const response = await fetch(url, {
+  return fetchTestRequest(url.toString(), {
     method: 'GET',
   })
-
-  return response
 }
 
 async function getResponseErrorCode(response: Response) {
@@ -67,6 +63,12 @@ async function withSupabaseCall<T extends { error?: { message?: string } | null 
 
 beforeAll(async () => {
   await resetAndSeedAppData(APPNAME)
+  // Cold first /channel_self request can 502 under Deno shard load; warm before assertions.
+  await warmEdgeEndpoint(getEndpointUrl('/channel_self'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(getBaseData(APPNAME)),
+  })
 })
 afterAll(async () => {
   await resetAppData(APPNAME)

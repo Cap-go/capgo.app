@@ -9,13 +9,12 @@ console.log('🧪 Testing App Created source resolution...\n')
 
 const appAddSource = readFileSync(new URL('../src/app/add.ts', import.meta.url), 'utf8')
 
-assert.doesNotMatch(appAddSource, /\bcheckAppExists\b/)
 assert.doesNotMatch(appAddSource, /\bensureAppDoesNotExist\b/)
+assert.match(appAddSource, /resolveAppAddDuplicateOutcome/)
+assert.match(appAddSource, /CLI Recovered App Already Exists/)
 assert.match(appAddSource, /method:\s*'POST'/)
 assert.match(appAddSource, /appId === 'io\.ionic\.starter'/)
 assert.match(appAddSource, /upsert:\s*false/)
-assert.doesNotMatch(appAddSource, /\bdefaultAppIconPath\b/)
-assert.match(appAddSource, /\.\.\.\(params\.iconUrl \? \{ icon: params\.iconUrl \} : \{\}\)/)
 
 assert.equal(isStorageObjectConflict({ statusCode: '409' }), true)
 assert.equal(isStorageObjectConflict({ status: 409 }), true)

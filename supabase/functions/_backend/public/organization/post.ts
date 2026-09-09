@@ -5,8 +5,9 @@ import { z } from 'zod'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { assertJwtMfaAssurance } from '../../utils/jwt_mfa_assurance.ts'
 import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
-import { parseOrgOnboardingIntent } from '../../utils/org_onboarding_intent.ts'
+import { parseOrgOnboardingDevelopmentEnvironment, parseOrgOnboardingIntent } from '../../utils/org_onboarding_intent.ts'
 import { normalizeWebsiteUrl } from './website.ts'
 
 const MAX_ESTIMATED_MAU = 1_000_000
@@ -21,8 +22,9 @@ const bodySchema = z.object({
   email: z.email().optional(),
   estimatedMau: estimatedMauSchema.optional(),
   website: z.string().optional(),
-  intent: z.enum(['ota', 'builder', 'both', 'exploring', 'unknown']).optional(),
+  intent: z.enum(['ota', 'builder', 'both', 'exploring', 'publish', 'unknown']).optional(),
   startingOut: z.boolean().optional(),
+  developmentEnvironment: z.enum(['hosted_builder', 'ai_assistant', 'hand_coded', 'other', 'local_project', 'exploring', 'skipped']).optional(),
 })
 
 
@@ -145,7 +147,7 @@ async function insertOrgForApiKey(
     management_email: string
     customer_id: string
     website: string | null
-    onboarding: { intent: string, starting_out: boolean }
+    onboarding: { intent: string, starting_out: boolean, development_environment: string }
   },
 ) {
   const apikeyRbacId = auth.apikey?.rbac_id
@@ -193,12 +195,11 @@ async function insertOrgForApiKey(
          name,
          created_by,
          management_email,
-         customer_id,
          website,
          onboarding
        )
-       VALUES ($1::uuid, $2::varchar, $3::uuid, $4::varchar, $5::varchar, $6::varchar, $7::jsonb)`,
-      [org.id, org.name, org.created_by, org.management_email, org.customer_id, org.website, JSON.stringify(org.onboarding)],
+       VALUES ($1::uuid, $2::varchar, $3::uuid, $4::varchar, $5::varchar, $6::jsonb)`,
+      [org.id, org.name, org.created_by, org.management_email, org.website, JSON.stringify(org.onboarding)],
     )
 
     await dbClient.query(
@@ -274,6 +275,9 @@ export async function post(
   const onboarding = {
     intent: parseOrgOnboardingIntent({ intent: body.intent }),
     starting_out: body.startingOut ?? false,
+    development_environment: parseOrgOnboardingDevelopmentEnvironment({
+      development_environment: body.developmentEnvironment,
+    }),
   }
   const newOrg = {
     id: orgId,
@@ -290,11 +294,19 @@ export async function post(
       await insertOrgForApiKey(c, auth, newOrg)
     }
     else {
+      await assertJwtMfaAssurance(c, auth)
+
+      // Omit customer_id: org-create trigger links pre-created pending stripe_info.
+      const { id, name, created_by, management_email, website: orgWebsite, onboarding: orgOnboarding } = newOrg
       const { error: errorOrg } = await supabaseWithAuth(c, auth)
         .from('orgs')
         .insert({
-          ...newOrg,
-          onboarding,
+          id,
+          name,
+          created_by,
+          management_email,
+          website: orgWebsite,
+          onboarding: orgOnboarding,
         })
 
       if (errorOrg) {

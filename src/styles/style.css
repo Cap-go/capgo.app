@@ -1,6 +1,3 @@
-@import url(https://fonts.bunny.net/css?family=inter:100,200,300,400,500,600,700,800,900|prompt:100,200,300,400,500,600,700,800,900)
-layer(base);
-
 @import 'tailwindcss';
 
 :root {

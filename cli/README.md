@@ -86,6 +86,10 @@ npx @capgo/cli@latest bundle upload com.example.app \
 Add `--fail-on-incompatible` when CI must stop instead of uploading a bundle that
 cannot safely update the current native build.
 
+Add `--accept-incompatible` when the mismatch is intentional (for example your
+JavaScript already checks that a native plugin exists before using it). The
+upload still warns, but Capgo will not send the crash-warning email.
+
 ## Documentation
 
 The most complete [documentation is here](https://capgo.app/docs/).
@@ -183,6 +187,13 @@ Capgo continues to load the root config while writing only the selected source. 
 - 🔹 [Notifications](#notifications)
   - [Setup](#notifications-setup)
 - 🔹 [Probe](#probe)
+- 📊 [Observe](#observe)
+  - [Summary](#observe-summary)
+  - [Metrics](#observe-metrics)
+  - [Events](#observe-events)
+  - [Device](#observe-device)
+  - [Versions](#observe-versions)
+  - [Routes](#observe-routes)
 - 🔹 [Generate-docs](#generate-docs)
 - 🔹 [Mcp](#mcp)
 
@@ -224,7 +235,7 @@ npx @capgo/cli@latest init YOUR_API_KEY com.example.app
 
 📱 Run Capacitor apps on devices from the CLI.
 
-### <a id="run-device"></a> 🔹 **Device**
+### <a id="run-device"></a> 📱 **Device**
 
 ```bash
 npx @capgo/cli@latest run device
@@ -412,7 +423,8 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **--min-update-version** | <code>string</code> | Minimal version required to update to this version. Used only if the disable auto update is set to metadata in channel |
 | **--auto-min-update-version** | <code>boolean</code> | Set the min update version based on native packages |
 | **--ignore-metadata-check** | <code>boolean</code> | Ignores the metadata (node_modules) check when uploading |
-| **--fail-on-incompatible** | <code>boolean</code> | Fail the upload (exit non-zero) instead of uploading when the bundle is incompatible with the channel's current native packages. In an interactive terminal you can still choose a native build; declining fails. Cannot be combined with --ignore-metadata-check. |
+| **--fail-on-incompatible** | <code>boolean</code> | Fail the upload (exit non-zero) instead of uploading when the bundle is incompatible with the channel's current native packages. In an interactive terminal you can still choose a native build; declining fails. Cannot be combined with --ignore-metadata-check or --accept-incompatible. |
+| **--accept-incompatible** | <code>boolean</code> | Accept native-package incompatibility as handled (still checks and warns, continues, skips the crash-warning email). Use this when your app already guards missing plugins at runtime. Cannot be combined with --fail-on-incompatible or --ignore-metadata-check. |
 | **--ignore-checksum-check** | <code>boolean</code> | Ignores the checksum check when uploading |
 | **--force-crc32-checksum** | <code>boolean</code> | Force CRC32 checksum for upload (override auto-detection) |
 | **--timeout** | <code>string</code> | Timeout for the upload process in seconds |
@@ -990,6 +1002,7 @@ npx @capgo/cli@latest channel set production com.example.app --bundle 1.0.0 --st
 | **--send-update-notification** | <code>boolean</code> | Send a native update-check notification to devices after updating the linked channel bundle |
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
 | **--ignore-metadata-check** | <code>boolean</code> | Ignore checking node_modules compatibility if present in the bundle |
+| **--accept-incompatible** | <code>boolean</code> | Accept native-package incompatibility as handled (still checks and warns, sets the channel instead of failing). Use this when your app already guards missing plugins at runtime. Cannot be combined with --ignore-metadata-check. |
 | **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
 | **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
 
@@ -1420,6 +1433,7 @@ and/or to Capgo storage as a time-limited download link (--output-upload).
    `npx @capgo/cli@latest build credentials save --appId <app-id> --platform <ios|android>`
 Android AAB only (no Play upload): npx @capgo/cli@latest build request com.example.app --platform android --no-playstore-upload --output-upload
 iOS IPA only (no TestFlight upload): npx @capgo/cli@latest build request com.example.app --platform ios --ios-distribution ad_hoc --output-upload
+Disable Xcode compilation cache: npx @capgo/cli@latest build request com.example.app --platform ios --no-cache
 
 **Example:**
 
@@ -1477,6 +1491,7 @@ npx @capgo/cli@latest build request com.example.app --platform ios --path .
 | **--sync-android-version** | <code>boolean</code> | Android: sync versionName in android/app/build.gradle from package.json before uploading the project. Fails unless versionName is a standalone quoted string literal. |
 | **--ai-analytics** | <code>boolean</code> | On build failure, send logs to Capgo AI for diagnosis. In interactive terminals this skips the upfront confirmation; in CI this auto-uploads and prints the analysis to stderr. |
 | **--no-prescan** | <code>boolean</code> | Skip the automatic pre-build scan |
+| **--no-cache** | <code>boolean</code> | Disable Xcode compilation cache for this build (default: cache enabled) |
 | **--prescan-ignore-fatal** | <code>boolean</code> | Run the pre-build scan but never block the build (report only) |
 | **--prescan-skip** | <code>string</code> | Skip specific prescan check(s) by id (repeatable or comma-separated). Other checks still run. |
 | **--prescan-warn** | <code>string</code> | Downgrade specific prescan check(s) to warning by id (repeatable or comma-separated). Check still runs. |
@@ -1889,6 +1904,186 @@ npx @capgo/cli@latest probe --platform ios
 | **--platform** | <code>string</code> | Platform to probe: ios or android |
 
 
+## <a id="observe"></a> 📊 **Observe**
+
+📊 Query Capgo Observe metrics so you can act on launch, crash, WebView, and navigation data.
+Start with summary and follow the findings. Capgo has no session id: use observe device DEVICE_ID for a device timeline.
+Navigation does not need Expo Router. Listen to history.pushState, history.replaceState, popstate, hashchange, and Capacitor App appUrlOpen, then send action=app_nav with metadata.route.
+
+### <a id="observe-summary"></a> 📊 **Summary**
+
+```bash
+npx @capgo/cli@latest observe summary
+```
+
+📊 Actionable Observe findings for an app.
+Start here. Each finding includes a next view to query.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest observe summary
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
+| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
+| **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
+| **--limit** | <code>string</code> | Max rows to return |
+| **--version-name** | <code>string</code> | Filter by bundle version name |
+| **--json** | <code>boolean</code> | Output as JSON |
+| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
+| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+
+### <a id="observe-metrics"></a> 📊 **Metrics**
+
+```bash
+npx @capgo/cli@latest observe metrics
+```
+
+📈 Sample Observe timings, slowest first by default.
+Use --action app_launch_ready or app_nav, and --sort slowest to find outliers.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest observe metrics --action app_launch_ready --sort slowest --json
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
+| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
+| **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
+| **--limit** | <code>string</code> | Max rows to return |
+| **--version-name** | <code>string</code> | Filter by bundle version name |
+| **--json** | <code>boolean</code> | Output as JSON |
+| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
+| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+
+### <a id="observe-events"></a> 📊 **Events**
+
+```bash
+npx @capgo/cli@latest observe events
+```
+
+📋 Observe action counts and latest devices.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest observe events --action app_crash_native
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
+| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
+| **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
+| **--limit** | <code>string</code> | Max rows to return |
+| **--version-name** | <code>string</code> | Filter by bundle version name |
+| **--json** | <code>boolean</code> | Output as JSON |
+| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
+| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+
+### <a id="observe-device"></a> 📱 **Device**
+
+```bash
+npx @capgo/cli@latest observe device
+```
+
+📱 Device timeline (session substitute) for one device_id.
+Capgo has no session id. Read events in time order to see launch, WebView, crashes, and navigations.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest observe device DEVICE_ID --json
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-d** | <code>string</code> | Device ID |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
+| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
+| **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
+| **--limit** | <code>string</code> | Max rows to return |
+| **--version-name** | <code>string</code> | Filter by bundle version name |
+| **--json** | <code>boolean</code> | Output as JSON |
+| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
+| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+
+### <a id="observe-versions"></a> 📊 **Versions**
+
+```bash
+npx @capgo/cli@latest observe versions
+```
+
+📦 Observe breakdown by bundle version.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest observe versions
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
+| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
+| **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
+| **--limit** | <code>string</code> | Max rows to return |
+| **--version-name** | <code>string</code> | Filter by bundle version name |
+| **--json** | <code>boolean</code> | Output as JSON |
+| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
+| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+
+### <a id="observe-routes"></a> 📊 **Routes**
+
+```bash
+npx @capgo/cli@latest observe routes
+```
+
+🧭 Per-screen Observe timings from metadata.route or action=app_nav.
+No Expo Router required. The app should listen to history/popstate/hashchange/appUrlOpen and send metadata.route.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest observe routes --json
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
+| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
+| **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
+| **--limit** | <code>string</code> | Max rows to return |
+| **--version-name** | <code>string</code> | Filter by bundle version name |
+| **--json** | <code>boolean</code> | Output as JSON |
+| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
+| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+
+
 ## <a id="mcp"></a> 🔹 **Mcp**
 
 ```bash
@@ -1906,7 +2101,7 @@ Selected tools exposed via MCP:
   - capgo_list_organizations, capgo_add_organization
   - capgo_star_repository
   - capgo_star_all_repositories
-  - capgo_get_account_id, capgo_doctor, capgo_get_stats
+  - capgo_get_account_id, capgo_doctor, capgo_get_stats, capgo_observe
   - capgo_request_build, capgo_generate_encryption_keys
 Example usage with Claude Desktop:
   Add to claude_desktop_config.json:

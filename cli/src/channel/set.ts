@@ -8,6 +8,7 @@ import { getActiveAppVersions, getVersionData } from '../api/versions'
 import { sendUpdateNotificationsForChannels } from '../notifications/send-update'
 import { printPreviewQrForResolvedTarget, resolveChannelPreviewTarget } from '../preview/qr'
 import { formatTable } from '../terminal-table'
+import { CliUserError } from '../shared/cli-user-error'
 import { channelUpdatePackageCliError, checkCompatibilityNativePackages, createSupabaseClient, findSavedKey, getAppId, getBundleVersion, getCompatibilityDetails, getConfig, getOrganizationId, invokeCapgoCliApi, isCompatible, resolveUserIdFromApiKey, sendEvent } from '../utils'
 
 /**
@@ -54,6 +55,36 @@ function assertOptionalConfidence(value: number | undefined) {
     throw new Error('Auto-pause confidence must be a number greater than 0 and less than 1')
 }
 
+/**
+ * Warn (and optionally throw) when a bundle's native packages don't match the
+ * channel. `--accept-incompatible` continues after the warning so callers can
+ * mark a handled mismatch (runtime plugin guards, etc.).
+ */
+export function rejectOrAcceptIncompatibleChannelBundle(params: {
+  silent: boolean
+  acceptIncompatible?: boolean
+  incompatible: boolean
+  finalCompatibility: Compatibility[]
+  heading: string
+  errorMessage: string
+}): void {
+  if (!params.incompatible)
+    return
+  if (!params.silent) {
+    log.warn(params.heading)
+    log.warn('')
+    displayCompatibilityTable(params.finalCompatibility)
+    log.warn('')
+    log.warn('An app store update may be required for these changes to take effect.')
+  }
+  if (params.acceptIncompatible) {
+    if (!params.silent)
+      log.warn('Proceeding because --accept-incompatible was set.')
+    return
+  }
+  throw new Error(params.errorMessage)
+}
+
 export async function setChannelInternal(channel: string, appId: string, options: OptionsSetChannel, silent = false) {
   if (!silent)
     intro('Set channel')
@@ -71,13 +102,20 @@ export async function setChannelInternal(channel: string, appId: string, options
   if (!appId) {
     if (!silent)
       log.error('Missing argument, you need to provide a appId, or be in a capacitor project')
-    throw new Error('Missing appId')
+    throw new CliUserError('Missing appId')
   }
 
   if (!channel) {
     if (!silent)
       log.error('Missing argument, you need to provide a channel')
     throw new Error('Missing channel id')
+  }
+
+  if (options.acceptIncompatible && options.ignoreMetadataCheck) {
+    const message = 'You cannot use --accept-incompatible together with --ignore-metadata-check — accepting a mismatch requires running the compatibility check. Remove one of them.'
+    if (!silent)
+      log.error(message)
+    throw new Error(message)
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
@@ -267,18 +305,16 @@ export async function setChannelInternal(channel: string, appId: string, options
 
       const incompatiblePackages = finalCompatibility.filter(item => !isCompatible(item))
 
-      if (localDependencies.length > 0 && incompatiblePackages.length > 0) {
-        if (!silent) {
-          log.warn(`Bundle NOT compatible with ${channel} channel`)
-          log.warn('')
-          displayCompatibilityTable(finalCompatibility)
-          log.warn('')
-          log.warn('An app store update may be required for these changes to take effect.')
-        }
-        throw new Error(`Bundle is not compatible with ${channel} channel`)
-      }
+      rejectOrAcceptIncompatibleChannelBundle({
+        silent,
+        acceptIncompatible: options.acceptIncompatible,
+        incompatible: localDependencies.length > 0 && incompatiblePackages.length > 0,
+        finalCompatibility,
+        heading: `Bundle NOT compatible with ${channel} channel`,
+        errorMessage: `Bundle is not compatible with ${channel} channel`,
+      })
 
-      if (!silent) {
+      if (!silent && !(localDependencies.length > 0 && incompatiblePackages.length > 0)) {
         if (localDependencies.length === 0 && finalCompatibility.length > 0)
           log.info(`Ignoring check compatibility with ${channel} channel because the bundle does not contain any native packages`)
         else
@@ -317,16 +353,14 @@ export async function setChannelInternal(channel: string, appId: string, options
 
       const incompatiblePackages = finalCompatibility.filter(item => !isCompatible(item))
 
-      if (incompatiblePackages.length > 0) {
-        if (!silent) {
-          log.warn(`Bundle NOT compatible with ${channel} channel`)
-          log.warn('')
-          displayCompatibilityTable(finalCompatibility)
-          log.warn('')
-          log.warn('An app store update may be required for these changes to take effect.')
-        }
-        throw new Error(`Latest remote bundle is not compatible with ${channel} channel`)
-      }
+      rejectOrAcceptIncompatibleChannelBundle({
+        silent,
+        acceptIncompatible: options.acceptIncompatible,
+        incompatible: incompatiblePackages.length > 0,
+        finalCompatibility,
+        heading: `Bundle NOT compatible with ${channel} channel`,
+        errorMessage: `Latest remote bundle is not compatible with ${channel} channel`,
+      })
     }
 
     if (!silent)
@@ -349,18 +383,16 @@ export async function setChannelInternal(channel: string, appId: string, options
 
       const incompatiblePackages = finalCompatibility.filter(item => !isCompatible(item))
 
-      if (localDependencies.length > 0 && incompatiblePackages.length > 0) {
-        if (!silent) {
-          log.warn(`Rollout bundle NOT compatible with ${channel} channel`)
-          log.warn('')
-          displayCompatibilityTable(finalCompatibility)
-          log.warn('')
-          log.warn('An app store update may be required for these changes to take effect.')
-        }
-        throw new Error(`Rollout bundle is not compatible with ${channel} channel`)
-      }
+      rejectOrAcceptIncompatibleChannelBundle({
+        silent,
+        acceptIncompatible: options.acceptIncompatible,
+        incompatible: localDependencies.length > 0 && incompatiblePackages.length > 0,
+        finalCompatibility,
+        heading: `Rollout bundle NOT compatible with ${channel} channel`,
+        errorMessage: `Rollout bundle is not compatible with ${channel} channel`,
+      })
 
-      if (!silent) {
+      if (!silent && !(localDependencies.length > 0 && incompatiblePackages.length > 0)) {
         if (localDependencies.length === 0 && finalCompatibility.length > 0)
           log.info(`Ignoring check compatibility with ${channel} channel because the rollout bundle does not contain any native packages`)
         else
@@ -443,16 +475,14 @@ export async function setChannelInternal(channel: string, appId: string, options
 
       const incompatiblePackages = finalCompatibility.filter(item => !isCompatible(item))
 
-      if (localDependencies.length > 0 && incompatiblePackages.length > 0) {
-        if (!silent) {
-          log.warn(`Rollout bundle NOT compatible with ${channel} channel`)
-          log.warn('')
-          displayCompatibilityTable(finalCompatibility)
-          log.warn('')
-          log.warn('An app store update may be required for these changes to take effect.')
-        }
-        throw new Error(`Rollout bundle is not compatible with ${channel} channel`)
-      }
+      rejectOrAcceptIncompatibleChannelBundle({
+        silent,
+        acceptIncompatible: options.acceptIncompatible,
+        incompatible: localDependencies.length > 0 && incompatiblePackages.length > 0,
+        finalCompatibility,
+        heading: `Rollout bundle NOT compatible with ${channel} channel`,
+        errorMessage: `Rollout bundle is not compatible with ${channel} channel`,
+      })
     }
 
     channelPayload.version = rolloutVersion

@@ -4,8 +4,9 @@ import type { Organization } from '../utils'
 import { existsSync, readFileSync } from 'node:fs'
 import { intro, log, outro } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
-import { getInvocationSource } from '../analytics/track'
+import { getInvocationSource, trackEvent } from '../analytics/track'
 import { getAppIconStoragePath, newIconPath } from '../api/app'
+import { getAppListPath } from './list'
 import { checkAlerts } from '../api/update'
 import { isAiAgentEnvironment } from '../init/onboarding-source'
 import { CliUserError } from '../shared/cli-user-error'
@@ -16,9 +17,11 @@ import {
   formatCapgoApiErrorBody,
   formatError,
   getAppId,
+  getCapgoCliHttpStatus,
   getConfig,
   getContentType,
   getOrganizationWithPermission,
+  invokeCapgoCliApi,
   resolveCapgoPublicApiHost,
   resolveUserIdFromApiKey,
   sendEvent,
@@ -78,6 +81,149 @@ export function isStorageObjectConflict(error: unknown) {
   return status === 409 || statusCode === '409'
 }
 
+export function isDuplicateAppCreateError(error: unknown, httpStatus?: number) {
+  if (httpStatus === 409)
+    return true
+  const message = formatError(error).toLowerCase()
+  return message.includes('app_id_already_exists') || message.includes('app id already exists')
+}
+
+export type AppAddDuplicateOutcome = 'duplicate_owned' | 'duplicate_taken' | 'not_duplicate'
+
+type AppListRow = { app_id?: string }
+
+async function isAppListedInOrganization(
+  apikey: string,
+  appId: string,
+  ownerOrg: string,
+  options?: { supaHost?: string, supaAnon?: string },
+): Promise<boolean | null> {
+  let page = 0
+  while (true) {
+    const { data, error } = await invokeCapgoCliApi<AppListRow[]>(
+      getAppListPath(page, ownerOrg),
+      {
+        apikey,
+        method: 'GET',
+        body: undefined,
+        supaHost: options?.supaHost,
+        supaAnon: options?.supaAnon,
+      },
+    )
+
+    if (error) {
+      const status = getCapgoCliHttpStatus(error)
+      if (status === 400 || status === 401 || status === 403)
+        return null
+      throw error
+    }
+
+    const batch = Array.isArray(data) ? data : []
+    if (batch.some(row => row.app_id === appId))
+      return true
+    if (batch.length < 50)
+      return false
+    page += 1
+  }
+}
+
+async function isAppInTargetOrganization(
+  apikey: string,
+  appId: string,
+  ownerOrg: string,
+  options?: { supaHost?: string, supaAnon?: string },
+): Promise<boolean | null> {
+  const { data, error } = await invokeCapgoCliApi<{ owner_org?: string }>(
+    `app/${encodeURIComponent(appId)}`,
+    {
+      apikey,
+      method: 'GET',
+      body: undefined,
+      supaHost: options?.supaHost,
+      supaAnon: options?.supaAnon,
+    },
+  )
+
+  if (error) {
+    const status = getCapgoCliHttpStatus(error)
+    if (status === 404)
+      return false
+    if (status === 401 || status === 403)
+      return null
+    throw error
+  }
+
+  return data?.owner_org === ownerOrg
+}
+
+async function isDuplicateAppOwnedByCaller(
+  params: {
+    apikey: string
+    appId: string
+    ownerOrg: string
+    supaHost?: string
+    supaAnon?: string
+  },
+  deps: {
+    isAppInTargetOrganization?: typeof isAppInTargetOrganization
+    isAppListedInOrganization?: typeof isAppListedInOrganization
+  } = {},
+): Promise<boolean> {
+  const lookup = deps.isAppInTargetOrganization ?? isAppInTargetOrganization
+  const appInTargetOrg = await lookup(
+    params.apikey,
+    params.appId,
+    params.ownerOrg,
+    { supaHost: params.supaHost, supaAnon: params.supaAnon },
+  )
+
+  if (appInTargetOrg === true)
+    return true
+  if (appInTargetOrg === false)
+    return false
+
+  const listAppsInOrg = deps.isAppListedInOrganization ?? isAppListedInOrganization
+  const listedInOrg = await listAppsInOrg(
+    params.apikey,
+    params.appId,
+    params.ownerOrg,
+    { supaHost: params.supaHost, supaAnon: params.supaAnon },
+  )
+  if (listedInOrg === true)
+    return true
+  if (listedInOrg === false)
+    return false
+
+  throw new Error('Cannot verify app ownership for this API key. Grant app.read or org.read, then retry.')
+}
+
+export async function resolveAppAddDuplicateOutcome(
+  params: {
+    apikey: string
+    appId: string
+    ownerOrg: string
+    createError: unknown
+    httpStatus?: number
+    supaHost?: string
+    supaAnon?: string
+  },
+  deps: {
+    isAppInTargetOrganization?: typeof isAppInTargetOrganization
+    isAppListedInOrganization?: typeof isAppListedInOrganization
+  } = {},
+): Promise<AppAddDuplicateOutcome> {
+  if (!isDuplicateAppCreateError(params.createError, params.httpStatus))
+    return 'not_duplicate'
+
+  try {
+    const owned = await isDuplicateAppOwnedByCaller(params, deps)
+    return owned ? 'duplicate_owned' : 'duplicate_taken'
+  }
+  catch (error) {
+    throw new Error(formatError(error))
+  }
+}
+
 async function createAppViaApi(
   apikey: string,
   params: {
@@ -124,7 +270,9 @@ async function createAppViaApi(
   const data = await response.json().catch(() => null)
   if (!response.ok) {
     const details = formatCapgoApiErrorBody(data) || `HTTP ${response.status}`
-    throw new Error(details)
+    const error = new Error(details) as Error & { httpStatus?: number }
+    error.httpStatus = response.status
+    throw error
   }
 
   const createdAppId = (data as { app_id?: string } | null)?.app_id
@@ -233,6 +381,7 @@ export async function addAppInternal(
     ? 'mcp'
     : isAiAgentEnvironment() ? 'ai' : 'cli'
 
+  let appAlreadyExists = false
   try {
     // Use the same authorized API path as the web console. Direct PostgREST inserts
     // hit apps/storage RLS and fail for common API-key + pending-onboarding setups.
@@ -248,24 +397,69 @@ export async function addAppInternal(
     })
   }
   catch (error) {
-    const message = formatError(error)
-    if (!silent)
-      log.error(`Could not add app ${message}`)
-    throw new Error(`Could not add app ${message}`)
+    let duplicateOutcome: AppAddDuplicateOutcome
+    try {
+      duplicateOutcome = await resolveAppAddDuplicateOutcome({
+        apikey: options.apikey!,
+        appId,
+        ownerOrg: organizationUid,
+        createError: error,
+        httpStatus: (error as { httpStatus?: number }).httpStatus,
+        supaHost: options.supaHost,
+        supaAnon: options.supaAnon,
+      })
+    }
+    catch (ownershipError) {
+      const message = formatError(ownershipError)
+      if (!silent)
+        log.error(`Could not add app ${message}`)
+      throw new Error(`Could not add app ${message}`)
+    }
+
+    if (duplicateOutcome === 'duplicate_owned') {
+      appAlreadyExists = true
+    }
+    else if (duplicateOutcome === 'duplicate_taken') {
+      const takenMessage = `App ID ${appId} already exists`
+      if (!silent)
+        log.error(`Could not add app: ${takenMessage}`)
+      throw new Error(`Could not add app: ${takenMessage}`)
+    }
+    else {
+      const message = formatError(error)
+      if (!silent)
+        log.error(`Could not add app ${message}`)
+      throw new Error(`Could not add app ${message}`)
+    }
   }
 
-  await sendEvent(options.apikey!, {
-    channel: 'app',
-    event: 'App Created',
-    icon: '🆕',
-    org_id: organizationUid,
-    tracking_version: 2,
-    tags: { 'app-id': appId, 'source': appCreateSource },
-    notifyConsole: true,
-  }).catch(() => {})
+  if (appAlreadyExists) {
+    void trackEvent({
+      channel: 'app',
+      event: 'CLI Recovered App Already Exists',
+      appId,
+      apikey: options.apikey!,
+      orgId: organizationUid,
+      tags: { source: appCreateSource },
+    })
+  }
+  else {
+    await sendEvent(options.apikey!, {
+      channel: 'app',
+      event: 'App Created',
+      icon: '🆕',
+      org_id: organizationUid,
+      tracking_version: 2,
+      tags: { 'app-id': appId, 'source': appCreateSource },
+      notifyConsole: true,
+    }).catch(() => {})
+  }
 
   if (!silent) {
-    log.success(`App ${appId} added to Capgo`)
+    if (appAlreadyExists)
+      log.success(`App ${appId} already exists in Capgo`)
+    else
+      log.success(`App ${appId} added to Capgo`)
     log.info(`This app is accessible to all members of your organization based on their permissions`)
     log.info(`Next step: upload a bundle with "npx @capgo/cli bundle upload ${appId}"`)
     outro('Done ✅')

@@ -6,6 +6,7 @@ import { chmod, mkdir } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import QRCode from 'qrcode'
 import { buildPreviewWebUrl, type PreviewWebEnv } from './web-url'
+import { CliUserError } from '../shared/cli-user-error'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { createSupabaseClient, findSavedKey, formatError, getAppId, getCapgoCliHttpStatus, getConfig, invokeCapgoCliApi, readCapgoCliApiErrorPayload } from '../utils'
 
@@ -330,7 +331,7 @@ export async function getPreviewQr(appId: string, target: string | undefined, op
 
   if (!appId) {
     log.error('Missing argument, you need to provide a appId, or be in a capacitor project')
-    throw new Error('Missing appId')
+    throw new CliUserError('Missing appId')
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)

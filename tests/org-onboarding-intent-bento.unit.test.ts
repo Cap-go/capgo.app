@@ -33,6 +33,7 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
 import {
   buildOnboardingIntentBentoEventData,
   buildOnboardingIntentBentoTags,
+  parseOrgOnboardingDevelopmentEnvironment,
   parseOrgOnboardingIntent,
   syncOrgOnboardingIntentBentoTags,
   syncOrgOnboardingIntentForOrg,
@@ -56,6 +57,25 @@ describe('parseOrgOnboardingIntent', () => {
     expect(parseOrgOnboardingIntent({ intent: 'builder' })).toBe('builder')
     expect(parseOrgOnboardingIntent({ intent: 'both' })).toBe('both')
     expect(parseOrgOnboardingIntent({ intent: 'exploring' })).toBe('exploring')
+    expect(parseOrgOnboardingIntent({ intent: 'publish' })).toBe('publish')
+  })
+})
+
+describe('parseOrgOnboardingDevelopmentEnvironment', () => {
+  it.concurrent('returns skipped when the question was not asked or stored', () => {
+    expect(parseOrgOnboardingDevelopmentEnvironment(null)).toBe('skipped')
+    expect(parseOrgOnboardingDevelopmentEnvironment({})).toBe('skipped')
+    expect(parseOrgOnboardingDevelopmentEnvironment({ development_environment: 'invalid' })).toBe('skipped')
+    expect(parseOrgOnboardingDevelopmentEnvironment({ development_environment: 'skipped' })).toBe('skipped')
+  })
+
+  it.concurrent('returns the stored development environment when valid', () => {
+    expect(parseOrgOnboardingDevelopmentEnvironment({ development_environment: 'hosted_builder' })).toBe('hosted_builder')
+    expect(parseOrgOnboardingDevelopmentEnvironment({ development_environment: 'ai_assistant' })).toBe('ai_assistant')
+    expect(parseOrgOnboardingDevelopmentEnvironment({ development_environment: 'hand_coded' })).toBe('hand_coded')
+    expect(parseOrgOnboardingDevelopmentEnvironment({ development_environment: 'other' })).toBe('other')
+    expect(parseOrgOnboardingDevelopmentEnvironment({ development_environment: 'local_project' })).toBe('local_project')
+    expect(parseOrgOnboardingDevelopmentEnvironment({ development_environment: 'exploring' })).toBe('exploring')
   })
 })
 
@@ -68,6 +88,7 @@ describe('buildOnboardingIntentBentoTags', () => {
         'onboarding_intent:ota',
         'onboarding_intent:builder',
         'onboarding_intent:exploring',
+        'onboarding_intent:publish',
       ],
     })
   })
@@ -94,6 +115,13 @@ describe('buildOnboardingIntentBentoEventData', () => {
     expect(builder.onboarding_url).toBe('https://console.capgo.app/apps')
     expect(builder.onboarding_url_builder).toBe('https://console.capgo.app/apps')
     expect(builder.onboarding_url_ota).toBe('https://console.capgo.app/app/new')
+
+    const publish = buildOnboardingIntentBentoEventData(c, 'publish', {
+      id: 'org-1',
+      name: 'Acme',
+      website: 'https://acme.example/',
+    })
+    expect(publish.onboarding_url).toBe('https://console.capgo.app/apps')
   })
 })
 
@@ -120,6 +148,7 @@ describe('syncOrgOnboardingIntentBentoTags', () => {
             'onboarding_intent:ota',
             'onboarding_intent:both',
             'onboarding_intent:exploring',
+            'onboarding_intent:publish',
           ],
         },
         {
@@ -130,6 +159,7 @@ describe('syncOrgOnboardingIntentBentoTags', () => {
             'onboarding_intent:ota',
             'onboarding_intent:both',
             'onboarding_intent:exploring',
+            'onboarding_intent:publish',
           ],
         },
       ],

@@ -1531,6 +1531,36 @@
       "type": "timestamp with time zone"
     },
     {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "support_channel_type",
+      "notNull": false,
+      "position": 26,
+      "table": "orgs",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "support_channel_url",
+      "notNull": false,
+      "position": 27,
+      "table": "orgs",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "support_channel_set_at",
+      "notNull": false,
+      "position": 28,
+      "table": "orgs",
+      "type": "timestamp with time zone"
+    },
+    {
       "default": "now()",
       "generated": "",
       "identity": "",
@@ -1982,11 +2012,11 @@
       "valid": true
     },
     {
-      "definition": "CHECK (jsonb_typeof(onboarding) = 'object'::text AND (NOT onboarding ? 'intent'::text OR ((onboarding ->> 'intent'::text) = ANY (ARRAY['unknown'::text, 'ota'::text, 'builder'::text, 'both'::text, 'exploring'::text]))))",
+      "definition": "CHECK (jsonb_typeof(onboarding) = 'object'::text AND (NOT onboarding ? 'intent'::text OR ((onboarding ->> 'intent'::text) = ANY (ARRAY['unknown'::text, 'ota'::text, 'builder'::text, 'both'::text, 'exploring'::text, 'publish'::text]))) AND (NOT onboarding ? 'development_environment'::text OR jsonb_typeof(onboarding -> 'development_environment'::text) = 'string'::text AND ((onboarding ->> 'development_environment'::text) = ANY (ARRAY['hosted_builder'::text, 'ai_assistant'::text, 'hand_coded'::text, 'other'::text, 'local_project'::text, 'exploring'::text, 'skipped'::text])))) NOT VALID",
       "name": "orgs_onboarding_valid",
       "table": "orgs",
       "type": "c",
-      "valid": true
+      "valid": false
     },
     {
       "definition": "CHECK (password_policy_config IS NULL OR jsonb_typeof(password_policy_config) = 'object'::text AND (NOT password_policy_config ? 'min_length'::text OR jsonb_typeof(password_policy_config -> 'min_length'::text) = 'number'::text AND ((password_policy_config ->> 'min_length'::text)::numeric) = trunc((password_policy_config ->> 'min_length'::text)::numeric) AND ((password_policy_config ->> 'min_length'::text)::numeric) >= 6::numeric AND ((password_policy_config ->> 'min_length'::text)::numeric) <= 72::numeric))",
@@ -2005,6 +2035,20 @@
     {
       "definition": "CHECK (required_encryption_key IS NULL OR (length(required_encryption_key::text) = ANY (ARRAY[20, 21])))",
       "name": "orgs_required_encryption_key_valid",
+      "table": "orgs",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (support_channel_type IS NULL OR (support_channel_type = ANY (ARRAY['slack'::text, 'discord'::text, 'teams'::text])))",
+      "name": "orgs_support_channel_type_check",
+      "table": "orgs",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (support_channel_type IS NULL AND support_channel_url IS NULL OR support_channel_type IS NOT NULL AND support_channel_url IS NOT NULL AND char_length(support_channel_url) <= 2048 AND support_channel_url ~ '^https://[^/\\s]+\\S*$'::text)",
+      "name": "orgs_support_channel_url_check",
       "table": "orgs",
       "type": "c",
       "valid": true

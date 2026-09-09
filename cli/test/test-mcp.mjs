@@ -68,6 +68,7 @@ try {
     'capgo_upload_bundle',
     'capgo_update_channel',
     'capgo_get_stats',
+    'capgo_observe',
     'capgo_login',
     'capgo_whoami',
     'capgo_logout',

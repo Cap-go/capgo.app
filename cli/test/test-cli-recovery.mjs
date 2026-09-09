@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import process from 'node:process'
 import vm from 'node:vm'
 import { shouldCapturePosthogException } from '../src/posthog.ts'
+import { CliUserError } from '../src/shared/cli-user-error.ts'
 import { saveKeyInternal } from '../src/key.ts'
 import { setConfigWriteTarget } from '../src/config/index.ts'
 import {
@@ -29,7 +30,8 @@ const tempDirs = []
 let failures = 0
 
 function makeTempDir(name) {
-  const dir = mkdtempSync(join(tmpdir(), `capgo-cli-recovery-${name}-`))
+  // realpath so path assertions survive a symlinked tmpdir (macOS /var -> /private/var)
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), `capgo-cli-recovery-${name}-`)))
   tempDirs.push(dir)
   return dir
 }
@@ -258,6 +260,23 @@ await test('resolveUpdaterPackageJsonPath resolves root-relative package.json op
   }
 })
 
+await test('resolveUpdaterPackageJsonPath prefers cwd over the workspace root for relative paths', () => {
+  const root = makeTempDir('updater-pkg-workspace')
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ workspaces: ['apps/*'] }))
+  const nested = join(root, 'apps', 'mobile')
+  mkdirSync(nested, { recursive: true })
+  writeFileSync(join(nested, 'package.json'), '{}')
+  const previousCwd = process.cwd()
+  try {
+    process.chdir(nested)
+    const resolved = resolveUpdaterPackageJsonPath('./package.json')
+    assert.equal(resolved, join(nested, 'package.json'))
+  }
+  finally {
+    process.chdir(previousCwd)
+  }
+})
+
 await test('buildUpdaterInstallInvocation uses yarn add when updater is not declared', () => {
   const invocation = buildUpdaterInstallInvocation({ pm: 'yarn', installCommand: 'yarn install' }, '^7.0.0', null)
   assert.deepEqual(invocation, { command: 'yarn', args: ['add', '@capgo/capacitor-updater@^7.0.0'] })
@@ -304,7 +323,7 @@ await test('zipBundleInternal rejects declared updater missing from node_modules
   }
 })
 
-await test('zipBundleInternal silent notifyAppReady failure stays PostHog-capturable', async () => {
+await test('zipBundleInternal silent notifyAppReady failure uses CliUserError', async () => {
   const root = makeTempDir('zip-silent')
   const webDir = join(root, 'www')
   mkdirSync(webDir)
@@ -314,8 +333,9 @@ await test('zipBundleInternal silent notifyAppReady failure stays PostHog-captur
   await assert.rejects(
     () => zipBundleInternal('com.example.app', { path: webDir, bundle: '1.0.0' }, true),
     (error) => {
+      assert.equal(error instanceof CliUserError, true)
       assert.match(error.message, /notifyAppReady\(\) is missing/)
-      assert.equal(shouldCapturePosthogException(error), true)
+      assert.equal(shouldCapturePosthogException(error), false)
       return true
     },
   )

@@ -24,22 +24,54 @@ const dialogStore = useDialogV2Store()
 const supabase = useSupabase()
 const isLoading = ref(true)
 const dialogRef = ref()
+const { currentOrganization } = storeToRefs(organizationStore)
 displayStore.NavTitle = t('organization')
 onMounted(async () => {
   await organizationStore.dedupFetchOrganizations()
   isLoading.value = false
 })
 
-const { currentOrganization } = storeToRefs(organizationStore)
 const orgName = ref(currentOrganization.value?.name ?? '')
 const email = ref(currentOrganization.value?.management_email ?? '')
+const supportChannelType = ref<'slack' | 'discord' | 'teams' | null>(null)
+const supportChannelUrl = ref<string | null>(null)
+let loadSupportChannelSequence = 0
+
+async function loadSupportChannel(orgId: string | undefined) {
+  const sequence = ++loadSupportChannelSequence
+  supportChannelType.value = null
+  supportChannelUrl.value = null
+  if (!orgId)
+    return
+
+  const { data, error } = await supabase
+    .from('orgs')
+    .select('support_channel_type, support_channel_url')
+    .eq('id', orgId)
+    .maybeSingle()
+
+  if (sequence !== loadSupportChannelSequence)
+    return
+
+  if (error) {
+    console.error('Failed to load organization support channel', error)
+    return
+  }
+
+  const type = data?.support_channel_type
+  supportChannelType.value = type === 'slack' || type === 'discord' || type === 'teams' ? type : null
+  supportChannelUrl.value = data?.support_channel_url ?? null
+}
 
 watch(currentOrganization, (newOrg) => {
   if (newOrg) {
     orgName.value = newOrg.name
     email.value = newOrg.management_email
+    void loadSupportChannel(newOrg.gid)
+    return
   }
-})
+  void loadSupportChannel(undefined)
+}, { immediate: true })
 
 const canUpdateOrgSettings = computedAsync(async () => {
   if (!currentOrganization.value)
@@ -188,6 +220,16 @@ function canDeleteOrg() {
     && organizationStore.organizations.length > 1
 }
 
+function supportChannelLabel(type: 'slack' | 'discord' | 'teams' | null) {
+  if (type === 'slack')
+    return t('support-channel-slack')
+  if (type === 'discord')
+    return t('support-channel-discord')
+  if (type === 'teams')
+    return t('support-channel-teams')
+  return t('support-channel-none')
+}
+
 async function deleteOrganization() {
   dialogRef.value?.open()
 }
@@ -294,6 +336,26 @@ async function copyOrganizationId() {
               </div>
             </div>
           </div>
+
+          <section
+            v-if="supportChannelUrl && supportChannelType"
+            class="p-4 mt-6 border rounded-lg border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50"
+          >
+            <h3 class="text-base font-semibold text-slate-800 dark:text-white">
+              {{ t('support-channel-title') }}
+            </h3>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              {{ t('support-channel-description') }}
+            </p>
+            <a
+              :href="supportChannelUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="d-btn d-btn-primary d-btn-sm mt-3"
+            >
+              {{ t('support-channel-open') }} ({{ supportChannelLabel(supportChannelType) }})
+            </a>
+          </section>
 
           <footer class="mt-auto">
             <div class="flex flex-col px-2 py-5 border-t md:px-6 border-slate-300">

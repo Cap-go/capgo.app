@@ -340,6 +340,11 @@ async function fetchWithRetry(
 
 export type { BuildCredentials, BuildRequestOptions, BuildRequestResult } from '../schemas/build'
 
+/** Builder job API cache flag: omit when enabled (default), send false when opted out. */
+export function buildJobCachePayload(cache?: boolean): { cache_enabled?: false } {
+  return cache === false ? { cache_enabled: false } : {}
+}
+
 /**
  * Stream build logs from the server via WebSocket.
  * Returns the final status if detected from the stream, or null if stream ended without status.
@@ -1837,6 +1842,11 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       build_mode: options.buildMode || 'release',
       build_options: buildOptionsPayload,
       build_credentials: buildCredentialsPayload,
+      ...buildJobCachePayload(options.cache),
+    }
+
+    if (options.cache === false) {
+      log.info(`ℹ️  --no-cache specified, compilation cache disabled for this ${platform} build`)
     }
 
     log.info('✓ Using credentials (merged from CLI args, env vars, and saved file)')
@@ -2198,7 +2208,10 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
           'Content-Type': 'application/json',
           authorization: options.apikey,
         }),
-        body: JSON.stringify({ app_id: appId }),
+        body: JSON.stringify({
+          app_id: appId,
+          ...buildJobCachePayload(options.cache),
+        }),
       })
 
       if (!startResponse.ok) {

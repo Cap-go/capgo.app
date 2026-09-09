@@ -1,6 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import { updateDeliveryStatsTestUtils } from '../supabase/functions/_backend/private/update_delivery_stats.ts'
-import { buildPlatformUpdateDeliveryDailyCFQuery, buildPlatformUpdateDeliveryOverviewCFQuery, buildUpdateDeliveryTimingEventsCFQuery } from '../supabase/functions/_backend/utils/cloudflare.ts'
+import {
+  hasAnalyticsEngineLiveValidationConfig,
+  lintAnalyticsEngineSql,
+  validateAnalyticsEngineSqlLive,
+} from '../supabase/functions/_backend/utils/analyticsEngineSqlLint.ts'
+import {
+  buildPlatformUpdateDeliveryDailyCFQuery,
+  buildPlatformUpdateDeliveryDeviceCountCFQuery,
+  buildPlatformUpdateDeliveryOverviewCFQuery,
+  buildUpdateDeliveryTimingEventsCFQuery,
+  mergePlatformUpdateDeliveryDailyRows,
+  mergePlatformUpdateDeliveryOverviewRows,
+  PLATFORM_DELIVERY_CF_CHUNK_DAYS,
+  splitPlatformUpdateDeliveryStatsParams,
+} from '../supabase/functions/_backend/utils/cloudflare.ts'
 
 describe('update delivery stats helpers', () => {
   it.concurrent('normalizes bounded period days', () => {
@@ -42,6 +56,14 @@ describe('update delivery stats helpers', () => {
     expect(daily).toContain('quantileExactWeighted(0.50)(duration_ms, sample_weight)')
     expect(daily).toContain('quantileExactWeighted(0.99)(duration_ms, sample_weight)')
     expect(daily).toContain('blob2 IN (\'download_complete\', \'download_zip_complete\', \'download_0\', \'download_zip_start\', \'download_manifest_start\')')
+    expect(daily).toContain('max(if(blob2 IN (\'download_complete\', \'download_zip_complete\') AND double1 > 0, double1, 0.0))')
+    expect(daily).toContain('toDateTime(\'2100-01-01 00:00:00\')')
+    expect(daily).toContain('* 1000.0')
+    expect(daily).not.toContain('avgIf(')
+    expect(daily).not.toContain('sumIf(')
+    expect(daily).not.toContain('countIf(')
+    expect(daily).not.toContain(', NULL)')
+    expect(daily).not.toContain(', 0)')
     expect(daily).toContain('format(\'{}:{}\', index1, blob1) AS app_device')
     expect(daily).toContain('COUNT(DISTINCT app_device) AS devices')
     expect(daily).toContain('GROUP BY day')
@@ -50,6 +72,108 @@ describe('update delivery stats helpers', () => {
     expect(overview).toContain('COUNT(DISTINCT app_device) AS devices')
     expect(overview).not.toContain('GROUP BY day')
     expect(overview).toContain('AND day >= \'2026-07-02\'')
+    expect(overview).toContain('max(if(blob2 IN (\'download_complete\', \'download_zip_complete\') AND double1 > 0, double1, 0.0))')
+    expect(overview).not.toContain('avgIf(')
+    expect(overview).not.toContain(', NULL)')
+    expect(lintAnalyticsEngineSql(daily)).toEqual([])
+    expect(lintAnalyticsEngineSql(overview)).toEqual([])
+  })
+
+  it('parses platform delivery queries against live Analytics Engine', async () => {
+    if (!hasAnalyticsEngineLiveValidationConfig()) {
+      console.warn('Skipping live AE check: CF_ANALYTICS_TOKEN / CF_ACCOUNT_ANALYTICS_ID not set')
+      return
+    }
+
+    const params = {
+      query_start: '2026-08-31T22:00:00.000Z',
+      period_start: '2026-09-01T00:00:00.000Z',
+      end_date: '2026-09-02T00:00:00.000Z',
+    }
+    const accountId = process.env.CF_ACCOUNT_ANALYTICS_ID!
+    const token = process.env.CF_ANALYTICS_TOKEN!
+    const queries = [
+      ['daily', buildPlatformUpdateDeliveryDailyCFQuery(params)],
+      ['overview', buildPlatformUpdateDeliveryOverviewCFQuery(params)],
+      ['devices', buildPlatformUpdateDeliveryDeviceCountCFQuery(params)],
+    ] as const
+
+    const results = await Promise.all(queries.map(async ([name, query]) => {
+      const result = await validateAnalyticsEngineSqlLive(accountId, token, query)
+      return [name, result] as const
+    }))
+    for (const [name, result] of results) {
+      expect(result, `${name} ${JSON.stringify(result)}`).toEqual({ ok: true })
+    }
+  }, 60_000)
+
+  it.concurrent('splits long platform windows into bounded AE chunks', () => {
+    const params = {
+      query_start: '2026-05-28T22:00:00.000Z',
+      period_start: '2026-05-29T00:00:00.000Z',
+      end_date: '2026-08-27T00:00:00.000Z',
+    }
+    const chunks = splitPlatformUpdateDeliveryStatsParams(params, PLATFORM_DELIVERY_CF_CHUNK_DAYS)
+    expect(chunks.length).toBeGreaterThan(1)
+    expect(chunks[0]?.period_start).toBe('2026-05-29T00:00:00.000Z')
+    expect(chunks.at(-1)?.end_date).toBe('2026-08-27T00:00:00.000Z')
+    for (const chunk of chunks) {
+      const spanMs = Date.parse(chunk.end_date) - Date.parse(chunk.period_start)
+      expect(spanMs).toBeLessThanOrEqual(PLATFORM_DELIVERY_CF_CHUNK_DAYS * 24 * 60 * 60 * 1000)
+      expect(Date.parse(chunk.query_start)).toBe(Date.parse(chunk.period_start) - 2 * 60 * 60 * 1000)
+    }
+  })
+
+  it.concurrent('merges chunked platform daily rows and overview percentiles', () => {
+    const mergedDaily = mergePlatformUpdateDeliveryDailyRows([
+      { day: '2026-07-02', samples: 5, devices: 4, p50_ms: 400, p75_ms: 500, p95_ms: 900, p99_ms: 1000 },
+      { day: '2026-07-01', samples: 10, devices: 8, p50_ms: 100, p75_ms: 150, p95_ms: 300, p99_ms: 400 },
+      { day: '2026-07-02', samples: 20, devices: 12, p50_ms: 200, p75_ms: 250, p95_ms: 500, p99_ms: 700 },
+    ])
+    expect(mergedDaily).toHaveLength(2)
+    expect(mergedDaily[0]?.day).toBe('2026-07-01')
+    expect(mergedDaily[1]).toMatchObject({ day: '2026-07-02', samples: 25, devices: 16 })
+    expect(mergedDaily[1]?.p50_ms).toBeCloseTo(240, 2)
+
+    const overview = mergePlatformUpdateDeliveryOverviewRows([
+      { samples: 10, devices: 8, p50_ms: 100, p75_ms: 150, p95_ms: 300, p99_ms: 400 },
+      { samples: 20, devices: 12, p50_ms: 200, p75_ms: 250, p95_ms: 500, p99_ms: 700 },
+    ])
+    expect(overview.samples).toBe(30)
+    expect(overview.devices).toBe(20)
+    expect(overview.p50_ms).toBeCloseTo(166.666, 2)
+  })
+
+  it.concurrent('builds a full-window platform device count query for chunked reads', () => {
+    const params = {
+      query_start: '2026-05-28T22:00:00.000Z',
+      period_start: '2026-05-29T00:00:00.000Z',
+      end_date: '2026-08-27T00:00:00.000Z',
+    }
+    const query = buildPlatformUpdateDeliveryDeviceCountCFQuery(params)
+    expect(query).toContain('COUNT(DISTINCT app_device) AS devices')
+    expect(query).not.toContain('GROUP BY day')
+    expect(query).toContain('AND day >= \'2026-05-29\'')
+  })
+
+  it.concurrent('caps platform delivery period days at 90', () => {
+    expect(updateDeliveryStatsTestUtils.normalizePlatformPeriodDays(30)).toBe(30)
+    expect(updateDeliveryStatsTestUtils.normalizePlatformPeriodDays(90)).toBe(90)
+    expect(updateDeliveryStatsTestUtils.normalizePlatformPeriodDays(365)).toBe(90)
+  })
+
+  it.concurrent('builds an empty platform response instead of failing the chart', () => {
+    const response = updateDeliveryStatsTestUtils.buildEmptyUpdateDeliveryResponse({
+      labels: ['2026-07-01', '2026-07-02'],
+      days: 7,
+      start: '2026-07-01T00:00:00.000Z',
+      end: '2026-07-02T23:59:59.999Z',
+      scope: 'platform',
+    })
+    expect(response.scope).toBe('platform')
+    expect(response.overview.samples).toBe(0)
+    expect(response.daily.samples).toEqual([0, 0])
+    expect(response.daily.p50_ms).toEqual([null, null])
   })
 
   it.concurrent('keeps pairing AE queries unfiltered so start events remain available', () => {

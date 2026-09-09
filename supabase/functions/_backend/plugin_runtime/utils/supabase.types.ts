@@ -2096,6 +2096,7 @@ export type Database = {
           id: string
           owner_org: string
           provider: string
+          secret_ciphertext: string | null
           secret_ref: string | null
           status: string
           updated_at: string
@@ -2108,6 +2109,7 @@ export type Database = {
           id?: string
           owner_org: string
           provider: string
+          secret_ciphertext?: string | null
           secret_ref?: string | null
           status: string
           updated_at?: string
@@ -2120,6 +2122,7 @@ export type Database = {
           id?: string
           owner_org?: string
           provider?: string
+          secret_ciphertext?: string | null
           secret_ref?: string | null
           status?: string
           updated_at?: string
@@ -2386,6 +2389,9 @@ export type Database = {
           required_encryption_key: string | null
           stats_refresh_requested_at: string | null
           stats_updated_at: string | null
+          support_channel_set_at: string | null
+          support_channel_type: string | null
+          support_channel_url: string | null
           updated_at: string | null
           website: string | null
         }
@@ -2410,6 +2416,9 @@ export type Database = {
           required_encryption_key?: string | null
           stats_refresh_requested_at?: string | null
           stats_updated_at?: string | null
+          support_channel_set_at?: string | null
+          support_channel_type?: string | null
+          support_channel_url?: string | null
           updated_at?: string | null
           website?: string | null
         }
@@ -2434,6 +2443,9 @@ export type Database = {
           required_encryption_key?: string | null
           stats_refresh_requested_at?: string | null
           stats_updated_at?: string | null
+          support_channel_set_at?: string | null
+          support_channel_type?: string | null
+          support_channel_url?: string | null
           updated_at?: string | null
           website?: string | null
         }
@@ -5209,6 +5221,7 @@ export type Database = {
         Args: { plain_key: string; stored_hash: string }
         Returns: boolean
       }
+      verify_getting_started: { Args: { p_app_id: string }; Returns: Json }
       verify_mfa: { Args: never; Returns: boolean }
     }
     Enums: {
@@ -5320,6 +5333,7 @@ export type Database = {
         | "app_launch_start"
         | "app_launch_ready"
         | "app_launch_timeout"
+        | "app_nav"
         | "webview_dom_content_loaded"
         | "webview_page_loaded"
       stripe_status:
@@ -5600,6 +5614,7 @@ export const Constants = {
         "app_launch_start",
         "app_launch_ready",
         "app_launch_timeout",
+        "app_nav",
         "webview_dom_content_loaded",
         "webview_page_loaded",
       ],

@@ -135,6 +135,19 @@ describe('getLatestNonEmptyPluginTrendPoint', () => {
 
     expect(point?.date).toBe('2026-01-01')
   })
+
+  it.concurrent('returns major_breakdown from the selected trend point when present', () => {
+    const point = getLatestNonEmptyPluginTrendPoint([
+      {
+        date: '2026-08-25',
+        version_breakdown: { '8.41.0': 100 },
+        major_breakdown: { '8': 100 },
+      },
+      { date: '2026-08-26', version_breakdown: {} },
+    ])
+
+    expect(point?.major_breakdown).toEqual({ '8': 100 })
+  })
 })
 
 describe('buildPluginCompatibilityTrendSeries', () => {

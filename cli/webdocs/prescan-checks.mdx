@@ -87,6 +87,7 @@ Ids are stable. Use the exact id in `--prescan-skip` / `--prescan-warn`.
 | `ios/plist-orientations-present` | ios | UISupportedInterfaceOrientations is declared | yes (2026-08-14) |
 | `ios/plist-display-name` | ios | Display name is set | yes (2026-08-14) |
 | `ios/plist-background-modes-sanity` | ios | UIBackgroundModes values look valid | yes (2026-08-14) |
+| `ios/plist-required-device-arm64` | ios | UIRequiredDeviceCapabilities is not armv7-only (iOS 26+ App Store installs) | yes (2026-08-14) |
 | `ios/xcode-deployment-target-capacitor` | ios | iOS deployment target meets Capacitor requirements | yes (2026-08-14) |
 | `ios/xcode-signing-team` | ios | DEVELOPMENT_TEAM / signing team is set | yes (2026-08-14) |
 | `ios/xcode-bundle-id-mismatch-across-configs` | ios | Bundle id is consistent across Xcode configs | yes (2026-08-14) |
@@ -98,6 +99,7 @@ Ids are stable. Use the exact id in `--prescan-skip` / `--prescan-warn`.
 | `ios/entitlements-aps-environment-vs-mode` | ios | aps-environment matches distribution mode | yes (2026-08-14) |
 | `ios/entitlements-associated-domains-format` | ios | Associated Domains format is valid | yes (2026-08-14) |
 | `ios/entitlements-app-groups-format` | ios | App Groups format is valid | yes (2026-08-14) |
+| `ios/entitlements-declared-age-range` | ios | `@capgo/capacitor-age-range` apps declare `com.apple.developer.declared-age-range` | yes (2026-08-14) |
 | `ios/capacitor-server-url-shipped` | ios | capacitor.config server.url is not left as a live-reload / remote shell endpoint for store builds | yes (2026-08-14) |
 | `ios/capacitor-server-cleartext` | ios | server.cleartext is not enabled for production | yes (2026-08-14) |
 | `ios/capacitor-allow-navigation-wildcard` | ios | server.allowNavigation is not a blanket wildcard | yes (2026-08-14) |

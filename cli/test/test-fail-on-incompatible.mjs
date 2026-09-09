@@ -10,6 +10,8 @@
 import assert from 'node:assert/strict'
 import { shouldBlockIncompatibleUpload } from '../src/bundle/builder-cta.ts'
 import { checkValidOptions } from '../src/bundle/upload.ts'
+import { rejectOrAcceptIncompatibleChannelBundle } from '../src/channel/set.ts'
+import { updateChannelOptionsSchema, uploadOptionsSchema } from '../src/schemas/sdk.ts'
 
 let failures = 0
 
@@ -134,6 +136,74 @@ test('--ignore-metadata-check alone does not trigger the conflict', () => {
   assert.doesNotThrow(() => checkValidOptions({ ignoreMetadataCheck: true }))
 })
 
+test('--accept-incompatible together with --fail-on-incompatible is rejected', () => {
+  assert.throws(
+    () => checkValidOptions({ acceptIncompatible: true, failOnIncompatible: true }),
+    (error) => {
+      assert.ok(error instanceof Error, 'expected an Error to be thrown')
+      assert.match(error.message, /--accept-incompatible/, 'message should mention --accept-incompatible')
+      assert.match(error.message, /--fail-on-incompatible/, 'message should mention --fail-on-incompatible')
+      return true
+    },
+  )
+})
+
+test('--accept-incompatible together with --ignore-metadata-check is rejected', () => {
+  assert.throws(
+    () => checkValidOptions({ acceptIncompatible: true, ignoreMetadataCheck: true }),
+    (error) => {
+      assert.ok(error instanceof Error, 'expected an Error to be thrown')
+      assert.match(error.message, /--accept-incompatible/, 'message should mention --accept-incompatible')
+      assert.match(error.message, /--ignore-metadata-check/, 'message should mention --ignore-metadata-check')
+      return true
+    },
+  )
+})
+
+test('--accept-incompatible alone does not trigger a conflict', () => {
+  assert.doesNotThrow(() => checkValidOptions({ acceptIncompatible: true }))
+})
+
+test('SDK uploadOptionsSchema rejects acceptIncompatible with ignoreCompatibilityCheck', () => {
+  const result = uploadOptionsSchema.safeParse({
+    appId: 'com.example.app',
+    path: './dist',
+    acceptIncompatible: true,
+    ignoreCompatibilityCheck: true,
+  })
+  assert.equal(result.success, false)
+  if (result.success)
+    return
+  assert.ok(result.error.issues.some(issue => issue.path.includes('ignoreCompatibilityCheck')))
+})
+
+test('SDK uploadOptionsSchema accepts acceptIncompatible alone', () => {
+  const result = uploadOptionsSchema.safeParse({
+    appId: 'com.example.app',
+    path: './dist',
+    acceptIncompatible: true,
+  })
+  assert.equal(result.success, true)
+})
+
+test('SDK uploadOptionsSchema rejects string acceptIncompatible', () => {
+  const result = uploadOptionsSchema.safeParse({
+    appId: 'com.example.app',
+    path: './dist',
+    acceptIncompatible: 'false',
+  })
+  assert.equal(result.success, false)
+})
+
+test('SDK updateChannelOptionsSchema rejects string acceptIncompatible', () => {
+  const result = updateChannelOptionsSchema.safeParse({
+    channelId: 'production',
+    appId: 'com.example.app',
+    acceptIncompatible: 'false',
+  })
+  assert.equal(result.success, false)
+})
+
 test('--rollout-advance with --dry-upload is rejected', () => {
   assert.throws(
     () => checkValidOptions({ rolloutAdvance: true, dryUpload: true }),
@@ -147,6 +217,43 @@ test('--rollout-advance with --dry-upload is rejected', () => {
 
 test('--rollout-advance alone does not trigger a dry-upload conflict', () => {
   assert.doesNotThrow(() => checkValidOptions({ rolloutAdvance: true }))
+})
+
+console.log('\n🧪 Testing rejectOrAcceptIncompatibleChannelBundle...\n')
+
+test('channel set throws when incompatible and not accepted', () => {
+  assert.throws(
+    () => rejectOrAcceptIncompatibleChannelBundle({
+      silent: true,
+      acceptIncompatible: false,
+      incompatible: true,
+      finalCompatibility: [],
+      heading: 'nope',
+      errorMessage: 'Bundle is not compatible with production channel',
+    }),
+    /Bundle is not compatible with production channel/,
+  )
+})
+
+test('channel set continues when incompatible and accepted', () => {
+  assert.doesNotThrow(() => rejectOrAcceptIncompatibleChannelBundle({
+    silent: true,
+    acceptIncompatible: true,
+    incompatible: true,
+    finalCompatibility: [],
+    heading: 'nope',
+    errorMessage: 'Bundle is not compatible with production channel',
+  }))
+})
+
+test('channel set continues when compatible', () => {
+  assert.doesNotThrow(() => rejectOrAcceptIncompatibleChannelBundle({
+    silent: true,
+    incompatible: false,
+    finalCompatibility: [],
+    heading: 'nope',
+    errorMessage: 'nope',
+  }))
 })
 
 if (failures > 0) {

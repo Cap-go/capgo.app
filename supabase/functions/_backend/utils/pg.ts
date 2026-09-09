@@ -13,9 +13,10 @@ import { getChannelSelfOverride, isChannelSelfStoreEnabled } from './channelSelf
 import { getAdminOnboardingTelemetry } from './cloudflare.ts'
 import { DISPOSABLE_EMAIL_DOMAINS, PERSONAL_EMAIL_DOMAINS } from './emailClassification.ts'
 import { getClientDbRegionSB } from './geolocation.ts'
-import { REQUIRED_GLOBAL_STATS_SHARDS } from './global_stats.ts'
+import { hasRequiredGlobalStatsShards, REQUIRED_GLOBAL_STATS_SHARDS } from './global_stats.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { buildAdminOnboardingWizardDropoff, getAdminOnboardingActivationMetrics } from './onboardingFunnel.ts'
+import { hasPluginVersionBreakdown } from './plugin_compatibility.ts'
 import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { getRolloutDecision } from './rollout.ts'
@@ -482,6 +483,8 @@ function getVersionSelect(
     min_update_version: sql<string | null>`${versionAlias.min_update_version}`.as(`${prefix}minUpdateVersion`),
     manifest_count: sql<number>`${versionAlias.manifest_count}`.as(`${prefix}manifest_count`),
     r2_path: sql`${versionAlias.r2_path}`.mapWith(versionAlias.r2_path).as(`${prefix}r2_path`),
+    deleted: sql<boolean>`COALESCE(${versionAlias.deleted}, false)`.as(`${prefix}deleted`),
+    deleted_at: sql<string | null>`${versionAlias.deleted_at}`.as(`${prefix}deleted_at`),
   }
 
   if (includeMetadata) {
@@ -537,7 +540,10 @@ function activeChannelVersionJoin(
 ) {
   const conditions = [
     eq(channelVersionColumn, versionAlias.id),
-    or(eq(versionAlias.deleted, false), eq(versionAlias.name, 'builtin')),
+    or(
+      and(eq(versionAlias.deleted, false), isNull(versionAlias.deleted_at)),
+      eq(versionAlias.name, 'builtin'),
+    ),
   ]
 
   if (channelAppIdColumn)
@@ -2346,6 +2352,9 @@ export interface AdminPluginBreakdown {
     version_breakdown: Record<string, number>
     major_breakdown: Record<string, number>
     devices_last_month: number
+    devices_last_month_ios: number
+    devices_last_month_android: number
+    version_ladder: AdminPluginVersionLadderEntry[]
   }>
 }
 
@@ -2494,6 +2503,9 @@ export interface AdminOrganizationInsightRow {
   paid_at: string | null
   registered_at: string
   distribution_stage: string | null
+  has_sso: boolean
+  support_channel_type: 'slack' | 'discord' | 'teams' | null
+  support_channel_url: string | null
 }
 
 export interface AdminOrganizationInsightsResult {
@@ -2571,7 +2583,15 @@ export async function getAdminOrganizationInsights(
           o.created_at AS registered_at,
           si.paid_at,
           p.name AS plan_name,
-          ${billingTypeExpression} AS billing_type
+          ${billingTypeExpression} AS billing_type,
+          o.support_channel_type,
+          o.support_channel_url,
+          EXISTS (
+            SELECT 1
+            FROM sso_providers sp
+            WHERE sp.org_id = o.id
+              AND sp.status = 'active'
+          ) AS has_sso
         FROM orgs o
         LEFT JOIN stripe_info si ON si.customer_id = o.customer_id
         LEFT JOIN plans p ON p.stripe_id = si.product_id
@@ -2615,6 +2635,9 @@ export async function getAdminOrganizationInsights(
           filtered.paid_at,
           filtered.plan_name,
           filtered.billing_type,
+          filtered.support_channel_type,
+          filtered.support_channel_url,
+          filtered.has_sso,
           COALESCE(vur.failed_update_count, 0)::bigint AS failed_update_count,
           COALESCE(vur.install_count, 0)::bigint AS install_count,
           COALESCE(vur.update_attempt_count, 0)::bigint AS update_attempt_count,
@@ -2747,7 +2770,10 @@ export async function getAdminOrganizationInsights(
         lb.last_build_at,
         filtered.paid_at,
         filtered.registered_at,
-        stage.distribution_stage
+        stage.distribution_stage,
+        filtered.has_sso,
+        filtered.support_channel_type,
+        filtered.support_channel_url
       FROM filtered_orgs filtered
       LEFT JOIN apps_by_org apps ON apps.org_id = filtered.org_id
       LEFT JOIN members_by_org members ON members.org_id = filtered.org_id
@@ -2812,6 +2838,9 @@ export async function getAdminOrganizationInsights(
       paid_at: normalizeTimestamp(row.paid_at),
       registered_at: normalizeTimestamp(row.registered_at) ?? '',
       distribution_stage: row.distribution_stage ?? null,
+      has_sso: row.has_sso === true,
+      support_channel_type: row.support_channel_type ?? null,
+      support_channel_url: row.support_channel_url ?? null,
     }))
 
     const total = Number((countResult.rows[0] as any)?.total) || 0
@@ -2826,6 +2855,109 @@ export async function getAdminOrganizationInsights(
   catch (e: unknown) {
     logPgError(c, 'getAdminOrganizationInsights', e)
     return { organizations: [], total: 0, plan_options: [] }
+  }
+  finally {
+    if (pgClient)
+      await closeClient(c, pgClient)
+  }
+}
+
+export interface AdminEnterpriseAdoptionPoint {
+  date: string
+  enterprise_count: number
+  sso_count: number
+  channel_count: number
+}
+
+export interface AdminEnterpriseAdoptionResult {
+  trend: AdminEnterpriseAdoptionPoint[]
+}
+
+/**
+ * Daily cumulative counts of paid Enterprise orgs, plus how many of those
+ * orgs have active SSO and a Capgo-admin support channel.
+ */
+export async function getAdminEnterpriseAdoption(
+  c: Context,
+  start_date: string,
+  end_date: string,
+): Promise<AdminEnterpriseAdoptionResult> {
+  let pgClient: ReturnType<typeof getPgClient> | undefined
+  try {
+    pgClient = getPgClient(c)
+    const drizzleClient = getDrizzleClient(pgClient)
+    const { startDay, seriesEndDay } = getAdminUtcDateRange(start_date, end_date)
+
+    const query = sql`
+      WITH date_series AS (
+        SELECT generate_series(
+          ${startDay.toISOString()}::timestamptz::date,
+          ${seriesEndDay.toISOString()}::timestamptz::date,
+          interval '1 day'
+        )::date AS date
+      ),
+      enterprise_orgs AS (
+        SELECT
+          o.id,
+          COALESCE(si.paid_at, o.created_at)::date AS started_on
+        FROM orgs o
+        INNER JOIN stripe_info si ON si.customer_id = o.customer_id
+        INNER JOIN plans p ON p.stripe_id = si.product_id
+        WHERE p.name = 'Enterprise'
+          AND si.status = 'succeeded'
+      ),
+      sso_orgs AS (
+        SELECT
+          sp.org_id,
+          GREATEST(MIN(sp.created_at)::date, MIN(e.started_on)) AS sso_on
+        FROM sso_providers sp
+        INNER JOIN enterprise_orgs e ON e.id = sp.org_id
+        WHERE sp.status = 'active'
+        GROUP BY sp.org_id
+      ),
+      channel_orgs AS (
+        SELECT
+          e.id,
+          GREATEST(o.support_channel_set_at::date, e.started_on) AS channel_on
+        FROM orgs o
+        INNER JOIN enterprise_orgs e ON e.id = o.id
+        WHERE o.support_channel_set_at IS NOT NULL
+      )
+      SELECT
+        ds.date::text AS date,
+        (
+          SELECT COUNT(*)::int
+          FROM enterprise_orgs e
+          WHERE e.started_on <= ds.date
+        ) AS enterprise_count,
+        (
+          SELECT COUNT(*)::int
+          FROM sso_orgs s
+          WHERE s.sso_on <= ds.date
+        ) AS sso_count,
+        (
+          SELECT COUNT(*)::int
+          FROM channel_orgs c
+          WHERE c.channel_on <= ds.date
+        ) AS channel_count
+      FROM date_series ds
+      ORDER BY ds.date ASC
+    `
+
+    const result = await drizzleClient.execute(query)
+    const trend: AdminEnterpriseAdoptionPoint[] = result.rows.map((row: any) => ({
+      date: String(row.date),
+      enterprise_count: Number(row.enterprise_count) || 0,
+      sso_count: Number(row.sso_count) || 0,
+      channel_count: Number(row.channel_count) || 0,
+    }))
+
+    cloudlog({ requestId: c.get('requestId'), message: 'getAdminEnterpriseAdoption result', resultCount: trend.length })
+    return { trend }
+  }
+  catch (e: unknown) {
+    logPgError(c, 'getAdminEnterpriseAdoption', e)
+    return { trend: [] }
   }
   finally {
     if (pgClient)
@@ -3729,7 +3861,7 @@ export async function getAdminOnboardingFunnel(
           WHEN onboarding->>'status' = 'completed' THEN 'completed'
           WHEN onboarding->>'status' = 'abandoned' THEN 'abandoned'
           WHEN COALESCE(onboarding->>'step', '') = '' THEN 'not_started'
-          WHEN onboarding->>'step' IN ('intent', 'details', 'organization', 'choice', 'install', 'setup') THEN onboarding->>'step'
+          WHEN onboarding->>'step' IN ('intent', 'publish_app_question', 'details', 'organization', 'choice', 'install', 'setup') THEN onboarding->>'step'
           ELSE 'not_started'
         END as step,
         COUNT(*)::int as count
@@ -3992,6 +4124,35 @@ export async function getAdminOnboardingFunnel(
   }
 }
 
+function pickPluginBreakdownSnapshotRow(rows: any[]) {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (!hasRequiredGlobalStatsShards(row.completed_shards))
+      continue
+    if (hasPluginVersionBreakdown(parseBreakdownJson(row.plugin_version_breakdown)))
+      return row
+  }
+
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (hasRequiredGlobalStatsShards(row.completed_shards))
+      return row
+  }
+
+  return rows.at(-1)
+}
+
+function getLatestNonEmptyPluginTrendRowDate(rows: any[]): string | null {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (hasPluginVersionBreakdown(parseBreakdownJson(row.plugin_version_breakdown))) {
+      return row.date instanceof Date ? row.date.toISOString().split('T')[0] : String(row.date)
+    }
+  }
+
+  return null
+}
+
 export async function getAdminPluginBreakdown(
   c: Context,
   start_date: string,
@@ -4012,7 +4173,8 @@ export async function getAdminPluginBreakdown(
         COALESCE(devices_last_month_android, 0)::int AS devices_last_month_android,
         plugin_version_breakdown,
         plugin_major_breakdown,
-        plugin_version_ladder
+        plugin_version_ladder,
+        completed_shards
       FROM global_stats
       WHERE date_id >= ${startDateOnly}
         AND date_id <= ${endDateOnly}
@@ -4035,6 +4197,8 @@ export async function getAdminPluginBreakdown(
       }
     }
 
+    const latestNonEmptyTrendDate = getLatestNonEmptyPluginTrendRowDate(rows)
+
     const trend = rows.map((row) => {
       const date = row.date instanceof Date ? row.date.toISOString().split('T')[0] : String(row.date)
       return {
@@ -4042,19 +4206,24 @@ export async function getAdminPluginBreakdown(
         version_breakdown: parseBreakdownJson(row.plugin_version_breakdown),
         major_breakdown: parseBreakdownJson(row.plugin_major_breakdown),
         devices_last_month: Number(row.devices_last_month) || 0,
+        devices_last_month_ios: Number(row.devices_last_month_ios) || 0,
+        devices_last_month_android: Number(row.devices_last_month_android) || 0,
+        version_ladder: date === latestNonEmptyTrendDate
+          ? parsePluginVersionLadderJson(row.plugin_version_ladder)
+          : [],
       }
     })
-    const latestRow = rows.at(-1)!
-    const latestDate = latestRow.date instanceof Date ? latestRow.date.toISOString().split('T')[0] : String(latestRow.date)
-    const versionBreakdown = parseBreakdownJson(latestRow.plugin_version_breakdown)
-    const majorBreakdown = parseBreakdownJson(latestRow.plugin_major_breakdown)
-    const versionLadder = parsePluginVersionLadderJson(latestRow.plugin_version_ladder)
+    const snapshotRow = pickPluginBreakdownSnapshotRow(rows)
+    const latestDate = snapshotRow.date instanceof Date ? snapshotRow.date.toISOString().split('T')[0] : String(snapshotRow.date)
+    const versionBreakdown = parseBreakdownJson(snapshotRow.plugin_version_breakdown)
+    const majorBreakdown = parseBreakdownJson(snapshotRow.plugin_major_breakdown)
+    const versionLadder = parsePluginVersionLadderJson(snapshotRow.plugin_version_ladder)
 
     return {
       date: latestDate,
-      devices_last_month: Number(latestRow.devices_last_month) || 0,
-      devices_last_month_ios: Number(latestRow.devices_last_month_ios) || 0,
-      devices_last_month_android: Number(latestRow.devices_last_month_android) || 0,
+      devices_last_month: Number(snapshotRow.devices_last_month) || 0,
+      devices_last_month_ios: Number(snapshotRow.devices_last_month_ios) || 0,
+      devices_last_month_android: Number(snapshotRow.devices_last_month_android) || 0,
       version_breakdown: versionBreakdown,
       major_breakdown: majorBreakdown,
       version_ladder: versionLadder,
