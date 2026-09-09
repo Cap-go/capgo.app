@@ -1704,7 +1704,7 @@ async function delete_cleanup_candidates() {
     }
 
     if (successful.length === toDelete.length) {
-        console.log(`\n🎉 All files successfully ${permanent ? 'deleted from' : 'moved to trash from'} main bucket!`)
+        console.log(`\n🎉 All files successfully ${deleteMode === 'permanent' ? 'deleted from' : 'moved to trash from'} main bucket!`)
         console.log('✅ Cleanup operation completed successfully')
     }
 
