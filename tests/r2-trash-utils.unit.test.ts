@@ -177,8 +177,8 @@ describe('moveS3LiteObjectToTrash', () => {
 
     expect(result).toBe('moved')
     expect(copyObject).toHaveBeenCalledOnce()
-    const [, destinationKey] = copyObject.mock.calls[0] as [unknown, string]
-    expect(destinationKey).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+/${key}$`))
+    const copyCalls = copyObject.mock.calls as unknown as Array<[{ sourceKey: string }, string]>
+    expect(copyCalls[0][1]).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+/${key}$`))
   })
 })
 
