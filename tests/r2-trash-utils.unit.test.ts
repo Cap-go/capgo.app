@@ -85,16 +85,33 @@ describe('isObjectNotFoundError', () => {
 describe('moveS3LiteObjectToTrash', () => {
   it('encodes copy source path segments before moving to trash', async () => {
     const key = 'orgs/org-1/apps/com.test/file name.zip'
+    const etag = '"abc123"'
     const copyObject = vi.fn(async () => undefined)
     const deleteObject = vi.fn(async () => undefined)
+    const statObject = vi.fn(async () => ({ etag }))
 
-    await moveS3LiteObjectToTrash({ copyObject, deleteObject }, key)
+    await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
 
     expect(copyObject).toHaveBeenCalledWith(
       { sourceKey: 'orgs/org-1/apps/com.test/file%20name.zip' },
       `${R2_TRASH_PREFIX}${key}`,
     )
+    expect(statObject).toHaveBeenCalledTimes(2)
     expect(deleteObject).toHaveBeenCalledWith(key)
+  })
+
+  it('skips delete when the live object changes after copy', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const copyObject = vi.fn(async () => undefined)
+    const deleteObject = vi.fn(async () => undefined)
+    const statObject = vi.fn()
+      .mockResolvedValueOnce({ etag: '"before"' })
+      .mockResolvedValueOnce({ etag: '"after"' })
+
+    await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
+
+    expect(copyObject).toHaveBeenCalledOnce()
+    expect(deleteObject).not.toHaveBeenCalled()
   })
 })
 

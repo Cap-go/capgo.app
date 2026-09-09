@@ -28,12 +28,29 @@ export function encodeS3LiteCopySourceKey(key: string): string {
 export type S3LiteTrashClient = {
   copyObject: (options: { sourceKey: string }, destinationKey: string) => Promise<unknown>
   deleteObject: (key: string) => Promise<unknown>
+  statObject: (key: string) => Promise<{ etag: string }>
 }
 
 /** Move a live object to 7-day trash via s3_lite_client (encodes copy source path segments). */
 export async function moveS3LiteObjectToTrash(s3client: S3LiteTrashClient, key: string): Promise<void> {
   const trashKey = getR2TrashKey(key)
+  let sourceEtag: string | undefined
+  try {
+    const stat = await s3client.statObject(key)
+    sourceEtag = stat.etag
+  }
+  catch (error) {
+    if (isObjectNotFoundError(error))
+      return
+    throw error
+  }
+
   await s3client.copyObject({ sourceKey: encodeS3LiteCopySourceKey(key) }, trashKey)
+
+  const afterCopy = await s3client.statObject(key)
+  if (sourceEtag && afterCopy.etag !== sourceEtag)
+    return
+
   await s3client.deleteObject(key)
 }
 

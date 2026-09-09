@@ -387,7 +387,7 @@ export function initS3() {
     params: {
       ...params,
       credentials: {
-        accessKeyId: access_key_id,
+        accessKeyId: '[redacted]',
         secretAccessKey: '[redacted]',
       },
     },
