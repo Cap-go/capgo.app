@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { buildCacheKeyOptionSchema, buildCacheOptionSchema, buildCredentialsSchema } from './build'
+import { aiAnalysisModeSchema, buildCacheKeyOptionSchema, buildCacheOptionSchema, buildCredentialsSchema } from './build'
 import { localizedReleaseNotesSchema, rejectConflictingBooleanGroup } from './common'
 
 export const capacitorConfigOptionSchema = z.string().min(1).describe('Capacitor config source to update')
@@ -396,7 +396,7 @@ export const requestBuildOptionsSchema = z.object({
   prescanWarn: z.array(z.string()).optional(),
   cache: buildCacheOptionSchema,
   cacheKey: buildCacheKeyOptionSchema,
-  aiAnalysisMode: z.enum(['auto-prompt', 'caller-handled', 'skip']).optional(),
+  aiAnalysisMode: aiAnalysisModeSchema.optional(),
 })
 
 export type RequestBuildOptions = z.infer<typeof requestBuildOptionsSchema>

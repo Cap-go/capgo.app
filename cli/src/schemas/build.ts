@@ -15,6 +15,8 @@ const inAppUpdatePrioritySchema = z.union([
   }),
 ])
 
+export const aiAnalysisModeSchema = z.enum(['auto-prompt', 'caller-handled', 'skip'])
+
 // ============================================================================
 // Build Credentials Schema
 // ============================================================================
@@ -112,7 +114,7 @@ export const buildRequestOptionsSchema = optionsBaseSchema.extend({
   aiAnalytics: z.boolean().optional(),
   sendLogsToSupport: z.boolean().optional(),
   sendLogs: z.boolean().optional(),
-  aiAnalysisMode: z.enum(['auto-prompt', 'caller-handled', 'skip']).optional(),
+  aiAnalysisMode: aiAnalysisModeSchema.optional(),
   prescan: z.boolean().optional(),
   prescanIgnoreFatal: z.boolean().optional(),
   prescanSkip: z.array(z.string()).optional(),
