@@ -447,6 +447,33 @@ await test('duplicate replacement requires a second interactive confirmation and
   assert.equal(deleteFailure.state.writes.length, 0)
 })
 
+await test('duplicate replacement reports profiles deleted before a later deletion fails', async () => {
+  const duplicates = [
+    { id: 'duplicate-1', name: 'Capgo one', profileType: 'IOS_APP_STORE' },
+    { id: 'duplicate-2', name: 'Capgo two', profileType: 'IOS_APP_STORE' },
+  ]
+  const attemptedDeletes = []
+  const partialFailure = baseDeps({
+    loadStores: async () => ({ local: generationCredentials(map({ old: profile('org.other.app') })), global: null }),
+    createProfile: async () => { throw new DuplicateProfileError(duplicates) },
+    deleteProfile: async (_token, id) => {
+      attemptedDeletes.push(id)
+      if (id === 'duplicate-2')
+        throw new Error('delete failed')
+    },
+  })
+
+  await assert.rejects(runIosProvisioningCommand({}, partialFailure.deps), (error) => {
+    assert.match(error.message, /Apple already deleted:/)
+    assert.match(error.message, /• Capgo one/)
+    assert.doesNotMatch(error.message, /• Capgo two/)
+    assert.match(error.message, /saved map was not changed/i)
+    return true
+  })
+  assert.deepEqual(attemptedDeletes, ['duplicate-1', 'duplicate-2'])
+  assert.equal(partialFailure.state.writes.length, 0)
+})
+
 await test('registers lowercase ios-provisioning help with only the supported command options', () => {
   const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
   const help = spawnSync(process.execPath, [resolve(cliDir, 'src/index.ts'), 'build', 'credentials', 'ios-provisioning', '--help'], { encoding: 'utf8' })

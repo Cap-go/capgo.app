@@ -150,11 +150,17 @@ async function createTargetProfile(
     if (!replace)
       throw new Error(`Provisioning profile replacement was declined for ${formatTargets([target])}`)
 
+    const deletedProfiles: typeof error.profiles = []
     for (const profile of error.profiles) {
       try {
         await deps.deleteProfile(freshToken(), profile.id)
+        deletedProfiles.push(profile)
       }
       catch {
+        if (deletedProfiles.length > 0) {
+          const deletedList = deletedProfiles.map(deleted => `  • ${deleted.name}`).join('\n')
+          throw new Error(`Could not delete all existing Capgo provisioning profiles for ${formatTargets([target])}.\n\nApple already deleted:\n${deletedList}\n\nThe saved map was not changed for this target. Retry the command; the remaining duplicates will be detected again.`)
+        }
         throw new Error(`Could not delete all existing Capgo provisioning profiles for ${formatTargets([target])}. The saved map was not changed for this target.`)
       }
     }
