@@ -100,7 +100,9 @@ describe('moveS3LiteObjectToTrash', () => {
     const etag = '"abc123"'
     const copyObject = vi.fn(async () => undefined)
     const deleteObject = vi.fn(async () => undefined)
-    const statObject = vi.fn(async () => ({ etag }))
+    const statObject = vi.fn()
+      .mockRejectedValueOnce({ name: 'NotFound' })
+      .mockResolvedValue({ etag })
 
     const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
 
@@ -109,8 +111,8 @@ describe('moveS3LiteObjectToTrash', () => {
       { sourceKey: 'orgs/org-1/apps/com.test/file%20name.zip' },
       `${R2_TRASH_PREFIX}${key}`,
     )
-    expect(statObject).toHaveBeenCalledTimes(2)
-    expect(deleteObject).toHaveBeenCalledWith(key, { ifMatch: etag })
+    expect(statObject).toHaveBeenCalledTimes(3)
+    expect(deleteObject).toHaveBeenCalledWith(key)
   })
 
   it('skips delete when the live object changes after copy', async () => {
@@ -118,6 +120,7 @@ describe('moveS3LiteObjectToTrash', () => {
     const copyObject = vi.fn(async () => undefined)
     const deleteObject = vi.fn(async () => undefined)
     const statObject = vi.fn()
+      .mockRejectedValueOnce({ name: 'NotFound' })
       .mockResolvedValueOnce({ etag: '"before"' })
       .mockResolvedValueOnce({ etag: '"after"' })
 
@@ -134,7 +137,9 @@ describe('moveS3LiteObjectToTrash', () => {
       throw { status: 404, code: 'not found' }
     })
     const deleteObject = vi.fn(async () => undefined)
-    const statObject = vi.fn(async () => ({ etag: '"before"' }))
+    const statObject = vi.fn()
+      .mockRejectedValueOnce({ name: 'NotFound' })
+      .mockResolvedValueOnce({ etag: '"before"' })
 
     const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
 
@@ -148,6 +153,7 @@ describe('moveS3LiteObjectToTrash', () => {
     const copyObject = vi.fn(async () => undefined)
     const deleteObject = vi.fn(async () => undefined)
     const statObject = vi.fn()
+      .mockRejectedValueOnce({ name: 'NotFound' })
       .mockResolvedValueOnce({ etag: '"before"' })
       .mockRejectedValueOnce({ status: 404, code: 'not found' })
 
@@ -157,19 +163,22 @@ describe('moveS3LiteObjectToTrash', () => {
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
-  it('returns skipped_changed when delete ifMatch fails', async () => {
+  it('uses a unique trash key when the default destination already exists', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const etag = '"before"'
     const copyObject = vi.fn(async () => undefined)
-    const deleteObject = vi.fn(async () => {
-      throw { name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } }
-    })
-    const statObject = vi.fn(async () => ({ etag }))
+    const deleteObject = vi.fn(async () => undefined)
+    const statObject = vi.fn()
+      .mockResolvedValueOnce({ etag }) // default trash exists
+      .mockResolvedValueOnce({ etag }) // source
+      .mockResolvedValueOnce({ etag }) // after copy
 
     const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
 
-    expect(result).toBe('skipped_changed')
-    expect(deleteObject).toHaveBeenCalledWith(key, { ifMatch: etag })
+    expect(result).toBe('moved')
+    expect(copyObject).toHaveBeenCalledOnce()
+    const [, destinationKey] = copyObject.mock.calls[0] as [unknown, string]
+    expect(destinationKey).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+/${key}$`))
   })
 })
 

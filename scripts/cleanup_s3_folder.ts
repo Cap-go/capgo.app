@@ -9,7 +9,7 @@
  */
 /// <reference lib="deno.ns" />
 import { S3Client } from 'https://deno.land/x/s3_lite_client@0.7.0/mod.ts'
-import { asS3LiteTrashClient, ConcurrencyLimiter, isLiveR2Key, moveS3LiteObjectToTrash, resolveOpsDeleteMode, R2_TRASH_PREFIX } from './r2_trash_utils.ts'
+import { ConcurrencyLimiter, isLiveR2Key, moveS3LiteObjectToTrash, resolveOpsDeleteMode, R2_TRASH_PREFIX } from './r2_trash_utils.ts'
 
 const folderToDelete = 'orgs'
 if (!folderToDelete) {
@@ -34,15 +34,13 @@ const rawS3client = new S3Client({
   bucket: 'backuptmp',
 })
 
-const s3client = asS3LiteTrashClient(rawS3client)
-
 const limiter = new ConcurrencyLimiter(CONCURRENCY)
 
 async function processKey(key: string): Promise<void> {
   return limiter.run(async () => {
     if (deleteMode === 'trash') {
       console.log(`Moving to trash: ${key}`)
-      const result = await moveS3LiteObjectToTrash(s3client, key)
+      const result = await moveS3LiteObjectToTrash(rawS3client, key)
       if (result === 'skipped_missing') {
         console.log(`Already absent: ${key}`)
         return
@@ -112,7 +110,7 @@ async function processFolder() {
   }
 
   try {
-    for await (const obj of s3client.listObjects({ prefix: folderToDelete })) {
+    for await (const obj of rawS3client.listObjects({ prefix: folderToDelete })) {
       if (!isLiveR2Key(obj.key))
         continue
 

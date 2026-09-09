@@ -64,12 +64,14 @@ async function main() {
       ALLOW_PERMANENT_R2_DELETE: process.env.ALLOW_PERMANENT_R2_DELETE,
     })
     const files = JSON.parse(await Bun.file(MAGIC_TO_DELETE).text()) as _Object[]
-    const keys = files.map(file => file.Key ?? '').filter(key => key && isLiveR2Key(key))
+    const candidates = files
+      .filter(file => file.Key && isLiveR2Key(file.Key))
+      .map(file => ({ key: file.Key!, etag: file.ETag }))
     let errorCount = 0
 
     if (deleteMode === 'dry_run') {
-      console.log(`DELETE_FILES=1 dry-run: would process ${keys.length} live objects`)
-      for (const key of keys)
+      console.log(`DELETE_FILES=1 dry-run: would process ${candidates.length} live objects`)
+      for (const { key } of candidates)
         console.log(`Would process: ${key}`)
       return
     }
@@ -95,7 +97,8 @@ async function main() {
       }
     }
 
-    async function moveKeyToTrash(key: string): Promise<'ok' | 'skipped' | 'failed'> {
+    async function moveKeyToTrash(candidate: { key: string, etag?: string }): Promise<'ok' | 'skipped' | 'failed'> {
+      const { key, etag: candidateEtag } = candidate
       const defaultTrashKey = getR2TrashKey(key)
       const trashKey = await objectExists(defaultTrashKey)
         ? getUniqueR2TrashKey(key)
@@ -104,6 +107,10 @@ async function main() {
       try {
         const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
         sourceEtag = head.ETag
+        if (candidateEtag && sourceEtag && candidateEtag !== sourceEtag) {
+          console.warn(`Skipped ${key}: live object etag changed since discovery`)
+          return 'skipped'
+        }
       }
       catch (headError) {
         if (isObjectNotFoundError(headError))
@@ -153,7 +160,7 @@ async function main() {
     }
 
     if (deleteMode === 'permanent') {
-      const toDelete = keys.map(key => ({ Key: key }))
+      const toDelete = candidates.map(({ key }) => ({ Key: key }))
       while (toDelete.length > 0) {
         const chunk = toDelete.splice(0, 999)
         console.log('permanent delete batch')
@@ -175,9 +182,9 @@ async function main() {
       }
     }
     else {
-      for (let i = 0; i < keys.length; i += DELETE_CONCURRENCY) {
-        const batch = keys.slice(i, i + DELETE_CONCURRENCY)
-        const results = await Promise.all(batch.map(key => limiter.run(() => moveKeyToTrash(key))))
+      for (let i = 0; i < candidates.length; i += DELETE_CONCURRENCY) {
+        const batch = candidates.slice(i, i + DELETE_CONCURRENCY)
+        const results = await Promise.all(batch.map(candidate => limiter.run(() => moveKeyToTrash(candidate))))
         errorCount += results.filter(result => result === 'failed').length
       }
     }

@@ -42,21 +42,26 @@ type RawS3LiteClient = {
   copyObject: S3LiteTrashClient['copyObject']
   deleteObject: (key: string) => Promise<unknown>
   statObject: S3LiteTrashClient['statObject']
+  listObjects?: (options: { prefix: string }) => AsyncIterable<{ key: string }>
 }
 
-/** Wrap s3_lite_client with etag-checked deletes (library has no native If-Match). */
-export function asS3LiteTrashClient(s3client: RawS3LiteClient): S3LiteTrashClient {
+/** Wrap s3_lite_client for trash moves. Listing stays on the raw client. */
+export function asS3LiteTrashClient(s3client: RawS3LiteClient): S3LiteTrashClient & Pick<RawS3LiteClient, 'listObjects'> {
   return {
     copyObject: (options, destinationKey) => s3client.copyObject(options, destinationKey),
     statObject: key => s3client.statObject(key),
+    // s3_lite has no atomic If-Match delete; callers verify etag immediately before calling.
     deleteObject: async (key, options) => {
       if (options?.ifMatch) {
         const stat = await s3client.statObject(key)
         if (stat.etag !== options.ifMatch)
           throw { name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } }
+        await s3client.deleteObject(key)
+        return
       }
       await s3client.deleteObject(key)
     },
+    listObjects: s3client.listObjects,
   }
 }
 
@@ -64,7 +69,16 @@ export type S3LiteTrashMoveResult = 'moved' | 'skipped_missing' | 'skipped_chang
 
 /** Move a live object to 7-day trash via s3_lite_client (encodes copy source path segments). */
 export async function moveS3LiteObjectToTrash(s3client: S3LiteTrashClient, key: string): Promise<S3LiteTrashMoveResult> {
-  const trashKey = getR2TrashKey(key)
+  let trashKey = getR2TrashKey(key)
+  try {
+    await s3client.statObject(trashKey)
+    trashKey = getUniqueR2TrashKey(key)
+  }
+  catch (error) {
+    if (!isObjectNotFoundError(error))
+      throw error
+  }
+
   let sourceEtag: string | undefined
   try {
     const stat = await s3client.statObject(key)
@@ -100,7 +114,7 @@ export async function moveS3LiteObjectToTrash(s3client: S3LiteTrashClient, key: 
     return 'skipped_changed'
 
   try {
-    await s3client.deleteObject(key, sourceEtag ? { ifMatch: sourceEtag } : undefined)
+    await s3client.deleteObject(key)
   }
   catch (error) {
     if (isPreconditionFailedError(error))
