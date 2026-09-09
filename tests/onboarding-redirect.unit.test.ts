@@ -293,4 +293,92 @@ describe('onboarding dashboard redirect', () => {
       userId: 'user-1',
     })).toBe(false)
   })
+
+  it('keeps console escapes confirmed after create via sticky pending first upload', async () => {
+    const module = await import('../src/utils/onboardingRedirect.ts')
+
+    module.setPendingFirstUploadAppId('user-1', 'com.example.app')
+
+    expect(module.getPendingFirstUploadAppId('user-1')).toBe('com.example.app')
+    expect(module.getPendingFirstUploadAppId('user-2')).toBeNull()
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/app/com.example.app/getting-started',
+      destination: '/dashboard',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(true)
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/apps',
+      destination: '/apikeys',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(true)
+  })
+
+  it('stops confirming after explore grant clears the sticky pending first upload', async () => {
+    const module = await import('../src/utils/onboardingRedirect.ts')
+
+    module.setPendingFirstUploadAppId('user-1', 'com.example.app')
+    module.allowOnboardingDashboardExploration('user-1', 'com.example.app')
+
+    expect(module.getPendingFirstUploadAppId('user-1')).toBeNull()
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/app/com.example.app/getting-started',
+      destination: '/dashboard',
+      resumeAppId: 'com.example.app',
+      userId: 'user-1',
+    })).toBe(false)
+  })
+
+  it('stops confirming after pending first upload is cleared for upload or builder completion', async () => {
+    const module = await import('../src/utils/onboardingRedirect.ts')
+
+    module.setPendingFirstUploadAppId('user-1', 'com.example.app')
+    module.clearPendingFirstUploadAppId('user-1')
+
+    expect(module.getPendingFirstUploadAppId('user-1')).toBeNull()
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/app/com.example.app/getting-started',
+      destination: '/dashboard',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(false)
+
+    // Pre-create path still confirms without pending.
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/app/new',
+      destination: '/dashboard',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(true)
+  })
+
+  it('keeps sticky pending first upload across a module reload via storage', async () => {
+    const module = await import('../src/utils/onboardingRedirect.ts')
+    module.setPendingFirstUploadAppId('user-1', 'com.example.app')
+
+    vi.resetModules()
+    const refreshed = await import('../src/utils/onboardingRedirect.ts')
+    expect(refreshed.getPendingFirstUploadAppId('user-1')).toBe('com.example.app')
+    expect(refreshed.shouldConfirmOnboardingDashboardExploration({
+      destination: '/apps',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(true)
+  })
+
+  it('excludes org-switcher escapes even when sticky pending first upload is set', async () => {
+    const module = await import('../src/utils/onboardingRedirect.ts')
+    module.setPendingFirstUploadAppId('user-1', 'com.example.app')
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/onboarding/organization',
+      currentSource: 'org-switcher',
+      destination: '/dashboard',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(false)
+  })
 })

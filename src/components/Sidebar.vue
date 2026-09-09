@@ -26,6 +26,7 @@ import {
   allowOnboardingDashboardExploration,
   getOnboardingContinueSetupRoute,
   getOnboardingResumeAppId,
+  getPendingFirstUploadAppId,
   ONBOARDING_DASHBOARD_EXPLORED_EVENT,
   shouldConfirmOnboardingDashboardExploration,
 } from '~/utils/onboardingRedirect'
@@ -149,12 +150,14 @@ async function openTab(tab: Tab) {
 
   const onboardingUserId = main.user?.id ?? main.auth?.id
   const resumeQueryAppId = typeof route.query.resume === 'string' ? route.query.resume : null
-  const isPendingOnboardingResume = route.path === '/app/new'
+  const currentSource = typeof route.query.source === 'string' ? route.query.source : null
+  const isPendingOnboardingResume = (route.path === '/app/new' || route.path === '/onboarding/app')
     && !!resumeQueryAppId
+  const pendingFirstUploadAppId = getPendingFirstUploadAppId(onboardingUserId)
   const onboardingResumeAppId = isPendingOnboardingResume
     ? resumeQueryAppId
-    : getOnboardingResumeAppId(onboardingUserId)
-  const currentSource = typeof route.query.source === 'string' ? route.query.source : null
+    : (getOnboardingResumeAppId(onboardingUserId) ?? pendingFirstUploadAppId)
+  const isPostCreateHardGate = !!pendingFirstUploadAppId || isPendingOnboardingResume
   const requiresOnboardingExplorationConfirmation = shouldConfirmOnboardingDashboardExploration({
     currentPath: route.path,
     currentSource,
@@ -166,8 +169,12 @@ async function openTab(tab: Tab) {
   if (requiresOnboardingExplorationConfirmation) {
     emit('closeSidebar')
     dialogStore.openDialog({
-      title: t('app-onboarding-explore-dashboard-confirm-title'),
-      description: t('app-onboarding-explore-dashboard-confirm-description'),
+      title: t(isPostCreateHardGate
+        ? 'sidebar-finish-first-update-confirm-title'
+        : 'app-onboarding-explore-dashboard-confirm-title'),
+      description: t(isPostCreateHardGate
+        ? 'sidebar-finish-first-update-confirm-description'
+        : 'app-onboarding-explore-dashboard-confirm-description'),
       buttons: [
         { text: t('app-onboarding-continue-setup'), role: 'primary' },
         { text: t('app-onboarding-explore-dashboard'), role: 'secondary' },

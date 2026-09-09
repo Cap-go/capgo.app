@@ -2874,6 +2874,8 @@
   "seven-days": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "showing": "Used in Capgo web console areas: components. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "showing-deliveries": "Used in Capgo web console areas: components. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "sidebar-finish-first-update-confirm-description": "Post-create sidebar hard-gate body: keep users on first-bundle setup until App Uploaded or Builder build started",
+  "sidebar-finish-first-update-confirm-title": "Post-create sidebar hard-gate title when leaving first-update setup for the console",
   "sign-out": "Used in Capgo web console areas: pages, pages/settings/account. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "signature-example-title": "Used in Capgo web console areas: pages/settings/organization. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "signature-verification-intro": "Used in Capgo web console areas: pages/settings/organization. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
