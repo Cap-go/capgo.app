@@ -759,15 +759,15 @@ function summarizeNativeActiveDevices(rows: Array<{ platform: string, devices: n
       return
     }
     if (platform === 'android') {
-      summary.android = devices
+      summary.android += devices
       return
     }
     if (platform === 'ios') {
-      summary.ios = devices
+      summary.ios += devices
       return
     }
     if (platform === 'electron') {
-      summary.electron = devices
+      summary.electron += devices
       return
     }
     summary.unknown += devices
@@ -796,11 +796,11 @@ function buildDailyPlatformActiveTotals(rows: NativeDailyPlatformRow[], dates: s
     const devices = Math.max(0, Number(row.devices) || 0)
     const platform = normalizeNativePlatform(row.platform)
     if (platform === 'android')
-      android[index] = devices
+      android[index] += devices
     else if (platform === 'ios')
-      ios[index] = devices
+      ios[index] += devices
     else if (platform === 'electron')
-      electron[index] = devices
+      electron[index] += devices
     else
       unknown[index] += devices
   })

@@ -16,7 +16,6 @@ import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/serv
 import { formatUtcDateParam, generateChartDayLabels, getChartDateRange, getLastNUtcDaysRange, normalizeToUtcStartOfDay } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import {
-  buildDailyPlatformActiveFromDatasets,
   calculateSummaryEvolutionPercent,
   generateDemoDailyPlatformActive,
   generateDemoNativeActiveSummary,
@@ -555,10 +554,7 @@ const selectedPeriodDailyPlatformActive = computed<NativeDailyPlatformActive | n
   if (rawChartData.value?.dailyPlatformActive)
     return rawChartData.value.dailyPlatformActive
 
-  if (!rawChartData.value)
-    return null
-
-  return buildDailyPlatformActiveFromDatasets(rawChartData.value.labels, rawChartData.value.datasets)
+  return null
 })
 
 const selectedPeriodLabel = computed(() => {
@@ -568,7 +564,7 @@ const selectedPeriodLabel = computed(() => {
     return t('three-days')
   if (periodDays.value === 7)
     return t('seven-days')
-  return t('thirty-days')
+  return t('max-period')
 })
 
 const totalActiveEvolution = computed(() => calculateSummaryEvolutionPercent(

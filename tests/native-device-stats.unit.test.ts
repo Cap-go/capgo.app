@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { nativeUsageTestUtils } from '../supabase/functions/_backend/public/statistics/index.ts'
 import {
-  buildDailyPlatformActiveFromDatasets,
   calculateSummaryEvolutionPercent,
   normalizeNativeActiveDevicesSummary,
   parseNativeSeriesPlatform,
@@ -13,26 +12,6 @@ describe('native device stats helpers', () => {
     expect(parseNativeSeriesPlatform('Android 2.1.0')).toBe('android')
     expect(parseNativeSeriesPlatform('Electron 3.0.0')).toBe('electron')
     expect(parseNativeSeriesPlatform('Unknown 0.0.0')).toBe('unknown')
-  })
-
-  it('aggregates daily platform totals from chart datasets', () => {
-    const daily = buildDailyPlatformActiveFromDatasets(
-      ['2024-10-24', '2024-10-25'],
-      [
-        { label: 'iOS 1.0.0', metaCountValues: [2, 3] },
-        { label: 'Android 1.0.0', metaCountValues: [4, 1] },
-        { label: 'Electron 1.0.0', metaCountValues: [1, 0] },
-      ],
-    )
-
-    expect(daily).toEqual({
-      labels: ['2024-10-24', '2024-10-25'],
-      ios: [2, 3],
-      android: [4, 1],
-      electron: [1, 0],
-      unknown: [0, 0],
-      total: [7, 4],
-    })
   })
 
   it('normalizes active device summary totals', () => {
@@ -79,6 +58,34 @@ describe('native usage backend helpers', () => {
       electron: [0, 0],
       unknown: [0, 0],
       total: [5, 4],
+    })
+  })
+
+  it('accumulates canonical platform variants in summary and daily totals', () => {
+    expect(nativeUsageTestUtils.summarizeNativeActiveDevices([
+      { platform: 'Android', devices: 5 },
+      { platform: 'android', devices: 3 },
+      { platform: 'iOS', devices: 2 },
+      { platform: 'total', devices: 10 },
+    ])).toEqual({
+      android: 8,
+      ios: 2,
+      electron: 0,
+      unknown: 0,
+      total: 10,
+    })
+
+    expect(nativeUsageTestUtils.buildDailyPlatformActiveTotals([
+      { date: '2024-10-24', platform: 'Android', devices: 2 },
+      { date: '2024-10-24', platform: 'android', devices: 1 },
+      { date: '2024-10-24', platform: 'iOS', devices: 4 },
+    ], ['2024-10-24'])).toEqual({
+      labels: ['2024-10-24'],
+      android: [3],
+      ios: [4],
+      electron: [0],
+      unknown: [0],
+      total: [7],
     })
   })
 })

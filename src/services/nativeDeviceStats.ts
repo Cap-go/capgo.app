@@ -15,11 +15,6 @@ export interface NativeDailyPlatformActive {
   total: number[]
 }
 
-export interface NativeChartDataset {
-  label: string
-  metaCountValues?: Array<number | undefined>
-}
-
 const EMPTY_SUMMARY: NativeActiveDevicesSummary = {
   android: 0,
   ios: 0,
@@ -55,42 +50,6 @@ export function normalizeNativeActiveDevicesSummary(value: Partial<NativeActiveD
     electron,
     unknown,
     total: total > 0 ? total : android + ios + electron + unknown,
-  }
-}
-
-export function buildDailyPlatformActiveFromDatasets(labels: string[], datasets: NativeChartDataset[]): NativeDailyPlatformActive {
-  const android = Array.from({ length: labels.length }).fill(0) as number[]
-  const ios = Array.from({ length: labels.length }).fill(0) as number[]
-  const electron = Array.from({ length: labels.length }).fill(0) as number[]
-  const unknown = Array.from({ length: labels.length }).fill(0) as number[]
-
-  datasets.forEach((dataset) => {
-    const platform = parseNativeSeriesPlatform(dataset.label)
-    const counts = dataset.metaCountValues ?? []
-    counts.forEach((count, index) => {
-      if (index >= labels.length)
-        return
-      const numeric = typeof count === 'number' && Number.isFinite(count) ? Math.max(0, Math.round(count)) : 0
-      if (platform === 'android')
-        android[index] += numeric
-      else if (platform === 'ios')
-        ios[index] += numeric
-      else if (platform === 'electron')
-        electron[index] += numeric
-      else
-        unknown[index] += numeric
-    })
-  })
-
-  const total = labels.map((_label, index) => android[index] + ios[index] + electron[index] + unknown[index])
-
-  return {
-    labels,
-    android,
-    ios,
-    electron,
-    unknown,
-    total,
   }
 }
 
