@@ -885,7 +885,7 @@ export function normalizeSupabaseHost(host: string): string {
 }
 
 function isLoopbackSupabaseHostname(hostname: string): boolean {
-  const normalized = hostname.toLowerCase()
+  const normalized = hostname.toLowerCase().replace(/^\[(.*)\]$/, '$1')
   return normalized === 'localhost'
     || normalized === '127.0.0.1'
     || normalized === '::1'
