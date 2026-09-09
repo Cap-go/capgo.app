@@ -1,5 +1,6 @@
 -- Rows written after 20260909163000 can carry JSON null intent: the interim orgs
 -- CHECK only enforced allowed text values via ->>, and SQL NULL passes CHECK.
+-- Supabase applies migration statements outside transaction blocks (LOCK TABLE fails with 25P01).
 UPDATE "public"."orgs"
 SET "onboarding" = "onboarding" - 'intent'
 WHERE ("onboarding" ? 'intent'::"text")
