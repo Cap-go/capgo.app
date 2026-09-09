@@ -18,7 +18,6 @@ import {
   USER_EMAIL_APIKEY_MANAGEMENT,
   USER_ID,
   USER_PASSWORD,
-  warmEdgeEndpoint,
 } from './test-utils.ts'
 
 const id = randomUUID()
@@ -50,6 +49,36 @@ async function appKeyBody(name: string, appId = APPNAME, extra: Record<string, u
     bindings: await appApiKeyBindings(appId),
     ...extra,
   }
+}
+
+async function warmEdgeEndpointWithDeadline(
+  path: string,
+  options: RequestInit,
+  deadlineMs: number,
+): Promise<void> {
+  const url = `${BASE_URL}${path}`
+  let lastStatus = 0
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    if (Date.now() >= deadlineMs)
+      throw new Error(`[warmEdgeEndpoint] timed out before attempt ${attempt} url=${url}`)
+
+    const response = await withFetchDeadline(deadlineMs, signal =>
+      fetch(url, { ...options, signal }),
+    )
+    await response.text().catch(() => undefined)
+    lastStatus = response.status
+    if (response.status !== 502 && response.status !== 503)
+      return
+
+    if (attempt === 5)
+      break
+
+    const delayMs = Math.min(500 * attempt, Math.max(0, deadlineMs - Date.now()))
+    if (delayMs <= 0)
+      throw new Error(`[warmEdgeEndpoint] timed out waiting to retry url=${url}`)
+    await new Promise(resolve => setTimeout(resolve, delayMs))
+  }
+  throw new Error(`[warmEdgeEndpoint] isolate still returning ${lastStatus} after 5 attempts url=${url}`)
 }
 
 async function withFetchDeadline<T>(
@@ -155,7 +184,7 @@ async function postApiKey(
       if (Date.now() >= deadline)
         return response
 
-      await new Promise(resolve => setTimeout(resolve, 300))
+      await new Promise(resolve => setTimeout(resolve, Math.min(300, Math.max(0, deadline - Date.now()))))
     }
   }
 
@@ -168,12 +197,12 @@ beforeAll(async () => {
   authHeaders = await getAuthHeaders()
   await resetAndSeedAppData(APPNAME)
   // Warm GET and POST handlers before concurrent key creation in this file.
-  await warmEdgeEndpoint('/apikey', { method: 'GET', headers: authHeaders })
-  await warmEdgeEndpoint('/apikey', {
+  await warmEdgeEndpointWithDeadline('/apikey', { method: 'GET', headers: authHeaders }, Date.now() + 15000)
+  await warmEdgeEndpointWithDeadline('/apikey', {
     method: 'POST',
     headers: authHeaders,
     body: JSON.stringify({}),
-  })
+  }, Date.now() + 15000)
 })
 
 afterAll(async () => {
