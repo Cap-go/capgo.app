@@ -496,7 +496,16 @@ export function initS3() {
         // signingEscapePath: storageEndpoint !== '127.0.0.1:54321/storage/v1/s3',
     }
 
-    console.log({ message: 'initS3', params })
+    console.log({
+        message: 'initS3',
+        params: {
+            ...params,
+            credentials: {
+                accessKeyId: '[redacted]',
+                secretAccessKey: '[redacted]',
+            },
+        },
+    })
 
     return new S3Client({ ...params })
 }
@@ -517,7 +526,14 @@ async function initS3Lite() {
         region: storageRegion,
         bucket,
     }
-    console.log({ message: 'initS3Lite', options })
+    console.log({
+        message: 'initS3Lite',
+        options: {
+            ...options,
+            accessKey: '[redacted]',
+            secretKey: '[redacted]',
+        },
+    })
     const client = new S3ClientLite(options)
     return client
 }
@@ -1655,7 +1671,7 @@ async function delete_cleanup_candidates() {
                 if (file.size != null && head.ContentLength !== file.size) {
                     return {
                         key: file.key,
-                        success: false,
+                        success: true,
                         error: 'Cleanup candidate stale: object size changed since prepare_cleanup_zip',
                         skipped: true,
                     }
@@ -1665,7 +1681,7 @@ async function delete_cleanup_candidates() {
                     if (candidateTime !== head.LastModified.getTime()) {
                         return {
                             key: file.key,
-                            success: false,
+                            success: true,
                             error: 'Cleanup candidate stale: object lastModified changed since prepare_cleanup_zip',
                             skipped: true,
                         }
@@ -1674,7 +1690,7 @@ async function delete_cleanup_candidates() {
                 if (file.etag && head.ETag && file.etag !== head.ETag) {
                     return {
                         key: file.key,
-                        success: false,
+                        success: true,
                         error: 'Cleanup candidate stale: object etag changed since prepare_cleanup_zip',
                         skipped: true,
                     }
@@ -1705,7 +1721,7 @@ async function delete_cleanup_candidates() {
                     if (isPreconditionFailedError(deleteError)) {
                         return {
                             key: file.key,
-                            success: false,
+                            success: true,
                             error: 'Cleanup candidate stale: live object changed before permanent delete',
                             skipped: true,
                         }
@@ -1753,7 +1769,7 @@ async function delete_cleanup_candidates() {
                     if (isPreconditionFailedError(deleteError))
                         return {
                             key: file.key,
-                            success: false,
+                            success: true,
                             error: 'Copied to trash but live object changed before delete; source key retained',
                             skipped: true,
                         }
@@ -1786,7 +1802,8 @@ async function delete_cleanup_candidates() {
     }
 
     // Analyze results
-    const successful = results.filter(r => r.success)
+    const successful = results.filter(r => r.success && !r.skipped)
+    const skipped = results.filter(r => r.success && r.skipped)
     const failed = results.filter(r => !r.success)
     const processedSize = successful.reduce((sum, result) => sum + (result.size ?? 0), 0)
     const processedSizeGB = (processedSize / (1024 * 1024 * 1024)).toFixed(2)
@@ -1794,6 +1811,7 @@ async function delete_cleanup_candidates() {
     console.log('\n📊 Delete Results:')
     console.log('================')
     console.log(`✅ Successfully processed: ${successful.length} files`)
+    console.log(`⏭️  Safely skipped: ${skipped.length} files`)
     console.log(`❌ Failed to process: ${failed.length} files`)
 
     if (failed.length > 0) {
@@ -1810,6 +1828,7 @@ async function delete_cleanup_candidates() {
         summary: {
             totalFiles: candidatesToProcess.length,
             successfulProcessed: successful.length,
+            skippedProcessed: skipped.length,
             failedProcessed: failed.length,
             totalSizeCandidates: totalSize,
             totalSizeCandidatesGB: parseFloat(totalSizeGB),
@@ -1818,6 +1837,7 @@ async function delete_cleanup_candidates() {
             sourceBucket: S3_BUCKET,
         },
         successful,
+        skipped,
         failed,
     }
 
@@ -1832,13 +1852,14 @@ async function delete_cleanup_candidates() {
         process.exit(1)
     }
 
-    if (successful.length === candidatesToProcess.length) {
-        console.log(`\n🎉 All files successfully ${deleteMode === 'permanent' ? 'deleted from' : 'moved to trash from'} main bucket!`)
+    if (failed.length === 0) {
+        console.log(`\n🎉 Cleanup finished with no failures (${successful.length} processed, ${skipped.length} safely skipped)`)
         console.log('✅ Cleanup operation completed successfully')
     }
 
     console.log(`\n📈 Summary:`)
     console.log(`   📦 Files ${deleteMode === 'permanent' ? 'deleted' : 'moved to trash'}: ${successful.length}/${candidatesToProcess.length}`)
+    console.log(`   ⏭️  Safely skipped: ${skipped.length}`)
     console.log(`   💾 Size ${deleteMode === 'permanent' ? 'deleted' : 'moved to trash'}: ${processedSizeGB} GB`)
     console.log(`   📁 Source bucket: ${S3_BUCKET}`)
 }

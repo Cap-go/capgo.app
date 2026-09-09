@@ -3,7 +3,7 @@ import type { Database } from '../supabase/functions/_backend/utils/supabase.typ
 import { ensureFile } from 'https://deno.land/std/fs/ensure_file.ts'
 import { S3Client } from 'https://deno.land/x/s3_lite_client@0.7.0/mod.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js'
-import { moveS3LiteObjectToTrash } from './r2_trash_utils.ts'
+import { encodeS3LiteCopySourceKey, moveS3LiteObjectToTrash } from './r2_trash_utils.ts'
 
 const supabaseUrl = 'https://sb.capgo.app'
 const supabaseServiceRole = '***'
@@ -66,7 +66,7 @@ async function main() {
     const file = await Deno.create(`/tmp/move-tmp/${obj.key}`)
     await getObj.body?.pipeTo(file.writable)
 
-    await rawS3client.copyObject({ sourceKey: obj.key }, obj.key.replace(oldUserId, newUserId))
+    await rawS3client.copyObject({ sourceKey: encodeS3LiteCopySourceKey(obj.key) }, obj.key.replace(oldUserId, newUserId))
     try {
       const trashResult = await moveS3LiteObjectToTrash(rawS3client, obj.key)
       if (trashResult !== 'moved')

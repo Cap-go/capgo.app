@@ -125,6 +125,12 @@ async function processKey(key: string): Promise<void> {
         return
       }
 
+      if (!sourceEtag) {
+        console.error(`Failed to trash ${key}: missing ETag from HeadObject; source retained`)
+        totalErrors += 1
+        return
+      }
+
       let trashKey: string
       try {
         trashKey = await resolveTrashDestinationKey(trashDestinationResolver, key, sourceEtag)

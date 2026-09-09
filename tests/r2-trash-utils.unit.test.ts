@@ -102,6 +102,10 @@ type MakeRequestArgs = {
   headers?: Headers
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 function makeAtomicDeleteClient(etag = '"abc123"') {
   const copyObject = vi.fn(async () => undefined)
   const deleteObject = vi.fn(async () => undefined)
@@ -125,7 +129,7 @@ describe('moveS3LiteObjectToTrash', () => {
     expect(result).toBe('moved')
     const copyCalls = copyObject.mock.calls as unknown as Array<[{ sourceKey: string }, string]>
     expect(copyCalls[0][0]).toEqual({ sourceKey: 'orgs/org-1/apps/com.test/file%20name.zip' })
-    expect(copyCalls[0][1]).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${key}$`))
+    expect(copyCalls[0][1]).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${escapeRegExp(key)}$`))
     expect(statObject).toHaveBeenCalledTimes(4)
     expect(makeRequest).toHaveBeenCalledOnce()
     const deleteCall = makeRequest.mock.calls[0]![0]
@@ -225,7 +229,7 @@ describe('moveS3LiteObjectToTrash', () => {
     expect(makeRequest).toHaveBeenCalledOnce()
     expect(deleteObject).not.toHaveBeenCalled()
     const copyCalls = copyObject.mock.calls as unknown as Array<[{ sourceKey: string }, string]>
-    expect(copyCalls[0][1]).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${key}$`))
+    expect(copyCalls[0][1]).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${escapeRegExp(key)}$`))
   })
 
   it('retains source when atomic delete loses a concurrent writer race', async () => {
@@ -301,7 +305,7 @@ describe('resolveTrashDestinationKey', () => {
 
     const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag }, key, '"etag"')
 
-    expect(trashKey).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${key}$`))
+    expect(trashKey).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${escapeRegExp(key)}$`))
     expect(trashKey).not.toBe(getR2TrashKey(key))
   })
 
@@ -323,7 +327,7 @@ describe('resolveTrashDestinationKey', () => {
 
     const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag }, key, '"current"')
 
-    expect(trashKey).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${key}$`))
+    expect(trashKey).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${escapeRegExp(key)}$`))
   })
 })
 
