@@ -15,6 +15,7 @@ interface AppleLookupResult {
   screenshotUrls?: string[]
 }
 
+const APPLE_LOOKUP_TIMEOUT_MS = 5_000
 const ALLOWED_STORE_HOSTS = new Set([
   'apps.apple.com',
   'itunes.apple.com',
@@ -112,6 +113,7 @@ async function fetchAppleLookupMetadata(c: Context<MiddlewareKeyVariables>, stor
           'user-agent': 'Mozilla/5.0 (compatible; CapgoOnboardingBot/1.0)',
           'accept-language': 'en-US,en;q=0.9',
         },
+        signal: AbortSignal.timeout(APPLE_LOOKUP_TIMEOUT_MS),
       })
       if (!response.ok) {
         cloudlog({
@@ -227,11 +229,7 @@ export async function fetchStoreMetadata(c: Context<MiddlewareKeyVariables>, bod
   const appleStoreId = extractAppleStoreId(parsedUrl)
   const appleStoreCountry = extractAppleStoreCountry(parsedUrl)
   const appleLookup = appleStoreId ? await fetchAppleLookupMetadata(c, appleStoreId, appleStoreCountry) : null
-  if (appleStoreId && !appleLookup) {
-    throw quickError(502, 'cannot_fetch_apple_app_id', 'Unable to fetch the App ID from Apple', {
-      url: parsedUrl.toString(),
-    })
-  }
+  const app_id_lookup_failed = Boolean(appleStoreId && !appleLookup)
   const ios_bundle_id = appleLookup?.bundleId?.trim() || null
   const screenshot_url = appleLookup?.screenshotUrls?.[0]?.trim() || null
   const app_id = android_app_id || ios_bundle_id
@@ -246,6 +244,7 @@ export async function fetchStoreMetadata(c: Context<MiddlewareKeyVariables>, bod
     icon_data_url,
     screenshot_url,
     app_id,
+    app_id_lookup_failed,
     android_app_id,
     ios_bundle_id,
     url: parsedUrl.toString(),

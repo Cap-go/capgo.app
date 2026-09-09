@@ -1,7 +1,6 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../supabase/functions/_backend/utils/hono.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { HTTPException } from 'hono/http-exception'
 import { fetchStoreMetadata } from '../supabase/functions/_backend/public/app/store_metadata.ts'
 
 function createContext() {
@@ -11,8 +10,9 @@ function createContext() {
   } as unknown as Context<MiddlewareKeyVariables>
 }
 
-function appStorePageResponse() {
-  return new Response('<meta property="og:title" content="Example App">', {
+function appStorePageResponse(iconUrl = '') {
+  const iconMeta = iconUrl ? `<meta property="og:image" content="${iconUrl}">` : ''
+  return new Response(`<meta property="og:title" content="Example App">${iconMeta}`, {
     status: 200,
     headers: { 'content-type': 'text/html' },
   })
@@ -48,19 +48,40 @@ describe('store metadata', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(3, 'https://itunes.apple.com/lookup?id=123456789', expect.anything())
   })
 
-  it('does not report a successful Apple import when both lookups omit the bundle ID', async () => {
+  it('does not perform the default lookup when the storefront lookup returns a bundle ID', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(appStorePageResponse())
+      .mockResolvedValueOnce(appleLookupResponse([{ bundleId: 'com.example.imported', trackName: 'Example App' }]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await fetchStoreMetadata(createContext(), {
+      url: 'https://apps.apple.com/om/app/example/id123456789',
+    })
+
+    expect(response.status).toBe(200)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('preserves icon metadata when both Apple lookups omit the bundle ID', async () => {
+    const iconUrl = 'https://is1-ssl.mzstatic.com/image/thumb/example/icon.png'
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(appStorePageResponse(iconUrl))
       .mockResolvedValueOnce(appleLookupResponse([]))
       .mockResolvedValueOnce(appleLookupResponse([]))
     vi.stubGlobal('fetch', fetchMock)
 
-    const error = await fetchStoreMetadata(createContext(), {
+    const response = await fetchStoreMetadata(createContext(), {
       url: 'https://apps.apple.com/om/app/example/id123456789',
-    }).catch(caught => caught)
+    })
 
-    expect(error).toBeInstanceOf(HTTPException)
-    expect(error.status).toBe(502)
-    expect(error.cause.error).toBe('cannot_fetch_apple_app_id')
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      status: 'ok',
+      name: 'Example App',
+      icon_url: iconUrl,
+      app_id: null,
+      app_id_lookup_failed: true,
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 })

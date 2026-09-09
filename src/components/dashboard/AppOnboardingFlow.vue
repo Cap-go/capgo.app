@@ -139,6 +139,7 @@ const onboardingTelemetry = createOnboardingTelemetryIdentity({
   onboardingVersion: onboardingAnalyticsVersion,
   supaHost: config.supaHost,
 })
+const APPLE_LOOKUP_TIMEOUT_MS = 5_000
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
 const ONBOARDING_AB_TEST_WAIT_TIMEOUT_MS = 3_000
 const WELCOME_CANVAS_MEDIA_QUERY = '(min-width: 640px) and (min-height: 640px)'
@@ -1150,21 +1151,39 @@ async function fetchAppleBundleId(rawUrl: string) {
     if (!storeId)
       return ''
 
-    const lookupUrl = new URL('https://itunes.apple.com/lookup')
-    lookupUrl.searchParams.set('id', storeId)
     const storeCountry = /^\/([a-z]{2})(?:\/|$)/i.exec(parsedUrl.pathname)?.[1]
-    if (storeCountry)
-      lookupUrl.searchParams.set('country', storeCountry.toLowerCase())
+    const lookupCountries = storeCountry ? [storeCountry.toLowerCase(), null] : [null]
 
-    const response = await fetch(lookupUrl.toString(), {
-      headers: { accept: 'application/json' },
-    })
-    if (!response.ok)
-      return ''
+    for (const country of lookupCountries) {
+      const lookupUrl = new URL('https://itunes.apple.com/lookup')
+      lookupUrl.searchParams.set('id', storeId)
+      if (country)
+        lookupUrl.searchParams.set('country', country)
 
-    const data = await response.json() as { results?: Array<{ bundleId?: string }> }
-    const result = data.results?.find(item => item.bundleId?.trim())
-    return result?.bundleId?.trim() ?? ''
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), APPLE_LOOKUP_TIMEOUT_MS)
+      try {
+        const response = await fetch(lookupUrl.toString(), {
+          headers: { accept: 'application/json' },
+          signal: controller.signal,
+        })
+        if (!response.ok)
+          continue
+
+        const data = await response.json() as { results?: Array<{ bundleId?: string }> }
+        const result = data.results?.find(item => item.bundleId?.trim())
+        if (result?.bundleId)
+          return result.bundleId.trim()
+      }
+      catch {
+        continue
+      }
+      finally {
+        clearTimeout(timeoutId)
+      }
+    }
+
+    return ''
   }
   catch {
     return ''
@@ -1194,18 +1213,6 @@ async function importStoreMetadata() {
     if (error)
       throw error
 
-    let importedAppId = typeof data?.app_id === 'string' ? data.app_id.trim() : ''
-    if (!importedAppId) {
-      const appleBundleId = await fetchAppleBundleId(requestedUrl)
-      if (requestedRun !== storeImportRun || existingAppSetup.value !== 'import' || storeUrl.value.trim() !== requestedUrl)
-        return
-      if (appleBundleId !== null) {
-        if (!appleBundleId)
-          throw new Error('Apple lookup did not return an App ID')
-        importedAppId = appleBundleId
-      }
-    }
-
     storeAppNamePreview.value = typeof data?.name === 'string' ? data.name.trim() : ''
     if (storeAppNamePreview.value) {
       if (!appName.value.trim())
@@ -1226,10 +1233,21 @@ async function importStoreMetadata() {
       useImportedStoreIcon.value = false
     }
 
+    let importedAppId = typeof data?.app_id === 'string' ? data.app_id.trim() : ''
+    if (!importedAppId) {
+      const appleBundleId = await fetchAppleBundleId(requestedUrl)
+      if (requestedRun !== storeImportRun || existingAppSetup.value !== 'import' || storeUrl.value.trim() !== requestedUrl)
+        return
+      if (appleBundleId !== null) {
+        if (!appleBundleId)
+          throw new Error('Apple lookup did not return an App ID')
+        importedAppId = appleBundleId
+      }
+    }
+
     importedStoreAppId.value = importedAppId
-    if (importedAppId) {
+    if (importedAppId && !hasEditedAppId.value) {
       manualAppId.value = importedAppId
-      hasEditedAppId.value = false
       appIdFeedback.value = ''
       appIdSuggestions.value = []
     }
