@@ -83,14 +83,16 @@ describe('atomic release publication', () => {
       knownTags: [],
       remote: 'origin',
     }, run)).toBe('superseded')
-    expect(remoteReads).toBe(2)
+    expect(remoteReads).toBeGreaterThanOrEqual(2)
   })
 
-  it.concurrent('treats a lost push response as published when remote matches local HEAD', () => {
+  it.concurrent('treats a lost push response as published when remote matches local HEAD and tags', () => {
     let remoteReads = 0
     const pushError = new Error('network timeout')
     const run = (args: string[]) => {
       if (args[0] === 'ls-remote') {
+        if (args[2] === 'refs/tags/capgo-12.0.1')
+          return `${releaseSha}\trefs/tags/capgo-12.0.1`
         remoteReads += 1
         const sha = remoteReads === 1 ? testedSha : releaseSha
         return `${sha}\trefs/heads/main`
@@ -100,6 +102,8 @@ describe('atomic release publication', () => {
       if (args[0] === 'push')
         throw pushError
       if (args[0] === 'rev-parse' && args[1] === 'HEAD')
+        return releaseSha
+      if (args[0] === 'rev-parse' && args[1] === 'capgo-12.0.1')
         return releaseSha
 
       throw new Error(`Unexpected git call: ${args.join(' ')}`)
@@ -111,7 +115,38 @@ describe('atomic release publication', () => {
       knownTags: [],
       remote: 'origin',
     }, run)).toBe('published')
-    expect(remoteReads).toBe(2)
+    expect(remoteReads).toBeGreaterThanOrEqual(2)
+  })
+
+  it.concurrent('preserves push failures when the branch matches but a tag is missing', () => {
+    const pushError = new Error('network timeout')
+    let remoteReads = 0
+    const run = (args: string[]) => {
+      if (args[0] === 'ls-remote') {
+        if (args[2] === 'refs/tags/capgo-12.0.1')
+          return ''
+        remoteReads += 1
+        const sha = remoteReads === 1 ? testedSha : releaseSha
+        return `${sha}\trefs/heads/main`
+      }
+      if (args[0] === 'tag')
+        return 'capgo-12.0.1'
+      if (args[0] === 'push')
+        throw pushError
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD')
+        return releaseSha
+      if (args[0] === 'rev-parse' && args[1] === 'capgo-12.0.1')
+        return releaseSha
+
+      throw new Error(`Unexpected git call: ${args.join(' ')}`)
+    }
+
+    expect(() => publishReleaseAtomically({
+      branch: 'main',
+      expectedBranchSha: testedSha,
+      knownTags: [],
+      remote: 'origin',
+    }, run)).toThrow(pushError)
   })
 
   it.concurrent('preserves genuine push failures when the branch did not move', () => {

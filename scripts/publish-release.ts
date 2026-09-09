@@ -70,6 +70,38 @@ function getNewTags(knownTags: readonly string[], run: GitRunner): string[] {
   return newTags
 }
 
+function readRemoteTagSha(remote: string, tag: string, run: GitRunner): string | null {
+  const ref = `refs/tags/${tag}`
+  const output = run(['ls-remote', remote, ref])
+  const [line, ...extraLines] = output.split('\n').filter(Boolean)
+  const match = line?.match(/^([0-9a-f]{40,64})\trefs\/tags\/(.+)$/i)
+
+  if (!match || extraLines.length > 0 || match[2] !== tag)
+    return null
+
+  return match[1]
+}
+
+function remoteMatchesLocalPublication(
+  remote: string,
+  branch: string,
+  newTags: readonly string[],
+  run: GitRunner,
+): boolean {
+  const localHead = run(['rev-parse', 'HEAD'])
+  if (readRemoteBranchSha(remote, branch, run) !== localHead)
+    return false
+
+  for (const tag of newTags) {
+    const localTagSha = run(['rev-parse', tag])
+    const remoteTagSha = readRemoteTagSha(remote, tag, run)
+    if (!remoteTagSha || remoteTagSha !== localTagSha)
+      return false
+  }
+
+  return true
+}
+
 export function publishReleaseAtomically(
   options: PublishReleaseOptions,
   run: GitRunner = runGit,
@@ -103,9 +135,10 @@ export function publishReleaseAtomically(
     }
 
     if (remoteSha) {
-      if (remoteSha === run(['rev-parse', 'HEAD']))
+      const localHead = run(['rev-parse', 'HEAD'])
+      if (remoteMatchesLocalPublication(options.remote, options.branch, newTags, run))
         return 'published'
-      if (remoteSha !== options.expectedBranchSha)
+      if (remoteSha !== localHead && remoteSha !== options.expectedBranchSha)
         return 'superseded'
     }
 
