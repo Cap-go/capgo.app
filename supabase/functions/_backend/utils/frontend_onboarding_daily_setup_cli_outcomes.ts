@@ -3,7 +3,7 @@ import type {
   FrontendOnboardingDailySetupCliEvent,
   FrontendOnboardingDailySetupCliEventKind,
 } from './frontend_onboarding_daily_setup_cli_outcomes_model.ts'
-import { buildFrontendOnboardingProductionHostHogql, FRONTEND_ONBOARDING_VERSIONS } from './frontend_onboarding_analytics_model.ts'
+import { buildFrontendOnboardingProductionHostHogql, FRONTEND_ONBOARDING_VERSIONS, hogqlOnboardingVersionIn } from './frontend_onboarding_analytics_model.ts'
 import { cloudlogErr } from './logging.ts'
 import { queryPosthogHogql } from './posthog_read.ts'
 
@@ -96,7 +96,7 @@ export function buildFrontendOnboardingDailySetupCliHogql(
   endDate: string,
   followupEndDate: string,
 ): string {
-  const setupVersionAllowlist = FRONTEND_ONBOARDING_VERSIONS.filter(version => version >= 2).join(', ')
+  const setupVersionAllowlist = hogqlOnboardingVersionIn('properties', FRONTEND_ONBOARDING_VERSIONS.filter(version => version >= 2))
 
   return `
     WITH setup_people AS (
@@ -106,7 +106,7 @@ export function buildFrontendOnboardingDailySetupCliHogql(
       WHERE event = 'onboarding_step_viewed'
         AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
         AND ${buildFrontendOnboardingProductionHostHogql('properties', 'timestamp')}
-        AND toIntOrZero(toString(properties.onboarding_version)) IN (${setupVersionAllowlist})
+        AND ${setupVersionAllowlist}
         AND JSONExtractString(toString(properties), 'step') = 'setup'
         AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
         AND timestamp < parseDateTimeBestEffort(${sqlStr(endDate)})
@@ -136,7 +136,7 @@ export function buildFrontendOnboardingDailySetupCliHogql(
           selected_events.event IN ('onboarding_step_viewed', 'onboarding_cli_command_copied', 'onboarding_ai_instructions_copied')
           AND JSONExtractString(toString(selected_events.properties), 'flow') = 'pre_org'
           AND ${buildFrontendOnboardingProductionHostHogql('selected_events.properties', 'selected_events.timestamp')}
-          AND toIntOrZero(toString(selected_events.properties.onboarding_version)) IN (${setupVersionAllowlist})
+          AND ${hogqlOnboardingVersionIn('selected_events.properties', FRONTEND_ONBOARDING_VERSIONS.filter(version => version >= 2))}
           AND JSONExtractString(toString(selected_events.properties), 'step') = 'setup'
         )
       )
