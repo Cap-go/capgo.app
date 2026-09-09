@@ -86,19 +86,19 @@ async function deleteUnusedStripeInfo(c: Context, customerId: string) {
 }
 
 async function resolveTrialPlan(c: Context, org: OrgRow, billingAccount: BillingAccount) {
-  const pendingPlan = isPendingStripeCustomerId(org.customer_id)
-    ? await getStripeCustomer(c, org.customer_id!).then(async (pendingStripeInfo) => {
-        if (!pendingStripeInfo?.product_id)
+  const existingStripeInfoPlan = org.customer_id && !isProvisionedStripeCustomerId(org.customer_id)
+    ? await getStripeCustomer(c, org.customer_id).then(async (stripeInfo) => {
+        if (!stripeInfo?.product_id)
           return null
         const { data } = await supabaseAdmin(c)
           .from('plans')
           .select()
-          .or(planProductIdOrFilter(pendingStripeInfo.product_id))
+          .or(planProductIdOrFilter(stripeInfo.product_id))
           .single()
         return data
       })
     : null
-  const plan = pendingPlan ?? await getDefaultPlan(c)
+  const plan = existingStripeInfoPlan ?? await getDefaultPlan(c)
   if (!plan)
     return null
   return {
@@ -108,10 +108,10 @@ async function resolveTrialPlan(c: Context, org: OrgRow, billingAccount: Billing
 }
 
 async function resolveBillingAccountForCreate(c: Context, org: OrgRow): Promise<BillingAccount> {
-  if (isPendingStripeCustomerId(org.customer_id)) {
-    const pendingStripeInfo = await getStripeCustomer(c, org.customer_id!)
-    if (pendingStripeInfo?.billing_account)
-      return normalizeBillingAccount(pendingStripeInfo.billing_account)
+  if (org.customer_id && !isProvisionedStripeCustomerId(org.customer_id)) {
+    const stripeInfo = await getStripeCustomer(c, org.customer_id)
+    if (stripeInfo?.billing_account)
+      return normalizeBillingAccount(stripeInfo.billing_account)
   }
   return getNewCustomersBillingAccount(c)
 }

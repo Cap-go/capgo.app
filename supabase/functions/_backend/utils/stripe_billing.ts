@@ -55,10 +55,16 @@ export class IncompleteUsPlanConfigError extends Error {
   }
 }
 
+function normalizeUsPlanField(value: string | null | undefined): string | null {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : null
+}
+
 function requireUsPlanField(value: string | null | undefined, field: string): string {
-  if (!value)
+  const normalized = normalizeUsPlanField(value)
+  if (!normalized)
     throw new IncompleteUsPlanConfigError(field)
-  return value
+  return normalized
 }
 
 export async function getBillingAccountForCustomer(c: Context, customerId: string): Promise<BillingAccount> {

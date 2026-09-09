@@ -48,13 +48,25 @@ const SOLO_PLAN = {
 describe('stripe billing account helpers', () => {
   it('defaults new customers to ee', () => {
     expect(getNewCustomersBillingAccount(createContext())).toBe('ee')
-    mockedEnv.STRIPE_NEW_CUSTOMERS_ACCOUNT = ''
-    expect(getNewCustomersBillingAccount(createContext())).toBe('ee')
+    const previousFlag = mockedEnv.STRIPE_NEW_CUSTOMERS_ACCOUNT
+    try {
+      mockedEnv.STRIPE_NEW_CUSTOMERS_ACCOUNT = ''
+      expect(getNewCustomersBillingAccount(createContext())).toBe('ee')
+    }
+    finally {
+      mockedEnv.STRIPE_NEW_CUSTOMERS_ACCOUNT = previousFlag
+    }
   })
 
   it('routes new customers to us when flag is set', () => {
-    mockedEnv.STRIPE_NEW_CUSTOMERS_ACCOUNT = 'us'
-    expect(getNewCustomersBillingAccount(createContext())).toBe('us')
+    const previousFlag = mockedEnv.STRIPE_NEW_CUSTOMERS_ACCOUNT
+    try {
+      mockedEnv.STRIPE_NEW_CUSTOMERS_ACCOUNT = 'us'
+      expect(getNewCustomersBillingAccount(createContext())).toBe('us')
+    }
+    finally {
+      mockedEnv.STRIPE_NEW_CUSTOMERS_ACCOUNT = previousFlag
+    }
   })
 
   it('normalizes billing account values', () => {
@@ -86,6 +98,7 @@ describe('stripe billing account helpers', () => {
     expect(() => getPlanProductId(incompleteUsPlan, 'us')).toThrow(IncompleteUsPlanConfigError)
     expect(() => getPlanPriceId(incompleteUsPlan, 'us', 'month')).toThrow(IncompleteUsPlanConfigError)
     expect(() => getPlanCreditProductId({ ...SOLO_PLAN, credit_id_us: null }, 'us')).toThrow(IncompleteUsPlanConfigError)
+    expect(() => getPlanProductId({ ...SOLO_PLAN, stripe_id_us: '   ' }, 'us')).toThrow(IncompleteUsPlanConfigError)
   })
 
   it('defaults to ee when admin client is unavailable but throws on lookup errors', async () => {

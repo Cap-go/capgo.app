@@ -228,6 +228,25 @@ describe('createStripeCustomer', () => {
     )
   })
 
+  it('uses local stripe_info billing_account when replacing a fake customer id', async () => {
+    getStripeCustomerMock.mockResolvedValue({
+      product_id: 'prod_solo_us',
+      billing_account: 'us',
+    })
+    mockSupabase({ orgCustomerId: LOCAL_ID })
+
+    await createStripeCustomer(createContext(), createOrg(LOCAL_ID))
+
+    expect(createCustomerMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      'us',
+    )
+  })
+
   it('creates a real customer when the org has a pre-PR 24-hex fake id', async () => {
     const legacy24HexLocalId = `cus_${crypto.randomUUID().replaceAll('-', '').slice(0, 24)}`
     const { orgUpdate } = mockSupabase({ orgCustomerId: legacy24HexLocalId })

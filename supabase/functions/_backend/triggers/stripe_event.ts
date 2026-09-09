@@ -10,6 +10,7 @@ import { isBentoConfigured, syncBentoSubscriberTags, trackBentoEvent } from '../
 import { purgeOnPremCacheForOrg, purgePlanCacheForOrg } from '../utils/cloudflare_cache_purge.ts'
 import { handleAutoTopUpPaymentIntent } from '../utils/credit_auto_top_up.ts'
 import { getFallbackCreditProductId } from '../utils/credits.ts'
+import { getRetryablePostgrestStatus, isRetryablePostgrestError } from '../utils/retry.ts'
 import { BRES, quickError, simpleError } from '../utils/hono.ts'
 import { middlewareStripeWebhook } from '../utils/hono_middleware_stripe.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
@@ -233,15 +234,17 @@ function compactMetadata(metadata: Record<string, string | undefined>) {
   ) as Record<string, string>
 }
 
+type PlanPriceIdsRow = Pick<PlanRow, 'price_m_id' | 'price_y_id' | 'price_m_id_us' | 'price_y_id_us'>
+
 function getPlanType(
-  plan: Pick<PlanRow, 'price_m_id' | 'price_y_id'>,
+  plan: PlanPriceIdsRow,
   priceId: string | null | undefined,
 ) {
   if (!priceId)
     return undefined
-  if (plan.price_m_id === priceId)
+  if (plan.price_m_id === priceId || plan.price_m_id_us === priceId)
     return 'monthly'
-  if (plan.price_y_id === priceId)
+  if (plan.price_y_id === priceId || plan.price_y_id_us === priceId)
     return 'yearly'
   return undefined
 }
@@ -262,11 +265,14 @@ function getSubscriptionTrackingState(
 
 function buildSubscriptionEventMetadata(
   stripeData: Pick<StripeData, 'data' | 'previousPriceId' | 'previousProductId'>,
-  currentPlan: Pick<PlanRow, 'name' | 'price_m_id' | 'price_y_id' | 'stripe_id'>,
-  previousPlan?: Pick<PlanRow, 'name' | 'price_m_id' | 'price_y_id' | 'stripe_id'> | null,
+  currentPlan: Pick<PlanRow, 'name' | 'price_m_id' | 'price_y_id' | 'price_m_id_us' | 'price_y_id_us' | 'stripe_id' | 'stripe_id_us'>,
+  previousPlan?: Pick<PlanRow, 'name' | 'price_m_id' | 'price_y_id' | 'price_m_id_us' | 'price_y_id_us' | 'stripe_id' | 'stripe_id_us'> | null,
 ) {
   const currentPlanType = getPlanType(currentPlan, stripeData.data.price_id)
-  const fallbackPreviousPlan = stripeData.previousProductId === currentPlan.stripe_id ? currentPlan : previousPlan
+  const fallbackPreviousPlan = stripeData.previousProductId === currentPlan.stripe_id
+    || stripeData.previousProductId === currentPlan.stripe_id_us
+    ? currentPlan
+    : previousPlan
   const previousPlanType = fallbackPreviousPlan
     ? getPlanType(fallbackPreviousPlan, stripeData.previousPriceId)
     : undefined
@@ -1253,7 +1259,7 @@ async function createdOrUpdated(
     }
 
     const segment = await customerToSegmentOrg(c, org.id, stripeData.data.price_id, plan, billingPlans.map(candidate => candidate.name))
-    const isMonthly = plan.price_m_id === stripeData.data.price_id
+    const isMonthly = getPlanType(plan, stripeData.data.price_id) === 'monthly'
     const eventName = `user:subscribe_${statusName}:${isMonthly ? 'monthly' : 'yearly'}`
     const subscriptionMetadata = buildSubscriptionEventMetadata(stripeData, plan, previousPlan)
     await syncBillingBentoTags(c, org, stripeData.data.customer_id, segment)
@@ -1511,8 +1517,19 @@ async function stripeEventHandler(c: Context<MiddlewareKeyVariablesStripe>) {
     .eq('customer_id', stripeData.data.customer_id)
     .single()
 
-  if (customerError || !customer) {
-    throw simpleError('no_customer_found', 'no customer found', { stripeData, customerError })
+  if (customerError) {
+    if (isRetryablePostgrestError(customerError)) {
+      const retryStatus = getRetryablePostgrestStatus(customerError) ?? 503
+      throw quickError(retryStatus, 'stripe_info_lookup_failed', 'Temporary stripe_info lookup failure', {
+        stripeData,
+        customerError,
+      })
+    }
+    throw simpleError('stripe_info_lookup_failed', 'stripe_info lookup failed', { stripeData, customerError })
+  }
+
+  if (!customer) {
+    throw simpleError('no_customer_found', 'no customer found', { stripeData })
   }
 
   await assertStripeBillingAccount(c, customer)
