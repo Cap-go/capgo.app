@@ -469,6 +469,12 @@ describe('app onboarding progress analytics integration', () => {
     const intentTransition = sourceBetween('function continueFromIntent()', 'function continuePreOrgDetails()')
     expect(intentTransition).toContain(`intent: selectedIntent.value`)
     expect(intentTransition).toContain(`?? (webNativeDevelopmentEnvironmentTreatment.value ? undefined : 'skipped')`)
+    // Product lock (Jose/Charly B path): intent tap only selects; Continue advances.
+    expect(onboardingSource).toContain('@click="selectedIntent = option.value"')
+    expect(onboardingSource).toContain('data-test="app-onboarding-continue-intent"')
+    expect(onboardingSource).toContain('@click="continueFromGoal()"')
+    expect(onboardingSource).not.toContain('selectIntentAndContinue')
+    expect(onboardingSource).not.toContain('intentAdvanceTimer')
 
     const appNameTransition = sourceBetween('function continueFromAppName()', 'function continueFromAppId()')
     expect(appNameTransition).toContain(`completeAndViewAppDetailsStep('app_id', { appId: generatedAppId.value, appName: appName.value.trim() })`)

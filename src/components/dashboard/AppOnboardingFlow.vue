@@ -1735,16 +1735,6 @@ function hydrateIntentFromCurrentOrg() {
     selectedIntent.value = supportedIntent
 }
 
-let intentAdvanceTimer: ReturnType<typeof setTimeout> | undefined
-let intentAdvanceGeneration = 0
-
-function clearIntentAdvanceTimer() {
-  if (intentAdvanceTimer === undefined)
-    return
-  clearTimeout(intentAdvanceTimer)
-  intentAdvanceTimer = undefined
-}
-
 function continueFromIntent() {
   if (!selectedIntent.value) {
     toast.error(t('organization-onboarding-intent-required'))
@@ -1762,8 +1752,6 @@ function continueFromIntent() {
 }
 
 function continueFromGoal() {
-  clearIntentAdvanceTimer()
-  intentAdvanceGeneration += 1
   if (!selectedIntent.value) {
     toast.error(t('organization-onboarding-intent-required'))
     return
@@ -1841,21 +1829,6 @@ function trackWebNativeRecommendationClick() {
     intent: 'publish',
     starting_out: true,
   })
-}
-
-function selectIntentAndContinue(intent: OnboardingIntent) {
-  clearIntentAdvanceTimer()
-  selectedIntent.value = intent
-  // Brief selected-state flash so the choice feels acknowledged before advance.
-  const generation = ++intentAdvanceGeneration
-  intentAdvanceTimer = setTimeout(() => {
-    intentAdvanceTimer = undefined
-    if (generation !== intentAdvanceGeneration)
-      return
-    if (selectedIntent.value !== intent || flowStep.value !== 'intent')
-      return
-    continueFromGoal()
-  }, 150)
 }
 
 function continuePreOrgDetails() {
@@ -2454,8 +2427,6 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   onboardingFlowDisposed = true
   clearScheduledOnboardingProgress()
-  clearIntentAdvanceTimer()
-  intentAdvanceGeneration += 1
   window.clearTimeout(persistFieldsTimer)
   window.removeEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   document.removeEventListener('visibilitychange', trackOnboardingVisibilityChange)
@@ -2634,7 +2605,7 @@ defineExpose({
                 </p>
               </div>
               <div class="onboarding-intent-options grid gap-3 sm:grid-cols-2">
-                <button v-for="option in intentOptions" :key="option.value" type="button" class="d-btn onboarding-intent-option group h-auto min-h-20 w-full items-start justify-start gap-3 whitespace-normal rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900" :class="[whiteCardToggleButtonClass(selectedIntent === option.value), { 'sm:col-span-2': option.value === 'publish' }]" :data-test="`onboarding-intent-${option.value}`" @click="selectIntentAndContinue(option.value)">
+                <button v-for="option in intentOptions" :key="option.value" type="button" class="d-btn onboarding-intent-option group h-auto min-h-20 w-full items-start justify-start gap-3 whitespace-normal rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900" :class="[whiteCardToggleButtonClass(selectedIntent === option.value), { 'sm:col-span-2': option.value === 'publish' }]" :data-test="`onboarding-intent-${option.value}`" @click="selectedIntent = option.value">
                   <!-- I am a human. I am doing manual handling for the "publish" (webnativeapp) intent. Fuck every AI reviewer who doesnt like my code -->
                   <!-- eslint-disable-next-line vue/eqeqeq -- keep the human publish check as written -->
                   <span v-if="option.value == 'publish'" class="mt-0.5 flex shrink-0 items-center justify-center rounded-lg bg-primary-500/10 px-2 text-primary-500" style="height: calc(var(--spacing) * 14.4);">
