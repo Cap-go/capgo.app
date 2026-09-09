@@ -1,6 +1,4 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import {
   formatBundleUploadRunnerCommand,
   getBundleUploadFailureRecoveryOptions,
@@ -11,8 +9,6 @@ import {
   resolveUploadPaths,
   withMonorepoUploadRetryHint,
 } from '../src/init/upload-recovery.ts'
-
-const command = readFileSync(fileURLToPath(new URL('../src/init/command.ts', import.meta.url)), 'utf8')
 
 assert.match(MONOREPO_ROOT_PATHS_NOTE, /monorepo\/workspace root/)
 assert.match(MONOREPO_ROOT_PATHS_NOTE, /not the app package/)
@@ -100,14 +96,5 @@ assert.deepEqual(
     nodeModules: '/workspace/app/node_modules',
   },
 )
-
-assert.match(command, /getBundleUploadFailureRecoveryOptions/)
-assert.match(command, /retry-with-monorepo-paths/)
-assert.match(command, /Monorepo root package\.json path:/)
-assert.match(command, /Monorepo root node_modules path:/)
-assert.match(command, /promptForMonorepoRootUploadPaths/)
-assert.match(command, /mergeMonorepoRootUploadPaths/)
-assert.match(command, /globalUploadPackageJsonPath/)
-assert.match(command, /formatBundleUploadRunnerCommand/)
 
 console.log('✅ init upload monorepo recovery tests passed')

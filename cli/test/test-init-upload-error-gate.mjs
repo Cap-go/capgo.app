@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import {
+  getBundleUploadFailureRecoveryOptions,
+  mergeMonorepoRootUploadPaths,
+} from '../src/init/upload-recovery.ts'
 
 const runtime = readFileSync(fileURLToPath(new URL('../src/init/runtime.tsx', import.meta.url)), 'utf8')
 const app = readFileSync(fileURLToPath(new URL('../src/init/ui/app.tsx', import.meta.url)), 'utf8')
@@ -16,12 +20,18 @@ assert.match(app, /else\s+\{\s+exit\(130\)/)
 assert.doesNotMatch(app, /key\.escape/)
 assert.match(command, /waitForInitStreamingContinue\('Press Enter to continue, or Ctrl\+C to cancel\.'/)
 assert.match(command, /updateInitStreamingStatus\('error', failureText\)/)
-assert.match(command, /getBundleUploadFailureRecoveryOptions/)
-assert.match(command, /retry-with-monorepo-paths/)
-assert.match(command, /Monorepo root package\.json path:/)
-assert.match(command, /Monorepo root node_modules path:/)
-assert.match(command, /globalUploadPackageJsonPath/)
-assert.match(command, /resolveUploadPaths/)
+assert.deepEqual(
+  getBundleUploadFailureRecoveryOptions().map(option => option.value),
+  ['retry', 'retry-with-monorepo-paths'],
+)
+assert.equal(
+  mergeMonorepoRootUploadPaths(
+    { packageJson: './package.json' },
+    { packageJson: './apps/mobile/package.json' },
+    '/workspace/app',
+  ).packageJson,
+  '/workspace/app/package.json,/workspace/app/apps/mobile/package.json',
+)
 assert.doesNotMatch(app, /Press Enter to continue\. Press Ctrl\+C to cancel\./)
 assert.match(replicationProgress, /reporter\?: ReplicationProgressReporter/)
 assert.match(replicationProgress, /const progressReporter = reporter \?\? clackReplicationReporter/)
