@@ -132,6 +132,10 @@ interface CreateRoleBindingBody {
   reason?: string
 }
 
+function channelLookupId(channelId: string | number): number {
+  return typeof channelId === 'number' ? channelId : Number(channelId)
+}
+
 async function resolveChannelRbacId(channelId: string | number): Promise<string | null> {
   if (typeof channelId === 'string' && channelId.includes('-'))
     return channelId
@@ -139,12 +143,21 @@ async function resolveChannelRbacId(channelId: string | number): Promise<string 
   const { data } = await getSupabaseClient()
     .from('channels')
     .select('rbac_id')
-    .eq('id', channelId)
+    .eq('id', channelLookupId(channelId))
     .maybeSingle()
   return data?.rbac_id ?? null
 }
 
 async function findExistingRoleBinding(body: CreateRoleBindingBody) {
+  const { data: role, error: roleError } = await getSupabaseClient()
+    .from('roles')
+    .select('id')
+    .eq('name', body.role_name)
+    .eq('scope_type', body.scope_type)
+    .maybeSingle()
+  if (roleError || !role)
+    return null
+
   let query = getSupabaseClient()
     .from('role_bindings')
     .select('id, principal_type, principal_id, role_id, scope_type, org_id, app_id, channel_id, granted_by, reason, is_direct')
@@ -152,6 +165,7 @@ async function findExistingRoleBinding(body: CreateRoleBindingBody) {
     .eq('principal_id', body.principal_id)
     .eq('scope_type', body.scope_type)
     .eq('org_id', body.org_id)
+    .eq('role_id', role.id)
 
   if (body.scope_type === 'app' && body.app_id)
     query = query.eq('app_id', body.app_id)
@@ -164,7 +178,7 @@ async function findExistingRoleBinding(body: CreateRoleBindingBody) {
   }
 
   const { data, error } = await query.maybeSingle()
-  if (error || !data)
+  if (error || !data || data.role_id !== role.id)
     return null
   return data
 }
