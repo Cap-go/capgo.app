@@ -218,6 +218,7 @@ const manualAppId = ref('')
 const appIdSuggestions = ref<string[]>([])
 const appIdFeedback = ref('')
 const hasEditedAppId = ref(false)
+const storeAppIdLookupFailed = ref(false)
 const selectedDevelopmentEnvironment = ref<OnboardingDevelopmentEnvironment | null>(null)
 const skippedPublishAppQuestion = ref(false)
 const selectedIntent = ref<OnboardingIntent | null>(null)
@@ -413,6 +414,7 @@ const resumeStep = computed(() => {
 const canUseStoreImportPreview = computed(() => useImportedStoreIcon.value && !!storeIconPreview.value)
 const iconPreview = computed(() => localIconPreview.value || (canUseStoreImportPreview.value ? storeIconPreview.value : '') || '')
 const hasImportedStoreMetadata = computed(() => existingAppSetup.value === 'import' && !!(importedStoreAppId.value || storeIconPreview.value || storeAppNamePreview.value))
+const shouldShowStoreAppIdLookupWarning = computed(() => storeAppIdLookupFailed.value && !manualAppId.value.trim())
 const suggestedAppId = computed(() => {
   if (createdApp.value)
     return createdApp.value.app_id
@@ -1032,6 +1034,7 @@ function resetStoreImportState() {
   storeAppNamePreview.value = ''
   useImportedStoreIcon.value = false
   importedStoreAppId.value = ''
+  storeAppIdLookupFailed.value = false
   isImportingStore.value = false
   isStoreImportOpen.value = false
   isStoreIconImportOpen.value = false
@@ -1201,6 +1204,7 @@ async function importStoreMetadata() {
   trackDetailsEvent('onboarding_store_import_submitted')
   const requestedRun = ++storeImportRun
   const manualAppIdAtRequest = manualAppId.value
+  storeAppIdLookupFailed.value = false
   isImportingStore.value = true
   try {
     const { data, error } = await invokeCapgoApi('app/store-metadata', {
@@ -1235,19 +1239,20 @@ async function importStoreMetadata() {
     }
 
     let importedAppId = typeof data?.app_id === 'string' ? data.app_id.trim() : ''
-    if (!importedAppId) {
-      if (data?.app_id_lookup_failed === true)
-        throw new Error('Apple lookup did not return an App ID')
+    let appIdLookupFailed = !importedAppId && data?.app_id_lookup_failed === true
+    if (!importedAppId && !appIdLookupFailed) {
       const appleBundleId = await fetchAppleBundleId(requestedUrl)
       if (requestedRun !== storeImportRun || existingAppSetup.value !== 'import' || storeUrl.value.trim() !== requestedUrl)
         return
       if (appleBundleId !== null) {
-        if (!appleBundleId)
-          throw new Error('Apple lookup did not return an App ID')
-        importedAppId = appleBundleId
+        if (appleBundleId)
+          importedAppId = appleBundleId
+        else
+          appIdLookupFailed = true
       }
     }
 
+    storeAppIdLookupFailed.value = appIdLookupFailed
     importedStoreAppId.value = importedAppId
     if (importedAppId && manualAppId.value === manualAppIdAtRequest) {
       manualAppId.value = importedAppId
@@ -2820,9 +2825,11 @@ defineExpose({
                       </button>
                     </div>
                     <p class="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400" aria-live="polite">
-                      {{ hasImportedStoreMetadata
-                        ? t('app-onboarding-store-imported-help')
-                        : t('app-onboarding-v2-store-import-help') }}
+                      {{ shouldShowStoreAppIdLookupWarning
+                        ? t('app-onboarding-store-imported-missing-app-id')
+                        : hasImportedStoreMetadata
+                          ? t('app-onboarding-store-imported-help')
+                          : t('app-onboarding-v2-store-import-help') }}
                     </p>
                   </div>
                 </div>

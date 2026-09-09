@@ -63,6 +63,10 @@ describe('pre-organization onboarding v3', () => {
 
     expect(metadataImport).toContain('await fetchAppleBundleId(requestedUrl)')
     expect(metadataImport.indexOf('data?.app_id_lookup_failed === true')).toBeLessThan(metadataImport.indexOf('await fetchAppleBundleId(requestedUrl)'))
+    expect(metadataImport).toContain('if (!importedAppId && !appIdLookupFailed)')
+    expect(metadataImport).toContain('storeAppIdLookupFailed.value = appIdLookupFailed')
+    expect(metadataImport).not.toContain("throw new Error('Apple lookup did not return an App ID')")
+    expect(onboardingSource).toContain('const shouldShowStoreAppIdLookupWarning = computed(() => storeAppIdLookupFailed.value && !manualAppId.value.trim())')
     expect(metadataImport.indexOf('storeAppNamePreview.value =')).toBeLessThan(metadataImport.indexOf('await fetchAppleBundleId(requestedUrl)'))
     expect(metadataImport.indexOf('storeIconPreview.value = importedIcon')).toBeLessThan(metadataImport.indexOf('await fetchAppleBundleId(requestedUrl)'))
     expect(metadataImport).toContain('const manualAppIdAtRequest = manualAppId.value')
@@ -78,6 +82,7 @@ describe('pre-organization onboarding v3', () => {
     expect(detailsPreview).toContain(':src="iconPreview"')
     expect(appIdField).toContain(':value="manualAppId"')
     expect(appIdField).toContain('@input="onAppIdInput"')
+    expect(onboardingSource).toContain("t('app-onboarding-store-imported-missing-app-id')")
   })
 
   it.concurrent('renders the generated App ID as code without swallowing sentence punctuation', () => {
