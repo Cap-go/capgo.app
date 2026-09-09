@@ -348,7 +348,7 @@ function sameBentoTagUpdate(
 
 function sameBentoSyncState(left: ABTestBentoSyncState, right: ABTestBentoSyncState) {
   const normalize = (state: ABTestBentoSyncState) => ({
-    cleanup_emails: [...state.cleanup_emails].sort(),
+    cleanup_emails: [...state.cleanup_emails].sort((left, right) => left.localeCompare(right)),
     email: state.email,
     pending: state.pending,
   })
