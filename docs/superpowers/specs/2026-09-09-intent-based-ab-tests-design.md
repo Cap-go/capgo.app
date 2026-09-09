@@ -98,17 +98,24 @@ branches or lose a concurrent reconciliation decision.
 
 ## Bento Synchronization
 
-After the database transaction commits, the endpoint performs one best-effort
-Bento tag synchronization:
+After the assignment transaction commits, the endpoint performs best-effort
+Bento reconciliation from the latest committed user state:
 
-- Newly created assignments add the selected branch tag and remove the
-  opposite branch tag, preserving current behavior.
-- Revoked assignments remove both branch tags for that experiment. Removing
-  both is idempotent and also cleans up any historical tag drift.
+1. A short transaction sets a two-second lock timeout, locks and rereads the
+   user row, then commits before any external request.
+2. The endpoint computes the complete desired tag state for every configured
+   experiment and calls Bento outside the row lock with a five-second abort
+   signal. Eligible assignments add the selected branch tag and remove the
+   opposite tag. Unassigned, ineligible, or malformed assignments remove both
+   branch tags, which also cleans up historical drift.
+3. The endpoint rereads the committed state under another short, bounded lock.
+   If the desired tags changed while Bento was running, it repeats with the
+   newest state. This prevents a slower request from leaving stale tags without
+   holding a database lock across network latency.
 
-A Bento failure is logged but does not restore an ineligible database
-assignment or fail the otherwise successful endpoint response, matching the
-existing on-demand synchronization policy.
+A Bento, timeout, or reconciliation-read failure is logged but does not restore
+an ineligible database assignment or fail the otherwise successful endpoint
+response, matching the existing on-demand synchronization policy.
 
 ## Frontend Contract
 
@@ -141,8 +148,8 @@ Unit coverage will verify:
 - Changing or clearing intent revokes only now-ineligible intent-gated
   assignments.
 - Revocation and creation can happen in the same transaction.
-- Bento synchronization adds new branch tags and removes both tags for revoked
-  experiments.
+- Bento reconciliation converges on the latest complete tag state, tolerates
+  malformed historical branches, and never holds a row lock during HTTP work.
 - The authenticated endpoint keeps its existing request and response shape.
 
 The existing backend lint, typecheck, and unit suites provide regression

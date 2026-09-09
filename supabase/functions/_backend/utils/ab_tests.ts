@@ -274,14 +274,19 @@ async function persistABTestAssignments(
 }
 
 function buildBentoTagUpdate(user: AssignmentUser) {
-  const testNames = Object.keys(AB_TESTS_CONFIG)
-  const { assignments } = readExistingAssignments(user.abtests, testNames)
+  if (typeof user.email !== 'string' || !user.email.trim())
+    return undefined
+
+  const storedAssignments = isRecord(user.abtests) ? user.abtests : {}
   const segments: string[] = []
   const deleteSegments: string[] = []
 
   for (const [testName, test] of Object.entries(AB_TESTS_CONFIG)) {
-    const assignment = assignments[testName]
-    if (!assignment || !isEligibleForTest(user, test)) {
+    const storedAssignment = storedAssignments[testName]
+    const branch = isRecord(storedAssignment) ? storedAssignment.branch : undefined
+    const isCurrentBranch = isABTestBranch(branch)
+      && (branch === test.treatment_branch || branch === test.control_branch)
+    if (!isCurrentBranch || !isEligibleForTest(user, test)) {
       deleteSegments.push(
         test.branches[test.treatment_branch].bento_tag,
         test.branches[test.control_branch].bento_tag,
@@ -289,12 +294,42 @@ function buildBentoTagUpdate(user: AssignmentUser) {
       continue
     }
 
-    const oppositeBranch = assignment.branch === test.treatment_branch ? test.control_branch : test.treatment_branch
-    segments.push(test.branches[assignment.branch].bento_tag)
+    const oppositeBranch = branch === test.treatment_branch ? test.control_branch : test.treatment_branch
+    segments.push(test.branches[branch].bento_tag)
     deleteSegments.push(test.branches[oppositeBranch].bento_tag)
   }
 
-  return { deleteSegments, segments }
+  return {
+    deleteSegments,
+    email: user.email.trim().toLowerCase(),
+    segments,
+  }
+}
+
+function sameBentoTagUpdate(
+  left: ReturnType<typeof buildBentoTagUpdate>,
+  right: ReturnType<typeof buildBentoTagUpdate>,
+) {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+async function readLockedABTestUser(
+  drizzle: ReturnType<typeof getDrizzleClient>,
+  userId: string,
+) {
+  return await drizzle.transaction(async (tx) => {
+    await tx.execute(sql`SET LOCAL lock_timeout = '2s'`)
+    const currentUserResult = await tx.execute<AssignmentUser & { email?: string | null }>(sql`
+      SELECT created_via_invite,
+             email,
+             onboarding->>'intent' AS intent,
+             onboarding->'abtests' AS abtests
+      FROM public.users
+      WHERE id = ${userId}::uuid
+      FOR UPDATE
+    `)
+    return currentUserResult.rows[0]
+  })
 }
 
 async function syncCurrentUserABTestTags(
@@ -303,34 +338,29 @@ async function syncCurrentUserABTestTags(
   userId: string,
 ) {
   try {
-    await drizzle.transaction(async (tx) => {
-      // This second row lock runs only after assignment commit. It serializes
-      // external updates while letting each waiter reread the newest state.
-      const currentUserResult = await tx.execute<AssignmentUser & { email?: string | null }>(sql`
-        SELECT created_via_invite,
-               email,
-               onboarding->>'intent' AS intent,
-               onboarding->'abtests' AS abtests
-        FROM public.users
-        WHERE id = ${userId}::uuid
-        FOR UPDATE
-      `)
-      const user = currentUserResult.rows[0]
-      if (!user || typeof user.email !== 'string' || !user.email.trim())
+    const signal = AbortSignal.timeout(BENTO_AB_TEST_SYNC_TIMEOUT_MS)
+    let user = await readLockedABTestUser(drizzle, userId)
+    while (user) {
+      const tagUpdate = buildBentoTagUpdate(user)
+      if (!tagUpdate)
         return
 
-      const tagUpdate = buildBentoTagUpdate(user)
-      const result = await syncBentoSubscriberTags(c, {
-        ...tagUpdate,
-        email: user.email.trim().toLowerCase(),
-      }, AbortSignal.timeout(BENTO_AB_TEST_SYNC_TIMEOUT_MS))
+      const result = await syncBentoSubscriberTags(c, tagUpdate, signal)
       if (result === false) {
         cloudlogErr({
           message: 'on-demand A/B Bento sync failed',
           requestId: c.get('requestId'),
         })
+        return
       }
-    })
+      if (result === undefined)
+        return
+
+      const latestUser = await readLockedABTestUser(drizzle, userId)
+      if (sameBentoTagUpdate(tagUpdate, latestUser ? buildBentoTagUpdate(latestUser) : undefined))
+        return
+      user = latestUser
+    }
   }
   catch (error) {
     cloudlogErr({

@@ -130,6 +130,12 @@ function persistedAssignments(branches: { development?: 'C' | 'D', emails?: 'A' 
   }
 }
 
+function queueBentoSnapshot(user: Record<string, unknown>) {
+  drizzleExecuteMock
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: [user] })
+}
+
 describe('new-user A/B test assignment', () => {
   beforeEach(() => {
     vi.resetAllMocks()
@@ -163,6 +169,8 @@ describe('new-user A/B test assignment', () => {
     expect(source).toContain('getPgClient(c, false)')
     expect(source).toContain('drizzle.transaction(async (tx) =>')
     expect(source).toContain('FOR UPDATE')
+    expect(source).toContain("SET LOCAL lock_timeout = '2s'")
+    expect(source).toContain('AbortSignal.timeout(BENTO_AB_TEST_SYNC_TIMEOUT_MS)')
   })
 
   it.each([
@@ -502,13 +510,15 @@ describe('new-user A/B test assignment', () => {
     drizzleExecuteMock
       .mockResolvedValueOnce({ rows: [{ abtests: replicaAssignments, created_via_invite: false, email: 'User@Example.com', intent: 'builder' }] })
       .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
-      .mockResolvedValueOnce({ rows: [{ abtests: persisted, created_via_invite: false, email: 'User@Example.com', intent: 'builder' }] })
+    const currentUser = { abtests: persisted, created_via_invite: false, email: 'User@Example.com', intent: 'builder' }
+    queueBentoSnapshot(currentUser)
+    queueBentoSnapshot(currentUser)
 
     await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
 
     expect(getPgClientMock.mock.calls).toEqual([[context, false]])
     expect(pgQueryMock).not.toHaveBeenCalled()
-    expect(drizzleExecuteMock).toHaveBeenCalledTimes(3)
+    expect(drizzleExecuteMock).toHaveBeenCalledTimes(6)
   })
 
   it('does not assign an intent-gated test before intent is persisted', async () => {
@@ -543,15 +553,17 @@ describe('new-user A/B test assignment', () => {
     drizzleExecuteMock
       .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false, email: 'User@Example.com', intent: 'ota' }] })
       .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
-      .mockResolvedValueOnce({ rows: [{ abtests: persisted, created_via_invite: false, email: 'User@Example.com', intent: 'ota' }] })
+    const currentUser = { abtests: persisted, created_via_invite: false, email: 'User@Example.com', intent: 'ota' }
+    queueBentoSnapshot(currentUser)
+    queueBentoSnapshot(currentUser)
 
     await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
 
-    expect(drizzleExecuteMock).toHaveBeenCalledTimes(3)
+    expect(drizzleExecuteMock).toHaveBeenCalledTimes(6)
     expect(random).toHaveBeenCalledOnce()
   })
 
-  it('reconciles Bento from committed assignments under a separate row lock', async () => {
+  it('reconciles Bento after the bounded snapshot transaction commits', async () => {
     const module = await loadABTestsModule()
     installIntentTest(module)
     const existing = persistedAssignments({ development: 'D', emails: 'B', publish: 'B' })
@@ -564,7 +576,7 @@ describe('new-user A/B test assignment', () => {
     let transactionNumber = 0
     drizzleTransactionMock.mockImplementation(async (callback) => {
       transactionNumber += 1
-      const transactionName = transactionNumber === 1 ? 'assignment' : 'reconciliation'
+      const transactionName = ['assignment', 'snapshot', 'verification'][transactionNumber - 1]
       events.push(`${transactionName}-started`)
       const result = await callback({ execute: drizzleExecuteMock })
       events.push(`${transactionName}-committed`)
@@ -577,20 +589,24 @@ describe('new-user A/B test assignment', () => {
     drizzleExecuteMock
       .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false, email: 'User@Example.com', intent: 'ota' }] })
       .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
-      .mockResolvedValueOnce({ rows: [{ abtests: persisted, created_via_invite: false, email: 'User@Example.com', intent: 'ota' }] })
+    const currentUser = { abtests: persisted, created_via_invite: false, email: 'User@Example.com', intent: 'ota' }
+    queueBentoSnapshot(currentUser)
+    queueBentoSnapshot(currentUser)
 
     await module.getOrCreateUserABTests(context, USER_ID)
 
     expect(events).toEqual([
       'assignment-started',
       'assignment-committed',
-      'reconciliation-started',
+      'snapshot-started',
+      'snapshot-committed',
       'bento-synced',
-      'reconciliation-committed',
+      'verification-started',
+      'verification-committed',
     ])
   })
 
-  it('synchronizes Bento from a newer reconciliation that committed first', async () => {
+  it('retries Bento when a newer reconciliation commits during synchronization', async () => {
     const module = await loadABTestsModule()
     installIntentTest(module)
     installIntentTest(module, ['builder'], BUILDER_INTENT_TEST_NAME)
@@ -607,19 +623,54 @@ describe('new-user A/B test assignment', () => {
     drizzleExecuteMock
       .mockResolvedValueOnce({ rows: [{ abtests: standardAssignments, created_via_invite: false, email: 'User@Example.com', intent: 'ota' }] })
       .mockResolvedValueOnce({ rows: [{ abtests: firstCommit }] })
-      .mockResolvedValueOnce({ rows: [{ abtests: latestCommit, created_via_invite: false, email: 'User@Example.com', intent: 'builder' }] })
+    const firstUser = { abtests: firstCommit, created_via_invite: false, email: 'User@Example.com', intent: 'ota' }
+    const latestUser = { abtests: latestCommit, created_via_invite: false, email: 'User@Example.com', intent: 'builder' }
+    queueBentoSnapshot(firstUser)
+    queueBentoSnapshot(latestUser)
+    queueBentoSnapshot(latestUser)
 
     await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(firstCommit)
 
-    const [, update, signal] = syncBentoSubscriberTagsMock.mock.calls[0]!
-    expect(update.segments).toContain('ab:builder_intent_targeted')
-    expect(update.segments).not.toContain('ab:intent_targeted')
-    expect(update.deleteSegments).toEqual(expect.arrayContaining([
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledTimes(2)
+    const [, firstUpdate] = syncBentoSubscriberTagsMock.mock.calls[0]!
+    const [, latestUpdate, signal] = syncBentoSubscriberTagsMock.mock.calls[1]!
+    expect(firstUpdate.segments).toContain('ab:intent_targeted')
+    expect(latestUpdate.segments).toContain('ab:builder_intent_targeted')
+    expect(latestUpdate.segments).not.toContain('ab:intent_targeted')
+    expect(latestUpdate.deleteSegments).toEqual(expect.arrayContaining([
       'ab:intent_targeted',
       'ab:no_intent_targeted',
       'ab:no_builder_intent_targeted',
     ]))
     expect(signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('treats a malformed current branch as unassigned during Bento reconciliation', async () => {
+    const module = await loadABTestsModule()
+    installIntentTest(module)
+    const standardAssignments = persistedAssignments({ development: 'D', emails: 'B', publish: 'B' })
+    const existing = {
+      ...standardAssignments,
+      [INTENT_TEST_NAME]: intentAssignment(),
+    }
+    const malformedCurrent = {
+      ...standardAssignments,
+      [INTENT_TEST_NAME]: { assigned_at: FIXED_DATE.toISOString(), branch: 'legacy' },
+    }
+    const context = { get: vi.fn(() => 'request-id') } as never
+    drizzleExecuteMock
+      .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false, email: 'User@Example.com', intent: 'builder' }] })
+      .mockResolvedValueOnce({ rows: [{ abtests: standardAssignments }] })
+    const currentUser = { abtests: malformedCurrent, created_via_invite: false, email: 'User@Example.com', intent: 'builder' }
+    queueBentoSnapshot(currentUser)
+    queueBentoSnapshot(currentUser)
+
+    await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(standardAssignments)
+
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledWith(context, expect.objectContaining({
+      deleteSegments: expect.arrayContaining(['ab:intent_targeted', 'ab:no_intent_targeted']),
+      email: 'user@example.com',
+    }), expect.any(AbortSignal))
   })
 
   it.each([
@@ -643,13 +694,15 @@ describe('new-user A/B test assignment', () => {
     drizzleExecuteMock
       .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false, email: 'User@Example.com', intent }] })
       .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
-      .mockResolvedValueOnce({ rows: [{ abtests: persisted, created_via_invite: false, email: 'User@Example.com', intent }] })
+    const currentUser = { abtests: persisted, created_via_invite: false, email: 'User@Example.com', intent }
+    queueBentoSnapshot(currentUser)
+    queueBentoSnapshot(currentUser)
 
     await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(standardAssignments)
 
     expect(getPgClientMock.mock.calls).toEqual([[context, false]])
     expect(pgQueryMock).not.toHaveBeenCalled()
-    expect(drizzleExecuteMock).toHaveBeenCalledTimes(3)
+    expect(drizzleExecuteMock).toHaveBeenCalledTimes(6)
     const updateParameters = collectSqlParameterValues(drizzleExecuteMock.mock.calls[1]?.[0])
     const assignmentsJson = updateParameters.find(value => typeof value === 'string' && value.startsWith('{'))
     expect(JSON.parse(String(assignmentsJson))).toEqual(persisted)
@@ -690,7 +743,9 @@ describe('new-user A/B test assignment', () => {
     drizzleExecuteMock
       .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false, email: 'User@Example.com', intent: 'builder' }] })
       .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
-      .mockResolvedValueOnce({ rows: [{ abtests: persisted, created_via_invite: false, email: 'User@Example.com', intent: 'builder' }] })
+    const currentUser = { abtests: persisted, created_via_invite: false, email: 'User@Example.com', intent: 'builder' }
+    queueBentoSnapshot(currentUser)
+    queueBentoSnapshot(currentUser)
 
     await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
 
@@ -744,13 +799,15 @@ describe('new-user A/B test assignment', () => {
     drizzleExecuteMock
       .mockResolvedValueOnce({ rows: [{ abtests: existing, created_via_invite: false, email: 'User@Example.com' }] })
       .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
-      .mockResolvedValueOnce({ rows: [{ abtests: persisted, created_via_invite: false, email: 'User@Example.com' }] })
+    const currentUser = { abtests: persisted, created_via_invite: false, email: 'User@Example.com' }
+    queueBentoSnapshot(currentUser)
+    queueBentoSnapshot(currentUser)
 
     await expect(getOrCreateUserABTests(context, USER_ID)).resolves.toEqual(persisted)
 
     expect(getPgClientMock.mock.calls).toEqual([[context, true], [context, false]])
-    expect(drizzleTransactionMock).toHaveBeenCalledTimes(2)
-    expect(drizzleExecuteMock).toHaveBeenCalledTimes(3)
+    expect(drizzleTransactionMock).toHaveBeenCalledTimes(3)
+    expect(drizzleExecuteMock).toHaveBeenCalledTimes(6)
     expect(random).toHaveBeenCalledTimes(2)
     expect(closeClientMock).toHaveBeenCalledTimes(2)
     expect(syncBentoSubscriberTagsMock).toHaveBeenCalledWith(context, {
