@@ -55,7 +55,14 @@ export type BuildCredentials = z.infer<typeof buildCredentialsSchema>
 
 export const buildCacheOptionSchema = z.boolean().optional()
 
-export const buildCacheKeyOptionSchema = z.string().min(1).optional()
+export const buildCacheKeyOptionSchema = z.preprocess((value) => {
+  if (value === undefined)
+    return undefined
+  if (typeof value !== 'string')
+    return value
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}, z.string().min(1).optional())
 
 export const buildRequestOptionsSchema = optionsBaseSchema.extend({
   path: z.string().optional(),
