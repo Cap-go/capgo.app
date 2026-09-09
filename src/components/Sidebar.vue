@@ -154,9 +154,10 @@ async function openTab(tab: Tab) {
   const onboardingResumeAppId = isPendingOnboardingResume
     ? resumeQueryAppId
     : getOnboardingResumeAppId(onboardingUserId)
+  const currentSource = typeof route.query.source === 'string' ? route.query.source : null
   const requiresOnboardingExplorationConfirmation = shouldConfirmOnboardingDashboardExploration({
     currentPath: route.path,
-    currentSource: typeof route.query.source === 'string' ? route.query.source : null,
+    currentSource,
     destination: tab.key,
     resumeAppId: onboardingResumeAppId,
     userId: onboardingUserId,
@@ -180,7 +181,7 @@ async function openTab(tab: Tab) {
     if (dialogStore.lastButtonRole === 'primary') {
       const continueRoute = getOnboardingContinueSetupRoute({
         currentPath: route.path,
-        currentSource: typeof route.query.source === 'string' ? route.query.source : null,
+        currentSource,
         currentStep: typeof route.query.step === 'string' ? route.query.step : null,
         resumeAppId: onboardingResumeAppId,
       })
