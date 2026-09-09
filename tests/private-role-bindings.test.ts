@@ -121,6 +121,89 @@ async function createRoleBindingFixture(): Promise<RoleBindingFixture> {
   }
 }
 
+interface CreateRoleBindingBody {
+  principal_type: string
+  principal_id: string
+  role_name: string
+  scope_type: 'org' | 'app' | 'channel'
+  org_id: string
+  app_id?: string | null
+  channel_id?: string | number | null
+  reason?: string
+}
+
+async function resolveChannelRbacId(channelId: string | number): Promise<string | null> {
+  if (typeof channelId === 'string' && channelId.includes('-'))
+    return channelId
+
+  const { data } = await getSupabaseClient()
+    .from('channels')
+    .select('rbac_id')
+    .eq('id', channelId)
+    .maybeSingle()
+  return data?.rbac_id ?? null
+}
+
+async function findExistingRoleBinding(body: CreateRoleBindingBody) {
+  let query = getSupabaseClient()
+    .from('role_bindings')
+    .select('id, principal_type, principal_id, role_id, scope_type, org_id, app_id, channel_id, granted_by, reason, is_direct')
+    .eq('principal_type', body.principal_type)
+    .eq('principal_id', body.principal_id)
+    .eq('scope_type', body.scope_type)
+    .eq('org_id', body.org_id)
+
+  if (body.scope_type === 'app' && body.app_id)
+    query = query.eq('app_id', body.app_id)
+
+  if (body.scope_type === 'channel' && body.channel_id != null) {
+    const channelRbacId = await resolveChannelRbacId(body.channel_id)
+    if (!channelRbacId)
+      return null
+    query = query.eq('channel_id', channelRbacId)
+  }
+
+  const { data, error } = await query.maybeSingle()
+  if (error || !data)
+    return null
+  return data
+}
+
+/**
+ * POST /private/role_bindings with gateway retries. A replayed create that already
+ * persisted returns 409 role_binding_duplicate — treat that as success when the
+ * intended binding row exists (cold-isolate 502/503 retry safety).
+ */
+async function createRoleBindingTestRequest(
+  headers: Record<string, string>,
+  body: CreateRoleBindingBody,
+): Promise<Response> {
+  const response = await fetchTestRequest(getEndpointUrl('/private/role_bindings'), {
+    method: 'POST',
+    headers,
+    retryUnsafe: true,
+    body: JSON.stringify(body),
+  })
+
+  if (response.status === 200)
+    return response
+
+  if (response.status === 409) {
+    const payload = await response.clone().json().catch(() => ({})) as { error?: string }
+    if (payload.error === 'User already has a role in this family at this scope') {
+      const existing = await findExistingRoleBinding(body)
+      if (existing) {
+        return new Response(JSON.stringify(existing), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+    }
+  }
+
+  return response
+}
+
 async function createUserOrgBinding(orgId: string, userId: string, roleName: string, grantedBy: string) {
   const supabase = getSupabaseClient()
   const { data: role, error: roleError } = await supabase
@@ -164,19 +247,15 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
     const fixture = await createRoleBindingFixture()
 
     try {
-      const createResponse = await fetchTestRequest(getEndpointUrl('/private/role_bindings'), {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({
-          principal_type: 'user',
-          principal_id: USER_ID,
-          role_name: 'channel_admin',
-          scope_type: 'channel',
-          org_id: fixture.attackerOrgId,
-          app_id: fixture.attackerAppUuid,
-          channel_id: fixture.attackerChannelRbacId,
-          reason: 'channel uuid regression',
-        }),
+      const createResponse = await createRoleBindingTestRequest(authHeaders, {
+        principal_type: 'user',
+        principal_id: USER_ID,
+        role_name: 'channel_admin',
+        scope_type: 'channel',
+        org_id: fixture.attackerOrgId,
+        app_id: fixture.attackerAppUuid,
+        channel_id: fixture.attackerChannelRbacId,
+        reason: 'channel uuid regression',
       })
 
       const createData = await createResponse.json() as { id: string, app_id: string, channel_id: string, scope_type: string }
@@ -284,19 +363,15 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       })
       expect(appAdminBindingError).toBeNull()
 
-      const createResponse = await fetchTestRequest(getEndpointUrl('/private/role_bindings'), {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({
-          principal_type: 'user',
-          principal_id: USER_ID_2,
-          role_name: 'channel_reader',
-          scope_type: 'channel',
-          org_id: orgId,
-          app_id: appUuid,
-          channel_id: channel!.id,
-          reason: 'app manager assigns lower-level channel role',
-        }),
+      const createResponse = await createRoleBindingTestRequest(authHeaders, {
+        principal_type: 'user',
+        principal_id: USER_ID_2,
+        role_name: 'channel_reader',
+        scope_type: 'channel',
+        org_id: orgId,
+        app_id: appUuid,
+        channel_id: channel!.id,
+        reason: 'app manager assigns lower-level channel role',
       })
 
       const createData = await createResponse.json() as { id: string, channel_id: string, role_id: string, error?: string }
@@ -612,18 +687,14 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
     const fixture = await createRoleBindingFixture()
 
     try {
-      const createResponse = await fetchTestRequest(getEndpointUrl('/private/role_bindings'), {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({
-          principal_type: 'user',
-          principal_id: USER_ID,
-          role_name: 'app_admin',
-          scope_type: 'app',
-          org_id: fixture.attackerOrgId,
-          app_id: fixture.victimAppUuid,
-          reason: 'cross-org regression',
-        }),
+      const createResponse = await createRoleBindingTestRequest(authHeaders, {
+        principal_type: 'user',
+        principal_id: USER_ID,
+        role_name: 'app_admin',
+        scope_type: 'app',
+        org_id: fixture.attackerOrgId,
+        app_id: fixture.victimAppUuid,
+        reason: 'cross-org regression',
       })
 
       const createData = await createResponse.json() as { error: string }
