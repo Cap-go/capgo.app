@@ -9,7 +9,7 @@
  */
 /// <reference lib="deno.ns" />
 import { S3Client } from 'https://deno.land/x/s3_lite_client@0.7.0/mod.ts'
-import { conditionalDeleteSource, ConcurrencyLimiter, isLiveR2Key, isObjectNotFoundError, moveS3LiteObjectToTrash, resolveOpsDeleteMode, R2_TRASH_PREFIX } from './r2_trash_utils.ts'
+import { ConcurrencyLimiter, isLiveR2Key, moveS3LiteObjectToTrash, permanentDeleteSourceIfMatch, resolveOpsDeleteMode, R2_TRASH_PREFIX } from './r2_trash_utils.ts'
 
 const folderToDelete = 'orgs'
 if (!folderToDelete) {
@@ -51,20 +51,7 @@ async function processKey(key: string): Promise<void> {
     }
 
     console.log(`Permanently deleting: ${key}`)
-    let sourceEtag: string | undefined
-    try {
-      const stat = await rawS3client.statObject(key)
-      sourceEtag = stat.etag
-    }
-    catch (error) {
-      if (isObjectNotFoundError(error)) {
-        console.log(`Already absent: ${key}`)
-        return
-      }
-      throw error
-    }
-
-    const deleteResult = await conditionalDeleteSource(rawS3client, key, sourceEtag)
+    const deleteResult = await permanentDeleteSourceIfMatch(rawS3client, key)
     if (deleteResult === 'skipped_missing') {
       console.log(`Already absent: ${key}`)
       return

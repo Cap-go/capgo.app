@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   ConcurrencyLimiter,
   conditionalDeleteSource,
+  permanentDeleteSourceIfMatch,
   encodeS3CopySource,
   getR2TrashKey,
   getUniqueR2TrashKey,
@@ -283,6 +284,19 @@ describe('conditionalDeleteSource', () => {
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
+  it('treats not-found during atomic delete as skipped_missing', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const deleteObject = vi.fn(async () => undefined)
+    const makeRequest = vi.fn(async () => {
+      throw { statusCode: 404, code: 'NotFound' }
+    })
+
+    const result = await conditionalDeleteSource({ deleteObject, makeRequest }, key, '"before"')
+
+    expect(result).toBe('skipped_missing')
+    expect(deleteObject).not.toHaveBeenCalled()
+  })
+
   it('retains source when atomic delete returns precondition failed', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const deleteObject = vi.fn(async () => undefined)
@@ -293,6 +307,52 @@ describe('conditionalDeleteSource', () => {
     const result = await conditionalDeleteSource({ deleteObject, makeRequest }, key, '"before"')
 
     expect(result).toBe('skipped_changed')
+    expect(deleteObject).not.toHaveBeenCalled()
+  })
+})
+
+describe('permanentDeleteSourceIfMatch', () => {
+  it('deletes permanently when the live etag still matches', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const etag = '"before"'
+    const statObject = vi.fn(async () => ({ etag }))
+    const deleteObject = vi.fn()
+    const makeRequest = vi.fn<(args: MakeRequestArgs) => Promise<Response>>(async () => new Response(null, { status: 204 }))
+
+    const result = await permanentDeleteSourceIfMatch({ statObject, deleteObject, makeRequest }, key)
+
+    expect(result).toBe('deleted')
+    expect(makeRequest).toHaveBeenCalledOnce()
+    expect(deleteObject).not.toHaveBeenCalled()
+  })
+
+  it('skips idempotently when the source is already absent', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const statObject = vi.fn(async () => {
+      throw { statusCode: 404, code: 'NotFound' }
+    })
+    const deleteObject = vi.fn()
+    const makeRequest = vi.fn()
+
+    const result = await permanentDeleteSourceIfMatch({ statObject, deleteObject, makeRequest }, key)
+
+    expect(result).toBe('skipped_missing')
+    expect(makeRequest).not.toHaveBeenCalled()
+    expect(deleteObject).not.toHaveBeenCalled()
+  })
+
+  it('retains the source when a concurrent writer wins the etag race', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const statObject = vi.fn(async () => ({ etag: '"before"' }))
+    const deleteObject = vi.fn()
+    const makeRequest = vi.fn(async () => {
+      throw { statusCode: 412, code: 'PreconditionFailed' }
+    })
+
+    const result = await permanentDeleteSourceIfMatch({ statObject, deleteObject, makeRequest }, key)
+
+    expect(result).toBe('skipped_changed')
+    expect(makeRequest).toHaveBeenCalledOnce()
     expect(deleteObject).not.toHaveBeenCalled()
   })
 })

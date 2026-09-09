@@ -144,6 +144,25 @@ export type RawS3LiteClient = {
 
 export type ConditionalDeleteResult = 'deleted' | 'skipped_changed' | 'skipped_missing'
 
+/** Permanent delete with live stat + atomic If-Match (used by ops scripts). */
+export async function permanentDeleteSourceIfMatch(
+  s3client: Pick<RawS3LiteClient, 'statObject' | 'deleteObject' | 'makeRequest'>,
+  key: string,
+): Promise<ConditionalDeleteResult> {
+  let sourceEtag: string | undefined
+  try {
+    const stat = await s3client.statObject(key)
+    sourceEtag = stat.etag
+  }
+  catch (error) {
+    if (isObjectNotFoundError(error))
+      return 'skipped_missing'
+    throw error
+  }
+
+  return conditionalDeleteSource(s3client, key, sourceEtag)
+}
+
 /**
  * Atomic If-Match delete via s3_lite makeRequest when available.
  * Without makeRequest, retain the source — stat-then-delete races with concurrent writers.
