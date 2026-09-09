@@ -37,8 +37,8 @@ function validateOptions(options: PublishReleaseOptions): void {
     throw new Error(`Invalid release branch: ${options.branch}`)
   if (!/^[0-9a-f]{40,64}$/i.test(options.expectedBranchSha))
     throw new Error('Expected branch SHA must be a full hexadecimal object ID')
-  if (!options.remote || /[\r\n]/.test(options.remote))
-    throw new Error('Release remote must be non-empty and contain no line breaks')
+  if (!options.remote || /[\r\n]/.test(options.remote) || options.remote.startsWith('-'))
+    throw new Error('Release remote must be non-empty, contain no line breaks, and not start with "-"')
   for (const tag of options.knownTags) {
     if (!isValidRefName(tag))
       throw new Error(`Invalid known release tag: ${tag}`)

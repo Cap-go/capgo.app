@@ -6,6 +6,15 @@ const releaseSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 const newerSha = '2222222222222222222222222222222222222222'
 
 describe('atomic release publication', () => {
+  it.concurrent('rejects remotes that start with a hyphen', () => {
+    expect(() => publishReleaseAtomically({
+      branch: 'main',
+      expectedBranchSha: testedSha,
+      knownTags: [],
+      remote: '--upload-pack=evil',
+    })).toThrow('Release remote must be non-empty, contain no line breaks, and not start with "-"')
+  })
+
   it.concurrent('treats a branch that moved before publication as safely superseded', () => {
     const calls: string[][] = []
     const run = (args: string[]) => {
