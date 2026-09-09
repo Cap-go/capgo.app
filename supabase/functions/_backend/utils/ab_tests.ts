@@ -439,7 +439,7 @@ async function syncCurrentUserABTestTags(
       if (cleanupEmail) {
         attempt += 1
         const cleanupResult = await syncBentoSubscriberTags(c, buildBentoTagCleanup(cleanupEmail), signal)
-        if (cleanupResult === false) {
+        if (cleanupResult !== true) {
           cloudlogErr({
             message: 'on-demand A/B Bento email cleanup failed',
             requestId: c.get('requestId'),
@@ -457,7 +457,7 @@ async function syncCurrentUserABTestTags(
       }
       attempt += 1
       const result = await syncBentoSubscriberTags(c, tagUpdate, signal)
-      if (result === false) {
+      if (result !== true) {
         cloudlogErr({
           message: 'on-demand A/B Bento sync failed',
           requestId: c.get('requestId'),

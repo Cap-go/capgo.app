@@ -118,10 +118,11 @@ the latest committed user state as background work:
    This prevents a slower request from leaving stale tags without holding a
    database lock across network latency or retrying indefinitely.
 4. Only a verified, converged delivery clears the pending marker and queued
-   email cleanups. A user with no deliverable email and no queued cleanup is
-   already converged. State is written only when it changes, and later
-   assignment reads retry any remaining work even when the assignment map is
-   already complete.
+   email cleanups. Missing Bento configuration is not a verified delivery and
+   keeps the marker pending. A user with no deliverable email and no queued
+   cleanup is already converged. State is written only when it changes, and
+   later assignment reads retry any remaining work even when the assignment map
+   is already complete.
 
 A Bento, timeout, or reconciliation-read failure is logged but does not restore
 an ineligible database assignment or fail the otherwise successful endpoint
