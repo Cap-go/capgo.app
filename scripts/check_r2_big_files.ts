@@ -37,7 +37,7 @@ async function main() {
         console.error('  prepare_cleanup_zip - Find orphaned zip files in R2 with no database records')
         console.error('  copy_cleanup_candidates_to_backup_bucket - Copy cleanup candidates to backup bucket')
         console.error('  copy_cleanup_candidates_direct - Copy cleanup candidates using direct S3 copy (faster but may not work on R2)')
-        console.error('  delete_cleanup_candidates - Move orphaned files to 7-day trash (ALLOW_PERMANENT_R2_DELETE=true for permanent)')
+        console.error('  delete_cleanup_candidates - Move orphaned files to 7-day trash (DRY_RUN=false; ALLOW_PERMANENT_R2_DELETE=true for permanent)')
         process.exit(1)
     }
 
