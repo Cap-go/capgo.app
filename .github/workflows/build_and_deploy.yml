@@ -88,7 +88,7 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
       - name: Apply Supabase Migrations
-        run: supabase db push --include-all
+        run: supabase db push
       - name: Update functions
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
