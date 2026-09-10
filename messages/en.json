@@ -1763,7 +1763,7 @@
   "native-active-devices-android": "Active Android devices",
   "native-active-devices-help": "Distinct devices that reported app activity at least once during the period.",
   "native-active-devices-ios": "Active iOS devices",
-  "native-active-devices-last-30-days": "Last 30 days",
+  "native-active-devices-last-30-days": "Last 30 Days",
   "native-active-devices-selected-period": "Selected period",
   "native-active-devices-total": "Total active devices",
   "native-dependencies": "Native Dependencies",

@@ -88,4 +88,32 @@ describe('native usage backend helpers', () => {
       total: [7],
     })
   })
+
+  it('accumulates multiple non-canonical platform values into the unknown bucket', () => {
+    expect(nativeUsageTestUtils.summarizeNativeActiveDevices([
+      { platform: 'windows', devices: 4 },
+      { platform: 'Web', devices: 2 },
+      { platform: 'custom-os', devices: 1 },
+    ])).toEqual({
+      android: 0,
+      ios: 0,
+      electron: 0,
+      unknown: 7,
+      total: 7,
+    })
+
+    expect(nativeUsageTestUtils.buildDailyPlatformActiveTotals([
+      { date: '2024-10-24', platform: 'windows', devices: 3 },
+      { date: '2024-10-24', platform: 'Web', devices: 2 },
+      { date: '2024-10-25', platform: 'custom-os', devices: 5 },
+      { date: '2024-10-25', platform: 'linux', devices: 1 },
+    ], ['2024-10-24', '2024-10-25'])).toEqual({
+      labels: ['2024-10-24', '2024-10-25'],
+      android: [0, 0],
+      ios: [0, 0],
+      electron: [0, 0],
+      unknown: [5, 6],
+      total: [5, 6],
+    })
+  })
 })
