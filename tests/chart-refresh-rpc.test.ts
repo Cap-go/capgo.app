@@ -61,6 +61,26 @@ async function countStatsRefreshAuditLogs(): Promise<number> {
   return rows[0]?.count ?? 0
 }
 
+function isRetryableRpcTransportError(error: { message?: string } | null) {
+  return error?.message?.includes('fetch failed') === true
+}
+
+async function rpcWithTransportRetry<T>(
+  rpcCall: () => PromiseLike<{ data: T | null, error: { message?: string } | null }>,
+): Promise<{ data: T | null, error: { message?: string } | null }> {
+  let result: { data: T | null, error: { message?: string } | null }
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    result = await rpcCall()
+    if (!isRetryableRpcTransportError(result.error) || attempt === 2)
+      return result
+
+    await new Promise(resolve => setTimeout(resolve, 200 * (attempt + 1)))
+  }
+
+  return result!
+}
+
 async function getAppRefreshState(appId: string) {
   const { data, error } = await getSupabaseClient()
     .from('apps')
@@ -227,9 +247,9 @@ describe('chart refresh RPCs', () => {
       stats_updated_at: new Date().toISOString(),
     }).eq('app_id', freshAppId).throwOnError()
 
-    const { data, error } = await authorizedClient.rpc('request_org_chart_refresh', {
+    const { data, error } = await rpcWithTransportRetry(() => authorizedClient.rpc('request_org_chart_refresh', {
       org_id: orgId,
-    }).single()
+    }).single())
 
     expect(error).toBeNull()
     expect(data?.queued_app_ids).toEqual([staleAppId])
@@ -275,9 +295,9 @@ describe('chart refresh RPCs', () => {
     expect(beforeOrgError).toBeNull()
     expect(beforeOrgState?.stats_refresh_requested_at).toBeTruthy()
 
-    const { data, error } = await authorizedClient.rpc('request_org_chart_refresh', {
+    const { data, error } = await rpcWithTransportRetry(() => authorizedClient.rpc('request_org_chart_refresh', {
       org_id: orgId,
-    }).single()
+    }).single())
 
     expect(error).toBeNull()
     expect(data?.queued_app_ids).toEqual([])
