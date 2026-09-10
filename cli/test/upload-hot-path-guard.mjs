@@ -1,3 +1,7 @@
+export const SUPABASE_RPC_PATTERN = /\bsupabase(?:\s*\?)?\s*\.\s*rpc\s*\(/
+export const SUPABASE_FROM_PATTERN = /\bsupabase(?:\s*\?)?\s*\.\s*from\s*\(/
+export const FUNCTIONS_INVOKE_PATTERN = /\bfunctions(?:\s*\?)?\s*\.\s*invoke\s*\(/
+
 export function sliceUploadHotPath(uploadSource) {
   const autoBumpStart = uploadSource.indexOf('const autoBumpInput = normalizeAutoBumpInput')
   const autoBumpEnd = uploadSource.indexOf('if (options.autoSetBundle)', autoBumpStart)

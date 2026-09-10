@@ -120,6 +120,30 @@ try {
 
   assert.ok(fetchCalls.some(call => call.url.includes('/private/cli/check-permission')), 'denied path still uses HTTP permission check')
 
+  fetchCalls.length = 0
+  permissionAllowed = true
+
+  const SELF_HOST = {
+    supaHost: 'https://selfhost.example.com',
+    supaAnon: 'selfhost-anon-key',
+  }
+
+  await checkAppExistsAndHasPermissionOrgErr(
+    'ck_selfhost_key',
+    'com.example.app',
+    'app.read_bundles',
+    { silent: true, skip2FACheck: true, ...SELF_HOST },
+  )
+
+  const selfHostCall = fetchCalls.find(call => call.url.includes('/private/cli/check-permission'))
+  assert.ok(selfHostCall, 'expected self-host permission check')
+  assert.equal(
+    selfHostCall.url,
+    'https://selfhost.example.com/functions/v1/private/cli/check-permission',
+  )
+  assert.equal(selfHostCall.headers?.capgkey, 'ck_selfhost_key')
+  assert.equal(selfHostCall.headers?.Authorization, 'Bearer selfhost-anon-key')
+
   console.log('app permission helper tests passed')
 }
 finally {

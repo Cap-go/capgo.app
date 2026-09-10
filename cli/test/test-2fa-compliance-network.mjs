@@ -14,6 +14,20 @@ import { check2FAAccessForOrg } from '../src/utils.ts'
 
 const HOST = { supaHost: 'https://fake.supabase.co', supaAnon: 'fake-anon' }
 
+function assert2faAppRequest(url, init, apikey = 'ck_key', appId = 'com.example.app') {
+  assert.match(url, /\/private\/cli\/check-2fa-app$/)
+  assert.equal(init?.method ?? 'GET', 'POST')
+  assert.equal(init?.headers?.capgkey, apikey)
+  assert.deepEqual(JSON.parse(String(init?.body ?? '{}')), { app_id: appId })
+}
+
+function assert2faOrgRequest(url, init, apikey = 'ck_key', orgId = 'org_123') {
+  assert.match(url, /\/private\/cli\/check-2fa-org$/)
+  assert.equal(init?.method ?? 'GET', 'POST')
+  assert.equal(init?.headers?.capgkey, apikey)
+  assert.deepEqual(JSON.parse(String(init?.body ?? '{}')), { org_id: orgId })
+}
+
 assert.equal(isTransientNetworkError(new Error('TypeError: fetch failed')), true)
 assert.equal(isTransientNetworkError({ message: 'ECONNREFUSED' }), true)
 assert.equal(isTransientNetworkError(new Error('ETIMEDOUT')), true)
@@ -44,8 +58,14 @@ function installFetch(handler) {
 
 try {
   let networkAttempts = 0
-  installFetch(async (url) => {
-    if (url.includes('/private/cli/check-2fa-app') || url.includes('/private/cli/check-2fa-org')) {
+  installFetch(async (url, init) => {
+    if (url.includes('/private/cli/check-2fa-app')) {
+      assert2faAppRequest(url, init)
+      networkAttempts += 1
+      throw new TypeError('fetch failed')
+    }
+    if (url.includes('/private/cli/check-2fa-org')) {
+      assert2faOrgRequest(url, init)
       networkAttempts += 1
       throw new TypeError('fetch failed')
     }
@@ -55,8 +75,9 @@ try {
   assert.equal(networkAttempts, TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS)
 
   let orgNetworkAttempts = 0
-  installFetch(async (url) => {
+  installFetch(async (url, init) => {
     if (url.includes('/private/cli/check-2fa-org')) {
+      assert2faOrgRequest(url, init)
       orgNetworkAttempts += 1
       throw new TypeError('fetch failed')
     }
@@ -66,8 +87,9 @@ try {
   assert.equal(orgNetworkAttempts, TWO_FACTOR_PREFLIGHT_MAX_ATTEMPTS)
 
   let retryAttempts = 0
-  installFetch(async (url) => {
+  installFetch(async (url, init) => {
     if (url.includes('/private/cli/check-2fa-app')) {
+      assert2faAppRequest(url, init)
       retryAttempts += 1
       if (retryAttempts < 2)
         throw new TypeError('fetch failed')
@@ -78,9 +100,11 @@ try {
   await check2FAComplianceForApp('ck_key', 'com.example.app', true, HOST)
   assert.equal(retryAttempts, 2)
 
-  installFetch(async (url) => {
-    if (url.includes('/private/cli/check-2fa-app'))
+  installFetch(async (url, init) => {
+    if (url.includes('/private/cli/check-2fa-app')) {
+      assert2faAppRequest(url, init)
       return json({ reject: true })
+    }
     throw new Error(`Unexpected fetch: ${url}`)
   })
   await assert.rejects(
@@ -93,9 +117,11 @@ try {
     },
   )
 
-  installFetch(async (url) => {
-    if (url.includes('/private/cli/check-2fa-app'))
+  installFetch(async (url, init) => {
+    if (url.includes('/private/cli/check-2fa-app')) {
+      assert2faAppRequest(url, init)
       return json({ error: 'permission denied for function reject_access_due_to_2fa_for_app' }, 403)
+    }
     throw new Error(`Unexpected fetch: ${url}`)
   })
   await assert.rejects(

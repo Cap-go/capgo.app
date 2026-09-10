@@ -37,14 +37,7 @@ beforeAll(async () => {
     return
   await resetAndSeedAppData(APP_NAME_METADATA)
 
-  const warmData = getBaseData(APP_NAME_METADATA)
-  await warmEdgeEndpoint(getEndpointUrl('/updates'), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(warmData),
-  })
+  await warmEdgeEndpoint(getEndpointUrl('/ok'))
 }, 60_000)
 
 afterAll(async () => {

@@ -2549,7 +2549,12 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
   }
 }
 
-async function addChannelStep(orgId: string, apikey: string, appId: string) {
+async function addChannelStep(
+  orgId: string,
+  apikey: string,
+  appId: string,
+  hostOptions?: { supaHost?: string, supaAnon?: string },
+) {
   const pm = getPMAndCommand()
   pLog.success(`✅ App ${appId} added — accessible to all members of your organization`)
   pLog.info(`💡 Keep in mind: Capgo cannot deliver updates to app versions that don’t include Capacitor Updater.`)
@@ -2588,6 +2593,8 @@ async function addChannelStep(orgId: string, apikey: string, appId: string) {
       const addChannelRes = await addChannelInternal(channelName, appId, {
         default: true,
         apikey,
+        supaHost: hostOptions?.supaHost,
+        supaAnon: hostOptions?.supaAnon,
       }, true)
       if (!addChannelRes)
         s.stop(`Channel already added ✅`)
@@ -5653,7 +5660,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
     if (stepToSkip < 2) {
       renderCurrentStep(2)
-      channelName = await addChannelStep(orgId, options.apikey, appId)
+      channelName = await addChannelStep(orgId, options.apikey, appId, hostOptions)
       globalChannelName = channelName
       markStepDone(2, undefined, channelName)
     }

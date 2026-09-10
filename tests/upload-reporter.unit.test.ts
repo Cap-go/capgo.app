@@ -64,9 +64,10 @@ describe('bundle upload reporting', () => {
     const source = readFileSync(new URL('../cli/src/bundle/upload.ts', import.meta.url), 'utf8')
     const uploadHotPath = sliceUploadHotPath(source)
 
-    expect(uploadHotPath).not.toMatch(/supabase\.from\(/)
-    expect(uploadHotPath).not.toMatch(/supabase\.rpc\(/)
-    expect(uploadHotPath).not.toMatch(/functions\.invoke\(/)
+    const { FUNCTIONS_INVOKE_PATTERN, SUPABASE_FROM_PATTERN, SUPABASE_RPC_PATTERN } = await import('../cli/test/upload-hot-path-guard.mjs')
+    expect(uploadHotPath).not.toMatch(SUPABASE_FROM_PATTERN)
+    expect(uploadHotPath).not.toMatch(SUPABASE_RPC_PATTERN)
+    expect(uploadHotPath).not.toMatch(FUNCTIONS_INVOKE_PATTERN)
     expect(uploadHotPath).toContain('updateOrCreateVersion(ctx.apikey')
     expect(uploadHotPath).toContain('finishTusUploadVersion(ctx.apikey')
     expect(uploadHotPath).toContain('checkPlanValidUploadViaHttp(apikey, orgId, appid, true, uploadCtx.host)')

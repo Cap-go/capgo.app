@@ -82,11 +82,10 @@ async function hasAnyPermission(
   permissions: Permission[],
   scope: { appId?: string, orgId?: string },
 ): Promise<boolean> {
-  for (const permission of permissions) {
-    if (await checkPermission(c, permission, scope))
-      return true
-  }
-  return false
+  const results = await Promise.all(
+    permissions.map(permission => checkPermission(c, permission, scope)),
+  )
+  return results.some(Boolean)
 }
 
 async function hasApiKeyBindingOnApp(

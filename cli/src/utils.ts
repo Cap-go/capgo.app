@@ -1071,26 +1071,34 @@ export async function invokeCapgoCliApi<T = any>(
   const method = (options.method ?? 'POST').toUpperCase()
   let base: string
   let anonKey: string | undefined = options.supaAnon
-  if (options.supaHost && options.supaAnon && !isCapgoManagedSupabaseHost(options.supaHost)) {
-    base = `${assertSecureSupabaseHost(options.supaHost)}/functions/v1`
-  }
-  else {
-    const localConfig = await getRemoteConfig(true)
-    anonKey = options.supaAnon ?? localConfig.supaKey
-    if (
-      localConfig.supaHost
-      && localConfig.supaKey
-      && localConfig.hostApi === defaultApiHost
-      && !isCapgoManagedSupabaseHost(localConfig.supaHost)
-      && !(options.supaHost && isCapgoManagedSupabaseHost(options.supaHost))
-    ) {
-      base = `${assertSecureSupabaseHost(localConfig.supaHost)}/functions/v1`
-    }
-    else if (options.useFilesHost) {
-      base = localConfig.hostFilesApi
+  try {
+    if (options.supaHost && options.supaAnon && !isCapgoManagedSupabaseHost(options.supaHost)) {
+      base = `${assertSecureSupabaseHost(options.supaHost)}/functions/v1`
     }
     else {
-      base = localConfig.hostApi
+      const localConfig = await getRemoteConfig(true)
+      anonKey = options.supaAnon ?? localConfig.supaKey
+      if (
+        localConfig.supaHost
+        && localConfig.supaKey
+        && localConfig.hostApi === defaultApiHost
+        && !isCapgoManagedSupabaseHost(localConfig.supaHost)
+        && !(options.supaHost && isCapgoManagedSupabaseHost(options.supaHost))
+      ) {
+        base = `${assertSecureSupabaseHost(localConfig.supaHost)}/functions/v1`
+      }
+      else if (options.useFilesHost) {
+        base = localConfig.hostFilesApi
+      }
+      else {
+        base = localConfig.hostApi
+      }
+    }
+  }
+  catch (hostError) {
+    return {
+      data: null,
+      error: hostError instanceof Error ? hostError : new Error(String(hostError)),
     }
   }
 

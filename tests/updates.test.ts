@@ -110,15 +110,8 @@ async function postUpdateAfterChannelMutation(data: Partial<ReturnType<typeof ge
 beforeAll(async () => {
   await resetAndSeedAppData(APP_NAME_UPDATE)
 
-  // Warm the plugin worker before assertions. Cold first POST /updates can 502 under local workerd.
-  const warmData = getBaseData(APP_NAME_UPDATE)
-  await warmEdgeEndpoint(getEndpointUrl('/updates'), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(warmData),
-  })
+  // Warm the plugin worker isolate without recording update stats.
+  await warmEdgeEndpoint(getEndpointUrl('/ok'))
 }, 60_000)
 afterAll(async () => {
   await resetAppData(APP_NAME_UPDATE)
