@@ -477,7 +477,7 @@ function createAiHelpPrompt() {
   const organizations: CliAiPromptOrganization[] = resolvedOrganizationId
     ? [{
         id: resolvedOrganizationId,
-        name: orgNameInput.value.trim() || resolvedOrganizationName.trim() || resolvedOrganizationId,
+        name: (props.preOrg ? orgNameInput.value.trim() : resolvedOrganizationName.trim()) || resolvedOrganizationId,
         apps: [{ appId: resolvedAppId, name: resolvedAppName }],
       }]
     : []

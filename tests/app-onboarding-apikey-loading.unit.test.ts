@@ -82,6 +82,7 @@ describe('app onboarding API key loading state', () => {
     expect(promptBuilder).toContain('return buildCliAiSetupPrompt({')
     expect(promptBuilder).toContain('organizations,')
     expect(promptBuilder).toContain('skippedOrganizations: [],')
+    expect(promptBuilder).toContain('name: (props.preOrg ? orgNameInput.value.trim() : resolvedOrganizationName.trim()) || resolvedOrganizationId')
     expect(promptBuilder).toContain('selectedIntent.value === \'publish\' ? \'builder\' : selectedIntent.value')
     expect(promptBuilder).not.toContain('t(\'app-onboarding-ai-help-prompt\'')
     expect(englishMessages['app-onboarding-ai-help-prompt']).toBeUndefined()
