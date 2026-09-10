@@ -1,7 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { parseAppOnboarding } from '../supabase/functions/_backend/utils/appOnboarding.ts'
-import { BASE_URL, createDirectApiKeyWithBindings, executeSQL, fetchTestRequest, getAuthHeaders, getAuthHeadersForCredentials, getSupabaseClient, headers, ORG_ID, ORG_ID_2, resetAndSeedAppData, resetAppData, resetAppDataStats, SUPABASE_ANON_KEY, USER_EMAIL_NONMEMBER, USER_ID, USER_ID_2, USER_PASSWORD_NONMEMBER } from './test-utils.ts'
+import { BASE_URL, createDirectApiKeyWithBindings, executeSQL, fetchTestRequest, getAuthHeaders, getAuthHeadersForCredentials, getSupabaseClient, headers, ORG_ID, ORG_ID_2, resetAndSeedAppData, resetAppData, resetAppDataStats, SUPABASE_ANON_KEY, USER_EMAIL_NONMEMBER, USER_ID, USER_ID_2, USER_PASSWORD_NONMEMBER, warmEdgeEndpoint } from './test-utils.ts'
+
+// Cold first /app request can 502 under Deno shard load (Kong upstream invalid response).
+beforeAll(async () => {
+  await warmEdgeEndpoint(`${BASE_URL}/app/com.warm.isolate.probe`, {
+    method: 'GET',
+    headers,
+  })
+})
 
 function isDuplicateAppCreationError(body: any): boolean {
   if (!body || typeof body !== 'object')
