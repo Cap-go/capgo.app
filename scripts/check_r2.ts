@@ -404,22 +404,38 @@ async function main() {
       }
     }
 
-    if (deleteMode === 'permanent') {
-      for (let i = 0; i < candidates.length; i += DELETE_CONCURRENCY) {
-        const batch = candidates.slice(i, i + DELETE_CONCURRENCY)
-        const results = await Promise.all(batch.map(candidate => limiter.run(() => permanentDeleteCandidate(candidate))))
-        errorCount += results.filter(result => result !== 'ok' && result !== 'skipped').length
+    async function runCandidateSafely<T extends { key: string }>(
+      candidate: T,
+      run: (candidate: T) => Promise<'ok' | 'skipped' | 'failed'>,
+    ): Promise<'ok' | 'skipped' | 'failed'> {
+      try {
+        return await run(candidate)
       }
-    }
-    else {
-      for (let i = 0; i < candidates.length; i += DELETE_CONCURRENCY) {
-        const batch = candidates.slice(i, i + DELETE_CONCURRENCY)
-        const results = await Promise.all(batch.map(candidate => limiter.run(() => moveKeyToTrash(candidate))))
-        errorCount += results.filter(result => result === 'failed').length
+      catch (error) {
+        console.error(`Failed to process ${candidate.key}:`, error)
+        return 'failed'
       }
     }
 
-    await claimPool.end()
+    try {
+      if (deleteMode === 'permanent') {
+        for (let i = 0; i < candidates.length; i += DELETE_CONCURRENCY) {
+          const batch = candidates.slice(i, i + DELETE_CONCURRENCY)
+          const results = await Promise.all(batch.map(candidate => limiter.run(() => runCandidateSafely(candidate, permanentDeleteCandidate))))
+          errorCount += results.filter(result => result !== 'ok' && result !== 'skipped').length
+        }
+      }
+      else {
+        for (let i = 0; i < candidates.length; i += DELETE_CONCURRENCY) {
+          const batch = candidates.slice(i, i + DELETE_CONCURRENCY)
+          const results = await Promise.all(batch.map(candidate => limiter.run(() => runCandidateSafely(candidate, moveKeyToTrash))))
+          errorCount += results.filter(result => result === 'failed').length
+        }
+      }
+    }
+    finally {
+      await claimPool.end()
+    }
 
     if (errorCount > 0)
       process.exit(1)

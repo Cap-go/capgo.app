@@ -649,9 +649,18 @@ export function getDatabaseURL(): string {
     return DEFAULT_DB_URL
 }
 
+function formatPgClientLogHost(dbUrl: string): string {
+    try {
+        return new URL(dbUrl).host
+    }
+    catch {
+        return '[redacted-non-url-connection]'
+    }
+}
+
 export function getPgClient(c: Context, maxConnections = 1) {
     const dbUrl = getDatabaseURL()
-    console.log({ message: 'getPgClient', dbHost: new URL(dbUrl).host })
+    console.log({ message: 'getPgClient', dbHost: formatPgClientLogHost(dbUrl) })
     return new Pool({
         connectionString: dbUrl,
         max: maxConnections,

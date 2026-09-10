@@ -70,21 +70,43 @@ app.post('/', middlewareKey(), async (c) => {
       const exist = await s3.checkIfExist(c, filePath)
       if (exist)
         throw simpleError('error_already_exist', 'Error already exist', { exist })
-    })
 
-    const url = await s3.getUploadUrl(c, filePath)
-    if (!url)
-      throw simpleError('cannot_get_upload_link', 'Cannot get upload link')
-
-    await withR2PathCoordinationLock(pgPool, filePath, async () => {
-      const { error: changeError } = await supabaseApikey(c, capgkey)
+      const { data: reserved, error: changeError } = await supabaseApikey(c, capgkey)
         .from('app_versions')
         .update({ r2_path: filePath })
         .eq('id', version.id)
+        .is('r2_path', null)
+        .select('id')
+        .maybeSingle()
 
       if (changeError)
         throw simpleError('cannot_update_supabase', 'Cannot update supabase', { changeError })
+
+      if (!reserved) {
+        const { data: current, error: currentError } = await supabaseApikey(c, capgkey)
+          .from('app_versions')
+          .select('r2_path')
+          .eq('id', version.id)
+          .single()
+        if (currentError)
+          throw simpleError('cannot_update_supabase', 'Cannot update supabase', { currentError })
+        if (current?.r2_path === filePath)
+          throw simpleError('upload_in_progress', 'Upload link already being generated for this version')
+        throw simpleError('cannot_update_supabase', 'Version already has a different r2_path')
+      }
+
+      reservedR2Path = true
     })
+
+    const url = await s3.getUploadUrl(c, filePath)
+    if (!url) {
+      await supabaseApikey(c, capgkey)
+        .from('app_versions')
+        .update({ r2_path: null })
+        .eq('id', version.id)
+        .eq('r2_path', filePath)
+      throw simpleError('cannot_get_upload_link', 'Cannot get upload link')
+    }
 
     await sendEventToTracking(c, {
       channel: 'upload-get-link',
