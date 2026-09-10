@@ -91,13 +91,6 @@ function buildBundleInfoRequest(c: Context, versionId: number) {
   }
 }
 
-async function getBundleInfo(c: Context, versionId: number): Promise<BundleInfoCache | null> {
-  const cacheEntry = buildBundleInfoRequest(c, versionId)
-  if (!cacheEntry)
-    return null
-  return cacheEntry.helper.matchJson<BundleInfoCache>(cacheEntry.request)
-}
-
 function setBundleInfo(c: Context, versionId: number, data: BundleInfoCache) {
   return backgroundTask(c, async () => {
     const cacheEntry = buildBundleInfoRequest(c, versionId)
