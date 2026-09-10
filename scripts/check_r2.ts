@@ -82,7 +82,7 @@ async function main() {
         .from('app_versions')
         .select('r2_path')
         .in('r2_path', batch)
-        .eq('deleted', false)
+        .or('deleted.is.null,deleted.eq.false')
         .is('deleted_at', null)
       if (error)
         throw error
@@ -108,7 +108,7 @@ async function main() {
           .select('name')
           .eq('app_id', appId)
           .in('name', versionNames)
-          .eq('deleted', false)
+          .or('deleted.is.null,deleted.eq.false')
           .is('deleted_at', null)
         if (legacyError)
           throw legacyError

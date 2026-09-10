@@ -24,6 +24,9 @@ export function parseLegacyAppsBundleKey(key: string): { appId: string, versionN
 /** Keep PostgREST `.in()` batches small enough for gateway URL limits. */
 const REVALIDATION_BATCH_SIZE = 50
 
+/** Live app_versions row predicate (negation of isVersionDeleted); NULL deleted counts as active. */
+export const APP_VERSION_NOT_DELETED_SQL = 'deleted IS NOT TRUE AND deleted_at IS NULL'
+
 /** Drop candidates that now have app_versions rows (shared by dry-run and execute paths). */
 export async function revalidateDeleteCandidatesAgainstAppVersions(
   candidates: DeleteFileCandidate[],
@@ -330,7 +333,7 @@ export async function withOrphanR2DeleteClaim<T>(
     if (scope) {
       const locked = await client.query(
         `SELECT r2_path FROM public.app_versions
-         WHERE app_id = $1 AND name = $2 AND deleted = false AND deleted_at IS NULL
+         WHERE app_id = $1 AND name = $2 AND ${APP_VERSION_NOT_DELETED_SQL}
          FOR UPDATE`,
         [scope.appId, scope.versionName],
       )
@@ -345,7 +348,7 @@ export async function withOrphanR2DeleteClaim<T>(
 
     const byPath = await client.query(
       `SELECT 1 FROM public.app_versions
-       WHERE r2_path = $1 AND deleted = false AND deleted_at IS NULL
+       WHERE r2_path = $1 AND ${APP_VERSION_NOT_DELETED_SQL}
        LIMIT 1
        FOR UPDATE`,
       [key],

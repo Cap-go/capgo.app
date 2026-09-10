@@ -20,6 +20,7 @@ import {
   copyS3LiteObjectIfMatch,
   moveS3LiteObjectToTrash,
   withOrphanR2DeleteClaim,
+  APP_VERSION_NOT_DELETED_SQL,
   resolveOpsDeleteMode,
   resolveTrashDestinationKey,
   R2_TRASH_PREFIX,
@@ -944,6 +945,11 @@ describe('copyS3LiteObjectIfMatch', () => {
 })
 
 describe('withOrphanR2DeleteClaim', () => {
+  it('treats legacy deleted=NULL rows as live references', () => {
+    expect(APP_VERSION_NOT_DELETED_SQL).toContain('IS NOT TRUE')
+    expect(APP_VERSION_NOT_DELETED_SQL).not.toContain('deleted = false')
+  })
+
   it('skips delete when app_versions already references the key under row lock', async () => {
     const client = {
       query: vi.fn(async (sql: string) => {

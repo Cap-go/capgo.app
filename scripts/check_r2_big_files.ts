@@ -4,7 +4,7 @@ import { S3Client as S3ClientLite } from '@bradenmacdonald/s3-lite-client/'
 import { Pool } from 'pg'
 import { Context } from 'vm'
 import { permanentDeleteAwsLiveKey } from './r2_cleanup/aws_permanent_delete.ts'
-import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, buildAwsTrashCopyPreserveFromHead, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, ConcurrencyLimiter, extractR2TrashSourceVersionMarker, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, mergeTrashCopyMetadata, normalizedS3EtagsMatch, parseLegacyAppsBundleKey, parseS3ListingLastModified, quoteS3CopySourceIfMatchEtag, resolveOpsDeleteMode, resolveTrashDestinationKey, withOrphanR2DeleteClaim } from './r2_trash_utils.ts'
+import { APP_VERSION_NOT_DELETED_SQL, applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, buildAwsTrashCopyPreserveFromHead, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, ConcurrencyLimiter, extractR2TrashSourceVersionMarker, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, mergeTrashCopyMetadata, normalizedS3EtagsMatch, parseLegacyAppsBundleKey, parseS3ListingLastModified, quoteS3CopySourceIfMatchEtag, resolveOpsDeleteMode, resolveTrashDestinationKey, withOrphanR2DeleteClaim } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const CHECKPOINT_FILE = './objects_checkpoint.json'
@@ -1122,7 +1122,7 @@ async function prepare_cleanup_zip() {
 
         // Single query to check all zip files at once
         const result = await pool.query(
-            'SELECT r2_path FROM app_versions WHERE r2_path = ANY($1) AND deleted = false AND deleted_at IS NULL',
+            `SELECT r2_path FROM app_versions WHERE r2_path = ANY($1) AND ${APP_VERSION_NOT_DELETED_SQL}`,
             [zipFileKeys]
         )
 
@@ -1618,7 +1618,7 @@ async function delete_cleanup_candidates() {
         for (const [appId, entries] of legacyByApp) {
             const versionNames = entries.map(entry => entry.versionName)
             const result = await pool.query(
-                'SELECT name FROM app_versions WHERE app_id = $1 AND name = ANY($2) AND deleted = false AND deleted_at IS NULL',
+                `SELECT name FROM app_versions WHERE app_id = $1 AND name = ANY($2) AND ${APP_VERSION_NOT_DELETED_SQL}`,
                 [appId, versionNames],
             )
             const liveNames = new Set((result.rows as { name: string }[]).map(row => row.name))
@@ -1634,7 +1634,7 @@ async function delete_cleanup_candidates() {
             return true
 
         const byPath = await pool.query(
-            'SELECT 1 FROM app_versions WHERE r2_path = $1 AND deleted = false AND deleted_at IS NULL LIMIT 1',
+            `SELECT 1 FROM app_versions WHERE r2_path = $1 AND ${APP_VERSION_NOT_DELETED_SQL} LIMIT 1`,
             [key],
         )
         if ((byPath.rowCount ?? 0) > 0) {
@@ -1647,7 +1647,7 @@ async function delete_cleanup_candidates() {
             return false
 
         const byLegacy = await pool.query(
-            'SELECT 1 FROM app_versions WHERE app_id = $1 AND name = $2 AND deleted = false AND deleted_at IS NULL LIMIT 1',
+            `SELECT 1 FROM app_versions WHERE app_id = $1 AND name = $2 AND ${APP_VERSION_NOT_DELETED_SQL} LIMIT 1`,
             [parsed.appId, parsed.versionName],
         )
         if ((byLegacy.rowCount ?? 0) > 0)
@@ -1661,7 +1661,7 @@ async function delete_cleanup_candidates() {
         for (let i = 0; i < candidateKeys.length; i += REVALIDATION_BATCH_SIZE) {
             const batch = candidateKeys.slice(i, i + REVALIDATION_BATCH_SIZE)
             const result = await pool.query(
-                'SELECT r2_path FROM app_versions WHERE r2_path = ANY($1) AND deleted = false AND deleted_at IS NULL',
+                `SELECT r2_path FROM app_versions WHERE r2_path = ANY($1) AND ${APP_VERSION_NOT_DELETED_SQL}`,
                 [batch],
             )
             for (const row of result.rows as { r2_path: string }[])
