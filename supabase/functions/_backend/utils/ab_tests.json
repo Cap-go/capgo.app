@@ -9,6 +9,18 @@
       "B": { "bento_tag": "ab:no_new_emails" }
     }
   },
+  "new_channel": {
+    "comment": "Shows the guided channel education and creation flow.",
+    "audience": "self_signup",
+    "intents": ["ota", "both"],
+    "treatment_percentage": 50,
+    "treatment_branch": "A",
+    "control_branch": "B",
+    "branches": {
+      "A": { "bento_tag": "ab:new_channel" },
+      "B": { "bento_tag": "ab:no_new_channel" }
+    }
+  },
   "webnativeapp_publish_intent": {
     "comment": "Shows a 'convert my webapp to mobile' intent option. Does not change the rest of the flow by itself.",
     "audience": "self_signup",

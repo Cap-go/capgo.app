@@ -4,6 +4,9 @@ import type {
   OnboardingIntent,
 } from '~/utils/onboardingProgressAnalytics'
 import {
+  NEW_CHANNEL_ANALYTICS_VERSION,
+  NEW_CHANNEL_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION,
+  NEW_CHANNEL_PUBLISH_INTENT_ANALYTICS_VERSION,
   ONBOARDING_ANALYTICS_VERSION,
   WEBNATIVE_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION,
   WEBNATIVE_PUBLISH_INTENT_ANALYTICS_VERSION,
@@ -11,6 +14,7 @@ import {
 
 export const WEBNATIVE_PUBLISH_INTENT_AB_TEST = 'webnativeapp_publish_intent'
 export const WEBNATIVE_DEVELOPMENT_ENVIRONMENT_AB_TEST = 'webnativeapp_development_environment'
+export const NEW_CHANNEL_AB_TEST = 'new_channel'
 
 export type OnboardingABTestBranch = 'A' | 'B' | 'C' | 'D'
 
@@ -62,12 +66,25 @@ export function hasWebNativeDevelopmentEnvironmentTreatment(onboarding: unknown)
   return getABTestBranch(onboarding, WEBNATIVE_DEVELOPMENT_ENVIRONMENT_AB_TEST) === 'C'
 }
 
+export function hasNewChannelTreatment(onboarding: unknown): boolean {
+  return getABTestBranch(onboarding, NEW_CHANNEL_AB_TEST) === 'A'
+}
+
 export function shouldShowWebNativePublishIntent(onboarding: unknown): boolean {
   return hasWebNativePublishIntentTreatment(onboarding)
     || hasWebNativeDevelopmentEnvironmentTreatment(onboarding)
 }
 
-export function resolveOnboardingAnalyticsVersion(onboarding: unknown): OnboardingAnalyticsVersion {
+export function resolveOnboardingAnalyticsVersion(
+  onboarding: unknown,
+  intent: OnboardingIntent | null = null,
+): OnboardingAnalyticsVersion {
+  if (hasNewChannelTreatment(onboarding) && hasWebNativeDevelopmentEnvironmentTreatment(onboarding))
+    return NEW_CHANNEL_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION
+  if (hasNewChannelTreatment(onboarding) && hasWebNativePublishIntentTreatment(onboarding) && (intent === 'ota' || intent === 'both'))
+    return NEW_CHANNEL_PUBLISH_INTENT_ANALYTICS_VERSION
+  if (hasNewChannelTreatment(onboarding))
+    return NEW_CHANNEL_ANALYTICS_VERSION
   if (hasWebNativeDevelopmentEnvironmentTreatment(onboarding))
     return WEBNATIVE_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION
   if (hasWebNativePublishIntentTreatment(onboarding))
