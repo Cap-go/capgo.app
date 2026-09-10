@@ -975,40 +975,62 @@ export async function readNativeDailyPlatformActiveCF(
   if (!c.env.DEVICE_USAGE)
     return []
 
-  const query = `SELECT
+  const whereClause = `index1 = '${escapeSqlString(app_id)}'
+  AND timestamp >= toDateTime('${formatDateCF(period_start)}')
+  AND timestamp < toDateTime('${formatDateCF(period_end)}')`
+
+  const platformQuery = `SELECT
   formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
   if(blob4 != '', blob4, if(double1 = 1, 'ios', if(double1 = 2, 'electron', if(double1 = 0, 'android', 'unknown')))) AS platform,
   COUNT(DISTINCT blob1) AS devices
 FROM device_usage
 WHERE
-  index1 = '${escapeSqlString(app_id)}'
-  AND timestamp >= toDateTime('${formatDateCF(period_start)}')
-  AND timestamp < toDateTime('${formatDateCF(period_end)}')
+  ${whereClause}
 GROUP BY date, platform
-UNION ALL
-SELECT
+ORDER BY date, platform`
+
+  const totalQuery = `SELECT
   formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
   'total' AS platform,
   COUNT(DISTINCT blob1) AS devices
 FROM device_usage
 WHERE
-  index1 = '${escapeSqlString(app_id)}'
-  AND timestamp >= toDateTime('${formatDateCF(period_start)}')
-  AND timestamp < toDateTime('${formatDateCF(period_end)}')
+  ${whereClause}
 GROUP BY date
-ORDER BY date, platform`
+ORDER BY date`
 
-  cloudlog({ requestId: c.get('requestId'), message: 'readNativeDailyPlatformActiveCF query', query })
+  cloudlog({ requestId: c.get('requestId'), message: 'readNativeDailyPlatformActiveCF query', query: platformQuery })
   try {
-    const rows = await runQueryToCFA<{ date: string, platform: string, devices: number | string }>(c, query)
-    return rows.map(row => ({
-      date: row.date,
-      platform: row.platform || 'unknown',
-      devices: Math.max(0, Number(row.devices) || 0),
-    }))
+    const [platformRows, totalRows] = await Promise.all([
+      runQueryToCFA<{ date: string, platform: string, devices: number | string }>(c, platformQuery),
+      runQueryToCFA<{ date: string, platform: string, devices: number | string }>(c, totalQuery),
+    ])
+
+    const rows = [
+      ...platformRows.map(row => ({
+        date: row.date,
+        platform: row.platform || 'unknown',
+        devices: Math.max(0, Number(row.devices) || 0),
+      })),
+      ...totalRows.map(row => ({
+        date: row.date,
+        platform: 'total',
+        devices: Math.max(0, Number(row.devices) || 0),
+      })),
+    ]
+
+    rows.sort((left, right) => {
+      if (left.date !== right.date)
+        return left.date < right.date ? -1 : 1
+      if (left.platform === right.platform)
+        return 0
+      return left.platform < right.platform ? -1 : 1
+    })
+
+    return rows
   }
   catch (e) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native daily platform active', error: serializeError(e), query })
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native daily platform active', error: serializeError(e), query: platformQuery })
     throw e
   }
 }
