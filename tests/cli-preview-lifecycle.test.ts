@@ -105,41 +105,38 @@ let authHeaders: Record<string, string>
 const apiKeyIds: number[] = []
 
 async function createAppApiKey(name: string, roleName = 'app_preview'): Promise<ApiKeyResponse> {
-  const createResponse = await fetch(`${BASE_URL}/apikey`, {
-    method: 'POST',
-    headers: authHeaders,
-    body: JSON.stringify({
-      name,
-      bindings: await appApiKeyBindings(APPNAME, roleName),
-    }),
+  const body = JSON.stringify({
+    name,
+    bindings: await appApiKeyBindings(APPNAME, roleName),
   })
+  let lastStatus = 0
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    const createResponse = await fetch(`${BASE_URL}/apikey`, {
+      method: 'POST',
+      headers: authHeaders,
+      body,
+    })
+    lastStatus = createResponse.status
+    if (createResponse.status === 502 || createResponse.status === 503) {
+      console.error(`[createAppApiKey] attempt=${attempt} status=${createResponse.status}`)
+      await new Promise(resolve => setTimeout(resolve, 500 * attempt))
+      continue
+    }
 
-  expect(createResponse.status).toBe(200)
-  const apiKey = await createResponse.json<ApiKeyResponse>()
-  apiKeyIds.push(apiKey.id)
-  expect(apiKey.key).toBeTruthy()
-  return apiKey
+    expect(createResponse.status).toBe(200)
+    const apiKey = await createResponse.json<ApiKeyResponse>()
+    apiKeyIds.push(apiKey.id)
+    expect(apiKey.key).toBeTruthy()
+    return apiKey
+  }
+  throw new Error(`[createAppApiKey] isolate still returning ${lastStatus} after 5 attempts`)
 }
 
 beforeAll(async () => {
   authHeaders = await getAuthHeaders()
   await resetAndSeedAppData(APPNAME, seedOptions)
   await warmEdgeEndpoint('/apikey', { method: 'GET', headers: authHeaders })
-
-  const warmResponse = await fetch(`${BASE_URL}/apikey`, {
-    method: 'POST',
-    headers: authHeaders,
-    body: JSON.stringify({
-      name: `warm-${id}`,
-      bindings: await appApiKeyBindings(APPNAME, 'app_preview'),
-    }),
-  })
-  if (!warmResponse.ok)
-    throw new Error(`Failed to warm /apikey POST route: ${warmResponse.status}`)
-  const warmed = await warmResponse.json<ApiKeyResponse>()
-  if (!warmed?.id)
-    throw new Error('Failed to warm /apikey POST route: response missing id')
-  apiKeyIds.push(warmed.id)
+  await createAppApiKey(`warm-${id}`)
 })
 
 afterAll(async () => {

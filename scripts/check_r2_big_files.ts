@@ -3,7 +3,7 @@ import { writeFileSync, existsSync, readFileSync } from 'fs'
 import { S3Client as S3ClientLite } from '@bradenmacdonald/s3-lite-client/'
 import { Pool } from 'pg'
 import { Context } from 'vm'
-import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, ConcurrencyLimiter, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, quoteS3CopySourceIfMatchEtag, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
+import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, ConcurrencyLimiter, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, permanentDeleteAwsLiveKey, quoteS3CopySourceIfMatchEtag, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const CHECKPOINT_FILE = './objects_checkpoint.json'
@@ -1739,27 +1739,25 @@ async function delete_cleanup_candidates() {
             }
 
             if (deleteMode === 'permanent') {
-                try {
-                    const deleteCommand = new DeleteObjectCommand({
-                        Bucket: S3_BUCKET,
-                        Key: file.key,
-                        IfMatch: sourceEtag,
-                    })
-                    applyR2ConditionalDeleteMiddleware(deleteCommand.middlewareStack, { etag: sourceEtag, lastModified: sourceLastModified })
-                    await s3.send(deleteCommand)
-                }
-                catch (deleteError: any) {
-                    if (isObjectNotFoundError(deleteError))
-                        return { key: file.key, success: true, error: null, skipped: true }
-                    if (isPreconditionFailedError(deleteError)) {
-                        return {
-                            key: file.key,
-                            success: true,
-                            error: 'Cleanup candidate stale: live object changed before permanent delete',
-                            skipped: true,
-                        }
+                const outcome = await permanentDeleteAwsLiveKey(s3, S3_BUCKET, file.key, sourceEtag, sourceLastModified)
+                switch (outcome) {
+                  case 'deleted':
+                    break
+                  case 'skipped_missing':
+                    return { key: file.key, success: true, error: null, skipped: true }
+                  case 'skipped_changed':
+                    return {
+                      key: file.key,
+                      success: true,
+                      error: 'Cleanup candidate stale: live object changed before permanent delete',
+                      skipped: true,
                     }
-                    throw deleteError
+                  case 'failed':
+                    return {
+                      key: file.key,
+                      success: false,
+                      error: 'Permanent delete guards failed; source retained',
+                    }
                 }
             }
             else {

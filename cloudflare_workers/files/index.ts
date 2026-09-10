@@ -48,19 +48,10 @@ function isCacheableAttachmentRead(request: Request): boolean {
   return hasAttachmentReadPath(new URL(request.url).pathname)
 }
 
-function isCacheablePreviewRead(request: Request): boolean {
-  if (request.method !== 'GET' || request.headers.has('range'))
-    return false
-
-  const hostname = getRequestHostname(request).toLowerCase()
-  if (!isPreviewSubdomain(hostname))
-    return false
-
-  const firstLabel = hostname.split('.', 1)[0]
-  if (/^c\d+-/.test(firstLabel))
-    return false
-
-  return new URL(request.url).pathname !== '/.capgo/preview.json'
+function isCacheablePreviewRead(_request: Request): boolean {
+  // Preview file responses use Cache-Control: no-store (soft-deleted bundles must not
+  // be served from a long-lived outer worker cache that predates the no-store change).
+  return false
 }
 
 function buildWorkersCacheKey(request: Request): string | null {

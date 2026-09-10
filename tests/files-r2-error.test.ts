@@ -157,14 +157,12 @@ describe('files worker cache keys', () => {
     expect(cacheKey).toBe('/files-cache/files/read/attachments/orgs/test/apps/app/bundle.zip?key=checksum')
   })
 
-  it('should include preview host in cache keys', async () => {
+  it('should bypass outer worker cache for preview reads (no-store responses)', async () => {
     const { filesWorkerCacheTestUtils } = await import('../cloudflare_workers/files/index.ts')
 
-    const cacheKey = filesWorkerCacheTestUtils.buildWorkersCacheKey(
+    expect(filesWorkerCacheTestUtils.buildWorkersCacheKey(
       new Request('https://app-123.preview.capgo.app/index.html?b=2&a=1'),
-    )
-
-    expect(cacheKey).toBe('/preview-cache/app-123.preview.capgo.app/index.html?a=1&b=2')
+    )).toBeNull()
   })
 
   it('should bypass channel preview and range requests', async () => {

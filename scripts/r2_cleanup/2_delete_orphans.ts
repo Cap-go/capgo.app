@@ -322,8 +322,7 @@ async function listExactKeyEtags(keys: string[]): Promise<Array<{ key: string, e
   return targets.filter((target): target is { key: string, etag: string, lastModified?: Date } => target !== null)
 }
 
-async function listPrefixKeys(prefix: string): Promise<Array<{ key: string, etag?: string, lastModified?: Date }>> {
-  const keys: Array<{ key: string, etag?: string, lastModified?: Date }> = []
+async function streamProcessPrefix(prefix: string): Promise<void> {
   let continuationToken: string | undefined
 
   while (true) {
@@ -334,6 +333,7 @@ async function listPrefixKeys(prefix: string): Promise<Array<{ key: string, etag
       MaxKeys: LIST_PAGE_SIZE,
     }))
 
+    const pageKeys: Array<{ key: string, etag?: string, lastModified?: Date }> = []
     for (const obj of response.Contents ?? []) {
       if (!obj.Key || !isLiveR2Key(obj.Key))
         continue
@@ -343,24 +343,19 @@ async function listPrefixKeys(prefix: string): Promise<Array<{ key: string, etag
         totalErrors += 1
         continue
       }
-      keys.push({ key: obj.Key, etag: obj.ETag, lastModified: obj.LastModified })
+      pageKeys.push({ key: obj.Key, etag: obj.ETag, lastModified: obj.LastModified })
+    }
+
+    if (pageKeys.length > 0) {
+      if (deleteMode === 'permanent')
+        await permanentDeleteBatch(pageKeys)
+      else
+        await processKeyBatch(pageKeys)
     }
 
     if (!response.IsTruncated)
       break
     continuationToken = response.NextContinuationToken
-  }
-
-  return keys
-}
-
-async function streamProcessPrefix(prefix: string): Promise<void> {
-  const liveKeys = await listPrefixKeys(prefix)
-
-  if (deleteMode === 'permanent')
-    await permanentDeleteBatch(liveKeys)
-  else {
-    await processKeyBatch(liveKeys)
   }
 }
 

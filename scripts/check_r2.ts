@@ -3,7 +3,7 @@ import type { _Object, ListObjectsV2CommandOutput } from '@aws-sdk/client-s3'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'// supabase.types.ts'
 import { CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { createClient } from '@supabase/supabase-js'
-import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, ConcurrencyLimiter, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, quoteS3CopySourceIfMatchEtag, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
+import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, ConcurrencyLimiter, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, permanentDeleteAwsLiveKey, quoteS3CopySourceIfMatchEtag, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const MAGIC_TO_DELETE = './tmp/magic_to_delete6.txt'
@@ -66,7 +66,7 @@ async function main() {
     const files = JSON.parse(await Bun.file(MAGIC_TO_DELETE).text()) as _Object[]
     let candidates = files
       .filter(file => file.Key && isLiveR2Key(file.Key))
-      .map(file => ({ key: file.Key!, etag: file.ETag }))
+      .map(file => ({ key: file.Key!, etag: file.ETag, lastModified: file.LastModified }))
     let errorCount = 0
 
     const supabase = supabaseAdmin()
@@ -129,54 +129,28 @@ async function main() {
       }
     }
 
-    async function permanentDeleteCandidate(candidate: { key: string, etag?: string }): Promise<'ok' | 'skipped' | 'failed'> {
-      const { key, etag: candidateEtag } = candidate
+    async function permanentDeleteCandidate(candidate: { key: string, etag?: string, lastModified?: Date }): Promise<'ok' | 'skipped' | 'failed'> {
+      const { key, etag: candidateEtag, lastModified: candidateLastModified } = candidate
       if (!candidateEtag) {
         console.warn(`Failed ${key}: missing discovery ETag; source retained`)
         return 'failed'
       }
-      let sourceEtag: string | undefined
-      let sourceLastModified: Date | undefined
-      try {
-        const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
-        sourceEtag = head.ETag
-        sourceLastModified = head.LastModified
-        if (candidateEtag !== sourceEtag) {
-          console.warn(`Skipped ${key}: live object etag changed since discovery`)
-          return 'skipped'
-        }
-      }
-      catch (headError) {
-        if (isObjectNotFoundError(headError))
-          return 'skipped'
-        console.error(`Failed to head ${key} before permanent delete:`, headError)
-        return 'failed'
-      }
 
-      if (!sourceEtag || !sourceLastModified) {
-        console.warn(`Failed ${key}: live object has no ETag or Last-Modified; source retained`)
-        return 'failed'
-      }
-
-      try {
-        const deleteCommand = new DeleteObjectCommand({
-          Bucket: S3_BUCKET,
-          Key: key,
-          IfMatch: sourceEtag,
-        })
-        applyR2ConditionalDeleteMiddleware(deleteCommand.middlewareStack, { etag: sourceEtag, lastModified: sourceLastModified })
-        await s3.send(deleteCommand)
-        return 'ok'
-      }
-      catch (deleteError) {
-        if (isObjectNotFoundError(deleteError))
+      const outcome = await permanentDeleteAwsLiveKey(s3, S3_BUCKET, key, candidateEtag, candidateLastModified)
+      switch (outcome) {
+        case 'deleted':
+          return 'ok'
+        case 'skipped_missing':
           return 'skipped'
-        if (isPreconditionFailedError(deleteError)) {
-          console.warn(`Skipped permanent delete for ${key}: live object changed since discovery`)
+        case 'skipped_changed':
+          console.warn(`Skipped ${key}: live object changed since discovery`)
           return 'skipped'
-        }
-        console.error(`Failed to permanently delete ${key}:`, deleteError)
-        return 'failed'
+        case 'failed':
+          if (!candidateLastModified)
+            console.warn(`Failed ${key}: missing discovery Last-Modified; source retained`)
+          else
+            console.warn(`Failed ${key}: permanent delete guards failed; source retained`)
+          return 'failed'
       }
     }
 
