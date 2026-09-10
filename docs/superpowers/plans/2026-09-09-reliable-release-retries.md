@@ -579,14 +579,14 @@ Expected: schema synchronization is structurally downstream from both database t
 
 ### Task 10: Revised verification and same-PR handoff
 
-- [ ] **Step 1: Run format/lint and typecheck**
+- [x] **Step 1: Run format/lint and typecheck**
 
 ```bash
 bun lint
 bun typecheck
 ```
 
-- [ ] **Step 2: Run the complete focused release suite**
+- [x] **Step 2: Run the complete focused release suite**
 
 ```bash
 bunx vitest run tests/release-scope.test.ts tests/publish-release.test.ts tests/resolve-deploy-tag.test.ts tests/deploy-scope.test.ts tests/publish-schema-types.test.ts tests/capgo-release-workflow.unit.test.ts tests/read-replica-release-workflow.unit.test.ts
