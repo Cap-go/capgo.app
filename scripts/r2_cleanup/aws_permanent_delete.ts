@@ -16,9 +16,13 @@ export async function permanentDeleteAwsLiveKey(
   s3: AwsS3Client,
   bucket: string,
   key: string,
+  candidateEtag?: string,
 ): Promise<AwsPermanentDeleteOutcome> {
   if (!isLiveR2Key(key))
     return 'skipped_missing'
+
+  if (!candidateEtag)
+    return 'failed'
 
   let sourceEtag: string | undefined
   let sourceLastModified: Date | undefined
@@ -38,6 +42,9 @@ export async function permanentDeleteAwsLiveKey(
 
   if (!sourceEtag || !sourceLastModified)
     return 'failed'
+
+  if (candidateEtag !== sourceEtag)
+    return 'skipped_changed'
 
   try {
     const deleteCommand = new DeleteObjectCommand({

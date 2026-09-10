@@ -212,9 +212,16 @@ async function processKeyBatch(keys: string[]): Promise<void> {
   await Promise.all(keys.map(key => processKey(key)))
 }
 
-async function permanentDeleteKey(key: string): Promise<void> {
+type PermanentDeleteTarget = string | { key: string, etag?: string }
+
+function normalizePermanentDeleteTarget(target: PermanentDeleteTarget): { key: string, etag?: string } {
+  return typeof target === 'string' ? { key: target } : target
+}
+
+async function permanentDeleteKey(target: PermanentDeleteTarget): Promise<void> {
+  const { key, etag } = normalizePermanentDeleteTarget(target)
   return limiter.run(async () => {
-    const outcome = await permanentDeleteAwsLiveKey(s3, S3_BUCKET, key)
+    const outcome = await permanentDeleteAwsLiveKey(s3, S3_BUCKET, key, etag)
     switch (outcome) {
       case 'deleted':
       case 'skipped_missing':
@@ -232,19 +239,38 @@ async function permanentDeleteKey(key: string): Promise<void> {
   })
 }
 
-async function permanentDeleteBatch(keys: string[]): Promise<void> {
+async function permanentDeleteBatch(keys: PermanentDeleteTarget[]): Promise<void> {
   if (deleteMode !== 'permanent')
     return
 
-  const liveKeys = keys.filter(isLiveR2Key)
+  const liveKeys = keys
+    .map(normalizePermanentDeleteTarget)
+    .filter(target => isLiveR2Key(target.key))
   if (liveKeys.length === 0)
     return
 
-  await Promise.all(liveKeys.map(key => permanentDeleteKey(key)))
+  for (let i = 0; i < liveKeys.length; i += CONCURRENCY) {
+    const batch = liveKeys.slice(i, i + CONCURRENCY)
+    await Promise.all(batch.map(target => permanentDeleteKey(target)))
+  }
 }
 
-async function listPrefixKeys(prefix: string): Promise<string[]> {
-  const keys: string[] = []
+async function listExactKeyEtags(keys: string[]): Promise<Array<{ key: string, etag?: string }>> {
+  const targets: Array<{ key: string, etag?: string }> = []
+  for (const key of keys) {
+    const response = await s3.send(new ListObjectsV2Command({
+      Bucket: S3_BUCKET,
+      Prefix: key,
+      MaxKeys: 1,
+    }))
+    const obj = response.Contents?.find(item => item.Key === key)
+    targets.push({ key, etag: obj?.ETag })
+  }
+  return targets
+}
+
+async function listPrefixKeys(prefix: string): Promise<Array<{ key: string, etag?: string }>> {
+  const keys: Array<{ key: string, etag?: string }> = []
   let continuationToken: string | undefined
 
   while (true) {
@@ -257,7 +283,7 @@ async function listPrefixKeys(prefix: string): Promise<string[]> {
 
     for (const obj of response.Contents ?? []) {
       if (obj.Key && isLiveR2Key(obj.Key))
-        keys.push(obj.Key)
+        keys.push({ key: obj.Key, etag: obj.ETag })
     }
 
     if (!response.IsTruncated)
@@ -274,7 +300,7 @@ async function streamProcessPrefix(prefix: string): Promise<void> {
   if (deleteMode === 'permanent')
     await permanentDeleteBatch(liveKeys)
   else {
-    await processKeyBatch(liveKeys)
+    await processKeyBatch(liveKeys.map(target => target.key))
   }
 }
 
@@ -332,7 +358,7 @@ async function main() {
   if (files.length > 0) {
     console.log(`\nProcessing ${files.length} files...`)
     if (deleteMode === 'permanent')
-      await permanentDeleteBatch(files)
+      await permanentDeleteBatch(await listExactKeyEtags(files))
     else {
       await processKeyBatch(files)
     }

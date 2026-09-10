@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import type { Database } from '../utils/supabase.types.ts'
 import { S3Client } from '@bradenmacdonald/s3-lite-client'
 import type { RawS3LiteClient } from './r2_trash_shared.ts'
-import { conditionalDeleteSource, encodeS3LiteCopySourceKey, isObjectNotFoundError, resolveAvailableR2TrashKey } from './r2_trash_shared.ts'
+import { conditionalDeleteSource, copyLiveObjectToTrash, isObjectNotFoundError, isPreconditionFailedError, resolveAvailableR2TrashKey } from './r2_trash_shared.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { getManifestStorageCandidateKeys } from './manifest_encoding.ts'
 import { getEnv } from './utils.ts'
@@ -170,7 +170,7 @@ async function moveObjectToTrash(c: Context, fileId: string) {
     sourceLastModified = stat.lastModified
   }
   catch (error) {
-    if (isMissingObjectError(error) || isObjectNotFoundError(error)) {
+    if (isObjectNotFoundError(error)) {
       cloudlog({ requestId: c.get('requestId'), message: 'R2 object missing before trash move, skip copy', fileId })
       return true
     }
@@ -193,10 +193,14 @@ async function moveObjectToTrash(c: Context, fileId: string) {
   }
 
   try {
-    await client.copyObject({ sourceKey: encodeS3LiteCopySourceKey(fileId) }, trashPath)
+    await copyLiveObjectToTrash(client as RawS3LiteClient, fileId, trashPath, sourceEtag)
   }
   catch (error) {
-    if (isMissingObjectError(error) || isObjectNotFoundError(error)) {
+    if (isPreconditionFailedError(error)) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object changed before trash copy, source retained', fileId })
+      return false
+    }
+    if (isObjectNotFoundError(error)) {
       cloudlog({ requestId: c.get('requestId'), message: 'R2 object disappeared during trash copy', fileId, error: serializeStorageError(error) })
       return true
     }
@@ -212,7 +216,7 @@ async function moveObjectToTrash(c: Context, fileId: string) {
     afterCopyLastModified = afterCopy.lastModified
   }
   catch (error) {
-    if (isMissingObjectError(error) || isObjectNotFoundError(error)) {
+    if (isObjectNotFoundError(error)) {
       cloudlog({ requestId: c.get('requestId'), message: 'R2 object absent after trash copy', fileId })
       return true
     }

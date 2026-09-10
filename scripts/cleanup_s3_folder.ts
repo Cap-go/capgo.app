@@ -65,23 +65,20 @@ async function processKeyBatch(keys: string[]): Promise<{ succeeded: number, fai
   let succeeded = 0
   let failed = 0
 
-  for (let i = 0; i < keys.length; i += CONCURRENCY) {
-    const batch = keys.slice(i, i + CONCURRENCY)
-    const results = await Promise.allSettled(batch.map(key => processKey(key)))
-    const batchFailures: unknown[] = []
-    for (const [index, result] of results.entries()) {
-      if (result.status === 'fulfilled') {
-        succeeded += 1
-        continue
-      }
-
-      failed += 1
-      batchFailures.push(result.reason)
-      console.error(`Failed to process ${batch[index]}:`, result.reason)
+  const results = await Promise.allSettled(keys.map(key => processKey(key)))
+  const failures: unknown[] = []
+  for (const [index, result] of results.entries()) {
+    if (result.status === 'fulfilled') {
+      succeeded += 1
+      continue
     }
-    if (batchFailures.length > 0 && deleteMode === 'trash')
-      throw batchFailures[0]
+
+    failed += 1
+    failures.push(result.reason)
+    console.error(`Failed to process ${keys[index]}:`, result.reason)
   }
+  if (failures.length > 0 && deleteMode === 'trash')
+    throw failures[0]
 
   return { succeeded, failed }
 }

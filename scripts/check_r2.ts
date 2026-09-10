@@ -131,13 +131,17 @@ async function main() {
 
     async function permanentDeleteCandidate(candidate: { key: string, etag?: string }): Promise<'ok' | 'skipped' | 'failed'> {
       const { key, etag: candidateEtag } = candidate
+      if (!candidateEtag) {
+        console.warn(`Failed ${key}: missing discovery ETag; source retained`)
+        return 'failed'
+      }
       let sourceEtag: string | undefined
       let sourceLastModified: Date | undefined
       try {
         const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
         sourceEtag = head.ETag
         sourceLastModified = head.LastModified
-        if (candidateEtag && sourceEtag && candidateEtag !== sourceEtag) {
+        if (candidateEtag !== sourceEtag) {
           console.warn(`Failed ${key}: live object etag changed since discovery`)
           return 'failed'
         }
@@ -183,13 +187,17 @@ async function main() {
 
     async function moveKeyToTrash(candidate: { key: string, etag?: string }): Promise<'ok' | 'skipped' | 'failed'> {
       const { key, etag: candidateEtag } = candidate
+      if (!candidateEtag) {
+        console.warn(`Failed ${key}: missing discovery ETag; source retained`)
+        return 'failed'
+      }
       let sourceEtag: string | undefined
       let sourceLastModified: Date | undefined
       try {
         const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
         sourceEtag = head.ETag
         sourceLastModified = head.LastModified
-        if (candidateEtag && sourceEtag && candidateEtag !== sourceEtag) {
+        if (candidateEtag !== sourceEtag) {
           console.warn(`Skipped ${key}: live object etag changed since discovery`)
           return 'skipped'
         }

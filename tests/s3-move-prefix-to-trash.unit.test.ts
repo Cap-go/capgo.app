@@ -10,12 +10,8 @@ function stat(etag = DEFAULT_ETAG, lastModified = DEFAULT_LAST_MODIFIED) {
   return { etag, lastModified }
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function expectUniqueTrashDestination(destination: string, liveKey: string) {
-  expect(destination).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${escapeRegExp(liveKey)}$`))
+function expectDefaultTrashDestination(destination: string | undefined, liveKey: string) {
+  expect(destination).toBe(`${R2_TRASH_PREFIX}${liveKey}`)
 }
 
 const mocks = vi.hoisted(() => {
@@ -23,7 +19,7 @@ const mocks = vi.hoisted(() => {
   const deleteObject = vi.fn<(key: string) => Promise<void>>(async () => {})
   const listObjects = vi.fn<() => AsyncGenerator<{ key: string }>>()
   const statObject = vi.fn<(key: string) => Promise<{ etag: string, size?: number, lastModified?: Date }>>(async () => stat())
-  const makeRequest = vi.fn(async () => new Response(null, { status: 204 }))
+  const makeRequest = vi.fn<(options: { method?: string, objectName?: string, headers?: Headers }) => Promise<Response>>(async () => new Response(null, { status: 204 }))
 
   class S3Client {
     copyObject = copyObject
@@ -77,7 +73,7 @@ describe('moveObjectsWithPrefixToTrash', () => {
         throw { statusCode: 404, code: 'NotFound' }
       return stat()
     })
-    makeRequest.mockImplementation(async () => new Response(null, { status: 204 }))
+    makeRequest.mockImplementation(async (_options) => new Response(null, { status: 204 }))
   })
 
   it('moves listed objects into deleted-after-7-days and deletes the source keys', async () => {
@@ -97,12 +93,13 @@ describe('moveObjectsWithPrefixToTrash', () => {
     const movedCount = await s3.moveObjectsWithPrefixToTrash(c, prefix)
 
     expect(movedCount).toBe(1)
-    const copyCalls = copyObject.mock.calls as unknown as Array<[{ sourceKey: string }, string]>
-    expect(copyCalls[0][0]).toEqual({ sourceKey: encodeS3LiteCopySourceKey(liveKey) })
-    expectUniqueTrashDestination(copyCalls[0][1], liveKey)
-    expect(makeRequest).toHaveBeenCalledOnce()
+    expect(copyObject).not.toHaveBeenCalled()
+    expect(makeRequest).toHaveBeenCalledTimes(2)
+    const copyCall = makeRequest.mock.calls[0]![0]!
+    expect(copyCall.method).toBe('PUT')
+    expectDefaultTrashDestination(copyCall.objectName, liveKey)
+    expect(copyCall.headers?.get('x-amz-copy-source')).toBe(encodeS3LiteCopySourceKey(liveKey))
     expect(deleteObject).not.toHaveBeenCalled()
-    expect(copyObject).toHaveBeenCalledTimes(1)
   })
 
   it('skips keys already under deleted-after-7-days', async () => {
@@ -118,12 +115,11 @@ describe('moveObjectsWithPrefixToTrash', () => {
     const movedCount = await s3.moveObjectsWithPrefixToTrash(c, prefix)
 
     expect(movedCount).toBe(1)
-    expect(copyObject).toHaveBeenCalledTimes(1)
     const liveKey = `${prefix}live.zip`
-    const copyCalls = copyObject.mock.calls as unknown as Array<[{ sourceKey: string }, string]>
-    expect(copyCalls[0][0]).toEqual({ sourceKey: encodeS3LiteCopySourceKey(liveKey) })
-    expectUniqueTrashDestination(copyCalls[0][1], liveKey)
-    expect(makeRequest).toHaveBeenCalledTimes(1)
+    expect(copyObject).not.toHaveBeenCalled()
+    expect(makeRequest).toHaveBeenCalledTimes(2)
+    const copyCall = makeRequest.mock.calls[0]![0]!
+    expectDefaultTrashDestination(copyCall.objectName, liveKey)
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
@@ -152,13 +148,17 @@ describe('moveObjectsWithPrefixToTrash', () => {
     listObjects.mockImplementation(async function* () {
       yield { key }
     })
-    copyObject.mockRejectedValue(new Error('copy failed'))
+    makeRequest.mockImplementation(async (options: { method?: string }) => {
+      if (options.method === 'PUT')
+        throw new Error('copy failed')
+      return new Response(null, { status: 204 })
+    })
 
     const c = await makeContext()
     await expect(s3.moveObjectsWithPrefixToTrash(c, prefix)).rejects.toBeInstanceOf(TrashMoveError)
 
-    expect(copyObject).toHaveBeenCalledTimes(1)
-    expect(makeRequest).not.toHaveBeenCalled()
+    expect(makeRequest).toHaveBeenCalledOnce()
+    expect(copyObject).not.toHaveBeenCalled()
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
@@ -183,11 +183,10 @@ describe('moveObjectsWithPrefixToTrash', () => {
     const c = await makeContext()
     await expect(s3.moveObjectsWithPrefixToTrash(c, prefix)).rejects.toBeInstanceOf(TrashMoveError)
 
-    expect(copyObject).toHaveBeenCalledTimes(1)
-    const copyCalls = copyObject.mock.calls as unknown as Array<[{ sourceKey: string }, string]>
-    expect(copyCalls[0][0]).toEqual({ sourceKey: encodeS3LiteCopySourceKey(successKey) })
-    expectUniqueTrashDestination(copyCalls[0][1], successKey)
-    expect(makeRequest).toHaveBeenCalledTimes(1)
+    expect(copyObject).not.toHaveBeenCalled()
+    expect(makeRequest).toHaveBeenCalledTimes(2)
+    const copyCall = makeRequest.mock.calls[0]![0]!
+    expectDefaultTrashDestination(copyCall.objectName, successKey)
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
@@ -204,17 +203,16 @@ describe('moveObjectsWithPrefixToTrash', () => {
     let maxInFlight = 0
     const trashedDestinations = new Set<string>()
     const deletedSources = new Set<string>()
-    copyObject.mockImplementation(async (source: { sourceKey: string }, destination: string) => {
-      trashedDestinations.add(destination)
+    makeRequest.mockImplementation(async (...args: unknown[]) => {
+      const options = args[0] as { method?: string, objectName?: string }
+      if (options.method === 'PUT' && options.objectName)
+        trashedDestinations.add(options.objectName)
+      if (options.method === 'DELETE' && options.objectName)
+        deletedSources.add(options.objectName)
       inFlight += 1
       maxInFlight = Math.max(maxInFlight, inFlight)
       await new Promise(resolve => setTimeout(resolve, 5))
       inFlight -= 1
-    })
-    makeRequest.mockImplementation(async (...args: unknown[]) => {
-      const options = args[0] as { objectName?: string }
-      if (options.objectName)
-        deletedSources.add(options.objectName)
       return new Response(null, { status: 204 })
     })
 
@@ -224,16 +222,14 @@ describe('moveObjectsWithPrefixToTrash', () => {
     expect(movedCount).toBe(25)
     expect(maxInFlight).toBeLessThanOrEqual(10)
     expect(maxInFlight).toBeGreaterThan(1)
-    expect(copyObject).toHaveBeenCalledTimes(25)
-    expect(makeRequest).toHaveBeenCalledTimes(25)
+    expect(copyObject).not.toHaveBeenCalled()
+    expect(makeRequest).toHaveBeenCalledTimes(50)
     expect(deleteObject).not.toHaveBeenCalled()
     expect(trashedDestinations.size).toBe(25)
     expect(deletedSources.size).toBe(25)
     for (const key of keys) {
       expect(deletedSources.has(key)).toBe(true)
-      const matchingDestination = [...trashedDestinations].find(dest => dest.endsWith(`/${key}`))
-      expect(matchingDestination).toBeDefined()
-      expectUniqueTrashDestination(matchingDestination!, key)
+      expect(trashedDestinations.has(`${R2_TRASH_PREFIX}${key}`)).toBe(true)
     }
   })
 
@@ -260,8 +256,8 @@ describe('moveObjectsWithPrefixToTrash', () => {
     const c = await makeContext()
     await expect(s3.moveObjectsWithPrefixToTrash(c, prefix)).rejects.toBeInstanceOf(TrashMoveError)
 
-    expect(copyObject).toHaveBeenCalledTimes(1)
-    expect(makeRequest).not.toHaveBeenCalled()
+    expect(copyObject).not.toHaveBeenCalled()
+    expect(makeRequest).toHaveBeenCalledOnce()
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
@@ -272,15 +268,17 @@ describe('moveObjectsWithPrefixToTrash', () => {
     listObjects.mockImplementation(async function* () {
       yield { key }
     })
-    makeRequest.mockImplementation(async () => {
-      throw { statusCode: 412, code: 'PreconditionFailed' }
+    makeRequest.mockImplementation(async (options: { method?: string }) => {
+      if (options.method === 'DELETE')
+        throw { statusCode: 412, code: 'PreconditionFailed' }
+      return new Response(null, { status: 204 })
     })
 
     const c = await makeContext()
     await expect(s3.moveObjectsWithPrefixToTrash(c, prefix)).rejects.toBeInstanceOf(TrashMoveError)
 
-    expect(copyObject).toHaveBeenCalledTimes(1)
-    expect(makeRequest).toHaveBeenCalledTimes(1)
+    expect(copyObject).not.toHaveBeenCalled()
+    expect(makeRequest).toHaveBeenCalledTimes(2)
     expect(deleteObject).not.toHaveBeenCalled()
   })
 })
@@ -290,7 +288,7 @@ describe('moveObjectToTrash', () => {
     vi.clearAllMocks()
     copyObject.mockImplementation(async () => {})
     deleteObject.mockImplementation(async () => {})
-    makeRequest.mockImplementation(async () => new Response(null, { status: 204 }))
+    makeRequest.mockImplementation(async (_options) => new Response(null, { status: 204 }))
   })
 
   it('keeps both trash copies when the same live key is deleted twice', async () => {
@@ -299,8 +297,10 @@ describe('moveObjectToTrash', () => {
     const copyDestinations: string[] = []
     let liveStatCount = 0
 
-    copyObject.mockImplementation(async (_source, destination) => {
-      copyDestinations.push(destination)
+    makeRequest.mockImplementation(async (options: { method?: string, objectName?: string }) => {
+      if (options.method === 'PUT' && options.objectName)
+        copyDestinations.push(options.objectName)
+      return new Response(null, { status: 204 })
     })
     statObject.mockImplementation(async (key: string) => {
       if (key === liveKey) {
@@ -333,7 +333,7 @@ describe('deleteObjectsWithPrefix', () => {
         throw { statusCode: 404, code: 'NotFound' }
       return stat()
     })
-    makeRequest.mockImplementation(async () => new Response(null, { status: 204 }))
+    makeRequest.mockImplementation(async (_options) => new Response(null, { status: 204 }))
   })
 
   it('is blocked unless ALLOW_PERMANENT_R2_DELETE=true', async () => {

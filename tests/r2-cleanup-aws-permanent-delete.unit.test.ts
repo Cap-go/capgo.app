@@ -25,7 +25,7 @@ describe('permanentDeleteAwsLiveKey', () => {
       throw new Error('unexpected command')
     })
 
-    const outcome = await permanentDeleteAwsLiveKey({ send }, bucket, key)
+    const outcome = await permanentDeleteAwsLiveKey({ send }, bucket, key, etag)
 
     expect(outcome).toBe('deleted')
     expect(send).toHaveBeenCalledTimes(2)
@@ -44,10 +44,17 @@ describe('permanentDeleteAwsLiveKey', () => {
       throw new Error('unexpected command')
     })
 
-    const outcome = await permanentDeleteAwsLiveKey({ send }, bucket, key)
+    const outcome = await permanentDeleteAwsLiveKey({ send }, bucket, key, etag)
 
     expect(outcome).toBe('skipped_changed')
     expect(send).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails closed when discovery etag is missing', async () => {
+    const send = vi.fn()
+    const outcome = await permanentDeleteAwsLiveKey({ send }, bucket, key)
+    expect(outcome).toBe('failed')
+    expect(send).not.toHaveBeenCalled()
   })
 
   it('fails closed when HeadObject returns no etag or lastModified', async () => {
@@ -57,9 +64,22 @@ describe('permanentDeleteAwsLiveKey', () => {
       throw new Error('delete should not run')
     })
 
-    const outcome = await permanentDeleteAwsLiveKey({ send }, bucket, key)
+    const outcome = await permanentDeleteAwsLiveKey({ send }, bucket, key, '"missing-head-etag"')
 
     expect(outcome).toBe('failed')
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it('retains source when listing etag no longer matches HeadObject', async () => {
+    const send = vi.fn(async (command: unknown) => {
+      if (command instanceof HeadObjectCommand)
+        return { ETag: '"replacement"', LastModified: lastModified }
+      throw new Error('delete should not run')
+    })
+
+    const outcome = await permanentDeleteAwsLiveKey({ send }, bucket, key, '"listed"')
+
+    expect(outcome).toBe('skipped_changed')
     expect(send).toHaveBeenCalledTimes(1)
   })
 
@@ -70,7 +90,7 @@ describe('permanentDeleteAwsLiveKey', () => {
       throw new Error('delete should not run')
     })
 
-    const outcome = await permanentDeleteAwsLiveKey({ send }, bucket, key)
+    const outcome = await permanentDeleteAwsLiveKey({ send }, bucket, key, etag)
 
     expect(outcome).toBe('skipped_missing')
     expect(send).toHaveBeenCalledTimes(1)

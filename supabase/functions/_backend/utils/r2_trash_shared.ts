@@ -93,7 +93,7 @@ export function createAwsTrashDestinationResolver(
 
 /**
  * Pick a trash destination without concurrent default-key overwrites.
- * Reuses the default trash key only when it already holds this source etag (idempotent rerun).
+ * Uses the default trash key when free, or when it already holds this source etag (idempotent rerun).
  * Otherwise allocates a unique suffix path.
  */
 export async function resolveTrashDestinationKey(
@@ -103,11 +103,12 @@ export async function resolveTrashDestinationKey(
   maxUniqueAttempts = 10,
 ): Promise<string> {
   const defaultTrashKey = getR2TrashKey(sourceKey)
-  if (await resolver.keyExists(defaultTrashKey)) {
-    const trashEtag = await resolver.getEtag(defaultTrashKey)
-    if (sourceEtag && trashEtag === sourceEtag)
-      return defaultTrashKey
-  }
+  if (!await resolver.keyExists(defaultTrashKey))
+    return defaultTrashKey
+
+  const trashEtag = await resolver.getEtag(defaultTrashKey)
+  if (sourceEtag && trashEtag === sourceEtag)
+    return defaultTrashKey
 
   for (let i = 0; i < maxUniqueAttempts; i++) {
     const candidate = getUniqueR2TrashKey(sourceKey)
@@ -206,8 +207,14 @@ export type S3LiteMakeRequest = (options: {
   returnBody?: boolean
 }) => Promise<Response>
 
+export type S3LiteCopySource = {
+  sourceKey: string
+  sourceIfMatch?: string
+  sourceBucketName?: string
+}
+
 export type S3LiteTrashClient = {
-  copyObject: (options: { sourceKey: string }, destinationKey: string) => Promise<unknown>
+  copyObject: (options: S3LiteCopySource, destinationKey: string) => Promise<unknown>
   deleteObject: (key: string, options?: { ifMatch?: string, lastModified?: Date }) => Promise<unknown>
   statObject: (key: string) => Promise<{ etag: string, lastModified?: Date }>
 }
@@ -305,6 +312,36 @@ export function asS3LiteTrashClient(s3client: RawS3LiteClient): S3LiteTrashClien
 
 export type S3LiteTrashMoveResult = 'moved' | 'skipped_missing' | 'skipped_changed'
 
+/** Copy a live object into trash with CopySourceIfMatch when makeRequest is available. */
+export async function copyLiveObjectToTrash(
+  s3client: Pick<RawS3LiteClient, 'copyObject' | 'makeRequest'>,
+  sourceKey: string,
+  trashKey: string,
+  sourceIfMatch: string,
+  sourceBucketName?: string,
+): Promise<void> {
+  const encodedSourceKey = encodeS3LiteCopySourceKey(sourceKey)
+  if (s3client.makeRequest) {
+    const copySource = sourceBucketName
+      ? `${sourceBucketName}/${encodedSourceKey}`
+      : encodedSourceKey
+    const headers = new Headers({
+      'x-amz-copy-source': copySource,
+      'x-amz-copy-source-if-match': sourceIfMatch,
+    })
+    await s3client.makeRequest({
+      method: 'PUT',
+      objectName: trashKey,
+      headers,
+      statusCode: 200,
+      returnBody: true,
+    })
+    return
+  }
+
+  await s3client.copyObject({ sourceKey: encodedSourceKey }, trashKey)
+}
+
 /** Move a live object to 7-day trash via s3_lite_client (encodes copy source path segments). */
 export async function moveS3LiteObjectToTrash(s3client: RawS3LiteClient, key: string): Promise<S3LiteTrashMoveResult> {
   if (!isLiveR2Key(key))
@@ -329,9 +366,11 @@ export async function moveS3LiteObjectToTrash(s3client: RawS3LiteClient, key: st
   const trashKey = await resolveAvailableR2TrashKey(s3client, key, sourceEtag)
 
   try {
-    await s3client.copyObject({ sourceKey: encodeS3LiteCopySourceKey(key) }, trashKey)
+    await copyLiveObjectToTrash(s3client, key, trashKey, sourceEtag)
   }
   catch (error) {
+    if (isPreconditionFailedError(error))
+      return 'skipped_changed'
     if (isObjectNotFoundError(error))
       return 'skipped_missing'
     throw error
