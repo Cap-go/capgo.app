@@ -878,6 +878,7 @@
   "channel-create-onboarding-name-invalid": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "channel-create-onboarding-name-placeholder": "Used in Capgo web console areas: components/dashboard. Role: input placeholder. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "channel-create-onboarding-name-required": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "channel-create-onboarding-name-taken": "Used in Capgo web console areas: components/dashboard. Role: validation error. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "channel-create-onboarding-preview-label": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "channel-create-onboarding-preview-placeholder": "Used in Capgo web console areas: components/dashboard. Role: input placeholder. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "channel-create-onboarding-self-assign-description": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

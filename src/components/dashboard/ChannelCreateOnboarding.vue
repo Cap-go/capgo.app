@@ -127,14 +127,16 @@ async function createChannel() {
       .select('name, public, allow_device_self_set')
       .eq('app_id', props.appId)
       .eq('name', normalizedName)
-      .eq('public', true)
       .maybeSingle()
 
     if (existingError)
       throw existingError
 
     if (existingChannel) {
-      completedChannel.value = existingChannel
+      if (existingChannel.public)
+        completedChannel.value = existingChannel
+      else
+        submitError.value = t('channel-create-onboarding-name-taken')
       return
     }
 

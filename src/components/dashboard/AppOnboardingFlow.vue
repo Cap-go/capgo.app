@@ -204,10 +204,18 @@ const reportedSetupSource = ref<'manual' | 'cli' | 'mcp' | 'ai' | null>(null)
 const flowStep = ref<OnboardingFlowStep>('details')
 const appDetailsStep = ref<AppDetailsStep>('name')
 const setupStage = ref<SetupStage>('cli')
-const showSetupBackButton = computed(() => props.preOrg
-  && newChannelTreatment.value
-  && flowStep.value === 'setup'
-  && (setupStage.value === 'channel-create' || setupStage.value === 'cli'))
+const showSetupBackButton = computed(() => newChannelTreatment.value && (
+  (
+    props.preOrg
+    && flowStep.value === 'setup'
+    && (setupStage.value === 'channel-create' || setupStage.value === 'cli')
+  )
+  || (
+    !props.preOrg
+    && flowStep.value === 'install'
+    && setupStage.value === 'channel-create'
+  )
+))
 const showLanguageSelector = computed(() => (
   (props.preOrg && !createdApp.value)
   || (flowStep.value === 'setup' && Boolean(createdApp.value))

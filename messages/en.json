@@ -2132,6 +2132,7 @@
   "channel-create-onboarding-name-help": "Use letters, numbers, dots, dashes, or underscores.",
   "channel-create-onboarding-name-required": "Enter a channel name.",
   "channel-create-onboarding-name-invalid": "Use only letters, numbers, dots, dashes, or underscores.",
+  "channel-create-onboarding-name-taken": "This channel name is already in use. Choose another name.",
   "channel-create-onboarding-submit": "Create channel",
   "channel-create-onboarding-load-error": "We could not load your channel setup. Please try again.",
   "channel-create-onboarding-submit-error": "We could not create this channel. Check the name and try again.",
