@@ -27,7 +27,7 @@ jobs:
       deploy_tag: ${{ steps.target.outputs.deploy_tag }}
       deploy_sha: ${{ steps.target.outputs.deploy_sha }}
       is_alpha: ${{ steps.target.outputs.is_alpha }}
-      has_migration_changes: ${{ steps.scope.outputs.has_migration_changes }}
+      requires_schema_types_sync: ${{ steps.scope.outputs.requires_schema_types_sync }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -543,7 +543,7 @@ jobs:
 
   sync_schema_types:
     needs: [changes, read_replica_schema, supabase_deploy]
-    if: ${{ needs.changes.result == 'success' && needs.changes.outputs.is_alpha != 'true' && needs.changes.outputs.has_migration_changes == 'true' && needs.read_replica_schema.result == 'success' && needs.supabase_deploy.result == 'success' }}
+    if: ${{ needs.changes.result == 'success' && needs.changes.outputs.is_alpha != 'true' && needs.changes.outputs.requires_schema_types_sync == 'true' && needs.read_replica_schema.result == 'success' && needs.supabase_deploy.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: Sync production schema and generated types

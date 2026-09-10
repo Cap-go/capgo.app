@@ -142,7 +142,7 @@ export function hasMigrationChanges(files: string[]): boolean {
 }
 
 export function requiresSchemaTypesSync(result: DeployScopeResult): boolean {
-  return result.base === null ? result.scope.supabase : hasMigrationChanges(result.files)
+  return result.base === null || hasMigrationChanges(result.files)
 }
 
 export function getComparableDeployHead(after: string, run: GitRunner = runGit): string {
@@ -228,5 +228,5 @@ if (import.meta.main) {
   for (const target of deployTargets) {
     console.log(`${target}=${result.scope[target]}`)
   }
-  console.log(`has_migration_changes=${requiresSchemaTypesSync(result)}`)
+  console.log(`requires_schema_types_sync=${requiresSchemaTypesSync(result)}`)
 }

@@ -1,20 +1,26 @@
-import { execFile as execFileCallback } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
-import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
-
-const execFile = promisify(execFileCallback)
-const projectRoot = fileURLToPath(new URL('..', import.meta.url))
+import { generateTypes } from '../scripts/getTypes.mjs'
 
 describe('Supabase type generation', () => {
-  it.concurrent('exits unsuccessfully when the generation target is invalid', async () => {
-    await expect(execFile('bun', ['scripts/getTypes.mjs'], {
-      cwd: projectRoot,
-      env: {
-        ...process.env,
-        BRANCH: 'main',
-        SUPABASE_URL: 'not-a-valid-url',
+  it.concurrent('propagates command generation failures', async () => {
+    await expect(generateTypes({
+      copy: async () => {},
+      execute: async () => {
+        throw new Error('generation failed')
       },
-    })).rejects.toMatchObject({ code: 1 })
+      resolveTarget: async () => ['--local'],
+      write: async () => {},
+    })).rejects.toThrow('generation failed')
+  })
+
+  it.concurrent('propagates generated type copy failures', async () => {
+    await expect(generateTypes({
+      copy: async () => {
+        throw new Error('copy failed')
+      },
+      execute: async () => ({ stderr: '', stdout: 'export interface Database {}' }),
+      resolveTarget: async () => ['--local'],
+      write: async () => {},
+    })).rejects.toThrow('copy failed')
   })
 })

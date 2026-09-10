@@ -476,7 +476,9 @@ run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outpu
 
 This allows an initial deployment that already started to finish even if a newer tag appears, while an old failed run cannot mutate production after a newer tag exists. Keep every checkout, release, environment choice, and native build pinned to `needs.changes.outputs.deploy_sha` / `deploy_tag`.
 
-Add `has_migration_changes` to `deploy-scope.ts` output for files under `supabase/migrations/`.
+Add `requires_schema_types_sync` to `deploy-scope.ts` output for files under
+`supabase/migrations/`, and enable it for the first Capgo release when there is
+no prior deployment tag.
 
 - [x] **Step 2: Run focused tests and verify failure**
 
@@ -486,7 +488,7 @@ bunx vitest run tests/deploy-scope.test.ts tests/capgo-release-workflow.unit.tes
 
 - [x] **Step 3: Update deployment scope and workflow**
 
-Resolve the triggering tag once in `changes`, immediately assert that it is current, and publish `has_migration_changes`. Add retry-only stale-tag guards before mutation in replica reconciliation, Supabase deployment, web/API/file/translation/plugin deployment, and native build-request jobs. Fetch tags in each guarded job so freshness is authoritative for that retry.
+Resolve the triggering tag once in `changes`, immediately assert that it is current, and publish `requires_schema_types_sync`. Add retry-only stale-tag guards before mutation in replica reconciliation, Supabase deployment, web/API/file/translation/plugin deployment, and native build-request jobs. Fetch tags in each guarded job so freshness is authoritative for that retry.
 
 Keep environment concurrency non-cancelling. A newer deployment queues behind a running one; a queued older run that starts after a newer tag exists fails in `changes` before mutation.
 
