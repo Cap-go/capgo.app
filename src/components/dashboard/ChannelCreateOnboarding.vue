@@ -23,7 +23,6 @@ const props = defineProps<{
 const emit = defineEmits<(event: 'continue') => void>()
 
 interface SavedChannel {
-  id: number
   name: string
   public: boolean
   allow_device_self_set: boolean
@@ -70,7 +69,7 @@ function selectSuggestedName(name: typeof suggestedNames[number]) {
 async function loadExistingChannel() {
   const { data, error } = await supabase
     .from('channels')
-    .select('id, name, public, allow_device_self_set')
+    .select('name, public, allow_device_self_set')
     .eq('app_id', props.appId)
     .order('created_at', { ascending: true })
     .limit(1)
@@ -92,6 +91,7 @@ async function initialize() {
     if (completedChannel.value)
       return
 
+    // Creating a public/default channel is guarded by both permissions in the channels INSERT policy.
     const [canCreateChannel, canUpdateAppSettings] = await Promise.all([
       checkPermissions('app.create_channel', { appId: props.appId }),
       checkPermissions('app.update_settings', { appId: props.appId }),
@@ -123,7 +123,7 @@ async function createChannel() {
   try {
     const { data: existingChannel, error: existingError } = await supabase
       .from('channels')
-      .select('id, name, public, allow_device_self_set')
+      .select('name, public, allow_device_self_set')
       .eq('app_id', props.appId)
       .eq('name', normalizedName)
       .maybeSingle()
@@ -136,7 +136,7 @@ async function createChannel() {
       return
     }
 
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('channels')
       .insert({
         name: normalizedName,
@@ -147,13 +147,16 @@ async function createChannel() {
         allow_device_self_set: allowSelfAssign.value,
         version: null,
       })
-      .select('id, name, public, allow_device_self_set')
-      .single()
 
-    if (error || !data)
-      throw error ?? new Error('Channel insert returned no data')
+    if (error)
+      throw error
 
-    completedChannel.value = data
+    // Avoid coupling a successful INSERT to channel-read RLS on the response row.
+    completedChannel.value = {
+      name: normalizedName,
+      public: true,
+      allow_device_self_set: allowSelfAssign.value,
+    }
     createdInOnboarding.value = true
   }
   catch (error) {

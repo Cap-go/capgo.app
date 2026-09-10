@@ -126,6 +126,7 @@ const organizationStore = useOrganizationStore()
 const dashboardAppsStore = useDashboardAppsStore()
 const onboardingUserId = computed(() => main.user?.id ?? main.auth?.id ?? null)
 const onboardingABTestAssignments = ref<Record<string, OnboardingABTestAssignment>>({})
+const onboardingABTestsPending = ref(false)
 const onboardingForABTests = computed(() => {
   const currentOnboarding = isRecord(main.user?.onboarding) ? main.user.onboarding : {}
   const currentABTests = isRecord(currentOnboarding.abtests) ? currentOnboarding.abtests : {}
@@ -343,9 +344,13 @@ function refreshOnboardingABTests(options: { force?: boolean } = {}): Promise<vo
     console.error('Cannot load onboarding A/B tests', error)
   })
   onboardingABTestsRequest = request
+  onboardingABTestsPending.value = true
   void request.finally(() => {
-    if (onboardingABTestsRequest === request)
+    if (onboardingABTestsRequest === request) {
       onboardingABTestsRequest = null
+      onboardingABTestsPending.value = false
+      reconcileSetupStageWithChannelAssignment()
+    }
   })
 
   return request
@@ -2015,9 +2020,18 @@ function continueFromOrganizationInvite(invitationCount: number) {
 function resolveSetupStage(
   progress = parseUserOnboardingProgress(main.user?.onboarding),
 ): SetupStage {
-  if (!newChannelTreatment.value)
+  if (!newChannelTreatment.value && !onboardingABTestsPending.value)
     return 'cli'
   return progress?.setup_stage ?? 'channel-routing'
+}
+
+function reconcileSetupStageWithChannelAssignment() {
+  if (!createdApp.value || (flowStep.value !== 'setup' && flowStep.value !== 'install'))
+    return
+
+  const nextStage = resolveSetupStage()
+  if (nextStage !== setupStage.value)
+    setSetupStage(nextStage)
 }
 
 function setSetupStage(nextStage: SetupStage) {
@@ -2056,9 +2070,9 @@ function goBackFromSetupStage() {
     setSetupStage(previousStage)
 }
 
-watch(newChannelTreatment, (enabled) => {
-  if (!enabled && setupStage.value !== 'cli')
-    setSetupStage('cli')
+watch(newChannelTreatment, () => {
+  if (!onboardingABTestsPending.value)
+    reconcileSetupStageWithChannelAssignment()
 })
 
 function onTechnicalInviteOpened() {

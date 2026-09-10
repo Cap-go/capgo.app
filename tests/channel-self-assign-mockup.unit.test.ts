@@ -118,6 +118,9 @@ describe('channel self-assignment animation', () => {
   it.concurrent('supports replay, reduced motion, cleanup, and onboarding continuation', () => {
     expect(mockupSource).toContain('gsap.matchMedia()')
     expect(mockupSource).toContain('\'(prefers-reduced-motion: reduce)\'')
+    expect(mockupSource).toContain(`function showFinalState() {\n  syncRoutingPaths()`)
+    expect(mockupSource).toContain(`:aria-label="t('channel-self-assign-replay')"`)
+    expect(mockupSource).toContain('width: min(8.5rem, calc(33.333% - 0.75rem));')
     expect(mockupSource).toContain('timeline = buildTimeline()')
     expect(mockupSource).toContain('timeline?.kill()')
     expect(mockupSource).toContain('media?.revert()')

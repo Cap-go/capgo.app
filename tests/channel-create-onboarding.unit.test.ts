@@ -40,8 +40,9 @@ describe('channel creation onboarding', () => {
     expect(componentSource).toContain('public: true')
     expect(componentSource).toContain('allow_device_self_set: allowSelfAssign.value')
     expect(componentSource).toContain('version: null')
-    expect(componentSource).toContain(`.select('id, name, public, allow_device_self_set')`)
-    expect(componentSource).toContain('.single()')
+    const channelInsert = componentSource.slice(componentSource.indexOf(`const { error } = await supabase`), componentSource.indexOf(`completedChannel.value = {`))
+    expect(channelInsert).not.toContain('.select(')
+    expect(componentSource).toContain('Avoid coupling a successful INSERT to channel-read RLS')
   })
 
   it.concurrent('requires an explicit valid name and confirms the saved channel before continuing', () => {

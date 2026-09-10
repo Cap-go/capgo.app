@@ -460,6 +460,18 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain(`type SetupStage = UserOnboardingSetupStage`)
     expect(onboardingSource).toContain(`const setupStage = ref<SetupStage>('cli')`)
     expect(onboardingSource).toContain('const newChannelTreatment = computed(() => hasNewChannelTreatment(onboardingForABTests.value))')
+    expect(onboardingSource).toContain('const onboardingABTestsPending = ref(false)')
+
+    const assignmentRefresh = sourceBetween('function refreshOnboardingABTests(', 'async function waitForOnboardingABTests(')
+    expect(assignmentRefresh).toContain('onboardingABTestsPending.value = true')
+    expect(assignmentRefresh).toContain('onboardingABTestsPending.value = false')
+    expect(assignmentRefresh).toContain('reconcileSetupStageWithChannelAssignment()')
+
+    const assignmentStageReconciliation = sourceBetween('function resolveSetupStage(', 'function continueFromChannelDefaultRouting()')
+    expect(assignmentStageReconciliation).toContain('!newChannelTreatment.value && !onboardingABTestsPending.value')
+    expect(assignmentStageReconciliation).toContain('function reconcileSetupStageWithChannelAssignment()')
+    expect(assignmentStageReconciliation).toContain(`flowStep.value !== 'setup' && flowStep.value !== 'install'`)
+    expect(assignmentStageReconciliation).toContain('const nextStage = resolveSetupStage()')
 
     const stepList = sourceBetween('const appOnboardingSteps = computed', 'const onboardingProgressSteps = computed')
     expect(stepList).not.toContain(`{ id: 'channels'`)

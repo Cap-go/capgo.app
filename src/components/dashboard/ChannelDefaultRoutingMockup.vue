@@ -1521,7 +1521,7 @@ onBeforeUnmount(() => {
 
 .cr-page-embedded .cr-channel-node {
   top: 70%;
-  width: 12rem;
+  width: min(12rem, calc(33.333% - 0.75rem));
 }
 
 .cr-page-embedded .cr-channel-card {

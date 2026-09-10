@@ -134,6 +134,7 @@ function renderedPathPoints(path: SVGPathElement) {
 }
 
 function showFinalState() {
+  syncRoutingPaths()
   const hidden = ['.csa-phone-scene', '.csa-code-scene', '.csa-aura']
   const visible = [
     '.csa-routing-scene',
@@ -393,7 +394,7 @@ onBeforeUnmount(() => {
           {{ t('channel-self-assign-description') }}
         </p>
       </div>
-      <button type="button" class="d-btn d-btn-sm shrink-0 border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-white/15 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10" @click="replay">
+      <button type="button" class="d-btn d-btn-sm shrink-0 border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-white/15 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10" :aria-label="t('channel-self-assign-replay')" @click="replay">
         <IconRefresh class="h-4 w-4" />
         <span class="hidden sm:inline">{{ t('channel-self-assign-replay') }}</span>
       </button>
@@ -1447,7 +1448,7 @@ onBeforeUnmount(() => {
   }
 
   .csa-routing-channel-node {
-    width: 8.5rem;
+    width: min(8.5rem, calc(33.333% - 0.75rem));
   }
 
   .csa-production-policy {

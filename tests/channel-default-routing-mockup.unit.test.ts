@@ -72,5 +72,6 @@ describe('channel default routing animation', () => {
     expect(embeddedPositions).toContain('.cr-page-embedded .cr-capgo-node {')
     expect(embeddedPositions).toContain('.cr-page-embedded .cr-channels-label {')
     expect(embeddedPositions).toContain('.cr-page-embedded .cr-channel-node {')
+    expect(embeddedPositions).toContain('width: min(12rem, calc(33.333% - 0.75rem));')
   })
 })

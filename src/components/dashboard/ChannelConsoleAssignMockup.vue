@@ -40,6 +40,8 @@ const root = ref<HTMLElement | null>(null)
 const reducedMotion = ref(false)
 let timeline: gsap.core.Timeline | null = null
 let media: gsap.MatchMedia | null = null
+let resizeObserver: ResizeObserver | null = null
+let resizeAnimationFrame: number | null = null
 
 function element(selector: string) {
   return root.value?.querySelector<HTMLElement>(selector) ?? null
@@ -236,20 +238,36 @@ function createAnimation() {
   })
 }
 
+function refreshAnimationAfterResize() {
+  if (resizeAnimationFrame !== null)
+    window.cancelAnimationFrame(resizeAnimationFrame)
+  resizeAnimationFrame = window.requestAnimationFrame(() => {
+    resizeAnimationFrame = null
+    createAnimation()
+  })
+}
+
 function replay() {
   if (reducedMotion.value) {
     showFinalState()
     return
   }
-  timeline?.restart()
+  createAnimation()
 }
 
 onMounted(async () => {
   await nextTick()
   createAnimation()
+  if (root.value) {
+    resizeObserver = new ResizeObserver(refreshAnimationAfterResize)
+    resizeObserver.observe(root.value)
+  }
 })
 
 onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  if (resizeAnimationFrame !== null)
+    window.cancelAnimationFrame(resizeAnimationFrame)
   timeline?.kill()
   media?.revert()
 })
@@ -270,7 +288,7 @@ onBeforeUnmount(() => {
           {{ t('channel-console-assign-description') }}
         </p>
       </div>
-      <button type="button" class="d-btn d-btn-sm shrink-0 border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-white/15 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10" @click="replay">
+      <button type="button" class="d-btn d-btn-sm shrink-0 border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-white/15 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10" :aria-label="t('channel-console-assign-replay')" @click="replay">
         <IconRefresh class="h-4 w-4" />
         <span class="hidden sm:inline">{{ t('channel-console-assign-replay') }}</span>
       </button>
