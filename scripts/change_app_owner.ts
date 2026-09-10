@@ -76,20 +76,16 @@ async function main() {
       throw new Error(`Missing source Last-Modified for ${obj.key}; aborting transfer`)
 
     const destinationKey = obj.key.replace(oldUserId, newUserId)
-    let destinationReady = false
     try {
       const destinationStat = await rawS3client.statObject(destinationKey)
-      if (normalizedS3EtagsMatch(destinationStat.etag, discoveryEtag))
-        destinationReady = true
-      else
+      if (!normalizedS3EtagsMatch(destinationStat.etag, discoveryEtag))
         throw new Error(`Destination ${destinationKey} already exists with different content; aborting transfer`)
     }
     catch (error) {
       if (!isObjectNotFoundError(error))
         throw error
     }
-    if (!destinationReady)
-      await copyS3LiteObjectIfMatch(rawS3client, obj.key, destinationKey, discoveryEtag, S3_BUCKET, discoveryLastModified)
+    await copyS3LiteObjectIfMatch(rawS3client, obj.key, destinationKey, discoveryEtag, S3_BUCKET, discoveryLastModified)
     try {
       const trashResult = await moveS3LiteObjectToTrash(rawS3client, obj.key, S3_BUCKET, discoveryEtag, discoveryLastModified)
       if (trashResult !== 'moved')

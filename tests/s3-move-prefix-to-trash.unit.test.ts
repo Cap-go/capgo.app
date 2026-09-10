@@ -294,8 +294,14 @@ describe('moveObjectsWithPrefixToTrash', () => {
 describe('moveObjectToTrash', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.unstubAllGlobals()
     copyObject.mockImplementation(async () => {})
     deleteObject.mockImplementation(async () => {})
+    statObject.mockImplementation(async (key: string) => {
+      if (key.startsWith(R2_TRASH_PREFIX))
+        throw { statusCode: 404, code: 'NotFound' }
+      return stat()
+    })
     makeRequest.mockImplementation(async (_options) => new Response(null, { status: 204 }))
   })
 

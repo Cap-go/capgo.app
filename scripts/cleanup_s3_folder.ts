@@ -138,10 +138,6 @@ async function processFolder() {
 
     if (deleteMode === 'dry_run') {
       for (const candidate of batch) {
-        if (permanentDeleteRequested && !candidate.discoveryLastModified) {
-          console.log(`Would process: ${candidate.key} (missing listing Last-Modified; would fail on execute)`)
-          continue
-        }
         console.log(`Would process: ${candidate.key}`)
         processedCount += 1
       }

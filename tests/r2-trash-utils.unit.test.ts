@@ -544,13 +544,14 @@ describe('copyObjectToTrashWithDestinationGuard', () => {
     expect(copy).toHaveBeenCalledOnce()
   })
 
-  it('reuses the default destination when etag matches but Last-Modified differs', async () => {
+  it('allocates a unique destination when etag matches but Last-Modified differs', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const etag = '"source"'
     const lastModified = new Date('2024-01-15T10:30:00.000Z')
     const defaultTrashKey = `${R2_TRASH_PREFIX}${key}`
-    const copy = vi.fn(async () => {
-      throw { statusCode: 412, code: 'PreconditionFailed' }
+    const copy = vi.fn(async (destinationKey: string) => {
+      if (destinationKey === defaultTrashKey)
+        throw { statusCode: 412, code: 'PreconditionFailed' }
     })
 
     const result = await copyObjectToTrashWithDestinationGuard(
@@ -562,8 +563,10 @@ describe('copyObjectToTrashWithDestinationGuard', () => {
       lastModified,
     )
 
-    expect(result).toEqual({ trashKey: defaultTrashKey })
-    expect(copy).toHaveBeenCalledOnce()
+    expect(result).not.toBe('skipped_changed')
+    if (result !== 'skipped_changed')
+      expect(result.trashKey).not.toBe(defaultTrashKey)
+    expect(copy).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -798,7 +801,7 @@ describe('resolveTrashDestinationKey', () => {
     expect(trashKey).toBe(getR2TrashKey(key))
   })
 
-  it('reuses the default trash key when etag matches even if Last-Modified differs', async () => {
+  it('allocates a unique path when the default trash key matches etag but not Last-Modified', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const etag = '"same"'
     const exists = vi.fn(async (trashKey: string) => trashKey === getR2TrashKey(key))
@@ -807,10 +810,10 @@ describe('resolveTrashDestinationKey', () => {
 
     const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag, getLastModified }, key, etag, new Date('2024-01-15T10:30:00.000Z'))
 
-    expect(trashKey).toBe(getR2TrashKey(key))
+    expect(trashKey).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${escapeRegExp(key)}$`))
   })
 
-  it('reuses the default trash key when etag matches but source Last-Modified is omitted', async () => {
+  it('allocates a unique path when etag matches but source Last-Modified is omitted', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const etag = '"same"'
     const exists = vi.fn(async (trashKey: string) => trashKey === getR2TrashKey(key))
@@ -819,7 +822,7 @@ describe('resolveTrashDestinationKey', () => {
 
     const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag, getLastModified }, key, etag)
 
-    expect(trashKey).toBe(getR2TrashKey(key))
+    expect(trashKey).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${escapeRegExp(key)}$`))
   })
 
   it('allocates a unique path when the default trash key holds a different etag', async () => {

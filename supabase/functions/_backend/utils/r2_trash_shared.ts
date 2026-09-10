@@ -152,8 +152,11 @@ export async function resolveTrashDestinationKey(
     return defaultTrashKey
 
   const trashEtag = await resolver.getEtag(defaultTrashKey)
-  if (sourceEtag && normalizedS3EtagsMatch(trashEtag, sourceEtag))
-    return defaultTrashKey
+  if (sourceEtag && sourceLastModified && resolver.getLastModified && normalizedS3EtagsMatch(trashEtag, sourceEtag)) {
+    const trashLastModified = await resolver.getLastModified(defaultTrashKey)
+    if (trashLastModified && trashLastModified.getTime() === sourceLastModified.getTime())
+      return defaultTrashKey
+  }
 
   for (let i = 0; i < maxUniqueAttempts; i++) {
     const candidate = getUniqueR2TrashKey(sourceKey)
@@ -238,9 +241,13 @@ export type TrashDestinationHead = { etag?: string, lastModified?: Date } | 'not
 function trashDestinationMatchesSource(
   destinationStat: Exclude<TrashDestinationHead, 'not_found'>,
   sourceEtag: string,
-  _sourceLastModified?: Date,
+  sourceLastModified?: Date,
 ): boolean {
-  return normalizedS3EtagsMatch(destinationStat.etag, sourceEtag)
+  if (!normalizedS3EtagsMatch(destinationStat.etag, sourceEtag))
+    return false
+  if (!sourceLastModified || !destinationStat.lastModified)
+    return false
+  return destinationStat.lastModified.getTime() === sourceLastModified.getTime()
 }
 
 /**
@@ -537,7 +544,8 @@ export async function copyLiveObjectToTrash(
         throw error
       try {
         const destinationStat = await s3client.statObject(destinationKey)
-        if (trashDestinationMatchesSource(destinationStat, sourceIfMatch, sourceLastModified))
+        if (trashDestinationMatchesSource(destinationStat, sourceIfMatch, sourceLastModified)
+          || normalizedS3EtagsMatch(destinationStat.etag, sourceIfMatch))
           return destinationKey
         destinationKey = getUniqueR2TrashKey(sourceKey)
         continue
