@@ -469,6 +469,12 @@ describe('app onboarding progress analytics integration', () => {
     const intentTransition = sourceBetween('function continueFromIntent()', 'function continuePreOrgDetails()')
     expect(intentTransition).toContain(`intent: selectedIntent.value`)
     expect(intentTransition).toContain(`?? (webNativeDevelopmentEnvironmentTreatment.value ? undefined : 'skipped')`)
+    // Product lock (Jose/Charly B path): intent tap only selects; Continue advances.
+    expect(onboardingSource).toContain('@click="selectedIntent = option.value"')
+    expect(onboardingSource).toContain('data-test="app-onboarding-continue-intent"')
+    expect(onboardingSource).toContain('@click="continueFromGoal()"')
+    expect(onboardingSource).not.toContain('selectIntentAndContinue')
+    expect(onboardingSource).not.toContain('intentAdvanceTimer')
 
     const appNameTransition = sourceBetween('function continueFromAppName()', 'function continueFromAppId()')
     expect(appNameTransition).toContain(`completeAndViewAppDetailsStep('app_id', { appId: generatedAppId.value, appName: appName.value.trim() })`)
@@ -602,6 +608,28 @@ describe('app onboarding progress analytics integration', () => {
     expect(demoExit.indexOf('window.dispatchEvent')).toBeLessThan(demoExit.indexOf('allowOnboardingDashboardExploration'))
 
     const confirmedSidebarExit = sidebarSource.slice(sidebarSource.indexOf('if (requiresOnboardingExplorationConfirmation)'), sidebarSource.indexOf('if (tab.onClick)'))
-    expect(confirmedSidebarExit.indexOf(`lastButtonRole !== 'primary'`)).toBeLessThan(confirmedSidebarExit.indexOf('window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))'))
+    const secondaryGuardIndex = confirmedSidebarExit.indexOf(`lastButtonRole !== 'secondary'`)
+    const exploredEventIndex = confirmedSidebarExit.indexOf('window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))')
+    expect(secondaryGuardIndex).toBeGreaterThanOrEqual(0)
+    expect(exploredEventIndex).toBeGreaterThanOrEqual(0)
+    expect(secondaryGuardIndex).toBeLessThan(exploredEventIndex)
+  })
+
+  it.concurrent('routes sidebar logo through openTab so onboarding hard-gate applies', () => {
+    const logoHeader = sidebarSource.slice(
+      sidebarSource.indexOf('<!-- Sidebar header -->'),
+      sidebarSource.indexOf('<GettingStartedNav'),
+    )
+    expect(logoHeader).not.toContain('<router-link')
+    expect(logoHeader).not.toContain('to="/apps"')
+    expect(logoHeader).toContain('@click="openLogoDashboard"')
+    expect(logoHeader).toContain('aria-label="Capgo - Go to dashboard"')
+
+    const openLogoDashboard = sidebarSource.slice(
+      sidebarSource.indexOf('function openLogoDashboard()'),
+      sidebarSource.indexOf('async function openTab(tab: Tab)'),
+    )
+    expect(openLogoDashboard).toContain("key: '/apps'")
+    expect(openLogoDashboard).toContain('openTab(')
   })
 })

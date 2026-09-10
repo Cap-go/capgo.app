@@ -6,6 +6,7 @@ name: Builder onboarding TUI preview
 # starts, so none of them ever attach a check to the PR. If that happens, re-run
 # on the PR head manually: Actions -> "Builder onboarding TUI preview" -> Run
 # workflow -> pr_number=<PR>. Let a single push settle to get a PR-attached run.
+# Submodule golden-only fixes under private/cli-mcp-tests still match the paths filter.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || inputs.pr_number || github.ref_name }}
   cancel-in-progress: true

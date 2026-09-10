@@ -142,4 +142,155 @@ describe('onboarding dashboard redirect', () => {
       userId: 'user-1',
     })).toBe(false)
   })
+
+  it('scopes dashboard exploration grants to the active resumeAppId', async () => {
+    const module = await import('../src/utils/onboardingRedirect.ts')
+    module.allowOnboardingDashboardExploration('user-1', 'com.old.app')
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/onboarding/app',
+      destination: '/dashboard',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(true)
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      destination: '/dashboard',
+      resumeAppId: 'com.new.app',
+      userId: 'user-1',
+    })).toBe(true)
+
+    expect(module.getOnboardingResumeRedirect({
+      appId: 'com.new.app',
+      appCount: 1,
+      createdAt: eligibleUser,
+      organizationCount: 1,
+      path: '/apps',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toEqual({
+      path: '/onboarding/app',
+      query: { resume: 'com.new.app', step: 'setup' },
+    })
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      destination: '/dashboard',
+      resumeAppId: 'com.old.app',
+      userId: 'user-1',
+    })).toBe(false)
+  })
+
+  it('returns continue-setup route only off pre-create paths with resumeAppId', async () => {
+    const module = await import('../src/utils/onboardingRedirect.ts')
+
+    expect(module.getOnboardingContinueSetupRoute({
+      currentPath: '/onboarding/organization',
+      resumeAppId: 'com.example.app',
+    })).toBeNull()
+
+    expect(module.getOnboardingContinueSetupRoute({
+      currentPath: '/app/new',
+      resumeAppId: 'com.example.app',
+    })).toBeNull()
+
+    expect(module.getOnboardingContinueSetupRoute({
+      currentPath: '/apikeys',
+      resumeAppId: 'com.example.app',
+    })).toEqual({
+      path: '/app/new',
+      query: { resume: 'com.example.app' },
+    })
+
+    expect(module.getOnboardingContinueSetupRoute({
+      currentPath: '/dashboard',
+      currentStep: 'setup',
+      resumeAppId: 'com.example.app',
+    })).toEqual({
+      path: '/app/new',
+      query: { resume: 'com.example.app', step: 'setup' },
+    })
+
+    expect(module.getOnboardingContinueSetupRoute({
+      currentPath: '/apikeys',
+      resumeAppId: null,
+    })).toBeNull()
+  })
+
+  // Invitation/set_password are not first-app create paths (allowlist regression).
+  it('confirms console escapes during pre-create onboarding even without resumeAppId', async () => {
+    const module = await import('../src/utils/onboardingRedirect.ts')
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/app/new',
+      destination: '/dashboard',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(true)
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/app/new',
+      destination: '/apps',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(true)
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/app/new',
+      destination: '#',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(false)
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/apps',
+      destination: '/dashboard',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(false)
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/onboarding/organization',
+      destination: '/dashboard',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(true)
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/onboarding/organization',
+      currentSource: 'org-switcher',
+      destination: '/dashboard',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(false)
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/onboarding/app',
+      destination: '/dashboard',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(true)
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/onboarding/invitation',
+      destination: '/dashboard',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(false)
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/onboarding/set_password',
+      destination: '/apps',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(false)
+
+    module.allowOnboardingDashboardExploration('user-1', null)
+
+    expect(module.shouldConfirmOnboardingDashboardExploration({
+      currentPath: '/app/new',
+      destination: '/dashboard',
+      resumeAppId: null,
+      userId: 'user-1',
+    })).toBe(false)
+  })
 })

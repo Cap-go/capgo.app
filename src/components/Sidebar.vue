@@ -24,6 +24,7 @@ import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import {
   allowOnboardingDashboardExploration,
+  getOnboardingContinueSetupRoute,
   getOnboardingResumeAppId,
   ONBOARDING_DASHBOARD_EXPLORED_EVENT,
   shouldConfirmOnboardingDashboardExploration,
@@ -142,6 +143,14 @@ function isTabActive(tab: string) {
     return currentPath === tabPath || currentPath.startsWith(`${tabPath}/`)
   })
 }
+function openLogoDashboard() {
+  void openTab({
+    label: 'apps',
+    icon: IconAppStore,
+    key: '/apps',
+  })
+}
+
 async function openTab(tab: Tab) {
   if (isSpoofTab(tab) && spoofLoading.value)
     return
@@ -153,14 +162,14 @@ async function openTab(tab: Tab) {
   const onboardingResumeAppId = isPendingOnboardingResume
     ? resumeQueryAppId
     : getOnboardingResumeAppId(onboardingUserId)
+  const currentSource = typeof route.query.source === 'string' ? route.query.source : null
   const requiresOnboardingExplorationConfirmation = shouldConfirmOnboardingDashboardExploration({
+    currentPath: route.path,
+    currentSource,
     destination: tab.key,
     resumeAppId: onboardingResumeAppId,
     userId: onboardingUserId,
   })
-
-  if (tab.key === '/apikeys' && isPendingOnboardingResume)
-    allowOnboardingDashboardExploration(onboardingUserId, onboardingResumeAppId)
 
   if (requiresOnboardingExplorationConfirmation) {
     emit('closeSidebar')
@@ -168,17 +177,29 @@ async function openTab(tab: Tab) {
       title: t('app-onboarding-explore-dashboard-confirm-title'),
       description: t('app-onboarding-explore-dashboard-confirm-description'),
       buttons: [
-        { text: t('app-onboarding-continue-setup'), role: 'secondary' },
-        { text: t('app-onboarding-explore-dashboard'), role: 'primary' },
+        { text: t('app-onboarding-continue-setup'), role: 'primary' },
+        { text: t('app-onboarding-explore-dashboard'), role: 'secondary' },
       ],
     })
     const wasCanceled = await dialogStore.onDialogDismiss()
     if (wasCanceled)
       return
-    if (dialogStore.lastButtonRole === 'secondary') {
-      return router.push({ path: '/app/new', query: { resume: onboardingResumeAppId } })
+    // Primary = stay in setup on an active pre-create route, or return to it
+    // when the dialog fired only because resumeAppId is set on an escape path.
+    if (dialogStore.lastButtonRole === 'primary') {
+      const continueRoute = getOnboardingContinueSetupRoute({
+        currentPath: route.path,
+        currentSource,
+        currentStep: typeof route.query.step === 'string' ? route.query.step : null,
+        resumeAppId: onboardingResumeAppId,
+      })
+      if (continueRoute) {
+        await router.push(continueRoute)
+        emit('closeSidebar')
+      }
+      return
     }
-    if (dialogStore.lastButtonRole !== 'primary')
+    if (dialogStore.lastButtonRole !== 'secondary')
       return
 
     window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
@@ -333,10 +354,11 @@ function tabLabel(tab: Tab) {
       >
         <!-- Sidebar header -->
         <div class="flex border-b shrink-0 border-slate-800 lg:border-slate-700 py-4">
-          <router-link
+          <button
+            type="button"
             class="flex items-center rounded-lg cursor-pointer focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
-            to="/apps"
             aria-label="Capgo - Go to dashboard"
+            @click="openLogoDashboard"
           >
             <span class="flex w-12 h-11 shrink-0 items-center justify-center">
               <img src="/capgo.webp" alt="Capgo logo" class="w-8 h-8 shrink-0">
@@ -344,7 +366,7 @@ function tabLabel(tab: Tab) {
             <span class="text-xl font-semibold whitespace-nowrap font-prompt text-slate-200 hover:text-white lg:text-slate-200 lg:hover:text-white">
               Capgo
             </span>
-          </router-link>
+          </button>
         </div>
 
         <GettingStartedNav :compact="isRail" />

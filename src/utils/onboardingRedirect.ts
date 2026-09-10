@@ -94,6 +94,17 @@ function matchingDashboardExploration(userId: string | null | undefined): Dashbo
   return state?.userId === userId ? state : null
 }
 
+function hasScopedDashboardExplorationGrant(
+  userId: string | null | undefined,
+  resumeAppId: string | null | undefined,
+): boolean {
+  const state = matchingDashboardExploration(userId)
+  if (!state)
+    return false
+
+  return state.resumeAppId === (resumeAppId ?? null)
+}
+
 function matchesAppPath(path: string, appId: string) {
   const candidates = new Set([appId, encodeURIComponent(appId)])
   for (const candidate of candidates) {
@@ -113,18 +124,71 @@ export function allowOnboardingDashboardExploration(userId: string | null | unde
   writeStoredExploration(state)
 }
 
-export function canExploreOnboardingDashboard(userId: string | null | undefined) {
-  return !!matchingDashboardExploration(userId)
+export function canExploreOnboardingDashboard(
+  userId: string | null | undefined,
+  resumeAppId?: string | null,
+) {
+  return hasScopedDashboardExplorationGrant(userId, resumeAppId)
+}
+
+const ONBOARDING_CONSOLE_ESCAPE_DESTINATIONS = new Set([
+  '/dashboard',
+  '/apps',
+  '/apikeys',
+  '/scan',
+])
+
+export function isPreCreateOnboardingPath(
+  path: string | null | undefined,
+  options?: { source?: string | null },
+) {
+  if (!path)
+    return false
+  if (path === '/app/new' || path === '/onboarding/app')
+    return true
+  // /onboarding/organization is shared: first-app create hard-gates, but
+  // org-switcher / add-another-org should not. Other /onboarding/* routes
+  // (invitation, set_password, …) are not first-app create.
+  if (path === '/onboarding/organization' || path.startsWith('/onboarding/organization/'))
+    return options?.source !== 'org-switcher'
+  return false
+}
+
+export function getOnboardingContinueSetupRoute(options: {
+  currentPath?: string | null
+  currentSource?: string | null
+  currentStep?: string | null
+  resumeAppId: string | null | undefined
+}) {
+  if (isPreCreateOnboardingPath(options.currentPath, { source: options.currentSource }))
+    return null
+  if (!options.resumeAppId)
+    return null
+
+  const query: Record<string, string> = { resume: options.resumeAppId }
+  if (typeof options.currentStep === 'string' && options.currentStep)
+    query.step = options.currentStep
+
+  return { path: '/app/new', query }
 }
 
 export function shouldConfirmOnboardingDashboardExploration(options: {
+  currentPath?: string | null
+  currentSource?: string | null
   destination: string
   resumeAppId: string | null | undefined
   userId: string | null | undefined
 }) {
-  return options.destination === '/dashboard'
-    && !!options.resumeAppId
-    && !canExploreOnboardingDashboard(options.userId)
+  if (!ONBOARDING_CONSOLE_ESCAPE_DESTINATIONS.has(options.destination))
+    return false
+  if (canExploreOnboardingDashboard(options.userId, options.resumeAppId))
+    return false
+
+  // Confirm before empty-product escapes while a first-app create is still in
+  // progress — either a resumed pending app, or the active /app/new flow.
+  return !!options.resumeAppId || isPreCreateOnboardingPath(options.currentPath, {
+    source: options.currentSource,
+  })
 }
 
 export function getOnboardingResumeAppId(userId: string | null | undefined) {
@@ -161,7 +225,7 @@ export function getOnboardingResumeRedirect(options: {
   resumeAppId: string | null | undefined
   userId: string | null | undefined
 }) {
-  if (canExploreOnboardingDashboard(options.userId))
+  if (canExploreOnboardingDashboard(options.userId, options.appId))
     return null
   if (!isNewOnboardingUser(options.createdAt))
     return null
