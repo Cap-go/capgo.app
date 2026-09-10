@@ -2690,6 +2690,8 @@ function validatePackageJsonPath(value: string | undefined): string | undefined 
     return 'Path is required.'
   if (!existsSync(trimmedValue))
     return `Path ${trimmedValue} does not exist`
+  if (!statSync(trimmedValue).isFile())
+    return 'Selected path is not a file'
   if (path.basename(trimmedValue) !== PACKNAME)
     return 'Selected a file that is not a package.json file'
 }
