@@ -69,13 +69,16 @@ async function main() {
 
     const sourceStat = await rawS3client.statObject(obj.key)
     const discoveryEtag = sourceStat.etag
+    const discoveryLastModified = sourceStat.lastModified
     if (!discoveryEtag)
       throw new Error(`Missing source ETag for ${obj.key}; aborting transfer`)
+    if (!discoveryLastModified)
+      throw new Error(`Missing source Last-Modified for ${obj.key}; aborting transfer`)
 
     const destinationKey = obj.key.replace(oldUserId, newUserId)
-    await copyS3LiteObjectIfMatch(rawS3client, obj.key, destinationKey, discoveryEtag, S3_BUCKET)
+    await copyS3LiteObjectIfMatch(rawS3client, obj.key, destinationKey, discoveryEtag, S3_BUCKET, discoveryLastModified)
     try {
-      const trashResult = await moveS3LiteObjectToTrash(rawS3client, obj.key, S3_BUCKET, discoveryEtag)
+      const trashResult = await moveS3LiteObjectToTrash(rawS3client, obj.key, S3_BUCKET, discoveryEtag, discoveryLastModified)
       if (trashResult !== 'moved')
         throw new Error(`Copied ${obj.key} to new owner key but failed to trash source object (${trashResult})`)
     }

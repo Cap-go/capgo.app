@@ -4,7 +4,7 @@ import type { Database } from '../supabase/functions/_backend/utils/supabase.typ
 import { CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { createClient } from '@supabase/supabase-js'
 import { permanentDeleteAwsLiveKey } from './r2_cleanup/aws_permanent_delete.ts'
-import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, ConcurrencyLimiter, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, parseS3ListingLastModified, quoteS3CopySourceIfMatchEtag, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
+import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, ConcurrencyLimiter, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, normalizedS3EtagsMatch, parseLegacyAppsBundleKey, parseS3ListingLastModified, quoteS3CopySourceIfMatchEtag, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const MAGIC_TO_DELETE = './tmp/magic_to_delete6.txt'
@@ -76,6 +76,7 @@ async function main() {
 
     const supabase = supabaseAdmin()
     const lookupExistingPaths = async (batch: string[]) => {
+      const found = new Set<string>()
       const { data, error } = await supabase
         .from('app_versions')
         .select('r2_path')
@@ -83,7 +84,39 @@ async function main() {
         .eq('deleted', false)
       if (error)
         throw error
-      return (data ?? []).map(row => row.r2_path)
+      for (const row of data ?? [])
+        found.add(row.r2_path)
+
+      const legacyByApp = new Map<string, Array<{ key: string, versionName: string }>>()
+      for (const key of batch) {
+        if (found.has(key))
+          continue
+        const parsed = parseLegacyAppsBundleKey(key)
+        if (!parsed)
+          continue
+        const entries = legacyByApp.get(parsed.appId) ?? []
+        entries.push({ key, versionName: parsed.versionName })
+        legacyByApp.set(parsed.appId, entries)
+      }
+
+      for (const [appId, entries] of legacyByApp) {
+        const versionNames = entries.map(entry => entry.versionName)
+        const { data: versions, error: legacyError } = await supabase
+          .from('app_versions')
+          .select('name')
+          .eq('app_id', appId)
+          .in('name', versionNames)
+          .eq('deleted', false)
+        if (legacyError)
+          throw legacyError
+        const liveNames = new Set((versions ?? []).map(version => version.name))
+        for (const entry of entries) {
+          if (liveNames.has(entry.versionName))
+            found.add(entry.key)
+        }
+      }
+
+      return [...found]
     }
     async function isStillOrphaned(key: string): Promise<boolean> {
       const { candidates: stillOrphaned } = await revalidateDeleteCandidatesAgainstAppVersions(
@@ -197,7 +230,7 @@ async function main() {
         const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
         sourceEtag = head.ETag
         sourceLastModified = head.LastModified
-        if (candidateEtag !== sourceEtag) {
+        if (!normalizedS3EtagsMatch(candidateEtag, sourceEtag)) {
           console.warn(`Skipped ${key}: live object etag changed since discovery`)
           return 'skipped'
         }

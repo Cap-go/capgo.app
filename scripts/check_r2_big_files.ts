@@ -4,7 +4,7 @@ import { S3Client as S3ClientLite } from '@bradenmacdonald/s3-lite-client/'
 import { Pool } from 'pg'
 import { Context } from 'vm'
 import { permanentDeleteAwsLiveKey } from './r2_cleanup/aws_permanent_delete.ts'
-import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, ConcurrencyLimiter, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, quoteS3CopySourceIfMatchEtag, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
+import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, ConcurrencyLimiter, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, parseLegacyAppsBundleKey, quoteS3CopySourceIfMatchEtag, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const CHECKPOINT_FILE = './objects_checkpoint.json'
@@ -1597,6 +1597,26 @@ async function delete_cleanup_candidates() {
     const mockContext = {} as Context
     const pool = getPgClient(mockContext)
     let candidatesToProcess = toDelete
+
+    async function isKeyReferencedInAppVersions(key: string): Promise<boolean> {
+        const byPath = await pool.query(
+            'SELECT 1 FROM app_versions WHERE r2_path = $1 AND deleted = false AND deleted_at IS NULL LIMIT 1',
+            [key],
+        )
+        if ((byPath.rowCount ?? 0) > 0)
+            return true
+
+        const parsed = parseLegacyAppsBundleKey(key)
+        if (!parsed)
+            return false
+
+        const byLegacy = await pool.query(
+            'SELECT 1 FROM app_versions WHERE app_id = $1 AND name = $2 AND deleted = false AND deleted_at IS NULL LIMIT 1',
+            [parsed.appId, parsed.versionName],
+        )
+        return (byLegacy.rowCount ?? 0) > 0
+    }
+
     try {
         const candidateKeys = candidatesToProcess.map((file: { key: string }) => file.key)
         const existingPaths = new Set<string>()
@@ -1609,6 +1629,13 @@ async function delete_cleanup_candidates() {
             )
             for (const row of result.rows as { r2_path: string }[])
                 existingPaths.add(row.r2_path)
+
+            for (const key of batch) {
+                if (existingPaths.has(key))
+                    continue
+                if (await isKeyReferencedInAppVersions(key))
+                    existingPaths.add(key)
+            }
         }
         const beforeCount = candidatesToProcess.length
         candidatesToProcess = candidatesToProcess.filter((file: { key: string }) => !existingPaths.has(file.key))
@@ -1618,14 +1645,13 @@ async function delete_cleanup_candidates() {
     }
     catch (error) {
         console.error('❌ Failed to revalidate cleanup candidates against database:', error)
-        process.exit(1)
-    }
-    finally {
         await pool.end()
+        process.exit(1)
     }
 
     if (candidatesToProcess.length === 0) {
         console.log('✅ No orphaned files remain after DB revalidation')
+        await pool.end()
         return
     }
 
@@ -1642,6 +1668,7 @@ async function delete_cleanup_candidates() {
         for (const file of candidatesToProcess)
             console.log(`Would process: ${file.key}`)
         console.log(`✅ Dry-run complete for ${candidatesToProcess.length} live candidates`)
+        await pool.end()
         return
     }
 
@@ -1672,6 +1699,15 @@ async function delete_cleanup_candidates() {
 
     async function processCandidate(file: { key: string, size?: number, lastModified?: string | Date | null, etag?: string | null }): Promise<{ key: string, success: boolean, error: string | null, skipped?: boolean, size?: number }> {
         try {
+            if (await isKeyReferencedInAppVersions(file.key)) {
+                return {
+                    key: file.key,
+                    success: true,
+                    error: 'app_versions row appeared since discovery',
+                    skipped: true,
+                }
+            }
+
             if (!file.etag) {
                 return {
                     key: file.key,
@@ -1936,6 +1972,7 @@ async function delete_cleanup_candidates() {
     if (failed.length > 0) {
         console.log(`\n⚠️  ${failed.length} files failed to process`)
         console.log('💡 Review failed operations in the report')
+        await pool.end()
         process.exit(1)
     }
 
@@ -1949,6 +1986,8 @@ async function delete_cleanup_candidates() {
     console.log(`   ⏭️  Safely skipped: ${skipped.length}`)
     console.log(`   💾 Size ${deleteMode === 'permanent' ? 'deleted' : 'moved to trash'}: ${processedSizeGB} GB`)
     console.log(`   📁 Source bucket: ${S3_BUCKET}`)
+
+    await pool.end()
 }
 
 main()

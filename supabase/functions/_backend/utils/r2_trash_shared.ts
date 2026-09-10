@@ -2,6 +2,25 @@ export type OpsDeleteMode = 'dry_run' | 'trash' | 'permanent'
 
 export type DeleteFileCandidate = { key: string, etag?: string }
 
+/** Legacy `apps/{userId}/{appId}/{segment}/{version}.zip` keys from check_r2 discovery. */
+export function parseLegacyAppsBundleKey(key: string): { appId: string, versionName: string } | null {
+  if (!key.startsWith('apps/'))
+    return null
+  const parts = key.split('/')
+  if (parts.length < 5)
+    return null
+  const fileName = parts[4]
+  if (!fileName?.endsWith('.zip'))
+    return null
+  const versionName = fileName.slice(0, -4)
+  if (!versionName)
+    return null
+  const appId = parts[2]
+  if (!appId)
+    return null
+  return { appId, versionName }
+}
+
 /** Keep PostgREST `.in()` batches small enough for gateway URL limits. */
 const REVALIDATION_BATCH_SIZE = 50
 
@@ -438,11 +457,12 @@ export type S3LiteTrashMoveResult = 'moved' | 'skipped_missing' | 'skipped_chang
 
 /** Copy a live object to a destination key with CopySourceIfMatch (guards against source races). */
 export async function copyS3LiteObjectIfMatch(
-  s3client: Pick<RawS3LiteClient, 'makeRequest'>,
+  s3client: Pick<RawS3LiteClient, 'makeRequest' | 'statObject'>,
   sourceKey: string,
   destinationKey: string,
   sourceIfMatch: string,
   sourceBucketName: string,
+  sourceLastModified?: Date,
 ): Promise<void> {
   if (!sourceBucketName)
     throw new Error('sourceBucketName is required for guarded copy')
@@ -453,14 +473,36 @@ export async function copyS3LiteObjectIfMatch(
   const headers = new Headers({
     'x-amz-copy-source': copySource,
     'x-amz-copy-source-if-match': quoteS3CopySourceIfMatchEtag(sourceIfMatch),
+    'cf-copy-destination-if-none-match': '*',
   })
-  await s3client.makeRequest({
-    method: 'PUT',
-    objectName: destinationKey,
-    headers,
-    statusCode: 200,
-    returnBody: true,
-  })
+  try {
+    await s3client.makeRequest({
+      method: 'PUT',
+      objectName: destinationKey,
+      headers,
+      statusCode: 200,
+      returnBody: true,
+    })
+  }
+  catch (error) {
+    if (!isPreconditionFailedError(error) || !s3client.statObject)
+      throw error
+    try {
+      const destinationStat = await s3client.statObject(destinationKey)
+      if (trashDestinationMatchesSource(
+        { etag: destinationStat.etag, lastModified: destinationStat.lastModified },
+        sourceIfMatch,
+        sourceLastModified,
+      ))
+        return
+    }
+    catch (statError) {
+      if (isObjectNotFoundError(statError))
+        throw error
+      throw statError
+    }
+    throw new Error(`Destination ${destinationKey} already exists with different content`)
+  }
 }
 
 /** Copy a live object into trash with CopySourceIfMatch when makeRequest is available. */
@@ -525,6 +567,7 @@ export async function moveS3LiteObjectToTrash(
   key: string,
   sourceBucketName: string,
   discoveryEtag?: string,
+  discoveryLastModified?: Date,
 ): Promise<S3LiteTrashMoveResult> {
   if (!isLiveR2Key(key))
     return 'moved'
@@ -545,7 +588,10 @@ export async function moveS3LiteObjectToTrash(
   if (!sourceEtag || !sourceLastModified)
     return 'skipped_changed'
 
-  if (discoveryEtag && normalizeS3Etag(discoveryEtag) !== normalizeS3Etag(sourceEtag))
+  if (discoveryEtag && !normalizedS3EtagsMatch(discoveryEtag, sourceEtag))
+    return 'skipped_changed'
+
+  if (discoveryLastModified && sourceLastModified.getTime() !== discoveryLastModified.getTime())
     return 'skipped_changed'
 
   const trashKey = await resolveAvailableR2TrashKey(s3client, key, sourceEtag, sourceLastModified)

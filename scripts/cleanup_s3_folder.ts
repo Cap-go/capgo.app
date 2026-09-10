@@ -56,8 +56,12 @@ async function processKey(candidate: ListingCandidate): Promise<ProcessKeyResult
     }
 
     if (deleteMode === 'trash') {
+      if (!discoveryLastModified) {
+        console.error(`Failed ${key}: missing listing Last-Modified; source retained`)
+        return 'failed'
+      }
       console.log(`Moving to trash: ${key}`)
-      const result = await moveS3LiteObjectToTrash(rawS3client, key, S3_BUCKET, discoveryEtag)
+      const result = await moveS3LiteObjectToTrash(rawS3client, key, S3_BUCKET, discoveryEtag, discoveryLastModified)
       if (result === 'skipped_missing') {
         console.log(`Already absent: ${key}`)
         return 'skipped'
@@ -164,7 +168,7 @@ async function processFolder() {
         errorCount += 1
         continue
       }
-      if (deleteMode === 'dry_run' && permanentDeleteRequested && !obj.lastModified) {
+      if (deleteMode === 'dry_run' && !obj.lastModified) {
         console.log(`Would process: ${obj.key} (missing listing Last-Modified; would fail on execute)`)
         processedCount += 1
         continue
