@@ -37,6 +37,7 @@ import { getCliLoginCommand } from './runner-command'
 import { nativePackageSchema } from './schemas/common'
 import { safeParseSchema } from './schemas/schema_validation'
 import { CliUserError } from './shared/cli-user-error'
+import { getHttpErrorStatus } from './shared/http-status'
 import { isTransientNetworkError } from './shared/network-error'
 import { trimTrailingSlashes } from './shared/trim-trailing-slashes'
 import {
@@ -1028,8 +1029,7 @@ export interface CapgoCliInvokeOptions {
 }
 
 export function getCapgoCliHttpStatus(error: unknown): number | undefined {
-  const context = (error as { context?: { status?: number } } | null)?.context
-  return typeof context?.status === 'number' ? context.status : undefined
+  return getHttpErrorStatus(error)
 }
 
 export async function readCapgoCliApiErrorPayload(error: unknown): Promise<{ error?: string, message?: string } | null> {

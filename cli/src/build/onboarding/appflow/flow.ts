@@ -604,7 +604,7 @@ export function applyAppflowInput(step: AppflowStep, progress: AppflowProgress, 
       // leaves p8KeyId unset so the next step prompts for it.
       const p8Path = (input.text ?? input.value ?? '').trim()
       if (!p8Path)
-        return base
+        return progress
       const extracted = extractKeyIdFromP8Path(p8Path)
       return {
         ...base,
@@ -616,13 +616,13 @@ export function applyAppflowInput(step: AppflowStep, progress: AppflowProgress, 
     case 'input-p8-key-id': {
       const p8KeyId = (input.text ?? input.value ?? '').trim()
       if (!p8KeyId)
-        return base
+        return progress
       return { ...base, p8KeyId, p8IssuerId: undefined }
     }
     case 'input-p8-issuer-id': {
       const p8IssuerId = (input.text ?? input.value ?? '').trim()
       if (!p8IssuerId)
-        return base
+        return progress
       return { ...base, p8IssuerId }
     }
     case 'handoff-build':

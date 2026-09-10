@@ -1,15 +1,5 @@
 import { categorizeCliError } from '../analytics/error-category'
-
-/**
- * HTTP status on FunctionsHttpError lives on error.context (Response), not
- * error.status — categorizeCliError only sees the latter today.
- */
-function getContextHttpStatus(error: unknown): number | undefined {
-  if (!error || typeof error !== 'object')
-    return undefined
-  const context = (error as { context?: { status?: unknown } }).context
-  return typeof context?.status === 'number' ? context.status : undefined
-}
+import { getHttpErrorStatus } from './http-status'
 
 /**
  * Detect transport-level failures from supabase-js / fetch when an RPC or HTTP
@@ -23,7 +13,7 @@ export function isTransientNetworkError(error: unknown): boolean {
   if (category === 'network_error' || category === 'timeout')
     return true
 
-  const status = getContextHttpStatus(error)
+  const status = getHttpErrorStatus(error)
   if (status === 408 || status === 429 || (typeof status === 'number' && status >= 500))
     return true
 

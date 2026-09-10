@@ -3379,7 +3379,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
                       initialProgress._credentialsExistGate === undefined
                       && IOS_API_KEY_GATE_STEPS.has(startStep)
                     ) {
-                      const existing = await loadSavedCredentials(appId)
+                      const existing = await loadSavedCredentials(appId).catch(() => null)
                       if (existing?.ios) {
                         const seeded = { ...initialProgress, _credentialsExistGate: 'pending' as const }
                         await saveProgress(appId, seeded)

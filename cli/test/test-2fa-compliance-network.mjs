@@ -24,6 +24,10 @@ const nestedCause = new Error('TypeError: fetch failed', {
   cause: new Error('connect ECONNRESET'),
 })
 assert.equal(isTransientNetworkError(nestedCause), true)
+assert.equal(isTransientNetworkError({ context: { status: 503 } }), true)
+assert.equal(isTransientNetworkError({ context: { status: 429 } }), true)
+assert.equal(isTransientNetworkError({ context: { status: 408 } }), true)
+assert.equal(isTransientNetworkError({ context: { status: 404 } }), false)
 
 const originalFetch = globalThis.fetch
 
