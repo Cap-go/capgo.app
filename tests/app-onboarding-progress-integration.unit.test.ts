@@ -456,7 +456,7 @@ describe('app onboarding progress analytics integration', () => {
   })
 
   it.concurrent('shows channel education before CLI for every fresh or resumed setup path', () => {
-    expect(onboardingSource).toContain(`type PreOrgFlowStep = 'intent' | 'details' | 'organization' | 'setup'`)
+    expect(onboardingSource).toContain(`type PreOrgFlowStep = 'intent' | 'publish_app_question' | 'details' | 'organization' | 'setup'`)
     expect(onboardingSource).toContain(`type SetupStage = 'channel-routing' | 'channel-self-assign' | 'channel-console-assign' | 'channel-create' | 'cli'`)
     expect(onboardingSource).toContain(`const setupStage = ref<SetupStage>('channel-routing')`)
 
@@ -585,8 +585,11 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain('const ONBOARDING_AB_TEST_WAIT_TIMEOUT_MS = 3_000')
     expect(onboardingSource).toContain('void refreshOnboardingABTests()')
     expect(onboardingSource).toContain('await waitForOnboardingABTests()')
-    expect(onboardingSource).toContain('Promise.race([refreshOnboardingABTests(), timeout])')
+    expect(onboardingSource).toContain('Promise.race([refreshOnboardingABTests(options), timeout])')
     expect(onboardingSource).toContain('if (props.preOrg && !welcomePending.value)')
+    expect(onboardingSource).toContain('function refreshOnboardingABTests(options: { force?: boolean } = {})')
+    expect(onboardingSource).toContain('reconcileOnboardingABTestAssignments(')
+    expect(onboardingSource).toContain('if (onboardingABTestsRequest === request)')
     expect(onboardingSource).toContain('onboardingABTestsRequest = null')
     expect(onboardingSource).toContain(`webNativePublishIntentTreatment.value`)
     expect(onboardingSource).toContain(`webNativeDevelopmentEnvironmentTreatment.value`)
@@ -597,13 +600,13 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain("developmentEnvironment: selectedDevelopmentEnvironment.value ?? 'skipped'")
     expect(onboardingSource).toContain("completeAndViewStep('publish_app_question'")
     expect(onboardingSource).toContain(`?? (webNativeDevelopmentEnvironmentTreatment.value ? undefined : 'skipped')`)
-    expect(onboardingSource).toContain(`resolveOnboardingAnalyticsVersion(onboardingForABTests.value)`)
+    expect(onboardingSource).toContain(`resolveOnboardingAnalyticsVersion(onboardingForABTests.value, selectedIntent.value)`)
     expect(onboardingSource).not.toContain(`if (props.preOrg) {\n      await main.awaitInitialLoad()`)
     expect(onboardingSource).toContain(`const WEBNATIVE_APP_URL = 'https://webnativeapp.com/?ref=capgo'`)
     expect(onboardingSource).toContain(`const publishIntentOption = { value: 'publish'`)
     expect(onboardingSource).toContain(`data-test="\`onboarding-development-environment-\${option.value}\`"`)
     expect(onboardingSource).toContain(`:data-test="\`onboarding-intent-\${option.value}\`"`)
-    expect(onboardingSource).toContain('function continueFromGoal()')
+    expect(onboardingSource).toContain('async function continueFromGoal()')
     expect(onboardingSource).toContain("completeAndViewStep('publish_app_question'")
     expect(onboardingSource).toContain("trackStepEvent('onboarding_development_environment_selected', 'publish_app_question'")
     expect(onboardingSource).toContain('function continueFromDevelopmentEnvironment()')
@@ -635,6 +638,12 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).not.toContain('showCapgoIntentQuestion')
     expect(onboardingSource).toContain('data-test="onboarding-webnative-check-website"')
     expect(onboardingSource).toContain('data-test="onboarding-webnative-continue-capgo"')
+    const goalTransition = sourceBetween('async function continueFromGoal()', 'function continueFromDevelopmentEnvironment()')
+    expectSourceOrder(goalTransition, [
+      'await persistOnboardingProgress()',
+      'await waitForOnboardingABTests({ force: true })',
+      'completeAndViewStep(',
+    ])
     expect(englishMessages['organization-onboarding-intent-option-publish-label']).toBe('Convert my webapp to a mobile app')
     expect(englishMessages['organization-onboarding-intent-option-publish-desc']).toBe('Turn my existing website into an iOS and Android app.')
     expect(englishMessages['organization-onboarding-development-environment-question']).toBe('What do you use to build your app?')

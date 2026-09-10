@@ -63,7 +63,9 @@ import { isValidAppId } from '~/utils/appId'
 import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { useBeforeUnloadWarning } from '~/utils/beforeUnloadWarning'
 import {
+  hasNewChannelTreatment,
   hasWebNativeDevelopmentEnvironmentTreatment,
+  reconcileOnboardingABTestAssignments,
   parseOnboardingABTestAssignments,
   resolveOnboardingAnalyticsVersion,
   shouldShowWebNativePublishIntent,
@@ -138,7 +140,8 @@ const onboardingForABTests = computed(() => {
 const config = getLocalConfig()
 const webNativePublishIntentTreatment = computed(() => shouldShowWebNativePublishIntent(onboardingForABTests.value))
 const webNativeDevelopmentEnvironmentTreatment = computed(() => hasWebNativeDevelopmentEnvironmentTreatment(onboardingForABTests.value))
-const onboardingAnalyticsVersion = () => resolveOnboardingAnalyticsVersion(onboardingForABTests.value)
+const newChannelTreatment = computed(() => hasNewChannelTreatment(onboardingForABTests.value))
+const onboardingAnalyticsVersion = () => resolveOnboardingAnalyticsVersion(onboardingForABTests.value, selectedIntent.value)
 const onboardingTelemetry = createOnboardingTelemetryIdentity({
   flow: props.preOrg ? 'pre_org' : 'existing_org',
   onboardingVersion: onboardingAnalyticsVersion,
@@ -288,64 +291,72 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function refreshOnboardingABTests(): Promise<void> {
+function applyOnboardingABTestAssignments(assignments: Record<string, OnboardingABTestAssignment>) {
+  onboardingABTestAssignments.value = reconcileOnboardingABTestAssignments(
+    onboardingABTestAssignments.value,
+    assignments,
+  )
+  if (!main.user)
+    return
+
+  const currentOnboarding = isRecord(main.user.onboarding) ? main.user.onboarding : {}
+  const currentABTests = parseOnboardingABTestAssignments(currentOnboarding.abtests) ?? {}
+  main.user = {
+    ...main.user,
+    onboarding: {
+      ...currentOnboarding,
+      abtests: reconcileOnboardingABTestAssignments(currentABTests, assignments),
+    } as Json,
+  }
+}
+
+function refreshOnboardingABTests(options: { force?: boolean } = {}): Promise<void> {
   if (!props.preOrg || !onboardingUserId.value)
     return Promise.resolve()
-  if (onboardingABTestsRequest)
-    return onboardingABTestsRequest
+  if (onboardingABTestsRequest) {
+    if (!options.force)
+      return onboardingABTestsRequest
+    return onboardingABTestsRequest.then(() => refreshOnboardingABTests({ force: true }))
+  }
 
-  onboardingABTestsRequest = (async () => {
+  if (options.force)
+    applyOnboardingABTestAssignments({})
+
+  const request = (async () => {
     const { data, error } = await invokeCapgoApi<OnboardingABTestsResponse>('private/onboarding_ab_tests', {
       method: 'POST',
       retries: 1,
     })
     if (error) {
       console.error('Cannot load onboarding A/B tests', error)
-      onboardingABTestsRequest = null
       return
     }
 
     const assignments = parseOnboardingABTestAssignments(data?.assignments)
-    if (!assignments) {
-      onboardingABTestsRequest = null
-      return
-    }
-
-    onboardingABTestAssignments.value = {
-      ...onboardingABTestAssignments.value,
-      ...assignments,
-    }
-    if (!main.user)
+    if (!assignments)
       return
 
-    const currentOnboarding = isRecord(main.user.onboarding) ? main.user.onboarding : {}
-    const currentABTests = isRecord(currentOnboarding.abtests) ? currentOnboarding.abtests : {}
-    main.user = {
-      ...main.user,
-      onboarding: {
-        ...currentOnboarding,
-        abtests: {
-          ...currentABTests,
-          ...assignments,
-        },
-      } as Json,
-    }
+    applyOnboardingABTestAssignments(assignments)
   })().catch((error) => {
-    onboardingABTestsRequest = null
     console.error('Cannot load onboarding A/B tests', error)
   })
+  onboardingABTestsRequest = request
+  void request.finally(() => {
+    if (onboardingABTestsRequest === request)
+      onboardingABTestsRequest = null
+  })
 
-  return onboardingABTestsRequest
+  return request
 }
 
-async function waitForOnboardingABTests() {
+async function waitForOnboardingABTests(options: { force?: boolean } = {}) {
   let timeoutId: number | undefined
   const timeout = new Promise<void>((resolve) => {
     timeoutId = window.setTimeout(resolve, ONBOARDING_AB_TEST_WAIT_TIMEOUT_MS)
   })
 
   try {
-    await Promise.race([refreshOnboardingABTests(), timeout])
+    await Promise.race([refreshOnboardingABTests(options), timeout])
   }
   finally {
     window.clearTimeout(timeoutId)
@@ -829,6 +840,7 @@ function resetOnboardingForm() {
   selectedDevelopmentEnvironment.value = null
   skippedPublishAppQuestion.value = false
   selectedIntent.value = null
+  applyOnboardingABTestAssignments({})
   webNativeRecommendationDismissed.value = false
   existingApp.value = props.preOrg ? true : null
   existingAppSetup.value = props.preOrg ? 'manual' : null
@@ -1777,11 +1789,13 @@ function continueFromIntent() {
   })
 }
 
-function continueFromGoal() {
+async function continueFromGoal() {
   if (!selectedIntent.value) {
     toast.error(t('organization-onboarding-intent-required'))
     return
   }
+  await persistOnboardingProgress()
+  await waitForOnboardingABTests({ force: true })
   if (webNativeDevelopmentEnvironmentTreatment.value) {
     ensurePublishAppQuestionStepTracked()
     completeAndViewStep('publish_app_question', {

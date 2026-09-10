@@ -6,6 +6,7 @@ import {
   hasWebNativePublishIntentTreatment,
   NEW_CHANNEL_AB_TEST,
   parseOnboardingABTestAssignments,
+  reconcileOnboardingABTestAssignments,
   resolveOnboardingAnalyticsVersion,
   shouldShowWebNativePublishIntent,
   shouldShowWebNativeRecommendation,
@@ -141,5 +142,12 @@ describe('webNativeApp onboarding A/B tests', () => {
     expect(parseOnboardingABTestAssignments(null)).toBeNull()
     expect(parseOnboardingABTestAssignments({ invalid: { assigned_at: 12, branch: 'A' } })).toBeNull()
     expect(parseOnboardingABTestAssignments({ invalid: { assigned_at: 'now', branch: 'Z' } })).toBeNull()
+  })
+
+  it.concurrent('removes a revoked channel assignment while preserving unrelated tests', () => {
+    const current = onboardingWithNewChannel('A', 'D', 'A').abtests
+    const authoritative = onboardingFor('A', 'D').abtests
+
+    expect(reconcileOnboardingABTestAssignments(current, authoritative)).toEqual(authoritative)
   })
 })

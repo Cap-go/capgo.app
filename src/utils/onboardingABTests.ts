@@ -47,6 +47,18 @@ export function parseOnboardingABTestAssignments(value: unknown): Record<string,
   return assignments
 }
 
+export function reconcileOnboardingABTestAssignments(
+  current: Record<string, OnboardingABTestAssignment>,
+  authoritative: Record<string, OnboardingABTestAssignment>,
+): Record<string, OnboardingABTestAssignment> {
+  const next = { ...current }
+  delete next[NEW_CHANNEL_AB_TEST]
+  return {
+    ...next,
+    ...authoritative,
+  }
+}
+
 function getABTestBranch(onboarding: unknown, testName: string): OnboardingABTestBranch | null {
   if (!isRecord(onboarding) || !isRecord(onboarding.abtests))
     return null
