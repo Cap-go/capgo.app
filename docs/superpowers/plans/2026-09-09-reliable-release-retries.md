@@ -389,19 +389,19 @@ Tasks 1–3 above describe the first implementation already present on this PR b
 - Modify: `tests/capgo-release-workflow.unit.test.ts`
 - Modify: `.github/workflows/bump_version.yml`
 
-- [ ] **Step 1: Add failing workflow contract tests**
+- [x] **Step 1: Add failing workflow contract tests**
 
 Require workflow-level concurrency that gives first-attempt, non-bot source pushes one shared branch group and gives bot commits or re-runs a unique group. Require `cancel-in-progress: true` so a new source push cancels older version work, without allowing an ignored auto-generated commit or a manual re-run to cancel legitimate work.
 
 Require explicit `github.run_attempt` guards in both `changes` and `bump-version`. The guard must exit non-zero with an actionable message, so “Re-run all jobs” and a direct re-run of the tag-generating job both fail before release mutation.
 
-- [ ] **Step 2: Run the focused workflow test and verify failure**
+- [x] **Step 2: Run the focused workflow test and verify failure**
 
 ```bash
 bunx vitest run tests/capgo-release-workflow.unit.test.ts
 ```
 
-- [ ] **Step 3: Implement concurrency and fail-fast guards**
+- [x] **Step 3: Implement concurrency and fail-fast guards**
 
 Add a conditional concurrency group keyed by branch only for a first-attempt source push. Keep ignored `chore(release):` and `chore(auto-sync):` runs, plus every `run_attempt > 1`, isolated with `github.run_id` and `github.run_attempt`.
 
@@ -414,7 +414,7 @@ if [ "$GITHUB_RUN_ATTEMPT" != "1" ]; then
 fi
 ```
 
-- [ ] **Step 4: Re-run the focused workflow test**
+- [x] **Step 4: Re-run the focused workflow test**
 
 Expected: the concurrency and re-run contracts pass without weakening the complete reusable test job.
 

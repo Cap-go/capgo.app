@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 
 interface WorkflowStep {
+  if?: string
   name?: string
+  run?: string
   uses?: string
   with?: Record<string, string>
 }
@@ -13,6 +15,10 @@ interface WorkflowJob {
 }
 
 interface WorkflowDefinition {
+  concurrency?: {
+    'cancel-in-progress'?: boolean
+    group?: string
+  }
   jobs?: Record<string, WorkflowJob>
 }
 
@@ -41,6 +47,34 @@ function getStep(workflow: string, name: string): string {
 }
 
 describe('native-aware Capgo release workflow', () => {
+  it.concurrent('cancels superseded source pushes without letting re-runs or bot commits cancel release work', async () => {
+    const workflowSource = await readWorkflow(workflowPaths.bump)
+    const workflow = parseWorkflow(workflowSource)
+
+    expect(workflow.concurrency?.['cancel-in-progress']).toBe(true)
+    expect(workflow.concurrency?.group).toContain('github.run_attempt == 1')
+    expect(workflow.concurrency?.group).toContain("!startsWith(github.event.head_commit.message, 'chore(release):')")
+    expect(workflow.concurrency?.group).toContain("!startsWith(github.event.head_commit.message, 'chore(auto-sync):')")
+    expect(workflow.concurrency?.group).toContain('github.ref')
+    expect(workflow.concurrency?.group).toContain('github.run_id')
+    expect(workflow.concurrency?.group).toContain('github.run_attempt')
+  })
+
+  it.concurrent('fails every version-generation re-run before it can create tags', async () => {
+    const workflow = parseWorkflow(await readWorkflow(workflowPaths.bump))
+
+    for (const jobName of ['changes', 'bump-version']) {
+      const steps = workflow.jobs?.[jobName]?.steps ?? []
+      const guard = steps.find(step => step.name === 'Reject version workflow re-run')
+
+      expect(guard, `${jobName} must reject re-runs independently`).toBeDefined()
+      expect(guard?.if).toBe('${{ github.run_attempt != 1 }}')
+      expect(guard?.run).toContain('Version-generation workflows cannot be re-run')
+      expect(guard?.run).toContain('exit 1')
+      expect(steps.indexOf(guard!)).toBe(0)
+    }
+  })
+
   it.concurrent('reruns deployment against the newest immutable environment tag', async () => {
     const workflowSource = await readWorkflow(workflowPaths.deploy)
     const workflow = parseWorkflow(workflowSource)

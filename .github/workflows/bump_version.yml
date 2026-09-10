@@ -1,5 +1,9 @@
 name: Bump version
 
+concurrency:
+  group: ${{ github.run_attempt == 1 && !startsWith(github.event.head_commit.message, 'chore(release):') && !startsWith(github.event.head_commit.message, 'chore(auto-sync):') && format('bump-version-{0}', github.ref) || format('bump-version-isolated-{0}-{1}', github.run_id, github.run_attempt) }}
+  cancel-in-progress: true
+
 on:
   push:
     branches:
@@ -24,6 +28,11 @@ jobs:
       has_migration_changes: ${{ steps.migration_scope.outputs.has_migration_changes }}
       run_any: ${{ steps.capgo.outputs.should_release == 'true' || steps.cli.outputs.should_release == 'true' || steps.notifications.outputs.should_release == 'true' }}
     steps:
+      - name: Reject version workflow re-run
+        if: ${{ github.run_attempt != 1 }}
+        run: |
+          echo "::error::Version-generation workflows cannot be re-run. Push a new commit so release scope is recalculated from the current branch."
+          exit 1
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -95,6 +104,11 @@ jobs:
     outputs:
       published: ${{ steps.publish.outputs.published }}
     steps:
+      - name: Reject version workflow re-run
+        if: ${{ github.run_attempt != 1 }}
+        run: |
+          echo "::error::Version-generation workflows cannot be re-run. Push a new commit so release scope is recalculated from the current branch."
+          exit 1
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
