@@ -22,6 +22,7 @@ export {
   getNewCustomersBillingAccount,
   getPlanCreditProductId,
   getPlanProductId,
+  resolvePlanCreditProductId,
   getStripeWebhookSecret,
   isStripeConfiguredForAccount,
   normalizeBillingAccount,

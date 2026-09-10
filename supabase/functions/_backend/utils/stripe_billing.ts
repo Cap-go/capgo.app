@@ -22,7 +22,11 @@ export function normalizeBillingAccount(value: string | null | undefined): Billi
 
 export function getNewCustomersBillingAccount(c: Context): BillingAccount {
   const flag = getEnv(c, 'STRIPE_NEW_CUSTOMERS_ACCOUNT').trim().toLowerCase()
-  return flag === 'us' ? 'us' : 'ee'
+  if (!flag || flag === 'ee')
+    return 'ee'
+  if (flag === 'us')
+    return 'us'
+  throw new Error(`Invalid STRIPE_NEW_CUSTOMERS_ACCOUNT value: ${JSON.stringify(flag)}`)
 }
 
 export function getStripeSecretKeyEnvName(account: BillingAccount): string {
@@ -113,6 +117,12 @@ export function getPlanPriceId(plan: PlanStripeIds, account: BillingAccount, rec
       : requireUsPlanField(plan.price_m_id_us, 'price_m_id_us')
   }
   return yearly ? plan.price_y_id : plan.price_m_id
+}
+
+export function resolvePlanCreditProductId(plan: PlanStripeIds, account: BillingAccount): string {
+  if (account === 'us')
+    return normalizeUsPlanField(plan.credit_id_us) ?? ''
+  return plan.credit_id?.trim() ?? ''
 }
 
 export function getPlanCreditProductId(plan: PlanStripeIds, account: BillingAccount): string {

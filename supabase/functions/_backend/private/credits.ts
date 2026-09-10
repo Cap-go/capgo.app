@@ -13,7 +13,7 @@ import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
-import { createOneTimeCheckout, getBillingAccountForCustomer, getCreditCheckoutDetails, getPlanCreditProductId, getStripe, isStripeEmulatorEnabled, planProductIdOrFilter } from '../utils/stripe.ts'
+import { createOneTimeCheckout, getBillingAccountForCustomer, getCreditCheckoutDetails, getPlanCreditProductId, getStripe, isStripeEmulatorEnabled, planProductIdOrFilter, resolvePlanCreditProductId } from '../utils/stripe.ts'
 import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
 import { getEnv } from '../utils/utils.ts'
 
@@ -287,7 +287,7 @@ async function getCreditTopUpProductId(c: AppContext, customerId: string, token:
     return { productId }
   }
 
-  const productId = getPlanCreditProductId(plan, billingAccount)
+  const productId = resolvePlanCreditProductId(plan, billingAccount)
   if (!productId) {
     const fallbackProductId = await getFallbackCreditProductId(c, customerId, async () => {
       const { data, error } = await supabase

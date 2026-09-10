@@ -871,12 +871,22 @@ async function getCreditTopUpProductIdFromCustomer(c: Context, customerId: strin
     .eq('customer_id', customerId)
     .maybeSingle()
 
-  if (stripeInfoError || !stripeInfo?.product_id) {
+  if (stripeInfoError) {
+    if (isRetryablePostgrestError(stripeInfoError)) {
+      const retryStatus = getRetryablePostgrestStatus(stripeInfoError) ?? 503
+      throw quickError(retryStatus, 'stripe_info_lookup_failed', 'Temporary stripe_info lookup failure', {
+        customerId,
+        stripeInfoError,
+      })
+    }
+    throw simpleError('stripe_info_lookup_failed', 'stripe_info lookup failed', { customerId, stripeInfoError })
+  }
+
+  if (!stripeInfo?.product_id) {
     cloudlog({
       requestId: c.get('requestId'),
       message: 'credit_plan_missing',
       customerId,
-      error: stripeInfoError,
     })
     return await getFallbackCreditProductId(c, customerId, fetchFallbackPlan)
   }

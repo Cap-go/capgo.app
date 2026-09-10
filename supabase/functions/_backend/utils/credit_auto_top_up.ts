@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import Stripe from 'stripe'
 import { getFallbackCreditProductId } from './credits.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { getBillingAccountForCustomer, getOneTimePriceId, getPlanCreditProductId, getStripe, isStripeEmulatorEnabled, isStripeConfiguredForAccount, planProductIdOrFilter } from './stripe.ts'
+import { getBillingAccountForCustomer, getOneTimePriceId, getPlanCreditProductId, getStripe, isStripeEmulatorEnabled, isStripeConfiguredForAccount, planProductIdOrFilter, resolvePlanCreditProductId } from './stripe.ts'
 import { supabaseAdmin } from './supabase.ts'
 
 export const MIN_AUTO_TOP_UP_THRESHOLD = 10
@@ -136,7 +136,7 @@ async function getCreditProductIdForCustomer(c: Context, customerId: string): Pr
   if (planError || !plan)
     return await getFallbackCreditProductId(c, customerId, loadSoloPlan)
 
-  const creditProductId = getPlanCreditProductId(plan, billingAccount)
+  const creditProductId = resolvePlanCreditProductId(plan, billingAccount)
   if (!creditProductId)
     return await getFallbackCreditProductId(c, customerId, loadSoloPlan)
 

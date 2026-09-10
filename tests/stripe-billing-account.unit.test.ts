@@ -23,6 +23,7 @@ import {
   normalizeBillingAccount,
   planProductIdOrFilter,
   resolveCheckoutPlanProductId,
+  resolvePlanCreditProductId,
 } from '../supabase/functions/_backend/utils/stripe_billing.ts'
 
 function createContext() {
@@ -70,6 +71,17 @@ describe('stripe billing account helpers', () => {
     }
   })
 
+  it('throws on invalid STRIPE_NEW_CUSTOMERS_ACCOUNT values', () => {
+    const previousFlag = mockedEnv.STRIPE_NEW_CUSTOMERS_ACCOUNT
+    try {
+      mockedEnv.STRIPE_NEW_CUSTOMERS_ACCOUNT = 'typo'
+      expect(() => getNewCustomersBillingAccount(createContext())).toThrow(/Invalid STRIPE_NEW_CUSTOMERS_ACCOUNT/)
+    }
+    finally {
+      mockedEnv.STRIPE_NEW_CUSTOMERS_ACCOUNT = previousFlag
+    }
+  })
+
   it('normalizes billing account values', () => {
     expect(normalizeBillingAccount('us')).toBe('us')
     expect(normalizeBillingAccount('ee')).toBe('ee')
@@ -88,6 +100,7 @@ describe('stripe billing account helpers', () => {
     expect(getPlanPriceId(SOLO_PLAN, 'us', 'month')).toBe('price_1UDRGPLr632EP5z4ufTRBBzf')
     expect(getPlanPriceId(SOLO_PLAN, 'ee', 'year')).toBe('price_1LVvuIGH46eYKnWwHMDCrxcH')
     expect(getPlanCreditProductId(SOLO_PLAN, 'us')).toBe('prod_VDt2YB5GrYFnII')
+    expect(resolvePlanCreditProductId({ ...SOLO_PLAN, credit_id_us: null }, 'us')).toBe('')
   })
 
   it('builds dual-product lookup filter', () => {
