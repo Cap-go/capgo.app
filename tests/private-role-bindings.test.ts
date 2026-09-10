@@ -405,7 +405,6 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       const deleteResponse = await fetchTestRequest(getEndpointUrl(`/private/role_bindings/${createData.id}`), {
         method: 'DELETE',
         headers: authHeaders,
-        retryUnsafe: true,
       })
       const deleteData = await deleteResponse.json() as { success?: boolean, error?: string }
       expect(deleteResponse.status).toBe(200)
@@ -768,7 +767,6 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       const deleteResponse = await fetchTestRequest(getEndpointUrl(`/private/role_bindings/${binding!.id}`), {
         method: 'DELETE',
         headers: authHeaders,
-        retryUnsafe: true,
       })
 
       const deleteData = await deleteResponse.json() as { success?: boolean, error?: string }
@@ -915,7 +913,6 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       const deleteResponse = await fetchTestRequest(getEndpointUrl(`/private/role_bindings/${targetBinding!.id}`), {
         method: 'DELETE',
         headers: authHeaders,
-        retryUnsafe: true,
       })
       const deleteData = await deleteResponse.json() as { success?: boolean, error?: string }
 
@@ -1053,7 +1050,6 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       const deleteResponse = await fetchTestRequest(getEndpointUrl(`/private/role_bindings/${orgBinding!.id}`), {
         method: 'DELETE',
         headers: authHeaders,
-        retryUnsafe: true,
       })
       const deleteData = await deleteResponse.json() as { success?: boolean, error?: string }
 
@@ -1203,7 +1199,6 @@ describe.skipIf(USE_CLOUDFLARE)('/private/role_bindings', () => {
       const deleteResponse = await fetchTestRequest(getEndpointUrl(`/private/role_bindings/${orgABinding!.id}`), {
         method: 'DELETE',
         headers: authHeaders,
-        retryUnsafe: true,
       })
       const deleteData = await deleteResponse.json() as { success?: boolean, error?: string }
 

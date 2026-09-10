@@ -786,6 +786,8 @@ function buildDailyPlatformActiveTotals(rows: NativeDailyPlatformRow[], dates: s
   const ios = Array.from({ length: dates.length }).fill(0) as number[]
   const electron = Array.from({ length: dates.length }).fill(0) as number[]
   const unknown = Array.from({ length: dates.length }).fill(0) as number[]
+  const totalFromRows = Array.from({ length: dates.length }).fill(0) as number[]
+  const hasTotalFromRows = Array.from({ length: dates.length }).fill(false) as boolean[]
 
   rows.forEach((row) => {
     const date = dayjs(row.date).utc().format('YYYY-MM-DD')
@@ -794,6 +796,13 @@ function buildDailyPlatformActiveTotals(rows: NativeDailyPlatformRow[], dates: s
       return
 
     const devices = Math.max(0, Number(row.devices) || 0)
+    const rawPlatform = row.platform?.trim().toLowerCase() || ''
+    if (rawPlatform === 'total') {
+      totalFromRows[index] = devices
+      hasTotalFromRows[index] = true
+      return
+    }
+
     const platform = normalizeNativePlatform(row.platform)
     if (platform === 'android')
       android[index] += devices
@@ -805,7 +814,11 @@ function buildDailyPlatformActiveTotals(rows: NativeDailyPlatformRow[], dates: s
       unknown[index] += devices
   })
 
-  const total = dates.map((_date, index) => android[index] + ios[index] + electron[index] + unknown[index])
+  const total = dates.map((_date, index) => (
+    hasTotalFromRows[index]
+      ? totalFromRows[index]
+      : android[index] + ios[index] + electron[index] + unknown[index]
+  ))
 
   return {
     labels: dates,

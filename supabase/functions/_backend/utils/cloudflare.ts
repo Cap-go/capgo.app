@@ -985,6 +985,17 @@ WHERE
   AND timestamp >= toDateTime('${formatDateCF(period_start)}')
   AND timestamp < toDateTime('${formatDateCF(period_end)}')
 GROUP BY date, platform
+UNION ALL
+SELECT
+  formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
+  'total' AS platform,
+  COUNT(DISTINCT blob1) AS devices
+FROM device_usage
+WHERE
+  index1 = '${escapeSqlString(app_id)}'
+  AND timestamp >= toDateTime('${formatDateCF(period_start)}')
+  AND timestamp < toDateTime('${formatDateCF(period_end)}')
+GROUP BY date
 ORDER BY date, platform`
 
   cloudlog({ requestId: c.get('requestId'), message: 'readNativeDailyPlatformActiveCF query', query })

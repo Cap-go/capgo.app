@@ -114,13 +114,27 @@ BEGIN
     WHERE du.timestamp >= p_period_start
       AND du.timestamp < p_period_end
   )
+  daily_counts AS (
+    SELECT
+      daily_usage.usage_date AS date,
+      daily_usage.usage_platform AS platform,
+      COUNT(DISTINCT daily_usage.device_id)::bigint AS devices
+    FROM daily_usage
+    GROUP BY daily_usage.usage_date, daily_usage.usage_platform
+    UNION ALL
+    SELECT
+      daily_usage.usage_date AS date,
+      'total'::character varying AS platform,
+      COUNT(DISTINCT daily_usage.device_id)::bigint AS devices
+    FROM daily_usage
+    GROUP BY daily_usage.usage_date
+  )
   SELECT
-    daily_usage.usage_date AS date,
-    daily_usage.usage_platform AS platform,
-    COUNT(DISTINCT daily_usage.device_id)::bigint AS devices
-  FROM daily_usage
-  GROUP BY daily_usage.usage_date, daily_usage.usage_platform
-  ORDER BY daily_usage.usage_date, daily_usage.usage_platform;
+    daily_counts.date,
+    daily_counts.platform,
+    daily_counts.devices
+  FROM daily_counts
+  ORDER BY daily_counts.date, daily_counts.platform;
 END;
 $$;
 

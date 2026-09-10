@@ -89,6 +89,21 @@ describe('native usage backend helpers', () => {
     })
   })
 
+  it('uses explicit daily total rows instead of summing platform counts', () => {
+    expect(nativeUsageTestUtils.buildDailyPlatformActiveTotals([
+      { date: '2024-10-24', platform: 'ios', devices: 1 },
+      { date: '2024-10-24', platform: 'android', devices: 1 },
+      { date: '2024-10-24', platform: 'total', devices: 1 },
+    ], ['2024-10-24'])).toEqual({
+      labels: ['2024-10-24'],
+      android: [1],
+      ios: [1],
+      electron: [0],
+      unknown: [0],
+      total: [1],
+    })
+  })
+
   it('accumulates multiple non-canonical platform values into the unknown bucket', () => {
     expect(nativeUsageTestUtils.summarizeNativeActiveDevices([
       { platform: 'windows', devices: 4 },
