@@ -1598,13 +1598,47 @@ async function delete_cleanup_candidates() {
     const pool = getPgClient(mockContext)
     let candidatesToProcess = toDelete
 
+    const referencedKeys = new Set<string>()
+
+    async function addLegacyReferencedKeys(batch: string[]) {
+        const legacyByApp = new Map<string, Array<{ key: string, versionName: string }>>()
+        for (const key of batch) {
+            if (referencedKeys.has(key))
+                continue
+            const parsed = parseLegacyAppsBundleKey(key)
+            if (!parsed)
+                continue
+            const entries = legacyByApp.get(parsed.appId) ?? []
+            entries.push({ key, versionName: parsed.versionName })
+            legacyByApp.set(parsed.appId, entries)
+        }
+
+        for (const [appId, entries] of legacyByApp) {
+            const versionNames = entries.map(entry => entry.versionName)
+            const result = await pool.query(
+                'SELECT name FROM app_versions WHERE app_id = $1 AND name = ANY($2) AND deleted = false AND deleted_at IS NULL',
+                [appId, versionNames],
+            )
+            const liveNames = new Set((result.rows as { name: string }[]).map(row => row.name))
+            for (const entry of entries) {
+                if (liveNames.has(entry.versionName))
+                    referencedKeys.add(entry.key)
+            }
+        }
+    }
+
     async function isKeyReferencedInAppVersions(key: string): Promise<boolean> {
+        if (referencedKeys.has(key))
+            return true
+
         const byPath = await pool.query(
             'SELECT 1 FROM app_versions WHERE r2_path = $1 AND deleted = false AND deleted_at IS NULL LIMIT 1',
             [key],
         )
-        if ((byPath.rowCount ?? 0) > 0)
+        if ((byPath.rowCount ?? 0) > 0) {
+            referencedKeys.add(key)
             return true
+        }
 
         const parsed = parseLegacyAppsBundleKey(key)
         if (!parsed)
@@ -1614,12 +1648,13 @@ async function delete_cleanup_candidates() {
             'SELECT 1 FROM app_versions WHERE app_id = $1 AND name = $2 AND deleted = false AND deleted_at IS NULL LIMIT 1',
             [parsed.appId, parsed.versionName],
         )
+        if ((byLegacy.rowCount ?? 0) > 0)
+            referencedKeys.add(key)
         return (byLegacy.rowCount ?? 0) > 0
     }
 
     try {
         const candidateKeys = candidatesToProcess.map((file: { key: string }) => file.key)
-        const existingPaths = new Set<string>()
         const REVALIDATION_BATCH_SIZE = 50
         for (let i = 0; i < candidateKeys.length; i += REVALIDATION_BATCH_SIZE) {
             const batch = candidateKeys.slice(i, i + REVALIDATION_BATCH_SIZE)
@@ -1628,17 +1663,12 @@ async function delete_cleanup_candidates() {
                 [batch],
             )
             for (const row of result.rows as { r2_path: string }[])
-                existingPaths.add(row.r2_path)
+                referencedKeys.add(row.r2_path)
 
-            for (const key of batch) {
-                if (existingPaths.has(key))
-                    continue
-                if (await isKeyReferencedInAppVersions(key))
-                    existingPaths.add(key)
-            }
+            await addLegacyReferencedKeys(batch)
         }
         const beforeCount = candidatesToProcess.length
-        candidatesToProcess = candidatesToProcess.filter((file: { key: string }) => !existingPaths.has(file.key))
+        candidatesToProcess = candidatesToProcess.filter((file: { key: string }) => !referencedKeys.has(file.key))
         const skippedCount = beforeCount - candidatesToProcess.length
         if (skippedCount > 0)
             console.log(`⏭️  Skipping ${skippedCount} candidates that now have app_versions records`)

@@ -3,7 +3,7 @@ import type { Database } from '../supabase/functions/_backend/utils/supabase.typ
 import { ensureFile } from 'https://deno.land/std/fs/ensure_file.ts'
 import { S3Client } from 'https://deno.land/x/s3_lite_client@0.7.0/mod.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js'
-import { copyS3LiteObjectIfMatch, moveS3LiteObjectToTrash } from './r2_trash_utils.ts'
+import { copyS3LiteObjectIfMatch, isObjectNotFoundError, moveS3LiteObjectToTrash, normalizedS3EtagsMatch } from './r2_trash_utils.ts'
 
 const supabaseUrl = 'https://sb.capgo.app'
 const supabaseServiceRole = '***'
@@ -76,7 +76,20 @@ async function main() {
       throw new Error(`Missing source Last-Modified for ${obj.key}; aborting transfer`)
 
     const destinationKey = obj.key.replace(oldUserId, newUserId)
-    await copyS3LiteObjectIfMatch(rawS3client, obj.key, destinationKey, discoveryEtag, S3_BUCKET, discoveryLastModified)
+    let destinationReady = false
+    try {
+      const destinationStat = await rawS3client.statObject(destinationKey)
+      if (normalizedS3EtagsMatch(destinationStat.etag, discoveryEtag))
+        destinationReady = true
+      else
+        throw new Error(`Destination ${destinationKey} already exists with different content; aborting transfer`)
+    }
+    catch (error) {
+      if (!isObjectNotFoundError(error))
+        throw error
+    }
+    if (!destinationReady)
+      await copyS3LiteObjectIfMatch(rawS3client, obj.key, destinationKey, discoveryEtag, S3_BUCKET, discoveryLastModified)
     try {
       const trashResult = await moveS3LiteObjectToTrash(rawS3client, obj.key, S3_BUCKET, discoveryEtag, discoveryLastModified)
       if (trashResult !== 'moved')

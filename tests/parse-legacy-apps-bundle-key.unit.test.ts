@@ -12,4 +12,8 @@ describe('parseLegacyAppsBundleKey', () => {
   it('returns null for non-apps keys', () => {
     expect(parseLegacyAppsBundleKey('orgs/a/apps/com.demo.app/v/1.zip')).toBeNull()
   })
+
+  it('returns null when extra path segments are present', () => {
+    expect(parseLegacyAppsBundleKey('apps/user-1/com.demo.app/channel/extra/v1.2.3.zip')).toBeNull()
+  })
 })

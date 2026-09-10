@@ -19,6 +19,7 @@ import {
   isLiveR2Key,
   isObjectNotFoundError,
   isPreconditionFailedError,
+  normalizedS3EtagsMatch,
   quoteS3CopySourceIfMatchEtag,
   resolveR2CleanupDeleteMode,
   resolveTrashDestinationKey,
@@ -157,7 +158,7 @@ async function processKey(target: TrashProcessTarget): Promise<void> {
         return
       }
 
-      if (discoveryEtag !== sourceEtag) {
+      if (!normalizedS3EtagsMatch(discoveryEtag, sourceEtag)) {
         console.warn(`Skipped trash for ${key}: live object etag changed since discovery`)
         totalProcessed += 1
         return
@@ -310,27 +311,62 @@ async function permanentDeleteBatch(keys: PermanentDeleteTarget[]): Promise<void
   }
 }
 
+function groupKeysByParentPrefix(keys: string[]): Map<string, string[]> {
+  const groups = new Map<string, string[]>()
+  for (const key of keys) {
+    const slash = key.lastIndexOf('/')
+    const prefix = slash >= 0 ? key.slice(0, slash + 1) : ''
+    const group = groups.get(prefix) ?? []
+    group.push(key)
+    groups.set(prefix, group)
+  }
+  return groups
+}
+
 async function listExactKeyEtags(keys: string[]): Promise<Array<{ key: string, etag: string, lastModified?: Date }>> {
-  const targets = await Promise.all(keys.map(key => limiter.run(async () => {
-    const response = await s3.send(new ListObjectsV2Command({
-      Bucket: S3_BUCKET,
-      Prefix: key,
-      MaxKeys: 1,
-    }))
-    const obj = response.Contents?.find(item => item.Key === key)
-    if (!obj) {
-      console.warn(`Skipped ${key}: object absent from list; already gone`)
-      return null
+  if (keys.length === 0)
+    return []
+
+  const keySet = new Set(keys)
+  const found = new Map<string, { key: string, etag: string, lastModified?: Date }>()
+  const groups = groupKeysByParentPrefix(keys)
+
+  for (const [prefix, groupKeys] of groups) {
+    let continuationToken: string | undefined
+    while (true) {
+      const response = await s3.send(new ListObjectsV2Command({
+        Bucket: S3_BUCKET,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+        MaxKeys: LIST_PAGE_SIZE,
+      }))
+
+      for (const obj of response.Contents ?? []) {
+        if (!obj.Key || !keySet.has(obj.Key) || found.has(obj.Key))
+          continue
+        if (!obj.ETag) {
+          console.error(`Skipped ${obj.Key}: missing discovery ETag from list; source retained`)
+          totalSkippedMissingDiscoveryEtag += 1
+          totalErrors += 1
+          continue
+        }
+        found.set(obj.Key, { key: obj.Key, etag: obj.ETag, lastModified: obj.LastModified })
+      }
+
+      if (!response.IsTruncated)
+        break
+      continuationToken = response.NextContinuationToken
     }
-    if (!obj.ETag) {
-      console.error(`Skipped ${key}: missing discovery ETag from list; source retained`)
-      totalSkippedMissingDiscoveryEtag += 1
-      totalErrors += 1
-      return null
+
+    for (const key of groupKeys) {
+      if (!found.has(key))
+        console.warn(`Skipped ${key}: object absent from list; already gone`)
     }
-    return { key, etag: obj.ETag, lastModified: obj.LastModified }
-  })))
-  return targets.filter((target): target is { key: string, etag: string, lastModified?: Date } => target !== null)
+  }
+
+  return keys
+    .map(key => found.get(key))
+    .filter((target): target is { key: string, etag: string, lastModified?: Date } => target !== undefined)
 }
 
 async function streamProcessPrefix(prefix: string): Promise<void> {

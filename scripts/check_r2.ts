@@ -82,6 +82,7 @@ async function main() {
         .select('r2_path')
         .in('r2_path', batch)
         .eq('deleted', false)
+        .is('deleted_at', null)
       if (error)
         throw error
       for (const row of data ?? [])
@@ -107,6 +108,7 @@ async function main() {
           .eq('app_id', appId)
           .in('name', versionNames)
           .eq('deleted', false)
+          .is('deleted_at', null)
         if (legacyError)
           throw legacyError
         const liveNames = new Set((versions ?? []).map(version => version.name))

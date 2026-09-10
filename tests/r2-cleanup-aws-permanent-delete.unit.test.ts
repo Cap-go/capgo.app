@@ -37,6 +37,7 @@ describe('permanentDeleteAwsLiveKey', () => {
     expect(deleteCall.input.Bucket).toBe(bucket)
     expect(deleteCall.input.Key).toBe(key)
     expect(deleteCall.input.IfMatch).toBe(etag)
+    expect(deleteCall.middlewareStack.identify().some(name => name.includes('r2ConditionalDeleteHeaders'))).toBe(true)
   })
 
   it('uses guarded delete headers with RFC 3339 Last-Modified and quoted If-Match', () => {
@@ -63,7 +64,7 @@ describe('permanentDeleteAwsLiveKey', () => {
 
   it('fails closed when discovery etag is missing', async () => {
     const send = vi.fn()
-    const outcome = await permanentDeleteAwsLiveKey({ send }, bucket, key)
+    const outcome = await permanentDeleteAwsLiveKey({ send }, bucket, key, undefined, lastModified)
     expect(outcome).toBe('failed')
     expect(send).not.toHaveBeenCalled()
   })

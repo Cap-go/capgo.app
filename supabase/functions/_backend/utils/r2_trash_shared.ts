@@ -7,7 +7,7 @@ export function parseLegacyAppsBundleKey(key: string): { appId: string, versionN
   if (!key.startsWith('apps/'))
     return null
   const parts = key.split('/')
-  if (parts.length < 5)
+  if (parts.length !== 5)
     return null
   const fileName = parts[4]
   if (!fileName?.endsWith('.zip'))
@@ -152,12 +152,8 @@ export async function resolveTrashDestinationKey(
     return defaultTrashKey
 
   const trashEtag = await resolver.getEtag(defaultTrashKey)
-  const etagMatches = sourceEtag && normalizeS3Etag(trashEtag) === normalizeS3Etag(sourceEtag)
-  if (etagMatches && sourceLastModified && resolver.getLastModified) {
-    const trashLastModified = await resolver.getLastModified(defaultTrashKey)
-    if (trashLastModified?.getTime() === sourceLastModified.getTime())
-      return defaultTrashKey
-  }
+  if (sourceEtag && normalizedS3EtagsMatch(trashEtag, sourceEtag))
+    return defaultTrashKey
 
   for (let i = 0; i < maxUniqueAttempts; i++) {
     const candidate = getUniqueR2TrashKey(sourceKey)
@@ -242,13 +238,9 @@ export type TrashDestinationHead = { etag?: string, lastModified?: Date } | 'not
 function trashDestinationMatchesSource(
   destinationStat: Exclude<TrashDestinationHead, 'not_found'>,
   sourceEtag: string,
-  sourceLastModified?: Date,
+  _sourceLastModified?: Date,
 ): boolean {
-  if (normalizeS3Etag(destinationStat.etag) !== normalizeS3Etag(sourceEtag))
-    return false
-  if (!sourceLastModified || !destinationStat.lastModified)
-    return false
-  return destinationStat.lastModified.getTime() === sourceLastModified.getTime()
+  return normalizedS3EtagsMatch(destinationStat.etag, sourceEtag)
 }
 
 /**
@@ -493,7 +485,7 @@ export async function copyS3LiteObjectIfMatch(
         { etag: destinationStat.etag, lastModified: destinationStat.lastModified },
         sourceIfMatch,
         sourceLastModified,
-      ))
+      ) || normalizedS3EtagsMatch(destinationStat.etag, sourceIfMatch))
         return
     }
     catch (statError) {
