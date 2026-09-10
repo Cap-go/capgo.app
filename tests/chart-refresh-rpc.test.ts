@@ -20,6 +20,8 @@ const orgId = randomUUID()
 const staleAppId = `com.chart.refresh.stale.${randomUUID().slice(0, 8)}`
 const freshAppId = `com.chart.refresh.fresh.${randomUUID().slice(0, 8)}`
 
+type RequestOrgChartRefreshRow = Database['public']['Functions']['request_org_chart_refresh']['Returns'][number]
+
 function createAuthClient() {
   return createClient<Database>(SUPABASE_BASE_URL, SUPABASE_ANON_KEY, {
     auth: {
@@ -247,7 +249,7 @@ describe('chart refresh RPCs', () => {
       stats_updated_at: new Date().toISOString(),
     }).eq('app_id', freshAppId).throwOnError()
 
-    const { data, error } = await rpcWithTransportRetry(() => authorizedClient.rpc('request_org_chart_refresh', {
+    const { data, error } = await rpcWithTransportRetry<RequestOrgChartRefreshRow>(() => authorizedClient.rpc('request_org_chart_refresh', {
       org_id: orgId,
     }).single())
 
@@ -295,7 +297,7 @@ describe('chart refresh RPCs', () => {
     expect(beforeOrgError).toBeNull()
     expect(beforeOrgState?.stats_refresh_requested_at).toBeTruthy()
 
-    const { data, error } = await rpcWithTransportRetry(() => authorizedClient.rpc('request_org_chart_refresh', {
+    const { data, error } = await rpcWithTransportRetry<RequestOrgChartRefreshRow>(() => authorizedClient.rpc('request_org_chart_refresh', {
       org_id: orgId,
     }).single())
 
