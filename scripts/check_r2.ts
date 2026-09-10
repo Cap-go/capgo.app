@@ -75,21 +75,30 @@ async function main() {
     let errorCount = 0
 
     const supabase = supabaseAdmin()
+    const lookupExistingPaths = async (batch: string[]) => {
+      const { data, error } = await supabase
+        .from('app_versions')
+        .select('r2_path')
+        .in('r2_path', batch)
+        .eq('deleted', false)
+      if (error)
+        throw error
+      return (data ?? []).map(row => row.r2_path)
+    }
+    async function isStillOrphaned(key: string): Promise<boolean> {
+      const { candidates: stillOrphaned } = await revalidateDeleteCandidatesAgainstAppVersions(
+        [{ key }],
+        lookupExistingPaths,
+      )
+      return stillOrphaned.length > 0
+    }
+
     console.log('Revalidating candidates against current app_versions...')
     let skippedCount = 0
     try {
       const revalidated = await revalidateDeleteCandidatesAgainstAppVersions(
         candidates,
-        async (batch) => {
-          const { data, error } = await supabase
-            .from('app_versions')
-            .select('r2_path')
-            .in('r2_path', batch)
-            .eq('deleted', false)
-          if (error)
-            throw error
-          return (data ?? []).map(row => row.r2_path)
-        },
+        lookupExistingPaths,
       )
       candidates = revalidated.candidates
       skippedCount = revalidated.skippedCount
@@ -136,6 +145,10 @@ async function main() {
 
     async function permanentDeleteCandidate(candidate: { key: string, etag?: string, lastModified?: Date }): Promise<'ok' | 'skipped' | 'failed'> {
       const { key, etag: candidateEtag, lastModified: candidateLastModified } = candidate
+      if (!(await isStillOrphaned(key))) {
+        console.warn(`Skipped ${key}: app_versions row appeared since discovery`)
+        return 'skipped'
+      }
       if (!candidateEtag) {
         console.warn(`Failed ${key}: missing discovery ETag; source retained`)
         return 'failed'
@@ -166,6 +179,10 @@ async function main() {
 
     async function moveKeyToTrash(candidate: { key: string, etag?: string, lastModified?: Date }): Promise<'ok' | 'skipped' | 'failed'> {
       const { key, etag: candidateEtag, lastModified: candidateLastModified } = candidate
+      if (!(await isStillOrphaned(key))) {
+        console.warn(`Skipped ${key}: app_versions row appeared since discovery`)
+        return 'skipped'
+      }
       if (!candidateEtag) {
         console.warn(`Failed ${key}: missing discovery ETag; source retained`)
         return 'failed'

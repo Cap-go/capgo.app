@@ -105,14 +105,14 @@ async function countPrefix(prefix: string): Promise<number> {
   return count
 }
 
-type TrashProcessTarget = string | { key: string, etag?: string }
+type TrashProcessTarget = string | { key: string, etag?: string, lastModified?: Date }
 
-function normalizeTrashTarget(target: TrashProcessTarget): { key: string, etag?: string } {
+function normalizeTrashTarget(target: TrashProcessTarget): { key: string, etag?: string, lastModified?: Date } {
   return typeof target === 'string' ? { key: target } : target
 }
 
 async function processKey(target: TrashProcessTarget): Promise<void> {
-  const { key, etag: discoveryEtag } = normalizeTrashTarget(target)
+  const { key, etag: discoveryEtag, lastModified: discoveryLastModified } = normalizeTrashTarget(target)
   return limiter.run(async () => {
     if (!isLiveR2Key(key))
       return
@@ -125,6 +125,11 @@ async function processKey(target: TrashProcessTarget): Promise<void> {
     if (deleteMode === 'trash') {
       if (!discoveryEtag) {
         console.error(`Failed to trash ${key}: missing discovery ETag; source retained`)
+        totalErrors += 1
+        return
+      }
+      if (!discoveryLastModified) {
+        console.error(`Failed to trash ${key}: missing discovery Last-Modified; source retained`)
         totalErrors += 1
         return
       }
@@ -154,6 +159,11 @@ async function processKey(target: TrashProcessTarget): Promise<void> {
 
       if (discoveryEtag !== sourceEtag) {
         console.warn(`Skipped trash for ${key}: live object etag changed since discovery`)
+        totalProcessed += 1
+        return
+      }
+      if (sourceLastModified.getTime() !== discoveryLastModified.getTime()) {
+        console.warn(`Skipped trash for ${key}: live object lastModified changed since discovery`)
         totalProcessed += 1
         return
       }

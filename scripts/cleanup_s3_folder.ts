@@ -24,6 +24,7 @@ const deleteMode = resolveOpsDeleteMode({
   DRY_RUN: Deno.env.get('DRY_RUN'),
   ALLOW_PERMANENT_R2_DELETE: Deno.env.get('ALLOW_PERMANENT_R2_DELETE'),
 })
+const permanentDeleteRequested = Deno.env.get('ALLOW_PERMANENT_R2_DELETE') === 'true'
 
 const S3_BUCKET = 'backuptmp'
 
@@ -132,9 +133,14 @@ async function processFolder() {
     pendingCandidates = []
 
     if (deleteMode === 'dry_run') {
-      for (const candidate of batch)
+      for (const candidate of batch) {
+        if (permanentDeleteRequested && !candidate.discoveryLastModified) {
+          console.log(`Would process: ${candidate.key} (missing listing Last-Modified; would fail on execute)`)
+          continue
+        }
         console.log(`Would process: ${candidate.key}`)
-      processedCount += batch.length
+        processedCount += 1
+      }
       return
     }
 
@@ -156,6 +162,11 @@ async function processFolder() {
         }
         console.error(`Failed ${obj.key}: missing listing ETag; source retained`)
         errorCount += 1
+        continue
+      }
+      if (deleteMode === 'dry_run' && permanentDeleteRequested && !obj.lastModified) {
+        console.log(`Would process: ${obj.key} (missing listing Last-Modified; would fail on execute)`)
+        processedCount += 1
         continue
       }
 

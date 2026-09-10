@@ -253,13 +253,20 @@ describe('moveS3LiteObjectToTrash', () => {
   it('reuses the default trash key when it already holds the same source etag', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const etag = '"before"'
+    const defaultTrashKey = `${R2_TRASH_PREFIX}${key}`
     const copyObject = vi.fn(async () => undefined)
     const deleteObject = vi.fn(async () => undefined)
-    const makeRequest = vi.fn<(args: MakeRequestArgs) => Promise<Response>>(async () => new Response(null, { status: 204 }))
+    const makeRequest = vi.fn<(args: MakeRequestArgs) => Promise<Response>>(async (options) => {
+      if (options.objectName === defaultTrashKey)
+        throw { statusCode: 412, code: 'PreconditionFailed' }
+      return new Response(null, { status: 204 })
+    })
     const statObject = vi.fn()
       .mockResolvedValueOnce(stat(etag)) // source
-      .mockResolvedValueOnce(stat(etag)) // default trash exists
-      .mockResolvedValueOnce(stat(etag)) // default trash etag
+      .mockResolvedValueOnce(stat(etag)) // default trash keyExists
+      .mockResolvedValueOnce(stat(etag)) // getEtag
+      .mockResolvedValueOnce(stat(etag)) // getLastModified
+      .mockResolvedValueOnce(stat(etag)) // destination stat after 412 reuse
       .mockResolvedValue(stat(etag)) // after copy + any follow-up stat
 
     const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key, TEST_S3_BUCKET)
