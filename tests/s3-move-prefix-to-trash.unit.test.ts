@@ -364,19 +364,26 @@ describe('moveObjectToTrash', () => {
     const defaultTrash = `${R2_TRASH_PREFIX}${liveKey}`
     const copyDestinations: string[] = []
     let liveStatCount = 0
+    const marker = formatR2TrashSourceVersionMarker(DEFAULT_LAST_MODIFIED)
 
     makeRequest.mockImplementation(async (options: { method?: string, objectName?: string }) => {
       if (options.method === 'PUT' && options.objectName)
         copyDestinations.push(options.objectName)
+      if (options.method === 'HEAD' && options.objectName === defaultTrash) {
+        return new Response(null, {
+          status: 200,
+          headers: { 'x-amz-meta-capgo-source-last-modified': marker },
+        })
+      }
       return new Response(null, { status: 204 })
     })
     statObject.mockImplementation(async (key: string) => {
       if (key === liveKey) {
         liveStatCount += 1
-        return stat(liveStatCount <= 2 ? '"etag-1"' : '"etag-2"')
+        return stat(liveStatCount <= 2 ? '"etag-1"' : '"etag-2"', DEFAULT_LAST_MODIFIED)
       }
       if (key === defaultTrash)
-        return stat('"etag-1"')
+        return stat('"etag-1"', DEFAULT_LAST_MODIFIED)
       throw { statusCode: 404, code: 'NotFound' }
     })
 
@@ -385,8 +392,9 @@ describe('moveObjectToTrash', () => {
     expect(await s3.moveObjectToTrash(c, liveKey)).toBe(true)
 
     expect(copyDestinations).toHaveLength(2)
-    expect(copyDestinations[0]).not.toBe(copyDestinations[1])
+    expect(copyDestinations[0]).toBe(defaultTrash)
     expect(copyDestinations[1]).not.toBe(defaultTrash)
+    expect(copyDestinations[0]).not.toBe(copyDestinations[1])
   })
 })
 

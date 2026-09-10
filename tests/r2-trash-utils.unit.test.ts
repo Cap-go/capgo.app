@@ -125,7 +125,8 @@ describe('isObjectNotFoundError', () => {
     expect(isObjectNotFoundError('NotFound')).toBe(false)
     expect(isObjectNotFoundError({ status: 404 })).toBe(true)
     expect(isObjectNotFoundError({ statusCode: 404 })).toBe(true)
-    expect(isObjectNotFoundError({ code: 'not found' })).toBe(true)
+    expect(isObjectNotFoundError({ code: 'not found' })).toBe(false)
+    expect(isObjectNotFoundError({ status: 404, code: 'not found' })).toBe(true)
   })
 })
 
@@ -950,6 +951,12 @@ describe('encodeS3CopySource', () => {
       .toBe('capgo/orgs/org-1/apps/com.test/file%20name.zip')
     expect(encodeS3CopySource('capgo', 'orgs/org-1/apps/com.test/文件.zip'))
       .toBe('capgo/orgs/org-1/apps/com.test/%E6%96%87%E4%BB%B6.zip')
+    expect(encodeS3CopySource('capgo', 'orgs/org-1/apps/com.test/file!(name).zip'))
+      .toBe('capgo/orgs/org-1/apps/com.test/file%21%28name%29.zip')
+    expect(encodeS3CopySource('capgo', 'orgs/org-1/apps/com.test/file*star.zip'))
+      .toBe('capgo/orgs/org-1/apps/com.test/file%2Astar.zip')
+    expect(encodeS3CopySource('capgo', 'orgs/org-1/apps/com.test/file\'quote.zip'))
+      .toBe('capgo/orgs/org-1/apps/com.test/file%27quote.zip')
   })
 })
 

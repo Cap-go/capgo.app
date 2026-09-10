@@ -593,9 +593,19 @@ export function isLiveR2Key(key: string): boolean {
   return !key.startsWith(R2_TRASH_PREFIX)
 }
 
+/** encodeURIComponent leaves S3 copy-source reserved chars literal; encode those too. */
+const S3_COPY_SOURCE_RESERVED_RE = /[!'()*]/g
+
+function encodeS3CopySourceSegment(segment: string): string {
+  return encodeURIComponent(segment).replace(
+    S3_COPY_SOURCE_RESERVED_RE,
+    char => `%${char.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`,
+  )
+}
+
 /** Per-segment encoding for clients that pass sourceKey into x-amz-copy-source without encoding. */
 export function encodeS3LiteCopySourceKey(key: string): string {
-  return key.split('/').map(segment => encodeURIComponent(segment)).join('/')
+  return key.split('/').map(encodeS3CopySourceSegment).join('/')
 }
 
 export type S3LiteMakeRequest = (options: {
@@ -992,8 +1002,7 @@ export function isObjectNotFoundError(error: unknown): boolean {
   return [err.name, err.Code, err.code].some(code =>
     code === 'NotFound'
     || code === 'NoSuchKey'
-    || code === '404'
-    || code === 'not found',
+    || code === '404',
   )
 }
 

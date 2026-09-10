@@ -433,7 +433,7 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
     // Use our own MIME type detection - R2 rewrites text/html to text/plain without custom domains
     const contentType = getContentType(actualFileName)
     const headers = buildPreviewResponseHeaders(contentType, {
-      disableCache: true,
+      disableCache: isChannelPreview,
       httpEtag: object.httpEtag,
     })
 
@@ -443,7 +443,7 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
       filePath: manifestEntry.file_name,
       contentType,
       isBrotli,
-      cacheMode: 'no-store',
+      cacheMode: isChannelPreview ? 'no-store' : 'immutable',
     })
 
     // If the file is brotli compressed, decompress it before serving

@@ -191,6 +191,24 @@ describe('public deleteApp storage contract', () => {
       expect(apiDeleteEqByTable[table]).toBeDefined()
       expect(apiDeleteEqByTable[table]).toHaveBeenCalledWith('app_id', 'com.test.app')
     }
+
+    for (const table of [
+      'daily_version',
+      'version_usage',
+      'bandwidth_usage',
+      'storage_usage',
+      'device_usage',
+      'daily_mau',
+      'daily_bandwidth',
+      'daily_storage',
+      'stats',
+      'org_users',
+      'deploy_history',
+      'app_versions',
+    ]) {
+      expect(deleteEqByTable[table]).toBeDefined()
+      expect(deleteEqByTable[table]).toHaveBeenCalledWith('app_id', 'com.test.app')
+    }
   })
 })
 
