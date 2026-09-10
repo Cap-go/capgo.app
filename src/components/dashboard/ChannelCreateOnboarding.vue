@@ -127,6 +127,8 @@ async function createChannel() {
       .select('name, public, allow_device_self_set')
       .eq('app_id', props.appId)
       .eq('name', normalizedName)
+      .order('public', { ascending: false })
+      .limit(1)
       .maybeSingle()
 
     if (existingError)

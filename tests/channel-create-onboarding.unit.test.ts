@@ -55,6 +55,8 @@ describe('channel creation onboarding', () => {
     expect(componentSource).toContain(`emit('continue')`)
     expect(componentSource).toContain(`.eq('app_id', props.appId)`)
     expect(componentSource).toContain(`.eq('name', normalizedName)`)
+    expect(componentSource).toContain(`.order('public', { ascending: false })`)
+    expect(componentSource).toContain(`.limit(1)`)
     expect(componentSource.match(/\.eq\('public', true\)/g)).toHaveLength(1)
     expect(componentSource).toContain('.maybeSingle()')
     expect(componentSource).toContain(`if (existingChannel.public)`)
