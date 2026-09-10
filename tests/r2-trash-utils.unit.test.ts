@@ -14,6 +14,7 @@ import {
   isObjectNotFoundError,
   isPreconditionFailedError,
   asS3LiteTrashClient,
+  copyLiveObjectToTrash,
   moveS3LiteObjectToTrash,
   resolveOpsDeleteMode,
   resolveTrashDestinationKey,
@@ -119,6 +120,7 @@ type MakeRequestArgs = {
 }
 
 const DEFAULT_LAST_MODIFIED = new Date('2024-01-15T10:30:00.000Z')
+const TEST_S3_BUCKET = 'capgo'
 
 function stat(etag: string, lastModified = DEFAULT_LAST_MODIFIED) {
   return { etag, lastModified }
@@ -145,7 +147,7 @@ describe('moveS3LiteObjectToTrash', () => {
     const etag = '"abc123"'
     const { copyObject, deleteObject, makeRequest, statObject } = makeAtomicDeleteClient(etag)
 
-    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key)
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key, TEST_S3_BUCKET)
 
     expect(result).toBe('moved')
     expect(copyObject).not.toHaveBeenCalled()
@@ -154,8 +156,9 @@ describe('moveS3LiteObjectToTrash', () => {
     const copyCall = makeRequest.mock.calls[0]![0]
     expect(copyCall.method).toBe('PUT')
     expect(copyCall.objectName).toBe(`${R2_TRASH_PREFIX}${key}`)
-    expect(copyCall.headers?.get('x-amz-copy-source')).toBe('orgs/org-1/apps/com.test/file%20name.zip')
+    expect(copyCall.headers?.get('x-amz-copy-source')).toBe(`${TEST_S3_BUCKET}/orgs/org-1/apps/com.test/file%20name.zip`)
     expect(copyCall.headers?.get('x-amz-copy-source-if-match')).toBe(etag)
+    expect(copyCall.headers?.get('cf-copy-destination-if-none-match')).toBe('*')
     const deleteCall = makeRequest.mock.calls[1]![0]
     expect(deleteCall.headers?.get('x-amz-if-match-last-modified-time'))
       .toBe(formatR2ConditionalDeleteLastModified(DEFAULT_LAST_MODIFIED))
@@ -172,7 +175,7 @@ describe('moveS3LiteObjectToTrash', () => {
       .mockRejectedValueOnce({ name: 'NotFound' }) // default trash slot
       .mockResolvedValueOnce(stat('"after"')) // changed after copy
 
-    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key, TEST_S3_BUCKET)
 
     expect(result).toBe('skipped_changed')
     expect(copyObject).toHaveBeenCalledOnce()
@@ -190,7 +193,7 @@ describe('moveS3LiteObjectToTrash', () => {
       .mockRejectedValueOnce({ name: 'NotFound' }) // default trash slot
       .mockResolvedValueOnce(stat(etag, new Date('2024-01-15T10:30:01.000Z'))) // replaced in same second bucket
 
-    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key)
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key, TEST_S3_BUCKET)
 
     expect(result).toBe('skipped_changed')
     expect(makeRequest).toHaveBeenCalledOnce()
@@ -206,7 +209,7 @@ describe('moveS3LiteObjectToTrash', () => {
       .mockResolvedValueOnce(stat('"before"')) // source
       .mockRejectedValueOnce({ name: 'NotFound' }) // default trash slot
 
-    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key, TEST_S3_BUCKET)
 
     expect(result).toBe('skipped_missing')
     expect(copyObject).toHaveBeenCalledOnce()
@@ -222,7 +225,7 @@ describe('moveS3LiteObjectToTrash', () => {
       .mockRejectedValueOnce({ name: 'NotFound' }) // default trash slot
       .mockRejectedValueOnce({ status: 404, code: 'not found' }) // gone after copy
 
-    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key, TEST_S3_BUCKET)
 
     expect(result).toBe('moved')
     expect(deleteObject).not.toHaveBeenCalled()
@@ -240,7 +243,7 @@ describe('moveS3LiteObjectToTrash', () => {
       .mockResolvedValueOnce(stat(etag)) // default trash etag
       .mockResolvedValue(stat(etag)) // after copy + any follow-up stat
 
-    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key)
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key, TEST_S3_BUCKET)
 
     expect(result).toBe('moved')
     expect(makeRequest).toHaveBeenCalledTimes(2)
@@ -264,7 +267,7 @@ describe('moveS3LiteObjectToTrash', () => {
       .mockRejectedValueOnce({ name: 'NotFound' }) // unique candidate free
       .mockResolvedValue(stat(etag)) // after copy + any follow-up stat
 
-    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key)
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key, TEST_S3_BUCKET)
 
     expect(result).toBe('moved')
     expect(copyObject).not.toHaveBeenCalled()
@@ -289,7 +292,7 @@ describe('moveS3LiteObjectToTrash', () => {
       .mockRejectedValueOnce({ name: 'NotFound' }) // default trash slot
       .mockResolvedValue(stat(etag)) // after copy
 
-    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key)
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key, TEST_S3_BUCKET)
 
     expect(result).toBe('skipped_changed')
     expect(copyObject).not.toHaveBeenCalled()
@@ -303,11 +306,66 @@ describe('moveS3LiteObjectToTrash', () => {
     const deleteObject = vi.fn(async () => undefined)
     const statObject = vi.fn()
 
-    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key)
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key, TEST_S3_BUCKET)
 
     expect(result).toBe('moved')
     expect(statObject).not.toHaveBeenCalled()
     expect(copyObject).not.toHaveBeenCalled()
+  })
+})
+
+describe('copyLiveObjectToTrash', () => {
+  it('treats destination precondition conflicts as success when trash already holds the same etag', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const etag = '"same"'
+    const trashKey = `${R2_TRASH_PREFIX}${key}`
+    const makeRequest = vi.fn<(args: MakeRequestArgs) => Promise<Response>>(async () => {
+      throw { statusCode: 412, code: 'PreconditionFailed' }
+    })
+    const statObject = vi.fn(async (objectKey: string) => {
+      if (objectKey === trashKey)
+        return stat(etag)
+      throw { name: 'NotFound' }
+    })
+
+    const destination = await copyLiveObjectToTrash(
+      { copyObject: vi.fn(), makeRequest, statObject },
+      key,
+      trashKey,
+      etag,
+      TEST_S3_BUCKET,
+    )
+
+    expect(destination).toBe(trashKey)
+    expect(makeRequest).toHaveBeenCalledOnce()
+  })
+
+  it('retries with a unique trash key when destination precondition conflicts with a different object', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const etag = '"source"'
+    const trashKey = `${R2_TRASH_PREFIX}${key}`
+    const makeRequest = vi.fn<(args: MakeRequestArgs) => Promise<Response>>(async (options) => {
+      if (options.objectName === trashKey)
+        throw { statusCode: 412, code: 'PreconditionFailed' }
+      return new Response(null, { status: 200 })
+    })
+    const statObject = vi.fn(async (objectKey: string) => {
+      if (objectKey === trashKey)
+        return stat('"other"')
+      throw { name: 'NotFound' }
+    })
+
+    const destination = await copyLiveObjectToTrash(
+      { copyObject: vi.fn(), makeRequest, statObject },
+      key,
+      trashKey,
+      etag,
+      TEST_S3_BUCKET,
+    )
+
+    expect(destination).not.toBe(trashKey)
+    expect(makeRequest).toHaveBeenCalledTimes(2)
+    expect(makeRequest.mock.calls[1]![0]!.headers?.get('cf-copy-destination-if-none-match')).toBe('*')
   })
 })
 

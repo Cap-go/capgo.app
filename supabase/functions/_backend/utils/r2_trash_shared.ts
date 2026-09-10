@@ -314,36 +314,71 @@ export type S3LiteTrashMoveResult = 'moved' | 'skipped_missing' | 'skipped_chang
 
 /** Copy a live object into trash with CopySourceIfMatch when makeRequest is available. */
 export async function copyLiveObjectToTrash(
-  s3client: Pick<RawS3LiteClient, 'copyObject' | 'makeRequest'>,
+  s3client: Pick<RawS3LiteClient, 'copyObject' | 'makeRequest' | 'statObject'>,
   sourceKey: string,
   trashKey: string,
   sourceIfMatch: string,
-  sourceBucketName?: string,
-): Promise<void> {
+  sourceBucketName: string,
+  maxAttempts = 10,
+): Promise<string> {
+  if (!sourceBucketName)
+    throw new Error('sourceBucketName is required for trash copy')
+
   const encodedSourceKey = encodeS3LiteCopySourceKey(sourceKey)
-  if (s3client.makeRequest) {
-    const copySource = sourceBucketName
-      ? `${sourceBucketName}/${encodedSourceKey}`
-      : encodedSourceKey
-    const headers = new Headers({
-      'x-amz-copy-source': copySource,
-      'x-amz-copy-source-if-match': sourceIfMatch,
-    })
-    await s3client.makeRequest({
-      method: 'PUT',
-      objectName: trashKey,
-      headers,
-      statusCode: 200,
-      returnBody: true,
-    })
-    return
+  const copySource = `${sourceBucketName}/${encodedSourceKey}`
+  let destinationKey = trashKey
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (s3client.makeRequest) {
+      const headers = new Headers({
+        'x-amz-copy-source': copySource,
+        'x-amz-copy-source-if-match': sourceIfMatch,
+        'cf-copy-destination-if-none-match': '*',
+      })
+      try {
+        await s3client.makeRequest({
+          method: 'PUT',
+          objectName: destinationKey,
+          headers,
+          statusCode: 200,
+          returnBody: true,
+        })
+        return destinationKey
+      }
+      catch (error) {
+        if (!isPreconditionFailedError(error))
+          throw error
+        try {
+          const destinationStat = await s3client.statObject(destinationKey)
+          if (destinationStat.etag === sourceIfMatch)
+            return destinationKey
+        }
+        catch (statError) {
+          if (!isObjectNotFoundError(statError))
+            throw statError
+        }
+        destinationKey = getUniqueR2TrashKey(sourceKey)
+        continue
+      }
+    }
+
+    await s3client.copyObject({
+      sourceKey: encodedSourceKey,
+      sourceBucketName,
+      sourceIfMatch,
+    }, destinationKey)
+    return destinationKey
   }
 
-  await s3client.copyObject({ sourceKey: encodedSourceKey }, trashKey)
+  throw new Error(`Failed to copy ${sourceKey} to trash after ${maxAttempts} attempts`)
 }
 
 /** Move a live object to 7-day trash via s3_lite_client (encodes copy source path segments). */
-export async function moveS3LiteObjectToTrash(s3client: RawS3LiteClient, key: string): Promise<S3LiteTrashMoveResult> {
+export async function moveS3LiteObjectToTrash(
+  s3client: RawS3LiteClient,
+  key: string,
+  sourceBucketName: string,
+): Promise<S3LiteTrashMoveResult> {
   if (!isLiveR2Key(key))
     return 'moved'
 
@@ -366,7 +401,7 @@ export async function moveS3LiteObjectToTrash(s3client: RawS3LiteClient, key: st
   const trashKey = await resolveAvailableR2TrashKey(s3client, key, sourceEtag)
 
   try {
-    await copyLiveObjectToTrash(s3client, key, trashKey, sourceEtag)
+    await copyLiveObjectToTrash(s3client, key, trashKey, sourceEtag, sourceBucketName)
   }
   catch (error) {
     if (isPreconditionFailedError(error))

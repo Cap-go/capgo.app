@@ -142,8 +142,8 @@ async function main() {
         sourceEtag = head.ETag
         sourceLastModified = head.LastModified
         if (candidateEtag !== sourceEtag) {
-          console.warn(`Failed ${key}: live object etag changed since discovery`)
-          return 'failed'
+          console.warn(`Skipped ${key}: live object etag changed since discovery`)
+          return 'skipped'
         }
       }
       catch (headError) {
@@ -172,8 +172,8 @@ async function main() {
         if (isObjectNotFoundError(deleteError))
           return 'skipped'
         if (isPreconditionFailedError(deleteError)) {
-          console.warn(`Failed permanent delete for ${key}: live object changed since discovery`)
-          return 'failed'
+          console.warn(`Skipped permanent delete for ${key}: live object changed since discovery`)
+          return 'skipped'
         }
         console.error(`Failed to permanently delete ${key}:`, deleteError)
         return 'failed'

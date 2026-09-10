@@ -358,12 +358,14 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
           .select('id,name,checksum,session_key,manifest_count,r2_path,external_url')
           .eq('app_id', actualAppId)
           .eq('id', previewVersionId)
+          .eq('deleted', false)
           .single()
       : await supabase
           .from('app_versions')
           .select('id,session_key,manifest_count')
           .eq('app_id', actualAppId)
           .eq('id', previewVersionId)
+          .eq('deleted', false)
           .single()
 
     const { data: bundle, error: bundleError } = bundleLookup

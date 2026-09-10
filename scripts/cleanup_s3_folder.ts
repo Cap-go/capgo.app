@@ -25,13 +25,15 @@ const deleteMode = resolveOpsDeleteMode({
   ALLOW_PERMANENT_R2_DELETE: Deno.env.get('ALLOW_PERMANENT_R2_DELETE'),
 })
 
+const S3_BUCKET = 'backuptmp'
+
 const rawS3client = new S3Client({
   endPoint: '***.r2.cloudflarestorage.com',
   useSSL: true,
   region: 'auto',
   accessKey: '***',
   secretKey: '***',
-  bucket: 'backuptmp',
+  bucket: S3_BUCKET,
 })
 
 const limiter = new ConcurrencyLimiter(CONCURRENCY)
@@ -40,7 +42,7 @@ async function processKey(key: string): Promise<void> {
   return limiter.run(async () => {
     if (deleteMode === 'trash') {
       console.log(`Moving to trash: ${key}`)
-      const result = await moveS3LiteObjectToTrash(rawS3client, key)
+      const result = await moveS3LiteObjectToTrash(rawS3client, key, S3_BUCKET)
       if (result === 'skipped_missing') {
         console.log(`Already absent: ${key}`)
         return

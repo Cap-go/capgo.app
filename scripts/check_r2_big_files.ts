@@ -1665,6 +1665,14 @@ async function delete_cleanup_candidates() {
 
     async function processCandidate(file: { key: string, size?: number, lastModified?: string | Date | null, etag?: string | null }): Promise<{ key: string, success: boolean, error: string | null, skipped?: boolean, size?: number }> {
         try {
+            if (!file.etag) {
+                return {
+                    key: file.key,
+                    success: false,
+                    error: 'Cleanup candidate has no discovery ETag; source retained',
+                }
+            }
+
             let sourceEtag: string | undefined
             let sourceLastModified: Date | undefined
             try {

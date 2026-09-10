@@ -156,7 +156,7 @@ async function processKey(key: string): Promise<void> {
       catch (copyError) {
         if (isPreconditionFailedError(copyError)) {
           console.warn(`Skipped trash copy for ${key}: live object changed before copy`)
-          totalErrors += 1
+          totalProcessed += 1
           return
         }
         try {
@@ -194,7 +194,7 @@ async function processKey(key: string): Promise<void> {
         }
         if (isPreconditionFailedError(deleteError)) {
           console.warn(`Skipped delete for ${key}: live object changed after copy; source key retained`)
-          totalErrors += 1
+          totalProcessed += 1
           return
         }
         console.error(`Copied ${key} to trash but failed to delete source:`, deleteError)
@@ -229,7 +229,7 @@ async function permanentDeleteKey(target: PermanentDeleteTarget): Promise<void> 
         return
       case 'skipped_changed':
         console.warn(`Skipped permanent delete for ${key}: live object changed since discovery; source retained`)
-        totalErrors += 1
+        totalProcessed += 1
         return
       case 'failed':
         console.error(`Failed to permanently delete ${key}: missing guards or transport error; source retained`)
@@ -255,18 +255,19 @@ async function permanentDeleteBatch(keys: PermanentDeleteTarget[]): Promise<void
   }
 }
 
-async function listExactKeyEtags(keys: string[]): Promise<Array<{ key: string, etag?: string }>> {
-  const targets: Array<{ key: string, etag?: string }> = []
-  for (const key of keys) {
+async function listExactKeyEtags(keys: string[]): Promise<Array<{ key: string, etag: string }>> {
+  const targets = await Promise.all(keys.map(key => limiter.run(async () => {
     const response = await s3.send(new ListObjectsV2Command({
       Bucket: S3_BUCKET,
       Prefix: key,
       MaxKeys: 1,
     }))
     const obj = response.Contents?.find(item => item.Key === key)
-    targets.push({ key, etag: obj?.ETag })
-  }
-  return targets
+    if (!obj?.ETag)
+      return null
+    return { key, etag: obj.ETag }
+  })))
+  return targets.filter((target): target is { key: string, etag: string } => target !== null)
 }
 
 async function listPrefixKeys(prefix: string): Promise<Array<{ key: string, etag?: string }>> {

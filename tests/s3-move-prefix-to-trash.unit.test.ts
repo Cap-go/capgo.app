@@ -98,7 +98,8 @@ describe('moveObjectsWithPrefixToTrash', () => {
     const copyCall = makeRequest.mock.calls[0]![0]!
     expect(copyCall.method).toBe('PUT')
     expectDefaultTrashDestination(copyCall.objectName, liveKey)
-    expect(copyCall.headers?.get('x-amz-copy-source')).toBe(encodeS3LiteCopySourceKey(liveKey))
+    expect(copyCall.headers?.get('x-amz-copy-source')).toBe(`capgo/${encodeS3LiteCopySourceKey(liveKey)}`)
+    expect(copyCall.headers?.get('cf-copy-destination-if-none-match')).toBe('*')
     expect(deleteObject).not.toHaveBeenCalled()
   })
 

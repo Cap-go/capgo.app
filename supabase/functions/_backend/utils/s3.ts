@@ -183,6 +183,12 @@ async function moveObjectToTrash(c: Context, fileId: string) {
     return false
   }
 
+  const bucket = getEnv(c, 'S3_BUCKET')
+  if (!bucket) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'S3_BUCKET is not configured before trash move', fileId })
+    return false
+  }
+
   let trashPath: string
   try {
     trashPath = await resolveAvailableR2TrashKey(client as RawS3LiteClient, fileId, sourceEtag)
@@ -193,7 +199,7 @@ async function moveObjectToTrash(c: Context, fileId: string) {
   }
 
   try {
-    await copyLiveObjectToTrash(client as RawS3LiteClient, fileId, trashPath, sourceEtag)
+    trashPath = await copyLiveObjectToTrash(client as RawS3LiteClient, fileId, trashPath, sourceEtag, bucket)
   }
   catch (error) {
     if (isPreconditionFailedError(error)) {

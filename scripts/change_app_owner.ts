@@ -11,13 +11,14 @@ const appToTransfer = 'com.demo.app'
 const newOwnerEmail = 'admin@capgo.app'
 
 async function main() {
+  const S3_BUCKET = 'capgo'
   const rawS3client = new S3Client({
     endPoint: '9ee3d7479a3c359681e3fab2c8cb22c0.r2.cloudflarestorage.com',
     useSSL: true,
     region: 'auto',
     accessKey: '***',
     secretKey: '***',
-    bucket: 'capgo',
+    bucket: S3_BUCKET,
   })
   const supabase = createClient<Database>(supabaseUrl, supabaseServiceRole, {
     auth: {
@@ -68,7 +69,7 @@ async function main() {
 
     await rawS3client.copyObject({ sourceKey: encodeS3LiteCopySourceKey(obj.key) }, obj.key.replace(oldUserId, newUserId))
     try {
-      const trashResult = await moveS3LiteObjectToTrash(rawS3client, obj.key)
+      const trashResult = await moveS3LiteObjectToTrash(rawS3client, obj.key, S3_BUCKET)
       if (trashResult !== 'moved')
         throw new Error(`Copied ${obj.key} to new owner key but failed to trash source object (${trashResult})`)
     }
