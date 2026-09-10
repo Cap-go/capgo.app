@@ -3,7 +3,7 @@ import { writeFileSync, existsSync, readFileSync } from 'fs'
 import { S3Client as S3ClientLite } from '@bradenmacdonald/s3-lite-client/'
 import { Pool } from 'pg'
 import { Context } from 'vm'
-import { applyR2ConditionalDeleteMiddleware, createAwsTrashDestinationResolver, encodeS3CopySource, ConcurrencyLimiter, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
+import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, ConcurrencyLimiter, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const CHECKPOINT_FILE = './objects_checkpoint.json'
@@ -1666,7 +1666,7 @@ async function delete_cleanup_candidates() {
 
     const trashDestinationResolver = createAwsTrashDestinationResolver(async (objectKey) => {
         const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: objectKey }))
-        return { etag: head.ETag }
+        return { etag: head.ETag, lastModified: head.LastModified }
     })
 
     async function processCandidate(file: { key: string, size?: number, lastModified?: string | Date | null, etag?: string | null }): Promise<{ key: string, success: boolean, error: string | null, skipped?: boolean, size?: number }> {
@@ -1763,18 +1763,47 @@ async function delete_cleanup_candidates() {
                 }
             }
             else {
-                const trashKey = await resolveTrashDestinationKey(trashDestinationResolver, file.key, sourceEtag)
+                let trashKey: string
+                try {
+                    trashKey = await resolveTrashDestinationKey(trashDestinationResolver, file.key, sourceEtag, sourceLastModified)
+                }
+                catch (allocError: any) {
+                    return {
+                        key: file.key,
+                        success: false,
+                        error: `Failed to allocate trash destination: ${allocError.message}`,
+                    }
+                }
 
                 try {
-                    await s3.send(new CopyObjectCommand({
-                        Bucket: S3_BUCKET,
-                        CopySource: encodeS3CopySource(S3_BUCKET, file.key),
-                        CopySourceIfMatch: sourceEtag,
-                        Key: trashKey,
-                    }))
-                }
-                catch (copyError: any) {
-                    if (isPreconditionFailedError(copyError)) {
+                    const copyResult = await copyObjectToTrashWithDestinationGuard(
+                        file.key,
+                        trashKey,
+                        sourceEtag,
+                        async (destinationKey) => {
+                            const copyCommand = new CopyObjectCommand({
+                                Bucket: S3_BUCKET,
+                                CopySource: encodeS3CopySource(S3_BUCKET, file.key),
+                                CopySourceIfMatch: sourceEtag,
+                                Key: destinationKey,
+                            })
+                            applyAwsCopyDestinationIfNoneMatchMiddleware(copyCommand.middlewareStack)
+                            await s3.send(copyCommand)
+                        },
+                        async (destinationKey) => {
+                            try {
+                                const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: destinationKey }))
+                                return { etag: head.ETag, lastModified: head.LastModified }
+                            }
+                            catch (error) {
+                                if (isObjectNotFoundError(error))
+                                    return 'not_found'
+                                throw error
+                            }
+                        },
+                        sourceLastModified,
+                    )
+                    if (copyResult === 'skipped_changed') {
                         return {
                             key: file.key,
                             success: true,
@@ -1782,6 +1811,9 @@ async function delete_cleanup_candidates() {
                             skipped: true,
                         }
                     }
+                    trashKey = copyResult.trashKey
+                }
+                catch (copyError: any) {
                     try {
                         const trashExists = await objectExists(trashKey)
                         const sourceExists = await objectExists(file.key)

@@ -185,7 +185,7 @@ async function processKey(target: TrashProcessTarget): Promise<void> {
           async (destinationKey) => {
             try {
               const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: destinationKey }))
-              return { etag: head.ETag }
+              return { etag: head.ETag, lastModified: head.LastModified }
             }
             catch (error) {
               if (isObjectNotFoundError(error))
@@ -193,6 +193,7 @@ async function processKey(target: TrashProcessTarget): Promise<void> {
               throw error
             }
           },
+          sourceLastModified,
         )
         if (copyResult === 'skipped_changed') {
           console.warn(`Skipped trash copy for ${key}: live object changed before copy`)

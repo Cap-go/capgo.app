@@ -9,7 +9,7 @@
  */
 /// <reference lib="deno.ns" />
 import { S3Client } from 'https://deno.land/x/s3_lite_client@0.7.0/mod.ts'
-import { ConcurrencyLimiter, isLiveR2Key, moveS3LiteObjectToTrash, permanentDeleteSourceIfMatch, resolveOpsDeleteMode, R2_TRASH_PREFIX } from './r2_trash_utils.ts'
+import { ConcurrencyLimiter, isLiveR2Key, isObjectNotFoundError, moveS3LiteObjectToTrash, permanentDeleteSourceIfMatch, resolveOpsDeleteMode, R2_TRASH_PREFIX } from './r2_trash_utils.ts'
 
 const folderToDelete = 'orgs'
 if (!folderToDelete) {
@@ -48,6 +48,10 @@ async function processKey(key: string): Promise<ProcessKeyResult> {
       discoveryEtag = listed.etag
     }
     catch (error) {
+      if (isObjectNotFoundError(error)) {
+        console.log(`Already absent: ${key}`)
+        return 'skipped'
+      }
       console.error(`Failed ${key}: could not read discovery ETag (${error})`)
       return 'failed'
     }

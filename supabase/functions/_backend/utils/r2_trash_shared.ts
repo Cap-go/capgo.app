@@ -207,6 +207,20 @@ export function applyAwsCopyDestinationIfNoneMatchMiddleware(middlewareStack: Aw
 
 export type TrashCopyAttemptResult = { trashKey: string } | 'skipped_changed'
 
+export type TrashDestinationHead = { etag?: string, lastModified?: Date } | 'not_found'
+
+function trashDestinationMatchesSource(
+  destinationStat: Exclude<TrashDestinationHead, 'not_found'>,
+  sourceEtag: string,
+  sourceLastModified?: Date,
+): boolean {
+  if (normalizeS3Etag(destinationStat.etag) !== normalizeS3Etag(sourceEtag))
+    return false
+  if (!sourceLastModified)
+    return true
+  return destinationStat.lastModified?.getTime() === sourceLastModified.getTime()
+}
+
 /**
  * Copy a live object into trash with destination-if-none-match and 412 retry logic.
  * Caller supplies transport-specific copy/head callbacks (AWS SDK, etc.).
@@ -216,7 +230,8 @@ export async function copyObjectToTrashWithDestinationGuard(
   initialTrashKey: string,
   sourceEtag: string,
   attemptCopy: (destinationKey: string) => Promise<void>,
-  headDestination: (destinationKey: string) => Promise<{ etag?: string } | 'not_found'>,
+  headDestination: (destinationKey: string) => Promise<TrashDestinationHead>,
+  sourceLastModified?: Date,
   maxAttempts = 10,
 ): Promise<TrashCopyAttemptResult> {
   let destinationKey = initialTrashKey
@@ -233,7 +248,7 @@ export async function copyObjectToTrashWithDestinationGuard(
       const destinationStat = await headDestination(destinationKey)
       if (destinationStat === 'not_found')
         return 'skipped_changed'
-      if (normalizeS3Etag(destinationStat.etag) === normalizeS3Etag(sourceEtag))
+      if (trashDestinationMatchesSource(destinationStat, sourceEtag, sourceLastModified))
         return { trashKey: destinationKey }
       destinationKey = getUniqueR2TrashKey(sourceKey)
     }

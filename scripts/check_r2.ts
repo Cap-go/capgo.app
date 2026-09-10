@@ -241,7 +241,7 @@ async function main() {
           async (destinationKey) => {
             try {
               const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: destinationKey }))
-              return { etag: head.ETag }
+              return { etag: head.ETag, lastModified: head.LastModified }
             }
             catch (error) {
               if (isObjectNotFoundError(error))
@@ -249,6 +249,7 @@ async function main() {
               throw error
             }
           },
+          sourceLastModified,
         )
         if (copyResult === 'skipped_changed') {
           console.warn(`Skipped ${key}: live object changed before trash copy`)

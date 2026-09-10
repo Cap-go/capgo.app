@@ -467,6 +467,53 @@ describe('copyObjectToTrashWithDestinationGuard', () => {
 
     expect(result).toBe('skipped_changed')
   })
+
+  it('reuses the destination when etag and Last-Modified both match the source', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const etag = '"source"'
+    const lastModified = new Date('2024-01-15T10:30:00.000Z')
+    const defaultTrashKey = `${R2_TRASH_PREFIX}${key}`
+    const copy = vi.fn(async () => {
+      throw { statusCode: 412, code: 'PreconditionFailed' }
+    })
+
+    const result = await copyObjectToTrashWithDestinationGuard(
+      key,
+      defaultTrashKey,
+      etag,
+      copy,
+      async () => ({ etag, lastModified }),
+      lastModified,
+    )
+
+    expect(result).toEqual({ trashKey: defaultTrashKey })
+    expect(copy).toHaveBeenCalledOnce()
+  })
+
+  it('allocates a unique destination when etag matches but Last-Modified differs', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const etag = '"source"'
+    const lastModified = new Date('2024-01-15T10:30:00.000Z')
+    const defaultTrashKey = `${R2_TRASH_PREFIX}${key}`
+    const copy = vi.fn(async (destinationKey: string) => {
+      if (destinationKey === defaultTrashKey)
+        throw { statusCode: 412, code: 'PreconditionFailed' }
+    })
+
+    const result = await copyObjectToTrashWithDestinationGuard(
+      key,
+      defaultTrashKey,
+      etag,
+      copy,
+      async () => ({ etag, lastModified: new Date('2024-01-15T10:30:01.000Z') }),
+      lastModified,
+    )
+
+    expect(result).not.toBe('skipped_changed')
+    if (result !== 'skipped_changed')
+      expect(result.trashKey).not.toBe(defaultTrashKey)
+    expect(copy).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('conditionalDeleteSource', () => {
