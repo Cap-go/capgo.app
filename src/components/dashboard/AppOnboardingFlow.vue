@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { CliAiPromptOrganization } from '~/services/cliAiPrompt'
 import type { Database, Json } from '~/types/supabase.types'
 import type { OnboardingABTestAssignment } from '~/utils/onboardingABTests'
 import type {
@@ -44,6 +45,7 @@ import {
   parseAppOnboarding,
 } from '~/services/appOnboarding'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
+import { buildCliAiSetupPrompt } from '~/services/cliAiPrompt'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { uploadOrgLogoFile } from '~/services/photos'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
@@ -460,21 +462,32 @@ const selectedAppIconSource = computed<NonNullable<OnboardingDetailsEventPropert
   })
 })
 function createAiHelpPrompt() {
+  if (!apiKey.value)
+    return ''
+
   const resolvedAppId = createdApp.value?.app_id || generatedAppId.value || '[APP_ID]'
   const resolvedAppName = createdApp.value?.name?.trim() || appName.value.trim() || resolvedAppId
-  let appStatus = t('app-onboarding-ai-help-status-new')
-  if (props.preOrg)
-    appStatus = t('app-onboarding-v2-ai-help-status')
-  else if (createdApp.value?.existing_app)
-    appStatus = t('app-onboarding-ai-help-status-existing')
+  const activeOrganization = currentOrg.value
+  const resolvedOrganizationId = createdApp.value?.owner_org
+    || preOrgCreatedOrganizationId.value
+    || activeOrganization?.gid
+  const resolvedOrganizationName = activeOrganization && activeOrganization.gid === resolvedOrganizationId
+    ? activeOrganization.name
+    : ''
+  const organizations: CliAiPromptOrganization[] = resolvedOrganizationId
+    ? [{
+        id: resolvedOrganizationId,
+        name: orgNameInput.value.trim() || resolvedOrganizationName.trim() || resolvedOrganizationId,
+        apps: [{ appId: resolvedAppId, name: resolvedAppName }],
+      }]
+    : []
+  const promptIntent = selectedIntent.value === 'publish' ? 'builder' : selectedIntent.value
 
-  return t('app-onboarding-ai-help-prompt', {
-    appName: resolvedAppName,
-    appId: resolvedAppId,
-    appStatus,
-    apiKeyGuidance: t('app-onboarding-ai-help-with-key'),
-    command: cliCommand.value,
-  })
+  return buildCliAiSetupPrompt({
+    apiKey: apiKey.value,
+    organizations,
+    skippedOrganizations: [],
+  }, promptIntent)
 }
 const appOnboardingSteps = computed<Array<{ id: OnboardingFlowStep, label: string }>>(() => {
   if (props.preOrg) {

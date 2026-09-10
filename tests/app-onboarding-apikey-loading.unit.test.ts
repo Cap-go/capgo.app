@@ -71,11 +71,24 @@ describe('app onboarding API key loading state', () => {
     expect(onboardingSource).toContain('<span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>')
   })
 
-  it.concurrent('provides secure onboarding copy in the English locale', () => {
+  it.concurrent('reuses the shared intent-aware AI setup prompt', () => {
     expect(englishMessages['app-onboarding-command-apikey-loading']).toBe('Creating your secure API key…')
     expect(englishMessages['app-onboarding-ai-help-caption']).toBe('Let your AI assistant guide you through setting up Capgo. Copy the onboarding instructions to get started.')
-    expect(englishMessages['app-onboarding-ai-help-with-key']).toContain('do not repeat the API key in your response')
-    expect(englishMessages['app-onboarding-ai-help-prompt']).toContain('3. Help me verify the installation succeeded.\n4. {apiKeyGuidance}')
+    expect(onboardingSource).toContain('import { buildCliAiSetupPrompt } from \'~/services/cliAiPrompt\'')
+    const promptBuilder = onboardingSource.slice(
+      onboardingSource.indexOf('function createAiHelpPrompt()'),
+      onboardingSource.indexOf('const appOnboardingSteps'),
+    )
+    expect(promptBuilder).toContain('return buildCliAiSetupPrompt({')
+    expect(promptBuilder).toContain('organizations,')
+    expect(promptBuilder).toContain('skippedOrganizations: [],')
+    expect(promptBuilder).toContain('selectedIntent.value === \'publish\' ? \'builder\' : selectedIntent.value')
+    expect(promptBuilder).not.toContain('t(\'app-onboarding-ai-help-prompt\'')
+    expect(englishMessages['app-onboarding-ai-help-prompt']).toBeUndefined()
+    expect(englishMessages['app-onboarding-ai-help-status-existing']).toBeUndefined()
+    expect(englishMessages['app-onboarding-ai-help-status-new']).toBeUndefined()
+    expect(englishMessages['app-onboarding-ai-help-with-key']).toBeUndefined()
+    expect(englishMessages['app-onboarding-v2-ai-help-status']).toBeUndefined()
     expect(englishMessages['app-onboarding-ai-help-copy-description']).toBeUndefined()
     expect(englishMessages['app-onboarding-ai-help-copy-title']).toBeUndefined()
     expect(englishMessages['app-onboarding-ai-help-copy-with-key']).toBeUndefined()
