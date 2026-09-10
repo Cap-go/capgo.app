@@ -15,14 +15,32 @@ function clampToToday(date: Date): Date {
 
 type VersionUsageKind = 'bundle' | 'native'
 
-function buildCacheKey(appId: string, from: Date, to: Date, kind: VersionUsageKind) {
-  return `${appId}|${kind}|${formatUtcDateParam(from)}|${formatUtcDateParam(to)}`
+export interface UseChartDataOptions {
+  forceRefetch?: boolean
 }
 
-export async function useChartData(supabase: SupabaseClient, appId: string, from: Date, to: Date, kind: VersionUsageKind = 'bundle') {
-  const cacheKey = buildCacheKey(appId, from, to, kind)
+function buildCacheKey(sessionId: string, appId: string, from: Date, to: Date, kind: VersionUsageKind) {
+  return `${sessionId}|${appId}|${kind}|${formatUtcDateParam(from)}|${formatUtcDateParam(to)}`
+}
 
-  if (chartDataCache.value.has(cacheKey))
+async function getChartCacheSessionKey(supabase: SupabaseClient): Promise<string> {
+  const { data } = await supabase.auth.getClaims()
+  const sub = data?.claims?.sub
+  return typeof sub === 'string' && sub.length > 0 ? sub : 'anonymous'
+}
+
+export async function useChartData(
+  supabase: SupabaseClient,
+  appId: string,
+  from: Date,
+  to: Date,
+  kind: VersionUsageKind = 'bundle',
+  options?: UseChartDataOptions,
+) {
+  const sessionKey = await getChartCacheSessionKey(supabase)
+  const cacheKey = buildCacheKey(sessionKey, appId, from, to, kind)
+
+  if (!options?.forceRefetch && chartDataCache.value.has(cacheKey))
     return chartDataCache.value.get(cacheKey)
 
   // Clamp the 'to' date to today - we can't fetch data for future dates

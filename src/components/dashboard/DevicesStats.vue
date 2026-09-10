@@ -684,7 +684,7 @@ async function loadThirtyDaySummary(forceRefetch = false, loadToken?: number, lo
   const summaryToken = ++thirtyDaySummaryRequestToken
   isFetchingThirtyDaySummary.value = true
   try {
-    const data = await useChartData(supabase, expectedAppId, startDate, endDate, 'native')
+    const data = await useChartData(supabase, expectedAppId, startDate, endDate, 'native', { forceRefetch })
     if (loadToken !== undefined && loadToken !== requestToken)
       return
     if (expectedAppId !== activeAppId.value)
@@ -780,7 +780,7 @@ async function loadData(forceRefetch = false) {
   currentRange.value = { startDate, endDate }
 
   try {
-    const data = await useChartData(supabase, requestedAppId, startDate, endDate, props.usageKind === 'native' ? 'native' : 'bundle')
+    const data = await useChartData(supabase, requestedAppId, startDate, endDate, props.usageKind === 'native' ? 'native' : 'bundle', { forceRefetch })
 
     if (currentToken !== requestToken || requestedAppId !== activeAppId.value)
       return
