@@ -94,18 +94,21 @@ app.post('/', middlewareKey(), async (c) => {
           throw simpleError('upload_in_progress', 'Upload link already being generated for this version')
         throw simpleError('cannot_update_supabase', 'Version already has a different r2_path')
       }
-
-      reservedR2Path = true
     })
 
-    const url = await s3.getUploadUrl(c, filePath)
-    if (!url) {
+    let url: string
+    try {
+      url = await s3.getUploadUrl(c, filePath)
+      if (!url)
+        throw simpleError('cannot_get_upload_link', 'Cannot get upload link')
+    }
+    catch (error) {
       await supabaseApikey(c, capgkey)
         .from('app_versions')
         .update({ r2_path: null })
         .eq('id', version.id)
         .eq('r2_path', filePath)
-      throw simpleError('cannot_get_upload_link', 'Cannot get upload link')
+      throw error
     }
 
     await sendEventToTracking(c, {
