@@ -1,5 +1,9 @@
 name: Bump version
 
+concurrency:
+  group: ${{ github.run_attempt == 1 && !startsWith(github.event.head_commit.message, 'chore(release):') && !startsWith(github.event.head_commit.message, 'chore(auto-sync):') && format('bump-version-{0}', github.ref) || format('bump-version-isolated-{0}-{1}', github.run_id, github.run_attempt) }}
+  cancel-in-progress: true
+
 on:
   push:
     branches:
@@ -10,7 +14,7 @@ permissions: {}
 
 jobs:
   changes:
-    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') && !startsWith(github.event.head_commit.message, 'chore(auto-sync):') }}
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -21,9 +25,13 @@ jobs:
       cli_release_as: ${{ steps.cli.outputs.release_as }}
       run_notifications: ${{ steps.notifications.outputs.should_release }}
       notifications_release_as: ${{ steps.notifications.outputs.release_as }}
-      has_migration_changes: ${{ steps.migration_scope.outputs.has_migration_changes }}
       run_any: ${{ steps.capgo.outputs.should_release == 'true' || steps.cli.outputs.should_release == 'true' || steps.notifications.outputs.should_release == 'true' }}
     steps:
+      - name: Reject version workflow re-run
+        if: ${{ github.run_attempt != 1 }}
+        run: |
+          echo "::error::Version-generation workflows cannot be re-run. Push a new commit so release scope is recalculated from the current branch."
+          exit 1
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -35,24 +43,23 @@ jobs:
           filter: blob:none
       - name: Setup bun
         run: bash scripts/setup-bun.sh
+      - name: Resolve release environment
+        id: release_environment
+        run: |
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            echo "scope_mode=--latest-stable" >> "$GITHUB_OUTPUT"
+          else
+            echo "scope_mode=--latest-alpha" >> "$GITHUB_OUTPUT"
+          fi
       - name: Resolve Capgo release scope
         id: capgo
-        run: bun scripts/release-scope.ts capgo "${{ github.event.before }}" "${{ github.sha }}" >> "$GITHUB_OUTPUT"
+        run: bun scripts/release-scope.ts capgo "${{ steps.release_environment.outputs.scope_mode }}" "${{ github.sha }}" >> "$GITHUB_OUTPUT"
       - name: Resolve CLI release scope
         id: cli
-        run: bun scripts/release-scope.ts cli "${{ github.event.before }}" "${{ github.sha }}" >> "$GITHUB_OUTPUT"
+        run: bun scripts/release-scope.ts cli "${{ steps.release_environment.outputs.scope_mode }}" "${{ github.sha }}" >> "$GITHUB_OUTPUT"
       - name: Resolve notifications plugin release scope
         id: notifications
-        run: bun scripts/release-scope.ts notifications "${{ github.event.before }}" "${{ github.sha }}" >> "$GITHUB_OUTPUT"
-      - name: Resolve migration scope
-        id: migration_scope
-        run: |
-          if git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" | grep -q '^supabase/migrations/'; then
-            echo "has_migration_changes=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_migration_changes=false" >> "$GITHUB_OUTPUT"
-          fi
-
+        run: bun scripts/release-scope.ts notifications "${{ steps.release_environment.outputs.scope_mode }}" "${{ github.sha }}" >> "$GITHUB_OUTPUT"
   # Run only the relevant test scope before creating tags
   test:
     needs: changes
@@ -71,13 +78,20 @@ jobs:
   # Only bump the changed release scopes and create matching tags after tests pass
   bump-version:
     needs: [changes, test]
-    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') && !startsWith(github.event.head_commit.message, 'chore(auto-sync):') && needs.changes.outputs.run_any == 'true' && needs.test.result == 'success' }}
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') && needs.changes.outputs.run_any == 'true' && needs.test.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: Bump versions and create tags
     permissions:
       contents: write
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
     steps:
+      - name: Reject version workflow re-run
+        if: ${{ github.run_attempt != 1 }}
+        run: |
+          echo "::error::Version-generation workflows cannot be re-run. Push a new commit so release scope is recalculated from the current branch."
+          exit 1
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -93,6 +107,10 @@ jobs:
       - name: Install dependencies
         if: ${{ needs.changes.outputs.run_capgo == 'true' || needs.changes.outputs.run_cli == 'true' || needs.changes.outputs.run_notifications == 'true' }}
         run: bun install --frozen-lockfile
+      - name: Record tested release state
+        run: |
+          git rev-parse HEAD > "$RUNNER_TEMP/release-base-sha"
+          git tag --list | sort > "$RUNNER_TEMP/release-tags-before"
       - name: Resolve Capgo native release bump
         id: capgo_version
         if: ${{ needs.changes.outputs.run_capgo == 'true' }}
@@ -228,74 +246,19 @@ jobs:
               fi
             fi
           fi
-      - name: Push to origin
+      - name: Publish release atomically
+        id: publish
+        env:
+          RELEASE_REMOTE_URL: https://x-access-token:${{ secrets.PERSONAL_ACCESS_TOKEN }}@github.com/${{ github.repository }}.git
         run: |
           set -e
 
-          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          remote_repo="https://${GITHUB_ACTOR}:${{ secrets.PERSONAL_ACCESS_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git"
-          git pull --rebase=false $remote_repo $CURRENT_BRANCH
-          git push $remote_repo HEAD:$CURRENT_BRANCH --follow-tags --tags
-
-  sync_schema_types:
-    needs: [changes, bump-version]
-    if: ${{ github.ref == 'refs/heads/main' && needs.changes.outputs.has_migration_changes == 'true' && !startsWith(github.event.head_commit.message, 'chore(release):') && !startsWith(github.event.head_commit.message, 'chore(auto-sync):') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: write
-    steps:
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24.x
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: main
-          token: "${{ secrets.PERSONAL_ACCESS_TOKEN }}"
-          fetch-depth: 0
-          filter: blob:none
-      - name: Setup bun
-        run: bash scripts/setup-bun.sh
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-      - name: Sync generated schema and types
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
-        run: |
-          if [ -z "${{ secrets.SUPABASE_PROJECT_ID_PROD }}" ]; then
-            echo "SUPABASE_PROJECT_ID_PROD is required for schema/types sync" >&2
-            exit 1
+          status="$(bun scripts/publish-release.ts \
+            "$GITHUB_REF_NAME" \
+            "$(< "$RUNNER_TEMP/release-base-sha")" \
+            "$RUNNER_TEMP/release-tags-before")"
+          if [ "$status" = "published" ]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
           fi
-
-          bunx supabase --version
-          bunx supabase link --project-ref ${{ secrets.SUPABASE_PROJECT_ID_PROD }}
-          bun schemas
-          BRANCH=main bun types
-
-          if git diff --quiet supabase/schemas/prod.sql src/types/supabase.types.ts supabase/functions/_backend/utils/supabase.types.ts; then
-            echo "No schema/types drift detected."
-            exit 0
-          fi
-
-          # Gate the auto-sync on its own output: the regenerated types are only
-          # trustworthy if they still compile against the backend that consumes
-          # them. Prod is often behind local migrations, so a regenerated types
-          # file can drop columns the code still references. Skip the push in
-          # that case instead of landing an unverified commit that reddens
-          # `main` — and exit 0 so migration-touching releases are not blocked.
-          echo "Schema/types drift detected; verifying regenerated types compile against the codebase."
-          if ! bun typecheck; then
-            echo "Regenerated schema/types do not compile (prod likely behind local migrations). Skipping auto-sync push." >&2
-            git checkout -- supabase/schemas/prod.sql src/types/supabase.types.ts supabase/functions/_backend/utils/supabase.types.ts
-            exit 0
-          fi
-
-          git config --local user.name "github-actions[bot]"
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git add supabase/schemas/prod.sql src/types/supabase.types.ts supabase/functions/_backend/utils/supabase.types.ts
-          git commit -m "chore(auto-sync): update supabase schema and generated types"
-
-          remote_repo="https://x-access-token:${{ secrets.PERSONAL_ACCESS_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git"
-          git push "$remote_repo" HEAD:main
