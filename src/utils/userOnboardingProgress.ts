@@ -10,10 +10,12 @@ export const USER_ONBOARDING_FLOWS = ['pre_org', 'existing_org'] as const
 export const USER_ONBOARDING_DEVELOPMENT_ENVIRONMENTS = ['hosted_builder', 'ai_assistant', 'hand_coded', 'other', 'local_project', 'exploring', 'skipped'] as const satisfies readonly OnboardingDevelopmentEnvironment[]
 export const USER_ONBOARDING_INTENTS = ['ota', 'builder', 'both', 'exploring', 'publish'] as const
 export const USER_ONBOARDING_DETAILS_STEPS = ['name', 'app_id', 'icon'] as const
+export const USER_ONBOARDING_SETUP_STAGES = ['channel-routing', 'channel-self-assign', 'channel-console-assign', 'channel-create', 'cli'] as const
 
 export type UserOnboardingStatus = typeof USER_ONBOARDING_STATUSES[number]
 export type UserOnboardingStep = typeof USER_ONBOARDING_STEPS[number]
 export type UserOnboardingDetailsStep = typeof USER_ONBOARDING_DETAILS_STEPS[number]
+export type UserOnboardingSetupStage = typeof USER_ONBOARDING_SETUP_STAGES[number]
 
 export interface UserOnboardingProgress {
   status: UserOnboardingStatus
@@ -23,6 +25,7 @@ export interface UserOnboardingProgress {
   intent?: OnboardingIntent
   publish_app_question?: true
   details_step?: UserOnboardingDetailsStep
+  setup_stage?: UserOnboardingSetupStage
   app_name?: string
   app_id?: string
   existing_app?: boolean | null
@@ -53,6 +56,7 @@ export const USER_ONBOARDING_PROGRESS_FIELDS = {
   onboarding_attempt_id: true,
   org_name: true,
   publish_app_question: true,
+  setup_stage: true,
   status: true,
   step: true,
   store_url: true,
@@ -67,6 +71,7 @@ export interface UserOnboardingProgressInput {
   intent?: OnboardingIntent | null
   publishAppQuestion?: boolean
   detailsStep?: UserOnboardingDetailsStep
+  setupStage?: UserOnboardingSetupStage
   appName?: string
   appId?: string
   existingApp?: boolean | null
@@ -159,6 +164,9 @@ function applyOptionalUserOnboardingFields(
   if (isOneOf(raw.details_step, USER_ONBOARDING_DETAILS_STEPS))
     progress.details_step = raw.details_step
 
+  if (isOneOf(raw.setup_stage, USER_ONBOARDING_SETUP_STAGES))
+    progress.setup_stage = raw.setup_stage
+
   const appName = optionalTrimmedString(raw.app_name)
   if (appName)
     progress.app_name = appName
@@ -248,6 +256,9 @@ export function buildUserOnboardingProgress(input: UserOnboardingProgressInput):
 
   if (input.detailsStep)
     progress.details_step = input.detailsStep
+
+  if (input.setupStage)
+    progress.setup_stage = input.setupStage
 
   const appName = optionalTrimmedString(input.appName)
   if (appName)

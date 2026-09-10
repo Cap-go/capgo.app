@@ -3214,7 +3214,7 @@
   "app-onboarding-continue-to-org": "Continue to organization",
   "unified-onboarding-step-intent": "Your goal",
   "unified-onboarding-step-organization": "Organization",
-  "unified-onboarding-step-channel": "Creating a channel",
+  "unified-onboarding-step-channel": "Channel",
   "unified-onboarding-step-setup": "Next step",
   "unified-onboarding-setup-builder-title": "Finish setup with Capgo Builder",
   "unified-onboarding-setup-builder-subtitle": "Run the builder onboarding command in your app project to set up cloud native builds.",

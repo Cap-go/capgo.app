@@ -13,7 +13,7 @@ import type {
   OnboardingStepCompletionProperties,
 } from '~/utils/onboardingProgressAnalytics'
 import type { OnboardingPersistOptions, OnboardingPersistResult } from '~/utils/onboardingProgressPersistence'
-import type { UserOnboardingStatus } from '~/utils/userOnboardingProgress'
+import type { UserOnboardingSetupStage, UserOnboardingStatus } from '~/utils/userOnboardingProgress'
 import mime from 'mime'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -163,7 +163,7 @@ type OnboardingFlowStep = StandardFlowStep | PreOrgFlowStep
 type OnboardingProgressStepId = OnboardingFlowStep | 'channel'
 type AppDetailsStep = 'name' | 'app_id' | 'icon'
 type AppDetailsAnalyticsStep = 'app_name' | 'app_id' | 'app_icon'
-type SetupStage = 'channel-routing' | 'channel-self-assign' | 'channel-console-assign' | 'channel-create' | 'cli'
+type SetupStage = UserOnboardingSetupStage
 
 const APP_DETAILS_ANALYTICS_STEPS: Record<AppDetailsStep, AppDetailsAnalyticsStep> = {
   name: 'app_name',
@@ -208,8 +208,10 @@ const preOrgShouldInvite = ref(false)
 const reportedSetupSource = ref<'manual' | 'cli' | 'mcp' | 'ai' | null>(null)
 const flowStep = ref<OnboardingFlowStep>('details')
 const appDetailsStep = ref<AppDetailsStep>('name')
-const setupStage = ref<SetupStage>('channel-routing')
-const showSetupBackButton = computed(() => (flowStep.value === 'setup' || flowStep.value === 'install') && (setupStage.value === 'channel-create' || setupStage.value === 'cli'))
+const setupStage = ref<SetupStage>('cli')
+const showSetupBackButton = computed(() => newChannelTreatment.value
+  && (flowStep.value === 'setup' || flowStep.value === 'install')
+  && (setupStage.value === 'channel-create' || setupStage.value === 'cli'))
 const showLanguageSelector = computed(() => (
   (props.preOrg && !createdApp.value)
   || (flowStep.value === 'setup' && Boolean(createdApp.value))
@@ -513,7 +515,7 @@ const appOnboardingSteps = computed<Array<{ id: OnboardingFlowStep, label: strin
 })
 const stepperStepId = computed(() => flowStep.value === 'publish_app_question' ? 'intent' : flowStep.value)
 const onboardingProgressSteps = computed<Array<{ id: OnboardingProgressStepId, label: string }>>(() => {
-  if (props.preOrg) {
+  if (props.preOrg && newChannelTreatment.value) {
     return [
       { id: 'intent', label: t('unified-onboarding-step-intent') },
       { id: 'details', label: t('app-onboarding-step-details') },
@@ -525,8 +527,8 @@ const onboardingProgressSteps = computed<Array<{ id: OnboardingProgressStepId, l
   return appOnboardingSteps.value
 })
 const currentProgressStepId = computed<OnboardingProgressStepId>(() => {
-  if (props.preOrg && flowStep.value === 'setup')
-    return setupStage.value === 'cli' ? 'setup' : 'channel'
+  if (props.preOrg && newChannelTreatment.value && flowStep.value === 'setup' && setupStage.value !== 'cli')
+    return 'channel'
   return stepperStepId.value
 })
 const currentStepIndex = computed(() => Math.max(0, onboardingProgressSteps.value.findIndex(entry => entry.id === currentProgressStepId.value)))
@@ -699,6 +701,7 @@ function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress'
     publishAppQuestion: flowStep.value === 'publish_app_question',
     intent: selectedIntent.value,
     detailsStep: appDetailsStep.value,
+    setupStage: flowStep.value === 'setup' || flowStep.value === 'install' ? setupStage.value : undefined,
     appName: appName.value,
     appId: selectedAppIdSource.value === 'generated' ? '' : generatedAppId.value,
     existingApp: existingApp.value,
@@ -837,6 +840,7 @@ async function writeOnboardingProgress(
 function resetOnboardingForm() {
   flowStep.value = props.preOrg ? 'intent' : 'details'
   appDetailsStep.value = 'name'
+  setupStage.value = 'cli'
   selectedDevelopmentEnvironment.value = null
   skippedPublishAppQuestion.value = false
   selectedIntent.value = null
@@ -883,6 +887,7 @@ function applyOnboardingProgress(progress: ReturnType<typeof parseUserOnboarding
 
   const flow = props.preOrg ? 'pre_org' : 'existing_org'
   flowStep.value = resumableOnboardingFlowStep(progress, flow)
+  setupStage.value = resolveSetupStage(progress)
   if (progress.details_step)
     appDetailsStep.value = progress.details_step
   if (progress.development_environment === 'skipped') {
@@ -1165,6 +1170,8 @@ async function loadResumeApp() {
   }
 
   createdApp.value = data
+  const savedProgress = parseUserOnboardingProgress(main.user?.onboarding)
+  setupStage.value = resolveSetupStage(savedProgress)
   appName.value = data.name ?? ''
   existingApp.value = data.existing_app ?? null
   storeUrl.value = data.ios_store_url ?? data.android_store_url ?? ''
@@ -2001,23 +2008,39 @@ function continueFromOrganizationInvite(invitationCount: number) {
     invitation_count: invitationCount,
   })
   showOrganizationInvite.value = false
+  setupStage.value = resolveSetupStage()
   completeAndViewStep('setup', { appId: createdApp.value.app_id })
 }
 
+function resolveSetupStage(
+  progress = parseUserOnboardingProgress(main.user?.onboarding),
+): SetupStage {
+  if (!newChannelTreatment.value)
+    return 'cli'
+  return progress?.setup_stage ?? 'channel-routing'
+}
+
+function setSetupStage(nextStage: SetupStage) {
+  if (setupStage.value === nextStage)
+    return
+  setupStage.value = nextStage
+  void persistOnboardingProgress()
+}
+
 function continueFromChannelDefaultRouting() {
-  setupStage.value = 'channel-self-assign'
+  setSetupStage('channel-self-assign')
 }
 
 function continueFromChannelSelfAssign() {
-  setupStage.value = 'channel-console-assign'
+  setSetupStage('channel-console-assign')
 }
 
 function continueFromChannelConsoleAssign() {
-  setupStage.value = 'channel-create'
+  setSetupStage('channel-create')
 }
 
 function continueFromChannelCreate() {
-  setupStage.value = 'cli'
+  setSetupStage('cli')
 }
 
 const previousSetupStage: Partial<Record<SetupStage, SetupStage>> = {
@@ -2030,8 +2053,13 @@ const previousSetupStage: Partial<Record<SetupStage, SetupStage>> = {
 function goBackFromSetupStage() {
   const previousStage = previousSetupStage[setupStage.value]
   if (previousStage)
-    setupStage.value = previousStage
+    setSetupStage(previousStage)
 }
+
+watch(newChannelTreatment, (enabled) => {
+  if (!enabled && setupStage.value !== 'cli')
+    setSetupStage('cli')
+})
 
 function onTechnicalInviteOpened() {
   progressTracker?.trackStepEvent('onboarding_technical_invite_opened', 'setup')
@@ -2169,7 +2197,10 @@ async function createAppRecord(options?: { nextStep?: StandardFlowStep | PreOrgF
     }
     if (flowStep.value === 'details')
       completionProperties.storeImportUsed = hasImportedStoreMetadata.value
-    completeAndViewStep(options?.nextStep ?? 'choice', completionProperties)
+    const nextStep = options?.nextStep ?? 'choice'
+    if (nextStep === 'setup' || nextStep === 'install')
+      setupStage.value = resolveSetupStage()
+    completeAndViewStep(nextStep, completionProperties)
   }
   catch (error) {
     console.error('Cannot create onboarding app', error)
@@ -2325,6 +2356,7 @@ function goToInstallStep() {
     return
 
   isCliCommandVisible.value = false
+  setupStage.value = resolveSetupStage()
   startApiKeyLoading()
   completeAndViewStep('install', {
     appId: createdApp.value.app_id,
@@ -3344,24 +3376,24 @@ defineExpose({
 
         <div v-else-if="flowStep === 'setup' && createdApp">
           <ChannelDefaultRoutingOnboarding
-            v-if="setupStage === 'channel-routing'"
+            v-if="newChannelTreatment && setupStage === 'channel-routing'"
             @continue="continueFromChannelDefaultRouting"
           />
 
           <ChannelSelfAssignOnboarding
-            v-else-if="setupStage === 'channel-self-assign'"
+            v-else-if="newChannelTreatment && setupStage === 'channel-self-assign'"
             @back="goBackFromSetupStage"
             @continue="continueFromChannelSelfAssign"
           />
 
           <ChannelConsoleAssignOnboarding
-            v-else-if="setupStage === 'channel-console-assign'"
+            v-else-if="newChannelTreatment && setupStage === 'channel-console-assign'"
             @back="goBackFromSetupStage"
             @continue="continueFromChannelConsoleAssign"
           />
 
           <ChannelCreateOnboarding
-            v-else-if="setupStage === 'channel-create'"
+            v-else-if="newChannelTreatment && setupStage === 'channel-create'"
             :app-id="createdApp.app_id"
             @continue="continueFromChannelCreate"
           />
@@ -3535,24 +3567,24 @@ defineExpose({
 
         <div v-else-if="!props.preOrg && flowStep === 'install' && createdApp">
           <ChannelDefaultRoutingOnboarding
-            v-if="setupStage === 'channel-routing'"
+            v-if="newChannelTreatment && setupStage === 'channel-routing'"
             @continue="continueFromChannelDefaultRouting"
           />
 
           <ChannelSelfAssignOnboarding
-            v-else-if="setupStage === 'channel-self-assign'"
+            v-else-if="newChannelTreatment && setupStage === 'channel-self-assign'"
             @back="goBackFromSetupStage"
             @continue="continueFromChannelSelfAssign"
           />
 
           <ChannelConsoleAssignOnboarding
-            v-else-if="setupStage === 'channel-console-assign'"
+            v-else-if="newChannelTreatment && setupStage === 'channel-console-assign'"
             @back="goBackFromSetupStage"
             @continue="continueFromChannelConsoleAssign"
           />
 
           <ChannelCreateOnboarding
-            v-else-if="setupStage === 'channel-create'"
+            v-else-if="newChannelTreatment && setupStage === 'channel-create'"
             :app-id="createdApp.app_id"
             @continue="continueFromChannelCreate"
           />

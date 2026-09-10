@@ -8,6 +8,7 @@ import {
   resumableOnboardingFlowStep,
   shouldPromptOnboardingResume,
   USER_ONBOARDING_MAX_JSON_BYTES,
+  USER_ONBOARDING_SETUP_STAGES,
 } from '../src/utils/userOnboardingProgress'
 
 describe('user onboarding progress', () => {
@@ -254,6 +255,34 @@ describe('user onboarding progress', () => {
       flow: 'pre_org',
       updated_at: '2026-08-15T00:00:00.000Z',
     })).toBeNull()
+  })
+
+  it.concurrent('round-trips every channel setup stage and ignores invalid stages', () => {
+    for (const setupStage of USER_ONBOARDING_SETUP_STAGES) {
+      expect(buildUserOnboardingProgress({
+        status: 'in_progress',
+        step: 'setup',
+        flow: 'existing_org',
+        setupStage,
+        updatedAt: '2026-09-10T00:00:00.000Z',
+      })).toMatchObject({ setup_stage: setupStage })
+
+      expect(parseUserOnboardingProgress({
+        status: 'in_progress',
+        step: 'setup',
+        flow: 'existing_org',
+        setup_stage: setupStage,
+        updated_at: '2026-09-10T00:00:00.000Z',
+      })).toMatchObject({ setup_stage: setupStage })
+    }
+
+    expect(parseUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'setup',
+      flow: 'existing_org',
+      setup_stage: 'unknown',
+      updated_at: '2026-09-10T00:00:00.000Z',
+    })).not.toHaveProperty('setup_stage')
   })
 
   it.concurrent('clamps oversize optional strings before they can fail the jsonb check', () => {
