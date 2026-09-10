@@ -83,6 +83,13 @@ export function resolveStripeEnvironment(c: Context, account: BillingAccount = '
   return 'test'
 }
 
+function isLoopbackStripeHost(hostname: string): boolean {
+  return hostname === 'localhost'
+    || hostname === '127.0.0.1'
+    || hostname === '[::1]'
+    || hostname === '::1'
+}
+
 function getStripeApiBaseUrl(c: Context): URL | null {
   const rawBaseUrl = getEnv(c, 'STRIPE_API_BASE_URL').trim()
   if (!rawBaseUrl)
@@ -98,6 +105,10 @@ function getStripeApiBaseUrl(c: Context): URL | null {
 
   if (!['http:', 'https:'].includes(parsedBaseUrl.protocol)) {
     throw new Error('STRIPE_API_BASE_URL must use http or https')
+  }
+
+  if (parsedBaseUrl.protocol === 'http:' && !isLoopbackStripeHost(parsedBaseUrl.hostname)) {
+    throw new Error('STRIPE_API_BASE_URL must use https for non-loopback hosts')
   }
 
   if (parsedBaseUrl.pathname !== '/' && parsedBaseUrl.pathname !== '') {
@@ -392,7 +403,7 @@ export async function createPortal(c: Context, customerId: string, callbackUrl: 
 export async function updateCustomerEmail(c: Context, customerId: string, newEmail: string) {
   const { stripe, configured } = await getStripeContextForCustomer(c, customerId)
   if (!configured)
-    return Promise.resolve()
+    return
   return stripe.customers.update(customerId, { email: newEmail, metadata: { email: newEmail } },
   )
 }
@@ -400,7 +411,7 @@ export async function updateCustomerEmail(c: Context, customerId: string, newEma
 export async function updateCustomerOrganizationName(c: Context, customerId: string, newName: string) {
   const { stripe, configured } = await getStripeContextForCustomer(c, customerId)
   if (!configured)
-    return Promise.resolve()
+    return
   return stripe.customers.update(customerId, { name: newName })
 }
 

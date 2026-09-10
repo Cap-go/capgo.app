@@ -25,6 +25,7 @@ import {
 const id = randomUUID()
 const APPNAME = `com.app.key.${id}`
 let authHeaders: Record<string, string>
+let warmupKeyId: number | null = null
 
 function orgKeyBody(name: string, extra: Record<string, unknown> = {}) {
   return {
@@ -55,14 +56,27 @@ beforeAll(async () => {
   await resetAndSeedAppData(APPNAME)
   await warmEdgeEndpoint('/apikey', { method: 'GET', headers: authHeaders })
   // GET alone does not compile the POST handler; warm create path before concurrent POSTs.
-  await warmEdgeEndpoint('/apikey', {
-    method: 'POST',
-    headers: authHeaders,
-    body: JSON.stringify(orgKeyBody(`warmup-${id.slice(0, 8)}`)),
-  })
+  const warmupResponse = await postApikey(orgKeyBody(`warmup-${id.slice(0, 8)}`))
+  expect(warmupResponse.status).toBe(200)
+  const warmupData = await warmupResponse.json() as { id: number }
+  warmupKeyId = warmupData.id
 }, 60000)
 
 afterAll(async () => {
+  if (warmupKeyId !== null) {
+    try {
+      const response = await fetch(`${BASE_URL}/apikey/${warmupKeyId}`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      })
+      if (!response.ok) {
+        console.warn(`apikey warmup cleanup delete ${warmupKeyId} status=${response.status}`)
+      }
+    }
+    catch (error) {
+      console.warn(`apikey warmup cleanup delete ${warmupKeyId} failed`, error)
+    }
+  }
   await resetAppData(APPNAME)
 })
 

@@ -217,7 +217,7 @@ describe('createStripeCustomer', () => {
       product_id: 'prod_solo_us',
       billing_account: 'us',
     })
-    mockSupabase({ orgCustomerId: PENDING_ID })
+    const { stripeInfoInsert } = mockSupabase({ orgCustomerId: PENDING_ID })
 
     await createStripeCustomer(createContext(), createOrg(PENDING_ID))
 
@@ -229,6 +229,10 @@ describe('createStripeCustomer', () => {
       expect.anything(),
       'us',
     )
+    expect(stripeInfoInsert).toHaveBeenCalledWith(expect.objectContaining({
+      billing_account: 'us',
+      product_id: SOLO_PLAN.stripe_id_us,
+    }))
   })
 
   it('uses local stripe_info billing_account when replacing a fake customer id', async () => {
