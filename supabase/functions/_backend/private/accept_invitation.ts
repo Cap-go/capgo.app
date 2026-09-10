@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { z } from 'zod'
 import { Hono } from 'hono/tiny'
@@ -173,7 +174,7 @@ async function ensureOrgMembership(
   }
 
   const pgPool = getPgClient(c, false)
-  let pgClient: Awaited<ReturnType<typeof pgPool.connect>> | null = null
+  let pgClient: PoolClient | null = null
   let transactionStarted = false
 
   try {
