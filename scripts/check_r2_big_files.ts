@@ -1696,7 +1696,14 @@ async function delete_cleanup_candidates() {
                         }
                     }
                 }
-                if (file.etag && head.ETag && file.etag !== head.ETag) {
+                if (!head.ETag) {
+                    return {
+                        key: file.key,
+                        success: false,
+                        error: 'Live object has no ETag from HeadObject; source retained',
+                    }
+                }
+                if (file.etag !== head.ETag) {
                     return {
                         key: file.key,
                         success: true,
