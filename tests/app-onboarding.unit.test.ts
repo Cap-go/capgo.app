@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { INIT_ONBOARDING_STEP_IDS } from '../cli/src/init/onboarding-steps'
 import {
   APP_ONBOARDING_STEP_IDS,
+  appendAppOnboardingStepHistory,
   applyAppOnboardingPatch,
   defaultAppOnboarding,
   mergeAppOnboarding,
@@ -115,5 +116,36 @@ describe('app onboarding merge', () => {
     expect(parseAppOnboardingPatch({ source: 'web' })).toBeNull()
     expect(parseAppOnboardingPatch({ steps: { not_a_step: { status: 'done' } } })).toBeNull()
     expect(parseAppOnboardingPatch({ source: 'ai' })).toEqual({ source: 'ai' })
+  })
+
+  it.concurrent('ignores client history and caps server history with an overflow marker', () => {
+    expect(parseAppOnboardingPatch({
+      steps: { build_project: { status: 'done', update_history: [{ forged: true }] } },
+    })).toEqual({ steps: { build_project: { status: 'done' } } })
+
+    let current: Record<string, unknown> = {
+      setup: {
+        source: 'cli',
+        outcome: 'in_progress',
+        steps: { build_project: { status: 'done', at: 'step-0' } },
+      },
+    }
+    for (let update = 1; update <= 11; update++) {
+      const patch = { steps: { build_project: { status: 'done' as const, at: `step-${update}` } } }
+      const merged = applyAppOnboardingPatch(current, patch, () => `merge-${update}`)
+      current = appendAppOnboardingStepHistory(current, merged, patch, () => `server-${update}`)
+    }
+
+    const setup = current.setup as { steps: { build_project: { update_history: Array<Record<string, unknown>> } } }
+    const history = setup.steps.build_project.update_history
+    expect(history).toHaveLength(10)
+    expect(history[0]).toEqual({ status: 'done', at: 'server-1' })
+    expect(history[9]).toEqual({ type: 'update_history_full', at: 'server-11' })
+
+    const duplicatePatch = { steps: { build_project: { status: 'done' as const, at: 'step-11' } } }
+    const duplicateMerge = applyAppOnboardingPatch(current, duplicatePatch, () => 'merge-duplicate')
+    const duplicate = appendAppOnboardingStepHistory(current, duplicateMerge, duplicatePatch, () => 'server-duplicate')
+    const duplicateSetup = duplicate.setup as { steps: { build_project: { update_history: unknown[] } } }
+    expect(duplicateSetup.steps.build_project.update_history).toEqual(history)
   })
 })
