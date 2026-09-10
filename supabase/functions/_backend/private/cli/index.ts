@@ -2,7 +2,7 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { createHono, getBodyOrQuery, parseBody, quickError } from '../../utils/hono.ts'
 import { version } from '../../utils/version.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
-import { checkPermission, type Permission } from '../../utils/rbac.ts'
+import { checkAnyPermission, checkPermission, type Permission } from '../../utils/rbac.ts'
 import { getAppOrganization } from '../../public/bundle/create.ts'
 import {
   isAllowedActionOrg,
@@ -76,18 +76,6 @@ const CLI_ORG_2FA_PERMISSIONS: Permission[] = [
   'org.delete',
   'org.create_app',
 ]
-
-async function hasAnyPermission(
-  c: Parameters<typeof checkPermission>[0],
-  permissions: Permission[],
-  scope: { appId?: string, orgId?: string },
-): Promise<boolean> {
-  for (const permission of permissions) {
-    if (await checkPermission(c, permission, scope))
-      return true
-  }
-  return false
-}
 
 async function hasApiKeyBindingOnApp(
   c: Parameters<typeof checkPermission>[0],
@@ -266,7 +254,7 @@ app.post('/check-2fa-app', middlewareKey(), async (c) => {
   if (!isValidAppId(body.app_id))
     return quickError(400, 'invalid_app_id', 'App ID must be a reverse domain string', { app_id: body.app_id })
 
-  if (!(await hasAnyPermission(c, CLI_APP_2FA_PERMISSIONS, { appId: body.app_id }))
+  if (!(await checkAnyPermission(c, CLI_APP_2FA_PERMISSIONS, { appId: body.app_id }))
     && !(await hasApiKeyBindingOnApp(c, body.app_id))) {
     return quickError(401, 'not_authorized', 'You cannot access this app', { app_id: body.app_id })
   }
@@ -454,7 +442,7 @@ app.post('/check-2fa-org', middlewareKey(), async (c) => {
   if (!body.org_id || typeof body.org_id !== 'string')
     return quickError(400, 'missing_org_id', 'Missing org_id', { body })
 
-  if (!(await hasAnyPermission(c, CLI_ORG_2FA_PERMISSIONS, { orgId: body.org_id })))
+  if (!(await checkAnyPermission(c, CLI_ORG_2FA_PERMISSIONS, { orgId: body.org_id })))
     return quickError(401, 'not_authorized', 'You cannot access this organization', { org_id: body.org_id })
 
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
