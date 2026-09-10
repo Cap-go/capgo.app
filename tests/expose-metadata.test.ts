@@ -37,16 +37,13 @@ beforeAll(async () => {
   if (USE_CLOUDFLARE)
     return
   await resetAndSeedAppData(APP_NAME_METADATA)
-  const warmData = getBaseData(APP_NAME_METADATA)
-  warmData.version_name = '1.0.0'
   await warmEdgeEndpoint(`${PLUGIN_BASE_URL}/updates`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(warmData),
   })
-})
+}, 60_000)
 
 afterAll(async () => {
   if (USE_CLOUDFLARE)

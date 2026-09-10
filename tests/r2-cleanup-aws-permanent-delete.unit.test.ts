@@ -1,7 +1,11 @@
 import { DeleteObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3'
 import { describe, expect, it, vi } from 'vitest'
 import { permanentDeleteAwsLiveKey } from '../scripts/r2_cleanup/aws_permanent_delete.ts'
-import { R2_TRASH_PREFIX } from '../scripts/r2_trash_utils.ts'
+import {
+  buildR2ConditionalDeleteHeaders,
+  formatR2ConditionalDeleteLastModified,
+  R2_TRASH_PREFIX,
+} from '../scripts/r2_trash_utils.ts'
 
 describe('permanentDeleteAwsLiveKey', () => {
   const bucket = 'capgo'
@@ -33,6 +37,13 @@ describe('permanentDeleteAwsLiveKey', () => {
     expect(deleteCall.input.Bucket).toBe(bucket)
     expect(deleteCall.input.Key).toBe(key)
     expect(deleteCall.input.IfMatch).toBe(etag)
+  })
+
+  it('uses guarded delete headers with RFC 3339 Last-Modified and quoted If-Match', () => {
+    expect(buildR2ConditionalDeleteHeaders({ etag, lastModified })).toEqual({
+      'x-amz-if-match-last-modified-time': formatR2ConditionalDeleteLastModified(lastModified),
+      'If-Match': etag,
+    })
   })
 
   it('retains source when conditional delete returns precondition failed', async () => {
