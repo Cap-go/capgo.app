@@ -4,7 +4,7 @@ import type { Database } from '../supabase/functions/_backend/utils/supabase.typ
 import { CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { createClient } from '@supabase/supabase-js'
 import { permanentDeleteAwsLiveKey } from './r2_cleanup/aws_permanent_delete.ts'
-import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, buildAwsTrashCopyMetadata, ConcurrencyLimiter, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, extractR2TrashSourceVersionMarker, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, normalizedS3EtagsMatch, parseLegacyAppsBundleKey, parseS3ListingLastModified, quoteS3CopySourceIfMatchEtag, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
+import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, ConcurrencyLimiter, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, extractR2TrashSourceVersionMarker, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, mergeTrashCopyMetadata, normalizedS3EtagsMatch, parseLegacyAppsBundleKey, parseS3ListingLastModified, quoteS3CopySourceIfMatchEtag, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const MAGIC_TO_DELETE = './tmp/magic_to_delete6.txt'
@@ -225,10 +225,12 @@ async function main() {
       }
       let sourceEtag: string | undefined
       let sourceLastModified: Date | undefined
+      let sourceMetadata: Record<string, string> | undefined
       try {
         const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
         sourceEtag = head.ETag
         sourceLastModified = head.LastModified
+        sourceMetadata = head.Metadata
         if (!normalizedS3EtagsMatch(candidateEtag, sourceEtag)) {
           console.warn(`Skipped ${key}: live object etag changed since discovery`)
           return 'skipped'
@@ -275,7 +277,7 @@ async function main() {
               CopySource: encodeS3CopySource(S3_BUCKET, key),
               CopySourceIfMatch: quoteS3CopySourceIfMatchEtag(sourceEtag),
               Key: destinationKey,
-              Metadata: buildAwsTrashCopyMetadata(sourceLastModified),
+              Metadata: mergeTrashCopyMetadata(sourceMetadata, sourceLastModified),
               MetadataDirective: 'REPLACE',
             })
             applyAwsCopyDestinationIfNoneMatchMiddleware(copyCommand.middlewareStack)

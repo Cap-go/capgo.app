@@ -11,7 +11,7 @@ import { permanentDeleteAwsLiveKey } from './aws_permanent_delete.ts'
 import {
   applyAwsCopyDestinationIfNoneMatchMiddleware,
   applyR2ConditionalDeleteMiddleware,
-  buildAwsTrashCopyMetadata,
+  mergeTrashCopyMetadata,
   ConcurrencyLimiter,
   copyObjectToTrashWithDestinationGuard,
   createAwsTrashDestinationResolver,
@@ -139,10 +139,12 @@ async function processKey(target: TrashProcessTarget): Promise<void> {
 
       let sourceEtag: string | undefined
       let sourceLastModified: Date | undefined
+      let sourceMetadata: Record<string, string> | undefined
       try {
         const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
         sourceEtag = head.ETag
         sourceLastModified = head.LastModified
+        sourceMetadata = head.Metadata
       }
       catch (headError) {
         if (isObjectNotFoundError(headError)) {
@@ -192,7 +194,7 @@ async function processKey(target: TrashProcessTarget): Promise<void> {
               CopySource: encodeS3CopySource(S3_BUCKET, key),
               CopySourceIfMatch: quoteS3CopySourceIfMatchEtag(sourceEtag),
               Key: destinationKey,
-              Metadata: buildAwsTrashCopyMetadata(sourceLastModified),
+              Metadata: mergeTrashCopyMetadata(sourceMetadata, sourceLastModified),
               MetadataDirective: 'REPLACE',
             })
             applyAwsCopyDestinationIfNoneMatchMiddleware(copyCommand.middlewareStack)
@@ -342,7 +344,9 @@ async function listExactKeyEtags(keys: string[]): Promise<Array<{ key: string, e
           console.warn(`Skipped ${key}: object absent from HeadObject; already gone`)
           return null
         }
-        throw error
+        console.error(`Failed to head ${key} during discovery:`, error)
+        totalErrors += 1
+        return null
       }
     }))
     for (const result of results) {

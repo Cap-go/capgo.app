@@ -142,6 +142,12 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+function makeRequestCalls(makeRequest: { mock: { calls: unknown[] } }, method: string): MakeRequestArgs[] {
+  return makeRequest.mock.calls
+    .map(call => (call as [MakeRequestArgs])[0])
+    .filter((args): args is MakeRequestArgs => args?.method === method)
+}
+
 function makeAtomicDeleteClient(etag = '"abc123"') {
   const copyObject = vi.fn(async () => undefined)
   const deleteObject = vi.fn(async () => undefined)
@@ -164,14 +170,13 @@ describe('moveS3LiteObjectToTrash', () => {
     expect(result).toBe('moved')
     expect(copyObject).not.toHaveBeenCalled()
     expect(statObject).toHaveBeenCalledTimes(3)
-    expect(makeRequest).toHaveBeenCalledTimes(2)
-    const copyCall = makeRequest.mock.calls[0]![0]
-    expect(copyCall.method).toBe('PUT')
+    expect(makeRequestCalls(makeRequest, 'PUT')).toHaveLength(1)
+    const copyCall = makeRequestCalls(makeRequest, 'PUT')[0]!
     expect(copyCall.objectName).toBe(`${R2_TRASH_PREFIX}${key}`)
     expect(copyCall.headers?.get('x-amz-copy-source')).toBe(`${TEST_S3_BUCKET}/orgs/org-1/apps/com.test/file%20name.zip`)
     expect(copyCall.headers?.get('x-amz-copy-source-if-match')).toBe(etag)
     expect(copyCall.headers?.get('cf-copy-destination-if-none-match')).toBe('*')
-    const deleteCall = makeRequest.mock.calls[1]![0]
+    const deleteCall = makeRequestCalls(makeRequest, 'DELETE')[0]!
     expect(deleteCall.headers?.get('x-amz-if-match-last-modified-time'))
       .toBe(formatR2ConditionalDeleteLastModified(DEFAULT_LAST_MODIFIED))
     expect(deleteCall.headers?.get('If-Match')).toBe(etag)
@@ -196,7 +201,8 @@ describe('moveS3LiteObjectToTrash', () => {
     const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key, TEST_S3_BUCKET)
 
     expect(result).toBe('skipped_changed')
-    expect(makeRequest).toHaveBeenCalledOnce()
+    expect(makeRequestCalls(makeRequest, 'PUT')).toHaveLength(1)
+    expect(makeRequestCalls(makeRequest, 'DELETE')).toHaveLength(0)
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
@@ -214,7 +220,8 @@ describe('moveS3LiteObjectToTrash', () => {
     const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key, TEST_S3_BUCKET)
 
     expect(result).toBe('skipped_changed')
-    expect(makeRequest).toHaveBeenCalledOnce()
+    expect(makeRequestCalls(makeRequest, 'PUT')).toHaveLength(1)
+    expect(makeRequestCalls(makeRequest, 'DELETE')).toHaveLength(0)
   })
 
   it('returns skipped_missing when the source disappears before copy', async () => {
@@ -231,7 +238,7 @@ describe('moveS3LiteObjectToTrash', () => {
     const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key, TEST_S3_BUCKET)
 
     expect(result).toBe('skipped_missing')
-    expect(makeRequest).toHaveBeenCalledOnce()
+    expect(makeRequestCalls(makeRequest, 'PUT')).toHaveLength(1)
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
@@ -299,9 +306,10 @@ describe('moveS3LiteObjectToTrash', () => {
 
     expect(result).toBe('moved')
     expect(copyObject).not.toHaveBeenCalled()
-    expect(makeRequest).toHaveBeenCalledTimes(2)
+    expect(makeRequestCalls(makeRequest, 'PUT')).toHaveLength(1)
+    expect(makeRequestCalls(makeRequest, 'DELETE')).toHaveLength(1)
     expect(deleteObject).not.toHaveBeenCalled()
-    const copyCall = makeRequest.mock.calls[0]![0]!
+    const copyCall = makeRequestCalls(makeRequest, 'PUT')[0]!
     expect(copyCall.objectName).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${escapeRegExp(key)}$`))
   })
 
@@ -324,7 +332,8 @@ describe('moveS3LiteObjectToTrash', () => {
 
     expect(result).toBe('skipped_changed')
     expect(copyObject).not.toHaveBeenCalled()
-    expect(makeRequest).toHaveBeenCalledTimes(2)
+    expect(makeRequestCalls(makeRequest, 'PUT')).toHaveLength(1)
+    expect(makeRequestCalls(makeRequest, 'DELETE')).toHaveLength(1)
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
@@ -368,7 +377,7 @@ describe('copyLiveObjectToTrash', () => {
     )
 
     expect(destination).toBe(trashKey)
-    expect(makeRequest).toHaveBeenCalledTimes(2)
+    expect(makeRequestCalls(makeRequest, 'PUT')).toHaveLength(1)
   })
 
   it('quotes unquoted source etags on the copy precondition header', async () => {
@@ -480,7 +489,7 @@ describe('copyLiveObjectToTrash', () => {
     )
 
     expect(destination).not.toBe(trashKey)
-    expect(makeRequest).toHaveBeenCalledTimes(3)
+    expect(makeRequestCalls(makeRequest, 'PUT')).toHaveLength(2)
   })
 })
 

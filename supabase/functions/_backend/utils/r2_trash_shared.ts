@@ -72,9 +72,50 @@ export function buildAwsTrashCopyMetadata(sourceLastModified: Date): Record<stri
   }
 }
 
-export function applyR2TrashCopyMetadataHeaders(headers: Headers, sourceLastModified: Date): void {
+export function mergeTrashCopyMetadata(
+  existingMetadata: Record<string, string> | undefined,
+  sourceLastModified: Date,
+): Record<string, string> {
+  return {
+    ...(existingMetadata ?? {}),
+    ...buildAwsTrashCopyMetadata(sourceLastModified),
+  }
+}
+
+export function applyR2TrashCopyMetadataHeaders(
+  headers: Headers,
+  sourceLastModified: Date,
+  existingMetadata?: Record<string, string>,
+): void {
   headers.set('x-amz-metadata-directive', 'REPLACE')
-  headers.set(`x-amz-meta-${R2_TRASH_SOURCE_LM_METADATA_KEY}`, formatR2TrashSourceVersionMarker(sourceLastModified))
+  const merged = mergeTrashCopyMetadata(existingMetadata, sourceLastModified)
+  for (const [key, value] of Object.entries(merged))
+    headers.set(`x-amz-meta-${key}`, value)
+}
+
+async function headS3LiteObjectMetadata(
+  s3client: Pick<RawS3LiteClient, 'makeRequest'>,
+  objectKey: string,
+): Promise<Record<string, string> | undefined> {
+  if (!s3client.makeRequest)
+    return undefined
+  try {
+    const response = await s3client.makeRequest({
+      method: 'HEAD',
+      objectName: objectKey,
+      returnBody: true,
+    })
+    const metadata: Record<string, string> = {}
+    response.headers.forEach((value, key) => {
+      if (key.startsWith('x-amz-meta-'))
+        metadata[key.slice('x-amz-meta-'.length)] = value
+    })
+    return Object.keys(metadata).length > 0 ? metadata : undefined
+  }
+  catch {
+    // Best-effort: copy still runs; missing metadata is acceptable on transient HEAD errors.
+    return undefined
+  }
 }
 
 export function resolveOpsDeleteMode(env: Record<string, string | undefined>): OpsDeleteMode {
@@ -283,6 +324,18 @@ function trashDestinationMatchesSource(
   if (!destinationSourceLastModified)
     return false
   return destinationSourceLastModified.getTime() === sourceLastModified.getTime()
+}
+
+function guardedCopyDestinationMatchesSource(
+  destinationStat: { etag?: string, lastModified?: Date },
+  sourceEtag: string,
+  sourceLastModified?: Date,
+): boolean {
+  if (!normalizedS3EtagsMatch(destinationStat.etag, sourceEtag))
+    return false
+  if (!sourceLastModified || !destinationStat.lastModified)
+    return false
+  return destinationStat.lastModified.getTime() === sourceLastModified.getTime()
 }
 
 /**
@@ -544,11 +597,7 @@ export async function copyS3LiteObjectIfMatch(
       throw error
     try {
       const destinationStat = await s3client.statObject(destinationKey)
-      if (trashDestinationMatchesSource(
-        { etag: destinationStat.etag, sourceVersionMarker: await headTrashDestinationSourceMarker(s3client, destinationKey) },
-        sourceIfMatch,
-        sourceLastModified,
-      ))
+      if (guardedCopyDestinationMatchesSource(destinationStat, sourceIfMatch, sourceLastModified))
         return
     }
     catch (statError) {
@@ -578,6 +627,9 @@ export async function copyLiveObjectToTrash(
   const encodedSourceKey = encodeS3LiteCopySourceKey(sourceKey)
   const copySource = `${sourceBucketName}/${encodedSourceKey}`
   let destinationKey = trashKey
+  const sourceMetadata = sourceLastModified
+    ? await headS3LiteObjectMetadata(s3client, sourceKey)
+    : undefined
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const headers = new Headers({
@@ -586,7 +638,7 @@ export async function copyLiveObjectToTrash(
       'cf-copy-destination-if-none-match': '*',
     })
     if (sourceLastModified)
-      applyR2TrashCopyMetadataHeaders(headers, sourceLastModified)
+      applyR2TrashCopyMetadataHeaders(headers, sourceLastModified, sourceMetadata)
     try {
       await s3client.makeRequest!({
         method: 'PUT',

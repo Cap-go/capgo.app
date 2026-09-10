@@ -4,7 +4,7 @@ import { S3Client as S3ClientLite } from '@bradenmacdonald/s3-lite-client/'
 import { Pool } from 'pg'
 import { Context } from 'vm'
 import { permanentDeleteAwsLiveKey } from './r2_cleanup/aws_permanent_delete.ts'
-import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, buildAwsTrashCopyMetadata, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, ConcurrencyLimiter, extractR2TrashSourceVersionMarker, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, normalizedS3EtagsMatch, parseLegacyAppsBundleKey, quoteS3CopySourceIfMatchEtag, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
+import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, ConcurrencyLimiter, extractR2TrashSourceVersionMarker, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, mergeTrashCopyMetadata, normalizedS3EtagsMatch, parseLegacyAppsBundleKey, quoteS3CopySourceIfMatchEtag, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const CHECKPOINT_FILE = './objects_checkpoint.json'
@@ -1746,6 +1746,7 @@ async function delete_cleanup_candidates() {
 
             let sourceEtag: string | undefined
             let sourceLastModified: Date | undefined
+            let sourceMetadata: Record<string, string> | undefined
             try {
                 const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: file.key }))
                 if (file.size != null && head.ContentLength !== file.size) {
@@ -1789,6 +1790,7 @@ async function delete_cleanup_candidates() {
                 }
                 sourceEtag = head.ETag
                 sourceLastModified = head.LastModified
+                sourceMetadata = head.Metadata
             }
             catch (headError: any) {
                 if (isObjectNotFoundError(headError))
@@ -1871,7 +1873,7 @@ async function delete_cleanup_candidates() {
                                 CopySource: encodeS3CopySource(S3_BUCKET, file.key),
                                 CopySourceIfMatch: quoteS3CopySourceIfMatchEtag(sourceEtag),
                                 Key: destinationKey,
-                                Metadata: buildAwsTrashCopyMetadata(sourceLastModified),
+                                Metadata: mergeTrashCopyMetadata(sourceMetadata, sourceLastModified),
                                 MetadataDirective: 'REPLACE',
                             })
                             applyAwsCopyDestinationIfNoneMatchMiddleware(copyCommand.middlewareStack)
@@ -1930,6 +1932,14 @@ async function delete_cleanup_candidates() {
                 }
 
                 try {
+                    if (await isKeyReferencedInAppVersions(file.key)) {
+                        return {
+                            key: file.key,
+                            success: true,
+                            error: 'app_versions row appeared immediately before delete',
+                            skipped: true,
+                        }
+                    }
                     const deleteCommand = new DeleteObjectCommand({
                         Bucket: S3_BUCKET,
                         Key: file.key,

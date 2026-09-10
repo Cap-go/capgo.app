@@ -44,9 +44,16 @@ function isCacheableAttachmentRead(request: Request): boolean {
   return hasAttachmentReadPath(new URL(request.url).pathname)
 }
 
+function requestHostname(request: Request): string {
+  const hostHeader = request.headers.get('host')
+  if (hostHeader)
+    return hostHeader.split(':')[0]
+  return new URL(request.url).hostname
+}
+
 function buildWorkersCacheKey(request: Request): string | null {
   const url = new URL(request.url)
-  if (isPreviewSubdomain(url.hostname))
+  if (isPreviewSubdomain(requestHostname(request)))
     return null
 
   if (isCacheableAttachmentRead(request))

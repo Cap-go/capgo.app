@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import type { Database } from '../utils/supabase.types.ts'
 import { S3Client } from '@bradenmacdonald/s3-lite-client'
 import type { RawS3LiteClient } from './r2_trash_shared.ts'
-import { conditionalDeleteSource, copyLiveObjectToTrash, isObjectNotFoundError, isPreconditionFailedError, resolveAvailableR2TrashKey } from './r2_trash_shared.ts'
+import { isObjectNotFoundError, moveS3LiteObjectToTrash } from './r2_trash_shared.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { getManifestStorageCandidateKeys } from './manifest_encoding.ts'
 import { getEnv } from './utils.ts'
@@ -161,101 +161,35 @@ async function moveObjectToTrash(c: Context, fileId: string) {
     return true
 
   const client = initS3(c)
-
-  let sourceEtag: string | undefined
-  let sourceLastModified: Date | undefined
-  try {
-    const stat = await client.statObject(fileId)
-    sourceEtag = stat.etag
-    sourceLastModified = stat.lastModified
-  }
-  catch (error) {
-    if (isObjectNotFoundError(error)) {
-      cloudlog({ requestId: c.get('requestId'), message: 'R2 object missing before trash move, skip copy', fileId })
-      return true
-    }
-    cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object stat failed before trash move', fileId, error: serializeStorageError(error) })
-    return false
-  }
-
-  if (!sourceEtag || !sourceLastModified) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object missing ETag or Last-Modified before trash move, source retained', fileId })
-    return false
-  }
-
   const bucket = getEnv(c, 'S3_BUCKET')
   if (!bucket) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'S3_BUCKET is not configured before trash move', fileId })
     return false
   }
 
-  let trashPath: string
   try {
-    trashPath = await resolveAvailableR2TrashKey(client as RawS3LiteClient, fileId, sourceEtag, sourceLastModified)
-  }
-  catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to allocate trash destination', fileId, error: serializeStorageError(error) })
-    return false
-  }
-
-  try {
-    trashPath = await copyLiveObjectToTrash(client as RawS3LiteClient, fileId, trashPath, sourceEtag, bucket, sourceLastModified)
-  }
-  catch (error) {
-    if (isPreconditionFailedError(error)) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object changed before trash copy, source retained', fileId })
-      return false
+    const result = await moveS3LiteObjectToTrash(client as RawS3LiteClient, fileId, bucket)
+    switch (result) {
+      case 'moved':
+        cloudlog({ requestId: c.get('requestId'), message: 'moved R2 object to trash', fileId })
+        return true
+      case 'skipped_missing':
+        cloudlog({ requestId: c.get('requestId'), message: 'R2 object missing before trash move, skip copy', fileId })
+        return true
+      case 'skipped_changed':
+        cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object changed before trash move, source retained', fileId })
+        return false
     }
-    if (isObjectNotFoundError(error)) {
-      cloudlog({ requestId: c.get('requestId'), message: 'R2 object disappeared during trash copy', fileId, error: serializeStorageError(error) })
-      return true
-    }
-    cloudlogErr({ requestId: c.get('requestId'), message: 'move R2 object to trash copy failed', fileId, trashPath, error: serializeStorageError(error) })
-    return false
-  }
-
-  let afterCopyEtag: string | undefined
-  let afterCopyLastModified: Date | undefined
-  try {
-    const afterCopy = await client.statObject(fileId)
-    afterCopyEtag = afterCopy.etag
-    afterCopyLastModified = afterCopy.lastModified
   }
   catch (error) {
     if (isObjectNotFoundError(error)) {
-      cloudlog({ requestId: c.get('requestId'), message: 'R2 object absent after trash copy', fileId })
+      cloudlog({ requestId: c.get('requestId'), message: 'R2 object missing before trash move, skip copy', fileId })
       return true
     }
-    cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object stat failed after trash copy', fileId, error: serializeStorageError(error) })
+    cloudlogErr({ requestId: c.get('requestId'), message: 'move R2 object to trash failed', fileId, error: serializeStorageError(error) })
     return false
   }
 
-  if (afterCopyEtag !== sourceEtag) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object changed after trash copy, source retained', fileId })
-    return false
-  }
-
-  if (afterCopyLastModified && afterCopyLastModified.getTime() !== sourceLastModified.getTime()) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object Last-Modified changed after trash copy, source retained', fileId })
-    return false
-  }
-
-  const deleteResult = await conditionalDeleteSource(
-    client as RawS3LiteClient,
-    fileId,
-    afterCopyEtag,
-    sourceLastModified,
-  )
-  if (deleteResult === 'deleted') {
-    cloudlog({ requestId: c.get('requestId'), message: 'moved R2 object to trash', fileId, trashPath })
-    return true
-  }
-  if (deleteResult === 'skipped_missing') {
-    cloudlog({ requestId: c.get('requestId'), message: 'R2 object absent before conditional delete', fileId })
-    return true
-  }
-
-  cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object changed before conditional delete, source retained', fileId })
   return false
 }
 

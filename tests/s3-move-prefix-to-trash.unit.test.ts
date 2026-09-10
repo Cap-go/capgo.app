@@ -46,6 +46,10 @@ vi.mock('@bradenmacdonald/s3-lite-client', () => ({
 
 const { copyObject, deleteObject, listObjects, statObject, makeRequest, setMakeRequestAvailable } = mocks
 
+function makeRequestCalls(method: string) {
+  return makeRequest.mock.calls.filter(([args]) => args.method === method)
+}
+
 const { s3, TrashMoveError } = await import('../supabase/functions/_backend/utils/s3.ts')
 
 async function makeContext(extraEnv: Record<string, string> = {}) {
@@ -101,15 +105,13 @@ describe('moveObjectsWithPrefixToTrash', () => {
 
     expect(movedCount).toBe(1)
     expect(copyObject).not.toHaveBeenCalled()
-    expect(makeRequest).toHaveBeenCalledTimes(2)
-    const copyCall = makeRequest.mock.calls[0]![0]!
-    expect(copyCall.method).toBe('PUT')
+    expect(makeRequestCalls('PUT')).toHaveLength(1)
+    const copyCall = makeRequestCalls('PUT')[0]![0]!
     expectDefaultTrashDestination(copyCall.objectName, liveKey)
     expect(copyCall.headers?.get('x-amz-copy-source')).toBe(`capgo/${encodeS3LiteCopySourceKey(liveKey)}`)
     expect(copyCall.headers?.get('x-amz-copy-source-if-match')).toBe(DEFAULT_ETAG)
     expect(copyCall.headers?.get('cf-copy-destination-if-none-match')).toBe('*')
-    const deleteCall = makeRequest.mock.calls[1]![0]!
-    expect(deleteCall.method).toBe('DELETE')
+    const deleteCall = makeRequestCalls('DELETE')[0]![0]!
     expect(deleteCall.objectName).toBe(liveKey)
     expect(deleteCall.headers?.get('x-amz-if-match-last-modified-time'))
       .toBe(formatR2ConditionalDeleteLastModified(DEFAULT_LAST_MODIFIED))
@@ -132,8 +134,8 @@ describe('moveObjectsWithPrefixToTrash', () => {
     expect(movedCount).toBe(1)
     const liveKey = `${prefix}live.zip`
     expect(copyObject).not.toHaveBeenCalled()
-    expect(makeRequest).toHaveBeenCalledTimes(2)
-    const copyCall = makeRequest.mock.calls[0]![0]!
+    expect(makeRequestCalls('PUT')).toHaveLength(1)
+    const copyCall = makeRequestCalls('PUT')[0]![0]!
     expectDefaultTrashDestination(copyCall.objectName, liveKey)
     expect(deleteObject).not.toHaveBeenCalled()
   })
@@ -172,7 +174,7 @@ describe('moveObjectsWithPrefixToTrash', () => {
     const c = await makeContext()
     await expect(s3.moveObjectsWithPrefixToTrash(c, prefix)).rejects.toBeInstanceOf(TrashMoveError)
 
-    expect(makeRequest).toHaveBeenCalledOnce()
+    expect(makeRequestCalls('PUT')).toHaveLength(1)
     expect(copyObject).not.toHaveBeenCalled()
     expect(deleteObject).not.toHaveBeenCalled()
   })
@@ -199,8 +201,8 @@ describe('moveObjectsWithPrefixToTrash', () => {
     await expect(s3.moveObjectsWithPrefixToTrash(c, prefix)).rejects.toBeInstanceOf(TrashMoveError)
 
     expect(copyObject).not.toHaveBeenCalled()
-    expect(makeRequest).toHaveBeenCalledTimes(2)
-    const copyCall = makeRequest.mock.calls[0]![0]!
+    expect(makeRequestCalls('PUT')).toHaveLength(1)
+    const copyCall = makeRequestCalls('PUT')[0]![0]!
     expectDefaultTrashDestination(copyCall.objectName, successKey)
     expect(deleteObject).not.toHaveBeenCalled()
   })
@@ -238,7 +240,8 @@ describe('moveObjectsWithPrefixToTrash', () => {
     expect(maxInFlight).toBeLessThanOrEqual(10)
     expect(maxInFlight).toBeGreaterThan(1)
     expect(copyObject).not.toHaveBeenCalled()
-    expect(makeRequest).toHaveBeenCalledTimes(50)
+    expect(makeRequestCalls('PUT')).toHaveLength(25)
+    expect(makeRequestCalls('DELETE')).toHaveLength(25)
     expect(deleteObject).not.toHaveBeenCalled()
     expect(trashedDestinations.size).toBe(25)
     expect(deletedSources.size).toBe(25)
@@ -272,7 +275,8 @@ describe('moveObjectsWithPrefixToTrash', () => {
     await expect(s3.moveObjectsWithPrefixToTrash(c, prefix)).rejects.toBeInstanceOf(TrashMoveError)
 
     expect(copyObject).not.toHaveBeenCalled()
-    expect(makeRequest).toHaveBeenCalledOnce()
+    expect(makeRequestCalls('PUT')).toHaveLength(1)
+    expect(makeRequestCalls('DELETE')).toHaveLength(0)
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
@@ -293,7 +297,8 @@ describe('moveObjectsWithPrefixToTrash', () => {
     await expect(s3.moveObjectsWithPrefixToTrash(c, prefix)).rejects.toBeInstanceOf(TrashMoveError)
 
     expect(copyObject).not.toHaveBeenCalled()
-    expect(makeRequest).toHaveBeenCalledTimes(2)
+    expect(makeRequestCalls('PUT')).toHaveLength(1)
+    expect(makeRequestCalls('DELETE')).toHaveLength(1)
     expect(deleteObject).not.toHaveBeenCalled()
   })
 })
