@@ -4,7 +4,7 @@ import type { Database } from '../supabase/functions/_backend/utils/supabase.typ
 import { CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { createClient } from '@supabase/supabase-js'
 import { permanentDeleteAwsLiveKey } from './r2_cleanup/aws_permanent_delete.ts'
-import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, ConcurrencyLimiter, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, normalizedS3EtagsMatch, parseLegacyAppsBundleKey, parseS3ListingLastModified, quoteS3CopySourceIfMatchEtag, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
+import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, buildAwsTrashCopyMetadata, ConcurrencyLimiter, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, extractR2TrashSourceVersionMarker, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, normalizedS3EtagsMatch, parseLegacyAppsBundleKey, parseS3ListingLastModified, quoteS3CopySourceIfMatchEtag, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const MAGIC_TO_DELETE = './tmp/magic_to_delete6.txt'
@@ -210,7 +210,7 @@ async function main() {
 
     const trashDestinationResolver = createAwsTrashDestinationResolver(async (objectKey) => {
       const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: objectKey }))
-      return { etag: head.ETag, lastModified: head.LastModified }
+      return { etag: head.ETag, lastModified: head.LastModified, metadata: head.Metadata }
     })
 
     async function moveKeyToTrash(candidate: { key: string, etag?: string, lastModified?: Date }): Promise<'ok' | 'skipped' | 'failed'> {
@@ -275,6 +275,8 @@ async function main() {
               CopySource: encodeS3CopySource(S3_BUCKET, key),
               CopySourceIfMatch: quoteS3CopySourceIfMatchEtag(sourceEtag),
               Key: destinationKey,
+              Metadata: buildAwsTrashCopyMetadata(sourceLastModified),
+              MetadataDirective: 'REPLACE',
             })
             applyAwsCopyDestinationIfNoneMatchMiddleware(copyCommand.middlewareStack)
             await s3.send(copyCommand)
@@ -282,7 +284,10 @@ async function main() {
           async (destinationKey) => {
             try {
               const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: destinationKey }))
-              return { etag: head.ETag, lastModified: head.LastModified }
+              return {
+                etag: head.ETag,
+                sourceVersionMarker: extractR2TrashSourceVersionMarker(head.Metadata),
+              }
             }
             catch (error) {
               if (isObjectNotFoundError(error))

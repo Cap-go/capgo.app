@@ -11,10 +11,12 @@ import { permanentDeleteAwsLiveKey } from './aws_permanent_delete.ts'
 import {
   applyAwsCopyDestinationIfNoneMatchMiddleware,
   applyR2ConditionalDeleteMiddleware,
+  buildAwsTrashCopyMetadata,
   ConcurrencyLimiter,
   copyObjectToTrashWithDestinationGuard,
   createAwsTrashDestinationResolver,
   encodeS3CopySource,
+  extractR2TrashSourceVersionMarker,
   isAlreadyMovedToTrash,
   isLiveR2Key,
   isObjectNotFoundError,
@@ -59,7 +61,7 @@ const limiter = new ConcurrencyLimiter(CONCURRENCY)
 
 const trashDestinationResolver = createAwsTrashDestinationResolver(async (objectKey) => {
   const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: objectKey }))
-  return { etag: head.ETag, lastModified: head.LastModified }
+  return { etag: head.ETag, lastModified: head.LastModified, metadata: head.Metadata }
 })
 
 let totalProcessed = 0
@@ -190,6 +192,8 @@ async function processKey(target: TrashProcessTarget): Promise<void> {
               CopySource: encodeS3CopySource(S3_BUCKET, key),
               CopySourceIfMatch: quoteS3CopySourceIfMatchEtag(sourceEtag),
               Key: destinationKey,
+              Metadata: buildAwsTrashCopyMetadata(sourceLastModified),
+              MetadataDirective: 'REPLACE',
             })
             applyAwsCopyDestinationIfNoneMatchMiddleware(copyCommand.middlewareStack)
             await s3.send(copyCommand)
@@ -197,7 +201,10 @@ async function processKey(target: TrashProcessTarget): Promise<void> {
           async (destinationKey) => {
             try {
               const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: destinationKey }))
-              return { etag: head.ETag, lastModified: head.LastModified }
+              return {
+                etag: head.ETag,
+                sourceVersionMarker: extractR2TrashSourceVersionMarker(head.Metadata),
+              }
             }
             catch (error) {
               if (isObjectNotFoundError(error))
@@ -311,56 +318,36 @@ async function permanentDeleteBatch(keys: PermanentDeleteTarget[]): Promise<void
   }
 }
 
-function groupKeysByParentPrefix(keys: string[]): Map<string, string[]> {
-  const groups = new Map<string, string[]>()
-  for (const key of keys) {
-    const slash = key.lastIndexOf('/')
-    const prefix = slash >= 0 ? key.slice(0, slash + 1) : ''
-    const group = groups.get(prefix) ?? []
-    group.push(key)
-    groups.set(prefix, group)
-  }
-  return groups
-}
-
 async function listExactKeyEtags(keys: string[]): Promise<Array<{ key: string, etag: string, lastModified?: Date }>> {
   if (keys.length === 0)
     return []
 
-  const keySet = new Set(keys)
   const found = new Map<string, { key: string, etag: string, lastModified?: Date }>()
-  const groups = groupKeysByParentPrefix(keys)
 
-  for (const [prefix, groupKeys] of groups) {
-    let continuationToken: string | undefined
-    while (true) {
-      const response = await s3.send(new ListObjectsV2Command({
-        Bucket: S3_BUCKET,
-        Prefix: prefix,
-        ContinuationToken: continuationToken,
-        MaxKeys: LIST_PAGE_SIZE,
-      }))
-
-      for (const obj of response.Contents ?? []) {
-        if (!obj.Key || !keySet.has(obj.Key) || found.has(obj.Key))
-          continue
-        if (!obj.ETag) {
-          console.error(`Skipped ${obj.Key}: missing discovery ETag from list; source retained`)
+  for (let i = 0; i < keys.length; i += CONCURRENCY) {
+    const batch = keys.slice(i, i + CONCURRENCY)
+    const results = await Promise.all(batch.map(async (key) => {
+      try {
+        const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
+        if (!head.ETag) {
+          console.error(`Skipped ${key}: missing discovery ETag from HeadObject; source retained`)
           totalSkippedMissingDiscoveryEtag += 1
           totalErrors += 1
-          continue
+          return null
         }
-        found.set(obj.Key, { key: obj.Key, etag: obj.ETag, lastModified: obj.LastModified })
+        return { key, etag: head.ETag, lastModified: head.LastModified }
       }
-
-      if (!response.IsTruncated)
-        break
-      continuationToken = response.NextContinuationToken
-    }
-
-    for (const key of groupKeys) {
-      if (!found.has(key))
-        console.warn(`Skipped ${key}: object absent from list; already gone`)
+      catch (error) {
+        if (isObjectNotFoundError(error)) {
+          console.warn(`Skipped ${key}: object absent from HeadObject; already gone`)
+          return null
+        }
+        throw error
+      }
+    }))
+    for (const result of results) {
+      if (result)
+        found.set(result.key, result)
     }
   }
 

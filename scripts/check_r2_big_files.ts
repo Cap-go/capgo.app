@@ -4,7 +4,7 @@ import { S3Client as S3ClientLite } from '@bradenmacdonald/s3-lite-client/'
 import { Pool } from 'pg'
 import { Context } from 'vm'
 import { permanentDeleteAwsLiveKey } from './r2_cleanup/aws_permanent_delete.ts'
-import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, ConcurrencyLimiter, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, parseLegacyAppsBundleKey, quoteS3CopySourceIfMatchEtag, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
+import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, buildAwsTrashCopyMetadata, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, ConcurrencyLimiter, extractR2TrashSourceVersionMarker, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, normalizedS3EtagsMatch, parseLegacyAppsBundleKey, quoteS3CopySourceIfMatchEtag, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const CHECKPOINT_FILE = './objects_checkpoint.json'
@@ -1724,7 +1724,7 @@ async function delete_cleanup_candidates() {
 
     const trashDestinationResolver = createAwsTrashDestinationResolver(async (objectKey) => {
         const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: objectKey }))
-        return { etag: head.ETag, lastModified: head.LastModified }
+        return { etag: head.ETag, lastModified: head.LastModified, metadata: head.Metadata }
     })
 
     async function processCandidate(file: { key: string, size?: number, lastModified?: string | Date | null, etag?: string | null }): Promise<{ key: string, success: boolean, error: string | null, skipped?: boolean, size?: number }> {
@@ -1779,7 +1779,7 @@ async function delete_cleanup_candidates() {
                         error: 'Live object has no ETag from HeadObject; source retained',
                     }
                 }
-                if (file.etag !== head.ETag) {
+                if (!normalizedS3EtagsMatch(file.etag, head.ETag)) {
                     return {
                         key: file.key,
                         success: true,
@@ -1871,6 +1871,8 @@ async function delete_cleanup_candidates() {
                                 CopySource: encodeS3CopySource(S3_BUCKET, file.key),
                                 CopySourceIfMatch: quoteS3CopySourceIfMatchEtag(sourceEtag),
                                 Key: destinationKey,
+                                Metadata: buildAwsTrashCopyMetadata(sourceLastModified),
+                                MetadataDirective: 'REPLACE',
                             })
                             applyAwsCopyDestinationIfNoneMatchMiddleware(copyCommand.middlewareStack)
                             await s3.send(copyCommand)
@@ -1878,7 +1880,10 @@ async function delete_cleanup_candidates() {
                         async (destinationKey) => {
                             try {
                                 const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: destinationKey }))
-                                return { etag: head.ETag, lastModified: head.LastModified }
+                                return {
+                                    etag: head.ETag,
+                                    sourceVersionMarker: extractR2TrashSourceVersionMarker(head.Metadata),
+                                }
                             }
                             catch (error) {
                                 if (isObjectNotFoundError(error))

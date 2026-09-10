@@ -86,14 +86,43 @@ async function main() {
         throw error
     }
     await copyS3LiteObjectIfMatch(rawS3client, obj.key, destinationKey, discoveryEtag, S3_BUCKET, discoveryLastModified)
-    try {
-      const trashResult = await moveS3LiteObjectToTrash(rawS3client, obj.key, S3_BUCKET, discoveryEtag, discoveryLastModified)
-      if (trashResult !== 'moved')
-        throw new Error(`Copied ${obj.key} to new owner key but failed to trash source object (${trashResult})`)
+    const trashResult = await moveS3LiteObjectToTrash(rawS3client, obj.key, S3_BUCKET, discoveryEtag, discoveryLastModified)
+    if (trashResult === 'moved' || trashResult === 'skipped_missing')
+      continue
+
+    if (trashResult === 'skipped_changed') {
+      const retryResult = await moveS3LiteObjectToTrash(rawS3client, obj.key, S3_BUCKET)
+      if (retryResult === 'moved' || retryResult === 'skipped_missing')
+        continue
+
+      let sourceExists = true
+      try {
+        await rawS3client.statObject(obj.key)
+      }
+      catch (error) {
+        if (isObjectNotFoundError(error))
+          sourceExists = false
+        else
+          throw error
+      }
+
+      let destinationMatches = false
+      try {
+        const destinationStat = await rawS3client.statObject(destinationKey)
+        destinationMatches = normalizedS3EtagsMatch(destinationStat.etag, discoveryEtag)
+      }
+      catch (error) {
+        if (!isObjectNotFoundError(error))
+          throw error
+      }
+
+      if (!sourceExists && destinationMatches)
+        continue
+
+      throw new Error(`Copied ${obj.key} to ${destinationKey} but failed to trash source object (${retryResult})`)
     }
-    catch (error) {
-      throw new Error(`Copied ${obj.key} to new owner key but failed to trash source object`, { cause: error })
-    }
+
+    throw new Error(`Copied ${obj.key} to new owner key but failed to trash source object (${trashResult})`)
   }
 
   console.log('Updating user_id in apps')

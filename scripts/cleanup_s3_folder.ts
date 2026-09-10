@@ -45,7 +45,7 @@ type ListingCandidate = {
   discoveryLastModified?: Date
 }
 
-type ProcessKeyResult = 'ok' | 'skipped' | 'failed'
+type ProcessKeyResult = 'ok' | 'skipped' | 'skipped_changed' | 'failed'
 
 async function processKey(candidate: ListingCandidate): Promise<ProcessKeyResult> {
   const { key, discoveryEtag, discoveryLastModified } = candidate
@@ -68,7 +68,7 @@ async function processKey(candidate: ListingCandidate): Promise<ProcessKeyResult
       }
       if (result === 'skipped_changed') {
         console.warn(`Skipped ${key}: live object changed before trash delete; source retained`)
-        return 'skipped'
+        return 'skipped_changed'
       }
       return 'ok'
     }
@@ -91,15 +91,16 @@ async function processKey(candidate: ListingCandidate): Promise<ProcessKeyResult
     }
     if (deleteResult === 'skipped_changed') {
       console.warn(`Skipped permanent delete for ${key}: live object changed before delete; source retained`)
-      return 'skipped'
+      return 'skipped_changed'
     }
     return deleteResult === 'deleted' ? 'ok' : 'failed'
   })
 }
 
-async function processKeyBatch(candidates: ListingCandidate[]): Promise<{ succeeded: number, failed: number }> {
+async function processKeyBatch(candidates: ListingCandidate[]): Promise<{ succeeded: number, failed: number, skippedChanged: number }> {
   let succeeded = 0
   let failed = 0
+  let skippedChanged = 0
 
   const results = await Promise.allSettled(candidates.map(candidate => processKey(candidate)))
   for (const [index, result] of results.entries()) {
@@ -114,9 +115,14 @@ async function processKeyBatch(candidates: ListingCandidate[]): Promise<{ succee
       continue
     }
 
+    if (result.value === 'skipped_changed') {
+      skippedChanged += 1
+      continue
+    }
+
     succeeded += 1
   }
-  return { succeeded, failed }
+  return { succeeded, failed, skippedChanged }
 }
 
 async function processFolder() {
@@ -127,6 +133,7 @@ async function processFolder() {
 
   let processedCount = 0
   let errorCount = 0
+  let skippedChangedCount = 0
   let pendingCandidates: ListingCandidate[] = []
 
   const flushBatch = async () => {
@@ -144,9 +151,10 @@ async function processFolder() {
       return
     }
 
-    const { succeeded, failed } = await processKeyBatch(batch)
+    const { succeeded, failed, skippedChanged } = await processKeyBatch(batch)
     processedCount += succeeded
     errorCount += failed
+    skippedChangedCount += skippedChanged
   }
 
   try {
@@ -182,6 +190,10 @@ async function processFolder() {
     await flushBatch()
 
     console.log(`Processed ${processedCount} files from ${folderToDelete}`)
+    if (skippedChangedCount > 0) {
+      console.error(`Incomplete cleanup: ${skippedChangedCount} object(s) changed before delete and were retained`)
+      Deno.exit(1)
+    }
     if (errorCount > 0) {
       console.error(`Errors: ${errorCount}`)
       Deno.exit(1)

@@ -21,6 +21,7 @@ import {
   resolveOpsDeleteMode,
   resolveTrashDestinationKey,
   R2_TRASH_PREFIX,
+  formatR2TrashSourceVersionMarker,
 } from '../scripts/r2_trash_utils.ts'
 
 describe('resolveOpsDeleteMode', () => {
@@ -257,7 +258,9 @@ describe('moveS3LiteObjectToTrash', () => {
     const copyObject = vi.fn(async () => undefined)
     const deleteObject = vi.fn(async () => undefined)
     const makeRequest = vi.fn<(args: MakeRequestArgs) => Promise<Response>>(async (options) => {
-      if (options.objectName === defaultTrashKey)
+      if (options.method === 'HEAD' && options.objectName === defaultTrashKey)
+        return new Response(null, { status: 200, headers: { 'x-amz-meta-capgo-source-last-modified': formatR2TrashSourceVersionMarker(DEFAULT_LAST_MODIFIED) } })
+      if (options.method === 'PUT' && options.objectName === defaultTrashKey)
         throw { statusCode: 412, code: 'PreconditionFailed' }
       return new Response(null, { status: 204 })
     })
@@ -265,16 +268,15 @@ describe('moveS3LiteObjectToTrash', () => {
       .mockResolvedValueOnce(stat(etag)) // source
       .mockResolvedValueOnce(stat(etag)) // default trash keyExists
       .mockResolvedValueOnce(stat(etag)) // getEtag
-      .mockResolvedValueOnce(stat(etag)) // getLastModified
       .mockResolvedValueOnce(stat(etag)) // destination stat after 412 reuse
       .mockResolvedValue(stat(etag)) // after copy + any follow-up stat
 
     const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key, TEST_S3_BUCKET)
 
     expect(result).toBe('moved')
-    expect(makeRequest).toHaveBeenCalledTimes(2)
-    const copyCall = makeRequest.mock.calls[0]![0]!
-    expect(copyCall.method).toBe('PUT')
+    const copyCalls = makeRequest.mock.calls.filter(([args]) => args.method === 'PUT')
+    expect(copyCalls).toHaveLength(1)
+    const copyCall = copyCalls[0]![0]!
     expect(copyCall.objectName).toBe(`${R2_TRASH_PREFIX}${key}`)
     expect(copyCall.headers?.get('x-amz-copy-source-if-match')).toBe(etag)
     expect(copyObject).not.toHaveBeenCalled()
@@ -345,7 +347,9 @@ describe('copyLiveObjectToTrash', () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const etag = '"same"'
     const trashKey = `${R2_TRASH_PREFIX}${key}`
-    const makeRequest = vi.fn<(args: MakeRequestArgs) => Promise<Response>>(async () => {
+    const makeRequest = vi.fn<(args: MakeRequestArgs) => Promise<Response>>(async (options) => {
+      if (options.method === 'HEAD')
+        return new Response(null, { status: 200, headers: { 'x-amz-meta-capgo-source-last-modified': formatR2TrashSourceVersionMarker(DEFAULT_LAST_MODIFIED) } })
       throw { statusCode: 412, code: 'PreconditionFailed' }
     })
     const statObject = vi.fn(async (objectKey: string) => {
@@ -364,7 +368,7 @@ describe('copyLiveObjectToTrash', () => {
     )
 
     expect(destination).toBe(trashKey)
-    expect(makeRequest).toHaveBeenCalledOnce()
+    expect(makeRequest).toHaveBeenCalledTimes(2)
   })
 
   it('quotes unquoted source etags on the copy precondition header', async () => {
@@ -388,7 +392,9 @@ describe('copyLiveObjectToTrash', () => {
     const etag = '"source"'
     const trashKey = `${R2_TRASH_PREFIX}${key}`
     const makeRequest = vi.fn<(args: MakeRequestArgs) => Promise<Response>>(async (options) => {
-      if (options.objectName === trashKey)
+      if (options.method === 'HEAD' && options.objectName === trashKey)
+        return new Response(null, { status: 200 })
+      if (options.method === 'PUT' && options.objectName === trashKey)
         throw { statusCode: 412, code: 'PreconditionFailed' }
       return new Response(null, { status: 200 })
     })
@@ -407,8 +413,9 @@ describe('copyLiveObjectToTrash', () => {
     )
 
     expect(destination).not.toBe(trashKey)
-    expect(makeRequest).toHaveBeenCalledTimes(2)
-    expect(makeRequest.mock.calls[1]![0]!.headers?.get('cf-copy-destination-if-none-match')).toBe('*')
+    const copyCalls = makeRequest.mock.calls.filter(([args]) => args.method === 'PUT')
+    expect(copyCalls).toHaveLength(2)
+    expect(copyCalls[1]![0]!.headers?.get('cf-copy-destination-if-none-match')).toBe('*')
   })
 
   it('fails closed when the destination slot is empty after a copy precondition conflict', async () => {
@@ -445,19 +452,21 @@ describe('copyLiveObjectToTrash', () => {
     )).rejects.toThrow(/requires makeRequest/)
   })
 
-  it('allocates a unique trash key when destination etag matches but Last-Modified differs', async () => {
+  it('allocates a unique trash key when destination etag matches but source-version marker differs', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const etag = '"same"'
     const trashKey = `${R2_TRASH_PREFIX}${key}`
     const sourceLastModified = new Date('2024-01-15T10:30:00.000Z')
     const makeRequest = vi.fn<(args: MakeRequestArgs) => Promise<Response>>(async (options) => {
+      if (options.method === 'HEAD' && options.objectName === trashKey)
+        return new Response(null, { status: 200, headers: { 'x-amz-meta-capgo-source-last-modified': formatR2TrashSourceVersionMarker(new Date('2024-01-15T10:30:01.000Z')) } })
       if (options.objectName === trashKey)
         throw { statusCode: 412, code: 'PreconditionFailed' }
       return new Response(null, { status: 200 })
     })
     const statObject = vi.fn(async (objectKey: string) => {
       if (objectKey === trashKey)
-        return stat(etag, new Date('2024-01-15T10:30:01.000Z'))
+        return stat(etag)
       throw { name: 'NotFound' }
     })
 
@@ -471,7 +480,7 @@ describe('copyLiveObjectToTrash', () => {
     )
 
     expect(destination).not.toBe(trashKey)
-    expect(makeRequest).toHaveBeenCalledTimes(2)
+    expect(makeRequest).toHaveBeenCalledTimes(3)
   })
 })
 
@@ -522,7 +531,7 @@ describe('copyObjectToTrashWithDestinationGuard', () => {
     expect(result).toBe('skipped_changed')
   })
 
-  it('reuses the destination when etag and Last-Modified both match the source', async () => {
+  it('reuses the destination when etag and source-version marker both match the source', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const etag = '"source"'
     const lastModified = new Date('2024-01-15T10:30:00.000Z')
@@ -536,7 +545,7 @@ describe('copyObjectToTrashWithDestinationGuard', () => {
       defaultTrashKey,
       etag,
       copy,
-      async () => ({ etag, lastModified }),
+      async () => ({ etag, sourceVersionMarker: formatR2TrashSourceVersionMarker(lastModified) }),
       lastModified,
     )
 
@@ -544,7 +553,7 @@ describe('copyObjectToTrashWithDestinationGuard', () => {
     expect(copy).toHaveBeenCalledOnce()
   })
 
-  it('allocates a unique destination when etag matches but Last-Modified differs', async () => {
+  it('allocates a unique destination when etag matches but source-version marker differs', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const etag = '"source"'
     const lastModified = new Date('2024-01-15T10:30:00.000Z')
@@ -559,7 +568,7 @@ describe('copyObjectToTrashWithDestinationGuard', () => {
       defaultTrashKey,
       etag,
       copy,
-      async () => ({ etag, lastModified: new Date('2024-01-15T10:30:01.000Z') }),
+      async () => ({ etag, sourceVersionMarker: formatR2TrashSourceVersionMarker(new Date('2024-01-15T10:30:01.000Z')) }),
       lastModified,
     )
 
@@ -788,39 +797,39 @@ describe('resolveTrashDestinationKey', () => {
     expect(trashKey).toBe(getR2TrashKey(key))
   })
 
-  it('reuses the default trash key when it already holds the same source etag and Last-Modified', async () => {
+  it('reuses the default trash key when it already holds the same source etag and version marker', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const etag = '"same"'
     const lastModified = new Date('2024-01-15T10:30:00.000Z')
     const exists = vi.fn(async (trashKey: string) => trashKey === getR2TrashKey(key))
     const getEtag = vi.fn(async () => etag)
-    const getLastModified = vi.fn(async () => lastModified)
+    const getSourceVersionMarker = vi.fn(async () => formatR2TrashSourceVersionMarker(lastModified))
 
-    const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag, getLastModified }, key, etag, lastModified)
+    const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag, getSourceVersionMarker }, key, etag, lastModified)
 
     expect(trashKey).toBe(getR2TrashKey(key))
   })
 
-  it('allocates a unique path when the default trash key matches etag but not Last-Modified', async () => {
+  it('allocates a unique path when the default trash key matches etag but not source-version marker', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const etag = '"same"'
     const exists = vi.fn(async (trashKey: string) => trashKey === getR2TrashKey(key))
     const getEtag = vi.fn(async () => etag)
-    const getLastModified = vi.fn(async () => new Date('2024-01-15T10:30:01.000Z'))
+    const getSourceVersionMarker = vi.fn(async () => formatR2TrashSourceVersionMarker(new Date('2024-01-15T10:30:01.000Z')))
 
-    const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag, getLastModified }, key, etag, new Date('2024-01-15T10:30:00.000Z'))
+    const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag, getSourceVersionMarker }, key, etag, new Date('2024-01-15T10:30:00.000Z'))
 
     expect(trashKey).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${escapeRegExp(key)}$`))
   })
 
-  it('allocates a unique path when etag matches but source Last-Modified is omitted', async () => {
+  it('allocates a unique path when etag matches but source-version marker is missing', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const etag = '"same"'
     const exists = vi.fn(async (trashKey: string) => trashKey === getR2TrashKey(key))
     const getEtag = vi.fn(async () => etag)
-    const getLastModified = vi.fn(async () => new Date('2024-01-15T10:30:00.000Z'))
+    const getSourceVersionMarker = vi.fn(async () => undefined)
 
-    const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag, getLastModified }, key, etag)
+    const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag, getSourceVersionMarker }, key, etag)
 
     expect(trashKey).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${escapeRegExp(key)}$`))
   })

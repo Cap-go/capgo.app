@@ -7,7 +7,7 @@ export function parseLegacyAppsBundleKey(key: string): { appId: string, versionN
   if (!key.startsWith('apps/'))
     return null
   const parts = key.split('/')
-  if (parts.length !== 5)
+  if (parts.length !== 5 || !parts[1] || !parts[2] || !parts[3])
     return null
   const fileName = parts[4]
   if (!fileName?.endsWith('.zip'))
@@ -45,6 +45,37 @@ export async function revalidateDeleteCandidatesAgainstAppVersions(
 }
 
 export const R2_TRASH_PREFIX = 'deleted-after-7-days/'
+
+/** User metadata key stamped on trash copies for idempotent reuse (copy time != source LM). */
+export const R2_TRASH_SOURCE_LM_METADATA_KEY = 'capgo-source-last-modified'
+
+export function formatR2TrashSourceVersionMarker(lastModified: Date): string {
+  return lastModified.toISOString()
+}
+
+export function parseR2TrashSourceVersionMarker(marker: string | undefined): Date | undefined {
+  if (!marker)
+    return undefined
+  const parsed = new Date(marker)
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed
+}
+
+export function extractR2TrashSourceVersionMarker(metadata?: Record<string, string> | null): string | undefined {
+  if (!metadata)
+    return undefined
+  return metadata[R2_TRASH_SOURCE_LM_METADATA_KEY]
+}
+
+export function buildAwsTrashCopyMetadata(sourceLastModified: Date): Record<string, string> {
+  return {
+    [R2_TRASH_SOURCE_LM_METADATA_KEY]: formatR2TrashSourceVersionMarker(sourceLastModified),
+  }
+}
+
+export function applyR2TrashCopyMetadataHeaders(headers: Headers, sourceLastModified: Date): void {
+  headers.set('x-amz-metadata-directive', 'REPLACE')
+  headers.set(`x-amz-meta-${R2_TRASH_SOURCE_LM_METADATA_KEY}`, formatR2TrashSourceVersionMarker(sourceLastModified))
+}
 
 export function resolveOpsDeleteMode(env: Record<string, string | undefined>): OpsDeleteMode {
   if (env.DRY_RUN !== 'false')
@@ -85,7 +116,7 @@ export function getUniqueR2TrashKey(sourceKey: string, suffix?: string): string 
 export type TrashDestinationResolver = {
   keyExists: (key: string) => Promise<boolean>
   getEtag: (key: string) => Promise<string | undefined>
-  getLastModified?: (key: string) => Promise<Date | undefined>
+  getSourceVersionMarker?: (key: string) => Promise<string | undefined>
 }
 
 /** S3 CopySourceIfMatch expects a quoted entity tag; s3-lite may return unquoted values. */
@@ -110,7 +141,7 @@ export function normalizedS3EtagsMatch(a?: string, b?: string): boolean {
 
 /** Build a TrashDestinationResolver from a HeadObject-style callback. */
 export function createAwsTrashDestinationResolver(
-  headObject: (key: string) => Promise<{ etag?: string, lastModified?: Date }>,
+  headObject: (key: string) => Promise<{ etag?: string, lastModified?: Date, metadata?: Record<string, string> }>,
 ): TrashDestinationResolver {
   return {
     keyExists: async (key) => {
@@ -128,9 +159,9 @@ export function createAwsTrashDestinationResolver(
       const head = await headObject(key)
       return head.etag
     },
-    getLastModified: async (key) => {
+    getSourceVersionMarker: async (key) => {
       const head = await headObject(key)
-      return head.lastModified
+      return extractR2TrashSourceVersionMarker(head.metadata)
     },
   }
 }
@@ -152,9 +183,10 @@ export async function resolveTrashDestinationKey(
     return defaultTrashKey
 
   const trashEtag = await resolver.getEtag(defaultTrashKey)
-  if (sourceEtag && sourceLastModified && resolver.getLastModified && normalizedS3EtagsMatch(trashEtag, sourceEtag)) {
-    const trashLastModified = await resolver.getLastModified(defaultTrashKey)
-    if (trashLastModified && trashLastModified.getTime() === sourceLastModified.getTime())
+  if (sourceEtag && sourceLastModified && resolver.getSourceVersionMarker && normalizedS3EtagsMatch(trashEtag, sourceEtag)) {
+    const trashMarker = await resolver.getSourceVersionMarker(defaultTrashKey)
+    const trashSourceLastModified = parseR2TrashSourceVersionMarker(trashMarker)
+    if (trashSourceLastModified?.getTime() === sourceLastModified.getTime())
       return defaultTrashKey
   }
 
@@ -236,7 +268,7 @@ export function applyAwsCopyDestinationIfNoneMatchMiddleware(middlewareStack: Aw
 
 export type TrashCopyAttemptResult = { trashKey: string } | 'skipped_changed'
 
-export type TrashDestinationHead = { etag?: string, lastModified?: Date } | 'not_found'
+export type TrashDestinationHead = { etag?: string, sourceVersionMarker?: string } | 'not_found'
 
 function trashDestinationMatchesSource(
   destinationStat: Exclude<TrashDestinationHead, 'not_found'>,
@@ -245,9 +277,12 @@ function trashDestinationMatchesSource(
 ): boolean {
   if (!normalizedS3EtagsMatch(destinationStat.etag, sourceEtag))
     return false
-  if (!sourceLastModified || !destinationStat.lastModified)
+  if (!sourceLastModified)
     return false
-  return destinationStat.lastModified.getTime() === sourceLastModified.getTime()
+  const destinationSourceLastModified = parseR2TrashSourceVersionMarker(destinationStat.sourceVersionMarker)
+  if (!destinationSourceLastModified)
+    return false
+  return destinationSourceLastModified.getTime() === sourceLastModified.getTime()
 }
 
 /**
@@ -308,9 +343,16 @@ export async function resolveAvailableR2TrashKey(
       const stat = await s3client.statObject(trashKey)
       return stat.etag
     },
-    getLastModified: async (trashKey) => {
-      const stat = await s3client.statObject(trashKey)
-      return stat.lastModified
+    getSourceVersionMarker: async (trashKey) => {
+      if (s3client.makeRequest) {
+        const response = await s3client.makeRequest({
+          method: 'HEAD',
+          objectName: trashKey,
+          returnBody: true,
+        })
+        return response.headers.get(`x-amz-meta-${R2_TRASH_SOURCE_LM_METADATA_KEY}`) ?? undefined
+      }
+      return undefined
     },
   }, key, sourceEtag, sourceLastModified)
 }
@@ -454,6 +496,20 @@ export function asS3LiteTrashClient(s3client: RawS3LiteClient): S3LiteTrashClien
 
 export type S3LiteTrashMoveResult = 'moved' | 'skipped_missing' | 'skipped_changed'
 
+async function headTrashDestinationSourceMarker(
+  s3client: Pick<RawS3LiteClient, 'makeRequest'>,
+  destinationKey: string,
+): Promise<string | undefined> {
+  if (!s3client.makeRequest)
+    return undefined
+  const response = await s3client.makeRequest({
+    method: 'HEAD',
+    objectName: destinationKey,
+    returnBody: true,
+  })
+  return response.headers.get(`x-amz-meta-${R2_TRASH_SOURCE_LM_METADATA_KEY}`) ?? undefined
+}
+
 /** Copy a live object to a destination key with CopySourceIfMatch (guards against source races). */
 export async function copyS3LiteObjectIfMatch(
   s3client: Pick<RawS3LiteClient, 'makeRequest' | 'statObject'>,
@@ -489,7 +545,7 @@ export async function copyS3LiteObjectIfMatch(
     try {
       const destinationStat = await s3client.statObject(destinationKey)
       if (trashDestinationMatchesSource(
-        { etag: destinationStat.etag, lastModified: destinationStat.lastModified },
+        { etag: destinationStat.etag, sourceVersionMarker: await headTrashDestinationSourceMarker(s3client, destinationKey) },
         sourceIfMatch,
         sourceLastModified,
       ))
@@ -529,6 +585,8 @@ export async function copyLiveObjectToTrash(
       'x-amz-copy-source-if-match': quoteS3CopySourceIfMatchEtag(sourceIfMatch),
       'cf-copy-destination-if-none-match': '*',
     })
+    if (sourceLastModified)
+      applyR2TrashCopyMetadataHeaders(headers, sourceLastModified)
     try {
       await s3client.makeRequest!({
         method: 'PUT',
@@ -544,7 +602,11 @@ export async function copyLiveObjectToTrash(
         throw error
       try {
         const destinationStat = await s3client.statObject(destinationKey)
-        if (trashDestinationMatchesSource(destinationStat, sourceIfMatch, sourceLastModified))
+        if (trashDestinationMatchesSource(
+          { etag: destinationStat.etag, sourceVersionMarker: await headTrashDestinationSourceMarker(s3client, destinationKey) },
+          sourceIfMatch,
+          sourceLastModified,
+        ))
           return destinationKey
         destinationKey = getUniqueR2TrashKey(sourceKey)
         continue
