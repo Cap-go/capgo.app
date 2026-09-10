@@ -540,3 +540,109 @@ jobs:
           BUILD_OUTPUT_UPLOAD_ENABLED: "true"
           BUILD_OUTPUT_RETENTION_SECONDS: "604800"
         run: bunx @capgo/cli@latest build request --platform android --path . --sync-android-version --ai-analytics
+
+  sync_schema_types:
+    needs: [changes, read_replica_schema, supabase_deploy]
+    if: ${{ needs.changes.result == 'success' && needs.changes.outputs.is_alpha != 'true' && needs.changes.outputs.has_migration_changes == 'true' && needs.read_replica_schema.result == 'success' && needs.supabase_deploy.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    name: Sync production schema and generated types
+    permissions:
+      contents: write
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_sha }}
+          token: "${{ secrets.PERSONAL_ACCESS_TOKEN }}"
+          fetch-depth: 0
+          filter: blob:none
+      - name: Setup bun
+        run: bash scripts/setup-bun.sh
+      - name: Prepare production schema access
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
+          SUPABASE_PROJECT_ID_PROD: ${{ secrets.SUPABASE_PROJECT_ID_PROD }}
+        run: |
+          if [ -z "$SUPABASE_PROJECT_ID_PROD" ]; then
+            echo "SUPABASE_PROJECT_ID_PROD is required for schema/types sync" >&2
+            exit 1
+          fi
+
+          bunx supabase --version
+          bunx supabase link --project-ref "$SUPABASE_PROJECT_ID_PROD"
+      - name: Sync generated schema and types
+        env:
+          DEPLOY_TAG: ${{ needs.changes.outputs.deploy_tag }}
+          SCHEMA_TYPES_REMOTE_URL: https://x-access-token:${{ secrets.PERSONAL_ACCESS_TOKEN }}@github.com/${{ github.repository }}.git
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          generated_files=(
+            supabase/schemas/prod.sql
+            src/types/supabase.types.ts
+            supabase/functions/_backend/utils/supabase.types.ts
+          )
+          remote_repo="$SCHEMA_TYPES_REMOTE_URL"
+
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+
+          for attempt in 1 2 3; do
+            echo "Schema/types publication attempt $attempt of 3"
+            git fetch --tags "$remote_repo" "+refs/heads/main:refs/remotes/schema-sync/main"
+            main_sha="$(git rev-parse refs/remotes/schema-sync/main)"
+
+            if ! bun scripts/resolve-deploy-tag.ts --assert-current "$DEPLOY_TAG"; then
+              echo "Schema/types sync deferred: $DEPLOY_TAG is no longer the current production tag."
+              exit 0
+            fi
+
+            pending_migrations="$(git diff --name-only "$DEPLOY_TAG" "$main_sha" -- supabase/migrations)"
+            if [ -n "$pending_migrations" ]; then
+              echo "Schema/types sync deferred: main contains migrations that are not present in $DEPLOY_TAG."
+              printf '%s\n' "$pending_migrations"
+              exit 0
+            fi
+
+            git checkout --detach "$main_sha"
+            bun install --frozen-lockfile
+            bun schemas
+            BRANCH=main bun types
+
+            if git diff --quiet -- "${generated_files[@]}"; then
+              echo "No schema/types drift detected."
+              exit 0
+            fi
+
+            echo "Schema/types drift detected; verifying regenerated types compile against current main."
+            if ! bun typecheck; then
+              echo "Schema/types sync deferred: production-generated types do not compile against current main." >&2
+              exit 0
+            fi
+
+            git add -- "${generated_files[@]}"
+            git commit -m "chore(auto-sync): update supabase schema and generated types"
+
+            git fetch --tags "$remote_repo"
+            if ! bun scripts/resolve-deploy-tag.ts --assert-current "$DEPLOY_TAG"; then
+              echo "Schema/types sync deferred: a newer production tag was published during generation."
+              exit 0
+            fi
+
+            status="$(bun scripts/publish-schema-types.ts main "$main_sha")"
+            if [ "$status" = "published" ]; then
+              echo "Schema/types commit published from main at $main_sha."
+              exit 0
+            fi
+
+            echo "Main moved during schema/types generation; regenerating from the new head."
+          done
+
+          echo "Schema/types publication could not obtain a stable main snapshot after 3 attempts." >&2
+          exit 1

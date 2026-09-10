@@ -62,6 +62,11 @@ describe('production read-replica release gate', () => {
       expect(workflow).toContain(
         'supabase_deploy:\n    needs: [changes, read_replica_schema]',
       )
+      expect(workflow).toContain(
+        'sync_schema_types:\n    needs: [changes, read_replica_schema, supabase_deploy]',
+      )
+      expect(workflow).toContain("needs.read_replica_schema.result == 'success'")
+      expect(workflow).toContain("needs.supabase_deploy.result == 'success'")
       expect(syncScript).toContain('planReadReplicaSchemaSync')
       expect(syncScript).toContain('preflightCompatibilityIssues')
       expect(syncScript).toContain('applyReadReplicaSchemaPlan')

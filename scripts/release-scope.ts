@@ -160,8 +160,11 @@ function resolveCommitsScope(component: Component, commits: string[], run: GitRu
       continue
     }
 
-    shouldRelease = true
     const message = getCommitMessage(commit, run)
+    if (message.subject.startsWith('chore(auto-sync):'))
+      continue
+
+    shouldRelease = true
     highestSeverity = Math.max(highestSeverity, getSeverity(message.subject, message.body))
   }
 

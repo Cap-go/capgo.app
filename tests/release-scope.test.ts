@@ -154,6 +154,57 @@ describe('release scope matching', () => {
     expect(matchesComponent('notifications', files)).toBe(false)
   })
 
+  it.concurrent('ignores an auto-sync commit when calculating pending release scope', () => {
+    const run = (args: string[]) => {
+      const key = args.join(' ')
+      const responses: Record<string, string> = {
+        'describe --tags --match capgo-[0-9]* --exclude capgo-*-alpha.* --abbrev=0 auto-sync-head': 'capgo-12.0.0',
+        'rev-list --reverse capgo-12.0.0..auto-sync-head': 'auto-sync-head',
+        'show --format= --name-only auto-sync-head': 'supabase/schemas/prod.sql\nsrc/types/supabase.types.ts',
+        'log -1 --format=%s auto-sync-head': 'chore(auto-sync): update supabase schema and generated types',
+        'log -1 --format=%b auto-sync-head': '',
+      }
+
+      if (key in responses)
+        return responses[key]
+
+      throw new Error(`Unexpected git call: ${key}`)
+    }
+
+    expect(resolvePendingReleaseScope('capgo', 'auto-sync-head', false, run)).toEqual({
+      base: 'capgo-12.0.0',
+      shouldRelease: false,
+      releaseAs: 'patch',
+    })
+  })
+
+  it.concurrent('lets an auto-sync run release earlier pending source changes', () => {
+    const run = (args: string[]) => {
+      const key = args.join(' ')
+      const responses: Record<string, string> = {
+        'describe --tags --match capgo-[0-9]* --exclude capgo-*-alpha.* --abbrev=0 auto-sync-head': 'capgo-12.0.0',
+        'rev-list --reverse capgo-12.0.0..auto-sync-head': 'feature-head\nauto-sync-head',
+        'show --format= --name-only feature-head': 'src/pages/index.vue',
+        'show --format= --name-only auto-sync-head': 'supabase/schemas/prod.sql\nsrc/types/supabase.types.ts',
+        'log -1 --format=%s feature-head': 'feat: pending console change',
+        'log -1 --format=%b feature-head': '',
+        'log -1 --format=%s auto-sync-head': 'chore(auto-sync): update supabase schema and generated types',
+        'log -1 --format=%b auto-sync-head': '',
+      }
+
+      if (key in responses)
+        return responses[key]
+
+      throw new Error(`Unexpected git call: ${key}`)
+    }
+
+    expect(resolvePendingReleaseScope('capgo', 'auto-sync-head', false, run)).toEqual({
+      base: 'capgo-12.0.0',
+      shouldRelease: true,
+      releaseAs: 'minor',
+    })
+  })
+
   it.concurrent('keeps earlier failed component changes pending after a later merge', () => {
     const run = (args: string[]) => {
       const key = args.join(' ')

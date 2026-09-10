@@ -11,6 +11,9 @@ interface WorkflowStep {
 }
 
 interface WorkflowJob {
+  if?: string
+  needs?: string[] | string
+  permissions?: Record<string, string>
   steps?: WorkflowStep[]
 }
 
@@ -58,6 +61,8 @@ describe('native-aware Capgo release workflow', () => {
     expect(workflow.concurrency?.group).toContain('github.ref')
     expect(workflow.concurrency?.group).toContain('github.run_id')
     expect(workflow.concurrency?.group).toContain('github.run_attempt')
+    expect(workflow.jobs?.changes?.if).not.toContain("chore(auto-sync):")
+    expect(workflow.jobs?.['bump-version']?.if).not.toContain("chore(auto-sync):")
   })
 
   it.concurrent('fails every version-generation re-run before it can create tags', async () => {
@@ -146,8 +151,38 @@ describe('native-aware Capgo release workflow', () => {
     expect(workflow).toContain('release-base-sha')
     expect(workflow).toContain('release-tags-before')
     expect(workflow).toContain('scripts/publish-release.ts')
-    expect(workflow).toContain("needs.bump-version.outputs.published == 'true'")
     expect(workflow).not.toContain('git pull')
+  })
+
+  it.concurrent('synchronizes production schema and types only after both database deployments', async () => {
+    const [bumpSource, deploySource] = await Promise.all([
+      readWorkflow(workflowPaths.bump),
+      readWorkflow(workflowPaths.deploy),
+    ])
+    const deploy = parseWorkflow(deploySource)
+    const syncJob = deploy.jobs?.sync_schema_types
+    const syncStep = syncJob?.steps?.find(step => step.name === 'Sync generated schema and types')
+
+    expect(bumpSource).not.toContain('sync_schema_types:')
+    expect(bumpSource).not.toContain('has_migration_changes')
+    expect(bumpSource).not.toContain('migration_scope')
+    expect(syncJob?.needs).toEqual(['changes', 'read_replica_schema', 'supabase_deploy'])
+    expect(syncJob?.if).toContain("needs.changes.outputs.is_alpha != 'true'")
+    expect(syncJob?.if).toContain("needs.changes.outputs.has_migration_changes == 'true'")
+    expect(syncJob?.if).toContain("needs.read_replica_schema.result == 'success'")
+    expect(syncJob?.if).toContain("needs.supabase_deploy.result == 'success'")
+    expect(syncJob?.permissions?.contents).toBe('write')
+    expect(syncStep?.run).toContain('for attempt in 1 2 3')
+    expect(syncStep?.run).toContain('refs/remotes/schema-sync/main')
+    expect(syncStep?.run).toContain('resolve-deploy-tag.ts --assert-current')
+    expect(syncStep?.run).toContain('git diff --name-only "$DEPLOY_TAG" "$main_sha" -- supabase/migrations')
+    expect(syncStep?.run).toContain('git checkout --detach "$main_sha"')
+    expect(syncStep?.run).toContain('bun schemas')
+    expect(syncStep?.run).toContain('BRANCH=main bun types')
+    expect(syncStep?.run).toContain('bun typecheck')
+    expect(syncStep?.run).toContain('scripts/publish-schema-types.ts main "$main_sha"')
+    expect(syncStep?.run).not.toContain('git pull')
+    expect(syncStep?.run).not.toMatch(/git (?:push )?--force/)
   })
 
   it.concurrent('decides the Capgo version after tests and before standard-version', async () => {

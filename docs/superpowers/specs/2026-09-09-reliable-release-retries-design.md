@@ -76,10 +76,11 @@ version workflow for commit A is unfinished, GitHub cancels A and B runs the
 complete test suite against the cumulative A+B state.
 
 Generated `chore(release):` and `chore(auto-sync):` pushes use an isolated
-concurrency identity and retain their existing job-level skip guards. They must
-not cancel the real version workflow that caused them. A manual re-run also uses
-an isolated identity so that retrying historical work cannot cancel the current
-branch release.
+concurrency identity. They must not cancel the real version workflow that caused
+them. Release commits retain their job-level skip guard. Auto-sync commits are
+excluded from component release scope, but their workflow is allowed to examine
+earlier pending commits. A manual re-run also uses an isolated identity so that
+retrying historical work cannot cancel the current branch release.
 
 If A's atomic publication has already completed before cancellation arrives, A
 is a valid published release and is not undone. If cancellation wins before
@@ -183,6 +184,15 @@ Before publishing the auto-sync commit, the job rechecks both the original
 deployment tag's freshness and the expected `main` SHA. If either changed, it
 retries or defers without overwriting newer work.
 
+An auto-sync compare-and-swap can legitimately win while a newer source push's
+version workflow is still testing. In that case the source workflow becomes
+superseded because `main` moved. The auto-sync push provides the handoff: its
+isolated version workflow ignores the generated auto-sync commit itself, but
+still sees, tests, and releases any earlier source changes that remain pending.
+If the newer source workflow already published, the auto-sync workflow finds no
+pending component work and becomes a no-op. This closes the race without making
+generated schema files create a release by themselves.
+
 ## Error handling and observability
 
 Both workflows write the tested or deployed SHA, selected component baselines,
@@ -208,6 +218,8 @@ Automated tests will cover:
 - newer real pushes cancelling unfinished older version workflows;
 - generated release/auto-sync pushes and manual re-runs not cancelling current
   version work;
+- auto-sync commits not creating releases by themselves while still handing off
+  earlier pending source changes;
 - version workflow re-runs failing before publication;
 - deployment retries retaining the original tag and allowing the current tag;
 - stale deployment retries failing inside every production-mutating job;

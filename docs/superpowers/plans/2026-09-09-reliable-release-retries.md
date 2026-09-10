@@ -391,7 +391,7 @@ Tasks 1–3 above describe the first implementation already present on this PR b
 
 - [x] **Step 1: Add failing workflow contract tests**
 
-Require workflow-level concurrency that gives first-attempt, non-bot source pushes one shared branch group and gives bot commits or re-runs a unique group. Require `cancel-in-progress: true` so a new source push cancels older version work, without allowing an ignored auto-generated commit or a manual re-run to cancel legitimate work.
+Require workflow-level concurrency that gives first-attempt, non-bot source pushes one shared branch group and gives bot commits or re-runs a unique group. Require `cancel-in-progress: true` so a new source push cancels older version work, without allowing an auto-generated commit or a manual re-run to cancel legitimate work.
 
 Require explicit `github.run_attempt` guards in both `changes` and `bump-version`. The guard must exit non-zero with an actionable message, so “Re-run all jobs” and a direct re-run of the tag-generating job both fail before release mutation.
 
@@ -403,7 +403,7 @@ bunx vitest run tests/capgo-release-workflow.unit.test.ts
 
 - [x] **Step 3: Implement concurrency and fail-fast guards**
 
-Add a conditional concurrency group keyed by branch only for a first-attempt source push. Keep ignored `chore(release):` and `chore(auto-sync):` runs, plus every `run_attempt > 1`, isolated with `github.run_id` and `github.run_attempt`.
+Add a conditional concurrency group keyed by branch only for a first-attempt source push. Keep `chore(release):` and `chore(auto-sync):` runs, plus every `run_attempt > 1`, isolated with `github.run_id` and `github.run_attempt`.
 
 Add this semantic guard before any meaningful work in both relevant jobs:
 
@@ -541,7 +541,7 @@ Expected: all compare-and-swap cases pass.
 - Modify: `.github/workflows/bump_version.yml`
 - Modify: `.github/workflows/build_and_deploy.yml`
 
-- [ ] **Step 1: Add failing workflow contracts**
+- [x] **Step 1: Add failing workflow contracts**
 
 Require `sync_schema_types` to be absent from `bump_version.yml` and present in `build_and_deploy.yml`. It must run only for stable releases with migration changes, after both `read_replica_schema` and `supabase_deploy` succeed.
 
@@ -556,19 +556,24 @@ Require a bounded retry loop that:
 7. calls `publish-schema-types.ts` with that exact base SHA;
 8. retries from a fresh `main` snapshot if compare-and-swap loses a race.
 
-- [ ] **Step 2: Run workflow tests and verify failure**
+Require auto-sync commits to be ignored as component changes while allowing the
+auto-sync-triggered version workflow to release any earlier real source changes
+that remain pending. This is the handoff when the schema commit wins the branch
+race while a newer source workflow is still testing.
+
+- [x] **Step 2: Run workflow tests and verify failure**
 
 ```bash
 bunx vitest run tests/capgo-release-workflow.unit.test.ts tests/read-replica-release-workflow.unit.test.ts
 ```
 
-- [ ] **Step 3: Relocate and harden synchronization**
+- [x] **Step 3: Relocate and harden synchronization**
 
 Remove the old pre-deploy job. Add the post-deploy job with explicit `contents: write`, production Supabase credentials, a small bounded retry count, exact-tag freshness checks, migration-diff deferral, typecheck deferral, and compare-and-swap publication.
 
-The schema job must be non-blocking only for deliberate deferrals caused by newer work or incompatible latest source. Genuine generation, authentication, or push failures still fail visibly.
+The schema job must be non-blocking only for deliberate deferrals caused by newer work or incompatible latest source. Genuine generation, authentication, or push failures still fail visibly. Auto-sync commits use an isolated version-workflow concurrency group, contribute no release scope themselves, and take over cumulative pending work only when another source run was superseded.
 
-- [ ] **Step 4: Re-run focused tests**
+- [x] **Step 4: Re-run focused tests**
 
 Expected: schema synchronization is structurally downstream from both database targets and no release-generation workflow can publish schema output.
 
