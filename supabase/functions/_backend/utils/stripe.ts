@@ -83,11 +83,12 @@ export function resolveStripeEnvironment(c: Context, account: BillingAccount = '
   return 'test'
 }
 
-function isLoopbackStripeHost(hostname: string): boolean {
+function isLocalStripeEmulatorHost(hostname: string): boolean {
   return hostname === 'localhost'
     || hostname === '127.0.0.1'
     || hostname === '[::1]'
     || hostname === '::1'
+    || hostname === 'host.docker.internal'
 }
 
 function getStripeApiBaseUrl(c: Context): URL | null {
@@ -107,7 +108,7 @@ function getStripeApiBaseUrl(c: Context): URL | null {
     throw new Error('STRIPE_API_BASE_URL must use http or https')
   }
 
-  if (parsedBaseUrl.protocol === 'http:' && !isLoopbackStripeHost(parsedBaseUrl.hostname)) {
+  if (parsedBaseUrl.protocol === 'http:' && !isLocalStripeEmulatorHost(parsedBaseUrl.hostname)) {
     throw new Error('STRIPE_API_BASE_URL must use https for non-loopback hosts')
   }
 

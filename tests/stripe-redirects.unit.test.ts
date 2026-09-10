@@ -289,6 +289,36 @@ describe('stripe redirect URL allowlist', () => {
     }))
   })
 
+  it('allows host.docker.internal for Playwright Stripe emulator base URL', async () => {
+    mockedEnv.STRIPE_API_BASE_URL = 'http://host.docker.internal:4520'
+
+    const stripeClient = {
+      checkout: {
+        sessions: {},
+      },
+    } as any
+
+    vi.mocked(Stripe).mockImplementation(function () {
+      return stripeClient
+    } as any)
+
+    const { getStripe } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    getStripe(createContext())
+
+    expect(Stripe).toHaveBeenCalledWith('sk_test_123', expect.objectContaining({
+      host: 'host.docker.internal',
+      port: 4520,
+      protocol: 'http',
+    }))
+  })
+
+  it('rejects non-local http Stripe API base URLs', async () => {
+    mockedEnv.STRIPE_API_BASE_URL = 'http://stripe.example.com'
+
+    const { getStripe } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    expect(() => getStripe(createContext())).toThrow('STRIPE_API_BASE_URL must use https for non-loopback hosts')
+  })
+
   it('falls back to checkout metadata for credit top-ups when line items are unavailable in emulator mode', async () => {
     mockedEnv.STRIPE_API_BASE_URL = 'http://127.0.0.1:4510'
 
