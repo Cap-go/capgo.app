@@ -5,6 +5,7 @@ import { Buffer } from 'node:buffer'
 import { brotliDecompressSync } from 'node:zlib'
 import { getRuntimeKey } from 'hono/adapter'
 import { buildChannelPreviewSubdomain, buildPreviewSubdomain, parsePreviewHostname } from '../../shared/preview-subdomain.ts'
+import { isVersionDeleted } from './file_read_cache.ts'
 import { CacheHelper } from '../utils/cache.ts'
 import { getBundleUrl } from '../utils/downloadUrl.ts'
 import { simpleError } from '../utils/hono.ts'
@@ -345,46 +346,38 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
 
   const isPayloadRequest = filePath === PREVIEW_PAYLOAD_FILE_PATH
 
-  // Check cache for bundle info
-  let bundleInfo = await getBundleInfo(c, previewVersionId)
-  let payloadBundle: PreviewDownloadBundle | null = null
+  const supabase = supabaseAdmin(c)
+  const bundleLookup = isPayloadRequest
+    ? await supabase
+        .from('app_versions')
+        .select('id,name,checksum,session_key,manifest_count,r2_path,external_url,deleted,deleted_at')
+        .eq('app_id', actualAppId)
+        .eq('id', previewVersionId)
+        .eq('deleted', false)
+        .is('deleted_at', null)
+        .single()
+    : await supabase
+        .from('app_versions')
+        .select('id,session_key,manifest_count,deleted,deleted_at')
+        .eq('app_id', actualAppId)
+        .eq('id', previewVersionId)
+        .eq('deleted', false)
+        .is('deleted_at', null)
+        .single()
 
-  if (isPayloadRequest || !bundleInfo) {
-    const supabase = supabaseAdmin(c)
+  const { data: bundle, error: bundleError } = bundleLookup
 
-    const bundleLookup = isPayloadRequest
-      ? await supabase
-          .from('app_versions')
-          .select('id,name,checksum,session_key,manifest_count,r2_path,external_url')
-          .eq('app_id', actualAppId)
-          .eq('id', previewVersionId)
-          .eq('deleted', false)
-          .single()
-      : await supabase
-          .from('app_versions')
-          .select('id,session_key,manifest_count')
-          .eq('app_id', actualAppId)
-          .eq('id', previewVersionId)
-          .eq('deleted', false)
-          .single()
-
-    const { data: bundle, error: bundleError } = bundleLookup
-
-    if (bundleError || !bundle) {
-      throw simpleError('bundle_not_found', 'Bundle not found', { versionId: previewVersionId })
-    }
-
-    if (isPayloadRequest)
-      payloadBundle = bundle as unknown as PreviewDownloadBundle
-
-    bundleInfo = {
-      hasManifest: (bundle.manifest_count ?? 0) > 0,
-      isEncrypted: !!bundle.session_key,
-    }
-
-    // Cache the bundle info
-    setBundleInfo(c, previewVersionId, bundleInfo)
+  if (bundleError || !bundle || isVersionDeleted(bundle)) {
+    throw simpleError('bundle_not_found', 'Bundle not found', { versionId: previewVersionId })
   }
+
+  const bundleInfo = {
+    hasManifest: (bundle.manifest_count ?? 0) > 0,
+    isEncrypted: !!bundle.session_key,
+  }
+  const payloadBundle = isPayloadRequest ? bundle as unknown as PreviewDownloadBundle : null
+
+  setBundleInfo(c, previewVersionId, bundleInfo)
 
   // Capgo Preview cannot decrypt customer-encrypted bundles: the decryption
   // private material lives only in the customer's app, not in Capgo's preview
@@ -433,7 +426,6 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
   // Look up file in manifest using a single query with OR conditions for all possible paths
   // This handles deep paths like /folder1/folder2/folder3/.../file.js
   // Also check for .br (brotli) compressed variants since bundles may store compressed files
-  const supabase = supabaseAdmin(c)
   const basePaths = [
     filePath,
     `www/${filePath}`,
@@ -477,7 +469,7 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
     // Use our own MIME type detection - R2 rewrites text/html to text/plain without custom domains
     const contentType = getContentType(actualFileName)
     const headers = buildPreviewResponseHeaders(contentType, {
-      disableCache: isChannelPreview,
+      disableCache: true,
       httpEtag: object.httpEtag,
     })
 
@@ -487,7 +479,7 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
       filePath: manifestEntry.file_name,
       contentType,
       isBrotli,
-      cacheMode: isChannelPreview ? 'no-store' : 'immutable',
+      cacheMode: 'no-store',
     })
 
     // If the file is brotli compressed, decompress it before serving

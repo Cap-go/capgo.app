@@ -292,7 +292,7 @@ describe('moveObjectToTrash', () => {
     makeRequest.mockImplementation(async (_options) => new Response(null, { status: 204 }))
   })
 
-  it('keeps both trash copies when the same live key is deleted twice', async () => {
+  it('allocates a unique trash destination when the same live key is deleted twice', async () => {
     const liveKey = 'orgs/org-1/apps/com.test.app/1.0.0.zip'
     const defaultTrash = `${R2_TRASH_PREFIX}${liveKey}`
     const copyDestinations: string[] = []

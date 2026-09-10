@@ -1121,7 +1121,7 @@ async function prepare_cleanup_zip() {
 
         // Single query to check all zip files at once
         const result = await pool.query(
-            'SELECT r2_path FROM app_versions WHERE r2_path = ANY($1) AND deleted = false',
+            'SELECT r2_path FROM app_versions WHERE r2_path = ANY($1) AND deleted = false AND deleted_at IS NULL',
             [zipFileKeys]
         )
 
@@ -1598,11 +1598,17 @@ async function delete_cleanup_candidates() {
     let candidatesToProcess = toDelete
     try {
         const candidateKeys = candidatesToProcess.map((file: { key: string }) => file.key)
-        const result = await pool.query(
-            'SELECT r2_path FROM app_versions WHERE r2_path = ANY($1) AND deleted = false',
-            [candidateKeys],
-        )
-        const existingPaths = new Set(result.rows.map((row: { r2_path: string }) => row.r2_path))
+        const existingPaths = new Set<string>()
+        const REVALIDATION_BATCH_SIZE = 50
+        for (let i = 0; i < candidateKeys.length; i += REVALIDATION_BATCH_SIZE) {
+            const batch = candidateKeys.slice(i, i + REVALIDATION_BATCH_SIZE)
+            const result = await pool.query(
+                'SELECT r2_path FROM app_versions WHERE r2_path = ANY($1) AND deleted = false AND deleted_at IS NULL',
+                [batch],
+            )
+            for (const row of result.rows as { r2_path: string }[])
+                existingPaths.add(row.r2_path)
+        }
         const beforeCount = candidatesToProcess.length
         candidatesToProcess = candidatesToProcess.filter((file: { key: string }) => !existingPaths.has(file.key))
         const skippedCount = beforeCount - candidatesToProcess.length

@@ -6,6 +6,7 @@ import {
   buildR2ConditionalDeleteHeaders,
   formatR2ConditionalDeleteLastModified,
   permanentDeleteSourceIfMatch,
+  quoteS3CopySourceIfMatchEtag,
   encodeS3CopySource,
   getR2TrashKey,
   getUniqueR2TrashKey,
@@ -36,6 +37,13 @@ describe('resolveOpsDeleteMode', () => {
       DRY_RUN: 'false',
       ALLOW_PERMANENT_R2_DELETE: 'true',
     })).toBe('permanent')
+  })
+})
+
+describe('quoteS3CopySourceIfMatchEtag', () => {
+  it('wraps unquoted client etags in quotes for copy preconditions', () => {
+    expect(quoteS3CopySourceIfMatchEtag('abc123')).toBe('"abc123"')
+    expect(quoteS3CopySourceIfMatchEtag('"already-quoted"')).toBe('"already-quoted"')
   })
 })
 
@@ -340,6 +348,22 @@ describe('copyLiveObjectToTrash', () => {
     expect(makeRequest).toHaveBeenCalledOnce()
   })
 
+  it('quotes unquoted source etags on the copy precondition header', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const makeRequest = vi.fn<(args: MakeRequestArgs) => Promise<Response>>(async () => new Response(null, { status: 200 }))
+    const statObject = vi.fn(async () => stat('unquoted-etag'))
+
+    await copyLiveObjectToTrash(
+      { copyObject: vi.fn(), makeRequest, statObject },
+      key,
+      `${R2_TRASH_PREFIX}${key}`,
+      'unquoted-etag',
+      TEST_S3_BUCKET,
+    )
+
+    expect(makeRequest.mock.calls[0]![0]!.headers?.get('x-amz-copy-source-if-match')).toBe('"unquoted-etag"')
+  })
+
   it('retries with a unique trash key when destination precondition conflicts with a different object', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const etag = '"source"'
@@ -366,6 +390,28 @@ describe('copyLiveObjectToTrash', () => {
     expect(destination).not.toBe(trashKey)
     expect(makeRequest).toHaveBeenCalledTimes(2)
     expect(makeRequest.mock.calls[1]![0]!.headers?.get('cf-copy-destination-if-none-match')).toBe('*')
+  })
+
+  it('fails closed when the destination slot is empty after a copy precondition conflict', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const etag = '"source"'
+    const trashKey = `${R2_TRASH_PREFIX}${key}`
+    const makeRequest = vi.fn<(args: MakeRequestArgs) => Promise<Response>>(async () => {
+      throw { statusCode: 412, code: 'PreconditionFailed' }
+    })
+    const statObject = vi.fn(async (objectKey: string) => {
+      if (objectKey === trashKey)
+        throw { name: 'NotFound' }
+      return stat(etag)
+    })
+
+    await expect(copyLiveObjectToTrash(
+      { copyObject: vi.fn(), makeRequest, statObject },
+      key,
+      trashKey,
+      etag,
+      TEST_S3_BUCKET,
+    )).rejects.toMatchObject({ name: 'SourceChangedBeforeTrashCopy' })
   })
 })
 
@@ -465,7 +511,7 @@ describe('permanentDeleteSourceIfMatch', () => {
     const deleteObject = vi.fn()
     const makeRequest = vi.fn<(args: MakeRequestArgs) => Promise<Response>>(async () => new Response(null, { status: 204 }))
 
-    const result = await permanentDeleteSourceIfMatch({ statObject, deleteObject, makeRequest }, key)
+    const result = await permanentDeleteSourceIfMatch({ statObject, deleteObject, makeRequest }, key, etag)
 
     expect(result).toBe('deleted')
     expect(makeRequest).toHaveBeenCalledOnce()
@@ -483,7 +529,7 @@ describe('permanentDeleteSourceIfMatch', () => {
     const deleteObject = vi.fn()
     const makeRequest = vi.fn()
 
-    const result = await permanentDeleteSourceIfMatch({ statObject, deleteObject, makeRequest }, key)
+    const result = await permanentDeleteSourceIfMatch({ statObject, deleteObject, makeRequest }, key, '"before"')
 
     expect(result).toBe('skipped_missing')
     expect(makeRequest).not.toHaveBeenCalled()
@@ -498,7 +544,7 @@ describe('permanentDeleteSourceIfMatch', () => {
       throw { statusCode: 412, code: 'PreconditionFailed' }
     })
 
-    const result = await permanentDeleteSourceIfMatch({ statObject, deleteObject, makeRequest }, key)
+    const result = await permanentDeleteSourceIfMatch({ statObject, deleteObject, makeRequest }, key, '"before"')
 
     expect(result).toBe('skipped_changed')
     expect(makeRequest).toHaveBeenCalledOnce()
@@ -511,7 +557,24 @@ describe('permanentDeleteSourceIfMatch', () => {
     const deleteObject = vi.fn()
     const makeRequest = vi.fn()
 
-    const result = await permanentDeleteSourceIfMatch({ statObject, deleteObject, makeRequest }, key)
+    const result = await permanentDeleteSourceIfMatch({ statObject, deleteObject, makeRequest }, key, '"before"')
+
+    expect(result).toBe('skipped_changed')
+    expect(makeRequest).not.toHaveBeenCalled()
+    expect(deleteObject).not.toHaveBeenCalled()
+  })
+
+  it('retains the source when discovery etag does not match the live object', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const statObject = vi.fn(async () => stat('"current"'))
+    const deleteObject = vi.fn()
+    const makeRequest = vi.fn()
+
+    const result = await permanentDeleteSourceIfMatch(
+      { statObject, deleteObject, makeRequest },
+      key,
+      '"stale-discovery"',
+    )
 
     expect(result).toBe('skipped_changed')
     expect(makeRequest).not.toHaveBeenCalled()
@@ -530,15 +593,29 @@ describe('resolveTrashDestinationKey', () => {
     expect(trashKey).toBe(getR2TrashKey(key))
   })
 
-  it('reuses the default trash key when it already holds the same source etag', async () => {
+  it('reuses the default trash key when it already holds the same source etag and Last-Modified', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const etag = '"same"'
+    const lastModified = new Date('2024-01-15T10:30:00.000Z')
+    const exists = vi.fn(async (trashKey: string) => trashKey === getR2TrashKey(key))
+    const getEtag = vi.fn(async () => etag)
+    const getLastModified = vi.fn(async () => lastModified)
+
+    const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag, getLastModified }, key, etag, lastModified)
+
+    expect(trashKey).toBe(getR2TrashKey(key))
+  })
+
+  it('allocates a unique path when the default trash key matches etag but not Last-Modified', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const etag = '"same"'
     const exists = vi.fn(async (trashKey: string) => trashKey === getR2TrashKey(key))
     const getEtag = vi.fn(async () => etag)
+    const getLastModified = vi.fn(async () => new Date('2024-01-15T10:30:01.000Z'))
 
-    const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag }, key, etag)
+    const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag, getLastModified }, key, etag, new Date('2024-01-15T10:30:00.000Z'))
 
-    expect(trashKey).toBe(getR2TrashKey(key))
+    expect(trashKey).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${escapeRegExp(key)}$`))
   })
 
   it('allocates a unique path when the default trash key holds a different etag', async () => {

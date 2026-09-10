@@ -191,7 +191,7 @@ async function moveObjectToTrash(c: Context, fileId: string) {
 
   let trashPath: string
   try {
-    trashPath = await resolveAvailableR2TrashKey(client as RawS3LiteClient, fileId, sourceEtag)
+    trashPath = await resolveAvailableR2TrashKey(client as RawS3LiteClient, fileId, sourceEtag, sourceLastModified)
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to allocate trash destination', fileId, error: serializeStorageError(error) })

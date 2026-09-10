@@ -66,6 +66,21 @@ export function getUniqueR2TrashKey(sourceKey: string, suffix?: string): string 
 export type TrashDestinationResolver = {
   keyExists: (key: string) => Promise<boolean>
   getEtag: (key: string) => Promise<string | undefined>
+  getLastModified?: (key: string) => Promise<Date | undefined>
+}
+
+/** S3 CopySourceIfMatch expects a quoted entity tag; s3-lite may return unquoted values. */
+export function quoteS3CopySourceIfMatchEtag(etag: string): string {
+  const trimmed = etag.trim()
+  if (trimmed.startsWith('"') && trimmed.endsWith('"'))
+    return trimmed
+  return `"${trimmed.replaceAll('"', '')}"`
+}
+
+function normalizeS3Etag(etag: string | undefined): string | undefined {
+  if (!etag)
+    return undefined
+  return quoteS3CopySourceIfMatchEtag(etag)
 }
 
 /** Build a TrashDestinationResolver from a HeadObject-style callback. */
@@ -100,6 +115,7 @@ export async function resolveTrashDestinationKey(
   resolver: TrashDestinationResolver,
   sourceKey: string,
   sourceEtag?: string,
+  sourceLastModified?: Date,
   maxUniqueAttempts = 10,
 ): Promise<string> {
   const defaultTrashKey = getR2TrashKey(sourceKey)
@@ -107,8 +123,17 @@ export async function resolveTrashDestinationKey(
     return defaultTrashKey
 
   const trashEtag = await resolver.getEtag(defaultTrashKey)
-  if (sourceEtag && trashEtag === sourceEtag)
-    return defaultTrashKey
+  const etagMatches = sourceEtag && normalizeS3Etag(trashEtag) === normalizeS3Etag(sourceEtag)
+  if (etagMatches) {
+    if (sourceLastModified && resolver.getLastModified) {
+      const trashLastModified = await resolver.getLastModified(defaultTrashKey)
+      if (trashLastModified?.getTime() === sourceLastModified.getTime())
+        return defaultTrashKey
+    }
+    else if (!sourceLastModified || !resolver.getLastModified) {
+      return defaultTrashKey
+    }
+  }
 
   for (let i = 0; i < maxUniqueAttempts; i++) {
     const candidate = getUniqueR2TrashKey(sourceKey)
@@ -167,6 +192,7 @@ export async function resolveAvailableR2TrashKey(
   s3client: Pick<RawS3LiteClient, 'statObject'>,
   key: string,
   sourceEtag?: string,
+  sourceLastModified?: Date,
 ): Promise<string> {
   return resolveTrashDestinationKey({
     keyExists: async (trashKey) => {
@@ -184,7 +210,11 @@ export async function resolveAvailableR2TrashKey(
       const stat = await s3client.statObject(trashKey)
       return stat.etag
     },
-  }, key, sourceEtag)
+    getLastModified: async (trashKey) => {
+      const stat = await s3client.statObject(trashKey)
+      return stat.lastModified
+    },
+  }, key, sourceEtag, sourceLastModified)
 }
 
 export function isLiveR2Key(key: string): boolean {
@@ -234,7 +264,11 @@ export type ConditionalDeleteResult = 'deleted' | 'skipped_changed' | 'skipped_m
 export async function permanentDeleteSourceIfMatch(
   s3client: Pick<RawS3LiteClient, 'statObject' | 'deleteObject' | 'makeRequest'>,
   key: string,
+  discoveryEtag?: string,
 ): Promise<ConditionalDeleteResult> {
+  if (!discoveryEtag)
+    return 'skipped_changed'
+
   let sourceEtag: string | undefined
   let sourceLastModified: Date | undefined
   try {
@@ -247,6 +281,12 @@ export async function permanentDeleteSourceIfMatch(
       return 'skipped_missing'
     throw error
   }
+
+  if (!sourceEtag || !sourceLastModified)
+    return 'skipped_changed'
+
+  if (normalizeS3Etag(discoveryEtag) !== normalizeS3Etag(sourceEtag))
+    return 'skipped_changed'
 
   return conditionalDeleteSource(s3client, key, sourceEtag, sourceLastModified)
 }
@@ -332,7 +372,7 @@ export async function copyLiveObjectToTrash(
     if (s3client.makeRequest) {
       const headers = new Headers({
         'x-amz-copy-source': copySource,
-        'x-amz-copy-source-if-match': sourceIfMatch,
+        'x-amz-copy-source-if-match': quoteS3CopySourceIfMatchEtag(sourceIfMatch),
         'cf-copy-destination-if-none-match': '*',
       })
       try {
@@ -350,15 +390,16 @@ export async function copyLiveObjectToTrash(
           throw error
         try {
           const destinationStat = await s3client.statObject(destinationKey)
-          if (destinationStat.etag === sourceIfMatch)
+          if (normalizeS3Etag(destinationStat.etag) === normalizeS3Etag(sourceIfMatch))
             return destinationKey
+          destinationKey = getUniqueR2TrashKey(sourceKey)
+          continue
         }
         catch (statError) {
-          if (!isObjectNotFoundError(statError))
-            throw statError
+          if (isObjectNotFoundError(statError))
+            throw { name: 'SourceChangedBeforeTrashCopy', code: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } }
+          throw statError
         }
-        destinationKey = getUniqueR2TrashKey(sourceKey)
-        continue
       }
     }
 
@@ -378,6 +419,7 @@ export async function moveS3LiteObjectToTrash(
   s3client: RawS3LiteClient,
   key: string,
   sourceBucketName: string,
+  discoveryEtag?: string,
 ): Promise<S3LiteTrashMoveResult> {
   if (!isLiveR2Key(key))
     return 'moved'
@@ -398,13 +440,16 @@ export async function moveS3LiteObjectToTrash(
   if (!sourceEtag || !sourceLastModified)
     return 'skipped_changed'
 
-  const trashKey = await resolveAvailableR2TrashKey(s3client, key, sourceEtag)
+  if (discoveryEtag && normalizeS3Etag(discoveryEtag) !== normalizeS3Etag(sourceEtag))
+    return 'skipped_changed'
+
+  const trashKey = await resolveAvailableR2TrashKey(s3client, key, sourceEtag, sourceLastModified)
 
   try {
     await copyLiveObjectToTrash(s3client, key, trashKey, sourceEtag, sourceBucketName)
   }
   catch (error) {
-    if (isPreconditionFailedError(error))
+    if (isPreconditionFailedError(error) || (error as { name?: string }).name === 'SourceChangedBeforeTrashCopy')
       return 'skipped_changed'
     if (isObjectNotFoundError(error))
       return 'skipped_missing'

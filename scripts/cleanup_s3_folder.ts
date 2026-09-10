@@ -40,26 +40,45 @@ const limiter = new ConcurrencyLimiter(CONCURRENCY)
 
 async function processKey(key: string): Promise<void> {
   return limiter.run(async () => {
+    let discoveryEtag: string | undefined
+    try {
+      const listed = await rawS3client.statObject(key)
+      discoveryEtag = listed.etag
+    }
+    catch (error) {
+      console.warn(`Skipped ${key}: could not read discovery ETag (${error})`)
+      return
+    }
+
+    if (!discoveryEtag) {
+      console.warn(`Skipped ${key}: missing discovery ETag; source retained`)
+      return
+    }
+
     if (deleteMode === 'trash') {
       console.log(`Moving to trash: ${key}`)
-      const result = await moveS3LiteObjectToTrash(rawS3client, key, S3_BUCKET)
+      const result = await moveS3LiteObjectToTrash(rawS3client, key, S3_BUCKET, discoveryEtag)
       if (result === 'skipped_missing') {
         console.log(`Already absent: ${key}`)
         return
       }
-      if (result === 'skipped_changed')
-        throw new Error(`Copied ${key} to trash but live object changed before delete; source key retained`)
+      if (result === 'skipped_changed') {
+        console.warn(`Skipped ${key}: live object changed before trash delete; source retained`)
+        return
+      }
       return
     }
 
     console.log(`Permanently deleting: ${key}`)
-    const deleteResult = await permanentDeleteSourceIfMatch(rawS3client, key)
+    const deleteResult = await permanentDeleteSourceIfMatch(rawS3client, key, discoveryEtag)
     if (deleteResult === 'skipped_missing') {
       console.log(`Already absent: ${key}`)
       return
     }
-    if (deleteResult === 'skipped_changed')
-      throw new Error(`Skipped permanent delete for ${key}: live object changed before delete`)
+    if (deleteResult === 'skipped_changed') {
+      console.warn(`Skipped permanent delete for ${key}: live object changed before delete; source retained`)
+      return
+    }
   })
 }
 
@@ -79,9 +98,6 @@ async function processKeyBatch(keys: string[]): Promise<{ succeeded: number, fai
     failures.push(result.reason)
     console.error(`Failed to process ${keys[index]}:`, result.reason)
   }
-  if (failures.length > 0 && deleteMode === 'trash')
-    throw failures[0]
-
   return { succeeded, failed }
 }
 
