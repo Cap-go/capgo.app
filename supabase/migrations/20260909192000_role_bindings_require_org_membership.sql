@@ -101,7 +101,7 @@ CREATE OR REPLACE FUNCTION rbac_internal.role_binding_caller_permission_allowed(
 RETURNS boolean
 LANGUAGE sql
 STABLE
-SECURITY DEFINER
+SECURITY INVOKER
 SET search_path = ''
 AS $$
   SELECT CASE
@@ -189,7 +189,8 @@ COMMENT ON FUNCTION rbac_internal.role_binding_caller_permission_allowed(
   text, uuid, uuid, uuid, bigint
 ) IS
   'RLS helper: caller may write a role_binding for the given scope and resource '
-  'identifiers. Mirrors the scope branches in role_bindings insert/update policies.';
+  'identifiers. SECURITY INVOKER so apps/channels/app_versions EXISTS checks '
+  'retain verify_mfa() RLS. Mirrors role_bindings insert/update policy branches.';
 
 DROP FUNCTION IF EXISTS public.role_binding_principal_allowed_for_org(text, uuid, uuid, text);
 

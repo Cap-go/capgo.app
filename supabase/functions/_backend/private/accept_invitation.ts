@@ -173,10 +173,11 @@ async function ensureOrgMembership(
   }
 
   const pgPool = getPgClient(c, false)
-  const pgClient = await pgPool.connect()
+  let pgClient: Awaited<ReturnType<typeof pgPool.connect>> | null = null
   let transactionStarted = false
 
   try {
+    pgClient = await pgPool.connect()
     await pgClient.query('BEGIN')
     transactionStarted = true
 
@@ -249,7 +250,7 @@ async function ensureOrgMembership(
     transactionStarted = false
   }
   catch (error) {
-    if (transactionStarted) {
+    if (transactionStarted && pgClient) {
       await pgClient.query('ROLLBACK').catch(() => {})
     }
     cloudlog({
@@ -263,7 +264,7 @@ async function ensureOrgMembership(
     return quickError(500, 'failed_to_accept_invitation', 'Failed to finalize org membership', { error: errorMessage })
   }
   finally {
-    pgClient.release()
+    pgClient?.release()
     closeClient(c, pgPool)
   }
 }
