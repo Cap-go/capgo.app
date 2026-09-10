@@ -156,17 +156,26 @@ function isPgLockTimeoutError(error: unknown): boolean {
     && (error as { code: string }).code === '55P03'
 }
 
+async function rollbackRbacOrgLockSavepoint(pgClient: PoolClient): Promise<void> {
+  await pgClient.query('ROLLBACK TO SAVEPOINT rbac_org_lock').catch(() => {})
+  await pgClient.query('RELEASE SAVEPOINT rbac_org_lock').catch(() => {})
+}
+
 async function acquireRbacOrgLockWithRetry(pgClient: PoolClient, orgId: string): Promise<void> {
   const lockAttempts = 6
   const lockTimeoutMs = 5000
+  const savepointName = 'rbac_org_lock'
+
+  await pgClient.query(`SET LOCAL lock_timeout = '${lockTimeoutMs}ms'`)
 
   for (let attempt = 0; attempt < lockAttempts; attempt++) {
     try {
-      await pgClient.query(`SET LOCAL lock_timeout = '${lockTimeoutMs}ms'`)
+      await pgClient.query(`SAVEPOINT ${savepointName}`)
       await pgClient.query(
         `SELECT public.lock_rbac_orgs($1::uuid)`,
         [orgId],
       )
+      await pgClient.query(`RELEASE SAVEPOINT ${savepointName}`)
       await pgClient.query(`SET LOCAL lock_timeout = '0'`)
       return
     }
@@ -174,6 +183,7 @@ async function acquireRbacOrgLockWithRetry(pgClient: PoolClient, orgId: string):
       if (!isPgLockTimeoutError(error) || attempt === lockAttempts - 1) {
         throw error
       }
+      await rollbackRbacOrgLockSavepoint(pgClient)
       await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)))
     }
   }
