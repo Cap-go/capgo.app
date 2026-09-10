@@ -20,6 +20,8 @@ async function continuePastWelcome(page: Page) {
 
 async function continuePastDevelopmentEnvironmentIfShown(page: Page) {
   const assistantOption = page.locator('[data-test="onboarding-development-environment-ai_assistant"]')
+  const appNameInput = page.locator('[data-test="app-onboarding-name"]')
+  await expect(assistantOption.or(appNameInput)).toBeVisible()
   if (await assistantOption.isVisible()) {
     await assistantOption.click()
     await page.click('[data-test="app-onboarding-continue-development-environment"]')
