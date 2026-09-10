@@ -331,6 +331,14 @@ export async function withOrphanR2DeleteClaim<T>(
   await client.query('BEGIN')
   try {
     if (scope) {
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
+        [`orphan-r2:${scope.appId}`, scope.versionName],
+      )
+      await client.query(
+        'SELECT 1 FROM public.apps WHERE app_id = $1 FOR UPDATE',
+        [scope.appId],
+      )
       const locked = await client.query(
         `SELECT r2_path FROM public.app_versions
          WHERE app_id = $1 AND name = $2 AND ${APP_VERSION_NOT_DELETED_SQL}
@@ -345,6 +353,11 @@ export async function withOrphanR2DeleteClaim<T>(
         }
       }
     }
+
+    await client.query(
+      'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
+      ['orphan-r2:path', key],
+    )
 
     const byPath = await client.query(
       `SELECT 1 FROM public.app_versions

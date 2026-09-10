@@ -24,7 +24,6 @@ const deleteMode = resolveOpsDeleteMode({
   DRY_RUN: Deno.env.get('DRY_RUN'),
   ALLOW_PERMANENT_R2_DELETE: Deno.env.get('ALLOW_PERMANENT_R2_DELETE'),
 })
-const permanentDeleteRequested = Deno.env.get('ALLOW_PERMANENT_R2_DELETE') === 'true'
 
 const S3_BUCKET = 'backuptmp'
 

@@ -85,15 +85,37 @@ async function main() {
       if (!isObjectNotFoundError(error))
         throw error
     }
+    async function destinationMatchesSource(): Promise<boolean> {
+      try {
+        const destinationStat = await rawS3client.statObject(destinationKey)
+        return normalizedS3EtagsMatch(destinationStat.etag, discoveryEtag)
+      }
+      catch (error) {
+        if (isObjectNotFoundError(error))
+          return false
+        throw error
+      }
+    }
+
     await copyS3LiteObjectIfMatch(rawS3client, obj.key, destinationKey, discoveryEtag, S3_BUCKET, discoveryLastModified)
     const trashResult = await moveS3LiteObjectToTrash(rawS3client, obj.key, S3_BUCKET, discoveryEtag, discoveryLastModified)
-    if (trashResult === 'moved' || trashResult === 'skipped_missing')
+    if (trashResult === 'moved')
       continue
+    if (trashResult === 'skipped_missing') {
+      if (await destinationMatchesSource())
+        continue
+      throw new Error(`Source ${obj.key} missing after copy but destination ${destinationKey} does not match expected content`)
+    }
 
     if (trashResult === 'skipped_changed') {
       const retryResult = await moveS3LiteObjectToTrash(rawS3client, obj.key, S3_BUCKET, discoveryEtag, discoveryLastModified)
-      if (retryResult === 'moved' || retryResult === 'skipped_missing')
+      if (retryResult === 'moved')
         continue
+      if (retryResult === 'skipped_missing') {
+        if (await destinationMatchesSource())
+          continue
+        throw new Error(`Source ${obj.key} missing after retry but destination ${destinationKey} does not match expected content`)
+      }
 
       let sourceExists = true
       try {

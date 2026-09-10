@@ -217,7 +217,7 @@ async function getChannelPreviewVersionId(c: Context<MiddlewareKeyVariables>, ap
 // Export the handler directly for use in the main app
 // This preserves the context (requestId, env bindings, etc.) from the parent app
 export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): Promise<Response> {
-  const hostname = c.req.header('host') || ''
+  const hostname = (c.req.header('host') || '').split(':')[0].toLowerCase()
   const parsed = parsePreviewSubdomain(hostname)
 
   if (!parsed) {

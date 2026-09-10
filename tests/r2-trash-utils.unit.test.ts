@@ -953,7 +953,7 @@ describe('withOrphanR2DeleteClaim', () => {
   it('skips delete when app_versions already references the key under row lock', async () => {
     const client = {
       query: vi.fn(async (sql: string) => {
-        if (sql === 'BEGIN' || sql === 'ROLLBACK')
+        if (sql === 'BEGIN' || sql === 'ROLLBACK' || sql.includes('pg_advisory_xact_lock'))
           return { rowCount: null, rows: [] }
         if (sql.includes('FOR UPDATE') && sql.includes('r2_path = $1'))
           return { rowCount: 1, rows: [{}] }
