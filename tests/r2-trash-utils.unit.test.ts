@@ -872,6 +872,27 @@ describe('resolveTrashDestinationKey', () => {
 
     expect(trashKey).toBe(defaultTrashKey)
   })
+
+  it('reuses the default trash slot when the object disappears between etag read and source-version marker read', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const defaultTrashKey = getR2TrashKey(key)
+    const etag = '"same"'
+    const lastModified = new Date('2024-01-15T10:30:00.000Z')
+    const exists = vi.fn(async (trashKey: string) => trashKey === defaultTrashKey)
+    const getEtag = vi.fn(async () => etag)
+    const getSourceVersionMarker = vi.fn(async () => {
+      throw { name: 'NotFound' }
+    })
+
+    const trashKey = await resolveTrashDestinationKey(
+      { keyExists: exists, getEtag, getSourceVersionMarker },
+      key,
+      etag,
+      lastModified,
+    )
+
+    expect(trashKey).toBe(defaultTrashKey)
+  })
 })
 
 describe('asS3LiteTrashClient', () => {
