@@ -143,6 +143,14 @@ function isTabActive(tab: string) {
     return currentPath === tabPath || currentPath.startsWith(`${tabPath}/`)
   })
 }
+function openLogoDashboard() {
+  void openTab({
+    label: 'apps',
+    icon: IconAppStore,
+    key: '/apps',
+  })
+}
+
 async function openTab(tab: Tab) {
   if (isSpoofTab(tab) && spoofLoading.value)
     return
@@ -346,10 +354,11 @@ function tabLabel(tab: Tab) {
       >
         <!-- Sidebar header -->
         <div class="flex border-b shrink-0 border-slate-800 lg:border-slate-700 py-4">
-          <router-link
+          <button
+            type="button"
             class="flex items-center rounded-lg cursor-pointer focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none focus:ring-offset-slate-800"
-            to="/apps"
             aria-label="Capgo - Go to dashboard"
+            @click="openLogoDashboard"
           >
             <span class="flex w-12 h-11 shrink-0 items-center justify-center">
               <img src="/capgo.webp" alt="Capgo logo" class="w-8 h-8 shrink-0">
@@ -357,7 +366,7 @@ function tabLabel(tab: Tab) {
             <span class="text-xl font-semibold whitespace-nowrap font-prompt text-slate-200 hover:text-white lg:text-slate-200 lg:hover:text-white">
               Capgo
             </span>
-          </router-link>
+          </button>
         </div>
 
         <GettingStartedNav :compact="isRail" />
