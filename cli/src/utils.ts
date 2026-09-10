@@ -1234,8 +1234,10 @@ export async function checkPlanValid(
 
   if (data?.result === 'permission_denied')
     await throwPlanPermissionDenied()
-  if (data?.result === 'billing_denied' || (data?.result !== 'allowed' && !data?.valid))
+  else if (data?.result === 'billing_denied' || data?.valid === false)
     await throwPlanUpgradeRequired(plansUrl, 'Plan upgrade required')
+  else if (data?.result !== 'allowed' && data?.valid !== true)
+    throw new Error('Cannot validate plan: unexpected plan check response')
 
   if (shouldWarnTrialExpiry({
     trialDays: data?.trial_days ?? 0,
@@ -1838,9 +1840,15 @@ export async function checkPlanValidUploadViaHttp(
   if (error)
     throw new Error(`Cannot validate plan: ${await formatCapgoCliApiError(error)}`)
 
-  if (!data?.valid) {
+  if (data?.valid === true) {
+    // Recognized allow shape — continue to trial warning below.
+  }
+  else if (data?.valid === false) {
     const plansUrl = `${config.hostWeb}/settings/organization/plans`
     await throwPlanUpgradeRequired(plansUrl, 'Plan upgrade required for upload')
+  }
+  else {
+    throw new Error('Cannot validate plan: unexpected upload plan check response')
   }
 
   const planData = data!
@@ -1922,12 +1930,7 @@ export async function getDefaultUploadChannelViaHttp(
     throw new Error(`Cannot find default upload channel: ${await formatCapgoCliApiError(error)}. You can set it here: ${config.hostWeb}/app/${appId}/info`)
   }
 
-  if (data?.default_upload_channel == null) {
-    const config = await getRemoteConfig()
-    throw new Error(`Cannot find default upload channel: app has no default_upload_channel configured. You can set it here: ${config.hostWeb}/app/${appId}/info`)
-  }
-
-  return data.default_upload_channel
+  return data?.default_upload_channel ?? null
 }
 
 export async function deleteBundleVersionViaHttp(

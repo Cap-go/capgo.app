@@ -53,7 +53,7 @@ export async function currentBundleInternal(channel: string, appId: string, opti
     const payload = await readCapgoCliApiErrorPayload(error)
     const code = payload?.error
 
-    if (status === 401) {
+    if (status === 401 && code === 'not_authorized') {
       if (!silent)
         log.error(`Insufficient permissions for channel ${channel}. Required RBAC permission for this action: channel.read.`)
       throw new CliUserError('Insufficient permissions for channel. Required RBAC permission for this action: channel.read.', { appId, channel })

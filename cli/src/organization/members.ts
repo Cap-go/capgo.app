@@ -200,6 +200,8 @@ export async function listMembersInternal(orgId: string, options: OptionsBase, s
   void trackEvent({
     channel: 'organization',
     event: 'Org Members Listed',
+    apikey: enrichedOptions.apikey!,
+    orgId,
     tags: {
       member_count: memberInfoList.length,
       with_2fa_count: memberInfoList.filter(m => m.has_2fa === true).length,

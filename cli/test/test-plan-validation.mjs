@@ -52,7 +52,7 @@ await test('checks an app-scoped key through Capgo HTTP plan API', async () => {
   const originalFetch = globalThis.fetch
   globalThis.fetch = async (input, init) => {
     const url = String(input)
-    calls.push({ url, method: init?.method, body: init?.body })
+    calls.push({ url, method: init?.method, body: init?.body, headers: init?.headers })
     if (url.includes('/private/config'))
       return json({ hostWeb: 'https://console.capgo.app' })
     if (url.includes('/private/cli/check-plan'))
@@ -64,6 +64,7 @@ await test('checks an app-scoped key through Capgo HTTP plan API', async () => {
     await utils.checkPlanValid('ck_key', 'org-id', 'com.example.app', false, HOST)
     const planCall = calls.find(call => String(call.url).includes('/private/cli/check-plan'))
     assert(planCall, 'Expected HTTP plan check')
+    assertEquals(planCall.headers?.capgkey, 'ck_key')
     assertEquals(JSON.parse(planCall.body), {
       org_id: 'org-id',
       app_id: 'com.example.app',
@@ -126,6 +127,60 @@ await test('checkPlanValid reports permission denial instead of billing upgrade 
   assert(thrown instanceof Error, 'Expected plan validation to throw')
   assert(thrown.message.includes('Plan validation permission denied'), `Unexpected error: ${thrown.message}`)
   assert(!thrown.message.includes('Plan upgrade required'), 'Must not report a billing upgrade for RBAC denial')
+})
+
+await test('checkPlanValid rejects malformed plan responses instead of upgrade copy', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.includes('/private/config'))
+      return json({ hostWeb: 'https://console.capgo.app' })
+    if (url.includes('/private/cli/check-plan'))
+      return json({ trial_days: 0 })
+    throw new Error(`Unexpected fetch: ${url}`)
+  }
+
+  let thrown
+  try {
+    await utils.checkPlanValid('ck_key', 'org-id', 'com.example.app', false, HOST)
+  }
+  catch (error) {
+    thrown = error
+  }
+  finally {
+    globalThis.fetch = originalFetch
+  }
+
+  assert(thrown instanceof Error, 'Expected malformed plan response to throw')
+  assert(thrown.message.includes('unexpected plan check response'), `Unexpected error: ${thrown.message}`)
+  assert(!thrown.message.includes('Plan upgrade required'), 'Must not report billing upgrade for malformed response')
+})
+
+await test('checkPlanValidUploadViaHttp rejects malformed upload plan responses', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    if (url.includes('/private/config'))
+      return json({ hostWeb: 'https://console.capgo.app' })
+    if (url.includes('/private/cli/check-plan-upload'))
+      return json({ trial_days: 0 })
+    throw new Error(`Unexpected fetch: ${url}`)
+  }
+
+  let thrown
+  try {
+    await utils.checkPlanValidUploadViaHttp('ck_key', 'org-id', 'com.example.app', false, HOST)
+  }
+  catch (error) {
+    thrown = error
+  }
+  finally {
+    globalThis.fetch = originalFetch
+  }
+
+  assert(thrown instanceof Error, 'Expected malformed upload plan response to throw')
+  assert(thrown.message.includes('unexpected upload plan check response'), `Unexpected error: ${thrown.message}`)
+  assert(!thrown.message.includes('Plan upgrade required'), 'Must not report billing upgrade for malformed response')
 })
 
 await test('checkPlanValid treats result=allowed as success even without valid', async () => {

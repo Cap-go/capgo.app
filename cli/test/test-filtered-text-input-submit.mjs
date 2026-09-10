@@ -35,9 +35,7 @@ function makeStdin() {
 }
 
 function emitBurst(stdin, text) {
-  for (const ch of text)
-    stdin.push(ch)
-  stdin.push('\r')
+  stdin.push(`${text}\r`)
 }
 
 async function waitForSubmit(getSubmitted, timeoutMs = 1000) {

@@ -3375,19 +3375,24 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
                   // "Key file selected · …" entries while they were
                   // still deciding.
                     hydrateCompletedLog()
-                    if (
-                      initialProgress._credentialsExistGate === undefined
-                      && IOS_API_KEY_GATE_STEPS.has(startStep)
-                    ) {
-                      const existing = await loadSavedCredentials(appId).catch(() => null)
-                      if (existing?.ios) {
-                        const seeded = { ...initialProgress, _credentialsExistGate: 'pending' as const }
-                        await saveProgress(appId, seeded)
-                        setStep('credentials-exist')
-                        return
+                    try {
+                      if (
+                        initialProgress._credentialsExistGate === undefined
+                        && IOS_API_KEY_GATE_STEPS.has(startStep)
+                      ) {
+                        const existing = await loadSavedCredentials(appId).catch(() => null)
+                        if (existing?.ios) {
+                          const seeded = { ...initialProgress, _credentialsExistGate: 'pending' as const }
+                          await saveProgress(appId, seeded)
+                          setStep('credentials-exist')
+                          return
+                        }
                       }
+                      setStep(startStep)
                     }
-                    setStep(startStep)
+                    catch (err) {
+                      handleErrorRef.current(err, 'resume-prompt')
+                    }
                     return
                   }
                   await resetForFreshStart()

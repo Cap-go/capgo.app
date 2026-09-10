@@ -10,7 +10,7 @@ let permissionAllowed = true
 
 globalThis.fetch = async (input, init) => {
   const url = String(input)
-  fetchCalls.push({ url, method: init?.method ?? 'GET', body: init?.body })
+  fetchCalls.push({ url, method: init?.method ?? 'GET', body: init?.body, headers: init?.headers })
   if (url.includes('/private/config')) {
     return new Response(JSON.stringify({}), {
       status: 200,
@@ -49,6 +49,7 @@ try {
   assert.ok(fetchCalls.some(call => call.url.includes('/private/cli/check-permission')), 'expected HTTP permission check')
   assert.ok(fetchCalls.some(call => /\/app\/com\.example\.app$/.test(call.url)), 'expected GET app existence check')
   const permissionCall = fetchCalls.find(call => call.url.includes('/private/cli/check-permission'))
+  assert.equal(permissionCall.headers?.capgkey, 'ck_plain_cli_key')
   assert.deepEqual(JSON.parse(permissionCall.body), {
     permission_key: 'app.read_bundles',
     org_id: null,
@@ -66,7 +67,9 @@ try {
   )
 
   assert.equal(fetchCalls.filter(call => /\/app\//.test(call.url)).length, 0, 'channel-scoped checks skip app existence HTTP call')
-  assert.deepEqual(JSON.parse(fetchCalls.find(call => call.url.includes('/private/cli/check-permission')).body), {
+  const channelDeleteCall = fetchCalls.find(call => call.url.includes('/private/cli/check-permission'))
+  assert.equal(channelDeleteCall.headers?.capgkey, 'ck_channel_cli_key')
+  assert.deepEqual(JSON.parse(channelDeleteCall.body), {
     permission_key: 'channel.delete',
     org_id: null,
     app_id: 'com.example.app',
@@ -81,7 +84,9 @@ try {
     { silent: true, skip2FACheck: true, channelId: 77 },
   )
 
-  assert.deepEqual(JSON.parse(fetchCalls.find(call => call.url.includes('/private/cli/check-permission')).body), {
+  const channelUpdateCall = fetchCalls.find(call => call.url.includes('/private/cli/check-permission'))
+  assert.equal(channelUpdateCall.headers?.capgkey, 'ck_channel_update_key')
+  assert.deepEqual(JSON.parse(channelUpdateCall.body), {
     permission_key: 'channel.update_settings',
     org_id: null,
     app_id: 'com.example.app',

@@ -570,9 +570,10 @@ function renderBody(view: StepView, busy: boolean, advance: (value?: string, tex
       <InputIssuerIdStep
         key={step}
         onSubmit={(text) => {
-          if (!text.trim())
+          const trimmed = text.trim()
+          if (!trimmed)
             return
-          advance(undefined, text)
+          advance(undefined, trimmed)
         }}
       />
     )

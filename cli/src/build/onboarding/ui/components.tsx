@@ -286,9 +286,16 @@ export const FilteredTextInput: FC<{
     }
     // Append input then apply the full constraint pipeline (paste-safe).
     if (input) {
-      const next = applyConstraints(valueRef.current + input, { filter, allowedPattern, maxLength, transform })
-      valueRef.current = next
-      setValue(next)
+      const submitRequested = input.includes('\r') || input.includes('\n')
+      const printable = input.replace(/[\r\n]/g, '')
+      if (printable) {
+        const next = applyConstraints(valueRef.current + printable, { filter, allowedPattern, maxLength, transform })
+        valueRef.current = next
+        setValue(next)
+      }
+      if (submitRequested) {
+        onSubmit(valueRef.current)
+      }
     }
   })
 
