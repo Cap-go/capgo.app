@@ -1,6 +1,6 @@
 {
   "name": "@capgo/capacitor-notifications",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "Capgo native push notifications, badge, and live-update trigger plugin for Capacitor apps.",
   "license": "AGPL-3.0-only",
   "type": "module",
