@@ -94,6 +94,7 @@ async function updateVersionForReupload(
   values.push(versionId)
 
   const pgClient = getPgClient(c, false)
+  let updated: PreparedVersionRow | undefined
   try {
     await pgClient.query('BEGIN')
     await pgClient.query(`SELECT set_config('capgo.prepare_reupload_reset', 'on', true)`)
@@ -105,13 +106,7 @@ async function updateVersionForReupload(
       values,
     )
     await pgClient.query('COMMIT')
-    const updated = result.rows[0]
-    if (!updated)
-      throw simpleError('cannot_prepare_upload', 'Cannot update bundle version for upload', { versionId })
-    return {
-      ...updated,
-      id: Number(updated.id),
-    }
+    updated = result.rows[0]
   }
   catch (error) {
     await pgClient.query('ROLLBACK').catch(() => undefined)
@@ -120,6 +115,12 @@ async function updateVersionForReupload(
   }
   finally {
     await closeClient(c, pgClient)
+  }
+  if (!updated)
+    throw simpleError('cannot_prepare_upload', 'Cannot update bundle version for upload', { versionId })
+  return {
+    ...updated,
+    id: Number(updated.id),
   }
 }
 
