@@ -78,6 +78,7 @@ describe('moveObjectsWithPrefixToTrash', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.unstubAllGlobals()
+    setMakeRequestAvailable(true)
     copyObject.mockImplementation(async () => {})
     deleteObject.mockImplementation(async () => {})
     statObject.mockImplementation(async (key: string) => {

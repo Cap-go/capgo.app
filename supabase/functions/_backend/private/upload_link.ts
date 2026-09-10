@@ -70,7 +70,13 @@ app.post('/', middlewareKey(), async (c) => {
       const exist = await s3.checkIfExist(c, filePath)
       if (exist)
         throw simpleError('error_already_exist', 'Error already exist', { exist })
+    })
 
+    const url = await s3.getUploadUrl(c, filePath)
+    if (!url)
+      throw simpleError('cannot_get_upload_link', 'Cannot get upload link')
+
+    await withR2PathCoordinationLock(pgPool, filePath, async () => {
       const { error: changeError } = await supabaseApikey(c, capgkey)
         .from('app_versions')
         .update({ r2_path: filePath })
@@ -79,10 +85,6 @@ app.post('/', middlewareKey(), async (c) => {
       if (changeError)
         throw simpleError('cannot_update_supabase', 'Cannot update supabase', { changeError })
     })
-
-    const url = await s3.getUploadUrl(c, filePath)
-    if (!url)
-      throw simpleError('cannot_get_upload_link', 'Cannot get upload link')
 
     await sendEventToTracking(c, {
       channel: 'upload-get-link',

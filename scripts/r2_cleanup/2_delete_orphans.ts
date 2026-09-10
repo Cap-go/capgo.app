@@ -176,12 +176,12 @@ async function processKey(target: TrashProcessTarget): Promise<void> {
 
       if (!normalizedS3EtagsMatch(discoveryEtag, sourceEtag)) {
         console.warn(`Skipped trash for ${key}: live object etag changed since discovery`)
-        totalProcessed += 1
+        totalSkippedChanged += 1
         return
       }
       if (sourceLastModified.getTime() !== discoveryLastModified.getTime()) {
         console.warn(`Skipped trash for ${key}: live object lastModified changed since discovery`)
-        totalProcessed += 1
+        totalSkippedChanged += 1
         return
       }
 
