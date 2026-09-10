@@ -3,6 +3,15 @@ import { describe, expect, it } from 'vitest'
 
 const mockupSource = readFileSync(new URL('../src/components/dashboard/ChannelDefaultRoutingMockup.vue', import.meta.url), 'utf8')
 
+function expectSourceOrder(source: string, markers: string[]) {
+  let previousIndex = -1
+  for (const marker of markers) {
+    const index = source.indexOf(marker, previousIndex + 1)
+    expect(index, `Expected source marker after previous marker: ${marker}`).toBeGreaterThan(previousIndex)
+    previousIndex = index
+  }
+}
+
 function sourceBetween(start: string, end: string) {
   const startIndex = mockupSource.indexOf(start)
   const endIndex = mockupSource.indexOf(end, startIndex)
@@ -73,5 +82,24 @@ describe('channel default routing animation', () => {
     expect(embeddedPositions).toContain('.cr-page-embedded .cr-channels-label {')
     expect(embeddedPositions).toContain('.cr-page-embedded .cr-channel-node {')
     expect(embeddedPositions).toContain('width: min(12rem, calc(33.333% - 0.75rem));')
+  })
+
+  it.concurrent('rebuilds rendered motion paths after a debounced resize and cleans up observers', () => {
+    expect(mockupSource).toContain('let resizeObserver: ResizeObserver | null = null')
+    expect(mockupSource).toContain('let resizeAnimationFrame: number | null = null')
+    expect(mockupSource).toContain('function refreshAnimationAfterResize()')
+    expect(mockupSource).toContain('window.cancelAnimationFrame(resizeAnimationFrame)')
+    expect(mockupSource).toContain('window.requestAnimationFrame(() => {')
+    expect(mockupSource).toContain('resizeObserver = new ResizeObserver(refreshAnimationAfterResize)')
+    expect(mockupSource).toContain('resizeObserver.observe(rootEl.value)')
+    expect(mockupSource).toContain('resizeObserver?.disconnect()')
+
+    const createAnimation = sourceBetween('function createAnimation()', 'function refreshAnimationAfterResize()')
+    expectSourceOrder(createAnimation, [
+      'timeline?.kill()',
+      'media?.revert()',
+      'const root = rootEl.value',
+      'media = gsap.matchMedia()',
+    ])
   })
 })

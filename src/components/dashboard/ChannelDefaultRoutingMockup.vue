@@ -26,6 +26,8 @@ const prefersReducedMotion = ref(false)
 
 let timeline: gsap.core.Timeline | null = null
 let media: gsap.MatchMedia | null = null
+let resizeObserver: ResizeObserver | null = null
+let resizeAnimationFrame: number | null = null
 
 function element<T extends Element>(root: HTMLElement, selector: string): T | null {
   return root.querySelector<T>(selector)
@@ -248,6 +250,11 @@ function buildTimeline(root: HTMLElement) {
 }
 
 function createAnimation() {
+  timeline?.kill()
+  media?.revert()
+  timeline = null
+  media = null
+
   const root = rootEl.value
   if (!root)
     return
@@ -269,6 +276,15 @@ function createAnimation() {
   })
 }
 
+function refreshAnimationAfterResize() {
+  if (resizeAnimationFrame !== null)
+    window.cancelAnimationFrame(resizeAnimationFrame)
+  resizeAnimationFrame = window.requestAnimationFrame(() => {
+    resizeAnimationFrame = null
+    createAnimation()
+  })
+}
+
 function replay() {
   timeline?.restart()
 }
@@ -276,9 +292,16 @@ function replay() {
 onMounted(async () => {
   await nextTick()
   createAnimation()
+  if (rootEl.value) {
+    resizeObserver = new ResizeObserver(refreshAnimationAfterResize)
+    resizeObserver.observe(rootEl.value)
+  }
 })
 
 onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  if (resizeAnimationFrame !== null)
+    window.cancelAnimationFrame(resizeAnimationFrame)
   timeline?.kill()
   media?.revert()
   timeline = null

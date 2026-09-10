@@ -204,8 +204,9 @@ const reportedSetupSource = ref<'manual' | 'cli' | 'mcp' | 'ai' | null>(null)
 const flowStep = ref<OnboardingFlowStep>('details')
 const appDetailsStep = ref<AppDetailsStep>('name')
 const setupStage = ref<SetupStage>('cli')
-const showSetupBackButton = computed(() => newChannelTreatment.value
-  && (flowStep.value === 'setup' || flowStep.value === 'install')
+const showSetupBackButton = computed(() => props.preOrg
+  && newChannelTreatment.value
+  && flowStep.value === 'setup'
   && (setupStage.value === 'channel-create' || setupStage.value === 'cli'))
 const showLanguageSelector = computed(() => (
   (props.preOrg && !createdApp.value)
@@ -2026,12 +2027,16 @@ function resolveSetupStage(
 }
 
 function reconcileSetupStageWithChannelAssignment() {
-  if (!createdApp.value || (flowStep.value !== 'setup' && flowStep.value !== 'install'))
+  if (
+    !createdApp.value
+    || (flowStep.value !== 'setup' && flowStep.value !== 'install')
+    || onboardingABTestsPending.value
+    || newChannelTreatment.value
+  ) {
     return
+  }
 
-  const nextStage = resolveSetupStage()
-  if (nextStage !== setupStage.value)
-    setSetupStage(nextStage)
+  setSetupStage('cli')
 }
 
 function setSetupStage(nextStage: SetupStage) {

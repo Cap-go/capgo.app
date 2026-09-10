@@ -55,10 +55,15 @@ describe('channel creation onboarding', () => {
     expect(componentSource).toContain(`emit('continue')`)
     expect(componentSource).toContain(`.eq('app_id', props.appId)`)
     expect(componentSource).toContain(`.eq('name', normalizedName)`)
+    expect(componentSource.match(/\.eq\('public', true\)/g)).toHaveLength(2)
     expect(componentSource).toContain('.maybeSingle()')
     expect(componentSource).toContain(`const allowSelfAssign = ref(true)`)
     expect(componentSource).toContain(`absolute left-3.5 top-1/2 z-10`)
     expect(componentSource).toContain(`mt-1 block min-h-10 text-xs`)
+    expectSourceOrder(componentSource, [
+      `<p v-if="submitError"`,
+      `<p v-else-if="!hasRequiredPermissions"`,
+    ])
   })
 
   it.concurrent('concludes the four-part story in user-facing copy', () => {

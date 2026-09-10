@@ -203,7 +203,11 @@ function copyMappedFields(
     ) {
       target[field.key] = value
     }
-    else if (field.type === 'integer' && isFrontendOnboardingVersionLabel(value)) {
+    else if (
+      field.type === 'integer'
+      && field.key === 'onboarding_version'
+      && isFrontendOnboardingVersionLabel(value)
+    ) {
       target[field.key] = value
     }
   }

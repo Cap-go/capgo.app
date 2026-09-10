@@ -471,7 +471,9 @@ describe('app onboarding progress analytics integration', () => {
     expect(assignmentStageReconciliation).toContain('!newChannelTreatment.value && !onboardingABTestsPending.value')
     expect(assignmentStageReconciliation).toContain('function reconcileSetupStageWithChannelAssignment()')
     expect(assignmentStageReconciliation).toContain(`flowStep.value !== 'setup' && flowStep.value !== 'install'`)
-    expect(assignmentStageReconciliation).toContain('const nextStage = resolveSetupStage()')
+    expect(assignmentStageReconciliation).toContain('onboardingABTestsPending.value')
+    expect(assignmentStageReconciliation).toContain('newChannelTreatment.value')
+    expect(assignmentStageReconciliation).toContain(`setSetupStage('cli')`)
 
     const stepList = sourceBetween('const appOnboardingSteps = computed', 'const onboardingProgressSteps = computed')
     expect(stepList).not.toContain(`{ id: 'channels'`)
@@ -490,6 +492,8 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain('v-for="(entry, index) in onboardingProgressSteps"')
     expect(onboardingSource).toContain(`:aria-current="currentProgressStepId === entry.id ? 'step' : undefined"`)
     expect(onboardingSource).toContain(`newChannelTreatment.value`)
+    expect(onboardingSource).toContain(`const showSetupBackButton = computed(() => props.preOrg`)
+    expect(onboardingSource).toContain(`&& flowStep.value === 'setup'`)
     expect(onboardingSource).toContain(`data-test="onboarding-setup-back"`)
     expect(onboardingSource).toContain(`@click="goBackFromSetupStage"`)
 

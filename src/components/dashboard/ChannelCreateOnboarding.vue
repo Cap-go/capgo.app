@@ -71,6 +71,7 @@ async function loadExistingChannel() {
     .from('channels')
     .select('name, public, allow_device_self_set')
     .eq('app_id', props.appId)
+    .eq('public', true)
     .order('created_at', { ascending: true })
     .limit(1)
     .maybeSingle()
@@ -126,6 +127,7 @@ async function createChannel() {
       .select('name, public, allow_device_self_set')
       .eq('app_id', props.appId)
       .eq('name', normalizedName)
+      .eq('public', true)
       .maybeSingle()
 
     if (existingError)
@@ -381,11 +383,11 @@ onMounted(() => {
             </span>
           </label>
 
-          <p v-if="!hasRequiredPermissions" class="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-200" role="alert">
-            {{ t('no-permission') }}
-          </p>
-          <p v-else-if="submitError" class="mt-4 rounded-xl border border-red-200 bg-red-50 px-3.5 py-3 text-sm text-red-700 dark:border-red-400/20 dark:bg-red-400/10 dark:text-red-200" role="alert">
+          <p v-if="submitError" class="mt-4 rounded-xl border border-red-200 bg-red-50 px-3.5 py-3 text-sm text-red-700 dark:border-red-400/20 dark:bg-red-400/10 dark:text-red-200" role="alert">
             {{ submitError }}
+          </p>
+          <p v-else-if="!hasRequiredPermissions" class="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-200" role="alert">
+            {{ t('no-permission') }}
           </p>
         </div>
 

@@ -36,6 +36,8 @@ const setChannelCall = `await CapacitorUpdater.setChannel({ channel: 'beta', tri
 const selfAssignPolicy = `allow_device_self_set: true`
 let timeline: gsap.core.Timeline | null = null
 let media: gsap.MatchMedia | null = null
+let resizeObserver: ResizeObserver | null = null
+let resizeAnimationFrame: number | null = null
 
 gsap.registerPlugin(MotionPathPlugin)
 
@@ -345,6 +347,8 @@ function buildTimeline() {
 function createAnimation() {
   timeline?.kill()
   media?.revert()
+  timeline = null
+  media = null
   media = gsap.matchMedia()
 
   media.add('(prefers-reduced-motion: reduce)', () => {
@@ -355,6 +359,15 @@ function createAnimation() {
   media.add('(prefers-reduced-motion: no-preference)', () => {
     reducedMotion.value = false
     timeline = buildTimeline()
+  })
+}
+
+function refreshAnimationAfterResize() {
+  if (resizeAnimationFrame !== null)
+    window.cancelAnimationFrame(resizeAnimationFrame)
+  resizeAnimationFrame = window.requestAnimationFrame(() => {
+    resizeAnimationFrame = null
+    createAnimation()
   })
 }
 
@@ -371,11 +384,20 @@ function replay() {
 onMounted(async () => {
   await nextTick()
   createAnimation()
+  if (root.value) {
+    resizeObserver = new ResizeObserver(refreshAnimationAfterResize)
+    resizeObserver.observe(root.value)
+  }
 })
 
 onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  if (resizeAnimationFrame !== null)
+    window.cancelAnimationFrame(resizeAnimationFrame)
   timeline?.kill()
   media?.revert()
+  timeline = null
+  media = null
 })
 </script>
 

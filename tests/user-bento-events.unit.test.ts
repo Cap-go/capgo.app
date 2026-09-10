@@ -75,6 +75,17 @@ describe('cli user Bento event registry', () => {
     })?.details.onboarding_version).toBe(onboardingVersion)
   })
 
+  it('does not accept onboarding version labels for other integer fields', () => {
+    expect(buildMappedUserBentoEvent({
+      sourceEvent: 'CLI Command Invoked',
+      observedAt: '2026-09-10T10:00:00.000Z',
+      tags: { flags_count: '5.E' },
+    })?.details).toEqual({
+      observed_at: '2026-09-10T10:00:00.000Z',
+      source_event: 'CLI Command Invoked',
+    })
+  })
+
   it('drops malformed onboarding attempt IDs', () => {
     expect(buildMappedUserBentoEvent({
       sourceEvent: 'onboarding_resume_restarted',
