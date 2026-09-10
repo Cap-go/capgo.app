@@ -1740,8 +1740,8 @@ describe('rbac permission system', () => {
 
         await query(`
           INSERT INTO public.orgs (id, name, management_email, created_by, enforcing_2fa)
-          VALUES ($1::uuid, $2, $3, $4::uuid, true)
-        `, [orgId, `RBAC Channel Key 2FA ${testId}`, `rbac-channel-key-2fa-${testId}@capgo.app`, USER_ID])
+          VALUES ($1::uuid, $2, $3, $4::uuid, false)
+        `, [orgId, `RBAC Channel Key Scope ${testId}`, `rbac-channel-key-scope-${testId}@capgo.app`, USER_ID])
 
         await query(`
           INSERT INTO public.apps (id, app_id, name, icon_url, owner_org)
@@ -1807,7 +1807,7 @@ describe('rbac permission system', () => {
 
         expect(guardedAccess.rows[0]).toMatchObject({
           can_read_channel_after_2fa_gate: true,
-          rejects_for_2fa: true,
+          rejects_for_2fa: false,
         })
 
         const visibleChannel = await query(

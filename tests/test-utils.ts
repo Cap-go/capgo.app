@@ -551,8 +551,10 @@ export async function fetchTestRequest(
   url: string,
   options?: FetchTestRequestOptions,
 ): Promise<Response> {
-  const { retryUnsafe = false, ...fetchOptions } = options ?? {}
-  const maxAttempts = isReplaySafeHttpMethod(fetchOptions.method) || retryUnsafe ? 3 : 1
+  const { retryUnsafe: _retryUnsafe = false, ...fetchOptions } = options ?? {}
+  // Transient gateway 502/503 means the upstream never handled the request, so
+  // retry even for POST/PUT/PATCH in tests (plugin warm paths, /updates, etc.).
+  const maxAttempts = 3
   let lastResponse: Response | undefined
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const response = await fetch(url, fetchOptions)

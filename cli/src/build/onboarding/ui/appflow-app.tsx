@@ -581,12 +581,17 @@ function renderBody(view: StepView, busy: boolean, advance: (value?: string, tex
   if (view.kind === 'choice') {
     const options = (view.options ?? []).map(o => ({ label: o.note ? `${o.label}  (${o.note})` : o.label, value: o.value }))
     return (
-      <Select
-        key={step}
-        options={options}
-        visibleOptionCount={Math.min(Math.max(options.length, 1), 10)}
-        onChange={value => advance(value)}
-      />
+      <Box flexDirection="column">
+        {options.map(o => (
+          <Text key={o.value}>{o.label}</Text>
+        ))}
+        <Select
+          key={step}
+          options={options}
+          visibleOptionCount={Math.min(Math.max(options.length, 1), 10)}
+          onChange={value => advance(value)}
+        />
+      </Box>
     )
   }
   if (view.kind === 'input') {
