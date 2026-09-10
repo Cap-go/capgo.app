@@ -113,7 +113,7 @@ BEGIN
       AND d.device_id = du.device_id
     WHERE du.timestamp >= p_period_start
       AND du.timestamp < p_period_end
-  )
+  ),
   daily_counts AS (
     SELECT
       daily_usage.usage_date AS date,
