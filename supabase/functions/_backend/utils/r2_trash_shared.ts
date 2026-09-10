@@ -86,17 +86,26 @@ export type S3ObjectCopyPreserve = {
   metadata?: Record<string, string>
   contentType?: string
   cacheControl?: string
+  contentEncoding?: string
+  contentDisposition?: string
+  expires?: Date
 }
 
 export function buildAwsTrashCopyPreserveFromHead(head: {
   Metadata?: Record<string, string>
   ContentType?: string
   CacheControl?: string
+  ContentEncoding?: string
+  ContentDisposition?: string
+  Expires?: Date
 }): S3ObjectCopyPreserve {
   return {
     metadata: head.Metadata,
     contentType: head.ContentType,
     cacheControl: head.CacheControl,
+    contentEncoding: head.ContentEncoding,
+    contentDisposition: head.ContentDisposition,
+    expires: head.Expires,
   }
 }
 
@@ -110,6 +119,12 @@ export function applyR2TrashCopyMetadataHeaders(
     headers.set('Content-Type', preserve.contentType)
   if (preserve?.cacheControl)
     headers.set('Cache-Control', preserve.cacheControl)
+  if (preserve?.contentEncoding)
+    headers.set('Content-Encoding', preserve.contentEncoding)
+  if (preserve?.contentDisposition)
+    headers.set('Content-Disposition', preserve.contentDisposition)
+  if (preserve?.expires)
+    headers.set('Expires', preserve.expires.toUTCString())
   const merged = mergeTrashCopyMetadata(preserve?.metadata, sourceLastModified)
   for (const [key, value] of Object.entries(merged))
     headers.set(`x-amz-meta-${key}`, value)
@@ -132,12 +147,17 @@ async function headS3LiteObjectCopyPreserve(
       if (key.startsWith('x-amz-meta-'))
         metadata[key.slice('x-amz-meta-'.length)] = value
     })
+    const expiresHeader = response.headers.get('expires')
     const preserve: S3ObjectCopyPreserve = {
       metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
       contentType: response.headers.get('content-type') ?? undefined,
       cacheControl: response.headers.get('cache-control') ?? undefined,
+      contentEncoding: response.headers.get('content-encoding') ?? undefined,
+      contentDisposition: response.headers.get('content-disposition') ?? undefined,
+      expires: expiresHeader ? new Date(expiresHeader) : undefined,
     }
-    if (!preserve.metadata && !preserve.contentType && !preserve.cacheControl)
+    if (!preserve.metadata && !preserve.contentType && !preserve.cacheControl
+      && !preserve.contentEncoding && !preserve.contentDisposition && !preserve.expires)
       return undefined
     return preserve
   }
@@ -419,13 +439,10 @@ function trashDestinationMatchesSource(
 function guardedCopyDestinationMatchesSource(
   destinationStat: { etag?: string, lastModified?: Date },
   sourceEtag: string,
-  sourceLastModified?: Date,
+  _sourceLastModified?: Date,
 ): boolean {
-  if (!normalizedS3EtagsMatch(destinationStat.etag, sourceEtag))
-    return false
-  if (!sourceLastModified || !destinationStat.lastModified)
-    return false
-  return destinationStat.lastModified.getTime() === sourceLastModified.getTime()
+  // Owner-copy destinations get a fresh Last-Modified; match etag only for resume.
+  return normalizedS3EtagsMatch(destinationStat.etag, sourceEtag)
 }
 
 /**

@@ -3,8 +3,9 @@ import type { _Object, ListObjectsV2CommandOutput } from '@aws-sdk/client-s3'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'// supabase.types.ts'
 import { CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { createClient } from '@supabase/supabase-js'
+import { Pool } from 'pg'
 import { permanentDeleteAwsLiveKey } from './r2_cleanup/aws_permanent_delete.ts'
-import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, ConcurrencyLimiter, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, extractR2TrashSourceVersionMarker, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, mergeTrashCopyMetadata, normalizedS3EtagsMatch, parseLegacyAppsBundleKey, parseS3ListingLastModified, quoteS3CopySourceIfMatchEtag, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
+import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, buildAwsTrashCopyPreserveFromHead, ConcurrencyLimiter, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, extractR2TrashSourceVersionMarker, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, mergeTrashCopyMetadata, normalizedS3EtagsMatch, parseLegacyAppsBundleKey, parseS3ListingLastModified, quoteS3CopySourceIfMatchEtag, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode, resolveTrashDestinationKey, withOrphanR2DeleteClaim } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const MAGIC_TO_DELETE = './tmp/magic_to_delete6.txt'
@@ -158,6 +159,7 @@ async function main() {
     }
 
     const s3 = await initS3()
+    const claimPool = createDeleteClaimPool()
 
     if (deleteMode === 'permanent')
       console.warn('WARNING: ALLOW_PERMANENT_R2_DELETE=true — permanently deleting objects')
@@ -190,21 +192,43 @@ async function main() {
         return 'skipped'
       }
 
-      const outcome = await permanentDeleteAwsLiveKey(s3, S3_BUCKET, key, candidateEtag, candidateLastModified)
-      switch (outcome) {
-        case 'deleted':
-          return 'ok'
-        case 'skipped_missing':
+      const claimClient = await claimPool.connect()
+      try {
+        const claimResult = await withOrphanR2DeleteClaim(claimClient, key, async () => {
+          const outcome = await permanentDeleteAwsLiveKey(s3, S3_BUCKET, key, candidateEtag, candidateLastModified)
+          switch (outcome) {
+            case 'deleted':
+              return 'deleted'
+            case 'skipped_missing':
+              return 'skipped_missing'
+            case 'skipped_changed':
+              return 'skipped_changed'
+            case 'failed':
+              return 'failed'
+          }
+        })
+        if (claimResult === 'skipped_referenced') {
+          console.warn(`Skipped ${key}: app_versions row appeared since discovery`)
           return 'skipped'
-        case 'skipped_changed':
-          console.warn(`Skipped ${key}: live object changed since discovery`)
-          return 'skipped'
-        case 'failed':
-          if (!candidateLastModified)
-            console.warn(`Failed ${key}: missing discovery Last-Modified; source retained`)
-          else
-            console.warn(`Failed ${key}: permanent delete guards failed; source retained`)
-          return 'failed'
+        }
+        switch (claimResult) {
+          case 'deleted':
+            return 'ok'
+          case 'skipped_missing':
+            return 'skipped'
+          case 'skipped_changed':
+            console.warn(`Skipped ${key}: live object changed since discovery`)
+            return 'skipped'
+          case 'failed':
+            if (!candidateLastModified)
+              console.warn(`Failed ${key}: missing discovery Last-Modified; source retained`)
+            else
+              console.warn(`Failed ${key}: permanent delete guards failed; source retained`)
+            return 'failed'
+        }
+      }
+      finally {
+        claimClient.release()
       }
     }
 
@@ -226,11 +250,21 @@ async function main() {
       let sourceEtag: string | undefined
       let sourceLastModified: Date | undefined
       let sourceMetadata: Record<string, string> | undefined
+      let sourceContentType: string | undefined
+      let sourceCacheControl: string | undefined
+      let sourceContentEncoding: string | undefined
+      let sourceContentDisposition: string | undefined
+      let sourceExpires: Date | undefined
       try {
         const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
         sourceEtag = head.ETag
         sourceLastModified = head.LastModified
         sourceMetadata = head.Metadata
+        sourceContentType = head.ContentType
+        sourceCacheControl = head.CacheControl
+        sourceContentEncoding = head.ContentEncoding
+        sourceContentDisposition = head.ContentDisposition
+        sourceExpires = head.Expires
         if (!normalizedS3EtagsMatch(candidateEtag, sourceEtag)) {
           console.warn(`Skipped ${key}: live object etag changed since discovery`)
           return 'skipped'
@@ -272,13 +306,26 @@ async function main() {
           trashKey,
           sourceEtag,
           async (destinationKey) => {
+            const copyPreserve = buildAwsTrashCopyPreserveFromHead({
+              Metadata: sourceMetadata,
+              ContentType: sourceContentType,
+              CacheControl: sourceCacheControl,
+              ContentEncoding: sourceContentEncoding,
+              ContentDisposition: sourceContentDisposition,
+              Expires: sourceExpires,
+            })
             const copyCommand = new CopyObjectCommand({
               Bucket: S3_BUCKET,
               CopySource: encodeS3CopySource(S3_BUCKET, key),
               CopySourceIfMatch: quoteS3CopySourceIfMatchEtag(sourceEtag),
               Key: destinationKey,
-              Metadata: mergeTrashCopyMetadata(sourceMetadata, sourceLastModified),
+              Metadata: mergeTrashCopyMetadata(copyPreserve.metadata, sourceLastModified),
               MetadataDirective: 'REPLACE',
+              ContentType: copyPreserve.contentType,
+              CacheControl: copyPreserve.cacheControl,
+              ContentEncoding: copyPreserve.contentEncoding,
+              ContentDisposition: copyPreserve.contentDisposition,
+              Expires: copyPreserve.expires,
             })
             applyAwsCopyDestinationIfNoneMatchMiddleware(copyCommand.middlewareStack)
             await s3.send(copyCommand)
@@ -325,14 +372,21 @@ async function main() {
         return 'skipped'
       }
 
+      const claimClient = await claimPool.connect()
       try {
-        const deleteCommand = new DeleteObjectCommand({
-          Bucket: S3_BUCKET,
-          Key: key,
-          IfMatch: sourceEtag,
+        const claimResult = await withOrphanR2DeleteClaim(claimClient, key, async () => {
+          const deleteCommand = new DeleteObjectCommand({
+            Bucket: S3_BUCKET,
+            Key: key,
+            IfMatch: sourceEtag,
+          })
+          applyR2ConditionalDeleteMiddleware(deleteCommand.middlewareStack, { etag: sourceEtag, lastModified: sourceLastModified })
+          await s3.send(deleteCommand)
         })
-        applyR2ConditionalDeleteMiddleware(deleteCommand.middlewareStack, { etag: sourceEtag, lastModified: sourceLastModified })
-        await s3.send(deleteCommand)
+        if (claimResult === 'skipped_referenced') {
+          console.warn(`Skipped delete for ${key}: app_versions row appeared after trash copy`)
+          return 'skipped'
+        }
         return 'ok'
       }
       catch (deleteError) {
@@ -344,6 +398,9 @@ async function main() {
         }
         console.error(`Copied ${key} to trash but failed to delete source:`, deleteError)
         return 'failed'
+      }
+      finally {
+        claimClient.release()
       }
     }
 
@@ -361,6 +418,8 @@ async function main() {
         errorCount += results.filter(result => result === 'failed').length
       }
     }
+
+    await claimPool.end()
 
     if (errorCount > 0)
       process.exit(1)
@@ -500,6 +559,17 @@ async function main() {
 
 function getEnv(s: string) {
   return process.env[s] ?? ''
+}
+
+function createDeleteClaimPool(): Pool {
+  const dbUrl = process.env.MAIN_SUPABASE_DB_URL ?? process.env.SUPABASE_DB_URL
+  if (!dbUrl)
+    throw new Error('SUPABASE_DB_URL or MAIN_SUPABASE_DB_URL is required for orphan delete claims')
+  return new Pool({
+    connectionString: dbUrl,
+    max: DELETE_CONCURRENCY,
+    idleTimeoutMillis: 2000,
+  })
 }
 
 async function listAllObjectsInFolder(s3: S3Client, path: string, bucketName: string | null = null) {

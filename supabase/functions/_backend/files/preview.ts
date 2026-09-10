@@ -319,7 +319,7 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
         .select('id,name,checksum,session_key,manifest_count,r2_path,external_url,deleted,deleted_at')
         .eq('app_id', actualAppId)
         .eq('id', previewVersionId)
-        .eq('deleted', false)
+        .or('deleted.is.null,deleted.eq.false')
         .is('deleted_at', null)
         .single()
     : await supabase
@@ -327,7 +327,7 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
         .select('id,session_key,manifest_count,deleted,deleted_at')
         .eq('app_id', actualAppId)
         .eq('id', previewVersionId)
-        .eq('deleted', false)
+        .or('deleted.is.null,deleted.eq.false')
         .is('deleted_at', null)
         .single()
 

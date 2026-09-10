@@ -53,7 +53,7 @@ function requestHostname(request: Request): string {
 
 function buildWorkersCacheKey(request: Request): string | null {
   const url = new URL(request.url)
-  if (isPreviewSubdomain(requestHostname(request)))
+  if (isPreviewSubdomain(requestHostname(request).toLowerCase()))
     return null
 
   if (isCacheableAttachmentRead(request))
@@ -64,7 +64,7 @@ function buildWorkersCacheKey(request: Request): string | null {
 
 // Middleware to route preview subdomain requests
 app.use('/*', async (c, next) => {
-  const hostname = c.req.header('host') || ''
+  const hostname = (c.req.header('host') || '').split(':')[0].toLowerCase()
   if (isPreviewSubdomain(hostname)) {
     // Handle preview requests directly within this context
     return handlePreviewRequest(c)

@@ -919,13 +919,14 @@ describe('copyS3LiteObjectIfMatch', () => {
     const key = 'apps/user-1/com.demo.app/segment/v1.0.0.zip'
     const destinationKey = key.replace('user-1', 'user-2')
     const etag = '"same"'
-    const lastModified = new Date('2024-01-15T10:30:00.000Z')
+    const sourceLastModified = new Date('2024-01-15T10:30:00.000Z')
+    const destinationLastModified = new Date('2024-01-16T12:00:00.000Z')
     const makeRequest = vi.fn(async () => {
       throw { statusCode: 412, code: 'PreconditionFailed' }
     })
     const statObject = vi.fn(async (objectKey: string) => {
       if (objectKey === destinationKey)
-        return { etag, lastModified }
+        return { etag, lastModified: destinationLastModified }
       throw { name: 'NotFound' }
     })
 
@@ -935,7 +936,7 @@ describe('copyS3LiteObjectIfMatch', () => {
       destinationKey,
       etag,
       'capgo',
-      lastModified,
+      sourceLastModified,
     )).resolves.toBeUndefined()
 
     expect(makeRequest).toHaveBeenCalledOnce()
