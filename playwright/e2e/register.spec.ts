@@ -43,6 +43,7 @@ async function continuePastChannelOnboardingIfShown(page: Page) {
   const continueAfterChannel = page.locator('[data-test="channel-create-continue"]')
   await expect(createChannel.or(continueAfterChannel)).toBeVisible()
   if (await createChannel.isVisible()) {
+    await page.locator('[data-test="channel-create-name"]').fill('production')
     await createChannel.click()
     await expect(continueAfterChannel).toBeVisible()
   }
