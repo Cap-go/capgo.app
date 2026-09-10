@@ -1,9 +1,10 @@
 import { Hono } from 'hono'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { encodeS3LiteCopySourceKey, formatR2ConditionalDeleteLastModified } from '../scripts/r2_trash_utils.ts'
+import { encodeS3LiteCopySourceKey, formatR2ConditionalDeleteLastModified, formatR2TrashSourceVersionMarker } from '../scripts/r2_trash_utils.ts'
 
 const R2_TRASH_PREFIX = 'deleted-after-7-days/'
-const DEFAULT_ETAG = '"test-etag"'
+const DEFAULT_ETAG = 'test-etag'
+const QUOTED_DEFAULT_ETAG = `"${DEFAULT_ETAG}"`
 const DEFAULT_LAST_MODIFIED = new Date('2024-01-15T10:30:00.000Z')
 
 function stat(etag = DEFAULT_ETAG, lastModified = DEFAULT_LAST_MODIFIED) {
@@ -109,13 +110,13 @@ describe('moveObjectsWithPrefixToTrash', () => {
     const copyCall = makeRequestCalls('PUT')[0]![0]!
     expectDefaultTrashDestination(copyCall.objectName, liveKey)
     expect(copyCall.headers?.get('x-amz-copy-source')).toBe(`capgo/${encodeS3LiteCopySourceKey(liveKey)}`)
-    expect(copyCall.headers?.get('x-amz-copy-source-if-match')).toBe(DEFAULT_ETAG)
+    expect(copyCall.headers?.get('x-amz-copy-source-if-match')).toBe(QUOTED_DEFAULT_ETAG)
     expect(copyCall.headers?.get('cf-copy-destination-if-none-match')).toBe('*')
     const deleteCall = makeRequestCalls('DELETE')[0]![0]!
     expect(deleteCall.objectName).toBe(liveKey)
     expect(deleteCall.headers?.get('x-amz-if-match-last-modified-time'))
       .toBe(formatR2ConditionalDeleteLastModified(DEFAULT_LAST_MODIFIED))
-    expect(deleteCall.headers?.get('If-Match')).toBe(DEFAULT_ETAG)
+    expect(deleteCall.headers?.get('If-Match')).toBe(QUOTED_DEFAULT_ETAG)
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
@@ -254,7 +255,7 @@ describe('moveObjectsWithPrefixToTrash', () => {
   it('retains source when Last-Modified changes after copy with the same etag', async () => {
     const prefix = 'orgs/org-1/apps/com.test.app/'
     const key = `${prefix}same-etag-new-time.zip`
-    const etag = DEFAULT_ETAG
+    const etag = QUOTED_DEFAULT_ETAG
 
     listObjects.mockImplementation(async function* () {
       yield { key }
@@ -325,6 +326,36 @@ describe('moveObjectToTrash', () => {
 
     expect(await s3.moveObjectToTrash(c, liveKey)).toBe(false)
     expect(deleteObject).not.toHaveBeenCalled()
+  })
+
+  it('reuses the default trash key when destination etag and source Last-Modified marker match', async () => {
+    const liveKey = 'orgs/org-1/apps/com.test.app/1.0.0.zip'
+    const defaultTrash = `${R2_TRASH_PREFIX}${liveKey}`
+    const marker = formatR2TrashSourceVersionMarker(DEFAULT_LAST_MODIFIED)
+    const copyDestinations: string[] = []
+
+    makeRequest.mockImplementation(async (options: { method?: string, objectName?: string }) => {
+      if (options.method === 'PUT' && options.objectName)
+        copyDestinations.push(options.objectName)
+      if (options.method === 'HEAD' && options.objectName === defaultTrash) {
+        return new Response(null, {
+          status: 200,
+          headers: { 'x-amz-meta-capgo-source-last-modified': marker },
+        })
+      }
+      return new Response(null, { status: 204 })
+    })
+    statObject.mockImplementation(async (key: string) => {
+      if (key === liveKey)
+        return stat(DEFAULT_ETAG, DEFAULT_LAST_MODIFIED)
+      if (key === defaultTrash)
+        return stat(QUOTED_DEFAULT_ETAG, new Date('2099-01-01T00:00:00.000Z'))
+      throw { statusCode: 404, code: 'NotFound' }
+    })
+
+    const c = await makeContext()
+    expect(await s3.moveObjectToTrash(c, liveKey)).toBe(true)
+    expect(copyDestinations).toEqual([defaultTrash])
   })
 
   it('allocates a unique trash destination when the same live key is deleted twice', async () => {

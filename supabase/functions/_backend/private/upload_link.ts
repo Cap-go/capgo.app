@@ -64,25 +64,12 @@ app.post('/', middlewareKey(), async (c) => {
 
   const pgPool = getPgClient(c)
   try {
-    return await withR2PathCoordinationLock(pgPool, filePath, async () => {
+    await withR2PathCoordinationLock(pgPool, filePath, async () => {
       cloudlog({ requestId: c.get('requestId'), message: 's3.checkIfExist', filePath })
 
       const exist = await s3.checkIfExist(c, filePath)
       if (exist)
         throw simpleError('error_already_exist', 'Error already exist', { exist })
-
-      const url = await s3.getUploadUrl(c, filePath)
-      if (!url)
-        throw simpleError('cannot_get_upload_link', 'Cannot get upload link')
-
-      await sendEventToTracking(c, {
-        channel: 'upload-get-link',
-        event: 'Upload via single file',
-        user_id: app.owner_org,
-        groups: { organization: app.owner_org },
-      })
-
-      cloudlog({ requestId: c.get('requestId'), message: 'upload link generated', filePath })
 
       const { error: changeError } = await supabaseApikey(c, capgkey)
         .from('app_versions')
@@ -91,9 +78,22 @@ app.post('/', middlewareKey(), async (c) => {
 
       if (changeError)
         throw simpleError('cannot_update_supabase', 'Cannot update supabase', { changeError })
-
-      return c.json({ url })
     })
+
+    const url = await s3.getUploadUrl(c, filePath)
+    if (!url)
+      throw simpleError('cannot_get_upload_link', 'Cannot get upload link')
+
+    await sendEventToTracking(c, {
+      channel: 'upload-get-link',
+      event: 'Upload via single file',
+      user_id: app.owner_org,
+      groups: { organization: app.owner_org },
+    })
+
+    cloudlog({ requestId: c.get('requestId'), message: 'upload link generated', filePath })
+
+    return c.json({ url })
   }
   finally {
     await closeClient(c, pgPool)

@@ -20,6 +20,7 @@ import {
   copyS3LiteObjectIfMatch,
   moveS3LiteObjectToTrash,
   withOrphanR2DeleteClaim,
+  withR2PathCoordinationLock,
   APP_VERSION_NOT_DELETED_SQL,
   resolveOpsDeleteMode,
   resolveTrashDestinationKey,
@@ -947,10 +948,71 @@ describe('copyS3LiteObjectIfMatch', () => {
   })
 })
 
+describe('withR2PathCoordinationLock', () => {
+  it('checks out a dedicated client when given a pool', async () => {
+    const connectedClient = {
+      query: vi.fn(async () => ({ rowCount: null, rows: [] })),
+      release: vi.fn(),
+    }
+    const pool = {
+      connect: vi.fn(async () => connectedClient),
+    }
+    const run = vi.fn(async () => 'ok')
+
+    const result = await withR2PathCoordinationLock(pool, 'orgs/o/apps/a/v.zip', run)
+
+    expect(result).toBe('ok')
+    expect(pool.connect).toHaveBeenCalledOnce()
+    expect(connectedClient.release).toHaveBeenCalledOnce()
+    expect(connectedClient.query).toHaveBeenCalledWith('BEGIN')
+    expect(connectedClient.query).toHaveBeenCalledWith('COMMIT')
+  })
+
+  it('reuses a checked-out client that exposes both connect and release', async () => {
+    const client = {
+      query: vi.fn(async () => ({ rowCount: null, rows: [] })),
+      connect: vi.fn(),
+      release: vi.fn(),
+    }
+    const run = vi.fn(async () => 'ok')
+
+    const result = await withR2PathCoordinationLock(client, 'orgs/o/apps/a/v.zip', run)
+
+    expect(result).toBe('ok')
+    expect(client.connect).not.toHaveBeenCalled()
+    expect(client.release).not.toHaveBeenCalled()
+    expect(client.query).toHaveBeenCalledWith('BEGIN')
+    expect(client.query).toHaveBeenCalledWith('COMMIT')
+  })
+})
+
 describe('withOrphanR2DeleteClaim', () => {
   it('treats legacy deleted=NULL rows as live references', () => {
     expect(APP_VERSION_NOT_DELETED_SQL).toContain('IS NOT TRUE')
     expect(APP_VERSION_NOT_DELETED_SQL).not.toContain('deleted = false')
+  })
+
+  it('skips delete for legacy keys when a live version row exists with a different r2_path', async () => {
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        if (sql === 'BEGIN' || sql === 'COMMIT' || sql.includes('pg_advisory_xact_lock') || sql.includes('FROM public.apps'))
+          return { rowCount: null, rows: [] }
+        if (sql.includes('FOR UPDATE') && sql.includes('app_versions') && sql.includes('app_id = $1'))
+          return { rowCount: 1, rows: [{ r2_path: 'orgs/other/apps/com.test.app/1.0.0.zip' }] }
+        return { rowCount: 0, rows: [] }
+      }),
+      release: vi.fn(),
+    }
+    const runDelete = vi.fn(async () => 'deleted')
+
+    const result = await withOrphanR2DeleteClaim(
+      client,
+      'apps/user-1/com.test.app/channel/1.0.0.zip',
+      runDelete,
+    )
+
+    expect(result).toBe('skipped_referenced')
+    expect(runDelete).not.toHaveBeenCalled()
   })
 
   it('skips delete when app_versions already references the key under row lock', async () => {

@@ -324,7 +324,9 @@ export type PgPoolLike = {
 }
 
 function isPgPoolLike(client: PgConnectedClient | PgPoolLike): client is PgPoolLike {
+  // Checked-out Pool clients expose both connect() and release(); only treat bare pools as pools.
   return typeof (client as PgPoolLike).connect === 'function'
+    && typeof (client as PgConnectedClient).release !== 'function'
 }
 
 async function withR2PathCoordinationLockOnClient<T>(
@@ -397,7 +399,8 @@ export async function withOrphanR2DeleteClaim<T>(
       )
       if ((locked.rowCount ?? 0) > 0) {
         const row = locked.rows[0] as { r2_path: string | null }
-        if (row.r2_path === key)
+        const isLegacyKey = parseLegacyAppsBundleKey(key) !== null
+        if (isLegacyKey || row.r2_path === key)
           return 'skipped_referenced'
       }
     }
