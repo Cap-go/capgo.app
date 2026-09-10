@@ -178,11 +178,51 @@ AS $$
   END
 $$;
 
+CREATE OR REPLACE FUNCTION rbac_internal.role_binding_write_principal_allowed(
+  p_principal_type text,
+  p_principal_id uuid,
+  p_org_id uuid,
+  p_scope_type text,
+  p_app_id uuid,
+  p_channel_id uuid,
+  p_bundle_id bigint
+)
+RETURNS boolean
+LANGUAGE plpgsql
+VOLATILE
+SECURITY INVOKER
+SET search_path = ''
+AS $$
+BEGIN
+  -- Evaluate caller permission before lock_rbac_orgs; PostgreSQL does not
+  -- guarantee AND operand order across separate policy functions.
+  IF NOT rbac_internal.role_binding_caller_permission_allowed(
+    p_scope_type,
+    p_org_id,
+    p_app_id,
+    p_channel_id,
+    p_bundle_id
+  ) THEN
+    RETURN false;
+  END IF;
+
+  RETURN rbac_internal.role_binding_principal_allowed_for_org(
+    p_principal_type,
+    p_principal_id,
+    p_org_id,
+    p_scope_type
+  );
+END;
+$$;
+
 ALTER FUNCTION rbac_internal.role_binding_principal_allowed_for_org(
   text, uuid, uuid, text
 ) OWNER TO postgres;
 ALTER FUNCTION rbac_internal.role_binding_caller_permission_allowed(
   text, uuid, uuid, uuid, bigint
+) OWNER TO postgres;
+ALTER FUNCTION rbac_internal.role_binding_write_principal_allowed(
+  text, uuid, uuid, text, uuid, uuid, bigint
 ) OWNER TO postgres;
 REVOKE ALL ON FUNCTION rbac_internal.role_binding_principal_allowed_for_org(
   text, uuid, uuid, text
@@ -190,12 +230,18 @@ REVOKE ALL ON FUNCTION rbac_internal.role_binding_principal_allowed_for_org(
 REVOKE ALL ON FUNCTION rbac_internal.role_binding_caller_permission_allowed(
   text, uuid, uuid, uuid, bigint
 ) FROM PUBLIC;
+REVOKE ALL ON FUNCTION rbac_internal.role_binding_write_principal_allowed(
+  text, uuid, uuid, text, uuid, uuid, bigint
+) FROM PUBLIC;
 GRANT USAGE ON SCHEMA rbac_internal TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION rbac_internal.role_binding_principal_allowed_for_org(
   text, uuid, uuid, text
 ) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION rbac_internal.role_binding_caller_permission_allowed(
   text, uuid, uuid, uuid, bigint
+) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION rbac_internal.role_binding_write_principal_allowed(
+  text, uuid, uuid, text, uuid, uuid, bigint
 ) TO authenticated, service_role;
 
 COMMENT ON FUNCTION rbac_internal.role_binding_principal_allowed_for_org(
@@ -215,6 +261,13 @@ COMMENT ON FUNCTION rbac_internal.role_binding_caller_permission_allowed(
   'identifiers. SECURITY INVOKER so apps/channels/app_versions EXISTS checks '
   'retain verify_mfa() RLS. Mirrors role_bindings insert/update policy branches.';
 
+COMMENT ON FUNCTION rbac_internal.role_binding_write_principal_allowed(
+  text, uuid, uuid, text, uuid, uuid, bigint
+) IS
+  'RLS helper: sequential caller-permission then target-principal checks for '
+  'role_bindings INSERT/UPDATE WITH CHECK. Ensures lock_rbac_orgs is not taken '
+  'before authorization fails.';
+
 DROP FUNCTION IF EXISTS public.role_binding_principal_allowed_for_org(text, uuid, uuid, text);
 
 DROP POLICY IF EXISTS "role_bindings_insert" ON public.role_bindings;
@@ -223,18 +276,14 @@ ON public.role_bindings
 FOR INSERT
 TO authenticated
 WITH CHECK (
-  rbac_internal.role_binding_caller_permission_allowed(
-    scope_type,
-    org_id,
-    app_id,
-    channel_id,
-    bundle_id
-  )
-  AND rbac_internal.role_binding_principal_allowed_for_org(
+  rbac_internal.role_binding_write_principal_allowed(
     principal_type,
     principal_id,
     org_id,
-    scope_type
+    scope_type,
+    app_id,
+    channel_id,
+    bundle_id
   )
 );
 
@@ -253,18 +302,14 @@ USING (
   )
 )
 WITH CHECK (
-  rbac_internal.role_binding_caller_permission_allowed(
-    scope_type,
-    org_id,
-    app_id,
-    channel_id,
-    bundle_id
-  )
-  AND rbac_internal.role_binding_principal_allowed_for_org(
+  rbac_internal.role_binding_write_principal_allowed(
     principal_type,
     principal_id,
     org_id,
-    scope_type
+    scope_type,
+    app_id,
+    channel_id,
+    bundle_id
   )
 );
 

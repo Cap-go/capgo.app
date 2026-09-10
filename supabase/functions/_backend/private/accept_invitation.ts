@@ -163,6 +163,8 @@ async function ensureOrgMembership(
     pgClient = await pgPool.connect()
     await pgClient.query('BEGIN')
     transactionStarted = true
+    await pgClient.query('SET LOCAL statement_timeout = 10000')
+    await pgClient.query('SET LOCAL idle_in_transaction_session_timeout = 15000')
 
     await pgClient.query(
       `SELECT public.lock_rbac_orgs($1::uuid)`,
@@ -172,12 +174,12 @@ async function ensureOrgMembership(
     const inviteRoleResult = await pgClient.query<{ rbac_role_name: string | null }>(
       `SELECT invite_role.rbac_role_name
        FROM (
-         SELECT public.tmp_users.rbac_role_name
+         SELECT public.tmp_users.rbac_role_name, 0 AS source_rank
          FROM public.tmp_users
          WHERE public.tmp_users.invite_magic_string = $1::text
            AND public.tmp_users.cancelled_at IS NULL
          UNION ALL
-         SELECT public.org_users.rbac_role_name
+         SELECT public.org_users.rbac_role_name, 1 AS source_rank
          FROM public.org_users
          WHERE public.org_users.user_id = $2::uuid
            AND public.org_users.org_id = $3::uuid
@@ -186,6 +188,7 @@ async function ensureOrgMembership(
            AND public.org_users.channel_id IS NULL
        ) AS invite_role
        WHERE invite_role.rbac_role_name IS NOT NULL
+       ORDER BY invite_role.source_rank
        LIMIT 1`,
       [invitation.invite_magic_string, userId, invitation.org_id],
     )
@@ -202,6 +205,7 @@ async function ensureOrgMembership(
        FROM public.roles
        WHERE public.roles.name = $1::text
          AND public.roles.scope_type = 'org'
+         AND public.roles.is_assignable = true
        LIMIT 1`,
       [rbacRoleName],
     )
