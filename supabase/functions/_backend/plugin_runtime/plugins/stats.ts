@@ -16,6 +16,7 @@ import { statsRequestSchema } from '../utils/plugin_validation.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { backgroundTask, INVALID_STRING_APP_ID, isLimited, MISSING_STRING_APP_ID, reverseDomainRegex } from '../utils/utils.ts'
 import { onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
+import { applyStatsModeToBody, normalizeAppStatsMode, shouldAcceptStatsAction } from '../utils/stats_mode.ts'
 
 const PLAN_ERROR = 'Cannot send stats, upgrade plan to continue to update'
 const DOWNLOAD_FAIL_FIXED_PLUGIN_VERSION = parse('7.17.0')
@@ -83,50 +84,64 @@ function shouldRecordStatsAction(action: string, pluginVersion: string) {
 }
 
 async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClient>, body: AppStats, appStatus?: AppStatusResult): Promise<PostResult> {
-  const { app_id, action, version_name, old_version_name, plugin_version, metadata } = body
+  const { app_id, action, version_name, old_version_name, plugin_version } = body
 
   const planActions: Array<'mau' | 'bandwidth'> = ['mau', 'bandwidth']
   const cachedAppStatus = appStatus ?? await getAppStatus(c, app_id)
   const cachedStatus = cachedAppStatus.status
+  let statsMode = normalizeAppStatsMode(cachedAppStatus.stats_mode)
+  let scopedBody = applyStatsModeToBody(body, statsMode)
+  let metadata = scopedBody.metadata
+
+  if (!shouldAcceptStatsAction(action, statsMode))
+    return { success: true }
+
   if (cachedStatus === 'onprem') {
-    const device = makeDevice(body, cachedAppStatus.allow_device_custom_id)
+    const device = makeDevice(scopedBody, cachedAppStatus.allow_device_custom_id)
     await onPremStats(c, app_id, action, device, metadata)
     return { success: true, isOnprem: true }
   }
 
   if (cachedStatus === 'cancelled') {
     const allowDeviceCustomId = cachedAppStatus.allow_device_custom_id
-    const device = makeDevice(body, allowDeviceCustomId)
+    const device = makeDevice(scopedBody, allowDeviceCustomId)
     const statsActions: StatsActions[] = [{ action: 'needPlanUpgrade' }]
     // Keep behavior backward compatible (default allow=true), but allow owners to
     // disable custom_id persistence from unauthenticated /stats traffic.
-    if (allowDeviceCustomId === false && typeof body.custom_id === 'string' && body.custom_id.trim() !== '') {
+    if (allowDeviceCustomId === false && typeof scopedBody.custom_id === 'string' && scopedBody.custom_id.trim() !== '') {
       statsActions.push({ action: 'customIdBlocked' })
     }
-    await sendStatsAndDevice(c, device, statsActions)
+    await sendStatsAndDevice(c, device, statsActions, false, statsMode)
     return { success: false, error: 'need_plan_upgrade', message: PLAN_ERROR }
   }
   const appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, planActions)
+  if (appOwner)
+    statsMode = normalizeAppStatsMode(appOwner.stats_mode)
+  scopedBody = applyStatsModeToBody(body, statsMode)
+  metadata = scopedBody.metadata
+  if (!shouldAcceptStatsAction(action, statsMode))
+    return { success: true }
+
   const allowDeviceCustomId = appOwner?.allow_device_custom_id
-  const device = makeDevice(body, allowDeviceCustomId)
+  const device = makeDevice(scopedBody, allowDeviceCustomId)
   const blockProviderInfraRequests = appOwner?.block_provider_infra_requests ?? cachedAppStatus.block_provider_infra_requests
   const blocked = await blockProviderInfrastructure(c, blockProviderInfraRequests)
   if (blocked)
     return { success: false, response: blocked }
 
   if (!appOwner) {
-    await setAppStatus(c, app_id, 'onprem', true, cachedAppStatus.block_provider_infra_requests)
+    await setAppStatus(c, app_id, 'onprem', true, cachedAppStatus.block_provider_infra_requests, statsMode)
     await onPremStats(c, app_id, action, device, metadata)
     return { success: true, isOnprem: true }
   }
   if (!appOwner.plan_valid) {
-    await setAppStatus(c, app_id, 'cancelled', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests)
+    await setAppStatus(c, app_id, 'cancelled', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests, normalizeAppStatsMode(appOwner.stats_mode))
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot update, upgrade plan to continue to update', id: app_id })
     const upgradeActions: StatsActions[] = [{ action: 'needPlanUpgrade' }]
     if (allowDeviceCustomId === false && typeof body.custom_id === 'string' && body.custom_id.trim() !== '') {
       upgradeActions.push({ action: 'customIdBlocked' })
     }
-    await sendStatsAndDevice(c, device, upgradeActions)
+    await sendStatsAndDevice(c, device, upgradeActions, false, normalizeAppStatsMode(appOwner.stats_mode))
     // Send weekly notification about missing payment (not configurable - payment related)
     backgroundTask(c, sendNotifOrgCached(c, 'org:missing_payment', {
       app_id,
@@ -135,7 +150,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     }, appOwner.owner_org, app_id, '0 0 * * 1', appOwner.orgs.management_email, drizzleClient)) // Weekly on Monday
     return { success: false, error: 'need_plan_upgrade', message: 'Cannot update, upgrade plan to continue to update' }
   }
-  await setAppStatus(c, app_id, 'cloud', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests)
+  await setAppStatus(c, app_id, 'cloud', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests, normalizeAppStatsMode(appOwner.stats_mode))
   const statsActions: StatsActions[] = []
   if (allowDeviceCustomId === false && typeof body.custom_id === 'string' && body.custom_id.trim() !== '') {
     statsActions.push({ action: 'customIdBlocked' })
@@ -146,7 +161,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     // Legacy plugins can report download_fail for a non-existent target version
     // when there was no update to download, so skip version validation too.
     await backgroundTask(c, createStatsMau(c, device.device_id, app_id, appOwner.owner_org, device.platform, device.version_build))
-    await sendStatsAndDevice(c, device, statsActions, action.endsWith('_fail'))
+    await sendStatsAndDevice(c, device, statsActions, action.endsWith('_fail'), normalizeAppStatsMode(appOwner.stats_mode))
     return { success: true }
   }
 
@@ -199,7 +214,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
   // Don't update device record on failure actions - the version_name in the request
   // is the failed version, not the actual running version on the device
   await backgroundTask(c, createStatsMau(c, device.device_id, app_id, appOwner.owner_org, device.platform, device.version_build))
-  await sendStatsAndDevice(c, device, statsActions, action.endsWith('_fail'))
+  await sendStatsAndDevice(c, device, statsActions, action.endsWith('_fail'), normalizeAppStatsMode(appOwner.stats_mode))
   return { success: true }
 }
 
