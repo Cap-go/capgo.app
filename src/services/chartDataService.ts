@@ -8,6 +8,10 @@ const SKIP_COLOR = 10
 const colorKeys = Object.keys(colors)
 const chartDataCache = ref<Map<string, any>>(new Map())
 
+export function clearChartDataCache() {
+  chartDataCache.value.clear()
+}
+
 function clampToToday(date: Date): Date {
   const today = normalizeToUtcStartOfDay()
   return date > today ? today : date
@@ -25,8 +29,10 @@ function buildCacheKey(sessionId: string, appId: string, from: Date, to: Date, k
 
 async function getChartCacheSessionKey(supabase: SupabaseClient): Promise<string> {
   const { data } = await supabase.auth.getClaims()
-  const sub = data?.claims?.sub
-  return typeof sub === 'string' && sub.length > 0 ? sub : 'anonymous'
+  const sessionId = data?.claims?.session_id
+  if (typeof sessionId === 'string' && sessionId.length > 0)
+    return sessionId
+  return 'anonymous'
 }
 
 export async function useChartData(
