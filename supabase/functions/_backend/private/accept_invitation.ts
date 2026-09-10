@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
 import { Hono } from 'hono/tiny'
 import { safeParseSchema } from '../utils/schema_validation.ts'
@@ -282,6 +283,9 @@ async function ensureOrgMembership(
   catch (error) {
     if (transactionStarted && pgClient) {
       await pgClient.query('ROLLBACK').catch(() => {})
+    }
+    if (error instanceof HTTPException) {
+      throw error
     }
     cloudlog({
       requestId: c.get('requestId'),
