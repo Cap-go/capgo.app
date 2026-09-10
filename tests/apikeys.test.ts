@@ -56,9 +56,18 @@ beforeAll(async () => {
     body: JSON.stringify(orgKeyBody(`warmup-post-${id.slice(0, 8)}`)),
   })
   if (warmupPostResponse.ok) {
+    const warmupName = `warmup-post-${id.slice(0, 8)}`
+    const warmupBody = await warmupPostResponse.text()
     try {
-      const warmupData = await warmupPostResponse.json<{ id: number }>()
-      warmupApiKeyId = warmupData.id
+      const warmupData = JSON.parse(warmupBody) as { id?: number }
+      if (typeof warmupData.id === 'number') {
+        warmupApiKeyId = warmupData.id
+      }
+    }
+    catch (error) {
+      console.warn('apikey beforeAll warmup parse failed', error)
+    }
+    if (warmupApiKeyId !== null) {
       const deleteResponse = await fetch(`${BASE_URL}/apikey/${warmupApiKeyId}`, {
         method: 'DELETE',
         headers: authHeaders,
@@ -67,8 +76,14 @@ beforeAll(async () => {
         console.warn(`apikey beforeAll warmup cleanup delete ${warmupApiKeyId} status=${deleteResponse.status}`)
       }
     }
-    catch (error) {
-      console.warn('apikey beforeAll warmup cleanup failed', error)
+    else {
+      const [deletedKey] = await executeSQL(
+        `DELETE FROM public.apikeys WHERE name = $1 RETURNING id`,
+        [warmupName],
+      )
+      if (deletedKey?.id) {
+        warmupApiKeyId = Number(deletedKey.id)
+      }
     }
   }
   else {

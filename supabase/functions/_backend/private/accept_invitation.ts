@@ -193,12 +193,11 @@ async function ensureOrgMembership(
     pgClient = await pgPool.connect()
     await pgClient.query('BEGIN')
     transactionStarted = true
-
-    await acquireRbacOrgLockWithRetry(pgClient, invitation.org_id)
-
-    // Bound post-lock work only; lock_timeout above handles advisory-lock waits.
     await pgClient.query('SET LOCAL statement_timeout = 10000')
     await pgClient.query('SET LOCAL idle_in_transaction_session_timeout = 15000')
+
+    // lock_timeout per attempt inside acquireRbacOrgLockWithRetry bounds lock waits.
+    await acquireRbacOrgLockWithRetry(pgClient, invitation.org_id)
 
     const inviteRoleResult = await pgClient.query<{ rbac_role_name: string | null }>(
       `SELECT invite_role.rbac_role_name
