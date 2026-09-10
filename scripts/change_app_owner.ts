@@ -67,9 +67,14 @@ async function main() {
     const file = await Deno.create(`/tmp/move-tmp/${obj.key}`)
     await getObj.body?.pipeTo(file.writable)
 
+    const sourceStat = await rawS3client.statObject(obj.key)
+    const discoveryEtag = sourceStat.etag
+    if (!discoveryEtag)
+      throw new Error(`Missing source ETag for ${obj.key}; aborting transfer`)
+
     await rawS3client.copyObject({ sourceKey: encodeS3LiteCopySourceKey(obj.key) }, obj.key.replace(oldUserId, newUserId))
     try {
-      const trashResult = await moveS3LiteObjectToTrash(rawS3client, obj.key, S3_BUCKET)
+      const trashResult = await moveS3LiteObjectToTrash(rawS3client, obj.key, S3_BUCKET, discoveryEtag)
       if (trashResult !== 'moved')
         throw new Error(`Copied ${obj.key} to new owner key but failed to trash source object (${trashResult})`)
     }

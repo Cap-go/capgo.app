@@ -13,6 +13,8 @@ export {
   isLiveR2Key,
   isObjectNotFoundError,
   isPreconditionFailedError,
+  normalizedS3EtagsMatch,
+  quoteS3CopySourceIfMatchEtag,
   R2_TRASH_PREFIX,
   resolveOpsDeleteMode,
   resolveTrashDestinationKey,

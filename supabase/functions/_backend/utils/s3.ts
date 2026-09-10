@@ -199,7 +199,7 @@ async function moveObjectToTrash(c: Context, fileId: string) {
   }
 
   try {
-    trashPath = await copyLiveObjectToTrash(client as RawS3LiteClient, fileId, trashPath, sourceEtag, bucket)
+    trashPath = await copyLiveObjectToTrash(client as RawS3LiteClient, fileId, trashPath, sourceEtag, bucket, sourceLastModified)
   }
   catch (error) {
     if (isPreconditionFailedError(error)) {

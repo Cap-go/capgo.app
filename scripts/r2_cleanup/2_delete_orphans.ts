@@ -256,16 +256,16 @@ async function processKeyBatch(keys: TrashProcessTarget[]): Promise<void> {
   await Promise.all(keys.map(key => processKey(key)))
 }
 
-type PermanentDeleteTarget = string | { key: string, etag?: string }
+type PermanentDeleteTarget = string | { key: string, etag?: string, lastModified?: Date }
 
-function normalizePermanentDeleteTarget(target: PermanentDeleteTarget): { key: string, etag?: string } {
+function normalizePermanentDeleteTarget(target: PermanentDeleteTarget): { key: string, etag?: string, lastModified?: Date } {
   return typeof target === 'string' ? { key: target } : target
 }
 
 async function permanentDeleteKey(target: PermanentDeleteTarget): Promise<void> {
-  const { key, etag } = normalizePermanentDeleteTarget(target)
+  const { key, etag, lastModified } = normalizePermanentDeleteTarget(target)
   return limiter.run(async () => {
-    const outcome = await permanentDeleteAwsLiveKey(s3, S3_BUCKET, key, etag)
+    const outcome = await permanentDeleteAwsLiveKey(s3, S3_BUCKET, key, etag, lastModified)
     switch (outcome) {
       case 'deleted':
       case 'skipped_missing':
@@ -299,7 +299,7 @@ async function permanentDeleteBatch(keys: PermanentDeleteTarget[]): Promise<void
   }
 }
 
-async function listExactKeyEtags(keys: string[]): Promise<Array<{ key: string, etag: string }>> {
+async function listExactKeyEtags(keys: string[]): Promise<Array<{ key: string, etag: string, lastModified?: Date }>> {
   const targets = await Promise.all(keys.map(key => limiter.run(async () => {
     const response = await s3.send(new ListObjectsV2Command({
       Bucket: S3_BUCKET,
@@ -307,19 +307,23 @@ async function listExactKeyEtags(keys: string[]): Promise<Array<{ key: string, e
       MaxKeys: 1,
     }))
     const obj = response.Contents?.find(item => item.Key === key)
-    if (!obj?.ETag) {
+    if (!obj) {
+      console.warn(`Skipped ${key}: object absent from list; already gone`)
+      return null
+    }
+    if (!obj.ETag) {
       console.error(`Skipped ${key}: missing discovery ETag from list; source retained`)
       totalSkippedMissingDiscoveryEtag += 1
       totalErrors += 1
       return null
     }
-    return { key, etag: obj.ETag }
+    return { key, etag: obj.ETag, lastModified: obj.LastModified }
   })))
-  return targets.filter((target): target is { key: string, etag: string } => target !== null)
+  return targets.filter((target): target is { key: string, etag: string, lastModified?: Date } => target !== null)
 }
 
-async function listPrefixKeys(prefix: string): Promise<Array<{ key: string, etag?: string }>> {
-  const keys: Array<{ key: string, etag?: string }> = []
+async function listPrefixKeys(prefix: string): Promise<Array<{ key: string, etag?: string, lastModified?: Date }>> {
+  const keys: Array<{ key: string, etag?: string, lastModified?: Date }> = []
   let continuationToken: string | undefined
 
   while (true) {
@@ -339,7 +343,7 @@ async function listPrefixKeys(prefix: string): Promise<Array<{ key: string, etag
         totalErrors += 1
         continue
       }
-      keys.push({ key: obj.Key, etag: obj.ETag })
+      keys.push({ key: obj.Key, etag: obj.ETag, lastModified: obj.LastModified })
     }
 
     if (!response.IsTruncated)

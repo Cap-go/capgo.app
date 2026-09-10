@@ -4,6 +4,7 @@ import {
   isLiveR2Key,
   isObjectNotFoundError,
   isPreconditionFailedError,
+  normalizedS3EtagsMatch,
 } from './delete_mode.ts'
 
 export type AwsPermanentDeleteOutcome = 'deleted' | 'skipped_missing' | 'skipped_changed' | 'failed'
@@ -17,11 +18,12 @@ export async function permanentDeleteAwsLiveKey(
   bucket: string,
   key: string,
   candidateEtag?: string,
+  candidateLastModified?: Date,
 ): Promise<AwsPermanentDeleteOutcome> {
   if (!isLiveR2Key(key))
     return 'skipped_missing'
 
-  if (!candidateEtag)
+  if (!candidateEtag || !candidateLastModified)
     return 'failed'
 
   let sourceEtag: string | undefined
@@ -43,7 +45,10 @@ export async function permanentDeleteAwsLiveKey(
   if (!sourceEtag || !sourceLastModified)
     return 'failed'
 
-  if (candidateEtag !== sourceEtag)
+  if (!normalizedS3EtagsMatch(candidateEtag, sourceEtag))
+    return 'skipped_changed'
+
+  if (sourceLastModified.getTime() !== candidateLastModified.getTime())
     return 'skipped_changed'
 
   try {

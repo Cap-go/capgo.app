@@ -9,7 +9,7 @@
  */
 /// <reference lib="deno.ns" />
 import { S3Client } from 'https://deno.land/x/s3_lite_client@0.7.0/mod.ts'
-import { ConcurrencyLimiter, isLiveR2Key, isObjectNotFoundError, moveS3LiteObjectToTrash, permanentDeleteSourceIfMatch, resolveOpsDeleteMode, R2_TRASH_PREFIX } from './r2_trash_utils.ts'
+import { ConcurrencyLimiter, isLiveR2Key, moveS3LiteObjectToTrash, permanentDeleteSourceIfMatch, resolveOpsDeleteMode, R2_TRASH_PREFIX } from './r2_trash_utils.ts'
 
 const folderToDelete = 'orgs'
 if (!folderToDelete) {
@@ -38,26 +38,19 @@ const rawS3client = new S3Client({
 
 const limiter = new ConcurrencyLimiter(CONCURRENCY)
 
+type ListingCandidate = {
+  key: string
+  discoveryEtag: string
+  discoveryLastModified?: Date
+}
+
 type ProcessKeyResult = 'ok' | 'skipped' | 'failed'
 
-async function processKey(key: string): Promise<ProcessKeyResult> {
+async function processKey(candidate: ListingCandidate): Promise<ProcessKeyResult> {
+  const { key, discoveryEtag, discoveryLastModified } = candidate
   return limiter.run(async () => {
-    let discoveryEtag: string | undefined
-    try {
-      const listed = await rawS3client.statObject(key)
-      discoveryEtag = listed.etag
-    }
-    catch (error) {
-      if (isObjectNotFoundError(error)) {
-        console.log(`Already absent: ${key}`)
-        return 'skipped'
-      }
-      console.error(`Failed ${key}: could not read discovery ETag (${error})`)
-      return 'failed'
-    }
-
     if (!discoveryEtag) {
-      console.error(`Failed ${key}: missing discovery ETag; source retained`)
+      console.error(`Failed ${key}: missing listing ETag; source retained`)
       return 'failed'
     }
 
@@ -75,8 +68,18 @@ async function processKey(key: string): Promise<ProcessKeyResult> {
       return 'ok'
     }
 
+    if (!discoveryLastModified) {
+      console.error(`Failed ${key}: missing listing Last-Modified for permanent delete; source retained`)
+      return 'failed'
+    }
+
     console.log(`Permanently deleting: ${key}`)
-    const deleteResult = await permanentDeleteSourceIfMatch(rawS3client, key, discoveryEtag)
+    const deleteResult = await permanentDeleteSourceIfMatch(
+      rawS3client,
+      key,
+      discoveryEtag,
+      discoveryLastModified,
+    )
     if (deleteResult === 'skipped_missing') {
       console.log(`Already absent: ${key}`)
       return 'skipped'
@@ -89,15 +92,15 @@ async function processKey(key: string): Promise<ProcessKeyResult> {
   })
 }
 
-async function processKeyBatch(keys: string[]): Promise<{ succeeded: number, failed: number }> {
+async function processKeyBatch(candidates: ListingCandidate[]): Promise<{ succeeded: number, failed: number }> {
   let succeeded = 0
   let failed = 0
 
-  const results = await Promise.allSettled(keys.map(key => processKey(key)))
+  const results = await Promise.allSettled(candidates.map(candidate => processKey(candidate)))
   for (const [index, result] of results.entries()) {
     if (result.status === 'rejected') {
       failed += 1
-      console.error(`Failed to process ${keys[index]}:`, result.reason)
+      console.error(`Failed to process ${candidates[index]!.key}:`, result.reason)
       continue
     }
 
@@ -119,18 +122,18 @@ async function processFolder() {
 
   let processedCount = 0
   let errorCount = 0
-  let pendingKeys: string[] = []
+  let pendingCandidates: ListingCandidate[] = []
 
   const flushBatch = async () => {
-    if (pendingKeys.length === 0)
+    if (pendingCandidates.length === 0)
       return
 
-    const batch = pendingKeys
-    pendingKeys = []
+    const batch = pendingCandidates
+    pendingCandidates = []
 
     if (deleteMode === 'dry_run') {
-      for (const key of batch)
-        console.log(`Would process: ${key}`)
+      for (const candidate of batch)
+        console.log(`Would process: ${candidate.key}`)
       processedCount += batch.length
       return
     }
@@ -145,8 +148,18 @@ async function processFolder() {
       if (!isLiveR2Key(obj.key))
         continue
 
-      pendingKeys.push(obj.key)
-      if (pendingKeys.length >= LIST_BATCH_SIZE)
+      if (!obj.etag) {
+        console.error(`Failed ${obj.key}: missing listing ETag; source retained`)
+        errorCount += 1
+        continue
+      }
+
+      pendingCandidates.push({
+        key: obj.key,
+        discoveryEtag: obj.etag,
+        discoveryLastModified: obj.lastModified,
+      })
+      if (pendingCandidates.length >= LIST_BATCH_SIZE)
         await flushBatch()
     }
 

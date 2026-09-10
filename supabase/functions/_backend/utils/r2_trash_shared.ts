@@ -83,6 +83,12 @@ function normalizeS3Etag(etag: string | undefined): string | undefined {
   return quoteS3CopySourceIfMatchEtag(etag)
 }
 
+export function normalizedS3EtagsMatch(a?: string, b?: string): boolean {
+  if (!a || !b)
+    return false
+  return normalizeS3Etag(a) === normalizeS3Etag(b)
+}
+
 /** Build a TrashDestinationResolver from a HeadObject-style callback. */
 export function createAwsTrashDestinationResolver(
   headObject: (key: string) => Promise<{ etag?: string, lastModified?: Date }>,
@@ -128,15 +134,10 @@ export async function resolveTrashDestinationKey(
 
   const trashEtag = await resolver.getEtag(defaultTrashKey)
   const etagMatches = sourceEtag && normalizeS3Etag(trashEtag) === normalizeS3Etag(sourceEtag)
-  if (etagMatches) {
-    if (sourceLastModified && resolver.getLastModified) {
-      const trashLastModified = await resolver.getLastModified(defaultTrashKey)
-      if (trashLastModified?.getTime() === sourceLastModified.getTime())
-        return defaultTrashKey
-    }
-    else if (!sourceLastModified || !resolver.getLastModified) {
+  if (etagMatches && sourceLastModified && resolver.getLastModified) {
+    const trashLastModified = await resolver.getLastModified(defaultTrashKey)
+    if (trashLastModified?.getTime() === sourceLastModified.getTime())
       return defaultTrashKey
-    }
   }
 
   for (let i = 0; i < maxUniqueAttempts; i++) {
@@ -216,9 +217,9 @@ function trashDestinationMatchesSource(
 ): boolean {
   if (normalizeS3Etag(destinationStat.etag) !== normalizeS3Etag(sourceEtag))
     return false
-  if (!sourceLastModified)
-    return true
-  return destinationStat.lastModified?.getTime() === sourceLastModified.getTime()
+  if (!sourceLastModified || !destinationStat.lastModified)
+    return false
+  return destinationStat.lastModified.getTime() === sourceLastModified.getTime()
 }
 
 /**
@@ -334,8 +335,9 @@ export async function permanentDeleteSourceIfMatch(
   s3client: Pick<RawS3LiteClient, 'statObject' | 'deleteObject' | 'makeRequest'>,
   key: string,
   discoveryEtag?: string,
+  discoveryLastModified?: Date,
 ): Promise<ConditionalDeleteResult> {
-  if (!discoveryEtag)
+  if (!discoveryEtag || !discoveryLastModified)
     return 'skipped_changed'
 
   let sourceEtag: string | undefined
@@ -354,7 +356,10 @@ export async function permanentDeleteSourceIfMatch(
   if (!sourceEtag || !sourceLastModified)
     return 'skipped_changed'
 
-  if (normalizeS3Etag(discoveryEtag) !== normalizeS3Etag(sourceEtag))
+  if (!normalizedS3EtagsMatch(discoveryEtag, sourceEtag))
+    return 'skipped_changed'
+
+  if (sourceLastModified.getTime() !== discoveryLastModified.getTime())
     return 'skipped_changed'
 
   return conditionalDeleteSource(s3client, key, sourceEtag, sourceLastModified)
@@ -428,56 +433,50 @@ export async function copyLiveObjectToTrash(
   trashKey: string,
   sourceIfMatch: string,
   sourceBucketName: string,
+  sourceLastModified?: Date,
   maxAttempts = 10,
 ): Promise<string> {
   if (!sourceBucketName)
     throw new Error('sourceBucketName is required for trash copy')
+  if (!s3client.makeRequest)
+    throw new Error(`Guarded trash copy requires makeRequest for ${sourceKey}`)
 
   const encodedSourceKey = encodeS3LiteCopySourceKey(sourceKey)
   const copySource = `${sourceBucketName}/${encodedSourceKey}`
   let destinationKey = trashKey
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (s3client.makeRequest) {
-      const headers = new Headers({
-        'x-amz-copy-source': copySource,
-        'x-amz-copy-source-if-match': quoteS3CopySourceIfMatchEtag(sourceIfMatch),
-        'cf-copy-destination-if-none-match': '*',
+    const headers = new Headers({
+      'x-amz-copy-source': copySource,
+      'x-amz-copy-source-if-match': quoteS3CopySourceIfMatchEtag(sourceIfMatch),
+      'cf-copy-destination-if-none-match': '*',
+    })
+    try {
+      await s3client.makeRequest!({
+        method: 'PUT',
+        objectName: destinationKey,
+        headers,
+        statusCode: 200,
+        returnBody: true,
       })
+      return destinationKey
+    }
+    catch (error) {
+      if (!isPreconditionFailedError(error))
+        throw error
       try {
-        await s3client.makeRequest({
-          method: 'PUT',
-          objectName: destinationKey,
-          headers,
-          statusCode: 200,
-          returnBody: true,
-        })
-        return destinationKey
+        const destinationStat = await s3client.statObject(destinationKey)
+        if (trashDestinationMatchesSource(destinationStat, sourceIfMatch, sourceLastModified))
+          return destinationKey
+        destinationKey = getUniqueR2TrashKey(sourceKey)
+        continue
       }
-      catch (error) {
-        if (!isPreconditionFailedError(error))
-          throw error
-        try {
-          const destinationStat = await s3client.statObject(destinationKey)
-          if (normalizeS3Etag(destinationStat.etag) === normalizeS3Etag(sourceIfMatch))
-            return destinationKey
-          destinationKey = getUniqueR2TrashKey(sourceKey)
-          continue
-        }
-        catch (statError) {
-          if (isObjectNotFoundError(statError))
-            throw { name: 'SourceChangedBeforeTrashCopy', code: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } }
-          throw statError
-        }
+      catch (statError) {
+        if (isObjectNotFoundError(statError))
+          throw { name: 'SourceChangedBeforeTrashCopy', code: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } }
+        throw statError
       }
     }
-
-    await s3client.copyObject({
-      sourceKey: encodedSourceKey,
-      sourceBucketName,
-      sourceIfMatch,
-    }, destinationKey)
-    return destinationKey
   }
 
   throw new Error(`Failed to copy ${sourceKey} to trash after ${maxAttempts} attempts`)
@@ -515,7 +514,7 @@ export async function moveS3LiteObjectToTrash(
   const trashKey = await resolveAvailableR2TrashKey(s3client, key, sourceEtag, sourceLastModified)
 
   try {
-    await copyLiveObjectToTrash(s3client, key, trashKey, sourceEtag, sourceBucketName)
+    await copyLiveObjectToTrash(s3client, key, trashKey, sourceEtag, sourceBucketName, sourceLastModified)
   }
   catch (error) {
     if (isPreconditionFailedError(error) || (error as { name?: string }).name === 'SourceChangedBeforeTrashCopy')

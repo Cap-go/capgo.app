@@ -184,15 +184,16 @@ describe('moveS3LiteObjectToTrash', () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const copyObject = vi.fn(async () => undefined)
     const deleteObject = vi.fn(async () => undefined)
+    const makeRequest = vi.fn(async () => new Response(null, { status: 200 }))
     const statObject = vi.fn()
       .mockResolvedValueOnce(stat('"before"')) // source
       .mockRejectedValueOnce({ name: 'NotFound' }) // default trash slot
       .mockResolvedValueOnce(stat('"after"')) // changed after copy
 
-    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key, TEST_S3_BUCKET)
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key, TEST_S3_BUCKET)
 
     expect(result).toBe('skipped_changed')
-    expect(copyObject).toHaveBeenCalledOnce()
+    expect(makeRequest).toHaveBeenCalledOnce()
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
@@ -215,18 +216,19 @@ describe('moveS3LiteObjectToTrash', () => {
 
   it('returns skipped_missing when the source disappears before copy', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
-    const copyObject = vi.fn(async () => {
+    const copyObject = vi.fn(async () => undefined)
+    const deleteObject = vi.fn(async () => undefined)
+    const makeRequest = vi.fn(async () => {
       throw { status: 404, code: 'not found' }
     })
-    const deleteObject = vi.fn(async () => undefined)
     const statObject = vi.fn()
       .mockResolvedValueOnce(stat('"before"')) // source
       .mockRejectedValueOnce({ name: 'NotFound' }) // default trash slot
 
-    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key, TEST_S3_BUCKET)
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key, TEST_S3_BUCKET)
 
     expect(result).toBe('skipped_missing')
-    expect(copyObject).toHaveBeenCalledOnce()
+    expect(makeRequest).toHaveBeenCalledOnce()
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
@@ -234,12 +236,13 @@ describe('moveS3LiteObjectToTrash', () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const copyObject = vi.fn(async () => undefined)
     const deleteObject = vi.fn(async () => undefined)
+    const makeRequest = vi.fn(async () => new Response(null, { status: 200 }))
     const statObject = vi.fn()
       .mockResolvedValueOnce(stat('"before"')) // source
       .mockRejectedValueOnce({ name: 'NotFound' }) // default trash slot
       .mockRejectedValueOnce({ status: 404, code: 'not found' }) // gone after copy
 
-    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, statObject }, key, TEST_S3_BUCKET)
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key, TEST_S3_BUCKET)
 
     expect(result).toBe('moved')
     expect(deleteObject).not.toHaveBeenCalled()
@@ -348,6 +351,7 @@ describe('copyLiveObjectToTrash', () => {
       trashKey,
       etag,
       TEST_S3_BUCKET,
+      DEFAULT_LAST_MODIFIED,
     )
 
     expect(destination).toBe(trashKey)
@@ -418,6 +422,47 @@ describe('copyLiveObjectToTrash', () => {
       etag,
       TEST_S3_BUCKET,
     )).rejects.toMatchObject({ name: 'SourceChangedBeforeTrashCopy' })
+  })
+
+  it('fails closed when makeRequest is unavailable', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    await expect(copyLiveObjectToTrash(
+      { copyObject: vi.fn(), statObject: vi.fn() },
+      key,
+      `${R2_TRASH_PREFIX}${key}`,
+      '"source"',
+      TEST_S3_BUCKET,
+      DEFAULT_LAST_MODIFIED,
+    )).rejects.toThrow(/requires makeRequest/)
+  })
+
+  it('allocates a unique trash key when destination etag matches but Last-Modified differs', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const etag = '"same"'
+    const trashKey = `${R2_TRASH_PREFIX}${key}`
+    const sourceLastModified = new Date('2024-01-15T10:30:00.000Z')
+    const makeRequest = vi.fn<(args: MakeRequestArgs) => Promise<Response>>(async (options) => {
+      if (options.objectName === trashKey)
+        throw { statusCode: 412, code: 'PreconditionFailed' }
+      return new Response(null, { status: 200 })
+    })
+    const statObject = vi.fn(async (objectKey: string) => {
+      if (objectKey === trashKey)
+        return stat(etag, new Date('2024-01-15T10:30:01.000Z'))
+      throw { name: 'NotFound' }
+    })
+
+    const destination = await copyLiveObjectToTrash(
+      { copyObject: vi.fn(), makeRequest, statObject },
+      key,
+      trashKey,
+      etag,
+      TEST_S3_BUCKET,
+      sourceLastModified,
+    )
+
+    expect(destination).not.toBe(trashKey)
+    expect(makeRequest).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -612,7 +657,12 @@ describe('permanentDeleteSourceIfMatch', () => {
     const deleteObject = vi.fn()
     const makeRequest = vi.fn<(args: MakeRequestArgs) => Promise<Response>>(async () => new Response(null, { status: 204 }))
 
-    const result = await permanentDeleteSourceIfMatch({ statObject, deleteObject, makeRequest }, key, etag)
+    const result = await permanentDeleteSourceIfMatch(
+      { statObject, deleteObject, makeRequest },
+      key,
+      etag,
+      DEFAULT_LAST_MODIFIED,
+    )
 
     expect(result).toBe('deleted')
     expect(makeRequest).toHaveBeenCalledOnce()
@@ -630,7 +680,12 @@ describe('permanentDeleteSourceIfMatch', () => {
     const deleteObject = vi.fn()
     const makeRequest = vi.fn()
 
-    const result = await permanentDeleteSourceIfMatch({ statObject, deleteObject, makeRequest }, key, '"before"')
+    const result = await permanentDeleteSourceIfMatch(
+      { statObject, deleteObject, makeRequest },
+      key,
+      '"before"',
+      DEFAULT_LAST_MODIFIED,
+    )
 
     expect(result).toBe('skipped_missing')
     expect(makeRequest).not.toHaveBeenCalled()
@@ -645,7 +700,12 @@ describe('permanentDeleteSourceIfMatch', () => {
       throw { statusCode: 412, code: 'PreconditionFailed' }
     })
 
-    const result = await permanentDeleteSourceIfMatch({ statObject, deleteObject, makeRequest }, key, '"before"')
+    const result = await permanentDeleteSourceIfMatch(
+      { statObject, deleteObject, makeRequest },
+      key,
+      '"before"',
+      DEFAULT_LAST_MODIFIED,
+    )
 
     expect(result).toBe('skipped_changed')
     expect(makeRequest).toHaveBeenCalledOnce()
@@ -675,6 +735,26 @@ describe('permanentDeleteSourceIfMatch', () => {
       { statObject, deleteObject, makeRequest },
       key,
       '"stale-discovery"',
+      DEFAULT_LAST_MODIFIED,
+    )
+
+    expect(result).toBe('skipped_changed')
+    expect(makeRequest).not.toHaveBeenCalled()
+    expect(deleteObject).not.toHaveBeenCalled()
+  })
+
+  it('retains the source when discovery Last-Modified does not match the live object', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const etag = '"before"'
+    const statObject = vi.fn(async () => stat(etag))
+    const deleteObject = vi.fn()
+    const makeRequest = vi.fn()
+
+    const result = await permanentDeleteSourceIfMatch(
+      { statObject, deleteObject, makeRequest },
+      key,
+      etag,
+      new Date('2024-01-15T10:30:01.000Z'),
     )
 
     expect(result).toBe('skipped_changed')
@@ -715,6 +795,18 @@ describe('resolveTrashDestinationKey', () => {
     const getLastModified = vi.fn(async () => new Date('2024-01-15T10:30:01.000Z'))
 
     const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag, getLastModified }, key, etag, new Date('2024-01-15T10:30:00.000Z'))
+
+    expect(trashKey).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${escapeRegExp(key)}$`))
+  })
+
+  it('allocates a unique path when etag matches but source Last-Modified is omitted', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const etag = '"same"'
+    const exists = vi.fn(async (trashKey: string) => trashKey === getR2TrashKey(key))
+    const getEtag = vi.fn(async () => etag)
+    const getLastModified = vi.fn(async () => new Date('2024-01-15T10:30:00.000Z'))
+
+    const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag, getLastModified }, key, etag)
 
     expect(trashKey).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${escapeRegExp(key)}$`))
   })
