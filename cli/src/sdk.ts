@@ -781,7 +781,6 @@ export class CapgoSDK {
         prescanWarn: parsed.prescanWarn,
         cache: parsed.cache,
         cacheKey: parsed.cacheKey,
-        aiAnalysisMode: parsed.aiAnalysisMode,
       }
 
       const result = await requestBuildInternal(parsed.appId, internalOptions, true)

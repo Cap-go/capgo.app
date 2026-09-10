@@ -1406,10 +1406,6 @@ export function splitPayload(
   return { buildOptions, buildCredentials }
 }
 
-/**
- * Run the full Capgo cloud build pipeline: request a job, upload sources, stream
- * logs, poll status, and optionally capture logs for AI analysis or support.
- */
 export async function requestBuildInternal(appId: string, options: BuildRequestOptions, silent = false, logger?: BuildLogger): Promise<BuildRequestResult> {
   // Start the verbose internal log so API errors + the support flow's bundle have
   // content (no-op if already started by a wrapping onboarding run).
@@ -2350,10 +2346,7 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       }
       else if (finalStatus === 'failed') {
         log.error(`Build failed`)
-        // Onboarding uses caller-handled AI: the Ink wizard owns failure UX (build-log
-        // viewer + Capgo AI prompt). Skip the cache-key discoverability tip there so the
-        // streamed build viewer stays byte-stable for the private TUI goldens.
-        if (options.cache !== false && !options.cacheKey?.trim() && aiAnalysisMode !== 'caller-handled') {
+        if (options.cache !== false && !options.cacheKey?.trim()) {
           log.info('Tip: if this looks cache-related (stale artifacts between RC/PROD or branches), retry with --cache-key <env> to isolate compilation cache, or --no-cache to skip cache restore.')
         }
         // Non-interactive (CI/CD) failure with neither --ai-analytics nor
