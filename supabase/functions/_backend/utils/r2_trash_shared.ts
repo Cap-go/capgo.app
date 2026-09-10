@@ -133,12 +133,14 @@ export function applyR2TrashCopyMetadataHeaders(
     headers.set(`x-amz-meta-${key}`, value)
 }
 
+type HeadS3LiteObjectCopyPreserveResult = S3ObjectCopyPreserve | 'head_failed' | 'not_found'
+
 async function headS3LiteObjectCopyPreserve(
   s3client: Pick<RawS3LiteClient, 'makeRequest'>,
   objectKey: string,
-): Promise<S3ObjectCopyPreserve | undefined> {
+): Promise<HeadS3LiteObjectCopyPreserveResult> {
   if (!s3client.makeRequest)
-    return undefined
+    return 'head_failed'
   try {
     const response = await s3client.makeRequest({
       method: 'HEAD',
@@ -159,14 +161,12 @@ async function headS3LiteObjectCopyPreserve(
       contentDisposition: response.headers.get('content-disposition') ?? undefined,
       expires: expiresHeader ? new Date(expiresHeader) : undefined,
     }
-    if (!preserve.metadata && !preserve.contentType && !preserve.cacheControl
-      && !preserve.contentEncoding && !preserve.contentDisposition && !preserve.expires)
-      return undefined
     return preserve
   }
-  catch {
-    // Best-effort: copy still runs; missing metadata is acceptable on transient HEAD errors.
-    return undefined
+  catch (error) {
+    if (isObjectNotFoundError(error))
+      return 'not_found'
+    return 'head_failed'
   }
 }
 
@@ -750,9 +750,15 @@ export async function copyLiveObjectToTrash(
   const encodedSourceKey = encodeS3LiteCopySourceKey(sourceKey)
   const copySource = `${sourceBucketName}/${encodedSourceKey}`
   let destinationKey = trashKey
-  const sourcePreserve = sourceLastModified
+  const sourcePreserveResult = sourceLastModified
     ? await headS3LiteObjectCopyPreserve(s3client, sourceKey)
     : undefined
+  if (sourcePreserveResult === 'not_found')
+    throw Object.assign(new Error(`Source missing before trash copy of ${sourceKey}`), { name: 'NotFound' })
+  if (sourcePreserveResult === 'head_failed')
+    throw new Error(`Failed to read source metadata for trash copy of ${sourceKey}`)
+
+  const sourcePreserve = sourcePreserveResult
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const headers = new Headers({
@@ -856,7 +862,7 @@ export async function moveS3LiteObjectToTrash(
     throw error
   }
 
-  if (sourceEtag && afterCopyEtag !== sourceEtag)
+  if (sourceEtag && afterCopyEtag && !normalizedS3EtagsMatch(afterCopyEtag, sourceEtag))
     return 'skipped_changed'
 
   if (afterCopyLastModified && afterCopyLastModified.getTime() !== sourceLastModified.getTime())

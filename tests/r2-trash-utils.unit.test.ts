@@ -231,7 +231,9 @@ describe('moveS3LiteObjectToTrash', () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const copyObject = vi.fn(async () => undefined)
     const deleteObject = vi.fn(async () => undefined)
-    const makeRequest = vi.fn(async () => {
+    const makeRequest = vi.fn(async (options: MakeRequestArgs) => {
+      if (options.method === 'HEAD')
+        return new Response(null, { status: 200, headers: new Headers({ 'content-type': 'application/zip' }) })
       throw { status: 404, code: 'not found' }
     })
     const statObject = vi.fn()
@@ -241,6 +243,7 @@ describe('moveS3LiteObjectToTrash', () => {
     const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key, TEST_S3_BUCKET)
 
     expect(result).toBe('skipped_missing')
+    expect(makeRequestCalls(makeRequest, 'HEAD')).toHaveLength(1)
     expect(makeRequestCalls(makeRequest, 'PUT')).toHaveLength(1)
     expect(deleteObject).not.toHaveBeenCalled()
   })
