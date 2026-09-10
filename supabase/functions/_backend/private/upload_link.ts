@@ -1,3 +1,4 @@
+import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
@@ -7,9 +8,83 @@ import { cloudlog } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { withR2PathCoordinationLock } from '../utils/r2_trash_shared.ts'
+import { retryWithBackoff } from '../utils/retry.ts'
 import { s3 } from '../utils/s3.ts'
-import { supabaseApikey } from '../utils/supabase.ts'
+import { supabaseAdmin, supabaseApikey } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
+
+type AppVersionsWriteClient = ReturnType<typeof supabaseApikey>
+
+async function isUploadR2PathReservationCleared(
+  client: AppVersionsWriteClient,
+  versionId: number,
+  filePath: string,
+): Promise<boolean> {
+  const { data, error } = await client
+    .from('app_versions')
+    .select('r2_path')
+    .eq('id', versionId)
+    .single()
+
+  if (error)
+    throw error
+
+  return data?.r2_path !== filePath
+}
+
+async function clearUploadR2PathReservationOnce(
+  client: AppVersionsWriteClient,
+  versionId: number,
+  filePath: string,
+): Promise<boolean> {
+  const { error } = await client
+    .from('app_versions')
+    .update({ r2_path: null })
+    .eq('id', versionId)
+    .eq('r2_path', filePath)
+
+  if (error)
+    throw error
+
+  return await isUploadR2PathReservationCleared(client, versionId, filePath)
+}
+
+async function clearUploadR2PathReservation(
+  c: Context<MiddlewareKeyVariables>,
+  capgkey: string,
+  versionId: number,
+  filePath: string,
+): Promise<void> {
+  const apiClient = supabaseApikey(c, capgkey)
+  const { result: cleared, lastError } = await retryWithBackoff(
+    () => clearUploadR2PathReservationOnce(apiClient, versionId, filePath),
+    {
+      attempts: 3,
+      baseDelayMs: 100,
+      shouldRetry: wasCleared => !wasCleared,
+    },
+  )
+
+  if (cleared)
+    return
+
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'upload r2_path rollback retries exhausted, using admin fallback',
+    versionId,
+    filePath,
+    lastError,
+  })
+
+  if (await clearUploadR2PathReservationOnce(supabaseAdmin(c), versionId, filePath))
+    return
+
+  throw simpleError(
+    'cannot_clear_upload_reservation',
+    'Cannot clear upload reservation after link failure; retry shortly',
+    { versionId, filePath, lastError },
+  )
+}
 
 interface DataUpload {
   name: string
@@ -103,11 +178,20 @@ app.post('/', middlewareKey(), async (c) => {
         throw simpleError('cannot_get_upload_link', 'Cannot get upload link')
     }
     catch (error) {
-      await supabaseApikey(c, capgkey)
-        .from('app_versions')
-        .update({ r2_path: null })
-        .eq('id', version.id)
-        .eq('r2_path', filePath)
+      try {
+        await clearUploadR2PathReservation(c, capgkey, version.id, filePath)
+      }
+      catch (clearError) {
+        cloudlog({
+          requestId: c.get('requestId'),
+          message: 'upload r2_path rollback failed after getUploadUrl error',
+          versionId: version.id,
+          filePath,
+          clearError,
+          originalError: error,
+        })
+        throw clearError
+      }
       throw error
     }
 

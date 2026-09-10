@@ -147,6 +147,7 @@ describe('on_app_delete storage cleanup', () => {
 describe('public deleteApp storage contract', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    moveObjectsWithPrefixToTrash.mockResolvedValue(2)
     deletedTables.length = 0
     for (const key of Object.keys(deleteEqByTable))
       delete deleteEqByTable[key]
@@ -209,6 +210,36 @@ describe('public deleteApp storage contract', () => {
       expect(deleteEqByTable[table]).toBeDefined()
       expect(deleteEqByTable[table]).toHaveBeenCalledWith('app_id', 'com.test.app')
     }
+  })
+
+  it('delegates R2 cleanup to on_app_delete after the apps row is removed', async () => {
+    const appRecord = {
+      app_id: 'com.test.app',
+      owner_org: 'org-1',
+      created_at: '2026-01-01T00:00:00Z',
+    }
+
+    await deleteApp(
+      makeDeleteAppContext(),
+      'com.test.app',
+      { key: 'capgo_test_key' } as any,
+    )
+
+    expect(moveObjectsWithPrefixToTrash).not.toHaveBeenCalled()
+
+    const response = await app.request('http://localhost/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(deletePayload(appRecord)),
+    })
+
+    expect(response.status).toBe(200)
+    expect(moveObjectsWithPrefixToTrash).toHaveBeenCalledTimes(1)
+    expect(moveObjectsWithPrefixToTrash).toHaveBeenCalledWith(
+      expect.anything(),
+      'orgs/org-1/apps/com.test.app/',
+    )
+    expect(deleteObjectsWithPrefix).not.toHaveBeenCalled()
   })
 })
 
