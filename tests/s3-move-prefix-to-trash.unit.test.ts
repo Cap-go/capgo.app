@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { encodeS3LiteCopySourceKey } from '../scripts/r2_trash_utils.ts'
+import { encodeS3LiteCopySourceKey, formatR2ConditionalDeleteLastModified } from '../scripts/r2_trash_utils.ts'
 
 const R2_TRASH_PREFIX = 'deleted-after-7-days/'
 const DEFAULT_ETAG = '"test-etag"'
@@ -103,7 +103,8 @@ describe('moveObjectsWithPrefixToTrash', () => {
     const deleteCall = makeRequest.mock.calls[1]![0]!
     expect(deleteCall.method).toBe('DELETE')
     expect(deleteCall.objectName).toBe(liveKey)
-    expect(deleteCall.headers?.get('x-amz-if-match-last-modified-time')).toBeTruthy()
+    expect(deleteCall.headers?.get('x-amz-if-match-last-modified-time'))
+      .toBe(formatR2ConditionalDeleteLastModified(DEFAULT_LAST_MODIFIED))
     expect(deleteCall.headers?.get('If-Match')).toBe(DEFAULT_ETAG)
     expect(deleteObject).not.toHaveBeenCalled()
   })

@@ -62,6 +62,7 @@ const trashDestinationResolver = createAwsTrashDestinationResolver(async (object
 
 let totalProcessed = 0
 let totalErrors = 0
+let totalSkippedMissingDiscoveryEtag = 0
 let totalToProcess = 0
 
 async function objectExists(key: string): Promise<boolean> {
@@ -306,7 +307,8 @@ async function listExactKeyEtags(keys: string[]): Promise<Array<{ key: string, e
     }))
     const obj = response.Contents?.find(item => item.Key === key)
     if (!obj?.ETag) {
-      console.error(`Failed to list discovery ETag for ${key}; source retained`)
+      console.error(`Skipped ${key}: missing discovery ETag from list; source retained`)
+      totalSkippedMissingDiscoveryEtag += 1
       totalErrors += 1
       return null
     }
@@ -328,8 +330,15 @@ async function listPrefixKeys(prefix: string): Promise<Array<{ key: string, etag
     }))
 
     for (const obj of response.Contents ?? []) {
-      if (obj.Key && isLiveR2Key(obj.Key))
-        keys.push({ key: obj.Key, etag: obj.ETag })
+      if (!obj.Key || !isLiveR2Key(obj.Key))
+        continue
+      if (!obj.ETag) {
+        console.error(`Skipped ${obj.Key}: missing discovery ETag from list; source retained`)
+        totalSkippedMissingDiscoveryEtag += 1
+        totalErrors += 1
+        continue
+      }
+      keys.push({ key: obj.Key, etag: obj.ETag })
     }
 
     if (!response.IsTruncated)
@@ -421,6 +430,8 @@ async function main() {
 
   console.log('\n\n=== Done ===')
   console.log(`Total processed: ${totalProcessed}`)
+  if (totalSkippedMissingDiscoveryEtag > 0)
+    console.warn(`Skipped missing discovery ETag: ${totalSkippedMissingDiscoveryEtag} (sources retained)`)
   console.log(`Errors: ${totalErrors}`)
   if (deleteMode === 'trash')
     console.log(`Objects moved under ${R2_TRASH_PREFIX} (lifecycle deletes after ~7 days)`)
