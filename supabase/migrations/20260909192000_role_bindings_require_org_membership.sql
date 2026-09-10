@@ -23,22 +23,31 @@ CREATE OR REPLACE FUNCTION rbac_internal.role_binding_principal_allowed_for_org(
   p_scope_type text
 )
 RETURNS boolean
-LANGUAGE sql
-STABLE
+LANGUAGE plpgsql
+VOLATILE
 SECURITY DEFINER
 SET search_path = ''
 AS $$
-  SELECT CASE
-    WHEN p_principal_type = public.rbac_principal_user()
-      AND p_scope_type = public.rbac_scope_org()
-    THEN true
-    WHEN p_principal_type = public.rbac_principal_user()
-      AND p_scope_type IN (
-        public.rbac_scope_app(),
-        public.rbac_scope_channel(),
-        public.rbac_scope_bundle()
-      )
-    THEN EXISTS (
+BEGIN
+  -- First org-scope user binding is allowed without a prior membership check.
+  IF p_principal_type = public.rbac_principal_user()
+    AND p_scope_type = public.rbac_scope_org()
+  THEN
+    RETURN true;
+  END IF;
+
+  -- Serialize with org membership revocation (org_users DELETE uses lock_rbac_orgs)
+  -- so scoped bindings cannot commit after concurrent membership removal.
+  PERFORM public.lock_rbac_orgs(p_org_id);
+
+  IF p_principal_type = public.rbac_principal_user()
+    AND p_scope_type IN (
+      public.rbac_scope_app(),
+      public.rbac_scope_channel(),
+      public.rbac_scope_bundle()
+    )
+  THEN
+    RETURN EXISTS (
       SELECT 1
       FROM public.role_bindings AS membership
       WHERE membership.principal_type = public.rbac_principal_user()
@@ -49,16 +58,22 @@ AS $$
           membership.expires_at IS NULL
           OR membership.expires_at > pg_catalog.now()
         )
-    )
-    WHEN p_principal_type = public.rbac_principal_group()
-    THEN EXISTS (
+    );
+  END IF;
+
+  IF p_principal_type = public.rbac_principal_group()
+  THEN
+    RETURN EXISTS (
       SELECT 1
       FROM public.groups
       WHERE groups.id = p_principal_id
         AND groups.org_id = p_org_id
-    )
-    WHEN p_principal_type = public.rbac_principal_apikey()
-    THEN EXISTS (
+    );
+  END IF;
+
+  IF p_principal_type = public.rbac_principal_apikey()
+  THEN
+    RETURN EXISTS (
       SELECT 1
       FROM public.role_bindings AS membership
       WHERE membership.principal_type = public.rbac_principal_apikey()
@@ -86,9 +101,11 @@ AS $$
               OR owner_membership.expires_at > pg_catalog.now()
             )
         )
-    )
-    ELSE false
-  END
+    );
+  END IF;
+
+  RETURN false;
+END;
 $$;
 
 CREATE OR REPLACE FUNCTION rbac_internal.role_binding_caller_permission_allowed(
@@ -187,7 +204,9 @@ COMMENT ON FUNCTION rbac_internal.role_binding_principal_allowed_for_org(
   'RLS helper: target principal may receive a role_binding on this org. User '
   'org-scope is always allowed (first membership). User app/channel/bundle '
   'requires a non-expired org-scope binding. Group must belong to the org. '
-  'Apikey must have an org-scope binding or an owner with org-scope membership.';
+  'Apikey must have an org-scope binding or an owner with org-scope membership. '
+  'Acquires lock_rbac_orgs before membership EXISTS checks to serialize with '
+  'concurrent org membership revocation.';
 
 COMMENT ON FUNCTION rbac_internal.role_binding_caller_permission_allowed(
   text, uuid, uuid, uuid, bigint
