@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import { isBentoConfigured, trackBentoEvents } from './bento.ts'
+import { isFrontendOnboardingVersionLabel } from './frontend_onboarding_analytics_model.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
 import { closeClient, getPgClient } from './pg.ts'
 import { backgroundTask } from './utils.ts'
@@ -202,7 +203,7 @@ function copyMappedFields(
     ) {
       target[field.key] = value
     }
-    else if (field.type === 'integer' && (value === '5.A' || value === '5.C')) {
+    else if (field.type === 'integer' && isFrontendOnboardingVersionLabel(value)) {
       target[field.key] = value
     }
   }

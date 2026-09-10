@@ -1,8 +1,13 @@
 export const FRONTEND_ONBOARDING_VERSIONS = [1, 2, 3, 4] as const
 export type FrontendOnboardingVersion = typeof FRONTEND_ONBOARDING_VERSIONS[number]
-export const WEBNATIVE_ONBOARDING_VERSION_LABELS = ['5.A', '5.C'] as const
+export const WEBNATIVE_ONBOARDING_VERSION_LABELS = ['5.A', '5.C', '5.E', '5.F', '5.G'] as const
 export const FRONTEND_ONBOARDING_FOLLOWUP_MS = 24 * 60 * 60 * 1000
 export const FRONTEND_ONBOARDING_PRODUCTION_HOST = ['console', 'capgo', 'app'].join('.')
+
+export function isFrontendOnboardingVersionLabel(value: unknown): value is typeof WEBNATIVE_ONBOARDING_VERSION_LABELS[number] {
+  return typeof value === 'string'
+    && (WEBNATIVE_ONBOARDING_VERSION_LABELS as readonly string[]).includes(value)
+}
 
 function hogqlWebNativeVersionLabels(): string {
   return WEBNATIVE_ONBOARDING_VERSION_LABELS.map(label => `'${label}'`).join(', ')

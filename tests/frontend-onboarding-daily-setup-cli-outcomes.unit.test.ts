@@ -70,7 +70,7 @@ describe('buildFrontendOnboardingDailySetupCliHogql', () => {
     expect(setupPeople).toContain('JSONExtractString(toString(properties), \'$host\') = \'console.capgo.app\'')
     expectAugust22ProductionHostFallback(setupPeople, 'properties', 'timestamp')
     expect(setupPeople).toContain('toIntOrZero(toString(properties.onboarding_version)) IN (2, 3, 4)')
-    expect(setupPeople).toContain("toString(properties.onboarding_version) IN ('5.A', '5.C')")
+    expect(setupPeople).toContain("toString(properties.onboarding_version) IN ('5.A', '5.C', '5.E', '5.F', '5.G')")
     expect(setupPeople).toContain('JSONExtractString(toString(properties), \'step\') = \'setup\'')
     expect(setupPeople).toContain('timestamp >= parseDateTimeBestEffort(\'2026-08-01T00:00:00.123Z\')')
     expect(setupPeople).toContain('timestamp < parseDateTimeBestEffort(\'2026-08-03T00:00:00.456Z\')')
@@ -104,7 +104,7 @@ describe('buildFrontendOnboardingDailySetupCliHogql', () => {
     expect(selectedSetupCopyBranch).toContain('JSONExtractString(toString(selected_events.properties), \'$host\') = \'console.capgo.app\'')
     expectAugust22ProductionHostFallback(selectedSetupCopyBranch, 'selected_events.properties', 'selected_events.timestamp')
     expect(selectedSetupCopyBranch).toContain('toIntOrZero(toString(selected_events.properties.onboarding_version)) IN (2, 3, 4)')
-    expect(selectedSetupCopyBranch).toContain("toString(selected_events.properties.onboarding_version) IN ('5.A', '5.C')")
+    expect(selectedSetupCopyBranch).toContain("toString(selected_events.properties.onboarding_version) IN ('5.A', '5.C', '5.E', '5.F', '5.G')")
     expect(selectedSetupCopyBranch).toContain('JSONExtractString(toString(selected_events.properties), \'step\') = \'setup\'')
 
     expect(query).toContain('count() OVER () AS total_events')

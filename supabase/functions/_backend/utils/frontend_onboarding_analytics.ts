@@ -9,6 +9,7 @@ import {
   hogqlOnboardingVersionIn,
   hogqlOnboardingVersionIsV4,
   hogqlOnboardingVersionValue,
+  isFrontendOnboardingVersionLabel,
 } from './frontend_onboarding_analytics_model.ts'
 import { getFrontendOnboardingDailySetupCliEvents } from './frontend_onboarding_daily_setup_cli_outcomes.ts'
 import {
@@ -135,7 +136,7 @@ function personId(value: unknown): string {
 }
 
 function onboardingVersion(value: unknown): FrontendOnboardingVersion | null {
-  if (value === '5.A' || value === '5.C')
+  if (isFrontendOnboardingVersionLabel(value))
     return 4
 
   return FRONTEND_ONBOARDING_VERSIONS.includes(value as FrontendOnboardingVersion)
