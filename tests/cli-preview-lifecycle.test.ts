@@ -11,6 +11,7 @@ import {
   resetAppData,
   SUPABASE_ANON_KEY,
   SUPABASE_BASE_URL,
+  warmEdgeEndpoint,
 } from './test-utils.ts'
 
 vi.mock('../cli/src/utils', async (importOriginal) => {
@@ -123,6 +124,7 @@ async function createAppApiKey(name: string, roleName = 'app_preview'): Promise<
 beforeAll(async () => {
   authHeaders = await getAuthHeaders()
   await resetAndSeedAppData(APPNAME, seedOptions)
+  await warmEdgeEndpoint('/apikey', { method: 'GET', headers: authHeaders })
 })
 
 afterAll(async () => {
