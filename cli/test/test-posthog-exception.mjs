@@ -246,6 +246,9 @@ try {
   // `uploadFail` now throws CliUserError, so a duplicate-version upload — a normal
   // `bundle upload` outcome — is filtered out of error tracking by type.
   assert.equal(shouldCapturePosthogException(new CliUserError('Version 1.2.3 already exists')), false)
+  // `app add` throws CliUserError when the app ID is taken by another org — a
+  // normal user situation, not a crash — so it is filtered out by type too.
+  assert.equal(shouldCapturePosthogException(new CliUserError('Could not add app: App ID com.example.app already exists')), false)
   // The `--fail-on-incompatible` abort is a state the user asked for, not a
   // crash, so it must never open an error tracking issue either.
   assert.equal(new IncompatibleBundleError('Upload aborted: bundle is incompatible') instanceof CliUserError, true)
