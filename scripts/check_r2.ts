@@ -178,13 +178,14 @@ async function main() {
 
     async function permanentDeleteCandidate(candidate: { key: string, etag?: string, lastModified?: Date }): Promise<'ok' | 'skipped' | 'failed'> {
       const { key, etag: candidateEtag, lastModified: candidateLastModified } = candidate
-      if (!(await isStillOrphaned(key))) {
-        console.warn(`Skipped ${key}: app_versions row appeared since discovery`)
-        return 'skipped'
-      }
       if (!candidateEtag) {
         console.warn(`Failed ${key}: missing discovery ETag; source retained`)
         return 'failed'
+      }
+
+      if (!(await isStillOrphaned(key))) {
+        console.warn(`Skipped ${key}: app_versions row appeared since discovery`)
+        return 'skipped'
       }
 
       const outcome = await permanentDeleteAwsLiveKey(s3, S3_BUCKET, key, candidateEtag, candidateLastModified)
@@ -212,10 +213,6 @@ async function main() {
 
     async function moveKeyToTrash(candidate: { key: string, etag?: string, lastModified?: Date }): Promise<'ok' | 'skipped' | 'failed'> {
       const { key, etag: candidateEtag, lastModified: candidateLastModified } = candidate
-      if (!(await isStillOrphaned(key))) {
-        console.warn(`Skipped ${key}: app_versions row appeared since discovery`)
-        return 'skipped'
-      }
       if (!candidateEtag) {
         console.warn(`Failed ${key}: missing discovery ETag; source retained`)
         return 'failed'
@@ -258,6 +255,11 @@ async function main() {
       catch (headError) {
         console.error(`Failed to allocate trash destination for ${key}:`, headError)
         return 'failed'
+      }
+
+      if (!(await isStillOrphaned(key))) {
+        console.warn(`Skipped ${key}: app_versions row appeared since discovery`)
+        return 'skipped'
       }
 
       try {
@@ -307,6 +309,11 @@ async function main() {
         }
         console.error(`Failed to trash ${key}:`, copyError)
         return 'failed'
+      }
+
+      if (!(await isStillOrphaned(key))) {
+        console.warn(`Skipped delete for ${key}: app_versions row appeared after trash copy`)
+        return 'skipped'
       }
 
       try {

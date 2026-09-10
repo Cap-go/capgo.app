@@ -1699,15 +1699,6 @@ async function delete_cleanup_candidates() {
 
     async function processCandidate(file: { key: string, size?: number, lastModified?: string | Date | null, etag?: string | null }): Promise<{ key: string, success: boolean, error: string | null, skipped?: boolean, size?: number }> {
         try {
-            if (await isKeyReferencedInAppVersions(file.key)) {
-                return {
-                    key: file.key,
-                    success: true,
-                    error: 'app_versions row appeared since discovery',
-                    skipped: true,
-                }
-            }
-
             if (!file.etag) {
                 return {
                     key: file.key,
@@ -1788,6 +1779,14 @@ async function delete_cleanup_candidates() {
             }
 
             if (deleteMode === 'permanent') {
+                if (await isKeyReferencedInAppVersions(file.key)) {
+                    return {
+                        key: file.key,
+                        success: true,
+                        error: 'app_versions row appeared since discovery',
+                        skipped: true,
+                    }
+                }
                 const outcome = await permanentDeleteAwsLiveKey(s3, S3_BUCKET, file.key, sourceEtag, sourceLastModified)
                 switch (outcome) {
                   case 'deleted':
@@ -1819,6 +1818,15 @@ async function delete_cleanup_candidates() {
                         key: file.key,
                         success: false,
                         error: `Failed to allocate trash destination: ${allocError.message}`,
+                    }
+                }
+
+                if (await isKeyReferencedInAppVersions(file.key)) {
+                    return {
+                        key: file.key,
+                        success: true,
+                        error: 'app_versions row appeared since discovery',
+                        skipped: true,
                     }
                 }
 
@@ -1875,6 +1883,15 @@ async function delete_cleanup_candidates() {
                         }
                     }
                     return { key: file.key, success: false, error: copyError.message }
+                }
+
+                if (await isKeyReferencedInAppVersions(file.key)) {
+                    return {
+                        key: file.key,
+                        success: true,
+                        error: 'app_versions row appeared after trash copy',
+                        skipped: true,
+                    }
                 }
 
                 try {
