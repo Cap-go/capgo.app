@@ -159,7 +159,9 @@ export async function resolveCheckoutPlanProductId(
   planProductId: string,
   billingAccount: BillingAccount,
 ): Promise<string> {
-  const { data: plan } = await findPlanByProductId(c, planProductId)
+  const { data: plan, error } = await findPlanByProductId(c, planProductId)
+  if (error)
+    throw error
   if (!plan)
     return planProductId
   return getPlanProductId(plan, billingAccount)

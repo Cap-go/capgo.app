@@ -2979,15 +2979,7 @@ export type Database = {
           updated_at?: string
           upgraded_at?: string | null
         }
-        Relationships: [
-          {
-            foreignKeyName: "stripe_info_product_id_fkey"
-            columns: ["product_id"]
-            isOneToOne: false
-            referencedRelation: "plans"
-            referencedColumns: ["stripe_id"]
-          },
-        ]
+        Relationships: []
       }
       tmp_users: {
         Row: {
