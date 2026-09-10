@@ -129,7 +129,10 @@ AS $$
     THEN EXISTS (
       SELECT 1
       FROM public.channels
+      JOIN public.apps
+        ON public.channels.app_id = public.apps.app_id
       WHERE public.channels.rbac_id = p_channel_id
+        AND public.apps.id = p_app_id
         AND p_org_id = public.channels.owner_org
         AND public.rbac_check_permission_request(
           public.rbac_perm_app_update_user_roles(),
@@ -145,6 +148,7 @@ AS $$
       JOIN public.app_versions
         ON public.app_versions.app_id = public.apps.app_id
       WHERE public.app_versions.id = p_bundle_id
+        AND public.apps.id = p_app_id
         AND p_org_id = public.apps.owner_org
         AND public.rbac_check_permission_request(
           public.rbac_perm_app_update_user_roles(),

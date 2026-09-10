@@ -182,6 +182,14 @@ async function ensureOrgMembership(
     await pgClient.query('BEGIN')
     transactionStarted = true
 
+    await pgClient.query(
+      `SELECT pg_catalog.pg_advisory_xact_lock(
+         pg_catalog.hashtext($1::text),
+         pg_catalog.hashtext($2::text)
+       )`,
+      [`accept_invitation_membership:${userId}`, invitation.org_id],
+    )
+
     const existingMembership = await pgClient.query<{ id: string }>(
       `SELECT public.org_users.id
        FROM public.org_users

@@ -2,7 +2,7 @@
 -- Direct PostgREST INSERT of an app-scoped role_binding must require org membership.
 BEGIN;
 
-SELECT plan(12);
+SELECT plan(14);
 
 SELECT tests.create_supabase_user(
   'rbac_membership_admin',
@@ -68,6 +68,16 @@ VALUES (
   '',
   tests.get_supabase_uid('rbac_membership_admin'),
   'Role bindings membership app',
+  '70000000-0000-4000-8000-000000009976'
+)
+ON CONFLICT (app_id) DO NOTHING;
+
+INSERT INTO public.apps (app_id, icon_url, user_id, name, owner_org)
+VALUES (
+  'com.test.rbac.membership.other.ghsa9976',
+  '',
+  tests.get_supabase_uid('rbac_membership_admin'),
+  'Role bindings membership other app',
   '70000000-0000-4000-8000-000000009976'
 )
 ON CONFLICT (app_id) DO NOTHING;
@@ -570,6 +580,68 @@ SELECT lives_ok(
       AND apps.app_id = 'com.test.rbac.membership.ghsa9976'
       AND channels.id = 70099761$$,
   'org admin can grant a channel-scoped role to an existing org member'
+);
+
+SELECT throws_ok(
+  $$INSERT INTO public.role_bindings (
+      principal_type,
+      principal_id,
+      role_id,
+      scope_type,
+      org_id,
+      app_id,
+      channel_id,
+      granted_by
+    )
+    SELECT
+      public.rbac_principal_user(),
+      tests.get_supabase_uid('rbac_membership_member'),
+      roles.id,
+      public.rbac_scope_channel(),
+      '70000000-0000-4000-8000-000000009976',
+      other_apps.id,
+      channels.rbac_id,
+      tests.get_supabase_uid('rbac_membership_admin')
+    FROM public.roles
+    CROSS JOIN public.apps AS other_apps
+    CROSS JOIN public.channels
+    WHERE roles.name = public.rbac_role_channel_reader()
+      AND roles.scope_type = public.rbac_scope_channel()
+      AND other_apps.app_id = 'com.test.rbac.membership.other.ghsa9976'
+      AND channels.id = 70099761$$,
+  '42501',
+  'new row violates row-level security policy for table "role_bindings"',
+  'org admin cannot grant a channel-scoped role when app_id mismatches the channel app'
+);
+
+SELECT throws_ok(
+  $$INSERT INTO public.role_bindings (
+      principal_type,
+      principal_id,
+      role_id,
+      scope_type,
+      org_id,
+      app_id,
+      bundle_id,
+      granted_by
+    )
+    SELECT
+      public.rbac_principal_user(),
+      tests.get_supabase_uid('rbac_membership_member'),
+      roles.id,
+      public.rbac_scope_bundle(),
+      '70000000-0000-4000-8000-000000009976',
+      other_apps.id,
+      70009976,
+      tests.get_supabase_uid('rbac_membership_admin')
+    FROM public.roles
+    CROSS JOIN public.apps AS other_apps
+    WHERE roles.name = public.rbac_role_bundle_reader()
+      AND roles.scope_type = public.rbac_scope_bundle()
+      AND other_apps.app_id = 'com.test.rbac.membership.other.ghsa9976'$$,
+  '42501',
+  'new row violates row-level security policy for table "role_bindings"',
+  'org admin cannot grant a bundle-scoped role when app_id mismatches the bundle app'
 );
 
 SELECT * FROM finish();
