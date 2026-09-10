@@ -500,7 +500,7 @@ Expected: all deployment and replica contracts pass.
 - Create: `tests/publish-schema-types.test.ts`
 - Create: `scripts/publish-schema-types.ts`
 
-- [ ] **Step 1: Write failing publisher tests**
+- [x] **Step 1: Write failing publisher tests**
 
 Define:
 
@@ -519,17 +519,17 @@ export function publishSchemaTypes(
 
 Test that unchanged remote `main` uses a normal atomic `HEAD:refs/heads/main` push, branch movement before the push returns `retry` without pushing, a rejected push followed by branch movement returns `retry`, and a rejected push with unchanged remote state is a genuine error.
 
-- [ ] **Step 2: Run the test and verify failure**
+- [x] **Step 2: Run the test and verify failure**
 
 ```bash
 bunx vitest run tests/publish-schema-types.test.ts
 ```
 
-- [ ] **Step 3: Implement the publisher**
+- [x] **Step 3: Implement the publisher**
 
 Validate branch/SHA inputs, read remote `main` with `git ls-remote --heads`, and push only the prepared commit. Do not use `git pull`, force push, merge, or rebase. The CLI prints `published` or `retry` for the workflow loop.
 
-- [ ] **Step 4: Re-run the publisher tests**
+- [x] **Step 4: Re-run the publisher tests**
 
 Expected: all compare-and-swap cases pass.
 
