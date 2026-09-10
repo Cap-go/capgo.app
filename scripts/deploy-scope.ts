@@ -141,6 +141,10 @@ export function hasMigrationChanges(files: string[]): boolean {
   return files.some(file => file.startsWith('supabase/migrations/'))
 }
 
+export function requiresSchemaTypesSync(result: DeployScopeResult): boolean {
+  return result.base === null ? result.scope.supabase : hasMigrationChanges(result.files)
+}
+
 export function getComparableDeployHead(after: string, run: GitRunner = runGit): string {
   const subject = run(['log', '-1', '--format=%s', after])
   if (!subject.startsWith('chore(release):')) {
@@ -224,5 +228,5 @@ if (import.meta.main) {
   for (const target of deployTargets) {
     console.log(`${target}=${result.scope[target]}`)
   }
-  console.log(`has_migration_changes=${hasMigrationChanges(result.files)}`)
+  console.log(`has_migration_changes=${requiresSchemaTypesSync(result)}`)
 }

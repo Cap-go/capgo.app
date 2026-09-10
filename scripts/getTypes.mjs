@@ -48,25 +48,18 @@ async function getTypeGenTarget() {
   )
 }
 
-async function main() {
-  try {
-    const args = ['supabase', 'gen', 'types', 'typescript', ...await getTypeGenTarget()]
-    const { stdout, stderr } = await execFile('bunx', args)
-    await writeFile('src/types/supabase.types.ts', stdout)
-    if (stderr)
-      console.error(stderr)
-    else
-      console.log('Type generated ✅')
-  }
-  catch (e) {
-    console.error(e) // should contain code (exit code) and signal (that caused the termination).
-  }
-  try {
-    await copyFile('src/types/supabase.types.ts', 'supabase/functions/_backend/utils/supabase.types.ts')
-    console.log('Copy done ✅')
-  }
-  catch (e) {
-    console.error(e) // should contain code (exit code) and signal (that caused the termination).
-  }
+export async function main() {
+  const args = ['supabase', 'gen', 'types', 'typescript', ...await getTypeGenTarget()]
+  const { stdout, stderr } = await execFile('bunx', args)
+  await writeFile('src/types/supabase.types.ts', stdout)
+  if (stderr)
+    console.error(stderr)
+  else
+    console.log('Type generated ✅')
+
+  await copyFile('src/types/supabase.types.ts', 'supabase/functions/_backend/utils/supabase.types.ts')
+  console.log('Copy done ✅')
 }
-main()
+
+if (import.meta.main)
+  await main()

@@ -125,13 +125,21 @@ validates and resolves the exact tag from its original `github.ref_name`. GitHub
 preserves the original `GITHUB_REF` and `GITHUB_SHA` on a re-run, so every job in
 that run remains bound to the same immutable release.
 
-Before every production-mutating job, a shared guard fetches the current tags
-and verifies that the run's original tag is still the newest tag for its stable
-or alpha environment:
+At the start of an initial workflow attempt, the scope job fetches the current
+tags and verifies that the run's original tag is still the newest tag for its
+stable or alpha environment. Once that attempt begins mutating production, it
+runs to completion even if a newer tag is published. This prevents a newer tag
+from interrupting the older deployment after only some targets were updated;
+the environment-wide deployment concurrency group keeps the newer deployment
+queued until the older one finishes.
+
+On a workflow re-run, every production-mutating job repeats the freshness check
+before that job touches production. Therefore:
 
 - If it is still newest, a failed job may be retried idempotently.
 - If a newer matching tag exists, the historical job fails fast before touching
-  production and directs the operator to retry the newer tag's deployment run.
+  production during that retry and directs the operator to retry the newer
+  tag's deployment run.
 
 The supported recovery action is **Re-run failed jobs**. GitHub re-runs failed
 jobs and their dependent jobs while retaining the original event ref. The
