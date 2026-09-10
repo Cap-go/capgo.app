@@ -26,6 +26,10 @@ interface StatsRes {
   error?: string
 }
 
+interface StatsPayload extends ReturnType<typeof getBaseData> {
+  action: string
+}
+
 async function postStats(data: object) {
   return fetchTestRequest(`${PLUGIN_BASE_URL}/stats`, {
     method: 'POST',
@@ -100,7 +104,7 @@ describeBackend('stats_mode app setting', () => {
     await supabase.from('apps').update({ stats_mode: 'billingOnly' }).eq('app_id', APP_NAME_STATS_MODE)
 
     const uuid = randomUUID().toLowerCase()
-    const baseData = getBaseData(APP_NAME_STATS_MODE)
+    const baseData = getBaseData(APP_NAME_STATS_MODE) as StatsPayload
     baseData.device_id = uuid
     baseData.action = 'app_crash'
     baseData.version_build = getVersionFromAction('set')
@@ -127,7 +131,7 @@ describeBackend('stats_mode app setting', () => {
     await supabase.from('apps').update({ stats_mode: 'billingOnly' }).eq('app_id', APP_NAME_STATS_MODE)
 
     const uuid = randomUUID().toLowerCase()
-    const baseData = getBaseData(APP_NAME_STATS_MODE)
+    const baseData = getBaseData(APP_NAME_STATS_MODE) as StatsPayload
     baseData.device_id = uuid
     baseData.action = 'set'
     baseData.version_build = getVersionFromAction('set')
@@ -157,7 +161,7 @@ describeBackend('stats_mode app setting', () => {
     await supabase.from('apps').update({ stats_mode: 'updatesOnly' }).eq('app_id', APP_NAME_STATS_MODE)
 
     const uuid = randomUUID().toLowerCase()
-    const baseData = getBaseData(APP_NAME_STATS_MODE)
+    const baseData = getBaseData(APP_NAME_STATS_MODE) as StatsPayload
     baseData.device_id = uuid
     baseData.action = 'app_crash'
     baseData.version_build = getVersionFromAction('set')

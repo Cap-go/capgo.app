@@ -24,6 +24,7 @@ export const apps = pgTable('apps', {
   expose_metadata: boolean('expose_metadata').notNull().default(false),
   block_provider_infra_requests: boolean('block_provider_infra_requests').notNull().default(true),
   allow_device_custom_id: boolean('allow_device_custom_id').notNull().default(true),
+  stats_mode: varchar('stats_mode').notNull().default('all'),
   need_onboarding: boolean('need_onboarding').notNull().default(false),
   onboarding: jsonb('onboarding').notNull().default({}),
   created_from_onboarding: boolean('created_from_onboarding').notNull().default(false),

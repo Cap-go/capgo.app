@@ -1,4 +1,6 @@
 import type { Context } from 'hono'
+import type { AppStatsMode } from './stats_mode.ts'
+import { normalizeAppStatsMode } from './stats_mode.ts'
 import { CacheHelper } from './cache.ts'
 import { backgroundTask, isStripeConfigured } from './utils.ts'
 
@@ -11,12 +13,14 @@ interface AppStatusCachePayload {
   status: AppStatus
   allow_device_custom_id: boolean
   block_provider_infra_requests: boolean
+  stats_mode?: AppStatsMode
 }
 
 export interface AppStatusResult {
   status: AppStatus | null
   allow_device_custom_id: boolean
   block_provider_infra_requests: boolean
+  stats_mode: AppStatsMode
   cacheHit: boolean
 }
 
@@ -38,15 +42,18 @@ export async function getAppStatus(c: Context, appId: string): Promise<AppStatus
       status: null,
       allow_device_custom_id: true,
       block_provider_infra_requests: false,
+      stats_mode: 'all',
       cacheHit: false,
     }
   }
   const blockProviderInfraRequests = payload.block_provider_infra_requests ?? false
+  const statsMode = normalizeAppStatsMode(payload.stats_mode)
   if (payload.status === 'cancelled' && !isStripeConfigured(c)) {
     return {
       status: 'cloud',
       allow_device_custom_id: payload.allow_device_custom_id,
       block_provider_infra_requests: blockProviderInfraRequests,
+      stats_mode: statsMode,
       cacheHit: true,
     }
   }
@@ -54,6 +61,7 @@ export async function getAppStatus(c: Context, appId: string): Promise<AppStatus
     status: payload.status,
     allow_device_custom_id: payload.allow_device_custom_id,
     block_provider_infra_requests: blockProviderInfraRequests,
+    stats_mode: statsMode,
     cacheHit: true,
   }
 }
@@ -64,6 +72,7 @@ export function setAppStatus(
   status: AppStatus,
   allowDeviceCustomId: boolean,
   blockProviderInfraRequests = false,
+  statsMode: AppStatsMode = 'all',
 ) {
   return backgroundTask(c, (async () => {
     const cacheEntry = buildAppStatusRequest(c, appId)
@@ -71,6 +80,7 @@ export function setAppStatus(
       status,
       allow_device_custom_id: allowDeviceCustomId,
       block_provider_infra_requests: blockProviderInfraRequests,
+      stats_mode: normalizeAppStatsMode(statsMode),
     }
     await cacheEntry.helper.putJson(cacheEntry.request, payload, APP_STATUS_CACHE_TTL_SECONDS)
   })())

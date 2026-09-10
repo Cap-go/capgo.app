@@ -78,15 +78,16 @@ export function applyStatsModeToBody<T extends AppStats>(body: T, mode: AppStats
   if (normalizedMode === STATS_MODE_ALL)
     return body
 
-  const next = { ...body }
-  if (usesBillingStatsPayload(normalizedMode)) {
-    delete next.custom_id
-    delete next.metadata
-    delete next.install_source
-    delete next.defaultChannel
-    delete next.key_id
-    delete next.old_version_name
-  }
+  if (!usesBillingStatsPayload(normalizedMode))
+    return body
+
+  const next = { ...body } as T
+  next.custom_id = undefined
+  next.metadata = undefined
+  next.install_source = undefined
+  next.defaultChannel = ''
+  next.key_id = undefined
+  next.old_version_name = undefined
   return next
 }
 
