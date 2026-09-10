@@ -1,12 +1,13 @@
 # Vanilla Postgres 17 for Phase 0 migration compatibility testing.
 # Does NOT include GoTrue, PostgREST, Studio, Realtime, or Storage API.
 # Use `bun run postgres:vanilla:push` to apply supabase/migrations/ via the Supabase CLI.
+name: capgo-vanilla
 services:
   postgres:
     image: postgres:17-alpine
     container_name: capgo-vanilla-postgres
     ports:
-      - '5432:5432'
+      - '127.0.0.1:5432:5432'
     environment:
       POSTGRES_USER: ${VANILLA_POSTGRES_USER}
       POSTGRES_PASSWORD: ${VANILLA_POSTGRES_PASSWORD}

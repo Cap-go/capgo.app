@@ -101,7 +101,7 @@ and writes a timestamped log under `.context/vanilla-postgres/`.
 Override the URL when needed:
 
 ```bash
-DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:5432/capgo?sslmode=disable' bun run postgres:vanilla:push
+VANILLA_POSTGRES_DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:5432/capgo?sslmode=disable' bun run postgres:vanilla:push
 ```
 
 ### Create new migrations (unchanged)

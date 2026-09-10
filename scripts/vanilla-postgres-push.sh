@@ -11,7 +11,18 @@ cd "$ROOT_DIR"
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 SERVICE="${VANILLA_POSTGRES_SERVICE:-postgres}"
-DATABASE_URL="${DATABASE_URL:-postgresql://${VANILLA_POSTGRES_USER}:${VANILLA_POSTGRES_PASSWORD}@127.0.0.1:5432/${VANILLA_POSTGRES_DB}?sslmode=disable}"
+
+if [[ -n "${DATABASE_URL:-}" && -z "${VANILLA_POSTGRES_DATABASE_URL:-}" ]]; then
+  echo "Refusing to use inherited DATABASE_URL for vanilla Postgres migrations." >&2
+  echo "Unset DATABASE_URL or set VANILLA_POSTGRES_DATABASE_URL to opt in." >&2
+  exit 1
+fi
+
+if [[ -n "${VANILLA_POSTGRES_DATABASE_URL:-}" ]]; then
+  DATABASE_URL="$VANILLA_POSTGRES_DATABASE_URL"
+else
+  DATABASE_URL="$(bun -e 'const encode = encodeURIComponent; console.log(`postgresql://${encode(process.env.VANILLA_POSTGRES_USER)}:${encode(process.env.VANILLA_POSTGRES_PASSWORD)}@127.0.0.1:5432/${encode(process.env.VANILLA_POSTGRES_DB)}?sslmode=disable`)')"
+fi
 
 compose() {
   docker compose -f "$COMPOSE_FILE" "$@"

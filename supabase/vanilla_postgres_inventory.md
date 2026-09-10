@@ -160,8 +160,7 @@ bun run postgres:vanilla:push   # expect failure at pg_cron on fresh DB
 Fresh database:
 
 ```bash
-bun run postgres:vanilla:down
-docker volume rm workspace_capgo_vanilla_postgres_data 2>/dev/null || true
+docker compose -f docker-compose.yml down -v
 bun run postgres:vanilla:up
 bun run postgres:vanilla:push
 ```
