@@ -609,11 +609,12 @@ export function isPreconditionFailedError(error: unknown): boolean {
     name?: string
     Code?: string
     code?: string
+    status?: number
     statusCode?: number
     $metadata?: { httpStatusCode?: number }
   }
 
-  if (err.$metadata?.httpStatusCode === 412 || err.statusCode === 412)
+  if (err.$metadata?.httpStatusCode === 412 || err.status === 412 || err.statusCode === 412)
     return true
 
   return [err.name, err.Code, err.code].some(code => code === 'PreconditionFailed')

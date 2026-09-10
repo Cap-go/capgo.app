@@ -164,10 +164,14 @@ async function main() {
       return { etag: head.ETag, lastModified: head.LastModified }
     })
 
-    async function moveKeyToTrash(candidate: { key: string, etag?: string }): Promise<'ok' | 'skipped' | 'failed'> {
-      const { key, etag: candidateEtag } = candidate
+    async function moveKeyToTrash(candidate: { key: string, etag?: string, lastModified?: Date }): Promise<'ok' | 'skipped' | 'failed'> {
+      const { key, etag: candidateEtag, lastModified: candidateLastModified } = candidate
       if (!candidateEtag) {
         console.warn(`Failed ${key}: missing discovery ETag; source retained`)
+        return 'failed'
+      }
+      if (!candidateLastModified) {
+        console.warn(`Failed ${key}: missing discovery Last-Modified; source retained`)
         return 'failed'
       }
       let sourceEtag: string | undefined
@@ -178,6 +182,10 @@ async function main() {
         sourceLastModified = head.LastModified
         if (candidateEtag !== sourceEtag) {
           console.warn(`Skipped ${key}: live object etag changed since discovery`)
+          return 'skipped'
+        }
+        if (!sourceLastModified || sourceLastModified.getTime() !== candidateLastModified.getTime()) {
+          console.warn(`Skipped ${key}: live object lastModified changed since discovery`)
           return 'skipped'
         }
       }

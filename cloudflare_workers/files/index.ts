@@ -46,6 +46,9 @@ function isCacheableAttachmentRead(request: Request): boolean {
 
 function buildWorkersCacheKey(request: Request): string | null {
   const url = new URL(request.url)
+  if (isPreviewSubdomain(url.hostname))
+    return null
+
   if (isCacheableAttachmentRead(request))
     return `/files-cache${url.pathname}${normalizeSearch(url, FILE_READ_TRACKING_QUERY_PARAMS)}`
 

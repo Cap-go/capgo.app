@@ -1679,6 +1679,13 @@ async function delete_cleanup_candidates() {
                     error: 'Cleanup candidate has no discovery ETag; source retained',
                 }
             }
+            if (!file.lastModified) {
+                return {
+                    key: file.key,
+                    success: false,
+                    error: 'Cleanup candidate has no discovery Last-Modified; source retained',
+                }
+            }
 
             let sourceEtag: string | undefined
             let sourceLastModified: Date | undefined
@@ -1692,15 +1699,20 @@ async function delete_cleanup_candidates() {
                         skipped: true,
                     }
                 }
-                if (file.lastModified && head.LastModified) {
-                    const candidateTime = new Date(file.lastModified).getTime()
-                    if (candidateTime !== head.LastModified.getTime()) {
-                        return {
-                            key: file.key,
-                            success: true,
-                            error: 'Cleanup candidate stale: object lastModified changed since prepare_cleanup_zip',
-                            skipped: true,
-                        }
+                if (!head.LastModified) {
+                    return {
+                        key: file.key,
+                        success: false,
+                        error: 'Live object has no Last-Modified from HeadObject; source retained',
+                    }
+                }
+                const candidateTime = new Date(file.lastModified).getTime()
+                if (candidateTime !== head.LastModified.getTime()) {
+                    return {
+                        key: file.key,
+                        success: true,
+                        error: 'Cleanup candidate stale: object lastModified changed since prepare_cleanup_zip',
+                        skipped: true,
                     }
                 }
                 if (!head.ETag) {

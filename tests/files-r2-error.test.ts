@@ -161,7 +161,7 @@ describe('files worker cache keys', () => {
     const { filesWorkerCacheTestUtils } = await import('../cloudflare_workers/files/index.ts')
 
     expect(filesWorkerCacheTestUtils.buildWorkersCacheKey(
-      new Request('https://app-123.preview.capgo.app/index.html?b=2&a=1'),
+      new Request('https://app-123.preview.capgo.app/files/read/attachments/orgs/test/apps/app/bundle.zip?b=2&a=1&key=checksum'),
     )).toBeNull()
   })
 

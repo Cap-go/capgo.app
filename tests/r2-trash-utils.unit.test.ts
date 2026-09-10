@@ -100,6 +100,7 @@ describe('isPreconditionFailedError', () => {
     expect(isPreconditionFailedError({ name: 'PreconditionFailed' })).toBe(true)
     expect(isPreconditionFailedError({ Code: 'PreconditionFailed' })).toBe(true)
     expect(isPreconditionFailedError({ $metadata: { httpStatusCode: 412 } })).toBe(true)
+    expect(isPreconditionFailedError({ status: 412 })).toBe(true)
     expect(isPreconditionFailedError({ name: 'NotFound' })).toBe(false)
   })
 })
