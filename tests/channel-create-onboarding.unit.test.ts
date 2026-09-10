@@ -18,15 +18,15 @@ function expectSourceOrder(source: string, markers: string[]) {
 describe('channel creation onboarding', () => {
   it.concurrent('places a required creation step between the three explanations and CLI', () => {
     expect(onboardingSource).toContain(`import ChannelCreateOnboarding from './ChannelCreateOnboarding.vue'`)
-    expect(onboardingSource).toContain(`type SetupStage = 'channel-routing' | 'channel-self-assign' | 'channel-console-assign' | 'channel-create' | 'cli'`)
+    expect(onboardingSource).toContain(`type SetupStage = UserOnboardingSetupStage`)
     expectSourceOrder(onboardingSource, [
-      `setupStage.value = 'channel-self-assign'`,
-      `setupStage.value = 'channel-console-assign'`,
-      `setupStage.value = 'channel-create'`,
-      `setupStage.value = 'cli'`,
+      `setSetupStage('channel-self-assign')`,
+      `setSetupStage('channel-console-assign')`,
+      `setSetupStage('channel-create')`,
+      `setSetupStage('cli')`,
     ])
     expect(onboardingSource.match(/<ChannelCreateOnboarding/g)).toHaveLength(2)
-    expect(onboardingSource.match(/<ChannelCreateOnboarding\s+v-else-if="setupStage === 'channel-create'"\s+:app-id="createdApp.app_id"/g)).toHaveLength(2)
+    expect(onboardingSource.match(/<ChannelCreateOnboarding\s+v-else-if="newChannelTreatment && setupStage === 'channel-create'"\s+:app-id="createdApp.app_id"/g)).toHaveLength(2)
   })
 
   it.concurrent('creates a real default channel for the onboarding app', () => {
@@ -55,6 +55,9 @@ describe('channel creation onboarding', () => {
     expect(componentSource).toContain(`.eq('app_id', props.appId)`)
     expect(componentSource).toContain(`.eq('name', normalizedName)`)
     expect(componentSource).toContain('.maybeSingle()')
+    expect(componentSource).toContain(`const allowSelfAssign = ref(true)`)
+    expect(componentSource).toContain(`absolute left-3.5 top-1/2 z-10`)
+    expect(componentSource).toContain(`mt-1 block min-h-10 text-xs`)
   })
 
   it.concurrent('concludes the four-part story in user-facing copy', () => {
@@ -63,6 +66,7 @@ describe('channel creation onboarding', () => {
     expect(messages['channel-create-onboarding-description']).toContain('real release route')
     expect(messages['channel-create-onboarding-default-title']).toBe('Default channel')
     expect(messages['channel-create-onboarding-self-assign-title']).toBe('Allow device self-assignment')
+    expect(messages['channel-create-onboarding-self-assign-disallow-title']).toBe('Disallow device self-assignment')
     expect(messages['channel-create-onboarding-submit']).toBe('Create channel')
     expect(messages['channel-create-onboarding-success-title']).toBe('Your first channel is ready')
   })

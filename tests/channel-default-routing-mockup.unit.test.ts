@@ -57,16 +57,16 @@ describe('channel default routing animation', () => {
     const responseBubbleRule = sourceBetween('.cr-response-bubble {', '.cr-bubble::before {')
 
     expect(requestBubbleRule).toContain('left: calc(50% + 7rem);')
-    expect(responseBubbleRule).toContain('right: calc(50% + 3.8rem);')
+    expect(responseBubbleRule).toContain('right: calc(50% + 6.2rem);')
   })
 
   it.concurrent('keeps the onboarding action in the footer while compacting the embedded animation', () => {
-    expect(mockupSource).toContain('<footer v-if="props.embedded" class="cr-onboarding-footer">')
+    expect(mockupSource).toContain('<footer v-if="props.embedded" class="flex items-center justify-between border-t')
     expect(mockupSource).toContain('data-test="channel-default-routing-continue"')
     expect(mockupSource).toContain(`@click="emit('continue')"`)
 
-    const embeddedStageRule = sourceBetween('.cr-page-embedded .cr-stage {', '.cr-page-embedded .cr-device-node {')
-    expect(embeddedStageRule).toContain('min-height: clamp(32rem, 55vh, 36rem);')
+    const embeddedStageRule = sourceBetween('.cr-page-embedded .cr-stage {', '@media (min-width: 640px)')
+    expect(embeddedStageRule).toContain('min-height: 27rem;')
 
     const embeddedPositions = sourceBetween('.cr-page-embedded .cr-device-node {', '@media (prefers-reduced-motion: reduce)')
     expect(embeddedPositions).toContain('.cr-page-embedded .cr-capgo-node {')

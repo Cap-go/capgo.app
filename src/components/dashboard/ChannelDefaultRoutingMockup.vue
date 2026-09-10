@@ -35,6 +35,65 @@ function elements(root: HTMLElement, selector: string): Element[] {
   return Array.from(root.querySelectorAll(selector))
 }
 
+const NETWORK_VIEWBOX_WIDTH = 1000
+const NETWORK_VIEWBOX_HEIGHT = 680
+
+function roundPath(value: number) {
+  return Math.round(value * 10) / 10
+}
+
+function svgPoint(svg: SVGSVGElement, el: Element, yAnchor: 'top' | 'center' | 'bottom') {
+  const svgRect = svg.getBoundingClientRect()
+  const rect = el.getBoundingClientRect()
+  if (svgRect.width < 1 || svgRect.height < 1)
+    return null
+
+  return {
+    x: (rect.left + rect.width / 2 - svgRect.left) / svgRect.width * NETWORK_VIEWBOX_WIDTH,
+    y: (rect.top + rect.height * (yAnchor === 'top' ? 0 : yAnchor === 'bottom' ? 1 : 0.5) - svgRect.top) / svgRect.height * NETWORK_VIEWBOX_HEIGHT,
+  }
+}
+
+function curvePath(from: { x: number, y: number }, to: { x: number, y: number }) {
+  const dx = to.x - from.x
+  const dy = to.y - from.y
+  if (Math.abs(dx) < 8) {
+    return `M${roundPath(from.x)} ${roundPath(from.y)} C${roundPath(from.x)} ${roundPath(from.y + dy * 0.35)} ${roundPath(to.x)} ${roundPath(to.y - dy * 0.25)} ${roundPath(to.x)} ${roundPath(to.y)}`
+  }
+
+  return `M${roundPath(from.x)} ${roundPath(from.y)} C${roundPath(from.x + dx * 0.1)} ${roundPath(from.y + dy * 0.5)} ${roundPath(to.x)} ${roundPath(to.y - Math.max(64, dy * 0.5))} ${roundPath(to.x)} ${roundPath(to.y)}`
+}
+
+function syncRoutingPaths(root: HTMLElement) {
+  const svg = element<SVGSVGElement>(root, '.cr-network')
+  const phone = element<HTMLElement>(root, '.cr-phone')
+  const capgo = element<HTMLElement>(root, '.cr-capgo-core')
+  const production = element<HTMLElement>(root, '.cr-production-card')
+  const development = element<HTMLElement>(root, '.cr-dev-node .cr-channel-card')
+  const staging = element<HTMLElement>(root, '.cr-staging-node .cr-channel-card')
+  if (!svg || !phone || !capgo || !production || !development || !staging)
+    return false
+
+  const phoneCenter = svgPoint(svg, phone, 'center')
+  const capgoCenter = svgPoint(svg, capgo, 'center')
+  const productionTop = svgPoint(svg, production, 'top')
+  const developmentTop = svgPoint(svg, development, 'top')
+  const stagingTop = svgPoint(svg, staging, 'top')
+  if (!phoneCenter || !capgoCenter || !productionTop || !developmentTop || !stagingTop)
+    return false
+
+  productionTop.y += 8
+  developmentTop.y += 8
+  stagingTop.y += 8
+
+  svg.querySelector('.cr-path-request')?.setAttribute('d', curvePath(phoneCenter, capgoCenter))
+  svg.querySelector('.cr-path-production')?.setAttribute('d', curvePath(capgoCenter, productionTop))
+  svg.querySelector('.cr-path-dev')?.setAttribute('d', curvePath(capgoCenter, developmentTop))
+  svg.querySelector('.cr-path-staging')?.setAttribute('d', curvePath(capgoCenter, stagingTop))
+  svg.querySelector('.cr-path-glow')?.setAttribute('d', curvePath(capgoCenter, productionTop))
+  return true
+}
+
 function renderedPathPoints(root: HTMLElement, path: SVGPathElement) {
   const stage = element<HTMLElement>(root, '.cr-stage')
   const matrix = path.getScreenCTM()
@@ -74,6 +133,8 @@ function showFinalState(root: HTMLElement) {
 }
 
 function buildTimeline(root: HTMLElement) {
+  syncRoutingPaths(root)
+
   const requestPath = element<SVGPathElement>(root, '.cr-path-request')
   const productionPath = element<SVGPathElement>(root, '.cr-path-production')
   const requestPacket = element<HTMLElement>(root, '.cr-request-packet')
@@ -227,8 +288,8 @@ onBeforeUnmount(() => {
 
 <template>
   <main ref="rootEl" class="cr-page" :class="{ 'cr-page-embedded': props.embedded }">
-    <div class="cr-shell">
-      <header class="cr-page-header">
+    <div class="cr-shell" :class="props.embedded ? 'overflow-hidden rounded-[1.6rem] border border-slate-200 bg-white shadow-xl shadow-slate-950/5 dark:border-white/10 dark:bg-slate-950' : ''">
+      <header class="cr-page-header" :class="props.embedded ? 'border-b border-slate-200 px-5 py-4 sm:px-6 dark:border-white/10' : ''">
         <div>
           <p class="cr-kicker">
             <span class="cr-kicker-dot" aria-hidden="true" />
@@ -243,11 +304,11 @@ onBeforeUnmount(() => {
         <button
           v-if="!prefersReducedMotion"
           type="button"
-          class="cr-replay"
+          :class="props.embedded ? 'd-btn d-btn-sm shrink-0 border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-white/15 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10' : 'cr-replay'"
           @click="replay"
         >
-          <IconRefreshCw aria-hidden="true" />
-          {{ t('channel-routing-mockup-replay') }}
+          <IconRefreshCw class="h-4 w-4" aria-hidden="true" />
+          <span :class="props.embedded ? 'hidden sm:inline' : ''">{{ t('channel-routing-mockup-replay') }}</span>
         </button>
       </header>
 
@@ -273,8 +334,8 @@ onBeforeUnmount(() => {
 
           <path class="cr-path cr-path-request" d="M500 146 C500 205 500 249 500 306" stroke="url(#cr-request-gradient)" />
           <path class="cr-path cr-path-channel cr-path-production" d="M500 384 C439 432 317 470 205 528" stroke="url(#cr-production-gradient)" />
-          <path class="cr-path cr-path-channel" d="M500 384 C500 432 500 475 500 528" />
-          <path class="cr-path cr-path-channel" d="M500 384 C561 432 683 470 795 528" />
+          <path class="cr-path cr-path-channel cr-path-dev" d="M500 384 C500 432 500 475 500 528" />
+          <path class="cr-path cr-path-channel cr-path-staging" d="M500 384 C561 432 683 470 795 528" />
           <path class="cr-path-glow" d="M500 384 C439 432 317 470 205 528" filter="url(#cr-soft-glow)" />
         </svg>
 
@@ -394,10 +455,11 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <footer v-if="props.embedded" class="cr-onboarding-footer">
+      <footer v-if="props.embedded" class="flex items-center justify-between border-t border-slate-200 bg-white px-5 py-3 sm:px-6 dark:border-white/10 dark:bg-slate-950">
+        <span class="h-10 w-10 shrink-0" aria-hidden="true" />
         <button
           type="button"
-          class="d-btn d-btn-primary min-h-12 gap-2 px-5"
+          class="d-btn d-btn-primary h-12 min-h-12 shrink-0 px-5"
           data-test="channel-default-routing-continue"
           @click="emit('continue')"
         >
@@ -423,7 +485,11 @@ onBeforeUnmount(() => {
   --cr-success-border: color-mix(in srgb, var(--color-success) 38%, transparent);
   --cr-success-text: color-mix(in srgb, var(--color-success) 54%, var(--color-base-content));
   --cr-stage-background:
-    radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--color-secondary) 14%, transparent), transparent 20rem),
+    radial-gradient(
+      ellipse 78% 52% at 50% 58%,
+      color-mix(in srgb, var(--color-secondary) 12%, transparent),
+      transparent 70%
+    ),
     linear-gradient(
       150deg,
       color-mix(in srgb, var(--color-base-100) 93%, #dbeafe) 0%,
@@ -456,14 +522,48 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
+.cr-page-embedded .cr-page-header {
+  align-items: start;
+  margin-bottom: 0;
+}
+
+.cr-page-embedded .cr-kicker {
+  margin-bottom: 0.25rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+}
+
 .cr-page-embedded .cr-page-header h1 {
-  font-size: clamp(1.65rem, 3vw, 2.35rem);
-  line-height: 1.08;
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
 }
 
 .cr-page-embedded .cr-description {
-  max-width: 48rem;
-  font-size: 0.95rem;
+  max-width: 42rem;
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+}
+
+.cr-page-embedded .cr-stage {
+  height: clamp(27rem, 52vh, 30rem);
+  min-height: 27rem;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+@media (min-width: 640px) {
+  .cr-page-embedded .cr-page-header h1 {
+    font-size: 1.5rem;
+  }
+
+  .cr-page-embedded .cr-description {
+    font-size: 0.875rem;
+  }
 }
 
 .cr-page-header {
@@ -832,7 +932,7 @@ onBeforeUnmount(() => {
 
 .cr-response-bubble {
   top: 3.25rem;
-  right: calc(50% + 3.8rem);
+  right: calc(50% + 6.2rem);
 }
 
 .cr-bubble::before {
@@ -1182,14 +1282,6 @@ onBeforeUnmount(() => {
   height: 1rem;
 }
 
-.cr-onboarding-footer {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 0.75rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid rgb(148 163 184 / 22%);
-}
-
 @media (max-width: 850px) {
   .cr-page-header {
     align-items: start;
@@ -1328,38 +1420,136 @@ onBeforeUnmount(() => {
 
 @media (min-width: 851px) {
   .cr-page-embedded .cr-page-header {
-    margin-bottom: 0.75rem;
+    margin-bottom: 0;
   }
 
   .cr-page-embedded .cr-stage {
     height: clamp(32rem, 55vh, 36rem);
-    min-height: clamp(32rem, 55vh, 36rem);
+    min-height: 32rem;
   }
+}
 
-  .cr-page-embedded .cr-device-node {
-    top: 2.5%;
-  }
+.cr-page-embedded .cr-device-node {
+  top: 2.5%;
+  left: 50%;
+}
 
-  .cr-page-embedded .cr-request-bubble,
-  .cr-page-embedded .cr-response-bubble {
-    top: 5%;
-  }
+.cr-page-embedded .cr-phone {
+  width: 3.3rem;
+  height: 5.55rem;
+  padding: 0.32rem;
+  border-radius: 0.95rem;
+}
 
-  .cr-page-embedded .cr-capgo-node {
-    top: 36%;
-  }
+.cr-page-embedded .cr-phone-speaker {
+  top: 0.24rem;
+  width: 0.9rem;
+  height: 0.13rem;
+}
 
-  .cr-page-embedded .cr-capgo-state {
-    top: 40%;
-  }
+.cr-page-embedded .cr-phone-screen {
+  border-radius: 0.65rem;
+}
 
-  .cr-page-embedded .cr-channels-label {
-    top: 63%;
-  }
+.cr-page-embedded .cr-app-mark {
+  width: 1.35rem;
+  height: 1.35rem;
+  margin-top: 0.45rem;
+  border-radius: 0.45rem;
+}
 
-  .cr-page-embedded .cr-channel-node {
-    top: 70%;
-  }
+.cr-page-embedded .cr-app-mark img {
+  width: 0.92rem;
+  height: 0.92rem;
+}
+
+.cr-page-embedded .cr-app-name {
+  font-size: 0.55rem;
+}
+
+.cr-page-embedded .cr-version-stack {
+  height: 0.85rem;
+  margin-top: -0.5rem;
+  font-size: 0.48rem;
+}
+
+.cr-page-embedded .cr-phone > .cr-installed-check {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+.cr-page-embedded .cr-request-bubble,
+.cr-page-embedded .cr-response-bubble {
+  top: 5%;
+  width: 15rem;
+  padding: 0.68rem 0.8rem;
+  border-radius: 0.82rem;
+}
+
+.cr-page-embedded .cr-capgo-node {
+  top: 36%;
+}
+
+.cr-page-embedded .cr-capgo-core {
+  width: 4.2rem;
+  height: 4.2rem;
+  border-radius: 1.2rem;
+}
+
+.cr-page-embedded .cr-capgo-core img {
+  width: 2.3rem;
+  height: 2.3rem;
+}
+
+.cr-page-embedded .cr-capgo-pulse {
+  inset: -0.58rem;
+  border-radius: 1.5rem;
+}
+
+.cr-page-embedded .cr-capgo-state {
+  top: 40%;
+  left: calc(50% + 5.2rem);
+  max-width: 16rem;
+  padding: 0.55rem 0.68rem;
+  font-size: 0.62rem;
+}
+
+.cr-page-embedded .cr-channels-label {
+  top: 63%;
+  font-size: 0.58rem;
+}
+
+.cr-page-embedded .cr-channel-node {
+  top: 70%;
+  width: 12rem;
+}
+
+.cr-page-embedded .cr-channel-card {
+  grid-template-columns: 2rem 1fr;
+  gap: 0.58rem;
+  min-height: 3.75rem;
+  padding: 0.65rem;
+  border-radius: 0.85rem;
+}
+
+.cr-page-embedded .cr-channel-icon {
+  width: 2rem;
+  height: 2rem;
+}
+
+.cr-page-embedded .cr-takeaway {
+  bottom: 0.55rem;
+  padding: 0.6rem 0.78rem;
+  font-size: 0.62rem;
+}
+
+.cr-page-embedded .cr-takeaway strong {
+  font-size: 0.72rem;
+}
+
+.cr-page-embedded .cr-takeaway-icon {
+  width: 1.85rem;
+  height: 1.85rem;
 }
 
 @media (prefers-reduced-motion: reduce) {

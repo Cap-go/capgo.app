@@ -47,6 +47,65 @@ function elements(selector: string) {
   return root.value ? Array.from(root.value.querySelectorAll<HTMLElement>(selector)) : []
 }
 
+const NETWORK_VIEWBOX_WIDTH = 1000
+const NETWORK_VIEWBOX_HEIGHT = 680
+
+function roundPath(value: number) {
+  return Math.round(value * 10) / 10
+}
+
+function svgPoint(svg: SVGSVGElement, el: HTMLElement, yAnchor: 'top' | 'center' | 'bottom') {
+  const svgRect = svg.getBoundingClientRect()
+  const rect = el.getBoundingClientRect()
+  if (svgRect.width < 1 || svgRect.height < 1)
+    return null
+
+  return {
+    x: (rect.left + rect.width / 2 - svgRect.left) / svgRect.width * NETWORK_VIEWBOX_WIDTH,
+    y: (rect.top + rect.height * (yAnchor === 'top' ? 0 : yAnchor === 'bottom' ? 1 : 0.5) - svgRect.top) / svgRect.height * NETWORK_VIEWBOX_HEIGHT,
+  }
+}
+
+function curvePath(from: { x: number, y: number }, to: { x: number, y: number }) {
+  const dx = to.x - from.x
+  const dy = to.y - from.y
+  if (Math.abs(dx) < 8) {
+    return `M${roundPath(from.x)} ${roundPath(from.y)} C${roundPath(from.x)} ${roundPath(from.y + dy * 0.35)} ${roundPath(to.x)} ${roundPath(to.y - dy * 0.25)} ${roundPath(to.x)} ${roundPath(to.y)}`
+  }
+
+  return `M${roundPath(from.x)} ${roundPath(from.y)} C${roundPath(from.x + dx * 0.1)} ${roundPath(from.y + dy * 0.5)} ${roundPath(to.x)} ${roundPath(to.y - Math.max(64, dy * 0.5))} ${roundPath(to.x)} ${roundPath(to.y)}`
+}
+
+function syncRoutingPaths() {
+  const svg = root.value?.querySelector<SVGSVGElement>('.csa-routing-network')
+  const phone = element('.csa-routing-phone')
+  const capgo = element('.csa-capgo-core')
+  const production = element('.csa-production-policy .csa-routing-channel-card')
+  const beta = element('.csa-beta-policy .csa-routing-channel-card')
+  const staging = element('.csa-staging-policy .csa-routing-channel-card')
+  if (!svg || !phone || !capgo || !production || !beta || !staging)
+    return false
+
+  const phoneCenter = svgPoint(svg, phone, 'center')
+  const capgoCenter = svgPoint(svg, capgo, 'center')
+  const productionTop = svgPoint(svg, production, 'top')
+  const betaTop = svgPoint(svg, beta, 'top')
+  const stagingTop = svgPoint(svg, staging, 'top')
+  if (!phoneCenter || !capgoCenter || !productionTop || !betaTop || !stagingTop)
+    return false
+
+  productionTop.y += 8
+  betaTop.y += 8
+  stagingTop.y += 8
+
+  svg.querySelector('.csa-path-request')?.setAttribute('d', curvePath(phoneCenter, capgoCenter))
+  svg.querySelector('.csa-path-production')?.setAttribute('d', curvePath(capgoCenter, productionTop))
+  svg.querySelector('.csa-path-beta')?.setAttribute('d', curvePath(capgoCenter, betaTop))
+  svg.querySelector('.csa-path-staging')?.setAttribute('d', curvePath(capgoCenter, stagingTop))
+  svg.querySelector('.csa-beta-path-glow')?.setAttribute('d', curvePath(capgoCenter, betaTop))
+  return true
+}
+
 function renderedPathPoints(path: SVGPathElement) {
   const stage = element('.csa-stage')
   const matrix = path.getScreenCTM()
@@ -75,7 +134,7 @@ function renderedPathPoints(path: SVGPathElement) {
 }
 
 function showFinalState() {
-  const hidden = ['.csa-phone-scene', '.csa-code-scene']
+  const hidden = ['.csa-phone-scene', '.csa-code-scene', '.csa-aura']
   const visible = [
     '.csa-routing-scene',
     '.csa-routing-node',
@@ -96,6 +155,9 @@ function showFinalState() {
 }
 
 function buildTimeline() {
+  syncRoutingPaths()
+
+  const aura = element('.csa-aura')
   const phoneScene = element('.csa-phone-scene')
   const phone = element('.csa-phone')
   const homeScreen = element('.csa-home-screen')
@@ -151,8 +213,9 @@ function buildTimeline() {
   const reverseRequestPoints = [...requestPoints].reverse()
   const reverseBetaPoints = [...betaPoints].reverse()
 
+  gsap.set(aura, { autoAlpha: 1 })
   gsap.set(phoneScene, { autoAlpha: 1 })
-  gsap.set(phone, { autoAlpha: 0, y: 18, scale: 0.95 })
+  gsap.set(phone, { autoAlpha: 0, y: 18, scale: 1, force3D: false })
   gsap.set(homeScreen, { autoAlpha: 1 })
   gsap.set([appHome, settingsScreen, dialogLayer, versionNew, betaChannel, betaEnabled, successToast], { autoAlpha: 0 })
   gsap.set(appHome, { xPercent: 12, scale: 0.985 })
@@ -168,6 +231,7 @@ function buildTimeline() {
   gsap.set(requestBubble, { y: 10 })
   gsap.set(responseBubble, { y: 10 })
   gsap.set(validationChecking, { y: 8 })
+  gsap.set(element('.csa-lookup-dot'), { x: 0 })
   gsap.set(validationCheck, { y: 8 })
   gsap.set(localChannel, { y: 10, scale: 0.96 })
   gsap.set(deviceCheck, { autoAlpha: 0, scale: 0.4 })
@@ -179,7 +243,7 @@ function buildTimeline() {
   })
 
   animation
-    .to(phone, { autoAlpha: 1, y: 0, scale: 1, duration: 0.55 })
+    .to(phone, { autoAlpha: 1, y: 0, duration: 0.55, force3D: false })
     .addLabel('open-app')
     .to(appIcon, { scale: 0.88, duration: 0.12, ease: 'power2.in' }, 'open-app+=0.48')
     .to(appIconPulse, { autoAlpha: 0.75, scale: 1.5, duration: 0.4 }, 'open-app+=0.48')
@@ -213,7 +277,7 @@ function buildTimeline() {
     .to(betaEnabled, { autoAlpha: 1, duration: 0.28 }, 'confirm-beta+=1.42')
     .fromTo(successToast, { autoAlpha: 0, y: -8, scale: 0.96 }, { autoAlpha: 1, y: 0, scale: 1, duration: 0.34, ease: 'back.out(1.4)' }, 'confirm-beta+=1.5')
     .addLabel('dismiss-phone')
-    .to(phone, { autoAlpha: 0, y: -22, scale: 0.86, duration: 0.5, ease: 'power3.in' }, 'dismiss-phone+=0.7')
+    .to(phone, { autoAlpha: 0, y: -22, duration: 0.5, ease: 'power3.in', force3D: false }, 'dismiss-phone+=0.7')
     .to(phoneScene, { autoAlpha: 0, duration: 0.15 }, 'dismiss-phone+=1.12')
     .addLabel('show-code')
     .to(codeScene, { autoAlpha: 1, duration: 0.2 }, 'show-code+=0.1')
@@ -223,6 +287,7 @@ function buildTimeline() {
     .to(codePanel, { autoAlpha: 0, y: -18, scale: 0.94, duration: 0.38, ease: 'power2.in' }, 'validate-channel+=1.3')
     .to(codeScene, { autoAlpha: 0, duration: 0.16 }, 'validate-channel+=1.6')
     .to(routingScene, { autoAlpha: 1, duration: 0.28 }, 'validate-channel+=1.62')
+    .to(aura, { autoAlpha: 0, duration: 0.4 }, 'validate-channel+=1.62')
     .addLabel('routing-arrive', 'validate-channel+=1.72')
     .to(routingNodes, { autoAlpha: 1, y: 0, duration: 0.4, stagger: 0.08 }, 'routing-arrive')
     .addLabel('routing-request', '+=0.2')
@@ -238,6 +303,7 @@ function buildTimeline() {
     .addLabel('routing-lookup', '+=0.1')
     .to(requestBubble, { autoAlpha: 0, y: -8, duration: 0.22 }, 'routing-lookup')
     .to(validationChecking, { autoAlpha: 1, y: 0, duration: 0.32 }, 'routing-lookup')
+    .to(element('.csa-lookup-dot'), { x: 18, duration: 0.7, repeat: 1, yoyo: true, ease: 'sine.inOut' }, 'routing-lookup+=0.15')
     .to(channelCards, { y: -4, duration: 0.2, stagger: 0.11, repeat: 1, yoyo: true }, 'routing-lookup+=0.14')
     .set(policyPacket, { autoAlpha: 1, scale: 1 }, 'routing-lookup+=0.38')
     .to(policyPacket, {
@@ -296,7 +362,9 @@ function replay() {
     showFinalState()
     return
   }
-  timeline?.restart()
+  gsap.set(element('.csa-phone'), { autoAlpha: 0, y: 18, scale: 1, force3D: false })
+  timeline?.kill()
+  timeline = buildTimeline()
 }
 
 onMounted(async () => {
@@ -333,10 +401,10 @@ onBeforeUnmount(() => {
 
     <section class="csa-stage relative isolate overflow-hidden" data-test="channel-self-assign-stage" role="img" :aria-label="t('channel-self-assign-stage-label')">
       <div class="csa-grid absolute inset-0 opacity-60" />
-      <div class="csa-aura absolute left-1/2 top-1/2 h-[30rem] w-[48rem] -translate-x-1/2 -translate-y-1/2 rounded-full" />
+      <div class="csa-aura pointer-events-none absolute left-1/2 top-[52%] h-[18rem] w-[22rem] -translate-x-1/2 -translate-y-1/2 rounded-full" />
 
       <div class="csa-phone-scene absolute inset-0 z-20 flex items-center justify-center">
-        <div class="csa-phone relative h-[29rem] w-[14.5rem] rounded-[3rem] border border-slate-500/80 bg-[#111827] p-[0.38rem] shadow-[0_28px_74px_rgba(0,0,0,0.58),inset_0_0_0_1px_rgba(255,255,255,0.13)]">
+        <div class="csa-phone relative h-[29rem] w-[14.5rem] overflow-hidden rounded-[3rem] border border-slate-500/80 bg-[#111827] p-[0.38rem] shadow-[0_28px_74px_rgba(0,0,0,0.58)]">
           <div class="relative h-full overflow-hidden rounded-[2.35rem] bg-[#f7f9fc] text-slate-950">
             <div class="absolute left-1/2 top-1.5 z-50 h-5 w-[5.4rem] -translate-x-1/2 rounded-full bg-black" />
             <div class="absolute inset-x-0 top-0 z-40 flex h-9 items-center justify-between px-5 pt-0.5 text-[0.58rem] font-semibold">
@@ -507,9 +575,9 @@ onBeforeUnmount(() => {
 
           <svg class="csa-routing-network" viewBox="0 0 1000 680" preserveAspectRatio="none" aria-hidden="true">
             <path class="csa-routing-path csa-path-request" d="M500 150 C500 198 500 250 500 300" />
-            <path class="csa-routing-path" d="M500 365 C320 398 200 446 193 480" />
+            <path class="csa-routing-path csa-path-production" d="M500 365 C320 398 200 446 193 480" />
             <path class="csa-routing-path csa-path-beta" d="M500 365 C500 410 500 448 500 480" />
-            <path class="csa-routing-path" d="M500 365 C680 398 800 446 807 480" />
+            <path class="csa-routing-path csa-path-staging" d="M500 365 C680 398 800 446 807 480" />
             <path class="csa-beta-path-glow" d="M500 365 C500 410 500 448 500 480" />
           </svg>
 
@@ -618,7 +686,7 @@ onBeforeUnmount(() => {
     <footer v-if="embedded" class="flex items-center justify-between border-t border-slate-200 bg-white px-5 py-3 sm:px-6 dark:border-white/10 dark:bg-slate-950">
       <button
         type="button"
-        class="d-btn d-btn-ghost d-btn-square min-h-10 h-10 w-10"
+        class="d-btn d-btn-ghost d-btn-square h-10 min-h-10 w-10 shrink-0"
         data-test="channel-self-assign-back"
         :aria-label="t('button-back')"
         :title="t('button-back')"
@@ -626,7 +694,7 @@ onBeforeUnmount(() => {
       >
         <IconArrowLeft class="h-4 w-4" aria-hidden="true" />
       </button>
-      <button type="button" class="d-btn d-btn-primary min-h-12 gap-2 px-5" data-test="channel-self-assign-continue" @click="emit('continue')">
+      <button type="button" class="d-btn d-btn-primary h-12 min-h-12 shrink-0 px-5" data-test="channel-self-assign-continue" @click="emit('continue')">
         {{ t('continue') }}
       </button>
     </footer>
@@ -649,7 +717,11 @@ onBeforeUnmount(() => {
   --csa-success-border: color-mix(in srgb, var(--color-success) 38%, transparent);
   --csa-success-text: color-mix(in srgb, var(--color-success) 54%, var(--color-base-content));
   --csa-stage-background:
-    radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--color-secondary) 14%, transparent), transparent 20rem),
+    radial-gradient(
+      ellipse 78% 52% at 50% 58%,
+      color-mix(in srgb, var(--color-secondary) 12%, transparent),
+      transparent 70%
+    ),
     linear-gradient(
       150deg,
       color-mix(in srgb, var(--color-base-100) 93%, #dbeafe) 0%,
@@ -680,9 +752,9 @@ onBeforeUnmount(() => {
 .csa-aura {
   background: radial-gradient(
     circle,
-    color-mix(in srgb, var(--color-success) 14%, transparent),
-    color-mix(in srgb, var(--color-secondary) 8%, transparent) 46%,
-    transparent 72%
+    color-mix(in srgb, var(--color-secondary) 16%, transparent),
+    color-mix(in srgb, var(--color-secondary) 7%, transparent) 42%,
+    transparent 70%
   );
 }
 
@@ -706,7 +778,6 @@ onBeforeUnmount(() => {
   color: var(--csa-muted-text);
 }
 
-.csa-phone,
 .csa-code-panel,
 .csa-routing-node {
   will-change: transform, opacity;
@@ -938,11 +1009,11 @@ onBeforeUnmount(() => {
 .csa-routing-bubble {
   position: absolute;
   top: 1.75rem;
-  left: calc(50% + 6rem);
+  left: calc(50% + 7.4rem);
   z-index: 6;
   display: grid;
   gap: 0.18rem;
-  width: 15rem;
+  width: 14.2rem;
   padding: 0.68rem 0.8rem;
   color: var(--csa-soft-text);
   border: 1px solid var(--csa-panel-border);
@@ -988,7 +1059,7 @@ onBeforeUnmount(() => {
 }
 
 .csa-response-bubble {
-  right: calc(50% + 4.6rem);
+  right: calc(50% + 5.4rem);
   left: auto;
   border-color: var(--csa-success-border);
   background: var(--csa-success-background);
@@ -1087,6 +1158,7 @@ onBeforeUnmount(() => {
   border-radius: inherit;
   background: #58adff;
   box-shadow: 0 0 0.7rem rgb(72 160 255 / 75%);
+  will-change: transform;
 }
 
 .csa-capgo-state-success {
@@ -1315,12 +1387,12 @@ onBeforeUnmount(() => {
   }
 
   .csa-routing-bubble {
-    left: calc(50% + 4.7rem);
-    width: 12.8rem;
+    left: calc(50% + 5.8rem);
+    width: 12.2rem;
   }
 
   .csa-response-bubble {
-    right: calc(50% + 4.2rem);
+    right: calc(50% + 4.8rem);
     left: auto;
   }
 

@@ -54,7 +54,7 @@ function targetPoint(stage: HTMLElement, target: HTMLElement) {
   const targetRect = target.getBoundingClientRect()
   return {
     x: targetRect.left - stageRect.left + targetRect.width / 2,
-    y: targetRect.top - stageRect.top + targetRect.height / 2,
+    y: targetRect.top - stageRect.top + targetRect.height * 0.4,
   }
 }
 
@@ -143,7 +143,7 @@ function buildTimeline() {
   gsap.set(frame, { autoAlpha: 0, y: 12 })
   gsap.set([appsScene, appScene, devicesScene, deviceScene], { autoAlpha: 0, x: 16 })
   gsap.set(dashboardScene, { autoAlpha: 1, x: 0 })
-  gsap.set(cursor, { autoAlpha: 0, x: stage.clientWidth * 0.72, y: stage.clientHeight * 0.68, scale: 1 })
+  gsap.set(cursor, { autoAlpha: 0, x: stage.clientWidth * 0.72, y: stage.clientHeight * 0.68, scale: 1, transformOrigin: '17% 20%' })
   gsap.set(clickPulse, { autoAlpha: 0, xPercent: -50, yPercent: -50, scale: 0.55 })
   gsap.set(clickTargets, { scale: 1, transformOrigin: 'center' })
   gsap.set(channelMenu, { autoAlpha: 0, y: -7, scale: 0.96, transformOrigin: 'top right' })
@@ -500,7 +500,7 @@ onBeforeUnmount(() => {
     <footer v-if="embedded" class="flex items-center justify-between border-t border-slate-200 bg-white px-5 py-3 sm:px-6 dark:border-white/10 dark:bg-slate-950">
       <button
         type="button"
-        class="d-btn d-btn-ghost d-btn-square min-h-10 h-10 w-10"
+        class="d-btn d-btn-ghost d-btn-square h-10 min-h-10 w-10 shrink-0"
         data-test="channel-console-assign-back"
         :aria-label="t('button-back')"
         :title="t('button-back')"
@@ -508,7 +508,7 @@ onBeforeUnmount(() => {
       >
         <IconArrowLeft class="h-4 w-4" aria-hidden="true" />
       </button>
-      <button type="button" class="d-btn d-btn-primary min-h-12 gap-2 px-5" data-test="channel-console-assign-continue" @click="emit('continue')">
+      <button type="button" class="d-btn d-btn-primary h-12 min-h-12 shrink-0 px-5" data-test="channel-console-assign-continue" @click="emit('continue')">
         {{ t('continue') }}
       </button>
     </footer>
@@ -1269,6 +1269,7 @@ onBeforeUnmount(() => {
 .csa-console-cursor {
   margin-top: -0.12rem;
   margin-left: -0.12rem;
+  transform-origin: 17% 20%;
 }
 
 .csa-console-click-pulse {

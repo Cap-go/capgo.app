@@ -2123,6 +2123,8 @@
   "channel-create-onboarding-default-description": "Devices without an assignment will automatically check this channel.",
   "channel-create-onboarding-self-assign-title": "Allow device self-assignment",
   "channel-create-onboarding-self-assign-description": "Optionally let users choose this channel from inside your app.",
+  "channel-create-onboarding-self-assign-disallow-title": "Disallow device self-assignment",
+  "channel-create-onboarding-self-assign-disallow-description": "This channel will not allow users to assign their devices to it.",
   "channel-create-onboarding-self-assign-short": "Self-assignment",
   "channel-create-onboarding-toggle-description": "The plugin can request this channel with setChannel(). You can change this later.",
   "channel-create-onboarding-form-title": "Choose your release route",

@@ -36,7 +36,7 @@ const supabase = useSupabase()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const channelName = ref('')
-const allowSelfAssign = ref(false)
+const allowSelfAssign = ref(true)
 const isInitializing = ref(true)
 const isSubmitting = ref(false)
 const hasRequiredPermissions = ref(false)
@@ -262,60 +262,63 @@ onMounted(() => {
     </div>
 
     <div v-else class="grid min-h-[25rem] lg:grid-cols-[1.05fr_0.95fr]">
-      <aside class="relative isolate overflow-hidden bg-slate-950 px-6 py-7 text-white sm:px-8">
+      <aside class="relative isolate overflow-hidden border-b border-slate-200 bg-slate-50 px-6 py-7 sm:px-8 lg:border-b-0 lg:border-r dark:border-white/10 dark:bg-slate-950 dark:text-white">
         <div class="absolute inset-0 -z-10 opacity-70" aria-hidden="true">
-          <div class="absolute right-[-6rem] top-[-7rem] h-72 w-72 rounded-full bg-primary-500/25 blur-3xl" />
+          <div class="absolute right-[-6rem] top-[-7rem] h-72 w-72 rounded-full bg-primary-500/15 blur-3xl dark:bg-primary-500/25" />
           <div class="absolute bottom-[-8rem] left-[-4rem] h-72 w-72 rounded-full bg-sky-400/10 blur-3xl" />
         </div>
-        <p class="text-xs font-bold uppercase tracking-[0.18em] text-sky-300">
+        <p class="text-xs font-bold uppercase tracking-[0.18em] text-primary-600 dark:text-sky-300">
           {{ t('channel-create-onboarding-preview-label') }}
         </p>
-        <div class="mt-5 grid grid-cols-[auto_1fr_auto_1fr_auto] items-center gap-2" aria-hidden="true">
-          <span class="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/10 text-sky-200">
+        <div class="mt-5 grid grid-cols-[2.75rem_1fr_3rem_1fr_7rem] items-center gap-2" aria-hidden="true">
+          <span class="flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white text-sky-600 dark:border-white/10 dark:bg-white/10 dark:text-sky-200">
             <IconSmartphone class="h-5 w-5" />
           </span>
           <span class="h-px bg-gradient-to-r from-sky-400/40 to-sky-400" />
-          <span class="flex h-12 w-12 items-center justify-center rounded-xl bg-primary-500 text-white shadow-lg shadow-primary-500/25">
+          <span class="flex h-12 w-12 items-center justify-center justify-self-center rounded-xl bg-primary-500 text-white shadow-lg shadow-primary-500/25">
             <IconServer class="h-5 w-5" />
           </span>
           <span class="h-px bg-gradient-to-r from-primary-400 to-emerald-400" />
-          <span class="flex h-11 min-w-11 items-center justify-center rounded-xl border border-emerald-300/30 bg-emerald-400/15 px-3 text-emerald-200">
+          <span class="flex h-11 w-11 items-center justify-center justify-self-center rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-300/30 dark:bg-emerald-400/15 dark:text-emerald-200">
             <IconGitBranch class="h-5 w-5 shrink-0" />
           </span>
         </div>
-        <div class="mt-3 grid grid-cols-[auto_1fr_auto] items-start text-center text-[0.68rem] font-medium text-slate-400">
-          <span class="w-11">{{ t('device') }}</span>
+        <div class="mt-3 grid grid-cols-[2.75rem_1fr_3rem_1fr_7rem] items-start gap-2 text-center text-[0.68rem] font-medium text-slate-500 dark:text-slate-400">
+          <span>{{ t('device') }}</span>
+          <span />
           <span>{{ t('channel-create-onboarding-capgo') }}</span>
-          <span class="max-w-28 truncate font-mono text-emerald-300">{{ channelPreviewName }}</span>
+          <span />
+          <span class="truncate font-mono text-emerald-600 dark:text-emerald-300">{{ channelPreviewName }}</span>
         </div>
 
         <div class="mt-7 space-y-3">
-          <div class="flex gap-3 rounded-xl border border-white/10 bg-white/[0.06] p-3.5">
-            <span class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sky-400/15 text-sky-300">
+          <div class="flex gap-3 rounded-xl border border-slate-200 bg-white p-3.5 dark:border-white/10 dark:bg-white/[0.06]">
+            <span class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-600 dark:bg-sky-400/15 dark:text-sky-300">
               <IconGlobe class="h-4 w-4" />
             </span>
             <div>
-              <p class="text-sm font-semibold">
+              <p class="text-sm font-semibold text-slate-900 dark:text-white">
                 {{ t('channel-create-onboarding-default-title') }}
               </p>
-              <p class="mt-1 text-xs leading-5 text-slate-400">
+              <p class="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
                 {{ t('channel-create-onboarding-default-description') }}
               </p>
             </div>
-            <IconCheck class="ml-auto mt-1 h-4 w-4 shrink-0 text-emerald-300" />
+            <IconCheck class="ml-auto mt-1 h-4 w-4 shrink-0 text-emerald-500 dark:text-emerald-300" />
           </div>
-          <div class="flex gap-3 rounded-xl border border-white/10 bg-white/[0.06] p-3.5">
-            <span class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-400/15 text-violet-300">
+          <div class="flex gap-3 rounded-xl border border-slate-200 bg-white p-3.5 dark:border-white/10 dark:bg-white/[0.06]">
+            <span class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-600 dark:bg-violet-400/15 dark:text-violet-300">
               <IconUsers class="h-4 w-4" />
             </span>
             <div>
-              <p class="text-sm font-semibold">
-                {{ t('channel-create-onboarding-self-assign-title') }}
+              <p class="text-sm font-semibold text-slate-900 dark:text-white">
+                {{ t(allowSelfAssign ? 'channel-create-onboarding-self-assign-title' : 'channel-create-onboarding-self-assign-disallow-title') }}
               </p>
-              <p class="mt-1 text-xs leading-5 text-slate-400">
-                {{ t('channel-create-onboarding-self-assign-description') }}
+              <p class="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                {{ t(allowSelfAssign ? 'channel-create-onboarding-self-assign-description' : 'channel-create-onboarding-self-assign-disallow-description') }}
               </p>
             </div>
+            <IconCheck v-if="allowSelfAssign" class="ml-auto mt-1 h-4 w-4 shrink-0 text-emerald-500 dark:text-emerald-300" />
           </div>
         </div>
       </aside>
@@ -333,7 +336,7 @@ onMounted(() => {
             {{ t('channel-name') }}
           </label>
           <div class="relative mt-2">
-            <IconGitBranch class="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <IconGitBranch class="pointer-events-none absolute left-3.5 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input
               id="onboarding-channel-name"
               v-model="channelName"
@@ -370,8 +373,8 @@ onMounted(() => {
           <label class="mt-5 flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 transition hover:border-violet-300 dark:border-white/10 dark:bg-slate-950/70 dark:hover:border-violet-400/40">
             <input v-model="allowSelfAssign" type="checkbox" class="d-checkbox d-checkbox-primary mt-0.5 h-4.5 w-4.5 shrink-0">
             <span>
-              <span class="block text-sm font-semibold text-slate-900 dark:text-white">{{ t('channel-create-onboarding-self-assign-title') }}</span>
-              <span class="mt-1 block text-xs leading-5 text-slate-500 dark:text-slate-400">{{ t('channel-create-onboarding-toggle-description') }}</span>
+              <span class="block text-sm font-semibold text-slate-900 dark:text-white">{{ t(allowSelfAssign ? 'channel-create-onboarding-self-assign-title' : 'channel-create-onboarding-self-assign-disallow-title') }}</span>
+              <span class="mt-1 block min-h-10 text-xs leading-5 text-slate-500 dark:text-slate-400">{{ t(allowSelfAssign ? 'channel-create-onboarding-toggle-description' : 'channel-create-onboarding-self-assign-disallow-description') }}</span>
             </span>
           </label>
 

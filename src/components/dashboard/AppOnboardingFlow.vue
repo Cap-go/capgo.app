@@ -65,8 +65,8 @@ import { useBeforeUnloadWarning } from '~/utils/beforeUnloadWarning'
 import {
   hasNewChannelTreatment,
   hasWebNativeDevelopmentEnvironmentTreatment,
-  reconcileOnboardingABTestAssignments,
   parseOnboardingABTestAssignments,
+  reconcileOnboardingABTestAssignments,
   resolveOnboardingAnalyticsVersion,
   shouldShowWebNativePublishIntent,
   shouldShowWebNativeRecommendation,
@@ -101,13 +101,13 @@ import {
 import AppOnboardingCliSteps from './AppOnboardingCliSteps.vue'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
 import AppOnboardingWelcome from './AppOnboardingWelcome.vue'
-import { developmentEnvironmentOptions } from './onboardingDevelopmentEnvironmentOptions'
-import OnboardingPublishIntentIcon from './OnboardingPublishIntentIcon.vue'
-import OnboardingToolPattern from './OnboardingToolPattern.vue'
 import ChannelConsoleAssignOnboarding from './ChannelConsoleAssignOnboarding.vue'
 import ChannelCreateOnboarding from './ChannelCreateOnboarding.vue'
 import ChannelDefaultRoutingOnboarding from './ChannelDefaultRoutingOnboarding.vue'
 import ChannelSelfAssignOnboarding from './ChannelSelfAssignOnboarding.vue'
+import { developmentEnvironmentOptions } from './onboardingDevelopmentEnvironmentOptions'
+import OnboardingPublishIntentIcon from './OnboardingPublishIntentIcon.vue'
+import OnboardingToolPattern from './OnboardingToolPattern.vue'
 import OrganizationOnboardingInvite from './OrganizationOnboardingInvite.vue'
 import TechnicalTeammateInviteCard from './TechnicalTeammateInviteCard.vue'
 
@@ -141,12 +141,6 @@ const config = getLocalConfig()
 const webNativePublishIntentTreatment = computed(() => shouldShowWebNativePublishIntent(onboardingForABTests.value))
 const webNativeDevelopmentEnvironmentTreatment = computed(() => hasWebNativeDevelopmentEnvironmentTreatment(onboardingForABTests.value))
 const newChannelTreatment = computed(() => hasNewChannelTreatment(onboardingForABTests.value))
-const onboardingAnalyticsVersion = () => resolveOnboardingAnalyticsVersion(onboardingForABTests.value, selectedIntent.value)
-const onboardingTelemetry = createOnboardingTelemetryIdentity({
-  flow: props.preOrg ? 'pre_org' : 'existing_org',
-  onboardingVersion: onboardingAnalyticsVersion,
-  supaHost: config.supaHost,
-})
 const APPLE_LOOKUP_TIMEOUT_MS = 5_000
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
 const ONBOARDING_AB_TEST_WAIT_TIMEOUT_MS = 3_000
@@ -236,6 +230,12 @@ const storeAppIdLookupFailed = ref(false)
 const selectedDevelopmentEnvironment = ref<OnboardingDevelopmentEnvironment | null>(null)
 const skippedPublishAppQuestion = ref(false)
 const selectedIntent = ref<OnboardingIntent | null>(null)
+const onboardingAnalyticsVersion = () => resolveOnboardingAnalyticsVersion(onboardingForABTests.value, selectedIntent.value)
+const onboardingTelemetry = createOnboardingTelemetryIdentity({
+  flow: props.preOrg ? 'pre_org' : 'existing_org',
+  onboardingVersion: onboardingAnalyticsVersion,
+  supaHost: config.supaHost,
+})
 const webNativeRecommendationDismissed = ref(false)
 const orgNameInput = ref('')
 const hasEditedOrgName = ref(false)
@@ -3482,7 +3482,21 @@ defineExpose({
             </div>
 
             <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
-              <button type="button" class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo" @click="openDashboard">
+              <button
+                type="button"
+                class="d-btn min-h-11"
+                :class="whiteCardSecondaryButtonClass()"
+                data-test="app-onboarding-dont-show-again"
+                :aria-label="t('app-onboarding-dont-show-again')"
+                :disabled="isSeedingDemo || isHidingSplash"
+                @click="skipOnboardingSplash"
+              >
+                <IconLoader v-if="isHidingSplash" class="h-4 w-4 animate-spin" />
+                <template v-else>
+                  {{ t('app-onboarding-dont-show-again') }}
+                </template>
+              </button>
+              <button type="button" class="d-btn min-h-11" :class="whiteCardPrimaryButtonClass()" :disabled="isSeedingDemo || isHidingSplash" @click="openDashboard">
                 <IconLoader v-if="isSeedingDemo" class="h-4 w-4 animate-spin" />
                 <template v-else>
                   {{ t('app-onboarding-explore-dashboard') }}
