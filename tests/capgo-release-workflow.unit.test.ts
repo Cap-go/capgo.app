@@ -75,14 +75,23 @@ describe('native-aware Capgo release workflow', () => {
     }
   })
 
-  it.concurrent('reruns deployment against the newest immutable environment tag', async () => {
+  it.concurrent('pins every deployment execution and retry to the triggering immutable tag', async () => {
     const workflowSource = await readWorkflow(workflowPaths.deploy)
     const workflow = parseWorkflow(workflowSource)
     const jobs = workflow.jobs ?? {}
     const targetCheckout = jobs.changes?.steps?.find(step => step.name === 'Checkout deployment target')
-    const downstreamCheckoutSteps = Object.entries(jobs)
-      .filter(([jobName]) => jobName !== 'changes')
-      .flatMap(([, job]) => job.steps ?? [])
+    const deploymentJobs = [
+      'supabase_deploy',
+      'read_replica_schema',
+      'deploy_webapp',
+      'deploy_api',
+      'deploy_translation_worker',
+      'deploy_files',
+      'deploy_plugin_regions',
+      'deploy_native_ios',
+      'deploy_native_android',
+    ]
+    const downstreamCheckoutSteps = deploymentJobs.flatMap(jobName => jobs[jobName]?.steps ?? [])
       .filter(step => step.uses?.startsWith('actions/checkout@'))
     const allCheckoutSteps = Object.values(jobs)
       .flatMap(job => job.steps ?? [])
@@ -93,7 +102,10 @@ describe('native-aware Capgo release workflow', () => {
     expect(workflowSource).toContain('deploy_tag: ${{ steps.target.outputs.deploy_tag }}')
     expect(workflowSource).toContain('deploy_sha: ${{ steps.target.outputs.deploy_sha }}')
     expect(workflowSource).toContain('is_alpha: ${{ steps.target.outputs.is_alpha }}')
-    expect(workflowSource).toContain('bun scripts/resolve-deploy-tag.ts')
+    expect(workflowSource).toContain('has_migration_changes: ${{ steps.scope.outputs.has_migration_changes }}')
+    expect(workflowSource).toContain('bun scripts/resolve-deploy-tag.ts --resolve "${{ github.ref_name }}"')
+    expect(workflowSource).toContain('bun scripts/resolve-deploy-tag.ts --assert-current "${{ github.ref_name }}"')
+    expect(workflowSource).not.toContain('resolve-deploy-tag.ts "$mode"')
     expect(workflowSource).toContain('bun scripts/deploy-scope.ts "${{ steps.target.outputs.deploy_tag }}"')
     expect(targetCheckout).toMatchObject({
       uses: 'actions/checkout@v6',
@@ -102,6 +114,17 @@ describe('native-aware Capgo release workflow', () => {
     expect(downstreamCheckoutSteps.length).toBeGreaterThan(0)
     for (const checkout of downstreamCheckoutSteps)
       expect(checkout.with?.ref).toBe('${{ needs.changes.outputs.deploy_sha }}')
+    for (const jobName of deploymentJobs) {
+      const steps = jobs[jobName]?.steps ?? []
+      const checkout = steps.find(step => step.uses?.startsWith('actions/checkout@'))
+      const retryGuard = steps.find(step => step.name === 'Reject stale deployment retry')
+
+      expect(checkout?.with?.['fetch-depth'], `${jobName} must fetch tags for retry validation`).toBe(0)
+      expect(retryGuard, `${jobName} must reject stale retries before mutation`).toBeDefined()
+      expect(retryGuard?.if).toBe('${{ github.run_attempt > 1 }}')
+      expect(retryGuard?.run).toContain('resolve-deploy-tag.ts --assert-current')
+      expect(retryGuard?.run).toContain('needs.changes.outputs.deploy_tag')
+    }
     for (const checkout of allCheckoutSteps)
       expect(checkout.uses).toBe('actions/checkout@v6')
     expect(workflowSource).toContain('tag_name: ${{ needs.changes.outputs.deploy_tag }}')

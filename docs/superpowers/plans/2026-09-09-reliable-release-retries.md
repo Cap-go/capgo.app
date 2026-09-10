@@ -424,7 +424,7 @@ Expected: the concurrency and re-run contracts pass without weakening the comple
 - Modify: `tests/resolve-deploy-tag.test.ts`
 - Modify: `scripts/resolve-deploy-tag.ts`
 
-- [ ] **Step 1: Add failing exact-tag and freshness tests**
+- [x] **Step 1: Add failing exact-tag and freshness tests**
 
 Add public APIs with this shape:
 
@@ -435,13 +435,13 @@ export function assertCurrentDeployTag(tag: string, run?: GitRunner): DeployTag
 
 Test that exact resolution never selects another tag; malformed tags and missing refs fail; stable and alpha freshness are evaluated independently; and a requested tag older than the newest tag for its environment throws a stale-deployment error.
 
-- [ ] **Step 2: Run the resolver tests and verify failure**
+- [x] **Step 2: Run the resolver tests and verify failure**
 
 ```bash
 bunx vitest run tests/resolve-deploy-tag.test.ts
 ```
 
-- [ ] **Step 3: Implement exact resolution and freshness assertion**
+- [x] **Step 3: Implement exact resolution and freshness assertion**
 
 Keep the creation-order-aware latest-tag resolver because it is needed only for the stale check. Add CLI modes:
 
@@ -452,7 +452,7 @@ bun scripts/resolve-deploy-tag.ts --assert-current "$DEPLOY_TAG"
 
 `--resolve` prints the exact event tag and SHA. `--assert-current` succeeds only when that same tag remains the newest stable/alpha tag and must never print or select a replacement deploy target.
 
-- [ ] **Step 4: Re-run the resolver tests**
+- [x] **Step 4: Re-run the resolver tests**
 
 Expected: exact resolution and same-environment freshness cases pass.
 
@@ -465,7 +465,7 @@ Expected: exact resolution and same-environment freshness cases pass.
 - Modify: `tests/read-replica-release-workflow.unit.test.ts`
 - Modify: `.github/workflows/build_and_deploy.yml`
 
-- [ ] **Step 1: Add failing deployment workflow contracts**
+- [x] **Step 1: Add failing deployment workflow contracts**
 
 Require `changes` to resolve `${{ github.ref_name }}` exactly and reject a stale queued deployment at startup. For every production-mutating job, require a retry-only freshness check:
 
@@ -478,19 +478,19 @@ This allows an initial deployment that already started to finish even if a newer
 
 Add `has_migration_changes` to `deploy-scope.ts` output for files under `supabase/migrations/`.
 
-- [ ] **Step 2: Run focused tests and verify failure**
+- [x] **Step 2: Run focused tests and verify failure**
 
 ```bash
 bunx vitest run tests/deploy-scope.test.ts tests/capgo-release-workflow.unit.test.ts tests/read-replica-release-workflow.unit.test.ts
 ```
 
-- [ ] **Step 3: Update deployment scope and workflow**
+- [x] **Step 3: Update deployment scope and workflow**
 
 Resolve the triggering tag once in `changes`, immediately assert that it is current, and publish `has_migration_changes`. Add retry-only stale-tag guards before mutation in replica reconciliation, Supabase deployment, web/API/file/translation/plugin deployment, and native build-request jobs. Fetch tags in each guarded job so freshness is authoritative for that retry.
 
 Keep environment concurrency non-cancelling. A newer deployment queues behind a running one; a queued older run that starts after a newer tag exists fails in `changes` before mutation.
 
-- [ ] **Step 4: Re-run focused deployment tests**
+- [x] **Step 4: Re-run focused deployment tests**
 
 Expected: all deployment and replica contracts pass.
 

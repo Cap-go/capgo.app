@@ -27,6 +27,7 @@ jobs:
       deploy_tag: ${{ steps.target.outputs.deploy_tag }}
       deploy_sha: ${{ steps.target.outputs.deploy_sha }}
       is_alpha: ${{ steps.target.outputs.is_alpha }}
+      has_migration_changes: ${{ steps.scope.outputs.has_migration_changes }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -37,17 +38,11 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - name: Resolve latest deployment target
+      - name: Resolve triggering deployment target
         id: target
-        env:
-          IS_ALPHA_EVENT: ${{ contains(github.ref_name, '-alpha.') }}
-        run: |
-          if [ "$IS_ALPHA_EVENT" = "true" ]; then
-            mode="--alpha"
-          else
-            mode="--stable"
-          fi
-          bun scripts/resolve-deploy-tag.ts "$mode" >> "$GITHUB_OUTPUT"
+        run: bun scripts/resolve-deploy-tag.ts --resolve "${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+      - name: Reject stale queued deployment
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ github.ref_name }}"
       - name: Checkout deployment target
         uses: actions/checkout@v6
         with:
@@ -76,10 +71,14 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.changes.outputs.deploy_sha }}
+          fetch-depth: 0
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: Reject stale deployment retry
+        if: ${{ github.run_attempt > 1 }}
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Set environment variable
         run: |
           if [ "${{ needs.changes.outputs.is_alpha }}" = "true" ]; then
@@ -147,10 +146,14 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.changes.outputs.deploy_sha }}
+          fetch-depth: 0
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: Reject stale deployment retry
+        if: ${{ github.run_attempt > 1 }}
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Setup Google Cloud CLI
         uses: google-github-actions/setup-gcloud@v2
       - name: Install dependencies
@@ -188,6 +191,9 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: Reject stale deployment retry
+        if: ${{ github.run_attempt > 1 }}
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Install dependencies
         run: bun install
       - name: Set environment variable
@@ -266,6 +272,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.changes.outputs.deploy_sha }}
+          fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -273,6 +280,9 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: Reject stale deployment retry
+        if: ${{ github.run_attempt > 1 }}
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Install dependencies
         run: bun install
       - name: Set environment variable
@@ -298,6 +308,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.changes.outputs.deploy_sha }}
+          fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -305,6 +316,9 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: Reject stale deployment retry
+        if: ${{ github.run_attempt > 1 }}
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Install dependencies
         run: bun install
       - name: Set environment variable
@@ -330,6 +344,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.changes.outputs.deploy_sha }}
+          fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -337,6 +352,9 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: Reject stale deployment retry
+        if: ${{ github.run_attempt > 1 }}
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Install dependencies
         run: bun install
       - name: Set environment variable
@@ -395,6 +413,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.changes.outputs.deploy_sha }}
+          fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -402,6 +421,9 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: Reject stale deployment retry
+        if: ${{ github.run_attempt > 1 }}
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Install dependencies
         run: bun install
       - name: Set environment variable
@@ -434,10 +456,14 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.changes.outputs.deploy_sha }}
+          fetch-depth: 0
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: Reject stale deployment retry
+        if: ${{ github.run_attempt > 1 }}
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Set environment variable
         run: |
           if [ "${{ needs.changes.outputs.is_alpha }}" = "true" ]; then
@@ -482,10 +508,14 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.changes.outputs.deploy_sha }}
+          fetch-depth: 0
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: Reject stale deployment retry
+        if: ${{ github.run_attempt > 1 }}
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Set environment variable
         run: |
           if [ "${{ needs.changes.outputs.is_alpha }}" = "true" ]; then

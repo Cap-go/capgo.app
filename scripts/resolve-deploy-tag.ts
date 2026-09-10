@@ -19,6 +19,27 @@ function runGit(args: string[]): string {
   }).trim()
 }
 
+function isAlphaTag(tag: string): boolean {
+  if (stableTagPattern.test(tag))
+    return false
+  if (alphaTagPattern.test(tag))
+    return true
+
+  throw new Error(`Malformed Capgo deployment tag: ${tag}`)
+}
+
+export function resolveDeployTag(
+  tag: string,
+  run: GitRunner = runGit,
+): DeployTag {
+  const isAlpha = isAlphaTag(tag)
+  const sha = run(['rev-list', '-n', '1', tag])
+  if (!/^[0-9a-f]{40,64}$/i.test(sha))
+    throw new Error(`Capgo deployment tag ${tag} did not resolve to a full commit SHA`)
+
+  return { isAlpha, sha, tag }
+}
+
 export function resolveLatestDeployTag(
   includePrereleaseTags: boolean,
   run: GitRunner = runGit,
@@ -55,16 +76,36 @@ export function resolveLatestDeployTag(
   }
 }
 
+export function assertCurrentDeployTag(
+  tag: string,
+  run: GitRunner = runGit,
+): DeployTag {
+  const target = resolveDeployTag(tag, run)
+  const latest = resolveLatestDeployTag(target.isAlpha, run)
+
+  if (latest.tag !== target.tag) {
+    const environment = target.isAlpha ? 'alpha' : 'stable'
+    throw new Error(`Deployment tag ${target.tag} is stale; current ${environment} tag is ${latest.tag}`)
+  }
+
+  return target
+}
+
 if (import.meta.main) {
-  const mode = process.argv[2] ?? '--stable'
-  if (mode !== '--stable' && mode !== '--alpha') {
-    console.error('Usage: bun scripts/resolve-deploy-tag.ts [--stable|--alpha]')
+  const mode = process.argv[2]
+  const tag = process.argv[3]
+  if ((mode !== '--resolve' && mode !== '--assert-current') || !tag) {
+    console.error('Usage: bun scripts/resolve-deploy-tag.ts [--resolve|--assert-current] <capgo-tag>')
     process.exit(1)
   }
 
-  const target = resolveLatestDeployTag(mode === '--alpha')
-  console.error(`Resolved deployment target: ${target.tag} (${target.sha})`)
-  console.log(`deploy_tag=${target.tag}`)
-  console.log(`deploy_sha=${target.sha}`)
-  console.log(`is_alpha=${target.isAlpha}`)
+  const target = mode === '--resolve'
+    ? resolveDeployTag(tag)
+    : assertCurrentDeployTag(tag)
+  console.error(`${mode === '--resolve' ? 'Resolved' : 'Validated'} deployment target: ${target.tag} (${target.sha})`)
+  if (mode === '--resolve') {
+    console.log(`deploy_tag=${target.tag}`)
+    console.log(`deploy_sha=${target.sha}`)
+    console.log(`is_alpha=${target.isAlpha}`)
+  }
 }
