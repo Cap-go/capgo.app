@@ -49,7 +49,7 @@ describe('stats_mode', () => {
     expect(body.custom_id).toBeUndefined()
     expect(body.metadata).toBeUndefined()
     expect(body.install_source).toBeUndefined()
-    expect(body.defaultChannel).toBeUndefined()
+    expect(body.defaultChannel).toBe('')
     expect(body.key_id).toBeUndefined()
     expect(body.old_version_name).toBeUndefined()
     expect(body.version_name).toBe('1.0.0')
