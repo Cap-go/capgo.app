@@ -308,7 +308,7 @@ function applyOnboardingABTestAssignments(assignments: Record<string, Onboarding
     onboarding: {
       ...currentOnboarding,
       abtests: reconcileOnboardingABTestAssignments(currentABTests, assignments),
-    } as Json,
+    } as unknown as Json,
   }
 }
 
