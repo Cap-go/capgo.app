@@ -24,6 +24,7 @@ import {
 const id = randomUUID()
 const APPNAME = `com.app.key.${id}`
 let authHeaders: Record<string, string>
+let warmupApiKeyId: number | null = null
 
 function orgKeyBody(name: string, extra: Record<string, unknown> = {}) {
   return {
@@ -46,18 +47,51 @@ beforeAll(async () => {
   await resetAndSeedAppData(APPNAME)
   // Load the apikey isolate before concurrent POSTs from this file.
   await warmEdgeEndpoint('/apikey', { method: 'GET', headers: authHeaders })
-  // Name-only POST warms the handler without persisting org-scoped bindings.
-  await warmEdgeEndpoint('/apikey', {
+  const warmupPostResponse = await fetch(`${BASE_URL}/apikey`, {
     method: 'POST',
     headers: {
       ...authHeaders,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ name: `warmup-post-${id.slice(0, 8)}` }),
+    body: JSON.stringify(orgKeyBody(`warmup-post-${id.slice(0, 8)}`)),
   })
+  if (warmupPostResponse.ok) {
+    try {
+      const warmupData = await warmupPostResponse.json<{ id: number }>()
+      warmupApiKeyId = warmupData.id
+      const deleteResponse = await fetch(`${BASE_URL}/apikey/${warmupApiKeyId}`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      })
+      if (!deleteResponse.ok) {
+        console.warn(`apikey beforeAll warmup cleanup delete ${warmupApiKeyId} status=${deleteResponse.status}`)
+      }
+    }
+    catch (error) {
+      console.warn('apikey beforeAll warmup cleanup failed', error)
+    }
+  }
+  else {
+    await warmEdgeEndpoint('/apikey', {
+      method: 'POST',
+      headers: {
+        ...authHeaders,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name: `warmup-post-fallback-${id.slice(0, 8)}` }),
+    })
+  }
 })
 
 afterAll(async () => {
+  if (warmupApiKeyId !== null) {
+    await fetch(`${BASE_URL}/apikey/${warmupApiKeyId}`, {
+      method: 'DELETE',
+      headers: authHeaders,
+    }).catch(() => undefined)
+    await getSupabaseClient().from('apikeys').delete().eq('id', warmupApiKeyId).catch(() => undefined)
+    warmupApiKeyId = null
+  }
   await resetAppData(APPNAME)
 })
 

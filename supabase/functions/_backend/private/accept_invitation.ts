@@ -149,6 +149,36 @@ async function ensurePublicUserRowExists(
   }
 }
 
+function isPgLockTimeoutError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as { code: string }).code === '55P03'
+}
+
+async function acquireRbacOrgLockWithRetry(pgClient: PoolClient, orgId: string): Promise<void> {
+  const lockAttempts = 6
+  const lockTimeoutMs = 5000
+
+  for (let attempt = 0; attempt < lockAttempts; attempt++) {
+    try {
+      await pgClient.query(`SET LOCAL lock_timeout = '${lockTimeoutMs}ms'`)
+      await pgClient.query(
+        `SELECT public.lock_rbac_orgs($1::uuid)`,
+        [orgId],
+      )
+      await pgClient.query(`SET LOCAL lock_timeout = '0'`)
+      return
+    }
+    catch (error) {
+      if (!isPgLockTimeoutError(error) || attempt === lockAttempts - 1) {
+        throw error
+      }
+      await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)))
+    }
+  }
+}
+
 async function ensureOrgMembership(
   c: Parameters<typeof useSupabaseAdmin>[0],
   _supabaseAdmin: ReturnType<typeof useSupabaseAdmin>,
@@ -163,13 +193,12 @@ async function ensureOrgMembership(
     pgClient = await pgPool.connect()
     await pgClient.query('BEGIN')
     transactionStarted = true
+
+    await acquireRbacOrgLockWithRetry(pgClient, invitation.org_id)
+
+    // Bound post-lock work only; lock_timeout above handles advisory-lock waits.
     await pgClient.query('SET LOCAL statement_timeout = 10000')
     await pgClient.query('SET LOCAL idle_in_transaction_session_timeout = 15000')
-
-    await pgClient.query(
-      `SELECT public.lock_rbac_orgs($1::uuid)`,
-      [invitation.org_id],
-    )
 
     const inviteRoleResult = await pgClient.query<{ rbac_role_name: string | null }>(
       `SELECT invite_role.rbac_role_name
