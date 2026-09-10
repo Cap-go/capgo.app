@@ -8,6 +8,7 @@
 
 import { CopyObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import {
+  applyR2ConditionalDeleteMiddleware,
   ConcurrencyLimiter,
   createAwsTrashDestinationResolver,
   encodeS3CopySource,
@@ -111,9 +112,11 @@ async function processKey(key: string): Promise<void> {
 
     if (deleteMode === 'trash') {
       let sourceEtag: string | undefined
+      let sourceLastModified: Date | undefined
       try {
         const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
         sourceEtag = head.ETag
+        sourceLastModified = head.LastModified
       }
       catch (headError) {
         if (isObjectNotFoundError(headError)) {
@@ -125,8 +128,8 @@ async function processKey(key: string): Promise<void> {
         return
       }
 
-      if (!sourceEtag) {
-        console.error(`Failed to trash ${key}: missing ETag from HeadObject; source retained`)
+      if (!sourceEtag || !sourceLastModified) {
+        console.error(`Failed to trash ${key}: missing ETag or Last-Modified from HeadObject; source retained`)
         totalErrors += 1
         return
       }
@@ -145,10 +148,16 @@ async function processKey(key: string): Promise<void> {
         await s3.send(new CopyObjectCommand({
           Bucket: S3_BUCKET,
           CopySource: encodeS3CopySource(S3_BUCKET, key),
+          CopySourceIfMatch: sourceEtag,
           Key: trashKey,
         }))
       }
       catch (copyError) {
+        if (isPreconditionFailedError(copyError)) {
+          console.warn(`Skipped trash copy for ${key}: live object changed before copy`)
+          totalErrors += 1
+          return
+        }
         try {
           const trashExists = await objectExists(trashKey)
           const sourceExists = await objectExists(key)
@@ -168,11 +177,13 @@ async function processKey(key: string): Promise<void> {
       }
 
       try {
-        await s3.send(new DeleteObjectCommand({
+        const deleteCommand = new DeleteObjectCommand({
           Bucket: S3_BUCKET,
           Key: key,
           IfMatch: sourceEtag,
-        }))
+        })
+        applyR2ConditionalDeleteMiddleware(deleteCommand.middlewareStack, { etag: sourceEtag, lastModified: sourceLastModified })
+        await s3.send(deleteCommand)
         totalProcessed += 1
       }
       catch (deleteError) {

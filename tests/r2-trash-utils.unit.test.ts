@@ -178,6 +178,24 @@ describe('moveS3LiteObjectToTrash', () => {
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
+  it('skips delete when Last-Modified changes but etag stays the same after copy', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const etag = '"same"'
+    const copyObject = vi.fn(async () => undefined)
+    const deleteObject = vi.fn(async () => undefined)
+    const makeRequest = vi.fn(async () => new Response(null, { status: 204 }))
+    const statObject = vi.fn()
+      .mockResolvedValueOnce(stat(etag, new Date('2024-01-15T10:30:00.000Z'))) // source
+      .mockRejectedValueOnce({ name: 'NotFound' }) // default trash slot
+      .mockRejectedValueOnce({ name: 'NotFound' }) // unique candidate
+      .mockResolvedValueOnce(stat(etag, new Date('2024-01-15T10:30:01.000Z'))) // replaced in same second bucket
+
+    const result = await moveS3LiteObjectToTrash({ copyObject, deleteObject, makeRequest, statObject }, key)
+
+    expect(result).toBe('skipped_changed')
+    expect(makeRequest).not.toHaveBeenCalled()
+  })
+
   it('returns skipped_missing when the source disappears before copy', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const copyObject = vi.fn(async () => {

@@ -225,11 +225,16 @@ async function moveObjectToTrash(c: Context, fileId: string) {
     return false
   }
 
+  if (afterCopyLastModified && afterCopyLastModified.getTime() !== sourceLastModified.getTime()) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object Last-Modified changed after trash copy, source retained', fileId })
+    return false
+  }
+
   const deleteResult = await conditionalDeleteSource(
     client as RawS3LiteClient,
     fileId,
     afterCopyEtag,
-    afterCopyLastModified ?? sourceLastModified,
+    sourceLastModified,
   )
   if (deleteResult === 'deleted') {
     cloudlog({ requestId: c.get('requestId'), message: 'moved R2 object to trash', fileId, trashPath })

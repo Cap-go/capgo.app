@@ -1748,10 +1748,19 @@ async function delete_cleanup_candidates() {
                     await s3.send(new CopyObjectCommand({
                         Bucket: S3_BUCKET,
                         CopySource: encodeS3CopySource(S3_BUCKET, file.key),
+                        CopySourceIfMatch: sourceEtag,
                         Key: trashKey,
                     }))
                 }
                 catch (copyError: any) {
+                    if (isPreconditionFailedError(copyError)) {
+                        return {
+                            key: file.key,
+                            success: true,
+                            error: 'Cleanup candidate stale: live object changed before trash copy',
+                            skipped: true,
+                        }
+                    }
                     try {
                         const trashExists = await objectExists(trashKey)
                         const sourceExists = await objectExists(file.key)

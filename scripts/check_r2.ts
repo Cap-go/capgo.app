@@ -80,6 +80,7 @@ async function main() {
             .from('app_versions')
             .select('r2_path')
             .in('r2_path', batch)
+            .eq('deleted', false)
           if (error)
             throw error
           return (data ?? []).map(row => row.r2_path)
@@ -218,10 +219,15 @@ async function main() {
         await s3.send(new CopyObjectCommand({
           Bucket: S3_BUCKET,
           CopySource: encodeS3CopySource(S3_BUCKET, key),
+          CopySourceIfMatch: sourceEtag,
           Key: trashKey,
         }))
       }
       catch (copyError) {
+        if (isPreconditionFailedError(copyError)) {
+          console.warn(`Skipped ${key}: live object changed before trash copy`)
+          return 'skipped'
+        }
         try {
           const trashExists = await objectExists(trashKey)
           const sourceExists = await objectExists(key)

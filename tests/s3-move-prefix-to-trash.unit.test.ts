@@ -237,6 +237,34 @@ describe('moveObjectsWithPrefixToTrash', () => {
     }
   })
 
+  it('retains source when Last-Modified changes after copy with the same etag', async () => {
+    const prefix = 'orgs/org-1/apps/com.test.app/'
+    const key = `${prefix}same-etag-new-time.zip`
+    const etag = DEFAULT_ETAG
+
+    listObjects.mockImplementation(async function* () {
+      yield { key }
+    })
+    statObject.mockImplementation(async (objectKey: string) => {
+      if (objectKey.startsWith(R2_TRASH_PREFIX))
+        throw { statusCode: 404, code: 'NotFound' }
+      if (objectKey === key) {
+        const callCount = statObject.mock.calls.filter((call: [string]) => call[0] === key).length
+        if (callCount <= 1)
+          return stat(etag, new Date('2024-01-15T10:30:00.000Z'))
+        return stat(etag, new Date('2024-01-15T10:30:01.000Z'))
+      }
+      throw { statusCode: 404, code: 'NotFound' }
+    })
+
+    const c = await makeContext()
+    await expect(s3.moveObjectsWithPrefixToTrash(c, prefix)).rejects.toBeInstanceOf(TrashMoveError)
+
+    expect(copyObject).toHaveBeenCalledTimes(1)
+    expect(makeRequest).not.toHaveBeenCalled()
+    expect(deleteObject).not.toHaveBeenCalled()
+  })
+
   it('retains source when conditional delete cannot prove safety', async () => {
     const prefix = 'orgs/org-1/apps/com.test.app/'
     const key = `${prefix}unsafe-delete.zip`

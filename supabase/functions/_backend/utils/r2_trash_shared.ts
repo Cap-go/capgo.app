@@ -353,11 +353,14 @@ export async function moveS3LiteObjectToTrash(s3client: RawS3LiteClient, key: st
   if (sourceEtag && afterCopyEtag !== sourceEtag)
     return 'skipped_changed'
 
+  if (afterCopyLastModified && afterCopyLastModified.getTime() !== sourceLastModified.getTime())
+    return 'skipped_changed'
+
   const deleteResult = await conditionalDeleteSource(
     s3client,
     key,
     afterCopyEtag ?? sourceEtag,
-    afterCopyLastModified ?? sourceLastModified,
+    sourceLastModified,
   )
   if (deleteResult === 'skipped_changed')
     return 'skipped_changed'

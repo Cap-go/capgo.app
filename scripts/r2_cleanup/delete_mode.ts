@@ -1,6 +1,7 @@
 export type R2CleanupDeleteMode = 'dry_run' | 'trash' | 'permanent'
 
 export {
+  applyR2ConditionalDeleteMiddleware,
   ConcurrencyLimiter,
   createAwsTrashDestinationResolver,
   encodeS3CopySource,
