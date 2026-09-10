@@ -322,7 +322,7 @@ export async function copyObjectToTrashWithDestinationGuard(
 }
 
 export async function resolveAvailableR2TrashKey(
-  s3client: Pick<RawS3LiteClient, 'statObject'>,
+  s3client: Pick<RawS3LiteClient, 'statObject' | 'makeRequest'>,
   key: string,
   sourceEtag?: string,
   sourceLastModified?: Date,
