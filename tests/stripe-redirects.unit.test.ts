@@ -63,6 +63,12 @@ function mockBillingAccountLookup(billingAccount = 'ee') {
             error: null,
           }),
         }),
+        or: vi.fn().mockReturnValue({
+          maybeSingle: vi.fn().mockResolvedValue({
+            data: null,
+            error: null,
+          }),
+        }),
       }),
     }),
   })
