@@ -608,6 +608,10 @@ describe('app onboarding progress analytics integration', () => {
     expect(demoExit.indexOf('window.dispatchEvent')).toBeLessThan(demoExit.indexOf('allowOnboardingDashboardExploration'))
 
     const confirmedSidebarExit = sidebarSource.slice(sidebarSource.indexOf('if (requiresOnboardingExplorationConfirmation)'), sidebarSource.indexOf('if (tab.onClick)'))
-    expect(confirmedSidebarExit.indexOf(`lastButtonRole !== 'secondary'`)).toBeLessThan(confirmedSidebarExit.indexOf('window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))'))
+    const secondaryGuardIndex = confirmedSidebarExit.indexOf(`lastButtonRole !== 'secondary'`)
+    const exploredEventIndex = confirmedSidebarExit.indexOf('window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))')
+    expect(secondaryGuardIndex).toBeGreaterThanOrEqual(0)
+    expect(exploredEventIndex).toBeGreaterThanOrEqual(0)
+    expect(secondaryGuardIndex).toBeLessThan(exploredEventIndex)
   })
 })
