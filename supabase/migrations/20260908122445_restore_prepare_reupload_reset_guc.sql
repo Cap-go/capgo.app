@@ -41,7 +41,10 @@ BEGIN
   END IF;
 
   IF TG_OP = 'UPDATE' THEN
+    -- Custom GUCs are settable by any SQL session, so also require an internal
+    -- request role (same gate as prepare_reupload_reset below).
     IF pg_catalog.current_setting('capgo.reclaim_manifest_null', true) = 'on'
+      AND public.is_internal_request_role(public.current_request_role())
       AND NEW.manifest IS NULL
       AND OLD.manifest IS NOT NULL
       AND NEW.native_packages IS NOT DISTINCT FROM OLD.native_packages
