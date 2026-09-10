@@ -64,7 +64,13 @@ await test('checks an app-scoped key through Capgo HTTP plan API', async () => {
     await utils.checkPlanValid('ck_key', 'org-id', 'com.example.app', false, HOST)
     const planCall = calls.find(call => String(call.url).includes('/private/cli/check-plan'))
     assert(planCall, 'Expected HTTP plan check')
+    assertEquals(planCall.method, 'POST')
+    assertEquals(
+      planCall.url,
+      'https://fake.supabase.co/functions/v1/private/cli/check-plan',
+    )
     assertEquals(planCall.headers?.capgkey, 'ck_key')
+    assertEquals(planCall.headers?.Authorization, 'Bearer fake-anon')
     assertEquals(JSON.parse(planCall.body), {
       org_id: 'org-id',
       app_id: 'com.example.app',

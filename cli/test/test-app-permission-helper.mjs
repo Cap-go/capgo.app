@@ -49,6 +49,7 @@ try {
   assert.ok(fetchCalls.some(call => call.url.includes('/private/cli/check-permission')), 'expected HTTP permission check')
   assert.ok(fetchCalls.some(call => /\/app\/com\.example\.app$/.test(call.url)), 'expected GET app existence check')
   const permissionCall = fetchCalls.find(call => call.url.includes('/private/cli/check-permission'))
+  assert.equal(permissionCall.method, 'POST')
   assert.equal(permissionCall.headers?.capgkey, 'ck_plain_cli_key')
   assert.deepEqual(JSON.parse(permissionCall.body), {
     permission_key: 'app.read_bundles',
@@ -68,6 +69,7 @@ try {
 
   assert.equal(fetchCalls.filter(call => /\/app\//.test(call.url)).length, 0, 'channel-scoped checks skip app existence HTTP call')
   const channelDeleteCall = fetchCalls.find(call => call.url.includes('/private/cli/check-permission'))
+  assert.equal(channelDeleteCall.method, 'POST')
   assert.equal(channelDeleteCall.headers?.capgkey, 'ck_channel_cli_key')
   assert.deepEqual(JSON.parse(channelDeleteCall.body), {
     permission_key: 'channel.delete',
@@ -85,6 +87,7 @@ try {
   )
 
   const channelUpdateCall = fetchCalls.find(call => call.url.includes('/private/cli/check-permission'))
+  assert.equal(channelUpdateCall.method, 'POST')
   assert.equal(channelUpdateCall.headers?.capgkey, 'ck_channel_update_key')
   assert.deepEqual(JSON.parse(channelUpdateCall.body), {
     permission_key: 'channel.update_settings',
@@ -137,6 +140,7 @@ try {
 
   const selfHostCall = fetchCalls.find(call => call.url.includes('/private/cli/check-permission'))
   assert.ok(selfHostCall, 'expected self-host permission check')
+  assert.equal(selfHostCall.method, 'POST')
   assert.equal(
     selfHostCall.url,
     'https://selfhost.example.com/functions/v1/private/cli/check-permission',

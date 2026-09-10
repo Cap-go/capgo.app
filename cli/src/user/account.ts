@@ -1,7 +1,7 @@
 import type { Options } from '../api/app'
 import { intro, log, outro } from '@clack/prompts'
 import { trackEvent } from '../analytics/track'
-import { createSupabaseClient, findSavedKey, formatError, resolveUserIdFromApiKey } from '../utils'
+import { findSavedKey, formatError, resolveUserIdFromApiKey } from '../utils'
 
 export async function getUserIdInternal(options: Options, silent = false) {
   if (!silent)
@@ -19,12 +19,7 @@ export async function getUserIdInternal(options: Options, silent = false) {
   }
 
   try {
-    const supabase = await createSupabaseClient(
-      enrichedOptions.apikey,
-      enrichedOptions.supaHost,
-      enrichedOptions.supaAnon,
-    )
-    const userId = await resolveUserIdFromApiKey(supabase, enrichedOptions.apikey, silent, {
+    const userId = await resolveUserIdFromApiKey(null, enrichedOptions.apikey, silent, {
       supaHost: enrichedOptions.supaHost,
       supaAnon: enrichedOptions.supaAnon,
     })

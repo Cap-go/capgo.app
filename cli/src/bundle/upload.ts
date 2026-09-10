@@ -1804,7 +1804,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     }
     catch (error) {
       try {
-        await deletedFailedVersion(apikey, appid, bundle, options)
+        await deletedFailedVersion(apikey, appid, bundle, { ...options, ...uploadCtx.host })
       }
       catch (cleanupError) {
         uploadFail(`Cannot upload bundle to S3 ${formatError(error)}. Cleanup of the incomplete version also failed (${formatError(cleanupError)}); delete bundle ${bundle} manually before retrying.`)
@@ -1884,7 +1884,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       }
       catch (error) {
         try {
-          await deletedFailedVersion(apikey, appid, bundle, options)
+          await deletedFailedVersion(apikey, appid, bundle, { ...options, ...uploadCtx.host })
         }
         catch (cleanupError) {
           uploadFail(`Cannot set bundle manifest ${formatError(error)}. Cleanup of the incomplete version also failed (${formatError(cleanupError)}); delete bundle ${bundle} manually before retrying.`)
