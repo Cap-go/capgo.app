@@ -649,12 +649,12 @@ export function getDatabaseURL(): string {
     return DEFAULT_DB_URL
 }
 
-export function getPgClient(c: Context) {
+export function getPgClient(c: Context, maxConnections = 1) {
     const dbUrl = getDatabaseURL()
     console.log({ message: 'getPgClient', dbUrl })
     return new Pool({
         connectionString: dbUrl,
-        max: 1,
+        max: maxConnections,
         idleTimeoutMillis: 2000,
     })
 }
@@ -1593,9 +1593,11 @@ async function delete_cleanup_candidates() {
 
     console.log(`📦 Found ${toDelete.length} cleanup candidates in ${cleanupFile}`)
 
+    const PROCESS_CONCURRENCY = 20
+
     console.log('🔗 Revalidating candidates against current app_versions...')
     const mockContext = {} as Context
-    const pool = getPgClient(mockContext)
+    const pool = getPgClient(mockContext, PROCESS_CONCURRENCY)
     let candidatesToProcess = toDelete
 
     const referencedKeys = new Set<string>()
@@ -1706,7 +1708,6 @@ async function delete_cleanup_candidates() {
     console.log('🔗 Connecting to R2...')
     const s3 = await initS3()
 
-    const PROCESS_CONCURRENCY = 20
     const limiter = new ConcurrencyLimiter(PROCESS_CONCURRENCY)
     let processedCount = 0
 

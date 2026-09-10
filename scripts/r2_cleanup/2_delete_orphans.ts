@@ -11,6 +11,7 @@ import { permanentDeleteAwsLiveKey } from './aws_permanent_delete.ts'
 import {
   applyAwsCopyDestinationIfNoneMatchMiddleware,
   applyR2ConditionalDeleteMiddleware,
+  buildAwsTrashCopyPreserveFromHead,
   mergeTrashCopyMetadata,
   ConcurrencyLimiter,
   copyObjectToTrashWithDestinationGuard,
@@ -140,11 +141,21 @@ async function processKey(target: TrashProcessTarget): Promise<void> {
       let sourceEtag: string | undefined
       let sourceLastModified: Date | undefined
       let sourceMetadata: Record<string, string> | undefined
+      let sourceContentType: string | undefined
+      let sourceCacheControl: string | undefined
+      let sourceContentEncoding: string | undefined
+      let sourceContentDisposition: string | undefined
+      let sourceExpires: Date | undefined
       try {
         const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
         sourceEtag = head.ETag
         sourceLastModified = head.LastModified
         sourceMetadata = head.Metadata
+        sourceContentType = head.ContentType
+        sourceCacheControl = head.CacheControl
+        sourceContentEncoding = head.ContentEncoding
+        sourceContentDisposition = head.ContentDisposition
+        sourceExpires = head.Expires
       }
       catch (headError) {
         if (isObjectNotFoundError(headError)) {
@@ -189,13 +200,26 @@ async function processKey(target: TrashProcessTarget): Promise<void> {
           trashKey,
           sourceEtag,
           async (destinationKey) => {
+            const copyPreserve = buildAwsTrashCopyPreserveFromHead({
+              Metadata: sourceMetadata,
+              ContentType: sourceContentType,
+              CacheControl: sourceCacheControl,
+              ContentEncoding: sourceContentEncoding,
+              ContentDisposition: sourceContentDisposition,
+              Expires: sourceExpires,
+            })
             const copyCommand = new CopyObjectCommand({
               Bucket: S3_BUCKET,
               CopySource: encodeS3CopySource(S3_BUCKET, key),
               CopySourceIfMatch: quoteS3CopySourceIfMatchEtag(sourceEtag),
               Key: destinationKey,
-              Metadata: mergeTrashCopyMetadata(sourceMetadata, sourceLastModified),
+              Metadata: mergeTrashCopyMetadata(copyPreserve.metadata, sourceLastModified),
               MetadataDirective: 'REPLACE',
+              ContentType: copyPreserve.contentType,
+              CacheControl: copyPreserve.cacheControl,
+              ContentEncoding: copyPreserve.contentEncoding,
+              ContentDisposition: copyPreserve.contentDisposition,
+              Expires: copyPreserve.expires,
             })
             applyAwsCopyDestinationIfNoneMatchMiddleware(copyCommand.middlewareStack)
             await s3.send(copyCommand)
