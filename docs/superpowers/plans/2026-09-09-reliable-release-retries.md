@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make rapid-merge release generation race-safe and make native deployment “Re-run all jobs” target the newest Capgo tag without removing the complete post-merge test gate or adding another workflow.
+**Goal:** Make rapid-merge release generation race-safe while ensuring release-generation re-runs are rejected and deployment retries stay pinned to their original immutable tag.
 
-**Architecture:** `bump_version.yml` will calculate pending work from component-specific tags and publish generated release refs with a compare-and-swap-style atomic push. `build_and_deploy.yml` will resolve the newest stable or alpha Capgo tag on every full execution and route every checkout and release action through that immutable target.
+**Architecture:** `bump_version.yml` calculates pending work from component-specific tags, cancels an older first-attempt push run when a newer source push arrives, rejects every re-run before tag generation, and publishes generated release refs with a compare-and-swap-style atomic push. `build_and_deploy.yml` resolves the tag that triggered the workflow, never retargets a retry, rejects stale retries before production mutation, and serializes deployments by environment. Production schema/types generation moves behind successful replica reconciliation and Supabase migration deployment, then publishes through a compare-and-swap retry loop on `main`.
 
 **Tech Stack:** GitHub Actions YAML, Bun/TypeScript, Git refs, Vitest.
 
@@ -22,6 +22,8 @@
 - Modify `.github/workflows/build_and_deploy.yml`: serialize by environment and use the resolved tag for scope, checkouts, environment, and GitHub Release creation.
 - Modify `tests/capgo-release-workflow.unit.test.ts`: lock the version and deployment workflow contracts.
 - Modify `tests/read-replica-release-workflow.unit.test.ts`: preserve the replica gate while switching its environment condition to the resolved target.
+- Create `scripts/publish-schema-types.ts`: publish one prepared schema/types commit only while `main` still equals the SHA used to generate it.
+- Create `tests/publish-schema-types.test.ts`: prove schema publication succeeds only against the expected remote `main` and classifies branch movement as retryable.
 
 ### Task 1: Cumulative component release scope
 
@@ -376,3 +378,224 @@ The PR body must summarize the observed races, state that full post-merge tests 
 - [ ] **Step 6: Establish stable-green**
 
 Use the `pr-ready` workflow to inspect checks, reviews, unresolved conversations, mergeability, and base/head SHAs. Record observation A only when all required gates are green. Recheck fresh state at least 300 seconds later and record observation B only if no relevant state changed.
+
+## Approved revision: pinned retries and post-deploy schema sync
+
+Tasks 1–3 above describe the first implementation already present on this PR branch. The following tasks replace Task 3's “newest tag” retry behavior with the user-approved immutable-tag design and relocate schema/type synchronization. Task 4 is repeated only after these revisions are complete.
+
+### Task 5: Cancel superseded source pushes and reject version re-runs
+
+**Files:**
+- Modify: `tests/capgo-release-workflow.unit.test.ts`
+- Modify: `.github/workflows/bump_version.yml`
+
+- [ ] **Step 1: Add failing workflow contract tests**
+
+Require workflow-level concurrency that gives first-attempt, non-bot source pushes one shared branch group and gives bot commits or re-runs a unique group. Require `cancel-in-progress: true` so a new source push cancels older version work, without allowing an ignored auto-generated commit or a manual re-run to cancel legitimate work.
+
+Require explicit `github.run_attempt` guards in both `changes` and `bump-version`. The guard must exit non-zero with an actionable message, so “Re-run all jobs” and a direct re-run of the tag-generating job both fail before release mutation.
+
+- [ ] **Step 2: Run the focused workflow test and verify failure**
+
+```bash
+bunx vitest run tests/capgo-release-workflow.unit.test.ts
+```
+
+- [ ] **Step 3: Implement concurrency and fail-fast guards**
+
+Add a conditional concurrency group keyed by branch only for a first-attempt source push. Keep ignored `chore(release):` and `chore(auto-sync):` runs, plus every `run_attempt > 1`, isolated with `github.run_id` and `github.run_attempt`.
+
+Add this semantic guard before any meaningful work in both relevant jobs:
+
+```bash
+if [ "$GITHUB_RUN_ATTEMPT" != "1" ]; then
+  echo "::error::Version-generation workflows cannot be re-run. Push a new commit so release scope is recalculated from current main."
+  exit 1
+fi
+```
+
+- [ ] **Step 4: Re-run the focused workflow test**
+
+Expected: the concurrency and re-run contracts pass without weakening the complete reusable test job.
+
+### Task 6: Resolve and validate the triggering deployment tag
+
+**Files:**
+- Modify: `tests/resolve-deploy-tag.test.ts`
+- Modify: `scripts/resolve-deploy-tag.ts`
+
+- [ ] **Step 1: Add failing exact-tag and freshness tests**
+
+Add public APIs with this shape:
+
+```ts
+export function resolveDeployTag(tag: string, run?: GitRunner): DeployTag
+export function assertCurrentDeployTag(tag: string, run?: GitRunner): DeployTag
+```
+
+Test that exact resolution never selects another tag; malformed tags and missing refs fail; stable and alpha freshness are evaluated independently; and a requested tag older than the newest tag for its environment throws a stale-deployment error.
+
+- [ ] **Step 2: Run the resolver tests and verify failure**
+
+```bash
+bunx vitest run tests/resolve-deploy-tag.test.ts
+```
+
+- [ ] **Step 3: Implement exact resolution and freshness assertion**
+
+Keep the creation-order-aware latest-tag resolver because it is needed only for the stale check. Add CLI modes:
+
+```bash
+bun scripts/resolve-deploy-tag.ts --resolve "$GITHUB_REF_NAME"
+bun scripts/resolve-deploy-tag.ts --assert-current "$DEPLOY_TAG"
+```
+
+`--resolve` prints the exact event tag and SHA. `--assert-current` succeeds only when that same tag remains the newest stable/alpha tag and must never print or select a replacement deploy target.
+
+- [ ] **Step 4: Re-run the resolver tests**
+
+Expected: exact resolution and same-environment freshness cases pass.
+
+### Task 7: Pin deployment retries and expose migration scope
+
+**Files:**
+- Modify: `tests/deploy-scope.test.ts`
+- Modify: `scripts/deploy-scope.ts`
+- Modify: `tests/capgo-release-workflow.unit.test.ts`
+- Modify: `tests/read-replica-release-workflow.unit.test.ts`
+- Modify: `.github/workflows/build_and_deploy.yml`
+
+- [ ] **Step 1: Add failing deployment workflow contracts**
+
+Require `changes` to resolve `${{ github.ref_name }}` exactly and reject a stale queued deployment at startup. For every production-mutating job, require a retry-only freshness check:
+
+```yaml
+if: ${{ github.run_attempt > 1 }}
+run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+```
+
+This allows an initial deployment that already started to finish even if a newer tag appears, while an old failed run cannot mutate production after a newer tag exists. Keep every checkout, release, environment choice, and native build pinned to `needs.changes.outputs.deploy_sha` / `deploy_tag`.
+
+Add `has_migration_changes` to `deploy-scope.ts` output for files under `supabase/migrations/`.
+
+- [ ] **Step 2: Run focused tests and verify failure**
+
+```bash
+bunx vitest run tests/deploy-scope.test.ts tests/capgo-release-workflow.unit.test.ts tests/read-replica-release-workflow.unit.test.ts
+```
+
+- [ ] **Step 3: Update deployment scope and workflow**
+
+Resolve the triggering tag once in `changes`, immediately assert that it is current, and publish `has_migration_changes`. Add retry-only stale-tag guards before mutation in replica reconciliation, Supabase deployment, web/API/file/translation/plugin deployment, and native build-request jobs. Fetch tags in each guarded job so freshness is authoritative for that retry.
+
+Keep environment concurrency non-cancelling. A newer deployment queues behind a running one; a queued older run that starts after a newer tag exists fails in `changes` before mutation.
+
+- [ ] **Step 4: Re-run focused deployment tests**
+
+Expected: all deployment and replica contracts pass.
+
+### Task 8: Compare-and-swap schema/types publication
+
+**Files:**
+- Create: `tests/publish-schema-types.test.ts`
+- Create: `scripts/publish-schema-types.ts`
+
+- [ ] **Step 1: Write failing publisher tests**
+
+Define:
+
+```ts
+export interface PublishSchemaTypesOptions {
+  branch: string
+  expectedBranchSha: string
+  remote: string
+}
+
+export function publishSchemaTypes(
+  options: PublishSchemaTypesOptions,
+  run?: GitRunner,
+): 'published' | 'retry'
+```
+
+Test that unchanged remote `main` uses a normal atomic `HEAD:refs/heads/main` push, branch movement before the push returns `retry` without pushing, a rejected push followed by branch movement returns `retry`, and a rejected push with unchanged remote state is a genuine error.
+
+- [ ] **Step 2: Run the test and verify failure**
+
+```bash
+bunx vitest run tests/publish-schema-types.test.ts
+```
+
+- [ ] **Step 3: Implement the publisher**
+
+Validate branch/SHA inputs, read remote `main` with `git ls-remote --heads`, and push only the prepared commit. Do not use `git pull`, force push, merge, or rebase. The CLI prints `published` or `retry` for the workflow loop.
+
+- [ ] **Step 4: Re-run the publisher tests**
+
+Expected: all compare-and-swap cases pass.
+
+### Task 9: Move schema/types generation after database deployment
+
+**Files:**
+- Modify: `tests/capgo-release-workflow.unit.test.ts`
+- Modify: `tests/read-replica-release-workflow.unit.test.ts`
+- Modify: `.github/workflows/bump_version.yml`
+- Modify: `.github/workflows/build_and_deploy.yml`
+
+- [ ] **Step 1: Add failing workflow contracts**
+
+Require `sync_schema_types` to be absent from `bump_version.yml` and present in `build_and_deploy.yml`. It must run only for stable releases with migration changes, after both `read_replica_schema` and `supabase_deploy` succeed.
+
+Require a bounded retry loop that:
+
+1. fetches current `main` and tags;
+2. rejects/defer-successfully if the original deploy tag is no longer current;
+3. defer-successfully if `main` contains migrations absent from the deployed tag;
+4. checks out the fetched `main` SHA and regenerates the production schema and types;
+5. defer-successfully if regenerated types do not typecheck against current source;
+6. commits only generated files;
+7. calls `publish-schema-types.ts` with that exact base SHA;
+8. retries from a fresh `main` snapshot if compare-and-swap loses a race.
+
+- [ ] **Step 2: Run workflow tests and verify failure**
+
+```bash
+bunx vitest run tests/capgo-release-workflow.unit.test.ts tests/read-replica-release-workflow.unit.test.ts
+```
+
+- [ ] **Step 3: Relocate and harden synchronization**
+
+Remove the old pre-deploy job. Add the post-deploy job with explicit `contents: write`, production Supabase credentials, a small bounded retry count, exact-tag freshness checks, migration-diff deferral, typecheck deferral, and compare-and-swap publication.
+
+The schema job must be non-blocking only for deliberate deferrals caused by newer work or incompatible latest source. Genuine generation, authentication, or push failures still fail visibly.
+
+- [ ] **Step 4: Re-run focused tests**
+
+Expected: schema synchronization is structurally downstream from both database targets and no release-generation workflow can publish schema output.
+
+### Task 10: Revised verification and same-PR handoff
+
+- [ ] **Step 1: Run format/lint and typecheck**
+
+```bash
+bun lint
+bun typecheck
+```
+
+- [ ] **Step 2: Run the complete focused release suite**
+
+```bash
+bunx vitest run tests/release-scope.test.ts tests/publish-release.test.ts tests/resolve-deploy-tag.test.ts tests/deploy-scope.test.ts tests/publish-schema-types.test.ts tests/capgo-release-workflow.unit.test.ts tests/read-replica-release-workflow.unit.test.ts
+```
+
+- [ ] **Step 3: Inspect and push the existing PR branch**
+
+```bash
+git diff --check
+git status --short
+git diff origin/main...HEAD --stat
+git push origin wolny/reliable-cicd-retries
+```
+
+- [ ] **Step 4: Re-run `pr-ready` until stable-green**
+
+Keep this work in the existing PR. Inspect checks, reviews, unresolved conversations, mergeability, and base/head SHAs. Resolve actionable failures, then record two all-green observations at least five minutes apart with no relevant state change.
