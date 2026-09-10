@@ -86,7 +86,7 @@ export async function currentBundleInternal(channel: string, appId: string, opti
     throw new CliUserError('Channel does not have a readable current bundle', { appId, channel })
   }
 
-  const orgId = await getOrganizationId(options.apikey!, appId, host).catch(() => undefined)
+  const orgId = await getOrganizationId(options.apikey!, appId, { ...host, silent: true }).catch(() => undefined)
   void trackEvent({
     channel: 'channel',
     event: 'Channel Current Bundle Viewed',

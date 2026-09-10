@@ -2635,7 +2635,7 @@ export async function assertOrgPermission(
 export async function getOrganizationId(
   apikey: string,
   appId: string,
-  options?: { supaHost?: string, supaAnon?: string },
+  options?: { supaHost?: string, supaAnon?: string, silent?: boolean },
 ) {
   const { data, error } = await invokeCapgoCliApi<{ owner_org?: string }>(`app/${encodeURIComponent(appId)}`, {
     apikey,
@@ -2649,7 +2649,8 @@ export async function getOrganizationId(
     const cause = formatError(error)
     // Surface the underlying cause instead of discarding it — a bare
     // "Cannot get organization id" leaves both users and triage with no signal.
-    log.error(`Cannot get organization id for app id ${appId}: ${cause}`)
+    if (!options?.silent)
+      log.error(`Cannot get organization id for app id ${appId}: ${cause}`)
     throw new CliUserError('Cannot get organization id for app', { appId, cause })
   }
   return data.owner_org
