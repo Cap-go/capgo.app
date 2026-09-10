@@ -62,9 +62,9 @@ app.post('/', middlewareKey(), async (c) => {
   cloudlog({ requestId: c.get('requestId'), message: 'filePath', filePath })
   // check if app version exist
 
-  const pgClient = getPgClient(c)
+  const pgPool = getPgClient(c)
   try {
-    return await withR2PathCoordinationLock(pgClient, filePath, async () => {
+    return await withR2PathCoordinationLock(pgPool, filePath, async () => {
       cloudlog({ requestId: c.get('requestId'), message: 's3.checkIfExist', filePath })
 
       const exist = await s3.checkIfExist(c, filePath)
@@ -96,6 +96,6 @@ app.post('/', middlewareKey(), async (c) => {
     })
   }
   finally {
-    closeClient(c, pgClient)
+    await closeClient(c, pgPool)
   }
 })

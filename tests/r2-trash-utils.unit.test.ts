@@ -962,6 +962,7 @@ describe('withOrphanR2DeleteClaim', () => {
           return { rowCount: 1, rows: [{}] }
         return { rowCount: 0, rows: [] }
       }),
+      release: vi.fn(),
     }
     const runDelete = vi.fn(async () => 'deleted')
 

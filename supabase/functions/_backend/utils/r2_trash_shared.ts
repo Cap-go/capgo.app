@@ -314,13 +314,21 @@ export function parseVersionScopedR2Key(key: string): { appId: string, versionNa
   return parseLegacyAppsBundleKey(key)
 }
 
-export type PgQueryClient = {
+export type PgConnectedClient = {
   query: (sql: string, params?: unknown[]) => Promise<{ rowCount: number | null, rows: unknown[] }>
+  release: (err?: Error | boolean) => void
 }
 
-/** Serialize orphan deletes and upload-link r2_path assignment for the same key. */
-export async function withR2PathCoordinationLock<T>(
-  client: PgQueryClient,
+export type PgPoolLike = {
+  connect: () => Promise<PgConnectedClient>
+}
+
+function isPgPoolLike(client: PgConnectedClient | PgPoolLike): client is PgPoolLike {
+  return typeof (client as PgPoolLike).connect === 'function'
+}
+
+async function withR2PathCoordinationLockOnClient<T>(
+  client: PgConnectedClient,
   key: string,
   run: () => Promise<T>,
 ): Promise<T> {
@@ -351,12 +359,30 @@ export async function withR2PathCoordinationLock<T>(
   }
 }
 
+/** Serialize orphan deletes and upload-link r2_path assignment for the same key. */
+export async function withR2PathCoordinationLock<T>(
+  clientOrPool: PgConnectedClient | PgPoolLike,
+  key: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (isPgPoolLike(clientOrPool)) {
+    const client = await clientOrPool.connect()
+    try {
+      return await withR2PathCoordinationLockOnClient(client, key, run)
+    }
+    finally {
+      client.release()
+    }
+  }
+  return withR2PathCoordinationLockOnClient(clientOrPool, key, run)
+}
+
 /**
  * Hold a version-scoped row lock while deleting an orphan key so upload cannot
  * assign app_versions.r2_path between the reference check and DeleteObject.
  */
 export async function withOrphanR2DeleteClaim<T>(
-  client: PgQueryClient,
+  client: PgConnectedClient,
   key: string,
   runDelete: () => Promise<T>,
 ): Promise<'skipped_referenced' | T> {
