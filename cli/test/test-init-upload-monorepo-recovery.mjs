@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { shellQuotePath } from '../src/app/info.ts'
 import {
   formatBundleUploadRunnerCommand,
   getBundleUploadFailureRecoveryOptions,
@@ -9,6 +10,10 @@ import {
   resolveUploadPaths,
   withMonorepoUploadRetryHint,
 } from '../src/init/upload-recovery.ts'
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
 
 assert.match(MONOREPO_ROOT_PATHS_NOTE, /monorepo\/workspace root/)
 assert.match(MONOREPO_ROOT_PATHS_NOTE, /not the app package/)
@@ -34,24 +39,21 @@ assert.equal(resolveUploadPaths('./package.json,./apps/mobile/package.json', pro
 assert.equal(resolveUploadPaths('/already/absolute/package.json', promptCwd), '/already/absolute/package.json')
 assert.equal(resolveUploadPaths('./node_modules', promptCwd), '/workspace/app/node_modules')
 
-assert.match(
-  formatBundleUploadRunnerCommand('npx -y', 'com.example.app', {
-    bundle: '1.0.1',
-    channel: 'production',
-    packageJson: '/Users/a/My Project/package.json',
-    nodeModules: '/Users/a/My Project/node_modules',
-  }),
-  /--package-json '\/Users\/a\/My Project\/package\.json'/,
-)
-assert.match(
-  formatBundleUploadRunnerCommand('npx -y', 'com.example.app', {
-    bundle: '1.0.1',
-    channel: 'production',
-    packageJson: '/Users/a/My Project/package.json',
-    nodeModules: '/Users/a/My Project/node_modules',
-  }),
-  /--node-modules '\/Users\/a\/My Project\/node_modules'/,
-)
+const packageJson = '/Users/a/My Project/package.json'
+const nodeModules = '/Users/a/My Project/node_modules'
+assert.equal(shellQuotePath(packageJson, 'linux'), '\'/Users/a/My Project/package.json\'')
+assert.equal(shellQuotePath(packageJson, 'win32'), '"/Users/a/My Project/package.json"')
+assert.equal(shellQuotePath(nodeModules, 'linux'), '\'/Users/a/My Project/node_modules\'')
+assert.equal(shellQuotePath(nodeModules, 'win32'), '"/Users/a/My Project/node_modules"')
+
+const uploadCommand = formatBundleUploadRunnerCommand('npx -y', 'com.example.app', {
+  bundle: '1.0.1',
+  channel: 'production',
+  packageJson,
+  nodeModules,
+})
+assert.match(uploadCommand, new RegExp(`--package-json ${escapeRegExp(shellQuotePath(packageJson))}`))
+assert.match(uploadCommand, new RegExp(`--node-modules ${escapeRegExp(shellQuotePath(nodeModules))}`))
 
 assert.equal(withMonorepoUploadRetryHint(''), MONOREPO_UPLOAD_RETRY_HINT)
 assert.equal(

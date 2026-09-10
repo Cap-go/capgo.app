@@ -5020,6 +5020,10 @@ async function uploadStep(orgId: string, apikey: string, appId: string, newVersi
         nodeModulesPath = paths.nodeModules
         globalUploadPackageJsonPath = uploadPackageJsonPath
         globalNodeModulesPath = nodeModulesPath
+        // Persist the selected paths on the existing step-9 checkpoint so
+        // resume can restore them if this retry fails and the user exits.
+        // Do not mark step 10 complete until upload succeeds.
+        markStepDone(9)
       }
       return 'retry'
     }
