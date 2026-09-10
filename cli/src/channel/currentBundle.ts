@@ -10,6 +10,7 @@ import {
   getAppId,
   getCapgoCliHttpStatus,
   getConfig,
+  getOrganizationId,
   readCapgoCliApiErrorPayload,
   resolveUserIdFromApiKey,
 } from '../utils'
@@ -85,11 +86,13 @@ export async function currentBundleInternal(channel: string, appId: string, opti
     throw new CliUserError('Channel does not have a readable current bundle', { appId, channel })
   }
 
+  const orgId = await getOrganizationId(options.apikey!, appId, host)
   void trackEvent({
     channel: 'channel',
     event: 'Channel Current Bundle Viewed',
     appId,
     apikey: options.apikey!,
+    orgId,
     tags: { has_bundle: true },
   })
 

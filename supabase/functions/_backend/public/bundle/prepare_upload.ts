@@ -232,7 +232,7 @@ async function updateExistingVersion(
   if (updateError)
     throw simpleError('cannot_prepare_upload', 'Cannot update bundle version for upload', { supabaseError: updateError })
   if (!updated)
-    return c.json({ status: 'ok', version: null })
+    throw simpleError('cannot_prepare_upload', 'Cannot update bundle version for upload', { versionId: existing.id })
 
   return c.json({ status: 'ok', version: updated })
 }
