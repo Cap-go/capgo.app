@@ -76,7 +76,7 @@ describe('moveObjectsWithPrefixToTrash', () => {
     makeRequest.mockImplementation(async (_options) => new Response(null, { status: 204 }))
   })
 
-  it('moves listed objects into deleted-after-7-days and deletes the source keys', async () => {
+  it('moves listed objects into deleted-after-7-days with conditional trash copy and delete', async () => {
     const prefix = 'orgs/org-1/apps/com.test.app/'
     const liveKey = `${prefix}1.0.0.zip`
 
@@ -100,6 +100,11 @@ describe('moveObjectsWithPrefixToTrash', () => {
     expectDefaultTrashDestination(copyCall.objectName, liveKey)
     expect(copyCall.headers?.get('x-amz-copy-source')).toBe(`capgo/${encodeS3LiteCopySourceKey(liveKey)}`)
     expect(copyCall.headers?.get('cf-copy-destination-if-none-match')).toBe('*')
+    const deleteCall = makeRequest.mock.calls[1]![0]!
+    expect(deleteCall.method).toBe('DELETE')
+    expect(deleteCall.objectName).toBe(liveKey)
+    expect(deleteCall.headers?.get('x-amz-if-match-last-modified-time')).toBeTruthy()
+    expect(deleteCall.headers?.get('If-Match')).toBe(DEFAULT_ETAG)
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
@@ -142,7 +147,7 @@ describe('moveObjectsWithPrefixToTrash', () => {
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
-  it('retains source when copyObject rejects after existence check', async () => {
+  it('retains source when makeRequest trash copy rejects after existence check', async () => {
     const prefix = 'orgs/org-1/apps/com.test.app/'
     const key = `${prefix}copy-fail.zip`
 

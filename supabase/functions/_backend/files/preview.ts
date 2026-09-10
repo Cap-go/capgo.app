@@ -23,11 +23,6 @@ interface PreviewAuthCache {
   allowPreview: boolean
 }
 
-interface BundleInfoCache {
-  hasManifest: boolean
-  isEncrypted: boolean
-}
-
 export interface PreviewDownloadBundle {
   checksum: string | null
   external_url: string | null
@@ -72,28 +67,6 @@ async function getPreviewAuth(c: Context, appId: string): Promise<PreviewAuthCac
 function setPreviewAuth(c: Context, appId: string, data: PreviewAuthCache) {
   return backgroundTask(c, async () => {
     const cacheEntry = buildPreviewAuthRequest(c, appId)
-    if (!cacheEntry)
-      return
-    await cacheEntry.helper.putJson(cacheEntry.request, data, PREVIEW_AUTH_CACHE_TTL_SECONDS)
-  })
-}
-
-// Cache helpers for bundle info
-const BUNDLE_INFO_CACHE_PATH = '/.preview-bundle'
-
-function buildBundleInfoRequest(c: Context, versionId: number) {
-  const helper = new CacheHelper(c)
-  if (!helper.available)
-    return null
-  return {
-    helper,
-    request: helper.buildRequest(BUNDLE_INFO_CACHE_PATH, { version_id: String(versionId) }),
-  }
-}
-
-function setBundleInfo(c: Context, versionId: number, data: BundleInfoCache) {
-  return backgroundTask(c, async () => {
-    const cacheEntry = buildBundleInfoRequest(c, versionId)
     if (!cacheEntry)
       return
     await cacheEntry.helper.putJson(cacheEntry.request, data, PREVIEW_AUTH_CACHE_TTL_SECONDS)
@@ -369,8 +342,6 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
     isEncrypted: !!bundle.session_key,
   }
   const payloadBundle = isPayloadRequest ? bundle as unknown as PreviewDownloadBundle : null
-
-  setBundleInfo(c, previewVersionId, bundleInfo)
 
   // Capgo Preview cannot decrypt customer-encrypted bundles: the decryption
   // private material lives only in the customer's app, not in Capgo's preview

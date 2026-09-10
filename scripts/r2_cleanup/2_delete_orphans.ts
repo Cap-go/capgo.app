@@ -9,8 +9,10 @@
 import { CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { permanentDeleteAwsLiveKey } from './aws_permanent_delete.ts'
 import {
+  applyAwsCopyDestinationIfNoneMatchMiddleware,
   applyR2ConditionalDeleteMiddleware,
   ConcurrencyLimiter,
+  copyObjectToTrashWithDestinationGuard,
   createAwsTrashDestinationResolver,
   encodeS3CopySource,
   isAlreadyMovedToTrash,
@@ -55,7 +57,7 @@ const limiter = new ConcurrencyLimiter(CONCURRENCY)
 
 const trashDestinationResolver = createAwsTrashDestinationResolver(async (objectKey) => {
   const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: objectKey }))
-  return { etag: head.ETag }
+  return { etag: head.ETag, lastModified: head.LastModified }
 })
 
 let totalProcessed = 0
@@ -101,7 +103,14 @@ async function countPrefix(prefix: string): Promise<number> {
   return count
 }
 
-async function processKey(key: string): Promise<void> {
+type TrashProcessTarget = string | { key: string, etag?: string }
+
+function normalizeTrashTarget(target: TrashProcessTarget): { key: string, etag?: string } {
+  return typeof target === 'string' ? { key: target } : target
+}
+
+async function processKey(target: TrashProcessTarget): Promise<void> {
+  const { key, etag: discoveryEtag } = normalizeTrashTarget(target)
   return limiter.run(async () => {
     if (!isLiveR2Key(key))
       return
@@ -112,6 +121,12 @@ async function processKey(key: string): Promise<void> {
     }
 
     if (deleteMode === 'trash') {
+      if (!discoveryEtag) {
+        console.error(`Failed to trash ${key}: missing discovery ETag; source retained`)
+        totalErrors += 1
+        return
+      }
+
       let sourceEtag: string | undefined
       let sourceLastModified: Date | undefined
       try {
@@ -135,9 +150,15 @@ async function processKey(key: string): Promise<void> {
         return
       }
 
+      if (discoveryEtag !== sourceEtag) {
+        console.warn(`Skipped trash for ${key}: live object etag changed since discovery`)
+        totalProcessed += 1
+        return
+      }
+
       let trashKey: string
       try {
-        trashKey = await resolveTrashDestinationKey(trashDestinationResolver, key, sourceEtag)
+        trashKey = await resolveTrashDestinationKey(trashDestinationResolver, key, sourceEtag, sourceLastModified)
       }
       catch (headError) {
         console.error(`Failed to allocate trash destination for ${key}:`, headError)
@@ -146,19 +167,40 @@ async function processKey(key: string): Promise<void> {
       }
 
       try {
-        await s3.send(new CopyObjectCommand({
-          Bucket: S3_BUCKET,
-          CopySource: encodeS3CopySource(S3_BUCKET, key),
-          CopySourceIfMatch: sourceEtag,
-          Key: trashKey,
-        }))
-      }
-      catch (copyError) {
-        if (isPreconditionFailedError(copyError)) {
+        const copyResult = await copyObjectToTrashWithDestinationGuard(
+          key,
+          trashKey,
+          sourceEtag,
+          async (destinationKey) => {
+            const copyCommand = new CopyObjectCommand({
+              Bucket: S3_BUCKET,
+              CopySource: encodeS3CopySource(S3_BUCKET, key),
+              CopySourceIfMatch: sourceEtag,
+              Key: destinationKey,
+            })
+            applyAwsCopyDestinationIfNoneMatchMiddleware(copyCommand.middlewareStack)
+            await s3.send(copyCommand)
+          },
+          async (destinationKey) => {
+            try {
+              const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: destinationKey }))
+              return { etag: head.ETag }
+            }
+            catch (error) {
+              if (isObjectNotFoundError(error))
+                return 'not_found'
+              throw error
+            }
+          },
+        )
+        if (copyResult === 'skipped_changed') {
           console.warn(`Skipped trash copy for ${key}: live object changed before copy`)
           totalProcessed += 1
           return
         }
+        trashKey = copyResult.trashKey
+      }
+      catch (copyError) {
         try {
           const trashExists = await objectExists(trashKey)
           const sourceExists = await objectExists(key)
@@ -207,7 +249,7 @@ async function processKey(key: string): Promise<void> {
   })
 }
 
-async function processKeyBatch(keys: string[]): Promise<void> {
+async function processKeyBatch(keys: TrashProcessTarget[]): Promise<void> {
   // Work-conserving pool: ConcurrencyLimiter inside processKey keeps CONCURRENCY slots busy.
   await Promise.all(keys.map(key => processKey(key)))
 }
@@ -263,8 +305,11 @@ async function listExactKeyEtags(keys: string[]): Promise<Array<{ key: string, e
       MaxKeys: 1,
     }))
     const obj = response.Contents?.find(item => item.Key === key)
-    if (!obj?.ETag)
+    if (!obj?.ETag) {
+      console.error(`Failed to list discovery ETag for ${key}; source retained`)
+      totalErrors += 1
       return null
+    }
     return { key, etag: obj.ETag }
   })))
   return targets.filter((target): target is { key: string, etag: string } => target !== null)
@@ -301,7 +346,7 @@ async function streamProcessPrefix(prefix: string): Promise<void> {
   if (deleteMode === 'permanent')
     await permanentDeleteBatch(liveKeys)
   else {
-    await processKeyBatch(liveKeys.map(target => target.key))
+    await processKeyBatch(liveKeys)
   }
 }
 
@@ -360,9 +405,8 @@ async function main() {
     console.log(`\nProcessing ${files.length} files...`)
     if (deleteMode === 'permanent')
       await permanentDeleteBatch(await listExactKeyEtags(files))
-    else {
-      await processKeyBatch(files)
-    }
+    else
+      await processKeyBatch(await listExactKeyEtags(files))
   }
 
   if (folders.length > 0) {

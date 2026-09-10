@@ -152,6 +152,22 @@ describe('public deleteApp storage contract', () => {
     storageList.mockResolvedValue({ data: [] })
   })
 
+  it('rejects delete when RBAC denies app.delete', async () => {
+    checkPermission.mockResolvedValueOnce(false)
+
+    await expect(deleteApp(
+      makeDeleteAppContext(),
+      'com.test.app',
+      { key: 'capgo_test_key' } as any,
+    )).rejects.toMatchObject({
+      cause: { error: 'cannot_delete_app' },
+    })
+
+    expect(deletedTables).not.toContain('apps')
+    expect(moveObjectsWithPrefixToTrash).not.toHaveBeenCalled()
+    expect(deleteObjectsWithPrefix).not.toHaveBeenCalled()
+  })
+
   it('deletes the app row without direct R2 trash or permanent delete calls', async () => {
     const response = await deleteApp(
       makeDeleteAppContext(),

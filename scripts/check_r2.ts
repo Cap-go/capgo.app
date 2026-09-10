@@ -3,7 +3,7 @@ import type { _Object, ListObjectsV2CommandOutput } from '@aws-sdk/client-s3'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'// supabase.types.ts'
 import { CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { createClient } from '@supabase/supabase-js'
-import { applyR2ConditionalDeleteMiddleware, ConcurrencyLimiter, createAwsTrashDestinationResolver, encodeS3CopySource, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
+import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, ConcurrencyLimiter, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const MAGIC_TO_DELETE = './tmp/magic_to_delete6.txt'
@@ -182,7 +182,7 @@ async function main() {
 
     const trashDestinationResolver = createAwsTrashDestinationResolver(async (objectKey) => {
       const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: objectKey }))
-      return { etag: head.ETag }
+      return { etag: head.ETag, lastModified: head.LastModified }
     })
 
     async function moveKeyToTrash(candidate: { key: string, etag?: string }): Promise<'ok' | 'skipped' | 'failed'> {
@@ -216,7 +216,7 @@ async function main() {
 
       let trashKey: string
       try {
-        trashKey = await resolveTrashDestinationKey(trashDestinationResolver, key, sourceEtag)
+        trashKey = await resolveTrashDestinationKey(trashDestinationResolver, key, sourceEtag, sourceLastModified)
       }
       catch (headError) {
         console.error(`Failed to allocate trash destination for ${key}:`, headError)
@@ -224,18 +224,39 @@ async function main() {
       }
 
       try {
-        await s3.send(new CopyObjectCommand({
-          Bucket: S3_BUCKET,
-          CopySource: encodeS3CopySource(S3_BUCKET, key),
-          CopySourceIfMatch: sourceEtag,
-          Key: trashKey,
-        }))
-      }
-      catch (copyError) {
-        if (isPreconditionFailedError(copyError)) {
+        const copyResult = await copyObjectToTrashWithDestinationGuard(
+          key,
+          trashKey,
+          sourceEtag,
+          async (destinationKey) => {
+            const copyCommand = new CopyObjectCommand({
+              Bucket: S3_BUCKET,
+              CopySource: encodeS3CopySource(S3_BUCKET, key),
+              CopySourceIfMatch: sourceEtag,
+              Key: destinationKey,
+            })
+            applyAwsCopyDestinationIfNoneMatchMiddleware(copyCommand.middlewareStack)
+            await s3.send(copyCommand)
+          },
+          async (destinationKey) => {
+            try {
+              const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: destinationKey }))
+              return { etag: head.ETag }
+            }
+            catch (error) {
+              if (isObjectNotFoundError(error))
+                return 'not_found'
+              throw error
+            }
+          },
+        )
+        if (copyResult === 'skipped_changed') {
           console.warn(`Skipped ${key}: live object changed before trash copy`)
           return 'skipped'
         }
+        trashKey = copyResult.trashKey
+      }
+      catch (copyError) {
         try {
           const trashExists = await objectExists(trashKey)
           const sourceExists = await objectExists(key)

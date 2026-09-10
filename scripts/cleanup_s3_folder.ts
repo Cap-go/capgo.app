@@ -38,7 +38,9 @@ const rawS3client = new S3Client({
 
 const limiter = new ConcurrencyLimiter(CONCURRENCY)
 
-async function processKey(key: string): Promise<void> {
+type ProcessKeyResult = 'ok' | 'skipped' | 'failed'
+
+async function processKey(key: string): Promise<ProcessKeyResult> {
   return limiter.run(async () => {
     let discoveryEtag: string | undefined
     try {
@@ -46,13 +48,13 @@ async function processKey(key: string): Promise<void> {
       discoveryEtag = listed.etag
     }
     catch (error) {
-      console.warn(`Skipped ${key}: could not read discovery ETag (${error})`)
-      return
+      console.error(`Failed ${key}: could not read discovery ETag (${error})`)
+      return 'failed'
     }
 
     if (!discoveryEtag) {
-      console.warn(`Skipped ${key}: missing discovery ETag; source retained`)
-      return
+      console.error(`Failed ${key}: missing discovery ETag; source retained`)
+      return 'failed'
     }
 
     if (deleteMode === 'trash') {
@@ -60,25 +62,26 @@ async function processKey(key: string): Promise<void> {
       const result = await moveS3LiteObjectToTrash(rawS3client, key, S3_BUCKET, discoveryEtag)
       if (result === 'skipped_missing') {
         console.log(`Already absent: ${key}`)
-        return
+        return 'skipped'
       }
       if (result === 'skipped_changed') {
         console.warn(`Skipped ${key}: live object changed before trash delete; source retained`)
-        return
+        return 'skipped'
       }
-      return
+      return 'ok'
     }
 
     console.log(`Permanently deleting: ${key}`)
     const deleteResult = await permanentDeleteSourceIfMatch(rawS3client, key, discoveryEtag)
     if (deleteResult === 'skipped_missing') {
       console.log(`Already absent: ${key}`)
-      return
+      return 'skipped'
     }
     if (deleteResult === 'skipped_changed') {
       console.warn(`Skipped permanent delete for ${key}: live object changed before delete; source retained`)
-      return
+      return 'skipped'
     }
+    return deleteResult === 'deleted' ? 'ok' : 'failed'
   })
 }
 
@@ -87,16 +90,19 @@ async function processKeyBatch(keys: string[]): Promise<{ succeeded: number, fai
   let failed = 0
 
   const results = await Promise.allSettled(keys.map(key => processKey(key)))
-  const failures: unknown[] = []
   for (const [index, result] of results.entries()) {
-    if (result.status === 'fulfilled') {
-      succeeded += 1
+    if (result.status === 'rejected') {
+      failed += 1
+      console.error(`Failed to process ${keys[index]}:`, result.reason)
       continue
     }
 
-    failed += 1
-    failures.push(result.reason)
-    console.error(`Failed to process ${keys[index]}:`, result.reason)
+    if (result.value === 'failed') {
+      failed += 1
+      continue
+    }
+
+    succeeded += 1
   }
   return { succeeded, failed }
 }

@@ -7,6 +7,7 @@ import {
   formatR2ConditionalDeleteLastModified,
   permanentDeleteSourceIfMatch,
   quoteS3CopySourceIfMatchEtag,
+  copyObjectToTrashWithDestinationGuard,
   encodeS3CopySource,
   getR2TrashKey,
   getUniqueR2TrashKey,
@@ -172,6 +173,11 @@ describe('moveS3LiteObjectToTrash', () => {
       .toBe(formatR2ConditionalDeleteLastModified(DEFAULT_LAST_MODIFIED))
     expect(deleteCall.headers?.get('If-Match')).toBe(etag)
     expect(deleteObject).not.toHaveBeenCalled()
+  })
+
+  it('quotes unquoted etags on conditional delete If-Match headers', async () => {
+    const headers = buildR2ConditionalDeleteHeaders({ etag: 'unquoted-etag', lastModified: DEFAULT_LAST_MODIFIED })
+    expect(headers['If-Match']).toBe('"unquoted-etag"')
   })
 
   it('skips delete when the live object changes after copy', async () => {
@@ -412,6 +418,54 @@ describe('copyLiveObjectToTrash', () => {
       etag,
       TEST_S3_BUCKET,
     )).rejects.toMatchObject({ name: 'SourceChangedBeforeTrashCopy' })
+  })
+})
+
+describe('copyObjectToTrashWithDestinationGuard', () => {
+  it('retries with a unique destination when the default trash slot is occupied', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const etag = '"source"'
+    const defaultTrashKey = `${R2_TRASH_PREFIX}${key}`
+    const copy = vi.fn(async (destinationKey: string) => {
+      if (destinationKey === defaultTrashKey)
+        throw { statusCode: 412, code: 'PreconditionFailed' }
+    })
+    const headDestination = vi.fn(async (destinationKey: string) => {
+      if (destinationKey === defaultTrashKey)
+        return { etag: '"other"' }
+      return 'not_found'
+    })
+
+    const result = await copyObjectToTrashWithDestinationGuard(
+      key,
+      defaultTrashKey,
+      etag,
+      copy,
+      headDestination,
+    )
+
+    expect(result).not.toBe('skipped_changed')
+    if (result !== 'skipped_changed')
+      expect(result.trashKey).not.toBe(defaultTrashKey)
+    expect(copy).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails closed when the source changes before copy and the destination slot is empty', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const etag = '"source"'
+    const defaultTrashKey = `${R2_TRASH_PREFIX}${key}`
+
+    const result = await copyObjectToTrashWithDestinationGuard(
+      key,
+      defaultTrashKey,
+      etag,
+      async () => {
+        throw { statusCode: 412, code: 'PreconditionFailed' }
+      },
+      async () => 'not_found',
+    )
+
+    expect(result).toBe('skipped_changed')
   })
 })
 

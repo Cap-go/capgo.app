@@ -137,6 +137,8 @@ beforeAll(async () => {
   if (!warmResponse.ok)
     throw new Error(`Failed to warm /apikey POST route: ${warmResponse.status}`)
   const warmed = await warmResponse.json<ApiKeyResponse>()
+  if (!warmed?.id)
+    throw new Error('Failed to warm /apikey POST route: response missing id')
   apiKeyIds.push(warmed.id)
 })
 

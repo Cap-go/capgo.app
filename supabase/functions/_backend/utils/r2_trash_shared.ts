@@ -85,7 +85,7 @@ function normalizeS3Etag(etag: string | undefined): string | undefined {
 
 /** Build a TrashDestinationResolver from a HeadObject-style callback. */
 export function createAwsTrashDestinationResolver(
-  headObject: (key: string) => Promise<{ etag?: string }>,
+  headObject: (key: string) => Promise<{ etag?: string, lastModified?: Date }>,
 ): TrashDestinationResolver {
   return {
     keyExists: async (key) => {
@@ -102,6 +102,10 @@ export function createAwsTrashDestinationResolver(
     getEtag: async (key) => {
       const head = await headObject(key)
       return head.etag
+    },
+    getLastModified: async (key) => {
+      const head = await headObject(key)
+      return head.lastModified
     },
   }
 }
@@ -158,7 +162,7 @@ export type R2ConditionalDeleteMatch = {
 export function buildR2ConditionalDeleteHeaders(match: R2ConditionalDeleteMatch): Record<string, string> {
   return {
     'x-amz-if-match-last-modified-time': formatR2ConditionalDeleteLastModified(match.lastModified),
-    'If-Match': match.etag,
+    'If-Match': quoteS3CopySourceIfMatchEtag(match.etag),
   }
 }
 
@@ -186,6 +190,56 @@ export function applyR2ConditionalDeleteMiddleware(
     },
     { step: 'build', name: 'r2ConditionalDeleteHeaders' },
   )
+}
+
+/** Reserve trash destination slots during AWS SDK CopyObject (R2 extension). */
+export function applyAwsCopyDestinationIfNoneMatchMiddleware(middlewareStack: AwsMiddlewareStack): void {
+  middlewareStack.add(
+    next => (args) => {
+      const request = (args as { request?: { headers?: Record<string, string> } }).request
+      if (request?.headers)
+        request.headers['cf-copy-destination-if-none-match'] = '*'
+      return next(args)
+    },
+    { step: 'build', name: 'awsCopyDestinationIfNoneMatch' },
+  )
+}
+
+export type TrashCopyAttemptResult = { trashKey: string } | 'skipped_changed'
+
+/**
+ * Copy a live object into trash with destination-if-none-match and 412 retry logic.
+ * Caller supplies transport-specific copy/head callbacks (AWS SDK, etc.).
+ */
+export async function copyObjectToTrashWithDestinationGuard(
+  sourceKey: string,
+  initialTrashKey: string,
+  sourceEtag: string,
+  attemptCopy: (destinationKey: string) => Promise<void>,
+  headDestination: (destinationKey: string) => Promise<{ etag?: string } | 'not_found'>,
+  maxAttempts = 10,
+): Promise<TrashCopyAttemptResult> {
+  let destinationKey = initialTrashKey
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      await attemptCopy(destinationKey)
+      return { trashKey: destinationKey }
+    }
+    catch (error) {
+      if (!isPreconditionFailedError(error))
+        throw error
+
+      const destinationStat = await headDestination(destinationKey)
+      if (destinationStat === 'not_found')
+        return 'skipped_changed'
+      if (normalizeS3Etag(destinationStat.etag) === normalizeS3Etag(sourceEtag))
+        return { trashKey: destinationKey }
+      destinationKey = getUniqueR2TrashKey(sourceKey)
+    }
+  }
+
+  throw new Error(`Failed to copy ${sourceKey} to trash after ${maxAttempts} attempts`)
 }
 
 export async function resolveAvailableR2TrashKey(
