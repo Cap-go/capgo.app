@@ -2797,7 +2797,9 @@ DECLARE
   org_required_key varchar(21);
   bundle_is_encrypted boolean;
   bundle_key_id varchar(20);
-  bundle_was_ready boolean;
+  bundle_upload_complete boolean;
+  bundle_identity_locked boolean;
+  is_r2_direct_finalize boolean;
   r2_direct_manifest_err constant text :=
     'r2_direct_manifest_jsonb: Use POST /private/set_manifest for in-progress '
     || 'r2-direct uploads instead of app_versions.manifest jsonb.';
@@ -2845,9 +2847,9 @@ BEGIN
         || 'until every entry exists in public.manifest.';
     END IF;
 
-    bundle_was_ready := OLD.storage_provider IS DISTINCT FROM 'r2-direct';
+    bundle_upload_complete := OLD.storage_provider IS DISTINCT FROM 'r2-direct';
 
-    IF bundle_was_ready
+    IF bundle_upload_complete
       AND (
         NEW.name IS DISTINCT FROM OLD.name
         OR NEW.app_id IS DISTINCT FROM OLD.app_id
@@ -2874,7 +2876,7 @@ BEGIN
           'user_id', OLD.user_id,
           'old_storage_provider', OLD.storage_provider,
           'new_storage_provider', NEW.storage_provider,
-          'reason', 'bundle_ready'
+          'reason', 'bundle_upload_complete'
         ));
       RAISE EXCEPTION '%',
         'bundle_already_ready: Bundle content cannot be changed '
@@ -2882,8 +2884,6 @@ BEGIN
     END IF;
 
     -- In-progress r2-direct uploads must use POST /private/set_manifest.
-    -- Block any non-null manifest jsonb write, including r2-direct -> r2 finalize
-    -- requests that try to smuggle manifest rows through on_version_update.
     IF OLD.storage_provider = 'r2-direct'
       AND NEW.manifest IS DISTINCT FROM OLD.manifest
       AND NEW.manifest IS NOT NULL
@@ -2899,6 +2899,63 @@ BEGIN
           'reason', 'r2_direct_manifest_jsonb'
         ));
       RAISE EXCEPTION '%', r2_direct_manifest_err;
+    END IF;
+
+    -- GHSA-5rg9-rhwj-wj76: CLI/TUS creates r2-direct rows with checksum before
+    -- finalize. Lock identity fields after first set (checksum/session_key/
+    -- key_id); still allow r2_path writes and the one-shot finalize
+    -- (r2-direct -> r2). Blank-checksum in-progress rows stay writable for
+    -- upload completion; channel linkage is not the freeze gate.
+    -- r2_path stays mutable while storage_provider = r2-direct (even when
+    -- channel-linked) so finalize can set the object key; only checksum,
+    -- session_key, and key_id are identity-locked here.
+    IF OLD.storage_provider = 'r2-direct' THEN
+      bundle_identity_locked := (
+        NULLIF(BTRIM(COALESCE(OLD.checksum, '')), '') IS NOT NULL
+        OR NULLIF(BTRIM(COALESCE(OLD.session_key, '')), '') IS NOT NULL
+        OR NULLIF(BTRIM(COALESCE(OLD.key_id, '')), '') IS NOT NULL
+      );
+
+      is_r2_direct_finalize := (
+        NEW.storage_provider = 'r2'
+        AND NEW.name IS NOT DISTINCT FROM OLD.name
+        AND NEW.app_id IS NOT DISTINCT FROM OLD.app_id
+        AND NEW.session_key IS NOT DISTINCT FROM OLD.session_key
+        AND NEW.key_id IS NOT DISTINCT FROM OLD.key_id
+        AND NEW.checksum IS NOT DISTINCT FROM OLD.checksum
+        AND NEW.external_url IS NOT DISTINCT FROM OLD.external_url
+        AND NEW.native_packages IS NOT DISTINCT FROM OLD.native_packages
+      );
+
+      IF bundle_identity_locked
+        AND (
+          NEW.name IS DISTINCT FROM OLD.name
+          OR NEW.app_id IS DISTINCT FROM OLD.app_id
+          OR NEW.session_key IS DISTINCT FROM OLD.session_key
+          OR NEW.key_id IS DISTINCT FROM OLD.key_id
+          OR NEW.checksum IS DISTINCT FROM OLD.checksum
+          OR NEW.external_url IS DISTINCT FROM OLD.external_url
+          OR NEW.native_packages IS DISTINCT FROM OLD.native_packages
+          OR (
+            NEW.storage_provider IS DISTINCT FROM OLD.storage_provider
+            AND NOT is_r2_direct_finalize
+          )
+        )
+      THEN
+        PERFORM public.pg_log('deny: BUNDLE_CONTENT_LOCKED_TRIGGER',
+          pg_catalog.jsonb_build_object(
+            'org_id', OLD.owner_org,
+            'app_id', OLD.app_id,
+            'version_name', OLD.name,
+            'user_id', OLD.user_id,
+            'old_storage_provider', OLD.storage_provider,
+            'new_storage_provider', NEW.storage_provider,
+            'reason', 'r2_direct_identity_locked'
+          ));
+        RAISE EXCEPTION '%',
+          'bundle_identity_locked: Bundle identity fields cannot be changed '
+          || 'after checksum, session_key, or key_id are first set during upload.';
+      END IF;
     END IF;
   END IF;
 
@@ -5805,8 +5862,6 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  PERFORM public.lock_channel_bundle_lifecycle(NEW.version, NEW.rollout_version);
-
   IF TG_OP = 'INSERT' THEN
     v_owner_org := public.get_owner_org_by_app_id_internal(NEW.app_id);
     v_channel_id := NULL::bigint;
@@ -5817,6 +5872,8 @@ BEGIN
 
   -- A blank target is the native/builtin channel state; an initial target needs
   -- app-level promotion, while changing an existing target is channel-scoped.
+  -- INSERT with rollout_version but no version still requires promotion RBAC
+  -- before lock_channel_bundle_lifecycle to avoid bundle-existence oracle leaks.
   IF v_request_role NOT IN ('service_role', 'postgres')
     AND pg_catalog.current_setting('capgo.seed_channel_targets', true) IS DISTINCT FROM 'true'
   THEN
@@ -5825,7 +5882,9 @@ BEGIN
         USING ERRCODE = '42501';
     END IF;
 
-    IF NOT (TG_OP = 'INSERT' AND NEW.version IS NULL)
+    -- Blank version on INSERT is the native channel state, but a rollout target still
+    -- needs promotion permission before bundle existence checks run.
+    IF NOT (TG_OP = 'INSERT' AND NEW.version IS NULL AND NEW.rollout_version IS NULL)
       AND NOT public.rbac_check_permission_request(
         public.rbac_perm_channel_promote_bundle(),
         v_owner_org,
@@ -5837,14 +5896,15 @@ BEGIN
     END IF;
   END IF;
 
+  PERFORM public.lock_channel_bundle_lifecycle(NEW.version, NEW.rollout_version);
+
   IF NEW.version IS NOT NULL THEN
     PERFORM 1
     FROM public.app_versions AS version
     WHERE version.id = NEW.version
       AND version.app_id = NEW.app_id
       AND version.owner_org = v_owner_org
-      AND version.deleted = false
-    FOR KEY SHARE;
+      AND version.deleted = false;
 
     IF NOT FOUND THEN
       RAISE EXCEPTION 'INVALID_CHANNEL_VERSION';
@@ -11607,6 +11667,15 @@ BEGIN
     WHERE bundle.bundle_id IS NOT NULL
     ORDER BY bundle.bundle_id
   LOOP
+    PERFORM 1
+    FROM public.app_versions AS version
+    WHERE version.id = v_bundle_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'INVALID_CHANNEL_BUNDLE';
+    END IF;
+
     PERFORM pg_catalog.pg_advisory_xact_lock(v_bundle_id);
   END LOOP;
 END;
@@ -16673,8 +16742,6 @@ BEGIN
   END IF;
 
   IF v_rollout_changed THEN
-    PERFORM public.lock_channel_bundle_lifecycle(NEW.version, NEW.rollout_version);
-
     IF (auth.uid() IS NOT NULL OR public.get_apikey_header() IS NOT NULL)
       AND NOT public.rbac_check_permission_request(
         public.rbac_perm_channel_promote_bundle(),
@@ -16686,14 +16753,15 @@ BEGIN
       RAISE EXCEPTION 'NO_RIGHTS';
     END IF;
 
+    PERFORM public.lock_channel_bundle_lifecycle(NEW.version, NEW.rollout_version);
+
     IF NEW.rollout_version IS NOT NULL THEN
       PERFORM 1
       FROM public.app_versions AS version
       WHERE version.id = NEW.rollout_version
         AND version.app_id = NEW.app_id
         AND version.owner_org = NEW.owner_org
-        AND version.deleted = false
-      FOR KEY SHARE;
+        AND version.deleted = false;
 
       IF NOT FOUND THEN
         RAISE EXCEPTION 'INVALID_ROLLOUT_VERSION';
@@ -17230,7 +17298,7 @@ $$;
 ALTER FUNCTION "public"."remove_old_jobs"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."report_app_onboarding_setup"("p_app_id" character varying, "p_patch" "jsonb") RETURNS "jsonb"
+CREATE OR REPLACE FUNCTION "public"."report_app_onboarding_setup"() RETURNS 
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
@@ -17292,10 +17360,10 @@ END;
 $$;
 
 
-ALTER FUNCTION "public"."report_app_onboarding_setup"("p_app_id" character varying, "p_patch" "jsonb") OWNER TO "postgres";
+ALTER FUNCTION "public"."report_app_onboarding_setup"() OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."report_app_onboarding_setup"("p_app_id" character varying, "p_patch" "jsonb") IS 'Records CLI/MCP/AI/manual setup progress for an app the caller can update. Completes need_onboarding when setup outcome is completed or skipped. Requires app.update_settings or org.create_app.';
+COMMENT ON FUNCTION "public"."report_app_onboarding_setup"() IS 'Records CLI/MCP/AI/manual setup progress for an app the caller can update. Completes need_onboarding when setup outcome is completed or skipped. Requires app.update_settings or org.create_app.';
 
 
 
@@ -21920,7 +21988,6 @@ CREATE TABLE IF NOT EXISTS "public"."orgs" (
     "support_channel_url" "text",
     "support_channel_set_at" timestamp with time zone,
     CONSTRAINT "orgs_max_apikey_expiration_days_valid" CHECK ((("max_apikey_expiration_days" IS NULL) OR (("max_apikey_expiration_days" >= 1) AND ("max_apikey_expiration_days" <= 365)))),
-    CONSTRAINT "orgs_onboarding_valid" CHECK ((("jsonb_typeof"("onboarding") = 'object'::"text") AND ((NOT ("onboarding" ? 'intent'::"text")) OR (("onboarding" ->> 'intent'::"text") = ANY (ARRAY['unknown'::"text", 'ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text"]))))),
     CONSTRAINT "orgs_password_policy_config_min_length_check" CHECK ((("password_policy_config" IS NULL) OR (("jsonb_typeof"("password_policy_config") = 'object'::"text") AND ((NOT ("password_policy_config" ? 'min_length'::"text")) OR (("jsonb_typeof"(("password_policy_config" -> 'min_length'::"text")) = 'number'::"text") AND ((("password_policy_config" ->> 'min_length'::"text"))::numeric = "trunc"((("password_policy_config" ->> 'min_length'::"text"))::numeric)) AND (((("password_policy_config" ->> 'min_length'::"text"))::numeric >= (6)::numeric) AND ((("password_policy_config" ->> 'min_length'::"text"))::numeric <= (72)::numeric))))))),
     CONSTRAINT "orgs_required_encryption_key_valid" CHECK ((("required_encryption_key" IS NULL) OR ("length"(("required_encryption_key")::"text") = ANY (ARRAY[20, 21])))),
     CONSTRAINT "orgs_support_channel_type_check" CHECK ((("support_channel_type" IS NULL) OR ("support_channel_type" = ANY (ARRAY['slack'::"text", 'discord'::"text", 'teams'::"text"])))),
@@ -21969,7 +22036,7 @@ COMMENT ON COLUMN "public"."orgs"."has_usage_credits" IS 'True only with positiv
 
 
 
-COMMENT ON COLUMN "public"."orgs"."onboarding" IS 'Onboarding answers (extensible JSONB). Currently: {"intent": unknown|ota|builder|both|exploring}. Used for segmentation and to tailor the org experience.';
+COMMENT ON COLUMN "public"."orgs"."onboarding" IS 'Onboarding answers (extensible JSONB). Currently: {"intent": unknown|ota|builder|both|exploring|publish, "starting_out": boolean, "development_environment": hosted_builder|ai_assistant|hand_coded|other|local_project|exploring|skipped}. Used for segmentation and to tailor the org experience.';
 
 
 
@@ -22750,7 +22817,7 @@ COMMENT ON COLUMN "public"."users"."github_username" IS 'Optional GitHub usernam
 
 
 
-COMMENT ON COLUMN "public"."users"."onboarding" IS 'Persisted create-app onboarding wizard progress for resume and admin drop-off. Keys: status, step, flow, intent, details_step, app_name, app_id, existing_app, existing_app_setup, store_url, imported_store_app_id, org_name, estimated_users_index, onboarding_attempt_id, last_run_id, updated_at, completed_at.';
+COMMENT ON COLUMN "public"."users"."onboarding" IS 'Persisted create-app onboarding wizard progress for resume and admin drop-off. Keys: status, step, flow, development_environment, intent, details_step, app_name, app_id, existing_app, existing_app_setup, store_url, imported_store_app_id, org_name, estimated_users_index, onboarding_attempt_id, last_run_id, abtests, updated_at, completed_at.';
 
 
 
@@ -23205,6 +23272,11 @@ ALTER TABLE "public"."orgs"
 
 
 
+ALTER TABLE "public"."orgs"
+    ADD CONSTRAINT "orgs_onboarding_valid" CHECK ((("jsonb_typeof"("onboarding") = 'object'::"text") AND ((NOT ("onboarding" ? 'intent'::"text")) OR (("onboarding" ->> 'intent'::"text") = ANY (ARRAY['unknown'::"text", 'ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text", 'publish'::"text"]))) AND ((NOT ("onboarding" ? 'development_environment'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'development_environment'::"text")) = 'string'::"text") AND (("onboarding" ->> 'development_environment'::"text") = ANY (ARRAY['hosted_builder'::"text", 'ai_assistant'::"text", 'hand_coded'::"text", 'other'::"text", 'local_project'::"text", 'exploring'::"text", 'skipped'::"text"])))))) NOT VALID;
+
+
+
 ALTER TABLE ONLY "public"."orgs"
     ADD CONSTRAINT "orgs_pkey" PRIMARY KEY ("id");
 
@@ -23356,7 +23428,7 @@ ALTER TABLE ONLY "public"."user_security"
 
 
 ALTER TABLE "public"."users"
-    ADD CONSTRAINT "users_onboarding_valid" CHECK ((("jsonb_typeof"("onboarding") = 'object'::"text") AND ("octet_length"(("onboarding")::"text") <= 65536) AND ((NOT ("onboarding" ? 'status'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'status'::"text")) = 'string'::"text") AND (("onboarding" ->> 'status'::"text") = ANY (ARRAY['in_progress'::"text", 'completed'::"text", 'abandoned'::"text"])))) AND ((NOT ("onboarding" ? 'step'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'step'::"text")) = 'string'::"text") AND (("onboarding" ->> 'step'::"text") = ANY (ARRAY['intent'::"text", 'details'::"text", 'organization'::"text", 'choice'::"text", 'install'::"text", 'setup'::"text"])))) AND ((NOT ("onboarding" ? 'flow'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'flow'::"text")) = 'string'::"text") AND (("onboarding" ->> 'flow'::"text") = ANY (ARRAY['pre_org'::"text", 'existing_org'::"text"])))) AND ((NOT ("onboarding" ? 'intent'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'intent'::"text")) = 'string'::"text") AND (("onboarding" ->> 'intent'::"text") = ANY (ARRAY['ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text"])))))) NOT VALID;
+    ADD CONSTRAINT "users_onboarding_valid" CHECK ((("jsonb_typeof"("onboarding") = 'object'::"text") AND ("octet_length"(("onboarding")::"text") <= 65536) AND ((NOT ("onboarding" ? 'status'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'status'::"text")) = 'string'::"text") AND (("onboarding" ->> 'status'::"text") = ANY (ARRAY['in_progress'::"text", 'completed'::"text", 'abandoned'::"text"])))) AND ((NOT ("onboarding" ? 'step'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'step'::"text")) = 'string'::"text") AND (("onboarding" ->> 'step'::"text") = ANY (ARRAY['intent'::"text", 'publish_app_question'::"text", 'details'::"text", 'organization'::"text", 'choice'::"text", 'install'::"text", 'setup'::"text"])))) AND ((NOT ("onboarding" ? 'flow'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'flow'::"text")) = 'string'::"text") AND (("onboarding" ->> 'flow'::"text") = ANY (ARRAY['pre_org'::"text", 'existing_org'::"text"])))) AND ((NOT ("onboarding" ? 'development_environment'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'development_environment'::"text")) = 'string'::"text") AND (("onboarding" ->> 'development_environment'::"text") = ANY (ARRAY['hosted_builder'::"text", 'ai_assistant'::"text", 'hand_coded'::"text", 'other'::"text", 'local_project'::"text", 'exploring'::"text", 'skipped'::"text"])))) AND ((NOT ("onboarding" ? 'intent'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'intent'::"text")) = 'string'::"text") AND (("onboarding" ->> 'intent'::"text") = ANY (ARRAY['ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text", 'publish'::"text"])))))) NOT VALID;
 
 
 
@@ -28705,9 +28777,9 @@ REVOKE ALL ON FUNCTION "public"."remove_old_jobs"() FROM PUBLIC;
 
 
 
-REVOKE ALL ON FUNCTION "public"."report_app_onboarding_setup"("p_app_id" character varying, "p_patch" "jsonb") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."report_app_onboarding_setup"("p_app_id" character varying, "p_patch" "jsonb") TO "service_role";
-GRANT ALL ON FUNCTION "public"."report_app_onboarding_setup"("p_app_id" character varying, "p_patch" "jsonb") TO "authenticated";
+REVOKE ALL ON FUNCTION "public"."report_app_onboarding_setup"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."report_app_onboarding_setup"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."report_app_onboarding_setup"() TO "authenticated";
 
 
 
