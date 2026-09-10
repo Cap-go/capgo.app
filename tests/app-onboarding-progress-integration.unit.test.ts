@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { createApp } from 'vue'
 import AppOnboardingFlow from '../src/components/dashboard/AppOnboardingFlow.vue'
 
+const messages = JSON.parse(readFileSync(new NodeUrl('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
+
 const writerMocks = vi.hoisted(() => ({
   main: {
     auth: { id: 'user-bento-retry' },
@@ -447,10 +449,99 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain(`sendOnboardingEvent('onboarding_intent_selected', {`)
   })
 
-  it.concurrent('keeps Maker+ invitations inside the organization progress step', () => {
+  it.concurrent('keeps Maker+ invitations inside the organization progress step before setup', () => {
     expect(onboardingSource).toContain(`createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })`)
     expect(onboardingSource).toContain(`trackOrganizationEvent('onboarding_organization_invite_viewed')`)
     expect(onboardingSource).toContain(`completeAndViewStep('setup', { appId: createdApp.value.app_id })`)
+  })
+
+  it.concurrent('shows channel education before CLI for every fresh or resumed setup path', () => {
+    expect(onboardingSource).toContain(`type PreOrgFlowStep = 'intent' | 'details' | 'organization' | 'setup'`)
+    expect(onboardingSource).toContain(`type SetupStage = 'channel-routing' | 'channel-self-assign' | 'channel-console-assign' | 'channel-create' | 'cli'`)
+    expect(onboardingSource).toContain(`const setupStage = ref<SetupStage>('channel-routing')`)
+
+    const stepList = sourceBetween('const appOnboardingSteps = computed', 'const onboardingProgressSteps = computed')
+    expect(stepList).not.toContain(`{ id: 'channels'`)
+
+    const progressStepList = sourceBetween('const onboardingProgressSteps = computed', 'const currentProgressStepId = computed')
+    expectSourceOrder(progressStepList, [
+      `{ id: 'intent', label: t('unified-onboarding-step-intent') }`,
+      `{ id: 'details', label: t('app-onboarding-step-details') }`,
+      `{ id: 'organization', label: t('unified-onboarding-step-organization') }`,
+      `{ id: 'channel', label: t('unified-onboarding-step-channel') }`,
+      `{ id: 'setup', label: t('unified-onboarding-step-setup') }`,
+    ])
+    expect(messages['unified-onboarding-step-channel']).toBe('Creating a channel')
+    expect(onboardingSource).toContain(`setupStage.value === 'cli' ? 'setup' : 'channel'`)
+    expect(onboardingSource).toContain('v-for="(entry, index) in onboardingProgressSteps"')
+    expect(onboardingSource).toContain(`:aria-current="currentProgressStepId === entry.id ? 'step' : undefined"`)
+    expect(onboardingSource).toContain(`const showSetupBackButton = computed(() => (flowStep.value === 'setup' || flowStep.value === 'install') && (setupStage.value === 'channel-create' || setupStage.value === 'cli'))`)
+    expect(onboardingSource).toContain(`data-test="onboarding-setup-back"`)
+    expect(onboardingSource).toContain(`@click="goBackFromSetupStage"`)
+
+    expect(onboardingSource).toContain(`createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })`)
+    expect(onboardingSource).toContain(`completeAndViewStep('setup', { appId: createdApp.value.app_id })`)
+
+    const channelTransition = sourceBetween('function continueFromChannelDefaultRouting()', 'function onTechnicalInviteOpened()')
+    expect(channelTransition).toContain(`setupStage.value = 'channel-self-assign'`)
+    expect(channelTransition).toContain('function continueFromChannelSelfAssign()')
+    expect(channelTransition).toContain(`setupStage.value = 'channel-console-assign'`)
+    expect(channelTransition).toContain('function continueFromChannelConsoleAssign()')
+    expect(channelTransition).toContain(`setupStage.value = 'channel-create'`)
+    expect(channelTransition).toContain('function continueFromChannelCreate()')
+    expect(channelTransition).toContain(`setupStage.value = 'cli'`)
+    expect(channelTransition).toContain(`'channel-self-assign': 'channel-routing'`)
+    expect(channelTransition).toContain(`'channel-console-assign': 'channel-self-assign'`)
+    expect(channelTransition).toContain(`'channel-create': 'channel-console-assign'`)
+    expect(channelTransition).toContain(`'cli': 'channel-create'`)
+    expect(channelTransition).toContain('function goBackFromSetupStage()')
+
+    const setup = sourceBetween(`v-else-if="flowStep === 'setup' && createdApp"`, `v-else-if="!props.preOrg && flowStep === 'choice'`)
+    expect(setup).toContain(`v-if="setupStage === 'channel-routing'"`)
+    expect(setup).toContain('<ChannelDefaultRoutingOnboarding')
+    expect(setup).toContain('@continue="continueFromChannelDefaultRouting"')
+    expect(setup).toContain(`v-else-if="setupStage === 'channel-self-assign'"`)
+    expect(setup).toContain('<ChannelSelfAssignOnboarding')
+    expect(setup).toContain('@back="goBackFromSetupStage"')
+    expect(setup).toContain('@continue="continueFromChannelSelfAssign"')
+    expect(setup).toContain(`v-else-if="setupStage === 'channel-console-assign'"`)
+    expect(setup).toContain('<ChannelConsoleAssignOnboarding')
+    expect(setup).toContain('@continue="continueFromChannelConsoleAssign"')
+    expect(setup).toContain(`v-else-if="setupStage === 'channel-create'"`)
+    expect(setup).toContain('<ChannelCreateOnboarding')
+    expect(setup).toContain('@continue="continueFromChannelCreate"')
+    expect(setup).toContain(`v-else data-test="onboarding-setup-cli"`)
+    expect(setup.indexOf('<ChannelDefaultRoutingOnboarding')).toBeLessThan(setup.indexOf('data-test="onboarding-setup-cli"'))
+    expect(setup.indexOf('<ChannelDefaultRoutingOnboarding')).toBeLessThan(setup.indexOf('<ChannelSelfAssignOnboarding'))
+    expect(setup.indexOf('<ChannelSelfAssignOnboarding')).toBeLessThan(setup.indexOf('<ChannelConsoleAssignOnboarding'))
+    expect(setup.indexOf('<ChannelConsoleAssignOnboarding')).toBeLessThan(setup.indexOf('<ChannelCreateOnboarding'))
+    expect(setup.indexOf('<ChannelCreateOnboarding')).toBeLessThan(setup.indexOf('data-test="onboarding-setup-cli"'))
+
+    const install = sourceBetween(`v-else-if="!props.preOrg && flowStep === 'install' && createdApp"`, `v-if="showLanguageSelector"`)
+    expect(install).toContain(`v-if="setupStage === 'channel-routing'"`)
+    expect(install).toContain('<ChannelDefaultRoutingOnboarding')
+    expect(install).toContain('@continue="continueFromChannelDefaultRouting"')
+    expect(install).toContain(`v-else-if="setupStage === 'channel-self-assign'"`)
+    expect(install).toContain('<ChannelSelfAssignOnboarding')
+    expect(install).toContain('@back="goBackFromSetupStage"')
+    expect(install).toContain('@continue="continueFromChannelSelfAssign"')
+    expect(install).toContain(`v-else-if="setupStage === 'channel-console-assign'"`)
+    expect(install).toContain('<ChannelConsoleAssignOnboarding')
+    expect(install).toContain('@continue="continueFromChannelConsoleAssign"')
+    expect(install).toContain(`v-else-if="setupStage === 'channel-create'"`)
+    expect(install).toContain('<ChannelCreateOnboarding')
+    expect(install).toContain('@continue="continueFromChannelCreate"')
+    expect(install).toContain(`v-else data-test="onboarding-install-cli"`)
+    expect(install.indexOf('<ChannelDefaultRoutingOnboarding')).toBeLessThan(install.indexOf('data-test="onboarding-install-cli"'))
+    expect(install.indexOf('<ChannelDefaultRoutingOnboarding')).toBeLessThan(install.indexOf('<ChannelSelfAssignOnboarding'))
+    expect(install.indexOf('<ChannelSelfAssignOnboarding')).toBeLessThan(install.indexOf('<ChannelConsoleAssignOnboarding'))
+    expect(install.indexOf('<ChannelConsoleAssignOnboarding')).toBeLessThan(install.indexOf('<ChannelCreateOnboarding'))
+    expect(install.indexOf('<ChannelCreateOnboarding')).toBeLessThan(install.indexOf('data-test="onboarding-install-cli"'))
+
+    const resume = sourceBetween('async function loadResumeApp()', 'async function importStoreMetadata()')
+    expect(resume).toContain(`flowStep.value = 'setup'`)
+    expect(resume).toContain(`flowStep.value = resumeStep.value === 'choice' ? 'choice' : 'install'`)
+    expect(resume).not.toContain(`setupStage.value = 'cli'`)
   })
 
   it.concurrent('keeps the unload warning scoped to unfinished pre-org onboarding', () => {

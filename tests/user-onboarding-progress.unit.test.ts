@@ -247,6 +247,15 @@ describe('user onboarding progress', () => {
     expect(isUsersOnboardingCheckConstraintError({ code: '23505' })).toBe(false)
   })
 
+  it.concurrent('keeps channel education out of persisted top-level onboarding steps', () => {
+    expect(parseUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'channels',
+      flow: 'pre_org',
+      updated_at: '2026-08-15T00:00:00.000Z',
+    })).toBeNull()
+  })
+
   it.concurrent('clamps oversize optional strings before they can fail the jsonb check', () => {
     const parsed = parseUserOnboardingProgress({
       status: 'in_progress',
