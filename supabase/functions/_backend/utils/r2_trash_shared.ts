@@ -492,7 +492,7 @@ export async function copyS3LiteObjectIfMatch(
         { etag: destinationStat.etag, lastModified: destinationStat.lastModified },
         sourceIfMatch,
         sourceLastModified,
-      ) || normalizedS3EtagsMatch(destinationStat.etag, sourceIfMatch))
+      ))
         return
     }
     catch (statError) {
@@ -544,8 +544,7 @@ export async function copyLiveObjectToTrash(
         throw error
       try {
         const destinationStat = await s3client.statObject(destinationKey)
-        if (trashDestinationMatchesSource(destinationStat, sourceIfMatch, sourceLastModified)
-          || normalizedS3EtagsMatch(destinationStat.etag, sourceIfMatch))
+        if (trashDestinationMatchesSource(destinationStat, sourceIfMatch, sourceLastModified))
           return destinationKey
         destinationKey = getUniqueR2TrashKey(sourceKey)
         continue

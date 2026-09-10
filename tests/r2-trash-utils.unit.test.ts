@@ -445,7 +445,7 @@ describe('copyLiveObjectToTrash', () => {
     )).rejects.toThrow(/requires makeRequest/)
   })
 
-  it('reuses the default trash key when destination etag matches but Last-Modified differs', async () => {
+  it('allocates a unique trash key when destination etag matches but Last-Modified differs', async () => {
     const key = 'orgs/org-1/apps/com.test/file.zip'
     const etag = '"same"'
     const trashKey = `${R2_TRASH_PREFIX}${key}`
@@ -470,8 +470,8 @@ describe('copyLiveObjectToTrash', () => {
       sourceLastModified,
     )
 
-    expect(destination).toBe(trashKey)
-    expect(makeRequest).toHaveBeenCalledOnce()
+    expect(destination).not.toBe(trashKey)
+    expect(makeRequest).toHaveBeenCalledTimes(2)
   })
 })
 

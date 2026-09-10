@@ -166,6 +166,7 @@ async function processFolder() {
       }
       if (deleteMode === 'dry_run' && !obj.lastModified) {
         console.log(`Would skip: ${obj.key} (missing listing Last-Modified; would fail on execute)`)
+        errorCount += 1
         continue
       }
 

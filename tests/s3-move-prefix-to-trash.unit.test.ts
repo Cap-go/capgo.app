@@ -20,24 +20,31 @@ const mocks = vi.hoisted(() => {
   const listObjects = vi.fn<() => AsyncGenerator<{ key: string }>>()
   const statObject = vi.fn<(key: string) => Promise<{ etag: string, size?: number, lastModified?: Date }>>(async () => stat())
   const makeRequest = vi.fn<(options: { method?: string, objectName?: string, headers?: Headers }) => Promise<Response>>(async () => new Response(null, { status: 204 }))
+  let includeMakeRequest = true
 
   class S3Client {
     copyObject = copyObject
     deleteObject = deleteObject
     listObjects = listObjects
     statObject = statObject
-    makeRequest = makeRequest
+    get makeRequest() {
+      return includeMakeRequest ? makeRequest : undefined
+    }
     getPresignedUrl = vi.fn(async () => 'https://storage.example/presigned')
   }
 
-  return { copyObject, deleteObject, listObjects, statObject, makeRequest, S3Client }
+  const setMakeRequestAvailable = (available: boolean) => {
+    includeMakeRequest = available
+  }
+
+  return { copyObject, deleteObject, listObjects, statObject, makeRequest, S3Client, setMakeRequestAvailable }
 })
 
 vi.mock('@bradenmacdonald/s3-lite-client', () => ({
   S3Client: mocks.S3Client,
 }))
 
-const { copyObject, deleteObject, listObjects, statObject, makeRequest } = mocks
+const { copyObject, deleteObject, listObjects, statObject, makeRequest, setMakeRequestAvailable } = mocks
 
 const { s3, TrashMoveError } = await import('../supabase/functions/_backend/utils/s3.ts')
 
@@ -295,6 +302,7 @@ describe('moveObjectToTrash', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.unstubAllGlobals()
+    setMakeRequestAvailable(true)
     copyObject.mockImplementation(async () => {})
     deleteObject.mockImplementation(async () => {})
     statObject.mockImplementation(async (key: string) => {
@@ -303,6 +311,15 @@ describe('moveObjectToTrash', () => {
       return stat()
     })
     makeRequest.mockImplementation(async (_options) => new Response(null, { status: 204 }))
+  })
+
+  it('fails closed when makeRequest is unavailable', async () => {
+    const liveKey = 'orgs/org-1/apps/com.test.app/1.0.0.zip'
+    const c = await makeContext()
+    setMakeRequestAvailable(false)
+
+    expect(await s3.moveObjectToTrash(c, liveKey)).toBe(false)
+    expect(deleteObject).not.toHaveBeenCalled()
   })
 
   it('allocates a unique trash destination when the same live key is deleted twice', async () => {
@@ -340,6 +357,7 @@ describe('deleteObjectsWithPrefix', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.unstubAllGlobals()
+    setMakeRequestAvailable(true)
     copyObject.mockImplementation(async () => {})
     deleteObject.mockImplementation(async () => {})
     statObject.mockImplementation(async (key: string) => {
