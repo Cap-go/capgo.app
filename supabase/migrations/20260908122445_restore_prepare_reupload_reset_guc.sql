@@ -82,6 +82,7 @@ BEGIN
       AND NEW.storage_provider = 'r2-direct'
       AND NEW.name IS NOT DISTINCT FROM OLD.name
       AND NEW.app_id IS NOT DISTINCT FROM OLD.app_id
+      AND NEW.manifest IS NOT DISTINCT FROM OLD.manifest
     THEN
       RETURN NEW;
     END IF;

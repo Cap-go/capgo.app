@@ -11,10 +11,10 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
-function installFetch(handler: (url: string) => Response | Promise<Response>) {
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+function installFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>) {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-    return handler(url)
+    return handler(url, init)
   }) as typeof fetch
 }
 
@@ -24,23 +24,41 @@ afterEach(() => {
 
 describe('shared/apikey-permission', () => {
   it('errors when permission HTTP returns false', async () => {
-    installFetch((url) => {
-      if (url.includes('/private/cli/check-permission'))
+    const ctx = makeCtx({ projectDir: '/tmp', apikey: 'k', ...HOST })
+    installFetch((url, init) => {
+      if (url.includes('/private/cli/check-permission')) {
+        expect(init?.method).toBe('POST')
+        expect(init?.headers).toMatchObject({ capgkey: 'k' })
+        expect(JSON.parse(String(init?.body))).toEqual({
+          permission_key: 'app.build_native',
+          org_id: null,
+          app_id: ctx.appId,
+          channel_id: null,
+        })
         return json({ allowed: false })
+      }
       throw new Error(`Unexpected fetch: ${url}`)
     })
-    const ctx = makeCtx({ projectDir: '/tmp', apikey: 'k', ...HOST })
     const findings = await apikeyPermission.run(ctx)
     expect(findings[0]?.severity).toBe('error')
     expect(findings[0]?.title).toContain('app.build_native')
   })
   it('passes when permission granted', async () => {
-    installFetch((url) => {
-      if (url.includes('/private/cli/check-permission'))
+    const ctx = makeCtx({ projectDir: '/tmp', apikey: 'k', ...HOST })
+    installFetch((url, init) => {
+      if (url.includes('/private/cli/check-permission')) {
+        expect(init?.method).toBe('POST')
+        expect(init?.headers).toMatchObject({ capgkey: 'k' })
+        expect(JSON.parse(String(init?.body))).toEqual({
+          permission_key: 'app.build_native',
+          org_id: null,
+          app_id: ctx.appId,
+          channel_id: null,
+        })
         return json({ allowed: true })
+      }
       throw new Error(`Unexpected fetch: ${url}`)
     })
-    const ctx = makeCtx({ projectDir: '/tmp', apikey: 'k', ...HOST })
     expect(await apikeyPermission.run(ctx)).toEqual([])
   })
   it('downgrades a network/API failure to info — never blocks offline users (spec)', async () => {

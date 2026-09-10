@@ -102,6 +102,8 @@ async function updateVersionForReupload(
       `UPDATE public.app_versions
        SET ${setClauses.join(', ')}
        WHERE id = $${values.length}
+         AND deleted = false
+         AND storage_provider = '${COMPLETED_UPLOAD_STORAGE_PROVIDER}'
        RETURNING id, name, storage_provider`,
       values,
     )

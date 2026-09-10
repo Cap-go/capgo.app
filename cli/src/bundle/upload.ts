@@ -1391,7 +1391,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     log.info(`[Verbose] Target channel${channels.length > 1 ? 's' : ''}: ${channelLabel}`)
 
   // App existence/permission already checked above; fetch org id for analytics and plan checks.
-  const orgId = await getOrganizationId(apikey, appid, { supaHost: options.supaHost, supaAnon: options.supaAnon })
+  const orgId = await getOrganizationId(apikey, appid, uploadCtx.host)
   if (options.verbose)
     log.info(`[Verbose] Organization ID: ${orgId}`)
 
@@ -1410,17 +1410,14 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (autoBumpInput) {
     let level: AutoBumpLevel
     if (autoBumpInput === 'ai') {
-      supabaseForAi = await createSupabaseClient(apikey, options.supaHost, options.supaAnon)
+      supabaseForAi = await createSupabaseClient(apikey, uploadCtx.host.supaHost, uploadCtx.host.supaAnon)
       const decision = await resolveAutoBumpLevelFromAi({
         supabase: supabaseForAi,
         appid,
         channels,
         path,
         apikey,
-        options: {
-          supaHost: options.supaHost,
-          supaAnon: options.supaAnon,
-        },
+        options: uploadCtx.host,
       })
       log.info(`🤖 AI auto-bump chose ${decision.level}: ${decision.reason}`)
       level = decision.level
