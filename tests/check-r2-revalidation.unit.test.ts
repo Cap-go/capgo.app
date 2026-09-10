@@ -30,6 +30,6 @@ describe('revalidateDeleteCandidatesAgainstAppVersions', () => {
 
     expect(skippedCount).toBe(0)
     expect(candidates).toHaveLength(501)
-    expect(lookup).toHaveBeenCalledTimes(2)
+    expect(lookup).toHaveBeenCalledTimes(11)
   })
 })

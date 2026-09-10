@@ -2,7 +2,8 @@ export type OpsDeleteMode = 'dry_run' | 'trash' | 'permanent'
 
 export type DeleteFileCandidate = { key: string, etag?: string }
 
-const REVALIDATION_BATCH_SIZE = 500
+/** Keep PostgREST `.in()` batches small enough for gateway URL limits. */
+const REVALIDATION_BATCH_SIZE = 50
 
 /** Drop candidates that now have app_versions rows (shared by dry-run and execute paths). */
 export async function revalidateDeleteCandidatesAgainstAppVersions(
@@ -122,6 +123,45 @@ export function formatR2ConditionalDeleteLastModified(lastModified: Date): strin
   return lastModified.toUTCString()
 }
 
+export type R2ConditionalDeleteMatch = {
+  etag: string
+  lastModified: Date
+}
+
+/** Headers for R2 DeleteObject: Last-Modified guard + If-Match stale-candidate guard. */
+export function buildR2ConditionalDeleteHeaders(match: R2ConditionalDeleteMatch): Record<string, string> {
+  return {
+    'x-amz-if-match-last-modified-time': formatR2ConditionalDeleteLastModified(match.lastModified),
+    'If-Match': match.etag,
+  }
+}
+
+type AwsMiddlewareStack = {
+  add: (
+    middleware: (next: (args: unknown) => Promise<unknown>) => (args: unknown) => Promise<unknown>,
+    options: { step: 'build', name: string },
+  ) => void
+}
+
+/** Attach R2 conditional-delete headers to an AWS SDK v3 command middleware stack. */
+export function applyR2ConditionalDeleteMiddleware(
+  middlewareStack: AwsMiddlewareStack,
+  match: R2ConditionalDeleteMatch,
+): void {
+  const headers = buildR2ConditionalDeleteHeaders(match)
+  middlewareStack.add(
+    next => (args) => {
+      const request = (args as { request?: { headers?: Record<string, string> } }).request
+      if (request?.headers) {
+        for (const [key, value] of Object.entries(headers))
+          request.headers[key] = value
+      }
+      return next(args)
+    },
+    { step: 'build', name: 'r2ConditionalDeleteHeaders' },
+  )
+}
+
 export async function resolveAvailableR2TrashKey(
   s3client: Pick<RawS3LiteClient, 'statObject'>,
   key: string,
@@ -222,7 +262,8 @@ export async function conditionalDeleteSource(
     return 'skipped_changed'
 
   const headers = new Headers()
-  headers.set('x-amz-if-match-last-modified-time', formatR2ConditionalDeleteLastModified(sourceLastModified))
+  for (const [key, value] of Object.entries(buildR2ConditionalDeleteHeaders({ etag: expectedEtag, lastModified: sourceLastModified })))
+    headers.set(key, value)
 
   try {
     await s3client.makeRequest({

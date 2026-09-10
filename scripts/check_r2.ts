@@ -3,7 +3,7 @@ import type { _Object, ListObjectsV2CommandOutput } from '@aws-sdk/client-s3'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'// supabase.types.ts'
 import { CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { createClient } from '@supabase/supabase-js'
-import { ConcurrencyLimiter, createAwsTrashDestinationResolver, encodeS3CopySource, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
+import { applyR2ConditionalDeleteMiddleware, ConcurrencyLimiter, createAwsTrashDestinationResolver, encodeS3CopySource, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const MAGIC_TO_DELETE = './tmp/magic_to_delete6.txt'
@@ -131,9 +131,11 @@ async function main() {
     async function permanentDeleteCandidate(candidate: { key: string, etag?: string }): Promise<'ok' | 'skipped' | 'failed'> {
       const { key, etag: candidateEtag } = candidate
       let sourceEtag: string | undefined
+      let sourceLastModified: Date | undefined
       try {
         const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
         sourceEtag = head.ETag
+        sourceLastModified = head.LastModified
         if (candidateEtag && sourceEtag && candidateEtag !== sourceEtag) {
           console.warn(`Failed ${key}: live object etag changed since discovery`)
           return 'failed'
@@ -146,17 +148,19 @@ async function main() {
         return 'failed'
       }
 
-      if (!sourceEtag) {
-        console.warn(`Failed ${key}: live object has no ETag; source retained`)
+      if (!sourceEtag || !sourceLastModified) {
+        console.warn(`Failed ${key}: live object has no ETag or Last-Modified; source retained`)
         return 'failed'
       }
 
       try {
-        await s3.send(new DeleteObjectCommand({
+        const deleteCommand = new DeleteObjectCommand({
           Bucket: S3_BUCKET,
           Key: key,
           IfMatch: sourceEtag,
-        }))
+        })
+        applyR2ConditionalDeleteMiddleware(deleteCommand.middlewareStack, { etag: sourceEtag, lastModified: sourceLastModified })
+        await s3.send(deleteCommand)
         return 'ok'
       }
       catch (deleteError) {
@@ -179,9 +183,11 @@ async function main() {
     async function moveKeyToTrash(candidate: { key: string, etag?: string }): Promise<'ok' | 'skipped' | 'failed'> {
       const { key, etag: candidateEtag } = candidate
       let sourceEtag: string | undefined
+      let sourceLastModified: Date | undefined
       try {
         const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
         sourceEtag = head.ETag
+        sourceLastModified = head.LastModified
         if (candidateEtag && sourceEtag && candidateEtag !== sourceEtag) {
           console.warn(`Skipped ${key}: live object etag changed since discovery`)
           return 'skipped'
@@ -191,6 +197,11 @@ async function main() {
         if (isObjectNotFoundError(headError))
           return 'skipped'
         console.error(`Failed to head ${key} before trash:`, headError)
+        return 'failed'
+      }
+
+      if (!sourceEtag || !sourceLastModified) {
+        console.warn(`Failed ${key}: live object has no ETag or Last-Modified; source retained`)
         return 'failed'
       }
 
@@ -225,17 +236,14 @@ async function main() {
         return 'failed'
       }
 
-      if (!sourceEtag) {
-        console.warn(`Skipped delete for ${key}: live object has no ETag; source retained`)
-        return 'failed'
-      }
-
       try {
-        await s3.send(new DeleteObjectCommand({
+        const deleteCommand = new DeleteObjectCommand({
           Bucket: S3_BUCKET,
           Key: key,
           IfMatch: sourceEtag,
-        }))
+        })
+        applyR2ConditionalDeleteMiddleware(deleteCommand.middlewareStack, { etag: sourceEtag, lastModified: sourceLastModified })
+        await s3.send(deleteCommand)
         return 'ok'
       }
       catch (deleteError) {

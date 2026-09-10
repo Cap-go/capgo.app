@@ -3,6 +3,7 @@ import {
   ConcurrencyLimiter,
   conditionalDeleteSource,
   createUniqueR2TrashSuffix,
+  buildR2ConditionalDeleteHeaders,
   formatR2ConditionalDeleteLastModified,
   permanentDeleteSourceIfMatch,
   encodeS3CopySource,
@@ -156,6 +157,7 @@ describe('moveS3LiteObjectToTrash', () => {
     const deleteCall = makeRequest.mock.calls[0]![0]
     expect(deleteCall.headers?.get('x-amz-if-match-last-modified-time'))
       .toBe(formatR2ConditionalDeleteLastModified(DEFAULT_LAST_MODIFIED))
+    expect(deleteCall.headers?.get('If-Match')).toBe(etag)
     expect(deleteObject).not.toHaveBeenCalled()
   })
 
@@ -306,7 +308,15 @@ describe('conditionalDeleteSource', () => {
     expect(deleteCall.objectName).toBe(key)
     expect(deleteCall.headers?.get('x-amz-if-match-last-modified-time'))
       .toBe(formatR2ConditionalDeleteLastModified(DEFAULT_LAST_MODIFIED))
+    expect(deleteCall.headers?.get('If-Match')).toBe(etag)
     expect(deleteObject).not.toHaveBeenCalled()
+  })
+
+  it('buildR2ConditionalDeleteHeaders includes Last-Modified and If-Match guards', () => {
+    const etag = '"before"'
+    const headers = buildR2ConditionalDeleteHeaders({ etag, lastModified: DEFAULT_LAST_MODIFIED })
+    expect(headers['x-amz-if-match-last-modified-time']).toBe(formatR2ConditionalDeleteLastModified(DEFAULT_LAST_MODIFIED))
+    expect(headers['If-Match']).toBe(etag)
   })
 
   it('retains source when makeRequest is unavailable', async () => {

@@ -3,7 +3,7 @@ import { writeFileSync, existsSync, readFileSync } from 'fs'
 import { S3Client as S3ClientLite } from '@bradenmacdonald/s3-lite-client/'
 import { Pool } from 'pg'
 import { Context } from 'vm'
-import { createAwsTrashDestinationResolver, encodeS3CopySource, ConcurrencyLimiter, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
+import { applyR2ConditionalDeleteMiddleware, createAwsTrashDestinationResolver, encodeS3CopySource, ConcurrencyLimiter, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const CHECKPOINT_FILE = './objects_checkpoint.json'
@@ -1666,6 +1666,7 @@ async function delete_cleanup_candidates() {
     async function processCandidate(file: { key: string, size?: number, lastModified?: string | Date | null, etag?: string | null }): Promise<{ key: string, success: boolean, error: string | null, skipped?: boolean, size?: number }> {
         try {
             let sourceEtag: string | undefined
+            let sourceLastModified: Date | undefined
             try {
                 const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: file.key }))
                 if (file.size != null && head.ContentLength !== file.size) {
@@ -1696,6 +1697,7 @@ async function delete_cleanup_candidates() {
                     }
                 }
                 sourceEtag = head.ETag
+                sourceLastModified = head.LastModified
             }
             catch (headError: any) {
                 if (isObjectNotFoundError(headError))
@@ -1707,21 +1709,23 @@ async function delete_cleanup_candidates() {
                 }
             }
 
-            if (!sourceEtag) {
+            if (!sourceEtag || !sourceLastModified) {
                 return {
                     key: file.key,
                     success: false,
-                    error: 'Live object has no ETag; source retained',
+                    error: 'Live object has no ETag or Last-Modified; source retained',
                 }
             }
 
             if (deleteMode === 'permanent') {
                 try {
-                    await s3.send(new DeleteObjectCommand({
+                    const deleteCommand = new DeleteObjectCommand({
                         Bucket: S3_BUCKET,
                         Key: file.key,
                         IfMatch: sourceEtag,
-                    }))
+                    })
+                    applyR2ConditionalDeleteMiddleware(deleteCommand.middlewareStack, { etag: sourceEtag, lastModified: sourceLastModified })
+                    await s3.send(deleteCommand)
                 }
                 catch (deleteError: any) {
                     if (isObjectNotFoundError(deleteError))
@@ -1765,11 +1769,13 @@ async function delete_cleanup_candidates() {
                 }
 
                 try {
-                    await s3.send(new DeleteObjectCommand({
+                    const deleteCommand = new DeleteObjectCommand({
                         Bucket: S3_BUCKET,
                         Key: file.key,
                         IfMatch: sourceEtag,
-                    }))
+                    })
+                    applyR2ConditionalDeleteMiddleware(deleteCommand.middlewareStack, { etag: sourceEtag, lastModified: sourceLastModified })
+                    await s3.send(deleteCommand)
                 }
                 catch (deleteError: any) {
                     if (isObjectNotFoundError(deleteError))
