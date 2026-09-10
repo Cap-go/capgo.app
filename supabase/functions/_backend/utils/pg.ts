@@ -52,7 +52,6 @@ interface ReplicationLagCacheEntry extends ReplicationLagStatus {
 
 const replicationLagMemoryCache = new Map<string, ReplicationLagCacheEntry>()
 const replicationLagInflight = new Map<string, Promise<ReplicationLagStatus>>()
-const workerdPgPools = new Map<string, Pool>()
 
 const READ_REPLICA_ROUTES: { region: string, binding: ReadReplicaHyperdriveBinding }[] = [
   { region: 'AS_JAPAN', binding: 'HYPERDRIVE_CAPGO_READ_AS_JAPAN' },
@@ -379,13 +378,6 @@ export function getPgClient(c: Context, readOnly = false) {
     options: readOnly && !isPooler ? '-c default_transaction_read_only=on' : undefined,
   }
 
-  const cacheKey = `${dbUrl}:${readOnly ? 'ro' : 'rw'}`
-  if (getRuntimeKey() === 'workerd') {
-    const cached = workerdPgPools.get(cacheKey)
-    if (cached)
-      return cached
-  }
-
   const pool = new Pool(options)
 
   // Hook to log when connections are removed from the pool
@@ -396,9 +388,6 @@ export function getPgClient(c: Context, readOnly = false) {
   pool.on('error', (err: Error) => {
     cloudlogErr({ requestId, message: 'PG Pool Error', error: err })
   })
-
-  if (getRuntimeKey() === 'workerd')
-    workerdPgPools.set(cacheKey, pool)
 
   return pool
 }
