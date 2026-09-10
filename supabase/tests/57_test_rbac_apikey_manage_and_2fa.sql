@@ -170,16 +170,16 @@ SELECT ok(
   'seed apikey 113 does not inherit org.update_user_roles'
 );
 
--- API keys must be blocked by org 2FA enforcement in direct RBAC checks
+-- API keys bypass org 2FA enforcement in direct RBAC checks (compliance uses reject_access_due_to_2fa_for_app)
 DO $$
 DECLARE
   org_id uuid := gen_random_uuid();
   user_id uuid := tests.get_supabase_uid('test_admin');
   apikey_rbac_id uuid;
-  apikey_value text := 'test-apikey-2fa-deny-' || gen_random_uuid()::text;
+  apikey_value text := 'test-apikey-2fa-bypass-' || gen_random_uuid()::text;
 BEGIN
   INSERT INTO public.orgs (id, created_by, name, management_email, enforcing_2fa)
-  VALUES (org_id, user_id, 'API Key 2FA Deny Org', 'apikey-2fa-deny@capgo.app', true);
+  VALUES (org_id, user_id, 'API Key 2FA Bypass Org', 'apikey-2fa-bypass@capgo.app', true);
 
   INSERT INTO public.apikeys (user_id, key, name)
   VALUES (user_id, apikey_value, '2FA bypass test key')
@@ -208,22 +208,22 @@ BEGIN
   WHERE roles.name = public.rbac_role_org_member()
   LIMIT 1;
 
-  PERFORM set_config('test.apikey_2fa_deny_org', org_id::text, true);
-  PERFORM set_config('test.apikey_2fa_deny_key', apikey_value, true);
+  PERFORM set_config('test.apikey_2fa_bypass_org', org_id::text, true);
+  PERFORM set_config('test.apikey_2fa_bypass_key', apikey_value, true);
 END $$;
 
 SELECT tests.authenticate_as('test_admin');
 
 SELECT ok(
-  NOT public.rbac_check_permission_direct(
+  public.rbac_check_permission_direct(
     public.rbac_perm_org_read(),
     tests.get_supabase_uid('test_admin'),
-    current_setting('test.apikey_2fa_deny_org')::uuid,
+    current_setting('test.apikey_2fa_bypass_org')::uuid,
     NULL::character varying,
     NULL::bigint,
-    current_setting('test.apikey_2fa_deny_key')
+    current_setting('test.apikey_2fa_bypass_key')
   ),
-  'API key direct RBAC check enforces org 2FA when key owner lacks 2FA'
+  'API key direct RBAC check ignores org 2FA enforcement'
 );
 
 SELECT * FROM finish();

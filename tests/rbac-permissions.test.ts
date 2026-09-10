@@ -1740,8 +1740,8 @@ describe('rbac permission system', () => {
 
         await query(`
           INSERT INTO public.orgs (id, name, management_email, created_by, enforcing_2fa)
-          VALUES ($1::uuid, $2, $3, $4::uuid, false)
-        `, [orgId, `RBAC Channel Key Scope ${testId}`, `rbac-channel-key-scope-${testId}@capgo.app`, USER_ID])
+          VALUES ($1::uuid, $2, $3, $4::uuid, true)
+        `, [orgId, `RBAC Channel Key 2FA ${testId}`, `rbac-channel-key-2fa-${testId}@capgo.app`, USER_ID])
 
         await query(`
           INSERT INTO public.apps (id, app_id, name, icon_url, owner_org)
@@ -1807,7 +1807,7 @@ describe('rbac permission system', () => {
 
         expect(guardedAccess.rows[0]).toMatchObject({
           can_read_channel_after_2fa_gate: true,
-          rejects_for_2fa: false,
+          rejects_for_2fa: true,
         })
 
         const visibleChannel = await query(
@@ -1829,7 +1829,7 @@ describe('rbac permission system', () => {
         expect(deletedChannel.rows).toEqual([{ id: channel.rows[0].id }])
       })
 
-      it('denies API-key rbac_check_permission_direct when org enforces 2FA and key owner lacks 2FA', async () => {
+      it('allows API-key rbac_check_permission_direct to bypass org 2FA enforcement', async () => {
         const testId = randomUUID()
         const keyOwnerId = randomUUID()
         const orgId = randomUUID()
@@ -1901,7 +1901,7 @@ describe('rbac permission system', () => {
           ) AS allowed
         `, [orgId, appId, apiKey])
 
-        expect(directAccess.rows[0].allowed).toBe(false)
+        expect(directAccess.rows[0].allowed).toBe(true)
       })
 
       it('should deny org permissions outside bound org for api keys', async () => {

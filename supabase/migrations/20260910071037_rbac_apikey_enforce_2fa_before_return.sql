@@ -1,6 +1,6 @@
--- Enforce org 2FA (and password policy) for API-key principals in
--- rbac_check_permission_direct*. The API-key branch previously returned after
--- rbac_has_permission without applying the same org gates as the user branch.
+-- rbac_check_permission_direct*: keep org 2FA and password-policy gates on the
+-- user-principal branch only. Explicit API-key credentials bypass those gates
+-- (compliance layer uses reject_access_due_to_2fa_for_app separately).
 
 CREATE OR REPLACE FUNCTION public.rbac_check_permission_direct(
   p_permission_key text,
@@ -85,18 +85,6 @@ BEGIN
 
       IF v_override IS NOT NULL THEN
         v_allowed := v_override;
-      END IF;
-    END IF;
-
-    IF v_effective_org_id IS NOT NULL THEN
-      IF (SELECT enforcing_2fa FROM public.orgs WHERE id = v_effective_org_id)
-        AND (v_effective_user_id IS NULL OR NOT public.has_2fa_enabled(v_effective_user_id))
-      THEN
-        RETURN false;
-      END IF;
-
-      IF public.user_meets_password_policy(v_effective_user_id, v_effective_org_id) = false THEN
-        RETURN false;
       END IF;
     END IF;
 
@@ -215,14 +203,6 @@ BEGIN
       v_effective_app_id,
       p_channel_id
     );
-
-    IF v_effective_org_id IS NOT NULL THEN
-      IF (SELECT enforcing_2fa FROM public.orgs WHERE id = v_effective_org_id)
-        AND (v_effective_user_id IS NULL OR NOT public.has_2fa_enabled(v_effective_user_id))
-      THEN
-        RETURN false;
-      END IF;
-    END IF;
 
     RETURN v_allowed;
   END IF;
