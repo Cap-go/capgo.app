@@ -54,12 +54,20 @@ beforeAll(async () => {
     },
     body: JSON.stringify(orgKeyBody(`warmup-post-${id.slice(0, 8)}`)),
   })
-  if (warmupPostResponse.status === 200) {
-    const warmupData = await warmupPostResponse.json<{ id: number }>()
-    await fetch(`${BASE_URL}/apikey/${warmupData.id}`, {
-      method: 'DELETE',
-      headers: authHeaders,
-    })
+  if (warmupPostResponse.ok) {
+    try {
+      const warmupData = await warmupPostResponse.json<{ id: number }>()
+      const deleteResponse = await fetch(`${BASE_URL}/apikey/${warmupData.id}`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      })
+      if (!deleteResponse.ok) {
+        console.warn(`apikey beforeAll warmup cleanup delete ${warmupData.id} status=${deleteResponse.status}`)
+      }
+    }
+    catch (error) {
+      console.warn('apikey beforeAll warmup cleanup delete failed', error)
+    }
   }
 })
 
