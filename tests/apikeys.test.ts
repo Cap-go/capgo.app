@@ -89,7 +89,15 @@ afterAll(async () => {
       method: 'DELETE',
       headers: authHeaders,
     }).catch(() => undefined)
-    await getSupabaseClient().from('apikeys').delete().eq('id', warmupApiKeyId).catch(() => undefined)
+    try {
+      const { error } = await getSupabaseClient().from('apikeys').delete().eq('id', warmupApiKeyId)
+      if (error) {
+        console.warn(`apikey afterAll warmup sql cleanup ${warmupApiKeyId}`, error)
+      }
+    }
+    catch (error) {
+      console.warn(`apikey afterAll warmup sql cleanup ${warmupApiKeyId} failed`, error)
+    }
     warmupApiKeyId = null
   }
   await resetAppData(APPNAME)
