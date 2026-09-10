@@ -633,9 +633,6 @@ export function isObjectNotFoundError(error: unknown): boolean {
     $metadata?: { httpStatusCode?: number }
   }
 
-  if ([err.$metadata?.httpStatusCode, err.status, err.statusCode].includes(404))
-    return true
-
   const permissionDenied = [err.name, err.Code, err.code].some(code =>
     code === 'AccessDenied'
     || code === 'Forbidden'
@@ -643,6 +640,9 @@ export function isObjectNotFoundError(error: unknown): boolean {
   )
   if (permissionDenied)
     return false
+
+  if ([err.$metadata?.httpStatusCode, err.status, err.statusCode].includes(404))
+    return true
 
   return [err.name, err.Code, err.code].some(code =>
     code === 'NotFound'
