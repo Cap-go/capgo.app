@@ -22,6 +22,7 @@ import {
   getStripeWebhookSecretEnvName,
   normalizeBillingAccount,
   planProductIdOrFilter,
+  resolveCheckoutPlanProductId,
 } from '../supabase/functions/_backend/utils/stripe_billing.ts'
 
 function createContext() {
@@ -136,6 +137,28 @@ describe('stripe billing account helpers', () => {
     } as any)
     try {
       await expect(billingModule.getBillingAccountForCustomer(context, 'cus_test')).rejects.toEqual(lookupError)
+    }
+    finally {
+      lookupErrorSpy.mockRestore()
+    }
+  })
+
+  it('propagates plan lookup errors before selecting checkout product id', async () => {
+    const context = createContext()
+    const lookupError = { message: 'connection refused', code: 'PGRST000' }
+    const adminModule = await import('../supabase/functions/_backend/utils/supabase.ts')
+
+    const lookupErrorSpy = vi.spyOn(adminModule, 'supabaseAdmin').mockReturnValue({
+      from: () => ({
+        select: () => ({
+          or: () => ({
+            maybeSingle: async () => ({ data: null, error: lookupError }),
+          }),
+        }),
+      }),
+    } as any)
+    try {
+      await expect(resolveCheckoutPlanProductId(context, 'prod_test', 'ee')).rejects.toEqual(lookupError)
     }
     finally {
       lookupErrorSpy.mockRestore()

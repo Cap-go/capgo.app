@@ -3248,10 +3248,7 @@ export async function getAdminCancelledOrganizations(
         COALESCE(si.paid_at, u.created_at, o.created_at) AS subscription_or_signup_date
       FROM orgs o
       INNER JOIN stripe_info si ON si.customer_id = o.customer_id
-      LEFT JOIN plans p ON (
-        (si.billing_account = 'us' AND p.stripe_id_us = si.product_id)
-        OR (COALESCE(si.billing_account, 'ee') <> 'us' AND p.stripe_id = si.product_id)
-      )
+      LEFT JOIN plans p ON ${adminPlanJoinOnStripeProductId}
       LEFT JOIN users u ON u.id = o.created_by
       WHERE si.canceled_at IS NOT NULL
         ${dateFilter}
