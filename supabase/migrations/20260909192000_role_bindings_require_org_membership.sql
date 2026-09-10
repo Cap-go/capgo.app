@@ -91,19 +91,105 @@ AS $$
   END
 $$;
 
-ALTER FUNCTION rbac_internal.role_binding_principal_allowed_for_org(text, uuid, uuid, text)
-  OWNER TO postgres;
-REVOKE ALL ON FUNCTION rbac_internal.role_binding_principal_allowed_for_org(text, uuid, uuid, text)
-  FROM PUBLIC;
-GRANT USAGE ON SCHEMA rbac_internal TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION rbac_internal.role_binding_principal_allowed_for_org(text, uuid, uuid, text)
-  TO authenticated, service_role;
+CREATE OR REPLACE FUNCTION rbac_internal.role_binding_caller_permission_allowed(
+  p_scope_type text,
+  p_org_id uuid,
+  p_app_id uuid,
+  p_channel_id uuid,
+  p_bundle_id bigint
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  SELECT CASE
+    WHEN p_scope_type = public.rbac_scope_org()
+    THEN public.rbac_check_permission_request(
+      public.rbac_perm_org_update_user_roles(),
+      p_org_id,
+      NULL::character varying,
+      NULL::bigint
+    )
+    WHEN p_scope_type = public.rbac_scope_app()
+    THEN EXISTS (
+      SELECT 1
+      FROM public.apps
+      WHERE public.apps.id = p_app_id
+        AND p_org_id = public.apps.owner_org
+        AND public.rbac_check_permission_request(
+          public.rbac_perm_app_update_user_roles(),
+          public.apps.owner_org,
+          public.apps.app_id,
+          NULL::bigint
+        )
+    )
+    WHEN p_scope_type = public.rbac_scope_channel()
+    THEN EXISTS (
+      SELECT 1
+      FROM public.channels
+      WHERE public.channels.rbac_id = p_channel_id
+        AND p_org_id = public.channels.owner_org
+        AND public.rbac_check_permission_request(
+          public.rbac_perm_app_update_user_roles(),
+          public.channels.owner_org,
+          public.channels.app_id,
+          public.channels.id
+        )
+    )
+    WHEN p_scope_type = public.rbac_scope_bundle()
+    THEN EXISTS (
+      SELECT 1
+      FROM public.apps
+      JOIN public.app_versions
+        ON public.app_versions.app_id = public.apps.app_id
+      WHERE public.app_versions.id = p_bundle_id
+        AND p_org_id = public.apps.owner_org
+        AND public.rbac_check_permission_request(
+          public.rbac_perm_app_update_user_roles(),
+          public.apps.owner_org,
+          public.apps.app_id,
+          NULL::bigint
+        )
+    )
+    ELSE false
+  END
+$$;
 
-COMMENT ON FUNCTION rbac_internal.role_binding_principal_allowed_for_org(text, uuid, uuid, text) IS
+ALTER FUNCTION rbac_internal.role_binding_principal_allowed_for_org(
+  text, uuid, uuid, text
+) OWNER TO postgres;
+ALTER FUNCTION rbac_internal.role_binding_caller_permission_allowed(
+  text, uuid, uuid, uuid, bigint
+) OWNER TO postgres;
+REVOKE ALL ON FUNCTION rbac_internal.role_binding_principal_allowed_for_org(
+  text, uuid, uuid, text
+) FROM PUBLIC;
+REVOKE ALL ON FUNCTION rbac_internal.role_binding_caller_permission_allowed(
+  text, uuid, uuid, uuid, bigint
+) FROM PUBLIC;
+GRANT USAGE ON SCHEMA rbac_internal TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION rbac_internal.role_binding_principal_allowed_for_org(
+  text, uuid, uuid, text
+) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION rbac_internal.role_binding_caller_permission_allowed(
+  text, uuid, uuid, uuid, bigint
+) TO authenticated, service_role;
+
+COMMENT ON FUNCTION rbac_internal.role_binding_principal_allowed_for_org(
+  text, uuid, uuid, text
+) IS
   'RLS helper: target principal may receive a role_binding on this org. User '
   'org-scope is always allowed (first membership). User app/channel/bundle '
   'requires a non-expired org-scope binding. Group must belong to the org. '
   'Apikey must have an org-scope binding or an owner with org-scope membership.';
+
+COMMENT ON FUNCTION rbac_internal.role_binding_caller_permission_allowed(
+  text, uuid, uuid, uuid, bigint
+) IS
+  'RLS helper: caller may write a role_binding for the given scope and resource '
+  'identifiers. Mirrors the scope branches in role_bindings insert/update policies.';
 
 DROP FUNCTION IF EXISTS public.role_binding_principal_allowed_for_org(text, uuid, uuid, text);
 
@@ -113,63 +199,12 @@ ON public.role_bindings
 FOR INSERT
 TO authenticated
 WITH CHECK (
-  (
-    (
-      scope_type = public.rbac_scope_org()
-      AND public.rbac_check_permission_request(
-        public.rbac_perm_org_update_user_roles(),
-        org_id,
-        NULL::character varying,
-        NULL::bigint
-      )
-    )
-    OR (
-      scope_type = public.rbac_scope_app()
-      AND EXISTS (
-        SELECT 1
-        FROM public.apps
-        WHERE apps.id = role_bindings.app_id
-          AND role_bindings.org_id = apps.owner_org
-          AND public.rbac_check_permission_request(
-            public.rbac_perm_app_update_user_roles(),
-            apps.owner_org,
-            apps.app_id,
-            NULL::bigint
-          )
-      )
-    )
-    OR (
-      scope_type = public.rbac_scope_channel()
-      AND EXISTS (
-        SELECT 1
-        FROM public.channels
-        WHERE channels.rbac_id = role_bindings.channel_id
-          AND role_bindings.org_id = channels.owner_org
-          AND public.rbac_check_permission_request(
-            public.rbac_perm_app_update_user_roles(),
-            channels.owner_org,
-            channels.app_id,
-            channels.id
-          )
-      )
-    )
-    OR (
-      scope_type = public.rbac_scope_bundle()
-      AND EXISTS (
-        SELECT 1
-        FROM public.app_versions
-        JOIN public.apps
-          ON apps.app_id = app_versions.app_id
-        WHERE app_versions.id = role_bindings.bundle_id
-          AND role_bindings.org_id = apps.owner_org
-          AND public.rbac_check_permission_request(
-            public.rbac_perm_app_update_user_roles(),
-            apps.owner_org,
-            apps.app_id,
-            NULL::bigint
-          )
-      )
-    )
+  rbac_internal.role_binding_caller_permission_allowed(
+    scope_type,
+    org_id,
+    app_id,
+    channel_id,
+    bundle_id
   )
   AND rbac_internal.role_binding_principal_allowed_for_org(
     principal_type,
@@ -185,123 +220,21 @@ ON public.role_bindings
 FOR UPDATE
 TO authenticated
 USING (
-  (
-    (
-      scope_type = public.rbac_scope_org()
-      AND public.rbac_check_permission_request(
-        public.rbac_perm_org_update_user_roles(),
-        org_id,
-        NULL::character varying,
-        NULL::bigint
-      )
-    )
-    OR (
-      scope_type = public.rbac_scope_app()
-      AND EXISTS (
-        SELECT 1
-        FROM public.apps
-        WHERE apps.id = role_bindings.app_id
-          AND role_bindings.org_id = apps.owner_org
-          AND public.rbac_check_permission_request(
-            public.rbac_perm_app_update_user_roles(),
-            apps.owner_org,
-            apps.app_id,
-            NULL::bigint
-          )
-      )
-    )
-    OR (
-      scope_type = public.rbac_scope_channel()
-      AND EXISTS (
-        SELECT 1
-        FROM public.channels
-        WHERE channels.rbac_id = role_bindings.channel_id
-          AND role_bindings.org_id = channels.owner_org
-          AND public.rbac_check_permission_request(
-            public.rbac_perm_app_update_user_roles(),
-            channels.owner_org,
-            channels.app_id,
-            channels.id
-          )
-      )
-    )
-    OR (
-      scope_type = public.rbac_scope_bundle()
-      AND EXISTS (
-        SELECT 1
-        FROM public.app_versions
-        JOIN public.apps
-          ON apps.app_id = app_versions.app_id
-        WHERE app_versions.id = role_bindings.bundle_id
-          AND role_bindings.org_id = apps.owner_org
-          AND public.rbac_check_permission_request(
-            public.rbac_perm_app_update_user_roles(),
-            apps.owner_org,
-            apps.app_id,
-            NULL::bigint
-          )
-      )
-    )
+  rbac_internal.role_binding_caller_permission_allowed(
+    scope_type,
+    org_id,
+    app_id,
+    channel_id,
+    bundle_id
   )
 )
 WITH CHECK (
-  (
-    (
-      scope_type = public.rbac_scope_org()
-      AND public.rbac_check_permission_request(
-        public.rbac_perm_org_update_user_roles(),
-        org_id,
-        NULL::character varying,
-        NULL::bigint
-      )
-    )
-    OR (
-      scope_type = public.rbac_scope_app()
-      AND EXISTS (
-        SELECT 1
-        FROM public.apps
-        WHERE apps.id = role_bindings.app_id
-          AND role_bindings.org_id = apps.owner_org
-          AND public.rbac_check_permission_request(
-            public.rbac_perm_app_update_user_roles(),
-            apps.owner_org,
-            apps.app_id,
-            NULL::bigint
-          )
-      )
-    )
-    OR (
-      scope_type = public.rbac_scope_channel()
-      AND EXISTS (
-        SELECT 1
-        FROM public.channels
-        WHERE channels.rbac_id = role_bindings.channel_id
-          AND role_bindings.org_id = channels.owner_org
-          AND public.rbac_check_permission_request(
-            public.rbac_perm_app_update_user_roles(),
-            channels.owner_org,
-            channels.app_id,
-            channels.id
-          )
-      )
-    )
-    OR (
-      scope_type = public.rbac_scope_bundle()
-      AND EXISTS (
-        SELECT 1
-        FROM public.app_versions
-        JOIN public.apps
-          ON apps.app_id = app_versions.app_id
-        WHERE app_versions.id = role_bindings.bundle_id
-          AND role_bindings.org_id = apps.owner_org
-          AND public.rbac_check_permission_request(
-            public.rbac_perm_app_update_user_roles(),
-            apps.owner_org,
-            apps.app_id,
-            NULL::bigint
-          )
-      )
-    )
+  rbac_internal.role_binding_caller_permission_allowed(
+    scope_type,
+    org_id,
+    app_id,
+    channel_id,
+    bundle_id
   )
   AND rbac_internal.role_binding_principal_allowed_for_org(
     principal_type,

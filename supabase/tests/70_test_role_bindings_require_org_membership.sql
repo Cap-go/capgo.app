@@ -2,12 +2,24 @@
 -- Direct PostgREST INSERT of an app-scoped role_binding must require org membership.
 BEGIN;
 
-SELECT plan(11);
+SELECT plan(12);
 
-SELECT tests.create_supabase_user('rbac_membership_admin', 'rbac-membership-admin@test.local');
-SELECT tests.create_supabase_user('rbac_membership_member', 'rbac-membership-member@test.local');
-SELECT tests.create_supabase_user('rbac_membership_outsider', 'rbac-membership-outsider@test.local');
-SELECT tests.create_supabase_user('rbac_membership_key_owner', 'rbac-membership-key-owner@test.local');
+SELECT tests.create_supabase_user(
+  'rbac_membership_admin',
+  'rbac-membership-admin@test.local'
+);
+SELECT tests.create_supabase_user(
+  'rbac_membership_member',
+  'rbac-membership-member@test.local'
+);
+SELECT tests.create_supabase_user(
+  'rbac_membership_outsider',
+  'rbac-membership-outsider@test.local'
+);
+SELECT tests.create_supabase_user(
+  'rbac_membership_key_owner',
+  'rbac-membership-key-owner@test.local'
+);
 
 SELECT tests.authenticate_as_service_role();
 SET LOCAL ROLE service_role;
@@ -15,10 +27,30 @@ SET LOCAL "request.jwt.claim.role" = 'service_role';
 
 INSERT INTO public.users (id, email, created_at, updated_at)
 VALUES
-  (tests.get_supabase_uid('rbac_membership_admin'), 'rbac-membership-admin@test.local', NOW(), NOW()),
-  (tests.get_supabase_uid('rbac_membership_member'), 'rbac-membership-member@test.local', NOW(), NOW()),
-  (tests.get_supabase_uid('rbac_membership_outsider'), 'rbac-membership-outsider@test.local', NOW(), NOW()),
-  (tests.get_supabase_uid('rbac_membership_key_owner'), 'rbac-membership-key-owner@test.local', NOW(), NOW())
+  (
+    tests.get_supabase_uid('rbac_membership_admin'),
+    'rbac-membership-admin@test.local',
+    NOW(),
+    NOW()
+  ),
+  (
+    tests.get_supabase_uid('rbac_membership_member'),
+    'rbac-membership-member@test.local',
+    NOW(),
+    NOW()
+  ),
+  (
+    tests.get_supabase_uid('rbac_membership_outsider'),
+    'rbac-membership-outsider@test.local',
+    NOW(),
+    NOW()
+  ),
+  (
+    tests.get_supabase_uid('rbac_membership_key_owner'),
+    'rbac-membership-key-owner@test.local',
+    NOW(),
+    NOW()
+  )
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO public.orgs (id, created_by, name, management_email)
@@ -39,6 +71,16 @@ VALUES (
   '70000000-0000-4000-8000-000000009976'
 )
 ON CONFLICT (app_id) DO NOTHING;
+
+INSERT INTO public.channels (id, name, app_id, owner_org, created_by)
+VALUES (
+  70099761,
+  'membership-rbac-channel',
+  'com.test.rbac.membership.ghsa9976',
+  '70000000-0000-4000-8000-000000009976',
+  tests.get_supabase_uid('rbac_membership_admin')
+)
+ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO public.app_versions (
   id,
@@ -62,10 +104,10 @@ ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO public.org_users (org_id, user_id, rbac_role_name, is_invite)
 SELECT
-  '70000000-0000-4000-8000-000000009976',
-  tests.get_supabase_uid(role_fixture.identifier),
-  role_fixture.role_name,
-  false
+  '70000000-0000-4000-8000-000000009976' AS org_id,
+  tests.get_supabase_uid(role_fixture.identifier) AS user_id,
+  role_fixture.role_name AS rbac_role_name,
+  false AS is_invite
 FROM (
   VALUES
     ('rbac_membership_admin', public.rbac_role_org_admin()),
@@ -73,22 +115,29 @@ FROM (
 ) AS role_fixture(identifier, role_name)
 ON CONFLICT DO NOTHING;
 
-INSERT INTO public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, granted_by)
+INSERT INTO public.role_bindings (
+  principal_type,
+  principal_id,
+  role_id,
+  scope_type,
+  org_id,
+  granted_by
+)
 SELECT
-  public.rbac_principal_user(),
-  tests.get_supabase_uid(role_fixture.identifier),
-  roles.id,
-  public.rbac_scope_org(),
-  '70000000-0000-4000-8000-000000009976',
-  tests.get_supabase_uid('rbac_membership_admin')
+  public.rbac_principal_user() AS principal_type,
+  tests.get_supabase_uid(role_fixture.identifier) AS principal_id,
+  public.roles.id AS role_id,
+  public.rbac_scope_org() AS scope_type,
+  '70000000-0000-4000-8000-000000009976' AS org_id,
+  tests.get_supabase_uid('rbac_membership_admin') AS granted_by
 FROM (
   VALUES
     ('rbac_membership_admin', public.rbac_role_org_admin()),
     ('rbac_membership_member', public.rbac_role_org_member())
 ) AS role_fixture(identifier, role_name)
 JOIN public.roles
-  ON roles.name = role_fixture.role_name
-  AND roles.scope_type = public.rbac_scope_org()
+  ON role_fixture.role_name = public.roles.name
+  AND public.rbac_scope_org() = public.roles.scope_type
 ON CONFLICT DO NOTHING;
 
 INSERT INTO public.orgs (id, created_by, name, management_email)
@@ -138,17 +187,24 @@ VALUES (
 )
 ON CONFLICT DO NOTHING;
 
-INSERT INTO public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, granted_by)
+INSERT INTO public.role_bindings (
+  principal_type,
+  principal_id,
+  role_id,
+  scope_type,
+  org_id,
+  granted_by
+)
 SELECT
-  public.rbac_principal_user(),
-  tests.get_supabase_uid('rbac_membership_admin'),
-  roles.id,
-  public.rbac_scope_org(),
-  '00000000-0000-4000-8000-000000000099',
-  tests.get_supabase_uid('rbac_membership_admin')
+  public.rbac_principal_user() AS principal_type,
+  tests.get_supabase_uid('rbac_membership_admin') AS principal_id,
+  public.roles.id AS role_id,
+  public.rbac_scope_org() AS scope_type,
+  '00000000-0000-4000-8000-000000000099' AS org_id,
+  tests.get_supabase_uid('rbac_membership_admin') AS granted_by
 FROM public.roles
-WHERE roles.name = public.rbac_role_org_admin()
-  AND roles.scope_type = public.rbac_scope_org()
+WHERE public.roles.name = public.rbac_role_org_admin()
+  AND public.roles.scope_type = public.rbac_scope_org()
 ON CONFLICT DO NOTHING;
 
 SELECT tests.create_v2_apikey(
@@ -187,17 +243,17 @@ INSERT INTO public.role_bindings (
   granted_by
 )
 SELECT
-  public.rbac_principal_apikey(),
-  apikeys.rbac_id,
-  roles.id,
-  public.rbac_scope_org(),
-  '70000000-0000-4000-8000-000000009976',
-  tests.get_supabase_uid('rbac_membership_admin')
+  public.rbac_principal_apikey() AS principal_type,
+  public.apikeys.rbac_id AS principal_id,
+  public.roles.id AS role_id,
+  public.rbac_scope_org() AS scope_type,
+  '70000000-0000-4000-8000-000000009976' AS org_id,
+  tests.get_supabase_uid('rbac_membership_admin') AS granted_by
 FROM public.apikeys
 JOIN public.roles
-  ON roles.name = public.rbac_role_org_member()
-  AND roles.scope_type = public.rbac_scope_org()
-WHERE apikeys.id = 70997602
+  ON public.rbac_role_org_member() = public.roles.name
+  AND public.rbac_scope_org() = public.roles.scope_type
+WHERE public.apikeys.id = 70997602
 ON CONFLICT DO NOTHING;
 
 SELECT tests.create_v2_apikey(
@@ -484,6 +540,36 @@ SELECT lives_ok(
     WHERE roles.name = public.rbac_role_bundle_reader()
       AND roles.scope_type = public.rbac_scope_bundle()$$,
   'org admin can grant a bundle-scoped role to an existing org member'
+);
+
+SELECT lives_ok(
+  $$INSERT INTO public.role_bindings (
+      principal_type,
+      principal_id,
+      role_id,
+      scope_type,
+      org_id,
+      app_id,
+      channel_id,
+      granted_by
+    )
+    SELECT
+      public.rbac_principal_user(),
+      tests.get_supabase_uid('rbac_membership_member'),
+      roles.id,
+      public.rbac_scope_channel(),
+      '70000000-0000-4000-8000-000000009976',
+      apps.id,
+      channels.rbac_id,
+      tests.get_supabase_uid('rbac_membership_admin')
+    FROM public.roles
+    CROSS JOIN public.apps
+    CROSS JOIN public.channels
+    WHERE roles.name = public.rbac_role_channel_reader()
+      AND roles.scope_type = public.rbac_scope_channel()
+      AND apps.app_id = 'com.test.rbac.membership.ghsa9976'
+      AND channels.id = 70099761$$,
+  'org admin can grant a channel-scoped role to an existing org member'
 );
 
 SELECT * FROM finish();

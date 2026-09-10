@@ -5,6 +5,7 @@ import { safeParseSchema } from '../utils/schema_validation.ts'
 import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { getEffectivePasswordMinLength, getPasswordPolicyValidationErrors } from '../utils/password_policy.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
 import { emptySupabase, supabaseAdmin as useSupabaseAdmin } from '../utils/supabase.ts'
 import { syncUserPreferenceTags } from '../utils/user_preferences.ts'
 import { getEnv } from '../utils/utils.ts'
@@ -147,6 +148,7 @@ async function ensurePublicUserRowExists(
 }
 
 async function ensureOrgMembership(
+  c: Parameters<typeof useSupabaseAdmin>[0],
   supabaseAdmin: ReturnType<typeof useSupabaseAdmin>,
   userId: string,
   invitation: any,
@@ -159,8 +161,6 @@ async function ensureOrgMembership(
     return quickError(500, 'failed_to_accept_invitation', 'Failed to resolve RBAC role', { error: 'Missing RBAC role name' })
   }
 
-  let rbacRoleId: string | null = null
-
   const { data: role, error: roleError } = await supabaseAdmin
     .from('roles')
     .select('id')
@@ -172,78 +172,99 @@ async function ensureOrgMembership(
     return quickError(500, 'failed_to_accept_invitation', 'Failed to resolve RBAC role', { error: roleError?.message ?? 'Role not found' })
   }
 
-  rbacRoleId = role.id
+  const pgPool = getPgClient(c, false)
+  const pgClient = await pgPool.connect()
+  let transactionStarted = false
 
-  // Avoid creating duplicates: org_users does not have a unique constraint on (org_id, user_id).
-  const { data: existingMembershipRows, error: existingMembershipError } = await supabaseAdmin
-    .from('org_users')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('org_id', invitation.org_id)
-    .is('app_id', null)
-    .is('channel_id', null)
+  try {
+    await pgClient.query('BEGIN')
+    transactionStarted = true
 
-  if (existingMembershipError) {
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to check existing org membership', { error: existingMembershipError.message })
-  }
+    const existingMembership = await pgClient.query<{ id: string }>(
+      `SELECT public.org_users.id
+       FROM public.org_users
+       WHERE public.org_users.user_id = $1::uuid
+         AND public.org_users.org_id = $2::uuid
+         AND public.org_users.app_id IS NULL
+         AND public.org_users.channel_id IS NULL
+       LIMIT 1`,
+      [userId, invitation.org_id],
+    )
 
-  if (existingMembershipRows && existingMembershipRows.length > 0) {
-    const { error: updateMembershipError } = await supabaseAdmin
-      .from('org_users')
-      .update({
-        rbac_role_name: rbacRoleName,
-        is_invite: false,
-      })
-      .eq('user_id', userId)
-      .eq('org_id', invitation.org_id)
-      .is('app_id', null)
-      .is('channel_id', null)
-
-    if (updateMembershipError) {
-      return quickError(500, 'failed_to_accept_invitation', 'Failed to update org membership', { error: updateMembershipError.message })
+    if (existingMembership.rows.length > 0) {
+      await pgClient.query(
+        `UPDATE public.org_users
+         SET rbac_role_name = $3::text,
+             is_invite = false
+         WHERE public.org_users.user_id = $1::uuid
+           AND public.org_users.org_id = $2::uuid
+           AND public.org_users.app_id IS NULL
+           AND public.org_users.channel_id IS NULL`,
+        [userId, invitation.org_id, rbacRoleName],
+      )
     }
-  }
-  else {
-    const { error: insertIntoMainTableError } = await supabaseAdmin.from('org_users').insert({
-      user_id: userId,
-      org_id: invitation.org_id,
-      rbac_role_name: rbacRoleName,
-      is_invite: false,
-    })
-
-    if (insertIntoMainTableError) {
-      return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation insert into org_users', { error: insertIntoMainTableError.message })
+    else {
+      await pgClient.query(
+        `INSERT INTO public.org_users (user_id, org_id, rbac_role_name, is_invite)
+         VALUES ($1::uuid, $2::uuid, $3::text, false)`,
+        [userId, invitation.org_id, rbacRoleName],
+      )
     }
+
+    await pgClient.query(
+      `DELETE FROM public.role_bindings
+       WHERE public.role_bindings.principal_type = 'user'
+         AND public.role_bindings.principal_id = $1::uuid
+         AND public.role_bindings.scope_type = 'org'
+         AND public.role_bindings.org_id = $2::uuid`,
+      [userId, invitation.org_id],
+    )
+
+    await pgClient.query(
+      `INSERT INTO public.role_bindings (
+         principal_type,
+         principal_id,
+         role_id,
+         scope_type,
+         org_id,
+         granted_by,
+         granted_at,
+         reason,
+         is_direct
+       ) VALUES (
+         'user',
+         $1::uuid,
+         $2::uuid,
+         'org',
+         $3::uuid,
+         $1::uuid,
+         now(),
+         'Accepted invitation',
+         true
+       )`,
+      [userId, role.id, invitation.org_id],
+    )
+
+    await pgClient.query('COMMIT')
+    transactionStarted = false
   }
-
-  const { error: deleteBindingError } = await supabaseAdmin
-    .from('role_bindings')
-    .delete()
-    .eq('principal_type', 'user')
-    .eq('principal_id', userId)
-    .eq('scope_type', 'org')
-    .eq('org_id', invitation.org_id)
-
-  if (deleteBindingError) {
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to clear existing RBAC role bindings', { error: deleteBindingError.message })
-  }
-
-  const { error: insertBindingError } = await supabaseAdmin
-    .from('role_bindings')
-    .insert({
-      principal_type: 'user',
-      principal_id: userId,
-      role_id: rbacRoleId as string,
-      scope_type: 'org',
-      org_id: invitation.org_id,
-      granted_by: userId,
-      granted_at: new Date().toISOString(),
-      reason: 'Accepted invitation',
-      is_direct: true,
+  catch (error) {
+    if (transactionStarted) {
+      await pgClient.query('ROLLBACK').catch(() => {})
+    }
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'ensureOrgMembership transaction failed',
+      userId,
+      orgId: invitation.org_id,
+      error,
     })
-
-  if (insertBindingError) {
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to create RBAC role binding', { error: insertBindingError.message })
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+    return quickError(500, 'failed_to_accept_invitation', 'Failed to finalize org membership', { error: errorMessage })
+  }
+  finally {
+    pgClient.release()
+    closeClient(c, pgPool)
   }
 }
 
@@ -318,7 +339,7 @@ app.post('/', async (c) => {
     }
 
     const userId = session.user?.id ?? existingUser.id
-    const membershipError = await ensureOrgMembership(supabaseAdmin, userId, invitation)
+    const membershipError = await ensureOrgMembership(c, supabaseAdmin, userId, invitation)
     if (membershipError)
       return membershipError
 
@@ -387,7 +408,7 @@ app.post('/', async (c) => {
         if (publicUserError)
           return publicUserError
 
-        const membershipError = await ensureOrgMembership(supabaseAdmin, session.user.id, invitation)
+        const membershipError = await ensureOrgMembership(c, supabaseAdmin, session.user.id, invitation)
         if (membershipError)
           return membershipError
 
@@ -472,7 +493,7 @@ app.post('/', async (c) => {
       return quickError(400, 'sign_in_failed', 'Sign in failed, please retry', { error: sessionError.message })
     }
 
-    const membershipError = await ensureOrgMembership(supabaseAdmin, user.user.id, invitation)
+    const membershipError = await ensureOrgMembership(c, supabaseAdmin, user.user.id, invitation)
     if (membershipError) {
       didRollback = true
       await rollbackCreatedUser(c, user.user.id)
