@@ -121,7 +121,8 @@ export function getPlanCreditProductId(plan: PlanStripeIds, account: BillingAcco
   return plan.credit_id ?? ''
 }
 
-const STRIPE_PRODUCT_ID_REGEX = /^prod_[A-Za-z0-9]+$/
+// Stripe product ids: prod_ + alphanumeric/underscore/hyphen (see Stripe 2018-05-21 id rules).
+const STRIPE_PRODUCT_ID_REGEX = /^prod_[A-Za-z0-9_-]+$/
 
 export function planProductIdOrFilter(productId: string): string {
   if (!STRIPE_PRODUCT_ID_REGEX.test(productId))

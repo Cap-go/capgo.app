@@ -97,6 +97,8 @@ describe('stripe billing account helpers', () => {
     expect(() => planProductIdOrFilter('')).toThrow('invalid_stripe_product_id')
     expect(() => planProductIdOrFilter('price_123')).toThrow('invalid_stripe_product_id')
     expect(() => planProductIdOrFilter('prod_bad),stripe_id_us.eq.x')).toThrow('invalid_stripe_product_id')
+    expect(planProductIdOrFilter('prod_solo_us')).toBe('stripe_id.eq.prod_solo_us,stripe_id_us.eq.prod_solo_us')
+    expect(planProductIdOrFilter('prod_cHwBt-3ULYAoLArt')).toBe('stripe_id.eq.prod_cHwBt-3ULYAoLArt,stripe_id_us.eq.prod_cHwBt-3ULYAoLArt')
   })
 
   it('rejects incomplete US plan config instead of falling back to EE ids', () => {
