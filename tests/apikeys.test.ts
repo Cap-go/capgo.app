@@ -46,7 +46,7 @@ beforeAll(async () => {
   await resetAndSeedAppData(APPNAME)
   // Load the apikey isolate before concurrent POSTs from this file.
   await warmEdgeEndpoint('/apikey', { method: 'GET', headers: authHeaders })
-  await warmEdgeEndpoint('/apikey', {
+  const warmupPostResponse = await fetch(`${BASE_URL}/apikey`, {
     method: 'POST',
     headers: {
       ...authHeaders,
@@ -54,6 +54,13 @@ beforeAll(async () => {
     },
     body: JSON.stringify(orgKeyBody(`warmup-post-${id.slice(0, 8)}`)),
   })
+  if (warmupPostResponse.status === 200) {
+    const warmupData = await warmupPostResponse.json<{ id: number }>()
+    await fetch(`${BASE_URL}/apikey/${warmupData.id}`, {
+      method: 'DELETE',
+      headers: authHeaders,
+    })
+  }
 })
 
 afterAll(async () => {

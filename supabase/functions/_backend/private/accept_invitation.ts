@@ -150,29 +150,10 @@ async function ensurePublicUserRowExists(
 
 async function ensureOrgMembership(
   c: Parameters<typeof useSupabaseAdmin>[0],
-  supabaseAdmin: ReturnType<typeof useSupabaseAdmin>,
+  _supabaseAdmin: ReturnType<typeof useSupabaseAdmin>,
   userId: string,
   invitation: any,
 ) {
-  const rbacRoleName = typeof invitation.rbac_role_name === 'string'
-    ? invitation.rbac_role_name.trim()
-    : ''
-
-  if (!rbacRoleName) {
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to resolve RBAC role', { error: 'Missing RBAC role name' })
-  }
-
-  const { data: role, error: roleError } = await supabaseAdmin
-    .from('roles')
-    .select('id')
-    .eq('name', rbacRoleName)
-    .eq('scope_type', 'org')
-    .single()
-
-  if (roleError || !role) {
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to resolve RBAC role', { error: roleError?.message ?? 'Role not found' })
-  }
-
   const pgPool = getPgClient(c, false)
   let pgClient: PoolClient | null = null
   let transactionStarted = false
@@ -183,12 +164,52 @@ async function ensureOrgMembership(
     transactionStarted = true
 
     await pgClient.query(
-      `SELECT pg_catalog.pg_advisory_xact_lock(
-         pg_catalog.hashtext($1::text),
-         pg_catalog.hashtext($2::text)
-       )`,
-      [`accept_invitation_membership:${userId}`, invitation.org_id],
+      `SELECT public.lock_rbac_orgs($1::uuid)`,
+      [invitation.org_id],
     )
+
+    const inviteRoleResult = await pgClient.query<{ rbac_role_name: string | null }>(
+      `SELECT invite_role.rbac_role_name
+       FROM (
+         SELECT public.tmp_users.rbac_role_name
+         FROM public.tmp_users
+         WHERE public.tmp_users.invite_magic_string = $1::text
+           AND public.tmp_users.cancelled_at IS NULL
+         UNION ALL
+         SELECT public.org_users.rbac_role_name
+         FROM public.org_users
+         WHERE public.org_users.user_id = $2::uuid
+           AND public.org_users.org_id = $3::uuid
+           AND public.org_users.is_invite IS TRUE
+           AND public.org_users.app_id IS NULL
+           AND public.org_users.channel_id IS NULL
+       ) AS invite_role
+       WHERE invite_role.rbac_role_name IS NOT NULL
+       LIMIT 1`,
+      [invitation.invite_magic_string, userId, invitation.org_id],
+    )
+
+    const rbacRoleName = inviteRoleResult.rows[0]?.rbac_role_name?.trim() ?? ''
+    if (!rbacRoleName) {
+      await pgClient.query('ROLLBACK')
+      transactionStarted = false
+      return quickError(500, 'failed_to_accept_invitation', 'Failed to resolve RBAC role', { error: 'Missing RBAC role name' })
+    }
+
+    const roleResult = await pgClient.query<{ id: string }>(
+      `SELECT public.roles.id
+       FROM public.roles
+       WHERE public.roles.name = $1::text
+         AND public.roles.scope_type = 'org'
+       LIMIT 1`,
+      [rbacRoleName],
+    )
+    const role = roleResult.rows[0]
+    if (!role) {
+      await pgClient.query('ROLLBACK')
+      transactionStarted = false
+      return quickError(500, 'failed_to_accept_invitation', 'Failed to resolve RBAC role', { error: 'Role not found' })
+    }
 
     const existingMembership = await pgClient.query<{ id: string }>(
       `SELECT public.org_users.id
