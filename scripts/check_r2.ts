@@ -3,7 +3,7 @@ import type { _Object, ListObjectsV2CommandOutput } from '@aws-sdk/client-s3'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'// supabase.types.ts'
 import { CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { createClient } from '@supabase/supabase-js'
-import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, ConcurrencyLimiter, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, permanentDeleteAwsLiveKey, quoteS3CopySourceIfMatchEtag, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
+import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, ConcurrencyLimiter, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, parseS3ListingLastModified, permanentDeleteAwsLiveKey, quoteS3CopySourceIfMatchEtag, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode, resolveTrashDestinationKey } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const MAGIC_TO_DELETE = './tmp/magic_to_delete6.txt'
@@ -66,7 +66,11 @@ async function main() {
     const files = JSON.parse(await Bun.file(MAGIC_TO_DELETE).text()) as _Object[]
     let candidates = files
       .filter(file => file.Key && isLiveR2Key(file.Key))
-      .map(file => ({ key: file.Key!, etag: file.ETag, lastModified: file.LastModified }))
+      .map(file => ({
+        key: file.Key!,
+        etag: file.ETag,
+        lastModified: parseS3ListingLastModified(file.LastModified),
+      }))
     let errorCount = 0
 
     const supabase = supabaseAdmin()

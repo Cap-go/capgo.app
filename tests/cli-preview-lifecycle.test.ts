@@ -104,6 +104,27 @@ function requestTrace(input: Parameters<typeof fetch>[0], init?: Parameters<type
 let authHeaders: Record<string, string>
 const apiKeyIds: number[] = []
 
+async function cleanupAmbiguousApiKeyCreate(name: string): Promise<void> {
+  const listResponse = await fetch(`${BASE_URL}/apikey`, {
+    method: 'GET',
+    headers: authHeaders,
+  })
+  if (!listResponse.ok)
+    return
+
+  const keys = await listResponse.json<Array<{ id: number, name: string }>>()
+  const orphan = keys.find(key => key.name === name)
+  if (!orphan)
+    return
+
+  const deleteResponse = await fetch(`${BASE_URL}/apikey/${orphan.id}`, {
+    method: 'DELETE',
+    headers: authHeaders,
+  })
+  if (!deleteResponse.ok && !apiKeyIds.includes(orphan.id))
+    apiKeyIds.push(orphan.id)
+}
+
 async function createAppApiKey(name: string, roleName = 'app_preview'): Promise<ApiKeyResponse> {
   const body = JSON.stringify({
     name,
@@ -119,6 +140,7 @@ async function createAppApiKey(name: string, roleName = 'app_preview'): Promise<
     lastStatus = createResponse.status
     if (createResponse.status === 502 || createResponse.status === 503) {
       console.error(`[createAppApiKey] attempt=${attempt} status=${createResponse.status}`)
+      await cleanupAmbiguousApiKeyCreate(name)
       await new Promise(resolve => setTimeout(resolve, 500 * attempt))
       continue
     }

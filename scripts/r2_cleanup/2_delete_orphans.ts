@@ -19,6 +19,7 @@ import {
   isLiveR2Key,
   isObjectNotFoundError,
   isPreconditionFailedError,
+  quoteS3CopySourceIfMatchEtag,
   resolveR2CleanupDeleteMode,
   resolveTrashDestinationKey,
   R2_TRASH_PREFIX,
@@ -176,7 +177,7 @@ async function processKey(target: TrashProcessTarget): Promise<void> {
             const copyCommand = new CopyObjectCommand({
               Bucket: S3_BUCKET,
               CopySource: encodeS3CopySource(S3_BUCKET, key),
-              CopySourceIfMatch: sourceEtag,
+              CopySourceIfMatch: quoteS3CopySourceIfMatchEtag(sourceEtag),
               Key: destinationKey,
             })
             applyAwsCopyDestinationIfNoneMatchMiddleware(copyCommand.middlewareStack)

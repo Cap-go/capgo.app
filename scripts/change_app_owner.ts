@@ -3,7 +3,7 @@ import type { Database } from '../supabase/functions/_backend/utils/supabase.typ
 import { ensureFile } from 'https://deno.land/std/fs/ensure_file.ts'
 import { S3Client } from 'https://deno.land/x/s3_lite_client@0.7.0/mod.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js'
-import { encodeS3LiteCopySourceKey, moveS3LiteObjectToTrash } from './r2_trash_utils.ts'
+import { copyS3LiteObjectIfMatch, moveS3LiteObjectToTrash } from './r2_trash_utils.ts'
 
 const supabaseUrl = 'https://sb.capgo.app'
 const supabaseServiceRole = '***'
@@ -72,7 +72,8 @@ async function main() {
     if (!discoveryEtag)
       throw new Error(`Missing source ETag for ${obj.key}; aborting transfer`)
 
-    await rawS3client.copyObject({ sourceKey: encodeS3LiteCopySourceKey(obj.key) }, obj.key.replace(oldUserId, newUserId))
+    const destinationKey = obj.key.replace(oldUserId, newUserId)
+    await copyS3LiteObjectIfMatch(rawS3client, obj.key, destinationKey, discoveryEtag, S3_BUCKET)
     try {
       const trashResult = await moveS3LiteObjectToTrash(rawS3client, obj.key, S3_BUCKET, discoveryEtag)
       if (trashResult !== 'moved')

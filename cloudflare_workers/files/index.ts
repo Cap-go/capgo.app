@@ -23,10 +23,6 @@ type FilesExecutionContext = ExecutionContext & {
   }
 }
 
-function getRequestHostname(request: Request): string {
-  return request.headers.get('host') || new URL(request.url).hostname
-}
-
 function hasAttachmentReadPath(pathname: string): boolean {
   return pathname.startsWith('/files/read/attachments/') || pathname.startsWith('/private/files/read/attachments/')
 }
@@ -48,21 +44,10 @@ function isCacheableAttachmentRead(request: Request): boolean {
   return hasAttachmentReadPath(new URL(request.url).pathname)
 }
 
-function isCacheablePreviewRead(_request: Request): boolean {
-  // Preview file responses use Cache-Control: no-store (soft-deleted bundles must not
-  // be served from a long-lived outer worker cache that predates the no-store change).
-  return false
-}
-
 function buildWorkersCacheKey(request: Request): string | null {
   const url = new URL(request.url)
   if (isCacheableAttachmentRead(request))
     return `/files-cache${url.pathname}${normalizeSearch(url, FILE_READ_TRACKING_QUERY_PARAMS)}`
-
-  if (isCacheablePreviewRead(request)) {
-    const hostname = getRequestHostname(request).toLowerCase()
-    return `/preview-cache/${hostname}${url.pathname}${normalizeSearch(url)}`
-  }
 
   return null
 }

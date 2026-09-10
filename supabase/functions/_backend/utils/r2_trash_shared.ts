@@ -149,9 +149,19 @@ export async function resolveTrashDestinationKey(
   throw new Error(`Failed to allocate unique trash destination for ${sourceKey}`)
 }
 
-/** HTTP-date for R2 DeleteObject conditional deletes (x-amz-if-match-last-modified-time). */
+/** RFC 3339 timestamp for R2 DeleteObject conditional deletes (x-amz-if-match-last-modified-time). */
 export function formatR2ConditionalDeleteLastModified(lastModified: Date): string {
-  return lastModified.toUTCString()
+  return lastModified.toISOString()
+}
+
+/** Normalize S3 list/JSON LastModified values (Date or ISO string) for conditional guards. */
+export function parseS3ListingLastModified(value: Date | string | undefined | null): Date | undefined {
+  if (!value)
+    return undefined
+  if (value instanceof Date)
+    return Number.isNaN(value.getTime()) ? undefined : value
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed
 }
 
 export type R2ConditionalDeleteMatch = {
@@ -425,6 +435,33 @@ export function asS3LiteTrashClient(s3client: RawS3LiteClient): S3LiteTrashClien
 }
 
 export type S3LiteTrashMoveResult = 'moved' | 'skipped_missing' | 'skipped_changed'
+
+/** Copy a live object to a destination key with CopySourceIfMatch (guards against source races). */
+export async function copyS3LiteObjectIfMatch(
+  s3client: Pick<RawS3LiteClient, 'makeRequest'>,
+  sourceKey: string,
+  destinationKey: string,
+  sourceIfMatch: string,
+  sourceBucketName: string,
+): Promise<void> {
+  if (!sourceBucketName)
+    throw new Error('sourceBucketName is required for guarded copy')
+  if (!s3client.makeRequest)
+    throw new Error(`Guarded copy requires makeRequest for ${sourceKey}`)
+
+  const copySource = `${sourceBucketName}/${encodeS3LiteCopySourceKey(sourceKey)}`
+  const headers = new Headers({
+    'x-amz-copy-source': copySource,
+    'x-amz-copy-source-if-match': quoteS3CopySourceIfMatchEtag(sourceIfMatch),
+  })
+  await s3client.makeRequest({
+    method: 'PUT',
+    objectName: destinationKey,
+    headers,
+    statusCode: 200,
+    returnBody: true,
+  })
+}
 
 /** Copy a live object into trash with CopySourceIfMatch when makeRequest is available. */
 export async function copyLiveObjectToTrash(

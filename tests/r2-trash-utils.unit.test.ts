@@ -718,7 +718,12 @@ describe('permanentDeleteSourceIfMatch', () => {
     const deleteObject = vi.fn()
     const makeRequest = vi.fn()
 
-    const result = await permanentDeleteSourceIfMatch({ statObject, deleteObject, makeRequest }, key, '"before"')
+    const result = await permanentDeleteSourceIfMatch(
+      { statObject, deleteObject, makeRequest },
+      key,
+      '"before"',
+      DEFAULT_LAST_MODIFIED,
+    )
 
     expect(result).toBe('skipped_changed')
     expect(makeRequest).not.toHaveBeenCalled()

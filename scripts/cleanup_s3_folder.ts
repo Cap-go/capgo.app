@@ -149,6 +149,11 @@ async function processFolder() {
         continue
 
       if (!obj.etag) {
+        if (deleteMode === 'dry_run') {
+          console.log(`Would process: ${obj.key} (missing listing ETag; would fail on execute)`)
+          processedCount += 1
+          continue
+        }
         console.error(`Failed ${obj.key}: missing listing ETag; source retained`)
         errorCount += 1
         continue
