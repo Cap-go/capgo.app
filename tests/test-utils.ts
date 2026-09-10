@@ -530,30 +530,18 @@ export interface FetchTestRequestOptions extends RequestInit {
   retryUnsafe?: boolean
 }
 
-function isReplaySafeHttpMethod(method: string | undefined): boolean {
-  switch ((method ?? 'GET').toUpperCase()) {
-    case 'GET':
-    case 'HEAD':
-    case 'OPTIONS':
-      return true
-    default:
-      return false
-  }
-}
-
 /**
  * Send one request. Application 4xx/5xx are test evidence and are not retried.
- * Only transient gateway 502/503 (isolate crash/reload) is retried — same signals
- * the CI warm step already treats as non-ready. Mutating methods are not retried
- * unless retryUnsafe is set (caller asserts idempotency).
+ * Transient gateway 502/503 (isolate crash/reload) is retried up to 3 times for
+ * any HTTP method — a gateway death means the handler never ran.
+ * `retryUnsafe` is accepted for backward compatibility but no longer changes behavior.
  */
 export async function fetchTestRequest(
   url: string,
   options?: FetchTestRequestOptions,
 ): Promise<Response> {
-  const { retryUnsafe: _retryUnsafe = false, ...fetchOptions } = options ?? {}
-  // Transient gateway 502/503 means the upstream never handled the request, so
-  // retry even for POST/PUT/PATCH in tests (plugin warm paths, /updates, etc.).
+  const { retryUnsafe: _retryUnsafe, ...fetchOptions } = options ?? {}
+  void _retryUnsafe
   const maxAttempts = 3
   let lastResponse: Response | undefined
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
