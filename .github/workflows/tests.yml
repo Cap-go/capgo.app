@@ -448,6 +448,7 @@ jobs:
           warm_get '/webhooks?orgId=00000000-0000-0000-0000-000000000000'
           warm_get '/organization?orgId=00000000-0000-0000-0000-000000000000'
           warm_get '/app/com.warm.isolate.probe'
+          warm_post /private/validate_password_compliance
           warm_post /organization
           warm_post /organization/members
           warm_post /apikey

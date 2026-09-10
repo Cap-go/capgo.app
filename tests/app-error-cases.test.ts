@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { BASE_URL, createDirectApiKeyWithBindings, fetchTestRequest, getAuthHeaders, getSupabaseClient, NON_ACCESS_APP_NAME, resetAndSeedAppData, resetAppData, USER_EMAIL, USER_ID } from './test-utils.ts'
+import { BASE_URL, createDirectApiKeyWithBindings, fetchTestRequest, getAuthHeaders, getSupabaseClient, NON_ACCESS_APP_NAME, resetAndSeedAppData, resetAppData, USER_EMAIL, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
 
 const id = randomUUID().replace(/-/g, '').slice(0, 12)
 const APPNAME = `com.app.error.${id}`
@@ -16,6 +16,12 @@ let authHeaders: Record<string, string>
 
 beforeAll(async () => {
   authHeaders = await getAuthHeaders()
+
+  // Cold first /app request can 502 under Deno shard load (same isolate as app.test).
+  await warmEdgeEndpoint(`${BASE_URL}/app/com.warm.isolate.probe`, {
+    method: 'GET',
+    headers: authHeaders,
+  })
 
   await resetAndSeedAppData(APPNAME, {
     orgId: testOrgId,
