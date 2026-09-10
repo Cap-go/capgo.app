@@ -19,13 +19,14 @@ http-get://127.0.0.1:$((8789 + worker_port_offset))/ok"
 for attempt in $(seq 1 "${max_attempts}"); do
   if bash .github/scripts/start-background-service.sh; then
     exit 0
+  else
+    exit_code=$?
+    echo "Cloudflare Workers failed to become ready with exit ${exit_code} (attempt ${attempt}/${max_attempts})" >&2
+    if [ "${attempt}" -eq "${max_attempts}" ]; then
+      exit "${exit_code}"
+    fi
+    sleep_seconds=$((attempt * 10))
+    echo "Retrying Cloudflare Workers startup in ${sleep_seconds}s..." >&2
+    sleep "${sleep_seconds}"
   fi
-  exit_code=$?
-  echo "Cloudflare Workers failed to become ready with exit ${exit_code} (attempt ${attempt}/${max_attempts})" >&2
-  if [ "${attempt}" -eq "${max_attempts}" ]; then
-    exit "${exit_code}"
-  fi
-  sleep_seconds=$((attempt * 10))
-  echo "Retrying Cloudflare Workers startup in ${sleep_seconds}s..." >&2
-  sleep "${sleep_seconds}"
 done

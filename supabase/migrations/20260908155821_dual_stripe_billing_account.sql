@@ -205,9 +205,9 @@ CREATE TRIGGER prevent_orphan_stripe_info_plan_ids
   FOR EACH ROW
   EXECUTE FUNCTION public.prevent_orphan_stripe_info_plan_ids();
 
--- apps channel_device_count / manifest_bundle_count bumps are bookkeeping for any
--- actor. Stale capgkey headers in the same SQL transaction must not turn recount
--- work into audit noise (see supabase/tests/40_test_audit_log_apikey.sql).
+-- apps channel_device_count / manifest_bundle_count bumps are bookkeeping for
+-- any actor. Stale capgkey headers in the same SQL transaction must not turn
+-- recount work into audit noise (see supabase/tests/40_test_audit_log_apikey.sql).
 CREATE OR REPLACE FUNCTION public.audit_log_trigger()
 RETURNS trigger
 LANGUAGE plpgsql

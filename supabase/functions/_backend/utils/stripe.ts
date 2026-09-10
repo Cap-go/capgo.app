@@ -10,6 +10,7 @@ import {
   getPlanPriceId,
   getStripeSecretKey,
   isStripeConfiguredForAccount,
+  planProductIdOrFilter,
   resolveCheckoutPlanProductId,
 } from './stripe_billing.ts'
 import { getEnv, isStripeConfigured, trimTrailingSlashes } from './utils.ts'
@@ -518,7 +519,7 @@ async function getStoredPlanPriceId(c: Context, planId: string, recurrence: stri
       .select('price_m_id, price_y_id, price_m_id_us, price_y_id_us, stripe_id, stripe_id_us')
 
     const { data, error } = await (typeof baseQuery.or === 'function'
-      ? baseQuery.or(`stripe_id.eq.${planId},stripe_id_us.eq.${planId}`)
+      ? baseQuery.or(planProductIdOrFilter(planId))
       : baseQuery.eq('stripe_id', planId)
     ).single()
 

@@ -47,7 +47,6 @@ async function postApikey(body: Record<string, unknown>, headers: Record<string,
     method: 'POST',
     headers,
     body: JSON.stringify(body),
-    retryUnsafe: true,
   })
 }
 

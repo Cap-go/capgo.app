@@ -168,7 +168,7 @@ describe('stripe redirect URL allowlist', () => {
       createContext(),
       'cus_123',
       'month',
-      'plan_test',
+      'prod_test',
       '/app/success',
       '/app/cancel',
       'org_123',
@@ -217,7 +217,7 @@ describe('stripe redirect URL allowlist', () => {
       createContext(),
       'cus_123',
       'month',
-      'plan_test',
+      'prod_test',
       'https://example.com/phishing',
       '/app/cancel',
     ).catch(error => error)
@@ -402,6 +402,7 @@ describe('stripe redirect URL allowlist', () => {
           or: vi.fn().mockReturnValue({
             single: vi.fn().mockResolvedValue({
               data: {
+                stripe_id: 'prod_test',
                 price_m_id: 'price_monthly_from_plan',
                 price_y_id: 'price_yearly_from_plan',
               },
@@ -409,6 +410,7 @@ describe('stripe redirect URL allowlist', () => {
             }),
             maybeSingle: vi.fn().mockResolvedValue({
               data: {
+                stripe_id: 'prod_test',
                 price_m_id: 'price_monthly_from_plan',
                 price_y_id: 'price_yearly_from_plan',
               },
@@ -448,7 +450,7 @@ describe('stripe redirect URL allowlist', () => {
       createContext(),
       'cus_123',
       'month',
-      'plan_test',
+      'prod_test',
       '/app/success',
       '/app/cancel',
     )

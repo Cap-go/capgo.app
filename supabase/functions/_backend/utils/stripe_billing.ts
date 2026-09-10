@@ -121,7 +121,12 @@ export function getPlanCreditProductId(plan: PlanStripeIds, account: BillingAcco
   return plan.credit_id ?? ''
 }
 
+const STRIPE_PRODUCT_ID_REGEX = /^prod_[A-Za-z0-9]+$/
+
 export function planProductIdOrFilter(productId: string): string {
+  if (!STRIPE_PRODUCT_ID_REGEX.test(productId))
+    throw new Error('invalid_stripe_product_id')
+
   return `stripe_id.eq.${productId},stripe_id_us.eq.${productId}`
 }
 

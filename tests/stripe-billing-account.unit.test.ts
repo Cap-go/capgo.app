@@ -93,6 +93,12 @@ describe('stripe billing account helpers', () => {
     expect(planProductIdOrFilter('prod_VDt1FTF7XJxyMR')).toBe('stripe_id.eq.prod_VDt1FTF7XJxyMR,stripe_id_us.eq.prod_VDt1FTF7XJxyMR')
   })
 
+  it('rejects invalid stripe product ids in lookup filter', () => {
+    expect(() => planProductIdOrFilter('')).toThrow('invalid_stripe_product_id')
+    expect(() => planProductIdOrFilter('price_123')).toThrow('invalid_stripe_product_id')
+    expect(() => planProductIdOrFilter('prod_bad),stripe_id_us.eq.x')).toThrow('invalid_stripe_product_id')
+  })
+
   it('rejects incomplete US plan config instead of falling back to EE ids', () => {
     const incompleteUsPlan = { ...SOLO_PLAN, stripe_id_us: null, price_m_id_us: null }
     expect(() => getPlanProductId(incompleteUsPlan, 'us')).toThrow(IncompleteUsPlanConfigError)
