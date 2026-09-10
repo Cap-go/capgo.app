@@ -1030,7 +1030,7 @@ ORDER BY date`
     return rows
   }
   catch (e) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native daily platform active', error: serializeError(e), query: platformQuery })
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native daily platform active', error: serializeError(e), queries: { platformQuery, totalQuery } })
     throw e
   }
 }
