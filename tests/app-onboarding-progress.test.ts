@@ -4,7 +4,10 @@ import { createClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { parseAppOnboardingLedger, shouldShowGettingStartedNav, shouldSkipOnboardingResume } from '../src/utils/appOnboardingProgress.ts'
 import {
+  BASE_URL,
   executeSQL,
+  fetchTestRequest,
+  getAuthHeaders,
   getSupabaseClient,
   ORG_ID,
   SUPABASE_ANON_KEY,
@@ -140,7 +143,7 @@ afterAll(async () => {
   await serviceRoleSupabase.from('apps').delete().in('app_id', [APP_RPC, APP_INSERT, APP_TESTFLIGHT, APP_STORE, APP_VERIFY, APP_SETUP])
 })
 
-describe('app onboarding progress RPCs', () => {
+describe('app onboarding progress', () => {
   it('must reject unauthenticated mark_onboarding_feature_started', async () => {
     const anon = createAuthClient()
     const { error } = await anon.rpc('mark_onboarding_feature_started', {
@@ -369,20 +372,16 @@ describe('app onboarding progress RPCs', () => {
   })
 
   it('completes pending onboarding when CLI/AI setup reports completed', async () => {
-    const authClient = createAuthClient()
-    const { error: signInError } = await authClient.auth.signInWithPassword({
-      email: USER_EMAIL,
-      password: USER_PASSWORD,
+    const response = await fetchTestRequest(`${BASE_URL}/app/${APP_SETUP}`, {
+      method: 'PUT',
+      headers: await getAuthHeaders(),
+      body: JSON.stringify({
+        onboarding: { outcome: 'completed' },
+      }),
     })
-    if (signInError)
-      throw signInError
-
-    const { data, error } = await authClient.rpc('report_app_onboarding_setup', {
-      p_app_id: APP_SETUP,
-      p_patch: { outcome: 'completed' },
-    })
-    expect(error).toBeNull()
-    expect(shouldSkipOnboardingResume(data)).toBe(true)
+    const updated = await response.json() as { onboarding?: unknown }
+    expect(response.status, JSON.stringify(updated)).toBe(200)
+    expect(shouldSkipOnboardingResume(updated.onboarding)).toBe(true)
 
     const { data: app, error: readError } = await serviceRoleSupabase
       .from('apps')
