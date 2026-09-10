@@ -14,6 +14,7 @@ export {
   isObjectNotFoundError,
   isPreconditionFailedError,
   normalizedS3EtagsMatch,
+  parseS3ListingLastModified,
   quoteS3CopySourceIfMatchEtag,
   R2_TRASH_PREFIX,
   resolveOpsDeleteMode,

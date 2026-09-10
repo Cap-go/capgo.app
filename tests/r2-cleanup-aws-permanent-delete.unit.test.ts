@@ -121,6 +121,27 @@ describe('permanentDeleteAwsLiveKey', () => {
     expect(send).toHaveBeenCalledTimes(1)
   })
 
+  it('accepts ISO string discovery Last-Modified from JSON listings', async () => {
+    const send = vi.fn(async (command: unknown) => {
+      if (command instanceof HeadObjectCommand)
+        return { ETag: etag, LastModified: lastModified }
+      if (command instanceof DeleteObjectCommand)
+        return {}
+      throw new Error('unexpected command')
+    })
+
+    const outcome = await permanentDeleteAwsLiveKey(
+      { send },
+      bucket,
+      key,
+      etag,
+      lastModified.toISOString(),
+    )
+
+    expect(outcome).toBe('deleted')
+    expect(send).toHaveBeenCalledTimes(2)
+  })
+
   it('treats missing source as skipped_missing', async () => {
     const send = vi.fn(async (command: unknown) => {
       if (command instanceof HeadObjectCommand)

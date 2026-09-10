@@ -91,7 +91,7 @@ async function main() {
       continue
 
     if (trashResult === 'skipped_changed') {
-      const retryResult = await moveS3LiteObjectToTrash(rawS3client, obj.key, S3_BUCKET)
+      const retryResult = await moveS3LiteObjectToTrash(rawS3client, obj.key, S3_BUCKET, discoveryEtag, discoveryLastModified)
       if (retryResult === 'moved' || retryResult === 'skipped_missing')
         continue
 

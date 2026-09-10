@@ -446,12 +446,10 @@ jobs:
           warm_post /triggers/cron_stat_app
           # Private API routes hit by sharded suites; warm before concurrent files start.
           warm_get '/webhooks?orgId=00000000-0000-0000-0000-000000000000'
-          warm_post /webhooks
           warm_get '/organization?orgId=00000000-0000-0000-0000-000000000000'
           warm_post /organization
           warm_post /organization/members
           warm_post /apikey
-          warm_post /app
       - name: Run backend integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}

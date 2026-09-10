@@ -17,7 +17,9 @@ import {
   isPreconditionFailedError,
   asS3LiteTrashClient,
   copyLiveObjectToTrash,
+  copyS3LiteObjectIfMatch,
   moveS3LiteObjectToTrash,
+  withOrphanR2DeleteClaim,
   resolveOpsDeleteMode,
   resolveTrashDestinationKey,
   R2_TRASH_PREFIX,
@@ -909,6 +911,58 @@ describe('encodeS3CopySource', () => {
       .toBe('capgo/orgs/org-1/apps/com.test/file%20name.zip')
     expect(encodeS3CopySource('capgo', 'orgs/org-1/apps/com.test/文件.zip'))
       .toBe('capgo/orgs/org-1/apps/com.test/%E6%96%87%E4%BB%B6.zip')
+  })
+})
+
+describe('copyS3LiteObjectIfMatch', () => {
+  it('treats an existing destination with the same etag as idempotent owner-copy resume', async () => {
+    const key = 'apps/user-1/com.demo.app/segment/v1.0.0.zip'
+    const destinationKey = key.replace('user-1', 'user-2')
+    const etag = '"same"'
+    const lastModified = new Date('2024-01-15T10:30:00.000Z')
+    const makeRequest = vi.fn(async () => {
+      throw { statusCode: 412, code: 'PreconditionFailed' }
+    })
+    const statObject = vi.fn(async (objectKey: string) => {
+      if (objectKey === destinationKey)
+        return { etag, lastModified }
+      throw { name: 'NotFound' }
+    })
+
+    await expect(copyS3LiteObjectIfMatch(
+      { makeRequest, statObject },
+      key,
+      destinationKey,
+      etag,
+      'capgo',
+      lastModified,
+    )).resolves.toBeUndefined()
+
+    expect(makeRequest).toHaveBeenCalledOnce()
+  })
+})
+
+describe('withOrphanR2DeleteClaim', () => {
+  it('skips delete when app_versions already references the key under row lock', async () => {
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        if (sql === 'BEGIN' || sql === 'ROLLBACK')
+          return { rowCount: null, rows: [] }
+        if (sql.includes('FOR UPDATE') && sql.includes('r2_path = $1'))
+          return { rowCount: 1, rows: [{}] }
+        return { rowCount: 0, rows: [] }
+      }),
+    }
+    const runDelete = vi.fn(async () => 'deleted')
+
+    const result = await withOrphanR2DeleteClaim(
+      client,
+      'orgs/org-1/apps/com.test.app/1.0.0.zip',
+      runDelete,
+    )
+
+    expect(result).toBe('skipped_referenced')
+    expect(runDelete).not.toHaveBeenCalled()
   })
 })
 

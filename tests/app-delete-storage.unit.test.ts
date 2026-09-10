@@ -49,14 +49,18 @@ const supabaseAdmin = vi.fn(() => ({
   storage: { from: storageFrom },
 }))
 
-const apiKeyClientDeleteEq = vi.fn(async () => ({ error: null }))
+const apiDeleteEqByTable: Record<string, ReturnType<typeof vi.fn>> = {}
 const apiSelectSingle = vi.fn(async () => ({ data: { owner_org: 'org-1' }, error: null }))
 const apiSelectEq = vi.fn(() => ({ single: apiSelectSingle }))
 const apiSelect = vi.fn(() => ({ eq: apiSelectEq }))
-const apiFrom = vi.fn(() => ({
-  select: apiSelect,
-  delete: () => ({ eq: apiKeyClientDeleteEq }),
-}))
+const apiFrom = vi.fn((table: string) => {
+  if (!apiDeleteEqByTable[table])
+    apiDeleteEqByTable[table] = vi.fn(async () => ({ error: null }))
+  return {
+    select: apiSelect,
+    delete: () => ({ eq: apiDeleteEqByTable[table] }),
+  }
+})
 const supabaseApikey = vi.fn(() => ({
   from: apiFrom,
 }))
@@ -146,8 +150,9 @@ describe('public deleteApp storage contract', () => {
     deletedTables.length = 0
     for (const key of Object.keys(deleteEqByTable))
       delete deleteEqByTable[key]
+    for (const key of Object.keys(apiDeleteEqByTable))
+      delete apiDeleteEqByTable[key]
     checkPermission.mockResolvedValue(true)
-    apiKeyClientDeleteEq.mockResolvedValue({ error: null })
     apiSelectSingle.mockResolvedValue({ data: { owner_org: 'org-1' }, error: null })
     storageList.mockResolvedValue({ data: [] })
   })
@@ -181,6 +186,11 @@ describe('public deleteApp storage contract', () => {
     expect(deletedTables).toContain('apps')
     expect(deleteEqByTable.apps).toBeDefined()
     expect(deleteEqByTable.apps).toHaveBeenCalledWith('app_id', 'com.test.app')
+
+    for (const table of ['app_versions_meta', 'channel_devices', 'channels', 'devices']) {
+      expect(apiDeleteEqByTable[table]).toBeDefined()
+      expect(apiDeleteEqByTable[table]).toHaveBeenCalledWith('app_id', 'com.test.app')
+    }
   })
 })
 

@@ -82,21 +82,43 @@ export function mergeTrashCopyMetadata(
   }
 }
 
+export type S3ObjectCopyPreserve = {
+  metadata?: Record<string, string>
+  contentType?: string
+  cacheControl?: string
+}
+
+export function buildAwsTrashCopyPreserveFromHead(head: {
+  Metadata?: Record<string, string>
+  ContentType?: string
+  CacheControl?: string
+}): S3ObjectCopyPreserve {
+  return {
+    metadata: head.Metadata,
+    contentType: head.ContentType,
+    cacheControl: head.CacheControl,
+  }
+}
+
 export function applyR2TrashCopyMetadataHeaders(
   headers: Headers,
   sourceLastModified: Date,
-  existingMetadata?: Record<string, string>,
+  preserve?: S3ObjectCopyPreserve,
 ): void {
   headers.set('x-amz-metadata-directive', 'REPLACE')
-  const merged = mergeTrashCopyMetadata(existingMetadata, sourceLastModified)
+  if (preserve?.contentType)
+    headers.set('Content-Type', preserve.contentType)
+  if (preserve?.cacheControl)
+    headers.set('Cache-Control', preserve.cacheControl)
+  const merged = mergeTrashCopyMetadata(preserve?.metadata, sourceLastModified)
   for (const [key, value] of Object.entries(merged))
     headers.set(`x-amz-meta-${key}`, value)
 }
 
-async function headS3LiteObjectMetadata(
+async function headS3LiteObjectCopyPreserve(
   s3client: Pick<RawS3LiteClient, 'makeRequest'>,
   objectKey: string,
-): Promise<Record<string, string> | undefined> {
+): Promise<S3ObjectCopyPreserve | undefined> {
   if (!s3client.makeRequest)
     return undefined
   try {
@@ -110,7 +132,14 @@ async function headS3LiteObjectMetadata(
       if (key.startsWith('x-amz-meta-'))
         metadata[key.slice('x-amz-meta-'.length)] = value
     })
-    return Object.keys(metadata).length > 0 ? metadata : undefined
+    const preserve: S3ObjectCopyPreserve = {
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+      contentType: response.headers.get('content-type') ?? undefined,
+      cacheControl: response.headers.get('cache-control') ?? undefined,
+    }
+    if (!preserve.metadata && !preserve.contentType && !preserve.cacheControl)
+      return undefined
+    return preserve
   }
   catch {
     // Best-effort: copy still runs; missing metadata is acceptable on transient HEAD errors.
@@ -253,6 +282,67 @@ export function parseS3ListingLastModified(value: Date | string | undefined | nu
     return Number.isNaN(value.getTime()) ? undefined : value
   const parsed = new Date(value)
   return Number.isNaN(parsed.getTime()) ? undefined : parsed
+}
+
+export function parseVersionScopedR2Key(key: string): { appId: string, versionName: string } | null {
+  const orgScoped = key.match(/^orgs\/[^/]+\/apps\/([^/]+)\/([^/]+)\.zip$/)
+  if (orgScoped)
+    return { appId: orgScoped[1], versionName: orgScoped[2] }
+  return parseLegacyAppsBundleKey(key)
+}
+
+export type PgQueryClient = {
+  query: (sql: string, params?: unknown[]) => Promise<{ rowCount: number | null, rows: unknown[] }>
+}
+
+/**
+ * Hold a version-scoped row lock while deleting an orphan key so upload cannot
+ * assign app_versions.r2_path between the reference check and DeleteObject.
+ */
+export async function withOrphanR2DeleteClaim<T>(
+  client: PgQueryClient,
+  key: string,
+  runDelete: () => Promise<T>,
+): Promise<'skipped_referenced' | T> {
+  const scope = parseVersionScopedR2Key(key)
+  await client.query('BEGIN')
+  try {
+    if (scope) {
+      const locked = await client.query(
+        `SELECT r2_path FROM public.app_versions
+         WHERE app_id = $1 AND name = $2 AND deleted = false AND deleted_at IS NULL
+         FOR UPDATE`,
+        [scope.appId, scope.versionName],
+      )
+      if ((locked.rowCount ?? 0) > 0) {
+        const row = locked.rows[0] as { r2_path: string | null }
+        if (row.r2_path === key) {
+          await client.query('ROLLBACK')
+          return 'skipped_referenced'
+        }
+      }
+    }
+
+    const byPath = await client.query(
+      `SELECT 1 FROM public.app_versions
+       WHERE r2_path = $1 AND deleted = false AND deleted_at IS NULL
+       LIMIT 1
+       FOR UPDATE`,
+      [key],
+    )
+    if ((byPath.rowCount ?? 0) > 0) {
+      await client.query('ROLLBACK')
+      return 'skipped_referenced'
+    }
+
+    const result = await runDelete()
+    await client.query('COMMIT')
+    return result
+  }
+  catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  }
 }
 
 export type R2ConditionalDeleteMatch = {
@@ -627,8 +717,8 @@ export async function copyLiveObjectToTrash(
   const encodedSourceKey = encodeS3LiteCopySourceKey(sourceKey)
   const copySource = `${sourceBucketName}/${encodedSourceKey}`
   let destinationKey = trashKey
-  const sourceMetadata = sourceLastModified
-    ? await headS3LiteObjectMetadata(s3client, sourceKey)
+  const sourcePreserve = sourceLastModified
+    ? await headS3LiteObjectCopyPreserve(s3client, sourceKey)
     : undefined
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -638,7 +728,7 @@ export async function copyLiveObjectToTrash(
       'cf-copy-destination-if-none-match': '*',
     })
     if (sourceLastModified)
-      applyR2TrashCopyMetadataHeaders(headers, sourceLastModified, sourceMetadata)
+      applyR2TrashCopyMetadataHeaders(headers, sourceLastModified, sourcePreserve)
     try {
       await s3client.makeRequest!({
         method: 'PUT',
