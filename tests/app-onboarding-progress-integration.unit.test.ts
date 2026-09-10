@@ -614,4 +614,22 @@ describe('app onboarding progress analytics integration', () => {
     expect(exploredEventIndex).toBeGreaterThanOrEqual(0)
     expect(secondaryGuardIndex).toBeLessThan(exploredEventIndex)
   })
+
+  it.concurrent('routes sidebar logo through openTab so onboarding hard-gate applies', () => {
+    const logoHeader = sidebarSource.slice(
+      sidebarSource.indexOf('<!-- Sidebar header -->'),
+      sidebarSource.indexOf('<GettingStartedNav'),
+    )
+    expect(logoHeader).not.toContain('<router-link')
+    expect(logoHeader).not.toContain('to="/apps"')
+    expect(logoHeader).toContain('@click="openLogoDashboard"')
+    expect(logoHeader).toContain('aria-label="Capgo - Go to dashboard"')
+
+    const openLogoDashboard = sidebarSource.slice(
+      sidebarSource.indexOf('function openLogoDashboard()'),
+      sidebarSource.indexOf('async function openTab(tab: Tab)'),
+    )
+    expect(openLogoDashboard).toContain("key: '/apps'")
+    expect(openLogoDashboard).toContain('openTab(')
+  })
 })
