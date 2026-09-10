@@ -275,7 +275,17 @@ export async function resolveTrashDestinationKey(
   if (!await resolver.keyExists(defaultTrashKey))
     return defaultTrashKey
 
-  const trashEtag = await resolver.getEtag(defaultTrashKey)
+  let trashEtag: string | undefined
+  try {
+    trashEtag = await resolver.getEtag(defaultTrashKey)
+  }
+  catch (error) {
+    if (isObjectNotFoundError(error))
+      return defaultTrashKey
+    throw error
+  }
+  if (!trashEtag)
+    return defaultTrashKey
   if (sourceEtag && sourceLastModified && resolver.getSourceVersionMarker && normalizedS3EtagsMatch(trashEtag, sourceEtag)) {
     const trashMarker = await resolver.getSourceVersionMarker(defaultTrashKey)
     const trashSourceLastModified = parseR2TrashSourceVersionMarker(trashMarker)

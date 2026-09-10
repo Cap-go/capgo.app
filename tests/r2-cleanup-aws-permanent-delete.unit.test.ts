@@ -41,9 +41,9 @@ describe('permanentDeleteAwsLiveKey', () => {
   })
 
   it('uses guarded delete headers with RFC 3339 Last-Modified and quoted If-Match', () => {
-    expect(buildR2ConditionalDeleteHeaders({ etag, lastModified })).toEqual({
+    expect(buildR2ConditionalDeleteHeaders({ etag: 'abc123', lastModified })).toEqual({
       'x-amz-if-match-last-modified-time': formatR2ConditionalDeleteLastModified(lastModified),
-      'If-Match': etag,
+      'If-Match': '"abc123"',
     })
   })
 

@@ -67,6 +67,7 @@ const trashDestinationResolver = createAwsTrashDestinationResolver(async (object
 
 let totalProcessed = 0
 let totalErrors = 0
+let totalSkippedChanged = 0
 let totalSkippedMissingDiscoveryEtag = 0
 let totalToProcess = 0
 
@@ -242,7 +243,7 @@ async function processKey(target: TrashProcessTarget): Promise<void> {
         )
         if (copyResult === 'skipped_changed') {
           console.warn(`Skipped trash copy for ${key}: live object changed before copy`)
-          totalProcessed += 1
+          totalSkippedChanged += 1
           return
         }
         trashKey = copyResult.trashKey
@@ -283,7 +284,7 @@ async function processKey(target: TrashProcessTarget): Promise<void> {
         }
         if (isPreconditionFailedError(deleteError)) {
           console.warn(`Skipped delete for ${key}: live object changed after copy; source key retained`)
-          totalProcessed += 1
+          totalSkippedChanged += 1
           return
         }
         console.error(`Copied ${key} to trash but failed to delete source:`, deleteError)
@@ -318,7 +319,7 @@ async function permanentDeleteKey(target: PermanentDeleteTarget): Promise<void> 
         return
       case 'skipped_changed':
         console.warn(`Skipped permanent delete for ${key}: live object changed since discovery; source retained`)
-        totalProcessed += 1
+        totalSkippedChanged += 1
         return
       case 'failed':
         console.error(`Failed to permanently delete ${key}: missing guards or transport error; source retained`)
@@ -503,10 +504,12 @@ async function main() {
   console.log(`Total processed: ${totalProcessed}`)
   if (totalSkippedMissingDiscoveryEtag > 0)
     console.warn(`Skipped missing discovery ETag: ${totalSkippedMissingDiscoveryEtag} (sources retained)`)
+  if (totalSkippedChanged > 0)
+    console.error(`Incomplete cleanup: ${totalSkippedChanged} object(s) changed before delete and were retained`)
   console.log(`Errors: ${totalErrors}`)
   if (deleteMode === 'trash')
     console.log(`Objects moved under ${R2_TRASH_PREFIX} (lifecycle deletes after ~7 days)`)
-  if (totalErrors > 0)
+  if (totalErrors > 0 || totalSkippedChanged > 0)
     process.exit(1)
 }
 

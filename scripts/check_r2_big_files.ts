@@ -651,7 +651,7 @@ export function getDatabaseURL(): string {
 
 export function getPgClient(c: Context, maxConnections = 1) {
     const dbUrl = getDatabaseURL()
-    console.log({ message: 'getPgClient', dbUrl })
+    console.log({ message: 'getPgClient', dbHost: new URL(dbUrl).host })
     return new Pool({
         connectionString: dbUrl,
         max: maxConnections,

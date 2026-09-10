@@ -859,6 +859,19 @@ describe('resolveTrashDestinationKey', () => {
 
     expect(trashKey).toMatch(new RegExp(`^${R2_TRASH_PREFIX}\\d+-[a-z0-9]+/${escapeRegExp(key)}$`))
   })
+
+  it('reuses the default trash slot when the object disappears between existence check and etag read', async () => {
+    const key = 'orgs/org-1/apps/com.test/file.zip'
+    const defaultTrashKey = getR2TrashKey(key)
+    const exists = vi.fn(async (trashKey: string) => trashKey === defaultTrashKey)
+    const getEtag = vi.fn(async () => {
+      throw { name: 'NotFound' }
+    })
+
+    const trashKey = await resolveTrashDestinationKey({ keyExists: exists, getEtag }, key, '"current"')
+
+    expect(trashKey).toBe(defaultTrashKey)
+  })
 })
 
 describe('asS3LiteTrashClient', () => {
