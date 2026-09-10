@@ -592,7 +592,7 @@ bun typecheck
 bunx vitest run tests/release-scope.test.ts tests/publish-release.test.ts tests/resolve-deploy-tag.test.ts tests/deploy-scope.test.ts tests/publish-schema-types.test.ts tests/capgo-release-workflow.unit.test.ts tests/read-replica-release-workflow.unit.test.ts
 ```
 
-- [ ] **Step 3: Inspect and push the existing PR branch**
+- [x] **Step 3: Inspect and push the existing PR branch**
 
 ```bash
 git diff --check
