@@ -4,7 +4,9 @@ import { Hono } from 'hono/tiny'
 import { parseBody, quickError, simpleError } from '../utils/hono.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
 import { checkPermission } from '../utils/rbac.ts'
+import { withR2PathCoordinationLock } from '../utils/r2_trash_shared.ts'
 import { s3 } from '../utils/s3.ts'
 import { supabaseApikey } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
@@ -60,37 +62,40 @@ app.post('/', middlewareKey(), async (c) => {
   cloudlog({ requestId: c.get('requestId'), message: 'filePath', filePath })
   // check if app version exist
 
-  cloudlog({ requestId: c.get('requestId'), message: 's3.checkIfExist', filePath })
+  const pgClient = getPgClient(c)
+  try {
+    return await withR2PathCoordinationLock(pgClient, filePath, async () => {
+      cloudlog({ requestId: c.get('requestId'), message: 's3.checkIfExist', filePath })
 
-  // check if object exist in r2
-  const exist = await s3.checkIfExist(c, filePath)
-  if (exist) {
-    throw simpleError('error_already_exist', 'Error already exist', { exist })
+      const exist = await s3.checkIfExist(c, filePath)
+      if (exist)
+        throw simpleError('error_already_exist', 'Error already exist', { exist })
+
+      const url = await s3.getUploadUrl(c, filePath)
+      if (!url)
+        throw simpleError('cannot_get_upload_link', 'Cannot get upload link')
+
+      await sendEventToTracking(c, {
+        channel: 'upload-get-link',
+        event: 'Upload via single file',
+        user_id: app.owner_org,
+        groups: { organization: app.owner_org },
+      })
+
+      cloudlog({ requestId: c.get('requestId'), message: 'upload link generated', filePath })
+
+      const { error: changeError } = await supabaseApikey(c, capgkey)
+        .from('app_versions')
+        .update({ r2_path: filePath })
+        .eq('id', version.id)
+
+      if (changeError)
+        throw simpleError('cannot_update_supabase', 'Cannot update supabase', { changeError })
+
+      return c.json({ url })
+    })
   }
-
-  const url = await s3.getUploadUrl(c, filePath)
-  if (!url) {
-    throw simpleError('cannot_get_upload_link', 'Cannot get upload link')
+  finally {
+    closeClient(c, pgClient)
   }
-
-  await sendEventToTracking(c, {
-    channel: 'upload-get-link',
-    event: 'Upload via single file',
-    user_id: app.owner_org,
-    groups: { organization: app.owner_org },
-  })
-
-  cloudlog({ requestId: c.get('requestId'), message: 'upload link generated', filePath })
-  const response = { url }
-
-  const { error: changeError } = await supabaseApikey(c, capgkey)
-    .from('app_versions')
-    .update({ r2_path: filePath })
-    .eq('id', version.id)
-
-  if (changeError) {
-    throw simpleError('cannot_update_supabase', 'Cannot update supabase', { changeError })
-  }
-
-  return c.json(response)
 })

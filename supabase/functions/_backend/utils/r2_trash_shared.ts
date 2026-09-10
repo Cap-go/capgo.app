@@ -318,15 +318,12 @@ export type PgQueryClient = {
   query: (sql: string, params?: unknown[]) => Promise<{ rowCount: number | null, rows: unknown[] }>
 }
 
-/**
- * Hold a version-scoped row lock while deleting an orphan key so upload cannot
- * assign app_versions.r2_path between the reference check and DeleteObject.
- */
-export async function withOrphanR2DeleteClaim<T>(
+/** Serialize orphan deletes and upload-link r2_path assignment for the same key. */
+export async function withR2PathCoordinationLock<T>(
   client: PgQueryClient,
   key: string,
-  runDelete: () => Promise<T>,
-): Promise<'skipped_referenced' | T> {
+  run: () => Promise<T>,
+): Promise<T> {
   const scope = parseVersionScopedR2Key(key)
   await client.query('BEGIN')
   try {
@@ -339,6 +336,33 @@ export async function withOrphanR2DeleteClaim<T>(
         'SELECT 1 FROM public.apps WHERE app_id = $1 FOR UPDATE',
         [scope.appId],
       )
+    }
+    await client.query(
+      'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
+      ['orphan-r2:path', key],
+    )
+    const result = await run()
+    await client.query('COMMIT')
+    return result
+  }
+  catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  }
+}
+
+/**
+ * Hold a version-scoped row lock while deleting an orphan key so upload cannot
+ * assign app_versions.r2_path between the reference check and DeleteObject.
+ */
+export async function withOrphanR2DeleteClaim<T>(
+  client: PgQueryClient,
+  key: string,
+  runDelete: () => Promise<T>,
+): Promise<'skipped_referenced' | T> {
+  const scope = parseVersionScopedR2Key(key)
+  return withR2PathCoordinationLock(client, key, async () => {
+    if (scope) {
       const locked = await client.query(
         `SELECT r2_path FROM public.app_versions
          WHERE app_id = $1 AND name = $2 AND ${APP_VERSION_NOT_DELETED_SQL}
@@ -347,17 +371,10 @@ export async function withOrphanR2DeleteClaim<T>(
       )
       if ((locked.rowCount ?? 0) > 0) {
         const row = locked.rows[0] as { r2_path: string | null }
-        if (row.r2_path === key) {
-          await client.query('ROLLBACK')
+        if (row.r2_path === key)
           return 'skipped_referenced'
-        }
       }
     }
-
-    await client.query(
-      'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
-      ['orphan-r2:path', key],
-    )
 
     const byPath = await client.query(
       `SELECT 1 FROM public.app_versions
@@ -366,19 +383,11 @@ export async function withOrphanR2DeleteClaim<T>(
        FOR UPDATE`,
       [key],
     )
-    if ((byPath.rowCount ?? 0) > 0) {
-      await client.query('ROLLBACK')
+    if ((byPath.rowCount ?? 0) > 0)
       return 'skipped_referenced'
-    }
 
-    const result = await runDelete()
-    await client.query('COMMIT')
-    return result
-  }
-  catch (error) {
-    await client.query('ROLLBACK')
-    throw error
-  }
+    return await runDelete()
+  })
 }
 
 export type R2ConditionalDeleteMatch = {

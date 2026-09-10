@@ -77,7 +77,7 @@ describe('createUniqueR2TrashSuffix', () => {
     expect(suffix).toMatch(/^\d+-[0-9a-z]{8}$/)
   })
 
-  it('produces distinct suffixes for concurrent callers', () => {
+  it('produces distinct suffixes across repeated calls', () => {
     const suffixes = new Set(Array.from({ length: 20 }, () => createUniqueR2TrashSuffix()))
     expect(suffixes.size).toBe(20)
   })
