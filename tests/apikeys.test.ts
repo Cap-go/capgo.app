@@ -68,21 +68,31 @@ beforeAll(async () => {
       console.warn('apikey beforeAll warmup parse failed', error)
     }
     if (warmupApiKeyId !== null) {
-      const deleteResponse = await fetch(`${BASE_URL}/apikey/${warmupApiKeyId}`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      })
-      if (!deleteResponse.ok) {
-        console.warn(`apikey beforeAll warmup cleanup delete ${warmupApiKeyId} status=${deleteResponse.status}`)
+      try {
+        const deleteResponse = await fetch(`${BASE_URL}/apikey/${warmupApiKeyId}`, {
+          method: 'DELETE',
+          headers: authHeaders,
+        })
+        if (!deleteResponse.ok) {
+          console.warn(`apikey beforeAll warmup cleanup delete ${warmupApiKeyId} status=${deleteResponse.status}`)
+        }
+      }
+      catch (error) {
+        console.warn(`apikey beforeAll warmup cleanup delete ${warmupApiKeyId} failed`, error)
       }
     }
     else {
-      const [deletedKey] = await executeSQL(
-        `DELETE FROM public.apikeys WHERE name = $1 RETURNING id`,
-        [warmupName],
-      )
-      if (deletedKey?.id) {
-        warmupApiKeyId = Number(deletedKey.id)
+      try {
+        const [deletedKey] = await executeSQL(
+          `DELETE FROM public.apikeys WHERE name = $1 RETURNING id`,
+          [warmupName],
+        )
+        if (deletedKey?.id) {
+          warmupApiKeyId = Number(deletedKey.id)
+        }
+      }
+      catch (error) {
+        console.warn(`apikey beforeAll warmup sql cleanup ${warmupName} failed`, error)
       }
     }
   }
