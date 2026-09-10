@@ -6,7 +6,8 @@
  * Permanent delete requires ALLOW_PERMANENT_R2_DELETE=true (ops-only).
  */
 
-import { CopyObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
+import { CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
+import { permanentDeleteAwsLiveKey } from './aws_permanent_delete.ts'
 import {
   applyR2ConditionalDeleteMiddleware,
   ConcurrencyLimiter,
@@ -211,6 +212,26 @@ async function processKeyBatch(keys: string[]): Promise<void> {
   await Promise.all(keys.map(key => processKey(key)))
 }
 
+async function permanentDeleteKey(key: string): Promise<void> {
+  return limiter.run(async () => {
+    const outcome = await permanentDeleteAwsLiveKey(s3, S3_BUCKET, key)
+    switch (outcome) {
+      case 'deleted':
+      case 'skipped_missing':
+        totalProcessed += 1
+        return
+      case 'skipped_changed':
+        console.warn(`Skipped permanent delete for ${key}: live object changed since discovery; source retained`)
+        totalErrors += 1
+        return
+      case 'failed':
+        console.error(`Failed to permanently delete ${key}: missing guards or transport error; source retained`)
+        totalErrors += 1
+        return
+    }
+  })
+}
+
 async function permanentDeleteBatch(keys: string[]): Promise<void> {
   if (deleteMode !== 'permanent')
     return
@@ -219,21 +240,7 @@ async function permanentDeleteBatch(keys: string[]): Promise<void> {
   if (liveKeys.length === 0)
     return
 
-  try {
-    const response = await s3.send(new DeleteObjectsCommand({
-      Bucket: S3_BUCKET,
-      Delete: { Objects: liveKeys.map(k => ({ Key: k })), Quiet: true },
-    }))
-    const batchErrors = response.Errors ?? []
-    for (const err of batchErrors)
-      console.error(`Failed to permanently delete ${err.Key ?? 'unknown'}: ${err.Code ?? 'unknown'} ${err.Message ?? ''}`)
-    totalErrors += batchErrors.length
-    totalProcessed += liveKeys.length - batchErrors.length
-  }
-  catch (error) {
-    console.error(`Failed to permanently delete batch (${liveKeys.length} keys):`, error)
-    totalErrors += liveKeys.length
-  }
+  await Promise.all(liveKeys.map(key => permanentDeleteKey(key)))
 }
 
 async function listPrefixKeys(prefix: string): Promise<string[]> {
@@ -264,10 +271,8 @@ async function listPrefixKeys(prefix: string): Promise<string[]> {
 async function streamProcessPrefix(prefix: string): Promise<void> {
   const liveKeys = await listPrefixKeys(prefix)
 
-  if (deleteMode === 'permanent') {
-    for (let i = 0; i < liveKeys.length; i += 999)
-      await permanentDeleteBatch(liveKeys.slice(i, i + 999))
-  }
+  if (deleteMode === 'permanent')
+    await permanentDeleteBatch(liveKeys)
   else {
     await processKeyBatch(liveKeys)
   }
@@ -326,10 +331,8 @@ async function main() {
 
   if (files.length > 0) {
     console.log(`\nProcessing ${files.length} files...`)
-    if (deleteMode === 'permanent') {
-      for (let i = 0; i < files.length; i += 999)
-        await permanentDeleteBatch(files.slice(i, i + 999))
-    }
+    if (deleteMode === 'permanent')
+      await permanentDeleteBatch(files)
     else {
       await processKeyBatch(files)
     }
