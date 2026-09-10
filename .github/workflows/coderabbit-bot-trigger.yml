@@ -5,6 +5,7 @@ on:
     branches:
       - 'cursor/**'
       - 'fix/**'
+      - 'wolny/**'
       - 'feat/admin-famous-apps'
       - 'fix/security-ghsa-*'
   pull_request_review:
@@ -40,6 +41,7 @@ jobs:
               const branch = pr.head.ref
               const allowed =
                 branch.startsWith('cursor/')
+                || branch.startsWith('wolny/')
                 || branch === 'feat/admin-famous-apps'
                 || branch.startsWith('fix/security-ghsa-')
               if (!allowed) {
