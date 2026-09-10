@@ -29,9 +29,9 @@ async function continuePastDevelopmentEnvironmentIfShown(page: Page) {
 }
 
 async function continuePastChannelOnboardingIfShown(page: Page) {
-  const cliCommand = page.locator('[data-test="app-onboarding-command-copy"]')
+  const cliSetup = page.locator('[data-test="onboarding-setup-cli"]')
   const routingContinue = page.locator('[data-test="channel-default-routing-continue"]')
-  await expect(routingContinue.or(cliCommand)).toBeVisible({ timeout: 60000 })
+  await expect(routingContinue.or(cliSetup)).toBeVisible({ timeout: 60000 })
   if (!await routingContinue.isVisible())
     return
 
@@ -48,7 +48,7 @@ async function continuePastChannelOnboardingIfShown(page: Page) {
     await expect(continueAfterChannel).toBeVisible()
   }
   await continueAfterChannel.click()
-  await expect(cliCommand).toBeVisible()
+  await expect(cliSetup).toBeVisible()
 }
 
 async function forceWebNativeOnboardingTreatments(email: string, password: string) {
