@@ -389,6 +389,7 @@ export type Database = {
           retention: number
           rollout_channel_count: number
           rollout_paused_version_names: string[]
+          stats_mode: string
           stats_refresh_requested_at: string | null
           stats_updated_at: string | null
           transfer_history: Json[] | null
@@ -422,6 +423,7 @@ export type Database = {
           retention?: number
           rollout_channel_count?: number
           rollout_paused_version_names?: string[]
+          stats_mode?: string
           stats_refresh_requested_at?: string | null
           stats_updated_at?: string | null
           transfer_history?: Json[] | null
@@ -455,6 +457,7 @@ export type Database = {
           retention?: number
           rollout_channel_count?: number
           rollout_paused_version_names?: string[]
+          stats_mode?: string
           stats_refresh_requested_at?: string | null
           stats_updated_at?: string | null
           transfer_history?: Json[] | null

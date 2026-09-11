@@ -8,6 +8,7 @@ import { simpleError200 } from './hono.ts'
 import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { cloudlog } from './logging.ts'
 import { logSkippedSupabaseWrite, shouldSkipSupabaseStatsFallback } from './supabase_write_guard.ts'
+import { applyStatsModeToDevice, applyStatsModeToLogDimensions, normalizeAppStatsMode, type AppStatsMode } from './stats_mode.ts'
 import { backgroundTask, isInternalVersionName } from './utils.ts'
 
 /**
@@ -212,15 +213,18 @@ export function createStatsDevices(c: Context, device: DeviceWithoutCreatedAt) {
   return backgroundTask(c, Promise.resolve(supabaseFallbacks!.trackDevicesSB(c, deviceWithCountry)))
 }
 
-export function sendStatsAndDevice(c: Context, device: DeviceWithoutCreatedAt, statsActions: StatsActions[], isFailedStat = false) {
-  const dimensions = getStatsLogDimensions(c, device)
+export function sendStatsAndDevice(c: Context, device: DeviceWithoutCreatedAt, statsActions: StatsActions[], isFailedStat = false, statsMode: AppStatsMode = 'all') {
+  const normalizedMode = normalizeAppStatsMode(statsMode)
+  const scopedDevice = applyStatsModeToDevice(device, normalizedMode)
+  const dimensions = applyStatsModeToLogDimensions(getStatsLogDimensions(c, scopedDevice), normalizedMode)
   const jobs = []
   statsActions.forEach(({ action, versionName, metadata }) => {
-    jobs.push(createStatsLogs(c, device.app_id, device.device_id, action, versionName ?? device.version_name, metadata, dimensions))
+    const scopedMetadata = normalizedMode === 'billingOnly' ? undefined : metadata
+    jobs.push(createStatsLogs(c, scopedDevice.app_id, scopedDevice.device_id, action, versionName ?? scopedDevice.version_name, scopedMetadata, dimensions))
   })
 
   if (!isFailedStat)
-    jobs.push(createStatsDevices(c, device))
+    jobs.push(createStatsDevices(c, scopedDevice))
 
   return Promise.all(jobs)
 }

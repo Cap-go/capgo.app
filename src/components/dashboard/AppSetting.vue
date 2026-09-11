@@ -308,6 +308,13 @@ async function submit(form: {
     toast.error(error as string)
   }
 
+  try {
+    await updateStatsMode(normalizeStatsModeValue(appRef.value?.stats_mode))
+  }
+  catch (error) {
+    toast.error(error as string)
+  }
+
   isLoading.value = false
 }
 
@@ -560,6 +567,30 @@ async function updateBlockProviderInfraRequests(enabled: boolean) {
   toast.success(t('changed-block-provider-infra-requests'))
   if (appRef.value)
     appRef.value.block_provider_infra_requests = enabled
+}
+
+type AppStatsMode = 'all' | 'updatesOnly' | 'billingOnly'
+
+const statsModeOptions: AppStatsMode[] = ['all', 'updatesOnly', 'billingOnly']
+
+function normalizeStatsModeValue(value: string | null | undefined): AppStatsMode {
+  if (value === 'updatesOnly' || value === 'billingOnly')
+    return value
+  return 'all'
+}
+
+async function updateStatsMode(nextMode: AppStatsMode) {
+  const current = normalizeStatsModeValue(appRef.value?.stats_mode)
+  if (nextMode === current)
+    return Promise.resolve()
+
+  const { error } = await supabase.from('apps').update({ stats_mode: nextMode }).eq('app_id', props.appId)
+  if (error)
+    return Promise.reject(t('cannot-change-stats-mode'))
+
+  toast.success(t('changed-stats-mode'))
+  if (appRef.value)
+    appRef.value.stats_mode = nextMode
 }
 
 async function loadChannels() {
@@ -1508,6 +1539,59 @@ async function transferAppOwnership() {
                 :label="t('allow-preview')"
                 :help="t('allow-preview-help')"
               />
+              <div v-if="appRef" class="space-y-3">
+                <div>
+                  <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                    {{ t('stats-mode-label') }}
+                  </h3>
+                  <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                    {{ t('stats-mode-intro') }}
+                  </p>
+                  <p class="mt-2 text-xs font-medium text-blue-700 dark:text-blue-300">
+                    {{ t('stats-mode-recommended') }}
+                  </p>
+                </div>
+                <fieldset class="space-y-3">
+                  <legend class="sr-only">
+                    {{ t('stats-mode-label') }}
+                  </legend>
+                  <label
+                    v-for="mode in statsModeOptions"
+                    :key="mode"
+                    :for="`stats-mode-${mode}`"
+                    class="block p-4 border rounded-lg cursor-pointer border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-500"
+                    :class="normalizeStatsModeValue(appRef?.stats_mode) === mode ? 'ring-2 ring-blue-500/30 border-blue-500' : ''"
+                  >
+                    <div class="flex items-start gap-3">
+                      <input
+                        :id="`stats-mode-${mode}`"
+                        v-model="appRef.stats_mode"
+                        name="stats_mode"
+                        type="radio"
+                        class="mt-1 radio radio-primary"
+                        :value="mode"
+                      >
+                      <span class="space-y-2">
+                        <span class="block text-sm font-semibold text-slate-800 dark:text-slate-100">
+                          {{ t(`stats-mode-option-${mode}-title`) }}
+                        </span>
+                        <span class="block text-sm text-slate-600 dark:text-slate-300">
+                          {{ t(`stats-mode-option-${mode}-summary`) }}
+                        </span>
+                        <span class="block text-xs text-slate-500 dark:text-slate-400">
+                          {{ t(`stats-mode-option-${mode}-collected`) }}
+                        </span>
+                        <span class="block text-xs text-slate-500 dark:text-slate-400">
+                          {{ t(`stats-mode-option-${mode}-usage`) }}
+                        </span>
+                      </span>
+                    </div>
+                  </label>
+                </fieldset>
+                <p class="text-xs text-slate-500 dark:text-slate-400">
+                  {{ t('stats-mode-server-note') }}
+                </p>
+              </div>
               <FormKit
                 type="checkbox"
                 name="allow_device_custom_id"

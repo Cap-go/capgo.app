@@ -46,6 +46,7 @@ function normalizeAppRow(app: AppIconSource): AppRow {
     onboarding_completed_at: 'onboarding_completed_at' in app ? app.onboarding_completed_at : null,
     rollout_channel_count: 'rollout_channel_count' in app ? app.rollout_channel_count : 0,
     rollout_paused_version_names: 'rollout_paused_version_names' in app ? app.rollout_paused_version_names : [],
+    stats_mode: 'stats_mode' in app ? app.stats_mode : 'all',
   }
 }
 

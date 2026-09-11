@@ -15,6 +15,7 @@ import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { createSignedImageUrl, getStorageAllowedOrigins, resolveWritableImageValue } from '../../utils/storage.ts'
 import { supabaseAdmin, supabaseApikey, supabaseWithAuth } from '../../utils/supabase.ts'
+import { normalizeAppStatsMode } from '../../plugin_runtime/utils/stats_mode.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
 interface UpdateApp {
@@ -26,6 +27,7 @@ interface UpdateApp {
   need_onboarding?: boolean
   existing_app?: boolean
   block_provider_infra_requests?: boolean
+  stats_mode?: string
   ios_store_url?: string | null
   android_store_url?: string | null
   onboarding?: unknown
@@ -129,6 +131,14 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     throw quickError(400, 'retention_to_small', 'Retention cannot be smaller than 0', { retention: body.retention })
   }
 
+  if (body.stats_mode !== undefined) {
+    const normalizedStatsMode = normalizeAppStatsMode(body.stats_mode)
+    if (body.stats_mode !== normalizedStatsMode) {
+      throw quickError(400, 'invalid_stats_mode', 'stats_mode must be all, updatesOnly, or billingOnly', { stats_mode: body.stats_mode })
+    }
+    body.stats_mode = normalizedStatsMode
+  }
+
   const onboardingPatch = parseAppOnboardingPatch(body.onboarding)
   const canUpdateSettings = await checkPermission(c, 'app.update_settings', { appId })
   const auth = c.get('auth')
@@ -176,6 +186,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     body.allow_device_custom_id,
     body.existing_app,
     body.block_provider_infra_requests,
+    body.stats_mode,
     body.ios_store_url,
     body.android_store_url,
   ]
@@ -259,6 +270,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
           need_onboarding: body.need_onboarding,
           existing_app: body.existing_app,
           block_provider_infra_requests: body.block_provider_infra_requests,
+          stats_mode: body.stats_mode,
           ios_store_url: body.ios_store_url,
           android_store_url: body.android_store_url,
         })
