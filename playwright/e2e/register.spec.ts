@@ -20,10 +20,35 @@ async function continuePastWelcome(page: Page) {
 
 async function continuePastDevelopmentEnvironmentIfShown(page: Page) {
   const assistantOption = page.locator('[data-test="onboarding-development-environment-ai_assistant"]')
+  const appNameInput = page.locator('[data-test="app-onboarding-name"]')
+  await expect(assistantOption.or(appNameInput)).toBeVisible()
   if (await assistantOption.isVisible()) {
     await assistantOption.click()
     await page.click('[data-test="app-onboarding-continue-development-environment"]')
   }
+}
+
+async function continuePastChannelOnboardingIfShown(page: Page) {
+  const cliSetup = page.locator('[data-test="onboarding-setup-cli"]')
+  const routingContinue = page.locator('[data-test="channel-default-routing-continue"]')
+  await expect(routingContinue.or(cliSetup)).toBeVisible({ timeout: 60000 })
+  if (!await routingContinue.isVisible())
+    return
+
+  await routingContinue.click()
+  await page.locator('[data-test="channel-self-assign-continue"]').click()
+  await page.locator('[data-test="channel-console-assign-continue"]').click()
+
+  const createChannel = page.locator('[data-test="channel-create-submit"]')
+  const continueAfterChannel = page.locator('[data-test="channel-create-continue"]')
+  await expect(createChannel.or(continueAfterChannel)).toBeVisible()
+  if (await createChannel.isVisible()) {
+    await page.locator('[data-test="channel-create-name"]').fill('production')
+    await createChannel.click()
+    await expect(continueAfterChannel).toBeVisible()
+  }
+  await continueAfterChannel.click()
+  await expect(cliSetup).toBeVisible()
 }
 
 async function forceWebNativeOnboardingTreatments(email: string, password: string) {
@@ -158,7 +183,7 @@ test.describe('Registration', () => {
     await expect(page.locator('[data-test="app-onboarding-command-copy"]')).toHaveCount(0)
     await page.click('[data-test="onboarding-finish"]')
 
-    await expect(page.locator('[data-test="app-onboarding-command-copy"]')).toBeVisible({ timeout: 60000 })
+    await continuePastChannelOnboardingIfShown(page)
     await expect(page.locator('[data-test="onboarding-technical-invite"]')).toBeVisible()
     await expect(page).toHaveURL(/\/onboarding\/app/)
   })

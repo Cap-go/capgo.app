@@ -11,7 +11,11 @@ import {
   FRONTEND_ONBOARDING_MAX_RANGE_MS,
   getAdminFrontendOnboardingAnalytics,
 } from '../supabase/functions/_backend/utils/frontend_onboarding_analytics.ts'
-import { buildFrontendOnboardingProductionHostHogql } from '../supabase/functions/_backend/utils/frontend_onboarding_analytics_model.ts'
+import {
+  buildFrontendOnboardingProductionHostHogql,
+  isFrontendOnboardingVersionLabel,
+  WEBNATIVE_ONBOARDING_VERSION_LABELS,
+} from '../supabase/functions/_backend/utils/frontend_onboarding_analytics_model.ts'
 import { createFrontendOnboardingDailySetupCliOutcomeCounts } from '../supabase/functions/_backend/utils/frontend_onboarding_daily_setup_cli_outcomes_model.ts'
 
 const { cloudlogErrMock, queryPosthogHogqlMock } = vi.hoisted(() => ({
@@ -65,6 +69,15 @@ describe('buildFrontendOnboardingProductionHostHogql', () => {
   })
 })
 
+describe('frontend onboarding version labels', () => {
+  it('accepts every active experiment analytics version', () => {
+    expect(WEBNATIVE_ONBOARDING_VERSION_LABELS).toEqual(['5.A', '5.C', '5.E', '5.F', '5.G'])
+    for (const version of WEBNATIVE_ONBOARDING_VERSION_LABELS)
+      expect(isFrontendOnboardingVersionLabel(version)).toBe(true)
+    expect(isFrontendOnboardingVersionLabel('5.D')).toBe(false)
+  })
+})
+
 describe('buildFrontendOnboardingHogql', () => {
   it('queries supported pre-org attempts and joins actor-scoped CLI starts by human identity', () => {
     const query = buildFrontendOnboardingHogql(
@@ -86,9 +99,9 @@ describe('buildFrontendOnboardingHogql', () => {
     expect(query).toContain('JSONExtractString(toString(properties), \'flow\') = \'pre_org\'')
     expect(query).toContain('JSONExtractString(toString(properties), \'$host\') = \'console.capgo.app\'')
     expectAugust22ProductionHostFallback(query)
-    expect(query).toContain("multiIf(toString(properties.onboarding_version) IN ('5.A', '5.C'), 4, toIntOrZero(toString(properties.onboarding_version))) AS onboarding_version")
+    expect(query).toContain("multiIf(toString(properties.onboarding_version) IN ('5.A', '5.C', '5.E', '5.F', '5.G'), 4, toIntOrZero(toString(properties.onboarding_version))) AS onboarding_version")
     expect(query).toContain("toIntOrZero(toString(properties.onboarding_version)) IN (1, 2, 3, 4)")
-    expect(query).toContain("toString(properties.onboarding_version) IN ('5.A', '5.C')")
+    expect(query).toContain("toString(properties.onboarding_version) IN ('5.A', '5.C', '5.E', '5.F', '5.G')")
     expect(query).not.toContain('toInt64OrZero')
     expect(query).toContain('JSONExtractString(toString(properties), \'onboarding_attempt_id\')')
     expect(query).toContain('JSONExtractString(toString(properties), \'step\')')
@@ -136,7 +149,7 @@ describe('buildFrontendOnboardingWelcomeHogql', () => {
 
     expect(query).toContain("event = 'onboarding_step_viewed'")
     expect(query).toContain("toIntOrZero(toString(properties.onboarding_version)) = 4")
-    expect(query).toContain("toString(properties.onboarding_version) IN ('5.A', '5.C')")
+    expect(query).toContain("toString(properties.onboarding_version) IN ('5.A', '5.C', '5.E', '5.F', '5.G')")
     expect(query).toContain("JSONExtractString(toString(properties), 'flow') = 'pre_org'")
     expect(query).toContain("JSONExtractString(toString(properties), '$host') = 'console.capgo.app'")
     expectAugust22ProductionHostFallback(query)
@@ -169,7 +182,7 @@ describe('buildFrontendOnboardingTabSwitchHogql', () => {
     expect(query).toContain("JSONExtractString(toString(properties), '$host') = 'console.capgo.app'")
     expectAugust22ProductionHostFallback(query)
     expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) = 4')
-    expect(query).toContain("toString(properties.onboarding_version) IN ('5.A', '5.C')")
+    expect(query).toContain("toString(properties.onboarding_version) IN ('5.A', '5.C', '5.E', '5.F', '5.G')")
     expect(query).toContain("toString(toDate(toTimeZone(timestamp, 'UTC'))) AS date")
     expect(query).not.toContain("toDate(timestamp, 'UTC')")
     expect(query).toContain("step IN ('welcome', 'intent', 'app_name', 'app_id', 'app_icon', 'organization')")

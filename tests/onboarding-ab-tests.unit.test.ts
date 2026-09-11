@@ -1,9 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
+  hasNewChannelTreatment,
   hasWebNativeDevelopmentEnvironmentTreatment,
   hasWebNativePublishIntentTreatment,
+  NEW_CHANNEL_AB_TEST,
   parseOnboardingABTestAssignments,
+  reconcileOnboardingABTestAssignments,
   resolveOnboardingAnalyticsVersion,
   shouldShowWebNativePublishIntent,
   shouldShowWebNativeRecommendation,
@@ -26,6 +29,24 @@ function onboardingFor(publishBranch: 'A' | 'B', environmentBranch: 'C' | 'D') {
       [WEBNATIVE_DEVELOPMENT_ENVIRONMENT_AB_TEST]: {
         assigned_at: '2026-09-01T00:00:00.000Z',
         branch: environmentBranch,
+      },
+    },
+  }
+}
+
+function onboardingWithNewChannel(
+  publishBranch: 'A' | 'B',
+  environmentBranch: 'C' | 'D',
+  channelBranch: 'A' | 'B',
+) {
+  const onboarding = onboardingFor(publishBranch, environmentBranch)
+  return {
+    ...onboarding,
+    abtests: {
+      ...onboarding.abtests,
+      [NEW_CHANNEL_AB_TEST]: {
+        assigned_at: '2026-09-10T00:00:00.000Z',
+        branch: channelBranch,
       },
     },
   }
@@ -57,11 +78,37 @@ describe('webNativeApp onboarding A/B tests', () => {
     })
   })
 
+  it.concurrent('configures a 50/50 channel experiment for exact OTA and both intents', () => {
+    expect(abTestsConfig[NEW_CHANNEL_AB_TEST]).toEqual({
+      audience: 'self_signup',
+      comment: 'Shows the guided channel education and creation flow.',
+      control_branch: 'B',
+      intents: ['ota', 'both'],
+      treatment_branch: 'A',
+      treatment_percentage: 50,
+      branches: {
+        A: { bento_tag: 'ab:new_channel' },
+        B: { bento_tag: 'ab:no_new_channel' },
+      },
+    })
+  })
+
   it.concurrent('uses 5.C when C is present, then 5.A for A-only users, and otherwise stays on V4', () => {
     expect(resolveOnboardingAnalyticsVersion(onboardingFor('A', 'C'))).toBe('5.C')
     expect(resolveOnboardingAnalyticsVersion(onboardingFor('B', 'C'))).toBe('5.C')
     expect(resolveOnboardingAnalyticsVersion(onboardingFor('A', 'D'))).toBe('5.A')
     expect(resolveOnboardingAnalyticsVersion(onboardingFor('B', 'D'))).toBe(4)
+  })
+
+  it.concurrent('uses the channel experiment analytics versions with explicit precedence', () => {
+    expect(resolveOnboardingAnalyticsVersion(onboardingWithNewChannel('B', 'D', 'A'), 'ota')).toBe('5.E')
+    expect(resolveOnboardingAnalyticsVersion(onboardingWithNewChannel('A', 'C', 'A'), 'ota')).toBe('5.F')
+    expect(resolveOnboardingAnalyticsVersion(onboardingWithNewChannel('A', 'D', 'A'), 'ota')).toBe('5.G')
+    expect(resolveOnboardingAnalyticsVersion(onboardingWithNewChannel('A', 'D', 'A'), 'both')).toBe('5.G')
+    expect(resolveOnboardingAnalyticsVersion(onboardingWithNewChannel('A', 'D', 'A'), 'builder')).toBe('5.E')
+    expect(resolveOnboardingAnalyticsVersion(onboardingWithNewChannel('A', 'D', 'B'), 'ota')).toBe('5.A')
+    expect(hasNewChannelTreatment(onboardingWithNewChannel('B', 'D', 'A'))).toBe(true)
+    expect(hasNewChannelTreatment(onboardingWithNewChannel('B', 'D', 'B'))).toBe(false)
   })
 
   it.concurrent('shows the publish intent for either treatment and the environment question only for C', () => {
@@ -95,5 +142,12 @@ describe('webNativeApp onboarding A/B tests', () => {
     expect(parseOnboardingABTestAssignments(null)).toBeNull()
     expect(parseOnboardingABTestAssignments({ invalid: { assigned_at: 12, branch: 'A' } })).toBeNull()
     expect(parseOnboardingABTestAssignments({ invalid: { assigned_at: 'now', branch: 'Z' } })).toBeNull()
+  })
+
+  it.concurrent('removes a revoked channel assignment while preserving unrelated tests', () => {
+    const current = onboardingWithNewChannel('A', 'D', 'A').abtests
+    const authoritative = onboardingFor('A', 'D').abtests
+
+    expect(reconcileOnboardingABTestAssignments(current, authoritative)).toEqual(authoritative)
   })
 })
