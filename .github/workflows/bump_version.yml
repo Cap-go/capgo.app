@@ -27,11 +27,6 @@ jobs:
       notifications_release_as: ${{ steps.notifications.outputs.release_as }}
       run_any: ${{ steps.capgo.outputs.should_release == 'true' || steps.cli.outputs.should_release == 'true' || steps.notifications.outputs.should_release == 'true' }}
     steps:
-      - name: Reject version workflow re-run
-        if: ${{ github.run_attempt != 1 }}
-        run: |
-          echo "::error::Version-generation workflows cannot be re-run. Push a new commit so release scope is recalculated from the current branch."
-          exit 1
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -41,6 +36,29 @@ jobs:
         with:
           fetch-depth: 0
           filter: blob:none
+      - name: Validate safe version workflow re-run
+        if: ${{ github.run_attempt > 1 }}
+        run: |
+          set -euo pipefail
+
+          current_sha="$(git ls-remote --heads origin "refs/heads/$GITHUB_REF_NAME" | cut -f1)"
+          if [ "$current_sha" != "$GITHUB_SHA" ]; then
+            echo "::error::$GITHUB_REF_NAME advanced after this workflow started. Retry the latest commit instead."
+            exit 1
+          fi
+
+          git fetch --force --prune --prune-tags origin '+refs/tags/*:refs/tags/*'
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            all_release_tags="$(git tag --contains "$GITHUB_SHA" --list 'capgo-[0-9]*' 'cli-[0-9]*' 'notifications-[0-9]*')"
+            release_tags="$(printf '%s\n' "$all_release_tags" | grep -v -- '-alpha\.' || true)"
+          else
+            release_tags="$(git tag --contains "$GITHUB_SHA" --list 'capgo-*-alpha.*' 'cli-*-alpha.*' 'notifications-*-alpha.*')"
+          fi
+          if [ -n "$release_tags" ]; then
+            echo "::error::A release tag already contains $GITHUB_SHA; this workflow must not publish it again."
+            printf '%s\n' "$release_tags"
+            exit 1
+          fi
       - name: Setup bun
         run: bash scripts/setup-bun.sh
       - name: Resolve release environment
@@ -87,11 +105,6 @@ jobs:
     outputs:
       published: ${{ steps.publish.outputs.published }}
     steps:
-      - name: Reject version workflow re-run
-        if: ${{ github.run_attempt != 1 }}
-        run: |
-          echo "::error::Version-generation workflows cannot be re-run. Push a new commit so release scope is recalculated from the current branch."
-          exit 1
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -102,6 +115,29 @@ jobs:
           fetch-depth: 0
           filter: blob:none
           token: "${{ secrets.PERSONAL_ACCESS_TOKEN }}"
+      - name: Validate safe version workflow re-run
+        if: ${{ github.run_attempt > 1 }}
+        run: |
+          set -euo pipefail
+
+          current_sha="$(git ls-remote --heads origin "refs/heads/$GITHUB_REF_NAME" | cut -f1)"
+          if [ "$current_sha" != "$GITHUB_SHA" ]; then
+            echo "::error::$GITHUB_REF_NAME advanced after this workflow started. Retry the latest commit instead."
+            exit 1
+          fi
+
+          git fetch --force --prune --prune-tags origin '+refs/tags/*:refs/tags/*'
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            all_release_tags="$(git tag --contains "$GITHUB_SHA" --list 'capgo-[0-9]*' 'cli-[0-9]*' 'notifications-[0-9]*')"
+            release_tags="$(printf '%s\n' "$all_release_tags" | grep -v -- '-alpha\.' || true)"
+          else
+            release_tags="$(git tag --contains "$GITHUB_SHA" --list 'capgo-*-alpha.*' 'cli-*-alpha.*' 'notifications-*-alpha.*')"
+          fi
+          if [ -n "$release_tags" ]; then
+            echo "::error::A release tag already contains $GITHUB_SHA; this workflow must not publish it again."
+            printf '%s\n' "$release_tags"
+            exit 1
+          fi
       - name: Setup bun
         run: bash scripts/setup-bun.sh
       - name: Install dependencies

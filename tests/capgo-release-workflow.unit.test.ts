@@ -65,18 +65,25 @@ describe('native-aware Capgo release workflow', () => {
     expect(workflow.jobs?.['bump-version']?.if).not.toContain("chore(auto-sync):")
   })
 
-  it.concurrent('fails every version-generation re-run before it can create tags', async () => {
+  it.concurrent('allows only unpublished reruns for the current branch tip', async () => {
     const workflow = parseWorkflow(await readWorkflow(workflowPaths.bump))
 
     for (const jobName of ['changes', 'bump-version']) {
       const steps = workflow.jobs?.[jobName]?.steps ?? []
-      const guard = steps.find(step => step.name === 'Reject version workflow re-run')
+      const guard = steps.find(step => step.name === 'Validate safe version workflow re-run')
+      const checkoutIndex = steps.findIndex(step => step.uses?.startsWith('actions/checkout@'))
 
-      expect(guard, `${jobName} must reject re-runs independently`).toBeDefined()
-      expect(guard?.if).toBe('${{ github.run_attempt != 1 }}')
-      expect(guard?.run).toContain('Version-generation workflows cannot be re-run')
+      expect(guard, `${jobName} must validate re-runs independently`).toBeDefined()
+      expect(guard?.if).toBe('${{ github.run_attempt > 1 }}')
+      expect(guard?.run).toContain('git ls-remote --heads origin')
+      expect(guard?.run).toContain('current_sha" != "$GITHUB_SHA')
+      expect(guard?.run).toContain('git fetch --force --prune --prune-tags origin')
+      expect(guard?.run).toContain('all_release_tags="$(git tag --contains "$GITHUB_SHA"')
+      expect(guard?.run).toContain("printf '%s\\n' \"$all_release_tags\" | grep -v -- '-alpha\\.' || true")
+      expect(guard?.run).toContain("'capgo-*-alpha.*'")
+      expect(guard?.run).toContain('A release tag already contains')
       expect(guard?.run).toContain('exit 1')
-      expect(steps.indexOf(guard!)).toBe(0)
+      expect(steps.indexOf(guard!)).toBeGreaterThan(checkoutIndex)
     }
   })
 
