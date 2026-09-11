@@ -404,6 +404,59 @@ describe('posthog helper', () => {
     expect(body.properties.pg_error_code).toBe('42P01')
   })
 
+  it('strips bound query parameters and keeps the Postgres cause for drizzle errors', async () => {
+    const { capturePosthogException } = await import('../supabase/functions/_backend/utils/posthog.ts')
+    envState.posthogApiHost = 'https://eu.i.posthog.com/i/v0/e'
+
+    await capturePosthogException(createContext(), {
+      error: Object.assign(new Error('Failed query: select "campaigns" from "notification_campaigns" where "owner_org" = $1\nparams: 00000000-0000-0000-0000-000000000000'), {
+        name: 'DrizzleQueryError',
+        cause: Object.assign(new Error('canceling statement due to statement timeout'), {
+          code: '57014',
+        }),
+      }),
+      functionName: 'api',
+      kind: 'drizzle_error',
+      status: 500,
+    })
+
+    const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)
+    const value = body.properties.$exception_list[0].value
+    expect(value).not.toContain('params:')
+    expect(value).not.toContain('00000000-0000-0000-0000-000000000000')
+    expect(body.properties.pg_error_code).toBe('57014')
+    expect(body.properties.database_cause.message).toBe('canceling statement due to statement timeout')
+  })
+
+  it('keeps the Postgres cause when a route wraps the failure in an HTTP error', async () => {
+    const { capturePosthogException } = await import('../supabase/functions/_backend/utils/posthog.ts')
+    envState.posthogApiHost = 'https://eu.i.posthog.com/i/v0/e'
+
+    const originalCause = Object.assign(new Error('Failed query: select "campaigns" from "notification_campaigns" where "owner_org" = $1\nparams: 00000000-0000-0000-0000-000000000000'), {
+      name: 'DrizzleQueryError',
+      cause: Object.assign(new Error('relation "notification_campaigns" does not exist'), {
+        code: '42P01',
+      }),
+    })
+    const httpException = Object.assign(new Error('Failed to load organization notification overview'), {
+      status: 503,
+      getResponse: () => new Response(),
+      cause: { error: 'notification_overview_unavailable', message: 'Failed to load organization notification overview', moreInfo: {}, originalCause: originalCause },
+    })
+
+    await capturePosthogException(createContext(), {
+      error: httpException,
+      functionName: 'api',
+      kind: 'http_exception',
+      status: 503,
+    })
+
+    const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)
+    expect(body.properties.$exception_list[0].value).not.toContain('params:')
+    expect(body.properties.pg_error_code).toBe('42P01')
+    expect(body.properties.database_cause.message).toBe('relation "notification_campaigns" does not exist')
+  })
+
   it('logs and skips exception delivery when the configured PostHog host is invalid', async () => {
     const { capturePosthogException } = await import('../supabase/functions/_backend/utils/posthog.ts')
     envState.posthogApiHost = '://bad-host'

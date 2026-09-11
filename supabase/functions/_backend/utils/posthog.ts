@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
-import { drizzleErrorFingerprintSegment, readPgErrorCode } from './pg_errors.ts'
+import { drizzleErrorFingerprintSegment, isDatabaseOriginError, readPgErrorCode, readPgErrorField, readQuickErrorOriginalCause } from './pg_errors.ts'
 import { existInEnv, getEnv, trimTrailingSlashes } from './utils.ts'
 
 const POSTHOG_CAPTURE_URL = 'https://eu.i.posthog.com/capture/'
@@ -276,6 +276,28 @@ function parseExceptionFrames(stack: string | undefined, fallbackFunctionName: s
       }]
 }
 
+// A DrizzleQueryError message ends with a `params: ...` line that repeats the
+// bound query values (org UUIDs and other request data). Those carry no
+// diagnostic value, so drop them before the message leaves the worker.
+function stripDrizzleQueryParams(message: string | undefined): string {
+  if (!message)
+    return ''
+  const paramsIndex = message.search(/\n\s*params:/i)
+  return paramsIndex === -1 ? message : message.slice(0, paramsIndex).trimEnd()
+}
+
+// The real Postgres failure hides one or two levels down: Drizzle exposes it on
+// `.cause`, and quickError() stores it under `.cause.originalCause`. Return the
+// serialized reason (name + param-free message) so error tracking keeps it.
+function serializeDatabaseCause(databaseError: unknown) {
+  const nestedCause = readPgErrorField(databaseError, 'cause')
+  const serialized = serializeError(nestedCause ?? databaseError)
+  return {
+    name: serialized.name,
+    message: stripDrizzleQueryParams(serialized.message),
+  }
+}
+
 export async function capturePosthogException(c: Context, payload: {
   error: unknown
   functionName: string
@@ -313,9 +335,14 @@ export async function capturePosthogException(c: Context, payload: {
     topFrame?.filename || 'unknown',
     String(payload.status ?? 500),
   ].join(':')
-  const pgErrorCode = payload.kind === 'drizzle_error'
-    ? readPgErrorCode(payload.error)
-    : undefined
+  // Resolve the underlying database error whether the failure reached us raw
+  // (Drizzle) or wrapped in an HTTP error by quickError(). Enriching from it
+  // keeps a route that maps a query failure to quickError(..., cause) as
+  // diagnosable as a raw Drizzle error.
+  const databaseError = readQuickErrorOriginalCause(payload.error) ?? payload.error
+  const hasDatabaseCause = isDatabaseOriginError(databaseError)
+  const pgErrorCode = hasDatabaseCause ? readPgErrorCode(databaseError) : undefined
+  const databaseCause = hasDatabaseCause ? serializeDatabaseCause(databaseError) : undefined
 
   const body = {
     token: apiKey,
@@ -324,7 +351,7 @@ export async function capturePosthogException(c: Context, payload: {
       distinct_id: distinctId,
       $exception_list: [{
         type: serializedError.name || 'Error',
-        value: serializedError.message,
+        value: stripDrizzleQueryParams(serializedError.message),
         mechanism: {
           handled: true,
           synthetic: false,
@@ -342,6 +369,7 @@ export async function capturePosthogException(c: Context, payload: {
       status: payload.status,
       url_path: requestPath,
       ...(pgErrorCode ? { pg_error_code: pgErrorCode } : {}),
+      ...(databaseCause ? { database_cause: databaseCause } : {}),
     },
     timestamp: new Date().toISOString(),
   }
