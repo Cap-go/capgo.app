@@ -49,7 +49,8 @@ jobs:
 
           git fetch --force --prune --prune-tags origin '+refs/tags/*:refs/tags/*'
           if [ "$GITHUB_REF_NAME" = "main" ]; then
-            release_tags="$(git tag --contains "$GITHUB_SHA" --list 'capgo-[0-9]*' 'cli-[0-9]*' 'notifications-[0-9]*' | grep -v -- '-alpha\.' || true)"
+            all_release_tags="$(git tag --contains "$GITHUB_SHA" --list 'capgo-[0-9]*' 'cli-[0-9]*' 'notifications-[0-9]*')"
+            release_tags="$(printf '%s\n' "$all_release_tags" | grep -v -- '-alpha\.' || true)"
           else
             release_tags="$(git tag --contains "$GITHUB_SHA" --list 'capgo-*-alpha.*' 'cli-*-alpha.*' 'notifications-*-alpha.*')"
           fi
@@ -127,7 +128,8 @@ jobs:
 
           git fetch --force --prune --prune-tags origin '+refs/tags/*:refs/tags/*'
           if [ "$GITHUB_REF_NAME" = "main" ]; then
-            release_tags="$(git tag --contains "$GITHUB_SHA" --list 'capgo-[0-9]*' 'cli-[0-9]*' 'notifications-[0-9]*' | grep -v -- '-alpha\.' || true)"
+            all_release_tags="$(git tag --contains "$GITHUB_SHA" --list 'capgo-[0-9]*' 'cli-[0-9]*' 'notifications-[0-9]*')"
+            release_tags="$(printf '%s\n' "$all_release_tags" | grep -v -- '-alpha\.' || true)"
           else
             release_tags="$(git tag --contains "$GITHUB_SHA" --list 'capgo-*-alpha.*' 'cli-*-alpha.*' 'notifications-*-alpha.*')"
           fi
