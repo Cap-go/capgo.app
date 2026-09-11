@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 import {
   matchesComponent,
   resolvePendingReleaseScope,
@@ -100,6 +101,22 @@ describe('release scope matching', () => {
     expect(packageJson.publishConfig?.access).toBe('public')
     expect(workflow).toContain('--access public')
     expect(workflow).not.toContain('--access restricted')
+  })
+
+  it.concurrent('stages notifications releases for automated 2FA approval', () => {
+    const workflow = readFileSync('.github/workflows/publish_notifications.yml', 'utf8')
+
+    expect(() => parse(workflow)).not.toThrow()
+    expect(workflow).toContain('npm install -g npm@^11.15.0')
+    expect(workflow).toContain('npm stage publish --tag latest --provenance --access public --ignore-scripts')
+    expect(workflow).toContain('npm stage publish --tag next --provenance --access public --ignore-scripts')
+    expect(workflow).toContain('NODE_AUTH_TOKEN: $' + '{{ secrets.NPM_TOKEN }}')
+    expect(workflow).toContain('GH_TOKEN: $' + '{{ secrets.NPM_STAGE_DISPATCH_TOKEN }}')
+    expect(workflow).toContain('repos/Cap-go/automations/dispatches')
+    expect(workflow).toContain('-f event_type=npm-stage-approve')
+    expect(workflow).toContain('working-directory: packages/capacitor-notifications')
+    expect(workflow).not.toContain('bun publish')
+    expect(workflow).not.toContain('NPM_CONFIG_TOKEN')
   })
 
   it.concurrent('builds package changelogs from the last successful component release', () => {
