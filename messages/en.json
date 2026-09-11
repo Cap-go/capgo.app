@@ -3399,5 +3399,13 @@
   "frontend-onboarding-daily-setup-cli-no-action": "No action",
   "frontend-onboarding-people": "people",
   "frontend-onboarding-no-dropoff": "No drop-off",
-  "frontend-onboarding-transition": "{from} → {to}"
+  "frontend-onboarding-transition": "{from} → {to}",
+  "admin-ab-tests": "A/B Tests",
+  "admin-ab-tests-description": "Assignment distribution across every experiment.",
+  "admin-ab-tests-total": "{tests} tests · {assignments} assignments",
+  "admin-ab-tests-experiment": "Experiment",
+  "admin-ab-tests-variant": "Variant",
+  "admin-ab-tests-assignments": "{count} assignments",
+  "admin-ab-tests-load-error": "Unable to load A/B test distribution. Please try again.",
+  "admin-ab-tests-empty": "No A/B tests are configured."
 }

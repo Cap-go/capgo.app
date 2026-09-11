@@ -1,6 +1,7 @@
 import type { Tab } from '~/components/comp_def'
 import IconArrowPath from '~icons/heroicons/arrow-path'
 import IconBanknotes from '~icons/heroicons/banknotes'
+import IconBeaker from '~icons/heroicons/beaker'
 import IconBell from '~icons/heroicons/bell'
 import IconBuildingOffice from '~icons/heroicons/building-office-2'
 import IconChartBar from '~icons/heroicons/chart-bar-square'
@@ -22,6 +23,7 @@ export const adminTabs: Tab[] = [
   { label: 'channel-surfing', icon: IconSignal, key: '/channel-surfing' },
   { label: 'users', icon: IconUsers, key: '/users' },
   { label: 'frontend-onboarding', icon: IconChartBar, key: '/frontend-onboarding' },
+  { label: 'admin-ab-tests', icon: IconBeaker, key: '/ab-tests' },
   { label: 'admin-organizations', icon: IconBuildingOffice, key: '/organizations' },
   { label: 'famous-apps', icon: IconSparkles, key: '/famous-apps' },
   { label: 'revenue', icon: IconBanknotes, key: '/revenue' },

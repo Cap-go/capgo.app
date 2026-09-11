@@ -2,6 +2,7 @@ import type Stripe from 'stripe'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
+import { getAdminABTestDistribution } from '../utils/ab_test_distribution.ts'
 import { getAdminBuilderAnalytics } from '../utils/builder_analytics.ts'
 import { getAdminBuilderCapacity } from '../utils/builder_capacity.ts'
 import { getAdminChannelSurfing } from '../utils/channel_surfing.ts'
@@ -23,6 +24,7 @@ const ISO_UTC_DATETIME_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$
 const INVALID_ADMIN_STATS_DATE = 'Expected ISO 8601 UTC datetime string'
 
 const metricCategories = [
+  'ab_test_distribution',
   'uploads',
   'distribution',
   'failures',
@@ -200,6 +202,10 @@ app.post('/', middlewareAuth, async (c) => {
     let result
 
     switch (metric_category) {
+      case 'ab_test_distribution':
+        result = await getAdminABTestDistribution(c)
+        break
+
       case 'uploads':
         result = await getAdminUploadMetrics(c, start_date, end_date, app_id)
         break
