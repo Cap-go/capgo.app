@@ -4,6 +4,7 @@ import {
   APP_ONBOARDING_STEP_IDS,
   appendAppOnboardingStepHistory,
   applyAppOnboardingPatch,
+  getAppOnboardingStepHistoryChanges,
   defaultAppOnboarding,
   mergeAppOnboarding,
   parseAppOnboarding,
@@ -147,5 +148,17 @@ describe('app onboarding merge', () => {
     const duplicate = appendAppOnboardingStepHistory(current, duplicateMerge, duplicatePatch, () => 'server-duplicate')
     const duplicateSetup = duplicate.setup as { steps: { build_project: { update_history: unknown[] } } }
     expect(duplicateSetup.steps.build_project.update_history).toEqual(history)
+    expect(getAppOnboardingStepHistoryChanges(current, duplicate, duplicatePatch)).toEqual([])
+
+    const changedPatch = { steps: { add_app: { status: 'done' as const, at: 'step-new' } } }
+    const changedMerge = applyAppOnboardingPatch(current, changedPatch, () => 'merge-new')
+    const changed = appendAppOnboardingStepHistory(current, changedMerge, changedPatch, () => 'server-new')
+    expect(getAppOnboardingStepHistoryChanges(current, changed, changedPatch)).toEqual([{
+      stepId: 'add_app',
+      status: 'done',
+      at: 'server-new',
+      historyLength: 1,
+      historyFull: false,
+    }])
   })
 })

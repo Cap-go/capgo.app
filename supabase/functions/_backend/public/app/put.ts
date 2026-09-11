@@ -4,7 +4,8 @@ import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { sql } from 'drizzle-orm'
 import { buildAppCreatorEventDetails } from '../../utils/app_creator.ts'
-import { appendAppOnboardingStepHistory, parseAppOnboardingPatch } from '../../utils/appOnboarding.ts'
+import { buildAppOnboardingStepPosthogEvent } from '../../utils/app_onboarding_posthog.ts'
+import { appendAppOnboardingStepHistory, getAppOnboardingStepHistoryChanges, parseAppOnboarding, parseAppOnboardingPatch } from '../../utils/appOnboarding.ts'
 import { deleteAppStatus } from '../../utils/appStatus.ts'
 import { trackBentoEvent } from '../../utils/bento.ts'
 import { createIfNotExistStoreInfo } from '../../utils/cloudflare.ts'
@@ -12,10 +13,11 @@ import { lockOnboardingApp, unlockOnboardingApp } from '../../utils/demo.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
+import { trackPosthogEvent } from '../../utils/posthog.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { createSignedImageUrl, getStorageAllowedOrigins, resolveWritableImageValue } from '../../utils/storage.ts'
 import { supabaseAdmin, supabaseApikey, supabaseWithAuth } from '../../utils/supabase.ts'
-import { isValidAppId } from '../../utils/utils.ts'
+import { backgroundTask, isValidAppId } from '../../utils/utils.ts'
 
 interface UpdateApp {
   name?: string
@@ -63,7 +65,7 @@ async function persistAppOnboarding(
               SELECT * FROM public.apps WHERE app_id = ${appId}
             `)
         app ??= current?.rows[0] as Database['public']['Tables']['apps']['Row'] | undefined
-        return app ? { app, completed } : undefined
+        return app ? { app, completed, historyChanges: [] } : undefined
       }
 
       const currentResult = await tx.execute<{ onboarding: unknown }>(sql`
@@ -85,6 +87,7 @@ async function persistAppOnboarding(
       if (!mergeResult.rows[0])
         throw new Error('Cannot merge app onboarding progress')
       const onboarding = appendAppOnboardingStepHistory(currentOnboarding, mergeResult.rows[0]?.onboarding, patch)
+      const historyChanges = getAppOnboardingStepHistoryChanges(currentOnboarding, onboarding, patch)
       const result = await tx.execute<Database['public']['Tables']['apps']['Row']>(sql`
         UPDATE public.apps
         SET onboarding = ${JSON.stringify(onboarding)}::jsonb,
@@ -105,6 +108,7 @@ async function persistAppOnboarding(
       return {
         app: (refreshed.rows[0] ?? row) as Database['public']['Tables']['apps']['Row'],
         completed,
+        historyChanges,
       }
     })
   }
@@ -214,6 +218,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
   let data: Database['public']['Tables']['apps']['Row'] | undefined
   let dbError: { message?: string } | null = null
   let completedPendingOnboarding = false
+  let onboardingStepHistoryChanges: ReturnType<typeof getAppOnboardingStepHistoryChanges> = []
 
   try {
     if (!canUpdateSettings && canCompleteOnboarding) {
@@ -225,6 +230,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
         const persisted = await persistAppOnboarding(c, appId, onboardingPatch ?? undefined, onboardingLock.client, true)
         data = persisted?.app
         completedPendingOnboarding = persisted?.completed ?? false
+        onboardingStepHistoryChanges = persisted?.historyChanges ?? []
         if (!data)
           dbError = { message: 'App not found during onboarding completion' }
       }
@@ -241,6 +247,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
         else {
           data = persisted.app
           completedPendingOnboarding = persisted.completed
+          onboardingStepHistoryChanges = persisted.historyChanges
         }
       }
       catch (error) {
@@ -274,6 +281,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
         if (persisted) {
           data = persisted.app
           completedPendingOnboarding = completedPendingOnboarding || persisted.completed
+          onboardingStepHistoryChanges = persisted.historyChanges
         }
       }
     }
@@ -286,6 +294,16 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
 
   if (dbError || !data) {
     throw simpleError('cannot_update_app', 'Cannot update app', { supabaseError: dbError })
+  }
+  if (auth && onboardingStepHistoryChanges.length > 0) {
+    const setup = parseAppOnboarding(data.onboarding)
+    await backgroundTask(c, Promise.all(onboardingStepHistoryChanges.map(change => trackPosthogEvent(c, buildAppOnboardingStepPosthogEvent({
+      appId: data.app_id,
+      auth,
+      change,
+      orgId: data.owner_org,
+      setup,
+    })))))
   }
   try {
     await deleteAppStatus(c, appId)
