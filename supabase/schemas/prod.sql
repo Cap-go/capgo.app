@@ -3235,16 +3235,28 @@ CREATE OR REPLACE FUNCTION "public"."check_org_members_2fa_enabled"("org_id" "uu
     SET "search_path" TO ''
     AS $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM public.orgs WHERE public.orgs.id = check_org_members_2fa_enabled.org_id) THEN
-    RAISE EXCEPTION 'Organization does not exist';
-  END IF;
-
-  IF NOT public.is_internal_request_role(public.current_request_role())
-    AND NOT public.rbac_check_permission_request(
-      public.rbac_perm_org_update_settings(),
-      check_org_members_2fa_enabled.org_id,
-      NULL::character varying,
-      NULL::bigint
+  -- Internal callers keep a distinguishable missing-org signal; non-internal
+  -- callers still collapse missing-org into NO_RIGHTS (anon oracle closed).
+  IF public.is_internal_request_role(public.current_request_role()) THEN
+    IF NOT EXISTS (
+      SELECT 1
+      FROM public.orgs
+      WHERE public.orgs.id = check_org_members_2fa_enabled.org_id
+    ) THEN
+      RAISE EXCEPTION 'ORG_NOT_FOUND';
+    END IF;
+  ELSIF (
+      NOT EXISTS (
+        SELECT 1
+        FROM public.orgs
+        WHERE public.orgs.id = check_org_members_2fa_enabled.org_id
+      )
+      OR NOT public.rbac_check_permission_request(
+        public.rbac_perm_org_update_settings(),
+        check_org_members_2fa_enabled.org_id,
+        NULL::character varying,
+        NULL::bigint
+      )
     )
   THEN
     RAISE EXCEPTION 'NO_RIGHTS';
@@ -3274,23 +3286,31 @@ CREATE OR REPLACE FUNCTION "public"."check_org_members_password_policy"("org_id"
     SET "search_path" TO ''
     AS $$
 BEGIN
-  IF NOT public.is_internal_request_role(public.current_request_role())
-    AND NOT public.rbac_check_permission_request(
-      public.rbac_perm_org_update_settings(),
-      check_org_members_password_policy.org_id,
-      NULL::character varying,
-      NULL::bigint
+  -- Internal callers keep a distinguishable missing-org signal; non-internal
+  -- callers still collapse missing-org into NO_RIGHTS (anon oracle closed).
+  IF public.is_internal_request_role(public.current_request_role()) THEN
+    IF NOT EXISTS (
+      SELECT 1
+      FROM public.orgs
+      WHERE public.orgs.id = check_org_members_password_policy.org_id
+    ) THEN
+      RAISE EXCEPTION 'ORG_NOT_FOUND';
+    END IF;
+  ELSIF (
+      NOT EXISTS (
+        SELECT 1
+        FROM public.orgs
+        WHERE public.orgs.id = check_org_members_password_policy.org_id
+      )
+      OR NOT public.rbac_check_permission_request(
+        public.rbac_perm_org_update_settings(),
+        check_org_members_password_policy.org_id,
+        NULL::character varying,
+        NULL::bigint
+      )
     )
   THEN
     RAISE EXCEPTION 'NO_RIGHTS';
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1
-    FROM public.orgs
-    WHERE public.orgs.id = check_org_members_password_policy.org_id
-  ) THEN
-    RAISE EXCEPTION 'Organization does not exist';
   END IF;
 
   RETURN QUERY
@@ -3299,7 +3319,10 @@ BEGIN
     au.email::text,
     u.first_name::text,
     u.last_name::text,
-    public.user_meets_password_policy(rb.principal_id, check_org_members_password_policy.org_id) AS password_policy_compliant
+    public.user_meets_password_policy(
+      rb.principal_id,
+      check_org_members_password_policy.org_id
+    ) AS password_policy_compliant
   FROM public.role_bindings rb
   JOIN public.roles r ON r.id = rb.role_id
     AND r.scope_type = rb.scope_type
@@ -27305,7 +27328,6 @@ GRANT ALL ON FUNCTION "public"."get_org_members"("user_id" "uuid", "guild_id" "u
 
 
 REVOKE ALL ON FUNCTION "public"."get_org_members_rbac"("p_org_id" "uuid") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."get_org_members_rbac"("p_org_id" "uuid") TO "anon";
 GRANT ALL ON FUNCTION "public"."get_org_members_rbac"("p_org_id" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."get_org_members_rbac"("p_org_id" "uuid") TO "service_role";
 
@@ -27720,7 +27742,6 @@ GRANT ALL ON FUNCTION "public"."is_mau_exceeded_by_org"("org_id" "uuid") TO "ser
 
 REVOKE ALL ON FUNCTION "public"."is_member_of_org"("user_id" "uuid", "org_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."is_member_of_org"("user_id" "uuid", "org_id" "uuid") TO "service_role";
-GRANT ALL ON FUNCTION "public"."is_member_of_org"("user_id" "uuid", "org_id" "uuid") TO "anon";
 GRANT ALL ON FUNCTION "public"."is_member_of_org"("user_id" "uuid", "org_id" "uuid") TO "authenticated";
 
 
@@ -28996,7 +29017,6 @@ GRANT ALL ON FUNCTION "public"."update_apps_build_timeout_updated_at"() TO "serv
 
 
 REVOKE ALL ON FUNCTION "public"."update_org_invite_role_rbac"("p_org_id" "uuid", "p_user_id" "uuid", "p_new_role_name" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."update_org_invite_role_rbac"("p_org_id" "uuid", "p_user_id" "uuid", "p_new_role_name" "text") TO "anon";
 GRANT ALL ON FUNCTION "public"."update_org_invite_role_rbac"("p_org_id" "uuid", "p_user_id" "uuid", "p_new_role_name" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."update_org_invite_role_rbac"("p_org_id" "uuid", "p_user_id" "uuid", "p_new_role_name" "text") TO "service_role";
 
@@ -29015,7 +29035,6 @@ GRANT ALL ON FUNCTION "public"."update_sso_providers_updated_at"() TO "authentic
 
 
 REVOKE ALL ON FUNCTION "public"."update_tmp_invite_role_rbac"("p_org_id" "uuid", "p_email" "text", "p_new_role_name" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."update_tmp_invite_role_rbac"("p_org_id" "uuid", "p_email" "text", "p_new_role_name" "text") TO "anon";
 GRANT ALL ON FUNCTION "public"."update_tmp_invite_role_rbac"("p_org_id" "uuid", "p_email" "text", "p_new_role_name" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."update_tmp_invite_role_rbac"("p_org_id" "uuid", "p_email" "text", "p_new_role_name" "text") TO "service_role";
 
