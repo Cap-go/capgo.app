@@ -17,6 +17,7 @@ export type AppOnboardingStepId = typeof APP_ONBOARDING_STEP_IDS[number]
 export type AppOnboardingSource = 'manual' | 'cli' | 'mcp' | 'ai'
 export type AppOnboardingOutcome = 'in_progress' | 'completed' | 'skipped' | 'switched_to_manual'
 export type AppOnboardingStepStatus = 'done' | 'skipped'
+export const APP_ONBOARDING_STEP_HISTORY_LIMIT = 10
 
 export interface AppOnboardingStepState {
   status: AppOnboardingStepStatus
@@ -35,6 +36,18 @@ export interface AppOnboardingPatch {
   outcome?: AppOnboardingOutcome
   steps?: Partial<Record<AppOnboardingStepId, AppOnboardingStepState>>
 }
+
+interface AppOnboardingStepHistoryEntry {
+  status: AppOnboardingStepStatus
+  at: string
+}
+
+interface AppOnboardingStepHistoryFullEntry {
+  type: 'update_history_full'
+  at: string
+}
+
+type AppOnboardingStepHistory = Array<AppOnboardingStepHistoryEntry | AppOnboardingStepHistoryFullEntry>
 
 const SOURCE_RANK: Record<AppOnboardingSource, number> = {
   manual: 0,
@@ -95,6 +108,36 @@ function parseSteps(value: unknown): AppOnboardingState['steps'] {
     }
   }
   return steps
+}
+
+function parseStepHistory(value: unknown): AppOnboardingStepHistory {
+  if (!Array.isArray(value))
+    return []
+  const history: AppOnboardingStepHistory = []
+  for (const entry of value) {
+    if (!isRecord(entry) || typeof entry.at !== 'string')
+      continue
+    if (entry.type === 'update_history_full')
+      history.push({ type: entry.type, at: entry.at })
+    else if (STEP_STATUS_SET.has(String(entry.status)))
+      history.push({ status: entry.status as AppOnboardingStepStatus, at: entry.at })
+    if (history.length === APP_ONBOARDING_STEP_HISTORY_LIMIT)
+      break
+  }
+  return history
+}
+
+function appendStepHistory(currentStep: Record<string, unknown>, nextStep: Record<string, unknown>, changedAt: string): AppOnboardingStepHistory {
+  const history = parseStepHistory(currentStep.update_history)
+  if (currentStep.status === nextStep.status && currentStep.at === nextStep.at)
+    return history
+
+  const lastEntry = history.at(-1)
+  if (lastEntry && 'type' in lastEntry && lastEntry.type === 'update_history_full')
+    return history
+  if (history.length < APP_ONBOARDING_STEP_HISTORY_LIMIT)
+    return [...history, { status: nextStep.status as AppOnboardingStepStatus, at: changedAt }]
+  return [...history.slice(0, APP_ONBOARDING_STEP_HISTORY_LIMIT - 1), { type: 'update_history_full', at: changedAt }]
 }
 
 export function parseAppOnboarding(value: unknown): AppOnboardingState {
@@ -206,5 +249,37 @@ export function applyAppOnboardingPatch(
   return {
     ...existing,
     setup,
+  }
+}
+
+export function appendAppOnboardingStepHistory(
+  currentValue: unknown,
+  mergedValue: unknown,
+  patch: AppOnboardingPatch,
+  now = () => new Date().toISOString(),
+): Record<string, unknown> {
+  const merged = isRecord(mergedValue) ? { ...mergedValue } : {}
+  const mergedSetup = parseSetupRecord(merged)
+  const mergedSteps = isRecord(mergedSetup.steps) ? { ...mergedSetup.steps } : {}
+  const currentSteps = parseSetupRecord(currentValue).steps
+  const currentStepRecords = isRecord(currentSteps) ? currentSteps : {}
+  const changedAt = now()
+
+  for (const stepId of Object.keys(patch.steps ?? {}) as AppOnboardingStepId[]) {
+    const nextStep = mergedSteps[stepId]
+    if (!isRecord(nextStep))
+      continue
+
+    const currentStep = isRecord(currentStepRecords[stepId]) ? currentStepRecords[stepId] : {}
+    const history = appendStepHistory(currentStep, nextStep, changedAt)
+    mergedSteps[stepId] = history.length > 0 ? { ...nextStep, update_history: history } : nextStep
+  }
+
+  return {
+    ...merged,
+    setup: {
+      ...mergedSetup,
+      steps: mergedSteps,
+    },
   }
 }

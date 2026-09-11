@@ -1,15 +1,17 @@
 import type { Context } from 'hono'
+import type { PoolClient } from 'pg'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
-import { parseAppOnboardingPatch } from '../../utils/appOnboarding.ts'
+import { sql } from 'drizzle-orm'
 import { buildAppCreatorEventDetails } from '../../utils/app_creator.ts'
+import { appendAppOnboardingStepHistory, parseAppOnboardingPatch } from '../../utils/appOnboarding.ts'
 import { deleteAppStatus } from '../../utils/appStatus.ts'
 import { trackBentoEvent } from '../../utils/bento.ts'
 import { createIfNotExistStoreInfo } from '../../utils/cloudflare.ts'
 import { lockOnboardingApp, unlockOnboardingApp } from '../../utils/demo.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
-import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { createSignedImageUrl, getStorageAllowedOrigins, resolveWritableImageValue } from '../../utils/storage.ts'
 import { supabaseAdmin, supabaseApikey, supabaseWithAuth } from '../../utils/supabase.ts'
@@ -32,40 +34,83 @@ interface UpdateApp {
 async function persistAppOnboarding(
   c: Context<MiddlewareKeyVariables>,
   appId: string,
-  patch: NonNullable<ReturnType<typeof parseAppOnboardingPatch>>,
-  pgClient?: ReturnType<typeof getPgClient>,
+  patch: NonNullable<ReturnType<typeof parseAppOnboardingPatch>> | undefined,
+  transactionClient?: PoolClient,
+  completePendingOnboarding = false,
 ) {
-  const client = pgClient ?? getPgClient(c)
-  const opened = !pgClient
+  const pool = transactionClient ? null : getPgClient(c)
   try {
-    const result = await client.query(
-      `UPDATE public.apps
-       SET onboarding = public.merge_app_onboarding_setup(onboarding, $2::jsonb),
-           updated_at = now()
-       WHERE app_id = $1
-       RETURNING *`,
-      [appId, JSON.stringify(patch)],
-    )
-    const row = result.rows[0] as Database['public']['Tables']['apps']['Row'] | undefined
-    if (!row)
-      return undefined
-    const completeResult = await client.query<{ completed: boolean }>(
-      `SELECT public.try_complete_pending_onboarding_if_setup_done($1) AS completed`,
-      [appId],
-    )
-    const completed = completeResult.rows[0]?.completed === true
-    const refreshed = await client.query(
-      `SELECT * FROM public.apps WHERE app_id = $1`,
-      [appId],
-    )
-    return {
-      app: (refreshed.rows[0] ?? row) as Database['public']['Tables']['apps']['Row'],
-      completed,
-    }
+    const drizzle = getDrizzleClient(transactionClient ?? pool!)
+    return await drizzle.transaction(async (tx) => {
+      let app: Database['public']['Tables']['apps']['Row'] | undefined
+      let completed = false
+      if (completePendingOnboarding) {
+        const completionResult = await tx.execute<Database['public']['Tables']['apps']['Row']>(sql`
+          UPDATE public.apps
+          SET need_onboarding = false
+          WHERE app_id = ${appId}
+            AND need_onboarding = true
+          RETURNING *
+        `)
+        app = completionResult.rows[0] as Database['public']['Tables']['apps']['Row'] | undefined
+        completed = !!app
+      }
+
+      if (!patch) {
+        const current = app
+          ? null
+          : await tx.execute<Database['public']['Tables']['apps']['Row']>(sql`
+              SELECT * FROM public.apps WHERE app_id = ${appId}
+            `)
+        app ??= current?.rows[0] as Database['public']['Tables']['apps']['Row'] | undefined
+        return app ? { app, completed } : undefined
+      }
+
+      const currentResult = await tx.execute<{ onboarding: unknown }>(sql`
+        SELECT onboarding
+        FROM public.apps
+        WHERE app_id = ${appId}
+        FOR UPDATE
+      `)
+      const currentOnboarding = currentResult.rows[0]?.onboarding
+      if (!currentResult.rows[0])
+        return undefined
+
+      const mergeResult = await tx.execute<{ onboarding: unknown }>(sql`
+        SELECT public.merge_app_onboarding_setup(
+          ${JSON.stringify(currentOnboarding)}::jsonb,
+          ${JSON.stringify(patch)}::jsonb
+        ) AS onboarding
+      `)
+      if (!mergeResult.rows[0])
+        throw new Error('Cannot merge app onboarding progress')
+      const onboarding = appendAppOnboardingStepHistory(currentOnboarding, mergeResult.rows[0]?.onboarding, patch)
+      const result = await tx.execute<Database['public']['Tables']['apps']['Row']>(sql`
+        UPDATE public.apps
+        SET onboarding = ${JSON.stringify(onboarding)}::jsonb,
+            updated_at = now()
+        WHERE app_id = ${appId}
+        RETURNING *
+      `)
+      const row = result.rows[0] as Database['public']['Tables']['apps']['Row'] | undefined
+      if (!row)
+        throw new Error('App disappeared during onboarding progress update')
+      const completeResult = await tx.execute<{ completed: boolean }>(sql`
+        SELECT public.try_complete_pending_onboarding_if_setup_done(${appId}) AS completed
+      `)
+      completed ||= completeResult.rows[0]?.completed === true
+      const refreshed = await tx.execute<Database['public']['Tables']['apps']['Row']>(sql`
+        SELECT * FROM public.apps WHERE app_id = ${appId}
+      `)
+      return {
+        app: (refreshed.rows[0] ?? row) as Database['public']['Tables']['apps']['Row'],
+        completed,
+      }
+    })
   }
   finally {
-    if (opened)
-      await closeClient(c, client)
+    if (pool)
+      await closeClient(c, pool)
   }
 }
 
@@ -173,50 +218,23 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
   try {
     if (!canUpdateSettings && canCompleteOnboarding) {
       // Bypass RLS for the narrow onboarding-completion path after explicit authz.
-      // Reuse the advisory-lock session so the update is serialized with the lock.
-      const pgClient = onboardingLock ?? getPgClient(c)
+      // Reuse the advisory-lock session and one transaction for completion and history.
       try {
-        const result = await pgClient.query(
-          `UPDATE public.apps
-           SET need_onboarding = false
-           WHERE app_id = $1
-             AND need_onboarding = true
-           RETURNING *`,
-          [appId],
-        )
-        data = result.rows[0]
-        if (data) {
-          completedPendingOnboarding = true
-        }
-        else {
-          // Already completed under the lock; return current row without re-firing side effects.
-          const current = await pgClient.query(
-            `SELECT * FROM public.apps WHERE app_id = $1`,
-            [appId],
-          )
-          data = current.rows[0]
-          if (!data)
-            dbError = { message: 'App not found during onboarding completion' }
-        }
-        if (data && onboardingPatch) {
-          const persisted = await persistAppOnboarding(c, appId, onboardingPatch, pgClient)
-          if (persisted)
-            data = persisted.app
-        }
+        if (!onboardingLock)
+          throw new Error('Missing onboarding completion lock')
+        const persisted = await persistAppOnboarding(c, appId, onboardingPatch ?? undefined, onboardingLock.client, true)
+        data = persisted?.app
+        completedPendingOnboarding = persisted?.completed ?? false
+        if (!data)
+          dbError = { message: 'App not found during onboarding completion' }
       }
       catch (error) {
         dbError = { message: (error as Error)?.message }
       }
-      finally {
-        // Only close a client we opened here; unlockOnboardingApp owns the lock session.
-        if (!onboardingLock)
-          await closeClient(c, pgClient)
-      }
     }
     else if (onboardingPatch && !hasSettingsPayload) {
-      const pgClient = getPgClient(c)
       try {
-        const persisted = await persistAppOnboarding(c, appId, onboardingPatch, pgClient)
+        const persisted = await persistAppOnboarding(c, appId, onboardingPatch)
         if (!persisted) {
           dbError = { message: 'App not found during onboarding progress update' }
         }
@@ -227,9 +245,6 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
       }
       catch (error) {
         dbError = { message: (error as Error)?.message }
-      }
-      finally {
-        await closeClient(c, pgClient)
       }
     }
     else {
