@@ -2983,6 +2983,7 @@ export type Database = {
           future_uuid: string
           id: number
           invite_magic_string: string
+          invited_by_user_id: string | null
           last_name: string
           org_id: string
           rbac_role_name: string
@@ -2996,6 +2997,7 @@ export type Database = {
           future_uuid?: string
           id?: number
           invite_magic_string?: string
+          invited_by_user_id?: string | null
           last_name: string
           org_id: string
           rbac_role_name?: string
@@ -3009,6 +3011,7 @@ export type Database = {
           future_uuid?: string
           id?: number
           invite_magic_string?: string
+          invited_by_user_id?: string | null
           last_name?: string
           org_id?: string
           rbac_role_name?: string
@@ -3648,6 +3651,10 @@ export type Database = {
     }
     Functions: {
       accept_invitation_to_org: { Args: { org_id: string }; Returns: string }
+      accept_tmp_user_invitation: {
+        Args: { p_invite_magic_string: string; p_user_id: string }
+        Returns: string
+      }
       acknowledge_compatibility_event: {
         Args: { event_id: number; note: string }
         Returns: undefined
