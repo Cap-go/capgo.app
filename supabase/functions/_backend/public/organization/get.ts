@@ -23,6 +23,11 @@ const orgSchema = z.object({
   management_email: z.email(),
   customer_id: z.string().nullable(),
   website: z.string().nullable(),
+  enforcing_2fa: z.boolean().optional(),
+  password_policy_config: z.unknown().nullable().optional(),
+  require_apikey_expiration: z.boolean().optional(),
+  max_apikey_expiration_days: z.number().nullable().optional(),
+  enforce_hashed_api_keys: z.boolean().optional(),
 })
 
 const orgsSchema = z.array(orgSchema)

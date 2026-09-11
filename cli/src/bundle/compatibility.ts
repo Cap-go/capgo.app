@@ -63,15 +63,13 @@ export async function checkCompatibilityInternal(
     enrichedOptions.supaHost,
     enrichedOptions.supaAnon,
   )
-  await check2FAComplianceForApp(supabase, resolvedAppId, silent)
-  await checkAppExistsAndHasPermissionOrgErr(
-    supabase,
-    enrichedOptions.apikey,
-    resolvedAppId,
-    'app.read_bundles',
+  await check2FAComplianceForApp(enrichedOptions.apikey, resolvedAppId, silent, { supaHost: enrichedOptions.supaHost, supaAnon: enrichedOptions.supaAnon })
+  await checkAppExistsAndHasPermissionOrgErr(enrichedOptions.apikey, resolvedAppId, 'app.read_bundles', {
+    supaHost: enrichedOptions.supaHost,
+    supaAnon: enrichedOptions.supaAnon,
     silent,
-    true,
-  )
+    skip2FACheck: true,
+  })
 
   const compatibility = await checkCompatibilityCloud(
     supabase,

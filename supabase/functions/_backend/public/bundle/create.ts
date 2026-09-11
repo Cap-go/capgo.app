@@ -15,7 +15,7 @@ interface CreateBundleBody {
   key_id?: string
 }
 
-function validateUrlFormat(url: string) {
+export function validateUrlFormat(url: string) {
   if (!url.startsWith('https://')) {
     throw simpleError('invalid_protocol', 'External URL must use HTTPS protocol', { external_url: url })
   }
@@ -139,7 +139,7 @@ interface AppWithOrg {
   }
 }
 
-async function getAppOrganization(c: Context, appId: string): Promise<AppWithOrg> {
+export async function getAppOrganization(c: Context, appId: string): Promise<AppWithOrg> {
   // Use supabaseAdmin to access org security settings (RLS bypass needed for enforcement check)
   const { data: app, error: appError } = await supabaseAdmin(c)
     .from('apps')
@@ -168,7 +168,7 @@ async function checkVersionExists(c: Context, appId: string, apikey: Database['p
   }
 }
 
-function checkEncryptedBundleEnforcement(appWithOrg: AppWithOrg, sessionKey: string | undefined, keyId: string | undefined): void {
+export function checkEncryptedBundleEnforcement(appWithOrg: AppWithOrg, sessionKey: string | undefined, keyId: string | undefined): void {
   // If org doesn't enforce encrypted bundles, allow
   if (!appWithOrg.orgs.enforce_encrypted_bundles) {
     return

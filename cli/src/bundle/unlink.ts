@@ -75,20 +75,18 @@ export async function unlinkDeviceInternal(
       enrichedOptions.supaHost,
       enrichedOptions.supaAnon,
     )
-    await check2FAComplianceForApp(supabase, resolvedAppId, silent)
+    await check2FAComplianceForApp(enrichedOptions.apikey!, resolvedAppId, silent, { supaHost: enrichedOptions.supaHost, supaAnon: enrichedOptions.supaAnon })
 
     const orgId = await getOrganizationId(enrichedOptions.apikey!, resolvedAppId, { supaHost: enrichedOptions.supaHost, supaAnon: enrichedOptions.supaAnon })
 
-    await checkAppExistsAndHasPermissionOrgErr(
-      supabase,
-      enrichedOptions.apikey,
-      resolvedAppId,
-      'bundle.delete',
+    await checkAppExistsAndHasPermissionOrgErr(enrichedOptions.apikey, resolvedAppId, 'bundle.delete', {
+      supaHost: enrichedOptions.supaHost,
+      supaAnon: enrichedOptions.supaAnon,
       silent,
-      true,
-    )
+      skip2FACheck: true,
+    })
 
-    await checkPlanValid(supabase, orgId, resolvedAppId)
+    await checkPlanValid(enrichedOptions.apikey!, orgId, resolvedAppId, !silent, { supaHost: enrichedOptions.supaHost, supaAnon: enrichedOptions.supaAnon })
 
     const versionData = await getVersionData(enrichedOptions.apikey!, resolvedAppId, bundle, {
       silent,

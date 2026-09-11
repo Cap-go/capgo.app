@@ -1976,6 +1976,8 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     await assertCliPermission(supabase, options.apikey, 'app.build_native', { appId }, {
       message: `Capgo rejected this API key: missing app.build_native permission for app ${appId}.`,
       silent,
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
     })
 
     // Request build from Capgo backend (POST /build/request)
@@ -2346,7 +2348,9 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       }
       else if (finalStatus === 'failed') {
         log.error(`Build failed`)
-        if (options.cache !== false && !options.cacheKey?.trim()) {
+        // Onboarding/TUI uses caller-handled failure UX (AI analysis prompt, log
+        // viewer) — keep the streamed build log free of CLI-only cache tips.
+        if (options.cache !== false && !options.cacheKey?.trim() && aiAnalysisMode !== 'caller-handled') {
           log.info('Tip: if this looks cache-related (stale artifacts between RC/PROD or branches), retry with --cache-key <env> to isolate compilation cache, or --no-cache to skip cache restore.')
         }
         // Non-interactive (CI/CD) failure with neither --ai-analytics nor

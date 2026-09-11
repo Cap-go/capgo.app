@@ -44,7 +44,11 @@ export async function setAppInternal(appId: string, options: Options, silent = f
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.update_settings', silent)
+  await checkAppExistsAndHasPermissionOrgErr(options.apikey, appId, 'app.update_settings', {
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+    silent,
+  })
   const organizationUid = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
 
   const {

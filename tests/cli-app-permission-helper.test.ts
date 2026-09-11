@@ -4,26 +4,25 @@ const hasCliPermissionMock = vi.hoisted(() => vi.fn())
 const invokeCapgoCliApiMock = vi.hoisted(() => vi.fn())
 const getCapgoCliHttpStatusMock = vi.hoisted(() => vi.fn())
 
-vi.mock('../cli/src/utils', () => ({
-  appAddHintMessage: (appId: string) => `App ${appId} does not exist, run first \`bunx @capgo/cli app add ${appId}\` to create it`,
-  getPMAndCommand: () => ({ runner: 'bunx' }),
-  hasCliPermission: hasCliPermissionMock,
-  invokeCapgoCliApi: invokeCapgoCliApiMock,
-  getCapgoCliHttpStatus: getCapgoCliHttpStatusMock,
-  isCapgoManagedSupabaseHost: () => false,
-  show2FADeniedError: vi.fn(() => {
-    throw new Error('2FA required')
-  }),
-}))
+vi.mock('../cli/src/utils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../cli/src/utils')>()
+  return {
+    ...actual,
+    getPMAndCommand: () => ({ runner: 'bunx' }),
+    hasCliPermissionViaHttp: hasCliPermissionMock,
+    invokeCapgoCliApi: invokeCapgoCliApiMock,
+    getCapgoCliHttpStatus: getCapgoCliHttpStatusMock,
+    show2FADeniedError: vi.fn(() => {
+      throw new Error('2FA required')
+    }),
+  }
+})
 
 const { checkAppExistsAndHasPermissionOrgErr } = await import('../cli/src/api/app')
 
-function createSupabaseMock() {
-  return {
-    supabaseUrl: 'http://127.0.0.1:54321',
-    supabaseKey: 'test-anon',
-    rpc: vi.fn(),
-  }
+const hostOptions = {
+  supaHost: 'http://127.0.0.1:54321',
+  supaAnon: 'test-anon',
 }
 
 describe('CLI app permission helper', () => {
@@ -35,42 +34,41 @@ describe('CLI app permission helper', () => {
   })
 
   it('does not require app-wide read before channel-scoped RBAC checks', async () => {
-    const supabase = createSupabaseMock()
-
     await expect(checkAppExistsAndHasPermissionOrgErr(
-      supabase as any,
       'test-key',
       'com.test.app',
       'channel.delete',
-      true,
-      true,
-      123,
+      {
+        ...hostOptions,
+        silent: true,
+        skip2FACheck: true,
+        channelId: 123,
+      },
     )).resolves.toBe(true)
 
     expect(invokeCapgoCliApiMock).not.toHaveBeenCalled()
-    expect(hasCliPermissionMock).toHaveBeenCalledWith(supabase, 'test-key', 'channel.delete', {
+    expect(hasCliPermissionMock).toHaveBeenCalledWith('test-key', 'channel.delete', {
       appId: 'com.test.app',
       channelId: 123,
-    })
+    }, expect.objectContaining(hostOptions))
   })
 
   it('keeps the app existence precheck for app-scoped RBAC checks', async () => {
-    const supabase = createSupabaseMock()
-
     await expect(checkAppExistsAndHasPermissionOrgErr(
-      supabase as any,
       'test-key',
       'com.missing.app',
       'app.delete',
-      true,
-      true,
+      {
+        ...hostOptions,
+        silent: true,
+        skip2FACheck: true,
+      },
     )).rejects.toThrow('App com.missing.app does not exist')
 
     expect(invokeCapgoCliApiMock).toHaveBeenCalledWith('app/com.missing.app', expect.objectContaining({
       apikey: 'test-key',
       method: 'GET',
-      supaHost: 'http://127.0.0.1:54321',
-      supaAnon: 'test-anon',
+      ...hostOptions,
     }))
     expect(hasCliPermissionMock).not.toHaveBeenCalled()
   })

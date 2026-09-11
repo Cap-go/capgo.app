@@ -332,7 +332,7 @@ const AndroidOnboardingApp: FC<AppProps> = ({ appId, initialProgress, androidDir
 
     let cancelled = false
     void (async () => {
-      const orgId = await getOrganizationId(resolvedApiKeyRef.current!, appId, { supaHost, supaAnon }).catch(() => null)
+      const orgId = await getOrganizationId(resolvedApiKeyRef.current!, appId, { supaHost, supaAnon, silent: true }).catch(() => null)
       if (orgId && !cancelled)
         setResolvedOrgId(orgId)
     })()

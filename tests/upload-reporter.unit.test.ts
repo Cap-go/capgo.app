@@ -56,6 +56,20 @@ describe('bundle upload reporting', () => {
   it('keeps the late permission check silent for internal uploads', async () => {
     const source = readFileSync(new URL('../cli/src/bundle/upload.ts', import.meta.url), 'utf8')
 
-    expect(source).toContain("checkAppExistsAndHasPermissionOrgErr(supabase, apikey, appid, 'app.upload_bundle', silent, true)")
+    expect(source).toContain("checkAppExistsAndHasPermissionOrgErr(apikey, appid, 'app.upload_bundle', { ...uploadCtx.host, silent, skip2FACheck: true })")
+  })
+
+  it('routes upload version writes through Capgo HTTP instead of supabase-js', async () => {
+    const { sliceUploadHotPath } = await import('../cli/test/upload-hot-path-guard.mjs')
+    const source = readFileSync(new URL('../cli/src/bundle/upload.ts', import.meta.url), 'utf8')
+    const uploadHotPath = sliceUploadHotPath(source)
+
+    const { FUNCTIONS_INVOKE_PATTERN, SUPABASE_FROM_PATTERN, SUPABASE_RPC_PATTERN } = await import('../cli/test/upload-hot-path-guard.mjs')
+    expect(uploadHotPath).not.toMatch(SUPABASE_FROM_PATTERN)
+    expect(uploadHotPath).not.toMatch(SUPABASE_RPC_PATTERN)
+    expect(uploadHotPath).not.toMatch(FUNCTIONS_INVOKE_PATTERN)
+    expect(uploadHotPath).toContain('updateOrCreateVersion(ctx.apikey')
+    expect(uploadHotPath).toContain('finishTusUploadVersion(ctx.apikey')
+    expect(uploadHotPath).toContain('checkPlanValidUploadViaHttp(apikey, orgId, appid, true, uploadCtx.host)')
   })
 })

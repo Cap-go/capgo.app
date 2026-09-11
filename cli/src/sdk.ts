@@ -79,7 +79,7 @@ import { setOrganizationInternal } from './organization/set'
 import { requestBuildOptionsSchema, updateChannelOptionsSchema, uploadOptionsSchema } from './schemas/sdk'
 import { CliUserError } from './shared/cli-user-error'
 import { getUserIdInternal } from './user/account'
-import { createSupabaseClient, findSavedKey, getConfig, getLocalConfig } from './utils'
+import { findSavedKey, getConfig, getLocalConfig } from './utils'
 import { parseSecurityPolicyError } from './utils/security_policy_errors'
 import { normalizeAutoBumpInput } from './versionHelpers'
 
@@ -354,10 +354,14 @@ export class CapgoSDK {
       const apikey = this.apikey || findSavedKey(true)
       if (!apikey)
         return { success: true, data: false }
-      const supabase = await createSupabaseClient(apikey, this.supaHost, this.supaAnon)
       // silent: no UI output (this runs over a stdio MCP channel). skip2FACheck: this
       // is a read-only "is it registered" probe — the real credential ops enforce 2FA.
-      await checkAppExistsAndHasPermissionOrgErr(supabase, apikey, appId, 'app.read', true, true)
+      await checkAppExistsAndHasPermissionOrgErr(apikey, appId, 'app.read', {
+        supaHost: this.supaHost,
+        supaAnon: this.supaAnon,
+        silent: true,
+        skip2FACheck: true,
+      })
       return { success: true, data: true }
     }
     catch {

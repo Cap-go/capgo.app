@@ -29,9 +29,15 @@ export async function listBundle(appId: string, options: OptionsBase, silent = f
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  await check2FAComplianceForApp(supabase, appId, silent)
-  await resolveUserIdFromApiKey(supabase, options.apikey)
-  await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'app.read_bundles', silent, true)
+  const host = { supaHost: options.supaHost, supaAnon: options.supaAnon }
+  await check2FAComplianceForApp(options.apikey, appId, silent, host)
+  await resolveUserIdFromApiKey(supabase, options.apikey, silent, host)
+  await checkAppExistsAndHasPermissionOrgErr(options.apikey, appId, 'app.read_bundles', {
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+    silent,
+    skip2FACheck: true,
+  })
 
   if (!silent)
     log.info(`Querying available versions of: ${appId} in Capgo`)

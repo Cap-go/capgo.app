@@ -130,7 +130,7 @@ import {
 } from './steps/ios-shared.js'
 import type { IosEffectDeps, IosStepCtx } from '../ios/flow.js'
 import { applyIosInput, runIosEffect } from '../ios/flow.js'
-import { getIosResumeStep } from '../ios/progress.js'
+import { getIosResumeStep, IOS_API_KEY_GATE_STEPS } from '../ios/progress.js'
 import { classifyP8SubmitError } from './p8-error.js'
 
 // Braille spinner frames for the per-row "Profile" cell during prefetch.
@@ -517,7 +517,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
 
     let cancelled = false
     void (async () => {
-      const orgId = await getOrganizationId(resolvedApiKeyRef.current!, appId, { supaHost, supaAnon }).catch(() => null)
+      const orgId = await getOrganizationId(resolvedApiKeyRef.current!, appId, { supaHost, supaAnon, silent: true }).catch(() => null)
       if (orgId && !cancelled)
         setResolvedOrgId(orgId)
     })()
@@ -3375,7 +3375,24 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
                   // "Key file selected · …" entries while they were
                   // still deciding.
                     hydrateCompletedLog()
-                    setStep(startStep)
+                    try {
+                      if (
+                        initialProgress._credentialsExistGate === undefined
+                        && IOS_API_KEY_GATE_STEPS.has(startStep)
+                      ) {
+                        const existing = await loadSavedCredentials(appId).catch(() => null)
+                        if (existing?.ios) {
+                          const seeded = { ...initialProgress, _credentialsExistGate: 'pending' as const }
+                          await saveProgress(appId, seeded)
+                          setStep('credentials-exist')
+                          return
+                        }
+                      }
+                      setStep(startStep)
+                    }
+                    catch (err) {
+                      handleErrorRef.current(err, 'resume-prompt')
+                    }
                     return
                   }
                   await resetForFreshStart()

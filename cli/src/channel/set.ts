@@ -119,8 +119,9 @@ export async function setChannelInternal(channel: string, appId: string, options
   }
 
   const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  await check2FAComplianceForApp(supabase, appId, silent)
-  const userId = await resolveUserIdFromApiKey(supabase, options.apikey)
+  const host = { supaHost: options.supaHost, supaAnon: options.supaAnon }
+  await check2FAComplianceForApp(options.apikey, appId, silent, host)
+  const userId = await resolveUserIdFromApiKey(supabase, options.apikey, silent, host)
 
   const {
     bundle,
@@ -260,9 +261,21 @@ export async function setChannelInternal(channel: string, appId: string, options
   // Disable unlinks only when a rollout bundle is linked; match API promote gating.
   const disableUnlinksRollout = rolloutDisable === true && existingChannel.rollout_version != null
   if (hasSettingsUpdate)
-    await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'channel.update_settings', silent, true, existingChannel.id)
+    await checkAppExistsAndHasPermissionOrgErr(options.apikey, appId, 'channel.update_settings', {
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+      silent,
+      skip2FACheck: true,
+      channelId: existingChannel.id,
+    })
   if (hasBundlePromotion || disableUnlinksRollout)
-    await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'channel.promote_bundle', silent, true, existingChannel.id)
+    await checkAppExistsAndHasPermissionOrgErr(options.apikey, appId, 'channel.promote_bundle', {
+      supaHost: options.supaHost,
+      supaAnon: options.supaAnon,
+      silent,
+      skip2FACheck: true,
+      channelId: existingChannel.id,
+    })
 
   const orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
 

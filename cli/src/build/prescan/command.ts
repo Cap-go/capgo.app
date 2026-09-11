@@ -85,6 +85,8 @@ export async function executePrescan(appId: string | undefined, options: Prescan
     apikey,
     supabase,
     credentials: options.credentials,
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
   })
   const overrides = parsePrescanOverrides({ skip: options.skip, warn: options.warn })
   validateOverrideIds(overrides, ALL_CHECK_IDS)

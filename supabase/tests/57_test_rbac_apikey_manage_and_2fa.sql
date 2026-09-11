@@ -170,7 +170,8 @@ SELECT ok(
   'seed apikey 113 does not inherit org.update_user_roles'
 );
 
--- API keys must not be blocked by org 2FA enforcement in direct RBAC checks
+-- API keys bypass org 2FA enforcement in direct RBAC checks
+-- (compliance uses reject_access_due_to_2fa_for_app)
 DO $$
 DECLARE
   org_id uuid := gen_random_uuid();

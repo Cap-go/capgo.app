@@ -14,6 +14,7 @@ import {
   resetAppData,
   resetAppDataStats,
   STRIPE_INFO_CUSTOMER_ID,
+  warmEdgeEndpoint,
 } from './test-utils.ts'
 
 const id = randomUUID()
@@ -35,7 +36,9 @@ beforeAll(async () => {
   if (USE_CLOUDFLARE)
     return
   await resetAndSeedAppData(APP_NAME_METADATA)
-})
+
+  await warmEdgeEndpoint(getEndpointUrl('/ok'))
+}, 60_000)
 
 afterAll(async () => {
   if (USE_CLOUDFLARE)

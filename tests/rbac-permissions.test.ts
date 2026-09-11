@@ -1829,6 +1829,81 @@ describe('rbac permission system', () => {
         expect(deletedChannel.rows).toEqual([{ id: channel.rows[0].id }])
       })
 
+      it('allows API-key rbac_check_permission_direct to bypass org 2FA enforcement', async () => {
+        const testId = randomUUID()
+        const keyOwnerId = randomUUID()
+        const orgId = randomUUID()
+        const appUuid = randomUUID()
+        const appId = `com.rbac.apikey-2fa.${testId}`
+        const apiKey = `rbac-apikey-2fa-${testId}`
+
+        await query(`
+          INSERT INTO auth.users (id, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_user_meta_data)
+          VALUES ($1::uuid, $2, $3, NOW(), NOW(), NOW(), '{}'::jsonb)
+        `, [keyOwnerId, `apikey-2fa-${testId}@capgo.app`, USER_PASSWORD_HASH])
+
+        await query(`
+          INSERT INTO public.users (id, email, first_name, last_name)
+          VALUES ($1::uuid, $2, 'API', 'Key')
+        `, [keyOwnerId, `apikey-2fa-${testId}@capgo.app`])
+
+        await query(`
+          INSERT INTO public.orgs (id, name, management_email, created_by, enforcing_2fa)
+          VALUES ($1::uuid, $2, $3, $4::uuid, true)
+        `, [orgId, `RBAC API Key 2FA ${testId}`, `rbac-apikey-2fa-${testId}@capgo.app`, USER_ID])
+
+        await query(`
+          INSERT INTO public.apps (id, app_id, name, icon_url, owner_org)
+          VALUES ($1::uuid, $2, $3, $4, $5::uuid)
+        `, [appUuid, appId, `RBAC API Key 2FA App ${testId}`, 'rbac-apikey-2fa-icon', orgId])
+
+        const apiKeyResult = await query(`
+          INSERT INTO public.apikeys (user_id, key, name)
+          VALUES ($1::uuid, $2, $3)
+          RETURNING rbac_id
+        `, [keyOwnerId, apiKey, `RBAC API key 2FA ${testId}`])
+
+        await query(`
+          INSERT INTO public.role_bindings (
+            principal_type,
+            principal_id,
+            role_id,
+            scope_type,
+            org_id,
+            app_id,
+            granted_by,
+            is_direct
+          )
+          SELECT
+            public.rbac_principal_apikey(),
+            $1::uuid,
+            roles.id,
+            public.rbac_scope_app(),
+            $2::uuid,
+            apps.id,
+            $3::uuid,
+            true
+          FROM public.roles
+          CROSS JOIN public.apps
+          WHERE roles.name = public.rbac_role_app_developer()
+            AND apps.app_id = $4
+          LIMIT 1
+        `, [apiKeyResult.rows[0].rbac_id, orgId, USER_ID, appId])
+
+        const directAccess = await query(`
+          SELECT public.rbac_check_permission_direct(
+            public.rbac_perm_app_create_channel(),
+            NULL::uuid,
+            $1::uuid,
+            $2,
+            NULL::bigint,
+            $3
+          ) AS allowed
+        `, [orgId, appId, apiKey])
+
+        expect(directAccess.rows[0].allowed).toBe(true)
+      })
+
       it('should deny org permissions outside bound org for api keys', async () => {
         const allowedOrgId = randomUUID()
         const targetOrgId = randomUUID()

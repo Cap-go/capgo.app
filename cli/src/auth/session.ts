@@ -108,7 +108,10 @@ export async function validateAndSaveKey(apikey: string, options: SaveKeyOptions
 
   // Validate BEFORE writing so an invalid key never lands on disk.
   const supabase = await createSupabaseClient(apikey, options.supaHost, options.supaAnon, true)
-  const userId = await resolveUserIdFromApiKey(supabase, apikey, true)
+  const userId = await resolveUserIdFromApiKey(supabase, apikey, true, {
+    supaHost: options.supaHost,
+    supaAnon: options.supaAnon,
+  })
 
   if (local) {
     await writeFileAtomic(LOCAL_KEY_PATH, `${apikey}\n`, { mode: 0o600 })

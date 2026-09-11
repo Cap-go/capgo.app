@@ -148,6 +148,17 @@ function tailResumeStep(progress: OnboardingProgress): OnboardingStep | null {
   return 'build-complete'
 }
 
+/** Steps where saved iOS credentials must trigger the data-safety gate before continuing. */
+export const IOS_API_KEY_GATE_STEPS = new Set<OnboardingStep>([
+  'welcome',
+  'setup-method-select',
+  'api-key-instructions',
+  'p8-method-select',
+  'input-p8-path',
+  'input-key-id',
+  'input-issuer-id',
+])
+
 export function getIosResumeStep(progress: OnboardingProgress | null, canAutomate = true): OnboardingStep {
   if (!progress)
     return 'welcome'
