@@ -16,6 +16,7 @@ describe('app onboarding step PostHog event', () => {
       setPersonProperties: false,
       timestamp: '2026-09-11T18:00:00.000Z',
       nonPersonTags: {
+        $insert_id: 'app-onboarding-step:com.example.app:build_project:2026-09-11T18:00:00.000Z:3',
         app_id: 'com.example.app',
         auth_type: 'jwt',
         history_entry_type: 'status',
