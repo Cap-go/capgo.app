@@ -49,6 +49,14 @@ interface AppOnboardingStepHistoryFullEntry {
 
 type AppOnboardingStepHistory = Array<AppOnboardingStepHistoryEntry | AppOnboardingStepHistoryFullEntry>
 
+export interface AppOnboardingStepHistoryChange {
+  stepId: AppOnboardingStepId
+  status: AppOnboardingStepStatus
+  at: string
+  historyLength: number
+  historyFull: boolean
+}
+
 const SOURCE_RANK: Record<AppOnboardingSource, number> = {
   manual: 0,
   ai: 1,
@@ -282,4 +290,36 @@ export function appendAppOnboardingStepHistory(
       steps: mergedSteps,
     },
   }
+}
+
+export function getAppOnboardingStepHistoryChanges(
+  currentValue: unknown,
+  nextValue: unknown,
+  patch: AppOnboardingPatch,
+): AppOnboardingStepHistoryChange[] {
+  const currentSteps = parseSetupRecord(currentValue).steps
+  const nextSteps = parseSetupRecord(nextValue).steps
+  if (!isRecord(nextSteps))
+    return []
+
+  return (Object.keys(patch.steps ?? {}) as AppOnboardingStepId[]).flatMap((stepId) => {
+    const currentStep = isRecord(currentSteps) && isRecord(currentSteps[stepId]) ? currentSteps[stepId] : {}
+    const nextStep = isRecord(nextSteps[stepId]) ? nextSteps[stepId] : null
+    if (!nextStep || !STEP_STATUS_SET.has(String(nextStep.status)))
+      return []
+
+    const currentHistory = parseStepHistory(currentStep.update_history)
+    const nextHistory = parseStepHistory(nextStep.update_history)
+    const latest = nextHistory.at(-1)
+    if (!latest || JSON.stringify(currentHistory) === JSON.stringify(nextHistory))
+      return []
+
+    return [{
+      stepId,
+      status: nextStep.status as AppOnboardingStepStatus,
+      at: latest.at,
+      historyLength: nextHistory.length,
+      historyFull: 'type' in latest,
+    }]
+  })
 }
