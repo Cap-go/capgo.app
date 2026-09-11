@@ -532,7 +532,7 @@ app.post('/', middlewareAuth(), async (c) => {
   const apikeyId = c.get('apikey')?.id
   await sendEventToTracking(c, addAuthenticatedApiKeyIdToTrackingPayload({
     ...trackedBody,
-    bento: bentoEvent?.event === 'bundle_incompatible_expected' ? { ...bentoEvent, event: 'bundle_safe_expected' } : bentoEvent,
+    bento: bentoEvent === bundleIncompatibleBentoEvent && bentoEvent?.data.gated ? { ...bentoEvent, event: 'bundle_safe_expected' } : bentoEvent,
     sentToBento: Boolean(bentoEvent),
     groups: verifiedOrgId ? { organization: verifiedOrgId } : undefined,
   }, apikeyId))
