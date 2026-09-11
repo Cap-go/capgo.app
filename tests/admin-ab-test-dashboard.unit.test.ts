@@ -31,6 +31,18 @@ describe('admin A/B test dashboard presentation', () => {
       ...payload[0],
       branches: [{ ...payload[0].branches[0], percentage: 101 }, payload[0].branches[1]],
     }])).toBeNull()
+    expect(parseAdminABTestDistribution([{
+      ...payload[0],
+      branches: [{ ...payload[0].branches[0], percentage: 49.9 }, payload[0].branches[1]],
+    }])).toBeNull()
+    expect(parseAdminABTestDistribution([{
+      ...payload[0],
+      total: 0,
+      branches: [
+        { ...payload[0].branches[0], count: 0, percentage: 50 },
+        { ...payload[0].branches[1], count: 0, percentage: 50 },
+      ],
+    }])).toBeNull()
   })
 
   it.concurrent('wires the admin tab, metric, and compact matrix page', async () => {

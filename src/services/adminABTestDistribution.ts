@@ -24,6 +24,12 @@ function isPercentage(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100
 }
 
+function expectedPercentage(count: number, total: number): number {
+  if (total === 0)
+    return 0
+  return Math.round((count / total) * 1_000) / 10
+}
+
 function parseBranch(value: unknown): AdminABTestDistributionBranch | null {
   if (!isRecord(value)
     || typeof value.branch !== 'string'
@@ -65,9 +71,11 @@ export function parseAdminABTestDistribution(value: unknown): AdminABTestDistrib
     const branches = item.branches.map(parseBranch)
     if (branches.includes(null))
       return null
+    const total = item.total
     const parsedBranches = branches as AdminABTestDistributionBranch[]
     if (new Set(parsedBranches.map(branch => branch.branch)).size !== parsedBranches.length
-      || parsedBranches.reduce((sum, branch) => sum + branch.count, 0) !== item.total) {
+      || parsedBranches.reduce((sum, branch) => sum + branch.count, 0) !== total
+      || parsedBranches.some(branch => branch.percentage !== expectedPercentage(branch.count, total))) {
       return null
     }
 
@@ -76,7 +84,7 @@ export function parseAdminABTestDistribution(value: unknown): AdminABTestDistrib
       branches: parsedBranches,
       label: item.label,
       test_name: item.test_name,
-      total: item.total,
+      total,
     })
   }
 
