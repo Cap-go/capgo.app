@@ -13,7 +13,10 @@ on:
 
 concurrency:
   group: coderabbit-bot-trigger-${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}
-  cancel-in-progress: true
+  # Never cancel in-progress runs: a cancelled job leaves a required "trigger"
+  # check in CANCELLED state and makes statusCheckRollup FAILURE even when a
+  # parallel run succeeds (see capgo.app#3295 run 34425022185).
+  cancel-in-progress: false
 
 # pull-requests: write is required: GITHUB_TOKEN gets 403 on issues.createComment
 # for PRs when only pull-requests: read is granted (see run 32975845301).
@@ -177,6 +180,6 @@ jobs:
                 owner,
                 repo,
                 issue_number: pr.number,
-                body: `${marker}\n@coderabbitai review`,
+                body: `${marker}\n@coderabbitai resume\n@coderabbitai review`,
               })
             }

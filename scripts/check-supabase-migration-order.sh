@@ -126,6 +126,34 @@ while IFS= read -r file; do
 done < <(git ls-tree -r --name-only "${base_ref}" -- supabase/migrations)
 
 status=0
+: > "${added_timestamps_file}"
+
+register_added_migration_timestamp() {
+  local file="$1"
+  local ts="$2"
+
+  existing_base_file="$(awk -F '\t' -v ts="$ts" '$1 == ts { print $2; exit }' "${base_timestamps_file}")"
+  if [[ -n "$existing_base_file" && "$existing_base_file" != "$file" ]]; then
+    echo "❌ Duplicate migration timestamp: ${ts}"
+    echo "  New file: $file"
+    echo "  Existing file: ${existing_base_file}"
+    status=1
+    return
+  fi
+
+  existing_added_file="$(awk -F '\t' -v ts="$ts" '$1 == ts { print $2; exit }' "${added_timestamps_file}")"
+  if [[ -n "$existing_added_file" && "$existing_added_file" != "$file" ]]; then
+    echo "❌ Duplicate migration timestamp in this change: ${ts}"
+    echo "  First file: ${existing_added_file}"
+    echo "  Second file: $file"
+    status=1
+    return
+  fi
+
+  if [[ -z "$existing_added_file" ]]; then
+    printf '%s\t%s\n' "$ts" "$file" >> "${added_timestamps_file}"
+  fi
+}
 
 # Allow content-preserving re-stamps: a pure rename (100% identical content) of a
 # migration to a timestamp NEWER than the latest on the base branch. This is the
@@ -143,6 +171,12 @@ while IFS=$'\t' read -r similarity _old_path new_path; do
     restamped_files+="${new_path}"$'\n'
   fi
 done < <(git diff --name-status -M100% --diff-filter=R "${base_ref}...HEAD" -- 'supabase/migrations/*.sql')
+
+# Out-of-order restamp plus org onboarding intent jsonb_typeof guard. Exact blob
+# hash keeps this allowlist from accepting later edits.
+restamp_webnative_onboarding='supabase/migrations/20260909163000_expand_webnative_onboarding.sql'
+restamp_webnative_onboarding_source='supabase/migrations/20260907163000_expand_webnative_onboarding.sql'
+restamp_webnative_onboarding_blob='ff4f7030f0c911234c3646239e88346e360cd9e7'
 
 # This migration failed before it was recorded in production: first a legacy
 # trigger referenced the removed column, then sequential DDL locks deadlocked
@@ -184,14 +218,26 @@ if [[ -n "$modified_files" ]]; then
 
     if [[ -n "$restamped_files" ]] && printf '%s' "$restamped_files" | grep -qxF "$file"; then
       echo "⚠️  Allowing content-preserving re-stamp to a newer timestamp: $file"
+      if [[ -n "$ts" ]]; then
+        register_added_migration_timestamp "$file" "$ts"
+      fi
       continue
-
-
     fi
 
     if [[ "$file" == "$failed_migration_hotfix" ]] \
       && [[ "$(git hash-object "$file")" == "$failed_migration_hotfix_blob" ]]; then
       echo "⚠️  Allowing audited repair to failed unapplied migration: $file"
+      continue
+    fi
+
+    restamp_rename_source="$(git diff --name-status -M50% "${base_ref}...HEAD" -- 'supabase/migrations/*.sql' | awk -F '\t' -v new_path="$restamp_webnative_onboarding" '$1 ~ /^R/ && $3 == new_path { print $2; exit }')"
+    if [[ "$file" == "$restamp_webnative_onboarding" ]] \
+      && [[ "$restamp_rename_source" == "$restamp_webnative_onboarding_source" ]] \
+      && [[ "$(git hash-object "$file")" == "$restamp_webnative_onboarding_blob" ]] \
+      && [[ -n "$ts" ]] \
+      && (( 10#$ts > 10#$latest_base_timestamp )); then
+      echo "⚠️  Allowing audited org onboarding intent guard during restamp: $file"
+      register_added_migration_timestamp "$file" "$ts"
       continue
     fi
 
@@ -246,8 +292,6 @@ if [[ -n "$deleted_files" && "$allow_migration_squash" -ne 1 ]]; then
   status=1
 fi
 if [[ -n "$added_files" ]]; then
-  : > "${added_timestamps_file}"
-
   while IFS= read -r file; do
     [[ -z "$file" ]] && continue
 
@@ -266,15 +310,7 @@ if [[ -n "$added_files" ]]; then
       status=1
     fi
 
-    existing_added_file="$(awk -F '\t' -v ts="$ts" '$1 == ts { print $2; exit }' "${added_timestamps_file}")"
-    if [[ -n "$existing_added_file" ]]; then
-      echo "❌ Duplicate migration timestamp in this change: ${ts}"
-      echo "  First file: ${existing_added_file}"
-      echo "  Second file: $file"
-      status=1
-    else
-      printf '%s\t%s\n' "$ts" "$file" >> "${added_timestamps_file}"
-    fi
+    register_added_migration_timestamp "$file" "$ts"
 
     if (( 10#$ts < 10#$latest_base_timestamp )); then
       if [[ "$allow_migration_squash" -eq 1 && "${file##*/}" == *_baseline.sql ]]; then

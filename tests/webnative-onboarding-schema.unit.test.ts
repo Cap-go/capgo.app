@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const webnativeOnboardingMigration = readFileSync(
-  new URL('../supabase/migrations/20260907163000_expand_webnative_onboarding.sql', import.meta.url),
+  new URL('../supabase/migrations/20260909163000_expand_webnative_onboarding.sql', import.meta.url),
   'utf8',
 )
 

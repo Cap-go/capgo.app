@@ -84,4 +84,47 @@ exec "$REAL_GIT" "$@"
       rmSync(repoDir, { recursive: true, force: true })
     }
   })
+
+  it('rejects duplicate timestamps among newly added migrations', () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'capgo-migration-order-dup-'))
+    const migrationsDir = join(repoDir, 'supabase', 'migrations')
+    const scriptPath = join(process.cwd(), 'scripts', 'check-supabase-migration-order.sh')
+
+    try {
+      mkdirSync(migrationsDir, { recursive: true })
+      run('git', ['init', '-b', 'main'], repoDir)
+      run('git', ['config', 'user.email', 'test@example.com'], repoDir)
+      run('git', ['config', 'user.name', 'Capgo Test'], repoDir)
+      run('git', ['config', 'commit.gpgsign', 'false'], repoDir)
+
+      writeFileSync(join(migrationsDir, '20260101000000_base.sql'), 'select 1;\n')
+      run('git', ['add', '.'], repoDir)
+      run('git', ['commit', '-m', 'base migration'], repoDir)
+
+      run('git', ['checkout', '-b', 'feature'], repoDir)
+      writeFileSync(join(migrationsDir, '20260102000000_first.sql'), 'select 2;\n')
+      writeFileSync(join(migrationsDir, '20260102000000_second.sql'), 'select 3;\n')
+      run('git', ['add', '.'], repoDir)
+      run('git', ['commit', '-m', 'duplicate timestamp migrations'], repoDir)
+
+      run('git', ['checkout', 'main'], repoDir)
+      run('git', ['merge', '--no-ff', 'feature', '-m', 'merge feature'], repoDir)
+
+      const result = spawnSync('bash', [scriptPath], {
+        cwd: repoDir,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          GITHUB_BASE_REF: 'main',
+          GITHUB_EVENT_NAME: 'pull_request',
+        },
+      })
+
+      expect(result.status).toBe(1)
+      expect(result.stdout).toContain('Duplicate migration timestamp in this change')
+    }
+    finally {
+      rmSync(repoDir, { recursive: true, force: true })
+    }
+  })
 })
