@@ -17298,75 +17298,6 @@ $$;
 ALTER FUNCTION "public"."remove_old_jobs"() OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."report_app_onboarding_setup"() RETURNS 
-    LANGUAGE "plpgsql" SECURITY DEFINER
-    SET "search_path" TO ''
-    AS $$
-DECLARE
-  v_owner_org uuid;
-  v_onboarding jsonb;
-BEGIN
-  IF p_app_id IS NULL OR btrim(p_app_id) = '' THEN
-    RAISE EXCEPTION 'APP_NOT_FOUND';
-  END IF;
-
-  IF jsonb_typeof(p_patch) IS DISTINCT FROM 'object' THEN
-    RAISE EXCEPTION 'INVALID_PATCH';
-  END IF;
-
-  SELECT apps.owner_org, apps.onboarding
-  INTO v_owner_org, v_onboarding
-  FROM public.apps
-  WHERE apps.app_id = p_app_id
-  FOR UPDATE;
-
-  IF v_owner_org IS NULL THEN
-    RAISE EXCEPTION 'NO_PERMISSION';
-  END IF;
-
-  IF NOT (
-    public.rbac_check_permission_request(
-      public.rbac_perm_app_update_settings(),
-      v_owner_org,
-      p_app_id,
-      NULL::bigint
-    )
-    OR public.rbac_check_permission_request(
-      public.rbac_perm_org_create_app(),
-      v_owner_org,
-      NULL::character varying,
-      NULL::bigint
-    )
-  ) THEN
-    RAISE EXCEPTION 'NO_PERMISSION';
-  END IF;
-
-  v_onboarding := public.merge_app_onboarding_setup(v_onboarding, p_patch);
-
-  UPDATE public.apps
-  SET onboarding = v_onboarding,
-      updated_at = now()
-  WHERE apps.app_id = p_app_id;
-
-  PERFORM public.try_complete_pending_onboarding_if_setup_done(p_app_id);
-
-  SELECT apps.onboarding
-  INTO v_onboarding
-  FROM public.apps
-  WHERE apps.app_id = p_app_id;
-
-  RETURN v_onboarding;
-END;
-$$;
-
-
-ALTER FUNCTION "public"."report_app_onboarding_setup"() OWNER TO "postgres";
-
-
-COMMENT ON FUNCTION "public"."report_app_onboarding_setup"() IS 'Records CLI/MCP/AI/manual setup progress for an app the caller can update. Completes need_onboarding when setup outcome is completed or skipped. Requires app.update_settings or org.create_app.';
-
-
-
 CREATE OR REPLACE FUNCTION "public"."request_actor_user_id"() RETURNS "uuid"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -22817,7 +22748,7 @@ COMMENT ON COLUMN "public"."users"."github_username" IS 'Optional GitHub usernam
 
 
 
-COMMENT ON COLUMN "public"."users"."onboarding" IS 'Persisted create-app onboarding wizard progress for resume and admin drop-off. Keys: status, step, flow, development_environment, intent, details_step, app_name, app_id, existing_app, existing_app_setup, store_url, imported_store_app_id, org_name, estimated_users_index, onboarding_attempt_id, last_run_id, abtests, updated_at, completed_at.';
+COMMENT ON COLUMN "public"."users"."onboarding" IS 'Persisted create-app onboarding wizard progress for resume and admin drop-off. Keys: status, step, flow, development_environment, intent, details_step, setup_stage, app_name, app_id, existing_app, existing_app_setup, store_url, imported_store_app_id, org_name, estimated_users_index, onboarding_attempt_id, last_run_id, abtests, updated_at, completed_at.';
 
 
 
@@ -23428,7 +23359,7 @@ ALTER TABLE ONLY "public"."user_security"
 
 
 ALTER TABLE "public"."users"
-    ADD CONSTRAINT "users_onboarding_valid" CHECK ((("jsonb_typeof"("onboarding") = 'object'::"text") AND ("octet_length"(("onboarding")::"text") <= 65536) AND ((NOT ("onboarding" ? 'status'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'status'::"text")) = 'string'::"text") AND (("onboarding" ->> 'status'::"text") = ANY (ARRAY['in_progress'::"text", 'completed'::"text", 'abandoned'::"text"])))) AND ((NOT ("onboarding" ? 'step'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'step'::"text")) = 'string'::"text") AND (("onboarding" ->> 'step'::"text") = ANY (ARRAY['intent'::"text", 'publish_app_question'::"text", 'details'::"text", 'organization'::"text", 'choice'::"text", 'install'::"text", 'setup'::"text"])))) AND ((NOT ("onboarding" ? 'flow'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'flow'::"text")) = 'string'::"text") AND (("onboarding" ->> 'flow'::"text") = ANY (ARRAY['pre_org'::"text", 'existing_org'::"text"])))) AND ((NOT ("onboarding" ? 'development_environment'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'development_environment'::"text")) = 'string'::"text") AND (("onboarding" ->> 'development_environment'::"text") = ANY (ARRAY['hosted_builder'::"text", 'ai_assistant'::"text", 'hand_coded'::"text", 'other'::"text", 'local_project'::"text", 'exploring'::"text", 'skipped'::"text"])))) AND ((NOT ("onboarding" ? 'intent'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'intent'::"text")) = 'string'::"text") AND (("onboarding" ->> 'intent'::"text") = ANY (ARRAY['ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text", 'publish'::"text"])))))) NOT VALID;
+    ADD CONSTRAINT "users_onboarding_valid" CHECK ((("jsonb_typeof"("onboarding") = 'object'::"text") AND ("octet_length"(("onboarding")::"text") <= 65536) AND ((NOT ("onboarding" ? 'status'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'status'::"text")) = 'string'::"text") AND (("onboarding" ->> 'status'::"text") = ANY (ARRAY['in_progress'::"text", 'completed'::"text", 'abandoned'::"text"])))) AND ((NOT ("onboarding" ? 'step'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'step'::"text")) = 'string'::"text") AND (("onboarding" ->> 'step'::"text") = ANY (ARRAY['intent'::"text", 'publish_app_question'::"text", 'details'::"text", 'organization'::"text", 'choice'::"text", 'install'::"text", 'setup'::"text"])))) AND ((NOT ("onboarding" ? 'flow'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'flow'::"text")) = 'string'::"text") AND (("onboarding" ->> 'flow'::"text") = ANY (ARRAY['pre_org'::"text", 'existing_org'::"text"])))) AND ((NOT ("onboarding" ? 'development_environment'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'development_environment'::"text")) = 'string'::"text") AND (("onboarding" ->> 'development_environment'::"text") = ANY (ARRAY['hosted_builder'::"text", 'ai_assistant'::"text", 'hand_coded'::"text", 'other'::"text", 'local_project'::"text", 'exploring'::"text", 'skipped'::"text"])))) AND ((NOT ("onboarding" ? 'intent'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'intent'::"text")) = 'string'::"text") AND (("onboarding" ->> 'intent'::"text") = ANY (ARRAY['ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text", 'publish'::"text"])))) AND ((NOT ("onboarding" ? 'setup_stage'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'setup_stage'::"text")) = 'string'::"text") AND (("onboarding" ->> 'setup_stage'::"text") = ANY (ARRAY['channel-routing'::"text", 'channel-self-assign'::"text", 'channel-console-assign'::"text", 'channel-create'::"text", 'cli'::"text"])))))) NOT VALID;
 
 
 
@@ -28774,12 +28705,6 @@ GRANT ALL ON FUNCTION "public"."reject_access_due_to_password_policy"("org_id" "
 
 
 REVOKE ALL ON FUNCTION "public"."remove_old_jobs"() FROM PUBLIC;
-
-
-
-REVOKE ALL ON FUNCTION "public"."report_app_onboarding_setup"() FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."report_app_onboarding_setup"() TO "service_role";
-GRANT ALL ON FUNCTION "public"."report_app_onboarding_setup"() TO "authenticated";
 
 
 
