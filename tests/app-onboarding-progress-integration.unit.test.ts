@@ -264,7 +264,7 @@ describe('app onboarding progress analytics integration', () => {
     writerMocks.organization.currentOrganization = {
       gid: 'resumed-org',
       name: 'Resumed Org',
-      onboarding: {},
+      onboarding: { intent: 'builder' },
     }
     writerMocks.abTestAssignments = currentOnboarding.abtests
     writerMocks.main.user = {
