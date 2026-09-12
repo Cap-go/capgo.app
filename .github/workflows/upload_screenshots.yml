@@ -39,7 +39,7 @@ jobs:
           } > "$BUNDLE_GEMFILE"
       - uses: ruby/setup-ruby@v1
         with:
-          ruby-version: '3.4'
+          ruby-version: '3.4.10'
       - name: Install fastlane
         run: |
           bundle config set path .bundle/vendor
@@ -72,7 +72,7 @@ jobs:
           } > "$BUNDLE_GEMFILE"
       - uses: ruby/setup-ruby@v1
         with:
-          ruby-version: '3.4'
+          ruby-version: '3.4.10'
       - name: Install fastlane
         run: |
           bundle config set path .bundle/vendor
