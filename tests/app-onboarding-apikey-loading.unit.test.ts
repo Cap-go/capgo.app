@@ -10,9 +10,9 @@ describe('app onboarding API key loading state', () => {
   })
 
   it.concurrent('replaces every incomplete CLI command with the shared loading treatment', () => {
-    expect(onboardingSource).not.toContain("{{ apiKey ?? '[APIKEY]' }}")
+    expect(onboardingSource).not.toContain('{{ apiKey ?? \'[APIKEY]\' }}')
     expect(onboardingSource).toContain('<Spinner')
-    expect(onboardingSource).toContain("t('app-onboarding-command-apikey-loading')")
+    expect(onboardingSource).toContain('t(\'app-onboarding-command-apikey-loading\')')
     expect(onboardingSource).not.toMatch(/role="status">\s*<div[^>]*aria-live="polite"/)
   })
 
@@ -27,7 +27,7 @@ describe('app onboarding API key loading state', () => {
     )
     const mountedFlow = onboardingSource.slice(onboardingSource.indexOf('onMounted(async () => {'))
     const resumeLoadIndex = mountedFlow.indexOf('const resumed = await loadResumeApp()')
-    const apiKeyProvisioningIndex = mountedFlow.indexOf('void loadApiKey().catch')
+    const apiKeyProvisioningIndex = mountedFlow.indexOf('startApiKeyLoading()')
 
     expect(resumeLoader).not.toContain('ensureApiKey')
     expect(resumeLoadIndex).toBeGreaterThanOrEqual(0)
@@ -38,12 +38,28 @@ describe('app onboarding API key loading state', () => {
 
   it.concurrent('targets the created app when a stale resume falls back to replacement creation', () => {
     const keyLoader = onboardingSource.slice(
-      onboardingSource.indexOf('async function ensureApiKey()'),
-      onboardingSource.indexOf('let apiKeyLoadingPromise'),
+      onboardingSource.indexOf('async function ensureApiKey('),
+      onboardingSource.indexOf('async function loadResumeApp()'),
     )
 
+    expect(keyLoader).toContain('const userId = main.user?.id ?? main.auth?.id')
     expect(keyLoader).toContain('const appId = createdApp.value?.app_id')
     expect(keyLoader).not.toContain('resumeAppId.value')
+  })
+
+  it.concurrent('retries API key loading from both CLI entry points', () => {
+    const showCommand = onboardingSource.slice(
+      onboardingSource.indexOf('function showCliCommand()'),
+      onboardingSource.indexOf('async function reportOnboardingPatch('),
+    )
+    const installNavigation = onboardingSource.slice(
+      onboardingSource.indexOf('function goToInstallStep()'),
+      onboardingSource.indexOf('async function openDashboard()'),
+    )
+
+    expect(showCommand).toContain('startApiKeyLoading()')
+    expect(installNavigation).toContain('startApiKeyLoading()')
+    expect(onboardingSource).toContain('@click="showCliCommand"')
   })
 
   it.concurrent('renders ready commands as native DaisyUI buttons', () => {
@@ -55,11 +71,25 @@ describe('app onboarding API key loading state', () => {
     expect(onboardingSource).toContain('<span v-if="!usesBuilderSetupCommand" class="text-emerald-300">&nbsp;{{ apiKey }}</span>')
   })
 
-  it.concurrent('provides secure onboarding copy in the English locale', () => {
+  it.concurrent('reuses the shared intent-aware AI setup prompt', () => {
     expect(englishMessages['app-onboarding-command-apikey-loading']).toBe('Creating your secure API key…')
     expect(englishMessages['app-onboarding-ai-help-caption']).toBe('Let your AI assistant guide you through setting up Capgo. Copy the onboarding instructions to get started.')
-    expect(englishMessages['app-onboarding-ai-help-with-key']).toContain('do not repeat the API key in your response')
-    expect(englishMessages['app-onboarding-ai-help-prompt']).toContain('3. Help me verify the installation succeeded.\n4. {apiKeyGuidance}')
+    expect(onboardingSource).toContain('import { buildCliAiSetupPrompt } from \'~/services/cliAiPrompt\'')
+    const promptBuilder = onboardingSource.slice(
+      onboardingSource.indexOf('function createAiHelpPrompt()'),
+      onboardingSource.indexOf('const appOnboardingSteps'),
+    )
+    expect(promptBuilder).toContain('return buildCliAiSetupPrompt({')
+    expect(promptBuilder).toContain('organizations,')
+    expect(promptBuilder).toContain('skippedOrganizations: [],')
+    expect(promptBuilder).toContain('name: (props.preOrg ? orgNameInput.value.trim() : resolvedOrganizationName.trim()) || resolvedOrganizationId')
+    expect(promptBuilder).toContain('selectedIntent.value === \'publish\' ? \'builder\' : selectedIntent.value')
+    expect(promptBuilder).not.toContain('t(\'app-onboarding-ai-help-prompt\'')
+    expect(englishMessages['app-onboarding-ai-help-prompt']).toBeUndefined()
+    expect(englishMessages['app-onboarding-ai-help-status-existing']).toBeUndefined()
+    expect(englishMessages['app-onboarding-ai-help-status-new']).toBeUndefined()
+    expect(englishMessages['app-onboarding-ai-help-with-key']).toBeUndefined()
+    expect(englishMessages['app-onboarding-v2-ai-help-status']).toBeUndefined()
     expect(englishMessages['app-onboarding-ai-help-copy-description']).toBeUndefined()
     expect(englishMessages['app-onboarding-ai-help-copy-title']).toBeUndefined()
     expect(englishMessages['app-onboarding-ai-help-copy-with-key']).toBeUndefined()
@@ -77,9 +107,9 @@ describe('app onboarding API key loading state', () => {
     expect(copyHandler).toContain('await loadApiKey()')
     expect(copyHandler).toContain('if (!apiKey.value)')
     expect(copyHandler).toContain('await copyText(createAiHelpPrompt())')
-    expect(copyHandler).toContain("trackSuccessfulCopy('onboarding_ai_instructions_copied')")
+    expect(copyHandler).toContain('trackSuccessfulCopy(\'onboarding_ai_instructions_copied\')')
     expect(copyHandler).not.toContain('dialogStore.openDialog({')
     expect(copyHandler).not.toContain('redactedCliCommand')
-    expect(onboardingSource).toContain("trackSuccessfulCopy('onboarding_cli_command_copied')")
+    expect(onboardingSource).toContain('trackSuccessfulCopy(\'onboarding_cli_command_copied\')')
   })
 })

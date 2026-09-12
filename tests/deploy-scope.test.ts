@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { resolveDeployScopeFromFiles, resolveDeployScopeFromGit } from '../scripts/deploy-scope.ts'
+import {
+  hasMigrationChanges,
+  requiresSchemaTypesSync,
+  resolveDeployScopeFromFiles,
+  resolveDeployScopeFromGit,
+} from '../scripts/deploy-scope.ts'
 
 const noBackendDeploys = {
   api: false,
@@ -10,6 +15,26 @@ const noBackendDeploys = {
 }
 
 describe('deploy scope matching', () => {
+  it.concurrent('reports migration changes separately from the Supabase deploy scope', () => {
+    expect(hasMigrationChanges(['supabase/migrations/20260910000000_example.sql'])).toBe(true)
+    expect(hasMigrationChanges(['supabase/functions/main/index.ts'])).toBe(false)
+  })
+
+  it.concurrent('synchronizes schema types for the first Capgo release', () => {
+    expect(requiresSchemaTypesSync({
+      base: null,
+      files: [],
+      head: 'HEAD',
+      scope: {
+        api: true,
+        files: true,
+        plugins: true,
+        supabase: true,
+        translation: true,
+      },
+    })).toBe(true)
+  })
+
   it.concurrent('does not deploy backend targets for frontend-only changes', () => {
     expect(resolveDeployScopeFromFiles(['src/pages/index.vue'])).toEqual(noBackendDeploys)
   })

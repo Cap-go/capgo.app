@@ -1,5 +1,6 @@
 import type { SQL } from 'drizzle-orm'
 import type { Context } from 'hono'
+import type { PoolClient } from 'pg'
 import type { AdminOnboardingActivationCohort, AdminOnboardingWizardDropoff } from './onboardingFunnel.ts'
 import { and, eq, isNotNull, isNull, or, sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/node-postgres'
@@ -392,7 +393,7 @@ export function getPgClient(c: Context, readOnly = false) {
   return pool
 }
 
-export function getDrizzleClient(db: ReturnType<typeof getPgClient>, options?: { logger?: boolean }) {
+export function getDrizzleClient(db: ReturnType<typeof getPgClient> | PoolClient, options?: { logger?: boolean }) {
   // Keep SQL logging on by default for API/trigger diagnostics.
   // Plugin hot paths pass `{ logger: false }` to avoid per-request log CPU/volume.
   return drizzle({ client: db, logger: options?.logger ?? true })
@@ -3861,7 +3862,7 @@ export async function getAdminOnboardingFunnel(
           WHEN onboarding->>'status' = 'completed' THEN 'completed'
           WHEN onboarding->>'status' = 'abandoned' THEN 'abandoned'
           WHEN COALESCE(onboarding->>'step', '') = '' THEN 'not_started'
-          WHEN onboarding->>'step' IN ('intent', 'details', 'organization', 'choice', 'install', 'setup') THEN onboarding->>'step'
+          WHEN onboarding->>'step' IN ('intent', 'publish_app_question', 'details', 'organization', 'choice', 'install', 'setup') THEN onboarding->>'step'
           ELSE 'not_started'
         END as step,
         COUNT(*)::int as count

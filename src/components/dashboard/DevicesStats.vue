@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions, Plugin } from 'chart.js'
 import type { TooltipClickHandler } from '~/services/chartTooltip'
+import type { NativeActiveDevicesSummary, NativeDailyPlatformActive } from '~/services/nativeDeviceStats'
 import type { Organization } from '~/stores/organization'
 import { useDark } from '@vueuse/core'
 import { CategoryScale, Chart, Filler, LinearScale, LineElement, PointElement, Tooltip } from 'chart.js'
@@ -14,11 +15,20 @@ import { useChartData } from '~/services/chartDataService'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
 import { formatUtcDateParam, generateChartDayLabels, getChartDateRange, getLastNUtcDaysRange, normalizeToUtcStartOfDay } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
+import {
+  calculateSummaryEvolutionPercent,
+  generateDemoDailyPlatformActive,
+  generateDemoNativeActiveSummary,
+  generateDemoPreviousNativeActiveSummary,
+  normalizeNativeActiveDevicesSummary,
+} from '~/services/nativeDeviceStats'
 import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
 import { shouldShowDashboardDemoData } from '~/utils/dashboardDemoMode'
 import ChartCard from './ChartCard.vue'
+import NativeDeviceMetricCard from './NativeDeviceMetricCard.vue'
+import NativePlatformTrendChart from './NativePlatformTrendChart.vue'
 import PeriodDaySelector from './PeriodDaySelector.vue'
 
 const props = defineProps({
@@ -101,6 +111,9 @@ interface ChartDataset {
 interface ChartApiData {
   labels: string[]
   datasets: ChartDataset[]
+  activeDevices?: NativeActiveDevicesSummary
+  previousPeriodActiveDevices?: NativeActiveDevicesSummary
+  dailyPlatformActive?: NativeDailyPlatformActive
 }
 
 Chart.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Filler)
@@ -112,6 +125,7 @@ const router = useRouter()
 const organizationStore = useOrganizationStore()
 const supabase = useSupabase()
 const rawChartData = ref<ChartApiData | null>(null)
+const rawThirtyDayChartData = ref<ChartApiData | null>(null)
 
 const detectedAppId = ref('')
 const activeAppId = computed(() => props.appId || detectedAppId.value)
@@ -175,6 +189,9 @@ let requestToken = 0
 // Cache for both billing period and last 30 days data
 const cachedBillingData = ref<{ data: ChartApiData, range: { startDate: Date, endDate: Date } } | null>(null)
 const cached30DayData = ref<{ data: ChartApiData, range: { startDate: Date, endDate: Date } } | null>(null)
+const cachedThirtyDaySummaryData = ref<{ data: ChartApiData, range: { startDate: Date, endDate: Date } } | null>(null)
+const isFetchingThirtyDaySummary = ref(false)
+let thirtyDaySummaryRequestToken = 0
 
 const latestVersion = computed(() => {
   const chartData = rawChartData.value
@@ -495,6 +512,76 @@ const isDemoMode = computed(() => shouldShowDashboardDemoData({
 
 const hasData = computed(() => !!(processedChartData.value && processedChartData.value.datasets.length > 0) || isDemoMode.value)
 
+const selectedPeriodActiveDevices = computed((): NativeActiveDevicesSummary | null => {
+  if (isDemoMode.value)
+    return generateDemoNativeActiveSummary(periodDays.value)
+
+  if (rawChartData.value?.activeDevices)
+    return normalizeNativeActiveDevicesSummary(rawChartData.value.activeDevices)
+
+  return null
+})
+
+const selectedPeriodPreviousActiveDevices = computed((): NativeActiveDevicesSummary | null => {
+  if (isDemoMode.value)
+    return generateDemoPreviousNativeActiveSummary(periodDays.value)
+
+  if (rawChartData.value?.previousPeriodActiveDevices)
+    return normalizeNativeActiveDevicesSummary(rawChartData.value.previousPeriodActiveDevices)
+
+  return null
+})
+
+const thirtyDayActiveDevices = computed(() => {
+  if (isDemoMode.value)
+    return generateDemoNativeActiveSummary(30)
+
+  if (!props.useBillingPeriod && periodDays.value === 30 && rawChartData.value?.activeDevices)
+    return normalizeNativeActiveDevicesSummary(rawChartData.value.activeDevices)
+
+  if (rawThirtyDayChartData.value?.activeDevices)
+    return normalizeNativeActiveDevicesSummary(rawThirtyDayChartData.value.activeDevices)
+
+  return normalizeNativeActiveDevicesSummary(null)
+})
+
+const selectedPeriodDailyPlatformActive = computed<NativeDailyPlatformActive | null>(() => {
+  if (isDemoMode.value) {
+    const labels = rawChartData.value?.labels ?? []
+    return labels.length ? generateDemoDailyPlatformActive(labels) : null
+  }
+
+  if (rawChartData.value?.dailyPlatformActive)
+    return rawChartData.value.dailyPlatformActive
+
+  return null
+})
+
+const selectedPeriodLabel = computed(() => {
+  if (periodDays.value === 1)
+    return t('one-day')
+  if (periodDays.value === 3)
+    return t('three-days')
+  if (periodDays.value === 7)
+    return t('seven-days')
+  return t('max-period')
+})
+
+const totalActiveEvolution = computed(() => calculateSummaryEvolutionPercent(
+  selectedPeriodActiveDevices.value?.total,
+  selectedPeriodPreviousActiveDevices.value?.total,
+))
+const androidActiveEvolution = computed(() => calculateSummaryEvolutionPercent(
+  selectedPeriodActiveDevices.value?.android,
+  selectedPeriodPreviousActiveDevices.value?.android,
+))
+const iosActiveEvolution = computed(() => calculateSummaryEvolutionPercent(
+  selectedPeriodActiveDevices.value?.ios,
+  selectedPeriodPreviousActiveDevices.value?.ios,
+))
+const showNativeKpis = computed(() => isNativeUsage.value)
+const isThirtyDaySummaryLoading = computed(() => isFetchingThirtyDaySummary.value || (isLoading.value && isNativeUsage.value && (props.useBillingPeriod || periodDays.value !== 30)))
+
 const todayLineOptions = computed(() => {
   if (!props.useBillingPeriod || !currentRange.value)
     return { enabled: false }
@@ -571,19 +658,77 @@ const chartOptions = computed<ChartOptions<'line'>>(() => {
 
 const chartPlugins = [verticalLinePlugin, todayLinePlugin] as unknown as Plugin<'line'>[]
 
+async function loadThirtyDaySummary(forceRefetch = false, loadToken?: number, loadAppId?: string) {
+  if (!isNativeUsage.value || !activeAppId.value || props.forceDemo) {
+    rawThirtyDayChartData.value = null
+    return
+  }
+
+  const expectedAppId = loadAppId ?? activeAppId.value
+
+  if (!props.useBillingPeriod && periodDays.value === 30) {
+    rawThirtyDayChartData.value = rawChartData.value
+    return
+  }
+
+  const { startDate, endDate } = getLastNUtcDaysRange(30)
+  const cacheIsValid = cachedThirtyDaySummaryData.value
+    && cachedThirtyDaySummaryData.value.range.startDate.getTime() === startDate.getTime()
+    && cachedThirtyDaySummaryData.value.range.endDate.getTime() === endDate.getTime()
+
+  if (cacheIsValid && !forceRefetch && cachedThirtyDaySummaryData.value) {
+    rawThirtyDayChartData.value = cachedThirtyDaySummaryData.value.data
+    return
+  }
+
+  const summaryToken = ++thirtyDaySummaryRequestToken
+  isFetchingThirtyDaySummary.value = true
+  try {
+    const data = await useChartData(supabase, expectedAppId, startDate, endDate, 'native', { forceRefetch })
+    if (loadToken !== undefined && loadToken !== requestToken)
+      return
+    if (expectedAppId !== activeAppId.value)
+      return
+    rawThirtyDayChartData.value = data
+    if (data)
+      cachedThirtyDaySummaryData.value = { data, range: { startDate, endDate } }
+  }
+  catch (error) {
+    console.error('[DevicesStats] Error fetching 30-day native summary:', error)
+    if (loadToken !== undefined && loadToken !== requestToken)
+      return
+    if (expectedAppId !== activeAppId.value)
+      return
+    rawThirtyDayChartData.value = null
+  }
+  finally {
+    if (summaryToken === thirtyDaySummaryRequestToken)
+      isFetchingThirtyDaySummary.value = false
+  }
+}
+
 async function loadData(forceRefetch = false) {
   if (!activeAppId.value) {
     rawChartData.value = null
+    rawThirtyDayChartData.value = null
     return
   }
 
   // If forceDemo is true (payment failed), use demo data instead of fetching
   if (props.forceDemo) {
+    requestToken++
     const { startDate, endDate } = getDateRange()
     const days = Math.floor((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1
     const demoData = generateDemoDevicesData(days, props.usageKind)
     rawChartData.value = demoData
     currentRange.value = { startDate, endDate }
+    if (isNativeUsage.value) {
+      const thirtyDayRange = getLastNUtcDaysRange(30)
+      rawThirtyDayChartData.value = {
+        labels: generateChartDayLabels(thirtyDayRange.startDate, thirtyDayRange.endDate),
+        datasets: demoData.datasets,
+      }
+    }
     isLoading.value = false
     return
   }
@@ -608,8 +753,13 @@ async function loadData(forceRefetch = false) {
     && cachedData.range.endDate.getTime() === endDate.getTime()
 
   if (cacheIsValid && !forceRefetch) {
+    const cacheToken = ++requestToken
+    const requestedAppId = activeAppId.value
     rawChartData.value = cachedData.data
     currentRange.value = cachedData.range
+    isLoading.value = false
+    if (isNativeUsage.value)
+      await loadThirtyDaySummary(false, cacheToken, requestedAppId)
     return
   }
 
@@ -624,14 +774,15 @@ async function loadData(forceRefetch = false) {
   }
 
   const currentToken = ++requestToken
+  const requestedAppId = activeAppId.value
   isLoading.value = true
   rawChartData.value = null
   currentRange.value = { startDate, endDate }
 
   try {
-    const data = await useChartData(supabase, activeAppId.value, startDate, endDate, props.usageKind === 'native' ? 'native' : 'bundle')
+    const data = await useChartData(supabase, requestedAppId, startDate, endDate, props.usageKind === 'native' ? 'native' : 'bundle', { forceRefetch })
 
-    if (currentToken !== requestToken)
+    if (currentToken !== requestToken || requestedAppId !== activeAppId.value)
       return
 
     rawChartData.value = data
@@ -644,15 +795,18 @@ async function loadData(forceRefetch = false) {
     else {
       cached30DayData.value = cacheEntry
     }
+
+    if (isNativeUsage.value)
+      await loadThirtyDaySummary(forceRefetch, currentToken, requestedAppId)
   }
   catch (error) {
     console.error('[DevicesStats] Error fetching chart data:', error)
-    if (currentToken !== requestToken)
+    if (currentToken !== requestToken || requestedAppId !== activeAppId.value)
       return
     rawChartData.value = null
   }
   finally {
-    if (currentToken === requestToken) {
+    if (currentToken === requestToken && requestedAppId === activeAppId.value) {
       isLoading.value = false
     }
   }
@@ -695,6 +849,7 @@ watch(
         // Clear cache when switching apps
         cachedBillingData.value = null
         cached30DayData.value = null
+        cachedThirtyDaySummaryData.value = null
         await loadData(true) // Force refetch for new app
       }
       else if (!rawChartData.value) {
@@ -733,6 +888,7 @@ watch(
     if (packageChanged || usageKindChanged) {
       cachedBillingData.value = null
       cached30DayData.value = null
+      cachedThirtyDaySummaryData.value = null
       await loadData(true)
     }
     else if (!rawChartData.value) {
@@ -754,6 +910,84 @@ watch(
       <PeriodDaySelector
         v-model="periodDays"
         :labels="{ 30: 'max-period' }"
+      />
+    </div>
+
+    <div v-if="showNativeKpis" class="flex flex-col gap-6">
+      <div>
+        <div class="mb-3">
+          <h3 class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+            {{ t('native-active-devices-last-30-days') }}
+          </h3>
+          <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+            {{ t('native-active-devices-help') }}
+          </p>
+        </div>
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <NativeDeviceMetricCard
+            :title="t('native-active-devices-android')"
+            :value="thirtyDayActiveDevices.android"
+            :subtitle="t('native-active-devices-last-30-days')"
+            :is-loading="isLoading || isThirtyDaySummaryLoading"
+            accent-class="text-emerald-600 dark:text-emerald-400"
+          />
+          <NativeDeviceMetricCard
+            :title="t('native-active-devices-ios')"
+            :value="thirtyDayActiveDevices.ios"
+            :subtitle="t('native-active-devices-last-30-days')"
+            :is-loading="isLoading || isThirtyDaySummaryLoading"
+            accent-class="text-[#119eff]"
+          />
+          <NativeDeviceMetricCard
+            :title="t('native-active-devices-total')"
+            :value="thirtyDayActiveDevices.total"
+            :subtitle="t('native-active-devices-last-30-days')"
+            :is-loading="isLoading || isThirtyDaySummaryLoading"
+          />
+        </div>
+      </div>
+
+      <div>
+        <div class="mb-3">
+          <h3 class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+            {{ t('native-active-devices-selected-period') }}
+          </h3>
+          <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+            {{ t('native-platform-active-trend-help') }} ({{ selectedPeriodLabel }})
+          </p>
+        </div>
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <NativeDeviceMetricCard
+            :title="t('native-active-devices-android')"
+            :value="selectedPeriodActiveDevices?.android"
+            :subtitle="selectedPeriodLabel"
+            :evolution="androidActiveEvolution"
+            :is-loading="isLoading"
+            accent-class="text-emerald-600 dark:text-emerald-400"
+          />
+          <NativeDeviceMetricCard
+            :title="t('native-active-devices-ios')"
+            :value="selectedPeriodActiveDevices?.ios"
+            :subtitle="selectedPeriodLabel"
+            :evolution="iosActiveEvolution"
+            :is-loading="isLoading"
+            accent-class="text-[#119eff]"
+          />
+          <NativeDeviceMetricCard
+            :title="t('native-active-devices-total')"
+            :value="selectedPeriodActiveDevices?.total"
+            :subtitle="selectedPeriodLabel"
+            :evolution="totalActiveEvolution"
+            :is-loading="isLoading"
+          />
+        </div>
+      </div>
+
+      <NativePlatformTrendChart
+        :daily-platform-active="selectedPeriodDailyPlatformActive"
+        :is-loading="isLoading"
+        :has-data="!!selectedPeriodDailyPlatformActive"
+        :is-demo-data="isDemoMode"
       />
     </div>
 

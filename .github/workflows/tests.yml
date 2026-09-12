@@ -450,6 +450,9 @@ jobs:
           warm_post /organization
           warm_post /organization/members
           warm_post /apikey
+          warm_post /private/events
+          warm_get '/app?limit=1'
+          warm_get /private/role_bindings
       - name: Run backend integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}

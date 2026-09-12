@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { parseAppOnboarding } from '../supabase/functions/_backend/utils/appOnboarding.ts'
-import { BASE_URL, createDirectApiKeyWithBindings, executeSQL, fetchTestRequest, getAuthHeaders, getSupabaseClient, headers, ORG_ID, ORG_ID_2, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID, USER_ID_2 } from './test-utils.ts'
+import { BASE_URL, createDirectApiKeyWithBindings, executeSQL, fetchTestRequest, getAuthHeaders, getAuthHeadersForCredentials, getSupabaseClient, headers, ORG_ID, ORG_ID_2, resetAndSeedAppData, resetAppData, resetAppDataStats, SUPABASE_ANON_KEY, USER_EMAIL_NONMEMBER, USER_ID, USER_ID_2, USER_PASSWORD_NONMEMBER } from './test-utils.ts'
 
 function isDuplicateAppCreationError(body: any): boolean {
   if (!body || typeof body !== 'object')
@@ -107,9 +107,10 @@ describe('[GET] /app operations with subkey', () => {
 
   it('should create app and subkey with limited rights', async () => {
     // Create a test app
-    const createApp = await fetch(`${BASE_URL}/app`, {
+    const createApp = await fetchTestRequest(`${BASE_URL}/app`, {
       method: 'POST',
       headers,
+      retryUnsafe: true,
       body: JSON.stringify({
         owner_org: ORG_ID,
         app_id: APPNAME,
@@ -141,7 +142,7 @@ describe('[GET] /app operations with subkey', () => {
   it('should access app with subkey', async () => {
     // Access app with subkey
     const subkeyHeaders = { 'x-limited-key-id': String(subkey) }
-    const getAppWithSubkey = await fetch(`${BASE_URL}/app/${APPNAME}`, {
+    const getAppWithSubkey = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
       method: 'GET',
       headers: { ...headers, ...subkeyHeaders },
     })
@@ -154,9 +155,10 @@ describe('[GET] /app operations with subkey', () => {
     // Create another app
     const otherAppId = randomUUID()
     const OTHER_APPNAME = `com.other.subkey.${otherAppId}`
-    const createOtherApp = await fetch(`${BASE_URL}/app`, {
+    const createOtherApp = await fetchTestRequest(`${BASE_URL}/app`, {
       method: 'POST',
       headers,
+      retryUnsafe: true,
       body: JSON.stringify({
         owner_org: ORG_ID,
         app_id: OTHER_APPNAME,
@@ -174,7 +176,7 @@ describe('[GET] /app operations with subkey', () => {
 
     // Try to access the other app with the subkey
     const subkeyHeaders = { 'x-limited-key-id': String(subkey) }
-    const getOtherAppWithSubkey = await fetch(`${BASE_URL}/app/${OTHER_APPNAME}`, {
+    const getOtherAppWithSubkey = await fetchTestRequest(`${BASE_URL}/app/${OTHER_APPNAME}`, {
       method: 'GET',
       headers: { ...headers, ...subkeyHeaders },
     })
@@ -190,9 +192,10 @@ describe('[GET] /app operations with subkey', () => {
   it('should update app with subkey', async () => {
     // Update app with subkey
     const subkeyHeaders = { 'x-limited-key-id': String(subkey) }
-    const updateApp = await fetch(`${BASE_URL}/app/${APPNAME}`, {
+    const updateApp = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
       method: 'PUT',
       headers: { ...headers, ...subkeyHeaders },
+      retryUnsafe: true,
       body: JSON.stringify({
         name: APPNAME,
         icon: 'https://cdn.example/updated-icon.png',
@@ -212,9 +215,10 @@ describe('[GET] /app operations with subkey', () => {
       appRoleName: 'app_reader',
     })
     const subkeyHeaders = { 'x-limited-key-id': String(subkeyData.id) }
-    const deleteApp = await fetch(`${BASE_URL}/app/${APPNAME}`, {
+    const deleteApp = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
       method: 'DELETE',
       headers: { ...headers, ...subkeyHeaders },
+      retryUnsafe: true,
     })
     expect(deleteApp.status).toBe(400)
     const deleteAppData = await deleteApp.json() as { error: string }
@@ -224,7 +228,7 @@ describe('[GET] /app operations with subkey', () => {
   it('should get all apps with subkey', async () => {
     // Get all apps with subkey
     const subkeyHeaders = { 'x-limited-key-id': String(subkey) }
-    const getAllApps = await fetch(`${BASE_URL}/app`, {
+    const getAllApps = await fetchTestRequest(`${BASE_URL}/app`, {
       method: 'GET',
       headers: { ...headers, ...subkeyHeaders },
     })
@@ -236,7 +240,7 @@ describe('[GET] /app operations with subkey', () => {
 
   it('should get all apps without subkey', async () => {
     // Get all apps without subkey
-    const getAllApps = await fetch(`${BASE_URL}/app`, {
+    const getAllApps = await fetchTestRequest(`${BASE_URL}/app`, {
       method: 'GET',
       headers,
     })
@@ -590,5 +594,57 @@ describe('[POST]/[PUT] /app onboarding progress', () => {
     expect(afterSkip.steps.add_channel?.status).toBe('skipped')
     // Partial CLI progress stays in_progress. Missing steps are not skipped.
     expect(afterSkip.outcome).toBe('in_progress')
+  })
+
+  it('updates app settings and onboarding progress with an authenticated JWT', async () => {
+    const jwtHeaders = await getAuthHeaders()
+    const jwtPut = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
+      method: 'PUT',
+      headers: jwtHeaders,
+      body: JSON.stringify({
+        name: `JWT ${APPNAME}`,
+        onboarding: {
+          outcome: 'switched_to_manual',
+        },
+      }),
+    })
+
+    const updated = await jwtPut.json() as { name?: string, onboarding?: unknown }
+    expect(jwtPut.status, JSON.stringify(updated)).toBe(200)
+    expect(updated.name).toBe(`JWT ${APPNAME}`)
+    expect(parseAppOnboarding(updated.onboarding).outcome).toBe('switched_to_manual')
+  })
+
+  it('rejects an app update from an authenticated non-member', async () => {
+    const nonMemberHeaders = await getAuthHeadersForCredentials(USER_EMAIL_NONMEMBER, USER_PASSWORD_NONMEMBER)
+    const deniedPut = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
+      method: 'PUT',
+      headers: nonMemberHeaders,
+      body: JSON.stringify({
+        name: `Denied ${APPNAME}`,
+      }),
+    })
+
+    const denied = await deniedPut.json() as { error?: string }
+    expect(deniedPut.status, JSON.stringify(denied)).toBe(401)
+    expect(denied.error).toBe('cannot_access_app')
+  })
+
+  it('prefers an explicit Capgo key over a simultaneous project bearer token', async () => {
+    const cliPut = await fetchTestRequest(`${BASE_URL}/app/${APPNAME}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'capgkey': headers.Authorization,
+      },
+      body: JSON.stringify({
+        name: `CLI ${APPNAME}`,
+      }),
+    })
+
+    const updated = await cliPut.json() as { name?: string }
+    expect(cliPut.status, JSON.stringify(updated)).toBe(200)
+    expect(updated.name).toBe(`CLI ${APPNAME}`)
   })
 })

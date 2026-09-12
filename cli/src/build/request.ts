@@ -340,6 +340,52 @@ async function fetchWithRetry(
 
 export type { BuildCredentials, BuildRequestOptions, BuildRequestResult } from '../schemas/build'
 
+export interface BuildJobCachePayloadInput {
+  cache?: boolean
+  cacheKey?: string
+}
+
+export interface BuildJobCachePayload {
+  cache_enabled?: false
+  cache_key?: string
+  cache_fingerprint_extra?: string
+}
+
+/** Builder job API cache fields: omit cache_enabled when enabled (default), send false when opted out. */
+export function buildJobCachePayload(input?: BuildJobCachePayloadInput): BuildJobCachePayload {
+  const payload: BuildJobCachePayload = {}
+  if (input?.cache === false)
+    payload.cache_enabled = false
+
+  const trimmedCacheKey = input?.cacheKey?.trim()
+  if (trimmedCacheKey) {
+    payload.cache_key = trimmedCacheKey
+    // Builder compatibility: accept cache_key (PR #190) and legacy cache_fingerprint_extra.
+    payload.cache_fingerprint_extra = trimmedCacheKey
+  }
+
+  return payload
+}
+
+export const FAILED_BUILD_CACHE_HINT
+  = 'Tip: if this looks cache-related (stale artifacts between RC/PROD or branches), retry with --cache-key <env> to isolate compilation cache, or --no-cache to skip cache restore.'
+
+/**
+ * Cache isolation tip after a failed native build.
+ * Skip it in caller-handled (Ink onboarding) mode: the TUI streams log.info into
+ * FullscreenBuildOutput, the extra line overflows the golden viewport, and
+ * --cache-key / --no-cache are not how the wizard retries.
+ */
+export function shouldLogFailedBuildCacheHint(options: {
+  cache?: boolean
+  cacheKey?: string
+  aiAnalysisMode?: 'auto-prompt' | 'caller-handled' | 'skip'
+}): boolean {
+  return options.cache !== false
+    && !options.cacheKey?.trim()
+    && options.aiAnalysisMode !== 'caller-handled'
+}
+
 /**
  * Stream build logs from the server via WebSocket.
  * Returns the final status if detected from the stream, or null if stream ended without status.
@@ -1837,6 +1883,14 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       build_mode: options.buildMode || 'release',
       build_options: buildOptionsPayload,
       build_credentials: buildCredentialsPayload,
+      ...buildJobCachePayload({ cache: options.cache, cacheKey: options.cacheKey }),
+    }
+
+    if (options.cache === false) {
+      log.info(`ℹ️  --no-cache specified, compilation cache disabled for this ${platform} build`)
+    }
+    else if (options.cacheKey?.trim()) {
+      log.info(`ℹ️  --cache-key "${options.cacheKey.trim()}" specified for this ${platform} build`)
     }
 
     log.info('✓ Using credentials (merged from CLI args, env vars, and saved file)')
@@ -2198,7 +2252,10 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
           'Content-Type': 'application/json',
           authorization: options.apikey,
         }),
-        body: JSON.stringify({ app_id: appId }),
+        body: JSON.stringify({
+          app_id: appId,
+          ...buildJobCachePayload({ cache: options.cache, cacheKey: options.cacheKey }),
+        }),
       })
 
       if (!startResponse.ok) {
@@ -2308,6 +2365,13 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
       }
       else if (finalStatus === 'failed') {
         log.error(`Build failed`)
+        if (shouldLogFailedBuildCacheHint({
+          cache: options.cache,
+          cacheKey: options.cacheKey,
+          aiAnalysisMode,
+        })) {
+          log.info(FAILED_BUILD_CACHE_HINT)
+        }
         // Non-interactive (CI/CD) failure with neither --ai-analytics nor
         // --send-logs: surface the discoverability tip here, INDEPENDENT of log
         // capture. The in-handler AI/decideCiFailureActions block below is gated

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { canDecodeCredentialBase64, decodeCredentialBase64 } from '../src/build/credentials-base64.ts'
+import { resolveCredentialsStore } from '../src/build/credentials-store-selection.ts'
 const {
   isCredentialsExportInvocation,
   resolveCredentialsExport,
@@ -125,6 +126,27 @@ await test('strict decoding rejects invalid characters, impossible length, malfo
 const appId = 'com.example.app'
 const localIos = { ios: { BUILD_CERTIFICATE_BASE64: 'local-cert', P12_PASSWORD: '' } }
 const globalAndroid = { android: { ANDROID_KEYSTORE_FILE: 'global-store' } }
+
+await test('shared store resolver selects the sole configured store', () => {
+  assert.deepEqual(
+    resolveCredentialsStore({ appId }, { local: localIos, global: null }),
+    { source: 'local', saved: localIos },
+  )
+})
+
+await test('shared store resolver rejects split local and global credentials', () => {
+  assert.throws(
+    () => resolveCredentialsStore({ appId }, { local: localIos, global: globalAndroid }),
+    /pass --local or --global/i,
+  )
+})
+
+await test('shared store resolver never falls back from an explicit source', () => {
+  assert.throws(
+    () => resolveCredentialsStore({ appId, local: true }, { local: null, global: globalAndroid }),
+    /local store/i,
+  )
+})
 
 await test('automatically chooses a local-only configured source and platform', () => {
   assert.deepEqual(

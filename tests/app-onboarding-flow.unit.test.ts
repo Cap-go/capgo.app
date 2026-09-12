@@ -20,6 +20,8 @@ describe('getting started CLI onboarding accordion', () => {
     expect(messages['getting-started-dont-show-again']).toBeTruthy()
     expect(messages['app-onboarding-dont-show-again']).toBeTruthy()
     expect(source).toContain('reportOnboardingPatch({ source: \'ai\' })')
+    expect(source).toContain('body: { onboarding: patch }')
+    expect(source).not.toContain('rpc(\'report_app_onboarding_setup\'')
     expect(source).toContain('switched_to_manual')
     expect(accordion).toContain('data-test="app-onboarding-cli-steps"')
     expect(accordion).toContain('APP_ONBOARDING_STEP_IDS')

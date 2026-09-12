@@ -4,7 +4,10 @@ import { createClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { parseAppOnboardingLedger, shouldShowGettingStartedNav, shouldSkipOnboardingResume } from '../src/utils/appOnboardingProgress.ts'
 import {
+  BASE_URL,
   executeSQL,
+  fetchTestRequest,
+  getAuthHeaders,
   getSupabaseClient,
   ORG_ID,
   SUPABASE_ANON_KEY,
@@ -23,6 +26,7 @@ const APP_TESTFLIGHT = `ob.tf.${randomUUID().slice(0, 8)}`
 const APP_STORE = `ob.st.${randomUUID().slice(0, 8)}`
 const APP_VERIFY = `ob.vf.${randomUUID().slice(0, 8)}`
 const APP_SETUP = `ob.su.${randomUUID().slice(0, 8)}`
+const APP_HISTORY = `ob.hi.${randomUUID().slice(0, 8)}`
 const DEVICE_TF = randomUUID().toLowerCase()
 const DEVICE_STORE = randomUUID().toLowerCase()
 
@@ -129,6 +133,7 @@ beforeAll(async () => {
   await createApp(APP_STORE)
   await createApp(APP_VERIFY, true)
   await createApp(APP_SETUP, true)
+  await createApp(APP_HISTORY, true)
   await insertDevice(APP_TESTFLIGHT, DEVICE_TF, 'testflight')
   await insertDevice(APP_STORE, DEVICE_STORE, 'app_store')
 })
@@ -137,10 +142,10 @@ afterAll(async () => {
   await serviceRoleSupabase.from('devices').delete().eq('app_id', APP_TESTFLIGHT)
   await serviceRoleSupabase.from('devices').delete().eq('app_id', APP_STORE)
   await serviceRoleSupabase.from('app_versions').delete().eq('app_id', APP_VERIFY)
-  await serviceRoleSupabase.from('apps').delete().in('app_id', [APP_RPC, APP_INSERT, APP_TESTFLIGHT, APP_STORE, APP_VERIFY, APP_SETUP])
+  await serviceRoleSupabase.from('apps').delete().in('app_id', [APP_RPC, APP_INSERT, APP_TESTFLIGHT, APP_STORE, APP_VERIFY, APP_SETUP, APP_HISTORY])
 })
 
-describe('app onboarding progress RPCs', () => {
+describe('app onboarding progress', () => {
   it('must reject unauthenticated mark_onboarding_feature_started', async () => {
     const anon = createAuthClient()
     const { error } = await anon.rpc('mark_onboarding_feature_started', {
@@ -369,20 +374,16 @@ describe('app onboarding progress RPCs', () => {
   })
 
   it('completes pending onboarding when CLI/AI setup reports completed', async () => {
-    const authClient = createAuthClient()
-    const { error: signInError } = await authClient.auth.signInWithPassword({
-      email: USER_EMAIL,
-      password: USER_PASSWORD,
+    const response = await fetchTestRequest(`${BASE_URL}/app/${APP_SETUP}`, {
+      method: 'PUT',
+      headers: await getAuthHeaders(),
+      body: JSON.stringify({
+        onboarding: { outcome: 'completed' },
+      }),
     })
-    if (signInError)
-      throw signInError
-
-    const { data, error } = await authClient.rpc('report_app_onboarding_setup', {
-      p_app_id: APP_SETUP,
-      p_patch: { outcome: 'completed' },
-    })
-    expect(error).toBeNull()
-    expect(shouldSkipOnboardingResume(data)).toBe(true)
+    const updated = await response.json() as { onboarding?: unknown }
+    expect(response.status, JSON.stringify(updated)).toBe(200)
+    expect(shouldSkipOnboardingResume(updated.onboarding)).toBe(true)
 
     const { data: app, error: readError } = await serviceRoleSupabase
       .from('apps')
@@ -391,6 +392,45 @@ describe('app onboarding progress RPCs', () => {
       .single()
     expect(readError).toBeNull()
     expect(app?.need_onboarding).toBe(false)
+  })
+
+  it('atomically records concurrent step history and rejects forged history', async () => {
+    const headers = await getAuthHeaders()
+    const responses = await Promise.all([
+      fetchTestRequest(`${BASE_URL}/app/${APP_HISTORY}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({
+          onboarding: { steps: { add_app: { status: 'done', update_history: [{ forged: true }] } } },
+        }),
+      }),
+      fetchTestRequest(`${BASE_URL}/app/${APP_HISTORY}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({
+          onboarding: { steps: { add_channel: { status: 'done' } } },
+        }),
+      }),
+    ])
+    expect(responses.map(response => response.status)).toEqual([200, 200])
+
+    const { data, error } = await serviceRoleSupabase
+      .from('apps')
+      .select('onboarding')
+      .eq('app_id', APP_HISTORY)
+      .single()
+    expect(error).toBeNull()
+    const onboarding = data?.onboarding as {
+      setup?: { steps?: Record<string, { status?: string, update_history?: Array<Record<string, unknown>> }> }
+    }
+    for (const stepId of ['add_app', 'add_channel']) {
+      const step = onboarding.setup?.steps?.[stepId]
+      expect(step?.status).toBe('done')
+      expect(step?.update_history).toHaveLength(1)
+      expect(step?.update_history?.[0]?.status).toBe('done')
+      expect(step?.update_history?.[0]?.at).toEqual(expect.any(String))
+    }
+    expect(JSON.stringify(onboarding)).not.toContain('forged')
   })
 
   it('completes pending onboarding when getting started is hidden', async () => {

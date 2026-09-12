@@ -6,10 +6,13 @@ import { describe, expect, it, vi } from 'vitest'
 import { createApp } from 'vue'
 import AppOnboardingFlow from '../src/components/dashboard/AppOnboardingFlow.vue'
 
+const messages = JSON.parse(readFileSync(new NodeUrl('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
+
 const writerMocks = vi.hoisted(() => ({
   main: {
     auth: { id: 'user-bento-retry' },
     authGeneration: 1,
+    awaitInitialLoad: vi.fn(async () => undefined),
     isAdmin: false,
     plans: [],
     user: {
@@ -29,6 +32,13 @@ vi.mock('vue-router', () => ({
 }))
 vi.mock('vue-sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 vi.mock('~/services/onboardingTracking', () => ({ sendOnboardingEvent: vi.fn() }))
+vi.mock('~/services/capgoApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/services/capgoApi')>()
+  return {
+    ...actual,
+    invokeCapgoApi: vi.fn(async () => ({ data: { assignments: {} }, error: null })),
+  }
+})
 vi.mock('~/services/supabase', () => ({
   getLocalConfig: () => ({ supaHost: 'https://sb.capgo.app', supaKey: 'anon-key' }),
   isLocal: () => false,
@@ -66,7 +76,9 @@ vi.mock('~/stores/organization', () => ({
 }))
 
 const onboardingSource = readFileSync(new NodeUrl('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
+const optionsSource = readFileSync(new NodeUrl('../src/components/dashboard/onboardingDevelopmentEnvironmentOptions.ts', import.meta.url), 'utf8')
 const sidebarSource = readFileSync(new NodeUrl('../src/components/Sidebar.vue', import.meta.url), 'utf8')
+const englishMessages = JSON.parse(readFileSync(new NodeUrl('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
 function sourceBetween(start: string, end: string) {
   const startIndex = onboardingSource.indexOf(start)
@@ -217,12 +229,13 @@ describe('app onboarding progress analytics integration', () => {
     const initializer = sourceBetween('function initializeProgressTracking(', 'function completeAndViewStep(')
     expect(initializer).toContain(`flow: props.preOrg ? 'pre_org' : 'existing_org'`)
     expect(initializer).toContain(`const initialStep: OnboardingAnalyticsStep = showPreOrgWelcome.value ? 'welcome' : analyticsStepFor(flowStep.value)`)
-    expect(initializer).toContain('const trackedSteps = appOnboardingSteps.value.flatMap<OnboardingAnalyticsStep>')
+    expect(initializer).toContain('trackedAnalyticsSteps = appOnboardingSteps.value.flatMap<OnboardingAnalyticsStep>')
     expect(initializer).toContain('return Object.values(APP_DETAILS_ANALYTICS_STEPS)')
-    expect(initializer).toContain(`trackedSteps.unshift('welcome')`)
+    expect(initializer).toContain(`trackedAnalyticsSteps.unshift('welcome')`)
     expect(initializer).toContain(`if (!props.preOrg && resumed && flowStep.value === 'setup')`)
-    expect(initializer).toContain(`trackedSteps.push('setup')`)
-    expect(initializer).toContain('steps: trackedSteps')
+    expect(initializer).toContain(`trackedAnalyticsSteps.push('setup')`)
+    expect(initializer).toContain('ensurePublishAppQuestionStepTracked()')
+    expect(initializer).toContain('steps: trackedAnalyticsSteps')
     expect(initializer).toContain('resumed,')
     expect(initializer).toContain('onboardingAttemptId: onboardingTelemetry.attemptId')
     expect(initializer).toContain('onboardingRunId: onboardingTelemetry.runId')
@@ -273,7 +286,7 @@ describe('app onboarding progress analytics integration', () => {
     const resumeLoader = sourceBetween('async function loadResumeApp()', 'async function importStoreMetadata()')
     expect(resumeLoader).not.toContain('initializeProgressTracking')
     expect(resumeLoader).not.toContain('viewStep')
-    expect(resumeLoader).toContain("if (props.preOrg || resumeStep.value === 'setup')")
+    expect(resumeLoader).toContain('if (props.preOrg || resumeStep.value === \'setup\')')
 
     const mountedFlow = sourceBetween('onMounted(async () => {', 'onBeforeUnmount(() => {')
     expect(onboardingSource).toContain(`import { createOnboardingProgressPersistence, shouldInitializeOnboardingProgressTracking } from '~/utils/onboardingProgressPersistence'`)
@@ -284,7 +297,7 @@ describe('app onboarding progress analytics integration', () => {
       'await organizationStore.awaitInitialLoad()',
       'const resumed = await loadResumeApp()',
       'resumedFlow = true',
-      'void loadApiKey()',
+      'startApiKeyLoading()',
       'return',
       'const resumeResult = await maybeResumeSavedOnboarding()',
     ])
@@ -334,6 +347,7 @@ describe('app onboarding progress analytics integration', () => {
     const persistenceQueue = sourceBetween('async function persistOnboardingProgress(', 'function schedulePersistOnboardingProgress(')
     expect(persistenceQueue).toContain(`status: UserOnboardingStatus = 'in_progress'`)
     expect(persistenceQueue).toContain('options: OnboardingPersistOptions = {}')
+    expect(persistenceQueue).toContain('clearScheduledOnboardingProgress()')
     expect(persistenceQueue).toContain('return onboardingProgressPersistence.persist(status, options)')
     expect(persistenceQueue).not.toContain('writeOnboardingProgress(status)')
     expect(persistenceQueue).not.toContain('initializeProgressTracking')
@@ -351,6 +365,9 @@ describe('app onboarding progress analytics integration', () => {
       'const onboarding = mergeUserOnboardingProgress(',
       'await replaceUserOnboardingIfUnchanged(',
     ])
+    expect(writer).toContain('if (error) {')
+    expect(writer).toContain('isUsersOnboardingCheckConstraintError(error)')
+    expect(writer).toContain('fallbackUsersOnboardingProgressForLegacyConstraint(persistableProgress)')
     expectSourceOrder(writer, [
       'if (error) {',
       `console.error('Failed to persist onboarding progress', error)`,
@@ -410,9 +427,12 @@ describe('app onboarding progress analytics integration', () => {
         pendingVisibilityChanges = []`)
 
     const scheduledPersistence = sourceBetween('function schedulePersistOnboardingProgress(', 'async function writeOnboardingProgress(')
+    expect(onboardingSource).toContain('const ONBOARDING_PROGRESS_PERSIST_DEBOUNCE_MS = 500')
     expectSourceOrder(scheduledPersistence, [
       'if (isHydratingOnboarding.value || onboardingProgressPersistence.isBlocked() || onboardingProgressPersistence.isAborted())',
       'return',
+      'persistFieldsQueuedAt ??= now',
+      'Math.max(0, ONBOARDING_PROGRESS_PERSIST_DEBOUNCE_MS - (now - persistFieldsQueuedAt))',
       'persistFieldsTimer = setTimeout',
       'void persistOnboardingProgress()',
     ])
@@ -429,10 +449,127 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain(`sendOnboardingEvent('onboarding_intent_selected', {`)
   })
 
-  it.concurrent('keeps Maker+ invitations inside the organization progress step', () => {
+  it.concurrent('keeps Maker+ invitations inside the organization progress step before setup', () => {
     expect(onboardingSource).toContain(`createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })`)
     expect(onboardingSource).toContain(`trackOrganizationEvent('onboarding_organization_invite_viewed')`)
     expect(onboardingSource).toContain(`completeAndViewStep('setup', { appId: createdApp.value.app_id })`)
+  })
+
+  it.concurrent('shows channel education before CLI for every fresh or resumed setup path', () => {
+    expect(onboardingSource).toContain(`type PreOrgFlowStep = 'intent' | 'publish_app_question' | 'details' | 'organization' | 'setup'`)
+    expect(onboardingSource).toContain(`type SetupStage = UserOnboardingSetupStage`)
+    expect(onboardingSource).toContain(`const setupStage = ref<SetupStage>('cli')`)
+    expect(onboardingSource).toContain('const newChannelTreatment = computed(() => hasNewChannelTreatment(onboardingForABTests.value))')
+    expect(onboardingSource).toContain('const onboardingABTestsPending = ref(false)')
+
+    const assignmentRefresh = sourceBetween('function refreshOnboardingABTests(', 'async function waitForOnboardingABTests(')
+    expect(assignmentRefresh).toContain('onboardingABTestsPending.value = true')
+    expect(assignmentRefresh).toContain('onboardingABTestsPending.value = false')
+    expect(assignmentRefresh).toContain('reconcileSetupStageWithChannelAssignment()')
+
+    const assignmentStageReconciliation = sourceBetween('function resolveSetupStage(', 'function continueFromChannelDefaultRouting()')
+    expect(assignmentStageReconciliation).toContain('!newChannelTreatment.value && !onboardingABTestsPending.value')
+    expect(assignmentStageReconciliation).toContain('function reconcileSetupStageWithChannelAssignment()')
+    expect(assignmentStageReconciliation).toContain(`flowStep.value !== 'setup' && flowStep.value !== 'install'`)
+    expect(assignmentStageReconciliation).toContain('onboardingABTestsPending.value')
+    expect(assignmentStageReconciliation).toContain('newChannelTreatment.value')
+    expect(assignmentStageReconciliation).toContain(`setSetupStage('cli')`)
+
+    const stepList = sourceBetween('const appOnboardingSteps = computed', 'const onboardingProgressSteps = computed')
+    expect(stepList).not.toContain(`{ id: 'channels'`)
+
+    const progressStepList = sourceBetween('const onboardingProgressSteps = computed', 'const currentProgressStepId = computed')
+    expectSourceOrder(progressStepList, [
+      `{ id: 'intent', label: t('unified-onboarding-step-intent') }`,
+      `{ id: 'details', label: t('app-onboarding-step-details') }`,
+      `{ id: 'organization', label: t('unified-onboarding-step-organization') }`,
+      `{ id: 'channel', label: t('unified-onboarding-step-channel') }`,
+      `{ id: 'setup', label: t('unified-onboarding-step-setup') }`,
+    ])
+    expect(progressStepList).toContain('props.preOrg && newChannelTreatment.value')
+    expect(messages['unified-onboarding-step-channel']).toBe('Channel')
+    expect(onboardingSource).toContain(`flowStep.value === 'setup' && setupStage.value !== 'cli'`)
+    expect(onboardingSource).toContain('v-for="(entry, index) in onboardingProgressSteps"')
+    expect(onboardingSource).toContain(`:aria-current="currentProgressStepId === entry.id ? 'step' : undefined"`)
+    expect(onboardingSource).toContain(`newChannelTreatment.value`)
+    const setupBackButton = sourceBetween('const showSetupBackButton = computed', 'const showLanguageSelector = computed')
+    expect(setupBackButton).toContain(`props.preOrg`)
+    expect(setupBackButton).toContain(`flowStep.value === 'setup'`)
+    expect(setupBackButton).toContain(`!props.preOrg`)
+    expect(setupBackButton).toContain(`flowStep.value === 'install'`)
+    expect(setupBackButton.match(/setupStage\.value === 'channel-create'/g)).toHaveLength(2)
+    expect(setupBackButton.match(/setupStage\.value === 'cli'/g)).toHaveLength(1)
+    expect(onboardingSource).toContain(`data-test="onboarding-setup-back"`)
+    expect(onboardingSource).toContain(`@click="goBackFromSetupStage"`)
+
+    expect(onboardingSource).toContain(`createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })`)
+    expect(onboardingSource).toContain(`completeAndViewStep('setup', { appId: createdApp.value.app_id })`)
+
+    const channelTransition = sourceBetween('function setSetupStage(', 'function onTechnicalInviteOpened()')
+    expect(channelTransition).toContain(`setSetupStage('channel-self-assign')`)
+    expect(channelTransition).toContain('function continueFromChannelSelfAssign()')
+    expect(channelTransition).toContain(`setSetupStage('channel-console-assign')`)
+    expect(channelTransition).toContain('function continueFromChannelConsoleAssign()')
+    expect(channelTransition).toContain(`setSetupStage('channel-create')`)
+    expect(channelTransition).toContain('function continueFromChannelCreate()')
+    expect(channelTransition).toContain(`setSetupStage('cli')`)
+    expect(channelTransition).toContain(`'channel-self-assign': 'channel-routing'`)
+    expect(channelTransition).toContain(`'channel-console-assign': 'channel-self-assign'`)
+    expect(channelTransition).toContain(`'channel-create': 'channel-console-assign'`)
+    expect(channelTransition).toContain(`'cli': 'channel-create'`)
+    expect(channelTransition).toContain('function goBackFromSetupStage()')
+
+    const setup = sourceBetween(`v-else-if="flowStep === 'setup' && createdApp"`, `v-else-if="!props.preOrg && flowStep === 'choice'`)
+    expect(setup).toContain(`v-if="newChannelTreatment && setupStage === 'channel-routing'"`)
+    expect(setup).toContain('<ChannelDefaultRoutingOnboarding')
+    expect(setup).toContain('@continue="continueFromChannelDefaultRouting"')
+    expect(setup).toContain(`v-else-if="newChannelTreatment && setupStage === 'channel-self-assign'"`)
+    expect(setup).toContain('<ChannelSelfAssignOnboarding')
+    expect(setup).toContain('@back="goBackFromSetupStage"')
+    expect(setup).toContain('@continue="continueFromChannelSelfAssign"')
+    expect(setup).toContain(`v-else-if="newChannelTreatment && setupStage === 'channel-console-assign'"`)
+    expect(setup).toContain('<ChannelConsoleAssignOnboarding')
+    expect(setup).toContain('@continue="continueFromChannelConsoleAssign"')
+    expect(setup).toContain(`v-else-if="newChannelTreatment && setupStage === 'channel-create'"`)
+    expect(setup).toContain('<ChannelCreateOnboarding')
+    expect(setup).toContain('@continue="continueFromChannelCreate"')
+    expect(setup).toContain(`v-else data-test="onboarding-setup-cli"`)
+    expect(setup.indexOf('<ChannelDefaultRoutingOnboarding')).toBeLessThan(setup.indexOf('data-test="onboarding-setup-cli"'))
+    expect(setup.indexOf('<ChannelDefaultRoutingOnboarding')).toBeLessThan(setup.indexOf('<ChannelSelfAssignOnboarding'))
+    expect(setup.indexOf('<ChannelSelfAssignOnboarding')).toBeLessThan(setup.indexOf('<ChannelConsoleAssignOnboarding'))
+    expect(setup.indexOf('<ChannelConsoleAssignOnboarding')).toBeLessThan(setup.indexOf('<ChannelCreateOnboarding'))
+    expect(setup.indexOf('<ChannelCreateOnboarding')).toBeLessThan(setup.indexOf('data-test="onboarding-setup-cli"'))
+
+    const install = sourceBetween(`v-else-if="!props.preOrg && flowStep === 'install' && createdApp"`, `v-if="showLanguageSelector"`)
+    expect(install).toContain(`v-if="newChannelTreatment && setupStage === 'channel-routing'"`)
+    expect(install).toContain('<ChannelDefaultRoutingOnboarding')
+    expect(install).toContain('@continue="continueFromChannelDefaultRouting"')
+    expect(install).toContain(`v-else-if="newChannelTreatment && setupStage === 'channel-self-assign'"`)
+    expect(install).toContain('<ChannelSelfAssignOnboarding')
+    expect(install).toContain('@back="goBackFromSetupStage"')
+    expect(install).toContain('@continue="continueFromChannelSelfAssign"')
+    expect(install).toContain(`v-else-if="newChannelTreatment && setupStage === 'channel-console-assign'"`)
+    expect(install).toContain('<ChannelConsoleAssignOnboarding')
+    expect(install).toContain('@continue="continueFromChannelConsoleAssign"')
+    expect(install).toContain(`v-else-if="newChannelTreatment && setupStage === 'channel-create'"`)
+    expect(install).toContain('<ChannelCreateOnboarding')
+    expect(install).toContain('@continue="continueFromChannelCreate"')
+    expect(install).toContain(`v-else data-test="onboarding-install-cli"`)
+    expect(install.indexOf('<ChannelDefaultRoutingOnboarding')).toBeLessThan(install.indexOf('data-test="onboarding-install-cli"'))
+    expect(install.indexOf('<ChannelDefaultRoutingOnboarding')).toBeLessThan(install.indexOf('<ChannelSelfAssignOnboarding'))
+    expect(install.indexOf('<ChannelSelfAssignOnboarding')).toBeLessThan(install.indexOf('<ChannelConsoleAssignOnboarding'))
+    expect(install.indexOf('<ChannelConsoleAssignOnboarding')).toBeLessThan(install.indexOf('<ChannelCreateOnboarding'))
+    expect(install.indexOf('<ChannelCreateOnboarding')).toBeLessThan(install.indexOf('data-test="onboarding-install-cli"'))
+
+    const resume = sourceBetween('async function loadResumeApp()', 'async function importStoreMetadata()')
+    expect(resume).toContain(`flowStep.value = 'setup'`)
+    expect(resume).toContain(`flowStep.value = resumeStep.value === 'choice' ? 'choice' : 'install'`)
+    expect(resume).toContain('setupStage.value = resolveSetupStage(savedProgress)')
+
+    const snapshot = sourceBetween('function snapshotOnboardingProgress(', 'function clearScheduledOnboardingProgress()')
+    expect(snapshot).toContain(`setupStage: flowStep.value === 'setup' || flowStep.value === 'install' ? setupStage.value : undefined`)
+    expect(onboardingSource).toContain('setup_stage')
+    expect(channelTransition).toContain('void persistOnboardingProgress()')
   })
 
   it.concurrent('keeps the unload warning scoped to unfinished pre-org onboarding', () => {
@@ -449,7 +586,8 @@ describe('app onboarding progress analytics integration', () => {
     expect(transitionHelpers).toContain('void persistOnboardingProgress()')
 
     const intentTransition = sourceBetween('function continueFromIntent()', 'function continuePreOrgDetails()')
-    expect(intentTransition).toContain(`completeAndViewStep('details', { intent: selectedIntent.value })`)
+    expect(intentTransition).toContain(`intent: selectedIntent.value`)
+    expect(intentTransition).toContain(`?? (webNativeDevelopmentEnvironmentTreatment.value ? undefined : 'skipped')`)
 
     const appNameTransition = sourceBetween('function continueFromAppName()', 'function continueFromAppId()')
     expect(appNameTransition).toContain(`completeAndViewAppDetailsStep('app_id', { appId: generatedAppId.value, appName: appName.value.trim() })`)
@@ -461,11 +599,92 @@ describe('app onboarding progress analytics integration', () => {
     const appCreation = sourceBetween('async function createAppRecord(', 'async function seedDemoData()')
     expect(appCreation).toContain('appId,')
     expect(appCreation).toContain('completionProperties.storeImportUsed = hasImportedStoreMetadata.value')
-    expect(appCreation).toContain('completeAndViewStep(options?.nextStep ?? \'choice\', completionProperties)')
+    expect(appCreation).toContain('const nextStep = options?.nextStep ?? \'choice\'')
+    expect(appCreation).toContain('completeAndViewStep(nextStep, completionProperties)')
 
     const realSetupChoice = sourceBetween('function goToInstallStep()', 'function openDashboard()')
     expect(realSetupChoice).toContain(`completeAndViewStep('install', {`)
     expect(realSetupChoice).toContain('appId: createdApp.value.app_id')
+  })
+
+  it.concurrent('loads stable backend flags and applies the A and C onboarding treatments', () => {
+    const workerSource = readFileSync(new NodeUrl('../cloudflare_workers/api/index.ts', import.meta.url), 'utf8')
+    expect(onboardingSource).toContain(`invokeCapgoApi<OnboardingABTestsResponse>('private/onboarding_ab_tests'`)
+    expect(workerSource).toContain("appPrivate.route('/onboarding_ab_tests', onboarding_ab_tests)")
+    expect(onboardingSource).toContain('const ONBOARDING_AB_TEST_WAIT_TIMEOUT_MS = 3_000')
+    expect(onboardingSource).toContain('void refreshOnboardingABTests()')
+    expect(onboardingSource).toContain('await waitForOnboardingABTests()')
+    expect(onboardingSource).toContain('Promise.race([refreshOnboardingABTests(options), timeout])')
+    expect(onboardingSource).toContain('if (props.preOrg && !welcomePending.value)')
+    expect(onboardingSource).toContain('function refreshOnboardingABTests(options: { force?: boolean } = {})')
+    expect(onboardingSource).toContain('reconcileOnboardingABTestAssignments(')
+    expect(onboardingSource).toContain('if (onboardingABTestsRequest === request)')
+    expect(onboardingSource).toContain('onboardingABTestsRequest = null')
+    expect(onboardingSource).toContain(`webNativePublishIntentTreatment.value`)
+    expect(onboardingSource).toContain(`webNativeDevelopmentEnvironmentTreatment.value`)
+    expect(onboardingSource).toContain(`shouldShowWebNativeRecommendation({`)
+    expect(onboardingSource).toContain(`developmentEnvironment: selectedDevelopmentEnvironment.value`)
+    expect(onboardingSource).toContain(`intent: selectedIntent.value`)
+    expect(onboardingSource).toContain(`startingOut: selectedUserCountStop.value?.startingOut === true`)
+    expect(onboardingSource).toContain("developmentEnvironment: selectedDevelopmentEnvironment.value ?? 'skipped'")
+    expect(onboardingSource).toContain("completeAndViewStep('publish_app_question'")
+    expect(onboardingSource).toContain(`?? (webNativeDevelopmentEnvironmentTreatment.value ? undefined : 'skipped')`)
+    expect(onboardingSource).toContain(`resolveOnboardingAnalyticsVersion(onboardingForABTests.value, selectedIntent.value)`)
+    expect(onboardingSource).not.toContain(`if (props.preOrg) {\n      await main.awaitInitialLoad()`)
+    expect(onboardingSource).toContain(`const WEBNATIVE_APP_URL = 'https://webnativeapp.com/?ref=capgo'`)
+    expect(onboardingSource).toContain(`const publishIntentOption = { value: 'publish'`)
+    expect(onboardingSource).toContain(`data-test="\`onboarding-development-environment-\${option.value}\`"`)
+    expect(onboardingSource).toContain(`:data-test="\`onboarding-intent-\${option.value}\`"`)
+    expect(onboardingSource).toContain('async function continueFromGoal()')
+    expect(onboardingSource).toContain("completeAndViewStep('publish_app_question'")
+    expect(onboardingSource).toContain("trackStepEvent('onboarding_development_environment_selected', 'publish_app_question'")
+    expect(onboardingSource).toContain('function continueFromDevelopmentEnvironment()')
+    expect(onboardingSource).toContain('function skipPublishAppQuestion()')
+    expect(onboardingSource).toContain('function continueFromCurrentPublishAppQuestion()')
+    expect(onboardingSource).toContain("developmentEnvironment: 'skipped'")
+    expect(onboardingSource).toContain(`:data-test="hasSelectedDevelopmentEnvironment ? 'app-onboarding-continue-development-environment' : 'app-onboarding-skip-development-environment'"`)
+    expect(onboardingSource).toContain('developmentEnvironment: persistedDevelopmentEnvironment()')
+    expect(onboardingSource).toContain('d-btn-ghost onboarding-development-environment-option')
+    expect(onboardingSource).toContain('sm:grid-cols-2')
+    expect(onboardingSource).toContain('<OnboardingToolPattern v-if="option.icons.length" :icons="option.icons" :muted="option.muted" />')
+    expect(optionsSource).toContain('value: \'hosted_builder\'')
+    expect(optionsSource).toContain('value: \'ai_assistant\'')
+    expect(optionsSource).toContain('value: \'hand_coded\'')
+    expect(optionsSource).toContain('value: \'other\'')
+    expect(optionsSource).toContain('icons: []')
+    expect(onboardingSource).toContain(':aria-pressed="selectedDevelopmentEnvironment === option.value"')
+    const persistEnv = sourceBetween('function persistedDevelopmentEnvironment()', 'function snapshotOnboardingProgress(')
+    expect(persistEnv).toContain("if (selected && selected !== 'skipped')")
+    expect(persistEnv).toContain('return selected')
+    expect(sourceBetween('function applyOnboardingProgress(', 'function applyDefaultPreOrgDetails()')).toContain('resumableOnboardingFlowStep(progress, flow)')
+    expect(sourceBetween('function applyOnboardingProgress(', 'function applyDefaultPreOrgDetails()')).toContain("if (progress.development_environment === 'skipped')")
+    expect(sourceBetween('function applyOnboardingProgress(', 'function applyDefaultPreOrgDetails()')).toContain('selectedDevelopmentEnvironment.value = progress.development_environment')
+    expect(onboardingSource).toContain('publishAppQuestion: flowStep.value === \'publish_app_question\'')
+    expect(onboardingSource).toContain('const showDevelopmentEnvironmentQuestion = computed(() => flowStep.value === \'publish_app_question\')')
+    expect(sourceBetween('function selectDevelopmentEnvironment(', 'function continueWithCapgoFromWebNativeRecommendation(')).toContain('schedulePersistOnboardingProgress()')
+    expect(onboardingSource).toContain("viewPreviousStep('intent')")
+    expect(onboardingSource).toContain("viewPreviousStep(webNativeDevelopmentEnvironmentTreatment ? 'publish_app_question' : 'intent')")
+    expect(onboardingSource).not.toContain('showCapgoIntentQuestion')
+    expect(onboardingSource).toContain('data-test="onboarding-webnative-check-website"')
+    expect(onboardingSource).toContain('data-test="onboarding-webnative-continue-capgo"')
+    const goalTransition = sourceBetween('async function continueFromGoal()', 'function continueFromDevelopmentEnvironment()')
+    expectSourceOrder(goalTransition, [
+      'await persistOnboardingProgress()',
+      'await waitForOnboardingABTests({ force: true })',
+      'completeAndViewStep(',
+    ])
+    expect(englishMessages['organization-onboarding-intent-option-publish-label']).toBe('Convert my webapp to a mobile app')
+    expect(englishMessages['organization-onboarding-intent-option-publish-desc']).toBe('Turn my existing website into an iOS and Android app.')
+    expect(englishMessages['organization-onboarding-development-environment-question']).toBe('What do you use to build your app?')
+    expect(englishMessages['organization-onboarding-development-environment-option-hosted_builder-label']).toBe('Hosted AI builder')
+    expect(englishMessages['organization-onboarding-development-environment-option-ai_assistant-label']).toBe('AI coding assistant')
+    expect(englishMessages['organization-onboarding-development-environment-option-hand_coded-label']).toBe('I write the code myself')
+    expect(englishMessages['organization-onboarding-development-environment-option-other-label']).toBe('Other')
+    expect(englishMessages['organization-onboarding-development-environment-skip']).toBe('Skip')
+    expect(englishMessages['organization-onboarding-webnative-title']).toBe('WebNativeApp may be a better fit')
+    expect(englishMessages['organization-onboarding-webnative-description']).toContain('WebNativeApp can package it for iOS and Android')
+    expect(englishMessages['organization-onboarding-webnative-check-website']).toBe('Check WebNativeApp')
+    expect(englishMessages['organization-onboarding-webnative-continue-capgo']).toBe('Continue with Capgo')
   })
 
   it.concurrent('reports back navigation as a new view without completing the abandoned step', () => {
@@ -474,7 +693,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(backNavigation).toContain('progressTracker?.viewStep(nextAnalyticsStep, previousAnalyticsStep)')
     expect(onboardingSource).toContain('@click="viewPreviousStep(\'choice\')"')
     expect(onboardingSource).toContain('@click="viewPreviousStep(\'details\')"')
-    expect(onboardingSource).toContain(`props.preOrg ? viewPreviousStep('intent') : router.push('/apps')`)
+    expect(onboardingSource).toContain(`props.preOrg ? viewPreviousStep(webNativeDevelopmentEnvironmentTreatment ? 'publish_app_question' : 'intent') : router.push('/apps')`)
     expect(onboardingSource).not.toContain('@click="flowStep = \'details\'"')
     expect(onboardingSource).not.toContain('@click="flowStep = \'choice\'"')
     expect(onboardingSource).not.toContain(`props.preOrg ? (flowStep = 'intent') : router.push('/apps')`)

@@ -6,6 +6,10 @@ import {
   buildFrontendOnboardingProductionHostHogql,
   FRONTEND_ONBOARDING_FOLLOWUP_MS,
   FRONTEND_ONBOARDING_VERSIONS,
+  hogqlOnboardingVersionIn,
+  hogqlOnboardingVersionIsV4,
+  hogqlOnboardingVersionValue,
+  isFrontendOnboardingVersionLabel,
 } from './frontend_onboarding_analytics_model.ts'
 import { getFrontendOnboardingDailySetupCliEvents } from './frontend_onboarding_daily_setup_cli_outcomes.ts'
 import {
@@ -132,6 +136,9 @@ function personId(value: unknown): string {
 }
 
 function onboardingVersion(value: unknown): FrontendOnboardingVersion | null {
+  if (isFrontendOnboardingVersionLabel(value))
+    return 4
+
   return FRONTEND_ONBOARDING_VERSIONS.includes(value as FrontendOnboardingVersion)
     ? value as FrontendOnboardingVersion
     : null
@@ -268,22 +275,20 @@ export function buildFrontendOnboardingDailyTabSwitches(
 export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: string, followupEndDate: string): string {
   const eventAllowlist = ['onboarding_step_viewed', AI_INSTRUCTIONS_COPIED_EVENT, ...ONBOARDING_INTERACTION_EVENTS].map(sqlStr).join(', ')
   const interactionEventAllowlist = ONBOARDING_INTERACTION_EVENTS.map(sqlStr).join(', ')
-  const versionAllowlist = FRONTEND_ONBOARDING_VERSIONS.join(', ')
-
   return `
     WITH frontend_events AS (
       SELECT
         event,
         timestamp,
         person_id,
-        toIntOrZero(toString(properties.onboarding_version)) AS onboarding_version,
+        ${hogqlOnboardingVersionValue()} AS onboarding_version,
         JSONExtractString(toString(properties), 'onboarding_attempt_id') AS attempt_id,
         JSONExtractString(toString(properties), 'step') AS step
       FROM events
       WHERE event IN (${eventAllowlist})
         AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
         AND ${buildFrontendOnboardingProductionHostHogql('properties', 'timestamp')}
-        AND toIntOrZero(toString(properties.onboarding_version)) IN (${versionAllowlist})
+        AND ${hogqlOnboardingVersionIn()}
         AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
         AND timestamp < parseDateTimeBestEffort(${sqlStr(followupEndDate)})
     ), onboarding_attempts AS (
@@ -359,7 +364,7 @@ export function buildFrontendOnboardingWelcomeHogql(
       WHERE event = 'onboarding_step_viewed'
         AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
         AND ${buildFrontendOnboardingProductionHostHogql('properties', 'timestamp')}
-        AND toIntOrZero(toString(properties.onboarding_version)) = 4
+        AND ${hogqlOnboardingVersionIsV4()}
         AND timestamp >= parseDateTimeBestEffort(${sqlStr(eventStartDate)})
         AND timestamp < parseDateTimeBestEffort(${sqlStr(followupEndDate)})
     ), welcome_attempts AS (
@@ -400,7 +405,7 @@ export function buildFrontendOnboardingTabSwitchHogql(startDate: string, endDate
         AND JSONExtractString(toString(properties), 'visibility_state') = 'hidden'
         AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
         AND ${buildFrontendOnboardingProductionHostHogql('properties', 'timestamp')}
-        AND toIntOrZero(toString(properties.onboarding_version)) = 4
+        AND ${hogqlOnboardingVersionIsV4()}
         AND timestamp >= parseDateTimeBestEffort(${sqlStr(startDate)})
         AND timestamp < parseDateTimeBestEffort(${sqlStr(endDate)})
     )

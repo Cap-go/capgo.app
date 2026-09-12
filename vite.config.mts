@@ -258,7 +258,9 @@ export default defineConfig({
     }),
 
     // https://github.com/feat-agency/vite-plugin-webfont-dl
-    WebfontDownload(),
+    WebfontDownload([
+      'https://fonts.bunny.net/css?family=inter:100,200,300,400,500,600,700,800,900|prompt:100,200,300,400,500,600,700,800,900',
+    ]),
 
     // https://github.com/webfansplz/vite-plugin-vue-devtools
     VueDevTools({

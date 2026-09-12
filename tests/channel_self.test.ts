@@ -3,7 +3,7 @@ import type { DeviceLink, HttpMethod } from './test-utils.ts'
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { fetchTestRequest, getBaseData, getSupabaseClient, PLUGIN_BASE_URL, resetAndSeedAppData, resetAppData, resetAppDataStats, warmEdgeEndpoint } from './test-utils.ts'
+import { fetchTestRequest, getBaseData, getEndpointUrl, getSupabaseClient, PLUGIN_BASE_URL, resetAndSeedAppData, resetAppData, resetAppDataStats, warmEdgeEndpoint } from './test-utils.ts'
 
 interface ChannelInfo {
   id: number
@@ -64,7 +64,7 @@ async function withSupabaseCall<T extends { error?: { message?: string } | null 
 beforeAll(async () => {
   await resetAndSeedAppData(APPNAME)
   // Cold first /channel_self request can 502 under Deno shard load; warm before assertions.
-  await warmEdgeEndpoint(`${PLUGIN_BASE_URL}/channel_self`, {
+  await warmEdgeEndpoint(getEndpointUrl('/channel_self'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(getBaseData(APPNAME)),
