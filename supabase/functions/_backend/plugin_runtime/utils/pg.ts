@@ -2391,6 +2391,8 @@ export interface AdminPayingOrgBreakdown {
   paying_orgs_total: number
 }
 
+const adminPlanJoinOnStripeProductId = sql`(si.billing_account = 'us' AND p.stripe_id_us = si.product_id) OR (COALESCE(si.billing_account, 'ee') <> 'us' AND p.stripe_id = si.product_id)`
+
 export async function getAdminPayingOrgBreakdown(c: Context): Promise<AdminPayingOrgBreakdown> {
   const emptyResult: AdminPayingOrgBreakdown = {
     paying_orgs_subscription: 0,
@@ -2407,7 +2409,7 @@ export async function getAdminPayingOrgBreakdown(c: Context): Promise<AdminPayin
         SELECT DISTINCT ON (si.customer_id)
           si.customer_id
         FROM public.stripe_info si
-        INNER JOIN public.plans p ON p.stripe_id = si.product_id
+        INNER JOIN public.plans p ON ${adminPlanJoinOnStripeProductId}
         WHERE si.is_good_plan = true
           AND si.status IN (
             'succeeded'::public.stripe_status,
@@ -2885,8 +2887,8 @@ export async function getAdminOrganizationInsights(
 
     const billingTypeExpression = sql`
       CASE
-        WHEN si.price_id = p.price_y_id THEN 'yearly'
-        WHEN si.price_id = p.price_m_id THEN 'monthly'
+        WHEN si.price_id IN (p.price_y_id, p.price_y_id_us) THEN 'yearly'
+        WHEN si.price_id IN (p.price_m_id, p.price_m_id_us) THEN 'monthly'
         WHEN si.subscription_anchor_start IS NOT NULL
           AND si.subscription_anchor_end IS NOT NULL
           AND si.subscription_anchor_end::timestamp - si.subscription_anchor_start::timestamp >= INTERVAL '330 days'
@@ -2920,7 +2922,7 @@ export async function getAdminOrganizationInsights(
           ${billingTypeExpression} AS billing_type
         FROM orgs o
         LEFT JOIN stripe_info si ON si.customer_id = o.customer_id
-        LEFT JOIN plans p ON p.stripe_id = si.product_id
+        LEFT JOIN plans p ON ${adminPlanJoinOnStripeProductId}
         WHERE true
           ${planFilter}
           ${billingFilter}
@@ -3116,7 +3118,7 @@ export async function getAdminOrganizationInsights(
       SELECT COUNT(*)::int AS total
       FROM orgs o
       LEFT JOIN stripe_info si ON si.customer_id = o.customer_id
-      LEFT JOIN plans p ON p.stripe_id = si.product_id
+      LEFT JOIN plans p ON ${adminPlanJoinOnStripeProductId}
       WHERE true
         ${planFilter}
         ${billingFilter}
@@ -3191,6 +3193,7 @@ export interface AdminCancelledOrganizationRow {
   plan_name: string | null
   billing_type: 'monthly' | 'yearly' | null
   subscription_or_signup_date: string
+  billing_account: 'ee' | 'us'
 }
 
 export interface AdminCancelledOrganizationsResult {
@@ -3228,10 +3231,11 @@ export async function getAdminCancelledOrganizations(
         si.customer_id,
         si.churn_reason,
         si.subscription_id,
+        COALESCE(si.billing_account, 'ee') AS billing_account,
         p.name AS plan_name,
         CASE
-          WHEN si.price_id = p.price_y_id THEN 'yearly'
-          WHEN si.price_id = p.price_m_id THEN 'monthly'
+          WHEN si.price_id IN (p.price_y_id, p.price_y_id_us) THEN 'yearly'
+          WHEN si.price_id IN (p.price_m_id, p.price_m_id_us) THEN 'monthly'
           WHEN si.subscription_anchor_start IS NOT NULL
             AND si.subscription_anchor_end IS NOT NULL
             AND si.subscription_anchor_end::timestamp - si.subscription_anchor_start::timestamp >= INTERVAL '330 days'
@@ -3244,7 +3248,7 @@ export async function getAdminCancelledOrganizations(
         COALESCE(si.paid_at, u.created_at, o.created_at) AS subscription_or_signup_date
       FROM orgs o
       INNER JOIN stripe_info si ON si.customer_id = o.customer_id
-      LEFT JOIN plans p ON p.stripe_id = si.product_id
+      LEFT JOIN plans p ON ${adminPlanJoinOnStripeProductId}
       LEFT JOIN users u ON u.id = o.created_by
       WHERE si.canceled_at IS NOT NULL
         ${dateFilter}
@@ -3277,6 +3281,7 @@ export async function getAdminCancelledOrganizations(
       plan_name: row.plan_name ?? null,
       billing_type: row.billing_type ?? null,
       subscription_or_signup_date: normalizeTimestamp(row.subscription_or_signup_date) ?? '',
+      billing_account: row.billing_account === 'us' ? 'us' : 'ee',
     }))
 
     const total = Number((countResult.rows[0] as any)?.total) || 0
@@ -3359,7 +3364,7 @@ export async function getAdminTrialOrganizations(
         lbu.last_bundle_upload_at
       FROM orgs o
       INNER JOIN stripe_info si ON si.customer_id = o.customer_id
-      LEFT JOIN plans p ON p.stripe_id = si.product_id
+      LEFT JOIN plans p ON ${adminPlanJoinOnStripeProductId}
       LEFT JOIN latest_bundle_uploads lbu ON lbu.owner_org = o.id
       WHERE si.trial_at::date >= CURRENT_DATE
         AND (si.status IS NULL OR si.status != 'succeeded')
@@ -3454,7 +3459,7 @@ export async function getAdminTrialPlanBreakdown(
           COUNT(DISTINCT o.id)::int AS trials
         FROM orgs o
         INNER JOIN stripe_info si ON si.customer_id = o.customer_id
-        LEFT JOIN plans p ON p.stripe_id = si.product_id
+        LEFT JOIN plans p ON ${adminPlanJoinOnStripeProductId}
         WHERE o.created_at >= ${startDay.toISOString()}::timestamptz
           AND o.created_at < ${endExclusive.toISOString()}::timestamptz
           AND si.trial_at IS NOT NULL

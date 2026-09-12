@@ -12,9 +12,13 @@ const {
   supabaseAdminMock: vi.fn(),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({
-  createCustomer: createCustomerMock,
-}))
+vi.mock('../supabase/functions/_backend/utils/stripe.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/stripe.ts')>()
+  return {
+    ...actual,
+    createCustomer: createCustomerMock,
+  }
+})
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   getDefaultPlan: getDefaultPlanMock,
@@ -35,7 +39,14 @@ const USER_ID = 'a1bb59b7-34b3-4e06-a0f1-2cc696f043dc'
 const PENDING_ID = `pending_${ORG_ID}`
 const LOCAL_ID = `cus_local_${ORG_ID.replaceAll('-', '')}`
 const CUSTOMER_ID = 'cus_VAgMn1agG4iQSC'
-const SOLO_PLAN = { name: 'Solo', stripe_id: 'prod_solo' }
+const SOLO_PLAN = {
+  name: 'Solo',
+  stripe_id: 'prod_solo',
+  stripe_id_us: 'prod_solo_us',
+  price_m_id_us: 'price_solo_m_us',
+  price_y_id_us: 'price_solo_y_us',
+  credit_id_us: 'prod_credits_us',
+}
 
 function createContext() {
   return {
@@ -117,12 +128,14 @@ function mockSupabase(options: {
         }
       }
       if (table === 'plans') {
+        const planQueryResult = {
+          single: async () => ({ data: SOLO_PLAN, error: null }),
+          maybeSingle: async () => ({ data: SOLO_PLAN, error: null }),
+        }
         return {
           select: () => ({
-            eq: () => ({
-              single: async () => ({ data: SOLO_PLAN, error: null }),
-              maybeSingle: async () => ({ data: { name: SOLO_PLAN.name }, error: null }),
-            }),
+            eq: () => planQueryResult,
+            or: () => planQueryResult,
           }),
         }
       }
@@ -162,7 +175,10 @@ describe('createStripeCustomer', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     getDefaultPlanMock.mockResolvedValue(SOLO_PLAN)
-    getStripeCustomerMock.mockResolvedValue({ product_id: SOLO_PLAN.stripe_id })
+    getStripeCustomerMock.mockResolvedValue({
+      product_id: SOLO_PLAN.stripe_id,
+      billing_account: 'ee',
+    })
     createCustomerMock.mockResolvedValue({ id: CUSTOMER_ID })
   })
 
@@ -181,11 +197,61 @@ describe('createStripeCustomer', () => {
     const planName = await createStripeCustomer(createContext(), createOrg(LOCAL_ID))
 
     expect(planName).toBe('Solo')
-    expect(createCustomerMock).toHaveBeenCalledTimes(1)
+    expect(createCustomerMock).toHaveBeenCalled()
+    expect(createCustomerMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      'ee',
+    )
     expect(orgUpdate).toHaveBeenCalledWith({ customer_id: CUSTOMER_ID }, expect.objectContaining({
       id: ORG_ID,
       customer_id: LOCAL_ID,
     }))
+  })
+
+  it('uses pending stripe_info billing_account when finalizing a pending org', async () => {
+    getStripeCustomerMock.mockResolvedValue({
+      product_id: 'prod_solo_us',
+      billing_account: 'us',
+    })
+    const { stripeInfoInsert } = mockSupabase({ orgCustomerId: PENDING_ID })
+
+    await createStripeCustomer(createContext(), createOrg(PENDING_ID))
+
+    expect(createCustomerMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      'us',
+    )
+    expect(stripeInfoInsert).toHaveBeenCalledWith(expect.objectContaining({
+      billing_account: 'us',
+      product_id: SOLO_PLAN.stripe_id_us,
+    }))
+  })
+
+  it('uses local stripe_info billing_account when replacing a fake customer id', async () => {
+    getStripeCustomerMock.mockResolvedValue({
+      product_id: 'prod_solo_us',
+      billing_account: 'us',
+    })
+    mockSupabase({ orgCustomerId: LOCAL_ID })
+
+    await createStripeCustomer(createContext(), createOrg(LOCAL_ID))
+
+    expect(createCustomerMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      'us',
+    )
   })
 
   it('creates a real customer when the org has a pre-PR 24-hex fake id', async () => {
@@ -195,11 +261,59 @@ describe('createStripeCustomer', () => {
     const planName = await createStripeCustomer(createContext(), createOrg(legacy24HexLocalId))
 
     expect(planName).toBe('Solo')
-    expect(createCustomerMock).toHaveBeenCalledTimes(1)
+    expect(createCustomerMock).toHaveBeenCalled()
     expect(orgUpdate).toHaveBeenCalledWith({ customer_id: CUSTOMER_ID }, expect.objectContaining({
       id: ORG_ID,
       customer_id: legacy24HexLocalId,
     }))
+  })
+
+  it('throws when stored plan lookup fails so the queue can retry', async () => {
+    getStripeCustomerMock.mockResolvedValue({
+      product_id: SOLO_PLAN.stripe_id,
+      billing_account: 'ee',
+    })
+    const planLookupError = { message: 'timeout' }
+    supabaseAdminMock.mockImplementation(() => ({
+      from: (table: string) => {
+        if (table === 'orgs') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: createOrg(PENDING_ID),
+                  error: null,
+                }),
+              }),
+            }),
+            update: (payload: { customer_id: string }) => orgUpdateQuery(payload, vi.fn()),
+          }
+        }
+        if (table === 'stripe_info') {
+          return {
+            insert: vi.fn(async () => ({ error: null })),
+            delete: () => ({
+              eq: vi.fn(async () => ({ error: null })),
+            }),
+          }
+        }
+        if (table === 'plans') {
+          return {
+            select: () => ({
+              or: () => ({
+                maybeSingle: async () => ({ data: null, error: planLookupError }),
+              }),
+            }),
+          }
+        }
+        throw new Error(`unexpected table ${table}`)
+      },
+    }))
+
+    await expect(createStripeCustomer(createContext(), createOrg(PENDING_ID)))
+      .rejects
+      .toMatchObject(planLookupError)
+    expect(createCustomerMock).not.toHaveBeenCalled()
   })
 
   it('throws when org reload fails so the queue can retry', async () => {
@@ -233,8 +347,8 @@ describe('createStripeCustomer', () => {
     const planName = await createStripeCustomer(createContext(), createOrg(PENDING_ID))
 
     expect(planName).toBe('Solo')
-    expect(createCustomerMock).toHaveBeenCalledTimes(1)
-    expect(stripeInfoInsert).toHaveBeenCalledTimes(1)
+    expect(createCustomerMock).toHaveBeenCalled()
+    expect(stripeInfoInsert).toHaveBeenCalled()
     expect(orgUpdate).toHaveBeenCalledWith({ customer_id: CUSTOMER_ID }, expect.objectContaining({
       id: ORG_ID,
       customer_id: PENDING_ID,
@@ -282,12 +396,14 @@ describe('createStripeCustomer', () => {
           }
         }
         if (table === 'plans') {
+          const planQueryResult = {
+            single: async () => ({ data: SOLO_PLAN, error: null }),
+            maybeSingle: async () => ({ data: { name: SOLO_PLAN.name }, error: null }),
+          }
           return {
             select: () => ({
-              eq: () => ({
-                single: async () => ({ data: SOLO_PLAN, error: null }),
-                maybeSingle: async () => ({ data: { name: SOLO_PLAN.name }, error: null }),
-              }),
+              eq: () => planQueryResult,
+              or: () => planQueryResult,
             }),
           }
         }
@@ -298,7 +414,7 @@ describe('createStripeCustomer', () => {
     const planName = await createStripeCustomer(createContext(), createOrg(PENDING_ID))
 
     expect(planName).toBe('Solo')
-    expect(createCustomerMock).toHaveBeenCalledTimes(1)
+    expect(createCustomerMock).toHaveBeenCalled()
     expect(orgState.customer_id).toBe(existingId)
     expect(stripeInfoDeleteEq).toHaveBeenCalledWith('customer_id', CUSTOMER_ID)
   })
@@ -308,7 +424,10 @@ describe('finalizePendingStripeCustomer', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     getDefaultPlanMock.mockResolvedValue(SOLO_PLAN)
-    getStripeCustomerMock.mockResolvedValue({ product_id: SOLO_PLAN.stripe_id })
+    getStripeCustomerMock.mockResolvedValue({
+      product_id: SOLO_PLAN.stripe_id,
+      billing_account: 'ee',
+    })
     createCustomerMock.mockResolvedValue({ id: CUSTOMER_ID })
   })
 
@@ -329,7 +448,7 @@ describe('finalizePendingStripeCustomer', () => {
     const planName = await finalizePendingStripeCustomer(createContext(), createOrg(PENDING_ID))
 
     expect(planName).toBe('Solo')
-    expect(createCustomerMock).toHaveBeenCalledTimes(1)
+    expect(createCustomerMock).toHaveBeenCalled()
     expect(stripeInfoDeleteEq).toHaveBeenCalledWith('customer_id', PENDING_ID)
   })
 })

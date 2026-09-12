@@ -13,7 +13,7 @@ import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
-import { createOneTimeCheckout, getCreditCheckoutDetails, getStripe, isStripeEmulatorEnabled } from '../utils/stripe.ts'
+import { createOneTimeCheckout, getBillingAccountForCustomer, getCreditCheckoutDetails, getPlanCreditProductId, getStripe, isStripeEmulatorEnabled, planProductIdOrFilter, resolvePlanCreditProductId } from '../utils/stripe.ts'
 import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
 import { getEnv } from '../utils/utils.ts'
 
@@ -231,6 +231,7 @@ async function getScopedCreditSteps(c: AppContext, orgId?: string): Promise<Cred
 }
 
 async function getCreditTopUpProductId(c: AppContext, customerId: string, token: string): Promise<{ productId: string }> {
+  const billingAccount = await getBillingAccountForCustomer(c, customerId)
   const supabase = supabaseClient(c, token)
   const { data: stripeInfo, error: stripeInfoError } = await supabase
     .from('stripe_info')
@@ -249,23 +250,23 @@ async function getCreditTopUpProductId(c: AppContext, customerId: string, token:
     const productId = await getFallbackCreditProductId(c, customerId, async () => {
       const { data, error } = await supabase
         .from('plans')
-        .select('credit_id')
+        .select('*')
         .eq('name', 'Solo')
         .single()
       if (error)
         throw error
-      return data ?? null
+      return data ? { credit_id: getPlanCreditProductId(data, billingAccount) } : null
     })
     return { productId }
   }
 
   const { data: plan, error: planError } = await supabase
     .from('plans')
-    .select('credit_id, name')
-    .eq('stripe_id', stripeInfo.product_id)
+    .select('*')
+    .or(planProductIdOrFilter(stripeInfo.product_id))
     .single()
 
-  if (planError || !plan?.credit_id) {
+  if (planError || !plan) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'credit_top_up_product_missing',
@@ -276,17 +277,32 @@ async function getCreditTopUpProductId(c: AppContext, customerId: string, token:
     const productId = await getFallbackCreditProductId(c, customerId, async () => {
       const { data, error } = await supabase
         .from('plans')
-        .select('credit_id')
+        .select('*')
         .eq('name', 'Solo')
         .single()
       if (error)
         throw error
-      return data ?? null
+      return data ? { credit_id: getPlanCreditProductId(data, billingAccount) } : null
     })
     return { productId }
   }
 
-  return { productId: plan.credit_id }
+  const productId = resolvePlanCreditProductId(plan, billingAccount)
+  if (!productId) {
+    const fallbackProductId = await getFallbackCreditProductId(c, customerId, async () => {
+      const { data, error } = await supabase
+        .from('plans')
+        .select('*')
+        .eq('name', 'Solo')
+        .single()
+      if (error)
+        throw error
+      return data ? { credit_id: getPlanCreditProductId(data, billingAccount) } : null
+    })
+    return { productId: fallbackProductId }
+  }
+
+  return { productId }
 }
 
 async function resolveOrgStripeContext(c: AppContext, orgId: string) {
@@ -593,7 +609,8 @@ app.post('/complete-top-up', middlewareAuth, async (c) => {
   const { customerId, token } = await resolveOrgStripeContext(c, body.orgId)
   const supabase = supabaseClient(c, token)
 
-  const stripe = getStripe(c)
+  const billingAccount = await getBillingAccountForCustomer(c, customerId)
+  const stripe = getStripe(c, billingAccount)
   const session = await resolveCheckoutSession(c, stripe, supabase, body.orgId, customerId, body.sessionId)
   const resolvedSessionId = session.id
 
@@ -609,7 +626,7 @@ app.post('/complete-top-up', middlewareAuth, async (c) => {
   const { productId } = await getCreditTopUpProductId(c, customerId, token)
   const paymentIntentId = getCheckoutSessionPaymentIntentId(session)
 
-  const { creditQuantity, itemsSummary } = await getCreditCheckoutDetails(c, session, productId)
+  const { creditQuantity, itemsSummary } = await getCreditCheckoutDetails(c, session, productId, billingAccount)
 
   if (creditQuantity <= 0)
     throw simpleError('credit_product_not_found', 'Checkout session does not include the credit product')

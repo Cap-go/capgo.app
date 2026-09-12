@@ -10,6 +10,7 @@ import { isBentoConfigured, syncBentoSubscriberTags, trackBentoEvent } from '../
 import { purgeOnPremCacheForOrg, purgePlanCacheForOrg } from '../utils/cloudflare_cache_purge.ts'
 import { handleAutoTopUpPaymentIntent } from '../utils/credit_auto_top_up.ts'
 import { getFallbackCreditProductId } from '../utils/credits.ts'
+import { getRetryablePostgrestStatus, isRetryablePostgrestError } from '../utils/retry.ts'
 import { BRES, quickError, simpleError } from '../utils/hono.ts'
 import { middlewareStripeWebhook } from '../utils/hono_middleware_stripe.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
@@ -17,13 +18,46 @@ import { getOrgAdminMemberEmailsForTags } from '../utils/org_email_notifications
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
-import { ensureCustomerMetadata, getCreditCheckoutDetails, getStripe, syncStripeCustomerCountry } from '../utils/stripe.ts'
+import type { BillingAccount } from '../utils/stripe_billing.ts'
+import { ensureCustomerMetadata, getBillingAccountForCustomer, getCreditCheckoutDetails, getPlanCreditProductId, getStripe, isStripeConfiguredForAccount, normalizeBillingAccount, planProductIdOrFilter, syncStripeCustomerCountry } from '../utils/stripe.ts'
 import { buildTransferInvoiceFooter, getTransferInvoiceFooterUpdate, isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER, TRANSFER_INVOICE_FOOTER_MAX_LENGTH } from '../utils/stripe_event.ts'
 import { customerToSegmentOrg, supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
-import { backgroundTask, isStripeConfigured } from '../utils/utils.ts'
+import { backgroundTask } from '../utils/utils.ts'
 
-export const app = new Hono<MiddlewareKeyVariablesStripe>()
+function getWebhookBillingAccount(c: Context): BillingAccount {
+  return c.get('stripeBillingAccount') ?? 'ee'
+}
+
+async function assertStripeBillingAccount(
+  c: Context,
+  customer: Pick<StripeInfoRow, 'billing_account' | 'customer_id'>,
+) {
+  const expected = getWebhookBillingAccount(c)
+  const actual = normalizeBillingAccount(customer.billing_account)
+  if (actual !== expected) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'Stripe webhook billing_account mismatch',
+      customerId: customer.customer_id,
+      expected,
+      actual,
+    })
+    throw simpleError('webhook_billing_account_mismatch', 'Stripe webhook billing account mismatch', {
+      customerId: customer.customer_id,
+      expected,
+      actual,
+    })
+  }
+}
+
+export function createStripeEventApp(webhookBillingAccount: BillingAccount = 'ee') {
+  const app = new Hono<MiddlewareKeyVariablesStripe>()
+  app.post('/', middlewareStripeWebhook(webhookBillingAccount), stripeEventHandler)
+  return app
+}
+
+export const app = createStripeEventApp('ee')
 
 interface Org {
   id: string
@@ -43,7 +77,7 @@ type StripeInfoRevenueState = {
   product_id?: string | null
   status?: Database['public']['Enums']['stripe_status'] | null
 } | null | undefined
-type RevenuePlanRow = Pick<PlanRow, 'name' | 'price_m' | 'price_m_id' | 'price_y' | 'price_y_id' | 'stripe_id'>
+type RevenuePlanRow = Pick<PlanRow, 'name' | 'price_m' | 'price_m_id' | 'price_y' | 'price_y_id' | 'stripe_id' | 'stripe_id_us' | 'price_m_id_us' | 'price_y_id_us'>
 type RevenuePlanKey = 'solo' | 'maker' | 'team' | 'enterprise'
 type RevenuePlanBreakdown = Record<RevenuePlanKey, number>
 type ChurnReason = 'past_due_unresolved'
@@ -200,15 +234,17 @@ function compactMetadata(metadata: Record<string, string | undefined>) {
   ) as Record<string, string>
 }
 
+type PlanPriceIdsRow = Pick<PlanRow, 'price_m_id' | 'price_y_id' | 'price_m_id_us' | 'price_y_id_us'>
+
 function getPlanType(
-  plan: Pick<PlanRow, 'price_m_id' | 'price_y_id'>,
+  plan: PlanPriceIdsRow,
   priceId: string | null | undefined,
 ) {
   if (!priceId)
     return undefined
-  if (plan.price_m_id === priceId)
+  if (plan.price_m_id === priceId || plan.price_m_id_us === priceId)
     return 'monthly'
-  if (plan.price_y_id === priceId)
+  if (plan.price_y_id === priceId || plan.price_y_id_us === priceId)
     return 'yearly'
   return undefined
 }
@@ -229,11 +265,14 @@ function getSubscriptionTrackingState(
 
 function buildSubscriptionEventMetadata(
   stripeData: Pick<StripeData, 'data' | 'previousPriceId' | 'previousProductId'>,
-  currentPlan: Pick<PlanRow, 'name' | 'price_m_id' | 'price_y_id' | 'stripe_id'>,
-  previousPlan?: Pick<PlanRow, 'name' | 'price_m_id' | 'price_y_id' | 'stripe_id'> | null,
+  currentPlan: Pick<PlanRow, 'name' | 'price_m_id' | 'price_y_id' | 'price_m_id_us' | 'price_y_id_us' | 'stripe_id' | 'stripe_id_us'>,
+  previousPlan?: Pick<PlanRow, 'name' | 'price_m_id' | 'price_y_id' | 'price_m_id_us' | 'price_y_id_us' | 'stripe_id' | 'stripe_id_us'> | null,
 ) {
   const currentPlanType = getPlanType(currentPlan, stripeData.data.price_id)
-  const fallbackPreviousPlan = stripeData.previousProductId === currentPlan.stripe_id ? currentPlan : previousPlan
+  const fallbackPreviousPlan = stripeData.previousProductId === currentPlan.stripe_id
+    || stripeData.previousProductId === currentPlan.stripe_id_us
+    ? currentPlan
+    : previousPlan
   const previousPlanType = fallbackPreviousPlan
     ? getPlanType(fallbackPreviousPlan, stripeData.previousPriceId)
     : undefined
@@ -281,10 +320,10 @@ function getPlanMrr(plan: RevenuePlanRow | null | undefined, priceId: string | n
   if (!plan || !priceId)
     return 0
 
-  if (plan.price_m_id === priceId)
+  if (plan.price_m_id === priceId || plan.price_m_id_us === priceId)
     return Number(plan.price_m) || 0
 
-  if (plan.price_y_id === priceId)
+  if (plan.price_y_id === priceId || plan.price_y_id_us === priceId)
     return (Number(plan.price_y) || 0) / 12
 
   return 0
@@ -294,7 +333,7 @@ function getPlanByProductId(plans: RevenuePlanRow[], productId: string | null | 
   if (!productId)
     return null
 
-  return plans.find(plan => plan.stripe_id === productId) ?? null
+  return plans.find(plan => plan.stripe_id === productId || plan.stripe_id_us === productId) ?? null
 }
 
 async function lookupOrgCreatorEmail(
@@ -318,10 +357,13 @@ async function lookupOrgCreatorEmail(
 }
 
 async function retrieveStripeCustomerBillingEmail(c: Context, customerId: string): Promise<string | null> {
-  if (!customerId || !isStripeConfigured(c))
+  if (!customerId)
+    return null
+  const billingAccount = await getBillingAccountForCustomer(c, customerId)
+  if (!isStripeConfiguredForAccount(c, billingAccount))
     return null
 
-  const customer = await getStripe(c).customers.retrieve(customerId)
+  const customer = await getStripe(c, billingAccount).customers.retrieve(customerId)
   if ('deleted' in customer && customer.deleted)
     return null
 
@@ -465,7 +507,7 @@ export async function syncBillingBentoTagsFromStoredStripeInfo(c: Context, org: 
     return
 
   const plans = await getBillingPlans(c)
-  const plan = plans.find(candidate => candidate.stripe_id === stripeInfo.product_id) ?? null
+  const plan = plans.find(candidate => candidate.stripe_id === stripeInfo.product_id || candidate.stripe_id_us === stripeInfo.product_id) ?? null
   const trialPlanNames = plans.map(candidate => candidate.name)
   const segment = await customerToSegmentOrg(c, org.id, stripeInfo.price_id, plan, trialPlanNames)
   await syncBillingBentoTags(c, org, customerId, segment)
@@ -600,7 +642,7 @@ function isStaleStripeEvent(
 async function getRevenuePlans(c: Context): Promise<RevenuePlanRow[]> {
   const { data: plans, error } = await supabaseAdmin(c)
     .from('plans')
-    .select('name, stripe_id, price_m, price_y, price_m_id, price_y_id')
+    .select('name, stripe_id, stripe_id_us, price_m, price_y, price_m_id, price_y_id, price_m_id_us, price_y_id_us')
     .in('name', ['Solo', 'Maker', 'Team', 'Enterprise'])
 
   if (error) {
@@ -812,76 +854,65 @@ async function writePaidAtAtomically(c: Context, customerId: string, eventOccurr
 }
 
 async function getCreditTopUpProductIdFromCustomer(c: Context, customerId: string): Promise<string> {
-  const pgClient = getPgClient(c, true)
-  const drizzleClient = getDrizzleClient(pgClient)
-
-  try {
-    let stripeInfoError: unknown | null = null
-    let stripeInfo: { product_id: string | null } | undefined
-    try {
-      [stripeInfo] = await drizzleClient
-        .select({ product_id: schema.stripe_info.product_id })
-        .from(schema.stripe_info)
-        .where(eq(schema.stripe_info.customer_id, customerId))
-        .limit(1)
-    }
-    catch (error) {
-      stripeInfoError = error
-    }
-
-    if (stripeInfoError || !stripeInfo?.product_id) {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'credit_plan_missing',
-        customerId,
-        error: stripeInfoError,
-      })
-      return await getFallbackCreditProductId(c, customerId, async () => {
-        const [fallbackPlan] = await drizzleClient
-          .select({ credit_id: schema.plans.credit_id })
-          .from(schema.plans)
-          .where(eq(schema.plans.name, 'Solo'))
-          .limit(1)
-        return fallbackPlan ?? null
-      })
-    }
-
-    let planError: unknown | null = null
-    let plan: { credit_id: string | null } | undefined
-    try {
-      [plan] = await drizzleClient
-        .select({ credit_id: schema.plans.credit_id })
-        .from(schema.plans)
-        .where(eq(schema.plans.stripe_id, stripeInfo.product_id))
-        .limit(1)
-    }
-    catch (error) {
-      planError = error
-    }
-
-    if (planError || !plan?.credit_id) {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'credit_top_up_product_missing',
-        customerId,
-        planStripeId: stripeInfo.product_id,
-        error: planError,
-      })
-      return await getFallbackCreditProductId(c, customerId, async () => {
-        const [fallbackPlan] = await drizzleClient
-          .select({ credit_id: schema.plans.credit_id })
-          .from(schema.plans)
-          .where(eq(schema.plans.name, 'Solo'))
-          .limit(1)
-        return fallbackPlan ?? null
-      })
-    }
-
-    return plan.credit_id
+  const billingAccount = await getBillingAccountForCustomer(c, customerId)
+  const fetchFallbackPlan = async () => {
+    const { data, error } = await supabaseAdmin(c)
+      .from('plans')
+      .select('*')
+      .eq('name', 'Solo')
+      .single()
+    if (error)
+      throw error
+    return data ? { credit_id: getPlanCreditProductId(data, billingAccount) } : null
   }
-  finally {
-    closeClient(c, pgClient)
+  const { data: stripeInfo, error: stripeInfoError } = await supabaseAdmin(c)
+    .from('stripe_info')
+    .select('product_id')
+    .eq('customer_id', customerId)
+    .maybeSingle()
+
+  if (stripeInfoError) {
+    if (isRetryablePostgrestError(stripeInfoError)) {
+      const retryStatus = getRetryablePostgrestStatus(stripeInfoError) ?? 503
+      throw quickError(retryStatus, 'stripe_info_lookup_failed', 'Temporary stripe_info lookup failure', {
+        customerId,
+        stripeInfoError,
+      })
+    }
+    throw simpleError('stripe_info_lookup_failed', 'stripe_info lookup failed', { customerId, stripeInfoError })
   }
+
+  if (!stripeInfo?.product_id) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'credit_plan_missing',
+      customerId,
+    })
+    return await getFallbackCreditProductId(c, customerId, fetchFallbackPlan)
+  }
+
+  const { data: plan, error: planError } = await supabaseAdmin(c)
+    .from('plans')
+    .select('*')
+    .or(planProductIdOrFilter(stripeInfo.product_id))
+    .maybeSingle()
+
+  if (planError || !plan) {
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'credit_top_up_product_missing',
+      customerId,
+      planStripeId: stripeInfo.product_id,
+      error: planError,
+    })
+    return await getFallbackCreditProductId(c, customerId, fetchFallbackPlan)
+  }
+
+  const creditProductId = getPlanCreditProductId(plan, billingAccount)
+  if (!creditProductId)
+    return await getFallbackCreditProductId(c, customerId, fetchFallbackPlan)
+
+  return creditProductId
 }
 
 async function handleCheckoutSessionCompleted(
@@ -926,8 +957,9 @@ async function handleCheckoutSessionCompleted(
     : null
 
   const creditProductId = metadataProductId ?? await getCreditTopUpProductIdFromCustomer(c, customerId)
+  const billingAccount = getWebhookBillingAccount(c)
 
-  const { creditQuantity, itemsSummary } = await getCreditCheckoutDetails(c, session, creditProductId)
+  const { creditQuantity, itemsSummary } = await getCreditCheckoutDetails(c, session, creditProductId, billingAccount)
 
   if (creditQuantity <= 0) {
     throw simpleError('credit_product_not_found', 'Checkout session does not include the credit product', {
@@ -1040,7 +1072,8 @@ async function invoiceCreatedOrUpdated(c: Context, stripeEvent: Stripe.InvoiceCr
   }
 
   try {
-    const liveInvoice = await getStripe(c).invoices.retrieve(eventInvoice.id)
+    const billingAccount = getWebhookBillingAccount(c)
+    const liveInvoice = await getStripe(c, billingAccount).invoices.retrieve(eventInvoice.id)
     const footer = getTransferInvoiceFooterUpdate(liveInvoice)
     if (!footer) {
       cloudlog({
@@ -1057,7 +1090,7 @@ async function invoiceCreatedOrUpdated(c: Context, stripeEvent: Stripe.InvoiceCr
       return c.json(BRES)
     }
 
-    await getStripe(c).invoices.update(eventInvoice.id, {
+    await getStripe(c, billingAccount).invoices.update(eventInvoice.id, {
       footer,
     })
     cloudlog({
@@ -1089,14 +1122,14 @@ async function invoiceUpcoming(c: Context, org: Org, stripeEvent: Stripe.Invoice
   if (stripeData.data.product_id) {
     const { data: plan } = await supabaseAdmin(c)
       .from('plans')
-      .select('name, price_y_id')
-      .eq('stripe_id', stripeData.data.product_id)
+      .select('name, price_y_id, price_y_id_us')
+      .or(planProductIdOrFilter(stripeData.data.product_id))
       .single()
     if (!plan) {
       throw simpleError('failed_to_get_plan', 'failed to get plan', { stripeData })
     }
     planName = plan.name
-    if (plan.price_y_id === stripeData.data.price_id) {
+    if (plan.price_y_id === stripeData.data.price_id || plan.price_y_id_us === stripeData.data.price_id) {
       planType = 'yearly'
     }
   }
@@ -1143,7 +1176,7 @@ async function createdOrUpdated(
   const { data: plan } = await supabaseAdmin(c)
     .from('plans')
     .select()
-    .eq('stripe_id', stripeData.data.product_id)
+    .or(planProductIdOrFilter(stripeData.data.product_id!))
     .single()
   if (plan) {
     const trackingState = getSubscriptionTrackingState(stripeData, status)
@@ -1204,7 +1237,7 @@ async function createdOrUpdated(
       const previousProduct = await supabaseAdmin(c)
         .from('plans')
         .select()
-        .eq('stripe_id', stripeData.previousProductId)
+        .or(planProductIdOrFilter(stripeData.previousProductId))
         .single()
       previousPlan = previousProduct.data
       const planChangeMetadata = buildSubscriptionEventMetadata(stripeData, plan, previousPlan)
@@ -1232,7 +1265,7 @@ async function createdOrUpdated(
     }
 
     const segment = await customerToSegmentOrg(c, org.id, stripeData.data.price_id, plan, billingPlans.map(candidate => candidate.name))
-    const isMonthly = plan.price_m_id === stripeData.data.price_id
+    const isMonthly = getPlanType(plan, stripeData.data.price_id) === 'monthly'
     const eventName = `user:subscribe_${statusName}:${isMonthly ? 'monthly' : 'yearly'}`
     const subscriptionMetadata = buildSubscriptionEventMetadata(stripeData, plan, previousPlan)
     await syncBillingBentoTags(c, org, stripeData.data.customer_id, segment)
@@ -1460,7 +1493,7 @@ async function cancelingOrFinished(
   return c.json(BRES)
 }
 
-app.post('/', middlewareStripeWebhook(), async (c) => {
+async function stripeEventHandler(c: Context<MiddlewareKeyVariablesStripe>) {
   const stripeData = c.get('stripeData')!
   const stripeEvent = c.get('stripeEvent')!
   const isCheckoutSession = isCheckoutSessionEvent(stripeEvent)
@@ -1484,6 +1517,29 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
   // find email from user with customer_id
   const org = await getOrg(c, stripeData)
 
+  const { data: customer, error: customerError } = await supabaseAdmin(c)
+    .from('stripe_info')
+    .select()
+    .eq('customer_id', stripeData.data.customer_id)
+    .single()
+
+  if (customerError) {
+    if (isRetryablePostgrestError(customerError)) {
+      const retryStatus = getRetryablePostgrestStatus(customerError) ?? 503
+      throw quickError(retryStatus, 'stripe_info_lookup_failed', 'Temporary stripe_info lookup failure', {
+        stripeData,
+        customerError,
+      })
+    }
+    throw simpleError('stripe_info_lookup_failed', 'stripe_info lookup failed', { stripeData, customerError })
+  }
+
+  if (!customer) {
+    throw simpleError('no_customer_found', 'no customer found', { stripeData })
+  }
+
+  await assertStripeBillingAccount(c, customer)
+
   await ensureCustomerMetadata(c, stripeData.data.customer_id, org.id, org.created_by)
   stripeData.data.customer_country = await syncStripeCustomerCountry(c, stripeData.data.customer_id)
 
@@ -1494,16 +1550,6 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
   if (stripeEvent.type === 'payment_intent.succeeded') {
     await handleAutoTopUpPaymentIntent(c, stripeEvent, org.id)
     return c.json(BRES)
-  }
-
-  const { data: customer } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .select()
-    .eq('customer_id', stripeData.data.customer_id)
-    .single()
-
-  if (!customer) {
-    throw simpleError('no_customer_found', 'no customer found', { stripeData })
   }
 
   if (stripeEvent.type === 'customer.source.expiring') {
@@ -1613,7 +1659,7 @@ app.post('/', middlewareStripeWebhook(), async (c) => {
     }
   }
   return cancelingOrFinished(c, stripeEvent, stripeData.data, customer)
-})
+}
 
 export const stripeEventTestUtils = {
   BENTO_CHARGE_SUCCEEDED_EVENT,

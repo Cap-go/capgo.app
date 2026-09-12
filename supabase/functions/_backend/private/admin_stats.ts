@@ -279,7 +279,7 @@ app.post('/', middlewareAuth, async (c) => {
                 details = detailsCache.get(org.subscription_id) ?? null
               }
               else {
-                details = await getCancellationDetails(c, org.subscription_id)
+                details = await getCancellationDetails(c, org.subscription_id, org.billing_account)
                 detailsCache.set(org.subscription_id, details)
               }
             }

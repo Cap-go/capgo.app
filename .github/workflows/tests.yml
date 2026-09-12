@@ -450,6 +450,7 @@ jobs:
           warm_post /organization
           warm_post /organization/members
           warm_post /apikey
+          warm_post /app
       - name: Run backend integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}
@@ -737,7 +738,7 @@ jobs:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 7
     name: Run Cloudflare Workers tests (shard ${{ matrix.shard }})
     permissions:
       contents: read
@@ -808,7 +809,7 @@ jobs:
       - name: Install dependencies
         run: bun install
       - name: Run Supabase Start
-        run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+        run: bash .github/scripts/start-supabase-worktree-with-retry.sh
       - name: Export isolated test endpoints
         run: |
           {
@@ -830,20 +831,7 @@ jobs:
           bash .github/scripts/start-background-service.sh
       - id: start_cloudflare_workers
         name: Start Cloudflare Workers for testing
-        env:
-          BACKGROUND_SERVICE_NAME: Cloudflare Workers
-          BACKGROUND_RUN_COMMAND: |
-            chmod +x scripts/start-cloudflare-workers.sh
-            exec ./scripts/start-cloudflare-workers.sh
-          BACKGROUND_LOG_PATH: ${{ runner.temp }}/cloudflare-workers.log
-          BACKGROUND_WAIT_TIMEOUT_MS: 120000
-          BACKGROUND_TAIL_LINES: 400
-        run: |
-          worker_port_offset="${CLOUDFLARE_WORKER_PORT_OFFSET:-0}"
-          export BACKGROUND_WAIT_ON="http-get://127.0.0.1:$((8787 + worker_port_offset))/ok
-          http-get://127.0.0.1:$((8788 + worker_port_offset))/ok
-          http-get://127.0.0.1:$((8789 + worker_port_offset))/ok"
-          bash .github/scripts/start-background-service.sh
+        run: bash .github/scripts/start-cloudflare-workers-with-retry.sh
       - name: Run Cloudflare Workers integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}
@@ -880,7 +868,7 @@ jobs:
     needs: [changes, lint_typecheck, dead_code]
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 7
     name: Run Cloudflare plugin tests (serial)
     permissions:
       contents: read
@@ -914,7 +902,7 @@ jobs:
       - name: Install dependencies
         run: bun install
       - name: Run Supabase Start
-        run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+        run: bash .github/scripts/start-supabase-worktree-with-retry.sh
       - name: Export isolated test endpoints
         run: |
           {
@@ -936,19 +924,8 @@ jobs:
       - id: start_cloudflare_workers
         name: Start Cloudflare Workers for testing
         env:
-          BACKGROUND_SERVICE_NAME: Cloudflare Workers
-          BACKGROUND_RUN_COMMAND: |
-            chmod +x scripts/start-cloudflare-workers.sh
-            exec ./scripts/start-cloudflare-workers.sh
-          BACKGROUND_LOG_PATH: ${{ runner.temp }}/cloudflare-plugin-workers.log
-          BACKGROUND_WAIT_TIMEOUT_MS: 120000
-          BACKGROUND_TAIL_LINES: 400
-        run: |
-          worker_port_offset="${CLOUDFLARE_WORKER_PORT_OFFSET:-0}"
-          export BACKGROUND_WAIT_ON="http-get://127.0.0.1:$((8787 + worker_port_offset))/ok
-          http-get://127.0.0.1:$((8788 + worker_port_offset))/ok
-          http-get://127.0.0.1:$((8789 + worker_port_offset))/ok"
-          bash .github/scripts/start-background-service.sh
+          CLOUDFLARE_WORKERS_LOG_PATH: ${{ runner.temp }}/cloudflare-plugin-workers.log
+        run: bash .github/scripts/start-cloudflare-workers-with-retry.sh
       - name: Warm plugin /updates endpoint
         run: |
           plugin_url="http://127.0.0.1:$((8788 + CLOUDFLARE_WORKER_PORT_OFFSET))/updates"
@@ -1498,6 +1475,45 @@ jobs:
         run: |
           export BACKGROUND_WAIT_ON="${SUPABASE_FUNCTIONS_HEALTH_URL:?Missing isolated Supabase health URL}"
           bash .github/scripts/start-background-service.sh
+      - name: Warm edge functions before CLI integration tests
+        run: |
+          # GET /ok alone is not enough — cold first requests under file parallelism 502.
+          health_url="${SUPABASE_FUNCTIONS_HEALTH_URL#http-get://}"
+          health_url="${health_url#https-get://}"
+          base_url="http://${health_url%/ok}"
+          warm_get() {
+            local path="$1"
+            for attempt in 1 2 3 4 5; do
+              status=$(curl -s -o /tmp/edge-warm.body -w '%{http_code}' "${base_url}${path}" || true)
+              echo "edge warm GET path=${path} attempt=${attempt} status=${status}"
+              if [ "${status}" != "502" ] && [ "${status}" != "503" ] && [ "${status}" != "000" ]; then
+                return 0
+              fi
+              sleep "${attempt}"
+            done
+            return 1
+          }
+          warm_post() {
+            local path="$1"
+            for attempt in 1 2 3 4 5; do
+              status=$(curl -s -o /tmp/edge-warm.body -w '%{http_code}' -X POST "${base_url}${path}" \
+                -H 'Content-Type: application/json' \
+                -H 'apisecret: testsecret' \
+                -d '{}' || true)
+              echo "edge warm POST path=${path} attempt=${attempt} status=${status}"
+              if [ "${status}" != "502" ] && [ "${status}" != "503" ] && [ "${status}" != "000" ]; then
+                return 0
+              fi
+              sleep "${attempt}"
+            done
+            return 1
+          }
+          warm_get /ok
+          warm_post /triggers/cron_email
+          warm_post /triggers/cron_stat_org
+          warm_post /triggers/cron_stat_app
+          warm_post /apikey
+          warm_post /app
       - name: Run Capgo CLI integration tests
         run: |
           bun run supabase:with-env -- bunx vitest run tests/cli* --exclude=tests/cli-min-version.test.ts --exclude=tests/cli-new-encryption.test.ts

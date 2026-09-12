@@ -1254,12 +1254,14 @@ function processSegments(segmentsObj: any): { segments: string[], deleteSegments
 }
 
 export async function getStripeCustomer(c: Context, customerId: string) {
-  const { data: stripeInfo } = await supabaseAdmin(c)
+  const { data, error } = await supabaseAdmin(c)
     .from('stripe_info')
     .select('*')
     .eq('customer_id', customerId)
-    .single()
-  return stripeInfo
+    .maybeSingle()
+  if (error)
+    throw error
+  return data
 }
 
 export async function getDefaultPlan(c: Context) {

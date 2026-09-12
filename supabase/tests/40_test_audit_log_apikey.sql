@@ -427,13 +427,17 @@ SELECT throws_ok(
 
 
 -- Test 18: background counter updates must not create audit or webhook work.
+SELECT set_config('request.headers', NULL, true);
+SELECT set_config('request.jwt.claim.sub', NULL, true);
+SELECT set_config('request.jwt.claims', NULL, true);
+
 DO $$
 DECLARE
     v_before_audit_id bigint;
 BEGIN
-    PERFORM set_config('request.headers', '{}', true);
-    PERFORM set_config('request.jwt.claim.sub', '', true);
-    PERFORM set_config('request.jwt.claims', '{}', true);
+    PERFORM set_config('request.headers', NULL, true);
+    PERFORM set_config('request.jwt.claim.sub', NULL, true);
+    PERFORM set_config('request.jwt.claims', NULL, true);
 
     SELECT COALESCE(MAX(id), 0) INTO v_before_audit_id
     FROM public.audit_logs;
