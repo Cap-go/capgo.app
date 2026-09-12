@@ -1198,7 +1198,7 @@ async function loadResumeApp() {
 
   createdApp.value = data
   const savedProgress = parseUserOnboardingProgress(main.user?.onboarding)
-  setupStage.value = resolveSetupStage(savedProgress)
+  applyOnboardingProgress(savedProgress)
   appName.value = data.name ?? ''
   existingApp.value = data.existing_app ?? null
   storeUrl.value = data.ios_store_url ?? data.android_store_url ?? ''
@@ -1208,7 +1208,8 @@ async function loadResumeApp() {
   void loadResumeIconPreview(data.icon_url, data.app_id, iconLoadRun)
   if (props.preOrg || resumeStep.value === 'setup') {
     flowStep.value = 'setup'
-    hydrateIntentFromCurrentOrg()
+    if (!savedProgress?.intent)
+      hydrateIntentFromCurrentOrg()
   }
   else {
     flowStep.value = resumeStep.value === 'choice' ? 'choice' : 'install'
