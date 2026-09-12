@@ -18,6 +18,7 @@ import IconSearch from '~icons/ic/round-search?raw'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconPencil from '~icons/lucide/pencil'
 import { fetchLinkedChannelsForVersion, formatLinkedChannel, unlinkLinkedChannels } from '~/services/bundleLinkedChannels'
+import { buildChannelBundleAssignUpdate, channelHasProgressiveRollout, resolveChannelBundleAssignTarget } from '~/services/channelBundleAssign'
 import { findChannelsWithoutPromotionPermission, formatChannelPromotionTargets } from '~/services/channelPromotion'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { formatBytes, getChecksumInfo } from '~/services/conversion'
@@ -51,6 +52,7 @@ const metadataComment = ref('')
 
 // Channel chooser state
 const selectedChannelForLink = ref<Database['public']['Tables']['channels']['Row'] | null>(null)
+const channelAssignTarget = ref<'auto' | 'stable' | 'rollout'>('auto')
 const currentChannelAction = ref<'set' | 'open' | 'unlink' | null>(null)
 const channelSearchVal = ref('')
 const filteredChannels = ref<(Database['public']['Tables']['channels']['Row'])[]>([])
@@ -169,7 +171,7 @@ async function getChannels() {
   const appId = version.value.app_id
   const { data: dataChannel, error: channelsError } = await supabase
     .from('channels')
-    .select()
+    .select('*, rollout_version, rollout_enabled, version')
     .eq('app_id', appId)
     // .eq('version', version.value.id)
     .order('updated_at', { ascending: false })
@@ -220,7 +222,11 @@ const checksumInfo = computed(() => {
 })
 
 // add check compatibility here
-async function setChannel(channel: Database['public']['Tables']['channels']['Row'], id: number | null) {
+async function setChannel(
+  channel: Database['public']['Tables']['channels']['Row'],
+  id: number | null,
+  target: 'auto' | 'stable' | 'rollout' = 'auto',
+) {
   if (!canPromoteChannel(channel.id)) {
     toast.error(t('no-permission'))
     throw new Error('No permission')
@@ -237,11 +243,23 @@ async function setChannel(channel: Database['public']['Tables']['channels']['Row
     throw new Error('No permission to update channel version')
   }
 
+  if (id === null) {
+    return supabase
+      .from('channels')
+      .update({ version: null })
+      .eq('id', channel.id)
+      .throwOnError()
+  }
+
+  const assignmentTarget = resolveChannelBundleAssignTarget(channel, target)
+  if (assignmentTarget === 'rollout' && !channel.version) {
+    toast.error(t('rollout-requires-stable-bundle'))
+    throw new Error('Rollout requires stable bundle')
+  }
+
   return supabase
     .from('channels')
-    .update({
-      version: id,
-    })
+    .update(buildChannelBundleAssignUpdate(channel, id, target))
     .eq('id', channel.id)
     .throwOnError()
 }
@@ -255,6 +273,7 @@ async function ASChannelChooser() {
   }
 
   selectedChannelForLink.value = null
+  channelAssignTarget.value = 'auto'
   currentChannelAction.value = 'set'
   channelSearchVal.value = ''
   filteredChannels.value = getPromotableChannels()
@@ -335,9 +354,10 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
     else {
       toast.info(t('bundle-compatible-with-channel', { channel: chan.name }))
     }
-    await setChannel(chan, version.value.id)
+    const assignmentTarget = resolveChannelBundleAssignTarget(chan, channelAssignTarget.value)
+    await setChannel(chan, version.value.id, channelAssignTarget.value)
     await getChannels()
-    toast.success(t('linked-bundle'))
+    toast.success(assignmentTarget === 'rollout' ? t('rollout-target-linked') : t('linked-bundle'))
     toast.info(t('cloud-replication-delay'))
   }
   catch (error) {
@@ -1171,6 +1191,32 @@ async function deleteBundle() {
               outer: 'mb-0! w-full',
             }"
           />
+        </div>
+
+        <div
+          v-if="selectedChannelForLink && channelHasProgressiveRollout(selectedChannelForLink)"
+          class="space-y-3 rounded-lg border border-sky-200 bg-sky-50 p-4 text-left dark:border-sky-800/70 dark:bg-sky-950/30"
+        >
+          <p class="text-sm font-medium text-sky-900 dark:text-sky-100">
+            {{ t('channel-bundle-assign-rollout-title') }}
+          </p>
+          <p class="text-xs text-sky-800/90 dark:text-sky-200/90">
+            {{ t('channel-bundle-assign-rollout-hint') }}
+          </p>
+          <div class="grid gap-2 sm:grid-cols-3">
+            <label class="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-sky-200 bg-white px-3 text-sm dark:border-sky-800 dark:bg-slate-900">
+              <input v-model="channelAssignTarget" type="radio" class="d-radio d-radio-sm" value="auto">
+              <span>{{ t('channel-bundle-assign-auto') }}</span>
+            </label>
+            <label class="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-sky-200 bg-white px-3 text-sm dark:border-sky-800 dark:bg-slate-900">
+              <input v-model="channelAssignTarget" type="radio" class="d-radio d-radio-sm" value="rollout">
+              <span>{{ t('channel-bundle-assign-rollout') }}</span>
+            </label>
+            <label class="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-sky-200 bg-white px-3 text-sm dark:border-sky-800 dark:bg-slate-900">
+              <input v-model="channelAssignTarget" type="radio" class="d-radio d-radio-sm" value="stable">
+              <span>{{ t('channel-bundle-assign-stable') }}</span>
+            </label>
+          </div>
         </div>
 
         <div class="space-y-3">

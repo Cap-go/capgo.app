@@ -7,7 +7,7 @@ const APPNAME = `com.app.b.${id}`
 const RBAC_APPNAME = `com.app.b.rbac.${id}`
 const RBAC_ORG_ID = randomUUID()
 
-async function putBundleToChannel(body: { app_id: string, version_id: number, channel_id: number }): Promise<Response> {
+async function putBundleToChannel(body: { app_id: string, version_id: number, channel_id: number, target?: 'auto' | 'stable' | 'rollout' }): Promise<Response> {
   return fetch(`${BASE_URL}/bundle`, {
     method: 'PUT',
     headers,
@@ -311,10 +311,46 @@ describe('[PUT] /bundle operations - Set bundle to channel', () => {
     }
   })
 
-  it('should reset leftover rollout when a new stable bundle is set', async () => {
+  it('should assign uploads to rollout target when progressive rollout is configured', async () => {
     const supabase = getSupabaseClient()
-    const nextVersion = await createAppVersions('1.0.1-test-channel-rollout-reset', APPNAME)
+    const nextVersion = await createAppVersions('1.0.1-test-channel-rollout-assign', APPNAME)
     const rolloutVersion = await createAppVersions('1.0.0-test-channel-rollout-target', APPNAME)
+
+    const { error: leftoverError } = await supabase
+      .from('channels')
+      .update({
+        version: versionId,
+        rollout_version: rolloutVersion.id,
+        rollout_enabled: true,
+        rollout_percentage_bps: 2500,
+      })
+      .eq('id', channelId)
+      .eq('app_id', APPNAME)
+    expect(leftoverError).toBeNull()
+
+    const response = await putBundleToChannel({
+      app_id: APPNAME,
+      version_id: nextVersion.id,
+      channel_id: channelId,
+    })
+    expect(response.status).toBe(200)
+
+    const { data: after, error: afterError } = await supabase
+      .from('channels')
+      .select('version, rollout_version, rollout_enabled, rollout_percentage_bps, rollout_id')
+      .eq('id', channelId)
+      .single()
+    expect(afterError).toBeNull()
+    expect(after?.version).toBe(versionId)
+    expect(after?.rollout_version).toBe(nextVersion.id)
+    expect(after?.rollout_enabled).toBe(true)
+    expect(after?.rollout_percentage_bps).toBe(2500)
+  })
+
+  it('should reset leftover rollout when a new stable bundle is set explicitly', async () => {
+    const supabase = getSupabaseClient()
+    const nextVersion = await createAppVersions('1.0.2-test-channel-rollout-reset', APPNAME)
+    const rolloutVersion = await createAppVersions('1.0.0-test-channel-rollout-target-2', APPNAME)
 
     const { error: leftoverError } = await supabase
       .from('channels')
@@ -342,6 +378,7 @@ describe('[PUT] /bundle operations - Set bundle to channel', () => {
       app_id: APPNAME,
       version_id: nextVersion.id,
       channel_id: channelId,
+      target: 'stable',
     })
     expect(response.status).toBe(200)
 

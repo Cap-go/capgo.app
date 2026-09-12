@@ -16,6 +16,7 @@ import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconWarning from '~icons/lucide/alert-triangle'
 import IconExternalLink from '~icons/lucide/external-link'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
+import HelpTooltip from '~/components/HelpTooltip.vue'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { formatDate, formatLocalDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
@@ -144,6 +145,7 @@ const rolloutProgressStyle = computed(() => {
 })
 const showRolloutSettings = computed(() => !!channel.value?.rollout_enabled)
 const showRolloutEnableRow = computed(() => !!channel.value && !channel.value.rollout_enabled)
+const rolloutPercentageDraft = ref('0')
 
 const canUpdateChannelSettings = computedAsync(async () => {
   if (!packageId.value || !id.value)
@@ -256,6 +258,7 @@ async function getChannel(force = false) {
     }
 
     channel.value = withBuiltinChannelVersion(data as any) as unknown as Database['public']['Tables']['channels']['Row'] & Channel
+    rolloutPercentageDraft.value = String((channel.value?.rollout_percentage_bps ?? 0) / 100)
 
     // Store in appDetailStore
     appDetailStore.setChannel(id.value, channel.value)
@@ -629,23 +632,59 @@ async function enableRollout() {
 }
 
 async function disableRollout() {
-  if (await saveChannelChanges({
-    rollout_enabled: false,
-    rollout_version: null,
-    rollout_paused_at: null,
-    rollout_pause_reason: null,
-  })) {
-    await askUpdateNotificationAfterBundleChange()
-  }
+  await confirmRolloutAction(
+    t('rollout-disable-confirm-title'),
+    t('rollout-disable-confirm-description', {
+      stable: stableBundleName.value,
+      target: rolloutTargetName.value,
+    }),
+    t('rollout-disable-confirm-action'),
+    async () => {
+      if (await saveChannelChanges({
+        rollout_enabled: false,
+        rollout_version: null,
+        rollout_paused_at: null,
+        rollout_pause_reason: null,
+      })) {
+        await askUpdateNotificationAfterBundleChange()
+      }
+    },
+  )
 }
 
-async function saveRolloutPercentage(value: string) {
-  const percentage = Number.parseFloat(value)
+async function saveRolloutPercentage(value?: string) {
+  const percentage = Number.parseFloat(value ?? rolloutPercentageDraft.value)
   if (Number.isNaN(percentage) || percentage < 0 || percentage > 100) {
     toast.error(t('invalid-rollout-percentage'))
     return
   }
-  await saveChannelChange('rollout_percentage_bps', Math.round(percentage * 100) as any)
+  const saved = await saveChannelChange('rollout_percentage_bps', Math.round(percentage * 100) as any)
+  if (saved)
+    rolloutPercentageDraft.value = String(percentage)
+}
+
+async function confirmRolloutAction(
+  title: string,
+  description: string,
+  confirmText: string,
+  onConfirm: () => Promise<void>,
+) {
+  dialogStore.openDialog({
+    title,
+    description,
+    buttons: [
+      {
+        text: t('button-cancel'),
+        role: 'cancel',
+      },
+      {
+        text: confirmText,
+        role: 'primary',
+        handler: onConfirm,
+      },
+    ],
+  })
+  await dialogStore.onDialogDismiss()
 }
 
 async function saveIntegerField(key: EditableChannelKey, value: string, min: number, max: number, nullable = false) {
@@ -679,36 +718,67 @@ async function saveAutoPauseConfidence(value: string) {
 }
 
 async function rollbackRollout() {
-  if (await saveChannelChanges({
-    rollout_version: null,
-    rollout_enabled: false,
-    rollout_percentage_bps: 0,
-    rollout_paused_at: null,
-    rollout_pause_reason: null,
-  })) {
-    await askUpdateNotificationAfterBundleChange()
-  }
+  await confirmRolloutAction(
+    t('rollout-rollback-confirm-title'),
+    t('rollout-rollback-confirm-description', {
+      stable: stableBundleName.value,
+      target: rolloutTargetName.value,
+    }),
+    t('rollout-rollback-confirm-action'),
+    async () => {
+      if (await saveChannelChanges({
+        rollout_version: null,
+        rollout_enabled: false,
+        rollout_percentage_bps: 0,
+        rollout_paused_at: null,
+        rollout_pause_reason: null,
+      })) {
+        await askUpdateNotificationAfterBundleChange()
+      }
+    },
+  )
 }
 
 async function promoteRollout() {
   if (!channel.value?.rollout_version)
     return
-  if (await saveChannelChanges({
-    version: channel.value.rollout_version,
-    rollout_version: null,
-    rollout_enabled: false,
-    rollout_percentage_bps: 0,
-    rollout_paused_at: null,
-    rollout_pause_reason: null,
-  })) {
-    await askUpdateNotificationAfterBundleChange()
-  }
+  await confirmRolloutAction(
+    t('rollout-promote-confirm-title'),
+    t('rollout-promote-confirm-description', {
+      stable: stableBundleName.value,
+      target: rolloutTargetName.value,
+      percent: rolloutPercentageText.value,
+    }),
+    t('rollout-promote-confirm-action'),
+    async () => {
+      if (await saveChannelChanges({
+        version: channel.value!.rollout_version,
+        rollout_version: null,
+        rollout_enabled: false,
+        rollout_percentage_bps: 0,
+        rollout_paused_at: null,
+        rollout_pause_reason: null,
+      })) {
+        await askUpdateNotificationAfterBundleChange()
+      }
+    },
+  )
 }
 
 async function toggleRolloutPause() {
-  await saveChannelChanges(channel.value?.rollout_paused_at
-    ? { rollout_paused_at: null, rollout_pause_reason: null }
-    : { rollout_paused_at: new Date().toISOString(), rollout_pause_reason: t('manual-rollout-pause') })
+  const isPaused = !!channel.value?.rollout_paused_at
+  await confirmRolloutAction(
+    isPaused ? t('rollout-resume-confirm-title') : t('rollout-pause-confirm-title'),
+    isPaused
+      ? t('rollout-resume-confirm-description', { target: rolloutTargetName.value, percent: rolloutPercentageText.value })
+      : t('rollout-pause-confirm-description', { stable: stableBundleName.value, target: rolloutTargetName.value }),
+    isPaused ? t('resume') : t('pause'),
+    async () => {
+      await saveChannelChanges(isPaused
+        ? { rollout_paused_at: null, rollout_pause_reason: null }
+        : { rollout_paused_at: new Date().toISOString(), rollout_pause_reason: t('manual-rollout-pause') })
+    },
+  )
 }
 
 async function refreshFilteredVersions() {
@@ -1034,8 +1104,8 @@ async function copyCurlCommand() {
               <div class="flex items-center gap-3">
                 <span class="text-base leading-5 cursor-pointer" @click="openBundle()">{{ channel.version.name }}</span>
                 <button
-                  type="button"
                   v-if="channel"
+                  type="button"
                   class="relative p-0 d-btn d-btn-outline size-6 min-h-6 before:absolute before:-inset-2.5 before:content-['']"
                   :aria-label="t('select-stable-bundle')"
                   :disabled="!canPromoteBundle"
@@ -1096,16 +1166,18 @@ async function copyCurlCommand() {
 
                   <dl class="grid border-y border-slate-200 text-sm dark:border-slate-700 sm:grid-cols-2 sm:divide-x sm:divide-slate-200 sm:dark:divide-slate-700">
                     <div class="py-3 sm:px-4 sm:first:pl-0">
-                      <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">
-                        {{ t('rollout-target') }}
+                      <dt class="flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
+                        <span>{{ t('rollout-target') }}</span>
+                        <HelpTooltip :label="t('rollout-target-tooltip')" width-class="w-64" />
                       </dt>
                       <dd class="mt-1 font-semibold text-slate-900 dark:text-white">
                         {{ channel?.rollout_version_info?.name ?? t('not-configured') }}
                       </dd>
                     </div>
                     <div class="border-t border-slate-200 py-3 dark:border-slate-700 sm:border-t-0 sm:px-4">
-                      <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">
-                        {{ t('rollout-percentage') }}
+                      <dt class="flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
+                        <span>{{ t('rollout-percentage') }}</span>
+                        <HelpTooltip :label="t('rollout-percentage-tooltip')" width-class="w-64" />
                       </dt>
                       <dd class="mt-1 font-semibold text-slate-900 dark:text-white">
                         {{ rolloutPercentageText }}
@@ -1122,24 +1194,39 @@ async function copyCurlCommand() {
                   <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
                     <div class="grid gap-3 sm:grid-cols-2">
                       <label class="space-y-1.5">
-                        <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('rollout-percentage') }}</span>
-                        <div class="flex min-h-11 items-center rounded-md border border-slate-200 bg-white px-3 focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100 dark:border-slate-700 dark:bg-slate-900 dark:focus-within:border-sky-700 dark:focus-within:ring-sky-950">
-                          <input
-                            class="w-full bg-transparent text-sm font-medium text-slate-900 outline-none disabled:cursor-not-allowed disabled:opacity-40 dark:text-white"
-                            type="number"
-                            min="0"
-                            max="100"
-                            step="0.01"
-                            :aria-label="t('rollout-percentage')"
+                        <span class="flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
+                          <span>{{ t('rollout-percentage') }}</span>
+                          <HelpTooltip :label="t('rollout-percentage-tooltip')" width-class="w-64" />
+                        </span>
+                        <div class="flex min-h-11 items-center gap-2">
+                          <div class="flex min-h-11 flex-1 items-center rounded-md border border-slate-200 bg-white px-3 focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100 dark:border-slate-700 dark:bg-slate-900 dark:focus-within:border-sky-700 dark:focus-within:ring-sky-950">
+                            <input
+                              v-model="rolloutPercentageDraft"
+                              class="w-full bg-transparent text-sm font-medium text-slate-900 outline-none disabled:cursor-not-allowed disabled:opacity-40 dark:text-white"
+                              type="number"
+                              min="0"
+                              max="100"
+                              step="0.01"
+                              :aria-label="t('rollout-percentage')"
+                              :disabled="rolloutControlsDisabled"
+                            >
+                            <span class="text-sm text-slate-400 dark:text-slate-500">%</span>
+                          </div>
+                          <button
+                            type="button"
+                            class="min-h-11 d-btn d-btn-primary d-btn-sm whitespace-nowrap"
                             :disabled="rolloutControlsDisabled"
-                            :value="rolloutPercentage"
-                            @change="saveRolloutPercentage(($event.target as HTMLInputElement).value)"
+                            @click="saveRolloutPercentage()"
                           >
-                          <span class="text-sm text-slate-400 dark:text-slate-500">%</span>
+                            {{ t('apply-rollout-percentage') }}
+                          </button>
                         </div>
                       </label>
                       <label class="space-y-1.5">
-                        <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('cache-ttl-seconds') }}</span>
+                        <span class="flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
+                          <span>{{ t('cache-ttl-seconds') }}</span>
+                          <HelpTooltip :label="t('rollout-cache-ttl-tooltip')" width-class="w-64" />
+                        </span>
                         <input
                           class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
                           type="number"
@@ -1155,20 +1242,20 @@ async function copyCurlCommand() {
                     </div>
 
                     <div class="flex flex-wrap gap-2 lg:justify-end">
-                      <button type="button" class="min-h-11 d-btn d-btn-ghost" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
-                        {{ t('set-rollout-target') }}
+                      <button type="button" class="min-h-11 d-btn d-btn-outline d-btn-primary" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
+                        {{ t('change-rollout-target') }}
                       </button>
                       <button type="button" class="min-h-11 d-btn d-btn-outline" :disabled="channel.rollout_enabled ? (rolloutTargetActionsDisabled || rolloutControlsDisabled) : rolloutEnableDisabled" @click="channel.rollout_enabled ? disableRollout() : enableRollout()">
-                        {{ channel.rollout_enabled ? t('disable') : t('enable') }}
+                        {{ channel.rollout_enabled ? t('disable-rollout') : t('enable-rollout') }}
                       </button>
                       <button type="button" class="min-h-11 d-btn d-btn-outline" :disabled="rolloutPauseDisabled" @click="toggleRolloutPause()">
-                        {{ channel.rollout_paused_at ? t('resume') : t('pause') }}
+                        {{ channel.rollout_paused_at ? t('resume-rollout') : t('pause-rollout') }}
                       </button>
                       <button type="button" class="min-h-11 d-btn d-btn-primary" :disabled="rolloutTargetActionsDisabled" @click="promoteRollout()">
-                        {{ t('promote') }}
+                        {{ t('complete-rollout') }}
                       </button>
-                      <button type="button" class="min-h-11 capitalize d-btn d-btn-error d-btn-ghost" :disabled="rolloutTargetActionsDisabled" @click="rollbackRollout()">
-                        {{ t('rollback') }}
+                      <button type="button" class="min-h-11 d-btn d-btn-error d-btn-outline" :disabled="rolloutTargetActionsDisabled" @click="rollbackRollout()">
+                        {{ t('rollback-rollout') }}
                       </button>
                     </div>
                   </div>

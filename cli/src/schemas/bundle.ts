@@ -12,6 +12,7 @@ export const optionsUploadSchema = optionsBaseSchema.extend({
   rollout: z.number().min(0).max(100).optional(),
   rolloutPercentageBps: z.number().int().min(0).max(10000).optional(),
   rolloutAdvance: z.boolean().optional(),
+  stable: z.boolean().optional(),
   rolloutCacheTtlSeconds: z.number().int().min(60).max(31536000).optional(),
   displayIvSession: z.boolean().optional(),
   external: z.string().optional(),

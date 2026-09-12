@@ -8,10 +8,36 @@ import { closeClient, getDrizzleClient, getPgClient, logPgError } from '../../ut
 import { checkPermissionPg } from '../../utils/rbac.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
+export type SetChannelTarget = 'auto' | 'stable' | 'rollout'
+
 export interface SetChannelBody {
   app_id: string
   version_id: number
   channel_id: number
+  target?: SetChannelTarget
+}
+
+interface ChannelRow {
+  name: string
+  owner_org: string
+  version: number | null
+  rollout_version: number | null
+  rollout_enabled: boolean
+}
+
+export function channelHasProgressiveRollout(channel: Pick<ChannelRow, 'rollout_enabled' | 'rollout_version'>) {
+  return channel.rollout_enabled || channel.rollout_version != null
+}
+
+export function resolveSetChannelTarget(
+  channel: Pick<ChannelRow, 'rollout_enabled' | 'rollout_version'>,
+  requestedTarget: SetChannelTarget = 'auto',
+): 'stable' | 'rollout' {
+  if (requestedTarget === 'stable')
+    return 'stable'
+  if (requestedTarget === 'rollout')
+    return 'rollout'
+  return channelHasProgressiveRollout(channel) ? 'rollout' : 'stable'
 }
 
 export interface PgQueryClient {
@@ -19,11 +45,11 @@ export interface PgQueryClient {
   release: () => void
 }
 
-interface ChannelRow { name: string, owner_org: string }
 
 export interface SetChannelResult {
   channelName: string
   versionName: string
+  assignmentTarget: 'stable' | 'rollout'
 }
 
 type DrizzleClient = ReturnType<typeof getDrizzleClient>
@@ -48,7 +74,11 @@ function getEffectiveApikey(c: Context<MiddlewareKeyVariables>, apikey: Database
 
 async function fetchTargetChannel(dbClient: PgQueryClient, body: SetChannelBody) {
   const channelResult = await dbClient.query<ChannelRow>(
-    `SELECT name, owner_org
+    `SELECT name,
+            owner_org,
+            version,
+            rollout_version,
+            rollout_enabled
      FROM public.channels
      WHERE id = $1
        AND app_id = $2
@@ -88,6 +118,23 @@ async function updateChannelVersion(dbClient: PgQueryClient, body: SetChannelBod
 
   if ((updateResult.rowCount ?? 0) !== 1) {
     throw new Error('Channel update affected 0 rows')
+  }
+}
+
+async function updateChannelRolloutVersion(dbClient: PgQueryClient, body: SetChannelBody, channelOwnerOrg: string) {
+  const updateResult = await dbClient.query(
+    `UPDATE public.channels
+     SET rollout_version = $1,
+         rollout_enabled = true
+     WHERE id = $2
+       AND app_id = $3
+       AND owner_org = $4
+     RETURNING id`,
+    [body.version_id, body.channel_id, body.app_id, channelOwnerOrg],
+  )
+
+  if ((updateResult.rowCount ?? 0) !== 1) {
+    throw new Error('Channel rollout update affected 0 rows')
   }
 }
 
@@ -136,12 +183,29 @@ export async function setChannelInTransaction(
     throw simpleError('cannot_find_channel', 'Cannot find channel')
   }
 
+  const assignmentTarget = resolveSetChannelTarget(channel, body.target)
+  if (assignmentTarget === 'rollout' && !channel.version) {
+    throw simpleError(
+      'cannot_set_rollout_without_stable',
+      'Cannot set rollout target because this channel has no stable bundle yet',
+      { channel_id: body.channel_id },
+    )
+  }
+
   await dbClient.query(
     'SELECT set_config(\'request.headers\', $1, true)',
     [JSON.stringify({ capgkey: getEffectiveApikey(c, apikey) })],
   )
-  await updateChannelVersion(dbClient, body, channel.owner_org)
-  return { channelName: channel.name, versionName }
+  if (assignmentTarget === 'rollout')
+    await updateChannelRolloutVersion(dbClient, body, channel.owner_org)
+  else
+    await updateChannelVersion(dbClient, body, channel.owner_org)
+
+  return {
+    channelName: channel.name,
+    versionName,
+    assignmentTarget,
+  }
 }
 
 export async function setChannel(c: Context<MiddlewareKeyVariables>, body: SetChannelBody, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
@@ -176,8 +240,13 @@ export async function setChannel(c: Context<MiddlewareKeyVariables>, body: SetCh
     await closeClient(c, pgClient)
   }
 
+  const message = result!.assignmentTarget === 'rollout'
+    ? `Bundle ${result!.versionName} set as rollout target on channel ${result!.channelName}`
+    : `Bundle ${result!.versionName} set to channel ${result!.channelName}`
+
   return c.json({
     status: 'success',
-    message: `Bundle ${result!.versionName} set to channel ${result!.channelName}`,
+    message,
+    assignmentTarget: result!.assignmentTarget,
   })
 }

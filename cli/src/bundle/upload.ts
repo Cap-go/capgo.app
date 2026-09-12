@@ -823,6 +823,10 @@ function formatRolloutPercentage(bps: number) {
   return `${Number((bps / 100).toFixed(2))}%`
 }
 
+function channelHasProgressiveRollout(channel: Pick<UploadTargetChannel, 'rollout_enabled' | 'rollout_version'>) {
+  return channel.rollout_enabled || channel.rollout_version != null
+}
+
 async function getVersionIdForChannelUpdate(supabase: SupabaseType, apikey: string, appid: string, bundle: string) {
   const { data: versionId } = await supabase
     .rpc('get_app_versions', { apikey, name_version: bundle, appid })
@@ -1058,7 +1062,7 @@ async function promoteExistingChannel(
   targetChannel: UploadTargetChannel,
   localConfig: localConfigType,
   displayBundleUrl: boolean,
-  options?: { supaHost?: string, supaAnon?: string },
+  options?: Pick<OptionsUpload, 'supaHost' | 'supaAnon' | 'stable'>,
 ): Promise<boolean> {
   const { error } = await invokeCapgoCliApi('bundle', {
     apikey,
@@ -1067,6 +1071,7 @@ async function promoteExistingChannel(
       app_id: appid,
       version_id: versionId,
       channel_id: targetChannel.id,
+      ...(options?.stable ? { target: 'stable' } : {}),
     },
     supaHost: options?.supaHost,
     supaAnon: options?.supaAnon,
@@ -1077,8 +1082,8 @@ async function promoteExistingChannel(
   }
 
   const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${targetChannel.id}`
-  if (targetChannel.rollout_enabled && targetChannel.rollout_version != null) {
-    log.warn('This channel has an active progressive rollout. Linking this bundle as the stable version resets that rollout, so devices receive the new bundle instead of the previous rollout target.')
+  if (!options?.stable && channelHasProgressiveRollout(targetChannel)) {
+    log.info('Channel has progressive rollout configured. This bundle was set as the rollout target; stable bundle stays unchanged.')
   }
   else if (targetChannel.public) {
     log.info('Your update is now available in your public channel 🎉')
@@ -1146,8 +1151,8 @@ async function setVersionInChannel(
     }
     if (data?.id) {
       const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${data.id}`
-      if (targetChannel.rollout_enabled && targetChannel.rollout_version != null) {
-        log.warn('This channel has an active progressive rollout. Linking this bundle as the stable version resets that rollout, so devices receive the new bundle instead of the previous rollout target.')
+      if (!options?.stable && targetChannel && channelHasProgressiveRollout(targetChannel)) {
+        log.info('Channel has progressive rollout configured. This bundle was set as the rollout target; stable bundle stays unchanged.')
       }
       else if (data.public) {
         log.info('Your update is now available in your public channel 🎉')
