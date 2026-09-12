@@ -47,8 +47,8 @@ function branchColor(index: number) {
     <template v-else>
       <div class="hidden grid-cols-[minmax(12rem,0.8fr)_repeat(2,minmax(0,1fr))] gap-8 border-y border-slate-200 bg-slate-50/70 px-6 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 lg:grid lg:px-8 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-400">
         <span>{{ t('admin-ab-tests-experiment') }}</span>
-        <span>{{ t('admin-ab-tests-variant') }} A</span>
-        <span>{{ t('admin-ab-tests-variant') }} B</span>
+        <span>{{ t('admin-ab-tests-treatment') }}</span>
+        <span>{{ t('admin-ab-tests-control') }}</span>
       </div>
 
       <article

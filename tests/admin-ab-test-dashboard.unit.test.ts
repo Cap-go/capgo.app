@@ -61,6 +61,9 @@ describe('admin A/B test dashboard presentation', () => {
     expect(matrixSource).toContain('role="progressbar"')
     expect(matrixSource).toContain('formatNumberValue(branch.count)')
     expect(matrixSource).toContain('formatPercentage(branch.percentage)')
+    expect(matrixSource).toContain(`t('admin-ab-tests-treatment')`)
+    expect(matrixSource).toContain(`t('admin-ab-tests-control')`)
+    expect(matrixSource).not.toContain(`t('admin-ab-tests-variant')`)
   })
 
   it.concurrent('defines the A/B test dashboard copy', async () => {
@@ -70,7 +73,8 @@ describe('admin A/B test dashboard presentation', () => {
     expect(messages['admin-ab-tests-description']).toBe('Assignment distribution across every experiment.')
     expect(messages['admin-ab-tests-total']).toBe('{tests} tests · {assignments} assignments')
     expect(messages['admin-ab-tests-experiment']).toBe('Experiment')
-    expect(messages['admin-ab-tests-variant']).toBe('Variant')
+    expect(messages['admin-ab-tests-treatment']).toBe('Treatment')
+    expect(messages['admin-ab-tests-control']).toBe('Control')
     expect(messages['admin-ab-tests-load-error']).toBe('Unable to load A/B test distribution. Please try again.')
     expect(messages['admin-ab-tests-empty']).toBe('No A/B tests are configured.')
   })

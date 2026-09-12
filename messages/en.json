@@ -3404,7 +3404,8 @@
   "admin-ab-tests-description": "Assignment distribution across every experiment.",
   "admin-ab-tests-total": "{tests} tests · {assignments} assignments",
   "admin-ab-tests-experiment": "Experiment",
-  "admin-ab-tests-variant": "Variant",
+  "admin-ab-tests-treatment": "Treatment",
+  "admin-ab-tests-control": "Control",
   "admin-ab-tests-assignments": "{count} assignments",
   "admin-ab-tests-load-error": "Unable to load A/B test distribution. Please try again.",
   "admin-ab-tests-empty": "No A/B tests are configured."

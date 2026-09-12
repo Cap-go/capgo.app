@@ -104,6 +104,7 @@ describe('admin A/B test distribution', () => {
 
     expect(getPgClientMock).toHaveBeenCalledWith(context, true)
     expect(queryMock).toHaveBeenCalledOnce()
+    expect(queryMock.mock.calls[0]?.[0]).toContain(`(user_account.onboarding -> 'abtests') ?| $1::text[]`)
     expect(queryMock.mock.calls[0]?.[1]).toEqual([expect.arrayContaining(['new_emails', 'new_channel'])])
     expect(result.find(test => test.test_name === 'new_emails')).toMatchObject({ total: 10 })
     expect(closeClientMock).toHaveBeenCalledWith(context, expect.anything())

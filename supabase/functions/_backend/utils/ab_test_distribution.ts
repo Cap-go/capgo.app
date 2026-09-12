@@ -87,7 +87,8 @@ export async function getAdminABTestDistribution(c: Context): Promise<AdminABTes
            ELSE '{}'::jsonb
          END
        ) AS assignment(test_name, value)
-       WHERE assignment.test_name = ANY($1::text[])
+       WHERE (user_account.onboarding -> 'abtests') ?| $1::text[]
+         AND assignment.test_name = ANY($1::text[])
          AND jsonb_typeof(assignment.value) = 'object'
        GROUP BY assignment.test_name, assignment.value ->> 'branch'`,
       [testNames],
