@@ -17,7 +17,8 @@ export type ABTestIntent = typeof AB_TEST_INTENTS[number]
 export interface ABTestConfig {
   audience: ABTestAudience
   intents?: ABTestIntent[]
-  branches: Record<string, { bento_tag: string }>
+  label: string
+  branches: Record<string, { bento_tag: string, label: string }>
   control_branch: ABTestBranch
   treatment_branch: ABTestBranch
   treatment_percentage: number
@@ -91,12 +92,15 @@ export function validateABTestsConfig(value: unknown): ABTestsConfig {
       invalidConfig(testName)
 
     const audience = entry.audience
+    const label = entry.label
     const percentage = entry.treatment_percentage
     const treatmentBranch = entry.treatment_branch
     const controlBranch = entry.control_branch
     const branches = entry.branches
     const intents = entry.intents
     if ((audience !== 'all' && audience !== 'self_signup')
+      || typeof label !== 'string'
+      || !label.trim()
       || typeof percentage !== 'number'
       || !Number.isInteger(percentage)
       || percentage < 0
@@ -120,10 +124,16 @@ export function validateABTestsConfig(value: unknown): ABTestsConfig {
 
     const treatmentTag = branches[treatmentBranch].bento_tag
     const controlTag = branches[controlBranch].bento_tag
+    const treatmentLabel = branches[treatmentBranch].label
+    const controlLabel = branches[controlBranch].label
     if (typeof treatmentTag !== 'string'
       || typeof controlTag !== 'string'
+      || typeof treatmentLabel !== 'string'
+      || typeof controlLabel !== 'string'
       || !treatmentTag.trim()
       || !controlTag.trim()
+      || !treatmentLabel.trim()
+      || !controlLabel.trim()
       || treatmentTag === controlTag
       || bentoTags.has(treatmentTag)
       || bentoTags.has(controlTag)) {
@@ -134,13 +144,14 @@ export function validateABTestsConfig(value: unknown): ABTestsConfig {
 
     config[testName] = {
       audience,
+      label: label.trim(),
       ...(intents === undefined ? {} : { intents: [...intents] }),
       control_branch: controlBranch,
       treatment_branch: treatmentBranch,
       treatment_percentage: percentage,
       branches: {
-        [treatmentBranch]: { bento_tag: treatmentTag },
-        [controlBranch]: { bento_tag: controlTag },
+        [treatmentBranch]: { bento_tag: treatmentTag, label: treatmentLabel.trim() },
+        [controlBranch]: { bento_tag: controlTag, label: controlLabel.trim() },
       },
     }
   }
