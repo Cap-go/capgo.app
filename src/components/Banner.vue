@@ -111,7 +111,7 @@ const bannerColor = computed(() => {
       v-bind="showCta ? {} : { href: billingCtaHref }"
       :role="showCta ? 'status' : undefined"
       class="flex items-center gap-2 min-w-0 flex-1 overflow-hidden"
-      :class="showCta ? '' : 'rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500'"
+      :class="showCta ? '' : 'rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500'"
       :aria-label="statusAriaLabel"
       :title="statusAriaLabel"
     >
