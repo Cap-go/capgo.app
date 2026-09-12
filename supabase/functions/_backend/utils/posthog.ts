@@ -222,6 +222,16 @@ function getPostHogExceptionUrl(host: string) {
   const normalizedHost = trimmedHost.endsWith('/capture') ? `${trimmedHost.slice(0, -'/capture'.length)}/` : trimmedHost
   return new URL('i/v0/e/', normalizedHost.endsWith('/') ? normalizedHost : `${normalizedHost}/`).toString()
 }
+// Cloudflare's "internal error; reference = <id>" carries a random reference id
+// that would otherwise land in the error-tracking issue title and make every
+// occurrence look like a new issue. Drop the id so the class groups under one
+// stable title.
+function stripCloudflareInternalErrorReference(message: string | undefined): string | undefined {
+  if (typeof message !== 'string')
+    return message
+  return message.replace(/(internal error; reference)\s*=\s*\S+/gi, '$1')
+}
+
 function getRequestPath(url: string) {
   try {
     return new URL(url).pathname || '/'
@@ -324,7 +334,7 @@ export async function capturePosthogException(c: Context, payload: {
       distinct_id: distinctId,
       $exception_list: [{
         type: serializedError.name || 'Error',
-        value: serializedError.message,
+        value: stripCloudflareInternalErrorReference(serializedError.message),
         mechanism: {
           handled: true,
           synthetic: false,

@@ -147,6 +147,34 @@ describe('backend alert resilience helpers', () => {
     expect(handler.fetch).toHaveBeenCalledTimes(3)
   })
 
+  it.concurrent('retries Cloudflare internal errors and returns a retryable response once exhausted', async () => {
+    const { filesTestUtils } = await import('../supabase/functions/_backend/files/files.ts')
+
+    const handler = {
+      fetch: vi.fn(async () => {
+        // Cloudflare raises this as a bare error with no retryable flags.
+        throw new Error('internal error; reference = 0123456789abcdef')
+      }),
+    } as any
+
+    const response = await filesTestUtils.fetchUploadHandlerWithRetry(
+      createTestContext(),
+      handler,
+      new Request('http://localhost/files/upload/attachments/test.zip', {
+        method: 'POST',
+        headers: {
+          'Content-Length': '0',
+          'Tus-Resumable': '1.0.0',
+          'Upload-Length': '2500',
+        },
+      }),
+    )
+
+    expect(response.status).toBe(503)
+    expect(response.headers.get('Retry-After')).toBe('1')
+    expect(handler.fetch).toHaveBeenCalledTimes(3)
+  })
+
   it.concurrent('forwards a replayable zero-byte TUS creation-with-upload body', async () => {
     const { filesTestUtils } = await import('../supabase/functions/_backend/files/files.ts')
 

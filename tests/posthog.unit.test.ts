@@ -379,6 +379,21 @@ describe('posthog helper', () => {
     expect(request?.[1]?.signal).toBeInstanceOf(AbortSignal)
   })
 
+  it('strips the reference id from Cloudflare internal errors so the title stays stable', async () => {
+    const { capturePosthogException } = await import('../supabase/functions/_backend/utils/posthog.ts')
+    envState.posthogApiHost = 'https://eu.i.posthog.com/i/v0/e'
+
+    await capturePosthogException(createContext(), {
+      error: new Error('internal error; reference = 0123abcd-4567-89ef'),
+      functionName: 'files',
+      kind: 'unhandled_error',
+      status: 500,
+    })
+
+    const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)
+    expect(body.properties.$exception_list[0].value).toBe('internal error; reference')
+  })
+
   it('fingerprints drizzle errors by queried table', async () => {
     const { capturePosthogException } = await import('../supabase/functions/_backend/utils/posthog.ts')
     envState.posthogApiHost = 'https://eu.i.posthog.com/i/v0/e'
