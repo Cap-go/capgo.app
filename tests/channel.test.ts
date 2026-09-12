@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
-import { BASE_URL, createAppVersions, getEndpointUrl, getSupabaseClient, headers, ORG_ID, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils.ts'
+import { BASE_URL, createAppVersions, getEndpointUrl, getSupabaseClient, headers, ORG_ID, resetAndSeedAppData, resetAppData, resetAppDataStats, warmEdgeEndpoint } from './test-utils.ts'
 
 const id = randomUUID()
 const APPNAME = `com.app.c.${id}`
@@ -17,6 +17,11 @@ beforeAll(async () => {
     .single()
     .throwOnError()
   productionVersionId = data.id
+  await warmEdgeEndpoint('/bundle', {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ app_id: APPNAME }),
+  })
 })
 afterEach(async () => {
   const client = getSupabaseClient()
