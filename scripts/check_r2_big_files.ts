@@ -1,8 +1,10 @@
-import { _Object, CopyObjectCommand, DeleteObjectCommand, ListObjectsV2Command, ListObjectsV2CommandOutput, S3Client, HeadObjectCommand, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3'
+import { _Object, CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, ListObjectsV2CommandOutput, S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3'
 import { writeFileSync, existsSync, readFileSync } from 'fs'
 import { S3Client as S3ClientLite } from '@bradenmacdonald/s3-lite-client/'
 import { Pool } from 'pg'
 import { Context } from 'vm'
+import { permanentDeleteAwsLiveKey } from './r2_cleanup/aws_permanent_delete.ts'
+import { APP_VERSION_NOT_DELETED_SQL, applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, buildAwsTrashCopyPreserveFromHead, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, ConcurrencyLimiter, extractR2TrashSourceVersionMarker, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, mergeTrashCopyMetadata, normalizedS3EtagsMatch, parseLegacyAppsBundleKey, parseS3ListingLastModified, quoteS3CopySourceIfMatchEtag, resolveOpsDeleteMode, resolveTrashDestinationKey, withOrphanR2DeleteClaim } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const CHECKPOINT_FILE = './objects_checkpoint.json'
@@ -36,7 +38,7 @@ async function main() {
         console.error('  prepare_cleanup_zip - Find orphaned zip files in R2 with no database records')
         console.error('  copy_cleanup_candidates_to_backup_bucket - Copy cleanup candidates to backup bucket')
         console.error('  copy_cleanup_candidates_direct - Copy cleanup candidates using direct S3 copy (faster but may not work on R2)')
-        console.error('  delete_cleanup_candidates - Delete orphaned files from main bucket (USE WITH CAUTION!)')
+        console.error('  delete_cleanup_candidates - Move orphaned files to 7-day trash (DRY_RUN=false; ALLOW_PERMANENT_R2_DELETE=true for permanent)')
         process.exit(1)
     }
 
@@ -495,7 +497,16 @@ export function initS3() {
         // signingEscapePath: storageEndpoint !== '127.0.0.1:54321/storage/v1/s3',
     }
 
-    console.log({ message: 'initS3', params })
+    console.log({
+        message: 'initS3',
+        params: {
+            ...params,
+            credentials: {
+                accessKeyId: '[redacted]',
+                secretAccessKey: '[redacted]',
+            },
+        },
+    })
 
     return new S3Client({ ...params })
 }
@@ -516,7 +527,14 @@ async function initS3Lite() {
         region: storageRegion,
         bucket,
     }
-    console.log({ message: 'initS3Lite', options })
+    console.log({
+        message: 'initS3Lite',
+        options: {
+            ...options,
+            accessKey: '[redacted]',
+            secretKey: '[redacted]',
+        },
+    })
     const client = new S3ClientLite(options)
     return client
 }
@@ -631,12 +649,21 @@ export function getDatabaseURL(): string {
     return DEFAULT_DB_URL
 }
 
-export function getPgClient(c: Context) {
+function formatPgClientLogHost(dbUrl: string): string {
+    try {
+        return new URL(dbUrl).host
+    }
+    catch {
+        return '[redacted-non-url-connection]'
+    }
+}
+
+export function getPgClient(c: Context, maxConnections = 1) {
     const dbUrl = getDatabaseURL()
-    console.log({ message: 'getPgClient', dbUrl })
+    console.log({ message: 'getPgClient', dbHost: formatPgClientLogHost(dbUrl) })
     return new Pool({
         connectionString: dbUrl,
-        max: 1,
+        max: maxConnections,
         idleTimeoutMillis: 2000,
     })
 }
@@ -1090,6 +1117,7 @@ async function prepare_cleanup_zip() {
         key: string
         size: number
         lastModified: Date | null
+        etag?: string | null
         reason: string
         error: string | null
     }
@@ -1103,7 +1131,7 @@ async function prepare_cleanup_zip() {
 
         // Single query to check all zip files at once
         const result = await pool.query(
-            'SELECT r2_path FROM app_versions WHERE r2_path = ANY($1)',
+            `SELECT r2_path FROM app_versions WHERE r2_path = ANY($1) AND ${APP_VERSION_NOT_DELETED_SQL}`,
             [zipFileKeys]
         )
 
@@ -1126,6 +1154,7 @@ async function prepare_cleanup_zip() {
                     key: zipFile.Key ?? '',
                     size: zipFile.Size?? 0,
                     lastModified: zipFile.LastModified || null,
+                    etag: zipFile.ETag ?? null,
                     reason: 'No matching app_versions record found',
                     error: null
                 })
@@ -1517,14 +1546,34 @@ async function copy_cleanup_candidates_direct() {
 }
 
 async function delete_cleanup_candidates() {
-    console.log('⚠️  DANGER: This will PERMANENTLY DELETE files from the main bucket!')
-    console.log('🔄 Deleting cleanup candidates from main bucket...')
+    const deleteMode = resolveOpsDeleteMode({
+        DRY_RUN: process.env.DRY_RUN,
+        ALLOW_PERMANENT_R2_DELETE: process.env.ALLOW_PERMANENT_R2_DELETE,
+    })
+
+    if (deleteMode === 'permanent')
+        console.warn('WARNING: ALLOW_PERMANENT_R2_DELETE=true — permanently deleting files from the main bucket!')
+    else if (deleteMode === 'trash')
+        console.log('Moving cleanup candidates to 7-day trash (set ALLOW_PERMANENT_R2_DELETE=true for permanent delete)')
+    else
+        console.log('Dry-run mode: listing cleanup candidates without modifying storage')
+
+    console.log('🔄 Processing cleanup candidates in the main bucket...')
 
     // Safety check - ensure this is intentional
     console.log('\n🛡️  SAFETY CHECKS:')
     console.log('   - Make sure you have backed up these files first')
-    console.log('   - This operation cannot be undone')
-    console.log('   - Files will be permanently removed from main bucket')
+    if (deleteMode === 'permanent') {
+        console.log('   - This operation cannot be undone')
+        console.log('   - Files will be permanently removed from main bucket')
+    }
+    else if (deleteMode === 'trash') {
+        console.log('   - Files move to deleted-after-7-days/ and remain recoverable for seven days')
+        console.log('   - Source keys are removed from their live paths after the trash copy succeeds')
+    }
+    else {
+        console.log('   - No objects will be modified in dry-run mode')
+    }
 
     // Check if cleanup_candidates.json exists
     const cleanupFile = './cleanup_candidates.json'
@@ -1538,69 +1587,463 @@ async function delete_cleanup_candidates() {
 
     // Load cleanup candidates file
     const cleanupData = JSON.parse(readFileSync(cleanupFile, 'utf-8'))
-    const toDelete = cleanupData.toDelete ?? []
+    const toDelete = (cleanupData.toDelete ?? []).filter((file: { key?: unknown }) => {
+        if (typeof file?.key !== 'string' || !file.key) {
+            console.warn('Skipping cleanup candidate with invalid key:', file)
+            return false
+        }
+        return isLiveR2Key(file.key)
+    })
 
     if (toDelete.length === 0) {
         console.log('✅ No files to delete - cleanup candidates is empty')
         return
     }
 
-    console.log(`📦 Found ${toDelete.length} files to delete from main bucket`)
+    console.log(`📦 Found ${toDelete.length} cleanup candidates in ${cleanupFile}`)
+
+    const PROCESS_CONCURRENCY = 20
+
+    console.log('🔗 Revalidating candidates against current app_versions...')
+    const mockContext = {} as Context
+    const pool = getPgClient(mockContext, PROCESS_CONCURRENCY)
+    let candidatesToProcess = toDelete
+
+    const referencedKeys = new Set<string>()
+
+    async function addLegacyReferencedKeys(batch: string[]) {
+        const legacyByApp = new Map<string, Array<{ key: string, versionName: string }>>()
+        for (const key of batch) {
+            if (referencedKeys.has(key))
+                continue
+            const parsed = parseLegacyAppsBundleKey(key)
+            if (!parsed)
+                continue
+            const entries = legacyByApp.get(parsed.appId) ?? []
+            entries.push({ key, versionName: parsed.versionName })
+            legacyByApp.set(parsed.appId, entries)
+        }
+
+        for (const [appId, entries] of legacyByApp) {
+            const versionNames = entries.map(entry => entry.versionName)
+            const result = await pool.query(
+                `SELECT name FROM app_versions WHERE app_id = $1 AND name = ANY($2) AND ${APP_VERSION_NOT_DELETED_SQL}`,
+                [appId, versionNames],
+            )
+            const liveNames = new Set((result.rows as { name: string }[]).map(row => row.name))
+            for (const entry of entries) {
+                if (liveNames.has(entry.versionName))
+                    referencedKeys.add(entry.key)
+            }
+        }
+    }
+
+    async function isKeyReferencedInAppVersions(key: string): Promise<boolean> {
+        if (referencedKeys.has(key))
+            return true
+
+        const byPath = await pool.query(
+            `SELECT 1 FROM app_versions WHERE r2_path = $1 AND ${APP_VERSION_NOT_DELETED_SQL} LIMIT 1`,
+            [key],
+        )
+        if ((byPath.rowCount ?? 0) > 0) {
+            referencedKeys.add(key)
+            return true
+        }
+
+        const parsed = parseLegacyAppsBundleKey(key)
+        if (!parsed)
+            return false
+
+        const byLegacy = await pool.query(
+            `SELECT 1 FROM app_versions WHERE app_id = $1 AND name = $2 AND ${APP_VERSION_NOT_DELETED_SQL} LIMIT 1`,
+            [parsed.appId, parsed.versionName],
+        )
+        if ((byLegacy.rowCount ?? 0) > 0)
+            referencedKeys.add(key)
+        return (byLegacy.rowCount ?? 0) > 0
+    }
+
+    try {
+        const candidateKeys = candidatesToProcess.map((file: { key: string }) => file.key)
+        const REVALIDATION_BATCH_SIZE = 50
+        for (let i = 0; i < candidateKeys.length; i += REVALIDATION_BATCH_SIZE) {
+            const batch = candidateKeys.slice(i, i + REVALIDATION_BATCH_SIZE)
+            const result = await pool.query(
+                `SELECT r2_path FROM app_versions WHERE r2_path = ANY($1) AND ${APP_VERSION_NOT_DELETED_SQL}`,
+                [batch],
+            )
+            for (const row of result.rows as { r2_path: string }[])
+                referencedKeys.add(row.r2_path)
+
+            await addLegacyReferencedKeys(batch)
+        }
+        const beforeCount = candidatesToProcess.length
+        candidatesToProcess = candidatesToProcess.filter((file: { key: string }) => !referencedKeys.has(file.key))
+        const skippedCount = beforeCount - candidatesToProcess.length
+        if (skippedCount > 0)
+            console.log(`⏭️  Skipping ${skippedCount} candidates that now have app_versions records`)
+    }
+    catch (error) {
+        console.error('❌ Failed to revalidate cleanup candidates against database:', error)
+        await pool.end()
+        process.exit(1)
+    }
+
+    if (candidatesToProcess.length === 0) {
+        console.log('✅ No orphaned files remain after DB revalidation')
+        await pool.end()
+        return
+    }
+
+    console.log(`📦 Processing ${candidatesToProcess.length} orphaned files from main bucket`)
 
     // Calculate total size
-    const totalSize = toDelete.reduce((sum: number, file: any) => sum + (file.size?? 0), 0)
+    const totalSize = candidatesToProcess.reduce((sum: number, file: any) => sum + (file.size?? 0), 0)
     const totalSizeGB = (totalSize / (1024 * 1024 * 1024)).toFixed(2)
 
-    console.log(`💾 Total size to delete: ${totalSizeGB} GB`)
+    console.log(`💾 Total size to ${deleteMode === 'dry_run' ? 'inspect' : 'process'}: ${totalSizeGB} GB`)
     console.log(`📁 From bucket: ${S3_BUCKET}`)
+
+    if (deleteMode === 'dry_run') {
+        for (const file of candidatesToProcess)
+            console.log(`Would process: ${file.key}`)
+        console.log(`✅ Dry-run complete for ${candidatesToProcess.length} live candidates`)
+        await pool.end()
+        return
+    }
 
     // Initialize S3 client
     console.log('🔗 Connecting to R2...')
     const s3 = await initS3()
 
-    // Delete files in parallel
-    console.log('⚡ Deleting files from main bucket...')
+    const limiter = new ConcurrencyLimiter(PROCESS_CONCURRENCY)
+    let processedCount = 0
 
-    const deleteOperations = toDelete.map(async (file: any, index: number) => {
+    async function objectExists(key: string): Promise<boolean> {
         try {
-            const deleteCommand = new DeleteObjectCommand({
-                Bucket: S3_BUCKET,
-                Key: file.key
-            })
-
-            await s3.send(deleteCommand)
-
-            // Log progress every 10 files
-            if ((index + 1) % 10 === 0) {
-                console.log(`📊 Progress: ${index + 1}/${toDelete.length} files deleted`)
-            }
-
-            return {
-                key: file.key,
-                success: true,
-                error: null
-            }
-        } catch (error: any) {
-            console.error(`❌ Error deleting ${file.key}:`, error.message)
-            return {
-                key: file.key,
-                success: false,
-                error: error.message
-            }
+            await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
+            return true
         }
+        catch (error) {
+            if (isObjectNotFoundError(error))
+                return false
+            throw error
+        }
+    }
+
+    const trashDestinationResolver = createAwsTrashDestinationResolver(async (objectKey) => {
+        const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: objectKey }))
+        return { etag: head.ETag, lastModified: head.LastModified, metadata: head.Metadata }
     })
 
-    // Execute all delete operations in parallel
-    const results = await Promise.all(deleteOperations)
+    async function processCandidate(file: { key: string, size?: number, lastModified?: string | Date | null, etag?: string | null }): Promise<{ key: string, success: boolean, error: string | null, skipped?: boolean, size?: number }> {
+        try {
+            if (!file.etag) {
+                return {
+                    key: file.key,
+                    success: false,
+                    error: 'Cleanup candidate has no discovery ETag; source retained',
+                }
+            }
+            if (!file.lastModified) {
+                return {
+                    key: file.key,
+                    success: false,
+                    error: 'Cleanup candidate has no discovery Last-Modified; source retained',
+                }
+            }
+
+            let sourceEtag: string | undefined
+            let sourceLastModified: Date | undefined
+            let sourceMetadata: Record<string, string> | undefined
+            let sourceContentType: string | undefined
+            let sourceCacheControl: string | undefined
+            let sourceContentEncoding: string | undefined
+            let sourceContentDisposition: string | undefined
+            let sourceExpires: Date | undefined
+            try {
+                const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: file.key }))
+                if (file.size != null && head.ContentLength !== file.size) {
+                    return {
+                        key: file.key,
+                        success: true,
+                        error: 'Cleanup candidate stale: object size changed since prepare_cleanup_zip',
+                        skipped: true,
+                    }
+                }
+                if (!head.LastModified) {
+                    return {
+                        key: file.key,
+                        success: false,
+                        error: 'Live object has no Last-Modified from HeadObject; source retained',
+                    }
+                }
+                const candidateLastModified = parseS3ListingLastModified(file.lastModified)
+                if (!candidateLastModified || candidateLastModified.getTime() !== head.LastModified.getTime()) {
+                    return {
+                        key: file.key,
+                        success: true,
+                        error: 'Cleanup candidate stale: object lastModified changed since prepare_cleanup_zip',
+                        skipped: true,
+                    }
+                }
+                if (!head.ETag) {
+                    return {
+                        key: file.key,
+                        success: false,
+                        error: 'Live object has no ETag from HeadObject; source retained',
+                    }
+                }
+                if (!normalizedS3EtagsMatch(file.etag, head.ETag)) {
+                    return {
+                        key: file.key,
+                        success: true,
+                        error: 'Cleanup candidate stale: object etag changed since prepare_cleanup_zip',
+                        skipped: true,
+                    }
+                }
+                sourceEtag = head.ETag
+                sourceLastModified = head.LastModified
+                sourceMetadata = head.Metadata
+                sourceContentType = head.ContentType
+                sourceCacheControl = head.CacheControl
+                sourceContentEncoding = head.ContentEncoding
+                sourceContentDisposition = head.ContentDisposition
+                sourceExpires = head.Expires
+            }
+            catch (headError: any) {
+                if (isObjectNotFoundError(headError))
+                    return { key: file.key, success: true, error: null, skipped: true }
+                return {
+                    key: file.key,
+                    success: false,
+                    error: `Failed to head source before cleanup: ${headError.message}`,
+                }
+            }
+
+            if (!sourceEtag || !sourceLastModified) {
+                return {
+                    key: file.key,
+                    success: false,
+                    error: 'Live object has no ETag or Last-Modified; source retained',
+                }
+            }
+
+            if (deleteMode === 'permanent') {
+                const claimClient = await pool.connect()
+                try {
+                    const claimResult = await withOrphanR2DeleteClaim(claimClient, file.key, async () => {
+                        const outcome = await permanentDeleteAwsLiveKey(s3, S3_BUCKET, file.key, sourceEtag, sourceLastModified)
+                        switch (outcome) {
+                          case 'deleted':
+                            return 'deleted'
+                          case 'skipped_missing':
+                            return 'skipped_missing'
+                          case 'skipped_changed':
+                            return 'skipped_changed'
+                          case 'failed':
+                            return 'failed'
+                        }
+                    })
+                    if (claimResult === 'skipped_referenced') {
+                        return {
+                            key: file.key,
+                            success: true,
+                            error: 'app_versions row appeared since discovery',
+                            skipped: true,
+                        }
+                    }
+                    switch (claimResult) {
+                      case 'skipped_missing':
+                        return { key: file.key, success: true, error: null, skipped: true }
+                      case 'skipped_changed':
+                        return {
+                          key: file.key,
+                          success: true,
+                          error: 'Cleanup candidate stale: live object changed before permanent delete',
+                          skipped: true,
+                        }
+                      case 'failed':
+                        return {
+                          key: file.key,
+                          success: false,
+                          error: 'Permanent delete guards failed; source retained',
+                        }
+                    }
+                }
+                finally {
+                    claimClient.release()
+                }
+            }
+            else {
+                let trashKey: string
+                try {
+                    trashKey = await resolveTrashDestinationKey(trashDestinationResolver, file.key, sourceEtag, sourceLastModified)
+                }
+                catch (allocError: any) {
+                    return {
+                        key: file.key,
+                        success: false,
+                        error: `Failed to allocate trash destination: ${allocError.message}`,
+                    }
+                }
+
+                if (await isKeyReferencedInAppVersions(file.key)) {
+                    return {
+                        key: file.key,
+                        success: true,
+                        error: 'app_versions row appeared since discovery',
+                        skipped: true,
+                    }
+                }
+
+                try {
+                    const copyResult = await copyObjectToTrashWithDestinationGuard(
+                        file.key,
+                        trashKey,
+                        sourceEtag,
+                        async (destinationKey) => {
+                            const copyPreserve = buildAwsTrashCopyPreserveFromHead({
+                                Metadata: sourceMetadata,
+                                ContentType: sourceContentType,
+                                CacheControl: sourceCacheControl,
+                                ContentEncoding: sourceContentEncoding,
+                                ContentDisposition: sourceContentDisposition,
+                                Expires: sourceExpires,
+                            })
+                            const copyCommand = new CopyObjectCommand({
+                                Bucket: S3_BUCKET,
+                                CopySource: encodeS3CopySource(S3_BUCKET, file.key),
+                                CopySourceIfMatch: quoteS3CopySourceIfMatchEtag(sourceEtag),
+                                Key: destinationKey,
+                                Metadata: mergeTrashCopyMetadata(copyPreserve.metadata, sourceLastModified),
+                                MetadataDirective: 'REPLACE',
+                                ContentType: copyPreserve.contentType,
+                                CacheControl: copyPreserve.cacheControl,
+                                ContentEncoding: copyPreserve.contentEncoding,
+                                ContentDisposition: copyPreserve.contentDisposition,
+                                Expires: copyPreserve.expires,
+                            })
+                            applyAwsCopyDestinationIfNoneMatchMiddleware(copyCommand.middlewareStack)
+                            await s3.send(copyCommand)
+                        },
+                        async (destinationKey) => {
+                            try {
+                                const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: destinationKey }))
+                                return {
+                                    etag: head.ETag,
+                                    sourceVersionMarker: extractR2TrashSourceVersionMarker(head.Metadata),
+                                }
+                            }
+                            catch (error) {
+                                if (isObjectNotFoundError(error))
+                                    return 'not_found'
+                                throw error
+                            }
+                        },
+                        sourceLastModified,
+                    )
+                    if (copyResult === 'skipped_changed') {
+                        return {
+                            key: file.key,
+                            success: true,
+                            error: 'Cleanup candidate stale: live object changed before trash copy',
+                            skipped: true,
+                        }
+                    }
+                    trashKey = copyResult.trashKey
+                }
+                catch (copyError: any) {
+                    try {
+                        const trashExists = await objectExists(trashKey)
+                        const sourceExists = await objectExists(file.key)
+                        if (isAlreadyMovedToTrash(trashExists, sourceExists) || !sourceExists)
+                            return { key: file.key, success: true, error: null, skipped: true }
+                    }
+                    catch (headError: any) {
+                        return {
+                            key: file.key,
+                            success: false,
+                            error: `Failed to verify trash resume state: ${headError.message}`,
+                        }
+                    }
+                    return { key: file.key, success: false, error: copyError.message }
+                }
+
+                const claimClient = await pool.connect()
+                try {
+                    const claimResult = await withOrphanR2DeleteClaim(claimClient, file.key, async () => {
+                        const deleteCommand = new DeleteObjectCommand({
+                            Bucket: S3_BUCKET,
+                            Key: file.key,
+                            IfMatch: sourceEtag,
+                        })
+                        applyR2ConditionalDeleteMiddleware(deleteCommand.middlewareStack, { etag: sourceEtag, lastModified: sourceLastModified })
+                        await s3.send(deleteCommand)
+                    })
+                    if (claimResult === 'skipped_referenced') {
+                        return {
+                            key: file.key,
+                            success: true,
+                            error: 'app_versions row appeared after trash copy',
+                            skipped: true,
+                        }
+                    }
+                }
+                catch (deleteError: any) {
+                    if (isObjectNotFoundError(deleteError))
+                        return { key: file.key, success: true, error: null, skipped: true }
+                    if (isPreconditionFailedError(deleteError))
+                        return {
+                            key: file.key,
+                            success: true,
+                            error: 'Copied to trash but live object changed before delete; source key retained',
+                            skipped: true,
+                        }
+                    return {
+                        key: file.key,
+                        success: false,
+                        error: `Copied to trash but failed to delete source: ${deleteError.message}`,
+                    }
+                }
+                finally {
+                    claimClient.release()
+                }
+            }
+
+            return { key: file.key, success: true, error: null, size: file.size ?? 0 }
+        }
+        catch (error: any) {
+            console.error(`❌ Error processing ${file.key}:`, error.message)
+            return { key: file.key, success: false, error: error.message }
+        }
+    }
+
+    console.log(`⚡ Processing files from main bucket (mode: ${deleteMode})...`)
+
+    const results: Array<{ key: string, success: boolean, error: string | null, skipped?: boolean, size?: number }> = []
+    for (let i = 0; i < candidatesToProcess.length; i += PROCESS_CONCURRENCY) {
+        const batch = candidatesToProcess.slice(i, i + PROCESS_CONCURRENCY)
+        const batchResults = await Promise.all(batch.map((file: { key: string }) => limiter.run(() => processCandidate(file))))
+        results.push(...batchResults)
+        processedCount += batchResults.length
+        if (processedCount % 10 === 0 || processedCount === candidatesToProcess.length)
+            console.log(`📊 Progress: ${processedCount}/${candidatesToProcess.length} files processed`)
+    }
 
     // Analyze results
-    const successful = results.filter(r => r.success)
+    const successful = results.filter(r => r.success && !r.skipped)
+    const skipped = results.filter(r => r.success && r.skipped)
     const failed = results.filter(r => !r.success)
+    const processedSize = successful.reduce((sum, result) => sum + (result.size ?? 0), 0)
+    const processedSizeGB = (processedSize / (1024 * 1024 * 1024)).toFixed(2)
 
     console.log('\n📊 Delete Results:')
     console.log('================')
-    console.log(`✅ Successfully deleted: ${successful.length} files`)
-    console.log(`❌ Failed to delete: ${failed.length} files`)
+    console.log(`✅ Successfully processed: ${successful.length} files`)
+    console.log(`⏭️  Safely skipped: ${skipped.length} files`)
+    console.log(`❌ Failed to process: ${failed.length} files`)
 
     if (failed.length > 0) {
         console.log('\n💥 Failed deletions:')
@@ -1612,16 +2055,21 @@ async function delete_cleanup_candidates() {
     // Save delete results
     const deleteReport = {
         generated: new Date().toISOString(),
+        deleteMode,
         summary: {
-            totalFiles: toDelete.length,
-            successfulDeletions: successful.length,
-            failedDeletions: failed.length,
-            totalSizeDeleted: totalSize,
-            totalSizeDeletedGB: parseFloat(totalSizeGB),
-            sourceBucket: S3_BUCKET
+            totalFiles: candidatesToProcess.length,
+            successfulProcessed: successful.length,
+            skippedProcessed: skipped.length,
+            failedProcessed: failed.length,
+            totalSizeCandidates: totalSize,
+            totalSizeCandidatesGB: parseFloat(totalSizeGB),
+            totalSizeProcessed: processedSize,
+            totalSizeProcessedGB: parseFloat(processedSizeGB),
+            sourceBucket: S3_BUCKET,
         },
-        successful: successful,
-        failed: failed
+        successful,
+        skipped,
+        failed,
     }
 
     const reportFile = './delete_report.json'
@@ -1629,18 +2077,25 @@ async function delete_cleanup_candidates() {
 
     console.log(`\n📝 Delete report saved to: ${reportFile}`)
 
-    if (successful.length === toDelete.length) {
-        console.log('\n🎉 All files successfully deleted from main bucket!')
+    if (failed.length > 0) {
+        console.log(`\n⚠️  ${failed.length} files failed to process`)
+        console.log('💡 Review failed operations in the report')
+        await pool.end()
+        process.exit(1)
+    }
+
+    if (failed.length === 0) {
+        console.log(`\n🎉 Cleanup finished with no failures (${successful.length} processed, ${skipped.length} safely skipped)`)
         console.log('✅ Cleanup operation completed successfully')
-    } else {
-        console.log(`\n⚠️  ${failed.length} files failed to delete`)
-        console.log('💡 Review failed deletions in the report')
     }
 
     console.log(`\n📈 Summary:`)
-    console.log(`   📦 Files deleted: ${successful.length}/${toDelete.length}`)
-    console.log(`   💾 Size deleted: ${totalSizeGB} GB`)
+    console.log(`   📦 Files ${deleteMode === 'permanent' ? 'deleted' : 'moved to trash'}: ${successful.length}/${candidatesToProcess.length}`)
+    console.log(`   ⏭️  Safely skipped: ${skipped.length}`)
+    console.log(`   💾 Size ${deleteMode === 'permanent' ? 'deleted' : 'moved to trash'}: ${processedSizeGB} GB`)
     console.log(`   📁 Source bucket: ${S3_BUCKET}`)
+
+    await pool.end()
 }
 
 main()

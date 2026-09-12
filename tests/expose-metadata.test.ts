@@ -9,11 +9,13 @@ import {
   getSupabaseClient,
   headers,
   ORG_ID,
+  PLUGIN_BASE_URL,
   postUpdate,
   resetAndSeedAppData,
   resetAppData,
   resetAppDataStats,
   STRIPE_INFO_CUSTOMER_ID,
+  warmEdgeEndpoint,
 } from './test-utils.ts'
 
 const id = randomUUID()
@@ -35,7 +37,13 @@ beforeAll(async () => {
   if (USE_CLOUDFLARE)
     return
   await resetAndSeedAppData(APP_NAME_METADATA)
-})
+  await warmEdgeEndpoint(`${PLUGIN_BASE_URL}/updates`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  })
+}, 60_000)
 
 afterAll(async () => {
   if (USE_CLOUDFLARE)

@@ -3,7 +3,7 @@ import type { Database } from '../src/types/supabase.types'
 import { createClient } from '@supabase/supabase-js'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { fetchTestRequest, getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, USER_ADMIN_EMAIL, USER_EMAIL, USER_EMAIL_NONMEMBER, USER_ID, USER_PASSWORD, USER_PASSWORD_NONMEMBER } from './test-utils.ts'
+import { fetchTestRequest, getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, USER_ADMIN_EMAIL, USER_EMAIL, USER_EMAIL_NONMEMBER, USER_ID, USER_PASSWORD, USER_PASSWORD_NONMEMBER, warmEdgeEndpoint } from './test-utils.ts'
 
 const SSO_TEST_ORG_ID = randomUUID()
 const SSO_TEST_CUSTOMER_ID = `cus_sso_test_${randomUUID()}`
@@ -42,6 +42,15 @@ beforeAll(async () => {
   })
   if (orgUserError)
     throw orgUserError
+
+  await warmEdgeEndpoint(getEndpointUrl('/private/sso/check-enforcement'), {
+    method: 'POST',
+    headers: authHeaders,
+    body: JSON.stringify({
+      email: 'warm@example.com',
+      auth_type: 'password',
+    }),
+  })
 })
 
 async function withEnforcedSsoPasswordUser(callback: (context: { targetAuthHeaders: Record<string, string>, email: string }) => Promise<void>) {

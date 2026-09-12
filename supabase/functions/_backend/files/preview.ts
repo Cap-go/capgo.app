@@ -5,6 +5,7 @@ import { Buffer } from 'node:buffer'
 import { brotliDecompressSync } from 'node:zlib'
 import { getRuntimeKey } from 'hono/adapter'
 import { buildChannelPreviewSubdomain, buildPreviewSubdomain, parsePreviewHostname } from '../../shared/preview-subdomain.ts'
+import { isVersionDeleted } from './file_read_cache.ts'
 import { CacheHelper } from '../utils/cache.ts'
 import { getBundleUrl } from '../utils/downloadUrl.ts'
 import { simpleError } from '../utils/hono.ts'
@@ -20,11 +21,6 @@ const PREVIEW_PAYLOAD_FILE_PATH = '.capgo/preview.json'
 interface PreviewAuthCache {
   actualAppId: string
   allowPreview: boolean
-}
-
-interface BundleInfoCache {
-  hasManifest: boolean
-  isEncrypted: boolean
 }
 
 export interface PreviewDownloadBundle {
@@ -71,35 +67,6 @@ async function getPreviewAuth(c: Context, appId: string): Promise<PreviewAuthCac
 function setPreviewAuth(c: Context, appId: string, data: PreviewAuthCache) {
   return backgroundTask(c, async () => {
     const cacheEntry = buildPreviewAuthRequest(c, appId)
-    if (!cacheEntry)
-      return
-    await cacheEntry.helper.putJson(cacheEntry.request, data, PREVIEW_AUTH_CACHE_TTL_SECONDS)
-  })
-}
-
-// Cache helpers for bundle info
-const BUNDLE_INFO_CACHE_PATH = '/.preview-bundle'
-
-function buildBundleInfoRequest(c: Context, versionId: number) {
-  const helper = new CacheHelper(c)
-  if (!helper.available)
-    return null
-  return {
-    helper,
-    request: helper.buildRequest(BUNDLE_INFO_CACHE_PATH, { version_id: String(versionId) }),
-  }
-}
-
-async function getBundleInfo(c: Context, versionId: number): Promise<BundleInfoCache | null> {
-  const cacheEntry = buildBundleInfoRequest(c, versionId)
-  if (!cacheEntry)
-    return null
-  return cacheEntry.helper.matchJson<BundleInfoCache>(cacheEntry.request)
-}
-
-function setBundleInfo(c: Context, versionId: number, data: BundleInfoCache) {
-  return backgroundTask(c, async () => {
-    const cacheEntry = buildBundleInfoRequest(c, versionId)
     if (!cacheEntry)
       return
     await cacheEntry.helper.putJson(cacheEntry.request, data, PREVIEW_AUTH_CACHE_TTL_SECONDS)
@@ -250,7 +217,7 @@ async function getChannelPreviewVersionId(c: Context<MiddlewareKeyVariables>, ap
 // Export the handler directly for use in the main app
 // This preserves the context (requestId, env bindings, etc.) from the parent app
 export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): Promise<Response> {
-  const hostname = c.req.header('host') || ''
+  const hostname = (c.req.header('host') || '').split(':')[0].toLowerCase()
   const parsed = parsePreviewSubdomain(hostname)
 
   if (!parsed) {
@@ -345,44 +312,36 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
 
   const isPayloadRequest = filePath === PREVIEW_PAYLOAD_FILE_PATH
 
-  // Check cache for bundle info
-  let bundleInfo = await getBundleInfo(c, previewVersionId)
-  let payloadBundle: PreviewDownloadBundle | null = null
+  const supabase = supabaseAdmin(c)
+  const bundleLookup = isPayloadRequest
+    ? await supabase
+        .from('app_versions')
+        .select('id,name,checksum,session_key,manifest_count,r2_path,external_url,deleted,deleted_at')
+        .eq('app_id', actualAppId)
+        .eq('id', previewVersionId)
+        .or('deleted.is.null,deleted.eq.false')
+        .is('deleted_at', null)
+        .single()
+    : await supabase
+        .from('app_versions')
+        .select('id,session_key,manifest_count,deleted,deleted_at')
+        .eq('app_id', actualAppId)
+        .eq('id', previewVersionId)
+        .or('deleted.is.null,deleted.eq.false')
+        .is('deleted_at', null)
+        .single()
 
-  if (isPayloadRequest || !bundleInfo) {
-    const supabase = supabaseAdmin(c)
+  const { data: bundle, error: bundleError } = bundleLookup
 
-    const bundleLookup = isPayloadRequest
-      ? await supabase
-          .from('app_versions')
-          .select('id,name,checksum,session_key,manifest_count,r2_path,external_url')
-          .eq('app_id', actualAppId)
-          .eq('id', previewVersionId)
-          .single()
-      : await supabase
-          .from('app_versions')
-          .select('id,session_key,manifest_count')
-          .eq('app_id', actualAppId)
-          .eq('id', previewVersionId)
-          .single()
-
-    const { data: bundle, error: bundleError } = bundleLookup
-
-    if (bundleError || !bundle) {
-      throw simpleError('bundle_not_found', 'Bundle not found', { versionId: previewVersionId })
-    }
-
-    if (isPayloadRequest)
-      payloadBundle = bundle as unknown as PreviewDownloadBundle
-
-    bundleInfo = {
-      hasManifest: (bundle.manifest_count ?? 0) > 0,
-      isEncrypted: !!bundle.session_key,
-    }
-
-    // Cache the bundle info
-    setBundleInfo(c, previewVersionId, bundleInfo)
+  if (bundleError || !bundle || isVersionDeleted(bundle)) {
+    throw simpleError('bundle_not_found', 'Bundle not found', { versionId: previewVersionId })
   }
+
+  const bundleInfo = {
+    hasManifest: (bundle.manifest_count ?? 0) > 0,
+    isEncrypted: !!bundle.session_key,
+  }
+  const payloadBundle = isPayloadRequest ? bundle as unknown as PreviewDownloadBundle : null
 
   // Capgo Preview cannot decrypt customer-encrypted bundles: the decryption
   // private material lives only in the customer's app, not in Capgo's preview
@@ -431,7 +390,6 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
   // Look up file in manifest using a single query with OR conditions for all possible paths
   // This handles deep paths like /folder1/folder2/folder3/.../file.js
   // Also check for .br (brotli) compressed variants since bundles may store compressed files
-  const supabase = supabaseAdmin(c)
   const basePaths = [
     filePath,
     `www/${filePath}`,

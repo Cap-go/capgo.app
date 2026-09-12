@@ -1,11 +1,33 @@
 /**
- * Script 2: Delete orphaned R2 paths - FAST parallel deletion
+ * Script 2: Delete orphaned R2 paths
  *
- * Just reads paths from script 1 and deletes everything in parallel.
- * No collecting, no waiting - stream delete while listing.
+ * Default: dry-run (count only).
+ * Execute: DRY_RUN=false moves orphans to deleted-after-7-days/ (7-day trash).
+ * Permanent delete requires ALLOW_PERMANENT_R2_DELETE=true (ops-only).
  */
 
-import { DeleteObjectsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
+import { CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
+import { permanentDeleteAwsLiveKey } from './aws_permanent_delete.ts'
+import {
+  applyAwsCopyDestinationIfNoneMatchMiddleware,
+  applyR2ConditionalDeleteMiddleware,
+  buildAwsTrashCopyPreserveFromHead,
+  mergeTrashCopyMetadata,
+  ConcurrencyLimiter,
+  copyObjectToTrashWithDestinationGuard,
+  createAwsTrashDestinationResolver,
+  encodeS3CopySource,
+  extractR2TrashSourceVersionMarker,
+  isAlreadyMovedToTrash,
+  isLiveR2Key,
+  isObjectNotFoundError,
+  isPreconditionFailedError,
+  normalizedS3EtagsMatch,
+  quoteS3CopySourceIfMatchEtag,
+  resolveR2CleanupDeleteMode,
+  resolveTrashDestinationKey,
+  R2_TRASH_PREFIX,
+} from './delete_mode.ts'
 
 // Load environment from prod file
 const envFile = await Bun.file('./internal/cloudflare/.env.prod').text()
@@ -21,9 +43,13 @@ for (const line of envFile.split('\n')) {
 
 const INPUT_FILE = './tmp/r2_cleanup/1_orphaned_paths.json'
 const S3_BUCKET = env.S3_BUCKET || 'capgo'
-const CONCURRENCY = 50 // High parallelism
+const CONCURRENCY = 50
+const LIST_PAGE_SIZE = 1000
 
-let DRY_RUN = true
+const deleteMode = resolveR2CleanupDeleteMode({
+  DRY_RUN: process.env.DRY_RUN,
+  ALLOW_PERMANENT_R2_DELETE: process.env.ALLOW_PERMANENT_R2_DELETE,
+})
 
 const s3 = new S3Client({
   credentials: { accessKeyId: env.S3_ACCESS_KEY_ID, secretAccessKey: env.S3_SECRET_ACCESS_KEY },
@@ -32,11 +58,31 @@ const s3 = new S3Client({
   forcePathStyle: true,
 })
 
-let totalDeleted = 0
-let totalErrors = 0
-let totalToDelete = 0
+const limiter = new ConcurrencyLimiter(CONCURRENCY)
 
-// Count objects under a prefix without deleting
+const trashDestinationResolver = createAwsTrashDestinationResolver(async (objectKey) => {
+  const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: objectKey }))
+  return { etag: head.ETag, lastModified: head.LastModified, metadata: head.Metadata }
+})
+
+let totalProcessed = 0
+let totalErrors = 0
+let totalSkippedChanged = 0
+let totalSkippedMissingDiscoveryEtag = 0
+let totalToProcess = 0
+
+async function objectExists(key: string): Promise<boolean> {
+  try {
+    await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
+    return true
+  }
+  catch (error) {
+    if (isObjectNotFoundError(error))
+      return false
+    throw error
+  }
+}
+
 async function countPrefix(prefix: string): Promise<number> {
   let continuationToken: string | undefined
   let count = 0
@@ -46,11 +92,15 @@ async function countPrefix(prefix: string): Promise<number> {
       Bucket: S3_BUCKET,
       Prefix: prefix,
       ContinuationToken: continuationToken,
-      MaxKeys: 1000,
+      MaxKeys: LIST_PAGE_SIZE,
     }))
 
-    if (response.Contents)
-      count += response.Contents.length
+    if (response.Contents) {
+      for (const obj of response.Contents) {
+        if (obj.Key && isLiveR2Key(obj.Key))
+          count += 1
+      }
+    }
 
     if (!response.IsTruncated)
       break
@@ -60,39 +110,303 @@ async function countPrefix(prefix: string): Promise<number> {
   return count
 }
 
-// Stream delete a prefix: list and delete simultaneously
-async function streamDelete(prefix: string): Promise<void> {
+type TrashProcessTarget = string | { key: string, etag?: string, lastModified?: Date }
+
+function normalizeTrashTarget(target: TrashProcessTarget): { key: string, etag?: string, lastModified?: Date } {
+  return typeof target === 'string' ? { key: target } : target
+}
+
+async function processKey(target: TrashProcessTarget): Promise<void> {
+  const { key, etag: discoveryEtag, lastModified: discoveryLastModified } = normalizeTrashTarget(target)
+  return limiter.run(async () => {
+    if (!isLiveR2Key(key))
+      return
+
+    if (deleteMode === 'dry_run') {
+      totalProcessed += 1
+      return
+    }
+
+    if (deleteMode === 'trash') {
+      if (!discoveryEtag) {
+        console.error(`Failed to trash ${key}: missing discovery ETag; source retained`)
+        totalErrors += 1
+        return
+      }
+      if (!discoveryLastModified) {
+        console.error(`Failed to trash ${key}: missing discovery Last-Modified; source retained`)
+        totalErrors += 1
+        return
+      }
+
+      let sourceEtag: string | undefined
+      let sourceLastModified: Date | undefined
+      let sourceMetadata: Record<string, string> | undefined
+      let sourceContentType: string | undefined
+      let sourceCacheControl: string | undefined
+      let sourceContentEncoding: string | undefined
+      let sourceContentDisposition: string | undefined
+      let sourceExpires: Date | undefined
+      try {
+        const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
+        sourceEtag = head.ETag
+        sourceLastModified = head.LastModified
+        sourceMetadata = head.Metadata
+        sourceContentType = head.ContentType
+        sourceCacheControl = head.CacheControl
+        sourceContentEncoding = head.ContentEncoding
+        sourceContentDisposition = head.ContentDisposition
+        sourceExpires = head.Expires
+      }
+      catch (headError) {
+        if (isObjectNotFoundError(headError)) {
+          totalProcessed += 1
+          return
+        }
+        console.error(`Failed to head ${key} before trash:`, headError)
+        totalErrors += 1
+        return
+      }
+
+      if (!sourceEtag || !sourceLastModified) {
+        console.error(`Failed to trash ${key}: missing ETag or Last-Modified from HeadObject; source retained`)
+        totalErrors += 1
+        return
+      }
+
+      if (!normalizedS3EtagsMatch(discoveryEtag, sourceEtag)) {
+        console.warn(`Skipped trash for ${key}: live object etag changed since discovery`)
+        totalSkippedChanged += 1
+        return
+      }
+      if (sourceLastModified.getTime() !== discoveryLastModified.getTime()) {
+        console.warn(`Skipped trash for ${key}: live object lastModified changed since discovery`)
+        totalSkippedChanged += 1
+        return
+      }
+
+      let trashKey: string
+      try {
+        trashKey = await resolveTrashDestinationKey(trashDestinationResolver, key, sourceEtag, sourceLastModified)
+      }
+      catch (headError) {
+        console.error(`Failed to allocate trash destination for ${key}:`, headError)
+        totalErrors += 1
+        return
+      }
+
+      try {
+        const copyResult = await copyObjectToTrashWithDestinationGuard(
+          key,
+          trashKey,
+          sourceEtag,
+          async (destinationKey) => {
+            const copyPreserve = buildAwsTrashCopyPreserveFromHead({
+              Metadata: sourceMetadata,
+              ContentType: sourceContentType,
+              CacheControl: sourceCacheControl,
+              ContentEncoding: sourceContentEncoding,
+              ContentDisposition: sourceContentDisposition,
+              Expires: sourceExpires,
+            })
+            const copyCommand = new CopyObjectCommand({
+              Bucket: S3_BUCKET,
+              CopySource: encodeS3CopySource(S3_BUCKET, key),
+              CopySourceIfMatch: quoteS3CopySourceIfMatchEtag(sourceEtag),
+              Key: destinationKey,
+              Metadata: mergeTrashCopyMetadata(copyPreserve.metadata, sourceLastModified),
+              MetadataDirective: 'REPLACE',
+              ContentType: copyPreserve.contentType,
+              CacheControl: copyPreserve.cacheControl,
+              ContentEncoding: copyPreserve.contentEncoding,
+              ContentDisposition: copyPreserve.contentDisposition,
+              Expires: copyPreserve.expires,
+            })
+            applyAwsCopyDestinationIfNoneMatchMiddleware(copyCommand.middlewareStack)
+            await s3.send(copyCommand)
+          },
+          async (destinationKey) => {
+            try {
+              const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: destinationKey }))
+              return {
+                etag: head.ETag,
+                sourceVersionMarker: extractR2TrashSourceVersionMarker(head.Metadata),
+              }
+            }
+            catch (error) {
+              if (isObjectNotFoundError(error))
+                return 'not_found'
+              throw error
+            }
+          },
+          sourceLastModified,
+        )
+        if (copyResult === 'skipped_changed') {
+          console.warn(`Skipped trash copy for ${key}: live object changed before copy`)
+          totalSkippedChanged += 1
+          return
+        }
+        trashKey = copyResult.trashKey
+      }
+      catch (copyError) {
+        try {
+          const trashExists = await objectExists(trashKey)
+          const sourceExists = await objectExists(key)
+          if (isAlreadyMovedToTrash(trashExists, sourceExists) || !sourceExists) {
+            totalProcessed += 1
+            return
+          }
+        }
+        catch (verifyError) {
+          console.error(`Failed to verify trash resume state for ${key}:`, verifyError)
+          totalErrors += 1
+          return
+        }
+        console.error(`Failed to trash ${key}:`, copyError)
+        totalErrors += 1
+        return
+      }
+
+      try {
+        const deleteCommand = new DeleteObjectCommand({
+          Bucket: S3_BUCKET,
+          Key: key,
+          IfMatch: sourceEtag,
+        })
+        applyR2ConditionalDeleteMiddleware(deleteCommand.middlewareStack, { etag: sourceEtag, lastModified: sourceLastModified })
+        await s3.send(deleteCommand)
+        totalProcessed += 1
+      }
+      catch (deleteError) {
+        if (isObjectNotFoundError(deleteError)) {
+          totalProcessed += 1
+          return
+        }
+        if (isPreconditionFailedError(deleteError)) {
+          console.warn(`Skipped delete for ${key}: live object changed after copy; source key retained`)
+          totalSkippedChanged += 1
+          return
+        }
+        console.error(`Copied ${key} to trash but failed to delete source:`, deleteError)
+        totalErrors += 1
+      }
+      return
+    }
+
+    // permanent mode is handled by permanentDeleteBatch in streamProcessPrefix
+  })
+}
+
+async function processKeyBatch(keys: TrashProcessTarget[]): Promise<void> {
+  // Work-conserving pool: ConcurrencyLimiter inside processKey keeps CONCURRENCY slots busy.
+  await Promise.all(keys.map(key => processKey(key)))
+}
+
+type PermanentDeleteTarget = string | { key: string, etag?: string, lastModified?: Date }
+
+function normalizePermanentDeleteTarget(target: PermanentDeleteTarget): { key: string, etag?: string, lastModified?: Date } {
+  return typeof target === 'string' ? { key: target } : target
+}
+
+async function permanentDeleteKey(target: PermanentDeleteTarget): Promise<void> {
+  const { key, etag, lastModified } = normalizePermanentDeleteTarget(target)
+  return limiter.run(async () => {
+    const outcome = await permanentDeleteAwsLiveKey(s3, S3_BUCKET, key, etag, lastModified)
+    switch (outcome) {
+      case 'deleted':
+      case 'skipped_missing':
+        totalProcessed += 1
+        return
+      case 'skipped_changed':
+        console.warn(`Skipped permanent delete for ${key}: live object changed since discovery; source retained`)
+        totalSkippedChanged += 1
+        return
+      case 'failed':
+        console.error(`Failed to permanently delete ${key}: missing guards or transport error; source retained`)
+        totalErrors += 1
+        return
+    }
+  })
+}
+
+async function permanentDeleteBatch(keys: PermanentDeleteTarget[]): Promise<void> {
+  if (deleteMode !== 'permanent')
+    return
+
+  const liveKeys = keys
+    .map(normalizePermanentDeleteTarget)
+    .filter(target => isLiveR2Key(target.key))
+  if (liveKeys.length === 0)
+    return
+
+  for (let i = 0; i < liveKeys.length; i += CONCURRENCY) {
+    const batch = liveKeys.slice(i, i + CONCURRENCY)
+    await Promise.all(batch.map(target => permanentDeleteKey(target)))
+  }
+}
+
+async function listExactKeyEtags(keys: string[]): Promise<Array<{ key: string, etag: string, lastModified?: Date }>> {
+  if (keys.length === 0)
+    return []
+
+  const found = new Map<string, { key: string, etag: string, lastModified?: Date }>()
+
+  for (let i = 0; i < keys.length; i += CONCURRENCY) {
+    const batch = keys.slice(i, i + CONCURRENCY)
+    const results = await Promise.all(batch.map(async (key) => {
+      try {
+        const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
+        if (!head.ETag) {
+          console.error(`Skipped ${key}: missing discovery ETag from HeadObject; source retained`)
+          totalSkippedMissingDiscoveryEtag += 1
+          totalErrors += 1
+          return null
+        }
+        return { key, etag: head.ETag, lastModified: head.LastModified }
+      }
+      catch (error) {
+        if (isObjectNotFoundError(error)) {
+          console.warn(`Skipped ${key}: object absent from HeadObject; already gone`)
+          return null
+        }
+        console.error(`Failed to head ${key} during discovery:`, error)
+        totalErrors += 1
+        return null
+      }
+    }))
+    for (const result of results) {
+      if (result)
+        found.set(result.key, result)
+    }
+  }
+
+  return keys
+    .map(key => found.get(key))
+    .filter((target): target is { key: string, etag: string, lastModified?: Date } => target !== undefined)
+}
+
+async function listPrefixKeys(prefix: string): Promise<Array<{ key: string, etag?: string, lastModified?: Date }>> {
+  const discovered: Array<{ key: string, etag?: string, lastModified?: Date }> = []
   let continuationToken: string | undefined
-  let batch: string[] = []
 
   while (true) {
     const response = await s3.send(new ListObjectsV2Command({
       Bucket: S3_BUCKET,
       Prefix: prefix,
       ContinuationToken: continuationToken,
-      MaxKeys: 1000,
+      MaxKeys: LIST_PAGE_SIZE,
     }))
 
-    if (response.Contents) {
-      for (const obj of response.Contents) {
-        if (obj.Key)
-          batch.push(obj.Key)
+    for (const obj of response.Contents ?? []) {
+      if (!obj.Key || !isLiveR2Key(obj.Key))
+        continue
+      if (!obj.ETag) {
+        console.error(`Skipped ${obj.Key}: missing discovery ETag from list; source retained`)
+        totalSkippedMissingDiscoveryEtag += 1
+        totalErrors += 1
+        continue
       }
-    }
-
-    // Delete immediately when we have 999
-    while (batch.length >= 999) {
-      const toDelete = batch.splice(0, 999)
-      if (!DRY_RUN) {
-        try {
-          await s3.send(new DeleteObjectsCommand({
-            Bucket: S3_BUCKET,
-            Delete: { Objects: toDelete.map(k => ({ Key: k })), Quiet: true },
-          }))
-        }
-        catch { totalErrors += toDelete.length }
-      }
-      totalDeleted += toDelete.length
+      discovered.push({ key: obj.Key, etag: obj.ETag, lastModified: obj.LastModified })
     }
 
     if (!response.IsTruncated)
@@ -100,68 +414,51 @@ async function streamDelete(prefix: string): Promise<void> {
     continuationToken = response.NextContinuationToken
   }
 
-  // Delete remaining
-  if (batch.length > 0) {
-    if (!DRY_RUN) {
-      try {
-        await s3.send(new DeleteObjectsCommand({
-          Bucket: S3_BUCKET,
-          Delete: { Objects: batch.map(k => ({ Key: k })), Quiet: true },
-        }))
-      }
-      catch { totalErrors += batch.length }
-    }
-    totalDeleted += batch.length
-  }
+  return discovered
 }
 
-// Delete single files directly - in parallel batches
-async function deleteFiles(keys: string[]): Promise<void> {
-  const batches: string[][] = []
-  for (let i = 0; i < keys.length; i += 999) {
-    batches.push(keys.slice(i, i + 999))
-  }
+async function streamProcessPrefix(prefix: string): Promise<void> {
+  const keys = await listPrefixKeys(prefix)
+  if (keys.length === 0)
+    return
 
-  // Delete all batches in parallel (CONCURRENCY at a time)
-  for (let i = 0; i < batches.length; i += CONCURRENCY) {
-    const batchGroup = batches.slice(i, i + CONCURRENCY)
-    await Promise.all(batchGroup.map(async (batch) => {
-      if (!DRY_RUN) {
-        try {
-          await s3.send(new DeleteObjectsCommand({
-            Bucket: S3_BUCKET,
-            Delete: { Objects: batch.map(k => ({ Key: k })), Quiet: true },
-          }))
-        }
-        catch { totalErrors += batch.length }
-      }
-      totalDeleted += batch.length
-    }))
+  for (let i = 0; i < keys.length; i += LIST_PAGE_SIZE) {
+    const batch = keys.slice(i, i + LIST_PAGE_SIZE)
+    if (deleteMode === 'permanent')
+      await permanentDeleteBatch(batch)
+    else
+      await processKeyBatch(batch)
   }
 }
 
 async function main() {
-  console.log(`\n=== Delete Orphaned R2 Paths ===`)
-  console.log(`Mode: ${DRY_RUN ? 'DRY RUN' : 'LIVE DELETE'}`)
-  console.log(`Concurrency: ${CONCURRENCY}\n`)
+  console.log('\n=== Orphaned R2 Cleanup ===')
+  console.log(`Mode: ${deleteMode}`)
+  console.log(`Concurrency: ${CONCURRENCY}`)
+  if (deleteMode === 'permanent') {
+    console.warn('WARNING: ALLOW_PERMANENT_R2_DELETE=true — objects will be permanently deleted')
+  }
+  console.log()
 
   const inputFile = Bun.file(INPUT_FILE)
   if (!await inputFile.exists()) {
-    console.error(`Run script 1 first`)
+    console.error('Run script 1 first')
     process.exit(1)
   }
 
   const data = await inputFile.json()
   const allPaths = data.orphanedPaths as { path: string, type: string }[]
 
-  // Separate files from folders
-  const files = allPaths.filter(p => p.path.endsWith('.zip')).map(p => p.path)
+  const files = allPaths
+    .filter(p => p.path.endsWith('.zip'))
+    .map(p => p.path)
+    .filter(isLiveR2Key)
   const folders = allPaths.filter(p => !p.path.endsWith('.zip')).map(p => p.path)
 
-  console.log(`Files to delete: ${files.length}`)
-  console.log(`Folders to delete: ${folders.length}`)
+  console.log(`Files to process: ${files.length}`)
+  console.log(`Folders to process: ${folders.length}`)
 
-  console.log('\nCounting total objects to delete (this can take time)...')
+  console.log('\nCounting total objects (this can take time)...')
   let folderObjects = 0
   if (folders.length > 0) {
     for (let i = 0; i < folders.length; i += CONCURRENCY) {
@@ -173,54 +470,47 @@ async function main() {
     process.stdout.write('\n')
   }
 
-  totalToDelete = files.length + folderObjects
-  console.log(`\nTotal objects to delete: ${totalToDelete}`)
+  totalToProcess = files.length + folderObjects
+  console.log(`\nTotal objects to process: ${totalToProcess}`)
 
-  // Ask user after counting
-  process.stdout.write('\nDo you want to actually DELETE files? (yes/no): ')
-  for await (const line of console) {
-    const answer = line.trim().toLowerCase()
-    if (answer === 'yes' || answer === 'y') {
-      DRY_RUN = false
-      break
-    }
-    if (answer === 'no' || answer === 'n')
-      break
-    process.stdout.write('Please answer yes or no: ')
-  }
-  if (DRY_RUN) {
-    console.log('\nAborting delete (dry run).')
+  if (deleteMode === 'dry_run') {
+    console.log('\nDry run complete — no objects changed. Set DRY_RUN=false to move orphans to trash.')
     return
   }
 
-  // Progress ticker
   const ticker = setInterval(() => {
-    process.stdout.write(`\r  Deleted: ${totalDeleted} | Errors: ${totalErrors}`)
+    process.stdout.write(`\r  Processed: ${totalProcessed} | Errors: ${totalErrors}`)
   }, 500)
 
-  // Delete all files in parallel batches
   if (files.length > 0) {
-    console.log(`\nDeleting ${files.length} files...`)
-    await deleteFiles(files)
+    console.log(`\nProcessing ${files.length} files...`)
+    if (deleteMode === 'permanent')
+      await permanentDeleteBatch(await listExactKeyEtags(files))
+    else
+      await processKeyBatch(await listExactKeyEtags(files))
   }
 
-  // Delete all folders in parallel (CONCURRENCY at a time)
   if (folders.length > 0) {
-    console.log(`\nDeleting ${folders.length} folders in parallel...`)
-    for (let i = 0; i < folders.length; i += CONCURRENCY) {
-      const batch = folders.slice(i, i + CONCURRENCY)
-      await Promise.all(batch.map(f => streamDelete(f)))
-      process.stdout.write(`\r  Progress: ${Math.min(i + CONCURRENCY, folders.length)}/${folders.length} folders | ${totalDeleted} files deleted`)
+    console.log(`\nProcessing ${folders.length} folders...`)
+    for (let i = 0; i < folders.length; i++) {
+      await streamProcessPrefix(folders[i]!)
+      process.stdout.write(`\r  Progress: ${i + 1}/${folders.length} folders | ${totalProcessed} objects processed`)
     }
   }
 
   clearInterval(ticker)
 
-  console.log(`\n\n=== Done ===`)
-  console.log(`Total deleted: ${totalDeleted}`)
+  console.log('\n\n=== Done ===')
+  console.log(`Total processed: ${totalProcessed}`)
+  if (totalSkippedMissingDiscoveryEtag > 0)
+    console.warn(`Skipped missing discovery ETag: ${totalSkippedMissingDiscoveryEtag} (sources retained)`)
+  if (totalSkippedChanged > 0)
+    console.error(`Incomplete cleanup: ${totalSkippedChanged} object(s) changed before delete and were retained`)
   console.log(`Errors: ${totalErrors}`)
-  if (DRY_RUN)
-    console.log(`\n(DRY RUN - nothing actually deleted)`)
+  if (deleteMode === 'trash')
+    console.log(`Objects moved under ${R2_TRASH_PREFIX} (lifecycle deletes after ~7 days)`)
+  if (totalErrors > 0 || totalSkippedChanged > 0)
+    process.exit(1)
 }
 
 await main()

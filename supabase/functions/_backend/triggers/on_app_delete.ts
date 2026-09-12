@@ -53,11 +53,12 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'DELETE'), async (c)
     }
 
     try {
-      const deletedObjectCount = await s3.deleteObjectsWithPrefix(c, `orgs/${record.owner_org}/apps/${record.app_id}/`)
-      cloudlog({ requestId: c.get('requestId'), message: 'deleted app storage objects', count: deletedObjectCount, app_id: record.app_id })
+      const trashedObjectCount = await s3.moveObjectsWithPrefixToTrash(c, `orgs/${record.owner_org}/apps/${record.app_id}/`)
+      cloudlog({ requestId: c.get('requestId'), message: 'moved app storage objects to trash', count: trashedObjectCount, app_id: record.app_id })
     }
     catch (error) {
-      cloudlog({ requestId: c.get('requestId'), message: 'error deleting app storage objects', error, app_id: record.app_id })
+      cloudlog({ requestId: c.get('requestId'), message: 'error moving app storage objects to trash', error, app_id: record.app_id })
+      throw error
     }
   }
 

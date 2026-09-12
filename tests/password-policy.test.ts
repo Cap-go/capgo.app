@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { checkOrgReadAccess } from '../supabase/functions/_backend/private/validate_password_compliance.ts'
-import { BASE_URL, executeSQL, getSupabaseClient, headers, TEST_EMAIL, USER_EMAIL, USER_ID, USER_ID_2, USER_PASSWORD, USER_PASSWORD_HASH } from './test-utils.ts'
+import { BASE_URL, executeSQL, getSupabaseClient, headers, TEST_EMAIL, USER_EMAIL, USER_ID, USER_ID_2, USER_PASSWORD, USER_PASSWORD_HASH, warmEdgeEndpoint } from './test-utils.ts'
 
 const ORG_ID = randomUUID()
 const globalId = randomUUID()
@@ -219,6 +219,16 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
         },
       })
       .eq('id', ORG_ID)
+
+    await warmEdgeEndpoint(`${BASE_URL}/private/validate_password_compliance`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        email: USER_EMAIL,
+        password: USER_PASSWORD,
+        org_id: ORG_ID,
+      }),
+    })
   })
 
   it('reject request with missing email', async () => {

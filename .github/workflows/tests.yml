@@ -440,6 +440,21 @@ jobs:
             done
             return 1
           }
+          warm_delete() {
+            local path="$1"
+            for attempt in 1 2 3 4 5; do
+              status=$(curl -s -o /tmp/edge-warm.body -w '%{http_code}' -X DELETE "${base_url}${path}" \
+                -H 'Content-Type: application/json' \
+                -H 'apisecret: testsecret' \
+                -d '{}' || true)
+              echo "edge warm DELETE path=${path} attempt=${attempt} status=${status}"
+              if [ "${status}" != "502" ] && [ "${status}" != "503" ] && [ "${status}" != "000" ]; then
+                return 0
+              fi
+              sleep "${attempt}"
+            done
+            return 1
+          }
           warm_get /ok
           warm_post /triggers/cron_email
           warm_post /triggers/cron_stat_org
@@ -449,7 +464,14 @@ jobs:
           warm_get '/organization?orgId=00000000-0000-0000-0000-000000000000'
           warm_post /organization
           warm_post /organization/members
+          warm_delete '/organization?orgId=00000000-0000-0000-0000-000000000000'
+          warm_delete '/organization/members?orgId=00000000-0000-0000-0000-000000000000&email=warm@example.com'
+          warm_get '/private/role_bindings'
           warm_post /apikey
+          # Public app routes (DELETE /app is cold-start heavy in sharded backend suites).
+          warm_get /app
+          warm_post /app
+          warm_delete /app/com.warm.edge
       - name: Run backend integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}
@@ -836,7 +858,7 @@ jobs:
             chmod +x scripts/start-cloudflare-workers.sh
             exec ./scripts/start-cloudflare-workers.sh
           BACKGROUND_LOG_PATH: ${{ runner.temp }}/cloudflare-workers.log
-          BACKGROUND_WAIT_TIMEOUT_MS: 120000
+          BACKGROUND_WAIT_TIMEOUT_MS: 180000
           BACKGROUND_TAIL_LINES: 400
         run: |
           worker_port_offset="${CLOUDFLARE_WORKER_PORT_OFFSET:-0}"

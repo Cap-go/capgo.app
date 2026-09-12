@@ -157,14 +157,22 @@ describe('files worker cache keys', () => {
     expect(cacheKey).toBe('/files-cache/files/read/attachments/orgs/test/apps/app/bundle.zip?key=checksum')
   })
 
-  it('should include preview host in cache keys', async () => {
+  it('should bypass outer worker cache for preview reads (no-store responses)', async () => {
     const { filesWorkerCacheTestUtils } = await import('../cloudflare_workers/files/index.ts')
 
-    const cacheKey = filesWorkerCacheTestUtils.buildWorkersCacheKey(
-      new Request('https://app-123.preview.capgo.app/index.html?b=2&a=1'),
-    )
+    expect(filesWorkerCacheTestUtils.buildWorkersCacheKey(
+      new Request('https://app-123.preview.capgo.app/files/read/attachments/orgs/test/apps/app/bundle.zip?b=2&a=1&key=checksum'),
+    )).toBeNull()
+  })
 
-    expect(cacheKey).toBe('/preview-cache/app-123.preview.capgo.app/index.html?a=1&b=2')
+  it('should bypass outer worker cache when Host is preview but request.url is api', async () => {
+    const { filesWorkerCacheTestUtils } = await import('../cloudflare_workers/files/index.ts')
+
+    expect(filesWorkerCacheTestUtils.buildWorkersCacheKey(
+      new Request('https://api.capgo.app/files/read/attachments/orgs/test/apps/app/bundle.zip?key=checksum', {
+        headers: { host: 'app-123.preview.capgo.app' },
+      }),
+    )).toBeNull()
   })
 
   it('should bypass channel preview and range requests', async () => {
