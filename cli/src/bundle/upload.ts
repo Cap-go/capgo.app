@@ -1110,7 +1110,7 @@ async function setVersionInChannel(
   targetChannel: UploadTargetChannel | null,
   requireChannelAssignment = false,
   selfAssign?: boolean,
-  cliHost?: { supaHost?: string, supaAnon?: string },
+  options?: Pick<OptionsUpload, 'supaHost' | 'supaAnon' | 'stable'>,
 ): Promise<boolean> {
   const canPromoteTargetChannel = targetChannel !== null
     && await hasCliPermission(supabase, apikey, 'channel.promote_bundle', { appId: appid, channelId: targetChannel.id })
@@ -1131,12 +1131,12 @@ async function setVersionInChannel(
       const canUpdateChannelSettings = await hasCliPermission(supabase, apikey, 'channel.update_settings', { appId: appid, channelId: targetChannel.id })
       if (!canUpdateChannelSettings) {
         log.warn('Cannot enable device self-assign because this API key lacks channel.update_settings')
-        return promoteExistingChannel(apikey, appid, versionId, targetChannel, localConfig, displayBundleUrl, cliHost)
+        return promoteExistingChannel(apikey, appid, versionId, targetChannel, localConfig, displayBundleUrl, options)
       }
     }
 
     if (!selfAssign)
-      return promoteExistingChannel(apikey, appid, versionId, targetChannel, localConfig, displayBundleUrl, cliHost)
+      return promoteExistingChannel(apikey, appid, versionId, targetChannel, localConfig, displayBundleUrl, options)
 
     const { error: dbError3, data } = await updateOrCreateChannel(supabase, {
       name: channel,
@@ -1178,8 +1178,8 @@ async function setVersionInChannel(
         version: bundle,
         ...(selfAssign ? { allow_device_self_set: true } : {}),
       },
-      supaHost: cliHost?.supaHost,
-      supaAnon: cliHost?.supaAnon,
+      supaHost: options?.supaHost,
+      supaAnon: options?.supaAnon,
     })
     if (error) {
       await uploadFailIfChannelError(error, async () => `Cannot create channel and set its bundle because this API key does not have the required RBAC permission. ${await formatFunctionInvokeError(error)}`)
