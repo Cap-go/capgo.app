@@ -6,11 +6,13 @@ import {
   BASE_URL,
   createIsolatedSeedAppOptions,
   executeSQL,
+  fetchTestRequest,
   getAuthHeaders,
   resetAndSeedAppData,
   resetAppData,
   SUPABASE_ANON_KEY,
   SUPABASE_BASE_URL,
+  warmEdgeEndpoint,
 } from './test-utils.ts'
 
 vi.mock('../cli/src/utils', async (importOriginal) => {
@@ -104,9 +106,10 @@ let authHeaders: Record<string, string>
 const apiKeyIds: number[] = []
 
 async function createAppApiKey(name: string, roleName = 'app_preview'): Promise<ApiKeyResponse> {
-  const createResponse = await fetch(`${BASE_URL}/apikey`, {
+  const createResponse = await fetchTestRequest(`${BASE_URL}/apikey`, {
     method: 'POST',
     headers: authHeaders,
+    retryUnsafe: true,
     body: JSON.stringify({
       name,
       bindings: await appApiKeyBindings(APPNAME, roleName),
@@ -123,14 +126,17 @@ async function createAppApiKey(name: string, roleName = 'app_preview'): Promise<
 beforeAll(async () => {
   authHeaders = await getAuthHeaders()
   await resetAndSeedAppData(APPNAME, seedOptions)
+  // Load the apikey isolate before concurrent preview-lifecycle POSTs (CI cold start).
+  await warmEdgeEndpoint('/apikey', { method: 'GET', headers: authHeaders })
 })
 
 afterAll(async () => {
   try {
     for (const apiKeyId of apiKeyIds) {
-      const deleteResponse = await fetch(`${BASE_URL}/apikey/${apiKeyId}`, {
+      const deleteResponse = await fetchTestRequest(`${BASE_URL}/apikey/${apiKeyId}`, {
         method: 'DELETE',
         headers: authHeaders,
+        retryUnsafe: true,
       })
       expect(deleteResponse.status).toBe(200)
     }
