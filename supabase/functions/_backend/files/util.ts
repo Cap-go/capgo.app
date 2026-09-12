@@ -193,6 +193,10 @@ export function isRetryableDurableObjectResetError(error: unknown): boolean {
     'moved to a different machine',
     'storage operation exceeded timeout',
     'caused object to be reset',
+    // Cloudflare raises a generic "internal error; reference = <id>" when the
+    // Worker call to the upload Durable Object fails at the infrastructure
+    // level. It is transient, so retry it instead of failing the upload.
+    'internal error; reference',
   ].some(fragment => message.includes(fragment))
 }
 
