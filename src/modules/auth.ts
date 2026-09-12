@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NavigationGuardNext, RouteLocationNormalized } from 'vue-router'
 import type { UserModule } from '~/types'
+import { clearChartDataCache } from '~/services/chartDataService'
 import { isCliLoginPath } from '~/services/cliLogin'
 import { hideLoader } from '~/services/loader'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
@@ -493,8 +494,10 @@ export const install: UserModule = ({ router }) => {
 
   if (typeof supabase.auth.onAuthStateChange === 'function') {
     supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session)
+      if (!session) {
         clearWebsitePaidUserCookie()
+        clearChartDataCache()
+      }
     })
   }
 

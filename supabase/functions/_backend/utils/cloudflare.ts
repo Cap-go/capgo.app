@@ -3,7 +3,7 @@ import type { Context } from 'hono'
 import type { DeviceComparable } from './deviceComparison.ts'
 import type { StatsInsightRawAction, StatsInsightRawDaily, StatsInsightRawDevice, StatsInsightRawSummary, StatsInsightRawVersion } from './statsInsights.ts'
 import type { Database } from './supabase.types.ts'
-import type { DeviceRes, DeviceWithoutCreatedAt, NativeVersionUsage, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
+import type { DeviceRes, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
 import { CACHE_PUT_TIMEOUT_MS, CacheHelper } from './cache.ts'
 import { hasComparableDeviceChanged, toComparableDevice } from './deviceComparison.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
@@ -911,6 +911,128 @@ ORDER BY date, platform, version_build`
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native version usage', error: serializeError(e), query })
   }
   return []
+}
+
+export async function readNativeActiveDevicesSummaryCF(
+  c: Context,
+  app_id: string,
+  period_start: string,
+  period_end: string,
+): Promise<NativeActiveDevicesByPlatformRow[]> {
+  if (!c.env.DEVICE_USAGE)
+    return []
+
+  const platformQuery = `SELECT
+  if(blob4 != '', blob4, if(double1 = 1, 'ios', if(double1 = 2, 'electron', if(double1 = 0, 'android', 'unknown')))) AS platform,
+  COUNT(DISTINCT blob1) AS devices
+FROM device_usage
+WHERE
+  index1 = '${escapeSqlString(app_id)}'
+  AND timestamp >= toDateTime('${formatDateCF(period_start)}')
+  AND timestamp < toDateTime('${formatDateCF(period_end)}')
+GROUP BY platform
+ORDER BY platform`
+
+  const totalQuery = `SELECT
+  COUNT(DISTINCT blob1) AS devices
+FROM device_usage
+WHERE
+  index1 = '${escapeSqlString(app_id)}'
+  AND timestamp >= toDateTime('${formatDateCF(period_start)}')
+  AND timestamp < toDateTime('${formatDateCF(period_end)}')`
+
+  cloudlog({ requestId: c.get('requestId'), message: 'readNativeActiveDevicesSummaryCF query', query: platformQuery })
+  try {
+    const [platformRows, totalRows] = await Promise.all([
+      runQueryToCFA<{ platform: string, devices: number | string }>(c, platformQuery),
+      runQueryToCFA<{ devices: number | string }>(c, totalQuery),
+    ])
+
+    const rows = platformRows.map(row => ({
+      platform: row.platform || 'unknown',
+      devices: Math.max(0, Number(row.devices) || 0),
+    }))
+
+    rows.push({
+      platform: 'total',
+      devices: Math.max(0, Number(totalRows[0]?.devices) || 0),
+    })
+
+    return rows
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native active devices summary', error: serializeError(e), query: platformQuery })
+    throw e
+  }
+}
+
+export async function readNativeDailyPlatformActiveCF(
+  c: Context,
+  app_id: string,
+  period_start: string,
+  period_end: string,
+): Promise<Array<{ date: string, platform: string, devices: number }>> {
+  if (!c.env.DEVICE_USAGE)
+    return []
+
+  const whereClause = `index1 = '${escapeSqlString(app_id)}'
+  AND timestamp >= toDateTime('${formatDateCF(period_start)}')
+  AND timestamp < toDateTime('${formatDateCF(period_end)}')`
+
+  const platformQuery = `SELECT
+  formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
+  if(blob4 != '', blob4, if(double1 = 1, 'ios', if(double1 = 2, 'electron', if(double1 = 0, 'android', 'unknown')))) AS platform,
+  COUNT(DISTINCT blob1) AS devices
+FROM device_usage
+WHERE
+  ${whereClause}
+GROUP BY date, platform
+ORDER BY date, platform`
+
+  const totalQuery = `SELECT
+  formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
+  'total' AS platform,
+  COUNT(DISTINCT blob1) AS devices
+FROM device_usage
+WHERE
+  ${whereClause}
+GROUP BY date
+ORDER BY date`
+
+  cloudlog({ requestId: c.get('requestId'), message: 'readNativeDailyPlatformActiveCF query', query: platformQuery })
+  try {
+    const [platformRows, totalRows] = await Promise.all([
+      runQueryToCFA<{ date: string, platform: string, devices: number | string }>(c, platformQuery),
+      runQueryToCFA<{ date: string, platform: string, devices: number | string }>(c, totalQuery),
+    ])
+
+    const rows = [
+      ...platformRows.map(row => ({
+        date: row.date,
+        platform: row.platform || 'unknown',
+        devices: Math.max(0, Number(row.devices) || 0),
+      })),
+      ...totalRows.map(row => ({
+        date: row.date,
+        platform: 'total',
+        devices: Math.max(0, Number(row.devices) || 0),
+      })),
+    ]
+
+    rows.sort((left, right) => {
+      if (left.date !== right.date)
+        return left.date < right.date ? -1 : 1
+      if (left.platform === right.platform)
+        return 0
+      return left.platform < right.platform ? -1 : 1
+    })
+
+    return rows
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native daily platform active', error: serializeError(e), queries: { platformQuery, totalQuery } })
+    throw e
+  }
 }
 
 export async function readDeviceVersionCountsCF(c: Context, app_id: string, channelName?: string): Promise<Record<string, number>> {

@@ -528,6 +528,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/preview/native-kpi': RouteRecordInfo<
+      '/preview/native-kpi',
+      '/preview/native-kpi',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/register': RouteRecordInfo<
       '/register',
       '/register',
@@ -1278,6 +1285,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/preview/channel.vue': {
       routes:
         | '/preview/channel'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/preview/native-kpi.vue': {
+      routes:
+        | '/preview/native-kpi'
       views:
         | never
       pathParamNames:
