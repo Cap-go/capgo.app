@@ -9,6 +9,8 @@ import AppOnboardingFlow from '../src/components/dashboard/AppOnboardingFlow.vue
 const messages = JSON.parse(readFileSync(new NodeUrl('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
 const writerMocks = vi.hoisted(() => ({
+  abTestAssignments: {} as Record<string, unknown>,
+  loadApp: vi.fn(),
   main: {
     auth: { id: 'user-bento-retry' },
     authGeneration: 1,
@@ -21,34 +23,55 @@ const writerMocks = vi.hoisted(() => ({
       onboarding: {},
     },
   },
+  organization: {
+    awaitInitialLoad: vi.fn(async () => undefined),
+    currentOrganization: null as { gid: string, name: string, onboarding?: unknown } | null,
+    organizations: [],
+    updateAppOnboarding: vi.fn(),
+  },
   refreshUser: vi.fn(),
   replaceUserOnboardingIfUnchanged: vi.fn(),
+  route: { query: {} as Record<string, string> },
 }))
 
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ query: {} }),
+  useRoute: () => writerMocks.route,
   useRouter: () => ({ push: vi.fn() }),
 }))
 vi.mock('vue-sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
+vi.mock('../src/components/dashboard/ChannelDefaultRoutingOnboarding.vue', () => ({
+  default: { template: '<div />' },
+}))
+vi.mock('~/services/apikeys', () => ({
+  createDefaultApiKey: vi.fn(),
+  findUsablePlainApiKey: vi.fn(async () => 'test-api-key'),
+  shareInFlightApiKeyLoad: vi.fn(async (_key: unknown, load: () => Promise<unknown>) => load()),
+}))
 vi.mock('~/services/onboardingTracking', () => ({ sendOnboardingEvent: vi.fn() }))
 vi.mock('~/services/capgoApi', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/services/capgoApi')>()
   return {
     ...actual,
-    invokeCapgoApi: vi.fn(async () => ({ data: { assignments: {} }, error: null })),
+    invokeCapgoApi: vi.fn(async () => ({ data: { assignments: writerMocks.abTestAssignments }, error: null })),
   }
 })
 vi.mock('~/services/supabase', () => ({
   getLocalConfig: () => ({ supaHost: 'https://sb.capgo.app', supaKey: 'anon-key' }),
   isLocal: () => false,
   useSupabase: () => {
-    const query = {
-      eq: () => query,
-      maybeSingle: writerMocks.refreshUser,
-      select: () => query,
+    return {
+      from: (table: string) => {
+        const query = {
+          eq: () => query,
+          maybeSingle: writerMocks.refreshUser,
+          select: () => query,
+          single: table === 'apps' ? writerMocks.loadApp : vi.fn(),
+        }
+        return query
+      },
+      rpc: vi.fn(async () => ({ data: null, error: null })),
     }
-    return { from: () => query }
   },
 }))
 vi.mock('~/services/userOnboardingWriteQueue', async (importOriginal) => {
@@ -67,13 +90,7 @@ vi.mock('~/stores/dialogv2', () => ({
   }),
 }))
 vi.mock('~/stores/main', () => ({ useMainStore: () => writerMocks.main }))
-vi.mock('~/stores/organization', () => ({
-  useOrganizationStore: () => ({
-    currentOrganization: null,
-    organizations: [],
-    updateAppOnboarding: vi.fn(),
-  }),
-}))
+vi.mock('~/stores/organization', () => ({ useOrganizationStore: () => writerMocks.organization }))
 
 const onboardingSource = readFileSync(new NodeUrl('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
 const optionsSource = readFileSync(new NodeUrl('../src/components/dashboard/onboardingDevelopmentEnvironmentOptions.ts', import.meta.url), 'utf8')
@@ -183,7 +200,13 @@ describe('app onboarding progress analytics integration', () => {
       }))
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
-      value: vi.fn(() => ({ matches: false })),
+      value: vi.fn(() => ({
+        addEventListener: vi.fn(),
+        addListener: vi.fn(),
+        matches: false,
+        removeEventListener: vi.fn(),
+        removeListener: vi.fn(),
+      })),
     })
     const container = document.createElement('div')
     const app = createApp(AppOnboardingFlow, { onboarding: true, preOrg: true })
@@ -210,6 +233,87 @@ describe('app onboarding progress analytics integration', () => {
     finally {
       app.unmount()
       writerMocks.main.user = previousUser
+      if (matchMediaDescriptor)
+        Object.defineProperty(window, 'matchMedia', matchMediaDescriptor)
+      else
+        Reflect.deleteProperty(window, 'matchMedia')
+    }
+  })
+
+  it('preserves the saved user intent and channel assignment when resuming the first app', async () => {
+    const previousUser = writerMocks.main.user
+    const previousRouteQuery = writerMocks.route.query
+    const previousOrganization = writerMocks.organization.currentOrganization
+    const previousAssignments = writerMocks.abTestAssignments
+    const matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    const assignedAt = '2026-09-11T10:00:00.000Z'
+    const currentOnboarding = {
+      abtests: {
+        new_channel: {
+          assigned_at: assignedAt,
+          branch: 'A',
+        },
+      },
+      flow: 'pre_org',
+      intent: 'ota',
+      status: 'in_progress',
+      step: 'organization',
+      updated_at: '2026-09-11T10:01:00.000Z',
+    }
+    writerMocks.route.query = { resume: 'com.example.resumed', step: 'setup' }
+    writerMocks.organization.currentOrganization = {
+      gid: 'resumed-org',
+      name: 'Resumed Org',
+      onboarding: { intent: 'builder' },
+    }
+    writerMocks.abTestAssignments = currentOnboarding.abtests
+    writerMocks.main.user = {
+      id: 'user-bento-retry',
+      image_url: 'avatar.png',
+      onboarding: currentOnboarding,
+    }
+    writerMocks.loadApp.mockReset()
+    writerMocks.loadApp.mockResolvedValue({
+      data: {
+        android_store_url: null,
+        app_id: 'com.example.resumed',
+        existing_app: true,
+        icon_url: null,
+        ios_store_url: null,
+        name: 'Resumed App',
+        owner_org: 'resumed-org',
+      },
+      error: null,
+    })
+    writerMocks.replaceUserOnboardingIfUnchanged.mockReset()
+    writerMocks.replaceUserOnboardingIfUnchanged.mockImplementation(async (_userId, _expectedOnboarding, onboarding) => ({
+      data: { ...writerMocks.main.user, onboarding },
+      error: null,
+    }))
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn(() => ({ matches: false })),
+    })
+    const container = document.createElement('div')
+    const app = createApp(AppOnboardingFlow, { onboarding: true, preOrg: true })
+    app.config.warnHandler = () => undefined
+
+    try {
+      app.mount(container)
+      await vi.waitFor(() => expect(writerMocks.replaceUserOnboardingIfUnchanged).toHaveBeenCalled())
+
+      const persistedOnboarding = writerMocks.replaceUserOnboardingIfUnchanged.mock.calls[0]?.[2]
+      expect(persistedOnboarding).toEqual(expect.objectContaining({
+        abtests: currentOnboarding.abtests,
+        intent: 'ota',
+      }))
+    }
+    finally {
+      app.unmount()
+      writerMocks.main.user = previousUser
+      writerMocks.route.query = previousRouteQuery
+      writerMocks.organization.currentOrganization = previousOrganization
+      writerMocks.abTestAssignments = previousAssignments
       if (matchMediaDescriptor)
         Object.defineProperty(window, 'matchMedia', matchMediaDescriptor)
       else
@@ -287,6 +391,12 @@ describe('app onboarding progress analytics integration', () => {
     expect(resumeLoader).not.toContain('initializeProgressTracking')
     expect(resumeLoader).not.toContain('viewStep')
     expect(resumeLoader).toContain('if (props.preOrg || resumeStep.value === \'setup\')')
+    expectSourceOrder(resumeLoader, [
+      'const savedProgress = parseUserOnboardingProgress(main.user?.onboarding)',
+      'applyOnboardingProgress(savedProgress)',
+      'if (!savedProgress?.intent)',
+      'hydrateIntentFromCurrentOrg()',
+    ])
 
     const mountedFlow = sourceBetween('onMounted(async () => {', 'onBeforeUnmount(() => {')
     expect(onboardingSource).toContain(`import { createOnboardingProgressPersistence, shouldInitializeOnboardingProgressTracking } from '~/utils/onboardingProgressPersistence'`)
@@ -564,7 +674,7 @@ describe('app onboarding progress analytics integration', () => {
     const resume = sourceBetween('async function loadResumeApp()', 'async function importStoreMetadata()')
     expect(resume).toContain(`flowStep.value = 'setup'`)
     expect(resume).toContain(`flowStep.value = resumeStep.value === 'choice' ? 'choice' : 'install'`)
-    expect(resume).toContain('setupStage.value = resolveSetupStage(savedProgress)')
+    expect(resume).toContain('applyOnboardingProgress(savedProgress)')
 
     const snapshot = sourceBetween('function snapshotOnboardingProgress(', 'function clearScheduledOnboardingProgress()')
     expect(snapshot).toContain(`setupStage: flowStep.value === 'setup' || flowStep.value === 'install' ? setupStage.value : undefined`)

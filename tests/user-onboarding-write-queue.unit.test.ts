@@ -46,6 +46,27 @@ describe('user onboarding write queue', () => {
     })
   })
 
+  it.concurrent('preserves an existing valid intent when a progress snapshot omits it', () => {
+    const current = {
+      flow: 'pre_org',
+      intent: 'ota',
+      status: 'in_progress',
+      step: 'organization',
+      updated_at: '2026-09-11T10:01:00.000Z',
+    }
+    const next = {
+      flow: 'pre_org',
+      status: 'in_progress',
+      step: 'setup',
+      updated_at: '2026-09-11T10:02:00.000Z',
+    }
+
+    expect(mergeUserOnboardingProgress(next, current)).toEqual({
+      ...next,
+      intent: 'ota',
+    })
+  })
+
   it.concurrent.each([
     ['null', null],
     ['array', ['not', 'an', 'object'] as string[]],
