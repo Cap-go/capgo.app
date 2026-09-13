@@ -225,13 +225,15 @@ export async function respondOpenStatusAdminCheck<C extends HealthCtx>(
   c: C,
   options: {
     probeName: string
+    deadlineMs?: number
     runAssessment: () => Promise<{ capgoStatus: 'ok' | 'ko', legacyBody: Record<string, unknown>, httpStatus: number }>
+    deadlineFallbackAssessment?: () => { capgoStatus: 'ok' | 'ko', legacyBody: Record<string, unknown>, httpStatus: number }
   },
 ) {
   let assessment: { capgoStatus: 'ok' | 'ko', legacyBody: Record<string, unknown>, httpStatus: number } | undefined
 
   const responder = createHealthResponder<C>({
-    deadlineMs: 10_000,
+    deadlineMs: options.deadlineMs ?? 10_000,
     cacheMs: 0,
     probes: [
       probe({
@@ -249,7 +251,9 @@ export async function respondOpenStatusAdminCheck<C extends HealthCtx>(
 
   const response = await responder.toResponse(c, c.req.method)
   if (!assessment) {
-    return response
+    assessment = options.deadlineFallbackAssessment?.()
+    if (!assessment)
+      return response
   }
 
   const openStatusBody = await response.clone().json().catch(() => ({})) as Record<string, unknown>

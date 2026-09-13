@@ -553,6 +553,7 @@ app.get('/', async (c) => {
     const client = pgClient
     return await respondOpenStatusAdminCheck(c, {
       probeName: 'pgmq_queues',
+      deadlineFallbackAssessment: () => queueHealthErrorAssessment(thresholds),
       runAssessment: async () => {
         try {
           return await buildQueueHealthAssessment(c, client)
@@ -570,6 +571,7 @@ app.get('/', async (c) => {
     cloudlogErr({ requestId: c.get('requestId'), message: 'queue_health_error', error })
     return await respondOpenStatusAdminCheck(c, {
       probeName: 'pgmq_queues',
+      deadlineFallbackAssessment: () => queueHealthErrorAssessment(thresholds),
       runAssessment: async () => queueHealthErrorAssessment(thresholds),
     })
   }

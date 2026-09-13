@@ -29,4 +29,31 @@ describe('respondOpenStatusAdminCheck', () => {
     expect(body.checked_at).toBe('2026-01-01T00:00:00.000Z')
     expect(body.status).not.toBe('unhealthy')
   })
+
+  it('uses deadline fallback with Capgo ko when assessment does not finish in time', async () => {
+    const c = {
+      req: { method: 'GET' },
+      env: {},
+    } as Parameters<typeof respondOpenStatusAdminCheck>[0]
+
+    const response = await respondOpenStatusAdminCheck(c, {
+      probeName: 'pgmq_queues',
+      deadlineMs: 50,
+      deadlineFallbackAssessment: () => ({
+        capgoStatus: 'ko',
+        httpStatus: 500,
+        legacyBody: {
+          status: 'ko',
+          error: 'queue_health_error',
+        },
+      }),
+      runAssessment: () => new Promise(() => {}),
+    })
+
+    expect(response.status).toBe(500)
+    const body = await response.json() as Record<string, unknown>
+    expect(body.status).toBe('ko')
+    expect(body.error).toBe('queue_health_error')
+    expect(body.status).not.toBe('unhealthy')
+  })
 })

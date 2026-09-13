@@ -466,6 +466,32 @@ function skippedDataCanary(reason: string): DataCanaryResult {
   }
 }
 
+function replicationLagErrorAssessment(thresholdSeconds: number, thresholdBytes: number) {
+  return {
+    capgoStatus: 'ko' as const,
+    httpStatus: 500,
+    legacyBody: {
+      status: 'ko',
+      error: 'replication_lag_error',
+      message: 'Failed to fetch replication lag',
+      threshold_seconds: thresholdSeconds,
+      threshold_minutes: Number((thresholdSeconds / 60).toFixed(2)),
+      threshold_bytes: thresholdBytes,
+      checked_at: new Date().toISOString(),
+      slot_count: 0,
+      active_count: 0,
+      inactive_count: 0,
+      max_lag_seconds: null,
+      max_lag_minutes: null,
+      max_lag_slot: null,
+      slots: [],
+      slot_status: 'ko',
+      subscription: skippedSubscription('replication_lag_error'),
+      data_canary: skippedDataCanary('replication_lag_error'),
+    },
+  }
+}
+
 export const app = honoFactory.createApp()
 
 app.use('*', useCors)
@@ -602,6 +628,7 @@ app.get('/', async (c) => {
 
     return await respondOpenStatusAdminCheck(c, {
       probeName: 'replication',
+      deadlineFallbackAssessment: () => replicationLagErrorAssessment(thresholdSeconds, thresholdBytes),
       runAssessment: async () => ({
         capgoStatus: overallStatus,
         httpStatus: overallStatus === 'ok' ? 200 : 503,
@@ -614,29 +641,8 @@ app.get('/', async (c) => {
     cloudlogErr({ requestId: c.get('requestId'), message: 'replication_lag_error', error })
     return await respondOpenStatusAdminCheck(c, {
       probeName: 'replication',
-      runAssessment: async () => ({
-        capgoStatus: 'ko' as const,
-        httpStatus: 500,
-        legacyBody: {
-          status: 'ko',
-          error: 'replication_lag_error',
-          message: 'Failed to fetch replication lag',
-          threshold_seconds: thresholdSeconds,
-          threshold_minutes: Number((thresholdSeconds / 60).toFixed(2)),
-          threshold_bytes: thresholdBytes,
-          checked_at: new Date().toISOString(),
-          slot_count: 0,
-          active_count: 0,
-          inactive_count: 0,
-          max_lag_seconds: null,
-          max_lag_minutes: null,
-          max_lag_slot: null,
-          slots: [],
-          slot_status: 'ko',
-          subscription: skippedSubscription('replication_lag_error'),
-          data_canary: skippedDataCanary('replication_lag_error'),
-        },
-      }),
+      deadlineFallbackAssessment: () => replicationLagErrorAssessment(thresholdSeconds, thresholdBytes),
+      runAssessment: async () => replicationLagErrorAssessment(thresholdSeconds, thresholdBytes),
     })
   }
   finally {
