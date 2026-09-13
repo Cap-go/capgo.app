@@ -100,43 +100,43 @@ const bannerColor = computed(() => {
 </script>
 
 <template>
-  <!-- Desktop inline version -->
+  <!-- Desktop inline version (also used in mobile navbar via Navbar.vue) -->
   <div
     v-if="props.desktop && showBanner"
-    class="flex items-center ml-auto space-x-1 min-w-0 max-w-[calc(100vw-4.75rem)] overflow-hidden sm:space-x-2 lg:max-w-full lg:space-x-3"
+    class="flex min-w-0 flex-nowrap items-center gap-1 overflow-hidden max-lg:w-full lg:ml-auto lg:max-w-full lg:gap-3"
     data-test="org-billing-banner"
   >
     <component
-      :is="showCta ? 'div' : 'a'"
-      v-bind="showCta ? {} : { href: billingCtaHref }"
-      :role="showCta ? 'status' : undefined"
-      class="flex items-center gap-2 min-w-0 flex-1 overflow-hidden"
+      :is="showCta ? 'span' : 'a'"
+      v-bind="showCta ? { role: 'status' } : { href: billingCtaHref }"
+      class="min-w-0 max-w-[38%] shrink truncate"
       :class="showCta ? '' : 'rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500'"
       :aria-label="statusAriaLabel"
-      :title="statusAriaLabel"
+      :title="statusLabel"
     >
       <span
-        class="d-badge d-badge-sm font-semibold shrink-0 max-w-full truncate"
+        class="d-badge d-badge-sm block max-w-full truncate font-semibold"
         :class="badgeClass"
         data-test="org-billing-status"
-        :title="statusLabel"
       >
         {{ statusLabel }}
       </span>
-      <span
-        v-if="statusDetail"
-        class="text-xs font-semibold truncate min-w-0 sm:text-sm"
-        :class="status.trialDaysLeft <= 7 ? 'text-amber-700 dark:text-amber-300' : 'text-slate-800 dark:text-slate-200'"
-        data-test="org-billing-detail"
-        :title="statusDetail"
-      >
-        {{ statusDetail }}
-      </span>
     </component>
+    <span
+      v-if="statusDetail"
+      class="min-w-0 flex-1 truncate text-[11px] font-semibold leading-tight sm:text-xs lg:text-sm"
+      :class="status.trialDaysLeft <= 7 ? 'text-amber-700 dark:text-amber-300' : 'text-slate-800 dark:text-slate-200'"
+      data-test="org-billing-detail"
+      :title="statusDetail"
+      role="status"
+      :aria-label="statusDetail"
+    >
+      {{ statusDetail }}
+    </span>
     <a
       v-if="showCta"
       :href="billingCtaHref"
-      class="shrink-0 whitespace-nowrap border-none d-btn d-btn-xs sm:d-btn-sm"
+      class="shrink-0 whitespace-nowrap border-none d-btn d-btn-xs h-7 min-h-0 px-2 lg:d-btn-sm"
       :class="bannerColor"
       data-test="org-billing-cta"
     >

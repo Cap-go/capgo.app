@@ -46,11 +46,11 @@ const { t } = useI18n()
           <div v-if="displayStore.NavTitle && isMobile">
             <button
               type="button"
-              class="flex p-1 rounded-sm dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:bg-slate-600 hover:bg-slate-300"
+              class="flex rounded-sm p-0.5 dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:bg-slate-600 hover:bg-slate-300"
               :aria-label="t('button-back')"
               @click="back()"
             >
-              <IconBack class="w-5 h-5 fill-current" />
+              <IconBack class="h-4 w-4 fill-current" />
               <span class="hidden md:block">{{ t('button-back') }}</span>
             </button>
           </div>
@@ -71,7 +71,7 @@ const { t } = useI18n()
           <!-- Hamburger button -->
           <button
             type="button"
-            class="p-1 rounded-md lg:hidden dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:text-slate-50 hover:text-slate-600"
+            class="rounded-md p-0.5 lg:hidden dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:text-slate-50 hover:text-slate-600"
             data-test="sidebar-mobile-toggle"
             aria-controls="sidebar"
             :aria-expanded="props.sidebarOpen"
@@ -79,7 +79,7 @@ const { t } = useI18n()
             @click.stop="$emit('toggleSidebar')"
           >
             <span class="sr-only">{{ props.sidebarOpen ? t('close-sidebar') : t('open-sidebar') }}</span>
-            <IconMenu class="w-5 h-5 fill-current" />
+            <IconMenu class="h-4 w-4 fill-current" />
           </button>
 
           <!-- Title on desktop -->
@@ -117,13 +117,16 @@ const { t } = useI18n()
           </div>
         </div>
 
-        <!-- Centered title on mobile (absolute so left/right controls keep their space) -->
-        <div
-          v-if="displayStore.NavTitle"
-          class="pointer-events-none absolute inset-x-0 px-14 text-center lg:hidden"
-        >
-          <div class="mx-auto max-w-[38%] truncate font-bold text-md text-dark dark:text-white">
-            {{ displayStore.NavTitle }}
+        <!-- Mobile title: sr-only on Capacitor native so billing pills keep full width -->
+        <div v-if="displayStore.NavTitle" class="lg:hidden">
+          <span class="sr-only">{{ displayStore.NavTitle }}</span>
+          <div
+            v-if="!isMobile"
+            class="pointer-events-none absolute inset-x-0 px-14 text-center"
+          >
+            <div class="mx-auto max-w-[38%] truncate font-bold text-md text-dark dark:text-white">
+              {{ displayStore.NavTitle }}
+            </div>
           </div>
         </div>
 
@@ -133,7 +136,7 @@ const { t } = useI18n()
         </div>
 
         <!-- Mobile banner in navbar -->
-        <div class="z-10 ml-auto min-w-0 shrink lg:hidden">
+        <div class="z-10 flex min-w-0 flex-1 justify-end overflow-hidden lg:hidden">
           <Banner desktop />
         </div>
       </div>
