@@ -218,7 +218,9 @@ export function registerCapgoLivenessPostOk(app: Hono<MiddlewareKeyVariables>) {
   })
 }
 
-/** Wrap a Capgo `ok`/`ko` admin payload in OpenStatus while preserving legacy fields under `extend`. */
+const OPENSTATUS_ADMIN_ADDITIVE_KEYS = ['checkedAt', 'checks', 'latencyMs'] as const
+
+/** Run an OpenStatus-bounded admin probe; response body keeps Capgo `status` ok|ko (monitoring contract). */
 export async function respondOpenStatusAdminCheck<C extends HealthCtx>(
   c: C,
   options: {
@@ -242,19 +244,36 @@ export async function respondOpenStatusAdminCheck<C extends HealthCtx>(
         },
       }),
     ],
-    extend: () => ({
-      capgo_status: assessment?.capgoStatus,
-      ...assessment?.legacyBody,
-    }),
+    extend: () => ({}),
   })
 
   const response = await responder.toResponse(c, c.req.method)
-  if (assessment && response.status !== assessment.httpStatus && assessment.httpStatus >= 400) {
-    const body = await response.clone().json().catch(() => ({}))
-    return new Response(JSON.stringify(body), {
+  if (!assessment) {
+    return response
+  }
+
+  const openStatusBody = await response.clone().json().catch(() => ({})) as Record<string, unknown>
+  const additive: Record<string, unknown> = {}
+  for (const key of OPENSTATUS_ADMIN_ADDITIVE_KEYS) {
+    if (openStatusBody[key] !== undefined)
+      additive[key] = openStatusBody[key]
+  }
+
+  const body = {
+    ...assessment.legacyBody,
+    ...additive,
+    status: assessment.capgoStatus,
+  }
+
+  if (c.req.method === 'HEAD') {
+    return new Response(null, {
       status: assessment.httpStatus,
       headers: response.headers,
     })
   }
-  return response
+
+  return new Response(JSON.stringify(body), {
+    status: assessment.httpStatus,
+    headers: response.headers,
+  })
 }
