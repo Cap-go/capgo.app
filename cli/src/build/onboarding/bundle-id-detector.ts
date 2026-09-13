@@ -23,7 +23,7 @@
 
 import { readFileSync } from 'node:fs'
 
-import { findXcodeProject } from '../pbxproj-parser.js'
+import { findSignableTargets, findXcodeProject } from '../pbxproj-parser.js'
 
 export type BundleIdSource = 'pbxproj-release' | 'pbxproj-debug' | 'pbxproj-fallback' | 'plist' | 'capacitor-config'
 
@@ -37,6 +37,8 @@ export interface BundleIdCandidate {
 export interface DetectedBundleIds {
   /** PRODUCT_BUNDLE_IDENTIFIER from project.pbxproj, preferring Release config. */
   pbxproj: BundleIdCandidate | null
+  /** Xcode application target whose bundle id exactly matches the detected project id. */
+  iosTarget: string | null
   /**
    * The Debug-config PRODUCT_BUNDLE_IDENTIFIER from project.pbxproj, when a
    * literal value exists. Exposed for the awareness note only — never used to
@@ -271,6 +273,7 @@ export function detectIosBundleIds(opts: {
   }
 
   let pbxproj: BundleIdCandidate | null = null
+  let iosTarget: string | null = null
   let debug: BundleIdCandidate | null = null
   let releaseResolved = false
   let plist: BundleIdCandidate | null = null
@@ -289,6 +292,12 @@ export function detectIosBundleIds(opts: {
       // when resolved, else the fallback (which parsePbxprojBundleId derives
       // without ever promoting Debug over a Release value).
       pbxproj = parsed.release ?? parsePbxprojBundleId(content)
+      if (pbxproj) {
+        iosTarget = findSignableTargets(content).find(target =>
+          target.productType === 'com.apple.product-type.application'
+          && target.bundleId === pbxproj?.value,
+        )?.name ?? null
+      }
     }
     catch {
       // unreadable — silently skip
@@ -335,6 +344,7 @@ export function detectIosBundleIds(opts: {
 
   return {
     pbxproj,
+    iosTarget,
     debug,
     plist,
     capacitor,

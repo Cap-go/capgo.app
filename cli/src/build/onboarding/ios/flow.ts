@@ -848,10 +848,11 @@ const TAIL_INPUT_STEPS = new Set<OnboardingStep>([
  * on missing inputs — the same fail-fast guard the android builder uses.
  *
  * Emits the FULL credential map the TUI's `doSaveCredentials` produces — the 5
- * base fields PLUS the ASC API key fields (APPLE_KEY_ID / APPLE_ISSUER_ID /
- * APPLE_KEY_CONTENT) on the create-new (always) and import-app_store paths. The
- * secret .p8 bytes come from the transient `carried.p8Content` (NEVER persisted);
- * the non-secret key/issuer ids come from persisted progress.keyId/issuerId.
+ * base fields, the detected CAPGO_IOS_TARGET when available, PLUS the ASC API
+ * key fields (APPLE_KEY_ID / APPLE_ISSUER_ID / APPLE_KEY_CONTENT) on the
+ * create-new (always) and import-app_store paths. The secret .p8 bytes come from
+ * the transient `carried.p8Content` (NEVER persisted); the non-secret key/issuer
+ * ids come from persisted progress.keyId/issuerId.
  */
 async function buildIosSavedCredentials(progress: OnboardingProgress, deps: IosEffectDeps): Promise<Record<string, string>> {
   const carried = deps.carried
@@ -885,6 +886,14 @@ async function buildIosSavedCredentials(progress: OnboardingProgress, deps: IosE
   }
 
   const distribution = isImport ? (progress.importDistribution || 'app_store') : 'app_store'
+  let iosTarget: string | undefined
+  try {
+    iosTarget = deps.detectBundleIds?.().iosTarget ?? undefined
+  }
+  catch {
+    // Target detection is best-effort; preserve the existing Builder defaults
+    // when the local Xcode project cannot be read.
+  }
 
   const credentials: Record<string, string> = {
     BUILD_CERTIFICATE_BASE64: certData.p12Base64,
@@ -892,6 +901,7 @@ async function buildIosSavedCredentials(progress: OnboardingProgress, deps: IosE
     CAPGO_IOS_PROVISIONING_MAP: JSON.stringify(provisioningMap),
     APP_STORE_CONNECT_TEAM_ID: teamId,
     CAPGO_IOS_DISTRIBUTION: distribution,
+    ...(iosTarget ? { CAPGO_IOS_TARGET: iosTarget } : {}),
   }
 
   // ASC API key fields (mirrors the TUI's doSaveCredentials APPLE_KEY_* writes,
