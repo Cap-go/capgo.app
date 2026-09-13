@@ -2,6 +2,19 @@ declare interface Window {
   // extend the window
 }
 
+declare global {
+  interface Document {
+    modelContext?: import('~/types/webmcp').WebMcpModelContext
+  }
+
+  interface Navigator {
+    /** @deprecated Prefer document.modelContext */
+    modelContext?: import('~/types/webmcp').WebMcpModelContext
+  }
+}
+
+export {}
+
 // with vite-plugin-md, markdowns can be treat as Vue components
 declare module '*.md' {
   import type { ComponentOptions } from 'vue'
