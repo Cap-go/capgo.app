@@ -18,6 +18,7 @@ import IconExternalLink from '~icons/lucide/external-link'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
 import HelpTooltip from '~/components/HelpTooltip.vue'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
+import { rolloutPercentageDraftFromBps, shouldShowRolloutEnableRow, shouldShowRolloutSettings } from '~/services/channelRolloutUi'
 import { formatDate, formatLocalDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
 import { checkCompatibilityNativePackages, defaultApiHost, isCompatible, useSupabase } from '~/services/supabase'
@@ -143,8 +144,8 @@ const rolloutProgressStyle = computed(() => {
   const percentage = Math.max(0, Math.min(100, rolloutPercentage.value))
   return `width: ${percentage}%`
 })
-const showRolloutSettings = computed(() => !!channel.value?.rollout_enabled)
-const showRolloutEnableRow = computed(() => !!channel.value && !channel.value.rollout_enabled)
+const showRolloutSettings = computed(() => shouldShowRolloutSettings(channel.value?.rollout_version))
+const showRolloutEnableRow = computed(() => shouldShowRolloutEnableRow(channel.value?.rollout_version, !!channel.value?.rollout_enabled))
 const rolloutPercentageDraft = ref('0')
 
 const canUpdateChannelSettings = computedAsync(async () => {
@@ -191,6 +192,7 @@ async function getChannel(force = false) {
   // Check if we already have this channel in the store
   if (!force && appDetailStore.currentChannelId === id.value && appDetailStore.currentChannel) {
     channel.value = withBuiltinChannelVersion(appDetailStore.currentChannel as any) as any
+    rolloutPercentageDraft.value = rolloutPercentageDraftFromBps(channel.value?.rollout_percentage_bps)
     if (channel.value?.name)
       displayStore.setChannelName(String(channel.value.id), channel.value.name)
     displayStore.NavTitle = channel.value?.name ?? t('channel')
@@ -258,7 +260,7 @@ async function getChannel(force = false) {
     }
 
     channel.value = withBuiltinChannelVersion(data as any) as unknown as Database['public']['Tables']['channels']['Row'] & Channel
-    rolloutPercentageDraft.value = String((channel.value?.rollout_percentage_bps ?? 0) / 100)
+    rolloutPercentageDraft.value = rolloutPercentageDraftFromBps(channel.value?.rollout_percentage_bps)
 
     // Store in appDetailStore
     appDetailStore.setChannel(id.value, channel.value)

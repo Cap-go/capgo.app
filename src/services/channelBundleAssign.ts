@@ -22,6 +22,24 @@ export function resolveChannelBundleAssignTarget(
   return channelHasProgressiveRollout(channel) ? 'rollout' : 'stable'
 }
 
+export function isBundleLinkedToChannel(
+  channel: Pick<ChannelRolloutState, 'version' | 'rollout_version'>,
+  versionId: number,
+) {
+  return channel.version === versionId || channel.rollout_version === versionId
+}
+
+export function buildChannelBundleUnlinkUpdate(
+  channel: Pick<ChannelRolloutState, 'version' | 'rollout_version'>,
+  versionId: number,
+): Database['public']['Tables']['channels']['Update'] | null {
+  if (channel.rollout_version === versionId)
+    return { rollout_version: null }
+  if (channel.version === versionId)
+    return { version: null }
+  return null
+}
+
 export function buildChannelBundleAssignUpdate(
   channel: ChannelRolloutState,
   versionId: number,

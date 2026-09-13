@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { buildChannelBundleAssignUpdate, resolveChannelBundleAssignTarget } from '../src/services/channelBundleAssign.ts'
+import {
+  buildChannelBundleAssignUpdate,
+  buildChannelBundleUnlinkUpdate,
+  isBundleLinkedToChannel,
+  resolveChannelBundleAssignTarget,
+} from '../src/services/channelBundleAssign.ts'
 
 describe('channel bundle assign helpers', () => {
   it('defaults to rollout when progressive rollout is configured', () => {
@@ -35,5 +40,21 @@ describe('channel bundle assign helpers', () => {
     }, 99, 'stable')).toEqual({
       version: 99,
     })
+  })
+
+  it('detects stable and rollout bundle associations', () => {
+    expect(isBundleLinkedToChannel({ version: 5, rollout_version: null }, 5)).toBe(true)
+    expect(isBundleLinkedToChannel({ version: 5, rollout_version: 10 }, 10)).toBe(true)
+    expect(isBundleLinkedToChannel({ version: 5, rollout_version: 10 }, 99)).toBe(false)
+  })
+
+  it('unlinks the matching stable or rollout field', () => {
+    expect(buildChannelBundleUnlinkUpdate({ version: 5, rollout_version: 10 }, 10)).toEqual({
+      rollout_version: null,
+    })
+    expect(buildChannelBundleUnlinkUpdate({ version: 5, rollout_version: 10 }, 5)).toEqual({
+      version: null,
+    })
+    expect(buildChannelBundleUnlinkUpdate({ version: 5, rollout_version: 10 }, 99)).toBeNull()
   })
 })

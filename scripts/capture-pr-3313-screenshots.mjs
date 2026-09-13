@@ -3,7 +3,10 @@ import { mkdir, readdir, unlink } from 'node:fs/promises'
 import path from 'node:path'
 
 const EMAIL = process.env.CAPGO_SCREENSHOT_EMAIL ?? 'test@capgo.app'
-const PASSWORD = process.env.CAPGO_SCREENSHOT_PASSWORD ?? 'testtest'
+const PASSWORD = process.env.CAPGO_SCREENSHOT_PASSWORD ?? process.env.CAPGO_PREPROD_DEMO_PASSWORD
+if (!PASSWORD) {
+  throw new Error('Set CAPGO_SCREENSHOT_PASSWORD or CAPGO_PREPROD_DEMO_PASSWORD before capturing AFTER screenshots')
+}
 const OUT_DIR = path.resolve('docs/pr-screenshots/3313')
 const AFTER_BASE = process.env.CAPGO_AFTER_BASE_URL ?? 'http://127.0.0.1:5173'
 const APP_ID = process.env.CAPGO_SCREENSHOT_APP_ID ?? 'com.demo.app'
@@ -119,15 +122,19 @@ async function captureBundleAssignDialog(page, baseURL, fileName) {
   if (!(await dialog.count()))
     throw new Error('Channel link dialog not found')
 
-  const productionRow = dialog.locator('#dialog-v2-content div.cursor-pointer').filter({ hasText: /Channel id:\s*1\b/i }).first()
-  if (!(await productionRow.count()))
-    throw new Error('Production channel row not found in link dialog')
-  await productionRow.click()
+  const channelRow = dialog.locator('#dialog-v2-content div.cursor-pointer').filter({
+    hasText: new RegExp(`Channel id:\\s*${CHANNEL_ID}\\b`, 'i'),
+  }).first()
+  if (!(await channelRow.count()))
+    throw new Error(`Channel ${CHANNEL_ID} row not found in link dialog`)
+  await channelRow.click()
   await settle(page)
 
-  const rolloutChoice = dialog.getByText(/auto \(recommended\)|rollout target|replace stable/i).first()
-  if (!(await rolloutChoice.count()))
-    throw new Error('Progressive rollout assign choices not visible in dialog')
+  const assignOptions = ['Auto (recommended)', 'Rollout target', 'Replace stable']
+  for (const label of assignOptions) {
+    if (!(await dialog.getByText(label, { exact: true }).count()))
+      throw new Error(`Bundle assign option not visible: ${label}`)
+  }
 
   await dialog.screenshot({ path: path.join(OUT_DIR, fileName) })
 }

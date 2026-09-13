@@ -18,7 +18,7 @@ import IconSearch from '~icons/ic/round-search?raw'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconPencil from '~icons/lucide/pencil'
 import { fetchLinkedChannelsForVersion, formatLinkedChannel, unlinkLinkedChannels } from '~/services/bundleLinkedChannels'
-import { buildChannelBundleAssignUpdate, channelHasProgressiveRollout, resolveChannelBundleAssignTarget } from '~/services/channelBundleAssign'
+import { buildChannelBundleAssignUpdate, buildChannelBundleUnlinkUpdate, channelHasProgressiveRollout, isBundleLinkedToChannel, resolveChannelBundleAssignTarget } from '~/services/channelBundleAssign'
 import { findChannelsWithoutPromotionPermission, formatChannelPromotionTargets } from '~/services/channelPromotion'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { formatBytes, getChecksumInfo } from '~/services/conversion'
@@ -248,9 +248,14 @@ async function setChannel(
   }
 
   if (id === null) {
+    if (!version.value)
+      throw new Error('No bundle version loaded')
+    const unlinkUpdate = buildChannelBundleUnlinkUpdate(channel, version.value.id)
+    if (!unlinkUpdate)
+      throw new Error('Bundle is not linked to this channel')
     return supabase
       .from('channels')
-      .update({ version: null })
+      .update(unlinkUpdate)
       .eq('id', channel.id)
       .throwOnError()
   }
@@ -911,9 +916,9 @@ async function deleteBundle() {
                   {{ version.min_update_version }}
                 </InfoRow>
 
-                <InfoRow v-if="channels && channels.length > 0 && version && channels.some(c => c.version === version!.id)" :label="t('channel')">
+                <InfoRow v-if="channels && channels.length > 0 && version && channels.some(c => isBundleLinkedToChannel(c, version!.id))" :label="t('channel')">
                   <div class="flex flex-wrap justify-end w-full gap-3">
-                    <div v-for="chn in channels.filter(c => c.version === version!.id)" :id="`open-channel-${chn.id}`" :key="chn.id" class="flex items-center gap-2">
+                    <div v-for="chn in channels.filter(c => isBundleLinkedToChannel(c, version!.id))" :id="`open-channel-${chn.id}`" :key="chn.id" class="flex items-center gap-2">
                       <span
                         class="font-bold text-blue-600 underline cursor-pointer dark:text-blue-500 hover:text-blue-700 underline-offset-4 dark:hover:text-blue-400"
                         @click="openChannel(chn)"

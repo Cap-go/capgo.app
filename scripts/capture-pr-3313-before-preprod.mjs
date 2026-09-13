@@ -3,7 +3,10 @@ import { mkdir, readdir, unlink } from 'node:fs/promises'
 import path from 'node:path'
 
 const EMAIL = process.env.CAPGO_SCREENSHOT_EMAIL ?? 'test@capgo.app'
-const PASSWORD = process.env.CAPGO_SCREENSHOT_PASSWORD ?? 'testtest'
+const PASSWORD = process.env.CAPGO_PREPROD_DEMO_PASSWORD ?? process.env.CAPGO_SCREENSHOT_PASSWORD
+if (!PASSWORD) {
+  throw new Error('Set CAPGO_PREPROD_DEMO_PASSWORD or CAPGO_SCREENSHOT_PASSWORD before capturing preprod screenshots')
+}
 const OUT_DIR = path.resolve('docs/pr-screenshots/3313')
 const BASE_URL = 'https://console.preprod.capgo.app'
 const APP_ID = 'com.demo.app'
