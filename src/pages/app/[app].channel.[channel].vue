@@ -1191,8 +1191,8 @@ async function copyCurlCommand() {
                     <div class="h-full rounded-full transition-[width] duration-200" :class="rolloutProgressClass" :style="rolloutProgressStyle" />
                   </div>
 
-                  <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-                    <div class="grid gap-3 sm:grid-cols-2">
+                  <div class="space-y-3">
+                    <div class="grid gap-3 sm:grid-cols-2 lg:max-w-2xl">
                       <label class="space-y-1.5">
                         <span class="flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
                           <span>{{ t('rollout-percentage') }}</span>
@@ -1241,7 +1241,7 @@ async function copyCurlCommand() {
                       </label>
                     </div>
 
-                    <div class="flex flex-wrap gap-2 lg:justify-end">
+                    <div class="flex flex-wrap gap-2">
                       <button type="button" class="min-h-11 d-btn d-btn-outline d-btn-primary" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
                         {{ t('change-rollout-target') }}
                       </button>

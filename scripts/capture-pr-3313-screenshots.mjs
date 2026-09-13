@@ -5,10 +5,11 @@ import path from 'node:path'
 const EMAIL = process.env.CAPGO_SCREENSHOT_EMAIL ?? 'test@capgo.app'
 const PASSWORD = process.env.CAPGO_SCREENSHOT_PASSWORD ?? 'testtest'
 const OUT_DIR = path.resolve('docs/pr-screenshots/3313')
-const AFTER_BASE = process.env.CAPGO_AFTER_BASE_URL ?? 'http://localhost:5173'
+const AFTER_BASE = process.env.CAPGO_AFTER_BASE_URL ?? 'http://127.0.0.1:5173'
 const APP_ID = process.env.CAPGO_SCREENSHOT_APP_ID ?? 'com.demo.app'
 const CHANNEL_ID = process.env.CAPGO_SCREENSHOT_CHANNEL_ID ?? '1'
 const BUNDLE_ID = process.env.CAPGO_SCREENSHOT_BUNDLE_ID ?? '6'
+
 const PREPROD_SUPABASE_URL = 'https://ibwjdnhknbkcqfbabwei.supabase.co'
 const PREPROD_ANON_KEY = 'sb_publishable_q_TJ5x2krpmTYIcRDknJJQ_fvKFqKYz'
 const PREPROD_STORAGE_KEY = 'sb-ibwjdnhknbkcqfbabwei-auth-token'
@@ -35,7 +36,22 @@ async function fetchPreprodSession() {
   }
 }
 
+async function installSsoBypass(page) {
+  const ssoOk = body => ({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(body),
+  })
+  await page.route('**/private/sso/check-domain', async (route) => {
+    await route.fulfill(ssoOk({ has_sso: false, enforce_sso: false }))
+  })
+  await page.route('**/private/sso/check-enforcement', async (route) => {
+    await route.fulfill(ssoOk({ allowed: true }))
+  })
+}
+
 async function login(page, baseURL) {
+  await installSsoBypass(page)
   const session = await fetchPreprodSession()
   await page.goto(`${baseURL}/login/`, { waitUntil: 'domcontentloaded', timeout: 120000 })
   await page.evaluate(({ storageKey, sessionData }) => {
@@ -46,7 +62,7 @@ async function login(page, baseURL) {
 }
 
 async function settle(page) {
-  await page.waitForLoadState('networkidle', { timeout: 25000 }).catch(() => {})
+  await page.waitForLoadState('domcontentloaded', { timeout: 25000 }).catch(() => {})
   await page.waitForTimeout(1500)
 }
 
@@ -76,6 +92,7 @@ async function captureRolloutSection(page, baseURL, fileName, viewport) {
   await dismissChrome(page)
 
   const section = page.locator('section[aria-labelledby="rollout-settings-title"]')
+  await section.waitFor({ state: 'visible', timeout: 60000 }).catch(() => {})
   if (!(await section.count()))
     throw new Error(`Progressive rollout section not found for ${fileName}`)
   await section.scrollIntoViewIfNeeded()
@@ -116,8 +133,15 @@ async function captureBundleAssignDialog(page, baseURL, fileName) {
 async function removeAfterFiles() {
   await mkdir(OUT_DIR, { recursive: true })
   for (const file of await readdir(OUT_DIR)) {
-    if (file.startsWith('after-preprod-') || file === 'desktop-rollout-section.png' || file === 'mobile-rollout-section.png' || file === 'bundle-assign-dialog.png')
+    if (
+      file.startsWith('after-local-')
+      || file.startsWith('after-preprod-')
+      || file === 'desktop-rollout-section.png'
+      || file === 'mobile-rollout-section.png'
+      || file === 'bundle-assign-dialog.png'
+    ) {
       await unlink(path.join(OUT_DIR, file))
+    }
   }
 }
 
@@ -129,20 +153,20 @@ async function main() {
   const page = await context.newPage()
   page.setDefaultTimeout(120000)
 
-  console.log(`[capture] AFTER PR UI via ${AFTER_BASE} (preprod Supabase auth)`)
+  console.log(`[capture] AFTER PR UI via ${AFTER_BASE} (serve:local + preprod Supabase auth)`)
   await login(page, AFTER_BASE)
   await dismissChrome(page)
 
-  await captureRolloutSection(page, AFTER_BASE, 'after-preprod-desktop-rollout-section.png', { width: 1280, height: 900 })
-  await captureRolloutSection(page, AFTER_BASE, 'after-preprod-mobile-rollout-section.png', { width: 375, height: 812 })
-  await captureBundleAssignDialog(page, AFTER_BASE, 'after-preprod-bundle-assign-dialog.png')
+  await captureRolloutSection(page, AFTER_BASE, 'after-local-desktop-rollout-section.png', { width: 1280, height: 900 })
+  await captureRolloutSection(page, AFTER_BASE, 'after-local-mobile-rollout-section.png', { width: 375, height: 812 })
+  await captureBundleAssignDialog(page, AFTER_BASE, 'after-local-bundle-assign-dialog.png')
 
   for (const name of [
-    'after-preprod-desktop-rollout-section.png',
-    'after-preprod-mobile-rollout-section.png',
-    'after-preprod-bundle-assign-dialog.png',
+    'after-local-desktop-rollout-section.png',
+    'after-local-mobile-rollout-section.png',
+    'after-local-bundle-assign-dialog.png',
   ]) {
-    const shortName = name.replace('after-preprod-', '')
+    const shortName = name.replace('after-local-', '')
     await copyFile(path.join(OUT_DIR, name), path.join(OUT_DIR, shortName))
   }
 
