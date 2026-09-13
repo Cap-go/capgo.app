@@ -90,6 +90,7 @@ function skippedDatabaseResponder() {
         name: 'database',
         critical: true,
         skip: () => true,
+        run: async () => undefined,
       }),
     ],
     extend: (_report, ctx) => ({
@@ -106,19 +107,24 @@ export function registerCapgoHealth(
   const databaseReadOnly = options.databaseReadOnly ?? false
 
   app.on(['GET', 'HEAD'], '/health', async (c) => {
-    if (!hasDatabaseConfig(c))
-      return skippedDatabaseResponder().toResponse(c, c.req.method)
+    const healthCtx = c as HealthCtx
+    if (!hasDatabaseConfig(healthCtx))
+      return skippedDatabaseResponder().toResponse(healthCtx, c.req.method)
 
     let databaseUrl: string
     try {
-      const resolveDatabaseURL = options.getDatabaseURL ?? (await import('./pg.ts')).getDatabaseURL
-      databaseUrl = resolveDatabaseURL(c, databaseReadOnly)
+      if (options.getDatabaseURL) {
+        databaseUrl = options.getDatabaseURL(healthCtx, databaseReadOnly)
+      }
+      else {
+        databaseUrl = (await import('./pg.ts')).getDatabaseURL(healthCtx, databaseReadOnly)
+      }
     }
     catch {
-      return skippedDatabaseResponder().toResponse(c, c.req.method)
+      return skippedDatabaseResponder().toResponse(healthCtx, c.req.method)
     }
 
     const responder = getResponder(databaseReadOnly, databaseUrl)
-    return responder.toResponse(c, c.req.method)
+    return responder.toResponse(healthCtx, c.req.method)
   })
 }
