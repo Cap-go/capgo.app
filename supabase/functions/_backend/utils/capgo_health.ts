@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { Hono } from 'hono/tiny'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import { createHealthResponder, probe, readEnv, runProbes } from '@openstatus/health'
+import type { PoolClient } from 'pg'
 import { Pool } from 'pg'
 import { getEnv } from './utils.ts'
 import { version as CapgoVersion } from './version.ts'
@@ -27,6 +28,9 @@ function cacheKey(databaseReadOnly: boolean, databaseUrl: string) {
   return `${databaseReadOnly ? 'ro' : 'rw'}:${databaseUrl}`
 }
 
+const DATABASE_PROBE_STATEMENT_TIMEOUT_MS = 2000
+
+/** True when this request has Postgres env vars or Hyperdrive bindings for a DB probe. */
 export function hasDatabaseConfig(c: HealthCtx) {
   if (readEnv('SUPABASE_DB_URL') || readEnv('MAIN_SUPABASE_DB_URL'))
     return true
@@ -42,23 +46,44 @@ export function hasDatabaseConfig(c: HealthCtx) {
   return false
 }
 
-async function pingDatabase(databaseUrl: string, signal: AbortSignal) {
+/** Run `SELECT 1`; destroy the checked-out client if the OpenStatus probe aborts. */
+export async function pingDatabase(databaseUrl: string, signal: AbortSignal) {
   const pool = new Pool({
     connectionString: databaseUrl,
     max: 1,
     connectionTimeoutMillis: 5000,
     idleTimeoutMillis: 1000,
   })
+  let client: PoolClient | undefined
   try {
-    const query = pool.query('SELECT 1')
-    if (signal.aborted)
-      throw new Error('aborted')
-    signal.addEventListener('abort', () => {
-      void pool.end().catch(() => undefined)
-    }, { once: true })
-    await query
+    client = await pool.connect()
+    await client.query(`SET statement_timeout TO ${DATABASE_PROBE_STATEMENT_TIMEOUT_MS}`)
+    const queryPromise = client.query('SELECT 1')
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        client?.release(true)
+        client = undefined
+        reject(new Error('aborted'))
+      }
+      if (signal.aborted) {
+        onAbort()
+        return
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      queryPromise
+        .then(() => {
+          signal.removeEventListener('abort', onAbort)
+          resolve()
+        })
+        .catch((err) => {
+          signal.removeEventListener('abort', onAbort)
+          reject(err)
+        })
+    })
   }
   finally {
+    if (client)
+      client.release()
     await pool.end().catch(() => undefined)
   }
 }
@@ -113,6 +138,7 @@ export async function runCapgoWorkerLivenessProbe() {
   await runProbes([workerProbe], { timeoutMs: 1000 })
 }
 
+/** Build the OpenStatus `/health` response for this Hono request. */
 export async function resolveCapgoHealthResponse(
   c: HealthCtx,
   options: CapgoHealthOptions = {},
@@ -138,6 +164,7 @@ export async function resolveCapgoHealthResponse(
   return getDatabaseResponder(databaseReadOnly, databaseUrl).toResponse(c, c.req.method)
 }
 
+/** Mount `GET /health` (HEAD is served implicitly by Hono v4). */
 export function registerCapgoHealth(
   app: Hono<MiddlewareKeyVariables>,
   options: CapgoHealthOptions = {},
@@ -147,6 +174,7 @@ export function registerCapgoHealth(
   })
 }
 
+/** Mount `POST /ok` with a worker liveness probe and legacy `{ status: 'ok' }` body. */
 export function registerCapgoLivenessPostOk(app: Hono<MiddlewareKeyVariables>) {
   app.post('/ok', async (c) => {
     await runCapgoWorkerLivenessProbe()

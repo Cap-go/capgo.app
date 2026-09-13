@@ -453,6 +453,7 @@ async function fetchQueueMetrics(
   }
 }
 
+/** Run pgmq metrics and return Capgo legacy queue health payload plus HTTP status for OpenStatus wrapping. */
 export async function buildQueueHealthAssessment(
   c: Context,
   pgClient: ReturnType<typeof getPgClient>,
