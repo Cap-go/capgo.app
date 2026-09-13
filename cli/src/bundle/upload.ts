@@ -823,6 +823,10 @@ function formatRolloutPercentage(bps: number) {
   return `${Number((bps / 100).toFixed(2))}%`
 }
 
+function channelHasProgressiveRollout(channel: Pick<UploadTargetChannel, 'rollout_enabled' | 'rollout_version'>) {
+  return channel.rollout_enabled || channel.rollout_version != null
+}
+
 async function getVersionIdForChannelUpdate(supabase: SupabaseType, apikey: string, appid: string, bundle: string) {
   const { data: versionId } = await supabase
     .rpc('get_app_versions', { apikey, name_version: bundle, appid })
@@ -1058,7 +1062,7 @@ async function promoteExistingChannel(
   targetChannel: UploadTargetChannel,
   localConfig: localConfigType,
   displayBundleUrl: boolean,
-  options?: { supaHost?: string, supaAnon?: string },
+  options?: Pick<OptionsUpload, 'supaHost' | 'supaAnon' | 'stable'>,
 ): Promise<boolean> {
   const { error } = await invokeCapgoCliApi('bundle', {
     apikey,
@@ -1067,6 +1071,7 @@ async function promoteExistingChannel(
       app_id: appid,
       version_id: versionId,
       channel_id: targetChannel.id,
+      ...(options?.stable ? { target: 'stable' } : {}),
     },
     supaHost: options?.supaHost,
     supaAnon: options?.supaAnon,
@@ -1077,8 +1082,8 @@ async function promoteExistingChannel(
   }
 
   const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${targetChannel.id}`
-  if (targetChannel.rollout_enabled && targetChannel.rollout_version != null) {
-    log.warn('This channel has an active progressive rollout. Linking this bundle as the stable version resets that rollout, so devices receive the new bundle instead of the previous rollout target.')
+  if (!options?.stable && channelHasProgressiveRollout(targetChannel)) {
+    log.info('Channel has progressive rollout configured. This bundle was set as the rollout target; stable bundle stays unchanged.')
   }
   else if (targetChannel.public) {
     log.info('Your update is now available in your public channel 🎉')
@@ -1105,7 +1110,7 @@ async function setVersionInChannel(
   targetChannel: UploadTargetChannel | null,
   requireChannelAssignment = false,
   selfAssign?: boolean,
-  cliHost?: { supaHost?: string, supaAnon?: string },
+  options?: Pick<OptionsUpload, 'supaHost' | 'supaAnon' | 'stable'>,
 ): Promise<boolean> {
   const canPromoteTargetChannel = targetChannel !== null
     && await hasCliPermission(supabase, apikey, 'channel.promote_bundle', { appId: appid, channelId: targetChannel.id })
@@ -1122,41 +1127,28 @@ async function setVersionInChannel(
 
   if (targetChannel && canPromoteTargetChannel) {
     const versionId = await getVersionIdForChannelUpdate(supabase, apikey, appid, bundle)
-    if (selfAssign) {
-      const canUpdateChannelSettings = await hasCliPermission(supabase, apikey, 'channel.update_settings', { appId: appid, channelId: targetChannel.id })
-      if (!canUpdateChannelSettings) {
-        log.warn('Cannot enable device self-assign because this API key lacks channel.update_settings')
-        return promoteExistingChannel(apikey, appid, versionId, targetChannel, localConfig, displayBundleUrl, cliHost)
-      }
-    }
+    const promoted = await promoteExistingChannel(apikey, appid, versionId, targetChannel, localConfig, displayBundleUrl, options)
+    if (!promoted)
+      return false
 
     if (!selfAssign)
-      return promoteExistingChannel(apikey, appid, versionId, targetChannel, localConfig, displayBundleUrl, cliHost)
+      return true
 
-    const { error: dbError3, data } = await updateOrCreateChannel(supabase, {
+    const canUpdateChannelSettings = await hasCliPermission(supabase, apikey, 'channel.update_settings', { appId: appid, channelId: targetChannel.id })
+    if (!canUpdateChannelSettings) {
+      log.warn('Cannot enable device self-assign because this API key lacks channel.update_settings')
+      return true
+    }
+
+    const { error: dbError3 } = await updateOrCreateChannel(supabase, {
       name: channel,
       app_id: appid,
       created_by: userId,
-      version: versionId,
       owner_org: orgId,
-      ...(selfAssign ? { allow_device_self_set: true } : {}),
+      allow_device_self_set: true,
     })
     if (dbError3) {
       await uploadFailIfChannelError(dbError3, () => `Cannot set channel because this API key does not have the required RBAC permission. ${formatError(dbError3)}`)
-    }
-    if (data?.id) {
-      const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${data.id}`
-      if (targetChannel.rollout_enabled && targetChannel.rollout_version != null) {
-        log.warn('This channel has an active progressive rollout. Linking this bundle as the stable version resets that rollout, so devices receive the new bundle instead of the previous rollout target.')
-      }
-      else if (data.public) {
-        log.info('Your update is now available in your public channel 🎉')
-      }
-      else {
-        log.info(`Link device to this bundle to try it: ${bundleUrl}`)
-      }
-      if (displayBundleUrl)
-        log.info(`Bundle url: ${bundleUrl}`)
     }
     return true
   }
@@ -1173,8 +1165,8 @@ async function setVersionInChannel(
         version: bundle,
         ...(selfAssign ? { allow_device_self_set: true } : {}),
       },
-      supaHost: cliHost?.supaHost,
-      supaAnon: cliHost?.supaAnon,
+      supaHost: options?.supaHost,
+      supaAnon: options?.supaAnon,
     })
     if (error) {
       await uploadFailIfChannelError(error, async () => `Cannot create channel and set its bundle because this API key does not have the required RBAC permission. ${await formatFunctionInvokeError(error)}`)
@@ -2177,6 +2169,9 @@ export function checkValidOptions(options: OptionsUpload) {
   }
   if (options.rolloutCacheTtlSeconds != null && (!Number.isInteger(options.rolloutCacheTtlSeconds) || options.rolloutCacheTtlSeconds < 60 || options.rolloutCacheTtlSeconds > 31536000)) {
     uploadFail('Rollout cache TTL seconds must be between 60 and 31536000')
+  }
+  if (options.stable === true && hasUploadRollout) {
+    uploadFail('You cannot use --stable together with --rollout, --rollout-percentage-bps, or --rollout-advance')
   }
   if (hasUploadRollout && options.dryUpload) {
     uploadFail('You cannot use --rollout or --rollout-advance with --dry-upload because dry upload does not update channels')

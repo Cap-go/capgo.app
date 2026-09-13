@@ -253,6 +253,17 @@ test('--rollout-advance alone does not trigger a dry-upload conflict', () => {
   assert.doesNotThrow(() => checkValidOptions({ rolloutAdvance: true }))
 })
 
+test('--stable with rollout options is rejected', () => {
+  assert.throws(
+    () => checkValidOptions({ stable: true, rolloutAdvance: true }),
+    (error) => {
+      assert.ok(error instanceof Error, 'expected an Error to be thrown')
+      assert.match(error.message, /--stable/, 'message should mention --stable')
+      return true
+    },
+  )
+})
+
 console.log('\n🧪 Testing rejectOrAcceptIncompatibleChannelBundle...\n')
 
 test('channel set throws when incompatible and not accepted', () => {
