@@ -250,11 +250,9 @@ export async function respondOpenStatusAdminCheck<C extends HealthCtx>(
   })
 
   const response = await responder.toResponse(c, c.req.method)
-  if (!assessment) {
-    assessment = options.deadlineFallbackAssessment?.()
-    if (!assessment)
-      return response
-  }
+  const finalAssessment = assessment ?? options.deadlineFallbackAssessment?.()
+  if (!finalAssessment)
+    return response
 
   const openStatusBody = await response.clone().json().catch(() => ({})) as Record<string, unknown>
   const additive: Record<string, unknown> = {}
@@ -264,20 +262,20 @@ export async function respondOpenStatusAdminCheck<C extends HealthCtx>(
   }
 
   const body = {
-    ...assessment.legacyBody,
+    ...finalAssessment.legacyBody,
     ...additive,
-    status: assessment.capgoStatus,
+    status: finalAssessment.capgoStatus,
   }
 
   if (c.req.method === 'HEAD') {
     return new Response(null, {
-      status: assessment.httpStatus,
+      status: finalAssessment.httpStatus,
       headers: response.headers,
     })
   }
 
   return new Response(JSON.stringify(body), {
-    status: assessment.httpStatus,
+    status: finalAssessment.httpStatus,
     headers: response.headers,
   })
 }
