@@ -520,12 +520,14 @@ app.get('/', async (c) => {
   })
 
   const thresholds = defaultThresholds()
-  const pgClient = getPgClient(c, false)
+  let pgClient: ReturnType<typeof getPgClient> | undefined
 
   try {
+    pgClient = getPgClient(c, false)
+    const assessment = await buildQueueHealthAssessment(c, pgClient)
     return await respondOpenStatusAdminCheck(c, {
       probeName: 'pgmq_queues',
-      runAssessment: () => buildQueueHealthAssessment(c, pgClient),
+      runAssessment: async () => assessment,
     })
   }
   catch (error) {
@@ -559,6 +561,7 @@ app.get('/', async (c) => {
     })
   }
   finally {
-    await closeClient(c, pgClient)
+    if (pgClient)
+      await closeClient(c, pgClient)
   }
 })

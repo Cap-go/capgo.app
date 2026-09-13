@@ -133,6 +133,26 @@ function skippedDatabaseResponder() {
   })
 }
 
+function databaseUrlResolutionFailedResponder() {
+  return createHealthResponder<HealthCtx>({
+    cacheMs: 0,
+    probes: [
+      workerProbe,
+      probe({
+        name: 'database',
+        critical: true,
+        run: async () => {
+          throw new Error('database_url_resolution_failed')
+        },
+      }),
+    ],
+    extend: (_report, ctx) => ({
+      version: CapgoVersion,
+      worker: getEnv(ctx, 'ENV_NAME') || undefined,
+    }),
+  })
+}
+
 /** Process liveness for legacy `/ok` — worker up, always returns 200 when isolate runs. */
 export async function runCapgoWorkerLivenessProbe() {
   await runProbes([workerProbe], { timeoutMs: 1000 })
@@ -158,7 +178,7 @@ export async function resolveCapgoHealthResponse(
     }
   }
   catch {
-    return skippedDatabaseResponder().toResponse(c, c.req.method)
+    return databaseUrlResolutionFailedResponder().toResponse(c, c.req.method)
   }
 
   return getDatabaseResponder(databaseReadOnly, databaseUrl).toResponse(c, c.req.method)

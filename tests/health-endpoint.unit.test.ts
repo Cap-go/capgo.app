@@ -32,9 +32,9 @@ describe('capgo /health endpoint', () => {
 
   it.concurrent('exposes /health on plugin worker with database probe', async () => {
     const response = await pluginWorker.fetch(new Request('https://plugin.preprod.capgo.app/health'))
-    expect(response.status).toBeGreaterThanOrEqual(200)
     const body = await response.json() as { status: string, checks?: Array<{ name: string }> }
     expect(body.status).toMatch(/^(ok|degraded|unhealthy)$/)
+    expect(response.status).toBe(body.status === 'unhealthy' ? 503 : 200)
     expect(body.checks?.some(check => check.name === 'database')).toBe(true)
   })
 
