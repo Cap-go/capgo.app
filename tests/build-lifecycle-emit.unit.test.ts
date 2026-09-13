@@ -22,6 +22,10 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   }),
 }))
 
+vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
+  backgroundTask: (_context: unknown, promise: Promise<unknown>) => promise,
+}))
+
 const { emitBuildTransitionEvent } = await import('../supabase/functions/_backend/utils/build_tracking.ts')
 
 const baseBuild = {

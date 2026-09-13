@@ -4,6 +4,7 @@ import { sendDiscordAlert } from './discord.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
 import { supabaseAdmin } from './supabase.ts'
 import { sendEventToTracking } from './tracking.ts'
+import { backgroundTask } from './utils.ts'
 
 export type BuildTransition = 'started' | 'succeeded' | 'failed' | 'timed_out'
 export type BuildFailureCategory = 'timeout' | 'builder_error' | 'validation_error' | 'unknown'
@@ -197,5 +198,5 @@ export async function emitBuildTransitionEvent(c: Context, input: EmitBuildTrans
   }
 
   if (transition === 'failed')
-    await sendFastBuildFailureAlert(c, input)
+    await backgroundTask(c, sendFastBuildFailureAlert(c, input))
 }
