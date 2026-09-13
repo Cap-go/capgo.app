@@ -100,6 +100,7 @@ async function captureRolloutSection(page, baseURL, fileName, viewport) {
 }
 
 async function captureBundleAssignDialog(page, baseURL, fileName) {
+  await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto(`${baseURL}/app/${APP_ID}/bundle/${BUNDLE_ID}`, {
     waitUntil: 'domcontentloaded',
     timeout: 120000,
@@ -108,6 +109,7 @@ async function captureBundleAssignDialog(page, baseURL, fileName) {
   await dismissChrome(page)
 
   const setBundleLink = page.locator('#open-channel').first()
+  await setBundleLink.waitFor({ state: 'visible', timeout: 60000 }).catch(() => {})
   if (!(await setBundleLink.count()))
     throw new Error('Set bundle entry not found on bundle page')
   await setBundleLink.click({ force: true })
