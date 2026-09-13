@@ -24,10 +24,7 @@ describe('pingDatabase', () => {
   })
 
   it('destroys the client when the probe aborts before the query settles', async () => {
-    let rejectQuery: (err: Error) => void = () => {}
-    const queryPromise = new Promise<unknown>((_, reject) => {
-      rejectQuery = reject
-    })
+    const queryPromise = new Promise<unknown>(() => {})
     const client = {
       query: vi.fn()
         .mockResolvedValueOnce(undefined)
@@ -45,7 +42,6 @@ describe('pingDatabase', () => {
     await expect(ping).rejects.toThrow('aborted')
     expect(mockRelease).toHaveBeenCalledWith(true)
     expect(mockEnd).toHaveBeenCalled()
-    rejectQuery(new Error('cancelled'))
   })
 
   it('releases the client normally when the query completes', async () => {

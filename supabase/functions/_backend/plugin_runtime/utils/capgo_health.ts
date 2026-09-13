@@ -28,7 +28,34 @@ function cacheKey(databaseReadOnly: boolean, databaseUrl: string) {
   return `${databaseReadOnly ? 'ro' : 'rw'}:${databaseUrl}`
 }
 
-const DATABASE_PROBE_STATEMENT_TIMEOUT_MS = 2000
+const DATABASE_PROBE_CONNECT_TIMEOUT_MS = 2000
+
+async function awaitAbortable<T>(
+  signal: AbortSignal,
+  run: () => Promise<T>,
+  onAbort?: () => void,
+): Promise<T> {
+  return await new Promise((resolve, reject) => {
+    const onAbortHandler = () => {
+      onAbort?.()
+      reject(new Error('aborted'))
+    }
+    if (signal.aborted) {
+      onAbortHandler()
+      return
+    }
+    signal.addEventListener('abort', onAbortHandler, { once: true })
+    run()
+      .then((value) => {
+        signal.removeEventListener('abort', onAbortHandler)
+        resolve(value)
+      })
+      .catch((err) => {
+        signal.removeEventListener('abort', onAbortHandler)
+        reject(err)
+      })
+  })
+}
 
 /** True when this request has Postgres env vars or Hyperdrive bindings for a DB probe. */
 export function hasDatabaseConfig(c: HealthCtx) {
@@ -51,34 +78,23 @@ async function pingDatabase(databaseUrl: string, signal: AbortSignal) {
   const pool = new Pool({
     connectionString: databaseUrl,
     max: 1,
-    connectionTimeoutMillis: 5000,
+    connectionTimeoutMillis: DATABASE_PROBE_CONNECT_TIMEOUT_MS,
     idleTimeoutMillis: 1000,
   })
   let client: PoolClient | undefined
   try {
-    client = await pool.connect()
-    await client.query(`SET statement_timeout TO ${DATABASE_PROBE_STATEMENT_TIMEOUT_MS}`)
-    const queryPromise = client.query('SELECT 1')
-    await new Promise<void>((resolve, reject) => {
-      const onAbort = () => {
-        client?.release(true)
-        client = undefined
-        reject(new Error('aborted'))
-      }
-      if (signal.aborted) {
-        onAbort()
-        return
-      }
-      signal.addEventListener('abort', onAbort, { once: true })
-      queryPromise
-        .then(() => {
-          signal.removeEventListener('abort', onAbort)
-          resolve()
-        })
-        .catch((err) => {
-          signal.removeEventListener('abort', onAbort)
-          reject(err)
-        })
+    client = await awaitAbortable(signal, () => pool.connect(), () => {
+      void pool.end().catch(() => undefined)
+    })
+    await awaitAbortable(signal, () => client!.query('SET statement_timeout TO 2000'), () => {
+      client?.release(true)
+      client = undefined
+    })
+    if (!client)
+      throw new Error('aborted')
+    await awaitAbortable(signal, () => client!.query('SELECT 1'), () => {
+      client?.release(true)
+      client = undefined
     })
   }
   finally {

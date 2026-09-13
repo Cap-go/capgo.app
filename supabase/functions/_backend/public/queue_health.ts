@@ -509,6 +509,32 @@ export async function buildQueueHealthAssessment(
   }
 }
 
+function queueHealthErrorAssessment(thresholds: QueueHealthThresholds) {
+  return {
+    capgoStatus: 'ko' as const,
+    httpStatus: 500,
+    legacyBody: {
+      status: 'ko',
+      error: 'queue_health_error',
+      message: 'Failed to check queue health',
+      checked_at: new Date().toISOString(),
+      no_queues_registered: null,
+      queue_count: 0,
+      healthy_count: 0,
+      unhealthy_count: 0,
+      max_queue_depth: 0,
+      max_archive_recent_count: 0,
+      total_stuck_count: 0,
+      total_never_read_stale_count: 0,
+      total_archive_stale_count: 0,
+      thresholds,
+      criteria: buildQueueHealthCriteria(thresholds),
+      unhealthy_queues: [] as Array<Record<string, unknown>>,
+      queues: [] as Array<Record<string, unknown>>,
+    },
+  }
+}
+
 export const app = honoFactory.createApp()
 
 app.use('*', useCors)
@@ -524,10 +550,19 @@ app.get('/', async (c) => {
 
   try {
     pgClient = getPgClient(c, false)
-    const assessment = await buildQueueHealthAssessment(c, pgClient)
+    const client = pgClient
     return await respondOpenStatusAdminCheck(c, {
       probeName: 'pgmq_queues',
-      runAssessment: async () => assessment,
+      runAssessment: async () => {
+        try {
+          return await buildQueueHealthAssessment(c, client)
+        }
+        catch (error) {
+          logPgError(c, 'queue_health', error)
+          cloudlogErr({ requestId: c.get('requestId'), message: 'queue_health_error', error })
+          return queueHealthErrorAssessment(thresholds)
+        }
+      },
     })
   }
   catch (error) {
@@ -535,29 +570,7 @@ app.get('/', async (c) => {
     cloudlogErr({ requestId: c.get('requestId'), message: 'queue_health_error', error })
     return await respondOpenStatusAdminCheck(c, {
       probeName: 'pgmq_queues',
-      runAssessment: async () => ({
-        capgoStatus: 'ko' as const,
-        httpStatus: 500,
-        legacyBody: {
-          status: 'ko',
-          error: 'queue_health_error',
-          message: 'Failed to check queue health',
-          checked_at: new Date().toISOString(),
-          no_queues_registered: null,
-          queue_count: 0,
-          healthy_count: 0,
-          unhealthy_count: 0,
-          max_queue_depth: 0,
-          max_archive_recent_count: 0,
-          total_stuck_count: 0,
-          total_never_read_stale_count: 0,
-          total_archive_stale_count: 0,
-          thresholds,
-          criteria: buildQueueHealthCriteria(thresholds),
-          unhealthy_queues: [],
-          queues: [],
-        },
-      }),
+      runAssessment: async () => queueHealthErrorAssessment(thresholds),
     })
   }
   finally {
