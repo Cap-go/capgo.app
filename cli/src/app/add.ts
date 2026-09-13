@@ -413,7 +413,7 @@ export async function addAppInternal(
       const message = formatError(ownershipError)
       if (!silent)
         log.error(`Could not add app ${message}`)
-      throw new Error(`Could not add app ${message}`)
+      throw new CliUserError(`Could not add app ${message}`)
     }
 
     if (duplicateOutcome === 'duplicate_owned') {
@@ -423,13 +423,13 @@ export async function addAppInternal(
       const takenMessage = `App ID ${appId} already exists`
       if (!silent)
         log.error(`Could not add app: ${takenMessage}`)
-      throw new Error(`Could not add app: ${takenMessage}`)
+      throw new CliUserError(`Could not add app: ${takenMessage}`)
     }
     else {
       const message = formatError(error)
       if (!silent)
         log.error(`Could not add app ${message}`)
-      throw new Error(`Could not add app ${message}`)
+      throw new CliUserError(`Could not add app ${message}`)
     }
   }
 
