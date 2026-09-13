@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const sendEventToTrackingMock = vi.hoisted(() => vi.fn())
 const sendDiscordAlertMock = vi.hoisted(() => vi.fn())
 const maybeSingleMock = vi.hoisted(() => vi.fn())
+const backgroundTaskMock = vi.hoisted(() => vi.fn())
 
 vi.mock('../supabase/functions/_backend/utils/tracking.ts', () => ({
   sendEventToTracking: sendEventToTrackingMock,
@@ -23,7 +24,7 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
 }))
 
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
-  backgroundTask: (_context: unknown, promise: Promise<unknown>) => promise,
+  backgroundTask: backgroundTaskMock,
 }))
 
 const { emitBuildTransitionEvent } = await import('../supabase/functions/_backend/utils/build_tracking.ts')
@@ -52,6 +53,8 @@ describe('emitBuildTransitionEvent', () => {
     sendDiscordAlertMock.mockResolvedValue(true)
     maybeSingleMock.mockReset()
     maybeSingleMock.mockResolvedValue({ data: { email: 'developer@example.test' }, error: null })
+    backgroundTaskMock.mockReset()
+    backgroundTaskMock.mockResolvedValue(null)
   })
 
   it('emits Build Started with no duration_seconds and no failure_category', async () => {
@@ -192,6 +195,9 @@ describe('emitBuildTransitionEvent', () => {
   })
 
   it('alerts Discord below the 10-second boundary and includes identifying fields', async () => {
+    let resolveEmailLookup!: (value: unknown) => void
+    maybeSingleMock.mockReturnValue(new Promise(resolve => resolveEmailLookup = resolve))
+
     await emitBuildTransition({
       jobId: 'job-uuid-1',
       previousStatus: 'running',
@@ -199,6 +205,11 @@ describe('emitBuildTransitionEvent', () => {
       timeoutApplied: false,
       effectiveBuildTimeSeconds: 9,
     })
+
+    expect(backgroundTaskMock).toHaveBeenCalledTimes(1)
+    expect(sendDiscordAlertMock).not.toHaveBeenCalled()
+    resolveEmailLookup({ data: { email: 'developer@example.test' }, error: null })
+    await backgroundTaskMock.mock.calls[0][1]
 
     expect(sendDiscordAlertMock).toHaveBeenCalledTimes(1)
     const payload = sendDiscordAlertMock.mock.calls[0][1]
@@ -213,6 +224,7 @@ describe('emitBuildTransitionEvent', () => {
     })
 
     sendDiscordAlertMock.mockClear()
+    backgroundTaskMock.mockClear()
     await emitBuildTransition({
       jobId: 'job-uuid-2',
       previousStatus: 'running',
@@ -222,5 +234,6 @@ describe('emitBuildTransitionEvent', () => {
     })
 
     expect(sendDiscordAlertMock).not.toHaveBeenCalled()
+    expect(backgroundTaskMock).not.toHaveBeenCalled()
   })
 })
