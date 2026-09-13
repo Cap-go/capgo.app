@@ -1127,41 +1127,28 @@ async function setVersionInChannel(
 
   if (targetChannel && canPromoteTargetChannel) {
     const versionId = await getVersionIdForChannelUpdate(supabase, apikey, appid, bundle)
-    if (selfAssign) {
-      const canUpdateChannelSettings = await hasCliPermission(supabase, apikey, 'channel.update_settings', { appId: appid, channelId: targetChannel.id })
-      if (!canUpdateChannelSettings) {
-        log.warn('Cannot enable device self-assign because this API key lacks channel.update_settings')
-        return promoteExistingChannel(apikey, appid, versionId, targetChannel, localConfig, displayBundleUrl, options)
-      }
-    }
+    const promoted = await promoteExistingChannel(apikey, appid, versionId, targetChannel, localConfig, displayBundleUrl, options)
+    if (!promoted)
+      return false
 
     if (!selfAssign)
-      return promoteExistingChannel(apikey, appid, versionId, targetChannel, localConfig, displayBundleUrl, options)
+      return true
 
-    const { error: dbError3, data } = await updateOrCreateChannel(supabase, {
+    const canUpdateChannelSettings = await hasCliPermission(supabase, apikey, 'channel.update_settings', { appId: appid, channelId: targetChannel.id })
+    if (!canUpdateChannelSettings) {
+      log.warn('Cannot enable device self-assign because this API key lacks channel.update_settings')
+      return true
+    }
+
+    const { error: dbError3 } = await updateOrCreateChannel(supabase, {
       name: channel,
       app_id: appid,
       created_by: userId,
-      version: versionId,
       owner_org: orgId,
-      ...(selfAssign ? { allow_device_self_set: true } : {}),
+      allow_device_self_set: true,
     })
     if (dbError3) {
       await uploadFailIfChannelError(dbError3, () => `Cannot set channel because this API key does not have the required RBAC permission. ${formatError(dbError3)}`)
-    }
-    if (data?.id) {
-      const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${data.id}`
-      if (!options?.stable && targetChannel && channelHasProgressiveRollout(targetChannel)) {
-        log.info('Channel has progressive rollout configured. This bundle was set as the rollout target; stable bundle stays unchanged.')
-      }
-      else if (data.public) {
-        log.info('Your update is now available in your public channel 🎉')
-      }
-      else {
-        log.info(`Link device to this bundle to try it: ${bundleUrl}`)
-      }
-      if (displayBundleUrl)
-        log.info(`Bundle url: ${bundleUrl}`)
     }
     return true
   }

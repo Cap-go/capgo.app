@@ -51,6 +51,10 @@ describe('channel bundle assign helpers', () => {
   it('unlinks the matching stable or rollout field', () => {
     expect(buildChannelBundleUnlinkUpdate({ version: 5, rollout_version: 10 }, 10)).toEqual({
       rollout_version: null,
+      rollout_enabled: false,
+      rollout_percentage_bps: 0,
+      rollout_paused_at: null,
+      rollout_pause_reason: null,
     })
     expect(buildChannelBundleUnlinkUpdate({ version: 5, rollout_version: 10 }, 5)).toEqual({
       version: null,

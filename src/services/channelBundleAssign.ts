@@ -33,8 +33,15 @@ export function buildChannelBundleUnlinkUpdate(
   channel: Pick<ChannelRolloutState, 'version' | 'rollout_version'>,
   versionId: number,
 ): Database['public']['Tables']['channels']['Update'] | null {
-  if (channel.rollout_version === versionId)
-    return { rollout_version: null }
+  if (channel.rollout_version === versionId) {
+    return {
+      rollout_version: null,
+      rollout_enabled: false,
+      rollout_percentage_bps: 0,
+      rollout_paused_at: null,
+      rollout_pause_reason: null,
+    }
+  }
   if (channel.version === versionId)
     return { version: null }
   return null
