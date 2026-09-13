@@ -5312,15 +5312,6 @@ export type Database = {
           mau: number
         }[]
       }
-      read_native_version_usage: {
-        Args: { p_app_id: string; p_period_end: string; p_period_start: string }
-        Returns: {
-          date: string
-          devices: number
-          platform: string
-          version_build: string
-        }[]
-      }
       read_native_active_devices_summary: {
         Args: { p_app_id: string; p_period_end: string; p_period_start: string }
         Returns: {
@@ -5334,6 +5325,15 @@ export type Database = {
           date: string
           devices: number
           platform: string
+        }[]
+      }
+      read_native_version_usage: {
+        Args: { p_app_id: string; p_period_end: string; p_period_start: string }
+        Returns: {
+          date: string
+          devices: number
+          platform: string
+          version_build: string
         }[]
       }
       read_storage_usage: {
