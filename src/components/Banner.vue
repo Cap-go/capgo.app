@@ -103,7 +103,7 @@ const bannerColor = computed(() => {
   <!-- Desktop inline version -->
   <div
     v-if="props.desktop && showBanner"
-    class="flex items-center ml-auto space-x-2 sm:space-x-3 min-w-0 max-w-[50vw] lg:max-w-full overflow-hidden"
+    class="flex items-center ml-auto space-x-1 min-w-0 max-w-[calc(100vw-4.75rem)] overflow-hidden sm:space-x-2 lg:max-w-full lg:space-x-3"
     data-test="org-billing-banner"
   >
     <component

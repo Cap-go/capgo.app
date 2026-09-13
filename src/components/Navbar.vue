@@ -40,17 +40,17 @@ const { t } = useI18n()
 <template>
   <header class="relative z-40 bg-slate-100 backdrop-blur-xl dark:bg-slate-900">
     <div class="px-2 sm:px-4 lg:px-6">
-      <div class="relative flex items-center justify-between h-16 -mb-px">
+      <div class="relative flex items-center h-16 -mb-px">
         <!-- Header: Left side -->
-        <div class="flex items-center space-x-4 lg:space-x-3">
-          <div v-if="displayStore.NavTitle && isMobile" class="pr-2">
+        <div class="z-10 flex shrink-0 items-center gap-0.5 sm:gap-1 lg:gap-3">
+          <div v-if="displayStore.NavTitle && isMobile">
             <button
               type="button"
-              class="flex p-2 rounded-sm dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:bg-slate-600 hover:bg-slate-300"
+              class="flex p-1 rounded-sm dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:bg-slate-600 hover:bg-slate-300"
               :aria-label="t('button-back')"
               @click="back()"
             >
-              <IconBack class="w-6 h-6 fill-current" />
+              <IconBack class="w-5 h-5 fill-current" />
               <span class="hidden md:block">{{ t('button-back') }}</span>
             </button>
           </div>
@@ -79,7 +79,7 @@ const { t } = useI18n()
             @click.stop="$emit('toggleSidebar')"
           >
             <span class="sr-only">{{ props.sidebarOpen ? t('close-sidebar') : t('open-sidebar') }}</span>
-            <IconMenu class="w-6 h-6 fill-current" />
+            <IconMenu class="w-5 h-5 fill-current" />
           </button>
 
           <!-- Title on desktop -->
@@ -117,20 +117,23 @@ const { t } = useI18n()
           </div>
         </div>
 
-        <!-- Centered title on mobile -->
-        <div class="flex-1 px-4 text-center lg:hidden">
-          <div class="font-bold truncate dark:text-white text-md text-dark">
+        <!-- Centered title on mobile (absolute so left/right controls keep their space) -->
+        <div
+          v-if="displayStore.NavTitle"
+          class="pointer-events-none absolute inset-x-0 px-14 text-center lg:hidden"
+        >
+          <div class="mx-auto max-w-[38%] truncate font-bold text-md text-dark dark:text-white">
             {{ displayStore.NavTitle }}
           </div>
         </div>
 
         <!-- Right side: Desktop banner -->
-        <div class="hidden lg:flex">
+        <div class="hidden lg:ml-auto lg:flex">
           <Banner desktop />
         </div>
 
         <!-- Mobile banner in navbar -->
-        <div class="lg:hidden">
+        <div class="z-10 ml-auto min-w-0 shrink lg:hidden">
           <Banner desktop />
         </div>
       </div>
