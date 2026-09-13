@@ -355,7 +355,7 @@ describe('[PUT] /bundle operations - Set bundle to channel', () => {
         app_id: APPNAME,
         version_id: versionId,
         channel_id: channelId,
-        target: 'stabel',
+        target: 'invalid',
       }),
     })
 
