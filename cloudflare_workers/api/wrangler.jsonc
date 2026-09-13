@@ -28,7 +28,11 @@
         "binding": "AI"
       },
       "vars": {
-        "ENV_NAME": "capgo_api-prod"
+        "ENV_NAME": "capgo_api-prod",
+        // Regional plugin workers for /updates colo-cache invalidation
+        // fan-out (authenticated with CACHE_INVALIDATE_SECRET, shipped as a
+        // wrangler secret; API_SECRET only guards the inbound trigger call).
+        "PLUGIN_INVALIDATE_URLS": "https://plugin.eu.capgo.app,https://plugin.na.capgo.app,https://plugin.sa.capgo.app,https://plugin.oc.capgo.app,https://plugin.jp.capgo.app,https://plugin.as.capgo.app,https://plugin.hk.capgo.app,https://plugin.me.capgo.app,https://plugin.af.capgo.app"
       },
       "routes": [
         {
@@ -124,7 +128,11 @@
         "binding": "AI"
       },
       "vars": {
-        "ENV_NAME": "capgo_api-preprod"
+        "ENV_NAME": "capgo_api-preprod",
+        // Regional plugin workers for /updates colo-cache invalidation
+        // fan-out (authenticated with CACHE_INVALIDATE_SECRET, shipped as a
+        // wrangler secret; API_SECRET only guards the inbound trigger call).
+        "PLUGIN_INVALIDATE_URLS": "https://plugin.preprod.capgo.app"
       },
       "routes": [
         {
@@ -219,7 +227,11 @@
         "binding": "AI"
       },
       "vars": {
-        "ENV_NAME": "capgo_api-alpha"
+        "ENV_NAME": "capgo_api-alpha",
+        // Regional plugin workers for /updates colo-cache invalidation
+        // fan-out (authenticated with CACHE_INVALIDATE_SECRET, shipped as a
+        // wrangler secret; API_SECRET only guards the inbound trigger call).
+        "PLUGIN_INVALIDATE_URLS": "https://plugin.dev.capgo.app"
       },
       "routes": [
         {

@@ -6,6 +6,7 @@ import { getRuntimeKey } from 'hono/adapter'
 import { cors } from 'hono/cors'
 import { createFactory } from 'hono/factory'
 import { HTTPException } from 'hono/http-exception'
+import { timingSafeEqual } from 'hono/utils/buffer'
 import { requestId } from 'hono/request-id'
 import { Hono } from 'hono/tiny'
 import { cloudlog } from './logging.ts'
@@ -313,6 +314,22 @@ export function simpleError(errorCode: string, message: string, moreInfo: any = 
   }
   return quickError(400, errorCode, message, moreInfo, cause)
 }
+
+export const middlewareAPISecret = honoFactory.createMiddleware(async (c, next) => {
+  const authorizationSecret = c.req.header('apisecret')
+  const API_SECRET = getEnv(c, 'API_SECRET')
+
+  if (!authorizationSecret || !API_SECRET) {
+    cloudlog({ requestId: c.get('requestId'), message: 'Cannot find authorizationSecret or API_SECRET', query: c.req.query() })
+    throw simpleError('cannot_find_authorization_secret', 'Cannot find authorization')
+  }
+  if (!await timingSafeEqual(authorizationSecret, API_SECRET)) {
+    cloudlog({ requestId: c.get('requestId'), message: 'Invalid API secret', query: c.req.query() })
+    throw simpleError('invalid_api_secret', 'Invalid API secret')
+  }
+  c.set('APISecret', authorizationSecret)
+  await next()
+})
 
 export function parseBody<T>(c: Context) {
   // IMPORTANT: c.req.json() consumes the request body.

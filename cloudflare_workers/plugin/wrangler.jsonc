@@ -17,6 +17,8 @@
     "prod_eu": {
       "name": "capgo_plugin-eu-prod",
       "vars": {
+        // Colo cache for /updates: flip to "on" per region to enable.
+        "UPDATES_CACHE_MODE": "off",
         "ENV_NAME": "capgo_plugin-eu-prod"
       },
       "observability": {
@@ -146,6 +148,8 @@
     "prod_me": {
       "name": "capgo_plugin-me-prod",
       "vars": {
+        // Colo cache for /updates: flip to "on" per region to enable.
+        "UPDATES_CACHE_MODE": "off",
         "ENV_NAME": "capgo_plugin-me-prod"
       },
       "observability": {
@@ -241,6 +245,8 @@
     "prod_hk": {
       "name": "capgo_plugin-hk-prod",
       "vars": {
+        // Colo cache for /updates: flip to "on" per region to enable.
+        "UPDATES_CACHE_MODE": "off",
         "ENV_NAME": "capgo_plugin-hk-prod"
       },
       "observability": {
@@ -336,6 +342,8 @@
     "prod_jp": {
       "name": "capgo_plugin-jp-prod",
       "vars": {
+        // Colo cache for /updates: flip to "on" per region to enable.
+        "UPDATES_CACHE_MODE": "off",
         "ENV_NAME": "capgo_plugin-jp-prod"
       },
       "observability": {
@@ -431,6 +439,8 @@
     "prod_as": {
       "name": "capgo_plugin-as-prod",
       "vars": {
+        // Colo cache for /updates: flip to "on" per region to enable.
+        "UPDATES_CACHE_MODE": "off",
         "ENV_NAME": "capgo_plugin-as-prod"
       },
       "observability": {
@@ -526,6 +536,8 @@
     "prod_na": {
       "name": "capgo_plugin-na-prod",
       "vars": {
+        // Colo cache for /updates: flip to "on" per region to enable.
+        "UPDATES_CACHE_MODE": "off",
         "ENV_NAME": "capgo_plugin-na-prod"
       },
       "observability": {
@@ -621,6 +633,8 @@
     "prod_af": {
       "name": "capgo_plugin-af-prod",
       "vars": {
+        // Colo cache for /updates: flip to "on" per region to enable.
+        "UPDATES_CACHE_MODE": "off",
         "ENV_NAME": "capgo_plugin-af-prod"
       },
       "placement": {
@@ -716,6 +730,8 @@
     "prod_oc": {
       "name": "capgo_plugin-oc-prod",
       "vars": {
+        // Colo cache for /updates: flip to "on" per region to enable.
+        "UPDATES_CACHE_MODE": "off",
         "ENV_NAME": "capgo_plugin-oc-prod"
       },
       "observability": {
@@ -811,6 +827,8 @@
     "prod_sa": {
       "name": "capgo_plugin-sa-prod",
       "vars": {
+        // Colo cache for /updates: flip to "on" per region to enable.
+        "UPDATES_CACHE_MODE": "off",
         "ENV_NAME": "capgo_plugin-sa-prod"
       },
       "observability": {
@@ -894,6 +912,8 @@
     "preprod": {
       "name": "capgo_plugin-eu-preprod",
       "vars": {
+        // Colo cache for /updates: flip to "on" per region to enable.
+        "UPDATES_CACHE_MODE": "off",
         "ENV_NAME": "capgo_plugin-eu-preprod"
       },
       "observability": {
@@ -985,6 +1005,8 @@
     "alpha": {
       "name": "capgo_plugin-alpha",
       "vars": {
+        // Colo cache for /updates: flip to "on" per region to enable.
+        "UPDATES_CACHE_MODE": "off",
         "ENV_NAME": "capgo_plugin-alpha"
       },
       "observability": {
@@ -1080,6 +1102,8 @@
     "local": {
       "name": "capgo_plugin-local",
       "vars": {
+        // Colo cache for /updates: flip to "on" per region to enable.
+        "UPDATES_CACHE_MODE": "off",
         "ENV_NAME": "capgo_plugin-local",
         "CAPGO_PREVENT_BACKGROUND_FUNCTIONS": "true"
       },
