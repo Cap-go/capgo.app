@@ -88,12 +88,7 @@ const EVENT_NAME_BY_TRANSITION: Record<BuildTransition, string> = {
   timed_out: 'Build Timed Out',
 }
 
-async function sendFastBuildFailureAlert(c: Context, input: EmitBuildTransitionInput): Promise<void> {
-  const duration = input.effectiveBuildTimeSeconds
-  const jobId = input.jobId
-  if (!jobId || duration === null || duration === undefined || duration >= 10)
-    return
-
+async function sendFastBuildFailureAlert(c: Context, input: EmitBuildTransitionInput, jobId: string, duration: number): Promise<void> {
   try {
     const { data, error } = await supabaseAdmin(c)
       .from('users')
@@ -197,6 +192,7 @@ export async function emitBuildTransitionEvent(c: Context, input: EmitBuildTrans
     })
   }
 
-  if (transition === 'failed')
-    await backgroundTask(c, sendFastBuildFailureAlert(c, input))
+  const duration = input.effectiveBuildTimeSeconds
+  if (transition === 'failed' && input.jobId && duration !== null && duration !== undefined && duration < 10)
+    await backgroundTask(c, sendFastBuildFailureAlert(c, input, input.jobId, duration))
 }
