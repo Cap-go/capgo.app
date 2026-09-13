@@ -53,6 +53,10 @@ const metadataComment = ref('')
 // Channel chooser state
 const selectedChannelForLink = ref<Database['public']['Tables']['channels']['Row'] | null>(null)
 const channelAssignTarget = ref<'auto' | 'stable' | 'rollout'>('auto')
+
+watch(selectedChannelForLink, () => {
+  channelAssignTarget.value = 'auto'
+})
 const currentChannelAction = ref<'set' | 'open' | 'unlink' | null>(null)
 const channelSearchVal = ref('')
 const filteredChannels = ref<(Database['public']['Tables']['channels']['Row'])[]>([])
@@ -1205,15 +1209,15 @@ async function deleteBundle() {
           </p>
           <div class="grid gap-2 sm:grid-cols-3">
             <label class="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-sky-200 bg-white px-3 text-sm dark:border-sky-800 dark:bg-slate-900">
-              <input v-model="channelAssignTarget" type="radio" class="d-radio d-radio-sm" value="auto">
+              <input v-model="channelAssignTarget" type="radio" name="channel-bundle-assign-target" class="d-radio d-radio-sm" value="auto">
               <span>{{ t('channel-bundle-assign-auto') }}</span>
             </label>
             <label class="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-sky-200 bg-white px-3 text-sm dark:border-sky-800 dark:bg-slate-900">
-              <input v-model="channelAssignTarget" type="radio" class="d-radio d-radio-sm" value="rollout">
+              <input v-model="channelAssignTarget" type="radio" name="channel-bundle-assign-target" class="d-radio d-radio-sm" value="rollout">
               <span>{{ t('channel-bundle-assign-rollout') }}</span>
             </label>
             <label class="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-sky-200 bg-white px-3 text-sm dark:border-sky-800 dark:bg-slate-900">
-              <input v-model="channelAssignTarget" type="radio" class="d-radio d-radio-sm" value="stable">
+              <input v-model="channelAssignTarget" type="radio" name="channel-bundle-assign-target" class="d-radio d-radio-sm" value="stable">
               <span>{{ t('channel-bundle-assign-stable') }}</span>
             </label>
           </div>

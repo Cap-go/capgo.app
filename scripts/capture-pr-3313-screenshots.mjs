@@ -1,5 +1,5 @@
 import { chromium } from '@playwright/test'
-import { copyFile, mkdir, readdir, unlink } from 'node:fs/promises'
+import { mkdir, readdir, unlink } from 'node:fs/promises'
 import path from 'node:path'
 
 const EMAIL = process.env.CAPGO_SCREENSHOT_EMAIL ?? 'test@capgo.app'
@@ -135,13 +135,7 @@ async function captureBundleAssignDialog(page, baseURL, fileName) {
 async function removeAfterFiles() {
   await mkdir(OUT_DIR, { recursive: true })
   for (const file of await readdir(OUT_DIR)) {
-    if (
-      file.startsWith('after-local-')
-      || file.startsWith('after-preprod-')
-      || file === 'desktop-rollout-section.png'
-      || file === 'mobile-rollout-section.png'
-      || file === 'bundle-assign-dialog.png'
-    ) {
+    if (file.startsWith('after-local-') || file.startsWith('after-preprod-')) {
       await unlink(path.join(OUT_DIR, file))
     }
   }
@@ -162,15 +156,6 @@ async function main() {
   await captureRolloutSection(page, AFTER_BASE, 'after-local-desktop-rollout-section.png', { width: 1280, height: 900 })
   await captureRolloutSection(page, AFTER_BASE, 'after-local-mobile-rollout-section.png', { width: 375, height: 812 })
   await captureBundleAssignDialog(page, AFTER_BASE, 'after-local-bundle-assign-dialog.png')
-
-  for (const name of [
-    'after-local-desktop-rollout-section.png',
-    'after-local-mobile-rollout-section.png',
-    'after-local-bundle-assign-dialog.png',
-  ]) {
-    const shortName = name.replace('after-local-', '')
-    await copyFile(path.join(OUT_DIR, name), path.join(OUT_DIR, shortName))
-  }
 
   await browser.close()
   console.log('[capture] done ->', OUT_DIR)

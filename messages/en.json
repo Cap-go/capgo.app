@@ -3177,7 +3177,7 @@
   "rollout-rollback-confirm-description": "This removes rollout target {target}. Devices return to stable {stable} only. The rollout target bundle is unlinked from this channel.",
   "rollout-rollback-confirm-action": "Rollback rollout",
   "rollout-disable-confirm-title": "Disable progressive rollout?",
-  "rollout-disable-confirm-description": "This turns off rollout and clears target {target}. Devices keep stable {stable}.",
+  "rollout-disable-confirm-description": "This turns off rollout and removes rollout target {target} from this channel. Devices keep stable {stable}.",
   "rollout-disable-confirm-action": "Disable rollout",
   "rollout-pause-confirm-title": "Pause progressive rollout?",
   "rollout-pause-confirm-description": "New devices stop receiving rollout target {target}. Devices already on the rollout keep it until cache expires. Stable {stable} is unchanged.",

@@ -109,7 +109,6 @@ async function createAppApiKey(name: string, roleName = 'app_preview'): Promise<
   const createResponse = await fetchTestRequest(`${BASE_URL}/apikey`, {
     method: 'POST',
     headers: authHeaders,
-    retryUnsafe: true,
     body: JSON.stringify({
       name,
       bindings: await appApiKeyBindings(APPNAME, roleName),

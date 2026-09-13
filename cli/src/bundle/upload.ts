@@ -2183,6 +2183,9 @@ export function checkValidOptions(options: OptionsUpload) {
   if (options.rolloutCacheTtlSeconds != null && (!Number.isInteger(options.rolloutCacheTtlSeconds) || options.rolloutCacheTtlSeconds < 60 || options.rolloutCacheTtlSeconds > 31536000)) {
     uploadFail('Rollout cache TTL seconds must be between 60 and 31536000')
   }
+  if (options.stable === true && hasUploadRollout) {
+    uploadFail('You cannot use --stable together with --rollout, --rollout-percentage-bps, or --rollout-advance')
+  }
   if (hasUploadRollout && options.dryUpload) {
     uploadFail('You cannot use --rollout or --rollout-advance with --dry-upload because dry upload does not update channels')
   }

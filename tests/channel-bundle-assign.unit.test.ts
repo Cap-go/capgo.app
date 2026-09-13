@@ -10,14 +10,20 @@ describe('channel bundle assign helpers', () => {
     }, 'auto')).toBe('rollout')
   })
 
-  it('builds rollout updates without touching stable', () => {
+  it('builds rollout updates without touching stable or rollout_enabled', () => {
     expect(buildChannelBundleAssignUpdate({
       rollout_enabled: true,
       rollout_version: 10,
       version: 5,
     }, 99, 'auto')).toEqual({
       rollout_version: 99,
-      rollout_enabled: true,
+    })
+    expect(buildChannelBundleAssignUpdate({
+      rollout_enabled: false,
+      rollout_version: 10,
+      version: 5,
+    }, 99, 'rollout')).toEqual({
+      rollout_version: 99,
     })
   })
 

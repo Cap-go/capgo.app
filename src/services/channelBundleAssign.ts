@@ -32,7 +32,6 @@ export function buildChannelBundleAssignUpdate(
   if (assignmentTarget === 'rollout') {
     return {
       rollout_version: versionId,
-      rollout_enabled: true,
     }
   }
 

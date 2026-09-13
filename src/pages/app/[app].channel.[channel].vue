@@ -501,7 +501,6 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
   if (bundleLinkMode.value === 'rollout') {
     const saved = await saveChannelChanges({
       rollout_version: appVersion.id,
-      rollout_enabled: true,
     })
     if (saved) {
       toast.success(t('rollout-target-linked'))

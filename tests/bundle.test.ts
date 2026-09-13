@@ -347,6 +347,55 @@ describe('[PUT] /bundle operations - Set bundle to channel', () => {
     expect(after?.rollout_percentage_bps).toBe(2500)
   })
 
+  it('should reject invalid channel assignment targets', async () => {
+    const response = await fetch(`${BASE_URL}/bundle`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        app_id: APPNAME,
+        version_id: versionId,
+        channel_id: channelId,
+        target: 'stabel',
+      }),
+    })
+
+    expect(response.status).toBe(400)
+  })
+
+  it('should preserve rollout_enabled when assigning a rollout target', async () => {
+    const supabase = getSupabaseClient()
+    const nextVersion = await createAppVersions('1.0.3-test-rollout-disabled-assign', APPNAME)
+
+    const { error: setupError } = await supabase
+      .from('channels')
+      .update({
+        version: versionId,
+        rollout_version: null,
+        rollout_enabled: false,
+        rollout_percentage_bps: 0,
+      })
+      .eq('id', channelId)
+      .eq('app_id', APPNAME)
+    expect(setupError).toBeNull()
+
+    const response = await putBundleToChannel({
+      app_id: APPNAME,
+      version_id: nextVersion.id,
+      channel_id: channelId,
+      target: 'rollout',
+    })
+    expect(response.status).toBe(200)
+
+    const { data: after, error: afterError } = await supabase
+      .from('channels')
+      .select('rollout_version, rollout_enabled')
+      .eq('id', channelId)
+      .single()
+    expect(afterError).toBeNull()
+    expect(after?.rollout_version).toBe(nextVersion.id)
+    expect(after?.rollout_enabled).toBe(false)
+  })
+
   it('should reset leftover rollout when a new stable bundle is set explicitly', async () => {
     const supabase = getSupabaseClient()
     const nextVersion = await createAppVersions('1.0.2-test-channel-rollout-reset', APPNAME)

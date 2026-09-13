@@ -62,6 +62,10 @@ function validateSetChannelBody(body: SetChannelBody) {
   if (!isValidAppId(body.app_id)) {
     throw simpleError('invalid_app_id', 'App ID must be a reverse domain string', { app_id: body.app_id })
   }
+
+  if (body.target != null && body.target !== 'auto' && body.target !== 'stable' && body.target !== 'rollout') {
+    throw simpleError('invalid_target', 'Invalid channel assignment target', { target: body.target })
+  }
 }
 
 function getEffectiveApikey(c: Context<MiddlewareKeyVariables>, apikey: Database['public']['Tables']['apikeys']['Row']) {
@@ -124,8 +128,7 @@ async function updateChannelVersion(dbClient: PgQueryClient, body: SetChannelBod
 async function updateChannelRolloutVersion(dbClient: PgQueryClient, body: SetChannelBody, channelOwnerOrg: string) {
   const updateResult = await dbClient.query(
     `UPDATE public.channels
-     SET rollout_version = $1,
-         rollout_enabled = true
+     SET rollout_version = $1
      WHERE id = $2
        AND app_id = $3
        AND owner_org = $4
