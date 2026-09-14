@@ -56,4 +56,45 @@ describe('respondOpenStatusAdminCheck', () => {
     expect(body.error).toBe('queue_health_error')
     expect(body.status).not.toBe('unhealthy')
   })
+
+  it('ignores a late successful assessment after the health deadline', async () => {
+    const c = {
+      req: { method: 'GET' },
+      env: {},
+    } as Parameters<typeof respondOpenStatusAdminCheck>[0]
+
+    let resolveLate!: (value: { capgoStatus: 'ok', httpStatus: number, legacyBody: Record<string, unknown> }) => void
+    const lateAssessment = new Promise<{ capgoStatus: 'ok', httpStatus: number, legacyBody: Record<string, unknown> }>((resolve) => {
+      resolveLate = resolve
+    })
+
+    const response = await respondOpenStatusAdminCheck(c, {
+      probeName: 'pgmq_queues',
+      deadlineMs: 50,
+      deadlineFallbackAssessment: () => ({
+        capgoStatus: 'ko',
+        httpStatus: 500,
+        legacyBody: {
+          status: 'ko',
+          error: 'queue_health_error',
+        },
+      }),
+      runAssessment: async () => {
+        await new Promise(resolve => setTimeout(resolve, 200))
+        return await lateAssessment
+      },
+    })
+
+    resolveLate({
+      capgoStatus: 'ok',
+      httpStatus: 200,
+      legacyBody: { status: 'ok', queue_count: 99 },
+    })
+
+    expect(response.status).toBe(500)
+    const body = await response.json() as Record<string, unknown>
+    expect(body.status).toBe('ko')
+    expect(body.error).toBe('queue_health_error')
+    expect(body.queue_count).toBeUndefined()
+  })
 })

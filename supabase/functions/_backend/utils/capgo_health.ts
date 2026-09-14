@@ -231,6 +231,7 @@ export async function respondOpenStatusAdminCheck<C extends HealthCtx>(
   },
 ) {
   let assessment: { capgoStatus: 'ok' | 'ko', legacyBody: Record<string, unknown>, httpStatus: number } | undefined
+  let assessmentSelectionLocked = false
 
   const responder = createHealthResponder<C>({
     deadlineMs: options.deadlineMs ?? 10_000,
@@ -240,7 +241,10 @@ export async function respondOpenStatusAdminCheck<C extends HealthCtx>(
         name: options.probeName,
         critical: true,
         run: async () => {
-          assessment = await options.runAssessment()
+          const result = await options.runAssessment()
+          if (assessmentSelectionLocked)
+            return
+          assessment = result
           if (assessment.capgoStatus === 'ko')
             throw new Error(`${options.probeName}_unhealthy`)
         },
@@ -250,6 +254,7 @@ export async function respondOpenStatusAdminCheck<C extends HealthCtx>(
   })
 
   const response = await responder.toResponse(c, c.req.method)
+  assessmentSelectionLocked = true
   const finalAssessment = assessment ?? options.deadlineFallbackAssessment?.()
   if (!finalAssessment)
     return response
