@@ -60,12 +60,12 @@ BEGIN
   END IF;
 
   IF jsonb_typeof(v_setup -> 'todo_list_version') = 'number'
-    AND (v_setup ->> 'todo_list_version') ~ '^[1-9][0-9]{0,15}$'
+    AND (v_setup ->> 'todo_list_version')::numeric
+      BETWEEN 1 AND 9007199254740991
+    AND (v_setup ->> 'todo_list_version')::numeric
+      = trunc((v_setup ->> 'todo_list_version')::numeric)
   THEN
     v_todo_list_version := (v_setup ->> 'todo_list_version')::bigint;
-    IF v_todo_list_version > 9007199254740991 THEN
-      v_todo_list_version := 1;
-    END IF;
   END IF;
 
   v_source := CASE v_setup ->> 'source'
@@ -191,3 +191,33 @@ GRANT ALL ON FUNCTION public.merge_app_onboarding_setup(
 COMMENT ON FUNCTION public.merge_app_onboarding_setup(jsonb, jsonb) IS
 'Merges versioned CLI/MCP/AI setup source, outcome, and step progress into
 apps.onboarding.setup without touching features.';
+
+-- Persist the logical version default for every pre-existing app. Nested setup
+-- data is kept semantically unchanged apart from the new key. The legacy
+-- branch is for installations that still store setup fields at the root.
+UPDATE public.apps
+SET
+    onboarding = CASE
+        WHEN jsonb_typeof(onboarding -> 'setup') = 'object'
+            THEN
+                jsonb_set(
+                    onboarding, '{setup,todo_list_version}', '1'::jsonb, true
+                )
+        WHEN
+            onboarding ? 'source'
+            OR onboarding ? 'outcome'
+            OR onboarding ? 'steps'
+            OR onboarding ? 'todo_list_version'
+            THEN
+                public.merge_app_onboarding_setup(onboarding, '{}'::jsonb)
+        ELSE
+            onboarding || '{"setup":{"todo_list_version":1}}'::jsonb
+    END
+WHERE NOT coalesce(
+    jsonb_typeof(onboarding -> 'setup' -> 'todo_list_version') = 'number'
+    AND (onboarding -> 'setup' ->> 'todo_list_version')::numeric
+    BETWEEN 1 AND 9007199254740991
+    AND (onboarding -> 'setup' ->> 'todo_list_version')::numeric
+    = trunc((onboarding -> 'setup' ->> 'todo_list_version')::numeric),
+    false
+);
