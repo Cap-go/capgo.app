@@ -42,18 +42,17 @@ const { t } = useI18n()
     <div class="px-2 sm:px-4 lg:px-6">
       <div class="relative flex items-center h-16 gap-0.5 -mb-px">
         <!-- Header: Left side -->
-        <div class="z-10 flex shrink-0 items-center gap-0 lg:gap-3">
-          <div v-if="displayStore.NavTitle && isMobile">
-            <button
-              type="button"
-              class="flex rounded-sm p-0.5 dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:bg-slate-600 hover:bg-slate-300"
-              :aria-label="t('button-back')"
-              @click="back()"
-            >
-              <IconBack class="h-3.5 w-3.5 fill-current" />
-              <span class="hidden md:block">{{ t('button-back') }}</span>
-            </button>
-          </div>
+        <div class="z-10 flex shrink-0 items-center -space-x-6 lg:gap-3 lg:space-x-0">
+          <button
+            v-if="displayStore.NavTitle && isMobile"
+            type="button"
+            class="flex h-11 w-11 shrink-0 items-center justify-center rounded-sm dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:bg-slate-600 hover:bg-slate-300"
+            :aria-label="t('button-back')"
+            @click="back()"
+          >
+            <IconBack class="h-3.5 w-3.5 fill-current" />
+            <span class="hidden md:block">{{ t('button-back') }}</span>
+          </button>
           <div class="hidden lg:block">
             <button
               type="button"
@@ -71,7 +70,7 @@ const { t } = useI18n()
           <!-- Hamburger button -->
           <button
             type="button"
-            class="rounded-sm p-0.5 lg:hidden dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:text-slate-50 hover:text-slate-600"
+            class="flex h-11 w-11 shrink-0 items-center justify-center rounded-sm lg:hidden dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:text-slate-50 hover:text-slate-600"
             data-test="sidebar-mobile-toggle"
             aria-controls="sidebar"
             :aria-expanded="props.sidebarOpen"
