@@ -1,3 +1,4 @@
+import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '~/utils/onboardingChannelAnalytics'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 
 export const ONBOARDING_ANALYTICS_VERSION = 4
@@ -20,7 +21,8 @@ export type OnboardingCopyEvent = 'onboarding_ai_instructions_copied' | 'onboard
 export type OnboardingDevelopmentEnvironment = 'hosted_builder' | 'ai_assistant' | 'hand_coded' | 'other' | 'local_project' | 'exploring' | 'skipped'
 export type OnboardingIntent = 'ota' | 'builder' | 'both' | 'exploring' | 'publish'
 export type OnboardingInteractionEvent
-  = | 'onboarding_development_environment_selected'
+  = | OnboardingChannelEvent
+    | 'onboarding_development_environment_selected'
     | 'onboarding_organization_import_opened'
     | 'onboarding_organization_import_submitted'
     | 'onboarding_organization_import_succeeded'
@@ -115,7 +117,7 @@ export function resolveOnboardingAppIconSource(options: {
   return 'none'
 }
 
-export interface OnboardingInteractionProperties {
+export type OnboardingInteractionProperties = Partial<OnboardingChannelEventProperties> & {
   development_environment?: OnboardingDevelopmentEnvironment
   invitation_count?: number
   intent?: OnboardingIntent

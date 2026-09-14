@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '~/utils/onboardingChannelAnalytics'
 import gsap from 'gsap'
 import { MotionPathPlugin } from 'gsap/MotionPathPlugin'
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconArrowLeft from '~icons/lucide/arrow-left'
 import IconBatteryFull from '~icons/lucide/battery-full'
@@ -19,25 +20,22 @@ import IconSignal from '~icons/lucide/signal'
 import IconSmartphone from '~icons/lucide/smartphone'
 import IconSparkles from '~icons/lucide/sparkles'
 import IconWifi from '~icons/lucide/wifi'
+import { useOnboardingChannelAnimation } from '~/composables/useOnboardingChannelAnimation'
 
 defineProps<{
   embedded?: boolean
 }>()
 
 const emit = defineEmits<{
+  analytics: [event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties]
   back: []
   continue: []
 }>()
 
 const { t } = useI18n()
 const root = ref<HTMLElement | null>(null)
-const reducedMotion = ref(false)
 const setChannelCall = `await CapacitorUpdater.setChannel({ channel: 'beta', triggerAutoUpdate: true })`
 const selfAssignPolicy = `allow_device_self_set: true`
-let timeline: gsap.core.Timeline | null = null
-let media: gsap.MatchMedia | null = null
-let resizeObserver: ResizeObserver | null = null
-let resizeAnimationFrame: number | null = null
 
 gsap.registerPlugin(MotionPathPlugin)
 
@@ -242,6 +240,7 @@ function buildTimeline() {
   gsap.set(channelCards, { y: 0, scale: 1 })
 
   const animation = gsap.timeline({
+    paused: true,
     defaults: { ease: 'power2.out' },
   })
 
@@ -344,60 +343,15 @@ function buildTimeline() {
   return animation
 }
 
-function createAnimation() {
-  timeline?.kill()
-  media?.revert()
-  timeline = null
-  media = null
-  media = gsap.matchMedia()
-
-  media.add('(prefers-reduced-motion: reduce)', () => {
-    reducedMotion.value = true
-    showFinalState()
-  })
-
-  media.add('(prefers-reduced-motion: no-preference)', () => {
-    reducedMotion.value = false
-    timeline = buildTimeline()
-  })
-}
-
-function refreshAnimationAfterResize() {
-  if (resizeAnimationFrame !== null)
-    window.cancelAnimationFrame(resizeAnimationFrame)
-  resizeAnimationFrame = window.requestAnimationFrame(() => {
-    resizeAnimationFrame = null
-    createAnimation()
-  })
-}
-
-function replay() {
-  if (reducedMotion.value) {
-    showFinalState()
-    return
-  }
-  gsap.set(element('.csa-phone'), { autoAlpha: 0, y: 18, scale: 1, force3D: false })
-  timeline?.kill()
-  timeline = buildTimeline()
-}
-
-onMounted(async () => {
-  await nextTick()
-  createAnimation()
-  if (root.value) {
-    resizeObserver = new ResizeObserver(refreshAnimationAfterResize)
-    resizeObserver.observe(root.value)
-  }
-})
-
-onBeforeUnmount(() => {
-  resizeObserver?.disconnect()
-  if (resizeAnimationFrame !== null)
-    window.cancelAnimationFrame(resizeAnimationFrame)
-  timeline?.kill()
-  media?.revert()
-  timeline = null
-  media = null
+const { continueOnboarding, goBack, replay } = useOnboardingChannelAnimation({
+  beforeReplay: () => gsap.set(element('.csa-phone'), { autoAlpha: 0, y: 18, scale: 1, force3D: false }),
+  buildTimeline,
+  emitAnalytics: (event, properties) => emit('analytics', event, properties),
+  onBack: () => emit('back'),
+  onContinue: () => emit('continue'),
+  root,
+  showFinalState,
+  stage: 'channel-self-assign',
 })
 </script>
 
@@ -713,11 +667,11 @@ onBeforeUnmount(() => {
         data-test="channel-self-assign-back"
         :aria-label="t('button-back')"
         :title="t('button-back')"
-        @click="emit('back')"
+        @click="goBack"
       >
         <IconArrowLeft class="h-4 w-4" aria-hidden="true" />
       </button>
-      <button type="button" class="d-btn d-btn-primary h-12 min-h-12 shrink-0 px-5" data-test="channel-self-assign-continue" @click="emit('continue')">
+      <button type="button" class="d-btn d-btn-primary h-12 min-h-12 shrink-0 px-5" data-test="channel-self-assign-continue" @click="continueOnboarding">
         {{ t('continue') }}
       </button>
     </footer>

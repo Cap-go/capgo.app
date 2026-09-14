@@ -1,12 +1,14 @@
 <script setup lang="ts">
+import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '~/utils/onboardingChannelAnalytics'
 import { gsap } from 'gsap'
 import { MotionPathPlugin } from 'gsap/MotionPathPlugin'
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconCheck from '~icons/lucide/check'
 import IconRefreshCw from '~icons/lucide/refresh-cw'
 import IconServer from '~icons/lucide/server'
 import IconSmartphone from '~icons/lucide/smartphone'
+import { useOnboardingChannelAnimation } from '~/composables/useOnboardingChannelAnimation'
 
 const props = withDefaults(defineProps<{
   embedded?: boolean
@@ -15,6 +17,7 @@ const props = withDefaults(defineProps<{
 })
 
 const emit = defineEmits<{
+  analytics: [event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties]
   continue: []
 }>()
 
@@ -22,12 +25,6 @@ gsap.registerPlugin(MotionPathPlugin)
 
 const { t } = useI18n()
 const rootEl = ref<HTMLElement | null>(null)
-const prefersReducedMotion = ref(false)
-
-let timeline: gsap.core.Timeline | null = null
-let media: gsap.MatchMedia | null = null
-let resizeObserver: ResizeObserver | null = null
-let resizeAnimationFrame: number | null = null
 
 function element<T extends Element>(root: HTMLElement, selector: string): T | null {
   return root.querySelector<T>(selector)
@@ -249,63 +246,21 @@ function buildTimeline(root: HTMLElement) {
   return animation
 }
 
-function createAnimation() {
-  timeline?.kill()
-  media?.revert()
-  timeline = null
-  media = null
-
-  const root = rootEl.value
-  if (!root)
-    return
-
-  media = gsap.matchMedia()
-  media.add('(prefers-reduced-motion: reduce)', () => {
-    prefersReducedMotion.value = true
-    showFinalState(root)
-  })
-  media.add('(prefers-reduced-motion: no-preference)', () => {
-    prefersReducedMotion.value = false
-    timeline = buildTimeline(root)
-    timeline?.play()
-
-    return () => {
-      timeline?.kill()
-      timeline = null
-    }
-  })
-}
-
-function refreshAnimationAfterResize() {
-  if (resizeAnimationFrame !== null)
-    window.cancelAnimationFrame(resizeAnimationFrame)
-  resizeAnimationFrame = window.requestAnimationFrame(() => {
-    resizeAnimationFrame = null
-    createAnimation()
-  })
-}
-
-function replay() {
-  timeline?.restart()
-}
-
-onMounted(async () => {
-  await nextTick()
-  createAnimation()
-  if (rootEl.value) {
-    resizeObserver = new ResizeObserver(refreshAnimationAfterResize)
-    resizeObserver.observe(rootEl.value)
-  }
-})
-
-onBeforeUnmount(() => {
-  resizeObserver?.disconnect()
-  if (resizeAnimationFrame !== null)
-    window.cancelAnimationFrame(resizeAnimationFrame)
-  timeline?.kill()
-  media?.revert()
-  timeline = null
-  media = null
+const {
+  continueOnboarding,
+  reducedMotion: prefersReducedMotion,
+  replay,
+} = useOnboardingChannelAnimation({
+  buildTimeline: () => rootEl.value ? buildTimeline(rootEl.value) : null,
+  emitAnalytics: (event, properties) => emit('analytics', event, properties),
+  onContinue: () => emit('continue'),
+  rebuildOnReplay: false,
+  root: rootEl,
+  showFinalState: () => {
+    if (rootEl.value)
+      showFinalState(rootEl.value)
+  },
+  stage: 'channel-routing',
 })
 </script>
 
@@ -484,7 +439,7 @@ onBeforeUnmount(() => {
           type="button"
           class="d-btn d-btn-primary h-12 min-h-12 shrink-0 px-5"
           data-test="channel-default-routing-continue"
-          @click="emit('continue')"
+          @click="continueOnboarding"
         >
           {{ t('continue') }}
         </button>

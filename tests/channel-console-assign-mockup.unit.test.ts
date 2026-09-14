@@ -5,6 +5,7 @@ const mockupUrl = new URL('../src/components/dashboard/ChannelConsoleAssignMocku
 const wrapperUrl = new URL('../src/components/dashboard/ChannelConsoleAssignOnboarding.vue', import.meta.url)
 const mockupSource = existsSync(mockupUrl) ? readFileSync(mockupUrl, 'utf8') : ''
 const wrapperSource = existsSync(wrapperUrl) ? readFileSync(wrapperUrl, 'utf8') : ''
+const animationComposableSource = readFileSync(new URL('../src/composables/useOnboardingChannelAnimation.ts', import.meta.url), 'utf8')
 const messages = JSON.parse(readFileSync(new URL('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
 function expectSourceOrder(source: string, markers: string[]) {
@@ -95,24 +96,31 @@ describe('channel console assignment animation', () => {
 
   it.concurrent('supports final state, replay, reduced motion, cleanup, and onboarding continuation', () => {
     expect(mockupSource).toContain('function showFinalState()')
-    expect(mockupSource).toContain('gsap.matchMedia()')
-    expect(mockupSource).toContain(`'(prefers-reduced-motion: reduce)'`)
-    expect(mockupSource).toContain('function refreshAnimationAfterResize()')
-    expect(mockupSource).toContain('new ResizeObserver(refreshAnimationAfterResize)')
-    expect(mockupSource).toContain('resizeObserver.observe(root.value)')
-    expect(mockupSource).toContain('resizeObserver?.disconnect()')
+    expect(animationComposableSource).toContain('gsap.matchMedia()')
+    expect(animationComposableSource).toContain(`'(prefers-reduced-motion: reduce)'`)
+    expect(animationComposableSource).toContain('function refreshAnimationAfterResize()')
+    expect(animationComposableSource).toContain('new ResizeObserver(refreshAnimationAfterResize)')
+    expect(animationComposableSource).toContain('resizeObserver.observe(options.root.value)')
+    expect(animationComposableSource).toContain('resizeObserver?.disconnect()')
     expect(mockupSource).toContain(`:aria-label="t('channel-console-assign-replay')"`)
     expect(mockupSource).not.toContain('timeline?.restart()')
-    expect(mockupSource).toContain('timeline?.kill()')
-    expect(mockupSource).toContain('media?.revert()')
+    expect(animationComposableSource).toContain('timeline?.kill()')
+    expect(animationComposableSource).toContain('media?.revert()')
     expect(mockupSource).toContain('back: []')
     expect(mockupSource).toContain('data-test="channel-console-assign-back"')
-    expect(mockupSource).toContain(`@click="emit('back')"`)
+    expect(mockupSource).toContain('@click="goBack"')
     expect(mockupSource).toContain('data-test="channel-console-assign-continue"')
+    expect(mockupSource).toContain('@click="continueOnboarding"')
     expect(mockupSource).toContain('class="d-btn d-btn-primary h-12 min-h-12 shrink-0 px-5"')
     expect(mockupSource).toContain(`{{ t('continue') }}`)
     expect(wrapperSource).toContain('back: []')
     expect(wrapperSource).toContain('@back="emit(\'back\')"')
     expect(wrapperSource).toContain('@continue="emit(\'continue\')"')
+    expect(mockupSource).toContain(`stage: 'channel-console-assign'`)
+    expect(animationComposableSource).toContain(`analytics.leave('back')`)
+    expect(animationComposableSource).toContain(`analytics.leave('continue')`)
+    expect(animationComposableSource).toContain('analytics.replayRequested()')
+    expect(animationComposableSource).toContain(`animation.eventCallback('onComplete', analytics.complete)`)
+    expect(wrapperSource).toContain('@analytics="forwardAnalytics"')
   })
 })

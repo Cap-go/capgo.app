@@ -243,6 +243,7 @@ declare global {
   const useNow: typeof import('@vueuse/core').useNow
   const useObjectUrl: typeof import('@vueuse/core').useObjectUrl
   const useOffsetPagination: typeof import('@vueuse/core').useOffsetPagination
+  const useOnboardingChannelAnimation: typeof import('./composables/useOnboardingChannelAnimation').useOnboardingChannelAnimation
   const useOnline: typeof import('@vueuse/core').useOnline
   const useOrgBillingCycleChart: typeof import('./composables/useOrgBillingCycleChart').useOrgBillingCycleChart
   const useOrganizationStore: typeof import('./stores/organization').useOrganizationStore
@@ -614,6 +615,7 @@ declare module 'vue' {
     readonly useNow: UnwrapRef<typeof import('@vueuse/core')['useNow']>
     readonly useObjectUrl: UnwrapRef<typeof import('@vueuse/core')['useObjectUrl']>
     readonly useOffsetPagination: UnwrapRef<typeof import('@vueuse/core')['useOffsetPagination']>
+    readonly useOnboardingChannelAnimation: UnwrapRef<typeof import('./composables/useOnboardingChannelAnimation')['useOnboardingChannelAnimation']>
     readonly useOnline: UnwrapRef<typeof import('@vueuse/core')['useOnline']>
     readonly useOrgBillingCycleChart: UnwrapRef<typeof import('./composables/useOrgBillingCycleChart')['useOrgBillingCycleChart']>
     readonly useOrganizationStore: UnwrapRef<typeof import('./stores/organization')['useOrganizationStore']>
