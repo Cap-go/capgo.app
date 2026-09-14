@@ -39,10 +39,10 @@ const { t } = useI18n()
 
 <template>
   <header class="relative z-40 bg-slate-100 backdrop-blur-xl dark:bg-slate-900">
-    <div class="px-2 sm:px-4 lg:px-6">
+    <div class="px-1 sm:px-4 lg:px-6">
       <div class="relative flex items-center h-16 gap-0.5 -mb-px">
         <!-- Header: Left side -->
-        <div class="z-10 flex shrink-0 items-center -space-x-6 lg:gap-3 lg:space-x-0">
+        <div class="z-10 flex shrink-0 items-center gap-0 lg:gap-3">
           <button
             v-if="displayStore.NavTitle && isMobile"
             type="button"
@@ -119,7 +119,7 @@ const { t } = useI18n()
         <!-- Mobile title: narrow inline slot so billing row keeps width -->
         <div
           v-if="displayStore.NavTitle"
-          class="min-w-0 max-w-[18%] shrink truncate px-0.5 text-[11px] font-bold leading-tight text-dark dark:text-white lg:hidden"
+          class="min-w-0 max-w-[17%] shrink truncate px-0.5 text-[11px] font-bold leading-tight text-dark dark:text-white lg:hidden"
         >
           {{ displayStore.NavTitle }}
         </div>
