@@ -69,5 +69,11 @@ const outcomeColors: Record<AdminABTestPublishIntentOutcomeName, string> = {
         </div>
       </div>
     </div>
+
+    <footer v-if="outcome.inferred_from_organization > 0" class="border-t border-slate-200 px-6 py-4 lg:px-8 dark:border-slate-700">
+      <p class="text-xs text-slate-500 dark:text-slate-400">
+        {{ t('admin-ab-tests-publish-outcome-inferred-note', { count: formatNumberValue(outcome.inferred_from_organization) }) }}
+      </p>
+    </footer>
   </section>
 </template>

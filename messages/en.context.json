@@ -207,6 +207,7 @@
   "admin-ab-tests-publish-outcome-description": "Used in the platform admin A/B tests page. Role: helper text explaining that the outcome cohort combines people exposed through either qualifying experiment.",
   "admin-ab-tests-publish-outcome-cohort": "Used in the platform admin A/B tests page. Role: cohort definition noting the two qualifying treatments and that duplicate people are counted once.",
   "admin-ab-tests-publish-outcome-exposed": "Used in the platform admin A/B tests page. Role: label below the total number of unique exposed people.",
+  "admin-ab-tests-publish-outcome-inferred-note": "Used below the Publish intent outcome chart in the platform admin A/B tests page. Explains that missing user-level intent values can be inferred from matching organization data. Preserve the {count} placeholder.",
   "admin-ab-tests-publish-outcome-selected-publish": "Used in the platform admin A/B tests page. Role: outcome label for people who selected the Publish intent.",
   "admin-ab-tests-publish-outcome-selected-another-intent": "Used in the platform admin A/B tests page. Role: outcome label for exposed people who selected a different known intent.",
   "admin-ab-tests-publish-outcome-no-selection-yet": "Used in the platform admin A/B tests page. Role: outcome label for exposed people who have not selected a known intent.",

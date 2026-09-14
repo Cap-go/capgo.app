@@ -12,6 +12,7 @@ export interface AdminABTestPublishIntentOutcomeCount {
 }
 
 export interface AdminABTestPublishIntentOutcome {
+  inferred_from_organization: number
   outcomes: AdminABTestPublishIntentOutcomeCount[]
   total: number
 }
@@ -32,6 +33,7 @@ function isOutcome(value: unknown): value is AdminABTestPublishIntentOutcomeName
 export function parseAdminABTestPublishIntentOutcome(value: unknown): AdminABTestPublishIntentOutcome | null {
   if (!isRecord(value)
     || !isNonNegativeInteger(value.total)
+    || (value.inferred_from_organization !== undefined && !isNonNegativeInteger(value.inferred_from_organization))
     || !Array.isArray(value.outcomes)
     || value.outcomes.length !== ADMIN_AB_TEST_PUBLISH_INTENT_OUTCOMES.length) {
     return null
@@ -55,7 +57,15 @@ export function parseAdminABTestPublishIntentOutcome(value: unknown): AdminABTes
   if (outcomes.reduce((sum, outcome) => sum + outcome.count, 0) !== value.total)
     return null
 
+  const inferredFromOrganization = value.inferred_from_organization ?? 0
+  const selectedTotal = outcomes
+    .filter(outcome => outcome.outcome !== 'no_selection_yet')
+    .reduce((sum, outcome) => sum + outcome.count, 0)
+  if (inferredFromOrganization > selectedTotal)
+    return null
+
   return {
+    inferred_from_organization: inferredFromOrganization,
     outcomes,
     total: value.total,
   }
