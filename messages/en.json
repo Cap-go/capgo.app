@@ -3415,6 +3415,13 @@
   "admin-ab-tests-treatment": "Treatment",
   "admin-ab-tests-control": "Control",
   "admin-ab-tests-assignments": "{count} assignments",
-  "admin-ab-tests-load-error": "Unable to load A/B test distribution. Please try again.",
+  "admin-ab-tests-publish-outcome-title": "New Publish intent outcome",
+  "admin-ab-tests-publish-outcome-description": "Unique people who saw the new Publish intent through either experiment.",
+  "admin-ab-tests-publish-outcome-cohort": "Publish intent treatment or Development environment treatment · duplicates counted once",
+  "admin-ab-tests-publish-outcome-exposed": "unique people exposed",
+  "admin-ab-tests-publish-outcome-selected-publish": "Selected Publish",
+  "admin-ab-tests-publish-outcome-selected-another-intent": "Selected another intent",
+  "admin-ab-tests-publish-outcome-no-selection-yet": "No selection yet",
+  "admin-ab-tests-load-error": "Unable to load A/B test data. Please try again.",
   "admin-ab-tests-empty": "No A/B tests are configured."
 }
