@@ -60,6 +60,7 @@ function startOtpSendCooldown(seconds: number) {
       otpSendCooldownSeconds.value = 0
       clearOtpSendCooldownTimer()
       resetOtpCaptcha()
+      otpSendError.value = ''
     }
     else {
       otpSendCooldownSeconds.value -= 1

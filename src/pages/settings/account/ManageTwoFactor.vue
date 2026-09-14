@@ -151,9 +151,7 @@ async function sendOtpVerification() {
       return
     }
 
-    if (parsed?.kind === 'captcha')
-      currentStep.value = 1
-
+    currentStep.value = 1
     return
   }
 
