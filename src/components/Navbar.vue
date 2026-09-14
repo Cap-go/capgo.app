@@ -40,17 +40,17 @@ const { t } = useI18n()
 <template>
   <header class="relative z-40 bg-slate-100 backdrop-blur-xl dark:bg-slate-900">
     <div class="px-2 sm:px-4 lg:px-6">
-      <div class="relative flex items-center justify-between h-16 -mb-px">
+      <div class="relative flex items-center h-16 gap-0.5 -mb-px">
         <!-- Header: Left side -->
-        <div class="flex items-center space-x-4 lg:space-x-3">
-          <div v-if="displayStore.NavTitle && isMobile" class="pr-2">
+        <div class="z-10 flex shrink-0 items-center gap-0 lg:gap-3">
+          <div v-if="displayStore.NavTitle && isMobile">
             <button
               type="button"
-              class="flex p-2 rounded-sm dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:bg-slate-600 hover:bg-slate-300"
+              class="flex rounded-sm p-0.5 dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:bg-slate-600 hover:bg-slate-300"
               :aria-label="t('button-back')"
               @click="back()"
             >
-              <IconBack class="w-6 h-6 fill-current" />
+              <IconBack class="h-3.5 w-3.5 fill-current" />
               <span class="hidden md:block">{{ t('button-back') }}</span>
             </button>
           </div>
@@ -71,7 +71,7 @@ const { t } = useI18n()
           <!-- Hamburger button -->
           <button
             type="button"
-            class="p-1 rounded-md lg:hidden dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:text-slate-50 hover:text-slate-600"
+            class="rounded-sm p-0.5 lg:hidden dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none text-slate-500 dark:hover:text-slate-50 hover:text-slate-600"
             data-test="sidebar-mobile-toggle"
             aria-controls="sidebar"
             :aria-expanded="props.sidebarOpen"
@@ -79,7 +79,7 @@ const { t } = useI18n()
             @click.stop="$emit('toggleSidebar')"
           >
             <span class="sr-only">{{ props.sidebarOpen ? t('close-sidebar') : t('open-sidebar') }}</span>
-            <IconMenu class="w-6 h-6 fill-current" />
+            <IconMenu class="h-3.5 w-3.5 fill-current" />
           </button>
 
           <!-- Title on desktop -->
@@ -117,20 +117,21 @@ const { t } = useI18n()
           </div>
         </div>
 
-        <!-- Centered title on mobile -->
-        <div class="flex-1 px-4 text-center lg:hidden">
-          <div class="font-bold truncate dark:text-white text-md text-dark">
-            {{ displayStore.NavTitle }}
-          </div>
+        <!-- Mobile title: narrow inline slot so billing row keeps width -->
+        <div
+          v-if="displayStore.NavTitle"
+          class="min-w-0 max-w-[18%] shrink truncate px-0.5 text-[11px] font-bold leading-tight text-dark dark:text-white lg:hidden"
+        >
+          {{ displayStore.NavTitle }}
         </div>
 
         <!-- Right side: Desktop banner -->
-        <div class="hidden lg:flex">
+        <div class="hidden lg:ml-auto lg:flex">
           <Banner desktop />
         </div>
 
         <!-- Mobile banner in navbar -->
-        <div class="lg:hidden">
+        <div class="z-10 min-w-0 flex-1 overflow-hidden lg:hidden">
           <Banner desktop />
         </div>
       </div>

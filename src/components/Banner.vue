@@ -105,10 +105,10 @@ const isNavbarInline = computed(() => props.desktop && isMobile)
   <!-- Desktop inline version (also used in mobile navbar via Navbar.vue) -->
   <div
     v-if="props.desktop && showBanner"
-    class="min-w-0 overflow-hidden max-lg:w-full lg:ml-auto lg:flex lg:max-w-full lg:flex-nowrap lg:items-center lg:gap-3"
+    class="min-w-0 w-full overflow-hidden lg:ml-auto lg:flex lg:max-w-full lg:flex-nowrap lg:items-center lg:gap-3"
     :class="isNavbarInline
-      ? 'grid w-full grid-cols-[minmax(0,auto)_minmax(0,1fr)_auto] items-center gap-x-2'
-      : 'flex flex-nowrap items-center gap-2'"
+      ? 'grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-1'
+      : 'flex max-w-[50vw] flex-nowrap items-center gap-2'"
     data-test="org-billing-banner"
   >
     <component
@@ -116,14 +116,14 @@ const isNavbarInline = computed(() => props.desktop && isMobile)
       v-bind="showCta ? { role: 'status' } : { href: billingCtaHref }"
       class="min-w-0 max-w-full overflow-hidden"
       :class="showCta ? '' : 'rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500'"
-      :aria-label="statusAriaLabel"
+      :aria-label="statusLabel"
       :title="statusLabel"
     >
       <span
         class="block max-w-full truncate font-semibold"
         :class="[
           badgeClass,
-          isNavbarInline ? 'rounded-full px-2 py-0.5 text-[10px] leading-tight' : 'd-badge d-badge-sm',
+          isNavbarInline ? 'rounded-full px-1.5 py-0.5 text-[10px] leading-tight' : 'd-badge d-badge-sm',
         ]"
         data-test="org-billing-status"
       >
@@ -134,7 +134,7 @@ const isNavbarInline = computed(() => props.desktop && isMobile)
       v-if="statusDetail"
       class="min-w-0 truncate font-semibold leading-tight"
       :class="[
-        isNavbarInline ? 'text-[10px]' : 'flex-1 text-[11px] sm:text-xs lg:text-sm',
+        isNavbarInline ? 'text-[10px]' : 'flex-1 text-xs sm:text-sm',
         status.trialDaysLeft <= 7 ? 'text-amber-700 dark:text-amber-300' : 'text-slate-800 dark:text-slate-200',
       ]"
       data-test="org-billing-detail"
@@ -147,7 +147,7 @@ const isNavbarInline = computed(() => props.desktop && isMobile)
     <a
       v-if="showCta"
       :href="billingCtaHref"
-      class="shrink-0 whitespace-nowrap border-none d-btn d-btn-xs h-7 min-h-0 px-2 text-[11px] lg:d-btn-sm lg:text-sm"
+      class="shrink-0 whitespace-nowrap border-none d-btn d-btn-xs h-6 min-h-0 px-1.5 text-[10px] leading-tight lg:h-auto lg:px-2 lg:text-sm lg:d-btn-sm"
       :class="bannerColor"
       data-test="org-billing-cta"
     >
