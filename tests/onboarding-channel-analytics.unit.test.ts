@@ -109,6 +109,25 @@ describe('onboarding channel animation analytics', () => {
     })
   })
 
+  it.concurrent('freezes completed watch duration before a later replay', () => {
+    const context = createTracker()
+    context.tracker.start('automatic', context.source)
+    context.advance(8_100)
+    context.setProgress(1)
+    context.tracker.complete()
+    context.advance(4_000)
+    context.tracker.replayRequested()
+
+    expect(context.events.at(-1)).toMatchObject({
+      event: 'onboarding_channel_animation_replayed',
+      properties: {
+        had_completed_animation: true,
+        replay_count: 1,
+        watch_duration_ms: 8_100,
+      },
+    })
+  })
+
   it.concurrent('distinguishes back navigation from an unexpected unmount', () => {
     const backed = createTracker()
     backed.tracker.start('automatic', backed.source)

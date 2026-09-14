@@ -74,6 +74,7 @@ export function createOnboardingChannelAnimationTracker(options: CreateOnboardin
   const now = options.now ?? Date.now
   let active = false
   let completed = false
+  let completedWatchDurationMs: number | null = null
   let disposed = false
   let exitRecorded = false
   let reducedMotion = false
@@ -110,7 +111,9 @@ export function createOnboardingChannelAnimationTracker(options: CreateOnboardin
       had_completed_animation: completed,
       reduced_motion: reducedMotion,
       replay_count: replayCount,
-      watch_duration_ms: active || completed ? Math.round(finiteNonNegative(now() - startedAt)) : 0,
+      watch_duration_ms: active
+        ? Math.round(finiteNonNegative(now() - startedAt))
+        : completedWatchDurationMs ?? 0,
     }
   }
 
@@ -120,6 +123,7 @@ export function createOnboardingChannelAnimationTracker(options: CreateOnboardin
     reducedMotion = false
     active = true
     completed = false
+    completedWatchDurationMs = null
     exitRecorded = false
     progressSource = source
     runIndex += 1
@@ -141,6 +145,7 @@ export function createOnboardingChannelAnimationTracker(options: CreateOnboardin
   function complete() {
     if (!active || completed || disposed)
       return
+    completedWatchDurationMs = Math.round(finiteNonNegative(now() - startedAt))
     completed = true
     active = false
     emit('onboarding_channel_animation_completed', progressProperties())
@@ -154,6 +159,7 @@ export function createOnboardingChannelAnimationTracker(options: CreateOnboardin
     emit('onboarding_channel_animation_replayed', progressProperties())
     active = false
     completed = false
+    completedWatchDurationMs = null
     exitRecorded = false
   }
 
@@ -163,6 +169,7 @@ export function createOnboardingChannelAnimationTracker(options: CreateOnboardin
     reducedMotion = true
     active = false
     completed = true
+    completedWatchDurationMs = 0
     exitRecorded = false
     progressSource = null
     startedAt = now()
@@ -178,6 +185,7 @@ export function createOnboardingChannelAnimationTracker(options: CreateOnboardin
       return
     active = false
     completed = false
+    completedWatchDurationMs = null
     progressSource = null
     viewStage()
     emit('onboarding_channel_animation_unavailable', {
@@ -213,6 +221,7 @@ export function createOnboardingChannelAnimationTracker(options: CreateOnboardin
     }
     disposed = true
     active = false
+    completedWatchDurationMs = null
   }
 
   return {
