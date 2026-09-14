@@ -10,11 +10,9 @@ import type {
 
 export type {
   AdminABTestChannelCreation,
-  AdminChannelAnimationCohort,
   AdminChannelAnimationCohortName,
   AdminChannelAnimationStage,
   AdminChannelAnimationStageName,
-  AdminChannelExperimentBranch,
   AdminChannelExperimentStatus,
 } from '../../supabase/functions/_backend/utils/ab_test_channel_creation.ts'
 
