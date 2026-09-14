@@ -840,6 +840,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain(':series="dailySetupCliAgentSeries"')
     expect(source).toContain('chart-id="cli-checklist-coverage-v4"')
     expect(source).toContain('visibleAnalytics.value?.v4_cli_checklist_coverage')
+    expect(source).toContain(':no-data-message="cliChecklistNoDataMessage"')
     expect(source).toContain('app-onboarding-cli-step-')
     expect(source).toContain(':value="step.done"')
     expect(source).toContain(':max="cliChecklistCoverage.active_apps"')

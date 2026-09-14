@@ -269,6 +269,9 @@ const cliChecklistRows = computed(() => cliChecklistCoverage.value.steps.map(ste
   label: t(`app-onboarding-cli-step-${step.step_id}`),
 })))
 const hasCliChecklistCoverage = computed(() => cliChecklistCoverage.value.active_apps > 0)
+const cliChecklistNoDataMessage = computed(() => cliChecklistCoverage.value.unavailable_apps > 0
+  ? t('frontend-onboarding-cli-checklist-unavailable', { count: cliChecklistCoverage.value.unavailable_apps })
+  : undefined)
 const dailySetupCliOutcomeLabels = computed<Record<FrontendOnboardingDailySetupCliOutcomeKey, string>>(() => ({
   cli_copy_init: t('frontend-onboarding-daily-setup-cli-cli-copy-init'),
   ai_copy_init: t('frontend-onboarding-daily-setup-cli-ai-copy-init'),
@@ -599,6 +602,7 @@ displayStore.defaultBack = '/dashboard'
             :unit="t('frontend-onboarding-apps')"
             :is-loading="isLoadingStats"
             :has-data="hasCliChecklistCoverage"
+            :no-data-message="cliChecklistNoDataMessage"
           >
             <template #header>
               <div class="min-w-0">
