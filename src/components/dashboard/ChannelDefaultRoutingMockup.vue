@@ -2,13 +2,13 @@
 import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '~/utils/onboardingChannelAnalytics'
 import { gsap } from 'gsap'
 import { MotionPathPlugin } from 'gsap/MotionPathPlugin'
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconCheck from '~icons/lucide/check'
 import IconRefreshCw from '~icons/lucide/refresh-cw'
 import IconServer from '~icons/lucide/server'
 import IconSmartphone from '~icons/lucide/smartphone'
-import { createOnboardingChannelAnimationTracker } from '~/utils/onboardingChannelAnalytics'
+import { useOnboardingChannelAnimation } from '~/composables/useOnboardingChannelAnimation'
 
 const props = withDefaults(defineProps<{
   embedded?: boolean
@@ -25,16 +25,6 @@ gsap.registerPlugin(MotionPathPlugin)
 
 const { t } = useI18n()
 const rootEl = ref<HTMLElement | null>(null)
-const prefersReducedMotion = ref(false)
-
-let timeline: gsap.core.Timeline | null = null
-let media: gsap.MatchMedia | null = null
-let resizeObserver: ResizeObserver | null = null
-let resizeAnimationFrame: number | null = null
-const animationAnalytics = createOnboardingChannelAnimationTracker({
-  emit: (event, properties) => emit('analytics', event, properties),
-  stage: 'channel-routing',
-})
 
 function element<T extends Element>(root: HTMLElement, selector: string): T | null {
   return root.querySelector<T>(selector)
@@ -256,97 +246,21 @@ function buildTimeline(root: HTMLElement) {
   return animation
 }
 
-function progressSource(animation: gsap.core.Timeline) {
-  return {
-    durationMs: () => animation.duration() * 1_000,
-    progress: () => animation.progress(),
-  }
-}
-
-function playAnimation(animation: gsap.core.Timeline, trigger: 'automatic' | 'replay' | 'resize') {
-  const source = progressSource(animation)
-  const replacedAfterResize = trigger === 'resize' && animationAnalytics.replaceProgressSource(source)
-  if (!replacedAfterResize)
-    animationAnalytics.start(trigger === 'replay' ? 'replay' : 'automatic', source)
-  animation.eventCallback('onComplete', animationAnalytics.complete)
-  animation.play(0)
-}
-
-function createAnimation(trigger: 'automatic' | 'replay' | 'resize' = 'automatic') {
-  timeline?.kill()
-  media?.revert()
-  timeline = null
-  media = null
-
-  const root = rootEl.value
-  if (!root)
-    return
-
-  media = gsap.matchMedia()
-  media.add('(prefers-reduced-motion: reduce)', () => {
-    prefersReducedMotion.value = true
-    showFinalState(root)
-    animationAnalytics.showReducedMotion()
-  })
-  media.add('(prefers-reduced-motion: no-preference)', () => {
-    prefersReducedMotion.value = false
-    timeline = buildTimeline(root)
-    if (!timeline) {
-      animationAnalytics.unavailable()
-      return
-    }
-    playAnimation(timeline, trigger)
-
-    return () => {
-      timeline?.kill()
-      timeline = null
-    }
-  })
-}
-
-function refreshAnimationAfterResize() {
-  if (resizeAnimationFrame !== null)
-    window.cancelAnimationFrame(resizeAnimationFrame)
-  resizeAnimationFrame = window.requestAnimationFrame(() => {
-    resizeAnimationFrame = null
-    createAnimation('resize')
-  })
-}
-
-function replay() {
-  animationAnalytics.replayRequested()
-  if (!timeline) {
-    createAnimation('replay')
-    return
-  }
-  animationAnalytics.start('replay', progressSource(timeline))
-  timeline.eventCallback('onComplete', animationAnalytics.complete)
-  timeline.restart()
-}
-
-function continueOnboarding() {
-  animationAnalytics.leave('continue')
-  emit('continue')
-}
-
-onMounted(async () => {
-  await nextTick()
-  createAnimation()
-  if (rootEl.value) {
-    resizeObserver = new ResizeObserver(refreshAnimationAfterResize)
-    resizeObserver.observe(rootEl.value)
-  }
-})
-
-onBeforeUnmount(() => {
-  animationAnalytics.dispose()
-  resizeObserver?.disconnect()
-  if (resizeAnimationFrame !== null)
-    window.cancelAnimationFrame(resizeAnimationFrame)
-  timeline?.kill()
-  media?.revert()
-  timeline = null
-  media = null
+const {
+  continueOnboarding,
+  reducedMotion: prefersReducedMotion,
+  replay,
+} = useOnboardingChannelAnimation({
+  buildTimeline: () => rootEl.value ? buildTimeline(rootEl.value) : null,
+  emitAnalytics: (event, properties) => emit('analytics', event, properties),
+  onContinue: () => emit('continue'),
+  rebuildOnReplay: false,
+  root: rootEl,
+  showFinalState: () => {
+    if (rootEl.value)
+      showFinalState(rootEl.value)
+  },
+  stage: 'channel-routing',
 })
 </script>
 

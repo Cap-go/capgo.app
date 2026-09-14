@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '~/utils/onboardingChannelAnalytics'
 import gsap from 'gsap'
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconAppWindow from '~icons/lucide/app-window'
 import IconArrowLeft from '~icons/lucide/arrow-left'
@@ -24,7 +24,7 @@ import IconSettings from '~icons/lucide/settings'
 import IconSmartphone from '~icons/lucide/smartphone'
 import IconSparkles from '~icons/lucide/sparkles'
 import IconWrench from '~icons/lucide/wrench'
-import { createOnboardingChannelAnimationTracker } from '~/utils/onboardingChannelAnalytics'
+import { useOnboardingChannelAnimation } from '~/composables/useOnboardingChannelAnimation'
 
 withDefaults(defineProps<{
   embedded?: boolean
@@ -40,15 +40,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const root = ref<HTMLElement | null>(null)
-const reducedMotion = ref(false)
-let timeline: gsap.core.Timeline | null = null
-let media: gsap.MatchMedia | null = null
-let resizeObserver: ResizeObserver | null = null
-let resizeAnimationFrame: number | null = null
-const animationAnalytics = createOnboardingChannelAnimationTracker({
-  emit: (event, properties) => emit('analytics', event, properties),
-  stage: 'channel-console-assign',
-})
 
 function element(selector: string) {
   return root.value?.querySelector<HTMLElement>(selector) ?? null
@@ -228,89 +219,14 @@ function buildTimeline() {
   return animation
 }
 
-function progressSource(animation: gsap.core.Timeline) {
-  return {
-    durationMs: () => animation.duration() * 1_000,
-    progress: () => animation.progress(),
-  }
-}
-
-function playAnimation(animation: gsap.core.Timeline, trigger: 'automatic' | 'replay' | 'resize') {
-  const source = progressSource(animation)
-  const replacedAfterResize = trigger === 'resize' && animationAnalytics.replaceProgressSource(source)
-  if (!replacedAfterResize)
-    animationAnalytics.start(trigger === 'replay' ? 'replay' : 'automatic', source)
-  animation.eventCallback('onComplete', animationAnalytics.complete)
-  animation.play(0)
-}
-
-function createAnimation(trigger: 'automatic' | 'replay' | 'resize' = 'automatic') {
-  timeline?.kill()
-  media?.revert()
-  media = gsap.matchMedia()
-
-  media.add('(prefers-reduced-motion: reduce)', () => {
-    reducedMotion.value = true
-    showFinalState()
-    animationAnalytics.showReducedMotion()
-  })
-
-  media.add('(prefers-reduced-motion: no-preference)', () => {
-    reducedMotion.value = false
-    timeline = buildTimeline()
-    if (!timeline) {
-      animationAnalytics.unavailable()
-      return
-    }
-    playAnimation(timeline, trigger)
-  })
-}
-
-function refreshAnimationAfterResize() {
-  if (resizeAnimationFrame !== null)
-    window.cancelAnimationFrame(resizeAnimationFrame)
-  resizeAnimationFrame = window.requestAnimationFrame(() => {
-    resizeAnimationFrame = null
-    createAnimation('resize')
-  })
-}
-
-function replay() {
-  animationAnalytics.replayRequested()
-  if (reducedMotion.value) {
-    showFinalState()
-    animationAnalytics.showReducedMotion()
-    return
-  }
-  createAnimation('replay')
-}
-
-function goBack() {
-  animationAnalytics.leave('back')
-  emit('back')
-}
-
-function continueOnboarding() {
-  animationAnalytics.leave('continue')
-  emit('continue')
-}
-
-onMounted(async () => {
-  await nextTick()
-  createAnimation()
-  if (root.value) {
-    resizeObserver = new ResizeObserver(refreshAnimationAfterResize)
-    resizeObserver.observe(root.value)
-  }
-})
-
-onBeforeUnmount(() => {
-  animationAnalytics.dispose()
-  resizeObserver?.disconnect()
-  if (resizeAnimationFrame !== null)
-    window.cancelAnimationFrame(resizeAnimationFrame)
-  timeline?.kill()
-  media?.revert()
+const { continueOnboarding, goBack, replay } = useOnboardingChannelAnimation({
+  buildTimeline,
+  emitAnalytics: (event, properties) => emit('analytics', event, properties),
+  onBack: () => emit('back'),
+  onContinue: () => emit('continue'),
+  root,
+  showFinalState,
+  stage: 'channel-console-assign',
 })
 </script>
 
