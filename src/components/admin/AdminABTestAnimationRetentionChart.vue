@@ -137,11 +137,10 @@ const chartOptions = computed<ChartOptions<'line'>>(() => ({
 </script>
 
 <template>
-  <div
-    class="h-64 w-full"
-    role="img"
-    :aria-label="t('admin-ab-tests-channel-retention-aria')"
-  >
+  <figure class="h-64 w-full">
     <Line :data="chartData" :options="chartOptions" />
-  </div>
+    <figcaption class="sr-only">
+      {{ t('admin-ab-tests-channel-retention-aria') }}
+    </figcaption>
+  </figure>
 </template>

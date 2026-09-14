@@ -56,7 +56,12 @@ function formatDifference(value: number | null) {
   if (value === null)
     return '—'
   const formatted = formatNumberValue(Math.abs(value), { minimumFractionDigits: 1, maximumFractionDigits: 1 })
-  return `${value > 0 ? '+' : value < 0 ? '−' : ''}${formatted} pp`
+  let sign = ''
+  if (value > 0)
+    sign = '+'
+  else if (value < 0)
+    sign = '−'
+  return `${sign}${formatted} pp`
 }
 
 function formatWatchTime(value: number | null) {

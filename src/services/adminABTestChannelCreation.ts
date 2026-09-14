@@ -1,3 +1,23 @@
+import type {
+  AdminABTestChannelCreation,
+  AdminChannelAnimationCohort,
+  AdminChannelAnimationCohortName,
+  AdminChannelAnimationStage,
+  AdminChannelAnimationStageName,
+  AdminChannelExperimentBranch,
+  AdminChannelExperimentStatus,
+} from '../../supabase/functions/_backend/utils/ab_test_channel_creation.ts'
+
+export type {
+  AdminABTestChannelCreation,
+  AdminChannelAnimationCohort,
+  AdminChannelAnimationCohortName,
+  AdminChannelAnimationStage,
+  AdminChannelAnimationStageName,
+  AdminChannelExperimentBranch,
+  AdminChannelExperimentStatus,
+} from '../../supabase/functions/_backend/utils/ab_test_channel_creation.ts'
+
 export const ADMIN_CHANNEL_ANIMATION_STAGES = [
   'channel-routing',
   'channel-self-assign',
@@ -11,69 +31,7 @@ export const ADMIN_CHANNEL_ANIMATION_COHORTS = [
   'unavailable',
 ] as const
 
-export type AdminChannelAnimationStageName = typeof ADMIN_CHANNEL_ANIMATION_STAGES[number]
-export type AdminChannelAnimationCohortName = typeof ADMIN_CHANNEL_ANIMATION_COHORTS[number]
-export type AdminChannelExperimentStatus = 'collecting' | 'treatment_ahead' | 'control_ahead' | 'inconclusive'
-export type AdminChannelPosthogFailureReason = 'too_large' | 'unconfigured' | 'timeout' | 'unavailable'
-
-export interface AdminChannelExperimentBranch {
-  assigned: number
-  branch: string
-  conversion_percentage: number | null
-  converted: number
-  eligible: number
-  label: string
-  pending: number
-}
-
-export interface AdminChannelAnimationCohort {
-  cohort: AdminChannelAnimationCohortName
-  completed: number | null
-  completion_percentage: number | null
-  continued: number
-  continued_percentage: number | null
-  median_watch_ms: number | null
-  users: number
-}
-
-export interface AdminChannelAnimationStage {
-  completed: number
-  completion_percentage: number | null
-  continued: number
-  continued_percentage: number | null
-  cohorts: AdminChannelAnimationCohort[]
-  interrupted: number
-  median_skip_progress_percentage: number | null
-  median_watch_ms: number | null
-  reached: number
-  replays: number
-  retention: Array<{ progress_percentage: 0 | 25 | 50 | 75 | 100, viewers: number }>
-  skip_progress: Array<{ from_percentage: 0 | 25 | 50 | 75, skipped: number, to_percentage: 24 | 49 | 74 | 99 }>
-  skipped: number
-  stage: AdminChannelAnimationStageName
-  started: number
-}
-
-export interface AdminABTestChannelCreation {
-  data_quality: {
-    posthog_configured: boolean
-    posthog_connected: boolean
-    posthog_failure_reason: AdminChannelPosthogFailureReason | null
-  }
-  experiment: {
-    branches: AdminChannelExperimentBranch[]
-    confidence_percentage: number | null
-    confidence_interval_percentage_points: { high: number, low: number } | null
-    difference_percentage_points: number | null
-    minimum_branch_sample: number
-    observation_window_hours: number
-    relative_lift_percentage: number | null
-    status: AdminChannelExperimentStatus
-    total_assigned: number
-  }
-  generated_at: string
-  stages: AdminChannelAnimationStage[]
-}
+type AdminChannelPosthogFailureReason = NonNullable<AdminABTestChannelCreation['data_quality']['posthog_failure_reason']>
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -251,6 +209,17 @@ function isFailureReason(value: unknown): value is AdminChannelPosthogFailureRea
     && ['too_large', 'unconfigured', 'timeout', 'unavailable'].includes(value)
 }
 
+function parseConfidenceInterval(value: unknown): { high: number, low: number } | null | undefined {
+  if (value === null)
+    return null
+  if (!isRecord(value)
+    || typeof value.low !== 'number' || !Number.isFinite(value.low)
+    || typeof value.high !== 'number' || !Number.isFinite(value.high)) {
+    return undefined
+  }
+  return { high: value.high, low: value.low }
+}
+
 export function parseAdminABTestChannelCreation(value: unknown): AdminABTestChannelCreation | null {
   if (!isRecord(value)
     || !isRecord(value.data_quality)
@@ -274,14 +243,7 @@ export function parseAdminABTestChannelCreation(value: unknown): AdminABTestChan
   const confidence = percentage(value.experiment.confidence_percentage)
   const difference = signedMeasurement(value.experiment.difference_percentage_points)
   const relativeLift = signedMeasurement(value.experiment.relative_lift_percentage)
-  const intervalValue = value.experiment.confidence_interval_percentage_points
-  const interval = intervalValue === null
-    ? null
-    : isRecord(intervalValue)
-      && typeof intervalValue.low === 'number' && Number.isFinite(intervalValue.low)
-      && typeof intervalValue.high === 'number' && Number.isFinite(intervalValue.high)
-      ? { high: intervalValue.high, low: intervalValue.low }
-      : undefined
+  const interval = parseConfidenceInterval(value.experiment.confidence_interval_percentage_points)
   if (branches.length !== 2 || branches.includes(null)
     || stages.length !== ADMIN_CHANNEL_ANIMATION_STAGES.length || stages.includes(null)
     || totalAssigned === null || minimumBranchSample === null || observationWindowHours === null

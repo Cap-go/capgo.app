@@ -66,6 +66,21 @@ export interface AdminChannelAnimationCohort {
   users: number
 }
 
+export type AdminChannelAnimationRetentionProgress = 0 | 25 | 50 | 75 | 100
+export type AdminChannelAnimationSkipProgressStart = 0 | 25 | 50 | 75
+export type AdminChannelAnimationSkipProgressEnd = 24 | 49 | 74 | 99
+
+export interface AdminChannelAnimationRetentionPoint {
+  progress_percentage: AdminChannelAnimationRetentionProgress
+  viewers: number
+}
+
+export interface AdminChannelAnimationSkipProgressBucket {
+  from_percentage: AdminChannelAnimationSkipProgressStart
+  skipped: number
+  to_percentage: AdminChannelAnimationSkipProgressEnd
+}
+
 export interface AdminChannelAnimationStage {
   completed: number
   completion_percentage: number | null
@@ -77,8 +92,8 @@ export interface AdminChannelAnimationStage {
   median_watch_ms: number | null
   reached: number
   replays: number
-  retention: Array<{ progress_percentage: 0 | 25 | 50 | 75 | 100, viewers: number }>
-  skip_progress: Array<{ from_percentage: 0 | 25 | 50 | 75, skipped: number, to_percentage: 24 | 49 | 74 | 99 }>
+  retention: AdminChannelAnimationRetentionPoint[]
+  skip_progress: AdminChannelAnimationSkipProgressBucket[]
   skipped: number
   stage: AdminChannelAnimationStageName
   started: number
@@ -109,21 +124,21 @@ function sqlString(value: string): string {
   return `'${value.replace(/'/g, '\'\'')}'`
 }
 
+function numberFromUnknown(value: unknown): number {
+  if (typeof value === 'number')
+    return value
+  if (typeof value === 'string' && value.trim() !== '')
+    return Number(value)
+  return Number.NaN
+}
+
 function readCount(value: unknown): number | null {
-  const count = typeof value === 'number'
-    ? value
-    : typeof value === 'string' && value.trim() !== ''
-      ? Number(value)
-      : Number.NaN
+  const count = numberFromUnknown(value)
   return Number.isSafeInteger(count) && count >= 0 ? count : null
 }
 
 function readMeasurement(value: unknown): number | null {
-  const measurement = typeof value === 'number'
-    ? value
-    : typeof value === 'string' && value.trim() !== ''
-      ? Number(value)
-      : Number.NaN
+  const measurement = numberFromUnknown(value)
   return Number.isFinite(measurement) && measurement >= 0 ? measurement : null
 }
 
@@ -143,6 +158,14 @@ function normalCdf(value: number): number {
   const t = 1 / (1 + 0.3275911 * x)
   const erf = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x)
   return 0.5 * (1 + sign * erf)
+}
+
+function experimentStatus(low: number, high: number): Exclude<AdminChannelExperimentStatus, 'collecting'> {
+  if (low > 0)
+    return 'treatment_ahead'
+  if (high < 0)
+    return 'control_ahead'
+  return 'inconclusive'
 }
 
 function experimentInference(treatment: AdminChannelExperimentBranch, control: AdminChannelExperimentBranch) {
@@ -174,11 +197,7 @@ function experimentInference(treatment: AdminChannelExperimentBranch, control: A
   return {
     confidencePercentage: roundOne(Math.max(0, Math.min(1, 1 - pValue)) * 100),
     interval: { high: roundOne(high * 100), low: roundOne(low * 100) },
-    status: low > 0
-      ? 'treatment_ahead' as const
-      : high < 0
-        ? 'control_ahead' as const
-        : 'inconclusive' as const,
+    status: experimentStatus(low, high),
   }
 }
 
@@ -465,12 +484,12 @@ export async function getAdminABTestChannelCreation(c: Context): Promise<AdminAB
   try {
     const [outcomeResult, posthog] = await Promise.all([
       pgClient.query<AdminChannelExperimentOutcomeRow>(
-        `WITH assigned_users AS (
+        String.raw`WITH assigned_users AS (
            SELECT
              user_account.id,
              assignment.value ->> 'branch' AS branch,
              CASE
-               WHEN assignment.value ->> 'assigned_at' ~ '^\\d{4}-\\d{2}-\\d{2}T'
+               WHEN assignment.value ->> 'assigned_at' ~ '^\d{4}-\d{2}-\d{2}T'
                  THEN (assignment.value ->> 'assigned_at')::timestamptz
                ELSE NULL
              END AS assigned_at
