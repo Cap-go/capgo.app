@@ -179,28 +179,38 @@ async function initialize() {
   }
 }
 
+function validateChannelNameForSubmission(normalizedName: string) {
+  if (!channelNameError.value)
+    return true
+
+  track('onboarding_channel_name_validation_failed', {
+    channel_name_length: normalizedName.length,
+    channel_name_source: channelNameSource.value,
+    failure_reason: normalizedName ? 'name_invalid' : 'name_required',
+  })
+  return false
+}
+
+function getCreateBlockReason(): NonNullable<OnboardingChannelEventProperties['failure_reason']> | null {
+  if (isInitializing.value)
+    return 'initializing'
+  if (isSubmitting.value)
+    return 'submitting'
+  if (!hasRequiredPermissions.value)
+    return 'permission_denied'
+  return null
+}
+
 async function createChannel() {
   showNameError.value = true
   submitError.value = ''
   const normalizedName = normalizedChannelName.value
-  if (channelNameError.value) {
-    track('onboarding_channel_name_validation_failed', {
-      channel_name_length: normalizedName.length,
-      channel_name_source: channelNameSource.value,
-      failure_reason: normalizedName ? 'name_invalid' : 'name_required',
-    })
+  if (!validateChannelNameForSubmission(normalizedName))
     return
-  }
-  if (isInitializing.value) {
-    track('onboarding_channel_create_blocked', { failure_reason: 'initializing' })
-    return
-  }
-  if (isSubmitting.value) {
-    track('onboarding_channel_create_blocked', { failure_reason: 'submitting' })
-    return
-  }
-  if (!hasRequiredPermissions.value) {
-    track('onboarding_channel_create_blocked', { failure_reason: 'permission_denied' })
+
+  const blockReason = getCreateBlockReason()
+  if (blockReason) {
+    track('onboarding_channel_create_blocked', { failure_reason: blockReason })
     return
   }
 
