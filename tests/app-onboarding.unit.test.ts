@@ -21,6 +21,7 @@ describe('app onboarding merge', () => {
   it.concurrent('defaults missing onboarding to manual in progress', () => {
     expect(parseAppOnboarding(null)).toEqual(defaultAppOnboarding())
     expect(parseAppOnboarding('nope')).toEqual(defaultAppOnboarding())
+    expect(defaultAppOnboarding().todo_list_version).toBe(1)
   })
 
   it.concurrent('reads nested setup without dropping the feature ledger', () => {
@@ -28,6 +29,7 @@ describe('app onboarding merge', () => {
       refreshed_at: '2026-08-14T00:00:00.000Z',
       features: { ota: { stage: 'local_only' } },
       setup: {
+        todo_list_version: 2,
         source: 'cli',
         outcome: 'in_progress',
         steps: { add_app: { status: 'done', at: '2026-08-14T10:00:00.000Z' } },
@@ -37,6 +39,7 @@ describe('app onboarding merge', () => {
     expect(parseAppOnboarding(ledger)).toMatchObject({
       source: 'cli',
       outcome: 'in_progress',
+      todo_list_version: 2,
       steps: { add_app: { status: 'done', at: '2026-08-14T10:00:00.000Z' } },
     })
 
@@ -46,6 +49,7 @@ describe('app onboarding merge', () => {
 
     expect(next.features).toEqual({ ota: { stage: 'local_only' } })
     expect(next.refreshed_at).toBe('2026-08-14T00:00:00.000Z')
+    expect(parseAppOnboarding(next).todo_list_version).toBe(2)
     expect(parseAppOnboarding(next).steps.add_channel?.status).toBe('done')
     expect(next.source).toBeUndefined()
   })
@@ -117,6 +121,7 @@ describe('app onboarding merge', () => {
     expect(parseAppOnboardingPatch({ source: 'web' })).toBeNull()
     expect(parseAppOnboardingPatch({ steps: { not_a_step: { status: 'done' } } })).toBeNull()
     expect(parseAppOnboardingPatch({ source: 'ai' })).toEqual({ source: 'ai' })
+    expect(parseAppOnboardingPatch({ todo_list_version: 99 })).toBeNull()
   })
 
   it.concurrent('ignores client history and caps server history with an overflow marker', () => {

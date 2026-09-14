@@ -146,6 +146,20 @@ afterAll(async () => {
 })
 
 describe('app onboarding progress', () => {
+  it.concurrent('defaults and preserves the server-owned todo list version', async () => {
+    const rows = await executeSQL<{ default_version: number, preserved_version: number }>(`
+      SELECT
+        (public.merge_app_onboarding_setup('{}'::jsonb, '{}'::jsonb)
+          -> 'setup' ->> 'todo_list_version')::integer AS default_version,
+        (public.merge_app_onboarding_setup(
+          '{"setup":{"todo_list_version":2}}'::jsonb,
+          '{"todo_list_version":99,"source":"cli"}'::jsonb
+        ) -> 'setup' ->> 'todo_list_version')::integer AS preserved_version
+    `)
+
+    expect(rows[0]).toEqual({ default_version: 1, preserved_version: 2 })
+  })
+
   it('must reject unauthenticated mark_onboarding_feature_started', async () => {
     const anon = createAuthClient()
     const { error } = await anon.rpc('mark_onboarding_feature_started', {

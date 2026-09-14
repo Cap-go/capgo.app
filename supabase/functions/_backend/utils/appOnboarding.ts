@@ -18,6 +18,7 @@ export type AppOnboardingSource = 'manual' | 'cli' | 'mcp' | 'ai'
 export type AppOnboardingOutcome = 'in_progress' | 'completed' | 'skipped' | 'switched_to_manual'
 export type AppOnboardingStepStatus = 'done' | 'skipped'
 export const APP_ONBOARDING_STEP_HISTORY_LIMIT = 10
+export const DEFAULT_APP_ONBOARDING_TODO_LIST_VERSION = 1
 
 export interface AppOnboardingStepState {
   status: AppOnboardingStepStatus
@@ -25,6 +26,7 @@ export interface AppOnboardingStepState {
 }
 
 export interface AppOnboardingState {
+  todo_list_version: number
   source: AppOnboardingSource
   outcome: AppOnboardingOutcome
   steps: Partial<Record<AppOnboardingStepId, AppOnboardingStepState>>
@@ -71,6 +73,7 @@ const STEP_STATUS_SET = new Set<string>(['done', 'skipped'])
 
 export function defaultAppOnboarding(): AppOnboardingState {
   return {
+    todo_list_version: DEFAULT_APP_ONBOARDING_TODO_LIST_VERSION,
     source: 'manual',
     outcome: 'in_progress',
     steps: {},
@@ -97,6 +100,12 @@ function parseSetupRecord(value: unknown): Record<string, unknown> {
   if (!isRecord(value))
     return {}
   return isRecord(value.setup) ? value.setup : value
+}
+
+function parseTodoListVersion(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
+    : DEFAULT_APP_ONBOARDING_TODO_LIST_VERSION
 }
 
 function parseSteps(value: unknown): AppOnboardingState['steps'] {
@@ -156,6 +165,7 @@ export function parseAppOnboarding(value: unknown): AppOnboardingState {
   const steps = parseSteps(raw.steps)
 
   return {
+    todo_list_version: parseTodoListVersion(raw.todo_list_version),
     source,
     outcome,
     steps,
@@ -236,6 +246,7 @@ export function mergeAppOnboarding(
   }
 
   return {
+    todo_list_version: current.todo_list_version,
     source: pickAppOnboardingSource(current.source, patch.source),
     outcome: deriveAppOnboardingOutcome(steps, current.outcome, patch.outcome),
     steps,
@@ -254,6 +265,7 @@ export function applyAppOnboardingPatch(
   delete existing.outcome
   delete existing.steps
   delete existing.updated_at
+  delete existing.todo_list_version
   return {
     ...existing,
     setup,
