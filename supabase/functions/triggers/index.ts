@@ -1,3 +1,4 @@
+import { app as cache_invalidate } from '../_backend/triggers/cache_invalidate.ts'
 import { app as canceled_org_retention_alerts } from '../_backend/triggers/canceled_org_retention_alerts.ts'
 import { app as credit_usage_alerts } from '../_backend/triggers/credit_usage_alerts.ts'
 import { app as credit_usage_posthog } from '../_backend/triggers/credit_usage_posthog.ts'
@@ -87,6 +88,7 @@ appGlobal.route('/credit_usage_posthog', credit_usage_posthog)
 appGlobal.route('/on_organization_delete', on_organization_delete)
 appGlobal.route('/on_deploy_history_create', on_deploy_history_create)
 appGlobal.route('/plugin_notifications', pluginNotifications)
+appGlobal.route('/cache_invalidate', cache_invalidate)
 appGlobal.route('/queue_consumer', queue_consumer)
 appGlobal.route('/send_email', send_email)
 appGlobal.route('/webhook_delivery', webhook_delivery)
