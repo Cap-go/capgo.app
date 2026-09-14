@@ -1,27 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { describe, expect, it, vi } from 'vitest'
 
-interface AuthGuardTestContext {
-  mainStore: {
-    auth: undefined | { id: string, email_confirmed_at?: string }
-    user: undefined
-    isAdmin: boolean
-    plans: unknown[]
-  }
-  mockGetAuthenticatorAssuranceLevel: ReturnType<typeof vi.fn>
-  mockGetClaims: ReturnType<typeof vi.fn>
-  mockGetSession: ReturnType<typeof vi.fn>
-  mockHideLoader: ReturnType<typeof vi.fn>
-  mockRpc: ReturnType<typeof vi.fn>
-  organizationStore: {
-    organizations: Array<{ gid: string, role: string }>
-    hasOrganizations: boolean
-    fetchOrganizations: ReturnType<typeof vi.fn>
-    dedupFetchOrganizations: ReturnType<typeof vi.fn>
-  }
-}
-
-function createTestContext(): AuthGuardTestContext {
+function createTestContext() {
   const mainStore = {
     auth: undefined,
     user: undefined,
@@ -87,6 +67,8 @@ function createTestContext(): AuthGuardTestContext {
     organizationStore,
   }
 }
+
+type AuthGuardTestContext = ReturnType<typeof createTestContext>
 
 const contextStorage = new AsyncLocalStorage<AuthGuardTestContext>()
 
