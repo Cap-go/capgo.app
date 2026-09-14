@@ -2,21 +2,12 @@
 import type { ChartData, ChartOptions, TooltipItem } from 'chart.js'
 import type { AdminChannelAnimationStage } from '~/services/adminABTestChannelCreation'
 import { useDark } from '@vueuse/core'
-import {
-  CategoryScale,
-  Chart,
-  Filler,
-  LinearScale,
-  LineController,
-  LineElement,
-  PointElement,
-  Tooltip,
-} from 'chart.js'
 import { computed } from 'vue'
 import { Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { createChartColorWithOpacity, resolveAccessibleChartColor } from '~/services/chartConfig'
 import { formatNumberValue } from '~/services/formatLocale'
+import '~/services/adminABTestAnimationChartRegister'
 
 const props = defineProps<{
   stage: AdminChannelAnimationStage
@@ -24,16 +15,6 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const isDark = useDark()
-
-Chart.register(
-  CategoryScale,
-  Filler,
-  LinearScale,
-  LineController,
-  LineElement,
-  PointElement,
-  Tooltip,
-)
 
 const chartData = computed<ChartData<'line'>>(() => {
   const treatmentColor = resolveAccessibleChartColor('#119eff', isDark.value)

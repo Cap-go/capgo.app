@@ -156,6 +156,46 @@ describe('admin A/B test dashboard presentation', () => {
       ...channelCreationPayload,
       stages: [{ ...channelCreationPayload.stages[0], reached: -1 }, ...channelCreationPayload.stages.slice(1)],
     })).toBeNull()
+    expect(parseAdminABTestChannelCreation({
+      ...channelCreationPayload,
+      stages: channelCreationPayload.stages.map((stage, index) => index === 0
+        ? { ...stage, retention: [...stage.retention].reverse() }
+        : stage),
+    })).toBeNull()
+    expect(parseAdminABTestChannelCreation({
+      ...channelCreationPayload,
+      stages: channelCreationPayload.stages.map((stage, index) => index === 0
+        ? { ...stage, skip_progress: [...stage.skip_progress].reverse() }
+        : stage),
+    })).toBeNull()
+    expect(parseAdminABTestChannelCreation({
+      ...channelCreationPayload,
+      stages: channelCreationPayload.stages.map((stage, index) => index === 1
+        ? { ...stage, stage: channelCreationPayload.stages[0].stage }
+        : stage),
+    })).toBeNull()
+    expect(parseAdminABTestChannelCreation({
+      ...channelCreationPayload,
+      stages: channelCreationPayload.stages.map((stage, index) => index === 0
+        ? {
+            ...stage,
+            cohorts: stage.cohorts.map((cohort, cohortIndex) => cohortIndex === 0
+              ? { ...cohort, completed: 'invalid' }
+              : cohort),
+          }
+        : stage),
+    })).toBeNull()
+    expect(parseAdminABTestChannelCreation({
+      ...channelCreationPayload,
+      stages: channelCreationPayload.stages.map((stage, index) => index === 0
+        ? {
+            ...stage,
+            cohorts: stage.cohorts.map((cohort, cohortIndex) => cohortIndex === 0
+              ? { ...cohort, completed: null }
+              : cohort),
+          }
+        : stage),
+    })).toBeNull()
   })
 
   it.concurrent('wires the admin tab, metrics, and dashboard cards', async () => {
@@ -186,10 +226,13 @@ describe('admin A/B test dashboard presentation', () => {
     expect(matrixSource).toContain(`t('admin-ab-tests-treatment')`)
     expect(matrixSource).toContain(`t('admin-ab-tests-control')`)
     expect(matrixSource).not.toContain(`t('admin-ab-tests-variant')`)
-    expect(channelSource).toContain('role="tablist"')
-    expect(channelSource).toContain(':aria-selected="stage.stage === selectedStageName"')
+    expect(channelSource).toContain('role="group"')
+    expect(channelSource).toContain(':aria-pressed="stage.stage === selectedStageName"')
+    expect(channelSource).not.toContain('role="tablist"')
     expect(channelSource).toContain('posthog_failure_reason === null')
     expect(channelSource).not.toContain('Channel creation" class="bg-')
+    expect(retentionSource).toContain(`import '~/services/adminABTestAnimationChartRegister'`)
+    expect(retentionSource).not.toContain('Chart.register')
     expect(retentionSource).toContain('stepped: true')
     expect(retentionSource).toContain(`t('admin-ab-tests-channel-skip-bucket'`)
     expect(outcomeSource).toContain('<progress')

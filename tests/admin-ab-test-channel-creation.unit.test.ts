@@ -175,6 +175,7 @@ describe('admin channel creation A/B analytics', () => {
     expect(queryMock).toHaveBeenCalledOnce()
     const [query, parameters] = queryMock.mock.calls[0] ?? []
     expect(query).toContain('FROM public.audit_logs AS audit_log')
+    expect(query).toContain(`(user_account.onboarding -> 'abtests') ? $1`)
     expect(query).toContain(`audit_log.table_name = 'channels'`)
     expect(query).toContain('audit_log.user_id = assigned_user.id')
     expect(query).toContain('make_interval(hours => $3)')

@@ -241,7 +241,7 @@
   "admin-ab-tests-channel-started": "Used in animation stage metrics. Role: label for automatic first runs started.",
   "admin-ab-tests-channel-status-collecting": "Used in the channel creation experiment summary. Role: status label shown before minimum sample sizes are reached.",
   "admin-ab-tests-channel-status-collecting-description": "Used below the collecting status. Role: minimum sample explanation. Preserve the {count} placeholder.",
-  "admin-ab-tests-channel-status-confidence": "Used below a mature experiment status. Role: confidence explanation. Preserve the {confidence} placeholder.",
+  "admin-ab-tests-channel-status-confidence": "Used below a mature experiment status. Explains that leader status uses the 95% confidence interval while {confidence} is from the pooled two-proportion z-test. Preserve the {confidence} placeholder.",
   "admin-ab-tests-channel-status-control-ahead": "Used in the channel creation experiment summary. Role: status label when the control branch's confidence interval is entirely above treatment.",
   "admin-ab-tests-channel-status-inconclusive": "Used in the channel creation experiment summary. Role: status label when the mature confidence interval crosses zero.",
   "admin-ab-tests-channel-status-treatment-ahead": "Used in the channel creation experiment summary. Role: status label when the treatment branch's confidence interval is entirely above control.",

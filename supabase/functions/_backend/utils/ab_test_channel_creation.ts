@@ -501,7 +501,8 @@ export async function getAdminABTestChannelCreation(c: Context): Promise<AdminAB
                ELSE '{}'::jsonb
              END
            ) AS assignment(test_name, value)
-           WHERE assignment.test_name = $1
+           WHERE (user_account.onboarding -> 'abtests') ? $1
+             AND assignment.test_name = $1
              AND assignment.value ->> 'branch' = ANY($2::text[])
              AND jsonb_typeof(assignment.value) = 'object'
          )

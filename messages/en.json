@@ -3463,7 +3463,7 @@
   "admin-ab-tests-channel-started": "Started",
   "admin-ab-tests-channel-status-collecting": "Too early to call",
   "admin-ab-tests-channel-status-collecting-description": "Collecting data until both branches have at least {count} eligible people.",
-  "admin-ab-tests-channel-status-confidence": "{confidence} confidence from the eligible cohort.",
+  "admin-ab-tests-channel-status-confidence": "Result status uses the 95% confidence interval; {confidence} confidence comes from the pooled two-proportion z-test.",
   "admin-ab-tests-channel-status-control-ahead": "Control ahead",
   "admin-ab-tests-channel-status-inconclusive": "No clear difference",
   "admin-ab-tests-channel-status-treatment-ahead": "Treatment ahead",

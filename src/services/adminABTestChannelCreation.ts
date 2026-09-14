@@ -29,6 +29,15 @@ export const ADMIN_CHANNEL_ANIMATION_COHORTS = [
   'unavailable',
 ] as const
 
+const ADMIN_CHANNEL_RETENTION_PROGRESS = [0, 25, 50, 75, 100] as const
+
+const ADMIN_CHANNEL_SKIP_PROGRESS = [
+  { from: 0, to: 24 },
+  { from: 25, to: 49 },
+  { from: 50, to: 74 },
+  { from: 75, to: 99 },
+] as const
+
 type AdminChannelPosthogFailureReason = NonNullable<AdminABTestChannelCreation['data_quality']['posthog_failure_reason']>
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -94,7 +103,10 @@ function parseCohort(value: unknown): AdminChannelAnimationCohort | null {
   if (!isRecord(value) || !isCohort(value.cohort))
     return null
   const users = count(value.users)
-  const completed = value.completed === null ? null : count(value.completed)
+  const supportsNullCompleted = value.cohort === 'reduced_motion' || value.cohort === 'unavailable'
+  const completed = value.completed === null
+    ? (supportsNullCompleted ? null : undefined)
+    : (count(value.completed) ?? undefined)
   const continued = count(value.continued)
   const completionPercentage = percentage(value.completion_percentage)
   const continuedPercentage = percentage(value.continued_percentage)
@@ -175,8 +187,15 @@ function parseStage(value: unknown): AdminChannelAnimationStage | null {
       to_percentage: to as 24 | 49 | 74 | 99,
     }]
   })
-  if (retention.length !== 5 || skipProgress.length !== 4)
+  if (retention.length !== ADMIN_CHANNEL_RETENTION_PROGRESS.length
+    || skipProgress.length !== ADMIN_CHANNEL_SKIP_PROGRESS.length
+    || retention.some((point, index) => point.progress_percentage !== ADMIN_CHANNEL_RETENTION_PROGRESS[index])
+    || skipProgress.some((bucket, index) => (
+      bucket.from_percentage !== ADMIN_CHANNEL_SKIP_PROGRESS[index]?.from
+      || bucket.to_percentage !== ADMIN_CHANNEL_SKIP_PROGRESS[index]?.to
+    ))) {
     return null
+  }
 
   return {
     completed: completed!,
@@ -244,6 +263,7 @@ export function parseAdminABTestChannelCreation(value: unknown): AdminABTestChan
   const interval = parseConfidenceInterval(value.experiment.confidence_interval_percentage_points)
   if (branches.length !== 2 || branches.includes(null)
     || stages.length !== ADMIN_CHANNEL_ANIMATION_STAGES.length || stages.includes(null)
+    || new Set(stages.map(stage => stage?.stage)).size !== stages.length
     || totalAssigned === null || minimumBranchSample === null || observationWindowHours === null
     || confidence === undefined || difference === undefined || relativeLift === undefined || interval === undefined
     || totalAssigned !== branches.reduce((sum, branch) => sum + (branch?.assigned ?? 0), 0)) {

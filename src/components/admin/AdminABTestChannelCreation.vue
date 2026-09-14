@@ -174,13 +174,12 @@ function statusTone(status: AdminChannelExperimentStatus) {
         </div>
 
         <template v-else>
-          <div class="mt-5 grid overflow-hidden rounded-lg border border-slate-200 sm:grid-cols-3 dark:border-slate-700" role="tablist" :aria-label="t('admin-ab-tests-channel-stage-selector')">
+          <div class="mt-5 grid overflow-hidden rounded-lg border border-slate-200 sm:grid-cols-3 dark:border-slate-700" role="group" :aria-label="t('admin-ab-tests-channel-stage-selector')">
             <button
               v-for="(stage, index) in analytics.stages"
               :key="stage.stage"
               type="button"
-              role="tab"
-              :aria-selected="stage.stage === selectedStageName"
+              :aria-pressed="stage.stage === selectedStageName"
               class="flex min-w-0 items-start gap-3 border-b border-slate-200 px-4 py-4 text-left transition last:border-b-0 hover:bg-slate-50 sm:border-b-0 sm:border-r sm:last:border-r-0 dark:border-slate-700 dark:hover:bg-slate-900/40"
               :class="stage.stage === selectedStageName ? 'bg-sky-50 ring-1 ring-inset ring-[#119eff] dark:bg-[#119eff]/10' : ''"
               @click="selectedStageName = stage.stage"
