@@ -19,7 +19,7 @@ AS $$
 DECLARE
   v_current jsonb := COALESCE(p_existing, '{}'::jsonb);
   v_setup jsonb;
-  v_todo_list_version integer := 1;
+  v_todo_list_version bigint := 1;
   v_source text;
   v_next_source text;
   v_outcome text;
@@ -60,9 +60,12 @@ BEGIN
   END IF;
 
   IF jsonb_typeof(v_setup -> 'todo_list_version') = 'number'
-    AND (v_setup ->> 'todo_list_version') ~ '^[1-9][0-9]{0,8}$'
+    AND (v_setup ->> 'todo_list_version') ~ '^[1-9][0-9]{0,15}$'
   THEN
-    v_todo_list_version := (v_setup ->> 'todo_list_version')::integer;
+    v_todo_list_version := (v_setup ->> 'todo_list_version')::bigint;
+    IF v_todo_list_version > 9007199254740991 THEN
+      v_todo_list_version := 1;
+    END IF;
   END IF;
 
   v_source := CASE v_setup ->> 'source'
