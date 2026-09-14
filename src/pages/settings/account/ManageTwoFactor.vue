@@ -6,7 +6,12 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
 import { formatLocalDate } from '~/services/date'
-import { verifyEmailOtp } from '~/services/emailOtp'
+import {
+  getEmailOtpSendErrorMessage,
+  parseEmailOtpSendError,
+  sendEmailOtpVerification,
+  verifyEmailOtp,
+} from '~/services/emailOtp'
 import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
@@ -42,8 +47,13 @@ const captchaRef = ref<InstanceType<typeof VueTurnstile> | null>(null)
 // Step 2 & 3: Email OTP
 const otpEmail = computed(() => main.auth?.email ?? main.user?.email ?? '')
 const otpSending = ref(false)
+const otpSendError = ref('')
+const otpSendCooldownSeconds = ref(0)
 const otpVerificationCode = ref('')
 const otpVerificationLoading = ref(false)
+let otpSendCooldownTimer: ReturnType<typeof setInterval> | null = null
+
+const otpSendDisabled = computed(() => otpSending.value || otpSendCooldownSeconds.value > 0)
 
 // Step 4 & 5: TOTP
 const mfaQRCode = ref('')
@@ -68,29 +78,82 @@ const setupDateLabel = computed(() => {
 watch(captchaToken, (token) => {
   if (token && currentStep.value === 1) {
     savedCaptchaToken.value = token
+    otpSendError.value = ''
     currentStep.value = 2
   }
 })
 
+function clearOtpSendCooldownTimer() {
+  if (otpSendCooldownTimer) {
+    clearInterval(otpSendCooldownTimer)
+    otpSendCooldownTimer = null
+  }
+}
+
+function resetCaptchaWidget() {
+  captchaToken.value = ''
+  savedCaptchaToken.value = ''
+  safeResetTurnstile(captchaRef.value)
+}
+
+function startOtpSendCooldown(seconds: number) {
+  clearOtpSendCooldownTimer()
+  otpSendCooldownSeconds.value = seconds
+  otpSendCooldownTimer = setInterval(() => {
+    if (otpSendCooldownSeconds.value <= 1) {
+      otpSendCooldownSeconds.value = 0
+      clearOtpSendCooldownTimer()
+      if (currentStep.value === 2) {
+        resetCaptchaWidget()
+        currentStep.value = 1
+      }
+    }
+    else {
+      otpSendCooldownSeconds.value -= 1
+    }
+  }, 1000)
+}
+
 async function sendOtpVerification() {
-  if (!otpEmail.value || otpSending.value)
+  if (!otpEmail.value || otpSending.value || otpSendCooldownSeconds.value > 0)
     return
 
-  otpSending.value = true
-  const { error } = await supabase.auth.signInWithOtp({
-    email: otpEmail.value,
-    options: {
-      shouldCreateUser: false,
-      captchaToken: savedCaptchaToken.value || undefined,
-    },
-  })
-  otpSending.value = false
+  if (captchaKey.value && !savedCaptchaToken.value) {
+    const message = t('captcha-required')
+    otpSendError.value = message
+    toast.error(message)
+    resetCaptchaWidget()
+    currentStep.value = 1
+    return
+  }
 
-  savedCaptchaToken.value = ''
+  otpSending.value = true
+  otpSendError.value = ''
+  const { error } = await sendEmailOtpVerification(
+    supabase,
+    otpEmail.value,
+    savedCaptchaToken.value || undefined,
+  )
+  otpSending.value = false
+  resetCaptchaWidget()
 
   if (error) {
-    toast.error(t('verification-failed'))
+    const parsed = parseEmailOtpSendError(error)
+    const message = parsed
+      ? getEmailOtpSendErrorMessage(parsed, t)
+      : t('email-otp-send-failed')
+    otpSendError.value = message
+    toast.error(message)
     console.error('Cannot send email OTP', error)
+
+    if (parsed?.kind === 'rate_limit') {
+      startOtpSendCooldown(parsed.waitSeconds ?? 60)
+      return
+    }
+
+    if (parsed?.kind === 'captcha')
+      currentStep.value = 1
+
     return
   }
 
@@ -219,18 +282,20 @@ async function disableMfa() {
 }
 
 function restartFromCaptcha() {
-  captchaToken.value = ''
-  savedCaptchaToken.value = ''
-  safeResetTurnstile(captchaRef.value)
+  clearOtpSendCooldownTimer()
+  otpSendCooldownSeconds.value = 0
+  otpSendError.value = ''
+  resetCaptchaWidget()
   otpVerificationCode.value = ''
   currentStep.value = 1
 }
 
 function resetWizard() {
+  clearOtpSendCooldownTimer()
+  otpSendCooldownSeconds.value = 0
+  otpSendError.value = ''
   currentStep.value = 1
-  captchaToken.value = ''
-  savedCaptchaToken.value = ''
-  safeResetTurnstile(captchaRef.value)
+  resetCaptchaWidget()
   otpVerificationCode.value = ''
   mfaQRCode.value = ''
   enrolledFactorId.value = ''
@@ -296,6 +361,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(async () => {
+  clearOtpSendCooldownTimer()
   if (enrolledFactorId.value && !mfaEnabled.value) {
     await supabase.auth.mfa.unenroll({ factorId: enrolledFactorId.value })
   }
@@ -456,15 +522,33 @@ onBeforeUnmount(async () => {
                   {{ otpEmail }}
                 </p>
               </div>
+              <p
+                v-if="otpSendError"
+                class="text-sm text-red-600 dark:text-red-400"
+                role="alert"
+              >
+                {{ otpSendError }}
+              </p>
+              <p
+                v-if="otpSendCooldownSeconds > 0"
+                class="text-sm text-amber-700 dark:text-amber-300"
+                role="status"
+              >
+                {{ t('email-otp-rate-limit-countdown', { seconds: otpSendCooldownSeconds }) }}
+              </p>
               <button
                 type="button"
                 class="d-btn d-btn-primary d-btn-sm"
-                :class="{ 'opacity-50 cursor-not-allowed': otpSending }"
-                :disabled="otpSending"
+                :class="{ 'opacity-50 cursor-not-allowed': otpSendDisabled }"
+                :disabled="otpSendDisabled"
                 @click="sendOtpVerification"
               >
                 <Spinner v-if="otpSending" size="w-4 h-4" class="mr-2" color="fill-white text-blue-300" />
-                {{ t('email-otp-send-code') }}
+                {{
+                  otpSendCooldownSeconds > 0
+                    ? t('email-otp-send-wait', { seconds: otpSendCooldownSeconds })
+                    : t('email-otp-send-code')
+                }}
               </button>
             </div>
 
