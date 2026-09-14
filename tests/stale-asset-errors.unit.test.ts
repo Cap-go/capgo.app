@@ -34,10 +34,18 @@ describe('stale asset error helpers', () => {
     expect(isTransientNetworkErrorMessage('downloadUrl error: Failed to fetch')).toBe(true)
   })
 
+  it('matches the posthog-js internal request-timeout abort', () => {
+    expect(isTransientNetworkErrorMessage('PostHog request timed out after 3000ms')).toBe(true)
+    expect(isTransientNetworkErrorMessage('PostHog request timed out after 10000ms')).toBe(true)
+    // Wrapped with the AbortError type prefix as it can surface in autocapture
+    expect(isTransientNetworkErrorMessage('AbortError: PostHog request timed out after 3000ms')).toBe(true)
+  })
+
   it('does not match richer messages that merely start with the same words', () => {
     expect(isTransientNetworkErrorMessage('Failed to fetch organization insights')).toBe(false)
     expect(isTransientNetworkErrorMessage('Failed to fetch dynamically imported module: https://console.capgo.app/assets/dashboard.js')).toBe(false)
     expect(isTransientNetworkErrorMessage('downloadUrl error: HTTP 500')).toBe(false)
+    expect(isTransientNetworkErrorMessage('PostHog request timed out after a while')).toBe(false)
     expect(isTransientNetworkErrorMessage(undefined)).toBe(false)
   })
 
@@ -53,6 +61,13 @@ describe('stale asset error helpers', () => {
       event: '$exception',
       properties: {
         $exception_values: ['downloadUrl error: NetworkError when attempting to fetch resource.'],
+      },
+    })).toBe(true)
+
+    expect(shouldSuppressPostHogExceptionEvent({
+      event: '$exception',
+      properties: {
+        $exception_list: [{ value: 'PostHog request timed out after 3000ms' }],
       },
     })).toBe(true)
   })
