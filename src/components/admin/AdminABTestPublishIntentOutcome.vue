@@ -6,7 +6,7 @@ import type {
 import { useI18n } from 'vue-i18n'
 import { formatNumberValue } from '~/services/formatLocale'
 
-const props = defineProps<{
+defineProps<{
   outcome: AdminABTestPublishIntentOutcome
 }>()
 
@@ -19,16 +19,9 @@ const outcomeLabels: Record<AdminABTestPublishIntentOutcomeName, string> = {
 }
 
 const outcomeColors: Record<AdminABTestPublishIntentOutcomeName, string> = {
-  selected_publish: 'bg-[#119eff]',
-  selected_another_intent: 'bg-violet-500',
-  no_selection_yet: 'bg-slate-400 dark:bg-slate-500',
-}
-
-function barWidth(count: number) {
-  if (props.outcome.total === 0)
-    return 0
-
-  return count / props.outcome.total * 100
+  selected_publish: 'd-progress-info',
+  selected_another_intent: 'd-progress-secondary',
+  no_selection_yet: 'd-progress-neutral',
 }
 </script>
 
@@ -66,18 +59,13 @@ function barWidth(count: number) {
               {{ formatNumberValue(item.count) }}
             </span>
           </div>
-          <div class="h-3 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
-            <div
-              role="progressbar"
-              :aria-label="t(outcomeLabels[item.outcome])"
-              :aria-valuenow="item.count"
-              aria-valuemin="0"
-              :aria-valuemax="Math.max(outcome.total, 1)"
-              class="h-full rounded-full"
-              :class="outcomeColors[item.outcome]"
-              :style="{ width: `${barWidth(item.count)}%` }"
-            />
-          </div>
+          <progress
+            :aria-label="t(outcomeLabels[item.outcome])"
+            class="d-progress h-3 w-full"
+            :class="outcomeColors[item.outcome]"
+            :value="item.count"
+            :max="Math.max(outcome.total, 1)"
+          />
         </div>
       </div>
     </div>
