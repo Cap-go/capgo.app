@@ -132,7 +132,16 @@ vi.mock('~/services/supabase', () => ({
       from: vi.fn(() => ({
         select: vi.fn(() => ({
           eq: vi.fn(() => ({
-            maybeSingle: vi.fn(async () => ({ data: null, error: null })),
+            maybeSingle: vi.fn(async () => ({
+              data: {
+                id: 'user-123',
+                email: 'user@example.com',
+                first_name: '',
+                last_name: '',
+                image_url: null,
+              },
+              error: null,
+            })),
           })),
         })),
       })),
