@@ -258,6 +258,17 @@ const setupCliOutcomeValues = computed(() => [
 ])
 const setupCliOutcomeColors = ['#119eff', '#8b5cf6', '#94a3b8']
 const hasSetupCliOutcomeData = computed(() => setupCliOutcomes.value.total_users > 0)
+const cliChecklistCoverage = computed(() => visibleAnalytics.value?.v4_cli_checklist_coverage ?? {
+  linked_apps: 0,
+  active_apps: 0,
+  unavailable_apps: 0,
+  steps: [],
+})
+const cliChecklistRows = computed(() => cliChecklistCoverage.value.steps.map(step => ({
+  ...step,
+  label: t(`app-onboarding-cli-step-${step.step_id}`),
+})))
+const hasCliChecklistCoverage = computed(() => cliChecklistCoverage.value.active_apps > 0)
 const dailySetupCliOutcomeLabels = computed<Record<FrontendOnboardingDailySetupCliOutcomeKey, string>>(() => ({
   cli_copy_init: t('frontend-onboarding-daily-setup-cli-cli-copy-init'),
   ai_copy_init: t('frontend-onboarding-daily-setup-cli-ai-copy-init'),
@@ -579,6 +590,43 @@ displayStore.defaultBack = '/dashboard'
               v-model="deduplicateDailyAttempts"
               :chart-label="t('frontend-onboarding-daily-attempts')"
             />
+          </ChartCard>
+
+          <ChartCard
+            chart-id="cli-checklist-coverage-v4"
+            :title="t('frontend-onboarding-cli-checklist-coverage-v4')"
+            :total="cliChecklistCoverage.active_apps"
+            :unit="t('frontend-onboarding-apps')"
+            :is-loading="isLoadingStats"
+            :has-data="hasCliChecklistCoverage"
+          >
+            <template #header>
+              <div class="min-w-0">
+                <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
+                  {{ t('frontend-onboarding-cli-checklist-coverage-v4') }}
+                </h2>
+                <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                  {{ t('frontend-onboarding-cli-checklist-coverage-description') }}
+                </p>
+              </div>
+            </template>
+            <div class="grid grid-cols-1 gap-x-8 gap-y-5 md:grid-cols-2">
+              <div v-for="step in cliChecklistRows" :key="step.step_id">
+                <div class="mb-2 flex items-center justify-between gap-3 text-sm">
+                  <span class="font-medium text-slate-700 dark:text-slate-200">{{ step.label }}</span>
+                  <span class="shrink-0 tabular-nums text-slate-500 dark:text-slate-400">
+                    {{ step.done }}/{{ cliChecklistCoverage.active_apps }} · {{ formatNumberValue(step.done_percent) }}%
+                  </span>
+                </div>
+                <progress class="h-2 w-full d-progress d-progress-secondary" :value="step.done" :max="cliChecklistCoverage.active_apps" />
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {{ t('frontend-onboarding-cli-checklist-step-detail', { count: step.skipped }) }}
+                </p>
+              </div>
+            </div>
+            <p v-if="cliChecklistCoverage.unavailable_apps > 0" class="mt-6 text-xs text-slate-500 dark:text-slate-400">
+              {{ t('frontend-onboarding-cli-checklist-unavailable', { count: cliChecklistCoverage.unavailable_apps }) }}
+            </p>
           </ChartCard>
 
           <ChartCard
