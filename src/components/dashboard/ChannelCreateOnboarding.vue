@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '~/utils/onboardingChannelAnalytics'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconArrowRight from '~icons/lucide/arrow-right'
@@ -20,7 +21,10 @@ const props = defineProps<{
   appId: string
 }>()
 
-const emit = defineEmits<(event: 'continue') => void>()
+const emit = defineEmits<{
+  analytics: [event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties]
+  continue: []
+}>()
 
 interface SavedChannel {
   name: string
@@ -43,6 +47,8 @@ const showNameError = ref(false)
 const submitError = ref('')
 const completedChannel = ref<SavedChannel | null>(null)
 const createdInOnboarding = ref(false)
+const channelNameSource = ref<'manual' | 'suggestion'>('manual')
+const lastTrackedChannelName = ref('')
 const currentOrganization = computed(() => organizationStore.currentOrganization)
 const normalizedChannelName = computed(() => channelName.value.trim())
 const channelPreviewName = computed(() => normalizedChannelName.value || t('channel-create-onboarding-preview-placeholder'))
@@ -62,8 +68,52 @@ const canSubmit = computed(() => (
 
 function selectSuggestedName(name: typeof suggestedNames[number]) {
   channelName.value = name
+  channelNameSource.value = 'suggestion'
   showNameError.value = false
   submitError.value = ''
+  track('onboarding_channel_name_suggestion_selected', {
+    channel_name_length: name.length,
+    channel_name_source: 'suggestion',
+    selected_suggestion: name,
+  })
+}
+
+function track(event: OnboardingChannelEvent, properties: Omit<OnboardingChannelEventProperties, 'channel_stage'> = {}) {
+  emit('analytics', event, {
+    channel_stage: 'channel-create',
+    ...properties,
+  })
+}
+
+function handleChannelNameInput() {
+  channelNameSource.value = 'manual'
+  submitError.value = ''
+}
+
+function handleChannelNameBlur() {
+  showNameError.value = true
+  const normalizedName = normalizedChannelName.value
+  if (channelNameError.value) {
+    track('onboarding_channel_name_validation_failed', {
+      channel_name_length: normalizedName.length,
+      channel_name_source: channelNameSource.value,
+      failure_reason: normalizedName ? 'name_invalid' : 'name_required',
+    })
+    return
+  }
+  if (lastTrackedChannelName.value === normalizedName)
+    return
+  lastTrackedChannelName.value = normalizedName
+  track('onboarding_channel_name_entered', {
+    channel_name_length: normalizedName.length,
+    channel_name_source: channelNameSource.value,
+  })
+}
+
+function handleSelfAssignChange() {
+  track('onboarding_channel_self_assign_toggled', {
+    allow_device_self_set: allowSelfAssign.value,
+  })
 }
 
 async function loadExistingChannel() {
@@ -86,11 +136,24 @@ async function loadExistingChannel() {
 async function initialize() {
   isInitializing.value = true
   submitError.value = ''
+  track('onboarding_channel_stage_viewed')
+  track('onboarding_channel_create_initialization_started')
   try {
     await organizationStore.awaitInitialLoad()
     await loadExistingChannel()
-    if (completedChannel.value)
+    if (completedChannel.value) {
+      track('onboarding_channel_create_existing_detected', {
+        allow_device_self_set: completedChannel.value.allow_device_self_set,
+        channel_name_length: completedChannel.value.name.length,
+        created_in_onboarding: false,
+        found_existing_channel: true,
+      })
+      track('onboarding_channel_create_loaded', {
+        found_existing_channel: true,
+        permission_state: 'not_checked',
+      })
       return
+    }
 
     // Creating a public/default channel is guarded by both permissions in the channels INSERT policy.
     const [canCreateChannel, canUpdateAppSettings] = await Promise.all([
@@ -98,10 +161,18 @@ async function initialize() {
       checkPermissions('app.update_settings', { appId: props.appId }),
     ])
     hasRequiredPermissions.value = canCreateChannel && canUpdateAppSettings
+    track('onboarding_channel_create_loaded', {
+      found_existing_channel: false,
+      permission_state: hasRequiredPermissions.value ? 'granted' : 'denied',
+    })
   }
   catch (error) {
     console.error('Cannot prepare onboarding channel creation', error)
     submitError.value = t('channel-create-onboarding-load-error')
+    track('onboarding_channel_create_failed', {
+      failure_phase: 'initialization',
+      failure_reason: 'load_failed',
+    })
   }
   finally {
     isInitializing.value = false
@@ -111,16 +182,44 @@ async function initialize() {
 async function createChannel() {
   showNameError.value = true
   submitError.value = ''
-  if (!canSubmit.value)
+  const normalizedName = normalizedChannelName.value
+  if (channelNameError.value) {
+    track('onboarding_channel_name_validation_failed', {
+      channel_name_length: normalizedName.length,
+      channel_name_source: channelNameSource.value,
+      failure_reason: normalizedName ? 'name_invalid' : 'name_required',
+    })
     return
-
-  if (!main.user || !currentOrganization.value?.gid) {
-    submitError.value = t('channel-create-onboarding-load-error')
+  }
+  if (isInitializing.value) {
+    track('onboarding_channel_create_blocked', { failure_reason: 'initializing' })
+    return
+  }
+  if (isSubmitting.value) {
+    track('onboarding_channel_create_blocked', { failure_reason: 'submitting' })
+    return
+  }
+  if (!hasRequiredPermissions.value) {
+    track('onboarding_channel_create_blocked', { failure_reason: 'permission_denied' })
     return
   }
 
-  const normalizedName = normalizedChannelName.value
+  track('onboarding_channel_create_submitted', {
+    allow_device_self_set: allowSelfAssign.value,
+    channel_name_length: normalizedName.length,
+    channel_name_source: channelNameSource.value,
+  })
+
+  if (!main.user || !currentOrganization.value?.gid) {
+    submitError.value = t('channel-create-onboarding-load-error')
+    track('onboarding_channel_create_blocked', {
+      failure_reason: 'missing_identity',
+    })
+    return
+  }
+
   isSubmitting.value = true
+  let failurePhase: NonNullable<OnboardingChannelEventProperties['failure_phase']> = 'existing_channel_lookup'
   try {
     const { data: existingChannel, error: existingError } = await supabase
       .from('channels')
@@ -135,13 +234,35 @@ async function createChannel() {
       throw existingError
 
     if (existingChannel) {
-      if (existingChannel.public)
+      if (existingChannel.public) {
         completedChannel.value = existingChannel
-      else
+        track('onboarding_channel_create_existing_detected', {
+          allow_device_self_set: existingChannel.allow_device_self_set,
+          channel_name_length: existingChannel.name.length,
+          created_in_onboarding: false,
+          found_existing_channel: true,
+        })
+        track('onboarding_channel_create_succeeded', {
+          allow_device_self_set: existingChannel.allow_device_self_set,
+          channel_name_length: existingChannel.name.length,
+          channel_name_source: channelNameSource.value,
+          created_in_onboarding: false,
+        })
+      }
+      else {
         submitError.value = t('channel-create-onboarding-name-taken')
+        track('onboarding_channel_create_failed', {
+          allow_device_self_set: allowSelfAssign.value,
+          channel_name_length: normalizedName.length,
+          channel_name_source: channelNameSource.value,
+          failure_phase: failurePhase,
+          failure_reason: 'name_taken',
+        })
+      }
       return
     }
 
+    failurePhase = 'channel_insert'
     const { error } = await supabase
       .from('channels')
       .insert({
@@ -164,14 +285,36 @@ async function createChannel() {
       allow_device_self_set: allowSelfAssign.value,
     }
     createdInOnboarding.value = true
+    track('onboarding_channel_create_succeeded', {
+      allow_device_self_set: allowSelfAssign.value,
+      channel_name_length: normalizedName.length,
+      channel_name_source: channelNameSource.value,
+      created_in_onboarding: true,
+    })
   }
   catch (error) {
     console.error('Cannot create onboarding channel', error)
     submitError.value = t('channel-create-onboarding-submit-error')
+    track('onboarding_channel_create_failed', {
+      allow_device_self_set: allowSelfAssign.value,
+      channel_name_length: normalizedName.length,
+      channel_name_source: channelNameSource.value,
+      failure_phase: failurePhase,
+      failure_reason: failurePhase === 'channel_insert' ? 'insert_failed' : 'request_failed',
+    })
   }
   finally {
     isSubmitting.value = false
   }
+}
+
+function continueOnboarding() {
+  track('onboarding_channel_create_continued', {
+    allow_device_self_set: completedChannel.value?.allow_device_self_set,
+    channel_name_length: completedChannel.value?.name.length,
+    created_in_onboarding: createdInOnboarding.value,
+  })
+  emit('continue')
 }
 
 onMounted(() => {
@@ -263,7 +406,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <button type="button" class="d-btn mt-6 min-h-12 w-full border-0 bg-primary-500 text-white hover:bg-primary-600" data-test="channel-create-continue" @click="emit('continue')">
+        <button type="button" class="d-btn mt-6 min-h-12 w-full border-0 bg-primary-500 text-white hover:bg-primary-600" data-test="channel-create-continue" @click="continueOnboarding">
           {{ t('channel-create-onboarding-continue') }}
           <IconArrowRight class="h-4 w-4" />
         </button>
@@ -357,8 +500,8 @@ onMounted(() => {
               :aria-invalid="showNameError && Boolean(channelNameError)"
               aria-describedby="onboarding-channel-name-help"
               data-test="channel-create-name"
-              @input="submitError = ''"
-              @blur="showNameError = true"
+              @input="handleChannelNameInput"
+              @blur="handleChannelNameBlur"
             >
           </div>
           <p id="onboarding-channel-name-help" class="mt-2 min-h-5 text-xs" :class="showNameError && channelNameError ? 'text-red-600 dark:text-red-300' : 'text-slate-500 dark:text-slate-400'">
@@ -380,7 +523,7 @@ onMounted(() => {
           </div>
 
           <label class="mt-5 flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 transition hover:border-violet-300 dark:border-white/10 dark:bg-slate-950/70 dark:hover:border-violet-400/40">
-            <input v-model="allowSelfAssign" type="checkbox" class="d-checkbox d-checkbox-primary mt-0.5 h-4.5 w-4.5 shrink-0">
+            <input v-model="allowSelfAssign" type="checkbox" class="d-checkbox d-checkbox-primary mt-0.5 h-4.5 w-4.5 shrink-0" @change="handleSelfAssignChange">
             <span>
               <span class="block text-sm font-semibold text-slate-900 dark:text-white">{{ t(allowSelfAssign ? 'channel-create-onboarding-self-assign-title' : 'channel-create-onboarding-self-assign-disallow-title') }}</span>
               <span class="mt-1 block min-h-10 text-xs leading-5 text-slate-500 dark:text-slate-400">{{ t(allowSelfAssign ? 'channel-create-onboarding-toggle-description' : 'channel-create-onboarding-self-assign-disallow-description') }}</span>

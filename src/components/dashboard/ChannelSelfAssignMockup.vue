@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '~/utils/onboardingChannelAnalytics'
 import gsap from 'gsap'
 import { MotionPathPlugin } from 'gsap/MotionPathPlugin'
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
@@ -19,12 +20,14 @@ import IconSignal from '~icons/lucide/signal'
 import IconSmartphone from '~icons/lucide/smartphone'
 import IconSparkles from '~icons/lucide/sparkles'
 import IconWifi from '~icons/lucide/wifi'
+import { createOnboardingChannelAnimationTracker } from '~/utils/onboardingChannelAnalytics'
 
 defineProps<{
   embedded?: boolean
 }>()
 
 const emit = defineEmits<{
+  analytics: [event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties]
   back: []
   continue: []
 }>()
@@ -38,6 +41,10 @@ let timeline: gsap.core.Timeline | null = null
 let media: gsap.MatchMedia | null = null
 let resizeObserver: ResizeObserver | null = null
 let resizeAnimationFrame: number | null = null
+const animationAnalytics = createOnboardingChannelAnimationTracker({
+  emit: (event, properties) => emit('analytics', event, properties),
+  stage: 'channel-self-assign',
+})
 
 gsap.registerPlugin(MotionPathPlugin)
 
@@ -242,6 +249,7 @@ function buildTimeline() {
   gsap.set(channelCards, { y: 0, scale: 1 })
 
   const animation = gsap.timeline({
+    paused: true,
     defaults: { ease: 'power2.out' },
   })
 
@@ -344,7 +352,23 @@ function buildTimeline() {
   return animation
 }
 
-function createAnimation() {
+function progressSource(animation: gsap.core.Timeline) {
+  return {
+    durationMs: () => animation.duration() * 1_000,
+    progress: () => animation.progress(),
+  }
+}
+
+function playAnimation(animation: gsap.core.Timeline, trigger: 'automatic' | 'replay' | 'resize') {
+  const source = progressSource(animation)
+  const replacedAfterResize = trigger === 'resize' && animationAnalytics.replaceProgressSource(source)
+  if (!replacedAfterResize)
+    animationAnalytics.start(trigger === 'replay' ? 'replay' : 'automatic', source)
+  animation.eventCallback('onComplete', animationAnalytics.complete)
+  animation.play(0)
+}
+
+function createAnimation(trigger: 'automatic' | 'replay' | 'resize' = 'automatic') {
   timeline?.kill()
   media?.revert()
   timeline = null
@@ -354,11 +378,17 @@ function createAnimation() {
   media.add('(prefers-reduced-motion: reduce)', () => {
     reducedMotion.value = true
     showFinalState()
+    animationAnalytics.showReducedMotion()
   })
 
   media.add('(prefers-reduced-motion: no-preference)', () => {
     reducedMotion.value = false
     timeline = buildTimeline()
+    if (!timeline) {
+      animationAnalytics.unavailable()
+      return
+    }
+    playAnimation(timeline, trigger)
   })
 }
 
@@ -367,18 +397,29 @@ function refreshAnimationAfterResize() {
     window.cancelAnimationFrame(resizeAnimationFrame)
   resizeAnimationFrame = window.requestAnimationFrame(() => {
     resizeAnimationFrame = null
-    createAnimation()
+    createAnimation('resize')
   })
 }
 
 function replay() {
+  animationAnalytics.replayRequested()
   if (reducedMotion.value) {
     showFinalState()
+    animationAnalytics.showReducedMotion()
     return
   }
   gsap.set(element('.csa-phone'), { autoAlpha: 0, y: 18, scale: 1, force3D: false })
-  timeline?.kill()
-  timeline = buildTimeline()
+  createAnimation('replay')
+}
+
+function goBack() {
+  animationAnalytics.leave('back')
+  emit('back')
+}
+
+function continueOnboarding() {
+  animationAnalytics.leave('continue')
+  emit('continue')
 }
 
 onMounted(async () => {
@@ -391,6 +432,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  animationAnalytics.dispose()
   resizeObserver?.disconnect()
   if (resizeAnimationFrame !== null)
     window.cancelAnimationFrame(resizeAnimationFrame)
@@ -713,11 +755,11 @@ onBeforeUnmount(() => {
         data-test="channel-self-assign-back"
         :aria-label="t('button-back')"
         :title="t('button-back')"
-        @click="emit('back')"
+        @click="goBack"
       >
         <IconArrowLeft class="h-4 w-4" aria-hidden="true" />
       </button>
-      <button type="button" class="d-btn d-btn-primary h-12 min-h-12 shrink-0 px-5" data-test="channel-self-assign-continue" @click="emit('continue')">
+      <button type="button" class="d-btn d-btn-primary h-12 min-h-12 shrink-0 px-5" data-test="channel-self-assign-continue" @click="continueOnboarding">
         {{ t('continue') }}
       </button>
     </footer>

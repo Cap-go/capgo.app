@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '~/utils/onboardingChannelAnalytics'
 import { gsap } from 'gsap'
 import { MotionPathPlugin } from 'gsap/MotionPathPlugin'
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
@@ -7,6 +8,7 @@ import IconCheck from '~icons/lucide/check'
 import IconRefreshCw from '~icons/lucide/refresh-cw'
 import IconServer from '~icons/lucide/server'
 import IconSmartphone from '~icons/lucide/smartphone'
+import { createOnboardingChannelAnimationTracker } from '~/utils/onboardingChannelAnalytics'
 
 const props = withDefaults(defineProps<{
   embedded?: boolean
@@ -15,6 +17,7 @@ const props = withDefaults(defineProps<{
 })
 
 const emit = defineEmits<{
+  analytics: [event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties]
   continue: []
 }>()
 
@@ -28,6 +31,10 @@ let timeline: gsap.core.Timeline | null = null
 let media: gsap.MatchMedia | null = null
 let resizeObserver: ResizeObserver | null = null
 let resizeAnimationFrame: number | null = null
+const animationAnalytics = createOnboardingChannelAnimationTracker({
+  emit: (event, properties) => emit('analytics', event, properties),
+  stage: 'channel-routing',
+})
 
 function element<T extends Element>(root: HTMLElement, selector: string): T | null {
   return root.querySelector<T>(selector)
@@ -249,7 +256,23 @@ function buildTimeline(root: HTMLElement) {
   return animation
 }
 
-function createAnimation() {
+function progressSource(animation: gsap.core.Timeline) {
+  return {
+    durationMs: () => animation.duration() * 1_000,
+    progress: () => animation.progress(),
+  }
+}
+
+function playAnimation(animation: gsap.core.Timeline, trigger: 'automatic' | 'replay' | 'resize') {
+  const source = progressSource(animation)
+  const replacedAfterResize = trigger === 'resize' && animationAnalytics.replaceProgressSource(source)
+  if (!replacedAfterResize)
+    animationAnalytics.start(trigger === 'replay' ? 'replay' : 'automatic', source)
+  animation.eventCallback('onComplete', animationAnalytics.complete)
+  animation.play(0)
+}
+
+function createAnimation(trigger: 'automatic' | 'replay' | 'resize' = 'automatic') {
   timeline?.kill()
   media?.revert()
   timeline = null
@@ -263,11 +286,16 @@ function createAnimation() {
   media.add('(prefers-reduced-motion: reduce)', () => {
     prefersReducedMotion.value = true
     showFinalState(root)
+    animationAnalytics.showReducedMotion()
   })
   media.add('(prefers-reduced-motion: no-preference)', () => {
     prefersReducedMotion.value = false
     timeline = buildTimeline(root)
-    timeline?.play()
+    if (!timeline) {
+      animationAnalytics.unavailable()
+      return
+    }
+    playAnimation(timeline, trigger)
 
     return () => {
       timeline?.kill()
@@ -281,12 +309,24 @@ function refreshAnimationAfterResize() {
     window.cancelAnimationFrame(resizeAnimationFrame)
   resizeAnimationFrame = window.requestAnimationFrame(() => {
     resizeAnimationFrame = null
-    createAnimation()
+    createAnimation('resize')
   })
 }
 
 function replay() {
-  timeline?.restart()
+  animationAnalytics.replayRequested()
+  if (!timeline) {
+    createAnimation('replay')
+    return
+  }
+  animationAnalytics.start('replay', progressSource(timeline))
+  timeline.eventCallback('onComplete', animationAnalytics.complete)
+  timeline.restart()
+}
+
+function continueOnboarding() {
+  animationAnalytics.leave('continue')
+  emit('continue')
 }
 
 onMounted(async () => {
@@ -299,6 +339,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  animationAnalytics.dispose()
   resizeObserver?.disconnect()
   if (resizeAnimationFrame !== null)
     window.cancelAnimationFrame(resizeAnimationFrame)
@@ -484,7 +525,7 @@ onBeforeUnmount(() => {
           type="button"
           class="d-btn d-btn-primary h-12 min-h-12 shrink-0 px-5"
           data-test="channel-default-routing-continue"
-          @click="emit('continue')"
+          @click="continueOnboarding"
         >
           {{ t('continue') }}
         </button>

@@ -26,7 +26,7 @@ function sourceBetween(start: string, end: string) {
 
 describe('channel default routing animation', () => {
   it.concurrent('moves packets along the connectors as they are rendered on screen', () => {
-    const timeline = sourceBetween('function buildTimeline(root: HTMLElement)', 'function createAnimation()')
+    const timeline = sourceBetween('function buildTimeline(root: HTMLElement)', 'function progressSource(')
 
     expect(mockupSource).toContain('function renderedPathPoints(')
     expect(mockupSource).toContain('path.getScreenCTM()')
@@ -72,7 +72,8 @@ describe('channel default routing animation', () => {
   it.concurrent('keeps the onboarding action in the footer while compacting the embedded animation', () => {
     expect(mockupSource).toContain('<footer v-if="props.embedded" class="flex items-center justify-between border-t')
     expect(mockupSource).toContain('data-test="channel-default-routing-continue"')
-    expect(mockupSource).toContain(`@click="emit('continue')"`)
+    expect(mockupSource).toContain('@click="continueOnboarding"')
+    expect(mockupSource).toContain(`animationAnalytics.leave('continue')`)
 
     const embeddedStageRule = sourceBetween('.cr-page-embedded .cr-stage {', '@media (min-width: 640px)')
     expect(embeddedStageRule).toContain('min-height: 27rem;')
@@ -94,12 +95,18 @@ describe('channel default routing animation', () => {
     expect(mockupSource).toContain('resizeObserver.observe(rootEl.value)')
     expect(mockupSource).toContain('resizeObserver?.disconnect()')
 
-    const createAnimation = sourceBetween('function createAnimation()', 'function refreshAnimationAfterResize()')
+    const createAnimation = sourceBetween('function createAnimation(', 'function refreshAnimationAfterResize()')
     expectSourceOrder(createAnimation, [
       'timeline?.kill()',
       'media?.revert()',
       'const root = rootEl.value',
       'media = gsap.matchMedia()',
     ])
+    expect(mockupSource).toContain(`stage: 'channel-routing'`)
+    expect(mockupSource).toContain(`animationAnalytics.start(trigger === 'replay' ? 'replay' : 'automatic', source)`)
+    expect(mockupSource).toContain(`animation.eventCallback('onComplete', animationAnalytics.complete)`)
+    expect(mockupSource).toContain('animationAnalytics.replayRequested()')
+    expect(mockupSource).toContain('animationAnalytics.showReducedMotion()')
+    expect(mockupSource).toContain('animationAnalytics.dispose()')
   })
 })
