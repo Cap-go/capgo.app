@@ -21,7 +21,7 @@ import { openSupport } from '~/services/support'
 import { isCapgoDomainReferrer, isDirectLoginLanding } from '~/utils/capgoReferrer'
 import { getLoginActionVisibility } from '~/utils/loginActions'
 import { validateRedirectPath } from '~/utils/safeRedirect'
-import { safeResetTurnstile } from '~/utils/turnstile'
+import { safeResetTurnstile, shouldRetryTurnstile, TURNSTILE_MAX_RETRIES } from '~/utils/turnstile'
 
 const route = useRoute('/login')
 const supabase = useSupabase()
@@ -52,6 +52,7 @@ const domainCheckTimeoutMs = 5000
 const domainCheckDebounceMs = 350
 const isCheckingSavedSession = ref(true)
 const captchaStatus = ref<'disabled' | 'loading' | 'ready' | 'unavailable'>(captchaKey.value ? 'loading' : 'disabled')
+const captchaRetries = ref(0)
 let captchaInitTimeout: ReturnType<typeof setTimeout> | null = null
 let domainCheckTimer: ReturnType<typeof setTimeout> | null = null
 let domainCheckSeq = 0
@@ -170,7 +171,33 @@ function scheduleCaptchaInitTimeout() {
 function handleCaptchaUnavailable(reason: string, error?: unknown) {
   captchaStatus.value = 'unavailable'
   clearCaptchaInitTimeout()
-  console.error(reason, error)
+  if (error !== undefined)
+    console.error(reason, error)
+  else
+    console.error(reason)
+}
+
+// Turnstile error 300010 and the rest of the 3xxxxx/6xxxxx families are
+// transient (network, WebView, ad-blocker). Reset the widget and let the
+// challenge run again instead of stranding the user on a dead captcha. Log at
+// error level only once the retry budget is spent.
+function handleCaptchaError(code: string) {
+  // Clearing the token drives captchaStatus back to 'loading' through its watcher.
+  turnstileToken.value = ''
+  if (isLoginStep.value && shouldRetryTurnstile(code, captchaRetries.value)) {
+    captchaRetries.value += 1
+    console.warn(`Turnstile error ${code}, retrying (${captchaRetries.value}/${TURNSTILE_MAX_RETRIES})`)
+    safeResetTurnstile(captchaComponent.value)
+    return
+  }
+  handleCaptchaUnavailable(`Turnstile error ${code}`)
+}
+
+// Cloudflare does not reset the widget when a token expires, so the stale token
+// stays bound. Clear it and reset so the next submit carries a fresh token.
+function handleCaptchaExpired() {
+  turnstileToken.value = ''
+  safeResetTurnstile(captchaComponent.value)
 }
 
 watch(turnstileToken, (token) => {
@@ -181,6 +208,7 @@ watch(turnstileToken, (token) => {
 
   if (token) {
     captchaStatus.value = 'ready'
+    captchaRetries.value = 0
     clearCaptchaInitTimeout()
   }
   else if (isLoginStep.value) {
@@ -990,9 +1018,17 @@ onMounted(checkLogin)
                           v-model="turnstileToken"
                           size="flexible"
                           :site-key="captchaKey"
-                          @error="handleCaptchaUnavailable('Turnstile error', $event)"
+                          @error="handleCaptchaError($event)"
+                          @expired="handleCaptchaExpired"
                           @unsupported="handleCaptchaUnavailable('Turnstile unsupported')"
                         />
+                        <p
+                          v-if="captchaStatus === 'unavailable'"
+                          class="mt-2 text-sm text-red-600 dark:text-red-400"
+                          data-test="captcha-unavailable"
+                        >
+                          {{ t('captcha-not-available') }}
+                        </p>
                       </div>
                     </div>
 
