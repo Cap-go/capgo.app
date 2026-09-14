@@ -11,6 +11,7 @@ export const ADMIN_AB_TEST_PUBLISH_INTENT_OUTCOMES = [
 export type AdminABTestPublishIntentOutcomeName = typeof ADMIN_AB_TEST_PUBLISH_INTENT_OUTCOMES[number]
 
 export interface AdminABTestPublishIntentOutcomeRow {
+  inferred_people?: number | string
   outcome: string | null
   people: number | string
 }
@@ -21,11 +22,13 @@ export interface AdminABTestPublishIntentOutcomeCount {
 }
 
 export interface AdminABTestPublishIntentOutcome {
+  inferred_from_organization: number
   outcomes: AdminABTestPublishIntentOutcomeCount[]
   total: number
 }
 
 const OTHER_ONBOARDING_INTENTS = ['ota', 'builder', 'both', 'exploring'] as const
+const ONBOARDING_INTENTS = ['publish', ...OTHER_ONBOARDING_INTENTS] as const
 const PUBLISH_INTENT_TEST = 'webnativeapp_publish_intent'
 const DEVELOPMENT_ENVIRONMENT_TEST = 'webnativeapp_development_environment'
 
@@ -52,12 +55,15 @@ export function buildAdminABTestPublishIntentOutcome(
   rows: AdminABTestPublishIntentOutcomeRow[],
 ): AdminABTestPublishIntentOutcome {
   const counts = new Map<AdminABTestPublishIntentOutcomeName, number>()
+  let inferredFromOrganization = 0
 
   for (const row of rows) {
     const count = readCount(row.people)
-    if (!isOutcome(row.outcome) || count === null)
+    const inferredCount = readCount(row.inferred_people ?? 0)
+    if (!isOutcome(row.outcome) || count === null || inferredCount === null || inferredCount > count)
       continue
     counts.set(row.outcome, (counts.get(row.outcome) ?? 0) + count)
+    inferredFromOrganization += inferredCount
   }
 
   const outcomes = ADMIN_AB_TEST_PUBLISH_INTENT_OUTCOMES.map(outcome => ({
@@ -66,6 +72,7 @@ export function buildAdminABTestPublishIntentOutcome(
   }))
 
   return {
+    inferred_from_organization: inferredFromOrganization,
     outcomes,
     total: outcomes.reduce((sum, outcome) => sum + outcome.count, 0),
   }
@@ -75,22 +82,44 @@ export async function getAdminABTestPublishIntentOutcome(c: Context): Promise<Ad
   const pgClient = getPgClient(c, true)
   try {
     const result = await pgClient.query<AdminABTestPublishIntentOutcomeRow>(
-      `SELECT
+      `WITH exposed_users AS (
+         SELECT
+           user_account.id,
+           user_account.onboarding ->> 'intent' AS user_intent
+         FROM public.users AS user_account
+         WHERE (user_account.onboarding -> 'abtests') @> $1::jsonb
+            OR (user_account.onboarding -> 'abtests') @> $2::jsonb
+       ), resolved_users AS (
+         SELECT
+           COALESCE(exposed_user.user_intent, inferred_organization.intent) AS intent,
+           exposed_user.user_intent IS NULL
+             AND inferred_organization.intent IS NOT NULL AS inferred_from_organization
+         FROM exposed_users AS exposed_user
+         LEFT JOIN LATERAL (
+           SELECT min(organization.onboarding ->> 'intent') AS intent
+           FROM public.orgs AS organization
+           WHERE exposed_user.user_intent IS NULL
+             AND organization.created_by = exposed_user.id
+             AND organization.onboarding ->> 'intent' = ANY($3::text[])
+           HAVING count(DISTINCT organization.onboarding ->> 'intent') = 1
+         ) AS inferred_organization ON exposed_user.user_intent IS NULL
+       )
+       SELECT
          CASE
-           WHEN user_account.onboarding ->> 'intent' = 'publish'
+           WHEN resolved_user.intent = 'publish'
              THEN 'selected_publish'
-           WHEN user_account.onboarding ->> 'intent' = ANY($3::text[])
+           WHEN resolved_user.intent = ANY($4::text[])
              THEN 'selected_another_intent'
            ELSE 'no_selection_yet'
          END AS outcome,
-         count(*)::bigint AS people
-       FROM public.users AS user_account
-       WHERE (user_account.onboarding -> 'abtests') @> $1::jsonb
-          OR (user_account.onboarding -> 'abtests') @> $2::jsonb
+         count(*)::bigint AS people,
+         count(*) FILTER (WHERE resolved_user.inferred_from_organization)::bigint AS inferred_people
+       FROM resolved_users AS resolved_user
        GROUP BY 1`,
       [
         treatmentAssignment(PUBLISH_INTENT_TEST),
         treatmentAssignment(DEVELOPMENT_ENVIRONMENT_TEST),
+        ONBOARDING_INTENTS,
         OTHER_ONBOARDING_INTENTS,
       ],
     )

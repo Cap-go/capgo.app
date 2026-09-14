@@ -24,9 +24,10 @@ describe('admin A/B test Publish intent outcome', () => {
 
   it('builds outcomes in stable order and fills missing buckets with zero', () => {
     expect(buildAdminABTestPublishIntentOutcome([
-      { outcome: 'selected_another_intent', people: 197 },
-      { outcome: 'selected_publish', people: '104' },
+      { inferred_people: 12, outcome: 'selected_another_intent', people: 197 },
+      { inferred_people: '2', outcome: 'selected_publish', people: '104' },
     ])).toEqual({
+      inferred_from_organization: 14,
       total: 301,
       outcomes: [
         { outcome: 'selected_publish', count: 104 },
@@ -44,6 +45,7 @@ describe('admin A/B test Publish intent outcome', () => {
       { outcome: null, people: 12 },
       { outcome: 'no_selection_yet', people: '5' },
     ])).toEqual({
+      inferred_from_organization: 0,
       total: 5,
       outcomes: [
         { outcome: 'selected_publish', count: 0 },
@@ -69,13 +71,19 @@ describe('admin A/B test Publish intent outcome', () => {
     const [query, parameters] = queryMock.mock.calls[0] ?? []
     expect(query).toContain(`(user_account.onboarding -> 'abtests') @> $1::jsonb`)
     expect(query).toContain(`(user_account.onboarding -> 'abtests') @> $2::jsonb`)
-    expect(query).toContain(`user_account.onboarding ->> 'intent' = ANY($3::text[])`)
+    expect(query).toContain(`COALESCE(exposed_user.user_intent, inferred_organization.intent)`)
+    expect(query).toContain(`WHERE exposed_user.user_intent IS NULL`)
+    expect(query).toContain(`organization.created_by = exposed_user.id`)
+    expect(query).toContain(`HAVING count(DISTINCT organization.onboarding ->> 'intent') = 1`)
+    expect(query).toContain(`resolved_user.intent = ANY($4::text[])`)
+    expect(query).toContain(`count(*) FILTER (WHERE resolved_user.inferred_from_organization)`)
     expect(parameters).toEqual([
       JSON.stringify({ webnativeapp_publish_intent: { branch: 'A' } }),
       JSON.stringify({ webnativeapp_development_environment: { branch: 'C' } }),
+      ['publish', 'ota', 'builder', 'both', 'exploring'],
       ['ota', 'builder', 'both', 'exploring'],
     ])
-    expect(result).toMatchObject({ total: 10 })
+    expect(result).toMatchObject({ inferred_from_organization: 0, total: 10 })
     expect(closeClientMock).toHaveBeenCalledWith(context, expect.anything())
   })
 })

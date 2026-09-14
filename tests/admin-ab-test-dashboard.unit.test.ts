@@ -19,6 +19,7 @@ const payload = [
 ]
 
 const outcomePayload = {
+  inferred_from_organization: 14,
   total: 356,
   outcomes: [
     { outcome: 'selected_publish', count: 104 },
@@ -57,11 +58,21 @@ describe('admin A/B test dashboard presentation', () => {
 
   it.concurrent('accepts a valid Publish intent outcome response', () => {
     expect(parseAdminABTestPublishIntentOutcome(outcomePayload)).toEqual(outcomePayload)
+    expect(parseAdminABTestPublishIntentOutcome({
+      outcomes: outcomePayload.outcomes,
+      total: outcomePayload.total,
+    })).toEqual({
+      inferred_from_organization: 0,
+      outcomes: outcomePayload.outcomes,
+      total: outcomePayload.total,
+    })
   })
 
   it.concurrent('rejects malformed Publish intent outcome responses', () => {
     expect(parseAdminABTestPublishIntentOutcome(null)).toBeNull()
     expect(parseAdminABTestPublishIntentOutcome({ ...outcomePayload, total: -1 })).toBeNull()
+    expect(parseAdminABTestPublishIntentOutcome({ ...outcomePayload, inferred_from_organization: -1 })).toBeNull()
+    expect(parseAdminABTestPublishIntentOutcome({ ...outcomePayload, inferred_from_organization: 302 })).toBeNull()
     expect(parseAdminABTestPublishIntentOutcome({ ...outcomePayload, outcomes: outcomePayload.outcomes.slice(0, 2) })).toBeNull()
     expect(parseAdminABTestPublishIntentOutcome({
       ...outcomePayload,
@@ -104,6 +115,8 @@ describe('admin A/B test dashboard presentation', () => {
     expect(outcomeSource).toContain('<progress')
     expect(outcomeSource).not.toContain('role="progressbar"')
     expect(outcomeSource).toContain('formatNumberValue(outcome.total)')
+    expect(outcomeSource).toContain('outcome.inferred_from_organization > 0')
+    expect(outcomeSource).toContain(`t('admin-ab-tests-publish-outcome-inferred-note'`)
     expect(outcomeSource).not.toContain('formatPercentage')
   })
 
@@ -123,6 +136,7 @@ describe('admin A/B test dashboard presentation', () => {
     expect(messages['admin-ab-tests-publish-outcome-selected-publish']).toBe('Selected Publish')
     expect(messages['admin-ab-tests-publish-outcome-selected-another-intent']).toBe('Selected another intent')
     expect(messages['admin-ab-tests-publish-outcome-no-selection-yet']).toBe('No selection yet')
+    expect(messages['admin-ab-tests-publish-outcome-inferred-note']).toBe('Some intent selections were inferred from organization data because an earlier onboarding issue removed them from user onboarding ({count} inferred).')
     expect(messages['admin-ab-tests-load-error']).toBe('Unable to load A/B test data. Please try again.')
     expect(messages['admin-ab-tests-empty']).toBe('No A/B tests are configured.')
   })

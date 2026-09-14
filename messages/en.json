@@ -3427,6 +3427,7 @@
   "admin-ab-tests-publish-outcome-selected-publish": "Selected Publish",
   "admin-ab-tests-publish-outcome-selected-another-intent": "Selected another intent",
   "admin-ab-tests-publish-outcome-no-selection-yet": "No selection yet",
+  "admin-ab-tests-publish-outcome-inferred-note": "Some intent selections were inferred from organization data because an earlier onboarding issue removed them from user onboarding ({count} inferred).",
   "admin-ab-tests-load-error": "Unable to load A/B test data. Please try again.",
   "admin-ab-tests-empty": "No A/B tests are configured."
 }
