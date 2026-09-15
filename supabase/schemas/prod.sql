@@ -6985,7 +6985,13 @@ COMMENT ON COLUMN "public"."apps"."onboarding_completed_at" IS 'Timestamp when t
 
 
 
-COMMENT ON COLUMN "public"."apps"."onboarding" IS 'Feature ledger plus setup source and Getting Started dismiss. Shape: {"refreshed_at": iso, "features": {...}, "setup": {"source": manual|cli|mcp|ai, "outcome": in_progress|completed|skipped|switched_to_manual, "steps": {step_id: {"status": done|skipped, "at": iso}}}, "getting_started_dismissed_at": iso}. Manual is the default when setup.source is missing.';
+COMMENT ON COLUMN "public"."apps"."onboarding" IS 'Feature ledger plus setup source.
+Shape: {"refreshed_at": iso, "features": {...}, "setup": {
+"todo_list_version": positive integer (default 1),
+"source": manual|cli|mcp|ai,
+"outcome": in_progress|completed|skipped|switched_to_manual,
+"steps": {step_id: {"status": done|skipped, "at": iso}}}}.
+Manual is the default when setup.source is missing.';
 
 
 
@@ -12097,6 +12103,7 @@ CREATE OR REPLACE FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "j
 DECLARE
   v_current jsonb := COALESCE(p_existing, '{}'::jsonb);
   v_setup jsonb;
+  v_todo_list_version bigint := 1;
   v_source text;
   v_next_source text;
   v_outcome text;
@@ -12134,6 +12141,15 @@ BEGIN
     v_setup := v_current -> 'setup';
   ELSE
     v_setup := v_current;
+  END IF;
+
+  IF jsonb_typeof(v_setup -> 'todo_list_version') = 'number'
+    AND (v_setup ->> 'todo_list_version')::numeric
+      BETWEEN 1 AND 9007199254740991
+    AND (v_setup ->> 'todo_list_version')::numeric
+      = trunc((v_setup ->> 'todo_list_version')::numeric)
+  THEN
+    v_todo_list_version := (v_setup ->> 'todo_list_version')::bigint;
   END IF;
 
   v_source := CASE v_setup ->> 'source'
@@ -12233,9 +12249,10 @@ BEGIN
 
   v_now := to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
 
-  RETURN (v_current - 'source' - 'outcome' - 'steps' - 'updated_at')
+  RETURN (v_current - 'source' - 'outcome' - 'steps' - 'updated_at' - 'todo_list_version')
     || jsonb_build_object(
       'setup', jsonb_build_object(
+        'todo_list_version', v_todo_list_version,
         'source', v_source,
         'outcome', v_outcome,
         'steps', v_steps,
@@ -12249,7 +12266,8 @@ $$;
 ALTER FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "jsonb", "p_patch" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "jsonb", "p_patch" "jsonb") IS 'Merges CLI/MCP/AI setup source, outcome, and step progress into apps.onboarding.setup without touching features.';
+COMMENT ON FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "jsonb", "p_patch" "jsonb") IS 'Merges versioned CLI/MCP/AI setup source, outcome, and step progress into
+apps.onboarding.setup without touching features.';
 
 
 
