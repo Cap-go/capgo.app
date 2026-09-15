@@ -492,7 +492,7 @@
   "app-onboarding-cli-step-done": "Done",
   "app-onboarding-cli-step-skipped": "Skipped",
   "app-onboarding-cli-step-add_app": "Add your app",
-  "app-onboarding-cli-step-login_cli_mcp": "Login into the Capgo CLI/MCP",
+  "app-onboarding-cli-step-login_cli_mcp": "Log in to the Capgo CLI/MCP",
   "app-onboarding-cli-step-add_channel": "Create production channel",
   "app-onboarding-cli-step-add_updater": "Install updater plugin",
   "app-onboarding-cli-step-add_code": "Add integration code",

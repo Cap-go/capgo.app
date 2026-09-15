@@ -31,9 +31,12 @@ export function buildFrontendOnboardingCliChecklistCoverage(
   rows: readonly AppChecklistRow[],
 ): FrontendOnboardingCliChecklistCoverage {
   const linkedIds = new Set(uniqueAppIds(linkedAppIds))
-  const activeApps = new Map(rows
+  const currentApps = new Map(rows
     .filter(row => linkedIds.has(row.appId))
     .map(row => [row.appId, parseAppOnboarding(row.onboarding)]))
+  const activeApps = new Map([...currentApps]
+    .filter(([, onboarding]) => onboarding.todo_list_version === 1))
+  const unavailableApps = linkedIds.size - currentApps.size
 
   const steps = APP_ONBOARDING_V1_STEP_IDS.map((stepId) => {
     const states = [...activeApps.values()].map(app => app.steps[stepId]?.status)
@@ -48,9 +51,9 @@ export function buildFrontendOnboardingCliChecklistCoverage(
   })
 
   return {
-    linked_apps: linkedIds.size,
+    linked_apps: activeApps.size + unavailableApps,
     active_apps: activeApps.size,
-    unavailable_apps: linkedIds.size - activeApps.size,
+    unavailable_apps: unavailableApps,
     steps,
   }
 }

@@ -193,9 +193,15 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION public.merge_app_onboarding_setup(jsonb, jsonb) OWNER TO "postgres";
-REVOKE ALL ON FUNCTION public.merge_app_onboarding_setup(jsonb, jsonb) FROM public;
-GRANT ALL ON FUNCTION public.merge_app_onboarding_setup(jsonb, jsonb) TO service_role;
+ALTER FUNCTION public.merge_app_onboarding_setup(
+    jsonb, jsonb
+) OWNER TO "postgres";
+REVOKE ALL ON FUNCTION public.merge_app_onboarding_setup(
+    jsonb, jsonb
+) FROM public;
+GRANT ALL ON FUNCTION public.merge_app_onboarding_setup(
+    jsonb, jsonb
+) TO service_role;
 
 COMMENT ON FUNCTION public.merge_app_onboarding_setup(jsonb, jsonb) IS
 'Merges versioned CLI/MCP/AI setup source, outcome, and step progress into
@@ -206,4 +212,5 @@ ON public.apps ((onboarding ->> 'created_by_user_id'))
 WHERE onboarding #>> '{setup,todo_list_version}' = '2';
 
 COMMENT ON INDEX public.idx_apps_onboarding_v2_creator IS
-'Bounds authenticated CLI/MCP login checklist updates to version 2 apps created by one user.';
+'Bounds authenticated CLI/MCP login checklist updates to version 2 apps
+created by one user.';

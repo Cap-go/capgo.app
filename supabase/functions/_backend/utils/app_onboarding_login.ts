@@ -6,6 +6,7 @@ import { appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardi
 import { cloudlogErr, serializeError } from './logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
 import { trackPosthogEvent } from './posthog.ts'
+import { checkPermissionPg } from './rbac.ts'
 import { backgroundTask } from './utils.ts'
 
 export function getAppOnboardingLoginSource(channel: string, event: string) {
@@ -27,6 +28,7 @@ export async function markAppOnboardingLoginFromTracking(
   if (!source || auth?.authType !== 'apikey')
     return
 
+  const apikey = auth.apikey?.key ?? c.get('capgkey') ?? null
   const pool = getPgClient(c)
   try {
     const committed = await getDrizzleClient(pool).transaction(async (tx) => {
@@ -39,6 +41,9 @@ export async function markAppOnboardingLoginFromTracking(
       `)
       const changes = []
       for (const app of result.rows) {
+        if (!(await checkPermissionPg(c, 'app.read', { appId: app.app_id }, tx, auth.userId, apikey)))
+          continue
+
         const current = parseAppOnboarding(app.onboarding)
         if (current.steps.login_cli_mcp?.status === 'done'
           && pickAppOnboardingSource(current.source, source) === current.source)
