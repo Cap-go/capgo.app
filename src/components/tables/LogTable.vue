@@ -329,10 +329,10 @@ columns.value = [
         ]),
         originalMessage
           ? h('span', {
-            class: 'min-w-0 truncate text-xs text-slate-500 dark:text-slate-400',
-            title: originalMessage,
-            'data-test': 'log-row-original-error',
-          }, originalMessage)
+              'class': 'min-w-0 truncate text-xs text-slate-500 dark:text-slate-400',
+              'title': originalMessage,
+              'data-test': 'log-row-original-error',
+            }, originalMessage)
           : null,
       ])
     },
