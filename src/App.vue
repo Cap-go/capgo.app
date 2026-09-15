@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { defineAsyncComponent, watch } from 'vue'
+import { useWebMcp } from '~/composables/useWebMcp'
 
 const Toast = defineAsyncComponent(() => import('~/components/Toast.vue'))
 const DialogV2 = defineAsyncComponent(() => import('~/components/DialogV2.vue'))
@@ -7,6 +8,8 @@ const SupportUsernamesPrompt = defineAsyncComponent(() => import('~/components/d
 
 const route = useRoute()
 const display = useDisplayStore()
+
+useWebMcp()
 
 watch(
   () => route.path,
