@@ -4,14 +4,17 @@ meta:
 </route>
 
 <script setup lang="ts">
+import type { AdminABTestChannelCreation as AdminABTestChannelCreationData } from '~/services/adminABTestChannelCreation'
 import type { AdminABTestDistribution } from '~/services/adminABTestDistribution'
 import type { AdminABTestPublishIntentOutcome as AdminABTestPublishIntentOutcomeData } from '~/services/adminABTestPublishIntentOutcome'
 import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import AdminABTestChannelCreation from '~/components/admin/AdminABTestChannelCreation.vue'
 import AdminABTestDistributionMatrix from '~/components/admin/AdminABTestDistributionMatrix.vue'
 import AdminABTestPublishIntentOutcome from '~/components/admin/AdminABTestPublishIntentOutcome.vue'
 import PageLoader from '~/components/PageLoader.vue'
+import { parseAdminABTestChannelCreation } from '~/services/adminABTestChannelCreation'
 import { parseAdminABTestDistribution } from '~/services/adminABTestDistribution'
 import { parseAdminABTestPublishIntentOutcome } from '~/services/adminABTestPublishIntentOutcome'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
@@ -23,6 +26,7 @@ const router = useRouter()
 const adminStore = useAdminDashboardStore()
 const displayStore = useDisplayStore()
 const mainStore = useMainStore()
+const channelCreation = ref<AdminABTestChannelCreationData | null>(null)
 const distribution = ref<AdminABTestDistribution[]>([])
 const publishIntentOutcome = ref<AdminABTestPublishIntentOutcomeData | null>(null)
 const isLoading = ref(true)
@@ -32,15 +36,18 @@ async function loadDashboard(forceRefresh = false) {
   isLoading.value = true
   loadError.value = false
   try {
-    const [distributionData, outcomeData] = await Promise.all([
+    const [distributionData, channelCreationData, outcomeData] = await Promise.all([
       adminStore.fetchStats('ab_test_distribution', forceRefresh),
+      adminStore.fetchStats('ab_test_channel_creation', forceRefresh),
       adminStore.fetchStats('ab_test_publish_intent_outcome', forceRefresh),
     ])
     const parsedDistribution = parseAdminABTestDistribution(distributionData)
+    const parsedChannelCreation = parseAdminABTestChannelCreation(channelCreationData)
     const parsedOutcome = parseAdminABTestPublishIntentOutcome(outcomeData)
-    if (!parsedDistribution || !parsedOutcome)
+    if (!parsedDistribution || !parsedChannelCreation || !parsedOutcome)
       throw new Error('Invalid A/B test dashboard response')
     distribution.value = parsedDistribution
+    channelCreation.value = parsedChannelCreation
     publishIntentOutcome.value = parsedOutcome
   }
   catch (error) {
@@ -80,6 +87,7 @@ displayStore.defaultBack = '/dashboard'
 
       <div v-else class="space-y-6">
         <AdminABTestDistributionMatrix :distribution="distribution" />
+        <AdminABTestChannelCreation v-if="channelCreation" :analytics="channelCreation" />
         <AdminABTestPublishIntentOutcome v-if="publishIntentOutcome" :outcome="publishIntentOutcome" />
       </div>
     </div>

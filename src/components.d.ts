@@ -12,6 +12,8 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AccessTable: typeof import('./components/tables/AccessTable.vue')['default']
+    AdminABTestAnimationRetentionChart: typeof import('./components/admin/AdminABTestAnimationRetentionChart.vue')['default']
+    AdminABTestChannelCreation: typeof import('./components/admin/AdminABTestChannelCreation.vue')['default']
     AdminABTestDistributionMatrix: typeof import('./components/admin/AdminABTestDistributionMatrix.vue')['default']
     AdminABTestPublishIntentOutcome: typeof import('./components/admin/AdminABTestPublishIntentOutcome.vue')['default']
     AdminBarChart: typeof import('./components/admin/AdminBarChart.vue')['default']
