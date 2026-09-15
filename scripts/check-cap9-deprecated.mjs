@@ -6,12 +6,14 @@
  * Does not flag Cordova SwiftPM product dependencies (still required on Cap 8).
  *
  * Usage:
- *   node scripts/check-cap9-deprecated.mjs
- *   node scripts/check-cap9-deprecated.mjs --dir path
+ *   node scripts/check-cap9-deprecated.mjs --dir packages/capacitor-notifications
  */
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 const SKIP_DIRS = new Set([
   'node_modules',
@@ -94,9 +96,35 @@ const RULES = [
 const CORDova_SPM_LINE
   = /\.product\s*\(\s*name\s*:\s*"Cordova"\s*,\s*package\s*:\s*"capacitor-swift-pm"\s*\)/
 
+/** @type {string} */
+let pluginRoot = ''
+
+function isUnderRoot(targetPath, rootDir) {
+  const resolved = path.resolve(targetPath)
+  const rel = path.relative(rootDir, resolved)
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
+}
+
+function resolvePluginDir(rawDir) {
+  const base = rawDir ? path.resolve(process.cwd(), rawDir) : process.cwd()
+  if (!isUnderRoot(base, REPO_ROOT)) {
+    console.error(`[cap9-deprecated] ERROR: plugin dir must stay inside repo (${REPO_ROOT})`)
+    process.exit(2)
+  }
+  const rel = path.relative(REPO_ROOT, base)
+  if (!rel.startsWith('packages/')) {
+    console.error('[cap9-deprecated] ERROR: plugin dir must be under packages/')
+    process.exit(2)
+  }
+  return base
+}
+
 function readText(p) {
+  if (!isUnderRoot(p, pluginRoot)) {
+    return ''
+  }
   try {
-    return fs.readFileSync(p, 'utf8')
+    return fs.readFileSync(path.resolve(p), 'utf8')
   }
   catch {
     return ''
@@ -104,8 +132,11 @@ function readText(p) {
 }
 
 function exists(p) {
+  if (!isUnderRoot(p, pluginRoot)) {
+    return false
+  }
   try {
-    fs.accessSync(p)
+    fs.accessSync(path.resolve(p))
     return true
   }
   catch {
@@ -114,11 +145,11 @@ function exists(p) {
 }
 
 function parseArgs(argv) {
-  const out = { dir: process.cwd() }
+  const out = { dir: null }
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--dir' || a === '--pluginDir') {
-      out.dir = path.resolve(argv[++i] || '.')
+      out.dir = argv[++i] || '.'
       continue
     }
   }
@@ -130,6 +161,9 @@ function walkFiles(rootDir, exts) {
   const stack = [rootDir]
   while (stack.length) {
     const dir = stack.pop()
+    if (!isUnderRoot(dir, pluginRoot)) {
+      continue
+    }
     let entries
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true })
@@ -205,11 +239,11 @@ function scanFile(filePath, rule) {
 }
 
 const args = parseArgs(process.argv)
-const pluginDir = args.dir
-const pkgPath = path.join(pluginDir, 'package.json')
+pluginRoot = resolvePluginDir(args.dir)
+const pkgPath = path.join(pluginRoot, 'package.json')
 
 if (!exists(pkgPath)) {
-  console.error(`[cap9-deprecated] ERROR: missing package.json in ${pluginDir}`)
+  console.error(`[cap9-deprecated] ERROR: missing package.json in ${pluginRoot}`)
   process.exit(2)
 }
 
@@ -227,7 +261,7 @@ if (!cap.android && !cap.ios) {
   process.exit(0)
 }
 
-const scanRoots = collectScanRoots(pluginDir, cap)
+const scanRoots = collectScanRoots(pluginRoot, cap)
 const allExts = [...new Set(RULES.flatMap(r => r.exts))]
 const files = []
 for (const root of scanRoots) {
@@ -245,7 +279,7 @@ for (const file of files) {
     for (const hit of hits) {
       violations.push({
         rule: rule.id,
-        file: path.relative(pluginDir, file),
+        file: path.relative(pluginRoot, file),
         line: hit.line,
         text: hit.text,
       })
@@ -254,7 +288,7 @@ for (const file of files) {
 }
 
 if (violations.length) {
-  const relDir = path.relative(process.cwd(), pluginDir) || '.'
+  const relDir = path.relative(process.cwd(), pluginRoot) || '.'
   console.error(`[cap9-deprecated] FAIL in ${relDir}`)
   for (const v of violations) {
     console.error(`  - ${v.rule}: ${v.file}:${v.line}: ${v.text}`)
