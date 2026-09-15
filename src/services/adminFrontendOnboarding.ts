@@ -1,5 +1,31 @@
 export type FrontendOnboardingStageKey = 'intent' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'setup'
 
+export type FrontendOnboardingCliChecklistStepId
+  = | 'add_app'
+    | 'add_channel'
+    | 'add_updater'
+    | 'add_code'
+    | 'add_encryption'
+    | 'select_platform'
+    | 'build_project'
+    | 'run_device'
+    | 'add_code_change'
+    | 'upload_bundle'
+    | 'test_update'
+    | 'completion'
+
+export interface FrontendOnboardingCliChecklistCoverage {
+  linked_apps: number
+  active_apps: number
+  unavailable_apps: number
+  steps: Array<{
+    step_id: FrontendOnboardingCliChecklistStepId
+    done: number
+    skipped: number
+    done_percent: number
+  }>
+}
+
 export const FRONTEND_ONBOARDING_DAILY_SETUP_CLI_OUTCOME_KEYS = [
   'cli_copy_init',
   'ai_copy_init',
@@ -168,6 +194,7 @@ export interface FrontendOnboardingAnalytics {
   }
   daily_setup_cli_outcomes: FrontendOnboardingDailySetupCliOutcomePoint[]
   daily_setup_cli_agent_usage: FrontendOnboardingDailySetupCliAgentUsage
+  v4_cli_checklist_coverage?: FrontendOnboardingCliChecklistCoverage
   posthog_configured: boolean
   posthog_connected: boolean
 }

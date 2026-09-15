@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const mockupSource = readFileSync(new URL('../src/components/dashboard/ChannelDefaultRoutingMockup.vue', import.meta.url), 'utf8')
+const animationComposableSource = readFileSync(new URL('../src/composables/useOnboardingChannelAnimation.ts', import.meta.url), 'utf8')
 
 function expectSourceOrder(source: string, markers: string[]) {
   let previousIndex = -1
@@ -26,7 +27,7 @@ function sourceBetween(start: string, end: string) {
 
 describe('channel default routing animation', () => {
   it.concurrent('moves packets along the connectors as they are rendered on screen', () => {
-    const timeline = sourceBetween('function buildTimeline(root: HTMLElement)', 'function createAnimation()')
+    const timeline = sourceBetween('function buildTimeline(root: HTMLElement)', 'const {\n  continueOnboarding,')
 
     expect(mockupSource).toContain('function renderedPathPoints(')
     expect(mockupSource).toContain('path.getScreenCTM()')
@@ -72,7 +73,8 @@ describe('channel default routing animation', () => {
   it.concurrent('keeps the onboarding action in the footer while compacting the embedded animation', () => {
     expect(mockupSource).toContain('<footer v-if="props.embedded" class="flex items-center justify-between border-t')
     expect(mockupSource).toContain('data-test="channel-default-routing-continue"')
-    expect(mockupSource).toContain(`@click="emit('continue')"`)
+    expect(mockupSource).toContain('@click="continueOnboarding"')
+    expect(animationComposableSource).toContain(`analytics.leave('continue')`)
 
     const embeddedStageRule = sourceBetween('.cr-page-embedded .cr-stage {', '@media (min-width: 640px)')
     expect(embeddedStageRule).toContain('min-height: 27rem;')
@@ -85,21 +87,29 @@ describe('channel default routing animation', () => {
   })
 
   it.concurrent('rebuilds rendered motion paths after a debounced resize and cleans up observers', () => {
-    expect(mockupSource).toContain('let resizeObserver: ResizeObserver | null = null')
-    expect(mockupSource).toContain('let resizeAnimationFrame: number | null = null')
-    expect(mockupSource).toContain('function refreshAnimationAfterResize()')
-    expect(mockupSource).toContain('window.cancelAnimationFrame(resizeAnimationFrame)')
-    expect(mockupSource).toContain('window.requestAnimationFrame(() => {')
-    expect(mockupSource).toContain('resizeObserver = new ResizeObserver(refreshAnimationAfterResize)')
-    expect(mockupSource).toContain('resizeObserver.observe(rootEl.value)')
-    expect(mockupSource).toContain('resizeObserver?.disconnect()')
+    expect(animationComposableSource).toContain('let resizeObserver: ResizeObserver | null = null')
+    expect(animationComposableSource).toContain('let resizeAnimationFrame: number | null = null')
+    expect(animationComposableSource).toContain('function refreshAnimationAfterResize()')
+    expect(animationComposableSource).toContain('window.cancelAnimationFrame(resizeAnimationFrame)')
+    expect(animationComposableSource).toContain('window.requestAnimationFrame(() => {')
+    expect(animationComposableSource).toContain('resizeObserver = new ResizeObserver(refreshAnimationAfterResize)')
+    expect(animationComposableSource).toContain('resizeObserver.observe(options.root.value)')
+    expect(animationComposableSource).toContain('resizeObserver?.disconnect()')
 
-    const createAnimation = sourceBetween('function createAnimation()', 'function refreshAnimationAfterResize()')
+    const createAnimation = animationComposableSource.slice(
+      animationComposableSource.indexOf('function createAnimation('),
+      animationComposableSource.indexOf('function refreshAnimationAfterResize()'),
+    )
     expectSourceOrder(createAnimation, [
       'timeline?.kill()',
       'media?.revert()',
-      'const root = rootEl.value',
       'media = gsap.matchMedia()',
     ])
+    expect(mockupSource).toContain(`stage: 'channel-routing'`)
+    expect(animationComposableSource).toContain(`analytics.start(trigger === 'replay' ? 'replay' : 'automatic', source)`)
+    expect(animationComposableSource).toContain(`animation.eventCallback('onComplete', analytics.complete)`)
+    expect(animationComposableSource).toContain('analytics.replayRequested()')
+    expect(animationComposableSource).toContain('analytics.showReducedMotion()')
+    expect(animationComposableSource).toContain('analytics.dispose()')
   })
 })

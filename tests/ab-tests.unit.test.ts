@@ -80,13 +80,14 @@ function testConfig(
   return {
     new_emails: {
       audience,
+      label: 'Email template',
       ...(intents ? { intents } : {}),
       control_branch: controlBranch,
       treatment_branch: treatmentBranch,
       treatment_percentage: treatmentPercentage,
       branches: {
-        [treatmentBranch]: { bento_tag: 'ab:new_emails' },
-        [controlBranch]: { bento_tag: 'ab:no_new_emails' },
+        [treatmentBranch]: { bento_tag: 'ab:new_emails', label: 'New emails' },
+        [controlBranch]: { bento_tag: 'ab:no_new_emails', label: 'Old emails' },
       },
     },
   }
@@ -102,8 +103,8 @@ function installIntentTest(
       ...testConfig().new_emails,
       intents,
       branches: {
-        A: { bento_tag: `ab:${testName}` },
-        B: { bento_tag: `ab:no_${testName}` },
+        A: { bento_tag: `ab:${testName}`, label: 'Treatment' },
+        B: { bento_tag: `ab:no_${testName}`, label: 'Control' },
       },
     },
   })
@@ -272,6 +273,16 @@ describe('new-user A/B test assignment', () => {
       .toEqual(['ota', 'both'])
   })
 
+  it('preserves display labels for the admin dashboard', async () => {
+    const { validateABTestsConfig } = await loadABTestsModule()
+
+    const config = validateABTestsConfig(testConfig())
+
+    expect(config.new_emails?.label).toBe('Email template')
+    expect(config.new_emails?.branches.A.label).toBe('New emails')
+    expect(config.new_emails?.branches.B.label).toBe('Old emails')
+  })
+
   it.each([
     ['an empty list', []],
     ['duplicate values', ['ota', 'ota']],
@@ -347,19 +358,40 @@ describe('new-user A/B test assignment', () => {
   it.each([
     ['a non-object config', null],
     ['an unsupported audience', testConfig(50, 'invalid' as 'all')],
+    ['a blank test label', {
+      new_emails: {
+        ...testConfig().new_emails,
+        label: ' ',
+      },
+    }],
+    ['a blank branch label', {
+      new_emails: {
+        ...testConfig().new_emails,
+        branches: {
+          ...testConfig().new_emails.branches,
+          A: { bento_tag: 'ab:new_emails', label: ' ' },
+        },
+      },
+    }],
     ['a fractional percentage', testConfig(50.5)],
     ['a percentage below zero', testConfig(-1)],
     ['a percentage above 100', testConfig(101)],
     ['a blank branch tag', {
       new_emails: {
         ...testConfig().new_emails,
-        branches: { A: { bento_tag: ' ' }, B: { bento_tag: 'ab:no_new_emails' } },
+        branches: {
+          A: { bento_tag: ' ', label: 'New emails' },
+          B: { bento_tag: 'ab:no_new_emails', label: 'Old emails' },
+        },
       },
     }],
     ['identical branch tags', {
       new_emails: {
         ...testConfig().new_emails,
-        branches: { A: { bento_tag: 'ab:same' }, B: { bento_tag: 'ab:same' } },
+        branches: {
+          A: { bento_tag: 'ab:same', label: 'New emails' },
+          B: { bento_tag: 'ab:same', label: 'Old emails' },
+        },
       },
     }],
     ['identical treatment and control branches', {
@@ -388,15 +420,15 @@ describe('new-user A/B test assignment', () => {
       first_test: {
         ...firstTest,
         branches: {
-          A: { bento_tag: 'ab:shared' },
-          B: { bento_tag: 'ab:first_control' },
+          A: { bento_tag: 'ab:shared', label: 'First treatment' },
+          B: { bento_tag: 'ab:first_control', label: 'First control' },
         },
       },
       second_test: {
         ...firstTest,
         branches: {
-          A: { bento_tag: 'ab:second_treatment' },
-          B: { bento_tag: 'ab:shared' },
+          A: { bento_tag: 'ab:second_treatment', label: 'Second treatment' },
+          B: { bento_tag: 'ab:shared', label: 'Second control' },
         },
       },
     })).toThrow('Invalid A/B test configuration')
@@ -406,8 +438,8 @@ describe('new-user A/B test assignment', () => {
     const { validateABTestsConfig } = await loadABTestsModule()
     const firstTest = testConfig().new_emails
     const secondBranches = {
-      A: { bento_tag: 'ab:second_treatment' },
-      B: { bento_tag: 'ab:second_control' },
+      A: { bento_tag: 'ab:second_treatment', label: 'Second treatment' },
+      B: { bento_tag: 'ab:second_control', label: 'Second control' },
     }
     secondBranches[branch].bento_tag = firstTest.branches[branch].bento_tag
 

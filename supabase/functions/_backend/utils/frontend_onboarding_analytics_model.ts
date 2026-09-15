@@ -46,6 +46,7 @@ export type FrontendOnboardingStageKey = 'intent' | 'details' | 'app_name' | 'ap
 
 export interface FrontendOnboardingAttempt {
   attemptId: string
+  appId?: string
   onboardingVersion: FrontendOnboardingVersion
   personId: string
   intentMs: number

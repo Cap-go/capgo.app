@@ -243,6 +243,7 @@ export async function getBuildStatus(
   }
   else if (updatedRows && updatedRows.length > 0) {
     await emitBuildTransitionEvent(c, {
+      jobId: job_id,
       previousStatus,
       effectiveStatus,
       timeoutApplied,

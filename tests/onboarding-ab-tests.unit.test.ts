@@ -58,22 +58,24 @@ describe('webNativeApp onboarding A/B tests', () => {
       audience: 'self_signup',
       comment: 'Shows a \'convert my webapp to mobile\' intent option. Does not change the rest of the flow by itself.',
       control_branch: 'B',
+      label: 'Publish intent',
       treatment_branch: 'A',
       treatment_percentage: 25,
       branches: {
-        A: { bento_tag: 'ab:webnativeapp_publish_intent' },
-        B: { bento_tag: 'ab:no_webnativeapp_publish_intent' },
+        A: { bento_tag: 'ab:webnativeapp_publish_intent', label: 'WebNativeApp option' },
+        B: { bento_tag: 'ab:no_webnativeapp_publish_intent', label: 'Current publish options' },
       },
     })
     expect(abTestsConfig[WEBNATIVE_DEVELOPMENT_ENVIRONMENT_AB_TEST]).toEqual({
       audience: 'self_signup',
       comment: 'Asks what tools people use to build. Combined with publish + hosted_builder + starting out, this can recommend WebNativeApp.',
       control_branch: 'D',
+      label: 'Development environment',
       treatment_branch: 'C',
       treatment_percentage: 25,
       branches: {
-        C: { bento_tag: 'ab:webnativeapp_development_environment' },
-        D: { bento_tag: 'ab:no_webnativeapp_development_environment' },
+        C: { bento_tag: 'ab:webnativeapp_development_environment', label: 'Development environment question' },
+        D: { bento_tag: 'ab:no_webnativeapp_development_environment', label: 'Current onboarding' },
       },
     })
   })
@@ -84,11 +86,12 @@ describe('webNativeApp onboarding A/B tests', () => {
       comment: 'Shows the guided channel education and creation flow.',
       control_branch: 'B',
       intents: ['ota', 'both'],
+      label: 'Channel creation',
       treatment_branch: 'A',
       treatment_percentage: 50,
       branches: {
-        A: { bento_tag: 'ab:new_channel' },
-        B: { bento_tag: 'ab:no_new_channel' },
+        A: { bento_tag: 'ab:new_channel', label: 'Guided channel flow' },
+        B: { bento_tag: 'ab:no_new_channel', label: 'Current channel flow' },
       },
     })
   })

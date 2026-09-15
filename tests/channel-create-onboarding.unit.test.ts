@@ -81,4 +81,33 @@ describe('channel creation onboarding', () => {
     expect(messages['channel-create-onboarding-submit']).toBe('Create channel')
     expect(messages['channel-create-onboarding-success-title']).toBe('Your first channel is ready')
   })
+
+  it.concurrent('tracks privacy-safe creation milestones through the onboarding event pipeline', () => {
+    expect(onboardingSource).toContain('function trackChannelEvent(name: OnboardingChannelEvent')
+    expect(onboardingSource.match(/@analytics="trackChannelEvent"/g)).toHaveLength(8)
+    expect(onboardingSource).toContain(`'onboarding_channel_stage_continued'`)
+    expect(onboardingSource).toContain(`'onboarding_channel_stage_backed'`)
+
+    for (const event of [
+      'onboarding_channel_stage_viewed',
+      'onboarding_channel_create_initialization_started',
+      'onboarding_channel_create_loaded',
+      'onboarding_channel_create_existing_detected',
+      'onboarding_channel_name_suggestion_selected',
+      'onboarding_channel_name_entered',
+      'onboarding_channel_name_validation_failed',
+      'onboarding_channel_self_assign_toggled',
+      'onboarding_channel_create_submitted',
+      'onboarding_channel_create_blocked',
+      'onboarding_channel_create_succeeded',
+      'onboarding_channel_create_failed',
+      'onboarding_channel_create_continued',
+    ]) {
+      expect(componentSource).toContain(`'${event}'`)
+    }
+
+    expect(componentSource).not.toContain('channel_name:')
+    expect(componentSource).toContain('channel_name_length:')
+    expect(componentSource).toContain('selected_suggestion: name')
+  })
 })

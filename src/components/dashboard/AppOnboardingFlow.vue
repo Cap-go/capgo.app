@@ -2,6 +2,7 @@
 import type { CliAiPromptOrganization } from '~/services/cliAiPrompt'
 import type { Database, Json } from '~/types/supabase.types'
 import type { OnboardingABTestAssignment } from '~/utils/onboardingABTests'
+import type { OnboardingChannelEvent, OnboardingChannelEventProperties, OnboardingChannelStage } from '~/utils/onboardingChannelAnalytics'
 import type {
   OnboardingAnalyticsStep,
   OnboardingCopyEvent,
@@ -616,6 +617,10 @@ function trackOrganizationEvent(
   progressTracker?.trackStepEvent(name, 'organization', details)
 }
 
+function trackChannelEvent(name: OnboardingChannelEvent, details: OnboardingChannelEventProperties) {
+  progressTracker?.trackStepEvent(name, analyticsStepFor(flowStep.value), details)
+}
+
 const detailsFieldTracker = createOnboardingDetailsFieldDebouncer((name, step, details) => {
   if (props.preOrg)
     progressTracker?.trackDetailsEvent(name, step, details)
@@ -1198,7 +1203,7 @@ async function loadResumeApp() {
 
   createdApp.value = data
   const savedProgress = parseUserOnboardingProgress(main.user?.onboarding)
-  setupStage.value = resolveSetupStage(savedProgress)
+  applyOnboardingProgress(savedProgress)
   appName.value = data.name ?? ''
   existingApp.value = data.existing_app ?? null
   storeUrl.value = data.ios_store_url ?? data.android_store_url ?? ''
@@ -1208,7 +1213,8 @@ async function loadResumeApp() {
   void loadResumeIconPreview(data.icon_url, data.app_id, iconLoadRun)
   if (props.preOrg || resumeStep.value === 'setup') {
     flowStep.value = 'setup'
-    hydrateIntentFromCurrentOrg()
+    if (!savedProgress?.intent)
+      hydrateIntentFromCurrentOrg()
   }
   else {
     flowStep.value = resumeStep.value === 'choice' ? 'choice' : 'install'
@@ -2068,19 +2074,37 @@ function setSetupStage(nextStage: SetupStage) {
 }
 
 function continueFromChannelDefaultRouting() {
+  trackChannelStageTransition('channel-self-assign', 'forward')
   setSetupStage('channel-self-assign')
 }
 
 function continueFromChannelSelfAssign() {
+  trackChannelStageTransition('channel-console-assign', 'forward')
   setSetupStage('channel-console-assign')
 }
 
 function continueFromChannelConsoleAssign() {
+  trackChannelStageTransition('channel-create', 'forward')
   setSetupStage('channel-create')
 }
 
 function continueFromChannelCreate() {
+  trackChannelStageTransition('cli', 'forward')
   setSetupStage('cli')
+}
+
+function trackChannelStageTransition(nextStage: OnboardingChannelStage | 'cli', direction: 'backward' | 'forward') {
+  const currentStage = setupStage.value
+  if (currentStage === 'cli')
+    return
+  trackChannelEvent(
+    direction === 'forward' ? 'onboarding_channel_stage_continued' : 'onboarding_channel_stage_backed',
+    {
+      channel_stage: currentStage,
+      navigation_direction: direction,
+      next_channel_stage: nextStage,
+    },
+  )
 }
 
 const previousSetupStage: Partial<Record<SetupStage, SetupStage>> = {
@@ -2092,8 +2116,10 @@ const previousSetupStage: Partial<Record<SetupStage, SetupStage>> = {
 
 function goBackFromSetupStage() {
   const previousStage = previousSetupStage[setupStage.value]
-  if (previousStage)
+  if (previousStage) {
+    trackChannelStageTransition(previousStage, 'backward')
     setSetupStage(previousStage)
+  }
 }
 
 watch(newChannelTreatment, () => {
@@ -3417,17 +3443,20 @@ defineExpose({
         <div v-else-if="flowStep === 'setup' && createdApp">
           <ChannelDefaultRoutingOnboarding
             v-if="newChannelTreatment && setupStage === 'channel-routing'"
+            @analytics="trackChannelEvent"
             @continue="continueFromChannelDefaultRouting"
           />
 
           <ChannelSelfAssignOnboarding
             v-else-if="newChannelTreatment && setupStage === 'channel-self-assign'"
+            @analytics="trackChannelEvent"
             @back="goBackFromSetupStage"
             @continue="continueFromChannelSelfAssign"
           />
 
           <ChannelConsoleAssignOnboarding
             v-else-if="newChannelTreatment && setupStage === 'channel-console-assign'"
+            @analytics="trackChannelEvent"
             @back="goBackFromSetupStage"
             @continue="continueFromChannelConsoleAssign"
           />
@@ -3435,6 +3464,7 @@ defineExpose({
           <ChannelCreateOnboarding
             v-else-if="newChannelTreatment && setupStage === 'channel-create'"
             :app-id="createdApp.app_id"
+            @analytics="trackChannelEvent"
             @continue="continueFromChannelCreate"
           />
 
@@ -3622,17 +3652,20 @@ defineExpose({
         <div v-else-if="!props.preOrg && flowStep === 'install' && createdApp">
           <ChannelDefaultRoutingOnboarding
             v-if="newChannelTreatment && setupStage === 'channel-routing'"
+            @analytics="trackChannelEvent"
             @continue="continueFromChannelDefaultRouting"
           />
 
           <ChannelSelfAssignOnboarding
             v-else-if="newChannelTreatment && setupStage === 'channel-self-assign'"
+            @analytics="trackChannelEvent"
             @back="goBackFromSetupStage"
             @continue="continueFromChannelSelfAssign"
           />
 
           <ChannelConsoleAssignOnboarding
             v-else-if="newChannelTreatment && setupStage === 'channel-console-assign'"
+            @analytics="trackChannelEvent"
             @back="goBackFromSetupStage"
             @continue="continueFromChannelConsoleAssign"
           />
@@ -3640,6 +3673,7 @@ defineExpose({
           <ChannelCreateOnboarding
             v-else-if="newChannelTreatment && setupStage === 'channel-create'"
             :app-id="createdApp.app_id"
+            @analytics="trackChannelEvent"
             @continue="continueFromChannelCreate"
           />
 

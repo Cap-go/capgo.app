@@ -69,6 +69,33 @@ describe('admin stats validation', () => {
     expect(parsed.success).toBe(true)
   })
 
+  it.concurrent('accepts the A/B test distribution metric', () => {
+    const parsed = safeParseSchema(adminStatsBodySchema, {
+      ...baseBody,
+      metric_category: 'ab_test_distribution',
+    })
+
+    expect(parsed.success).toBe(true)
+  })
+
+  it.concurrent('accepts the A/B channel creation analytics metric', () => {
+    const parsed = safeParseSchema(adminStatsBodySchema, {
+      ...baseBody,
+      metric_category: 'ab_test_channel_creation',
+    })
+
+    expect(parsed.success).toBe(true)
+  })
+
+  it.concurrent('accepts the A/B Publish intent outcome metric', () => {
+    const parsed = safeParseSchema(adminStatsBodySchema, {
+      ...baseBody,
+      metric_category: 'ab_test_publish_intent_outcome',
+    })
+
+    expect(parsed.success).toBe(true)
+  })
+
   it.concurrent('accepts the cli usage metric', () => {
     const parsed = safeParseSchema(adminStatsBodySchema, {
       ...baseBody,
