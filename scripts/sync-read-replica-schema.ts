@@ -501,7 +501,7 @@ function isSafeQuotedIdentifier(value: string): boolean {
 }
 
 function isSafeSchemaFragment(value: string): boolean {
-  return /^[\w .()[\],:'"{}+\-=<>!]+$/u.test(value)
+  return /^[\w #.()[\],:'"{}+\-=<>!]+$/u.test(value)
 }
 
 function isSafeTypeDefinition(value: string): boolean {
