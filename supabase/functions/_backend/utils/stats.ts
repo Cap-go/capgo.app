@@ -19,7 +19,7 @@ import {
   normalizeStatsMetadata,
   onPremStats,
 } from './plugin_stats.ts'
-import { getPgClient } from './pg.ts'
+import { closeClient, getPgClient } from './pg.ts'
 import { normalizeStatsInsightDate, normalizeStatsInsightNumber, sortStatsInsightTotals } from './statsInsights.ts'
 import { countDevicesSB, countInstallSourcesSB, getAppsFromSB, getUpdateStatsSB, readBandwidthUsageSB, readDevicesSB, readDeviceUsageSB, readDeviceVersionCountsSB, readNativeActiveDevicesSummarySB, readNativeDailyPlatformActiveSB, readNativeVersionUsageSB, readStatsInsightsSB, readStatsSB, readStatsStorageSB, readStatsVersionSB, supabaseWithAuth, trackBandwidthUsageSB, trackDevicesSB, trackDeviceUsageSB, trackLogsSB, trackMetaSB, trackVersionUsageSB } from './supabase.ts'
 import { logSkippedSupabaseWrite, shouldSkipSupabaseStatsFallback } from './supabase_write_guard.ts'
@@ -588,29 +588,36 @@ export interface UpdateDeviceOutcomeSourceRow {
   device_id: string
   action: string
   created_at: string
+  app_id?: string
 }
 
 const updateDeviceOutcomeFailureActions = new Set<string>(PUBLIC_FAILURE_ACTIONS)
 
 export function buildDailyDeviceUpdateOutcomesFromRows(rows: UpdateDeviceOutcomeSourceRow[]): DailyUpdateDeviceOutcome[] {
-  const byDayDevice = new Map<string, { succeeded: boolean, failed: boolean }>()
+  const byDayDevice = new Map<string, { lastSetAt: number | null, lastFailAt: number | null }>()
 
   rows.forEach((row) => {
     if (!row.created_at || !row.device_id)
       return
     const date = row.created_at.slice(0, 10)
-    const key = `${date}\0${row.device_id}`
-    const entry = byDayDevice.get(key) ?? { succeeded: false, failed: false }
-    if (row.action === 'set')
-      entry.succeeded = true
-    if (updateDeviceOutcomeFailureActions.has(row.action))
-      entry.failed = true
+    const appScope = row.app_id ?? ''
+    const key = `${date}\0${appScope}\0${row.device_id}`
+    const entry = byDayDevice.get(key) ?? { lastSetAt: null, lastFailAt: null }
+    const ts = Date.parse(row.created_at)
+    if (Number.isNaN(ts))
+      return
+    if (row.action === 'set' && (entry.lastSetAt === null || ts > entry.lastSetAt))
+      entry.lastSetAt = ts
+    if (updateDeviceOutcomeFailureActions.has(row.action) && (entry.lastFailAt === null || ts > entry.lastFailAt))
+      entry.lastFailAt = ts
     byDayDevice.set(key, entry)
   })
 
   const byDay = new Map<string, number>()
   byDayDevice.forEach((entry, key) => {
-    if (!entry.failed || entry.succeeded)
+    if (entry.lastFailAt === null)
+      return
+    if (entry.lastSetAt !== null && entry.lastFailAt <= entry.lastSetAt)
       return
     const date = key.split('\0')[0] ?? ''
     if (!date)
@@ -637,17 +644,21 @@ export async function readDailyUpdateDeviceOutcomesSB(
     WITH scoped AS (
       SELECT
         (created_at AT TIME ZONE 'UTC')::date AS day,
+        app_id,
         device_id,
-        bool_or(action = 'set') AS succeeded,
-        bool_or(action = ANY($4::public.stats_action[])) AS failed
+        max(created_at) FILTER (WHERE action = 'set') AS last_set_at,
+        max(created_at) FILTER (WHERE action = ANY($4::public.stats_action[])) AS last_fail_at
       FROM public.stats
       WHERE app_id = ANY($1::varchar[])
         AND created_at >= $2::timestamptz
         AND created_at < $3::timestamptz
         AND (action = 'set' OR action = ANY($4::public.stats_action[]))
-      GROUP BY 1, 2
+      GROUP BY 1, 2, 3
     )
-    SELECT day::text AS date, COUNT(*) FILTER (WHERE failed AND NOT succeeded)::text AS devices_failed
+    SELECT day::text AS date, COUNT(*) FILTER (
+      WHERE last_fail_at IS NOT NULL
+        AND (last_set_at IS NULL OR last_fail_at > last_set_at)
+    )::text AS devices_failed
     FROM scoped
     GROUP BY day
     ORDER BY day ASC
@@ -662,7 +673,10 @@ export async function readDailyUpdateDeviceOutcomesSB(
   }
   catch (error) {
     cloudlog({ requestId: c.get('requestId'), message: 'Error reading daily update device outcomes from Supabase', error })
-    return []
+    throw error
+  }
+  finally {
+    closeClient(c, pgClient)
   }
 }
 

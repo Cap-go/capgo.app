@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Database } from '~/types/supabase.types'
 import type { PeriodDayOption } from '~/utils/periodDays'
-import { computed, ref, useId, watch, watchEffect } from 'vue'
+import { computed, nextTick, ref, useId, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -92,6 +92,26 @@ const app = ref<Database['public']['Tables']['apps']['Row']>()
 const insights = ref<LogInsightsResponse | null>(null)
 const publicChannels = ref<{ id: number, name: string, versionName: string }[]>([])
 const activeView = ref<'update' | 'failure'>('update')
+const observeUpdaterTabUpdateId = 'observe-updater-tab-update-btn'
+const observeUpdaterTabFailureId = 'observe-updater-tab-failure-btn'
+const observeUpdaterPanelUpdateId = 'observe-updater-panel-update'
+const observeUpdaterPanelFailureId = 'observe-updater-panel-failure'
+
+async function focusObserveUpdaterTab(view: 'update' | 'failure') {
+  await nextTick()
+  const tabId = view === 'update' ? observeUpdaterTabUpdateId : observeUpdaterTabFailureId
+  document.getElementById(tabId)?.focus()
+}
+
+function onObserveUpdaterTabKeydown(event: KeyboardEvent) {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')
+    return
+  event.preventDefault()
+  const nextView = activeView.value === 'update' ? 'failure' : 'update'
+  activeView.value = nextView
+  void focusObserveUpdaterTab(nextView)
+}
+
 let latestInsightsRequest = 0
 
 const appRouteSegment = computed(() => {
@@ -408,10 +428,14 @@ watch(() => [
           class="inline-flex p-1 rounded-lg border bg-slate-100 border-slate-200 dark:bg-slate-800/80 dark:border-slate-700"
           role="tablist"
           :aria-label="t('observe-updater-view-tabs')"
+          @keydown="onObserveUpdaterTabKeydown"
         >
           <button
+            :id="observeUpdaterTabUpdateId"
             type="button"
             role="tab"
+            :aria-controls="observeUpdaterPanelUpdateId"
+            :tabindex="activeView === 'update' ? 0 : -1"
             class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
             :class="activeView === 'update'
               ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white'
@@ -423,8 +447,11 @@ watch(() => [
             {{ t('observe-updater-tab-update') }}
           </button>
           <button
+            :id="observeUpdaterTabFailureId"
             type="button"
             role="tab"
+            :aria-controls="observeUpdaterPanelFailureId"
+            :tabindex="activeView === 'failure' ? 0 : -1"
             class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
             :class="activeView === 'failure'
               ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white'
@@ -437,7 +464,14 @@ watch(() => [
           </button>
         </div>
 
-        <div v-show="activeView === 'update'" class="flex flex-col gap-6" data-test="observe-updater-view-update">
+        <div
+          v-show="activeView === 'update'"
+          :id="observeUpdaterPanelUpdateId"
+          role="tabpanel"
+          :aria-labelledby="observeUpdaterTabUpdateId"
+          class="flex flex-col gap-6"
+          data-test="observe-updater-view-update"
+        >
           <p class="text-sm text-slate-600 dark:text-slate-300">
             {{ t('observe-updater-update-help') }}
           </p>
@@ -469,7 +503,14 @@ watch(() => [
           />
         </div>
 
-        <div v-show="activeView === 'failure'" class="flex flex-col gap-6" data-test="observe-updater-view-failure">
+        <div
+          v-show="activeView === 'failure'"
+          :id="observeUpdaterPanelFailureId"
+          role="tabpanel"
+          :aria-labelledby="observeUpdaterTabFailureId"
+          class="flex flex-col gap-6"
+          data-test="observe-updater-view-failure"
+        >
           <div
             class="p-4 border rounded-lg shadow-sm"
             :class="totalErrors > 0

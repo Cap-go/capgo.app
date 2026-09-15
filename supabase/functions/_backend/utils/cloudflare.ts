@@ -3490,14 +3490,16 @@ export async function readDailyUpdateDeviceOutcomesCF(
   if (!c.env.APP_LOG || appIds.length === 0)
     return []
 
-  const appFilter = appIds.length === 1
-    ? `AND index1 = '${escapeSqlString(appIds[0])}'`
-    : `AND index1 IN (${appIds.map(id => `'${escapeSqlString(id)}'`).join(', ')})`
+  let appFilter: string
+  if (appIds.length === 1)
+    appFilter = `AND index1 = '${escapeSqlString(appIds[0])}'`
+  else
+    appFilter = `AND index1 IN (${appIds.map(id => `'${escapeSqlString(id)}'`).join(', ')})`
   const window = `timestamp >= toDateTime('${formatDateCF(start_date)}') AND timestamp < toDateTime('${formatDateCF(end_date)}') ${appFilter}`
   const failureActions = PUBLIC_FAILURE_ACTIONS.map(action => `'${action}'`).join(', ')
   const day = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
-  const outcomeBase = `SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(blob2 IN (${failureActions}), 1, 0)) AS failed FROM app_log WHERE ${window} AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id`
-  const query = `SELECT date, sum(if(succeeded = 0, failed, 0)) AS devices_failed FROM (${outcomeBase}) GROUP BY date ORDER BY date ASC`
+  const outcomeBase = `SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'set', toUnixTimestamp(timestamp), 0)) AS set_ts, max(if(blob2 IN (${failureActions}), toUnixTimestamp(timestamp), 0)) AS fail_ts FROM app_log WHERE ${window} AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id`
+  const query = `SELECT date, sum(if(fail_ts > 0 AND (set_ts = 0 OR fail_ts > set_ts), 1, 0)) AS devices_failed FROM (${outcomeBase}) GROUP BY date ORDER BY date ASC`
 
   try {
     const rows = await runQueryToCFA<{ date: string, devices_failed: number }>(c, query)
@@ -3508,7 +3510,7 @@ export async function readDailyUpdateDeviceOutcomesCF(
   }
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error in readDailyUpdateDeviceOutcomesCF', error: serializeError(e), query })
-    return []
+    throw e
   }
 }
 

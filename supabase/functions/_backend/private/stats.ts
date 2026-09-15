@@ -61,11 +61,14 @@ const statsInsightsSchema = z.object({
 })
 
 const deviceOutcomesSchema = z.object({
-  appId: appIdSchema,
+  appId: appIdSchema.optional(),
   appIds: z.array(appIdSchema).optional(),
   rangeStart: z.union([safeQueryDateSchema, z.number()]),
   rangeEnd: z.union([safeQueryDateSchema, z.number()]),
-})
+}).refine(
+  body => Boolean(body.appId) || (body.appIds?.length ?? 0) > 0,
+  { message: 'appId or appIds is required' },
+)
 
 const insightPeriodDays = [1, 3, 7, 30] as const
 type InsightPeriodDays = typeof insightPeriodDays[number]
@@ -235,12 +238,18 @@ app.post('/device_outcomes', middlewareAuth(), async (c) => {
   if (!startDate || !endDate)
     throw simpleError('invalid_body', 'Invalid body')
 
-  const appIds = body.appIds?.length ? body.appIds : [body.appId]
-  for (const appId of appIds) {
-    const hasAppReadLogsPermission = await checkPermission(c, 'app.read_logs', { appId })
-    if (!hasAppReadLogsPermission)
-      throw simpleError('app_access_denied', 'You can\'t access this app', { app_id: appId })
+  const requestedAppIds = body.appIds?.length
+    ? body.appIds
+    : body.appId
+      ? [body.appId]
+      : []
+  const appIds: string[] = []
+  for (const appId of requestedAppIds) {
+    if (await checkPermission(c, 'app.read_logs', { appId }))
+      appIds.push(appId)
   }
+  if (appIds.length === 0)
+    throw simpleError('app_access_denied', 'You can\'t access this app', { app_id: requestedAppIds[0] ?? body.appId })
 
   cloudlog({ requestId: c.get('requestId'), message: 'post private/stats/device_outcomes body', body: { appIds, startDate, endDate } })
 

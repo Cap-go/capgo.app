@@ -126,8 +126,7 @@ async function fetchDeviceFailedByDay(targetAppIds: string[], startDate: string,
   if (!sessionData.session)
     return null
 
-  const primaryAppId = props.appId || targetAppIds[0]
-  if (!primaryAppId)
+  if (targetAppIds.length === 0)
     return null
 
   const response = await fetch(`${defaultApiHost}/private/stats/device_outcomes`, {
@@ -137,7 +136,7 @@ async function fetchDeviceFailedByDay(targetAppIds: string[], startDate: string,
       'authorization': `Bearer ${sessionData.session.access_token}`,
     },
     body: JSON.stringify({
-      appId: primaryAppId,
+      ...(props.appId ? { appId: props.appId } : {}),
       appIds: targetAppIds,
       rangeStart: `${startDate}T00:00:00.000Z`,
       rangeEnd: `${endDateExclusive}T00:00:00.000Z`,
@@ -294,7 +293,7 @@ async function calculateStats(forceRefetch = false) {
     let usedDeviceFailedSeries = isDemoMode.value
     if (!isDemoMode.value) {
       const deviceOutcomes = await fetchDeviceFailedByDay(targetAppIds, startDate, endDateExclusive)
-      if (deviceOutcomes) {
+      if (deviceOutcomes !== null) {
         usedDeviceFailedSeries = true
         actionData.fail = createUndefinedArray(dayCount) as (number | undefined)[]
         deviceOutcomes.forEach((row) => {
@@ -321,8 +320,8 @@ async function calculateStats(forceRefetch = false) {
             const installedCount = stat.install || 0
             const failedCount = stat.fail || 0
             const requestedCount = stat.get || 0
-            const failedCountForDay = usedDeviceFailedSeries ? (actionData.fail[daysDiff] ?? 0) : failedCount
-            const totalForDay = installedCount + failedCountForDay + requestedCount
+            const failForRow = usedDeviceFailedSeries ? 0 : failedCount
+            const totalForDay = installedCount + failForRow + requestedCount
 
             // Increment arrays
             incrementArrayValue(dailyCounts, daysDiff, totalForDay)
@@ -340,6 +339,14 @@ async function calculateStats(forceRefetch = false) {
           }
         }
       })
+    }
+
+    if (usedDeviceFailedSeries) {
+      for (let daysDiff = 0; daysDiff < dayCount; daysDiff++) {
+        const deviceFailedCount = actionData.fail[daysDiff] ?? 0
+        if (deviceFailedCount > 0)
+          incrementArrayValue(dailyCounts, daysDiff, deviceFailedCount)
+      }
     }
 
     const finalDailyCounts = dailyCounts
