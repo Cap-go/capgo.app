@@ -15,6 +15,7 @@ interface OnboardingRow {
 const userId = randomUUID()
 const email = `user-bento-events-${randomUUID()}@test.com`
 const verifiedAppId = 'com.demo.app'
+const checklistAppId = `com.test.cli-login.${randomUUID().slice(0, 8)}`
 let apiKey: string | undefined
 let apiKeyId: number | undefined
 
@@ -28,6 +29,14 @@ beforeAll(async () => {
     `INSERT INTO public.users (id, email)
      VALUES ($1, $2)`,
     [userId, email],
+  )
+  await executeSQL(
+    `INSERT INTO public.apps (app_id, icon_url, name, owner_org, onboarding)
+     VALUES ($1, '', $1, $2, $3::jsonb)`,
+    [checklistAppId, ORG_ID, JSON.stringify({
+      created_by_user_id: userId,
+      setup: { todo_list_version: 2, source: 'manual', outcome: 'in_progress', steps: {} },
+    })],
   )
 
   const createdApiKey = await createDirectApiKeyWithBindings({
@@ -43,6 +52,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  await executeSQL('DELETE FROM public.apps WHERE app_id = $1', [checklistAppId])
   if (apiKeyId !== undefined)
     await executeSQL('DELETE FROM public.apikeys WHERE id = $1', [apiKeyId])
   await executeSQL('DELETE FROM public.users WHERE id = $1', [userId])
@@ -84,6 +94,45 @@ async function setOnboarding(onboarding: Record<string, unknown>) {
     [userId, JSON.stringify(onboarding)],
   )
 }
+
+async function setChecklistOnboarding() {
+  await executeSQL(
+    'UPDATE public.apps SET onboarding = $2::jsonb WHERE app_id = $1',
+    [checklistAppId, JSON.stringify({
+      created_by_user_id: userId,
+      setup: { todo_list_version: 2, source: 'manual', outcome: 'in_progress', steps: {} },
+    })],
+  )
+}
+
+async function readChecklistOnboarding() {
+  const rows = await executeSQL<OnboardingRow>('SELECT onboarding FROM public.apps WHERE app_id = $1', [checklistAppId])
+  return rows[0]?.onboarding
+}
+
+it('marks the version 2 login step from authenticated CLI and MCP PostHog signals', async () => {
+  for (const signal of [
+    { channel: 'user-login', event: 'User CLI login', source: 'cli' },
+    { channel: 'cli-usage', event: 'CLI Command Invoked', source: 'cli' },
+    { channel: 'mcp', event: 'MCP Tool Invoked', source: 'mcp' },
+  ]) {
+    await setChecklistOnboarding()
+    const response = await postEvent({ ...signal, tracking_version: 2 })
+    expect(response.status).toBe(200)
+    expect(await readChecklistOnboarding()).toMatchObject({
+      setup: {
+        todo_list_version: 2,
+        source: signal.source,
+        steps: {
+          login_cli_mcp: {
+            status: 'done',
+            update_history: [{ status: 'done' }],
+          },
+        },
+      },
+    })
+  }
+})
 
 it('keeps notifyConsole login events out of the user Bento state', async () => {
   const response = await postEvent({

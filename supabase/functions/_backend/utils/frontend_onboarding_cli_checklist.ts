@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { AppOnboardingStepId } from './appOnboarding.ts'
 import { inArray } from 'drizzle-orm'
-import { APP_ONBOARDING_STEP_IDS, parseAppOnboarding } from './appOnboarding.ts'
+import { APP_ONBOARDING_V1_STEP_IDS, parseAppOnboarding } from './appOnboarding.ts'
 import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
 import * as schema from './postgres_schema.ts'
 
@@ -35,7 +35,7 @@ export function buildFrontendOnboardingCliChecklistCoverage(
     .filter(row => linkedIds.has(row.appId))
     .map(row => [row.appId, parseAppOnboarding(row.onboarding)]))
 
-  const steps = APP_ONBOARDING_STEP_IDS.map((stepId) => {
+  const steps = APP_ONBOARDING_V1_STEP_IDS.map((stepId) => {
     const states = [...activeApps.values()].map(app => app.steps[stepId]?.status)
     const done = states.filter(status => status === 'done').length
     const skipped = states.filter(status => status === 'skipped').length
