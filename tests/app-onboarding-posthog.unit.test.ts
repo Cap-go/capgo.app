@@ -8,7 +8,7 @@ describe('app onboarding step PostHog event', () => {
       auth: { authType: 'jwt', userId: 'user-id', apikey: null, jwt: 'token' },
       change: { stepId: 'build_project', status: 'done', at: '2026-09-11T18:00:00.000Z', historyLength: 3, historyFull: false },
       orgId: 'org-id',
-      setup: { source: 'cli', outcome: 'in_progress', steps: {} },
+      setup: { todo_list_version: 2, source: 'cli', outcome: 'in_progress', steps: {} },
     })).toMatchObject({
       event: 'App Onboarding Step Changed',
       groups: { organization: 'org-id' },
@@ -23,6 +23,7 @@ describe('app onboarding step PostHog event', () => {
         history_length: 3,
         onboarding_outcome: 'in_progress',
         onboarding_source: 'cli',
+        todo_list_version: 2,
         step_id: 'build_project',
         step_status: 'done',
       },

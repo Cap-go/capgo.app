@@ -1,4 +1,4 @@
-export const APP_ONBOARDING_STEP_IDS = [
+export const APP_ONBOARDING_V1_STEP_IDS = [
   'add_app',
   'add_channel',
   'add_updater',
@@ -13,11 +13,29 @@ export const APP_ONBOARDING_STEP_IDS = [
   'completion',
 ] as const
 
-export type AppOnboardingStepId = typeof APP_ONBOARDING_STEP_IDS[number]
+export const APP_ONBOARDING_V2_STEP_IDS = [
+  'login_cli_mcp',
+  'add_channel',
+  'add_updater',
+  'add_code',
+  'add_encryption',
+  'select_platform',
+  'build_project',
+  'run_device',
+  'add_code_change',
+  'upload_bundle',
+  'test_update',
+  'completion',
+] as const
+
+export type AppOnboardingStepId
+  = | typeof APP_ONBOARDING_V1_STEP_IDS[number]
+    | typeof APP_ONBOARDING_V2_STEP_IDS[number]
 export type AppOnboardingSource = 'manual' | 'cli' | 'mcp' | 'ai'
 export type AppOnboardingOutcome = 'in_progress' | 'completed' | 'skipped' | 'switched_to_manual'
 export type AppOnboardingStepStatus = 'done' | 'skipped'
 export const APP_ONBOARDING_STEP_HISTORY_LIMIT = 10
+export const DEFAULT_APP_ONBOARDING_TODO_LIST_VERSION = 2
 
 export interface AppOnboardingStepState {
   status: AppOnboardingStepStatus
@@ -25,6 +43,7 @@ export interface AppOnboardingStepState {
 }
 
 export interface AppOnboardingState {
+  todo_list_version: number
   source: AppOnboardingSource
   outcome: AppOnboardingOutcome
   steps: Partial<Record<AppOnboardingStepId, AppOnboardingStepState>>
@@ -64,17 +83,22 @@ const SOURCE_RANK: Record<AppOnboardingSource, number> = {
   mcp: 3,
 }
 
-const STEP_ID_SET = new Set<string>(APP_ONBOARDING_STEP_IDS)
+const STEP_ID_SET = new Set<string>([...APP_ONBOARDING_V1_STEP_IDS, ...APP_ONBOARDING_V2_STEP_IDS])
 const SOURCE_SET = new Set<string>(['manual', 'cli', 'mcp', 'ai'])
 const OUTCOME_SET = new Set<string>(['in_progress', 'completed', 'skipped', 'switched_to_manual'])
 const STEP_STATUS_SET = new Set<string>(['done', 'skipped'])
 
 export function defaultAppOnboarding(): AppOnboardingState {
   return {
+    todo_list_version: DEFAULT_APP_ONBOARDING_TODO_LIST_VERSION,
     source: 'manual',
     outcome: 'in_progress',
     steps: {},
   }
+}
+
+export function getAppOnboardingStepIds(todoListVersion: number): readonly AppOnboardingStepId[] {
+  return todoListVersion === 1 ? APP_ONBOARDING_V1_STEP_IDS : APP_ONBOARDING_V2_STEP_IDS
 }
 
 export function isAppOnboardingSource(value: unknown): value is AppOnboardingSource {
@@ -97,6 +121,12 @@ function parseSetupRecord(value: unknown): Record<string, unknown> {
   if (!isRecord(value))
     return {}
   return isRecord(value.setup) ? value.setup : value
+}
+
+function parseTodoListVersion(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
+    : DEFAULT_APP_ONBOARDING_TODO_LIST_VERSION
 }
 
 function parseSteps(value: unknown): AppOnboardingState['steps'] {
@@ -156,6 +186,7 @@ export function parseAppOnboarding(value: unknown): AppOnboardingState {
   const steps = parseSteps(raw.steps)
 
   return {
+    todo_list_version: parseTodoListVersion(raw.todo_list_version),
     source,
     outcome,
     steps,
@@ -196,8 +227,9 @@ export function deriveAppOnboardingOutcome(
   steps: AppOnboardingState['steps'],
   current: AppOnboardingOutcome,
   patch?: AppOnboardingOutcome,
+  todoListVersion = DEFAULT_APP_ONBOARDING_TODO_LIST_VERSION,
 ): AppOnboardingOutcome {
-  const statuses = APP_ONBOARDING_STEP_IDS.map(id => steps[id]?.status)
+  const statuses = getAppOnboardingStepIds(todoListVersion).map(id => steps[id]?.status)
   const allPresent = statuses.every(status => status === 'done' || status === 'skipped')
   const anySkipped = statuses.includes('skipped')
 
@@ -220,10 +252,13 @@ export function mergeAppOnboarding(
 ): AppOnboardingState {
   const current = parseAppOnboarding(currentValue)
   const steps: AppOnboardingState['steps'] = { ...current.steps }
+  const stepIds = new Set(getAppOnboardingStepIds(current.todo_list_version))
 
   if (patch.steps) {
     for (const [key, value] of Object.entries(patch.steps) as Array<[AppOnboardingStepId, AppOnboardingStepState | undefined]>) {
       if (!value)
+        continue
+      if (!stepIds.has(key))
         continue
       const existing = steps[key]
       if (existing?.status === 'done' && value.status === 'skipped')
@@ -236,8 +271,9 @@ export function mergeAppOnboarding(
   }
 
   return {
+    todo_list_version: current.todo_list_version,
     source: pickAppOnboardingSource(current.source, patch.source),
-    outcome: deriveAppOnboardingOutcome(steps, current.outcome, patch.outcome),
+    outcome: deriveAppOnboardingOutcome(steps, current.outcome, patch.outcome, current.todo_list_version),
     steps,
     updated_at: now(),
   }
@@ -254,6 +290,7 @@ export function applyAppOnboardingPatch(
   delete existing.outcome
   delete existing.steps
   delete existing.updated_at
+  delete existing.todo_list_version
   return {
     ...existing,
     setup,
