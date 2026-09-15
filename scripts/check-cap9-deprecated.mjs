@@ -99,12 +99,14 @@ const CORDova_SPM_LINE
 /** @type {string} */
 let pluginRoot = ''
 
+/** Returns whether `targetPath` resolves inside `rootDir`. */
 function isUnderRoot(targetPath, rootDir) {
   const resolved = path.resolve(targetPath)
   const rel = path.relative(rootDir, resolved)
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
 }
 
+/** Resolve and validate the Capacitor plugin directory under `packages/`. */
 function resolvePluginDir(rawDir) {
   const base = rawDir ? path.resolve(process.cwd(), rawDir) : process.cwd()
   if (!isUnderRoot(base, REPO_ROOT)) {
@@ -119,6 +121,7 @@ function resolvePluginDir(rawDir) {
   return base
 }
 
+/** Read UTF-8 text when the path stays under `pluginRoot`. */
 function readText(p) {
   if (!isUnderRoot(p, pluginRoot)) {
     return ''
@@ -131,6 +134,7 @@ function readText(p) {
   }
 }
 
+/** Check filesystem access when the path stays under `pluginRoot`. */
 function exists(p) {
   if (!isUnderRoot(p, pluginRoot)) {
     return false
@@ -144,6 +148,7 @@ function exists(p) {
   }
 }
 
+/** Parse `--dir` / `--pluginDir` from CLI args. */
 function parseArgs(argv) {
   const out = { dir: null }
   for (let i = 2; i < argv.length; i++) {
@@ -156,6 +161,7 @@ function parseArgs(argv) {
   return out
 }
 
+/** Recursively list files with given extensions under `rootDir`. */
 function walkFiles(rootDir, exts) {
   const out = []
   const stack = [rootDir]
@@ -192,6 +198,7 @@ function walkFiles(rootDir, exts) {
   return out
 }
 
+/** Collect Android/iOS native scan roots from package capacitor metadata. */
 function collectScanRoots(pluginDir, pkg) {
   const cap = typeof pkg.capacitor === 'object' && pkg.capacitor ? pkg.capacitor : {}
   const roots = []
@@ -216,6 +223,7 @@ function collectScanRoots(pluginDir, pkg) {
   return roots
 }
 
+/** Return deprecated API matches for one file and rule. */
 function scanFile(filePath, rule) {
   const ext = path.extname(filePath)
   if (!rule.exts.includes(ext))
@@ -261,7 +269,7 @@ if (!cap.android && !cap.ios) {
   process.exit(0)
 }
 
-const scanRoots = collectScanRoots(pluginRoot, cap)
+const scanRoots = collectScanRoots(pluginRoot, pkg)
 const allExts = [...new Set(RULES.flatMap(r => r.exts))]
 const files = []
 for (const root of scanRoots) {
