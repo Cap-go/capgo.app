@@ -13,6 +13,48 @@ const crypto = require('node:crypto')
 const https = require('node:https')
 
 const TARGET_HOST = 'updater.capgo.com.cn'
+
+/** @type {Promise<(request: Request) => Promise<Response>> | null} */
+let aliproxyHealthHandlerPromise = null
+
+function getAliproxyHealthHandler() {
+  if (!aliproxyHealthHandlerPromise) {
+    aliproxyHealthHandlerPromise = import('@openstatus/health').then(({ createHealthHandler, httpProbe, probe }) =>
+      createHealthHandler({
+        path: '/health',
+        probes: [
+          httpProbe({
+            name: 'updater_upstream',
+            url: `https://${TARGET_HOST}/ok`,
+            expectStatus: 200,
+          }),
+          probe({
+            name: 'aliproxy',
+            critical: false,
+            run: async () => undefined,
+          }),
+        ],
+        extend: () => ({ worker: 'aliproxy' }),
+      }),
+    )
+  }
+  return aliproxyHealthHandlerPromise
+}
+
+/**
+ * @param {Response} response
+ */
+async function fetchResponseToAliproxyResult(response) {
+  const bodyText = response.status === 204 || response.status === 205
+    ? ''
+    : await response.text()
+  return {
+    statusCode: response.status,
+    headers: Object.fromEntries(response.headers.entries()),
+    body: bodyText,
+    isBase64Encoded: false,
+  }
+}
 const CLIENT_BUDGET_MS = 2500
 const FETCH_TIMEOUT_MS = 15000
 const MAX_ENTRY_BYTES = 2 * 1024 * 1024
@@ -296,6 +338,12 @@ function upstreamErrorResponse() {
 async function handleRequest(event) {
   const requestData = parseRequestData(event)
   const { method, reqPath, bodyBuffer, options } = buildUpstreamRequest(requestData)
+
+  if (method === 'GET' && (reqPath === '/health' || reqPath === '/health/')) {
+    const healthHandler = await getAliproxyHealthHandler()
+    const healthRequest = new Request(`https://${TARGET_HOST}${reqPath}`, { method: 'GET' })
+    return fetchResponseToAliproxyResult(await healthHandler(healthRequest))
+  }
   const cacheKey = makeCacheKey(method, reqPath, bodyBuffer)
   const cached = getCache(cacheKey)
   const degraded = isDegraded()

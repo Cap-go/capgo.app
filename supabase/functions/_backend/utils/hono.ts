@@ -15,6 +15,7 @@ import { cloudlog } from './logging.ts'
 import { onError } from './on_error.ts'
 import { getEnv } from './utils.ts'
 
+import { registerCapgoHealth, runCapgoWorkerLivenessProbe } from './capgo_health.ts'
 import { version as CapgoVersion } from './version.ts'
 
 export interface JWTClaims {
@@ -338,7 +339,8 @@ export function createHono(functionName: string, _version: string) {
     },
   }))
 
-  appGlobal.post('/ok', (c) => {
+  appGlobal.post('/ok', async (c) => {
+    await runCapgoWorkerLivenessProbe()
     return c.json(BRES)
   })
   appGlobal.post('/ko', (c) => {
@@ -349,6 +351,8 @@ export function createHono(functionName: string, _version: string) {
     }
     return c.json(defaultResponse, 500)
   })
+
+  registerCapgoHealth(appGlobal)
 
   return appGlobal
 }

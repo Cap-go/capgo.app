@@ -113,6 +113,7 @@
         "@formkit/themes": "2.1.0",
         "@formkit/vue": "2.1.0",
         "@hono/standard-validator": "^0.3.0",
+        "@openstatus/health": "0.1.1",
         "@std/semver": "npm:@jsr/std__semver@1.0.8",
         "@supabase/supabase-js": "2.110.8",
         "@vuepic/vue-datepicker": "^14.0.0",
@@ -212,7 +213,7 @@
     },
     "cli": {
       "name": "@capgo/cli",
-      "version": "8.47.1",
+      "version": "8.51.0",
       "bin": {
         "capgo": "dist/index.js",
       },
@@ -285,7 +286,7 @@
     },
     "packages/capacitor-notifications": {
       "name": "@capgo/capacitor-notifications",
-      "version": "0.1.13",
+      "version": "0.1.14",
       "devDependencies": {
         "@capacitor/android": "^8.4.2",
         "@capacitor/ios": "^8.4.2",
@@ -939,6 +940,8 @@
     "@nodelib/fs.stat": ["@nodelib/fs.stat@2.0.5", "", {}, "sha512-RkhPPp2zrqDAQA/2jNhnztcPAlv64XdhIp7a7454A5ovI7Bukxgt7MX7udwAu3zg1DcpPU0rz3VV1SeaqvY4+A=="],
 
     "@nodelib/fs.walk": ["@nodelib/fs.walk@1.2.8", "", { "dependencies": { "@nodelib/fs.scandir": "2.1.5", "fastq": "^1.6.0" } }, "sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg=="],
+
+    "@openstatus/health": ["@openstatus/health@0.1.1", "", {}, "sha512-BjSDIl1WOHF64lmhJipYdcolIt/Ciy4eoaasG8XuvDZJ6ENc6GFw49A0JyN2sZYOuKuTcKAS8B7pjHnsJtk+Lw=="],
 
     "@ota-meshi/ast-token-store": ["@ota-meshi/ast-token-store@0.3.0", "", {}, "sha512-XRO0zi2NIUKq2lUk3T1ecFSld1fMWRKE6naRFGkgkdeosx7IslyUKNv5Dcb5PJTja9tHJoFu0v/7yEpAkrkrTg=="],
 

@@ -5,5 +5,7 @@
   "scripts": {
     "start": "node ./index.js"
   },
-  "dependencies": {}
+  "dependencies": {
+    "@openstatus/health": "0.1.1"
+  }
 }

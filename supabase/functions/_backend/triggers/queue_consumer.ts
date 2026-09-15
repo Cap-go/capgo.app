@@ -8,6 +8,7 @@ import { integerLikeSchema, safeParseSchema } from '../utils/schema_validation.t
 import { sendDiscordAlert } from '../utils/discord.ts'
 import { BRES, middlewareAPISecret, parseBody, simpleError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
+import { runCapgoWorkerLivenessProbe } from '../utils/capgo_health.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { backgroundTask, getEnv, WAIT_FOR_COMPLETION_HEADER } from '../utils/utils.ts'
 import { updateManifestSize } from './on_manifest_create.ts'
@@ -1129,8 +1130,8 @@ async function runQueueSync(
 }
 export const app = new Hono<MiddlewareKeyVariables>()
 
-// /health endpoint
-app.get('/health', (c) => {
+app.get('/health', async (c) => {
+  await runCapgoWorkerLivenessProbe()
   return c.text('OK', 200)
 })
 

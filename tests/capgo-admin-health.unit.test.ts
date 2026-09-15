@@ -1,0 +1,100 @@
+import { describe, expect, it } from 'vitest'
+import { respondOpenStatusAdminCheck } from '../supabase/functions/_backend/utils/capgo_health.ts'
+
+describe('respondOpenStatusAdminCheck', () => {
+  it('returns Capgo ok|ko status with legacy fields, not OpenStatus status', async () => {
+    const c = {
+      req: { method: 'GET' },
+      env: {},
+    } as Parameters<typeof respondOpenStatusAdminCheck>[0]
+
+    const response = await respondOpenStatusAdminCheck(c, {
+      probeName: 'pgmq_queues',
+      runAssessment: async () => ({
+        capgoStatus: 'ko',
+        httpStatus: 503,
+        legacyBody: {
+          status: 'ko',
+          checked_at: '2026-01-01T00:00:00.000Z',
+          queue_count: 2,
+        },
+      }),
+    })
+
+    expect(response.status).toBe(503)
+    const body = await response.json() as Record<string, unknown>
+    expect(body.status).toBe('ko')
+    expect(body).not.toHaveProperty('capgo_status')
+    expect(body.queue_count).toBe(2)
+    expect(body.checked_at).toBe('2026-01-01T00:00:00.000Z')
+    expect(body.status).not.toBe('unhealthy')
+  })
+
+  it('uses deadline fallback with Capgo ko when assessment does not finish in time', async () => {
+    const c = {
+      req: { method: 'GET' },
+      env: {},
+    } as Parameters<typeof respondOpenStatusAdminCheck>[0]
+
+    const response = await respondOpenStatusAdminCheck(c, {
+      probeName: 'pgmq_queues',
+      deadlineMs: 50,
+      deadlineFallbackAssessment: () => ({
+        capgoStatus: 'ko',
+        httpStatus: 500,
+        legacyBody: {
+          status: 'ko',
+          error: 'queue_health_error',
+        },
+      }),
+      runAssessment: () => new Promise(() => {}),
+    })
+
+    expect(response.status).toBe(500)
+    const body = await response.json() as Record<string, unknown>
+    expect(body.status).toBe('ko')
+    expect(body.error).toBe('queue_health_error')
+    expect(body.status).not.toBe('unhealthy')
+  })
+
+  it('ignores a late successful assessment after the health deadline', async () => {
+    const c = {
+      req: { method: 'GET' },
+      env: {},
+    } as Parameters<typeof respondOpenStatusAdminCheck>[0]
+
+    let resolveLate!: (value: { capgoStatus: 'ok', httpStatus: number, legacyBody: Record<string, unknown> }) => void
+    const lateAssessment = new Promise<{ capgoStatus: 'ok', httpStatus: number, legacyBody: Record<string, unknown> }>((resolve) => {
+      resolveLate = resolve
+    })
+
+    const response = await respondOpenStatusAdminCheck(c, {
+      probeName: 'pgmq_queues',
+      deadlineMs: 50,
+      deadlineFallbackAssessment: () => ({
+        capgoStatus: 'ko',
+        httpStatus: 500,
+        legacyBody: {
+          status: 'ko',
+          error: 'queue_health_error',
+        },
+      }),
+      runAssessment: async () => {
+        await new Promise(resolve => setTimeout(resolve, 200))
+        return await lateAssessment
+      },
+    })
+
+    resolveLate({
+      capgoStatus: 'ok',
+      httpStatus: 200,
+      legacyBody: { status: 'ok', queue_count: 99 },
+    })
+
+    expect(response.status).toBe(500)
+    const body = await response.json() as Record<string, unknown>
+    expect(body.status).toBe('ko')
+    expect(body.error).toBe('queue_health_error')
+    expect(body.queue_count).toBeUndefined()
+  })
+})
