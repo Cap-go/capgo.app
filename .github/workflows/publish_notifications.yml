@@ -35,6 +35,8 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Typecheck notifications plugin
         run: bun run --cwd packages/capacitor-notifications typecheck
+      - name: Check Cap 9 deprecated APIs (notifications plugin)
+        run: bun run --cwd packages/capacitor-notifications check:cap9-deprecated
       - name: Build notifications plugin
         run: bun run --cwd packages/capacitor-notifications build
       - name: Resolve previous successful notifications release

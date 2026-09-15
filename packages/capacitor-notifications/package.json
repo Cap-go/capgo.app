@@ -20,6 +20,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check:cap9-deprecated": "node scripts/check-cap9-deprecated.mjs",
     "prepublishOnly": "bun run typecheck && bun run build"
   },
   "peerDependencies": {
