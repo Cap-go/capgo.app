@@ -24,6 +24,14 @@ test.describe('Observe sections', () => {
     await expect(pluginsTab).toBeVisible()
     await expect(updaterTab).toHaveAttribute('aria-current', 'page')
     await expect(page.locator('[data-test="observe-updater-version-filter"]')).toBeVisible()
+    await expect(page.locator('[data-test="observe-updater-tab-update"]')).toBeVisible()
+    await expect(page.locator('[data-test="observe-updater-tab-failure"]')).toBeVisible()
+    await expect(page.locator('[data-test="observe-updater-view-update"]')).toBeVisible()
+
+    await page.locator('[data-test="observe-updater-tab-failure"]').click()
+    await expect(page.locator('[data-test="observe-updater-view-failure"]')).toBeVisible()
+    await page.locator('[data-test="observe-updater-tab-update"]').click()
+    await expect(page.locator('[data-test="observe-updater-view-update"]')).toBeVisible()
 
     await logsTab.click()
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/logs(?:\?|$)/)

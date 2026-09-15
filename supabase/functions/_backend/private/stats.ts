@@ -11,7 +11,7 @@ import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { appIdSchema, deviceIdSchema, hasInvalidQueryLimitInput, hasUnsafeQueryText, hasUnsafeStatsQueryText, MAX_QUERY_LIMIT, queryLimitSchema, safeQueryDateSchema, safeQueryTextSchema, statsActionSchema } from '../utils/privateAnalyticsValidation.ts'
 import { checkPermission } from '../utils/rbac.ts'
-import { readStats, readStatsInsights } from '../utils/stats.ts'
+import { readDailyUpdateDeviceOutcomes, readStats, readStatsInsights } from '../utils/stats.ts'
 import { getRollingStatsPeriod } from '../utils/statsPeriod.ts'
 
 interface DataStats {
@@ -59,6 +59,16 @@ const statsInsightsSchema = z.object({
   actions: z.array(statsActionSchema).optional(),
   versionName: safeQueryTextSchema.optional(),
 })
+
+const deviceOutcomesSchema = z.object({
+  appId: appIdSchema.optional(),
+  appIds: z.array(appIdSchema).optional(),
+  rangeStart: z.union([safeQueryDateSchema, z.number()]),
+  rangeEnd: z.union([safeQueryDateSchema, z.number()]),
+}).refine(
+  body => Boolean(body.appId) || (body.appIds?.length ?? 0) > 0,
+  { message: 'appId or appIds is required' },
+)
 
 const insightPeriodDays = [1, 3, 7, 30] as const
 type InsightPeriodDays = typeof insightPeriodDays[number]
@@ -214,6 +224,40 @@ function createStatsReadParams(
 app.post('/', middlewareAuth(), async (c) => {
   const { body, startDate, endDate } = await getValidatedStatsRequestBody(c, statsBodySchema, 'post private/stats body')
   return c.json(await readStats(c, createStatsReadParams(body, startDate, endDate)))
+})
+
+app.post('/device_outcomes', middlewareAuth(), async (c) => {
+  const bodyRaw = await parseBody<DataStats & { appIds?: string[], rangeStart?: string | number, rangeEnd?: string | number }>(c)
+  const parsed = safeParseSchema(deviceOutcomesSchema, bodyRaw)
+  if (!parsed.success)
+    throw simpleError('invalid_body', 'Invalid body', { error: parsed.error })
+
+  const body = parsed.data
+  const startDate = normalizeRangeDate(body.rangeStart)
+  const endDate = normalizeRangeDate(body.rangeEnd)
+  if (!startDate || !endDate)
+    throw simpleError('invalid_body', 'Invalid body')
+
+  const requestedAppIds = body.appIds?.length
+    ? body.appIds
+    : body.appId
+      ? [body.appId]
+      : []
+  const appIds: string[] = []
+  for (const appId of requestedAppIds) {
+    if (await checkPermission(c, 'app.read_logs', { appId }))
+      appIds.push(appId)
+  }
+  if (appIds.length === 0)
+    throw simpleError('app_access_denied', 'You can\'t access this app', { app_id: requestedAppIds[0] ?? body.appId })
+
+  cloudlog({ requestId: c.get('requestId'), message: 'post private/stats/device_outcomes body', body: { appIds, startDate, endDate } })
+
+  return c.json(await readDailyUpdateDeviceOutcomes(c, {
+    app_ids: appIds,
+    start_date: startDate,
+    end_date: endDate,
+  }))
 })
 
 app.post('/insights', middlewareAuth(), async (c) => {

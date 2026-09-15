@@ -2474,7 +2474,7 @@ export async function getUpdateStatsCF(c: Context): Promise<UpdateStats> {
 // Note: Device cleanup is no longer needed as Analytics Engine handles data retention automatically
 
 // Shared failure taxonomy for device-day success rates (admin + public /data).
-const PUBLIC_FAILURE_ACTIONS = ['set_fail', 'update_fail', 'download_fail', 'windows_path_fail', 'canonical_path_fail', 'directory_path_fail', 'unzip_fail', 'low_mem_fail', 'download_manifest_file_fail', 'download_manifest_checksum_fail', 'download_manifest_brotli_fail', 'finish_download_fail', 'manifest_path_fail', 'decrypt_fail', 'insufficient_disk_space', 'cannotGetBundle', 'checksum_fail', 'blocked_by_server_url', 'backend_refusal'] as const
+export const PUBLIC_FAILURE_ACTIONS = ['set_fail', 'update_fail', 'download_fail', 'windows_path_fail', 'canonical_path_fail', 'directory_path_fail', 'unzip_fail', 'low_mem_fail', 'download_manifest_file_fail', 'download_manifest_checksum_fail', 'download_manifest_brotli_fail', 'finish_download_fail', 'manifest_path_fail', 'decrypt_fail', 'insufficient_disk_space', 'cannotGetBundle', 'checksum_fail', 'blocked_by_server_url', 'backend_refusal'] as const
 
 // ============================================================================
 // ADMIN ANALYTICS FUNCTIONS
@@ -3481,6 +3481,39 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
  * Device-day install success rate for a closed time window.
  * Used by global_stats.success_rate so admin matches public /data.
  */
+export async function readDailyUpdateDeviceOutcomesCF(
+  c: Context,
+  appIds: string[],
+  start_date: string,
+  end_date: string,
+): Promise<Array<{ date: string, devices_failed: number }>> {
+  if (!c.env.APP_LOG || appIds.length === 0)
+    return []
+
+  let appFilter: string
+  if (appIds.length === 1)
+    appFilter = `AND index1 = '${escapeSqlString(appIds[0])}'`
+  else
+    appFilter = `AND index1 IN (${appIds.map(id => `'${escapeSqlString(id)}'`).join(', ')})`
+  const window = `timestamp >= toDateTime('${formatDateCF(start_date)}') AND timestamp < toDateTime('${formatDateCF(end_date)}') ${appFilter}`
+  const failureActions = PUBLIC_FAILURE_ACTIONS.map(action => `'${action}'`).join(', ')
+  const day = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
+  const outcomeBase = `SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'set', toUnixTimestamp(timestamp), 0)) AS set_ts, max(if(blob2 IN (${failureActions}), toUnixTimestamp(timestamp), 0)) AS fail_ts FROM app_log WHERE ${window} AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id`
+  const query = `SELECT date, sum(if(fail_ts > 0 AND (set_ts = 0 OR fail_ts > set_ts), 1, 0)) AS devices_failed FROM (${outcomeBase}) GROUP BY date ORDER BY date ASC`
+
+  try {
+    const rows = await runQueryToCFA<{ date: string, devices_failed: number }>(c, query)
+    return rows.map(row => ({
+      date: row.date,
+      devices_failed: Number(row.devices_failed) || 0,
+    }))
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error in readDailyUpdateDeviceOutcomesCF', error: serializeError(e), query })
+    throw e
+  }
+}
+
 export async function getDeviceDaySuccessRateCF(c: Context, start: Date, end: Date): Promise<number> {
   if (!c.env.APP_LOG)
     return 0
