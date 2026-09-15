@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
+import { parseAdminABTestChannelCreation } from '../src/services/adminABTestChannelCreation'
 import {
   parseAdminABTestDistribution,
   totalABTestAssignments,
@@ -26,6 +27,56 @@ const outcomePayload = {
     { outcome: 'selected_another_intent', count: 197 },
     { outcome: 'no_selection_yet', count: 55 },
   ],
+}
+
+const channelCreationPayload = {
+  data_quality: {
+    posthog_configured: true,
+    posthog_connected: true,
+    posthog_failure_reason: null,
+  },
+  experiment: {
+    branches: [
+      { assigned: 11, branch: 'A', conversion_percentage: 50, converted: 4, eligible: 8, label: 'Guided channel flow', pending: 3 },
+      { assigned: 16, branch: 'B', conversion_percentage: 41.7, converted: 5, eligible: 12, label: 'Current channel flow', pending: 4 },
+    ],
+    confidence_percentage: null,
+    confidence_interval_percentage_points: null,
+    difference_percentage_points: 8.3,
+    minimum_branch_sample: 100,
+    observation_window_hours: 24,
+    relative_lift_percentage: 20,
+    status: 'collecting',
+    total_assigned: 27,
+  },
+  generated_at: '2026-09-14T12:00:00.000Z',
+  stages: ['channel-routing', 'channel-self-assign', 'channel-console-assign'].map(stage => ({
+    completed: 6,
+    completion_percentage: 66.7,
+    continued: 7,
+    continued_percentage: 77.8,
+    cohorts: [
+      { cohort: 'automatic', completed: 6, completion_percentage: 66.7, continued: 7, continued_percentage: 77.8, median_watch_ms: 42_000, users: 9 },
+      { cohort: 'replay', completed: 2, completion_percentage: 100, continued: 2, continued_percentage: 100, median_watch_ms: 48_000, users: 2 },
+      { cohort: 'reduced_motion', completed: null, completion_percentage: null, continued: 1, continued_percentage: 100, median_watch_ms: null, users: 1 },
+      { cohort: 'unavailable', completed: null, completion_percentage: null, continued: 0, continued_percentage: null, median_watch_ms: null, users: 0 },
+    ],
+    interrupted: 1,
+    median_skip_progress_percentage: 46,
+    median_watch_ms: 42_000,
+    reached: 9,
+    replays: 2,
+    retention: [0, 25, 50, 75, 100].map((progress, index) => ({ progress_percentage: progress, viewers: [9, 8, 7, 6, 6][index] })),
+    skip_progress: [
+      { from_percentage: 0, skipped: 0, to_percentage: 24 },
+      { from_percentage: 25, skipped: 1, to_percentage: 49 },
+      { from_percentage: 50, skipped: 1, to_percentage: 74 },
+      { from_percentage: 75, skipped: 0, to_percentage: 99 },
+    ],
+    skipped: 2,
+    stage,
+    started: 9,
+  })),
 }
 
 describe('admin A/B test dashboard presentation', () => {
@@ -89,22 +140,85 @@ describe('admin A/B test dashboard presentation', () => {
     expect(parseAdminABTestPublishIntentOutcome({ ...outcomePayload, total: 355 })).toBeNull()
   })
 
+  it.concurrent('accepts valid channel creation diagnostics and rejects malformed stages', () => {
+    expect(parseAdminABTestChannelCreation(channelCreationPayload)).toEqual(channelCreationPayload)
+    expect(parseAdminABTestChannelCreation({
+      ...channelCreationPayload,
+      experiment: {
+        ...channelCreationPayload.experiment,
+        difference_percentage_points: -8.3,
+        relative_lift_percentage: -20,
+      },
+    })).not.toBeNull()
+    expect(parseAdminABTestChannelCreation(null)).toBeNull()
+    expect(parseAdminABTestChannelCreation({ ...channelCreationPayload, stages: channelCreationPayload.stages.slice(0, 2) })).toBeNull()
+    expect(parseAdminABTestChannelCreation({
+      ...channelCreationPayload,
+      stages: [{ ...channelCreationPayload.stages[0], reached: -1 }, ...channelCreationPayload.stages.slice(1)],
+    })).toBeNull()
+    expect(parseAdminABTestChannelCreation({
+      ...channelCreationPayload,
+      stages: channelCreationPayload.stages.map((stage, index) => index === 0
+        ? { ...stage, retention: [...stage.retention].reverse() }
+        : stage),
+    })).toBeNull()
+    expect(parseAdminABTestChannelCreation({
+      ...channelCreationPayload,
+      stages: channelCreationPayload.stages.map((stage, index) => index === 0
+        ? { ...stage, skip_progress: [...stage.skip_progress].reverse() }
+        : stage),
+    })).toBeNull()
+    expect(parseAdminABTestChannelCreation({
+      ...channelCreationPayload,
+      stages: channelCreationPayload.stages.map((stage, index) => index === 1
+        ? { ...stage, stage: channelCreationPayload.stages[0].stage }
+        : stage),
+    })).toBeNull()
+    expect(parseAdminABTestChannelCreation({
+      ...channelCreationPayload,
+      stages: channelCreationPayload.stages.map((stage, index) => index === 0
+        ? {
+            ...stage,
+            cohorts: stage.cohorts.map((cohort, cohortIndex) => cohortIndex === 0
+              ? { ...cohort, completed: 'invalid' }
+              : cohort),
+          }
+        : stage),
+    })).toBeNull()
+    expect(parseAdminABTestChannelCreation({
+      ...channelCreationPayload,
+      stages: channelCreationPayload.stages.map((stage, index) => index === 0
+        ? {
+            ...stage,
+            cohorts: stage.cohorts.map((cohort, cohortIndex) => cohortIndex === 0
+              ? { ...cohort, completed: null }
+              : cohort),
+          }
+        : stage),
+    })).toBeNull()
+  })
+
   it.concurrent('wires the admin tab, metrics, and dashboard cards', async () => {
-    const [tabsSource, storeSource, pageSource, matrixSource, outcomeSource] = await Promise.all([
+    const [tabsSource, storeSource, pageSource, matrixSource, channelSource, retentionSource, outcomeSource] = await Promise.all([
       readFile(new URL('../src/constants/adminTabs.ts', import.meta.url), 'utf8'),
       readFile(new URL('../src/stores/adminDashboard.ts', import.meta.url), 'utf8'),
       readFile(new URL('../src/pages/admin/dashboard/ab-tests.vue', import.meta.url), 'utf8'),
       readFile(new URL('../src/components/admin/AdminABTestDistributionMatrix.vue', import.meta.url), 'utf8'),
+      readFile(new URL('../src/components/admin/AdminABTestChannelCreation.vue', import.meta.url), 'utf8'),
+      readFile(new URL('../src/components/admin/AdminABTestAnimationRetentionChart.vue', import.meta.url), 'utf8'),
       readFile(new URL('../src/components/admin/AdminABTestPublishIntentOutcome.vue', import.meta.url), 'utf8'),
     ])
 
     expect(tabsSource).toContain(`label: 'admin-ab-tests'`)
     expect(tabsSource).toContain(`key: '/ab-tests'`)
     expect(storeSource).toContain(`'ab_test_distribution'`)
+    expect(storeSource).toContain(`'ab_test_channel_creation'`)
     expect(storeSource).toContain(`'ab_test_publish_intent_outcome'`)
     expect(pageSource).toContain(`fetchStats('ab_test_distribution', forceRefresh)`)
+    expect(pageSource).toContain(`fetchStats('ab_test_channel_creation', forceRefresh)`)
     expect(pageSource).toContain(`fetchStats('ab_test_publish_intent_outcome', forceRefresh)`)
     expect(pageSource).toContain('<AdminABTestDistributionMatrix')
+    expect(pageSource).toContain('<AdminABTestChannelCreation')
     expect(pageSource).toContain('<AdminABTestPublishIntentOutcome')
     expect(matrixSource).toContain('role="progressbar"')
     expect(matrixSource).toContain('formatNumberValue(branch.count)')
@@ -112,6 +226,15 @@ describe('admin A/B test dashboard presentation', () => {
     expect(matrixSource).toContain(`t('admin-ab-tests-treatment')`)
     expect(matrixSource).toContain(`t('admin-ab-tests-control')`)
     expect(matrixSource).not.toContain(`t('admin-ab-tests-variant')`)
+    expect(channelSource).toContain('role="group"')
+    expect(channelSource).toContain(':aria-pressed="stage.stage === selectedStageName"')
+    expect(channelSource).not.toContain('role="tablist"')
+    expect(channelSource).toContain('posthog_failure_reason === null')
+    expect(channelSource).not.toContain('Channel creation" class="bg-')
+    expect(retentionSource).toContain(`import '~/services/adminABTestAnimationChartRegister'`)
+    expect(retentionSource).not.toContain('Chart.register')
+    expect(retentionSource).toContain('stepped: true')
+    expect(retentionSource).toContain(`t('admin-ab-tests-channel-skip-bucket'`)
     expect(outcomeSource).toContain('<progress')
     expect(outcomeSource).not.toContain('role="progressbar"')
     expect(outcomeSource).toContain('formatNumberValue(outcome.total)')
@@ -129,6 +252,12 @@ describe('admin A/B test dashboard presentation', () => {
     expect(messages['admin-ab-tests-experiment']).toBe('Experiment')
     expect(messages['admin-ab-tests-treatment']).toBe('Treatment')
     expect(messages['admin-ab-tests-control']).toBe('Control')
+    expect(messages['admin-ab-tests-channel-title']).toBe('Channel creation — overall result')
+    expect(messages['admin-ab-tests-channel-animation-title']).toBe('Animation diagnostics')
+    expect(messages['admin-ab-tests-channel-stage-routing']).toBe('Default routing')
+    expect(messages['admin-ab-tests-channel-stage-self-assign']).toBe('Device self-assignment')
+    expect(messages['admin-ab-tests-channel-stage-console-assign']).toBe('Console assignment')
+    expect(messages['admin-ab-tests-channel-diagnostic-note']).toContain('only treatment versus control')
     expect(messages['admin-ab-tests-publish-outcome-title']).toBe('New Publish intent outcome')
     expect(messages['admin-ab-tests-publish-outcome-description']).toBe('Unique people who saw the new Publish intent through either experiment.')
     expect(messages['admin-ab-tests-publish-outcome-cohort']).toBe('Publish intent treatment or Development environment treatment · duplicates counted once')

@@ -327,7 +327,7 @@ export async function checkPermissionPg(
   c: Context<MiddlewareKeyVariables>,
   permission: Permission,
   scope: PermissionScope,
-  drizzleClient: ReturnType<typeof getDrizzleClient>,
+  drizzleClient: Pick<ReturnType<typeof getDrizzleClient>, 'execute'>,
   userId: string,
   apikeyString?: string | null,
 ): Promise<boolean> {

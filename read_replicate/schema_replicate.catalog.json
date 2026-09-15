@@ -2267,6 +2267,13 @@
     },
     {
       "constraintOwned": false,
+      "definition": "CREATE INDEX idx_apps_onboarding_v2_creator ON public.apps USING btree (((onboarding ->> 'created_by_user_id'::text))) WHERE ((onboarding #>> '{setup,todo_list_version}'::text[]) = '2'::text)",
+      "name": "idx_apps_onboarding_v2_creator",
+      "table": "apps",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
       "definition": "CREATE UNIQUE INDEX idx_apps_owner_org_app_id ON public.apps USING btree (owner_org, app_id)",
       "name": "idx_apps_owner_org_app_id",
       "table": "apps",

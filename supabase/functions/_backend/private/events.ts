@@ -3,6 +3,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { BentoTrackingPayload, TrackOptions } from '../utils/tracking.ts'
 import { Hono } from 'hono/tiny'
 import { APP_TOO_LARGE_EVENT, buildAppTooLargeBentoEvent } from '../utils/app_too_large_tracking.ts'
+import { markAppOnboardingLoginFromTracking } from '../utils/app_onboarding_login.ts'
 import { buildBuilderOnboardingBentoEvent, BUILDER_RECOVERY_MILESTONES } from '../utils/builder_onboarding_recovery.ts'
 import { BUNDLE_INCOMPATIBLE_EVENT, buildBundleCompatibilityBentoEvent, bundleIncompatibleEmailOutcome, isBreakingChangeGatedByChannelStrategy, isCliTrueTag } from '../utils/bundle_compatibility_recovery.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
@@ -536,6 +537,8 @@ app.post('/', middlewareAuth(), async (c) => {
     sentToBento: Boolean(bentoEvent),
     groups: verifiedOrgId ? { organization: verifiedOrgId } : undefined,
   }, apikeyId))
+
+  await markAppOnboardingLoginFromTracking(c, trackedBody.channel, trackedBody.event)
 
   await recordUserBentoEvent(c, {
     userId: c.get('auth')!.userId,

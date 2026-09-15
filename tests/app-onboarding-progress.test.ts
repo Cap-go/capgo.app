@@ -146,6 +146,44 @@ afterAll(async () => {
 })
 
 describe('app onboarding progress', () => {
+  it.concurrent('defaults and preserves the server-owned todo list version', async () => {
+    const rows = await executeSQL<{ default_version: number, preserved_version: number }>(`
+      SELECT
+        (public.merge_app_onboarding_setup('{}'::jsonb, '{}'::jsonb)
+          -> 'setup' ->> 'todo_list_version')::integer AS default_version,
+        (public.merge_app_onboarding_setup(
+          '{"setup":{"todo_list_version":1}}'::jsonb,
+          '{"todo_list_version":99,"source":"cli"}'::jsonb
+        ) -> 'setup' ->> 'todo_list_version')::integer AS preserved_version
+    `)
+
+    expect(rows[0]).toEqual({ default_version: 2, preserved_version: 1 })
+  })
+
+  it.concurrent('merges only steps belonging to the stored todo list version', async () => {
+    const rows = await executeSQL<Record<string, boolean>>(`
+      SELECT
+        public.merge_app_onboarding_setup(
+          '{"setup":{"todo_list_version":1}}'::jsonb,
+          '{"steps":{"add_app":{"status":"done"},"login_cli_mcp":{"status":"done"}}}'::jsonb
+        ) -> 'setup' -> 'steps' ? 'add_app' AS v1_add_app,
+        public.merge_app_onboarding_setup(
+          '{"setup":{"todo_list_version":1}}'::jsonb,
+          '{"steps":{"add_app":{"status":"done"},"login_cli_mcp":{"status":"done"}}}'::jsonb
+        ) -> 'setup' -> 'steps' ? 'login_cli_mcp' AS v1_login,
+        public.merge_app_onboarding_setup(
+          '{"setup":{"todo_list_version":2}}'::jsonb,
+          '{"steps":{"add_app":{"status":"done"},"login_cli_mcp":{"status":"done"}}}'::jsonb
+        ) -> 'setup' -> 'steps' ? 'add_app' AS v2_add_app,
+        public.merge_app_onboarding_setup(
+          '{"setup":{"todo_list_version":2}}'::jsonb,
+          '{"steps":{"add_app":{"status":"done"},"login_cli_mcp":{"status":"done"}}}'::jsonb
+        ) -> 'setup' -> 'steps' ? 'login_cli_mcp' AS v2_login
+    `)
+
+    expect(rows[0]).toEqual({ v1_add_app: true, v1_login: false, v2_add_app: false, v2_login: true })
+  })
+
   it('must reject unauthenticated mark_onboarding_feature_started', async () => {
     const anon = createAuthClient()
     const { error } = await anon.rpc('mark_onboarding_feature_started', {
@@ -395,13 +433,19 @@ describe('app onboarding progress', () => {
   })
 
   it('atomically records concurrent step history and rejects forged history', async () => {
+    const { error: seedError } = await serviceRoleSupabase
+      .from('apps')
+      .update({ onboarding: { setup: { todo_list_version: Number.MAX_SAFE_INTEGER } } })
+      .eq('app_id', APP_HISTORY)
+    expect(seedError).toBeNull()
+
     const headers = await getAuthHeaders()
     const responses = await Promise.all([
       fetchTestRequest(`${BASE_URL}/app/${APP_HISTORY}`, {
         method: 'PUT',
         headers,
         body: JSON.stringify({
-          onboarding: { steps: { add_app: { status: 'done', update_history: [{ forged: true }] } } },
+          onboarding: { steps: { login_cli_mcp: { status: 'done', update_history: [{ forged: true }] } } },
         }),
       }),
       fetchTestRequest(`${BASE_URL}/app/${APP_HISTORY}`, {
@@ -421,9 +465,13 @@ describe('app onboarding progress', () => {
       .single()
     expect(error).toBeNull()
     const onboarding = data?.onboarding as {
-      setup?: { steps?: Record<string, { status?: string, update_history?: Array<Record<string, unknown>> }> }
+      setup?: {
+        todo_list_version?: number
+        steps?: Record<string, { status?: string, update_history?: Array<Record<string, unknown>> }>
+      }
     }
-    for (const stepId of ['add_app', 'add_channel']) {
+    expect(onboarding.setup?.todo_list_version).toBe(Number.MAX_SAFE_INTEGER)
+    for (const stepId of ['login_cli_mcp', 'add_channel']) {
       const step = onboarding.setup?.steps?.[stepId]
       expect(step?.status).toBe('done')
       expect(step?.update_history).toHaveLength(1)

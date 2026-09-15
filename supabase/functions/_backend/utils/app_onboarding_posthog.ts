@@ -25,6 +25,7 @@ export function buildAppOnboardingStepPosthogEvent(input: AppOnboardingStepPosth
       history_length: input.change.historyLength,
       onboarding_outcome: input.setup.outcome,
       onboarding_source: input.setup.source,
+      todo_list_version: input.setup.todo_list_version,
       step_id: input.change.stepId,
       step_status: input.change.status,
     },
