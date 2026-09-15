@@ -26,6 +26,7 @@ export const ADMIN_CHANNEL_OUTCOME_WINDOW_HOURS = 24
 export const ADMIN_CHANNEL_MIN_BRANCH_SAMPLE = 100
 
 const NEW_CHANNEL_ANALYTICS_VERSION = '5.E'
+const NEW_CHANNEL_ANALYTICS_STARTED_AT = '2026-09-14 00:00:00'
 const NEW_CHANNEL_TEST = 'new_channel'
 const FIRST_RUN_TERMINAL_EVENTS = [
   'onboarding_channel_animation_completed',
@@ -410,12 +411,13 @@ export function buildAdminChannelAnimationHogql(): string {
         toString(person_id) AS person_id,
         JSONExtractString(toString(properties), 'channel_stage') AS stage,
         toIntOrZero(toString(properties.animation_run_index)) AS run_index,
-        toFloat64OrZero(toString(properties.animation_progress_percent)) AS progress_percentage,
-        toFloat64OrZero(toString(properties.watch_duration_ms)) AS watch_ms
+        toFloatOrZero(toString(properties.animation_progress_percent)) AS progress_percentage,
+        toFloatOrZero(toString(properties.watch_duration_ms)) AS watch_ms
       FROM events
-      WHERE event IN (${eventAllowlist})
+      WHERE timestamp >= toDateTime(${sqlString(NEW_CHANNEL_ANALYTICS_STARTED_AT)})
+        AND event IN (${eventAllowlist})
         AND JSONExtractString(toString(properties), 'channel_stage') IN (${stageAllowlist})
-        AND toString(properties.onboarding_version) = ${sqlString(NEW_CHANNEL_ANALYTICS_VERSION)}
+        AND JSONExtractString(toString(properties), 'onboarding_version') = ${sqlString(NEW_CHANNEL_ANALYTICS_VERSION)}
         AND ${buildFrontendOnboardingProductionHostHogql('properties', 'timestamp')}
     ), per_person_stage AS (
       SELECT
@@ -441,38 +443,38 @@ export function buildAdminChannelAnimationHogql(): string {
       GROUP BY person_id, stage
     )
     SELECT
-      stage,
-      sum(reached) AS reached,
-      sum(started) AS started,
-      sum(completed) AS completed,
-      sum(skipped) AS skipped,
-      sum(interrupted) AS interrupted,
-      sum(continued) AS continued,
-      sum(replay_requests) AS replays,
-      round(quantileIf(0.5)(first_run_watch_ms, first_run_terminal = 1 AND first_run_watch_ms > 0)) AS median_watch_ms,
-      round(quantileIf(0.5)(first_run_progress, skipped = 1)) AS median_skip_progress_percentage,
-      countIf(first_run_terminal = 1 AND first_run_progress >= 25) AS retention_25,
-      countIf(first_run_terminal = 1 AND first_run_progress >= 50) AS retention_50,
-      countIf(first_run_terminal = 1 AND first_run_progress >= 75) AS retention_75,
-      countIf(skipped = 1 AND first_run_progress < 25) AS skipped_0_24,
-      countIf(skipped = 1 AND first_run_progress >= 25 AND first_run_progress < 50) AS skipped_25_49,
-      countIf(skipped = 1 AND first_run_progress >= 50 AND first_run_progress < 75) AS skipped_50_74,
-      countIf(skipped = 1 AND first_run_progress >= 75 AND first_run_progress < 100) AS skipped_75_99,
-      sum(started) AS automatic_users,
-      sum(completed) AS automatic_completed,
-      countIf(started = 1 AND continued = 1) AS automatic_continued,
-      round(quantileIf(0.5)(first_run_watch_ms, first_run_terminal = 1 AND first_run_watch_ms > 0)) AS automatic_median_watch_ms,
-      countIf(replay_requests > 0) AS replay_users,
-      sum(replay_completed) AS replay_completed,
-      countIf(replay_requests > 0 AND continued = 1) AS replay_continued,
-      round(quantileIf(0.5)(replay_watch_ms, replay_terminal = 1 AND replay_watch_ms > 0)) AS replay_median_watch_ms,
-      sum(reduced_motion) AS reduced_motion_users,
-      countIf(reduced_motion = 1 AND continued = 1) AS reduced_motion_continued,
-      sum(unavailable) AS unavailable_users,
-      countIf(unavailable = 1 AND continued = 1) AS unavailable_continued
-    FROM per_person_stage
-    GROUP BY stage
-    ORDER BY indexOf([${stageAllowlist}], stage)`
+      stage_metrics.stage AS stage,
+      sum(stage_metrics.reached) AS reached,
+      sum(stage_metrics.started) AS started,
+      sum(stage_metrics.completed) AS completed,
+      sum(stage_metrics.skipped) AS skipped,
+      sum(stage_metrics.interrupted) AS interrupted,
+      sum(stage_metrics.continued) AS continued,
+      sum(stage_metrics.replay_requests) AS replays,
+      round(quantileIf(0.5)(stage_metrics.first_run_watch_ms, stage_metrics.first_run_terminal = 1 AND stage_metrics.first_run_watch_ms > 0)) AS median_watch_ms,
+      round(quantileIf(0.5)(stage_metrics.first_run_progress, stage_metrics.skipped = 1)) AS median_skip_progress_percentage,
+      countIf(stage_metrics.first_run_terminal = 1 AND stage_metrics.first_run_progress >= 25) AS retention_25,
+      countIf(stage_metrics.first_run_terminal = 1 AND stage_metrics.first_run_progress >= 50) AS retention_50,
+      countIf(stage_metrics.first_run_terminal = 1 AND stage_metrics.first_run_progress >= 75) AS retention_75,
+      countIf(stage_metrics.skipped = 1 AND stage_metrics.first_run_progress < 25) AS skipped_0_24,
+      countIf(stage_metrics.skipped = 1 AND stage_metrics.first_run_progress >= 25 AND stage_metrics.first_run_progress < 50) AS skipped_25_49,
+      countIf(stage_metrics.skipped = 1 AND stage_metrics.first_run_progress >= 50 AND stage_metrics.first_run_progress < 75) AS skipped_50_74,
+      countIf(stage_metrics.skipped = 1 AND stage_metrics.first_run_progress >= 75 AND stage_metrics.first_run_progress < 100) AS skipped_75_99,
+      sum(stage_metrics.started) AS automatic_users,
+      sum(stage_metrics.completed) AS automatic_completed,
+      countIf(stage_metrics.started = 1 AND stage_metrics.continued = 1) AS automatic_continued,
+      round(quantileIf(0.5)(stage_metrics.first_run_watch_ms, stage_metrics.first_run_terminal = 1 AND stage_metrics.first_run_watch_ms > 0)) AS automatic_median_watch_ms,
+      countIf(stage_metrics.replay_requests > 0) AS replay_users,
+      sum(stage_metrics.replay_completed) AS replay_completed,
+      countIf(stage_metrics.replay_requests > 0 AND stage_metrics.continued = 1) AS replay_continued,
+      round(quantileIf(0.5)(stage_metrics.replay_watch_ms, stage_metrics.replay_terminal = 1 AND stage_metrics.replay_watch_ms > 0)) AS replay_median_watch_ms,
+      sum(stage_metrics.reduced_motion) AS reduced_motion_users,
+      countIf(stage_metrics.reduced_motion = 1 AND stage_metrics.continued = 1) AS reduced_motion_continued,
+      sum(stage_metrics.unavailable) AS unavailable_users,
+      countIf(stage_metrics.unavailable = 1 AND stage_metrics.continued = 1) AS unavailable_continued
+    FROM per_person_stage AS stage_metrics
+    GROUP BY stage_metrics.stage
+    ORDER BY indexOf([${stageAllowlist}], stage_metrics.stage)`
 }
 
 export async function getAdminABTestChannelCreation(c: Context): Promise<AdminABTestChannelCreation> {

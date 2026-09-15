@@ -144,9 +144,15 @@ describe('admin channel creation A/B analytics', () => {
   it('builds a production-only, first-run animation query', () => {
     const query = buildAdminChannelAnimationHogql()
 
-    expect(query).toContain(`toString(properties.onboarding_version) = '5.E'`)
+    expect(query).toContain(`timestamp >= toDateTime('2026-09-14 00:00:00')`)
+    expect(query).toContain(`JSONExtractString(toString(properties), 'onboarding_version') = '5.E'`)
     expect(query).toContain(`JSONExtractString(toString(properties), 'channel_stage')`)
     expect(query).toContain(`JSONExtractString(toString(properties), '$host') = 'console.capgo.app'`)
+    expect(query).toContain(`toFloatOrZero(toString(properties.animation_progress_percent))`)
+    expect(query).toContain(`toFloatOrZero(toString(properties.watch_duration_ms))`)
+    expect(query).not.toContain('toFloat64OrZero')
+    expect(query).toContain('FROM per_person_stage AS stage_metrics')
+    expect(query).toContain('quantileIf(0.5)(stage_metrics.first_run_progress, stage_metrics.skipped = 1)')
     expect(query).toContain(`run_index = 1`)
     expect(query).toContain(`run_index > 1`)
     expect(query).toContain(`quantileIf(0.5)`)
