@@ -14,7 +14,7 @@ import {
 const APP_ID = 'com.demo.app'
 
 const R2_DIRECT_MANIFEST_ERR = 'r2_direct_manifest_jsonb'
-const SET_MANIFEST_PATH = '/private/set_manifest'
+const CLI_UPGRADE_HINT = '@capgo/cli@latest'
 
 function poisonManifestEntries(ownerOrg: string, versionName: string) {
   const prefix = `orgs/${ownerOrg}/apps/${APP_ID}/delta`
@@ -85,7 +85,7 @@ describe('manifest poison guard', () => {
       expect(response.status).toBeGreaterThanOrEqual(400)
       const body = await response.text()
       expect(body).toContain(R2_DIRECT_MANIFEST_ERR)
-      expect(body).toContain(SET_MANIFEST_PATH)
+      expect(body).toContain(CLI_UPGRADE_HINT)
 
       const { data: versionRow, error: versionError } = await adminClient
         .from('app_versions')

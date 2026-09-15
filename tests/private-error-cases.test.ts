@@ -279,6 +279,37 @@ describe('[POST] /private/upload_link - Error Cases', () => {
     const data = await response.json() as { error: string }
     expect(data.error).toBe('error_version_not_found')
   })
+
+  it('rejects a @capgo/cli older than the minimum before any upload work', async () => {
+    const response = await fetch(getEndpointUrl('/private/upload_link'), {
+      method: 'POST',
+      headers: { ...headers, 'x-cli-version': '8.0.0' },
+      body: JSON.stringify({
+        app_id: APPNAME,
+        version: '1.0.0',
+      }),
+    })
+
+    expect(response.status).toBe(400)
+    const data = await response.json() as { error: string }
+    expect(data.error).toBe('cli_version_too_old')
+  })
+
+  it('does not gate requests without a parseable cli version header', async () => {
+    const response = await fetch(getEndpointUrl('/private/upload_link'), {
+      method: 'POST',
+      headers: { ...headers, 'x-cli-version': 'not-a-version' },
+      body: JSON.stringify({
+        app_id: APPNAME,
+        version: '1.0.0',
+      }),
+    })
+
+    // The gate is skipped, so the request falls through to the normal flow.
+    expect(response.status).toBe(404)
+    const data = await response.json() as { error: string }
+    expect(data.error).toBe('error_version_not_found')
+  })
 })
 
 describe('[POST] /private/download_link - Error Cases', () => {
