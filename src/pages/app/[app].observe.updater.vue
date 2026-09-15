@@ -470,231 +470,231 @@ watch(() => [
         </div>
 
         <div v-show="activeView === 'failure'" class="flex flex-col gap-6" data-test="observe-updater-view-failure">
-        <div
-          class="p-4 border rounded-lg shadow-sm"
-          :class="totalErrors > 0
-            ? 'bg-rose-50 border-rose-200 dark:bg-rose-950/20 dark:border-rose-800'
-            : 'bg-emerald-50 border-emerald-200 dark:bg-emerald-950/20 dark:border-emerald-800'"
-        >
-          <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div class="flex items-start gap-3 min-w-0">
-              <IconBug
-                v-if="totalErrors > 0"
-                class="w-6 h-6 mt-0.5 shrink-0 text-rose-600 dark:text-rose-300"
-              />
-              <IconActivity
-                v-else
-                class="w-6 h-6 mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-300"
-              />
-              <div class="min-w-0">
-                <h3 class="font-semibold" :class="totalErrors > 0 ? 'text-rose-800 dark:text-rose-100' : 'text-emerald-800 dark:text-emerald-100'">
-                  {{ totalErrors > 0 ? t('top-priority') : t('no-log-insights') }}
-                </h3>
-                <p class="mt-1 text-sm" :class="totalErrors > 0 ? 'text-rose-700 dark:text-rose-200' : 'text-emerald-700 dark:text-emerald-200'">
-                  {{ totalErrors > 0 ? topPriorityMessage : t('no-log-insights-help') }}
-                </p>
-              </div>
-            </div>
-            <button type="button" class="gap-2 d-btn d-btn-sm d-btn-outline shrink-0" @click="openLogs(topAction?.action)">
-              <IconExternalLink class="w-4 h-4" />
-              {{ topAction ? t('view-action-logs') : t('view-logs') }}
-            </button>
-          </div>
-        </div>
-
-        <div
-          class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
-        >
-          <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-            <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-              <IconBug class="w-4 h-4" />
-              {{ t('errors-in-period') }}
-            </div>
-            <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">
-              {{ formatCount(totalErrors) }}
-            </div>
-          </div>
-          <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-            <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-              <IconSmartphone class="w-4 h-4" />
-              {{ t('affected-devices') }}
-            </div>
-            <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">
-              {{ formatCount(insights?.summary.device_count) }}
-            </div>
-          </div>
-          <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-            <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-              <IconLayers class="w-4 h-4" />
-              {{ t('action-count') }}
-            </div>
-            <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">
-              {{ formatCount(insights?.summary.action_count) }}
-            </div>
-          </div>
-          <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-            <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-              <IconActivity class="w-4 h-4" />
-              {{ t('top-priority') }}
-            </div>
-            <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white truncate">
-              {{ topAction ? formatAction(topAction.action) : '-' }}
-            </div>
-            <div v-if="topAction" class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              {{ t('error-share', { share: formatPercent(topActionShare) }) }}
-            </div>
-          </div>
-        </div>
-
-        <div v-if="insightsLoading" class="flex items-center justify-center h-64 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-          <Spinner size="w-12 h-12" />
-        </div>
-
-        <div v-else-if="!insights || totalErrors === 0" class="flex flex-col items-center justify-center h-64 bg-white border rounded-lg shadow-sm text-slate-500 dark:bg-slate-800 dark:text-slate-400 border-slate-200 dark:border-slate-700">
-          <IconActivity class="w-12 h-12 mb-2" />
-          <p>{{ t('no-log-insights') }}</p>
-          <p class="mt-1 text-sm">
-            {{ t('no-log-insights-help') }}
-          </p>
-        </div>
-
-        <template v-else>
-          <div class="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-            <section class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-              <div class="mb-4">
-                <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
-                  {{ t('error-categories') }}
-                </h3>
-              </div>
-              <div class="space-y-4">
-                <button
-                  v-for="action in insights.actions"
-                  :key="action.action"
-                  type="button"
-                  class="w-full text-left group"
-                  @click="openLogs(action.action)"
-                >
-                  <div class="flex items-center justify-between gap-3 text-sm">
-                    <span class="font-medium text-slate-800 dark:text-slate-100 truncate">{{ formatAction(action.action) }}</span>
-                    <span class="text-slate-500 dark:text-slate-400 shrink-0">{{ formatCount(action.total) }}</span>
-                  </div>
-                  <div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
-                    <div class="h-full rounded-full bg-rose-500 transition-all group-hover:bg-rose-600" :style="`width: ${Math.max(4, (action.total / totalErrors) * 100)}%`" />
-                  </div>
-                  <div class="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
-                    <span>{{ t('affected-devices') }}: {{ formatCount(action.device_count) }}</span>
-                    <span>{{ t('version-count') }}: {{ formatCount(action.version_count) }}</span>
-                    <span>{{ t('last-seen') }}: {{ formatLastSeen(action.last_seen) }}</span>
-                  </div>
-                </button>
-              </div>
-            </section>
-
-            <section class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-              <div class="mb-4">
-                <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
-                  {{ t('daily-error-trend') }}
-                </h3>
-              </div>
-              <div class="flex items-end gap-2 h-56">
-                <div v-for="day in dailyTotals" :key="day.date" class="flex flex-col items-center justify-end flex-1 h-full min-w-0 gap-2">
-                  <div class="flex items-end w-full h-full rounded-t bg-slate-100 dark:bg-slate-700">
-                    <div class="w-full rounded-t bg-amber-500" :style="`height: ${Math.max(4, (day.total / maxDailyTotal) * 100)}%`" />
-                  </div>
-                  <div class="w-full text-center text-[11px] text-slate-500 dark:text-slate-400 truncate" :title="day.topAction ? formatAction(day.topAction) : ''">
-                    {{ formatLocalDateShort(day.date) }}
-                  </div>
+          <div
+            class="p-4 border rounded-lg shadow-sm"
+            :class="totalErrors > 0
+              ? 'bg-rose-50 border-rose-200 dark:bg-rose-950/20 dark:border-rose-800'
+              : 'bg-emerald-50 border-emerald-200 dark:bg-emerald-950/20 dark:border-emerald-800'"
+          >
+            <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div class="flex items-start gap-3 min-w-0">
+                <IconBug
+                  v-if="totalErrors > 0"
+                  class="w-6 h-6 mt-0.5 shrink-0 text-rose-600 dark:text-rose-300"
+                />
+                <IconActivity
+                  v-else
+                  class="w-6 h-6 mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-300"
+                />
+                <div class="min-w-0">
+                  <h3 class="font-semibold" :class="totalErrors > 0 ? 'text-rose-800 dark:text-rose-100' : 'text-emerald-800 dark:text-emerald-100'">
+                    {{ totalErrors > 0 ? t('top-priority') : t('no-log-insights') }}
+                  </h3>
+                  <p class="mt-1 text-sm" :class="totalErrors > 0 ? 'text-rose-700 dark:text-rose-200' : 'text-emerald-700 dark:text-emerald-200'">
+                    {{ totalErrors > 0 ? topPriorityMessage : t('no-log-insights-help') }}
+                  </p>
                 </div>
               </div>
-            </section>
+              <button type="button" class="gap-2 d-btn d-btn-sm d-btn-outline shrink-0" @click="openLogs(topAction?.action)">
+                <IconExternalLink class="w-4 h-4" />
+                {{ topAction ? t('view-action-logs') : t('view-logs') }}
+              </button>
+            </div>
           </div>
 
-          <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
-            <section class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-              <div class="mb-4">
-                <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
-                  {{ t('top-error-versions') }}
-                </h3>
+          <div
+            class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
+          >
+            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+              <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+                <IconBug class="w-4 h-4" />
+                {{ t('errors-in-period') }}
               </div>
-              <div class="overflow-x-auto">
-                <table class="min-w-full text-sm">
-                  <thead class="text-xs uppercase text-slate-500 dark:text-slate-400">
-                    <tr>
-                      <th class="px-0 py-2 text-left font-medium">
-                        {{ t('version') }}
-                      </th>
-                      <th class="px-3 py-2 text-left font-medium">
-                        {{ t('action') }}
-                      </th>
-                      <th class="px-3 py-2 text-right font-medium">
-                        {{ t('events') }}
-                      </th>
-                      <th class="px-0 py-2 text-right font-medium">
-                        {{ t('devices') }}
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
-                    <tr
-                      v-for="version in insights.versions"
-                      :key="`${version.action}-${version.version_name}`"
-                      :class="selectedVersionName === version.version_name ? 'bg-azure-50/70 dark:bg-azure-400/5' : ''"
-                    >
-                      <td class="px-0 py-2 font-medium text-slate-900 dark:text-white">
-                        <button
-                          type="button"
-                          class="text-left hover:text-azure-600 focus:outline-hidden focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-azure-500 dark:hover:text-azure-300"
-                          :aria-pressed="selectedVersionName === version.version_name"
-                          @click="applyVersionFilter(selectedVersionName === version.version_name ? '' : version.version_name)"
-                        >
-                          {{ version.version_name }}
-                        </button>
-                      </td>
-                      <td class="px-3 py-2 text-slate-600 dark:text-slate-300">
-                        {{ formatAction(version.action) }}
-                      </td>
-                      <td class="px-3 py-2 text-right text-slate-600 dark:text-slate-300">
-                        {{ formatCount(version.total) }}
-                      </td>
-                      <td class="px-0 py-2 text-right text-slate-600 dark:text-slate-300">
-                        {{ formatCount(version.device_count) }}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+              <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">
+                {{ formatCount(totalErrors) }}
               </div>
-            </section>
-
-            <section class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-              <div class="mb-4">
-                <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
-                  {{ t('top-error-devices') }}
-                </h3>
+            </div>
+            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+              <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+                <IconSmartphone class="w-4 h-4" />
+                {{ t('affected-devices') }}
               </div>
-              <div class="space-y-3">
-                <button
-                  v-for="device in insights.devices"
-                  :key="`${device.action}-${device.device_id}`"
-                  type="button"
-                  class="flex items-center justify-between w-full gap-3 p-3 text-left border rounded-md border-slate-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/40"
-                  @click="openDeviceLogs(device)"
-                >
-                  <div class="min-w-0">
-                    <div class="font-medium truncate text-slate-900 dark:text-white">
-                      {{ device.device_id }}
-                    </div>
-                    <div class="mt-1 text-xs text-slate-500 dark:text-slate-400 truncate">
-                      {{ formatAction(device.action) }} · {{ device.version_name }} · {{ formatLastSeen(device.last_seen) }}
-                    </div>
-                  </div>
-                  <div class="text-sm font-semibold text-slate-700 dark:text-slate-200 shrink-0">
-                    {{ formatCount(device.total) }}
-                  </div>
-                </button>
+              <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">
+                {{ formatCount(insights?.summary.device_count) }}
               </div>
-            </section>
+            </div>
+            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+              <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+                <IconLayers class="w-4 h-4" />
+                {{ t('action-count') }}
+              </div>
+              <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">
+                {{ formatCount(insights?.summary.action_count) }}
+              </div>
+            </div>
+            <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+              <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+                <IconActivity class="w-4 h-4" />
+                {{ t('top-priority') }}
+              </div>
+              <div class="mt-2 text-lg font-semibold text-slate-900 dark:text-white truncate">
+                {{ topAction ? formatAction(topAction.action) : '-' }}
+              </div>
+              <div v-if="topAction" class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {{ t('error-share', { share: formatPercent(topActionShare) }) }}
+              </div>
+            </div>
           </div>
-        </template>
+
+          <div v-if="insightsLoading" class="flex items-center justify-center h-64 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+            <Spinner size="w-12 h-12" />
+          </div>
+
+          <div v-else-if="!insights || totalErrors === 0" class="flex flex-col items-center justify-center h-64 bg-white border rounded-lg shadow-sm text-slate-500 dark:bg-slate-800 dark:text-slate-400 border-slate-200 dark:border-slate-700">
+            <IconActivity class="w-12 h-12 mb-2" />
+            <p>{{ t('no-log-insights') }}</p>
+            <p class="mt-1 text-sm">
+              {{ t('no-log-insights-help') }}
+            </p>
+          </div>
+
+          <template v-else>
+            <div class="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+              <section class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+                <div class="mb-4">
+                  <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
+                    {{ t('error-categories') }}
+                  </h3>
+                </div>
+                <div class="space-y-4">
+                  <button
+                    v-for="action in insights.actions"
+                    :key="action.action"
+                    type="button"
+                    class="w-full text-left group"
+                    @click="openLogs(action.action)"
+                  >
+                    <div class="flex items-center justify-between gap-3 text-sm">
+                      <span class="font-medium text-slate-800 dark:text-slate-100 truncate">{{ formatAction(action.action) }}</span>
+                      <span class="text-slate-500 dark:text-slate-400 shrink-0">{{ formatCount(action.total) }}</span>
+                    </div>
+                    <div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
+                      <div class="h-full rounded-full bg-rose-500 transition-all group-hover:bg-rose-600" :style="`width: ${Math.max(4, (action.total / totalErrors) * 100)}%`" />
+                    </div>
+                    <div class="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+                      <span>{{ t('affected-devices') }}: {{ formatCount(action.device_count) }}</span>
+                      <span>{{ t('version-count') }}: {{ formatCount(action.version_count) }}</span>
+                      <span>{{ t('last-seen') }}: {{ formatLastSeen(action.last_seen) }}</span>
+                    </div>
+                  </button>
+                </div>
+              </section>
+
+              <section class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+                <div class="mb-4">
+                  <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
+                    {{ t('daily-error-trend') }}
+                  </h3>
+                </div>
+                <div class="flex items-end gap-2 h-56">
+                  <div v-for="day in dailyTotals" :key="day.date" class="flex flex-col items-center justify-end flex-1 h-full min-w-0 gap-2">
+                    <div class="flex items-end w-full h-full rounded-t bg-slate-100 dark:bg-slate-700">
+                      <div class="w-full rounded-t bg-amber-500" :style="`height: ${Math.max(4, (day.total / maxDailyTotal) * 100)}%`" />
+                    </div>
+                    <div class="w-full text-center text-[11px] text-slate-500 dark:text-slate-400 truncate" :title="day.topAction ? formatAction(day.topAction) : ''">
+                      {{ formatLocalDateShort(day.date) }}
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
+              <section class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+                <div class="mb-4">
+                  <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
+                    {{ t('top-error-versions') }}
+                  </h3>
+                </div>
+                <div class="overflow-x-auto">
+                  <table class="min-w-full text-sm">
+                    <thead class="text-xs uppercase text-slate-500 dark:text-slate-400">
+                      <tr>
+                        <th class="px-0 py-2 text-left font-medium">
+                          {{ t('version') }}
+                        </th>
+                        <th class="px-3 py-2 text-left font-medium">
+                          {{ t('action') }}
+                        </th>
+                        <th class="px-3 py-2 text-right font-medium">
+                          {{ t('events') }}
+                        </th>
+                        <th class="px-0 py-2 text-right font-medium">
+                          {{ t('devices') }}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                      <tr
+                        v-for="version in insights.versions"
+                        :key="`${version.action}-${version.version_name}`"
+                        :class="selectedVersionName === version.version_name ? 'bg-azure-50/70 dark:bg-azure-400/5' : ''"
+                      >
+                        <td class="px-0 py-2 font-medium text-slate-900 dark:text-white">
+                          <button
+                            type="button"
+                            class="text-left hover:text-azure-600 focus:outline-hidden focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-azure-500 dark:hover:text-azure-300"
+                            :aria-pressed="selectedVersionName === version.version_name"
+                            @click="applyVersionFilter(selectedVersionName === version.version_name ? '' : version.version_name)"
+                          >
+                            {{ version.version_name }}
+                          </button>
+                        </td>
+                        <td class="px-3 py-2 text-slate-600 dark:text-slate-300">
+                          {{ formatAction(version.action) }}
+                        </td>
+                        <td class="px-3 py-2 text-right text-slate-600 dark:text-slate-300">
+                          {{ formatCount(version.total) }}
+                        </td>
+                        <td class="px-0 py-2 text-right text-slate-600 dark:text-slate-300">
+                          {{ formatCount(version.device_count) }}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+                <div class="mb-4">
+                  <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
+                    {{ t('top-error-devices') }}
+                  </h3>
+                </div>
+                <div class="space-y-3">
+                  <button
+                    v-for="device in insights.devices"
+                    :key="`${device.action}-${device.device_id}`"
+                    type="button"
+                    class="flex items-center justify-between w-full gap-3 p-3 text-left border rounded-md border-slate-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/40"
+                    @click="openDeviceLogs(device)"
+                  >
+                    <div class="min-w-0">
+                      <div class="font-medium truncate text-slate-900 dark:text-white">
+                        {{ device.device_id }}
+                      </div>
+                      <div class="mt-1 text-xs text-slate-500 dark:text-slate-400 truncate">
+                        {{ formatAction(device.action) }} · {{ device.version_name }} · {{ formatLastSeen(device.last_seen) }}
+                      </div>
+                    </div>
+                    <div class="text-sm font-semibold text-slate-700 dark:text-slate-200 shrink-0">
+                      {{ formatCount(device.total) }}
+                    </div>
+                  </button>
+                </div>
+              </section>
+            </div>
+          </template>
         </div>
       </div>
     </div>
