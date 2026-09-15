@@ -135,6 +135,7 @@ it('marks the version 2 login step from authenticated CLI and MCP PostHog signal
 })
 
 it('keeps notifyConsole login events out of the user Bento state', async () => {
+  await setOnboarding({})
   const response = await postEvent({
     channel: 'user-login',
     event: 'User CLI login',
