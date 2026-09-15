@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { INIT_ONBOARDING_STEP_IDS } from '../cli/src/init/onboarding-steps'
 import {
-  APP_ONBOARDING_STEP_IDS,
+  APP_ONBOARDING_V1_STEP_IDS,
+  APP_ONBOARDING_V2_STEP_IDS,
   appendAppOnboardingStepHistory,
   applyAppOnboardingPatch,
   getAppOnboardingStepHistoryChanges,
+  getAppOnboardingStepIds,
   defaultAppOnboarding,
   mergeAppOnboarding,
   parseAppOnboarding,
@@ -15,13 +17,17 @@ import {
 describe('app onboarding merge', () => {
   it.concurrent('keeps CLI step ids in sync with the CLI onboarding list', () => {
     // CLI titles live in cli/src/init/onboarding-steps.ts; backend ids must stay identical.
-    expect([...APP_ONBOARDING_STEP_IDS]).toEqual([...INIT_ONBOARDING_STEP_IDS])
+    expect([...APP_ONBOARDING_V1_STEP_IDS]).toEqual([...INIT_ONBOARDING_STEP_IDS])
+    expect(APP_ONBOARDING_V2_STEP_IDS).toEqual(['login_cli_mcp', ...INIT_ONBOARDING_STEP_IDS.slice(1)])
+    expect(getAppOnboardingStepIds(1)).toBe(APP_ONBOARDING_V1_STEP_IDS)
+    expect(getAppOnboardingStepIds(2)).toBe(APP_ONBOARDING_V2_STEP_IDS)
+    expect(getAppOnboardingStepIds(99)).toBe(APP_ONBOARDING_V2_STEP_IDS)
   })
 
   it.concurrent('defaults missing onboarding to manual in progress', () => {
     expect(parseAppOnboarding(null)).toEqual(defaultAppOnboarding())
     expect(parseAppOnboarding('nope')).toEqual(defaultAppOnboarding())
-    expect(defaultAppOnboarding().todo_list_version).toBe(1)
+    expect(defaultAppOnboarding().todo_list_version).toBe(2)
   })
 
   it.concurrent('reads nested setup without dropping the feature ledger', () => {
@@ -61,7 +67,7 @@ describe('app onboarding merge', () => {
   })
 
   it.concurrent('keeps a done step when a later skip arrives', () => {
-    const first = mergeAppOnboarding({}, {
+    const first = mergeAppOnboarding({ todo_list_version: 1 }, {
       source: 'cli',
       steps: { add_app: { status: 'done', at: '2026-08-14T10:00:00.000Z' } },
     }, () => '2026-08-14T10:00:00.000Z')
@@ -79,7 +85,7 @@ describe('app onboarding merge', () => {
   })
 
   it.concurrent('marks completed only when every CLI step is done', () => {
-    const steps = Object.fromEntries(APP_ONBOARDING_STEP_IDS.map(id => [id, { status: 'done' as const }]))
+    const steps = Object.fromEntries(APP_ONBOARDING_V2_STEP_IDS.map(id => [id, { status: 'done' as const }]))
     const completed = mergeAppOnboarding({ source: 'cli' }, { steps }, () => '2026-08-14T12:00:00.000Z')
     expect(completed.outcome).toBe('completed')
 
@@ -92,8 +98,28 @@ describe('app onboarding merge', () => {
     expect(skipped.outcome).toBe('skipped')
   })
 
+  it.concurrent('accepts only the steps defined by each todo list version', () => {
+    const v1 = mergeAppOnboarding({ todo_list_version: 1 }, {
+      steps: {
+        add_app: { status: 'done' },
+        login_cli_mcp: { status: 'done' },
+      },
+    })
+    expect(v1.steps.add_app?.status).toBe('done')
+    expect(v1.steps.login_cli_mcp).toBeUndefined()
+
+    const v2 = mergeAppOnboarding({ todo_list_version: 2 }, {
+      steps: {
+        add_app: { status: 'done' },
+        login_cli_mcp: { status: 'done' },
+      },
+    })
+    expect(v2.steps.add_app).toBeUndefined()
+    expect(v2.steps.login_cli_mcp?.status).toBe('done')
+  })
+
   it.concurrent('keeps the original step timestamp when a later report omits at', () => {
-    const first = mergeAppOnboarding({}, {
+    const first = mergeAppOnboarding({ todo_list_version: 1 }, {
       source: 'cli',
       steps: { add_app: { status: 'done', at: '2026-08-14T10:00:00.000Z' } },
     }, () => '2026-08-14T10:00:00.000Z')
@@ -155,11 +181,11 @@ describe('app onboarding merge', () => {
     expect(duplicateSetup.steps.build_project.update_history).toEqual(history)
     expect(getAppOnboardingStepHistoryChanges(current, duplicate, duplicatePatch)).toEqual([])
 
-    const changedPatch = { steps: { add_app: { status: 'done' as const, at: 'step-new' } } }
+    const changedPatch = { steps: { login_cli_mcp: { status: 'done' as const, at: 'step-new' } } }
     const changedMerge = applyAppOnboardingPatch(current, changedPatch, () => 'merge-new')
     const changed = appendAppOnboardingStepHistory(current, changedMerge, changedPatch, () => 'server-new')
     expect(getAppOnboardingStepHistoryChanges(current, changed, changedPatch)).toEqual([{
-      stepId: 'add_app',
+      stepId: 'login_cli_mcp',
       status: 'done',
       at: 'server-new',
       historyLength: 1,

@@ -9,12 +9,14 @@ describe('frontend onboarding CLI checklist coverage', () => {
       'com.example.one',
       'com.example.one',
       'com.example.two',
+      'com.example.v2',
       'com.example.deleted',
       '',
     ], [{
       appId: 'com.example.one',
       onboarding: {
         setup: {
+          todo_list_version: 1,
           steps: {
             add_app: { status: 'done' },
             add_channel: { status: 'skipped' },
@@ -24,9 +26,20 @@ describe('frontend onboarding CLI checklist coverage', () => {
     }, {
       appId: 'com.example.two',
       onboarding: {
-        steps: {
-          add_app: { status: 'done' },
-          add_channel: { status: 'unknown' },
+        setup: {
+          todo_list_version: 1,
+          steps: {
+            add_app: { status: 'done' },
+            add_channel: { status: 'unknown' },
+          },
+        },
+      },
+    }, {
+      appId: 'com.example.v2',
+      onboarding: {
+        setup: {
+          todo_list_version: 2,
+          steps: { login_cli_mcp: { status: 'done' } },
         },
       },
     }, {

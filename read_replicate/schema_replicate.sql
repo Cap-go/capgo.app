@@ -892,6 +892,13 @@ CREATE INDEX idx_apps_onboarding_refreshed_at ON public.apps USING btree (COALES
 
 
 --
+-- Name: idx_apps_onboarding_v2_creator; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_apps_onboarding_v2_creator ON public.apps USING btree (((onboarding ->> 'created_by_user_id'::text))) WHERE ((onboarding #>> '{setup,todo_list_version}'::text[]) = '2'::text);
+
+
+--
 -- Name: idx_apps_owner_org_app_id; Type: INDEX; Schema: public; Owner: -
 --
 
