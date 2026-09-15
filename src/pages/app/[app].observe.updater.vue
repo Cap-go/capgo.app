@@ -11,6 +11,8 @@ import IconBug from '~icons/lucide/bug'
 import IconExternalLink from '~icons/lucide/external-link'
 import IconLayers from '~icons/lucide/layers'
 import IconSmartphone from '~icons/lucide/smartphone'
+import BundleInstallStatsPanel from '~/components/dashboard/BundleInstallStatsPanel.vue'
+import DeliveryLatencyPanel from '~/components/dashboard/DeliveryLatencyPanel.vue'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { formatLocalDateShort, formatLocalDateTime } from '~/services/date'
@@ -89,6 +91,7 @@ const versionFilterId = useId()
 const app = ref<Database['public']['Tables']['apps']['Row']>()
 const insights = ref<LogInsightsResponse | null>(null)
 const publicChannels = ref<{ id: number, name: string, versionName: string }[]>([])
+const activeView = ref<'update' | 'failure'>('update')
 let latestInsightsRequest = 0
 
 const appRouteSegment = computed(() => {
@@ -402,6 +405,72 @@ watch(() => [
         </div>
 
         <div
+          class="inline-flex p-1 rounded-lg border bg-slate-100 border-slate-200 dark:bg-slate-800/80 dark:border-slate-700"
+          role="tablist"
+          :aria-label="t('observe-updater-view-tabs')"
+        >
+          <button
+            type="button"
+            role="tab"
+            class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
+            :class="activeView === 'update'
+              ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white'
+              : 'text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white'"
+            :aria-selected="activeView === 'update'"
+            data-test="observe-updater-tab-update"
+            @click="activeView = 'update'"
+          >
+            {{ t('observe-updater-tab-update') }}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            class="px-4 py-2 text-sm font-medium rounded-md transition-colors"
+            :class="activeView === 'failure'
+              ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white'
+              : 'text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white'"
+            :aria-selected="activeView === 'failure'"
+            data-test="observe-updater-tab-failure"
+            @click="activeView = 'failure'"
+          >
+            {{ t('observe-updater-tab-failure') }}
+          </button>
+        </div>
+
+        <div v-show="activeView === 'update'" class="flex flex-col gap-6" data-test="observe-updater-view-update">
+          <p class="text-sm text-slate-600 dark:text-slate-300">
+            {{ t('observe-updater-update-help') }}
+          </p>
+          <div
+            class="grid grid-cols-1 gap-4 sm:grid-cols-2"
+            :class="publicChannels.length ? 'xl:grid-cols-3' : 'xl:grid-cols-1'"
+          >
+            <BundleAdoptionCard
+              v-for="channel in publicChannels"
+              :key="channel.id"
+              :app-id="id"
+              :version-name="channel.versionName"
+              :linked-channel-id="channel.id"
+            />
+          </div>
+          <BundleInstallStatsPanel
+            :app-id="id"
+            :days="selectedDays"
+            :version-name="selectedVersionName"
+            hide-period-selector
+            compact
+          />
+          <DeliveryLatencyPanel
+            :key="`${id}-${selectedDays}`"
+            scope="app"
+            :app-id="id"
+            :days="selectedDays"
+            hide-period-selector
+          />
+        </div>
+
+        <div v-show="activeView === 'failure'" class="flex flex-col gap-6" data-test="observe-updater-view-failure">
+        <div
           class="p-4 border rounded-lg shadow-sm"
           :class="totalErrors > 0
             ? 'bg-rose-50 border-rose-200 dark:bg-rose-950/20 dark:border-rose-800'
@@ -434,16 +503,8 @@ watch(() => [
         </div>
 
         <div
-          class="grid grid-cols-1 gap-4 sm:grid-cols-2"
-          :class="publicChannels.length ? 'xl:grid-cols-5' : 'xl:grid-cols-4'"
+          class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
         >
-          <BundleAdoptionCard
-            v-for="channel in publicChannels"
-            :key="channel.id"
-            :app-id="id"
-            :version-name="channel.versionName"
-            :linked-channel-id="channel.id"
-          />
           <div class="p-4 bg-white border rounded-lg shadow-sm dark:bg-slate-800 border-slate-200 dark:border-slate-700">
             <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
               <IconBug class="w-4 h-4" />
@@ -634,6 +695,7 @@ watch(() => [
             </section>
           </div>
         </template>
+        </div>
       </div>
     </div>
     <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">

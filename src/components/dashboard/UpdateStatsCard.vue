@@ -9,7 +9,7 @@ import UpdateStatsChart from '~/components/dashboard/UpdateStatsChart.vue'
 import { addUtcDays, formatUtcDateParam, normalizeToUtcStartOfDay } from '~/services/date'
 import { calculateDemoEvolution, calculateDemoTotal, generateDemoUpdateStatsData } from '~/services/demoChartData'
 import { formatNumberValue } from '~/services/formatLocale'
-import { useSupabase } from '~/services/supabase'
+import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
 import { createUndefinedArray, incrementArrayValue } from '~/utils/chartOptimizations'
@@ -85,7 +85,7 @@ const chartUpdateDataByAction = computed(() => {
 const actionDisplayNames = computed(() => ({
   requested: capitalize(t('get')),
   install: capitalize(t('installed')),
-  fail: capitalize(t('failed')),
+  fail: capitalize(t('update-stats-devices-failed')),
 }))
 
 // Generate demo data when forceDemo is true
@@ -119,6 +119,38 @@ const effectiveLastDayEvolution = computed(() => isDemoMode.value ? calculateDem
 const hasData = computed(() => effectiveTotalUpdates.value > 0 || isDemoMode.value)
 
 const PAGE_SIZE = 1000
+
+async function fetchDeviceFailedByDay(targetAppIds: string[], startDate: string, endDateExclusive: string) {
+  const supabase = useSupabase()
+  const { data: sessionData } = await supabase.auth.getSession()
+  if (!sessionData.session)
+    return null
+
+  const primaryAppId = props.appId || targetAppIds[0]
+  if (!primaryAppId)
+    return null
+
+  const response = await fetch(`${defaultApiHost}/private/stats/device_outcomes`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'authorization': `Bearer ${sessionData.session.access_token}`,
+    },
+    body: JSON.stringify({
+      appId: primaryAppId,
+      appIds: targetAppIds,
+      rangeStart: `${startDate}T00:00:00.000Z`,
+      rangeEnd: `${endDateExclusive}T00:00:00.000Z`,
+    }),
+  })
+
+  if (!response.ok) {
+    console.error('Failed to fetch device update outcomes:', await response.json().catch(() => ({})))
+    return null
+  }
+
+  return await response.json() as Array<{ date: string, devices_failed: number }>
+}
 
 async function fetchDailyVersionStats(targetAppIds: string[], startDate: string, endDate: string) {
   const supabase = useSupabase()
@@ -184,6 +216,7 @@ async function calculateStats(forceRefetch = false) {
 
   const startDate = formatUtcDateParam(rangeStart)
   const endDate = formatUtcDateParam(today)
+  const endDateExclusive = formatUtcDateParam(addUtcDays(today, 1))
 
   // Cache key includes org, app, and range to avoid stale data between periods
   const cacheKey = `${currentOrgId ?? 'none'}:${props.appId || 'org'}:${startDate}:${endDate}`
@@ -258,6 +291,23 @@ async function calculateStats(forceRefetch = false) {
     let failedTotal = 0
     let requestedTotal = 0
 
+    let usedDeviceFailedSeries = isDemoMode.value
+    if (!isDemoMode.value) {
+      const deviceOutcomes = await fetchDeviceFailedByDay(targetAppIds, startDate, endDateExclusive)
+      if (deviceOutcomes) {
+        usedDeviceFailedSeries = true
+        actionData.fail = createUndefinedArray(dayCount) as (number | undefined)[]
+        deviceOutcomes.forEach((row) => {
+          if (!row.date)
+            return
+          const statDate = normalizeToUtcStartOfDay(new Date(`${row.date}T00:00:00.000Z`))
+          const daysDiff = Math.floor((statDate.getTime() - rangeStart.getTime()) / DAY_IN_MS)
+          if (daysDiff >= 0 && daysDiff < dayCount)
+            incrementArrayValue(actionData.fail, daysDiff, row.devices_failed || 0)
+        })
+      }
+    }
+
     if (data && data.length > 0) {
       // Process each stat entry
       data.forEach((stat: any) => {
@@ -271,14 +321,16 @@ async function calculateStats(forceRefetch = false) {
             const installedCount = stat.install || 0
             const failedCount = stat.fail || 0
             const requestedCount = stat.get || 0
-            const totalForDay = installedCount + failedCount + requestedCount
+            const failedCountForDay = usedDeviceFailedSeries ? (actionData.fail[daysDiff] ?? 0) : failedCount
+            const totalForDay = installedCount + failedCountForDay + requestedCount
 
             // Increment arrays
             incrementArrayValue(dailyCounts, daysDiff, totalForDay)
 
             // Track by action type
             incrementArrayValue(actionData.install, daysDiff, installedCount)
-            incrementArrayValue(actionData.fail, daysDiff, failedCount)
+            if (!usedDeviceFailedSeries)
+              incrementArrayValue(actionData.fail, daysDiff, failedCount)
             incrementArrayValue(actionData.requested, daysDiff, requestedCount)
 
             // Track by app
@@ -378,9 +430,14 @@ onMounted(async () => {
   >
     <template #header>
       <div class="flex flex-col gap-2 justify-between items-start">
-        <h2 class="flex-1 min-w-0 text-2xl font-semibold leading-tight dark:text-white text text-slate-600">
-          {{ t('update_statistics') }}
-        </h2>
+        <div class="flex-1 min-w-0">
+          <h2 class="text-2xl font-semibold leading-tight dark:text-white text text-slate-600">
+            {{ t('update_statistics') }}
+          </h2>
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            {{ t('update-stats-devices-failed-help') }}
+          </p>
+        </div>
         <div class="flex flex-wrap gap-2 items-center text-xs sm:gap-3 sm:text-sm">
           <div class="flex gap-2 items-center">
             <div class="w-3 h-3 rounded-full" style="background-color: hsl(210, 65%, 55%)" />

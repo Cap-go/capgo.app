@@ -5,7 +5,7 @@ import type { StatsLogDimensions, VersionAction } from './plugin_stats.ts'
 import type { Database } from './supabase.types.ts'
 import type { DeviceRes, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, ReadDevicesParams, ReadDevicesResponse, ReadStatsInsightsParams, ReadStatsParams, StatsActions, StatsInsightAction, StatsInsightDaily, StatsInsightDevice, StatsInsightsResult, StatsInsightVersion, StatsMetadata, VersionCompareFilter, VersionUsage, VersionUsageChannel } from './types.ts'
 import { getRuntimeKey } from 'hono/adapter'
-import { countDevicesCF, countInstallSourcesCF, countUpdatesFromLogsCF, countUpdatesFromLogsExternalCF, getAppsFromCF, getUpdateStatsCF, readBandwidthUsageCF, readDevicesCF, readDeviceUsageCF, readDeviceVersionCountsCF, readNativeActiveDevicesSummaryCF, readNativeDailyPlatformActiveCF, readNativeVersionUsageCF, readStatsCF, readStatsInsightsCF, readStatsVersionCF, trackDevicesCF } from './cloudflare.ts'
+import { countDevicesCF, countInstallSourcesCF, countUpdatesFromLogsCF, countUpdatesFromLogsExternalCF, getAppsFromCF, getUpdateStatsCF, PUBLIC_FAILURE_ACTIONS, readBandwidthUsageCF, readDailyUpdateDeviceOutcomesCF, readDevicesCF, readDeviceUsageCF, readDeviceVersionCountsCF, readNativeActiveDevicesSummaryCF, readNativeDailyPlatformActiveCF, readNativeVersionUsageCF, readStatsCF, readStatsInsightsCF, readStatsVersionCF, trackDevicesCF } from './cloudflare.ts'
 import { isDemoApp } from './demo.ts'
 import { normalizeDeviceCountryCode } from './deviceComparison.ts'
 import { simpleError } from './hono.ts'
@@ -19,6 +19,7 @@ import {
   normalizeStatsMetadata,
   onPremStats,
 } from './plugin_stats.ts'
+import { getPgClient } from './pg.ts'
 import { normalizeStatsInsightDate, normalizeStatsInsightNumber, sortStatsInsightTotals } from './statsInsights.ts'
 import { countDevicesSB, countInstallSourcesSB, getAppsFromSB, getUpdateStatsSB, readBandwidthUsageSB, readDevicesSB, readDeviceUsageSB, readDeviceVersionCountsSB, readNativeActiveDevicesSummarySB, readNativeDailyPlatformActiveSB, readNativeVersionUsageSB, readStatsInsightsSB, readStatsSB, readStatsStorageSB, readStatsVersionSB, supabaseWithAuth, trackBandwidthUsageSB, trackDevicesSB, trackDeviceUsageSB, trackLogsSB, trackMetaSB, trackVersionUsageSB } from './supabase.ts'
 import { logSkippedSupabaseWrite, shouldSkipSupabaseStatsFallback } from './supabase_write_guard.ts'
@@ -576,4 +577,107 @@ export function getUpdateStats(c: Context) {
     return getUpdateStatsCF(c)
   else
     return getUpdateStatsSB(c)
+}
+
+export interface DailyUpdateDeviceOutcome {
+  date: string
+  devices_failed: number
+}
+
+export interface UpdateDeviceOutcomeSourceRow {
+  device_id: string
+  action: string
+  created_at: string
+}
+
+const updateDeviceOutcomeFailureActions = new Set<string>(PUBLIC_FAILURE_ACTIONS)
+
+export function buildDailyDeviceUpdateOutcomesFromRows(rows: UpdateDeviceOutcomeSourceRow[]): DailyUpdateDeviceOutcome[] {
+  const byDayDevice = new Map<string, { succeeded: boolean, failed: boolean }>()
+
+  rows.forEach((row) => {
+    if (!row.created_at || !row.device_id)
+      return
+    const date = row.created_at.slice(0, 10)
+    const key = `${date}\0${row.device_id}`
+    const entry = byDayDevice.get(key) ?? { succeeded: false, failed: false }
+    if (row.action === 'set')
+      entry.succeeded = true
+    if (updateDeviceOutcomeFailureActions.has(row.action))
+      entry.failed = true
+    byDayDevice.set(key, entry)
+  })
+
+  const byDay = new Map<string, number>()
+  byDayDevice.forEach((entry, key) => {
+    if (!entry.failed || entry.succeeded)
+      return
+    const date = key.split('\0')[0] ?? ''
+    if (!date)
+      return
+    byDay.set(date, (byDay.get(date) ?? 0) + 1)
+  })
+
+  return [...byDay.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([date, devices_failed]) => ({ date, devices_failed }))
+}
+
+export async function readDailyUpdateDeviceOutcomesSB(
+  c: Context,
+  appIds: string[],
+  start_date: string,
+  end_date: string,
+): Promise<DailyUpdateDeviceOutcome[]> {
+  if (appIds.length === 0)
+    return []
+
+  const pgClient = getPgClient(c)
+  const query = `
+    WITH scoped AS (
+      SELECT
+        (created_at AT TIME ZONE 'UTC')::date AS day,
+        device_id,
+        bool_or(action = 'set') AS succeeded,
+        bool_or(action = ANY($4::public.stats_action[])) AS failed
+      FROM public.stats
+      WHERE app_id = ANY($1::varchar[])
+        AND created_at >= $2::timestamptz
+        AND created_at < $3::timestamptz
+        AND (action = 'set' OR action = ANY($4::public.stats_action[]))
+      GROUP BY 1, 2
+    )
+    SELECT day::text AS date, COUNT(*) FILTER (WHERE failed AND NOT succeeded)::text AS devices_failed
+    FROM scoped
+    GROUP BY day
+    ORDER BY day ASC
+  `
+
+  try {
+    const result = await pgClient.query(query, [appIds, start_date, end_date, [...PUBLIC_FAILURE_ACTIONS]])
+    return result.rows.map(row => ({
+      date: String(row.date),
+      devices_failed: normalizeStatsInsightNumber(row.devices_failed),
+    }))
+  }
+  catch (error) {
+    cloudlog({ requestId: c.get('requestId'), message: 'Error reading daily update device outcomes from Supabase', error })
+    return []
+  }
+}
+
+export async function readDailyUpdateDeviceOutcomes(
+  c: Context<MiddlewareKeyVariables>,
+  params: { app_ids: string[], start_date: string, end_date: string },
+): Promise<DailyUpdateDeviceOutcome[]> {
+  const appIds = [...new Set(params.app_ids.filter(Boolean))]
+  if (appIds.length === 0)
+    return []
+
+  if (await isDemoApp(c, appIds[0]!))
+    return buildDailyDeviceUpdateOutcomesFromRows(await generateDemoLogs(c, { app_id: appIds[0]!, start_date: params.start_date, end_date: params.end_date, limit: 10_000 }))
+
+  if (c.env.APP_LOG)
+    return readDailyUpdateDeviceOutcomesCF(c, appIds, params.start_date, params.end_date)
+  return readDailyUpdateDeviceOutcomesSB(c, appIds, params.start_date, params.end_date)
 }
