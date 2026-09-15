@@ -4,6 +4,7 @@ import { app as accept_invitation } from '../../supabase/functions/_backend/priv
 import { app as admin_credits } from '../../supabase/functions/_backend/private/admin_credits.ts'
 import { app as admin_org_support_channel } from '../../supabase/functions/_backend/private/admin_org_support_channel.ts'
 import { app as admin_stats } from '../../supabase/functions/_backend/private/admin_stats.ts'
+import { app as bundle_install_stats } from '../../supabase/functions/_backend/private/bundle_install_stats.ts'
 import { app as channel_device } from '../../supabase/functions/_backend/private/channel_device.ts'
 import { app as channel_stats } from '../../supabase/functions/_backend/private/channel_stats.ts'
 import { app as config } from '../../supabase/functions/_backend/private/config.ts'
@@ -41,7 +42,6 @@ import { app as stats_priv } from '../../supabase/functions/_backend/private/sta
 import { app as storeTop } from '../../supabase/functions/_backend/private/store_top.ts'
 import { app as stripe_checkout } from '../../supabase/functions/_backend/private/stripe_checkout.ts'
 import { app as stripe_portal } from '../../supabase/functions/_backend/private/stripe_portal.ts'
-import { app as bundle_install_stats } from '../../supabase/functions/_backend/private/bundle_install_stats.ts'
 import { app as update_delivery_stats } from '../../supabase/functions/_backend/private/update_delivery_stats.ts'
 import { app as validate_password_compliance } from '../../supabase/functions/_backend/private/validate_password_compliance.ts'
 import { app as verify_email_otp } from '../../supabase/functions/_backend/private/verify_email_otp.ts'
@@ -122,7 +122,7 @@ app.route('/check_cpu_usage', check_cpu_usage)
 app.route('/translation', translation)
 app.route('/plugin_regions', pluginRegions)
 
-// Private API
+// Private routes are bundled into this Cloudflare API worker at deploy time.
 const functionNamePrivate = 'private'
 const appPrivate = createHono(functionNamePrivate, version)
 appPrivate.route('/plans', plans)
