@@ -207,4 +207,43 @@ test.describe('Observe sections', () => {
     await expect(popover).toContainText(/"filename"/)
     await expect(popover).toContainText('assets/index-8ebc69aabbcc.js')
   })
+
+  test('shows original error text under the translated action label', async ({ page }) => {
+    const now = new Date().toISOString()
+    const originalError = 'Uncaught ReferenceError: foo is not defined'
+    await page.route('**/private/stats', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.continue()
+        return
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            app_id: 'com.demo.app',
+            device_id: '44444444-4444-4444-4444-444444444444',
+            action: 'webview_javascript_error',
+            version_name: '1.0.0',
+            created_at: now,
+            metadata: {
+              error_type: 'javascript_error',
+              message: originalError,
+              href: 'capacitor://localhost/index.html',
+            },
+          },
+        ]),
+      })
+    })
+
+    await page.goto('/app/com.demo.app/observe/logs')
+    const row = page.locator('#custom_table tbody tr', { hasText: '44444444' })
+    await expect(row.locator('[data-test="log-row-action"]')).toHaveText('WebView JavaScript error')
+    await expect(row.locator('[data-test="log-row-original-error"]')).toHaveText(originalError)
+    await expect(row.locator('[data-test="log-row-action"]')).toHaveAttribute(
+      'title',
+      `WebView JavaScript error\nwebview_javascript_error\n${originalError}`,
+    )
+    await expect(row.locator('[data-test="log-row-metadata"]')).toHaveCount(1)
+  })
 })

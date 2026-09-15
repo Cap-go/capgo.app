@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { logRowDisplayMetadata, parseLogVersionName } from '~/services/logTableDisplay'
+import { extractLogOriginalMessage, formatLogActionLinkTitle, logRowDisplayMetadata, parseLogVersionName } from '~/services/logTableDisplay'
 
 describe('parseLogVersionName', () => {
   it.concurrent('keeps a plain version unchanged', () => {
@@ -46,5 +46,41 @@ describe('logRowDisplayMetadata', () => {
       error: 'timeout',
       filename: 'assets/main.js',
     })
+  })
+})
+
+describe('extractLogOriginalMessage', () => {
+  it.concurrent('prefers message over other metadata fields', () => {
+    expect(extractLogOriginalMessage({
+      error_type: 'javascript_error',
+      message: 'Uncaught ReferenceError: foo is not defined',
+      href: 'capacitor://localhost/',
+    })).toBe('Uncaught ReferenceError: foo is not defined')
+  })
+
+  it.concurrent('falls back to error when message is absent', () => {
+    expect(extractLogOriginalMessage({ error: 'network timeout' })).toBe('network timeout')
+  })
+
+  it.concurrent('returns null when metadata has no known error keys', () => {
+    expect(extractLogOriginalMessage({ source: 'notify_app_ready' })).toBeNull()
+  })
+})
+
+describe('formatLogActionLinkTitle', () => {
+  it.concurrent('includes translated label, action code, and original message', () => {
+    expect(formatLogActionLinkTitle(
+      'webview_javascript_error',
+      'WebView JavaScript error',
+      { message: 'boom' },
+    )).toBe('WebView JavaScript error\nwebview_javascript_error\nboom')
+  })
+
+  it.concurrent('omits duplicate label when action is not translated', () => {
+    expect(formatLogActionLinkTitle(
+      'custom_unknown_action',
+      'custom_unknown_action',
+      { reason: 'denied' },
+    )).toBe('custom_unknown_action\ndenied')
   })
 })
