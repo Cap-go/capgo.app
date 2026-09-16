@@ -658,6 +658,7 @@ async function confirmConsequentialChannelChange(options: {
   confirmRole?: 'primary' | 'secondary' | 'danger' | 'cancel'
   onConfirm: () => Promise<void>
 }) {
+  let confirmInFlight = false
   dialogStore.openDialog({
     id: options.id,
     title: options.title,
@@ -671,7 +672,17 @@ async function confirmConsequentialChannelChange(options: {
       {
         text: t('button-confirm'),
         role: options.confirmRole ?? 'primary',
-        handler: options.onConfirm,
+        handler: async () => {
+          if (confirmInFlight)
+            return false
+          confirmInFlight = true
+          try {
+            await options.onConfirm()
+          }
+          finally {
+            confirmInFlight = false
+          }
+        },
       },
     ],
   })
@@ -805,17 +816,19 @@ async function rollbackRollout() {
 }
 
 async function promoteRollout() {
-  if (!channel.value?.rollout_version)
+  const promotedVersionId = channel.value?.rollout_version
+  if (!promotedVersionId)
     return
+  const promotedTargetName = rolloutTargetName.value
   await confirmConsequentialChannelChange({
     id: 'confirm-promote-rollout',
     title: t('confirm-promote-rollout-title'),
     description: t('confirm-promote-rollout-description', {
-      target: rolloutTargetName.value,
+      target: promotedTargetName,
     }),
     onConfirm: async () => {
       if (await saveChannelChanges({
-        version: channel.value!.rollout_version,
+        version: promotedVersionId,
         rollout_version: null,
         rollout_enabled: false,
         rollout_percentage_bps: 0,

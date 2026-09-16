@@ -4,6 +4,11 @@ import { describe, expect, it } from 'vitest'
 const channelPageSource = readFileSync(new URL('../src/pages/app/[app].channel.[channel].vue', import.meta.url), 'utf8')
 
 describe('channel information rollout and update package UX', () => {
+  it.concurrent('prevents double promote confirm from unlinking stable bundle', () => {
+    expect(channelPageSource).toContain('confirmInFlight')
+    expect(channelPageSource).toContain('const promotedVersionId = channel.value?.rollout_version')
+  })
+
   it.concurrent('requires confirmation before changing download format or rollout percentage', () => {
     expect(channelPageSource).toContain('confirm-update-package')
     expect(channelPageSource).toContain('confirm-rollout-percentage')
