@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { DevelopmentEnvironmentFlowAttempt } from './ab_test_development_environment_flow_model.ts'
 import { buildDevelopmentEnvironmentFlow } from './ab_test_development_environment_flow_model.ts'
+import { FRONTEND_ONBOARDING_PRODUCTION_HOST } from './frontend_onboarding_analytics_model.ts'
 import { queryPosthogHogql } from './posthog_read.ts'
 
 const EVENT_LIMIT = 50_000
@@ -32,7 +33,7 @@ export function buildDevelopmentEnvironmentFlowHogql(startDate: string, endDate:
     WHERE timestamp >= parseDateTimeBestEffort('${new Date(start).toISOString()}')
       AND timestamp < parseDateTimeBestEffort('${new Date(end).toISOString()}')
       AND event IN ('onboarding_step_viewed', 'onboarding_step_completed', 'onboarding_development_environment_selected')
-      AND JSONExtractString(toString(properties), '$host') = 'console.capgo.app'
+      AND JSONExtractString(toString(properties), '$host') = '${FRONTEND_ONBOARDING_PRODUCTION_HOST}'
       AND JSONExtractString(toString(properties), 'flow') = 'pre_org'
       AND (JSONExtractString(toString(properties), 'step') = 'publish_app_question'
         OR (event = 'onboarding_step_viewed'
