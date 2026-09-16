@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { AppOnboardingStepId } from './appOnboarding.ts'
 import { inArray } from 'drizzle-orm'
-import { APP_ONBOARDING_V1_STEP_IDS, parseAppOnboarding } from './appOnboarding.ts'
+import { getAppOnboardingStepIds, parseAppOnboarding } from './appOnboarding.ts'
 import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
 import * as schema from './postgres_schema.ts'
 
@@ -29,16 +29,17 @@ function uniqueAppIds(appIds: readonly string[]): string[] {
 export function buildFrontendOnboardingCliChecklistCoverage(
   linkedAppIds: readonly string[],
   rows: readonly AppChecklistRow[],
+  todoListVersion: 1 | 2 = 1,
 ): FrontendOnboardingCliChecklistCoverage {
   const linkedIds = new Set(uniqueAppIds(linkedAppIds))
   const currentApps = new Map(rows
     .filter(row => linkedIds.has(row.appId))
     .map(row => [row.appId, parseAppOnboarding(row.onboarding)]))
   const activeApps = new Map([...currentApps]
-    .filter(([, onboarding]) => onboarding.todo_list_version === 1))
+    .filter(([, onboarding]) => onboarding.todo_list_version === todoListVersion))
   const unavailableApps = linkedIds.size - currentApps.size
 
-  const steps = APP_ONBOARDING_V1_STEP_IDS.map((stepId) => {
+  const steps = getAppOnboardingStepIds(todoListVersion).map((stepId) => {
     const states = [...activeApps.values()].map(app => app.steps[stepId]?.status)
     const done = states.filter(status => status === 'done').length
     const skipped = states.filter(status => status === 'skipped').length
@@ -61,10 +62,14 @@ export function buildFrontendOnboardingCliChecklistCoverage(
 export async function getFrontendOnboardingCliChecklistCoverage(
   c: Context,
   linkedAppIds: readonly string[],
-): Promise<FrontendOnboardingCliChecklistCoverage> {
+): Promise<Record<1 | 2, FrontendOnboardingCliChecklistCoverage>> {
   const appIds = uniqueAppIds(linkedAppIds)
+  const buildCoverages = (rows: readonly AppChecklistRow[]) => ({
+    1: buildFrontendOnboardingCliChecklistCoverage(appIds, rows, 1),
+    2: buildFrontendOnboardingCliChecklistCoverage(appIds, rows, 2),
+  })
   if (appIds.length === 0)
-    return buildFrontendOnboardingCliChecklistCoverage([], [])
+    return buildCoverages([])
 
   const pgClient = getPgClient(c, true)
   try {
@@ -72,7 +77,7 @@ export async function getFrontendOnboardingCliChecklistCoverage(
       .select({ appId: schema.apps.app_id, onboarding: schema.apps.onboarding })
       .from(schema.apps)
       .where(inArray(schema.apps.app_id, appIds))
-    return buildFrontendOnboardingCliChecklistCoverage(appIds, rows)
+    return buildCoverages(rows)
   }
   finally {
     await closeClient(c, pgClient)

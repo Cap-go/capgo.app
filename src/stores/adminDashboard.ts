@@ -17,7 +17,7 @@ import {
 } from '~/services/userOnboardingWriteQueue'
 import { useMainStore } from '~/stores/main'
 
-export type MetricCategory = 'ab_test_channel_creation' | 'ab_test_distribution' | 'ab_test_publish_intent_outcome' | 'uploads' | 'distribution' | 'failures' | 'success_rate' | 'platform_overview' | 'org_metrics' | 'mau_trend' | 'success_rate_trend' | 'apps_trend' | 'bundles_trend' | 'deployments_trend' | 'storage_trend' | 'bandwidth_trend' | 'global_stats_trend' | 'plugin_breakdown' | 'trial_organizations' | 'trial_plan_breakdown' | 'onboarding_funnel' | 'cancelled_users' | 'email_type_breakdown' | 'customer_country_breakdown' | 'organization_insights' | 'builder_analytics' | 'builder_capacity' | 'cli_usage' | 'channel_surfing' | 'frontend_onboarding_analytics' | 'plans_analytics' | 'famous_apps' | 'enterprise_adoption'
+export type MetricCategory = 'ab_test_development_environment_flow' | 'ab_test_channel_creation' | 'ab_test_development_environment' | 'ab_test_distribution' | 'ab_test_publish_intent_outcome' | 'uploads' | 'distribution' | 'failures' | 'success_rate' | 'platform_overview' | 'org_metrics' | 'mau_trend' | 'success_rate_trend' | 'apps_trend' | 'bundles_trend' | 'deployments_trend' | 'storage_trend' | 'bandwidth_trend' | 'global_stats_trend' | 'plugin_breakdown' | 'trial_organizations' | 'trial_plan_breakdown' | 'onboarding_funnel' | 'cancelled_users' | 'email_type_breakdown' | 'customer_country_breakdown' | 'organization_insights' | 'builder_analytics' | 'builder_capacity' | 'cli_usage' | 'channel_surfing' | 'frontend_onboarding_analytics' | 'onboarding_payment_cohorts' | 'registration_monthly_comparison' | 'plans_analytics' | 'famous_apps' | 'enterprise_adoption'
 
 export type DateRangeMode = DateRangePreset
 export const DEFAULT_DATE_RANGE_MODE = '30day' as const satisfies DateRangeMode
@@ -29,6 +29,7 @@ type DateRange = DateRangeValue
 interface CachedData {
   data: unknown
   timestamp: number
+  authIdentity?: string
 }
 
 interface AdminStatsRequestBody {
@@ -60,6 +61,8 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
   // Cache state (5-minute TTL)
   const CACHE_TTL = 5 * 60 * 1000 // 5 minutes
   const cache = ref<Map<string, CachedData>>(new Map())
+  let paymentCohortRequest = 0
+  let paymentCohortLoadingGeneration = 0
 
   // Loading state — a counter (not a boolean) so concurrent fetchStats() calls (e.g. the
   // builder page loads two categories at once) don't clobber each other's flag.
@@ -288,18 +291,36 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
   // Response shape varies by metric_category. Full per-metric runtime schemas are
   // out of scope here; keep the previous polymorphic return contract.
   async function fetchStats(category: MetricCategory, forceRefresh = false): Promise<any> {
-    const requestDateRange = getRollingDateRange()
-    const cacheKey = getCacheKey(category, requestDateRange)
+    const isPaymentCohort = category === 'onboarding_payment_cohorts'
+    const main = isPaymentCohort ? useMainStore() : null
+    if (isPaymentCohort && (!main?.isAdmin || !main.user?.id))
+      throw new Error('Platform admin access required')
+    const authIdentity = main ? `${main.user?.id}:${main.authGeneration}` : undefined
+    const now = new Date()
+    const requestDateRange = isPaymentCohort
+      ? {
+          start: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 3, 1)),
+          end: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())),
+        }
+      : getRollingDateRange()
+    const cacheKey = isPaymentCohort
+      ? `${category}-${requestDateRange.end.toISOString().slice(0, 10)}`
+      : getCacheKey(category, requestDateRange)
     const skipCache = category === 'customer_country_breakdown'
 
     // Check cache
-    if (!forceRefresh && !skipCache && isCacheValid(cacheKey)) {
+    if (!forceRefresh && !skipCache && isCacheValid(cacheKey) && (!isPaymentCohort || cache.value.get(cacheKey)?.authIdentity === authIdentity)) {
       const cached = cache.value.get(cacheKey)
       return cached?.data
     }
 
     loadingCount.value++
     loadingCategory.value = category
+    const paymentRequest = isPaymentCohort ? ++paymentCohortRequest : null
+    const paymentLoadingGeneration = paymentCohortLoadingGeneration
+    const isCurrentPaymentIdentity = () => !isPaymentCohort || (
+      main?.isAdmin && `${main.user?.id}:${main.authGeneration}` === authIdentity
+    )
 
     try {
       const { start, end } = requestDateRange
@@ -311,10 +332,10 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
         end_date: end.toISOString(),
       }
 
-      if (selectedAppId.value)
+      if (!isPaymentCohort && selectedAppId.value)
         body.app_id = selectedAppId.value
 
-      if (selectedOrgId.value)
+      if (!isPaymentCohort && selectedOrgId.value)
         body.org_id = selectedOrgId.value
 
       if (category === 'org_metrics')
@@ -324,6 +345,8 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session)
         throw new Error('Not authenticated')
+      if (!isCurrentPaymentIdentity())
+        throw new Error('Platform admin session changed')
 
       // Call Cloudflare Worker API directly
       const response = await fetch(`${defaultApiHost}/private/admin_stats`, {
@@ -344,24 +367,32 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
 
       if (!data?.success)
         throw new Error('Failed to fetch admin stats')
+      if (!isCurrentPaymentIdentity())
+        throw new Error('Platform admin session changed')
 
       // Update cache
-      cache.value.set(cacheKey, {
-        data: data.data,
-        timestamp: Date.now(),
-      })
+      if (!isPaymentCohort || paymentRequest === paymentCohortRequest) {
+        cache.value.set(cacheKey, {
+          data: data.data,
+          timestamp: Date.now(),
+          ...(isPaymentCohort ? { authIdentity } : {}),
+        })
+      }
 
       return data.data
     }
     finally {
-      loadingCount.value = Math.max(0, loadingCount.value - 1)
-      if (loadingCount.value === 0)
-        loadingCategory.value = null
+      if (!isPaymentCohort || paymentLoadingGeneration === paymentCohortLoadingGeneration) {
+        loadingCount.value = Math.max(0, loadingCount.value - 1)
+        if (loadingCount.value === 0)
+          loadingCategory.value = null
+      }
     }
   }
 
   function invalidateCache() {
     cache.value.clear()
+    paymentCohortRequest++
     refreshTrigger.value++
   }
 
@@ -369,6 +400,7 @@ export const useAdminDashboardStore = defineStore('adminDashboard', () => {
   function $reset() {
     clearFilters()
     invalidateCache()
+    paymentCohortLoadingGeneration++
     loadingCount.value = 0
     loadingCategory.value = null
     adminDashboardMinimize.value = {}

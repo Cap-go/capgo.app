@@ -20,6 +20,8 @@ import AdminDailyConversionChart from '~/components/admin/AdminDailyConversionCh
 import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
 import AdminFunnelChart from '~/components/admin/AdminFunnelChart.vue'
 import AdminOnboardingJourneyGraph from '~/components/admin/AdminOnboardingJourneyGraph.vue'
+import AdminOnboardingPaymentCohorts from '~/components/admin/AdminOnboardingPaymentCohorts.vue'
+import AdminRegistrationComparison from '~/components/admin/AdminRegistrationComparison.vue'
 import AdminStackedBarChart from '~/components/admin/AdminStackedBarChart.vue'
 import AdminStatsCard from '~/components/admin/AdminStatsCard.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
@@ -51,6 +53,7 @@ const isLoading = ref(true)
 const isLoadingStats = ref(false)
 const isReady = ref(false)
 const analytics = ref<FrontendOnboardingAnalytics | null>(null)
+const cliChecklistVersion = ref<1 | 2>(2)
 const loadError = ref(false)
 const deduplicateDailyAttempts = ref(false)
 const deduplicateV4Funnel = ref(false)
@@ -219,9 +222,7 @@ const intentToDetailsDaily = computed(() => latestDailyConversions.value?.intent
 const detailsToOrganizationDaily = computed(() => latestDailyConversions.value?.details_to_organization ?? [])
 const organizationToSetupDaily = computed(() => latestDailyConversions.value?.organization_to_setup ?? [])
 const hasConversionData = (points: readonly { started: number }[]) => points.some(point => point.started > 0)
-const v1FunnelStages = computed(() => buildFrontendOnboardingFunnelStages(visibleAnalytics.value?.funnels.v1 ?? []))
 const v4FunnelStages = computed(() => buildFrontendOnboardingFunnelStages(displayedV4Funnel.value))
-const v1FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(visibleAnalytics.value?.funnels.v1 ?? []))
 const v4FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(displayedV4Funnel.value))
 const hasDailyAttempts = computed(() => displayedDailyAttempts.value
   .some(day => day.v1_attempts > 0 || day.v2_attempts > 0 || day.v3_attempts > 0 || (day.v4_attempts ?? 0) > 0))
@@ -258,7 +259,8 @@ const setupCliOutcomeValues = computed(() => [
 ])
 const setupCliOutcomeColors = ['#119eff', '#8b5cf6', '#94a3b8']
 const hasSetupCliOutcomeData = computed(() => setupCliOutcomes.value.total_users > 0)
-const cliChecklistCoverage = computed(() => visibleAnalytics.value?.v4_cli_checklist_coverage ?? {
+const cliChecklistCoverage = computed(() => visibleAnalytics.value?.v4_cli_checklist_coverage_by_version?.[cliChecklistVersion.value]
+  ?? (cliChecklistVersion.value === 1 ? visibleAnalytics.value?.v4_cli_checklist_coverage : undefined) ?? {
   linked_apps: 0,
   active_apps: 0,
   unavailable_apps: 0,
@@ -534,6 +536,8 @@ displayStore.defaultBack = '/dashboard'
     <div class="w-full h-full px-4 pt-2 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
       <AdminFilterBar />
 
+      <AdminOnboardingPaymentCohorts v-if="mainStore.isAdmin" class="mb-6" />
+
       <PageLoader v-if="isLoading" />
 
       <div v-else class="space-y-6">
@@ -612,6 +616,13 @@ displayStore.defaultBack = '/dashboard'
                 <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
                   {{ t('frontend-onboarding-cli-checklist-coverage-description') }}
                 </p>
+                <label for="cli-checklist-version" class="mt-3 flex flex-wrap items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                  {{ t('frontend-onboarding-cli-checklist-version') }}
+                  <select id="cli-checklist-version" v-model.number="cliChecklistVersion" class="d-select d-select-bordered d-select-sm">
+                    <option :value="1">{{ t('frontend-onboarding-cli-checklist-version-1') }}</option>
+                    <option :value="2">{{ t('frontend-onboarding-cli-checklist-version-2') }}</option>
+                  </select>
+                </label>
               </div>
             </template>
             <div class="grid grid-cols-1 gap-x-8 gap-y-5 md:grid-cols-2">
@@ -857,37 +868,8 @@ displayStore.defaultBack = '/dashboard'
               accessible-borders
             />
           </ChartCard>
-
-          <ChartCard
-            chart-id="funnel-v1-legacy"
-            :title="t('frontend-onboarding-funnel-v1-legacy')"
-            :is-loading="isLoadingStats"
-          >
-            <template #header>
-              <div class="min-w-0">
-                <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
-                  {{ t('frontend-onboarding-funnel-v1-legacy') }}
-                </h2>
-                <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                  {{ t('frontend-onboarding-funnel-description') }}
-                </p>
-              </div>
-            </template>
-            <div class="mt-6 h-72 sm:h-80">
-              <AdminFunnelChart :stages="v1FunnelStages" />
-            </div>
-            <div class="grid grid-cols-2 gap-4 pt-5 mt-5 border-t border-slate-200 md:grid-cols-4 dark:border-slate-700">
-              <div v-for="summary in v1FunnelSummaries" :key="summary.key" class="text-center">
-                <p class="text-xl font-bold text-slate-900 tabular-nums dark:text-white">
-                  {{ formatNumberValue(summary.conversion_percent) }}%
-                </p>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {{ summary.from_label ? t('frontend-onboarding-transition', { from: summary.from_label, to: summary.to_label }) : summary.to_label }} · {{ formatNumberValue(summary.reached) }}
-                </p>
-              </div>
-            </div>
-          </ChartCard>
         </template>
+        <AdminRegistrationComparison />
       </div>
     </div>
   </div>

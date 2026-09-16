@@ -304,7 +304,8 @@ export function buildFrontendOnboardingHogql(startDate: string, cohortEndDate: s
         onboarding_version,
         attempt_id,
         toString(argMin(person_id, timestamp)) AS person_id,
-        argMinIf(app_id, timestamp, event = ${sqlStr(ONBOARDING_STEP_COMPLETED_EVENT)} AND app_id != '') AS app_id,
+        -- App-name completions carry draft IDs, not the persisted app ID.
+        argMinIf(app_id, timestamp, event = ${sqlStr(ONBOARDING_STEP_COMPLETED_EVENT)} AND step IN ('organization', 'setup') AND app_id != '') AS app_id,
         toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'intent')) AS intent_ms,
         toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step IN ('details', 'app_name'))) AS details_ms,
         toUnixTimestamp64Milli(minIf(timestamp, event = 'onboarding_step_viewed' AND step = 'app_name')) AS app_name_ms,
@@ -548,7 +549,8 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
     daily_setup_cli_outcomes: dailySetupCliOutcomes,
     daily_setup_cli_agent_usage: dailySetupCliAgentUsage,
     daily_tab_switches: dailyTabSwitches,
-    v4_cli_checklist_coverage: v4ChecklistCoverage,
+    v4_cli_checklist_coverage: v4ChecklistCoverage[1],
+    v4_cli_checklist_coverage_by_version: v4ChecklistCoverage,
     posthog_configured: posthog.configured,
     posthog_connected: posthog.connected,
   }

@@ -1,3 +1,4 @@
+import type { LocationQuery } from 'vue-router'
 import configs from '../../configs.json'
 import { isLocalDevHost } from './sanitize'
 
@@ -85,6 +86,36 @@ export function isAllowedConfirmationUrl(urlValue: string, options: {
     return false
 
   return options.allowedHosts.includes(url.hostname)
+}
+
+export function resolveConfirmationUrl(query: LocationQuery, options: {
+  allowedHosts: string[]
+  allowLocalDev?: boolean
+}): string | null {
+  const confirmationUrl = query.confirmation_url
+  if (typeof confirmationUrl !== 'string' || !confirmationUrl)
+    return null
+
+  try {
+    // Vue Router already decodes query values. Only decode legacy URLs whose scheme is still encoded.
+    const decodedUrl = /^https?%3A/i.test(confirmationUrl) ? decodeURIComponent(confirmationUrl) : confirmationUrl
+    if (!isAllowedConfirmationUrl(decodedUrl, options))
+      return null
+
+    const url = new URL(decodedUrl)
+    if (url.pathname === '/auth/v1/verify' && url.searchParams.has('token')) {
+      // Some email links place these parameters outside the nested confirmation URL.
+      for (const parameter of ['type', 'redirect_to'] as const) {
+        const value = query[parameter]
+        if (!url.searchParams.has(parameter) && typeof value === 'string')
+          url.searchParams.set(parameter, value)
+      }
+    }
+    return url.href
+  }
+  catch {
+    return null
+  }
 }
 
 export function getAllowedConfirmationHosts() {

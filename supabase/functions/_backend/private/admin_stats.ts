@@ -3,6 +3,8 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
 import { getAdminABTestChannelCreation } from '../utils/ab_test_channel_creation.ts'
+import { getAdminABTestDevelopmentEnvironment } from '../utils/ab_test_development_environment.ts'
+import { getAdminDevelopmentEnvironmentFlow } from '../utils/ab_test_development_environment_flow.ts'
 import { getAdminABTestDistribution } from '../utils/ab_test_distribution.ts'
 import { getAdminABTestPublishIntentOutcome } from '../utils/ab_test_publish_intent_outcome.ts'
 import { getAdminBuilderAnalytics } from '../utils/builder_analytics.ts'
@@ -14,8 +16,10 @@ import { getAdminFrontendOnboardingAnalytics } from '../utils/frontend_onboardin
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
+import { getAdminOnboardingPaymentCohorts } from '../utils/onboarding_payment_cohorts.ts'
 import { getAdminCancelledOrganizations, getAdminCustomerCountryBreakdown, getAdminDeploymentsTrend, getAdminEmailTypeBreakdown, getAdminEnterpriseAdoption, getAdminFamousApps, getAdminGlobalStatsTrend, getAdminOnboardingFunnel, getAdminOrganizationInsights, getAdminPluginBreakdown, getAdminTrialOrganizations, getAdminTrialPlanBreakdown } from '../utils/pg.ts'
 import { getAdminPlansAnalytics } from '../utils/plans_analytics.ts'
+import { getAdminRegistrationMonthlyComparison } from '../utils/registration_monthly_comparison.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { getCancellationDetails } from '../utils/stripe.ts'
 import { supabaseClient as useSupabaseClient } from '../utils/supabase.ts'
@@ -27,6 +31,8 @@ const INVALID_ADMIN_STATS_DATE = 'Expected ISO 8601 UTC datetime string'
 
 const metricCategories = [
   'ab_test_channel_creation',
+  'ab_test_development_environment',
+  'ab_test_development_environment_flow',
   'ab_test_distribution',
   'ab_test_publish_intent_outcome',
   'uploads',
@@ -47,6 +53,7 @@ const metricCategories = [
   'trial_organizations',
   'trial_plan_breakdown',
   'onboarding_funnel',
+  'onboarding_payment_cohorts',
   'cancelled_users',
   'email_type_breakdown',
   'customer_country_breakdown',
@@ -56,6 +63,7 @@ const metricCategories = [
   'cli_usage',
   'channel_surfing',
   'frontend_onboarding_analytics',
+  'registration_monthly_comparison',
   'plans_analytics',
   'famous_apps',
   'enterprise_adoption',
@@ -206,12 +214,24 @@ app.post('/', middlewareAuth, async (c) => {
     let result
 
     switch (metric_category) {
+      case 'onboarding_payment_cohorts':
+        result = await getAdminOnboardingPaymentCohorts(c)
+        break
+
       case 'ab_test_channel_creation':
         result = await getAdminABTestChannelCreation(c)
         break
 
       case 'ab_test_distribution':
         result = await getAdminABTestDistribution(c)
+        break
+
+      case 'ab_test_development_environment':
+        result = await getAdminABTestDevelopmentEnvironment(c)
+        break
+
+      case 'ab_test_development_environment_flow':
+        result = await getAdminDevelopmentEnvironmentFlow(c, start_date, end_date)
         break
 
       case 'ab_test_publish_intent_outcome':
@@ -361,6 +381,10 @@ app.post('/', middlewareAuth, async (c) => {
 
       case 'frontend_onboarding_analytics':
         result = await getAdminFrontendOnboardingAnalytics(c, start_date, end_date)
+        break
+
+      case 'registration_monthly_comparison':
+        result = await getAdminRegistrationMonthlyComparison(c)
         break
 
       case 'plans_analytics':

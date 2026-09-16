@@ -18,10 +18,52 @@
   <meta name="description" content="webapp to manage your OTA updates for capacitor">
   <meta name="title" content="Capgo app">
   <title>Capgo app</title>
+  <style>
+    :root {
+      --app-loader-background: #f8fafc;
+      --app-loader-logo-filter: invert(1);
+    }
+
+    :root[data-theme='capgodark'] {
+      --app-loader-background: #0f172a;
+      --app-loader-logo-filter: invert(0);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme='capgolight']) {
+        --app-loader-background: #0f172a;
+        --app-loader-logo-filter: invert(0);
+      }
+    }
+
+    html,
+    body {
+      margin: 0;
+      background-color: var(--app-loader-background);
+    }
+
+    #app-loader {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: var(--app-loader-background);
+    }
+
+    #app-loader img {
+      width: 150px;
+      height: 150px;
+      filter: var(--app-loader-logo-filter);
+    }
+  </style>
 </head>
 
 <body class="overflow-hidden h-full antialiased font-inter">
-  <div id="app-loader"></div>
+  <div id="app-loader" role="status" aria-label="Loading Capgo">
+    <img src="/capgo.webp" alt="" width="150" height="150" />
+  </div>
   <div id="app" class="overflow-hidden h-full"></div>
   <script src="/theme-bootstrap.js"></script>
   <script type="module" src="/src/main.ts"></script>

@@ -5,18 +5,27 @@ meta:
 
 <script setup lang="ts">
 import type { AdminABTestChannelCreation as AdminABTestChannelCreationData } from '~/services/adminABTestChannelCreation'
+import type { AdminABTestDevelopmentEnvironment as AdminABTestDevelopmentEnvironmentData } from '~/services/adminABTestDevelopmentEnvironment'
+import type { AdminABTestDevelopmentEnvironmentIntents } from '~/services/adminABTestDevelopmentEnvironmentIntent'
 import type { AdminABTestDistribution } from '~/services/adminABTestDistribution'
 import type { AdminABTestPublishIntentOutcome as AdminABTestPublishIntentOutcomeData } from '~/services/adminABTestPublishIntentOutcome'
+import type { AdminDevelopmentEnvironmentFlow as QuestionFlow } from '~/services/adminDevelopmentEnvironmentFlow'
 import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import AdminABTestChannelCreation from '~/components/admin/AdminABTestChannelCreation.vue'
+import AdminABTestDevelopmentEnvironment from '~/components/admin/AdminABTestDevelopmentEnvironment.vue'
+import AdminABTestDevelopmentEnvironmentIntent from '~/components/admin/AdminABTestDevelopmentEnvironmentIntent.vue'
 import AdminABTestDistributionMatrix from '~/components/admin/AdminABTestDistributionMatrix.vue'
 import AdminABTestPublishIntentOutcome from '~/components/admin/AdminABTestPublishIntentOutcome.vue'
+import AdminDevelopmentEnvironmentFlow from '~/components/admin/AdminDevelopmentEnvironmentFlow.vue'
 import PageLoader from '~/components/PageLoader.vue'
 import { parseAdminABTestChannelCreation } from '~/services/adminABTestChannelCreation'
+import { parseAdminABTestDevelopmentEnvironment } from '~/services/adminABTestDevelopmentEnvironment'
+import { parseAdminABTestDevelopmentEnvironmentIntents } from '~/services/adminABTestDevelopmentEnvironmentIntent'
 import { parseAdminABTestDistribution } from '~/services/adminABTestDistribution'
 import { parseAdminABTestPublishIntentOutcome } from '~/services/adminABTestPublishIntentOutcome'
+import { parseAdminDevelopmentEnvironmentFlow } from '~/services/adminDevelopmentEnvironmentFlow'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -29,26 +38,50 @@ const mainStore = useMainStore()
 const channelCreation = ref<AdminABTestChannelCreationData | null>(null)
 const distribution = ref<AdminABTestDistribution[]>([])
 const publishIntentOutcome = ref<AdminABTestPublishIntentOutcomeData | null>(null)
+const developmentEnvironment = ref<AdminABTestDevelopmentEnvironmentData | null>(null)
+const environmentIntents = ref<AdminABTestDevelopmentEnvironmentIntents | null>(null)
 const isLoading = ref(true)
 const loadError = ref(false)
+const questionFlow = ref<QuestionFlow | null>(null)
+const questionFlowLoading = ref(true)
+
+async function loadQuestionFlow(forceRefresh = false) {
+  questionFlowLoading.value = true
+  questionFlow.value = null
+  try {
+    questionFlow.value = parseAdminDevelopmentEnvironmentFlow(await adminStore.fetchStats('ab_test_development_environment_flow', forceRefresh))
+  }
+  catch (error) {
+    console.error('[Admin A/B Tests] Error loading question flow:', error)
+  }
+  finally {
+    questionFlowLoading.value = false
+  }
+}
 
 async function loadDashboard(forceRefresh = false) {
   isLoading.value = true
   loadError.value = false
   try {
-    const [distributionData, channelCreationData, outcomeData] = await Promise.all([
+    const [distributionData, channelCreationData, outcomeData, environmentData] = await Promise.all([
       adminStore.fetchStats('ab_test_distribution', forceRefresh),
       adminStore.fetchStats('ab_test_channel_creation', forceRefresh),
       adminStore.fetchStats('ab_test_publish_intent_outcome', forceRefresh),
+      adminStore.fetchStats('ab_test_development_environment', forceRefresh),
     ])
     const parsedDistribution = parseAdminABTestDistribution(distributionData)
     const parsedChannelCreation = parseAdminABTestChannelCreation(channelCreationData)
     const parsedOutcome = parseAdminABTestPublishIntentOutcome(outcomeData)
-    if (!parsedDistribution || !parsedChannelCreation || !parsedOutcome)
+    const parsedEnvironment = parseAdminABTestDevelopmentEnvironment(environmentData)
+    const parsedIntents = parsedEnvironment && parseAdminABTestDevelopmentEnvironmentIntents(environmentData?.development_environment_intents, parsedEnvironment)
+    if (!parsedDistribution || !parsedChannelCreation || !parsedOutcome || !parsedEnvironment || !parsedIntents) {
       throw new Error('Invalid A/B test dashboard response')
+    }
     distribution.value = parsedDistribution
     channelCreation.value = parsedChannelCreation
     publishIntentOutcome.value = parsedOutcome
+    developmentEnvironment.value = parsedEnvironment
+    environmentIntents.value = parsedIntents
   }
   catch (error) {
     console.error('[Admin A/B Tests] Error loading dashboard:', error)
@@ -66,6 +99,7 @@ onMounted(async () => {
     return
   }
 
+  void loadQuestionFlow()
   await loadDashboard()
 })
 
@@ -89,6 +123,9 @@ displayStore.defaultBack = '/dashboard'
         <AdminABTestDistributionMatrix :distribution="distribution" />
         <AdminABTestChannelCreation v-if="channelCreation" :analytics="channelCreation" />
         <AdminABTestPublishIntentOutcome v-if="publishIntentOutcome" :outcome="publishIntentOutcome" />
+        <AdminABTestDevelopmentEnvironment v-if="developmentEnvironment" :outcome="developmentEnvironment" />
+        <AdminDevelopmentEnvironmentFlow :analytics="questionFlow" :loading="questionFlowLoading" @retry="loadQuestionFlow(true)" />
+        <AdminABTestDevelopmentEnvironmentIntent v-if="environmentIntents" :groups="environmentIntents" />
       </div>
     </div>
   </div>
