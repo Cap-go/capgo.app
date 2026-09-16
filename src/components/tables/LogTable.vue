@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
+import type { LogActionLabelMode } from '~/services/logTableDisplay'
 import { useDebounceFn, useStorage } from '@vueuse/core'
 import { computed, h, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -10,7 +11,7 @@ import LogMetadataPopover from '~/components/tables/LogMetadataPopover.vue'
 import { formatDate } from '~/services/date'
 import { getDateRangeForPreset, getTimeWindowPageRange, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
 import { getLogDocUrl } from '~/services/logDocLinks'
-import { extractLogOriginalMessage, formatLogActionLinkTitle, logRowDisplayMetadata, parseLogVersionName, resolveLogActionPrimaryLabel, shouldShowLogActionCodeLine, type LogActionLabelMode } from '~/services/logTableDisplay'
+import { extractLogOriginalMessage, formatLogActionLinkTitle, logRowDisplayMetadata, parseLogVersionName, resolveLogActionPrimaryLabel, shouldShowLogActionCodeLine } from '~/services/logTableDisplay'
 import { actionToFilter, createActionFilterState, failureActionFilterKeys, filterToAction, observeActionFilterKeys, updateActionFilterKeys } from '~/services/statsActions'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
