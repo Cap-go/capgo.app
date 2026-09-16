@@ -16,6 +16,7 @@
   Click this link to sign in:
 </p>
 
+<!-- Never put confirmation_url in href; ampersand truncation drops type. Use confirmation_link only. -->
 <p>
   <a
     href="{{ event.details.confirmation_link }}"

@@ -4,8 +4,8 @@ Hi,<br/><br/>
 
 <p>To accept the invitation and complete your account setup, please follow the link below:</p>
 
-<a href="{{ .SiteURL }}/confirm-signup?confirmation_url={{ .ConfirmationURL }}"
-  >{{ .SiteURL }}/confirm-signup?confirmation_url={{ .ConfirmationURL }}
+<a href="{{ .SiteURL }}/confirm-signup?confirmation_url={{ .ConfirmationURL | urlquery }}"
+  >{{ .SiteURL }}/confirm-signup?confirmation_url={{ .ConfirmationURL | urlquery }}
 </a>
 
 <p>If you did not expect this invitation, you can safely ignore this email.</p>

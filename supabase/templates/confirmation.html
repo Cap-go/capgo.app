@@ -4,8 +4,8 @@ Hi,<br/><br/>
 
 <p>To complete your account setup, please confirm your email address by following the link below:</p>
 
-<a href="{{ .SiteURL }}/confirm-signup?confirmation_url={{ .ConfirmationURL }}"
-  >{{ .SiteURL }}/confirm-signup?confirmation_url={{ .ConfirmationURL }}
+<a href="{{ .SiteURL }}/confirm-signup?confirmation_url={{ .ConfirmationURL | urlquery }}"
+  >{{ .SiteURL }}/confirm-signup?confirmation_url={{ .ConfirmationURL | urlquery }}
 </a>
 
 <br /><br />

@@ -28,7 +28,19 @@ describe('auth email Bento mapping', () => {
       'token-hash',
       'signup',
       'https://console.capgo.app/',
-    )).toBe('https://api.capgo.app/auth/v1/verify?token=token-hash&type=signup&redirect_to=https%3A%2F%2Fconsole.capgo.app%2F')
+    )).toBe('https://api.capgo.app/auth/v1/verify?type=signup&token=token-hash&redirect_to=https%3A%2F%2Fconsole.capgo.app%2F')
+  })
+
+  it.concurrent('puts type before token in recovery verify URLs', () => {
+    const url = buildAuthConfirmationUrl(
+      'https://sb.capgo.app',
+      'recovery-token-hash',
+      'recovery',
+      'https://console.capgo.app',
+    )
+
+    expect(url).toBe('https://sb.capgo.app/auth/v1/verify?type=recovery&token=recovery-token-hash&redirect_to=https%3A%2F%2Fconsole.capgo.app')
+    expect(url.indexOf('type=recovery')).toBeLessThan(url.indexOf('token=recovery-token-hash'))
   })
 
   it.concurrent('normalizes email_change_current verify type to email_change', () => {
@@ -53,7 +65,7 @@ describe('auth email Bento mapping', () => {
       token_hash: 'hash-1',
     }, 'https://xyz.supabase.co', 'https://console.capgo.app/')
 
-    expect(details.confirmation_url).toBe('https://xyz.supabase.co/auth/v1/verify?token=hash-1&type=email_change&redirect_to=https%3A%2F%2Fconsole.capgo.app')
+    expect(details.confirmation_url).toBe('https://xyz.supabase.co/auth/v1/verify?type=email_change&token=hash-1&redirect_to=https%3A%2F%2Fconsole.capgo.app')
     expect(details.confirmation_link).toBe(`https://console.capgo.app/confirm-signup?confirmation_url=${encodeURIComponent(details.confirmation_url)}`)
     expect(details).toMatchObject({
       email: 'user@capgo.app',
@@ -134,7 +146,7 @@ describe('auth email Bento mapping', () => {
     }, 'https://xyz.supabase.co', '')
 
     expect(details.site_url).toBe('https://console.capgo.app')
-    expect(details.confirmation_url).toContain('/auth/v1/verify?token=hash-2&type=signup')
+    expect(details.confirmation_url).toContain('/auth/v1/verify?type=signup&token=hash-2')
     expect(details.confirmation_link).toContain('confirmation_url=')
   })
 })

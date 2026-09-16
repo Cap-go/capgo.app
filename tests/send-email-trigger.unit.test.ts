@@ -51,7 +51,7 @@ const signupEvent = {
   },
 }
 
-const signupConfirmationUrl = 'https://xyz.supabase.co/auth/v1/verify?token=token-hash&type=signup&redirect_to=https%3A%2F%2Fconsole.capgo.app'
+const signupConfirmationUrl = 'https://xyz.supabase.co/auth/v1/verify?type=signup&token=token-hash&redirect_to=https%3A%2F%2Fconsole.capgo.app'
 
 function postSendEmail(body: unknown) {
   return app.request('http://local/', {

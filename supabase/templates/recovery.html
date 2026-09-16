@@ -4,8 +4,8 @@ You have asked to reset your password for the Capgo.app account associated with 
 
 <p>To reset the password, please click on the following link:</p>
 
-<a href="{{ .SiteURL }}/confirm-signup?confirmation_url={{ .ConfirmationURL }}"
-  >{{ .SiteURL }}/confirm-signup?confirmation_url={{ .ConfirmationURL }}
+<a href="{{ .SiteURL }}/confirm-signup?confirmation_url={{ .ConfirmationURL | urlquery }}"
+  >{{ .SiteURL }}/confirm-signup?confirmation_url={{ .ConfirmationURL | urlquery }}
 </a>
 
 <p>This link will expire in 1 hour for security reasons.</p>

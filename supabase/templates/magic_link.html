@@ -8,7 +8,7 @@ Enter this code on the 2FA email confirmation screen:<br/>
 
 Option 2: Magic link (for normal login to Capgo.app)<br/>
 Click this link to sign in:<br/>
-<a href="{{ .SiteURL }}/confirm-signup?confirmation_url={{ .ConfirmationURL }}">
+<a href="{{ .SiteURL }}/confirm-signup?confirmation_url={{ .ConfirmationURL | urlquery }}">
   Sign in to Capgo.app
 </a><br/><br/>
 

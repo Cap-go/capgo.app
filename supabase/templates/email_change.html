@@ -4,8 +4,8 @@ You have requested to change the email address associated with your Capgo.app ac
 
 <p>To confirm this change, please click on the following link:</p>
 
-<a href="{{ .SiteURL }}/confirm-signup?confirmation_url={{ .ConfirmationURL }}"
-  >{{ .SiteURL }}/confirm-signup?confirmation_url={{ .ConfirmationURL }}
+<a href="{{ .SiteURL }}/confirm-signup?confirmation_url={{ .ConfirmationURL | urlquery }}"
+  >{{ .SiteURL }}/confirm-signup?confirmation_url={{ .ConfirmationURL | urlquery }}
 </a>
 
 <br/><br/>

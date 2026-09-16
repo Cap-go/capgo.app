@@ -157,10 +157,9 @@ export function buildAuthConfirmationUrl(
   if (!baseUrl || !hash || !actionType)
     return ''
 
-  const params = new URLSearchParams({
-    token: hash,
-    type: actionType,
-  })
+  const params = new URLSearchParams()
+  params.set('type', actionType)
+  params.set('token', hash)
   const redirect = textField(redirectTo)
   if (redirect)
     params.set('redirect_to', redirect)
