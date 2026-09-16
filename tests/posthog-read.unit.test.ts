@@ -34,6 +34,35 @@ afterEach(() => {
 })
 
 describe('postHog read transport', () => {
+  it.each([
+    {},
+    { columns: ['paid_at_seconds'], results: [] },
+    { columns: ['customer_id', 'paid_at_seconds', 'total_rows'], results: null },
+    { columns: ['customer_id', 'paid_at_seconds', 'total_rows'], results: [['cus_fake', 1]] },
+    { columns: ['customer_id', 'paid_at_seconds', 'total_rows'], results: [], has_more: true },
+    { columns: ['customer_id', 'paid_at_seconds', 'total_rows'], results: [], next: '/next-page' },
+    { columns: ['customer_id', 'paid_at_seconds', 'total_rows', 'total_rows'], results: [] },
+  ])('rejects malformed or paginated authoritative responses %j with strict columns', async (payload) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(payload))))
+    await expect(queryPosthogHogql(context(posthogEnv()), 'SELECT invoice', { requiredColumns: ['customer_id', 'paid_at_seconds', 'total_rows'] })).resolves.toMatchObject({ failureReason: 'unavailable', rows: [] })
+  })
+
+  it('accepts a validated genuinely empty authoritative response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ columns: ['customer_id', 'paid_at_seconds', 'total_rows'], results: [], has_more: false, next: null }))))
+    await expect(queryPosthogHogql(context(posthogEnv()), 'SELECT invoice', { requiredColumns: ['customer_id', 'paid_at_seconds', 'total_rows'] })).resolves.toMatchObject({ failureReason: null, rows: [] })
+  })
+
+  it('honors an overall caller deadline as well as the per-query timeout', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const controller = new AbortController()
+    controller.abort()
+    vi.stubGlobal('fetch', vi.fn(async (_url, options: RequestInit) => {
+      options.signal?.throwIfAborted()
+      return new Response(JSON.stringify({ columns: [], results: [] }))
+    }))
+    await expect(queryPosthogHogql(context(posthogEnv()), 'SELECT 1', { signal: controller.signal })).resolves.toMatchObject({ failureReason: 'timeout', rows: [] })
+  })
+
   it('does not fetch when the read key is unconfigured', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
