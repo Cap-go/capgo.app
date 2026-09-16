@@ -145,7 +145,6 @@ describe('admin channel creation A/B analytics', () => {
     const query = buildAdminChannelAnimationHogql()
 
     expect(query).toContain(`timestamp >= toDateTime('2026-09-14 00:00:00')`)
-    expect(query).toContain(`JSONExtractString(toString(properties), 'onboarding_version') = '5.E'`)
     expect(query).toContain(`JSONExtractString(toString(properties), 'channel_stage')`)
     expect(query).toContain(`JSONExtractString(toString(properties), '$host') = 'console.capgo.app'`)
     expect(query).toContain(`toFloatOrZero(toString(properties.animation_progress_percent))`)
@@ -158,6 +157,15 @@ describe('admin channel creation A/B analytics', () => {
     expect(query).toContain(`quantileIf(0.5)`)
     for (const stage of ADMIN_CHANNEL_ANIMATION_STAGES)
       expect(query).toContain(`'${stage}'`)
+  })
+
+  it.concurrent('includes every guided channel treatment variant without splitting unique viewers by version', () => {
+    const query = buildAdminChannelAnimationHogql()
+    const versionFilter = query.match(/JSONExtractString\(toString\(properties\), 'onboarding_version'\) IN \(([^)]+)\)/)
+
+    expect(versionFilter?.[1]).toBe(`'5.E', '5.F', '5.G'`)
+    expect(query).toContain('GROUP BY person_id, stage')
+    expect(query).not.toContain('GROUP BY person_id, stage, onboarding_version')
   })
 
   it('queries matured channel outcomes and PostHog, then closes the replica pool', async () => {

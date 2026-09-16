@@ -25,7 +25,8 @@ export type AdminChannelExperimentStatus = 'collecting' | 'treatment_ahead' | 'c
 export const ADMIN_CHANNEL_OUTCOME_WINDOW_HOURS = 24
 export const ADMIN_CHANNEL_MIN_BRANCH_SAMPLE = 100
 
-const NEW_CHANNEL_ANALYTICS_VERSION = '5.E'
+// These variants share the guided channel animations alongside different onboarding experiments.
+const NEW_CHANNEL_ANALYTICS_VERSIONS = ['5.E', '5.F', '5.G'] as const
 const NEW_CHANNEL_ANALYTICS_STARTED_AT = '2026-09-14 00:00:00'
 const NEW_CHANNEL_TEST = 'new_channel'
 const FIRST_RUN_TERMINAL_EVENTS = [
@@ -402,6 +403,7 @@ export function buildAdminChannelAnimationHogql(): string {
   ].map(sqlString).join(', ')
   const stageAllowlist = ADMIN_CHANNEL_ANIMATION_STAGES.map(sqlString).join(', ')
   const terminalAllowlist = FIRST_RUN_TERMINAL_EVENTS.map(sqlString).join(', ')
+  const versionAllowlist = NEW_CHANNEL_ANALYTICS_VERSIONS.map(sqlString).join(', ')
 
   return `
     WITH channel_events AS (
@@ -417,7 +419,7 @@ export function buildAdminChannelAnimationHogql(): string {
       WHERE timestamp >= toDateTime(${sqlString(NEW_CHANNEL_ANALYTICS_STARTED_AT)})
         AND event IN (${eventAllowlist})
         AND JSONExtractString(toString(properties), 'channel_stage') IN (${stageAllowlist})
-        AND JSONExtractString(toString(properties), 'onboarding_version') = ${sqlString(NEW_CHANNEL_ANALYTICS_VERSION)}
+        AND JSONExtractString(toString(properties), 'onboarding_version') IN (${versionAllowlist})
         AND ${buildFrontendOnboardingProductionHostHogql('properties', 'timestamp')}
     ), per_person_stage AS (
       SELECT
