@@ -9,7 +9,7 @@ test.describe('Auth email confirmation redirects', () => {
   })
 
   test('restores recovery parameters from a tracked email link', async ({ page }) => {
-    const verificationUrl = 'http://127.0.0.1:54321/auth/v1/verify?token=password-reset-regression'
+    const verificationUrl = 'https://127.0.0.1/auth/v1/verify?token=password-reset-regression'
     const redirectTo = new URL('/forgot_password?step=2', test.info().project.use.baseURL).href
     const query = new URLSearchParams({
       confirmation_url: verificationUrl,
@@ -32,7 +32,7 @@ test.describe('Auth email confirmation redirects', () => {
 
   test('preserves query parameters inside a fully encoded recovery link', async ({ page }) => {
     const redirectTo = new URL('/forgot_password?step=2&source=email', test.info().project.use.baseURL).href
-    const verificationUrl = new URL('http://127.0.0.1:54321/auth/v1/verify')
+    const verificationUrl = new URL('https://127.0.0.1/auth/v1/verify')
     verificationUrl.search = new URLSearchParams({ token: 'password-reset-regression', type: 'recovery', redirect_to: redirectTo }).toString()
     const query = new URLSearchParams({ confirmation_url: verificationUrl.href })
     const requestPromise = page.waitForRequest(request => request.isNavigationRequest() && new URL(request.url()).pathname === '/auth/v1/verify')
