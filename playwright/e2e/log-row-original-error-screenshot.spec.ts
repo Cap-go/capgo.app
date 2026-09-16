@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { expect, test } from '../support/commands'
 import { dismissSupportPrompt } from '../support/dismissSupportPrompt'
 
+// Intentionally writes to tracked docs/pr-screenshots for PR evidence (product requirement).
 const screenshotDir = resolve(process.cwd(), 'docs/pr-screenshots')
 const rowScreenshotPath = resolve(screenshotDir, 'logs-table-original-error-row.png')
 const consoleScreenshotPath = resolve(screenshotDir, 'logs-table-original-error.png')
