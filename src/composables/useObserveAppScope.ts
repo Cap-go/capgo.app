@@ -13,6 +13,7 @@ export function useObserveAppScope() {
   const id = ref('')
   const lastAppParam = ref('')
   const isLoading = ref(false)
+  let latestRefreshRequest = 0
   const selectedVersionName = ref('')
   const bundleNames = ref<string[]>([])
   const app = ref<Database['public']['Tables']['apps']['Row']>()
@@ -105,6 +106,7 @@ export function useObserveAppScope() {
   }
 
   async function refreshAppScope() {
+    const refreshId = ++latestRefreshRequest
     isLoading.value = true
     try {
       await Promise.all([loadAppInfo(), loadBundleNames()])
@@ -112,7 +114,10 @@ export function useObserveAppScope() {
     catch (error) {
       console.error(error)
     }
-    isLoading.value = false
+    finally {
+      if (refreshId === latestRefreshRequest)
+        isLoading.value = false
+    }
   }
 
   async function applyVersionFilter(name: string) {
@@ -134,6 +139,9 @@ export function useObserveAppScope() {
     if (appParam && lastAppParam.value !== appParam) {
       lastAppParam.value = appParam
       id.value = appParam
+      app.value = undefined
+      publicChannels.value = []
+      bundleNames.value = []
       selectedVersionName.value = typeof route.query.version === 'string' ? route.query.version : ''
       await refreshAppScope()
       displayStore.NavTitle = ''

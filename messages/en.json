@@ -3016,7 +3016,7 @@
   "observe-updater-tab-update": "Update",
   "observe-updater-tab-failure": "Failure",
   "observe-updater-view-tabs": "Updater view",
-  "observe-updater-update-help": "Bundle adoption, install success, and delivery timing for the selected period.",
+  "observe-updater-update-help": "Bundle adoption, install success, and delivery timing for the selected period. Install and delivery charts roll up to the nearest 1, 3, 7, or 30-day window.",
   "updated-at": "Updated at",
   "updated-default-download-channel": "Updated default download channel.",
   "updated-default-upload-channel": "Updated the default upload channel",

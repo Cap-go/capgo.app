@@ -147,6 +147,17 @@ describe('private analytics route validation', () => {
     }))
   })
 
+  it('rejects reversed rangeStart and rangeEnd on /private/stats/insights', async () => {
+    const response = await statsApp.request(postJson('http://local/insights', {
+      appId: 'com.example.app',
+      rangeStart: '2026-01-02T00:00:00.000Z',
+      rangeEnd: '2026-01-01T00:00:00.000Z',
+    }))
+
+    await expectInvalidBody(response)
+    expect(readStatsInsightsMock).not.toHaveBeenCalled()
+  })
+
   it('accepts rangeStart and rangeEnd on /private/stats/insights', async () => {
     const rangeStart = '2026-01-01T00:00:00.000Z'
     const rangeEnd = '2026-01-02T00:00:00.000Z'

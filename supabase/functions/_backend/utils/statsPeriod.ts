@@ -35,7 +35,7 @@ export function getCustomStatsPeriod(rangeStart: string | Date, rangeEnd: string
     start: start.toISOString(),
     endExclusive: endExclusive.toISOString(),
     endInclusive: endInclusive.toISOString(),
-    labels: generateUtcDateLabels(start, endExclusive),
+    labels: generateUtcDateLabels(start, endInclusive),
   }
 }
 
