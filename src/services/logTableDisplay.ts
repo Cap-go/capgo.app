@@ -66,9 +66,12 @@ export function extractLogOriginalMessage(metadata: LogMetadata): string | null 
     return null
 
   for (const key of LOG_ORIGINAL_MESSAGE_KEYS) {
-    const value = normalized[key]?.trim()
-    if (value)
-      return value
+    const raw = normalized[key]
+    if (typeof raw !== 'string')
+      continue
+    const trimmed = raw.trim()
+    if (trimmed)
+      return trimmed
   }
 
   return null

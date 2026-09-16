@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractLogOriginalMessage, formatLogActionLinkTitle, logRowDisplayMetadata, parseLogVersionName } from '~/services/logTableDisplay'
+import { extractLogOriginalMessage, formatLogActionLinkTitle, logRowDisplayMetadata, parseLogVersionName, type LogMetadata } from '~/services/logTableDisplay'
 
 describe('parseLogVersionName', () => {
   it.concurrent('keeps a plain version unchanged', () => {
@@ -64,6 +64,12 @@ describe('extractLogOriginalMessage', () => {
 
   it.concurrent('returns null when metadata has no known error keys', () => {
     expect(extractLogOriginalMessage({ source: 'notify_app_ready' })).toBeNull()
+  })
+
+  it.concurrent('ignores non-string message and error values', () => {
+    expect(extractLogOriginalMessage({ message: { text: 'boom' } } as LogMetadata)).toBeNull()
+    expect(extractLogOriginalMessage({ error: 404 } as LogMetadata)).toBeNull()
+    expect(extractLogOriginalMessage({ reason: 'ok', error: 404 } as LogMetadata)).toBe('ok')
   })
 })
 
