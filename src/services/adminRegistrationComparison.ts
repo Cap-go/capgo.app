@@ -6,6 +6,7 @@ export interface RegistrationComparisonCounts {
 }
 
 export interface RegistrationMonthlyComparison {
+  source: 'supabase'
   generated_at: string
   time_zone: 'Europe/Warsaw'
   cutoff_day: number

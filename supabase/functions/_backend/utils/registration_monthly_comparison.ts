@@ -117,7 +117,7 @@ export async function getAdminRegistrationMonthlyComparison(c: Context, now = ne
       unknown_other: sum.unknown_other + month.unknown_other,
       total: sum.total + month.total,
     }), { self_signup: 0, organization_invite: 0, unknown_other: 0, total: 0 })
-    return { ...metadata, months, totals }
+    return { ...metadata, source: 'supabase' as const, months, totals }
   }
   finally {
     await closeClient(c, pgClient)

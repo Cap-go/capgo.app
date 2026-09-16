@@ -24,7 +24,7 @@ async function loadComparison() {
   comparison.value = null
   try {
     const result = await adminStore.fetchStats('registration_monthly_comparison', true)
-    if (!result || !Array.isArray(result.months) || result.months.length !== 5 || !result.totals)
+    if (!result || result.source !== 'supabase' || !Array.isArray(result.months) || result.months.length !== 5 || !result.totals)
       throw new Error('Invalid registration comparison response')
     comparison.value = result
   }

@@ -19,6 +19,7 @@ vi.mock('../src/components/dashboard/ChartCard.vue', () => ({
 }))
 
 const payload = {
+  source: 'supabase',
   generated_at: '2026-09-16T12:35:00.000Z',
   time_zone: 'Europe/Warsaw',
   cutoff_day: 16,
@@ -85,11 +86,13 @@ describe('admin monthly registration comparison', () => {
     expect(container.querySelector('tfoot td:nth-child(4)')?.textContent?.trim()).toBe('5')
   })
 
-  it('retains unavailable dashes for responses from the previous backend during rollout', async () => {
-    fetchStatsMock.mockResolvedValue({ ...payload, months: payload.months.map(month => ({ ...month, unknown_other: null })), totals: { ...payload.totals, unknown_other: null } })
+  it.each([undefined, 'posthog'])('rejects an old or mismatched source %s rather than labeling it Supabase', async (source) => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {})
+    fetchStatsMock.mockResolvedValue({ ...payload, source, months: payload.months.map(month => ({ ...month, unknown_other: null })), totals: { ...payload.totals, unknown_other: null } })
     const container = await mountComparison()
-    expect(container.querySelectorAll('[aria-label="Not separately tracked"]')).toHaveLength(6)
-    expect(container.querySelector('tbody tr td:nth-child(4)')?.textContent?.trim()).toBe('—')
+    expect(container.querySelector('table')).toBeNull()
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('Supabase registration data is temporarily unavailable')
+    errorLog.mockRestore()
   })
 
   it('keeps zeros visible when there are no recorded registrations', async () => {

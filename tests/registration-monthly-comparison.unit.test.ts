@@ -103,6 +103,7 @@ describe('registration comparison results', () => {
     expect(result.months[0]).toEqual({ month: '2026-09', full_month: false, self_signup: 4, organization_invite: 2, unknown_other: 1, total: 7 })
     expect(result.months[1].total).toBe(0)
     expect(result.totals).toEqual({ self_signup: 7, organization_invite: 3, unknown_other: 1, total: 11 })
+    expect(result.source).toBe('supabase')
     expect(result.generated_at).toBe('2026-09-16T12:35:00.000Z')
   })
 
