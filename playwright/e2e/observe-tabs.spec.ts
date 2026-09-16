@@ -7,31 +7,35 @@ test.describe('Observe sections', () => {
   })
 
   test('keeps Observe subtabs reachable on desktop and mobile', async ({ page }) => {
-    await page.goto('/app/com.demo.app/observe/updater')
-    // Dismiss support prompt so mobile tab clicks are not intercepted.
+    await page.goto('/app/com.demo.app/observe/update')
     await dismissSupportPrompt(page)
 
-    const updaterTab = page.getByRole('button', { name: 'Updater', exact: true })
+    const updateTab = page.getByRole('button', { name: 'Update', exact: true })
+    const failureTab = page.getByRole('button', { name: 'Failure', exact: true })
     const logsTab = page.getByRole('button', { name: 'Logs', exact: true })
     const nativeTab = page.getByRole('button', { name: 'Native', exact: true })
     const compatibilityTab = page.getByRole('button', { name: 'Compatibility', exact: true })
     const pluginsTab = page.getByRole('button', { name: 'Plugins', exact: true })
 
-    await expect(updaterTab).toBeVisible()
+    await expect(updateTab).toBeVisible()
+    await expect(failureTab).toBeVisible()
     await expect(logsTab).toBeVisible()
     await expect(nativeTab).toBeVisible()
     await expect(compatibilityTab).toBeVisible()
     await expect(pluginsTab).toBeVisible()
-    await expect(updaterTab).toHaveAttribute('aria-current', 'page')
+    await expect(updateTab).toHaveAttribute('aria-current', 'page')
     await expect(page.locator('[data-test="observe-updater-version-filter"]')).toBeVisible()
-    await expect(page.locator('[data-test="observe-updater-tab-update"]')).toBeVisible()
-    await expect(page.locator('[data-test="observe-updater-tab-failure"]')).toBeVisible()
-    await expect(page.locator('[data-test="observe-updater-view-update"]')).toBeVisible()
+    await expect(page.locator('[data-test="observe-date-range-picker"]')).toBeVisible()
+    await expect(page.locator('[data-test="observe-view-update"]')).toBeVisible()
 
-    await page.locator('[data-test="observe-updater-tab-failure"]').click()
-    await expect(page.locator('[data-test="observe-updater-view-failure"]')).toBeVisible()
-    await page.locator('[data-test="observe-updater-tab-update"]').click()
-    await expect(page.locator('[data-test="observe-updater-view-update"]')).toBeVisible()
+    await failureTab.click()
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/failure(?:\?|$)/)
+    await expect(failureTab).toHaveAttribute('aria-current', 'page')
+    await expect(page.locator('[data-test="observe-view-failure"]')).toBeVisible()
+
+    await updateTab.click()
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/update(?:\?|$)/)
+    await expect(page.locator('[data-test="observe-view-update"]')).toBeVisible()
 
     await logsTab.click()
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/logs(?:\?|$)/)
@@ -50,15 +54,14 @@ test.describe('Observe sections', () => {
     await expect(page.locator('[data-test="observe-plugin-insights"] table').getByText('4.15.3', { exact: true })).toBeVisible()
 
     await page.setViewportSize({ width: 375, height: 667 })
-    await expect(updaterTab).toBeVisible()
+    await expect(updateTab).toBeVisible()
     await expect(pluginsTab).toBeVisible()
 
-    const updaterBox = await updaterTab.boundingBox()
+    const updateBox = await updateTab.boundingBox()
     const pluginsBox = await pluginsTab.boundingBox()
-    expect(updaterBox?.x).toBeGreaterThanOrEqual(0)
+    expect(updateBox?.x).toBeGreaterThanOrEqual(0)
     expect((pluginsBox?.x ?? 0) + (pluginsBox?.width ?? 0)).toBeLessThanOrEqual(375)
 
-    // Dismiss support prompt so mobile tab clicks are not intercepted.
     await dismissSupportPrompt(page)
     await nativeTab.click()
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/native(?:\?|$)/)
@@ -66,22 +69,32 @@ test.describe('Observe sections', () => {
     await expect(page.getByRole('heading', { name: 'Observe', exact: true, level: 1 })).toBeVisible()
   })
 
-  test('observe updater and native default to 1 day and persist the period in the URL', async ({ page }) => {
+  test('observe update and failure share date range in the URL', async ({ page }) => {
+    await page.goto('/app/com.demo.app/observe/update')
+    await expect(page).toHaveURL(/[?&]range=24h(?:&|$)/)
+
+    await page.goto('/app/com.demo.app/observe/update?range=1h')
+    await expect(page.locator('[data-test="observe-date-range-picker"]')).toBeVisible()
+
+    await page.getByRole('button', { name: 'Failure', exact: true }).click()
+    await expect(page).toHaveURL(/\/observe\/failure(?:\?|$)/)
+    await expect(page).toHaveURL(/[?&]range=1h(?:&|$)/)
+  })
+
+  test('redirects legacy observe updater URL to update tab', async ({ page }) => {
+    await page.goto('/app/com.demo.app/observe/updater')
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/update(?:\?|$)/)
+  })
+
+  test('observe native default to 1 day and persist the period in the URL', async ({ page }) => {
     const oneDayButton = () => page.locator('[data-testid="period-day-selector"]').getByRole('button', { name: '1 day', exact: true })
     const sevenDayButton = () => page.locator('[data-testid="period-day-selector"]').getByRole('button', { name: '7 days', exact: true })
 
-    await page.goto('/app/com.demo.app/observe/updater')
-    await expect(oneDayButton()).toHaveAttribute('aria-pressed', 'true')
-
-    await expect.poll(async () => Number(await page.locator('[data-testid="observe-period-labels"]').getAttribute('data-count'))).toBe(2)
-
-    await sevenDayButton().click()
-    await expect(page).toHaveURL(/[?&]days=7(?:&|$)/)
-    await expect(sevenDayButton()).toHaveAttribute('aria-pressed', 'true')
-
     await page.goto('/app/com.demo.app/observe/native')
     await expect(oneDayButton()).toHaveAttribute('aria-pressed', 'true')
+
     await expect.poll(async () => Number(await page.locator('[data-testid="observe-period-labels"]').getAttribute('data-count'))).toBe(2)
+
     await sevenDayButton().click()
     await expect(page).toHaveURL(/[?&]days=7(?:&|$)/)
     await expect(sevenDayButton()).toHaveAttribute('aria-pressed', 'true')

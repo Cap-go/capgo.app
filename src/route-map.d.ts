@@ -346,6 +346,13 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
+    '/app/[app].observe.failure': RouteRecordInfo<
+      '/app/[app].observe.failure',
+      '/app/:app/observe/failure',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
     '/app/[app].observe.logs': RouteRecordInfo<
       '/app/[app].observe.logs',
       '/app/:app/observe/logs',
@@ -363,6 +370,13 @@ declare module 'vue-router/auto-routes' {
     '/app/[app].observe.plugins': RouteRecordInfo<
       '/app/[app].observe.plugins',
       '/app/:app/observe/plugins',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
+    '/app/[app].observe.update': RouteRecordInfo<
+      '/app/[app].observe.update',
+      '/app/:app/observe/update',
       { app: ParamValue<true> },
       { app: ParamValue<false> },
       | never
@@ -1089,6 +1103,14 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
+    'src/pages/app/[app].observe.failure.vue': {
+      routes:
+        | '/app/[app].observe.failure'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
     'src/pages/app/[app].observe.logs.vue': {
       routes:
         | '/app/[app].observe.logs'
@@ -1108,6 +1130,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/app/[app].observe.plugins.vue': {
       routes:
         | '/app/[app].observe.plugins'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].observe.update.vue': {
+      routes:
+        | '/app/[app].observe.update'
       views:
         | never
       pathParamNames:

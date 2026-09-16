@@ -12,7 +12,7 @@ import { cloudlog } from '../utils/logging.ts'
 import { appIdSchema, deviceIdSchema, hasInvalidQueryLimitInput, hasUnsafeQueryText, hasUnsafeStatsQueryText, MAX_QUERY_LIMIT, queryLimitSchema, safeQueryDateSchema, safeQueryTextSchema, statsActionSchema } from '../utils/privateAnalyticsValidation.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { readDailyUpdateDeviceOutcomes, readStats, readStatsInsights } from '../utils/stats.ts'
-import { getRollingStatsPeriod } from '../utils/statsPeriod.ts'
+import { getCustomStatsPeriod, getRollingStatsPeriod } from '../utils/statsPeriod.ts'
 
 interface DataStats {
   appId: string
@@ -56,9 +56,14 @@ const exportSchema = z.object({
 const statsInsightsSchema = z.object({
   appId: appIdSchema,
   days: z.number().optional(),
+  rangeStart: z.union([safeQueryDateSchema, z.number()]).optional(),
+  rangeEnd: z.union([safeQueryDateSchema, z.number()]).optional(),
   actions: z.array(statsActionSchema).optional(),
   versionName: safeQueryTextSchema.optional(),
-})
+}).refine(
+  body => body.days !== undefined || (body.rangeStart !== undefined && body.rangeEnd !== undefined),
+  { message: 'days or rangeStart and rangeEnd is required' },
+)
 
 /** Org dashboard may send many app ids; cap permission-check fan-out. */
 const MAX_DEVICE_OUTCOMES_APP_IDS = 500
@@ -125,6 +130,8 @@ interface StatsBody {
 interface StatsInsightsBody {
   appId: string
   days?: number
+  rangeStart?: string | number
+  rangeEnd?: string | number
   actions?: string[]
   versionName?: string
 }
@@ -272,18 +279,37 @@ app.post('/insights', middlewareAuth(), async (c) => {
   const body = parsed.data as StatsInsightsBody
   if (hasUnsafeQueryText(body.versionName))
     throw simpleError('invalid_body', 'Invalid body')
-  const days = normalizeStatsInsightsPeriodDays(body.days)
-  if (!days)
-    throw simpleError('invalid_days', 'days must be one of 1, 3, 7, or 30')
-
   const hasAppReadLogsPermission = await checkPermission(c, 'app.read_logs', { appId: body.appId })
   if (!hasAppReadLogsPermission)
     throw simpleError('app_access_denied', 'You can\'t access this app', { app_id: body.appId })
 
-  const period = getStatsInsightsPeriod(days)
   const actions = body.actions?.length ? body.actions : defaultInsightActions
   const versionName = body.versionName?.trim() || undefined
-  cloudlog({ requestId: c.get('requestId'), message: 'post private/stats/insights body', body: { appId: body.appId, days, actionCount: actions.length, versionName } })
+
+  let period: ReturnType<typeof getStatsInsightsPeriod>
+  if (body.rangeStart !== undefined && body.rangeEnd !== undefined) {
+    const startDate = normalizeRangeDate(body.rangeStart)
+    const endDate = normalizeRangeDate(body.rangeEnd)
+    if (!startDate || !endDate)
+      throw simpleError('invalid_body', 'Invalid body')
+    const custom = getCustomStatsPeriod(startDate, endDate)
+    const days = normalizeStatsInsightsPeriodDays(body.days) ?? 1
+    period = {
+      requested_days: days,
+      start: custom.start,
+      end: custom.endInclusive,
+      end_exclusive: custom.endExclusive,
+      labels: custom.labels,
+    }
+    cloudlog({ requestId: c.get('requestId'), message: 'post private/stats/insights body', body: { appId: body.appId, rangeStart: startDate, rangeEnd: endDate, actionCount: actions.length, versionName } })
+  }
+  else {
+    const days = normalizeStatsInsightsPeriodDays(body.days)
+    if (!days)
+      throw simpleError('invalid_days', 'days must be one of 1, 3, 7, or 30')
+    period = getStatsInsightsPeriod(days)
+    cloudlog({ requestId: c.get('requestId'), message: 'post private/stats/insights body', body: { appId: body.appId, days, actionCount: actions.length, versionName } })
+  }
 
   return c.json({
     ...(await readStatsInsights(c, {

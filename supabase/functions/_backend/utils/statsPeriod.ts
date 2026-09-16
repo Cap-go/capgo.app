@@ -25,6 +25,22 @@ export function generateUtcDateLabels(from: Date, to: Date) {
  * 1 day is a rolling 24h window relative to `now`, with two UTC day labels
  * (24h ago and latest). 3/7/30 stay inclusive UTC calendar days through today.
  */
+export function getCustomStatsPeriod(rangeStart: string | Date, rangeEnd: string | Date): RollingStatsPeriod {
+  const start = new Date(rangeStart)
+  const endExclusive = new Date(rangeEnd)
+  if (Number.isNaN(start.getTime()) || Number.isNaN(endExclusive.getTime()) || endExclusive.getTime() <= start.getTime()) {
+    const now = new Date()
+    return getRollingStatsPeriod(1, now)
+  }
+  const endInclusive = new Date(endExclusive.getTime() - 1)
+  return {
+    start: start.toISOString(),
+    endExclusive: endExclusive.toISOString(),
+    endInclusive: endInclusive.toISOString(),
+    labels: generateUtcDateLabels(start, endExclusive),
+  }
+}
+
 export function getRollingStatsPeriod(days: number, now = new Date()): RollingStatsPeriod {
   if (days === 1) {
     const endExclusive = new Date(now)

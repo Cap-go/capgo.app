@@ -235,7 +235,8 @@ const router = createRouter({
     // Legacy app tab URLs after settings/observe revamp
     { path: '/app/:app/info', redirect: redirectAppPath('/settings') },
     { path: '/app/:app/access', redirect: redirectAppPath('/settings/access') },
-    { path: '/app/:app/logs/insights', redirect: redirectAppPath('/observe/updater') },
+    { path: '/app/:app/logs/insights', redirect: redirectAppPath('/observe/failure') },
+    { path: '/app/:app/observe/updater', redirect: redirectAppPath('/observe/update') },
     { path: '/app/:app/logs', redirect: redirectAppPath('/observe/logs') },
     { path: '/app/:app/compatibility', redirect: redirectAppPath('/observe/compatibility') },
     { path: '/app/:app/observe', redirect: redirectAppPath('/observe/native') },
