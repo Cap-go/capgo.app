@@ -24,6 +24,8 @@ import { isInternalVersionName, withBuiltinChannelVersion } from '~/services/ver
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
+import { createChannelRolloutConfirmFlows } from '~/utils/channelRolloutConfirmFlows'
+import { getUpdatePackageDescription as getUpdatePackageDescriptionCopy, getUpdatePackageLabel as getUpdatePackageLabelCopy } from '~/utils/channelUpdatePackageCopy'
 
 interface Channel {
   version: Database['public']['Tables']['app_versions']['Row']
@@ -522,15 +524,9 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
     }
     const previousRolloutVersionId = channel.value.rollout_version
     if (previousRolloutVersionId != null && previousRolloutVersionId !== appVersion.id) {
-      await confirmConsequentialChannelChange({
-        id: 'confirm-set-rollout-target',
-        title: t('confirm-set-rollout-target-title'),
-        description: t('confirm-set-rollout-target-description', {
-          current: rolloutTargetName.value,
-          next: appVersion.name,
-          percent: rolloutPercentageText.value,
-          fallback: stableBundleName.value,
-        }),
+      await getRolloutConfirmFlows().confirmSetRolloutTarget({
+        currentTargetName: rolloutTargetName.value,
+        nextTargetName: appVersion.name,
         onConfirm: applyRolloutTargetLink,
       })
     }
@@ -651,115 +647,16 @@ async function openSelectRolloutVersion() {
   await openSelectVersion()
 }
 
-async function confirmConsequentialChannelChange(options: {
-  id: string
-  title: string
-  description: string
-  confirmRole?: 'primary' | 'secondary' | 'danger' | 'cancel'
-  onConfirm: () => Promise<void>
-}) {
-  let confirmInFlight = false
-  dialogStore.openDialog({
-    id: options.id,
-    title: options.title,
-    description: options.description,
-    preventAccidentalClose: true,
-    buttons: [
-      {
-        text: t('button-cancel'),
-        role: 'cancel',
-      },
-      {
-        text: t('button-confirm'),
-        role: options.confirmRole ?? 'primary',
-        handler: async () => {
-          if (confirmInFlight)
-            return false
-          confirmInFlight = true
-          try {
-            await options.onConfirm()
-          }
-          finally {
-            confirmInFlight = false
-          }
-        },
-      },
-    ],
-  })
-  await dialogStore.onDialogDismiss()
-}
-
 async function enableRollout() {
-  if (!channel.value)
-    return
-  if (!channel.value.rollout_version) {
-    await openSelectRolloutVersion()
-    return
-  }
-  await confirmConsequentialChannelChange({
-    id: 'confirm-enable-rollout',
-    title: t('confirm-enable-rollout-title'),
-    description: t('confirm-enable-rollout-description', {
-      target: rolloutTargetName.value,
-      fallback: stableBundleName.value,
-      percent: rolloutPercentageText.value,
-    }),
-    onConfirm: async () => {
-      await saveChannelChange('rollout_enabled', true as any)
-    },
-  })
+  await getRolloutConfirmFlows().enableRollout()
 }
 
 async function disableRollout() {
-  await confirmConsequentialChannelChange({
-    id: 'confirm-disable-rollout',
-    title: t('confirm-disable-rollout-title'),
-    description: t('confirm-disable-rollout-description', {
-      fallback: stableBundleName.value,
-    }),
-    confirmRole: 'danger',
-    onConfirm: async () => {
-      if (await saveChannelChanges({
-        rollout_enabled: false,
-        rollout_version: null,
-        rollout_paused_at: null,
-        rollout_pause_reason: null,
-      })) {
-        await askUpdateNotificationAfterBundleChange()
-      }
-    },
-  })
-}
-
-function formatRolloutPercentageLabel(percentage: number) {
-  return `${percentage.toLocaleString(undefined, { maximumFractionDigits: 2 })}%`
+  await getRolloutConfirmFlows().disableRollout()
 }
 
 async function applyRolloutPercentage() {
-  const percentage = Number.parseFloat(rolloutPercentageDraft.value)
-  if (Number.isNaN(percentage) || percentage < 0 || percentage > 100) {
-    toast.error(t('invalid-rollout-percentage'))
-    return
-  }
-  const nextBps = Math.round(percentage * 100)
-  const currentBps = channel.value?.rollout_percentage_bps ?? 0
-  if (nextBps === currentBps) {
-    toast.info(t('rollout-percentage-unchanged', { percent: formatRolloutPercentageLabel(percentage) }))
-    return
-  }
-  const currentLabel = formatRolloutPercentageLabel(currentBps / 100)
-  const nextLabel = formatRolloutPercentageLabel(percentage)
-  await confirmConsequentialChannelChange({
-    id: 'confirm-rollout-percentage',
-    title: t('confirm-rollout-percentage-title'),
-    description: t('confirm-rollout-percentage-description', {
-      current: currentLabel,
-      next: nextLabel,
-    }),
-    onConfirm: async () => {
-      await saveChannelChange('rollout_percentage_bps', nextBps as any)
-    },
-  })
+  await getRolloutConfirmFlows().applyRolloutPercentage(rolloutPercentageDraft.value)
 }
 
 async function saveIntegerField(key: EditableChannelKey, value: string, min: number, max: number, nullable = false) {
@@ -793,85 +690,15 @@ async function saveAutoPauseConfidence(value: string) {
 }
 
 async function rollbackRollout() {
-  await confirmConsequentialChannelChange({
-    id: 'confirm-rollback-rollout',
-    title: t('confirm-rollback-rollout-title'),
-    description: t('confirm-rollback-rollout-description', {
-      target: rolloutTargetName.value,
-      fallback: stableBundleName.value,
-    }),
-    confirmRole: 'danger',
-    onConfirm: async () => {
-      if (await saveChannelChanges({
-        rollout_version: null,
-        rollout_enabled: false,
-        rollout_percentage_bps: 0,
-        rollout_paused_at: null,
-        rollout_pause_reason: null,
-      })) {
-        await askUpdateNotificationAfterBundleChange()
-      }
-    },
-  })
+  await getRolloutConfirmFlows().rollbackRollout()
 }
 
 async function promoteRollout() {
-  const promotedVersionId = channel.value?.rollout_version
-  if (!promotedVersionId)
-    return
-  const promotedTargetName = rolloutTargetName.value
-  await confirmConsequentialChannelChange({
-    id: 'confirm-promote-rollout',
-    title: t('confirm-promote-rollout-title'),
-    description: t('confirm-promote-rollout-description', {
-      target: promotedTargetName,
-    }),
-    onConfirm: async () => {
-      if (await saveChannelChanges({
-        version: promotedVersionId,
-        rollout_version: null,
-        rollout_enabled: false,
-        rollout_percentage_bps: 0,
-        rollout_paused_at: null,
-        rollout_pause_reason: null,
-      })) {
-        await askUpdateNotificationAfterBundleChange()
-      }
-    },
-  })
+  await getRolloutConfirmFlows().promoteRollout()
 }
 
 async function toggleRolloutPause() {
-  if (channel.value?.rollout_paused_at) {
-    await confirmConsequentialChannelChange({
-      id: 'confirm-resume-rollout',
-      title: t('confirm-resume-rollout-title'),
-      description: t('confirm-resume-rollout-description', {
-        percent: rolloutPercentageText.value,
-        target: rolloutTargetName.value,
-      }),
-      onConfirm: async () => {
-        await saveChannelChanges({
-          rollout_paused_at: null,
-          rollout_pause_reason: null,
-        })
-      },
-    })
-    return
-  }
-  await confirmConsequentialChannelChange({
-    id: 'confirm-pause-rollout',
-    title: t('confirm-pause-rollout-title'),
-    description: t('confirm-pause-rollout-description', {
-      target: rolloutTargetName.value,
-    }),
-    onConfirm: async () => {
-      await saveChannelChanges({
-        rollout_paused_at: new Date().toISOString(),
-        rollout_pause_reason: t('manual-rollout-pause'),
-      })
-    },
-  })
+  await getRolloutConfirmFlows().toggleRolloutPause()
 }
 
 async function refreshFilteredVersions() {
@@ -929,6 +756,30 @@ function closeUpdatePackageDropdown() {
   }
 }
 
+let rolloutConfirmFlows!: ReturnType<typeof createChannelRolloutConfirmFlows>
+
+function getRolloutConfirmFlows() {
+  return rolloutConfirmFlows
+}
+
+rolloutConfirmFlows = createChannelRolloutConfirmFlows({
+  dialogStore,
+  t,
+  toast,
+  canUpdateChannelSettings: () => canUpdateChannelSettings.value,
+  closeUpdatePackageDropdown,
+  getChannel: () => channel.value,
+  rolloutTargetName: () => rolloutTargetName.value,
+  stableBundleName: () => stableBundleName.value,
+  rolloutPercentageText: () => rolloutPercentageText.value,
+  saveChannelChange: async (key, value) => {
+    await saveChannelChange(key as EditableChannelKey, value as any)
+  },
+  saveChannelChanges,
+  askUpdateNotificationAfterBundleChange,
+  openSelectRolloutVersion,
+})
+
 function getAutoUpdateLabel(value: string) {
   switch (value) {
     case 'major':
@@ -984,56 +835,15 @@ const updatePackageOptions = [
 ] as const satisfies Database['public']['Enums']['channel_update_package'][]
 
 function getUpdatePackageLabel(value?: Database['public']['Enums']['channel_update_package'] | null) {
-  switch (value) {
-    case 'zip':
-      return t('update-package-zip')
-    case 'delta':
-      return t('update-package-delta')
-    case 'zip_from_builtin':
-      return t('update-package-zip-from-builtin')
-    case 'delta_from_builtin':
-      return t('update-package-delta-from-builtin')
-    default:
-      return t('update-package-all')
-  }
+  return getUpdatePackageLabelCopy(t, value)
 }
 
 function getUpdatePackageDescription(value: Database['public']['Enums']['channel_update_package']) {
-  switch (value) {
-    case 'zip':
-      return t('update-package-zip-description')
-    case 'delta':
-      return t('update-package-delta-description')
-    case 'zip_from_builtin':
-      return t('update-package-zip-from-builtin-description')
-    case 'delta_from_builtin':
-      return t('update-package-delta-from-builtin-description')
-    default:
-      return t('update-package-all-description')
-  }
+  return getUpdatePackageDescriptionCopy(t, value)
 }
 
 async function onSelectUpdatePackage(value: Database['public']['Enums']['channel_update_package']) {
-  if (!canUpdateChannelSettings.value) {
-    toast.error(t('no-permission'))
-    return false
-  }
-
-  closeUpdatePackageDropdown()
-  if (value === channel.value?.update_package)
-    return
-
-  await confirmConsequentialChannelChange({
-    id: 'confirm-update-package',
-    title: t('confirm-update-package-title'),
-    description: t('confirm-update-package-description', {
-      current: getUpdatePackageLabel(channel.value?.update_package),
-      next: getUpdatePackageLabel(value),
-    }),
-    onConfirm: async () => {
-      await saveChannelChange('update_package', value)
-    },
-  })
+  await getRolloutConfirmFlows().onSelectUpdatePackage(value)
 }
 
 function openLink(url?: string): void {
@@ -1225,8 +1035,8 @@ async function copyCurlCommand() {
               <div class="flex items-center gap-3">
                 <span class="text-base leading-5 cursor-pointer" @click="openBundle()">{{ channel.version.name }}</span>
                 <button
-                  type="button"
                   v-if="channel"
+                  type="button"
                   class="relative p-0 d-btn d-btn-outline size-6 min-h-6 before:absolute before:-inset-2.5 before:content-['']"
                   :aria-label="t('select-stable-bundle')"
                   :disabled="!canPromoteBundle"
