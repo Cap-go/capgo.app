@@ -77,9 +77,27 @@ export function extractLogOriginalMessage(metadata: LogMetadata): string | null 
   return null
 }
 
+export type LogActionLabelMode = 'name' | 'key'
+
 /** Show canonical stats_action under the friendly label when they differ. */
 export function shouldShowLogActionCode(action: string, translatedLabel: string): boolean {
   return translatedLabel !== action
+}
+
+export function resolveLogActionPrimaryLabel(
+  action: string,
+  translatedLabel: string,
+  mode: LogActionLabelMode,
+): string {
+  return mode === 'key' ? action : translatedLabel
+}
+
+export function shouldShowLogActionCodeLine(
+  action: string,
+  translatedLabel: string,
+  mode: LogActionLabelMode,
+): boolean {
+  return mode === 'name' && shouldShowLogActionCode(action, translatedLabel)
 }
 
 export function formatLogActionLinkTitle(

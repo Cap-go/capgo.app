@@ -246,5 +246,10 @@ test.describe('Observe sections', () => {
       `WebView JavaScript error\nwebview_javascript_error\n${originalError}`,
     )
     await expect(row.locator('[data-test="log-row-metadata"]')).toHaveCount(1)
+
+    await page.locator('[data-test="log-action-label-mode-key"]').click()
+    await expect(row.locator('[data-test="log-row-action"]')).toHaveText('webview_javascript_error')
+    await expect(row.locator('[data-test="log-row-action-code"]')).toHaveCount(0)
+    await expect(row.locator('[data-test="log-row-original-error"]')).toHaveText(originalError)
   })
 })

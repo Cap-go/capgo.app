@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractLogOriginalMessage, formatLogActionLinkTitle, logRowDisplayMetadata, parseLogVersionName, shouldShowLogActionCode, type LogMetadata } from '~/services/logTableDisplay'
+import { extractLogOriginalMessage, formatLogActionLinkTitle, logRowDisplayMetadata, parseLogVersionName, resolveLogActionPrimaryLabel, shouldShowLogActionCode, shouldShowLogActionCodeLine, type LogMetadata } from '~/services/logTableDisplay'
 
 describe('parseLogVersionName', () => {
   it.concurrent('keeps a plain version unchanged', () => {
@@ -80,6 +80,23 @@ describe('shouldShowLogActionCode', () => {
 
   it.concurrent('hides duplicate code when label equals action', () => {
     expect(shouldShowLogActionCode('notify_app_ready', 'notify_app_ready')).toBe(false)
+  })
+})
+
+describe('resolveLogActionPrimaryLabel', () => {
+  it.concurrent('uses friendly name in name mode', () => {
+    expect(resolveLogActionPrimaryLabel('webview_javascript_error', 'WebView JavaScript error', 'name')).toBe('WebView JavaScript error')
+  })
+
+  it.concurrent('uses canonical key in key mode', () => {
+    expect(resolveLogActionPrimaryLabel('webview_javascript_error', 'WebView JavaScript error', 'key')).toBe('webview_javascript_error')
+  })
+})
+
+describe('shouldShowLogActionCodeLine', () => {
+  it.concurrent('shows secondary code line only in name mode when translated', () => {
+    expect(shouldShowLogActionCodeLine('webview_javascript_error', 'WebView JavaScript error', 'name')).toBe(true)
+    expect(shouldShowLogActionCodeLine('webview_javascript_error', 'WebView JavaScript error', 'key')).toBe(false)
   })
 })
 

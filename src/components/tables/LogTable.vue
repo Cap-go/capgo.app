@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
-import { useDebounceFn } from '@vueuse/core'
+import { useDebounceFn, useStorage } from '@vueuse/core'
 import { computed, h, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -10,7 +10,7 @@ import LogMetadataPopover from '~/components/tables/LogMetadataPopover.vue'
 import { formatDate } from '~/services/date'
 import { getDateRangeForPreset, getTimeWindowPageRange, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
 import { getLogDocUrl } from '~/services/logDocLinks'
-import { extractLogOriginalMessage, formatLogActionLinkTitle, logRowDisplayMetadata, parseLogVersionName, shouldShowLogActionCode } from '~/services/logTableDisplay'
+import { extractLogOriginalMessage, formatLogActionLinkTitle, logRowDisplayMetadata, parseLogVersionName, resolveLogActionPrimaryLabel, shouldShowLogActionCodeLine, type LogActionLabelMode } from '~/services/logTableDisplay'
 import { actionToFilter, createActionFilterState, failureActionFilterKeys, filterToAction, observeActionFilterKeys, updateActionFilterKeys } from '~/services/statsActions'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
@@ -42,6 +42,7 @@ const router = useRouter()
 const route = useRoute()
 const { t } = useI18n()
 const supabase = useSupabase()
+const actionLabelMode = useStorage<LogActionLabelMode>('capgo-log-action-label-mode', 'name')
 const search = ref('')
 const elements = ref<Element[]>([])
 const isLoading = ref(false)
@@ -309,11 +310,13 @@ columns.value = [
     sortable: true,
     head: true,
     renderFunction: (elem: Element) => {
+      const mode = actionLabelMode.value
       const actionLabel = formatAction(elem)
+      const primaryLabel = resolveLogActionPrimaryLabel(elem.action, actionLabel, mode)
       const metadata = logRowDisplayMetadata(elem.version_name, elem.metadata)
       const originalMessage = extractLogOriginalMessage(elem.metadata)
       const linkTitle = formatLogActionLinkTitle(elem.action, actionLabel, elem.metadata)
-      const showActionCode = shouldShowLogActionCode(elem.action, actionLabel)
+      const showActionCode = shouldShowLogActionCodeLine(elem.action, actionLabel, mode)
       const secondaryLines = [
         showActionCode
           ? h('span', {
@@ -337,9 +340,11 @@ columns.value = [
             'target': '_blank',
             'rel': 'noopener noreferrer',
             'title': linkTitle,
-            'class': 'min-w-0 truncate font-medium hover:underline',
+            'class': mode === 'key'
+              ? 'min-w-0 truncate font-mono text-sm font-medium hover:underline'
+              : 'min-w-0 truncate font-medium hover:underline',
             'data-test': 'log-row-action',
-          }, actionLabel),
+          }, primaryLabel),
           metadata
             ? h(LogMetadataPopover, { json: JSON.stringify(metadata, null, 2) })
             : null,
@@ -441,6 +446,38 @@ watch(range, async () => {
       :app-id="props.appId ?? ''"
       :search-placeholder="deviceId ? t('search-by-device-id-0') : t('search-by-device-id-')"
       @reload="loadOlder()" @reset="refreshData()" @export="exportCsv()"
-    />
+    >
+      <template #toolbar-extra>
+        <fieldset class="mr-2 flex h-10 items-center rounded-md border border-gray-300 bg-white p-0.5 dark:border-gray-600 dark:bg-gray-800">
+          <legend class="sr-only">
+            {{ t('logs-action-label-mode') }}
+          </legend>
+          <button
+            type="button"
+            class="d-btn d-btn-sm h-9 min-h-9 border-0 px-2.5 text-xs font-semibold shadow-none"
+            :class="actionLabelMode === 'name'
+              ? 'bg-azure-500 text-white hover:bg-azure-600'
+              : 'bg-transparent text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'"
+            :aria-pressed="actionLabelMode === 'name'"
+            data-test="log-action-label-mode-name"
+            @click="actionLabelMode = 'name'"
+          >
+            {{ t('logs-action-label-mode-name') }}
+          </button>
+          <button
+            type="button"
+            class="d-btn d-btn-sm h-9 min-h-9 border-0 px-2.5 text-xs font-semibold shadow-none"
+            :class="actionLabelMode === 'key'
+              ? 'bg-azure-500 text-white hover:bg-azure-600'
+              : 'bg-transparent text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'"
+            :aria-pressed="actionLabelMode === 'key'"
+            data-test="log-action-label-mode-key"
+            @click="actionLabelMode = 'key'"
+          >
+            {{ t('logs-action-label-mode-key') }}
+          </button>
+        </fieldset>
+      </template>
+    </TableLog>
   </div>
 </template>
