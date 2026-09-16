@@ -12,10 +12,10 @@ export const ADMIN_AB_TEST_DEVELOPMENT_ENVIRONMENT_OUTCOMES = [
 
 export type AdminABTestDevelopmentEnvironmentOutcomeName = typeof ADMIN_AB_TEST_DEVELOPMENT_ENVIRONMENT_OUTCOMES[number]
 
-const HOSTED_BUILDER_INTENTS = ['publish', 'builder', 'ota', 'both', 'exploring', 'no_selection_yet'] as const
+const DEVELOPMENT_ENVIRONMENT_INTENTS = ['publish', 'builder', 'ota', 'both', 'exploring', 'no_selection_yet'] as const
 
-interface AdminABTestHostedBuilderIntent {
-  outcomes: { outcome: typeof HOSTED_BUILDER_INTENTS[number], count: number }[]
+interface AdminABTestDevelopmentEnvironmentIntent {
+  outcomes: { outcome: typeof DEVELOPMENT_ENVIRONMENT_INTENTS[number], count: number }[]
   total: number
 }
 
@@ -66,28 +66,31 @@ export function buildAdminABTestDevelopmentEnvironment(rows: AdminABTestDevelopm
   }
 }
 
-function buildHostedBuilderIntents(rows: AdminABTestDevelopmentEnvironmentRow[]): AdminABTestHostedBuilderIntent {
-  const counts = new Map<typeof HOSTED_BUILDER_INTENTS[number], number>()
+function buildEnvironmentIntents(rows: AdminABTestDevelopmentEnvironmentRow[], environment: AdminABTestDevelopmentEnvironmentOutcomeName): AdminABTestDevelopmentEnvironmentIntent {
+  const counts = new Map<typeof DEVELOPMENT_ENVIRONMENT_INTENTS[number], number>()
   let total = 0
   for (const row of rows) {
-    if (row.outcome !== 'hosted_builder')
+    if (row.outcome !== environment)
       continue
-    if (!(HOSTED_BUILDER_INTENTS as readonly unknown[]).includes(row.intent))
-      throw new Error('Invalid hosted builder intent')
-    const intent = row.intent as typeof HOSTED_BUILDER_INTENTS[number]
+    if (!(DEVELOPMENT_ENVIRONMENT_INTENTS as readonly unknown[]).includes(row.intent))
+      throw new Error('Invalid development environment intent')
+    const intent = row.intent as typeof DEVELOPMENT_ENVIRONMENT_INTENTS[number]
     const count = readCount(row.people)
     total += count
     if (!Number.isSafeInteger(total))
-      throw new Error('Hosted builder intent total exceeds safe integer range')
+      throw new Error('Development environment intent total exceeds safe integer range')
     counts.set(intent, (counts.get(intent) ?? 0) + count)
   }
   return {
     total,
-    outcomes: HOSTED_BUILDER_INTENTS.map(outcome => ({ outcome, count: counts.get(outcome) ?? 0 })),
+    outcomes: DEVELOPMENT_ENVIRONMENT_INTENTS.map(outcome => ({ outcome, count: counts.get(outcome) ?? 0 })),
   }
 }
 
-export async function getAdminABTestDevelopmentEnvironment(c: Context): Promise<AdminABTestDevelopmentEnvironment & { hosted_builder_intents: AdminABTestHostedBuilderIntent }> {
+export async function getAdminABTestDevelopmentEnvironment(c: Context): Promise<AdminABTestDevelopmentEnvironment & {
+  hosted_builder_intents: AdminABTestDevelopmentEnvironmentIntent
+  development_environment_intents: Record<AdminABTestDevelopmentEnvironmentOutcomeName, AdminABTestDevelopmentEnvironmentIntent>
+}> {
   const pgClient = getPgClient(c, true)
   try {
     const test = AB_TESTS_CONFIG[DEVELOPMENT_ENVIRONMENT_TEST]
@@ -95,7 +98,8 @@ export async function getAdminABTestDevelopmentEnvironment(c: Context): Promise<
       throw new Error(`Missing A/B test configuration for ${DEVELOPMENT_ENVIRONMENT_TEST}`)
 
     // Assignment cohort, not question exposure: later onboarding versions retain C.
-    // The indexed JSON containment predicate keeps one record per user; no org inference.
+    // One indexed replica scan serves both charts, with at most 5 x 6 grouped rows.
+    // Each user contributes once; switching groups needs no additional database query.
     const result = await pgClient.query<AdminABTestDevelopmentEnvironmentRow>(
       `SELECT
          CASE
@@ -115,12 +119,14 @@ export async function getAdminABTestDevelopmentEnvironment(c: Context): Promise<
       [
         JSON.stringify({ [DEVELOPMENT_ENVIRONMENT_TEST]: { branch: test.treatment_branch } }),
         DEVELOPMENT_ENVIRONMENTS,
-        HOSTED_BUILDER_INTENTS.filter(intent => intent !== 'no_selection_yet'),
+        DEVELOPMENT_ENVIRONMENT_INTENTS.filter(intent => intent !== 'no_selection_yet'),
       ],
     )
+    const intents = Object.fromEntries(ADMIN_AB_TEST_DEVELOPMENT_ENVIRONMENT_OUTCOMES.map(environment => [environment, buildEnvironmentIntents(result.rows, environment)])) as Record<AdminABTestDevelopmentEnvironmentOutcomeName, AdminABTestDevelopmentEnvironmentIntent>
     return {
       ...buildAdminABTestDevelopmentEnvironment(result.rows),
-      hosted_builder_intents: buildHostedBuilderIntents(result.rows),
+      hosted_builder_intents: intents.hosted_builder,
+      development_environment_intents: intents,
     }
   }
   finally {
