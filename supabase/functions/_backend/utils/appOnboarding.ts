@@ -103,7 +103,11 @@ export function defaultAppOnboarding(): AppOnboardingState {
 }
 
 export function getAppOnboardingStepIds(todoListVersion: number): readonly AppOnboardingStepId[] {
-  return todoListVersion === 3 ? APP_ONBOARDING_V3_STEP_IDS : todoListVersion === 1 ? APP_ONBOARDING_V1_STEP_IDS : APP_ONBOARDING_V2_STEP_IDS
+  if (todoListVersion === 3)
+    return APP_ONBOARDING_V3_STEP_IDS
+  if (todoListVersion === 1)
+    return APP_ONBOARDING_V1_STEP_IDS
+  return APP_ONBOARDING_V2_STEP_IDS
 }
 
 export function isAppOnboardingSource(value: unknown): value is AppOnboardingSource {

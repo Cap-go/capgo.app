@@ -56,7 +56,13 @@ const isSelectedCurrent = computed(() => selectedStep.value.id === currentStep.v
 const isFirstStep = computed(() => selectedStep.value.index === 0)
 const guideHref = computed(() => APP_ONBOARDING_STEP_GUIDES[selectedStep.value.id])
 const guideLabel = computed(() => isFirstStep.value ? t('setup-checklist-manual-guide') : t('setup-checklist-task-guide', { task: selectedStep.value.title }))
-const waitingMessageKey = computed(() => isFirstStep.value ? 'setup-checklist-waiting-start' : ['add_channel', 'run_device', 'upload_bundle', 'test_update'].includes(selectedStep.value.id) ? `setup-checklist-waiting-${selectedStep.value.id}` : 'setup-checklist-waiting-step')
+const waitingMessageKey = computed(() => {
+  if (isFirstStep.value)
+    return 'setup-checklist-waiting-start'
+  if (['add_channel', 'run_device', 'upload_bundle', 'test_update'].includes(selectedStep.value.id))
+    return `setup-checklist-waiting-${selectedStep.value.id}`
+  return 'setup-checklist-waiting-step'
+})
 const completed = computed(() => onboarding.value.outcome === 'completed')
 const checklistOpen = ref(false)
 const channelFlowOpen = ref(false)
@@ -85,7 +91,11 @@ function selectStep(id: string) {
 }
 
 function statusLabel(status: string | undefined) {
-  return t(status === 'done' ? 'app-onboarding-cli-step-done' : status === 'skipped' ? 'app-onboarding-cli-step-skipped' : 'app-onboarding-cli-step-pending')
+  if (status === 'done')
+    return t('app-onboarding-cli-step-done')
+  if (status === 'skipped')
+    return t('app-onboarding-cli-step-skipped')
+  return t('app-onboarding-cli-step-pending')
 }
 </script>
 
@@ -208,9 +218,9 @@ function statusLabel(status: string | undefined) {
               <code class="block whitespace-pre-wrap break-all text-sm leading-6 text-sky-200">{{ command }}</code>
               <IconCopy class="absolute right-4 top-5 h-5 w-5 text-slate-400 group-hover:text-white" aria-hidden="true" />
             </button>
-            <div v-else class="mt-5 rounded-2xl bg-slate-950 p-5 text-sm text-slate-300" role="status">
+            <output v-else class="mt-5 block rounded-2xl bg-slate-950 p-5 text-sm text-slate-300">
               {{ t('app-onboarding-command-apikey-loading') }}
-            </div>
+            </output>
             <div class="mt-5 grid gap-3 sm:grid-cols-2" data-test="setup-checklist-start-actions">
               <button type="button" class="d-btn h-auto min-h-14 border-primary-500 bg-primary-500 px-3 py-3 text-base text-white hover:border-primary-600 hover:bg-primary-600 focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2" data-test="setup-checklist-copy-command" :disabled="!command" @click="emit('copyCommand')">
                 <IconCopy class="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -240,21 +250,21 @@ function statusLabel(status: string | undefined) {
             {{ t(selectedStep.id === 'add_channel' ? 'setup-checklist-channel-detection' : 'setup-checklist-follow-terminal') }}
           </p>
 
-          <div class="mt-7 border-t border-slate-200 py-5 dark:border-white/15" role="status" aria-live="polite" aria-atomic="true">
-            <p class="flex items-start gap-3 text-sm font-medium text-slate-800 dark:text-slate-200">
+          <output class="mt-7 block border-t border-slate-200 py-5 dark:border-white/15" aria-live="polite" aria-atomic="true">
+            <span class="flex items-start gap-3 text-sm font-medium text-slate-800 dark:text-slate-200">
               <IconInfo v-if="refreshError" class="mt-0.5 h-5 w-5 shrink-0 text-amber-600" aria-hidden="true" />
               <IconCheck v-else-if="selectedStep.status === 'done'" class="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" aria-hidden="true" />
               <IconMinus v-else-if="selectedStep.status === 'skipped'" class="mt-0.5 h-5 w-5 shrink-0 text-amber-600" aria-hidden="true" />
               <IconLoader v-else class="mt-0.5 h-5 w-5 shrink-0 text-slate-400 motion-safe:animate-spin" aria-hidden="true" />
               <span>{{ refreshError ? t('setup-checklist-refresh-error') : selectedStep.status ? statusLabel(selectedStep.status) : isSelectedCurrent || selectedStep.id === 'add_channel' ? t(waitingMessageKey) : t('setup-checklist-future-task') }}</span>
-            </p>
-            <p class="mt-2 pl-8 text-sm leading-6 text-slate-500 dark:text-slate-400">
+            </span>
+            <span class="mt-2 block pl-8 text-sm leading-6 text-slate-500 dark:text-slate-400">
               {{ t('setup-checklist-auto-progress') }}
-            </p>
+            </span>
             <button v-if="refreshError" type="button" class="d-btn d-btn-ghost mt-2 min-h-11 text-sky-700 dark:text-azure-300" @click="refreshOnboarding">
               {{ t('setup-checklist-retry') }}
             </button>
-          </div>
+          </output>
 
           <button v-if="!isSelectedCurrent && currentStep" type="button" class="d-btn d-btn-ghost mt-4 min-h-11 self-start text-sky-700 dark:text-azure-300" @click="selectStep(currentStep.id)">
             {{ t('setup-checklist-return-current') }}

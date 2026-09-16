@@ -20,6 +20,32 @@ import { backgroundTask } from '../utils/utils.ts'
 
 const bodySchema = z.object({ appId: appIdSchema, N: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), initial: z.boolean().optional() })
 type Observations = Partial<Record<'add_channel' | 'run_device' | 'upload_bundle' | 'test_update', boolean>>
+type AuthenticatedClient = ReturnType<typeof supabaseWithAuth>
+
+async function hasPublishedBundle(client: AuthenticatedClient, appId: string) {
+  // A version/r2_path can exist before its upload. Require final manifest,
+  // a registered external bundle, or positive archive metadata instead.
+  const delta = await client.from('app_versions').select('id').eq('app_id', appId).eq('deleted', false).not('name', 'in', '(builtin,unknown)').neq('storage_provider', 'revert_to_builtin').or('manifest_count.gt.0,external_url.neq.').limit(1)
+  if (delta.error)
+    throw delta.error
+  if (delta.data?.length)
+    return true
+  const archive = await client.from('app_versions').select('id,app_versions_meta!inner(size)').eq('app_id', appId).eq('deleted', false).not('name', 'in', '(builtin,unknown)').neq('storage_provider', 'revert_to_builtin').gt('app_versions_meta.size', 0).limit(1)
+  if (archive.error)
+    throw archive.error
+  return !!archive.data?.length
+}
+
+async function hasAppliedBundle(c: Context<MiddlewareKeyVariables>, client: AuthenticatedClient, appId: string, createdAt: string | null) {
+  const logs = await readStats(c, { app_id: appId, actions: ['set'], start_date: createdAt ?? undefined, limit: 10 }, false)
+  const names = [...new Set(logs.filter(log => log.action === 'set' && log.device_id && log.version_name && !['builtin', 'unknown'].includes(log.version_name)).map(log => log.version_name!))]
+  if (!names.length)
+    return false
+  const versions = await client.from('app_versions').select('id').eq('app_id', appId).in('name', names).neq('storage_provider', 'revert_to_builtin').limit(1)
+  if (versions.error)
+    throw versions.error
+  return !!versions.data?.length
+}
 
 // Evidence is gathered outside the lock; merge only the observed milestones into
 // the current row, so a concurrent CLI report cannot be overwritten.
@@ -117,32 +143,10 @@ app.post('/', middlewareAuth(), async (c) => {
       })
     }
     if (due(2) && current.steps.upload_bundle?.status !== 'done') {
-      await check('upload_bundle', 'app.read', async () => {
-        // A version/r2_path can exist before its upload. Require final manifest,
-        // a registered external bundle, or positive archive metadata instead.
-        const base = () => client.from('app_versions').select('id').eq('app_id', appId).eq('deleted', false).not('name', 'in', '(builtin,unknown)').neq('storage_provider', 'revert_to_builtin')
-        const delta = await base().or('manifest_count.gt.0,external_url.neq.').limit(1)
-        if (delta.error)
-          throw delta.error
-        if (delta.data?.length)
-          return true
-        const archive = await client.from('app_versions').select('id,app_versions_meta!inner(size)').eq('app_id', appId).eq('deleted', false).not('name', 'in', '(builtin,unknown)').neq('storage_provider', 'revert_to_builtin').gt('app_versions_meta.size', 0).limit(1)
-        if (archive.error)
-          throw archive.error
-        return !!archive.data?.length
-      })
+      await check('upload_bundle', 'app.read', () => hasPublishedBundle(client, appId))
     }
     if (due(3) && current.steps.test_update?.status !== 'done') {
-      await check('test_update', 'app.read_logs', async () => {
-        const logs = await readStats(c, { app_id: appId, actions: ['set'], start_date: row.created_at ?? undefined, limit: 10 }, false)
-        const names = [...new Set(logs.filter(log => log.action === 'set' && log.device_id && log.version_name && !['builtin', 'unknown'].includes(log.version_name)).map(log => log.version_name!))]
-        if (!names.length)
-          return false
-        const versions = await client.from('app_versions').select('id').eq('app_id', appId).in('name', names).neq('storage_provider', 'revert_to_builtin').limit(1)
-        if (versions.error)
-          throw versions.error
-        return !!versions.data?.length
-      })
+      await check('test_update', 'app.read_logs', () => hasAppliedBundle(c, client, appId, row.created_at))
     }
   }
   const onboarding = current.todo_list_version === 3 && Object.keys(observations).length
