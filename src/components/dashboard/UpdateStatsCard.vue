@@ -1,9 +1,11 @@
 <script setup lang="ts">
+import { onClickOutside } from '@vueuse/core'
 import colors from 'tailwindcss/colors'
 import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ArrowDownOnSquareIcon from '~icons/heroicons/arrow-down-on-square'
 import GlobeAltIcon from '~icons/heroicons/globe-alt'
+import IconInformationCircle from '~icons/heroicons/information-circle'
 import XCircleIcon from '~icons/heroicons/x-circle'
 import UpdateStatsChart from '~/components/dashboard/UpdateStatsChart.vue'
 import { addUtcDays, formatUtcDateParam, normalizeToUtcStartOfDay } from '~/services/date'
@@ -42,6 +44,23 @@ const props = defineProps({
 // Removed filterToBillingPeriod - no longer needed as we work with correct date range from the start
 
 const { t } = useI18n()
+const devicesFailedHelpOpen = ref(false)
+const devicesFailedHelpRef = ref<HTMLElement | null>(null)
+const devicesFailedHelpTriggerId = useId()
+const devicesFailedHelpPanelId = `${devicesFailedHelpTriggerId}-panel`
+
+onClickOutside(devicesFailedHelpRef, () => {
+  devicesFailedHelpOpen.value = false
+})
+
+function toggleDevicesFailedHelp() {
+  devicesFailedHelpOpen.value = !devicesFailedHelpOpen.value
+}
+
+function closeDevicesFailedHelp() {
+  devicesFailedHelpOpen.value = false
+}
+
 const organizationStore = useOrganizationStore()
 const effectiveOrganization = computed(() => {
   if (props.appId)
@@ -443,13 +462,40 @@ onMounted(async () => {
   >
     <template #header>
       <div class="flex flex-col gap-2 justify-between items-start">
-        <div class="flex-1 min-w-0">
+        <div class="flex flex-1 gap-1.5 items-center min-w-0">
           <h2 class="text-2xl font-semibold leading-tight dark:text-white text text-slate-600">
             {{ t('update_statistics') }}
           </h2>
-          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            {{ t('update-stats-devices-failed-help') }}
-          </p>
+          <div
+            ref="devicesFailedHelpRef"
+            class="relative inline-flex shrink-0"
+            data-test="update-stats-devices-failed-help"
+          >
+            <button
+              :id="devicesFailedHelpTriggerId"
+              type="button"
+              class="inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+              :aria-label="t('update-stats-devices-failed-help-aria')"
+              :aria-expanded="devicesFailedHelpOpen"
+              :aria-controls="devicesFailedHelpPanelId"
+              aria-haspopup="dialog"
+              @click.stop="toggleDevicesFailedHelp"
+              @keydown.escape="closeDevicesFailedHelp"
+            >
+              <IconInformationCircle class="h-4 w-4" aria-hidden="true" />
+            </button>
+            <dialog
+              v-if="devicesFailedHelpOpen"
+              :id="devicesFailedHelpPanelId"
+              class="absolute left-0 z-30 m-0 mt-1 w-[min(18rem,calc(100vw-2rem))] max-w-none translate-none rounded-md border border-slate-200 bg-white p-3 text-left text-xs leading-5 text-slate-600 shadow-lg open:flex open:flex-col dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+              open
+              :aria-label="t('update-stats-devices-failed-help-aria')"
+              @keydown.escape="closeDevicesFailedHelp"
+              @click.stop
+            >
+              {{ t('update-stats-devices-failed-help') }}
+            </dialog>
+          </div>
         </div>
         <div class="flex flex-wrap gap-2 items-center text-xs sm:gap-3 sm:text-sm">
           <div class="flex gap-2 items-center">
