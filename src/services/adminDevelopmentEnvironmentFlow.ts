@@ -11,7 +11,7 @@ export interface DevelopmentEnvironmentFlowGroup {
 export interface AdminDevelopmentEnvironmentFlow {
   generated_at: string
   period: { start: string, end: string }
-  data_quality: { configured: boolean, connected: boolean, failure_reason: string | null }
+  data_quality: { configured: boolean, connected: boolean, failure_reason: string | null, excluded_question_views: number }
   reached: number | null
   groups: DevelopmentEnvironmentFlowGroup[] | null
 }
@@ -30,6 +30,7 @@ export function parseAdminDevelopmentEnvironmentFlow(value: unknown): AdminDevel
     || !Number.isFinite(Date.parse(value.period.start)) || !Number.isFinite(Date.parse(value.period.end))
     || Date.parse(value.period.end) <= Date.parse(value.period.start)
     || !record(value.data_quality) || typeof value.data_quality.configured !== 'boolean' || typeof value.data_quality.connected !== 'boolean'
+    || !count(value.data_quality.excluded_question_views)
     || (value.data_quality.failure_reason !== null && !['too_large', 'unconfigured', 'timeout', 'unavailable', 'invalid_data'].includes(value.data_quality.failure_reason as string))) {
     return null
   }

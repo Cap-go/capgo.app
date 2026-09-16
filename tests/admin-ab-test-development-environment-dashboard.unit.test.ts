@@ -57,7 +57,7 @@ function mount(component: Component, props = {}) {
 
 function stats(category: string) {
   if (category === 'ab_test_development_environment_flow')
-    return { generated_at: '2026-09-16T00:00:00.000Z', period: { start: '2026-09-01T00:00:00.000Z', end: '2026-09-16T00:00:00.000Z' }, data_quality: { configured: true, connected: true, failure_reason: null }, reached: 0, groups: ['answered', 'skipped', 'no_answer'].map(answer => ({ answer, people: 0, continued: 0, did_not_continue: 0 })) }
+    return { generated_at: '2026-09-16T00:00:00.000Z', period: { start: '2026-09-01T00:00:00.000Z', end: '2026-09-16T00:00:00.000Z' }, data_quality: { configured: true, connected: true, failure_reason: null, excluded_question_views: 0 }, reached: 0, groups: ['answered', 'skipped', 'no_answer'].map(answer => ({ answer, people: 0, continued: 0, did_not_continue: 0 })) }
   if (category === 'ab_test_distribution')
     return []
   if (category === 'ab_test_publish_intent_outcome')
@@ -134,7 +134,7 @@ describe('actual A/B dashboard page wiring', () => {
     await vi.waitFor(() => expect(container.querySelectorAll('h2')).toHaveLength(4))
     expect(mocks.fetchStats).toHaveBeenCalledWith('ab_test_development_environment_flow', false)
     const card = [...container.querySelectorAll('section')].find(section => section.querySelector('h2')?.textContent === 'App-building question flow')!
-    expect(card.textContent).toContain('No recorded question views')
+    expect(card.textContent).toContain('No question views with complete tracking')
     card.querySelector<HTMLButtonElement>('button')?.click()
     await vi.waitFor(() => expect(mocks.fetchStats).toHaveBeenCalledWith('ab_test_development_environment_flow', true))
     expect(mocks.fetchStats.mock.calls.filter(([category]) => category !== 'ab_test_development_environment_flow')).toHaveLength(4)

@@ -22,7 +22,7 @@ export function buildDevelopmentEnvironmentFlow(attempts: DevelopmentEnvironment
   const people = new Map<string, { reachedMs: number, continuedMs: number | null, answer: DevelopmentEnvironmentFlowAnswer }>()
   for (const attempt of attempts) {
     if (!attempt.personId.trim() || !attempt.attemptId.trim())
-      throw new Error('Missing question flow identity')
+      continue
     const events = [...attempt.events].sort((a, b) => a.timestampMs - b.timestampMs
       || Number(b.event === 'onboarding_step_completed') - Number(a.event === 'onboarding_step_completed'))
     const reached = events.find(event => event.event === 'onboarding_step_viewed' && event.step === QUESTION)

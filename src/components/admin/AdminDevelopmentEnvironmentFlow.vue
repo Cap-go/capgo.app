@@ -94,6 +94,9 @@ const period = computed(() => props.analytics
       <AdminOnboardingJourneyGraph v-else :config="graph" />
     </div>
     <footer class="space-y-1 border-t border-slate-200 px-6 py-4 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
+      <p v-if="analytics && !analytics.data_quality.failure_reason && analytics.data_quality.excluded_question_views > 0" class="font-medium text-amber-700 dark:text-amber-300">
+        {{ t('admin-ab-question-flow-excluded-note', { count: formatNumberValue(analytics.data_quality.excluded_question_views) }) }}
+      </p>
       <p>{{ t('admin-ab-question-flow-counting-note') }}</p>
       <p>{{ t('admin-ab-question-flow-continuation-note') }}</p>
     </footer>

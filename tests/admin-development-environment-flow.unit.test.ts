@@ -60,7 +60,7 @@ describe('question exposure flow', () => {
 
   it.concurrent('uses the decision at continuation and ignores selections made on later visits', () => {
     expect(buildDevelopmentEnvironmentFlow([attempt('person', [viewed(), selected(), completed('skipped'), selected(400)])]).groups[1].people).toBe(1)
-    expect(() => buildDevelopmentEnvironmentFlow([attempt('', [viewed()])])).toThrow('identity')
+    expect(buildDevelopmentEnvironmentFlow([attempt('', [viewed()]), attempt('valid')]).reached).toBe(1)
   })
 })
 
@@ -106,6 +106,17 @@ describe('question flow reporting', () => {
     expect((await getAdminDevelopmentEnvironmentFlow({} as never, start, end)).reached).toBe(0)
   })
 
+  it('keeps valid people visible and reports question views excluded for missing identity', async () => {
+    queryMock.mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [
+      { person_id: 'legacy-person', attempt_id: '', events: [['onboarding_step_viewed', question, 100, '']], total_events: 4, total_attempts: 3 },
+      { person_id: '', attempt_id: 'missing-person', events: [['onboarding_step_viewed', question, 100, '']], total_events: 4, total_attempts: 3 },
+      { person_id: 'valid-person', attempt_id: 'valid-attempt', events: [['onboarding_step_viewed', question, 100, ''], ['onboarding_step_completed', question, 200, 'skipped']], total_events: 4, total_attempts: 3 },
+    ] })
+    const result = await getAdminDevelopmentEnvironmentFlow({} as never, start, end)
+    expect(result).toMatchObject({ reached: 1, data_quality: { failure_reason: null, excluded_question_views: 2 } })
+    expect(result.groups?.[1].continued).toBe(1)
+  })
+
   it.each(['unconfigured', 'unavailable', 'timeout', 'too_large'])('reports %s as unavailable, never as zero', async (failureReason) => {
     queryMock.mockResolvedValueOnce({ configured: true, connected: false, failureReason, rows: [] })
     expect(await getAdminDevelopmentEnvironmentFlow({} as never, start, end)).toMatchObject({ reached: null, groups: null, data_quality: { failure_reason: failureReason } })
@@ -116,7 +127,6 @@ describe('question flow reporting', () => {
     { total_events: 1, total_attempts: 2 },
     { total_events: -1, total_attempts: 1 },
     { total_events: 1, total_attempts: 'invalid' },
-    { total_events: 1, total_attempts: 1, attempt_id: '' },
     { total_events: 1, total_attempts: 1, events: [['onboarding_step_viewed', question, 'invalid', '']] },
   ])('rejects incomplete or invalid analytics: %j', async (changes) => {
     queryMock.mockResolvedValueOnce({ configured: true, connected: true, failureReason: null, rows: [

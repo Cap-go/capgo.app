@@ -83,7 +83,7 @@ export async function getAdminDevelopmentEnvironmentFlow(c: Context, startDate: 
   const metadata = {
     generated_at: new Date().toISOString(),
     period: { start: startDate, end: endDate },
-    data_quality: { configured: result.configured, connected: result.connected, failure_reason: result.failureReason as string | null },
+    data_quality: { configured: result.configured, connected: result.connected, failure_reason: result.failureReason as string | null, excluded_question_views: 0 },
   }
   if (result.failureReason)
     return { ...metadata, reached: null, groups: null }
@@ -98,7 +98,13 @@ export async function getAdminDevelopmentEnvironmentFlow(c: Context, startDate: 
       if (result.rows.reduce((sum, row) => sum + (Array.isArray(row.events) ? row.events.length : 0), 0) !== totalEvents)
         throw new Error('Incomplete question flow events')
     }
-    return { ...metadata, ...buildDevelopmentEnvironmentFlow(result.rows.map(mapAttempt)) }
+    const attempts = result.rows.map(mapAttempt)
+    // Legacy views without attempt/person tracking cannot be correlated safely.
+    // Keep usable visits visible and disclose the excluded exposure count.
+    const excludedQuestionViews = attempts
+      .filter(attempt => !attempt.personId.trim() || !attempt.attemptId.trim())
+      .reduce((sum, attempt) => sum + attempt.events.filter(event => event.event === 'onboarding_step_viewed' && event.step === 'publish_app_question').length, 0)
+    return { ...metadata, data_quality: { ...metadata.data_quality, excluded_question_views: excludedQuestionViews }, ...buildDevelopmentEnvironmentFlow(attempts) }
   }
   catch {
     return { ...metadata, data_quality: { ...metadata.data_quality, failure_reason: 'invalid_data' }, reached: null, groups: null }
