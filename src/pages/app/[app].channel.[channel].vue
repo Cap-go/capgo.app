@@ -510,13 +510,32 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
     toast.info(t('bundle-compatible-with-channel', { channel: channel.value.name }))
   }
   if (bundleLinkMode.value === 'rollout') {
-    const saved = await saveChannelChanges({
-      rollout_version: appVersion.id,
-      rollout_enabled: true,
-    })
-    if (saved) {
-      toast.success(t('rollout-target-linked'))
-      await askUpdateNotificationAfterBundleChange()
+    const applyRolloutTargetLink = async () => {
+      const saved = await saveChannelChanges({
+        rollout_version: appVersion.id,
+        rollout_enabled: true,
+      })
+      if (saved) {
+        toast.success(t('rollout-target-linked'))
+        await askUpdateNotificationAfterBundleChange()
+      }
+    }
+    const previousRolloutVersionId = channel.value.rollout_version
+    if (previousRolloutVersionId != null && previousRolloutVersionId !== appVersion.id) {
+      await confirmConsequentialChannelChange({
+        id: 'confirm-set-rollout-target',
+        title: t('confirm-set-rollout-target-title'),
+        description: t('confirm-set-rollout-target-description', {
+          current: rolloutTargetName.value,
+          next: appVersion.name,
+          percent: rolloutPercentageText.value,
+          fallback: stableBundleName.value,
+        }),
+        onConfirm: applyRolloutTargetLink,
+      })
+    }
+    else {
+      await applyRolloutTargetLink()
     }
     return
   }
@@ -1328,7 +1347,7 @@ async function copyCurlCommand() {
                     </div>
 
                     <div class="flex flex-wrap gap-2 lg:justify-end">
-                      <button type="button" class="min-h-11 d-btn d-btn-ghost" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
+                      <button type="button" class="min-h-11 d-btn d-btn-outline" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
                         {{ t('set-rollout-target') }}
                       </button>
                       <button type="button" class="min-h-11 d-btn d-btn-outline" :disabled="channel.rollout_enabled ? (rolloutTargetActionsDisabled || rolloutControlsDisabled) : rolloutEnableDisabled" @click="channel.rollout_enabled ? disableRollout() : enableRollout()">
@@ -1340,7 +1359,7 @@ async function copyCurlCommand() {
                       <button type="button" class="min-h-11 d-btn d-btn-primary" :disabled="rolloutTargetActionsDisabled" @click="promoteRollout()">
                         {{ t('promote') }}
                       </button>
-                      <button type="button" class="min-h-11 capitalize d-btn d-btn-error d-btn-ghost" :disabled="rolloutTargetActionsDisabled" @click="rollbackRollout()">
+                      <button type="button" class="min-h-11 capitalize d-btn d-btn-outline d-btn-error" :disabled="rolloutTargetActionsDisabled" @click="rollbackRollout()">
                         {{ t('rollback') }}
                       </button>
                     </div>

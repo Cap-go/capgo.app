@@ -12,6 +12,7 @@ describe('channel information rollout and update package UX', () => {
     expect(channelPageSource).toContain('confirm-disable-rollout')
     expect(channelPageSource).toContain('confirm-promote-rollout')
     expect(channelPageSource).toContain('confirm-rollback-rollout')
+    expect(channelPageSource).toContain('confirm-set-rollout-target')
     expect(channelPageSource).toContain('confirm-pause-rollout')
     expect(channelPageSource).toContain('confirm-resume-rollout')
   })
