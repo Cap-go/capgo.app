@@ -21,6 +21,7 @@ declare module 'vue' {
     AdminBarChart: typeof import('./components/admin/AdminBarChart.vue')['default']
     AdminChartDeduplicateControl: typeof import('./components/admin/AdminChartDeduplicateControl.vue')['default']
     AdminDailyConversionChart: typeof import('./components/admin/AdminDailyConversionChart.vue')['default']
+    AdminDevelopmentEnvironmentFlow: typeof import('./components/admin/AdminDevelopmentEnvironmentFlow.vue')['default']
     AdminFilterBar: typeof import('./components/admin/AdminFilterBar.vue')['default']
     AdminFunnelChart: typeof import('./components/admin/AdminFunnelChart.vue')['default']
     AdminMultiLineChart: typeof import('./components/admin/AdminMultiLineChart.vue')['default']

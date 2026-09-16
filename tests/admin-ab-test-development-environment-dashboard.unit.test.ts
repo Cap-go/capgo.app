@@ -56,6 +56,8 @@ function mount(component: Component, props = {}) {
 }
 
 function stats(category: string) {
+  if (category === 'ab_test_development_environment_flow')
+    return { generated_at: '2026-09-16T00:00:00.000Z', period: { start: '2026-09-01T00:00:00.000Z', end: '2026-09-16T00:00:00.000Z' }, data_quality: { configured: true, connected: true, failure_reason: null, excluded_question_views: 0 }, reached: 0, groups: ['answered', 'skipped', 'no_answer'].map(answer => ({ answer, people: 0, continued: 0, did_not_continue: 0 })) }
   if (category === 'ab_test_distribution')
     return []
   if (category === 'ab_test_publish_intent_outcome')
@@ -127,12 +129,39 @@ describe('real development environment card', () => {
 })
 
 describe('actual A/B dashboard page wiring', () => {
+  it('loads the question flow independently and force-refreshes only that chart', async () => {
+    const container = mount(ABTestsPage)
+    await vi.waitFor(() => expect(container.querySelectorAll('h2')).toHaveLength(4))
+    expect(mocks.fetchStats).toHaveBeenCalledWith('ab_test_development_environment_flow', false)
+    const card = [...container.querySelectorAll('section')].find(section => section.querySelector('h2')?.textContent === 'App-building question flow')!
+    expect(card.textContent).toContain('No question views with complete tracking')
+    card.querySelector<HTMLButtonElement>('button')?.click()
+    await vi.waitFor(() => expect(mocks.fetchStats).toHaveBeenCalledWith('ab_test_development_environment_flow', true))
+    expect(mocks.fetchStats.mock.calls.filter(([category]) => category !== 'ab_test_development_environment_flow')).toHaveLength(4)
+  })
+
+  it('keeps existing A/B charts visible when question tracking is unavailable and retries it separately', async () => {
+    mocks.fetchStats.mockImplementation(async (category) => {
+      if (category === 'ab_test_development_environment_flow')
+        throw new Error('analytics unavailable')
+      return stats(category)
+    })
+    const container = mount(ABTestsPage)
+    await vi.waitFor(() => expect(container.querySelectorAll('h2')).toHaveLength(4))
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('Question flow is unavailable')
+    expect(container.querySelector('progress')).not.toBeNull()
+    mocks.fetchStats.mockImplementation(async category => stats(category))
+    const card = [...container.querySelectorAll('section')].find(section => section.querySelector('h2')?.textContent === 'App-building question flow')!
+    card.querySelector<HTMLButtonElement>('button')?.click()
+    await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).toBeNull())
+  })
+
   it('loads the new category and places its card after Publish intent outcome', async () => {
     const container = mount(ABTestsPage)
-    await vi.waitFor(() => expect(container.querySelectorAll('h2')).toHaveLength(3))
+    await vi.waitFor(() => expect(container.querySelectorAll('h2')).toHaveLength(4))
     expect(mocks.fetchStats).toHaveBeenCalledWith('ab_test_development_environment', false)
     const titles = [...container.querySelectorAll('h2')].map(title => title.textContent?.trim())
-    expect(titles.slice(-3)).toEqual(['New Publish intent outcome', 'What do you use to build your app?', 'Hosted AI builder: selected intent'])
+    expect(titles.slice(-4)).toEqual(['New Publish intent outcome', 'What do you use to build your app?', 'App-building question flow', 'Hosted AI builder: selected intent'])
   })
 
   it('renders six intent rows in stable order with counts, percentages and saved-answer notes', async () => {
@@ -140,7 +169,7 @@ describe('actual A/B dashboard page wiring', () => {
       ? { ...payload, development_environment_intents: environmentIntents(payload, { ...hostedPayload, outcomes: [...hostedPayload.outcomes].reverse() }) }
       : stats(category))
     const container = mount(ABTestsPage)
-    await vi.waitFor(() => expect(container.querySelectorAll('h2')).toHaveLength(3))
+    await vi.waitFor(() => expect(container.querySelectorAll('h2')).toHaveLength(4))
     const card = [...container.querySelectorAll('section')].find(section => section.querySelector('h2')?.textContent?.trim() === 'Hosted AI builder: selected intent')!
     const bars = [...card.querySelectorAll('progress')]
     expect(bars.map(bar => bar.getAttribute('aria-label'))).toEqual(['Convert my webapp to a mobile app', 'Build native apps (Capgo Builder)', 'Ship live updates (OTA)', 'Both', 'Just exploring', 'Did not select yet'])
@@ -150,7 +179,7 @@ describe('actual A/B dashboard page wiring', () => {
     expect(card.textContent).toContain('unique people · Hosted AI builder')
     expect(card.textContent).toContain('treatment C / 5.C')
     expect(card.textContent).toContain('not inferred from organizations')
-    expect(mocks.fetchStats).toHaveBeenCalledTimes(4)
+    expect(mocks.fetchStats).toHaveBeenCalledTimes(5)
   })
 
   it('renders an empty intent chart when no hosted-builder people exist, even if other tools were selected', async () => {
@@ -158,7 +187,7 @@ describe('actual A/B dashboard page wiring', () => {
       ? { total: 9, outcomes: payload.outcomes.map(item => item.outcome === 'hosted_builder' ? { ...item, count: 0 } : item), development_environment_intents: environmentIntents({ total: 9, outcomes: payload.outcomes.map(item => item.outcome === 'hosted_builder' ? { ...item, count: 0 } : item) }, emptyHostedPayload) }
       : stats(category))
     const container = mount(ABTestsPage)
-    await vi.waitFor(() => expect(container.querySelectorAll('h2')).toHaveLength(3))
+    await vi.waitFor(() => expect(container.querySelectorAll('h2')).toHaveLength(4))
     const card = [...container.querySelectorAll('section')].find(section => section.querySelector('h2')?.textContent?.trim() === 'Hosted AI builder: selected intent')!
     expect(card.textContent).toContain('No people in this cohort belong to the Hosted AI builder group yet.')
     expect([...card.querySelectorAll('progress')].every(bar => bar.value === 0 && bar.max === 1)).toBe(true)
@@ -212,7 +241,7 @@ describe('actual A/B dashboard page wiring', () => {
       expect(card.textContent).toContain('100.0%')
       expect(card.textContent).toContain(`unique people · ${label}`)
     }
-    expect(mocks.fetchStats).toHaveBeenCalledTimes(4)
+    expect(mocks.fetchStats).toHaveBeenCalledTimes(5)
   })
 
   it.each(['missing', 'extra', 'mismatched', 'malformed'])('rejects %s non-hosted group data', async (failure) => {
@@ -268,5 +297,7 @@ describe('actual A/B dashboard page wiring', () => {
     expect(backend).toContain(`case 'ab_test_development_environment':`)
     expect(backend).toContain('result = await getAdminABTestDevelopmentEnvironment(c)')
     expect(backend.indexOf('if (!isAdmin)')).toBeLessThan(backend.indexOf(`case 'ab_test_development_environment':`))
+    expect(backend.indexOf('if (!isAdmin)')).toBeLessThan(backend.indexOf(`case 'ab_test_development_environment_flow':`))
+    expect(store).toContain(`'ab_test_development_environment_flow'`)
   })
 })
