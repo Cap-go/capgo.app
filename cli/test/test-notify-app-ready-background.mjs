@@ -74,6 +74,11 @@ test('ignores comments, strings, definitions, other packages, type imports, and 
 test('checks Vue script/setup blocks and ignores markup and HTML comments', () => {
   assert.equal(scan(`<template><div /></template><script setup lang="ts">${call}</script>`, 'App.vue'), 'found')
   assert.equal(scan(`<template>${call}</template><!-- <script>${call}</script> -->`, 'App.vue'), 'not_found')
+  assert.equal(scan(`<template><script>${call}</script></template>`, 'App.vue'), 'not_found')
+  assert.equal(scan(`<template><div /></template><!-- <script>${call}</script> --><!-- ignored -->`, 'App.vue'), 'not_found')
+  assert.equal(scan(`<template><div /></template><script lang="ts" data-example=">">${call}</script>`, 'App.vue'), 'found')
+  assert.equal(scan(`<template><div /></template><script>${call}</script\t\n bar>`, 'App.vue'), 'found')
+  assert.equal(scan(`<template><div /></template><script>${call}`, 'App.vue'), 'unknown')
 })
 
 test('excludes build output, tests, dependencies, and unrelated workspace packages', () => {

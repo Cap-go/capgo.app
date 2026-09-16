@@ -1,6 +1,7 @@
 import type { NotifyAppReadyProject } from './notify-app-ready-project'
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { NodeTypes, parse as parseVue } from '@vue/compiler-dom'
 import ts from 'typescript'
 
 const UPDATER_PACKAGE = '@capgo/capacitor-updater'
@@ -25,9 +26,12 @@ function compilerOptions(dir: string): ts.CompilerOptions {
 
 function vueScripts(content: string): string {
   // Only script blocks are JavaScript; markup/comments must not complete a todo.
-  return [...content.replace(/<!--[\s\S]*?-->/g, '').matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi)]
-    .map(match => match[1])
-    .join('\n')
+  const root = parseVue(content, { parseMode: 'sfc', onError: error => { throw error } })
+  return root.children.flatMap((node) => {
+    if (node.type !== NodeTypes.ELEMENT || node.tag !== 'script')
+      return []
+    return node.children.flatMap(child => child.type === NodeTypes.TEXT ? [child.content] : [])
+  }).join('\n')
 }
 
 function importDeclaration(node: ts.Node): ts.ImportDeclaration | undefined {
