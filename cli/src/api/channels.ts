@@ -1,8 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../types/supabase.types'
+import process from 'node:process'
 import { confirm as confirmC, intro, log, outro, spinner } from '@clack/prompts'
-import { Table } from '@sauber/table'
-import { formatError, invokeCapgoCliApi } from '../utils'
+import { CliUserError } from '../shared/cli-user-error'
+import { formatTable, visibleWidth } from '../terminal-table'
+import { formatCapgoCliInvokeError, formatError, getCapgoCliHttpStatus, invokeCapgoCliApi, readCapgoCliApiErrorPayload } from '../utils'
 
 interface CheckVersionOptions {
   silent?: boolean
@@ -21,7 +23,7 @@ interface CapgoHttpOptions {
   supaAnon?: string
 }
 
-type HttpChannel = {
+interface HttpChannel {
   id: number
   name: string
   public?: boolean
@@ -49,7 +51,6 @@ function normalizeHttpChannel(row: HttpChannel): Channel {
     id: row.id,
     name: row.name,
     public: !!row.public,
-    // TODO(cli-http): GET channel does not currently return ios/android; default false for display
     ios: row.ios ?? false,
     android: row.android ?? false,
     disable_auto_update: String(row.disableAutoUpdate ?? row.disable_auto_update ?? ''),
@@ -216,7 +217,7 @@ export function findChannel(supabase: SupabaseClient<Database>, appId: string, n
     .single()
 }
 
-export type ChannelLinkedVersion = { id: number, name: string }
+export interface ChannelLinkedVersion { id: number, name: string }
 
 export async function findVersionsLinkedToChannel(
   supabase: SupabaseClient<Database>,
@@ -268,34 +269,64 @@ export async function isVersionLinkedToOtherChannel(
 export type { Channel } from '../schemas/channel'
 type Channel = import('../schemas/channel').Channel
 
+function wrapChannelValue(value: string, width: number): string[] {
+  const lines: string[] = []
+  let line = ''
+  for (const character of value) {
+    if (character === '\n') {
+      lines.push(line)
+      line = ''
+      continue
+    }
+    if (line && visibleWidth(line + character) > width) {
+      lines.push(line)
+      line = ''
+    }
+    line += character
+  }
+  lines.push(line)
+  return lines
+}
+
+export function formatChannels(data: Channel[], columns = (process.stdout.columns ?? 120) - 2): string {
+  if (!data.length)
+    return 'No channels found.'
+
+  const headers = ['Name', 'Version', 'Public', 'iOS', 'Android', 'Auto Update', 'Updates Under Native', 'Device Self Set', 'Emulator', 'Device', 'Dev', 'Prod']
+  const yesNo = (value: boolean) => value ? 'Yes' : 'No'
+  const rows = data.toReversed().map(row => [
+    row.name,
+    row.version?.name || 'Unlinked',
+    yesNo(row.public),
+    yesNo(row.ios),
+    yesNo(row.android),
+    row.disable_auto_update || 'none',
+    yesNo(!row.disable_auto_update_under_native),
+    yesNo(row.allow_device_self_set),
+    yesNo(row.allow_emulator),
+    yesNo(row.allow_device),
+    yesNo(row.allow_dev),
+    yesNo(row.allow_prod),
+  ])
+  const table = formatTable({ headers, rows })
+  if (visibleWidth(table.split('\n')[0] ?? '') <= columns)
+    return table
+
+  const valueWidth = Math.max(2, columns - Math.max(...headers.map(visibleWidth)) - 7)
+  return rows.map(row => formatTable({
+    headers: ['Setting', 'Value'],
+    rows: headers.flatMap((header, index) =>
+      wrapChannelValue(row[index] ?? '', valueWidth).map((line, lineIndex) => [lineIndex ? '' : header, line]),
+    ),
+  })).join('\n\n')
+}
+
 export function displayChannels(data: Channel[], silent = false) {
   if (silent)
     return
 
-  const t = new Table()
-  t.theme = Table.roundTheme
-  t.headers = ['Name', 'Version', 'Public', 'iOS', 'Android', 'Auto Update', 'Native Auto Update', 'Device Self Set', 'Emulator', 'Device', 'Dev', 'Prod']
-  t.rows = []
-
-  for (const row of data.toReversed()) {
-    t.rows.push([
-      row.name,
-      row.version?.name,
-      row.public ? '✅' : '❌',
-      row.ios ? '✅' : '❌',
-      row.android ? '✅' : '❌',
-      row.disable_auto_update,
-      row.disable_auto_update_under_native ? '❌' : '✅',
-      row.allow_device_self_set ? '✅' : '❌',
-      row.allow_emulator ? '✅' : '❌',
-      row.allow_device ? '✅' : '❌',
-      row.allow_dev ? '✅' : '❌',
-      row.allow_prod ? '✅' : '❌',
-    ])
-  }
-
   log.success('Channels')
-  log.success(t.toString())
+  log.message(formatChannels(data))
 }
 
 export async function getActiveChannels(
@@ -307,9 +338,15 @@ export async function getActiveChannels(
   while (true) {
     const { data, error: vError } = await fetchChannelsPage(appid, page, options)
     if (vError) {
-      if (!options.silent)
-        log.error(`App ${appid} not found in database`)
-      throw new Error(`App ${appid} not found in database: ${formatError(vError)}`)
+      const status = getCapgoCliHttpStatus(vError)
+      const payload = await readCapgoCliApiErrorPayload(vError)
+      if (status === 401 || status === 403 || payload?.error === 'cannot_access_app') {
+        throw new CliUserError(
+          'Cannot list channels. Check that your API key is valid and has app.read_channels permission for this app.',
+          { appId: appid, requiredPermissionKey: 'app.read_channels' },
+        )
+      }
+      throw new Error(`Cannot list channels: ${await formatCapgoCliInvokeError(vError)}`, { cause: vError })
     }
     const batch = Array.isArray(data) ? data : []
     if (!batch.length)

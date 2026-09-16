@@ -71,6 +71,9 @@ npx @capgo/cli@latest channel list
 
 📋 List all channels configured for an app in Capgo Cloud to review distribution settings.
 
+Use a valid API key with `app.read` and `app.read_channels` permission for the app. Permission failures identify the required permission.
+Settings display Yes/No, and channels without a bundle display Unlinked. Narrow terminals show each channel as a Setting/Value table.
+
 **Example:**
 
 ```bash
@@ -179,4 +182,3 @@ npx @capgo/cli@latest channel set production com.example.app --bundle 1.0.0 --st
 | **--accept-incompatible** | <code>boolean</code> | Accept native-package incompatibility as handled (still checks and warns, sets the channel instead of failing). Use this when your app already guards missing plugins at runtime. Cannot be combined with --ignore-metadata-check. |
 | **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
 | **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
-

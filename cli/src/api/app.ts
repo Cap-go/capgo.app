@@ -9,7 +9,7 @@ import {
   throwTwoFactorComplianceRpcError,
   warnAndContinueTwoFactorPreflightNetworkFailure,
 } from '../shared/two-factor-compliance'
-import { appAddHintMessage, formatCapgoApiErrorBody, getCapgoCliHttpStatus, hasCliPermission, invokeCapgoCliApi, isCapgoManagedSupabaseHost, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
+import { appAddHintMessage, formatCapgoApiErrorBody, formatCapgoCliInvokeError, getCapgoCliHttpStatus, hasCliPermission, invokeCapgoCliApi, isCapgoManagedSupabaseHost, resolveCapgoPublicApiHost, show2FADeniedError } from '../utils'
 
 export async function checkAppExists(
   apikey: string,
@@ -24,9 +24,16 @@ export async function checkAppExists(
     supaAnon: options?.supaAnon,
   })
   if (error) {
-    if (getCapgoCliHttpStatus(error) === 404)
+    const status = getCapgoCliHttpStatus(error)
+    if (status === 404)
       return false
-    throw error
+    if (status === 401 || status === 403) {
+      throw new CliUserError(
+        'Cannot access app. Check that your API key is valid and has app.read permission for this app.',
+        { appId: appid, requiredPermissionKey: 'app.read' },
+      )
+    }
+    throw new Error(`Cannot check app access: ${await formatCapgoCliInvokeError(error)}`, { cause: error })
   }
   return !!data
 }
@@ -40,7 +47,6 @@ export type ExistingOrganizationApp = Pick<
   Database['public']['Tables']['apps']['Row'],
   'app_id' | 'name' | 'owner_org' | 'need_onboarding'
 >
-
 
 export async function listPendingOnboardingApps(
   apikey: string,
