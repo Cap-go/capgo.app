@@ -67,9 +67,9 @@ describe('extractLogOriginalMessage', () => {
   })
 
   it.concurrent('ignores non-string message and error values', () => {
-    expect(extractLogOriginalMessage({ message: { text: 'boom' } } as LogMetadata)).toBeNull()
-    expect(extractLogOriginalMessage({ error: 404 } as LogMetadata)).toBeNull()
-    expect(extractLogOriginalMessage({ reason: 'ok', error: 404 } as LogMetadata)).toBe('ok')
+    expect(extractLogOriginalMessage({ message: { text: 'boom' } } as unknown as LogMetadata)).toBeNull()
+    expect(extractLogOriginalMessage({ error: 404 } as unknown as LogMetadata)).toBeNull()
+    expect(extractLogOriginalMessage({ reason: 'ok', error: 404 } as unknown as LogMetadata)).toBe('ok')
   })
 })
 
