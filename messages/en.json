@@ -3486,6 +3486,18 @@
   "admin-ab-tests-publish-outcome-selected-another-intent": "Selected another intent",
   "admin-ab-tests-publish-outcome-no-selection-yet": "No selection yet",
   "admin-ab-tests-publish-outcome-inferred-note": "Some intent selections were inferred from organization data because an earlier onboarding issue removed them from user onboarding ({count} inferred).",
+  "admin-ab-tests-development-environment-title": "What do you use to build your app?",
+  "admin-ab-tests-development-environment-description": "Saved development environment answers among people assigned to the treatment cohort.",
+  "admin-ab-tests-development-environment-cohort": "Development environment treatment C / 5.C · assignment cohort, not necessarily reached the question · later onboarding versions with the same C assignment included",
+  "admin-ab-tests-development-environment-assigned": "unique people assigned",
+  "admin-ab-tests-development-environment-ai-assistant": "AI assistant",
+  "admin-ab-tests-development-environment-hosted-builder": "Hosted AI builder",
+  "admin-ab-tests-development-environment-other": "Other",
+  "admin-ab-tests-development-environment-hand-coded": "I write code by hand",
+  "admin-ab-tests-development-environment-no-selection-yet": "Did not select yet",
+  "admin-ab-tests-development-environment-ai-assistant-note": "AI assistant includes Claude, Cursor, Codex and other AI coding assistants.",
+  "admin-ab-tests-development-environment-no-selection-note": "Did not select yet includes missing, unavailable or skipped answers and unsupported legacy values.",
+  "admin-ab-tests-development-environment-empty": "No people have been assigned to this cohort yet.",
   "admin-ab-tests-load-error": "Unable to load A/B test data. Please try again.",
   "admin-ab-tests-empty": "No A/B tests are configured."
 }
