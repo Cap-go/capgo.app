@@ -20,6 +20,7 @@ import AdminDailyConversionChart from '~/components/admin/AdminDailyConversionCh
 import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
 import AdminFunnelChart from '~/components/admin/AdminFunnelChart.vue'
 import AdminOnboardingJourneyGraph from '~/components/admin/AdminOnboardingJourneyGraph.vue'
+import AdminOnboardingPaymentCohorts from '~/components/admin/AdminOnboardingPaymentCohorts.vue'
 import AdminRegistrationComparison from '~/components/admin/AdminRegistrationComparison.vue'
 import AdminStackedBarChart from '~/components/admin/AdminStackedBarChart.vue'
 import AdminStatsCard from '~/components/admin/AdminStatsCard.vue'
@@ -534,6 +535,8 @@ displayStore.defaultBack = '/dashboard'
   <div class="h-full pb-4 overflow-hidden">
     <div class="w-full h-full px-4 pt-2 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
       <AdminFilterBar />
+
+      <AdminOnboardingPaymentCohorts v-if="mainStore.isAdmin" class="mb-6" />
 
       <PageLoader v-if="isLoading" />
 
