@@ -136,19 +136,16 @@ app.post('/', middlewareAuth(), async (c) => {
       return !!result.data?.length
     })
   }
-  if (current.todo_list_version === 3 && current.outcome !== 'skipped') {
-    if (due(1) && current.steps.run_device?.status !== 'done') {
-      await check('run_device', 'app.read_devices', async () => {
-        return (await readDevices(c, { app_id: appId, limit: 1 }, false)).data.some(device => !!device.device_id)
-      })
-    }
-    if (due(2) && current.steps.upload_bundle?.status !== 'done') {
-      await check('upload_bundle', 'app.read', () => hasPublishedBundle(client, appId))
-    }
-    if (due(3) && current.steps.test_update?.status !== 'done') {
-      await check('test_update', 'app.read_logs', () => hasAppliedBundle(c, client, appId, row.created_at))
-    }
+  const observeMilestones = current.todo_list_version === 3 && current.outcome !== 'skipped'
+  if (observeMilestones && due(1) && current.steps.run_device?.status !== 'done') {
+    await check('run_device', 'app.read_devices', async () => {
+      return (await readDevices(c, { app_id: appId, limit: 1 }, false)).data.some(device => !!device.device_id)
+    })
   }
+  if (observeMilestones && due(2) && current.steps.upload_bundle?.status !== 'done')
+    await check('upload_bundle', 'app.read', () => hasPublishedBundle(client, appId))
+  if (observeMilestones && due(3) && current.steps.test_update?.status !== 'done')
+    await check('test_update', 'app.read_logs', () => hasAppliedBundle(c, client, appId, row.created_at))
   const onboarding = current.todo_list_version === 3 && Object.keys(observations).length
     ? await persistObservedProgress(c, appId, observations) ?? row.onboarding
     : row.onboarding
