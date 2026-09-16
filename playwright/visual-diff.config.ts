@@ -1,5 +1,4 @@
 import type { Page } from '@playwright/test'
-import { dismissSupportPrompt } from './support/dismissSupportPrompt'
 
 export interface VisualDiffRoute {
   slug: string
@@ -25,7 +24,6 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     path: '/apps',
     auth: true,
     prepare: async (page) => {
-      await dismissSupportPrompt(page)
       const toggle = page.locator('[data-test="sidebar-collapse-toggle"]')
       if (!(await toggle.count()))
         return
@@ -45,7 +43,9 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'app-dashboard-installs', path: '/app/com.demo.app/installs', auth: true },
   { slug: 'app-dashboard-active-bundle', path: '/app/com.demo.app/active-bundle', auth: true },
   {
-    slug: 'onboarding-setup-v3', path: '/apps', auth: true,
+    slug: 'onboarding-setup-v3',
+    path: '/apps',
+    auth: true,
     prepare: async (page) => {
       // Read-only response fixtures let both base and head render the same app.
       // The base ignores version 3; the head shows the experiment treatment.

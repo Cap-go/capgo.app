@@ -1,7 +1,17 @@
+import type { Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
 
 const fixture = '/playwright/fixtures/onboarding-setup.html'
 const instructions = '[data-test="setup-checklist-instructions"]'
+
+async function advanceProgressPolls(page: Page, count: number) {
+  for (let i = 0; i < count; i++) {
+    const requests = await page.evaluate(() => (window as any).onboardingSetupPreview.state.requests)
+    await page.clock.runFor(2000)
+    // Let response parsing finish between ticks, as it does with the real clock.
+    await expect.poll(() => page.evaluate(() => (window as any).onboardingSetupPreview.state.requests)).toBe(requests + 1)
+  }
+}
 
 test.describe('Actionable onboarding setup checklist', () => {
   test.beforeEach(async ({ page }) => {
@@ -49,7 +59,7 @@ test.describe('Actionable onboarding setup checklist', () => {
     await page.getByRole('button', { name: 'Explore dashboard', exact: true }).click()
     await expect.poll(() => page.evaluate(() => (window as any).onboardingSetupPreview.events)).toContain('explore')
     await expect(page.locator('[data-test="setup-checklist-progress"]')).toHaveText('0 of 7 complete')
-    await page.getByRole('button', { name: "Don't show this again" }).click()
+    await page.getByRole('button', { name: 'Don\'t show this again' }).click()
     await expect.poll(() => page.evaluate(() => (window as any).onboardingSetupPreview.events)).toContain('hide')
   })
 
@@ -151,7 +161,7 @@ test.describe('Actionable onboarding setup checklist', () => {
         if (id === (version === 1 ? 'login_cli_mcp' : 'add_app'))
           continue
         await page.locator(`[data-test="app-onboarding-cli-step-${id}"] button`).click()
-        const title = await page.locator(instructions).getByRole('heading').innerText()
+        const title = await page.locator(instructions).getByRole('heading').textContent()
         const guide = page.locator('[data-test="setup-checklist-manual-guide"]')
         await expect(guide).toHaveAttribute('href', href)
         await expect(guide).toHaveText(id === 'add_app' || id === 'login_cli_mcp' ? 'Manual setup guide' : `Guide: ${title}`)
@@ -212,7 +222,9 @@ test.describe('Actionable onboarding setup checklist', () => {
     await dialog.locator('[data-test="channel-create-name"]').blur()
     await expect(dialog).toContainText('Use only letters, numbers, dots, dashes, or underscores.')
     await dialog.getByRole('button', { name: /production.*recommended/i }).click()
-    await page.evaluate(() => { (window as any).onboardingSetupPreview.state.channelInsertError = true })
+    await page.evaluate(() => {
+      (window as any).onboardingSetupPreview.state.channelInsertError = true
+    })
     await dialog.locator('[data-test="channel-create-submit"]').click()
     await expect(dialog.getByRole('alert')).toContainText('We could not create this channel.')
     await expect(page.locator('[data-test="app-onboarding-cli-step-add_channel"]')).toHaveAttribute('data-status', 'pending')
@@ -237,8 +249,12 @@ test.describe('Actionable onboarding setup checklist', () => {
     })
     expect(result.steps).toEqual({})
     expect(result.inserts.at(-1)).toMatchObject({
-      app_id: 'com.example.onboarding-preview', name: 'production', public: true, allow_device_self_set: true,
-      owner_org: '00000000-0000-4000-8000-000000000002', created_by: '00000000-0000-4000-8000-000000000001',
+      app_id: 'com.example.onboarding-preview',
+      name: 'production',
+      public: true,
+      allow_device_self_set: true,
+      owner_org: '00000000-0000-4000-8000-000000000002',
+      created_by: '00000000-0000-4000-8000-000000000001',
     })
     expect(result.events.every((event: any) => event.properties.channel_flow_origin === 'todo_list')).toBe(true)
     for (const event of ['onboarding_channel_flow_opened', 'onboarding_channel_animation_replayed', 'onboarding_channel_stage_backed', 'onboarding_channel_name_validation_failed', 'onboarding_channel_create_failed', 'onboarding_channel_create_submitted', 'onboarding_channel_create_succeeded', 'onboarding_channel_create_continued'])
@@ -270,7 +286,9 @@ test.describe('Actionable onboarding setup checklist', () => {
   test('supports reduced motion on mobile and respects channel creation permissions', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 })
     await page.emulateMedia({ reducedMotion: 'reduce' })
-    await page.evaluate(() => { (window as any).onboardingSetupPreview.state.channelPermissions = false })
+    await page.evaluate(() => {
+      (window as any).onboardingSetupPreview.state.channelPermissions = false
+    })
     await page.locator('[data-test="setup-checklist-mobile-toggle"]').click()
     await page.locator('[data-test="app-onboarding-cli-step-add_channel"] button').click()
     await page.locator('[data-test="setup-checklist-create-channel"]').click()
@@ -420,7 +438,7 @@ test.describe('Actionable onboarding setup checklist', () => {
     await page.evaluate(() => {
       (window as any).onboardingSetupPreview.state.channels.push({ id: 2, app_id: 'com.example.onboarding-preview', name: 'production' })
     })
-    await page.clock.runFor(8000)
+    await advanceProgressPolls(page, 4)
     await expect(page.locator('[data-test="app-onboarding-cli-step-add_channel"]')).toHaveAttribute('data-status', 'done')
     await expect(page.locator('[data-test="setup-checklist-progress"]')).toHaveText('2 of 7 complete')
     await expect(page.locator(instructions).getByRole('heading', { name: 'Install Capgo Updater' })).toBeVisible()
@@ -448,7 +466,7 @@ test.describe('Actionable onboarding setup checklist', () => {
       state.steps.login_cli_mcp = { status: 'done' }
       state.channelError = true
     })
-    await page.clock.runFor(10_000)
+    await advanceProgressPolls(page, 5)
     await expect.poll(() => page.evaluate(() => (window as any).onboardingSetupPreview.state.channelRequests)).toBe(3)
     await expect(page.locator('[data-test="setup-checklist-progress"]')).toHaveText('2 of 7 complete')
     await expect(page.locator(instructions).getByRole('heading', { name: 'Install Capgo Updater' })).toBeVisible()
@@ -506,14 +524,14 @@ test.describe('Actionable onboarding setup checklist', () => {
     await page.evaluate(() => {
       (window as any).onboardingSetupPreview.state.channels.push({ id: 2, app_id: 'com.example.other-app', name: 'production' })
     })
-    await page.clock.runFor(6000)
+    await advanceProgressPolls(page, 3)
     await expect(page.locator('[data-test="app-onboarding-cli-step-add_channel"]')).toHaveAttribute('data-status', 'done')
     await expect(page.locator('[data-test="setup-checklist-progress"]')).toHaveText('1 of 7 complete')
   })
 
   test('supports legacy checklist data and a mobile task picker without horizontal overflow', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 })
-    await page.goto(fixture + '?version=1')
+    await page.goto(`${fixture}?version=1`)
     await expect(page.locator(instructions).getByRole('heading', { name: 'Start guided setup' })).toBeVisible()
     const toggle = page.locator('[data-test="setup-checklist-mobile-toggle"]')
     await toggle.click()
@@ -527,7 +545,7 @@ test.describe('Actionable onboarding setup checklist', () => {
   test('renders desktop, mobile, dark and loading states without console errors', async ({ page }) => {
     const errors: string[] = []
     page.on('pageerror', error => errors.push(error.message))
-    page.on('console', message => {
+    page.on('console', (message) => {
       if (message.type() === 'error')
         errors.push(message.text())
     })
@@ -544,7 +562,7 @@ test.describe('Actionable onboarding setup checklist', () => {
     expect(panel).not.toBeNull()
     expect(manualGuide).not.toBeNull()
     expect(panel!.y + panel!.height - manualGuide!.y - manualGuide!.height).toBeLessThanOrEqual(33)
-    const dismissal = await page.getByRole('button', { name: "Don't show this again" }).boundingBox()
+    const dismissal = await page.getByRole('button', { name: 'Don\'t show this again' }).boundingBox()
     expect(dismissal).not.toBeNull()
     expect(dismissal!.y + dismissal!.height).toBeLessThanOrEqual(1322)
     await page.screenshot({ path: '.context/onboarding-design/setup-desktop.png' })
