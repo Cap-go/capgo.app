@@ -341,8 +341,11 @@ export async function getActiveChannels(
       const status = getCapgoCliHttpStatus(vError)
       const payload = await readCapgoCliApiErrorPayload(vError)
       if (status === 401 || status === 403 || payload?.error === 'cannot_access_app') {
+        const message = 'Cannot list channels. Check that your API key is valid and has app.read_channels permission for this app.'
+        if (!options.silent)
+          log.error(message)
         throw new CliUserError(
-          'Cannot list channels. Check that your API key is valid and has app.read_channels permission for this app.',
+          message,
           { appId: appid, requiredPermissionKey: 'app.read_channels' },
         )
       }

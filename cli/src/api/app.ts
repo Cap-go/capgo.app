@@ -15,6 +15,7 @@ export async function checkAppExists(
   apikey: string,
   appid: string,
   options?: { supaHost?: string, supaAnon?: string },
+  silent = true,
 ) {
   const { data, error } = await invokeCapgoCliApi(`app/${encodeURIComponent(appid)}`, {
     apikey,
@@ -28,8 +29,11 @@ export async function checkAppExists(
     if (status === 404)
       return false
     if (status === 401 || status === 403) {
+      const message = 'Cannot access app. Check that your API key is valid and has app.read permission for this app.'
+      if (!silent)
+        log.error(message)
       throw new CliUserError(
-        'Cannot access app. Check that your API key is valid and has app.read permission for this app.',
+        message,
         { appId: appid, requiredPermissionKey: 'app.read' },
       )
     }
@@ -265,7 +269,7 @@ export async function checkAppExistsAndHasPermissionOrgErr(
     await check2FAComplianceForApp(supabase, appid, silent)
 
   // Keep local/self-host Capgo HTTP traffic on the same host as this supabase client.
-  if (!isChannelScopedPermission && !(await checkAppExists(apikey, appid, hostOptionsFromSupabase(supabase)))) {
+  if (!isChannelScopedPermission && !(await checkAppExists(apikey, appid, hostOptionsFromSupabase(supabase), silent))) {
     const msg = appAddHintMessage(appid)
     if (!silent)
       log.error(msg)

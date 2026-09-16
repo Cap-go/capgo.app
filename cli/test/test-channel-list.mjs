@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 process.env.CAPGO_DISABLE_POSTHOG = '1'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { checkAppExists, checkAppExistsAndHasPermissionOrgErr } from '../src/api/app.ts'
 import { displayChannels, formatChannels, getActiveChannels } from '../src/api/channels.ts'
 import { CliUserError } from '../src/shared/cli-user-error.ts'
@@ -138,4 +142,61 @@ try {
 }
 finally {
   globalThis.fetch = originalFetch
+}
+
+const fixture = mkdtempSync(join(tmpdir(), 'capgo-channel-list-'))
+try {
+  const preload = join(fixture, 'fetch.mjs')
+  writeFileSync(preload, `
+    const nativeFetch = globalThis.fetch
+    const scenario = process.env.CAPGO_CHANNEL_LIST_SCENARIO
+    globalThis.fetch = async (input) => {
+      const url = input?.url ?? String(input)
+      if (!url.startsWith('http') || url.includes('.wasm'))
+        return nativeFetch(input)
+      if (url.includes('/private/config'))
+        return Response.json({})
+      if (url.includes('/rpc/reject_access_due_to_2fa_for_app'))
+        return Response.json(false)
+      if (url.includes('/rpc/cli_check_permission'))
+        return Response.json(scenario !== 'denied-channel')
+      if (url.includes('/app/' + ${JSON.stringify(appId)})) {
+        if (scenario === 'denied-app')
+          return Response.json({ error: 'cannot_access_app' }, { status: 401 })
+        return Response.json({ app_id: ${JSON.stringify(appId)}, owner_org: 'test-org' })
+      }
+      if (url.includes('/channel?')) {
+        if (scenario === 'denied-http')
+          return Response.json({ error: 'cannot_access_app' }, { status: 400 })
+        return Response.json([${JSON.stringify(httpChannel)}])
+      }
+      return Response.json({ status: 'ok' })
+    }
+  `)
+  for (const scenario of ['denied-app', 'denied-channel', 'denied-http', 'allowed']) {
+    const child = spawnSync('node', [
+      '--import', preload, new URL('../dist/index.js', import.meta.url).pathname,
+      'channel', 'list', appId, '-a', options.apikey,
+      '--supa-host', options.supaHost, '--supa-anon', options.supaAnon,
+    ], {
+      encoding: 'utf8', timeout: 15000,
+      env: { ...process.env, CAPGO_CHANNEL_LIST_SCENARIO: scenario },
+    })
+    const output = child.stdout + child.stderr
+    assert.equal(child.status, scenario === 'allowed' ? 0 : 1, output)
+    assert.doesNotMatch(output, /Edge Function returned|non-2xx/)
+    if (scenario === 'denied-app')
+      assert.match(output, /app.read permission/)
+    else if (scenario.startsWith('denied'))
+      assert.match(output, /app.read_channels/)
+    else {
+      assert.match(output, /Unlinked/)
+      assert.match(output, /iOS\s+│ Yes/)
+      assert.match(output, /Android\s+│ No/)
+    }
+  }
+  console.log('Built CLI prints permission failures and readable channel settings')
+}
+finally {
+  rmSync(fixture, { recursive: true, force: true })
 }
