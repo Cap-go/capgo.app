@@ -877,11 +877,12 @@ Also applies to dialog/Teleport content, admin filters, and hidden utility input
   both allow-lists accordingly.
 - Auth Bento templates (`supabase/templates/bento/auth_*.html`) must use
   `event.details.confirmation_link` in CTA `href` attributes, never raw
-  `confirmation_url`. The nested verify URL contains `&type=...`; unencoded
-  `confirmation_url` in an `href` is truncated at the first `&`, which drops
-  `type` and breaks GoTrue verify (`validation_failed: Verify requires a
-  verification type`). Bento templates are uploaded manually; after repo changes,
-  re-check and re-upload live Bento templates to match.
+  `confirmation_url`. The nested verify URL contains `&`-delimited query params;
+  unencoded `confirmation_url` in an `href` is truncated at the first `&`, which
+  breaks GoTrue verify (for example `validation_failed: Verify requires a
+  verification type` when `type` is dropped). Bento templates are uploaded
+  manually; after repo changes, re-check and re-upload live Bento templates to
+  match.
 
 ## Frontend Testing
 
