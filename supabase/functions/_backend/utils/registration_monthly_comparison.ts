@@ -1,5 +1,5 @@
 import type { Context } from 'hono'
-import { queryPosthogHogql } from './posthog_read.ts'
+import { closeClient, getPgClient } from './pg.ts'
 
 export const REGISTRATION_COMPARISON_TIME_ZONE = 'Europe/Warsaw'
 export const REGISTRATION_COMPARISON_MONTHS = 5
@@ -40,33 +40,38 @@ export function buildRegistrationComparisonWindows(now: Date) {
   return { generated_at: generatedAt, time_zone: REGISTRATION_COMPARISON_TIME_ZONE, cutoff_day: day, cutoff_time: cutoffTime, windows }
 }
 
-export function buildRegistrationMonthlyComparisonHogql(now: Date) {
-  const { generated_at, windows } = buildRegistrationComparisonWindows(now)
-  const localDate = (value: string) => `toDateTime('${value}', '${REGISTRATION_COMPARISON_TIME_ZONE}')`
-  const filters = windows.map((window, index) => `(
-      registered_at >= ${localDate(window.start_local)}
-      AND registered_at < ${index === 0 ? `parseDateTimeBestEffort('${generated_at}')` : localDate(window.end_local)}
-    )`).join('\n    OR ')
-
-  // Backend registration events have no browser host; do not apply the frontend host filter.
-  // Deduplicate across all prior registration events before filtering the comparison months:
-  // a retry in these months must not make an older account appear newly registered.
-  return `SELECT
-  substring(toString(toTimeZone(registered_at, '${REGISTRATION_COMPARISON_TIME_ZONE}')), 1, 7) AS month,
-  countIf(signup_event = 'User Joined') AS self_signup,
-  countIf(signup_event = 'User Joined by Invite') AS organization_invite,
-  count() AS total
-FROM (
-  SELECT person_id, min(timestamp) AS registered_at, argMin(event, timestamp) AS signup_event
-  FROM events
-  WHERE timestamp < parseDateTimeBestEffort('${generated_at}')
-    AND event IN ('User Joined', 'User Joined by Invite')
-  GROUP BY person_id
+// Evaluate the five timezone conversions once, not once per candidate account.
+export const REGISTRATION_MONTHLY_COMPARISON_SQL = `WITH comparison_windows AS MATERIALIZED (
+  SELECT month,
+    start_local::timestamp AT TIME ZONE '${REGISTRATION_COMPARISON_TIME_ZONE}' AS starts_at,
+    CASE WHEN position = 1 THEN $4::timestamptz
+      ELSE end_local::timestamp AT TIME ZONE '${REGISTRATION_COMPARISON_TIME_ZONE}'
+    END AS ends_at
+  FROM unnest($1::text[], $2::text[], $3::text[])
+    WITH ORDINALITY AS boundary(month, start_local, end_local, position)
 )
-WHERE ${filters}
-GROUP BY month
-ORDER BY month DESC
-LIMIT ${REGISTRATION_COMPARISON_MONTHS}`
+SELECT comparison.month,
+  count(account.id) FILTER (WHERE account.created_via_invite = false)::bigint AS self_signup,
+  count(account.id) FILTER (WHERE account.created_via_invite = true)::bigint AS organization_invite,
+  count(account.id) FILTER (WHERE account.created_via_invite IS NULL)::bigint AS unknown_other,
+  count(account.id)::bigint AS total
+FROM comparison_windows AS comparison
+LEFT JOIN public.users AS account
+  ON account.created_at >= comparison.starts_at AND account.created_at < comparison.ends_at
+GROUP BY comparison.month
+ORDER BY comparison.month DESC`
+
+export function buildRegistrationMonthlyComparisonQuery(now: Date) {
+  const { generated_at, windows } = buildRegistrationComparisonWindows(now)
+  return {
+    sql: REGISTRATION_MONTHLY_COMPARISON_SQL,
+    params: [
+      windows.map(window => window.month),
+      windows.map(window => window.start_local),
+      windows.map(window => window.end_local),
+      generated_at,
+    ],
+  }
 }
 
 function registrationCount(value: unknown): number {
@@ -80,35 +85,41 @@ function registrationCount(value: unknown): number {
 
 export async function getAdminRegistrationMonthlyComparison(c: Context, now = new Date()) {
   const { windows, ...metadata } = buildRegistrationComparisonWindows(now)
-  const posthog = await queryPosthogHogql(c, buildRegistrationMonthlyComparisonHogql(now))
-  if (!posthog.configured || !posthog.connected || posthog.failureReason !== null)
-    throw new Error('Registration comparison PostHog query failed')
-
-  const counts = new Map<string, { self_signup: number, organization_invite: number, total: number }>()
-  for (const row of posthog.rows) {
-    if (typeof row.month !== 'string' || !windows.some(window => window.month === row.month) || counts.has(row.month))
-      throw new Error('Invalid registration comparison month')
-    const values = {
-      self_signup: registrationCount(row.self_signup),
-      organization_invite: registrationCount(row.organization_invite),
-      total: registrationCount(row.total),
+  const query = buildRegistrationMonthlyComparisonQuery(now)
+  // Admin-only, aggregate-only reporting uses the primary Supabase database so newly
+  // created accounts are not omitted by replica lag. Never use this on plugin hot paths.
+  const pgClient = getPgClient(c)
+  try {
+    const result = await pgClient.query(query.sql, query.params)
+    const counts = new Map<string, { self_signup: number, organization_invite: number, unknown_other: number, total: number }>()
+    for (const row of result.rows) {
+      if (typeof row.month !== 'string' || !windows.some(window => window.month === row.month) || counts.has(row.month))
+        throw new Error('Invalid registration comparison month')
+      const values = {
+        self_signup: registrationCount(row.self_signup),
+        organization_invite: registrationCount(row.organization_invite),
+        unknown_other: registrationCount(row.unknown_other),
+        total: registrationCount(row.total),
+      }
+      if (values.self_signup + values.organization_invite + values.unknown_other !== values.total)
+        throw new Error('Inconsistent registration comparison total')
+      counts.set(row.month, values)
     }
-    if (values.self_signup + values.organization_invite !== values.total)
-      throw new Error('Inconsistent registration comparison total')
-    counts.set(row.month, values)
-  }
 
-  const months = windows.map(({ month, full_month }) => ({
-    month,
-    full_month,
-    ...(counts.get(month) ?? { self_signup: 0, organization_invite: 0, total: 0 }),
-    // There is no separate event for unclassified registrations or accounts missing tracking.
-    unknown_other: null,
-  }))
-  const totals = months.reduce((sum, month) => ({
-    self_signup: sum.self_signup + month.self_signup,
-    organization_invite: sum.organization_invite + month.organization_invite,
-    total: sum.total + month.total,
-  }), { self_signup: 0, organization_invite: 0, total: 0 })
-  return { ...metadata, months, totals: { ...totals, unknown_other: null } }
+    const months = windows.map(({ month, full_month }) => ({
+      month,
+      full_month,
+      ...(counts.get(month) ?? { self_signup: 0, organization_invite: 0, unknown_other: 0, total: 0 }),
+    }))
+    const totals = months.reduce((sum, month) => ({
+      self_signup: sum.self_signup + month.self_signup,
+      organization_invite: sum.organization_invite + month.organization_invite,
+      unknown_other: sum.unknown_other + month.unknown_other,
+      total: sum.total + month.total,
+    }), { self_signup: 0, organization_invite: 0, unknown_other: 0, total: 0 })
+    return { ...metadata, source: 'supabase' as const, months, totals }
+  }
+  finally {
+    await closeClient(c, pgClient)
+  }
 }

@@ -16,6 +16,7 @@ import { getAdminFrontendOnboardingAnalytics } from '../utils/frontend_onboardin
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
+import { getAdminOnboardingPaymentCohorts } from '../utils/onboarding_payment_cohorts.ts'
 import { getAdminCancelledOrganizations, getAdminCustomerCountryBreakdown, getAdminDeploymentsTrend, getAdminEmailTypeBreakdown, getAdminEnterpriseAdoption, getAdminFamousApps, getAdminGlobalStatsTrend, getAdminOnboardingFunnel, getAdminOrganizationInsights, getAdminPluginBreakdown, getAdminTrialOrganizations, getAdminTrialPlanBreakdown } from '../utils/pg.ts'
 import { getAdminPlansAnalytics } from '../utils/plans_analytics.ts'
 import { getAdminRegistrationMonthlyComparison } from '../utils/registration_monthly_comparison.ts'
@@ -52,6 +53,7 @@ const metricCategories = [
   'trial_organizations',
   'trial_plan_breakdown',
   'onboarding_funnel',
+  'onboarding_payment_cohorts',
   'cancelled_users',
   'email_type_breakdown',
   'customer_country_breakdown',
@@ -212,6 +214,10 @@ app.post('/', middlewareAuth, async (c) => {
     let result
 
     switch (metric_category) {
+      case 'onboarding_payment_cohorts':
+        result = await getAdminOnboardingPaymentCohorts(c)
+        break
+
       case 'ab_test_channel_creation':
         result = await getAdminABTestChannelCreation(c)
         break
