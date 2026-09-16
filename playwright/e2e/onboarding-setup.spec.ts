@@ -64,6 +64,10 @@ test.describe('Actionable onboarding setup checklist', () => {
   })
 
   test('follows persisted progress, counts skipped tasks, and stops polling on completion', async ({ page }) => {
+    const time = new Date('2026-09-16T12:00:00Z')
+    await page.clock.install({ time })
+    await page.clock.pauseAt(time)
+    await page.goto(fixture)
     await page.evaluate(() => {
       (window as any).onboardingSetupPreview.state.steps = {
         login_cli_mcp: { status: 'done' },
@@ -75,6 +79,7 @@ test.describe('Actionable onboarding setup checklist', () => {
         completion: { status: 'done' },
       }
     })
+    await advanceProgressPolls(page, 1)
     await expect(page.locator('[data-test="setup-checklist-progress"]')).toHaveText('2 of 7 complete')
     await expect(page.locator(instructions).getByRole('heading', { name: 'Create a channel' })).toBeVisible()
     await expect(page.locator('[data-test="setup-checklist-start-actions"]')).toHaveCount(0)
@@ -89,6 +94,7 @@ test.describe('Actionable onboarding setup checklist', () => {
     await page.evaluate(() => {
       (window as any).onboardingSetupPreview.state.steps.add_updater = { status: 'done' }
     })
+    await advanceProgressPolls(page, 1)
     await expect(page.locator('[data-test="setup-checklist-progress"]')).toHaveText('3 of 7 complete')
     await expect(page.locator(instructions).getByRole('heading', { name: 'Run your app on a device' })).toBeVisible()
 
@@ -99,6 +105,7 @@ test.describe('Actionable onboarding setup checklist', () => {
         test_update: { status: 'done' },
       })
     })
+    await advanceProgressPolls(page, 1)
     await expect(page.locator('[data-test="setup-checklist-progress"]')).toHaveText('6 of 7 complete')
     for (const id of ['run_device', 'upload_bundle', 'test_update'])
       await expect(page.locator(`[data-test="app-onboarding-cli-step-${id}"]`)).toHaveAttribute('data-status', 'done')
@@ -106,11 +113,12 @@ test.describe('Actionable onboarding setup checklist', () => {
     await page.evaluate(() => {
       (window as any).onboardingSetupPreview.state.outcome = 'completed'
     })
+    await advanceProgressPolls(page, 1)
     await expect(page.getByRole('heading', { name: 'Guided setup complete' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Explore dashboard', exact: true })).toHaveCount(0)
     const requests = await page.evaluate(() => (window as any).onboardingSetupPreview.state.requests)
     const channelRequests = await page.evaluate(() => (window as any).onboardingSetupPreview.state.channelRequests)
-    await page.waitForTimeout(2500)
+    await page.clock.runFor(10_000)
     expect(await page.evaluate(() => (window as any).onboardingSetupPreview.state.requests)).toBe(requests)
     expect(await page.evaluate(() => (window as any).onboardingSetupPreview.state.channelRequests)).toBe(channelRequests)
     await page.getByRole('button', { name: 'Open your app', exact: true }).click()

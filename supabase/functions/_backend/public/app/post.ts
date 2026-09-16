@@ -59,6 +59,8 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
   }
   if (body.icon && !normalizedIcon)
     throw simpleError('invalid_icon_path', 'Icon path must belong to this app organization')
+  // Ensure intent-gated assignment also exists for apps created outside the wizard.
+  await getOrCreateUserABTests(c, auth.userId)
   let pgClient
   let data: Database['public']['Tables']['apps']['Row'] | undefined
   try {
@@ -70,8 +72,6 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
     if (!creatorEmail)
       throw new Error(`Cannot resolve email for app creator ${auth.userId}`)
 
-    // Ensure intent-gated assignment also exists for apps created outside the wizard.
-    await getOrCreateUserABTests(c, auth.userId)
     const dataInsert = {
       owner_org: body.owner_org,
       app_id: body.app_id,

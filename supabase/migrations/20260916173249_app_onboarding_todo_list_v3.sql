@@ -202,7 +202,7 @@ ALTER FUNCTION public.merge_app_onboarding_setup(
 ) OWNER TO "postgres";
 REVOKE ALL ON FUNCTION public.merge_app_onboarding_setup(
     jsonb, jsonb
-) FROM PUBLIC, anon, authenticated;
+) FROM public, anon, authenticated;
 GRANT ALL ON FUNCTION public.merge_app_onboarding_setup(
     jsonb, jsonb
 ) TO service_role;
@@ -219,8 +219,8 @@ ON public.apps ((onboarding ->> 'created_by_user_id'))
 WHERE onboarding #>> '{setup,todo_list_version}' IN ('2', '3');
 
 -- Runs once per inserted app. Both lookups use primary keys (users.id/orgs.id).
--- The trigger runs after protect_apps_onboarding, so authenticated inserts cannot
--- choose a branch/version or forge the server-side creator ledger.
+-- The trigger runs after protect_apps_onboarding, so authenticated inserts
+-- cannot choose a branch/version or forge the server-side creator ledger.
 CREATE OR REPLACE FUNCTION public.assign_app_onboarding_todo_list_version()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -253,9 +253,12 @@ BEGIN
   RETURN NEW;
 END;
 $$;
-ALTER FUNCTION public.assign_app_onboarding_todo_list_version() OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.assign_app_onboarding_todo_list_version() FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.assign_app_onboarding_todo_list_version() TO service_role;
+ALTER FUNCTION public.assign_app_onboarding_todo_list_version()
+OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.assign_app_onboarding_todo_list_version()
+FROM public, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.assign_app_onboarding_todo_list_version()
+TO service_role;
 CREATE OR REPLACE TRIGGER zz_assign_app_onboarding_todo_list_version
 BEFORE INSERT ON public.apps FOR EACH ROW
 EXECUTE FUNCTION public.assign_app_onboarding_todo_list_version();
