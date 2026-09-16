@@ -76,6 +76,10 @@ describe('admin stats validation', () => {
     }).success).toBe(true)
   })
 
+  it.concurrent('accepts the app-building question flow metric', () => {
+    expect(safeParseSchema(adminStatsBodySchema, { ...baseBody, metric_category: 'ab_test_development_environment_flow' }).success).toBe(true)
+  })
+
   it.concurrent('accepts the A/B test distribution metric', () => {
     const parsed = safeParseSchema(adminStatsBodySchema, {
       ...baseBody,

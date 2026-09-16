@@ -9,6 +9,7 @@ import type { AdminABTestDevelopmentEnvironment as AdminABTestDevelopmentEnviron
 import type { AdminABTestDevelopmentEnvironmentIntents } from '~/services/adminABTestDevelopmentEnvironmentIntent'
 import type { AdminABTestDistribution } from '~/services/adminABTestDistribution'
 import type { AdminABTestPublishIntentOutcome as AdminABTestPublishIntentOutcomeData } from '~/services/adminABTestPublishIntentOutcome'
+import type { AdminDevelopmentEnvironmentFlow as QuestionFlow } from '~/services/adminDevelopmentEnvironmentFlow'
 import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -17,12 +18,14 @@ import AdminABTestDevelopmentEnvironment from '~/components/admin/AdminABTestDev
 import AdminABTestDevelopmentEnvironmentIntent from '~/components/admin/AdminABTestDevelopmentEnvironmentIntent.vue'
 import AdminABTestDistributionMatrix from '~/components/admin/AdminABTestDistributionMatrix.vue'
 import AdminABTestPublishIntentOutcome from '~/components/admin/AdminABTestPublishIntentOutcome.vue'
+import AdminDevelopmentEnvironmentFlow from '~/components/admin/AdminDevelopmentEnvironmentFlow.vue'
 import PageLoader from '~/components/PageLoader.vue'
 import { parseAdminABTestChannelCreation } from '~/services/adminABTestChannelCreation'
 import { parseAdminABTestDevelopmentEnvironment } from '~/services/adminABTestDevelopmentEnvironment'
 import { parseAdminABTestDevelopmentEnvironmentIntents } from '~/services/adminABTestDevelopmentEnvironmentIntent'
 import { parseAdminABTestDistribution } from '~/services/adminABTestDistribution'
 import { parseAdminABTestPublishIntentOutcome } from '~/services/adminABTestPublishIntentOutcome'
+import { parseAdminDevelopmentEnvironmentFlow } from '~/services/adminDevelopmentEnvironmentFlow'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -39,6 +42,22 @@ const developmentEnvironment = ref<AdminABTestDevelopmentEnvironmentData | null>
 const environmentIntents = ref<AdminABTestDevelopmentEnvironmentIntents | null>(null)
 const isLoading = ref(true)
 const loadError = ref(false)
+const questionFlow = ref<QuestionFlow | null>(null)
+const questionFlowLoading = ref(true)
+
+async function loadQuestionFlow(forceRefresh = false) {
+  questionFlowLoading.value = true
+  questionFlow.value = null
+  try {
+    questionFlow.value = parseAdminDevelopmentEnvironmentFlow(await adminStore.fetchStats('ab_test_development_environment_flow', forceRefresh))
+  }
+  catch (error) {
+    console.error('[Admin A/B Tests] Error loading question flow:', error)
+  }
+  finally {
+    questionFlowLoading.value = false
+  }
+}
 
 async function loadDashboard(forceRefresh = false) {
   isLoading.value = true
@@ -80,6 +99,7 @@ onMounted(async () => {
     return
   }
 
+  void loadQuestionFlow()
   await loadDashboard()
 })
 
@@ -104,6 +124,7 @@ displayStore.defaultBack = '/dashboard'
         <AdminABTestChannelCreation v-if="channelCreation" :analytics="channelCreation" />
         <AdminABTestPublishIntentOutcome v-if="publishIntentOutcome" :outcome="publishIntentOutcome" />
         <AdminABTestDevelopmentEnvironment v-if="developmentEnvironment" :outcome="developmentEnvironment" />
+        <AdminDevelopmentEnvironmentFlow :analytics="questionFlow" :loading="questionFlowLoading" @retry="loadQuestionFlow(true)" />
         <AdminABTestDevelopmentEnvironmentIntent v-if="environmentIntents" :groups="environmentIntents" />
       </div>
     </div>
