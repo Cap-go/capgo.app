@@ -53,6 +53,7 @@ import { createKey, deleteOldKey, saveKeyCommand } from './key'
 import { login } from './login'
 import { startMcpServer } from './mcp/server'
 import { setupNotifications } from './notifications/setup'
+import { startNotifyAppReadyCheck } from './notify-app-ready-background'
 import { type ObserveCliOptions, observeCommand } from './observe/command'
 import { addOrganization, deleteOrganization, listMembers, listOrganizations, setOrganization } from './organization'
 import { capturePosthogException, getCommandPath, shouldCapturePosthogException } from './posthog'
@@ -99,6 +100,7 @@ let currentCommandPath = 'unknown'
 program.hook('preAction', (_thisCommand, actionCommand) => {
   setConfigWriteTarget(resolveCapacitorConfigTargetPath(actionCommand.optsWithGlobals().capacitorConfig, cwd(), { logError: true }))
   currentCommandPath = getCommandPath(actionCommand)
+  startNotifyAppReadyCheck(actionCommand, currentCommandPath)
   setCurrentCliCommand(currentCommandPath)
   applyCommandAnalyticsOptOut(currentCommandPath, actionCommand.opts())
   const commandContext = extractCommandContext(actionCommand)

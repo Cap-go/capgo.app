@@ -15,6 +15,7 @@ npx @capgo/cli@latest init
 ```
 
 This includes adding code for updates, building, uploading your app, and verifying update functionality.
+Commands run inside an identifiable Capacitor project can also complete the **Add Integration Code** onboarding task automatically when they detect a source call to `CapacitorUpdater.notifyAppReady()`. This check is best effort: it may stop when the command exits, and it does not confirm the call runs successfully on a device. In monorepos, it checks the selected app and skips ambiguous project selections.
 Capgo bundles are web assets and can be fetched by anyone who knows the URL. Use encryption for banking, regulated, or other high-security apps.
 During the iOS run-on-device step, choose a physical iPhone/iPad or simulator. If you choose a physical device, the CLI lets you connect, unlock, and check again before it launches the app.
 
@@ -37,4 +38,3 @@ npx @capgo/cli@latest init YOUR_API_KEY com.example.app
 | **--main-file** | <code>string</code> | Application entry file to update (useful in monorepos) |
 | **--capacitor-config** | <code>string</code> | Capacitor config source to update (useful with dynamic monorepo configs) |
 | **--no-analytics** | <code>boolean</code> | Disable init analytics and terminal replay for this run |
-
