@@ -3498,6 +3498,12 @@
   "admin-ab-tests-development-environment-ai-assistant-note": "AI assistant includes Claude, Cursor, Codex and other AI coding assistants.",
   "admin-ab-tests-development-environment-no-selection-note": "Did not select yet includes missing, unavailable or skipped answers and unsupported legacy values.",
   "admin-ab-tests-development-environment-empty": "No people have been assigned to this cohort yet.",
+  "admin-ab-tests-hosted-builder-intent-title": "Hosted AI builder: selected intent",
+  "admin-ab-tests-hosted-builder-intent-description": "Saved intent among people who selected Hosted AI builder in the development environment treatment cohort.",
+  "admin-ab-tests-hosted-builder-intent-cohort": "Development environment treatment C / 5.C · Hosted AI builder answers · later onboarding versions with the same C assignment included",
+  "admin-ab-tests-hosted-builder-intent-people": "unique people who selected Hosted AI builder",
+  "admin-ab-tests-hosted-builder-intent-note": "Intent is read from each person's saved onboarding answer, not inferred from organizations. Did not select yet includes missing, skipped and unsupported values.",
+  "admin-ab-tests-hosted-builder-intent-empty": "No people in this cohort have selected Hosted AI builder yet.",
   "admin-ab-tests-load-error": "Unable to load A/B test data. Please try again.",
   "admin-ab-tests-empty": "No A/B tests are configured."
 }

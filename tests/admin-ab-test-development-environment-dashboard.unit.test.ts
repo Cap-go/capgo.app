@@ -35,6 +35,9 @@ vi.mock('~/services/formatLocale', () => ({
 const names = ['ai_assistant', 'hosted_builder', 'other', 'hand_coded', 'no_selection_yet'] as const
 const payload = { total: 12, outcomes: names.map((outcome, index) => ({ outcome, count: [4, 3, 2, 1, 2][index] })) }
 const emptyPayload = { total: 0, outcomes: names.map(outcome => ({ outcome, count: 0 })) }
+const intentNames = ['publish', 'builder', 'ota', 'both', 'exploring', 'no_selection_yet'] as const
+const hostedPayload = { total: 3, outcomes: intentNames.map((outcome, index) => ({ outcome, count: [1, 1, 0, 0, 0, 1][index] })) }
+const emptyHostedPayload = { total: 0, outcomes: intentNames.map(outcome => ({ outcome, count: 0 })) }
 const publishPayload = { total: 0, outcomes: ['selected_publish', 'selected_another_intent', 'no_selection_yet'].map(outcome => ({ outcome, count: 0 })) }
 const mountedApps: App[] = []
 
@@ -53,7 +56,7 @@ function stats(category: string) {
   if (category === 'ab_test_publish_intent_outcome')
     return publishPayload
   if (category === 'ab_test_development_environment')
-    return payload
+    return { ...payload, hosted_builder_intents: hostedPayload }
   return {}
 }
 
@@ -121,10 +124,61 @@ describe('real development environment card', () => {
 describe('actual A/B dashboard page wiring', () => {
   it('loads the new category and places its card after Publish intent outcome', async () => {
     const container = mount(ABTestsPage)
-    await vi.waitFor(() => expect(container.querySelectorAll('h2')).toHaveLength(2))
+    await vi.waitFor(() => expect(container.querySelectorAll('h2')).toHaveLength(3))
     expect(mocks.fetchStats).toHaveBeenCalledWith('ab_test_development_environment', false)
     const titles = [...container.querySelectorAll('h2')].map(title => title.textContent?.trim())
-    expect(titles.slice(-2)).toEqual(['New Publish intent outcome', 'What do you use to build your app?'])
+    expect(titles.slice(-3)).toEqual(['New Publish intent outcome', 'What do you use to build your app?', 'Hosted AI builder: selected intent'])
+  })
+
+  it('renders six intent rows in stable order with counts, percentages and saved-answer notes', async () => {
+    mocks.fetchStats.mockImplementation(async category => category === 'ab_test_development_environment'
+      ? { ...payload, hosted_builder_intents: { ...hostedPayload, outcomes: [...hostedPayload.outcomes].reverse() } }
+      : stats(category))
+    const container = mount(ABTestsPage)
+    await vi.waitFor(() => expect(container.querySelectorAll('h2')).toHaveLength(3))
+    const card = [...container.querySelectorAll('section')].find(section => section.querySelector('h2')?.textContent?.trim() === 'Hosted AI builder: selected intent')!
+    const bars = [...card.querySelectorAll('progress')]
+    expect(bars.map(bar => bar.getAttribute('aria-label'))).toEqual(['Convert my webapp to a mobile app', 'Build native apps (Capgo Builder)', 'Ship live updates (OTA)', 'Both', 'Just exploring', 'Did not select yet'])
+    expect(bars.map(bar => bar.value)).toEqual([1, 1, 0, 0, 0, 1])
+    expect(bars.every(bar => bar.max === 3)).toBe(true)
+    expect(card.textContent).toContain('33.3%')
+    expect(card.textContent).toContain('unique people who selected Hosted AI builder')
+    expect(card.textContent).toContain('treatment C / 5.C')
+    expect(card.textContent).toContain('not inferred from organizations')
+    expect(mocks.fetchStats).toHaveBeenCalledTimes(4)
+  })
+
+  it('renders an empty intent chart when no hosted-builder people exist, even if other tools were selected', async () => {
+    mocks.fetchStats.mockImplementation(async category => category === 'ab_test_development_environment'
+      ? { total: 9, outcomes: payload.outcomes.map(item => item.outcome === 'hosted_builder' ? { ...item, count: 0 } : item), hosted_builder_intents: emptyHostedPayload }
+      : stats(category))
+    const container = mount(ABTestsPage)
+    await vi.waitFor(() => expect(container.querySelectorAll('h2')).toHaveLength(3))
+    const card = [...container.querySelectorAll('section')].find(section => section.querySelector('h2')?.textContent?.trim() === 'Hosted AI builder: selected intent')!
+    expect(card.textContent).toContain('No people in this cohort have selected Hosted AI builder yet.')
+    expect([...card.querySelectorAll('progress')].every(bar => bar.value === 0 && bar.max === 1)).toBe(true)
+    expect(card.textContent?.match(/0\.0%/g)).toHaveLength(6)
+  })
+
+  it.each([
+    undefined,
+    { ...hostedPayload, total: 4 },
+    { total: 0, outcomes: [] },
+    { ...hostedPayload, outcomes: [hostedPayload.outcomes[0], ...hostedPayload.outcomes.slice(0, 5)] },
+    { ...hostedPayload, outcomes: [{ outcome: 'unsupported', count: 1 }, ...hostedPayload.outcomes.slice(1)] },
+    ...[-1, 0.5, '1', Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1].map(count => ({ ...hostedPayload, outcomes: [{ outcome: 'publish', count }, ...hostedPayload.outcomes.slice(1)] })),
+    { total: 4, outcomes: hostedPayload.outcomes.map(item => item.outcome === 'publish' ? { ...item, count: 2 } : item) },
+  ])('rejects malformed or mismatched hosted-builder intent data and retries with fresh data: %j', async (hosted_builder_intents) => {
+    mocks.fetchStats.mockImplementation(async category => category === 'ab_test_development_environment'
+      ? { ...payload, hosted_builder_intents }
+      : stats(category))
+    const container = mount(ABTestsPage)
+    await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull())
+    expect(container.querySelector('progress')).toBeNull()
+    mocks.fetchStats.mockImplementation(async category => stats(category))
+    container.querySelector<HTMLButtonElement>('button')?.click()
+    await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).toBeNull())
+    expect(mocks.fetchStats).toHaveBeenCalledWith('ab_test_development_environment', true)
   })
 
   it.each(['invalid', 'failed'])('uses the existing error state and force-refresh retry for %s new data', async (failure) => {
