@@ -101,8 +101,8 @@ onMounted(() => void loadComparison())
               <td class="px-3 py-4 text-right tabular-nums text-purple-500">
                 {{ formatNumberValue(month.organization_invite) }}
               </td>
-              <td class="px-3 py-4 text-right text-slate-400" :aria-label="t('registration-comparison-not-tracked')">
-                —
+              <td class="px-3 py-4 text-right tabular-nums text-slate-400" :aria-label="month.unknown_other === null ? t('registration-comparison-not-tracked') : undefined">
+                {{ month.unknown_other === null ? '—' : formatNumberValue(month.unknown_other) }}
               </td>
               <td class="px-3 py-4 text-right font-semibold tabular-nums">
                 {{ formatNumberValue(month.total) }}
@@ -120,8 +120,8 @@ onMounted(() => void loadComparison())
               <td class="px-3 py-4 text-right tabular-nums">
                 {{ formatNumberValue(comparison.totals.organization_invite) }}
               </td>
-              <td class="px-3 py-4 text-right text-slate-400" :aria-label="t('registration-comparison-not-tracked')">
-                —
+              <td class="px-3 py-4 text-right tabular-nums text-slate-400" :aria-label="comparison.totals.unknown_other === null ? t('registration-comparison-not-tracked') : undefined">
+                {{ comparison.totals.unknown_other === null ? '—' : formatNumberValue(comparison.totals.unknown_other) }}
               </td>
               <td class="px-3 py-4 text-right tabular-nums">
                 {{ formatNumberValue(comparison.totals.total) }}

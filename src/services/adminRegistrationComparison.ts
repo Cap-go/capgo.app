@@ -1,7 +1,7 @@
 export interface RegistrationComparisonCounts {
   self_signup: number
   organization_invite: number
-  unknown_other: null
+  unknown_other: number | null
   total: number
 }
 
