@@ -1,11 +1,12 @@
 export interface RegistrationComparisonCounts {
   self_signup: number
   organization_invite: number
-  unknown_other: null
+  unknown_other: number | null
   total: number
 }
 
 export interface RegistrationMonthlyComparison {
+  source: 'supabase'
   generated_at: string
   time_zone: 'Europe/Warsaw'
   cutoff_day: number

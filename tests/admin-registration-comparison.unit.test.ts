@@ -19,6 +19,7 @@ vi.mock('../src/components/dashboard/ChartCard.vue', () => ({
 }))
 
 const payload = {
+  source: 'supabase',
   generated_at: '2026-09-16T12:35:00.000Z',
   time_zone: 'Europe/Warsaw',
   cutoff_day: 16,
@@ -28,10 +29,10 @@ const payload = {
     full_month: false,
     self_signup: 4,
     organization_invite: 2,
-    unknown_other: null,
+    unknown_other: 0,
     total: 6,
   })),
-  totals: { self_signup: 20, organization_invite: 10, unknown_other: null, total: 30 },
+  totals: { self_signup: 20, organization_invite: 10, unknown_other: 0, total: 30 },
 }
 let app: App | undefined
 
@@ -61,21 +62,41 @@ afterEach(() => {
 })
 
 describe('admin monthly registration comparison', () => {
-  it('renders five months, separate signup methods, and tracked totals', async () => {
+  it('renders five months, database signup methods, and account totals', async () => {
     const container = await mountComparison()
     expect(fetchStatsMock).toHaveBeenCalledWith('registration_monthly_comparison', true)
     expect(container.textContent).toContain('14:35 Warsaw time')
     expect(container.textContent).toContain('independent of the page date filter')
     expect(container.querySelectorAll('tbody tr')).toHaveLength(5)
     expect(container.querySelector('tbody tr')?.textContent).toContain('September 2026')
-    expect(Array.from(container.querySelectorAll('tbody tr:first-child td')).map(cell => cell.textContent?.trim())).toEqual(['4', '2', '—', '6'])
-    expect(Array.from(container.querySelectorAll('tfoot td')).map(cell => cell.textContent?.trim())).toEqual(['20', '10', '—', '30'])
-    expect(container.querySelectorAll('[aria-label="Not separately tracked"]')).toHaveLength(6)
-    expect(container.textContent).toContain('unavailable, not zero')
+    expect(Array.from(container.querySelectorAll('tbody tr:first-child td')).map(cell => cell.textContent?.trim())).toEqual(['4', '2', '0', '6'])
+    expect(Array.from(container.querySelectorAll('tfoot td')).map(cell => cell.textContent?.trim())).toEqual(['20', '10', '0', '30'])
+    expect(container.querySelectorAll('[aria-label="Not separately tracked"]')).toHaveLength(0)
+    expect(container.textContent).toContain('Total accounts')
+    expect(container.textContent).toContain('Supabase account records')
+    expect(container.textContent).toContain('historical classifications are not independently verified')
+    expect(container.textContent).toContain('Deleted accounts are excluded')
+    expect(container.textContent).not.toContain('User Joined')
+  })
+
+  it('renders nonzero unknown source counts instead of hardcoded dashes', async () => {
+    fetchStatsMock.mockResolvedValue({ ...payload, months: payload.months.map(month => ({ ...month, unknown_other: 1, total: 7 })), totals: { ...payload.totals, unknown_other: 5, total: 35 } })
+    const container = await mountComparison()
+    expect(container.querySelector('tbody tr td:nth-child(4)')?.textContent?.trim()).toBe('1')
+    expect(container.querySelector('tfoot td:nth-child(4)')?.textContent?.trim()).toBe('5')
+  })
+
+  it.each([undefined, 'posthog'])('rejects an old or mismatched source %s rather than labeling it Supabase', async (source) => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {})
+    fetchStatsMock.mockResolvedValue({ ...payload, source, months: payload.months.map(month => ({ ...month, unknown_other: null })), totals: { ...payload.totals, unknown_other: null } })
+    const container = await mountComparison()
+    expect(container.querySelector('table')).toBeNull()
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('Supabase registration data is temporarily unavailable')
+    errorLog.mockRestore()
   })
 
   it('keeps zeros visible when there are no recorded registrations', async () => {
-    fetchStatsMock.mockResolvedValue({ ...payload, months: payload.months.map(month => ({ ...month, self_signup: 0, organization_invite: 0, total: 0 })), totals: { self_signup: 0, organization_invite: 0, unknown_other: null, total: 0 } })
+    fetchStatsMock.mockResolvedValue({ ...payload, months: payload.months.map(month => ({ ...month, self_signup: 0, organization_invite: 0, total: 0 })), totals: { self_signup: 0, organization_invite: 0, unknown_other: 0, total: 0 } })
     const container = await mountComparison()
     expect(container.querySelectorAll('tbody tr')).toHaveLength(5)
     expect(container.querySelector('tfoot')?.textContent).toContain('0')
