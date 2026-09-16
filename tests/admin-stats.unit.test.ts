@@ -69,6 +69,13 @@ describe('admin stats validation', () => {
     expect(parsed.success).toBe(true)
   })
 
+  it.concurrent('accepts the monthly registration comparison metric', () => {
+    expect(safeParseSchema(adminStatsBodySchema, {
+      ...baseBody,
+      metric_category: 'registration_monthly_comparison',
+    }).success).toBe(true)
+  })
+
   it.concurrent('accepts the A/B test distribution metric', () => {
     const parsed = safeParseSchema(adminStatsBodySchema, {
       ...baseBody,

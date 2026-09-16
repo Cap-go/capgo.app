@@ -192,7 +192,7 @@ describe('admin frontend onboarding dashboard', () => {
       ],
       points: [{
         date: '2026-08-10',
-        counts: { 'agent:codex': 2, no_cli_invoked: 1 },
+        counts: { 'agent:codex': 2, 'no_cli_invoked': 1 },
       }],
     },
     posthog_configured: true,
@@ -469,8 +469,8 @@ describe('admin frontend onboarding dashboard', () => {
         { key: 'no_cli_invoked' },
       ],
       points: [
-        { date: '2026-08-09', counts: { 'agent:codex': 2, 'agent:cline': 0, multiple_agents: 1, no_agent: 0, no_cli_invoked: 3 } },
-        { date: '2026-08-10', counts: { 'agent:codex': 0, 'agent:cline': 1, multiple_agents: 0, no_agent: 2, no_cli_invoked: 0 } },
+        { date: '2026-08-09', counts: { 'agent:codex': 2, 'agent:cline': 0, 'multiple_agents': 1, 'no_agent': 0, 'no_cli_invoked': 3 } },
+        { date: '2026-08-10', counts: { 'agent:codex': 0, 'agent:cline': 1, 'multiple_agents': 0, 'no_agent': 2, 'no_cli_invoked': 0 } },
       ],
     }
     const labels = {
@@ -520,7 +520,7 @@ describe('admin frontend onboarding dashboard', () => {
     }
     const usage = {
       groups: [{ key: 'unknown_agent' }, { key: 'agent:raw-fallback' }],
-      points: [{ date: '2026-08-09', counts: { unknown_agent: 2, 'agent:raw-fallback': 1 } }],
+      points: [{ date: '2026-08-09', counts: { 'unknown_agent': 2, 'agent:raw-fallback': 1 } }],
     }
 
     const series = buildFrontendOnboardingDailySetupCliAgentSeries(usage, labels)
@@ -806,26 +806,27 @@ describe('admin frontend onboarding dashboard', () => {
     expect(onLoadingCallback).toContain('if (!value)')
     expect(onLoadingCallback).toContain('isLoading.value = false')
     expect(source).toContain('const visibleAnalytics = computed(() => isLoadingStats.value ? null : analytics.value)')
-    expect(source).toContain("rawLatestFunnel.value.version === 'v4'\n  ? visibleAnalytics.value?.v4_kpis ?? visibleAnalytics.value?.kpis")
-    expect(source).toContain("rawLatestFunnel.value.version === 'v4'\n  ? visibleAnalytics.value?.v4_daily_conversions ?? visibleAnalytics.value?.daily_conversions")
+    expect(source).toContain('rawLatestFunnel.value.version === \'v4\'\n  ? visibleAnalytics.value?.v4_kpis ?? visibleAnalytics.value?.kpis')
+    expect(source).toContain('rawLatestFunnel.value.version === \'v4\'\n  ? visibleAnalytics.value?.v4_daily_conversions ?? visibleAnalytics.value?.daily_conversions')
   })
 
-  it.concurrent('uses the existing admin dashboard components for v4 and the legacy funnel', async () => {
+  it.concurrent('uses the existing admin dashboard components for v4 and replaces the legacy funnel with registrations', async () => {
     const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
     const template = source.slice(source.indexOf('<template>'))
 
     expect(source).toContain('<PageLoader')
     expect(source.match(/<AdminFilterBar(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source.match(/<AdminStatsCard(?:\s|\/?>)/g)).toHaveLength(4)
-    expect(source.match(/<ChartCard(?:\s|\/?>)/g)).toHaveLength(13)
+    expect(source.match(/<ChartCard(?:\s|\/?>)/g)).toHaveLength(12)
+    expect(source.match(/<AdminRegistrationComparison(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source.match(/<AdminBarChart(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source.match(/<AdminStackedBarChart(?:\s|\/?>)/g)).toHaveLength(5)
     expect(source.match(/<AdminDailyConversionChart(?:\s|\/?>)/g)).toHaveLength(3)
-    expect(source.match(/<AdminFunnelChart(?:\s|\/?>)/g)).toHaveLength(2)
+    expect(source.match(/<AdminFunnelChart(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source.match(/<AdminOnboardingJourneyGraph(?:\s|\/?>)/g)).toHaveLength(1)
     expect(source).toContain('<AdminOnboardingJourneyGraph :config="onboardingGraphV4" />')
     expect(source).toContain('<AdminFunnelChart :stages="v4FunnelStages" />')
-    expect(source).toContain('<AdminFunnelChart :stages="v1FunnelStages" />')
+    expect(source).not.toContain('v1FunnelStages')
     expect(source).not.toContain('<AdminFunnelChart :stages="v4FunnelStages" :is-loading="isLoadingStats" />')
     expect(source).not.toContain('<AdminFunnelChart :stages="v1FunnelStages" :is-loading="isLoadingStats" />')
     expect(source).toContain('orientation="vertical"')
@@ -855,12 +856,12 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain(`t('frontend-onboarding-version-3')`)
     expect(source).toContain(`t('frontend-onboarding-version-4')`)
     expect(source).toContain(`'frontend-onboarding-funnel-v4'`)
-    expect(source).toContain(`t('frontend-onboarding-funnel-v1-legacy')`)
+    expect(source).not.toContain(`t('frontend-onboarding-funnel-v1-legacy')`)
     expect(source).not.toContain(`t('frontend-onboarding-demo-data')`)
     expect(source).toContain('buildFrontendOnboardingGraphMetrics')
     expect(source).toContain('visibleAnalytics.value?.v4_graph?.nodes')
     expect(source).toContain('visibleAnalytics.value?.v3_graph?.nodes')
-    expect(source).toContain("const details = stage(onboardingGraphSource.value.version === 'v4' ? 'app_name' : 'details')")
+    expect(source).toContain('const details = stage(onboardingGraphSource.value.version === \'v4\' ? \'app_name\' : \'details\')')
     expect(source).not.toContain('onboardingGraphV4Demo')
     expect(source).toContain('buildFrontendOnboardingFunnelSummaries')
     expect(template).toContain('summary.conversion_percent')
@@ -874,7 +875,7 @@ describe('admin frontend onboarding dashboard', () => {
     const cliOutcomeIndex = template.indexOf(`t('frontend-onboarding-setup-cli-outcomes-v2-v4')`)
     const dailyCliOutcomeIndex = template.indexOf('chart-id="daily-setup-cli-outcomes-v2-v4"')
     const dailyCliAgentIndex = template.indexOf('chart-id="daily-setup-cli-agent-usage-v2-v4"')
-    const legacyIndex = template.indexOf(`t('frontend-onboarding-funnel-v1-legacy')`)
+    const registrationIndex = template.indexOf('<AdminRegistrationComparison')
     expect(template.slice(v4FunnelIndex, intentDetailsChartIndex)).toContain('md:grid-cols-3 xl:grid-cols-6')
     expect(v4FunnelIndex).toBeLessThan(graphIndex)
     expect(v4FunnelIndex).toBeLessThan(intentDetailsChartIndex)
@@ -884,8 +885,8 @@ describe('admin frontend onboarding dashboard', () => {
     expect(graphIndex).toBeLessThan(cliOutcomeIndex)
     expect(cliOutcomeIndex).toBeLessThan(dailyCliOutcomeIndex)
     expect(dailyCliOutcomeIndex).toBeLessThan(dailyCliAgentIndex)
-    expect(dailyCliAgentIndex).toBeLessThan(legacyIndex)
-    expect(dailyCliOutcomeIndex).toBeLessThan(legacyIndex)
+    expect(dailyCliAgentIndex).toBeLessThan(registrationIndex)
+    expect(dailyCliOutcomeIndex).toBeLessThan(registrationIndex)
 
     const dailyCliOutcomeSection = template.slice(dailyCliOutcomeIndex, dailyCliAgentIndex)
     expect(dailyCliOutcomeSection).toContain(':has-data="hasDailySetupCliOutcomeData"')
@@ -894,7 +895,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(dailyCliOutcomeSection).toContain(':series="dailySetupCliSeries"')
     expect(dailyCliOutcomeSection).not.toContain(':total=')
     expect(dailyCliOutcomeSection).not.toContain(':unit=')
-    const dailyCliAgentSection = template.slice(dailyCliAgentIndex, legacyIndex)
+    const dailyCliAgentSection = template.slice(dailyCliAgentIndex, registrationIndex)
     expect(dailyCliAgentSection).toContain(':has-data="hasDailySetupCliAgentData"')
     expect(dailyCliAgentSection).toContain(`t('frontend-onboarding-daily-setup-cli-agent-usage-v2-v4')`)
     expect(dailyCliAgentSection).toContain(`t('frontend-onboarding-daily-setup-cli-agent-usage-description')`)

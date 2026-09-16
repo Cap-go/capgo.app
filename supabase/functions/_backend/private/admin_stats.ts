@@ -18,6 +18,7 @@ import { cloudlog } from '../utils/logging.ts'
 import { getAdminOnboardingPaymentCohorts } from '../utils/onboarding_payment_cohorts.ts'
 import { getAdminCancelledOrganizations, getAdminCustomerCountryBreakdown, getAdminDeploymentsTrend, getAdminEmailTypeBreakdown, getAdminEnterpriseAdoption, getAdminFamousApps, getAdminGlobalStatsTrend, getAdminOnboardingFunnel, getAdminOrganizationInsights, getAdminPluginBreakdown, getAdminTrialOrganizations, getAdminTrialPlanBreakdown } from '../utils/pg.ts'
 import { getAdminPlansAnalytics } from '../utils/plans_analytics.ts'
+import { getAdminRegistrationMonthlyComparison } from '../utils/registration_monthly_comparison.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { getCancellationDetails } from '../utils/stripe.ts'
 import { supabaseClient as useSupabaseClient } from '../utils/supabase.ts'
@@ -60,6 +61,7 @@ const metricCategories = [
   'cli_usage',
   'channel_surfing',
   'frontend_onboarding_analytics',
+  'registration_monthly_comparison',
   'plans_analytics',
   'famous_apps',
   'enterprise_adoption',
@@ -373,6 +375,10 @@ app.post('/', middlewareAuth, async (c) => {
 
       case 'frontend_onboarding_analytics':
         result = await getAdminFrontendOnboardingAnalytics(c, start_date, end_date)
+        break
+
+      case 'registration_monthly_comparison':
+        result = await getAdminRegistrationMonthlyComparison(c)
         break
 
       case 'plans_analytics':
