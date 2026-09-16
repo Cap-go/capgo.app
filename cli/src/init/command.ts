@@ -40,7 +40,7 @@ import { uploadSupportLogs } from '../support/support-upload'
 import { canPromptInteractively, consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
 import { loginInitInBrowser, shouldStartInitBrowserLogin } from './browser-login'
-import { isChannelAlreadyExistsError } from './channel-conflict'
+import { selectOnboardingChannel } from './channel-selection'
 import { createMissingExecutableError, getAvailablePackageManagers, getMissingPackageManagerExecutable, getPackageManagerInfo, preparePackageManagerCommandEnvironment, probeExecutable, probePackageManagerCommand, resolveExecutableProbeError, waitForCommandResult } from './command-execution'
 import { reportInitOnboardingStep } from './onboarding-report'
 import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pIsCancel, log as pLog, outro as pOutro, select as pSelect, spinner as pSpinner, text as pText } from './prompts'
@@ -374,10 +374,11 @@ export function getGitRepoStatus(startDir = cwd()): GitRepoStatus {
   }
 }
 
-export function getInitUpdaterPluginConfig(appId: string, directInstall: boolean) {
+export function getInitUpdaterPluginConfig(appId: string, directInstall: boolean, channelName?: string) {
   return {
     version: initNativeBundleVersion,
     appId,
+    ...(channelName ? { defaultChannel: channelName } : {}),
     autoUpdate: directInstall ? 'always' : 'atBackground',
     ...(directInstall
       ? {
@@ -2600,7 +2601,7 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
   }
 }
 
-async function addChannelStep(orgId: string, apikey: string, appId: string) {
+async function addChannelStep(orgId: string, apikey: string, appId: string, supabase: Awaited<ReturnType<typeof createSupabaseClient>>, options: SuperOptions) {
   const pm = getPMAndCommand()
   pLog.success(`✅ App ${appId} added — accessible to all members of your organization`)
   pLog.info(`💡 Keep in mind: Capgo cannot deliver updates to app versions that don’t include Capacitor Updater.`)
@@ -2608,69 +2609,64 @@ async function addChannelStep(orgId: string, apikey: string, appId: string) {
   pLog.info(`A channel is a release track that controls which users get which updates.`)
   pLog.info(`Most apps only need one: "production". You can add more later.`)
   pLog.info(`Learn more: https://capgo.app/docs/live-updates/channels/`)
-  while (true) {
-    let channelName = globalChannelName
-    const channelChoice = await pSelect({
-      message: 'Which channel name do you want to use?',
-      options: [
-        { value: 'default', label: `✅ Use "${defaultChannel}"` },
-        { value: 'custom', label: '✏️ Choose a custom name' },
-      ],
-    })
-    await cancelCommand(channelChoice, orgId, apikey)
-
-    if (channelChoice === 'default') {
-      channelName = defaultChannel
-    }
-    else {
+  const channelName = await selectOnboardingChannel(supabase, appId, globalChannelName, {
+    reuseChannel: async (name) => {
+      const choice = await pSelect({
+        message: `A channel named "${name}" already exists, do you want to use it or do you want to create a new channel?`,
+        options: [
+          { value: 'use-existing', label: 'Yes, use it' },
+          { value: 'create-new', label: 'No, create a new one' },
+        ],
+      })
+      await cancelCommand(choice, orgId, apikey)
+      if (choice === 'use-existing') {
+        pLog.success(`Using existing channel "${name}" ✅`)
+        return true
+      }
+      return false
+    },
+    chooseName: async (existingNames) => {
+      if (!existingNames.includes(defaultChannel)) {
+        const channelChoice = await pSelect({
+          message: 'Which channel name do you want to use?',
+          options: [
+            { value: 'default', label: `✅ Use "${defaultChannel}"` },
+            { value: 'custom', label: '✏️ Choose a custom name' },
+          ],
+        })
+        await cancelCommand(channelChoice, orgId, apikey)
+        if (channelChoice === 'default')
+          return defaultChannel
+      }
       const selectedChannelName = await pText({
         message: 'Enter the channel name to use for onboarding:',
         placeholder: 'e.g. staging, beta, dev',
         validate: validateChannelName,
       })
       await cancelCommand(selectedChannelName, orgId, apikey)
-      channelName = (selectedChannelName as string).trim()
-    }
-
-    globalChannelName = channelName
-    const s = pSpinner()
-    s.start(`Running: ${pm.runner} @capgo/cli@latest channel add ${channelName} ${appId} --default`)
-    try {
-      const addChannelRes = await addChannelInternal(channelName, appId, {
-        default: true,
-        apikey,
-      }, true)
-      if (!addChannelRes)
-        s.stop(`Channel already added ✅`)
-      else
+      return (selectedChannelName as string).trim()
+    },
+    createChannel: async (name) => {
+      const s = pSpinner()
+      s.start(`Running: ${pm.runner} @capgo/cli@latest channel add ${name} ${appId} --default`)
+      try {
+        await addChannelInternal(name, appId, {
+          default: true,
+          apikey,
+          supaHost: options.supaHost,
+          supaAnon: options.supaAnon,
+        }, true)
         s.stop(`Channel add done ✅`)
-      await markStep(orgId, apikey, 'add-channel', appId)
-      return channelName
-    }
-    catch (error) {
-      if (!isChannelAlreadyExistsError(error)) {
+      }
+      catch (error) {
         s.stop(`Channel creation failed ❌`)
         throw error
       }
-
-      s.stop(`Channel already exists`)
-
-      const existingChannelChoice = await pSelect({
-        message: `The channel "${channelName}" already exists. What would you like to do?`,
-        options: [
-          { value: 'use-existing', label: '✅ Use the existing channel' },
-          { value: 'change', label: '✏️ Choose a different channel name' },
-        ],
-      })
-      await cancelCommand(existingChannelChoice, orgId, apikey)
-
-      if (existingChannelChoice === 'use-existing') {
-        pLog.success(`Using existing channel "${channelName}" ✅`)
-        await markStep(orgId, apikey, 'add-channel', appId)
-        return channelName
-      }
-    }
-  }
+    },
+  })
+  globalChannelName = channelName
+  await markStep(orgId, apikey, 'add-channel', appId)
+  return channelName
 }
 
 function rememberPackageJsonPath(packageJsonPath: string): void {
@@ -3088,7 +3084,7 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
       if (doDirectInstall) {
         await updateConfigbyKey('SplashScreen', { launchAutoHide: false })
       }
-      return updateConfigUpdater(getInitUpdaterPluginConfig(appId, delta))
+      return updateConfigUpdater(getInitUpdaterPluginConfig(appId, delta, globalChannelName))
     })
     s.stop(`Updated ${formatInitFilePath(updatedConfig.path)} ✅`)
     break
@@ -5728,7 +5724,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
     if (stepToSkip < 2) {
       renderCurrentStep(2)
-      channelName = await addChannelStep(orgId, options.apikey, appId)
+      channelName = await addChannelStep(orgId, options.apikey, appId, supabase, options)
       globalChannelName = channelName
       markStepDone(2, undefined, channelName)
     }
