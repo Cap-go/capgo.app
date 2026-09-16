@@ -3,6 +3,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
 import { getAdminABTestChannelCreation } from '../utils/ab_test_channel_creation.ts'
+import { getAdminABTestDevelopmentEnvironment } from '../utils/ab_test_development_environment.ts'
 import { getAdminABTestDistribution } from '../utils/ab_test_distribution.ts'
 import { getAdminABTestPublishIntentOutcome } from '../utils/ab_test_publish_intent_outcome.ts'
 import { getAdminBuilderAnalytics } from '../utils/builder_analytics.ts'
@@ -27,6 +28,7 @@ const INVALID_ADMIN_STATS_DATE = 'Expected ISO 8601 UTC datetime string'
 
 const metricCategories = [
   'ab_test_channel_creation',
+  'ab_test_development_environment',
   'ab_test_distribution',
   'ab_test_publish_intent_outcome',
   'uploads',
@@ -212,6 +214,10 @@ app.post('/', middlewareAuth, async (c) => {
 
       case 'ab_test_distribution':
         result = await getAdminABTestDistribution(c)
+        break
+
+      case 'ab_test_development_environment':
+        result = await getAdminABTestDevelopmentEnvironment(c)
         break
 
       case 'ab_test_publish_intent_outcome':
