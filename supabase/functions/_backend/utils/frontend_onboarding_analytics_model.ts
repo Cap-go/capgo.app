@@ -13,19 +13,27 @@ function hogqlWebNativeVersionLabels(): string {
   return WEBNATIVE_ONBOARDING_VERSION_LABELS.map(label => `'${label}'`).join(', ')
 }
 
+function hogqlOnboardingVersionRaw(properties: string): string {
+  // Typed property access casts string experiment labels to NULL in numeric schemas.
+  return `coalesce(nullIf(JSONExtractString(toString(${properties}), 'onboarding_version'), ''), JSONExtractRaw(toString(${properties}), 'onboarding_version'))`
+}
+
 export function hogqlOnboardingVersionValue(properties = 'properties'): string {
-  return `multiIf(toString(${properties}.onboarding_version) IN (${hogqlWebNativeVersionLabels()}), 4, toIntOrZero(toString(${properties}.onboarding_version)))`
+  const version = hogqlOnboardingVersionRaw(properties)
+  return `multiIf(${version} IN (${hogqlWebNativeVersionLabels()}), 4, toIntOrZero(${version}))`
 }
 
 export function hogqlOnboardingVersionIn(
   properties = 'properties',
   versions: readonly number[] = FRONTEND_ONBOARDING_VERSIONS,
 ): string {
-  return `(toIntOrZero(toString(${properties}.onboarding_version)) IN (${versions.join(', ')}) OR toString(${properties}.onboarding_version) IN (${hogqlWebNativeVersionLabels()}))`
+  const version = hogqlOnboardingVersionRaw(properties)
+  return `(toIntOrZero(${version}) IN (${versions.join(', ')}) OR ${version} IN (${hogqlWebNativeVersionLabels()}))`
 }
 
 export function hogqlOnboardingVersionIsV4(properties = 'properties'): string {
-  return `(toIntOrZero(toString(${properties}.onboarding_version)) = 4 OR toString(${properties}.onboarding_version) IN (${hogqlWebNativeVersionLabels()}))`
+  const version = hogqlOnboardingVersionRaw(properties)
+  return `(toIntOrZero(${version}) = 4 OR ${version} IN (${hogqlWebNativeVersionLabels()}))`
 }
 
 export function buildFrontendOnboardingProductionHostHogql(properties: string, timestamp: string): string {
