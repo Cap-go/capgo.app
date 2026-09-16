@@ -35,6 +35,8 @@ export function buildOnboardingPaymentInvoiceHogql(period: OnboardingPaymentCoho
     LIMIT ${ONBOARDING_PAYMENT_SOURCE_LIMIT}`
 }
 
+function loadInvoicePayments(c: Context, period: OnboardingPaymentCohortPeriod, scope: string[], kind: 'subscription', signal: AbortSignal): Promise<OnboardingSubscriptionPayment[]>
+function loadInvoicePayments(c: Context, period: OnboardingPaymentCohortPeriod, scope: string[], kind: 'credit', signal: AbortSignal): Promise<OnboardingCreditPayment[]>
 async function loadInvoicePayments(c: Context, period: OnboardingPaymentCohortPeriod, scope: string[], kind: 'subscription' | 'credit', signal: AbortSignal) {
   const records: Record<string, unknown>[] = []
   let nextOffset = 0
@@ -99,8 +101,8 @@ export async function getAdminOnboardingPaymentCohorts(c: Context, now = new Dat
   const controller = new AbortController()
   const signal = AbortSignal.any([AbortSignal.timeout(INVOICE_REPORT_DEADLINE_MS), controller.signal])
   try {
-    const subscriptionPayments = await loadInvoicePayments(c, period, customers, 'subscription', signal) as OnboardingSubscriptionPayment[]
-    const creditPayments = intents.length ? await loadInvoicePayments(c, period, intents, 'credit', signal) as OnboardingCreditPayment[] : []
+    const subscriptionPayments = await loadInvoicePayments(c, period, customers, 'subscription', signal)
+    const creditPayments = intents.length ? await loadInvoicePayments(c, period, intents, 'credit', signal) : []
     return aggregateOnboardingPaymentCohorts({
       ...period,
       ...data,
