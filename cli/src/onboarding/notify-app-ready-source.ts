@@ -1,11 +1,11 @@
 import type { NotifyAppReadyProject } from './notify-app-ready-project'
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
-import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import ts from 'typescript'
 
 const UPDATER_PACKAGE = '@capgo/capacitor-updater'
 const SOURCE_EXTENSION = /\.(?:[cm]?[jt]sx?|vue)$/
-const EXCLUDED_DIRECTORY = /^(?:\..*|node_modules|dist|build|www|coverage|android|ios|test|tests|__tests__|__mocks__|scripts)$/
+const EXCLUDED_DIRECTORY = /^(?:\..*|node_modules|dist|build|www|coverage|android|ios|test|tests|__tests__|__mocks__|fixtures|__fixtures__|e2e|cypress|playwright|scripts)$/
 const EXCLUDED_FILE = /\.(?:test|spec|d)\.[cm]?[jt]sx?$|^capacitor\.config\./
 
 function contained(root: string, path: string): boolean {
@@ -107,7 +107,7 @@ export function scanNotifyAppReadySource(project: NotifyAppReadyProject): 'found
     }
     function addFile(path: string): void {
       checkBudget()
-      if (!SOURCE_EXTENSION.test(path) || EXCLUDED_FILE.test(path))
+      if (!SOURCE_EXTENSION.test(path) || EXCLUDED_FILE.test(basename(path)))
         return
       const canonical = realpathSync(path)
       if (seen.has(canonical) || !contained(project.workspaceRoot, canonical)

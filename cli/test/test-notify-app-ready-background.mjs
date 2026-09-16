@@ -78,7 +78,7 @@ test('checks Vue script/setup blocks and ignores markup and HTML comments', () =
 
 test('excludes build output, tests, dependencies, and unrelated workspace packages', () => {
   const project = app(fixture())
-  for (const path of ['output/main.js', 'dist/main.js', 'tests/main.ts', 'src/example.spec.ts', 'node_modules/example/main.js'])
+  for (const path of ['output/main.js', 'dist/main.js', 'tests/main.ts', 'src/example.spec.ts', 'src/__fixtures__/main.ts', 'capacitor.config.example.ts', 'node_modules/example/main.js'])
     write(join(project.dir, path), call)
   app(project.dir, 'apps/other', 'com.example.other')
   write(join(project.dir, 'apps/other/src/main.ts'), call)
