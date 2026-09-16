@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractLogOriginalMessage, formatLogActionLinkTitle, logRowDisplayMetadata, parseLogVersionName, type LogMetadata } from '~/services/logTableDisplay'
+import { extractLogOriginalMessage, formatLogActionLinkTitle, logRowDisplayMetadata, parseLogVersionName, shouldShowLogActionCode, type LogMetadata } from '~/services/logTableDisplay'
 
 describe('parseLogVersionName', () => {
   it.concurrent('keeps a plain version unchanged', () => {
@@ -70,6 +70,16 @@ describe('extractLogOriginalMessage', () => {
     expect(extractLogOriginalMessage({ message: { text: 'boom' } } as unknown as LogMetadata)).toBeNull()
     expect(extractLogOriginalMessage({ error: 404 } as unknown as LogMetadata)).toBeNull()
     expect(extractLogOriginalMessage({ reason: 'ok', error: 404 } as unknown as LogMetadata)).toBe('ok')
+  })
+})
+
+describe('shouldShowLogActionCode', () => {
+  it.concurrent('shows code when label is translated', () => {
+    expect(shouldShowLogActionCode('webview_javascript_error', 'WebView JavaScript error')).toBe(true)
+  })
+
+  it.concurrent('hides duplicate code when label equals action', () => {
+    expect(shouldShowLogActionCode('notify_app_ready', 'notify_app_ready')).toBe(false)
   })
 })
 

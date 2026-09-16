@@ -20,6 +20,7 @@ test.describe('PR screenshot — logs original error', () => {
 
     const row = page.locator('#custom_table tbody tr', { hasText: '44444444' })
     await expect(row.locator('[data-test="log-row-action"]')).toHaveText('WebView JavaScript error')
+    await expect(row.locator('[data-test="log-row-action-code"]')).toHaveText('webview_javascript_error')
     await expect(row.locator('[data-test="log-row-original-error"]')).toHaveText('Uncaught ReferenceError: foo is not defined')
 
     await expect(page.getByRole('button', { name: 'Logs', exact: true })).toHaveAttribute('aria-current', 'page')

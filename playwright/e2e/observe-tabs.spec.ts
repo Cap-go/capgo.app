@@ -239,6 +239,7 @@ test.describe('Observe sections', () => {
     await page.goto('/app/com.demo.app/observe/logs')
     const row = page.locator('#custom_table tbody tr', { hasText: '44444444' })
     await expect(row.locator('[data-test="log-row-action"]')).toHaveText('WebView JavaScript error')
+    await expect(row.locator('[data-test="log-row-action-code"]')).toHaveText('webview_javascript_error')
     await expect(row.locator('[data-test="log-row-original-error"]')).toHaveText(originalError)
     await expect(row.locator('[data-test="log-row-action"]')).toHaveAttribute(
       'title',

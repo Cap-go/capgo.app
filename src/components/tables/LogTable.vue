@@ -10,7 +10,7 @@ import LogMetadataPopover from '~/components/tables/LogMetadataPopover.vue'
 import { formatDate } from '~/services/date'
 import { getDateRangeForPreset, getTimeWindowPageRange, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
 import { getLogDocUrl } from '~/services/logDocLinks'
-import { extractLogOriginalMessage, formatLogActionLinkTitle, logRowDisplayMetadata, parseLogVersionName } from '~/services/logTableDisplay'
+import { extractLogOriginalMessage, formatLogActionLinkTitle, logRowDisplayMetadata, parseLogVersionName, shouldShowLogActionCode } from '~/services/logTableDisplay'
 import { actionToFilter, createActionFilterState, failureActionFilterKeys, filterToAction, observeActionFilterKeys, updateActionFilterKeys } from '~/services/statsActions'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 
@@ -313,6 +313,23 @@ columns.value = [
       const metadata = logRowDisplayMetadata(elem.version_name, elem.metadata)
       const originalMessage = extractLogOriginalMessage(elem.metadata)
       const linkTitle = formatLogActionLinkTitle(elem.action, actionLabel, elem.metadata)
+      const showActionCode = shouldShowLogActionCode(elem.action, actionLabel)
+      const secondaryLines = [
+        showActionCode
+          ? h('span', {
+              'class': 'block min-w-0 break-all font-mono text-xs text-slate-600 dark:text-slate-400',
+              'title': elem.action,
+              'data-test': 'log-row-action-code',
+            }, elem.action)
+          : null,
+        originalMessage
+          ? h('span', {
+              'class': 'block min-w-0 break-all text-xs text-slate-500 dark:text-slate-400',
+              'title': originalMessage,
+              'data-test': 'log-row-original-error',
+            }, originalMessage)
+          : null,
+      ].filter(Boolean)
       return h('div', { class: 'flex w-full min-w-0 flex-col gap-0.5' }, [
         h('div', { class: 'flex min-w-0 items-center gap-1.5' }, [
           h('a', {
@@ -327,12 +344,8 @@ columns.value = [
             ? h(LogMetadataPopover, { json: JSON.stringify(metadata, null, 2) })
             : null,
         ]),
-        originalMessage
-          ? h('span', {
-              'class': 'min-w-0 truncate text-xs text-slate-500 dark:text-slate-400',
-              'title': originalMessage,
-              'data-test': 'log-row-original-error',
-            }, originalMessage)
+        secondaryLines.length
+          ? h('div', { class: 'flex min-w-0 flex-col gap-0.5' }, secondaryLines)
           : null,
       ])
     },

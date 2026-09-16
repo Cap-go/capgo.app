@@ -77,6 +77,11 @@ export function extractLogOriginalMessage(metadata: LogMetadata): string | null 
   return null
 }
 
+/** Show canonical stats_action under the friendly label when they differ. */
+export function shouldShowLogActionCode(action: string, translatedLabel: string): boolean {
+  return translatedLabel !== action
+}
+
 export function formatLogActionLinkTitle(
   action: string,
   translatedLabel: string,
