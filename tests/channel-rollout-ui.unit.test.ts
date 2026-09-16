@@ -7,6 +7,7 @@ import { createApp, defineComponent, h, nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
 import en from '../messages/en.json'
 import { useDialogV2Store } from '../src/stores/dialogv2'
+import type { ChannelRolloutConfirmFlowsDeps } from '../src/utils/channelRolloutConfirmFlows'
 import { createChannelRolloutConfirmFlows } from '../src/utils/channelRolloutConfirmFlows'
 import { getUpdatePackageDescription } from '../src/utils/channelUpdatePackageCopy'
 import { confirmConsequentialChannelChange } from '../src/utils/confirmConsequentialChannelChange'
@@ -100,8 +101,8 @@ function createTestFlows(options: {
     rolloutTargetName: () => 'Rollout bundle',
     stableBundleName: () => 'Stable bundle',
     rolloutPercentageText: () => '10%',
-    saveChannelChange,
-    saveChannelChanges,
+    saveChannelChange: saveChannelChange as ChannelRolloutConfirmFlowsDeps['saveChannelChange'],
+    saveChannelChanges: saveChannelChanges as ChannelRolloutConfirmFlowsDeps['saveChannelChanges'],
     askUpdateNotificationAfterBundleChange,
     openSelectRolloutVersion,
   })
