@@ -23,6 +23,10 @@ export async function confirmConsequentialChannelChange(
       {
         text: buttonLabels.cancel,
         role: 'cancel',
+        handler: async () => {
+          if (confirmInFlight)
+            return false
+        },
       },
       {
         text: buttonLabels.confirm,

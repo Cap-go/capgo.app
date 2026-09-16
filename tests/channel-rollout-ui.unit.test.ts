@@ -126,6 +126,34 @@ afterEach(() => {
 })
 
 describe('channel information rollout and update package UX', () => {
+  it('confirmConsequentialChannelChange blocks cancel while confirm is in flight', async () => {
+    const { container, dialogStore, t } = mountDialogShell()
+    const onConfirm = vi.fn(async () => {
+      await new Promise(resolve => setTimeout(resolve, 40))
+    })
+
+    void confirmConsequentialChannelChange(
+      dialogStore,
+      { cancel: t('button-cancel'), confirm: t('button-confirm') },
+      {
+        id: 'confirm-rollout-percentage',
+        title: t('confirm-rollout-percentage-title'),
+        description: t('confirm-rollout-percentage-description', { current: '10%', next: '25%' }),
+        onConfirm,
+      },
+    )
+
+    await nextTick()
+    findDialogButton(container, 'Confirm').click()
+    await nextTick()
+    findDialogButton(container, 'Cancel').click()
+    await nextTick()
+    expect(dialogStore.showDialog).toBe(true)
+    await new Promise(resolve => setTimeout(resolve, 60))
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+    expect(dialogStore.showDialog).toBe(false)
+  })
+
   it('confirmConsequentialChannelChange ignores duplicate confirm clicks', async () => {
     const { container, dialogStore, t } = mountDialogShell()
     const onConfirm = vi.fn(async () => {

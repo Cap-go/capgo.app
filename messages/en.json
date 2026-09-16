@@ -2995,7 +2995,7 @@
   "update-package-all": "Zip + delta (default)",
   "update-package-all-description": "Devices that support delta get changed files only; others download the full zip.",
   "update-package-delta": "Delta only",
-  "update-package-delta-description": "Only changed files are served. Devices without delta support cannot update until you change this or upload a full zip.",
+  "update-package-delta-description": "Only changed files are served. Devices without delta support cannot update until you switch to a format that serves a full zip.",
   "update-package-delta-from-builtin": "Delta from store build only",
   "update-package-delta-from-builtin-description": "While the device still matches the native store version, serve delta only. Other devices keep zip + delta.",
   "update-package-delta-required": "This channel requires a delta package, but the bundle has no delta files. Upload with delta enabled, or switch the channel to zip only or zip and delta.",
