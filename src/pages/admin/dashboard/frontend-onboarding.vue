@@ -51,6 +51,7 @@ const isLoading = ref(true)
 const isLoadingStats = ref(false)
 const isReady = ref(false)
 const analytics = ref<FrontendOnboardingAnalytics | null>(null)
+const cliChecklistVersion = ref<1 | 2>(2)
 const loadError = ref(false)
 const deduplicateDailyAttempts = ref(false)
 const deduplicateV4Funnel = ref(false)
@@ -258,7 +259,8 @@ const setupCliOutcomeValues = computed(() => [
 ])
 const setupCliOutcomeColors = ['#119eff', '#8b5cf6', '#94a3b8']
 const hasSetupCliOutcomeData = computed(() => setupCliOutcomes.value.total_users > 0)
-const cliChecklistCoverage = computed(() => visibleAnalytics.value?.v4_cli_checklist_coverage ?? {
+const cliChecklistCoverage = computed(() => visibleAnalytics.value?.v4_cli_checklist_coverage_by_version?.[cliChecklistVersion.value]
+  ?? (cliChecklistVersion.value === 1 ? visibleAnalytics.value?.v4_cli_checklist_coverage : undefined) ?? {
   linked_apps: 0,
   active_apps: 0,
   unavailable_apps: 0,
@@ -612,6 +614,13 @@ displayStore.defaultBack = '/dashboard'
                 <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
                   {{ t('frontend-onboarding-cli-checklist-coverage-description') }}
                 </p>
+                <label for="cli-checklist-version" class="mt-3 flex flex-wrap items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                  {{ t('frontend-onboarding-cli-checklist-version') }}
+                  <select id="cli-checklist-version" v-model.number="cliChecklistVersion" class="d-select d-select-bordered d-select-sm">
+                    <option :value="1">{{ t('frontend-onboarding-cli-checklist-version-1') }}</option>
+                    <option :value="2">{{ t('frontend-onboarding-cli-checklist-version-2') }}</option>
+                  </select>
+                </label>
               </div>
             </template>
             <div class="grid grid-cols-1 gap-x-8 gap-y-5 md:grid-cols-2">

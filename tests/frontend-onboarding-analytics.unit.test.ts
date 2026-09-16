@@ -57,7 +57,10 @@ function expectAugust22ProductionHostFallback(query: string, properties = 'prope
 
 beforeEach(() => {
   checklistCoverageMock.mockReset()
-  checklistCoverageMock.mockResolvedValue({ linked_apps: 0, active_apps: 0, unavailable_apps: 0, steps: [] })
+  checklistCoverageMock.mockResolvedValue({
+    1: { linked_apps: 0, active_apps: 0, unavailable_apps: 0, steps: [] },
+    2: { linked_apps: 0, active_apps: 0, unavailable_apps: 0, steps: [] },
+  })
   cloudlogErrMock.mockReset()
   queryPosthogHogqlMock.mockReset()
   queryPosthogHogqlMock.mockResolvedValue({
@@ -475,6 +478,8 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     })
     expect(result).not.toHaveProperty('onboarding_version')
     expect(checklistCoverageMock).toHaveBeenCalledWith(expect.anything(), ['com.example.onboarding'])
+    expect(result.v4_cli_checklist_coverage_by_version).toEqual(await checklistCoverageMock.mock.results[0].value)
+    expect(result.v4_cli_checklist_coverage).toEqual(result.v4_cli_checklist_coverage_by_version[1])
     expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(4)
   })
 

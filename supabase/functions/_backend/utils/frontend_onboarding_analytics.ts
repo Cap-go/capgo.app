@@ -548,7 +548,8 @@ export async function getAdminFrontendOnboardingAnalytics(c: Context, startDate:
     daily_setup_cli_outcomes: dailySetupCliOutcomes,
     daily_setup_cli_agent_usage: dailySetupCliAgentUsage,
     daily_tab_switches: dailyTabSwitches,
-    v4_cli_checklist_coverage: v4ChecklistCoverage,
+    v4_cli_checklist_coverage: v4ChecklistCoverage[1],
+    v4_cli_checklist_coverage_by_version: v4ChecklistCoverage,
     posthog_configured: posthog.configured,
     posthog_connected: posthog.connected,
   }
