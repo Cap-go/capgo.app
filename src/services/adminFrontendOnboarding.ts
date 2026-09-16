@@ -2,6 +2,7 @@ export type FrontendOnboardingStageKey = 'intent' | 'details' | 'app_name' | 'ap
 
 export type FrontendOnboardingCliChecklistStepId
   = | 'add_app'
+    | 'login_cli_mcp'
     | 'add_channel'
     | 'add_updater'
     | 'add_code'
@@ -195,6 +196,7 @@ export interface FrontendOnboardingAnalytics {
   daily_setup_cli_outcomes: FrontendOnboardingDailySetupCliOutcomePoint[]
   daily_setup_cli_agent_usage: FrontendOnboardingDailySetupCliAgentUsage
   v4_cli_checklist_coverage?: FrontendOnboardingCliChecklistCoverage
+  v4_cli_checklist_coverage_by_version?: Record<1 | 2, FrontendOnboardingCliChecklistCoverage>
   posthog_configured: boolean
   posthog_connected: boolean
 }

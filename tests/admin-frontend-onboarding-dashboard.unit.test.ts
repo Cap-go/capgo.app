@@ -840,6 +840,11 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).toContain(':series="dailySetupCliAgentSeries"')
     expect(source).toContain('chart-id="cli-checklist-coverage-v4"')
     expect(source).toContain('visibleAnalytics.value?.v4_cli_checklist_coverage')
+    expect(source).toContain('const cliChecklistVersion = ref<1 | 2>(2)')
+    expect(source).toContain('v4_cli_checklist_coverage_by_version?.[cliChecklistVersion.value]')
+    expect(source).toContain('cliChecklistVersion.value === 1 ? visibleAnalytics.value?.v4_cli_checklist_coverage : undefined')
+    expect(source).toContain('for="cli-checklist-version"')
+    expect(source).toContain('v-model.number="cliChecklistVersion"')
     expect(source).toContain(':no-data-message="cliChecklistNoDataMessage"')
     expect(source).toContain('app-onboarding-cli-step-')
     expect(source).toContain(':value="step.done"')
@@ -1061,7 +1066,7 @@ describe('admin frontend onboarding dashboard', () => {
     expect(template).toContain('<template v-else>')
   })
 
-  it.concurrent('omits existing-org analytics and selector UI', async () => {
+  it.concurrent('omits existing-org analytics and global onboarding selectors', async () => {
     const source = await readFile(new URL('../src/pages/admin/dashboard/frontend-onboarding.vue', import.meta.url), 'utf8')
     const template = source.slice(source.indexOf('<template>'))
 
@@ -1069,7 +1074,8 @@ describe('admin frontend onboarding dashboard', () => {
     expect(source).not.toContain('posthog_connected')
     expect(source).not.toContain('existing_org')
     expect(source).not.toContain('DateRangePicker')
-    expect(source).not.toContain('<select')
+    expect(template.match(/<select\b/g)).toHaveLength(1)
+    expect(template).toContain('id="cli-checklist-version"')
     expect(source).not.toContain('version-selector')
     expect(source).not.toContain('intent-selector')
     expect(template).not.toContain('is-demo-data')
