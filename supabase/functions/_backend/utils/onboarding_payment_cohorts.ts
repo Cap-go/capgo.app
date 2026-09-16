@@ -39,14 +39,15 @@ function loadInvoicePayments(c: Context, period: OnboardingPaymentCohortPeriod, 
 function loadInvoicePayments(c: Context, period: OnboardingPaymentCohortPeriod, scope: string[], kind: 'credit', signal: AbortSignal): Promise<OnboardingCreditPayment[]>
 async function loadInvoicePayments(c: Context, period: OnboardingPaymentCohortPeriod, scope: string[], kind: 'subscription' | 'credit', signal: AbortSignal) {
   const records: Record<string, unknown>[] = []
-  let nextOffset = 0
   // Even an empty cohort verifies the authoritative source instead of masking an outage.
-  const worker = async () => {
-    while (nextOffset < Math.max(scope.length, 1)) {
+  const batches = Array.from({ length: Math.max(1, Math.ceil(scope.length / INVOICE_SCOPE_BATCH_SIZE)) }, (_, index) =>
+    scope.slice(index * INVOICE_SCOPE_BATCH_SIZE, (index + 1) * INVOICE_SCOPE_BATCH_SIZE))
+  const concurrency = Math.min(INVOICE_BATCH_CONCURRENCY, batches.length)
+  // Each worker owns a disjoint stride of the pre-partitioned batch list.
+  const worker = async (workerIndex: number) => {
+    for (let batchIndex = workerIndex; batchIndex < batches.length; batchIndex += concurrency) {
       signal.throwIfAborted()
-      const offset = nextOffset
-      nextOffset += INVOICE_SCOPE_BATCH_SIZE
-      const result = await queryPosthogHogql(c, buildOnboardingPaymentInvoiceHogql(period, scope.slice(offset, offset + INVOICE_SCOPE_BATCH_SIZE), kind), {
+      const result = await queryPosthogHogql(c, buildOnboardingPaymentInvoiceHogql(period, batches[batchIndex], kind), {
         requiredColumns: [kind === 'subscription' ? 'customer_id' : 'payment_intent_id', 'paid_at_seconds', 'total_rows'],
         signal,
       })
@@ -58,7 +59,7 @@ async function loadInvoicePayments(c: Context, period: OnboardingPaymentCohortPe
         throw new Error('Incomplete invoice source: combined source limit exceeded')
     }
   }
-  await Promise.all(Array.from({ length: Math.min(INVOICE_BATCH_CONCURRENCY, Math.max(1, Math.ceil(scope.length / INVOICE_SCOPE_BATCH_SIZE))) }, worker))
+  await Promise.all(Array.from({ length: concurrency }, (_, index) => worker(index)))
   return records.map((row) => {
     const seconds = onboardingPaymentSourceNumber(row.paid_at_seconds)
     if (!Number.isSafeInteger(seconds) || seconds <= 0)

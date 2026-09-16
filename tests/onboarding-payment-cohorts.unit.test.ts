@@ -200,6 +200,44 @@ describe('bounded PostHog payment report', () => {
     expect(queries.every(call => call[2].signal === queries[0][2].signal)).toBe(true)
   })
 
+  it.each(['subscription', 'credit'] as const)('queries every %s scope exactly once despite out-of-order batch completions', async (kind) => {
+    const size = 2501
+    const orgs = Array.from({ length: size }, (_, index) => org(`org-${index}`, 'user-a', `cus_fake_${index}`))
+    const grants = kind === 'credit'
+      ? orgs.map((ownedOrg, index) => ({ ...grant(`grant-${index}`), org_id: ownedOrg.id, payment_intent_id: `pi_fake_${index}` }))
+      : []
+    dataMock.mockResolvedValue({ users: [user()], orgs, grants })
+    const column = kind === 'subscription' ? 'customer_id' : 'payment_intent'
+    const resultColumn = kind === 'subscription' ? 'customer_id' : 'payment_intent_id'
+    const requested: string[] = []
+    let active = 0
+    let peak = 0
+    posthogMock.mockImplementation(async (_c, query: string) => {
+      if (!query.includes(`GROUP BY ${column},`))
+        return source()
+      const scopeText = query.match(new RegExp(`${column} IN \\(([^)]+)\\)`))?.[1] ?? ''
+      const scope = Array.from(scopeText.matchAll(/'([^']+)'/g), match => match[1])
+      requested.push(...scope)
+      peak = Math.max(peak, ++active)
+      // Later batches can finish before the first worker resumes.
+      await new Promise(resolve => setTimeout(resolve, scope[0].endsWith('_0') ? 10 : 1))
+      active--
+      return source(scope.map(id => ({
+        [resultColumn]: id,
+        paid_at_seconds: Date.parse('2026-09-02T00:00:00Z') / 1000,
+        total_rows: scope.length,
+      })))
+    })
+    const report = await getAdminOnboardingPaymentCohorts({} as Context, cutoff)
+    const expected = Array.from({ length: size }, (_, index) => `${kind === 'subscription' ? 'cus' : 'pi'}_fake_${index}`)
+    expect(requested).toHaveLength(size)
+    expect(new Set(requested).size).toBe(size)
+    expect([...requested].sort()).toEqual(expected.sort())
+    expect(peak).toBe(4)
+    expect(report.rows[0].ever.paid).toBe(1)
+    expect(report.credit_timestamp_fallbacks).toBe(0)
+  })
+
   it('cancels sibling warehouse requests when any authoritative batch fails', async () => {
     dataMock.mockResolvedValue({ users: [user()], orgs: Array.from({ length: 2501 }, (_, index) => org(`org-${index}`, 'user-a', `cus_${index}`)), grants: [] })
     let calls = 0
