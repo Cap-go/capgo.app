@@ -1992,7 +1992,7 @@ type SendEventPayload = TrackOptions & { nonPersonTags?: Record<string, unknown>
   | { notifyConsole?: false, icon?: never }
 )
 
-export async function sendEvent(capgkey: string, payload: SendEventPayload, verbose?: boolean, signal?: AbortSignal): Promise<void> {
+export async function sendEvent(capgkey: string, payload: SendEventPayload, verbose?: boolean, signal?: AbortSignal, apiHost?: string): Promise<void> {
   const telemetryDisabled = isTruthyEnvValue(env.CAPGO_DISABLE_TELEMETRY) || isTruthyEnvValue(env.CAPGO_DISABLE_POSTHOG)
   if (telemetryDisabled && !payload.notifyConsole)
     return
@@ -2019,9 +2019,9 @@ export async function sendEvent(capgkey: string, payload: SendEventPayload, verb
     if (verbose) {
       log.info(`Get remove config: for ${payload.event}`)
     }
-    // Always fetch remote config silently — sendEvent is telemetry and must
-    // not bypass an Ink-controlled stdout (e.g. during `capgo init`).
-    const config = await getRemoteConfig(true, signal)
+    // A resolved destination avoids rediscovering config in background workers.
+    // Fetch config silently when needed so telemetry cannot interrupt terminal UIs.
+    const hostApi = apiHost ?? (await getRemoteConfig(true, signal)).hostApi
     if (verbose) {
       log.info(`Sending analytics event: ${JSON.stringify(enrichedPayload)}`)
     }
@@ -2034,7 +2034,7 @@ export async function sendEvent(capgkey: string, payload: SendEventPayload, verb
       : controller.signal
 
     try {
-      const fetchResponse = await fetch(`${config.hostApi}/private/events`, {
+      const fetchResponse = await fetch(`${trimTrailingSlashes(hostApi)}/private/events`, {
         method: 'POST',
         body: JSON.stringify(enrichedPayload),
         headers: buildCliRequestHeaders({

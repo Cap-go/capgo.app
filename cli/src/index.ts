@@ -100,9 +100,9 @@ let currentCommandPath = 'unknown'
 program.hook('preAction', (_thisCommand, actionCommand) => {
   setConfigWriteTarget(resolveCapacitorConfigTargetPath(actionCommand.optsWithGlobals().capacitorConfig, cwd(), { logError: true }))
   currentCommandPath = getCommandPath(actionCommand)
-  startNotifyAppReadyCheck(actionCommand, currentCommandPath)
   setCurrentCliCommand(currentCommandPath)
   applyCommandAnalyticsOptOut(currentCommandPath, actionCommand.opts())
+  startNotifyAppReadyCheck(actionCommand, currentCommandPath)
   const commandContext = extractCommandContext(actionCommand)
   if (currentCommandPath === 'login' || currentCommandPath === 'init')
     deferCommandInvocation(currentCommandPath, commandContext)
