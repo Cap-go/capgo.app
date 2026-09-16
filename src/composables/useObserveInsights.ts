@@ -77,6 +77,7 @@ export function useObserveInsights(options: {
 
     const requestId = ++latestInsightsRequest
     insightsLoading.value = true
+    insights.value = null
     try {
       const { data: sessionData } = await supabase.auth.getSession()
       if (!sessionData.session) {

@@ -4,7 +4,7 @@ import { useNow } from '@vueuse/core'
 import { computed, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DateRangePicker from '~/components/DateRangePicker.vue'
-import { clampDateRange } from '~/services/dateRange'
+import { clampDateRange, inferDateRangePreset } from '~/services/dateRange'
 
 defineProps<{
   bundleNames: string[]
@@ -29,7 +29,13 @@ function onVersionSelectChange(event: Event) {
 
 function onRangeApply(payload: { start: Date, end: Date, mode: DateRangePreset }) {
   const clamped = clampDateRange({ start: payload.start, end: payload.end }, minDate.value)
-  emit('applyRange', { ...payload, start: clamped.start, end: clamped.end })
+  let mode = payload.mode
+  if (mode !== 'custom') {
+    const inferred = inferDateRangePreset(clamped.start, clamped.end)
+    if (inferred === 'custom' || inferred !== mode)
+      mode = inferred
+  }
+  emit('applyRange', { start: clamped.start, end: clamped.end, mode })
 }
 </script>
 

@@ -28,10 +28,8 @@ export function generateUtcDateLabels(from: Date, to: Date) {
 export function getCustomStatsPeriod(rangeStart: string | Date, rangeEnd: string | Date): RollingStatsPeriod {
   const start = new Date(rangeStart)
   const endExclusive = new Date(rangeEnd)
-  if (Number.isNaN(start.getTime()) || Number.isNaN(endExclusive.getTime()) || endExclusive.getTime() <= start.getTime()) {
-    const now = new Date()
-    return getRollingStatsPeriod(1, now)
-  }
+  if (Number.isNaN(start.getTime()) || Number.isNaN(endExclusive.getTime()) || endExclusive.getTime() <= start.getTime())
+    throw new Error('invalid_stats_range')
   const endInclusive = new Date(endExclusive.getTime() - 1)
   return {
     start: start.toISOString(),

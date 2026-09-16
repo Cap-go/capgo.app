@@ -8,7 +8,7 @@ export function legacyStatsDaysFromRange(start: Date, end: Date): PeriodDayOptio
     return 1
   if (hours <= 3.5 * 24)
     return 3
-  if (hours <= 10 * 24)
+  if (hours <= 14 * 24)
     return 7
   return 30
 }

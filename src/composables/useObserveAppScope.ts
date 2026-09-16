@@ -54,13 +54,21 @@ export function useObserveAppScope() {
   }
 
   async function loadAppInfo() {
+    const appId = id.value
+    if (!appId) {
+      app.value = undefined
+      publicChannels.value = []
+      return
+    }
     try {
       const { data: dataApp } = await supabase
         .from('apps')
         .select()
-        .eq('app_id', id.value)
+        .eq('app_id', appId)
         .single()
-      app.value = dataApp || app.value
+      if (appId !== id.value)
+        return
+      app.value = dataApp ?? undefined
 
       const { data: channelsData } = await supabase
         .from('channels')
@@ -69,9 +77,12 @@ export function useObserveAppScope() {
         name,
         version:app_versions!channels_version_fkey(id, name)
       `)
-        .eq('app_id', id.value)
+        .eq('app_id', appId)
         .eq('public', true)
         .order('id', { ascending: true })
+
+      if (appId !== id.value)
+        return
 
       const uniqueByVersion = new Map<string, { id: number, name: string, versionName: string }>()
       for (const channel of channelsData ?? []) {
@@ -85,7 +96,10 @@ export function useObserveAppScope() {
       publicChannels.value = [...uniqueByVersion.values()]
     }
     catch (error) {
+      if (appId !== id.value)
+        return
       console.error(error)
+      app.value = undefined
       publicChannels.value = []
     }
   }

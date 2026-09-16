@@ -292,7 +292,13 @@ app.post('/insights', middlewareAuth(), async (c) => {
     const endDate = normalizeRangeDate(body.rangeEnd)
     if (!startDate || !endDate)
       throw simpleError('invalid_body', 'Invalid body')
-    const custom = getCustomStatsPeriod(startDate, endDate)
+    let custom: ReturnType<typeof getCustomStatsPeriod>
+    try {
+      custom = getCustomStatsPeriod(startDate, endDate)
+    }
+    catch {
+      throw simpleError('invalid_body', 'Invalid body')
+    }
     const days = normalizeStatsInsightsPeriodDays(body.days) ?? 1
     period = {
       requested_days: days,

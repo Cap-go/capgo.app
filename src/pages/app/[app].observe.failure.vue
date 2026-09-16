@@ -290,7 +290,7 @@ function openDeviceLogs(device: { action: string, device_id: string }) {
               <div class="flex items-end gap-2 h-56">
                 <div v-for="day in dailyTotals" :key="day.date" class="flex flex-col items-center justify-end flex-1 h-full min-w-0 gap-2">
                   <div class="flex items-end w-full h-full rounded-t bg-slate-100 dark:bg-slate-700">
-                    <div class="w-full rounded-t bg-amber-500" :style="`height: ${Math.max(4, (day.total / maxDailyTotal) * 100)}%`" />
+                    <div class="w-full rounded-t bg-amber-500" :style="`height: ${day.total <= 0 ? 0 : Math.max(4, (day.total / maxDailyTotal) * 100)}%`" />
                   </div>
                   <div class="w-full text-center text-[11px] text-slate-500 dark:text-slate-400 truncate" :title="day.topAction ? formatAction(day.topAction) : ''">
                     {{ formatLocalDateShort(day.date) }}
