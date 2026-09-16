@@ -261,6 +261,11 @@ describe('public live update metrics', () => {
     expect(queries.join('\n')).toContain('blob6')
     expect(queries.join('\n')).toContain('blob7')
     expect(queries.join('\n')).toContain('blob10')
+    const firstDayQuery = queries.find(query => query.includes('first_day_successes'))
+    expect(firstDayQuery).toContain('argMin(successes, date)')
+    expect(firstDayQuery).toContain('argMin(failures, date)')
+    expect(firstDayQuery).toContain('sum(successes)')
+    expect(firstDayQuery).toContain('GROUP BY app_id, version_name')
   })
 
   it('computes device-day success rate for global_stats windows', async () => {
