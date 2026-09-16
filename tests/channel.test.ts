@@ -45,9 +45,17 @@ describe('[GET] /channel operations', () => {
       headers,
     })
 
-    const data = await response.json()
+    const data = await response.json<{ name: string, ios: boolean, android: boolean }[]>()
     expect(response.status).toBe(200)
     expect(Array.isArray(data)).toBe(true)
+    const { data: expected } = await getSupabaseClient()
+      .from('channels')
+      .select('ios, android')
+      .eq('app_id', APPNAME)
+      .eq('name', 'production')
+      .single()
+      .throwOnError()
+    expect(data.find(channel => channel.name === 'production')).toMatchObject(expected)
   })
 
   it('get specific channel', async () => {
@@ -60,6 +68,14 @@ describe('[GET] /channel operations', () => {
     const data = await response.json<{ name: string }>()
     expect(response.status).toBe(200)
     expect(data.name).toBe('production')
+    const { data: expected } = await getSupabaseClient()
+      .from('channels')
+      .select('ios, android')
+      .eq('app_id', APPNAME)
+      .eq('name', 'production')
+      .single()
+      .throwOnError()
+    expect(data).toMatchObject(expected)
   })
 
   it('invalid app_id', async () => {

@@ -187,6 +187,8 @@ Use this skill for OTA update workflows in Capgo Cloud.
 
 - Alias: `l`
 - Example: `npx @capgo/cli@latest channel list com.example.app`
+- Requires a valid API key with `app.read` and `app.read_channels` permission for the app. Permission failures identify the required permission.
+- Displays Yes/No settings and marks channels without a bundle as Unlinked. Narrow terminals show each channel as a Setting/Value table.
 
 ### `channel delete [channelId] [appId]`
 
