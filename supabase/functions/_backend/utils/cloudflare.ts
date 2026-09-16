@@ -3306,6 +3306,12 @@ export interface PublicBreakdownMetric {
 
 export interface PublicLiveUpdateMetrics {
   success_rate: number
+  first_try_rate: number | null
+  first_day_rate: number | null
+  first_day_success_rate: number | null
+  rollback_rate: number | null
+  zip_success_rate: number | null
+  delta_success_rate: number | null
   daily: Array<{ date: string, success_rate: number }>
   failures: Array<{ reason: string, share: number }>
   platforms: PublicBreakdownMetric[]
@@ -3325,6 +3331,17 @@ function roundPublicPercent(value: number) {
 function rawShare(part: number, total: number) {
   return total > 0 ? (part / total) * 100 : 0
 }
+
+function rateFromParts(part: number, total: number): number | null {
+  return total > 0 ? roundPublicPercent((part / total) * 100) : null
+}
+
+function rateFromOutcomes(successes: number, failures: number): number | null {
+  return rateFromParts(successes, successes + failures)
+}
+
+const PUBLIC_ZIP_FAIL_ACTIONS = ['unzip_fail', 'download_fail'] as const
+const PUBLIC_DELTA_FAIL_ACTIONS = ['download_manifest_file_fail', 'download_manifest_checksum_fail', 'download_manifest_brotli_fail', 'manifest_path_fail'] as const
 
 function buildBreakdownMetrics(
   shareRows: Array<{ key: string, devices: number }>,
@@ -3397,8 +3414,13 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
   const failureActions = PUBLIC_FAILURE_ACTIONS.map(action => `'${action}'`).join(', ')
   const day = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
   // Device-day outcomes: one success/fail per device per day. Fail-then-set same day counts as success only.
+  const zipFailActions = PUBLIC_ZIP_FAIL_ACTIONS.map(action => `'${action}'`).join(', ')
+  const deltaFailActions = PUBLIC_DELTA_FAIL_ACTIONS.map(action => `'${action}'`).join(', ')
   const outcomeBase = `SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(blob2 IN (${failureActions}), 1, 0)) AS failed, argMax(blob5, timestamp) AS platform, argMax(blob6, timestamp) AS country, argMax(blob7, timestamp) AS plugin_version FROM app_log WHERE ${window} AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id`
-  const outcomesQuery = `SELECT date, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (${outcomeBase}) GROUP BY date`
+  const outcomesQuery = `SELECT date, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures, sum(if(succeeded = 1 AND failed = 0, 1, 0)) AS first_tries FROM (${outcomeBase}) GROUP BY date`
+  const firstDayQuery = `SELECT sum(first_day_successes) AS first_day_successes, sum(first_day_failures) AS first_day_failures, sum(total_successes) AS total_successes FROM (SELECT app_id, version_name, argMin(successes, date) AS first_day_successes, argMin(failures, date) AS first_day_failures, sum(successes) AS total_successes FROM (SELECT date, app_id, version_name, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, blob3 AS version_name, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(blob2 IN (${failureActions}), 1, 0)) AS failed FROM app_log WHERE ${window} AND blob3 != '' AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id, version_name) GROUP BY date, app_id, version_name) GROUP BY app_id, version_name)`
+  const rollbackQuery = `SELECT sum(has_reset) AS rollbacks, sum(if(has_set + has_reset > 0, 1, 0)) AS outcomes FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'reset', 1, 0)) AS has_reset, max(if(blob2 = 'set', 1, 0)) AS has_set FROM app_log WHERE ${window} AND blob2 IN ('set', 'reset') GROUP BY date, app_id, device_id)`
+  const packageQuery = `SELECT sum(if(zip_ok = 1, 1, 0)) AS zip_successes, sum(if(zip_ok = 0 AND zip_fail = 1, 1, 0)) AS zip_failures, sum(if(delta_ok = 1, 1, 0)) AS delta_successes, sum(if(delta_ok = 0 AND delta_fail = 1, 1, 0)) AS delta_failures FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'download_zip_complete', 1, 0)) AS zip_ok, max(if(blob2 IN (${zipFailActions}), 1, 0)) AS zip_fail, max(if(blob2 = 'download_manifest_complete', 1, 0)) AS delta_ok, max(if(blob2 IN (${deltaFailActions}), 1, 0)) AS delta_fail FROM app_log WHERE ${window} AND blob2 IN ('download_zip_complete', 'download_manifest_complete', ${zipFailActions}, ${deltaFailActions}) GROUP BY date, app_id, device_id)`
   const failuresQuery = `SELECT action, count() AS devices FROM (SELECT ${day} AS date, blob2 AS action, index1 AS app_id, blob1 AS device_id FROM app_log WHERE ${window} AND blob2 IN (${failureActions}) GROUP BY date, action, app_id, device_id) GROUP BY action`
   const platformsShareQuery = `SELECT platform, count() AS devices FROM (SELECT double1 AS platform, index1 AS app_id, blob1 AS device_id FROM device_usage WHERE ${window} AND double1 IN (0.0, 1.0, 2.0) GROUP BY platform, app_id, device_id) GROUP BY platform`
   const platformsOutcomeQuery = `SELECT platform AS key, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (${outcomeBase}) WHERE platform IN ('ios', 'android', 'electron') GROUP BY platform`
@@ -3413,6 +3435,9 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
   try {
     const [
       outcomeRows,
+      firstDayRows,
+      rollbackRows,
+      packageRows,
       failureRows,
       platformShareRows,
       platformOutcomeRows,
@@ -3424,7 +3449,10 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
       versionOutcomeRows,
       versionFailureRows,
     ] = await Promise.all([
-      runQueryToCFA<{ date: string, successes: number, failures: number }>(c, outcomesQuery),
+      runQueryToCFA<{ date: string, successes: number, failures: number, first_tries: number }>(c, outcomesQuery),
+      runQueryToCFA<{ first_day_successes: number, first_day_failures: number, total_successes: number }>(c, firstDayQuery),
+      runQueryToCFA<{ rollbacks: number, outcomes: number }>(c, rollbackQuery),
+      runQueryToCFA<{ zip_successes: number, zip_failures: number, delta_successes: number, delta_failures: number }>(c, packageQuery),
       runQueryToCFA<{ action: string, devices: number }>(c, failuresQuery),
       runQueryToCFA<{ platform: number, devices: number }>(c, platformsShareQuery),
       runQueryToCFA<{ key: string, successes: number, failures: number }>(c, platformsOutcomeQuery),
@@ -3444,8 +3472,15 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
     }).sort((a, b) => a.date.localeCompare(b.date))
     const totalSuccesses = outcomeRows.reduce((sum, row) => sum + (Number(row.successes) || 0), 0)
     const totalFailures = outcomeRows.reduce((sum, row) => sum + (Number(row.failures) || 0), 0)
+    const totalFirstTries = outcomeRows.reduce((sum, row) => sum + (Number(row.first_tries) || 0), 0)
     const totalOutcomes = totalSuccesses + totalFailures
     const success_rate = totalOutcomes ? roundPublicPercent((totalSuccesses / totalOutcomes) * 100) : 0
+    const firstDay = firstDayRows[0]
+    const firstDaySuccesses = Number(firstDay?.first_day_successes) || 0
+    const firstDayFailures = Number(firstDay?.first_day_failures) || 0
+    const firstDayTotalSuccesses = Number(firstDay?.total_successes) || 0
+    const rollback = rollbackRows[0]
+    const packages = packageRows[0]
     const failureTotal = failureRows.reduce((sum, row) => sum + (Number(row.devices) || 0), 0)
     const failures = [...failureRows]
       .map(row => ({ reason: row.action, devices: Number(row.devices) || 0 }))
@@ -3464,6 +3499,12 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
 
     return {
       success_rate,
+      first_try_rate: rateFromParts(totalFirstTries, totalSuccesses),
+      first_day_rate: rateFromParts(firstDaySuccesses, firstDayTotalSuccesses),
+      first_day_success_rate: rateFromOutcomes(firstDaySuccesses, firstDayFailures),
+      rollback_rate: rateFromParts(Number(rollback?.rollbacks) || 0, Number(rollback?.outcomes) || 0),
+      zip_success_rate: rateFromOutcomes(Number(packages?.zip_successes) || 0, Number(packages?.zip_failures) || 0),
+      delta_success_rate: rateFromOutcomes(Number(packages?.delta_successes) || 0, Number(packages?.delta_failures) || 0),
       daily,
       failures,
       platforms: buildBreakdownMetrics(platformShareMapped, platformOutcomeRows, platformFailureRows, 3),
