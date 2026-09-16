@@ -20,6 +20,7 @@ import AdminDailyConversionChart from '~/components/admin/AdminDailyConversionCh
 import AdminFilterBar from '~/components/admin/AdminFilterBar.vue'
 import AdminFunnelChart from '~/components/admin/AdminFunnelChart.vue'
 import AdminOnboardingJourneyGraph from '~/components/admin/AdminOnboardingJourneyGraph.vue'
+import AdminRegistrationComparison from '~/components/admin/AdminRegistrationComparison.vue'
 import AdminStackedBarChart from '~/components/admin/AdminStackedBarChart.vue'
 import AdminStatsCard from '~/components/admin/AdminStatsCard.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
@@ -220,9 +221,7 @@ const intentToDetailsDaily = computed(() => latestDailyConversions.value?.intent
 const detailsToOrganizationDaily = computed(() => latestDailyConversions.value?.details_to_organization ?? [])
 const organizationToSetupDaily = computed(() => latestDailyConversions.value?.organization_to_setup ?? [])
 const hasConversionData = (points: readonly { started: number }[]) => points.some(point => point.started > 0)
-const v1FunnelStages = computed(() => buildFrontendOnboardingFunnelStages(visibleAnalytics.value?.funnels.v1 ?? []))
 const v4FunnelStages = computed(() => buildFrontendOnboardingFunnelStages(displayedV4Funnel.value))
-const v1FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(visibleAnalytics.value?.funnels.v1 ?? []))
 const v4FunnelSummaries = computed(() => buildFrontendOnboardingFunnelSummaries(displayedV4Funnel.value))
 const hasDailyAttempts = computed(() => displayedDailyAttempts.value
   .some(day => day.v1_attempts > 0 || day.v2_attempts > 0 || day.v3_attempts > 0 || (day.v4_attempts ?? 0) > 0))
@@ -866,37 +865,8 @@ displayStore.defaultBack = '/dashboard'
               accessible-borders
             />
           </ChartCard>
-
-          <ChartCard
-            chart-id="funnel-v1-legacy"
-            :title="t('frontend-onboarding-funnel-v1-legacy')"
-            :is-loading="isLoadingStats"
-          >
-            <template #header>
-              <div class="min-w-0">
-                <h2 class="text-xl font-semibold leading-tight text-slate-900 dark:text-white sm:text-2xl">
-                  {{ t('frontend-onboarding-funnel-v1-legacy') }}
-                </h2>
-                <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                  {{ t('frontend-onboarding-funnel-description') }}
-                </p>
-              </div>
-            </template>
-            <div class="mt-6 h-72 sm:h-80">
-              <AdminFunnelChart :stages="v1FunnelStages" />
-            </div>
-            <div class="grid grid-cols-2 gap-4 pt-5 mt-5 border-t border-slate-200 md:grid-cols-4 dark:border-slate-700">
-              <div v-for="summary in v1FunnelSummaries" :key="summary.key" class="text-center">
-                <p class="text-xl font-bold text-slate-900 tabular-nums dark:text-white">
-                  {{ formatNumberValue(summary.conversion_percent) }}%
-                </p>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {{ summary.from_label ? t('frontend-onboarding-transition', { from: summary.from_label, to: summary.to_label }) : summary.to_label }} · {{ formatNumberValue(summary.reached) }}
-                </p>
-              </div>
-            </div>
-          </ChartCard>
         </template>
+        <AdminRegistrationComparison />
       </div>
     </div>
   </div>
