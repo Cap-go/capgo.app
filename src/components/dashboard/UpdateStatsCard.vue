@@ -121,34 +121,40 @@ const hasData = computed(() => effectiveTotalUpdates.value > 0 || isDemoMode.val
 const PAGE_SIZE = 1000
 
 async function fetchDeviceFailedByDay(targetAppIds: string[], startDate: string, endDateExclusive: string) {
-  const supabase = useSupabase()
-  const { data: sessionData } = await supabase.auth.getSession()
-  if (!sessionData.session)
-    return null
+  try {
+    const supabase = useSupabase()
+    const { data: sessionData } = await supabase.auth.getSession()
+    if (!sessionData.session)
+      return null
 
-  if (targetAppIds.length === 0)
-    return null
+    if (targetAppIds.length === 0)
+      return null
 
-  const response = await fetch(`${defaultApiHost}/private/stats/device_outcomes`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'authorization': `Bearer ${sessionData.session.access_token}`,
-    },
-    body: JSON.stringify({
-      ...(props.appId ? { appId: props.appId } : {}),
-      appIds: targetAppIds,
-      rangeStart: `${startDate}T00:00:00.000Z`,
-      rangeEnd: `${endDateExclusive}T00:00:00.000Z`,
-    }),
-  })
+    const response = await fetch(`${defaultApiHost}/private/stats/device_outcomes`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'authorization': `Bearer ${sessionData.session.access_token}`,
+      },
+      body: JSON.stringify({
+        ...(props.appId ? { appId: props.appId } : {}),
+        appIds: targetAppIds,
+        rangeStart: `${startDate}T00:00:00.000Z`,
+        rangeEnd: `${endDateExclusive}T00:00:00.000Z`,
+      }),
+    })
 
-  if (!response.ok) {
-    console.error('Failed to fetch device update outcomes:', await response.json().catch(() => ({})))
+    if (!response.ok) {
+      console.error('Failed to fetch device update outcomes:', await response.json().catch(() => ({})))
+      return null
+    }
+
+    return await response.json() as Array<{ date: string, devices_failed: number }>
+  }
+  catch (error) {
+    console.error('Failed to fetch device update outcomes:', error)
     return null
   }
-
-  return await response.json() as Array<{ date: string, devices_failed: number }>
 }
 
 async function fetchDailyVersionStats(targetAppIds: string[], startDate: string, endDate: string) {

@@ -60,9 +60,12 @@ const statsInsightsSchema = z.object({
   versionName: safeQueryTextSchema.optional(),
 })
 
+/** Org dashboard may send many app ids; cap permission-check fan-out. */
+const MAX_DEVICE_OUTCOMES_APP_IDS = 500
+
 const deviceOutcomesSchema = z.object({
   appId: appIdSchema.optional(),
-  appIds: z.array(appIdSchema).optional(),
+  appIds: z.array(appIdSchema).max(MAX_DEVICE_OUTCOMES_APP_IDS).optional(),
   rangeStart: z.union([safeQueryDateSchema, z.number()]),
   rangeEnd: z.union([safeQueryDateSchema, z.number()]),
 }).refine(
@@ -238,11 +241,11 @@ app.post('/device_outcomes', middlewareAuth(), async (c) => {
   if (!startDate || !endDate)
     throw simpleError('invalid_body', 'Invalid body')
 
-  const requestedAppIds = body.appIds?.length
+  const requestedAppIds = [...new Set(body.appIds?.length
     ? body.appIds
     : body.appId
       ? [body.appId]
-      : []
+      : [])]
   const appIds: string[] = []
   for (const appId of requestedAppIds) {
     if (await checkPermission(c, 'app.read_logs', { appId }))
