@@ -52,7 +52,10 @@ describe('public live update metrics', () => {
             { name: 'failures', type: 'UInt64' },
             { name: 'first_tries', type: 'UInt64' },
           ],
-          [{ date: '2026-06-30', successes: '90', failures: '10', first_tries: '81' }],
+          [
+            { date: '2026-06-30', successes: '90', failures: '10', first_tries: '81' },
+            { date: '2026-06-29', successes: '20', failures: '30', first_tries: '10' },
+          ],
         )
       }
 
@@ -229,8 +232,12 @@ describe('public live update metrics', () => {
       new Date('2026-07-01T00:00:00.000Z'),
     )
 
-    expect(metrics.success_rate).toBe(90)
-    expect(metrics.first_try_rate).toBe(90)
+    expect(metrics.success_rate).toBe(73.3)
+    expect(metrics.first_try_rate).toBe(82.7)
+    expect(metrics.daily).toEqual([
+      { date: '2026-06-29', success_rate: 40 },
+      { date: '2026-06-30', success_rate: 90 },
+    ])
     expect(metrics.first_day_rate).toBe(40)
     expect(metrics.first_day_success_rate).toBe(90)
     expect(metrics.rollback_rate).toBe(3)
