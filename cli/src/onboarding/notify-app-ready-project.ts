@@ -90,23 +90,21 @@ export async function resolveNotifyAppReadyProject(options: NotifyAppReadyCheckO
     const selectedSource = options.packageJson || options.mainFile
       ? projectDirectory(options, root, {} as CapacitorConfig)
       : undefined
-    const matches: { dir: string, config: CapacitorConfig }[] = []
-    for (const candidate of discovery.candidates) {
-      if (selectedSource && realpathSync(candidate.dir) !== selectedSource)
-        continue
-      try {
-        const candidateConfig = await readConfig(candidate.dir)
-        if (!options.appId || getAppId(undefined, candidateConfig) === options.appId)
-          matches.push({ dir: candidate.dir, config: candidateConfig })
-      }
-      catch {
-        // An invalid sibling config must not prevent checking the selected app.
-      }
-    }
+    if ((options.packageJson || options.mainFile) && !selectedSource)
+      return undefined
+    // Select statically before evaluating any executable workspace config.
+    const matches = discovery.candidates.filter(candidate => selectedSource
+      ? realpathSync(candidate.dir) === selectedSource
+      : !options.appId || candidate.appId === options.appId)
     if (matches.length !== 1)
       return undefined
     configDir = matches[0].dir
-    config = matches[0].config
+    try {
+      config = await readConfig(configDir)
+    }
+    catch {
+      return undefined
+    }
   }
 
   const appId = getAppId(undefined, config)

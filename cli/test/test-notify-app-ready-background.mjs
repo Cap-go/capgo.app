@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -144,6 +144,28 @@ test('honors dynamic root config source paths and rejects conflicting targets', 
   assert.equal(await resolveNotifyAppReadyProject({ ...options, packageJson: 'apps/mobile/package.json,package.json' }), undefined)
   write(target, { ...project.config, appId: 'com.example.other' })
   assert.equal(await resolveNotifyAppReadyProject(options), undefined)
+})
+
+test('workspace discovery does not execute unselected sibling configs', async () => {
+  const root = fixture()
+  write(join(root, 'package.json'), { private: true, workspaces: ['apps/*'] })
+  const first = app(root, 'apps/first', 'com.example.first')
+  const second = app(root, 'apps/second', 'com.example.second')
+  for (const project of [first, second]) {
+    write(join(project.dir, 'capacitor.config.js'), `
+      require('node:fs').writeFileSync(${JSON.stringify(join(project.dir, 'config-loaded'))}, 'loaded')
+      module.exports = ${JSON.stringify(project.config)}
+    `)
+  }
+  const options = { cwd: root, command: 'app list' }
+  assert.equal(await resolveNotifyAppReadyProject(options), undefined)
+  assert.equal(await resolveNotifyAppReadyProject({ ...options, appId: 'com.example.unknown' }), undefined)
+  assert.equal(await resolveNotifyAppReadyProject({ ...options, packageJson: 'apps/first/package.json,apps/second/package.json' }), undefined)
+  assert.equal(existsSync(join(first.dir, 'config-loaded')), false)
+  assert.equal(existsSync(join(second.dir, 'config-loaded')), false)
+  assert.equal((await resolveNotifyAppReadyProject({ ...options, appId: second.appId })).dir, second.dir)
+  assert.equal(existsSync(join(first.dir, 'config-loaded')), false)
+  assert.equal(existsSync(join(second.dir, 'config-loaded')), true)
 })
 
 test('incomplete scans and invalid Capacitor configs cannot mark integration complete', async () => {
