@@ -154,3 +154,16 @@ describe('webNativeApp onboarding A/B tests', () => {
     expect(reconcileOnboardingABTestAssignments(current, authoritative)).toEqual(authoritative)
   })
 })
+
+
+describe('independent checklist version experiment', () => {
+  it.concurrent('does not change PostHog wizard version when the todo-list flag is added', () => {
+    for (const intent of ['ota', 'both', 'builder'] as const) {
+      for (const channelBranch of ['A', 'B'] as const) {
+        const existing = { abtests: { new_channel: { branch: channelBranch, assigned_at: '2026-09-16T00:00:00Z' } } }
+        const treatment = { abtests: { ...existing.abtests, ota_todo_list_v3: { branch: 'A', assigned_at: '2026-09-16T00:00:00Z' } } }
+        expect(resolveOnboardingAnalyticsVersion(treatment, intent)).toBe(resolveOnboardingAnalyticsVersion(existing, intent))
+      }
+    }
+  })
+})

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '../src/utils/onboardingChannelAnalytics'
-import { createOnboardingChannelAnimationTracker } from '../src/utils/onboardingChannelAnalytics'
+import { createOnboardingChannelAnimationTracker, withOnboardingChannelOrigin } from '../src/utils/onboardingChannelAnalytics'
+import { createOnboardingProgressTracker, NEW_CHANNEL_ANALYTICS_VERSION } from '../src/utils/onboardingProgressAnalytics'
 
 function createTracker() {
   let now = 1_000
@@ -34,6 +35,57 @@ function createTracker() {
 }
 
 describe('onboarding channel animation analytics', () => {
+  it.concurrent('keeps todo-list and regular-onboarding origins distinct through the PostHog capture pipeline', () => {
+    const capture = vi.fn()
+    const progress = createOnboardingProgressTracker({
+      capture,
+      flow: 'pre_org',
+      steps: ['setup'],
+      resumed: true,
+      onboardingAttemptId: '00000000-0000-4000-8000-000000000001',
+      onboardingRunId: 'ir_00000000-0000-4000-8000-000000000002',
+      onboardingVersion: () => NEW_CHANNEL_ANALYTICS_VERSION,
+      supaHost: 'https://supabase.capgo.test',
+    })
+    progress.viewStep('setup')
+    const regular = createOnboardingChannelAnimationTracker({
+      stage: 'channel-routing',
+      emit: (event, properties) => progress.trackStepEvent(event, 'setup', withOnboardingChannelOrigin(properties)),
+    })
+    regular.start('automatic', { durationMs: () => 8000, progress: () => 0.25 })
+    const todo = createOnboardingChannelAnimationTracker({
+      stage: 'channel-routing',
+      emit: (event, properties) => progress.trackStepEvent(event, 'setup', withOnboardingChannelOrigin(withOnboardingChannelOrigin(properties, 'todo_list'))),
+    })
+    todo.start('automatic', { durationMs: () => 8000, progress: () => 0.25 })
+    todo.replayRequested()
+    todo.start('replay', { durationMs: () => 8000, progress: () => 0.25 })
+    todo.dispose()
+    progress.trackStepEvent('onboarding_channel_create_succeeded', 'setup', withOnboardingChannelOrigin({
+      channel_stage: 'channel-create',
+      created_in_onboarding: true,
+      channel_name_length: 10,
+    }, 'todo_list'))
+
+    const channelCaptures = capture.mock.calls.filter(call => call[0].startsWith('onboarding_channel_'))
+    expect(channelCaptures.filter(call => call[2].channel_flow_origin === 'onboarding').map(call => call[0])).toEqual([
+      'onboarding_channel_stage_viewed',
+      'onboarding_channel_animation_started',
+    ])
+    expect(channelCaptures.filter(call => call[2].channel_flow_origin === 'todo_list').map(call => call[0])).toEqual([
+      'onboarding_channel_stage_viewed',
+      'onboarding_channel_animation_started',
+      'onboarding_channel_animation_replayed',
+      'onboarding_channel_animation_started',
+      'onboarding_channel_animation_interrupted',
+      'onboarding_channel_create_succeeded',
+    ])
+    for (const [, , properties] of channelCaptures) {
+      expect(properties).toMatchObject({ onboarding_version: NEW_CHANNEL_ANALYTICS_VERSION, resumed: true, step: 'setup' })
+      expect(properties).not.toHaveProperty('channel_name')
+    }
+  })
+
   it.concurrent('tracks the stage, animation start, completion, and a completed continuation', () => {
     const context = createTracker()
     context.tracker.start('automatic', context.source)

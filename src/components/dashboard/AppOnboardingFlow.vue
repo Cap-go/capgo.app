@@ -83,6 +83,7 @@ import {
   loadOnboardingAppDraft,
 } from '~/utils/onboardingAppDraft'
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
+import { withOnboardingChannelOrigin } from '~/utils/onboardingChannelAnalytics'
 import {
   createOnboardingDetailsFieldDebouncer,
   createOnboardingProgressTracker,
@@ -103,6 +104,7 @@ import {
 } from '~/utils/userOnboardingProgress'
 import AppOnboardingCliSteps from './AppOnboardingCliSteps.vue'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
+import AppOnboardingSetupChecklist from './AppOnboardingSetupChecklist.vue'
 import AppOnboardingWelcome from './AppOnboardingWelcome.vue'
 import ChannelConsoleAssignOnboarding from './ChannelConsoleAssignOnboarding.vue'
 import ChannelCreateOnboarding from './ChannelCreateOnboarding.vue'
@@ -590,6 +592,7 @@ const canCreatePreOrgOrganization = computed(() => {
 })
 const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-title') : t('unified-onboarding-setup-ota-title'))
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
+const showSetupChecklist = computed(() => (flowStep.value === 'setup' || flowStep.value === 'install') && setupStage.value === 'cli' && !!createdApp.value && !usesBuilderSetupCommand.value && parseAppOnboarding(createdApp.value?.onboarding).todo_list_version === 3)
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
 let trackedAnalyticsSteps: OnboardingAnalyticsStep[] = []
@@ -618,7 +621,7 @@ function trackOrganizationEvent(
 }
 
 function trackChannelEvent(name: OnboardingChannelEvent, details: OnboardingChannelEventProperties) {
-  progressTracker?.trackStepEvent(name, analyticsStepFor(flowStep.value), details)
+  progressTracker?.trackStepEvent(name, analyticsStepFor(flowStep.value), withOnboardingChannelOrigin(details))
 }
 
 const detailsFieldTracker = createOnboardingDetailsFieldDebouncer((name, step, details) => {
@@ -2674,13 +2677,13 @@ defineExpose({
       'onboarding-flow-details-icon': flowStep === 'details' && appDetailsStep === 'icon',
     }"
   >
-    <div class="mx-auto w-full" :class="(flowStep === 'setup' || flowStep === 'install') && setupStage !== 'cli' ? 'max-w-6xl' : 'max-w-3xl'">
+    <div class="mx-auto w-full" :class="showSetupChecklist || ((flowStep === 'setup' || flowStep === 'install') && setupStage !== 'cli') ? 'max-w-6xl' : 'max-w-3xl'">
       <div v-if="isLoading" class="flex min-h-[50vh] items-center justify-center">
         <Spinner size="w-32 h-32" />
       </div>
 
       <div v-else class="onboarding-flow-content space-y-6">
-        <header class="onboarding-flow-header">
+        <header v-if="!showSetupChecklist" class="onboarding-flow-header">
           <div class="flex items-center gap-2">
             <button
               v-if="showSetupBackButton"
@@ -3439,6 +3442,24 @@ defineExpose({
             </div>
           </div>
         </template>
+
+        <AppOnboardingSetupChecklist
+          v-else-if="showSetupChecklist && createdApp"
+          :key="createdApp.app_id"
+          :app-id="createdApp.app_id"
+          :initial-onboarding="createdApp.onboarding"
+          :command="cliCommand"
+          :hiding="isHidingSplash"
+          :leaving="isSeedingDemo"
+          @copy-command="copyCliCommand"
+          @copy-ai="copyAiInstructions"
+          @hide="skipOnboardingSplash"
+          @explore="openDashboard"
+          @complete="openDashboard"
+          @invite-opened="onTechnicalInviteOpened"
+          @invite-succeeded="onTechnicalInviteSucceeded"
+          @channel-analytics="trackChannelEvent"
+        />
 
         <div v-else-if="flowStep === 'setup' && createdApp">
           <ChannelDefaultRoutingOnboarding

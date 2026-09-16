@@ -1,0 +1,115 @@
+import type { Context } from 'hono'
+import type { MiddlewareKeyVariables } from '../supabase/functions/_backend/utils/hono.ts'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { app, persistObservedProgress } from '../supabase/functions/_backend/private/onboarding_progress.ts'
+
+const mocks = vi.hoisted(() => ({
+  permission: vi.fn(), permissionPg: vi.fn(), from: vi.fn(), devices: vi.fn(), logs: vi.fn(), execute: vi.fn(), close: vi.fn(), track: vi.fn(),
+  row: { onboarding: { setup: { todo_list_version: 3, steps: {} } }, created_at: '2026-09-16T00:00:00Z' } as any,
+  channels: [] as any[], versions: [] as any[], archive: [] as any[], errors: {} as Record<string, boolean>, queries: [] as any[],
+}))
+vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', () => ({ middlewareAuth: () => async (c: Context<MiddlewareKeyVariables>, next: () => Promise<void>) => {
+  c.set('auth', { authType: 'jwt', userId: '11111111-1111-4111-8111-111111111111', jwt: 'fixture', apikey: null })
+  await next()
+} }))
+vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({ checkPermission: mocks.permission, checkPermissionPg: mocks.permissionPg }))
+vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({ supabaseWithAuth: () => ({ from: mocks.from }) }))
+vi.mock('../supabase/functions/_backend/utils/stats.ts', () => ({ readDevices: mocks.devices, readStats: mocks.logs }))
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({ getPgClient: () => ({}), getDrizzleClient: () => ({ transaction: (fn: any) => fn({ execute: mocks.execute }) }), closeClient: mocks.close }))
+vi.mock('../supabase/functions/_backend/utils/utils.ts', async (original) => ({ ...await original<typeof import('../supabase/functions/_backend/utils/utils.ts')>(), backgroundTask: async (_c: any, task: any) => await task }))
+vi.mock('../supabase/functions/_backend/utils/posthog.ts', () => ({ trackPosthogEvent: mocks.track }))
+
+function query(table: string) {
+  const calls: any[] = []
+  mocks.queries.push({ table, calls })
+  const builder: any = {}
+  for (const method of ['select', 'eq', 'neq', 'not', 'or', 'gt', 'in', 'limit'])
+    builder[method] = (...args: any[]) => { calls.push([method, ...args]); return builder }
+  builder.single = async () => ({ data: mocks.row, error: mocks.errors[table] ? new Error('Unavailable') : null })
+  builder.then = (resolve: any, reject: any) => Promise.resolve({
+    data: table === 'channels' ? mocks.channels : calls.some(call => String(call[1]).includes('!inner')) ? mocks.archive : mocks.versions,
+    error: mocks.errors[table] ? new Error('Unavailable') : null,
+  }).then(resolve, reject)
+  return builder
+}
+const request = (N: number, initial = false, appId = 'com.test.onboarding') => app.request('http://local/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appId, N, initial }) })
+
+describe('onboarding progress endpoint', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.row = { onboarding: { setup: { todo_list_version: 3, steps: {} } }, created_at: '2026-09-16T00:00:00Z' }
+    mocks.channels = []; mocks.versions = []; mocks.archive = []; mocks.errors = {}; mocks.queries = []
+    mocks.from.mockImplementation(query)
+    mocks.permission.mockResolvedValue(true)
+    mocks.permissionPg.mockResolvedValue(true)
+    mocks.devices.mockResolvedValue({ data: [] })
+    mocks.logs.mockResolvedValue([])
+    mocks.execute.mockResolvedValue({ rows: [] })
+  })
+  it.each([0, 1, 2, 3, 4, 5, 9])('always reads the exact app at N=%s and rotates extra checks', async (N) => {
+    expect((await request(N)).status).toBe(200)
+    expect(mocks.queries[0]).toMatchObject({ table: 'apps', calls: [['select', 'onboarding, created_at'], ['eq', 'app_id', 'com.test.onboarding']] })
+    expect(mocks.from.mock.calls.filter(call => call[0] === 'channels')).toHaveLength(N % 5 === 0 ? 1 : 0)
+    expect(mocks.devices).toHaveBeenCalledTimes(N % 5 === 1 ? 1 : 0)
+    expect(mocks.logs).toHaveBeenCalledTimes(N % 5 === 3 ? 1 : 0)
+    expect(mocks.from.mock.calls.filter(call => call[0] === 'app_versions')).toHaveLength(N % 5 === 2 ? 2 : 0)
+  })
+  it('checks all four on initial load and bypasses demo logs', async () => {
+    expect((await request(0, true)).status).toBe(200)
+    expect(mocks.devices).toHaveBeenCalledWith(expect.anything(), { app_id: 'com.test.onboarding', limit: 1 }, false)
+    expect(mocks.logs).toHaveBeenCalledWith(expect.anything(), { app_id: 'com.test.onboarding', actions: ['set'], start_date: mocks.row.created_at, limit: 10 }, false)
+    expect(mocks.queries.some(q => q.calls.some((call: any[]) => call.includes('add_code')))).toBe(false)
+  })
+  it('retains progress and channel state when a check fails', async () => {
+    mocks.errors.channels = true
+    const result = await (await request(0)).json()
+    expect(result).toEqual({ onboarding: mocks.row.onboarding, checkErrors: ['add_channel'] })
+    expect(mocks.execute).not.toHaveBeenCalled()
+  })
+  it('requires set for a real uploaded version, never download_complete or builtin', async () => {
+    mocks.logs.mockResolvedValue([{ action: 'download_complete', device_id: 'device', version_name: '1.0' }, { action: 'set', device_id: 'device', version_name: 'builtin' }])
+    await request(3)
+    expect(mocks.from).not.toHaveBeenCalledWith('app_versions')
+    mocks.logs.mockResolvedValue([{ action: 'set', device_id: 'device', version_name: '1.0' }])
+    await request(3)
+    expect(mocks.queries.at(-1).calls).toContainEqual(['in', 'name', ['1.0']])
+    expect(mocks.queries.at(-1).calls).toContainEqual(['eq', 'app_id', 'com.test.onboarding'])
+  })
+  it('does not infer new milestones for a control app', async () => {
+    mocks.row.onboarding.setup.todo_list_version = 2
+    await request(0, true)
+    expect(mocks.devices).not.toHaveBeenCalled()
+    expect(mocks.logs).not.toHaveBeenCalled()
+    expect(mocks.from).not.toHaveBeenCalledWith('app_versions')
+    expect(mocks.execute).not.toHaveBeenCalled()
+  })
+  it('does not expose app existence or logs/devices without permission', async () => {
+    mocks.permission.mockResolvedValue(false)
+    expect((await request(0)).status).toBe(403)
+    expect(mocks.from).not.toHaveBeenCalled()
+    mocks.permission.mockImplementation(async (_c, permission) => permission === 'app.read')
+    await request(0, true)
+    expect(mocks.devices).not.toHaveBeenCalled()
+    expect(mocks.logs).not.toHaveBeenCalled()
+  })
+  it.each([-1, 1.5, '2', Number.MAX_SAFE_INTEGER + 1])('rejects invalid N=%s before reading data', async (N) => {
+    expect((await request(N as number)).status).toBe(400)
+    expect(mocks.from).not.toHaveBeenCalled()
+  })
+  it('merges observations with the locked current row, preserving init app-ready progress', async () => {
+    const onboarding = { setup: { todo_list_version: 3, source: 'cli', steps: { add_code: { status: 'done' }, login_cli_mcp: { status: 'done' } } } }
+    mocks.execute.mockResolvedValueOnce({ rows: [{ onboarding, owner_org: 'org' }] }).mockResolvedValue({ rows: [] })
+    const context = { get: (key: string) => key === 'auth' ? { userId: 'user', authType: 'jwt' } : undefined, env: {} } as any
+    const result = await persistObservedProgress(context, 'com.test.onboarding', { run_device: true }) as any
+    expect(result.setup.steps.add_code.status).toBe('done')
+    expect(result.setup.steps.run_device.status).toBe('done')
+    expect(result.setup.steps.test_update).toBeUndefined()
+    expect(mocks.close).toHaveBeenCalledOnce()
+  })
+  it('unchecks a deleted channel despite a saved done report', async () => {
+    const onboarding = { setup: { todo_list_version: 3, steps: { add_channel: { status: 'done' } } } }
+    mocks.execute.mockResolvedValueOnce({ rows: [{ onboarding, owner_org: 'org' }] }).mockResolvedValue({ rows: [] })
+    const context = { get: () => ({ userId: 'user', authType: 'jwt' }), env: {} } as any
+    expect((await persistObservedProgress(context, 'com.test.onboarding', { add_channel: false }) as any).setup.steps.add_channel).toBeUndefined()
+  })
+})

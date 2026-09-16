@@ -5,7 +5,7 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { sql } from 'drizzle-orm'
 import { buildAppCreatorEventDetails } from '../../utils/app_creator.ts'
 import { buildAppOnboardingStepPosthogEvent } from '../../utils/app_onboarding_posthog.ts'
-import { appendAppOnboardingStepHistory, getAppOnboardingStepHistoryChanges, parseAppOnboarding, parseAppOnboardingPatch } from '../../utils/appOnboarding.ts'
+import { appendAppOnboardingStepHistory, filterAppOnboardingReportedPatch, getAppOnboardingStepHistoryChanges, parseAppOnboarding, parseAppOnboardingPatch } from '../../utils/appOnboarding.ts'
 import { deleteAppStatus } from '../../utils/appStatus.ts'
 import { trackBentoEvent } from '../../utils/bento.ts'
 import { createIfNotExistStoreInfo } from '../../utils/cloudflare.ts'
@@ -78,6 +78,7 @@ async function persistAppOnboarding(
       if (!currentResult.rows[0])
         return undefined
 
+      patch = filterAppOnboardingReportedPatch(currentOnboarding, patch)
       const mergeResult = await tx.execute<{ onboarding: unknown }>(sql`
         SELECT public.merge_app_onboarding_setup(
           ${JSON.stringify(currentOnboarding)}::jsonb,

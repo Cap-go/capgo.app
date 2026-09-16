@@ -46,5 +46,26 @@
       "C": { "bento_tag": "ab:webnativeapp_development_environment", "label": "Development environment question" },
       "D": { "bento_tag": "ab:no_webnativeapp_development_environment", "label": "Current onboarding" }
     }
+  },
+  "ota_todo_list_v3": {
+    "comment": "Assigns the seven-goal checklist to new apps in organizations created by the OTA-intent user. Independent from wizard analytics versions.",
+    "audience": "all",
+    "intents": [
+      "ota"
+    ],
+    "label": "OTA setup checklist v3",
+    "treatment_percentage": 50,
+    "treatment_branch": "A",
+    "control_branch": "B",
+    "branches": {
+      "A": {
+        "bento_tag": "ab:ota_todo_list_v3",
+        "label": "Seven-goal checklist"
+      },
+      "B": {
+        "bento_tag": "ab:no_ota_todo_list_v3",
+        "label": "Current checklist"
+      }
+    }
   }
 }

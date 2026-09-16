@@ -3,6 +3,8 @@ import { INIT_ONBOARDING_STEP_IDS } from '../cli/src/init/onboarding-steps'
 import {
   APP_ONBOARDING_V1_STEP_IDS,
   APP_ONBOARDING_V2_STEP_IDS,
+  APP_ONBOARDING_V3_STEP_IDS,
+  filterAppOnboardingReportedPatch,
   appendAppOnboardingStepHistory,
   applyAppOnboardingPatch,
   getAppOnboardingStepHistoryChanges,
@@ -191,5 +193,31 @@ describe('app onboarding merge', () => {
       historyLength: 1,
       historyFull: false,
     }])
+  })
+})
+
+
+describe('seven-goal checklist v3', () => {
+  const current = { setup: { todo_list_version: 3, steps: {} } }
+  it.concurrent('uses seven required milestones without changing v1/v2 or the default', () => {
+    expect(getAppOnboardingStepIds(3)).toEqual(['login_cli_mcp', 'add_channel', 'add_updater', 'add_code', 'run_device', 'upload_bundle', 'test_update'])
+    expect(defaultAppOnboarding().todo_list_version).toBe(2)
+  })
+  it.concurrent('ignores legacy CLI completion until all seven goals are present', () => {
+    const state = mergeAppOnboarding(current, { outcome: 'completed', steps: { completion: { status: 'done' }, add_encryption: { status: 'skipped' } } })
+    expect(state.outcome).toBe('in_progress')
+    expect(state.steps).toEqual({})
+    expect(mergeAppOnboarding(current, { steps: Object.fromEntries(APP_ONBOARDING_V3_STEP_IDS.map(id => [id, { status: 'done' }])) }).outcome).toBe('completed')
+    expect(mergeAppOnboarding(current, { outcome: 'skipped' }).outcome).toBe('skipped')
+  })
+  it.concurrent('keeps app-ready reports while requiring backend evidence for three milestones', () => {
+    const patch = { source: 'cli' as const, steps: { add_code: { status: 'done' as const }, run_device: { status: 'done' as const }, upload_bundle: { status: 'done' as const }, test_update: { status: 'done' as const } } }
+    expect(filterAppOnboardingReportedPatch(current, patch).steps).toEqual({ add_code: { status: 'done' } })
+    expect(filterAppOnboardingReportedPatch({ setup: { todo_list_version: 2 } }, patch)).toBe(patch)
+  })
+  it.concurrent('preserves other milestone histories during an automatic update', () => {
+    const saved = { setup: { todo_list_version: 3, steps: { add_code: { status: 'done', update_history: [{ status: 'done', at: '2026-09-16' }] } } } }
+    const next = applyAppOnboardingPatch(saved, { steps: { run_device: { status: 'done' } } })
+    expect((next.setup as any).steps.add_code.update_history).toEqual(saved.setup.steps.add_code.update_history)
   })
 })

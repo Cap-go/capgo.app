@@ -28,6 +28,11 @@ export const APP_ONBOARDING_V2_STEP_IDS = [
   'completion',
 ] as const
 
+export const APP_ONBOARDING_V3_STEP_IDS = [
+  'login_cli_mcp', 'add_channel', 'add_updater', 'add_code',
+  'run_device', 'upload_bundle', 'test_update',
+] as const
+
 export type AppOnboardingStepId
   = | typeof APP_ONBOARDING_V1_STEP_IDS[number]
     | typeof APP_ONBOARDING_V2_STEP_IDS[number]
@@ -98,7 +103,7 @@ export function defaultAppOnboarding(): AppOnboardingState {
 }
 
 export function getAppOnboardingStepIds(todoListVersion: number): readonly AppOnboardingStepId[] {
-  return todoListVersion === 1 ? APP_ONBOARDING_V1_STEP_IDS : APP_ONBOARDING_V2_STEP_IDS
+  return todoListVersion === 3 ? APP_ONBOARDING_V3_STEP_IDS : todoListVersion === 1 ? APP_ONBOARDING_V1_STEP_IDS : APP_ONBOARDING_V2_STEP_IDS
 }
 
 export function isAppOnboardingSource(value: unknown): value is AppOnboardingSource {
@@ -236,7 +241,7 @@ export function deriveAppOnboardingOutcome(
   if (allPresent)
     return anySkipped ? 'skipped' : 'completed'
 
-  if (patch === 'completed' || patch === 'skipped')
+  if ((patch === 'completed' && todoListVersion !== 3) || patch === 'skipped')
     return patch
 
   if (patch === 'switched_to_manual' || current === 'switched_to_manual')
@@ -286,6 +291,12 @@ export function applyAppOnboardingPatch(
 ): Record<string, unknown> {
   const existing = isRecord(currentValue) ? { ...currentValue } : {}
   const setup = mergeAppOnboarding(existing.setup ?? existing, patch, now)
+  const rawSetup = parseSetupRecord(currentValue)
+  const rawSteps = isRecord(rawSetup.steps) ? rawSetup.steps : {}
+  for (const id of Object.keys(setup.steps) as AppOnboardingStepId[]) {
+    if (isRecord(rawSteps[id]))
+      setup.steps[id] = { ...rawSteps[id], ...setup.steps[id]! }
+  }
   delete existing.source
   delete existing.outcome
   delete existing.steps
@@ -359,4 +370,15 @@ export function getAppOnboardingStepHistoryChanges(
       historyFull: 'type' in latest,
     }]
   })
+}
+
+// These v3 milestones require observed backend evidence, not init prompt completion.
+export function filterAppOnboardingReportedPatch(current: unknown, patch: AppOnboardingPatch): AppOnboardingPatch {
+  if (parseAppOnboarding(current).todo_list_version !== 3)
+    return patch
+  const steps = { ...patch.steps }
+  delete steps.run_device
+  delete steps.upload_bundle
+  delete steps.test_update
+  return { ...patch, steps }
 }
