@@ -3501,6 +3501,12 @@
   "admin-ab-tests-development-environment-ai-assistant-note": "AI assistant includes Claude, Cursor, Codex and other AI coding assistants.",
   "admin-ab-tests-development-environment-no-selection-note": "Did not select yet includes missing, unavailable or skipped answers and unsupported legacy values.",
   "admin-ab-tests-development-environment-empty": "No people have been assigned to this cohort yet.",
+  "admin-ab-tests-environment-intent-title": "{group}: selected intent",
+  "admin-ab-tests-environment-intent-description": "Saved intent among people in the selected app-building group.",
+  "admin-ab-tests-environment-intent-group": "App-building tool",
+  "admin-ab-tests-environment-intent-people": "unique people · {group}",
+  "admin-ab-tests-environment-intent-note": "Counts and percentages use the selected group only. Intent is read from each person's saved onboarding answer, not inferred from organizations. Did not select yet includes missing, skipped and unsupported values.",
+  "admin-ab-tests-environment-intent-empty": "No people in this cohort belong to the {group} group yet.",
   "admin-ab-tests-load-error": "Unable to load A/B test data. Please try again.",
   "admin-ab-tests-empty": "No A/B tests are configured."
 }

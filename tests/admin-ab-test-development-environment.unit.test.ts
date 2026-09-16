@@ -60,7 +60,7 @@ describe('admin A/B test development environment replica query', () => {
   })
 
   it('counts one user row in the C assignment cohort using only their saved answer', async () => {
-    queryMock.mockResolvedValueOnce({ rows: [{ outcome: 'hand_coded', people: '4' }, { outcome: 'no_selection_yet', people: '2' }] })
+    queryMock.mockResolvedValueOnce({ rows: [{ outcome: 'hand_coded', intent: 'ota', people: '4' }, { outcome: 'no_selection_yet', intent: 'no_selection_yet', people: '2' }] })
     const context = {} as never
     expect(await getAdminABTestDevelopmentEnvironment(context)).toMatchObject({ total: 6 })
     expect(getPgClientMock).toHaveBeenCalledWith(context, true)
@@ -77,6 +77,7 @@ describe('admin A/B test development environment replica query', () => {
     expect(parameters).toEqual([
       JSON.stringify({ webnativeapp_development_environment: { branch: 'C' } }),
       ['ai_assistant', 'hosted_builder', 'other', 'hand_coded'],
+      ['publish', 'builder', 'ota', 'both', 'exploring'],
     ])
     expect(closeClientMock).toHaveBeenCalledWith(context, getPgClientMock.mock.results[0].value)
   })
@@ -88,6 +89,79 @@ describe('admin A/B test development environment replica query', () => {
     queryMock.mockResolvedValueOnce({ rows: [{ outcome: 'ai_assistant', people: 'bad' }] })
     await expect(getAdminABTestDevelopmentEnvironment(context)).rejects.toThrow()
     expect(closeClientMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('splits only hosted-builder people into every saved intent without changing the tool totals', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [
+      { outcome: 'hosted_builder', intent: 'publish', people: '2' },
+      { outcome: 'hosted_builder', intent: 'publish', people: 1 },
+      { outcome: 'hosted_builder', intent: 'builder', people: '3' },
+      { outcome: 'hosted_builder', intent: 'ota', people: 1 },
+      { outcome: 'hosted_builder', intent: 'both', people: 0 },
+      { outcome: 'hosted_builder', intent: 'exploring', people: 1 },
+      { outcome: 'hosted_builder', intent: 'no_selection_yet', people: '3' },
+      { outcome: 'ai_assistant', intent: 'publish', people: 5 },
+    ] })
+    const result = await getAdminABTestDevelopmentEnvironment({} as never)
+    expect(result).toMatchObject({
+      total: 16,
+      hosted_builder_intents: {
+        total: 11,
+        outcomes: [
+          { outcome: 'publish', count: 3 },
+          { outcome: 'builder', count: 3 },
+          { outcome: 'ota', count: 1 },
+          { outcome: 'both', count: 0 },
+          { outcome: 'exploring', count: 1 },
+          { outcome: 'no_selection_yet', count: 3 },
+        ],
+      },
+    })
+    expect(result.outcomes.find(item => item.outcome === 'hosted_builder')?.count).toBe(11)
+    const [query, parameters] = queryMock.mock.calls[0]
+    expect(query).toContain(`WHEN user_account.onboarding ->> 'intent' = ANY($3::text[])`)
+    expect(query).toContain(`THEN user_account.onboarding ->> 'intent'`)
+    expect(query).toContain('GROUP BY 1, 2')
+    expect(parameters[2]).toEqual(['publish', 'builder', 'ota', 'both', 'exploring'])
+    expect(query).not.toMatch(/\b(?:JOIN|UNION|OR)\b|public\.orgs|posthog|5\.C/i)
+    expect(queryMock).toHaveBeenCalledOnce()
+  })
+
+  it('returns all six empty intent buckets when no hosted-builder people exist', async () => {
+    expect(await getAdminABTestDevelopmentEnvironment({} as never)).toHaveProperty('hosted_builder_intents', {
+      total: 0,
+      outcomes: ['publish', 'builder', 'ota', 'both', 'exploring', 'no_selection_yet'].map(outcome => ({ outcome, count: 0 })),
+    })
+  })
+
+  it.each([null, 'unsupported'])('rejects corrupt hosted-builder intent %s and closes the client', async (intent) => {
+    queryMock.mockResolvedValueOnce({ rows: [{ outcome: 'hosted_builder', intent, people: 1 }] })
+    await expect(getAdminABTestDevelopmentEnvironment({} as never)).rejects.toThrow('Invalid development environment intent')
+    expect(closeClientMock).toHaveBeenCalledOnce()
+  })
+
+  it('uses every group from the same SQL rows and preserves the hosted-builder response field', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [
+      { outcome: 'hosted_builder', intent: 'publish', people: '1' },
+      { outcome: 'hosted_builder', intent: 'exploring', people: 1 },
+      { outcome: 'hand_coded', intent: 'ota', people: 9 },
+      { outcome: 'ai_assistant', intent: 'no_selection_yet', people: 3 },
+      { outcome: 'other', intent: 'both', people: 4 },
+      { outcome: 'no_selection_yet', intent: 'builder', people: 5 },
+    ] })
+    const result = await getAdminABTestDevelopmentEnvironment({} as never)
+    const groups = result.development_environment_intents
+    expect(result.total).toBe(23)
+    expect(groups.hosted_builder.total).toBe(2)
+    expect(groups.hosted_builder.outcomes.map(item => item.count)).toEqual([1, 0, 0, 0, 1, 0])
+    expect(groups.hosted_builder).toEqual(result.hosted_builder_intents)
+    expect(groups.hand_coded.outcomes.map(item => item.count)).toEqual([0, 0, 9, 0, 0, 0])
+    expect(groups.ai_assistant.outcomes.at(-1)?.count).toBe(3)
+    expect(groups.other.outcomes.find(item => item.outcome === 'both')?.count).toBe(4)
+    expect(groups.no_selection_yet.outcomes.find(item => item.outcome === 'builder')?.count).toBe(5)
+    for (const environment of result.outcomes)
+      expect(groups[environment.outcome].total).toBe(environment.count)
+    expect(queryMock).toHaveBeenCalledOnce()
   })
 
   it('throws for missing test configuration and still closes the client', async () => {

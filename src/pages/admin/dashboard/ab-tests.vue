@@ -6,6 +6,7 @@ meta:
 <script setup lang="ts">
 import type { AdminABTestChannelCreation as AdminABTestChannelCreationData } from '~/services/adminABTestChannelCreation'
 import type { AdminABTestDevelopmentEnvironment as AdminABTestDevelopmentEnvironmentData } from '~/services/adminABTestDevelopmentEnvironment'
+import type { AdminABTestDevelopmentEnvironmentIntents } from '~/services/adminABTestDevelopmentEnvironmentIntent'
 import type { AdminABTestDistribution } from '~/services/adminABTestDistribution'
 import type { AdminABTestPublishIntentOutcome as AdminABTestPublishIntentOutcomeData } from '~/services/adminABTestPublishIntentOutcome'
 import { onMounted, ref } from 'vue'
@@ -13,11 +14,13 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import AdminABTestChannelCreation from '~/components/admin/AdminABTestChannelCreation.vue'
 import AdminABTestDevelopmentEnvironment from '~/components/admin/AdminABTestDevelopmentEnvironment.vue'
+import AdminABTestDevelopmentEnvironmentIntent from '~/components/admin/AdminABTestDevelopmentEnvironmentIntent.vue'
 import AdminABTestDistributionMatrix from '~/components/admin/AdminABTestDistributionMatrix.vue'
 import AdminABTestPublishIntentOutcome from '~/components/admin/AdminABTestPublishIntentOutcome.vue'
 import PageLoader from '~/components/PageLoader.vue'
 import { parseAdminABTestChannelCreation } from '~/services/adminABTestChannelCreation'
 import { parseAdminABTestDevelopmentEnvironment } from '~/services/adminABTestDevelopmentEnvironment'
+import { parseAdminABTestDevelopmentEnvironmentIntents } from '~/services/adminABTestDevelopmentEnvironmentIntent'
 import { parseAdminABTestDistribution } from '~/services/adminABTestDistribution'
 import { parseAdminABTestPublishIntentOutcome } from '~/services/adminABTestPublishIntentOutcome'
 import { useAdminDashboardStore } from '~/stores/adminDashboard'
@@ -33,6 +36,7 @@ const channelCreation = ref<AdminABTestChannelCreationData | null>(null)
 const distribution = ref<AdminABTestDistribution[]>([])
 const publishIntentOutcome = ref<AdminABTestPublishIntentOutcomeData | null>(null)
 const developmentEnvironment = ref<AdminABTestDevelopmentEnvironmentData | null>(null)
+const environmentIntents = ref<AdminABTestDevelopmentEnvironmentIntents | null>(null)
 const isLoading = ref(true)
 const loadError = ref(false)
 
@@ -50,12 +54,15 @@ async function loadDashboard(forceRefresh = false) {
     const parsedChannelCreation = parseAdminABTestChannelCreation(channelCreationData)
     const parsedOutcome = parseAdminABTestPublishIntentOutcome(outcomeData)
     const parsedEnvironment = parseAdminABTestDevelopmentEnvironment(environmentData)
-    if (!parsedDistribution || !parsedChannelCreation || !parsedOutcome || !parsedEnvironment)
+    const parsedIntents = parsedEnvironment && parseAdminABTestDevelopmentEnvironmentIntents(environmentData?.development_environment_intents, parsedEnvironment)
+    if (!parsedDistribution || !parsedChannelCreation || !parsedOutcome || !parsedEnvironment || !parsedIntents) {
       throw new Error('Invalid A/B test dashboard response')
+    }
     distribution.value = parsedDistribution
     channelCreation.value = parsedChannelCreation
     publishIntentOutcome.value = parsedOutcome
     developmentEnvironment.value = parsedEnvironment
+    environmentIntents.value = parsedIntents
   }
   catch (error) {
     console.error('[Admin A/B Tests] Error loading dashboard:', error)
@@ -97,6 +104,7 @@ displayStore.defaultBack = '/dashboard'
         <AdminABTestChannelCreation v-if="channelCreation" :analytics="channelCreation" />
         <AdminABTestPublishIntentOutcome v-if="publishIntentOutcome" :outcome="publishIntentOutcome" />
         <AdminABTestDevelopmentEnvironment v-if="developmentEnvironment" :outcome="developmentEnvironment" />
+        <AdminABTestDevelopmentEnvironmentIntent v-if="environmentIntents" :groups="environmentIntents" />
       </div>
     </div>
   </div>

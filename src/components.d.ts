@@ -15,6 +15,7 @@ declare module 'vue' {
     AdminABTestAnimationRetentionChart: typeof import('./components/admin/AdminABTestAnimationRetentionChart.vue')['default']
     AdminABTestChannelCreation: typeof import('./components/admin/AdminABTestChannelCreation.vue')['default']
     AdminABTestDevelopmentEnvironment: typeof import('./components/admin/AdminABTestDevelopmentEnvironment.vue')['default']
+    AdminABTestDevelopmentEnvironmentIntent: typeof import('./components/admin/AdminABTestDevelopmentEnvironmentIntent.vue')['default']
     AdminABTestDistributionMatrix: typeof import('./components/admin/AdminABTestDistributionMatrix.vue')['default']
     AdminABTestPublishIntentOutcome: typeof import('./components/admin/AdminABTestPublishIntentOutcome.vue')['default']
     AdminBarChart: typeof import('./components/admin/AdminBarChart.vue')['default']
