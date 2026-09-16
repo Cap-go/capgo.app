@@ -1,4 +1,5 @@
 import type { Context } from 'hono'
+import { DatabaseSync } from 'node:sqlite'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildRegistrationComparisonWindows,
@@ -74,7 +75,8 @@ describe('registration comparison HogQL', () => {
     expect(query).toContain('event IN (\'User Joined\', \'User Joined by Invite\')')
     expect(query).toContain('GROUP BY person_id')
     expect(query).toContain('min(timestamp) AS registered_at, argMin(event, timestamp) AS signup_event')
-    expect(query).toContain('timestamp >= toDateTime(\'2026-05-01 00:00:00\', \'Europe/Warsaw\')')
+    expect(query).toContain('registered_at >= toDateTime(\'2026-05-01 00:00:00\', \'Europe/Warsaw\')')
+    expect(query).not.toContain('timestamp >=')
     expect(query).toContain('timestamp < parseDateTimeBestEffort(\'2026-09-16T12:35:00.000Z\')')
     expect(query).toContain('registered_at < toDateTime(\'2026-08-16 14:35:00\', \'Europe/Warsaw\')')
     expect(query).toContain('registered_at < parseDateTimeBestEffort(\'2026-09-16T12:35:00.000Z\')')
@@ -83,6 +85,39 @@ describe('registration comparison HogQL', () => {
     expect(query).not.toContain('$host')
     expect(query).not.toContain('person.properties')
     expect(query).not.toContain('created_at')
+  })
+
+  it.concurrent('does not turn an earlier signup with an in-window retry into a new registration', () => {
+    const query = buildRegistrationMonthlyComparisonHogql(now)
+    // Execute the actual first-timestamp subquery. Source attribution is omitted because
+    // SQLite lacks ClickHouse argMin; its value is irrelevant to this timestamp regression.
+    const firstRegistrationQuery = query.slice(query.indexOf('SELECT person_id,'), query.indexOf('\n)'))
+      .replace(', argMin(event, timestamp) AS signup_event', '')
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.function('parseDateTimeBestEffort', value => String(value))
+      // All five fixture month boundaries use Warsaw's summer UTC+02:00 offset.
+      db.function('toDateTime', (value, timeZone) => {
+        if (timeZone !== 'Europe/Warsaw')
+          throw new Error('Unexpected fixture time zone')
+        return new Date(`${String(value).replace(' ', 'T')}+02:00`).toISOString()
+      })
+      db.exec('CREATE TABLE events (person_id TEXT, timestamp TEXT, event TEXT)')
+      const insert = db.prepare('INSERT INTO events VALUES (?, ?, ?)')
+      insert.run('earlier-registration', '2026-01-05T12:00:00.000Z', 'User Joined')
+      insert.run('earlier-registration', '2026-06-03T12:00:00.000Z', 'User Joined by Invite')
+      insert.run('new-registration', '2026-06-03T12:00:00.000Z', 'User Joined')
+      insert.run('new-registration', '2026-06-05T12:00:00.000Z', 'User Joined')
+      insert.run('future-registration', '2026-10-03T12:00:00.000Z', 'User Joined')
+      const rows = db.prepare(firstRegistrationQuery).all()
+      expect(rows).toHaveLength(2)
+      expect(rows.find(row => row.person_id === 'earlier-registration')?.registered_at).toBe('2026-01-05T12:00:00.000Z')
+      expect(rows.filter(row => String(row.registered_at) >= '2026-05-01T00:00:00.000Z')
+        .map(row => row.person_id)).toEqual(['new-registration'])
+    }
+    finally {
+      db.close()
+    }
   })
 })
 

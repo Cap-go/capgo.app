@@ -49,7 +49,8 @@ export function buildRegistrationMonthlyComparisonHogql(now: Date) {
     )`).join('\n    OR ')
 
   // Backend registration events have no browser host; do not apply the frontend host filter.
-  // First-event attribution keeps retries and overlapping source events from counting a person twice.
+  // Deduplicate across all prior registration events before filtering the comparison months:
+  // a retry in these months must not make an older account appear newly registered.
   return `SELECT
   substring(toString(toTimeZone(registered_at, '${REGISTRATION_COMPARISON_TIME_ZONE}')), 1, 7) AS month,
   countIf(signup_event = 'User Joined') AS self_signup,
@@ -58,8 +59,7 @@ export function buildRegistrationMonthlyComparisonHogql(now: Date) {
 FROM (
   SELECT person_id, min(timestamp) AS registered_at, argMin(event, timestamp) AS signup_event
   FROM events
-  WHERE timestamp >= ${localDate(windows[windows.length - 1].start_local)}
-    AND timestamp < parseDateTimeBestEffort('${generated_at}')
+  WHERE timestamp < parseDateTimeBestEffort('${generated_at}')
     AND event IN ('User Joined', 'User Joined by Invite')
   GROUP BY person_id
 )
