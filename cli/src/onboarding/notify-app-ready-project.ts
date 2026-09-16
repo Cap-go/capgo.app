@@ -111,7 +111,7 @@ export async function resolveNotifyAppReadyProject(options: NotifyAppReadyCheckO
 
   const appId = getAppId(undefined, config)
   if (typeof appId !== 'string' || !appId.trim() || (options.appId && options.appId !== appId)
-    || typeof config.webDir !== 'string' || !config.webDir.trim()) {
+    || (config.webDir !== undefined && (typeof config.webDir !== 'string' || !config.webDir.trim()))) {
     return undefined
   }
 
@@ -133,6 +133,6 @@ export async function resolveNotifyAppReadyProject(options: NotifyAppReadyCheckO
     workspaceRoot: workspaceRoot(realpathSync(dir)),
     config,
     appId,
-    webDir: typeof config.webDir === 'string' ? resolve(configDir, config.webDir) : undefined,
+    webDir: resolve(configDir, config.webDir ?? 'www'),
   }
 }

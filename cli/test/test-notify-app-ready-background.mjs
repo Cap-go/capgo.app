@@ -145,8 +145,12 @@ test('incomplete scans and invalid Capacitor configs cannot mark integration com
   const project = app(fixture())
   write(join(project.dir, 'src/main.ts'), ' '.repeat(1024 * 1024 + 1))
   assert.equal(scanNotifyAppReadySource(project), 'unknown')
-  write(join(project.dir, 'capacitor.config.json'), { appId: project.appId })
+  write(join(project.dir, 'capacitor.config.json'), { appId: project.appId, webDir: 5 })
   assert.equal(await resolveNotifyAppReadyProject({ cwd: project.dir, command: 'app list' }), undefined)
+  write(join(project.dir, 'capacitor.config.json'), { appId: project.appId })
+  const resolved = await resolveNotifyAppReadyProject({ cwd: project.dir, command: 'app list' })
+  assert.equal(resolved.dir, project.dir)
+  assert.equal(resolved.webDir, join(project.dir, 'www'))
 })
 
 test('packaged worker sends only the add_code patch with CLI auth and destination context', async () => {
