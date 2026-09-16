@@ -98,6 +98,13 @@ try {
   assert.equal(channels[0].disable_auto_update_under_native, true)
   assert.ok(calls.some(url => url.includes('/channel?app_id=com.example.channel.list&page=0')))
 
+  responseBody = httpChannel
+  const singleChannel = await getActiveChannels(options, appId)
+  assert.equal(singleChannel.length, 1, 'preserves a single-channel object response')
+  assert.equal(singleChannel[0].name, 'production')
+  assert.equal(singleChannel[0].ios, true)
+  assert.equal(singleChannel[0].android, false)
+
   const input = [...channels, { ...channels[0], id: 2, name: '测试', version: { name: '1.2.3' } }]
   const wide = formatChannels(input, 240)
   const lines = wide.split('\n')
@@ -168,12 +175,13 @@ try {
       if (url.includes('/channel?')) {
         if (scenario === 'denied-http')
           return Response.json({ error: 'cannot_access_app' }, { status: 400 })
-        return Response.json([${JSON.stringify(httpChannel)}])
+        const channel = ${JSON.stringify(httpChannel)}
+        return Response.json(scenario === 'single-object' ? channel : [channel])
       }
       return Response.json({ status: 'ok' })
     }
   `)
-  for (const scenario of ['denied-app', 'denied-channel', 'denied-http', 'allowed']) {
+  for (const scenario of ['denied-app', 'denied-channel', 'denied-http', 'allowed', 'single-object']) {
     const child = spawnSync('node', [
       '--import', preload, new URL('../dist/index.js', import.meta.url).pathname,
       'channel', 'list', appId, '-a', options.apikey,
@@ -183,7 +191,7 @@ try {
       env: { ...process.env, CAPGO_CHANNEL_LIST_SCENARIO: scenario },
     })
     const output = child.stdout + child.stderr
-    assert.equal(child.status, scenario === 'allowed' ? 0 : 1, output)
+    assert.equal(child.status, scenario.startsWith('denied') ? 1 : 0, output)
     assert.doesNotMatch(output, /Edge Function returned|non-2xx/)
     if (scenario === 'denied-app')
       assert.match(output, /app.read permission/)

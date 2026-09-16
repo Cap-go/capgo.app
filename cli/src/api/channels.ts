@@ -351,7 +351,7 @@ export async function getActiveChannels(
       }
       throw new Error(`Cannot list channels: ${await formatCapgoCliInvokeError(vError)}`, { cause: vError })
     }
-    const batch = Array.isArray(data) ? data : []
+    const batch = Array.isArray(data) ? data : data ? [data] : []
     if (!batch.length)
       break
     all.push(...batch.map(normalizeHttpChannel))
