@@ -5,6 +5,7 @@ import { useRoute } from 'vue-router'
 import IconLoader from '~icons/lucide/loader-2'
 import IconTriangleAlert from '~icons/lucide/triangle-alert'
 import { authGhostButtonClass, authSecondaryButtonClass } from '~/components/auth/pageStyles'
+import { replaceDocument } from '~/services/documentNavigation'
 import { openSupport } from '~/services/support'
 import { getAllowedConfirmationHosts, resolveConfirmationUrl } from '~/utils/safeRedirect'
 
@@ -26,7 +27,7 @@ onMounted(() => {
       error.value = invalidConfirmationMessage
       return
     }
-    window.location.href = confirmationUrl
+    replaceDocument(confirmationUrl)
   }
   catch {
     isRedirecting.value = false

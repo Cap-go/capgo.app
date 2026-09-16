@@ -6,10 +6,12 @@ import { createApp } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import { routes } from 'vue-router/auto-routes'
 import { installDeepLinkHandler } from '~/services/deepLinks'
+import { isDocumentNavigationPending, replaceDocument } from '~/services/documentNavigation'
 import { getNativeExternalPurchaseRedirect, isNativeAppStoreContext, isNativeExternalPurchaseRestrictedPath } from '~/services/nativeCompliance'
 import { posthogLoader } from '~/services/posthog'
 import { getErrorMessage, isComponentResolutionErrorMessage, isKnownCrawlerNoiseErrorMessage, isStaleAssetErrorMessage } from '~/services/staleAssetErrors'
 import { getLocalConfig } from '~/services/supabase'
+import { getAllowedConfirmationHosts, resolveConfirmationUrl } from '~/utils/safeRedirect'
 import App from './App.vue'
 import { getRemoteConfig } from './services/supabase'
 // your custom styles here
@@ -76,6 +78,9 @@ function clearChunkReloadToastPending(): void {
 // leaving), so it silently throws the navigation away. When we know the target
 // we navigate there instead, so the user lands where they asked to go.
 function handleChunkError(message: string, targetPath?: string) {
+  if (isDocumentNavigationPending())
+    return
+
   const previousReload = getChunkReloadTimestamp()
   if (previousReload && Date.now() - previousReload < CHUNK_RELOAD_COOLDOWN_MS) {
     console.warn('Chunk load error detected again after a recent reload, skipping automatic reload.', message)
@@ -256,6 +261,22 @@ router.onError((error, to) => {
 })
 
 router.beforeEach((to, from, next) => {
+  if (to.path === '/confirm-signup' || to.path === '/confirm-signup/') {
+    try {
+      const confirmationUrl = resolveConfirmationUrl(to.query, {
+        allowedHosts: getAllowedConfirmationHosts(),
+        allowLocalDev: import.meta.env.DEV,
+      })
+      if (confirmationUrl) {
+        replaceDocument(confirmationUrl)
+        return next(false)
+      }
+    }
+    catch {
+      // Let the confirmation page display a navigation error.
+    }
+  }
+
   if (isNativeAppStoreContext() && isNativeExternalPurchaseRestrictedPath(to.path)) {
     return next(getNativeExternalPurchaseRedirect(to.path))
   }
@@ -282,10 +303,16 @@ app.use(router)
 void installDeepLinkHandler(router)
 
 router.isReady().then(async () => {
+  if (isDocumentNavigationPending())
+    return
+
   app.mount('#app')
 
   // Wait for vue-sonner component to be mounted
   setTimeout(async () => {
+    if (isDocumentNavigationPending())
+      return
+
     const key = hasChunkReloadToastPending()
     console.log('Checking for chunk reload toast...', key)
     // Show toast if we just reloaded due to chunk error

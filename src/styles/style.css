@@ -317,21 +317,6 @@ html {
   overflow: auto;
 }
 
-#app-loader {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  background-color: var(--color-gray-900);
-  z-index: 100;
-  background-image: url('/capgo.webp');
-  background-repeat: no-repeat;
-  background-attachment: fixed;
-  background-position: center;
-  background-size: 150px 150px;
-}
-
 #confirm-button {
   background-color: var(--color-red-500);
   color: var(--color-white);
