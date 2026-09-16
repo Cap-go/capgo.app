@@ -155,7 +155,7 @@ describe('actual A/B dashboard page wiring', () => {
     expect(mocks.fetchStats).not.toHaveBeenCalled()
   })
 
-  it.concurrent('adds dispatch behind existing admin authentication and the store category', async () => {
+  it('adds dispatch behind existing admin authentication and the store category', async () => {
     const backend = await readFile(new NodeURL('../supabase/functions/_backend/private/admin_stats.ts', import.meta.url), 'utf8')
     const store = await readFile(new NodeURL('../src/stores/adminDashboard.ts', import.meta.url), 'utf8')
     expect(store).toContain(`'ab_test_development_environment'`)
