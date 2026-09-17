@@ -3,8 +3,8 @@ import { writeFileSync, existsSync, readFileSync } from 'fs'
 import { S3Client as S3ClientLite } from '@bradenmacdonald/s3-lite-client/'
 import { Pool } from 'pg'
 import { Context } from 'vm'
-import { permanentDeleteAwsLiveKey } from './r2_cleanup/aws_permanent_delete.ts'
-import { APP_VERSION_NOT_DELETED_SQL, applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, buildAwsTrashCopyPreserveFromHead, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, ConcurrencyLimiter, extractR2TrashSourceVersionMarker, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, mergeTrashCopyMetadata, normalizedS3EtagsMatch, parseLegacyAppsBundleKey, parseS3ListingLastModified, quoteS3CopySourceIfMatchEtag, resolveOpsDeleteMode, resolveTrashDestinationKey, withOrphanR2DeleteClaim } from './r2_trash_utils.ts'
+import { moveOrphanAwsCandidateToTrash, permanentDeleteOrphanAwsCandidate } from './r2_orphan_aws_workflow.ts'
+import { APP_VERSION_NOT_DELETED_SQL, ConcurrencyLimiter, createAwsTrashDestinationResolver, isLiveR2Key, isObjectNotFoundError, normalizedS3EtagsMatch, parseLegacyAppsBundleKey, parseS3ListingLastModified, resolveOpsDeleteMode } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const CHECKPOINT_FILE = './objects_checkpoint.json'
@@ -1737,6 +1737,27 @@ async function delete_cleanup_candidates() {
         return { etag: head.ETag, lastModified: head.LastModified, metadata: head.Metadata }
     })
 
+    const orphanWorkflow = {
+        s3,
+        bucket: S3_BUCKET,
+        claimPool: pool,
+        trashDestinationResolver,
+        objectExists,
+        isStillOrphaned: async (key: string) => !(await isKeyReferencedInAppVersions(key)),
+    }
+
+    function mapOrphanOutcome(
+        key: string,
+        outcome: 'ok' | 'skipped' | 'failed',
+        size?: number,
+    ): { key: string, success: boolean, error: string | null, skipped?: boolean, size?: number } {
+        if (outcome === 'ok')
+            return { key, success: true, error: null, size: size ?? 0 }
+        if (outcome === 'skipped')
+            return { key, success: true, error: null, skipped: true }
+        return { key, success: false, error: 'Failed to process orphan candidate; source retained' }
+    }
+
     async function processCandidate(file: { key: string, size?: number, lastModified?: string | Date | null, etag?: string | null }): Promise<{ key: string, success: boolean, error: string | null, skipped?: boolean, size?: number }> {
         try {
             if (!file.etag) {
@@ -1830,189 +1851,29 @@ async function delete_cleanup_candidates() {
                 }
             }
 
+            const candidate = {
+                key: file.key,
+                etag: file.etag,
+                lastModified: sourceLastModified,
+            }
+            const sourceHead = {
+                etag: sourceEtag,
+                lastModified: sourceLastModified,
+                metadata: sourceMetadata,
+                contentType: sourceContentType,
+                cacheControl: sourceCacheControl,
+                contentEncoding: sourceContentEncoding,
+                contentDisposition: sourceContentDisposition,
+                expires: sourceExpires,
+            }
+
             if (deleteMode === 'permanent') {
-                const claimClient = await pool.connect()
-                try {
-                    const claimResult = await withOrphanR2DeleteClaim(claimClient, file.key, async () => {
-                        const outcome = await permanentDeleteAwsLiveKey(s3, S3_BUCKET, file.key, sourceEtag, sourceLastModified)
-                        switch (outcome) {
-                          case 'deleted':
-                            return 'deleted'
-                          case 'skipped_missing':
-                            return 'skipped_missing'
-                          case 'skipped_changed':
-                            return 'skipped_changed'
-                          case 'failed':
-                            return 'failed'
-                        }
-                    })
-                    if (claimResult === 'skipped_referenced') {
-                        return {
-                            key: file.key,
-                            success: true,
-                            error: 'app_versions row appeared since discovery',
-                            skipped: true,
-                        }
-                    }
-                    switch (claimResult) {
-                      case 'skipped_missing':
-                        return { key: file.key, success: true, error: null, skipped: true }
-                      case 'skipped_changed':
-                        return {
-                          key: file.key,
-                          success: true,
-                          error: 'Cleanup candidate stale: live object changed before permanent delete',
-                          skipped: true,
-                        }
-                      case 'failed':
-                        return {
-                          key: file.key,
-                          success: false,
-                          error: 'Permanent delete guards failed; source retained',
-                        }
-                    }
-                }
-                finally {
-                    claimClient.release()
-                }
-            }
-            else {
-                let trashKey: string
-                try {
-                    trashKey = await resolveTrashDestinationKey(trashDestinationResolver, file.key, sourceEtag, sourceLastModified)
-                }
-                catch (allocError: any) {
-                    return {
-                        key: file.key,
-                        success: false,
-                        error: `Failed to allocate trash destination: ${allocError.message}`,
-                    }
-                }
-
-                if (await isKeyReferencedInAppVersions(file.key)) {
-                    return {
-                        key: file.key,
-                        success: true,
-                        error: 'app_versions row appeared since discovery',
-                        skipped: true,
-                    }
-                }
-
-                try {
-                    const copyResult = await copyObjectToTrashWithDestinationGuard(
-                        file.key,
-                        trashKey,
-                        sourceEtag,
-                        async (destinationKey) => {
-                            const copyPreserve = buildAwsTrashCopyPreserveFromHead({
-                                Metadata: sourceMetadata,
-                                ContentType: sourceContentType,
-                                CacheControl: sourceCacheControl,
-                                ContentEncoding: sourceContentEncoding,
-                                ContentDisposition: sourceContentDisposition,
-                                Expires: sourceExpires,
-                            })
-                            const copyCommand = new CopyObjectCommand({
-                                Bucket: S3_BUCKET,
-                                CopySource: encodeS3CopySource(S3_BUCKET, file.key),
-                                CopySourceIfMatch: quoteS3CopySourceIfMatchEtag(sourceEtag),
-                                Key: destinationKey,
-                                Metadata: mergeTrashCopyMetadata(copyPreserve.metadata, sourceLastModified),
-                                MetadataDirective: 'REPLACE',
-                                ContentType: copyPreserve.contentType,
-                                CacheControl: copyPreserve.cacheControl,
-                                ContentEncoding: copyPreserve.contentEncoding,
-                                ContentDisposition: copyPreserve.contentDisposition,
-                                Expires: copyPreserve.expires,
-                            })
-                            applyAwsCopyDestinationIfNoneMatchMiddleware(copyCommand.middlewareStack)
-                            await s3.send(copyCommand)
-                        },
-                        async (destinationKey) => {
-                            try {
-                                const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: destinationKey }))
-                                return {
-                                    etag: head.ETag,
-                                    sourceVersionMarker: extractR2TrashSourceVersionMarker(head.Metadata),
-                                }
-                            }
-                            catch (error) {
-                                if (isObjectNotFoundError(error))
-                                    return 'not_found'
-                                throw error
-                            }
-                        },
-                        sourceLastModified,
-                    )
-                    if (copyResult === 'skipped_changed') {
-                        return {
-                            key: file.key,
-                            success: true,
-                            error: 'Cleanup candidate stale: live object changed before trash copy',
-                            skipped: true,
-                        }
-                    }
-                    trashKey = copyResult.trashKey
-                }
-                catch (copyError: any) {
-                    try {
-                        const trashExists = await objectExists(trashKey)
-                        const sourceExists = await objectExists(file.key)
-                        if (isAlreadyMovedToTrash(trashExists, sourceExists) || !sourceExists)
-                            return { key: file.key, success: true, error: null, skipped: true }
-                    }
-                    catch (headError: any) {
-                        return {
-                            key: file.key,
-                            success: false,
-                            error: `Failed to verify trash resume state: ${headError.message}`,
-                        }
-                    }
-                    return { key: file.key, success: false, error: copyError.message }
-                }
-
-                const claimClient = await pool.connect()
-                try {
-                    const claimResult = await withOrphanR2DeleteClaim(claimClient, file.key, async () => {
-                        const deleteCommand = new DeleteObjectCommand({
-                            Bucket: S3_BUCKET,
-                            Key: file.key,
-                            IfMatch: sourceEtag,
-                        })
-                        applyR2ConditionalDeleteMiddleware(deleteCommand.middlewareStack, { etag: sourceEtag, lastModified: sourceLastModified })
-                        await s3.send(deleteCommand)
-                    })
-                    if (claimResult === 'skipped_referenced') {
-                        return {
-                            key: file.key,
-                            success: true,
-                            error: 'app_versions row appeared after trash copy',
-                            skipped: true,
-                        }
-                    }
-                }
-                catch (deleteError: any) {
-                    if (isObjectNotFoundError(deleteError))
-                        return { key: file.key, success: true, error: null, skipped: true }
-                    if (isPreconditionFailedError(deleteError))
-                        return {
-                            key: file.key,
-                            success: true,
-                            error: 'Copied to trash but live object changed before delete; source key retained',
-                            skipped: true,
-                        }
-                    return {
-                        key: file.key,
-                        success: false,
-                        error: `Copied to trash but failed to delete source: ${deleteError.message}`,
-                    }
-                }
-                finally {
-                    claimClient.release()
-                }
+                const outcome = await permanentDeleteOrphanAwsCandidate(orphanWorkflow, candidate)
+                return mapOrphanOutcome(file.key, outcome, file.size)
             }
 
-            return { key: file.key, success: true, error: null, size: file.size ?? 0 }
+            const outcome = await moveOrphanAwsCandidateToTrash(orphanWorkflow, candidate, sourceHead)
+            return mapOrphanOutcome(file.key, outcome, file.size)
         }
         catch (error: any) {
             console.error(`❌ Error processing ${file.key}:`, error.message)

@@ -1,11 +1,11 @@
 /* eslint-disable node/prefer-global/process */
 import type { _Object, ListObjectsV2CommandOutput } from '@aws-sdk/client-s3'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'// supabase.types.ts'
-import { CopyObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
+import { HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { createClient } from '@supabase/supabase-js'
 import { Pool } from 'pg'
-import { permanentDeleteAwsLiveKey } from './r2_cleanup/aws_permanent_delete.ts'
-import { applyAwsCopyDestinationIfNoneMatchMiddleware, applyR2ConditionalDeleteMiddleware, buildAwsTrashCopyPreserveFromHead, ConcurrencyLimiter, copyObjectToTrashWithDestinationGuard, createAwsTrashDestinationResolver, encodeS3CopySource, extractR2TrashSourceVersionMarker, isAlreadyMovedToTrash, isLiveR2Key, isObjectNotFoundError, isPreconditionFailedError, mergeTrashCopyMetadata, normalizedS3EtagsMatch, parseLegacyAppsBundleKey, parseS3ListingLastModified, quoteS3CopySourceIfMatchEtag, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode, resolveTrashDestinationKey, withOrphanR2DeleteClaim } from './r2_trash_utils.ts'
+import { headOrphanAwsCandidate, moveOrphanAwsCandidateToTrash, permanentDeleteOrphanAwsCandidate } from './r2_orphan_aws_workflow.ts'
+import { ConcurrencyLimiter, createAwsTrashDestinationResolver, isLiveR2Key, isObjectNotFoundError, parseLegacyAppsBundleKey, parseS3ListingLastModified, revalidateDeleteCandidatesAgainstAppVersions, resolveOpsDeleteMode } from './r2_trash_utils.ts'
 
 const S3_BUCKET = 'capgo'
 const MAGIC_TO_DELETE = './tmp/magic_to_delete6.txt'
@@ -180,228 +180,27 @@ async function main() {
       }
     }
 
-    async function permanentDeleteCandidate(candidate: { key: string, etag?: string, lastModified?: Date }): Promise<'ok' | 'skipped' | 'failed'> {
-      const { key, etag: candidateEtag, lastModified: candidateLastModified } = candidate
-      if (!candidateEtag) {
-        console.warn(`Failed ${key}: missing discovery ETag; source retained`)
-        return 'failed'
-      }
-
-      if (!(await isStillOrphaned(key))) {
-        console.warn(`Skipped ${key}: app_versions row appeared since discovery`)
-        return 'skipped'
-      }
-
-      const claimClient = await claimPool.connect()
-      try {
-        const claimResult = await withOrphanR2DeleteClaim(claimClient, key, async () => {
-          const outcome = await permanentDeleteAwsLiveKey(s3, S3_BUCKET, key, candidateEtag, candidateLastModified)
-          switch (outcome) {
-            case 'deleted':
-              return 'deleted'
-            case 'skipped_missing':
-              return 'skipped_missing'
-            case 'skipped_changed':
-              return 'skipped_changed'
-            case 'failed':
-              return 'failed'
-          }
-        })
-        if (claimResult === 'skipped_referenced') {
-          console.warn(`Skipped ${key}: app_versions row appeared since discovery`)
-          return 'skipped'
-        }
-        switch (claimResult) {
-          case 'deleted':
-            return 'ok'
-          case 'skipped_missing':
-            return 'skipped'
-          case 'skipped_changed':
-            console.warn(`Skipped ${key}: live object changed since discovery`)
-            return 'skipped'
-          case 'failed':
-            if (!candidateLastModified)
-              console.warn(`Failed ${key}: missing discovery Last-Modified; source retained`)
-            else
-              console.warn(`Failed ${key}: permanent delete guards failed; source retained`)
-            return 'failed'
-        }
-      }
-      finally {
-        claimClient.release()
-      }
+    const orphanWorkflow = {
+      s3,
+      bucket: S3_BUCKET,
+      claimPool,
+      trashDestinationResolver: createAwsTrashDestinationResolver(async (objectKey) => {
+        const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: objectKey }))
+        return { etag: head.ETag, lastModified: head.LastModified, metadata: head.Metadata }
+      }),
+      objectExists,
+      isStillOrphaned,
     }
 
-    const trashDestinationResolver = createAwsTrashDestinationResolver(async (objectKey) => {
-      const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: objectKey }))
-      return { etag: head.ETag, lastModified: head.LastModified, metadata: head.Metadata }
-    })
+    async function permanentDeleteCandidate(candidate: { key: string, etag?: string, lastModified?: Date }): Promise<'ok' | 'skipped' | 'failed'> {
+      return permanentDeleteOrphanAwsCandidate(orphanWorkflow, candidate)
+    }
 
     async function moveKeyToTrash(candidate: { key: string, etag?: string, lastModified?: Date }): Promise<'ok' | 'skipped' | 'failed'> {
-      const { key, etag: candidateEtag, lastModified: candidateLastModified } = candidate
-      if (!candidateEtag) {
-        console.warn(`Failed ${key}: missing discovery ETag; source retained`)
-        return 'failed'
-      }
-      if (!candidateLastModified) {
-        console.warn(`Failed ${key}: missing discovery Last-Modified; source retained`)
-        return 'failed'
-      }
-      let sourceEtag: string | undefined
-      let sourceLastModified: Date | undefined
-      let sourceMetadata: Record<string, string> | undefined
-      let sourceContentType: string | undefined
-      let sourceCacheControl: string | undefined
-      let sourceContentEncoding: string | undefined
-      let sourceContentDisposition: string | undefined
-      let sourceExpires: Date | undefined
-      try {
-        const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }))
-        sourceEtag = head.ETag
-        sourceLastModified = head.LastModified
-        sourceMetadata = head.Metadata
-        sourceContentType = head.ContentType
-        sourceCacheControl = head.CacheControl
-        sourceContentEncoding = head.ContentEncoding
-        sourceContentDisposition = head.ContentDisposition
-        sourceExpires = head.Expires
-        if (!normalizedS3EtagsMatch(candidateEtag, sourceEtag)) {
-          console.warn(`Skipped ${key}: live object etag changed since discovery`)
-          return 'skipped'
-        }
-        if (!sourceLastModified || sourceLastModified.getTime() !== candidateLastModified.getTime()) {
-          console.warn(`Skipped ${key}: live object lastModified changed since discovery`)
-          return 'skipped'
-        }
-      }
-      catch (headError) {
-        if (isObjectNotFoundError(headError))
-          return 'skipped'
-        console.error(`Failed to head ${key} before trash:`, headError)
-        return 'failed'
-      }
-
-      if (!sourceEtag || !sourceLastModified) {
-        console.warn(`Failed ${key}: live object has no ETag or Last-Modified; source retained`)
-        return 'failed'
-      }
-
-      let trashKey: string
-      try {
-        trashKey = await resolveTrashDestinationKey(trashDestinationResolver, key, sourceEtag, sourceLastModified)
-      }
-      catch (headError) {
-        console.error(`Failed to allocate trash destination for ${key}:`, headError)
-        return 'failed'
-      }
-
-      if (!(await isStillOrphaned(key))) {
-        console.warn(`Skipped ${key}: app_versions row appeared since discovery`)
-        return 'skipped'
-      }
-
-      try {
-        const copyResult = await copyObjectToTrashWithDestinationGuard(
-          key,
-          trashKey,
-          sourceEtag,
-          async (destinationKey) => {
-            const copyPreserve = buildAwsTrashCopyPreserveFromHead({
-              Metadata: sourceMetadata,
-              ContentType: sourceContentType,
-              CacheControl: sourceCacheControl,
-              ContentEncoding: sourceContentEncoding,
-              ContentDisposition: sourceContentDisposition,
-              Expires: sourceExpires,
-            })
-            const copyCommand = new CopyObjectCommand({
-              Bucket: S3_BUCKET,
-              CopySource: encodeS3CopySource(S3_BUCKET, key),
-              CopySourceIfMatch: quoteS3CopySourceIfMatchEtag(sourceEtag),
-              Key: destinationKey,
-              Metadata: mergeTrashCopyMetadata(copyPreserve.metadata, sourceLastModified),
-              MetadataDirective: 'REPLACE',
-              ContentType: copyPreserve.contentType,
-              CacheControl: copyPreserve.cacheControl,
-              ContentEncoding: copyPreserve.contentEncoding,
-              ContentDisposition: copyPreserve.contentDisposition,
-              Expires: copyPreserve.expires,
-            })
-            applyAwsCopyDestinationIfNoneMatchMiddleware(copyCommand.middlewareStack)
-            await s3.send(copyCommand)
-          },
-          async (destinationKey) => {
-            try {
-              const head = await s3.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: destinationKey }))
-              return {
-                etag: head.ETag,
-                sourceVersionMarker: extractR2TrashSourceVersionMarker(head.Metadata),
-              }
-            }
-            catch (error) {
-              if (isObjectNotFoundError(error))
-                return 'not_found'
-              throw error
-            }
-          },
-          sourceLastModified,
-        )
-        if (copyResult === 'skipped_changed') {
-          console.warn(`Skipped ${key}: live object changed before trash copy`)
-          return 'skipped'
-        }
-        trashKey = copyResult.trashKey
-      }
-      catch (copyError) {
-        try {
-          const trashExists = await objectExists(trashKey)
-          const sourceExists = await objectExists(key)
-          if (isAlreadyMovedToTrash(trashExists, sourceExists) || !sourceExists)
-            return 'skipped'
-        }
-        catch (headError) {
-          console.error(`Failed to verify trash resume state for ${key}:`, headError)
-          return 'failed'
-        }
-        console.error(`Failed to trash ${key}:`, copyError)
-        return 'failed'
-      }
-
-      if (!(await isStillOrphaned(key))) {
-        console.warn(`Skipped delete for ${key}: app_versions row appeared after trash copy`)
-        return 'skipped'
-      }
-
-      const claimClient = await claimPool.connect()
-      try {
-        const claimResult = await withOrphanR2DeleteClaim(claimClient, key, async () => {
-          const deleteCommand = new DeleteObjectCommand({
-            Bucket: S3_BUCKET,
-            Key: key,
-            IfMatch: sourceEtag,
-          })
-          applyR2ConditionalDeleteMiddleware(deleteCommand.middlewareStack, { etag: sourceEtag, lastModified: sourceLastModified })
-          await s3.send(deleteCommand)
-        })
-        if (claimResult === 'skipped_referenced') {
-          console.warn(`Skipped delete for ${key}: app_versions row appeared after trash copy`)
-          return 'skipped'
-        }
-        return 'ok'
-      }
-      catch (deleteError) {
-        if (isObjectNotFoundError(deleteError))
-          return 'skipped'
-        if (isPreconditionFailedError(deleteError)) {
-          console.warn(`Skipped delete for ${key}: live object changed after copy (possible concurrent upload)`)
-          return 'skipped'
-        }
-        console.error(`Copied ${key} to trash but failed to delete source:`, deleteError)
-        return 'failed'
-      }
-      finally {
-        claimClient.release()
-      }
+      const headResult = await headOrphanAwsCandidate(orphanWorkflow, candidate)
+      if (headResult === 'ok' || headResult === 'skipped' || headResult === 'failed')
+        return headResult
+      return moveOrphanAwsCandidateToTrash(orphanWorkflow, candidate, headResult.head)
     }
 
     async function runCandidateSafely<T extends { key: string }>(

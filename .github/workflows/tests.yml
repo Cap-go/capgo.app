@@ -442,14 +442,14 @@ jobs:
             done
             return 1
           }
+          # DELETE warmup without apisecret: loads the route/handler but auth fails before mutation.
           warm_delete() {
             local path="$1"
             for attempt in 1 2 3 4 5; do
               status=$(curl -s -o /tmp/edge-warm.body -w '%{http_code}' -X DELETE "${base_url}${path}" \
                 -H 'Content-Type: application/json' \
-                -H 'apisecret: testsecret' \
                 -d '{}' || true)
-              echo "edge warm DELETE path=${path} attempt=${attempt} status=${status}"
+              echo "edge warm DELETE (no auth) path=${path} attempt=${attempt} status=${status}"
               if [ "${status}" != "502" ] && [ "${status}" != "503" ] && [ "${status}" != "000" ]; then
                 return 0
               fi
