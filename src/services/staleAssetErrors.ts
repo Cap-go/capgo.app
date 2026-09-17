@@ -82,7 +82,39 @@ interface PostHogEventLike {
     $exception_list?: PostHogExceptionLike[]
     $exception_values?: unknown[]
     $current_url?: unknown
+    $host?: unknown
   }
+}
+
+// Local dev-server hosts. The capture gate in posthog.ts skips analytics only
+// when the Supabase host is local, so a developer running the frontend against
+// remote or preprod Supabase still sends events. Their transient compile and
+// hot-reload errors then open production error-tracking issues. Match the page
+// host to drop those events regardless of the Supabase host.
+const LOCAL_DEV_HOST_PATTERNS = [
+  /^localhost$/i,
+  /^127\.0\.0\.1$/,
+  /\.local$/i,
+]
+
+function hostFromUrl(url: unknown): string | undefined {
+  if (typeof url !== 'string' || url === '')
+    return undefined
+
+  try {
+    return new URL(url).host
+  }
+  catch {
+    return undefined
+  }
+}
+
+export function isLocalDevHost(host: unknown): boolean {
+  if (typeof host !== 'string' || host === '')
+    return false
+
+  const hostname = host.replace(/:\d+$/, '')
+  return LOCAL_DEV_HOST_PATTERNS.some(pattern => pattern.test(hostname))
 }
 
 function stripUrlQueryAndHash(url: string | undefined): string | undefined {
@@ -154,6 +186,9 @@ export function isInjectedDocumentCodeException(exception: PostHogExceptionLike 
 export function shouldSuppressPostHogExceptionEvent(event: PostHogEventLike): boolean {
   if (event.event !== '$exception')
     return false
+
+  if (isLocalDevHost(event.properties?.$host) || isLocalDevHost(hostFromUrl(event.properties?.$current_url)))
+    return true
 
   const exception = event.properties?.$exception_list?.[0]
   const exceptionValue = getErrorMessage(exception?.value) ?? getErrorMessage(exception?.$exception_value)
