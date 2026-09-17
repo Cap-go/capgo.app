@@ -1,10 +1,12 @@
 import { expect, test } from '../support/commands'
 import { mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { dismissSupportPrompt } from '../support/dismissSupportPrompt'
 
 const screenshotDir = resolve(process.cwd(), 'docs/pr-screenshots/pr-3340')
 
 async function dismissOptionalPrompts(page: import('@playwright/test').Page) {
+  await dismissSupportPrompt(page)
   const remindLater = page.getByRole('button', { name: 'Remind me later', exact: true })
   if (await remindLater.isVisible().catch(() => false))
     await remindLater.click()
@@ -35,7 +37,7 @@ test.describe('PR 3340 channel UX screenshots', () => {
     const percentInput = page.locator('#rollout-percentage-input')
     await expect(percentInput).toBeEnabled({ timeout: 60000 })
     await percentInput.scrollIntoViewIfNeeded()
-    const infoButton = page.getByTestId('rollout-settings-info')
+    const infoButton = page.getByRole('button', { name: 'Progressive rollout information' })
     await expect(infoButton).toBeVisible()
     await page.screenshot({
       path: resolve(screenshotDir, '05-rollout-apply-controls.png'),
@@ -107,5 +109,33 @@ test.describe('PR 3340 channel UX screenshots', () => {
       path: resolve(screenshotDir, '07-rollout-rollback-confirm.png'),
     })
     await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  })
+
+  test('capture rollout settings info icon and modal', async ({ page }) => {
+    await page.route('**/private/sso/check-enforcement', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ allowed: true }),
+      })
+    })
+    await page.login('test@capgo.app', 'testtest')
+    await page.goto('/app/com.demo.app/channel/1')
+    await expect(page.getByText('Progressive rollout', { exact: false }).first()).toBeVisible({ timeout: 30000 })
+    await dismissOptionalPrompts(page)
+    const infoButton = page.getByRole('button', { name: 'Progressive rollout information' })
+    await expect(infoButton).toBeVisible({ timeout: 60000 })
+    await infoButton.scrollIntoViewIfNeeded()
+    await page.screenshot({
+      path: resolve(screenshotDir, '08-rollout-settings-info-icon.png'),
+      fullPage: false,
+    })
+    await infoButton.click()
+    await expect(page.locator('h3').filter({ hasText: 'Progressive rollout' })).toBeVisible()
+    await expect(page.getByText('Stable fallback stays for most devices')).toBeVisible()
+    await page.screenshot({
+      path: resolve(screenshotDir, '08-rollout-settings-info-modal.png'),
+      fullPage: false,
+    })
   })
 })
