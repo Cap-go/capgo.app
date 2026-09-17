@@ -18,11 +18,17 @@ describe('v3 checklist SQL security and bounded lookups', () => {
     const appId = `com.onboarding.lock.${randomUUID()}`
     let pendingWrite: Promise<boolean> | undefined
     try {
-      // Reuse only the read-only seed identity; every modified resource belongs
+      // Reuse only read-only seed identities; every modified resource belongs
       // to this test's new organization.
-      const userId = (await revoker.query('SELECT id FROM public.users WHERE email = \'test@capgo.app\'')).rows[0].id
-      await revoker.query('INSERT INTO public.orgs(id, created_by, name, management_email) VALUES ($1, $2, $3, $4)', [orgId, userId, 'Onboarding lock test', 'test@capgo.app'])
-      await revoker.query(`INSERT INTO public.role_bindings(principal_type, principal_id, role_id, scope_type, org_id, granted_by, reason, is_direct) SELECT public.rbac_principal_user(), $1::uuid, r.id, public.rbac_scope_org(), $2::uuid, $1::uuid, 'Onboarding lock test', true FROM public.roles r WHERE r.name = public.rbac_role_org_super_admin() AND r.scope_type = public.rbac_scope_org() ON CONFLICT DO NOTHING`, [userId, orgId])
+      const ownerId = (await revoker.query('SELECT id FROM public.users WHERE email = \'test@capgo.app\'')).rows[0].id
+      const userId = (await revoker.query('SELECT id FROM public.users WHERE email = \'admin@capgo.app\'')).rows[0].id
+      await revoker.query('INSERT INTO public.orgs(id, created_by, name, management_email) VALUES ($1, $2, $3, $4)', [orgId, ownerId, 'Onboarding lock test', 'test@capgo.app'])
+      // Keep a separate active owner so revoking the second member respects the
+      // database's last-super-admin guard instead of bypassing it.
+      for (const memberId of [ownerId, userId]) {
+        await revoker.query(`INSERT INTO public.org_users(org_id, user_id, rbac_role_name, is_invite) VALUES ($1, $2, public.rbac_role_org_super_admin(), false) ON CONFLICT DO NOTHING`, [orgId, memberId])
+        await revoker.query(`INSERT INTO public.role_bindings(principal_type, principal_id, role_id, scope_type, org_id, granted_by, reason, is_direct) SELECT public.rbac_principal_user(), $1::uuid, r.id, public.rbac_scope_org(), $2::uuid, $3::uuid, 'Onboarding lock test', true FROM public.roles r WHERE r.name = public.rbac_role_org_super_admin() AND r.scope_type = public.rbac_scope_org() ON CONFLICT DO NOTHING`, [memberId, orgId, ownerId])
+      }
       await revoker.query('INSERT INTO public.apps(app_id, owner_org, name, icon_url) VALUES ($1, $2, \'Onboarding lock test\', \'\')', [appId, orgId])
       const permissionQuery = 'SELECT public.rbac_check_permission_direct(\'org.create_app\', $1::uuid, $2::uuid, NULL::text, NULL::bigint, NULL::text) AS allowed'
       expect((await revoker.query(permissionQuery, [userId, orgId])).rows[0].allowed).toBe(true)
