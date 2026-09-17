@@ -64,7 +64,7 @@
     "lint:fix": "oxlint --config ../.oxlintrc.json --fix src",
     "check-posix-paths": "node test/check-posix-paths.js",
     "generate-docs": "node dist/index.js generate-docs README.md",
-    "test:notify-app-ready-background": "bun test ./test/test-notify-app-ready-background.mjs",
+    "test:notify-app-ready-background": "bun test ./test/test-notify-app-ready-background.mjs ./test/test-background-check-shutdown.mjs",
     "test:bundle": "bun test/test-bundle.mjs",
     "test:bundle-validation": "bun test test/bundle/",
     "test:prescan": "bun test test/prescan/",

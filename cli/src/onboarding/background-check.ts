@@ -37,7 +37,7 @@ export async function runOnboardingCheck(options: OnboardingCheckOptions, check:
     return
   const anonKey = options.supaAnon ?? config.supaKey
   setCurrentCliCommand(options.command)
-  const attemptId = randomUUID()
+  const attemptId = options.attemptId ?? randomUUID()
   const trackScan = async (event: 'scan_started' | 'scan_ended', timestamp: number, tags: Record<string, string | number> = {}) => {
     try {
       await sendEvent(apikey, {
@@ -76,7 +76,6 @@ export async function runOnboardingCheck(options: OnboardingCheckOptions, check:
       }),
       // Preserve source, outcome, and all unrelated onboarding steps.
       body: JSON.stringify({ onboarding: { steps: { [check.step]: { status: 'done' } } } }),
-      signal: AbortSignal.timeout(2_000),
       redirect: 'error',
     })
     todoReportHttpStatus = response.status
