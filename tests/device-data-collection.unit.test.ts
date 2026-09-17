@@ -6,6 +6,7 @@ import {
   DEFAULT_DEVICE_DATA_COLLECTION,
   mauPlatformForCollection,
   mauVersionBuildForCollection,
+  mergeDeviceDataCollection,
   parseDeviceDataCollection,
   sanitizeDeviceDataCollectionInput,
 } from '../supabase/functions/_backend/utils/deviceDataCollection.ts'
@@ -56,6 +57,16 @@ describe('device data collection', () => {
       ...DEFAULT_DEVICE_DATA_COLLECTION,
       country: false,
     })
+  })
+
+  it.concurrent('merges CLI/API patches onto the current collection flags', () => {
+    expect(mergeDeviceDataCollection(undefined, undefined)).toBeUndefined()
+    expect(mergeDeviceDataCollection({ country: false, platform: false }, { country: true })).toEqual({
+      ...DEFAULT_DEVICE_DATA_COLLECTION,
+      country: true,
+      platform: false,
+    })
+    expect(mergeDeviceDataCollection({ country: false }, null)).toEqual(DEFAULT_DEVICE_DATA_COLLECTION)
   })
 
   it.concurrent('strips disabled fields before persist and keeps update-routing fields on the source object', () => {

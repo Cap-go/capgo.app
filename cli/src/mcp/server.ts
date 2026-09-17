@@ -161,8 +161,21 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       description: 'Update settings for an existing app in Capgo Cloud',
       inputSchema: mcpUpdateAppInputSchema,
     },
-    async ({ appId, name, icon, retention }) => {
-      const result = await sdk.updateApp({ appId, name, icon, retention })
+    async ({ appId, name, icon, retention, collectCountry, collectPlatform, collectOsVersion, collectPluginVersion, collectVersionBuild, collectIsEmulator, collectIsProd, collectInstallSource }) => {
+      const result = await sdk.updateApp({
+        appId,
+        name,
+        icon,
+        retention,
+        collectCountry,
+        collectPlatform,
+        collectOsVersion,
+        collectPluginVersion,
+        collectVersionBuild,
+        collectIsEmulator,
+        collectIsProd,
+        collectInstallSource,
+      })
       if (!result.success) {
         return formatMcpError(result)
       }

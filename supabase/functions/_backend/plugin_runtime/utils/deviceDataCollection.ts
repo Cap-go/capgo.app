@@ -42,6 +42,21 @@ export function sanitizeDeviceDataCollectionInput(raw: unknown): DeviceDataColle
   return parseDeviceDataCollection(raw)
 }
 
+export function mergeDeviceDataCollection(current: unknown, patch: unknown): DeviceDataCollection | undefined {
+  if (patch === undefined)
+    return undefined
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch))
+    return parseDeviceDataCollection(patch)
+
+  const next = parseDeviceDataCollection(current)
+  const source = patch as Record<string, unknown>
+  for (const key of DEVICE_DATA_COLLECTION_KEYS) {
+    if (typeof source[key] === 'boolean')
+      next[key] = source[key]
+  }
+  return next
+}
+
 export function applyDeviceDataCollectionToDevice<T extends Record<string, unknown>>(
   device: T,
   collection: DeviceDataCollection,

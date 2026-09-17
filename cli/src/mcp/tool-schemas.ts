@@ -13,6 +13,14 @@ export const mcpUpdateAppInputSchema = z.object({
   name: z.string().optional(),
   icon: z.string().optional(),
   retention: z.number().optional(),
+  collectCountry: z.boolean().optional(),
+  collectPlatform: z.boolean().optional(),
+  collectOsVersion: z.boolean().optional(),
+  collectPluginVersion: z.boolean().optional(),
+  collectVersionBuild: z.boolean().optional(),
+  collectIsEmulator: z.boolean().optional(),
+  collectIsProd: z.boolean().optional(),
+  collectInstallSource: z.boolean().optional(),
 })
 
 export const mcpDeleteAppInputSchema = z.object({

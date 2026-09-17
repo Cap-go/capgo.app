@@ -10,7 +10,7 @@ import { deleteAppStatus } from '../../utils/appStatus.ts'
 import { trackBentoEvent } from '../../utils/bento.ts'
 import { createIfNotExistStoreInfo } from '../../utils/cloudflare.ts'
 import { lockOnboardingApp, unlockOnboardingApp } from '../../utils/demo.ts'
-import { sanitizeDeviceDataCollectionInput } from '../../utils/deviceDataCollection.ts'
+import { mergeDeviceDataCollection } from '../../utils/deviceDataCollection.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
@@ -148,7 +148,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     : supabaseAdmin(c)
   const { data: previousApp, error: previousAppError } = await previousAppClient
     .from('apps')
-    .select('need_onboarding, owner_org, name, app_id, onboarding')
+    .select('need_onboarding, owner_org, name, app_id, onboarding, device_data_collection')
     .eq('app_id', appId)
     .single()
 
@@ -269,7 +269,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
           need_onboarding: body.need_onboarding,
           existing_app: body.existing_app,
           block_provider_infra_requests: body.block_provider_infra_requests,
-          device_data_collection: sanitizeDeviceDataCollectionInput(body.device_data_collection),
+          device_data_collection: mergeDeviceDataCollection(previousApp.device_data_collection, body.device_data_collection),
           ios_store_url: body.ios_store_url,
           android_store_url: body.android_store_url,
         })

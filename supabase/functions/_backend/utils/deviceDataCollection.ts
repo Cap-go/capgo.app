@@ -5,6 +5,7 @@ export {
   DEVICE_DATA_COLLECTION_KEYS,
   mauPlatformForCollection,
   mauVersionBuildForCollection,
+  mergeDeviceDataCollection,
   parseDeviceDataCollection,
   sanitizeDeviceDataCollectionInput,
 } from '../plugin_runtime/utils/deviceDataCollection.ts'

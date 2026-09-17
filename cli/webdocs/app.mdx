@@ -163,6 +163,22 @@ npx @capgo/cli@latest app set com.example.app --name "Updated App" --retention 3
 | **--no-preview** | <code>boolean</code> | Disable bundle and channel preview QR codes for this app |
 | **--allow-device-custom-id** | <code>boolean</code> | Allow devices to set a custom device ID for this app |
 | **--no-allow-device-custom-id** | <code>boolean</code> | Disallow custom device IDs for this app |
+| **--collect-country** | <code>boolean</code> | Store the request country on device records and stats |
+| **--no-collect-country** | <code>boolean</code> | Do not store country on device records or stats |
+| **--collect-platform** | <code>boolean</code> | Store device platform on device records and stats |
+| **--no-collect-platform** | <code>boolean</code> | Do not store device platform on device records or stats |
+| **--collect-os-version** | <code>boolean</code> | Store device OS version on device records and stats |
+| **--no-collect-os-version** | <code>boolean</code> | Do not store device OS version on device records or stats |
+| **--collect-plugin-version** | <code>boolean</code> | Store the updater plugin version on device records and stats |
+| **--no-collect-plugin-version** | <code>boolean</code> | Do not store the updater plugin version on device records or stats |
+| **--collect-version-build** | <code>boolean</code> | Store the native app version on device records and stats |
+| **--no-collect-version-build** | <code>boolean</code> | Do not store the native app version on device records or stats |
+| **--collect-is-emulator** | <code>boolean</code> | Store whether the client reported itself as an emulator |
+| **--no-collect-is-emulator** | <code>boolean</code> | Do not store the emulator flag |
+| **--collect-is-prod** | <code>boolean</code> | Store whether the client reported a production build |
+| **--no-collect-is-prod** | <code>boolean</code> | Do not store the production / development flag |
+| **--collect-install-source** | <code>boolean</code> | Store App Store, Play Store, TestFlight, or other install source |
+| **--no-collect-install-source** | <code>boolean</code> | Do not store install source |
 | **--block-provider-infra-requests** | <code>boolean</code> | Block provider infrastructure requests for this app |
 | **--no-block-provider-infra-requests** | <code>boolean</code> | Allow provider infrastructure requests for this app |
 | **--build-timeout-minutes** | <code>string</code> | Native build timeout in minutes (5-360, default: 15) |

@@ -42,7 +42,7 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 - `app add [appId]`: create an app in Capgo Cloud.
 - `app list`: list apps under the current account. Pass `--filter-by-org-id <orgId>` to list only apps from one organization, `--show-org` to include organization names, and `--show-org-id` to include organization IDs. The CLI warns that the filter can hide other accessible apps. Use `npx @capgo/cli@latest app list --output-text` for plain status text with an embedded CSV app table and no interactive terminal formatting.
 - `app delete [appId]`: remove an app.
-- `app set [appId]`: update app settings such as name, icon, retention, metadata exposure, and preview access with `--preview` or `--no-preview`.
+- `app set [appId]`: update app settings such as name, icon, retention, metadata exposure, preview access with `--preview` or `--no-preview`, and optional device data collection with `--collect-country` / `--no-collect-country` (same pattern for platform, os-version, plugin-version, version-build, is-emulator, is-prod, install-source). Unchecked fields are not stored; `/updates` still uses the live request.
 - `app setting [path]`: update Capacitor config values programmatically.
 - `app debug [appId]`: listen for live-update debug events, optionally for one device.
 
