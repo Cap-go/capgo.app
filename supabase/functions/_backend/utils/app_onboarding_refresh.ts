@@ -124,7 +124,7 @@ WITH signals AS (
         'ota', public.merge_app_onboarding_feature(a.onboarding->'features'->'ota',
           (SELECT v.created_at FROM public.app_versions v WHERE v.app_id = a.app_id AND v.deleted IS NOT TRUE AND v.name IS DISTINCT FROM 'builtin' AND v.name IS DISTINCT FROM 'unknown' ORDER BY v.created_at LIMIT 1),
           s.first_install_at,
-          GREATEST(s.last_install_at, (SELECT v.created_at FROM public.app_versions v WHERE v.app_id = a.app_id AND v.deleted IS NOT TRUE AND v.name IS DISTINCT FROM 'builtin' AND v.name IS DISTINCT FROM 'unknown' ORDER BY v.created_at DESC LIMIT 1)), s.stage),
+          GREATEST(s.last_install_at, (SELECT v.created_at FROM public.app_versions v WHERE v.app_id = a.app_id AND v.deleted IS NOT TRUE AND v.name IS DISTINCT FROM 'builtin' AND v.name IS DISTINCT FROM 'unknown' AND v.created_at IS NOT NULL ORDER BY v.created_at DESC LIMIT 1)), s.stage),
         'builder', public.merge_app_onboarding_feature(a.onboarding->'features'->'builder',
           (SELECT b.created_at FROM public.build_requests b WHERE b.app_id = a.app_id ORDER BY b.created_at LIMIT 1),
           (SELECT b.completed_at FROM public.build_requests b WHERE b.app_id = a.app_id AND b.status IN ('succeeded', 'released') AND b.completed_at IS NOT NULL ORDER BY b.completed_at LIMIT 1),

@@ -133,13 +133,15 @@ describe('backend onboarding refresh PostgreSQL and telemetry integration', () =
     await client.query('INSERT INTO public.app_onboarding_refresh_jobs(app_id,batch_token) SELECT id,$2 FROM unnest($1::varchar[]) ids(id)', [ids, token])
     await client.query('INSERT INTO public.app_versions(app_id,owner_org,name,created_at) SELECT id,$2,\'first-bundle\',\'2026-08-02T00:00:00Z\'::timestamptz FROM unnest($1::varchar[]) ids(id)', [ids, orgId])
     await client.query('INSERT INTO public.build_requests(app_id,owner_org,requested_by,platform,status,upload_session_key,upload_path,upload_url,upload_expires_at,created_at,completed_at) SELECT id,$2,$3,\'android\',\'succeeded\',\'test-only\',\'fixture\',\'https://example.com\',now(),\'2026-08-03T00:00:00Z\'::timestamptz,\'2026-08-04T00:00:00Z\'::timestamptz FROM unnest($1::varchar[]) ids(id)', [ids, orgId, owner])
+    // Match MIN/MAX semantics even when an old bundle has no timestamp.
+    await client.query('INSERT INTO public.app_versions(app_id,owner_org,name,created_at) VALUES ($1,$2,\'latest-bundle\',\'2026-09-17T00:00:00Z\'::timestamptz),($1,$2,\'undated-bundle\',NULL)', [ids[0], orgId])
     client.release()
     try {
       mocks.run.mockImplementation(async (_c, query: string) => ids.map(app_id => ({ app_id, first_at: '2026-08-05T12:00:00Z', last_at: '2026-09-16T12:00:00Z', ...(query.includes('FROM device_info') ? { stage: 'native_unknown' } : {}) })))
       expect(await refreshAppOnboardingBatch(context, pool, { appIds: ids, batchToken: token }, now)).toBe(20)
-      const rows = (await pool.query('SELECT onboarding FROM public.apps WHERE app_id=ANY($1::varchar[])', [ids])).rows
+      const rows = (await pool.query('SELECT app_id, onboarding FROM public.apps WHERE app_id=ANY($1::varchar[])', [ids])).rows
       for (const row of rows) {
-        expect(row.onboarding.features.ota).toMatchObject({ started_at: '2026-08-02T00:00:00.000Z', succeeded_at: '2026-08-05T12:00:00.000Z', retained_30d_at: '2026-09-16T12:00:00.000Z' })
+        expect(row.onboarding.features.ota).toMatchObject({ started_at: '2026-08-02T00:00:00.000Z', succeeded_at: '2026-08-05T12:00:00.000Z', retained_30d_at: row.app_id === ids[0] ? '2026-09-17T00:00:00.000Z' : '2026-09-16T12:00:00.000Z' })
         expect(row.onboarding.features.builder).toMatchObject({ started_at: '2026-08-03T00:00:00.000Z', succeeded_at: '2026-08-04T00:00:00.000Z' })
       }
     }
