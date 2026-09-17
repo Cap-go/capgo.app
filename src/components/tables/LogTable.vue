@@ -314,23 +314,23 @@ columns.value = [
       const metadata = logRowDisplayMetadata(elem.version_name, elem.metadata)
       const originalMessage = extractLogOriginalMessage(elem.metadata)
       const showKeyOnHover = actionLabel !== actionKey
-      return h('div', { class: 'flex w-full min-w-0 flex-col gap-0.5' }, [
-        h('div', { class: 'flex min-w-0 items-center gap-1.5' }, [
+      return h('div', { class: 'group flex w-full min-w-0 flex-col gap-0.5' }, [
+        h('div', { class: 'flex w-full min-w-0 items-center gap-1.5' }, [
           h('a', {
             'href': getLogDocUrl(actionKey),
             'target': '_blank',
             'rel': 'noopener noreferrer',
             'title': actionKey,
-            'class': 'group block min-w-0 truncate font-medium hover:underline',
+            'class': 'block min-w-0 flex-1 truncate font-medium hover:underline',
             'data-test': 'log-row-action',
           }, [
             h('span', {
-              'class': showKeyOnHover ? 'group-hover:hidden group-focus-visible:hidden' : undefined,
+              'class': showKeyOnHover ? 'group-hover:hidden group-focus-within:hidden' : undefined,
               'data-test': 'log-row-action-name',
             }, actionLabel),
             showKeyOnHover
               ? h('span', {
-                  'class': 'hidden font-mono group-hover:inline group-focus-visible:inline',
+                  'class': 'hidden font-mono group-hover:inline group-focus-within:inline',
                   'data-test': 'log-row-action-key',
                 }, actionKey)
               : null,

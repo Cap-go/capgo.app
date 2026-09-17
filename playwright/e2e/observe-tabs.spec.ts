@@ -182,7 +182,11 @@ test.describe('Observe sections', () => {
     await expect(longVersionRow.locator('[data-test="log-row-version"]')).toHaveText(longVersion)
     await expect(longVersionRow.locator('[data-test="log-row-version"]')).toHaveAttribute('title', longVersion)
     await expect(longVersionRow.locator('[data-test="log-row-action-name"]')).toHaveText('Update process failed')
+    await expect(longVersionRow.locator('[data-test="log-row-action-key"]')).toBeHidden()
     await expect(longVersionRow.locator('[data-test="log-row-metadata"]')).toHaveCount(0)
+    await longVersionRow.locator('[data-test="log-row-action"]').hover()
+    await expect(longVersionRow.locator('[data-test="log-row-action-name"]')).toBeHidden()
+    await expect(longVersionRow.locator('[data-test="log-row-action-key"]')).toHaveText('update_fail')
 
     const versionBox = await longVersionRow.locator('[data-test="log-row-version"]').boundingBox()
     const actionBox = await longVersionRow.locator('[data-test="log-row-action"]').boundingBox()
