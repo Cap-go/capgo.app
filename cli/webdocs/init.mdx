@@ -15,8 +15,6 @@ npx @capgo/cli@latest init
 ```
 
 This includes adding code for updates, building, uploading your app, and verifying update functionality.
-Commands inside an identifiable Capacitor project can also complete Install Updater Plugin in the background when `@capgo/capacitor-updater` is declared in that app's package.json and installed locally. Hoisted and symlinked workspace installations are supported. This is best effort: commands may exit before detection finishes, and missing packages never clear an already completed step.
-Background onboarding checks use the default Capgo API unless a custom API origin is explicitly trusted. Select your self-host with `--supa-host` and `--supa-anon`, or set `CAPGO_TRUSTED_API_ORIGINS` to a comma-separated list of trusted URL origins including scheme and port. Remote hosts require HTTPS; HTTP is allowed only for trusted loopback origins. Requests do not follow redirects.
 Capgo bundles are web assets and can be fetched by anyone who knows the URL. Use encryption for banking, regulated, or other high-security apps.
 During the iOS run-on-device step, choose a physical iPhone/iPad or simulator. If you choose a physical device, the CLI lets you connect, unlock, and check again before it launches the app.
 
@@ -39,3 +37,4 @@ npx @capgo/cli@latest init YOUR_API_KEY com.example.app
 | **--main-file** | <code>string</code> | Application entry file to update (useful in monorepos) |
 | **--capacitor-config** | <code>string</code> | Capacitor config source to update (useful with dynamic monorepo configs) |
 | **--no-analytics** | <code>boolean</code> | Disable init analytics and terminal replay for this run |
+
