@@ -2,11 +2,23 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../supabase/functions/_backend/utils/hono.ts'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { app, persistObservedProgress } from '../supabase/functions/_backend/private/onboarding_progress.ts'
+import { persistAppOnboarding } from '../supabase/functions/_backend/public/app/put.ts'
 
 const mocks = vi.hoisted(() => ({
-  permission: vi.fn(), permissionPg: vi.fn(), from: vi.fn(), devices: vi.fn(), logs: vi.fn(), execute: vi.fn(), close: vi.fn(), track: vi.fn(),
+  permission: vi.fn(),
+  permissionPg: vi.fn(),
+  from: vi.fn(),
+  devices: vi.fn(),
+  logs: vi.fn(),
+  execute: vi.fn(),
+  close: vi.fn(),
+  track: vi.fn(),
   row: { onboarding: { setup: { todo_list_version: 3, steps: {} } }, created_at: '2026-09-16T00:00:00Z' } as any,
-  channels: [] as any[], versions: [] as any[], archive: [] as any[], errors: {} as Record<string, boolean>, queries: [] as any[],
+  channels: [] as any[],
+  versions: [] as any[],
+  archive: [] as any[],
+  errors: {} as Record<string, boolean>,
+  queries: [] as any[],
 }))
 vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', () => ({ middlewareAuth: () => async (c: Context<MiddlewareKeyVariables>, next: () => Promise<void>) => {
   c.set('auth', { authType: 'jwt', userId: '11111111-1111-4111-8111-111111111111', jwt: 'fixture', apikey: null })
@@ -16,15 +28,19 @@ vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({ checkPermission
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({ supabaseWithAuth: () => ({ from: mocks.from }) }))
 vi.mock('../supabase/functions/_backend/utils/stats.ts', () => ({ readDevices: mocks.devices, readStats: mocks.logs }))
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({ getPgClient: () => ({}), getDrizzleClient: () => ({ transaction: (fn: any) => fn({ execute: mocks.execute }) }), closeClient: mocks.close }))
-vi.mock('../supabase/functions/_backend/utils/utils.ts', async (original) => ({ ...await original<typeof import('../supabase/functions/_backend/utils/utils.ts')>(), backgroundTask: async (_c: any, task: any) => await task }))
+vi.mock('../supabase/functions/_backend/utils/utils.ts', async original => ({ ...await original<typeof import('../supabase/functions/_backend/utils/utils.ts')>(), backgroundTask: async (_c: any, task: any) => await task }))
 vi.mock('../supabase/functions/_backend/utils/posthog.ts', () => ({ trackPosthogEvent: mocks.track }))
 
 function query(table: string) {
   const calls: any[] = []
   mocks.queries.push({ table, calls })
   const builder: any = {}
-  for (const method of ['select', 'eq', 'neq', 'not', 'or', 'gt', 'in', 'limit'])
-    builder[method] = (...args: any[]) => { calls.push([method, ...args]); return builder }
+  for (const method of ['select', 'eq', 'neq', 'not', 'or', 'gt', 'in', 'limit']) {
+    builder[method] = (...args: any[]) => {
+      calls.push([method, ...args])
+      return builder
+    }
+  }
   builder.single = async () => ({ data: mocks.row, error: mocks.errors[table] ? new Error('Unavailable') : null })
   builder.then = (resolve: any, reject: any) => Promise.resolve({
     data: table === 'channels' ? mocks.channels : calls.some(call => String(call[1]).includes('!inner')) ? mocks.archive : mocks.versions,
@@ -32,13 +48,29 @@ function query(table: string) {
   }).then(resolve, reject)
   return builder
 }
+function lockedRow(onboarding: unknown, ownerOrg = 'org') {
+  mocks.execute.mockResolvedValueOnce({ rows: [{ owner_org: ownerOrg }] })
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: [{ onboarding, owner_org: ownerOrg }] })
+    .mockResolvedValue({ rows: [] })
+}
+function contextFor(auth: unknown, capgkey?: string) {
+  return ({
+    get: (key: string) => key === 'auth' ? auth : key === 'capgkey' ? capgkey : undefined,
+    env: {},
+  }) as any
+}
 const request = (N: number, initial = false, appId = 'com.test.onboarding') => app.request('http://local/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appId, N, initial }) })
 
 describe('onboarding progress endpoint', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.row = { onboarding: { setup: { todo_list_version: 3, steps: {} } }, created_at: '2026-09-16T00:00:00Z' }
-    mocks.channels = []; mocks.versions = []; mocks.archive = []; mocks.errors = {}; mocks.queries = []
+    mocks.channels = []
+    mocks.versions = []
+    mocks.archive = []
+    mocks.errors = {}
+    mocks.queries = []
     mocks.from.mockImplementation(query)
     mocks.permission.mockResolvedValue(true)
     mocks.permissionPg.mockResolvedValue(true)
@@ -98,7 +130,7 @@ describe('onboarding progress endpoint', () => {
   })
   it('merges observations with the locked current row, preserving init app-ready progress', async () => {
     const onboarding = { setup: { todo_list_version: 3, source: 'cli', steps: { add_code: { status: 'done' }, login_cli_mcp: { status: 'done' } } } }
-    mocks.execute.mockResolvedValueOnce({ rows: [{ onboarding, owner_org: 'org' }] }).mockResolvedValue({ rows: [] })
+    lockedRow(onboarding)
     const context = { get: (key: string) => key === 'auth' ? { userId: 'user', authType: 'jwt' } : undefined, env: {} } as any
     const result = await persistObservedProgress(context, 'com.test.onboarding', { run_device: true }) as any
     expect(result.setup.steps.add_code.status).toBe('done')
@@ -108,8 +140,40 @@ describe('onboarding progress endpoint', () => {
   })
   it('unchecks a deleted channel despite a saved done report', async () => {
     const onboarding = { setup: { todo_list_version: 3, steps: { add_channel: { status: 'done' } } } }
-    mocks.execute.mockResolvedValueOnce({ rows: [{ onboarding, owner_org: 'org' }] }).mockResolvedValue({ rows: [] })
-    const context = { get: () => ({ userId: 'user', authType: 'jwt' }), env: {} } as any
+    lockedRow(onboarding)
+    const context = contextFor({ userId: 'user', authType: 'jwt' })
     expect((await persistObservedProgress(context, 'com.test.onboarding', { add_channel: false }) as any).setup.steps.add_channel).toBeUndefined()
+  })
+  it('preserves the request key for hashed RBAC keys on both write-permission paths', async () => {
+    lockedRow(mocks.row.onboarding)
+    mocks.permissionPg.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    const auth = { userId: 'user', authType: 'apikey', apikey: { key: null, rbac_id: 'rbac-key' } }
+    const result = await persistObservedProgress(contextFor(auth, 'fixture-hashed-key'), 'com.test.onboarding', { run_device: true }) as any
+    expect(result.setup.steps.run_device.status).toBe('done')
+    expect(mocks.permissionPg).toHaveBeenNthCalledWith(1, expect.anything(), 'app.update_settings', { appId: 'com.test.onboarding' }, expect.anything(), 'user', 'fixture-hashed-key')
+    expect(mocks.permissionPg).toHaveBeenNthCalledWith(2, expect.anything(), 'org.create_app', { orgId: 'org' }, expect.anything(), 'user', 'fixture-hashed-key')
+  })
+  it('does not persist observed progress after permission is revoked', async () => {
+    lockedRow(mocks.row.onboarding)
+    mocks.permissionPg.mockResolvedValue(false)
+    expect(await persistObservedProgress(contextFor({ userId: 'user', authType: 'jwt' }), 'com.test.onboarding', { run_device: true })).toBeUndefined()
+    expect(mocks.execute).toHaveBeenCalledTimes(3)
+  })
+  it('rejects CLI progress under the locked current permission state before any merge or write', async () => {
+    lockedRow(mocks.row.onboarding)
+    mocks.permissionPg.mockResolvedValue(false)
+    const context = contextFor({ userId: 'user', authType: 'apikey', apikey: { key: null, rbac_id: 'rbac-key' } }, 'fixture-hashed-key')
+    await expect(persistAppOnboarding(context, 'com.test.onboarding', { steps: { add_code: { status: 'done' } } }, { user_id: 'user', key: null } as any)).rejects.toMatchObject({ status: 401 })
+    expect(mocks.permissionPg.mock.calls.every(call => call[5] === 'fixture-hashed-key')).toBe(true)
+    expect(mocks.execute).toHaveBeenCalledTimes(3)
+    expect(mocks.close).toHaveBeenCalledOnce()
+  })
+  it('does not write or complete onboarding if the app changed organizations while waiting for its lock', async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [{ owner_org: 'original-org' }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ onboarding: mocks.row.onboarding, owner_org: 'new-org' }] })
+    expect(await persistAppOnboarding(contextFor({ userId: 'user', authType: 'jwt' }), 'com.test.onboarding', undefined, { user_id: 'user', key: null } as any, undefined, true)).toBeUndefined()
+    expect(mocks.permissionPg).not.toHaveBeenCalled()
+    expect(mocks.execute).toHaveBeenCalledTimes(3)
   })
 })

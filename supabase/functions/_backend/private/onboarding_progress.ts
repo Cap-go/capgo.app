@@ -1,12 +1,13 @@
 import type { Context } from 'hono'
+import type { AppOnboardingPatch } from '../utils/appOnboarding.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Permission } from '../utils/rbac.ts'
-import type { AppOnboardingPatch } from '../utils/appOnboarding.ts'
 import { sql } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
 import { buildAppOnboardingStepPosthogEvent } from '../utils/app_onboarding_posthog.ts'
 import { appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardingStepHistoryChanges, parseAppOnboarding } from '../utils/appOnboarding.ts'
+import { lockAppOnboardingForWrite } from '../utils/appOnboardingWriteLock.ts'
 import { parseBody, quickError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlogErr, serializeError } from '../utils/logging.ts'
@@ -53,16 +54,15 @@ export async function persistObservedProgress(c: Context<MiddlewareKeyVariables>
   const auth = c.get('auth')!
   const pool = getPgClient(c)
   try {
-    const result = await getDrizzleClient(pool).transaction(async (tx) => {
-      const row = (await tx.execute<{ onboarding: unknown, owner_org: string }>(sql`
-        SELECT onboarding, owner_org FROM public.apps WHERE app_id = ${appId} FOR UPDATE
-      `)).rows[0]
+    const result = await getDrizzleClient(pool, { logger: false }).transaction(async (tx) => {
+      const row = await lockAppOnboardingForWrite(tx, appId)
       if (!row || parseAppOnboarding(row.onboarding).todo_list_version !== 3)
         return null
-      const key = auth.apikey?.key ?? null
+      const key = auth.apikey?.key ?? c.get('capgkey') ?? null
       if (!(await checkPermissionPg(c, 'app.update_settings', { appId }, tx, auth.userId, key))
-        && !(await checkPermissionPg(c, 'org.create_app', { orgId: row.owner_org }, tx, auth.userId, key)))
+        && !(await checkPermissionPg(c, 'org.create_app', { orgId: row.owner_org }, tx, auth.userId, key))) {
         return null
+      }
       const current = parseAppOnboarding(row.onboarding)
       if (current.outcome === 'skipped')
         return null
@@ -89,7 +89,11 @@ export async function persistObservedProgress(c: Context<MiddlewareKeyVariables>
     })
     if (result?.historyChanges.length) {
       await backgroundTask(c, Promise.all(result.historyChanges.map(change => trackPosthogEvent(c, buildAppOnboardingStepPosthogEvent({
-        appId, auth, change, orgId: result.orgId, setup: parseAppOnboarding(result.onboarding),
+        appId,
+        auth,
+        change,
+        orgId: result.orgId,
+        setup: parseAppOnboarding(result.onboarding),
       })))))
     }
     return result?.onboarding

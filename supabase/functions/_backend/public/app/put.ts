@@ -3,9 +3,11 @@ import type { PoolClient } from 'pg'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { sql } from 'drizzle-orm'
+import { HTTPException } from 'hono/http-exception'
 import { buildAppCreatorEventDetails } from '../../utils/app_creator.ts'
 import { buildAppOnboardingStepPosthogEvent } from '../../utils/app_onboarding_posthog.ts'
 import { appendAppOnboardingStepHistory, filterAppOnboardingReportedPatch, getAppOnboardingStepHistoryChanges, parseAppOnboarding, parseAppOnboardingPatch } from '../../utils/appOnboarding.ts'
+import { lockAppOnboardingForWrite } from '../../utils/appOnboardingWriteLock.ts'
 import { deleteAppStatus } from '../../utils/appStatus.ts'
 import { trackBentoEvent } from '../../utils/bento.ts'
 import { createIfNotExistStoreInfo } from '../../utils/cloudflare.ts'
@@ -14,7 +16,7 @@ import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
 import { trackPosthogEvent } from '../../utils/posthog.ts'
-import { checkPermission } from '../../utils/rbac.ts'
+import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { createSignedImageUrl, getStorageAllowedOrigins, resolveWritableImageValue } from '../../utils/storage.ts'
 import { supabaseAdmin, supabaseApikey, supabaseWithAuth } from '../../utils/supabase.ts'
 import { backgroundTask, isValidAppId } from '../../utils/utils.ts'
@@ -33,17 +35,30 @@ interface UpdateApp {
   onboarding?: unknown
 }
 
-async function persistAppOnboarding(
+export async function persistAppOnboarding(
   c: Context<MiddlewareKeyVariables>,
   appId: string,
   patch: NonNullable<ReturnType<typeof parseAppOnboardingPatch>> | undefined,
+  apikey: Database['public']['Tables']['apikeys']['Row'],
   transactionClient?: PoolClient,
   completePendingOnboarding = false,
 ) {
   const pool = transactionClient ? null : getPgClient(c)
   try {
-    const drizzle = getDrizzleClient(transactionClient ?? pool!)
+    const drizzle = getDrizzleClient(transactionClient ?? pool!, { logger: false })
     return await drizzle.transaction(async (tx) => {
+      const current = await lockAppOnboardingForWrite(tx, appId)
+      if (!current)
+        return undefined
+      const auth = c.get('auth')
+      const userId = auth?.userId ?? apikey.user_id
+      const key = auth?.apikey?.key ?? c.get('capgkey') ?? (auth?.authType === 'jwt' ? null : apikey.key)
+      // Recheck under the same lock held by RBAC revocations, not the earlier
+      // request-level permission snapshot.
+      if (!(await checkPermissionPg(c, 'app.update_settings', { appId }, tx, userId, key))
+        && !(await checkPermissionPg(c, 'org.create_app', { orgId: current.owner_org }, tx, userId, key))) {
+        throw quickError(401, 'cannot_access_app', 'You can\'t access this app', { app_id: appId })
+      }
       let app: Database['public']['Tables']['apps']['Row'] | undefined
       let completed = false
       if (completePendingOnboarding) {
@@ -59,24 +74,16 @@ async function persistAppOnboarding(
       }
 
       if (!patch) {
-        const current = app
+        const refreshed = app
           ? null
           : await tx.execute<Database['public']['Tables']['apps']['Row']>(sql`
               SELECT * FROM public.apps WHERE app_id = ${appId}
             `)
-        app ??= current?.rows[0] as Database['public']['Tables']['apps']['Row'] | undefined
+        app ??= refreshed?.rows[0] as Database['public']['Tables']['apps']['Row'] | undefined
         return app ? { app, completed, historyChanges: [] } : undefined
       }
 
-      const currentResult = await tx.execute<{ onboarding: unknown }>(sql`
-        SELECT onboarding
-        FROM public.apps
-        WHERE app_id = ${appId}
-        FOR UPDATE
-      `)
-      const currentOnboarding = currentResult.rows[0]?.onboarding
-      if (!currentResult.rows[0])
-        return undefined
+      const currentOnboarding = current.onboarding
 
       patch = filterAppOnboardingReportedPatch(currentOnboarding, patch)
       const mergeResult = await tx.execute<{ onboarding: unknown }>(sql`
@@ -228,7 +235,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
       try {
         if (!onboardingLock)
           throw new Error('Missing onboarding completion lock')
-        const persisted = await persistAppOnboarding(c, appId, onboardingPatch ?? undefined, onboardingLock.client, true)
+        const persisted = await persistAppOnboarding(c, appId, onboardingPatch ?? undefined, apikey, onboardingLock.client, true)
         data = persisted?.app
         completedPendingOnboarding = persisted?.completed ?? false
         onboardingStepHistoryChanges = persisted?.historyChanges ?? []
@@ -236,12 +243,14 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
           dbError = { message: 'App not found during onboarding completion' }
       }
       catch (error) {
+        if (error instanceof HTTPException)
+          throw error
         dbError = { message: (error as Error)?.message }
       }
     }
     else if (onboardingPatch && !hasSettingsPayload) {
       try {
-        const persisted = await persistAppOnboarding(c, appId, onboardingPatch)
+        const persisted = await persistAppOnboarding(c, appId, onboardingPatch, apikey)
         if (!persisted) {
           dbError = { message: 'App not found during onboarding progress update' }
         }
@@ -252,6 +261,8 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
         }
       }
       catch (error) {
+        if (error instanceof HTTPException)
+          throw error
         dbError = { message: (error as Error)?.message }
       }
     }
@@ -278,7 +289,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
       if (data)
         completedPendingOnboarding = previousApp.need_onboarding === true && data.need_onboarding === false
       if (data && onboardingPatch) {
-        const persisted = await persistAppOnboarding(c, appId, onboardingPatch)
+        const persisted = await persistAppOnboarding(c, appId, onboardingPatch, apikey)
         if (persisted) {
           data = persisted.app
           completedPendingOnboarding = completedPendingOnboarding || persisted.completed
