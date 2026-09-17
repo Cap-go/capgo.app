@@ -311,10 +311,10 @@ const fixCapacitorCliDirname = {
 
 // Build CLI
 const buildCLI = Bun.build({
-  entrypoints: ['src/index.ts'],
+  entrypoints: ['src/index.ts', 'src/notify-app-ready-worker.ts'],
   target: 'node',
   outdir: 'dist',
-  external: EXTERNAL_PACKAGES,
+  external: [...EXTERNAL_PACKAGES, 'typescript'],
   sourcemap: env.NODE_ENV === 'development' ? 'linked' : 'none',
   minify: true,
   // Keep env access runtime-only unless explicitly defined below.
