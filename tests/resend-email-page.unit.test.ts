@@ -42,7 +42,7 @@ vi.mock('~/services/emailOtp', async importOriginal => ({
 vi.mock('vue-turnstile', () => ({
   default: defineComponent({
     props: ['modelValue', 'siteKey'],
-    emits: ['update:modelValue'],
+    emits: ['update:modelValue', 'error', 'unsupported', 'expired'],
     setup(props, { emit, expose }) {
       expose({
         reset() {
@@ -50,12 +50,18 @@ vi.mock('vue-turnstile', () => ({
           emit('update:modelValue', '')
         },
       })
-      return () => h('input', {
-        'data-test': 'captcha',
-        'data-site-key': props.siteKey,
-        'value': props.modelValue,
-        'onInput': (event: Event) => emit('update:modelValue', (event.target as HTMLInputElement).value),
-      })
+      return () => h('div', [
+        h('input', {
+          'data-test': 'captcha',
+          'data-site-key': props.siteKey,
+          'value': props.modelValue,
+          'onInput': (event: Event) => emit('update:modelValue', (event.target as HTMLInputElement).value),
+        }),
+        ...(['error', 'unsupported', 'expired'] as const).map(event => h('button', {
+          type: 'button',
+          onClick: () => emit(event),
+        }, `CAPTCHA ${event}`)),
+      ])
     },
   }),
 }))
@@ -105,6 +111,7 @@ function button(container: HTMLElement, text: string) {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('VITE_CAPTCHA_KEY', 'test-site-key')
+  vi.stubGlobal('turnstile', undefined)
   mocks.route.query = {}
   mocks.getSession.mockResolvedValue({ data: { session: null } })
   mocks.resend.mockResolvedValue({ error: null })
@@ -118,6 +125,8 @@ afterEach(() => {
   document.body.replaceChildren()
   inputs.clear()
   vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 describe('email confirmation CAPTCHA', () => {
@@ -133,6 +142,76 @@ describe('email confirmation CAPTCHA', () => {
 
   it('requires CAPTCHA before resending a signup confirmation', async () => {
     const container = await mountPage()
+    await submitResend()
+
+    await vi.waitFor(() => expect(container.textContent).toContain(messages['captcha-required']))
+    expect(mocks.resend).not.toHaveBeenCalled()
+  })
+
+  it.each(['error', 'unsupported'])('allows the server to handle resend when CAPTCHA emits %s', async (event) => {
+    const container = await mountPage()
+    await completeCaptcha(container)
+    button(container, `CAPTCHA ${event}`).click()
+    await nextTick()
+    expect(container.textContent).toContain(messages['captcha-resend-unavailable'])
+    expect(container.querySelector<HTMLInputElement>('[data-test="captcha"]')?.value).toBe('')
+
+    await submitResend()
+    await vi.waitFor(() => expect(mocks.toast.success).toHaveBeenCalledOnce())
+    expect(mocks.resend).toHaveBeenCalledWith({
+      type: 'signup',
+      email: 'confirmation-test@example.com',
+      options: { captchaToken: undefined },
+    })
+  })
+
+  it('allows submitting after the CAPTCHA script fails to initialize', async () => {
+    vi.useFakeTimers()
+    const container = await mountPage()
+    await vi.advanceTimersByTimeAsync(8000)
+    await nextTick()
+    expect(container.textContent).toContain(messages['captcha-resend-unavailable'])
+    vi.useRealTimers()
+
+    await submitResend()
+    await vi.waitFor(() => expect(mocks.toast.success).toHaveBeenCalledOnce())
+    expect(mocks.resend).toHaveBeenCalledWith(expect.objectContaining({ options: { captchaToken: undefined } }))
+  })
+
+  it('keeps requiring a challenge once Turnstile has initialized', async () => {
+    vi.stubGlobal('turnstile', {})
+    vi.useFakeTimers()
+    const container = await mountPage()
+    await vi.advanceTimersByTimeAsync(8000)
+    await nextTick()
+    expect(container.textContent).not.toContain(messages['captcha-resend-unavailable'])
+    vi.useRealTimers()
+
+    await submitResend()
+    await vi.waitFor(() => expect(container.textContent).toContain(messages['captcha-required']))
+    expect(mocks.resend).not.toHaveBeenCalled()
+  })
+
+  it('restores normal CAPTCHA requirements when an unavailable widget recovers', async () => {
+    const container = await mountPage()
+    button(container, 'CAPTCHA error').click()
+    await nextTick()
+    await completeCaptcha(container, 'recovered-captcha-token')
+    expect(container.textContent).not.toContain(messages['captcha-resend-unavailable'])
+
+    await submitResend()
+    await vi.waitFor(() => expect(mocks.toast.success).toHaveBeenCalledOnce())
+    expect(mocks.resend).toHaveBeenCalledWith(expect.objectContaining({ options: { captchaToken: 'recovered-captcha-token' } }))
+    await submitResend()
+    await vi.waitFor(() => expect(container.textContent).toContain(messages['captcha-required']))
+    expect(mocks.resend).toHaveBeenCalledOnce()
+  })
+
+  it('clears an expired token instead of sending it', async () => {
+    const container = await mountPage()
+    await completeCaptcha(container)
+    button(container, 'CAPTCHA expired').click()
+    await nextTick()
     await submitResend()
 
     await vi.waitFor(() => expect(container.textContent).toContain(messages['captcha-required']))
@@ -161,6 +240,8 @@ describe('email confirmation CAPTCHA', () => {
     await submitResend()
     await vi.waitFor(() => expect(container.textContent).toContain('Captcha verification failed'))
     expect(mocks.resetCaptcha).toHaveBeenCalledOnce()
+    expect(mocks.toast.error).toHaveBeenCalledWith('Captcha verification failed')
+    expect(mocks.toast.error.mock.invocationCallOrder[0]).toBeLessThan(mocks.resetCaptcha.mock.invocationCallOrder[0])
 
     await submitResend()
     await vi.waitFor(() => expect(container.textContent).toContain(messages['captcha-required']))
@@ -174,6 +255,35 @@ describe('email confirmation CAPTCHA', () => {
       email: 'confirmation-test@example.com',
       options: { captchaToken: 'retry-captcha-token' },
     })
+  })
+
+  it('shows a thrown resend error before resetting and allows retrying with a fresh token', async () => {
+    mocks.resend.mockRejectedValueOnce(new Error('Network unavailable'))
+    const container = await mountPage()
+    await completeCaptcha(container)
+    await submitResend()
+
+    await vi.waitFor(() => expect(container.textContent).toContain('Network unavailable'))
+    expect(mocks.toast.error).toHaveBeenCalledWith('Network unavailable')
+    expect(mocks.toast.error.mock.invocationCallOrder[0]).toBeLessThan(mocks.resetCaptcha.mock.invocationCallOrder[0])
+    expect(button(container, messages.resend).disabled).toBe(false)
+    expect(container.querySelector<HTMLInputElement>('[data-test="captcha"]')?.value).toBe('')
+
+    await completeCaptcha(container, 'retry-captcha-token')
+    await submitResend()
+    await vi.waitFor(() => expect(mocks.toast.success).toHaveBeenCalledOnce())
+    expect(mocks.resend).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows a localized fallback for thrown errors without a message', async () => {
+    mocks.resend.mockRejectedValueOnce(null)
+    const container = await mountPage()
+    await completeCaptcha(container)
+    await submitResend()
+
+    await vi.waitFor(() => expect(container.textContent).toContain(messages['confirm-email-send-failed']))
+    expect(mocks.toast.error).toHaveBeenCalledWith(messages['confirm-email-send-failed'])
+    expect(mocks.resetCaptcha).toHaveBeenCalledOnce()
   })
 
   it('allows resending when CAPTCHA is disabled', async () => {

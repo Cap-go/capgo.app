@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { setErrors } from '@formkit/core'
 import { FormKit, FormKitMessages } from '@formkit/vue'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -23,6 +23,8 @@ const main = useMainStore()
 const isLoading = ref(false)
 const resendCaptchaToken = ref('')
 const resendCaptchaRef = ref<InstanceType<typeof VueTurnstile> | null>(null)
+const resendCaptchaStatus = ref<'disabled' | 'loading' | 'ready' | 'unavailable'>(import.meta.env.VITE_CAPTCHA_KEY ? 'loading' : 'disabled')
+let resendCaptchaInitTimeout: ReturnType<typeof setTimeout> | null = null
 const isLoadingMain = ref(false)
 const otpSending = ref(false)
 const otpSendError = ref('')
@@ -41,6 +43,48 @@ const returnTo = computed(() => validateRedirectPath(rawReturnToQuery.value, '/s
 const attemptedDestination = computed(() => validateRedirectPath(rawReturnToQuery.value, rawReturnToQuery.value))
 const usesEmailOtpFlow = computed(() => emailVerificationBlockingReason.value && !!currentUserId.value && !!currentUserEmail.value)
 const otpSendDisabled = computed(() => otpSending.value || otpSendCooldownSeconds.value > 0)
+const shouldBlockForResendCaptcha = computed(() => !!captchaKey.value && resendCaptchaStatus.value === 'loading' && !resendCaptchaToken.value)
+
+function clearResendCaptchaInitTimeout() {
+  if (resendCaptchaInitTimeout) {
+    clearTimeout(resendCaptchaInitTimeout)
+    resendCaptchaInitTimeout = null
+  }
+}
+
+function handleResendCaptchaUnavailable() {
+  resendCaptchaToken.value = ''
+  resendCaptchaStatus.value = 'unavailable'
+  clearResendCaptchaInitTimeout()
+}
+
+function scheduleResendCaptchaInitTimeout() {
+  clearResendCaptchaInitTimeout()
+  if (!captchaKey.value || !resendCaptchaRef.value || resendCaptchaToken.value || resendCaptchaStatus.value === 'unavailable')
+    return
+
+  resendCaptchaInitTimeout = setTimeout(() => {
+    if (!resendCaptchaToken.value && !(globalThis as typeof globalThis & { turnstile?: unknown }).turnstile)
+      handleResendCaptchaUnavailable()
+  }, 8000)
+}
+
+watch(resendCaptchaRef, scheduleResendCaptchaInitTimeout)
+watch(resendCaptchaToken, (token) => {
+  if (token) {
+    resendCaptchaStatus.value = 'ready'
+    clearResendCaptchaInitTimeout()
+  }
+  else if (resendCaptchaStatus.value !== 'unavailable' && captchaKey.value) {
+    resendCaptchaStatus.value = 'loading'
+    scheduleResendCaptchaInitTimeout()
+  }
+}, { flush: 'sync' })
+
+function showResendError(message: string) {
+  setErrors('resend-email', [message], {})
+  toast.error(message)
+}
 
 function clearOtpSendCooldownTimer() {
   if (otpSendCooldownTimer) {
@@ -74,7 +118,7 @@ async function submit(form: { email: string }) {
   if (isLoading.value)
     return
 
-  if (captchaKey.value && !resendCaptchaToken.value) {
+  if (shouldBlockForResendCaptcha.value) {
     setErrors('resend-email', [t('captcha-required')], {})
     return
   }
@@ -87,8 +131,11 @@ async function submit(form: { email: string }) {
       options: { captchaToken: resendCaptchaToken.value || undefined },
     })
     if (error)
-      setErrors('resend-email', [error.message], {})
+      showResendError(error.message)
     else toast.success(t('confirm-email-sent'))
+  }
+  catch (error) {
+    showResendError(error instanceof Error && error.message ? error.message : t('confirm-email-send-failed'))
   }
   finally {
     isLoading.value = false
@@ -184,6 +231,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  clearResendCaptchaInitTimeout()
   clearOtpSendCooldownTimer()
 })
 </script>
@@ -322,7 +370,13 @@ onBeforeUnmount(() => {
               v-model="resendCaptchaToken"
               size="flexible"
               :site-key="captchaKey"
+              @error="handleResendCaptchaUnavailable"
+              @unsupported="handleResendCaptchaUnavailable"
+              @expired="resendCaptchaToken = ''"
             />
+            <p v-if="resendCaptchaStatus === 'unavailable'" class="text-xs leading-5 text-amber-700 dark:text-amber-300" role="status">
+              {{ t('captcha-resend-unavailable') }}
+            </p>
           </div>
 
           <FormKitMessages />
