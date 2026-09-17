@@ -514,6 +514,8 @@ async function getHandler(c: Context): Promise<Response> {
   }
 
   if (isHead) {
+    // HEAD must use R2 metadata only (head()), never bucket.get() — streaming a
+    // multi-MB body and stripping it breaks HTTP/2 Content-Length on Workers.
     let objectInfo: R2Object | null = null
     try {
       objectInfo = await headFirstExistingAttachmentCandidate(new RetryBucket(bucket, DEFAULT_RETRY_PARAMS), candidateKeys)
@@ -545,7 +547,7 @@ async function getHandler(c: Context): Promise<Response> {
     }
 
     headers.set('content-length', objectInfo.size.toString())
-    return new Response(null, { headers })
+    return new Response(null, { status: 200, headers })
   }
 
   let object: R2ObjectBody | null = null
