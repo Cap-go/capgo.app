@@ -51,6 +51,7 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     path: '/app/com.demo.app/settings',
     auth: true,
     prepare: async (page) => {
+      await dismissSupportPrompt(page)
       const fieldset = page.locator('[data-test="device-data-collection"]')
       try {
         await fieldset.waitFor({ state: 'visible', timeout: 5000 })
