@@ -780,7 +780,7 @@ function openUpdatePackageInfo() {
   openChannelInfoDialog(
     'update-package-info',
     t('update-package'),
-    getUpdatePackageInfoDescriptionCopy(t, channel.value?.update_package),
+    getUpdatePackageInfoDescriptionCopy(t, channel.value?.update_package ?? 'all'),
   )
 }
 

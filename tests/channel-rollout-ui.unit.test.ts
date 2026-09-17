@@ -333,5 +333,6 @@ describe('channel information rollout and update package UX', () => {
       expect(getUpdatePackageDescription(t, option).length).toBeGreaterThan(10)
       expect(getUpdatePackageInfoDescription(t, option)).toContain(getUpdatePackageDescription(t, option))
     }
+    expect(getUpdatePackageInfoDescription(t)).toContain(getUpdatePackageDescription(t, 'all'))
   })
 })
