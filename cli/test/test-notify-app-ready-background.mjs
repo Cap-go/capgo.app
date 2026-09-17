@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { resolveNotifyAppReadyProject } from '../src/onboarding/notify-app-ready-project.ts'
 import { scanNotifyAppReadySource } from '../src/onboarding/notify-app-ready-source.ts'
 import { scanUpdaterInstalled } from '../src/onboarding/updater-installed.ts'
+import { isTrustedOnboardingApiHost } from '../src/onboarding/background-api.ts'
 
 const fixtures = []
 const workerUrl = new URL('../dist/notify-app-ready-worker.js', import.meta.url)
@@ -28,6 +29,10 @@ async function workerHarness(worker = workerUrl) {
       behavior.onEvent?.(requests.at(-1).body)
     if (request.method === 'PUT' && behavior.putError) {
       request.destroy()
+      return
+    }
+    if (behavior.redirectLocation && (request.method === 'POST' ? behavior.events === 'redirect' : behavior.putRedirect)) {
+      response.writeHead(307, { Location: behavior.redirectLocation }).end()
       return
     }
     if (request.method === 'POST' && behavior.events === 'hang')
@@ -54,7 +59,7 @@ async function workerHarness(worker = workerUrl) {
         worker.on('exit', code => process.exit(code))
       `], {
         stdio: 'ignore',
-        env: { ...process.env, CAPGO_DISABLE_TELEMETRY: '', CAPGO_DISABLE_POSTHOG: '', ...environment },
+        env: { ...process.env, CAPGO_DISABLE_TELEMETRY: '', CAPGO_DISABLE_POSTHOG: '', CAPGO_TRUSTED_API_ORIGINS: api, ...environment },
       })
       const timeout = setTimeout(() => child.kill(), 10_000)
       try {
@@ -369,7 +374,7 @@ test.concurrent('foreground exits while the real worker is waiting on scan-start
   const child = spawn('node', [join(dir, 'run.mjs')], {
     cwd: harness.project.dir,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, CAPGO_DISABLE_TELEMETRY: '', CAPGO_DISABLE_POSTHOG: '' },
+    env: { ...process.env, CAPGO_DISABLE_TELEMETRY: '', CAPGO_DISABLE_POSTHOG: '', CAPGO_TRUSTED_API_ORIGINS: harness.api },
   })
   let output = ''
   let errors = ''
@@ -563,7 +568,7 @@ test.concurrent('separate updater and source workers can be abandoned together w
   `)
   const child = spawn('node', [join(dir, 'run.mjs')], {
     cwd: harness.project.dir, stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, CAPGO_DISABLE_TELEMETRY: '', CAPGO_DISABLE_POSTHOG: '' },
+    env: { ...process.env, CAPGO_DISABLE_TELEMETRY: '', CAPGO_DISABLE_POSTHOG: '', CAPGO_TRUSTED_API_ORIGINS: harness.api },
   })
   let output = ''
   let errors = ''
@@ -591,6 +596,76 @@ test.concurrent('separate updater and source workers can be abandoned together w
     harness.close()
   }
 }, 10_000)
+
+test('background API requests require both explicit destination trust and safe transport', () => {
+  assert.equal(isTrustedOnboardingApiHost('https://api.capgo.app', {}, []), true)
+  assert.equal(isTrustedOnboardingApiHost('https://api.capgo.app.example.com', {}, []), false)
+  assert.equal(isTrustedOnboardingApiHost('https://api.capgo.app:8443', {}, []), false)
+  assert.equal(isTrustedOnboardingApiHost('https://self-host.example.com/api', {}, []), false)
+  assert.equal(isTrustedOnboardingApiHost('https://self-host.example.com/api', {}, ['https://self-host.example.com']), true)
+  assert.equal(isTrustedOnboardingApiHost('http://self-host.example.com', {}, ['http://self-host.example.com']), false)
+  assert.equal(isTrustedOnboardingApiHost('http://self-host.example.com/functions/v1', { supaHost: 'http://self-host.example.com', supaAnon: 'fake-anon' }, []), false)
+  assert.equal(isTrustedOnboardingApiHost('https://self-host.example.com/functions/v1', { supaHost: 'https://self-host.example.com', supaAnon: 'fake-anon' }, []), true)
+  assert.equal(isTrustedOnboardingApiHost('https://other.example.com', { supaHost: 'https://self-host.example.com', supaAnon: 'fake-anon' }, []), false)
+  for (const host of ['localhost', '127.0.0.1', '[::1]']) {
+    const origin = `http://${host}:12345`
+    assert.equal(isTrustedOnboardingApiHost(origin, {}, []), false)
+    assert.equal(isTrustedOnboardingApiHost(origin, {}, [origin]), true)
+    assert.equal(isTrustedOnboardingApiHost(origin, {}, [`${origin}/path`]), false)
+  }
+  for (const host of ['not-a-url', 'ftp://localhost', 'http://user:password@localhost', 'https://api.capgo.app?query=1', 'https://api.capgo.app#fragment'])
+    assert.equal(isTrustedOnboardingApiHost(host, {}, [host]), false)
+})
+
+test.concurrent('both workers send no credentials to project-selected untrusted hosts', async () => {
+  for (const worker of [workerUrl, updaterWorkerUrl]) {
+    const harness = await workerHarness(worker)
+    installUpdater(harness.project)
+    try {
+      await harness.run({}, { CAPGO_TRUSTED_API_ORIGINS: '' })
+      assert.deepEqual(harness.requests, [], 'untrusted project config must not receive the API key')
+      await harness.run({ supaHost: harness.api, supaAnon: 'fake-anon-key' }, { CAPGO_TRUSTED_API_ORIGINS: '' })
+      assert.equal(harness.requests.filter(request => request.method === 'PUT').length, 1, 'explicit CLI self-host selection should still work')
+    }
+    finally {
+      harness.close()
+    }
+  }
+}, 20_000)
+
+test.concurrent('neither telemetry nor onboarding redirects can forward worker credentials to another origin', async () => {
+  const forwarded = []
+  const destination = createServer((request, response) => {
+    forwarded.push(request.headers)
+    response.writeHead(200, { 'Content-Type': 'application/json' }).end('{"status":"ok"}')
+  })
+  destination.listen(0, '127.0.0.1')
+  await once(destination, 'listening')
+  try {
+    for (const worker of [workerUrl, updaterWorkerUrl]) {
+      const harness = await workerHarness(worker)
+      installUpdater(harness.project)
+      harness.behavior.redirectLocation = `http://127.0.0.1:${destination.address().port}`
+      try {
+        harness.behavior.events = 'redirect'
+        await harness.run()
+        assert.equal(harness.requests.filter(request => request.method === 'PUT').length, 1, 'failed telemetry must not prevent reporting')
+        harness.behavior.events = 'ok'
+        harness.behavior.putRedirect = true
+        await harness.run()
+        assert.equal(harness.requests.at(-1).body.nonPersonTags.todo_report_status, 'failed')
+        assert.deepEqual(forwarded, [], 'custom capgkey headers must never follow a redirect')
+      }
+      finally {
+        harness.close()
+      }
+    }
+  }
+  finally {
+    destination.closeAllConnections()
+    destination.close()
+  }
+}, 20_000)
 
 afterAll(() => {
   for (const root of fixtures)

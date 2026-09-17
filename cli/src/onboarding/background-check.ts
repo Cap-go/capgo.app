@@ -1,8 +1,10 @@
 import type { OnboardingCheckOptions } from './background'
 import type { NotifyAppReadyProject } from './notify-app-ready-project'
 import { randomUUID } from 'node:crypto'
+import { env } from 'node:process'
 import { buildCliRequestHeaders, setCurrentCliCommand } from '../analytics/cli-headers'
 import { resolveNotifyAppReadyProject } from './notify-app-ready-project'
+import { isTrustedOnboardingApiHost } from './background-api'
 import { defaultApiHost, findSavedKeySilent, isCapgoManagedSupabaseHost, normalizeSupabaseHost, resolveConfiguredCapgoPublicApiHost, sendEvent, trimTrailingSlashes } from '../utils'
 
 interface BackgroundOnboardingCheck {
@@ -12,6 +14,8 @@ interface BackgroundOnboardingCheck {
 }
 
 export async function runOnboardingCheck(options: OnboardingCheckOptions, check: BackgroundOnboardingCheck): Promise<void> {
+  // Capture user-provided trust before evaluating executable project config.
+  const trustedOrigins = env.CAPGO_TRUSTED_API_ORIGINS?.split(',') ?? []
   const apikey = options.apikey ?? findSavedKeySilent()
   if (!apikey)
     return
@@ -29,6 +33,8 @@ export async function runOnboardingCheck(options: OnboardingCheckOptions, check:
   const apiHost = explicitSelfHost
     ? `${normalizeSupabaseHost(options.supaHost!)}/functions/v1`
     : resolveConfiguredCapgoPublicApiHost(config)
+  if (!isTrustedOnboardingApiHost(apiHost, options, trustedOrigins))
+    return
   const anonKey = options.supaAnon ?? config.supaKey
   setCurrentCliCommand(options.command)
   const attemptId = randomUUID()
@@ -41,7 +47,7 @@ export async function runOnboardingCheck(options: OnboardingCheckOptions, check:
         timestamp: new Date(timestamp),
         tags: { app_id: project.appId },
         nonPersonTags: { attempt_id: attemptId, command_path: options.command, ...tags },
-      }, false, AbortSignal.timeout(500), apiHost)
+      }, false, AbortSignal.timeout(500), apiHost, 'error')
     }
     catch {
       // Scan telemetry must never prevent onboarding detection or todo reporting.
@@ -71,6 +77,7 @@ export async function runOnboardingCheck(options: OnboardingCheckOptions, check:
       // Preserve source, outcome, and all unrelated onboarding steps.
       body: JSON.stringify({ onboarding: { steps: { [check.step]: { status: 'done' } } } }),
       signal: AbortSignal.timeout(2_000),
+      redirect: 'error',
     })
     todoReportHttpStatus = response.status
     todoReportStatus = response.ok ? 'success' : 'rejected'
