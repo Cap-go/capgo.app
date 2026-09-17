@@ -8,7 +8,7 @@ import { createI18n } from 'vue-i18n'
 import en from '../messages/en.json'
 import { useDialogV2Store } from '../src/stores/dialogv2'
 import type { ChannelRolloutConfirmFlowsDeps } from '../src/utils/channelRolloutConfirmFlows'
-import { createChannelRolloutConfirmFlows } from '../src/utils/channelRolloutConfirmFlows'
+import { createChannelRolloutConfirmFlows, isRolloutPercentageDraftChanged } from '../src/utils/channelRolloutConfirmFlows'
 import { getUpdatePackageDescription } from '../src/utils/channelUpdatePackageCopy'
 import { confirmConsequentialChannelChange } from '../src/utils/confirmConsequentialChannelChange'
 
@@ -197,6 +197,15 @@ describe('channel information rollout and update package UX', () => {
     await dismiss('Confirm')
     await secondSelect
     expect(saveChannelChange).toHaveBeenCalledWith('update_package', 'delta')
+  })
+
+  it('empty rollout percentage draft is unchanged while invalid and out-of-range stay dirty', () => {
+    expect(isRolloutPercentageDraftChanged('', 1000)).toBe(false)
+    expect(isRolloutPercentageDraftChanged('   ', 1000)).toBe(false)
+    expect(isRolloutPercentageDraftChanged('10', 1000)).toBe(false)
+    expect(isRolloutPercentageDraftChanged('abc', 1000)).toBe(true)
+    expect(isRolloutPercentageDraftChanged('25', 1000)).toBe(true)
+    expect(isRolloutPercentageDraftChanged('150', 1000)).toBe(true)
   })
 
   it('applyRolloutPercentage cancel skips save and confirm updates bps', async () => {

@@ -24,7 +24,7 @@ import { isInternalVersionName, withBuiltinChannelVersion } from '~/services/ver
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
-import { createChannelRolloutConfirmFlows } from '~/utils/channelRolloutConfirmFlows'
+import { createChannelRolloutConfirmFlows, isRolloutPercentageDraftChanged } from '~/utils/channelRolloutConfirmFlows'
 import { getUpdatePackageDescription as getUpdatePackageDescriptionCopy, getUpdatePackageLabel as getUpdatePackageLabelCopy } from '~/utils/channelUpdatePackageCopy'
 
 interface Channel {
@@ -175,14 +175,9 @@ watch(
   },
   { immediate: true },
 )
-const rolloutPercentageDraftChanged = computed(() => {
-  if (!rolloutPercentageDraft.value.trim())
-    return false
-  const parsed = Number.parseFloat(rolloutPercentageDraft.value)
-  if (Number.isNaN(parsed))
-    return true
-  return Math.round(parsed * 100) !== (channel.value?.rollout_percentage_bps ?? 0)
-})
+const rolloutPercentageDraftChanged = computed(() =>
+  isRolloutPercentageDraftChanged(rolloutPercentageDraft.value, channel.value?.rollout_percentage_bps ?? 0),
+)
 
 const showDebugSection = ref(false)
 

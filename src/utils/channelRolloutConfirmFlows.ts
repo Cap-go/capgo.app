@@ -36,6 +36,15 @@ function formatRolloutPercentageLabel(percentage: number) {
   return `${percentage.toLocaleString(undefined, { maximumFractionDigits: 2 })}%`
 }
 
+export function isRolloutPercentageDraftChanged(draft: string, currentBps: number) {
+  if (!draft.trim())
+    return false
+  const parsed = Number.parseFloat(draft)
+  if (Number.isNaN(parsed))
+    return true
+  return Math.round(parsed * 100) !== currentBps
+}
+
 function buttonLabels(t: Translate) {
   return { cancel: t('button-cancel'), confirm: t('button-confirm') }
 }
