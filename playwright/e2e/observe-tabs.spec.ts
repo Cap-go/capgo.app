@@ -181,7 +181,7 @@ test.describe('Observe sections', () => {
     const compositeVersion = '2.36.2+8ebc69:assets/index-8ebc69aabbcc.js'
     await expect(longVersionRow.locator('[data-test="log-row-version"]')).toHaveText(longVersion)
     await expect(longVersionRow.locator('[data-test="log-row-version"]')).toHaveAttribute('title', longVersion)
-    await expect(longVersionRow.locator('[data-test="log-row-action"]')).toHaveText('Update process failed')
+    await expect(longVersionRow.locator('[data-test="log-row-action-name"]')).toHaveText('Update process failed')
     await expect(longVersionRow.locator('[data-test="log-row-metadata"]')).toHaveCount(0)
 
     const versionBox = await longVersionRow.locator('[data-test="log-row-version"]').boundingBox()
@@ -238,18 +238,16 @@ test.describe('Observe sections', () => {
 
     await page.goto('/app/com.demo.app/observe/logs')
     const row = page.locator('#custom_table tbody tr', { hasText: '44444444' })
-    await expect(row.locator('[data-test="log-row-action"]')).toHaveText('WebView JavaScript error')
-    await expect(row.locator('[data-test="log-row-action-code"]')).toHaveText('webview_javascript_error')
+    const action = row.locator('[data-test="log-row-action"]')
+    await expect(action.locator('[data-test="log-row-action-name"]')).toHaveText('WebView JavaScript error')
+    await expect(action.locator('[data-test="log-row-action-key"]')).toBeHidden()
+    await expect(action).toHaveAttribute('title', 'webview_javascript_error')
     await expect(row.locator('[data-test="log-row-original-error"]')).toHaveText(originalError)
-    await expect(row.locator('[data-test="log-row-action"]')).toHaveAttribute(
-      'title',
-      `WebView JavaScript error\nwebview_javascript_error\n${originalError}`,
-    )
     await expect(row.locator('[data-test="log-row-metadata"]')).toHaveCount(1)
 
-    await page.locator('[data-test="log-action-label-mode-key"]').click()
-    await expect(row.locator('[data-test="log-row-action"]')).toHaveText('webview_javascript_error')
-    await expect(row.locator('[data-test="log-row-action-code"]')).toHaveCount(0)
+    await action.hover()
+    await expect(action.locator('[data-test="log-row-action-name"]')).toBeHidden()
+    await expect(action.locator('[data-test="log-row-action-key"]')).toHaveText('webview_javascript_error')
     await expect(row.locator('[data-test="log-row-original-error"]')).toHaveText(originalError)
   })
 })

@@ -312,9 +312,6 @@ onMounted(() => {
 <template>
   <div class="pb-4 md:pb-0">
     <div class="flex flex-wrap items-start justify-between gap-2 p-3 pb-4 overflow-visible md:items-center md:flex-nowrap">
-      <div v-if="$slots['toolbar-extra']" class="flex h-10 shrink-0 items-center md:mb-0">
-        <slot name="toolbar-extra" />
-      </div>
       <div class="flex h-10 shrink-0 md:mb-0">
         <button class="inline-flex items-center py-1.5 px-3 mr-2 text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden" type="button" @click="reloadData">
           <IconReload v-if="!isLoading" class="m-1 md:mr-2" />

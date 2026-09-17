@@ -8,42 +8,65 @@ const screenshotDir = resolve(process.cwd(), 'docs/pr-screenshots')
 
 test.describe('PR screenshot — logs original error', () => {
   test.beforeEach(async ({ page }) => {
-    await page.addInitScript(() => {
-      localStorage.setItem('capgo-log-action-label-mode', 'name')
+    await page.route('**/private/sso/check-enforcement', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ allowed: true }),
+      })
     })
     await page.login('test@capgo.app', 'testtest')
   })
 
-  test('capture observe logs in name and key action label modes', async ({ page }) => {
+  test('capture observe logs translated name and hover key', async ({ page }) => {
     mkdirSync(screenshotDir, { recursive: true })
+    const originalError = 'Uncaught ReferenceError: foo is not defined'
+    const now = new Date().toISOString()
+
+    await page.route('**/private/stats', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.continue()
+        return
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            app_id: 'com.demo.app',
+            device_id: '44444444-4444-4444-4444-444444444444',
+            action: 'webview_javascript_error',
+            version_name: '1.0.0',
+            created_at: now,
+            metadata: {
+              error_type: 'javascript_error',
+              message: originalError,
+              href: 'capacitor://localhost/index.html',
+            },
+          },
+        ]),
+      })
+    })
 
     await page.goto('/app/com.demo.app/observe/logs')
     await dismissSupportPrompt(page)
 
     const row = page.locator('#custom_table tbody tr', { hasText: '44444444' })
-    await expect(page.locator('[data-test="log-action-label-mode-name"]')).toHaveAttribute('aria-pressed', 'true')
+    const action = row.locator('[data-test="log-row-action"]')
 
-    await expect(row.locator('[data-test="log-row-action"]')).toHaveText('WebView JavaScript error')
-    await expect(row.locator('[data-test="log-row-action-code"]')).toHaveText('webview_javascript_error')
-    await expect(row.locator('[data-test="log-row-original-error"]')).toHaveText('Uncaught ReferenceError: foo is not defined')
-
-    await row.scrollIntoViewIfNeeded()
-    await page.screenshot({ path: resolve(screenshotDir, 'logs-table-action-label-name-mode.png'), fullPage: false })
-    await row.screenshot({ path: resolve(screenshotDir, 'logs-table-action-label-name-mode-row.png') })
-
-    await page.locator('[data-test="log-action-label-mode-key"]').click()
-    await expect(page.locator('[data-test="log-action-label-mode-key"]')).toHaveAttribute('aria-pressed', 'true')
-    await expect(row.locator('[data-test="log-row-action"]')).toHaveText('webview_javascript_error')
-    await expect(row.locator('[data-test="log-row-action-code"]')).toHaveCount(0)
-    await expect(row.locator('[data-test="log-row-original-error"]')).toHaveText('Uncaught ReferenceError: foo is not defined')
+    await expect(action.locator('[data-test="log-row-action-name"]')).toHaveText('WebView JavaScript error')
+    await expect(action.locator('[data-test="log-row-action-key"]')).toBeHidden()
+    await expect(row.locator('[data-test="log-row-original-error"]')).toHaveText(originalError)
 
     await row.scrollIntoViewIfNeeded()
-    await page.screenshot({ path: resolve(screenshotDir, 'logs-table-action-label-key-mode.png'), fullPage: false })
-    await row.screenshot({ path: resolve(screenshotDir, 'logs-table-action-label-key-mode-row.png') })
+    await page.screenshot({ path: resolve(screenshotDir, 'logs-table-original-error.png'), fullPage: false })
+    await row.screenshot({ path: resolve(screenshotDir, 'logs-table-original-error-row.png') })
 
-    await expect(row.locator('[data-test="log-row-action"]')).toHaveAttribute(
-      'title',
-      /webview_javascript_error/,
-    )
+    await action.hover()
+    await expect(action.locator('[data-test="log-row-action-name"]')).toBeHidden()
+    await expect(action.locator('[data-test="log-row-action-key"]')).toHaveText('webview_javascript_error')
+
+    await page.screenshot({ path: resolve(screenshotDir, 'logs-table-action-hover-key.png'), fullPage: false })
+    await row.screenshot({ path: resolve(screenshotDir, 'logs-table-action-hover-key-row.png') })
   })
 })

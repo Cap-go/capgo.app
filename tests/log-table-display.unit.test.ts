@@ -1,5 +1,6 @@
+import type { LogMetadata } from '~/services/logTableDisplay'
 import { describe, expect, it } from 'vitest'
-import { extractLogOriginalMessage, formatLogActionLinkTitle, logRowDisplayMetadata, parseLogVersionName, resolveLogActionPrimaryLabel, shouldShowLogActionCode, shouldShowLogActionCodeLine, type LogMetadata } from '~/services/logTableDisplay'
+import { extractLogOriginalMessage, logRowDisplayMetadata, parseLogVersionName } from '~/services/logTableDisplay'
 
 describe('parseLogVersionName', () => {
   it.concurrent('keeps a plain version unchanged', () => {
@@ -70,50 +71,5 @@ describe('extractLogOriginalMessage', () => {
     expect(extractLogOriginalMessage({ message: { text: 'boom' } } as unknown as LogMetadata)).toBeNull()
     expect(extractLogOriginalMessage({ error: 404 } as unknown as LogMetadata)).toBeNull()
     expect(extractLogOriginalMessage({ reason: 'ok', error: 404 } as unknown as LogMetadata)).toBe('ok')
-  })
-})
-
-describe('shouldShowLogActionCode', () => {
-  it.concurrent('shows code when label is translated', () => {
-    expect(shouldShowLogActionCode('webview_javascript_error', 'WebView JavaScript error')).toBe(true)
-  })
-
-  it.concurrent('hides duplicate code when label equals action', () => {
-    expect(shouldShowLogActionCode('notify_app_ready', 'notify_app_ready')).toBe(false)
-  })
-})
-
-describe('resolveLogActionPrimaryLabel', () => {
-  it.concurrent('uses friendly name in name mode', () => {
-    expect(resolveLogActionPrimaryLabel('webview_javascript_error', 'WebView JavaScript error', 'name')).toBe('WebView JavaScript error')
-  })
-
-  it.concurrent('uses canonical key in key mode', () => {
-    expect(resolveLogActionPrimaryLabel('webview_javascript_error', 'WebView JavaScript error', 'key')).toBe('webview_javascript_error')
-  })
-})
-
-describe('shouldShowLogActionCodeLine', () => {
-  it.concurrent('shows secondary code line only in name mode when translated', () => {
-    expect(shouldShowLogActionCodeLine('webview_javascript_error', 'WebView JavaScript error', 'name')).toBe(true)
-    expect(shouldShowLogActionCodeLine('webview_javascript_error', 'WebView JavaScript error', 'key')).toBe(false)
-  })
-})
-
-describe('formatLogActionLinkTitle', () => {
-  it.concurrent('includes translated label, action code, and original message', () => {
-    expect(formatLogActionLinkTitle(
-      'webview_javascript_error',
-      'WebView JavaScript error',
-      { message: 'boom' },
-    )).toBe('WebView JavaScript error\nwebview_javascript_error\nboom')
-  })
-
-  it.concurrent('omits duplicate label when action is not translated', () => {
-    expect(formatLogActionLinkTitle(
-      'custom_unknown_action',
-      'custom_unknown_action',
-      { reason: 'denied' },
-    )).toBe('custom_unknown_action\ndenied')
   })
 })
