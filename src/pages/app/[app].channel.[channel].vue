@@ -176,6 +176,8 @@ watch(
   { immediate: true },
 )
 const rolloutPercentageDraftChanged = computed(() => {
+  if (!rolloutPercentageDraft.value.trim())
+    return false
   const parsed = Number.parseFloat(rolloutPercentageDraft.value)
   if (Number.isNaN(parsed))
     return true
