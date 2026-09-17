@@ -2190,6 +2190,13 @@
     },
     {
       "constraintOwned": false,
+      "definition": "CREATE INDEX idx_app_versions_onboarding_created ON public.app_versions USING btree (app_id, created_at) WHERE ((deleted IS NOT TRUE) AND ((name)::text IS DISTINCT FROM 'builtin'::text) AND ((name)::text IS DISTINCT FROM 'unknown'::text))",
+      "name": "idx_app_versions_onboarding_created",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
       "definition": "CREATE INDEX idx_app_versions_owner_org_not_deleted ON public.app_versions USING btree (owner_org) WHERE (deleted = false)",
       "name": "idx_app_versions_owner_org_not_deleted",
       "table": "app_versions",

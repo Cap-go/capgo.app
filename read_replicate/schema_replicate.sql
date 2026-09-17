@@ -850,6 +850,13 @@ CREATE INDEX idx_app_versions_name ON public.app_versions USING btree (name);
 
 
 --
+-- Name: idx_app_versions_onboarding_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_app_versions_onboarding_created ON public.app_versions USING btree (app_id, created_at) WHERE ((deleted IS NOT TRUE) AND ((name)::text IS DISTINCT FROM 'builtin'::text) AND ((name)::text IS DISTINCT FROM 'unknown'::text));
+
+
+--
 -- Name: idx_app_versions_owner_org_not_deleted; Type: INDEX; Schema: public; Owner: -
 --
 

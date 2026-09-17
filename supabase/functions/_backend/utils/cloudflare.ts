@@ -451,7 +451,7 @@ function convertDataToJsTypes<T>(apiResponse: AnalyticsApiResponse) {
   })
 }
 
-export async function runQueryToCFA<T>(c: Context, query: string) {
+export async function runQueryToCFA<T>(c: Context, query: string, options: { signal?: AbortSignal } = {}) {
   const CF_ANALYTICS_TOKEN = getEnv(c, 'CF_ANALYTICS_TOKEN')
   const CF_ACCOUNT_ID = getEnv(c, 'CF_ACCOUNT_ANALYTICS_ID')
 
@@ -474,6 +474,7 @@ export async function runQueryToCFA<T>(c: Context, query: string) {
       method: 'POST',
       headers,
       body: query,
+      signal: options.signal,
     })
 
     if (!response.ok) {
