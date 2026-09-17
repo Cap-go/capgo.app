@@ -36,6 +36,10 @@ The organization lock runs once per authorized backend write transaction attempt
 
 The assignment predicate was measured against temporary tables with 1,000,000 user rows and 100,000 organization rows. `EXPLAIN (ANALYZE, BUFFERS)` showed one primary-key index scan per table, one resulting row, 0.398 ms planning and 0.038 ms execution, with no sequential scans. These are synthetic local measurements, not production timing guarantees. Actual PostgreSQL tests verify function ACLs, empty search paths, protected direct inserts and fixed versions. Tinbase applies broad function grants after migrations; the ACL checks run through its native socket after reapplying this migration, and run normally in the Docker backend suite.
 
+## Dashboard exploration
+
+Explore dashboard opens the app overview. For v3, the Getting started route opens the fullscreen seven-goal setup instead of the legacy four-goal wrapper, regardless of exploration mode or the channel-flow assignment. A refresh after exploration offers Continue exploring, Come back to the setup, or Don't show this again. The last choice stores a user-scoped browser-local preference; it dismisses only this reminder, not onboarding. Continuing hides the reminder for the current page, while a later refresh can show it again. Finished/dismissed apps are excluded.
+
 ## Review preview
 
 Start the real frontend and visit `/playwright/fixtures/onboarding-setup.html?view=flow&version=3&resume=com.example.onboarding-preview&step=setup`; change version to 2 for the control. It mounts AppOnboardingFlow with synthetic identity and intercepted requests. No production writes are sent. Screenshots and the repository visual report are in `docs/pr-assets/onboarding-v3`.

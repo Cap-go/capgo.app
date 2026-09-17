@@ -114,6 +114,7 @@ declare module 'vue' {
     NativePlatformTrendChart: typeof import('./components/dashboard/NativePlatformTrendChart.vue')['default']
     Navbar: typeof import('./components/Navbar.vue')['default']
     OnboardingExploreBanner: typeof import('./components/dashboard/OnboardingExploreBanner.vue')['default']
+    OnboardingExploreReminder: typeof import('./components/dashboard/OnboardingExploreReminder.vue')['default']
     OnboardingPublishIntentIcon: typeof import('./components/dashboard/OnboardingPublishIntentIcon.vue')['default']
     OnboardingPublishIntentIconMobileApp: typeof import('./components/dashboard/OnboardingPublishIntentIconMobileApp.vue')['default']
     OnboardingPublishIntentIconWebPage: typeof import('./components/dashboard/OnboardingPublishIntentIconWebPage.vue')['default']

@@ -597,3 +597,63 @@ test.describe('Actionable onboarding setup checklist', () => {
     expect(errors).toEqual([])
   })
 })
+
+test.describe('Dashboard exploration and returning to v3 setup', () => {
+  test.beforeEach(async ({ page }) => {
+    const response = await page.request.get(fixture)
+    const html = (await response.text()).replace('src="./onboarding-setup.ts', 'src="/playwright/fixtures/onboarding-setup.ts')
+    await page.route('**/*', async (route) => {
+      const path = new URL(route.request().url()).pathname
+      if (route.request().resourceType() === 'document' && (path.startsWith('/app/') || path === '/onboarding/app'))
+        await route.fulfill({ body: html, contentType: 'text/html' })
+      else
+        await route.continue()
+    })
+  })
+
+  const appId = 'com.example.onboarding-preview'
+  const setup = `${fixture}?view=navigation&resume=${appId}&step=setup`
+
+  test('lands on the app dashboard, prompts on refresh, and returns to fullscreen setup', async ({ page }) => {
+    await page.goto(setup)
+    await expect(page.locator('[data-test="onboarding-setup-cli"]')).toBeVisible()
+    await page.getByRole('button', { name: 'Explore dashboard', exact: true }).click()
+    await expect(page).toHaveURL(new RegExp(`/app/${appId}$`))
+    await expect(page.getByRole('heading', { name: 'App dashboard', exact: true })).toBeVisible()
+    await expect(page.getByText('Continue exploring or return to setup?', { exact: true })).toHaveCount(0)
+    await page.reload()
+    await expect(page.getByText('It looks like you have been exploring the dashboard.', { exact: false })).toBeVisible()
+    await page.getByRole('button', { name: 'Continue exploring', exact: true }).click()
+    await expect(page.getByText('Continue exploring or return to setup?', { exact: true })).toHaveCount(0)
+    await page.reload()
+    await page.getByRole('button', { name: 'Come back to the setup', exact: true }).click()
+    await expect(page).toHaveURL(new RegExp(`/onboarding/app\\?resume=${appId}&step=setup$`))
+    await expect(page.locator('[data-test="onboarding-setup-cli"]')).toBeVisible()
+    await expect(page.locator('[data-test="getting-started-page"]')).toHaveCount(0)
+  })
+
+  test('stores permanent browser dismissal without hiding onboarding or removing the return button', async ({ page }) => {
+    await page.goto(setup)
+    await page.getByRole('button', { name: 'Explore dashboard', exact: true }).click()
+    await expect(page.locator('[data-test="preview-app-dashboard"]')).toBeVisible()
+    await page.reload()
+    await page.getByRole('button', { name: 'Don\'t show this again', exact: true }).click()
+    expect(await page.evaluate(() => localStorage.getItem('capgo:onboarding-exploration-reminder-dismissed:00000000-0000-4000-8000-000000000001'))).toBe('true')
+    await page.reload()
+    await expect(page.locator('[data-test="preview-app-dashboard"]')).toBeVisible()
+    await expect(page.getByText('Continue exploring or return to setup?', { exact: true })).toHaveCount(0)
+    await page.getByRole('button', { name: 'Continue with setup', exact: true }).click()
+    await expect(page.locator('[data-test="onboarding-setup-cli"]')).toBeVisible()
+  })
+
+  test('opens the fullscreen v3 checklist without exploration mode and keeps v2 getting-started', async ({ page }) => {
+    await page.goto(`/app/${appId}/getting-started?version=3`)
+    await expect(page.locator('[data-test="onboarding-setup-cli"]')).toBeVisible()
+    await expect(page).toHaveURL(new RegExp(`/onboarding/app\\?resume=${appId}&step=setup$`))
+    await expect(page.locator('[data-test="getting-started-page"]')).toHaveCount(0)
+    await page.goto(`/app/${appId}/getting-started?version=2`)
+    await expect(page.locator('[data-test="getting-started-page"]')).toBeVisible()
+    await expect(page).toHaveURL(new RegExp(`/app/${appId}/getting-started\\?version=2$`))
+    await expect(page.locator('[data-test="onboarding-setup-cli"]')).toHaveCount(0)
+  })
+})

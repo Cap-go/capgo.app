@@ -3628,5 +3628,9 @@
   "onboarding-payment-cohorts-source-note": "Sources: Supabase signup and ownership records, confirmed positive stripe_top_up credit purchases, and PostHog-synced live paid positive Stripe invoices using actual paid_at. Subscription flags (stripe_info) are not payment evidence.",
   "onboarding-payment-cohorts-credit-note": "An exact matching paid credit invoice supplies the payment timestamp even when it is outside the conversion range. Only an individually missing matching invoice falls back to the confirmed credit grant timestamp.",
   "onboarding-payment-cohorts-ever-note": "Ever paid is gross first-payment conversion observed through the cutoff, with unequal follow-up across cohorts. It is not net revenue or current-payer status; conversion remains counted after later refunds or cancellations.",
-  "onboarding-payment-cohorts-snapshot-note": "Invoice data is a synced snapshot, not a guarantee of complete current Stripe data. Freshness metadata may be unavailable without invalidating payments; failure of the required invoice source makes the entire table unavailable."
+  "onboarding-payment-cohorts-snapshot-note": "Invoice data is a synced snapshot, not a guarantee of complete current Stripe data. Freshness metadata may be unavailable without invalidating payments; failure of the required invoice source makes the entire table unavailable.",
+  "app-onboarding-exploration-reminder-title": "Continue exploring or return to setup?",
+  "app-onboarding-exploration-reminder-description": "It looks like you have been exploring the dashboard. Would you like to continue exploring or come back to the setup?",
+  "app-onboarding-exploration-reminder-continue": "Continue exploring",
+  "app-onboarding-exploration-reminder-setup": "Come back to the setup"
 }

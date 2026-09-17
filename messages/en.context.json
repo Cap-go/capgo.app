@@ -3627,5 +3627,9 @@
   "setup-checklist-waiting-start": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "setup-checklist-waiting-step": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "setup-checklist-waiting-test_update": "Used in Capgo web console. Role: UI sentence about \"setup checklist waiting test_update\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "setup-checklist-waiting-upload_bundle": "Used in Capgo web console. Role: UI sentence about \"setup checklist waiting upload_bundle\". Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "setup-checklist-waiting-upload_bundle": "Used in Capgo web console. Role: UI sentence about \"setup checklist waiting upload_bundle\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "app-onboarding-exploration-reminder-title": "Title of a dialog shown after refreshing the dashboard during unfinished app setup. Offers staying in the dashboard or returning to setup.",
+  "app-onboarding-exploration-reminder-description": "Dialog body asking a user who previously explored the dashboard whether to continue exploring or return to unfinished app setup.",
+  "app-onboarding-exploration-reminder-continue": "Dialog button that closes the reminder and keeps the user exploring the app dashboard.",
+  "app-onboarding-exploration-reminder-setup": "Dialog button returning the user to the fullscreen app setup checklist."
 }

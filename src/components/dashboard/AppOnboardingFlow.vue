@@ -300,7 +300,8 @@ const startingOutUserCountStop: UserCountStop = {
 const planNameOrder = ['Solo', 'Maker', 'Team', 'Enterprise'] as const
 
 const localCommand = isLocal(config.supaHost) ? ` --supa-host ${config.supaHost} --supa-anon ${config.supaKey}` : ''
-const usesBuilderSetupCommand = computed(() => selectedIntent.value === 'builder' || selectedIntent.value === 'publish')
+const usesTodoListV3 = computed(() => !!createdApp.value && parseAppOnboarding(createdApp.value.onboarding).todo_list_version === 3)
+const usesBuilderSetupCommand = computed(() => !usesTodoListV3.value && (selectedIntent.value === 'builder' || selectedIntent.value === 'publish'))
 const markedOnboardingFeatures = new Set<string>()
 let onboardingABTestsRequest: Promise<void> | null = null
 
@@ -592,7 +593,7 @@ const canCreatePreOrgOrganization = computed(() => {
 })
 const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-title') : t('unified-onboarding-setup-ota-title'))
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
-const showSetupChecklist = computed(() => (flowStep.value === 'setup' || flowStep.value === 'install') && setupStage.value === 'cli' && !!createdApp.value && !usesBuilderSetupCommand.value && parseAppOnboarding(createdApp.value?.onboarding).todo_list_version === 3)
+const showSetupChecklist = computed(() => (flowStep.value === 'setup' || flowStep.value === 'install') && usesTodoListV3.value)
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
 let trackedAnalyticsSteps: OnboardingAnalyticsStep[] = []
@@ -2051,7 +2052,7 @@ function continueFromOrganizationInvite(invitationCount: number) {
 function resolveSetupStage(
   progress = parseUserOnboardingProgress(main.user?.onboarding),
 ): SetupStage {
-  if (!newChannelTreatment.value && !onboardingABTestsPending.value)
+  if (usesTodoListV3.value || (!newChannelTreatment.value && !onboardingABTestsPending.value))
     return 'cli'
   return progress?.setup_stage ?? 'channel-routing'
 }
@@ -2315,7 +2316,7 @@ async function seedDemoData() {
       ownerOrgId: currentOrg.value.gid,
     })
     await persistOnboardingProgress('completed')
-    router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
+    router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}`)
   }
   catch (error) {
     console.error('Cannot seed demo data', error)
@@ -2454,7 +2455,7 @@ async function openDashboard() {
   window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
   allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
   await persistOnboardingProgress('completed')
-  router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
+  router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}`)
 }
 
 async function skipOnboardingSplash() {

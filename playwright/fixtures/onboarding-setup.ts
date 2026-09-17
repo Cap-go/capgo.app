@@ -1,18 +1,22 @@
+import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '../../src/utils/onboardingChannelAnalytics'
 import { createPinia } from 'pinia'
 import { createApp, defineComponent, h, ref } from 'vue'
-import { createRouter, createWebHistory } from 'vue-router'
-import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '../../src/utils/onboardingChannelAnalytics'
-import DialogV2 from '../../src/components/DialogV2.vue'
-import AppOnboardingFlow from '../../src/components/dashboard/AppOnboardingFlow.vue'
+import { createRouter, createWebHistory, RouterView } from 'vue-router'
 import AppOnboardingCliSteps from '../../src/components/dashboard/AppOnboardingCliSteps.vue'
+import AppOnboardingFlow from '../../src/components/dashboard/AppOnboardingFlow.vue'
 import AppOnboardingSetupChecklist from '../../src/components/dashboard/AppOnboardingSetupChecklist.vue'
+import OnboardingExploreBanner from '../../src/components/dashboard/OnboardingExploreBanner.vue'
+import OnboardingExploreReminder from '../../src/components/dashboard/OnboardingExploreReminder.vue'
+import DialogV2 from '../../src/components/DialogV2.vue'
 import { i18n } from '../../src/modules/i18n'
+import GettingStartedPage from '../../src/pages/app/[app].getting-started.vue'
 import { useSupabase } from '../../src/services/supabase'
 import { useMainStore } from '../../src/stores/main'
 import { useOrganizationStore } from '../../src/stores/organization'
 import '../../src/styles/style.css'
 
 const params = new URLSearchParams(location.search)
+const navigationView = params.get('view') === 'navigation' || location.pathname.startsWith('/app/') || location.pathname === '/onboarding/app'
 const previewAppId = 'com.example.onboarding-preview'
 const savedChannelStatus = params.get('channelStatus')
 const state = {
@@ -55,10 +59,13 @@ window.fetch = async (input, init) => {
       if (state.channelDelayMs)
         await new Promise(resolve => setTimeout(resolve, state.channelDelayMs))
     }
-    return new Response(JSON.stringify(state.error ? { message: 'Progress unavailable' } : {
-      onboarding: { setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome } },
-      ...(checkChannel && !channelError ? { hasChannel } : {}), checkErrors: checkChannel && channelError ? ['add_channel'] : [],
-    }), { status: state.error ? 503 : 200, headers: { 'Content-Type': 'application/json' } })
+    return new Response(JSON.stringify(state.error
+      ? { message: 'Progress unavailable' }
+      : {
+          onboarding: { setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome } },
+          ...(checkChannel && !channelError ? { hasChannel } : {}),
+          checkErrors: checkChannel && channelError ? ['add_channel'] : [],
+        }), { status: state.error ? 503 : 200, headers: { 'Content-Type': 'application/json' } })
   }
   if (url.pathname.includes('/rpc/')) {
     return new Response(JSON.stringify(state.channelPermissions), { headers: { 'Content-Type': 'application/json' } })
@@ -90,7 +97,7 @@ window.fetch = async (input, init) => {
       headers: { 'Content-Type': 'application/json' },
     })
   }
-  if (params.get('view') === 'flow') {
+  if (params.get('view') === 'flow' || navigationView) {
     const app = { id: '00000000-0000-4000-8000-000000000003', app_id: previewAppId, name: 'My Capacitor app', icon_url: '', owner_org: '00000000-0000-4000-8000-000000000002', need_onboarding: true, onboarding: { setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome } } }
     const user = { id: '00000000-0000-4000-8000-000000000001', email: 'preview@example.com', onboarding: { intent: 'ota', status: 'in_progress', step: 'setup', flow: 'app', setup_stage: 'cli', app_id: previewAppId } }
     const rows = url.pathname.endsWith('/apps') ? [app] : url.pathname.endsWith('/users') ? [user] : url.pathname.endsWith('/apikeys') ? [{ key: '00000000-0000-4000-8000-000000000004', rbac_id: '00000000-0000-4000-8000-000000000005', expires_at: null }] : url.pathname.endsWith('/role_bindings') ? [{ principal_id: '00000000-0000-4000-8000-000000000005', scope_type: 'org', roles: { name: 'org_super_admin' } }] : []
@@ -98,9 +105,11 @@ window.fetch = async (input, init) => {
     return new Response(JSON.stringify(single ? rows[0] ?? {} : rows), { headers: { 'Content-Type': 'application/json' } })
   }
   state.requests += 1
-  return new Response(JSON.stringify(state.error ? { message: 'Progress unavailable' } : [{
-    onboarding: { setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome } },
-  }]), {
+  return new Response(JSON.stringify(state.error
+    ? { message: 'Progress unavailable' }
+    : [{
+        onboarding: { setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome } },
+      }]), {
     status: state.error ? 503 : 200,
     headers: { 'Content-Type': 'application/json' },
   })
@@ -115,26 +124,28 @@ const app = createApp(defineComponent({
       class: 'min-h-screen bg-slate-50 px-4 py-8 sm:px-6 lg:px-8 dark:bg-slate-950',
     }, [
       h('div', { class: 'mx-auto max-w-6xl' }, [
-        params.get('view') === 'flow'
-          ? h(AppOnboardingFlow, { onboarding: true })
-          : params.get('view') === 'compact'
-          ? h(AppOnboardingCliSteps, { appId: preview.appId.value })
-          : h(AppOnboardingSetupChecklist, {
-              appId: preview.appId.value,
-              command: preview.command.value,
-              hiding: preview.hiding.value,
-              leaving: false,
-              onCopyCommand: async () => {
-                events.push('copy-command')
-                await navigator.clipboard.writeText(preview.command.value)
-              },
-              onCopyAi: () => events.push('copy-ai'),
-              onHide: () => events.push('hide'),
-              onExplore: () => events.push('explore'),
-              onComplete: () => events.push('complete'),
-              onInviteOpened: () => events.push('invite-opened'),
-              onChannelAnalytics: (event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties) => channelEvents.push({ event, properties }),
-            }),
+        navigationView
+          ? h(RouterView)
+          : params.get('view') === 'flow'
+            ? h(AppOnboardingFlow, { onboarding: true })
+            : params.get('view') === 'compact'
+              ? h(AppOnboardingCliSteps, { appId: preview.appId.value })
+              : h(AppOnboardingSetupChecklist, {
+                  appId: preview.appId.value,
+                  command: preview.command.value,
+                  hiding: preview.hiding.value,
+                  leaving: false,
+                  onCopyCommand: async () => {
+                    events.push('copy-command')
+                    await navigator.clipboard.writeText(preview.command.value)
+                  },
+                  onCopyAi: () => events.push('copy-ai'),
+                  onHide: () => events.push('hide'),
+                  onExplore: () => events.push('explore'),
+                  onComplete: () => events.push('complete'),
+                  onInviteOpened: () => events.push('invite-opened'),
+                  onChannelAnalytics: (event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties) => channelEvents.push({ event, properties }),
+                }),
       ]),
       h(DialogV2),
     ])
@@ -151,7 +162,12 @@ organization.awaitInitialLoad = async () => true
 app.use(i18n)
 app.use(createRouter({
   history: createWebHistory(),
-  routes: [{ path: '/:pathMatch(.*)*', component: { render: () => null } }],
+  routes: navigationView
+    ? [
+        { path: '/app/:app', component: defineComponent({ setup: () => () => h('section', { 'data-test': 'preview-app-dashboard' }, [h('h1', 'App dashboard'), h(OnboardingExploreBanner, { appId: previewAppId }), h(OnboardingExploreReminder, { appId: previewAppId })]) }) },
+        { path: '/app/:app/getting-started', name: '/app/[app].getting-started', component: GettingStartedPage },
+        { path: '/:pathMatch(.*)*', component: defineComponent({ setup: () => () => h(AppOnboardingFlow, { onboarding: true }) }) },
+      ]
+    : [{ path: '/:pathMatch(.*)*', component: { render: () => null } }],
 }))
-await app.config.globalProperties.$router.isReady()
-app.mount('#app')
+void app.config.globalProperties.$router.isReady().then(() => app.mount('#app'))
