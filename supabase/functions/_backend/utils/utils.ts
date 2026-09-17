@@ -221,16 +221,20 @@ export function backgroundTask(c: Context, p: any) {
 
 function getContextEnv(c: Context): Record<string, string | undefined> {
   const runtimeEnv = env(c)
-  if (runtimeEnv && typeof runtimeEnv === 'object') {
-    return runtimeEnv as Record<string, string | undefined>
-  }
-
   const contextEnv = (c as Context & { env?: Record<string, string | undefined> }).env
+
+  const merged: Record<string, string | undefined> = {}
+  if (runtimeEnv && typeof runtimeEnv === 'object')
+    Object.assign(merged, runtimeEnv as Record<string, string | undefined>)
   if (contextEnv && typeof contextEnv === 'object') {
-    return contextEnv
+    for (const key of Object.keys(contextEnv)) {
+      const value = contextEnv[key]
+      if (value !== undefined)
+        merged[key] = value
+    }
   }
 
-  return {}
+  return merged
 }
 
 export function existInEnv(c: Context, key: string): boolean {

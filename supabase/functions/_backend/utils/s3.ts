@@ -1,6 +1,8 @@
 import type { Context } from 'hono'
 import type { Database } from '../utils/supabase.types.ts'
 import { S3Client } from '@bradenmacdonald/s3-lite-client'
+import type { RawS3LiteClient } from './r2_trash_shared.ts'
+import { isObjectNotFoundError, moveS3LiteObjectToTrash } from './r2_trash_shared.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { getManifestStorageCandidateKeys } from './manifest_encoding.ts'
 import { getEnv } from './utils.ts'
@@ -75,10 +77,23 @@ function initS3(c: Context) {
   return client
 }
 
-const R2_TRASH_PREFIX = 'deleted-after-7-days/'
+export const R2_TRASH_PREFIX = 'deleted-after-7-days/'
+const PREFIX_TRASH_CONCURRENCY = 10
 
-function getTrashPath(fileId: string) {
-  return `${R2_TRASH_PREFIX}${fileId}`
+export class TrashMoveError extends Error {
+  readonly failedKeys: string[]
+  readonly prefix: string
+
+  constructor(prefix: string, failedKeys: string[]) {
+    super(`Failed to move ${failedKeys.length} object(s) to trash for prefix ${prefix}`)
+    this.name = 'TrashMoveError'
+    this.prefix = prefix
+    this.failedKeys = failedKeys
+  }
+}
+
+function isPermanentR2DeleteAllowed(c: Context): boolean {
+  return getEnv(c, 'ALLOW_PERMANENT_R2_DELETE') === 'true'
 }
 
 export async function getPath(
@@ -141,84 +156,53 @@ function shouldUseSizeRangeFallback(size: number, headError: unknown): boolean {
   return !size && !isMissingObjectError(headError)
 }
 
-type ObjectPresence = 'present' | 'absent' | 'unknown'
-
-async function getObjectPresence(c: Context, fileId: string | null): Promise<ObjectPresence> {
-  if (!fileId)
-    return 'absent'
-
-  try {
-    const client = initS3(c)
-    const url = await client.getPresignedUrl('HEAD', fileId)
-    const response = await fetch(url, {
-      method: 'HEAD',
-      signal: AbortSignal.timeout(10_000),
-    })
-    await response.body?.cancel()
-
-    if (response.status === 404)
-      return 'absent'
-    if (response.status === 200)
-      return 'present'
-
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'getObjectPresence unexpected HEAD status',
-      fileId,
-      status: response.status,
-      statusText: response.statusText,
-    })
-    return 'unknown'
-  }
-  catch (error) {
-    if (isMissingObjectError(error))
-      return 'absent'
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'getObjectPresence failed',
-      fileId,
-      error: serializeStorageError(error),
-    })
-    return 'unknown'
-  }
-}
-
 async function moveObjectToTrash(c: Context, fileId: string) {
   if (fileId.startsWith(R2_TRASH_PREFIX))
     return true
 
-  // Only skip copy on a definitive absent object. Unknown HEAD must fail closed
-  // so callers keep DB tracking until trash succeeds.
-  const presence = await getObjectPresence(c, fileId)
-  if (presence === 'absent') {
-    cloudlog({ requestId: c.get('requestId'), message: 'R2 object missing before trash move, skip copy', fileId })
-    return true
-  }
-  if (presence === 'unknown') {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object presence unknown, refuse trash skip', fileId })
+  const client = initS3(c)
+  const bucket = getEnv(c, 'S3_BUCKET')
+  if (!bucket) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'S3_BUCKET is not configured before trash move', fileId })
     return false
   }
 
-  const client = initS3(c)
-  const trashPath = getTrashPath(fileId)
   try {
-    await client.copyObject({ sourceKey: fileId }, trashPath)
-    await client.deleteObject(fileId)
-    cloudlog({ requestId: c.get('requestId'), message: 'moved R2 object to trash', fileId, trashPath })
-    return true
+    const result = await moveS3LiteObjectToTrash(client as RawS3LiteClient, fileId, bucket)
+    switch (result) {
+      case 'moved':
+        cloudlog({ requestId: c.get('requestId'), message: 'moved R2 object to trash', fileId })
+        return true
+      case 'skipped_missing':
+        cloudlog({ requestId: c.get('requestId'), message: 'R2 object missing before trash move, skip copy', fileId })
+        return true
+      case 'skipped_changed':
+        cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object changed before trash move, source retained', fileId })
+        return false
+    }
   }
   catch (error) {
-    if (isMissingObjectError(error)) {
-      cloudlog({ requestId: c.get('requestId'), message: 'R2 object disappeared during trash move', fileId, error: serializeStorageError(error) })
+    if (isObjectNotFoundError(error)) {
+      cloudlog({ requestId: c.get('requestId'), message: 'R2 object missing before trash move, skip copy', fileId })
       return true
     }
-
-    cloudlogErr({ requestId: c.get('requestId'), message: 'move R2 object to trash failed', fileId, trashPath, error: serializeStorageError(error) })
+    cloudlogErr({ requestId: c.get('requestId'), message: 'move R2 object to trash failed', fileId, error: serializeStorageError(error) })
     return false
   }
+
+  return false
 }
 
 async function deleteObjectsWithPrefix(c: Context, prefix: string): Promise<number> {
+  if (!isPermanentR2DeleteAllowed(c)) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'deleteObjectsWithPrefix blocked — permanent R2 delete is ops-only',
+      prefix,
+    })
+    throw new Error('deleteObjectsWithPrefix requires ALLOW_PERMANENT_R2_DELETE=true; use moveObjectsWithPrefixToTrash for product deletes')
+  }
+
   const client = initS3(c)
   let deletedCount = 0
 
@@ -228,17 +212,82 @@ async function deleteObjectsWithPrefix(c: Context, prefix: string): Promise<numb
       deletedCount += 1
     }
     catch (error) {
-      cloudlog({
+      cloudlogErr({
         requestId: c.get('requestId'),
         message: 'deleteObjectsWithPrefix item failed',
         prefix,
         key: object.key,
         error,
       })
+      throw error
     }
   }
 
   return deletedCount
+}
+
+async function moveObjectsWithPrefixToTrash(c: Context, prefix: string): Promise<number> {
+  const client = initS3(c)
+  const failedKeys: string[] = []
+  let movedCount = 0
+  let batch: string[] = []
+
+  async function moveKey(key: string) {
+    try {
+      const moved = await moveObjectToTrash(c, key)
+      if (!moved) {
+        failedKeys.push(key)
+        return
+      }
+      movedCount += 1
+    }
+    catch (error) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'moveObjectsWithPrefixToTrash item failed',
+        prefix,
+        key,
+        error,
+      })
+      failedKeys.push(key)
+    }
+  }
+
+  async function flushBatch() {
+    if (batch.length === 0)
+      return
+
+    const currentBatch = batch
+    batch = []
+    await Promise.all(currentBatch.map(moveKey))
+  }
+
+  try {
+    for await (const object of client.listObjects({ prefix })) {
+      if (object.key.startsWith(R2_TRASH_PREFIX))
+        continue
+      batch.push(object.key)
+      if (batch.length >= PREFIX_TRASH_CONCURRENCY)
+        await flushBatch()
+    }
+  }
+  finally {
+    await flushBatch()
+  }
+
+  if (failedKeys.length > 0) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'moveObjectsWithPrefixToTrash failed closed',
+      prefix,
+      failedCount: failedKeys.length,
+      movedCount,
+      failedKeys,
+    })
+    throw new TrashMoveError(prefix, failedKeys)
+  }
+
+  return movedCount
 }
 
 async function checkIfExist(c: Context, fileId: string | null) {
@@ -559,6 +608,7 @@ export const s3 = {
   deleteObject,
   getSizeDiagnostics,
   moveObjectToTrash,
+  moveObjectsWithPrefixToTrash,
   deleteObjectsWithPrefix,
   checkIfExist,
   getSignedUrl,

@@ -75,12 +75,6 @@ function initS3(c: Context) {
   return client
 }
 
-const R2_TRASH_PREFIX = 'deleted-after-7-days/'
-
-function getTrashPath(fileId: string) {
-  return `${R2_TRASH_PREFIX}${fileId}`
-}
-
 export async function getPath(
   c: Context,
   record: Database['public']['Tables']['app_versions']['Row'],
@@ -120,15 +114,6 @@ async function getUploadUrl(c: Context, fileId: string, expirySeconds = 1200) {
   return url
 }
 
-async function deleteObject(c: Context, fileId: string) {
-  const client = initS3(c)
-  const url = await client.getPresignedUrl('DELETE', fileId)
-  const response = await fetch(url, {
-    method: 'DELETE',
-  })
-  return response.status >= 200 && response.status < 300
-}
-
 function isMissingObjectError(error: unknown): boolean {
   if (!error || typeof error !== 'object')
     return false
@@ -139,106 +124,6 @@ function isMissingObjectError(error: unknown): boolean {
 
 function shouldUseSizeRangeFallback(size: number, headError: unknown): boolean {
   return !size && !isMissingObjectError(headError)
-}
-
-type ObjectPresence = 'present' | 'absent' | 'unknown'
-
-async function getObjectPresence(c: Context, fileId: string | null): Promise<ObjectPresence> {
-  if (!fileId)
-    return 'absent'
-
-  try {
-    const client = initS3(c)
-    const url = await client.getPresignedUrl('HEAD', fileId)
-    const response = await fetch(url, {
-      method: 'HEAD',
-      signal: AbortSignal.timeout(10_000),
-    })
-    await response.body?.cancel()
-
-    if (response.status === 404)
-      return 'absent'
-    if (response.status === 200)
-      return 'present'
-
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'getObjectPresence unexpected HEAD status',
-      fileId,
-      status: response.status,
-      statusText: response.statusText,
-    })
-    return 'unknown'
-  }
-  catch (error) {
-    if (isMissingObjectError(error))
-      return 'absent'
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'getObjectPresence failed',
-      fileId,
-      error: serializeStorageError(error),
-    })
-    return 'unknown'
-  }
-}
-
-async function moveObjectToTrash(c: Context, fileId: string) {
-  if (fileId.startsWith(R2_TRASH_PREFIX))
-    return true
-
-  // Only skip copy on a definitive absent object. Unknown HEAD must fail closed
-  // so callers keep DB tracking until trash succeeds.
-  const presence = await getObjectPresence(c, fileId)
-  if (presence === 'absent') {
-    cloudlog({ requestId: c.get('requestId'), message: 'R2 object missing before trash move, skip copy', fileId })
-    return true
-  }
-  if (presence === 'unknown') {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'R2 object presence unknown, refuse trash skip', fileId })
-    return false
-  }
-
-  const client = initS3(c)
-  const trashPath = getTrashPath(fileId)
-  try {
-    await client.copyObject({ sourceKey: fileId }, trashPath)
-    await client.deleteObject(fileId)
-    cloudlog({ requestId: c.get('requestId'), message: 'moved R2 object to trash', fileId, trashPath })
-    return true
-  }
-  catch (error) {
-    if (isMissingObjectError(error)) {
-      cloudlog({ requestId: c.get('requestId'), message: 'R2 object disappeared during trash move', fileId, error: serializeStorageError(error) })
-      return true
-    }
-
-    cloudlogErr({ requestId: c.get('requestId'), message: 'move R2 object to trash failed', fileId, trashPath, error: serializeStorageError(error) })
-    return false
-  }
-}
-
-async function deleteObjectsWithPrefix(c: Context, prefix: string): Promise<number> {
-  const client = initS3(c)
-  let deletedCount = 0
-
-  for await (const object of client.listObjects({ prefix })) {
-    try {
-      await client.deleteObject(object.key)
-      deletedCount += 1
-    }
-    catch (error) {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'deleteObjectsWithPrefix item failed',
-        prefix,
-        key: object.key,
-        error,
-      })
-    }
-  }
-
-  return deletedCount
 }
 
 async function checkIfExist(c: Context, fileId: string | null) {
@@ -556,10 +441,7 @@ async function getObject(c: Context, fileId: string): Promise<Response | null> {
 
 export const s3 = {
   getSize,
-  deleteObject,
   getSizeDiagnostics,
-  moveObjectToTrash,
-  deleteObjectsWithPrefix,
   checkIfExist,
   getSignedUrl,
   getUploadUrl,

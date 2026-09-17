@@ -3,6 +3,7 @@ import type { Database } from '../supabase/functions/_backend/utils/supabase.typ
 import { ensureFile } from 'https://deno.land/std/fs/ensure_file.ts'
 import { S3Client } from 'https://deno.land/x/s3_lite_client@0.7.0/mod.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js'
+import { copyS3LiteObjectIfMatch, isObjectNotFoundError, moveS3LiteObjectToTrash, normalizedS3EtagsMatch } from './r2_trash_utils.ts'
 
 const supabaseUrl = 'https://sb.capgo.app'
 const supabaseServiceRole = '***'
@@ -10,15 +11,15 @@ const appToTransfer = 'com.demo.app'
 const newOwnerEmail = 'admin@capgo.app'
 
 async function main() {
-  const s3client = new S3Client({
+  const S3_BUCKET = 'capgo'
+  const rawS3client = new S3Client({
     endPoint: '9ee3d7479a3c359681e3fab2c8cb22c0.r2.cloudflarestorage.com',
     useSSL: true,
     region: 'auto',
     accessKey: '***',
     secretKey: '***',
-    bucket: 'capgo',
+    bucket: S3_BUCKET,
   })
-
   const supabase = createClient<Database>(supabaseUrl, supabaseServiceRole, {
     auth: {
       autoRefreshToken: false,
@@ -59,15 +60,91 @@ async function main() {
   }
 
   console.log(`Listing objects for ${oldUserId}`)
-  for await (const obj of s3client.listObjects({ prefix: `apps/${oldUserId}/` })) {
+  for await (const obj of rawS3client.listObjects({ prefix: `apps/${oldUserId}/` })) {
     console.log(`Processing ${obj.key}`)
-    const getObj = await s3client.getObject(obj.key)
+    const getObj = await rawS3client.getObject(obj.key)
     await ensureFile(`/tmp/move-tmp/${obj.key}`)
     const file = await Deno.create(`/tmp/move-tmp/${obj.key}`)
     await getObj.body?.pipeTo(file.writable)
 
-    await s3client.copyObject({ sourceKey: obj.key }, obj.key.replace(oldUserId, newUserId))
-    await s3client.deleteObject(obj.key)
+    const sourceStat = await rawS3client.statObject(obj.key)
+    const discoveryEtag = sourceStat.etag
+    const discoveryLastModified = sourceStat.lastModified
+    if (!discoveryEtag)
+      throw new Error(`Missing source ETag for ${obj.key}; aborting transfer`)
+    if (!discoveryLastModified)
+      throw new Error(`Missing source Last-Modified for ${obj.key}; aborting transfer`)
+
+    const destinationKey = obj.key.replace(oldUserId, newUserId)
+    try {
+      const destinationStat = await rawS3client.statObject(destinationKey)
+      if (!normalizedS3EtagsMatch(destinationStat.etag, discoveryEtag))
+        throw new Error(`Destination ${destinationKey} already exists with different content; aborting transfer`)
+    }
+    catch (error) {
+      if (!isObjectNotFoundError(error))
+        throw error
+    }
+    async function destinationMatchesSource(): Promise<boolean> {
+      try {
+        const destinationStat = await rawS3client.statObject(destinationKey)
+        return normalizedS3EtagsMatch(destinationStat.etag, discoveryEtag)
+      }
+      catch (error) {
+        if (isObjectNotFoundError(error))
+          return false
+        throw error
+      }
+    }
+
+    await copyS3LiteObjectIfMatch(rawS3client, obj.key, destinationKey, discoveryEtag, S3_BUCKET, discoveryLastModified)
+    const trashResult = await moveS3LiteObjectToTrash(rawS3client, obj.key, S3_BUCKET, discoveryEtag, discoveryLastModified)
+    if (trashResult === 'moved')
+      continue
+    if (trashResult === 'skipped_missing') {
+      if (await destinationMatchesSource())
+        continue
+      throw new Error(`Source ${obj.key} missing after copy but destination ${destinationKey} does not match expected content`)
+    }
+
+    if (trashResult === 'skipped_changed') {
+      const retryResult = await moveS3LiteObjectToTrash(rawS3client, obj.key, S3_BUCKET, discoveryEtag, discoveryLastModified)
+      if (retryResult === 'moved')
+        continue
+      if (retryResult === 'skipped_missing') {
+        if (await destinationMatchesSource())
+          continue
+        throw new Error(`Source ${obj.key} missing after retry but destination ${destinationKey} does not match expected content`)
+      }
+
+      let sourceExists = true
+      try {
+        await rawS3client.statObject(obj.key)
+      }
+      catch (error) {
+        if (isObjectNotFoundError(error))
+          sourceExists = false
+        else
+          throw error
+      }
+
+      let destinationMatches = false
+      try {
+        const destinationStat = await rawS3client.statObject(destinationKey)
+        destinationMatches = normalizedS3EtagsMatch(destinationStat.etag, discoveryEtag)
+      }
+      catch (error) {
+        if (!isObjectNotFoundError(error))
+          throw error
+      }
+
+      if (!sourceExists && destinationMatches)
+        continue
+
+      throw new Error(`Copied ${obj.key} to ${destinationKey} but failed to trash source object (${retryResult})`)
+    }
+
+    throw new Error(`Copied ${obj.key} to new owner key but failed to trash source object (${trashResult})`)
   }
 
   console.log('Updating user_id in apps')

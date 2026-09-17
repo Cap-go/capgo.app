@@ -9,7 +9,7 @@ const appGlobal = createHono(functionName, version)
 
 // Middleware to route preview subdomain requests
 appGlobal.use('/*', async (c, next) => {
-  const hostname = c.req.header('host') || ''
+  const hostname = (c.req.header('host') || '').split(':')[0].toLowerCase()
   if (isPreviewSubdomain(hostname)) {
     // Handle preview requests directly within this context
     return handlePreviewRequest(c)
