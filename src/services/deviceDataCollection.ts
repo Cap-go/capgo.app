@@ -6,7 +6,6 @@ import {
 
 export type {
   DeviceDataCollection,
-  DeviceDataCollectionKey,
 } from '../../supabase/functions/_backend/utils/deviceDataCollection.ts'
 
 export {
