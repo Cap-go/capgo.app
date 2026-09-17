@@ -3175,6 +3175,7 @@
   "rollout-target": "Target",
   "stable-fallback": "Stable fallback",
   "channel-version-with-rollout": "{fallback} · serving {target}",
+  "rollout-settings-info": "Progressive rollout information",
   "rollout-settings-help": "Stable fallback stays for most devices. A random, sticky share receives the rollout target until you promote, roll back, or disable. Rollout decisions are cached for the TTL below.",
   "rollout-delivery-all-title": "All devices receive {target}",
   "rollout-delivery-split-title": "{percent} of devices receive {target}",

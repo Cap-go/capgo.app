@@ -3079,6 +3079,7 @@
   "rollout-percentage-unchanged": "Used in Capgo web console areas: utils. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "rollout-policy": "Used in Capgo web console. Role: UI label about \"rollout policy\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "rollout-settings-help": "Used in Capgo web console areas: pages/app. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "rollout-settings-info": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "rollout-target": "Used in Capgo web console areas: pages/app. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "rollout-target-linked": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "save-changes": "Used in Capgo web console areas: pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

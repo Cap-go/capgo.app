@@ -756,6 +756,21 @@ function closeUpdatePackageDropdown() {
   }
 }
 
+function openRolloutSettingsInfo() {
+  dialogStore.openDialog({
+    id: 'rollout-settings-info',
+    title: t('progressive-rollout'),
+    description: `${t('rollout-settings-help')}\n\n${t('rollout-percentage-help')}`,
+    size: 'lg',
+    buttons: [
+      {
+        text: t('close'),
+        role: 'primary',
+      },
+    ],
+  })
+}
+
 let rolloutConfirmFlows!: ReturnType<typeof createChannelRolloutConfirmFlows>
 
 function getRolloutConfirmFlows() {
@@ -1080,12 +1095,20 @@ async function copyCurlCommand() {
                 <div class="space-y-4">
                   <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div class="min-w-0 space-y-1">
-                      <h2 id="rollout-settings-title" class="text-base font-semibold text-slate-950 dark:text-white">
-                        {{ t('progressive-rollout') }}
-                      </h2>
-                      <p class="text-xs text-slate-500 dark:text-slate-400">
-                        {{ t('rollout-settings-help') }}
-                      </p>
+                      <div class="flex items-center gap-1.5">
+                        <h2 id="rollout-settings-title" class="text-base font-semibold text-slate-950 dark:text-white">
+                          {{ t('progressive-rollout') }}
+                        </h2>
+                        <button
+                          type="button"
+                          class="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                          data-test="rollout-settings-info"
+                          :aria-label="t('rollout-settings-info')"
+                          @click="openRolloutSettingsInfo()"
+                        >
+                          <IconInformation class="h-4 w-4" aria-hidden="true" />
+                        </button>
+                      </div>
                       <p v-if="channel.rollout_pause_reason" class="text-xs text-amber-700 dark:text-amber-300">
                         {{ channel.rollout_pause_reason }}
                       </p>
@@ -1123,10 +1146,7 @@ async function copyCurlCommand() {
                   <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
                     <div class="grid gap-3 sm:grid-cols-2">
                       <div class="space-y-1.5">
-                        <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('rollout-percentage') }}</span>
-                        <p class="text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                          {{ t('rollout-percentage-help') }}
-                        </p>
+                        <label for="rollout-percentage-input" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('rollout-percentage') }}</label>
                         <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
                           <div class="flex min-h-11 flex-1 items-center rounded-md border border-slate-200 bg-white px-3 focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100 dark:border-slate-700 dark:bg-slate-900 dark:focus-within:border-sky-700 dark:focus-within:ring-sky-950">
                             <input
@@ -1137,7 +1157,6 @@ async function copyCurlCommand() {
                               min="0"
                               max="100"
                               step="0.01"
-                              :aria-label="t('rollout-percentage')"
                               :disabled="rolloutControlsDisabled"
                               @keydown.enter.prevent="applyRolloutPercentage()"
                             >

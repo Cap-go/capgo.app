@@ -281,6 +281,24 @@ describe('channel information rollout and update package UX', () => {
     }
   })
 
+  it('rollout settings info dialog shows help copy without confirm actions', async () => {
+    const { container, dialogStore, t } = mountDialogShell()
+    dialogStore.openDialog({
+      id: 'rollout-settings-info',
+      title: t('progressive-rollout'),
+      description: `${t('rollout-settings-help')}\n\n${t('rollout-percentage-help')}`,
+      buttons: [{ text: t('close'), role: 'primary' }],
+    })
+    await nextTick()
+    expect(container.textContent).toContain('Progressive rollout')
+    expect(container.textContent).toContain('Stable fallback stays for most devices')
+    expect(container.textContent).toContain('Share of eligible devices in the sticky rollout cohort')
+    expect(container.textContent).not.toContain('Confirm')
+    findDialogButton(container, 'Close').click()
+    await nextTick()
+    expect(dialogStore.showDialog).toBe(false)
+  })
+
   it('update package descriptions stay documented for every option', () => {
     const { t } = mountDialogShell()
     for (const option of ['all', 'zip', 'delta', 'zip_from_builtin', 'delta_from_builtin'] as const) {

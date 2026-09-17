@@ -35,10 +35,19 @@ test.describe('PR 3340 channel UX screenshots', () => {
     const percentInput = page.locator('#rollout-percentage-input')
     await expect(percentInput).toBeEnabled({ timeout: 60000 })
     await percentInput.scrollIntoViewIfNeeded()
+    const infoButton = page.getByTestId('rollout-settings-info')
+    await expect(infoButton).toBeVisible()
     await page.screenshot({
       path: resolve(screenshotDir, '05-rollout-apply-controls.png'),
       fullPage: false,
     })
+    await infoButton.click()
+    await expect(page.locator('h3').filter({ hasText: 'Progressive rollout' })).toBeVisible()
+    await expect(page.getByText('Stable fallback stays for most devices')).toBeVisible()
+    await page.screenshot({
+      path: resolve(screenshotDir, '08-rollout-settings-info-modal.png'),
+    })
+    await page.getByRole('button', { name: 'Close', exact: true }).click()
     await percentInput.fill('25', { force: true })
     const applyPercent = page.getByRole('button', { name: 'Apply percentage', exact: true })
     await expect(applyPercent).toBeEnabled({ timeout: 15000 })
