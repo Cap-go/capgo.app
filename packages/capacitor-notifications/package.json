@@ -1,6 +1,6 @@
 {
   "name": "@capgo/capacitor-notifications",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "description": "Capgo native push notifications, badge, and live-update trigger plugin for Capacitor apps.",
   "license": "AGPL-3.0-only",
   "type": "module",
@@ -20,6 +20,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check:cap9-deprecated": "node ../../scripts/check-cap9-deprecated.mjs packages/capacitor-notifications",
     "prepublishOnly": "bun run typecheck && bun run build"
   },
   "peerDependencies": {
