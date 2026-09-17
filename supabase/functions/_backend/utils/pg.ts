@@ -1,5 +1,6 @@
 import type { SQL } from 'drizzle-orm'
 import type { Context } from 'hono'
+import type { PoolClient } from 'pg'
 import type { AdminOnboardingActivationCohort, AdminOnboardingWizardDropoff } from './onboardingFunnel.ts'
 import { and, eq, isNotNull, isNull, or, sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/node-postgres'
@@ -7,6 +8,7 @@ import { alias } from 'drizzle-orm/pg-core'
 import { getRuntimeKey } from 'hono/adapter'
 // @ts-types="npm:@types/pg"
 import { Pool } from 'pg'
+import { serializePostgresError } from '../plugin_runtime/utils/postgres_error.ts'
 import { backgroundTask, existInEnv, getEnv } from '../utils/utils.ts'
 import { CacheHelper } from './cache.ts'
 import { getChannelSelfOverride, isChannelSelfStoreEnabled } from './channelSelfStore.ts'
@@ -386,66 +388,25 @@ export function getPgClient(c: Context, readOnly = false) {
   })
 
   pool.on('error', (err: Error) => {
-    cloudlogErr({ requestId, message: 'PG Pool Error', error: err })
+    cloudlogErr({ requestId, message: 'PG Pool Error', databaseSource: dbName, error: serializePostgresError(err) })
   })
 
   return pool
 }
 
-export function getDrizzleClient(db: ReturnType<typeof getPgClient>, options?: { logger?: boolean }) {
+export function getDrizzleClient(db: ReturnType<typeof getPgClient> | PoolClient, options?: { logger?: boolean }) {
   // Keep SQL logging on by default for API/trigger diagnostics.
   // Plugin hot paths pass `{ logger: false }` to avoid per-request log CPU/volume.
   return drizzle({ client: db, logger: options?.logger ?? true })
 }
 
-// Helper to extract detailed error information from pg errors
+// Keep the original driver cause, not just Drizzle's "Failed query" wrapper.
 export function logPgError(c: Context, functionName: string, error: unknown) {
-  const e = error as Error & {
-    code?: string
-    errno?: number
-    syscall?: string
-    address?: string
-    port?: number
-    severity?: string
-    detail?: string
-    hint?: string
-    position?: string
-    routine?: string
-    file?: string
-    line?: string
-    column?: string
-  }
-
   cloudlogErr({
     requestId: c.get('requestId'),
     message: `${functionName} - PostgreSQL Error`,
-    error: {
-      // Basic error info
-      message: e.message,
-      name: e.name,
-      stack: e.stack,
-
-      // PostgreSQL-specific error codes
-      code: e.code, // e.g., '57P01' for connection termination, 'ECONNREFUSED', 'ETIMEDOUT'
-      severity: e.severity,
-      detail: e.detail,
-      hint: e.hint,
-
-      // Network-level errors
-      errno: e.errno, // System error number
-      syscall: e.syscall, // System call that failed (e.g., 'connect', 'read', 'write')
-      address: e.address, // IP address
-      port: e.port, // Port number
-
-      // Query position info
-      position: e.position,
-      routine: e.routine,
-
-      // File info for debugging
-      file: e.file,
-      line: e.line,
-      column: e.column,
-    },
+    databaseSource: c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown',
+    error: serializePostgresError(error),
   })
 }
 
@@ -3861,7 +3822,7 @@ export async function getAdminOnboardingFunnel(
           WHEN onboarding->>'status' = 'completed' THEN 'completed'
           WHEN onboarding->>'status' = 'abandoned' THEN 'abandoned'
           WHEN COALESCE(onboarding->>'step', '') = '' THEN 'not_started'
-          WHEN onboarding->>'step' IN ('intent', 'details', 'organization', 'choice', 'install', 'setup') THEN onboarding->>'step'
+          WHEN onboarding->>'step' IN ('intent', 'publish_app_question', 'details', 'organization', 'choice', 'install', 'setup') THEN onboarding->>'step'
           ELSE 'not_started'
         END as step,
         COUNT(*)::int as count

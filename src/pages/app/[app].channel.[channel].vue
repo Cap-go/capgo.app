@@ -3,7 +3,7 @@ import type { Database } from '~/types/supabase.types'
 import { FormKit } from '@formkit/vue'
 import { greaterOrEqual, parse } from '@std/semver'
 import { computedAsync, onClickOutside } from '@vueuse/core'
-import { computed, ref, watchEffect } from 'vue'
+import { computed, ref, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -24,6 +24,8 @@ import { isInternalVersionName, withBuiltinChannelVersion } from '~/services/ver
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
+import { createChannelRolloutConfirmFlows, isRolloutPercentageDraftChanged } from '~/utils/channelRolloutConfirmFlows'
+import { getUpdatePackageDescription as getUpdatePackageDescriptionCopy, getUpdatePackageInfoDescription as getUpdatePackageInfoDescriptionCopy, getUpdatePackageLabel as getUpdatePackageLabelCopy } from '~/utils/channelUpdatePackageCopy'
 
 interface Channel {
   version: Database['public']['Tables']['app_versions']['Row']
@@ -165,6 +167,17 @@ const rolloutEnableDisabled = computed(() => {
     return true
   return channel.value.rollout_version ? rolloutControlsDisabled.value : !canPromoteBundle.value
 })
+const rolloutPercentageDraft = ref('0')
+watch(
+  () => channel.value?.rollout_percentage_bps,
+  (bps) => {
+    rolloutPercentageDraft.value = String((bps ?? 0) / 100)
+  },
+  { immediate: true },
+)
+const rolloutPercentageDraftChanged = computed(() =>
+  isRolloutPercentageDraftChanged(rolloutPercentageDraft.value, channel.value?.rollout_percentage_bps ?? 0),
+)
 
 const showDebugSection = ref(false)
 
@@ -462,7 +475,7 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
     toast.error(t('bundle-not-compatible-with-channel', { channel: channel.value.name }))
 
     dialogStore.openDialog({
-      title: t('confirm-action'),
+      title: t('compatibility-accept-title'),
       description: t('set-even-not-compatible'),
       buttons: [
         {
@@ -481,7 +494,7 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
           },
         },
         {
-          text: t('button-confirm'),
+          text: t('compatibility-accept'),
           role: 'primary',
         },
       ],
@@ -496,13 +509,26 @@ async function handleVersionLink(appVersion: Database['public']['Tables']['app_v
     toast.info(t('bundle-compatible-with-channel', { channel: channel.value.name }))
   }
   if (bundleLinkMode.value === 'rollout') {
-    const saved = await saveChannelChanges({
-      rollout_version: appVersion.id,
-      rollout_enabled: true,
-    })
-    if (saved) {
-      toast.success(t('rollout-target-linked'))
-      await askUpdateNotificationAfterBundleChange()
+    const applyRolloutTargetLink = async () => {
+      const saved = await saveChannelChanges({
+        rollout_version: appVersion.id,
+        rollout_enabled: true,
+      })
+      if (saved) {
+        toast.success(t('rollout-target-linked'))
+        await askUpdateNotificationAfterBundleChange()
+      }
+    }
+    const previousRolloutVersionId = channel.value.rollout_version
+    if (previousRolloutVersionId != null && previousRolloutVersionId !== appVersion.id) {
+      await getRolloutConfirmFlows().confirmSetRolloutTarget({
+        currentTargetName: rolloutTargetName.value,
+        nextTargetName: appVersion.name,
+        onConfirm: applyRolloutTargetLink,
+      })
+    }
+    else {
+      await applyRolloutTargetLink()
     }
     return
   }
@@ -619,33 +645,15 @@ async function openSelectRolloutVersion() {
 }
 
 async function enableRollout() {
-  if (!channel.value)
-    return
-  if (!channel.value.rollout_version) {
-    await openSelectRolloutVersion()
-    return
-  }
-  await saveChannelChange('rollout_enabled', true as any)
+  await getRolloutConfirmFlows().enableRollout()
 }
 
 async function disableRollout() {
-  if (await saveChannelChanges({
-    rollout_enabled: false,
-    rollout_version: null,
-    rollout_paused_at: null,
-    rollout_pause_reason: null,
-  })) {
-    await askUpdateNotificationAfterBundleChange()
-  }
+  await getRolloutConfirmFlows().disableRollout()
 }
 
-async function saveRolloutPercentage(value: string) {
-  const percentage = Number.parseFloat(value)
-  if (Number.isNaN(percentage) || percentage < 0 || percentage > 100) {
-    toast.error(t('invalid-rollout-percentage'))
-    return
-  }
-  await saveChannelChange('rollout_percentage_bps', Math.round(percentage * 100) as any)
+async function applyRolloutPercentage() {
+  await getRolloutConfirmFlows().applyRolloutPercentage(rolloutPercentageDraft.value)
 }
 
 async function saveIntegerField(key: EditableChannelKey, value: string, min: number, max: number, nullable = false) {
@@ -679,36 +687,15 @@ async function saveAutoPauseConfidence(value: string) {
 }
 
 async function rollbackRollout() {
-  if (await saveChannelChanges({
-    rollout_version: null,
-    rollout_enabled: false,
-    rollout_percentage_bps: 0,
-    rollout_paused_at: null,
-    rollout_pause_reason: null,
-  })) {
-    await askUpdateNotificationAfterBundleChange()
-  }
+  await getRolloutConfirmFlows().rollbackRollout()
 }
 
 async function promoteRollout() {
-  if (!channel.value?.rollout_version)
-    return
-  if (await saveChannelChanges({
-    version: channel.value.rollout_version,
-    rollout_version: null,
-    rollout_enabled: false,
-    rollout_percentage_bps: 0,
-    rollout_paused_at: null,
-    rollout_pause_reason: null,
-  })) {
-    await askUpdateNotificationAfterBundleChange()
-  }
+  await getRolloutConfirmFlows().promoteRollout()
 }
 
 async function toggleRolloutPause() {
-  await saveChannelChanges(channel.value?.rollout_paused_at
-    ? { rollout_paused_at: null, rollout_pause_reason: null }
-    : { rollout_paused_at: new Date().toISOString(), rollout_pause_reason: t('manual-rollout-pause') })
+  await getRolloutConfirmFlows().toggleRolloutPause()
 }
 
 async function refreshFilteredVersions() {
@@ -766,6 +753,61 @@ function closeUpdatePackageDropdown() {
   }
 }
 
+function openChannelInfoDialog(id: string, title: string, description: string) {
+  dialogStore.openDialog({
+    id,
+    title,
+    description,
+    size: 'lg',
+    buttons: [
+      {
+        text: t('close'),
+        role: 'primary',
+      },
+    ],
+  })
+}
+
+function openRolloutSettingsInfo() {
+  openChannelInfoDialog(
+    'rollout-settings-info',
+    t('progressive-rollout'),
+    `${t('rollout-settings-help')}\n\n${t('rollout-percentage-help')}`,
+  )
+}
+
+function openUpdatePackageInfo() {
+  openChannelInfoDialog(
+    'update-package-info',
+    t('update-package'),
+    getUpdatePackageInfoDescriptionCopy(t, channel.value?.update_package ?? 'all'),
+  )
+}
+
+let rolloutConfirmFlows!: ReturnType<typeof createChannelRolloutConfirmFlows>
+
+function getRolloutConfirmFlows() {
+  return rolloutConfirmFlows
+}
+
+rolloutConfirmFlows = createChannelRolloutConfirmFlows({
+  dialogStore,
+  t,
+  toast,
+  canUpdateChannelSettings: () => canUpdateChannelSettings.value,
+  closeUpdatePackageDropdown,
+  getChannel: () => channel.value,
+  rolloutTargetName: () => rolloutTargetName.value,
+  stableBundleName: () => stableBundleName.value,
+  rolloutPercentageText: () => rolloutPercentageText.value,
+  saveChannelChange: async (key, value) => {
+    await saveChannelChange(key as EditableChannelKey, value as any)
+  },
+  saveChannelChanges,
+  askUpdateNotificationAfterBundleChange,
+  openSelectRolloutVersion,
+})
+
 function getAutoUpdateLabel(value: string) {
   switch (value) {
     case 'major':
@@ -821,28 +863,15 @@ const updatePackageOptions = [
 ] as const satisfies Database['public']['Enums']['channel_update_package'][]
 
 function getUpdatePackageLabel(value?: Database['public']['Enums']['channel_update_package'] | null) {
-  switch (value) {
-    case 'zip':
-      return t('update-package-zip')
-    case 'delta':
-      return t('update-package-delta')
-    case 'zip_from_builtin':
-      return t('update-package-zip-from-builtin')
-    case 'delta_from_builtin':
-      return t('update-package-delta-from-builtin')
-    default:
-      return t('update-package-all')
-  }
+  return getUpdatePackageLabelCopy(t, value)
+}
+
+function getUpdatePackageDescription(value: Database['public']['Enums']['channel_update_package']) {
+  return getUpdatePackageDescriptionCopy(t, value)
 }
 
 async function onSelectUpdatePackage(value: Database['public']['Enums']['channel_update_package']) {
-  if (!canUpdateChannelSettings.value) {
-    toast.error(t('no-permission'))
-    return false
-  }
-
-  await saveChannelChange('update_package', value)
-  closeUpdatePackageDropdown()
+  await getRolloutConfirmFlows().onSelectUpdatePackage(value)
 }
 
 function openLink(url?: string): void {
@@ -1034,8 +1063,8 @@ async function copyCurlCommand() {
               <div class="flex items-center gap-3">
                 <span class="text-base leading-5 cursor-pointer" @click="openBundle()">{{ channel.version.name }}</span>
                 <button
-                  type="button"
                   v-if="channel"
+                  type="button"
                   class="relative p-0 d-btn d-btn-outline size-6 min-h-6 before:absolute before:-inset-2.5 before:content-['']"
                   :aria-label="t('select-stable-bundle')"
                   :disabled="!canPromoteBundle"
@@ -1079,12 +1108,20 @@ async function copyCurlCommand() {
                 <div class="space-y-4">
                   <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div class="min-w-0 space-y-1">
-                      <h2 id="rollout-settings-title" class="text-base font-semibold text-slate-950 dark:text-white">
-                        {{ t('progressive-rollout') }}
-                      </h2>
-                      <p class="text-xs text-slate-500 dark:text-slate-400">
-                        {{ t('rollout-settings-help') }}
-                      </p>
+                      <div class="flex items-center gap-1.5">
+                        <h2 id="rollout-settings-title" class="text-base font-semibold text-slate-950 dark:text-white">
+                          {{ t('progressive-rollout') }}
+                        </h2>
+                        <button
+                          type="button"
+                          class="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                          data-test="rollout-settings-info"
+                          :aria-label="t('rollout-settings-info')"
+                          @click="openRolloutSettingsInfo()"
+                        >
+                          <IconInformation class="h-4 w-4" aria-hidden="true" />
+                        </button>
+                      </div>
                       <p v-if="channel.rollout_pause_reason" class="text-xs text-amber-700 dark:text-amber-300">
                         {{ channel.rollout_pause_reason }}
                       </p>
@@ -1121,23 +1158,33 @@ async function copyCurlCommand() {
 
                   <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
                     <div class="grid gap-3 sm:grid-cols-2">
-                      <label class="space-y-1.5">
-                        <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('rollout-percentage') }}</span>
-                        <div class="flex min-h-11 items-center rounded-md border border-slate-200 bg-white px-3 focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100 dark:border-slate-700 dark:bg-slate-900 dark:focus-within:border-sky-700 dark:focus-within:ring-sky-950">
-                          <input
-                            class="w-full bg-transparent text-sm font-medium text-slate-900 outline-none disabled:cursor-not-allowed disabled:opacity-40 dark:text-white"
-                            type="number"
-                            min="0"
-                            max="100"
-                            step="0.01"
-                            :aria-label="t('rollout-percentage')"
-                            :disabled="rolloutControlsDisabled"
-                            :value="rolloutPercentage"
-                            @change="saveRolloutPercentage(($event.target as HTMLInputElement).value)"
+                      <div class="space-y-1.5">
+                        <label for="rollout-percentage-input" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('rollout-percentage') }}</label>
+                        <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                          <div class="flex min-h-11 flex-1 items-center rounded-md border border-slate-200 bg-white px-3 focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100 dark:border-slate-700 dark:bg-slate-900 dark:focus-within:border-sky-700 dark:focus-within:ring-sky-950">
+                            <input
+                              id="rollout-percentage-input"
+                              v-model="rolloutPercentageDraft"
+                              class="w-full bg-transparent text-sm font-medium text-slate-900 outline-none disabled:cursor-not-allowed disabled:opacity-40 dark:text-white"
+                              type="number"
+                              min="0"
+                              max="100"
+                              step="0.01"
+                              :disabled="rolloutControlsDisabled"
+                              @keydown.enter.prevent="applyRolloutPercentage()"
+                            >
+                            <span class="text-sm text-slate-400 dark:text-slate-500">%</span>
+                          </div>
+                          <button
+                            type="button"
+                            class="min-h-11 d-btn d-btn-outline d-btn-sm sm:d-btn-md"
+                            :disabled="rolloutControlsDisabled || !rolloutPercentageDraftChanged"
+                            @click="applyRolloutPercentage()"
                           >
-                          <span class="text-sm text-slate-400 dark:text-slate-500">%</span>
+                            {{ t('apply-rollout-percentage') }}
+                          </button>
                         </div>
-                      </label>
+                      </div>
                       <label class="space-y-1.5">
                         <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('cache-ttl-seconds') }}</span>
                         <input
@@ -1155,7 +1202,7 @@ async function copyCurlCommand() {
                     </div>
 
                     <div class="flex flex-wrap gap-2 lg:justify-end">
-                      <button type="button" class="min-h-11 d-btn d-btn-ghost" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
+                      <button type="button" class="min-h-11 d-btn d-btn-outline" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
                         {{ t('set-rollout-target') }}
                       </button>
                       <button type="button" class="min-h-11 d-btn d-btn-outline" :disabled="channel.rollout_enabled ? (rolloutTargetActionsDisabled || rolloutControlsDisabled) : rolloutEnableDisabled" @click="channel.rollout_enabled ? disableRollout() : enableRollout()">
@@ -1167,7 +1214,7 @@ async function copyCurlCommand() {
                       <button type="button" class="min-h-11 d-btn d-btn-primary" :disabled="rolloutTargetActionsDisabled" @click="promoteRollout()">
                         {{ t('promote') }}
                       </button>
-                      <button type="button" class="min-h-11 capitalize d-btn d-btn-error d-btn-ghost" :disabled="rolloutTargetActionsDisabled" @click="rollbackRollout()">
+                      <button type="button" class="min-h-11 capitalize d-btn d-btn-outline d-btn-error" :disabled="rolloutTargetActionsDisabled" @click="rollbackRollout()">
                         {{ t('rollback') }}
                       </button>
                     </div>
@@ -1399,13 +1446,13 @@ async function copyCurlCommand() {
               </div>
             </InfoRow>
             <InfoRow :label="t('update-package')">
-              <div class="flex items-center justify-end w-full gap-3">
+              <div class="flex items-center justify-end w-full gap-2">
                 <details ref="updatePackageDropdown" class="d-dropdown d-dropdown-end">
                   <summary class="d-btn d-btn-outline d-btn-sm">
                     <span>{{ getUpdatePackageLabel(channel.update_package) }}</span>
                     <IconDown class="w-4 h-4 ml-1 fill-current" />
                   </summary>
-                  <ul class="w-64 p-2 bg-white shadow d-dropdown-content dark:bg-base-200 rounded-box z-1">
+                  <ul class="w-80 max-h-96 overflow-y-auto p-2 bg-white shadow d-dropdown-content dark:bg-base-200 rounded-box z-50">
                     <li
                       v-for="option in updatePackageOptions"
                       :key="option"
@@ -1414,20 +1461,24 @@ async function copyCurlCommand() {
                       <button
                         type="button"
                         class="block w-full px-3 py-2 text-left text-gray-900 dark:text-white"
+                        :class="{ 'bg-sky-50 dark:bg-sky-950/40': channel.update_package === option }"
                         @click="onSelectUpdatePackage(option)"
                       >
-                        {{ getUpdatePackageLabel(option) }}
+                        <span class="block text-sm font-medium">{{ getUpdatePackageLabel(option) }}</span>
+                        <span class="mt-0.5 block text-xs leading-snug text-slate-500 dark:text-slate-400">{{ getUpdatePackageDescription(option) }}</span>
                       </button>
                     </li>
                   </ul>
                 </details>
-                <div class="relative inline-flex group">
-                  <IconInformation class="w-4 h-4 transition-colors text-slate-400 cursor-help dark:text-slate-400 dark:group-hover:text-slate-200 group-hover:text-slate-600" />
-                  <div class="absolute right-0 w-64 px-3 py-2 mb-2 text-xs text-white transition-opacity duration-150 bg-gray-800 rounded-lg shadow-lg opacity-0 pointer-events-none bottom-full group-hover:opacity-100">
-                    {{ t('update-package-help') }}
-                    <div class="absolute w-2 h-2 rotate-45 bg-gray-800 -bottom-1 right-2" />
-                  </div>
-                </div>
+                <button
+                  type="button"
+                  class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                  data-test="update-package-info"
+                  :aria-label="t('update-package-info')"
+                  @click="openUpdatePackageInfo()"
+                >
+                  <IconInformation class="h-4 w-4" aria-hidden="true" />
+                </button>
               </div>
             </InfoRow>
             <InfoRow :label="t('allow-dev-build')">

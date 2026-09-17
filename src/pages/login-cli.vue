@@ -9,12 +9,15 @@ import IconCheckCircle from '~icons/heroicons/check-circle'
 import IconClipboard from '~icons/heroicons/clipboard-document'
 import IconEye from '~icons/heroicons/eye'
 import IconEyeSlash from '~icons/heroicons/eye-slash'
+import IconInformationCircle from '~icons/heroicons/information-circle'
 import IconKey from '~icons/heroicons/key'
 import IconSparkles from '~icons/heroicons/sparkles'
+import CliLoginSkippedOrganizations from '~/components/CliLoginSkippedOrganizations.vue'
 import { buildCliAiSetupPrompt } from '~/services/cliAiPrompt'
 import {
   createCliLoginKeyDependencies,
   getCliLoginDestination,
+  isCliAiQuery,
   isMatchingCliLoginEvent,
   isValidCliLoginSession,
   prepareCliLoginKey,
@@ -40,13 +43,13 @@ const revealDialogOpen = ref(false)
 const reused = ref(false)
 const hashed = ref(false)
 const expiresAt = ref<string | null>(null)
-const skippedNames = ref<string[]>([])
+const skippedOrganizations = ref<Array<{ id: string, name: string }>>([])
 const realtimeUnavailable = ref(false)
 const destination = ref('/dashboard')
 const channels: RealtimeChannel[] = []
 const aiPromptOrganizations = ref<CliAiPromptOrganization[]>([])
 const aiPromptSkippedOrganizations = ref<Array<{ id: string, name: string }>>([])
-const aiMode = computed(() => route.query.ai === '1')
+const aiMode = computed(() => isCliAiQuery(route.query.ai))
 const displayedKey = computed(() => revealed.value && secret.value ? secret.value : hiddenKey)
 const aiPrompt = computed(() => {
   if (!secret.value || aiPromptOrganizations.value.length === 0)
@@ -55,7 +58,7 @@ const aiPrompt = computed(() => {
     apiKey: secret.value,
     organizations: aiPromptOrganizations.value,
     skippedOrganizations: aiPromptSkippedOrganizations.value,
-  })
+  }, route.query.intent)
 })
 const revealButtonRef = useTemplateRef<HTMLButtonElement>('revealButtonRef')
 const revealDialogRef = useTemplateRef<HTMLElement>('revealDialogRef')
@@ -138,7 +141,7 @@ async function prepare(): Promise<void> {
       organizationStore.organizations,
       createCliLoginKeyDependencies(supabase, userId),
     )
-    skippedNames.value = result.skippedOrganizationNames
+    skippedOrganizations.value = result.skippedOrganizations
     if (result.status === 'empty') {
       state.value = 'empty'
       return
@@ -319,9 +322,7 @@ onBeforeUnmount(() => {
         <p class="d-alert d-alert-warning">
           {{ t('cli-login-no-eligible') }}
         </p>
-        <p v-if="skippedNames.length" class="text-sm">
-          {{ t('cli-login-skipped-organizations', { organizations: skippedNames.join(', ') }) }}
-        </p>
+        <CliLoginSkippedOrganizations v-if="skippedOrganizations.length" :organizations="skippedOrganizations" />
         <button class="d-btn" type="button" @click="router.push('/dashboard')">
           {{ t('dashboard') }}
         </button>
@@ -343,9 +344,12 @@ onBeforeUnmount(() => {
               <IconClipboard class="h-4 w-4" /> {{ t('cli-login-ai-copy') }}
             </button>
           </div>
-          <p class="d-alert d-alert-warning text-sm">
-            {{ t('cli-login-ai-security-warning') }}
-          </p>
+          <div class="flex items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/60">
+            <IconInformationCircle class="mt-0.5 h-5 w-5 shrink-0 text-azure-500" aria-hidden="true" />
+            <p class="text-sm leading-6 text-slate-600 dark:text-slate-300">
+              {{ t('cli-login-ai-security-warning') }}
+            </p>
+          </div>
         </template>
         <template v-else>
           <p class="text-slate-600 dark:text-slate-300">
@@ -374,9 +378,12 @@ onBeforeUnmount(() => {
           <p class="text-xs text-slate-500">
             {{ t('cli-login-copy-note') }}
           </p>
-          <p class="d-alert d-alert-warning text-sm">
-            {{ t('cli-login-security-warning') }}
-          </p>
+          <div class="flex items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/60">
+            <IconInformationCircle class="mt-0.5 h-5 w-5 shrink-0 text-azure-500" aria-hidden="true" />
+            <p class="text-sm leading-6 text-slate-600 dark:text-slate-300">
+              {{ t('cli-login-security-warning') }}
+            </p>
+          </div>
         </template>
         <p v-if="hashed" class="text-sm text-amber-700 dark:text-amber-300">
           {{ t('cli-login-hashed-warning') }}
@@ -384,9 +391,7 @@ onBeforeUnmount(() => {
         <p v-if="expiresAt" class="text-sm text-amber-700 dark:text-amber-300">
           {{ t('cli-login-expiration-warning', { date: formatLocalDate(expiresAt) }) }}
         </p>
-        <p v-if="skippedNames.length" class="text-sm text-amber-700 dark:text-amber-300">
-          {{ t('cli-login-skipped-organizations', { organizations: skippedNames.join(', ') }) }}
-        </p>
+        <CliLoginSkippedOrganizations v-if="skippedOrganizations.length" :organizations="skippedOrganizations" has-key />
         <output v-if="!aiMode" class="flex items-center text-sm" :class="realtimeUnavailable ? 'text-amber-700' : 'text-slate-500'">
           <template v-if="realtimeUnavailable">
             {{ t('cli-login-realtime-unavailable') }}

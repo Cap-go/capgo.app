@@ -5,7 +5,7 @@ import type {
   NativeNotificationQueueMessage,
   NativeNotificationRegistryRow,
 } from './nativeNotifications.ts'
-import { buildNotificationRegistryLookupQuery, createNotificationDeliveryEventProofFromSecret, getAllNotificationBuckets, getNotificationBucket, getNotificationEventIndex, getNotificationIndex } from './nativeNotifications.ts'
+import { buildNotificationRegistryLookupQuery, createNotificationDeliveryEventProofFromSecret, decryptProviderSecretWithSecretKey, getAllNotificationBuckets, getNotificationBucket, getNotificationEventIndex, getNotificationIndex } from './nativeNotifications.ts'
 
 type NotificationEnv = Record<string, unknown>
 const MAX_NOTIFICATION_RETRY_ATTEMPTS = 3
@@ -151,6 +151,22 @@ function parseSecretValue(env: NotificationEnv, secretRef: string | null | undef
   catch {
     return raw
   }
+}
+
+async function resolveProviderSecretValue(env: NotificationEnv, providerConfig: NativeNotificationProviderConfig): Promise<unknown> {
+  if (providerConfig.secretCiphertext) {
+    const secretKey = readEnv(env, 'NOTIFICATIONS_TOKEN_SECRET') || readEnv(env, 'API_SECRET')
+    if (!secretKey)
+      throw new Error('Missing notification token secret')
+    const plaintext = await decryptProviderSecretWithSecretKey(secretKey, providerConfig.secretCiphertext)
+    try {
+      return JSON.parse(plaintext)
+    }
+    catch {
+      return plaintext
+    }
+  }
+  return parseSecretValue(env, providerConfig.secretRef)
 }
 
 function createSendCredentialCache(): SendCredentialCache {
@@ -350,7 +366,7 @@ async function signEcJwt(header: Record<string, unknown>, claims: Record<string,
 }
 
 async function loadFcmAccessToken(env: NotificationEnv, providerConfig: NativeNotificationProviderConfig): Promise<string> {
-  const secretValue = parseSecretValue(env, providerConfig.secretRef)
+  const secretValue = await resolveProviderSecretValue(env, providerConfig)
   const secretObject = secretValue && typeof secretValue === 'object' ? secretValue as Record<string, unknown> : {}
   const directAccessToken = getString(secretObject.access_token)
   if (directAccessToken)
@@ -384,7 +400,7 @@ async function loadFcmAccessToken(env: NotificationEnv, providerConfig: NativeNo
 }
 
 async function getFcmAccessToken(env: NotificationEnv, providerConfig: NativeNotificationProviderConfig, cache: SendCredentialCache): Promise<string> {
-  const cacheKey = `fcm:${providerConfig.secretRef ?? ''}:${getString(providerConfig.config.serviceAccountEmail)}`
+  const cacheKey = `fcm:${providerConfig.secretCiphertext ? 'ciphertext' : providerConfig.secretRef ?? ''}:${getString(providerConfig.config.serviceAccountEmail)}`
   let tokenPromise = cache.fcmAccessTokens.get(cacheKey)
   if (!tokenPromise) {
     tokenPromise = loadFcmAccessToken(env, providerConfig)
@@ -481,7 +497,7 @@ function isInvalidFcmToken(json: FcmSendError): boolean {
 }
 
 async function sendFcm(env: NotificationEnv, providerConfig: NativeNotificationProviderConfig, token: string, message: NativeNotificationQueueMessage, cache: SendCredentialCache): Promise<SendOutcome> {
-  const secretValue = parseSecretValue(env, providerConfig.secretRef)
+  const secretValue = await resolveProviderSecretValue(env, providerConfig)
   const secretObject = secretValue && typeof secretValue === 'object' ? secretValue as Record<string, unknown> : {}
   const projectId = getString(providerConfig.config.projectId) || getString(secretObject.project_id)
   if (!projectId)
@@ -515,7 +531,7 @@ async function buildApnsJwt(providerConfig: NativeNotificationProviderConfig, pr
   const keyId = getString(providerConfig.config.keyId)
   if (!teamId || !keyId)
     throw new Error('Missing iOS push team id or key id')
-  const cacheKey = `apns:${providerConfig.secretRef ?? ''}:${teamId}:${keyId}`
+  const cacheKey = `apns:${providerConfig.secretCiphertext ? 'ciphertext' : providerConfig.secretRef ?? ''}:${teamId}:${keyId}`
   let jwtPromise = cache.apnsJwtTokens.get(cacheKey)
   if (!jwtPromise) {
     jwtPromise = signEcJwt({ alg: 'ES256', kid: keyId }, { iss: teamId, iat: Math.floor(Date.now() / 1000) }, privateKey)
@@ -557,7 +573,7 @@ function buildApnsPayload(message: NativeNotificationQueueMessage) {
 }
 
 async function sendApns(env: NotificationEnv, providerConfig: NativeNotificationProviderConfig, token: string, message: NativeNotificationQueueMessage, cache: SendCredentialCache): Promise<SendOutcome> {
-  const secretValue = parseSecretValue(env, providerConfig.secretRef)
+  const secretValue = await resolveProviderSecretValue(env, providerConfig)
   const secretObject = secretValue && typeof secretValue === 'object' ? secretValue as Record<string, unknown> : {}
   const privateKey = getString(secretObject.private_key) || getString(secretValue)
   const bundleId = getString(providerConfig.config.bundleId)

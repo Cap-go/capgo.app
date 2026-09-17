@@ -25,7 +25,8 @@
 
 Anyone from the community can review the pull request and leave comments.
 
-Review are rewarded with a tip of $20. On merged pull request.
+Review are rewarded with a tip of $20 when requested on merged pull request.
+AI review does not qualify.
 
 ## What is a good review?
 

@@ -32,6 +32,10 @@ test.describe('App dashboard sections', () => {
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/native(?:\?|$)/)
     await expect(nativeTab).toHaveAttribute('aria-current', 'page')
     await expect(page.getByRole('heading', { name: 'Native build by platform' })).toBeVisible()
+    await expect(page.getByText('Active Android devices').first()).toBeVisible()
+    await expect(page.getByText('Active iOS devices').first()).toBeVisible()
+    await expect(page.getByText('Total active devices').first()).toBeVisible()
+    await expect(page.getByText('Android vs iOS active devices')).toBeVisible()
     await expect(page.locator('[data-testid="bundle-install-stats"]')).toHaveCount(0)
 
     await installsTab.click()

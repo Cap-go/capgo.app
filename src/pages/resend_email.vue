@@ -1,17 +1,18 @@
 <script setup lang="ts">
 import { setErrors } from '@formkit/core'
 import { FormKit, FormKitMessages } from '@formkit/vue'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
 import iconEmail from '~icons/oui/email?raw'
 import { authGhostButtonClass, authInsetCardClass, authPanelClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
-import { getRecentEmailOtpVerification, sendEmailOtpVerification, verifyEmailOtp } from '~/services/emailOtp'
+import { getEmailOtpSendErrorMessage, getRecentEmailOtpVerification, parseEmailOtpSendError, sendEmailOtpVerification, verifyEmailOtp } from '~/services/emailOtp'
 import { useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { useMainStore } from '~/stores/main'
+import { validateRedirectPath } from '~/utils/safeRedirect'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
 const { t } = useI18n()
@@ -22,16 +23,50 @@ const main = useMainStore()
 const isLoading = ref(false)
 const isLoadingMain = ref(false)
 const otpSending = ref(false)
+const otpSendError = ref('')
+const otpSendCooldownSeconds = ref(0)
 const otpCaptchaToken = ref('')
 const otpCaptchaRef = ref<InstanceType<typeof VueTurnstile> | null>(null)
 const otpVerificationCode = ref('')
 const otpVerificationLoading = ref(false)
+let otpSendCooldownTimer: ReturnType<typeof setInterval> | null = null
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const currentUserId = ref('')
 const currentUserEmail = ref('')
 const emailVerificationBlockingReason = computed(() => route.query.reason === 'email_not_verified')
-const returnTo = computed(() => (typeof route.query.return_to === 'string' ? route.query.return_to : ''))
+const rawReturnToQuery = computed(() => typeof route.query.return_to === 'string' ? route.query.return_to : '')
+const returnTo = computed(() => validateRedirectPath(rawReturnToQuery.value, '/settings/account'))
+const attemptedDestination = computed(() => validateRedirectPath(rawReturnToQuery.value, rawReturnToQuery.value))
 const usesEmailOtpFlow = computed(() => emailVerificationBlockingReason.value && !!currentUserId.value && !!currentUserEmail.value)
+const otpSendDisabled = computed(() => otpSending.value || otpSendCooldownSeconds.value > 0)
+
+function clearOtpSendCooldownTimer() {
+  if (otpSendCooldownTimer) {
+    clearInterval(otpSendCooldownTimer)
+    otpSendCooldownTimer = null
+  }
+}
+
+function resetOtpCaptcha() {
+  otpCaptchaToken.value = ''
+  safeResetTurnstile(otpCaptchaRef.value)
+}
+
+function startOtpSendCooldown(seconds: number) {
+  clearOtpSendCooldownTimer()
+  otpSendCooldownSeconds.value = seconds
+  otpSendCooldownTimer = setInterval(() => {
+    if (otpSendCooldownSeconds.value <= 1) {
+      otpSendCooldownSeconds.value = 0
+      clearOtpSendCooldownTimer()
+      resetOtpCaptcha()
+      otpSendError.value = ''
+    }
+    else {
+      otpSendCooldownSeconds.value -= 1
+    }
+  }, 1000)
+}
 
 async function submit(form: { email: string }) {
   isLoading.value = true
@@ -61,7 +96,7 @@ async function loadDeleteEmailVerificationState() {
 
     const { isVerified } = await getRecentEmailOtpVerification(supabase, currentUserId.value)
     if (isVerified)
-      await router.replace(returnTo.value || '/settings/account')
+      await router.replace(returnTo.value)
   }
   catch (error) {
     console.error('Cannot load email verification state', error)
@@ -72,23 +107,34 @@ async function loadDeleteEmailVerificationState() {
 }
 
 async function sendOtpCode() {
-  if (!currentUserEmail.value || otpSending.value)
+  if (!currentUserEmail.value || otpSending.value || otpSendCooldownSeconds.value > 0)
     return
 
   if (captchaKey.value && !otpCaptchaToken.value) {
-    toast.error(t('captcha-required'))
+    const message = t('captcha-required')
+    otpSendError.value = message
+    toast.error(message)
     return
   }
 
   otpSending.value = true
+  otpSendError.value = ''
   const { error } = await sendEmailOtpVerification(supabase, currentUserEmail.value, otpCaptchaToken.value)
   otpSending.value = false
-  otpCaptchaToken.value = ''
-  safeResetTurnstile(otpCaptchaRef.value)
+  resetOtpCaptcha()
 
   if (error) {
-    toast.error(error.message.toLowerCase().includes('captcha') ? t('captcha-fail') : t('verification-failed'))
+    const parsed = parseEmailOtpSendError(error)
+    const message = parsed
+      ? getEmailOtpSendErrorMessage(parsed, t)
+      : t('email-otp-send-failed')
+    otpSendError.value = message
+    toast.error(message)
     console.error('Cannot send email OTP', error)
+
+    if (parsed?.kind === 'rate_limit')
+      startOtpSendCooldown(parsed.waitSeconds ?? 60)
+
     return
   }
 
@@ -120,6 +166,10 @@ async function verifyOtpCode() {
 onMounted(async () => {
   await loadDeleteEmailVerificationState()
 })
+
+onBeforeUnmount(() => {
+  clearOtpSendCooldownTimer()
+})
 </script>
 
 <template>
@@ -143,8 +193,8 @@ onMounted(async () => {
         <p class="mt-2 text-sm leading-6">
           {{ t('email-not-verified-banner-body') }}
         </p>
-        <p v-if="returnTo" class="mt-3 text-xs font-medium tracking-[0.12em] uppercase">
-          {{ t('attempted-destination') }} {{ returnTo }}
+        <p v-if="rawReturnToQuery" class="mt-3 text-xs font-medium tracking-[0.12em] uppercase">
+          {{ t('attempted-destination') }} {{ attemptedDestination }}
         </p>
       </div>
 
@@ -170,10 +220,25 @@ onMounted(async () => {
           />
         </div>
 
+        <p
+          v-if="otpSendError"
+          class="text-sm text-red-600 dark:text-red-400"
+          role="alert"
+        >
+          {{ otpSendError }}
+        </p>
+        <p
+          v-if="otpSendCooldownSeconds > 0"
+          class="text-sm text-amber-700 dark:text-amber-300"
+          role="status"
+        >
+          {{ t('email-otp-rate-limit-countdown', { seconds: otpSendCooldownSeconds }) }}
+        </p>
+
         <button
           type="button"
           :class="authPrimaryButtonClass"
-          :disabled="otpSending || otpVerificationLoading"
+          :disabled="otpSendDisabled || otpVerificationLoading"
           :aria-busy="otpSending ? 'true' : 'false'"
           @click="sendOtpCode"
         >
@@ -181,7 +246,11 @@ onMounted(async () => {
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
           </svg>
-          {{ t('email-otp-send-code') }}
+          {{
+            otpSendCooldownSeconds > 0
+              ? t('email-otp-send-wait', { seconds: otpSendCooldownSeconds })
+              : t('email-otp-send-code')
+          }}
         </button>
 
         <FormKit

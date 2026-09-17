@@ -86,6 +86,12 @@ describe('public stats endpoint', () => {
   it('serves runtime live update metrics with browser CORS', async () => {
     mocks.getPublicLiveUpdateMetricsCF.mockResolvedValueOnce({
       success_rate: 97.5,
+      first_try_rate: 91.2,
+      first_day_rate: 38.4,
+      first_day_success_rate: 88.1,
+      rollback_rate: 2.6,
+      zip_success_rate: 79.4,
+      delta_success_rate: 93.8,
       daily: [{ date: '2026-05-10', success_rate: 97.5 }],
       failures: [{ reason: 'download_fail', share: 100 }],
       platforms: [
@@ -113,6 +119,12 @@ describe('public stats endpoint', () => {
       period_days: 30,
       updated_at: '2026-05-11T12:00:00.000Z',
       success_rate: 97.5,
+      first_try_rate: 91.2,
+      first_day_rate: 38.4,
+      first_day_success_rate: 88.1,
+      rollback_rate: 2.6,
+      zip_success_rate: 79.4,
+      delta_success_rate: 93.8,
       daily: [{ date: '2026-05-10', success_rate: 97.5 }],
       failures: [{ reason: 'download_fail', share: 100 }],
       platforms: [
@@ -154,6 +166,12 @@ describe('public stats endpoint', () => {
   it('sanitizes public live update metrics to rounded percentages only', () => {
     const dirty = {
       success_rate: 84.246,
+      first_try_rate: 88.16,
+      first_day_rate: 41.04,
+      first_day_success_rate: 76.66,
+      rollback_rate: 2.14,
+      zip_success_rate: 80.04,
+      delta_success_rate: 95.55,
       daily: [{ date: '2026-05-10', success_rate: 91.999 }],
       failures: [{ reason: 'download_fail', share: 37.94 }],
       platforms: [
@@ -171,6 +189,12 @@ describe('public stats endpoint', () => {
 
     expect(sanitized).toEqual({
       success_rate: 84.2,
+      first_try_rate: 88.2,
+      first_day_rate: 41,
+      first_day_success_rate: 76.7,
+      rollback_rate: 2.1,
+      zip_success_rate: 80,
+      delta_success_rate: 95.5,
       daily: [{ date: '2026-05-10', success_rate: 92 }],
       failures: [{ reason: 'download_fail', share: 37.9 }],
       platforms: [
@@ -184,6 +208,30 @@ describe('public stats endpoint', () => {
       ],
     })
     expect(sanitized).not.toHaveProperty('devices')
+  })
+
+  it('keeps missing reliability rates as null', () => {
+    const sanitized = sanitizePublicLiveUpdateMetrics({
+      success_rate: 80,
+      first_try_rate: null,
+      first_day_rate: null,
+      first_day_success_rate: null,
+      rollback_rate: null,
+      zip_success_rate: null,
+      delta_success_rate: null,
+      daily: [],
+      failures: [],
+      platforms: [],
+      countries: [],
+      updater_versions: [],
+    })
+
+    expect(sanitized.first_try_rate).toBeNull()
+    expect(sanitized.first_day_rate).toBeNull()
+    expect(sanitized.first_day_success_rate).toBeNull()
+    expect(sanitized.rollback_rate).toBeNull()
+    expect(sanitized.zip_success_rate).toBeNull()
+    expect(sanitized.delta_success_rate).toBeNull()
   })
 
   it('keeps the fallback counters when no completed stats row exists', async () => {

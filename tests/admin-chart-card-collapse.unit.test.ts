@@ -124,9 +124,7 @@ describe('admin chart card minimize control', () => {
     expect(toggle?.getAttribute('aria-expanded')).toBe('true')
     expect(toggle?.getAttribute('aria-controls')).toMatch(/^chart-content-/)
     expect(container.querySelector('[data-test="chart-content"]')).not.toBeNull()
-    const expandedTitleTypography = container.querySelector('h2')?.className
-      .split(' ')
-      .filter(className => /^(?:text-(?:base|lg|xl|2xl)|font-|leading-|sm:text-)/.test(className))
+    const expandedTitleTypography = container.querySelector('h2')?.className.split(' ').filter(className => /^(?:text-(?:base|lg|xl|2xl)|font-|leading-|sm:text-)/.test(className))
 
     toggle?.click()
     await nextTick()
@@ -136,9 +134,7 @@ describe('admin chart card minimize control', () => {
     expect(toggle?.getAttribute('aria-label')).toBe('Expand graph')
     expect(container.textContent).toContain('Daily onboarding attempts')
     expect(container.querySelector('[data-test="chart-content"]')).toBeNull()
-    const collapsedTitleTypography = container.querySelector('h2')?.className
-      .split(' ')
-      .filter(className => /^(?:text-(?:base|lg|xl|2xl)|font-|leading-|sm:text-)/.test(className))
+    const collapsedTitleTypography = container.querySelector('h2')?.className.split(' ').filter(className => /^(?:text-(?:base|lg|xl|2xl)|font-|leading-|sm:text-)/.test(className))
     expect(collapsedTitleTypography).toEqual(expandedTitleTypography)
   })
 
@@ -392,8 +388,11 @@ describe('admin chart card minimize control', () => {
     expect(source).toContain(':title="graphTitle"')
     expect(source).toContain(`:title="t('frontend-onboarding-tab-switches-v4')"`)
     expect(source).toContain(`:title="t('frontend-onboarding-daily-setup-cli-agent-usage-v2-v4')"`)
-    expect(source).toContain(`:title="t('frontend-onboarding-funnel-v1-legacy')"`)
+    expect(source).toContain(`:title="t('frontend-onboarding-cli-checklist-coverage-v4')"`)
+    expect(source).toContain('<AdminRegistrationComparison />')
     expect(source.match(/<ChartCard/g)).toHaveLength(12)
+    const registrations = readFileSync(resolve(process.cwd(), 'src/components/admin/AdminRegistrationComparison.vue'), 'utf8')
+    expect(registrations).toContain('chart-id="registration-monthly-comparison"')
   })
 
   it('assigns a stable chart ID to every admin dashboard graph', () => {

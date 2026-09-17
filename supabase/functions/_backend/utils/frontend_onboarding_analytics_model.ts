@@ -1,7 +1,40 @@
 export const FRONTEND_ONBOARDING_VERSIONS = [1, 2, 3, 4] as const
 export type FrontendOnboardingVersion = typeof FRONTEND_ONBOARDING_VERSIONS[number]
+export const WEBNATIVE_ONBOARDING_VERSION_LABELS = ['5.A', '5.C', '5.E', '5.F', '5.G'] as const
 export const FRONTEND_ONBOARDING_FOLLOWUP_MS = 24 * 60 * 60 * 1000
 export const FRONTEND_ONBOARDING_PRODUCTION_HOST = ['console', 'capgo', 'app'].join('.')
+
+export function isFrontendOnboardingVersionLabel(value: unknown): value is typeof WEBNATIVE_ONBOARDING_VERSION_LABELS[number] {
+  return typeof value === 'string'
+    && (WEBNATIVE_ONBOARDING_VERSION_LABELS as readonly string[]).includes(value)
+}
+
+function hogqlWebNativeVersionLabels(): string {
+  return WEBNATIVE_ONBOARDING_VERSION_LABELS.map(label => `'${label}'`).join(', ')
+}
+
+function hogqlOnboardingVersionRaw(properties: string): string {
+  // Typed property access casts string experiment labels to NULL in numeric schemas.
+  return `coalesce(nullIf(JSONExtractString(toString(${properties}), 'onboarding_version'), ''), JSONExtractRaw(toString(${properties}), 'onboarding_version'))`
+}
+
+export function hogqlOnboardingVersionValue(properties = 'properties'): string {
+  const version = hogqlOnboardingVersionRaw(properties)
+  return `multiIf(${version} IN (${hogqlWebNativeVersionLabels()}), 4, toIntOrZero(${version}))`
+}
+
+export function hogqlOnboardingVersionIn(
+  properties = 'properties',
+  versions: readonly number[] = FRONTEND_ONBOARDING_VERSIONS,
+): string {
+  const version = hogqlOnboardingVersionRaw(properties)
+  return `(toIntOrZero(${version}) IN (${versions.join(', ')}) OR ${version} IN (${hogqlWebNativeVersionLabels()}))`
+}
+
+export function hogqlOnboardingVersionIsV4(properties = 'properties'): string {
+  const version = hogqlOnboardingVersionRaw(properties)
+  return `(toIntOrZero(${version}) = 4 OR ${version} IN (${hogqlWebNativeVersionLabels()}))`
+}
 
 export function buildFrontendOnboardingProductionHostHogql(properties: string, timestamp: string): string {
   const currentUrl = `JSONExtractString(toString(${properties}), '$current_url')`
@@ -21,6 +54,7 @@ export type FrontendOnboardingStageKey = 'intent' | 'details' | 'app_name' | 'ap
 
 export interface FrontendOnboardingAttempt {
   attemptId: string
+  appId?: string
   onboardingVersion: FrontendOnboardingVersion
   personId: string
   intentMs: number

@@ -1386,7 +1386,7 @@ describe('[POST] /organization', () => {
       expect(error).toBeNull()
       expect(data).toBeTruthy()
       expect(data?.name).toBe(name)
-      expect(data?.onboarding).toEqual({ intent: 'unknown', starting_out: true })
+      expect(data?.onboarding).toEqual({ intent: 'unknown', starting_out: true, development_environment: 'skipped' })
       expect(data?.website).toBe('https://capgo.app/')
     }
     finally {

@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   buildUserOnboardingProgress,
   clampResumableOnboardingStep,
+  fallbackUsersOnboardingProgressForLegacyConstraint,
+  isUsersOnboardingCheckConstraintError,
   parseUserOnboardingProgress,
+  resumableOnboardingFlowStep,
   shouldPromptOnboardingResume,
   USER_ONBOARDING_MAX_JSON_BYTES,
+  USER_ONBOARDING_SETUP_STAGES,
 } from '../src/utils/userOnboardingProgress'
 
 describe('user onboarding progress', () => {
@@ -21,7 +25,8 @@ describe('user onboarding progress', () => {
       status: 'in_progress',
       step: 'organization',
       flow: 'pre_org',
-      intent: 'ota',
+      development_environment: 'hosted_builder',
+      intent: 'publish',
       details_step: 'icon',
       app_name: 'Acme',
       app_id: 'com.acme.app',
@@ -34,7 +39,8 @@ describe('user onboarding progress', () => {
       status: 'in_progress',
       step: 'organization',
       flow: 'pre_org',
-      intent: 'ota',
+      development_environment: 'hosted_builder',
+      intent: 'publish',
       details_step: 'icon',
       app_name: 'Acme',
       app_id: 'com.acme.app',
@@ -42,6 +48,54 @@ describe('user onboarding progress', () => {
       org_name: 'Acme Org',
       onboarding_attempt_id: '7e64f484-4171-47b6-86f7-0ef5d49e0ef8',
       last_run_id: 'ir_6b735b41-f8ea-45b9-a46e-10c8be795276',
+      updated_at: '2026-08-15T00:00:00.000Z',
+    })
+
+    expect(parseUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'details',
+      flow: 'pre_org',
+      development_environment: 'skipped',
+      intent: 'ota',
+      updated_at: '2026-08-15T00:00:00.000Z',
+    })).toEqual({
+      status: 'in_progress',
+      step: 'details',
+      flow: 'pre_org',
+      development_environment: 'skipped',
+      intent: 'ota',
+      updated_at: '2026-08-15T00:00:00.000Z',
+    })
+
+    expect(parseUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'publish_app_question',
+      flow: 'pre_org',
+      development_environment: 'hosted_builder',
+      intent: 'publish',
+      updated_at: '2026-08-15T00:00:00.000Z',
+    })).toEqual({
+      status: 'in_progress',
+      step: 'publish_app_question',
+      flow: 'pre_org',
+      development_environment: 'hosted_builder',
+      intent: 'publish',
+      updated_at: '2026-08-15T00:00:00.000Z',
+    })
+
+    expect(parseUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'intent',
+      flow: 'pre_org',
+      publish_app_question: true,
+      intent: 'ota',
+      updated_at: '2026-08-15T00:00:00.000Z',
+    })).toEqual({
+      status: 'in_progress',
+      step: 'intent',
+      flow: 'pre_org',
+      publish_app_question: true,
+      intent: 'ota',
       updated_at: '2026-08-15T00:00:00.000Z',
     })
   })
@@ -67,6 +121,7 @@ describe('user onboarding progress', () => {
       status: 'in_progress',
       step: 'details',
       flow: 'pre_org',
+      developmentEnvironment: 'local_project',
       intent: 'builder',
       detailsStep: 'app_id',
       appName: '  Hello  ',
@@ -84,6 +139,7 @@ describe('user onboarding progress', () => {
       status: 'in_progress',
       step: 'details',
       flow: 'pre_org',
+      development_environment: 'local_project',
       intent: 'builder',
       details_step: 'app_id',
       app_name: 'Hello',
@@ -110,6 +166,13 @@ describe('user onboarding progress', () => {
       step: 'intent',
       flow: 'pre_org',
       intent: 'ota',
+      updatedAt: '2026-08-15T00:00:00.000Z',
+    }), 'pre_org')).toBe(true)
+    expect(shouldPromptOnboardingResume(buildUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'publish_app_question',
+      flow: 'pre_org',
+      intent: 'publish',
       updatedAt: '2026-08-15T00:00:00.000Z',
     }), 'pre_org')).toBe(true)
     expect(shouldPromptOnboardingResume(buildUserOnboardingProgress({
@@ -145,6 +208,81 @@ describe('user onboarding progress', () => {
     expect(clampResumableOnboardingStep('setup', 'pre_org')).toBe('organization')
     expect(clampResumableOnboardingStep('install', 'existing_org')).toBe('install')
     expect(clampResumableOnboardingStep('details', 'pre_org')).toBe('details')
+  })
+
+  it.concurrent('restores the build-and-publish question from the persisted flag when step stays intent', () => {
+    const saved = parseUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'intent',
+      flow: 'pre_org',
+      publish_app_question: true,
+      intent: 'ota',
+      updated_at: '2026-08-15T00:00:00.000Z',
+    })
+    expect(saved).not.toBeNull()
+    expect(resumableOnboardingFlowStep(saved!, 'pre_org')).toBe('publish_app_question')
+    expect(buildUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'publish_app_question',
+      flow: 'pre_org',
+      intent: 'ota',
+      updatedAt: '2026-08-15T00:00:00.000Z',
+    })).toMatchObject({
+      step: 'publish_app_question',
+      publish_app_question: true,
+      intent: 'ota',
+    })
+    expect(fallbackUsersOnboardingProgressForLegacyConstraint(buildUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'publish_app_question',
+      flow: 'pre_org',
+      intent: 'ota',
+      updatedAt: '2026-08-15T00:00:00.000Z',
+    }))).toMatchObject({
+      step: 'intent',
+      publish_app_question: true,
+      intent: 'ota',
+    })
+    expect(isUsersOnboardingCheckConstraintError({ code: '23514' })).toBe(true)
+    expect(isUsersOnboardingCheckConstraintError({ message: 'violates check constraint "users_onboarding_valid"' })).toBe(true)
+    expect(isUsersOnboardingCheckConstraintError({ code: '23505' })).toBe(false)
+  })
+
+  it.concurrent('keeps channel education out of persisted top-level onboarding steps', () => {
+    expect(parseUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'channels',
+      flow: 'pre_org',
+      updated_at: '2026-08-15T00:00:00.000Z',
+    })).toBeNull()
+  })
+
+  it.concurrent('round-trips every channel setup stage and ignores invalid stages', () => {
+    for (const setupStage of USER_ONBOARDING_SETUP_STAGES) {
+      expect(buildUserOnboardingProgress({
+        status: 'in_progress',
+        step: 'setup',
+        flow: 'existing_org',
+        setupStage,
+        updatedAt: '2026-09-10T00:00:00.000Z',
+      })).toMatchObject({ setup_stage: setupStage })
+
+      expect(parseUserOnboardingProgress({
+        status: 'in_progress',
+        step: 'setup',
+        flow: 'existing_org',
+        setup_stage: setupStage,
+        updated_at: '2026-09-10T00:00:00.000Z',
+      })).toMatchObject({ setup_stage: setupStage })
+    }
+
+    expect(parseUserOnboardingProgress({
+      status: 'in_progress',
+      step: 'setup',
+      flow: 'existing_org',
+      setup_stage: 'unknown',
+      updated_at: '2026-09-10T00:00:00.000Z',
+    })).not.toHaveProperty('setup_stage')
   })
 
   it.concurrent('clamps oversize optional strings before they can fail the jsonb check', () => {
