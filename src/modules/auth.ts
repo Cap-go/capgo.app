@@ -215,6 +215,19 @@ async function guard(
     main.plans = await getPlans()
   }
 
+  async function resolvePlatformAdminStatus() {
+    try {
+      // isPlatformAdmin() is the only frontend admin-rights source.
+      main.isAdmin = await isPlatformAdmin()
+      if (main.isAdmin)
+        setWebsitePaidUserCookie(true)
+    }
+    catch (error) {
+      console.error('Failed to resolve platform admin status:', error)
+      main.isAdmin = false
+    }
+  }
+
   function shouldRedirectToOrgOnboarding() {
     if (isCliLoginRoute)
       return false
@@ -354,7 +367,9 @@ async function guard(
       })
     }
 
-    if (organizationsLoaded && !organizationStore.hasOrganizations && shouldRedirectToOrgOnboarding()) {
+    await resolvePlatformAdminStatus()
+
+    if (organizationsLoaded && !organizationStore.hasOrganizations && !main.isAdmin && shouldRedirectToOrgOnboarding()) {
       return next({
         path: '/onboarding/app',
         query: {
@@ -366,17 +381,6 @@ async function guard(
     const onboardingRedirect = await getPendingOnboardingRedirect(organizationsLoaded)
     if (onboardingRedirect)
       return next(onboardingRedirect)
-
-    try {
-      // isPlatformAdmin() is the only frontend admin-rights source.
-      main.isAdmin = await isPlatformAdmin()
-      if (main.isAdmin)
-        setWebsitePaidUserCookie(true)
-    }
-    catch (error) {
-      console.error('Failed to resolve platform admin status:', error)
-      main.isAdmin = false
-    }
 
     next()
     hideLoader()
@@ -426,7 +430,10 @@ async function guard(
       organizationsLoaded = await tryLoadOrganizations(() => organizationStore.fetchOrganizations(organizationFetchOptions))
     }
 
-    if (organizationsLoaded && !organizationStore.hasOrganizations && shouldRedirectToOrgOnboarding()) {
+    if (organizationsLoaded && !organizationStore.hasOrganizations)
+      await resolvePlatformAdminStatus()
+
+    if (organizationsLoaded && !organizationStore.hasOrganizations && !main.isAdmin && shouldRedirectToOrgOnboarding()) {
       return next({
         path: '/onboarding/app',
         query: {

@@ -461,6 +461,57 @@ describe('auth guard SSO provisioning', () => {
     })
   })
 
+  it.concurrent.each([
+    { cachedAuth: false, result: 'admin' },
+    { cachedAuth: true, result: 'admin' },
+    { cachedAuth: false, result: 'member' },
+    { cachedAuth: true, result: 'member' },
+    { cachedAuth: false, result: 'error' },
+    { cachedAuth: true, result: 'error' },
+  ])('resolves $result access without organizations (cached auth: $cachedAuth)', async ({ cachedAuth, result }) => {
+    await withTestContext(async (context) => {
+      const user = {
+        id: 'user-123',
+        email: 'user@managed.test',
+        email_confirmed_at: '2026-04-15T10:00:00.000Z',
+        app_metadata: { provider: 'email', providers: ['email'] },
+      }
+      context.mockGetSession.mockResolvedValue({
+        data: { session: { access_token: 'token-123', user } },
+      })
+      if (cachedAuth)
+        context.mainStore.auth = user
+      context.mainStore.isAdmin = true
+      context.organizationStore.fetchOrganizations = vi.fn(async () => {
+        context.organizationStore.organizations = []
+        context.organizationStore.hasOrganizations = false
+      })
+      if (result === 'error')
+        context.mockIsPlatformAdmin.mockRejectedValue(new Error('Admin lookup failed'))
+      else
+        context.mockIsPlatformAdmin.mockResolvedValue(result === 'admin')
+
+      const guard = await getGuard()
+      const next = vi.fn()
+      await guard(
+        { path: '/dashboard', fullPath: '/dashboard', meta: { middleware: 'auth' }, query: {} },
+        { path: '/login', fullPath: '/login', meta: {}, query: {} },
+        next,
+      )
+
+      expect(context.mockIsPlatformAdmin).toHaveBeenCalledOnce()
+      expect(context.mainStore.isAdmin).toBe(result === 'admin')
+      if (result === 'admin') {
+        expect(next).toHaveBeenCalledWith()
+        expect(context.mockSetWebsitePaidUserCookie).toHaveBeenCalledWith(true)
+      }
+      else {
+        expect(next).toHaveBeenCalledWith({ path: '/onboarding/app', query: { to: '/dashboard' } })
+        expect(context.mockSetWebsitePaidUserCookie).not.toHaveBeenCalled()
+      }
+    })
+  })
+
   it.concurrent('redirects accounts pending deletion to the recovery page instead of app onboarding', async () => {
     await withTestContext(async (context) => {
       context.mockRpc.mockResolvedValueOnce({
