@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { Hono } from 'hono/tiny'
 import { Pool } from 'pg'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { getAdminFamousApps } from '../supabase/functions/_backend/utils/pg.ts'
 import {
   executeSQL,
@@ -22,6 +22,7 @@ describe('app fame reporting and scheduling', () => {
   let pool: Pool
 
   beforeAll(async () => {
+    vi.stubGlobal('EdgeRuntime', undefined)
     pool = new Pool({ connectionString: POSTGRES_URL })
 
     await executeSQL(`
@@ -56,6 +57,7 @@ describe('app fame reporting and scheduling', () => {
     await executeSQL(`DELETE FROM public.orgs WHERE id = $1::uuid`, [orgId])
     await executeSQL(`DELETE FROM public.stripe_info WHERE customer_id = $1`, [customerId])
     await pool.end()
+    vi.unstubAllGlobals()
   })
 
   it('returns AI-scored apps ranked by fame, not device count', async () => {
