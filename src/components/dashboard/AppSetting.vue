@@ -15,7 +15,7 @@ import gearSix from '~icons/ph/gear-six?raw'
 import iconName from '~icons/ph/user?raw'
 import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { DEVICE_DATA_COLLECTION_KEYS, parseDeviceDataCollection } from '~/services/deviceDataCollection'
+import { DEVICE_DATA_COLLECTION_KEYS, parseAppRowDeviceDataCollection } from '~/services/deviceDataCollection'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { useSupabase } from '~/services/supabase'
@@ -337,7 +337,7 @@ async function submit(form: {
   isLoading.value = false
 }
 
-const deviceDataCollection = computed(() => parseDeviceDataCollection(appRef.value?.device_data_collection))
+const deviceDataCollection = computed(() => parseAppRowDeviceDataCollection(appRef.value as unknown))
 
 const storeImportUrl = computed(() => appRef.value?.ios_store_url || appRef.value?.android_store_url || '')
 const shouldShowStoreIconImport = computed(() => !appRef.value?.icon_url && !isAppIconLoading.value && !!storeImportUrl.value)
@@ -577,7 +577,7 @@ async function updateAllowDeviceCustomId(newAllowDeviceCustomId: boolean) {
 }
 
 async function updateDeviceDataCollection(next: DeviceDataCollection) {
-  const current = parseDeviceDataCollection(appRef.value?.device_data_collection)
+  const current = parseAppRowDeviceDataCollection(appRef.value as unknown)
   if (DEVICE_DATA_COLLECTION_KEYS.every(key => current[key] === next[key]))
     return Promise.resolve()
 
@@ -587,7 +587,7 @@ async function updateDeviceDataCollection(next: DeviceDataCollection) {
 
   toast.success(t('changed-device-data-collection'))
   if (appRef.value)
-    appRef.value.device_data_collection = next
+    Object.assign(appRef.value, { device_data_collection: next })
 }
 
 async function updateBlockProviderInfraRequests(enabled: boolean) {

@@ -12,7 +12,7 @@ import DeploymentStatsCard from '~/components/dashboard/DeploymentStatsCard.vue'
 import DevicesStats from '~/components/dashboard/DevicesStats.vue'
 import ReleaseBanner from '~/components/dashboard/ReleaseBanner.vue'
 import UpdateStatsCard from '~/components/dashboard/UpdateStatsCard.vue'
-import { parseDeviceDataCollection } from '~/services/deviceDataCollection'
+import { parseAppRowDeviceDataCollection } from '~/services/deviceDataCollection'
 import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDisplayStore } from '~/stores/display'
@@ -41,7 +41,7 @@ const usageComponent = ref<{
 const appNotFound = ref(false)
 let loadGeneration = 0
 
-const deviceDataCollection = computed(() => parseDeviceDataCollection(app.value?.device_data_collection))
+const deviceDataCollection = computed(() => parseAppRowDeviceDataCollection(app.value as unknown))
 
 const lacksSecurityAccess = computed(() => {
   const org = organizationStore.currentOrganization
