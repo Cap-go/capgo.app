@@ -2067,6 +2067,11 @@ export async function getAdminPayingOrgBreakdown(c: Context): Promise<AdminPayin
         FROM public.stripe_info si
         INNER JOIN public.plans p ON p.stripe_id = si.product_id
         WHERE si.is_good_plan = true
+          -- Trials are stored as succeeded + is_good_plan. Require a real payment
+          -- and an ended trial so this card matches "Paid via Subscription".
+          AND si.paid_at IS NOT NULL
+          AND si.paid_at < NOW()
+          AND si.trial_at <= NOW()
           AND si.status IN (
             'succeeded'::public.stripe_status,
             'canceled'::public.stripe_status,

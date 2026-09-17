@@ -1699,7 +1699,7 @@ displayStore.defaultBack = '/dashboard'
                   0
                 </p>
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Active subscription organizations
+                  Paid subscriptions, excluding trials
                 </p>
               </div>
             </div>
