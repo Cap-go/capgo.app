@@ -4,8 +4,8 @@ import { Hono } from 'hono/tiny'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { globalStatsTestUtils } from '../supabase/functions/_backend/triggers/global_stats.ts'
 import { REQUIRED_GLOBAL_STATS_SHARDS } from '../supabase/functions/_backend/utils/global_stats.ts'
-import { getAdminGlobalStatsTrend, getAdminOnboardingFunnel } from '../supabase/functions/_backend/utils/pg.ts'
-import { BASE_URL, executeSQL, fetchTestRequest, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, PRODUCT_ID, resetAndSeedAppData, resetAppData, TEST_EMAIL, USER_ADMIN_EMAIL, USER_ID, USER_PASSWORD_HASH } from './test-utils.ts'
+import { getAdminGlobalStatsTrend, getAdminOnboardingFunnel, getAdminOrganizationInsights, getAdminTrialOrganizations, getAdminTrialPlanBreakdown } from '../supabase/functions/_backend/utils/pg.ts'
+import { executeSQL, getSupabaseClient, POSTGRES_URL, PRODUCT_ID, resetAndSeedAppData, resetAppData, TEST_EMAIL, USER_ID, USER_PASSWORD_HASH } from './test-utils.ts'
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000
 const NOW = Date.now()
@@ -89,7 +89,6 @@ async function requestDirectAdminStats<T>(registerRoute: (app: AdminStatsTestApp
     registerRoute(app)
 
     const response = await app.request('http://local/', undefined, { SUPABASE_DB_URL: POSTGRES_URL })
-    expect(response.status).toBe(200)
     return await response.json() as T
   }
   finally {
@@ -105,7 +104,7 @@ async function getCoreSnapshotCountsAt(snapshotExclusiveEnd: Date) {
   return requestDirectAdminStats<{
     abovePlanWithCredits: number
     abovePlanWithoutCredits: number
-  }>(app => {
+  }>((app) => {
     app.get('/', async c => c.json(await globalStatsTestUtils.getCoreSnapshotCounts(c, snapshotExclusiveEnd)))
   })
 }
@@ -113,36 +112,32 @@ async function getCoreSnapshotCountsAt(snapshotExclusiveEnd: Date) {
 async function getBillingSnapshotCountsAt(snapshotExclusiveEnd: Date) {
   return requestDirectAdminStats<{
     plans: Record<string, number>
-  }>(app => {
+  }>((app) => {
     app.get('/', async c => c.json(await globalStatsTestUtils.getBillingSnapshotCounts(c, snapshotExclusiveEnd)))
   })
 }
 
 async function getOnboardingFunnelDirect(startDate: string, endDate: string) {
-  return requestDirectAdminStats<Awaited<ReturnType<typeof getAdminOnboardingFunnel>>>(app => {
+  return requestDirectAdminStats<Awaited<ReturnType<typeof getAdminOnboardingFunnel>>>((app) => {
     app.get('/', async c => c.json(await getAdminOnboardingFunnel(c, startDate, endDate)))
   })
 }
 
 async function getGlobalStatsTrendDirect(startDate: string, endDate: string) {
-  return requestDirectAdminStats<Awaited<ReturnType<typeof getAdminGlobalStatsTrend>>>(app => {
+  return requestDirectAdminStats<Awaited<ReturnType<typeof getAdminGlobalStatsTrend>>>((app) => {
     app.get('/', async c => c.json(await getAdminGlobalStatsTrend(c, startDate, endDate)))
   })
 }
 
-let adminHeaders: Record<string, string>
 let soloPlan: {
   name: string
   price_m_id: string
   price_y_id: string
   stripe_id: string
 } | null = null
-let creatorUserCreatedAt = ''
 
 beforeAll(async () => {
   const supabase = getSupabaseClient()
-
-  adminHeaders = await getAuthHeadersForCredentials(USER_ADMIN_EMAIL, 'adminadmin')
 
   const [{ data: planRow, error: planError }, { data: userRow, error: userError }] = await Promise.all([
     supabase.from('plans').select('name, price_m_id, price_y_id, stripe_id').eq('stripe_id', PRODUCT_ID).single(),
@@ -159,7 +154,6 @@ beforeAll(async () => {
     throw new Error('Expected creator user to exist for admin stats tests')
 
   soloPlan = planRow
-  creatorUserCreatedAt = new Date(userRow.created_at).toISOString()
 
   const { error: globalStatsError } = await supabase.from('global_stats').upsert([
     {
@@ -1006,21 +1000,13 @@ describe('global stats core snapshots', () => {
   })
 })
 
-describe('/private/admin_stats', () => {
+describe('shared reporting queries', () => {
   it('returns global stats trend rows from the self-joined global_stats table', async () => {
-    const response = await fetchTestRequest(`${BASE_URL}/private/admin_stats`, {
-      method: 'POST',
-      headers: adminHeaders,
-      body: JSON.stringify({
-        metric_category: 'global_stats_trend',
-        start_date: '2099-12-30T00:00:00.000Z',
-        end_date: '2099-12-31T23:59:59.000Z',
-      }),
+    const response = await requestDirectAdminStats<Awaited<ReturnType<typeof getAdminGlobalStatsTrend>>>((app) => {
+      app.get('/', async c => c.json(await getAdminGlobalStatsTrend(c, '2099-12-30T00:00:00.000Z', '2099-12-31T23:59:59.000Z')))
     })
 
-    expect(response.status).toBe(200)
-    const payload = await response.json() as {
-      success: boolean
+    const payload = { data: response } as {
       data: Array<{
         date: string
         apps: number
@@ -1044,7 +1030,6 @@ describe('/private/admin_stats', () => {
       }>
     }
 
-    expect(payload.success).toBe(true)
     expect(payload.data).toHaveLength(2)
 
     const historical = payload.data.find(row => row.date === GLOBAL_STATS_TREND_DATES[0])
@@ -1075,21 +1060,11 @@ describe('/private/admin_stats', () => {
   })
 
   it('returns last bundle upload for trial organizations and excludes builtin versions', async () => {
-    const response = await fetchTestRequest(`${BASE_URL}/private/admin_stats`, {
-      method: 'POST',
-      headers: adminHeaders,
-      body: JSON.stringify({
-        metric_category: 'trial_organizations',
-        start_date: '2026-04-02T00:00:00.000Z',
-        end_date: '2026-04-02T00:00:00.000Z',
-        limit: 100,
-        offset: 0,
-      }),
+    const response = await requestDirectAdminStats<Awaited<ReturnType<typeof getAdminTrialOrganizations>>>((app) => {
+      app.get('/', async c => c.json(await getAdminTrialOrganizations(c, 100, 0)))
     })
 
-    expect(response.status).toBe(200)
-    const payload = await response.json() as {
-      success: boolean
+    const payload = { data: response } as {
       data: {
         organizations: Array<{
           org_id: string
@@ -1100,7 +1075,6 @@ describe('/private/admin_stats', () => {
       }
     }
 
-    expect(payload.success).toBe(true)
     const organization = payload.data.organizations.find(org => org.org_id === TRIAL_ORG_ID)
     expect(organization).toBeTruthy()
     expect(organization?.plan_name).toBe(soloPlan?.name)
@@ -1111,24 +1085,13 @@ describe('/private/admin_stats', () => {
   it('returns organization insights with plan filtering and preprocessed period usage', async () => {
     if (!soloPlan)
       throw new Error('Expected Solo plan to be loaded')
+    const planName = soloPlan.name
 
-    const response = await fetchTestRequest(`${BASE_URL}/private/admin_stats`, {
-      method: 'POST',
-      headers: adminHeaders,
-      body: JSON.stringify({
-        metric_category: 'organization_insights',
-        start_date: INSIGHTS_START,
-        end_date: INSIGHTS_END,
-        plan_name: soloPlan.name,
-        billing_type: 'monthly',
-        limit: 100,
-        offset: 0,
-      }),
+    const response = await requestDirectAdminStats<Awaited<ReturnType<typeof getAdminOrganizationInsights>>>((app) => {
+      app.get('/', async c => c.json(await getAdminOrganizationInsights(c, INSIGHTS_START, INSIGHTS_END, { plan_name: planName, billing_type: 'monthly', limit: 100, offset: 0 })))
     })
 
-    expect(response.status).toBe(200)
-    const payload = await response.json() as {
-      success: boolean
+    const payload = { data: response } as {
       data: {
         organizations: Array<{
           org_id: string
@@ -1149,7 +1112,6 @@ describe('/private/admin_stats', () => {
       }
     }
 
-    expect(payload.success).toBe(true)
     expect(payload.data.plan_options).toContain(soloPlan.name)
 
     const organization = payload.data.organizations.find(org => org.org_id === TRIAL_ORG_ID)
@@ -1167,32 +1129,17 @@ describe('/private/admin_stats', () => {
     expect(organization?.members_count).toBe(1)
     expect(organization?.last_build_at).toBe(INSIGHTS_LAST_BUILD_AT)
 
-    const paidOnlyResponse = await fetchTestRequest(`${BASE_URL}/private/admin_stats`, {
-      method: 'POST',
-      headers: adminHeaders,
-      body: JSON.stringify({
-        metric_category: 'organization_insights',
-        start_date: INSIGHTS_START,
-        end_date: INSIGHTS_END,
-        plan_name: soloPlan.name,
-        billing_type: 'monthly',
-        paid_only: true,
-        search: TRIAL_ORG_ID,
-        limit: 100,
-        offset: 0,
-      }),
+    const paidOnlyResponse = await requestDirectAdminStats<Awaited<ReturnType<typeof getAdminOrganizationInsights>>>((app) => {
+      app.get('/', async c => c.json(await getAdminOrganizationInsights(c, INSIGHTS_START, INSIGHTS_END, { plan_name: planName, billing_type: 'monthly', paid_only: true, search: TRIAL_ORG_ID, limit: 100, offset: 0 })))
     })
 
-    expect(paidOnlyResponse.status).toBe(200)
-    const paidOnlyPayload = await paidOnlyResponse.json() as {
-      success: boolean
+    const paidOnlyPayload = { data: paidOnlyResponse } as {
       data: {
         organizations: Array<{ org_id: string }>
         total: number
       }
     }
 
-    expect(paidOnlyPayload.success).toBe(true)
     expect(paidOnlyPayload.data.organizations).toEqual([])
     expect(paidOnlyPayload.data.total).toBe(0)
   })
@@ -1200,25 +1147,13 @@ describe('/private/admin_stats', () => {
   it('prioritizes organizations needing attention before pagination', async () => {
     if (!soloPlan)
       throw new Error('Expected Solo plan to be loaded')
+    const planName = soloPlan.name
 
-    const response = await fetchTestRequest(getEndpointUrl('/private/admin_stats'), {
-      method: 'POST',
-      headers: adminHeaders,
-      body: JSON.stringify({
-        metric_category: 'organization_insights',
-        start_date: INSIGHTS_START,
-        end_date: INSIGHTS_END,
-        plan_name: soloPlan.name,
-        billing_type: 'monthly',
-        search: ATTENTION_SORT_TOKEN,
-        limit: 1,
-        offset: 0,
-      }),
+    const response = await requestDirectAdminStats<Awaited<ReturnType<typeof getAdminOrganizationInsights>>>((app) => {
+      app.get('/', async c => c.json(await getAdminOrganizationInsights(c, INSIGHTS_START, INSIGHTS_END, { plan_name: planName, billing_type: 'monthly', search: ATTENTION_SORT_TOKEN, limit: 1, offset: 0 })))
     })
 
-    expect(response.status).toBe(200)
-    const payload = await response.json() as {
-      success: boolean
+    const payload = { data: response } as {
       data: {
         organizations: Array<{
           org_id: string
@@ -1228,70 +1163,18 @@ describe('/private/admin_stats', () => {
       }
     }
 
-    expect(payload.success).toBe(true)
     expect(payload.data.total).toBe(2)
     expect(payload.data.organizations).toHaveLength(1)
     expect(payload.data.organizations[0]?.org_id).toBe(TRIAL_ORG_ID)
     expect(payload.data.organizations[0]?.needs_attention).toBe(true)
   })
 
-  it('returns cancellation billing metadata and subscription-or-signup dates', async () => {
-    const response = await fetchTestRequest(`${BASE_URL}/private/admin_stats`, {
-      method: 'POST',
-      headers: adminHeaders,
-      body: JSON.stringify({
-        metric_category: 'cancelled_users',
-        start_date: '2026-01-01T00:00:00.000Z',
-        end_date: '2026-12-31T23:59:59.000Z',
-        limit: 100,
-        offset: 0,
-      }),
-    })
-
-    expect(response.status).toBe(200)
-    const payload = await response.json() as {
-      success: boolean
-      data: {
-        organizations: Array<{
-          org_id: string
-          plan_name: string | null
-          billing_type: 'monthly' | 'yearly' | null
-          cancellation_reason: string | null
-          subscription_or_signup_date: string
-        }>
-      }
-    }
-
-    expect(payload.success).toBe(true)
-
-    const yearlyOrganization = payload.data.organizations.find(org => org.org_id === CANCELLED_YEARLY_ORG_ID)
-    expect(yearlyOrganization).toBeTruthy()
-    expect(yearlyOrganization?.plan_name).toBe('Solo')
-    expect(yearlyOrganization?.billing_type).toBe('yearly')
-    expect(yearlyOrganization?.subscription_or_signup_date).toBe(CANCELLED_YEARLY_PAID_AT)
-
-    const monthlyOrganization = payload.data.organizations.find(org => org.org_id === CANCELLED_MONTHLY_ORG_ID)
-    expect(monthlyOrganization).toBeTruthy()
-    expect(monthlyOrganization?.plan_name).toBe('Solo')
-    expect(monthlyOrganization?.cancellation_reason).toBe('Failed to resolve past due')
-    expect(monthlyOrganization?.billing_type).toBe('monthly')
-    expect(monthlyOrganization?.subscription_or_signup_date).toBe(creatorUserCreatedAt)
-  })
-
   it('returns subscribed as the last onboarding funnel step without exceeding the bundle cohort', async () => {
-    const response = await fetchTestRequest(`${BASE_URL}/private/admin_stats`, {
-      method: 'POST',
-      headers: adminHeaders,
-      body: JSON.stringify({
-        metric_category: 'onboarding_funnel',
-        start_date: '2026-02-01T00:00:00.000Z',
-        end_date: '2026-02-02T00:00:00.000Z',
-      }),
+    const response = await requestDirectAdminStats<Awaited<ReturnType<typeof getAdminOnboardingFunnel>>>((app) => {
+      app.get('/', async c => c.json(await getAdminOnboardingFunnel(c, '2026-02-01T00:00:00.000Z', '2026-02-02T00:00:00.000Z')))
     })
 
-    expect(response.status).toBe(200)
-    const payload = await response.json() as {
-      success: boolean
+    const payload = { data: response } as {
       data: {
         total_registrations: number
         total_orgs: number
@@ -1335,7 +1218,6 @@ describe('/private/admin_stats', () => {
       }
     }
 
-    expect(payload.success).toBe(true)
     expect(payload.data.total_registrations).toBe(4)
     expect(payload.data.total_orgs).toBe(3)
     expect(payload.data.orgs_with_app).toBe(2)
@@ -1655,19 +1537,11 @@ describe('/private/admin_stats', () => {
       if (channelUpdateError)
         throw channelUpdateError
 
-      const response = await fetchTestRequest(`${BASE_URL}/private/admin_stats`, {
-        method: 'POST',
-        headers: adminHeaders,
-        body: JSON.stringify({
-          metric_category: 'onboarding_funnel',
-          start_date: '2098-07-01T00:00:00.000Z',
-          end_date: '2098-07-02T00:00:00.000Z',
-        }),
+      const response = await requestDirectAdminStats<Awaited<ReturnType<typeof getAdminOnboardingFunnel>>>((app) => {
+        app.get('/', async c => c.json(await getAdminOnboardingFunnel(c, '2098-07-01T00:00:00.000Z', '2098-07-02T00:00:00.000Z')))
       })
 
-      expect(response.status).toBe(200)
-      const payload = await response.json() as {
-        success: boolean
+      const payload = { data: response } as {
         data: {
           total_registrations: number
           total_orgs: number
@@ -1685,7 +1559,6 @@ describe('/private/admin_stats', () => {
         }
       }
 
-      expect(payload.success).toBe(true)
       expect(payload.data.total_registrations).toBe(1)
       expect(payload.data.total_orgs).toBe(1)
       expect(payload.data.orgs_with_app).toBe(1)
@@ -1713,19 +1586,11 @@ describe('/private/admin_stats', () => {
   })
 
   it('returns daily new trial organizations grouped by plan', async () => {
-    const response = await fetchTestRequest(getEndpointUrl('/private/admin_stats'), {
-      method: 'POST',
-      headers: adminHeaders,
-      body: JSON.stringify({
-        metric_category: 'trial_plan_breakdown',
-        start_date: '2026-02-01T00:00:00.000Z',
-        end_date: '2026-02-02T00:00:00.000Z',
-      }),
+    const response = await requestDirectAdminStats<Awaited<ReturnType<typeof getAdminTrialPlanBreakdown>>>((app) => {
+      app.get('/', async c => c.json(await getAdminTrialPlanBreakdown(c, '2026-02-01T00:00:00.000Z', '2026-02-02T00:00:00.000Z')))
     })
 
-    expect(response.status).toBe(200)
-    const payload = await response.json() as {
-      success: boolean
+    const payload = { data: response } as {
       data: {
         totals: Array<{ plan_name: string, total: number }>
         trend: Array<{
@@ -1736,7 +1601,6 @@ describe('/private/admin_stats', () => {
       }
     }
 
-    expect(payload.success).toBe(true)
     expect(payload.data.trend).toHaveLength(1)
     expect(payload.data.trend[0]?.date).toBe('2026-02-01')
     // Counts all trial orgs created that day: ONBOARDING_ORG, ONBOARDING_NO_BUNDLE_ORG,

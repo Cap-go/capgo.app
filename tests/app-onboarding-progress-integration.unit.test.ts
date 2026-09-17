@@ -471,7 +471,6 @@ describe('app onboarding progress analytics integration', () => {
     expect(writer).toContain(`if (current?.status === 'completed' && status !== 'completed')`)
     expect(writer).toContain('await replaceUserOnboardingIfUnchanged(')
     expectSourceOrder(writer, [
-      'const onboardingWithPreferences = preserveAdminDashboardMinimize(',
       'const onboarding = mergeUserOnboardingProgress(',
       'await replaceUserOnboardingIfUnchanged(',
     ])

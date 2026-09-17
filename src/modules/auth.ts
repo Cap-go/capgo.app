@@ -194,7 +194,6 @@ async function guard(
   const inviteOrgId = typeof to.query.invite_org === 'string' && to.query.invite_org.length > 0
     ? to.query.invite_org
     : null
-  const isAdminRoute = to.path.startsWith('/admin')
   const isCliLoginRoute = isCliLoginPath(to.path)
   const organizationFetchOptions = { loadImages: !isCliLoginRoute }
 
@@ -355,27 +354,13 @@ async function guard(
       })
     }
 
-    if (organizationsLoaded && isAdminRoute) {
-      try {
-        main.isAdmin = await isPlatformAdmin()
-        if (main.isAdmin)
-          setWebsitePaidUserCookie(true)
-      }
-      catch (error) {
-        console.error('Failed to resolve platform admin status:', error)
-        main.isAdmin = false
-      }
-    }
-
     if (organizationsLoaded && !organizationStore.hasOrganizations && shouldRedirectToOrgOnboarding()) {
-      if (!isAdminRoute || !main.isAdmin) {
-        return next({
-          path: '/onboarding/app',
-          query: {
-            to: to.fullPath,
-          },
-        })
-      }
+      return next({
+        path: '/onboarding/app',
+        query: {
+          to: to.fullPath,
+        },
+      })
     }
 
     const onboardingRedirect = await getPendingOnboardingRedirect(organizationsLoaded)
@@ -453,26 +438,6 @@ async function guard(
     const onboardingRedirect = await getPendingOnboardingRedirect(organizationsLoaded)
     if (onboardingRedirect)
       return next(onboardingRedirect)
-
-    // Check if user is trying to access admin routes
-    if (isAdminRoute) {
-      try {
-        // Re-check via the single approved frontend path for admin-rights.
-        main.isAdmin = await isPlatformAdmin()
-        if (main.isAdmin)
-          setWebsitePaidUserCookie(true)
-      }
-      catch (error) {
-        console.error('Failed to resolve platform admin status:', error)
-        main.isAdmin = false
-      }
-
-      // Redirect non-admin users to dashboard
-      if (!main.isAdmin) {
-        console.warn('Non-admin user attempted to access admin route:', to.path)
-        return next('/dashboard')
-      }
-    }
 
     hideLoader()
     next()

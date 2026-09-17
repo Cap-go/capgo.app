@@ -1,13 +1,11 @@
 import { randomUUID } from 'node:crypto'
+import { Hono } from 'hono/tiny'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { getAdminFamousApps } from '../supabase/functions/_backend/utils/pg.ts'
 import {
-  BASE_URL,
   executeSQL,
-  fetchTestRequest,
-  getAuthHeadersForCredentials,
   POSTGRES_URL,
-  USER_ADMIN_EMAIL,
   USER_ID,
   withAuthenticatedUser,
 } from './test-utils.ts'
@@ -20,15 +18,10 @@ const capgoDemoAppId = `app.capgo.famehide.${fixtureId.slice(0, 8)}`
 const leakedAppId = `com.test.fame.leaked.${fixtureId.slice(0, 8)}`
 const customerId = `cus_fame_${fixtureId.replaceAll('-', '').slice(0, 20)}`
 
-const INSIGHTS_START = '2026-04-01T00:00:00.000Z'
-const INSIGHTS_END = '2026-04-30T23:59:59.000Z'
-
-describe('admin famous apps', () => {
-  let adminHeaders: Record<string, string>
+describe('app fame reporting and scheduling', () => {
   let pool: Pool
 
   beforeAll(async () => {
-    adminHeaders = await getAuthHeadersForCredentials(USER_ADMIN_EMAIL, 'adminadmin')
     pool = new Pool({ connectionString: POSTGRES_URL })
 
     await executeSQL(`
@@ -66,41 +59,32 @@ describe('admin famous apps', () => {
   })
 
   it('returns AI-scored apps ranked by fame, not device count', async () => {
-    const response = await fetchTestRequest(`${BASE_URL}/private/admin_stats`, {
-      method: 'POST',
-      headers: adminHeaders,
-      body: JSON.stringify({
-        metric_category: 'famous_apps',
-        start_date: INSIGHTS_START,
-        end_date: INSIGHTS_END,
-        search: fixtureId.slice(0, 8),
-        min_score: 0,
-        limit: 50,
-        offset: 0,
-      }),
-    })
+    const app = new Hono<{ Bindings: { SUPABASE_DB_URL: string } }>()
+    app.get('/', async c => c.json(await getAdminFamousApps(c, {
+      search: fixtureId.slice(0, 8),
+      min_score: 0,
+      limit: 50,
+      offset: 0,
+    })))
+    const response = await app.request('http://local/', undefined, { SUPABASE_DB_URL: POSTGRES_URL })
 
     expect(response.status).toBe(200)
-    const payload = await response.json() as {
-      success: boolean
-      data: {
-        apps: Array<{ app_id: string, fame_score: number, tier: string, known_as: string | null, icon_url: string | null }>
-        iconic_count: number
-        famous_count: number
-        notable_count: number
-      }
+    const data = await response.json() as {
+      apps: Array<{ app_id: string, fame_score: number, tier: string, known_as: string | null, icon_url: string | null }>
+      iconic_count: number
+      famous_count: number
+      notable_count: number
     }
 
-    expect(payload.success).toBe(true)
-    const famous = payload.data.apps.find(app => app.app_id === famousAppId)
-    const niche = payload.data.apps.find(app => app.app_id === nicheAppId)
+    const famous = data.apps.find(app => app.app_id === famousAppId)
+    const niche = data.apps.find(app => app.app_id === nicheAppId)
     expect(famous?.fame_score).toBe(94)
     expect(famous?.tier).toBe('iconic')
     expect(famous?.known_as).toBe('National Bank')
     expect(niche?.fame_score).toBe(38)
 
-    const famousIndex = payload.data.apps.findIndex(app => app.app_id === famousAppId)
-    const nicheIndex = payload.data.apps.findIndex(app => app.app_id === nicheAppId)
+    const famousIndex = data.apps.findIndex(app => app.app_id === famousAppId)
+    const nicheIndex = data.apps.findIndex(app => app.app_id === nicheAppId)
     expect(famousIndex).toBeGreaterThanOrEqual(0)
     expect(nicheIndex).toBeGreaterThan(famousIndex)
     expect(famous?.icon_url).toBe('https://example.com/bank.png')
@@ -108,48 +92,38 @@ describe('admin famous apps', () => {
   })
 
   it('filters by minimum fame score', async () => {
-    const response = await fetchTestRequest(`${BASE_URL}/private/admin_stats`, {
-      method: 'POST',
-      headers: adminHeaders,
-      body: JSON.stringify({
-        metric_category: 'famous_apps',
-        start_date: INSIGHTS_START,
-        end_date: INSIGHTS_END,
-        min_score: 80,
-        search: famousAppId,
-        limit: 50,
-        offset: 0,
-      }),
-    })
+    const app = new Hono<{ Bindings: { SUPABASE_DB_URL: string } }>()
+    app.get('/', async c => c.json(await getAdminFamousApps(c, {
+      min_score: 80,
+      search: famousAppId,
+      limit: 50,
+      offset: 0,
+    })))
+    const response = await app.request('http://local/', undefined, { SUPABASE_DB_URL: POSTGRES_URL })
 
     expect(response.status).toBe(200)
-    const payload = await response.json() as {
-      data: { apps: Array<{ app_id: string }> }
+    const data = await response.json() as {
+      apps: Array<{ app_id: string }>
     }
-    expect(payload.data.apps.some(app => app.app_id === famousAppId)).toBe(true)
-    expect(payload.data.apps.some(app => app.app_id === nicheAppId)).toBe(false)
+    expect(data.apps.some(app => app.app_id === famousAppId)).toBe(true)
+    expect(data.apps.some(app => app.app_id === nicheAppId)).toBe(false)
   })
 
   it('hides Capgo plugin demos and leaked rubric scores from the famous list', async () => {
-    const response = await fetchTestRequest(`${BASE_URL}/private/admin_stats`, {
-      method: 'POST',
-      headers: adminHeaders,
-      body: JSON.stringify({
-        metric_category: 'famous_apps',
-        start_date: INSIGHTS_START,
-        end_date: INSIGHTS_END,
-        min_score: 80,
-        search: fixtureId.slice(0, 8),
-        limit: 50,
-        offset: 0,
-      }),
-    })
+    const app = new Hono<{ Bindings: { SUPABASE_DB_URL: string } }>()
+    app.get('/', async c => c.json(await getAdminFamousApps(c, {
+      min_score: 80,
+      search: fixtureId.slice(0, 8),
+      limit: 50,
+      offset: 0,
+    })))
+    const response = await app.request('http://local/', undefined, { SUPABASE_DB_URL: POSTGRES_URL })
 
     expect(response.status).toBe(200)
-    const payload = await response.json() as {
-      data: { apps: Array<{ app_id: string }> }
+    const data = await response.json() as {
+      apps: Array<{ app_id: string }>
     }
-    const appIds = payload.data.apps.map(app => app.app_id)
+    const appIds = data.apps.map(app => app.app_id)
     expect(appIds).toContain(famousAppId)
     expect(appIds).not.toContain(capgoDemoAppId)
     expect(appIds).not.toContain(leakedAppId)

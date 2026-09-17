@@ -41,7 +41,6 @@ import IconStore from '~icons/lucide/store'
 import IconTerminal from '~icons/lucide/terminal'
 import IconTrash from '~icons/lucide/trash-2'
 import IconUsers from '~icons/lucide/users-round'
-import { preserveAdminDashboardMinimize } from '~/services/adminDashboardPreferences'
 import { createDefaultApiKey, findUsablePlainApiKey, shareInFlightApiKeyLoad } from '~/services/apikeys'
 import {
   parseAppOnboarding,
@@ -816,13 +815,8 @@ async function writeOnboardingProgress(
       if (current?.status === 'completed' && status !== 'completed')
         return 'skipped'
 
-      const onboardingWithPreferences = preserveAdminDashboardMinimize(
-        persistableProgress as unknown as Json,
-        currentOnboarding,
-        main.isAdmin,
-      )
       const onboarding = mergeUserOnboardingProgress(
-        onboardingWithPreferences,
+        persistableProgress as unknown as Json,
         currentOnboarding,
       )
       const { data, error } = await replaceUserOnboardingIfUnchanged(

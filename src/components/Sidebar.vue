@@ -8,7 +8,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconDoc from '~icons/gg/loadbar-doc'
 import IconChart from '~icons/heroicons/chart-bar'
-import IconShield from '~icons/heroicons/shield-check'
 import IconDiscord from '~icons/ic/round-discord'
 import IconBoxes from '~icons/lucide/boxes'
 import IconFlask from '~icons/lucide/flask-conical'
@@ -192,7 +191,7 @@ async function openTab(tab: Tab) {
   emit('closeSidebar')
 }
 
-// Computed tabs list that includes admin link if user is admin
+// Computed console navigation tabs
 const tabs = computed<Tab[]>(() => {
   const baseTabs: Tab[] = [
     {
@@ -260,15 +259,6 @@ const tabs = computed<Tab[]>(() => {
         ]
       : []),
   ]
-
-  // Add admin dashboard link if user is admin
-  if (main.isAdmin) {
-    baseTabs.splice(2, 0, {
-      label: 'admin-dashboard',
-      icon: IconShield,
-      key: '/admin/dashboard',
-    })
-  }
 
   if (main.isAdmin && !spoofed.value) {
     baseTabs.push({
