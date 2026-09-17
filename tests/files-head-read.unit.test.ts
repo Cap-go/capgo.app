@@ -49,7 +49,7 @@ vi.mock('../supabase/functions/_backend/utils/stats.ts', () => ({
 function createR2Object(size: number, range?: R2Range): R2ObjectBody {
   return {
     body: new Response('bundle bytes'.repeat(Math.ceil(size / 12))).body,
-    checksums: { sha256: new Uint8Array(32) },
+    checksums: {},
     customMetadata: {},
     etag: 'etag',
     httpEtag: '"etag"',
@@ -62,12 +62,12 @@ function createR2Object(size: number, range?: R2Range): R2ObjectBody {
     writeHttpMetadata(headers: Headers) {
       headers.set('content-type', 'application/zip')
     },
-  } as R2ObjectBody
+  } as unknown as R2ObjectBody
 }
 
 function createR2HeadObject(size: number): R2Object {
   return {
-    checksums: { sha256: new Uint8Array(32) },
+    checksums: {},
     customMetadata: {},
     etag: 'etag',
     httpEtag: '"etag"',
@@ -79,7 +79,7 @@ function createR2HeadObject(size: number): R2Object {
     writeHttpMetadata(headers: Headers) {
       headers.set('content-type', 'application/zip')
     },
-  } as R2Object
+  } as unknown as R2Object
 }
 
 async function createFilesApp(routePrefix = '/files') {
