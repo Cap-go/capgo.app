@@ -758,7 +758,7 @@ function buildAutoPauseChanges() {
     return null
   const failure = parseOptionalInteger(draft.failureRateBps, 0, 10000)
   const window = parseRequiredInteger(draft.windowMinutes, 1, 10080)
-  const confidence = Number(draft.confidence.trim())
+  const confidence = Number(Number(draft.confidence.trim()).toFixed(4))
   const minAttempts = parseOptionalInteger(draft.minAttempts, 0, Number.MAX_SAFE_INTEGER)
   const minFailures = parseOptionalInteger(draft.minFailures, 0, Number.MAX_SAFE_INTEGER)
   const cooldown = parseRequiredInteger(draft.cooldownMinutes, 0, 10080)
@@ -772,7 +772,7 @@ function buildAutoPauseChanges() {
     auto_pause_failure_rate_bps: failure.value,
     auto_pause_action: draft.action,
     auto_pause_window_minutes: window.value,
-    auto_pause_confidence: Number(confidence.toFixed(4)),
+    auto_pause_confidence: confidence,
     auto_pause_min_attempts: minAttempts.value,
     auto_pause_min_failures: minFailures.value,
     auto_pause_cooldown_minutes: cooldown.value,
