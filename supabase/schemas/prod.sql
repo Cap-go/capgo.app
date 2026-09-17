@@ -1678,6 +1678,41 @@ $$;
 ALTER FUNCTION "public"."assert_request_principal_rank"("p_org_id" "uuid", "p_target_priority" integer, "p_mutation" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."assign_app_onboarding_todo_list_version"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $_$
+DECLARE
+  v_creator uuid := auth.uid();
+  v_setup jsonb;
+BEGIN
+  IF v_creator IS NULL AND (NEW.onboarding ->> 'created_by_user_id')
+    ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  THEN
+    v_creator := (NEW.onboarding ->> 'created_by_user_id')::uuid;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.users AS u
+    JOIN public.orgs AS o ON o.id = NEW.owner_org
+    WHERE u.id = v_creator AND o.created_by = u.id
+      AND u.onboarding ->> 'intent' = 'ota'
+      AND u.onboarding #>> '{abtests,ota_todo_list_v3,branch}' = 'A'
+  ) THEN
+    v_setup := CASE WHEN jsonb_typeof(NEW.onboarding -> 'setup') = 'object'
+      THEN NEW.onboarding -> 'setup' ELSE '{}'::jsonb END;
+    NEW.onboarding := COALESCE(NEW.onboarding, '{}'::jsonb)
+      || jsonb_build_object('created_by_user_id', v_creator::text);
+    NEW.onboarding := jsonb_set(COALESCE(NEW.onboarding, '{}'::jsonb), '{setup}',
+      v_setup || jsonb_build_object('todo_list_version', 3), true);
+  END IF;
+  RETURN NEW;
+END;
+$_$;
+
+
+ALTER FUNCTION "public"."assign_app_onboarding_todo_list_version"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."audit_log_trigger"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -6987,10 +7022,12 @@ COMMENT ON COLUMN "public"."apps"."onboarding_completed_at" IS 'Timestamp when t
 
 COMMENT ON COLUMN "public"."apps"."onboarding" IS 'Feature ledger plus setup source.
 Shape: {"refreshed_at": iso, "features": {...}, "setup": {
-"todo_list_version": positive integer (default 1),
+"todo_list_version": positive integer (default 2),
 "source": manual|cli|mcp|ai,
 "outcome": in_progress|completed|skipped|switched_to_manual,
 "steps": {step_id: {"status": done|skipped, "at": iso}}}}.
+Version 1 starts with add_app; version 2 starts with login_cli_mcp.
+Version 3 has seven goals and is assigned at app creation by the OTA experiment.
 Manual is the default when setup.source is missing.';
 
 
@@ -12103,7 +12140,7 @@ CREATE OR REPLACE FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "j
 DECLARE
   v_current jsonb := COALESCE(p_existing, '{}'::jsonb);
   v_setup jsonb;
-  v_todo_list_version bigint := 1;
+  v_todo_list_version bigint := 2;
   v_source text;
   v_next_source text;
   v_outcome text;
@@ -12116,20 +12153,7 @@ DECLARE
   v_now text;
   v_all_present boolean := true;
   v_any_skipped boolean := false;
-  v_step_ids text[] := ARRAY[
-    'add_app',
-    'add_channel',
-    'add_updater',
-    'add_code',
-    'add_encryption',
-    'select_platform',
-    'build_project',
-    'run_device',
-    'add_code_change',
-    'upload_bundle',
-    'test_update',
-    'completion'
-  ];
+  v_step_ids text[];
   v_source_rank integer;
   v_next_rank integer;
 BEGIN
@@ -12151,6 +12175,37 @@ BEGIN
   THEN
     v_todo_list_version := (v_setup ->> 'todo_list_version')::bigint;
   END IF;
+
+  v_step_ids := CASE WHEN v_todo_list_version = 1 THEN ARRAY[
+    'add_app',
+    'add_channel',
+    'add_updater',
+    'add_code',
+    'add_encryption',
+    'select_platform',
+    'build_project',
+    'run_device',
+    'add_code_change',
+    'upload_bundle',
+    'test_update',
+    'completion'
+  ] WHEN v_todo_list_version = 3 THEN ARRAY[
+    'login_cli_mcp', 'add_channel', 'add_updater', 'add_code',
+    'run_device', 'upload_bundle', 'test_update'
+  ] ELSE ARRAY[
+    'login_cli_mcp',
+    'add_channel',
+    'add_updater',
+    'add_code',
+    'add_encryption',
+    'select_platform',
+    'build_project',
+    'run_device',
+    'add_code_change',
+    'upload_bundle',
+    'test_update',
+    'completion'
+  ] END;
 
   v_source := CASE v_setup ->> 'source'
     WHEN 'cli' THEN 'cli'
@@ -12221,8 +12276,7 @@ BEGIN
   END IF;
 
   FOREACH v_step_id IN ARRAY v_step_ids LOOP
-    -- jsonb -> missing key ->> 'status' is NULL. NULL NOT IN (...) is unknown, not true,
-    -- so treat empty status as "step not reported yet".
+    -- jsonb -> missing key ->> 'status' is NULL. Treat it as not reported yet.
     IF COALESCE(v_steps -> v_step_id ->> 'status', '') NOT IN ('done', 'skipped') THEN
       v_all_present := false;
     ELSIF v_steps -> v_step_id ->> 'status' = 'skipped' THEN
@@ -12239,7 +12293,7 @@ BEGIN
   END;
   IF v_all_present THEN
     v_outcome := CASE WHEN v_any_skipped THEN 'skipped' ELSE 'completed' END;
-  ELSIF v_patch_outcome IN ('completed', 'skipped') THEN
+  ELSIF v_patch_outcome = 'skipped' OR (v_patch_outcome = 'completed' AND v_todo_list_version <> 3) THEN
     v_outcome := v_patch_outcome;
   ELSIF v_patch_outcome = 'switched_to_manual' OR v_outcome = 'switched_to_manual' THEN
     v_outcome := 'switched_to_manual';
@@ -23973,6 +24027,10 @@ CREATE INDEX "idx_apps_default_upload_channel" ON "public"."apps" USING "btree" 
 
 
 
+CREATE INDEX "idx_apps_onboarding_login_creator" ON "public"."apps" USING "btree" ((("onboarding" ->> 'created_by_user_id'::"text"))) WHERE (("onboarding" #>> '{setup,todo_list_version}'::"text"[]) = ANY (ARRAY['2'::"text", '3'::"text"]));
+
+
+
 CREATE INDEX "idx_apps_onboarding_ota_stage" ON "public"."apps" USING "btree" ((((("onboarding" -> 'features'::"text") -> 'ota'::"text") ->> 'stage'::"text")));
 
 
@@ -24886,6 +24944,10 @@ CREATE OR REPLACE TRIGGER "update_webhooks_updated_at" BEFORE UPDATE ON "public"
 
 
 CREATE OR REPLACE TRIGGER "validate_channel_preview_role_binding" BEFORE INSERT OR UPDATE OF "role_id", "scope_type", "principal_type", "principal_id", "org_id", "app_id", "channel_id", "parent_binding_id", "expires_at", "is_direct" ON "public"."role_bindings" FOR EACH ROW EXECUTE FUNCTION "public"."validate_channel_preview_role_binding"();
+
+
+
+CREATE OR REPLACE TRIGGER "zz_assign_app_onboarding_todo_list_version" BEFORE INSERT ON "public"."apps" FOR EACH ROW EXECUTE FUNCTION "public"."assign_app_onboarding_todo_list_version"();
 
 
 
@@ -26900,6 +26962,11 @@ GRANT ALL ON FUNCTION "public"."assert_preview_bundle_owner"("p_owner_org" "uuid
 
 REVOKE ALL ON FUNCTION "public"."assert_request_principal_rank"("p_org_id" "uuid", "p_target_priority" integer, "p_mutation" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."assert_request_principal_rank"("p_org_id" "uuid", "p_target_priority" integer, "p_mutation" "text") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."assign_app_onboarding_todo_list_version"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."assign_app_onboarding_todo_list_version"() TO "service_role";
 
 
 
