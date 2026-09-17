@@ -4,7 +4,7 @@ import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
-import { parseDeviceDataCollection } from '~/services/deviceDataCollection'
+import { parseAppRowDeviceDataCollection } from '~/services/deviceDataCollection'
 import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 
@@ -16,7 +16,7 @@ const isLoading = ref(false)
 const supabase = useSupabase()
 const displayStore = useDisplayStore()
 const app = ref<Database['public']['Tables']['apps']['Row']>()
-const deviceDataCollection = computed(() => parseDeviceDataCollection(app.value?.device_data_collection))
+const deviceDataCollection = computed(() => parseAppRowDeviceDataCollection(app.value as unknown))
 
 async function loadAppInfo() {
   try {

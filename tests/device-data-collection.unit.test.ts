@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseDeviceDataCollection as parseFrontendCollection } from '../src/services/deviceDataCollection'
+import { parseAppRowDeviceDataCollection, parseDeviceDataCollection as parseFrontendCollection } from '../src/services/deviceDataCollection'
 import {
   applyDeviceDataCollectionToDevice,
   applyDeviceDataCollectionToLogDimensions,
@@ -31,6 +31,11 @@ describe('device data collection', () => {
     expect(parseDeviceDataCollection(undefined)).toEqual(DEFAULT_DEVICE_DATA_COLLECTION)
     expect(parseDeviceDataCollection('nope')).toEqual(DEFAULT_DEVICE_DATA_COLLECTION)
     expect(parseFrontendCollection({})).toEqual(DEFAULT_DEVICE_DATA_COLLECTION)
+    expect(parseAppRowDeviceDataCollection({ device_data_collection: { country: false } })).toEqual({
+      ...DEFAULT_DEVICE_DATA_COLLECTION,
+      country: false,
+    })
+    expect(parseAppRowDeviceDataCollection(null)).toEqual(DEFAULT_DEVICE_DATA_COLLECTION)
     expect(Object.values(DEFAULT_DEVICE_DATA_COLLECTION).every(Boolean)).toBe(true)
   })
 

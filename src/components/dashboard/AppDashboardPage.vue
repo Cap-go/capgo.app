@@ -17,7 +17,7 @@ import ReleaseBanner from '~/components/dashboard/ReleaseBanner.vue'
 import ReleaseLivePanel from '~/components/dashboard/ReleaseLivePanel.vue'
 import UpdateStatsCard from '~/components/dashboard/UpdateStatsCard.vue'
 import { fetchAppChartRefreshState } from '~/services/dashboardRefresh'
-import { parseDeviceDataCollection } from '~/services/deviceDataCollection'
+import { parseAppRowDeviceDataCollection } from '~/services/deviceDataCollection'
 import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDisplayStore } from '~/stores/display'
@@ -54,7 +54,7 @@ const nativeUsage = ref<NativeUsageState>({ data: null, isLoading: true })
 const nativeDevicesStats = useTemplateRef<{ reload: () => Promise<void> }>('nativeDevicesStats')
 let loadGeneration = 0
 
-const deviceDataCollection = computed(() => parseDeviceDataCollection(app.value?.device_data_collection))
+const deviceDataCollection = computed(() => parseAppRowDeviceDataCollection(app.value as unknown))
 
 const lacksSecurityAccess = computed(() => {
   const org = organizationStore.currentOrganization
