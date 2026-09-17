@@ -151,6 +151,29 @@ describe('[POST] /private/events operations', () => {
     expect(data.status).toBe('ok')
   })
 
+  it.concurrent('tracks v2 Direct Update Without Delta events for Bento forwarding', async () => {
+    const response = await fetch(`${BASE_URL}/private/events`, {
+      method: 'POST',
+      headers: {
+        capgkey: headers.Authorization,
+      },
+      body: JSON.stringify({
+        channel: 'app-error',
+        event: 'Direct Update Without Delta',
+        org_id: ORG_ID,
+        tracking_version: 2,
+        tags: {
+          'app-id': APPNAME_EVENT,
+          'external': false,
+        },
+      }),
+    })
+
+    const data = await response.json() as { status: string }
+    expect(response.status).toBe(200)
+    expect(data.status).toBe('ok')
+  })
+
   it.concurrent('tracks v2 onboarding-step-done events (resolves org from verified org, not user_id)', async () => {
     const response = await fetch(`${BASE_URL}/private/events`, {
       method: 'POST',
