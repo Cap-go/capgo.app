@@ -2,6 +2,7 @@ import type { Command } from 'commander'
 import process from 'node:process'
 import { log } from '@clack/prompts'
 import { isCI } from 'ci-info'
+import { flushAnalytics, trackEvent } from '../analytics/track'
 import { getPendingOnboardingChecks } from './background-workers'
 
 const gracePeriodMs = 5_000
@@ -36,8 +37,23 @@ export async function waitForOnboardingChecks(command: Pick<Command, 'optsWithGl
   process.prependOnceListener('SIGINT', onInterrupt)
   try {
     log.info('Waiting for background checks to finish (up to 5 seconds). Press Ctrl-C to exit immediately.')
+    const checks = [...pendingChecks.values()]
+    const options = command.optsWithGlobals()
+    void trackEvent({
+      channel: 'cli-usage',
+      event: 'background_checks_wait_started',
+      apikey: typeof options.apikey === 'string' ? options.apikey : undefined,
+      appId: typeof options.appId === 'string' ? options.appId : undefined,
+      timestamp: new Date(),
+      nonPersonTags: {
+        command_path: commandPath,
+        pending_checks: checks.length,
+        grace_period_ms: gracePeriodMs,
+        scan_attempt_ids: checks.map(check => check.attemptId),
+      },
+    })
     await Promise.race([
-      Promise.allSettled([...pendingChecks.values()]),
+      Promise.allSettled([...checks.map(check => check.completion), flushAnalytics(gracePeriodMs)]),
       new Promise<void>((resolve) => {
         // This timer keeps the process alive while the workers remain unreferenced.
         timer = setTimeout(resolve, gracePeriodMs)
@@ -51,5 +67,7 @@ export async function waitForOnboardingChecks(command: Pick<Command, 'optsWithGl
     // A hanging request must not outlive the shared shutdown budget.
     for (const worker of pendingChecks.keys())
       void worker.terminate().catch(() => {})
+    // Delivery shares the worker budget; offline telemetry cannot extend shutdown.
+    await flushAnalytics(0)
   }
 }

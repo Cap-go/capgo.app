@@ -275,8 +275,10 @@ test.concurrent('packaged worker pairs scan events and sends only the add_code p
   const harness = await workerHarness()
   const { api, requests } = harness
   try {
-    await harness.run()
+    const parentAttempt = '11111111-1111-4111-8111-111111111111'
+    await harness.run({ attemptId: parentAttempt })
     const firstAttempt = scanEvents(requests, 'found', 'success')
+    assert.equal(firstAttempt, parentAttempt)
     assert.deepEqual(requests.map(request => request.body.event ?? request.method), ['scan_started', 'PUT', 'scan_ended'])
     const patch = requests.find(request => request.method === 'PUT')
     assert.deepEqual(patch.body, { onboarding: { steps: { add_code: { status: 'done' } } } })
