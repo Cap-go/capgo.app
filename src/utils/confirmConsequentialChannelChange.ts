@@ -38,8 +38,9 @@ export async function confirmConsequentialChannelChange(
           try {
             await options.onConfirm()
           }
-          finally {
+          catch (error) {
             confirmInFlight = false
+            throw error
           }
         },
       },

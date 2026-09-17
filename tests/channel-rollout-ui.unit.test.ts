@@ -26,6 +26,7 @@ const DialogHarness = defineComponent({
         ...(options.buttons ?? []).map(button =>
           h('button', {
             type: 'button',
+            disabled: button.disabled,
             onClick: () => dialogStore.closeDialog(button),
           }, button.text),
         ),
@@ -81,12 +82,13 @@ function createTestFlows(options: {
   channel: TestChannel
   saveChannelChange?: ReturnType<typeof vi.fn>
   saveChannelChanges?: ReturnType<typeof vi.fn>
+  askUpdateNotificationAfterBundleChange?: ReturnType<typeof vi.fn>
   canUpdate?: boolean
 }) {
   const dialogStore = useDialogV2Store()
   const saveChannelChange = options.saveChannelChange ?? vi.fn(async () => true)
   const saveChannelChanges = options.saveChannelChanges ?? vi.fn(async () => true)
-  const askUpdateNotificationAfterBundleChange = vi.fn(async () => {})
+  const askUpdateNotificationAfterBundleChange = options.askUpdateNotificationAfterBundleChange ?? vi.fn(async () => {})
   const openSelectRolloutVersion = vi.fn(async () => {})
   const closeUpdatePackageDropdown = vi.fn()
   const toast = { error: vi.fn(), info: vi.fn() }
@@ -111,6 +113,7 @@ function createTestFlows(options: {
     flows,
     saveChannelChange,
     saveChannelChanges,
+    askUpdateNotificationAfterBundleChange,
     toast,
     openSelectRolloutVersion,
     dismiss: (label: 'Cancel' | 'Confirm') => dismissDialog(options.container, label),
@@ -177,6 +180,53 @@ describe('channel information rollout and update package UX', () => {
     confirmButton.click()
     await dismissDialog(container, 'Confirm')
     expect(onConfirm).toHaveBeenCalledTimes(1)
+  })
+
+  it('promoteRollout second confirm after save does not unlink the stable bundle', async () => {
+    const { container, dialogStore, t } = mountDialogShell()
+    const channel: TestChannel = { rollout_version: 202 }
+    const writes: Record<string, unknown>[] = []
+    let releaseNotification: () => void = () => {}
+    const notificationGate = new Promise<void>((resolve) => {
+      releaseNotification = resolve
+    })
+    const saveChannelChanges = vi.fn(async (changes: Record<string, unknown>) => {
+      writes.push({ ...changes })
+      if (Object.prototype.hasOwnProperty.call(changes, 'rollout_version'))
+        channel.rollout_version = changes.rollout_version as number | null
+      return true
+    })
+    const { flows } = createTestFlows({
+      container,
+      t,
+      channel,
+      saveChannelChanges,
+      askUpdateNotificationAfterBundleChange: vi.fn(() => notificationGate),
+    })
+
+    const promote = flows.promoteRollout()
+    await nextTick()
+    findDialogButton(container, 'Confirm').click()
+    await vi.waitFor(() => expect(saveChannelChanges).toHaveBeenCalledTimes(1))
+    expect(writes[0]).toEqual(expect.objectContaining({ version: 202, rollout_version: null }))
+    expect(channel.rollout_version).toBeNull()
+    await nextTick()
+    expect(findDialogButton(container, 'Confirm').disabled).toBe(true)
+
+    findDialogButton(container, 'Confirm').click()
+    const enabledConfirm = dialogStore.dialogOptions.buttons?.find(button => button.role === 'primary')
+    expect(enabledConfirm).toBeDefined()
+    await dialogStore.closeDialog({
+      text: 'Confirm',
+      role: 'primary',
+      handler: enabledConfirm?.handler,
+    })
+    await dialogStore.closeDialog(enabledConfirm)
+
+    releaseNotification()
+    await promote
+    expect(saveChannelChanges).toHaveBeenCalledTimes(1)
+    expect(writes).toEqual([expect.objectContaining({ version: 202, rollout_version: null })])
   })
 
   it('onSelectUpdatePackage cancel skips save and confirm applies update_package', async () => {

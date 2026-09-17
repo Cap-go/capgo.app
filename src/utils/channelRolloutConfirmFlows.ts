@@ -174,6 +174,7 @@ export function createChannelRolloutConfirmFlows(deps: ChannelRolloutConfirmFlow
     if (!promotedVersionId)
       return
     const promotedTargetName = deps.rolloutTargetName()
+    let promoteWriteStarted = false
     await confirm({
       id: 'confirm-promote-rollout',
       title: deps.t('confirm-promote-rollout-title'),
@@ -181,16 +182,27 @@ export function createChannelRolloutConfirmFlows(deps: ChannelRolloutConfirmFlow
         target: promotedTargetName,
       }),
       onConfirm: async () => {
-        if (await deps.saveChannelChanges({
+        if (promoteWriteStarted)
+          return
+        const liveTarget = deps.getChannel()?.rollout_version
+        if (liveTarget != null && liveTarget !== promotedVersionId) {
+          deps.toast.error(deps.t('error-invalid-version'))
+          return
+        }
+        promoteWriteStarted = true
+        const saved = await deps.saveChannelChanges({
           version: promotedVersionId,
           rollout_version: null,
           rollout_enabled: false,
           rollout_percentage_bps: 0,
           rollout_paused_at: null,
           rollout_pause_reason: null,
-        })) {
-          await deps.askUpdateNotificationAfterBundleChange()
+        })
+        if (!saved) {
+          promoteWriteStarted = false
+          return
         }
+        await deps.askUpdateNotificationAfterBundleChange()
       },
     })
   }
