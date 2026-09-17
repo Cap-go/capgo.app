@@ -25,7 +25,7 @@ import { useAppDetailStore } from '~/stores/appDetail'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { createChannelRolloutConfirmFlows, isRolloutPercentageDraftChanged } from '~/utils/channelRolloutConfirmFlows'
-import { getUpdatePackageDescription as getUpdatePackageDescriptionCopy, getUpdatePackageLabel as getUpdatePackageLabelCopy } from '~/utils/channelUpdatePackageCopy'
+import { getUpdatePackageDescription as getUpdatePackageDescriptionCopy, getUpdatePackageInfoDescription as getUpdatePackageInfoDescriptionCopy, getUpdatePackageLabel as getUpdatePackageLabelCopy } from '~/utils/channelUpdatePackageCopy'
 
 interface Channel {
   version: Database['public']['Tables']['app_versions']['Row']
@@ -753,11 +753,11 @@ function closeUpdatePackageDropdown() {
   }
 }
 
-function openRolloutSettingsInfo() {
+function openChannelInfoDialog(id: string, title: string, description: string) {
   dialogStore.openDialog({
-    id: 'rollout-settings-info',
-    title: t('progressive-rollout'),
-    description: `${t('rollout-settings-help')}\n\n${t('rollout-percentage-help')}`,
+    id,
+    title,
+    description,
     size: 'lg',
     buttons: [
       {
@@ -766,6 +766,22 @@ function openRolloutSettingsInfo() {
       },
     ],
   })
+}
+
+function openRolloutSettingsInfo() {
+  openChannelInfoDialog(
+    'rollout-settings-info',
+    t('progressive-rollout'),
+    `${t('rollout-settings-help')}\n\n${t('rollout-percentage-help')}`,
+  )
+}
+
+function openUpdatePackageInfo() {
+  openChannelInfoDialog(
+    'update-package-info',
+    t('update-package'),
+    getUpdatePackageInfoDescriptionCopy(t, channel.value?.update_package),
+  )
 }
 
 let rolloutConfirmFlows!: ReturnType<typeof createChannelRolloutConfirmFlows>
@@ -1098,7 +1114,7 @@ async function copyCurlCommand() {
                         </h2>
                         <button
                           type="button"
-                          class="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                          class="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
                           data-test="rollout-settings-info"
                           :aria-label="t('rollout-settings-info')"
                           @click="openRolloutSettingsInfo()"
@@ -1430,42 +1446,39 @@ async function copyCurlCommand() {
               </div>
             </InfoRow>
             <InfoRow :label="t('update-package')">
-              <div class="flex w-full flex-col items-end gap-2">
-                <div class="flex items-center justify-end w-full gap-3">
-                  <details ref="updatePackageDropdown" class="d-dropdown d-dropdown-end">
-                    <summary class="d-btn d-btn-outline d-btn-sm">
-                      <span>{{ getUpdatePackageLabel(channel.update_package) }}</span>
-                      <IconDown class="w-4 h-4 ml-1 fill-current" />
-                    </summary>
-                    <ul class="w-80 max-h-96 overflow-y-auto p-2 bg-white shadow d-dropdown-content dark:bg-base-200 rounded-box z-1">
-                      <li
-                        v-for="option in updatePackageOptions"
-                        :key="option"
-                        class="block px-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600"
+              <div class="flex items-center justify-end w-full gap-2">
+                <details ref="updatePackageDropdown" class="d-dropdown d-dropdown-end">
+                  <summary class="d-btn d-btn-outline d-btn-sm">
+                    <span>{{ getUpdatePackageLabel(channel.update_package) }}</span>
+                    <IconDown class="w-4 h-4 ml-1 fill-current" />
+                  </summary>
+                  <ul class="w-80 max-h-96 overflow-y-auto p-2 bg-white shadow d-dropdown-content dark:bg-base-200 rounded-box z-50">
+                    <li
+                      v-for="option in updatePackageOptions"
+                      :key="option"
+                      class="block px-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600"
+                    >
+                      <button
+                        type="button"
+                        class="block w-full px-3 py-2 text-left text-gray-900 dark:text-white"
+                        :class="{ 'bg-sky-50 dark:bg-sky-950/40': channel.update_package === option }"
+                        @click="onSelectUpdatePackage(option)"
                       >
-                        <button
-                          type="button"
-                          class="block w-full px-3 py-2 text-left text-gray-900 dark:text-white"
-                          :class="{ 'bg-sky-50 dark:bg-sky-950/40': channel.update_package === option }"
-                          @click="onSelectUpdatePackage(option)"
-                        >
-                          <span class="block text-sm font-medium">{{ getUpdatePackageLabel(option) }}</span>
-                          <span class="mt-0.5 block text-xs leading-snug text-slate-500 dark:text-slate-400">{{ getUpdatePackageDescription(option) }}</span>
-                        </button>
-                      </li>
-                    </ul>
-                  </details>
-                  <div class="relative inline-flex group">
-                    <IconInformation class="w-4 h-4 transition-colors text-slate-400 cursor-help dark:text-slate-400 dark:group-hover:text-slate-200 group-hover:text-slate-600" />
-                    <div class="absolute right-0 w-72 px-3 py-2 mb-2 text-xs text-white transition-opacity duration-150 bg-gray-800 rounded-lg shadow-lg opacity-0 pointer-events-none bottom-full group-hover:opacity-100">
-                      {{ t('update-package-help') }}
-                      <div class="absolute w-2 h-2 rotate-45 bg-gray-800 -bottom-1 right-2" />
-                    </div>
-                  </div>
-                </div>
-                <p class="max-w-md text-right text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                  {{ getUpdatePackageDescription(channel.update_package ?? 'all') }}
-                </p>
+                        <span class="block text-sm font-medium">{{ getUpdatePackageLabel(option) }}</span>
+                        <span class="mt-0.5 block text-xs leading-snug text-slate-500 dark:text-slate-400">{{ getUpdatePackageDescription(option) }}</span>
+                      </button>
+                    </li>
+                  </ul>
+                </details>
+                <button
+                  type="button"
+                  class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                  data-test="update-package-info"
+                  :aria-label="t('update-package-info')"
+                  @click="openUpdatePackageInfo()"
+                >
+                  <IconInformation class="h-4 w-4" aria-hidden="true" />
+                </button>
               </div>
             </InfoRow>
             <InfoRow :label="t('allow-dev-build')">

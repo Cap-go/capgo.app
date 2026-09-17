@@ -3000,6 +3000,7 @@
   "update-package-delta-from-builtin-description": "While the device still matches the native store version, serve delta only. Other devices keep zip + delta.",
   "update-package-delta-required": "This channel requires a delta package, but the bundle has no delta files. Upload with delta enabled, or switch the channel to zip only or zip and delta.",
   "update-package-help": "Controls what each device downloads on update check. Delta requires manifests from uploads with --delta. Store-only modes apply only while the device still matches the native app store version.",
+  "update-package-info": "Download format information",
   "update-package-zip": "Full zip only",
   "update-package-zip-description": "Every device downloads the whole bundle zip, even when a delta manifest exists.",
   "update-package-zip-from-builtin": "Full zip from store build only",

@@ -1,6 +1,6 @@
-import { expect, test } from '../support/commands'
 import { mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { expect, test } from '../support/commands'
 import { dismissSupportPrompt } from '../support/dismissSupportPrompt'
 
 const screenshotDir = resolve(process.cwd(), 'docs/pr-screenshots/pr-3340')
@@ -30,8 +30,8 @@ test.describe('PR 3340 channel UX screenshots', () => {
     })
     await page.login('test@capgo.app', 'testtest')
     await page.goto('/app/com.demo.app/channel/1')
-    await expect(page.getByText('Download format', { exact: false }).first()).toBeVisible({ timeout: 30000 })
     await dismissOptionalPrompts(page)
+    await expect(page.getByText('Download format', { exact: false }).first()).toBeVisible({ timeout: 30000 })
 
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
     const percentInput = page.locator('#rollout-percentage-input')
@@ -66,6 +66,16 @@ test.describe('PR 3340 channel UX screenshots', () => {
       fullPage: false,
     })
 
+    const formatInfo = page.getByRole('button', { name: 'Download format information' })
+    await expect(formatInfo).toBeVisible()
+    await formatInfo.click()
+    await expect(page.locator('h3').filter({ hasText: 'Download format' })).toBeVisible()
+    await expect(page.getByText('Controls what each device downloads on update check')).toBeVisible()
+    await page.screenshot({
+      path: resolve(screenshotDir, '09-download-format-info-modal.png'),
+    })
+    await page.getByRole('button', { name: 'Close', exact: true }).click()
+
     const formatSummary = page.locator('summary').filter({ hasText: /Zip \+ delta|Full zip|Delta only/ }).first()
     await formatSummary.click()
     await expect(page.getByText('Delta only', { exact: true }).first()).toBeVisible()
@@ -91,8 +101,8 @@ test.describe('PR 3340 channel UX screenshots', () => {
     })
     await page.login('test@capgo.app', 'testtest')
     await page.goto('/app/com.demo.app/channel/1')
-    await expect(page.getByText('Progressive rollout', { exact: false }).first()).toBeVisible({ timeout: 30000 })
     await dismissOptionalPrompts(page)
+    await expect(page.getByText('Progressive rollout', { exact: false }).first()).toBeVisible({ timeout: 30000 })
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
     await expect(page.getByRole('button', { name: 'Set target', exact: true })).toBeVisible({ timeout: 60000 })
 
@@ -121,8 +131,8 @@ test.describe('PR 3340 channel UX screenshots', () => {
     })
     await page.login('test@capgo.app', 'testtest')
     await page.goto('/app/com.demo.app/channel/1')
-    await expect(page.getByText('Progressive rollout', { exact: false }).first()).toBeVisible({ timeout: 30000 })
     await dismissOptionalPrompts(page)
+    await expect(page.getByText('Progressive rollout', { exact: false }).first()).toBeVisible({ timeout: 30000 })
     const infoButton = page.getByRole('button', { name: 'Progressive rollout information' })
     await expect(infoButton).toBeVisible({ timeout: 60000 })
     await infoButton.scrollIntoViewIfNeeded()

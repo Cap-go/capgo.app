@@ -1,15 +1,15 @@
 // @vitest-environment happy-dom
 
 import type { App } from 'vue'
+import type { ChannelRolloutConfirmFlowsDeps } from '../src/utils/channelRolloutConfirmFlows'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, defineComponent, h, nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
 import en from '../messages/en.json'
 import { useDialogV2Store } from '../src/stores/dialogv2'
-import type { ChannelRolloutConfirmFlowsDeps } from '../src/utils/channelRolloutConfirmFlows'
 import { createChannelRolloutConfirmFlows, isRolloutPercentageDraftChanged } from '../src/utils/channelRolloutConfirmFlows'
-import { getUpdatePackageDescription } from '../src/utils/channelUpdatePackageCopy'
+import { getUpdatePackageDescription, getUpdatePackageInfoDescription } from '../src/utils/channelUpdatePackageCopy'
 import { confirmConsequentialChannelChange } from '../src/utils/confirmConsequentialChannelChange'
 
 const DialogHarness = defineComponent({
@@ -308,10 +308,30 @@ describe('channel information rollout and update package UX', () => {
     expect(dialogStore.showDialog).toBe(false)
   })
 
+  it('update package info dialog shows current format help without confirm actions', async () => {
+    const { container, dialogStore, t } = mountDialogShell()
+    dialogStore.openDialog({
+      id: 'update-package-info',
+      title: t('update-package'),
+      description: getUpdatePackageInfoDescription(t, 'all'),
+      buttons: [{ text: t('close'), role: 'primary' }],
+    })
+    await nextTick()
+    expect(container.textContent).toContain('Download format')
+    expect(container.textContent).toContain('Controls what each device downloads on update check')
+    expect(container.textContent).toContain('Zip + delta (default)')
+    expect(container.textContent).toContain('Devices that support delta get changed files only')
+    expect(container.textContent).not.toContain('Confirm')
+    findDialogButton(container, 'Close').click()
+    await nextTick()
+    expect(dialogStore.showDialog).toBe(false)
+  })
+
   it('update package descriptions stay documented for every option', () => {
     const { t } = mountDialogShell()
     for (const option of ['all', 'zip', 'delta', 'zip_from_builtin', 'delta_from_builtin'] as const) {
       expect(getUpdatePackageDescription(t, option).length).toBeGreaterThan(10)
+      expect(getUpdatePackageInfoDescription(t, option)).toContain(getUpdatePackageDescription(t, option))
     }
   })
 })

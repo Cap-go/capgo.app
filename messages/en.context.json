@@ -3454,6 +3454,7 @@
   "update-package-delta-from-builtin-description": "Used in Capgo web console areas: utils. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "update-package-delta-required": "Used in Capgo web console areas: services. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "update-package-help": "Used in Capgo web console areas: pages/app. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "update-package-info": "Used in Capgo web console areas: pages/app. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "update-package-zip": "Used in Capgo web console areas: components/tables, utils. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "update-package-zip-description": "Used in Capgo web console areas: utils. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "update-package-zip-from-builtin": "Used in Capgo web console areas: components/tables, utils. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

@@ -39,3 +39,11 @@ export function getUpdatePackageDescription(
       return t('update-package-all-description')
   }
 }
+
+export function getUpdatePackageInfoDescription(
+  t: Translate,
+  value?: ChannelUpdatePackage | null,
+) {
+  const current = value ?? 'all'
+  return `${t('update-package-help')}\n\n${getUpdatePackageLabel(t, current)}\n${getUpdatePackageDescription(t, current)}`
+}
