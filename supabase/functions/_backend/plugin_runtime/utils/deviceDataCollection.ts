@@ -46,7 +46,7 @@ export function applyDeviceDataCollectionToDevice<T extends Record<string, unkno
   device: T,
   collection: DeviceDataCollection,
 ): T {
-  const next = { ...device }
+  const next: Record<string, unknown> = { ...device }
   if (!collection.country)
     next.country_code = null
   if (!collection.platform)
@@ -63,7 +63,7 @@ export function applyDeviceDataCollectionToDevice<T extends Record<string, unkno
     next.is_prod = null
   if (!collection.install_source)
     next.install_source = null
-  return next
+  return next as T
 }
 
 export function applyDeviceDataCollectionToLogDimensions<T extends {
