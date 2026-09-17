@@ -1190,7 +1190,12 @@ function startApiKeyLoading() {
 }
 
 async function loadResumeApp() {
-  if (!resumeAppId.value || !currentOrg.value?.gid)
+  if (!resumeAppId.value)
+    return false
+  const appOrganization = organizationStore.getOrgByAppId(resumeAppId.value)
+  if (appOrganization && currentOrg.value?.gid !== appOrganization.gid)
+    organizationStore.setCurrentOrganization(appOrganization.gid)
+  if (!currentOrg.value?.gid)
     return false
 
   const { data, error } = await supabase

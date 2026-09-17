@@ -24,6 +24,8 @@ const writerMocks = vi.hoisted(() => ({
     },
   },
   organization: {
+    getOrgByAppId: vi.fn(),
+    setCurrentOrganization: vi.fn(),
     awaitInitialLoad: vi.fn(async () => undefined),
     currentOrganization: null as { gid: string, name: string, onboarding?: unknown } | null,
     organizations: [],
@@ -814,14 +816,16 @@ describe('app onboarding progress analytics integration', () => {
     expect(demoAction).not.toContain('completeStep')
     expect(demoAction).not.toContain('completeAndViewStep')
     expect(demoAction).toContain('allowOnboardingDashboardExploration')
-    expect(demoAction).toContain('router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}`)')
+    expect(demoAction).toContain('router.push(`/app/')
+    expect(demoAction).not.toContain('/getting-started')
 
     const dashboardExit = sourceBetween('function openDashboard()', 'onMounted(async () => {')
     expect(dashboardExit).toContain(`if (flowStep.value === 'install' || flowStep.value === 'setup')`)
     expect(dashboardExit).toContain('progressTracker?.completeStep(flowStep.value, {')
     expect(dashboardExit).toContain('appId: createdApp.value.app_id')
     expect(dashboardExit).toContain(`await persistOnboardingProgress('completed')`)
-    expect(dashboardExit).toContain('router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}`)')
+    expect(dashboardExit).toContain('router.push(`/app/')
+    expect(dashboardExit).not.toContain('/getting-started')
     expect(dashboardExit.indexOf('completeStep')).toBeLessThan(dashboardExit.indexOf('router.push'))
     expect(dashboardExit).toContain('window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))')
     expect(onboardingSource).toContain('progressTracker?.trackDashboardExplored(createdApp.value?.app_id)')

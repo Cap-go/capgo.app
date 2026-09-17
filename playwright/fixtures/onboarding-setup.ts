@@ -40,7 +40,7 @@ const state = {
 }
 const events: string[] = []
 const channelEvents: Array<{ event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties }> = []
-const preview = { state, events, channelEvents, appId: ref(previewAppId), command: ref('npx @capgo/cli@latest i [API_KEY]'), hiding: ref(false) }
+const preview = { state, events, channelEvents, appId: ref(previewAppId), command: ref('npx @capgo/cli@latest i [API_KEY]'), hiding: ref(false), selectedOrgId: ref('') }
 Object.assign(window, { onboardingSetupPreview: preview })
 
 // This isolated component fixture never sends requests to production.
@@ -100,7 +100,7 @@ window.fetch = async (input, init) => {
   if (params.get('view') === 'flow' || navigationView) {
     const app = { id: '00000000-0000-4000-8000-000000000003', app_id: previewAppId, name: 'My Capacitor app', icon_url: '', owner_org: '00000000-0000-4000-8000-000000000002', need_onboarding: true, onboarding: { setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome } } }
     const user = { id: '00000000-0000-4000-8000-000000000001', email: 'preview@example.com', onboarding: { intent: 'ota', status: 'in_progress', step: 'setup', flow: 'app', setup_stage: 'cli', app_id: previewAppId } }
-    const rows = url.pathname.endsWith('/apps') ? [app] : url.pathname.endsWith('/users') ? [user] : url.pathname.endsWith('/apikeys') ? [{ key: '00000000-0000-4000-8000-000000000004', rbac_id: '00000000-0000-4000-8000-000000000005', expires_at: null }] : url.pathname.endsWith('/role_bindings') ? [{ principal_id: '00000000-0000-4000-8000-000000000005', scope_type: 'org', roles: { name: 'org_super_admin' } }] : []
+    const rows = url.pathname.endsWith('/apps') ? (!url.searchParams.get('owner_org') || url.searchParams.get('owner_org') === `eq.${app.owner_org}` ? [app] : []) : url.pathname.endsWith('/users') ? [user] : url.pathname.endsWith('/apikeys') ? [{ key: '00000000-0000-4000-8000-000000000004', rbac_id: '00000000-0000-4000-8000-000000000005', expires_at: null }] : url.pathname.endsWith('/role_bindings') ? [{ principal_id: '00000000-0000-4000-8000-000000000005', scope_type: 'org', roles: { name: 'org_super_admin' } }] : []
     const single = new Headers(init?.headers).get('Accept')?.includes('object')
     return new Response(JSON.stringify(single ? rows[0] ?? {} : rows), { headers: { 'Content-Type': 'application/json' } })
   }
@@ -157,7 +157,16 @@ app.use(pinia)
 Object.defineProperty(useMainStore(pinia), 'user', { value: { id: '00000000-0000-4000-8000-000000000001', email: 'preview@example.com', onboarding: { intent: 'ota', status: 'in_progress', step: 'setup', flow: 'app', setup_stage: 'cli', app_id: previewAppId } } })
 useMainStore(pinia).awaitInitialLoad = async () => true
 const organization = useOrganizationStore(pinia)
-Object.defineProperty(organization, 'currentOrganization', { value: { gid: '00000000-0000-4000-8000-000000000002' } })
+const previewOrganization = { gid: '00000000-0000-4000-8000-000000000002' }
+const selectedOrganization = ref(params.get('wrongOrg') === '1' ? { gid: '00000000-0000-4000-8000-000000000099' } : previewOrganization)
+preview.selectedOrgId.value = selectedOrganization.value.gid
+Object.defineProperty(organization, 'currentOrganization', { get: () => selectedOrganization.value })
+organization.getOrgByAppId = appId => appId === previewAppId ? previewOrganization as any : undefined
+organization.setCurrentOrganization = (orgId) => {
+  if (orgId === previewOrganization.gid)
+    selectedOrganization.value = previewOrganization
+  preview.selectedOrgId.value = selectedOrganization.value.gid
+}
 organization.awaitInitialLoad = async () => true
 app.use(i18n)
 app.use(createRouter({

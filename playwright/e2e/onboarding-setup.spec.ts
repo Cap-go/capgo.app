@@ -632,6 +632,13 @@ test.describe('Dashboard exploration and returning to v3 setup', () => {
     await expect(page.locator('[data-test="getting-started-page"]')).toHaveCount(0)
   })
 
+  test('resumes the app in its owning organization after exploring another organization', async ({ page }) => {
+    await page.goto(`${setup}&wrongOrg=1`)
+    await expect(page.locator('[data-test="onboarding-setup-cli"]')).toBeVisible()
+    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.selectedOrgId.value)).toBe('00000000-0000-4000-8000-000000000002')
+    await expect(page.locator('[data-test^="app-onboarding-cli-step-"]')).toHaveCount(7)
+  })
+
   test('stores permanent browser dismissal without hiding onboarding or removing the return button', async ({ page }) => {
     await page.goto(setup)
     await page.getByRole('button', { name: 'Explore dashboard', exact: true }).click()

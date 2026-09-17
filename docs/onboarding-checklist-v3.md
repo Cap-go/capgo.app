@@ -38,7 +38,7 @@ The assignment predicate was measured against temporary tables with 1,000,000 us
 
 ## Dashboard exploration
 
-Explore dashboard opens the app overview. For v3, the Getting started route opens the fullscreen seven-goal setup instead of the legacy four-goal wrapper, regardless of exploration mode or the channel-flow assignment. A refresh after exploration offers Continue exploring, Come back to the setup, or Don't show this again. The last choice stores a user-scoped browser-local preference; it dismisses only this reminder, not onboarding. Continuing hides the reminder for the current page, while a later refresh can show it again. Finished/dismissed apps are excluded.
+Explore dashboard opens the app overview. For v3, the Getting started route opens the fullscreen seven-goal setup instead of the legacy four-goal wrapper, regardless of exploration mode or the channel-flow assignment. A refresh after exploration offers Continue exploring, Come back to the setup, or Don't show this again. The last choice stores a user-scoped browser-local preference; it dismisses only this reminder, not onboarding. Continuing hides the reminder for the current page, while a later refresh can show it again. Finished/dismissed apps are excluded. Resuming setup selects the owning organization of the requested app, including after exploring a different organization.
 
 ## Review preview
 
