@@ -20,7 +20,9 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 - Prefer `npx @capgo/cli@latest ...` in user-facing examples in this repo.
 - Many commands can infer `appId` and related config from the current Capacitor project.
 - Commands inside an identifiable Capacitor project can automatically complete the Add Integration Code onboarding task when a source call to `CapacitorUpdater.notifyAppReady()` is detected. Detection is best effort and may be abandoned when the command exits. It does not confirm runtime readiness.
+- A separate background check can complete Install Updater Plugin when `@capgo/capacitor-updater` is declared in the selected app's package.json and installed locally, including hoisted or symlinked workspace dependencies. Missing dependencies leave existing progress untouched; detection may be abandoned when the command exits.
 - With analytics enabled, source scans emit `scan_started` and `scan_ended` events in the `notify-app-ready` channel with a shared `attempt_id`. The ended event includes scan duration, result, and todo-report outcome. An abandoned scan may have no ended event.
+- Updater installation checks use the same scan events and attempt pairing in the `updater-installed` channel, with a separate attempt ID from the source scan. Telemetry opt-out does not prevent either onboarding check.
 - Shared public flags commonly include `-a, --apikey <apikey>` and `--verbose` on commands that support verbose output.
 - `--capacitor-config <path>` is a global option for dynamic monorepos: Capacitor still loads the active root config, while config-writing commands update the selected app-specific source file. On `mcp`, the target remains active for the server lifetime so config-writing MCP tools use the same source.
 
