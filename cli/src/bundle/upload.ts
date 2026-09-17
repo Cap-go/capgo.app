@@ -39,6 +39,7 @@ import { clackUploadReporter, getUploadReporter, runWithUploadReporter } from '.
 import { formatUploadChannels, getChannelsToAssignByChecksum, parseUploadChannels } from './upload-channels'
 import {
   formatActiveRolloutResetWarning,
+  formatClearedProgressiveRolloutSuccess,
   formatFailOnActiveRolloutMessage,
   formatStableChannelLinkSuccess,
   hasActiveRollout,
@@ -1094,11 +1095,13 @@ async function promoteExistingChannel(
   }
 
   const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${targetChannel.id}`
-  log.success(formatStableChannelLinkSuccess(channel, bundle, clearedActiveRollout))
+  log.success(formatStableChannelLinkSuccess(channel, bundle))
+  if (clearedActiveRollout)
+    log.success(formatClearedProgressiveRolloutSuccess(channel))
   if (targetChannel.public) {
     log.info('Your update is now available in your public channel 🎉')
   }
-  else if (!clearedActiveRollout) {
+  else {
     log.info(`Link device to this bundle to try it: ${bundleUrl}`)
   }
 
@@ -1165,11 +1168,13 @@ async function setVersionInChannel(
     }
     if (data?.id) {
       const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${data.id}`
-      log.success(formatStableChannelLinkSuccess(channel, bundle, clearedActiveRollout))
+      log.success(formatStableChannelLinkSuccess(channel, bundle))
+      if (clearedActiveRollout)
+        log.success(formatClearedProgressiveRolloutSuccess(channel))
       if (data.public) {
         log.info('Your update is now available in your public channel 🎉')
       }
-      else if (!clearedActiveRollout) {
+      else {
         log.info(`Link device to this bundle to try it: ${bundleUrl}`)
       }
       if (displayBundleUrl)
@@ -1217,7 +1222,7 @@ async function setVersionInChannel(
     }
 
     const bundleUrl = `${localConfig.hostWeb}/app/${appid}/channel/${createdChannelId}`
-    log.success(formatStableChannelLinkSuccess(channel, bundle, false))
+    log.success(formatStableChannelLinkSuccess(channel, bundle))
     if (createdChannelPublic)
       log.info('Your update is now available in your public channel 🎉')
     else

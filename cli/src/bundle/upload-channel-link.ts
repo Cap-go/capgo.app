@@ -30,11 +30,12 @@ export function formatActiveRolloutResetWarning(channelName: string): string {
   return `Channel "${channelName}" has an active progressive rollout. Linking this bundle as stable resets that rollout so devices receive the new stable bundle instead of the previous rollout target.`
 }
 
-export function formatStableChannelLinkSuccess(channelName: string, bundle: string, clearedActiveRollout: boolean): string {
-  if (clearedActiveRollout)
-    return `Linked @${bundle} to channel "${channelName}" as stable and cleared the active progressive rollout.`
+export function formatStableChannelLinkSuccess(channelName: string, bundle: string): string {
+  return `Linked @${bundle} to channel ${channelName} as stable.`
+}
 
-  return `Linked @${bundle} to channel "${channelName}" as stable.`
+export function formatClearedProgressiveRolloutSuccess(channelName: string): string {
+  return `Cleared progressive rollout on ${channelName}.`
 }
 
 export function formatFailOnActiveRolloutMessage(channelName: string): string {

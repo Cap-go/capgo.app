@@ -4,6 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import {
+  formatClearedProgressiveRolloutSuccess,
   formatFailOnActiveRolloutMessage,
   formatStableChannelLinkSuccess,
   hasActiveRollout,
@@ -78,15 +79,15 @@ console.log('\n🧪 Testing channel-link success messages...\n')
 
 test('stable link success mentions channel and bundle', () => {
   assert.match(
-    formatStableChannelLinkSuccess('production', '1.2.3', false),
-    /Linked @1\.2\.3 to channel "production" as stable\./,
+    formatStableChannelLinkSuccess('production', '1.2.3'),
+    /Linked @1\.2\.3 to channel production as stable\./,
   )
 })
 
-test('stable link success mentions cleared rollout', () => {
+test('cleared rollout success is a separate line', () => {
   assert.match(
-    formatStableChannelLinkSuccess('production', '1.2.3', true),
-    /cleared the active progressive rollout/,
+    formatClearedProgressiveRolloutSuccess('production'),
+    /Cleared progressive rollout on production\./,
   )
 })
 

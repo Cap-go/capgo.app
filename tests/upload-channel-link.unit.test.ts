@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import {
+  formatClearedProgressiveRolloutSuccess,
   formatStableChannelLinkSuccess,
   hasActiveRollout,
   shouldFailOnActiveRollout,
@@ -24,8 +25,10 @@ describe('bundle upload channel-link helpers', () => {
   })
 
   it('formats stable link success for CI logs', () => {
-    expect(formatStableChannelLinkSuccess('production', '1.0.0', true))
-      .toContain('cleared the active progressive rollout')
+    expect(formatStableChannelLinkSuccess('production', '1.0.0'))
+      .toBe('Linked @1.0.0 to channel production as stable.')
+    expect(formatClearedProgressiveRolloutSuccess('production'))
+      .toBe('Cleared progressive rollout on production.')
   })
 })
 
@@ -39,5 +42,11 @@ describe('bundle upload rollout messaging source', () => {
   it('checks fail-on-active-rollout during channel preflight', () => {
     const source = readFileSync(new URL('../cli/src/bundle/upload.ts', import.meta.url), 'utf8')
     expect(source).toContain('shouldFailOnActiveRollout(options, targetChannel)')
+  })
+
+  it('always prints link-device guidance after stable assignment', () => {
+    const source = readFileSync(new URL('../cli/src/bundle/upload.ts', import.meta.url), 'utf8')
+    expect(source).toContain('Link device to this bundle to try it:')
+    expect(source).not.toMatch(/else if \(!clearedActiveRollout\)/)
   })
 })
