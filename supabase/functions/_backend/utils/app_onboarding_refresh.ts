@@ -27,7 +27,11 @@ function windowFilter(apps: AppWindow[], now: Date) {
   if (!apps.length || apps.length > ONBOARDING_APPS_PER_MESSAGE)
     throw new Error('Invalid onboarding telemetry batch size')
   const cutoff = new Date(now)
+  const day = cutoff.getUTCDate()
+  cutoff.setUTCDate(1)
   cutoff.setUTCMonth(cutoff.getUTCMonth() - 3)
+  const lastDay = new Date(Date.UTC(cutoff.getUTCFullYear(), cutoff.getUTCMonth() + 1, 0)).getUTCDate()
+  cutoff.setUTCDate(Math.min(day, lastDay))
   return apps.map((app) => {
     const created = new Date(app.created_at)
     if (!app.app_id || app.app_id.length > 255 || !Number.isFinite(created.getTime()))

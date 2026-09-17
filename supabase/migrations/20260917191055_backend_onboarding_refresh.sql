@@ -1,30 +1,46 @@
 -- Operational leases keep producer retries from duplicating app work. Expired
 -- leases are replaced after 30 minutes; stale message tokens cannot write.
 CREATE TABLE public.app_onboarding_refresh_jobs (
-  app_id varchar(255) PRIMARY KEY REFERENCES public.apps(app_id) ON DELETE CASCADE,
-  batch_token uuid NOT NULL,
-  enqueued_at timestamptz NOT NULL DEFAULT now()
+    app_id varchar(255) PRIMARY KEY REFERENCES public.apps (
+        app_id
+    ) ON DELETE CASCADE,
+    batch_token uuid NOT NULL,
+    enqueued_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE public.app_onboarding_refresh_jobs OWNER TO postgres;
 ALTER TABLE public.app_onboarding_refresh_jobs ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON TABLE public.app_onboarding_refresh_jobs FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON TABLE public.app_onboarding_refresh_jobs FROM public,
+anon,
+authenticated;
 GRANT ALL ON TABLE public.app_onboarding_refresh_jobs TO service_role;
-CREATE POLICY app_onboarding_refresh_jobs_service ON public.app_onboarding_refresh_jobs
-  FOR ALL TO service_role USING (true) WITH CHECK (true);
-CREATE POLICY app_onboarding_refresh_jobs_deny_clients ON public.app_onboarding_refresh_jobs
-  AS RESTRICTIVE FOR ALL TO anon, authenticated USING (false) WITH CHECK (false);
+CREATE POLICY app_onboarding_refresh_jobs_service
+ON public.app_onboarding_refresh_jobs
+FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY app_onboarding_refresh_jobs_deny_clients
+ON public.app_onboarding_refresh_jobs
+AS RESTRICTIVE FOR ALL TO anon, authenticated USING (false) WITH CHECK (false);
 
 -- These ordered owning-app indexes bound first/last lookups in the worker.
-CREATE INDEX idx_app_versions_onboarding_created ON public.app_versions(app_id, created_at)
-  WHERE deleted IS NOT TRUE AND name IS DISTINCT FROM 'builtin' AND name IS DISTINCT FROM 'unknown';
-CREATE INDEX idx_build_requests_onboarding_success ON public.build_requests(app_id, completed_at)
-  WHERE status IN ('succeeded', 'released') AND completed_at IS NOT NULL;
-CREATE INDEX idx_build_requests_onboarding_used ON public.build_requests(app_id, (COALESCE(completed_at, created_at)));
+CREATE INDEX idx_app_versions_onboarding_created ON public.app_versions (
+    app_id, created_at
+)
+WHERE deleted IS NOT true
+AND name IS DISTINCT FROM 'builtin'
+AND name IS DISTINCT FROM 'unknown';
+CREATE INDEX idx_build_requests_onboarding_success ON public.build_requests (
+    app_id, completed_at
+)
+WHERE status IN ('succeeded', 'released') AND completed_at IS NOT null;
+CREATE INDEX idx_build_requests_onboarding_used ON public.build_requests (
+    app_id, (coalesce(completed_at, created_at))
+);
 
 SELECT pgmq.create('cron_onboarding_refresh');
 SELECT pgmq.create('cron_onboarding_refresh_apps');
 
-CREATE OR REPLACE FUNCTION public.enqueue_app_onboarding_refreshes(p_limit integer DEFAULT 3000)
+CREATE OR REPLACE FUNCTION public.enqueue_app_onboarding_refreshes(
+    p_limit integer DEFAULT 3000
+)
 RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 DECLARE
   v_batch record;
@@ -60,28 +76,61 @@ BEGIN
   RETURN v_total;
 END;
 $$;
-ALTER FUNCTION public.enqueue_app_onboarding_refreshes(integer) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.enqueue_app_onboarding_refreshes(integer) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.enqueue_app_onboarding_refreshes(integer) TO service_role;
+ALTER FUNCTION public.enqueue_app_onboarding_refreshes(
+    integer
+) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.enqueue_app_onboarding_refreshes(
+    integer
+) FROM public,
+anon,
+authenticated;
+GRANT EXECUTE ON FUNCTION public.enqueue_app_onboarding_refreshes(
+    integer
+) TO service_role;
 COMMENT ON FUNCTION public.enqueue_app_onboarding_refreshes(integer) IS
-  'Internal producer: at most 3000 oldest due apps, indexed refresh ordering and per-app lease PK lookups. Enqueues batches of at most 20, atomically with leases.';
+'Internal producer: at most 3000 oldest due apps, indexed refresh ordering
+and per-app lease PK lookups. Enqueues batches of at most 20,
+atomically with leases.';
 
 -- Reuse the existing scheduler; do not add a pg_cron job.
-UPDATE public.cron_tasks SET task_type = 'queue', target = 'cron_onboarding_refresh',
-  payload = '{"function_name":"cron_onboarding_refresh","function_type":"cloudflare"}'::jsonb,
-  minute_interval = 10, second_interval = NULL, hour_interval = NULL,
-  run_at_hour = NULL, run_at_minute = NULL, batch_size = NULL, enabled = true,
-  description = 'Enqueue backend onboarding refresh producer every 10 minutes', updated_at = now()
+UPDATE public.cron_tasks SET
+    task_type = 'queue', target = 'cron_onboarding_refresh',
+    payload
+    = '{
+        "function_name":"cron_onboarding_refresh",
+        "function_type":"cloudflare"
+    }'::jsonb,
+    minute_interval = 10, second_interval = null, hour_interval = null,
+    run_at_hour = null, run_at_minute = null, batch_size = null, enabled = true,
+    description
+    = 'Enqueue backend onboarding refresh producer every 10 minutes',
+    updated_at = now()
 WHERE name = 'refresh_app_onboarding_progress';
-INSERT INTO public.cron_tasks(name, task_type, target, batch_size, minute_interval, description)
+INSERT INTO public.cron_tasks (
+    name, task_type, target, batch_size, minute_interval, description
+)
 VALUES
-  ('onboarding_refresh_producer_queue', 'function_queue', '["cron_onboarding_refresh"]', 1, 1, 'Consume one onboarding producer per minute'),
-  ('onboarding_refresh_apps_queue', 'function_queue', '["cron_onboarding_refresh_apps"]', 15, 1, 'Consume 15 batches of 20 apps per minute (300 apps maximum)');
+(
+    'onboarding_refresh_producer_queue',
+    'function_queue',
+    '["cron_onboarding_refresh"]',
+    1,
+    1,
+    'Consume one onboarding producer per minute'
+),
+(
+    'onboarding_refresh_apps_queue',
+    'function_queue',
+    '["cron_onboarding_refresh_apps"]',
+    15,
+    1,
+    'Consume 15 batches of 20 apps per minute (300 apps maximum)'
+);
 
-CREATE OR REPLACE FUNCTION "public"."process_all_cron_tasks"() RETURNS "void"
-    LANGUAGE "plpgsql"
-    SET "search_path" TO ''
-    AS $$
+CREATE OR REPLACE FUNCTION public.process_all_cron_tasks() RETURNS void
+LANGUAGE plpgsql
+SET search_path TO ''
+AS $$
 DECLARE
   current_hour int;
   current_minute int;
@@ -188,15 +237,16 @@ END;
 $$;
 
 
-
 ALTER FUNCTION public.process_all_cron_tasks() OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.process_all_cron_tasks() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.process_all_cron_tasks() FROM public;
 GRANT EXECUTE ON FUNCTION public.process_all_cron_tasks() TO service_role;
 
-CREATE OR REPLACE FUNCTION "public"."process_function_queue"("queue_name" "text", "batch_size" integer DEFAULT 950) RETURNS "void"
-    LANGUAGE "plpgsql"
-    SET "search_path" TO ''
-    AS $$
+CREATE OR REPLACE FUNCTION public.process_function_queue(
+    "queue_name" text, "batch_size" integer DEFAULT 950
+) RETURNS void
+LANGUAGE plpgsql
+SET search_path TO ''
+AS $$
 DECLARE
   calls_needed int;
   headers jsonb;
@@ -248,6 +298,5 @@ END;
 $$;
 
 
-
 ALTER FUNCTION public.process_function_queue(text, integer) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.process_function_queue(text, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.process_function_queue(text, integer) FROM public;

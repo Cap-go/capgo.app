@@ -38,6 +38,16 @@ describe('backend onboarding refresh telemetry', () => {
     expect(q.installs).toContain('index1 = \'com.example.o\'\'hare\'')
     expect(q.installs).toContain('timestamp >= toDateTime(\'2026-09-16 10:00:00\')')
   })
+  it.concurrent.each([
+    { current: '2026-05-31T12:13:14Z', cutoff: '2026-02-28 12:13:14' },
+    { current: '2028-05-31T12:13:14Z', cutoff: '2028-02-29 12:13:14' },
+    { current: '2026-12-31T12:13:14Z', cutoff: '2026-09-30 12:13:14' },
+    { current: '2026-01-31T12:13:14Z', cutoff: '2025-10-31 12:13:14' },
+  ])('clamps three-month windows to the target month at $current', ({ current, cutoff }) => {
+    const q = buildOnboardingTelemetryQueries([{ ...apps[0], created_at: '2025-01-01T00:00:00Z' }], new Date(current))
+    expect(q.installs).toContain(`timestamp >= toDateTime('${cutoff}')`)
+    expect(q.devices).toContain(`timestamp >= toDateTime('${cutoff}')`)
+  })
   it.concurrent('rejects oversized batches and SQL rather than silently truncating evidence', () => {
     expect(() => buildOnboardingTelemetryQueries(Array.from({ length: 21 }, () => ({ ...apps[0] })), now)).toThrow('batch size')
     expect(() => buildOnboardingTelemetryQueries(Array.from({ length: 20 }, () => ({ ...apps[0], app_id: '\''.repeat(255) })), now)).toThrow('size budget')
