@@ -343,7 +343,7 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
     cloudlog({ requestId: c.get('requestId'), message: 'Writing to Analytics Engine DEVICE_INFO' })
     // Platform: 0 = android, 1 = ios, 2 = electron
     const platformLower = comparableDevice.platform?.toLowerCase()
-    const platformValue = platformLower === 'ios' ? 1 : platformLower === 'electron' ? 2 : 0
+    const platformValue = platformLower === 'ios' ? 1 : platformLower === 'electron' ? 2 : platformLower === 'android' ? 0 : -1
     c.env.DEVICE_INFO.writeDataPoint({
       blobs: [
         device.device_id,
@@ -359,8 +359,8 @@ export async function trackDevicesCF(c: Context, device: DeviceWithoutCreatedAt)
       ],
       doubles: [
         platformValue,
-        comparableDevice.is_prod ? 1 : 0,
-        comparableDevice.is_emulator ? 1 : 0,
+        comparableDevice.is_prod == null ? -1 : comparableDevice.is_prod ? 1 : 0,
+        comparableDevice.is_emulator == null ? -1 : comparableDevice.is_emulator ? 1 : 0,
       ],
       indexes: [device.app_id],
     })
@@ -1220,12 +1220,12 @@ export async function readDevicesCF(c: Context, params: ReadDevicesParams, custo
       device_id: row.device_id,
       version: null, // version ID not stored in Analytics Engine
       version_name: row.version_name || null,
-      platform: row.platform === 1 ? 'ios' : row.platform === 2 ? 'electron' : 'android',
+      platform: row.platform === 1 ? 'ios' : row.platform === 2 ? 'electron' : row.platform === 0 ? 'android' : null,
       plugin_version: row.plugin_version,
       os_version: row.os_version,
       version_build: row.version_build,
-      is_prod: Boolean(row.is_prod),
-      is_emulator: Boolean(row.is_emulator),
+      is_prod: row.is_prod < 0 ? null : Boolean(row.is_prod),
+      is_emulator: row.is_emulator < 0 ? null : Boolean(row.is_emulator),
       country_code: row.country_code || null,
       install_source: row.install_source || null,
       custom_id: row.custom_id,

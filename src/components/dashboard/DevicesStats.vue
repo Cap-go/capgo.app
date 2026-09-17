@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions, Plugin } from 'chart.js'
 import type { TooltipClickHandler } from '~/services/chartTooltip'
+import type { DeviceDataCollection } from '~/services/deviceDataCollection'
 import type { NativeActiveDevicesSummary, NativeDailyPlatformActive } from '~/services/nativeDeviceStats'
 import type { Organization } from '~/stores/organization'
 import { useDark } from '@vueuse/core'
@@ -14,6 +15,7 @@ import { createChartScales } from '~/services/chartConfig'
 import { useChartData } from '~/services/chartDataService'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
 import { formatUtcDateParam, generateChartDayLabels, getChartDateRange, getLastNUtcDaysRange, normalizeToUtcStartOfDay } from '~/services/date'
+import { DEFAULT_DEVICE_DATA_COLLECTION } from '~/services/deviceDataCollection'
 import { formatNumberValue } from '~/services/formatLocale'
 import {
   calculateSummaryEvolutionPercent,
@@ -55,6 +57,10 @@ const props = defineProps({
   usageKind: {
     type: String,
     default: 'bundle',
+  },
+  deviceDataCollection: {
+    type: Object as () => DeviceDataCollection,
+    default: () => ({ ...DEFAULT_DEVICE_DATA_COLLECTION }),
   },
 })
 
@@ -579,7 +585,9 @@ const iosActiveEvolution = computed(() => calculateSummaryEvolutionPercent(
   selectedPeriodActiveDevices.value?.ios,
   selectedPeriodPreviousActiveDevices.value?.ios,
 ))
-const showNativeKpis = computed(() => isNativeUsage.value)
+const showNativeKpis = computed(() => isNativeUsage.value && props.deviceDataCollection.platform)
+const showNativeVersionChart = computed(() => !isNativeUsage.value || props.deviceDataCollection.version_build)
+const collectionDisabledMessage = computed(() => t('device-data-collection-chart-disabled'))
 const isThirtyDaySummaryLoading = computed(() => isFetchingThirtyDaySummary.value || (isLoading.value && isNativeUsage.value && (props.useBillingPeriod || periodDays.value !== 30)))
 
 const todayLineOptions = computed(() => {
@@ -913,7 +921,14 @@ watch(
       />
     </div>
 
-    <div v-if="showNativeKpis" class="flex flex-col gap-6">
+    <div
+      v-if="isNativeUsage && !showNativeKpis"
+      class="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600 dark:border-slate-700 dark:bg-gray-800 dark:text-slate-300"
+      data-test="native-platform-collection-disabled"
+    >
+      {{ collectionDisabledMessage }}
+    </div>
+    <div v-else-if="showNativeKpis" class="flex flex-col gap-6">
       <div>
         <div class="mb-3">
           <h3 class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
@@ -992,6 +1007,7 @@ watch(
     </div>
 
     <div
+      v-if="showNativeVersionChart"
       data-testid="version-chart-range"
       :data-from="currentRange ? formatUtcDateParam(currentRange.startDate) : undefined"
       :data-to="currentRange ? formatUtcDateParam(currentRange.endDate) : undefined"
@@ -1026,6 +1042,12 @@ watch(
 
         <Line class="h-full w-full" :data="processedChartData!" :options="chartOptions" :plugins="chartPlugins" />
       </ChartCard>
+    </div>
+    <div
+      v-else
+      class="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600 dark:border-slate-700 dark:bg-gray-800 dark:text-slate-300"
+    >
+      {{ collectionDisabledMessage }}
     </div>
   </section>
 </template>

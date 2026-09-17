@@ -10,6 +10,7 @@ import { Hono } from 'hono/tiny'
 import { getAppStatus, setAppStatus } from '../utils/appStatus.ts'
 import { checkChannelSelfIPRateLimit, isChannelSelfRateLimited, recordChannelSelfIPRequest, recordChannelSelfRequest } from '../utils/channelSelfRateLimit.ts'
 import { deleteChannelSelfOverride, getChannelSelfOverride, isChannelSelfStoreEnabled, setChannelSelfOverride } from '../utils/channelSelfStore.ts'
+import { parseDeviceDataCollection } from '../utils/deviceDataCollection.ts'
 import { BRES, parseBody, quickError, simpleError200, simpleRateLimit } from '../utils/hono.ts'
 import { invalidIpInfo } from '../utils/invalids_ip.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -141,7 +142,7 @@ async function assertChannelSelfAppOwnerPlanValid(
   }
 
   if (!appOwner.plan_valid) {
-    await setAppStatus(c, appId, 'cancelled', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests)
+    await setAppStatus(c, appId, 'cancelled', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests, parseDeviceDataCollection(appOwner.device_data_collection))
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot update, upgrade plan to continue to update', id: appId })
     await sendStatsAndDevice(c, device, [{ action: 'needPlanUpgrade' }])
 
@@ -163,7 +164,7 @@ async function assertChannelSelfAppOwnerPlanValid(
     return { response: onPremiseAppResponse(c) }
   }
 
-  await setAppStatus(c, appId, 'cloud', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests)
+  await setAppStatus(c, appId, 'cloud', appOwner.allow_device_custom_id, appOwner.block_provider_infra_requests, parseDeviceDataCollection(appOwner.device_data_collection))
   return { appOwner }
 }
 
@@ -271,6 +272,7 @@ async function prepareChannelSelfDeviceRequest(
 
   const appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
   const device = makeDevice(body, appOwner?.allow_device_custom_id)
+  c.set('deviceDataCollection', parseDeviceDataCollection(appOwner?.device_data_collection ?? cachedAppStatus.device_data_collection))
   const blockProviderInfraRequests = appOwner?.block_provider_infra_requests ?? cachedAppStatus.block_provider_infra_requests
   const blocked = await blockProviderInfrastructure(c, operationLabel, blockProviderInfraRequests)
   if (blocked)
@@ -576,6 +578,7 @@ async function listCompatibleChannels(c: Context, drizzleClient: ReturnType<type
   }
   const appOwner = await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, PLAN_MAU_ACTIONS)
   const device = makeDevice(body, appOwner?.allow_device_custom_id)
+  c.set('deviceDataCollection', parseDeviceDataCollection(appOwner?.device_data_collection ?? cachedAppStatus.device_data_collection))
   const blockProviderInfraRequests = appOwner?.block_provider_infra_requests ?? cachedAppStatus.block_provider_infra_requests
   const blocked = await blockProviderInfrastructure(c, 'GET', blockProviderInfraRequests)
   if (blocked)

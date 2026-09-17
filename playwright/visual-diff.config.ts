@@ -46,6 +46,23 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'app-dashboard-active-bundle', path: '/app/com.demo.app/active-bundle', auth: true },
   { slug: 'app-getting-started', path: '/app/com.demo.app/getting-started', auth: true },
   { slug: 'app-settings', path: '/app/com.demo.app/settings', auth: true },
+  {
+    slug: 'app-settings-device-data',
+    path: '/app/com.demo.app/settings',
+    auth: true,
+    prepare: async (page) => {
+      await dismissSupportPrompt(page)
+      const fieldset = page.locator('[data-test="device-data-collection"]')
+      try {
+        await fieldset.waitFor({ state: 'visible', timeout: 5000 })
+      }
+      catch {
+        // Base does not have the collection fieldset yet.
+        return
+      }
+      await fieldset.scrollIntoViewIfNeeded()
+    },
+  },
   { slug: 'app-settings-access', path: '/app/com.demo.app/settings/access', auth: true },
   { slug: 'org-settings', path: '/settings/organization', auth: true },
   { slug: 'org-settings-team', path: '/settings/organization/members', auth: true },

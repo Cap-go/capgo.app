@@ -221,7 +221,7 @@ describe('deviceComparison utilities', () => {
 
       const comparable = toComparableExisting(existing)
 
-      expect(comparable.is_prod).toBe(false)
+      expect(comparable.is_prod).toBeNull()
       expect(comparable.is_emulator).toBe(false)
     })
 
@@ -606,8 +606,8 @@ describe('deviceComparison utilities', () => {
         version_build: null,
         custom_id: '',
         version_name: '',
-        is_prod: undefined,
-        is_emulator: null,
+        is_prod: null,
+        is_emulator: undefined,
         default_channel: null,
       } as unknown as DeviceWithoutCreatedAt
 

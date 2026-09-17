@@ -1,12 +1,14 @@
 import type { Context } from 'hono'
+import type { DeviceDataCollection } from './deviceDataCollection.ts'
 import type { Database } from './supabase.types.ts'
 import type { DeviceWithoutCreatedAt, StatsActions, StatsMetadata, VersionUsageChannel } from './types.ts'
 import { getRuntimeKey } from 'hono/adapter'
 import { createIfNotExistStoreInfo, trackBandwidthUsageCF, trackDevicesCF, trackDeviceUsageCF, trackLogsCF, trackLogsCFExternal, trackVersionUsageCF, updateStoreApp } from './cloudflare.ts'
 import { normalizeDeviceCountryCode } from './deviceComparison.ts'
+import { applyDeviceDataCollectionToDevice, applyDeviceDataCollectionToLogDimensions, DEFAULT_DEVICE_DATA_COLLECTION } from './deviceDataCollection.ts'
 import { simpleError200 } from './hono.ts'
-import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { cloudlog } from './logging.ts'
+import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { logSkippedSupabaseWrite, shouldSkipSupabaseStatsFallback } from './supabase_write_guard.ts'
 import { backgroundTask, isInternalVersionName } from './utils.ts'
 
@@ -83,14 +85,16 @@ export function normalizeStatsMetadata(metadata?: StatsMetadata): StatsMetadata 
   return Object.keys(normalized).length > 0 ? normalized : undefined
 }
 
-function getStatsLogDimensions(c: Context, device: DeviceWithoutCreatedAt): StatsLogDimensions {
-  const requestCountry = c.req.raw?.cf?.country
-  const countryCode = normalizeDeviceCountryCode(typeof requestCountry === 'string' ? requestCountry : device.country_code)
-  return {
+function getStatsLogDimensions(c: Context, device: DeviceWithoutCreatedAt, collection: DeviceDataCollection = DEFAULT_DEVICE_DATA_COLLECTION): StatsLogDimensions {
+  const requestCountry = collection.country ? c.req.raw?.cf?.country : undefined
+  const countryCode = collection.country
+    ? normalizeDeviceCountryCode(typeof requestCountry === 'string' ? requestCountry : device.country_code)
+    : null
+  return applyDeviceDataCollectionToLogDimensions({
     platform: device.platform,
     country_code: countryCode,
     plugin_version: device.plugin_version,
-  }
+  }, collection)
 }
 
 export function createStatsMau(c: Context, device_id: string, app_id: string, org_id: string, platform: string, version_build?: string | null): Promise<void> {
@@ -130,7 +134,7 @@ export async function onPremStats(c: Context, app_id: string, action: string, de
     'get',
     device.version_name,
     metadata,
-    getStatsLogDimensions(c, device),
+    getStatsLogDimensions(c, device, c.get('deviceDataCollection') ?? DEFAULT_DEVICE_DATA_COLLECTION),
   )
   cloudlog({ requestId: c.get('requestId'), message: 'App is external (onPremise), returning 429', app_id: device.app_id, country: c.req.raw.cf?.country, user_agent: c.req.raw.headers.get('user-agent') })
   return onPremiseAppResponse(c)
@@ -196,10 +200,12 @@ export function createStatsLogs(c: Context, app_id: string, device_id: string, a
   return backgroundTask(c, Promise.resolve(supabaseFallbacks!.trackLogsSB(c, app_id, lowerDeviceId, action, finalVersionName, finalMetadata)))
 }
 
-export function createStatsDevices(c: Context, device: DeviceWithoutCreatedAt) {
-  const requestCountry = c.req.raw?.cf?.country
-  const countryCode = normalizeDeviceCountryCode(typeof requestCountry === 'string' ? requestCountry : undefined)
-  const deviceWithCountry = countryCode ? { ...device, country_code: countryCode } : device
+export function createStatsDevices(c: Context, device: DeviceWithoutCreatedAt, collection: DeviceDataCollection = DEFAULT_DEVICE_DATA_COLLECTION) {
+  const requestCountry = collection.country ? c.req.raw?.cf?.country : undefined
+  const countryCode = collection.country
+    ? normalizeDeviceCountryCode(typeof requestCountry === 'string' ? requestCountry : undefined)
+    : null
+  const deviceWithCountry = countryCode ? { ...device, country_code: countryCode } : { ...device, country_code: collection.country ? device.country_code : null }
 
   if (getRuntimeKey() === 'workerd' && c.env?.DEVICE_INFO)
     return backgroundTask(c, trackDevicesCF(c, deviceWithCountry))
@@ -212,15 +218,17 @@ export function createStatsDevices(c: Context, device: DeviceWithoutCreatedAt) {
   return backgroundTask(c, Promise.resolve(supabaseFallbacks!.trackDevicesSB(c, deviceWithCountry)))
 }
 
-export function sendStatsAndDevice(c: Context, device: DeviceWithoutCreatedAt, statsActions: StatsActions[], isFailedStat = false) {
-  const dimensions = getStatsLogDimensions(c, device)
+export function sendStatsAndDevice(c: Context, device: DeviceWithoutCreatedAt, statsActions: StatsActions[], isFailedStat = false, collection?: DeviceDataCollection) {
+  const flags = collection ?? c.get('deviceDataCollection') ?? DEFAULT_DEVICE_DATA_COLLECTION
+  const storedDevice = applyDeviceDataCollectionToDevice(device, flags) as DeviceWithoutCreatedAt
+  const dimensions = getStatsLogDimensions(c, storedDevice, flags)
   const jobs = []
   statsActions.forEach(({ action, versionName, metadata }) => {
-    jobs.push(createStatsLogs(c, device.app_id, device.device_id, action, versionName ?? device.version_name, metadata, dimensions))
+    jobs.push(createStatsLogs(c, storedDevice.app_id, storedDevice.device_id, action, versionName ?? storedDevice.version_name, metadata, dimensions))
   })
 
   if (!isFailedStat)
-    jobs.push(createStatsDevices(c, device))
+    jobs.push(createStatsDevices(c, storedDevice, flags))
 
   return Promise.all(jobs)
 }

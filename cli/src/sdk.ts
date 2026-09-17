@@ -260,6 +260,14 @@ export class CapgoSDK {
         name: options.name,
         icon: options.icon,
         retention: options.retention,
+        collectCountry: options.collectCountry,
+        collectPlatform: options.collectPlatform,
+        collectOsVersion: options.collectOsVersion,
+        collectPluginVersion: options.collectPluginVersion,
+        collectVersionBuild: options.collectVersionBuild,
+        collectIsEmulator: options.collectIsEmulator,
+        collectIsProd: options.collectIsProd,
+        collectInstallSource: options.collectInstallSource,
       }
 
       await setAppInternal(options.appId, internalOptions, true)

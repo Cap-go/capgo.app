@@ -541,6 +541,16 @@
       "type": "jsonb"
     },
     {
+      "default": "jsonb_build_object('country', true, 'platform', true, 'os_version', true, 'plugin_version', true, 'version_build', true, 'is_emulator', true, 'is_prod', true, 'install_source', true)",
+      "generated": "",
+      "identity": "",
+      "name": "device_data_collection",
+      "notNull": true,
+      "position": 32,
+      "table": "apps",
+      "type": "jsonb"
+    },
+    {
       "default": "now()",
       "generated": "",
       "identity": "",

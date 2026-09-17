@@ -12,6 +12,7 @@ import IconCode from '~icons/heroicons/code-bracket'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
 import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
+import { useDeviceDataCollection } from '~/composables/useDeviceDataCollection'
 import { useDeviceUpdateFormat } from '~/composables/useDeviceUpdateFormat'
 import { formatDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
@@ -37,6 +38,8 @@ const device = ref<Database['public']['Tables']['devices']['Row']>()
 const channels = ref<(Database['public']['Tables']['channels']['Row'] & Channel)[]>([])
 const channelDevice = ref<Database['public']['Tables']['channels']['Row']>()
 const reloadCount = ref(0)
+
+const { collection } = useDeviceDataCollection(packageId)
 
 const canManageDevices = computedAsync(async () => {
   if (!packageId.value)
@@ -393,7 +396,7 @@ async function copyCurlCommand() {
     <PageLoader v-if="isLoading" />
     <div v-else-if="device" id="devices" class="mt-0 md:mt-8">
       <div class="w-full h-full px-0 pt-0 mx-auto mb-8 sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
-        <div v-if="device.plugin_version === '0.0.0'" class="my-2 mr-auto ml-auto text-center text-white rounded-2xl border-8 bg-[#ef4444] w-fit border-[#ef4444]">
+        <div v-if="collection.plugin_version && device.plugin_version === '0.0.0'" class="my-2 mr-auto ml-auto text-center text-white rounded-2xl border-8 bg-[#ef4444] w-fit border-[#ef4444]">
           {{ t('device-injected') }}
           <br>
           {{ t('device-injected-2') }}
@@ -409,31 +412,31 @@ async function copyCurlCommand() {
             <InfoRow v-if="device.updated_at" :label="t('last-update')">
               {{ formatDate(device.updated_at) }}
             </InfoRow>
-            <InfoRow v-if="device.platform" :label="t('platform')">
+            <InfoRow v-if="collection.platform && device.platform" :label="t('platform')">
               {{ device.platform }}
             </InfoRow>
-            <InfoRow v-if="device.plugin_version" :label="t('plugin-version')">
+            <InfoRow v-if="collection.plugin_version && device.plugin_version" :label="t('plugin-version')">
               {{ device.plugin_version }}
             </InfoRow>
             <InfoRow v-if="device.version_name" :label="t('version')" is-link @click="openBundle()">
               {{ device.version_name }}
             </InfoRow>
-            <InfoRow v-if="device.version_build" :label="t('version-builtin')">
+            <InfoRow v-if="collection.version_build && device.version_build" :label="t('version-builtin')">
               {{ device.version_build }}
             </InfoRow>
-            <InfoRow v-if="device.os_version" :label="t('os-version')">
+            <InfoRow v-if="collection.os_version && device.os_version" :label="t('os-version')">
               {{ device.os_version }}
             </InfoRow>
-            <InfoRow v-if="minVersion(device.plugin_version) && device.is_emulator != null" :label="t('is-emulator')">
+            <InfoRow v-if="collection.is_emulator && minVersion(device.plugin_version) && device.is_emulator != null" :label="t('is-emulator')">
               {{ device.is_emulator ? t('yes') : t('no') }}
             </InfoRow>
-            <InfoRow v-if="minVersion(device.plugin_version) && device.is_prod != null" :label="t('is-production-app')">
+            <InfoRow v-if="collection.is_prod && minVersion(device.plugin_version) && device.is_prod != null" :label="t('is-production-app')">
               {{ device.is_prod ? t('yes') : t('no') }}
             </InfoRow>
             <InfoRow v-if="device.key_id" :label="t('public-key-prefix')">
               {{ device.key_id }}
             </InfoRow>
-            <InfoRow v-if="device.country_code" :label="t('country')">
+            <InfoRow v-if="collection.country && device.country_code" :label="t('country')">
               {{ device.country_code }}
             </InfoRow>
             <InfoRow v-if="device.default_channel" :label="t('default-channel')">

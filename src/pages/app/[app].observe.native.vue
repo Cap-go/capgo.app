@@ -15,6 +15,7 @@ import IconTimer from '~icons/lucide/timer'
 import DeliveryLatencyPanel from '~/components/dashboard/DeliveryLatencyPanel.vue'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import VersionGroupSelector from '~/components/dashboard/VersionGroupSelector.vue'
+import { useDeviceDataCollection } from '~/composables/useDeviceDataCollection'
 import { useNativeObserveStats } from '~/composables/useNativeObserveStats'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { formatLocalDateShort } from '~/services/date'
@@ -97,6 +98,7 @@ const packageId = computed(() => {
 const appRouteSegment = computed(() => route.path.match(/^\/app\/([^/]+)/)?.[1] ?? encodeURIComponent(packageId.value))
 const { days } = usePeriodDaysQuery()
 const versionGroup = ref<VersionGroupOption>('version')
+const { collection } = useDeviceDataCollection(packageId)
 const { stats, statsLoading, fetchStats } = useNativeObserveStats<NativeObserveStatsResponse>(
   packageId,
   () => ({ days: days.value, version_group: versionGroup.value }),
@@ -105,7 +107,7 @@ const { stats, statsLoading, fetchStats } = useNativeObserveStats<NativeObserveS
 const hasData = computed(() => (stats.value?.overview.total_events ?? 0) > 0)
 const topActions = computed(() => stats.value?.actionBreakdown.slice(0, 10) ?? [])
 const topVersions = computed(() => stats.value?.versions.slice(0, versionGroup.value === 'version' ? 8 : 24) ?? [])
-const showPlatformColumn = computed(() => versionGroup.value !== 'version')
+const showPlatformColumn = computed(() => collection.value.platform && versionGroup.value !== 'version')
 const showChannelColumn = computed(() => versionGroup.value === 'version_platform_channel')
 const versionHealthHelp = computed(() => {
   if (versionGroup.value === 'version_platform_channel')

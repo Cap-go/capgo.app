@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { TableColumn } from '../comp_def'
 import type { DateRangePreset } from '~/services/dateRange'
+import type { DeviceDataCollection } from '~/services/deviceDataCollection'
 import type { Database } from '~/types/supabase.types'
 import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -17,6 +18,7 @@ import {
   shouldRecountOnTableReload,
   TABLE_DATE_RANGE_DEFAULT,
 } from '~/services/dateRange'
+import { DEFAULT_DEVICE_DATA_COLLECTION } from '~/services/deviceDataCollection'
 import { defaultApiHost, useSupabase } from '~/services/supabase'
 import BundleMultiFilter from './BundleMultiFilter.vue'
 import VersionCompareField from './VersionCompareField.vue'
@@ -30,9 +32,15 @@ const props = defineProps<{
   versionName?: string
   showAddButton?: boolean
   channel?: unknown
+  deviceDataCollection?: DeviceDataCollection
 }>()
 
 const emit = defineEmits(['addDevice'])
+
+const collection = computed(() => props.deviceDataCollection ?? DEFAULT_DEVICE_DATA_COLLECTION)
+const showPlatformColumn = computed(() => collection.value.platform || collection.value.os_version)
+const showPlatformFilter = computed(() => collection.value.platform)
+const showOsVersionFilter = computed(() => collection.value.os_version)
 
 // TODO: delete the old version check when all devices uses the new version system
 type Device = Database['public']['Tables']['devices']['Row']
@@ -81,9 +89,9 @@ const activeExtraFilters = computed(() => {
   const bundleActive = bundleCompareOp.value === 'in'
     ? selectedVersionNames.value.length > 0
     : hasVersionDigits(selectedVersionNames.value[0])
-  return (selectedPlatform.value ? 1 : 0)
+  return ((showPlatformFilter.value && selectedPlatform.value) ? 1 : 0)
     + (bundleActive ? 1 : 0)
-    + (hasVersionDigits(osVersionValue.value) ? 1 : 0)
+    + ((showOsVersionFilter.value && hasVersionDigits(osVersionValue.value)) ? 1 : 0)
 })
 const bundleRangeValue = computed({
   get: () => selectedVersionNames.value[0] ?? '',
@@ -134,50 +142,75 @@ function clearDeviceViewFilters(clearFilters: () => void) {
   cancelScheduledReload()
   clearFilters()
 }
-const columns = ref<TableColumn[]>([
-  {
-    label: t('device-id'),
-    key: 'device_id',
-    class: 'truncate max-w-10',
-    mobile: true,
-    head: true,
-    sortable: false,
-    onClick: (elem: Device) => openOne(elem),
-    renderFunction: (item) => {
-      const customId = item.custom_id?.trim()
-      return h('div', { class: 'flex flex-col text-slate-800 dark:text-white' }, [
-        h('div', { class: 'truncate font-medium' }, customId || item.device_id),
-        customId
-          ? h('div', { class: 'text-xs text-slate-500 dark:text-gray-400 truncate' }, item.device_id)
-          : null,
-      ])
-    },
+
+const columnSort = ref<Record<string, TableColumn['sortable']>>({})
+
+function platformDisplay(elem: Device) {
+  const parts: string[] = []
+  if (collection.value.platform && elem.platform)
+    parts.push(elem.platform)
+  if (collection.value.os_version && elem.os_version)
+    parts.push(elem.os_version)
+  return parts.join(' ')
+}
+
+const columns = computed<TableColumn[]>({
+  get() {
+    const cols: TableColumn[] = [
+      {
+        label: t('device-id'),
+        key: 'device_id',
+        class: 'truncate max-w-10',
+        mobile: true,
+        head: true,
+        sortable: false,
+        onClick: (elem: Device) => openOne(elem),
+        renderFunction: (item) => {
+          const customId = item.custom_id?.trim()
+          return h('div', { class: 'flex flex-col text-slate-800 dark:text-white' }, [
+            h('div', { class: 'truncate font-medium' }, customId || item.device_id),
+            customId
+              ? h('div', { class: 'text-xs text-slate-500 dark:text-gray-400 truncate' }, item.device_id)
+              : null,
+          ])
+        },
+      },
+      {
+        label: t('updated-at'),
+        key: 'updated_at',
+        mobile: false,
+        sortable: 'desc',
+        displayFunction: (elem: Device) => formatDate(elem.updated_at ?? ''),
+      },
+    ]
+    if (showPlatformColumn.value) {
+      cols.push({
+        label: t('platform'),
+        key: 'platform',
+        mobile: true,
+        head: true,
+        sortable: false,
+        displayFunction: platformDisplay,
+      })
+    }
+    cols.push({
+      label: t('bundle'),
+      key: 'version_name',
+      mobile: true,
+      head: true,
+      sortable: false,
+      displayFunction: (elem: Device) => elem.version_name ?? elem.version ?? 'unknown',
+      onClick: (elem: Device) => openOneVersion(elem),
+    })
+    return cols.map(col => ({
+      ...col,
+      sortable: columnSort.value[col.key] ?? col.sortable,
+    }))
   },
-  {
-    label: t('updated-at'),
-    key: 'updated_at',
-    mobile: false,
-    sortable: 'desc',
-    displayFunction: (elem: Device) => formatDate(elem.updated_at ?? ''),
+  set(next) {
+    columnSort.value = Object.fromEntries(next.map(col => [col.key, col.sortable]))
   },
-  {
-    label: t('platform'),
-    key: 'platform',
-    mobile: true,
-    head: true,
-    sortable: false,
-    displayFunction: (elem: Device) => `${elem.platform} ${elem.os_version}`,
-  },
-  {
-    label: t('bundle'),
-    key: 'version_name',
-    mobile: true,
-    head: true,
-    sortable: false,
-    displayFunction: (elem: Device) => elem.version_name ?? elem.version ?? 'unknown',
-    onClick: (elem: Device) => openOneVersion(elem),
-  },
-])
+})
 
 function getActiveOrder(columns: TableColumn[]) {
   return columns
@@ -239,8 +272,8 @@ function getBundleFilterPayload() {
 function getDevicesFilterBody() {
   return {
     ...getBundleFilterPayload(),
-    ...getOsVersionFilter(),
-    platform: getPlatformFilter(),
+    ...(showOsVersionFilter.value ? getOsVersionFilter() : {}),
+    platform: showPlatformFilter.value ? getPlatformFilter() : undefined,
   }
 }
 
@@ -681,6 +714,13 @@ watch(() => props.versionName, (value) => {
   })
 })
 
+watch(collection, (flags) => {
+  if (!flags.platform)
+    selectedPlatform.value = ''
+  if (!flags.os_version)
+    osVersionValue.value = ''
+})
+
 watch([selectedPlatform, selectedVersionNames, bundleCompareOp, osVersionOp, osVersionValue], () => {
   if (skipFilterReload.value)
     return
@@ -890,7 +930,7 @@ async function exportDevices(format: 'csv' | 'json') {
         </div>
       </template>
       <template #filter-extras>
-        <fieldset>
+        <fieldset v-if="showPlatformFilter">
           <legend class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
             {{ t('platform') }}
           </legend>
@@ -918,6 +958,7 @@ async function exportDevices(format: 'csv' | 'json') {
           </div>
         </fieldset>
         <VersionCompareField
+          v-if="showOsVersionFilter"
           :label="t('os-version')"
           :op="osVersionOp"
           :value="osVersionValue"
