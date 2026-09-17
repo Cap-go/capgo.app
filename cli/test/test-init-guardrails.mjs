@@ -36,7 +36,7 @@ import {
   waitForCommandResult,
 } from '../src/init/command-execution.ts'
 import { getCliLoginCommand } from '../src/runner-command.ts'
-import { usesAlwaysDirectUpdate } from '../src/updaterConfig.ts'
+import { shouldWarnDirectUpdateWithoutDelta, usesAlwaysDirectUpdate, usesDirectUpdate } from '../src/updaterConfig.ts'
 import { getPMAndCommand, setPMAndCommand } from '../src/utils.ts'
 
 let failures = 0
@@ -348,6 +348,29 @@ t('instant update detection supports new autoUpdate modes and legacy directUpdat
   assert.equal(usesAlwaysDirectUpdate({ autoUpdate: true, directUpdate: true }), true)
   assert.equal(usesAlwaysDirectUpdate({ directUpdate: 'always' }), true)
   assert.equal(usesAlwaysDirectUpdate({ directUpdate: 'onLaunch' }), false)
+  assert.equal(usesAlwaysDirectUpdate({ directUpdate: 'atInstall' }), false)
+})
+
+t('direct update detection includes always, atInstall, and onLaunch', () => {
+  assert.equal(usesDirectUpdate({ autoUpdate: 'always' }), true)
+  assert.equal(usesDirectUpdate({ autoUpdate: 'atInstall' }), true)
+  assert.equal(usesDirectUpdate({ autoUpdate: 'onLaunch' }), true)
+  assert.equal(usesDirectUpdate({ autoUpdate: 'atBackground', directUpdate: 'always' }), false)
+  assert.equal(usesDirectUpdate({ autoUpdate: 'onlyDownload', directUpdate: 'atInstall' }), false)
+  assert.equal(usesDirectUpdate({ autoUpdate: false, directUpdate: 'onLaunch' }), false)
+  assert.equal(usesDirectUpdate({ autoUpdate: true, directUpdate: true }), true)
+  assert.equal(usesDirectUpdate({ directUpdate: 'always' }), true)
+  assert.equal(usesDirectUpdate({ directUpdate: 'atInstall' }), true)
+  assert.equal(usesDirectUpdate({ directUpdate: 'onLaunch' }), true)
+  assert.equal(usesDirectUpdate({ autoUpdate: true }), false)
+  assert.equal(usesDirectUpdate(undefined), false)
+})
+
+t('direct update without delta warns only when instant updates skip delta', () => {
+  assert.equal(shouldWarnDirectUpdateWithoutDelta({ instantUpdateEnabled: true, deltaEnabled: false }), true)
+  assert.equal(shouldWarnDirectUpdateWithoutDelta({ instantUpdateEnabled: true, deltaEnabled: true }), false)
+  assert.equal(shouldWarnDirectUpdateWithoutDelta({ instantUpdateEnabled: false, deltaEnabled: false }), false)
+  assert.equal(shouldWarnDirectUpdateWithoutDelta({ instantUpdateEnabled: true, deltaEnabled: false, dryUpload: true }), false)
 })
 
 t('guided ota version suggestions stay on major zero when native baseline is pinned', () => {

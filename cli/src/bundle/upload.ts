@@ -24,7 +24,7 @@ import { confirmWithRememberedChoice } from '../promptPreferences'
 import { showReplicationProgress } from '../replicationProgress'
 import { CliUserError } from '../shared/cli-user-error'
 import { formatTable } from '../terminal-table'
-import { usesAlwaysDirectUpdate } from '../updaterConfig'
+import { DIRECT_UPDATE_WITHOUT_DELTA_EVENT, shouldWarnDirectUpdateWithoutDelta, usesDirectUpdate } from '../updaterConfig'
 import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
 import type { AutoBumpLevel } from '../versionHelpers'
 import { autoBumpVersionBy, getVersionSuggestions, interactiveVersionBump, normalizeAutoBumpInput } from '../versionHelpers'
@@ -466,6 +466,37 @@ function shouldUploadFullZip(options: OptionsUpload): boolean {
 
 function shouldSendAppTooLargeEvent(options: OptionsUpload): boolean {
   return shouldUploadFullZip(options) || hasCompleteS3UploadConfig(options)
+}
+
+async function warnDirectUpdateWithoutDelta(input: {
+  apikey: string
+  appid: string
+  orgId: string
+  options: OptionsUpload
+  silent: boolean
+}) {
+  if (!input.silent) {
+    log.warn('WARNING: Direct updates (directUpdate always/atInstall/onLaunch) are enabled, but this upload is not using delta updates.')
+    log.warn('Devices will download the full zip while applying the update, which can feel slow or stuck.')
+    log.warn('Upload with --delta so only changed files are sent: npx @capgo/cli@latest bundle upload --delta')
+  }
+
+  if (input.options.verbose)
+    log.info(`[Verbose] Sending '${DIRECT_UPDATE_WITHOUT_DELTA_EVENT}' event to analytics...`)
+
+  await sendEvent(input.apikey, {
+    channel: 'app-error',
+    event: DIRECT_UPDATE_WITHOUT_DELTA_EVENT,
+    org_id: input.orgId,
+    tracking_version: 2,
+    tags: {
+      'app-id': input.appid,
+      'external': !!input.options.external,
+    },
+  }, input.options.verbose)
+
+  if (input.options.verbose)
+    log.info(`[Verbose] Event sent successfully`)
 }
 
 async function prepareBundleFile(path: string, options: OptionsUpload, apikey: string, orgId: string, appid: string, maxUploadLength: number, alertUploadSize: number, publicKeyFromConfig?: string) {
@@ -1334,14 +1365,14 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   options.userRequestedDelta = !!(options.partial || options.delta || options.partialOnly || options.deltaOnly)
 
   // Check if instant updates are enabled and auto-enable delta updates.
-  const instantUpdateEnabled = usesAlwaysDirectUpdate(extConfig?.config?.plugins?.CapacitorUpdater)
+  const instantUpdateEnabled = usesDirectUpdate(extConfig?.config?.plugins?.CapacitorUpdater)
   const interactive = canPromptInteractively({ silent })
   if (instantUpdateEnabled && options.delta === undefined) {
     if (interactive) {
-      log.info('💡 Instant updates are enabled in your config')
+      log.info('💡 Direct updates are enabled in your config (always, atInstall, or onLaunch)')
       log.info('   Delta updates send only changed files instead of the full bundle')
       const enableDelta = await pConfirm({
-        message: 'Enable delta updates for this upload? (Recommended with instant updates)',
+        message: 'Enable delta updates for this upload? (Recommended with direct updates)',
         initialValue: true,
       })
       if (!pIsCancel(enableDelta) && enableDelta) {
@@ -1711,6 +1742,20 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       log.info(`[Verbose] Delta updates: ${options.delta ? 'enabled' : 'disabled'}`)
   }
 
+  if (shouldWarnDirectUpdateWithoutDelta({
+    instantUpdateEnabled,
+    deltaEnabled: !!options.delta,
+    dryUpload: !!options.dryUpload,
+  })) {
+    await warnDirectUpdateWithoutDelta({
+      apikey,
+      appid,
+      orgId,
+      options,
+      silent,
+    })
+  }
+
   if (options.encryptPartial && encryptionMethod === 'v1')
     uploadFail('You cannot encrypt the partial update if you are not using the v2 encryption method')
 
@@ -1919,6 +1964,19 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
       log.info(`Failed to upload partial files to capgo cloud. Error: ${formatError(err)}. This is not a critical error, the bundle has been uploaded without the partial files`)
       if (options.verbose)
         log.info(`[Verbose] Delta upload error details: ${formatError(err)}`)
+      if (shouldWarnDirectUpdateWithoutDelta({
+        instantUpdateEnabled,
+        deltaEnabled: false,
+        dryUpload: !!options.dryUpload,
+      })) {
+        await warnDirectUpdateWithoutDelta({
+          apikey,
+          appid,
+          orgId,
+          options,
+          silent,
+        })
+      }
     }
 
     if (finalManifest?.length) {

@@ -96,6 +96,7 @@ function allPreferencesDisabled(): EmailPreferences {
   prefs.cli_realtime_feed = false
   prefs.daily_fail_ratio = false
   prefs.app_too_large = false
+  prefs.direct_update_without_delta = false
   return prefs
 }
 
