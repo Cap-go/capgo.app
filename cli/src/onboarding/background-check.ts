@@ -76,7 +76,6 @@ export async function runOnboardingCheck(options: OnboardingCheckOptions, check:
       }),
       // Preserve source, outcome, and all unrelated onboarding steps.
       body: JSON.stringify({ onboarding: { steps: { [check.step]: { status: 'done' } } } }),
-      signal: AbortSignal.timeout(2_000),
       redirect: 'error',
     })
     todoReportHttpStatus = response.status

@@ -1,6 +1,7 @@
 import type { Command } from 'commander'
 import { cwd } from 'node:process'
 import { Worker } from 'node:worker_threads'
+import { registerOnboardingCheck } from './background-workers'
 
 export interface OnboardingCheckOptions {
   cwd: string
@@ -39,6 +40,7 @@ export function startOnboardingCheck(command: Command, commandPath: string, work
     worker.stdout?.destroy()
     worker.stderr?.destroy()
     worker.on('error', () => {})
+    registerOnboardingCheck(worker)
     // Both detection and reporting can be abandoned when the command exits.
     worker.unref()
   }

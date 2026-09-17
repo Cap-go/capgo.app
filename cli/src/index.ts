@@ -54,6 +54,7 @@ import { login } from './login'
 import { startMcpServer } from './mcp/server'
 import { setupNotifications } from './notifications/setup'
 import { startNotifyAppReadyCheck } from './notify-app-ready-background'
+import { waitForOnboardingChecks } from './onboarding/background-shutdown'
 import { type ObserveCliOptions, observeCommand } from './observe/command'
 import { addOrganization, deleteOrganization, listMembers, listOrganizations, setOrganization } from './organization'
 import { capturePosthogException, getCommandPath, shouldCapturePosthogException } from './posthog'
@@ -97,10 +98,12 @@ program
 enableSupabaseInstrumentation()
 
 let currentCommandPath = 'unknown'
+let currentActionCommand: Command | undefined
 
 program.hook('preAction', (_thisCommand, actionCommand) => {
   setConfigWriteTarget(resolveCapacitorConfigTargetPath(actionCommand.optsWithGlobals().capacitorConfig, cwd(), { logError: true }))
   currentCommandPath = getCommandPath(actionCommand)
+  currentActionCommand = actionCommand
   setCurrentCliCommand(currentCommandPath)
   applyCommandAnalyticsOptOut(currentCommandPath, actionCommand.opts())
   startNotifyAppReadyCheck(actionCommand, currentCommandPath)
@@ -1519,6 +1522,8 @@ void (async () => {
   try {
     await program.parseAsync()
     await flushAnalytics()
+    if (currentActionCommand)
+      await waitForOnboardingChecks(currentActionCommand, currentCommandPath)
   }
   catch (error: unknown) {
     if (typeof error === 'object' && error !== null && 'code' in error) {

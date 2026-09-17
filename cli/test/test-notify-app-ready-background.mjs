@@ -19,7 +19,7 @@ const call = "import { CapacitorUpdater } from '@capgo/capacitor-updater'; Capac
 
 async function workerHarness(worker = workerUrl) {
   const requests = []
-  const behavior = { events: 'ok', putStatus: 200, putError: false }
+  const behavior = { events: 'ok', putStatus: 200, putError: false, putDelayMs: 0 }
   const server = createServer(async (request, response) => {
     let body = ''
     for await (const chunk of request)
@@ -28,7 +28,7 @@ async function workerHarness(worker = workerUrl) {
     if (request.method === 'POST')
       behavior.onEvent?.(requests.at(-1).body)
     if (request.method === 'PUT' && behavior.putError) {
-      request.destroy()
+      request.socket.destroy()
       return
     }
     if (behavior.redirectLocation && (request.method === 'POST' ? behavior.events === 'redirect' : behavior.putRedirect)) {
@@ -37,6 +37,8 @@ async function workerHarness(worker = workerUrl) {
     }
     if (request.method === 'POST' && behavior.events === 'hang')
       return
+    if (request.method === 'PUT' && behavior.putDelayMs)
+      await new Promise(resolve => setTimeout(resolve, behavior.putDelayMs))
     const status = request.method === 'PUT' ? behavior.putStatus : behavior.events === 'rejected' ? 503 : 200
     response.writeHead(status, { 'Content-Type': 'application/json' }).end('{"status":"ok"}')
   })
@@ -343,6 +345,22 @@ test.concurrent('analytics opt-out and unavailable telemetry never prevent the t
   }
   finally {
     harness.close()
+  }
+}, 20_000)
+
+test.concurrent('both workers allow successful todo reports to take longer than two seconds', async () => {
+  for (const [worker, channel] of [[workerUrl, 'notify-app-ready'], [updaterWorkerUrl, 'updater-installed']]) {
+    const harness = await workerHarness(worker)
+    if (channel === 'updater-installed')
+      installUpdater(harness.project)
+    harness.behavior.putDelayMs = 2_200
+    try {
+      await harness.run()
+      scanEvents(harness.requests, 'found', 'success', channel)
+    }
+    finally {
+      harness.close()
+    }
   }
 }, 20_000)
 
