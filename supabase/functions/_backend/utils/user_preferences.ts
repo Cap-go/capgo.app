@@ -36,6 +36,7 @@ const EMAIL_PREF_DISABLED_TAGS: Record<EmailPreferenceKey, string> = {
   bundle_incompatible: 'bundle_incompatible_disabled',
   bundle_incompatible_expected: 'bundle_incompatible_expected_disabled',
   app_too_large: 'app_too_large_disabled',
+  direct_update_without_delta: 'direct_update_without_delta_disabled',
 }
 
 const ALL_LEGACY_TAGS = [NOTIFICATION_TAG, NEWSLETTER_TAG]

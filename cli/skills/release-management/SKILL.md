@@ -46,6 +46,7 @@ Use this skill for OTA update workflows in Capgo Cloud.
   - External URL mode is useful for very large or privacy-sensitive bundles.
   - Encryption is recommended for trustless distribution.
   - Interactive prompts are disabled automatically in CI and other non-interactive sessions so uploads do not block automation.
+  - If CapacitorUpdater direct/instant updates are enabled (`directUpdate` or `autoUpdate` set to `always`, `atInstall`, or `onLaunch`) and the upload is not using `--delta`, the CLI warns and reports a Bento event. Use `--delta` (or omit `--no-delta`) so devices do not download a full zip while applying the update.
   - Optional upload prompts can remember the user's answer on the current machine so future uploads can skip the same question.
   - `--channel` accepts a single channel or a comma-separated list such as `production,beta`.
   - When multiple channels are provided, channels that already have the uploaded checksum are skipped and the remaining channels are assigned.

@@ -6,6 +6,7 @@ import { APP_TOO_LARGE_EVENT, buildAppTooLargeBentoEvent } from '../utils/app_to
 import { markAppOnboardingLoginFromTracking } from '../utils/app_onboarding_login.ts'
 import { buildBuilderOnboardingBentoEvent, BUILDER_RECOVERY_MILESTONES } from '../utils/builder_onboarding_recovery.ts'
 import { BUNDLE_INCOMPATIBLE_EVENT, buildBundleCompatibilityBentoEvent, bundleIncompatibleEmailOutcome, isBreakingChangeGatedByChannelStrategy, isCliTrueTag } from '../utils/bundle_compatibility_recovery.ts'
+import { DIRECT_UPDATE_WITHOUT_DELTA_EVENT, buildDirectUpdateWithoutDeltaBentoEvent } from '../utils/direct_update_without_delta_tracking.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -302,6 +303,35 @@ async function buildAppTooLargeTrackedBentoEvent(
   })
 }
 
+async function buildDirectUpdateWithoutDeltaTrackedBentoEvent(
+  c: Context<MiddlewareKeyVariables>,
+  supabase: ReturnType<typeof supabaseWithAuth>,
+  onboardingOrgId: string | undefined,
+  appId: string | undefined,
+  trackedBody: TrackOptions,
+) {
+  if (!onboardingOrgId || !appId || trackedBody.event !== DIRECT_UPDATE_WITHOUT_DELTA_EVENT)
+    return undefined
+
+  const [orgResult, appResult] = await Promise.all([
+    supabase.from('orgs').select('id, name').eq('id', onboardingOrgId).single(),
+    supabase.from('apps').select('name').eq('app_id', appId).single(),
+  ])
+  if (orgResult.error || appResult.error) {
+    cloudlog({ requestId: c.get('requestId'), message: 'direct update without delta bento lookup failed; skipping signal', org: orgResult.error, app: appResult.error })
+    return undefined
+  }
+
+  return buildDirectUpdateWithoutDeltaBentoEvent({
+    event: trackedBody.event,
+    orgId: onboardingOrgId,
+    appId,
+    orgName: orgResult.data?.name ?? undefined,
+    appName: appResult.data?.name ?? undefined,
+    tags: trackedBody.tags,
+  })
+}
+
 function optionalTagString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
@@ -528,8 +558,14 @@ app.post('/', middlewareAuth(), async (c) => {
   // automation email org admins (gated by the `app_too_large` preference).
   const appTooLargeBentoEvent: BentoTrackingPayload | undefined = await buildAppTooLargeTrackedBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
 
+  // CLI bundle upload warning when instant/direct updates are on but the
+  // upload is not using delta. PostHog records `Direct Update Without Delta`;
+  // this Bento signal lets a lifecycle automation email org admins (gated by
+  // the `direct_update_without_delta` preference).
+  const directUpdateWithoutDeltaBentoEvent: BentoTrackingPayload | undefined = await buildDirectUpdateWithoutDeltaTrackedBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
+
   // Exactly one of these is ever set (distinct event names); `??` picks the active one.
-  const bentoEvent = onboardingBentoEvent ?? builderBentoEvent ?? bundleIncompatibleBentoEvent ?? aiInstructionsCopiedBentoEvent ?? appTooLargeBentoEvent
+  const bentoEvent = onboardingBentoEvent ?? builderBentoEvent ?? bundleIncompatibleBentoEvent ?? aiInstructionsCopiedBentoEvent ?? appTooLargeBentoEvent ?? directUpdateWithoutDeltaBentoEvent
   const apikeyId = c.get('apikey')?.id
   await sendEventToTracking(c, addAuthenticatedApiKeyIdToTrackingPayload({
     ...trackedBody,
