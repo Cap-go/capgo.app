@@ -5,7 +5,6 @@ import type { AdminOnboardingActivationCohort, AdminOnboardingWizardDropoff } fr
 import { and, eq, isNotNull, isNull, or, sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/node-postgres'
 import { alias } from 'drizzle-orm/pg-core'
-import { getRuntimeKey } from 'hono/adapter'
 // @ts-types="npm:@types/pg"
 import { Pool } from 'pg'
 import { serializePostgresError } from '../plugin_runtime/utils/postgres_error.ts'
@@ -411,10 +410,17 @@ export function logPgError(c: Context, functionName: string, error: unknown) {
 }
 
 export function closeClient(c: Context, db: ReturnType<typeof getPgClient>) {
-  // cloudlog(c.get('requestId'), 'Closing client', client)
-  if (getRuntimeKey() !== 'workerd')
-    return backgroundTask(c, db.end())
-  return undefined
+  // Always end the request-scoped pool. On workerd a Pool that is never ended
+  // leaks its Hyperdrive sockets until the pool slots are exhausted (the workerd
+  // sawtooth). backgroundTask defers end() to waitUntil, so it never adds
+  // request latency.
+  return backgroundTask(c, Promise.resolve(db.end()).catch((error: unknown) => {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'PG client end failed',
+      error: serializePostgresError(error),
+    })
+  }))
 }
 
 export function getAlias() {
