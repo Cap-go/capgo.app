@@ -310,6 +310,17 @@ describe('channel information rollout and update package UX', () => {
     })
   })
 
+  it('applyRolloutSettings rejects an out-of-range cache TTL', async () => {
+    const { container, t } = mountDialogShell()
+    const channel: TestChannel = { rollout_percentage_bps: 1000, rollout_cache_ttl_seconds: 2592000 }
+    const { flows, saveChannelChanges, toast } = createTestFlows({ container, t, channel })
+
+    await flows.applyRolloutSettings({ percentage: 25, cacheTtlSeconds: 30 })
+    expect(toast.error).toHaveBeenCalledWith(t('invalid-rollout-cache-ttl'))
+    expect(saveChannelChanges).not.toHaveBeenCalled()
+    expect(container.textContent).not.toContain('Update rollout settings?')
+  })
+
   it('rollout control confirms match expected dialog ids and saves', async () => {
     const { container, t } = mountDialogShell()
     const channel: TestChannel = {
@@ -379,6 +390,7 @@ describe('channel information rollout and update package UX', () => {
     expect(container.textContent).toContain('Progressive rollout')
     expect(container.textContent).toContain('Stable fallback stays for most devices')
     expect(container.textContent).toContain('Share of eligible devices in the sticky rollout cohort')
+    expect(container.textContent).toContain('cached server-side')
     expect(container.textContent).not.toContain('Confirm')
     findDialogButton(container, 'Close').click()
     await nextTick()

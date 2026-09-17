@@ -1294,7 +1294,7 @@ async function copyCurlCommand() {
 
                   <div class="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
                     <div class="space-y-1.5">
-                      <label class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('rollout-percentage') }}</label>
+                      <label for="rollout-percentage-input" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('rollout-percentage') }}</label>
                       <p class="text-xs text-slate-500 dark:text-slate-400">
                         {{ t('rollout-percentage-placeholder') }}
                       </p>
@@ -1321,7 +1321,7 @@ async function copyCurlCommand() {
                       </div>
                     </div>
                     <div class="space-y-1.5">
-                      <label class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('cache-ttl-seconds') }}</label>
+                      <label for="rollout-cache-ttl-input" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('cache-ttl-seconds') }}</label>
                       <p class="text-xs text-slate-500 dark:text-slate-400">
                         {{ t('cache-ttl-placeholder') }}
                       </p>
