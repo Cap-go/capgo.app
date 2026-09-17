@@ -1,14 +1,16 @@
 import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '../../src/utils/onboardingChannelAnalytics'
 import { createPinia } from 'pinia'
-import { createApp, defineComponent, h, ref } from 'vue'
+import { createApp, defineComponent, h, onMounted, ref } from 'vue'
 import { createRouter, createWebHistory, RouterView } from 'vue-router'
 import AppOnboardingCliSteps from '../../src/components/dashboard/AppOnboardingCliSteps.vue'
 import AppOnboardingFlow from '../../src/components/dashboard/AppOnboardingFlow.vue'
 import AppOnboardingSetupChecklist from '../../src/components/dashboard/AppOnboardingSetupChecklist.vue'
+import GettingStartedNav from '../../src/components/dashboard/GettingStartedNav.vue'
 import OnboardingExploreBanner from '../../src/components/dashboard/OnboardingExploreBanner.vue'
 import OnboardingExploreReminder from '../../src/components/dashboard/OnboardingExploreReminder.vue'
 import DialogV2 from '../../src/components/DialogV2.vue'
 import { i18n } from '../../src/modules/i18n'
+import { install as installOnboardingSetupNavigation } from '../../src/modules/onboarding-setup'
 import GettingStartedPage from '../../src/pages/app/[app].getting-started.vue'
 import { useSupabase } from '../../src/services/supabase'
 import { useMainStore } from '../../src/stores/main'
@@ -155,6 +157,7 @@ const pinia = createPinia()
 app.use(pinia)
 // Supply identity to the real channel form without starting dashboard store watchers.
 Object.defineProperty(useMainStore(pinia), 'user', { value: { id: '00000000-0000-4000-8000-000000000001', email: 'preview@example.com', onboarding: { intent: 'ota', status: 'in_progress', step: 'setup', flow: 'app', setup_stage: 'cli', app_id: previewAppId } } })
+Object.defineProperty(useMainStore(pinia), 'auth', { value: { id: '00000000-0000-4000-8000-000000000001' } })
 useMainStore(pinia).awaitInitialLoad = async () => true
 const organization = useOrganizationStore(pinia)
 const previewOrganization = { gid: '00000000-0000-4000-8000-000000000002' }
@@ -168,15 +171,23 @@ organization.setCurrentOrganization = (orgId) => {
   preview.selectedOrgId.value = selectedOrganization.value.gid
 }
 organization.awaitInitialLoad = async () => true
+organization.getAppsByOrgId = orgId => orgId === previewOrganization.gid ? [{ app_id: previewAppId, owner_org: orgId, name: 'My Capacitor app', icon_url: '', need_onboarding: true, onboarding: { setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome } } }] : []
 app.use(i18n)
-app.use(createRouter({
+const router = createRouter({
   history: createWebHistory(),
   routes: navigationView
     ? [
-        { path: '/app/:app', component: defineComponent({ setup: () => () => h('section', { 'data-test': 'preview-app-dashboard' }, [h('h1', 'App dashboard'), h(OnboardingExploreBanner, { appId: previewAppId }), h(OnboardingExploreReminder, { appId: previewAppId })]) }) },
-        { path: '/app/:app/getting-started', name: '/app/[app].getting-started', component: GettingStartedPage },
+        { path: '/app/:app', component: defineComponent({ setup: () => () => h('section', { 'data-test': 'preview-app-dashboard' }, [h('h1', 'App dashboard'), h(GettingStartedNav), h(OnboardingExploreBanner, { appId: previewAppId }), h(OnboardingExploreReminder, { appId: previewAppId })]) }) },
+        { path: '/app/:app/getting-started', name: '/app/[app].getting-started', component: defineComponent({
+          setup() {
+            onMounted(() => events.push('getting-started-mounted'))
+            return () => h(GettingStartedPage)
+          },
+        }) },
         { path: '/:pathMatch(.*)*', component: defineComponent({ setup: () => () => h(AppOnboardingFlow, { onboarding: true }) }) },
       ]
     : [{ path: '/:pathMatch(.*)*', component: { render: () => null } }],
-}))
-void app.config.globalProperties.$router.isReady().then(() => app.mount('#app'))
+})
+installOnboardingSetupNavigation({ app, router, routes: router.options.routes })
+app.use(router)
+void router.isReady().then(() => app.mount('#app'))
