@@ -15,8 +15,8 @@ export interface DeviceComparable {
   version_build: string // DB schema: DEFAULT 'builtin'
   custom_id: string // DB schema: DEFAULT '' NOT NULL
   version_name: string | null // DB schema: text (NULLABLE)
-  is_prod: boolean
-  is_emulator: boolean
+  is_prod: boolean | null
+  is_emulator: boolean | null
   install_source?: string | null
   default_channel: string | null // DB schema: TEXT (NULLABLE)
   key_id: string | null
@@ -65,8 +65,8 @@ export function toComparableDevice(device: DeviceWithoutCreatedAt): DeviceCompar
     custom_id: normalizedCustomId ?? '',
     // DB schema: version_name text (NULLABLE - allows NULL!)
     version_name: normalizedVersionName,
-    is_prod: device.is_prod ?? false,
-    is_emulator: device.is_emulator ?? false,
+    is_prod: device.is_prod == null ? null : Boolean(device.is_prod),
+    is_emulator: device.is_emulator == null ? null : Boolean(device.is_emulator),
     // DB schema: default_channel TEXT (NULLABLE - allows NULL!)
     default_channel: normalizedDefaultChannel,
     key_id: normalizedKeyId,
@@ -103,8 +103,8 @@ export function toComparableExisting(existing: DeviceExistingRowLike): DeviceCom
     custom_id: normalizedCustomId ?? '',
     // DB schema: version_name text (NULLABLE - allows NULL!)
     version_name: normalizedVersionName,
-    is_prod: existing?.is_prod === undefined || existing?.is_prod === null ? false : Boolean(existing.is_prod),
-    is_emulator: existing?.is_emulator === undefined || existing?.is_emulator === null ? false : Boolean(existing.is_emulator),
+    is_prod: existing?.is_prod === undefined || existing?.is_prod === null ? null : Boolean(existing.is_prod),
+    is_emulator: existing?.is_emulator === undefined || existing?.is_emulator === null ? null : Boolean(existing.is_emulator),
     // DB schema: default_channel TEXT (NULLABLE - allows NULL!)
     default_channel: normalizedDefaultChannel,
     key_id: normalizedKeyId,

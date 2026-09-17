@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Context } from 'hono'
+import type { DeviceDataCollection } from './deviceDataCollection.ts'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import type { StatsLogDimensions, VersionAction } from './plugin_stats.ts'
 import type { Database } from './supabase.types.ts'
@@ -8,6 +9,7 @@ import { getRuntimeKey } from 'hono/adapter'
 import { countDevicesCF, countInstallSourcesCF, countUpdatesFromLogsCF, countUpdatesFromLogsExternalCF, getAppsFromCF, getUpdateStatsCF, readBandwidthUsageCF, readDevicesCF, readDeviceUsageCF, readDeviceVersionCountsCF, readNativeActiveDevicesSummaryCF, readNativeDailyPlatformActiveCF, readNativeVersionUsageCF, readStatsCF, readStatsInsightsCF, readStatsVersionCF, trackDevicesCF } from './cloudflare.ts'
 import { isDemoApp } from './demo.ts'
 import { normalizeDeviceCountryCode } from './deviceComparison.ts'
+import { applyDeviceDataCollectionToDevice, applyDeviceDataCollectionToLogDimensions, DEFAULT_DEVICE_DATA_COLLECTION } from './deviceDataCollection.ts'
 import { simpleError } from './hono.ts'
 import { cloudlog } from './logging.ts'
 import {
@@ -99,12 +101,16 @@ export function createStatsLogs(c: Context, app_id: string, device_id: string, a
 
 interface CreateStatsDevicesOptions {
   includeRequestCountry?: boolean
+  collection?: DeviceDataCollection
 }
 
 export function createStatsDevices(c: Context, device: DeviceWithoutCreatedAt, options: CreateStatsDevicesOptions = {}) {
-  const requestCountry = options.includeRequestCountry === false ? undefined : c.req.raw?.cf?.country
-  const countryCode = normalizeDeviceCountryCode(typeof requestCountry === 'string' ? requestCountry : undefined)
-  const deviceWithCountry = countryCode ? { ...device, country_code: countryCode } : device
+  const collection = options.collection ?? DEFAULT_DEVICE_DATA_COLLECTION
+  const requestCountry = options.includeRequestCountry === false || !collection.country ? undefined : c.req.raw?.cf?.country
+  const countryCode = collection.country
+    ? normalizeDeviceCountryCode(typeof requestCountry === 'string' ? requestCountry : undefined)
+    : null
+  const deviceWithCountry = countryCode ? { ...device, country_code: countryCode } : { ...device, country_code: collection.country ? device.country_code : null }
 
   // In Cloudflare Workers (workerd), prefer Analytics Engine when available.
   // For local Cloudflare testing, these bindings are typically absent, so we
@@ -121,21 +127,25 @@ export function createStatsDevices(c: Context, device: DeviceWithoutCreatedAt, o
   return backgroundTask(c, trackDevicesSB(c, deviceWithCountry))
 }
 
-export function sendStatsAndDevice(c: Context, device: DeviceWithoutCreatedAt, statsActions: StatsActions[], isFailedStat = false) {
-  const requestCountry = c.req.raw?.cf?.country
-  const countryCode = normalizeDeviceCountryCode(typeof requestCountry === 'string' ? requestCountry : device.country_code)
-  const dimensions: StatsLogDimensions = {
-    platform: device.platform,
+export function sendStatsAndDevice(c: Context, device: DeviceWithoutCreatedAt, statsActions: StatsActions[], isFailedStat = false, collection?: DeviceDataCollection) {
+  const flags = collection ?? c.get('deviceDataCollection') ?? DEFAULT_DEVICE_DATA_COLLECTION
+  const storedDevice = applyDeviceDataCollectionToDevice(device, flags) as DeviceWithoutCreatedAt
+  const requestCountry = flags.country ? c.req.raw?.cf?.country : undefined
+  const countryCode = flags.country
+    ? normalizeDeviceCountryCode(typeof requestCountry === 'string' ? requestCountry : storedDevice.country_code)
+    : null
+  const dimensions: StatsLogDimensions = applyDeviceDataCollectionToLogDimensions({
+    platform: storedDevice.platform,
     country_code: countryCode,
-    plugin_version: device.plugin_version,
-  }
+    plugin_version: storedDevice.plugin_version,
+  }, flags)
   const jobs = []
   statsActions.forEach(({ action, versionName, metadata }) => {
-    jobs.push(createStatsLogs(c, device.app_id, device.device_id, action, versionName ?? device.version_name, metadata, dimensions))
+    jobs.push(createStatsLogs(c, storedDevice.app_id, storedDevice.device_id, action, versionName ?? storedDevice.version_name, metadata, dimensions))
   })
 
   if (!isFailedStat)
-    jobs.push(createStatsDevices(c, device))
+    jobs.push(createStatsDevices(c, storedDevice, { collection: flags }))
 
   return Promise.all(jobs)
 }

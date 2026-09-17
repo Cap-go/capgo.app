@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { DeviceDataCollection } from '~/services/deviceDataCollection'
 import type { Database } from '~/types/supabase.types'
 import { Camera } from '@capacitor/camera'
 import { FormKit, FormKitMessages } from '@formkit/vue'
@@ -14,6 +15,7 @@ import gearSix from '~icons/ph/gear-six?raw'
 import iconName from '~icons/ph/user?raw'
 import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { DEVICE_DATA_COLLECTION_KEYS, parseDeviceDataCollection } from '~/services/deviceDataCollection'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
 import { useSupabase } from '~/services/supabase'
@@ -240,6 +242,14 @@ async function submit(form: {
   allow_preview: boolean
   allow_device_custom_id: boolean
   block_provider_infra_requests: boolean
+  collect_country: boolean
+  collect_platform: boolean
+  collect_os_version: boolean
+  collect_plugin_version: boolean
+  collect_version_build: boolean
+  collect_is_emulator: boolean
+  collect_is_prod: boolean
+  collect_install_source: boolean
   build_timeout_minutes?: number | string
 }) {
   isLoading.value = true
@@ -308,8 +318,26 @@ async function submit(form: {
     toast.error(error as string)
   }
 
+  try {
+    await updateDeviceDataCollection({
+      country: form.collect_country !== false,
+      platform: form.collect_platform !== false,
+      os_version: form.collect_os_version !== false,
+      plugin_version: form.collect_plugin_version !== false,
+      version_build: form.collect_version_build !== false,
+      is_emulator: form.collect_is_emulator !== false,
+      is_prod: form.collect_is_prod !== false,
+      install_source: form.collect_install_source !== false,
+    })
+  }
+  catch (error) {
+    toast.error(error as string)
+  }
+
   isLoading.value = false
 }
+
+const deviceDataCollection = computed(() => parseDeviceDataCollection(appRef.value?.device_data_collection))
 
 const storeImportUrl = computed(() => appRef.value?.ios_store_url || appRef.value?.android_store_url || '')
 const shouldShowStoreIconImport = computed(() => !appRef.value?.icon_url && !isAppIconLoading.value && !!storeImportUrl.value)
@@ -546,6 +574,20 @@ async function updateAllowDeviceCustomId(newAllowDeviceCustomId: boolean) {
   toast.success(t('changed-allow-device-custom-id'))
   if (appRef.value)
     appRef.value.allow_device_custom_id = newAllowDeviceCustomId
+}
+
+async function updateDeviceDataCollection(next: DeviceDataCollection) {
+  const current = parseDeviceDataCollection(appRef.value?.device_data_collection)
+  if (DEVICE_DATA_COLLECTION_KEYS.every(key => current[key] === next[key]))
+    return Promise.resolve()
+
+  const { error } = await supabase.from('apps').update({ device_data_collection: next }).eq('app_id', props.appId)
+  if (error)
+    return Promise.reject(t('cannot-change-device-data-collection'))
+
+  toast.success(t('changed-device-data-collection'))
+  if (appRef.value)
+    appRef.value.device_data_collection = next
 }
 
 async function updateBlockProviderInfraRequests(enabled: boolean) {
@@ -1522,6 +1564,78 @@ async function transferAppOwnership() {
                 :label="t('block-provider-infra-requests')"
                 :help="t('block-provider-infra-requests-help')"
               />
+              <fieldset class="pt-2">
+                <legend class="mb-1 text-sm font-medium text-slate-800 dark:text-slate-100">
+                  {{ t('device-data-collection') }}
+                </legend>
+                <p class="mb-3 text-sm text-neutral-700 dark:text-neutral-300">
+                  {{ t('device-data-collection-help') }}
+                </p>
+                <FormKit
+                  id="collect-country"
+                  type="checkbox"
+                  name="collect_country"
+                  :value="deviceDataCollection.country"
+                  :label="t('collect-country')"
+                  :help="t('collect-country-help')"
+                />
+                <FormKit
+                  id="collect-platform"
+                  type="checkbox"
+                  name="collect_platform"
+                  :value="deviceDataCollection.platform"
+                  :label="t('collect-platform')"
+                  :help="t('collect-platform-help')"
+                />
+                <FormKit
+                  id="collect-os-version"
+                  type="checkbox"
+                  name="collect_os_version"
+                  :value="deviceDataCollection.os_version"
+                  :label="t('collect-os-version')"
+                  :help="t('collect-os-version-help')"
+                />
+                <FormKit
+                  id="collect-plugin-version"
+                  type="checkbox"
+                  name="collect_plugin_version"
+                  :value="deviceDataCollection.plugin_version"
+                  :label="t('collect-plugin-version')"
+                  :help="t('collect-plugin-version-help')"
+                />
+                <FormKit
+                  id="collect-version-build"
+                  type="checkbox"
+                  name="collect_version_build"
+                  :value="deviceDataCollection.version_build"
+                  :label="t('collect-version-build')"
+                  :help="t('collect-version-build-help')"
+                />
+                <FormKit
+                  id="collect-is-emulator"
+                  type="checkbox"
+                  name="collect_is_emulator"
+                  :value="deviceDataCollection.is_emulator"
+                  :label="t('collect-is-emulator')"
+                  :help="t('collect-is-emulator-help')"
+                />
+                <FormKit
+                  id="collect-is-prod"
+                  type="checkbox"
+                  name="collect_is_prod"
+                  :value="deviceDataCollection.is_prod"
+                  :label="t('collect-is-prod')"
+                  :help="t('collect-is-prod-help')"
+                />
+                <FormKit
+                  id="collect-install-source"
+                  type="checkbox"
+                  name="collect_install_source"
+                  :value="deviceDataCollection.install_source"
+                  :label="t('collect-install-source')"
+                  :help="t('collect-install-source-help')"
+                />
+              </fieldset>
               <FormKit
                 type="button"
                 :label="t('transfer-app-ownership')"
