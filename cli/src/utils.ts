@@ -1992,7 +1992,7 @@ type SendEventPayload = TrackOptions & { nonPersonTags?: Record<string, unknown>
   | { notifyConsole?: false, icon?: never }
 )
 
-export async function sendEvent(capgkey: string, payload: SendEventPayload, verbose?: boolean, signal?: AbortSignal, apiHost?: string): Promise<void> {
+export async function sendEvent(capgkey: string, payload: SendEventPayload, verbose?: boolean, signal?: AbortSignal, apiHost?: string, redirect?: RequestInit['redirect']): Promise<void> {
   const telemetryDisabled = isTruthyEnvValue(env.CAPGO_DISABLE_TELEMETRY) || isTruthyEnvValue(env.CAPGO_DISABLE_POSTHOG)
   if (telemetryDisabled && !payload.notifyConsole)
     return
@@ -2042,6 +2042,7 @@ export async function sendEvent(capgkey: string, payload: SendEventPayload, verb
           'capgkey': capgkey,
         }),
         signal: eventSignal,
+        redirect,
       })
 
       clearTimeout(timeoutId)

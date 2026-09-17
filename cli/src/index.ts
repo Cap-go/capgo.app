@@ -62,6 +62,7 @@ import { probe } from './probe'
 import { testRunDeviceCommand } from './run/device'
 import { CliUserError } from './shared/cli-user-error'
 import { TwoFactorComplianceNetworkError } from './shared/two-factor-compliance'
+import { startUpdaterInstalledCheck } from './updater-installed-background'
 import { getUserId } from './user/account'
 import { formatError } from './utils'
 import { normalizeAutoBumpInput } from './versionHelpers'
@@ -103,6 +104,7 @@ program.hook('preAction', (_thisCommand, actionCommand) => {
   setCurrentCliCommand(currentCommandPath)
   applyCommandAnalyticsOptOut(currentCommandPath, actionCommand.opts())
   startNotifyAppReadyCheck(actionCommand, currentCommandPath)
+  startUpdaterInstalledCheck(actionCommand, currentCommandPath)
   const commandContext = extractCommandContext(actionCommand)
   if (currentCommandPath === 'login' || currentCommandPath === 'init')
     deferCommandInvocation(currentCommandPath, commandContext)

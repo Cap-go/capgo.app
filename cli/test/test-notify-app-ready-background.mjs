@@ -9,12 +9,15 @@ import { afterAll, test } from 'bun:test'
 import { fileURLToPath } from 'node:url'
 import { resolveNotifyAppReadyProject } from '../src/onboarding/notify-app-ready-project.ts'
 import { scanNotifyAppReadySource } from '../src/onboarding/notify-app-ready-source.ts'
+import { scanUpdaterInstalled } from '../src/onboarding/updater-installed.ts'
+import { isTrustedOnboardingApiHost } from '../src/onboarding/background-api.ts'
 
 const fixtures = []
 const workerUrl = new URL('../dist/notify-app-ready-worker.js', import.meta.url)
+const updaterWorkerUrl = new URL('../dist/updater-installed-worker.js', import.meta.url)
 const call = "import { CapacitorUpdater } from '@capgo/capacitor-updater'; CapacitorUpdater.notifyAppReady()"
 
-async function workerHarness() {
+async function workerHarness(worker = workerUrl) {
   const requests = []
   const behavior = { events: 'ok', putStatus: 200, putError: false }
   const server = createServer(async (request, response) => {
@@ -26,6 +29,10 @@ async function workerHarness() {
       behavior.onEvent?.(requests.at(-1).body)
     if (request.method === 'PUT' && behavior.putError) {
       request.destroy()
+      return
+    }
+    if (behavior.redirectLocation && (request.method === 'POST' ? behavior.events === 'redirect' : behavior.putRedirect)) {
+      response.writeHead(307, { Location: behavior.redirectLocation }).end()
       return
     }
     if (request.method === 'POST' && behavior.events === 'hang')
@@ -45,14 +52,14 @@ async function workerHarness() {
       const workerData = { cwd: project.dir, command: 'app list', apikey: 'fake-api-key', ...extra }
       const child = spawn('node', ['--input-type=module', '-e', `
         import { Worker } from 'node:worker_threads'
-        const worker = new Worker(new URL(${JSON.stringify(workerUrl.href)}), {
+        const worker = new Worker(new URL(${JSON.stringify(worker.href)}), {
           workerData: ${JSON.stringify(workerData)}, stdout: true, stderr: true, execArgv: []
         })
         worker.on('error', () => process.exit(1))
         worker.on('exit', code => process.exit(code))
       `], {
         stdio: 'ignore',
-        env: { ...process.env, CAPGO_DISABLE_TELEMETRY: '', CAPGO_DISABLE_POSTHOG: '', ...environment },
+        env: { ...process.env, CAPGO_DISABLE_TELEMETRY: '', CAPGO_DISABLE_POSTHOG: '', CAPGO_TRUSTED_API_ORIGINS: api, ...environment },
       })
       const timeout = setTimeout(() => child.kill(), 10_000)
       try {
@@ -71,7 +78,7 @@ async function workerHarness() {
   }
 }
 
-function scanEvents(requests, result, reportStatus) {
+function scanEvents(requests, result, reportStatus, channel = 'notify-app-ready') {
   const events = requests.filter(request => request.method === 'POST')
   assert.deepEqual(events.map(request => request.body.event), ['scan_started', 'scan_ended'])
   const [started, ended] = events.map(request => request.body)
@@ -81,7 +88,7 @@ function scanEvents(requests, result, reportStatus) {
     assert.equal(request.path.endsWith('/private/events'), true)
     assert.equal(request.headers.capgkey, 'fake-api-key')
     assert.equal(request.headers['x-cli-command'], 'app list')
-    assert.equal(request.body.channel, 'notify-app-ready')
+    assert.equal(request.body.channel, channel)
     assert.equal(request.body.tracking_version, 2)
     assert.deepEqual(request.body.tags, { app_id: 'com.example.ready' })
     assert.equal(request.body.nonPersonTags.command_path, 'app list')
@@ -367,7 +374,7 @@ test.concurrent('foreground exits while the real worker is waiting on scan-start
   const child = spawn('node', [join(dir, 'run.mjs')], {
     cwd: harness.project.dir,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, CAPGO_DISABLE_TELEMETRY: '', CAPGO_DISABLE_POSTHOG: '' },
+    env: { ...process.env, CAPGO_DISABLE_TELEMETRY: '', CAPGO_DISABLE_POSTHOG: '', CAPGO_TRUSTED_API_ORIGINS: harness.api },
   })
   let output = ''
   let errors = ''
@@ -426,6 +433,239 @@ test('launcher abandons a busy worker without output or waiting for shutdown', a
     clearTimeout(timeout)
   }
 })
+
+function installUpdater(project, directory = project.dir, section = 'dependencies') {
+  write(join(project.dir, 'package.json'), {
+    name: 'example-mobile',
+    [section]: { '@capgo/capacitor-updater': 'catalog:' },
+  })
+  write(join(directory, 'node_modules/@capgo/capacitor-updater/package.json'), {
+    name: '@capgo/capacitor-updater', version: '8.0.0',
+  })
+}
+
+test('updater detection requires both a selected-app declaration and an installed package', () => {
+  for (const section of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+    const project = app(fixture())
+    assert.equal(scanUpdaterInstalled(project), 'not_found')
+    write(join(project.dir, 'package.json'), { [section]: { '@capgo/capacitor-updater': '^8.0.0' } })
+    assert.equal(scanUpdaterInstalled(project), 'not_found', 'declaration alone is not installation')
+    installUpdater(project, project.dir, section)
+    assert.equal(scanUpdaterInstalled(project), 'found')
+    write(join(project.dir, 'package.json'), { name: 'example-without-updater' })
+    assert.equal(scanUpdaterInstalled(project), 'not_found', 'an undeclared package must not complete the step')
+  }
+  const project = app(fixture())
+  installUpdater(project)
+  write(join(project.dir, 'node_modules/@capgo/capacitor-updater/package.json'), 'broken-json')
+  assert.equal(scanUpdaterInstalled(project), 'not_found')
+})
+
+test('updater detection supports hoisted and pnpm-style symlinked installations without attributing sibling dependencies', async () => {
+  const root = fixture()
+  write(join(root, 'package.json'), { private: true, workspaces: ['apps/*'] })
+  const first = app(root, 'apps/first', 'com.example.first')
+  const second = app(root, 'apps/second', 'com.example.second')
+  installUpdater(first, root)
+  assert.equal(scanUpdaterInstalled(first), 'found')
+  assert.equal(scanUpdaterInstalled(second), 'not_found')
+  const selected = await resolveNotifyAppReadyProject({ cwd: root, command: 'app list', appId: first.appId })
+  assert.equal(scanUpdaterInstalled(selected), 'found')
+  const pnpmRoot = fixture()
+  const linked = app(pnpmRoot, 'apps/mobile')
+  installUpdater(linked, join(pnpmRoot, '.pnpm-store/updater'))
+  mkdirSync(join(linked.dir, 'node_modules/@capgo'), { recursive: true })
+  symlinkSync(join(pnpmRoot, '.pnpm-store/updater/node_modules/@capgo/capacitor-updater'), join(linked.dir, 'node_modules/@capgo/capacitor-updater'), 'junction')
+  assert.equal(scanUpdaterInstalled(linked), 'found')
+})
+
+test.concurrent('installed-updater worker pairs scan events and only completes add_updater, including self-hosted destinations', async () => {
+  const harness = await workerHarness(updaterWorkerUrl)
+  const { api, project, requests } = harness
+  installUpdater(project)
+  try {
+    await harness.run()
+    const firstAttempt = scanEvents(requests, 'found', 'success', 'updater-installed')
+    const patch = requests.find(request => request.method === 'PUT')
+    assert.deepEqual(patch.body, { onboarding: { steps: { add_updater: { status: 'done' } } } })
+    assert.equal(patch.path, '/app/com.example.ready')
+    assert.equal(patch.headers.authorization, 'fake-api-key')
+    assert.equal(patch.headers['x-cli-command'], 'app list')
+    await harness.run({ supaHost: api, supaAnon: 'fake-anon-key' })
+    assert.notEqual(scanEvents(requests, 'found', 'success', 'updater-installed'), firstAttempt)
+    assert.equal(requests.every(request => request.path.startsWith('/functions/v1/')), true)
+    assert.equal(requests.find(request => request.method === 'PUT').headers.authorization, 'Bearer fake-anon-key')
+  }
+  finally {
+    harness.close()
+  }
+}, 20_000)
+
+test.concurrent('installed-updater worker skips missing and invalid targets, and handles rejected reports and telemetry opt-out', async () => {
+  const harness = await workerHarness(updaterWorkerUrl)
+  const { project, requests, behavior } = harness
+  try {
+    await harness.run()
+    scanEvents(requests, 'not_found', 'not_attempted', 'updater-installed')
+    assert.equal(requests.length, 2, 'missing installation must never clear progress')
+    installUpdater(project)
+    for (const extra of [{ appId: 'com.example.other' }, { apikey: '' }, { cwd: '/nonexistent-example-project' }]) {
+      await harness.run(extra)
+      assert.equal(requests.length, 0)
+    }
+    behavior.putStatus = 403
+    await harness.run()
+    scanEvents(requests, 'found', 'rejected', 'updater-installed')
+    assert.equal(requests.at(-1).body.nonPersonTags.todo_report_http_status, 403)
+    behavior.putStatus = 200
+    for (const setting of ['CAPGO_DISABLE_TELEMETRY', 'CAPGO_DISABLE_POSTHOG']) {
+      await harness.run({}, { [setting]: 'true' })
+      assert.deepEqual(requests.map(request => request.method), ['PUT'])
+    }
+    behavior.events = 'hang'
+    await harness.run()
+    scanEvents(requests, 'found', 'success', 'updater-installed')
+  }
+  finally {
+    harness.close()
+  }
+}, 20_000)
+
+test.concurrent('separate updater and source workers can be abandoned together without holding the foreground open', async () => {
+  const harness = await workerHarness()
+  installUpdater(harness.project)
+  harness.behavior.events = 'hang'
+  const channels = new Set()
+  let ready
+  const received = new Promise(resolve => { ready = resolve })
+  harness.behavior.onEvent = event => {
+    if (event.event === 'scan_started') {
+      channels.add(event.channel)
+      if (channels.size === 2)
+        ready()
+    }
+  }
+  const dir = fixture()
+  write(join(dir, 'package.json'), { type: 'module' })
+  const build = await Bun.build({
+    entrypoints: [
+      fileURLToPath(new URL('../src/notify-app-ready-background.ts', import.meta.url)),
+      fileURLToPath(new URL('../src/updater-installed-background.ts', import.meta.url)),
+    ],
+    outdir: dir, target: 'node', format: 'esm',
+  })
+  assert.equal(build.success, true)
+  write(join(dir, 'notify-app-ready-worker.js'), `import ${JSON.stringify(workerUrl.href)}`)
+  write(join(dir, 'updater-installed-worker.js'), `import ${JSON.stringify(updaterWorkerUrl.href)}`)
+  write(join(dir, 'run.mjs'), `
+    import { startNotifyAppReadyCheck } from './notify-app-ready-background.js'
+    import { startUpdaterInstalledCheck } from './updater-installed-background.js'
+    const command = { optsWithGlobals: () => ({ apikey: 'fake-api-key' }), registeredArguments: [], args: [] }
+    startNotifyAppReadyCheck(command, 'app list')
+    startUpdaterInstalledCheck(command, 'app list')
+    process.stdin.resume()
+    process.stdin.once('end', () => console.log('foreground-finished'))
+  `)
+  const child = spawn('node', [join(dir, 'run.mjs')], {
+    cwd: harness.project.dir, stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, CAPGO_DISABLE_TELEMETRY: '', CAPGO_DISABLE_POSTHOG: '', CAPGO_TRUSTED_API_ORIGINS: harness.api },
+  })
+  let output = ''
+  let errors = ''
+  child.stdout.on('data', chunk => { output += chunk })
+  child.stderr.on('data', chunk => { errors += chunk })
+  const exited = once(child, 'exit')
+  const timeout = setTimeout(() => child.kill(), 5_000)
+  try {
+    await Promise.race([received, exited.then(() => { throw new Error('foreground exited before both workers started') })])
+    const attempts = harness.requests.filter(request => request.body.event === 'scan_started')
+      .map(request => request.body.nonPersonTags.attempt_id)
+    assert.equal(new Set(attempts).size, 2, 'each worker must have its own attempt ID')
+    child.stdin.end()
+    const [code, signal] = await exited
+    assert.equal(signal, null, 'background workers kept the foreground alive')
+    assert.equal(code, 0)
+    assert.equal(output.trim(), 'foreground-finished')
+    assert.equal(errors, '')
+    assert.deepEqual([...channels].sort(), ['notify-app-ready', 'updater-installed'])
+  }
+  finally {
+    clearTimeout(timeout)
+    if (child.exitCode === null)
+      child.kill()
+    harness.close()
+  }
+}, 10_000)
+
+test('background API requests require both explicit destination trust and safe transport', () => {
+  assert.equal(isTrustedOnboardingApiHost('https://api.capgo.app', {}, []), true)
+  assert.equal(isTrustedOnboardingApiHost('https://api.capgo.app.example.com', {}, []), false)
+  assert.equal(isTrustedOnboardingApiHost('https://api.capgo.app:8443', {}, []), false)
+  assert.equal(isTrustedOnboardingApiHost('https://self-host.example.com/api', {}, []), false)
+  assert.equal(isTrustedOnboardingApiHost('https://self-host.example.com/api', {}, ['https://self-host.example.com']), true)
+  assert.equal(isTrustedOnboardingApiHost('http://self-host.example.com', {}, ['http://self-host.example.com']), false)
+  assert.equal(isTrustedOnboardingApiHost('http://self-host.example.com/functions/v1', { supaHost: 'http://self-host.example.com', supaAnon: 'fake-anon' }, []), false)
+  assert.equal(isTrustedOnboardingApiHost('https://self-host.example.com/functions/v1', { supaHost: 'https://self-host.example.com', supaAnon: 'fake-anon' }, []), true)
+  assert.equal(isTrustedOnboardingApiHost('https://other.example.com', { supaHost: 'https://self-host.example.com', supaAnon: 'fake-anon' }, []), false)
+  for (const host of ['localhost', '127.0.0.1', '[::1]']) {
+    const origin = `http://${host}:12345`
+    assert.equal(isTrustedOnboardingApiHost(origin, {}, []), false)
+    assert.equal(isTrustedOnboardingApiHost(origin, {}, [origin]), true)
+    assert.equal(isTrustedOnboardingApiHost(origin, {}, [`${origin}/path`]), false)
+  }
+  for (const host of ['not-a-url', 'ftp://localhost', 'http://user:password@localhost', 'https://api.capgo.app?query=1', 'https://api.capgo.app#fragment'])
+    assert.equal(isTrustedOnboardingApiHost(host, {}, [host]), false)
+})
+
+test.concurrent('both workers send no credentials to project-selected untrusted hosts', async () => {
+  for (const worker of [workerUrl, updaterWorkerUrl]) {
+    const harness = await workerHarness(worker)
+    installUpdater(harness.project)
+    try {
+      await harness.run({}, { CAPGO_TRUSTED_API_ORIGINS: '' })
+      assert.deepEqual(harness.requests, [], 'untrusted project config must not receive the API key')
+      await harness.run({ supaHost: harness.api, supaAnon: 'fake-anon-key' }, { CAPGO_TRUSTED_API_ORIGINS: '' })
+      assert.equal(harness.requests.filter(request => request.method === 'PUT').length, 1, 'explicit CLI self-host selection should still work')
+    }
+    finally {
+      harness.close()
+    }
+  }
+}, 20_000)
+
+test.concurrent('neither telemetry nor onboarding redirects can forward worker credentials to another origin', async () => {
+  const forwarded = []
+  const destination = createServer((request, response) => {
+    forwarded.push(request.headers)
+    response.writeHead(200, { 'Content-Type': 'application/json' }).end('{"status":"ok"}')
+  })
+  destination.listen(0, '127.0.0.1')
+  await once(destination, 'listening')
+  try {
+    for (const worker of [workerUrl, updaterWorkerUrl]) {
+      const harness = await workerHarness(worker)
+      installUpdater(harness.project)
+      harness.behavior.redirectLocation = `http://127.0.0.1:${destination.address().port}`
+      try {
+        harness.behavior.events = 'redirect'
+        await harness.run()
+        assert.equal(harness.requests.filter(request => request.method === 'PUT').length, 1, 'failed telemetry must not prevent reporting')
+        harness.behavior.events = 'ok'
+        harness.behavior.putRedirect = true
+        await harness.run()
+        assert.equal(harness.requests.at(-1).body.nonPersonTags.todo_report_status, 'failed')
+        assert.deepEqual(forwarded, [], 'custom capgkey headers must never follow a redirect')
+      }
+      finally {
+        harness.close()
+      }
+    }
+  }
+  finally {
+    destination.closeAllConnections()
+    destination.close()
+  }
+}, 20_000)
 
 afterAll(() => {
   for (const root of fixtures)
