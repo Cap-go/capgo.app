@@ -21,6 +21,8 @@ const route = useRoute()
 const router = useRouter()
 const main = useMainStore()
 const isLoading = ref(false)
+const resendCaptchaToken = ref('')
+const resendCaptchaRef = ref<InstanceType<typeof VueTurnstile> | null>(null)
 const isLoadingMain = ref(false)
 const otpSending = ref(false)
 const otpSendError = ref('')
@@ -69,24 +71,38 @@ function startOtpSendCooldown(seconds: number) {
 }
 
 async function submit(form: { email: string }) {
+  if (isLoading.value)
+    return
+
+  if (captchaKey.value && !resendCaptchaToken.value) {
+    setErrors('resend-email', [t('captcha-required')], {})
+    return
+  }
+
   isLoading.value = true
-  const { error } = await supabase.auth.resend({
-    type: 'signup',
-    email: form.email,
-  })
-  isLoading.value = false
-  if (error)
-    setErrors('resend-email', [error.message], {})
-  else toast.success(t('confirm-email-sent'))
+  try {
+    const { error } = await supabase.auth.resend({
+      type: 'signup',
+      email: form.email,
+      options: { captchaToken: resendCaptchaToken.value || undefined },
+    })
+    if (error)
+      setErrors('resend-email', [error.message], {})
+    else toast.success(t('confirm-email-sent'))
+  }
+  finally {
+    isLoading.value = false
+    resendCaptchaToken.value = ''
+    safeResetTurnstile(resendCaptchaRef.value)
+  }
 }
 
-async function loadDeleteEmailVerificationState() {
+async function loadEmailVerificationState() {
   if (!emailVerificationBlockingReason.value)
     return
 
   isLoadingMain.value = true
   try {
-    await main.awaitInitialLoad()
     const { data: sessionData } = await supabase.auth.getSession()
     currentUserId.value = sessionData.session?.user.id ?? main.auth?.id ?? ''
     currentUserEmail.value = sessionData.session?.user.email ?? main.auth?.email ?? main.user?.email ?? ''
@@ -164,7 +180,7 @@ async function verifyOtpCode() {
 }
 
 onMounted(async () => {
-  await loadDeleteEmailVerificationState()
+  await loadEmailVerificationState()
 })
 
 onBeforeUnmount(() => {
@@ -296,6 +312,18 @@ onBeforeUnmount(() => {
             autocomplete="email"
             validation="required:trim"
           />
+
+          <div v-if="captchaKey" class="space-y-2">
+            <p class="text-sm font-medium text-slate-700 dark:text-slate-100">
+              {{ t('captcha') }}
+            </p>
+            <VueTurnstile
+              ref="resendCaptchaRef"
+              v-model="resendCaptchaToken"
+              size="flexible"
+              :site-key="captchaKey"
+            />
+          </div>
 
           <FormKitMessages />
 
