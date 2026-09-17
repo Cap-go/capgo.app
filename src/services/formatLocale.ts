@@ -99,10 +99,6 @@ export function formatNumberValue(value: number | null | undefined, options?: In
   return formatNumber(Number(value ?? 0), options)
 }
 
-export function formatOneDecimal(value: number | null | undefined) {
-  return formatNumberValue(value, { minimumFractionDigits: 1, maximumFractionDigits: 1 })
-}
-
 export function getFormatLocaleOptions(displayLanguage?: string | null): FormatLocaleOption[] {
   const language = String(displayLanguage || i18n.global.locale.value || 'en')
   const regionNames = typeof Intl.DisplayNames === 'function'
