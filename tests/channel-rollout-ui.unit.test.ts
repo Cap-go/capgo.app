@@ -105,7 +105,7 @@ function createTestFlows(options: {
     rolloutPercentageText: () => '10%',
     saveChannelChange: saveChannelChange as ChannelRolloutConfirmFlowsDeps['saveChannelChange'],
     saveChannelChanges: saveChannelChanges as ChannelRolloutConfirmFlowsDeps['saveChannelChanges'],
-    askUpdateNotificationAfterBundleChange,
+    askUpdateNotificationAfterBundleChange: askUpdateNotificationAfterBundleChange as ChannelRolloutConfirmFlowsDeps['askUpdateNotificationAfterBundleChange'],
     openSelectRolloutVersion,
   })
 
