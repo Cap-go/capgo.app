@@ -52,7 +52,13 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     auth: true,
     prepare: async (page) => {
       const fieldset = page.locator('[data-test="device-data-collection"]')
-      await fieldset.waitFor({ state: 'visible' })
+      try {
+        await fieldset.waitFor({ state: 'visible', timeout: 5000 })
+      }
+      catch {
+        // Base does not have the collection fieldset yet.
+        return
+      }
       await fieldset.scrollIntoViewIfNeeded()
     },
   },
