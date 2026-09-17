@@ -1,0 +1,108 @@
+export interface NativeActiveDevicesSummary {
+  android: number
+  ios: number
+  electron: number
+  unknown: number
+  total: number
+}
+
+export interface NativeDailyPlatformActive {
+  labels: string[]
+  android: number[]
+  ios: number[]
+  electron: number[]
+  unknown: number[]
+  total: number[]
+}
+
+const EMPTY_SUMMARY: NativeActiveDevicesSummary = {
+  android: 0,
+  ios: 0,
+  electron: 0,
+  unknown: 0,
+  total: 0,
+}
+
+export function parseNativeSeriesPlatform(label: string): 'android' | 'ios' | 'electron' | 'unknown' {
+  const normalized = label.trim().toLowerCase()
+  if (normalized.startsWith('android'))
+    return 'android'
+  if (normalized.startsWith('ios'))
+    return 'ios'
+  if (normalized.startsWith('electron'))
+    return 'electron'
+  return 'unknown'
+}
+
+export function normalizeNativeActiveDevicesSummary(value: Partial<NativeActiveDevicesSummary> | null | undefined): NativeActiveDevicesSummary {
+  if (!value)
+    return { ...EMPTY_SUMMARY }
+
+  const android = Math.max(0, Number(value.android) || 0)
+  const ios = Math.max(0, Number(value.ios) || 0)
+  const electron = Math.max(0, Number(value.electron) || 0)
+  const unknown = Math.max(0, Number(value.unknown) || 0)
+  const total = Math.max(0, Number(value.total) || 0)
+
+  return {
+    android,
+    ios,
+    electron,
+    unknown,
+    total: total > 0 ? total : android + ios + electron + unknown,
+  }
+}
+
+export function calculateSummaryEvolutionPercent(current?: number, previous?: number): number | undefined {
+  if (current === undefined || previous === undefined)
+    return undefined
+
+  const currentValue = Math.max(0, Number(current) || 0)
+  const previousValue = Math.max(0, Number(previous) || 0)
+
+  if (previousValue <= 0)
+    return currentValue > 0 ? 100 : undefined
+
+  return ((currentValue - previousValue) / previousValue) * 100
+}
+
+export function generateDemoNativeActiveSummary(days: number): NativeActiveDevicesSummary {
+  const growth = Math.min(days, 30)
+  const android = 420 + growth * 8
+  const ios = 360 + growth * 6
+  return {
+    android,
+    ios,
+    electron: 12,
+    unknown: 3,
+    total: android + ios + 15,
+  }
+}
+
+export function generateDemoPreviousNativeActiveSummary(days: number): NativeActiveDevicesSummary {
+  const current = generateDemoNativeActiveSummary(days)
+  return {
+    android: Math.round(current.android * 0.92),
+    ios: Math.round(current.ios * 0.9),
+    electron: current.electron,
+    unknown: current.unknown,
+    total: Math.round(current.total * 0.91),
+  }
+}
+
+export function generateDemoDailyPlatformActive(labels: string[]): NativeDailyPlatformActive {
+  const android = labels.map((_label, index) => 120 + index * 4 + (index % 3))
+  const ios = labels.map((_label, index) => 95 + index * 3 + (index % 2))
+  const electron = labels.map(() => 4)
+  const unknown = labels.map(() => 1)
+  const total = labels.map((_label, index) => android[index] + ios[index] + electron[index] + unknown[index])
+
+  return {
+    labels,
+    android,
+    ios,
+    electron,
+    unknown,
+    total,
+  }
+}

@@ -3,6 +3,6 @@ export type {
 } from '../../supabase/functions/_backend/utils/appOnboarding.ts'
 
 export {
-  APP_ONBOARDING_STEP_IDS,
+  getAppOnboardingStepIds,
   parseAppOnboarding,
 } from '../../supabase/functions/_backend/utils/appOnboarding.ts'

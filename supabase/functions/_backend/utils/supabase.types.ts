@@ -5312,6 +5312,21 @@ export type Database = {
           mau: number
         }[]
       }
+      read_native_active_devices_summary: {
+        Args: { p_app_id: string; p_period_end: string; p_period_start: string }
+        Returns: {
+          devices: number
+          platform: string
+        }[]
+      }
+      read_native_daily_platform_active: {
+        Args: { p_app_id: string; p_period_end: string; p_period_start: string }
+        Returns: {
+          date: string
+          devices: number
+          platform: string
+        }[]
+      }
       read_native_version_usage: {
         Args: { p_app_id: string; p_period_end: string; p_period_start: string }
         Returns: {
@@ -5439,10 +5454,6 @@ export type Database = {
         Returns: boolean
       }
       remove_old_jobs: { Args: never; Returns: undefined }
-      report_app_onboarding_setup: {
-        Args: { p_app_id: string; p_patch: Json }
-        Returns: Json
-      }
       request_actor_user_id: { Args: never; Returns: string }
       request_app_chart_refresh: {
         Args: { app_id: string }

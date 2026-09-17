@@ -20,6 +20,7 @@ import { autoAuth, defaultApiHost, hashEmail, useSupabase } from '~/services/sup
 import { openSupport } from '~/services/support'
 import { isCapgoDomainReferrer, isDirectLoginLanding } from '~/utils/capgoReferrer'
 import { getLoginActionVisibility } from '~/utils/loginActions'
+import { validateRedirectPath } from '~/utils/safeRedirect'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
 const route = useRoute('/login')
@@ -211,12 +212,10 @@ onBeforeUnmount(() => {
 })
 
 async function nextLogin() {
-  if (route.query.to && typeof route.query.to === 'string') {
-    await router.replace(route.query.to)
-  }
-  else {
-    await router.replace('/dashboard')
-  }
+  const redirectTarget = typeof route.query.to === 'string'
+    ? validateRedirectPath(route.query.to)
+    : '/dashboard'
+  await router.replace(redirectTarget)
   setTimeout(async () => {
     isLoading.value = false
   }, 500)
@@ -496,7 +495,7 @@ async function handleSsoLogin() {
   try {
     const redirectUrl = new URL('/sso-callback', globalThis.location.origin)
     if (route.query.to && typeof route.query.to === 'string') {
-      redirectUrl.searchParams.set('to', route.query.to)
+      redirectUrl.searchParams.set('to', validateRedirectPath(route.query.to))
     }
 
     const { data, error } = await supabase.auth.signInWithSSO({

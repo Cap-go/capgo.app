@@ -68,6 +68,7 @@ export const optionsSetChannelSchema = optionsBaseSchema.extend({
   prod: z.boolean().optional(),
   packageJson: z.string().optional(),
   ignoreMetadataCheck: z.boolean().optional(),
+  acceptIncompatible: z.boolean().optional(),
   qrPreview: z.boolean().optional(),
   sendUpdateNotification: z.boolean().optional(),
   rolloutBundle: z.string().optional(),
@@ -93,6 +94,7 @@ export const optionsSetChannelSchema = optionsBaseSchema.extend({
   rejectConflictingBooleanGroup(value, ctx, ['rolloutEnable', 'rolloutDisable'])
   rejectConflictingBooleanGroup(value, ctx, ['rolloutPause', 'rolloutResume', 'rolloutRollback', 'rolloutPromote'])
   rejectConflictingBooleanGroup(value, ctx, ['autoPauseEnabled', 'autoPauseDisabled'])
+  rejectConflictingBooleanGroup(value, ctx, ['acceptIncompatible', 'ignoreMetadataCheck'])
 })
 
 export type OptionsSetChannel = z.infer<typeof optionsSetChannelSchema>

@@ -122,11 +122,6 @@ async function processKey(target: TrashProcessTarget): Promise<void> {
     if (!isLiveR2Key(key))
       return
 
-    if (deleteMode === 'dry_run') {
-      totalProcessed += 1
-      return
-    }
-
     if (deleteMode === 'trash') {
       if (!discoveryEtag) {
         console.error(`Failed to trash ${key}: missing discovery ETag; source retained`)
@@ -385,9 +380,21 @@ async function listExactKeyEtags(keys: string[]): Promise<Array<{ key: string, e
     .filter((target): target is { key: string, etag: string, lastModified?: Date } => target !== undefined)
 }
 
-async function listPrefixKeys(prefix: string): Promise<Array<{ key: string, etag?: string, lastModified?: Date }>> {
-  const discovered: Array<{ key: string, etag?: string, lastModified?: Date }> = []
+async function streamProcessPrefix(prefix: string): Promise<void> {
   let continuationToken: string | undefined
+  let pendingBatch: Array<{ key: string, etag?: string, lastModified?: Date }> = []
+
+  const flushBatch = async () => {
+    if (pendingBatch.length === 0)
+      return
+
+    const batch = pendingBatch
+    pendingBatch = []
+    if (deleteMode === 'permanent')
+      await permanentDeleteBatch(batch)
+    else
+      await processKeyBatch(batch)
+  }
 
   while (true) {
     const response = await s3.send(new ListObjectsV2Command({
@@ -406,7 +413,9 @@ async function listPrefixKeys(prefix: string): Promise<Array<{ key: string, etag
         totalErrors += 1
         continue
       }
-      discovered.push({ key: obj.Key, etag: obj.ETag, lastModified: obj.LastModified })
+      pendingBatch.push({ key: obj.Key, etag: obj.ETag, lastModified: obj.LastModified })
+      if (pendingBatch.length >= LIST_PAGE_SIZE)
+        await flushBatch()
     }
 
     if (!response.IsTruncated)
@@ -414,21 +423,7 @@ async function listPrefixKeys(prefix: string): Promise<Array<{ key: string, etag
     continuationToken = response.NextContinuationToken
   }
 
-  return discovered
-}
-
-async function streamProcessPrefix(prefix: string): Promise<void> {
-  const keys = await listPrefixKeys(prefix)
-  if (keys.length === 0)
-    return
-
-  for (let i = 0; i < keys.length; i += LIST_PAGE_SIZE) {
-    const batch = keys.slice(i, i + LIST_PAGE_SIZE)
-    if (deleteMode === 'permanent')
-      await permanentDeleteBatch(batch)
-    else
-      await processKeyBatch(batch)
-  }
+  await flushBatch()
 }
 
 async function main() {

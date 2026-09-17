@@ -432,6 +432,10 @@ DECLARE
   role_name text;
   role_id uuid;
 BEGIN
+  -- Serialize with update_org/tmp_invite_role_rbac: read pending role only after
+  -- the shared org lock so acceptance cannot observe a stale invite role.
+  PERFORM public.lock_rbac_orgs(accept_invitation_to_org.org_id);
+
   SELECT public.org_users.*
   INTO invite
   FROM public.org_users
@@ -518,7 +522,7 @@ BEGIN
     NULL,
     NULL,
     auth.uid(),
-    now(),
+    pg_catalog.now(),
     'Accepted invitation',
     true
   ) ON CONFLICT DO NOTHING;
@@ -526,7 +530,7 @@ BEGIN
   UPDATE public.org_users
   SET is_invite = false,
       rbac_role_name = role_name,
-      updated_at = CURRENT_TIMESTAMP
+      updated_at = pg_catalog.now()
   WHERE public.org_users.user_id = invite_user_id
     AND public.org_users.org_id = invite_org_id
     AND public.org_users.is_invite IS TRUE;
@@ -539,7 +543,7 @@ $$;
 ALTER FUNCTION "public"."accept_invitation_to_org"("org_id" "uuid") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."accept_invitation_to_org"("org_id" "uuid") IS 'Accepts a pending org invite and creates the active RBAC binding. Kept for old clients.';
+COMMENT ON FUNCTION "public"."accept_invitation_to_org"("org_id" "uuid") IS 'Accepts a pending org invite and creates the active RBAC binding. Kept for old clients. Acquires lock_rbac_orgs before reading the pending invite role.';
 
 
 
@@ -2797,7 +2801,9 @@ DECLARE
   org_required_key varchar(21);
   bundle_is_encrypted boolean;
   bundle_key_id varchar(20);
-  bundle_was_ready boolean;
+  bundle_upload_complete boolean;
+  bundle_identity_locked boolean;
+  is_r2_direct_finalize boolean;
   r2_direct_manifest_err constant text :=
     'r2_direct_manifest_jsonb: Use POST /private/set_manifest for in-progress '
     || 'r2-direct uploads instead of app_versions.manifest jsonb.';
@@ -2845,9 +2851,9 @@ BEGIN
         || 'until every entry exists in public.manifest.';
     END IF;
 
-    bundle_was_ready := OLD.storage_provider IS DISTINCT FROM 'r2-direct';
+    bundle_upload_complete := OLD.storage_provider IS DISTINCT FROM 'r2-direct';
 
-    IF bundle_was_ready
+    IF bundle_upload_complete
       AND (
         NEW.name IS DISTINCT FROM OLD.name
         OR NEW.app_id IS DISTINCT FROM OLD.app_id
@@ -2874,7 +2880,7 @@ BEGIN
           'user_id', OLD.user_id,
           'old_storage_provider', OLD.storage_provider,
           'new_storage_provider', NEW.storage_provider,
-          'reason', 'bundle_ready'
+          'reason', 'bundle_upload_complete'
         ));
       RAISE EXCEPTION '%',
         'bundle_already_ready: Bundle content cannot be changed '
@@ -2882,8 +2888,6 @@ BEGIN
     END IF;
 
     -- In-progress r2-direct uploads must use POST /private/set_manifest.
-    -- Block any non-null manifest jsonb write, including r2-direct -> r2 finalize
-    -- requests that try to smuggle manifest rows through on_version_update.
     IF OLD.storage_provider = 'r2-direct'
       AND NEW.manifest IS DISTINCT FROM OLD.manifest
       AND NEW.manifest IS NOT NULL
@@ -2899,6 +2903,63 @@ BEGIN
           'reason', 'r2_direct_manifest_jsonb'
         ));
       RAISE EXCEPTION '%', r2_direct_manifest_err;
+    END IF;
+
+    -- GHSA-5rg9-rhwj-wj76: CLI/TUS creates r2-direct rows with checksum before
+    -- finalize. Lock identity fields after first set (checksum/session_key/
+    -- key_id); still allow r2_path writes and the one-shot finalize
+    -- (r2-direct -> r2). Blank-checksum in-progress rows stay writable for
+    -- upload completion; channel linkage is not the freeze gate.
+    -- r2_path stays mutable while storage_provider = r2-direct (even when
+    -- channel-linked) so finalize can set the object key; only checksum,
+    -- session_key, and key_id are identity-locked here.
+    IF OLD.storage_provider = 'r2-direct' THEN
+      bundle_identity_locked := (
+        NULLIF(BTRIM(COALESCE(OLD.checksum, '')), '') IS NOT NULL
+        OR NULLIF(BTRIM(COALESCE(OLD.session_key, '')), '') IS NOT NULL
+        OR NULLIF(BTRIM(COALESCE(OLD.key_id, '')), '') IS NOT NULL
+      );
+
+      is_r2_direct_finalize := (
+        NEW.storage_provider = 'r2'
+        AND NEW.name IS NOT DISTINCT FROM OLD.name
+        AND NEW.app_id IS NOT DISTINCT FROM OLD.app_id
+        AND NEW.session_key IS NOT DISTINCT FROM OLD.session_key
+        AND NEW.key_id IS NOT DISTINCT FROM OLD.key_id
+        AND NEW.checksum IS NOT DISTINCT FROM OLD.checksum
+        AND NEW.external_url IS NOT DISTINCT FROM OLD.external_url
+        AND NEW.native_packages IS NOT DISTINCT FROM OLD.native_packages
+      );
+
+      IF bundle_identity_locked
+        AND (
+          NEW.name IS DISTINCT FROM OLD.name
+          OR NEW.app_id IS DISTINCT FROM OLD.app_id
+          OR NEW.session_key IS DISTINCT FROM OLD.session_key
+          OR NEW.key_id IS DISTINCT FROM OLD.key_id
+          OR NEW.checksum IS DISTINCT FROM OLD.checksum
+          OR NEW.external_url IS DISTINCT FROM OLD.external_url
+          OR NEW.native_packages IS DISTINCT FROM OLD.native_packages
+          OR (
+            NEW.storage_provider IS DISTINCT FROM OLD.storage_provider
+            AND NOT is_r2_direct_finalize
+          )
+        )
+      THEN
+        PERFORM public.pg_log('deny: BUNDLE_CONTENT_LOCKED_TRIGGER',
+          pg_catalog.jsonb_build_object(
+            'org_id', OLD.owner_org,
+            'app_id', OLD.app_id,
+            'version_name', OLD.name,
+            'user_id', OLD.user_id,
+            'old_storage_provider', OLD.storage_provider,
+            'new_storage_provider', NEW.storage_provider,
+            'reason', 'r2_direct_identity_locked'
+          ));
+        RAISE EXCEPTION '%',
+          'bundle_identity_locked: Bundle identity fields cannot be changed '
+          || 'after checksum, session_key, or key_id are first set during upload.';
+      END IF;
     END IF;
   END IF;
 
@@ -5805,8 +5866,6 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  PERFORM public.lock_channel_bundle_lifecycle(NEW.version, NEW.rollout_version);
-
   IF TG_OP = 'INSERT' THEN
     v_owner_org := public.get_owner_org_by_app_id_internal(NEW.app_id);
     v_channel_id := NULL::bigint;
@@ -5817,6 +5876,8 @@ BEGIN
 
   -- A blank target is the native/builtin channel state; an initial target needs
   -- app-level promotion, while changing an existing target is channel-scoped.
+  -- INSERT with rollout_version but no version still requires promotion RBAC
+  -- before lock_channel_bundle_lifecycle to avoid bundle-existence oracle leaks.
   IF v_request_role NOT IN ('service_role', 'postgres')
     AND pg_catalog.current_setting('capgo.seed_channel_targets', true) IS DISTINCT FROM 'true'
   THEN
@@ -5825,7 +5886,9 @@ BEGIN
         USING ERRCODE = '42501';
     END IF;
 
-    IF NOT (TG_OP = 'INSERT' AND NEW.version IS NULL)
+    -- Blank version on INSERT is the native channel state, but a rollout target still
+    -- needs promotion permission before bundle existence checks run.
+    IF NOT (TG_OP = 'INSERT' AND NEW.version IS NULL AND NEW.rollout_version IS NULL)
       AND NOT public.rbac_check_permission_request(
         public.rbac_perm_channel_promote_bundle(),
         v_owner_org,
@@ -5837,14 +5900,15 @@ BEGIN
     END IF;
   END IF;
 
+  PERFORM public.lock_channel_bundle_lifecycle(NEW.version, NEW.rollout_version);
+
   IF NEW.version IS NOT NULL THEN
     PERFORM 1
     FROM public.app_versions AS version
     WHERE version.id = NEW.version
       AND version.app_id = NEW.app_id
       AND version.owner_org = v_owner_org
-      AND version.deleted = false
-    FOR KEY SHARE;
+      AND version.deleted = false;
 
     IF NOT FOUND THEN
       RAISE EXCEPTION 'INVALID_CHANNEL_VERSION';
@@ -6921,7 +6985,13 @@ COMMENT ON COLUMN "public"."apps"."onboarding_completed_at" IS 'Timestamp when t
 
 
 
-COMMENT ON COLUMN "public"."apps"."onboarding" IS 'Feature ledger plus setup source and Getting Started dismiss. Shape: {"refreshed_at": iso, "features": {...}, "setup": {"source": manual|cli|mcp|ai, "outcome": in_progress|completed|skipped|switched_to_manual, "steps": {step_id: {"status": done|skipped, "at": iso}}}, "getting_started_dismissed_at": iso}. Manual is the default when setup.source is missing.';
+COMMENT ON COLUMN "public"."apps"."onboarding" IS 'Feature ledger plus setup source.
+Shape: {"refreshed_at": iso, "features": {...}, "setup": {
+"todo_list_version": positive integer (default 1),
+"source": manual|cli|mcp|ai,
+"outcome": in_progress|completed|skipped|switched_to_manual,
+"steps": {step_id: {"status": done|skipped, "at": iso}}}}.
+Manual is the default when setup.source is missing.';
 
 
 
@@ -11607,6 +11677,15 @@ BEGIN
     WHERE bundle.bundle_id IS NOT NULL
     ORDER BY bundle.bundle_id
   LOOP
+    PERFORM 1
+    FROM public.app_versions AS version
+    WHERE version.id = v_bundle_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'INVALID_CHANNEL_BUNDLE';
+    END IF;
+
     PERFORM pg_catalog.pg_advisory_xact_lock(v_bundle_id);
   END LOOP;
 END;
@@ -12024,6 +12103,7 @@ CREATE OR REPLACE FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "j
 DECLARE
   v_current jsonb := COALESCE(p_existing, '{}'::jsonb);
   v_setup jsonb;
+  v_todo_list_version bigint := 1;
   v_source text;
   v_next_source text;
   v_outcome text;
@@ -12061,6 +12141,15 @@ BEGIN
     v_setup := v_current -> 'setup';
   ELSE
     v_setup := v_current;
+  END IF;
+
+  IF jsonb_typeof(v_setup -> 'todo_list_version') = 'number'
+    AND (v_setup ->> 'todo_list_version')::numeric
+      BETWEEN 1 AND 9007199254740991
+    AND (v_setup ->> 'todo_list_version')::numeric
+      = trunc((v_setup ->> 'todo_list_version')::numeric)
+  THEN
+    v_todo_list_version := (v_setup ->> 'todo_list_version')::bigint;
   END IF;
 
   v_source := CASE v_setup ->> 'source'
@@ -12160,9 +12249,10 @@ BEGIN
 
   v_now := to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
 
-  RETURN (v_current - 'source' - 'outcome' - 'steps' - 'updated_at')
+  RETURN (v_current - 'source' - 'outcome' - 'steps' - 'updated_at' - 'todo_list_version')
     || jsonb_build_object(
       'setup', jsonb_build_object(
+        'todo_list_version', v_todo_list_version,
         'source', v_source,
         'outcome', v_outcome,
         'steps', v_steps,
@@ -12176,7 +12266,8 @@ $$;
 ALTER FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "jsonb", "p_patch" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "jsonb", "p_patch" "jsonb") IS 'Merges CLI/MCP/AI setup source, outcome, and step progress into apps.onboarding.setup without touching features.';
+COMMENT ON FUNCTION "public"."merge_app_onboarding_setup"("p_existing" "jsonb", "p_patch" "jsonb") IS 'Merges versioned CLI/MCP/AI setup source, outcome, and step progress into
+apps.onboarding.setup without touching features.';
 
 
 
@@ -16002,6 +16093,114 @@ $$;
 ALTER FUNCTION "public"."read_device_usage"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."read_native_active_devices_summary"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) RETURNS TABLE("platform" character varying, "devices" bigint)
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  RETURN QUERY
+  WITH authorized_app AS (
+    SELECT apps.app_id
+    FROM public.apps
+    WHERE apps.app_id = p_app_id
+      AND public.rbac_check_permission_request(
+        public.rbac_perm_app_read(),
+        apps.owner_org,
+        apps.app_id,
+        NULL::bigint
+      )
+  ),
+  usage_rows AS (
+    SELECT
+      du.device_id,
+      COALESCE(NULLIF(du.platform, ''), NULLIF(d.platform::text, ''), 'unknown')::character varying AS usage_platform
+    FROM public.device_usage AS du
+    INNER JOIN authorized_app AS aa ON aa.app_id = du.app_id
+    LEFT JOIN public.devices AS d
+      ON d.app_id = du.app_id
+      AND d.device_id = du.device_id
+    WHERE du.timestamp >= p_period_start
+      AND du.timestamp < p_period_end
+  )
+  SELECT usage_rows.usage_platform AS platform, COUNT(DISTINCT usage_rows.device_id)::bigint AS devices
+  FROM usage_rows
+  GROUP BY usage_rows.usage_platform
+  UNION ALL
+  SELECT 'total'::character varying AS platform, COUNT(DISTINCT usage_rows.device_id)::bigint AS devices
+  FROM usage_rows;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."read_native_active_devices_summary"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."read_native_active_devices_summary"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) IS 'Authorized distinct active native devices by platform for a period. Active means at least one device_usage report in the window.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."read_native_daily_platform_active"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) RETURNS TABLE("date" "date", "platform" character varying, "devices" bigint)
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  RETURN QUERY
+  WITH authorized_app AS (
+    SELECT apps.app_id
+    FROM public.apps
+    WHERE apps.app_id = p_app_id
+      AND public.rbac_check_permission_request(
+        public.rbac_perm_app_read(),
+        apps.owner_org,
+        apps.app_id,
+        NULL::bigint
+      )
+  ),
+  daily_usage AS (
+    SELECT
+      date_trunc('day', du.timestamp)::date AS usage_date,
+      COALESCE(NULLIF(du.platform, ''), NULLIF(d.platform::text, ''), 'unknown')::character varying AS usage_platform,
+      du.device_id
+    FROM public.device_usage AS du
+    INNER JOIN authorized_app AS aa ON aa.app_id = du.app_id
+    LEFT JOIN public.devices AS d
+      ON d.app_id = du.app_id
+      AND d.device_id = du.device_id
+    WHERE du.timestamp >= p_period_start
+      AND du.timestamp < p_period_end
+  ),
+  daily_counts AS (
+    SELECT
+      daily_usage.usage_date AS date,
+      daily_usage.usage_platform AS platform,
+      COUNT(DISTINCT daily_usage.device_id)::bigint AS devices
+    FROM daily_usage
+    GROUP BY daily_usage.usage_date, daily_usage.usage_platform
+    UNION ALL
+    SELECT
+      daily_usage.usage_date AS date,
+      'total'::character varying AS platform,
+      COUNT(DISTINCT daily_usage.device_id)::bigint AS devices
+    FROM daily_usage
+    GROUP BY daily_usage.usage_date
+  )
+  SELECT
+    daily_counts.date,
+    daily_counts.platform,
+    daily_counts.devices
+  FROM daily_counts
+  ORDER BY daily_counts.date, daily_counts.platform;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."read_native_daily_platform_active"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."read_native_daily_platform_active"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) IS 'Authorized distinct active native devices by calendar day and platform. Active means at least one device_usage report on that day.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."read_native_version_usage"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) RETURNS TABLE("date" "date", "platform" character varying, "version_build" character varying, "devices" bigint)
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -16673,8 +16872,6 @@ BEGIN
   END IF;
 
   IF v_rollout_changed THEN
-    PERFORM public.lock_channel_bundle_lifecycle(NEW.version, NEW.rollout_version);
-
     IF (auth.uid() IS NOT NULL OR public.get_apikey_header() IS NOT NULL)
       AND NOT public.rbac_check_permission_request(
         public.rbac_perm_channel_promote_bundle(),
@@ -16686,14 +16883,15 @@ BEGIN
       RAISE EXCEPTION 'NO_RIGHTS';
     END IF;
 
+    PERFORM public.lock_channel_bundle_lifecycle(NEW.version, NEW.rollout_version);
+
     IF NEW.rollout_version IS NOT NULL THEN
       PERFORM 1
       FROM public.app_versions AS version
       WHERE version.id = NEW.rollout_version
         AND version.app_id = NEW.app_id
         AND version.owner_org = NEW.owner_org
-        AND version.deleted = false
-      FOR KEY SHARE;
+        AND version.deleted = false;
 
       IF NOT FOUND THEN
         RAISE EXCEPTION 'INVALID_ROLLOUT_VERSION';
@@ -17228,75 +17426,6 @@ $$;
 
 
 ALTER FUNCTION "public"."remove_old_jobs"() OWNER TO "postgres";
-
-
-CREATE OR REPLACE FUNCTION "public"."report_app_onboarding_setup"("p_app_id" character varying, "p_patch" "jsonb") RETURNS "jsonb"
-    LANGUAGE "plpgsql" SECURITY DEFINER
-    SET "search_path" TO ''
-    AS $$
-DECLARE
-  v_owner_org uuid;
-  v_onboarding jsonb;
-BEGIN
-  IF p_app_id IS NULL OR btrim(p_app_id) = '' THEN
-    RAISE EXCEPTION 'APP_NOT_FOUND';
-  END IF;
-
-  IF jsonb_typeof(p_patch) IS DISTINCT FROM 'object' THEN
-    RAISE EXCEPTION 'INVALID_PATCH';
-  END IF;
-
-  SELECT apps.owner_org, apps.onboarding
-  INTO v_owner_org, v_onboarding
-  FROM public.apps
-  WHERE apps.app_id = p_app_id
-  FOR UPDATE;
-
-  IF v_owner_org IS NULL THEN
-    RAISE EXCEPTION 'NO_PERMISSION';
-  END IF;
-
-  IF NOT (
-    public.rbac_check_permission_request(
-      public.rbac_perm_app_update_settings(),
-      v_owner_org,
-      p_app_id,
-      NULL::bigint
-    )
-    OR public.rbac_check_permission_request(
-      public.rbac_perm_org_create_app(),
-      v_owner_org,
-      NULL::character varying,
-      NULL::bigint
-    )
-  ) THEN
-    RAISE EXCEPTION 'NO_PERMISSION';
-  END IF;
-
-  v_onboarding := public.merge_app_onboarding_setup(v_onboarding, p_patch);
-
-  UPDATE public.apps
-  SET onboarding = v_onboarding,
-      updated_at = now()
-  WHERE apps.app_id = p_app_id;
-
-  PERFORM public.try_complete_pending_onboarding_if_setup_done(p_app_id);
-
-  SELECT apps.onboarding
-  INTO v_onboarding
-  FROM public.apps
-  WHERE apps.app_id = p_app_id;
-
-  RETURN v_onboarding;
-END;
-$$;
-
-
-ALTER FUNCTION "public"."report_app_onboarding_setup"("p_app_id" character varying, "p_patch" "jsonb") OWNER TO "postgres";
-
-
-COMMENT ON FUNCTION "public"."report_app_onboarding_setup"("p_app_id" character varying, "p_patch" "jsonb") IS 'Records CLI/MCP/AI/manual setup progress for an app the caller can update. Completes need_onboarding when setup outcome is completed or skipped. Requires app.update_settings or org.create_app.';
-
 
 
 CREATE OR REPLACE FUNCTION "public"."request_actor_user_id"() RETURNS "uuid"
@@ -19434,36 +19563,18 @@ CREATE OR REPLACE FUNCTION "public"."update_org_invite_role_rbac"("p_org_id" "uu
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-DECLARE
-  role_id uuid;
 BEGIN
-  SELECT id INTO role_id
-  FROM public.roles r
-  WHERE r.name = p_new_role_name
-    AND r.scope_type = public.rbac_scope_org()
-    AND r.is_assignable = true
-  LIMIT 1;
-
-  IF role_id IS NULL THEN
-    RAISE EXCEPTION 'ROLE_NOT_FOUND';
-  END IF;
-
-  IF p_new_role_name = public.rbac_role_org_super_admin() THEN
-    IF NOT public.rbac_check_permission_request(public.rbac_perm_org_update_user_roles(), p_org_id, NULL::character varying, NULL::bigint) THEN
-      RAISE EXCEPTION 'NO_PERMISSION_TO_UPDATE_ROLES';
-    END IF;
-  ELSE
-    IF NOT public.rbac_check_permission_request(public.rbac_perm_org_invite_user(), p_org_id, NULL::character varying, NULL::bigint) THEN
-      RAISE EXCEPTION 'NO_PERMISSION_TO_UPDATE_ROLES';
-    END IF;
-  END IF;
+  PERFORM rbac_internal.assert_assignable_org_invite_role_exists(p_new_role_name);
+  PERFORM rbac_internal.assert_invite_role_update_permission(p_org_id, p_new_role_name);
+  PERFORM public.lock_rbac_orgs(p_org_id);
+  PERFORM rbac_internal.assert_invite_role_update_permission(p_org_id, p_new_role_name);
 
   UPDATE public.org_users
   SET rbac_role_name = p_new_role_name,
-      updated_at = now()
-  WHERE org_id = p_org_id
-    AND user_id = p_user_id
-    AND is_invite IS TRUE;
+      updated_at = pg_catalog.now()
+  WHERE public.org_users.org_id = p_org_id
+    AND public.org_users.user_id = p_user_id
+    AND public.org_users.is_invite IS TRUE;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'NO_INVITATION';
@@ -19615,36 +19726,18 @@ CREATE OR REPLACE FUNCTION "public"."update_tmp_invite_role_rbac"("p_org_id" "uu
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
-DECLARE
-  role_id uuid;
 BEGIN
-  SELECT id INTO role_id
-  FROM public.roles r
-  WHERE r.name = p_new_role_name
-    AND r.scope_type = public.rbac_scope_org()
-    AND r.is_assignable = true
-  LIMIT 1;
-
-  IF role_id IS NULL THEN
-    RAISE EXCEPTION 'ROLE_NOT_FOUND';
-  END IF;
-
-  IF p_new_role_name = public.rbac_role_org_super_admin() THEN
-    IF NOT public.rbac_check_permission_request(public.rbac_perm_org_update_user_roles(), p_org_id, NULL::character varying, NULL::bigint) THEN
-      RAISE EXCEPTION 'NO_PERMISSION_TO_UPDATE_ROLES';
-    END IF;
-  ELSE
-    IF NOT public.rbac_check_permission_request(public.rbac_perm_org_invite_user(), p_org_id, NULL::character varying, NULL::bigint) THEN
-      RAISE EXCEPTION 'NO_PERMISSION_TO_UPDATE_ROLES';
-    END IF;
-  END IF;
+  PERFORM rbac_internal.assert_assignable_org_invite_role_exists(p_new_role_name);
+  PERFORM rbac_internal.assert_invite_role_update_permission(p_org_id, p_new_role_name);
+  PERFORM public.lock_rbac_orgs(p_org_id);
+  PERFORM rbac_internal.assert_invite_role_update_permission(p_org_id, p_new_role_name);
 
   UPDATE public.tmp_users
   SET rbac_role_name = p_new_role_name,
-      updated_at = now()
-  WHERE org_id = p_org_id
-    AND email = p_email
-    AND cancelled_at IS NULL;
+      updated_at = pg_catalog.now()
+  WHERE public.tmp_users.org_id = p_org_id
+    AND public.tmp_users.email = p_email
+    AND public.tmp_users.cancelled_at IS NULL;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'NO_INVITATION';
@@ -20144,6 +20237,71 @@ COMMENT ON FUNCTION "public"."verify_mfa"() IS 'Returns true when the current se
 
 
 
+CREATE OR REPLACE FUNCTION "rbac_internal"."assert_assignable_org_invite_role_exists"("p_new_role_name" "text") RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  role_id uuid;
+BEGIN
+  SELECT public.roles.id INTO role_id
+  FROM public.roles
+  WHERE public.roles.name = p_new_role_name
+    AND public.roles.scope_type = public.rbac_scope_org()
+    AND public.roles.is_assignable = true
+  LIMIT 1;
+
+  IF role_id IS NULL THEN
+    RAISE EXCEPTION 'ROLE_NOT_FOUND';
+  END IF;
+END;
+$$;
+
+
+ALTER FUNCTION "rbac_internal"."assert_assignable_org_invite_role_exists"("p_new_role_name" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "rbac_internal"."assert_assignable_org_invite_role_exists"("p_new_role_name" "text") IS 'RLS/RPC helper: pending invite role must resolve to an assignable org-scope role.';
+
+
+
+CREATE OR REPLACE FUNCTION "rbac_internal"."assert_invite_role_update_permission"("p_org_id" "uuid", "p_new_role_name" "text") RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  has_permission boolean;
+BEGIN
+  IF p_new_role_name = public.rbac_role_org_super_admin() THEN
+    has_permission := public.rbac_check_permission_request(
+      public.rbac_perm_org_update_user_roles(),
+      p_org_id,
+      NULL::character varying,
+      NULL::bigint
+    );
+  ELSE
+    has_permission := public.rbac_check_permission_request(
+      public.rbac_perm_org_invite_user(),
+      p_org_id,
+      NULL::character varying,
+      NULL::bigint
+    );
+  END IF;
+
+  IF NOT has_permission THEN
+    RAISE EXCEPTION 'NO_PERMISSION_TO_UPDATE_ROLES';
+  END IF;
+END;
+$$;
+
+
+ALTER FUNCTION "rbac_internal"."assert_invite_role_update_permission"("p_org_id" "uuid", "p_new_role_name" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "rbac_internal"."assert_invite_role_update_permission"("p_org_id" "uuid", "p_new_role_name" "text") IS 'RLS/RPC helper: caller may update a pending invite role for the given org.';
+
+
+
 CREATE OR REPLACE FUNCTION "rbac_internal"."channel_override_principal_in_org"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid") RETURNS boolean
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO ''
@@ -20160,6 +20318,201 @@ ALTER FUNCTION "rbac_internal"."channel_override_principal_in_org"("p_principal_
 
 
 COMMENT ON FUNCTION "rbac_internal"."channel_override_principal_in_org"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid") IS 'RLS helper: delegates to rbac_principal_has_org_binding (any scope binding, group membership, or group in org). Called from channel_permission_overrides INSERT/UPDATE policies and cleanup DELETE (once per written row, authenticated only). SECURITY DEFINER so app-scoped admins are not blocked by groups/role_bindings SELECT RLS. Lives in rbac_internal (not PostgREST-exposed).';
+
+
+
+CREATE OR REPLACE FUNCTION "rbac_internal"."role_binding_caller_permission_allowed"("p_scope_type" "text", "p_org_id" "uuid", "p_app_id" "uuid", "p_channel_id" "uuid", "p_bundle_id" bigint) RETURNS boolean
+    LANGUAGE "sql" STABLE
+    SET "search_path" TO ''
+    AS $$
+  SELECT CASE
+    WHEN p_scope_type = public.rbac_scope_org()
+    THEN public.rbac_check_permission_request(
+      public.rbac_perm_org_update_user_roles(),
+      p_org_id,
+      NULL::character varying,
+      NULL::bigint
+    )
+    WHEN p_scope_type = public.rbac_scope_app()
+    THEN EXISTS (
+      SELECT 1
+      FROM public.apps
+      WHERE public.apps.id = p_app_id
+        AND p_org_id = public.apps.owner_org
+        AND public.rbac_check_permission_request(
+          public.rbac_perm_app_update_user_roles(),
+          public.apps.owner_org,
+          public.apps.app_id,
+          NULL::bigint
+        )
+    )
+    WHEN p_scope_type = public.rbac_scope_channel()
+    THEN EXISTS (
+      SELECT 1
+      FROM public.channels
+      JOIN public.apps
+        ON public.channels.app_id = public.apps.app_id
+      WHERE public.channels.rbac_id = p_channel_id
+        AND public.apps.id = p_app_id
+        AND p_org_id = public.channels.owner_org
+        AND public.rbac_check_permission_request(
+          public.rbac_perm_app_update_user_roles(),
+          public.channels.owner_org,
+          public.channels.app_id,
+          public.channels.id
+        )
+    )
+    WHEN p_scope_type = public.rbac_scope_bundle()
+    THEN EXISTS (
+      SELECT 1
+      FROM public.apps
+      JOIN public.app_versions
+        ON public.app_versions.app_id = public.apps.app_id
+      WHERE public.app_versions.id = p_bundle_id
+        AND public.apps.id = p_app_id
+        AND p_org_id = public.apps.owner_org
+        AND public.rbac_check_permission_request(
+          public.rbac_perm_app_update_user_roles(),
+          public.apps.owner_org,
+          public.apps.app_id,
+          NULL::bigint
+        )
+    )
+    ELSE false
+  END
+$$;
+
+
+ALTER FUNCTION "rbac_internal"."role_binding_caller_permission_allowed"("p_scope_type" "text", "p_org_id" "uuid", "p_app_id" "uuid", "p_channel_id" "uuid", "p_bundle_id" bigint) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "rbac_internal"."role_binding_caller_permission_allowed"("p_scope_type" "text", "p_org_id" "uuid", "p_app_id" "uuid", "p_channel_id" "uuid", "p_bundle_id" bigint) IS 'RLS helper: caller may write a role_binding for the given scope and resource identifiers. SECURITY INVOKER so apps/channels/app_versions EXISTS checks retain verify_mfa() RLS. Mirrors role_bindings insert/update policy branches.';
+
+
+
+CREATE OR REPLACE FUNCTION "rbac_internal"."role_binding_principal_allowed_for_org"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid", "p_scope_type" "text") RETURNS boolean
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  -- First org-scope user binding is allowed without a prior membership check.
+  IF p_principal_type = public.rbac_principal_user()
+    AND p_scope_type = public.rbac_scope_org()
+  THEN
+    RETURN true;
+  END IF;
+
+  -- Serialize with org membership revocation (org_users DELETE uses lock_rbac_orgs)
+  -- so scoped bindings cannot commit after concurrent membership removal.
+  PERFORM public.lock_rbac_orgs(p_org_id);
+
+  IF p_principal_type = public.rbac_principal_user()
+    AND p_scope_type IN (
+      public.rbac_scope_app(),
+      public.rbac_scope_channel(),
+      public.rbac_scope_bundle()
+    )
+  THEN
+    RETURN EXISTS (
+      SELECT 1
+      FROM public.role_bindings AS membership
+      WHERE membership.principal_type = public.rbac_principal_user()
+        AND membership.principal_id = p_principal_id
+        AND membership.scope_type = public.rbac_scope_org()
+        AND membership.org_id = p_org_id
+        AND (
+          membership.expires_at IS NULL
+          OR membership.expires_at > pg_catalog.now()
+        )
+    );
+  END IF;
+
+  IF p_principal_type = public.rbac_principal_group()
+  THEN
+    RETURN EXISTS (
+      SELECT 1
+      FROM public.groups
+      WHERE groups.id = p_principal_id
+        AND groups.org_id = p_org_id
+    );
+  END IF;
+
+  IF p_principal_type = public.rbac_principal_apikey()
+  THEN
+    RETURN EXISTS (
+      SELECT 1
+      FROM public.role_bindings AS membership
+      WHERE membership.principal_type = public.rbac_principal_apikey()
+        AND membership.principal_id = p_principal_id
+        AND membership.scope_type = public.rbac_scope_org()
+        AND membership.org_id = p_org_id
+        AND (
+          membership.expires_at IS NULL
+          OR membership.expires_at > pg_catalog.now()
+        )
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM public.apikeys
+      WHERE apikeys.rbac_id = p_principal_id
+        AND EXISTS (
+          SELECT 1
+          FROM public.role_bindings AS owner_membership
+          WHERE owner_membership.principal_type = public.rbac_principal_user()
+            AND owner_membership.principal_id = apikeys.user_id
+            AND owner_membership.scope_type = public.rbac_scope_org()
+            AND owner_membership.org_id = p_org_id
+            AND (
+              owner_membership.expires_at IS NULL
+              OR owner_membership.expires_at > pg_catalog.now()
+            )
+        )
+    );
+  END IF;
+
+  RETURN false;
+END;
+$$;
+
+
+ALTER FUNCTION "rbac_internal"."role_binding_principal_allowed_for_org"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid", "p_scope_type" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "rbac_internal"."role_binding_principal_allowed_for_org"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid", "p_scope_type" "text") IS 'RLS helper: target principal may receive a role_binding on this org. User org-scope is always allowed (first membership). User app/channel/bundle requires a non-expired org-scope binding. Group must belong to the org. Apikey must have an org-scope binding or an owner with org-scope membership. Acquires lock_rbac_orgs before membership EXISTS checks to serialize with concurrent org membership revocation.';
+
+
+
+CREATE OR REPLACE FUNCTION "rbac_internal"."role_binding_write_principal_allowed"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid", "p_scope_type" "text", "p_app_id" "uuid", "p_channel_id" "uuid", "p_bundle_id" bigint) RETURNS boolean
+    LANGUAGE "plpgsql"
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  -- Evaluate caller permission before lock_rbac_orgs; PostgreSQL does not
+  -- guarantee AND operand order across separate policy functions.
+  IF NOT rbac_internal.role_binding_caller_permission_allowed(
+    p_scope_type,
+    p_org_id,
+    p_app_id,
+    p_channel_id,
+    p_bundle_id
+  ) THEN
+    RETURN false;
+  END IF;
+
+  RETURN rbac_internal.role_binding_principal_allowed_for_org(
+    p_principal_type,
+    p_principal_id,
+    p_org_id,
+    p_scope_type
+  );
+END;
+$$;
+
+
+ALTER FUNCTION "rbac_internal"."role_binding_write_principal_allowed"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid", "p_scope_type" "text", "p_app_id" "uuid", "p_channel_id" "uuid", "p_bundle_id" bigint) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "rbac_internal"."role_binding_write_principal_allowed"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid", "p_scope_type" "text", "p_app_id" "uuid", "p_channel_id" "uuid", "p_bundle_id" bigint) IS 'RLS helper: sequential caller-permission then target-principal checks for role_bindings INSERT/UPDATE WITH CHECK. Ensures lock_rbac_orgs is not taken before authorization fails.';
 
 
 
@@ -21754,6 +22107,7 @@ CREATE TABLE IF NOT EXISTS "public"."notification_provider_configs" (
     "config" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
     "secret_ref" "text",
     "created_by" "uuid",
+    "secret_ciphertext" "text",
     CONSTRAINT "notification_provider_configs_provider_check" CHECK (("provider" = ANY (ARRAY['fcm'::"text", 'apns'::"text"]))),
     CONSTRAINT "notification_provider_configs_status_check" CHECK (("status" = ANY (ARRAY['draft'::"text", 'configured'::"text", 'disabled'::"text", 'error'::"text"])))
 );
@@ -21763,6 +22117,10 @@ ALTER TABLE "public"."notification_provider_configs" OWNER TO "postgres";
 
 
 COMMENT ON TABLE "public"."notification_provider_configs" IS 'Low-cardinality native notification provider configuration. Per-device push tokens are stored only as encrypted Cloudflare Analytics Engine events, not in Postgres.';
+
+
+
+COMMENT ON COLUMN "public"."notification_provider_configs"."secret_ciphertext" IS 'AES-GCM encrypted push credential material for hosted Capgo. Null when using worker env secret_ref (self-host).';
 
 
 
@@ -21915,7 +22273,6 @@ CREATE TABLE IF NOT EXISTS "public"."orgs" (
     "support_channel_url" "text",
     "support_channel_set_at" timestamp with time zone,
     CONSTRAINT "orgs_max_apikey_expiration_days_valid" CHECK ((("max_apikey_expiration_days" IS NULL) OR (("max_apikey_expiration_days" >= 1) AND ("max_apikey_expiration_days" <= 365)))),
-    CONSTRAINT "orgs_onboarding_valid" CHECK ((("jsonb_typeof"("onboarding") = 'object'::"text") AND ((NOT ("onboarding" ? 'intent'::"text")) OR (("onboarding" ->> 'intent'::"text") = ANY (ARRAY['unknown'::"text", 'ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text"]))))),
     CONSTRAINT "orgs_password_policy_config_min_length_check" CHECK ((("password_policy_config" IS NULL) OR (("jsonb_typeof"("password_policy_config") = 'object'::"text") AND ((NOT ("password_policy_config" ? 'min_length'::"text")) OR (("jsonb_typeof"(("password_policy_config" -> 'min_length'::"text")) = 'number'::"text") AND ((("password_policy_config" ->> 'min_length'::"text"))::numeric = "trunc"((("password_policy_config" ->> 'min_length'::"text"))::numeric)) AND (((("password_policy_config" ->> 'min_length'::"text"))::numeric >= (6)::numeric) AND ((("password_policy_config" ->> 'min_length'::"text"))::numeric <= (72)::numeric))))))),
     CONSTRAINT "orgs_required_encryption_key_valid" CHECK ((("required_encryption_key" IS NULL) OR ("length"(("required_encryption_key")::"text") = ANY (ARRAY[20, 21])))),
     CONSTRAINT "orgs_support_channel_type_check" CHECK ((("support_channel_type" IS NULL) OR ("support_channel_type" = ANY (ARRAY['slack'::"text", 'discord'::"text", 'teams'::"text"])))),
@@ -21964,7 +22321,7 @@ COMMENT ON COLUMN "public"."orgs"."has_usage_credits" IS 'True only with positiv
 
 
 
-COMMENT ON COLUMN "public"."orgs"."onboarding" IS 'Onboarding answers (extensible JSONB). Currently: {"intent": unknown|ota|builder|both|exploring}. Used for segmentation and to tailor the org experience.';
+COMMENT ON COLUMN "public"."orgs"."onboarding" IS 'Onboarding answers (extensible JSONB). Currently: {"intent": unknown|ota|builder|both|exploring|publish, "starting_out": boolean, "development_environment": hosted_builder|ai_assistant|hand_coded|other|local_project|exploring|skipped}. Used for segmentation and to tailor the org experience.';
 
 
 
@@ -22745,7 +23102,7 @@ COMMENT ON COLUMN "public"."users"."github_username" IS 'Optional GitHub usernam
 
 
 
-COMMENT ON COLUMN "public"."users"."onboarding" IS 'Persisted create-app onboarding wizard progress for resume and admin drop-off. Keys: status, step, flow, intent, details_step, app_name, app_id, existing_app, existing_app_setup, store_url, imported_store_app_id, org_name, estimated_users_index, onboarding_attempt_id, last_run_id, updated_at, completed_at.';
+COMMENT ON COLUMN "public"."users"."onboarding" IS 'Persisted create-app onboarding wizard progress for resume and admin drop-off. Keys: status, step, flow, development_environment, intent, details_step, setup_stage, app_name, app_id, existing_app, existing_app_setup, store_url, imported_store_app_id, org_name, estimated_users_index, onboarding_attempt_id, last_run_id, abtests, updated_at, completed_at.';
 
 
 
@@ -23200,6 +23557,11 @@ ALTER TABLE "public"."orgs"
 
 
 
+ALTER TABLE "public"."orgs"
+    ADD CONSTRAINT "orgs_onboarding_valid" CHECK ((("jsonb_typeof"("onboarding") = 'object'::"text") AND ((NOT ("onboarding" ? 'intent'::"text")) OR (("onboarding" ->> 'intent'::"text") = ANY (ARRAY['unknown'::"text", 'ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text", 'publish'::"text"]))) AND ((NOT ("onboarding" ? 'development_environment'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'development_environment'::"text")) = 'string'::"text") AND (("onboarding" ->> 'development_environment'::"text") = ANY (ARRAY['hosted_builder'::"text", 'ai_assistant'::"text", 'hand_coded'::"text", 'other'::"text", 'local_project'::"text", 'exploring'::"text", 'skipped'::"text"])))))) NOT VALID;
+
+
+
 ALTER TABLE ONLY "public"."orgs"
     ADD CONSTRAINT "orgs_pkey" PRIMARY KEY ("id");
 
@@ -23351,7 +23713,7 @@ ALTER TABLE ONLY "public"."user_security"
 
 
 ALTER TABLE "public"."users"
-    ADD CONSTRAINT "users_onboarding_valid" CHECK ((("jsonb_typeof"("onboarding") = 'object'::"text") AND ("octet_length"(("onboarding")::"text") <= 65536) AND ((NOT ("onboarding" ? 'status'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'status'::"text")) = 'string'::"text") AND (("onboarding" ->> 'status'::"text") = ANY (ARRAY['in_progress'::"text", 'completed'::"text", 'abandoned'::"text"])))) AND ((NOT ("onboarding" ? 'step'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'step'::"text")) = 'string'::"text") AND (("onboarding" ->> 'step'::"text") = ANY (ARRAY['intent'::"text", 'details'::"text", 'organization'::"text", 'choice'::"text", 'install'::"text", 'setup'::"text"])))) AND ((NOT ("onboarding" ? 'flow'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'flow'::"text")) = 'string'::"text") AND (("onboarding" ->> 'flow'::"text") = ANY (ARRAY['pre_org'::"text", 'existing_org'::"text"])))) AND ((NOT ("onboarding" ? 'intent'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'intent'::"text")) = 'string'::"text") AND (("onboarding" ->> 'intent'::"text") = ANY (ARRAY['ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text"])))))) NOT VALID;
+    ADD CONSTRAINT "users_onboarding_valid" CHECK ((("jsonb_typeof"("onboarding") = 'object'::"text") AND ("octet_length"(("onboarding")::"text") <= 65536) AND ((NOT ("onboarding" ? 'status'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'status'::"text")) = 'string'::"text") AND (("onboarding" ->> 'status'::"text") = ANY (ARRAY['in_progress'::"text", 'completed'::"text", 'abandoned'::"text"])))) AND ((NOT ("onboarding" ? 'step'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'step'::"text")) = 'string'::"text") AND (("onboarding" ->> 'step'::"text") = ANY (ARRAY['intent'::"text", 'publish_app_question'::"text", 'details'::"text", 'organization'::"text", 'choice'::"text", 'install'::"text", 'setup'::"text"])))) AND ((NOT ("onboarding" ? 'flow'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'flow'::"text")) = 'string'::"text") AND (("onboarding" ->> 'flow'::"text") = ANY (ARRAY['pre_org'::"text", 'existing_org'::"text"])))) AND ((NOT ("onboarding" ? 'development_environment'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'development_environment'::"text")) = 'string'::"text") AND (("onboarding" ->> 'development_environment'::"text") = ANY (ARRAY['hosted_builder'::"text", 'ai_assistant'::"text", 'hand_coded'::"text", 'other'::"text", 'local_project'::"text", 'exploring'::"text", 'skipped'::"text"])))) AND ((NOT ("onboarding" ? 'intent'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'intent'::"text")) = 'string'::"text") AND (("onboarding" ->> 'intent'::"text") = ANY (ARRAY['ota'::"text", 'builder'::"text", 'both'::"text", 'exploring'::"text", 'publish'::"text"])))) AND ((NOT ("onboarding" ? 'setup_stage'::"text")) OR (("jsonb_typeof"(("onboarding" -> 'setup_stage'::"text")) = 'string'::"text") AND (("onboarding" ->> 'setup_stage'::"text") = ANY (ARRAY['channel-routing'::"text", 'channel-self-assign'::"text", 'channel-console-assign'::"text", 'channel-create'::"text", 'cli'::"text"])))))) NOT VALID;
 
 
 
@@ -24076,6 +24438,14 @@ CREATE UNIQUE INDEX "usage_credit_transactions_purchase_payment_intent_id_idx" O
 
 
 CREATE UNIQUE INDEX "usage_credit_transactions_purchase_session_id_idx" ON "public"."usage_credit_transactions" USING "btree" ((("source_ref" ->> 'sessionId'::"text"))) WHERE (("transaction_type" = 'purchase'::"public"."credit_transaction_type") AND (("source_ref" ->> 'sessionId'::"text") IS NOT NULL));
+
+
+
+CREATE INDEX "users_onboarding_abtests_gin_idx" ON "public"."users" USING "gin" ((("onboarding" -> 'abtests'::"text")));
+
+
+
+COMMENT ON INDEX "public"."users_onboarding_abtests_gin_idx" IS 'Bounds platform admin A/B distribution reads to users assigned to configured onboarding experiments.';
 
 
 
@@ -25905,11 +26275,11 @@ CREATE POLICY "role_bindings_delete" ON "public"."role_bindings" FOR DELETE TO "
 
 
 
-CREATE POLICY "role_bindings_insert" ON "public"."role_bindings" FOR INSERT TO "authenticated" WITH CHECK (((("scope_type" = "public"."rbac_scope_org"()) AND "public"."rbac_check_permission_request"("public"."rbac_perm_org_update_user_roles"(), "org_id", NULL::character varying, NULL::bigint)) OR (("scope_type" = "public"."rbac_scope_app"()) AND (EXISTS ( SELECT 1
-   FROM "public"."apps"
-  WHERE (("apps"."id" = "role_bindings"."app_id") AND "public"."rbac_check_permission_request"("public"."rbac_perm_app_update_user_roles"(), "apps"."owner_org", "apps"."app_id", NULL::bigint))))) OR (("scope_type" = "public"."rbac_scope_channel"()) AND (EXISTS ( SELECT 1
-   FROM "public"."channels"
-  WHERE (("channels"."rbac_id" = "role_bindings"."channel_id") AND "public"."rbac_check_permission_request"("public"."rbac_perm_app_update_user_roles"(), "channels"."owner_org", "channels"."app_id", "channels"."id")))))));
+CREATE POLICY "role_bindings_insert" ON "public"."role_bindings" FOR INSERT TO "authenticated" WITH CHECK ("rbac_internal"."role_binding_write_principal_allowed"("principal_type", "principal_id", "org_id", "scope_type", "app_id", "channel_id", "bundle_id"));
+
+
+
+COMMENT ON POLICY "role_bindings_insert" ON "public"."role_bindings" IS 'Caller needs *_update_user_roles. Scoped bindings require org_id to match the resource owner org and the target principal to belong to that org.';
 
 
 
@@ -25917,11 +26287,11 @@ CREATE POLICY "role_bindings_select" ON "public"."role_bindings" FOR SELECT TO "
 
 
 
-CREATE POLICY "role_bindings_update" ON "public"."role_bindings" FOR UPDATE TO "authenticated" USING (((("scope_type" = "public"."rbac_scope_org"()) AND "public"."rbac_check_permission_request"("public"."rbac_perm_org_update_user_roles"(), "org_id", NULL::character varying, NULL::bigint)) OR (("scope_type" = "public"."rbac_scope_app"()) AND (EXISTS ( SELECT 1
-   FROM "public"."apps"
-  WHERE (("apps"."id" = "role_bindings"."app_id") AND "public"."rbac_check_permission_request"("public"."rbac_perm_app_update_user_roles"(), "apps"."owner_org", "apps"."app_id", NULL::bigint))))) OR (("scope_type" = "public"."rbac_scope_channel"()) AND (EXISTS ( SELECT 1
-   FROM "public"."channels"
-  WHERE (("channels"."rbac_id" = "role_bindings"."channel_id") AND "public"."rbac_check_permission_request"("public"."rbac_perm_app_update_user_roles"(), "channels"."owner_org", "channels"."app_id", "channels"."id")))))));
+CREATE POLICY "role_bindings_update" ON "public"."role_bindings" FOR UPDATE TO "authenticated" USING ("rbac_internal"."role_binding_caller_permission_allowed"("scope_type", "org_id", "app_id", "channel_id", "bundle_id")) WITH CHECK ("rbac_internal"."role_binding_write_principal_allowed"("principal_type", "principal_id", "org_id", "scope_type", "app_id", "channel_id", "bundle_id"));
+
+
+
+COMMENT ON POLICY "role_bindings_update" ON "public"."role_bindings" IS 'Same caller permission, owner-org binding, and target-membership checks as role_bindings_insert.';
 
 
 
@@ -28559,6 +28929,20 @@ GRANT ALL ON FUNCTION "public"."read_device_usage"("p_app_id" character varying,
 
 
 
+REVOKE ALL ON FUNCTION "public"."read_native_active_devices_summary"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."read_native_active_devices_summary"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) TO "service_role";
+GRANT ALL ON FUNCTION "public"."read_native_active_devices_summary"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."read_native_active_devices_summary"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) TO "anon";
+
+
+
+REVOKE ALL ON FUNCTION "public"."read_native_daily_platform_active"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."read_native_daily_platform_active"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) TO "service_role";
+GRANT ALL ON FUNCTION "public"."read_native_daily_platform_active"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."read_native_daily_platform_active"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) TO "anon";
+
+
+
 REVOKE ALL ON FUNCTION "public"."read_native_version_usage"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."read_native_version_usage"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) TO "service_role";
 GRANT ALL ON FUNCTION "public"."read_native_version_usage"("p_app_id" character varying, "p_period_start" timestamp without time zone, "p_period_end" timestamp without time zone) TO "authenticated";
@@ -28697,12 +29081,6 @@ GRANT ALL ON FUNCTION "public"."reject_access_due_to_password_policy"("org_id" "
 
 
 REVOKE ALL ON FUNCTION "public"."remove_old_jobs"() FROM PUBLIC;
-
-
-
-REVOKE ALL ON FUNCTION "public"."report_app_onboarding_setup"("p_app_id" character varying, "p_patch" "jsonb") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."report_app_onboarding_setup"("p_app_id" character varying, "p_patch" "jsonb") TO "service_role";
-GRANT ALL ON FUNCTION "public"."report_app_onboarding_setup"("p_app_id" character varying, "p_patch" "jsonb") TO "authenticated";
 
 
 
@@ -29007,9 +29385,39 @@ GRANT ALL ON FUNCTION "public"."verify_mfa"() TO "service_role";
 
 
 
+REVOKE ALL ON FUNCTION "rbac_internal"."assert_assignable_org_invite_role_exists"("p_new_role_name" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "rbac_internal"."assert_assignable_org_invite_role_exists"("p_new_role_name" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "rbac_internal"."assert_assignable_org_invite_role_exists"("p_new_role_name" "text") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "rbac_internal"."assert_invite_role_update_permission"("p_org_id" "uuid", "p_new_role_name" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "rbac_internal"."assert_invite_role_update_permission"("p_org_id" "uuid", "p_new_role_name" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "rbac_internal"."assert_invite_role_update_permission"("p_org_id" "uuid", "p_new_role_name" "text") TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "rbac_internal"."channel_override_principal_in_org"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "rbac_internal"."channel_override_principal_in_org"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "rbac_internal"."channel_override_principal_in_org"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "rbac_internal"."role_binding_caller_permission_allowed"("p_scope_type" "text", "p_org_id" "uuid", "p_app_id" "uuid", "p_channel_id" "uuid", "p_bundle_id" bigint) FROM PUBLIC;
+GRANT ALL ON FUNCTION "rbac_internal"."role_binding_caller_permission_allowed"("p_scope_type" "text", "p_org_id" "uuid", "p_app_id" "uuid", "p_channel_id" "uuid", "p_bundle_id" bigint) TO "authenticated";
+GRANT ALL ON FUNCTION "rbac_internal"."role_binding_caller_permission_allowed"("p_scope_type" "text", "p_org_id" "uuid", "p_app_id" "uuid", "p_channel_id" "uuid", "p_bundle_id" bigint) TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "rbac_internal"."role_binding_principal_allowed_for_org"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid", "p_scope_type" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "rbac_internal"."role_binding_principal_allowed_for_org"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid", "p_scope_type" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "rbac_internal"."role_binding_principal_allowed_for_org"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid", "p_scope_type" "text") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "rbac_internal"."role_binding_write_principal_allowed"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid", "p_scope_type" "text", "p_app_id" "uuid", "p_channel_id" "uuid", "p_bundle_id" bigint) FROM PUBLIC;
+GRANT ALL ON FUNCTION "rbac_internal"."role_binding_write_principal_allowed"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid", "p_scope_type" "text", "p_app_id" "uuid", "p_channel_id" "uuid", "p_bundle_id" bigint) TO "authenticated";
+GRANT ALL ON FUNCTION "rbac_internal"."role_binding_write_principal_allowed"("p_principal_type" "text", "p_principal_id" "uuid", "p_org_id" "uuid", "p_scope_type" "text", "p_app_id" "uuid", "p_channel_id" "uuid", "p_bundle_id" bigint) TO "service_role";
 
 
 

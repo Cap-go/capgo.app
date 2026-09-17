@@ -3,7 +3,52 @@ import { buildCliAiSetupPrompt } from '../src/services/cliAiPrompt'
 
 const apiKey = 'capgo_test_secret'
 
+function promptInput() {
+  return {
+    apiKey,
+    organizations: [{
+      id: 'org-1',
+      name: 'Acme',
+      apps: [{ appId: 'com.acme.app', name: 'Production App' }],
+    }],
+    skippedOrganizations: [],
+  }
+}
+
 describe('buildCliAiSetupPrompt', () => {
+  it.concurrent('keeps OTA as the default for absent and unsupported intents', () => {
+    const existing = buildCliAiSetupPrompt(promptInput())
+
+    expect(buildCliAiSetupPrompt(promptInput(), 'ota')).toBe(existing)
+    expect(buildCliAiSetupPrompt(promptInput(), 'unknown')).toBe(existing)
+    expect(buildCliAiSetupPrompt(promptInput(), ['builder'])).toBe(existing)
+  })
+
+  it.concurrent('builds the MCP-first Builder onboarding prompt', () => {
+    const prompt = buildCliAiSetupPrompt(promptInput(), 'builder')
+
+    expect(prompt.match(new RegExp(apiKey, 'g'))).toHaveLength(1)
+    expect(prompt).toContain(`login ${apiKey}`)
+    expect(prompt).toContain("npx install-mcp 'npx @capgo/cli@latest mcp' --client {MCP_CLIENT}")
+    expect(prompt).toContain('restart the AI client')
+    expect(prompt).toContain('start_capgo_builder_onboarding')
+    expect(prompt).toContain('capgo_builder_onboarding_next_step')
+    expect(prompt).not.toContain('## 8. Test the first live update')
+  })
+
+  it.concurrent('uses one choose-first prompt for both and exploring', () => {
+    const both = buildCliAiSetupPrompt(promptInput(), 'both')
+    const exploring = buildCliAiSetupPrompt(promptInput(), 'exploring')
+
+    expect(exploring).toBe(both)
+    expect(both.match(new RegExp(apiKey, 'g'))).toHaveLength(1)
+    expect(both).toContain('What would you like to configure first: Capgo Live Updates or Capgo Builder?')
+    expect(both).toContain('Do not start both setup flows concurrently.')
+    expect(both).toContain('offer to configure the other product')
+    expect(both).toContain('start_capgo_builder_onboarding')
+    expect(both).toContain('## 8. Test the first live update')
+  })
+
   it.concurrent('embeds the secret only in the mandatory login command', () => {
     const prompt = buildCliAiSetupPrompt({
       apiKey,
