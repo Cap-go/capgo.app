@@ -24,6 +24,7 @@ watch([() => props.appId, () => main.user?.id ?? main.auth?.id, () => dialogStor
   markOnboardingExplorationReminderShown()
   dialogStore.openDialog({
     id: 'onboarding-exploration-reminder',
+    size: '2xl',
     title: t('app-onboarding-exploration-reminder-title'),
     description: t('app-onboarding-exploration-reminder-description'),
     buttons: [
