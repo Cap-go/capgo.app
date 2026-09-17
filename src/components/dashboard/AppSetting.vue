@@ -1564,7 +1564,7 @@ async function transferAppOwnership() {
                 :label="t('block-provider-infra-requests')"
                 :help="t('block-provider-infra-requests-help')"
               />
-              <fieldset class="pt-2">
+              <fieldset class="pt-2" data-test="device-data-collection">
                 <legend class="mb-1 text-sm font-medium text-slate-800 dark:text-slate-100">
                   {{ t('device-data-collection') }}
                 </legend>
