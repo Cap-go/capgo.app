@@ -34,9 +34,9 @@ test.describe('PR 3340 channel UX screenshots', () => {
     await expect(page.getByText('Download format', { exact: false }).first()).toBeVisible({ timeout: 30000 })
 
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-    const percentInput = page.locator('#rollout-percentage-input')
-    await expect(percentInput).toBeEnabled({ timeout: 60000 })
-    await percentInput.scrollIntoViewIfNeeded()
+    const editSettings = page.locator('[data-test="rollout-settings-edit"]')
+    await expect(editSettings).toBeEnabled({ timeout: 60000 })
+    await editSettings.scrollIntoViewIfNeeded()
     const infoButton = page.getByRole('button', { name: 'Progressive rollout information' })
     await expect(infoButton).toBeVisible()
     await page.screenshot({
@@ -50,11 +50,14 @@ test.describe('PR 3340 channel UX screenshots', () => {
       path: resolve(screenshotDir, '08-rollout-settings-info-modal.png'),
     })
     await page.getByRole('button', { name: 'Close', exact: true }).click()
+    await editSettings.click()
+    const percentInput = page.locator('#rollout-percentage-input')
+    await expect(percentInput).toBeVisible()
     await percentInput.fill('25', { force: true })
-    const applyPercent = page.getByRole('button', { name: 'Apply percentage', exact: true })
+    const applyPercent = page.getByRole('button', { name: 'Apply', exact: true }).first()
     await expect(applyPercent).toBeEnabled({ timeout: 15000 })
     await applyPercent.click()
-    await expect(page.locator('h3').filter({ hasText: 'Apply rollout percentage?' })).toBeVisible()
+    await expect(page.locator('h3').filter({ hasText: 'Update rollout settings?' })).toBeVisible()
     await page.screenshot({
       path: resolve(screenshotDir, '04-rollout-percentage-confirm.png'),
     })
@@ -104,9 +107,9 @@ test.describe('PR 3340 channel UX screenshots', () => {
     await dismissOptionalPrompts(page)
     await expect(page.getByText('Progressive rollout', { exact: false }).first()).toBeVisible({ timeout: 30000 })
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-    await expect(page.getByRole('button', { name: 'Set target', exact: true })).toBeVisible({ timeout: 60000 })
+    await expect(page.getByRole('button', { name: 'Promote', exact: true })).toBeVisible({ timeout: 60000 })
 
-    const actionRow = page.locator('button', { hasText: 'Set target' }).locator('xpath=ancestor::div[contains(@class,"flex-wrap")][1]')
+    const actionRow = page.locator('button', { hasText: 'Promote' }).locator('xpath=ancestor::div[contains(@class,"flex-wrap")][1]')
     await actionRow.scrollIntoViewIfNeeded()
     await page.screenshot({
       path: resolve(screenshotDir, '06-rollout-action-buttons-bordered.png'),

@@ -8,7 +8,7 @@ import { createApp, defineComponent, h, nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
 import en from '../messages/en.json'
 import { useDialogV2Store } from '../src/stores/dialogv2'
-import { createChannelRolloutConfirmFlows, isRolloutPercentageDraftChanged } from '../src/utils/channelRolloutConfirmFlows'
+import { createChannelRolloutConfirmFlows, formatRolloutCacheTtlDisplay, formatRolloutCacheTtlHuman, isRolloutPercentageDraftChanged } from '../src/utils/channelRolloutConfirmFlows'
 import { getUpdatePackageDescription, getUpdatePackageInfoDescription } from '../src/utils/channelUpdatePackageCopy'
 import { confirmConsequentialChannelChange } from '../src/utils/confirmConsequentialChannelChange'
 
@@ -73,6 +73,7 @@ interface TestChannel {
   update_package?: 'all' | 'zip' | 'delta' | 'zip_from_builtin' | 'delta_from_builtin' | null
   rollout_version?: number | null
   rollout_percentage_bps?: number | null
+  rollout_cache_ttl_seconds?: number | null
   rollout_paused_at?: string | null
 }
 
@@ -258,10 +259,17 @@ describe('channel information rollout and update package UX', () => {
     expect(isRolloutPercentageDraftChanged('150', 1000)).toBe(true)
   })
 
+  it('number drafts from type=number v-model do not throw and compare in bps', () => {
+    expect(isRolloutPercentageDraftChanged(10, 1000)).toBe(false)
+    expect(isRolloutPercentageDraftChanged(1, 1000)).toBe(true)
+    expect(isRolloutPercentageDraftChanged(25, 2500)).toBe(false)
+    expect(isRolloutPercentageDraftChanged(0, 0)).toBe(false)
+  })
+
   it('applyRolloutPercentage cancel skips save and confirm updates bps', async () => {
     const { container, t } = mountDialogShell()
     const channel: TestChannel = { rollout_percentage_bps: 1000 }
-    const { flows, saveChannelChange, dismiss } = createTestFlows({ container, t, channel })
+    const { flows, saveChannelChange, saveChannelChanges, dismiss } = createTestFlows({ container, t, channel })
 
     const firstApply = flows.applyRolloutPercentage('25')
     await nextTick()
@@ -270,12 +278,36 @@ describe('channel information rollout and update package UX', () => {
     await dismiss('Cancel')
     await firstApply
     expect(saveChannelChange).not.toHaveBeenCalled()
+    expect(saveChannelChanges).not.toHaveBeenCalled()
 
     const secondApply = flows.applyRolloutPercentage('25')
     await nextTick()
     await dismiss('Confirm')
     await secondApply
-    expect(saveChannelChange).toHaveBeenCalledWith('rollout_percentage_bps', 2500)
+    expect(saveChannelChanges).toHaveBeenCalledWith({ rollout_percentage_bps: 2500 })
+
+    const numericApply = flows.applyRolloutPercentage(40)
+    await nextTick()
+    await dismiss('Confirm')
+    await numericApply
+    expect(saveChannelChanges).toHaveBeenCalledWith({ rollout_percentage_bps: 4000 })
+  })
+
+  it('applyRolloutSettings confirms percentage and cache TTL together', async () => {
+    const { container, t } = mountDialogShell()
+    const channel: TestChannel = { rollout_percentage_bps: 1000, rollout_cache_ttl_seconds: 2592000 }
+    const { flows, saveChannelChanges, dismiss } = createTestFlows({ container, t, channel })
+
+    const apply = flows.applyRolloutSettings({ percentage: 25, cacheTtlSeconds: 3600 })
+    await nextTick()
+    expect(container.textContent).toContain('Update rollout settings?')
+    expect(container.textContent).toContain('1 hour (3600s)')
+    await dismiss('Confirm')
+    await apply
+    expect(saveChannelChanges).toHaveBeenCalledWith({
+      rollout_percentage_bps: 2500,
+      rollout_cache_ttl_seconds: 3600,
+    })
   })
 
   it('rollout control confirms match expected dialog ids and saves', async () => {
@@ -298,11 +330,6 @@ describe('channel information rollout and update package UX', () => {
         run: () => flows.enableRollout(),
         title: 'Enable progressive rollout?',
         assert: () => expect(saveChannelChange).toHaveBeenCalledWith('rollout_enabled', true),
-      },
-      {
-        run: () => flows.disableRollout(),
-        title: 'Disable progressive rollout?',
-        assert: () => expect(saveChannelChanges).toHaveBeenCalledWith(expect.objectContaining({ rollout_enabled: false })),
       },
       {
         run: () => flows.rollbackRollout(),
@@ -345,7 +372,7 @@ describe('channel information rollout and update package UX', () => {
     dialogStore.openDialog({
       id: 'rollout-settings-info',
       title: t('progressive-rollout'),
-      description: `${t('rollout-settings-help')}\n\n${t('rollout-percentage-help')}`,
+      description: `${t('rollout-settings-help')}\n\n${t('rollout-percentage-help')}\n\n${t('cache-ttl-help')}`,
       buttons: [{ text: t('close'), role: 'primary' }],
     })
     await nextTick()
@@ -375,6 +402,14 @@ describe('channel information rollout and update package UX', () => {
     findDialogButton(container, 'Close').click()
     await nextTick()
     expect(dialogStore.showDialog).toBe(false)
+  })
+
+  it('formats cache TTL as a human duration', () => {
+    const { t } = mountDialogShell()
+    expect(formatRolloutCacheTtlHuman(2592000, t)).toBe('30 days')
+    expect(formatRolloutCacheTtlHuman(3600, t)).toBe('1 hour')
+    expect(formatRolloutCacheTtlHuman(90, t)).toBe('1 minute 30 seconds')
+    expect(formatRolloutCacheTtlDisplay(2592000, t)).toBe('30 days (2592000s)')
   })
 
   it('update package descriptions stay documented for every option', () => {
