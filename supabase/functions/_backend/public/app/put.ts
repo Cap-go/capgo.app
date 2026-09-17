@@ -2,12 +2,12 @@ import type { Context } from 'hono'
 import type { PoolClient } from 'pg'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
-import { sql } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { HTTPException } from 'hono/http-exception'
 import { buildAppCreatorEventDetails } from '../../utils/app_creator.ts'
 import { buildAppOnboardingStepPosthogEvent } from '../../utils/app_onboarding_posthog.ts'
 import { appendAppOnboardingStepHistory, filterAppOnboardingReportedPatch, getAppOnboardingStepHistoryChanges, parseAppOnboarding, parseAppOnboardingPatch } from '../../utils/appOnboarding.ts'
-import { lockAppOnboardingForWrite } from '../../utils/appOnboardingWriteLock.ts'
+import { lockAppOnboardingForWrite, retryAppOnboardingWrite } from '../../utils/appOnboardingWriteLock.ts'
 import { deleteAppStatus } from '../../utils/appStatus.ts'
 import { trackBentoEvent } from '../../utils/bento.ts'
 import { createIfNotExistStoreInfo } from '../../utils/cloudflare.ts'
@@ -15,6 +15,7 @@ import { lockOnboardingApp, unlockOnboardingApp } from '../../utils/demo.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
+import { apps } from '../../utils/postgres_schema.ts'
 import { trackPosthogEvent } from '../../utils/posthog.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { createSignedImageUrl, getStorageAllowedOrigins, resolveWritableImageValue } from '../../utils/storage.ts'
@@ -35,6 +36,10 @@ interface UpdateApp {
   onboarding?: unknown
 }
 
+type AppSettings = Pick<Database['public']['Tables']['apps']['Update'], 'name' | 'icon_url' | 'retention' | 'expose_metadata' | 'allow_device_custom_id'
+  | 'need_onboarding' | 'existing_app' | 'block_provider_infra_requests'
+  | 'ios_store_url' | 'android_store_url'>
+
 export async function persistAppOnboarding(
   c: Context<MiddlewareKeyVariables>,
   appId: string,
@@ -42,11 +47,12 @@ export async function persistAppOnboarding(
   apikey: Database['public']['Tables']['apikeys']['Row'],
   transactionClient?: PoolClient,
   completePendingOnboarding = false,
+  settings?: AppSettings,
 ) {
   const pool = transactionClient ? null : getPgClient(c)
   try {
     const drizzle = getDrizzleClient(transactionClient ?? pool!, { logger: false })
-    return await drizzle.transaction(async (tx) => {
+    return await retryAppOnboardingWrite(drizzle, async (tx) => {
       const current = await lockAppOnboardingForWrite(tx, appId)
       if (!current)
         return undefined
@@ -55,12 +61,51 @@ export async function persistAppOnboarding(
       const key = auth?.apikey?.key ?? c.get('capgkey') ?? (auth?.authType === 'jwt' ? null : apikey.key)
       // Recheck under the same lock held by RBAC revocations, not the earlier
       // request-level permission snapshot.
-      if (!(await checkPermissionPg(c, 'app.update_settings', { appId }, tx, userId, key))
-        && !(await checkPermissionPg(c, 'org.create_app', { orgId: current.owner_org }, tx, userId, key))) {
+      const canUpdateSettings = await checkPermissionPg(c, 'app.update_settings', { appId }, tx, userId, key)
+      if (!canUpdateSettings && (settings
+        || !(await checkPermissionPg(c, 'org.create_app', { orgId: current.owner_org }, tx, userId, key)))) {
         throw quickError(401, 'cannot_access_app', 'You can\'t access this app', { app_id: appId })
       }
       let app: Database['public']['Tables']['apps']['Row'] | undefined
       let completed = false
+      if (settings) {
+        if (settings.icon_url) {
+          settings = { ...settings, icon_url: resolveWritableImageValue(settings.icon_url, { orgId: current.owner_org, appId }, getStorageAllowedOrigins(c)) ?? undefined }
+          if (!settings.icon_url)
+            throw simpleError('invalid_icon_path', 'Icon path must belong to this app organization')
+        }
+        // Settings retain caller RLS inside this same transaction. Restore the
+        // internal role/context before merging backend-owned progress fields.
+        const saved = (await tx.execute<{ role: string, claims: string | null, sub: string | null, headers: string | null }>(sql`
+          SELECT current_user AS role,
+            pg_catalog.current_setting('request.jwt.claims', true) AS claims,
+            pg_catalog.current_setting('request.jwt.claim.sub', true) AS sub,
+            pg_catalog.current_setting('request.headers', true) AS headers
+        `)).rows[0]
+        const jwt = auth?.authType === 'jwt'
+        await tx.execute(sql`SELECT
+          pg_catalog.set_config('request.jwt.claims', ${JSON.stringify(jwt ? { ...auth.claims, sub: userId, role: 'authenticated' } : { role: 'anon' })}, true),
+          pg_catalog.set_config('request.jwt.claim.sub', ${jwt ? userId : ''}, true),
+          pg_catalog.set_config('request.headers', ${JSON.stringify(jwt ? {} : { capgkey: key })}, true)
+        `)
+        await tx.execute(jwt ? sql`SET LOCAL ROLE authenticated` : sql`SET LOCAL ROLE anon`)
+        const updated = await tx.update(apps).set(settings).where(eq(apps.app_id, appId)).returning({ app_id: apps.app_id })
+        if (!updated[0])
+          throw quickError(401, 'cannot_access_app', 'You can\'t access this app', { app_id: appId })
+        const updatedApp = await tx.execute<Database['public']['Tables']['apps']['Row']>(sql`
+          SELECT * FROM public.apps WHERE app_id = ${appId}
+        `)
+        app = updatedApp.rows[0]
+        if (!app)
+          throw quickError(401, 'cannot_access_app', 'You can\'t access this app', { app_id: appId })
+        completed = current.need_onboarding && !app.need_onboarding
+        await tx.execute(sql`SET LOCAL ROLE ${sql.identifier(saved.role)}`)
+        await tx.execute(sql`SELECT
+          pg_catalog.set_config('request.jwt.claims', ${saved.claims ?? ''}, true),
+          pg_catalog.set_config('request.jwt.claim.sub', ${saved.sub ?? ''}, true),
+          pg_catalog.set_config('request.headers', ${saved.headers ?? ''}, true)
+        `)
+      }
       if (completePendingOnboarding) {
         const completionResult = await tx.execute<Database['public']['Tables']['apps']['Row']>(sql`
           UPDATE public.apps
@@ -223,6 +268,19 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     body.need_onboarding,
   ].some(value => value !== undefined)
 
+  const settingsPayload: AppSettings = {
+    name: body.name,
+    icon_url: normalizedIcon ?? body.icon,
+    retention: body.retention,
+    expose_metadata: body.expose_metadata,
+    allow_device_custom_id: body.allow_device_custom_id,
+    need_onboarding: body.need_onboarding,
+    existing_app: body.existing_app,
+    block_provider_infra_requests: body.block_provider_infra_requests,
+    ios_store_url: body.ios_store_url,
+    android_store_url: body.android_store_url,
+  }
+
   let data: Database['public']['Tables']['apps']['Row'] | undefined
   let dbError: { message?: string } | null = null
   let completedPendingOnboarding = false
@@ -248,9 +306,9 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
         dbError = { message: (error as Error)?.message }
       }
     }
-    else if (onboardingPatch && !hasSettingsPayload) {
+    else if (onboardingPatch) {
       try {
-        const persisted = await persistAppOnboarding(c, appId, onboardingPatch, apikey)
+        const persisted = await persistAppOnboarding(c, appId, onboardingPatch, apikey, onboardingLock?.client, false, hasSettingsPayload ? settingsPayload : undefined)
         if (!persisted) {
           dbError = { message: 'App not found during onboarding progress update' }
         }
@@ -269,18 +327,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     else {
       const updateResult = await callerClient
         .from('apps')
-        .update({
-          name: body.name,
-          icon_url: normalizedIcon ?? body.icon,
-          retention: body.retention,
-          expose_metadata: body.expose_metadata,
-          allow_device_custom_id: body.allow_device_custom_id,
-          need_onboarding: body.need_onboarding,
-          existing_app: body.existing_app,
-          block_provider_infra_requests: body.block_provider_infra_requests,
-          ios_store_url: body.ios_store_url,
-          android_store_url: body.android_store_url,
-        })
+        .update(settingsPayload)
         .eq('app_id', appId)
         .select()
         .single()
@@ -288,14 +335,6 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
       dbError = updateResult.error
       if (data)
         completedPendingOnboarding = previousApp.need_onboarding === true && data.need_onboarding === false
-      if (data && onboardingPatch) {
-        const persisted = await persistAppOnboarding(c, appId, onboardingPatch, apikey)
-        if (persisted) {
-          data = persisted.app
-          completedPendingOnboarding = completedPendingOnboarding || persisted.completed
-          onboardingStepHistoryChanges = persisted.historyChanges
-        }
-      }
     }
   }
   finally {

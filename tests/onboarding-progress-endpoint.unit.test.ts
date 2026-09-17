@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   devices: vi.fn(),
   logs: vi.fn(),
   execute: vi.fn(),
+  transaction: vi.fn(),
+  update: vi.fn(),
   close: vi.fn(),
   track: vi.fn(),
   row: { onboarding: { setup: { todo_list_version: 3, steps: {} } }, created_at: '2026-09-16T00:00:00Z' } as any,
@@ -27,7 +29,7 @@ vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', () => ({ midd
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({ checkPermission: mocks.permission, checkPermissionPg: mocks.permissionPg }))
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({ supabaseWithAuth: () => ({ from: mocks.from }) }))
 vi.mock('../supabase/functions/_backend/utils/stats.ts', () => ({ readDevices: mocks.devices, readStats: mocks.logs }))
-vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({ getPgClient: () => ({}), getDrizzleClient: () => ({ transaction: (fn: any) => fn({ execute: mocks.execute }) }), closeClient: mocks.close }))
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({ getPgClient: () => ({}), getDrizzleClient: () => ({ transaction: mocks.transaction }), closeClient: mocks.close }))
 vi.mock('../supabase/functions/_backend/utils/utils.ts', async original => ({ ...await original<typeof import('../supabase/functions/_backend/utils/utils.ts')>(), backgroundTask: async (_c: any, task: any) => await task }))
 vi.mock('../supabase/functions/_backend/utils/posthog.ts', () => ({ trackPosthogEvent: mocks.track }))
 
@@ -77,6 +79,7 @@ describe('onboarding progress endpoint', () => {
     mocks.devices.mockResolvedValue({ data: [] })
     mocks.logs.mockResolvedValue([])
     mocks.execute.mockResolvedValue({ rows: [] })
+    mocks.transaction.mockImplementation(async (fn: any) => fn({ execute: mocks.execute, update: mocks.update }))
   })
   it.each([0, 1, 2, 3, 4, 5, 9])('always reads the exact app at N=%s and rotates extra checks', async (N) => {
     expect((await request(N)).status).toBe(200)
@@ -168,12 +171,55 @@ describe('onboarding progress endpoint', () => {
     expect(mocks.execute).toHaveBeenCalledTimes(3)
     expect(mocks.close).toHaveBeenCalledOnce()
   })
-  it('does not write or complete onboarding if the app changed organizations while waiting for its lock', async () => {
+  it('retries CLI progress after an organization transfer and authorizes its new scope', async () => {
     mocks.execute.mockResolvedValueOnce({ rows: [{ owner_org: 'original-org' }] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [{ onboarding: mocks.row.onboarding, owner_org: 'new-org' }] })
-    expect(await persistAppOnboarding(contextFor({ userId: 'user', authType: 'jwt' }), 'com.test.onboarding', undefined, { user_id: 'user', key: null } as any, undefined, true)).toBeUndefined()
+    lockedRow(mocks.row.onboarding, 'new-org')
+    const onboarding = { setup: { todo_list_version: 3, steps: { add_code: { status: 'done' } } } }
+    const row = { app_id: 'com.test.onboarding', owner_org: 'new-org', onboarding }
+    mocks.execute.mockResolvedValueOnce({ rows: [{ onboarding }] })
+      .mockResolvedValueOnce({ rows: [row] })
+      .mockResolvedValueOnce({ rows: [{ completed: false }] })
+      .mockResolvedValueOnce({ rows: [row] })
+    mocks.permissionPg.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    const result = await persistAppOnboarding(contextFor({ userId: 'user', authType: 'jwt' }), row.app_id, { steps: { add_code: { status: 'done' } } }, { user_id: 'user', key: null } as any)
+    expect(result?.app).toMatchObject(row)
+    expect(mocks.transaction).toHaveBeenCalledTimes(2)
+    expect(mocks.permissionPg).toHaveBeenNthCalledWith(2, expect.anything(), 'org.create_app', { orgId: 'new-org' }, expect.anything(), 'user', null)
+  })
+  it('retries polled observations after an organization transfer', async () => {
+    mocks.execute.mockResolvedValueOnce({ rows: [{ owner_org: 'original-org' }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ onboarding: mocks.row.onboarding, owner_org: 'new-org' }] })
+    lockedRow(mocks.row.onboarding, 'new-org')
+    mocks.permissionPg.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    const result = await persistObservedProgress(contextFor({ userId: 'user', authType: 'jwt' }), 'com.test.onboarding', { run_device: true }) as any
+    expect(result.setup.steps.run_device.status).toBe('done')
+    expect(mocks.transaction).toHaveBeenCalledTimes(2)
+    expect(mocks.permissionPg.mock.calls[1][2]).toEqual({ orgId: 'new-org' })
+  })
+  it('bounds transfer retries and reports a retryable conflict without writing', async () => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      mocks.execute.mockResolvedValueOnce({ rows: [{ owner_org: `org-${attempt}` }] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ onboarding: mocks.row.onboarding, owner_org: `org-${attempt + 1}` }] })
+    }
+    await expect(persistAppOnboarding(contextFor({ userId: 'user', authType: 'jwt' }), 'com.test.onboarding', undefined, { user_id: 'user', key: null } as any)).rejects.toMatchObject({ status: 409 })
+    expect(mocks.transaction).toHaveBeenCalledTimes(3)
+    expect(mocks.execute).toHaveBeenCalledTimes(9)
     expect(mocks.permissionPg).not.toHaveBeenCalled()
+  })
+  it('keeps a genuinely missing app distinct from a transfer', async () => {
+    expect(await persistAppOnboarding(contextFor({ userId: 'user', authType: 'jwt' }), 'com.test.onboarding', undefined, { user_id: 'user', key: null } as any)).toBeUndefined()
+    expect(mocks.transaction).toHaveBeenCalledOnce()
+  })
+  it('rejects combined settings and progress before either write when settings permission is revoked', async () => {
+    lockedRow(mocks.row.onboarding)
+    mocks.permissionPg.mockResolvedValue(false)
+    await expect(persistAppOnboarding(contextFor({ userId: 'user', authType: 'jwt' }), 'com.test.onboarding', { steps: { add_code: { status: 'done' } } }, { user_id: 'user', key: null } as any, undefined, false, { name: 'Changed' })).rejects.toMatchObject({ status: 401 })
+    expect(mocks.update).not.toHaveBeenCalled()
     expect(mocks.execute).toHaveBeenCalledTimes(3)
+    expect(mocks.permissionPg).toHaveBeenCalledOnce()
   })
 })

@@ -7,7 +7,7 @@ import { Hono } from 'hono/tiny'
 import { z } from 'zod'
 import { buildAppOnboardingStepPosthogEvent } from '../utils/app_onboarding_posthog.ts'
 import { appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardingStepHistoryChanges, parseAppOnboarding } from '../utils/appOnboarding.ts'
-import { lockAppOnboardingForWrite } from '../utils/appOnboardingWriteLock.ts'
+import { lockAppOnboardingForWrite, retryAppOnboardingWrite } from '../utils/appOnboardingWriteLock.ts'
 import { parseBody, quickError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlogErr, serializeError } from '../utils/logging.ts'
@@ -54,7 +54,7 @@ export async function persistObservedProgress(c: Context<MiddlewareKeyVariables>
   const auth = c.get('auth')!
   const pool = getPgClient(c)
   try {
-    const result = await getDrizzleClient(pool, { logger: false }).transaction(async (tx) => {
+    const result = await retryAppOnboardingWrite(getDrizzleClient(pool, { logger: false }), async (tx) => {
       const row = await lockAppOnboardingForWrite(tx, appId)
       if (!row || parseAppOnboarding(row.onboarding).todo_list_version !== 3)
         return null
