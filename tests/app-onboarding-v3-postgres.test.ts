@@ -37,7 +37,7 @@ describe('v3 checklist SQL security and bounded lookups', () => {
         return (originalQuery as any)(...args)
       }) as any)
       restoreQuery = () => querySpy.mockRestore()
-      await expect(persistAppOnboarding(context, appId, patch, apikey, client, false, { name: 'After' })).rejects.toThrow('Injected progress merge failure')
+      await expect(persistAppOnboarding(context, appId, patch, apikey, client, false, { name: 'After' })).rejects.toMatchObject({ cause: { message: 'Injected progress merge failure' } })
       expect(injected).toBe(true)
       restoreQuery()
       expect((await client.query('SELECT name, onboarding FROM public.apps WHERE app_id = $1', [appId])).rows[0]).toEqual(before)
