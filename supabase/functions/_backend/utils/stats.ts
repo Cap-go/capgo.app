@@ -365,9 +365,9 @@ async function generateDemoLogs(c: Context, params: ReadStatsParams): Promise<De
   return logs.slice(0, limit)
 }
 
-export async function readStats(c: Context<MiddlewareKeyVariables>, params: ReadStatsParams) {
+export async function readStats(c: Context<MiddlewareKeyVariables>, params: ReadStatsParams, includeDemoLogs = true) {
   // For demo apps, generate fake logs instead of querying real data
-  if (await isDemoApp(c, params.app_id)) {
+  if (includeDemoLogs && await isDemoApp(c, params.app_id)) {
     return generateDemoLogs(c, params)
   }
 

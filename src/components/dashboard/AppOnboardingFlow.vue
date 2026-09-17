@@ -83,6 +83,7 @@ import {
   loadOnboardingAppDraft,
 } from '~/utils/onboardingAppDraft'
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
+import { withOnboardingChannelOrigin } from '~/utils/onboardingChannelAnalytics'
 import {
   createOnboardingDetailsFieldDebouncer,
   createOnboardingProgressTracker,
@@ -103,6 +104,7 @@ import {
 } from '~/utils/userOnboardingProgress'
 import AppOnboardingCliSteps from './AppOnboardingCliSteps.vue'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
+import AppOnboardingSetupChecklist from './AppOnboardingSetupChecklist.vue'
 import AppOnboardingWelcome from './AppOnboardingWelcome.vue'
 import ChannelConsoleAssignOnboarding from './ChannelConsoleAssignOnboarding.vue'
 import ChannelCreateOnboarding from './ChannelCreateOnboarding.vue'
@@ -298,7 +300,8 @@ const startingOutUserCountStop: UserCountStop = {
 const planNameOrder = ['Solo', 'Maker', 'Team', 'Enterprise'] as const
 
 const localCommand = isLocal(config.supaHost) ? ` --supa-host ${config.supaHost} --supa-anon ${config.supaKey}` : ''
-const usesBuilderSetupCommand = computed(() => selectedIntent.value === 'builder' || selectedIntent.value === 'publish')
+const usesTodoListV3 = computed(() => !!createdApp.value && parseAppOnboarding(createdApp.value.onboarding).todo_list_version === 3)
+const usesBuilderSetupCommand = computed(() => !usesTodoListV3.value && (selectedIntent.value === 'builder' || selectedIntent.value === 'publish'))
 const markedOnboardingFeatures = new Set<string>()
 let onboardingABTestsRequest: Promise<void> | null = null
 
@@ -590,6 +593,7 @@ const canCreatePreOrgOrganization = computed(() => {
 })
 const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-title') : t('unified-onboarding-setup-ota-title'))
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
+const showSetupChecklist = computed(() => (flowStep.value === 'setup' || flowStep.value === 'install') && usesTodoListV3.value)
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
 let trackedAnalyticsSteps: OnboardingAnalyticsStep[] = []
@@ -618,7 +622,7 @@ function trackOrganizationEvent(
 }
 
 function trackChannelEvent(name: OnboardingChannelEvent, details: OnboardingChannelEventProperties) {
-  progressTracker?.trackStepEvent(name, analyticsStepFor(flowStep.value), details)
+  progressTracker?.trackStepEvent(name, analyticsStepFor(flowStep.value), withOnboardingChannelOrigin(details))
 }
 
 const detailsFieldTracker = createOnboardingDetailsFieldDebouncer((name, step, details) => {
@@ -1186,7 +1190,12 @@ function startApiKeyLoading() {
 }
 
 async function loadResumeApp() {
-  if (!resumeAppId.value || !currentOrg.value?.gid)
+  if (!resumeAppId.value)
+    return false
+  const appOrganization = organizationStore.getOrgByAppId(resumeAppId.value)
+  if (appOrganization && currentOrg.value?.gid !== appOrganization.gid)
+    organizationStore.setCurrentOrganization(appOrganization.gid)
+  if (!currentOrg.value?.gid)
     return false
 
   const { data, error } = await supabase
@@ -2048,7 +2057,7 @@ function continueFromOrganizationInvite(invitationCount: number) {
 function resolveSetupStage(
   progress = parseUserOnboardingProgress(main.user?.onboarding),
 ): SetupStage {
-  if (!newChannelTreatment.value && !onboardingABTestsPending.value)
+  if (usesTodoListV3.value || (!newChannelTreatment.value && !onboardingABTestsPending.value))
     return 'cli'
   return progress?.setup_stage ?? 'channel-routing'
 }
@@ -2312,7 +2321,7 @@ async function seedDemoData() {
       ownerOrgId: currentOrg.value.gid,
     })
     await persistOnboardingProgress('completed')
-    router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
+    router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}`)
   }
   catch (error) {
     console.error('Cannot seed demo data', error)
@@ -2451,7 +2460,7 @@ async function openDashboard() {
   window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
   allowOnboardingDashboardExploration(onboardingUserId.value, createdApp.value.app_id)
   await persistOnboardingProgress('completed')
-  router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}/getting-started`)
+  router.push(`/app/${encodeURIComponent(createdApp.value.app_id)}`)
 }
 
 async function skipOnboardingSplash() {
@@ -2674,13 +2683,13 @@ defineExpose({
       'onboarding-flow-details-icon': flowStep === 'details' && appDetailsStep === 'icon',
     }"
   >
-    <div class="mx-auto w-full" :class="(flowStep === 'setup' || flowStep === 'install') && setupStage !== 'cli' ? 'max-w-6xl' : 'max-w-3xl'">
+    <div class="mx-auto w-full" :class="showSetupChecklist || ((flowStep === 'setup' || flowStep === 'install') && setupStage !== 'cli') ? 'max-w-6xl' : 'max-w-3xl'">
       <div v-if="isLoading" class="flex min-h-[50vh] items-center justify-center">
         <Spinner size="w-32 h-32" />
       </div>
 
       <div v-else class="onboarding-flow-content space-y-6">
-        <header class="onboarding-flow-header">
+        <header v-if="!showSetupChecklist" class="onboarding-flow-header">
           <div class="flex items-center gap-2">
             <button
               v-if="showSetupBackButton"
@@ -3439,6 +3448,24 @@ defineExpose({
             </div>
           </div>
         </template>
+
+        <AppOnboardingSetupChecklist
+          v-else-if="showSetupChecklist && createdApp"
+          :key="createdApp.app_id"
+          :app-id="createdApp.app_id"
+          :initial-onboarding="createdApp.onboarding"
+          :command="cliCommand"
+          :hiding="isHidingSplash"
+          :leaving="isSeedingDemo"
+          @copy-command="copyCliCommand"
+          @copy-ai="copyAiInstructions"
+          @hide="skipOnboardingSplash"
+          @explore="openDashboard"
+          @complete="openDashboard"
+          @invite-opened="onTechnicalInviteOpened"
+          @invite-succeeded="onTechnicalInviteSucceeded"
+          @channel-analytics="trackChannelEvent"
+        />
 
         <div v-else-if="flowStep === 'setup' && createdApp">
           <ChannelDefaultRoutingOnboarding

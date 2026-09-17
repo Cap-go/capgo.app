@@ -1,5 +1,4 @@
 import type { Page } from '@playwright/test'
-import { dismissSupportPrompt } from './support/dismissSupportPrompt'
 
 export interface VisualDiffRoute {
   slug: string
@@ -25,7 +24,6 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     path: '/apps',
     auth: true,
     prepare: async (page) => {
-      await dismissSupportPrompt(page)
       const toggle = page.locator('[data-test="sidebar-collapse-toggle"]')
       if (!(await toggle.count()))
         return
@@ -44,6 +42,26 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'app-dashboard-native', path: '/app/com.demo.app/native', auth: true },
   { slug: 'app-dashboard-installs', path: '/app/com.demo.app/installs', auth: true },
   { slug: 'app-dashboard-active-bundle', path: '/app/com.demo.app/active-bundle', auth: true },
+  {
+    slug: 'onboarding-setup-v3',
+    path: '/apps',
+    auth: true,
+    prepare: async (page) => {
+      // Read-only response fixtures let both base and head render the same app.
+      // The base ignores version 3; the head shows the experiment treatment.
+      const onboarding = { setup: { todo_list_version: 3, source: 'manual', outcome: 'in_progress', steps: {} } }
+      await page.route('**/rest/v1/apps?*', async (route) => {
+        const response = await route.fetch()
+        const json = await response.json().catch(() => null)
+        const override = (row: any) => row?.app_id === 'com.demo.app' ? { ...row, need_onboarding: true, onboarding } : row
+        await route.fulfill({ response, json: Array.isArray(json) ? json.map(override) : override(json) })
+      })
+      await page.route('**/rpc/verify_getting_started', route => route.fulfill({ json: onboarding }))
+      await page.route('**/private/onboarding_progress', route => route.fulfill({ json: { onboarding, hasChannel: false, checkErrors: [] } }))
+      await page.goto('/app/new?resume=com.demo.app&step=setup')
+      await page.getByRole('heading', { name: /Start guided setup|Finish setup in your app/ }).waitFor()
+    },
+  },
   { slug: 'app-getting-started', path: '/app/com.demo.app/getting-started', auth: true },
   { slug: 'app-settings', path: '/app/com.demo.app/settings', auth: true },
   { slug: 'app-settings-access', path: '/app/com.demo.app/settings/access', auth: true },
