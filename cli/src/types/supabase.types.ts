@@ -399,6 +399,7 @@ export type Database = {
           created_at: string | null
           created_from_onboarding: boolean
           default_upload_channel: string
+          device_data_collection: Json
           existing_app: boolean
           expose_metadata: boolean
           icon_url: string
@@ -432,6 +433,7 @@ export type Database = {
           created_at?: string | null
           created_from_onboarding?: boolean
           default_upload_channel?: string
+          device_data_collection?: Json
           existing_app?: boolean
           expose_metadata?: boolean
           icon_url: string
@@ -465,6 +467,7 @@ export type Database = {
           created_at?: string | null
           created_from_onboarding?: boolean
           default_upload_channel?: string
+          device_data_collection?: Json
           existing_app?: boolean
           expose_metadata?: boolean
           icon_url?: string
@@ -1561,7 +1564,7 @@ export type Database = {
           is_prod: boolean | null
           key_id: string | null
           os_version: string | null
-          platform: Database["public"]["Enums"]["platform_os"]
+          platform: Database["public"]["Enums"]["platform_os"] | null
           plugin_version: string
           updated_at: string
           version: number | null
@@ -1578,7 +1581,7 @@ export type Database = {
           is_prod?: boolean | null
           key_id?: string | null
           os_version?: string | null
-          platform: Database["public"]["Enums"]["platform_os"]
+          platform: Database["public"]["Enums"]["platform_os"] | null
           plugin_version?: string
           updated_at: string
           version?: number | null
@@ -3756,6 +3759,7 @@ export type Database = {
           created_at: string | null
           created_from_onboarding: boolean
           default_upload_channel: string
+          device_data_collection: Json
           existing_app: boolean
           expose_metadata: boolean
           icon_url: string
@@ -3969,6 +3973,7 @@ export type Database = {
           channel_device_count: number
           created_at: string
           default_upload_channel: string
+          device_data_collection: Json
           existing_app: boolean
           expose_metadata: boolean
           icon_url: string

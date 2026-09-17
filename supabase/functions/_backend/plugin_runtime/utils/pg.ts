@@ -1254,6 +1254,7 @@ export interface AppOwnerPostgresResult {
   expose_metadata: boolean
   allow_device_custom_id: boolean
   block_provider_infra_requests: boolean
+  device_data_collection: unknown
   /** stripe_info.trial_at, only selected for the edge cache (bounds how long plan_valid holds). */
   plan_trial_at?: string | null
 }
@@ -1296,6 +1297,7 @@ export async function queryAppOwnerPostgres(
       expose_metadata: schema.apps.expose_metadata,
       allow_device_custom_id: schema.apps.allow_device_custom_id,
       block_provider_infra_requests: schema.apps.block_provider_infra_requests,
+      device_data_collection: schema.apps.device_data_collection,
       orgs: {
         created_by: orgAlias.created_by,
         id: orgAlias.id,

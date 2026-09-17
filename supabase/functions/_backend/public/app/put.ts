@@ -12,6 +12,7 @@ import { deleteAppStatus } from '../../utils/appStatus.ts'
 import { trackBentoEvent } from '../../utils/bento.ts'
 import { createIfNotExistStoreInfo } from '../../utils/cloudflare.ts'
 import { lockOnboardingApp, unlockOnboardingApp } from '../../utils/demo.ts'
+import { sanitizeDeviceDataCollectionInput } from '../../utils/deviceDataCollection.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent } from '../../utils/org_onboarding_intent.ts'
@@ -32,13 +33,14 @@ interface UpdateApp {
   need_onboarding?: boolean
   existing_app?: boolean
   block_provider_infra_requests?: boolean
+  device_data_collection?: unknown
   ios_store_url?: string | null
   android_store_url?: string | null
   onboarding?: unknown
 }
 
 type AppSettings = Pick<Database['public']['Tables']['apps']['Update'], 'name' | 'icon_url' | 'retention' | 'expose_metadata' | 'allow_device_custom_id'
-  | 'need_onboarding' | 'existing_app' | 'block_provider_infra_requests'
+  | 'need_onboarding' | 'existing_app' | 'block_provider_infra_requests' | 'device_data_collection'
   | 'ios_store_url' | 'android_store_url'>
 
 export async function persistAppOnboarding(
@@ -235,6 +237,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     body.allow_device_custom_id,
     body.existing_app,
     body.block_provider_infra_requests,
+    body.device_data_collection,
     body.ios_store_url,
     body.android_store_url,
   ]
@@ -279,6 +282,9 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     need_onboarding: body.need_onboarding,
     existing_app: body.existing_app,
     block_provider_infra_requests: body.block_provider_infra_requests,
+    device_data_collection: body.device_data_collection !== undefined
+      ? sanitizeDeviceDataCollectionInput(body.device_data_collection)
+      : undefined,
     ios_store_url: body.ios_store_url,
     android_store_url: body.android_store_url,
   }
