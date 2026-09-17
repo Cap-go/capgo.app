@@ -4,7 +4,7 @@ import { Hono } from 'hono/tiny'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { globalStatsTestUtils } from '../supabase/functions/_backend/triggers/global_stats.ts'
 import { REQUIRED_GLOBAL_STATS_SHARDS } from '../supabase/functions/_backend/utils/global_stats.ts'
-import { getAdminGlobalStatsTrend, getAdminOnboardingFunnel } from '../supabase/functions/_backend/utils/pg.ts'
+import { getAdminGlobalStatsTrend, getAdminOnboardingFunnel, getAdminPayingOrgBreakdown } from '../supabase/functions/_backend/utils/pg.ts'
 import { BASE_URL, executeSQL, fetchTestRequest, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, POSTGRES_URL, PRODUCT_ID, resetAndSeedAppData, resetAppData, TEST_EMAIL, USER_ADMIN_EMAIL, USER_ID, USER_PASSWORD_HASH } from './test-utils.ts'
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000
@@ -127,6 +127,12 @@ async function getOnboardingFunnelDirect(startDate: string, endDate: string) {
 async function getGlobalStatsTrendDirect(startDate: string, endDate: string) {
   return requestDirectAdminStats<Awaited<ReturnType<typeof getAdminGlobalStatsTrend>>>(app => {
     app.get('/', async c => c.json(await getAdminGlobalStatsTrend(c, startDate, endDate)))
+  })
+}
+
+async function getPayingOrgBreakdownDirect() {
+  return requestDirectAdminStats<Awaited<ReturnType<typeof getAdminPayingOrgBreakdown>>>(app => {
+    app.get('/', async c => c.json(await getAdminPayingOrgBreakdown(c)))
   })
 }
 
@@ -1004,6 +1010,108 @@ describe('global stats core snapshots', () => {
     expect(historical?.plan_credits).toBe(1)
     expect(latest?.plan_credits).toBe(3)
   })
+
+  it.concurrent('does not count trial orgs as paid via subscription', async () => {
+    const trialOrgId = randomUUID()
+    const paidOrgId = randomUUID()
+    const trialAppId = `com.admin.stats.paidsub.trial.${trialOrgId.slice(0, 8)}`
+    const paidAppId = `com.admin.stats.paidsub.paid.${paidOrgId.slice(0, 8)}`
+    const trialCustomerId = `cus_admin_stats_paidsub_trial_${trialOrgId.slice(0, 8)}`
+    const paidCustomerId = `cus_admin_stats_paidsub_paid_${paidOrgId.slice(0, 8)}`
+    const orgIds = [trialOrgId, paidOrgId]
+    const appIds = [trialAppId, paidAppId]
+    const customerIds = [trialCustomerId, paidCustomerId]
+    const past = new Date(NOW - (30 * DAY_IN_MS)).toISOString()
+    const future = new Date(NOW + (30 * DAY_IN_MS)).toISOString()
+
+    try {
+      await Promise.all([
+        resetAndSeedAppData(trialAppId, {
+          orgId: trialOrgId,
+          stripeCustomerId: trialCustomerId,
+          planProductId: PRODUCT_ID,
+        }),
+        resetAndSeedAppData(paidAppId, {
+          orgId: paidOrgId,
+          stripeCustomerId: paidCustomerId,
+          planProductId: PRODUCT_ID,
+        }),
+      ])
+
+      await executeSQL(`
+        UPDATE public.stripe_info
+        SET status = 'succeeded'::public.stripe_status,
+            is_good_plan = true,
+            paid_at = NULL,
+            canceled_at = NULL,
+            trial_at = $2::timestamptz,
+            subscription_anchor_end = $2::timestamptz
+        WHERE customer_id = $1
+      `, [trialCustomerId, future])
+
+      await executeSQL(`
+        UPDATE public.stripe_info
+        SET status = 'succeeded'::public.stripe_status,
+            is_good_plan = true,
+            paid_at = $2::timestamptz,
+            canceled_at = NULL,
+            trial_at = $2::timestamptz,
+            subscription_anchor_end = $3::timestamptz
+        WHERE customer_id = $1
+      `, [paidCustomerId, past, future])
+
+      // Same membership filters as getAdminPayingOrgBreakdown. Scoped to these
+      // two customers so parallel test files cannot change the assertion.
+      const included = await executeSQL<{ customer_id: string }>(`
+        SELECT si.customer_id
+        FROM public.stripe_info si
+        INNER JOIN public.plans p ON p.stripe_id = si.product_id
+        INNER JOIN public.orgs o ON o.customer_id = si.customer_id
+        WHERE si.customer_id = ANY($1::text[])
+          AND si.is_good_plan = true
+          AND si.paid_at IS NOT NULL
+          AND si.paid_at < NOW()
+          AND si.trial_at <= NOW()
+          AND si.status IN (
+            'succeeded'::public.stripe_status,
+            'canceled'::public.stripe_status,
+            'deleted'::public.stripe_status
+          )
+          AND (si.canceled_at IS NULL OR si.canceled_at > NOW())
+          AND si.subscription_anchor_end > NOW()
+        ORDER BY si.customer_id
+      `, [customerIds])
+
+      expect(included.map(row => row.customer_id)).toEqual([paidCustomerId])
+
+      const expectedTotal = await executeSQL<{ count: number }>(`
+        SELECT COUNT(DISTINCT o.id)::int AS count
+        FROM public.stripe_info si
+        INNER JOIN public.plans p ON p.stripe_id = si.product_id
+        INNER JOIN public.orgs o ON o.customer_id = si.customer_id
+        WHERE si.is_good_plan = true
+          AND si.paid_at IS NOT NULL
+          AND si.paid_at < NOW()
+          AND si.trial_at <= NOW()
+          AND si.status IN (
+            'succeeded'::public.stripe_status,
+            'canceled'::public.stripe_status,
+            'deleted'::public.stripe_status
+          )
+          AND (si.canceled_at IS NULL OR si.canceled_at > NOW())
+          AND si.subscription_anchor_end > NOW()
+      `)
+
+      const live = await getPayingOrgBreakdownDirect()
+      expect(live.paying_orgs_subscription).toBe(Number(expectedTotal[0]?.count) || 0)
+    }
+    finally {
+      await Promise.all(appIds.map(appId => resetAppData(appId)))
+      await executeSQL('DELETE FROM public.org_users WHERE org_id = ANY($1::uuid[])', [orgIds])
+      await executeSQL('DELETE FROM public.orgs WHERE id = ANY($1::uuid[])', [orgIds])
+      await executeSQL('DELETE FROM public.stripe_info WHERE customer_id = ANY($1::text[])', [customerIds])
+    }
+  }, 90000)
 })
 
 describe('/private/admin_stats', () => {
