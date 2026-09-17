@@ -95,6 +95,16 @@ async function createFilesApp(routePrefix = '/files') {
 
 const filePath = 'orgs/test-org/apps/com.test.app/bundle.zip'
 const readUrl = `http://localhost/files/read/attachments/${filePath}?device_id=device-1`
+const objectSize = 1_000
+
+async function fetchHead(appGlobal: Awaited<ReturnType<typeof createFilesApp>>, range?: string) {
+  const headers = range ? { range } : undefined
+  return appGlobal.fetch(
+    new Request(readUrl, { method: 'HEAD', headers }),
+    { ATTACHMENT_BUCKET: {} },
+    { waitUntil: () => { } } as any,
+  )
+}
 
 describe('files attachment HEAD reads on workerd/R2', () => {
   beforeEach(() => {
@@ -118,11 +128,7 @@ describe('files attachment HEAD reads on workerd/R2', () => {
     retryGetMock.mockResolvedValue(null)
     const appGlobal = await createFilesApp()
 
-    const response = await appGlobal.fetch(
-      new Request(readUrl, { method: 'HEAD' }),
-      { ATTACHMENT_BUCKET: {} },
-      { waitUntil: () => { } } as any,
-    )
+    const response = await fetchHead(appGlobal)
 
     expect(response.status).toBe(200)
     expect(response.headers.get('content-length')).toBe('3478395')
@@ -132,6 +138,74 @@ describe('files attachment HEAD reads on workerd/R2', () => {
     expect((await response.arrayBuffer()).byteLength).toBe(0)
     expect(retryGetMock).not.toHaveBeenCalled()
     expect(createStatsBandwidthMock).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 when R2 head finds no object', async () => {
+    retryHeadMock.mockResolvedValue(null)
+    const appGlobal = await createFilesApp()
+
+    const response = await fetchHead(appGlobal)
+
+    expect(response.status).toBe(404)
+    expect(retryGetMock).not.toHaveBeenCalled()
+  })
+
+  it('returns 503 when R2 head fails', async () => {
+    retryHeadMock.mockRejectedValue(new Error('r2 unavailable'))
+    const appGlobal = await createFilesApp()
+
+    const response = await fetchHead(appGlobal)
+
+    expect(response.status).toBe(503)
+    expect(retryGetMock).not.toHaveBeenCalled()
+  })
+
+  it('returns 206 for bounded, open-ended, and suffix HEAD ranges', async () => {
+    retryHeadMock.mockResolvedValue(createR2HeadObject(objectSize))
+    const appGlobal = await createFilesApp()
+
+    const bounded = await fetchHead(appGlobal, 'bytes=0-99')
+    expect(bounded.status).toBe(206)
+    expect(bounded.headers.get('content-length')).toBe('100')
+    expect(bounded.headers.get('content-range')).toBe(`bytes 0-99/${objectSize}`)
+    expect((await bounded.arrayBuffer()).byteLength).toBe(0)
+
+    const openEnded = await fetchHead(appGlobal, 'bytes=100-')
+    expect(openEnded.status).toBe(206)
+    expect(openEnded.headers.get('content-length')).toBe('900')
+    expect(openEnded.headers.get('content-range')).toBe(`bytes 100-999/${objectSize}`)
+
+    const suffix = await fetchHead(appGlobal, 'bytes=-500')
+    expect(suffix.status).toBe(206)
+    expect(suffix.headers.get('content-length')).toBe('500')
+    expect(suffix.headers.get('content-range')).toBe(`bytes 500-999/${objectSize}`)
+  })
+
+  it('returns 416 for reversed and unsatisfiable HEAD ranges', async () => {
+    retryHeadMock.mockResolvedValue(createR2HeadObject(objectSize))
+    const appGlobal = await createFilesApp()
+
+    const reversed = await fetchHead(appGlobal, 'bytes=10-5')
+    expect(reversed.status).toBe(416)
+    expect(reversed.headers.get('content-range')).toBe(`bytes */${objectSize}`)
+    expect((await reversed.arrayBuffer()).byteLength).toBe(0)
+
+    const unsatisfiable = await fetchHead(appGlobal, 'bytes=1000-')
+    expect(unsatisfiable.status).toBe(416)
+    expect(unsatisfiable.headers.get('content-range')).toBe(`bytes */${objectSize}`)
+  })
+
+  it('parses attachment byte ranges for suffix and invalid inputs', async () => {
+    const { parseAttachmentByteRange } = await import('../supabase/functions/_backend/files/files.ts')
+
+    expect(parseAttachmentByteRange('bytes=-500', objectSize)).toEqual({
+      kind: 'partial',
+      start: 500,
+      end: 999,
+      bytesTransferred: 500,
+    })
+    expect(parseAttachmentByteRange('bytes=10-5', objectSize)).toEqual({ kind: 'invalid' })
+    expect(parseAttachmentByteRange('bytes=1000-', objectSize)).toEqual({ kind: 'invalid' })
   })
 
   it('returns headers-only 200 with Content-Length on cache hit', async () => {

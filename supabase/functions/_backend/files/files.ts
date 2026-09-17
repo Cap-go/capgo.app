@@ -490,7 +490,7 @@ async function getHandler(c: Context): Promise<Response> {
   }
 
   const rangeHeaderFromRequest = c.req.header('range')
-  if (rangeHeaderFromRequest) {
+  if (rangeHeaderFromRequest && !isHead) {
     cloudlog({ requestId: c.get('requestId'), message: 'getHandler files range request', range: rangeHeaderFromRequest })
     try {
       const retryBucket = new RetryBucket(bucket, DEFAULT_RETRY_PARAMS)
@@ -534,16 +534,14 @@ async function getHandler(c: Context): Promise<Response> {
     headers.set('Content-Disposition', `attachment; filename="${objectInfo.key}"`)
 
     if (rangeHeaderFromRequest) {
-      const rangeMatch = rangeHeaderFromRequest.match(/bytes=(\d+)-(\d*)/)
-      if (rangeMatch) {
-        const rangeStart = Number.parseInt(rangeMatch[1])
-        const rangeEnd = rangeMatch[2] ? Number.parseInt(rangeMatch[2]) : objectInfo.size - 1
-        const boundedEnd = Math.min(rangeEnd, objectInfo.size - 1)
-        const bytesTransferred = boundedEnd - rangeStart + 1
-        headers.set('content-length', bytesTransferred.toString())
-        headers.set('content-range', `bytes ${rangeStart}-${boundedEnd}/${objectInfo.size}`)
-        return new Response(null, { headers, status: 206 })
+      const parsedRange = parseAttachmentByteRange(rangeHeaderFromRequest, objectInfo.size)
+      if (parsedRange.kind === 'invalid') {
+        return buildInvalidAttachmentRangeResponse(objectInfo.size, false)
       }
+
+      headers.set('content-length', parsedRange.bytesTransferred.toString())
+      headers.set('content-range', `bytes ${parsedRange.start}-${parsedRange.end}/${objectInfo.size}`)
+      return new Response(null, { headers, status: 206 })
     }
 
     headers.set('content-length', objectInfo.size.toString())
@@ -640,6 +638,74 @@ export function calculateBytesTransferred(objLen: number, r2Range: R2Range | und
   }
   const bytesTransferred = endIndexInclusive - startIndexInclusive + 1
   return isPositiveFiniteNumber(bytesTransferred) ? bytesTransferred : objLen
+}
+
+type ParsedAttachmentByteRange =
+  | { kind: 'partial', start: number, end: number, bytesTransferred: number }
+  | { kind: 'invalid' }
+
+export function parseAttachmentByteRange(rangeHeader: string, fileSize: number): ParsedAttachmentByteRange {
+  if (!isPositiveFiniteNumber(fileSize)) {
+    return { kind: 'invalid' }
+  }
+
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim())
+  if (!match) {
+    return { kind: 'invalid' }
+  }
+
+  const startRaw = match[1]
+  const endRaw = match[2]
+
+  if (startRaw === '' && endRaw !== '') {
+    const suffixLength = Number.parseInt(endRaw, 10)
+    if (!Number.isFinite(suffixLength) || suffixLength <= 0) {
+      return { kind: 'invalid' }
+    }
+
+    if (suffixLength >= fileSize) {
+      return { kind: 'partial', start: 0, end: fileSize - 1, bytesTransferred: fileSize }
+    }
+
+    const start = fileSize - suffixLength
+    return { kind: 'partial', start, end: fileSize - 1, bytesTransferred: suffixLength }
+  }
+
+  if (startRaw === '') {
+    return { kind: 'invalid' }
+  }
+
+  const rangeStart = Number.parseInt(startRaw, 10)
+  if (!Number.isFinite(rangeStart) || rangeStart < 0) {
+    return { kind: 'invalid' }
+  }
+
+  if (rangeStart >= fileSize) {
+    return { kind: 'invalid' }
+  }
+
+  const rangeEnd = endRaw === '' ? fileSize - 1 : Number.parseInt(endRaw, 10)
+  if (!Number.isFinite(rangeEnd) || rangeEnd < 0) {
+    return { kind: 'invalid' }
+  }
+
+  const boundedEnd = Math.min(rangeEnd, fileSize - 1)
+  if (boundedEnd < rangeStart) {
+    return { kind: 'invalid' }
+  }
+
+  return {
+    kind: 'partial',
+    start: rangeStart,
+    end: boundedEnd,
+    bytesTransferred: boundedEnd - rangeStart + 1,
+  }
+}
+
+function buildInvalidAttachmentRangeResponse(fileSize: number, includeBody: boolean): Response {
+  const headers = new Headers()
+  headers.set('Content-Range', `bytes */${fileSize}`)
+  return new Response(includeBody ? new Uint8Array(0) : null, { status: 416, headers })
 }
 
 function optionsHandler(c: Context) {
