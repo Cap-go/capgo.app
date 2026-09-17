@@ -21,6 +21,7 @@ export interface ChannelRolloutConfirmFlowsDeps {
     update_package?: ChannelUpdatePackage | null
     rollout_version?: number | null
     rollout_percentage_bps?: number | null
+    rollout_cache_ttl_seconds?: number | null
     rollout_paused_at?: string | null
   } | undefined)
   rolloutTargetName: () => string
@@ -36,13 +37,50 @@ function formatRolloutPercentageLabel(percentage: number) {
   return `${percentage.toLocaleString(undefined, { maximumFractionDigits: 2 })}%`
 }
 
-export function isRolloutPercentageDraftChanged(draft: string, currentBps: number) {
-  if (!draft.trim())
+export function isRolloutPercentageDraftChanged(draft: string | number, currentBps: number) {
+  const normalized = String(draft ?? '').trim()
+  if (!normalized)
     return false
-  const parsed = Number.parseFloat(draft)
+  const parsed = Number.parseFloat(normalized)
   if (Number.isNaN(parsed))
     return true
   return Math.round(parsed * 100) !== currentBps
+}
+
+export function parseRolloutCacheTtlSeconds(draft: string | number) {
+  const parsed = Number(String(draft ?? '').trim())
+  if (!Number.isInteger(parsed) || parsed < 60 || parsed > 31536000)
+    return null
+  return parsed
+}
+
+const ROLLOUT_CACHE_TTL_UNITS = [
+  { seconds: 86400, one: 'day', many: 'days' },
+  { seconds: 3600, one: 'hour', many: 'hours' },
+  { seconds: 60, one: 'minute', many: 'minutes' },
+  { seconds: 1, one: 'second', many: 'seconds' },
+] as const
+
+export function formatRolloutCacheTtlHuman(seconds: number, t: Translate) {
+  let remaining = Math.max(0, Math.floor(seconds))
+  const parts: string[] = []
+  for (const unit of ROLLOUT_CACHE_TTL_UNITS) {
+    const count = Math.floor(remaining / unit.seconds)
+    if (count <= 0)
+      continue
+    remaining %= unit.seconds
+    parts.push(`${count} ${t(count === 1 ? unit.one : unit.many)}`)
+  }
+  if (parts.length === 0)
+    return `0 ${t('seconds')}`
+  return parts.join(' ')
+}
+
+export function formatRolloutCacheTtlDisplay(seconds: number, t: Translate) {
+  return t('cache-ttl-display', {
+    human: formatRolloutCacheTtlHuman(seconds, t),
+    seconds: String(seconds),
+  })
 }
 
 function buttonLabels(t: Translate) {
@@ -76,29 +114,71 @@ export function createChannelRolloutConfirmFlows(deps: ChannelRolloutConfirmFlow
     })
   }
 
-  async function applyRolloutPercentage(draftValue: string) {
-    const percentage = Number.parseFloat(draftValue)
+  async function applyRolloutSettings(input: { percentage: string | number, cacheTtlSeconds?: string | number }) {
+    const percentage = Number.parseFloat(String(input.percentage).trim())
     if (Number.isNaN(percentage) || percentage < 0 || percentage > 100) {
       deps.toast.error(deps.t('invalid-rollout-percentage'))
       return
     }
     const nextBps = Math.round(percentage * 100)
     const currentBps = deps.getChannel()?.rollout_percentage_bps ?? 0
-    if (nextBps === currentBps) {
-      deps.toast.info(deps.t('rollout-percentage-unchanged', { percent: formatRolloutPercentageLabel(percentage) }))
+    const percentChanged = nextBps !== currentBps
+    const hasTtl = input.cacheTtlSeconds !== undefined
+    let nextTtl: number | undefined
+    let ttlChanged = false
+    if (hasTtl) {
+      const parsedTtl = parseRolloutCacheTtlSeconds(input.cacheTtlSeconds as string | number)
+      if (parsedTtl == null) {
+        deps.toast.error(deps.t('invalid-rollout-cache-ttl'))
+        return
+      }
+      nextTtl = parsedTtl
+      ttlChanged = parsedTtl !== (deps.getChannel()?.rollout_cache_ttl_seconds ?? 2592000)
+    }
+    if (!percentChanged && !ttlChanged) {
+      deps.toast.info(hasTtl
+        ? deps.t('rollout-settings-unchanged')
+        : deps.t('rollout-percentage-unchanged', { percent: formatRolloutPercentageLabel(percentage) }))
       return
     }
-    const currentLabel = formatRolloutPercentageLabel(currentBps / 100)
-    const nextLabel = formatRolloutPercentageLabel(percentage)
+    const changes: Record<string, unknown> = {}
+    if (percentChanged)
+      changes.rollout_percentage_bps = nextBps
+    if (ttlChanged)
+      changes.rollout_cache_ttl_seconds = nextTtl
     await confirm({
-      id: 'confirm-rollout-percentage',
-      title: deps.t('confirm-rollout-percentage-title'),
-      description: deps.t('confirm-rollout-percentage-description', {
-        current: currentLabel,
-        next: nextLabel,
-      }),
+      id: hasTtl ? 'confirm-rollout-settings' : 'confirm-rollout-percentage',
+      title: hasTtl ? deps.t('confirm-rollout-settings-title') : deps.t('confirm-rollout-percentage-title'),
+      description: hasTtl
+        ? deps.t('confirm-rollout-settings-description', {
+            percent: formatRolloutPercentageLabel(percentage),
+            ttl: formatRolloutCacheTtlDisplay(nextTtl ?? deps.getChannel()?.rollout_cache_ttl_seconds ?? 2592000, deps.t),
+          })
+        : deps.t('confirm-rollout-percentage-description', {
+            current: formatRolloutPercentageLabel(currentBps / 100),
+            next: formatRolloutPercentageLabel(percentage),
+          }),
       onConfirm: async () => {
-        await deps.saveChannelChange('rollout_percentage_bps', nextBps)
+        await deps.saveChannelChanges(changes)
+      },
+    })
+  }
+
+  async function applyRolloutPercentage(draftValue: string | number) {
+    await applyRolloutSettings({ percentage: draftValue })
+  }
+
+  async function applyAutoPauseSettings(changes: Record<string, unknown>) {
+    if (Object.keys(changes).length === 0) {
+      deps.toast.info(deps.t('auto-pause-settings-unchanged'))
+      return
+    }
+    await confirm({
+      id: 'confirm-auto-pause-settings',
+      title: deps.t('confirm-auto-pause-settings-title'),
+      description: deps.t('confirm-auto-pause-settings-description'),
+      onConfirm: async () => {
+        await deps.saveChannelChanges(changes)
       },
     })
   }
@@ -121,27 +201,6 @@ export function createChannelRolloutConfirmFlows(deps: ChannelRolloutConfirmFlow
       }),
       onConfirm: async () => {
         await deps.saveChannelChange('rollout_enabled', true)
-      },
-    })
-  }
-
-  async function disableRollout() {
-    await confirm({
-      id: 'confirm-disable-rollout',
-      title: deps.t('confirm-disable-rollout-title'),
-      description: deps.t('confirm-disable-rollout-description', {
-        fallback: deps.stableBundleName(),
-      }),
-      confirmRole: 'danger',
-      onConfirm: async () => {
-        if (await deps.saveChannelChanges({
-          rollout_enabled: false,
-          rollout_version: null,
-          rollout_paused_at: null,
-          rollout_pause_reason: null,
-        })) {
-          await deps.askUpdateNotificationAfterBundleChange()
-        }
       },
     })
   }
@@ -260,9 +319,10 @@ export function createChannelRolloutConfirmFlows(deps: ChannelRolloutConfirmFlow
 
   return {
     onSelectUpdatePackage,
+    applyRolloutSettings,
     applyRolloutPercentage,
+    applyAutoPauseSettings,
     enableRollout,
-    disableRollout,
     rollbackRollout,
     promoteRollout,
     toggleRolloutPause,

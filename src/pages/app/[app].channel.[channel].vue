@@ -3,7 +3,7 @@ import type { Database } from '~/types/supabase.types'
 import { FormKit } from '@formkit/vue'
 import { greaterOrEqual, parse } from '@std/semver'
 import { computedAsync, onClickOutside } from '@vueuse/core'
-import { computed, ref, watch, watchEffect } from 'vue'
+import { computed, nextTick, ref, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -24,7 +24,7 @@ import { isInternalVersionName, withBuiltinChannelVersion } from '~/services/ver
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
-import { createChannelRolloutConfirmFlows, isRolloutPercentageDraftChanged } from '~/utils/channelRolloutConfirmFlows'
+import { createChannelRolloutConfirmFlows, formatRolloutCacheTtlDisplay, formatRolloutCacheTtlHuman, isRolloutPercentageDraftChanged, parseRolloutCacheTtlSeconds } from '~/utils/channelRolloutConfirmFlows'
 import { getUpdatePackageDescription as getUpdatePackageDescriptionCopy, getUpdatePackageInfoDescription as getUpdatePackageInfoDescriptionCopy, getUpdatePackageLabel as getUpdatePackageLabelCopy } from '~/utils/channelUpdatePackageCopy'
 
 interface Channel {
@@ -117,22 +117,6 @@ const rolloutDeliveryBannerClass = computed(() => {
   }
   return 'border-sky-300 bg-sky-50 text-sky-900 dark:border-sky-800/70 dark:bg-sky-950/30 dark:text-sky-100'
 })
-const rolloutStatusLabel = computed(() => {
-  if (!rolloutConfigured.value)
-    return t('not-configured')
-  if (channel.value?.rollout_paused_at)
-    return t('paused')
-  return channel.value?.rollout_enabled ? t('enabled') : t('disabled')
-})
-const rolloutStatusClass = computed(() => {
-  if (!rolloutConfigured.value || !channel.value?.rollout_enabled) {
-    return 'border-slate-300 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300'
-  }
-  if (channel.value.rollout_paused_at) {
-    return 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800/70 dark:bg-amber-950/30 dark:text-amber-200'
-  }
-  return 'border-sky-300 bg-sky-50 text-sky-800 dark:border-sky-800/70 dark:bg-sky-950/30 dark:text-sky-200'
-})
 const rolloutProgressClass = computed(() => {
   if (!rolloutConfigured.value || !channel.value?.rollout_enabled)
     return 'bg-slate-300 dark:bg-slate-600'
@@ -167,16 +151,79 @@ const rolloutEnableDisabled = computed(() => {
     return true
   return channel.value.rollout_version ? rolloutControlsDisabled.value : !canPromoteBundle.value
 })
+const fieldInputClass = 'min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950'
 const rolloutPercentageDraft = ref('0')
+const rolloutCacheTtlDraft = ref('2592000')
+const editingRolloutSettings = ref(false)
+const rolloutPercentageInput = useTemplateRef<HTMLInputElement>('rolloutPercentageInput')
 watch(
-  () => channel.value?.rollout_percentage_bps,
-  (bps) => {
+  () => [channel.value?.rollout_percentage_bps, channel.value?.rollout_cache_ttl_seconds] as const,
+  ([bps, ttl]) => {
+    if (editingRolloutSettings.value)
+      return
     rolloutPercentageDraft.value = String((bps ?? 0) / 100)
+    rolloutCacheTtlDraft.value = String(ttl ?? 2592000)
   },
   { immediate: true },
 )
-const rolloutPercentageDraftChanged = computed(() =>
-  isRolloutPercentageDraftChanged(rolloutPercentageDraft.value, channel.value?.rollout_percentage_bps ?? 0),
+const rolloutSettingsDraftChanged = computed(() => {
+  const ttl = parseRolloutCacheTtlSeconds(rolloutCacheTtlDraft.value)
+  return isRolloutPercentageDraftChanged(rolloutPercentageDraft.value, channel.value?.rollout_percentage_bps ?? 0)
+    || (ttl != null && ttl !== (channel.value?.rollout_cache_ttl_seconds ?? 2592000))
+})
+const rolloutCacheTtlText = computed(() => formatRolloutCacheTtlDisplay(channel.value?.rollout_cache_ttl_seconds ?? 2592000, t))
+const rolloutCacheTtlDraftHuman = computed(() => {
+  const parsed = parseRolloutCacheTtlSeconds(rolloutCacheTtlDraft.value)
+  return parsed == null ? '' : formatRolloutCacheTtlHuman(parsed, t)
+})
+
+type AutoPauseAction = 'pause' | 'rollback' | 'notify'
+interface AutoPauseDraft {
+  failureRateBps: string
+  action: AutoPauseAction
+  windowMinutes: string
+  confidence: string
+  minAttempts: string
+  minFailures: string
+  cooldownMinutes: string
+}
+function autoPauseDraftFromChannel(row: NonNullable<typeof channel.value>): AutoPauseDraft {
+  return {
+    failureRateBps: row.auto_pause_failure_rate_bps == null ? '' : String(row.auto_pause_failure_rate_bps),
+    action: (row.auto_pause_action as AutoPauseAction) || 'pause',
+    windowMinutes: String(row.auto_pause_window_minutes),
+    confidence: String(row.auto_pause_confidence),
+    minAttempts: row.auto_pause_min_attempts == null ? '' : String(row.auto_pause_min_attempts),
+    minFailures: row.auto_pause_min_failures == null ? '' : String(row.auto_pause_min_failures),
+    cooldownMinutes: String(row.auto_pause_cooldown_minutes),
+  }
+}
+const autoPauseDraft = ref<AutoPauseDraft>({
+  failureRateBps: '',
+  action: 'pause',
+  windowMinutes: '60',
+  confidence: '0.95',
+  minAttempts: '',
+  minFailures: '',
+  cooldownMinutes: '60',
+})
+const editingAutoPause = ref(false)
+watch(
+  () => channel.value && [
+    channel.value.auto_pause_failure_rate_bps,
+    channel.value.auto_pause_action,
+    channel.value.auto_pause_window_minutes,
+    channel.value.auto_pause_confidence,
+    channel.value.auto_pause_min_attempts,
+    channel.value.auto_pause_min_failures,
+    channel.value.auto_pause_cooldown_minutes,
+  ],
+  () => {
+    if (!channel.value || editingAutoPause.value)
+      return
+    autoPauseDraft.value = autoPauseDraftFromChannel(channel.value)
+  },
+  { immediate: true },
 )
 
 const showDebugSection = ref(false)
@@ -592,7 +639,7 @@ async function handleRevert() {
   await dialogStore.onDialogDismiss()
 }
 
-async function openSelectVersion() {
+async function openSelectVersion(startInSearch = false) {
   if (!canPromoteBundle.value) {
     toast.error(t('no-permission'))
     return
@@ -617,7 +664,7 @@ async function openSelectVersion() {
 
   bundleLinkVersions.value = data ?? []
   bundleLinkSearchVal.value = ''
-  bundleLinkSearchMode.value = false
+  bundleLinkSearchMode.value = startInSearch
 
   // Open the dialog
   dialogStore.openDialog({
@@ -641,49 +688,136 @@ async function openSelectStableVersion() {
 
 async function openSelectRolloutVersion() {
   bundleLinkMode.value = 'rollout'
-  await openSelectVersion()
+  await openSelectVersion(true)
 }
 
 async function enableRollout() {
   await getRolloutConfirmFlows().enableRollout()
 }
 
-async function disableRollout() {
-  await getRolloutConfirmFlows().disableRollout()
+function syncRolloutSettingsDraft() {
+  rolloutPercentageDraft.value = String((channel.value?.rollout_percentage_bps ?? 0) / 100)
+  rolloutCacheTtlDraft.value = String(channel.value?.rollout_cache_ttl_seconds ?? 2592000)
 }
 
-async function applyRolloutPercentage() {
-  await getRolloutConfirmFlows().applyRolloutPercentage(rolloutPercentageDraft.value)
+async function startEditRolloutSettings() {
+  syncRolloutSettingsDraft()
+  editingRolloutSettings.value = true
+  await nextTick()
+  rolloutPercentageInput.value?.focus()
+  rolloutPercentageInput.value?.select()
 }
 
-async function saveIntegerField(key: EditableChannelKey, value: string, min: number, max: number, nullable = false) {
-  const trimmedValue = value.trim()
-  if (!trimmedValue && nullable) {
-    await saveChannelChange(key, null as any)
-    return
-  }
+function cancelEditRolloutSettings() {
+  editingRolloutSettings.value = false
+  syncRolloutSettingsDraft()
+}
 
-  const parsedValue = Number(trimmedValue)
-  if (!Number.isInteger(parsedValue) || parsedValue < min || parsedValue > max) {
+async function applyRolloutSettings() {
+  await getRolloutConfirmFlows().applyRolloutSettings({
+    percentage: rolloutPercentageDraft.value,
+    cacheTtlSeconds: rolloutCacheTtlDraft.value,
+  })
+  if (!rolloutSettingsDraftChanged.value)
+    editingRolloutSettings.value = false
+}
+
+function parseOptionalInteger(value: string, min: number, max: number) {
+  const trimmed = value.trim()
+  if (!trimmed)
+    return { ok: true as const, value: null }
+  const parsed = Number(trimmed)
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max)
+    return { ok: false as const }
+  return { ok: true as const, value: parsed }
+}
+
+function parseRequiredInteger(value: string, min: number, max: number) {
+  const parsed = Number(value.trim())
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max)
+    return { ok: false as const }
+  return { ok: true as const, value: parsed }
+}
+
+function autoPauseActionLabel(action: string) {
+  if (action === 'rollback')
+    return t('rollback')
+  if (action === 'notify')
+    return t('notify')
+  return t('pause')
+}
+
+function displayOptionalNumber(value: number | null | undefined) {
+  return value == null ? t('not-configured') : String(value)
+}
+
+function buildAutoPauseChanges() {
+  const row = channel.value
+  const draft = autoPauseDraft.value
+  if (!row)
+    return null
+  const failure = parseOptionalInteger(draft.failureRateBps, 0, 10000)
+  const window = parseRequiredInteger(draft.windowMinutes, 1, 10080)
+  const confidence = Number(Number(draft.confidence.trim()).toFixed(4))
+  const minAttempts = parseOptionalInteger(draft.minAttempts, 0, Number.MAX_SAFE_INTEGER)
+  const minFailures = parseOptionalInteger(draft.minFailures, 0, Number.MAX_SAFE_INTEGER)
+  const cooldown = parseRequiredInteger(draft.cooldownMinutes, 0, 10080)
+  if (!failure.ok || !window.ok || !minAttempts.ok || !minFailures.ok || !cooldown.ok
+    || !Number.isFinite(confidence) || confidence <= 0 || confidence >= 1
+    || !['pause', 'rollback', 'notify'].includes(draft.action)) {
     toast.error(t('error-update-channel'))
-    return
+    return null
   }
-
-  await saveChannelChange(key, parsedValue as any)
+  const next = {
+    auto_pause_failure_rate_bps: failure.value,
+    auto_pause_action: draft.action,
+    auto_pause_window_minutes: window.value,
+    auto_pause_confidence: confidence,
+    auto_pause_min_attempts: minAttempts.value,
+    auto_pause_min_failures: minFailures.value,
+    auto_pause_cooldown_minutes: cooldown.value,
+  }
+  const changes: Record<string, unknown> = {}
+  if (row.auto_pause_failure_rate_bps !== next.auto_pause_failure_rate_bps)
+    changes.auto_pause_failure_rate_bps = next.auto_pause_failure_rate_bps
+  if (row.auto_pause_action !== next.auto_pause_action)
+    changes.auto_pause_action = next.auto_pause_action
+  if (row.auto_pause_window_minutes !== next.auto_pause_window_minutes)
+    changes.auto_pause_window_minutes = next.auto_pause_window_minutes
+  if (Number(row.auto_pause_confidence) !== next.auto_pause_confidence)
+    changes.auto_pause_confidence = next.auto_pause_confidence
+  if (row.auto_pause_min_attempts !== next.auto_pause_min_attempts)
+    changes.auto_pause_min_attempts = next.auto_pause_min_attempts
+  if (row.auto_pause_min_failures !== next.auto_pause_min_failures)
+    changes.auto_pause_min_failures = next.auto_pause_min_failures
+  if (row.auto_pause_cooldown_minutes !== next.auto_pause_cooldown_minutes)
+    changes.auto_pause_cooldown_minutes = next.auto_pause_cooldown_minutes
+  return changes
 }
 
-async function saveAutoPauseFailureRate(value: string) {
-  await saveIntegerField('auto_pause_failure_rate_bps', value, 0, 10000, true)
+function startEditAutoPause() {
+  if (channel.value)
+    autoPauseDraft.value = autoPauseDraftFromChannel(channel.value)
+  editingAutoPause.value = true
 }
 
-async function saveAutoPauseConfidence(value: string) {
-  const confidence = Number(value.trim())
-  if (!Number.isFinite(confidence) || confidence <= 0 || confidence >= 1) {
-    toast.error(t('error-update-channel'))
+function cancelEditAutoPause() {
+  editingAutoPause.value = false
+  if (channel.value)
+    autoPauseDraft.value = autoPauseDraftFromChannel(channel.value)
+}
+
+async function applyAutoPauseSettings() {
+  const changes = buildAutoPauseChanges()
+  if (!changes)
+    return
+  if (Object.keys(changes).length === 0) {
+    editingAutoPause.value = false
     return
   }
-
-  await saveChannelChange('auto_pause_confidence', Number(confidence.toFixed(4)) as any)
+  await getRolloutConfirmFlows().applyAutoPauseSettings(changes)
+  if (Object.keys(buildAutoPauseChanges() ?? {}).length === 0)
+    editingAutoPause.value = false
 }
 
 async function rollbackRollout() {
@@ -772,7 +906,15 @@ function openRolloutSettingsInfo() {
   openChannelInfoDialog(
     'rollout-settings-info',
     t('progressive-rollout'),
-    `${t('rollout-settings-help')}\n\n${t('rollout-percentage-help')}`,
+    `${t('rollout-settings-help')}\n\n${t('rollout-percentage-help')}\n\n${t('cache-ttl-help')}`,
+  )
+}
+
+function openAutoPauseInfo() {
+  openChannelInfoDialog(
+    'auto-pause-info',
+    t('auto-pause'),
+    t('auto-pause-help'),
   )
 }
 
@@ -1105,50 +1247,44 @@ async function copyCurlCommand() {
             </InfoRow>
             <div v-if="showRolloutSettings" class="px-4 py-5 sm:px-6">
               <section class="space-y-6" aria-labelledby="rollout-settings-title">
-                <div class="space-y-4">
-                  <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div class="min-w-0 space-y-1">
-                      <div class="flex items-center gap-1.5">
-                        <h2 id="rollout-settings-title" class="text-base font-semibold text-slate-950 dark:text-white">
-                          {{ t('progressive-rollout') }}
-                        </h2>
-                        <button
-                          type="button"
-                          class="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
-                          data-test="rollout-settings-info"
-                          :aria-label="t('rollout-settings-info')"
-                          @click="openRolloutSettingsInfo()"
-                        >
-                          <IconInformation class="h-4 w-4" aria-hidden="true" />
-                        </button>
-                      </div>
-                      <p v-if="channel.rollout_pause_reason" class="text-xs text-amber-700 dark:text-amber-300">
-                        {{ channel.rollout_pause_reason }}
+                <div class="space-y-2">
+                  <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div class="flex min-w-0 items-center gap-1.5">
+                      <h2 id="rollout-settings-title" class="text-base font-semibold text-slate-950 dark:text-white">
+                        {{ t('progressive-rollout') }}
+                      </h2>
+                      <button
+                        type="button"
+                        class="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                        data-test="rollout-settings-info"
+                        :aria-label="t('rollout-settings-info')"
+                        @click="openRolloutSettingsInfo()"
+                      >
+                        <IconInformation class="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    </div>
+                    <div class="flex min-w-0 flex-wrap items-center justify-end gap-2">
+                      <p class="mr-1 text-sm text-slate-600 dark:text-slate-300">
+                        <span>{{ t('rollout-target') }}:</span>
+                        <span class="ml-1 font-semibold text-slate-900 dark:text-white">{{ channel?.rollout_version_info?.name ?? t('not-configured') }}</span>
                       </p>
+                      <button type="button" class="d-btn d-btn-outline d-btn-sm" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
+                        {{ t('update') }}
+                      </button>
+                      <button type="button" class="d-btn d-btn-outline d-btn-sm" :disabled="rolloutPauseDisabled" @click="toggleRolloutPause()">
+                        {{ channel.rollout_paused_at ? t('resume') : t('pause') }}
+                      </button>
+                      <button type="button" class="d-btn d-btn-primary d-btn-sm" :disabled="rolloutTargetActionsDisabled" @click="promoteRollout()">
+                        {{ t('promote') }}
+                      </button>
+                      <button type="button" class="capitalize d-btn d-btn-outline d-btn-error d-btn-sm" :disabled="rolloutTargetActionsDisabled" @click="rollbackRollout()">
+                        {{ t('rollback') }}
+                      </button>
                     </div>
-                    <span class="inline-flex min-h-9 items-center self-start rounded-md border px-3 text-xs font-semibold" :class="rolloutStatusClass">
-                      {{ rolloutStatusLabel }}
-                    </span>
                   </div>
-
-                  <dl class="grid border-y border-slate-200 text-sm dark:border-slate-700 sm:grid-cols-2 sm:divide-x sm:divide-slate-200 sm:dark:divide-slate-700">
-                    <div class="py-3 sm:px-4 sm:first:pl-0">
-                      <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">
-                        {{ t('rollout-target') }}
-                      </dt>
-                      <dd class="mt-1 font-semibold text-slate-900 dark:text-white">
-                        {{ channel?.rollout_version_info?.name ?? t('not-configured') }}
-                      </dd>
-                    </div>
-                    <div class="border-t border-slate-200 py-3 dark:border-slate-700 sm:border-t-0 sm:px-4">
-                      <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">
-                        {{ t('rollout-percentage') }}
-                      </dt>
-                      <dd class="mt-1 font-semibold text-slate-900 dark:text-white">
-                        {{ rolloutPercentageText }}
-                      </dd>
-                    </div>
-                  </dl>
+                  <p v-if="channel.rollout_pause_reason" class="text-xs text-amber-700 dark:text-amber-300">
+                    {{ channel.rollout_pause_reason }}
+                  </p>
                 </div>
 
                 <div class="space-y-3">
@@ -1156,66 +1292,77 @@ async function copyCurlCommand() {
                     <div class="h-full rounded-full transition-[width] duration-200" :class="rolloutProgressClass" :style="rolloutProgressStyle" />
                   </div>
 
-                  <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-                    <div class="grid gap-3 sm:grid-cols-2">
-                      <div class="space-y-1.5">
-                        <label for="rollout-percentage-input" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('rollout-percentage') }}</label>
-                        <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
-                          <div class="flex min-h-11 flex-1 items-center rounded-md border border-slate-200 bg-white px-3 focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100 dark:border-slate-700 dark:bg-slate-900 dark:focus-within:border-sky-700 dark:focus-within:ring-sky-950">
-                            <input
-                              id="rollout-percentage-input"
-                              v-model="rolloutPercentageDraft"
-                              class="w-full bg-transparent text-sm font-medium text-slate-900 outline-none disabled:cursor-not-allowed disabled:opacity-40 dark:text-white"
-                              type="number"
-                              min="0"
-                              max="100"
-                              step="0.01"
-                              :disabled="rolloutControlsDisabled"
-                              @keydown.enter.prevent="applyRolloutPercentage()"
-                            >
-                            <span class="text-sm text-slate-400 dark:text-slate-500">%</span>
-                          </div>
-                          <button
-                            type="button"
-                            class="min-h-11 d-btn d-btn-outline d-btn-sm sm:d-btn-md"
-                            :disabled="rolloutControlsDisabled || !rolloutPercentageDraftChanged"
-                            @click="applyRolloutPercentage()"
-                          >
-                            {{ t('apply-rollout-percentage') }}
-                          </button>
-                        </div>
+                  <div class="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                    <div class="space-y-1.5">
+                      <label for="rollout-percentage-input" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('rollout-percentage') }}</label>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('rollout-percentage-placeholder') }}
+                      </p>
+                      <div v-if="!editingRolloutSettings" class="min-h-11 font-semibold text-slate-900 dark:text-white">
+                        {{ rolloutPercentageText }}
                       </div>
-                      <label class="space-y-1.5">
-                        <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('cache-ttl-seconds') }}</span>
+                      <div v-else class="flex min-h-11 items-center rounded-md border border-slate-200 bg-white px-3 focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100 dark:border-slate-700 dark:bg-slate-900 dark:focus-within:border-sky-700 dark:focus-within:ring-sky-950">
                         <input
-                          class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                          id="rollout-percentage-input"
+                          ref="rolloutPercentageInput"
+                          v-model="rolloutPercentageDraft"
+                          class="w-full bg-transparent text-sm font-medium text-slate-900 outline-none disabled:cursor-not-allowed disabled:opacity-40 dark:text-white"
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          :placeholder="t('rollout-percentage-placeholder')"
+                          :aria-label="t('rollout-percentage')"
+                          :disabled="rolloutControlsDisabled"
+                          @keydown.enter.prevent="applyRolloutSettings()"
+                          @keydown.escape.prevent="cancelEditRolloutSettings()"
+                        >
+                        <span class="text-sm text-slate-400 dark:text-slate-500">%</span>
+                      </div>
+                    </div>
+                    <div class="space-y-1.5">
+                      <label for="rollout-cache-ttl-input" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('cache-ttl-seconds') }}</label>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('cache-ttl-placeholder') }}
+                      </p>
+                      <div v-if="!editingRolloutSettings" class="min-h-11 font-semibold text-slate-900 dark:text-white">
+                        {{ rolloutCacheTtlText }}
+                      </div>
+                      <div v-else class="flex min-h-11 items-center rounded-md border border-slate-200 bg-white px-3 focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100 dark:border-slate-700 dark:bg-slate-900 dark:focus-within:border-sky-700 dark:focus-within:ring-sky-950">
+                        <input
+                          id="rollout-cache-ttl-input"
+                          v-model="rolloutCacheTtlDraft"
+                          class="w-full bg-transparent text-sm font-medium text-slate-900 outline-none disabled:cursor-not-allowed disabled:opacity-40 dark:text-white"
                           type="number"
                           min="60"
                           max="31536000"
                           step="60"
+                          :placeholder="t('cache-ttl-placeholder')"
                           :aria-label="t('cache-ttl-seconds')"
                           :disabled="rolloutControlsDisabled"
-                          :value="channel.rollout_cache_ttl_seconds"
-                          @change="saveIntegerField('rollout_cache_ttl_seconds', ($event.target as HTMLInputElement).value, 60, 31536000)"
+                          @keydown.enter.prevent="applyRolloutSettings()"
+                          @keydown.escape.prevent="cancelEditRolloutSettings()"
                         >
-                      </label>
+                        <span v-if="rolloutCacheTtlDraftHuman" class="shrink-0 pl-2 text-sm text-slate-400 dark:text-slate-500">{{ rolloutCacheTtlDraftHuman }}</span>
+                      </div>
                     </div>
-
-                    <div class="flex flex-wrap gap-2 lg:justify-end">
-                      <button type="button" class="min-h-11 d-btn d-btn-outline" :disabled="!canPromoteBundle" @click="openSelectRolloutVersion()">
-                        {{ t('set-rollout-target') }}
+                    <div class="flex flex-wrap justify-end gap-2">
+                      <button
+                        v-if="editingRolloutSettings"
+                        type="button"
+                        class="d-btn d-btn-ghost d-btn-sm"
+                        @click="cancelEditRolloutSettings()"
+                      >
+                        {{ t('button-cancel') }}
                       </button>
-                      <button type="button" class="min-h-11 d-btn d-btn-outline" :disabled="channel.rollout_enabled ? (rolloutTargetActionsDisabled || rolloutControlsDisabled) : rolloutEnableDisabled" @click="channel.rollout_enabled ? disableRollout() : enableRollout()">
-                        {{ channel.rollout_enabled ? t('disable') : t('enable') }}
-                      </button>
-                      <button type="button" class="min-h-11 d-btn d-btn-outline" :disabled="rolloutPauseDisabled" @click="toggleRolloutPause()">
-                        {{ channel.rollout_paused_at ? t('resume') : t('pause') }}
-                      </button>
-                      <button type="button" class="min-h-11 d-btn d-btn-primary" :disabled="rolloutTargetActionsDisabled" @click="promoteRollout()">
-                        {{ t('promote') }}
-                      </button>
-                      <button type="button" class="min-h-11 capitalize d-btn d-btn-outline d-btn-error" :disabled="rolloutTargetActionsDisabled" @click="rollbackRollout()">
-                        {{ t('rollback') }}
+                      <button
+                        type="button"
+                        class="d-btn d-btn-outline d-btn-sm"
+                        data-test="rollout-settings-edit"
+                        :disabled="rolloutControlsDisabled || (editingRolloutSettings && !rolloutSettingsDraftChanged)"
+                        @click="editingRolloutSettings ? applyRolloutSettings() : startEditRolloutSettings()"
+                      >
+                        {{ editingRolloutSettings ? t('apply') : t('update') }}
                       </button>
                     </div>
                   </div>
@@ -1223,43 +1370,90 @@ async function copyCurlCommand() {
 
                 <div class="border-t border-slate-200 pt-5 dark:border-slate-700/80">
                   <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">
-                      {{ t('auto-pause') }}
-                    </h3>
-                    <label class="inline-flex min-h-11 items-center gap-3 text-sm font-medium text-slate-700 dark:text-slate-200">
-                      <input
-                        class="d-toggle d-toggle-sm"
-                        type="checkbox"
-                        :checked="channel.auto_pause_enabled"
-                        :disabled="rolloutControlsDisabled"
-                        @change="saveChannelChange('auto_pause_enabled', !channel.auto_pause_enabled as any)"
+                    <div class="flex items-center gap-1.5">
+                      <h3 class="text-sm font-semibold text-slate-900 dark:text-white">
+                        {{ t('auto-pause') }}
+                      </h3>
+                      <button
+                        type="button"
+                        class="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                        data-test="auto-pause-info"
+                        :aria-label="t('auto-pause-info')"
+                        @click="openAutoPauseInfo()"
                       >
-                      <span>{{ channel.auto_pause_enabled ? t('enabled') : t('disabled') }}</span>
-                    </label>
+                        <IconInformation class="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <label class="inline-flex min-h-11 items-center gap-3 text-sm font-medium text-slate-700 dark:text-slate-200">
+                        <input
+                          class="d-toggle d-toggle-sm"
+                          type="checkbox"
+                          :checked="channel.auto_pause_enabled"
+                          :disabled="rolloutControlsDisabled"
+                          @change="saveChannelChange('auto_pause_enabled', !channel.auto_pause_enabled as any)"
+                        >
+                        <span>{{ channel.auto_pause_enabled ? t('enabled') : t('disabled') }}</span>
+                      </label>
+                      <template v-if="channel.auto_pause_enabled">
+                        <button
+                          v-if="editingAutoPause"
+                          type="button"
+                          class="d-btn d-btn-ghost d-btn-sm"
+                          @click="cancelEditAutoPause()"
+                        >
+                          {{ t('button-cancel') }}
+                        </button>
+                        <button
+                          type="button"
+                          class="d-btn d-btn-outline d-btn-sm"
+                          data-test="auto-pause-edit"
+                          :disabled="rolloutControlsDisabled"
+                          @click="editingAutoPause ? applyAutoPauseSettings() : startEditAutoPause()"
+                        >
+                          {{ editingAutoPause ? t('apply') : t('update') }}
+                        </button>
+                      </template>
+                    </div>
                   </div>
 
                   <div v-if="channel.auto_pause_enabled" class="grid w-full gap-3 text-left sm:grid-cols-2 xl:grid-cols-4">
-                    <label class="space-y-1.5">
-                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('failure-rate-bps') }}</span>
+                    <div class="space-y-1.5">
+                      <label for="auto-pause-failure-rate" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('failure-rate-bps') }}</label>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('failure-rate-placeholder') }}
+                      </p>
+                      <div v-if="!editingAutoPause" class="min-h-11 font-semibold text-slate-900 dark:text-white">
+                        {{ displayOptionalNumber(channel.auto_pause_failure_rate_bps) }}
+                      </div>
                       <input
-                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        v-else
+                        id="auto-pause-failure-rate"
+                        v-model="autoPauseDraft.failureRateBps"
+                        :class="fieldInputClass"
                         type="number"
                         min="0"
                         max="10000"
+                        :placeholder="t('failure-rate-placeholder')"
                         :aria-label="t('failure-rate-bps')"
                         :disabled="rolloutControlsDisabled"
-                        :value="channel.auto_pause_failure_rate_bps ?? ''"
-                        @change="saveAutoPauseFailureRate(($event.target as HTMLInputElement).value)"
                       >
-                    </label>
-                    <label class="space-y-1.5">
-                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('auto-pause-action') }}</span>
+                    </div>
+                    <div class="space-y-1.5">
+                      <label for="auto-pause-action" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('auto-pause-action') }}</label>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('auto-pause-action-placeholder') }}
+                      </p>
+                      <div v-if="!editingAutoPause" class="min-h-11 font-semibold text-slate-900 dark:text-white">
+                        {{ autoPauseActionLabel(channel.auto_pause_action) }}
+                      </div>
                       <select
-                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        v-else
+                        id="auto-pause-action"
+                        v-model="autoPauseDraft.action"
+                        :class="fieldInputClass"
                         :aria-label="t('auto-pause-action')"
                         :disabled="rolloutControlsDisabled"
-                        :value="channel.auto_pause_action"
-                        @change="saveChannelChange('auto_pause_action', ($event.target as HTMLSelectElement).value as any)"
                       >
                         <option value="pause">
                           {{ t('pause') }}
@@ -1271,71 +1465,111 @@ async function copyCurlCommand() {
                           {{ t('notify') }}
                         </option>
                       </select>
-                    </label>
-                    <label class="space-y-1.5">
-                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('window-minutes') }}</span>
+                    </div>
+                    <div class="space-y-1.5">
+                      <label for="auto-pause-window" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('window-minutes') }}</label>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('window-minutes-placeholder') }}
+                      </p>
+                      <div v-if="!editingAutoPause" class="min-h-11 font-semibold text-slate-900 dark:text-white">
+                        {{ channel.auto_pause_window_minutes }}
+                      </div>
                       <input
-                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        v-else
+                        id="auto-pause-window"
+                        v-model="autoPauseDraft.windowMinutes"
+                        :class="fieldInputClass"
                         type="number"
                         min="1"
                         max="10080"
+                        :placeholder="t('window-minutes-placeholder')"
                         :aria-label="t('window-minutes')"
                         :disabled="rolloutControlsDisabled"
-                        :value="channel.auto_pause_window_minutes"
-                        @change="saveIntegerField('auto_pause_window_minutes', ($event.target as HTMLInputElement).value, 1, 10080)"
                       >
-                    </label>
-                    <label class="space-y-1.5">
-                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('confidence') }}</span>
+                    </div>
+                    <div class="space-y-1.5">
+                      <label for="auto-pause-confidence" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('confidence') }}</label>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('confidence-placeholder') }}
+                      </p>
+                      <div v-if="!editingAutoPause" class="min-h-11 font-semibold text-slate-900 dark:text-white">
+                        {{ channel.auto_pause_confidence }}
+                      </div>
                       <input
-                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        v-else
+                        id="auto-pause-confidence"
+                        v-model="autoPauseDraft.confidence"
+                        :class="fieldInputClass"
                         type="number"
                         min="0.0001"
                         max="0.9999"
                         step="0.0001"
+                        :placeholder="t('confidence-placeholder')"
                         :aria-label="t('confidence')"
                         :disabled="rolloutControlsDisabled"
-                        :value="channel.auto_pause_confidence"
-                        @change="saveAutoPauseConfidence(($event.target as HTMLInputElement).value)"
                       >
-                    </label>
-                    <label class="space-y-1.5">
-                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('min-attempts') }}</span>
+                    </div>
+                    <div class="space-y-1.5">
+                      <label for="auto-pause-min-attempts" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('min-attempts') }}</label>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('min-attempts-placeholder') }}
+                      </p>
+                      <div v-if="!editingAutoPause" class="min-h-11 font-semibold text-slate-900 dark:text-white">
+                        {{ displayOptionalNumber(channel.auto_pause_min_attempts) }}
+                      </div>
                       <input
-                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        v-else
+                        id="auto-pause-min-attempts"
+                        v-model="autoPauseDraft.minAttempts"
+                        :class="fieldInputClass"
                         type="number"
                         min="0"
+                        :placeholder="t('min-attempts-placeholder')"
                         :aria-label="t('min-attempts')"
                         :disabled="rolloutControlsDisabled"
-                        :value="channel.auto_pause_min_attempts ?? ''"
-                        @change="saveIntegerField('auto_pause_min_attempts', ($event.target as HTMLInputElement).value, 0, Number.MAX_SAFE_INTEGER, true)"
                       >
-                    </label>
-                    <label class="space-y-1.5">
-                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('min-failures') }}</span>
+                    </div>
+                    <div class="space-y-1.5">
+                      <label for="auto-pause-min-failures" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('min-failures') }}</label>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('min-failures-placeholder') }}
+                      </p>
+                      <div v-if="!editingAutoPause" class="min-h-11 font-semibold text-slate-900 dark:text-white">
+                        {{ displayOptionalNumber(channel.auto_pause_min_failures) }}
+                      </div>
                       <input
-                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        v-else
+                        id="auto-pause-min-failures"
+                        v-model="autoPauseDraft.minFailures"
+                        :class="fieldInputClass"
                         type="number"
                         min="0"
+                        :placeholder="t('min-failures-placeholder')"
                         :aria-label="t('min-failures')"
                         :disabled="rolloutControlsDisabled"
-                        :value="channel.auto_pause_min_failures ?? ''"
-                        @change="saveIntegerField('auto_pause_min_failures', ($event.target as HTMLInputElement).value, 0, Number.MAX_SAFE_INTEGER, true)"
                       >
-                    </label>
-                    <label class="space-y-1.5">
-                      <span class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('cooldown-minutes') }}</span>
+                    </div>
+                    <div class="space-y-1.5">
+                      <label for="auto-pause-cooldown" class="block text-xs font-medium text-slate-500 dark:text-slate-400">{{ t('cooldown-minutes') }}</label>
+                      <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ t('cooldown-minutes-placeholder') }}
+                      </p>
+                      <div v-if="!editingAutoPause" class="min-h-11 font-semibold text-slate-900 dark:text-white">
+                        {{ channel.auto_pause_cooldown_minutes }}
+                      </div>
                       <input
-                        class="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-700 dark:focus:ring-sky-950"
+                        v-else
+                        id="auto-pause-cooldown"
+                        v-model="autoPauseDraft.cooldownMinutes"
+                        :class="fieldInputClass"
                         type="number"
                         min="0"
                         max="10080"
+                        :placeholder="t('cooldown-minutes-placeholder')"
                         :aria-label="t('cooldown-minutes')"
                         :disabled="rolloutControlsDisabled"
-                        :value="channel.auto_pause_cooldown_minutes"
-                        @change="saveIntegerField('auto_pause_cooldown_minutes', ($event.target as HTMLInputElement).value, 0, 10080)"
                       >
-                    </label>
+                    </div>
                   </div>
                 </div>
               </section>
@@ -1578,7 +1812,7 @@ async function copyCurlCommand() {
       <div class="w-full space-y-4">
         <div class="text-left">
           <p class="mb-4 text-sm text-gray-600 dark:text-gray-400">
-            {{ t('select-bundle-action-for-channel') }}
+            {{ bundleLinkMode === 'rollout' ? t('search-and-select-a-different-bundle') : t('select-bundle-action-for-channel') }}
           </p>
         </div>
 
