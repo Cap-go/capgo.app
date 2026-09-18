@@ -14,6 +14,7 @@ const state = {
   sends: [] as string[],
   verificationError: false,
   verifications: [] as string[],
+  captchaCallbacks: null as { error: () => void, unsupported: () => void } | null,
 }
 Object.assign(window, { emailVerificationPreview: state })
 
@@ -52,9 +53,13 @@ supabase.functions.invoke = async (_, options) => {
 // A deterministic widget exercises the page's CAPTCHA transitions in the browser.
 const widgets = new Map<string, { element: HTMLElement, input: HTMLInputElement }>()
 Object.assign(window, { turnstile: {
-  render(element: HTMLElement | null, options: { callback: (token: string) => void }) {
+  render(element: HTMLElement | null, options: { 'callback': (token: string) => void, 'error-callback': (code: string) => void, 'unsupported-callback': () => void }) {
     if (!element)
       return 'unmounted-fixture-widget'
+    state.captchaCallbacks = {
+      error: () => options['error-callback']('fixture-error'),
+      unsupported: () => options['unsupported-callback'](),
+    }
     const id = `fixture-widget-${widgets.size}`
     const label = document.createElement('label')
     label.className = 'flex items-center gap-3 rounded border border-slate-300 bg-slate-50 p-4 text-slate-900'

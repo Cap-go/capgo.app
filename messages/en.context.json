@@ -923,6 +923,7 @@
   "captcha-fail": "Used in Capgo web console areas: pages, pages/settings/account, services. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "captcha-not-available": "Used in Capgo web console areas: components/dashboard, pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "captcha-required": "Used in Capgo web console areas: components/dashboard, pages, pages/settings/account, pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "captcha-unavailable": "Used in the signed-in email verification send step when CAPTCHA fails or its script cannot initialize. Role: status message explaining that the user must retry the challenge before sending a code.",
   "captcha-resend-unavailable": "Used on the confirmation email resend page when the CAPTCHA widget fails or cannot initialize. Role: status message explaining that the user can attempt resend or reload to retry the challenge. The server still validates CAPTCHA requirements.",
   "change": "Used in Capgo web console areas: components, components/admin, components/dashboard, pages/settings/account, pages/settings/organization. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "change-api-key-name": "Used in API key management. Role: UI label about \"change api key name\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

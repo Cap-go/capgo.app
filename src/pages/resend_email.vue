@@ -33,6 +33,9 @@ const otpSendError = ref('')
 const otpSendCooldownSeconds = ref(0)
 const otpCaptchaToken = ref('')
 const otpCaptchaRef = ref<InstanceType<typeof VueTurnstile> | null>(null)
+const otpCaptchaUnavailable = ref(false)
+const otpCaptchaRetryKey = ref(0)
+let otpCaptchaInitTimeout: ReturnType<typeof setTimeout> | null = null
 const otpVerificationCode = ref('')
 const otpVerificationLoading = ref(false)
 let otpSendCooldownTimer: ReturnType<typeof setInterval> | null = null
@@ -50,12 +53,54 @@ const shouldBlockForResendCaptcha = computed(() => !!captchaKey.value && resendC
 watch(otpStep, async (step) => {
   if (step === 'send') {
     otpCaptchaToken.value = ''
+    otpCaptchaUnavailable.value = false
     otpSendError.value = ''
     return
   }
   await nextTick()
   document.getElementById('email-verification-code')?.focus()
 })
+
+function clearOtpCaptchaInitTimeout() {
+  if (otpCaptchaInitTimeout) {
+    clearTimeout(otpCaptchaInitTimeout)
+    otpCaptchaInitTimeout = null
+  }
+}
+
+function handleOtpCaptchaUnavailable() {
+  otpCaptchaToken.value = ''
+  otpCaptchaUnavailable.value = true
+  clearOtpCaptchaInitTimeout()
+}
+
+watch(otpCaptchaRef, (widget) => {
+  clearOtpCaptchaInitTimeout()
+  if (!widget || !captchaKey.value)
+    return
+  otpCaptchaInitTimeout = setTimeout(() => {
+    if (!otpCaptchaToken.value && !(globalThis as typeof globalThis & { turnstile?: unknown }).turnstile)
+      handleOtpCaptchaUnavailable()
+  }, 8000)
+})
+
+watch(otpCaptchaToken, (token) => {
+  if (token) {
+    otpCaptchaUnavailable.value = false
+    clearOtpCaptchaInitTimeout()
+  }
+}, { flush: 'sync' })
+
+function retryOtpCaptcha() {
+  if (!(globalThis as typeof globalThis & { turnstile?: unknown }).turnstile) {
+    // The library retains a failed script load until the page reloads.
+    window.location.reload()
+    return
+  }
+  otpCaptchaToken.value = ''
+  otpCaptchaUnavailable.value = false
+  otpCaptchaRetryKey.value += 1
+}
 
 function clearResendCaptchaInitTimeout() {
   if (resendCaptchaInitTimeout) {
@@ -266,6 +311,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  clearOtpCaptchaInitTimeout()
   clearResendCaptchaInitTimeout()
   clearOtpSendCooldownTimer()
 })
@@ -313,12 +359,23 @@ onBeforeUnmount(() => {
               {{ t('captcha') }}
             </p>
             <VueTurnstile
+              :key="otpCaptchaRetryKey"
               ref="otpCaptchaRef"
               v-model="otpCaptchaToken"
               size="flexible"
               :site-key="captchaKey"
+              @error="handleOtpCaptchaUnavailable"
+              @unsupported="handleOtpCaptchaUnavailable"
               @expired="otpCaptchaToken = ''"
             />
+            <template v-if="otpCaptchaUnavailable">
+              <p class="text-xs leading-5 text-amber-700 dark:text-amber-300" role="status">
+                {{ t('captcha-unavailable') }}
+              </p>
+              <button type="button" :class="authGhostButtonClass" :disabled="otpSending" @click="retryOtpCaptcha">
+                {{ t('retry') }}
+              </button>
+            </template>
           </div>
 
           <p

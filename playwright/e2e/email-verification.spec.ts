@@ -53,6 +53,25 @@ test.describe('Progressive email verification', () => {
     expect(await page.evaluate(() => (window as any).emailVerificationPreview.sends.length)).toBe(2)
   })
 
+  for (const event of ['error', 'unsupported']) {
+    test(`recovers from CAPTCHA ${event} without sending before a fresh challenge succeeds`, async ({ page }) => {
+      const captcha = page.getByRole('checkbox', { name: 'Verify you are human' })
+      test.skip(!await captcha.count(), 'CAPTCHA is disabled in this environment')
+      await captcha.check()
+      await page.evaluate(event => (window as any).emailVerificationPreview.captchaCallbacks[event](), event)
+      const send = page.getByRole('button', { name: 'Send verification code', exact: true })
+      await expect(send).toBeDisabled()
+      await expect(page.getByText('Captcha is unavailable. Retry the challenge to continue.', { exact: true })).toBeVisible()
+      await expect(page.getByLabel('Enter the verification code', { exact: true })).toHaveCount(0)
+      await page.getByRole('button', { name: 'Retry', exact: true }).click()
+      await expect(captcha).not.toBeChecked()
+      await expect(send).toBeDisabled()
+      expect(await page.evaluate(() => (window as any).emailVerificationPreview.sends.length)).toBe(0)
+      await sendCode(page)
+      await expect(page.getByLabel('Enter the verification code', { exact: true })).toBeVisible()
+    })
+  }
+
   test('returns to the CAPTCHA step to resend and allows returning to the existing code', async ({ page }) => {
     await sendCode(page)
     const code = page.getByLabel('Enter the verification code', { exact: true })

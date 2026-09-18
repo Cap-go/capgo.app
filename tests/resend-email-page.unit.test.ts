@@ -134,6 +134,52 @@ beforeEach(() => {
 })
 
 describe('progressive email verification', () => {
+  it.each(['error', 'unsupported'])('explains CAPTCHA %s and retries with a fresh widget without bypassing the challenge', async (event) => {
+    vi.stubGlobal('turnstile', {})
+    const container = await mountOtpPage()
+    await completeCaptcha(container)
+    const originalWidget = container.querySelector('[data-test="captcha"]')
+    button(container, `CAPTCHA ${event}`).click()
+    await nextTick()
+    expect(container.textContent).toContain(messages['captcha-unavailable'])
+    expect(button(container, messages['email-otp-send-code']).disabled).toBe(true)
+    expect(container.querySelector<HTMLInputElement>('[data-test="captcha"]')?.value).toBe('')
+    expect(container.querySelector('input[autocomplete="one-time-code"]')).toBeNull()
+
+    button(container, messages.retry).click()
+    await nextTick()
+    expect(originalWidget?.isConnected).toBe(false)
+    expect(container.textContent).not.toContain(messages['captcha-unavailable'])
+    expect(button(container, messages['email-otp-send-code']).disabled).toBe(true)
+    expect(mocks.sendEmailOtpVerification).not.toHaveBeenCalled()
+    await sendOtp(container)
+    expect(mocks.sendEmailOtpVerification).toHaveBeenCalledOnce()
+  })
+
+  it('offers a page reload when the OTP CAPTCHA script never initializes', async () => {
+    const reload = vi.spyOn(window.location, 'reload').mockImplementation(() => {})
+    vi.useFakeTimers()
+    const container = await mountOtpPage()
+    await vi.advanceTimersByTimeAsync(8000)
+    await nextTick()
+    expect(container.textContent).toContain(messages['captcha-unavailable'])
+    expect(button(container, messages['email-otp-send-code']).disabled).toBe(true)
+    button(container, messages.retry).click()
+    expect(reload).toHaveBeenCalledOnce()
+    expect(mocks.sendEmailOtpVerification).not.toHaveBeenCalled()
+    reload.mockRestore()
+  })
+
+  it('clears the OTP CAPTCHA unavailable message if the widget recovers automatically', async () => {
+    const container = await mountOtpPage()
+    button(container, 'CAPTCHA error').click()
+    await nextTick()
+    expect(container.textContent).toContain(messages['captcha-unavailable'])
+    await completeCaptcha(container, 'recovered-captcha-token')
+    expect(container.textContent).not.toContain(messages['captcha-unavailable'])
+    expect(button(container, messages['email-otp-send-code']).disabled).toBe(false)
+  })
+
   it('shows only the send step until the server confirms a code was sent', async () => {
     let finishSend!: (result: { error: null }) => void
     mocks.sendEmailOtpVerification.mockImplementationOnce(() => new Promise(resolve => finishSend = resolve))
