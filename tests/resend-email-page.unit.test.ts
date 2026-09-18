@@ -72,7 +72,7 @@ const inputs = new Map<string, FormKitNode>()
 async function mountPage() {
   const app = createApp(ResendEmailPage)
   app.use(plugin, defaultConfig({
-    config: { delay: 0 },
+    config: { delay: 20 },
     plugins: [(node) => { inputs.set(node.name, node) }],
   }))
   app.use(createI18n({ legacy: false, locale: 'en', messages: { en: messages } }))
@@ -224,7 +224,7 @@ describe('progressive email verification', () => {
     await inputs.get('email_otp')!.input('123456')
     button(container, messages['email-otp-resend-code']).click()
     await nextTick()
-    expect(container.querySelector('input[autocomplete="one-time-code"]')).toBeNull()
+    expect(container.querySelector<HTMLElement>('form#verify-email-otp')?.style.display).toBe('none')
     expect(button(container, messages['email-otp-send-code']).disabled).toBe(true)
     button(container, messages['email-otp-back-to-code']).click()
     await nextTick()
@@ -251,6 +251,19 @@ describe('progressive email verification', () => {
     await inputs.get('email_otp')!.input('123456')
     button(container, messages['validate-email']).click()
     await vi.waitFor(() => expect(mocks.router.replace).toHaveBeenCalledWith('/settings/account'))
+  })
+
+  it('keeps newly typed digits when immediately opening resend and returning to code entry', async () => {
+    const container = await mountOtpPage()
+    await sendOtp(container)
+    const input = container.querySelector<HTMLInputElement>('input[autocomplete="one-time-code"]')!
+    input.value = '123456'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    button(container, messages['email-otp-resend-code']).click()
+    await nextTick()
+    button(container, messages['email-otp-back-to-code']).click()
+    await nextTick()
+    expect(container.querySelector<HTMLInputElement>('input[autocomplete="one-time-code"]')?.value).toBe('123456')
   })
 
   it('disables sending again when the challenge expires', async () => {

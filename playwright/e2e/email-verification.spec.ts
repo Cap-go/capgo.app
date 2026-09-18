@@ -58,7 +58,7 @@ test.describe('Progressive email verification', () => {
     const code = page.getByLabel('Enter the verification code', { exact: true })
     await code.fill('123456')
     await page.getByRole('button', { name: 'Send another code', exact: true }).click()
-    await expect(code).toHaveCount(0)
+    await expect(code).toBeHidden()
     const captcha = page.getByRole('checkbox', { name: 'Verify you are human' })
     if (await captcha.count()) {
       await expect(captcha).not.toBeChecked()

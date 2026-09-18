@@ -365,7 +365,7 @@ onBeforeUnmount(() => {
           </button>
         </template>
 
-        <FormKit v-else id="verify-email-otp" type="form" :actions="false" @submit="verifyOtpCode">
+        <FormKit v-if="otpHasSentCode" v-show="otpStep === 'verify'" id="verify-email-otp" type="form" :actions="false" @submit="verifyOtpCode">
           <div class="space-y-5">
             <FormKit
               id="email-verification-code"
