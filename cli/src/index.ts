@@ -14,6 +14,7 @@ import { getInfo } from './app/info'
 import { listApp } from './app/list'
 import { setApp } from './app/set'
 import { setSetting } from './app/setting'
+import { appTodo } from './app/todo'
 import { clearCredentialsCommand, listCredentialsCommand, migrateCredentialsCommand, saveCredentialsCommand, updateCredentialsCommand } from './build/credentials-command'
 import { exportCredentialsCommand, isCredentialsExportInvocation } from './build/credentials-export-command'
 import { sanitizeCredentialsExportTerminalText, writeCredentialsExportStderr } from './build/credentials-export-terminal'
@@ -479,6 +480,19 @@ Example: npx @capgo/cli@latest app list`)
   .option('--show-org', 'Show the organization name for each app')
   .option('--show-org-id', 'Show the organization ID for each app')
   .option('--output-text', 'Print plain text with a CSV app table and no interactive formatting')
+  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
+  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+
+app
+  .command('todo [appId]')
+  .alias('todoList')
+  .description(`📋 Show your app's onboarding todo list with done, skipped, and pending tasks.
+
+Uses the same live progress checks as the Capgo dashboard. The app ID can be inferred from your Capacitor project.
+
+Example: npx @capgo/cli@latest app todo com.example.app`)
+  .action(appTodo)
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('--supa-host <supaHost>', optionDescriptions.supaHost)
   .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
 
