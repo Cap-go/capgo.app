@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
-import type { Pool } from 'pg'
+import type { getDrizzleClient } from './pg.ts'
+import { sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { escapeSqlString, formatDateCF, runQueryToCFA } from './cloudflare.ts'
 import { getEnv } from './utils.ts'
@@ -11,7 +12,7 @@ export const onboardingRefreshBody = z.object({
   batchToken: z.uuid(),
 })
 
-interface AppWindow {
+interface AppWindow extends Record<string, unknown> {
   app_id: string
   created_at: Date | string
 }
@@ -96,33 +97,33 @@ export async function readOnboardingTelemetry(c: Context, apps: AppWindow[], now
   }
 }
 
-export async function refreshAppOnboardingBatch(c: Context, pool: Pool, body: z.infer<typeof onboardingRefreshBody>, now = new Date()) {
+export async function refreshAppOnboardingBatch(c: Context, database: Pick<ReturnType<typeof getDrizzleClient>, 'execute' | 'transaction'>, body: z.infer<typeof onboardingRefreshBody>, now = new Date()) {
   // A replaced lease makes old queue messages harmless. Deleted apps disappear
   // through the FK. No transaction/row lock is held during Cloudflare reads.
-  const { rows: apps } = await pool.query<AppWindow>(`
+  const { rows: apps } = await database.execute<AppWindow>(sql`
     SELECT a.app_id, a.created_at FROM public.apps a
     JOIN public.app_onboarding_refresh_jobs j ON j.app_id = a.app_id
-    WHERE a.app_id = ANY($1::varchar[]) AND j.batch_token = $2::uuid
-    ORDER BY a.app_id`, [body.appIds, body.batchToken])
+    WHERE a.app_id = ANY(${sql.param(body.appIds)}::varchar[]) AND j.batch_token = ${body.batchToken}::uuid
+    ORDER BY a.app_id`)
   if (!apps.length)
     return 0
   const telemetry = await readOnboardingTelemetry(c, apps, now)
-  const client = await pool.connect()
-  try {
-    await client.query('BEGIN')
-    await client.query('SET LOCAL statement_timeout = \'10s\'')
-    await client.query('SET LOCAL lock_timeout = \'2s\'')
+  return database.transaction(async (tx) => {
+    await tx.execute(sql`SELECT
+      pg_catalog.set_config('statement_timeout', '10s', true),
+      pg_catalog.set_config('lock_timeout', '2s', true)
+    `)
     // Match deterministic app lock order. The UPDATE below merges into the live
     // row, preserving concurrent CLI setup reports and unrelated feature keys.
-    await client.query('SELECT app_id FROM public.apps WHERE app_id = ANY($1::varchar[]) ORDER BY app_id FOR UPDATE', [apps.map(app => app.app_id)])
-    const result = await client.query(`
+    await tx.execute(sql`SELECT app_id FROM public.apps WHERE app_id = ANY(${sql.param(apps.map(app => app.app_id))}::varchar[]) ORDER BY app_id FOR UPDATE`)
+    const result = await tx.execute(sql`
 WITH signals AS (
-  SELECT s.* FROM jsonb_to_recordset($1::jsonb) AS s(app_id varchar, first_install_at timestamptz, last_install_at timestamptz, first_device_at timestamptz, last_device_at timestamptz, stage text)
-  JOIN public.app_onboarding_refresh_jobs j ON j.app_id = s.app_id AND j.batch_token = $2::uuid
+  SELECT s.* FROM jsonb_to_recordset(${JSON.stringify(telemetry)}::jsonb) AS s(app_id varchar, first_install_at timestamptz, last_install_at timestamptz, first_device_at timestamptz, last_device_at timestamptz, stage text)
+  JOIN public.app_onboarding_refresh_jobs j ON j.app_id = s.app_id AND j.batch_token = ${body.batchToken}::uuid
 ), refreshed AS (
   UPDATE public.apps a SET onboarding = jsonb_strip_nulls(
     COALESCE(a.onboarding, '{}'::jsonb) || jsonb_build_object(
-      'refreshed_at', $3::text,
+      'refreshed_at', ${now.toISOString()}::text,
       'features', COALESCE(a.onboarding->'features', '{}'::jsonb) || jsonb_build_object(
         'cli_install', public.merge_app_onboarding_feature(a.onboarding->'features'->'cli_install', s.first_device_at, s.first_device_at, s.last_device_at, NULL),
         'ota', public.merge_app_onboarding_feature(a.onboarding->'features'->'ota',
@@ -135,16 +136,8 @@ WITH signals AS (
           (SELECT COALESCE(b.completed_at, b.created_at) FROM public.build_requests b WHERE b.app_id = a.app_id ORDER BY COALESCE(b.completed_at, b.created_at) DESC LIMIT 1), NULL)))), updated_at = now()
   FROM signals s WHERE a.app_id = s.app_id RETURNING a.app_id
 )
-DELETE FROM public.app_onboarding_refresh_jobs j USING refreshed r WHERE j.app_id = r.app_id AND j.batch_token = $2::uuid
-RETURNING j.app_id`, [JSON.stringify(telemetry), body.batchToken, now.toISOString()])
-    await client.query('COMMIT')
+DELETE FROM public.app_onboarding_refresh_jobs j USING refreshed r WHERE j.app_id = r.app_id AND j.batch_token = ${body.batchToken}::uuid
+RETURNING j.app_id`)
     return result.rowCount ?? 0
-  }
-  catch (error) {
-    await client.query('ROLLBACK')
-    throw error
-  }
-  finally {
-    client.release()
-  }
+  })
 }

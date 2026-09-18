@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
+import { sql } from 'drizzle-orm'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { refreshAppOnboardingBatch } from '../supabase/functions/_backend/utils/app_onboarding_refresh.ts'
+import { getDrizzleClient } from '../supabase/functions/_backend/utils/pg.ts'
 import { getPostgresClient } from './test-utils.ts'
 
 const mocks = vi.hoisted(() => ({ run: vi.fn() }))
@@ -106,7 +108,7 @@ describe('backend onboarding refresh PostgreSQL and telemetry integration', () =
       })
       client.release()
       released = true
-      expect(await refreshAppOnboardingBatch(context, pool, { appIds: ids, batchToken: token }, now)).toBe(1)
+      expect(await refreshAppOnboardingBatch(context, getDrizzleClient(pool), { appIds: ids, batchToken: token }, now)).toBe(1)
       const row = (await pool.query('SELECT onboarding FROM public.apps WHERE app_id=$1', [appId])).rows[0].onboarding
       expect(row.setup.steps).toMatchObject({ add_code: { status: 'done' }, add_updater: { status: 'done' } })
       expect(row.features.custom.succeeded_at).toBe('2026-08-02T00:00:00Z')
@@ -114,7 +116,7 @@ describe('backend onboarding refresh PostgreSQL and telemetry integration', () =
       expect(row.features.ota).toMatchObject({ succeeded_at: '2026-09-10T13:14:15.000Z', last_used_at: '2026-09-16T20:00:00.000Z', stage: 'store_live' })
       expect(row.refreshed_at).toBe(now.toISOString())
       expect((await pool.query('SELECT * FROM public.app_onboarding_refresh_jobs WHERE app_id=$1', [appId])).rows).toHaveLength(0)
-      expect(await refreshAppOnboardingBatch(context, pool, { appIds: ids, batchToken: token }, now)).toBe(0)
+      expect(await refreshAppOnboardingBatch(context, getDrizzleClient(pool), { appIds: ids, batchToken: token }, now)).toBe(0)
     }
     finally {
       // release() above lets a max=1 shared pool service the worker.
@@ -138,7 +140,7 @@ describe('backend onboarding refresh PostgreSQL and telemetry integration', () =
     client.release()
     try {
       mocks.run.mockImplementation(async (_c, query: string) => ids.map(app_id => ({ app_id, first_at: '2026-08-05T12:00:00Z', last_at: '2026-09-16T12:00:00Z', ...(query.includes('FROM device_info') ? { stage: 'native_unknown' } : {}) })))
-      expect(await refreshAppOnboardingBatch(context, pool, { appIds: ids, batchToken: token }, now)).toBe(20)
+      expect(await refreshAppOnboardingBatch(context, getDrizzleClient(pool), { appIds: ids, batchToken: token }, now)).toBe(20)
       const rows = (await pool.query('SELECT app_id, onboarding FROM public.apps WHERE app_id=ANY($1::varchar[])', [ids])).rows
       for (const row of rows) {
         expect(row.onboarding.features.ota).toMatchObject({ started_at: '2026-08-02T00:00:00.000Z', succeeded_at: '2026-08-05T12:00:00.000Z', retained_30d_at: row.app_id === ids[0] ? '2026-09-17T00:00:00.000Z' : '2026-09-16T12:00:00.000Z' })
@@ -162,17 +164,18 @@ describe('backend onboarding refresh PostgreSQL and telemetry integration', () =
     client.release()
     try {
       mocks.run.mockResolvedValue([])
-      const failingPool = {
-        query: pool.query.bind(pool),
-        connect: async () => {
-          const connection = await pool.connect()
-          return {
-            query: (sql: string, values?: unknown[]) => connection.query(sql === 'COMMIT' ? 'SELECT 1/0' : sql, values),
-            release: () => connection.release(),
-          }
-        },
-      } as unknown as typeof pool
-      await expect(refreshAppOnboardingBatch(context, failingPool, { appIds: ids, batchToken: token }, now)).rejects.toMatchObject({ code: '22012' })
+      const database = getDrizzleClient(pool)
+      const failingDatabase: Pick<typeof database, 'execute' | 'transaction'> = {
+        execute: database.execute.bind(database),
+        transaction: (operation, config) => database.transaction(async (tx) => {
+          const result = await operation(tx)
+          // Fail after the batch write but before Drizzle commits, proving the
+          // wrapper rolls back both onboarding updates and lease deletion.
+          await tx.execute(sql`SELECT 1/0`)
+          return result
+        }, config),
+      }
+      await expect(refreshAppOnboardingBatch(context, failingDatabase, { appIds: ids, batchToken: token }, now)).rejects.toMatchObject({ cause: { code: '22012' } })
       expect((await pool.query('SELECT onboarding FROM public.apps WHERE app_id=$1', [ids[0]])).rows[0].onboarding).toEqual(before)
       expect((await pool.query('SELECT batch_token FROM public.app_onboarding_refresh_jobs WHERE app_id=$1', [ids[0]])).rows[0].batch_token).toBe(token)
     }
@@ -191,11 +194,11 @@ describe('backend onboarding refresh PostgreSQL and telemetry integration', () =
     client.release()
     try {
       mocks.run.mockRejectedValue(new Error('Cloudflare unavailable'))
-      await expect(refreshAppOnboardingBatch(context, pool, { appIds: ids, batchToken: token }, now)).rejects.toThrow('Cloudflare unavailable')
+      await expect(refreshAppOnboardingBatch(context, getDrizzleClient(pool), { appIds: ids, batchToken: token }, now)).rejects.toThrow('Cloudflare unavailable')
       expect((await pool.query('SELECT onboarding FROM public.apps WHERE app_id=$1', [ids[0]])).rows[0].onboarding).toEqual(before)
       expect((await pool.query('SELECT batch_token FROM public.app_onboarding_refresh_jobs WHERE app_id=$1', [ids[0]])).rows[0].batch_token).toBe(token)
       mocks.run.mockClear()
-      expect(await refreshAppOnboardingBatch(context, pool, { appIds: ids, batchToken: randomUUID() }, now)).toBe(0)
+      expect(await refreshAppOnboardingBatch(context, getDrizzleClient(pool), { appIds: ids, batchToken: randomUUID() }, now)).toBe(0)
       expect(mocks.run).not.toHaveBeenCalled()
     }
     finally {
