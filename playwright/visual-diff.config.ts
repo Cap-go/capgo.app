@@ -17,6 +17,29 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'login', path: '/login/', auth: false },
   { slug: 'dashboard', path: '/dashboard', auth: true },
   { slug: 'account-settings', path: '/settings/account', auth: true },
+  {
+    slug: 'email-verification-send',
+    path: '/resend_email',
+    auth: true,
+    prepare: async (page) => {
+      await page.route('**/rest/v1/user_security?*', route => route.fulfill({ json: { email_otp_verified_at: null } }))
+      await page.goto('/resend_email?reason=email_not_verified&return_to=/settings/account')
+      await page.getByRole('button', { name: 'Send verification code', exact: true }).waitFor()
+    },
+  },
+  {
+    slug: 'email-verification-code',
+    path: '/resend_email',
+    auth: true,
+    prepare: async (page) => {
+      // Keep screenshots deterministic and never send a real verification email.
+      await page.route('**/rest/v1/user_security?*', route => route.fulfill({ json: { email_otp_verified_at: null } }))
+      await page.route('**/auth/v1/otp', route => route.fulfill({ json: { user: null, session: null } }))
+      await page.goto('/resend_email?reason=email_not_verified&return_to=/settings/account')
+      await page.getByRole('button', { name: 'Send verification code', exact: true }).click()
+      await page.getByLabel('Enter the verification code', { exact: true }).waitFor()
+    },
+  },
   { slug: 'organization-credits', path: '/settings/organization/credits', auth: true },
   { slug: 'apps', path: '/apps', auth: true },
   {

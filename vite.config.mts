@@ -200,6 +200,7 @@ export default defineConfig({
           input: [
             path.resolve(__dirname, 'index.html'),
             path.resolve(__dirname, 'playwright/fixtures/onboarding-setup.html'),
+            path.resolve(__dirname, 'playwright/fixtures/email-verification.html'),
           ],
         },
       }
