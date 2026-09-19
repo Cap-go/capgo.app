@@ -144,6 +144,34 @@ describe('onboarding dashboard redirect', () => {
   })
 })
 
+describe('post app create redirect', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.resetModules()
+  })
+
+  it('sends returning-org users to getting started and keeps first-app users in the flow', async () => {
+    const { getPostAppCreateRedirectPath } = await import('../src/utils/onboardingRedirect.ts')
+
+    expect(getPostAppCreateRedirectPath({
+      appId: 'com.example.second',
+      isFirstAppOnboarding: false,
+    })).toBe('/app/com.example.second/getting-started')
+    expect(getPostAppCreateRedirectPath({
+      appId: 'com.example.second',
+      isFirstAppOnboarding: true,
+    })).toBeNull()
+    expect(getPostAppCreateRedirectPath({
+      appId: '',
+      isFirstAppOnboarding: false,
+    })).toBeNull()
+    expect(getPostAppCreateRedirectPath({
+      appId: 'com.example/with/slash',
+      isFirstAppOnboarding: false,
+    })).toBe('/app/com.example%2Fwith%2Fslash/getting-started')
+  })
+})
+
 describe('post-CLI getting started redirect', () => {
   beforeEach(() => {
     vi.restoreAllMocks()

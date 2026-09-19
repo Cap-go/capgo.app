@@ -182,6 +182,16 @@ export function getOnboardingResumeRedirect(options: {
 
 const GETTING_STARTED_CONTINUE_PATHS = new Set(['/dashboard', '/apps', '/onboarding/app', '/app/new'])
 
+export function getPostAppCreateRedirectPath(options: {
+  appId: string
+  isFirstAppOnboarding: boolean
+}) {
+  if (!options.appId || options.isFirstAppOnboarding)
+    return null
+
+  return `/app/${encodeURIComponent(options.appId)}/getting-started`
+}
+
 export function getGettingStartedContinueRedirect(options: {
   appId: string | null | undefined
   appCount: number
