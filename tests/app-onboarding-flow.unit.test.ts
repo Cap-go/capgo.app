@@ -22,7 +22,7 @@ describe('getting started CLI onboarding accordion', () => {
     expect(gettingStarted).toContain('verify_getting_started')
     expect(gettingStarted).toContain('dismiss_getting_started')
     expect(source).toContain('leaveSplashIfAlreadySetup')
-    expect(panel).toContain('p_patch: { source: \'ai\' }')
+    expect(panel).toContain("sendOnboardingEvent('onboarding_ai_instructions_copied'")
     expect(messages['getting-started-verify']).toBeTruthy()
     expect(messages['getting-started-dont-show-again']).toBeTruthy()
     expect(messages['app-onboarding-dont-show-again']).toBeTruthy()
