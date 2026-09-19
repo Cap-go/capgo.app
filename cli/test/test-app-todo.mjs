@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { formatAppTodoList, getAppTodoSteps, readAppTodoProgress } from '../src/app/todo.ts'
+import { formatAppTodoList, getAppTodoSteps, readAppTodoProgress, TODO_BACKGROUND_WAIT_MS, waitForTodoBackgroundChecks } from '../src/app/todo.ts'
 import { getAppOnboardingStepIds, parseAppOnboarding } from '../../supabase/functions/_backend/utils/appOnboarding.ts'
 import messages from '../../messages/en.json'
 
@@ -26,6 +26,20 @@ const progress = {
   hasChannel: false,
   checkErrors: [],
 }
+
+assert.equal(TODO_BACKGROUND_WAIT_MS, 10_000)
+const countdown = []
+const timedOutAt = Date.now()
+assert.equal(await waitForTodoBackgroundChecks([new Promise(() => {})], seconds => countdown.push(seconds), 2_200), false)
+assert.equal(countdown[0], 3)
+assert.ok(countdown.length >= 2, 'interactive countdown updates while waiting')
+assert.ok(countdown.slice(1).every((seconds, index) => seconds < countdown[index]), 'remaining seconds only decrease')
+assert.ok(Date.now() - timedOutAt >= 2_100, 'wait honors its shared deadline')
+let finishCheck
+const completedCheck = new Promise(resolve => { finishCheck = resolve })
+const finishEarly = waitForTodoBackgroundChecks([completedCheck], undefined, 10_000)
+finishCheck()
+assert.equal(await finishEarly, true, 'completed checks end the wait before the deadline')
 
 for (const version of [1, 2, 3, 4, 0, -1, 1.5, '3', undefined]) {
   const value = { setup: { todo_list_version: version, steps: progress.onboarding.setup.steps } }
@@ -114,16 +128,30 @@ finally {
 const fixture = mkdtempSync(join(tmpdir(), 'capgo-app-todo-'))
 try {
   writeFileSync(join(fixture, 'capacitor.config.json'), JSON.stringify({ appId, appName: 'Todo test', webDir: 'dist' }))
+  writeFileSync(join(fixture, 'package.json'), JSON.stringify({ name: 'todo-test', version: '1.0.0' }))
   const preload = join(fixture, 'fetch.mjs')
   writeFileSync(preload, `
+    import { appendFileSync, existsSync, writeFileSync } from 'node:fs'
+    import { isMainThread } from 'node:worker_threads'
     const nativeFetch = globalThis.fetch
+    const codeMarker = ${JSON.stringify(join(fixture, 'background-code-updated'))}
+    const updaterMarker = ${JSON.stringify(join(fixture, 'background-updater-updated'))}
+    const progressReads = ${JSON.stringify(join(fixture, 'progress-reads'))}
     globalThis.fetch = async (input, init) => {
       const url = input?.url ?? String(input)
       const scenario = process.env.CAPGO_TODO_SCENARIO
       if (!url.startsWith('http') || url.includes('.wasm')) return nativeFetch(input, init)
       if (url.includes('/private/config')) return Response.json({ supaHost: ${JSON.stringify(options.supaHost)}, supaKey: ${JSON.stringify(options.supaAnon)} })
       if (url.includes('/rpc/reject_access_due_to_2fa_for_app')) return Response.json(scenario === 'two-factor')
+      if (scenario === 'background-updated' && init?.method === 'PUT' && url.endsWith('/app/${appId}')) {
+        await new Promise(resolve => setTimeout(resolve, 700))
+        const steps = JSON.parse(init.body).onboarding.steps
+        if (steps.add_code) writeFileSync(codeMarker, 'done')
+        if (steps.add_updater) writeFileSync(updaterMarker, 'done')
+        return Response.json({ status: 'ok' })
+      }
       if (url.includes('/private/onboarding_progress')) {
+        if (scenario === 'background-updated' && isMainThread) appendFileSync(progressReads, 'read\\n')
         if (scenario === 'denied') return Response.json({ error: 'app_access_denied' }, { status: 403 })
         if (scenario === 'missing') return Response.json({ error: 'app_not_found' }, { status: 404 })
         if (scenario === 'failed') return Response.json({ error: 'database_unavailable' }, { status: 500 })
@@ -132,6 +160,10 @@ try {
         if (scenario === 'partial') progress.checkErrors = ['run_device']
         if (scenario === 'v2') progress.onboarding.setup.todo_list_version = 2
         if (scenario === 'empty') progress.onboarding = null
+        if (scenario === 'background-updated') {
+          progress.onboarding.setup.steps.add_code.status = existsSync(codeMarker) ? 'done' : 'pending'
+          progress.onboarding.setup.steps.add_updater.status = existsSync(updaterMarker) ? 'done' : 'pending'
+        }
         return Response.json(progress)
       }
       return Response.json({ status: 'ok' })
@@ -163,8 +195,12 @@ try {
         if (scenario === 'v2') {
           assert.match(text, /Todo list v2/)
           assert.doesNotMatch(text, /Next step:/)
+          assert.doesNotMatch(text, /Waiting 10 seconds for background TODO list checks/, 'v2 does not wait for background checks')
         }
-        else if (scenario === 'empty') assert.match(text, /0\/12 completed/)
+        else if (scenario === 'empty') {
+          assert.match(text, /0\/12 completed/)
+          assert.doesNotMatch(text, /Waiting 10 seconds for background TODO list checks/)
+        }
         else assert.match(text, /2\/7 completed/)
         if (scenario === 'partial') assert.match(text, /Some live progress checks failed/)
       }
@@ -175,6 +211,27 @@ try {
       }
     }
   }
+  writeFileSync(join(fixture, 'package.json'), JSON.stringify({
+    name: 'todo-test', version: '1.0.0', dependencies: { '@capgo/capacitor-updater': '8.0.0' },
+  }))
+  mkdirSync(join(fixture, 'node_modules/@capgo/capacitor-updater'), { recursive: true })
+  writeFileSync(join(fixture, 'node_modules/@capgo/capacitor-updater/package.json'), JSON.stringify({ name: '@capgo/capacitor-updater', version: '8.0.0' }))
+  mkdirSync(join(fixture, 'src'))
+  writeFileSync(join(fixture, 'src/main.ts'), "import { CapacitorUpdater } from '@capgo/capacitor-updater'; CapacitorUpdater.notifyAppReady()")
+  const backgroundUpdate = spawnSync('node', [
+    '--import', preload, builtCli, 'app', 'todo', appId,
+    '-a', options.apikey, '--supa-host', options.supaHost, '--supa-anon', options.supaAnon,
+  ], {
+    cwd: fixture, encoding: 'utf8', timeout: 15_000,
+    env: { ...process.env, CAPGO_TODO_SCENARIO: 'background-updated', CAPGO_DISABLE_TELEMETRY: '1', CAPGO_DISABLE_POSTHOG: '1', CI: '1' },
+  })
+  const backgroundText = backgroundUpdate.stdout + backgroundUpdate.stderr
+  assert.equal(backgroundUpdate.status, 0, backgroundText)
+  assert.equal((backgroundText.match(/Waiting 10 seconds for background TODO list checks to finish/g) ?? []).length, 1, backgroundText)
+  assert.doesNotMatch(backgroundText, /Waiting [1-9] seconds for background TODO list checks to finish/, 'non-interactive output does not count down')
+  assert.match(backgroundText, /\[x\] Done: Add the app-ready code/, 'the printed list includes the background report')
+  assert.match(backgroundText, /\[x\] Done: Install Capgo Updater/, 'the list waits for the updater check too')
+  assert.equal(readFileSync(join(fixture, 'progress-reads'), 'utf8').trim().split('\n').length, 2, 'v3 rereads progress after the worker completes')
 }
 finally {
   rmSync(fixture, { recursive: true, force: true })
