@@ -17,27 +17,32 @@ interface AppWindow extends Record<string, unknown> {
   created_at: Date | string | null
 }
 const stages = ['no_device', 'local_only', 'native_unknown', 'play_unknown', 'testflight', 'store_live'] as const
+const telemetryDate = z.preprocess(value => typeof value === 'string' && value.trim() ? new Date(value) : value, z.date())
 const telemetryRow = z.object({
   app_id: z.string(),
-  first_at: z.coerce.date(),
-  last_at: z.coerce.date(),
+  first_at: telemetryDate,
+  last_at: telemetryDate,
 })
 const deviceRow = telemetryRow.extend({ stage: z.enum(stages) })
 
-function windowFilter(apps: AppWindow[], now: Date) {
-  if (!apps.length || apps.length > ONBOARDING_APPS_PER_MESSAGE)
-    throw new Error('Invalid onboarding telemetry batch size')
+function windowStart(app: AppWindow, now: Date) {
   const cutoff = new Date(now)
   const day = cutoff.getUTCDate()
   cutoff.setUTCDate(1)
   cutoff.setUTCMonth(cutoff.getUTCMonth() - 3)
   const lastDay = new Date(Date.UTC(cutoff.getUTCFullYear(), cutoff.getUTCMonth() + 1, 0)).getUTCDate()
   cutoff.setUTCDate(Math.min(day, lastDay))
+  const created = app.created_at == null ? cutoff : new Date(app.created_at)
+  if (!app.app_id || !Number.isFinite(created.getTime()))
+    throw new Error('Invalid onboarding telemetry window')
+  return created > cutoff ? created : cutoff
+}
+
+function windowFilter(apps: AppWindow[], now: Date) {
+  if (!apps.length || apps.length > ONBOARDING_APPS_PER_MESSAGE)
+    throw new Error('Invalid onboarding telemetry batch size')
   return apps.map((app) => {
-    const created = new Date(app.created_at ?? 0)
-    if (!app.app_id || !Number.isFinite(created.getTime()))
-      throw new Error('Invalid onboarding telemetry window')
-    const start = created > cutoff ? created : cutoff
+    const start = windowStart(app, now)
     return `(index1 = '${escapeSqlString(app.app_id)}' AND timestamp >= toDateTime('${formatDateCF(start)}') AND timestamp < toDateTime('${formatDateCF(now)}'))`
   }).join(' OR ')
 }
@@ -75,7 +80,7 @@ export async function readOnboardingTelemetry(c: Context, apps: AppWindow[], now
     const appIds = new Set(apps.map(app => app.app_id))
     for (const row of [...installs, ...devices]) {
       const app = apps.find(app => app.app_id === row.app_id)
-      if (!appIds.has(row.app_id) || !app || row.first_at > row.last_at || row.last_at > now || row.first_at.getTime() < Math.floor(new Date(app.created_at ?? 0).getTime() / 1000) * 1000)
+      if (!appIds.has(row.app_id) || !app || row.first_at > row.last_at || row.last_at > now || row.first_at.getTime() < Math.floor(windowStart(app, now).getTime() / 1000) * 1000)
         throw new Error('Cloudflare returned invalid onboarding telemetry')
     }
     if (installs.length > apps.length || devices.length > apps.length * stages.length)
@@ -100,7 +105,7 @@ export async function refreshAppOnboardingBatch(c: Context, database: Pick<Retur
   // A replaced lease makes old queue messages harmless. Deleted apps disappear
   // through the FK. No transaction/row lock is held during Cloudflare reads.
   const { rows: apps } = await database.execute<AppWindow>(sql`
-    SELECT a.app_id, COALESCE(a.created_at, '1970-01-01'::timestamptz) AS created_at FROM public.apps a
+    SELECT a.app_id, a.created_at FROM public.apps a
     JOIN public.app_onboarding_refresh_jobs j ON j.app_id = a.app_id
     WHERE a.app_id = ANY(${sql.param(body.appIds)}::varchar[]) AND j.batch_token = ${body.batchToken}::uuid
     ORDER BY a.app_id`)

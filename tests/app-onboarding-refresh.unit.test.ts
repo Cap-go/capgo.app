@@ -87,6 +87,10 @@ describe('backend onboarding refresh telemetry', () => {
   it.each([
     [{ app_id: 'another-app', first_at: now, last_at: now }],
     [{ app_id: apps[0].app_id, first_at: 'invalid', last_at: now }],
+    [{ app_id: apps[0].app_id, first_at: null, last_at: now }],
+    [{ app_id: apps[0].app_id, first_at: '', last_at: now }],
+    [{ app_id: apps[0].app_id, first_at: now, last_at: null }],
+    [{ app_id: apps[0].app_id, first_at: now, last_at: '' }],
     [{ app_id: apps[0].app_id, first_at: now, last_at: '2026-01-01' }],
     [{ app_id: apps[0].app_id, first_at: now, last_at: '2026-10-01' }],
     [{ app_id: apps[0].app_id, first_at: now, last_at: now }, { app_id: apps[0].app_id, first_at: now, last_at: now }],
@@ -97,6 +101,10 @@ describe('backend onboarding refresh telemetry', () => {
   it('uses the same second precision as Cloudflare when validating app creation', async () => {
     mocks.run.mockResolvedValueOnce([{ app_id: apps[0].app_id, first_at: '2026-09-16T00:00:00Z', last_at: '2026-09-16T00:00:01Z' }]).mockResolvedValueOnce([])
     expect(await readOnboardingTelemetry(context, [{ ...apps[0], created_at: '2026-09-16T00:00:00.500Z' }], now)).toHaveLength(1)
+  })
+  it('uses the retention window as the lower bound when app creation is missing', async () => {
+    mocks.run.mockResolvedValueOnce([{ app_id: apps[0].app_id, first_at: '1970-01-01T00:00:00Z', last_at: now }]).mockResolvedValueOnce([])
+    await expect(readOnboardingTelemetry(context, [{ ...apps[0], created_at: null }], now)).rejects.toThrow('invalid onboarding telemetry')
   })
   it('requires Cloudflare configuration and never falls back to Supabase statistics', async () => {
     await expect(readOnboardingTelemetry({ ...context, env: {} } as Context, apps, now)).rejects.toThrow('not configured')
