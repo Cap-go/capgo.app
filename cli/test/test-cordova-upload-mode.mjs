@@ -46,6 +46,21 @@ await t('collectCordovaAppIdCandidates reads config.xml widget id', async () => 
   }
 })
 
+await t('collectCordovaAppIdCandidates ignores widget id in XML comments', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'capgo-cordova-comment-'))
+  try {
+    writeFileSync(join(dir, 'config.xml'), `<?xml version="1.0" encoding="UTF-8"?>
+<!-- <widget id="com.comment.fake"></widget> -->
+<widget id="com.customer.real" version="1.0.0">
+  <content src="index.html" />
+</widget>`)
+    assert.deepEqual(collectCordovaAppIdCandidates(dir), ['com.customer.real'])
+  }
+  finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 await t('collectCordovaAppIdCandidates reads plugin.xml id', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'capgo-cordova-plugin-'))
   try {
@@ -64,9 +79,26 @@ await t('buildCordovaUploadConfig defaults webDir to www', async () => {
     writeCordovaProject(dir)
     await withCwd(dir, async () => {
       const config = buildCordovaUploadConfig({})
-      assert.equal(config.config.webDir, CORDOVA_DEFAULT_WEB_DIR)
+      assert.equal(config.config.webDir, join(dir, CORDOVA_DEFAULT_WEB_DIR))
       assert.equal(config.config.appId, 'com.example.cordova')
       assert.equal(config.path, '')
+    })
+  }
+  finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await t('buildCordovaUploadConfig resolves webDir from nested working directory', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'capgo-cordova-nested-cwd-'))
+  const nestedDir = join(dir, 'scripts')
+  try {
+    writeCordovaProject(dir)
+    mkdirSync(nestedDir, { recursive: true })
+    await withCwd(nestedDir, async () => {
+      const config = buildCordovaUploadConfig({})
+      assert.equal(config.config.webDir, join(dir, CORDOVA_DEFAULT_WEB_DIR))
+      assert.equal(config.config.appId, 'com.example.cordova')
     })
   }
   finally {

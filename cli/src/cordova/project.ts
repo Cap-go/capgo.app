@@ -2,6 +2,7 @@ import type { CapacitorConfig, ExtConfigPairs } from '../config'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { cwd } from 'node:process'
+import { DOMParser } from '@xmldom/xmldom'
 import { isValidAppId } from '../recovery/app-id'
 
 export const CORDOVA_DEFAULT_WEB_DIR = 'www'
@@ -26,10 +27,17 @@ export function findCordovaProjectRoot(startDir = cwd()): string {
 }
 
 function parseXmlRootId(content: string, rootTag: 'widget' | 'plugin'): string | undefined {
-  const pattern = new RegExp(`<${rootTag}[^>]*\\sid=["']([^"']+)["']`, 'i')
-  const match = content.match(pattern)
-  const candidate = match?.[1]?.trim()
-  return candidate && isValidAppId(candidate) ? candidate : undefined
+  try {
+    const doc = new DOMParser().parseFromString(content, 'text/xml')
+    const root = doc.documentElement
+    if (!root || root.nodeName.toLowerCase() !== rootTag)
+      return undefined
+    const candidate = root.getAttribute('id')?.trim()
+    return candidate && isValidAppId(candidate) ? candidate : undefined
+  }
+  catch {
+    return undefined
+  }
 }
 
 function readCordovaAppIdFromFile(filePath: string): string | undefined {
@@ -67,9 +75,13 @@ export function resolveCordovaWebDir(path?: string): string {
 }
 
 export function buildCordovaUploadConfig(options: { path?: string, appId?: string }): ExtConfigPairs {
-  const detectedAppId = collectCordovaAppIdCandidates()[0]
+  const projectRoot = findCordovaProjectRoot()
+  const detectedAppId = collectCordovaAppIdCandidates(projectRoot)[0]
   const appId = options.appId?.trim() || detectedAppId || ''
-  const webDir = resolveCordovaWebDir(options.path)
+  const webDirRelative = resolveCordovaWebDir(options.path)
+  const webDir = options.path?.trim()
+    ? webDirRelative
+    : resolve(projectRoot, webDirRelative)
 
   const config: CapacitorConfig = {
     appId,
