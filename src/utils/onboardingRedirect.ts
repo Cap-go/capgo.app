@@ -167,7 +167,7 @@ export function dismissOnboardingExplorationReminder(userId: string) {
 }
 
 export function getAppSetupRedirect(app: { app_id: string, onboarding?: unknown }) {
-  if (parseAppOnboarding(app.onboarding).todo_list_version !== 3)
+  if (![3, 4].includes(parseAppOnboarding(app.onboarding).todo_list_version))
     return null
   return { path: '/onboarding/app', query: { resume: app.app_id, step: 'setup' } }
 }

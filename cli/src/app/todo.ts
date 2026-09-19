@@ -93,17 +93,18 @@ export function getAppTodoSteps(progress: AppTodoProgress) {
   const version = typeof setup.todo_list_version === 'number' && Number.isSafeInteger(setup.todo_list_version) && setup.todo_list_version > 0
     ? setup.todo_list_version
     : 2
-  const ids: readonly (keyof typeof STEP_TITLES)[] = version === 3
+  // TODO(2027-03-19): Remove v3 flat-step compatibility after existing apps migrate.
+  const ids: readonly (keyof typeof STEP_TITLES)[] = version === 3 || version === 4
     ? V3_STEP_IDS
     : version === 1 ? ['add_app', ...V2_STEP_IDS.slice(1)] : V2_STEP_IDS
-  const reportedSteps = asRecord(setup.steps)
+  const reportedSteps = version === 4 ? asRecord(asRecord(setup.steps).ota) : asRecord(setup.steps)
   const steps = ids.map((id) => {
     const reportedStatus = asRecord(reportedSteps[id]).status
     let status: 'done' | 'skipped' | 'pending' = reportedStatus === 'done' || reportedStatus === 'skipped' ? reportedStatus : 'pending'
     // Match the frontend's live channel override, including deleted channels.
     if (id === 'add_channel' && typeof progress.hasChannel === 'boolean')
       status = progress.hasChannel ? 'done' : 'pending'
-    const title = version === 3 ? V3_STEP_TITLES[id as keyof typeof V3_STEP_TITLES] : STEP_TITLES[id]
+    const title = version === 3 || version === 4 ? V3_STEP_TITLES[id as keyof typeof V3_STEP_TITLES] : STEP_TITLES[id]
     return { id, title, status }
   })
   return { version, steps }
@@ -116,7 +117,7 @@ export function formatAppTodoList(appId: string, progress: AppTodoProgress, opti
   const markers = { done: '[x] Done', skipped: '[-] Skipped', pending: '[ ] Pending' }
   const colors = { done: '32', skipped: '2', pending: '33' }
   const colorize = (value: string, code: string) => options.color ? `\u001B[${code}m${value}\u001B[0m` : value
-  const next = version === 3 ? steps.find(step => step.status === 'pending') : undefined
+  const next = version === 3 || version === 4 ? steps.find(step => step.status === 'pending') : undefined
   const help = next ? V3_NEXT_STEP_HELP[next.id as typeof V3_STEP_IDS[number]] : undefined
   return [
     colorize(`App: ${appId} — Todo list v${version}`, '1'),

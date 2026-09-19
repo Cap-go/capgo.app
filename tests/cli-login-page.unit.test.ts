@@ -245,7 +245,7 @@ describe('/login-cli page contract', () => {
     await flushPromises()
 
     const copiedPrompt = clipboardWrite.mock.calls[0]?.[0] as string
-    expect(copiedPrompt).toContain('Todo list v3 progress checks')
+    expect(copiedPrompt).toContain('OTA todo list progress checks')
     expect(copiedPrompt).toContain('app todo {SELECTED_CAPGO_APP_ID}')
   })
 

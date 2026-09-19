@@ -27,7 +27,7 @@ describe('buildCliAiSetupPrompt', () => {
   it.concurrent('checks Todo list v3 after each OTA milestone when intent is explicit', () => {
     const prompt = buildCliAiSetupPrompt(promptInput(3), 'ota')
 
-    expect(prompt).toContain('## Todo list v3 progress checks')
+    expect(prompt).toContain('## OTA todo list progress checks')
     expect(prompt.match(/app todo \{SELECTED_CAPGO_APP_ID\}/g)).toHaveLength(7)
     expect(prompt).toContain('After selecting the Capgo app, run the checklist once')
     expect(prompt).toContain('After the chosen channel is available')
@@ -44,11 +44,17 @@ describe('buildCliAiSetupPrompt', () => {
   })
 
   it.concurrent('leaves v1 and v2 OTA prompts without checklist instructions', () => {
-    for (const version of [1, 2, 4, undefined]) {
+    for (const version of [1, 2, undefined]) {
       const prompt = buildCliAiSetupPrompt(promptInput(version), 'ota')
       expect(prompt).not.toContain('app todo {SELECTED_CAPGO_APP_ID}')
-      expect(prompt).not.toContain('Todo list v3 progress checks')
+      expect(prompt).not.toContain('OTA todo list progress checks')
     }
+  })
+
+  it.concurrent('includes v4 OTA apps in the checklist protocol', () => {
+    const prompt = buildCliAiSetupPrompt(promptInput(4), 'ota')
+    expect(prompt).toContain('## OTA todo list progress checks')
+    expect(prompt).toContain('`Todo list v4`')
   })
 
   it.concurrent('keeps default, Builder, and choose-first prompts free of OTA checklist checks', () => {
@@ -61,8 +67,8 @@ describe('buildCliAiSetupPrompt', () => {
     mixed.organizations[0]!.apps.push({ appId: 'com.acme.new', name: 'New App', todoListVersion: 3 })
     const prompt = buildCliAiSetupPrompt(mixed, 'ota')
     expect(prompt).toContain('A mixed organization can contain apps with different todo-list versions')
-    expect(prompt).toContain('The following Capgo app IDs use Todo list v3: `com.acme.new`.')
-    expect(prompt).toContain('only if its app ID is in that v3 list')
+    expect(prompt).toContain('The following Capgo app IDs use Todo list v3 or v4: `com.acme.new`.')
+    expect(prompt).toContain('only if its app ID is in that OTA list')
     expect(prompt).toContain('If it reports v1 or v2, skip every later checklist checkpoint')
 
     mixed.organizations[0]!.apps[1]!.appId = 'invalid-app-id'

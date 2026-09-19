@@ -147,6 +147,22 @@ describe('onboarding progress endpoint', () => {
     const context = contextFor({ userId: 'user', authType: 'jwt' })
     expect((await persistObservedProgress(context, 'com.test.onboarding', { add_channel: false }) as any).setup.steps.add_channel).toBeUndefined()
   })
+  it('returns a deleted v4 channel to pending without removing its OTA step', async () => {
+    const onboarding = { setup: { todo_list_version: 4, paths: ['ota'], steps: { ota: { add_channel: { status: 'done' }, add_code: { status: 'pending' } } } } }
+    lockedRow(onboarding)
+    const context = contextFor({ userId: 'user', authType: 'jwt' })
+    const result = await persistObservedProgress(context, 'com.test.onboarding', { add_channel: false }) as any
+    expect(result.setup.steps.ota.add_channel).toEqual({ status: 'pending' })
+    expect(result.setup.steps.ota.add_code).toEqual({ status: 'pending' })
+    expect(result.setup.paths).toEqual(['ota'])
+  })
+  it('records observed v4 milestones in the OTA path', async () => {
+    const onboarding = { setup: { todo_list_version: 4, steps: { ota: {} } } }
+    lockedRow(onboarding)
+    const result = await persistObservedProgress(contextFor({ userId: 'user', authType: 'jwt' }), 'com.test.onboarding', { run_device: true }) as any
+    expect(result.setup.steps.ota.run_device.status).toBe('done')
+    expect(result.setup.steps.run_device).toBeUndefined()
+  })
   it('preserves the request key for hashed RBAC keys on both write-permission paths', async () => {
     lockedRow(mocks.row.onboarding)
     mocks.permissionPg.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
