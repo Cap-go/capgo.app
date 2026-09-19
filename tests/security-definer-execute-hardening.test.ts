@@ -238,7 +238,7 @@ describe('security definer execute hardening', () => {
     expect(result.rows).toHaveLength(1)
     expect(result.rows[0].prosecdef).toBe(true)
     expect(result.rows[0].pronargs).toBe(0)
-    expect(result.rows[0].proconfig).toContain('search_path=')
+    expect(result.rows[0].proconfig?.[0]).toMatch(/^search_path=(?:"")?$/)
   })
 
   it.concurrent('keeps signed-in RPCs inaccessible to anonymous callers', async () => {
