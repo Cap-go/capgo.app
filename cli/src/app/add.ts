@@ -29,9 +29,12 @@ import {
   sendEvent,
 } from '../utils'
 
+function normalizeConsoleHost(hostWeb: string): string {
+  return hostWeb.endsWith('/') ? hostWeb.slice(0, -1) : hostWeb
+}
+
 export function appGettingStartedUrl(appId: string, hostWeb = defaultHostWeb): string {
-  const base = hostWeb.endsWith('/') ? hostWeb.slice(0, -1) : hostWeb
-  return `${base}/app/${appId}/getting-started`
+  return `${normalizeConsoleHost(hostWeb)}/app/${appId}/getting-started`
 }
 
 export function formatAppGettingStartedMessage(appId: string, hostWeb = defaultHostWeb): string {
@@ -39,7 +42,7 @@ export function formatAppGettingStartedMessage(appId: string, hostWeb = defaultH
 }
 
 export function shouldPrintAppGettingStartedUrl(hostWeb: string, usesCustomSupabase: boolean): boolean {
-  return !usesCustomSupabase || hostWeb !== defaultHostWeb
+  return !usesCustomSupabase || normalizeConsoleHost(hostWeb) !== defaultHostWeb
 }
 
 export async function resolveAppGettingStartedMessage(
