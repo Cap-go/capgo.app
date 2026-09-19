@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
@@ -52,7 +53,9 @@ async function workerHarness(worker = workerUrl) {
     api, project, requests, behavior,
     async run(extra = {}, environment = {}) {
       requests.length = 0
-      const workerData = { cwd: project.dir, command: 'app list', apikey: 'fake-api-key', ...extra }
+      const workerData = worker.href === combinedWorkerUrl.href
+        ? { cwd: project.dir, command: 'app list', apikey: 'fake-api-key', ...extra }
+        : { project: { dir: project.dir, workspaceRoot: project.workspaceRoot, appId: project.appId, webDir: project.webDir }, apiHost: api, command: 'app list', apikey: 'fake-api-key', attemptId: randomUUID(), ...extra }
       const child = spawn('node', ['--input-type=module', '-e', `
         import { Worker } from 'node:worker_threads'
         const worker = new Worker(new URL(${JSON.stringify(worker.href)}), {
@@ -288,7 +291,7 @@ test.concurrent('packaged worker pairs scan events and sends only the add_code p
     assert.equal(patch.headers.authorization, 'fake-api-key')
     assert.equal(patch.headers['x-cli-command'], 'app list')
     assert.equal(requests.at(-1).body.nonPersonTags.todo_report_http_status, 200)
-    await harness.run({ supaHost: api, supaAnon: 'fake-anon-key' })
+    await harness.run({ apiHost: `${api}/functions/v1`, anonKey: 'fake-anon-key' })
     assert.notEqual(scanEvents(requests, 'found', 'success'), firstAttempt)
     assert.equal(requests.every(request => request.path.startsWith('/functions/v1/')), true)
     assert.equal(requests.find(request => request.method === 'PUT').headers.authorization, 'Bearer fake-anon-key')
@@ -320,10 +323,6 @@ test.concurrent('scan-ended records negative, unknown, rejected, and failed todo
     attempts.add(scanEvents(requests, 'found', 'failed'))
     assert.equal('todo_report_http_status' in requests.at(-1).body.nonPersonTags, false)
     assert.equal(attempts.size, 4)
-    await harness.run({ cwd: '/nonexistent-example-project' })
-    assert.equal(requests.length, 0)
-    await harness.run({ apikey: '' })
-    assert.equal(requests.length, 0)
   }
   finally {
     harness.close()
@@ -379,16 +378,16 @@ test.concurrent('foreground exits while the real worker is waiting on scan-start
   const dir = fixture()
   write(join(dir, 'package.json'), { type: 'module' })
   const build = await Bun.build({
-    entrypoints: [fileURLToPath(new URL('../src/notify-app-ready-background.ts', import.meta.url))],
+    entrypoints: [fileURLToPath(new URL('../src/onboarding/background.ts', import.meta.url))],
     outdir: dir,
     target: 'node',
     format: 'esm',
   })
   assert.equal(build.success, true)
-  write(join(dir, 'notify-app-ready-worker.js'), `import ${JSON.stringify(workerUrl.href)}`)
+  write(join(dir, 'onboarding-worker.js'), `import ${JSON.stringify(combinedWorkerUrl.href)}`)
   write(join(dir, 'run.mjs'), `
-    import { startNotifyAppReadyCheck } from './notify-app-ready-background.js'
-    startNotifyAppReadyCheck({ optsWithGlobals: () => ({ apikey: 'fake-api-key' }), registeredArguments: [], args: [] }, 'app list')
+    import { startOnboardingChecks } from './background.js'
+    startOnboardingChecks({ optsWithGlobals: () => ({ apikey: 'fake-api-key' }), registeredArguments: [], args: [] }, 'app list')
     process.stdin.resume()
     process.stdin.once('end', () => console.log('foreground-finished'))
   `)
@@ -425,16 +424,16 @@ test('launcher abandons a busy worker without output or waiting for shutdown', a
   const dir = fixture()
   write(join(dir, 'package.json'), { type: 'module' })
   const build = await Bun.build({
-    entrypoints: [fileURLToPath(new URL('../src/notify-app-ready-background.ts', import.meta.url))],
+    entrypoints: [fileURLToPath(new URL('../src/onboarding/background.ts', import.meta.url))],
     outdir: dir,
     target: 'node',
     format: 'esm',
   })
   assert.equal(build.success, true)
-  write(join(dir, 'notify-app-ready-worker.js'), "console.log('worker-output'); console.error('worker-error'); setInterval(() => {}, 10000)")
+  write(join(dir, 'onboarding-worker.js'), "console.log('worker-output'); console.error('worker-error'); setInterval(() => {}, 10000)")
   write(join(dir, 'run.mjs'), `
-    import { startNotifyAppReadyCheck } from './notify-app-ready-background.js'
-    startNotifyAppReadyCheck({ optsWithGlobals: () => ({}), registeredArguments: [], args: [] }, 'app list')
+    import { startOnboardingChecks } from './background.js'
+    startOnboardingChecks({ optsWithGlobals: () => ({}), registeredArguments: [], args: [] }, 'app list')
     setTimeout(() => console.log('foreground-finished'), 500)
   `)
   const child = spawn('node', [join(dir, 'run.mjs')], { stdio: ['ignore', 'pipe', 'pipe'] })
@@ -512,7 +511,7 @@ test.concurrent('installed-updater worker pairs scan events and only completes a
     assert.equal(patch.path, '/app/com.example.ready')
     assert.equal(patch.headers.authorization, 'fake-api-key')
     assert.equal(patch.headers['x-cli-command'], 'app list')
-    await harness.run({ supaHost: api, supaAnon: 'fake-anon-key' })
+    await harness.run({ apiHost: `${api}/functions/v1`, anonKey: 'fake-anon-key' })
     assert.notEqual(scanEvents(requests, 'found', 'success', 'updater-installed'), firstAttempt)
     assert.equal(requests.every(request => request.path.startsWith('/functions/v1/')), true)
     assert.equal(requests.find(request => request.method === 'PUT').headers.authorization, 'Bearer fake-anon-key')
@@ -522,7 +521,7 @@ test.concurrent('installed-updater worker pairs scan events and only completes a
   }
 }, 20_000)
 
-test.concurrent('installed-updater worker skips missing and invalid targets, and handles rejected reports and telemetry opt-out', async () => {
+test.concurrent('installed-updater worker skips missing packages and handles rejected reports and telemetry opt-out', async () => {
   const harness = await workerHarness(updaterWorkerUrl)
   const { project, requests, behavior } = harness
   try {
@@ -530,10 +529,6 @@ test.concurrent('installed-updater worker skips missing and invalid targets, and
     scanEvents(requests, 'not_found', 'not_attempted', 'updater-installed')
     assert.equal(requests.length, 2, 'missing installation must never clear progress')
     installUpdater(project)
-    for (const extra of [{ appId: 'com.example.other' }, { apikey: '' }, { cwd: '/nonexistent-example-project' }]) {
-      await harness.run(extra)
-      assert.equal(requests.length, 0)
-    }
     behavior.putStatus = 403
     await harness.run()
     scanEvents(requests, 'found', 'rejected', 'updater-installed')
@@ -573,6 +568,20 @@ test.concurrent('coordinator loads the project once and reports both checks inde
       { onboarding: { steps: { add_code: { status: 'done' } } } },
       { onboarding: { steps: { add_updater: { status: 'done' } } } },
     ])
+  }
+  finally {
+    harness.close()
+  }
+}, 20_000)
+
+test.concurrent('coordinator skips both checks when the project or credentials cannot be resolved', async () => {
+  const harness = await workerHarness(combinedWorkerUrl)
+  installUpdater(harness.project)
+  try {
+    for (const options of [{ appId: 'com.example.other' }, { apikey: '' }, { cwd: '/nonexistent-example-project' }]) {
+      await harness.run(options)
+      assert.deepEqual(harness.requests, [])
+    }
   }
   finally {
     harness.close()
@@ -659,19 +668,17 @@ test('background API requests require both explicit destination trust and safe t
     assert.equal(isTrustedOnboardingApiHost(host, {}, [host]), false)
 })
 
-test.concurrent('both workers send no credentials to project-selected untrusted hosts', async () => {
-  for (const worker of [workerUrl, updaterWorkerUrl]) {
-    const harness = await workerHarness(worker)
-    installUpdater(harness.project)
-    try {
-      await harness.run({}, { CAPGO_TRUSTED_API_ORIGINS: '' })
-      assert.deepEqual(harness.requests, [], 'untrusted project config must not receive the API key')
-      await harness.run({ supaHost: harness.api, supaAnon: 'fake-anon-key' }, { CAPGO_TRUSTED_API_ORIGINS: '' })
-      assert.equal(harness.requests.filter(request => request.method === 'PUT').length, 1, 'explicit CLI self-host selection should still work')
-    }
-    finally {
-      harness.close()
-    }
+test.concurrent('coordinator sends no credentials to project-selected untrusted hosts', async () => {
+  const harness = await workerHarness(combinedWorkerUrl)
+  installUpdater(harness.project)
+  try {
+    await harness.run({}, { CAPGO_TRUSTED_API_ORIGINS: '' })
+    assert.deepEqual(harness.requests, [], 'untrusted project config must not receive the API key')
+    await harness.run({ supaHost: harness.api, supaAnon: 'fake-anon-key' }, { CAPGO_TRUSTED_API_ORIGINS: '' })
+    assert.equal(harness.requests.filter(request => request.method === 'PUT').length, 2, 'explicit CLI self-host selection should still work')
+  }
+  finally {
+    harness.close()
   }
 }, 20_000)
 

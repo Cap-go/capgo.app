@@ -2,7 +2,7 @@ import type { OnboardingCheckOptions } from './onboarding/background'
 import { randomUUID } from 'node:crypto'
 import { exit } from 'node:process'
 import { Worker, workerData } from 'node:worker_threads'
-import { prepareOnboardingCheck } from './onboarding/background-check'
+import { prepareOnboardingCheck } from './onboarding/background-preparation'
 
 function runScanWorker(workerUrl: URL, data: object): Promise<void> {
   return new Promise((resolve) => {

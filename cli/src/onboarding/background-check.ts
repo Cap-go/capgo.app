@@ -1,11 +1,6 @@
-import type { OnboardingCheckOptions } from './background'
 import type { OnboardingScanProject } from './notify-app-ready-project'
-import { randomUUID } from 'node:crypto'
-import { env } from 'node:process'
 import { buildCliRequestHeaders, setCurrentCliCommand } from '../analytics/cli-headers'
-import { resolveNotifyAppReadyProject } from './notify-app-ready-project'
-import { isTrustedOnboardingApiHost } from './background-api'
-import { defaultApiHost, findSavedKeySilent, isCapgoManagedSupabaseHost, normalizeSupabaseHost, resolveConfiguredCapgoPublicApiHost, sendEvent, trimTrailingSlashes } from '../utils'
+import { sendEvent, trimTrailingSlashes } from '../utils'
 
 interface BackgroundOnboardingCheck {
   channel: 'notify-app-ready' | 'updater-installed'
@@ -22,45 +17,9 @@ export interface PreparedOnboardingCheck {
   attemptId: string
 }
 
-export async function prepareOnboardingCheck(options: OnboardingCheckOptions): Promise<Omit<PreparedOnboardingCheck, 'attemptId'> | undefined> {
-  // Capture user-provided trust before evaluating executable project config.
-  const trustedOrigins = env.CAPGO_TRUSTED_API_ORIGINS?.split(',') ?? []
-  const apikey = options.apikey ?? findSavedKeySilent()
-  if (!apikey)
-    return
-  const project = await resolveNotifyAppReadyProject(options)
-  if (!project)
-    return
-
-  const updater = project.config.plugins?.CapacitorUpdater
-  const config = {
-    hostApi: updater?.localApi || defaultApiHost,
-    supaHost: updater?.localSupa,
-    supaKey: updater?.localSupaAnon,
-  }
-  const explicitSelfHost = options.supaHost && options.supaAnon && !isCapgoManagedSupabaseHost(options.supaHost)
-  const apiHost = explicitSelfHost
-    ? `${normalizeSupabaseHost(options.supaHost!)}/functions/v1`
-    : resolveConfiguredCapgoPublicApiHost(config)
-  if (!isTrustedOnboardingApiHost(apiHost, options, trustedOrigins))
-    return
-  const anonKey = options.supaAnon ?? config.supaKey
-  return {
-    project: { dir: project.dir, workspaceRoot: project.workspaceRoot, appId: project.appId, webDir: project.webDir },
-    apiHost,
-    anonKey,
-    apikey,
-    command: options.command,
-  }
-}
-
-export async function runOnboardingCheck(options: OnboardingCheckOptions | PreparedOnboardingCheck, check: BackgroundOnboardingCheck): Promise<void> {
-  const prepared = 'project' in options ? options : await prepareOnboardingCheck(options)
-  if (!prepared)
-    return
-  const { project, apiHost, anonKey, apikey, command } = prepared
+export async function runOnboardingCheck(prepared: PreparedOnboardingCheck, check: BackgroundOnboardingCheck): Promise<void> {
+  const { project, apiHost, anonKey, apikey, command, attemptId } = prepared
   setCurrentCliCommand(command)
-  const attemptId = 'project' in options ? options.attemptId : options.attemptId ?? randomUUID()
   const trackScan = async (event: 'scan_started' | 'scan_ended', timestamp: number, tags: Record<string, string | number> = {}) => {
     try {
       await sendEvent(apikey, {
