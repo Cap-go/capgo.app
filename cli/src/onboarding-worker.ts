@@ -1,10 +1,23 @@
 import type { OnboardingCheckOptions } from './onboarding/background'
 import { randomUUID } from 'node:crypto'
 import { exit } from 'node:process'
-import { workerData } from 'node:worker_threads'
-import { prepareOnboardingCheck, runOnboardingCheck } from './onboarding/background-check'
-import { scanNotifyAppReadySource } from './onboarding/notify-app-ready-source'
-import { scanUpdaterInstalled } from './onboarding/updater-installed'
+import { Worker, workerData } from 'node:worker_threads'
+import { prepareOnboardingCheck } from './onboarding/background-check'
+
+function runScanWorker(workerUrl: URL, data: object): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      const worker = new Worker(workerUrl, { workerData: data, stdout: true, stderr: true })
+      worker.stdout?.destroy()
+      worker.stderr?.destroy()
+      worker.on('error', () => {})
+      worker.once('exit', () => resolve())
+    }
+    catch {
+      resolve()
+    }
+  })
+}
 
 async function runOnboardingChecks(options: OnboardingCheckOptions): Promise<void> {
   const prepared = await prepareOnboardingCheck(options)
@@ -13,16 +26,8 @@ async function runOnboardingChecks(options: OnboardingCheckOptions): Promise<voi
 
   const attemptIds = options.attemptIds ?? [options.attemptId ?? randomUUID(), randomUUID()]
   await Promise.allSettled([
-    runOnboardingCheck({ ...prepared, attemptId: attemptIds[0] }, {
-      channel: 'notify-app-ready',
-      step: 'add_code',
-      scan: scanNotifyAppReadySource,
-    }),
-    runOnboardingCheck({ ...prepared, attemptId: attemptIds[1] }, {
-      channel: 'updater-installed',
-      step: 'add_updater',
-      scan: scanUpdaterInstalled,
-    }),
+    runScanWorker(new URL('./notify-app-ready-worker.js', import.meta.url), { ...prepared, attemptId: attemptIds[0] }),
+    runScanWorker(new URL('./updater-installed-worker.js', import.meta.url), { ...prepared, attemptId: attemptIds[1] }),
   ])
 }
 
