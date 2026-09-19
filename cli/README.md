@@ -156,7 +156,7 @@ Capgo continues to load the root config while writing only the selected source. 
   - [Create](#key-create)
   - [Delete_old](#key-delete_old)
 - 👤 [Account](#account)
-  - [Id](#account-id)
+  - [Whoami](#account-whoami)
 - 🔹 [Organization](#organization)
   - [List](#organization-list)
   - [Add](#organization-add)
@@ -1085,18 +1085,20 @@ npx @capgo/cli@latest key delete_old
 
 👤 Manage your Capgo account details and retrieve information for support or collaboration.
 
-### <a id="account-id"></a> 🔹 **Id**
+### <a id="account-whoami"></a> 🔹 **Whoami**
+
+**Alias:** `id`
 
 ```bash
-npx @capgo/cli@latest account id
+npx @capgo/cli@latest account whoami
 ```
 
-🪪 Retrieve your account ID, safe to share for collaboration or support purposes in Discord or other platforms.
+🪪 Retrieve your account ID and email address.
 
 **Example:**
 
 ```bash
-npx @capgo/cli@latest account id
+npx @capgo/cli@latest account whoami
 ```
 
 **Options:**
