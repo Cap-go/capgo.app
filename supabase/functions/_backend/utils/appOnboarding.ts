@@ -33,7 +33,7 @@ export const APP_ONBOARDING_V4_OTA_STEP_IDS = [
   'run_device', 'upload_bundle', 'test_update',
 ] as const
 
-export const APP_ONBOARDING_V3_STEP_IDS = APP_ONBOARDING_V4_OTA_STEP_IDS
+export const APP_ONBOARDING_V3_STEP_IDS = [...APP_ONBOARDING_V4_OTA_STEP_IDS] as const
 
 export type AppOnboardingStepId
   = | typeof APP_ONBOARDING_V1_STEP_IDS[number]
