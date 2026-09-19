@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -15,6 +15,7 @@ import { isTrustedOnboardingApiHost } from '../src/onboarding/background-api.ts'
 const fixtures = []
 const workerUrl = new URL('../dist/notify-app-ready-worker.js', import.meta.url)
 const updaterWorkerUrl = new URL('../dist/updater-installed-worker.js', import.meta.url)
+const combinedWorkerUrl = new URL('../dist/onboarding-worker.js', import.meta.url)
 const call = "import { CapacitorUpdater } from '@capgo/capacitor-updater'; CapacitorUpdater.notifyAppReady()"
 
 async function workerHarness(worker = workerUrl) {
@@ -551,8 +552,35 @@ test.concurrent('installed-updater worker skips missing and invalid targets, and
   }
 }, 20_000)
 
-test.concurrent('separate updater and source workers can be abandoned together without holding the foreground open', async () => {
-  const harness = await workerHarness()
+test.concurrent('combined worker loads the project once and reports both checks independently', async () => {
+  const harness = await workerHarness(combinedWorkerUrl)
+  const { project, requests } = harness
+  installUpdater(project)
+  const configLoaded = join(project.dir, 'config-loaded')
+  write(join(project.dir, 'capacitor.config.js'), `
+    require('node:fs').appendFileSync(${JSON.stringify(configLoaded)}, '1')
+    module.exports = ${JSON.stringify(project.config)}
+  `)
+  try {
+    await harness.run()
+    assert.equal(readFileSync(configLoaded, 'utf8'), '1', 'project config should load only once')
+    const sourceRequests = requests.filter(request => request.body.channel === 'notify-app-ready')
+    const updaterRequests = requests.filter(request => request.body.channel === 'updater-installed')
+    const sourceAttempt = scanEvents(sourceRequests, 'found', 'success')
+    const updaterAttempt = scanEvents(updaterRequests, 'found', 'success', 'updater-installed')
+    assert.notEqual(sourceAttempt, updaterAttempt)
+    assert.deepEqual(requests.filter(request => request.method === 'PUT').map(request => request.body).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))), [
+      { onboarding: { steps: { add_code: { status: 'done' } } } },
+      { onboarding: { steps: { add_updater: { status: 'done' } } } },
+    ])
+  }
+  finally {
+    harness.close()
+  }
+}, 20_000)
+
+test.concurrent('combined worker and its scan workers can be abandoned without holding the foreground open', async () => {
+  const harness = await workerHarness(combinedWorkerUrl)
   installUpdater(harness.project)
   harness.behavior.events = 'hang'
   const channels = new Set()
@@ -568,21 +596,15 @@ test.concurrent('separate updater and source workers can be abandoned together w
   const dir = fixture()
   write(join(dir, 'package.json'), { type: 'module' })
   const build = await Bun.build({
-    entrypoints: [
-      fileURLToPath(new URL('../src/notify-app-ready-background.ts', import.meta.url)),
-      fileURLToPath(new URL('../src/updater-installed-background.ts', import.meta.url)),
-    ],
+    entrypoints: [fileURLToPath(new URL('../src/onboarding/background.ts', import.meta.url))],
     outdir: dir, target: 'node', format: 'esm',
   })
   assert.equal(build.success, true)
-  write(join(dir, 'notify-app-ready-worker.js'), `import ${JSON.stringify(workerUrl.href)}`)
-  write(join(dir, 'updater-installed-worker.js'), `import ${JSON.stringify(updaterWorkerUrl.href)}`)
+  write(join(dir, 'onboarding-worker.js'), `import ${JSON.stringify(combinedWorkerUrl.href)}`)
   write(join(dir, 'run.mjs'), `
-    import { startNotifyAppReadyCheck } from './notify-app-ready-background.js'
-    import { startUpdaterInstalledCheck } from './updater-installed-background.js'
+    import { startOnboardingChecks } from './background.js'
     const command = { optsWithGlobals: () => ({ apikey: 'fake-api-key' }), registeredArguments: [], args: [] }
-    startNotifyAppReadyCheck(command, 'app list')
-    startUpdaterInstalledCheck(command, 'app list')
+    startOnboardingChecks(command, 'app list')
     process.stdin.resume()
     process.stdin.once('end', () => console.log('foreground-finished'))
   `)

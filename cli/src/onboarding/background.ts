@@ -8,6 +8,7 @@ export interface OnboardingCheckOptions {
   cwd: string
   command: string
   attemptId?: string
+  attemptIds?: string[]
   appId?: string
   apikey?: string
   capacitorConfig?: string
@@ -17,7 +18,7 @@ export interface OnboardingCheckOptions {
   supaAnon?: string
 }
 
-export function startOnboardingCheck(command: Command, commandPath: string, workerUrl: URL): void {
+export function startOnboardingCheck(command: Command, commandPath: string, workerUrl: URL, attemptIds?: string[]): void {
   try {
     const options = command.optsWithGlobals()
     const argument = (name: string) => {
@@ -25,11 +26,12 @@ export function startOnboardingCheck(command: Command, commandPath: string, work
       return index < 0 ? undefined : command.args[index]
     }
     const text = (value: unknown) => typeof value === 'string' ? value : undefined
-    const attemptId = randomUUID()
+    const attemptId = attemptIds?.[0] ?? randomUUID()
     const workerData: OnboardingCheckOptions = {
       cwd: cwd(),
       command: commandPath,
       attemptId,
+      attemptIds,
       appId: text(options.appId) ?? argument('appId'),
       apikey: text(options.apikey) ?? argument('apikey'),
       capacitorConfig: text(options.capacitorConfig),
@@ -44,11 +46,15 @@ export function startOnboardingCheck(command: Command, commandPath: string, work
     worker.stdout?.destroy()
     worker.stderr?.destroy()
     worker.on('error', () => {})
-    registerOnboardingCheck(worker, attemptId)
+    registerOnboardingCheck(worker, attemptIds ?? [attemptId])
     // Both detection and reporting can be abandoned when the command exits.
     worker.unref()
   }
   catch {
     // Optional onboarding detection must never affect the requested command.
   }
+}
+
+export function startOnboardingChecks(command: Command, commandPath: string): void {
+  startOnboardingCheck(command, commandPath, new URL('./onboarding-worker.js', import.meta.url), [randomUUID(), randomUUID()])
 }

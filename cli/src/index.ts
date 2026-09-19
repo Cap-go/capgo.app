@@ -53,7 +53,7 @@ import { createKey, deleteOldKey, saveKeyCommand } from './key'
 import { login } from './login'
 import { startMcpServer } from './mcp/server'
 import { setupNotifications } from './notifications/setup'
-import { startNotifyAppReadyCheck } from './notify-app-ready-background'
+import { startOnboardingChecks } from './onboarding/background'
 import { waitForOnboardingChecks } from './onboarding/background-shutdown'
 import { type ObserveCliOptions, observeCommand } from './observe/command'
 import { addOrganization, deleteOrganization, listMembers, listOrganizations, setOrganization } from './organization'
@@ -63,7 +63,6 @@ import { probe } from './probe'
 import { testRunDeviceCommand } from './run/device'
 import { CliUserError } from './shared/cli-user-error'
 import { TwoFactorComplianceNetworkError } from './shared/two-factor-compliance'
-import { startUpdaterInstalledCheck } from './updater-installed-background'
 import { whoami } from './user/whoami'
 import { formatError } from './utils'
 import { normalizeAutoBumpInput } from './versionHelpers'
@@ -106,8 +105,7 @@ program.hook('preAction', (_thisCommand, actionCommand) => {
   currentActionCommand = actionCommand
   setCurrentCliCommand(currentCommandPath)
   applyCommandAnalyticsOptOut(currentCommandPath, actionCommand.opts())
-  startNotifyAppReadyCheck(actionCommand, currentCommandPath)
-  startUpdaterInstalledCheck(actionCommand, currentCommandPath)
+  startOnboardingChecks(actionCommand, currentCommandPath)
   const commandContext = extractCommandContext(actionCommand)
   if (currentCommandPath === 'login' || currentCommandPath === 'init')
     deferCommandInvocation(currentCommandPath, commandContext)
