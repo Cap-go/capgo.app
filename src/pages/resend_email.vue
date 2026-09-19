@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { setErrors } from '@formkit/core'
 import { FormKit, FormKitMessages } from '@formkit/vue'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -25,12 +25,17 @@ const resendCaptchaToken = ref('')
 const resendCaptchaRef = ref<InstanceType<typeof VueTurnstile> | null>(null)
 const resendCaptchaStatus = ref<'disabled' | 'loading' | 'ready' | 'unavailable'>(import.meta.env.VITE_CAPTCHA_KEY ? 'loading' : 'disabled')
 let resendCaptchaInitTimeout: ReturnType<typeof setTimeout> | null = null
-const isLoadingMain = ref(false)
+const isLoadingMain = ref(route.query.reason === 'email_not_verified')
+const otpStep = ref<'send' | 'verify'>('send')
+const otpHasSentCode = ref(false)
 const otpSending = ref(false)
 const otpSendError = ref('')
 const otpSendCooldownSeconds = ref(0)
 const otpCaptchaToken = ref('')
 const otpCaptchaRef = ref<InstanceType<typeof VueTurnstile> | null>(null)
+const otpCaptchaUnavailable = ref(false)
+const otpCaptchaRetryKey = ref(0)
+let otpCaptchaInitTimeout: ReturnType<typeof setTimeout> | null = null
 const otpVerificationCode = ref('')
 const otpVerificationLoading = ref(false)
 let otpSendCooldownTimer: ReturnType<typeof setInterval> | null = null
@@ -42,8 +47,60 @@ const rawReturnToQuery = computed(() => typeof route.query.return_to === 'string
 const returnTo = computed(() => validateRedirectPath(rawReturnToQuery.value, '/settings/account'))
 const attemptedDestination = computed(() => validateRedirectPath(rawReturnToQuery.value, rawReturnToQuery.value))
 const usesEmailOtpFlow = computed(() => emailVerificationBlockingReason.value && !!currentUserId.value && !!currentUserEmail.value)
-const otpSendDisabled = computed(() => otpSending.value || otpSendCooldownSeconds.value > 0)
+const otpSendDisabled = computed(() => otpSending.value || otpSendCooldownSeconds.value > 0 || (!!captchaKey.value && !otpCaptchaToken.value))
 const shouldBlockForResendCaptcha = computed(() => !!captchaKey.value && resendCaptchaStatus.value === 'loading' && !resendCaptchaToken.value)
+
+watch(otpStep, async (step) => {
+  if (step === 'send') {
+    otpCaptchaToken.value = ''
+    otpCaptchaUnavailable.value = false
+    otpSendError.value = ''
+    return
+  }
+  await nextTick()
+  document.getElementById('email-verification-code')?.focus()
+})
+
+function clearOtpCaptchaInitTimeout() {
+  if (otpCaptchaInitTimeout) {
+    clearTimeout(otpCaptchaInitTimeout)
+    otpCaptchaInitTimeout = null
+  }
+}
+
+function handleOtpCaptchaUnavailable() {
+  otpCaptchaToken.value = ''
+  otpCaptchaUnavailable.value = true
+  clearOtpCaptchaInitTimeout()
+}
+
+watch(otpCaptchaRef, (widget) => {
+  clearOtpCaptchaInitTimeout()
+  if (!widget || !captchaKey.value)
+    return
+  otpCaptchaInitTimeout = setTimeout(() => {
+    if (!otpCaptchaToken.value && !(globalThis as typeof globalThis & { turnstile?: unknown }).turnstile)
+      handleOtpCaptchaUnavailable()
+  }, 8000)
+})
+
+watch(otpCaptchaToken, (token) => {
+  if (token) {
+    otpCaptchaUnavailable.value = false
+    clearOtpCaptchaInitTimeout()
+  }
+}, { flush: 'sync' })
+
+function retryOtpCaptcha() {
+  if (!(globalThis as typeof globalThis & { turnstile?: unknown }).turnstile) {
+    // The library retains a failed script load until the page reloads.
+    window.location.reload()
+    return
+  }
+  otpCaptchaToken.value = ''
+  otpCaptchaUnavailable.value = false
+  otpCaptchaRetryKey.value += 1
+}
 
 function clearResendCaptchaInitTimeout() {
   if (resendCaptchaInitTimeout) {
@@ -182,30 +239,45 @@ async function sendOtpCode() {
 
   otpSending.value = true
   otpSendError.value = ''
-  const { error } = await sendEmailOtpVerification(supabase, currentUserEmail.value, otpCaptchaToken.value)
-  otpSending.value = false
-  resetOtpCaptcha()
+  try {
+    const { error } = await sendEmailOtpVerification(supabase, currentUserEmail.value, otpCaptchaToken.value)
+    if (error) {
+      const parsed = parseEmailOtpSendError(error)
+      const message = parsed
+        ? getEmailOtpSendErrorMessage(parsed, t)
+        : t('email-otp-send-failed')
+      otpSendError.value = message
+      toast.error(message)
+      console.error('Cannot send email OTP', error)
 
-  if (error) {
-    const parsed = parseEmailOtpSendError(error)
-    const message = parsed
-      ? getEmailOtpSendErrorMessage(parsed, t)
-      : t('email-otp-send-failed')
-    otpSendError.value = message
-    toast.error(message)
+      if (parsed?.kind === 'rate_limit')
+        startOtpSendCooldown(parsed.waitSeconds ?? 60)
+
+      return
+    }
+
+    otpHasSentCode.value = true
+    otpVerificationCode.value = ''
+    otpStep.value = 'verify'
+    toast.success(t('email-otp-sent'))
+  }
+  catch (error) {
+    otpSendError.value = t('email-otp-send-failed')
+    toast.error(otpSendError.value)
     console.error('Cannot send email OTP', error)
-
-    if (parsed?.kind === 'rate_limit')
-      startOtpSendCooldown(parsed.waitSeconds ?? 60)
-
     return
   }
-
-  toast.success(t('email-otp-sent'))
+  finally {
+    otpSending.value = false
+    resetOtpCaptcha()
+  }
 }
 
-async function verifyOtpCode() {
-  const token = otpVerificationCode.value.replaceAll(' ', '')
+async function verifyOtpCode(form: { email_otp: string }) {
+  if (otpStep.value !== 'verify')
+    return
+
+  const token = form.email_otp.replaceAll(' ', '')
   if (!token) {
     toast.error(t('email-otp-code-required'))
     return
@@ -214,16 +286,24 @@ async function verifyOtpCode() {
     return
 
   otpVerificationLoading.value = true
-  const { data, error } = await verifyEmailOtp(supabase, token)
-  otpVerificationLoading.value = false
+  try {
+    const { data, error } = await verifyEmailOtp(supabase, token)
 
-  if (error || !data?.verified_at) {
+    if (error || !data?.verified_at) {
+      toast.error(t('verification-failed'))
+      console.error('Cannot verify email OTP', error)
+      return
+    }
+
+    await router.replace(returnTo.value || '/settings/account')
+  }
+  catch (error) {
     toast.error(t('verification-failed'))
     console.error('Cannot verify email OTP', error)
-    return
   }
-
-  await router.replace(returnTo.value || '/settings/account')
+  finally {
+    otpVerificationLoading.value = false
+  }
 }
 
 onMounted(async () => {
@@ -231,6 +311,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  clearOtpCaptchaInitTimeout()
   clearResendCaptchaInitTimeout()
   clearOtpSendCooldownTimer()
 })
@@ -239,8 +320,8 @@ onBeforeUnmount(() => {
 <template>
   <AuthPageShell
     card-width-class="max-w-md"
-    :card-kicker="t('resend')"
-    :card-title="t('resend-email')"
+    :card-kicker="emailVerificationBlockingReason ? t('email') : t('resend')"
+    :card-title="emailVerificationBlockingReason ? t('email-verification-title') : t('resend-email')"
   >
     <div v-if="isLoadingMain" class="flex justify-center py-10">
       <Spinner size="w-14 h-14" class="my-auto" />
@@ -267,79 +348,117 @@ onBeforeUnmount(() => {
           <p class="mb-1 font-medium text-slate-700 dark:text-slate-100">
             {{ currentUserEmail }}
           </p>
-          <p class="text-xs leading-5">
-            {{ t('email-otp-code-required') }}
+          <p class="text-xs leading-5" :role="otpStep === 'verify' ? 'status' : undefined">
+            {{ otpStep === 'verify' ? t('email-otp-enter-description') : t('email-otp-send-description') }}
           </p>
         </div>
 
-        <div v-if="captchaKey" class="space-y-2">
-          <p class="text-sm font-medium text-slate-700 dark:text-slate-100">
-            {{ t('captcha') }}
+        <template v-if="otpStep === 'send'">
+          <div v-if="captchaKey" class="space-y-2">
+            <p class="text-sm font-medium text-slate-700 dark:text-slate-100">
+              {{ t('captcha') }}
+            </p>
+            <VueTurnstile
+              :key="otpCaptchaRetryKey"
+              ref="otpCaptchaRef"
+              v-model="otpCaptchaToken"
+              size="flexible"
+              :site-key="captchaKey"
+              @error="handleOtpCaptchaUnavailable"
+              @unsupported="handleOtpCaptchaUnavailable"
+              @expired="otpCaptchaToken = ''"
+            />
+            <template v-if="otpCaptchaUnavailable">
+              <p class="text-xs leading-5 text-amber-700 dark:text-amber-300" role="status">
+                {{ t('captcha-unavailable') }}
+              </p>
+              <button type="button" :class="authGhostButtonClass" :disabled="otpSending" @click="retryOtpCaptcha">
+                {{ t('retry') }}
+              </button>
+            </template>
+          </div>
+
+          <p
+            v-if="otpSendError"
+            class="text-sm text-red-600 dark:text-red-400"
+            role="alert"
+          >
+            {{ otpSendError }}
           </p>
-          <VueTurnstile
-            ref="otpCaptchaRef"
-            v-model="otpCaptchaToken"
-            size="flexible"
-            :site-key="captchaKey"
-          />
-        </div>
+          <p
+            v-if="otpSendCooldownSeconds > 0"
+            class="text-sm text-amber-700 dark:text-amber-300"
+            role="status"
+          >
+            {{ t('email-otp-rate-limit-countdown', { seconds: otpSendCooldownSeconds }) }}
+          </p>
 
-        <p
-          v-if="otpSendError"
-          class="text-sm text-red-600 dark:text-red-400"
-          role="alert"
-        >
-          {{ otpSendError }}
-        </p>
-        <p
-          v-if="otpSendCooldownSeconds > 0"
-          class="text-sm text-amber-700 dark:text-amber-300"
-          role="status"
-        >
-          {{ t('email-otp-rate-limit-countdown', { seconds: otpSendCooldownSeconds }) }}
-        </p>
+          <button
+            type="button"
+            :class="authPrimaryButtonClass"
+            :disabled="otpSendDisabled || otpVerificationLoading"
+            :aria-busy="otpSending ? 'true' : 'false'"
+            @click="sendOtpCode"
+          >
+            <svg v-if="otpSending" class="inline-block mr-1 h-5 w-5 animate-spin align-middle text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+            {{
+              otpSendCooldownSeconds > 0
+                ? t('email-otp-send-wait', { seconds: otpSendCooldownSeconds })
+                : t('email-otp-send-code')
+            }}
+          </button>
 
-        <button
-          type="button"
-          :class="authPrimaryButtonClass"
-          :disabled="otpSendDisabled || otpVerificationLoading"
-          :aria-busy="otpSending ? 'true' : 'false'"
-          @click="sendOtpCode"
-        >
-          <svg v-if="otpSending" class="inline-block mr-1 h-5 w-5 animate-spin align-middle text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-          </svg>
-          {{
-            otpSendCooldownSeconds > 0
-              ? t('email-otp-send-wait', { seconds: otpSendCooldownSeconds })
-              : t('email-otp-send-code')
-          }}
-        </button>
+          <button
+            v-if="otpHasSentCode"
+            type="button"
+            :class="authGhostButtonClass"
+            :disabled="otpSending"
+            @click="otpStep = 'verify'"
+          >
+            {{ t('email-otp-back-to-code') }}
+          </button>
+        </template>
 
-        <FormKit
-          v-model="otpVerificationCode"
-          type="text"
-          name="email_otp"
-          :label="t('email-otp-code-required')"
-          inputmode="numeric"
-          autocomplete="one-time-code"
-          validation="required:trim|length:6"
-        />
+        <FormKit v-if="otpHasSentCode" v-show="otpStep === 'verify'" id="verify-email-otp" type="form" :actions="false" @submit="verifyOtpCode">
+          <div class="space-y-5">
+            <FormKit
+              id="email-verification-code"
+              v-model="otpVerificationCode"
+              type="text"
+              name="email_otp"
+              :label="t('email-otp-code-required')"
+              :disabled="otpVerificationLoading"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              validation="required:trim|length:6"
+            />
 
-        <button
-          type="button"
-          :class="authPrimaryButtonClass"
-          :disabled="otpVerificationLoading || otpSending"
-          :aria-busy="otpVerificationLoading ? 'true' : 'false'"
-          @click="verifyOtpCode"
-        >
-          <svg v-if="otpVerificationLoading" class="inline-block mr-1 h-5 w-5 animate-spin align-middle text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-          </svg>
-          {{ t('validate-email') }}
-        </button>
+            <button
+              type="submit"
+              :class="authPrimaryButtonClass"
+              :disabled="otpVerificationLoading || otpSending"
+              :aria-busy="otpVerificationLoading ? 'true' : 'false'"
+            >
+              <svg v-if="otpVerificationLoading" class="inline-block mr-1 h-5 w-5 animate-spin align-middle text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+              </svg>
+              {{ t('validate-email') }}
+            </button>
+
+            <button
+              type="button"
+              :class="authGhostButtonClass"
+              :disabled="otpVerificationLoading"
+              @click="otpStep = 'send'"
+            >
+              {{ t('email-otp-resend-code') }}
+            </button>
+          </div>
+        </FormKit>
 
         <div :class="authPanelClass">
           <router-link to="/login" class="text-sm font-semibold text-[rgb(255,114,17)] transition-colors duration-200 hover:text-[rgb(235,94,0)]">

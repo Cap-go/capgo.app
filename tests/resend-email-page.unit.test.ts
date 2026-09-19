@@ -72,7 +72,7 @@ const inputs = new Map<string, FormKitNode>()
 async function mountPage() {
   const app = createApp(ResendEmailPage)
   app.use(plugin, defaultConfig({
-    config: { delay: 0 },
+    config: { delay: 20 },
     plugins: [(node) => { inputs.set(node.name, node) }],
   }))
   app.use(createI18n({ legacy: false, locale: 'en', messages: { en: messages } }))
@@ -108,6 +108,19 @@ function button(container: HTMLElement, text: string) {
   return Array.from(container.querySelectorAll('button')).find(button => button.textContent?.trim() === text)!
 }
 
+async function mountOtpPage() {
+  mocks.route.query = { reason: 'email_not_verified', return_to: '/settings/account' }
+  mocks.getSession.mockResolvedValue({ data: { session: { user: { id: 'test-user', email: 'confirmation-test@example.com' } } } })
+  return mountPage()
+}
+
+async function sendOtp(container: HTMLElement) {
+  if (container.querySelector('[data-test="captcha"]'))
+    await completeCaptcha(container)
+  button(container, messages['email-otp-send-code']).click()
+  await vi.waitFor(() => expect(container.querySelector('input[autocomplete="one-time-code"]')).not.toBeNull())
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('VITE_CAPTCHA_KEY', 'test-site-key')
@@ -118,6 +131,196 @@ beforeEach(() => {
   mocks.getRecentEmailOtpVerification.mockResolvedValue({ isVerified: false })
   mocks.sendEmailOtpVerification.mockResolvedValue({ error: null })
   mocks.verifyEmailOtp.mockResolvedValue({ data: { verified_at: new Date().toISOString() }, error: null })
+})
+
+describe('progressive email verification', () => {
+  it.each(['error', 'unsupported'])('explains CAPTCHA %s and retries with a fresh widget without bypassing the challenge', async (event) => {
+    vi.stubGlobal('turnstile', {})
+    const container = await mountOtpPage()
+    await completeCaptcha(container)
+    const originalWidget = container.querySelector('[data-test="captcha"]')
+    button(container, `CAPTCHA ${event}`).click()
+    await nextTick()
+    expect(container.textContent).toContain(messages['captcha-unavailable'])
+    expect(button(container, messages['email-otp-send-code']).disabled).toBe(true)
+    expect(container.querySelector<HTMLInputElement>('[data-test="captcha"]')?.value).toBe('')
+    expect(container.querySelector('input[autocomplete="one-time-code"]')).toBeNull()
+
+    button(container, messages.retry).click()
+    await nextTick()
+    expect(originalWidget?.isConnected).toBe(false)
+    expect(container.textContent).not.toContain(messages['captcha-unavailable'])
+    expect(button(container, messages['email-otp-send-code']).disabled).toBe(true)
+    expect(mocks.sendEmailOtpVerification).not.toHaveBeenCalled()
+    await sendOtp(container)
+    expect(mocks.sendEmailOtpVerification).toHaveBeenCalledOnce()
+  })
+
+  it('offers a page reload when the OTP CAPTCHA script never initializes', async () => {
+    const reload = vi.spyOn(window.location, 'reload').mockImplementation(() => {})
+    vi.useFakeTimers()
+    const container = await mountOtpPage()
+    await vi.advanceTimersByTimeAsync(8000)
+    await nextTick()
+    expect(container.textContent).toContain(messages['captcha-unavailable'])
+    expect(button(container, messages['email-otp-send-code']).disabled).toBe(true)
+    button(container, messages.retry).click()
+    expect(reload).toHaveBeenCalledOnce()
+    expect(mocks.sendEmailOtpVerification).not.toHaveBeenCalled()
+    reload.mockRestore()
+  })
+
+  it('clears the OTP CAPTCHA unavailable message if the widget recovers automatically', async () => {
+    const container = await mountOtpPage()
+    button(container, 'CAPTCHA error').click()
+    await nextTick()
+    expect(container.textContent).toContain(messages['captcha-unavailable'])
+    await completeCaptcha(container, 'recovered-captcha-token')
+    expect(container.textContent).not.toContain(messages['captcha-unavailable'])
+    expect(button(container, messages['email-otp-send-code']).disabled).toBe(false)
+  })
+
+  it('shows only the send step until the server confirms a code was sent', async () => {
+    let finishSend!: (result: { error: null }) => void
+    mocks.sendEmailOtpVerification.mockImplementationOnce(() => new Promise(resolve => finishSend = resolve))
+    const container = await mountOtpPage()
+
+    expect(container.querySelector('input[autocomplete="one-time-code"]')).toBeNull()
+    expect(container.textContent).not.toContain(messages['validate-email'])
+    expect(container.textContent).toContain(messages['email-otp-send-description'])
+    expect(button(container, messages['email-otp-send-code']).disabled).toBe(true)
+
+    await completeCaptcha(container)
+    button(container, messages['email-otp-send-code']).click()
+    await nextTick()
+    expect(mocks.sendEmailOtpVerification).toHaveBeenCalledOnce()
+    expect(container.querySelector('input[autocomplete="one-time-code"]')).toBeNull()
+    expect(button(container, messages['email-otp-send-code']).disabled).toBe(true)
+
+    finishSend({ error: null })
+    await vi.waitFor(() => expect(document.activeElement?.id).toBe('email-verification-code'))
+    expect(container.querySelector('[data-test="captcha"]')).toBeNull()
+    expect(container.textContent).not.toContain(messages['email-otp-send-code'])
+    expect(container.textContent).toContain(messages['email-otp-enter-description'])
+    expect(button(container, messages['validate-email'])).toBeDefined()
+  })
+
+  it.each([
+    { code: 'captcha_failed', message: 'Captcha verification failed', status: 400 },
+    { code: 'unexpected_failure', message: 'Unable to send', status: 500 },
+    { code: 'over_email_send_rate_limit', message: 'Try after 2 seconds', status: 429 },
+  ])('stays on the send step after $code', async (error) => {
+    mocks.sendEmailOtpVerification.mockResolvedValueOnce({ error })
+    const container = await mountOtpPage()
+    await completeCaptcha(container)
+    button(container, messages['email-otp-send-code']).click()
+    await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull())
+
+    expect(container.querySelector('input[autocomplete="one-time-code"]')).toBeNull()
+    expect(container.querySelector<HTMLInputElement>('[data-test="captcha"]')?.value).toBe('')
+    expect(mocks.resetCaptcha).toHaveBeenCalledOnce()
+    expect(mocks.verifyEmailOtp).not.toHaveBeenCalled()
+  })
+
+  it('requires a fresh challenge after the rate-limit countdown before retrying', async () => {
+    vi.useFakeTimers()
+    mocks.sendEmailOtpVerification.mockResolvedValueOnce({ error: {
+      code: 'over_email_send_rate_limit',
+      message: 'Try after 2 seconds',
+      status: 429,
+    } })
+    const container = await mountOtpPage()
+    await completeCaptcha(container)
+    button(container, messages['email-otp-send-code']).click()
+    await vi.waitFor(() => expect(container.textContent).toContain('Wait 2 seconds'))
+    await vi.advanceTimersByTimeAsync(2000)
+    await nextTick()
+    expect(container.textContent).not.toContain('Wait 2 seconds')
+    expect(button(container, messages['email-otp-send-code']).disabled).toBe(true)
+    vi.useRealTimers()
+    await sendOtp(container)
+    expect(mocks.sendEmailOtpVerification).toHaveBeenCalledTimes(2)
+  })
+
+  it('recovers from a thrown send error without advancing or leaving sending stuck', async () => {
+    mocks.sendEmailOtpVerification.mockRejectedValueOnce(new Error('Network unavailable'))
+    const container = await mountOtpPage()
+    await completeCaptcha(container)
+    button(container, messages['email-otp-send-code']).click()
+    await vi.waitFor(() => expect(container.textContent).toContain(messages['email-otp-send-failed']))
+
+    expect(container.querySelector('input[autocomplete="one-time-code"]')).toBeNull()
+    expect(button(container, messages['email-otp-send-code']).getAttribute('aria-busy')).toBe('false')
+    await sendOtp(container)
+    expect(mocks.sendEmailOtpVerification).toHaveBeenCalledTimes(2)
+  })
+
+  it('also progresses when CAPTCHA is disabled', async () => {
+    vi.stubEnv('VITE_CAPTCHA_KEY', '')
+    const container = await mountOtpPage()
+    expect(button(container, messages['email-otp-send-code']).disabled).toBe(false)
+    expect(container.querySelector('input[autocomplete="one-time-code"]')).toBeNull()
+    await sendOtp(container)
+    expect(mocks.sendEmailOtpVerification).toHaveBeenCalledWith(expect.anything(), 'confirmation-test@example.com', '')
+  })
+
+  it('requires a fresh CAPTCHA to resend and preserves the previous code when going back', async () => {
+    const container = await mountOtpPage()
+    await sendOtp(container)
+    await inputs.get('email_otp')!.input('123456')
+    button(container, messages['email-otp-resend-code']).click()
+    await nextTick()
+    expect(container.querySelector<HTMLElement>('form#verify-email-otp')?.style.display).toBe('none')
+    expect(button(container, messages['email-otp-send-code']).disabled).toBe(true)
+    button(container, messages['email-otp-back-to-code']).click()
+    await nextTick()
+    expect(container.querySelector<HTMLInputElement>('input[autocomplete="one-time-code"]')?.value).toBe('123456')
+
+    button(container, messages['email-otp-resend-code']).click()
+    await nextTick()
+    await sendOtp(container)
+    expect(mocks.sendEmailOtpVerification).toHaveBeenCalledTimes(2)
+    expect(container.querySelector<HTMLInputElement>('input[autocomplete="one-time-code"]')?.value).toBe('')
+  })
+
+  it('keeps code entry available after an invalid code, then accepts a retry', async () => {
+    mocks.verifyEmailOtp.mockResolvedValueOnce({ data: null, error: new Error('Invalid code') })
+    const container = await mountOtpPage()
+    await sendOtp(container)
+    await inputs.get('email_otp')!.input('000000')
+    button(container, messages['validate-email']).click()
+    await vi.waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith(messages['verification-failed']))
+    expect(container.querySelector('input[autocomplete="one-time-code"]')).not.toBeNull()
+    expect(container.querySelector('[data-test="captcha"]')).toBeNull()
+    expect(mocks.router.replace).not.toHaveBeenCalled()
+
+    await inputs.get('email_otp')!.input('123456')
+    button(container, messages['validate-email']).click()
+    await vi.waitFor(() => expect(mocks.router.replace).toHaveBeenCalledWith('/settings/account'))
+  })
+
+  it('keeps newly typed digits when immediately opening resend and returning to code entry', async () => {
+    const container = await mountOtpPage()
+    await sendOtp(container)
+    const input = container.querySelector<HTMLInputElement>('input[autocomplete="one-time-code"]')!
+    input.value = '123456'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    button(container, messages['email-otp-resend-code']).click()
+    await nextTick()
+    button(container, messages['email-otp-back-to-code']).click()
+    await nextTick()
+    expect(container.querySelector<HTMLInputElement>('input[autocomplete="one-time-code"]')?.value).toBe('123456')
+  })
+
+  it('disables sending again when the challenge expires', async () => {
+    const container = await mountOtpPage()
+    await completeCaptcha(container)
+    expect(button(container, messages['email-otp-send-code']).disabled).toBe(false)
+    button(container, 'CAPTCHA expired').click()
+    await nextTick()
+    expect(button(container, messages['email-otp-send-code']).disabled).toBe(true)
+    expect(container.querySelector('input[autocomplete="one-time-code"]')).toBeNull()
+  })
 })
 
 afterEach(() => {
@@ -315,6 +518,7 @@ describe('email confirmation CAPTCHA', () => {
     button(container, messages['email-otp-send-code']).click()
     await vi.waitFor(() => expect(mocks.sendEmailOtpVerification).toHaveBeenCalledWith(expect.anything(), 'confirmation-test@example.com', 'test-captcha-token'))
     expect(mocks.resetCaptcha).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(container.querySelector('input[autocomplete="one-time-code"]')).not.toBeNull())
 
     await inputs.get('email_otp')!.input('123456')
     await nextTick()

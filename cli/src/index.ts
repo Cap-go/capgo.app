@@ -65,7 +65,7 @@ import { testRunDeviceCommand } from './run/device'
 import { CliUserError } from './shared/cli-user-error'
 import { TwoFactorComplianceNetworkError } from './shared/two-factor-compliance'
 import { startUpdaterInstalledCheck } from './updater-installed-background'
-import { getUserId } from './user/account'
+import { whoami } from './user/whoami'
 import { formatError } from './utils'
 import { normalizeAutoBumpInput } from './versionHelpers'
 
@@ -714,11 +714,12 @@ const account = program
   .command('account')
   .description(`👤 Manage your Capgo account details and retrieve information for support or collaboration.`)
 
-account.command('id')
-  .description(`🪪 Retrieve your account ID, safe to share for collaboration or support purposes in Discord or other platforms.
+account.command('whoami')
+  .alias('id')
+  .description(`🪪 Retrieve your account ID and email address.
 
-Example: npx @capgo/cli@latest account id`)
-  .action(getUserId)
+Example: npx @capgo/cli@latest account whoami`)
+  .action(whoami)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
 
 const organization = program
