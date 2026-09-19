@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { cwd } from 'node:process'
 import vue from '@vitejs/plugin-vue'
@@ -9,6 +10,15 @@ const rawIconId = '\0vitest-raw-icon'
 
 export default defineConfig(({ mode }) => ({
   plugins: [
+    {
+      name: 'vitest-auth-email-html',
+      enforce: 'pre',
+      async load(id) {
+        if (!id.includes('/cloudflare_workers/api/email_templates/') || !id.endsWith('.html'))
+          return null
+        return `export default ${JSON.stringify(await readFile(id, 'utf8'))}`
+      },
+    },
     {
       name: 'vitest-raw-icon',
       enforce: 'pre',
