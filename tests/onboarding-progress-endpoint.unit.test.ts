@@ -21,9 +21,10 @@ const mocks = vi.hoisted(() => ({
   archive: [] as any[],
   errors: {} as Record<string, boolean>,
   queries: [] as any[],
+  auth: { authType: 'jwt', userId: '11111111-1111-4111-8111-111111111111', jwt: 'fixture', apikey: null } as any,
 }))
 vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', () => ({ middlewareAuth: () => async (c: Context<MiddlewareKeyVariables>, next: () => Promise<void>) => {
-  c.set('auth', { authType: 'jwt', userId: '11111111-1111-4111-8111-111111111111', jwt: 'fixture', apikey: null })
+  c.set('auth', mocks.auth)
   await next()
 } }))
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({ checkPermission: mocks.permission, checkPermissionPg: mocks.permissionPg }))
@@ -68,6 +69,7 @@ describe('onboarding progress endpoint', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.row = { onboarding: { setup: { todo_list_version: 3, steps: {} } }, created_at: '2026-09-16T00:00:00Z' }
+    mocks.auth = { authType: 'jwt', userId: '11111111-1111-4111-8111-111111111111', jwt: 'fixture', apikey: null }
     mocks.channels = []
     mocks.versions = []
     mocks.archive = []
@@ -116,6 +118,39 @@ describe('onboarding progress endpoint', () => {
     expect(mocks.devices).not.toHaveBeenCalled()
     expect(mocks.logs).not.toHaveBeenCalled()
     expect(mocks.from).not.toHaveBeenCalledWith('app_versions')
+    expect(mocks.execute).not.toHaveBeenCalled()
+  })
+  it('returns v3 CLI start as done in the same API-key request with read-only app access', async () => {
+    mocks.auth = { authType: 'apikey', userId: 'other-user', apikey: { key: null } }
+    mocks.row.onboarding = { created_by_user_id: 'creator', setup: { todo_list_version: 3, source: 'ai', steps: {} } }
+    lockedRow(mocks.row.onboarding)
+    mocks.permissionPg.mockResolvedValue(false)
+
+    const response = await request(4)
+    const result = await response.json() as any
+    expect(result.onboarding.setup.steps.login_cli_mcp.status).toBe('done')
+    expect(Object.keys(result.onboarding.setup.steps)).toEqual(['login_cli_mcp'])
+    expect(result.onboarding.setup.source).toBe('cli')
+    expect(mocks.permission).toHaveBeenCalledWith(expect.anything(), 'app.read', { appId: 'com.test.onboarding' })
+    expect(mocks.permissionPg).not.toHaveBeenCalled()
+    expect(mocks.execute).toHaveBeenCalledTimes(5)
+  })
+  it('does not mark CLI start for JWT requests or an API key without app.read', async () => {
+    mocks.row.onboarding = { created_by_user_id: 'creator', setup: { todo_list_version: 3, steps: {} } }
+    expect(((await (await request(4)).json()) as any).onboarding).toEqual(mocks.row.onboarding)
+    expect(mocks.execute).not.toHaveBeenCalled()
+
+    mocks.auth = { authType: 'apikey', userId: 'other-user', apikey: { key: 'other-key' } }
+    mocks.from.mockClear()
+    mocks.permission.mockResolvedValue(false)
+    expect((await request(4)).status).toBe(403)
+    expect(mocks.from).not.toHaveBeenCalled()
+    expect(mocks.execute).not.toHaveBeenCalled()
+
+    mocks.auth = { authType: 'apikey', userId: 'creator', apikey: { key: 'creator-key' } }
+    mocks.permission.mockResolvedValue(true)
+    mocks.row.onboarding.setup.todo_list_version = 2
+    expect(((await (await request(4)).json()) as any).onboarding).toEqual(mocks.row.onboarding)
     expect(mocks.execute).not.toHaveBeenCalled()
   })
   it('does not expose app existence or logs/devices without permission', async () => {

@@ -201,10 +201,10 @@ function emitCommandInvoked(commandPath: string, ctx: CommandContext, apikey?: s
   })
 }
 
-export function trackCommandInvoked(commandPath: string, ctx: CommandContext): void {
+export function trackCommandInvoked(commandPath: string, ctx: CommandContext, apikey?: string): void {
   commandStartedAt = Date.now()
   currentCommandPath = commandPath
-  emitCommandInvoked(commandPath, ctx)
+  emitCommandInvoked(commandPath, ctx, apikey)
 }
 
 export function deferCommandInvocation(commandPath: string, ctx: CommandContext): void {
