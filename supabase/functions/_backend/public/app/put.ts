@@ -14,6 +14,7 @@ import { createIfNotExistStoreInfo } from '../../utils/cloudflare.ts'
 import { lockOnboardingApp, unlockOnboardingApp } from '../../utils/demo.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
+import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent } from '../../utils/org_onboarding_intent.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
 import { apps } from '../../utils/postgres_schema.ts'
 import { trackPosthogEvent } from '../../utils/posthog.ts'
@@ -374,7 +375,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
   if (completedPendingOnboarding) {
     const { data: orgData, error: orgError } = await supabaseAdmin(c)
       .from('orgs')
-      .select('management_email, name')
+      .select('management_email, name, website, onboarding')
       .eq('id', data.owner_org)
       .single()
 
@@ -384,8 +385,11 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     else {
       const creatorDetails = buildAppCreatorEventDetails(data.onboarding)
       await trackBentoEvent(c, orgData.management_email, {
-        org_id: data.owner_org,
-        org_name: orgData.name,
+        ...buildOnboardingIntentBentoEventData(c, parseOrgOnboardingIntent(orgData.onboarding), {
+          id: data.owner_org,
+          name: orgData.name,
+          website: orgData.website,
+        }),
         app_name: data.name,
         ...creatorDetails,
       }, 'app:created')
