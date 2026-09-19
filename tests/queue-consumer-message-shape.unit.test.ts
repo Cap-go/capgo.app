@@ -235,6 +235,14 @@ describe('queue_consumer legacy message compatibility', () => {
       appVersionRow({ deleted_at: null, manifest: [{ file_name: 'index.html' }], manifest_count: 0 }),
       appVersionRow({ deleted_at: null }),
     )).toBe('continue')
+    expect(onVersionUpdateTestUtils.getDeletedVersionAction(
+      appVersionRow({ deleted: true, deleted_at: null, manifest: null, manifest_count: 0 }),
+      appVersionRow({ deleted: false, deleted_at: null }),
+    )).toBe('delete')
+    expect(onVersionUpdateTestUtils.getDeletedVersionAction(
+      appVersionRow({ deleted: false, deleted_at: deletedAt, manifest: null, manifest_count: 0 }),
+      appVersionRow({ deleted: false, deleted_at: null }),
+    )).toBe('delete')
   })
 
   it.concurrent('uses the shared queue retry budget for Discord failure alerts', () => {

@@ -67,6 +67,25 @@ describe('cli user Bento event registry', () => {
     })
   })
 
+  it.each(['5.A', '5.C', '5.E', '5.F', '5.G'])('keeps onboarding analytics version %s in Bento events', (onboardingVersion) => {
+    expect(buildMappedUserBentoEvent({
+      sourceEvent: 'onboarding_step_completed',
+      observedAt: '2026-09-10T10:00:00.000Z',
+      tags: { onboarding_version: onboardingVersion },
+    })?.details.onboarding_version).toBe(onboardingVersion)
+  })
+
+  it('does not accept onboarding version labels for other integer fields', () => {
+    expect(buildMappedUserBentoEvent({
+      sourceEvent: 'CLI Command Invoked',
+      observedAt: '2026-09-10T10:00:00.000Z',
+      tags: { flags_count: '5.E' },
+    })?.details).toEqual({
+      observed_at: '2026-09-10T10:00:00.000Z',
+      source_event: 'CLI Command Invoked',
+    })
+  })
+
   it('drops malformed onboarding attempt IDs', () => {
     expect(buildMappedUserBentoEvent({
       sourceEvent: 'onboarding_resume_restarted',

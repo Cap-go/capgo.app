@@ -2,6 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NavigationGuardNext, RouteLocationNormalized } from 'vue-router'
 import type { UserModule } from '~/types'
 import { isTerminalAppOnboarding } from '~/services/appOnboarding'
+import { clearChartDataCache } from '~/services/chartDataService'
+import { isCliLoginPath } from '~/services/cliLogin'
 import { hideLoader } from '~/services/loader'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { setUser } from '~/services/posthog'
@@ -17,6 +19,7 @@ import { isCicdSetupValidated } from '~/utils/gettingStartedCicd'
 import { isStoreReleaseValidated } from '~/utils/gettingStartedDismiss'
 import { getGettingStartedContinueRedirect, getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
 import { hasPendingInviteSkip } from '~/utils/pendingInviteSkip'
+import { validateRedirectPath } from '~/utils/safeRedirect'
 import { getPlans, isPlatformAdmin } from './../services/supabase'
 
 async function updateUser(
@@ -175,9 +178,7 @@ function getAccountDisabledRedirect(to: RouteLocationNormalized) {
 
 function getPostRestorePath(to: RouteLocationNormalized) {
   const target = typeof to.query.to === 'string' ? to.query.to : ''
-  if (target.startsWith('/') && target !== '/accountDisabled')
-    return target
-  return '/dashboard'
+  return validateRedirectPath(target, '/dashboard', { blockedPrefixes: ['/accountDisabled'] })
 }
 
 async function guard(
@@ -197,7 +198,7 @@ async function guard(
     ? to.query.invite_org
     : null
   const isAdminRoute = to.path.startsWith('/admin')
-  const isCliLoginRoute = to.path === '/login-cli'
+  const isCliLoginRoute = isCliLoginPath(to.path)
   const organizationFetchOptions = { loadImages: !isCliLoginRoute }
 
   async function tryLoadOrganizations(fetcher: () => Promise<void>) {
@@ -518,8 +519,10 @@ export const install: UserModule = ({ router }) => {
 
   if (typeof supabase.auth.onAuthStateChange === 'function') {
     supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session)
+      if (!session) {
         clearWebsitePaidUserCookie()
+        clearChartDataCache()
+      }
     })
   }
 

@@ -19,3 +19,4 @@ tests/release-scope.test.ts
 tests/rollout.test.ts
 tests/stats-export-cors.test.ts
 tests/upsert-version-meta-rpc.test.ts
+tests/app-onboarding-v3.db.test.ts

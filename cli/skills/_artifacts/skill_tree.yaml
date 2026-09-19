@@ -3,6 +3,10 @@ skills:
     path: skills/usage/SKILL.md
     domain: cli-usage
     focus: High-level routing and shared invocation rules.
+  - name: observe
+    path: skills/observe/SKILL.md
+    domain: observe
+    focus: Query Observe findings, metrics, device timelines, and navigation routes.
   - name: release-management
     path: skills/release-management/SKILL.md
     domain: ota-release-management

@@ -23,6 +23,7 @@ interface NotificationProviderConfig {
   status: string
   config: Record<string, unknown>
   secret_ref?: string | null
+  has_secret?: boolean
 }
 
 interface NotificationCampaign {
@@ -102,8 +103,10 @@ const providerForm = ref({
   platform: 'android',
   status: 'draft',
   secretRef: '',
+  secretMaterial: '',
   config: '{\n  "projectId": "",\n  "serviceAccountEmail": ""\n}',
 })
+const providerSecretFileName = ref('')
 const campaignForm = ref({
   name: '',
   kind: 'alert',
@@ -157,6 +160,10 @@ const expectedProviderSecretRef = computed(() => {
   const normalizedAppId = normalizeSecretRefSegment(id.value)
   return `NOTIFICATIONS_${normalizedAppId}_${providerSecretRefSegment(providerForm.value.platform)}`
 })
+const currentProviderHasSecret = computed(() => {
+  const provider = providers.value.find(item => item.platform === providerForm.value.platform)
+  return Boolean(provider?.has_secret)
+})
 const providerConfigPlaceholder = computed(() => {
   if (providerForm.value.platform === 'ios') {
     return '{\n  "teamId": "",\n  "keyId": "",\n  "bundleId": "",\n  "environment": "production"\n}'
@@ -166,6 +173,28 @@ const providerConfigPlaceholder = computed(() => {
 
 function providerSecretRefSegment(platform: string) {
   return platform === 'ios' ? 'IOS' : 'ANDROID'
+}
+
+function providerSecretAccept(platform: string) {
+  return platform === 'ios' ? '.p8,text/plain' : '.json,application/json,text/plain'
+}
+
+function providerSecretLabel(platform: string) {
+  return platform === 'ios' ? t('notification-provider-secret-file-ios') : t('notification-provider-secret-file-android')
+}
+
+async function onProviderSecretFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file)
+    return
+  providerSecretFileName.value = file.name
+  providerForm.value.secretMaterial = await file.text()
+}
+
+function clearProviderSecretSelection() {
+  providerForm.value.secretMaterial = ''
+  providerSecretFileName.value = ''
 }
 
 function notificationPlatformLabel(platform?: string) {
@@ -382,16 +411,22 @@ async function refreshData(appId = id.value, refreshId = ++activeRefreshId) {
 async function saveProvider() {
   isSaving.value = true
   try {
+    const payload: Record<string, unknown> = {
+      appId: id.value,
+      platform: providerForm.value.platform,
+      status: providerForm.value.status,
+      config: parseJson(providerForm.value.config, {}),
+    }
+    if (providerForm.value.secretMaterial.trim())
+      payload.secretMaterial = providerForm.value.secretMaterial.trim()
+    else if (providerForm.value.secretRef.trim())
+      payload.secretRef = providerForm.value.secretRef.trim()
     await notificationFetch('/providers', {
       method: 'PUT',
-      body: JSON.stringify({
-        appId: id.value,
-        platform: providerForm.value.platform,
-        status: providerForm.value.status,
-        secretRef: providerForm.value.secretRef.trim() || (providerForm.value.status === 'configured' ? expectedProviderSecretRef.value : null),
-        config: parseJson(providerForm.value.config, {}),
-      }),
+      body: JSON.stringify(payload),
     })
+    providerForm.value.secretMaterial = ''
+    providerSecretFileName.value = ''
     toast.success(t('notification-save-success'))
     await reloadNotifications()
   }
@@ -607,6 +642,8 @@ watch(() => {
 
 watch(() => providerForm.value.platform, () => {
   providerForm.value.config = providerConfigPlaceholder.value
+  providerForm.value.secretMaterial = ''
+  providerSecretFileName.value = ''
 })
 
 watch(broadcastSearch, () => {
@@ -744,11 +781,38 @@ watch(activeNotificationTab, () => {
                           </select>
                         </label>
                         <label class="space-y-1 sm:col-span-2 2xl:col-span-2">
-                          <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ t('notification-provider-secret-ref') }}</span>
-                          <input v-model="providerForm.secretRef" class="w-full d-input d-input-bordered" :placeholder="expectedProviderSecretRef">
-                          <span class="block text-xs leading-5 text-slate-500 dark:text-slate-400">{{ t('notification-provider-secret-ref-help') }}</span>
+                          <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ providerSecretLabel(providerForm.platform) }}</span>
+                          <input
+                            type="file"
+                            class="w-full d-file-input d-file-input-bordered"
+                            :accept="providerSecretAccept(providerForm.platform)"
+                            :aria-label="providerSecretLabel(providerForm.platform)"
+                            @change="onProviderSecretFileChange"
+                          >
+                          <span v-if="providerSecretFileName" class="block text-xs leading-5 text-slate-500 dark:text-slate-400">
+                            {{ t('notification-provider-secret-selected', { file: providerSecretFileName }) }}
+                            <button type="button" class="ml-2 underline" @click="clearProviderSecretSelection">
+                              {{ t('remove') }}
+                            </button>
+                          </span>
+                          <span v-else-if="currentProviderHasSecret" class="block text-xs leading-5 text-vista-blue-700 dark:text-vista-blue-200">
+                            {{ providerForm.platform === 'ios' ? t('notification-provider-secret-on-file-ios') : t('notification-provider-secret-on-file-android') }}
+                          </span>
+                          <span class="block text-xs leading-5 text-slate-500 dark:text-slate-400">{{ t('notification-provider-secret-upload-help') }}</span>
                         </label>
                       </div>
+                      <details class="rounded-lg border border-slate-200 dark:border-slate-700">
+                        <summary class="cursor-pointer px-3 py-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                          {{ t('notification-provider-self-host-advanced') }}
+                        </summary>
+                        <div class="border-t border-slate-200 p-3 dark:border-slate-700">
+                          <label class="block space-y-1">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ t('notification-provider-secret-ref') }}</span>
+                            <input v-model="providerForm.secretRef" class="w-full d-input d-input-bordered" :placeholder="expectedProviderSecretRef">
+                            <span class="block text-xs leading-5 text-slate-500 dark:text-slate-400">{{ t('notification-provider-secret-ref-self-host-help') }}</span>
+                          </label>
+                        </div>
+                      </details>
                       <label class="block space-y-1">
                         <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ t('notification-provider-config-json') }}</span>
                         <textarea v-model="providerForm.config" class="w-full font-mono text-sm d-textarea d-textarea-bordered min-h-36" :placeholder="providerConfigPlaceholder" />
@@ -768,8 +832,16 @@ watch(activeNotificationTab, () => {
                               {{ provider.status }}
                             </span>
                           </div>
-                          <div class="mt-2 font-mono text-xs break-all text-slate-500 dark:text-slate-400">
-                            {{ provider.secret_ref || t('not-set') }}
+                          <div class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                            <span v-if="provider.has_secret">
+                              {{ provider.platform === 'ios' ? t('notification-provider-secret-on-file-ios') : t('notification-provider-secret-on-file-android') }}
+                            </span>
+                            <span v-else-if="provider.secret_ref" class="font-mono break-all">
+                              {{ provider.secret_ref }}
+                            </span>
+                            <span v-else>
+                              {{ t('not-set') }}
+                            </span>
                           </div>
                         </div>
                       </div>

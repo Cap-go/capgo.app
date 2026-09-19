@@ -26,9 +26,9 @@ describe('well-known change-password', () => {
       .toBe('/.well-known/change-password /settings/account/change-password 302')
   })
 
-  it.concurrent('404s the chrome well-known probe before the deep-link catch-all', () => {
+  it.concurrent('routes unknown well-known probes through the deep-link catch-all', () => {
     expect(firstMatchingRedirectLine('/.well-known/resource-that-should-not-exist-whose-status-code-should-not-be-200'))
-      .toBe('/.well-known/resource-that-should-not-exist-whose-status-code-should-not-be-200 /404 404')
+      .toBe('/.well-known/* /deepLink/:splat 200')
   })
 
   it.concurrent('keeps apple and android deep-link well-known rewrites', () => {

@@ -303,7 +303,7 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
       toast.error(t('bundle-not-compatible-with-channel', { channel: chan.name }))
 
       dialogStore.openDialog({
-        title: t('confirm-action'),
+        title: t('compatibility-accept-title'),
         description: t('set-even-not-compatible'),
         buttons: [
           {
@@ -321,7 +321,7 @@ async function handleChannelLink(chan: Database['public']['Tables']['channels'][
             },
           },
           {
-            text: t('button-confirm'),
+            text: t('compatibility-accept'),
             role: 'primary',
           },
         ],

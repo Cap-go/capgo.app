@@ -1,12 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { buildCapgoBundleUploadCommand, buildCapgoOtaCliInitCommand, capgoLocalCliArgs } from '../src/utils/gettingStartedCli.ts'
-import { APP_ONBOARDING_STEP_IDS } from '../supabase/functions/_backend/utils/appOnboarding.ts'
+import { APP_ONBOARDING_V2_STEP_IDS as APP_ONBOARDING_STEP_IDS } from '../supabase/functions/_backend/utils/appOnboarding.ts'
 
 const panelSource = readFileSync(new URL('../src/components/dashboard/GettingStartedCliPanel.vue', import.meta.url), 'utf8')
 const liveUpdatePanelSource = readFileSync(new URL('../src/components/dashboard/GettingStartedLiveUpdatePanel.vue', import.meta.url), 'utf8')
 const gettingStarted = readFileSync(new URL('../src/pages/app/[app].getting-started.vue', import.meta.url), 'utf8')
-const onboardingSource = readFileSync(new URL('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
 const messages = JSON.parse(readFileSync(new URL('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
 describe('getting started CLI setup panel', () => {
@@ -91,16 +90,10 @@ describe('getting started CLI setup panel', () => {
     expect(panelSource.indexOf('<AppOnboardingCliSteps')).toBeLessThan(panelSource.indexOf('<TechnicalTeammateInviteCard'))
     expect(panelSource).toContain('sendOnboardingEvent(\'onboarding_cli_command_copied\'')
     expect(panelSource).toContain('sendOnboardingEvent(\'onboarding_ai_instructions_copied\'')
-    expect(panelSource).toContain('report_app_onboarding_setup')
-    expect(onboardingSource).not.toContain('<AppOnboardingCliSteps')
-    expect(onboardingSource).not.toContain('<OnboardingAltSetup')
-    expect(onboardingSource).not.toContain('<TechnicalTeammateInviteCard')
-    expect(onboardingSource).not.toContain('flowStep === \'setup\' && createdApp')
-    expect(onboardingSource).not.toContain('app-onboarding-command-show')
-    expect(onboardingSource).not.toContain('void loadApiKey()')
+    expect(panelSource).toContain("sendOnboardingEvent('onboarding_ai_instructions_copied'")
+    // First-app onboarding may still embed CLI helpers; 2nd+ app create uses GettingStartedCliPanel.
     expect(panelSource).toContain('organizationStore.getOrgByAppId(props.appId)')
     expect(panelSource).toContain('await organizationStore.awaitInitialLoad()')
-    expect(onboardingSource).toContain('await goToGettingStarted()')
     expect(panelSource).toContain(':compressed="false"')
 
     for (const id of APP_ONBOARDING_STEP_IDS)

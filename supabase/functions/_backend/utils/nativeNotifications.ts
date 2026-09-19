@@ -47,6 +47,7 @@ export interface NativeNotificationProviderConfig {
   status: string
   config: Record<string, unknown>
   secretRef?: string | null
+  secretCiphertext?: string | null
 }
 
 export interface NativeNotificationRegisterInput {
@@ -375,20 +376,56 @@ export function getNotificationDeliveryEventId(params: {
   return `${params.event}:${params.appId}:${params.campaignId}:${params.notificationId}:${params.deviceKey}`
 }
 
-export async function encryptNotificationToken(c: Context, token: string): Promise<string> {
+async function encryptWithSecretKey(secret: string, plaintext: string): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12))
-  const key = await aesKeyFromSecret(getNotificationTokenSecret(c))
-  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, textEncoder.encode(token))
+  const key = await aesKeyFromSecret(secret)
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, textEncoder.encode(plaintext))
   return `v1:${toBase64Url(iv)}:${toBase64Url(new Uint8Array(encrypted))}`
 }
 
-export async function decryptNotificationToken(c: Context, encryptedToken: string): Promise<string> {
-  const [version, ivValue, cipherValue] = encryptedToken.split(':')
+async function decryptWithSecretKey(secret: string, ciphertext: string): Promise<string> {
+  const [version, ivValue, cipherValue] = ciphertext.split(':')
   if (version !== 'v1' || !ivValue || !cipherValue)
-    throw simpleError('invalid_notification_token_ciphertext', 'Invalid notification token ciphertext')
-  const key = await aesKeyFromSecret(getNotificationTokenSecret(c))
+    throw simpleError('invalid_notification_secret_ciphertext', 'Invalid notification secret ciphertext')
+  const key = await aesKeyFromSecret(secret)
   const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: new Uint8Array(fromBase64Url(ivValue)) }, key, new Uint8Array(fromBase64Url(cipherValue)))
   return new TextDecoder().decode(decrypted)
+}
+
+export function getNotificationTokenSecretFromValue(secret: string): string {
+  if (!secret)
+    throw simpleError('missing_notifications_token_secret', 'Missing notification token secret')
+  return secret
+}
+
+export async function encryptNotificationToken(c: Context, token: string): Promise<string> {
+  return encryptWithSecretKey(getNotificationTokenSecret(c), token)
+}
+
+export async function decryptNotificationToken(c: Context, encryptedToken: string): Promise<string> {
+  return decryptWithSecretKey(getNotificationTokenSecret(c), encryptedToken)
+}
+
+export async function encryptProviderSecret(c: Context, secretMaterial: string): Promise<string> {
+  return encryptWithSecretKey(getNotificationTokenSecret(c), secretMaterial)
+}
+
+export async function decryptProviderSecretWithSecretKey(secretKey: string, ciphertext: string): Promise<string> {
+  return decryptWithSecretKey(getNotificationTokenSecretFromValue(secretKey), ciphertext)
+}
+
+export function parseProviderSecretMaterial(secretMaterial: string): unknown {
+  const trimmed = secretMaterial.trim()
+  if (!trimmed)
+    throw simpleError('missing_notification_secret_material', 'Missing notification platform secret material')
+  if (trimmed.includes('-----BEGIN'))
+    return trimmed
+  try {
+    return JSON.parse(trimmed)
+  }
+  catch {
+    return trimmed
+  }
 }
 
 export async function trackNotificationRegistrationCF(c: Context<MiddlewareKeyVariables>, input: NativeNotificationRegisterInput) {

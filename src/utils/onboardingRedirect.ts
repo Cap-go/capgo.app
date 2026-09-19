@@ -15,6 +15,9 @@ interface DashboardExploration {
 // Module memory keeps the grant alive when session storage is blocked, for
 // example in private or restricted browsing contexts.
 let dashboardExplorationFallback: DashboardExploration | null = null
+let explorationGrantedThisPage = false
+let explorationReminderShownThisPage = false
+const EXPLORATION_REMINDER_DISMISSED_KEY = 'capgo:onboarding-exploration-reminder-dismissed'
 
 function webStorages(): Storage[] {
   if (typeof window === 'undefined')
@@ -111,6 +114,7 @@ export function allowOnboardingDashboardExploration(userId: string | null | unde
 
   const state: DashboardExploration = { userId, resumeAppId: resumeAppId ?? null }
   dashboardExplorationFallback = state
+  explorationGrantedThisPage = true
   writeStoredExploration(state)
 }
 
@@ -130,6 +134,36 @@ export function shouldConfirmOnboardingDashboardExploration(options: {
 
 export function getOnboardingResumeAppId(userId: string | null | undefined) {
   return matchingDashboardExploration(userId)?.resumeAppId ?? null
+}
+
+export function shouldShowOnboardingExplorationReminder(options: {
+  userId: string | null | undefined
+  appId: string
+  navigationType: string | undefined
+}) {
+  if (options.navigationType !== 'reload' || explorationGrantedThisPage || explorationReminderShownThisPage)
+    return false
+  if (getOnboardingResumeAppId(options.userId) !== options.appId)
+    return false
+  try {
+    return window.localStorage.getItem(`${EXPLORATION_REMINDER_DISMISSED_KEY}:${options.userId}`) !== 'true'
+  }
+  catch {
+    return true
+  }
+}
+
+export function markOnboardingExplorationReminderShown() {
+  explorationReminderShownThisPage = true
+}
+
+export function dismissOnboardingExplorationReminder(userId: string) {
+  try {
+    window.localStorage.setItem(`${EXPLORATION_REMINDER_DISMISSED_KEY}:${userId}`, 'true')
+  }
+  catch {
+    // Keep dashboard navigation usable when browser storage is blocked.
+  }
 }
 
 export function getOnboardingExploreBannerAppId(options: {
@@ -181,6 +215,16 @@ export function getOnboardingResumeRedirect(options: {
 }
 
 const GETTING_STARTED_CONTINUE_PATHS = new Set(['/dashboard', '/apps', '/onboarding/app', '/app/new'])
+
+export function getPostAppCreateRedirectPath(options: {
+  appId: string
+  isFirstAppOnboarding: boolean
+}) {
+  if (!options.appId || options.isFirstAppOnboarding)
+    return null
+
+  return `/app/${encodeURIComponent(options.appId)}/getting-started`
+}
 
 export function getGettingStartedContinueRedirect(options: {
   appId: string | null | undefined

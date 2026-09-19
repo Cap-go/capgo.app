@@ -367,7 +367,8 @@ export async function pollOperation(
  *
  *  - 4–30 characters
  *  - allowed chars: letters, digits, space, hyphen (`-`), apostrophe (`'`),
- *    exclamation (`!`), period (`.`)
+ *    exclamation (`!`) — periods (`.`) are **not** allowed (appIds like
+ *    `com.example.app` must be normalized before submit)
  *  - must start and end with a letter or digit
  *
  * We strip any disallowed character (including em-dashes — which break the
@@ -377,7 +378,7 @@ export async function pollOperation(
  */
 export function sanitizeGcpProjectDisplayName(input: string): string {
   const fallback = 'Capgo Build'
-  const allowed = input.replace(/[^A-Z0-9 \-'!.]/gi, ' ').replace(/\s+/g, ' ').trim()
+  const allowed = input.replace(/[^A-Z0-9 \-'!]/gi, ' ').replace(/\s+/g, ' ').trim()
   // Must start and end with a letter or digit.
   const trimmed = allowed.replace(/^[^A-Z0-9]+/i, '').replace(/[^A-Z0-9]+$/i, '')
   let result = trimmed.slice(0, 30).replace(/[^A-Z0-9]+$/i, '')

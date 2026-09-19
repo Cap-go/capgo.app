@@ -69,7 +69,7 @@ import {
   resolveOnboardingAppIconSource,
 } from '~/utils/onboardingProgressAnalytics'
 import { createOnboardingProgressPersistence, shouldInitializeOnboardingProgressTracking } from '~/utils/onboardingProgressPersistence'
-import { allowOnboardingDashboardExploration, ONBOARDING_DASHBOARD_EXPLORED_EVENT } from '~/utils/onboardingRedirect'
+import { allowOnboardingDashboardExploration, getPostAppCreateRedirectPath, ONBOARDING_DASHBOARD_EXPLORED_EVENT } from '~/utils/onboardingRedirect'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import {
   buildUserOnboardingProgress,
@@ -553,7 +553,8 @@ function applyOnboardingProgress(progress: ReturnType<typeof parseUserOnboarding
     return
 
   const flow = props.preOrg ? 'pre_org' : 'existing_org'
-  flowStep.value = clampResumableOnboardingStep(progress.step, flow)
+  const resumedStep = clampResumableOnboardingStep(progress.step, flow)
+  flowStep.value = resumedStep === 'publish_app_question' ? 'details' : resumedStep
   if (progress.details_step)
     appDetailsStep.value = progress.details_step
   if (progress.intent)
@@ -1566,6 +1567,19 @@ async function createAppRecord(options?: { nextStep?: StandardFlowStep | PreOrgF
     }
     if (flowStep.value === 'details')
       completionProperties.storeImportUsed = hasImportedStoreMetadata.value
+
+    const postCreateRedirect = getPostAppCreateRedirectPath({
+      appId,
+      isFirstAppOnboarding: props.onboarding,
+    })
+    if (postCreateRedirect) {
+      progressTracker?.completeStep(analyticsStepFor(flowStep.value), completionProperties)
+      if (await persistOnboardingProgress('completed') === 'retryable_failure')
+        await persistOnboardingProgress('completed')
+      await router.replace(postCreateRedirect)
+      return
+    }
+
     completeAndViewStep(options?.nextStep ?? 'choice', completionProperties)
   }
   catch (error) {

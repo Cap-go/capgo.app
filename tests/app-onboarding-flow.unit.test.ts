@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
-import { APP_ONBOARDING_STEP_IDS } from '../supabase/functions/_backend/utils/appOnboarding.ts'
+import { APP_ONBOARDING_V2_STEP_IDS, getAppOnboardingStepIds } from '../supabase/functions/_backend/utils/appOnboarding.ts'
+
+const APP_ONBOARDING_STEP_IDS = APP_ONBOARDING_V2_STEP_IDS
 
 describe('getting started CLI onboarding accordion', () => {
   it.concurrent('shows every CLI step in the getting started accordion', async () => {
@@ -20,14 +22,18 @@ describe('getting started CLI onboarding accordion', () => {
     expect(gettingStarted).toContain('verify_getting_started')
     expect(gettingStarted).toContain('dismiss_getting_started')
     expect(source).toContain('leaveSplashIfAlreadySetup')
-    expect(panel).toContain('p_patch: { source: \'ai\' }')
+    expect(panel).toContain("sendOnboardingEvent('onboarding_ai_instructions_copied'")
     expect(messages['getting-started-verify']).toBeTruthy()
     expect(messages['getting-started-dont-show-again']).toBeTruthy()
     expect(messages['app-onboarding-dont-show-again']).toBeTruthy()
     expect(accordion).toContain('data-test="app-onboarding-cli-steps"')
-    expect(accordion).toContain('APP_ONBOARDING_STEP_IDS')
+    expect(accordion).toContain('getAppOnboardingStepIds(onboarding.value.todo_list_version)')
     expect(accordion).toContain('progressSignature')
     expect(accordion).not.toContain('deep: true')
+
+    expect(getAppOnboardingStepIds(3)).toHaveLength(7)
+    expect(getAppOnboardingStepIds(1)).toHaveLength(12)
+    expect(getAppOnboardingStepIds(2)).toHaveLength(12)
 
     for (const id of APP_ONBOARDING_STEP_IDS)
       expect(messages[`app-onboarding-cli-step-${id}`]).toBeTruthy()

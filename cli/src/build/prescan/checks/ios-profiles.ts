@@ -1,6 +1,7 @@
 // src/build/prescan/checks/ios-profiles.ts
 import type { MobileprovisionDetail } from '../../mobileprovision-parser'
 import type { Finding, PrescanCheck, ScanContext } from '../types'
+import { analyzeProvisioningCoverage, parseProvisioningMap as parseStoredProvisioningMap, wildcardBundleMatches } from '../../ios-provisioning-map'
 import { parseMobileprovisionDetailedFromBase64 } from '../../mobileprovision-parser'
 import { openP12 } from './ios-certs'
 
@@ -29,10 +30,8 @@ export function parseProvisioningMap(ctx: ScanContext): MappedProfile[] {
       return []
     const entries: MappedProfile[] = []
     for (const [bundleId, value] of Object.entries(obj)) {
-      if (typeof value === 'string') {
-        // tolerated legacy/raw shape: { bundleId: base64 }
+      if (typeof value === 'string')
         entries.push({ bundleId, base64: value })
-      }
       else if (value && typeof value === 'object' && typeof (value as { profile?: unknown }).profile === 'string') {
         const entry = value as { profile: string, name?: string }
         entries.push({ bundleId, base64: entry.profile, name: entry.name })
@@ -90,11 +89,7 @@ export const profileExpiry: PrescanCheck = {
 }
 
 function bundleMatches(profileBundleId: string, appBundleId: string): boolean {
-  if (profileBundleId === '*')
-    return true
-  if (profileBundleId.endsWith('.*'))
-    return appBundleId.startsWith(profileBundleId.slice(0, -1))
-  return profileBundleId === appBundleId
+  return profileBundleId === appBundleId || wildcardBundleMatches(profileBundleId, appBundleId)
 }
 
 export const profileBundleMatch: PrescanCheck = {
@@ -178,24 +173,82 @@ export const certProfilePairing: PrescanCheck = {
 export const targetsCovered: PrescanCheck = {
   id: 'ios/targets-covered',
   platforms: ['ios'],
-  appliesTo: hasMap,
+  appliesTo: ctx => ctx.credentials?.CAPGO_IOS_PROVISIONING_MAP !== undefined,
   async run(ctx): Promise<Finding[]> {
+    let map
+    try {
+      map = parseStoredProvisioningMap(ctx.credentials?.CAPGO_IOS_PROVISIONING_MAP)
+    }
+    catch (error) {
+      return [{
+        id: 'ios/targets-covered',
+        severity: 'error',
+        title: 'Saved iOS provisioning profile map cannot be used',
+        detail: error instanceof Error ? error.message : 'The saved provisioning profile map is invalid',
+        fix: 'Save or update the iOS provisioning profile map before building',
+      }]
+    }
     const { findSignableTargets, readPbxproj } = await import('../../pbxproj-parser')
     const pbx = readPbxproj(ctx.projectDir)
     if (!pbx)
       return []
     const targets = findSignableTargets(pbx)
-    const mapped = parseProvisioningMap(ctx)
-    // targets without a resolvable bundle id cannot be matched — skip them rather than false-error
-    const missing = targets.filter(t => t.bundleId && !mapped.some(p => bundleMatches(p.bundleId, t.bundleId)))
+    const coverage = analyzeProvisioningCoverage(targets, map)
+    const wildcardOwned = new Set([
+      ...(coverage.wildcardReuse?.targets ?? []),
+      ...coverage.wildcardConflict,
+    ].map(target => target.bundleId))
+    const missing = coverage.missing.filter(target => !wildcardOwned.has(target.bundleId))
     if (missing.length === 0)
       return []
+    const missingCount = missing.reduce((count, target) => count + target.targetNames.length, 0)
+    const hasMultipleTargets = targets.filter(target => target.bundleId).length > 1
     return [{
       id: 'ios/targets-covered',
       severity: 'error',
-      title: `${missing.length} signable target(s) have no provisioning profile mapped`,
-      detail: `uncovered: ${missing.map(t => `${t.name} (${t.bundleId})`).join(', ')}`,
-      fix: 'Add --ios-provisioning-profile "bundleId=/path/to/profile.mobileprovision" for each and re-save credentials',
+      title: `${missingCount} signable target(s) have no provisioning profile mapped`,
+      detail: `uncovered: ${missing.flatMap(target => target.targetNames.map(name => `${name} (${target.bundleId})`)).join(', ')}`,
+      fix: hasMultipleTargets
+        ? 'Run npx @capgo/cli@latest build credentials ios-provisioning to set up every target'
+        : 'Add --ios-provisioning-profile "bundleId=/path/to/profile.mobileprovision" and re-save credentials',
+    }]
+  },
+}
+
+export const wildcardProfileTargets: PrescanCheck = {
+  id: 'ios/wildcard-profile-targets',
+  platforms: ['ios'],
+  appliesTo: ctx => ctx.credentials?.CAPGO_IOS_PROVISIONING_MAP !== undefined,
+  async run(ctx): Promise<Finding[]> {
+    let map
+    try {
+      map = parseStoredProvisioningMap(ctx.credentials?.CAPGO_IOS_PROVISIONING_MAP)
+    }
+    catch {
+      return [] // ios/targets-covered owns malformed and invalid saved maps
+    }
+    const { findSignableTargets, readPbxproj } = await import('../../pbxproj-parser')
+    const pbx = readPbxproj(ctx.projectDir)
+    if (!pbx)
+      return []
+    const coverage = analyzeProvisioningCoverage(findSignableTargets(pbx), map)
+    if (coverage.wildcardConflict.length > 0) {
+      return [{
+        id: 'ios/wildcard-profile-targets',
+        severity: 'error',
+        title: 'Sorry, multiple matching wildcard provisioning profiles are not supported',
+        detail: `targets: ${coverage.wildcardConflict.map(target => `${target.targetNames.join('/')} (${target.bundleId})`).join(', ')}`,
+        fix: 'Remove or replace the conflicting wildcard profiles in the saved map, then retry',
+      }]
+    }
+    if (!coverage.wildcardReuse)
+      return []
+    return [{
+      id: 'ios/wildcard-profile-targets',
+      severity: 'error',
+      title: `${coverage.wildcardReuse.targets.length} target bundle id(s) can reuse a saved wildcard provisioning profile`,
+      detail: `targets: ${coverage.wildcardReuse.targets.map(target => `${target.targetNames.join('/')} (${target.bundleId})`).join(', ')}`,
+      fix: 'Run npx @capgo/cli@latest build credentials ios-provisioning to confirm and update the map',
     }]
   },
 }

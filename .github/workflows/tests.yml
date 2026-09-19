@@ -221,6 +221,8 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Typecheck notifications plugin
         run: bun run --cwd packages/capacitor-notifications typecheck
+      - name: Check Cap 9 deprecated APIs (notifications plugin)
+        run: bun run --cwd packages/capacitor-notifications check:cap9-deprecated
       - name: Build notifications plugin
         run: bun run --cwd packages/capacitor-notifications build
       - name: Verify notifications publish access
@@ -450,6 +452,9 @@ jobs:
           warm_post /organization
           warm_post /organization/members
           warm_post /apikey
+          warm_post /private/events
+          warm_get '/app?limit=1'
+          warm_get /private/role_bindings
       - name: Run backend integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}

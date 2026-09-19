@@ -81,7 +81,9 @@ export interface TrackEventInput {
   appId?: string
   /** Explicit key; falls back to the saved key. No key => no event. */
   apikey?: string
+  timestamp?: Date
   tags?: Record<string, string | number | boolean>
+  nonPersonTags?: Record<string, unknown>
 }
 
 /**
@@ -122,8 +124,10 @@ export function trackEvent(input: TrackEventInput): Promise<void> {
         channel: input.channel,
         event: input.event,
         tracking_version: 2,
+        ...(input.timestamp ? { timestamp: input.timestamp } : {}),
         ...(orgId ? { org_id: orgId } : {}),
         tags,
+        ...(input.nonPersonTags ? { nonPersonTags: input.nonPersonTags } : {}),
       }, false, controller.signal).catch(() => {})
     }
     catch {
