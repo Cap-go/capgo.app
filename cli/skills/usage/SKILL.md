@@ -21,7 +21,7 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 - Many commands can infer `appId` and related config from the current Capacitor project.
 - Commands inside an identifiable Capacitor project can automatically complete the Add Integration Code onboarding task when a source call to `CapacitorUpdater.notifyAppReady()` is detected. Detection is best effort and may be abandoned when the command exits. It does not confirm runtime readiness.
 - A separate background check can complete Install Updater Plugin when `@capgo/capacitor-updater` is declared in the selected app's package.json and installed locally, including hoisted or symlinked workspace dependencies. Missing dependencies leave existing progress untouched; detection may be abandoned when the command exits.
-- After supported interactive app, bundle, channel, organization, and key commands, plus `build request`, `login`, `doctor`, and `get-qr`, finish, pending background checks share a wait of up to five seconds. The CLI prints a waiting message and can exit sooner after the checks finish; pressing Ctrl-C during the wait exits immediately. JSON, output-text, quiet, CI, piped, `init`, `build init`, and MCP runs do not add this wait or message. Commands with fixed machine-readable output, such as account ID and bundle release type, also exit without waiting.
+- After supported interactive app, bundle, channel, organization, and key commands, plus `build request`, `login`, `doctor`, and `get-qr`, finish, pending background checks share a wait of up to five seconds. The CLI prints a waiting message and can exit sooner after the checks finish; pressing Ctrl-C during the wait exits immediately. JSON, output-text, quiet, CI, piped, `init`, `build init`, and MCP runs do not add this wait or message. `account whoami` (and its `account id` alias) and `bundle releaseType` also exit without waiting.
 - With analytics enabled, source scans emit `scan_started` and `scan_ended` events in the `notify-app-ready` channel with a shared `attempt_id`. The ended event includes scan duration, result, and todo-report outcome. An abandoned scan may have no ended event.
 - With analytics enabled, displaying the waiting message emits `background_checks_wait_started` in the `cli-usage` channel. Its event properties include the command path, pending check count, grace period, and pending `scan_attempt_ids`. Telemetry shares the five-second wait budget and respects `CAPGO_DISABLE_TELEMETRY` and `CAPGO_DISABLE_POSTHOG`.
 - Updater installation checks use the same scan events and attempt pairing in the `updater-installed` channel, with a separate attempt ID from the source scan. Telemetry opt-out does not prevent either onboarding check.
@@ -95,7 +95,7 @@ Load `skills/native-builds/SKILL.md` when working with:
 
 Load `skills/organization-management/SKILL.md` when working with:
 
-- `account id`
+- `account whoami` (alias: `account id`)
 - `organization list`, `organization add`, `organization members`, `organization set`, `organization delete`
 - deprecated `organisation` aliases
 
