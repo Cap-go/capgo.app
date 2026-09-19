@@ -35,7 +35,6 @@ CREATE INDEX idx_build_requests_onboarding_used ON public.build_requests (
     app_id, (coalesce(completed_at, created_at))
 );
 
-SELECT pgmq.create('cron_onboarding_refresh');
 SELECT pgmq.create('cron_onboarding_refresh_apps');
 
 CREATE OR REPLACE FUNCTION public.enqueue_app_onboarding_refreshes(
@@ -107,20 +106,16 @@ atomically with leases.';
 
 -- Reuse the existing scheduler; do not add a pg_cron job.
 UPDATE public.cron_tasks SET
-    task_type = 'queue', target = 'cron_onboarding_refresh',
-    payload
-    = '{
-        "function_name":"cron_onboarding_refresh",
-        "function_type":"cloudflare"
-    }'::jsonb,
+    task_type = 'function',
+    target = 'public.enqueue_app_onboarding_refreshes()',
+    payload = null,
     minute_interval = 10, second_interval = null, hour_interval = null,
     run_at_hour = null, run_at_minute = null, batch_size = null, enabled = true,
-    description
-    = 'Enqueue backend onboarding refresh producer every 10 minutes',
+    description = 'Enqueue onboarding app refresh batches every 10 minutes',
     updated_at = now()
 WHERE name = 'refresh_app_onboarding_progress';
 
--- The scheduled batch RPC has been replaced by the backend producer. Keep the
+-- The scheduled batch RPC has been replaced by the SQL producer. Keep the
 -- single-app refresh RPC used by verify_getting_started.
 DROP FUNCTION public.refresh_app_onboarding_progress(integer);
 
@@ -133,14 +128,6 @@ INSERT INTO public.cron_tasks (
 )
 VALUES
 (
-    'onboarding_refresh_producer_queue',
-    'function_queue',
-    '["cron_onboarding_refresh"]',
-    1,
-    1,
-    'Consume one onboarding producer per minute'
-),
-(
     'onboarding_refresh_apps_queue',
     'function_queue',
     '["cron_onboarding_refresh_apps"]',
@@ -148,120 +135,6 @@ VALUES
     1,
     'Consume 15 batches of 20 apps per minute (300 apps maximum)'
 );
-
-CREATE OR REPLACE FUNCTION public.process_all_cron_tasks() RETURNS void
-LANGUAGE plpgsql
-SET search_path TO ''
-AS $$
-DECLARE
-  current_hour int;
-  current_minute int;
-  current_second int;
-  current_dow int;
-  current_day int;
-  task RECORD;
-  queue_names text[];
-  should_run boolean;
-  lock_acquired boolean;
-BEGIN
-  lock_acquired := pg_catalog.pg_try_advisory_lock(1);
-
-  IF NOT lock_acquired THEN
-    RAISE NOTICE 'process_all_cron_tasks: skipped, another instance is already running';
-    RETURN;
-  END IF;
-
-  BEGIN
-    current_hour := EXTRACT(HOUR FROM NOW());
-    current_minute := EXTRACT(MINUTE FROM NOW());
-    current_second := EXTRACT(SECOND FROM NOW());
-    current_dow := EXTRACT(DOW FROM NOW());
-    current_day := EXTRACT(DAY FROM NOW());
-
-    FOR task IN SELECT * FROM public.cron_tasks WHERE enabled = true ORDER BY id LOOP
-      should_run := false;
-
-      IF task.second_interval IS NOT NULL THEN
-        should_run := true;
-      ELSIF task.minute_interval IS NOT NULL THEN
-        should_run := (current_minute % task.minute_interval = 0)
-                      AND (current_second < 10);
-      ELSIF task.hour_interval IS NOT NULL THEN
-        should_run := (current_hour % task.hour_interval = 0)
-                      AND (current_minute = COALESCE(task.run_at_minute, 0))
-                      AND (current_second < 10);
-      ELSIF task.run_at_hour IS NOT NULL THEN
-        should_run := (current_hour = task.run_at_hour)
-                      AND (current_minute = COALESCE(task.run_at_minute, 0))
-                      AND (current_second < 10);
-
-        IF should_run AND task.run_on_dow IS NOT NULL THEN
-          should_run := (current_dow = task.run_on_dow);
-        END IF;
-
-        IF should_run AND task.run_on_day IS NOT NULL THEN
-          should_run := (current_day = task.run_on_day);
-        END IF;
-      END IF;
-
-      IF should_run THEN
-        BEGIN
-          CASE task.task_type
-            WHEN 'function' THEN
-              EXECUTE 'SELECT ' || task.target;
-
-            WHEN 'queue' THEN
-              IF task.name = 'refresh_app_onboarding_progress' AND EXISTS (SELECT 1 FROM pgmq.q_cron_onboarding_refresh) THEN
-                CONTINUE;
-              END IF;
-              PERFORM pgmq.send(
-                task.target,
-                COALESCE(task.payload, jsonb_build_object('function_name', task.target))
-              );
-
-            WHEN 'function_queue' THEN
-              SELECT array_agg(value::text) INTO queue_names
-              FROM jsonb_array_elements_text(task.target::jsonb);
-
-              IF task.batch_size IS NOT NULL THEN
-                PERFORM public.process_function_queue(queue_names, task.batch_size);
-              ELSE
-                PERFORM public.process_function_queue(queue_names);
-              END IF;
-          END CASE;
-        EXCEPTION
-          WHEN query_canceled THEN
-            RAISE WARNING 'cron task "%" canceled (timeout): %', task.name, SQLERRM;
-          WHEN OTHERS THEN
-            RAISE WARNING 'cron task "%" failed: %', task.name, SQLERRM;
-        END;
-      END IF;
-    END LOOP;
-
-    IF current_minute % 5 = 0 AND current_second < 10 THEN
-      PERFORM pgmq.send(
-        'cron_rollout_auto_pause',
-        jsonb_build_object(
-          'function_name', 'cron_rollout_auto_pause',
-          'function_type', 'cloudflare'
-        )
-      );
-    END IF;
-
-    PERFORM public.process_function_queue(ARRAY['cron_rollout_auto_pause']);
-  EXCEPTION WHEN OTHERS THEN
-    PERFORM pg_catalog.pg_advisory_unlock(1);
-    RAISE;
-  END;
-
-  PERFORM pg_catalog.pg_advisory_unlock(1);
-END;
-$$;
-
-
-ALTER FUNCTION public.process_all_cron_tasks() OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.process_all_cron_tasks() FROM public;
-GRANT EXECUTE ON FUNCTION public.process_all_cron_tasks() TO service_role;
 
 CREATE OR REPLACE FUNCTION public.process_function_queue(
     "queue_name" text, "batch_size" integer DEFAULT 950
@@ -275,14 +148,14 @@ DECLARE
   queue_size bigint;
   request_timeout_ms int;
   url text;
-  onboarding_queue boolean := queue_name IN ('cron_onboarding_refresh', 'cron_onboarding_refresh_apps');
+  onboarding_queue boolean := queue_name = 'cron_onboarding_refresh_apps';
 BEGIN
   EXECUTE pg_catalog.format('SELECT count(*) FROM pgmq.%I', 'q_' || queue_name)
   INTO queue_size;
 
   IF queue_size > 0 THEN
     IF onboarding_queue THEN
-      batch_size := LEAST(batch_size, CASE WHEN queue_name = 'cron_onboarding_refresh' THEN 1 ELSE 15 END);
+      batch_size := LEAST(batch_size, 15);
     END IF;
     headers := pg_catalog.jsonb_build_object(
       'Content-Type', 'application/json',

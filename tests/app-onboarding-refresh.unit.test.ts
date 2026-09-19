@@ -122,7 +122,6 @@ describe('backend onboarding refresh telemetry', () => {
 describe('onboarding queue execution budgets', () => {
   it.concurrent('caps one dispatch to 300 apps and awaits acknowledgment within visibility and pg_net deadlines', () => {
     const u = __queueConsumerTestUtils__
-    expect(u.getQueueBatchSize('cron_onboarding_refresh', 950)).toBe(1)
     expect(u.getQueueBatchSize('cron_onboarding_refresh_apps', 950)).toBe(15)
     expect(u.getQueueHttpConcurrency('cron_onboarding_refresh_apps')).toBe(15)
     expect(u.getQueueHttpTimeoutMs('cron_onboarding_refresh_apps')).toBe(45_000)

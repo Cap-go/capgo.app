@@ -1,7 +1,7 @@
 # Backend onboarding refresh
 
-The existing scheduler enqueues `cron_onboarding_refresh` every ten minutes.
-Its backend producer atomically leases up to 3,000 oldest due apps and writes
+The existing SQL scheduler calls `enqueue_app_onboarding_refreshes()` every ten
+minutes. That function atomically leases up to 3,000 oldest due apps and writes
 `cron_onboarding_refresh_apps` messages containing at most twenty app IDs each.
 App IDs over 128 bytes get single-app messages to keep Cloudflare queries bounded.
 The minute consumer dispatches one group of fifteen messages: at most 300 apps.
@@ -9,7 +9,7 @@ All apps remain eligible, independent of billing or checklist version. A full
 sweep can take longer than ten minutes when more than 3,000 apps are due.
 
 Pending leases prevent duplicate enqueueing. Thirty-minute expired leases can
-be replaced by a producer; tokens make replaced or already-completed messages
+be replaced by the next producer run; tokens make replaced or already-completed messages
 harmless. The global five-read queue ceiling remains unchanged. Provider failure
 leaves onboarding and leases untouched, allowing bounded queue retries and later
 producer recovery. Deleted apps remove their leases through the foreign key.
@@ -27,7 +27,7 @@ As in the old SQL refresh, the latest observed device update initially sets
 Analytics Engine sampling means a missing result is not proof no event occurred;
 existing confirmed milestones are never cleared.
 
-Both internal routes require the API secret. Cloudflare reads have a shared
+The consumer's internal route requires the API secret. Cloudflare reads have a shared
 ten-second abort deadline; missing configuration and malformed responses fail
 the job rather than masquerading as empty results. Each worker uses a short
 write transaction with ten-second statement and two-second lock timeouts.
@@ -36,7 +36,7 @@ HTTP timeout, awaits queue acknowledgments, and has a 120-second visibility
 window. The scheduler makes one awaited dispatch with a 60-second pg_net
 timeout for these queues, instead of the generic ten-dispatch fan-out.
 
-SQL execution is internal only: one producer call per scheduled message; at most
+SQL execution is internal only: one direct producer call per scheduled run; at most
 3,000 output apps, refresh-expression index ordering, and lease primary-key
 lookups. Worker transactions touch at most twenty apps via primary keys. The
 three JSON merge calls per app are existing pure functions with no table scans.

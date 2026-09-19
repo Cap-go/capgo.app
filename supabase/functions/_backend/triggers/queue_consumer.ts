@@ -533,8 +533,6 @@ async function processQueueMessage(c: Context, queueName: string, message: Messa
 }
 
 function getQueueBatchSize(queueName: string, requestedBatchSize: number): number {
-  if (queueName === 'cron_onboarding_refresh')
-    return Math.min(requestedBatchSize, 1)
   if (queueName === 'cron_onboarding_refresh_apps')
     return Math.min(requestedBatchSize, ONBOARDING_MESSAGES_PER_MINUTE)
   if (isVersionQueueFunction(queueName))
@@ -1108,7 +1106,7 @@ function shouldRunQueueSyncInBackground(queueName: string): boolean {
 }
 
 function isOnboardingQueue(queueName: string): boolean {
-  return queueName === 'cron_onboarding_refresh' || queueName === 'cron_onboarding_refresh_apps'
+  return queueName === 'cron_onboarding_refresh_apps'
 }
 
 async function runQueueSync(
