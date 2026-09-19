@@ -91,7 +91,9 @@ await t('loadUploadProjectConfig resolves cordova mode without capacitor.config'
 })
 
 await t('missing capacitor config suggests --mode cordova on upload', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'capgo-missing-cap-config-'))
+  // Use /tmp explicitly — os.tmpdir() on GitHub Actions is under the workspace,
+  // so Capacitor's upward config search would pick up this monorepo's appId.
+  const dir = mkdtempSync('/tmp/capgo-missing-cap-config-')
   const previousCwd = cwd()
   try {
     chdir(dir)
