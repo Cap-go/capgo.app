@@ -121,7 +121,7 @@ describe('onboarding progress endpoint', () => {
     expect(mocks.execute).not.toHaveBeenCalled()
   })
   it('returns v3 CLI start as done in the same API-key request, even with read-only app access', async () => {
-    mocks.auth = { authType: 'apikey', userId: 'creator', apikey: { key: null } }
+    mocks.auth = { authType: 'apikey', userId: 'other-user', apikey: { key: null } }
     mocks.row.onboarding = { created_by_user_id: 'creator', setup: { todo_list_version: 3, source: 'ai', steps: {} } }
     lockedRow(mocks.row.onboarding)
     mocks.permissionPg.mockImplementation(async (_c, permission) => permission === 'app.read')
@@ -131,16 +131,17 @@ describe('onboarding progress endpoint', () => {
     expect(result.onboarding.setup.steps.login_cli_mcp.status).toBe('done')
     expect(Object.keys(result.onboarding.setup.steps)).toEqual(['login_cli_mcp'])
     expect(result.onboarding.setup.source).toBe('cli')
-    expect(mocks.permissionPg).toHaveBeenCalledWith(expect.anything(), 'app.read', { appId: 'com.test.onboarding' }, expect.anything(), 'creator', null)
+    expect(mocks.permissionPg).toHaveBeenCalledWith(expect.anything(), 'app.read', { appId: 'com.test.onboarding' }, expect.anything(), 'other-user', null)
     expect(mocks.execute).toHaveBeenCalledTimes(5)
   })
-  it('does not mark CLI start for JWT requests or another app creator', async () => {
+  it('does not mark CLI start for JWT requests or an API key without app.read', async () => {
     mocks.row.onboarding = { created_by_user_id: 'creator', setup: { todo_list_version: 3, steps: {} } }
     expect(((await (await request(4)).json()) as any).onboarding).toEqual(mocks.row.onboarding)
     expect(mocks.execute).not.toHaveBeenCalled()
 
     mocks.auth = { authType: 'apikey', userId: 'other-user', apikey: { key: 'other-key' } }
     lockedRow(mocks.row.onboarding)
+    mocks.permissionPg.mockResolvedValue(false)
     expect(((await (await request(4)).json()) as any).onboarding).toEqual(mocks.row.onboarding)
     expect(mocks.execute).toHaveBeenCalledTimes(3)
 

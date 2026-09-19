@@ -59,10 +59,8 @@ export async function persistObservedProgress(c: Context<MiddlewareKeyVariables>
       if (!row || parseAppOnboarding(row.onboarding).todo_list_version !== 3)
         return null
       const key = auth.apikey?.key ?? c.get('capgkey') ?? null
-      const isApiKeyCreator = observations.login_cli_mcp === true
+      const canMarkCliStart = observations.login_cli_mcp === true
         && auth.authType === 'apikey'
-        && (row.onboarding as { created_by_user_id?: unknown } | null)?.created_by_user_id === auth.userId
-      const canMarkCliStart = isApiKeyCreator
         && await checkPermissionPg(c, 'app.read', { appId }, tx, auth.userId, key)
       const hasOtherObservations = Object.keys(observations).some(id => id !== 'login_cli_mcp')
       const canWriteObservations = hasOtherObservations
