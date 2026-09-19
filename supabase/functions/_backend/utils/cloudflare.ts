@@ -417,7 +417,7 @@ export function formatDateCF(date: string | Date | undefined | null) {
 }
 
 interface AnalyticsApiResponse {
-  data: { [key: string]: string }[]
+  data: { [key: string]: string | null }[]
   meta: { name: string, type: string }[]
   rows: number
   rows_before_limit_at_least: number
@@ -445,13 +445,20 @@ function convertDataToJsTypes<T>(apiResponse: AnalyticsApiResponse) {
     const convertedRow = {} as any
     meta.forEach((column) => {
       const { name, type } = column
-      convertedRow[name] = converters[type] ? converters[type](row[name]) : row[name]
+      const value = row[name]
+      // Preserve missing DateTime values for caller validation; Date(null)
+      // would otherwise silently become a false 1970 timestamp.
+      if (value == null || (type === 'DateTime' && value.trim() === '')) {
+        convertedRow[name] = null
+        return
+      }
+      convertedRow[name] = converters[type] ? converters[type](value) : value
     })
     return convertedRow as T
   })
 }
 
-export async function runQueryToCFA<T>(c: Context, query: string) {
+export async function runQueryToCFA<T>(c: Context, query: string, options: { signal?: AbortSignal } = {}) {
   const CF_ANALYTICS_TOKEN = getEnv(c, 'CF_ANALYTICS_TOKEN')
   const CF_ACCOUNT_ID = getEnv(c, 'CF_ACCOUNT_ANALYTICS_ID')
 
@@ -474,6 +481,7 @@ export async function runQueryToCFA<T>(c: Context, query: string) {
       method: 'POST',
       headers,
       body: query,
+      signal: options.signal,
     })
 
     if (!response.ok) {
