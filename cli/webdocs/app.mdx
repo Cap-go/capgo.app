@@ -86,6 +86,32 @@ npx @capgo/cli@latest app list
 | **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
 | **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
 
+### <a id="app-todo"></a> 📋 **Todo**
+
+**Alias:** `todoList`
+
+```bash
+npx @capgo/cli@latest app todo com.example.app
+npx @capgo/cli@latest app todoList com.example.app
+```
+
+Show the app's versioned onboarding todo list with done, skipped, and pending tasks.
+Uses the same live progress checks as the Capgo dashboard. These checks can refresh
+saved v3 milestones when evidence is found. Skipped tasks count toward completed
+progress and remain labeled as skipped. If a live check fails, a warning is printed
+and saved progress is shown for that task.
+
+Omit the app ID to use the current Capacitor project's app ID. Requires an API key
+with `app.read` permission; additional milestone checks depend on its read permissions.
+
+**Options:**
+
+| Param | Type | Description |
+| ----- | ---- | ----------- |
+| **-a, --apikey** | <code>string</code> | API key to link to your account |
+| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
+| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+
 ### <a id="app-debug"></a> 🐞 **Debug**
 
 ```bash
