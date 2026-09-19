@@ -142,6 +142,7 @@ Capgo continues to load the root config while writing only the selected source. 
   - [Add](#app-add)
   - [Delete](#app-delete)
   - [List](#app-list)
+  - [Todo](#app-todo)
   - [Debug](#app-debug)
   - [Setting](#app-setting)
   - [Set](#app-set)
@@ -740,6 +741,31 @@ npx @capgo/cli@latest app list
 | **--show-org** | <code>boolean</code> | Show the organization name for each app |
 | **--show-org-id** | <code>boolean</code> | Show the organization ID for each app |
 | **--output-text** | <code>boolean</code> | Print plain text with a CSV app table and no interactive formatting |
+| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
+| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+
+### <a id="app-todo"></a> 🔹 **Todo**
+
+**Alias:** `todoList`
+
+```bash
+npx @capgo/cli@latest app todo
+```
+
+📋 Show your app's onboarding todo list with done, skipped, and pending tasks.
+Uses the same live progress checks as the Capgo dashboard. The app ID can be inferred from your Capacitor project.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest app todo com.example.app
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
 | **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
 | **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
 
