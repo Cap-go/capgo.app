@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
-import { APP_ONBOARDING_STEP_IDS } from '../supabase/functions/_backend/utils/appOnboarding.ts'
+import { APP_ONBOARDING_V2_STEP_IDS } from '../supabase/functions/_backend/utils/appOnboarding.ts'
+
+const APP_ONBOARDING_STEP_IDS = APP_ONBOARDING_V2_STEP_IDS
 
 describe('getting started CLI onboarding accordion', () => {
   it.concurrent('shows every CLI step in the getting started accordion', async () => {

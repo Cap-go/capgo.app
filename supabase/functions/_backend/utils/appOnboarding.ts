@@ -387,9 +387,6 @@ export function filterAppOnboardingReportedPatch(current: unknown, patch: AppOnb
   return { ...patch, steps }
 }
 
-// GettingStartedCliPanel uses the v2 checklist shape in the console shell.
-export const APP_ONBOARDING_STEP_IDS = APP_ONBOARDING_V2_STEP_IDS
-
 export function hasStartedCliSetup(value: unknown): boolean {
   const onboarding = parseAppOnboarding(value)
   if (onboarding.source === 'cli' || onboarding.source === 'mcp')
