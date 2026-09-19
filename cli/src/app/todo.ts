@@ -136,7 +136,7 @@ export function formatAppTodoList(appId: string, progress: AppTodoProgress, opti
 export async function readAppTodoProgress(appId: string, options: OptionsBase): Promise<AppTodoProgress> {
   const { data, error } = await invokeCapgoCliApi<AppTodoProgress>('private/onboarding_progress', {
     ...options,
-    body: { appId, N: 0, initial: true },
+    body: { appId, N: 0, initial: true, client: 'cli' },
     signal: AbortSignal.timeout(15_000),
   })
   if (error) {

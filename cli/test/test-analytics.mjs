@@ -136,6 +136,12 @@ try {
   assert.equal(body.tags.flags_count, 2)
   assert.equal(body.tags.positional_arg_count, 1)
 
+  requests = stubFetch()
+  trackCommandInvoked('app todo', ctx, 'explicit-todo-key')
+  await flushAnalytics()
+  assert.equal(findEvent(requests).init.headers.capgkey, 'explicit-todo-key', 'explicit --apikey takes precedence over a saved key')
+  assert.equal(JSON.stringify(JSON.parse(findEvent(requests).init.body).tags).includes('explicit-todo-key'), false, 'API keys must not appear in analytics tags')
+
   // 6b. login/init defer invocation until an explicitly validated key is available
   process.env.CAPGO_TOKEN = 'stale-key'
   requests = stubFetch()

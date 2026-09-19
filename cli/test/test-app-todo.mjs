@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { formatAppTodoList, getAppTodoSteps, readAppTodoProgress } from '../src/app/todo.ts'
@@ -94,7 +94,7 @@ try {
   globalThis.fetch = async (input, init) => {
     assert.equal(String(input), options.supaHost + '/functions/v1/private/onboarding_progress')
     assert.equal(init.method, 'POST')
-    assert.deepEqual(JSON.parse(init.body), { appId, N: 0, initial: true })
+    assert.deepEqual(JSON.parse(init.body), { appId, N: 0, initial: true, client: 'cli' })
     assert.equal(init.headers.capgkey, options.apikey)
     assert.equal(init.headers.Authorization, 'Bearer ' + options.supaAnon)
     return Response.json(progress)
@@ -116,11 +116,17 @@ try {
   writeFileSync(join(fixture, 'capacitor.config.json'), JSON.stringify({ appId, appName: 'Todo test', webDir: 'dist' }))
   const preload = join(fixture, 'fetch.mjs')
   writeFileSync(preload, `
+    import { writeFileSync } from 'node:fs'
     const nativeFetch = globalThis.fetch
     globalThis.fetch = async (input, init) => {
       const url = input?.url ?? String(input)
       const scenario = process.env.CAPGO_TODO_SCENARIO
       if (!url.startsWith('http') || url.includes('.wasm')) return nativeFetch(input, init)
+      if (url.includes('/private/events') && process.env.CAPGO_TODO_TRACKING_FILE) {
+        const event = JSON.parse(init.body)
+        if (event.event === 'CLI Command Invoked')
+          writeFileSync(process.env.CAPGO_TODO_TRACKING_FILE, JSON.stringify({ key: init.headers.capgkey, command: event.tags.command_path }))
+      }
       if (url.includes('/private/config')) return Response.json({ supaHost: ${JSON.stringify(options.supaHost)}, supaKey: ${JSON.stringify(options.supaAnon)} })
       if (url.includes('/rpc/reject_access_due_to_2fa_for_app')) return Response.json(scenario === 'two-factor')
       if (url.includes('/private/onboarding_progress')) {
@@ -175,6 +181,14 @@ try {
       }
     }
   }
+
+  const trackingFile = join(fixture, 'tracking.json')
+  const tracked = spawnSync('node', ['--import', preload, builtCli, 'app', 'todo', appId, '-a', options.apikey, '--supa-host', options.supaHost, '--supa-anon', options.supaAnon], {
+    cwd: fixture, encoding: 'utf8', timeout: 15000,
+    env: { ...process.env, CAPGO_TOKEN: 'stale-saved-key', CAPGO_TODO_TRACKING_FILE: trackingFile, CI: '1', CAPGO_DISABLE_TELEMETRY: '', CAPGO_DISABLE_POSTHOG: '' },
+  })
+  assert.equal(tracked.status, 0, tracked.stdout + tracked.stderr)
+  assert.deepEqual(JSON.parse(readFileSync(trackingFile, 'utf8')), { key: options.apikey, command: 'app todo' }, 'the command event uses --apikey instead of a saved key')
 }
 finally {
   rmSync(fixture, { recursive: true, force: true })
