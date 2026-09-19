@@ -11,10 +11,10 @@ const rawIconId = '\0vitest-raw-icon'
 export default defineConfig(({ mode }) => ({
   plugins: [
     {
-      name: 'vitest-auth-email-html',
+      name: 'vitest-auth-email-templates',
       enforce: 'pre',
       async load(id) {
-        if (!id.includes('/cloudflare_workers/api/email_templates/') || !id.endsWith('.html'))
+        if (!id.includes('/cloudflare_workers/api/email_templates/') || !/\.(?:html|txt)$/.test(id))
           return null
         return `export default ${JSON.stringify(await readFile(id, 'utf8'))}`
       },

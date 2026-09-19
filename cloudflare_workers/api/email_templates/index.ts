@@ -1,26 +1,36 @@
 import type { AuthEmailTemplateDetails } from '../../../supabase/functions/_backend/utils/auth_email.ts'
 import emailChange from './email_change.html'
+import emailChangeText from './email_change.txt'
 import emailChangedNotification from './email_changed_notification.html'
+import emailChangedNotificationText from './email_changed_notification.txt'
 import invite from './invite.html'
+import inviteText from './invite.txt'
 import magiclink from './magiclink.html'
+import magiclinkText from './magiclink.txt'
 import mfaFactorEnrolledNotification from './mfa_factor_enrolled_notification.html'
+import mfaFactorEnrolledNotificationText from './mfa_factor_enrolled_notification.txt'
 import mfaFactorUnenrolledNotification from './mfa_factor_unenrolled_notification.html'
+import mfaFactorUnenrolledNotificationText from './mfa_factor_unenrolled_notification.txt'
 import passwordChangedNotification from './password_changed_notification.html'
+import passwordChangedNotificationText from './password_changed_notification.txt'
 import reauthentication from './reauthentication.html'
+import reauthenticationText from './reauthentication.txt'
 import recovery from './recovery.html'
+import recoveryText from './recovery.txt'
 import signup from './signup.html'
+import signupText from './signup.txt'
 
 const templates = {
-  email_change: { subject: 'Confirm your Capgo.app email change', html: emailChange },
-  email_changed_notification: { subject: 'Your Capgo.app email was changed', html: emailChangedNotification },
-  invite: { subject: 'You\'re invited to Capgo.app', html: invite },
-  magiclink: { subject: 'Your Capgo.app sign-in link', html: magiclink },
-  mfa_factor_enrolled_notification: { subject: 'MFA added to your Capgo.app account', html: mfaFactorEnrolledNotification },
-  mfa_factor_unenrolled_notification: { subject: 'MFA removed from your Capgo.app account', html: mfaFactorUnenrolledNotification },
-  password_changed_notification: { subject: 'Your Capgo.app password was changed', html: passwordChangedNotification },
-  reauthentication: { subject: 'Your Capgo.app confirmation code', html: reauthentication },
-  recovery: { subject: 'Reset your Capgo.app password', html: recovery },
-  signup: { subject: 'Confirm your Capgo.app email', html: signup },
+  email_change: { subject: 'Confirm your Capgo.app email change', html: emailChange, text: emailChangeText },
+  email_changed_notification: { subject: 'Your Capgo.app email was changed', html: emailChangedNotification, text: emailChangedNotificationText },
+  invite: { subject: 'You\'re invited to Capgo.app', html: invite, text: inviteText },
+  magiclink: { subject: 'Your Capgo.app sign-in link', html: magiclink, text: magiclinkText },
+  mfa_factor_enrolled_notification: { subject: 'MFA added to your Capgo.app account', html: mfaFactorEnrolledNotification, text: mfaFactorEnrolledNotificationText },
+  mfa_factor_unenrolled_notification: { subject: 'MFA removed from your Capgo.app account', html: mfaFactorUnenrolledNotification, text: mfaFactorUnenrolledNotificationText },
+  password_changed_notification: { subject: 'Your Capgo.app password was changed', html: passwordChangedNotification, text: passwordChangedNotificationText },
+  reauthentication: { subject: 'Your Capgo.app confirmation code', html: reauthentication, text: reauthenticationText },
+  recovery: { subject: 'Reset your Capgo.app password', html: recovery, text: recoveryText },
+  signup: { subject: 'Confirm your Capgo.app email', html: signup, text: signupText },
 } as const
 
 export type AuthEmailAction = keyof typeof templates
@@ -48,31 +58,11 @@ function escapeHtml(value: string): string {
   })[char] ?? char)
 }
 
-function htmlToTextTemplate(html: string): string {
-  return html
-    .replace(/<a\s[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (_match, href: string, label: string) => {
-      const text = label.replace(/<[^>]*>/g, '').trim()
-      return text === href ? href : `${text} (${href})`
-    })
-    .replace(/<br\b[^>]*>/gi, '\n')
-    .replace(/<\/p>/gi, '\n\n')
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, '\'')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-}
-
 export function renderAuthEmail(action: AuthEmailAction, details: AuthEmailTemplateDetails) {
   const template = templates[action]
   return {
     subject: template.subject,
     html: render(template.html, details, escapeHtml),
-    text: render(htmlToTextTemplate(template.html), details, value => value),
+    text: render(template.text, details, value => value),
   }
 }
