@@ -2253,7 +2253,7 @@
     },
     {
       "constraintOwned": false,
-      "definition": "CREATE INDEX idx_apps_onboarding_login_creator ON public.apps USING btree (((onboarding ->> 'created_by_user_id'::text))) WHERE ((onboarding #>> '{setup,todo_list_version}'::text[]) = ANY (ARRAY['2'::text, '3'::text]))",
+      "definition": "CREATE INDEX idx_apps_onboarding_login_creator ON public.apps USING btree (((onboarding ->> 'created_by_user_id'::text))) WHERE ((onboarding #>> '{setup,todo_list_version}'::text[]) = ANY (ARRAY['2'::text, '3'::text, '4'::text]))",
       "name": "idx_apps_onboarding_login_creator",
       "table": "apps",
       "valid": true
