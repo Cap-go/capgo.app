@@ -1,3 +1,5 @@
+import type { Context } from 'hono'
+import { respondOpenStatusAdminCheck } from '../utils/capgo_health.ts'
 import { honoFactory, useCors } from '../utils/hono.ts'
 import { cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
@@ -451,44 +453,38 @@ async function fetchQueueMetrics(
   }
 }
 
-export const app = honoFactory.createApp()
-
-app.use('*', useCors)
-
-app.get('/', async (c) => {
-  await validatePlatformAdminOrApiSecret(c, {
-    logPrefix: 'queue_health',
-    forbiddenMessage: 'Not admin - only admin users can access queue health',
-  })
-
+/** Run pgmq metrics and return Capgo legacy queue health payload plus HTTP status for OpenStatus wrapping. */
+export async function buildQueueHealthAssessment(
+  c: Context,
+  pgClient: ReturnType<typeof getPgClient>,
+): Promise<{ capgoStatus: QueueStatus, legacyBody: Record<string, unknown>, httpStatus: number }> {
   const thresholds = defaultThresholds()
-  const pgClient = getPgClient(c, false)
+  const queueNames = await listQueues(pgClient)
+  const intervalMap = await loadQueueIntervals(pgClient)
 
-  try {
-    const queueNames = await listQueues(pgClient)
-    const intervalMap = await loadQueueIntervals(pgClient)
+  const metricsList = await Promise.all(
+    queueNames.map(queueName => fetchQueueMetrics(
+      pgClient,
+      queueName,
+      intervalMap.get(queueName) ?? null,
+      thresholds,
+    )),
+  )
 
-    const metricsList = await Promise.all(
-      queueNames.map(queueName => fetchQueueMetrics(
-        pgClient,
-        queueName,
-        intervalMap.get(queueName) ?? null,
-        thresholds,
-      )),
-    )
+  const queues = metricsList.map(metrics => evaluateQueueHealth(metrics, thresholds))
+  const unhealthy = queues.filter(queue => queue.status === 'ko')
+  const overallStatus: QueueStatus = unhealthy.length > 0 ? 'ko' : 'ok'
 
-    const queues = metricsList.map(metrics => evaluateQueueHealth(metrics, thresholds))
-    const unhealthy = queues.filter(queue => queue.status === 'ko')
-    // Empty registry is not a processing failure (fresh installs / no pgmq queues yet).
-    const overallStatus: QueueStatus = unhealthy.length > 0 ? 'ko' : 'ok'
+  const maxQueueDepth = queues.reduce((max, queue) => Math.max(max, queue.queue_count), 0)
+  const maxArchiveRecent = queues.reduce((max, queue) => Math.max(max, queue.archive_recent_count), 0)
+  const totalStuck = queues.reduce((sum, queue) => sum + queue.stuck_count, 0)
+  const totalNeverReadStale = queues.reduce((sum, queue) => sum + queue.never_read_stale_count, 0)
+  const totalArchiveStale = queues.reduce((sum, queue) => sum + queue.archive_stale_count, 0)
 
-    const maxQueueDepth = queues.reduce((max, queue) => Math.max(max, queue.queue_count), 0)
-    const maxArchiveRecent = queues.reduce((max, queue) => Math.max(max, queue.archive_recent_count), 0)
-    const totalStuck = queues.reduce((sum, queue) => sum + queue.stuck_count, 0)
-    const totalNeverReadStale = queues.reduce((sum, queue) => sum + queue.never_read_stale_count, 0)
-    const totalArchiveStale = queues.reduce((sum, queue) => sum + queue.archive_stale_count, 0)
-
-    return c.json({
+  return {
+    capgoStatus: overallStatus,
+    httpStatus: overallStatus === 'ok' ? 200 : 503,
+    legacyBody: {
       status: overallStatus,
       checked_at: new Date().toISOString(),
       no_queues_registered: queues.length === 0,
@@ -509,12 +505,15 @@ app.get('/', async (c) => {
         reason_details: queue.reason_details,
       })),
       queues,
-    }, overallStatus === 'ok' ? 200 : 503)
+    },
   }
-  catch (error) {
-    logPgError(c, 'queue_health', error)
-    cloudlogErr({ requestId: c.get('requestId'), message: 'queue_health_error', error })
-    return c.json({
+}
+
+function queueHealthErrorAssessment(thresholds: QueueHealthThresholds) {
+  return {
+    capgoStatus: 'ko' as const,
+    httpStatus: 500,
+    legacyBody: {
       status: 'ko',
       error: 'queue_health_error',
       message: 'Failed to check queue health',
@@ -530,11 +529,54 @@ app.get('/', async (c) => {
       total_archive_stale_count: 0,
       thresholds,
       criteria: buildQueueHealthCriteria(thresholds),
-      unhealthy_queues: [],
-      queues: [],
-    }, 500)
+      unhealthy_queues: [] as Array<Record<string, unknown>>,
+      queues: [] as Array<Record<string, unknown>>,
+    },
+  }
+}
+
+export const app = honoFactory.createApp()
+
+app.use('*', useCors)
+
+app.get('/', async (c) => {
+  await validatePlatformAdminOrApiSecret(c, {
+    logPrefix: 'queue_health',
+    forbiddenMessage: 'Not admin - only admin users can access queue health',
+  })
+
+  const thresholds = defaultThresholds()
+  let pgClient: ReturnType<typeof getPgClient> | undefined
+
+  try {
+    pgClient = getPgClient(c, false)
+    const client = pgClient
+    return await respondOpenStatusAdminCheck(c, {
+      probeName: 'pgmq_queues',
+      deadlineFallbackAssessment: () => queueHealthErrorAssessment(thresholds),
+      runAssessment: async () => {
+        try {
+          return await buildQueueHealthAssessment(c, client)
+        }
+        catch (error) {
+          logPgError(c, 'queue_health', error)
+          cloudlogErr({ requestId: c.get('requestId'), message: 'queue_health_error', error })
+          return queueHealthErrorAssessment(thresholds)
+        }
+      },
+    })
+  }
+  catch (error) {
+    logPgError(c, 'queue_health', error)
+    cloudlogErr({ requestId: c.get('requestId'), message: 'queue_health_error', error })
+    return await respondOpenStatusAdminCheck(c, {
+      probeName: 'pgmq_queues',
+      deadlineFallbackAssessment: () => queueHealthErrorAssessment(thresholds),
+      runAssessment: async () => queueHealthErrorAssessment(thresholds),
+    })
   }
   finally {
-    await closeClient(c, pgClient)
+    if (pgClient)
+      await closeClient(c, pgClient)
   }
 })

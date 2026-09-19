@@ -30,6 +30,13 @@ describe('[GET] /ok Function Test', () => {
       const response = await fetch(`${CLOUDFLARE_API_URL}/ok`)
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({ status: 'ok' })
+
+      const healthResponse = await fetch(`${CLOUDFLARE_API_URL}/health`)
+      expect(healthResponse.status).toBeGreaterThanOrEqual(200)
+      expect(healthResponse.status).toBeLessThan(600)
+      const healthBody = await healthResponse.json() as { status: string, checks?: Array<{ name: string }> }
+      expect(healthBody.status).toMatch(/^(ok|degraded|unhealthy)$/)
+      expect(healthBody.checks?.some(check => check.name === 'database')).toBe(true)
       return
     }
 
