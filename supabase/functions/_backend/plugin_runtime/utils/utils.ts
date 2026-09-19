@@ -136,7 +136,13 @@ export function isInternalVersionName(version: string) {
   return version === 'builtin' || version === 'unknown'
 }
 
-export function isValidSemver(version: string): boolean {
+export function isVersionDeleted(row: { deleted?: boolean | null, deleted_at?: string | Date | null } | null | undefined): boolean {
+  if (!row)
+    return false
+  return row.deleted === true || row.deleted_at != null
+}
+
+export function isValidSemver(version: string) {
   if (!version)
     return false
   // Reject leading 'v' or 'V'

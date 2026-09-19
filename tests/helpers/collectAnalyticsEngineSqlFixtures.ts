@@ -2,8 +2,6 @@ import type { Context } from 'hono'
 import {
   buildNativeObservePluginTotalDevicesCFQuery,
   buildNativeObservePluginVersionsCFQuery,
-  buildPlatformUpdateDeliveryDailyCFQuery,
-  buildPlatformUpdateDeliveryOverviewCFQuery,
   buildReadDevicesCFQuery,
   buildUpdateDeliveryTimingEventsCFQuery,
   countDevicesCF,
@@ -271,29 +269,18 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
         }),
       },
       {
-        name: 'buildUpdateDeliveryTimingEventsCFQuery.platformRequireDuration',
+        name: 'buildUpdateDeliveryTimingEventsCFQuery.platformPairing',
         query: buildUpdateDeliveryTimingEventsCFQuery({
           start_date: SAMPLE_START,
           end_date: SAMPLE_END,
-          actions: ['download_complete', 'download_zip_complete'],
-          require_duration: true,
+          actions: [
+            'download_complete',
+            'download_zip_complete',
+            'download_0',
+            'download_zip_start',
+            'download_manifest_start',
+          ],
           limit: 50_000,
-        }),
-      },
-      {
-        name: 'buildPlatformUpdateDeliveryDailyCFQuery.platform',
-        query: buildPlatformUpdateDeliveryDailyCFQuery({
-          query_start: '2026-05-31T22:00:00.000Z',
-          period_start: SAMPLE_START,
-          end_date: SAMPLE_END,
-        }),
-      },
-      {
-        name: 'buildPlatformUpdateDeliveryOverviewCFQuery.platform',
-        query: buildPlatformUpdateDeliveryOverviewCFQuery({
-          query_start: '2026-05-31T22:00:00.000Z',
-          period_start: SAMPLE_START,
-          end_date: SAMPLE_END,
         }),
       },
       {
@@ -368,6 +355,7 @@ export async function collectAnalyticsEngineSqlFixtures(): Promise<AnalyticsEngi
       search: 'demo',
       actions: ['get', 'set'],
       deviceIds: [SAMPLE_DEVICE_ID],
+      version_name: '1.2.3',
       order: [{ key: 'created_at', sortable: 'desc' }],
       limit: 10,
     }))

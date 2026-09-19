@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
+import { createClient } from '@supabase/supabase-js'
 import { findAppInOrganization } from '../src/api/app.ts'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from '../src/init/app-conflict.ts'
 import { isChannelAlreadyExistsError } from '../src/init/channel-conflict.ts'
+import { selectOnboardingChannel } from '../src/init/channel-selection.ts'
 
 let failures = 0
 
@@ -137,6 +139,140 @@ await t('findAppInOrganization returns null for another org or missing app', asy
   finally {
     globalThis.fetch = originalFetch
   }
+})
+
+async function withChannelSelection(channels, answers, run, lookupError) {
+  const calls = { reuse: [], chooseName: [], create: [] }
+  const supabase = createClient('https://example.supabase.co', 'test-key', {
+    auth: { persistSession: false, autoRefreshToken: false },
+  })
+  mockAppFetch(async (url) => {
+    const request = new URL(url)
+    assert.equal(request.pathname, '/rest/v1/channels')
+    assert.equal(request.searchParams.get('app_id'), 'eq.com.example.app')
+    assert.equal(request.searchParams.get('select'), 'name,public')
+    return jsonResponse(lookupError ?? channels, lookupError ? 403 : 200)
+  })
+  const prompts = {
+    reuseChannel: async (name) => {
+      calls.reuse.push(name)
+      const answer = answers.reuse.shift()
+      if (answer instanceof Error)
+        throw answer
+      assert.equal(typeof answer, 'boolean', 'unexpected reuse prompt')
+      return answer
+    },
+    chooseName: async (names) => {
+      calls.chooseName.push([...names])
+      const name = answers.names.shift()
+      assert.equal(typeof name, 'string', 'unexpected new-channel prompt')
+      return name
+    },
+    createChannel: async (name) => {
+      calls.create.push(name)
+      const error = answers.createErrors?.shift()
+      if (error)
+        throw error
+    },
+  }
+  try {
+    await run(() => selectOnboardingChannel(supabase, 'com.example.app', answers.preferredName ?? 'production', prompts), calls)
+  }
+  finally {
+    globalThis.fetch = originalFetch
+  }
+}
+
+for (const name of ['production', 'staging']) {
+  await t(`onboarding offers to reuse an existing ${name} channel before creating anything`, async () => {
+    await withChannelSelection([{ name, public: true }], { reuse: [true], names: [] }, async (select, calls) => {
+      assert.equal(await select(), name)
+      assert.deepEqual(calls, { reuse: [name], chooseName: [], create: [] })
+    })
+  })
+}
+
+await t('onboarding keeps the channel-name picker for apps without channels', async () => {
+  await withChannelSelection([], { reuse: [], names: ['production'] }, async (select, calls) => {
+    assert.equal(await select(), 'production')
+    assert.deepEqual(calls, { reuse: [], chooseName: [[]], create: ['production'] })
+  })
+})
+
+await t('declining reuse creates a new channel with the chosen name', async () => {
+  await withChannelSelection([{ name: 'production', public: true }], { reuse: [false], names: ['beta'] }, async (select, calls) => {
+    assert.equal(await select(), 'beta')
+    assert.deepEqual(calls, { reuse: ['production'], chooseName: [['production']], create: ['beta'] })
+  })
+})
+
+await t('choosing another existing channel asks for reuse instead of recreating it', async () => {
+  await withChannelSelection([
+    { name: 'beta', public: false },
+    { name: 'production', public: true },
+  ], { reuse: [false, true], names: ['beta'] }, async (select, calls) => {
+    assert.equal(await select(), 'beta')
+    assert.deepEqual(calls.reuse, ['production', 'beta'])
+    assert.deepEqual(calls.create, [])
+  })
+})
+
+await t('declining an already-used custom name returns to name selection', async () => {
+  await withChannelSelection([{ name: 'beta', public: false }], { reuse: [false, false], names: ['beta', 'dev'] }, async (select, calls) => {
+    assert.equal(await select(), 'dev')
+    assert.deepEqual(calls.reuse, ['beta', 'beta'])
+    assert.deepEqual(calls.create, ['dev'])
+  })
+})
+
+for (const [preferredName, expected] of [['production', 'production'], ['beta', 'beta'], ['missing', 'staging']]) {
+  await t(`onboarding prefers ${expected} when the saved channel is ${preferredName}`, async () => {
+    await withChannelSelection([
+      { name: 'beta', public: false },
+      { name: 'production', public: false },
+      { name: 'staging', public: true },
+    ], { preferredName, reuse: [true], names: [] }, async (select, calls) => {
+      assert.equal(await select(), expected)
+      assert.deepEqual(calls.reuse, [expected])
+      assert.deepEqual(calls.create, [])
+    })
+  })
+}
+
+await t('channel lookup failures stop onboarding before prompting or creating', async () => {
+  await withChannelSelection([], { reuse: [], names: [] }, async (select, calls) => {
+    await assert.rejects(select, /Cannot check existing channels:.*permission denied/)
+    assert.deepEqual(calls, { reuse: [], chooseName: [], create: [] })
+  }, { message: 'permission denied', code: '42501' })
+})
+
+await t('cancelling reuse stops without creating a channel', async () => {
+  const cancelled = new Error('Operation cancelled')
+  await withChannelSelection([{ name: 'production', public: true }], { reuse: [cancelled], names: [] }, async (select, calls) => {
+    await assert.rejects(select, error => error === cancelled)
+    assert.deepEqual(calls.create, [])
+  })
+})
+
+await t('a duplicate creation error offers reuse and permits a different new name', async () => {
+  await withChannelSelection([], {
+    reuse: [false],
+    names: ['production', 'beta'],
+    createErrors: [new Error('duplicate key value violates unique constraint "unique_name_app_id"')],
+  }, async (select, calls) => {
+    assert.equal(await select(), 'beta')
+    assert.deepEqual(calls.reuse, ['production'])
+    assert.deepEqual(calls.chooseName, [[], ['production']])
+    assert.deepEqual(calls.create, ['production', 'beta'])
+  })
+})
+
+await t('other creation failures propagate without offering reuse', async () => {
+  const failed = new Error('network unavailable')
+  await withChannelSelection([], { reuse: [], names: ['production'], createErrors: [failed] }, async (select, calls) => {
+    await assert.rejects(select, error => error === failed)
+    assert.deepEqual(calls.reuse, [])
+  })
 })
 
 if (failures > 0) {

@@ -242,3 +242,56 @@ describe('post-CLI getting started redirect', () => {
     })).toBeNull()
   })
 })
+
+describe('exploration refresh reminder', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.resetModules()
+    window.sessionStorage.clear()
+    window.localStorage.clear()
+  })
+
+  it('shows only on refresh of a saved exploration, once per page', async () => {
+    const initial = await import('../src/utils/onboardingRedirect')
+    initial.allowOnboardingDashboardExploration('user-1', 'com.example.app')
+    const options = { userId: 'user-1', appId: 'com.example.app', navigationType: 'reload' }
+    expect(initial.shouldShowOnboardingExplorationReminder(options)).toBe(false)
+    vi.resetModules()
+    const refreshed = await import('../src/utils/onboardingRedirect')
+    expect(refreshed.shouldShowOnboardingExplorationReminder({ ...options, navigationType: 'navigate' })).toBe(false)
+    expect(refreshed.shouldShowOnboardingExplorationReminder({ ...options, userId: 'user-2' })).toBe(false)
+    expect(refreshed.shouldShowOnboardingExplorationReminder({ ...options, appId: 'com.other.app' })).toBe(false)
+    expect(refreshed.shouldShowOnboardingExplorationReminder(options)).toBe(true)
+    refreshed.markOnboardingExplorationReminderShown()
+    expect(refreshed.shouldShowOnboardingExplorationReminder(options)).toBe(false)
+  })
+
+  it('persists reminder dismissal without clearing exploration or dismissing another user', async () => {
+    const initial = await import('../src/utils/onboardingRedirect')
+    initial.allowOnboardingDashboardExploration('user-1', 'com.example.app')
+    initial.dismissOnboardingExplorationReminder('user-1')
+    vi.resetModules()
+    const refreshed = await import('../src/utils/onboardingRedirect')
+    expect(refreshed.shouldShowOnboardingExplorationReminder({ userId: 'user-1', appId: 'com.example.app', navigationType: 'reload' })).toBe(false)
+    expect(refreshed.getOnboardingResumeAppId('user-1')).toBe('com.example.app')
+    refreshed.allowOnboardingDashboardExploration('user-2', 'com.example.app')
+    vi.resetModules()
+    const other = await import('../src/utils/onboardingRedirect')
+    expect(other.shouldShowOnboardingExplorationReminder({ userId: 'user-2', appId: 'com.example.app', navigationType: 'reload' })).toBe(true)
+  })
+
+  it('keeps navigation usable with blocked local storage', async () => {
+    const initial = await import('../src/utils/onboardingRedirect')
+    initial.allowOnboardingDashboardExploration('user-1', 'com.example.app')
+    vi.resetModules()
+    const refreshed = await import('../src/utils/onboardingRedirect')
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('blocked')
+    })
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('blocked')
+    })
+    expect(() => refreshed.dismissOnboardingExplorationReminder('user-1')).not.toThrow()
+  })
+
+})

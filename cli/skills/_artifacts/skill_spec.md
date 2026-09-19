@@ -2,7 +2,7 @@
 
 ## Goal
 
-Provide a small Capgo CLI skill set that helps an agent choose and invoke the correct CLI commands for app setup, OTA release operations, organization administration, MCP setup, GitHub support commands, and native cloud builds without exceeding TanStack Intent size limits.
+Provide a small Capgo CLI skill set that helps an agent choose and invoke the correct CLI commands for app setup, OTA release operations, organization administration, MCP setup, GitHub support commands, Observe queries, and native cloud builds without exceeding TanStack Intent size limits.
 
 ## Sources
 
@@ -13,6 +13,7 @@ Provide a small Capgo CLI skill set that helps an agent choose and invoke the co
 ## Skill set
 
 - `usage`: routing, setup, diagnostics, app commands, docs generation, MCP, and GitHub support commands.
+- `observe`: Observe query commands and MCP (`summary`, `metrics`, `events`, `device`, `versions`, `routes`).
 - `release-management`: bundle, channel, compatibility, cleanup, and encryption-key workflows.
 - `native-builds`: native cloud build requests and build credential storage/update flows.
 - `organization-management`: account ID lookup, organization admin flows, and deprecated `organisation` aliases.

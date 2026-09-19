@@ -11,12 +11,24 @@ import {
   FRONTEND_ONBOARDING_MAX_RANGE_MS,
   getAdminFrontendOnboardingAnalytics,
 } from '../supabase/functions/_backend/utils/frontend_onboarding_analytics.ts'
-import { buildFrontendOnboardingProductionHostHogql } from '../supabase/functions/_backend/utils/frontend_onboarding_analytics_model.ts'
+import {
+  buildFrontendOnboardingProductionHostHogql,
+  hogqlOnboardingVersionIn,
+  hogqlOnboardingVersionIsV4,
+  hogqlOnboardingVersionValue,
+  isFrontendOnboardingVersionLabel,
+  WEBNATIVE_ONBOARDING_VERSION_LABELS,
+} from '../supabase/functions/_backend/utils/frontend_onboarding_analytics_model.ts'
 import { createFrontendOnboardingDailySetupCliOutcomeCounts } from '../supabase/functions/_backend/utils/frontend_onboarding_daily_setup_cli_outcomes_model.ts'
 
-const { cloudlogErrMock, queryPosthogHogqlMock } = vi.hoisted(() => ({
+const { checklistCoverageMock, cloudlogErrMock, queryPosthogHogqlMock } = vi.hoisted(() => ({
+  checklistCoverageMock: vi.fn(),
   cloudlogErrMock: vi.fn(),
   queryPosthogHogqlMock: vi.fn(),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/frontend_onboarding_cli_checklist.ts', () => ({
+  getFrontendOnboardingCliChecklistCoverage: checklistCoverageMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/posthog_read.ts', () => ({
@@ -28,6 +40,7 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
 }))
 
 const DAY_MS = 24 * 60 * 60 * 1000
+const RAW_VERSION = "coalesce(nullIf(JSONExtractString(toString(properties), 'onboarding_version'), ''), JSONExtractRaw(toString(properties), 'onboarding_version'))"
 
 function createContext(): Context {
   return { get: () => 'request-id' } as unknown as Context
@@ -47,6 +60,11 @@ function expectAugust22ProductionHostFallback(query: string, properties = 'prope
 }
 
 beforeEach(() => {
+  checklistCoverageMock.mockReset()
+  checklistCoverageMock.mockResolvedValue({
+    1: { linked_apps: 0, active_apps: 0, unavailable_apps: 0, steps: [] },
+    2: { linked_apps: 0, active_apps: 0, unavailable_apps: 0, steps: [] },
+  })
   cloudlogErrMock.mockReset()
   queryPosthogHogqlMock.mockReset()
   queryPosthogHogqlMock.mockResolvedValue({
@@ -65,6 +83,23 @@ describe('buildFrontendOnboardingProductionHostHogql', () => {
   })
 })
 
+describe('frontend onboarding version labels', () => {
+  it.each(['properties', 'selected_events.properties'])('bypasses numeric property casting for %s', (properties) => {
+    const rawVersion = `coalesce(nullIf(JSONExtractString(toString(${properties}), 'onboarding_version'), ''), JSONExtractRaw(toString(${properties}), 'onboarding_version'))`
+    const labels = "'5.A', '5.C', '5.E', '5.F', '5.G'"
+    expect(hogqlOnboardingVersionValue(properties)).toBe(`multiIf(${rawVersion} IN (${labels}), 4, toIntOrZero(${rawVersion}))`)
+    expect(hogqlOnboardingVersionIn(properties, [2, 3, 4])).toBe(`(toIntOrZero(${rawVersion}) IN (2, 3, 4) OR ${rawVersion} IN (${labels}))`)
+    expect(hogqlOnboardingVersionIsV4(properties)).toBe(`(toIntOrZero(${rawVersion}) = 4 OR ${rawVersion} IN (${labels}))`)
+  })
+
+  it('accepts every active experiment analytics version', () => {
+    expect(WEBNATIVE_ONBOARDING_VERSION_LABELS).toEqual(['5.A', '5.C', '5.E', '5.F', '5.G'])
+    for (const version of WEBNATIVE_ONBOARDING_VERSION_LABELS)
+      expect(isFrontendOnboardingVersionLabel(version)).toBe(true)
+    expect(isFrontendOnboardingVersionLabel('5.D')).toBe(false)
+  })
+})
+
 describe('buildFrontendOnboardingHogql', () => {
   it('queries supported pre-org attempts and joins actor-scoped CLI starts by human identity', () => {
     const query = buildFrontendOnboardingHogql(
@@ -73,7 +108,7 @@ describe('buildFrontendOnboardingHogql', () => {
       '2026-08-04T00:00:00.789Z',
     )
 
-    expect(query).toContain("event IN ('onboarding_step_viewed', 'onboarding_ai_instructions_copied'")
+    expect(query).toContain('event IN (\'onboarding_step_viewed\', \'onboarding_step_completed\', \'onboarding_ai_instructions_copied\'')
     expect(query).toContain("'onboarding_app_id_entered'")
     expect(query).toContain("'onboarding_app_creation_succeeded'")
     expect(query).not.toContain("'onboarding_app_details_step_completed'")
@@ -86,14 +121,18 @@ describe('buildFrontendOnboardingHogql', () => {
     expect(query).toContain('JSONExtractString(toString(properties), \'flow\') = \'pre_org\'')
     expect(query).toContain('JSONExtractString(toString(properties), \'$host\') = \'console.capgo.app\'')
     expectAugust22ProductionHostFallback(query)
-    expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) AS onboarding_version')
-    expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) IN (1, 2, 3, 4)')
+    expect(query).toContain(`multiIf(${RAW_VERSION} IN ('5.A', '5.C', '5.E', '5.F', '5.G'), 4, toIntOrZero(${RAW_VERSION})) AS onboarding_version`)
+    expect(query).toContain(`toIntOrZero(${RAW_VERSION}) IN (1, 2, 3, 4)`)
+    expect(query).toContain(`${RAW_VERSION} IN ('5.A', '5.C', '5.E', '5.F', '5.G')`)
+    expect(query).not.toContain('properties.onboarding_version')
     expect(query).not.toContain('toInt64OrZero')
     expect(query).toContain('JSONExtractString(toString(properties), \'onboarding_attempt_id\')')
+    expect(query).toContain('JSONExtractString(toString(properties), \'app_id\') AS app_id')
     expect(query).toContain('JSONExtractString(toString(properties), \'step\')')
     expect(query).not.toMatch(/WITH\s+JSONExtractString/)
     expect(query).toContain('toString(person_id) AS person_id')
     expect(query).toContain('onboarding_attempts.person_id AS person_id')
+    expect(query).toContain("argMinIf(app_id, timestamp, event = 'onboarding_step_completed' AND step IN ('organization', 'setup') AND app_id != '') AS app_id")
     expect(query).toContain('JSONExtractString(toString(properties), \'channel\') = \'onboarding-v2\'')
     expect(query).toContain('event = \'CLI Command Invoked\'')
     expect(query).toContain('JSONExtractString(toString(properties), \'command_path\') = \'init\'')
@@ -134,7 +173,8 @@ describe('buildFrontendOnboardingWelcomeHogql', () => {
     )
 
     expect(query).toContain("event = 'onboarding_step_viewed'")
-    expect(query).toContain("toIntOrZero(toString(properties.onboarding_version)) = 4")
+    expect(query).toContain(`toIntOrZero(${RAW_VERSION}) = 4`)
+    expect(query).toContain(`${RAW_VERSION} IN ('5.A', '5.C', '5.E', '5.F', '5.G')`)
     expect(query).toContain("JSONExtractString(toString(properties), 'flow') = 'pre_org'")
     expect(query).toContain("JSONExtractString(toString(properties), '$host') = 'console.capgo.app'")
     expectAugust22ProductionHostFallback(query)
@@ -166,7 +206,8 @@ describe('buildFrontendOnboardingTabSwitchHogql', () => {
     expect(query).toContain("JSONExtractString(toString(properties), 'flow') = 'pre_org'")
     expect(query).toContain("JSONExtractString(toString(properties), '$host') = 'console.capgo.app'")
     expectAugust22ProductionHostFallback(query)
-    expect(query).toContain('toIntOrZero(toString(properties.onboarding_version)) = 4')
+    expect(query).toContain(`toIntOrZero(${RAW_VERSION}) = 4`)
+    expect(query).toContain(`${RAW_VERSION} IN ('5.A', '5.C', '5.E', '5.F', '5.G')`)
     expect(query).toContain("toString(toDate(toTimeZone(timestamp, 'UTC'))) AS date")
     expect(query).not.toContain("toDate(timestamp, 'UTC')")
     expect(query).toContain("step IN ('welcome', 'intent', 'app_name', 'app_id', 'app_icon', 'organization')")
@@ -280,6 +321,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       failureReason: null,
       rows: [{
         attempt_id: 'attempt-1',
+        app_id: 'com.example.onboarding',
         person_id: 'person-v4',
         onboarding_version: 4,
         intent_ms: intentMs,
@@ -448,6 +490,9 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
       no_cli: 1,
     })
     expect(result).not.toHaveProperty('onboarding_version')
+    expect(checklistCoverageMock).toHaveBeenCalledWith(expect.anything(), ['com.example.onboarding'])
+    expect(result.v4_cli_checklist_coverage_by_version).toEqual(await checklistCoverageMock.mock.results[0].value)
+    expect(result.v4_cli_checklist_coverage).toEqual(result.v4_cli_checklist_coverage_by_version[1])
     expect(queryPosthogHogqlMock).toHaveBeenCalledTimes(4)
   })
 
@@ -646,6 +691,7 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
         { attempt_id: ['array'], onboarding_version: 2, intent_ms: startMs + 1_000, details_ms: startMs + 2_000, total_attempts: 10 },
         { attempt_id: 'unknown-version', onboarding_version: 5, intent_ms: startMs + 1_000, total_attempts: 10 },
         { attempt_id: 'string-version', onboarding_version: '3', intent_ms: startMs + 1_000, total_attempts: 10 },
+        { attempt_id: 'webnative-label', onboarding_version: '5.A', intent_ms: startMs + 1_000, total_attempts: 10 },
         { attempt_id: 'boolean-step', onboarding_version: 4, intent_ms: startMs + 2_000, details_ms: true, organization_ms: [], setup_ms: {}, interaction_events: 'not-an-array', total_attempts: 10 },
         { attempt_id: 'valid', onboarding_version: 4, intent_ms: String(startMs + 1_000), details_ms: undefined, organization_ms: 0, setup_ms: 'not-a-number', interaction_events: [[' valid ', startMs + 2_000], ['', startMs + 2_000], ['missing-time'], 42, null], total_attempts: 10 },
       ],
@@ -670,9 +716,9 @@ describe('getAdminFrontendOnboardingAnalytics', () => {
     )
 
     expect(result).toMatchObject({
-      v4_kpis: { attempts: 2, completed: 0, completion_rate: 0 },
+      v4_kpis: { attempts: 3, completed: 0, completion_rate: 0 },
       funnels: { v4: [
-        { key: 'intent', reached: 2 },
+        { key: 'intent', reached: 3 },
         { key: 'app_name', reached: 0 },
         { key: 'app_id', reached: 0 },
         { key: 'app_icon', reached: 0 },

@@ -4,7 +4,7 @@ import { env } from 'node:process'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ALLOWED_STATS_ACTIONS } from '../supabase/functions/_backend/plugin_runtime/plugins/stats_actions.ts'
-import { APP_NAME, createAppVersions, executeSQL, getBaseData, getSupabaseClient, getVersionFromAction, headers, ORG_ID, PLUGIN_BASE_URL, resetAndSeedAppData, resetAndSeedAppDataStats, resetAppData, resetAppDataStats, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
+import { APP_NAME, createAppVersions, executeSQL, fetchTestRequest, getBaseData, getSupabaseClient, getVersionFromAction, headers, ORG_ID, PLUGIN_BASE_URL, resetAndSeedAppData, resetAndSeedAppDataStats, resetAppData, resetAppDataStats, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
 
 const id = randomUUID()
 const APP_NAME_STATS = `${APP_NAME}.${id}`
@@ -27,12 +27,12 @@ interface StatsPayload extends ReturnType<typeof getBaseData> {
 }
 
 async function postStats(data: object) {
-  const response = await fetch(`${PLUGIN_BASE_URL}/stats`, {
+  return fetchTestRequest(`${PLUGIN_BASE_URL}/stats`, {
     method: 'POST',
+    retryUnsafe: true,
     headers,
     body: JSON.stringify(data),
   })
-  return response
 }
 
 async function expectNoPrimaryStatsRows(appId: string, deviceIds: string[]) {

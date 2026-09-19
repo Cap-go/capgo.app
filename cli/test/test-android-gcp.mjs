@@ -109,15 +109,29 @@ await test('enableService short-circuits on noop.DONE_OPERATION without polling'
 
 await test('sanitizeGcpProjectDisplayName strips em-dash + invalid chars', async () => {
   const { sanitizeGcpProjectDisplayName } = await importGcp()
-  assertEquals(sanitizeGcpProjectDisplayName('Capgo Native Build — com.example.app'), 'Capgo Native Build com.example')
+  assertEquals(sanitizeGcpProjectDisplayName('Capgo Native Build — com.example.app'), 'Capgo Native Build com example')
   assertEquals(sanitizeGcpProjectDisplayName('foo_bar_baz'), 'foo bar baz')
   assertEquals(sanitizeGcpProjectDisplayName('_leading and trailing_'), 'leading and trailing')
+})
+
+await test('sanitizeGcpProjectDisplayName strips periods from appIds (GCP rejects dots)', async () => {
+  const { sanitizeGcpProjectDisplayName } = await importGcp()
+  const out = sanitizeGcpProjectDisplayName('Capgo Native Build com.spotties.spotties')
+  assert(!out.includes('.'), `display name must not contain periods, got "${out}"`)
+  assert(out.length >= 4 && out.length <= 30, `expected 4–30 chars, got ${out.length}: "${out}"`)
+  assert(/^[A-Za-z0-9]/.test(out), `must start with letter/digit, got "${out}"`)
+  assert(/[A-Za-z0-9]$/.test(out), `must end with letter/digit, got "${out}"`)
+  assertEquals(
+    sanitizeGcpProjectDisplayName('Capgo Native Build com.example.app'),
+    'Capgo Native Build com example',
+  )
 })
 
 await test('sanitizeGcpProjectDisplayName respects 30-char max + start/end rules', async () => {
   const { sanitizeGcpProjectDisplayName } = await importGcp()
   const long = 'Capgo Native Build com.very.long.app.name'
   const out = sanitizeGcpProjectDisplayName(long)
+  assert(!out.includes('.'), `display name must not contain periods, got "${out}"`)
   assert(out.length <= 30, `expected ≤30 chars, got ${out.length}`)
   assert(/^[A-Za-z0-9]/.test(out), `must start with letter/digit, got "${out}"`)
   assert(/[A-Za-z0-9]$/.test(out), `must end with letter/digit, got "${out}"`)

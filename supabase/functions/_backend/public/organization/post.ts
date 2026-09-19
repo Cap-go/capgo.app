@@ -7,7 +7,7 @@ import { quickError, simpleError } from '../../utils/hono.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { assertJwtMfaAssurance } from '../../utils/jwt_mfa_assurance.ts'
 import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
-import { parseOrgOnboardingIntent } from '../../utils/org_onboarding_intent.ts'
+import { parseOrgOnboardingDevelopmentEnvironment, parseOrgOnboardingIntent } from '../../utils/org_onboarding_intent.ts'
 import { normalizeWebsiteUrl } from './website.ts'
 
 const MAX_ESTIMATED_MAU = 1_000_000
@@ -22,8 +22,9 @@ const bodySchema = z.object({
   email: z.email().optional(),
   estimatedMau: estimatedMauSchema.optional(),
   website: z.string().optional(),
-  intent: z.enum(['ota', 'builder', 'both', 'exploring', 'unknown']).optional(),
+  intent: z.enum(['ota', 'builder', 'both', 'exploring', 'publish', 'unknown']).optional(),
   startingOut: z.boolean().optional(),
+  developmentEnvironment: z.enum(['hosted_builder', 'ai_assistant', 'hand_coded', 'other', 'local_project', 'exploring', 'skipped']).optional(),
 })
 
 
@@ -146,7 +147,7 @@ async function insertOrgForApiKey(
     management_email: string
     customer_id: string
     website: string | null
-    onboarding: { intent: string, starting_out: boolean }
+    onboarding: { intent: string, starting_out: boolean, development_environment: string }
   },
 ) {
   const apikeyRbacId = auth.apikey?.rbac_id
@@ -274,6 +275,9 @@ export async function post(
   const onboarding = {
     intent: parseOrgOnboardingIntent({ intent: body.intent }),
     starting_out: body.startingOut ?? false,
+    development_environment: parseOrgOnboardingDevelopmentEnvironment({
+      development_environment: body.developmentEnvironment,
+    }),
   }
   const newOrg = {
     id: orgId,

@@ -39,7 +39,3 @@ export async function getUserIdInternal(options: Options, silent = false) {
     throw error instanceof Error ? error : new Error(String(error))
   }
 }
-
-export async function getUserId(options: Options) {
-  await getUserIdInternal(options, false)
-}

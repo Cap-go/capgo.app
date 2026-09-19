@@ -15,17 +15,25 @@ const {
   pgQuery,
   purgeFileReadCache,
   supabaseAdmin,
+  channelsUpdate,
 } = vi.hoisted(() => {
   const callOrder: string[] = []
   const appVersionsMetaSelectEq = vi.fn()
   const appVersionsMetaSelect = vi.fn(() => ({ eq: appVersionsMetaSelectEq }))
   const appVersionsMetaUpdateEq = vi.fn()
   const appVersionsMetaUpdate = vi.fn(() => ({ eq: appVersionsMetaUpdateEq }))
+  const channelsUpdateEq = vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) }))
+  const channelsUpdate = vi.fn(() => ({ eq: channelsUpdateEq }))
   const supabaseFrom = vi.fn((table: string) => {
     if (table === 'app_versions_meta') {
       return {
         select: appVersionsMetaSelect,
         update: appVersionsMetaUpdate,
+      }
+    }
+    if (table === 'channels') {
+      return {
+        update: channelsUpdate,
       }
     }
     return {}
@@ -61,6 +69,8 @@ const {
     appVersionsMetaSelectEq,
     appVersionsMetaUpdate,
     appVersionsMetaUpdateEq,
+    channelsUpdate,
+    channelsUpdateEq,
     callOrder,
     closeClient: vi.fn(),
     createStatsMeta: vi.fn(),
@@ -82,6 +92,11 @@ const {
 })
 
 vi.mock('../supabase/functions/_backend/files/file_read_cache.ts', () => ({
+  isVersionDeleted: (row: { deleted?: boolean | null, deleted_at?: string | Date | null } | null | undefined) => {
+    if (!row)
+      return false
+    return row.deleted === true || row.deleted_at != null
+  },
   purgeFileReadCache,
 }))
 
@@ -186,6 +201,7 @@ describe('on_version_update deleted version cleanup', () => {
   it('moves the bundle to trash and clears stored size for soft-deleted versions', async () => {
     const response = await deleteIt(createContext(), createVersion())
     expect(response.status).toBe(200)
+    expect(channelsUpdate).toHaveBeenCalledTimes(2)
     expect(purgeFileReadCache).toHaveBeenCalledWith(
       'orgs/org-1/apps/com.cleanup.test/1.0.0.zip',
       'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',

@@ -133,6 +133,7 @@ declare global {
   const useAdminDashboardStore: typeof import('./stores/adminDashboard').useAdminDashboardStore
   const useAnimate: typeof import('@vueuse/core').useAnimate
   const useAppDetailStore: typeof import('./stores/appDetail').useAppDetailStore
+  const useAppOnboardingCliProgress: typeof import('./composables/useAppOnboardingCliProgress').useAppOnboardingCliProgress
   const useAppPage: typeof import('./composables/useAppPage').useAppPage
   const useArrayDifference: typeof import('@vueuse/core').useArrayDifference
   const useArrayEvery: typeof import('@vueuse/core').useArrayEvery
@@ -243,6 +244,7 @@ declare global {
   const useNow: typeof import('@vueuse/core').useNow
   const useObjectUrl: typeof import('@vueuse/core').useObjectUrl
   const useOffsetPagination: typeof import('@vueuse/core').useOffsetPagination
+  const useOnboardingChannelAnimation: typeof import('./composables/useOnboardingChannelAnimation').useOnboardingChannelAnimation
   const useOnline: typeof import('@vueuse/core').useOnline
   const useOrgBillingCycleChart: typeof import('./composables/useOrgBillingCycleChart').useOrgBillingCycleChart
   const useOrganizationStore: typeof import('./stores/organization').useOrganizationStore
@@ -250,6 +252,7 @@ declare global {
   const useParallax: typeof import('@vueuse/core').useParallax
   const useParentElement: typeof import('@vueuse/core').useParentElement
   const usePerformanceObserver: typeof import('@vueuse/core').usePerformanceObserver
+  const usePeriodDaysQuery: typeof import('./composables/usePeriodDaysQuery').usePeriodDaysQuery
   const usePermission: typeof import('@vueuse/core').usePermission
   const usePointer: typeof import('@vueuse/core').usePointer
   const usePointerLock: typeof import('@vueuse/core').usePointerLock
@@ -503,6 +506,7 @@ declare module 'vue' {
     readonly useAdminDashboardStore: UnwrapRef<typeof import('./stores/adminDashboard')['useAdminDashboardStore']>
     readonly useAnimate: UnwrapRef<typeof import('@vueuse/core')['useAnimate']>
     readonly useAppDetailStore: UnwrapRef<typeof import('./stores/appDetail')['useAppDetailStore']>
+    readonly useAppOnboardingCliProgress: UnwrapRef<typeof import('./composables/useAppOnboardingCliProgress')['useAppOnboardingCliProgress']>
     readonly useAppPage: UnwrapRef<typeof import('./composables/useAppPage')['useAppPage']>
     readonly useArrayDifference: UnwrapRef<typeof import('@vueuse/core')['useArrayDifference']>
     readonly useArrayEvery: UnwrapRef<typeof import('@vueuse/core')['useArrayEvery']>
@@ -613,6 +617,7 @@ declare module 'vue' {
     readonly useNow: UnwrapRef<typeof import('@vueuse/core')['useNow']>
     readonly useObjectUrl: UnwrapRef<typeof import('@vueuse/core')['useObjectUrl']>
     readonly useOffsetPagination: UnwrapRef<typeof import('@vueuse/core')['useOffsetPagination']>
+    readonly useOnboardingChannelAnimation: UnwrapRef<typeof import('./composables/useOnboardingChannelAnimation')['useOnboardingChannelAnimation']>
     readonly useOnline: UnwrapRef<typeof import('@vueuse/core')['useOnline']>
     readonly useOrgBillingCycleChart: UnwrapRef<typeof import('./composables/useOrgBillingCycleChart')['useOrgBillingCycleChart']>
     readonly useOrganizationStore: UnwrapRef<typeof import('./stores/organization')['useOrganizationStore']>
@@ -620,6 +625,7 @@ declare module 'vue' {
     readonly useParallax: UnwrapRef<typeof import('@vueuse/core')['useParallax']>
     readonly useParentElement: UnwrapRef<typeof import('@vueuse/core')['useParentElement']>
     readonly usePerformanceObserver: UnwrapRef<typeof import('@vueuse/core')['usePerformanceObserver']>
+    readonly usePeriodDaysQuery: UnwrapRef<typeof import('./composables/usePeriodDaysQuery')['usePeriodDaysQuery']>
     readonly usePermission: UnwrapRef<typeof import('@vueuse/core')['usePermission']>
     readonly usePointer: UnwrapRef<typeof import('@vueuse/core')['usePointer']>
     readonly usePointerLock: UnwrapRef<typeof import('@vueuse/core')['usePointerLock']>

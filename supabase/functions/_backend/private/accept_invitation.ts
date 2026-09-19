@@ -1,10 +1,13 @@
+import type { PoolClient } from 'pg'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
 import { Hono } from 'hono/tiny'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { getEffectivePasswordMinLength, getPasswordPolicyValidationErrors } from '../utils/password_policy.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
 import { emptySupabase, supabaseAdmin as useSupabaseAdmin } from '../utils/supabase.ts'
 import { syncUserPreferenceTags } from '../utils/user_preferences.ts'
 import { getEnv } from '../utils/utils.ts'
@@ -146,104 +149,199 @@ async function ensurePublicUserRowExists(
   }
 }
 
+function isPgLockTimeoutError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as { code: string }).code === '55P03'
+}
+
+async function rollbackRbacOrgLockSavepoint(pgClient: PoolClient): Promise<void> {
+  await pgClient.query('ROLLBACK TO SAVEPOINT rbac_org_lock').catch(() => {})
+  await pgClient.query('RELEASE SAVEPOINT rbac_org_lock').catch(() => {})
+}
+
+async function acquireRbacOrgLockWithRetry(pgClient: PoolClient, orgId: string): Promise<void> {
+  const lockAttempts = 6
+  const lockTimeoutMs = 5000
+  const savepointName = 'rbac_org_lock'
+
+  await pgClient.query(`SET LOCAL lock_timeout = '${lockTimeoutMs}ms'`)
+
+  for (let attempt = 0; attempt < lockAttempts; attempt++) {
+    try {
+      await pgClient.query(`SAVEPOINT ${savepointName}`)
+      await pgClient.query(
+        `SELECT public.lock_rbac_orgs($1::uuid)`,
+        [orgId],
+      )
+      await pgClient.query(`RELEASE SAVEPOINT ${savepointName}`)
+      await pgClient.query(`SET LOCAL lock_timeout = '0'`)
+      return
+    }
+    catch (error) {
+      if (!isPgLockTimeoutError(error) || attempt === lockAttempts - 1) {
+        throw error
+      }
+      await rollbackRbacOrgLockSavepoint(pgClient)
+      await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)))
+    }
+  }
+}
+
 async function ensureOrgMembership(
-  supabaseAdmin: ReturnType<typeof useSupabaseAdmin>,
+  c: Parameters<typeof useSupabaseAdmin>[0],
+  _supabaseAdmin: ReturnType<typeof useSupabaseAdmin>,
   userId: string,
   invitation: any,
 ) {
-  const rbacRoleName = typeof invitation.rbac_role_name === 'string'
-    ? invitation.rbac_role_name.trim()
-    : ''
+  const pgPool = getPgClient(c, false)
+  let pgClient: PoolClient | null = null
+  let transactionStarted = false
 
-  if (!rbacRoleName) {
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to resolve RBAC role', { error: 'Missing RBAC role name' })
-  }
+  try {
+    pgClient = await pgPool.connect()
+    await pgClient.query('BEGIN')
+    transactionStarted = true
+    await pgClient.query('SET LOCAL statement_timeout = 10000')
+    await pgClient.query('SET LOCAL idle_in_transaction_session_timeout = 15000')
 
-  let rbacRoleId: string | null = null
+    // lock_timeout per attempt inside acquireRbacOrgLockWithRetry bounds lock waits.
+    await acquireRbacOrgLockWithRetry(pgClient, invitation.org_id)
 
-  const { data: role, error: roleError } = await supabaseAdmin
-    .from('roles')
-    .select('id')
-    .eq('name', rbacRoleName)
-    .eq('scope_type', 'org')
-    .single()
+    const inviteRoleResult = await pgClient.query<{ rbac_role_name: string | null }>(
+      `SELECT invite_role.rbac_role_name
+       FROM (
+         SELECT public.tmp_users.rbac_role_name, 0 AS source_rank
+         FROM public.tmp_users
+         WHERE public.tmp_users.invite_magic_string = $1::text
+           AND public.tmp_users.cancelled_at IS NULL
+         UNION ALL
+         SELECT public.org_users.rbac_role_name, 1 AS source_rank
+         FROM public.org_users
+         WHERE public.org_users.user_id = $2::uuid
+           AND public.org_users.org_id = $3::uuid
+           AND public.org_users.is_invite IS TRUE
+           AND public.org_users.app_id IS NULL
+           AND public.org_users.channel_id IS NULL
+       ) AS invite_role
+       WHERE invite_role.rbac_role_name IS NOT NULL
+       ORDER BY invite_role.source_rank
+       LIMIT 1`,
+      [invitation.invite_magic_string, userId, invitation.org_id],
+    )
 
-  if (roleError || !role) {
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to resolve RBAC role', { error: roleError?.message ?? 'Role not found' })
-  }
-
-  rbacRoleId = role.id
-
-  // Avoid creating duplicates: org_users does not have a unique constraint on (org_id, user_id).
-  const { data: existingMembershipRows, error: existingMembershipError } = await supabaseAdmin
-    .from('org_users')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('org_id', invitation.org_id)
-    .is('app_id', null)
-    .is('channel_id', null)
-
-  if (existingMembershipError) {
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to check existing org membership', { error: existingMembershipError.message })
-  }
-
-  if (existingMembershipRows && existingMembershipRows.length > 0) {
-    const { error: updateMembershipError } = await supabaseAdmin
-      .from('org_users')
-      .update({
-        rbac_role_name: rbacRoleName,
-        is_invite: false,
-      })
-      .eq('user_id', userId)
-      .eq('org_id', invitation.org_id)
-      .is('app_id', null)
-      .is('channel_id', null)
-
-    if (updateMembershipError) {
-      return quickError(500, 'failed_to_accept_invitation', 'Failed to update org membership', { error: updateMembershipError.message })
+    const rbacRoleName = inviteRoleResult.rows[0]?.rbac_role_name?.trim() ?? ''
+    if (!rbacRoleName) {
+      await pgClient.query('ROLLBACK')
+      transactionStarted = false
+      return quickError(500, 'failed_to_accept_invitation', 'Failed to resolve RBAC role', { error: 'Missing RBAC role name' })
     }
-  }
-  else {
-    const { error: insertIntoMainTableError } = await supabaseAdmin.from('org_users').insert({
-      user_id: userId,
-      org_id: invitation.org_id,
-      rbac_role_name: rbacRoleName,
-      is_invite: false,
-    })
 
-    if (insertIntoMainTableError) {
-      return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation insert into org_users', { error: insertIntoMainTableError.message })
+    const roleResult = await pgClient.query<{ id: string }>(
+      `SELECT public.roles.id
+       FROM public.roles
+       WHERE public.roles.name = $1::text
+         AND public.roles.scope_type = 'org'
+         AND public.roles.is_assignable = true
+       LIMIT 1`,
+      [rbacRoleName],
+    )
+    const role = roleResult.rows[0]
+    if (!role) {
+      await pgClient.query('ROLLBACK')
+      transactionStarted = false
+      return quickError(500, 'failed_to_accept_invitation', 'Failed to resolve RBAC role', { error: 'Role not found' })
     }
+
+    const existingMembership = await pgClient.query<{ id: string }>(
+      `SELECT public.org_users.id
+       FROM public.org_users
+       WHERE public.org_users.user_id = $1::uuid
+         AND public.org_users.org_id = $2::uuid
+         AND public.org_users.app_id IS NULL
+         AND public.org_users.channel_id IS NULL
+       LIMIT 1`,
+      [userId, invitation.org_id],
+    )
+
+    if (existingMembership.rows.length > 0) {
+      await pgClient.query(
+        `UPDATE public.org_users
+         SET rbac_role_name = $3::text,
+             is_invite = false
+         WHERE public.org_users.user_id = $1::uuid
+           AND public.org_users.org_id = $2::uuid
+           AND public.org_users.app_id IS NULL
+           AND public.org_users.channel_id IS NULL`,
+        [userId, invitation.org_id, rbacRoleName],
+      )
+    }
+    else {
+      await pgClient.query(
+        `INSERT INTO public.org_users (user_id, org_id, rbac_role_name, is_invite)
+         VALUES ($1::uuid, $2::uuid, $3::text, false)`,
+        [userId, invitation.org_id, rbacRoleName],
+      )
+    }
+
+    await pgClient.query(
+      `DELETE FROM public.role_bindings
+       WHERE public.role_bindings.principal_type = 'user'
+         AND public.role_bindings.principal_id = $1::uuid
+         AND public.role_bindings.scope_type = 'org'
+         AND public.role_bindings.org_id = $2::uuid`,
+      [userId, invitation.org_id],
+    )
+
+    await pgClient.query(
+      `INSERT INTO public.role_bindings (
+         principal_type,
+         principal_id,
+         role_id,
+         scope_type,
+         org_id,
+         granted_by,
+         granted_at,
+         reason,
+         is_direct
+       ) VALUES (
+         'user',
+         $1::uuid,
+         $2::uuid,
+         'org',
+         $3::uuid,
+         $1::uuid,
+         now(),
+         'Accepted invitation',
+         true
+       )`,
+      [userId, role.id, invitation.org_id],
+    )
+
+    await pgClient.query('COMMIT')
+    transactionStarted = false
   }
-
-  const { error: deleteBindingError } = await supabaseAdmin
-    .from('role_bindings')
-    .delete()
-    .eq('principal_type', 'user')
-    .eq('principal_id', userId)
-    .eq('scope_type', 'org')
-    .eq('org_id', invitation.org_id)
-
-  if (deleteBindingError) {
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to clear existing RBAC role bindings', { error: deleteBindingError.message })
-  }
-
-  const { error: insertBindingError } = await supabaseAdmin
-    .from('role_bindings')
-    .insert({
-      principal_type: 'user',
-      principal_id: userId,
-      role_id: rbacRoleId as string,
-      scope_type: 'org',
-      org_id: invitation.org_id,
-      granted_by: userId,
-      granted_at: new Date().toISOString(),
-      reason: 'Accepted invitation',
-      is_direct: true,
+  catch (error) {
+    if (transactionStarted && pgClient) {
+      await pgClient.query('ROLLBACK').catch(() => {})
+    }
+    if (error instanceof HTTPException) {
+      throw error
+    }
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'ensureOrgMembership transaction failed',
+      userId,
+      orgId: invitation.org_id,
+      error,
     })
-
-  if (insertBindingError) {
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to create RBAC role binding', { error: insertBindingError.message })
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+    return quickError(500, 'failed_to_accept_invitation', 'Failed to finalize org membership', { error: errorMessage })
+  }
+  finally {
+    pgClient?.release()
+    closeClient(c, pgPool)
   }
 }
 
@@ -318,7 +416,7 @@ app.post('/', async (c) => {
     }
 
     const userId = session.user?.id ?? existingUser.id
-    const membershipError = await ensureOrgMembership(supabaseAdmin, userId, invitation)
+    const membershipError = await ensureOrgMembership(c, supabaseAdmin, userId, invitation)
     if (membershipError)
       return membershipError
 
@@ -387,7 +485,7 @@ app.post('/', async (c) => {
         if (publicUserError)
           return publicUserError
 
-        const membershipError = await ensureOrgMembership(supabaseAdmin, session.user.id, invitation)
+        const membershipError = await ensureOrgMembership(c, supabaseAdmin, session.user.id, invitation)
         if (membershipError)
           return membershipError
 
@@ -472,7 +570,7 @@ app.post('/', async (c) => {
       return quickError(400, 'sign_in_failed', 'Sign in failed, please retry', { error: sessionError.message })
     }
 
-    const membershipError = await ensureOrgMembership(supabaseAdmin, user.user.id, invitation)
+    const membershipError = await ensureOrgMembership(c, supabaseAdmin, user.user.id, invitation)
     if (membershipError) {
       didRollback = true
       await rollbackCreatedUser(c, user.user.id)
