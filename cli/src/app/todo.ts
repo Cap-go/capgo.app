@@ -1,5 +1,5 @@
 import type { OptionsBase } from '../schemas/base'
-import { stdin, stdout } from 'node:process'
+import { env, stdin, stdout } from 'node:process'
 import { intro, log, outro, spinner } from '@clack/prompts'
 import { check2FAComplianceForApp } from '../api/app'
 import { CliUserError } from '../shared/cli-user-error'
@@ -42,6 +42,37 @@ const V3_STEP_TITLES: Record<typeof V3_STEP_IDS[number], string> = {
   test_update: 'Deliver an update to a device',
 }
 
+const V3_NEXT_STEP_HELP: Record<typeof V3_STEP_IDS[number], { action: string, doneWhen: string }> = {
+  login_cli_mcp: {
+    action: 'Run a Capgo CLI command or start the MCP guided setup as the app creator.',
+    doneWhen: 'Capgo records that CLI or MCP activity for the app creator.',
+  },
+  add_channel: {
+    action: 'Create a channel for this app to receive live updates.',
+    doneWhen: 'Capgo finds a channel for this app.',
+  },
+  add_updater: {
+    action: 'Install @capgo/capacitor-updater in your app project.',
+    doneWhen: 'The CLI finds the dependency declared and installed, then reports it to Capgo.',
+  },
+  add_code: {
+    action: 'Call CapacitorUpdater.notifyAppReady() once your app is ready after an update.',
+    doneWhen: 'The CLI finds that call in your app source and reports it to Capgo.',
+  },
+  run_device: {
+    action: 'Build and open the app on a device or simulator with Capgo installed.',
+    doneWhen: 'Capgo sees a device connect to this app.',
+  },
+  upload_bundle: {
+    action: 'Build and upload your first live update bundle.',
+    doneWhen: 'Capgo finds a published bundle for this app.',
+  },
+  test_update: {
+    action: 'Assign the update to a channel, then reopen the app on a device.',
+    doneWhen: 'Capgo records a device applying an uploaded version.',
+  },
+}
+
 export interface AppTodoProgress {
   onboarding: unknown
   hasChannel?: boolean
@@ -78,16 +109,27 @@ export function getAppTodoSteps(progress: AppTodoProgress) {
   return { version, steps }
 }
 
-export function formatAppTodoList(appId: string, progress: AppTodoProgress): string {
+export function formatAppTodoList(appId: string, progress: AppTodoProgress, options: { color?: boolean } = {}): string {
   const { version, steps } = getAppTodoSteps(progress)
   const done = steps.filter(step => step.status === 'done').length
   const skipped = steps.filter(step => step.status === 'skipped').length
   const markers = { done: '[x] Done', skipped: '[-] Skipped', pending: '[ ] Pending' }
+  const colors = { done: '32', skipped: '2', pending: '33' }
+  const colorize = (value: string, code: string) => options.color ? `\u001B[${code}m${value}\u001B[0m` : value
+  const next = version === 3 ? steps.find(step => step.status === 'pending') : undefined
+  const help = next ? V3_NEXT_STEP_HELP[next.id as typeof V3_STEP_IDS[number]] : undefined
   return [
-    `App: ${appId} — Todo list v${version}`,
+    colorize(`App: ${appId} — Todo list v${version}`, '1'),
     `${done + skipped}/${steps.length} completed (${done} done, ${skipped} skipped, ${steps.length - done - skipped} pending)`,
     '',
-    ...steps.map(step => `${markers[step.status]}: ${step.title}`),
+    ...steps.map(step => `${colorize(markers[step.status], colors[step.status])}: ${step.title}`),
+    ...(next && help ? [
+      '',
+      colorize(`Next step: ${next.title}`, '1;36'),
+      `  ${help.action}`,
+      `  Done when: ${help.doneWhen}`,
+      '  Run this command again to recheck progress.',
+    ] : []),
   ].join('\n')
 }
 
@@ -150,6 +192,6 @@ export async function appTodo(appId: string | undefined, options: Partial<Option
   }
   if (progress.checkErrors?.length)
     log.warn('Some live progress checks failed. Showing saved progress for those tasks; try again to refresh them.')
-  log.info(formatAppTodoList(appId, progress))
+  log.info(formatAppTodoList(appId, progress, { color: !!stdout.isTTY && env.NO_COLOR === undefined }))
   outro('Done ✅')
 }

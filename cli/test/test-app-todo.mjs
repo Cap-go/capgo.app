@@ -51,11 +51,43 @@ assert.match(output, /\[x\] Done: Start guided setup/)
 assert.match(output, /\[-\] Skipped: Install Capgo Updater/)
 assert.match(output, /\[ \] Pending: Create a channel/)
 assert.match(output, /\[ \] Pending: Add the app-ready code/)
+assert.match(output, /Next step: Create a channel/)
+assert.match(output, /Done when: Capgo finds a channel for this app/)
+assert.match(output, /Run this command again to recheck progress/)
+assert.doesNotMatch(output, /Done when: The CLI finds that call/, 'only the next pending step is explained')
+assert.doesNotMatch(output, /\u001B\[/, 'plain output has no color codes')
+const coloredOutput = formatAppTodoList(appId, progress, { color: true })
+assert.match(coloredOutput, /\u001B\[32m\[x\] Done\u001B\[0m/)
+assert.match(coloredOutput, /\u001B\[33m\[ \] Pending\u001B\[0m/)
+assert.match(coloredOutput, /\u001B\[2m\[-\] Skipped\u001B\[0m/)
+assert.match(coloredOutput, /\u001B\[1;36mNext step: Create a channel\u001B\[0m/)
 assert.doesNotMatch(output, /Completion|encryption|undefined/)
 assert.match(formatAppTodoList(appId, { ...progress, hasChannel: true }), /3\/7 completed/)
+assert.match(formatAppTodoList(appId, { ...progress, hasChannel: true }), /Next step: Add the app-ready code/)
 assert.match(formatAppTodoList(appId, { onboarding: progress.onboarding }), /3\/7 completed/, 'retains saved channel progress when the live check is unavailable')
 assert.equal(progress.onboarding.setup.steps.add_channel.status, 'done', 'does not mutate saved progress')
-assert.match(formatAppTodoList(appId, { onboarding: { setup: { todo_list_version: 3, steps: Object.fromEntries(getAppOnboardingStepIds(3).map(id => [id, { status: 'done' }])) } } }), /7\/7 completed \(7 done, 0 skipped, 0 pending\)/)
+const allDone = formatAppTodoList(appId, { onboarding: { setup: { todo_list_version: 3, steps: Object.fromEntries(getAppOnboardingStepIds(3).map(id => [id, { status: 'done' }])) } } })
+assert.match(allDone, /7\/7 completed \(7 done, 0 skipped, 0 pending\)/)
+assert.doesNotMatch(allDone, /Next step:/)
+const v2Output = formatAppTodoList(appId, { onboarding: { setup: { todo_list_version: 2, steps: {} } } })
+assert.doesNotMatch(v2Output, /Next step:|Done when:/, 'v2 keeps the checklist without v3 guidance')
+
+for (const [id, action, completion] of [
+  ['login_cli_mcp', 'Run a Capgo CLI command', 'Capgo records that CLI or MCP activity'],
+  ['add_channel', 'Create a channel', 'Capgo finds a channel'],
+  ['add_updater', 'Install @capgo/capacitor-updater', 'The CLI finds the dependency'],
+  ['add_code', 'Call CapacitorUpdater.notifyAppReady()', 'The CLI finds that call'],
+  ['run_device', 'Build and open the app', 'Capgo sees a device'],
+  ['upload_bundle', 'Build and upload your first', 'Capgo finds a published bundle'],
+  ['test_update', 'Assign the update', 'Capgo records a device applying'],
+]) {
+  const steps = Object.fromEntries(getAppOnboardingStepIds(3).map(stepId => [stepId, { status: stepId === id ? 'pending' : 'done' }]))
+  const text = formatAppTodoList(appId, { onboarding: { setup: { todo_list_version: 3, steps } } })
+  assert.match(text, new RegExp(`Next step: ${messages[`setup-checklist-step-${id}`]}`))
+  assert.ok(text.includes(action), `${id} explains the action`)
+  assert.ok(text.includes(`Done when: ${completion}`), `${id} explains the completion signal`)
+  assert.equal((text.match(/Next step:/g) ?? []).length, 1)
+}
 
 const originalFetch = globalThis.fetch
 try {
@@ -124,10 +156,14 @@ try {
       assert.equal(child.status, failure ? 1 : 0, text)
       assert.match(text, /Loading the todo list/, 'non-interactive commands report the pending work')
       assert.doesNotMatch(text, /Todo list loaded|Could not load todo list/, 'non-interactive commands do not render spinner completion')
+      assert.doesNotMatch(text, /\u001B\[/, 'non-interactive commands do not use ANSI colors')
       if (!failure) {
         assert.match(text, new RegExp('App: ' + appId.replaceAll('.', '\\.')))
         assert.match(text, /\[ \] Pending:/)
-        if (scenario === 'v2') assert.match(text, /Todo list v2/)
+        if (scenario === 'v2') {
+          assert.match(text, /Todo list v2/)
+          assert.doesNotMatch(text, /Next step:/)
+        }
         else if (scenario === 'empty') assert.match(text, /0\/12 completed/)
         else assert.match(text, /2\/7 completed/)
         if (scenario === 'partial') assert.match(text, /Some live progress checks failed/)
