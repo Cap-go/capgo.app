@@ -139,10 +139,11 @@ describe('onboarding progress endpoint', () => {
     expect(((await (await request(4, false, 'com.test.onboarding', 'cli')).json()) as any).onboarding).toEqual(mocks.row.onboarding)
     expect(mocks.execute).not.toHaveBeenCalled()
 
-    mocks.auth = { authType: 'apikey', userId: 'other-user', apikey: { key: 'other-key' } }
+    mocks.auth = { authType: 'apikey', userId: 'creator', apikey: { key: 'creator-key' } }
     expect(((await (await request(4)).json()) as any).onboarding).toEqual(mocks.row.onboarding)
     expect(mocks.execute).not.toHaveBeenCalled()
 
+    mocks.auth = { authType: 'apikey', userId: 'other-user', apikey: { key: 'other-key' } }
     lockedRow(mocks.row.onboarding)
     expect(((await (await request(4, false, 'com.test.onboarding', 'cli')).json()) as any).onboarding).toEqual(mocks.row.onboarding)
     expect(mocks.execute).toHaveBeenCalledTimes(3)
