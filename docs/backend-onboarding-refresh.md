@@ -3,6 +3,7 @@
 The existing scheduler enqueues `cron_onboarding_refresh` every ten minutes.
 Its backend producer atomically leases up to 3,000 oldest due apps and writes
 `cron_onboarding_refresh_apps` messages containing at most twenty app IDs each.
+App IDs over 128 bytes get single-app messages to keep Cloudflare queries bounded.
 The minute consumer dispatches one group of fifteen messages: at most 300 apps.
 All apps remain eligible, independent of billing or checklist version. A full
 sweep can take longer than ten minutes when more than 3,000 apps are due.
@@ -21,6 +22,8 @@ its event timestamps provide OTA success/usage without `daily_version`.
 Supabase's device rollup. First/last bundle and builder timestamps use ordered
 owning-app index lookups in PostgreSQL. The worker preserves setup, historic
 milestones, unrelated features, stage precedence, and thirty-day retention.
+As in the old SQL refresh, the latest observed device update initially sets
+`cli_install.succeeded_at` and `last_used_at`.
 Analytics Engine sampling means a missing result is not proof no event occurred;
 existing confirmed milestones are never cleared.
 

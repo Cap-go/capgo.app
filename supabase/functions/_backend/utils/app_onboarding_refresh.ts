@@ -8,13 +8,13 @@ import { getEnv } from './utils.ts'
 export const ONBOARDING_APPS_PER_MESSAGE = 20
 export const ONBOARDING_MESSAGES_PER_MINUTE = 15
 export const onboardingRefreshBody = z.object({
-  appIds: z.array(z.string().min(1).max(255)).min(1).max(ONBOARDING_APPS_PER_MESSAGE),
+  appIds: z.array(z.string().min(1)).min(1).max(ONBOARDING_APPS_PER_MESSAGE),
   batchToken: z.uuid(),
 })
 
 interface AppWindow extends Record<string, unknown> {
   app_id: string
-  created_at: Date | string
+  created_at: Date | string | null
 }
 const stages = ['no_device', 'local_only', 'native_unknown', 'play_unknown', 'testflight', 'store_live'] as const
 const telemetryRow = z.object({
@@ -34,8 +34,8 @@ function windowFilter(apps: AppWindow[], now: Date) {
   const lastDay = new Date(Date.UTC(cutoff.getUTCFullYear(), cutoff.getUTCMonth() + 1, 0)).getUTCDate()
   cutoff.setUTCDate(Math.min(day, lastDay))
   return apps.map((app) => {
-    const created = new Date(app.created_at)
-    if (!app.app_id || app.app_id.length > 255 || !Number.isFinite(created.getTime()))
+    const created = new Date(app.created_at ?? 0)
+    if (!app.app_id || !Number.isFinite(created.getTime()))
       throw new Error('Invalid onboarding telemetry window')
     const start = created > cutoff ? created : cutoff
     return `(index1 = '${escapeSqlString(app.app_id)}' AND timestamp >= toDateTime('${formatDateCF(start)}') AND timestamp < toDateTime('${formatDateCF(now)}'))`
@@ -75,7 +75,7 @@ export async function readOnboardingTelemetry(c: Context, apps: AppWindow[], now
     const appIds = new Set(apps.map(app => app.app_id))
     for (const row of [...installs, ...devices]) {
       const app = apps.find(app => app.app_id === row.app_id)
-      if (!appIds.has(row.app_id) || !app || row.first_at > row.last_at || row.last_at > now || row.first_at.getTime() < Math.floor(new Date(app.created_at).getTime() / 1000) * 1000)
+      if (!appIds.has(row.app_id) || !app || row.first_at > row.last_at || row.last_at > now || row.first_at.getTime() < Math.floor(new Date(app.created_at ?? 0).getTime() / 1000) * 1000)
         throw new Error('Cloudflare returned invalid onboarding telemetry')
     }
     if (installs.length > apps.length || devices.length > apps.length * stages.length)
@@ -86,7 +86,6 @@ export async function readOnboardingTelemetry(c: Context, apps: AppWindow[], now
       app_id: app.app_id,
       first_install_at: installs.find(row => row.app_id === app.app_id)?.first_at.toISOString() ?? null,
       last_install_at: installs.find(row => row.app_id === app.app_id)?.last_at.toISOString() ?? null,
-      first_device_at: devices.filter(row => row.app_id === app.app_id).reduce<string | null>((at, row) => !at || row.first_at.toISOString() < at ? row.first_at.toISOString() : at, null),
       last_device_at: devices.filter(row => row.app_id === app.app_id).reduce<string | null>((at, row) => !at || row.last_at.toISOString() > at ? row.last_at.toISOString() : at, null),
       stage: devices.filter(row => row.app_id === app.app_id).reduce<string>((stage, row) => stages.indexOf(row.stage) > stages.indexOf(stage as typeof stages[number]) ? row.stage : stage, 'no_device'),
     }))
@@ -101,7 +100,7 @@ export async function refreshAppOnboardingBatch(c: Context, database: Pick<Retur
   // A replaced lease makes old queue messages harmless. Deleted apps disappear
   // through the FK. No transaction/row lock is held during Cloudflare reads.
   const { rows: apps } = await database.execute<AppWindow>(sql`
-    SELECT a.app_id, a.created_at FROM public.apps a
+    SELECT a.app_id, COALESCE(a.created_at, '1970-01-01'::timestamptz) AS created_at FROM public.apps a
     JOIN public.app_onboarding_refresh_jobs j ON j.app_id = a.app_id
     WHERE a.app_id = ANY(${sql.param(body.appIds)}::varchar[]) AND j.batch_token = ${body.batchToken}::uuid
     ORDER BY a.app_id`)
@@ -125,7 +124,7 @@ WITH signals AS (
     COALESCE(a.onboarding, '{}'::jsonb) || jsonb_build_object(
       'refreshed_at', ${now.toISOString()}::text,
       'features', COALESCE(a.onboarding->'features', '{}'::jsonb) || jsonb_build_object(
-        'cli_install', public.merge_app_onboarding_feature(a.onboarding->'features'->'cli_install', s.first_device_at, s.first_device_at, s.last_device_at, NULL),
+        'cli_install', public.merge_app_onboarding_feature(a.onboarding->'features'->'cli_install', s.last_device_at, s.last_device_at, s.last_device_at, NULL),
         'ota', public.merge_app_onboarding_feature(a.onboarding->'features'->'ota',
           (SELECT v.created_at FROM public.app_versions v WHERE v.app_id = a.app_id AND v.deleted IS NOT TRUE AND v.name IS DISTINCT FROM 'builtin' AND v.name IS DISTINCT FROM 'unknown' ORDER BY v.created_at LIMIT 1),
           s.first_install_at,

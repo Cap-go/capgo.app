@@ -1,7 +1,7 @@
 -- Operational leases keep producer retries from duplicating app work. Expired
 -- leases are replaced after 30 minutes; stale message tokens cannot write.
 CREATE TABLE public.app_onboarding_refresh_jobs (
-    app_id varchar(255) PRIMARY KEY REFERENCES public.apps (
+    app_id varchar PRIMARY KEY REFERENCES public.apps (
         app_id
     ) ON DELETE CASCADE,
     batch_token uuid NOT NULL,
@@ -59,10 +59,23 @@ BEGIN
         AND NOT EXISTS (SELECT 1 FROM public.app_onboarding_refresh_jobs j WHERE j.app_id = a.app_id AND j.enqueued_at > now() - interval '30 minutes')
       ORDER BY COALESCE(a.onboarding->>'refreshed_at', ''), a.app_id
       LIMIT v_limit FOR UPDATE OF a SKIP LOCKED
-    ), numbered AS (
-      SELECT app_id, (pg_catalog.row_number() OVER (ORDER BY app_id) - 1) / 20 AS batch FROM candidates
+    ),
+    -- Keep unusually long IDs in single-app messages so escaped Analytics
+    -- Engine filters stay within the worker's query-size budget.
+    numbered AS (
+      SELECT app_id,
+        pg_catalog.octet_length(app_id) > 128 AS long_id,
+        pg_catalog.row_number() OVER (
+          PARTITION BY pg_catalog.octet_length(app_id) > 128 ORDER BY app_id
+        ) - 1 AS ordinal
+      FROM candidates
+    ), batches AS (
+      SELECT app_id, long_id,
+        CASE WHEN long_id THEN ordinal ELSE ordinal / 20 END AS batch
+      FROM numbered
     )
-    SELECT pg_catalog.array_agg(app_id ORDER BY app_id) AS app_ids FROM numbered GROUP BY batch ORDER BY batch
+    SELECT pg_catalog.array_agg(app_id ORDER BY app_id) AS app_ids
+    FROM batches GROUP BY long_id, batch ORDER BY long_id, batch
   LOOP
     v_token := pg_catalog.gen_random_uuid();
     INSERT INTO public.app_onboarding_refresh_jobs(app_id, batch_token, enqueued_at)

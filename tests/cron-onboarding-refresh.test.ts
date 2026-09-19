@@ -63,6 +63,24 @@ describe('backend onboarding refresh PostgreSQL and telemetry integration', () =
       client.release()
     }
   })
+  it('keeps a long legacy app ID from blocking the producer', async () => {
+    const client = await (await getPostgresClient()).connect()
+    try {
+      await client.query('BEGIN')
+      const { orgId } = await fixture(client)
+      const appId = `000.${'a'.repeat(252)}`
+      await client.query('INSERT INTO public.apps(app_id,owner_org,name,icon_url,created_at,need_onboarding) VALUES ($1,$2,\'Long ID fixture\',\'\',NULL,false)', [appId, orgId])
+      await client.query('SELECT public.enqueue_app_onboarding_refreshes(3000)')
+      const messages = (await client.query('SELECT message->\'payload\' AS payload FROM pgmq.q_cron_onboarding_refresh_apps WHERE message->\'payload\'->\'appIds\' ? $1', [appId])).rows
+      expect(messages).toHaveLength(1)
+      expect(messages[0].payload.appIds).toEqual([appId])
+      expect((await client.query('SELECT batch_token FROM public.app_onboarding_refresh_jobs WHERE app_id=$1', [appId])).rows).toHaveLength(1)
+    }
+    finally {
+      await client.query('ROLLBACK')
+      client.release()
+    }
+  })
   it('uses indexed producer ordering and denies caller access to producer and operational leases', async () => {
     const client = await (await getPostgresClient()).connect()
     try {
@@ -145,6 +163,8 @@ describe('backend onboarding refresh PostgreSQL and telemetry integration', () =
       expect(await refreshAppOnboardingBatch(context, getDrizzleClient(pool), { appIds: ids, batchToken: token }, now)).toBe(20)
       const rows = (await pool.query('SELECT app_id, onboarding FROM public.apps WHERE app_id=ANY($1::varchar[])', [ids])).rows
       for (const row of rows) {
+        expect(row.onboarding.features.cli_install).toMatchObject({ started_at: '2026-09-16T12:00:00.000Z', succeeded_at: '2026-09-16T12:00:00.000Z', last_used_at: '2026-09-16T12:00:00.000Z' })
+        expect(row.onboarding.features.cli_install.retained_30d_at).toBeUndefined()
         expect(row.onboarding.features.ota).toMatchObject({ started_at: '2026-08-02T00:00:00.000Z', succeeded_at: '2026-08-05T12:00:00.000Z', retained_30d_at: row.app_id === ids[0] ? '2026-09-17T00:00:00.000Z' : '2026-09-16T12:00:00.000Z' })
         expect(row.onboarding.features.builder).toMatchObject({ started_at: '2026-08-03T00:00:00.000Z', succeeded_at: '2026-08-04T00:00:00.000Z' })
       }

@@ -38,6 +38,17 @@ describe('backend onboarding refresh telemetry', () => {
     expect(q.installs).toContain('index1 = \'com.example.o\'\'hare\'')
     expect(q.installs).toContain('timestamp >= toDateTime(\'2026-09-16 10:00:00\')')
   })
+  it.concurrent('accepts an existing app ID longer than 255 characters in a single-app batch', () => {
+    const appId = `000.${'a'.repeat(252)}`
+    const q = buildOnboardingTelemetryQueries([{ app_id: appId, created_at: null }], now)
+    expect(q.installs).toContain(`index1 = '${appId}'`)
+    expect(q.installs.length).toBeLessThan(9000)
+    expect(onboardingRefreshBody.safeParse({ appIds: [appId], batchToken: '11111111-1111-4111-8111-111111111111' }).success).toBe(true)
+  })
+  it.concurrent('keeps twenty escaped short IDs within the Cloudflare query budget', () => {
+    const q = buildOnboardingTelemetryQueries(Array.from({ length: 20 }, (_, i) => ({ app_id: `${i.toString().padStart(2, '0')}${'\''.repeat(126)}`, created_at: null })), now)
+    expect(Math.max(q.installs.length, q.devices.length)).toBeLessThanOrEqual(9000)
+  })
   it.concurrent.each([
     { current: '2026-05-31T12:13:14Z', cutoff: '2026-02-28 12:13:14' },
     { current: '2028-05-31T12:13:14Z', cutoff: '2028-02-29 12:13:14' },
@@ -60,7 +71,6 @@ describe('backend onboarding refresh telemetry', () => {
       app_id: apps[0].app_id,
       first_install_at: '2026-09-01T13:14:15.000Z',
       last_install_at: '2026-09-16T20:00:00.000Z',
-      first_device_at: '2026-09-01T13:14:15.000Z',
       last_device_at: '2026-09-16T20:00:00.000Z',
       stage: 'store_live',
     }])
@@ -68,7 +78,7 @@ describe('backend onboarding refresh telemetry', () => {
   })
   it('accepts a successful empty result without inventing success', async () => {
     mocks.run.mockResolvedValue([])
-    expect(await readOnboardingTelemetry(context, apps, now)).toEqual([{ app_id: apps[0].app_id, first_install_at: null, last_install_at: null, first_device_at: null, last_device_at: null, stage: 'no_device' }])
+    expect(await readOnboardingTelemetry(context, apps, now)).toEqual([{ app_id: apps[0].app_id, first_install_at: null, last_install_at: null, last_device_at: null, stage: 'no_device' }])
   })
   it('propagates a provider failure instead of advancing progress as if no events existed', async () => {
     mocks.run.mockRejectedValue(new Error('Provider unavailable'))
