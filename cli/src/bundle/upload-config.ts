@@ -20,6 +20,20 @@ export function buildMissingCapacitorConfigUploadMessage(options: Pick<OptionsUp
   ].join('\n')
 }
 
+export function enhanceMissingCapacitorConfigUploadError(
+  error: unknown,
+  options: Pick<OptionsUpload, 'path' | 'channel'> & { appId?: string },
+): never {
+  if (error instanceof CliUserError && error.message === NO_CAPACITOR_CONFIG_MESSAGE) {
+    throw new CliUserError(buildMissingCapacitorConfigUploadMessage({
+      appId: options.appId,
+      path: options.path,
+      channel: options.channel,
+    }))
+  }
+  throw error
+}
+
 export async function loadUploadProjectConfig(
   options: OptionsUpload,
   context: { appId?: string } = {},
@@ -31,13 +45,10 @@ export async function loadUploadProjectConfig(
     return await getConfig()
   }
   catch (error) {
-    if (error instanceof CliUserError && error.message === NO_CAPACITOR_CONFIG_MESSAGE) {
-      throw new CliUserError(buildMissingCapacitorConfigUploadMessage({
-        appId: context.appId,
-        path: options.path,
-        channel: options.channel,
-      }))
-    }
-    throw error
+    enhanceMissingCapacitorConfigUploadError(error, {
+      appId: context.appId,
+      path: options.path,
+      channel: options.channel,
+    })
   }
 }

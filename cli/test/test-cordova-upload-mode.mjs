@@ -6,9 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { withCwd } from '../src/build/cwd.ts'
-import { getConfigWriteTarget, setConfigWriteTarget } from '../src/config/index.ts'
 import { buildCordovaUploadConfig, collectCordovaAppIdCandidates, CORDOVA_DEFAULT_WEB_DIR } from '../src/cordova/project.ts'
-import { buildMissingCapacitorConfigUploadMessage, loadUploadProjectConfig } from '../src/bundle/upload-config.ts'
+import { buildMissingCapacitorConfigUploadMessage, enhanceMissingCapacitorConfigUploadError, loadUploadProjectConfig } from '../src/bundle/upload-config.ts'
 import { CliUserError } from '../src/shared/cli-user-error.ts'
 import { NO_CAPACITOR_CONFIG_MESSAGE } from '../src/utils.ts'
 
@@ -91,35 +90,28 @@ await t('loadUploadProjectConfig resolves cordova mode without capacitor.config'
 })
 
 await t('missing capacitor config suggests --mode cordova on upload', async () => {
-  // Use /tmp explicitly — os.tmpdir() on GitHub Actions is under the workspace,
-  // so Capacitor's upward config search would pick up this monorepo's appId.
-  const dir = mkdtempSync('/tmp/capgo-missing-cap-config-')
-  const previousTarget = getConfigWriteTarget()
-  setConfigWriteTarget(undefined)
-  try {
-    await withCwd(dir, async () => {
-      await assert.rejects(
-        () => loadUploadProjectConfig({ channel: 'production', path: 'www' }, { appId: 'com.example.app' }),
-        (error) => {
-          assert.equal(error instanceof CliUserError, true)
-          assert.match(error.message, new RegExp(NO_CAPACITOR_CONFIG_MESSAGE))
-          assert.match(error.message, /--mode cordova/)
-          assert.match(error.message, /--channel production/)
-          return true
-        },
-      )
-    })
-    const hint = buildMissingCapacitorConfigUploadMessage({
+  const hint = buildMissingCapacitorConfigUploadMessage({
+    appId: 'com.example.app',
+    path: 'www',
+    channel: 'production',
+  })
+  assert.match(hint, new RegExp(NO_CAPACITOR_CONFIG_MESSAGE))
+  assert.match(hint, /--mode cordova/)
+  assert.match(hint, /--channel production/)
+  assert.match(hint, /npx @capgo\/cli@latest bundle upload com\.example\.app --mode cordova --path www --channel production/)
+
+  assert.throws(
+    () => enhanceMissingCapacitorConfigUploadError(new CliUserError(NO_CAPACITOR_CONFIG_MESSAGE), {
       appId: 'com.example.app',
       path: 'www',
       channel: 'production',
-    })
-    assert.match(hint, /npx @capgo\/cli@latest bundle upload com\.example\.app --mode cordova --path www --channel production/)
-  }
-  finally {
-    setConfigWriteTarget(previousTarget)
-    rmSync(dir, { recursive: true, force: true })
-  }
+    }),
+    (error) => {
+      assert.equal(error instanceof CliUserError, true)
+      assert.equal(error.message, hint)
+      return true
+    },
+  )
 })
 
 await t('bundle upload rejects unknown --mode values', async () => {
