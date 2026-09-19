@@ -3,6 +3,7 @@ import { isValidAppId } from '~/utils/appId'
 export interface CliAiPromptApp {
   appId: string
   name: string | null
+  todoListVersion?: number
 }
 
 export interface CliAiPromptOrganization {
@@ -554,15 +555,57 @@ The test succeeds when:
 - The application calls \`notifyAppReady()\` without subsequently rolling back.
 - No \`cap sync\`, \`cap copy\`, or equivalent synchronization occurred after the test change was created.`
 
-function otaSections(input: CliAiPromptInput): string[] {
+function v3ChecklistProtocol(appIds: string[]): string {
+  return `## Todo list v3 progress checks
+
+The following Capgo app IDs use Todo list v3: ${appIds.map(appId => `\`${appId}\``).join(', ')}.
+
+After selecting the Capgo app, run the checklist once with the selected ephemeral runner only if its app ID is in that v3 list. For any other selected app, skip this entire checklist protocol and every checkpoint below:
+
+{CAPGO_CLI_RUNNER} app todo {SELECTED_CAPGO_APP_ID}
+
+Use the checklist checkpoints below only if this command reports \`Todo list v3\` for the selected app. If it reports v1 or v2, skip every later checklist checkpoint and follow the normal setup instructions. A mixed organization can contain apps with different todo-list versions; never apply a v3 checkpoint to a v2 app.
+
+At each checkpoint, inspect all statuses, follow the explanation for the next pending step, and tell me what changed. Treat a task as complete only when the CLI reports it done or skipped. The CLI rechecks progress each time it runs; if a local scan or device event has not appeared yet, rerun after that activity finishes instead of claiming success early.
+
+If I choose guided \`init\`, wait for me to finish it, then run the checklist again for the selected v3 app and explain any remaining pending steps.`
+}
+
+function v3Checkpoint(when: string): string {
+  return `Todo list v3 checkpoint: ${when} Run:
+
+{CAPGO_CLI_RUNNER} app todo {SELECTED_CAPGO_APP_ID}`
+}
+
+function withV3Checkpoint(section: string, enabled: boolean, when: string): string {
+  return enabled ? `${section}\n\n${v3Checkpoint(when)}` : section
+}
+
+function v3ChecklistAppIds(input: CliAiPromptInput): string[] {
+  return [...new Set(input.organizations.flatMap(organization => getPromptApps(organization)
+    .filter(app => app.todoListVersion === 3)
+    .map(app => app.appId)))]
+}
+
+function firstUpdateTestSection(withV3Checklist: boolean): string {
+  if (!withV3Checklist)
+    return FIRST_UPDATE_TEST_SECTION
+  const beforeTestChange = FIRST_UPDATE_TEST_SECTION.replace(
+    '### Create a recognizable test change',
+    `${v3Checkpoint('After the original native app first runs on a device or simulator, recheck device registration.')}\n\n### Create a recognizable test change`,
+  )
+  return `${beforeTestChange}\n\n${v3Checkpoint('After the installed app applies the live update, recheck update delivery.')}`
+}
+
+function otaSections(input: CliAiPromptInput, withV3Checklist = false): string[] {
   return [
     INIT_RECOMMENDATION_SECTION,
     buildOrganizationSection(input),
-    CHANNEL_SECTION,
-    PLUGIN_SECTION,
-    NOTIFY_APP_READY_SECTION,
-    FIRST_UPLOAD_SECTION,
-    FIRST_UPDATE_TEST_SECTION,
+    withV3Checkpoint(CHANNEL_SECTION, withV3Checklist, 'After the chosen channel is available and configured, recheck channel creation.'),
+    withV3Checkpoint(PLUGIN_SECTION, withV3Checklist, 'After the updater is installed in the selected app project, recheck plugin installation.'),
+    withV3Checkpoint(NOTIFY_APP_READY_SECTION, withV3Checklist, 'After the app-ready call is in the real startup path, recheck the source scan.'),
+    withV3Checkpoint(FIRST_UPLOAD_SECTION, withV3Checklist, 'After the first bundle upload completes, recheck published-bundle progress.'),
+    firstUpdateTestSection(withV3Checklist),
   ]
 }
 
@@ -592,8 +635,11 @@ export function buildCliAiSetupPrompt(input: CliAiPromptInput, rawIntent?: unkno
     ].join('\n\n')
   }
 
+  const v3AppIds = rawIntent === 'ota' ? v3ChecklistAppIds(input) : []
+  const withV3Checklist = v3AppIds.length > 0
   return [
     buildAuthenticationSection(input.apiKey),
-    ...otaSections(input),
+    ...(withV3Checklist ? [v3ChecklistProtocol(v3AppIds)] : []),
+    ...otaSections(input, withV3Checklist),
   ].join('\n\n')
 }

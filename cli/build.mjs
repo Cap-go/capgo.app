@@ -311,7 +311,7 @@ const fixCapacitorCliDirname = {
 
 // Build CLI
 const buildCLI = Bun.build({
-  entrypoints: ['src/index.ts', 'src/notify-app-ready-worker.ts', 'src/updater-installed-worker.ts'],
+  entrypoints: ['src/index.ts', 'src/onboarding-worker.ts', 'src/notify-app-ready-worker.ts', 'src/updater-installed-worker.ts'],
   target: 'node',
   outdir: 'dist',
   external: [...EXTERNAL_PACKAGES, 'typescript'],
