@@ -6,7 +6,6 @@ import { APP_ONBOARDING_V2_STEP_IDS as APP_ONBOARDING_STEP_IDS } from '../supaba
 const panelSource = readFileSync(new URL('../src/components/dashboard/GettingStartedCliPanel.vue', import.meta.url), 'utf8')
 const liveUpdatePanelSource = readFileSync(new URL('../src/components/dashboard/GettingStartedLiveUpdatePanel.vue', import.meta.url), 'utf8')
 const gettingStarted = readFileSync(new URL('../src/pages/app/[app].getting-started.vue', import.meta.url), 'utf8')
-const onboardingSource = readFileSync(new URL('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
 const messages = JSON.parse(readFileSync(new URL('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
 describe('getting started CLI setup panel', () => {
