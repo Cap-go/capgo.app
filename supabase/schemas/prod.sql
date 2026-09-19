@@ -17482,6 +17482,24 @@ $$;
 ALTER FUNCTION "public"."remove_old_jobs"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."request_actor_email_adress"() RETURNS "text"
+    LANGUAGE "sql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+  SELECT u.email::text
+  FROM public.users AS u
+  -- Evaluate the volatile actor helper once so the users PK bounds the lookup.
+  WHERE u.id = (SELECT public.request_actor_user_id())
+$$;
+
+
+ALTER FUNCTION "public"."request_actor_email_adress"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."request_actor_email_adress"() IS 'Returns only the validated request actor email for CLI account whoami; no caller-supplied user ID is accepted.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."request_actor_user_id"() RETURNS "uuid"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -29148,6 +29166,13 @@ GRANT ALL ON FUNCTION "public"."reject_access_due_to_password_policy"("org_id" "
 
 
 REVOKE ALL ON FUNCTION "public"."remove_old_jobs"() FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "public"."request_actor_email_adress"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."request_actor_email_adress"() TO "service_role";
+GRANT ALL ON FUNCTION "public"."request_actor_email_adress"() TO "anon";
+GRANT ALL ON FUNCTION "public"."request_actor_email_adress"() TO "authenticated";
 
 
 
