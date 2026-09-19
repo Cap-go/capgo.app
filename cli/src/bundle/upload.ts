@@ -25,15 +25,18 @@ import { showReplicationProgress } from '../replicationProgress'
 import { CliUserError } from '../shared/cli-user-error'
 import { formatTable } from '../terminal-table'
 import { usesAlwaysDirectUpdate } from '../updaterConfig'
-import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getBundleVersion, getCompatibilityDetails, getConfig, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
+import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, canPromptInteractively, channelUpdatePackageCliError, checkCompatibilityCloud, checkPlanValidUpload, checkRemoteCliMessages, createSupabaseClient, deletedFailedVersion, deltaManifestTooLargeMessage, findRoot, findSavedKey, formatError, getBundleVersion, getCompatibilityDetails, getInstalledVersion, getLocalConfig, getLocalDependencies, getOrganizationId, getPMAndCommand, getRemoteChecksums, getRemoteFileConfig, hasCliPermission, invokeCapgoCliApi, isCompatible, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, regexSemver, resolveUserIdFromApiKey, sendEvent, setVersionManifest, updateConfigUpdater, updateOrCreateChannel, updateOrCreateVersion, UPLOAD_TIMEOUT, UPLOAD_TIMEOUT_ERROR_NAME, uploadTimeoutMessage, uploadTUS, uploadUrl, zipFile } from '../utils'
 import type { AutoBumpLevel } from '../versionHelpers'
 import { autoBumpVersionBy, getVersionSuggestions, interactiveVersionBump, normalizeAutoBumpInput } from '../versionHelpers'
 import { resolveAutoBumpLevelFromAi } from './auto-bump-ai'
 import { maybePromptBuilderCta, shouldBlockIncompatibleUpload } from './builder-cta'
 import { checkIndexPosition, searchInDirectory } from './check'
 import { summarizeUploadCompatibility } from './compatibility'
+import { CORDOVA_DEFAULT_WEB_DIR } from '../cordova/project'
+import { isCordovaMode } from '../framework/mode'
 import { ensureNotifyAppReadyInBuildFolder } from '../recovery/notify-app-ready'
 import { parsePackageJsonOptionPaths, resolveAppIdWithRecovery } from '../recovery/app-id'
+import { loadUploadProjectConfig } from './upload-config'
 import { prepareBundlePartialFiles, uploadPartial } from './partial'
 import { clackUploadReporter, getUploadReporter, runWithUploadReporter } from './reporter'
 import { formatUploadChannels, getChannelsToAssignByChecksum, parseUploadChannels } from './upload-channels'
@@ -157,13 +160,17 @@ async function getAppIdAndPath(appId: string | undefined, options: OptionsUpload
     supaHost: options.supaHost,
     supaAnon: options.supaAnon,
   })
-  const path = options.path || config?.webDir
+  const path = options.path || config?.webDir || (isCordovaMode(options.mode) ? CORDOVA_DEFAULT_WEB_DIR : undefined)
 
   if (!finalAppId) {
-    uploadFail('Missing argument, you need to provide a appid or be in a capacitor project')
+    uploadFail(isCordovaMode(options.mode)
+      ? 'Missing appId. Pass it on the command line or set id in config.xml / plugin.xml'
+      : 'Missing argument, you need to provide a appid or be in a capacitor project')
   }
   if (!path) {
-    uploadFail('Missing argument, you need to provide a path (--path), or be in a capacitor project')
+    uploadFail(isCordovaMode(options.mode)
+      ? `Missing upload path. Pass --path or use the default Cordova web dir (${CORDOVA_DEFAULT_WEB_DIR})`
+      : 'Missing argument, you need to provide a path (--path), or be in a capacitor project')
   }
 
   if (!existsSync(path)) {
@@ -468,6 +475,23 @@ function shouldSendAppTooLargeEvent(options: OptionsUpload): boolean {
   return shouldUploadFullZip(options) || hasCompleteS3UploadConfig(options)
 }
 
+async function resolveUpdaterVersionForUpload(options: OptionsUpload, root: string): Promise<string | null> {
+  if (!isCordovaMode(options.mode))
+    return getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
+
+  const cordovaUpdaterPackages = [
+    '@capgo/capacitor-updater',
+    '@capgo/cordova-updater',
+    'cordova-plugin-capgo',
+  ]
+  for (const packageName of cordovaUpdaterPackages) {
+    const version = await getInstalledVersion(packageName, root, options.packageJson)
+    if (version)
+      return version
+  }
+  return null
+}
+
 async function prepareBundleFile(path: string, options: OptionsUpload, apikey: string, orgId: string, appid: string, maxUploadLength: number, alertUploadSize: number, publicKeyFromConfig?: string) {
   let ivSessionKey
   let sessionKey
@@ -484,7 +508,7 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
   zipped = await zipFile(path)
   s.message(`Calculating checksum`)
   const root = findRoot(cwd())
-  const updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
+  const updaterVersion = await resolveUpdaterVersionForUpload(options, root)
   let useSha256 = false
   let coerced
   try {
@@ -494,7 +518,13 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
     coerced = undefined
   }
   if (!updaterVersion) {
-    uploadFail('Cannot find @capgo/capacitor-updater in node_modules, please install it first with your package manager')
+    if (isCordovaMode(options.mode)) {
+      log.warn('Cannot find a Capgo updater plugin in node_modules. Using SHA256 checksum for this Cordova upload.')
+      useSha256 = true
+    }
+    else {
+      uploadFail('Cannot find @capgo/capacitor-updater in node_modules, please install it first with your package manager')
+    }
   }
   else if (coerced) {
     // Use SHA256 for v5.10.0+, v6.25.0+ and v7.0.30+
@@ -1323,9 +1353,12 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   if (options.verbose)
     log.info(`[Verbose] API key retrieved successfully`)
 
-  const extConfig = await getConfig()
-  if (options.verbose)
-    log.info(`[Verbose] Capacitor config loaded successfully`)
+  const extConfig = await loadUploadProjectConfig(options, { appId: preAppid })
+  if (options.verbose) {
+    log.info(isCordovaMode(options.mode)
+      ? `[Verbose] Cordova project config resolved (webDir: ${extConfig.config.webDir})`
+      : `[Verbose] Capacitor config loaded successfully`)
+  }
 
   // Record whether the user explicitly asked for a delta/partial upload BEFORE
   // any mutation of `options.delta`. The instant-update auto-enable below and
@@ -1479,9 +1512,14 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   }
 
   if (options.autoSetBundle) {
-    await updateConfigUpdater({ version: bundle })
-    if (options.verbose)
-      log.info(`[Verbose] Auto-set bundle version in ${extConfig.path}`)
+    if (isCordovaMode(options.mode)) {
+      log.warn('--auto-set-bundle is not supported in Cordova mode (no capacitor.config to update)')
+    }
+    else {
+      await updateConfigUpdater({ version: bundle })
+      if (options.verbose)
+        log.info(`[Verbose] Auto-set bundle version in ${extConfig.path}`)
+    }
   }
 
   log.info(`Upload ${appid}@${bundle} started from path "${path}" to Capgo cloud`)

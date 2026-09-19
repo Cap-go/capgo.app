@@ -66,6 +66,7 @@ import { CliUserError } from './shared/cli-user-error'
 import { TwoFactorComplianceNetworkError } from './shared/two-factor-compliance'
 import { whoami } from './user/whoami'
 import { formatError } from './utils'
+import { CLI_PROJECT_MODES } from './framework/mode'
 import { normalizeAutoBumpInput } from './versionHelpers'
 
 // Common option descriptions used across multiple commands
@@ -78,6 +79,7 @@ const optionDescriptions = {
   capacitorConfig: `Capacitor config source to update (useful with dynamic monorepo configs)`,
   verbose: `Enable verbose output with detailed logging`,
   ignoreNotifyAppReady: `Skip notifyAppReady() check (not recommended — updates may roll back)`,
+  mode: `Project framework mode. Use cordova for Cordova apps without capacitor.config (webDir defaults to www)`,
   acceptIncompatible: `Accept native-package incompatibility as handled (still checks and warns, continues, skips the crash-warning email). Use this when your app already guards missing plugins at runtime.`,
   acceptIncompatibleChannel: `Accept native-package incompatibility as handled (still checks and warns, sets the channel instead of failing). Use this when your app already guards missing plugins at runtime.`,
 }
@@ -245,10 +247,12 @@ Version must be > 0.0.0 and unique. Deleted versions cannot be reused for securi
 External option: Store only a URL link (useful for apps >200MB or privacy requirements).
 Capgo never inspects external content. Add encryption for trustless security.
 
-Example: npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel production,beta`)
+Example: npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel production,beta
+Cordova example: npx @capgo/cli@latest bundle upload com.example.app --mode cordova --path www --channel production`)
   .action(handleBundleUploadCommand)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('-p, --path <path>', `Path of the folder to upload, if not provided it will use the webDir set in capacitor.config`)
+  .addOption(new Option('--mode <framework>', optionDescriptions.mode).choices([...CLI_PROJECT_MODES]))
+  .option('-p, --path <path>', `Path of the folder to upload, if not provided it will use the webDir set in capacitor.config (or www with --mode cordova)`)
   .option('-c, --channel <channel>', `Channel to link to. Use commas for multiple channels, for example production,beta`)
   .option('--rollout <rollout>', `Set the uploaded bundle as this channel's rollout target at a percentage from 0 to 100`, value => Number.parseFloat(value))
   .option('--rollout-percentage-bps <rolloutPercentageBps>', `Set the uploaded bundle rollout percentage in basis points from 0 to 10000`, value => Number.parseInt(value, 10))
