@@ -1,0 +1,68 @@
+import type { AuthEmailTemplateDetails } from '../../../supabase/functions/_backend/utils/auth_email.ts'
+import emailChange from './email_change.html'
+import emailChangeText from './email_change.txt'
+import emailChangedNotification from './email_changed_notification.html'
+import emailChangedNotificationText from './email_changed_notification.txt'
+import invite from './invite.html'
+import inviteText from './invite.txt'
+import magiclink from './magiclink.html'
+import magiclinkText from './magiclink.txt'
+import mfaFactorEnrolledNotification from './mfa_factor_enrolled_notification.html'
+import mfaFactorEnrolledNotificationText from './mfa_factor_enrolled_notification.txt'
+import mfaFactorUnenrolledNotification from './mfa_factor_unenrolled_notification.html'
+import mfaFactorUnenrolledNotificationText from './mfa_factor_unenrolled_notification.txt'
+import passwordChangedNotification from './password_changed_notification.html'
+import passwordChangedNotificationText from './password_changed_notification.txt'
+import reauthentication from './reauthentication.html'
+import reauthenticationText from './reauthentication.txt'
+import recovery from './recovery.html'
+import recoveryText from './recovery.txt'
+import signup from './signup.html'
+import signupText from './signup.txt'
+
+const templates = {
+  email_change: { subject: 'Confirm your Capgo.app email change', html: emailChange, text: emailChangeText },
+  email_changed_notification: { subject: 'Your Capgo.app email was changed', html: emailChangedNotification, text: emailChangedNotificationText },
+  invite: { subject: 'You\'re invited to Capgo.app', html: invite, text: inviteText },
+  magiclink: { subject: 'Your Capgo.app sign-in link', html: magiclink, text: magiclinkText },
+  mfa_factor_enrolled_notification: { subject: 'MFA added to your Capgo.app account', html: mfaFactorEnrolledNotification, text: mfaFactorEnrolledNotificationText },
+  mfa_factor_unenrolled_notification: { subject: 'MFA removed from your Capgo.app account', html: mfaFactorUnenrolledNotification, text: mfaFactorUnenrolledNotificationText },
+  password_changed_notification: { subject: 'Your Capgo.app password was changed', html: passwordChangedNotification, text: passwordChangedNotificationText },
+  reauthentication: { subject: 'Your Capgo.app confirmation code', html: reauthentication, text: reauthenticationText },
+  recovery: { subject: 'Reset your Capgo.app password', html: recovery, text: recoveryText },
+  signup: { subject: 'Confirm your Capgo.app email', html: signup, text: signupText },
+} as const
+
+export type AuthEmailAction = keyof typeof templates
+
+export function isAuthEmailAction(action: string): action is AuthEmailAction {
+  return Object.hasOwn(templates, action)
+}
+
+function render(source: string, details: AuthEmailTemplateDetails, escape: (value: string) => string): string {
+  return source.replace(/\{\{\s*([a-z_]+)\s*\}\}/g, (_match, key: keyof AuthEmailTemplateDetails) => {
+    const value = details[key]
+    if (!value)
+      throw new Error(`Missing auth email template value: ${key}`)
+    return escape(value)
+  })
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, char => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    '\'': '&#39;',
+  })[char] ?? char)
+}
+
+export function renderAuthEmail(action: AuthEmailAction, details: AuthEmailTemplateDetails) {
+  const template = templates[action]
+  return {
+    subject: template.subject,
+    html: render(template.html, details, escapeHtml),
+    text: render(template.text, details, value => value),
+  }
+}
