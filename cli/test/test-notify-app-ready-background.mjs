@@ -21,8 +21,20 @@ const call = "import { CapacitorUpdater } from '@capgo/capacitor-updater'; Capac
 
 async function workerHarness(worker = workerUrl) {
   const requests = []
-  const behavior = { events: 'ok', putStatus: 200, putError: false, putDelayMs: 0 }
+  const statusRequests = []
+  const behavior = { events: 'ok', getStatus: 200, getDelayMs: 0, putStatus: 200, putError: false, putDelayMs: 0 }
   const server = createServer(async (request, response) => {
+    if (request.method === 'GET') {
+      statusRequests.push({ path: request.url, headers: request.headers })
+      if (behavior.getDelayMs)
+        await new Promise(resolve => setTimeout(resolve, behavior.getDelayMs))
+      if (behavior.getRedirectLocation) {
+        response.writeHead(307, { Location: behavior.getRedirectLocation }).end()
+        return
+      }
+      response.writeHead(behavior.getStatus, { 'Content-Type': 'application/json' }).end(JSON.stringify(behavior.getBody ?? { onboarding: { setup: { todo_list_version: 3, steps: {} } } }))
+      return
+    }
     let body = ''
     for await (const chunk of request)
       body += chunk
@@ -50,9 +62,10 @@ async function workerHarness(worker = workerUrl) {
   const project = app(fixture(), '.', 'com.example.ready', { plugins: { CapacitorUpdater: { localApi: api } } })
   write(join(project.dir, 'src/main.ts'), call)
   return {
-    api, project, requests, behavior,
+    api, project, requests, statusRequests, behavior,
     async run(extra = {}, environment = {}) {
       requests.length = 0
+      statusRequests.length = 0
       const workerData = worker.href === combinedWorkerUrl.href
         ? { cwd: project.dir, command: 'app list', apikey: 'fake-api-key', ...extra }
         : { project: { dir: project.dir, workspaceRoot: project.workspaceRoot, appId: project.appId, webDir: project.webDir }, apiHost: api, command: 'app list', apikey: 'fake-api-key', attemptId: randomUUID(), ...extra }
@@ -549,7 +562,7 @@ test.concurrent('installed-updater worker skips missing packages and handles rej
 
 test.concurrent('coordinator loads the project once and reports both checks independently', async () => {
   const harness = await workerHarness(combinedWorkerUrl)
-  const { project, requests } = harness
+  const { project, requests, statusRequests } = harness
   installUpdater(project)
   const configLoaded = join(project.dir, 'config-loaded')
   write(join(project.dir, 'capacitor.config.js'), `
@@ -559,6 +572,7 @@ test.concurrent('coordinator loads the project once and reports both checks inde
   try {
     await harness.run()
     assert.equal(readFileSync(configLoaded, 'utf8'), '1', 'project config should load only once')
+    assert.equal(statusRequests.length, 1, 'coordinator should read status once for both checks')
     const sourceRequests = requests.filter(request => request.body.channel === 'notify-app-ready')
     const updaterRequests = requests.filter(request => request.body.channel === 'updater-installed')
     const sourceAttempt = scanEvents(sourceRequests, 'found', 'success')
@@ -568,6 +582,72 @@ test.concurrent('coordinator loads the project once and reports both checks inde
       { onboarding: { steps: { add_code: { status: 'done' } } } },
       { onboarding: { steps: { add_updater: { status: 'done' } } } },
     ])
+  }
+  finally {
+    harness.close()
+  }
+}, 20_000)
+
+test.concurrent('coordinator skips only done steps across checklist versions', async () => {
+  const harness = await workerHarness(combinedWorkerUrl)
+  const { project, requests, statusRequests, behavior } = harness
+  installUpdater(project)
+  try {
+    behavior.getBody = { onboarding: { todo_list_version: 1, steps: { add_code: { status: 'done' }, add_updater: { status: 'skipped' } } } }
+    await harness.run()
+    assert.equal(statusRequests.length, 1)
+    assert.equal(statusRequests[0].path, '/app/com.example.ready')
+    assert.equal(statusRequests[0].headers.capgkey, 'fake-api-key')
+    assert.equal(statusRequests[0].headers.authorization, 'fake-api-key')
+    assert.equal(statusRequests[0].headers['x-cli-command'], 'app list')
+    assert.deepEqual(requests.filter(request => request.method === 'PUT').map(request => request.body), [{ onboarding: { steps: { add_updater: { status: 'done' } } } }])
+    scanEvents(requests, 'found', 'success', 'updater-installed')
+
+    behavior.getBody = { onboarding: { setup: { todo_list_version: 2, steps: { add_code: { status: 'skipped' }, add_updater: { status: 'done' } } } } }
+    await harness.run()
+    assert.equal(statusRequests.length, 1)
+    assert.deepEqual(requests.filter(request => request.method === 'PUT').map(request => request.body), [{ onboarding: { steps: { add_code: { status: 'done' } } } }])
+    scanEvents(requests, 'found', 'success')
+
+    behavior.getBody = { onboarding: { setup: { todo_list_version: 3, steps: { add_code: { status: 'done' }, add_updater: { status: 'done' } } } } }
+    await harness.run()
+    assert.equal(statusRequests.length, 1)
+    assert.deepEqual(requests, [], 'no scan or report should run when both steps are done')
+  }
+  finally {
+    harness.close()
+  }
+}, 20_000)
+
+test.concurrent('coordinator stops a still-running completed check when status arrives after 250 ms', async () => {
+  const harness = await workerHarness(combinedWorkerUrl)
+  const { project, requests, statusRequests, behavior } = harness
+  installUpdater(project)
+  behavior.getDelayMs = 400
+  behavior.getBody = { onboarding: { setup: { todo_list_version: 3, steps: { add_code: { status: 'done' } } } } }
+  behavior.events = 'hang'
+  try {
+    await harness.run()
+    assert.equal(statusRequests.length, 1)
+    assert.deepEqual(requests.filter(request => request.method === 'PUT').map(request => request.body), [{ onboarding: { steps: { add_updater: { status: 'done' } } } }])
+  }
+  finally {
+    harness.close()
+  }
+}, 20_000)
+
+test.concurrent('coordinator runs both checks when the status read fails or has no onboarding data', async () => {
+  const harness = await workerHarness(combinedWorkerUrl)
+  const { project, requests, statusRequests, behavior } = harness
+  installUpdater(project)
+  try {
+    for (const response of [{ status: 503 }, { status: 200, body: { status: 'ok' } }]) {
+      behavior.getStatus = response.status
+      behavior.getBody = response.body
+      await harness.run()
+      assert.equal(statusRequests.length, 1)
+      assert.deepEqual(requests.filter(request => request.method === 'PUT').map(request => Object.keys(request.body.onboarding.steps)[0]).sort(), ['add_code', 'add_updater'])
+    }
   }
   finally {
     harness.close()
@@ -674,11 +754,37 @@ test.concurrent('coordinator sends no credentials to project-selected untrusted 
   try {
     await harness.run({}, { CAPGO_TRUSTED_API_ORIGINS: '' })
     assert.deepEqual(harness.requests, [], 'untrusted project config must not receive the API key')
+    assert.deepEqual(harness.statusRequests, [])
     await harness.run({ supaHost: harness.api, supaAnon: 'fake-anon-key' }, { CAPGO_TRUSTED_API_ORIGINS: '' })
+    assert.equal(harness.statusRequests[0].headers.authorization, 'Bearer fake-anon-key')
     assert.equal(harness.requests.filter(request => request.method === 'PUT').length, 2, 'explicit CLI self-host selection should still work')
   }
   finally {
     harness.close()
+  }
+}, 20_000)
+
+test.concurrent('coordinator status redirects cannot forward credentials and still run both checks', async () => {
+  const forwarded = []
+  const destination = createServer((request, response) => {
+    forwarded.push(request.headers)
+    response.writeHead(200, { 'Content-Type': 'application/json' }).end('{}')
+  })
+  destination.listen(0, '127.0.0.1')
+  await once(destination, 'listening')
+  const harness = await workerHarness(combinedWorkerUrl)
+  installUpdater(harness.project)
+  harness.behavior.getRedirectLocation = `http://127.0.0.1:${destination.address().port}`
+  try {
+    await harness.run()
+    assert.equal(harness.statusRequests.length, 1)
+    assert.deepEqual(harness.requests.filter(request => request.method === 'PUT').map(request => Object.keys(request.body.onboarding.steps)[0]).sort(), ['add_code', 'add_updater'])
+    assert.deepEqual(forwarded, [])
+  }
+  finally {
+    harness.close()
+    destination.closeAllConnections()
+    destination.close()
   }
 }, 20_000)
 
