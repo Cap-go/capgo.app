@@ -106,6 +106,43 @@ describe('deleted bundle cache', () => {
     expect(queryMock).toHaveBeenCalled()
   })
 
+  it('still serves a cached zip when the deleted lookup errors', async () => {
+    queryMock.mockRejectedValue(new Error('hyperdrive blip'))
+
+    const fileId = 'orgs/test-org/apps/test-app/bundle.zip'
+    const { buildFileReadCacheRequest } = await import('../supabase/functions/_backend/files/file_read_cache.ts')
+    const cache = createCache()
+    await cache.put(
+      buildFileReadCacheRequest(new Request(`http://localhost/read/attachments/${fileId}`)),
+      new Response('cached live bytes', {
+        headers: { 'content-type': 'application/zip' },
+      }),
+    )
+    globalThis.caches = { default: cache } as any
+
+    const bucketPut = vi.fn()
+    const appGlobal = await createFilesApp()
+    const response = await appGlobal.fetch(
+      new Request(`http://localhost/read/attachments/${fileId}`),
+      { ATTACHMENT_BUCKET: { put: bucketPut, head: vi.fn(), get: vi.fn() } },
+      { waitUntil: () => { } } as any,
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe('cached live bytes')
+    expect(queryMock).toHaveBeenCalled()
+  })
+
+  it('treats lookup errors as not deleted', async () => {
+    queryMock.mockRejectedValue(new Error('hyperdrive blip'))
+
+    const { isAttachmentVersionDeleted } = await import('../supabase/functions/_backend/files/file_read_cache.ts')
+    const context = { get: () => 'test-request-id' } as any
+
+    await expect(isAttachmentVersionDeleted(context, 'orgs/test-org/apps/test-app/bundle.zip')).resolves.toBe(false)
+    expect(queryMock).toHaveBeenCalled()
+  })
+
   it('does not serve or restore a cached file when a deleted marker is present', async () => {
     const { buildDeletedFileMarkerRequest } = await import('../supabase/functions/_backend/files/file_read_cache.ts')
     const cache = createCache(new Map([

@@ -90,6 +90,7 @@ export const ALLOWED_STATS_ACTIONS = [
   'webview_content_process_terminated',
   'webview_dom_content_loaded',
   'webview_page_loaded',
+  'app_nav',
   'set_next',
   'os_version_changed',
   'native_app_version_changed',

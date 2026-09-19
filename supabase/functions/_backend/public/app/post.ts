@@ -1,8 +1,9 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
-import { addAppCreatorToOnboarding, resolveAppCreatorEmail } from '../../utils/app_creator.ts'
+import { getOrCreateUserABTests } from '../../utils/ab_tests.ts'
 import { applyAppOnboardingPatch, isAppOnboardingSource } from '../../utils/appOnboarding.ts'
+import { addAppCreatorToOnboarding, resolveAppCreatorEmail } from '../../utils/app_creator.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
@@ -58,6 +59,8 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
   }
   if (body.icon && !normalizedIcon)
     throw simpleError('invalid_icon_path', 'Icon path must belong to this app organization')
+  // Ensure intent-gated assignment also exists for apps created outside the wizard.
+  await getOrCreateUserABTests(c, auth.userId)
   let pgClient
   let data: Database['public']['Tables']['apps']['Row'] | undefined
   try {
@@ -84,9 +87,6 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: CreateApp):
       android_store_url: body.android_store_url ?? null,
       onboarding: applyAppOnboardingPatch(addAppCreatorToOnboarding({}, auth.userId, creatorEmail), {
         source: isAppOnboardingSource(body.onboarding?.source) ? body.onboarding.source : 'manual',
-        ...(body.need_onboarding === true
-          ? { steps: { add_app: { status: 'done' as const } } }
-          : {}),
       }),
     }
     const result = await pgClient.query(

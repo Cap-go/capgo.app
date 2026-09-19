@@ -283,4 +283,12 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).not.toContain('<OnboardingAltSetup')
     expect(onboardingSource).not.toContain('@progress="onCliStepsProgress"')
   })
+
+  it.concurrent('skips the choice splash for returning-org app creation', () => {
+    const appCreation = sliceBetween(onboardingSource, 'async function createAppRecord(', 'async function seedDemoData()')
+    expect(appCreation).toContain('getPostAppCreateRedirectPath({')
+    expect(appCreation).toContain('isFirstAppOnboarding: props.onboarding')
+    expect(appCreation).toContain('await router.replace(postCreateRedirect)')
+    expect(appCreation.indexOf('getPostAppCreateRedirectPath({')).toBeLessThan(appCreation.indexOf("completeAndViewStep(options?.nextStep ?? 'choice'"))
+  })
 })

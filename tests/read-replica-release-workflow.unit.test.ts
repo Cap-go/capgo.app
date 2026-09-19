@@ -56,12 +56,17 @@ describe('production read-replica release gate', () => {
         [
           'read_replica_schema:',
           '    needs: changes',
-          `    if: ${githubExpression('needs.changes.result == \'success\' && needs.changes.outputs.supabase == \'true\' && !contains(github.ref_name, \'-alpha\')')}`,
+          `    if: ${githubExpression('needs.changes.result == \'success\' && needs.changes.outputs.supabase == \'true\' && needs.changes.outputs.is_alpha != \'true\'')}`,
         ].join('\n'),
       )
       expect(workflow).toContain(
         'supabase_deploy:\n    needs: [changes, read_replica_schema]',
       )
+      expect(workflow).toContain(
+        'sync_schema_types:\n    needs: [changes, read_replica_schema, supabase_deploy]',
+      )
+      expect(workflow).toContain("needs.read_replica_schema.result == 'success'")
+      expect(workflow).toContain("needs.supabase_deploy.result == 'success'")
       expect(syncScript).toContain('planReadReplicaSchemaSync')
       expect(syncScript).toContain('preflightCompatibilityIssues')
       expect(syncScript).toContain('applyReadReplicaSchemaPlan')

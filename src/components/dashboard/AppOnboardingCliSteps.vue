@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import IconCheck from '~icons/lucide/check'
 import IconChevronDown from '~icons/lucide/chevron-down'
 import IconMinus from '~icons/lucide/minus'
-import { APP_ONBOARDING_STEP_IDS, hasStartedCliSetup, parseAppOnboarding } from '~/services/appOnboarding'
+import { getAppOnboardingStepIds, hasStartedCliSetup, parseAppOnboarding } from '~/services/appOnboarding'
 import { useSupabase } from '~/services/supabase'
 
 const props = defineProps<{
@@ -24,7 +24,7 @@ const onboarding = ref(parseAppOnboarding(props.initialOnboarding))
 let pollTimer: number | null = null
 let refreshGeneration = 0
 
-const steps = computed(() => APP_ONBOARDING_STEP_IDS.map(id => ({
+const steps = computed(() => getAppOnboardingStepIds(onboarding.value.todo_list_version).map(id => ({
   id,
   status: onboarding.value.steps[id]?.status as AppOnboardingStepStatus | undefined,
   title: t(`app-onboarding-cli-step-${id}`),

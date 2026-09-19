@@ -10,6 +10,7 @@ Use this skill as the entry point for the Capgo CLI skill set.
 TanStack Intent skills should stay focused and under the validator line limit, so the Capgo CLI guidance is split into multiple skills:
 
 - `usage`: high-level command routing, shared invocation rules, and quick command selection.
+- `observe`: Observe query commands and MCP (`summary`, `metrics`, `events`, `device`, `versions`, `routes`).
 - `release-management`: OTA bundle, channel, and encryption-key workflows.
 - `native-builds`: native cloud build request and build-credential workflows.
 - `organization-management`: organization, account, and deprecated organisation-alias workflows.
@@ -18,6 +19,13 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 
 - Prefer `npx @capgo/cli@latest ...` in user-facing examples in this repo.
 - Many commands can infer `appId` and related config from the current Capacitor project.
+- Commands inside an identifiable Capacitor project can automatically complete the Add Integration Code onboarding task when a source call to `CapacitorUpdater.notifyAppReady()` is detected. Detection is best effort and may be abandoned when the command exits. It does not confirm runtime readiness.
+- A separate background check can complete Install Updater Plugin when `@capgo/capacitor-updater` is declared in the selected app's package.json and installed locally, including hoisted or symlinked workspace dependencies. Missing dependencies leave existing progress untouched; detection may be abandoned when the command exits.
+- After supported interactive app, bundle, channel, organization, and key commands, plus `build request`, `login`, `doctor`, and `get-qr`, finish, pending background checks share a wait of up to five seconds. The CLI prints a waiting message and can exit sooner after the checks finish; pressing Ctrl-C during the wait exits immediately. JSON, output-text, quiet, CI, piped, `init`, `build init`, and MCP runs do not add this wait or message. `account whoami` (and its `account id` alias) and `bundle releaseType` also exit without waiting.
+- With analytics enabled, source scans emit `scan_started` and `scan_ended` events in the `notify-app-ready` channel with a shared `attempt_id`. The ended event includes scan duration, result, and todo-report outcome. An abandoned scan may have no ended event.
+- With analytics enabled, displaying the waiting message emits `background_checks_wait_started` in the `cli-usage` channel. Its event properties include the command path, pending check count, grace period, and pending `scan_attempt_ids`. Telemetry shares the five-second wait budget and respects `CAPGO_DISABLE_TELEMETRY` and `CAPGO_DISABLE_POSTHOG`.
+- Updater installation checks use the same scan events and attempt pairing in the `updater-installed` channel, with a separate attempt ID from the source scan. Telemetry opt-out does not prevent either onboarding check.
+- Background onboarding requests trust the default Capgo API origin. For a custom API, explicitly select the self-host with `--supa-host` and `--supa-anon` where supported, or list trusted URL origins (including scheme and port) in `CAPGO_TRUSTED_API_ORIGINS`, separated by commas. Remote hosts require HTTPS; HTTP is permitted only for trusted loopback origins. Untrusted destinations and redirects are skipped without sending credentials to another host.
 - Shared public flags commonly include `-a, --apikey <apikey>` and `--verbose` on commands that support verbose output.
 - `--capacitor-config <path>` is a global option for dynamic monorepos: Capacitor still loads the active root config, while config-writing commands update the selected app-specific source file. On `mcp`, the target remains active for the server lifetime so config-writing MCP tools use the same source.
 
@@ -25,25 +33,28 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 
 ### Project setup and diagnostics
 
-- `init [apikey] [appId]`: guided first-time setup for Capgo in a Capacitor app. The interactive flow now runs as a real Ink-based fullscreen onboarding so it uses the same UI stack as `build init` (alias: `build onboarding`), with a persistent dashboard, phase roadmap, progress cards, shared log area, and resume support. At startup, onboarding still recommends a clean git worktree before file edits; dirty repos show `Check again` first and also offer a non-recommended `Continue anyway` override. When dependency auto-detection fails on macOS, the flow opens a native file picker for `package.json` before falling back to manual path entry. If the local bundle ID already exists in the selected Capgo account, onboarding offers to reuse that app, then offers to delete and recreate it, then falls back to alternate bundle ID suggestions. If the user reuses a pending app that was already created in the web onboarding flow, the CLI syncs that selected dashboard app ID back into `capacitor.config.*` before the remaining steps continue. Outside that reused pending-app path, the CLI keeps using the local Capacitor app ID. It writes the new `autoUpdate` policy modes into config: `"atBackground"` for the default flow and `"always"` for instant updates. It can also offer a final `npx skills add https://github.com/Cap-go/capgo-skills -g -y` install step before the GitHub support prompt; if accepted, the support menu includes `Cap-go/capgo-skills` alongside the updater-only and all-Capgo choices. If native platforms are missing, the onboarding can offer to run `cap add` for you. The updater step now verifies that `@capgo/capacitor-updater` is both declared in the selected `package.json` and resolvable from `node_modules`; if automatic install or later build/sync fails, onboarding prints the manual command, waits for the user to type `ready`, re-checks, and only then continues. If the user enables instant updates, onboarding requires `@capacitor/splash-screen` for `autoSplashscreen`, offers to install it with the same auto-install/retry flow, and waits until it is declared and resolvable before writing config. During the iOS run-on-device step, onboarding asks whether to use a physical iPhone/iPad or a simulator; for physical devices, it asks the user to connect and unlock the device, then offers a check-again loop before launching with the detected target. If iOS sync validation fails during onboarding, the CLI can offer to run a one-line native reset command, wait for you to type `ready` after a manual fix, surface `doctor`, and save a support bundle before you leave the flow.
+- `init [apikey] [appId]`: guided first-time setup for Capgo in a Capacitor app. The interactive flow now runs as a real Ink-based fullscreen onboarding so it uses the same UI stack as `build init` (alias: `build onboarding`), with a persistent dashboard, phase roadmap, progress cards, shared log area, and resume support. At startup, onboarding still recommends a clean git worktree before file edits; dirty repos show `Check again` first and also offer a non-recommended `Continue anyway` override. When dependency auto-detection fails on macOS, the flow opens a native file picker for `package.json` before falling back to manual path entry. If the onboarding bundle upload fails, recovery can retry immediately or ask for the monorepo/workspace root `package.json` and hoisted `node_modules` paths (not the app package folder) and then retry. If the local bundle ID already exists in the selected Capgo account, onboarding offers to reuse that app, then offers to delete and recreate it, then falls back to alternate bundle ID suggestions. If the user reuses a pending app that was already created in the web onboarding flow, the CLI syncs that selected dashboard app ID back into `capacitor.config.*` before the remaining steps continue. Outside that reused pending-app path, the CLI keeps using the local Capacitor app ID. It writes the new `autoUpdate` policy modes into config: `"atBackground"` for the default flow and `"always"` for instant updates. It can also offer a final `npx skills add https://github.com/Cap-go/capgo-skills -g -y` install step before the GitHub support prompt; if accepted, the support menu includes `Cap-go/capgo-skills` alongside the updater-only and all-Capgo choices. If native platforms are missing, the onboarding can offer to run `cap add` for you. The updater step now verifies that `@capgo/capacitor-updater` is both declared in the selected `package.json` and resolvable from `node_modules`; if automatic install or later build/sync fails, onboarding prints the manual command, waits for the user to type `ready`, re-checks, and only then continues. If the user enables instant updates, onboarding requires `@capacitor/splash-screen` for `autoSplashscreen`, offers to install it with the same auto-install/retry flow, and waits until it is declared and resolvable before writing config. During the iOS run-on-device step, onboarding asks whether to use a physical iPhone/iPad or a simulator; for physical devices, it asks the user to connect and unlock the device, then offers a check-again loop before launching with the detected target. If iOS sync validation fails during onboarding, the CLI can offer to run a one-line native reset command, wait for you to type `ready` after a manual fix, surface `doctor`, and save a support bundle before you leave the flow.
 - `init --no-analytics`: disables init onboarding analytics and terminal replay for that run.
+- When `init` finds an existing app channel, it asks **Yes, use it** or **No, create a new one** before creating anything. It prefers the saved/production channel, then a default download channel, then another existing channel. Reusing continues onboarding with that channel; declining lets the user choose a new name.
 - `run device [platform]`: run a Capacitor app on a connected device or simulator. In an interactive terminal, omitting `[platform]` asks whether to start on iOS or Android. The command lists available devices and simulators, includes a reload option, and resolves the `cap run` command. Use `npx @capgo/cli@latest run device ios --no-launch` to exercise iOS physical/simulator target selection and print the resolved command without launching the app.
 - `login [apikey]`: store an API key locally.
 - `doctor`: inspect installation health and gather troubleshooting details.
 - `probe`: test whether the update endpoint would deliver an update.
+- `observe summary|metrics|events|device|versions|routes`: query Observe findings, timings, device timelines, and per-screen routes. Start with `observe summary`. Use `observe device DEVICE_ID` as the session timeline. Navigation uses `app_nav` + `metadata.route` (history/popstate/hashchange/appUrlOpen, no Expo Router). Pass `--json` for agents.
 
 ### App-level operations
 
 - `app add [appId]`: create an app in Capgo Cloud.
 - `app list`: list apps under the current account. Pass `--filter-by-org-id <orgId>` to list only apps from one organization, `--show-org` to include organization names, and `--show-org-id` to include organization IDs. The CLI warns that the filter can hide other accessible apps. Use `npx @capgo/cli@latest app list --output-text` for plain status text with an embedded CSV app table and no interactive terminal formatting.
 - `app delete [appId]`: remove an app.
+- `app todo [appId]` (alias: `app todoList`): show the versioned onboarding checklist with done, skipped, and pending tasks, using the same live progress checks as the dashboard. Skipped tasks count toward completed progress. Live checks can refresh saved v3 milestones; a warning means saved progress is shown for checks that failed. Requires `app.read`; additional checks depend on the key's read permissions. Omit the app ID to infer it from the current Capacitor project. Example: `npx @capgo/cli@latest app todo com.example.app`. Supports `-a, --apikey`, `--supa-host`, and `--supa-anon`.
 - `app set [appId]`: update app settings such as name, icon, retention, metadata exposure, and preview access with `--preview` or `--no-preview`.
 - `app setting [path]`: update Capacitor config values programmatically.
 - `app debug [appId]`: listen for live-update debug events, optionally for one device.
 
 ### Docs and agent integrations
 
-- `mcp`: start the Capgo MCP server for AI-agent integrations; pass `--capacitor-config <path>` when its config-writing tools should target an app-specific source.
+- `mcp`: start the Capgo MCP server for AI-agent integrations; pass `--capacitor-config <path>` when its config-writing tools should target an app-specific source. Observe queries use `capgo_observe` (start at `view=summary`).
 
 ### GitHub support commands
 
@@ -51,6 +62,13 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 - `star-all [repositories...]`: star all Capgo repositories matching the default filter, with delay and concurrency controls. The default set includes `capacitor-*` repositories plus `Cap-go/CLI`, `Cap-go/capgo`, and `Cap-go/capgo-skills`.
 
 ## Related skills
+
+### `observe`
+
+Load `skills/observe/SKILL.md` when working with:
+
+- `observe summary`, `observe metrics`, `observe events`, `observe device`, `observe versions`, `observe routes`
+- MCP `capgo_observe`
 
 ### `release-management`
 
@@ -78,7 +96,7 @@ Load `skills/native-builds/SKILL.md` when working with:
 
 Load `skills/organization-management/SKILL.md` when working with:
 
-- `account id`
+- `account whoami` (alias: `account id`)
 - `organization list`, `organization add`, `organization members`, `organization set`, `organization delete`
 - deprecated `organisation` aliases
 

@@ -66,7 +66,8 @@ Use this skill for OTA update workflows in Capgo Cloud.
   - `--min-update-version <minUpdateVersion>`
   - `--auto-min-update-version`
   - `--ignore-metadata-check`
-  - `--fail-on-incompatible` (fail the upload instead of uploading when the bundle is incompatible with a target channel's current native packages; cannot be combined with `--ignore-metadata-check`)
+  - `--fail-on-incompatible` (fail the upload instead of uploading when the bundle is incompatible with a target channel's current native packages; cannot be combined with `--ignore-metadata-check` or `--accept-incompatible`)
+  - `--accept-incompatible` (mark native-package incompatibility as handled: still checks and warns, continues the upload, skips the crash-warning email; cannot be combined with `--fail-on-incompatible` or `--ignore-metadata-check`)
   - `--ignore-checksum-check`
   - `--force-crc32-checksum`
   - `--timeout <timeout>`
@@ -186,6 +187,8 @@ Use this skill for OTA update workflows in Capgo Cloud.
 
 - Alias: `l`
 - Example: `npx @capgo/cli@latest channel list com.example.app`
+- Requires a valid API key with `app.read` and `app.read_channels` permission for the app. Permission failures identify the required permission.
+- Displays Yes/No settings and marks channels without a bundle as Unlinked. Narrow terminals show each channel as a Setting/Value table.
 
 ### `channel delete [channelId] [appId]`
 
@@ -228,6 +231,7 @@ Use this skill for OTA update workflows in Capgo Cloud.
   - `--device`, `--no-device`
   - `--package-json <packageJson>`
   - `--ignore-metadata-check`
+  - `--accept-incompatible` (mark native-package incompatibility as handled: still checks and warns, sets the channel instead of failing; cannot be combined with `--ignore-metadata-check`)
   - `--qr-preview`
   - `--send-update-notification`
 

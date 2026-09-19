@@ -1594,8 +1594,9 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
   // onboarding if the app has no build credentials, otherwise a native build.
   // Accepting skips this OTA upload (a native build supersedes it). Skipped
   // entirely for the programmatic SDK path (silent), which must not prompt,
-  // print, or emit CTA telemetry.
-  if (incompatible && !silent) {
+  // print, or emit CTA telemetry. Also skipped when `--accept-incompatible`
+  // is set: the caller already marked the mismatch as handled.
+  if (incompatible && !silent && !options.acceptIncompatible) {
     // CI / non-interactive with the flag: hard fail now, before the promotional
     // Builder ad prints (there is no escape-hatch prompt to offer).
     if (options.failOnIncompatible && !interactive)
@@ -1626,6 +1627,9 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     // Interactive and the user declined the native-build escape hatch.
     if (shouldBlockIncompatibleUpload({ incompatible, failOnIncompatible: !!options.failOnIncompatible, interactive, builderAction }))
       uploadFailIncompatible()
+  }
+  else if (incompatible && options.acceptIncompatible && !silent) {
+    log.warn('Proceeding because --accept-incompatible was set. The incompatible-bundle crash warning will not be emailed.')
   }
   if (options.verbose) {
     log.info(`[Verbose] Compatibility check completed:`)
@@ -2063,6 +2067,7 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
         version_new_name: bundle,
         ...(compatibilityResult.compatibility.versionOldId ? { version_old_id: compatibilityResult.compatibility.versionOldId } : {}),
         ...(compatibilityResult.compatibility.versionOldName ? { version_old_name: compatibilityResult.compatibility.versionOldName } : {}),
+        ...(options.acceptIncompatible ? { incompatibility_accepted: true } : {}),
       },
     })
   }
@@ -2116,7 +2121,8 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
 /**
  * Validate mutually-exclusive and dependent upload options, failing fast (via
  * `uploadFail`) before any network call. Exported so the option-conflict guards
- * (e.g. `--fail-on-incompatible` + `--ignore-metadata-check`) can be unit-tested
+ * (e.g. `--fail-on-incompatible` + `--ignore-metadata-check`, or
+ * `--accept-incompatible` + `--fail-on-incompatible`) can be unit-tested
  * directly.
  */
 export function checkValidOptions(options: OptionsUpload) {
@@ -2183,6 +2189,12 @@ export function checkValidOptions(options: OptionsUpload) {
   }
   if (options.failOnIncompatible && options.ignoreMetadataCheck) {
     uploadFail('You cannot use --fail-on-incompatible together with --ignore-metadata-check — the metadata check is exactly what --fail-on-incompatible enforces. Remove one of them.')
+  }
+  if (options.acceptIncompatible && options.failOnIncompatible) {
+    uploadFail('You cannot use --accept-incompatible together with --fail-on-incompatible — one continues despite a mismatch, the other refuses it. Remove one of them.')
+  }
+  if (options.acceptIncompatible && options.ignoreMetadataCheck) {
+    uploadFail('You cannot use --accept-incompatible together with --ignore-metadata-check — accepting a mismatch requires running the compatibility check. Remove one of them.')
   }
 }
 

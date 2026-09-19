@@ -422,6 +422,20 @@ describe('onError PostHog capture', () => {
     expect(response.status).toBe(500)
   })
 
+  it('skips Discord for Cloudflare internal errors on the files upload path', async () => {
+    const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
+
+    const response = await onError('files')(new Error('internal error; reference = 0123abcd-4567-89ef'), createContext())
+
+    expect(sendDiscordAlert500Mock).not.toHaveBeenCalled()
+    expect(capturePosthogExceptionMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      functionName: 'files',
+      kind: 'unhandled_error',
+      status: 500,
+    }))
+    expect(response.status).toBe(500)
+  })
+
   it('captures generic unhandled errors in PostHog', async () => {
     const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
 

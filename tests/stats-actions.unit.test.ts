@@ -22,6 +22,7 @@ const HEALTH_STATS_ACTIONS = [
   'webview_content_process_terminated',
   'webview_dom_content_loaded',
   'webview_page_loaded',
+  'app_nav',
 ] as const
 
 const NATIVE_VERSION_STATS_ACTIONS = [

@@ -35,7 +35,7 @@ function redactSensitiveRequestBody(value: unknown): unknown {
   ]))
 }
 
-function isFilesDurableObjectStorageTimeout(functionName: string, error: unknown): boolean {
+function isFilesDurableObjectTransientError(functionName: string, error: unknown): boolean {
   if (!filesUploadFunctionNames.has(functionName) || !error || typeof error !== 'object' || !('message' in error))
     return false
 
@@ -44,8 +44,13 @@ function isFilesDurableObjectStorageTimeout(functionName: string, error: unknown
     return false
 
   const normalizedMessage = message.toLowerCase()
-  return normalizedMessage.includes('storage operation exceeded timeout')
+  const isStorageTimeout = normalizedMessage.includes('storage operation exceeded timeout')
     && normalizedMessage.includes('object to be reset')
+  // Cloudflare's generic "internal error; reference = <id>" from the upload
+  // Durable Object call is transient too; the retry loop already recovers it,
+  // so any residual occurrence should stay off the Discord alert channel.
+  const isCloudflareInternalError = normalizedMessage.includes('internal error; reference')
+  return isStorageTimeout || isCloudflareInternalError
 }
 
 function readRequestHeader(c: Context, name: string): string | undefined {
@@ -267,7 +272,7 @@ export function onError(functionName: string) {
     }
     // Non-HTTP errors: log with stack and return 500
     const suppressQueueRetryAlert = shouldSuppressQueueRetryAlert(c)
-    const suppressDiscordAlert = suppressQueueRetryAlert || isFilesDurableObjectStorageTimeout(functionName, e)
+    const suppressDiscordAlert = suppressQueueRetryAlert || isFilesDurableObjectTransientError(functionName, e)
     cloudlogErr({
       requestId: c.get('requestId'),
       functionName,
