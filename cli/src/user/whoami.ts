@@ -36,7 +36,7 @@ export async function whoami(options: Options) {
       headers: ['Account ID', 'Account email'],
       rows: [[userId, email]],
     }))
-    void trackEvent({ channel: 'account', event: 'Account Identity Viewed', tags: {} })
+    void trackEvent({ channel: 'account', event: 'Account Identity Viewed', apikey, tags: {} })
     outro('Done ✅')
   }
   catch (error) {
