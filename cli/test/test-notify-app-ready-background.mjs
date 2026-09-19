@@ -579,7 +579,7 @@ test.concurrent('combined worker loads the project once and reports both checks 
   }
 }, 20_000)
 
-test.concurrent('combined worker and its scan workers can be abandoned without holding the foreground open', async () => {
+test.concurrent('combined worker can be abandoned without holding the foreground open', async () => {
   const harness = await workerHarness(combinedWorkerUrl)
   installUpdater(harness.project)
   harness.behavior.events = 'hang'
@@ -619,13 +619,13 @@ test.concurrent('combined worker and its scan workers can be abandoned without h
   const exited = once(child, 'exit')
   const timeout = setTimeout(() => child.kill(), 5_000)
   try {
-    await Promise.race([received, exited.then(() => { throw new Error('foreground exited before both workers started') })])
+    await Promise.race([received, exited.then(() => { throw new Error('foreground exited before both checks started') })])
     const attempts = harness.requests.filter(request => request.body.event === 'scan_started')
       .map(request => request.body.nonPersonTags.attempt_id)
-    assert.equal(new Set(attempts).size, 2, 'each worker must have its own attempt ID')
+    assert.equal(new Set(attempts).size, 2, 'each check must have its own attempt ID')
     child.stdin.end()
     const [code, signal] = await exited
-    assert.equal(signal, null, 'background workers kept the foreground alive')
+    assert.equal(signal, null, 'background worker kept the foreground alive')
     assert.equal(code, 0)
     assert.equal(output.trim(), 'foreground-finished')
     assert.equal(errors, '')
