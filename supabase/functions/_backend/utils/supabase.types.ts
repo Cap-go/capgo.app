@@ -5380,10 +5380,6 @@ export type Database = {
         Args: { p_user_id: string }
         Returns: string
       }
-      refresh_app_onboarding_progress: {
-        Args: { p_batch_size?: number }
-        Returns: number
-      }
       refresh_app_rollout_channel_count_for_app: {
         Args: { p_app_id: string }
         Returns: undefined

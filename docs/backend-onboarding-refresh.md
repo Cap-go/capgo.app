@@ -42,8 +42,8 @@ the existing app/created index and the new success/last-use indexes. The new
 lease table and producer function deny anon/authenticated access. No plugin
 hot path, checklist experiment assignment, or email delivery is changed.
 
-The legacy SQL refresh functions and Getting Started verification RPC remain
-available for compatibility. The scheduled refresh uses only the backend path.
+The old scheduled SQL batch function is dropped. The single-app SQL refresh
+function remains because the Getting Started Verify RPC calls it on demand.
 
 Query plan validation uses synthetic data, without customer identifiers: 20,000
 apps, 500,000 bundles and 200,000 builds. PostgreSQL 17 chose the refresh-order

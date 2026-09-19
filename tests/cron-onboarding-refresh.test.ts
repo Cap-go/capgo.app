@@ -73,6 +73,8 @@ describe('backend onboarding refresh PostgreSQL and telemetry integration', () =
       expect(def).toContain('SKIP LOCKED')
       const task = (await client.query('SELECT task_type, target, minute_interval, hour_interval FROM public.cron_tasks WHERE name=\'refresh_app_onboarding_progress\'')).rows[0]
       expect(task).toMatchObject({ task_type: 'queue', target: 'cron_onboarding_refresh', minute_interval: 10, hour_interval: null })
+      expect((await client.query("SELECT to_regprocedure('public.refresh_app_onboarding_progress(integer)') AS old_batch")).rows[0].old_batch).toBeNull()
+      expect((await client.query("SELECT to_regprocedure('public.refresh_one_app_onboarding_progress(character varying)') AS single_app")).rows[0].single_app).not.toBeNull()
       const dispatcher = (await client.query('SELECT pg_get_functiondef(\'public.process_function_queue(text,integer)\'::regprocedure) AS def')).rows[0].def
       expect(dispatcher).toContain('calls_needed := 1')
       expect(dispatcher).toContain('\'wait_for_completion\', onboarding_queue')

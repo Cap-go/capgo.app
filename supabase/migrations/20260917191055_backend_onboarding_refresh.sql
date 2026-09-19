@@ -106,6 +106,15 @@ UPDATE public.cron_tasks SET
     = 'Enqueue backend onboarding refresh producer every 10 minutes',
     updated_at = now()
 WHERE name = 'refresh_app_onboarding_progress';
+
+-- The scheduled batch RPC has been replaced by the backend producer. Keep the
+-- single-app refresh RPC used by verify_getting_started.
+DROP FUNCTION public.refresh_app_onboarding_progress(integer);
+
+COMMENT ON COLUMN public.apps.onboarding IS
+'App onboarding state. The backend refresh worker updates feature success, usage, and stage; setup progress is stored separately under setup. Clients may only set feature started_at through mark_onboarding_feature_started.';
+COMMENT ON FUNCTION public.refresh_one_app_onboarding_progress(varchar) IS
+'Internal. Refreshes onboarding features for one app from devices, bundles, daily_version installs, and build_requests when Getting Started is verified. Never called from plugin request paths.';
 INSERT INTO public.cron_tasks (
     name, task_type, target, batch_size, minute_interval, description
 )

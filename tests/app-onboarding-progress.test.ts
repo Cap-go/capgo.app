@@ -110,21 +110,12 @@ async function insertDevice(appId: string, deviceId: string, installSource: stri
     throw error
 }
 
-async function refreshUntil(appId: string) {
-  for (let attempt = 0; attempt < 40; attempt++) {
-    await executeSQL('SELECT public.refresh_app_onboarding_progress(500)')
-    const { data, error } = await serviceRoleSupabase
-      .from('apps')
-      .select('onboarding')
-      .eq('app_id', appId)
-      .single()
-    if (error)
-      throw error
-    const ledger = parseAppOnboardingLedger(data.onboarding)
-    if (ledger.refreshed_at)
-      return ledger
-  }
-  throw new Error(`refresh_app_onboarding_progress never reached ${appId}`)
+async function refreshOne(appId: string) {
+  const rows = await executeSQL<{ onboarding: unknown }>(
+    'SELECT public.refresh_one_app_onboarding_progress($1) AS onboarding',
+    [appId],
+  )
+  return parseAppOnboardingLedger(rows[0]?.onboarding)
 }
 
 beforeAll(async () => {
@@ -297,13 +288,8 @@ describe('app onboarding progress', () => {
   })
 
   it('keeps TestFlight-only apps off store_live', async () => {
-    const defs = await executeSQL<{ def: string }>(
-      `SELECT pg_get_functiondef('public.refresh_app_onboarding_progress(integer)'::regprocedure) AS def`,
-    )
-    expect(defs[0]?.def).toContain('INNER JOIN batch ON batch.app_id')
-
-    const testflight = await refreshUntil(APP_TESTFLIGHT)
-    const store = await refreshUntil(APP_STORE)
+    const testflight = await refreshOne(APP_TESTFLIGHT)
+    const store = await refreshOne(APP_STORE)
 
     expect(testflight.features?.ota?.stage).toBe('testflight')
     expect(testflight.features?.ota?.stage).not.toBe('store_live')
@@ -356,7 +342,7 @@ describe('app onboarding progress', () => {
     expect(againError).toBeNull()
     expect(parseAppOnboardingLedger(again).getting_started_dismissed_at).toBe(firstDismissedAt)
 
-    const refreshed = await refreshUntil(APP_RPC)
+    const refreshed = await refreshOne(APP_RPC)
     expect(refreshed.getting_started_dismissed_at).toBe(firstDismissedAt)
     expect(refreshed.features?.cli_install?.started_at).toBeTruthy()
   })
