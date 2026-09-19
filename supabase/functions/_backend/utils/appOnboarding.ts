@@ -28,17 +28,19 @@ export const APP_ONBOARDING_V2_STEP_IDS = [
   'completion',
 ] as const
 
-export const APP_ONBOARDING_V3_STEP_IDS = [
+export const APP_ONBOARDING_V4_OTA_STEP_IDS = [
   'login_cli_mcp', 'add_channel', 'add_updater', 'add_code',
   'run_device', 'upload_bundle', 'test_update',
 ] as const
+
+export const APP_ONBOARDING_V3_STEP_IDS = [...APP_ONBOARDING_V4_OTA_STEP_IDS] as const
 
 export type AppOnboardingStepId
   = | typeof APP_ONBOARDING_V1_STEP_IDS[number]
     | typeof APP_ONBOARDING_V2_STEP_IDS[number]
 export type AppOnboardingSource = 'manual' | 'cli' | 'mcp' | 'ai'
 export type AppOnboardingOutcome = 'in_progress' | 'completed' | 'skipped' | 'switched_to_manual'
-export type AppOnboardingStepStatus = 'done' | 'skipped'
+export type AppOnboardingStepStatus = 'pending' | 'done' | 'skipped'
 export const APP_ONBOARDING_STEP_HISTORY_LIMIT = 10
 export const DEFAULT_APP_ONBOARDING_TODO_LIST_VERSION = 2
 
@@ -103,7 +105,8 @@ export function defaultAppOnboarding(): AppOnboardingState {
 }
 
 export function getAppOnboardingStepIds(todoListVersion: number): readonly AppOnboardingStepId[] {
-  if (todoListVersion === 3)
+  // TODO(2027-03-19): Remove v3 flat-step support after existing rows migrate.
+  if (todoListVersion === 3 || todoListVersion === 4)
     return APP_ONBOARDING_V3_STEP_IDS
   if (todoListVersion === 1)
     return APP_ONBOARDING_V1_STEP_IDS
@@ -138,7 +141,7 @@ function parseTodoListVersion(value: unknown): number {
     : DEFAULT_APP_ONBOARDING_TODO_LIST_VERSION
 }
 
-function parseSteps(value: unknown): AppOnboardingState['steps'] {
+function parseSteps(value: unknown, includePending = false): AppOnboardingState['steps'] {
   const steps: AppOnboardingState['steps'] = {}
   if (!isRecord(value))
     return steps
@@ -146,7 +149,7 @@ function parseSteps(value: unknown): AppOnboardingState['steps'] {
     if (!isAppOnboardingStepId(key) || !isRecord(stepValue))
       continue
     const status = stepValue.status
-    if (!STEP_STATUS_SET.has(String(status)))
+    if (!STEP_STATUS_SET.has(String(status)) && !(includePending && status === 'pending'))
       continue
     const at = stepValue.at
     steps[key] = {
@@ -192,10 +195,22 @@ export function parseAppOnboarding(value: unknown): AppOnboardingState {
   const raw = parseSetupRecord(value)
   const source = isAppOnboardingSource(raw.source) ? raw.source : fallback.source
   const outcome = isAppOnboardingOutcome(raw.outcome) ? raw.outcome : fallback.outcome
-  const steps = parseSteps(raw.steps)
+  const todoListVersion = parseTodoListVersion(raw.todo_list_version)
+  const rawSteps = isRecord(raw.steps) ? raw.steps : {}
+  const steps = todoListVersion === 4
+    ? parseSteps(rawSteps.ota, true)
+    : parseSteps(rawSteps)
+  if (todoListVersion === 4) {
+    for (const id of Object.keys(steps) as AppOnboardingStepId[]) {
+      if (!(APP_ONBOARDING_V4_OTA_STEP_IDS as readonly string[]).includes(id))
+        delete steps[id]
+    }
+    for (const id of APP_ONBOARDING_V4_OTA_STEP_IDS)
+      steps[id] ??= { status: 'pending' }
+  }
 
   return {
-    todo_list_version: parseTodoListVersion(raw.todo_list_version),
+    todo_list_version: todoListVersion,
     source,
     outcome,
     steps,
@@ -213,7 +228,8 @@ export function parseAppOnboardingPatch(value: unknown): AppOnboardingPatch | nu
     patch.source = raw.source
   if (isAppOnboardingOutcome(raw.outcome))
     patch.outcome = raw.outcome
-  const steps = parseSteps(raw.steps)
+  const rawSteps = isRecord(raw.steps) ? raw.steps : {}
+  const steps = parseSteps(isRecord(rawSteps.ota) ? rawSteps.ota : rawSteps)
   if (Object.keys(steps).length > 0)
     patch.steps = steps
 
@@ -245,7 +261,7 @@ export function deriveAppOnboardingOutcome(
   if (allPresent)
     return anySkipped ? 'skipped' : 'completed'
 
-  if ((patch === 'completed' && todoListVersion !== 3) || patch === 'skipped')
+  if ((patch === 'completed' && todoListVersion !== 3 && todoListVersion !== 4) || patch === 'skipped')
     return patch
 
   if (patch === 'switched_to_manual' || current === 'switched_to_manual')
@@ -265,7 +281,7 @@ export function mergeAppOnboarding(
 
   if (patch.steps) {
     for (const [key, value] of Object.entries(patch.steps) as Array<[AppOnboardingStepId, AppOnboardingStepState | undefined]>) {
-      if (!value)
+      if (!value || !STEP_STATUS_SET.has(value.status))
         continue
       if (!stepIds.has(key))
         continue
@@ -297,9 +313,11 @@ export function applyAppOnboardingPatch(
   const setup = mergeAppOnboarding(existing.setup ?? existing, patch, now)
   const rawSetup = parseSetupRecord(currentValue)
   const rawSteps = isRecord(rawSetup.steps) ? rawSetup.steps : {}
+  const isV4 = setup.todo_list_version === 4
+  const rawCurrentSteps = isV4 && isRecord(rawSteps.ota) ? rawSteps.ota : rawSteps
   for (const id of Object.keys(setup.steps) as AppOnboardingStepId[]) {
-    if (isRecord(rawSteps[id]))
-      setup.steps[id] = { ...rawSteps[id], ...setup.steps[id]! }
+    if (isRecord(rawCurrentSteps[id]))
+      setup.steps[id] = { ...rawCurrentSteps[id], ...setup.steps[id]! }
   }
   delete existing.source
   delete existing.outcome
@@ -308,8 +326,16 @@ export function applyAppOnboardingPatch(
   delete existing.todo_list_version
   return {
     ...existing,
-    setup,
+    setup: isV4
+      ? { ...rawSetup, ...setup, paths: rawSetup.paths ?? ['ota'], selected_path: rawSetup.selected_path ?? 'ota', steps: { ...rawSteps, ota: setup.steps } }
+      : setup,
   }
+}
+
+function getRawStepRecords(value: unknown): Record<string, unknown> {
+  const setup = parseSetupRecord(value)
+  const steps = isRecord(setup.steps) ? setup.steps : {}
+  return parseTodoListVersion(setup.todo_list_version) === 4 && isRecord(steps.ota) ? steps.ota : steps
 }
 
 export function appendAppOnboardingStepHistory(
@@ -320,9 +346,10 @@ export function appendAppOnboardingStepHistory(
 ): Record<string, unknown> {
   const merged = isRecord(mergedValue) ? { ...mergedValue } : {}
   const mergedSetup = parseSetupRecord(merged)
-  const mergedSteps = isRecord(mergedSetup.steps) ? { ...mergedSetup.steps } : {}
-  const currentSteps = parseSetupRecord(currentValue).steps
-  const currentStepRecords = isRecord(currentSteps) ? currentSteps : {}
+  const isV4 = parseTodoListVersion(mergedSetup.todo_list_version) === 4
+  const mergedStepPaths = isRecord(mergedSetup.steps) ? { ...mergedSetup.steps } : {}
+  const mergedSteps = { ...getRawStepRecords(merged) }
+  const currentStepRecords = getRawStepRecords(currentValue)
   const changedAt = now()
 
   for (const stepId of Object.keys(patch.steps ?? {}) as AppOnboardingStepId[]) {
@@ -339,7 +366,7 @@ export function appendAppOnboardingStepHistory(
     ...merged,
     setup: {
       ...mergedSetup,
-      steps: mergedSteps,
+      steps: isV4 ? { ...mergedStepPaths, ota: mergedSteps } : mergedSteps,
     },
   }
 }
@@ -349,13 +376,11 @@ export function getAppOnboardingStepHistoryChanges(
   nextValue: unknown,
   patch: AppOnboardingPatch,
 ): AppOnboardingStepHistoryChange[] {
-  const currentSteps = parseSetupRecord(currentValue).steps
-  const nextSteps = parseSetupRecord(nextValue).steps
-  if (!isRecord(nextSteps))
-    return []
+  const currentSteps = getRawStepRecords(currentValue)
+  const nextSteps = getRawStepRecords(nextValue)
 
   return (Object.keys(patch.steps ?? {}) as AppOnboardingStepId[]).flatMap((stepId) => {
-    const currentStep = isRecord(currentSteps) && isRecord(currentSteps[stepId]) ? currentSteps[stepId] : {}
+    const currentStep = isRecord(currentSteps[stepId]) ? currentSteps[stepId] : {}
     const nextStep = isRecord(nextSteps[stepId]) ? nextSteps[stepId] : null
     if (!nextStep || !STEP_STATUS_SET.has(String(nextStep.status)))
       return []
@@ -376,9 +401,9 @@ export function getAppOnboardingStepHistoryChanges(
   })
 }
 
-// These v3 milestones require observed backend evidence, not init prompt completion.
+// These v3/v4 milestones require observed backend evidence, not init prompt completion.
 export function filterAppOnboardingReportedPatch(current: unknown, patch: AppOnboardingPatch): AppOnboardingPatch {
-  if (parseAppOnboarding(current).todo_list_version !== 3)
+  if (![3, 4].includes(parseAppOnboarding(current).todo_list_version))
     return patch
   const steps = { ...patch.steps }
   delete steps.run_device

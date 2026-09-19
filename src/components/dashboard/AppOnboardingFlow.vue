@@ -300,8 +300,9 @@ const startingOutUserCountStop: UserCountStop = {
 const planNameOrder = ['Solo', 'Maker', 'Team', 'Enterprise'] as const
 
 const localCommand = isLocal(config.supaHost) ? ` --supa-host ${config.supaHost} --supa-anon ${config.supaKey}` : ''
-const usesTodoListV3 = computed(() => !!createdApp.value && parseAppOnboarding(createdApp.value.onboarding).todo_list_version === 3)
-const usesBuilderSetupCommand = computed(() => !usesTodoListV3.value && (selectedIntent.value === 'builder' || selectedIntent.value === 'publish'))
+// TODO(2027-03-19): Remove v3 compatibility after all existing OTA checklists have migrated.
+const usesOtaTodoList = computed(() => !!createdApp.value && [3, 4].includes(parseAppOnboarding(createdApp.value.onboarding).todo_list_version))
+const usesBuilderSetupCommand = computed(() => !usesOtaTodoList.value && (selectedIntent.value === 'builder' || selectedIntent.value === 'publish'))
 const markedOnboardingFeatures = new Set<string>()
 let onboardingABTestsRequest: Promise<void> | null = null
 
@@ -597,7 +598,7 @@ const canCreatePreOrgOrganization = computed(() => {
 })
 const setupTitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-title') : t('unified-onboarding-setup-ota-title'))
 const setupSubtitle = computed(() => usesBuilderSetupCommand.value ? t('unified-onboarding-setup-builder-subtitle') : t('unified-onboarding-setup-ota-subtitle'))
-const showSetupChecklist = computed(() => (flowStep.value === 'setup' || flowStep.value === 'install') && usesTodoListV3.value)
+const showSetupChecklist = computed(() => (flowStep.value === 'setup' || flowStep.value === 'install') && usesOtaTodoList.value)
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
 let trackedAnalyticsSteps: OnboardingAnalyticsStep[] = []
@@ -2061,7 +2062,7 @@ function continueFromOrganizationInvite(invitationCount: number) {
 function resolveSetupStage(
   progress = parseUserOnboardingProgress(main.user?.onboarding),
 ): SetupStage {
-  if (usesTodoListV3.value || (!newChannelTreatment.value && !onboardingABTestsPending.value))
+  if (usesOtaTodoList.value || (!newChannelTreatment.value && !onboardingABTestsPending.value))
     return 'cli'
   return progress?.setup_stage ?? 'channel-routing'
 }
