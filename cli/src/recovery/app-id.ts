@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { cwd } from 'node:process'
 import { confirm as pConfirm, isCancel as pIsCancel, log, select as pSelect, text as pText } from '@clack/prompts'
 import { trackEvent } from '../analytics/track'
-import { addAppInternal, formatAppGettingStartedMessage } from '../app/add'
+import { addAppInternal, resolveAppGettingStartedMessage } from '../app/add'
 import { getAppListPath } from '../app/list'
 import { extractApplicationIds } from '../build/onboarding/android/gradle-parser'
 import { createSupabaseClient, findRoot, findSavedKeySilent, formatError, getAppId, getConfigForWrite, getOrganizationWithPermission, invokeCapgoCliApi, PACKNAME } from '../utils'
@@ -275,7 +275,12 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
       await addAppInternal(appId, { apikey: resolvedApikey, supaHost: options.supaHost, supaAnon: options.supaAnon }, organization, true)
       await persistAppIdToConfig(appId)
       log.success(`Created app ${appId} in Capgo`)
-      log.info(formatAppGettingStartedMessage(appId))
+      const gettingStartedMessage = await resolveAppGettingStartedMessage(appId, {
+        supaHost: options.supaHost,
+        supaAnon: options.supaAnon,
+      })
+      if (gettingStartedMessage)
+        log.info(gettingStartedMessage)
       trackAppIdRecovery(appId, 'create-app', resolvedApikey)
       return appId
     }
