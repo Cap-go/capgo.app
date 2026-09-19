@@ -13,6 +13,7 @@ import IconInformationCircle from '~icons/heroicons/information-circle'
 import IconKey from '~icons/heroicons/key'
 import IconSparkles from '~icons/heroicons/sparkles'
 import CliLoginSkippedOrganizations from '~/components/CliLoginSkippedOrganizations.vue'
+import { parseAppOnboarding } from '~/services/appOnboarding'
 import { buildCliAiSetupPrompt } from '~/services/cliAiPrompt'
 import {
   createCliLoginKeyDependencies,
@@ -155,6 +156,7 @@ async function prepare(): Promise<void> {
         apps: organizationStore.getAppsByOrgId(organization.gid).map(app => ({
           appId: app.app_id,
           name: app.name,
+          todoListVersion: parseAppOnboarding(app.onboarding).todo_list_version,
         })),
       }))
     aiPromptSkippedOrganizations.value = organizationStore.organizations

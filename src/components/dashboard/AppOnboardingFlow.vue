@@ -518,7 +518,11 @@ function createAiHelpPrompt() {
     ? [{
         id: resolvedOrganizationId,
         name: (props.preOrg ? orgNameInput.value.trim() : resolvedOrganizationName.trim()) || resolvedOrganizationId,
-        apps: [{ appId: resolvedAppId, name: resolvedAppName }],
+        apps: [{
+          appId: resolvedAppId,
+          name: resolvedAppName,
+          todoListVersion: createdApp.value ? parseAppOnboarding(createdApp.value.onboarding).todo_list_version : undefined,
+        }],
       }]
     : []
   const promptIntent = selectedIntent.value === 'publish' ? 'builder' : selectedIntent.value
