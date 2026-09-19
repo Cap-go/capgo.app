@@ -18,6 +18,7 @@ import {
   formatError,
   getAppId,
   getCapgoCliHttpStatus,
+  consoleWebUrl,
   getConfig,
   getContentType,
   getOrganizationWithPermission,
@@ -26,6 +27,14 @@ import {
   resolveUserIdFromApiKey,
   sendEvent,
 } from '../utils'
+
+export function appGettingStartedUrl(appId: string): string {
+  return consoleWebUrl(`/app/${appId}/getting-started`)
+}
+
+export function formatAppGettingStartedMessage(appId: string): string {
+  return `Continue setup at ${appGettingStartedUrl(appId)}`
+}
 
 export const reverseDomainRegex = /^[a-z0-9]+(\.[\w-]+)+$/i
 
@@ -458,8 +467,10 @@ export async function addAppInternal(
   if (!silent) {
     if (appAlreadyExists)
       log.success(`App ${appId} already exists in Capgo`)
-    else
+    else {
       log.success(`App ${appId} added to Capgo`)
+      log.info(formatAppGettingStartedMessage(appId))
+    }
     log.info(`This app is accessible to all members of your organization based on their permissions`)
     log.info(`Next step: upload a bundle with "npx @capgo/cli bundle upload ${appId}"`)
     outro('Done ✅')
