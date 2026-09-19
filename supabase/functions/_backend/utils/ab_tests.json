@@ -54,7 +54,7 @@
       "ota"
     ],
     "label": "OTA setup checklist v3",
-    "treatment_percentage": 50,
+    "treatment_percentage": 100,
     "treatment_branch": "A",
     "control_branch": "B",
     "branches": {
