@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 const componentUrl = new URL('../src/components/dashboard/ChannelCreateOnboarding.vue', import.meta.url)
 const componentSource = existsSync(componentUrl) ? readFileSync(componentUrl, 'utf8') : ''
-const onboardingSource = readFileSync(new URL('../src/components/dashboard/AppOnboardingFlow.vue', import.meta.url), 'utf8')
+const channelSetupSource = readFileSync(new URL('../src/components/dashboard/ChannelSetupOnboardingDialog.vue', import.meta.url), 'utf8')
 const messages = JSON.parse(readFileSync(new URL('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
 function expectSourceOrder(source: string, markers: string[]) {
@@ -17,16 +17,15 @@ function expectSourceOrder(source: string, markers: string[]) {
 
 describe('channel creation onboarding', () => {
   it.concurrent('places a required creation step between the three explanations and CLI', () => {
-    expect(onboardingSource).toContain(`import ChannelCreateOnboarding from './ChannelCreateOnboarding.vue'`)
-    expect(onboardingSource).toContain(`type SetupStage = UserOnboardingSetupStage`)
-    expectSourceOrder(onboardingSource, [
-      `setSetupStage('channel-self-assign')`,
-      `setSetupStage('channel-console-assign')`,
-      `setSetupStage('channel-create')`,
-      `setSetupStage('cli')`,
+    expect(channelSetupSource).toContain(`import ChannelCreateOnboarding from './ChannelCreateOnboarding.vue'`)
+    expectSourceOrder(channelSetupSource, [
+      `stage === 'channel-routing'`,
+      `stage === 'channel-self-assign'`,
+      `stage === 'channel-console-assign'`,
+      `<ChannelCreateOnboarding ref="channelCreate"`,
     ])
-    expect(onboardingSource.match(/<ChannelCreateOnboarding/g)).toHaveLength(2)
-    expect(onboardingSource.match(/<ChannelCreateOnboarding\s+v-else-if="newChannelTreatment && setupStage === 'channel-create'"\s+:app-id="createdApp.app_id"/g)).toHaveLength(2)
+    expect(channelSetupSource.match(/<ChannelCreateOnboarding/g)).toHaveLength(1)
+    expect(channelSetupSource).toContain(`<ChannelCreateOnboarding ref="channelCreate" :app-id="appId" @analytics="track" @continue="exit('completed')"`)
   })
 
   it.concurrent('creates a real default channel for the onboarding app', () => {
@@ -83,10 +82,10 @@ describe('channel creation onboarding', () => {
   })
 
   it.concurrent('tracks privacy-safe creation milestones through the onboarding event pipeline', () => {
-    expect(onboardingSource).toContain('function trackChannelEvent(name: OnboardingChannelEvent')
-    expect(onboardingSource.match(/@analytics="trackChannelEvent"/g)).toHaveLength(8)
-    expect(onboardingSource).toContain(`'onboarding_channel_stage_continued'`)
-    expect(onboardingSource).toContain(`'onboarding_channel_stage_backed'`)
+    expect(channelSetupSource).toContain('function track(event: OnboardingChannelEvent')
+    expect(channelSetupSource.match(/@analytics="track"/g)).toHaveLength(4)
+    expect(channelSetupSource).toContain(`'onboarding_channel_stage_continued'`)
+    expect(channelSetupSource).toContain(`'onboarding_channel_stage_backed'`)
 
     for (const event of [
       'onboarding_channel_stage_viewed',

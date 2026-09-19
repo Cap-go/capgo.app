@@ -2,55 +2,27 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick } from 'vue'
-import AppOnboardingFlow from '../src/components/dashboard/AppOnboardingFlow.vue'
+import GettingStartedCliPanel from '../src/components/dashboard/GettingStartedCliPanel.vue'
 
-const runtimeMocks = vi.hoisted(() => {
-  const app = {
-    app_id: 'com.test.runtime-onboarding',
-    name: 'Runtime onboarding app',
-    owner_org: 'org-runtime-onboarding',
-    existing_app: false,
-    icon_url: null,
-    ios_store_url: null,
-    android_store_url: null,
-  }
-
-  return {
-    app,
-    createApp: vi.fn(async () => ({
-      ok: true as const,
-      app,
-      usedAppId: app.app_id,
-      originalAppId: app.app_id,
-      wasRetried: false,
-    })),
-    createDefaultApiKey: vi.fn(),
-    findUsablePlainApiKey: vi.fn(async (): Promise<string | null> => 'runtime-api-key'),
-    main: {
-      auth: { id: 'user-runtime-onboarding' },
-      awaitInitialLoad: vi.fn(async () => undefined),
-      isAdmin: false,
-      plans: [],
-      user: { id: 'user-runtime-onboarding', onboarding: {} } as { id: string, onboarding: Record<string, unknown> } | null,
-    },
-    organizationStore: {
-      getOrgByAppId: vi.fn(),
-      setCurrentOrganization: vi.fn(),
-      awaitInitialLoad: vi.fn(async () => undefined),
-      currentOrganization: { gid: 'org-runtime-onboarding', name: 'Runtime organization' },
-      organizations: [],
-      updateAppOnboarding: vi.fn(),
-    },
-    query: {} as Record<string, string>,
-  }
-})
+const runtimeMocks = vi.hoisted(() => ({
+  createDefaultApiKey: vi.fn(),
+  findUsablePlainApiKey: vi.fn(async (): Promise<string | null> => 'runtime-api-key'),
+  main: {
+    auth: { id: 'user-runtime-onboarding' },
+    user: { id: 'user-runtime-onboarding', onboarding: {} } as { id: string, onboarding: Record<string, unknown> } | null,
+  },
+  organizationStore: {
+    getOrgByAppId: vi.fn(() => ({ gid: 'org-runtime-onboarding' })),
+    setCurrentOrganization: vi.fn(),
+    awaitInitialLoad: vi.fn(async () => undefined),
+    currentOrganization: { gid: 'org-runtime-onboarding', name: 'Runtime organization' },
+    organizations: [],
+    updateAppOnboarding: vi.fn(),
+  },
+}))
 
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),
-}))
-vi.mock('vue-router', () => ({
-  useRoute: () => ({ query: runtimeMocks.query }),
-  useRouter: () => ({ push: vi.fn() }),
 }))
 vi.mock('vue-sonner', () => ({ toast: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }))
 vi.mock('~/services/apikeys', async (importOriginal) => {
@@ -70,7 +42,7 @@ vi.mock('~/services/supabase', () => ({
       eq: () => query,
       maybeSingle: async () => ({ data: null, error: null }),
       select: () => query,
-      single: async () => ({ data: runtimeMocks.app, error: null }),
+      single: async () => ({ data: { onboarding: {} }, error: null }),
     }
     return {
       auth: { getClaims: async () => ({ data: { claims: { sub: runtimeMocks.main.auth.id } } }) },
@@ -79,7 +51,6 @@ vi.mock('~/services/supabase', () => ({
     }
   },
 }))
-vi.mock('~/stores/dashboardApps', () => ({ useDashboardAppsStore: () => ({ upsertApp: vi.fn() }) }))
 vi.mock('~/stores/dialogv2', () => ({
   useDialogV2Store: () => ({
     lastButtonRole: null,
@@ -89,43 +60,33 @@ vi.mock('~/stores/dialogv2', () => ({
 }))
 vi.mock('~/stores/main', () => ({ useMainStore: () => runtimeMocks.main }))
 vi.mock('~/stores/organization', () => ({ useOrganizationStore: () => runtimeMocks.organizationStore }))
-vi.mock('~/utils/onboardingAppCreateHelpers', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/utils/onboardingAppCreateHelpers')>()
-  return { ...actual, createOnboardingAppWithFallbackIds: runtimeMocks.createApp }
-})
-vi.mock('~/utils/onboardingProgressPersistence', () => ({
-  createOnboardingProgressPersistence: () => ({
-    abort: vi.fn(),
-    isAborted: () => false,
-    isBlocked: () => false,
-    persist: async () => 'persisted',
-  }),
-  shouldInitializeOnboardingProgressTracking: () => true,
-}))
 
-interface MountedFlow {
+interface MountedPanel {
   app: ReturnType<typeof createApp>
   container: HTMLDivElement
 }
 
-const mountedFlows: MountedFlow[] = []
+const mountedPanels: MountedPanel[] = []
 
-async function mountFlow(query: Record<string, string> = {}) {
-  runtimeMocks.query = query
+async function mountPanel() {
   const container = document.createElement('div')
   document.body.appendChild(container)
-  const app = createApp(AppOnboardingFlow, { onboarding: false })
+  const app = createApp(GettingStartedCliPanel, {
+    appId: 'com.test.runtime-onboarding',
+    appName: 'Runtime onboarding app',
+    existingApp: false,
+  })
   app.config.warnHandler = () => undefined
   app.mount(container)
   const mounted = { app, container }
-  mountedFlows.push(mounted)
+  mountedPanels.push(mounted)
   return mounted
 }
 
 function element<T extends Element>(container: Element, selector: string) {
   const value = container.querySelector<T>(selector)
   if (!value)
-    throw new Error(`Missing onboarding element: ${selector}`)
+    throw new Error(`Missing getting-started element: ${selector}`)
   return value
 }
 
@@ -134,65 +95,37 @@ async function click(container: Element, selector: string) {
   await nextTick()
 }
 
-async function reachIconStep(container: Element) {
-  await vi.waitFor(() => expect(container.querySelector('[data-test="app-onboarding-name"]')).not.toBeNull())
-  await click(container, '[data-test="app-onboarding-existing-no"]')
-
-  const nameInput = element<HTMLInputElement>(container, '[data-test="app-onboarding-name"]')
-  nameInput.value = 'Runtime onboarding app'
-  nameInput.dispatchEvent(new Event('input', { bubbles: true }))
-  await nextTick()
-
-  await click(container, '[data-test="app-onboarding-continue"]')
-  await vi.waitFor(() => expect(container.querySelector('[data-test="app-onboarding-skip-app-id"]')).not.toBeNull())
-  await click(container, '[data-test="app-onboarding-skip-app-id"]')
-  await vi.waitFor(() => expect(container.textContent).toContain('app-onboarding-command-show'))
-}
-
-function buttonWithText(container: Element, text: string) {
-  const button = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
-    .find(candidate => candidate.textContent?.includes(text))
-  if (!button)
-    throw new Error(`Missing onboarding button with text: ${text}`)
-  return button
-}
-
 beforeEach(() => {
-  runtimeMocks.query = {}
-  runtimeMocks.createApp.mockClear()
   runtimeMocks.createDefaultApiKey.mockReset()
   runtimeMocks.createDefaultApiKey.mockResolvedValue({ data: { key: 'runtime-created-api-key' }, error: null })
   runtimeMocks.findUsablePlainApiKey.mockReset()
   runtimeMocks.findUsablePlainApiKey.mockResolvedValue('runtime-api-key')
-  runtimeMocks.main.awaitInitialLoad.mockClear()
   runtimeMocks.main.user = { id: runtimeMocks.main.auth.id, onboarding: {} }
   runtimeMocks.organizationStore.awaitInitialLoad.mockClear()
   runtimeMocks.organizationStore.updateAppOnboarding.mockClear()
-  Object.defineProperty(window, 'matchMedia', {
-    configurable: true,
-    value: vi.fn(() => ({ matches: false })),
+  vi.stubGlobal('navigator', {
+    ...navigator,
+    clipboard: { writeText: vi.fn(async () => undefined) },
   })
 })
 
 afterEach(() => {
-  for (const mounted of mountedFlows.splice(0)) {
+  for (const mounted of mountedPanels.splice(0)) {
     mounted.app.unmount()
     mounted.container.remove()
   }
 })
 
-describe('app onboarding API key runtime loading', () => {
-  it('reuses a key when a fresh existing-org wizard is opened', async () => {
-    const { container } = await mountFlow()
+describe('getting started API key runtime loading', () => {
+  it('reuses a key when Getting Started opens for an app', async () => {
+    await mountPanel()
 
-    await vi.waitFor(() => expect(container.querySelector('[data-test="app-onboarding-name"]')).not.toBeNull())
     await vi.waitFor(() => expect(runtimeMocks.findUsablePlainApiKey).toHaveBeenCalledTimes(1))
-
     expect(runtimeMocks.findUsablePlainApiKey).toHaveBeenCalledWith(
       expect.anything(),
       runtimeMocks.main.auth.id,
       runtimeMocks.organizationStore.currentOrganization.gid,
-      undefined,
+      'com.test.runtime-onboarding',
     )
     expect(runtimeMocks.createDefaultApiKey).not.toHaveBeenCalled()
   })
@@ -200,18 +133,18 @@ describe('app onboarding API key runtime loading', () => {
   it('uses the authenticated user ID while the public profile is still loading', async () => {
     runtimeMocks.main.user = null
 
-    await mountFlow()
+    await mountPanel()
 
     await vi.waitFor(() => expect(runtimeMocks.findUsablePlainApiKey).toHaveBeenCalledTimes(1))
     expect(runtimeMocks.findUsablePlainApiKey).toHaveBeenCalledWith(
       expect.anything(),
       runtimeMocks.main.auth.id,
       runtimeMocks.organizationStore.currentOrganization.gid,
-      undefined,
+      'com.test.runtime-onboarding',
     )
   })
 
-  it('retries a settled failed load when the CLI command is revealed', async () => {
+  it('retries a settled failed load when copying AI instructions', async () => {
     const loadError = new Error('transient API-key failure')
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     runtimeMocks.findUsablePlainApiKey
@@ -219,11 +152,9 @@ describe('app onboarding API key runtime loading', () => {
       .mockResolvedValueOnce('runtime-retried-api-key')
 
     try {
-      const { container } = await mountFlow()
+      const { container } = await mountPanel()
       await vi.waitFor(() => expect(consoleError).toHaveBeenCalledWith('Cannot ensure API key', loadError))
-      await reachIconStep(container)
-
-      buttonWithText(container, 'app-onboarding-command-show').click()
+      await click(container, '[data-test="getting-started-cli-copy-ai"]')
 
       await vi.waitFor(() => expect(runtimeMocks.findUsablePlainApiKey).toHaveBeenCalledTimes(2))
     }
@@ -232,7 +163,7 @@ describe('app onboarding API key runtime loading', () => {
     }
   })
 
-  it('retries a settled failed load when entering the install step', async () => {
+  it('retries a settled failed load when the CLI copy button becomes available', async () => {
     const loadError = new Error('transient API-key failure')
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     runtimeMocks.findUsablePlainApiKey
@@ -240,14 +171,11 @@ describe('app onboarding API key runtime loading', () => {
       .mockResolvedValueOnce('runtime-retried-api-key')
 
     try {
-      const { container } = await mountFlow()
+      const { container } = await mountPanel()
       await vi.waitFor(() => expect(consoleError).toHaveBeenCalledWith('Cannot ensure API key', loadError))
-      await reachIconStep(container)
-      await click(container, '[data-test="app-onboarding-continue"]')
-      await vi.waitFor(() => expect(runtimeMocks.createApp).toHaveBeenCalledTimes(1))
-      await vi.waitFor(() => expect(container.textContent).toContain('app-onboarding-choice-real-title'))
-
-      buttonWithText(container, 'app-onboarding-choice-real-title').click()
+      await click(container, '[data-test="getting-started-cli-copy-ai"]')
+      await vi.waitFor(() => expect(container.querySelector('[data-test="getting-started-cli-command-copy"]')).not.toBeNull())
+      await click(container, '[data-test="getting-started-cli-command-copy"]')
 
       await vi.waitFor(() => expect(runtimeMocks.findUsablePlainApiKey).toHaveBeenCalledTimes(2))
     }
@@ -256,21 +184,18 @@ describe('app onboarding API key runtime loading', () => {
     }
   })
 
-  it('shares an in-flight key load across concurrent onboarding component instances', async () => {
+  it('dedupes in-flight key loads within one Getting Started panel', async () => {
     let finishLookup: ((key: string | null) => void) | undefined
     runtimeMocks.findUsablePlainApiKey.mockImplementation(() => new Promise((resolve) => {
       finishLookup = resolve
     }))
 
-    await Promise.all([
-      mountFlow(),
-      mountFlow(),
-    ])
+    const { container } = await mountPanel()
+    await click(container, '[data-test="getting-started-cli-copy-ai"]')
 
-    await vi.waitFor(() => expect(runtimeMocks.findUsablePlainApiKey).toHaveBeenCalled())
-    expect(runtimeMocks.findUsablePlainApiKey).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(runtimeMocks.findUsablePlainApiKey).toHaveBeenCalledTimes(1))
 
-    finishLookup?.(null)
-    await vi.waitFor(() => expect(runtimeMocks.createDefaultApiKey).toHaveBeenCalledTimes(1))
+    finishLookup?.('runtime-shared-api-key')
+    await vi.waitFor(() => expect(container.querySelector('[data-test="getting-started-cli-command-copy"]')).not.toBeNull())
   })
 })
