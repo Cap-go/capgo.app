@@ -19,7 +19,7 @@ import { readDevices, readStats } from '../utils/stats.ts'
 import { supabaseWithAuth } from '../utils/supabase.ts'
 import { backgroundTask } from '../utils/utils.ts'
 
-const bodySchema = z.object({ appId: appIdSchema, N: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), initial: z.boolean().optional(), client: z.literal('cli').optional() })
+const bodySchema = z.object({ appId: appIdSchema, N: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), initial: z.boolean().optional() })
 type Observations = Partial<Record<'login_cli_mcp' | 'add_channel' | 'run_device' | 'upload_bundle' | 'test_update', boolean>>
 type AuthenticatedClient = ReturnType<typeof supabaseWithAuth>
 
@@ -59,10 +59,10 @@ export async function persistObservedProgress(c: Context<MiddlewareKeyVariables>
       if (!row || parseAppOnboarding(row.onboarding).todo_list_version !== 3)
         return null
       const key = auth.apikey?.key ?? c.get('capgkey') ?? null
-      const isCliCreator = observations.login_cli_mcp === true
+      const isApiKeyCreator = observations.login_cli_mcp === true
         && auth.authType === 'apikey'
         && (row.onboarding as { created_by_user_id?: unknown } | null)?.created_by_user_id === auth.userId
-      const canMarkCliStart = isCliCreator
+      const canMarkCliStart = isApiKeyCreator
         && await checkPermissionPg(c, 'app.read', { appId }, tx, auth.userId, key)
       const hasOtherObservations = Object.keys(observations).some(id => id !== 'login_cli_mcp')
       const canWriteObservations = hasOtherObservations
@@ -120,7 +120,7 @@ app.post('/', middlewareAuth({ preferApiKey: true }), async (c) => {
   const parsed = bodySchema.safeParse(await parseBody(c))
   if (!parsed.success)
     throw quickError(400, 'invalid_body', 'Invalid body')
-  const { appId, N, initial, client: requestClient } = parsed.data
+  const { appId, N, initial } = parsed.data
   if (!(await checkPermission(c, 'app.read', { appId })))
     throw quickError(403, 'app_access_denied', 'You cannot access this app')
   const client = supabaseWithAuth(c, c.get('auth')!)
@@ -131,7 +131,7 @@ app.post('/', middlewareAuth({ preferApiKey: true }), async (c) => {
   const current = parseAppOnboarding(row.onboarding)
   const observations: Observations = {}
   const checkErrors: string[] = []
-  if (current.todo_list_version === 3 && requestClient === 'cli' && c.get('auth')?.authType === 'apikey')
+  if (current.todo_list_version === 3 && c.get('auth')?.authType === 'apikey')
     observations.login_cli_mcp = true
   const due = (slot: number) => initial || N % 5 === slot
   async function check(id: keyof Observations, permission: Permission, action: () => Promise<boolean>) {

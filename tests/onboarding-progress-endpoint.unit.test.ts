@@ -63,7 +63,7 @@ function contextFor(auth: unknown, capgkey?: string) {
     env: {},
   }) as any
 }
-const request = (N: number, initial = false, appId = 'com.test.onboarding', client?: 'cli') => app.request('http://local/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appId, N, initial, ...(client ? { client } : {}) }) })
+const request = (N: number, initial = false, appId = 'com.test.onboarding') => app.request('http://local/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appId, N, initial }) })
 
 describe('onboarding progress endpoint', () => {
   beforeEach(() => {
@@ -126,7 +126,7 @@ describe('onboarding progress endpoint', () => {
     lockedRow(mocks.row.onboarding)
     mocks.permissionPg.mockImplementation(async (_c, permission) => permission === 'app.read')
 
-    const response = await request(0, true, 'com.test.onboarding', 'cli')
+    const response = await request(0, true)
     const result = await response.json() as any
     expect(result.onboarding.setup.steps.login_cli_mcp.status).toBe('done')
     expect(Object.keys(result.onboarding.setup.steps)).toEqual(['login_cli_mcp'])
@@ -134,24 +134,20 @@ describe('onboarding progress endpoint', () => {
     expect(mocks.permissionPg).toHaveBeenCalledWith(expect.anything(), 'app.read', { appId: 'com.test.onboarding' }, expect.anything(), 'creator', null)
     expect(mocks.execute).toHaveBeenCalledTimes(5)
   })
-  it('does not mark CLI start for JWT requests, unmarked API-key requests, or another app creator', async () => {
+  it('does not mark CLI start for JWT requests or another app creator', async () => {
     mocks.row.onboarding = { created_by_user_id: 'creator', setup: { todo_list_version: 3, steps: {} } }
-    expect(((await (await request(4, false, 'com.test.onboarding', 'cli')).json()) as any).onboarding).toEqual(mocks.row.onboarding)
-    expect(mocks.execute).not.toHaveBeenCalled()
-
-    mocks.auth = { authType: 'apikey', userId: 'creator', apikey: { key: 'creator-key' } }
     expect(((await (await request(4)).json()) as any).onboarding).toEqual(mocks.row.onboarding)
     expect(mocks.execute).not.toHaveBeenCalled()
 
     mocks.auth = { authType: 'apikey', userId: 'other-user', apikey: { key: 'other-key' } }
     lockedRow(mocks.row.onboarding)
-    expect(((await (await request(4, false, 'com.test.onboarding', 'cli')).json()) as any).onboarding).toEqual(mocks.row.onboarding)
+    expect(((await (await request(4)).json()) as any).onboarding).toEqual(mocks.row.onboarding)
     expect(mocks.execute).toHaveBeenCalledTimes(3)
 
     mocks.execute.mockClear()
     mocks.auth = { authType: 'apikey', userId: 'creator', apikey: { key: 'creator-key' } }
     mocks.row.onboarding.setup.todo_list_version = 2
-    expect(((await (await request(4, false, 'com.test.onboarding', 'cli')).json()) as any).onboarding).toEqual(mocks.row.onboarding)
+    expect(((await (await request(4)).json()) as any).onboarding).toEqual(mocks.row.onboarding)
     expect(mocks.execute).not.toHaveBeenCalled()
   })
   it('does not expose app existence or logs/devices without permission', async () => {

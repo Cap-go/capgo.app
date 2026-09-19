@@ -94,7 +94,7 @@ try {
   globalThis.fetch = async (input, init) => {
     assert.equal(String(input), options.supaHost + '/functions/v1/private/onboarding_progress')
     assert.equal(init.method, 'POST')
-    assert.deepEqual(JSON.parse(init.body), { appId, N: 0, initial: true, client: 'cli' })
+    assert.deepEqual(JSON.parse(init.body), { appId, N: 0, initial: true })
     assert.equal(init.headers.capgkey, options.apikey)
     assert.equal(init.headers.Authorization, 'Bearer ' + options.supaAnon)
     return Response.json(progress)
