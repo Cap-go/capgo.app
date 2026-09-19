@@ -70,6 +70,12 @@ For an app that is already configured, upload a new bundle with:
 npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel production
 ```
 
+Cordova projects without `capacitor.config.*`:
+
+```bash
+npx @capgo/cli@latest bundle upload com.example.app --mode cordova --path www --channel production
+```
+
 ## CI Upload Example
 
 ```bash
