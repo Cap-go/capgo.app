@@ -144,7 +144,7 @@ test.describe('Actionable onboarding setup checklist', () => {
       const checklist = page.locator('[data-test="app-onboarding-cli-steps"]')
       await checklist.getByRole('button').click()
       await expect(checklist.locator('li')).toHaveCount(version === 3 ? 7 : 12)
-      await expect(checklist).toContainText(version === 3 ? 'Publish your first update' : 'Upload bundle')
+      await expect(checklist).toContainText('Upload bundle')
       await expect(checklist).toContainText(`0 of ${version === 3 ? 7 : 12} steps`)
       expect(await page.evaluate(() => (window as any).onboardingSetupPreview.state.version)).toBe(version)
     }
@@ -612,7 +612,7 @@ test.describe('Dashboard exploration and returning to v3 setup', () => {
   })
 
   const appId = 'com.example.onboarding-preview'
-  const setup = `${fixture}?view=navigation&resume=${appId}&step=setup`
+  const setup = `/onboarding/app?resume=${appId}&step=setup`
 
   test('lands on the app dashboard, prompts on refresh, and returns to fullscreen setup', async ({ page }) => {
     await page.goto(setup)
@@ -653,12 +653,13 @@ test.describe('Dashboard exploration and returning to v3 setup', () => {
     await expect(page.locator('[data-test="onboarding-setup-cli"]')).toBeVisible()
   })
 
-  test('opens the fullscreen v3 checklist without exploration mode and keeps v2 getting-started', async ({ page }) => {
+  test('shows v3 getting-started page and keeps v2 getting-started', async ({ page }) => {
     await page.goto(`/app/${appId}/getting-started?version=3`)
-    await expect(page.locator('[data-test="onboarding-setup-cli"]')).toBeVisible()
-    await expect(page).toHaveURL(new RegExp(`/onboarding/app\\?resume=${appId}&step=setup$`))
-    await expect(page.locator('[data-test="getting-started-page"]')).toHaveCount(0)
-    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.events)).not.toContain('getting-started-mounted')
+    await expect(page.locator('[data-test="getting-started-page"]')).toBeVisible()
+    await expect(page.locator('[data-test="getting-started-cli-panel"]')).toBeVisible()
+    await expect(page).toHaveURL(new RegExp(`/app/${appId}/getting-started\\?version=3$`))
+    await expect(page.locator('[data-test="onboarding-setup-cli"]')).toHaveCount(0)
+    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.events)).toContain('getting-started-mounted')
     await page.goto(`/app/${appId}/getting-started?version=2`)
     await expect(page.locator('[data-test="getting-started-page"]')).toBeVisible()
     await expect(page).toHaveURL(new RegExp(`/app/${appId}/getting-started\\?version=2$`))
@@ -666,13 +667,14 @@ test.describe('Dashboard exploration and returning to v3 setup', () => {
     expect(await page.evaluate(() => (window as any).onboardingSetupPreview.events)).toContain('getting-started-mounted')
   })
 
-  test('links Getting started directly to fullscreen setup for v3 and the legacy page for v2', async ({ page }) => {
+  test('links Getting started to the getting-started page for v3 and v2', async ({ page }) => {
     await page.goto(`/app/${appId}?version=3`)
     const link = page.locator('[data-test="getting-started-nav-link"]')
-    await expect(link).toHaveAttribute('href', `/onboarding/app?resume=${appId}&step=setup`)
+    await expect(link).toHaveAttribute('href', `/app/${appId}/getting-started`)
     await link.click()
-    await expect(page.locator('[data-test="onboarding-setup-cli"]')).toBeVisible()
-    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.events)).not.toContain('getting-started-mounted')
+    await expect(page.locator('[data-test="getting-started-page"]')).toBeVisible()
+    await expect(page.locator('[data-test="getting-started-cli-panel"]')).toBeVisible()
+    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.events)).toContain('getting-started-mounted')
 
     await page.goto(`/app/${appId}?version=2`)
     await expect(link).toHaveAttribute('href', `/app/${appId}/getting-started`)

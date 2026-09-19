@@ -1,7 +1,7 @@
 import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '../../src/utils/onboardingChannelAnalytics'
 import { createPinia } from 'pinia'
 import { createApp, defineComponent, h, onMounted, ref } from 'vue'
-import { createRouter, createWebHistory, RouterView } from 'vue-router'
+import { createRouter, createWebHistory, RouterView, useRoute, useRouter } from 'vue-router'
 import AppOnboardingCliSteps from '../../src/components/dashboard/AppOnboardingCliSteps.vue'
 import AppOnboardingFlow from '../../src/components/dashboard/AppOnboardingFlow.vue'
 import AppOnboardingSetupChecklist from '../../src/components/dashboard/AppOnboardingSetupChecklist.vue'
@@ -11,6 +11,7 @@ import OnboardingExploreReminder from '../../src/components/dashboard/Onboarding
 import DialogV2 from '../../src/components/DialogV2.vue'
 import { i18n } from '../../src/modules/i18n'
 import { install as installOnboardingSetupNavigation } from '../../src/modules/onboarding-setup'
+import { allowOnboardingDashboardExploration } from '../../src/utils/onboardingRedirect'
 import GettingStartedPage from '../../src/pages/app/[app].getting-started.vue'
 import { useSupabase } from '../../src/services/supabase'
 import { useMainStore } from '../../src/stores/main'
@@ -120,6 +121,26 @@ window.fetch = async (input, init) => {
 // Supply a fixture-only session. All fetch calls above are intercepted.
 useSupabase().auth.getSession = async () => ({ data: { session: { access_token: 'fixture-token' } as any }, error: null })
 
+function createSetupChecklistProps(onExplore: () => void) {
+  return {
+    appId: preview.appId.value,
+    command: preview.command.value,
+    hiding: preview.hiding.value,
+    leaving: false,
+    initialOnboarding: { setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome } },
+    onCopyCommand: async () => {
+      events.push('copy-command')
+      await navigator.clipboard.writeText(preview.command.value)
+    },
+    onCopyAi: () => events.push('copy-ai'),
+    onHide: () => events.push('hide'),
+    onExplore,
+    onComplete: () => events.push('complete'),
+    onInviteOpened: () => events.push('invite-opened'),
+    onChannelAnalytics: (event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties) => channelEvents.push({ event, properties }),
+  }
+}
+
 const app = createApp(defineComponent({
   setup() {
     return () => h('main', {
@@ -131,23 +152,11 @@ const app = createApp(defineComponent({
           : params.get('view') === 'flow'
             ? h(AppOnboardingFlow, { onboarding: true })
             : params.get('view') === 'compact'
-              ? h(AppOnboardingCliSteps, { appId: preview.appId.value })
-              : h(AppOnboardingSetupChecklist, {
+              ? h(AppOnboardingCliSteps, {
                   appId: preview.appId.value,
-                  command: preview.command.value,
-                  hiding: preview.hiding.value,
-                  leaving: false,
-                  onCopyCommand: async () => {
-                    events.push('copy-command')
-                    await navigator.clipboard.writeText(preview.command.value)
-                  },
-                  onCopyAi: () => events.push('copy-ai'),
-                  onHide: () => events.push('hide'),
-                  onExplore: () => events.push('explore'),
-                  onComplete: () => events.push('complete'),
-                  onInviteOpened: () => events.push('invite-opened'),
-                  onChannelAnalytics: (event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties) => channelEvents.push({ event, properties }),
-                }),
+                  initialOnboarding: { setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome } },
+                })
+              : h(AppOnboardingSetupChecklist, createSetupChecklistProps(() => events.push('explore'))),
       ]),
       h(DialogV2),
     ])
@@ -182,6 +191,21 @@ const router = createRouter({
           setup() {
             onMounted(() => events.push('getting-started-mounted'))
             return () => h(GettingStartedPage)
+          },
+        }) },
+        { path: '/onboarding/app', component: defineComponent({
+          setup() {
+            const router = useRouter()
+            const route = useRoute()
+            onMounted(() => {
+              if (typeof route.query.resume === 'string')
+                organization.setCurrentOrganization(previewOrganization.gid)
+            })
+            return () => h(AppOnboardingSetupChecklist, createSetupChecklistProps(() => {
+              events.push('explore')
+              allowOnboardingDashboardExploration('00000000-0000-4000-8000-000000000001', preview.appId.value)
+              void router.push(`/app/${preview.appId.value}`)
+            }))
           },
         }) },
         { path: '/:pathMatch(.*)*', component: defineComponent({ setup: () => () => h(AppOnboardingFlow, { onboarding: true }) }) },
