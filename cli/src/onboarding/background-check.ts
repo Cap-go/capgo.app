@@ -1,43 +1,25 @@
-import type { OnboardingCheckOptions } from './background'
-import type { NotifyAppReadyProject } from './notify-app-ready-project'
-import { randomUUID } from 'node:crypto'
-import { env } from 'node:process'
+import type { OnboardingScanProject } from './notify-app-ready-project'
 import { buildCliRequestHeaders, setCurrentCliCommand } from '../analytics/cli-headers'
-import { resolveNotifyAppReadyProject } from './notify-app-ready-project'
-import { isTrustedOnboardingApiHost } from './background-api'
-import { defaultApiHost, findSavedKeySilent, isCapgoManagedSupabaseHost, normalizeSupabaseHost, resolveConfiguredCapgoPublicApiHost, sendEvent, trimTrailingSlashes } from '../utils'
+import { sendEvent, trimTrailingSlashes } from '../utils'
 
 interface BackgroundOnboardingCheck {
   channel: 'notify-app-ready' | 'updater-installed'
   step: 'add_code' | 'add_updater'
-  scan: (project: NotifyAppReadyProject) => 'found' | 'not_found' | 'unknown'
+  scan: (project: OnboardingScanProject) => 'found' | 'not_found' | 'unknown'
 }
 
-export async function runOnboardingCheck(options: OnboardingCheckOptions, check: BackgroundOnboardingCheck): Promise<void> {
-  // Capture user-provided trust before evaluating executable project config.
-  const trustedOrigins = env.CAPGO_TRUSTED_API_ORIGINS?.split(',') ?? []
-  const apikey = options.apikey ?? findSavedKeySilent()
-  if (!apikey)
-    return
-  const project = await resolveNotifyAppReadyProject(options)
-  if (!project)
-    return
+export interface PreparedOnboardingCheck {
+  project: OnboardingScanProject
+  apiHost: string
+  anonKey?: string
+  apikey: string
+  command: string
+  attemptId: string
+}
 
-  const updater = project.config.plugins?.CapacitorUpdater
-  const config = {
-    hostApi: updater?.localApi || defaultApiHost,
-    supaHost: updater?.localSupa,
-    supaKey: updater?.localSupaAnon,
-  }
-  const explicitSelfHost = options.supaHost && options.supaAnon && !isCapgoManagedSupabaseHost(options.supaHost)
-  const apiHost = explicitSelfHost
-    ? `${normalizeSupabaseHost(options.supaHost!)}/functions/v1`
-    : resolveConfiguredCapgoPublicApiHost(config)
-  if (!isTrustedOnboardingApiHost(apiHost, options, trustedOrigins))
-    return
-  const anonKey = options.supaAnon ?? config.supaKey
-  setCurrentCliCommand(options.command)
-  const attemptId = options.attemptId ?? randomUUID()
+export async function runOnboardingCheck(prepared: PreparedOnboardingCheck, check: BackgroundOnboardingCheck): Promise<void> {
+  const { project, apiHost, anonKey, apikey, command, attemptId } = prepared
+  setCurrentCliCommand(command)
   const trackScan = async (event: 'scan_started' | 'scan_ended', timestamp: number, tags: Record<string, string | number> = {}) => {
     try {
       await sendEvent(apikey, {
@@ -46,7 +28,7 @@ export async function runOnboardingCheck(options: OnboardingCheckOptions, check:
         tracking_version: 2,
         timestamp: new Date(timestamp),
         tags: { app_id: project.appId },
-        nonPersonTags: { attempt_id: attemptId, command_path: options.command, ...tags },
+        nonPersonTags: { attempt_id: attemptId, command_path: command, ...tags },
       }, false, AbortSignal.timeout(500), apiHost, 'error')
     }
     catch {
