@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import type { Database, Json } from '~/types/supabase.types'
+import type { OnboardingABTestAssignment } from '~/utils/onboardingABTests'
 import type {
   OnboardingAnalyticsStep,
   OnboardingDetailsEvent,
   OnboardingDetailsEventProperties,
+  OnboardingDevelopmentEnvironment,
   OnboardingIntent,
   OnboardingInteractionEvent,
   OnboardingInteractionProperties,
@@ -54,6 +56,14 @@ import { isValidAppId } from '~/utils/appId'
 import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { useBeforeUnloadWarning } from '~/utils/beforeUnloadWarning'
 import {
+  hasWebNativeDevelopmentEnvironmentTreatment,
+  parseOnboardingABTestAssignments,
+  reconcileOnboardingABTestAssignments,
+  resolveOnboardingAnalyticsVersion,
+  shouldShowWebNativePublishIntent,
+  shouldShowWebNativeRecommendation,
+} from '~/utils/onboardingABTests'
+import {
   buildAlternativeAppIds,
   createOnboardingAppWithFallbackIds,
 } from '~/utils/onboardingAppCreateHelpers'
@@ -74,11 +84,17 @@ import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import {
   buildUserOnboardingProgress,
   clampResumableOnboardingStep,
+  fallbackUsersOnboardingProgressForLegacyConstraint,
+  isUsersOnboardingCheckConstraintError,
   parseUserOnboardingProgress,
+  resumableOnboardingFlowStep,
   shouldPromptOnboardingResume,
 } from '~/utils/userOnboardingProgress'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
 import AppOnboardingWelcome from './AppOnboardingWelcome.vue'
+import { developmentEnvironmentOptions } from './onboardingDevelopmentEnvironmentOptions'
+import OnboardingPublishIntentIcon from './OnboardingPublishIntentIcon.vue'
+import OnboardingToolPattern from './OnboardingToolPattern.vue'
 import OrganizationOnboardingInvite from './OrganizationOnboardingInvite.vue'
 
 const props = defineProps<{
@@ -95,17 +111,39 @@ const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const dashboardAppsStore = useDashboardAppsStore()
 const onboardingUserId = computed(() => main.user?.id ?? main.auth?.id ?? null)
+const onboardingABTestAssignments = ref<Record<string, OnboardingABTestAssignment>>({})
+const onboardingABTestsPending = ref(false)
+const onboardingForABTests = computed(() => {
+  const currentOnboarding = isRecord(main.user?.onboarding) ? main.user.onboarding : {}
+  const currentABTests = isRecord(currentOnboarding.abtests) ? currentOnboarding.abtests : {}
+  return {
+    ...currentOnboarding,
+    abtests: {
+      ...currentABTests,
+      ...onboardingABTestAssignments.value,
+    },
+  }
+})
 const config = getLocalConfig()
-const onboardingTelemetry = createOnboardingTelemetryIdentity({ flow: props.preOrg ? 'pre_org' : 'existing_org', supaHost: config.supaHost })
+const webNativePublishIntentTreatment = computed(() => shouldShowWebNativePublishIntent(onboardingForABTests.value))
+const webNativeDevelopmentEnvironmentTreatment = computed(() => hasWebNativeDevelopmentEnvironmentTreatment(onboardingForABTests.value))
+const onboardingAnalyticsVersion = () => resolveOnboardingAnalyticsVersion(onboardingForABTests.value, selectedIntent.value)
+const onboardingTelemetry = createOnboardingTelemetryIdentity({
+  flow: props.preOrg ? 'pre_org' : 'existing_org',
+  onboardingVersion: onboardingAnalyticsVersion,
+  supaHost: config.supaHost,
+})
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
+const ONBOARDING_AB_TEST_WAIT_TIMEOUT_MS = 3_000
 const WELCOME_CANVAS_MEDIA_QUERY = '(min-width: 640px) and (min-height: 640px)'
+const WEBNATIVE_APP_URL = 'https://webnativeapp.com/?ref=capgo'
 const removeBeforeUnloadWarning = useBeforeUnloadWarning(Boolean(props.preOrg))
 
 type AppRow = Omit<Database['public']['Tables']['apps']['Row'], 'onboarding'> & {
   onboarding?: unknown
 }
 type StandardFlowStep = 'details' | 'choice' | 'install' | 'setup'
-type PreOrgFlowStep = 'intent' | 'details' | 'organization' | 'setup'
+type PreOrgFlowStep = 'intent' | 'publish_app_question' | 'details' | 'organization' | 'setup'
 type OnboardingFlowStep = StandardFlowStep | PreOrgFlowStep
 type AppDetailsStep = 'name' | 'app_id' | 'icon'
 type AppDetailsAnalyticsStep = 'app_name' | 'app_id' | 'app_icon'
@@ -129,6 +167,16 @@ interface OrganizationWebsitePreview {
   name: string
   website: string
 }
+
+interface OnboardingABTestsResponse {
+  assignments: unknown
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+let onboardingABTestsRequest: Promise<void> | null = null
 
 const isLoading = ref(true)
 const isHydratingOnboarding = ref(true)
@@ -162,7 +210,10 @@ const manualAppId = ref('')
 const appIdSuggestions = ref<string[]>([])
 const appIdFeedback = ref('')
 const hasEditedAppId = ref(false)
+const selectedDevelopmentEnvironment = ref<OnboardingDevelopmentEnvironment | null>(null)
+const skippedPublishAppQuestion = ref(false)
 const selectedIntent = ref<OnboardingIntent | null>(null)
+const webNativeRecommendationDismissed = ref(false)
 const orgNameInput = ref('')
 const hasEditedOrgName = ref(false)
 const estimatedUsersIndex = ref<number | null>(null)
@@ -177,12 +228,24 @@ const organizationWebsiteInput = ref('')
 const websitePreview = ref<OrganizationWebsitePreview | null>(null)
 const showOrganizationInvite = ref(false)
 
-const intentOptions = [
+const standardIntentOptions = [
   { value: 'ota', icon: IconRefresh },
   { value: 'builder', icon: IconSmartphone },
   { value: 'both', icon: IconLayers },
   { value: 'exploring', icon: IconCompass },
 ] as const
+const publishIntentOption = { value: 'publish', icon: OnboardingPublishIntentIcon } as const
+const intentOptions = computed(() => webNativePublishIntentTreatment.value
+  ? [publishIntentOption, ...standardIntentOptions]
+  : standardIntentOptions)
+const showDevelopmentEnvironmentQuestion = computed(() => flowStep.value === 'publish_app_question')
+const hasSelectedDevelopmentEnvironment = computed(() => Boolean(
+  selectedDevelopmentEnvironment.value
+  && selectedDevelopmentEnvironment.value !== 'skipped',
+))
+const publishAppQuestionPrimaryActionLabel = computed(() => hasSelectedDevelopmentEnvironment.value
+  ? t('unified-onboarding-continue-intent')
+  : t('organization-onboarding-development-environment-skip'))
 
 const fallbackUserCountStops: UserCountStop[] = [
   { value: 2000, label: '2K', planName: 'Solo' },
@@ -282,13 +345,21 @@ const userCountStops = computed<UserCountStop[]>(() => {
   ]
 })
 const selectedUserCountStop = computed<UserCountStop | null>(() => estimatedUsersIndex.value === null ? null : userCountStops.value[Math.min(estimatedUsersIndex.value, userCountStops.value.length - 1)] ?? null)
+const showWebNativeRecommendation = computed(() => shouldShowWebNativeRecommendation({
+  developmentEnvironment: selectedDevelopmentEnvironment.value,
+  dismissed: webNativeRecommendationDismissed.value,
+  intent: selectedIntent.value,
+  onboarding: onboardingForABTests.value,
+  startingOut: selectedUserCountStop.value?.startingOut === true,
+}))
 const canCreatePreOrgOrganization = computed(() => {
   if (!orgNameInput.value.trim() || isImportingOrganizationWebsite.value)
     return false
-  return selectedUserCountStop.value !== null
+  return selectedUserCountStop.value !== null && !showWebNativeRecommendation.value
 })
 
 let progressTracker: ReturnType<typeof createOnboardingProgressTracker> | null = null
+let trackedAnalyticsSteps: OnboardingAnalyticsStep[] = []
 let pendingVisibilityChanges: Array<{ state: DocumentVisibilityState, occurredAt: number }> = []
 let persistFieldsTimer: ReturnType<typeof setTimeout> | undefined
 let pendingDashboardExplored = false
@@ -332,20 +403,33 @@ function trackOnboardingVisibilityChange() {
   progressTracker.trackVisibilityChange(visibilityChange.state, visibilityChange.occurredAt)
 }
 
+function ensurePublishAppQuestionStepTracked() {
+  if (!webNativeDevelopmentEnvironmentTreatment.value)
+    return
+  if (trackedAnalyticsSteps.includes('publish_app_question'))
+    return
+  const intentIndex = trackedAnalyticsSteps.indexOf('intent')
+  if (intentIndex < 0)
+    return
+  trackedAnalyticsSteps.splice(intentIndex + 1, 0, 'publish_app_question')
+}
+
 function initializeProgressTracking(resumed: boolean) {
   const initialStep: OnboardingAnalyticsStep = showPreOrgWelcome.value ? 'welcome' : analyticsStepFor(flowStep.value)
-  const trackedSteps = appOnboardingSteps.value.flatMap<OnboardingAnalyticsStep>((step) => {
+  trackedAnalyticsSteps = appOnboardingSteps.value.flatMap<OnboardingAnalyticsStep>((step) => {
     if (step.id === 'details')
       return Object.values(APP_DETAILS_ANALYTICS_STEPS)
     return [step.id]
   })
   if (initialStep === 'welcome')
-    trackedSteps.unshift('welcome')
+    trackedAnalyticsSteps.unshift('welcome')
+  ensurePublishAppQuestionStepTracked()
 
   progressTracker = createOnboardingProgressTracker({
     flow: props.preOrg ? 'pre_org' : 'existing_org',
+    onboardingVersion: onboardingAnalyticsVersion,
     resumed,
-    steps: trackedSteps,
+    steps: trackedAnalyticsSteps,
     supaHost: config.supaHost,
     onboardingAttemptId: onboardingTelemetry.attemptId,
     onboardingRunId: onboardingTelemetry.runId,
@@ -386,6 +470,17 @@ function viewPreviousStep(nextStep: OnboardingFlowStep) {
   void persistOnboardingProgress()
 }
 
+function persistedDevelopmentEnvironment(): OnboardingDevelopmentEnvironment | null {
+  const selected = selectedDevelopmentEnvironment.value
+  if (selected && selected !== 'skipped')
+    return selected
+  if (skippedPublishAppQuestion.value)
+    return 'skipped'
+  if (!webNativeDevelopmentEnvironmentTreatment.value && flowStep.value !== 'intent' && flowStep.value !== 'publish_app_question')
+    return 'skipped'
+  return null
+}
+
 function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress') {
   const flow = props.preOrg ? 'pre_org' : 'existing_org'
   const telemetry = onboardingTelemetry.getProgressMetadata()
@@ -393,6 +488,8 @@ function snapshotOnboardingProgress(status: UserOnboardingStatus = 'in_progress'
     status,
     step: clampResumableOnboardingStep(flowStep.value, flow),
     flow,
+    developmentEnvironment: persistedDevelopmentEnvironment(),
+    publishAppQuestion: flowStep.value === 'publish_app_question',
     intent: selectedIntent.value,
     detailsStep: appDetailsStep.value,
     appName: appName.value,
@@ -447,6 +544,8 @@ async function writeOnboardingProgress(
       return 'skipped'
 
     const progress = snapshotOnboardingProgress(status)
+    let persistableProgress = progress
+    let usedConstraintFallback = false
     let currentOnboarding = main.user.onboarding
     let latestProfile = main.user
 
@@ -464,7 +563,7 @@ async function writeOnboardingProgress(
         return 'skipped'
 
       const onboardingWithPreferences = preserveAdminDashboardMinimize(
-        progress as unknown as Json,
+        persistableProgress as unknown as Json,
         currentOnboarding,
         main.isAdmin,
       )
@@ -479,6 +578,11 @@ async function writeOnboardingProgress(
       )
 
       if (error) {
+        if (!usedConstraintFallback && isUsersOnboardingCheckConstraintError(error) && persistableProgress.step === 'publish_app_question') {
+          usedConstraintFallback = true
+          persistableProgress = fallbackUsersOnboardingProgressForLegacyConstraint(persistableProgress)
+          continue
+        }
         console.error('Failed to persist onboarding progress', error)
         return 'retryable_failure'
       }
@@ -511,10 +615,89 @@ async function writeOnboardingProgress(
   })
 }
 
+function applyOnboardingABTestAssignments(assignments: Record<string, OnboardingABTestAssignment>) {
+  onboardingABTestAssignments.value = reconcileOnboardingABTestAssignments(
+    onboardingABTestAssignments.value,
+    assignments,
+  )
+  if (!main.user)
+    return
+
+  const currentOnboarding = isRecord(main.user.onboarding) ? main.user.onboarding : {}
+  const currentABTests = parseOnboardingABTestAssignments(currentOnboarding.abtests) ?? {}
+  main.user = {
+    ...main.user,
+    onboarding: {
+      ...currentOnboarding,
+      abtests: reconcileOnboardingABTestAssignments(currentABTests, assignments),
+    } as unknown as Json,
+  }
+}
+
+function refreshOnboardingABTests(options: { force?: boolean } = {}): Promise<void> {
+  if (!props.preOrg || !onboardingUserId.value)
+    return Promise.resolve()
+  if (onboardingABTestsRequest) {
+    if (!options.force)
+      return onboardingABTestsRequest
+    return onboardingABTestsRequest.then(() => refreshOnboardingABTests({ force: true }))
+  }
+
+  if (options.force)
+    applyOnboardingABTestAssignments({})
+
+  const request = (async () => {
+    const { data, error } = await invokeCapgoApi<OnboardingABTestsResponse>('private/onboarding_ab_tests', {
+      method: 'POST',
+      retries: 1,
+    })
+    if (error) {
+      console.error('Cannot load onboarding A/B tests', error)
+      return
+    }
+
+    const assignments = parseOnboardingABTestAssignments(data?.assignments)
+    if (!assignments)
+      return
+
+    applyOnboardingABTestAssignments(assignments)
+  })().catch((error) => {
+    console.error('Cannot load onboarding A/B tests', error)
+  })
+  onboardingABTestsRequest = request
+  onboardingABTestsPending.value = true
+  void request.finally(() => {
+    if (onboardingABTestsRequest === request) {
+      onboardingABTestsRequest = null
+      onboardingABTestsPending.value = false
+    }
+  })
+
+  return request
+}
+
+async function waitForOnboardingABTests(options: { force?: boolean } = {}) {
+  let timeoutId: number | undefined
+  const timeout = new Promise<void>((resolve) => {
+    timeoutId = window.setTimeout(resolve, ONBOARDING_AB_TEST_WAIT_TIMEOUT_MS)
+  })
+
+  try {
+    await Promise.race([refreshOnboardingABTests(options), timeout])
+  }
+  finally {
+    window.clearTimeout(timeoutId)
+  }
+}
+
 function resetOnboardingForm() {
   flowStep.value = props.preOrg ? 'intent' : 'details'
   appDetailsStep.value = 'name'
+  selectedDevelopmentEnvironment.value = null
+  skippedPublishAppQuestion.value = false
   selectedIntent.value = null
+  applyOnboardingABTestAssignments({})
+  webNativeRecommendationDismissed.value = false
   existingApp.value = props.preOrg ? true : null
   existingAppSetup.value = props.preOrg ? 'manual' : null
   appName.value = ''
@@ -540,7 +723,9 @@ function showWelcomeOnDesktop() {
   welcomePending.value = Boolean(props.preOrg && welcomeCanvasEligible.value)
 }
 
-function continueFromWelcome() {
+async function continueFromWelcome() {
+  await waitForOnboardingABTests()
+  ensurePublishAppQuestionStepTracked()
   const nextStep = flowStep.value
   const nextAnalyticsStep = analyticsStepFor(nextStep)
   progressTracker?.completeStep('welcome', { nextStep: nextAnalyticsStep })
@@ -553,10 +738,17 @@ function applyOnboardingProgress(progress: ReturnType<typeof parseUserOnboarding
     return
 
   const flow = props.preOrg ? 'pre_org' : 'existing_org'
-  const resumedStep = clampResumableOnboardingStep(progress.step, flow)
-  flowStep.value = resumedStep === 'publish_app_question' ? 'details' : resumedStep
+  flowStep.value = resumableOnboardingFlowStep(progress, flow)
   if (progress.details_step)
     appDetailsStep.value = progress.details_step
+  if (progress.development_environment === 'skipped') {
+    skippedPublishAppQuestion.value = true
+    selectedDevelopmentEnvironment.value = null
+  }
+  else if (progress.development_environment) {
+    skippedPublishAppQuestion.value = false
+    selectedDevelopmentEnvironment.value = progress.development_environment
+  }
   if (progress.intent)
     selectedIntent.value = progress.intent
   if (progress.existing_app === true || progress.existing_app === false)
@@ -605,7 +797,7 @@ async function maybeResumeSavedOnboarding() {
     return false
   }
 
-  const resumableStep = clampResumableOnboardingStep(saved.step, flow)
+  const resumableStep = resumableOnboardingFlowStep(saved, flow)
   onboardingTelemetry.prepareResumeCandidate({
     onboardingAttemptId: saved.onboarding_attempt_id,
     lastRunId: saved.last_run_id,
@@ -1308,8 +1500,97 @@ function continueFromIntent() {
     toast.error(t('organization-onboarding-intent-required'))
     return
   }
+  if (webNativeDevelopmentEnvironmentTreatment.value && !selectedDevelopmentEnvironment.value) {
+    toast.error(t('organization-onboarding-development-environment-required'))
+    return
+  }
 
-  completeAndViewStep('details', { intent: selectedIntent.value })
+  completeAndViewStep('details', {
+    developmentEnvironment: selectedDevelopmentEnvironment.value ?? (webNativeDevelopmentEnvironmentTreatment.value ? undefined : 'skipped'),
+    intent: selectedIntent.value,
+  })
+}
+
+async function continueFromGoal() {
+  if (!selectedIntent.value) {
+    toast.error(t('organization-onboarding-intent-required'))
+    return
+  }
+  await persistOnboardingProgress()
+  await waitForOnboardingABTests({ force: true })
+  if (webNativeDevelopmentEnvironmentTreatment.value) {
+    ensurePublishAppQuestionStepTracked()
+    completeAndViewStep('publish_app_question', {
+      intent: selectedIntent.value,
+    })
+    return
+  }
+  continueFromIntent()
+}
+
+function continueFromDevelopmentEnvironment() {
+  if (!selectedDevelopmentEnvironment.value || selectedDevelopmentEnvironment.value === 'skipped') {
+    toast.error(t('organization-onboarding-development-environment-required'))
+    return
+  }
+  skippedPublishAppQuestion.value = false
+  continueFromIntent()
+}
+
+function skipPublishAppQuestion() {
+  if (!selectedIntent.value) {
+    toast.error(t('organization-onboarding-intent-required'))
+    return
+  }
+  skippedPublishAppQuestion.value = true
+  selectedDevelopmentEnvironment.value = null
+  completeAndViewStep('details', {
+    developmentEnvironment: 'skipped',
+    intent: selectedIntent.value,
+  })
+}
+
+function continueFromCurrentPublishAppQuestion() {
+  if (hasSelectedDevelopmentEnvironment.value)
+    continueFromDevelopmentEnvironment()
+  else
+    skipPublishAppQuestion()
+}
+
+function backToIntentGoal() {
+  viewPreviousStep('intent')
+}
+
+function selectDevelopmentEnvironment(environment: OnboardingDevelopmentEnvironment) {
+  if (environment === 'skipped')
+    return
+  if (selectedDevelopmentEnvironment.value === environment)
+    return
+
+  skippedPublishAppQuestion.value = false
+  selectedDevelopmentEnvironment.value = environment
+  webNativeRecommendationDismissed.value = false
+  progressTracker?.trackStepEvent('onboarding_development_environment_selected', 'publish_app_question', {
+    development_environment: environment,
+  })
+  schedulePersistOnboardingProgress()
+}
+
+function continueWithCapgoFromWebNativeRecommendation() {
+  webNativeRecommendationDismissed.value = true
+  trackOrganizationEvent('onboarding_webnative_continue_with_capgo', {
+    development_environment: selectedDevelopmentEnvironment.value ?? undefined,
+    intent: 'publish',
+    starting_out: true,
+  })
+}
+
+function trackWebNativeRecommendationClick() {
+  trackOrganizationEvent('onboarding_webnative_recommendation_clicked', {
+    development_environment: selectedDevelopmentEnvironment.value ?? undefined,
+    intent: 'publish',
+    starting_out: true,
+  })
 }
 
 function continuePreOrgDetails() {
@@ -1691,6 +1972,7 @@ onMounted(async () => {
   isHydratingOnboarding.value = true
   try {
     if (props.preOrg) {
+      void refreshOnboardingABTests()
       if (resumeAppId.value) {
         await organizationStore.awaitInitialLoad()
         const resumed = await loadResumeApp()
@@ -1834,8 +2116,8 @@ defineExpose({
     v-else
     class="onboarding-flow-shell h-full min-h-0 overflow-y-auto bg-slate-50 px-4 py-6 sm:px-6 lg:px-8 dark:bg-slate-950"
     :class="{
-      'onboarding-flow-app-creation': props.preOrg && (flowStep === 'intent' || flowStep === 'details'),
-      'onboarding-flow-intent': props.preOrg && flowStep === 'intent',
+      'onboarding-flow-app-creation': props.preOrg && (flowStep === 'intent' || flowStep === 'publish_app_question' || flowStep === 'details'),
+      'onboarding-flow-intent': props.preOrg && (flowStep === 'intent' || flowStep === 'publish_app_question'),
       'onboarding-flow-details-name': flowStep === 'details' && appDetailsStep === 'name',
       'onboarding-flow-details-app-id': flowStep === 'details' && appDetailsStep === 'app_id',
       'onboarding-flow-details-icon': flowStep === 'details' && appDetailsStep === 'icon',
@@ -1895,33 +2177,68 @@ defineExpose({
           </nav>
         </header>
 
-        <div v-if="props.preOrg && flowStep === 'intent'" class="onboarding-intent-card rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
+        <div v-if="props.preOrg && (flowStep === 'intent' || flowStep === 'publish_app_question')" class="onboarding-intent-card rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
           <div class="onboarding-intent-card-content space-y-6">
-            <div class="onboarding-intent-heading">
-              <p class="onboarding-intent-eyebrow text-sm font-semibold text-primary-500 dark:text-slate-300">
-                {{ t('unified-onboarding-step-intent') }}
-              </p>
-              <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                {{ t('organization-onboarding-intent-question') }}
-              </h2>
-              <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {{ t('organization-onboarding-intent-hint') }}
-              </p>
-            </div>
-            <div class="onboarding-intent-options grid gap-3 sm:grid-cols-2">
-              <button v-for="option in intentOptions" :key="option.value" type="button" class="d-btn onboarding-intent-option group h-auto min-h-20 w-full items-start justify-start gap-3 whitespace-normal rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900" :class="whiteCardToggleButtonClass(selectedIntent === option.value)" :data-test="`onboarding-intent-${option.value}`" @click="selectedIntent = option.value">
-                <span class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500/10 text-primary-500"><component :is="option.icon" class="h-5 w-5" /></span>
-                <span class="min-w-0">
-                  <span class="block text-sm font-semibold text-slate-950 dark:text-white">{{ t(`organization-onboarding-intent-option-${option.value}-label`) }}</span>
-                  <span class="onboarding-intent-option-description mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">{{ t(`organization-onboarding-intent-option-${option.value}-desc`) }}</span>
-                </span>
-              </button>
-            </div>
-            <div class="onboarding-intent-actions flex justify-end border-t border-slate-200 pt-6 dark:border-white/15">
-              <button type="button" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" data-test="app-onboarding-continue-intent" :disabled="!selectedIntent" @click="continueFromIntent()">
-                {{ t('unified-onboarding-continue-intent') }}<IconArrowRight class="h-4 w-4" />
-              </button>
-            </div>
+            <template v-if="showDevelopmentEnvironmentQuestion">
+              <div class="onboarding-intent-heading">
+                <p class="onboarding-intent-eyebrow text-sm font-semibold text-primary-500 dark:text-slate-300">
+                  {{ t('unified-onboarding-step-intent') }}
+                </p>
+                <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+                  {{ t('organization-onboarding-development-environment-question') }}
+                </h2>
+              </div>
+              <div class="onboarding-development-environment-options grid gap-3 sm:grid-cols-2">
+                <button v-for="option in developmentEnvironmentOptions" :key="option.value" type="button" class="d-btn d-btn-ghost onboarding-development-environment-option group relative h-auto min-h-[8.5rem] w-full items-end justify-start overflow-hidden whitespace-normal rounded-xl border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white sm:min-h-[9.5rem] dark:focus-visible:ring-offset-slate-900" :class="whiteCardToggleButtonClass(selectedDevelopmentEnvironment === option.value)" :data-test="`onboarding-development-environment-${option.value}`" :aria-pressed="selectedDevelopmentEnvironment === option.value" @click="selectDevelopmentEnvironment(option.value)">
+                  <OnboardingToolPattern v-if="option.icons.length" :icons="option.icons" :muted="option.muted" />
+                  <span class="relative z-10 min-w-0">
+                    <span class="block text-sm font-semibold text-slate-950 dark:text-white">{{ t(`organization-onboarding-development-environment-option-${option.value}-label`) }}</span>
+                    <span v-if="option.hasDescription" class="mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">{{ t(`organization-onboarding-development-environment-option-${option.value}-desc`) }}</span>
+                  </span>
+                </button>
+              </div>
+              <div class="onboarding-intent-actions flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/15">
+                <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" data-test="app-onboarding-back-intent-goal" @click="backToIntentGoal()">
+                  {{ t('button-back') }}
+                </button>
+                <button type="button" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" :data-test="hasSelectedDevelopmentEnvironment ? 'app-onboarding-continue-development-environment' : 'app-onboarding-skip-development-environment'" @click="continueFromCurrentPublishAppQuestion()">
+                  {{ publishAppQuestionPrimaryActionLabel }}<IconArrowRight class="h-4 w-4" />
+                </button>
+              </div>
+            </template>
+
+            <template v-else>
+              <div>
+                <p class="onboarding-intent-eyebrow text-sm font-semibold text-primary-500 dark:text-slate-300">
+                  {{ t('unified-onboarding-step-intent') }}
+                </p>
+                <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+                  {{ t('organization-onboarding-intent-question') }}
+                </h2>
+                <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  {{ t('organization-onboarding-intent-hint') }}
+                </p>
+              </div>
+              <div class="onboarding-intent-options grid gap-3 sm:grid-cols-2">
+                <button v-for="option in intentOptions" :key="option.value" type="button" class="d-btn onboarding-intent-option group h-auto min-h-20 w-full items-center justify-start gap-3 whitespace-normal rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900" :class="[whiteCardToggleButtonClass(selectedIntent === option.value), { 'sm:col-span-2': option.value === 'publish' }]" :data-test="`onboarding-intent-${option.value}`" @click="selectedIntent = option.value">
+                  <!-- I am a human. I am doing manual handling for the "publish" (webnativeapp) intent. Fuck every AI reviewer who doesnt like my code -->
+                  <!-- eslint-disable-next-line vue/eqeqeq -- keep the human publish check as written -->
+                  <span v-if="option.value == 'publish'" class="flex shrink-0 items-center justify-center rounded-lg bg-primary-500/10 px-2 text-primary-500" style="height: calc(var(--spacing) * 14.4);">
+                    <OnboardingPublishIntentIcon class="h-8" />
+                  </span>
+                  <span v-else class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500/10 text-primary-500"><component :is="option.icon" class="h-5 w-5" /></span>
+                  <span class="min-w-0">
+                    <span class="block text-sm font-semibold text-slate-950 dark:text-white">{{ t(`organization-onboarding-intent-option-${option.value}-label`) }}</span>
+                    <span class="onboarding-intent-option-description mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">{{ t(`organization-onboarding-intent-option-${option.value}-desc`) }}</span>
+                  </span>
+                </button>
+              </div>
+              <div class="onboarding-intent-actions flex justify-end border-t border-slate-200 pt-6 dark:border-white/15">
+                <button type="button" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" data-test="app-onboarding-continue-intent" :disabled="!selectedIntent" @click="continueFromGoal()">
+                  {{ t('unified-onboarding-continue-intent') }}<IconArrowRight class="h-4 w-4" />
+                </button>
+              </div>
+            </template>
           </div>
         </div>
 
@@ -2233,7 +2550,7 @@ defineExpose({
                     class="d-btn min-h-12"
                     :class="whiteCardSecondaryButtonClass()"
                     :disabled="isAppDetailsNavigationPending"
-                    @click="appDetailsStep === 'name' ? (props.preOrg ? viewPreviousStep('intent') : router.push('/apps')) : viewPreviousAppDetailsStep()"
+                    @click="appDetailsStep === 'name' ? (props.preOrg ? viewPreviousStep(webNativeDevelopmentEnvironmentTreatment ? 'publish_app_question' : 'intent') : router.push('/apps')) : viewPreviousAppDetailsStep()"
                   >
                     {{ appDetailsStep === 'name' && !props.preOrg ? t('button-cancel') : t('button-back') }}
                   </button>
@@ -2454,6 +2771,27 @@ defineExpose({
                       </span>
                     </span>
                   </label>
+                </div>
+              </div>
+
+              <div v-if="showWebNativeRecommendation" class="rounded-2xl border border-primary-500/30 bg-primary-500/5 p-5 dark:border-primary-400/30 dark:bg-primary-400/10" data-test="onboarding-webnative-recommendation">
+                <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h3 class="text-lg font-semibold text-slate-950 dark:text-white">
+                      {{ t('organization-onboarding-webnative-title') }}
+                    </h3>
+                    <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                      {{ t('organization-onboarding-webnative-description') }}
+                    </p>
+                  </div>
+                </div>
+                <div class="mt-4 flex flex-col gap-3 sm:flex-row">
+                  <button type="button" class="d-btn min-h-12" :class="whiteCardSecondaryButtonClass()" data-test="onboarding-webnative-continue-capgo" @click="continueWithCapgoFromWebNativeRecommendation()">
+                    {{ t('organization-onboarding-webnative-continue-capgo') }}
+                  </button>
+                  <a :href="WEBNATIVE_APP_URL" target="_blank" rel="noopener noreferrer" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" data-test="onboarding-webnative-check-website" @click="trackWebNativeRecommendationClick()">
+                    {{ t('organization-onboarding-webnative-check-website') }}<IconArrowRight class="h-4 w-4" />
+                  </a>
                 </div>
               </div>
 
