@@ -5454,7 +5454,7 @@ export type Database = {
         Returns: boolean
       }
       remove_old_jobs: { Args: never; Returns: undefined }
-      request_actor_email_adress: { Args: never; Returns: string | null }
+      request_actor_email_adress: { Args: never; Returns: string }
       request_actor_user_id: { Args: never; Returns: string }
       request_app_chart_refresh: {
         Args: { app_id: string }
