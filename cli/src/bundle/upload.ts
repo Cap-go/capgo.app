@@ -480,9 +480,9 @@ async function resolveUpdaterVersionForUpload(options: OptionsUpload, root: stri
     return getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
 
   const cordovaUpdaterPackages = [
-    '@capgo/capacitor-updater',
     '@capgo/cordova-updater',
     'cordova-plugin-capgo',
+    '@capgo/capacitor-updater',
   ]
   for (const packageName of cordovaUpdaterPackages) {
     const version = await getInstalledVersion(packageName, root, options.packageJson)
