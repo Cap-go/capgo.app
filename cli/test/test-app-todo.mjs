@@ -122,6 +122,8 @@ try {
       const text = child.stdout + child.stderr
       const failure = ['denied', 'missing', 'failed', 'invalid', 'two-factor'].includes(scenario)
       assert.equal(child.status, failure ? 1 : 0, text)
+      assert.match(text, /Loading the todo list/, 'non-interactive commands report the pending work')
+      assert.doesNotMatch(text, /Todo list loaded|Could not load todo list/, 'non-interactive commands do not render spinner completion')
       if (!failure) {
         assert.match(text, new RegExp('App: ' + appId.replaceAll('.', '\\.')))
         assert.match(text, /\[ \] Pending:/)

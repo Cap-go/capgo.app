@@ -1,5 +1,6 @@
 import type { OptionsBase } from '../schemas/base'
-import { intro, log, outro } from '@clack/prompts'
+import { stdin, stdout } from 'node:process'
+import { intro, log, outro, spinner } from '@clack/prompts'
 import { check2FAComplianceForApp } from '../api/app'
 import { CliUserError } from '../shared/cli-user-error'
 import { createSupabaseClient, findSavedKey, formatCapgoCliInvokeError, getAppId, getCapgoCliHttpStatus, getConfig, invokeCapgoCliApi } from '../utils'
@@ -129,12 +130,20 @@ export async function appTodo(appId: string | undefined, options: Partial<Option
   }
 
   const supabase = await createSupabaseClient(apikey, options.supaHost, options.supaAnon)
-  await check2FAComplianceForApp(supabase, appId)
+  const loading = stdin.isTTY && stdout.isTTY ? spinner() : null
+  if (loading)
+    loading.start('Loading the todo list')
+  else
+    log.info('Loading the todo list')
+
   let progress: AppTodoProgress
   try {
+    await check2FAComplianceForApp(supabase, appId)
     progress = await readAppTodoProgress(appId, { ...options, apikey })
+    loading?.stop('Todo list loaded')
   }
   catch (error) {
+    loading?.stop('Could not load todo list')
     if (error instanceof CliUserError)
       log.error(error.message)
     throw error
