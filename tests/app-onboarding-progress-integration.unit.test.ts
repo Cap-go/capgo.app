@@ -29,6 +29,10 @@ vi.mock('vue-router', () => ({
 }))
 vi.mock('vue-sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 vi.mock('~/services/onboardingTracking', () => ({ sendOnboardingEvent: vi.fn() }))
+vi.mock('~/services/capgoApi', () => ({
+  getCapgoApiErrorCode: vi.fn(),
+  invokeCapgoApi: vi.fn(async () => ({ data: { assignments: {} }, error: null })),
+}))
 vi.mock('~/services/supabase', () => ({
   getLocalConfig: () => ({ supaHost: 'https://sb.capgo.app', supaKey: 'anon-key' }),
   isLocal: () => false,
@@ -38,7 +42,10 @@ vi.mock('~/services/supabase', () => ({
       maybeSingle: writerMocks.refreshUser,
       select: () => query,
     }
-    return { from: () => query }
+    return {
+      auth: { getSession: vi.fn(async () => ({ data: { session: null }, error: null })) },
+      from: () => query,
+    }
   },
 }))
 vi.mock('~/services/userOnboardingWriteQueue', async (importOriginal) => {
@@ -217,11 +224,11 @@ describe('app onboarding progress analytics integration', () => {
     const initializer = sourceBetween('function initializeProgressTracking(', 'function completeAndViewStep(')
     expect(initializer).toContain(`flow: props.preOrg ? 'pre_org' : 'existing_org'`)
     expect(initializer).toContain(`const initialStep: OnboardingAnalyticsStep = showPreOrgWelcome.value ? 'welcome' : analyticsStepFor(flowStep.value)`)
-    expect(initializer).toContain('const trackedSteps = appOnboardingSteps.value.flatMap<OnboardingAnalyticsStep>')
+    expect(initializer).toContain('trackedAnalyticsSteps = appOnboardingSteps.value.flatMap<OnboardingAnalyticsStep>')
     expect(initializer).toContain('return Object.values(APP_DETAILS_ANALYTICS_STEPS)')
-    expect(initializer).toContain(`trackedSteps.unshift('welcome')`)
-    expect(initializer).not.toContain(`trackedSteps.push('setup')`)
-    expect(initializer).toContain('steps: trackedSteps')
+    expect(initializer).toContain(`trackedAnalyticsSteps.unshift('welcome')`)
+    expect(initializer).not.toContain(`trackedAnalyticsSteps.push('setup')`)
+    expect(initializer).toContain('steps: trackedAnalyticsSteps')
     expect(initializer).toContain('resumed,')
     expect(initializer).toContain('onboardingAttemptId: onboardingTelemetry.attemptId')
     expect(initializer).toContain('onboardingRunId: onboardingTelemetry.runId')
@@ -339,7 +346,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(persistenceQueue).not.toContain('writeOnboardingProgress(status)')
     expect(persistenceQueue).not.toContain('initializeProgressTracking')
 
-    const writer = sourceBetween('async function writeOnboardingProgress(', 'function resetOnboardingForm(')
+    const writer = sourceBetween('async function writeOnboardingProgress(', 'function applyOnboardingABTestAssignments(')
     expect(writer).toContain(`if (!userId || isHydratingOnboarding.value)\n    return 'skipped'`)
     expect(writer).toContain('return serializeUserOnboardingWrite(userId, async () => {')
     expect(writer).toContain('main.authGeneration !== authGeneration')
@@ -352,6 +359,9 @@ describe('app onboarding progress analytics integration', () => {
       'const onboarding = mergeUserOnboardingProgress(',
       'await replaceUserOnboardingIfUnchanged(',
     ])
+    expect(writer).toContain('if (error) {')
+    expect(writer).toContain('isUsersOnboardingCheckConstraintError(error)')
+    expect(writer).toContain('fallbackUsersOnboardingProgressForLegacyConstraint(persistableProgress)')
     expectSourceOrder(writer, [
       'if (error) {',
       `console.error('Failed to persist onboarding progress', error)`,
@@ -451,7 +461,8 @@ describe('app onboarding progress analytics integration', () => {
     expect(transitionHelpers).toContain('void persistOnboardingProgress()')
 
     const intentTransition = sourceBetween('function continueFromIntent()', 'function continuePreOrgDetails()')
-    expect(intentTransition).toContain(`completeAndViewStep('details', { intent: selectedIntent.value })`)
+    expect(intentTransition).toContain(`intent: selectedIntent.value`)
+    expect(intentTransition).toContain(`?? (webNativeDevelopmentEnvironmentTreatment.value ? undefined : 'skipped')`)
 
     const appNameTransition = sourceBetween('function continueFromAppName()', 'function continueFromAppId()')
     expect(appNameTransition).toContain(`completeAndViewAppDetailsStep('app_id', { appId: generatedAppId.value, appName: appName.value.trim() })`)
@@ -475,7 +486,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(backNavigation).not.toContain('completeStep')
     expect(backNavigation).toContain('progressTracker?.viewStep(nextAnalyticsStep, previousAnalyticsStep)')
     expect(onboardingSource).toContain('@click="viewPreviousStep(\'details\')"')
-    expect(onboardingSource).toContain(`props.preOrg ? viewPreviousStep('intent') : router.push('/apps')`)
+    expect(onboardingSource).toContain(`props.preOrg ? viewPreviousStep(webNativeDevelopmentEnvironmentTreatment ? 'publish_app_question' : 'intent') : router.push('/apps')`)
     expect(onboardingSource).not.toContain('@click="flowStep = \'details\'"')
     expect(onboardingSource).not.toContain('@click="flowStep = \'choice\'"')
     expect(onboardingSource).not.toContain(`props.preOrg ? (flowStep = 'intent') : router.push('/apps')`)

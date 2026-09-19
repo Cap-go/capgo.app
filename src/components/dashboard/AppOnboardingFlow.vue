@@ -2800,6 +2800,7 @@ defineExpose({
                   {{ t('button-back') }}
                 </button>
                 <button
+                  v-if="!showWebNativeRecommendation"
                   type="button"
                   class="d-btn min-h-12"
                   :class="whiteCardPrimaryButtonClass()"
