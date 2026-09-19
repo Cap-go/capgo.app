@@ -127,12 +127,6 @@ const onboardingForABTests = computed(() => {
 const config = getLocalConfig()
 const webNativePublishIntentTreatment = computed(() => shouldShowWebNativePublishIntent(onboardingForABTests.value))
 const webNativeDevelopmentEnvironmentTreatment = computed(() => hasWebNativeDevelopmentEnvironmentTreatment(onboardingForABTests.value))
-const onboardingAnalyticsVersion = () => resolveOnboardingAnalyticsVersion(onboardingForABTests.value, selectedIntent.value)
-const onboardingTelemetry = createOnboardingTelemetryIdentity({
-  flow: props.preOrg ? 'pre_org' : 'existing_org',
-  onboardingVersion: onboardingAnalyticsVersion,
-  supaHost: config.supaHost,
-})
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
 const ONBOARDING_AB_TEST_WAIT_TIMEOUT_MS = 3_000
 const WELCOME_CANVAS_MEDIA_QUERY = '(min-width: 640px) and (min-height: 640px)'
@@ -213,6 +207,12 @@ const hasEditedAppId = ref(false)
 const selectedDevelopmentEnvironment = ref<OnboardingDevelopmentEnvironment | null>(null)
 const skippedPublishAppQuestion = ref(false)
 const selectedIntent = ref<OnboardingIntent | null>(null)
+const onboardingAnalyticsVersion = () => resolveOnboardingAnalyticsVersion(onboardingForABTests.value, selectedIntent.value)
+const onboardingTelemetry = createOnboardingTelemetryIdentity({
+  flow: props.preOrg ? 'pre_org' : 'existing_org',
+  onboardingVersion: onboardingAnalyticsVersion,
+  supaHost: config.supaHost,
+})
 const webNativeRecommendationDismissed = ref(false)
 const orgNameInput = ref('')
 const hasEditedOrgName = ref(false)
