@@ -70,7 +70,7 @@ export function collectAppIdCandidates(
     }
   }
 
-  for (const cordovaAppId of collectCordovaAppIdCandidates(projectRoot))
+  for (const cordovaAppId of collectCordovaAppIdCandidates())
     push(cordovaAppId)
 
   return [...candidates]
