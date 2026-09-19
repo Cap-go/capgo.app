@@ -90,7 +90,7 @@ describe('getting started CLI setup panel', () => {
     expect(panelSource.indexOf('<AppOnboardingCliSteps')).toBeLessThan(panelSource.indexOf('<TechnicalTeammateInviteCard'))
     expect(panelSource).toContain('sendOnboardingEvent(\'onboarding_cli_command_copied\'')
     expect(panelSource).toContain('sendOnboardingEvent(\'onboarding_ai_instructions_copied\'')
-    expect(panelSource).toContain('report_app_onboarding_setup')
+    expect(panelSource).toContain("sendOnboardingEvent('onboarding_ai_instructions_copied'")
     // First-app onboarding may still embed CLI helpers; 2nd+ app create uses GettingStartedCliPanel.
     expect(panelSource).toContain('organizationStore.getOrgByAppId(props.appId)')
     expect(panelSource).toContain('await organizationStore.awaitInitialLoad()')

@@ -553,7 +553,8 @@ function applyOnboardingProgress(progress: ReturnType<typeof parseUserOnboarding
     return
 
   const flow = props.preOrg ? 'pre_org' : 'existing_org'
-  flowStep.value = clampResumableOnboardingStep(progress.step, flow)
+  const resumedStep = clampResumableOnboardingStep(progress.step, flow)
+  flowStep.value = resumedStep === 'publish_app_question' ? 'details' : resumedStep
   if (progress.details_step)
     appDetailsStep.value = progress.details_step
   if (progress.intent)

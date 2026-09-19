@@ -185,12 +185,6 @@ async function copyAiInstructions() {
       app_id: props.appId,
       setup_command: 'ota',
     })
-    const { error } = await supabase.rpc('report_app_onboarding_setup', {
-      p_app_id: props.appId,
-      p_patch: { source: 'ai' } as never,
-    })
-    if (error)
-      console.error('Cannot report onboarding progress', error)
   }
 }
 
