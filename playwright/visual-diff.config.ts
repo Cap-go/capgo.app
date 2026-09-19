@@ -119,7 +119,8 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       }
     },
   },
-  { slug: 'observe', path: '/app/com.demo.app/observe/updater', auth: true },
+  { slug: 'observe-update', path: '/app/com.demo.app/observe/update', auth: true },
+  { slug: 'observe-failure', path: '/app/com.demo.app/observe/failure', auth: true },
   {
     slug: 'observe-logs',
     path: '/app/com.demo.app/observe/logs',

@@ -243,6 +243,9 @@ declare global {
   const useNetwork: typeof import('@vueuse/core').useNetwork
   const useNow: typeof import('@vueuse/core').useNow
   const useObjectUrl: typeof import('@vueuse/core').useObjectUrl
+  const useObserveAppScope: typeof import('./composables/useObserveAppScope').useObserveAppScope
+  const useObserveDateRangeQuery: typeof import('./composables/useObserveDateRangeQuery').useObserveDateRangeQuery
+  const useObserveInsights: typeof import('./composables/useObserveInsights').useObserveInsights
   const useOffsetPagination: typeof import('@vueuse/core').useOffsetPagination
   const useOnboardingChannelAnimation: typeof import('./composables/useOnboardingChannelAnimation').useOnboardingChannelAnimation
   const useOnline: typeof import('@vueuse/core').useOnline
@@ -354,6 +357,9 @@ declare global {
   // @ts-ignore
   export type { UpdateEndpointRequest } from './composables/useDeviceUpdateFormat'
   import('./composables/useDeviceUpdateFormat')
+  // @ts-ignore
+  export type { LogInsightSummary, LogInsightAction, LogInsightDaily, LogInsightVersion, LogInsightDevice, LogInsightsResponse } from './composables/useObserveInsights'
+  import('./composables/useObserveInsights')
   // @ts-ignore
   export type { CheckDomainResponse } from './composables/useSSORouting'
   import('./composables/useSSORouting')
@@ -616,6 +622,9 @@ declare module 'vue' {
     readonly useNetwork: UnwrapRef<typeof import('@vueuse/core')['useNetwork']>
     readonly useNow: UnwrapRef<typeof import('@vueuse/core')['useNow']>
     readonly useObjectUrl: UnwrapRef<typeof import('@vueuse/core')['useObjectUrl']>
+    readonly useObserveAppScope: UnwrapRef<typeof import('./composables/useObserveAppScope')['useObserveAppScope']>
+    readonly useObserveDateRangeQuery: UnwrapRef<typeof import('./composables/useObserveDateRangeQuery')['useObserveDateRangeQuery']>
+    readonly useObserveInsights: UnwrapRef<typeof import('./composables/useObserveInsights')['useObserveInsights']>
     readonly useOffsetPagination: UnwrapRef<typeof import('@vueuse/core')['useOffsetPagination']>
     readonly useOnboardingChannelAnimation: UnwrapRef<typeof import('./composables/useOnboardingChannelAnimation')['useOnboardingChannelAnimation']>
     readonly useOnline: UnwrapRef<typeof import('@vueuse/core')['useOnline']>
