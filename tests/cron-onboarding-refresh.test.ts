@@ -15,7 +15,7 @@ async function fixture(client: any, count: number, billing: 'paid' | 'trial' | '
     await client.query(`INSERT INTO public.stripe_info(customer_id,status,product_id,trial_at)
       VALUES ($1,$2,'prod_LQIregjtNduh4q',$3::timestamptz)`, [customerId, billing === 'paid' ? 'succeeded' : 'created', billing === 'trial' ? new Date(Date.now() + 86400000).toISOString() : '2020-01-01T00:00:00Z'])
   }
-  await client.query('INSERT INTO public.orgs(id,created_by,name,management_email,customer_id) VALUES ($1,$2,\'Refresh fixture\',\'onboarding-refresh@example.com\',$3)', [orgId, owner, customerId])
+  await client.query('INSERT INTO public.orgs(id,created_by,name,management_email,customer_id) VALUES ($1,$2,$3,\'onboarding-refresh@example.com\',$4)', [orgId, owner, `Refresh ${orgId}`, customerId])
   if (billing === 'credits') {
     await client.query('INSERT INTO public.usage_credit_grants(org_id,credits_total,credits_consumed,expires_at) VALUES ($1,1,0,now()+interval \'1 day\')', [orgId])
   }
