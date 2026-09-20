@@ -42,14 +42,14 @@ finishCheck()
 assert.equal(await finishEarly, true, 'completed checks end the wait before the deadline')
 
 for (const version of [1, 2, 3, 4, 0, -1, 1.5, '3', undefined]) {
-  const value = { setup: { todo_list_version: version, steps: progress.onboarding.setup.steps } }
+  const value = { setup: { todo_list_version: version, ...(version === 4 ? { ota_todo_list_version: '1' } : {}), steps: version === 4 ? { ota: progress.onboarding.setup.steps } : progress.onboarding.setup.steps } }
   const parsed = parseAppOnboarding(value)
   const actual = getAppTodoSteps({ onboarding: value })
   assert.equal(actual.version, parsed.todo_list_version)
-  assert.deepEqual(actual.steps.map(step => step.id), getAppOnboardingStepIds(parsed.todo_list_version), 'step order matches the frontend')
+  assert.deepEqual(actual.steps.map(step => step.id), getAppOnboardingStepIds(parsed.todo_list_version, parsed.ota_todo_list_version), 'step order matches the frontend')
   for (const step of actual.steps) {
     assert.equal(step.status, parsed.steps[step.id]?.status ?? 'pending')
-    const prefix = actual.version === 3 ? 'setup-checklist-step-' : 'app-onboarding-cli-step-'
+    const prefix = actual.version === 3 || actual.version === 4 ? 'setup-checklist-step-' : 'app-onboarding-cli-step-'
     assert.equal(step.title, messages[prefix + step.id], 'task titles match the frontend')
   }
 }
@@ -80,6 +80,17 @@ assert.match(formatAppTodoList(appId, { ...progress, hasChannel: true }), /3\/7 
 assert.match(formatAppTodoList(appId, { ...progress, hasChannel: true }), /Next step: Add the app-ready code/)
 assert.match(formatAppTodoList(appId, { onboarding: progress.onboarding }), /3\/7 completed/, 'retains saved channel progress when the live check is unavailable')
 assert.equal(progress.onboarding.setup.steps.add_channel.status, 'done', 'does not mutate saved progress')
+const v4Progress = { onboarding: { setup: { todo_list_version: 4, ota_todo_list_version: '1', paths: ['ota'], selected_path: 'ota', steps: { ota: { ...progress.onboarding.setup.steps } } } }, hasChannel: false }
+const v4Output = formatAppTodoList(appId, v4Progress)
+assert.match(v4Output, /Todo list v4/)
+assert.match(v4Output, /2\/7 completed/)
+assert.match(v4Output, /Next step: Create a channel/)
+assert.equal(getAppTodoSteps(v4Progress).steps.find(step => step.id === 'add_updater').status, 'skipped')
+for (const otaVersion of ['2', 1, undefined]) {
+  const unsupported = { onboarding: { setup: { todo_list_version: 4, ota_todo_list_version: otaVersion, steps: { ota: progress.onboarding.setup.steps } } } }
+  assert.deepEqual(getAppTodoSteps(unsupported).steps, [], 'unsupported OTA versions do not show v1 steps')
+  assert.match(formatAppTodoList(appId, unsupported), /does not support this OTA checklist version/)
+}
 const allDone = formatAppTodoList(appId, { onboarding: { setup: { todo_list_version: 3, steps: Object.fromEntries(getAppOnboardingStepIds(3).map(id => [id, { status: 'done' }])) } } })
 assert.match(allDone, /7\/7 completed \(7 done, 0 skipped, 0 pending\)/)
 assert.doesNotMatch(allDone, /Next step:/)
@@ -148,7 +159,7 @@ try {
       }
       if (url.includes('/private/config')) return Response.json({ supaHost: ${JSON.stringify(options.supaHost)}, supaKey: ${JSON.stringify(options.supaAnon)} })
       if (url.includes('/rpc/reject_access_due_to_2fa_for_app')) return Response.json(scenario === 'two-factor')
-      if (scenario === 'background-updated' && init?.method === 'PUT' && url.endsWith('/app/${appId}')) {
+      if (scenario?.startsWith('background-updated') && init?.method === 'PUT' && url.endsWith('/app/${appId}')) {
         await new Promise(resolve => setTimeout(resolve, 700))
         const steps = JSON.parse(init.body).onboarding.steps
         if (steps.add_code) writeFileSync(codeMarker, 'done')
@@ -156,7 +167,7 @@ try {
         return Response.json({ status: 'ok' })
       }
       if (url.includes('/private/onboarding_progress')) {
-        if (scenario === 'background-updated' && isMainThread) appendFileSync(progressReads, 'read\\n')
+        if (scenario?.startsWith('background-updated') && isMainThread) appendFileSync(progressReads, 'read\\n')
         if (scenario === 'denied') return Response.json({ error: 'app_access_denied' }, { status: 403 })
         if (scenario === 'missing') return Response.json({ error: 'app_not_found' }, { status: 404 })
         if (scenario === 'failed') return Response.json({ error: 'database_unavailable' }, { status: 500 })
@@ -165,9 +176,15 @@ try {
         if (scenario === 'partial') progress.checkErrors = ['run_device']
         if (scenario === 'v2') progress.onboarding.setup.todo_list_version = 2
         if (scenario === 'empty') progress.onboarding = null
-        if (scenario === 'background-updated') {
-          progress.onboarding.setup.steps.add_code.status = existsSync(codeMarker) ? 'done' : 'pending'
-          progress.onboarding.setup.steps.add_updater.status = existsSync(updaterMarker) ? 'done' : 'pending'
+        if (scenario?.startsWith('background-updated')) {
+          if (scenario === 'background-updated-v4') {
+            progress.onboarding.setup.todo_list_version = 4
+            progress.onboarding.setup.ota_todo_list_version = '1'
+            progress.onboarding.setup.steps = { ota: progress.onboarding.setup.steps }
+          }
+          const steps = scenario === 'background-updated-v4' ? progress.onboarding.setup.steps.ota : progress.onboarding.setup.steps
+          steps.add_code.status = existsSync(codeMarker) ? 'done' : 'pending'
+          steps.add_updater.status = existsSync(updaterMarker) ? 'done' : 'pending'
         }
         return Response.json(progress)
       }
@@ -231,20 +248,25 @@ try {
   writeFileSync(join(fixture, 'node_modules/@capgo/capacitor-updater/package.json'), JSON.stringify({ name: '@capgo/capacitor-updater', version: '8.0.0' }))
   mkdirSync(join(fixture, 'src'))
   writeFileSync(join(fixture, 'src/main.ts'), "import { CapacitorUpdater } from '@capgo/capacitor-updater'; CapacitorUpdater.notifyAppReady()")
-  const backgroundUpdate = spawnSync('node', [
-    '--import', preload, builtCli, 'app', 'todo', appId,
-    '-a', options.apikey, '--supa-host', options.supaHost, '--supa-anon', options.supaAnon,
-  ], {
-    cwd: fixture, encoding: 'utf8', timeout: 15_000,
-    env: { ...process.env, CAPGO_TODO_SCENARIO: 'background-updated', CAPGO_DISABLE_TELEMETRY: '1', CAPGO_DISABLE_POSTHOG: '1', CI: '1' },
-  })
-  const backgroundText = backgroundUpdate.stdout + backgroundUpdate.stderr
-  assert.equal(backgroundUpdate.status, 0, backgroundText)
-  assert.equal((backgroundText.match(/Waiting 10 seconds for background TODO list checks to finish/g) ?? []).length, 1, backgroundText)
-  assert.doesNotMatch(backgroundText, /Waiting [1-9] seconds for background TODO list checks to finish/, 'non-interactive output does not count down')
-  assert.match(backgroundText, /\[x\] Done: Add the app-ready code/, 'the printed list includes the background report')
-  assert.match(backgroundText, /\[x\] Done: Install Capgo Updater/, 'the list waits for the updater check too')
-  assert.equal(readFileSync(join(fixture, 'progress-reads'), 'utf8').trim().split('\n').length, 2, 'v3 rereads progress after the worker completes')
+  for (const scenario of ['background-updated', 'background-updated-v4']) {
+    for (const name of ['background-code-updated', 'background-updater-updated', 'progress-reads'])
+      rmSync(join(fixture, name), { force: true })
+    const backgroundUpdate = spawnSync('node', [
+      '--import', preload, builtCli, 'app', 'todo', appId,
+      '-a', options.apikey, '--supa-host', options.supaHost, '--supa-anon', options.supaAnon,
+    ], {
+      cwd: fixture, encoding: 'utf8', timeout: 15_000,
+      env: { ...process.env, CAPGO_TODO_SCENARIO: scenario, CAPGO_DISABLE_TELEMETRY: '1', CAPGO_DISABLE_POSTHOG: '1', CI: '1' },
+    })
+    const backgroundText = backgroundUpdate.stdout + backgroundUpdate.stderr
+    assert.equal(backgroundUpdate.status, 0, backgroundText)
+    assert.match(backgroundText, new RegExp(`Todo list v${scenario === 'background-updated-v4' ? 4 : 3}`))
+    assert.equal((backgroundText.match(/Waiting 10 seconds for background TODO list checks to finish/g) ?? []).length, 1, backgroundText)
+    assert.doesNotMatch(backgroundText, /Waiting [1-9] seconds for background TODO list checks to finish/, 'non-interactive output does not count down')
+    assert.match(backgroundText, /\[x\] Done: Add the app-ready code/, 'the printed list includes the background report')
+    assert.match(backgroundText, /\[x\] Done: Install Capgo Updater/, 'the list waits for the updater check too')
+    assert.equal(readFileSync(join(fixture, 'progress-reads'), 'utf8').trim().split('\n').length, 2, `${scenario} rereads progress after the worker completes`)
+  }
 }
 finally {
   rmSync(fixture, { recursive: true, force: true })

@@ -41,7 +41,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const panelId = useId()
 const { onboarding, refreshError, refreshOnboarding } = useAppOnboardingCliProgress(() => props.appId, () => props.initialOnboarding)
-const steps = computed(() => getAppOnboardingStepIds(onboarding.value.todo_list_version).filter(isAppOnboardingChecklistStep).map((id, index) => ({
+const steps = computed(() => getAppOnboardingStepIds(onboarding.value.todo_list_version, onboarding.value.ota_todo_list_version).filter(isAppOnboardingChecklistStep).map((id, index) => ({
   id,
   index,
   status: onboarding.value.steps[id]?.status,
@@ -49,7 +49,7 @@ const steps = computed(() => getAppOnboardingStepIds(onboarding.value.todo_list_
   description: t(`setup-checklist-description-${id}`),
 })))
 const doneCount = computed(() => steps.value.filter(step => step.status === 'done' || step.status === 'skipped').length)
-const currentStep = computed(() => steps.value.find(step => !step.status))
+const currentStep = computed(() => steps.value.find(step => step.status !== 'done' && step.status !== 'skipped'))
 const selectedId = ref<string | null>(null)
 const selectedStep = computed(() => steps.value.find(step => step.id === selectedId.value) ?? currentStep.value ?? steps.value.at(-1)!)
 const isSelectedCurrent = computed(() => selectedStep.value.id === currentStep.value?.id)

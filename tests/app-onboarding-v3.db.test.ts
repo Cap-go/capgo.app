@@ -2,13 +2,13 @@ import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 import { createClient } from '@supabase/supabase-js'
 import { describe, expect, it } from 'vitest'
-import { APP_ONBOARDING_V3_STEP_IDS, parseAppOnboarding } from '../supabase/functions/_backend/utils/appOnboarding.ts'
+import { APP_ONBOARDING_OTA_V1_STEP_IDS, APP_ONBOARDING_V3_STEP_IDS, parseAppOnboarding } from '../supabase/functions/_backend/utils/appOnboarding.ts'
 
 const admin = createClient(env.SUPABASE_URL!, env.SUPABASE_SERVICE_KEY!, { auth: { persistSession: false, autoRefreshToken: false } })
 
 describe('persisted app checklist v3', () => {
   it.concurrent.each([
-    ['ota', 'A', true, 3], ['ota', 'B', true, 2], ['both', 'A', true, 2], ['builder', 'A', true, 2], ['ota', 'A', false, 2],
+    ['ota', 'A', true, 4], ['ota', 'B', true, 2], ['both', 'A', true, 2], ['builder', 'A', true, 2], ['ota', 'A', false, 2],
   ])('assigns %s/%s with creator-owned org=%s to version %s only at insert', async (intent, branch, ownOrg, expectedVersion) => {
     const email = `onboarding-v3-${randomUUID()}@example.com`
     const created = await admin.auth.admin.createUser({ email, password: 'v3test-password', email_confirm: true })
@@ -35,6 +35,15 @@ describe('persisted app checklist v3', () => {
         const app = await admin.from('apps').insert({ app_id: appId, owner_org: org.data!.id, name: 'Checklist v3', icon_url: '', onboarding: { created_by_user_id: userId, setup: { todo_list_version: 2, steps: {} } } }).select('onboarding').single()
         expect(app.error).toBeNull()
         expect(parseAppOnboarding(app.data!.onboarding).todo_list_version).toBe(expectedVersion)
+        if (expectedVersion === 4) {
+          const setup = (app.data!.onboarding as any).setup
+          expect(setup.ota_todo_list_version).toBe('1')
+          expect(setup.paths).toEqual(['ota'])
+          expect(setup.selected_path).toBe('ota')
+          expect(Object.keys(setup.steps)).toEqual(['ota'])
+          expect(Object.keys(setup.steps.ota).sort()).toEqual([...APP_ONBOARDING_OTA_V1_STEP_IDS].sort())
+          expect(Object.values(setup.steps.ota)).toEqual(Array.from({ length: 7 }, () => ({ status: 'pending' })))
+        }
       }
       expect((await admin.from('users').update({ onboarding: { intent: 'builder', abtests: {} } }).eq('id', userId)).error).toBeNull()
       expect((await admin.from('apps').update({ name: 'Renamed' }).in('app_id', appIds)).error).toBeNull()
@@ -66,5 +75,38 @@ describe('persisted app checklist v3', () => {
     const control = await admin.rpc('merge_app_onboarding_setup', { p_existing: { setup: { todo_list_version: 2 } }, p_patch: { outcome: 'completed' } })
     expect(control.error).toBeNull()
     expect(parseAppOnboarding(control.data).outcome).toBe('completed')
+  })
+
+  it.concurrent('SQL merge keeps all v4 OTA steps and preserves future path data', async () => {
+    const current = { setup: { todo_list_version: 4, ota_todo_list_version: '1', paths: ['ota'], selected_path: 'ota', steps: { ota: Object.fromEntries(APP_ONBOARDING_OTA_V1_STEP_IDS.map(id => [id, { status: 'pending' }])), builder: { placeholder: { status: 'pending' } } } }, features: { ota: { stage: 'local_only' } } }
+    const premature = await admin.rpc('merge_app_onboarding_setup', { p_existing: current, p_patch: { outcome: 'completed', steps: { ota: { add_code: { status: 'done' } } } } })
+    expect(premature.error).toBeNull()
+    expect(premature.data.setup.outcome).toBe('in_progress')
+    expect(premature.data.setup.ota_todo_list_version).toBe('1')
+    expect(premature.data.setup.steps.ota.add_code.status).toBe('done')
+    expect(premature.data.setup.steps.ota.add_channel).toEqual({ status: 'pending' })
+    expect(premature.data.setup.steps.builder).toEqual(current.setup.steps.builder)
+    expect(premature.data.features).toEqual(current.features)
+    const completed = await admin.rpc('merge_app_onboarding_setup', { p_existing: current, p_patch: { steps: Object.fromEntries(APP_ONBOARDING_OTA_V1_STEP_IDS.map(id => [id, { status: 'done' }])) } })
+    expect(completed.error).toBeNull()
+    expect(parseAppOnboarding(completed.data).outcome).toBe('completed')
+  })
+
+  it.concurrent('SQL merge leaves unknown and numeric v4 OTA versions untouched', async () => {
+    for (const version of ['2', 1]) {
+      const current = { setup: { todo_list_version: 4, ota_todo_list_version: version, steps: { ota: { add_code: { status: 'pending' } } } } }
+      const result = await admin.rpc('merge_app_onboarding_setup', { p_existing: current, p_patch: { steps: { add_code: { status: 'done' } }, outcome: 'completed' } })
+      expect(result.error).toBeNull()
+      expect(result.data.setup.ota_todo_list_version).toBe(version)
+      expect(result.data.setup.steps.ota.add_code).toEqual({ status: 'pending' })
+      expect(result.data.setup.paths).toBeUndefined()
+      expect(result.data.setup.outcome).toBe('in_progress')
+    }
+    const builderOnly = { setup: { todo_list_version: 4, outcome: 'completed', paths: ['builder'], selected_path: 'builder', steps: { builder: { configure_signing: { status: 'done' } } } } }
+    const result = await admin.rpc('merge_app_onboarding_setup', { p_existing: builderOnly, p_patch: { steps: { add_code: { status: 'done' } } } })
+    expect(result.error).toBeNull()
+    expect(result.data.setup.outcome).toBe('completed')
+    expect(result.data.setup.paths).toEqual(['builder'])
+    expect(result.data.setup.steps).toEqual(builderOnly.setup.steps)
   })
 })

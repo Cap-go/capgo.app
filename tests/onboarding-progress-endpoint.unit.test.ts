@@ -120,20 +120,47 @@ describe('onboarding progress endpoint', () => {
     expect(mocks.from).not.toHaveBeenCalledWith('app_versions')
     expect(mocks.execute).not.toHaveBeenCalled()
   })
-  it('returns v3 CLI start as done in the same API-key request with read-only app access', async () => {
+  it.each([3, 4])('returns v%s CLI start as done in the same API-key request with read-only app access', async (todoListVersion) => {
     mocks.auth = { authType: 'apikey', userId: 'other-user', apikey: { key: 'fixture-key' } }
-    mocks.row.onboarding = { created_by_user_id: 'creator', setup: { todo_list_version: 3, source: 'ai', steps: {} } }
+    mocks.row.onboarding = {
+      created_by_user_id: 'creator',
+      setup: {
+        todo_list_version: todoListVersion,
+        source: 'ai',
+        ...(todoListVersion === 4 ? { ota_todo_list_version: '1', paths: ['ota'] } : {}),
+        steps: todoListVersion === 4 ? { ota: { login_cli_mcp: { status: 'pending' }, add_channel: { status: 'pending' } } } : {},
+      },
+    }
     lockedRow(mocks.row.onboarding)
     mocks.permissionPg.mockImplementation(async (_c, permission) => permission === 'app.read')
 
     const response = await request(4)
     const result = await response.json() as any
-    expect(result.onboarding.setup.steps.login_cli_mcp.status).toBe('done')
-    expect(Object.keys(result.onboarding.setup.steps)).toEqual(['login_cli_mcp'])
+    const steps = todoListVersion === 4 ? result.onboarding.setup.steps.ota : result.onboarding.setup.steps
+    expect(steps.login_cli_mcp.status).toBe('done')
+    if (todoListVersion === 4) {
+      expect(steps.add_channel).toEqual({ status: 'pending' })
+      expect(result.onboarding.setup.steps.login_cli_mcp).toBeUndefined()
+      expect(result.onboarding.setup.paths).toEqual(['ota'])
+    }
+    else {
+      expect(Object.keys(steps)).toEqual(['login_cli_mcp'])
+    }
     expect(result.onboarding.setup.source).toBe('cli')
     expect(mocks.permission).toHaveBeenCalledWith(expect.anything(), 'app.read', { appId: 'com.test.onboarding' })
     expect(mocks.permissionPg).toHaveBeenCalledWith(expect.anything(), 'app.read', { appId: 'com.test.onboarding' }, expect.anything(), 'other-user', 'fixture-key')
     expect(mocks.execute).toHaveBeenCalledTimes(5)
+  })
+  it('keeps v4 channel progress pending when an API key has read-only app access', async () => {
+    mocks.auth = { authType: 'apikey', userId: 'other-user', apikey: { key: 'fixture-key' } }
+    mocks.row.onboarding = { setup: { todo_list_version: 4, ota_todo_list_version: '1', paths: ['ota'], steps: { ota: { login_cli_mcp: { status: 'pending' }, add_channel: { status: 'pending' } } } } }
+    mocks.channels = [{ id: 'channel' }]
+    lockedRow(mocks.row.onboarding)
+    mocks.permissionPg.mockImplementation(async (_c, permission) => permission === 'app.read')
+
+    const result = await (await request(0)).json() as any
+    expect(result.onboarding.setup.steps.ota.login_cli_mcp.status).toBe('done')
+    expect(result.onboarding.setup.steps.ota.add_channel.status).toBe('pending')
   })
   it('does not mark CLI start for JWT requests, revoked API keys, or v2 apps', async () => {
     mocks.row.onboarding = { created_by_user_id: 'creator', setup: { todo_list_version: 3, steps: {} } }
@@ -157,6 +184,13 @@ describe('onboarding progress endpoint', () => {
     mocks.auth = { authType: 'apikey', userId: 'creator', apikey: { key: 'creator-key' } }
     mocks.row.onboarding.setup.todo_list_version = 2
     expect(((await (await request(4)).json()) as any).onboarding).toEqual(mocks.row.onboarding)
+    expect(mocks.execute).not.toHaveBeenCalled()
+  })
+  it.each(['2', 1])('does not update unsupported v4 OTA version %s', async (otaVersion) => {
+    mocks.auth = { authType: 'apikey', userId: 'other-user', apikey: { key: 'fixture-key' } }
+    mocks.row.onboarding = { setup: { todo_list_version: 4, ota_todo_list_version: otaVersion, steps: { ota: { login_cli_mcp: { status: 'pending' } } } } }
+    const result = await (await request(4)).json() as any
+    expect(result.onboarding).toEqual(mocks.row.onboarding)
     expect(mocks.execute).not.toHaveBeenCalled()
   })
   it('does not expose app existence or logs/devices without permission', async () => {
@@ -187,6 +221,28 @@ describe('onboarding progress endpoint', () => {
     lockedRow(onboarding)
     const context = contextFor({ userId: 'user', authType: 'jwt' })
     expect((await persistObservedProgress(context, 'com.test.onboarding', { add_channel: false }) as any).setup.steps.add_channel).toBeUndefined()
+  })
+  it('returns a deleted v4 channel to pending without removing its OTA step', async () => {
+    const onboarding = { setup: { todo_list_version: 4, ota_todo_list_version: '1', paths: ['ota'], steps: { ota: { add_channel: { status: 'done' }, add_code: { status: 'pending' } } } } }
+    lockedRow(onboarding)
+    const context = contextFor({ userId: 'user', authType: 'jwt' })
+    const result = await persistObservedProgress(context, 'com.test.onboarding', { add_channel: false }) as any
+    expect(result.setup.steps.ota.add_channel).toEqual({ status: 'pending' })
+    expect(result.setup.steps.ota.add_code).toEqual({ status: 'pending' })
+    expect(result.setup.paths).toEqual(['ota'])
+  })
+  it('does not rewrite a v4 channel step that is already pending', async () => {
+    const onboarding = { setup: { todo_list_version: 4, ota_todo_list_version: '1', paths: ['ota'], steps: { ota: { add_channel: { status: 'pending' } } } } }
+    lockedRow(onboarding)
+    expect(await persistObservedProgress(contextFor({ userId: 'user', authType: 'jwt' }), 'com.test.onboarding', { add_channel: false })).toBeUndefined()
+    expect(mocks.execute).toHaveBeenCalledTimes(3)
+  })
+  it('records observed v4 milestones in the OTA path', async () => {
+    const onboarding = { setup: { todo_list_version: 4, ota_todo_list_version: '1', steps: { ota: {} } } }
+    lockedRow(onboarding)
+    const result = await persistObservedProgress(contextFor({ userId: 'user', authType: 'jwt' }), 'com.test.onboarding', { run_device: true }) as any
+    expect(result.setup.steps.ota.run_device.status).toBe('done')
+    expect(result.setup.steps.run_device).toBeUndefined()
   })
   it('preserves the request key for hashed RBAC keys on both write-permission paths', async () => {
     lockedRow(mocks.row.onboarding)

@@ -185,7 +185,9 @@ describe('/login-cli page contract', () => {
     expect(page).toContain('route.query.intent')
     expect(page).toContain('buildCliAiSetupPrompt({')
     expect(page).toContain('organizationStore.getAppsByOrgId(organization.gid)')
-    expect(page).toContain('todoListVersion: parseAppOnboarding(app.onboarding).todo_list_version')
+    expect(page).toContain('const onboarding = parseAppOnboarding(app.onboarding)')
+    expect(page).toContain('todoListVersion: onboarding.todo_list_version')
+    expect(page).toContain('otaTodoListVersion: onboarding.ota_todo_list_version')
     expect(page).toContain('eligibleIds.has(organization.gid)')
     expect(page).toContain('await navigator.clipboard.writeText(aiPrompt.value)')
     expect(page).toContain(`v-if="aiMode"`)
@@ -245,7 +247,7 @@ describe('/login-cli page contract', () => {
     await flushPromises()
 
     const copiedPrompt = clipboardWrite.mock.calls[0]?.[0] as string
-    expect(copiedPrompt).toContain('Todo list v3 progress checks')
+    expect(copiedPrompt).toContain('OTA todo list progress checks')
     expect(copiedPrompt).toContain('app todo {SELECTED_CAPGO_APP_ID}')
   })
 

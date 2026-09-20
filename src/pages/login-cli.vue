@@ -153,11 +153,15 @@ async function prepare(): Promise<void> {
       .map(organization => ({
         id: organization.gid,
         name: organization.name,
-        apps: organizationStore.getAppsByOrgId(organization.gid).map(app => ({
-          appId: app.app_id,
-          name: app.name,
-          todoListVersion: parseAppOnboarding(app.onboarding).todo_list_version,
-        })),
+        apps: organizationStore.getAppsByOrgId(organization.gid).map((app) => {
+          const onboarding = parseAppOnboarding(app.onboarding)
+          return {
+            appId: app.app_id,
+            name: app.name,
+            todoListVersion: onboarding.todo_list_version,
+            otaTodoListVersion: onboarding.ota_todo_list_version,
+          }
+        }),
       }))
     aiPromptSkippedOrganizations.value = organizationStore.organizations
       .filter(organization => !eligibleIds.has(organization.gid))

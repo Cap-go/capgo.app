@@ -6,7 +6,7 @@ import { sql } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
 import { buildAppOnboardingStepPosthogEvent } from '../utils/app_onboarding_posthog.ts'
-import { appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardingStepHistoryChanges, parseAppOnboarding, pickAppOnboardingSource } from '../utils/appOnboarding.ts'
+import { appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardingStepHistoryChanges, hasSupportedOtaTodoList, parseAppOnboarding, pickAppOnboardingSource } from '../utils/appOnboarding.ts'
 import { lockAppOnboardingForWrite, retryAppOnboardingWrite } from '../utils/appOnboardingWriteLock.ts'
 import { parseBody, quickError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
@@ -56,7 +56,7 @@ export async function persistObservedProgress(c: Context<MiddlewareKeyVariables>
   try {
     const result = await retryAppOnboardingWrite(getDrizzleClient(pool, { logger: false }), async (tx) => {
       const row = await lockAppOnboardingForWrite(tx, appId)
-      if (!row || parseAppOnboarding(row.onboarding).todo_list_version !== 3)
+      if (!row || !hasSupportedOtaTodoList(parseAppOnboarding(row.onboarding)))
         return null
       const key = auth.apikey?.key ?? c.get('capgkey') ?? null
       const canMarkCliStart = observations.login_cli_mcp === true
@@ -80,15 +80,20 @@ export async function persistObservedProgress(c: Context<MiddlewareKeyVariables>
         if (present && current.steps[id]?.status !== 'done')
           patch.steps![id] = { status: 'done', at }
       }
-      const removeChannel = canWriteObservations && observations.add_channel === false && !!current.steps.add_channel
+      const removeChannel = canWriteObservations && observations.add_channel === false && current.steps.add_channel?.status === 'done'
       const sourceChanged = canMarkCliStart && pickAppOnboardingSource(current.source, 'cli') !== current.source
       if (!removeChannel && Object.keys(patch.steps!).length === 0 && !sourceChanged)
         return null
       const base = applyAppOnboardingPatch(row.onboarding, {}, () => at)
       const setup = base.setup as Record<string, unknown>
-      const steps = setup.steps as Record<string, unknown>
-      if (removeChannel)
-        delete steps.add_channel
+      const stepPaths = setup.steps as Record<string, unknown>
+      const steps = current.todo_list_version === 4 ? stepPaths.ota as Record<string, unknown> : stepPaths
+      if (removeChannel) {
+        if (current.todo_list_version === 4)
+          steps.add_channel = { status: 'pending' }
+        else
+          delete steps.add_channel
+      }
       const merged = applyAppOnboardingPatch(base, patch, () => at)
       const onboarding = appendAppOnboardingStepHistory(row.onboarding, merged, patch, () => at)
       const historyChanges = getAppOnboardingStepHistoryChanges(row.onboarding, onboarding, patch)
@@ -129,7 +134,7 @@ app.post('/', middlewareAuth({ preferApiKey: true }), async (c) => {
   const current = parseAppOnboarding(row.onboarding)
   const observations: Observations = {}
   const checkErrors: string[] = []
-  if (current.todo_list_version === 3 && c.get('auth')?.authType === 'apikey')
+  if (hasSupportedOtaTodoList(current) && c.get('auth')?.authType === 'apikey')
     observations.login_cli_mcp = true
   const due = (slot: number) => initial || N % 5 === slot
   async function check(id: keyof Observations, permission: Permission, action: () => Promise<boolean>) {
@@ -151,7 +156,7 @@ app.post('/', middlewareAuth({ preferApiKey: true }), async (c) => {
       return !!result.data?.length
     })
   }
-  const observeMilestones = current.todo_list_version === 3 && current.outcome !== 'skipped'
+  const observeMilestones = hasSupportedOtaTodoList(current) && current.outcome !== 'skipped'
   if (observeMilestones && due(1) && current.steps.run_device?.status !== 'done') {
     await check('run_device', 'app.read_devices', async () => {
       return (await readDevices(c, { app_id: appId, limit: 1 }, false)).data.some(device => !!device.device_id)
@@ -161,7 +166,7 @@ app.post('/', middlewareAuth({ preferApiKey: true }), async (c) => {
     await check('upload_bundle', 'app.read', () => hasPublishedBundle(client, appId))
   if (observeMilestones && due(3) && current.steps.test_update?.status !== 'done')
     await check('test_update', 'app.read_logs', () => hasAppliedBundle(c, client, appId, row.created_at))
-  const onboarding = current.todo_list_version === 3 && Object.keys(observations).length
+  const onboarding = observeMilestones && Object.keys(observations).length
     ? await persistObservedProgress(c, appId, observations) ?? row.onboarding
     : row.onboarding
   c.header('Cache-Control', 'no-store')

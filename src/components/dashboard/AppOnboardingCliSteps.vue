@@ -17,10 +17,10 @@ const { t } = useI18n()
 const isOpen = ref(false)
 const { onboarding } = useAppOnboardingCliProgress(() => props.appId, () => props.initialOnboarding)
 
-const steps = computed(() => getAppOnboardingStepIds(onboarding.value.todo_list_version).map(id => ({
+const steps = computed(() => getAppOnboardingStepIds(onboarding.value.todo_list_version, onboarding.value.ota_todo_list_version).map(id => ({
   id,
   status: onboarding.value.steps[id]?.status as AppOnboardingStepStatus | undefined,
-  title: t(onboarding.value.todo_list_version === 3 ? `setup-checklist-step-${id}` : `app-onboarding-cli-step-${id}`),
+  title: t([3, 4].includes(onboarding.value.todo_list_version) ? `setup-checklist-step-${id}` : `app-onboarding-cli-step-${id}`),
 })))
 
 const doneCount = computed(() => steps.value.filter(step => step.status === 'done' || step.status === 'skipped').length)
@@ -41,6 +41,7 @@ function statusLabel(status: AppOnboardingStepStatus | undefined) {
 
 <template>
   <div
+    v-if="steps.length"
     class="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50/80 dark:border-white/15 dark:bg-slate-950/90"
     data-test="app-onboarding-cli-steps"
   >
@@ -53,7 +54,7 @@ function statusLabel(status: AppOnboardingStepStatus | undefined) {
     >
       <span class="min-w-0">
         <span class="block text-sm font-medium text-slate-950 dark:text-white">
-          {{ t(onboarding.todo_list_version === 3 ? 'setup-checklist-list-title' : 'app-onboarding-cli-steps-title') }}
+          {{ t([3, 4].includes(onboarding.todo_list_version) ? 'setup-checklist-list-title' : 'app-onboarding-cli-steps-title') }}
         </span>
         <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">
           {{ t('app-onboarding-cli-steps-progress', { done: doneCount, total: steps.length }) }}
@@ -72,7 +73,7 @@ function statusLabel(status: AppOnboardingStepStatus | undefined) {
       class="border-t border-slate-200 px-4 py-3 dark:border-white/10"
     >
       <p class="mb-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
-        {{ t(onboarding.todo_list_version === 3 ? 'setup-checklist-list-subtitle' : 'app-onboarding-cli-steps-subtitle') }}
+        {{ t([3, 4].includes(onboarding.todo_list_version) ? 'setup-checklist-list-subtitle' : 'app-onboarding-cli-steps-subtitle') }}
       </p>
       <ol class="space-y-2">
         <li

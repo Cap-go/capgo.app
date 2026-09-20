@@ -1,4 +1,4 @@
-import { parseAppOnboarding } from '~/services/appOnboarding'
+import { hasSupportedOtaTodoList, parseAppOnboarding } from '~/services/appOnboarding'
 import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 
 // August uses Central European Summer Time (UTC+2).
@@ -167,7 +167,7 @@ export function dismissOnboardingExplorationReminder(userId: string) {
 }
 
 export function getAppSetupRedirect(app: { app_id: string, onboarding?: unknown }) {
-  if (parseAppOnboarding(app.onboarding).todo_list_version !== 3)
+  if (!hasSupportedOtaTodoList(parseAppOnboarding(app.onboarding)))
     return null
   return { path: '/onboarding/app', query: { resume: app.app_id, step: 'setup' } }
 }

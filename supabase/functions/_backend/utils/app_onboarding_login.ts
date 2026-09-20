@@ -36,7 +36,7 @@ export async function markAppOnboardingLoginFromTracking(
         SELECT app_id, onboarding, owner_org
         FROM public.apps
         WHERE onboarding ->> 'created_by_user_id' = ${auth.userId}
-          AND onboarding #>> '{setup,todo_list_version}' IN ('2', '3')
+          AND onboarding #>> '{setup,todo_list_version}' IN ('2', '3', '4')
         FOR UPDATE
       `)
       const changes = []
