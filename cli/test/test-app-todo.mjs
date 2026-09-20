@@ -159,7 +159,7 @@ try {
       }
       if (url.includes('/private/config')) return Response.json({ supaHost: ${JSON.stringify(options.supaHost)}, supaKey: ${JSON.stringify(options.supaAnon)} })
       if (url.includes('/rpc/reject_access_due_to_2fa_for_app')) return Response.json(scenario === 'two-factor')
-      if (scenario === 'background-updated' && init?.method === 'PUT' && url.endsWith('/app/${appId}')) {
+      if (scenario?.startsWith('background-updated') && init?.method === 'PUT' && url.endsWith('/app/${appId}')) {
         await new Promise(resolve => setTimeout(resolve, 700))
         const steps = JSON.parse(init.body).onboarding.steps
         if (steps.add_code) writeFileSync(codeMarker, 'done')
@@ -167,7 +167,7 @@ try {
         return Response.json({ status: 'ok' })
       }
       if (url.includes('/private/onboarding_progress')) {
-        if (scenario === 'background-updated' && isMainThread) appendFileSync(progressReads, 'read\\n')
+        if (scenario?.startsWith('background-updated') && isMainThread) appendFileSync(progressReads, 'read\\n')
         if (scenario === 'denied') return Response.json({ error: 'app_access_denied' }, { status: 403 })
         if (scenario === 'missing') return Response.json({ error: 'app_not_found' }, { status: 404 })
         if (scenario === 'failed') return Response.json({ error: 'database_unavailable' }, { status: 500 })
@@ -176,9 +176,15 @@ try {
         if (scenario === 'partial') progress.checkErrors = ['run_device']
         if (scenario === 'v2') progress.onboarding.setup.todo_list_version = 2
         if (scenario === 'empty') progress.onboarding = null
-        if (scenario === 'background-updated') {
-          progress.onboarding.setup.steps.add_code.status = existsSync(codeMarker) ? 'done' : 'pending'
-          progress.onboarding.setup.steps.add_updater.status = existsSync(updaterMarker) ? 'done' : 'pending'
+        if (scenario?.startsWith('background-updated')) {
+          if (scenario === 'background-updated-v4') {
+            progress.onboarding.setup.todo_list_version = 4
+            progress.onboarding.setup.ota_todo_list_version = '1'
+            progress.onboarding.setup.steps = { ota: progress.onboarding.setup.steps }
+          }
+          const steps = scenario === 'background-updated-v4' ? progress.onboarding.setup.steps.ota : progress.onboarding.setup.steps
+          steps.add_code.status = existsSync(codeMarker) ? 'done' : 'pending'
+          steps.add_updater.status = existsSync(updaterMarker) ? 'done' : 'pending'
         }
         return Response.json(progress)
       }
@@ -242,20 +248,25 @@ try {
   writeFileSync(join(fixture, 'node_modules/@capgo/capacitor-updater/package.json'), JSON.stringify({ name: '@capgo/capacitor-updater', version: '8.0.0' }))
   mkdirSync(join(fixture, 'src'))
   writeFileSync(join(fixture, 'src/main.ts'), "import { CapacitorUpdater } from '@capgo/capacitor-updater'; CapacitorUpdater.notifyAppReady()")
-  const backgroundUpdate = spawnSync('node', [
-    '--import', preload, builtCli, 'app', 'todo', appId,
-    '-a', options.apikey, '--supa-host', options.supaHost, '--supa-anon', options.supaAnon,
-  ], {
-    cwd: fixture, encoding: 'utf8', timeout: 15_000,
-    env: { ...process.env, CAPGO_TODO_SCENARIO: 'background-updated', CAPGO_DISABLE_TELEMETRY: '1', CAPGO_DISABLE_POSTHOG: '1', CI: '1' },
-  })
-  const backgroundText = backgroundUpdate.stdout + backgroundUpdate.stderr
-  assert.equal(backgroundUpdate.status, 0, backgroundText)
-  assert.equal((backgroundText.match(/Waiting 10 seconds for background TODO list checks to finish/g) ?? []).length, 1, backgroundText)
-  assert.doesNotMatch(backgroundText, /Waiting [1-9] seconds for background TODO list checks to finish/, 'non-interactive output does not count down')
-  assert.match(backgroundText, /\[x\] Done: Add the app-ready code/, 'the printed list includes the background report')
-  assert.match(backgroundText, /\[x\] Done: Install Capgo Updater/, 'the list waits for the updater check too')
-  assert.equal(readFileSync(join(fixture, 'progress-reads'), 'utf8').trim().split('\n').length, 2, 'v3 rereads progress after the worker completes')
+  for (const scenario of ['background-updated', 'background-updated-v4']) {
+    for (const name of ['background-code-updated', 'background-updater-updated', 'progress-reads'])
+      rmSync(join(fixture, name), { force: true })
+    const backgroundUpdate = spawnSync('node', [
+      '--import', preload, builtCli, 'app', 'todo', appId,
+      '-a', options.apikey, '--supa-host', options.supaHost, '--supa-anon', options.supaAnon,
+    ], {
+      cwd: fixture, encoding: 'utf8', timeout: 15_000,
+      env: { ...process.env, CAPGO_TODO_SCENARIO: scenario, CAPGO_DISABLE_TELEMETRY: '1', CAPGO_DISABLE_POSTHOG: '1', CI: '1' },
+    })
+    const backgroundText = backgroundUpdate.stdout + backgroundUpdate.stderr
+    assert.equal(backgroundUpdate.status, 0, backgroundText)
+    assert.match(backgroundText, new RegExp(`Todo list v${scenario === 'background-updated-v4' ? 4 : 3}`))
+    assert.equal((backgroundText.match(/Waiting 10 seconds for background TODO list checks to finish/g) ?? []).length, 1, backgroundText)
+    assert.doesNotMatch(backgroundText, /Waiting [1-9] seconds for background TODO list checks to finish/, 'non-interactive output does not count down')
+    assert.match(backgroundText, /\[x\] Done: Add the app-ready code/, 'the printed list includes the background report')
+    assert.match(backgroundText, /\[x\] Done: Install Capgo Updater/, 'the list waits for the updater check too')
+    assert.equal(readFileSync(join(fixture, 'progress-reads'), 'utf8').trim().split('\n').length, 2, `${scenario} rereads progress after the worker completes`)
+  }
 }
 finally {
   rmSync(fixture, { recursive: true, force: true })

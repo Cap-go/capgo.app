@@ -239,7 +239,8 @@ export async function appTodo(appId: string | undefined, options: Partial<Option
       log.error(error.message)
     throw error
   }
-  const checks = getAppTodoSteps(progress).version === 3 ? backgroundChecks : []
+  const { version, steps } = getAppTodoSteps(progress)
+  const checks = version === 3 || (version === 4 && steps.length > 0) ? backgroundChecks : []
   if (checks.length) {
     const waiting = stdin.isTTY && stdout.isTTY ? spinner() : null
     const waitMessage = (seconds: number) => `Waiting ${seconds} seconds for background TODO list checks to finish`
