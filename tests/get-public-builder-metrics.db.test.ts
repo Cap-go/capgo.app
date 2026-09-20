@@ -84,6 +84,7 @@ beforeAll(async () => {
       upload_url: 'https://example.com/ios-pending',
       upload_expires_at: completedAt,
       created_at: now.toISOString(),
+      runner_wait_seconds: 0,
     },
   ]
 
