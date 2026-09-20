@@ -1,4 +1,4 @@
-import type { AnalyticsEngineDataset, D1Database, Hyperdrive, KVNamespace, Queue } from '@cloudflare/workers-types'
+import type { AnalyticsEngineDataset, D1Database, Hyperdrive, KVNamespace, Queue, SendEmail } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
 import type { DeviceComparable } from './deviceComparison.ts'
 import type { StatsInsightRawAction, StatsInsightRawDaily, StatsInsightRawDevice, StatsInsightRawSummary, StatsInsightRawVersion } from './statsInsights.ts'
@@ -63,6 +63,7 @@ export type Bindings = {
   NOTIFICATION_EVENTS?: AnalyticsEngineDataset
   CLI_USAGE?: AnalyticsEngineDataset
   NOTIFICATION_QUEUE?: Queue
+  AUTH_EMAIL?: SendEmail
   DB_STOREAPPS: D1Database
   CHANNEL_SELF_STORE?: KVNamespace
   PLUGIN_NOTIFICATION_QUEUE?: KVNamespace
