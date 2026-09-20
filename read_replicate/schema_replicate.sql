@@ -892,6 +892,13 @@ CREATE INDEX idx_apps_onboarding_ota_stage ON public.apps USING btree (((((onboa
 
 
 --
+-- Name: idx_apps_onboarding_queued_refresh_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_apps_onboarding_queued_refresh_at ON public.apps USING btree (COALESCE((onboarding ->> 'queued_refresh_at'::text), ''::text), COALESCE((onboarding ->> 'refreshed_at'::text), ''::text), app_id);
+
+
+--
 -- Name: idx_apps_onboarding_refreshed_at; Type: INDEX; Schema: public; Owner: -
 --
 
