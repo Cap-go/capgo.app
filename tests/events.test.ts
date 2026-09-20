@@ -3,7 +3,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   APP_NAME,
   BASE_URL,
-  fetchTestRequest,
   getAuthHeaders,
   getEndpointUrl,
   headers,
@@ -30,10 +29,8 @@ afterAll(async () => {
 
 describe('[POST] /private/events operations', () => {
   it('track event with apikey', async () => {
-    const response = await fetchTestRequest(`${BASE_URL}/private/events`, {
+    const response = await fetch(`${BASE_URL}/private/events`, {
       method: 'POST',
-      // A duplicate synthetic event is harmless if workerd restarts after dispatch.
-      retryUnsafe: true,
       headers: {
         capgkey: headers.Authorization,
       },

@@ -1,88 +1,69 @@
--- Operational leases keep producer retries from duplicating app work. Expired
--- leases are replaced after 30 minutes; stale message tokens cannot write.
-CREATE TABLE public.app_onboarding_refresh_jobs (
-    app_id varchar PRIMARY KEY REFERENCES public.apps (
-        app_id
-    ) ON DELETE CASCADE,
-    batch_token uuid NOT NULL,
-    enqueued_at timestamptz NOT NULL DEFAULT now()
-);
-ALTER TABLE public.app_onboarding_refresh_jobs OWNER TO postgres;
-ALTER TABLE public.app_onboarding_refresh_jobs ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON TABLE public.app_onboarding_refresh_jobs FROM public,
-anon,
-authenticated;
-GRANT ALL ON TABLE public.app_onboarding_refresh_jobs TO service_role;
-CREATE POLICY app_onboarding_refresh_jobs_service
-ON public.app_onboarding_refresh_jobs
-FOR ALL TO service_role USING (true) WITH CHECK (true);
-CREATE POLICY app_onboarding_refresh_jobs_deny_clients
-ON public.app_onboarding_refresh_jobs
-AS RESTRICTIVE FOR ALL TO anon, authenticated USING (false) WITH CHECK (false);
-
--- These ordered owning-app indexes bound first/last lookups in the worker.
-CREATE INDEX idx_app_versions_onboarding_created ON public.app_versions (
-    app_id, created_at
-)
-WHERE deleted IS NOT true
-AND name IS DISTINCT FROM 'builtin'
-AND name IS DISTINCT FROM 'unknown';
-CREATE INDEX idx_build_requests_onboarding_success ON public.build_requests (
-    app_id, completed_at
-)
-WHERE status IN ('succeeded', 'released') AND completed_at IS NOT null;
-CREATE INDEX idx_build_requests_onboarding_used ON public.build_requests (
-    app_id, (coalesce(completed_at, created_at))
+-- Scheduling state lives alongside the existing feature ledger. Never-queued
+-- apps sort first; a stuck message can be re-enqueued after 30 minutes.
+CREATE INDEX idx_apps_onboarding_queued_refresh_at
+ON public.apps (
+  (coalesce(onboarding->>'queued_refresh_at', '')),
+  (coalesce(onboarding->>'refreshed_at', '')),
+  app_id
 );
 
 SELECT pgmq.create('cron_onboarding_refresh_apps');
 
 CREATE OR REPLACE FUNCTION public.enqueue_app_onboarding_refreshes(
-    p_limit integer DEFAULT 3000
+    p_limit integer DEFAULT 500
 )
 RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 DECLARE
   v_batch record;
-  v_token uuid;
+  v_queued_at text := pg_catalog.to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
   v_total integer := 0;
-  v_limit integer := GREATEST(1, LEAST(COALESCE(p_limit, 3000), 3000));
+  v_limit integer := GREATEST(1, LEAST(COALESCE(p_limit, 500), 500));
 BEGIN
   IF NOT pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtext('app_onboarding_refresh_producer')) THEN
     RETURN 0;
   END IF;
   FOR v_batch IN
     WITH candidates AS MATERIALIZED (
-      SELECT a.app_id
+      SELECT a.app_id, a.onboarding->>'queued_refresh_at' AS queued_at
       FROM public.apps a
       WHERE COALESCE(a.onboarding->>'refreshed_at', '') < pg_catalog.to_char((now() - interval '10 minutes') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
-        AND NOT EXISTS (SELECT 1 FROM public.app_onboarding_refresh_jobs j WHERE j.app_id = a.app_id AND j.enqueued_at > now() - interval '30 minutes')
-      ORDER BY COALESCE(a.onboarding->>'refreshed_at', ''), a.app_id
+        AND (
+          COALESCE(a.onboarding->>'queued_refresh_at', '') <= COALESCE(a.onboarding->>'refreshed_at', '')
+          OR a.onboarding->>'queued_refresh_at' < pg_catalog.to_char((now() - interval '30 minutes') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+        )
+        AND COALESCE((
+          SELECT si.status = 'succeeded' OR si.trial_at > now()
+            OR EXISTS (
+              SELECT 1 FROM public.usage_credit_grants g
+              WHERE g.org_id = a.owner_org AND g.expires_at >= now()
+                AND g.credits_total > g.credits_consumed
+            )
+          FROM public.orgs o
+          LEFT JOIN public.stripe_info si ON si.customer_id = o.customer_id
+          WHERE o.id = a.owner_org
+        ), false)
+      ORDER BY COALESCE(a.onboarding->>'queued_refresh_at', ''), COALESCE(a.onboarding->>'refreshed_at', ''), a.app_id
       LIMIT v_limit FOR UPDATE OF a SKIP LOCKED
     ),
-    -- Keep unusually long IDs in single-app messages so escaped Analytics
-    -- Engine filters stay within the worker's query-size budget.
+    queued AS (
+      UPDATE public.apps a
+      SET onboarding = pg_catalog.jsonb_set(a.onboarding, '{queued_refresh_at}', pg_catalog.to_jsonb(v_queued_at), true)
+      FROM candidates c WHERE a.app_id = c.app_id
+      RETURNING a.app_id, c.queued_at
+    ),
     numbered AS (
-      SELECT app_id,
-        pg_catalog.octet_length(app_id) > 128 AS long_id,
-        pg_catalog.row_number() OVER (
-          PARTITION BY pg_catalog.octet_length(app_id) > 128 ORDER BY app_id
-        ) - 1 AS ordinal
-      FROM candidates
+      SELECT app_id, pg_catalog.row_number() OVER (
+        ORDER BY COALESCE(queued_at, ''), app_id
+      ) - 1 AS ordinal FROM queued
     ), batches AS (
-      SELECT app_id, long_id,
-        CASE WHEN long_id THEN ordinal ELSE ordinal / 20 END AS batch
-      FROM numbered
+      SELECT app_id, ordinal / 25 AS batch FROM numbered
     )
     SELECT pg_catalog.array_agg(app_id ORDER BY app_id) AS app_ids
-    FROM batches GROUP BY long_id, batch ORDER BY long_id, batch
+    FROM batches GROUP BY batch ORDER BY batch
   LOOP
-    v_token := pg_catalog.gen_random_uuid();
-    INSERT INTO public.app_onboarding_refresh_jobs(app_id, batch_token, enqueued_at)
-      SELECT app_id, v_token, now() FROM pg_catalog.unnest(v_batch.app_ids) AS ids(app_id)
-      ON CONFLICT (app_id) DO UPDATE SET batch_token = EXCLUDED.batch_token, enqueued_at = EXCLUDED.enqueued_at;
     PERFORM pgmq.send('cron_onboarding_refresh_apps', pg_catalog.jsonb_build_object(
       'function_name', 'cron_onboarding_refresh_apps', 'function_type', 'cloudflare',
-      'payload', pg_catalog.jsonb_build_object('appIds', v_batch.app_ids, 'batchToken', v_token)));
+      'payload', pg_catalog.jsonb_build_object('appIds', v_batch.app_ids, 'queuedAt', v_queued_at)));
     v_total := v_total + pg_catalog.cardinality(v_batch.app_ids);
   END LOOP;
   RETURN v_total;
@@ -100,9 +81,8 @@ GRANT EXECUTE ON FUNCTION public.enqueue_app_onboarding_refreshes(
     integer
 ) TO service_role;
 COMMENT ON FUNCTION public.enqueue_app_onboarding_refreshes(integer) IS
-'Internal producer: at most 3000 oldest due apps, indexed refresh ordering
-and per-app lease PK lookups. Enqueues batches of at most 20,
-atomically with leases.';
+'Internal producer: at most 500 due apps from paying, trial, or credited orgs.
+Updates queued_refresh_at and enqueues batches of at most 25 atomically.';
 
 -- Reuse the existing scheduler; do not add a pg_cron job.
 UPDATE public.cron_tasks SET
@@ -131,9 +111,9 @@ VALUES
     'onboarding_refresh_apps_queue',
     'function_queue',
     '["cron_onboarding_refresh_apps"]',
-    15,
+    4,
     1,
-    'Consume 15 batches of 20 apps per minute (300 apps maximum)'
+    'Consume 4 batches of 25 apps per minute (100 apps maximum)'
 );
 
 CREATE OR REPLACE FUNCTION public.process_function_queue(
@@ -155,7 +135,7 @@ BEGIN
 
   IF queue_size > 0 THEN
     IF onboarding_queue THEN
-      batch_size := LEAST(batch_size, 15);
+      batch_size := LEAST(batch_size, 4);
     END IF;
     headers := pg_catalog.jsonb_build_object(
       'Content-Type', 'application/json',

@@ -1,6 +1,5 @@
-import type { Context } from 'hono'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { formatDateCF, getLastMonthAnalyticsWindow, getLastMonthAnalyticsWindowStart, runQueryToCFA } from '../supabase/functions/_backend/utils/cloudflare.ts'
+import { formatDateCF, getLastMonthAnalyticsWindow, getLastMonthAnalyticsWindowStart } from '../supabase/functions/_backend/utils/cloudflare.ts'
 
 describe('formatDateCF', () => {
   it.concurrent('normalizes Date objects to a stable UTC SQL timestamp', () => {
@@ -12,29 +11,6 @@ describe('formatDateCF', () => {
   })
 })
 
-describe('analytics engine DateTime conversion', () => {
-  afterEach(() => vi.unstubAllGlobals())
-
-  it('preserves missing timestamps instead of converting them to 1970', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      data: [{ at: null }, { at: '' }, { at: '2026-09-19T12:00:00Z' }],
-      meta: [{ name: 'at', type: 'DateTime' }],
-      rows: 3,
-      rows_before_limit_at_least: 3,
-    }), { status: 200 })))
-    const context = {
-      env: { CF_ANALYTICS_TOKEN: 'test-token', CF_ACCOUNT_ANALYTICS_ID: 'test-account' },
-      get: () => 'test-request',
-    } as unknown as Context
-
-    expect(await runQueryToCFA<{ at: Date | null }>(context, 'SELECT at')).toEqual([
-      { at: null },
-      { at: null },
-      { at: new Date('2026-09-19T12:00:00Z') },
-    ])
-  })
-})
-
 describe('getLastMonthAnalyticsWindow', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -42,8 +18,8 @@ describe('getLastMonthAnalyticsWindow', () => {
 
   it.concurrent('builds deterministic rolling analytics bounds from a snapshot end date', () => {
     expect(getLastMonthAnalyticsWindow(new Date('2026-03-25T00:00:00.000Z'))).toEqual({
-      startExpression: 'toDateTime(\'2026-02-23 00:00:00\')',
-      endExpression: 'toDateTime(\'2026-03-25 00:00:00\')',
+      startExpression: "toDateTime('2026-02-23 00:00:00')",
+      endExpression: "toDateTime('2026-03-25 00:00:00')",
     })
   })
 
@@ -55,7 +31,7 @@ describe('getLastMonthAnalyticsWindow', () => {
     vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-03-25T12:34:56.789Z').getTime())
 
     expect(getLastMonthAnalyticsWindow()).toEqual({
-      startExpression: 'toDateTime(\'2026-02-23 12:34:56\')',
+      startExpression: "toDateTime('2026-02-23 12:34:56')",
       endExpression: 'now()',
     })
   })

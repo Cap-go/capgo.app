@@ -12,7 +12,7 @@ app.post('/', middlewareAPISecret, async (c) => {
     throw quickError(400, 'invalid_body', 'Invalid onboarding refresh batch')
   const pool = getPgClient(c)
   try {
-    const refreshed = await refreshAppOnboardingBatch(c, getDrizzleClient(pool), parsed.data)
+    const refreshed = await refreshAppOnboardingBatch(getDrizzleClient(pool), parsed.data)
     cloudlog({ requestId: c.get('requestId'), message: 'onboarding refresh batch finished', requested: parsed.data.appIds.length, refreshed })
     return c.json(BRES)
   }
