@@ -6,7 +6,7 @@ import { sql } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
 import { buildAppOnboardingStepPosthogEvent } from '../utils/app_onboarding_posthog.ts'
-import { appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardingStepHistoryChanges, parseAppOnboarding } from '../utils/appOnboarding.ts'
+import { appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardingStepHistoryChanges, parseAppOnboarding, pickAppOnboardingSource } from '../utils/appOnboarding.ts'
 import { lockAppOnboardingForWrite, retryAppOnboardingWrite } from '../utils/appOnboardingWriteLock.ts'
 import { parseBody, quickError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
@@ -20,7 +20,7 @@ import { supabaseWithAuth } from '../utils/supabase.ts'
 import { backgroundTask } from '../utils/utils.ts'
 
 const bodySchema = z.object({ appId: appIdSchema, N: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), initial: z.boolean().optional() })
-type Observations = Partial<Record<'add_channel' | 'run_device' | 'upload_bundle' | 'test_update', boolean>>
+type Observations = Partial<Record<'login_cli_mcp' | 'add_channel' | 'run_device' | 'upload_bundle' | 'test_update', boolean>>
 type AuthenticatedClient = ReturnType<typeof supabaseWithAuth>
 
 async function hasPublishedBundle(client: AuthenticatedClient, appId: string) {
@@ -59,21 +59,30 @@ export async function persistObservedProgress(c: Context<MiddlewareKeyVariables>
       if (!row || ![3, 4].includes(parseAppOnboarding(row.onboarding).todo_list_version))
         return null
       const key = auth.apikey?.key ?? c.get('capgkey') ?? null
-      if (!(await checkPermissionPg(c, 'app.update_settings', { appId }, tx, auth.userId, key))
-        && !(await checkPermissionPg(c, 'org.create_app', { orgId: row.owner_org }, tx, auth.userId, key))) {
+      const canMarkCliStart = observations.login_cli_mcp === true
+        && auth.authType === 'apikey'
+        && await checkPermissionPg(c, 'app.read', { appId }, tx, auth.userId, key)
+      const hasOtherObservations = Object.keys(observations).some(id => id !== 'login_cli_mcp')
+      const canWriteObservations = hasOtherObservations
+        && ((await checkPermissionPg(c, 'app.update_settings', { appId }, tx, auth.userId, key))
+          || (await checkPermissionPg(c, 'org.create_app', { orgId: row.owner_org }, tx, auth.userId, key)))
+      if (!canMarkCliStart && !canWriteObservations) {
         return null
       }
       const current = parseAppOnboarding(row.onboarding)
       if (current.outcome === 'skipped')
         return null
       const at = new Date().toISOString()
-      const patch: AppOnboardingPatch = { steps: {} }
+      const patch: AppOnboardingPatch = { steps: {}, ...(canMarkCliStart ? { source: 'cli' } : {}) }
       for (const [id, present] of Object.entries(observations) as Array<[keyof Observations, boolean]>) {
+        if (id === 'login_cli_mcp' ? !canMarkCliStart : !canWriteObservations)
+          continue
         if (present && current.steps[id]?.status !== 'done')
           patch.steps![id] = { status: 'done', at }
       }
-      const removeChannel = observations.add_channel === false && current.steps.add_channel?.status === 'done'
-      if (!removeChannel && Object.keys(patch.steps!).length === 0)
+      const removeChannel = canWriteObservations && observations.add_channel === false && current.steps.add_channel?.status === 'done'
+      const sourceChanged = canMarkCliStart && pickAppOnboardingSource(current.source, 'cli') !== current.source
+      if (!removeChannel && Object.keys(patch.steps!).length === 0 && !sourceChanged)
         return null
       const base = applyAppOnboardingPatch(row.onboarding, {}, () => at)
       const setup = base.setup as Record<string, unknown>
@@ -110,7 +119,7 @@ export async function persistObservedProgress(c: Context<MiddlewareKeyVariables>
 
 export const app = new Hono<MiddlewareKeyVariables>()
 app.use('*', useCors)
-app.post('/', middlewareAuth(), async (c) => {
+app.post('/', middlewareAuth({ preferApiKey: true }), async (c) => {
   const parsed = bodySchema.safeParse(await parseBody(c))
   if (!parsed.success)
     throw quickError(400, 'invalid_body', 'Invalid body')
@@ -125,6 +134,8 @@ app.post('/', middlewareAuth(), async (c) => {
   const current = parseAppOnboarding(row.onboarding)
   const observations: Observations = {}
   const checkErrors: string[] = []
+  if ([3, 4].includes(current.todo_list_version) && c.get('auth')?.authType === 'apikey')
+    observations.login_cli_mcp = true
   const due = (slot: number) => initial || N % 5 === slot
   async function check(id: keyof Observations, permission: Permission, action: () => Promise<boolean>) {
     try {

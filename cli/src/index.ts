@@ -110,8 +110,10 @@ program.hook('preAction', (_thisCommand, actionCommand) => {
   const commandContext = extractCommandContext(actionCommand)
   if (currentCommandPath === 'login' || currentCommandPath === 'init')
     deferCommandInvocation(currentCommandPath, commandContext)
-  else
-    trackCommandInvoked(currentCommandPath, commandContext)
+  else {
+    const optionKey = actionCommand.optsWithGlobals().apikey
+    trackCommandInvoked(currentCommandPath, commandContext, typeof optionKey === 'string' ? optionKey : undefined)
+  }
 })
 
 program.hook('postAction', (_thisCommand, actionCommand) => {

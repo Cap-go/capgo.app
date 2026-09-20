@@ -21,9 +21,10 @@ const mocks = vi.hoisted(() => ({
   archive: [] as any[],
   errors: {} as Record<string, boolean>,
   queries: [] as any[],
+  auth: { authType: 'jwt', userId: '11111111-1111-4111-8111-111111111111', jwt: 'fixture', apikey: null } as any,
 }))
 vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', () => ({ middlewareAuth: () => async (c: Context<MiddlewareKeyVariables>, next: () => Promise<void>) => {
-  c.set('auth', { authType: 'jwt', userId: '11111111-1111-4111-8111-111111111111', jwt: 'fixture', apikey: null })
+  c.set('auth', mocks.auth)
   await next()
 } }))
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({ checkPermission: mocks.permission, checkPermissionPg: mocks.permissionPg }))
@@ -68,6 +69,7 @@ describe('onboarding progress endpoint', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.row = { onboarding: { setup: { todo_list_version: 3, steps: {} } }, created_at: '2026-09-16T00:00:00Z' }
+    mocks.auth = { authType: 'jwt', userId: '11111111-1111-4111-8111-111111111111', jwt: 'fixture', apikey: null }
     mocks.channels = []
     mocks.versions = []
     mocks.archive = []
@@ -118,6 +120,72 @@ describe('onboarding progress endpoint', () => {
     expect(mocks.from).not.toHaveBeenCalledWith('app_versions')
     expect(mocks.execute).not.toHaveBeenCalled()
   })
+  it.each([3, 4])('returns v%s CLI start as done in the same API-key request with read-only app access', async (todoListVersion) => {
+    mocks.auth = { authType: 'apikey', userId: 'other-user', apikey: { key: 'fixture-key' } }
+    mocks.row.onboarding = {
+      created_by_user_id: 'creator',
+      setup: {
+        todo_list_version: todoListVersion,
+        source: 'ai',
+        ...(todoListVersion === 4 ? { paths: ['ota'] } : {}),
+        steps: todoListVersion === 4 ? { ota: { login_cli_mcp: { status: 'pending' }, add_channel: { status: 'pending' } } } : {},
+      },
+    }
+    lockedRow(mocks.row.onboarding)
+    mocks.permissionPg.mockImplementation(async (_c, permission) => permission === 'app.read')
+
+    const response = await request(4)
+    const result = await response.json() as any
+    const steps = todoListVersion === 4 ? result.onboarding.setup.steps.ota : result.onboarding.setup.steps
+    expect(steps.login_cli_mcp.status).toBe('done')
+    if (todoListVersion === 4) {
+      expect(steps.add_channel).toEqual({ status: 'pending' })
+      expect(result.onboarding.setup.steps.login_cli_mcp).toBeUndefined()
+      expect(result.onboarding.setup.paths).toEqual(['ota'])
+    }
+    else {
+      expect(Object.keys(steps)).toEqual(['login_cli_mcp'])
+    }
+    expect(result.onboarding.setup.source).toBe('cli')
+    expect(mocks.permission).toHaveBeenCalledWith(expect.anything(), 'app.read', { appId: 'com.test.onboarding' })
+    expect(mocks.permissionPg).toHaveBeenCalledWith(expect.anything(), 'app.read', { appId: 'com.test.onboarding' }, expect.anything(), 'other-user', 'fixture-key')
+    expect(mocks.execute).toHaveBeenCalledTimes(5)
+  })
+  it('keeps v4 channel progress pending when an API key has read-only app access', async () => {
+    mocks.auth = { authType: 'apikey', userId: 'other-user', apikey: { key: 'fixture-key' } }
+    mocks.row.onboarding = { setup: { todo_list_version: 4, paths: ['ota'], steps: { ota: { login_cli_mcp: { status: 'pending' }, add_channel: { status: 'pending' } } } } }
+    mocks.channels = [{ id: 'channel' }]
+    lockedRow(mocks.row.onboarding)
+    mocks.permissionPg.mockImplementation(async (_c, permission) => permission === 'app.read')
+
+    const result = await (await request(0)).json() as any
+    expect(result.onboarding.setup.steps.ota.login_cli_mcp.status).toBe('done')
+    expect(result.onboarding.setup.steps.ota.add_channel.status).toBe('pending')
+  })
+  it('does not mark CLI start for JWT requests, revoked API keys, or v2 apps', async () => {
+    mocks.row.onboarding = { created_by_user_id: 'creator', setup: { todo_list_version: 3, steps: {} } }
+    expect(((await (await request(4)).json()) as any).onboarding).toEqual(mocks.row.onboarding)
+    expect(mocks.execute).not.toHaveBeenCalled()
+
+    mocks.auth = { authType: 'apikey', userId: 'other-user', apikey: { key: 'other-key' } }
+    mocks.from.mockClear()
+    mocks.permission.mockResolvedValue(false)
+    expect((await request(4)).status).toBe(403)
+    expect(mocks.from).not.toHaveBeenCalled()
+    expect(mocks.execute).not.toHaveBeenCalled()
+
+    mocks.permission.mockResolvedValue(true)
+    lockedRow(mocks.row.onboarding)
+    mocks.permissionPg.mockResolvedValue(false)
+    expect(((await (await request(4)).json()) as any).onboarding).toEqual(mocks.row.onboarding)
+    expect(mocks.execute).toHaveBeenCalledTimes(3)
+
+    mocks.execute.mockClear()
+    mocks.auth = { authType: 'apikey', userId: 'creator', apikey: { key: 'creator-key' } }
+    mocks.row.onboarding.setup.todo_list_version = 2
+    expect(((await (await request(4)).json()) as any).onboarding).toEqual(mocks.row.onboarding)
+    expect(mocks.execute).not.toHaveBeenCalled()
+  })
   it('does not expose app existence or logs/devices without permission', async () => {
     mocks.permission.mockResolvedValue(false)
     expect((await request(0)).status).toBe(403)
@@ -155,6 +223,12 @@ describe('onboarding progress endpoint', () => {
     expect(result.setup.steps.ota.add_channel).toEqual({ status: 'pending' })
     expect(result.setup.steps.ota.add_code).toEqual({ status: 'pending' })
     expect(result.setup.paths).toEqual(['ota'])
+  })
+  it('does not rewrite a v4 channel step that is already pending', async () => {
+    const onboarding = { setup: { todo_list_version: 4, paths: ['ota'], steps: { ota: { add_channel: { status: 'pending' } } } } }
+    lockedRow(onboarding)
+    expect(await persistObservedProgress(contextFor({ userId: 'user', authType: 'jwt' }), 'com.test.onboarding', { add_channel: false })).toBeUndefined()
+    expect(mocks.execute).toHaveBeenCalledTimes(3)
   })
   it('records observed v4 milestones in the OTA path', async () => {
     const onboarding = { setup: { todo_list_version: 4, steps: { ota: {} } } }

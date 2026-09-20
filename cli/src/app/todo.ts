@@ -2,6 +2,7 @@ import type { OptionsBase } from '../schemas/base'
 import { env, stdin, stdout } from 'node:process'
 import { intro, log, outro, spinner } from '@clack/prompts'
 import { check2FAComplianceForApp } from '../api/app'
+import { getPendingOnboardingChecks } from '../onboarding/background-workers'
 import { CliUserError } from '../shared/cli-user-error'
 import { createSupabaseClient, findSavedKey, formatCapgoCliInvokeError, getAppId, getCapgoCliHttpStatus, getConfig, invokeCapgoCliApi } from '../utils'
 
@@ -77,6 +78,48 @@ export interface AppTodoProgress {
   onboarding: unknown
   hasChannel?: boolean
   checkErrors?: string[]
+}
+
+export const TODO_BACKGROUND_WAIT_MS = 10_000
+
+export async function waitForTodoBackgroundChecks(
+  checks: readonly Promise<void>[],
+  onCountdown?: (remainingSeconds: number) => void,
+  timeoutMs = TODO_BACKGROUND_WAIT_MS,
+): Promise<boolean> {
+  if (!checks.length)
+    return true
+
+  const deadline = Date.now() + timeoutMs
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let countdown: ReturnType<typeof setInterval> | undefined
+  let remaining = Math.ceil(timeoutMs / 1_000)
+  onCountdown?.(remaining)
+  if (onCountdown) {
+    countdown = setInterval(() => {
+      const next = Math.max(1, Math.ceil((deadline - Date.now()) / 1_000))
+      if (next !== remaining) {
+        remaining = next
+        onCountdown(next)
+      }
+    }, 1_000)
+  }
+
+  try {
+    return await Promise.race([
+      Promise.allSettled(checks).then(() => true),
+      new Promise<false>((resolve) => {
+        // Keep the process alive while the background workers remain unreferenced.
+        timer = setTimeout(() => resolve(false), timeoutMs)
+      }),
+    ])
+  }
+  finally {
+    if (timer)
+      clearTimeout(timer)
+    if (countdown)
+      clearInterval(countdown)
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -157,6 +200,8 @@ export async function readAppTodoProgress(appId: string, options: OptionsBase): 
 }
 
 export async function appTodo(appId: string | undefined, options: Partial<OptionsBase>) {
+  // Snapshot before the first API read so a check finishing during that read still triggers a refresh.
+  const backgroundChecks = [...getPendingOnboardingChecks().values()].map(check => check.completion)
   intro('App todo list')
   const apikey = options.apikey || findSavedKey()
   if (!apikey) {
@@ -190,6 +235,41 @@ export async function appTodo(appId: string | undefined, options: Partial<Option
     if (error instanceof CliUserError)
       log.error(error.message)
     throw error
+  }
+  const checks = getAppTodoSteps(progress).version === 3 ? backgroundChecks : []
+  if (checks.length) {
+    const waiting = stdin.isTTY && stdout.isTTY ? spinner() : null
+    const waitMessage = (seconds: number) => `Waiting ${seconds} seconds for background TODO list checks to finish`
+    if (!waiting)
+      log.info(waitMessage(10))
+    let started = false
+    const finished = await waitForTodoBackgroundChecks(checks, waiting
+      ? (seconds) => {
+          if (started)
+            waiting.message(waitMessage(seconds))
+          else {
+            waiting.start(waitMessage(seconds))
+            started = true
+          }
+        }
+      : undefined)
+    waiting?.stop(finished ? 'Background TODO list checks finished' : 'Finished waiting for background TODO list checks')
+
+    const refreshing = stdin.isTTY && stdout.isTTY ? spinner() : null
+    if (refreshing)
+      refreshing.start('Refreshing the todo list')
+    else
+      log.info('Refreshing the todo list')
+    try {
+      progress = await readAppTodoProgress(appId, { ...options, apikey })
+      refreshing?.stop('Todo list refreshed')
+    }
+    catch (error) {
+      refreshing?.stop('Could not refresh todo list')
+      if (error instanceof CliUserError)
+        log.error(error.message)
+      throw error
+    }
   }
   if (progress.checkErrors?.length)
     log.warn('Some live progress checks failed. Showing saved progress for those tasks; try again to refresh them.')
