@@ -198,7 +198,8 @@ describe('exploration refresh reminder and v3 setup routing', () => {
   it('uses fullscreen setup for v3 and v4 with no exploration grant and preserves legacy routes', async () => {
     const { getAppSetupRedirect } = await import('../src/utils/onboardingRedirect')
     for (const version of [3, 4])
-      expect(getAppSetupRedirect({ app_id: 'com.example.app', onboarding: { setup: { todo_list_version: version } } })).toEqual({ path: '/onboarding/app', query: { resume: 'com.example.app', step: 'setup' } })
+      expect(getAppSetupRedirect({ app_id: 'com.example.app', onboarding: { setup: { todo_list_version: version, ...(version === 4 ? { ota_todo_list_version: '1' } : {}) } } })).toEqual({ path: '/onboarding/app', query: { resume: 'com.example.app', step: 'setup' } })
+    expect(getAppSetupRedirect({ app_id: 'com.example.app', onboarding: { setup: { todo_list_version: 4, ota_todo_list_version: '2' } } })).toBeNull()
     for (const version of [1, 2])
       expect(getAppSetupRedirect({ app_id: 'com.example.app', onboarding: { setup: { todo_list_version: version } } })).toBeNull()
   })

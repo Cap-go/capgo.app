@@ -6,8 +6,9 @@ Shape: {"refreshed_at": iso, "features": {...}, "setup": {
 "outcome": in_progress|completed|skipped|switched_to_manual,
 "steps": {step_id: {"status": done|skipped, "at": iso}}}} for v1-v3.
 Version 1 starts with add_app; version 2 starts with login_cli_mcp.
-Version 3 has seven flat goals. Version 4 stores all OTA goals under
-setup.steps.ota with pending|done|skipped status and setup.paths=["ota"].
+Version 3 has seven flat goals. Version 4 stores OTA checklist version "1"
+under setup.steps.ota with pending|done|skipped status,
+setup.ota_todo_list_version="1", and setup.paths=["ota"].
 Manual is the default when setup.source is missing.';
 
 CREATE OR REPLACE FUNCTION public.merge_app_onboarding_setup(
@@ -34,7 +35,7 @@ DECLARE
   v_step jsonb;
   v_existing_step jsonb;
   v_now text;
-  v_all_present boolean := true;
+  v_all_present boolean := false;
   v_any_skipped boolean := false;
   v_step_ids text[];
   v_source_rank integer;
@@ -72,10 +73,14 @@ BEGIN
     'upload_bundle',
     'test_update',
     'completion'
-  ] WHEN v_todo_list_version IN (3, 4) THEN ARRAY[
+  ] WHEN v_todo_list_version = 3
+    OR (v_todo_list_version = 4
+      AND jsonb_typeof(v_setup -> 'ota_todo_list_version') = 'string'
+      AND v_setup ->> 'ota_todo_list_version' = '1') THEN ARRAY[
     'login_cli_mcp', 'add_channel', 'add_updater', 'add_code',
     'run_device', 'upload_bundle', 'test_update'
-  ] ELSE ARRAY[
+  ] WHEN v_todo_list_version = 4 THEN ARRAY[]::text[]
+  ELSE ARRAY[
     'login_cli_mcp',
     'add_channel',
     'add_updater',
@@ -89,6 +94,7 @@ BEGIN
     'test_update',
     'completion'
   ] END;
+  v_all_present := cardinality(v_step_ids) > 0;
 
   v_source := CASE v_setup ->> 'source'
     WHEN 'cli' THEN 'cli'
@@ -192,7 +198,11 @@ BEGIN
     WHEN 'switched_to_manual' THEN 'switched_to_manual'
     ELSE 'in_progress'
   END;
-  IF v_all_present THEN
+  IF v_todo_list_version = 4 AND cardinality(v_step_ids) = 0 THEN
+    IF v_patch_outcome IN ('skipped', 'switched_to_manual') THEN
+      v_outcome := v_patch_outcome;
+    END IF;
+  ELSIF v_all_present THEN
     v_outcome := CASE WHEN v_any_skipped THEN 'skipped' ELSE 'completed' END;
   ELSIF v_patch_outcome = 'skipped' OR (v_patch_outcome = 'completed' AND v_todo_list_version NOT IN (3, 4)) THEN
     v_outcome := v_patch_outcome;
@@ -204,12 +214,14 @@ BEGIN
 
   v_now := to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
 
-  IF v_todo_list_version = 4 THEN
+  IF v_todo_list_version = 4 AND cardinality(v_step_ids) > 0 THEN
     v_setup := v_setup || jsonb_build_object(
       'paths', COALESCE(v_setup -> 'paths', jsonb_build_array('ota')),
       'selected_path', COALESCE(v_setup -> 'selected_path', to_jsonb('ota'::text))
     );
     v_steps := jsonb_set(v_step_paths, '{ota}', v_steps, true);
+  ELSIF v_todo_list_version = 4 THEN
+    v_steps := v_step_paths;
   END IF;
 
   RETURN (v_current - 'source' - 'outcome' - 'steps' - 'updated_at' - 'todo_list_version')
@@ -279,6 +291,7 @@ BEGIN
     NEW.onboarding := jsonb_set(COALESCE(NEW.onboarding, '{}'::jsonb), '{setup}',
       v_setup || jsonb_build_object(
         'todo_list_version', 4,
+        'ota_todo_list_version', '1',
         'paths', jsonb_build_array('ota'),
         'selected_path', 'ota',
         'steps', jsonb_build_object('ota', jsonb_build_object(

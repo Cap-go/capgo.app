@@ -42,11 +42,11 @@ finishCheck()
 assert.equal(await finishEarly, true, 'completed checks end the wait before the deadline')
 
 for (const version of [1, 2, 3, 4, 0, -1, 1.5, '3', undefined]) {
-  const value = { setup: { todo_list_version: version, steps: version === 4 ? { ota: progress.onboarding.setup.steps } : progress.onboarding.setup.steps } }
+  const value = { setup: { todo_list_version: version, ...(version === 4 ? { ota_todo_list_version: '1' } : {}), steps: version === 4 ? { ota: progress.onboarding.setup.steps } : progress.onboarding.setup.steps } }
   const parsed = parseAppOnboarding(value)
   const actual = getAppTodoSteps({ onboarding: value })
   assert.equal(actual.version, parsed.todo_list_version)
-  assert.deepEqual(actual.steps.map(step => step.id), getAppOnboardingStepIds(parsed.todo_list_version), 'step order matches the frontend')
+  assert.deepEqual(actual.steps.map(step => step.id), getAppOnboardingStepIds(parsed.todo_list_version, parsed.ota_todo_list_version), 'step order matches the frontend')
   for (const step of actual.steps) {
     assert.equal(step.status, parsed.steps[step.id]?.status ?? 'pending')
     const prefix = actual.version === 3 || actual.version === 4 ? 'setup-checklist-step-' : 'app-onboarding-cli-step-'
@@ -80,12 +80,17 @@ assert.match(formatAppTodoList(appId, { ...progress, hasChannel: true }), /3\/7 
 assert.match(formatAppTodoList(appId, { ...progress, hasChannel: true }), /Next step: Add the app-ready code/)
 assert.match(formatAppTodoList(appId, { onboarding: progress.onboarding }), /3\/7 completed/, 'retains saved channel progress when the live check is unavailable')
 assert.equal(progress.onboarding.setup.steps.add_channel.status, 'done', 'does not mutate saved progress')
-const v4Progress = { onboarding: { setup: { todo_list_version: 4, paths: ['ota'], selected_path: 'ota', steps: { ota: { ...progress.onboarding.setup.steps } } } }, hasChannel: false }
+const v4Progress = { onboarding: { setup: { todo_list_version: 4, ota_todo_list_version: '1', paths: ['ota'], selected_path: 'ota', steps: { ota: { ...progress.onboarding.setup.steps } } } }, hasChannel: false }
 const v4Output = formatAppTodoList(appId, v4Progress)
 assert.match(v4Output, /Todo list v4/)
 assert.match(v4Output, /2\/7 completed/)
 assert.match(v4Output, /Next step: Create a channel/)
 assert.equal(getAppTodoSteps(v4Progress).steps.find(step => step.id === 'add_updater').status, 'skipped')
+for (const otaVersion of ['2', 1, undefined]) {
+  const unsupported = { onboarding: { setup: { todo_list_version: 4, ota_todo_list_version: otaVersion, steps: { ota: progress.onboarding.setup.steps } } } }
+  assert.deepEqual(getAppTodoSteps(unsupported).steps, [], 'unsupported OTA versions do not show v1 steps')
+  assert.match(formatAppTodoList(appId, unsupported), /does not support this OTA checklist version/)
+}
 const allDone = formatAppTodoList(appId, { onboarding: { setup: { todo_list_version: 3, steps: Object.fromEntries(getAppOnboardingStepIds(3).map(id => [id, { status: 'done' }])) } } })
 assert.match(allDone, /7\/7 completed \(7 done, 0 skipped, 0 pending\)/)
 assert.doesNotMatch(allDone, /Next step:/)

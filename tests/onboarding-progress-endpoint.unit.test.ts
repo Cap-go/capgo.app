@@ -127,7 +127,7 @@ describe('onboarding progress endpoint', () => {
       setup: {
         todo_list_version: todoListVersion,
         source: 'ai',
-        ...(todoListVersion === 4 ? { paths: ['ota'] } : {}),
+        ...(todoListVersion === 4 ? { ota_todo_list_version: '1', paths: ['ota'] } : {}),
         steps: todoListVersion === 4 ? { ota: { login_cli_mcp: { status: 'pending' }, add_channel: { status: 'pending' } } } : {},
       },
     }
@@ -153,7 +153,7 @@ describe('onboarding progress endpoint', () => {
   })
   it('keeps v4 channel progress pending when an API key has read-only app access', async () => {
     mocks.auth = { authType: 'apikey', userId: 'other-user', apikey: { key: 'fixture-key' } }
-    mocks.row.onboarding = { setup: { todo_list_version: 4, paths: ['ota'], steps: { ota: { login_cli_mcp: { status: 'pending' }, add_channel: { status: 'pending' } } } } }
+    mocks.row.onboarding = { setup: { todo_list_version: 4, ota_todo_list_version: '1', paths: ['ota'], steps: { ota: { login_cli_mcp: { status: 'pending' }, add_channel: { status: 'pending' } } } } }
     mocks.channels = [{ id: 'channel' }]
     lockedRow(mocks.row.onboarding)
     mocks.permissionPg.mockImplementation(async (_c, permission) => permission === 'app.read')
@@ -186,6 +186,13 @@ describe('onboarding progress endpoint', () => {
     expect(((await (await request(4)).json()) as any).onboarding).toEqual(mocks.row.onboarding)
     expect(mocks.execute).not.toHaveBeenCalled()
   })
+  it.each(['2', 1])('does not update unsupported v4 OTA version %s', async (otaVersion) => {
+    mocks.auth = { authType: 'apikey', userId: 'other-user', apikey: { key: 'fixture-key' } }
+    mocks.row.onboarding = { setup: { todo_list_version: 4, ota_todo_list_version: otaVersion, steps: { ota: { login_cli_mcp: { status: 'pending' } } } } }
+    const result = await (await request(4)).json() as any
+    expect(result.onboarding).toEqual(mocks.row.onboarding)
+    expect(mocks.execute).not.toHaveBeenCalled()
+  })
   it('does not expose app existence or logs/devices without permission', async () => {
     mocks.permission.mockResolvedValue(false)
     expect((await request(0)).status).toBe(403)
@@ -216,7 +223,7 @@ describe('onboarding progress endpoint', () => {
     expect((await persistObservedProgress(context, 'com.test.onboarding', { add_channel: false }) as any).setup.steps.add_channel).toBeUndefined()
   })
   it('returns a deleted v4 channel to pending without removing its OTA step', async () => {
-    const onboarding = { setup: { todo_list_version: 4, paths: ['ota'], steps: { ota: { add_channel: { status: 'done' }, add_code: { status: 'pending' } } } } }
+    const onboarding = { setup: { todo_list_version: 4, ota_todo_list_version: '1', paths: ['ota'], steps: { ota: { add_channel: { status: 'done' }, add_code: { status: 'pending' } } } } }
     lockedRow(onboarding)
     const context = contextFor({ userId: 'user', authType: 'jwt' })
     const result = await persistObservedProgress(context, 'com.test.onboarding', { add_channel: false }) as any
@@ -225,13 +232,13 @@ describe('onboarding progress endpoint', () => {
     expect(result.setup.paths).toEqual(['ota'])
   })
   it('does not rewrite a v4 channel step that is already pending', async () => {
-    const onboarding = { setup: { todo_list_version: 4, paths: ['ota'], steps: { ota: { add_channel: { status: 'pending' } } } } }
+    const onboarding = { setup: { todo_list_version: 4, ota_todo_list_version: '1', paths: ['ota'], steps: { ota: { add_channel: { status: 'pending' } } } } }
     lockedRow(onboarding)
     expect(await persistObservedProgress(contextFor({ userId: 'user', authType: 'jwt' }), 'com.test.onboarding', { add_channel: false })).toBeUndefined()
     expect(mocks.execute).toHaveBeenCalledTimes(3)
   })
   it('records observed v4 milestones in the OTA path', async () => {
-    const onboarding = { setup: { todo_list_version: 4, steps: { ota: {} } } }
+    const onboarding = { setup: { todo_list_version: 4, ota_todo_list_version: '1', steps: { ota: {} } } }
     lockedRow(onboarding)
     const result = await persistObservedProgress(contextFor({ userId: 'user', authType: 'jwt' }), 'com.test.onboarding', { run_device: true }) as any
     expect(result.setup.steps.ota.run_device.status).toBe('done')

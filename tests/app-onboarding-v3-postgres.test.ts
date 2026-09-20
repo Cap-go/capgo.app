@@ -122,7 +122,7 @@ describe('v3 checklist SQL security and bounded lookups', () => {
       await client.query('SET LOCAL ROLE authenticated')
       await client.query(`INSERT INTO public.apps(app_id, owner_org, name, icon_url, onboarding) VALUES ($1, $2, 'Direct v3 test', '', $3::jsonb)`, [appId, orgId, JSON.stringify({ created_by_user_id: randomUUID(), setup: { todo_list_version: 1 } })])
       const inserted = await client.query('SELECT onboarding FROM public.apps WHERE app_id = $1', [appId])
-      expect(inserted.rows[0].onboarding).toMatchObject({ created_by_user_id: userId, setup: { todo_list_version: 4, paths: ['ota'], steps: { ota: { add_channel: { status: 'pending' } } } } })
+      expect(inserted.rows[0].onboarding).toMatchObject({ created_by_user_id: userId, setup: { todo_list_version: 4, ota_todo_list_version: '1', paths: ['ota'], steps: { ota: { add_channel: { status: 'pending' } } } } })
       const updated = await client.query(`UPDATE public.apps SET onboarding = '{"setup":{"todo_list_version":1}}'::jsonb WHERE app_id = $1 RETURNING onboarding`, [appId])
       expect(updated.rows[0].onboarding.setup.todo_list_version).toBe(4)
     }

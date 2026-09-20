@@ -44,6 +44,7 @@ import IconUsers from '~icons/lucide/users-round'
 import { preserveAdminDashboardMinimize } from '~/services/adminDashboardPreferences'
 import { createDefaultApiKey, findUsablePlainApiKey, shareInFlightApiKeyLoad } from '~/services/apikeys'
 import {
+  hasSupportedOtaTodoList,
   parseAppOnboarding,
 } from '~/services/appOnboarding'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
@@ -301,7 +302,7 @@ const planNameOrder = ['Solo', 'Maker', 'Team', 'Enterprise'] as const
 
 const localCommand = isLocal(config.supaHost) ? ` --supa-host ${config.supaHost} --supa-anon ${config.supaKey}` : ''
 // TODO(2027-03-19): Remove v3 compatibility after all existing OTA checklists have migrated.
-const usesOtaTodoList = computed(() => !!createdApp.value && [3, 4].includes(parseAppOnboarding(createdApp.value.onboarding).todo_list_version))
+const usesOtaTodoList = computed(() => !!createdApp.value && hasSupportedOtaTodoList(parseAppOnboarding(createdApp.value.onboarding)))
 const usesBuilderSetupCommand = computed(() => !usesOtaTodoList.value && (selectedIntent.value === 'builder' || selectedIntent.value === 'publish'))
 const markedOnboardingFeatures = new Set<string>()
 let onboardingABTestsRequest: Promise<void> | null = null
@@ -508,6 +509,7 @@ function createAiHelpPrompt() {
 
   const resolvedAppId = createdApp.value?.app_id || generatedAppId.value || '[APP_ID]'
   const resolvedAppName = createdApp.value?.name?.trim() || appName.value.trim() || resolvedAppId
+  const appOnboarding = createdApp.value ? parseAppOnboarding(createdApp.value.onboarding) : undefined
   const activeOrganization = currentOrg.value
   const resolvedOrganizationId = createdApp.value?.owner_org
     || preOrgCreatedOrganizationId.value
@@ -522,7 +524,8 @@ function createAiHelpPrompt() {
         apps: [{
           appId: resolvedAppId,
           name: resolvedAppName,
-          todoListVersion: createdApp.value ? parseAppOnboarding(createdApp.value.onboarding).todo_list_version : undefined,
+          todoListVersion: appOnboarding?.todo_list_version,
+          otaTodoListVersion: appOnboarding?.ota_todo_list_version,
         }],
       }]
     : []

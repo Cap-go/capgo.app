@@ -17,7 +17,7 @@ const { t } = useI18n()
 const isOpen = ref(false)
 const { onboarding } = useAppOnboardingCliProgress(() => props.appId, () => props.initialOnboarding)
 
-const steps = computed(() => getAppOnboardingStepIds(onboarding.value.todo_list_version).map(id => ({
+const steps = computed(() => getAppOnboardingStepIds(onboarding.value.todo_list_version, onboarding.value.ota_todo_list_version).map(id => ({
   id,
   status: onboarding.value.steps[id]?.status as AppOnboardingStepStatus | undefined,
   title: t([3, 4].includes(onboarding.value.todo_list_version) ? `setup-checklist-step-${id}` : `app-onboarding-cli-step-${id}`),
@@ -41,6 +41,7 @@ function statusLabel(status: AppOnboardingStepStatus | undefined) {
 
 <template>
   <div
+    v-if="steps.length"
     class="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50/80 dark:border-white/15 dark:bg-slate-950/90"
     data-test="app-onboarding-cli-steps"
   >

@@ -136,18 +136,19 @@ export function getAppTodoSteps(progress: AppTodoProgress) {
   const version = typeof setup.todo_list_version === 'number' && Number.isSafeInteger(setup.todo_list_version) && setup.todo_list_version > 0
     ? setup.todo_list_version
     : 2
+  const otaV1 = version === 4 && setup.ota_todo_list_version === '1'
   // TODO(2027-03-19): Remove v3 flat-step compatibility after existing apps migrate.
-  const ids: readonly (keyof typeof STEP_TITLES)[] = version === 3 || version === 4
+  const ids: readonly (keyof typeof STEP_TITLES)[] = version === 3 || otaV1
     ? V3_STEP_IDS
-    : version === 1 ? ['add_app', ...V2_STEP_IDS.slice(1)] : V2_STEP_IDS
-  const reportedSteps = version === 4 ? asRecord(asRecord(setup.steps).ota) : asRecord(setup.steps)
+    : version === 4 ? [] : version === 1 ? ['add_app', ...V2_STEP_IDS.slice(1)] : V2_STEP_IDS
+  const reportedSteps = otaV1 ? asRecord(asRecord(setup.steps).ota) : asRecord(setup.steps)
   const steps = ids.map((id) => {
     const reportedStatus = asRecord(reportedSteps[id]).status
     let status: 'done' | 'skipped' | 'pending' = reportedStatus === 'done' || reportedStatus === 'skipped' ? reportedStatus : 'pending'
     // Match the frontend's live channel override, including deleted channels.
     if (id === 'add_channel' && typeof progress.hasChannel === 'boolean')
       status = progress.hasChannel ? 'done' : 'pending'
-    const title = version === 3 || version === 4 ? V3_STEP_TITLES[id as keyof typeof V3_STEP_TITLES] : STEP_TITLES[id]
+    const title = version === 3 || otaV1 ? V3_STEP_TITLES[id as keyof typeof V3_STEP_TITLES] : STEP_TITLES[id]
     return { id, title, status }
   })
   return { version, steps }
@@ -155,6 +156,8 @@ export function getAppTodoSteps(progress: AppTodoProgress) {
 
 export function formatAppTodoList(appId: string, progress: AppTodoProgress, options: { color?: boolean } = {}): string {
   const { version, steps } = getAppTodoSteps(progress)
+  if (version === 4 && steps.length === 0)
+    return `App: ${appId} — Todo list v4\nThis CLI does not support this OTA checklist version.`
   const done = steps.filter(step => step.status === 'done').length
   const skipped = steps.filter(step => step.status === 'skipped').length
   const markers = { done: '[x] Done', skipped: '[-] Skipped', pending: '[ ] Pending' }

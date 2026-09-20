@@ -4,6 +4,7 @@ export interface CliAiPromptApp {
   appId: string
   name: string | null
   todoListVersion?: number
+  otaTodoListVersion?: string
 }
 
 export interface CliAiPromptOrganization {
@@ -583,7 +584,7 @@ function withOtaChecklistCheckpoint(section: string, enabled: boolean, when: str
 
 function otaChecklistAppIds(input: CliAiPromptInput): string[] {
   return [...new Set(input.organizations.flatMap(organization => getPromptApps(organization)
-    .filter(app => [3, 4].includes(app.todoListVersion ?? 0))
+    .filter(app => app.todoListVersion === 3 || (app.todoListVersion === 4 && app.otaTodoListVersion === '1'))
     .map(app => app.appId)))]
 }
 

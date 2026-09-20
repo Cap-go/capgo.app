@@ -41,7 +41,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const panelId = useId()
 const { onboarding, refreshError, refreshOnboarding } = useAppOnboardingCliProgress(() => props.appId, () => props.initialOnboarding)
-const steps = computed(() => getAppOnboardingStepIds(onboarding.value.todo_list_version).filter(isAppOnboardingChecklistStep).map((id, index) => ({
+const steps = computed(() => getAppOnboardingStepIds(onboarding.value.todo_list_version, onboarding.value.ota_todo_list_version).filter(isAppOnboardingChecklistStep).map((id, index) => ({
   id,
   index,
   status: onboarding.value.steps[id]?.status,

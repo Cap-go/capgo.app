@@ -3,13 +3,13 @@ import { buildCliAiSetupPrompt } from '../src/services/cliAiPrompt'
 
 const apiKey = 'capgo_test_secret'
 
-function promptInput(todoListVersion?: number) {
+function promptInput(todoListVersion?: number, otaTodoListVersion?: string) {
   return {
     apiKey,
     organizations: [{
       id: 'org-1',
       name: 'Acme',
-      apps: [{ appId: 'com.acme.app', name: 'Production App', todoListVersion }],
+      apps: [{ appId: 'com.acme.app', name: 'Production App', todoListVersion, otaTodoListVersion }],
     }],
     skippedOrganizations: [],
   }
@@ -52,9 +52,11 @@ describe('buildCliAiSetupPrompt', () => {
   })
 
   it.concurrent('includes v4 OTA apps in the checklist protocol', () => {
-    const prompt = buildCliAiSetupPrompt(promptInput(4), 'ota')
+    const prompt = buildCliAiSetupPrompt(promptInput(4, '1'), 'ota')
     expect(prompt).toContain('## OTA todo list progress checks')
     expect(prompt).toContain('`Todo list v4`')
+    for (const version of [undefined, '2'])
+      expect(buildCliAiSetupPrompt(promptInput(4, version), 'ota')).not.toContain('## OTA todo list progress checks')
   })
 
   it.concurrent('keeps default, Builder, and choose-first prompts free of OTA checklist checks', () => {
