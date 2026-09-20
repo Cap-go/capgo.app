@@ -9,13 +9,17 @@ afterAll(async () => (await getPostgresClient()).end())
 
 async function fixture(client: any, count: number, billing: 'paid' | 'trial' | 'credits' | 'none' = 'none') {
   const orgId = randomUUID()
-  const customerId = billing === 'paid' || billing === 'trial' ? `cus_onboarding_${orgId}` : null
+  let customerId = billing === 'paid' || billing === 'trial' ? `cus_onboarding_${orgId}` : null
   const owner = (await client.query('SELECT id FROM public.users WHERE email = \'test@capgo.app\'')).rows[0].id
   if (customerId) {
     await client.query(`INSERT INTO public.stripe_info(customer_id,status,product_id,trial_at)
       VALUES ($1,$2,'prod_LQIregjtNduh4q',$3::timestamptz)`, [customerId, billing === 'paid' ? 'succeeded' : 'created', billing === 'trial' ? new Date(Date.now() + 86400000).toISOString() : '2020-01-01T00:00:00Z'])
   }
   await client.query('INSERT INTO public.orgs(id,created_by,name,management_email,customer_id) VALUES ($1,$2,$3,\'onboarding-refresh@example.com\',$4)', [orgId, owner, `Refresh ${orgId}`, customerId])
+  customerId = (await client.query('SELECT customer_id FROM public.orgs WHERE id=$1', [orgId])).rows[0].customer_id
+  if (billing === 'none' || billing === 'credits') {
+    await client.query('UPDATE public.stripe_info SET status=\'created\', trial_at=now()-interval \'1 day\' WHERE customer_id=$1', [customerId])
+  }
   if (billing === 'credits') {
     await client.query('INSERT INTO public.usage_credit_grants(org_id,credits_total,credits_consumed,expires_at) VALUES ($1,1,0,now()+interval \'1 day\')', [orgId])
   }
