@@ -13,13 +13,13 @@ async function fixture(client: any, count: number, billing: 'paid' | 'trial' | '
   const owner = (await client.query('SELECT id FROM public.users WHERE email = \'test@capgo.app\'')).rows[0].id
   if (customerId) {
     await client.query(`INSERT INTO public.stripe_info(customer_id,status,product_id,trial_at)
-      VALUES ($1,$2,'test',$3::timestamptz)`, [customerId, billing === 'paid' ? 'succeeded' : 'created', billing === 'trial' ? new Date(Date.now() + 86400000).toISOString() : '2020-01-01T00:00:00Z'])
+      VALUES ($1,$2,'prod_LQIregjtNduh4q',$3::timestamptz)`, [customerId, billing === 'paid' ? 'succeeded' : 'created', billing === 'trial' ? new Date(Date.now() + 86400000).toISOString() : '2020-01-01T00:00:00Z'])
   }
   await client.query('INSERT INTO public.orgs(id,created_by,name,management_email,customer_id) VALUES ($1,$2,\'Refresh fixture\',\'onboarding-refresh@example.com\',$3)', [orgId, owner, customerId])
   if (billing === 'credits') {
     await client.query('INSERT INTO public.usage_credit_grants(org_id,credits_total,credits_consumed,expires_at) VALUES ($1,1,0,now()+interval \'1 day\')', [orgId])
   }
-  const ids = Array.from({ length: count }, (_, i) => `000.onboarding.refresh.${orgId}.${String(i).padStart(4, '0')}`)
+  const ids = Array.from({ length: count }, (_, i) => `000.r.${orgId}.${String(i).padStart(4, '0')}`)
   await client.query(`INSERT INTO public.apps(app_id,owner_org,name,icon_url,need_onboarding)
     SELECT app_id,$1,'Refresh fixture','',false FROM pg_catalog.unnest($2::varchar[]) ids(app_id)`, [orgId, ids])
   return { orgId, customerId, ids }
