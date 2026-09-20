@@ -22,10 +22,28 @@ const appId = `com.public.builder.metrics.${testId}`
 const uploadSessionKey = `public-builder-metrics-${testId}`
 const buildIds: string[] = []
 
+type FailureMetric = { reason: string, share: number }
+type PlatformMetric = {
+  key: string
+  share: number
+  success_rate: number | null
+  top_failure: { reason: string, share: number } | null
+}
+
 async function callPublicMetrics() {
   const { data, error } = await anon.rpc('get_public_builder_metrics')
   expect(error).toBeNull()
   return data as Record<string, unknown>
+}
+
+function failureShare(payload: Record<string, unknown>, reason: string) {
+  const failures = payload.failures as FailureMetric[]
+  return failures.find(row => row.reason === reason)?.share ?? 0
+}
+
+function platformMetric(payload: Record<string, unknown>, key: string) {
+  const platforms = payload.platforms as PlatformMetric[]
+  return platforms.find(row => row.key === key)
 }
 
 beforeAll(async () => {
@@ -37,61 +55,6 @@ beforeAll(async () => {
   })
   if (appError)
     throw appError
-
-  const now = new Date()
-  const startedAt = new Date(now.getTime() - 120_000).toISOString()
-  const completedAt = new Date(now.getTime() - 60_000).toISOString()
-  const rows = [
-    {
-      app_id: appId,
-      owner_org: ORG_ID,
-      requested_by: USER_ID,
-      platform: 'ios',
-      status: 'succeeded',
-      upload_session_key: `${uploadSessionKey}-ios-success`,
-      upload_path: 'builds/public-metrics/ios',
-      upload_url: 'https://example.com/ios',
-      upload_expires_at: completedAt,
-      created_at: now.toISOString(),
-      started_at: startedAt,
-      completed_at: completedAt,
-      runner_wait_seconds: 10,
-    },
-    {
-      app_id: appId,
-      owner_org: ORG_ID,
-      requested_by: USER_ID,
-      platform: 'android',
-      status: 'failed',
-      upload_session_key: `${uploadSessionKey}-android-failed`,
-      upload_path: 'builds/public-metrics/android',
-      upload_url: 'https://example.com/android',
-      upload_expires_at: completedAt,
-      created_at: now.toISOString(),
-      started_at: startedAt,
-      completed_at: completedAt,
-      runner_wait_seconds: 20,
-      last_error: 'script_failure: compile step failed',
-    },
-    {
-      app_id: appId,
-      owner_org: ORG_ID,
-      requested_by: USER_ID,
-      platform: 'ios',
-      status: 'pending',
-      upload_session_key: `${uploadSessionKey}-ios-pending`,
-      upload_path: 'builds/public-metrics/ios-pending',
-      upload_url: 'https://example.com/ios-pending',
-      upload_expires_at: completedAt,
-      created_at: now.toISOString(),
-      runner_wait_seconds: 0,
-    },
-  ]
-
-  const { data, error } = await admin.from('build_requests').insert(rows).select('id')
-  if (error)
-    throw error
-  buildIds.push(...(data ?? []).map(row => row.id))
 })
 
 afterAll(async () => {
@@ -115,23 +78,92 @@ describe('get_public_builder_metrics RPC', () => {
   })
 
   it('aggregates terminal ios/android outcomes without exposing raw errors', async () => {
-    const payload = await callPublicMetrics()
-    const failures = payload.failures as Array<{ reason: string, share: number }>
-    const platforms = payload.platforms as Array<{
-      key: string
-      share: number
-      success_rate: number | null
-      top_failure: { reason: string, share: number } | null
-    }>
+    const baseline = await callPublicMetrics()
+    const baselineScriptShare = failureShare(baseline, 'script_failure')
+    const baselineAndroid = platformMetric(baseline, 'android')
 
-    expect(failures.some(row => row.reason === 'script_failure')).toBe(true)
-    expect(failures.every(row => typeof row.share === 'number')).toBe(true)
+    const now = new Date()
+    const startedAt = new Date(now.getTime() - 120_000).toISOString()
+    const completedAt = new Date(now.getTime() - 60_000).toISOString()
+    const terminalRows = [
+      {
+        app_id: appId,
+        owner_org: ORG_ID,
+        requested_by: USER_ID,
+        platform: 'ios',
+        status: 'succeeded',
+        upload_session_key: `${uploadSessionKey}-ios-success`,
+        upload_path: 'builds/public-metrics/ios',
+        upload_url: 'https://example.com/ios',
+        upload_expires_at: completedAt,
+        created_at: now.toISOString(),
+        started_at: startedAt,
+        completed_at: completedAt,
+        runner_wait_seconds: 10,
+      },
+      {
+        app_id: appId,
+        owner_org: ORG_ID,
+        requested_by: USER_ID,
+        platform: 'android',
+        status: 'failed',
+        upload_session_key: `${uploadSessionKey}-android-failed`,
+        upload_path: 'builds/public-metrics/android',
+        upload_url: 'https://example.com/android',
+        upload_expires_at: completedAt,
+        created_at: now.toISOString(),
+        started_at: startedAt,
+        completed_at: completedAt,
+        runner_wait_seconds: 20,
+        last_error: 'script_failure: compile step failed',
+      },
+    ]
 
-    const ios = platforms.find(row => row.key === 'ios')
-    const android = platforms.find(row => row.key === 'android')
-    expect(ios?.success_rate).toBe(100)
-    expect(android?.success_rate).toBe(0)
-    expect(android?.top_failure?.reason).toBe('script_failure')
-    expect(android?.top_failure?.share).toBe(100)
+    const { data: terminalData, error: terminalError } = await admin
+      .from('build_requests')
+      .insert(terminalRows)
+      .select('id')
+    if (terminalError)
+      throw terminalError
+    buildIds.push(...(terminalData ?? []).map(row => row.id))
+
+    const afterTerminal = await callPublicMetrics()
+    expect(failureShare(afterTerminal, 'script_failure')).toBeGreaterThan(baselineScriptShare)
+    expect(platformMetric(afterTerminal, 'android')?.top_failure?.reason).toBe('script_failure')
+    expect(platformMetric(afterTerminal, 'android')?.top_failure?.share).toBeGreaterThanOrEqual(
+      baselineAndroid?.top_failure?.share ?? 0,
+    )
+    ;(afterTerminal.failures as FailureMetric[]).forEach(row => expect(typeof row.share).toBe('number'))
+
+    const beforePending = afterTerminal
+    const { data: pendingData, error: pendingError } = await admin
+      .from('build_requests')
+      .insert({
+        app_id: appId,
+        owner_org: ORG_ID,
+        requested_by: USER_ID,
+        platform: 'ios',
+        status: 'pending',
+        upload_session_key: `${uploadSessionKey}-ios-pending`,
+        upload_path: 'builds/public-metrics/ios-pending',
+        upload_url: 'https://example.com/ios-pending',
+        upload_expires_at: completedAt,
+        created_at: now.toISOString(),
+        runner_wait_seconds: 0,
+      })
+      .select('id')
+      .single()
+    if (pendingError)
+      throw pendingError
+    buildIds.push(pendingData.id)
+
+    const afterPending = await callPublicMetrics()
+    expect(afterPending.success_rate).toBe(beforePending.success_rate)
+    expect(platformMetric(afterPending, 'ios')?.success_rate)
+      .toBe(platformMetric(beforePending, 'ios')?.success_rate)
+    expect(platformMetric(afterPending, 'android')?.success_rate)
+      .toBe(platformMetric(beforePending, 'android')?.success_rate)
+    expect(platformMetric(afterPending, 'android')?.top_failure)
+      .toEqual(platformMetric(beforePending, 'android')?.top_failure)
   })
 })

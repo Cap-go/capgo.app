@@ -34,8 +34,8 @@ base AS (
   FROM public.build_requests br
   CROSS JOIN params p
   WHERE br.platform IN ('ios', 'android')
-    AND br.created_at >= p.period_start
-    AND br.created_at < (p.period_end + 1)
+    AND br.created_at >= (p.period_start::timestamp AT TIME ZONE 'UTC')
+    AND br.created_at < ((p.period_end + 1)::timestamp AT TIME ZONE 'UTC')
 ),
 terminal AS (
   SELECT *
@@ -187,6 +187,8 @@ totals AS (
     COALESCE(SUM(outcomes), 0::numeric) AS outcome_total
   FROM platform_rows
 ),
+-- Weight by platform outcomes (not per-row duration sample counts) to match
+-- website buildPublicBuilderMetrics in Cap-go/website publicBuilderMetrics.ts.
 weighted AS (
   SELECT
     CASE
