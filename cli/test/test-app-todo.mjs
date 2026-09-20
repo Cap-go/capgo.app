@@ -141,6 +141,11 @@ try {
       const url = input?.url ?? String(input)
       const scenario = process.env.CAPGO_TODO_SCENARIO
       if (!url.startsWith('http') || url.includes('.wasm')) return nativeFetch(input, init)
+      if (url.includes('/private/events') && process.env.CAPGO_TODO_TRACKING_FILE) {
+        const event = JSON.parse(init.body)
+        if (event.event === 'CLI Command Invoked')
+          writeFileSync(process.env.CAPGO_TODO_TRACKING_FILE, JSON.stringify({ key: init.headers.capgkey, command: event.tags.command_path }))
+      }
       if (url.includes('/private/config')) return Response.json({ supaHost: ${JSON.stringify(options.supaHost)}, supaKey: ${JSON.stringify(options.supaAnon)} })
       if (url.includes('/rpc/reject_access_due_to_2fa_for_app')) return Response.json(scenario === 'two-factor')
       if (scenario === 'background-updated' && init?.method === 'PUT' && url.endsWith('/app/${appId}')) {
@@ -211,6 +216,14 @@ try {
       }
     }
   }
+  const trackingFile = join(fixture, 'tracking.json')
+  const tracked = spawnSync('node', ['--import', preload, builtCli, 'app', 'todo', appId, '-a', options.apikey, '--supa-host', options.supaHost, '--supa-anon', options.supaAnon], {
+    cwd: fixture, encoding: 'utf8', timeout: 15000,
+    env: { ...process.env, CAPGO_TOKEN: 'stale-saved-key', CAPGO_TODO_TRACKING_FILE: trackingFile, CI: '1', CAPGO_DISABLE_TELEMETRY: '', CAPGO_DISABLE_POSTHOG: '' },
+  })
+  assert.equal(tracked.status, 0, tracked.stdout + tracked.stderr)
+  assert.deepEqual(JSON.parse(readFileSync(trackingFile, 'utf8')), { key: options.apikey, command: 'app todo' }, 'the command event uses --apikey instead of a saved key')
+
   writeFileSync(join(fixture, 'package.json'), JSON.stringify({
     name: 'todo-test', version: '1.0.0', dependencies: { '@capgo/capacitor-updater': '8.0.0' },
   }))
