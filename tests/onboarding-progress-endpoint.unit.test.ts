@@ -121,10 +121,10 @@ describe('onboarding progress endpoint', () => {
     expect(mocks.execute).not.toHaveBeenCalled()
   })
   it('returns v3 CLI start as done in the same API-key request with read-only app access', async () => {
-    mocks.auth = { authType: 'apikey', userId: 'other-user', apikey: { key: null } }
+    mocks.auth = { authType: 'apikey', userId: 'other-user', apikey: { key: 'fixture-key' } }
     mocks.row.onboarding = { created_by_user_id: 'creator', setup: { todo_list_version: 3, source: 'ai', steps: {} } }
     lockedRow(mocks.row.onboarding)
-    mocks.permissionPg.mockResolvedValue(false)
+    mocks.permissionPg.mockImplementation(async (_c, permission) => permission === 'app.read')
 
     const response = await request(4)
     const result = await response.json() as any
@@ -132,10 +132,10 @@ describe('onboarding progress endpoint', () => {
     expect(Object.keys(result.onboarding.setup.steps)).toEqual(['login_cli_mcp'])
     expect(result.onboarding.setup.source).toBe('cli')
     expect(mocks.permission).toHaveBeenCalledWith(expect.anything(), 'app.read', { appId: 'com.test.onboarding' })
-    expect(mocks.permissionPg).not.toHaveBeenCalled()
+    expect(mocks.permissionPg).toHaveBeenCalledWith(expect.anything(), 'app.read', { appId: 'com.test.onboarding' }, expect.anything(), 'other-user', 'fixture-key')
     expect(mocks.execute).toHaveBeenCalledTimes(5)
   })
-  it('does not mark CLI start for JWT requests or an API key without app.read', async () => {
+  it('does not mark CLI start for JWT requests, revoked API keys, or v2 apps', async () => {
     mocks.row.onboarding = { created_by_user_id: 'creator', setup: { todo_list_version: 3, steps: {} } }
     expect(((await (await request(4)).json()) as any).onboarding).toEqual(mocks.row.onboarding)
     expect(mocks.execute).not.toHaveBeenCalled()
@@ -147,8 +147,14 @@ describe('onboarding progress endpoint', () => {
     expect(mocks.from).not.toHaveBeenCalled()
     expect(mocks.execute).not.toHaveBeenCalled()
 
-    mocks.auth = { authType: 'apikey', userId: 'creator', apikey: { key: 'creator-key' } }
     mocks.permission.mockResolvedValue(true)
+    lockedRow(mocks.row.onboarding)
+    mocks.permissionPg.mockResolvedValue(false)
+    expect(((await (await request(4)).json()) as any).onboarding).toEqual(mocks.row.onboarding)
+    expect(mocks.execute).toHaveBeenCalledTimes(3)
+
+    mocks.execute.mockClear()
+    mocks.auth = { authType: 'apikey', userId: 'creator', apikey: { key: 'creator-key' } }
     mocks.row.onboarding.setup.todo_list_version = 2
     expect(((await (await request(4)).json()) as any).onboarding).toEqual(mocks.row.onboarding)
     expect(mocks.execute).not.toHaveBeenCalled()
