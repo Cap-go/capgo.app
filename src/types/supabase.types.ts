@@ -4198,6 +4198,10 @@ export type Database = {
       }
       delete_user: { Args: never; Returns: undefined }
       dismiss_getting_started: { Args: { p_app_id: string }; Returns: Json }
+      enqueue_app_onboarding_refreshes: {
+        Args: { p_limit?: number }
+        Returns: number
+      }
       exist_app: { Args: { appid: string }; Returns: boolean }
       exist_app_v2: { Args: { appid: string }; Returns: boolean }
       exist_app_versions:
