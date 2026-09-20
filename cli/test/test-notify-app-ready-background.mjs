@@ -588,6 +588,37 @@ test.concurrent('coordinator skips both checks when the project or credentials c
   }
 }, 20_000)
 
+test.concurrent('coordinator skips custom updater endpoints without reporting or telemetry', async () => {
+  const harness = await workerHarness(combinedWorkerUrl)
+  installUpdater(harness.project)
+  const configPath = join(harness.project.dir, 'capacitor.config.json')
+  try {
+    for (const endpoints of [
+      { updateUrl: 'https://updates.example.net/check' },
+      { updateUrl: 'https://plugin.capgo.app/updates', statsUrl: 'https://stats.example.net/report' },
+      { updateUrl: 'https://plugin.capgo.app.evil.test/updates' },
+      { statsUrl: 'invalid-url' },
+    ]) {
+      write(configPath, { ...harness.project.config, plugins: { CapacitorUpdater: { localApi: harness.api, ...endpoints } } })
+      await harness.run()
+      assert.deepEqual(harness.requests, [], JSON.stringify(endpoints))
+    }
+
+    for (const endpoints of [
+      { updateUrl: 'https://plugin.eu.capgo.app/updates', statsUrl: '' },
+      { updateUrl: 'https://usecapgo.com/updates', statsUrl: 'https://stats.usecapgo.com/report' },
+    ]) {
+      write(configPath, { ...harness.project.config, plugins: { CapacitorUpdater: { localApi: harness.api, ...endpoints } } })
+      await harness.run()
+      assert.equal(harness.requests.filter(request => request.method === 'PUT').length, 2)
+      assert.equal(harness.requests.filter(request => request.method === 'POST').length, 4)
+    }
+  }
+  finally {
+    harness.close()
+  }
+}, 30_000)
+
 test.concurrent('coordinator and its scan workers can be abandoned without holding the foreground open', async () => {
   const harness = await workerHarness(combinedWorkerUrl)
   installUpdater(harness.project)
