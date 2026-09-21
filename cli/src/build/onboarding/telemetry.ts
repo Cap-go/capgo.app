@@ -35,6 +35,7 @@ export type BuilderOnboardingAction
   = | 'resume_prompt_decision'
     | 'question_shown'
     | 'question_answered'
+    | 'question_skipped'
     | 'android_sa_method_selected'
     | 'android_sa_validation_recovery_selected'
     | 'android_sa_validation_result'

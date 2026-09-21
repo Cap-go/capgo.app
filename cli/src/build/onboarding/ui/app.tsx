@@ -75,6 +75,7 @@ import { CompletedStepsLog } from './completed-steps-log.js'
 import { BOX_HEADER_ROWS, COMPACT_HEADER_ROWS, DiffSummary, Divider, FilteredTextInput, FullscreenAiViewer, FullscreenBuildOutput, FullscreenDiffViewer, Header, isBuildCompleteDismissKey, SecretsTable, SpinnerLine, SuccessLine, Table, WIZARD_PADDING_ROWS } from './components.js'
 import { logBudgetRows } from './frame-fit.js'
 import { TerminalTooSmallPrompt } from './min-size-gate.js'
+import { routeFreshIosSetupMethod } from './setup-method-route.js'
 import {
   AskBuildStep,
   AskCiSecretsStep,
@@ -1746,13 +1747,8 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
             return
           if (existing?.ios)
             setStep('credentials-exist')
-          else if (isMacOS())
-            // Fresh iOS, no creds: offer the import-vs-create fork (create-new →
-            // the guided .p8 helper). Only macOS can drive the helper; other
-            // hosts go straight to the manual .p8 instructions.
-            setStep('setup-method-select')
           else
-            setStep('api-key-instructions')
+            setStep(routeFreshIosSetupMethod(isMacOS(), journeyId, trackAction))
         })()
       }, 800)
     }
@@ -1792,12 +1788,8 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
               return
             if (existing?.ios)
               setStep('credentials-exist')
-            else if (isMacOS())
-              // Fresh iOS, no creds: route through the import-vs-create fork
-              // (create-new → the guided .p8 helper) on macOS.
-              setStep('setup-method-select')
             else
-              setStep('api-key-instructions')
+              setStep(routeFreshIosSetupMethod(isMacOS(), journeyId, trackAction))
           })()
           return
         }
@@ -2444,6 +2436,8 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
         if (!next)
           return
         let advanceTo = next
+        if (step === 'backing-up' && (next === 'setup-method-select' || next === 'api-key-instructions'))
+          advanceTo = routeFreshIosSetupMethod(next === 'setup-method-select', journeyId, trackAction)
         if (step === 'verifying-key') {
           // The key is confirmed and the flow is moving on — NOW dismiss the
           // guided helper window (if it's still open on its success screen).
@@ -3417,13 +3411,8 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
               if (existing?.ios) {
                 setStep('credentials-exist')
               }
-              else if (isMacOS()) {
-              // macOS users see the fork: import existing or create new
-                setStep('setup-method-select')
-              }
               else {
-              // Non-macOS hosts can only create new (importing requires Keychain)
-                setStep('api-key-instructions')
+                setStep(routeFreshIosSetupMethod(isMacOS(), journeyId, trackAction))
               }
             }}
           />
@@ -3448,7 +3437,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
                     if (existing?.ios)
                       setStep('credentials-exist')
                     else
-                      setStep('api-key-instructions')
+                      setStep(routeFreshIosSetupMethod(isMacOS(), journeyId, trackAction))
                   })()
                 }
                 else {

@@ -113,10 +113,11 @@ try {
   }
 
   // ── iOS setup question uses reusable action payloads ──────────────────────
-  for (const [action, choice] of [
+  for (const [action, choice, reason] of [
     ['question_shown', undefined],
     ['question_answered', 'create-new'],
     ['question_answered', 'import-existing'],
+    ['question_skipped', 'create-new', 'non_macos_auto_create_new'],
   ]) {
     const requests = installFetchMock()
     await trackBuilderOnboardingAction({
@@ -128,7 +129,7 @@ try {
       replaySessionId: 'build-onboarding-replay-ios',
       platform: 'ios',
       step: 'setup-method-select',
-      tags: { attempt_id: 'bj_ios-setup', question_id: 'ios_setup_method', ...(choice && { choice }) },
+      tags: { attempt_id: 'bj_ios-setup', question_id: 'ios_setup_method', ...(choice && { choice }), ...(reason && { reason }) },
     })
 
     const body = findEventBody(requests)
@@ -144,6 +145,7 @@ try {
       journey_id: 'bj_ios-setup',
       platform: 'ios',
       question_id: 'ios_setup_method',
+      ...(reason && { reason }),
       step: 'setup-method-select',
     })
   }
