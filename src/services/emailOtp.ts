@@ -88,12 +88,18 @@ export async function sendEmailOtpVerification(
   supabase: SupabaseClient<Database>,
   email: string,
   captchaToken?: string,
+  purpose?: 'delete_account',
 ) {
+  const emailRedirectTo = purpose === 'delete_account'
+    ? new URL('/?reason=delete_account', globalThis.location.origin).href
+    : undefined
+
   return await supabase.auth.signInWithOtp({
     email,
     options: {
       shouldCreateUser: false,
       captchaToken: captchaToken || undefined,
+      ...(emailRedirectTo ? { emailRedirectTo } : {}),
     },
   })
 }

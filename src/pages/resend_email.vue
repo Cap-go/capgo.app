@@ -240,7 +240,8 @@ async function sendOtpCode() {
   otpSending.value = true
   otpSendError.value = ''
   try {
-    const { error } = await sendEmailOtpVerification(supabase, currentUserEmail.value, otpCaptchaToken.value)
+    const purpose = returnTo.value === '/delete_account' ? 'delete_account' : undefined
+    const { error } = await sendEmailOtpVerification(supabase, currentUserEmail.value, otpCaptchaToken.value, purpose)
     if (error) {
       const parsed = parseEmailOtpSendError(error)
       const message = parsed
