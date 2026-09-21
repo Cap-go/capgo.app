@@ -70,6 +70,12 @@ For an app that is already configured, upload a new bundle with:
 npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel production
 ```
 
+Cordova projects without `capacitor.config.*`:
+
+```bash
+npx @capgo/cli@latest bundle upload com.example.app --mode cordova --path www --channel production
+```
+
 ## CI Upload Example
 
 ```bash
@@ -397,7 +403,8 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **-p** | <code>string</code> | Path of the folder to upload, if not provided it will use the webDir set in capacitor.config |
+| **--mode** | <code>string</code> | Project framework mode. Use `cordova` for Cordova apps without `capacitor.config` (webDir defaults to `www`) |
+| **-p** | <code>string</code> | Path of the folder to upload, if not provided it will use the webDir set in capacitor.config (or `www` with `--mode cordova`) |
 | **-c** | <code>string</code> | Channel to link to. Use commas for multiple channels, for example production,beta |
 | **--rollout** | <code>string</code> | Set the uploaded bundle as this channel's rollout target at a percentage from 0 to 100 |
 | **--rollout-percentage-bps** | <code>string</code> | Set the uploaded bundle rollout percentage in basis points from 0 to 10000 |
