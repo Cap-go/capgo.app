@@ -150,7 +150,9 @@ module.exports = config
       assert.equal(scan.appId, builderId, 'prescan Capgo checks use the Builder key')
       assert.equal(scan.nativeAppId, nativeId, 'prescan local iOS checks use the native ID')
       assert.equal(scan.config.appId, nativeId, 'prescan native checks keep the Capacitor ID')
-      assert.equal((await buildScanContext({ appId: 'com.example.explicit', platform: 'android', projectDir: project, credentials: {} })).appId, 'com.example.explicit')
+      const explicitScan = await buildScanContext({ appId: 'com.example.explicit', platform: 'android', projectDir: project, credentials: {} })
+      assert.equal(explicitScan.appId, 'com.example.explicit')
+      assert.equal(explicitScan.nativeAppId, nativeId, 'an explicit Capgo ID does not replace the native ID')
       if (extension === 'ts') {
         const deps = buildDeps(() => ({}))
         assert.equal(await deps.getAppId(), builderId, 'MCP Capgo operations use the Builder key')
@@ -182,6 +184,13 @@ module.exports = config
       process.chdir(previousCwd)
     }
   }
+
+  const invalidProject = join(root, 'invalid-explicit')
+  mkdirSync(join(invalidProject, 'www'), { recursive: true })
+  writeFileSync(join(invalidProject, 'capacitor.config.json'), JSON.stringify(configFor('')))
+  const overriddenScan = await buildScanContext({ appId: 'com.example.explicit', platform: 'ios', projectDir: invalidProject, credentials: {} })
+  assert.equal(overriddenScan.appId, 'com.example.explicit', 'explicit IDs bypass invalid Builder config during prescan')
+  assert.equal(overriddenScan.nativeAppId, nativeId, 'prescan still uses the native ID for local checks')
 }
 finally {
   if (existsSync(root))

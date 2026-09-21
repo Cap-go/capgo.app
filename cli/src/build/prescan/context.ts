@@ -6,7 +6,7 @@ import { getConfig } from '../../utils'
 import { CliUserError } from '../../shared/cli-user-error'
 import { mergeCredentials } from '../credentials'
 import { withCwd } from '../cwd'
-import { getBuilderAppId, getConfiguredBuilderAppId } from '../app-id'
+import { getBuilderAppId, hasBuilderAppIdField } from '../app-id'
 
 export interface BuildScanContextArgs {
   appId?: string
@@ -31,7 +31,7 @@ export async function buildScanContext(args: BuildScanContextArgs): Promise<Scan
   catch { config = undefined } // no capacitor project — checks degrade individually
   const appId = getBuilderAppId(args.appId, config, 'native', 'defined')
   if (!appId) throw new CliUserError('Missing appId: pass it explicitly or run inside a Capacitor project')
-  const nativeAppId = getConfiguredBuilderAppId(config) ? config?.appId ?? appId : appId
+  const nativeAppId = hasBuilderAppIdField(config) ? config?.appId ?? appId : appId
   const credentials = args.credentials
     ?? (await mergeCredentials(appId, args.platform) as Record<string, string> | undefined)
   return {
