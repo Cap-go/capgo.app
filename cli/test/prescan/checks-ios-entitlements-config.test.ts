@@ -98,6 +98,19 @@ describe('ios/entitlements-vs-profile-capability', () => {
     expect(entitlementsVsProfileCapability.appliesTo?.(ctx)).toBe(false)
   })
 
+  it('matches native iOS entitlements and profiles when the Builder app ID differs', async () => {
+    const ctx = ctxWithEntitlements(
+      '<key>com.apple.developer.healthkit</key><true/>',
+      {
+        appId: 'com.example.builder',
+        nativeAppId: 'com.demo.app',
+        credentials: { CAPGO_IOS_PROVISIONING_MAP: mapWith(profileXml('')) },
+      },
+    )
+    expect(entitlementsVsProfileCapability.appliesTo?.(ctx)).toBe(true)
+    expect((await entitlementsVsProfileCapability.run(ctx))[0]?.severity).toBe('error')
+  })
+
   it('errors when the app declares a capability the profile does not grant', async () => {
     const ctx = ctxWithEntitlements(
       '<key>com.apple.developer.healthkit</key><true/>',

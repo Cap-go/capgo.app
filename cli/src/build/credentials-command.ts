@@ -4,7 +4,8 @@ import { resolve } from 'node:path'
 import { cwd, exit } from 'node:process'
 import { log } from '@clack/prompts'
 import { trackEvent } from '../analytics/track'
-import { findSavedKey, getAppId, getConfig, getOrganizationId, sendEvent } from '../utils'
+import { findSavedKey, getConfig, getOrganizationId, sendEvent } from '../utils'
+import { getBuilderAppId } from './app-id'
 import {
   clearSavedCredentials,
   convertFilesToCredentials,
@@ -186,7 +187,7 @@ export async function saveCredentialsCommand(options: SaveCredentialsOptions): P
 
     // Try to infer appId from capacitor.config if not provided
     const extConfig = await getConfig()
-    const appId = getAppId(options.appId, extConfig?.config)
+    const appId = getBuilderAppId(options.appId, extConfig?.config)
 
     if (!appId) {
       log.error('❌ App ID is required.')
@@ -567,7 +568,7 @@ export async function listCredentialsCommand(options?: { appId?: string, local?:
 
     // Try to infer appId from capacitor.config if not provided
     const extConfig = await getConfig()
-    const inferredAppId = options?.appId || getAppId(undefined, extConfig?.config)
+    const inferredAppId = getBuilderAppId(options?.appId, extConfig?.config)
 
     // If specific appId is provided or inferred, only show that one
     const appsToShow = inferredAppId ? [inferredAppId] : allAppIds
@@ -659,7 +660,7 @@ export async function clearCredentialsCommand(options: { appId?: string, platfor
   try {
     // Try to infer appId from capacitor.config if not explicitly provided
     const extConfig = await getConfig()
-    const appId = options.appId || getAppId(undefined, extConfig?.config)
+    const appId = getBuilderAppId(options.appId, extConfig?.config)
     const credentialsPath = options.local ? getLocalCredentialsPath() : getGlobalCredentialsPath()
 
     if (appId && options.platform) {
@@ -749,7 +750,7 @@ export async function updateCredentialsCommand(options: SaveCredentialsOptions):
 
     // Try to infer appId from capacitor.config if not provided
     const extConfig = await getConfig()
-    const appId = getAppId(options.appId, extConfig?.config)
+    const appId = getBuilderAppId(options.appId, extConfig?.config)
 
     if (!appId) {
       log.error('❌ App ID is required.')
@@ -994,7 +995,7 @@ export async function migrateCredentialsCommand(options: { appId?: string, platf
 
     // Try to infer appId from capacitor.config if not provided
     const extConfig = await getConfig()
-    const appId = getAppId(options.appId, extConfig?.config)
+    const appId = getBuilderAppId(options.appId, extConfig?.config)
 
     if (!appId) {
       log.error('❌ App ID is required.')

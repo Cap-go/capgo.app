@@ -2111,7 +2111,7 @@ export async function decideAppflow(
   if (!progress.capgoAppId)
     progress = { ...progress, capgoAppId: appId }
 
-  const flowDeps = buildAppflowEffectDeps({ appId, packageName: facts.appId })
+  const flowDeps = buildAppflowEffectDeps({ appId, packageName: await deps.getNativeAppId?.() ?? facts.appId })
 
   // Carries the most-recent AUTO effect's `transient` (e.g. the org/app/cert/dist
   // option lists, or validation results) so the interactive step it transitions
@@ -3413,6 +3413,8 @@ export interface EngineDeps {
   cwd: string
   hasSavedKey: () => boolean
   getAppId: () => Promise<string | undefined>
+  /** Native package/bundle id, separate from the Capgo Builder app key. */
+  getNativeAppId?: () => Promise<string | undefined>
   detectPlatforms: () => Promise<Platform[]>
   isAppRegistered: (appId: string) => Promise<boolean>
   loadProgress: (appId: string) => Promise<OnboardingProgress | null>

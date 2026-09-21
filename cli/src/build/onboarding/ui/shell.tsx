@@ -83,12 +83,14 @@ export interface OnboardingShellProps {
   /**
    * iOS-side bundle id default — sourced from `config.appId` (top-level), which
    * is what `cap sync` writes into `PRODUCT_BUNDLE_IDENTIFIER`. Distinct from
-   * `appId` above, which `getAppId()` may resolve to
+   * `appId` above, which the Builder resolver may resolve to
    * `config.plugins.CapacitorUpdater.appId` (a Capgo lookup key — wrong for
    * Apple signing). Threaded down to the iOS OnboardingApp; the Android app
    * ignores it.
    */
   iosBundleIdInitial: string
+  /** Android package name for Appflow validation; defaults to the legacy Capgo key. */
+  appflowPackageName?: string
   iosDir: string
   androidDir: string
   /**
@@ -133,7 +135,7 @@ const AnalyticsNotice: FC = () => (
   </Box>
 )
 
-const OnboardingShell: FC<OnboardingShellProps> = ({ appId, iosBundleIdInitial, iosDir, androidDir, guidedHelperUsable, apikey, supaHost, supaAnon, journeyId, initialPlatform, updateInfo, analyticsNotice, onResolvePlatform, onStep, onResult, onBeforeExit }) => {
+const OnboardingShell: FC<OnboardingShellProps> = ({ appId, iosBundleIdInitial, appflowPackageName, iosDir, androidDir, guidedHelperUsable, apikey, supaHost, supaAnon, journeyId, initialPlatform, updateInfo, analyticsNotice, onResolvePlatform, onStep, onResult, onBeforeExit }) => {
   const { exit } = useApp()
   const { cols, rows } = useTerminalSize()
   const [ready, setReady] = useState<ReadyApp | null>(null)
@@ -227,7 +229,7 @@ const OnboardingShell: FC<OnboardingShellProps> = ({ appId, iosBundleIdInitial, 
   if (ready?.kind === 'android')
     return <AndroidOnboardingApp appId={appId} initialProgress={ready.progress} androidDir={androidDir} apikey={apikey} supaHost={supaHost} supaAnon={supaAnon} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
   if (ready?.kind === 'appflow')
-    return <AppflowApp appId={appId} scope={ready.scope} apikey={apikey} supaHost={supaHost} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
+    return <AppflowApp appId={appId} packageName={appflowPackageName ?? appId} scope={ready.scope} apikey={apikey} supaHost={supaHost} journeyId={journeyId} onStep={onStep} onResult={onResult} onBeforeExit={onBeforeExit} />
 
   // Not ready yet: the platform picker (or a brief framed load). The picker is
   // NOT gated to the full 80×49 onboarding floor — it's small and adapts
