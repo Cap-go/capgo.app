@@ -278,7 +278,8 @@ describe('user onboarding progress', () => {
     })!
     expect(resumableOnboardingFlowStep(legacy, flow)).toBe('channel')
     expect(resumableOnboardingFlowStep({ ...legacy, setup_stage: 'channel-create' }, flow)).toBe('channel')
-    expect(resumableOnboardingFlowStep({ ...legacy, setup_stage: 'cli' }, flow)).toBe(finalStep)
+    expect(resumableOnboardingFlowStep({ ...legacy, setup_stage: 'cli' }, flow)).toBe('channel')
+    expect(resumableOnboardingFlowStep({ ...legacy, final_step: finalStep, setup_stage: 'cli' }, flow)).toBe(finalStep)
   })
 
   it.concurrent('round-trips every channel setup stage and ignores invalid stages', () => {

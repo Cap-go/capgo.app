@@ -4,9 +4,8 @@ import { readFileSync } from 'node:fs'
 import { URL as NodeUrl } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { createApp } from 'vue'
-import { sendOnboardingEvent } from '../src/services/onboardingTracking'
 import AppOnboardingFlow from '../src/components/dashboard/AppOnboardingFlow.vue'
-
+import { sendOnboardingEvent } from '../src/services/onboardingTracking'
 
 const writerMocks = vi.hoisted(() => ({
   abTestAssignments: {} as Record<string, unknown>,
@@ -194,57 +193,59 @@ describe('app onboarding progress analytics integration', () => {
     try {
       for (const preOrg of [true, false]) {
         for (const todoListVersion of [2, 3, 4]) {
-          const appId = `com.example.channel.${preOrg ? 'pre' : 'existing'}.${todoListVersion}`
-          writerMocks.route.query = { resume: appId, step: preOrg ? 'setup' : 'install' }
-          writerMocks.organization.currentOrganization = { gid: 'test-org', name: 'Test Org' }
-          writerMocks.abTestAssignments = { new_channel: { assigned_at: '2026-09-21T00:00:00.000Z', branch: todoListVersion === 2 ? 'B' : 'A' } }
-          writerMocks.main.user = {
-            id: 'user-bento-retry',
-            image_url: 'avatar.png',
-            onboarding: {
-              app_id: appId,
-              final_step: preOrg ? 'setup' : 'install',
-              flow: preOrg ? 'pre_org' : 'existing_org',
-              setup_stage: 'channel-routing',
-              status: 'in_progress',
-              step: 'channel',
-              updated_at: '2026-09-21T00:00:00.000Z',
-            },
-          }
-          writerMocks.loadApp.mockResolvedValue({
-            data: {
-              android_store_url: null,
-              app_id: appId,
-              existing_app: true,
-              icon_url: null,
-              ios_store_url: null,
-              name: 'Test App',
-              onboarding: { setup: { todo_list_version: todoListVersion, ota_todo_list_version: todoListVersion === 4 ? '1' : undefined, steps: {} } },
-              owner_org: 'test-org',
-            },
-            error: null,
-          })
-          writerMocks.replaceUserOnboardingIfUnchanged.mockImplementation(async (_userId, _expectedOnboarding, onboarding) => ({
-            data: { ...writerMocks.main.user, onboarding },
-            error: null,
-          }))
-          vi.mocked(sendOnboardingEvent).mockClear()
-          const container = document.createElement('div')
-          const app = createApp(AppOnboardingFlow, { onboarding: true, preOrg })
-          app.config.warnHandler = () => undefined
-          try {
-            app.mount(container)
-            await vi.waitFor(() => expect(vi.mocked(sendOnboardingEvent).mock.calls.some(call => call[0] === 'onboarding_step_viewed' && call[1]?.step === 'channel')).toBe(true))
-            const viewed = vi.mocked(sendOnboardingEvent).mock.calls.filter(call => call[0] === 'onboarding_step_viewed')
-            expect(viewed.some(call => call[1]?.step === 'setup' || call[1]?.step === 'install')).toBe(false)
-            expect(container.querySelector('[data-test="onboarding-setup-cli"]')).toBeNull()
-            expect(container.querySelector('[data-test="onboarding-install-cli"]')).toBeNull()
-          }
-          finally {
-            app.unmount()
-          }
+          for (const resumeKind of ['channel', 'legacy-final'] as const) {
+            const appId = `com.example.channel.${preOrg ? 'pre' : 'existing'}.${todoListVersion}.${resumeKind}`
+            writerMocks.route.query = { resume: appId, step: preOrg ? 'setup' : 'install' }
+            writerMocks.organization.currentOrganization = { gid: 'test-org', name: 'Test Org' }
+            writerMocks.abTestAssignments = { new_channel: { assigned_at: '2026-09-21T00:00:00.000Z', branch: todoListVersion === 2 ? 'B' : 'A' } }
+            writerMocks.main.user = {
+              id: 'user-bento-retry',
+              image_url: 'avatar.png',
+              onboarding: {
+                app_id: appId,
+                final_step: resumeKind === 'channel' ? (preOrg ? 'setup' : 'install') : undefined,
+                flow: preOrg ? 'pre_org' : 'existing_org',
+                setup_stage: resumeKind === 'channel' ? 'channel-routing' : 'cli',
+                status: 'in_progress',
+                step: resumeKind === 'channel' ? 'channel' : preOrg ? 'setup' : 'install',
+                updated_at: '2026-09-21T00:00:00.000Z',
+              },
+            }
+            writerMocks.loadApp.mockResolvedValue({
+              data: {
+                android_store_url: null,
+                app_id: appId,
+                existing_app: true,
+                icon_url: null,
+                ios_store_url: null,
+                name: 'Test App',
+                onboarding: { setup: { todo_list_version: todoListVersion, ota_todo_list_version: todoListVersion === 4 ? '1' : undefined, steps: {} } },
+                owner_org: 'test-org',
+              },
+              error: null,
+            })
+            writerMocks.replaceUserOnboardingIfUnchanged.mockImplementation(async (_userId, _expectedOnboarding, onboarding) => ({
+              data: { ...writerMocks.main.user, onboarding },
+              error: null,
+            }))
+            vi.mocked(sendOnboardingEvent).mockClear()
+            const container = document.createElement('div')
+            const app = createApp(AppOnboardingFlow, { onboarding: true, preOrg })
+            app.config.warnHandler = () => undefined
+            try {
+              app.mount(container)
+              await vi.waitFor(() => expect(vi.mocked(sendOnboardingEvent).mock.calls.some(call => call[0] === 'onboarding_step_viewed' && call[1]?.step === 'channel')).toBe(true))
+              const viewed = vi.mocked(sendOnboardingEvent).mock.calls.filter(call => call[0] === 'onboarding_step_viewed')
+              expect(viewed.some(call => call[1]?.step === 'setup' || call[1]?.step === 'install')).toBe(false)
+              expect(container.querySelector('[data-test="onboarding-setup-cli"]')).toBeNull()
+              expect(container.querySelector('[data-test="onboarding-install-cli"]')).toBeNull()
+            }
+            finally {
+              app.unmount()
+            }
 
-          writerMocks.main.authGeneration += 1
+            writerMocks.main.authGeneration += 1
+          }
         }
       }
     }
@@ -534,8 +535,8 @@ describe('app onboarding progress analytics integration', () => {
     const resumeLoader = sourceBetween('async function loadResumeApp(', 'async function importStoreMetadata()')
     expect(resumeLoader).not.toContain('initializeProgressTracking')
     expect(resumeLoader).not.toContain('viewStep')
-    expect(resumeLoader).toContain("finalOnboardingStep.value = props.preOrg || resumeStep.value === 'setup'")
-    expect(resumeLoader).toContain("if (finalOnboardingStep.value === 'setup')")
+    expect(resumeLoader).toContain('finalOnboardingStep.value = props.preOrg || resumeStep.value === \'setup\'')
+    expect(resumeLoader).toContain('if (finalOnboardingStep.value === \'setup\')')
     expectSourceOrder(resumeLoader, [
       'const savedProgress = parseUserOnboardingProgress(main.user?.onboarding)',
       'applyOnboardingProgress(savedProgress)',
@@ -713,28 +714,28 @@ describe('app onboarding progress analytics integration', () => {
   it.concurrent('routes both onboarding flows through channel before final setup', () => {
     const preOrgSteps = sourceBetween('const appOnboardingSteps = computed', 'const stepperStepId = computed')
     expectSourceOrder(preOrgSteps, [
-      "{ id: 'organization'",
-      "{ id: 'channel'",
-      "{ id: 'setup'",
+      '{ id: \'organization\'',
+      '{ id: \'channel\'',
+      '{ id: \'setup\'',
     ])
     expectSourceOrder(preOrgSteps, [
-      "{ id: 'choice'",
-      "{ id: 'channel'",
-      "{ id: finalOnboardingStep.value",
+      '{ id: \'choice\'',
+      '{ id: \'channel\'',
+      '{ id: finalOnboardingStep.value',
     ])
-    expect(onboardingSource).toContain("createAppRecord({ nextStep: shouldInvite ? 'organization' : 'channel' })")
-    expect(onboardingSource).toContain("completeAndViewStep('channel', { appId: createdApp.value.app_id })")
-    expect(onboardingSource).toContain("completeAndViewStep('channel', {\n    appId: createdApp.value.app_id,")
+    expect(onboardingSource).toContain('createAppRecord({ nextStep: shouldInvite ? \'organization\' : \'channel\' })')
+    expect(onboardingSource).toContain('completeAndViewStep(\'channel\', { appId: createdApp.value.app_id })')
+    expect(onboardingSource).toContain('completeAndViewStep(\'channel\', {\n    appId: createdApp.value.app_id,')
 
     const channel = sourceBetween('function continueFromChannelDefaultRouting()', 'function onTechnicalInviteOpened()')
     expectSourceOrder(channel, [
-      "setSetupStage('channel-self-assign')",
-      "setSetupStage('channel-console-assign')",
-      "setSetupStage('channel-create')",
-      "completeAndViewStep(finalOnboardingStep.value",
+      'setSetupStage(\'channel-self-assign\')',
+      'setSetupStage(\'channel-console-assign\')',
+      'setSetupStage(\'channel-create\')',
+      'completeAndViewStep(finalOnboardingStep.value',
     ])
-    expect(channel).toContain("if (flowStep.value !== 'channel' || setupStage.value !== 'channel-create' || !createdApp.value)")
-    expect(channel).toContain("trackChannelStageTransition(finalOnboardingStep.value, 'forward')")
+    expect(channel).toContain('if (flowStep.value !== \'channel\' || setupStage.value !== \'channel-create\' || !createdApp.value)')
+    expect(channel).toContain('trackChannelStageTransition(finalOnboardingStep.value, \'forward\')')
 
     const renderedChannel = sourceBetween('flowStep === \'channel\' && createdApp', 'flowStep === \'setup\' && createdApp')
     expectSourceOrder(renderedChannel, [
@@ -745,7 +746,7 @@ describe('app onboarding progress analytics integration', () => {
     ])
     expect(renderedChannel).not.toContain('newChannelTreatment')
     expect(onboardingSource).toContain('const showSetupChecklist = computed(() => (flowStep.value === \'setup\' || flowStep.value === \'install\') && usesOtaTodoList.value)')
-    expect(onboardingSource).toContain("progressTracker?.trackStepEvent(name, 'channel', {")
+    expect(onboardingSource).toContain('progressTracker?.trackStepEvent(name, \'channel\', {')
     expect(onboardingSource).toContain('void viewFinalStepWhenRendered(nextStep, previousAnalyticsStep)')
     expect(onboardingSource).toContain('if (!isLoading.value && createdApp.value && flowStep.value === step)')
   })

@@ -1235,14 +1235,14 @@ async function loadResumeApp(appId = resumeAppId.value) {
   void loadResumeIconPreview(data.icon_url, data.app_id, iconLoadRun)
   finalOnboardingStep.value = props.preOrg || resumeStep.value === 'setup' || (resumeStep.value !== 'choice' && savedProgress?.app_id === data.app_id && (savedProgress?.final_step === 'setup' || savedProgress?.step === 'setup')) ? 'setup' : 'install'
   if (finalOnboardingStep.value === 'setup') {
-    flowStep.value = savedProgress && savedProgress.app_id === data.app_id && savedProgress.setup_stage === 'cli'
+    flowStep.value = savedProgress && savedProgress.app_id === data.app_id && savedProgress.final_step && savedProgress.setup_stage === 'cli'
       ? 'setup'
       : 'channel'
     if (!savedProgress?.intent)
       hydrateIntentFromCurrentOrg()
   }
   else {
-    flowStep.value = resumeStep.value === 'choice' ? 'choice' : savedProgress && savedProgress.app_id === data.app_id && savedProgress.setup_stage === 'cli' ? 'install' : 'channel'
+    flowStep.value = resumeStep.value === 'choice' ? 'choice' : savedProgress && savedProgress.app_id === data.app_id && savedProgress.final_step && savedProgress.setup_stage === 'cli' ? 'install' : 'channel'
   }
   return true
 }

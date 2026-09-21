@@ -324,7 +324,7 @@ export function resumableOnboardingFlowStep(
   flow: OnboardingAnalyticsFlow,
 ): UserOnboardingStep {
   const step = clampResumableOnboardingStep(progress.step, flow)
-  if ((step === 'setup' || step === 'install') && progress.setup_stage !== 'cli')
+  if ((step === 'setup' || step === 'install') && (progress.setup_stage !== 'cli' || !progress.final_step))
     return 'channel'
   if (progress.publish_app_question === true && (step === 'intent' || step === 'publish_app_question'))
     return 'publish_app_question'

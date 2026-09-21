@@ -20,6 +20,13 @@ ADD CONSTRAINT "users_onboarding_valid" CHECK (
     )
   )
   AND (
+    (NOT ("onboarding" ? 'final_step'::"text"))
+    OR (
+      ("jsonb_typeof"(("onboarding" -> 'final_step'::"text")) = 'string'::"text")
+      AND (("onboarding" ->> 'final_step'::"text") = ANY (ARRAY['setup'::"text", 'install'::"text"]))
+    )
+  )
+  AND (
     (NOT ("onboarding" ? 'flow'::"text"))
     OR (
       ("jsonb_typeof"(("onboarding" -> 'flow'::"text")) = 'string'::"text")
