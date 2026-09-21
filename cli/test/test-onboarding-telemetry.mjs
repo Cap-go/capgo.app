@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { trackBuilderOnboardingAction, trackBuilderOnboardingCancelled, trackBuilderOnboardingLogin, trackBuilderOnboardingStep } from '../src/build/onboarding/telemetry.ts'
+import { saveImportDistributionAnswer, trackImportDistributionShown } from '../src/build/onboarding/ui/import-distribution-analytics.ts'
 
 
 console.log('🧪 Testing onboarding telemetry...\n')
@@ -183,6 +184,60 @@ try {
     })
   }
   console.log('✅ iOS setup question action payloads')
+
+  // The TUI tracks the import fork on display and only after persistence.
+  for (const [value, choice] of [
+    ['app_store', 'app_store'],
+    ['ad_hoc', 'ad_hoc'],
+    ['__cancel__', 'switch_to_create_new'],
+  ]) {
+    const requests = installFetchMock()
+    const sends = []
+    const trackAction = (action, tags) => sends.push(trackBuilderOnboardingAction({
+      action,
+      apikey: 'capgo-key',
+      appId: 'com.example.app',
+      orgId: 'org-id',
+      journeyId: 'bj_ios-import',
+      replaySessionId: 'build-onboarding-replay-ios',
+      platform: 'ios',
+      step: 'import-distribution-mode',
+      tags,
+    }))
+    trackImportDistributionShown('bj_ios-import', trackAction)
+    let saved = false
+    await saveImportDistributionAnswer(async () => { saved = true }, value, 'bj_ios-import', (action, tags) => {
+      assert.equal(saved, true, 'answer is tracked after save')
+      trackAction(action, tags)
+    })
+    await Promise.all(sends)
+    const bodies = requests.filter(request => request.url.endsWith('/private/events')).map(request => JSON.parse(request.init.body))
+    assert.equal(bodies.length, 2)
+    for (const [index, action] of ['question_shown', 'question_answered'].entries()) {
+      const body = bodies.find(body => body.tags.action === action)
+      assert.equal(body.event, 'Builder Onboarding Action')
+      assert.equal(body.org_id, 'org-id')
+      assert.deepEqual(body.tags, {
+        $session_id: 'build-onboarding-replay-ios',
+        action,
+        app_id: 'com.example.app',
+        attempt_id: 'bj_ios-import',
+        ...(index === 1 && { choice }),
+        journey_id: 'bj_ios-import',
+        platform: 'ios',
+        question_id: 'ios_import_distribution',
+        step: 'import-distribution-mode',
+      })
+    }
+  }
+  {
+    const actions = []
+    await assert.rejects(saveImportDistributionAnswer(async () => { throw new Error('save failed') }, 'ad_hoc', 'bj_ios-import', (...args) => actions.push(args)))
+    assert.equal(actions.length, 0, 'failed save emits no answered event')
+    await saveImportDistributionAnswer(async () => {}, '__cancel__', 'bj_ios-import', () => { throw new Error('telemetry failed') })
+    assert.doesNotThrow(() => trackImportDistributionShown('bj_ios-import', () => { throw new Error('telemetry failed') }))
+  }
+  console.log('✅ iOS import distribution question actions and save ordering')
 
   // ── Step event carries the journey id ─────────────────────────────────────
   {

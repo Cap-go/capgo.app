@@ -63,6 +63,7 @@ import { IOS_MIN_ROWS, terminalFitsOnboarding } from '../min-terminal-size.js'
 import { deleteProgress, extractKeyIdFromP8Path, getImportEntryStep, loadProgress, saveProgress } from '../progress.js'
 import { getBuildOnboardingRecoveryAdvice } from '../recovery.js'
 import { trackBuilderOnboardingAction, trackBuilderOnboardingStep } from '../telemetry.js'
+import { saveImportDistributionAnswer, trackImportDistributionShown } from './import-distribution-analytics.js'
 import {
   getPhaseLabel,
 
@@ -817,6 +818,17 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
       return
     setupMethodShownRef.current = true
     trackAction('question_shown', { attempt_id: journeyId, question_id: 'ios_setup_method' })
+  }, [step, terminalCols, terminalRows, trackAction, journeyId])
+  const importDistributionShownRef = useRef(false)
+  useEffect(() => {
+    if (step !== 'import-distribution-mode') {
+      importDistributionShownRef.current = false
+      return
+    }
+    if (importDistributionShownRef.current || !terminalFitsOnboarding(terminalCols, terminalRows, 'ios'))
+      return
+    importDistributionShownRef.current = true
+    trackImportDistributionShown(journeyId, trackAction)
   }, [step, terminalCols, terminalRows, trackAction, journeyId])
   const [teamId, setTeamId] = useState(initialProgress?.completedSteps.certificateCreated?.teamId || '')
   const [certData, setCertData] = useState<CertificateData | null>(initialProgress?.completedSteps.certificateCreated || null)
@@ -3822,7 +3834,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
                 completedSteps: {},
               }
               const reduced = applyIosInput('import-distribution-mode', base, { step: 'import-distribution-mode', value: value as 'app_store' | 'ad_hoc' | '__cancel__' })
-              await saveProgress(appId, reduced)
+              await saveImportDistributionAnswer(() => saveProgress(appId, reduced), value as 'app_store' | 'ad_hoc' | '__cancel__', journeyId, trackAction)
 
               if (value === '__cancel__') {
                 // The user bailed to the create-new path. Keep the React importMode
