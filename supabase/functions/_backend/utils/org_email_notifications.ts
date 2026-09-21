@@ -81,6 +81,7 @@ export type EmailPreferenceKey
     | 'bundle_incompatible'
     | 'bundle_incompatible_expected'
     | 'app_too_large'
+    | 'direct_update_without_delta'
 
 export interface EmailPreferences {
   usage_limit?: boolean
@@ -100,6 +101,7 @@ export interface EmailPreferences {
   bundle_incompatible?: boolean
   bundle_incompatible_expected?: boolean
   app_too_large?: boolean
+  direct_update_without_delta?: boolean
 }
 
 /**
