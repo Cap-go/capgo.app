@@ -475,18 +475,30 @@ function shouldSendAppTooLargeEvent(options: OptionsUpload): boolean {
   return shouldUploadFullZip(options) || hasCompleteS3UploadConfig(options)
 }
 
-async function resolveUpdaterVersionForUpload(options: OptionsUpload, root: string): Promise<string | null> {
-  if (!isCordovaMode(options.mode))
-    return getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
+const CORDOVA_UPDATER_PACKAGES = [
+  '@capgo/cordova-updater',
+  'cordova-plugin-capgo',
+] as const
 
-  const cordovaUpdaterPackages = [
-    '@capgo/cordova-updater',
-    'cordova-plugin-capgo',
-  ]
-  for (const packageName of cordovaUpdaterPackages) {
+type ResolvedUpdaterForUpload = {
+  packageName: string
+  version: string
+}
+
+function isCordovaUpdaterPackage(packageName: string): boolean {
+  return (CORDOVA_UPDATER_PACKAGES as readonly string[]).includes(packageName)
+}
+
+async function resolveUpdaterForUpload(options: OptionsUpload, root: string): Promise<ResolvedUpdaterForUpload | null> {
+  if (!isCordovaMode(options.mode)) {
+    const version = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
+    return version ? { packageName: '@capgo/capacitor-updater', version } : null
+  }
+
+  for (const packageName of CORDOVA_UPDATER_PACKAGES) {
     const version = await getInstalledVersion(packageName, root, options.packageJson)
     if (version)
-      return version
+      return { packageName, version }
   }
   return null
 }
@@ -507,7 +519,9 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
   zipped = await zipFile(path)
   s.message(`Calculating checksum`)
   const root = findRoot(cwd())
-  const updaterVersion = await resolveUpdaterVersionForUpload(options, root)
+  const resolvedUpdater = await resolveUpdaterForUpload(options, root)
+  const updaterVersion = resolvedUpdater?.version
+  const updaterPackageName = resolvedUpdater?.packageName
   let useSha256 = false
   let coerced
   try {
@@ -516,7 +530,7 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
   catch {
     coerced = undefined
   }
-  if (!updaterVersion) {
+  if (!resolvedUpdater) {
     if (isCordovaMode(options.mode)) {
       log.warn('Cannot find a Capgo updater plugin in node_modules. Using SHA256 checksum for this Cordova upload.')
       useSha256 = true
@@ -525,12 +539,15 @@ async function prepareBundleFile(path: string, options: OptionsUpload, apikey: s
       uploadFail('Cannot find @capgo/capacitor-updater in node_modules, please install it first with your package manager')
     }
   }
+  else if (updaterPackageName && isCordovaUpdaterPackage(updaterPackageName)) {
+    useSha256 = true
+  }
   else if (coerced) {
     // Use SHA256 for v5.10.0+, v6.25.0+ and v7.0.30+
     useSha256 = !isDeprecatedPluginVersion(coerced, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7)
   }
   else if (updaterVersion === 'link:@capgo/capacitor-updater' || updaterVersion === 'file:..' || updaterVersion === 'file:../') {
-    log.warn('Using local @capgo/capacitor-updater. Assuming latest version for checksum calculation.')
+    log.warn(`Using local ${updaterPackageName ?? '@capgo/capacitor-updater'}. Assuming latest version for checksum calculation.`)
     useSha256 = true
   }
   const forceCrc32 = options.forceCrc32Checksum === true
