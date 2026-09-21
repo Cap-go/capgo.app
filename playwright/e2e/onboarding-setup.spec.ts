@@ -614,6 +614,12 @@ test.describe('Dashboard exploration and returning to v3 setup', () => {
   const appId = 'com.example.onboarding-preview'
   const setup = `${fixture}?view=navigation&resume=${appId}&step=setup`
 
+  test('routes legacy saved setup through channel creation first', async ({ page }) => {
+    await page.goto(`${setup}&legacyChannel=1`)
+    await expect(page.locator('[data-test="channel-default-routing-animation"]')).toBeVisible()
+    await expect(page.locator('[data-test="onboarding-setup-cli"]')).toHaveCount(0)
+  })
+
   test('lands on the app dashboard, prompts on refresh, and returns to fullscreen setup', async ({ page }) => {
     await page.goto(setup)
     await expect(page.locator('[data-test="onboarding-setup-cli"]')).toBeVisible()
