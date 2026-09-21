@@ -128,7 +128,7 @@ describe('pre-organization onboarding v3', () => {
   })
 
   it.concurrent('does not restore a skipped generated App ID as a manual choice', () => {
-    expect(onboardingSource).toContain('appId: selectedAppIdSource.value === \'generated\' ? \'\' : generatedAppId.value')
+    expect(onboardingSource).toContain("appId: createdApp.value?.app_id ?? (selectedAppIdSource.value === 'generated' ? '' : generatedAppId.value)")
   })
 
   it.concurrent('tracks every app-details page as a standard onboarding step', () => {
@@ -248,7 +248,7 @@ describe('pre-organization onboarding v3', () => {
     expect(onboardingSource).toContain('website: websitePreview.value?.website')
     expect(onboardingSource).toContain('selectedStop.planName !== \'Solo\'')
     expect(onboardingSource).toContain('<OrganizationOnboardingInvite')
-    expect(onboardingSource).toContain('completeAndViewStep(\'setup\', { appId: createdApp.value.app_id })')
+    expect(onboardingSource).toContain('completeAndViewStep(\'channel\', { appId: createdApp.value.app_id })')
   })
 
   it.concurrent('keeps the organization website tooltip clear of the panel and viewport edges', () => {
@@ -302,7 +302,7 @@ describe('pre-organization onboarding v3', () => {
     const organizationCreation = sliceBetween(onboardingSource, 'async function createOrganizationAndApp()', 'async function createAppRecord(')
     expect(organizationCreation).toContain('preOrgCreatedOrganizationId.value = data.id')
     expect(organizationCreation).toContain('await completePreOrgAppCreation(data.id, shouldInvite)')
-    expect(organizationCreation).toContain('await createAppRecord({ nextStep: shouldInvite ? \'organization\' : \'setup\' })')
+    expect(organizationCreation).toContain('await createAppRecord({ nextStep: shouldInvite ? \'organization\' : \'channel\' })')
 
     const appCreation = sliceBetween(onboardingSource, 'async function createAppRecord(', 'async function seedDemoData()')
     expect(appCreation).toContain('returnToAppIdAfterConflict()')
@@ -317,8 +317,7 @@ describe('pre-organization onboarding v3', () => {
     expect(setup).toContain(':show-manual-setup-link="false"')
     expect(setup).toContain(':tracking-version="3"')
     expect(setup).toContain('t(\'onboarding-manual-setup-prefix\')')
-    expect(setup).toContain('<ChannelDefaultRoutingOnboarding')
-    expect(setup.indexOf('<ChannelDefaultRoutingOnboarding')).toBeLessThan(setup.indexOf('<AppOnboardingCliSteps'))
+    expect(onboardingSource.indexOf('<ChannelDefaultRoutingOnboarding')).toBeLessThan(onboardingSource.indexOf('flowStep === \'setup\' && createdApp'))
     expect(setup.indexOf('t(\'onboarding-manual-setup-prefix\')')).toBeLessThan(setup.indexOf('<TechnicalTeammateInviteCard'))
     expect(setup.indexOf('<AppOnboardingCliSteps')).toBeLessThan(setup.indexOf('<TechnicalTeammateInviteCard'))
     expect(setup).not.toContain('selectedUserCountStop')

@@ -204,8 +204,9 @@ describe('user onboarding progress', () => {
     }), 'pre_org')).toBe(false)
   })
 
-  it.concurrent('clamps post-org steps back to organization for the pre-org wizard', () => {
-    expect(clampResumableOnboardingStep('setup', 'pre_org')).toBe('organization')
+  it.concurrent('keeps pre-org channel and setup resumable', () => {
+    expect(clampResumableOnboardingStep('setup', 'pre_org')).toBe('setup')
+    expect(clampResumableOnboardingStep('channel', 'pre_org')).toBe('channel')
     expect(clampResumableOnboardingStep('install', 'existing_org')).toBe('install')
     expect(clampResumableOnboardingStep('details', 'pre_org')).toBe('details')
   })
@@ -248,13 +249,36 @@ describe('user onboarding progress', () => {
     expect(isUsersOnboardingCheckConstraintError({ code: '23505' })).toBe(false)
   })
 
-  it.concurrent('keeps channel education out of persisted top-level onboarding steps', () => {
-    expect(parseUserOnboardingProgress({
+  it.concurrent.each(['pre_org', 'existing_org'] as const)('resumes %s at its saved channel substep', (flow) => {
+    const progress = buildUserOnboardingProgress({
       status: 'in_progress',
-      step: 'channels',
-      flow: 'pre_org',
-      updated_at: '2026-08-15T00:00:00.000Z',
-    })).toBeNull()
+      step: 'channel',
+      flow,
+      setupStage: 'channel-console-assign',
+      finalStep: flow === 'pre_org' ? 'setup' : 'install',
+      appId: 'com.example.onboarding',
+    })
+    expect(parseUserOnboardingProgress(progress)).toMatchObject({
+      step: 'channel',
+      setup_stage: 'channel-console-assign',
+      final_step: flow === 'pre_org' ? 'setup' : 'install',
+    })
+    expect(resumableOnboardingFlowStep(progress, flow)).toBe('channel')
+  })
+
+  it.concurrent.each([
+    ['pre_org', 'setup'],
+    ['existing_org', 'install'],
+  ] as const)('routes legacy %s final steps through channel until completion', (flow, finalStep) => {
+    const legacy = parseUserOnboardingProgress({
+      status: 'in_progress',
+      step: finalStep,
+      flow,
+      updated_at: '2026-09-10T00:00:00.000Z',
+    })!
+    expect(resumableOnboardingFlowStep(legacy, flow)).toBe('channel')
+    expect(resumableOnboardingFlowStep({ ...legacy, setup_stage: 'channel-create' }, flow)).toBe('channel')
+    expect(resumableOnboardingFlowStep({ ...legacy, setup_stage: 'cli' }, flow)).toBe(finalStep)
   })
 
   it.concurrent('round-trips every channel setup stage and ignores invalid stages', () => {

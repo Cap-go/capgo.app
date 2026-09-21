@@ -25,8 +25,8 @@ describe('channel creation onboarding', () => {
       `setSetupStage('channel-create')`,
       `setSetupStage('cli')`,
     ])
-    expect(onboardingSource.match(/<ChannelCreateOnboarding/g)).toHaveLength(2)
-    expect(onboardingSource.match(/<ChannelCreateOnboarding\s+v-else-if="newChannelTreatment && setupStage === 'channel-create'"\s+:app-id="createdApp.app_id"/g)).toHaveLength(2)
+    expect(onboardingSource.match(/<ChannelCreateOnboarding/g)).toHaveLength(1)
+    expect(onboardingSource).toContain('v-else-if="setupStage === \'channel-create\'"')
   })
 
   it.concurrent('creates a real default channel for the onboarding app', () => {
@@ -84,7 +84,7 @@ describe('channel creation onboarding', () => {
 
   it.concurrent('tracks privacy-safe creation milestones through the onboarding event pipeline', () => {
     expect(onboardingSource).toContain('function trackChannelEvent(name: OnboardingChannelEvent')
-    expect(onboardingSource.match(/@analytics="trackChannelEvent"/g)).toHaveLength(8)
+    expect(onboardingSource.match(/@analytics="trackChannelEvent"/g)).toHaveLength(4)
     expect(onboardingSource).toContain(`'onboarding_channel_stage_continued'`)
     expect(onboardingSource).toContain(`'onboarding_channel_stage_backed'`)
 

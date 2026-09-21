@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs'
 import { URL as NodeUrl } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { createApp } from 'vue'
+import { sendOnboardingEvent } from '../src/services/onboardingTracking'
 import AppOnboardingFlow from '../src/components/dashboard/AppOnboardingFlow.vue'
 
-const messages = JSON.parse(readFileSync(new NodeUrl('../messages/en.json', import.meta.url), 'utf8')) as Record<string, string>
 
 const writerMocks = vi.hoisted(() => ({
   abTestAssignments: {} as Record<string, unknown>,
@@ -119,6 +119,148 @@ function expectSourceOrder(source: string, markers: string[]) {
 }
 
 describe('app onboarding progress analytics integration', () => {
+  it('records a final setup view only after the saved setup screen renders', async () => {
+    const previousUser = writerMocks.main.user
+    const previousRouteQuery = writerMocks.route.query
+    const previousOrganization = writerMocks.organization.currentOrganization
+    const matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    writerMocks.route.query = { resume: 'com.example.final', step: 'setup' }
+    writerMocks.organization.currentOrganization = { gid: 'test-org', name: 'Test Org' }
+    writerMocks.main.user = {
+      id: 'user-bento-retry',
+      image_url: 'avatar.png',
+      onboarding: {
+        app_id: 'com.example.final',
+        final_step: 'setup',
+        flow: 'pre_org',
+        setup_stage: 'cli',
+        status: 'in_progress',
+        step: 'setup',
+        updated_at: '2026-09-21T00:00:00.000Z',
+      },
+    }
+    writerMocks.loadApp.mockResolvedValue({
+      data: {
+        android_store_url: null,
+        app_id: 'com.example.final',
+        existing_app: true,
+        icon_url: null,
+        ios_store_url: null,
+        name: 'Test App',
+        onboarding: { setup: { todo_list_version: 3, steps: {} } },
+        owner_org: 'test-org',
+      },
+      error: null,
+    })
+    writerMocks.replaceUserOnboardingIfUnchanged.mockImplementation(async (_userId, _expectedOnboarding, onboarding) => ({
+      data: { ...writerMocks.main.user, onboarding },
+      error: null,
+    }))
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: vi.fn(() => ({ matches: false })) })
+    vi.mocked(sendOnboardingEvent).mockClear()
+    const container = document.createElement('div')
+    const app = createApp(AppOnboardingFlow, { onboarding: true, preOrg: true })
+    app.config.warnHandler = () => undefined
+    try {
+      app.mount(container)
+      await vi.waitFor(() => expect(vi.mocked(sendOnboardingEvent).mock.calls.some(call => call[0] === 'onboarding_step_viewed' && call[1]?.step === 'setup')).toBe(true))
+      expect(container.querySelector('[data-test="onboarding-setup-cli"]')).not.toBeNull()
+      expect(vi.mocked(sendOnboardingEvent).mock.calls.some(call => call[0] === 'onboarding_step_viewed' && call[1]?.step === 'channel')).toBe(false)
+    }
+    finally {
+      app.unmount()
+      writerMocks.main.user = previousUser
+      writerMocks.route.query = previousRouteQuery
+      writerMocks.organization.currentOrganization = previousOrganization
+      if (matchMediaDescriptor)
+        Object.defineProperty(window, 'matchMedia', matchMediaDescriptor)
+      else
+        Reflect.deleteProperty(window, 'matchMedia')
+    }
+  })
+
+  it('resumes channel before setup for either todo-list version, flow, and assignment', async () => {
+    const previousUser = writerMocks.main.user
+    const previousAuthGeneration = writerMocks.main.authGeneration
+    const previousRouteQuery = writerMocks.route.query
+    const previousOrganization = writerMocks.organization.currentOrganization
+    const previousAssignments = writerMocks.abTestAssignments
+    const matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn(() => ({ matches: false })),
+    })
+
+    try {
+      for (const preOrg of [true, false]) {
+        for (const todoListVersion of [2, 3, 4]) {
+          const appId = `com.example.channel.${preOrg ? 'pre' : 'existing'}.${todoListVersion}`
+          writerMocks.route.query = { resume: appId, step: preOrg ? 'setup' : 'install' }
+          writerMocks.organization.currentOrganization = { gid: 'test-org', name: 'Test Org' }
+          writerMocks.abTestAssignments = { new_channel: { assigned_at: '2026-09-21T00:00:00.000Z', branch: todoListVersion === 2 ? 'B' : 'A' } }
+          writerMocks.main.user = {
+            id: 'user-bento-retry',
+            image_url: 'avatar.png',
+            onboarding: {
+              app_id: appId,
+              final_step: preOrg ? 'setup' : 'install',
+              flow: preOrg ? 'pre_org' : 'existing_org',
+              setup_stage: 'channel-routing',
+              status: 'in_progress',
+              step: 'channel',
+              updated_at: '2026-09-21T00:00:00.000Z',
+            },
+          }
+          writerMocks.loadApp.mockResolvedValue({
+            data: {
+              android_store_url: null,
+              app_id: appId,
+              existing_app: true,
+              icon_url: null,
+              ios_store_url: null,
+              name: 'Test App',
+              onboarding: { setup: { todo_list_version: todoListVersion, ota_todo_list_version: todoListVersion === 4 ? '1' : undefined, steps: {} } },
+              owner_org: 'test-org',
+            },
+            error: null,
+          })
+          writerMocks.replaceUserOnboardingIfUnchanged.mockImplementation(async (_userId, _expectedOnboarding, onboarding) => ({
+            data: { ...writerMocks.main.user, onboarding },
+            error: null,
+          }))
+          vi.mocked(sendOnboardingEvent).mockClear()
+          const container = document.createElement('div')
+          const app = createApp(AppOnboardingFlow, { onboarding: true, preOrg })
+          app.config.warnHandler = () => undefined
+          try {
+            app.mount(container)
+            await vi.waitFor(() => expect(vi.mocked(sendOnboardingEvent).mock.calls.some(call => call[0] === 'onboarding_step_viewed' && call[1]?.step === 'channel')).toBe(true))
+            const viewed = vi.mocked(sendOnboardingEvent).mock.calls.filter(call => call[0] === 'onboarding_step_viewed')
+            expect(viewed.some(call => call[1]?.step === 'setup' || call[1]?.step === 'install')).toBe(false)
+            expect(container.querySelector('[data-test="onboarding-setup-cli"]')).toBeNull()
+            expect(container.querySelector('[data-test="onboarding-install-cli"]')).toBeNull()
+          }
+          finally {
+            app.unmount()
+          }
+
+          writerMocks.main.authGeneration += 1
+        }
+      }
+    }
+    finally {
+      writerMocks.main.user = previousUser
+      writerMocks.main.authGeneration = previousAuthGeneration
+      writerMocks.route.query = previousRouteQuery
+      writerMocks.organization.currentOrganization = previousOrganization
+      writerMocks.abTestAssignments = previousAssignments
+      if (matchMediaDescriptor)
+        Object.defineProperty(window, 'matchMedia', matchMediaDescriptor)
+      else
+        Reflect.deleteProperty(window, 'matchMedia')
+    }
+  })
+
   it.concurrent('forwards document visibility changes and removes the listener on teardown', () => {
     const visibilityHandler = sourceBetween('function trackOnboardingVisibilityChange()', 'function initializeProgressTracking(')
     expect(visibilityHandler).toContain('const visibilityChange = { state: document.visibilityState, occurredAt: Date.now() }')
@@ -338,8 +480,8 @@ describe('app onboarding progress analytics integration', () => {
     expect(initializer).toContain('trackedAnalyticsSteps = appOnboardingSteps.value.flatMap<OnboardingAnalyticsStep>')
     expect(initializer).toContain('return Object.values(APP_DETAILS_ANALYTICS_STEPS)')
     expect(initializer).toContain(`trackedAnalyticsSteps.unshift('welcome')`)
-    expect(initializer).toContain(`if (!props.preOrg && resumed && flowStep.value === 'setup')`)
-    expect(initializer).toContain(`trackedAnalyticsSteps.push('setup')`)
+    expect(initializer).toContain(`if (initialStep === 'setup' || initialStep === 'install')`)
+    expect(initializer).toContain('void viewFinalStepWhenRendered(initialStep)')
     expect(initializer).toContain('ensurePublishAppQuestionStepTracked()')
     expect(initializer).toContain('steps: trackedAnalyticsSteps')
     expect(initializer).toContain('resumed,')
@@ -389,10 +531,11 @@ describe('app onboarding progress analytics integration', () => {
     ])
     expect(resumeDialog.match(/return null/g)).toHaveLength(2)
 
-    const resumeLoader = sourceBetween('async function loadResumeApp()', 'async function importStoreMetadata()')
+    const resumeLoader = sourceBetween('async function loadResumeApp(', 'async function importStoreMetadata()')
     expect(resumeLoader).not.toContain('initializeProgressTracking')
     expect(resumeLoader).not.toContain('viewStep')
-    expect(resumeLoader).toContain('if (props.preOrg || resumeStep.value === \'setup\')')
+    expect(resumeLoader).toContain("finalOnboardingStep.value = props.preOrg || resumeStep.value === 'setup'")
+    expect(resumeLoader).toContain("if (finalOnboardingStep.value === 'setup')")
     expectSourceOrder(resumeLoader, [
       'const savedProgress = parseUserOnboardingProgress(main.user?.onboarding)',
       'applyOnboardingProgress(savedProgress)',
@@ -561,127 +704,50 @@ describe('app onboarding progress analytics integration', () => {
     expect(onboardingSource).toContain(`sendOnboardingEvent('onboarding_intent_selected', {`)
   })
 
-  it.concurrent('keeps Maker+ invitations inside the organization progress step before setup', () => {
-    expect(onboardingSource).toContain(`createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })`)
+  it.concurrent('keeps Maker+ invitations inside the organization progress step before channel', () => {
+    expect(onboardingSource).toContain(`createAppRecord({ nextStep: shouldInvite ? 'organization' : 'channel' })`)
     expect(onboardingSource).toContain(`trackOrganizationEvent('onboarding_organization_invite_viewed')`)
-    expect(onboardingSource).toContain(`completeAndViewStep('setup', { appId: createdApp.value.app_id })`)
+    expect(onboardingSource).toContain(`completeAndViewStep('channel', { appId: createdApp.value.app_id })`)
   })
 
-  it.concurrent('shows channel education before CLI for every fresh or resumed setup path', () => {
-    expect(onboardingSource).toContain(`type PreOrgFlowStep = 'intent' | 'publish_app_question' | 'details' | 'organization' | 'setup'`)
-    expect(onboardingSource).toContain(`type SetupStage = UserOnboardingSetupStage`)
-    expect(onboardingSource).toContain(`const setupStage = ref<SetupStage>('cli')`)
-    expect(onboardingSource).toContain('const newChannelTreatment = computed(() => hasNewChannelTreatment(onboardingForABTests.value))')
-    expect(onboardingSource).toContain('const onboardingABTestsPending = ref(false)')
-
-    const assignmentRefresh = sourceBetween('function refreshOnboardingABTests(', 'async function waitForOnboardingABTests(')
-    expect(assignmentRefresh).toContain('onboardingABTestsPending.value = true')
-    expect(assignmentRefresh).toContain('onboardingABTestsPending.value = false')
-    expect(assignmentRefresh).toContain('reconcileSetupStageWithChannelAssignment()')
-
-    const assignmentStageReconciliation = sourceBetween('function resolveSetupStage(', 'function continueFromChannelDefaultRouting()')
-    expect(assignmentStageReconciliation).toContain('!newChannelTreatment.value && !onboardingABTestsPending.value')
-    expect(assignmentStageReconciliation).toContain('function reconcileSetupStageWithChannelAssignment()')
-    expect(assignmentStageReconciliation).toContain(`flowStep.value !== 'setup' && flowStep.value !== 'install'`)
-    expect(assignmentStageReconciliation).toContain('onboardingABTestsPending.value')
-    expect(assignmentStageReconciliation).toContain('newChannelTreatment.value')
-    expect(assignmentStageReconciliation).toContain(`setSetupStage('cli')`)
-
-    const stepList = sourceBetween('const appOnboardingSteps = computed', 'const onboardingProgressSteps = computed')
-    expect(stepList).not.toContain(`{ id: 'channels'`)
-
-    const progressStepList = sourceBetween('const onboardingProgressSteps = computed', 'const currentProgressStepId = computed')
-    expectSourceOrder(progressStepList, [
-      `{ id: 'intent', label: t('unified-onboarding-step-intent') }`,
-      `{ id: 'details', label: t('app-onboarding-step-details') }`,
-      `{ id: 'organization', label: t('unified-onboarding-step-organization') }`,
-      `{ id: 'channel', label: t('unified-onboarding-step-channel') }`,
-      `{ id: 'setup', label: t('unified-onboarding-step-setup') }`,
+  it.concurrent('routes both onboarding flows through channel before final setup', () => {
+    const preOrgSteps = sourceBetween('const appOnboardingSteps = computed', 'const stepperStepId = computed')
+    expectSourceOrder(preOrgSteps, [
+      "{ id: 'organization'",
+      "{ id: 'channel'",
+      "{ id: 'setup'",
     ])
-    expect(progressStepList).toContain('props.preOrg && newChannelTreatment.value')
-    expect(messages['unified-onboarding-step-channel']).toBe('Channel')
-    expect(onboardingSource).toContain(`flowStep.value === 'setup' && setupStage.value !== 'cli'`)
-    expect(onboardingSource).toContain('v-for="(entry, index) in onboardingProgressSteps"')
-    expect(onboardingSource).toContain(`:aria-current="currentProgressStepId === entry.id ? 'step' : undefined"`)
-    expect(onboardingSource).toContain(`newChannelTreatment.value`)
-    const setupBackButton = sourceBetween('const showSetupBackButton = computed', 'const showLanguageSelector = computed')
-    expect(setupBackButton).toContain(`props.preOrg`)
-    expect(setupBackButton).toContain(`flowStep.value === 'setup'`)
-    expect(setupBackButton).toContain(`!props.preOrg`)
-    expect(setupBackButton).toContain(`flowStep.value === 'install'`)
-    expect(setupBackButton.match(/setupStage\.value === 'channel-create'/g)).toHaveLength(2)
-    expect(setupBackButton.match(/setupStage\.value === 'cli'/g)).toHaveLength(1)
-    expect(onboardingSource).toContain(`data-test="onboarding-setup-back"`)
-    expect(onboardingSource).toContain(`@click="goBackFromSetupStage"`)
+    expectSourceOrder(preOrgSteps, [
+      "{ id: 'choice'",
+      "{ id: 'channel'",
+      "{ id: finalOnboardingStep.value",
+    ])
+    expect(onboardingSource).toContain("createAppRecord({ nextStep: shouldInvite ? 'organization' : 'channel' })")
+    expect(onboardingSource).toContain("completeAndViewStep('channel', { appId: createdApp.value.app_id })")
+    expect(onboardingSource).toContain("completeAndViewStep('channel', {\n    appId: createdApp.value.app_id,")
 
-    expect(onboardingSource).toContain(`createAppRecord({ nextStep: shouldInvite ? 'organization' : 'setup' })`)
-    expect(onboardingSource).toContain(`completeAndViewStep('setup', { appId: createdApp.value.app_id })`)
+    const channel = sourceBetween('function continueFromChannelDefaultRouting()', 'function onTechnicalInviteOpened()')
+    expectSourceOrder(channel, [
+      "setSetupStage('channel-self-assign')",
+      "setSetupStage('channel-console-assign')",
+      "setSetupStage('channel-create')",
+      "completeAndViewStep(finalOnboardingStep.value",
+    ])
+    expect(channel).toContain("if (flowStep.value !== 'channel' || setupStage.value !== 'channel-create' || !createdApp.value)")
+    expect(channel).toContain("trackChannelStageTransition(finalOnboardingStep.value, 'forward')")
 
-    const channelTransition = sourceBetween('function setSetupStage(', 'function onTechnicalInviteOpened()')
-    expect(channelTransition).toContain(`setSetupStage('channel-self-assign')`)
-    expect(channelTransition).toContain('function continueFromChannelSelfAssign()')
-    expect(channelTransition).toContain(`setSetupStage('channel-console-assign')`)
-    expect(channelTransition).toContain('function continueFromChannelConsoleAssign()')
-    expect(channelTransition).toContain(`setSetupStage('channel-create')`)
-    expect(channelTransition).toContain('function continueFromChannelCreate()')
-    expect(channelTransition).toContain(`setSetupStage('cli')`)
-    expect(channelTransition).toContain(`'channel-self-assign': 'channel-routing'`)
-    expect(channelTransition).toContain(`'channel-console-assign': 'channel-self-assign'`)
-    expect(channelTransition).toContain(`'channel-create': 'channel-console-assign'`)
-    expect(channelTransition).toContain(`'cli': 'channel-create'`)
-    expect(channelTransition).toContain('function goBackFromSetupStage()')
-
-    const setup = sourceBetween(`v-else-if="flowStep === 'setup' && createdApp"`, `v-else-if="!props.preOrg && flowStep === 'choice'`)
-    expect(setup).toContain(`v-if="newChannelTreatment && setupStage === 'channel-routing'"`)
-    expect(setup).toContain('<ChannelDefaultRoutingOnboarding')
-    expect(setup).toContain('@continue="continueFromChannelDefaultRouting"')
-    expect(setup).toContain(`v-else-if="newChannelTreatment && setupStage === 'channel-self-assign'"`)
-    expect(setup).toContain('<ChannelSelfAssignOnboarding')
-    expect(setup).toContain('@back="goBackFromSetupStage"')
-    expect(setup).toContain('@continue="continueFromChannelSelfAssign"')
-    expect(setup).toContain(`v-else-if="newChannelTreatment && setupStage === 'channel-console-assign'"`)
-    expect(setup).toContain('<ChannelConsoleAssignOnboarding')
-    expect(setup).toContain('@continue="continueFromChannelConsoleAssign"')
-    expect(setup).toContain(`v-else-if="newChannelTreatment && setupStage === 'channel-create'"`)
-    expect(setup).toContain('<ChannelCreateOnboarding')
-    expect(setup).toContain('@continue="continueFromChannelCreate"')
-    expect(setup).toContain(`v-else data-test="onboarding-setup-cli"`)
-    expect(setup.indexOf('<ChannelDefaultRoutingOnboarding')).toBeLessThan(setup.indexOf('data-test="onboarding-setup-cli"'))
-    expect(setup.indexOf('<ChannelDefaultRoutingOnboarding')).toBeLessThan(setup.indexOf('<ChannelSelfAssignOnboarding'))
-    expect(setup.indexOf('<ChannelSelfAssignOnboarding')).toBeLessThan(setup.indexOf('<ChannelConsoleAssignOnboarding'))
-    expect(setup.indexOf('<ChannelConsoleAssignOnboarding')).toBeLessThan(setup.indexOf('<ChannelCreateOnboarding'))
-    expect(setup.indexOf('<ChannelCreateOnboarding')).toBeLessThan(setup.indexOf('data-test="onboarding-setup-cli"'))
-
-    const install = sourceBetween(`v-else-if="!props.preOrg && flowStep === 'install' && createdApp"`, `v-if="showLanguageSelector"`)
-    expect(install).toContain(`v-if="newChannelTreatment && setupStage === 'channel-routing'"`)
-    expect(install).toContain('<ChannelDefaultRoutingOnboarding')
-    expect(install).toContain('@continue="continueFromChannelDefaultRouting"')
-    expect(install).toContain(`v-else-if="newChannelTreatment && setupStage === 'channel-self-assign'"`)
-    expect(install).toContain('<ChannelSelfAssignOnboarding')
-    expect(install).toContain('@back="goBackFromSetupStage"')
-    expect(install).toContain('@continue="continueFromChannelSelfAssign"')
-    expect(install).toContain(`v-else-if="newChannelTreatment && setupStage === 'channel-console-assign'"`)
-    expect(install).toContain('<ChannelConsoleAssignOnboarding')
-    expect(install).toContain('@continue="continueFromChannelConsoleAssign"')
-    expect(install).toContain(`v-else-if="newChannelTreatment && setupStage === 'channel-create'"`)
-    expect(install).toContain('<ChannelCreateOnboarding')
-    expect(install).toContain('@continue="continueFromChannelCreate"')
-    expect(install).toContain(`v-else data-test="onboarding-install-cli"`)
-    expect(install.indexOf('<ChannelDefaultRoutingOnboarding')).toBeLessThan(install.indexOf('data-test="onboarding-install-cli"'))
-    expect(install.indexOf('<ChannelDefaultRoutingOnboarding')).toBeLessThan(install.indexOf('<ChannelSelfAssignOnboarding'))
-    expect(install.indexOf('<ChannelSelfAssignOnboarding')).toBeLessThan(install.indexOf('<ChannelConsoleAssignOnboarding'))
-    expect(install.indexOf('<ChannelConsoleAssignOnboarding')).toBeLessThan(install.indexOf('<ChannelCreateOnboarding'))
-    expect(install.indexOf('<ChannelCreateOnboarding')).toBeLessThan(install.indexOf('data-test="onboarding-install-cli"'))
-
-    const resume = sourceBetween('async function loadResumeApp()', 'async function importStoreMetadata()')
-    expect(resume).toContain(`flowStep.value = 'setup'`)
-    expect(resume).toContain(`flowStep.value = resumeStep.value === 'choice' ? 'choice' : 'install'`)
-    expect(resume).toContain('applyOnboardingProgress(savedProgress)')
-
-    const snapshot = sourceBetween('function snapshotOnboardingProgress(', 'function clearScheduledOnboardingProgress()')
-    expect(snapshot).toContain(`setupStage: flowStep.value === 'setup' || flowStep.value === 'install' ? setupStage.value : undefined`)
-    expect(onboardingSource).toContain('setup_stage')
-    expect(channelTransition).toContain('void persistOnboardingProgress()')
+    const renderedChannel = sourceBetween('flowStep === \'channel\' && createdApp', 'flowStep === \'setup\' && createdApp')
+    expectSourceOrder(renderedChannel, [
+      '<ChannelDefaultRoutingOnboarding',
+      '<ChannelSelfAssignOnboarding',
+      '<ChannelConsoleAssignOnboarding',
+      '<ChannelCreateOnboarding',
+    ])
+    expect(renderedChannel).not.toContain('newChannelTreatment')
+    expect(onboardingSource).toContain('const showSetupChecklist = computed(() => (flowStep.value === \'setup\' || flowStep.value === \'install\') && usesOtaTodoList.value)')
+    expect(onboardingSource).toContain("progressTracker?.trackStepEvent(name, 'channel', {")
+    expect(onboardingSource).toContain('void viewFinalStepWhenRendered(nextStep, previousAnalyticsStep)')
+    expect(onboardingSource).toContain('if (!isLoading.value && createdApp.value && flowStep.value === step)')
   })
 
   it.concurrent('keeps the unload warning scoped to unfinished pre-org onboarding', () => {
@@ -715,7 +781,7 @@ describe('app onboarding progress analytics integration', () => {
     expect(appCreation).toContain('completeAndViewStep(nextStep, completionProperties)')
 
     const realSetupChoice = sourceBetween('function goToInstallStep()', 'function openDashboard()')
-    expect(realSetupChoice).toContain(`completeAndViewStep('install', {`)
+    expect(realSetupChoice).toContain(`completeAndViewStep('channel', {`)
     expect(realSetupChoice).toContain('appId: createdApp.value.app_id')
   })
 
