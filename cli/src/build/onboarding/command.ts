@@ -7,7 +7,8 @@ import { render } from 'ink'
 import React from 'react'
 import { resolveOwnerOrgId } from '../../analytics/org-resolver.js'
 import { trackEvent } from '../../analytics/track.js'
-import { findSavedKeySilent, getAppId, getConfig } from '../../utils.js'
+import { findSavedKeySilent, getConfig } from '../../utils.js'
+import { getBuilderAppId, getConfiguredBuilderAppId } from '../app-id.js'
 import { appendInternalLog, startInternalLog } from '../../support/internal-log.js'
 import { newBuilderJourneyId } from './journey.js'
 import { trackBuilderOnboardingCancelled } from './telemetry.js'
@@ -218,9 +219,8 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
   let appId: string | undefined
   // `iosBundleIdInitial` is the iOS-side default — the top-level
   // `config.appId` (what `cap sync` writes into PRODUCT_BUNDLE_IDENTIFIER).
-  // This is distinct from `appId` above, which `getAppId` resolves to the
-  // CapacitorUpdater plugin override when present (e.g. a Capgo dev-tunnel
-  // suffix). The iOS onboarding flow uses these for different purposes —
+  // This is distinct from `appId` above, which resolves the Capgo Builder key.
+  // The iOS onboarding flow uses these for different purposes —
   // never collapse them — see the AppProps doc-block in ui/app.tsx.
   let iosBundleIdInitial: string | undefined
   let iosDir = 'ios'
@@ -255,7 +255,14 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
     process.exit(1)
   }
 
-  appId = getAppId(undefined, extConfig.config)
+  try {
+    appId = getBuilderAppId(undefined, extConfig.config)
+  }
+  catch (error) {
+    await stopInk(projectDiscoveryInk)
+    log.error(error instanceof Error ? error.message : String(error))
+    process.exit(1)
+  }
   iosBundleIdInitial = extConfig.config.appId
   iosDir = getPlatformDirFromCapacitorConfig(extConfig.config, 'ios')
   androidDir = getPlatformDirFromCapacitorConfig(extConfig.config, 'android')
@@ -277,6 +284,7 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
   // resolved Capgo lookup key. Mismatch detection will still surface the
   // pbxproj/plist values; the user can pick the right one from there.
   const iosBundleIdForOnboarding = iosBundleIdInitial || appId
+  const appflowPackageName = getConfiguredBuilderAppId(extConfig.config) ? iosBundleIdForOnboarding : appId
 
   const initialPlatform = resolveInitialPlatform(options, iosDir, androidDir)
 
@@ -360,6 +368,7 @@ export async function onboardingBuilderCommand(options: OnboardingBuilderOptions
       // suffix via plugins.CapacitorUpdater.appId) for Capgo SaaS calls.
       // See the AppProps doc-block in ui/app.tsx for the split.
       iosBundleIdInitial: iosBundleIdForOnboarding,
+      appflowPackageName,
       iosDir,
       androidDir,
       apikey: options.apikey,

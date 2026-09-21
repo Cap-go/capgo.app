@@ -6,7 +6,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { cwd, exit } from 'node:process'
 import { confirm, isCancel, log } from '@clack/prompts'
-import { canPromptInteractively, formatError, getAppId, getConfig } from '../utils'
+import { canPromptInteractively, formatError, getConfig } from '../utils'
+import { getBuilderAppId } from './app-id'
 import { loadSavedCredentials, updateSavedCredentials } from './credentials'
 import { decodeCredentialBase64 } from './credentials-base64'
 import { resolveCredentialsStore } from './credentials-store-selection'
@@ -252,7 +253,7 @@ export async function runIosProvisioningCommand(options: IosProvisioningOptions,
 
 async function loadDefaultProject(): Promise<IosProvisioningProject> {
   const { config } = await getConfig(true)
-  const appId = getAppId(undefined, config)
+  const appId = getBuilderAppId(undefined, config)
   if (!appId)
     throw new Error('The Capacitor project does not define an app id')
 

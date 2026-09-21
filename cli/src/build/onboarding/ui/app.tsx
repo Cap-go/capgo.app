@@ -245,10 +245,9 @@ interface LogEntry { text: string, color?: string }
 interface AppProps {
   /**
    * Capgo lookup key (progress files, saved credentials, Capgo SaaS build
-   * API). Resolved by `getAppId()`, which prefers
-   * `config.plugins.CapacitorUpdater.appId` over `config.appId` so dev-tunnel
-   * sandboxes can override the Capgo-side identifier without renaming the
-   * iOS bundle. Do NOT use for Apple-side operations — see
+   * API). Resolved by the Builder app-id helper, which uses
+   * `plugins.CapgoBuilder.capgoBuilderAppId` when configured and otherwise
+   * keeps the prior updater/native fallback. Do NOT use for Apple-side operations — see
    * `iosBundleIdInitial`.
    */
   appId: string
@@ -359,9 +358,7 @@ const OnboardingApp: FC<AppProps> = ({ appId, iosBundleIdInitial, initialProgres
 
   // ─── iOS bundle id ─────────────────────────────────────────────────────
   //
-  // `appId` (prop) is the Capgo lookup key — what `getAppId()` resolves to,
-  // which prefers `config.plugins.CapacitorUpdater.appId` over `config.appId`
-  // for dev-tunnel sandboxes. It owns the progress-file key, credentials
+  // `appId` (prop) is the Capgo Builder lookup key. It owns the progress-file key, credentials
   // store key, and `capgo build request` command path.
   //
   // `iosBundleId` is what we send to Apple — sourced from `config.appId`
