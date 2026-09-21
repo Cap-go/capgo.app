@@ -16,6 +16,14 @@ import React from 'react'
 import stringWidth from 'string-width'
 import OnboardingShell from '../src/build/onboarding/ui/shell.tsx'
 
+const loginServices = {
+  browserAvailable: true,
+  validateExisting: async () => {},
+  savePasted: async () => {},
+  beginBrowser: async () => { throw new Error('unused') },
+  completeBrowser: async () => {},
+}
+
 const watchdog = setTimeout(() => {
   console.error('WATCHDOG 30s')
   process.exit(2)
@@ -52,7 +60,7 @@ function makeStdin() {
 async function renderShellAt(cols, rows) {
   const stdout = makeStdout(cols, rows)
   const instance = render(
-    React.createElement(OnboardingShell, { appId: 'com.test.app', iosDir: 'ios', androidDir: 'android', journeyId: 'bj_test' }),
+    React.createElement(OnboardingShell, { appId: 'com.test.app', iosDir: 'ios', androidDir: 'android', journeyId: 'bj_test', apikey: 'test-key', loginServices }),
     { stdout, stderr: makeStdout(cols, rows), stdin: makeStdin(), debug: true, exitOnCtrlC: false, patchConsole: false },
   )
   await new Promise(r => setTimeout(r, 80))

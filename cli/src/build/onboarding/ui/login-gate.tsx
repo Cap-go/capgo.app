@@ -1,6 +1,7 @@
 import type { FC, ReactNode } from 'react'
 import type { BrowserLoginSession } from '../../../init/browser-login.js'
 import type { BuilderLoginServices } from '../login.js'
+import { Select } from '@inkjs/ui'
 import { Box, Text, useInput } from 'ink'
 import React, { useEffect, useRef, useState } from 'react'
 import { Header, FilteredTextInput, SpinnerLine } from './components.js'
@@ -157,12 +158,32 @@ const BuilderLoginGate: FC<BuilderLoginGateProps> = ({ candidateKey, services, c
 
   return (
     <Box flexDirection="column" minHeight={rows} padding={1}>
-      {compact && view === 'entry'
+      {compact
         ? <Text bold color="cyan">Capgo Cloud Build · Login</Text>
         : <Header />}
       {view === 'checking' && <Box marginTop={1}><SpinnerLine text="Checking Capgo login…" /></Box>}
-      {view === 'candidate-error' && (
-        <CardChooser
+      {view === 'candidate-error' && (compact
+        ? (
+            <Box flexDirection="column">
+              <Text bold>We couldn't verify your Capgo login.</Text>
+              <Select
+                options={[
+                  { value: 'retry', label: '🔄 Retry key' },
+                  { value: 'another', label: '📋 Use another key' },
+                ]}
+                onChange={(choice) => {
+                  if (choice === 'retry')
+                    retryCandidate()
+                  else {
+                    setMethod(services.browserAvailable ? undefined : 'paste')
+                    setError(undefined)
+                    setView(services.browserAvailable ? 'choice' : 'entry')
+                  }
+                }}
+              />
+            </Box>
+          )
+        : <CardChooser
           layout={pickPlatformLayout(cols, rows)}
           question="We couldn't verify your Capgo login."
           subtitle={error}
@@ -180,16 +201,28 @@ const BuilderLoginGate: FC<BuilderLoginGateProps> = ({ candidateKey, services, c
             }
           }}
           footer={compact ? undefined : footer}
-        />
+          />
       )}
-      {view === 'choice' && (
-        <CardChooser
+      {view === 'choice' && (compact
+        ? (
+            <Box flexDirection="column">
+              <Text bold>How would you like to log in?</Text>
+              <Select
+                options={[
+                  { value: 'browser', label: '🌎 Open browser' },
+                  { value: 'paste', label: '📋 Paste API key' },
+                ]}
+                onChange={chooseMethod}
+              />
+            </Box>
+          )
+        : <CardChooser
           layout={pickPlatformLayout(cols, rows)}
           question="How would you like to log in?"
           options={choiceOptions}
           onSelect={chooseMethod}
           footer={compact ? undefined : footer}
-        />
+          />
       )}
       {view === 'opening' && <Box marginTop={1}><SpinnerLine text="Opening the Capgo Dashboard…" /></Box>}
       {view === 'verifying' && <Box marginTop={1}><SpinnerLine text="Checking API key…" /></Box>}

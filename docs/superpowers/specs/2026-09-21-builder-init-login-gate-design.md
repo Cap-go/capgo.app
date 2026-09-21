@@ -94,16 +94,20 @@ separate, bordered masked entry area headed:
 > Paste the API key from the Capgo Dashboard
 
 The browser path also shows the generated URL, with a concise fallback note if
-the browser did not open. The input shows a bounded number of mask characters
-even when a long key is pasted; it retains and submits the whole value. Key
+the browser did not open. On small terminals, the key input uses a plain,
+unboxed masked prompt similar to OTA; the same choice and validation flow stays
+available. The input shows a bounded number of mask characters even when a
+long key is pasted; it retains and submits the whole value. Key
 characters never appear in the rendered frame, normal output, support log, or
 telemetry. The field accepts a user-initiated terminal paste. The CLI does not
 read the macOS clipboard automatically and does not impose a UUID-only format
 on keys.
 
 At small terminal sizes, the existing `44 × 11` picker floor and responsive
-list layout apply. The login view must not clip at that floor; the existing
-resize prompt covers smaller terminals. Authentication stays ahead of an
+list layout apply. The bordered key input appears only when the whole input
+view fits; the unboxed prompt is used otherwise. The login view must not clip
+at the picker floor; the existing resize prompt covers smaller terminals.
+Authentication stays ahead of an
 explicit `--platform` and ahead of the single-native-folder auto-selection.
 
 ## Telemetry and privacy

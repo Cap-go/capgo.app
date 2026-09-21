@@ -87,7 +87,7 @@ The spec is `docs/superpowers/specs/2026-09-21-builder-init-login-gate-design.md
 
 **Files:** `cli/src/build/onboarding/ui/login-gate.tsx` (new), `cli/src/build/onboarding/ui/components.tsx`, `cli/test/test-builder-login-gate.mjs`
 
-- [ ] **Step 1: Add a controlled-Ink test** that renders the real component with fake `BuilderLoginServices`. Verify the two short cards, browser URL, masked bordered field, invalid-key retry without a second browser opening, browser-open failure fallback, Escape cancellation, and that no frame contains the test key. Feed a long fake key and assert the border still fits at 44 columns while the service receives the whole value.
+- [ ] **Step 1: Add a controlled-Ink test** that renders the real component with fake `BuilderLoginServices`. Verify the two short cards, browser URL, masked bordered field on a large terminal, unboxed OTA-like masked input on a small terminal, invalid-key retry without a second browser opening, browser-open failure fallback, Escape cancellation, and that no frame contains the test key. Feed a long fake key and assert the small-terminal frame still fits at 44 columns while the service receives the whole value.
 - [ ] **Step 2: Run** `bun cli/test/test-builder-login-gate.mjs`; expect the UI cases to fail.
 - [ ] **Step 3: Extend** `FilteredTextInput` with optional `maxMaskWidth` (default unchanged). When `mask` is true, render no more than that many bullets; submit the untruncated state. The Builder field passes `filter=""`, `mask`, and `maxMaskWidth={24}`. Trim only on submission and reject empty input. Do not use a UUID-only input filter.
 - [ ] **Step 4: Implement** `BuilderLoginGate` as a body component under the existing `Header`. Use `CardChooser` with `pickPlatformLayout(cols, rows)` and exactly these options:
@@ -99,7 +99,7 @@ The spec is `docs/superpowers/specs/2026-09-21-builder-init-login-gate-design.md
   ]
   ```
 
-  Show `Paste the API key from the Capgo Dashboard` above the bordered field. On a hosted Capgo run, browser selection calls `beginBrowser` once and keeps its URL/session in component state. A failed submit stays on the same field; another submit calls `completeBrowser` with the same session. On custom hosts, go straight to the paste field. A failed existing-key check offers retry or another key. Display a short generic validation error inside Ink; never print raw API errors or the key. Keep a cancellation flag so an async result cannot advance after Escape.
+  Show `Paste the API key from the Capgo Dashboard` above the masked field. Render its border only when the whole input view fits; at small sizes use an unboxed, OTA-like prompt. On a hosted Capgo run, browser selection calls `beginBrowser` once and keeps its URL/session in component state. A failed submit stays on the same field; another submit calls `completeBrowser` with the same session. On custom hosts, go straight to the paste field. A failed existing-key check offers retry or another key. Display a short generic validation error inside Ink; never print raw API errors or the key. Keep a cancellation flag so an async result cannot advance after Escape.
 - [ ] **Step 5: Run** the focused test at card and list dimensions, plus `bun run cli:typecheck`. Commit with `feat(cli): add fullscreen builder login view`.
 
 ## Task 4: Gate platform and resume on verified authentication

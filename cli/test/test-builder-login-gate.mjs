@@ -3,8 +3,10 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { render } from 'ink'
 import React from 'react'
+import stringWidth from 'string-width'
 import { resolveBuilderCandidateKey } from '../src/build/onboarding/login.ts'
 import BuilderLoginGate from '../src/build/onboarding/ui/login-gate.tsx'
+import OnboardingShell from '../src/build/onboarding/ui/shell.tsx'
 
 const previousToken = process.env.CAPGO_TOKEN
 try {
@@ -136,6 +138,7 @@ console.log('Builder Ink login screen passed')
     },
   })
   await waitFor(() => ui.stdout.lastFrame.includes('How would you like to log in?'))
+  await new Promise(resolve => setTimeout(resolve, 20))
   ui.stdin.send('\r')
   await waitFor(() => ui.stdout.lastFrame.includes('Open this URL in your browser:'))
   assert.match(ui.stdout.lastFrame, /╭|╮/u, 'large input should be boxed')
@@ -164,3 +167,81 @@ console.log('Builder Ink login screen passed')
 }
 
 console.log('Builder browser retry and cancellation passed')
+
+{
+  const ui = renderGate({
+    cols: 44,
+    rows: 11,
+    beginBrowser: async (onUrl) => {
+      const session = { session: 'small-session', url: 'https://console.capgo.app/login-cli?session=small-session', browserOpened: false }
+      onUrl(session.url)
+      return session
+    },
+  })
+  await waitFor(() => ui.stdout.lastFrame.includes('How would you like to log in?'))
+  assert.ok(ui.stdout.lastFrame.split('\n').length <= 11, 'small login choice must fit the terminal')
+  assert.ok(ui.stdout.lastFrame.split('\n').every(line => stringWidth(line) <= 44), 'small login choice must fit terminal width')
+  await new Promise(resolve => setTimeout(resolve, 20))
+  ui.stdin.send('\r')
+  await waitFor(() => ui.stdout.lastFrame.includes('small-session'))
+  assert.match(ui.stdout.lastFrame, /Paste the API key/)
+  assert.doesNotMatch(ui.stdout.lastFrame, /[╭╮╰╯]/u)
+  assert.ok(ui.stdout.lastFrame.split('\n').length <= 11, 'small browser fallback must fit the terminal')
+  assert.ok(ui.stdout.lastFrame.split('\n').every(line => stringWidth(line) <= 44), 'small browser fallback must fit terminal width')
+  ui.instance.unmount()
+}
+
+console.log('Builder small-terminal browser fallback passed')
+
+function renderShellForLogin({ initialPlatform } = {}) {
+  const stdout = makeStream(100, 50)
+  const stdin = makeStdin()
+  const resolved = []
+  let finishValidation
+  const validation = new Promise(resolve => (finishValidation = resolve))
+  const services = {
+    browserAvailable: true,
+    validateExisting: async () => validation,
+    savePasted: async () => {},
+    beginBrowser: async () => { throw new Error('unused') },
+    completeBrowser: async () => {},
+  }
+  let instance
+  instance = render(React.createElement(OnboardingShell, {
+    appId: 'com.example.builderlogin',
+    iosBundleIdInitial: 'com.example.builderlogin',
+    iosDir: 'ios',
+    androidDir: 'android',
+    guidedHelperUsable: false,
+    apikey: 'existing-test-key',
+    loginServices: services,
+    journeyId: 'bj_login-test',
+    initialPlatform,
+    onResolvePlatform: (platform) => {
+      resolved.push(platform)
+      instance?.unmount()
+    },
+  }), { stdout, stderr: makeStream(100, 50), stdin, debug: true, exitOnCtrlC: false, patchConsole: false })
+  return { stdout, stdin, instance, resolved, finishValidation }
+}
+
+{
+  const shell = renderShellForLogin()
+  await waitFor(() => shell.stdout.lastFrame.includes('Checking Capgo login'))
+  assert.doesNotMatch(shell.stdout.lastFrame, /Which platform do you want to set up/)
+  shell.finishValidation()
+  await waitFor(() => shell.stdout.lastFrame.includes('Which platform do you want to set up'))
+  shell.instance.unmount()
+}
+
+{
+  const shell = renderShellForLogin({ initialPlatform: 'ios' })
+  await waitFor(() => shell.stdout.lastFrame.includes('Checking Capgo login'))
+  assert.deepEqual(shell.resolved, [])
+  shell.finishValidation()
+  await waitFor(() => shell.resolved.length === 1)
+  assert.deepEqual(shell.resolved, ['ios'])
+  shell.instance.unmount()
+}
+
+console.log('Builder shell authenticates before platform choice and auto-load')

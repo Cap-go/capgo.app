@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
-import { trackBuilderOnboardingAction, trackBuilderOnboardingCancelled, trackBuilderOnboardingStep } from '../src/build/onboarding/telemetry.ts'
+import { trackBuilderOnboardingAction, trackBuilderOnboardingCancelled, trackBuilderOnboardingLogin, trackBuilderOnboardingStep } from '../src/build/onboarding/telemetry.ts'
 
 
 console.log('🧪 Testing onboarding telemetry...\n')
@@ -41,12 +41,45 @@ function findEventBody(requests) {
 }
 
 try {
+  // The new login event is sent only after the caller has a validated key.
+  {
+    const requests = installFetchMock()
+    await trackBuilderOnboardingLogin({
+      apikey: 'capgo-key',
+      appId: 'com.example.app',
+      journeyId: 'bj_login-1',
+      method: 'paste',
+      retryCount: 1,
+      durationMs: 1234,
+    })
+    const body = findEventBody(requests)
+    assert.equal(body.event, 'Builder Onboarding Login')
+    assert.equal(body.channel, 'builder-onboarding')
+    assert.equal(body.org_id, undefined)
+    assert.deepEqual(body.tags, {
+      app_id: 'com.example.app',
+      journey_id: 'bj_login-1',
+      method: 'paste',
+      retry_count: 1,
+      duration_ms: 1234,
+    })
+    assert.equal(JSON.stringify(body).includes('capgo-key'), false)
+  }
+
   // ── Env opt-out prevents direct onboarding telemetry sends ──────────────────
   {
     const requests = installFetchMock()
     const previousTelemetryOptOut = process.env.CAPGO_DISABLE_TELEMETRY
     process.env.CAPGO_DISABLE_TELEMETRY = 'true'
     try {
+      await trackBuilderOnboardingLogin({
+        apikey: 'capgo-key',
+        appId: 'com.example.app',
+        journeyId: 'bj_login-opt-out',
+        method: 'browser',
+        retryCount: 0,
+        durationMs: 100,
+      })
       await trackBuilderOnboardingAction({
         action: 'android_sa_method_selected',
         apikey: 'capgo-key',
