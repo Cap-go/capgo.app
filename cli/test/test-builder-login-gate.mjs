@@ -58,19 +58,24 @@ function makeStdin() {
 }
 
 async function waitFor(predicate, description = 'login UI') {
-  const deadline = Date.now() + 2000
+  const deadline = Date.now() + 5000
   while (!predicate() && Date.now() < deadline)
     await new Promise(resolve => setTimeout(resolve, 10))
   assert.ok(predicate(), `Timed out waiting for ${description}`)
 }
 
 async function sendUntil(ui, input, predicate, description) {
-  const deadline = Date.now() + 2000
+  const deadline = Date.now() + 5000
   while (!predicate() && Date.now() < deadline) {
     ui.stdin.send(input)
     await new Promise(resolve => setTimeout(resolve, 50))
   }
   assert.ok(predicate(), `Timed out waiting for ${description}`)
+}
+
+async function stop(ui) {
+  ui.instance.unmount()
+  await ui.instance.waitUntilExit()
 }
 
 function renderGate({ cols = 100, rows = 50, candidateKey, browserAvailable = true, savePasted = async () => {}, validateExisting = async () => {}, beginBrowser = async () => ({ session: 'test-session', url: 'https://console.capgo.app/login-cli?session=test-session', browserOpened: true }), completeBrowser = async () => {} } = {}) {
@@ -92,10 +97,10 @@ function renderGate({ cols = 100, rows = 50, candidateKey, browserAvailable = tr
 
 {
   const ui = renderGate()
-  await waitFor(() => ui.stdout.lastFrame.includes('How would you like to log in?'))
+  await waitFor(() => ui.stdout.lastFrame.includes('How would you like to log in?'), 'initial login choice')
   assert.match(ui.stdout.lastFrame, /Create key in Dashboard/)
   assert.match(ui.stdout.lastFrame, /Use an existing key/)
-  ui.instance.unmount()
+  await stop(ui)
 }
 
 {
@@ -106,17 +111,19 @@ function renderGate({ cols = 100, rows = 50, candidateKey, browserAvailable = tr
     browserAvailable: false,
     savePasted: async key => submitted.push(key),
   })
-  await waitFor(() => ui.stdout.lastFrame.includes('Paste the API key'))
+  await waitFor(() => ui.stdout.lastFrame.includes('Paste the API key'), 'compact manual entry')
   assert.doesNotMatch(ui.stdout.lastFrame, /[╭╮╰╯]/u, 'small input must be unboxed')
+  // Ink can paint the new field before its useInput subscription is active.
+  await new Promise(resolve => setTimeout(resolve, 100))
   const key = '12345678-1234-1234-1234-123456789abc'
   ui.stdin.send(key)
-  await waitFor(() => ui.stdout.lastFrame.includes('••••'))
+  await waitFor(() => ui.stdout.lastFrame.includes('••••'), 'compact masked paste')
   ui.stdin.send('\r')
-  await waitFor(() => ui.authenticated.length === 1)
+  await waitFor(() => ui.authenticated.length === 1, 'compact key verification')
   assert.deepEqual(submitted, [key])
   assert.equal(ui.authenticated[0].metadata.method, 'paste')
   assert.ok(ui.stdout.lastFrame.length < 2000)
-  ui.instance.unmount()
+  await stop(ui)
 }
 
 console.log('Builder Ink login screen passed')
@@ -127,7 +134,7 @@ console.log('Builder Ink login screen passed')
   assert.equal(ui.authenticated[0].key, 'existing-key')
   assert.equal(ui.authenticated[0].metadata.method, undefined)
   assert.ok(ui.stdout.frames.every(frame => !frame.includes('How would you like to log in?')))
-  ui.instance.unmount()
+  await stop(ui)
 }
 
 {
@@ -146,15 +153,17 @@ console.log('Builder Ink login screen passed')
         throw new Error('invalid test key')
     },
   })
-  await waitFor(() => ui.stdout.lastFrame.includes('How would you like to log in?'))
+  await waitFor(() => ui.stdout.lastFrame.includes('How would you like to log in?'), 'browser login choice after existing-key check')
   await sendUntil(ui, '\r', () => ui.stdout.lastFrame.includes('Open this URL in your browser:'), 'browser login entry')
   assert.match(ui.stdout.lastFrame, /╭|╮/u, 'large input should be boxed')
+  await new Promise(resolve => setTimeout(resolve, 100))
   ui.stdin.send('invalid-key')
-  await waitFor(() => ui.stdout.lastFrame.includes('••••'))
+  await waitFor(() => ui.stdout.lastFrame.includes('••••'), 'first browser masked paste')
   ui.stdin.send('\r')
   await waitFor(() => ui.stdout.lastFrame.includes('Paste another key'), 'invalid-key retry message')
+  await new Promise(resolve => setTimeout(resolve, 100))
   ui.stdin.send('valid-test-key')
-  await waitFor(() => ui.stdout.lastFrame.includes('••••'))
+  await waitFor(() => ui.stdout.lastFrame.includes('••••'), 'second browser masked paste')
   ui.stdin.send('\r')
   await waitFor(() => ui.authenticated.length === 1, 'browser-key verification')
   assert.deepEqual(completed, ['invalid-key', 'valid-test-key'])
@@ -162,14 +171,14 @@ console.log('Builder Ink login screen passed')
   assert.equal(ui.authenticated[0].metadata.method, 'browser')
   assert.equal(ui.authenticated[0].metadata.retryCount, 1)
   assert.ok(ui.stdout.frames.every(frame => !frame.includes('invalid-key') && !frame.includes('valid-test-key')))
-  ui.instance.unmount()
+  await stop(ui)
 }
 
 {
   const ui = renderGate()
-  await waitFor(() => ui.stdout.lastFrame.includes('How would you like to log in?'))
+  await waitFor(() => ui.stdout.lastFrame.includes('How would you like to log in?'), 'login choice before Escape')
   await sendUntil(ui, '\x1b', ui.wasCancelled, 'Escape cancellation')
-  ui.instance.unmount()
+  await stop(ui)
 }
 
 console.log('Builder browser retry and cancellation passed')
@@ -184,7 +193,7 @@ console.log('Builder browser retry and cancellation passed')
       return session
     },
   })
-  await waitFor(() => ui.stdout.lastFrame.includes('How would you like to log in?'))
+  await waitFor(() => ui.stdout.lastFrame.includes('How would you like to log in?'), 'small-terminal login choice')
   assert.ok(ui.stdout.lastFrame.split('\n').length <= 11, 'small login choice must fit the terminal')
   assert.ok(ui.stdout.lastFrame.split('\n').every(line => stringWidth(line) <= 44), 'small login choice must fit terminal width')
   await sendUntil(ui, '\r', () => ui.stdout.lastFrame.includes('small-session'), 'small-terminal browser entry')
@@ -192,7 +201,7 @@ console.log('Builder browser retry and cancellation passed')
   assert.doesNotMatch(ui.stdout.lastFrame, /[╭╮╰╯]/u)
   assert.ok(ui.stdout.lastFrame.split('\n').length <= 11, 'small browser fallback must fit the terminal')
   assert.ok(ui.stdout.lastFrame.split('\n').every(line => stringWidth(line) <= 44), 'small browser fallback must fit terminal width')
-  ui.instance.unmount()
+  await stop(ui)
 }
 
 console.log('Builder small-terminal browser fallback passed')
@@ -231,21 +240,21 @@ function renderShellForLogin({ initialPlatform } = {}) {
 
 {
   const shell = renderShellForLogin()
-  await waitFor(() => shell.stdout.lastFrame.includes('Checking Capgo login'))
+  await waitFor(() => shell.stdout.lastFrame.includes('Checking Capgo login'), 'shell login check')
   assert.doesNotMatch(shell.stdout.lastFrame, /Which platform do you want to set up/)
   shell.finishValidation()
   await waitFor(() => shell.stdout.lastFrame.includes('Which platform do you want to set up'), 'platform picker after authentication')
-  shell.instance.unmount()
+  await stop(shell)
 }
 
 {
   const shell = renderShellForLogin({ initialPlatform: 'ios' })
-  await waitFor(() => shell.stdout.lastFrame.includes('Checking Capgo login'))
+  await waitFor(() => shell.stdout.lastFrame.includes('Checking Capgo login'), 'shell preselected-platform login check')
   assert.deepEqual(shell.resolved, [])
   shell.finishValidation()
   await waitFor(() => shell.resolved.length === 1, 'preselected platform after authentication')
   assert.deepEqual(shell.resolved, ['ios'])
-  shell.instance.unmount()
+  await stop(shell)
 }
 
 console.log('Builder shell authenticates before platform choice and auto-load')
