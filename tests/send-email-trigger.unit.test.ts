@@ -90,6 +90,43 @@ describe('send_email queue handler', () => {
     expect(text).toContain('https://console.capgo.app/confirm-signup?confirmation_url=')
   })
 
+  it('sends a code-only account-deletion email when the magiclink redirect carries the deletion purpose', async () => {
+    const response = await postSendEmail({
+      user: { email: 'user@example.com' },
+      email_data: {
+        email_action_type: 'magiclink',
+        redirect_to: 'https://console.capgo.app/?reason=delete_account',
+        token: '847291',
+        token_hash: 'magic-hash',
+      },
+    })
+
+    expect(response.status).toBe(200)
+    const { subject, html, text } = sendMock.mock.calls[0]![0] as { subject: string, html: string, text: string }
+    expect(subject).toBe('Your code to continue account deletion')
+    expect(html).toContain('847291')
+    expect(text).toContain('847291')
+    expect(html).toContain('please change your Capgo password immediately')
+    expect(text).toContain('please change your Capgo password immediately')
+    expect(html).not.toContain('<a ')
+    expect(text).not.toContain('https://')
+  })
+
+  it('keeps the generic sign-in email when the redirect is outside the site', async () => {
+    const response = await postSendEmail({
+      user: { email: 'user@example.com' },
+      email_data: {
+        email_action_type: 'magiclink',
+        redirect_to: 'https://example.com/?reason=delete_account',
+        token: '847291',
+        token_hash: 'magic-hash',
+      },
+    })
+
+    expect(response.status).toBe(200)
+    expect(sendMock).toHaveBeenCalledWith(expect.objectContaining({ subject: 'Your Capgo.app sign-in link' }))
+  })
+
   it('sends both secure email-change confirmations to their respective addresses', async () => {
     const response = await postSendEmail({
       user: { email: 'old@example.com', new_email: 'new@example.com' },

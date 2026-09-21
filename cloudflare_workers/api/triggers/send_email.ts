@@ -8,7 +8,7 @@ import {
 import { BRES, middlewareAPISecret, parseBody, quickError, simpleError } from '../../../supabase/functions/_backend/utils/hono.ts'
 import { cloudlog } from '../../../supabase/functions/_backend/utils/logging.ts'
 import { getEnv } from '../../../supabase/functions/_backend/utils/utils.ts'
-import { isAuthEmailAction, renderAuthEmail } from '../email_templates/index.ts'
+import { isAuthEmailAction, renderAuthEmail, selectAuthEmailTemplate } from '../email_templates/index.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -32,7 +32,8 @@ app.post('/', middlewareAPISecret, async (c) => {
     const details = buildAuthEmailTemplateDetails(payload, supabaseUrl, webappUrl)
     let content: ReturnType<typeof renderAuthEmail>
     try {
-      content = renderAuthEmail(payload.email_action_type, details)
+      const template = selectAuthEmailTemplate(payload.email_action_type, payload.redirect_to ?? '', details.site_url)
+      content = renderAuthEmail(template, details)
     }
     catch (error) {
       quickError(500, 'invalid_auth_email_template', 'Auth email template could not be rendered', {

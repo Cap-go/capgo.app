@@ -1,4 +1,6 @@
 import type { AuthEmailTemplateDetails } from '../../../supabase/functions/_backend/utils/auth_email.ts'
+import deleteAccountVerification from './delete_account_verification.html'
+import deleteAccountVerificationText from './delete_account_verification.txt'
 import emailChange from './email_change.html'
 import emailChangeText from './email_change.txt'
 import emailChangedNotification from './email_changed_notification.html'
@@ -21,6 +23,7 @@ import signup from './signup.html'
 import signupText from './signup.txt'
 
 const templates = {
+  delete_account_verification: { subject: 'Your code to continue account deletion', html: deleteAccountVerification, text: deleteAccountVerificationText },
   email_change: { subject: 'Confirm your Capgo.app email change', html: emailChange, text: emailChangeText },
   email_changed_notification: { subject: 'Your Capgo.app email was changed', html: emailChangedNotification, text: emailChangedNotificationText },
   invite: { subject: 'You\'re invited to Capgo.app', html: invite, text: inviteText },
@@ -33,10 +36,28 @@ const templates = {
   signup: { subject: 'Confirm your Capgo.app email', html: signup, text: signupText },
 } as const
 
-export type AuthEmailAction = keyof typeof templates
+type AuthEmailTemplate = keyof typeof templates
+export type AuthEmailAction = Exclude<AuthEmailTemplate, 'delete_account_verification'>
 
 export function isAuthEmailAction(action: string): action is AuthEmailAction {
-  return Object.hasOwn(templates, action)
+  return action !== 'delete_account_verification' && Object.hasOwn(templates, action)
+}
+
+export function selectAuthEmailTemplate(action: AuthEmailAction, redirectTo: string, siteUrl: string): AuthEmailTemplate {
+  if (action !== 'magiclink')
+    return action
+
+  try {
+    const redirect = new URL(redirectTo)
+    const site = new URL(siteUrl)
+    if (redirect.origin === site.origin && redirect.pathname === '/' && redirect.searchParams.get('reason') === 'delete_account')
+      return 'delete_account_verification'
+  }
+  catch {
+    // Invalid or missing redirect URLs use the normal sign-in template.
+  }
+
+  return action
 }
 
 function render(source: string, details: AuthEmailTemplateDetails, escape: (value: string) => string): string {
@@ -58,7 +79,7 @@ function escapeHtml(value: string): string {
   })[char] ?? char)
 }
 
-export function renderAuthEmail(action: AuthEmailAction, details: AuthEmailTemplateDetails) {
+export function renderAuthEmail(action: AuthEmailTemplate, details: AuthEmailTemplateDetails) {
   const template = templates[action]
   return {
     subject: template.subject,
