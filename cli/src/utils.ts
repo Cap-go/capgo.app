@@ -1091,7 +1091,8 @@ export async function createSupabaseClient(apikey: string, supaHost?: string, su
     config.supaKey = supaKey
   }
   if (!config.supaHost || !config.supaKey) {
-    log.error(CAPGO_SERVER_CONFIG_MISSING_MESSAGE)
+    if (!silent)
+      log.error(CAPGO_SERVER_CONFIG_MISSING_MESSAGE)
     throw new CliUserError(CAPGO_SERVER_CONFIG_MISSING_MESSAGE, {
       missingSupaHost: !config.supaHost,
       missingSupaKey: !config.supaKey,
