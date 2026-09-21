@@ -36,6 +36,7 @@ const testDir = dirname(fileURLToPath(import.meta.url))
 const indexSource = readFileSync(join(testDir, '../src/index.ts'), 'utf8')
 const loginSource = readFileSync(join(testDir, '../src/login.ts'), 'utf8')
 const initSource = readFileSync(join(testDir, '../src/init/command.ts'), 'utf8')
+const builderSource = readFileSync(join(testDir, '../src/build/onboarding/command.ts'), 'utf8')
 
 function sourceBetween(source, start, end) {
   const startIndex = source.indexOf(start)
@@ -48,6 +49,8 @@ function sourceBetween(source, start, end) {
 const preActionSource = sourceBetween(indexSource, "program.hook('preAction'", "program.hook('postAction'")
 assert.match(preActionSource, /currentCommandPath === 'login'/)
 assert.match(preActionSource, /currentCommandPath === 'init'/)
+assert.match(preActionSource, /currentCommandPath === 'build init'/)
+assert.match(preActionSource, /currentCommandPath === 'build onboarding'/)
 assert.match(preActionSource, /deferCommandInvocation\(currentCommandPath, commandContext\)/)
 
 const initCommandSource = sourceBetween(indexSource, ".command('init [apikey] [appId]')", "program\n  .command('doctor')")
@@ -76,5 +79,9 @@ assert.ok(initSavedKeyFallbackIndex >= 0, 'init replaces an absent or empty comm
 assert.ok(initSavedKeyFallbackIndex < initValidationIndex, 'init restores its saved-key fallback before validation')
 assert.ok(initValidationIndex >= 0, 'init validates the selected key with Capgo')
 assert.ok(initInvocationIndex > initValidationIndex, 'init invocation is emitted only after validation')
+
+const builderAuthCallback = sourceBetween(builderSource, 'onAuthenticated: (key, metadata) => {', 'onBeforeExit: finishBuildReplay')
+assert.match(builderAuthCallback, /flushDeferredCommandInvocation\(key\)/)
+assert.match(builderAuthCallback, /if \(metadata\.method\)/)
 
 console.log('✅ authenticated command invocation tests passed')

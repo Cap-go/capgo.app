@@ -110,7 +110,7 @@ program.hook('preAction', (_thisCommand, actionCommand) => {
   applyCommandAnalyticsOptOut(currentCommandPath, actionCommand.opts())
   startOnboardingChecks(actionCommand, currentCommandPath)
   const commandContext = extractCommandContext(actionCommand)
-  if (currentCommandPath === 'login' || currentCommandPath === 'init')
+  if (currentCommandPath === 'login' || currentCommandPath === 'init' || currentCommandPath === 'build init' || currentCommandPath === 'build onboarding')
     deferCommandInvocation(currentCommandPath, commandContext)
   else {
     const optionKey = actionCommand.optsWithGlobals().apikey
